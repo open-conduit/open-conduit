@@ -635,6 +635,16 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 			if target == nil {
 				return storage.ErrConflict
 			}
+			pinned, pinErr := attemptState(tx, target.ID)
+			if pinErr != nil && !errors.Is(pinErr, storage.ErrNotFound) {
+				return pinErr
+			}
+			if pinErr == nil && (rec.Policy == "inject" && !pinned.Capabilities.Inject || rec.Policy == "interrupt" && !pinned.Capabilities.Interrupt) {
+				if b.Fallback == "" {
+					return extension.ErrUnsupported
+				}
+				rec.Policy, rec.Reason = b.Fallback, "target_control_unsupported"
+			}
 			if target.ExecutorBinding != rec.Binding {
 				// The old attempt retains its original binding. Config/attempt
 				// generation pinning is owned by the scheduler, never inferred

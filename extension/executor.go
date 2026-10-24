@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"math"
+	"time"
 
 	"github.com/alsiola/open-conduit/domain"
 )
@@ -45,6 +46,15 @@ type Result struct {
 	Usage     Usage
 	Artifacts []domain.ArtifactRef
 }
+
+// RetryHint classifies a retryable executor limit without provider-specific
+// fields. A nil reset means the reset time is unknown. Core validates bounds and
+// selects backoff; a hint never grants authority or an immediate retry.
+type RetryHint struct{ ResetAt *time.Time }
+
+// RetryHintProvider may be implemented by an executor error. Runtime calls it
+// outside coordination transactions and persists only validated policy data.
+type RetryHintProvider interface{ RetryHint() RetryHint }
 
 // Wait returns one structured outcome or a transport/process error. Cancellation
 // of observation does not imply termination of a detached execution.
