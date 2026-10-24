@@ -1,6 +1,6 @@
 # Planned Go package boundaries
 
-Decision B01, ticket 01-01. These are ownership and import rules for the interfaces and scaffold in 01-02–01-06. Ticket 01-02 implements `domain`, `storage`, shared storage cases in `conformance` and a volatile double in `conformance/reference`. It introduces `github.com/alsiola/open-conduit` with the source baseline’s Go minimum (1.24.2) to run those contracts; 01-06 reviews the supported toolchain/platforms and adds the remaining scaffold/CI.
+Decision B01, ticket 01-01. These are ownership and import rules for the interfaces and scaffold in 01-02–01-06. Ticket 01-03 adds `extension`, `observability` and their conformance fixtures ([B03](extensions.md)). Ticket 01-02 implements `domain`, `storage`, shared storage cases in `conformance` and a volatile double in `conformance/reference`. It introduces `github.com/alsiola/open-conduit` with the source baseline’s Go minimum (1.24.2) to run those contracts; 01-06 reviews the supported toolchain/platforms and adds the remaining scaffold/CI.
 
 | Package | Owns | Allowed project dependencies |
 | --- | --- | --- |
@@ -48,4 +48,4 @@ In 01-06, enforce this graph with a transitive `go list -deps -json` import chec
 
 Non-goals for stages 01–06: no Effect primitive/outbox state machine, DAG, workflow language, remote management or third-party extension protocol/manifest. Adapters reconcile writes and mark messages whose effects cannot be re-derived. Namespaced KV is mandatory coordination storage, not a second event log or artifact warehouse. Subprocess transport and schema evolution are deferred to 07-01–07-03 after shipped workload evidence.
 
-Decisions deliberately left to their tickets: lifecycle/storage fencing ([B02](domain-storage.md), delivered in 01-02); ingress completeness and push overlap (01-03); ordering, wait races and active policy (01-04); config inheritance/reload/auth (01-05); workspace contract (03-02); generic injection acknowledgements (04-02); pending job coalescing (05-01). These decisions must preserve the boundaries above.
+Decisions deliberately left to their tickets: lifecycle/storage fencing ([B02](domain-storage.md), delivered in 01-02); ingress completeness and push overlap ([B03](extensions.md), delivered in 01-03); ordering, wait races and active policy (01-04); config inheritance/reload/auth (01-05); workspace contract (03-02); generic injection acknowledgements (04-02); pending job coalescing (05-01). These decisions must preserve the boundaries above.

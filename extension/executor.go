@@ -1,0 +1,112 @@
+package extension
+
+import (
+	"context"
+	"fmt"
+	"math"
+
+	"github.com/alsiola/open-conduit/domain"
+)
+
+const (
+	ToolbeltNone = "none"
+	ToolbeltCLI  = "cli"
+	ToolbeltMCP  = "mcp"
+	ToolbeltSDK  = "sdk"
+)
+
+// Resource is optional and provider-defined. Acquisition/cleanup are 03-02.
+type Resource struct {
+	Kind string
+	Data domain.Payload
+}
+type ExecutionContext struct {
+	Config                          domain.Payload
+	Secrets                         map[string]string
+	Resources                       []Resource
+	ToolbeltEndpoint, ToolbeltToken string
+}
+type RunRequest struct {
+	Work      domain.Work
+	Execution domain.Execution
+	Trigger   domain.Event
+	Context   ExecutionContext
+	// PersistRecovery durably saves opaque executor-owned metadata before launch
+	// is acknowledged. It is fenced by this execution's current lease.
+	PersistRecovery func(domain.Payload) error
+}
+type Usage struct {
+	InputTokens, OutputTokens, CachedTokens *uint64
+	Cost                                    *float64
+	Currency                                string
+}
+type Result struct {
+	Outcome   domain.Outcome
+	Usage     Usage
+	Artifacts []domain.ArtifactRef
+}
+
+// Wait returns one structured outcome or a transport/process error. Cancellation
+// of observation does not imply termination of a detached execution.
+type RunHandle interface {
+	Wait(context.Context) (Result, error)
+}
+type Executor interface {
+	Capabilities() domain.Capabilities
+	Run(context.Context, RunRequest) (RunHandle, error)
+	// Recover must never launch replacement work. It returns the existing handle,
+	// a finished result via that handle, or ErrNotAdoptable.
+	Recover(context.Context, RunRequest, domain.Payload) (RunHandle, error)
+}
+type InterruptExecutor interface {
+	Interrupt(context.Context, domain.ID) error
+}
+
+// Injection acknowledgement/completion races are refined in 04-02. Success here
+// means accepted, never proof that an event was consumed by the running process.
+type InjectExecutor interface {
+	Inject(context.Context, domain.ID, domain.Event) error
+}
+type ResumeExecutor interface {
+	Resume(context.Context, RunRequest, domain.Payload) (RunHandle, error)
+}
+
+func ValidateBinding(b domain.Binding, e Executor) error {
+	c, r := e.Capabilities(), b.Requires
+	valid := func(s string) bool {
+		return s == ToolbeltNone || s == ToolbeltCLI || s == ToolbeltMCP || s == ToolbeltSDK
+	}
+	if !valid(c.Toolbelt) || (r.Toolbelt != "" && !valid(r.Toolbelt)) {
+		return fmt.Errorf("%w: toolbelt transport", ErrInvalid)
+	}
+	if c.Interrupt {
+		if _, ok := e.(InterruptExecutor); !ok {
+			return fmt.Errorf("%w: interrupt implementation", ErrInvalid)
+		}
+	}
+	if c.Inject {
+		if _, ok := e.(InjectExecutor); !ok {
+			return fmt.Errorf("%w: inject implementation", ErrInvalid)
+		}
+	}
+	if c.Resume {
+		if _, ok := e.(ResumeExecutor); !ok {
+			return fmt.Errorf("%w: resume implementation", ErrInvalid)
+		}
+	}
+	if r.Interrupt && !c.Interrupt || r.Inject && !c.Inject || r.Resume && !c.Resume || r.Workspace && !c.Workspace || r.Toolbelt != "" && r.Toolbelt != c.Toolbelt {
+		return fmt.Errorf("%w: binding %s", ErrUnsupported, b.Name)
+	}
+	return nil
+}
+func ValidateResult(r Result) error {
+	switch r.Outcome.Kind {
+	case domain.OutcomeCompleted, domain.OutcomeFailed, domain.OutcomeWaiting, domain.OutcomeHandoff:
+	default:
+		return fmt.Errorf("%w: outcome", ErrInvalid)
+	}
+	if r.Usage.Cost != nil && (math.IsNaN(*r.Usage.Cost) || math.IsInf(*r.Usage.Cost, 0) || *r.Usage.Cost < 0 || r.Usage.Currency == "") {
+		return fmt.Errorf("%w: cost", ErrInvalid)
+	}
+	return nil
+}
