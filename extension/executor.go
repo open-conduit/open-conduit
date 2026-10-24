@@ -31,7 +31,10 @@ type RunRequest struct {
 	Work      domain.Work
 	Execution domain.Execution
 	Trigger   domain.Event
-	Context   ExecutionContext
+	// Inputs retains the acceptance-ordered batch, including context preceding a
+	// wake. Trigger remains the selected event; recovery restores the same batch.
+	Inputs  []domain.Event
+	Context ExecutionContext
 	// PersistRecovery durably saves opaque executor-owned metadata before launch
 	// is acknowledged. It is fenced by this execution's current lease.
 	PersistRecovery func(domain.Payload) error

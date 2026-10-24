@@ -291,7 +291,11 @@ func (c *Causal) Emit(ctx context.Context, lease domain.LeaseRef, e domain.Event
 		}
 		e.WorkID = w.ID
 		e.ExecutionID = x.ID
-		accepted, added, er = AcceptDerivedInTx(tx, now, c.limits, w.ScopeID, x.TriggerID, e)
+		trigger, er := executionTriggerInTx(tx, x)
+		if er != nil {
+			return er
+		}
+		accepted, added, er = AcceptDerivedInTx(tx, now, c.limits, w.ScopeID, trigger, e)
 		if errors.Is(er, ErrCausalRejected) {
 			refusal = er
 			return nil

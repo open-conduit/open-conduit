@@ -205,8 +205,12 @@ func (s *Scheduler) handoffContinuationInTx(tx storage.Tx, x domain.Execution, n
 	if err != nil {
 		return err
 	}
-	event := domain.Event{ID: domain.ID("handoff-event/" + identity(string(x.ID))), Type: "core.execution.handoff", Source: "core.execution", DeliveryID: "handoff/" + string(x.ID), CausationID: x.TriggerID, WorkID: x.WorkID, ExecutionID: x.ID, OccurredAt: now, ReceivedAt: now}
-	accepted, _, err := AcceptDerivedInTx(tx, now, s.options.CausalLimits, work.ScopeID, x.TriggerID, event)
+	trigger, err := executionTriggerInTx(tx, x)
+	if err != nil {
+		return err
+	}
+	event := domain.Event{ID: domain.ID("handoff-event/" + identity(string(x.ID))), Type: "core.execution.handoff", Source: "core.execution", DeliveryID: "handoff/" + string(x.ID), CausationID: trigger, WorkID: x.WorkID, ExecutionID: x.ID, OccurredAt: now, ReceivedAt: now}
+	accepted, _, err := AcceptDerivedInTx(tx, now, s.options.CausalLimits, work.ScopeID, trigger, event)
 	if errors.Is(err, ErrCausalRejected) {
 		return nil
 	}

@@ -87,6 +87,9 @@ func (r *Router) Cancel(ctx context.Context, id domain.ID) error {
 		for _, wait := range waits {
 			if wait.State == domain.WaitActive {
 				wait.State = domain.WaitCancelled
+				if err = disableWaitSubscriptionsInTx(tx, wait.ID); err != nil {
+					return err
+				}
 				if err = tx.PutWait(wait, wait.Revision); err != nil {
 					return err
 				}
@@ -125,6 +128,9 @@ func (r *Router) Cancel(ctx context.Context, id domain.ID) error {
 			if err = tx.DeleteTimer(timer.ID, timer.Revision); err != nil {
 				return err
 			}
+			if err = tx.Delete(timerNamespace, timerKey(timer.ID)); err != nil {
+				return err
+			}
 		}
 		entries, err := tx.List(queueNamespace, identity(string(id))+"/")
 		if err != nil {
@@ -134,6 +140,9 @@ func (r *Router) Cancel(ctx context.Context, id domain.ID) error {
 			if err = tx.Delete(queueNamespace, entry.Key); err != nil {
 				return err
 			}
+		}
+		if err = tx.Delete(wakeReadyNamespace, identity(string(id))); err != nil {
+			return err
 		}
 		// These namespaces are reserved for the scheduler's retry policy.
 		if err = tx.Delete("core.scheduler.eligibility", identity(string(id))); err != nil {
@@ -168,7 +177,11 @@ func (r *Router) CreateChild(ctx context.Context, ref domain.LeaseRef, request C
 		if parent.State.Terminal() {
 			return storage.ErrInvalid
 		}
-		out, e = r.createLinked(tx, parent.ScopeID, parent.ID, "", x.TriggerID, request, &rejected)
+		trigger, e := executionTriggerInTx(tx, x)
+		if e != nil {
+			return e
+		}
+		out, e = r.createLinked(tx, parent.ScopeID, parent.ID, "", trigger, request, &rejected)
 		return e
 	})
 	if err != nil {

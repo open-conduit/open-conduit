@@ -34,6 +34,7 @@ type SchedulerOptions struct {
 	AutoContinueHandoff  bool
 	ControlErrorFallback map[string]string
 	Timeout              time.Duration
+	AuthorizeAlias       func(context.Context, AliasAuthorization) error
 }
 type Scheduler struct {
 	store   storage.Store
@@ -60,6 +61,12 @@ type AttemptState struct {
 	AutoContinueHandoff               bool
 	Capabilities                      domain.Capabilities
 	Deadline                          time.Time
+	CurrentTriggerID                  domain.ID
+	CausalTriggerID                   domain.ID
+	WaitID, WakeEventID               domain.ID
+	ObservedSequence                  uint64
+	InputEventIDs                     []domain.ID
+	RemainingTimeout                  time.Duration
 }
 
 func attemptState(tx storage.Tx, id domain.ID) (state AttemptState, err error) {
@@ -281,6 +288,9 @@ func (s *Scheduler) requestInTx(tx storage.Tx, state AttemptState, ref domain.Le
 		return
 	}
 	trigger := req.Execution.TriggerID
+	if state.CurrentTriggerID != "" {
+		trigger = state.CurrentTriggerID
+	}
 	if triggerOverride != "" {
 		trigger = triggerOverride
 	}
@@ -289,6 +299,13 @@ func (s *Scheduler) requestInTx(tx storage.Tx, state AttemptState, ref domain.Le
 		return req, err
 	}
 	req.Trigger = a.Event
+	for _, eventID := range state.InputEventIDs {
+		input, er := tx.Event(eventID)
+		if er != nil {
+			return req, er
+		}
+		req.Inputs = append(req.Inputs, input.Event)
+	}
 	req.Context.Config = state.Binding.Config
 	return req, nil
 }
@@ -298,6 +315,7 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 	var ready domain.Work
 	var input QueuedInput
 	var parked domain.ID
+	var wake wakeReady
 	// Resolve/validate plugin metadata outside the claim transaction.
 	err = s.transact(ctx, nil, func(tx storage.Tx) error {
 		var e error
@@ -316,6 +334,23 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 			return storage.ErrInvalid
 		}
 		input = inputs[0]
+		wakeErr := getJSON(tx, wakeReadyNamespace, identity(string(id)), &wake)
+		if wakeErr != nil && !errors.Is(wakeErr, storage.ErrNotFound) {
+			return wakeErr
+		}
+		if wakeErr == nil {
+			found := false
+			for _, candidate := range inputs {
+				if candidate.EventID == wake.EventID {
+					input = candidate
+					found = true
+					break
+				}
+			}
+			if !found {
+				return storage.ErrConflict
+			}
+		}
 		pinned, e = effectiveBinding(tx, ready.ScopeID, input.Binding)
 		if e != nil {
 			return e
@@ -397,7 +432,13 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 		if e != nil {
 			return e
 		}
-		if len(inputs) == 0 || inputs[0] != input {
+		foundInput := false
+		for _, candidate := range inputs {
+			if candidate == input {
+				foundInput = true
+			}
+		}
+		if !foundInput {
 			return storage.ErrConflict
 		}
 		executionID := parked
@@ -428,13 +469,38 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 		attempt.Lease = ref
 		if parked == "" {
 			state.Deadline = s.now().Add(s.options.Timeout)
+		} else {
+			if state.RemainingTimeout <= 0 {
+				return storage.ErrInvalid
+			}
+			state.Deadline = s.now().Add(state.RemainingTimeout)
+		}
+		state.InputEventIDs = make([]domain.ID, 0, len(inputs))
+		for _, pending := range inputs {
+			state.InputEventIDs = append(state.InputEventIDs, pending.EventID)
+		}
+		state.CurrentTriggerID = input.EventID
+		if parked == "" {
+			state.CausalTriggerID = input.EventID
+		}
+		if wake.EventID != "" {
+			state.WakeEventID = wake.EventID
+		}
+		if e = tx.Delete(wakeReadyNamespace, identity(string(id))); e != nil {
+			return e
 		}
 		state.ExecutionID, state.Epoch, state.Excluded = executionID, ref.Epoch, false
 		state.LaunchState = "launching"
 		if parked != "" {
 			state.LaunchState = "resuming"
 		}
+		if input.Sequence > state.ObservedSequence {
+			state.ObservedSequence = input.Sequence
+		}
 		if e = putAttemptState(tx, state); e != nil {
+			return e
+		}
+		if e = ArmExecutionDeadlineInTx(tx, s.now(), state, ref); e != nil {
 			return e
 		}
 		if _, e = ConsumeInputsInTx(tx, id, executionID); e != nil {
@@ -529,6 +595,13 @@ func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt,
 		if current.Epoch != state.Epoch {
 			return storage.ErrConflict
 		}
+		execution, e := tx.Execution(id)
+		if e != nil {
+			return e
+		}
+		if execution.State != domain.ExecutionRunning {
+			return storage.ErrInvalid
+		}
 		ref, e := tx.Claim(id, s.options.Owner, s.options.LeaseDuration)
 		if e != nil {
 			return e
@@ -536,6 +609,9 @@ func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt,
 		attempt.Lease = ref
 		current.Epoch, current.Excluded, current.LaunchState = ref.Epoch, false, "recovering"
 		if e = putAttemptState(tx, current); e != nil {
+			return e
+		}
+		if e = ArmExecutionDeadlineInTx(tx, s.now(), current, ref); e != nil {
 			return e
 		}
 		attempt.Request, e = s.requestInTx(tx, current, ref, "")
@@ -578,6 +654,9 @@ func (s *Scheduler) fail(ctx context.Context, ref domain.LeaseRef, result extens
 		if err != nil {
 			return err
 		}
+		if err = CancelExecutionDeadlineInTx(tx, x.ID); err != nil {
+			return err
+		}
 		state.Excluded = excluded
 		state.LaunchState = "failed"
 		state.Result = &result
@@ -604,7 +683,7 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 		return err
 	}
 	if result.Outcome.Kind == domain.OutcomeWaiting {
-		return extension.ErrUnsupported
+		return s.acknowledgeWaiting(ctx, ref, result)
 	}
 	if result.Outcome.Kind == domain.OutcomeFailed {
 		return s.Fail(ctx, ref, result)
@@ -635,6 +714,9 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 					return storage.ErrConflict
 				}
 			}
+		}
+		if err = CancelExecutionDeadlineInTx(tx, x.ID); err != nil {
+			return err
 		}
 		x.State = domain.ExecutionCompleted
 		if result.Outcome.Kind == domain.OutcomeHandoff {
@@ -692,6 +774,9 @@ func (s *Scheduler) Timeout(ctx context.Context, ref domain.LeaseRef) error {
 		}
 		x, err := tx.Execution(ref.ExecutionID)
 		if err != nil {
+			return err
+		}
+		if err = CancelExecutionDeadlineInTx(tx, x.ID); err != nil {
 			return err
 		}
 		result := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "execution timed out"}}

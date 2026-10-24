@@ -384,6 +384,21 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 		if s.event.Routed {
 			return nil
 		}
+		if s.work != nil && s.work.State == domain.WorkWaiting {
+			var handled bool
+			err := r.transact(ctx, nil, func(tx storage.Tx) error {
+				var e error
+				handled, e = routeWaitingInTx(tx, r.now(), r.options.CausalLimits, id)
+				return e
+			})
+			if err != nil {
+				return err
+			}
+			if handled {
+				return nil
+			}
+			continue
+		}
 		if s.work != nil {
 			var prior domain.ID
 			err := r.transact(ctx, nil, func(tx storage.Tx) error {
@@ -737,7 +752,7 @@ func ConsumeInputsInTx(tx storage.Tx, work, execution domain.ID) (inputs []Queue
 	}
 	for _, input := range inputs {
 		key := queueKey(work, input.Sequence)
-		if e = putJSON(tx, consumedNamespace, key, struct {
+		if e = putJSON(tx, consumedNamespace, key+"/"+identity(string(execution)), struct {
 			Input       QueuedInput
 			ExecutionID domain.ID
 		}{input, execution}); e != nil {

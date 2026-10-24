@@ -77,6 +77,7 @@ type RetryState struct {
 	FailureCount              int
 	FailureSequence           uint64
 	Blocked, Exhausted        bool
+	BlockedReason             string
 	EligibleAt                time.Time
 	TimerID, RetryEventID     domain.ID
 }
@@ -111,6 +112,9 @@ func resetRetryInTx(tx storage.Tx, work domain.ID) error {
 		timer, er := tx.Timer(state.TimerID)
 		if er == nil {
 			if er = tx.DeleteTimer(timer.ID, timer.Revision); er != nil {
+				return er
+			}
+			if er = tx.Delete(timerNamespace, timerKey(timer.ID)); er != nil {
 				return er
 			}
 		} else if !errors.Is(er, storage.ErrNotFound) {
@@ -175,6 +179,9 @@ func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, resul
 			if er = tx.DeleteTimer(timer.ID, timer.Revision); er != nil {
 				return er
 			}
+			if er = tx.Delete(timerNamespace, timerKey(timer.ID)); er != nil {
+				return er
+			}
 		} else if !errors.Is(er, storage.ErrNotFound) {
 			return er
 		}
@@ -193,7 +200,11 @@ func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, resul
 		if er != nil {
 			return er
 		}
-		event := domain.Event{ID: state.RetryEventID, Type: "core.retry.due", Source: "core.retry", DeliveryID: "due/" + string(x.ID), OccurredAt: state.EligibleAt, ReceivedAt: state.EligibleAt, CausationID: x.TriggerID, WorkID: w.ID, Data: domain.Payload{Schema: "core.retry.due.v1", Data: data}}
+		trigger, er := executionTriggerInTx(tx, x)
+		if er != nil {
+			return er
+		}
+		event := domain.Event{ID: state.RetryEventID, Type: "core.retry.due", Source: "core.retry", DeliveryID: "due/" + string(x.ID), OccurredAt: state.EligibleAt, ReceivedAt: state.EligibleAt, CausationID: trigger, WorkID: w.ID, Data: domain.Payload{Schema: "core.retry.due.v1", Data: data}}
 		if err = tx.PutTimer(domain.Timer{ID: state.TimerID, FireAt: state.EligibleAt, Event: event}, 0); err != nil {
 			return err
 		}
@@ -282,6 +293,7 @@ func (s *Scheduler) ProcessRetry(ctx context.Context, eventID domain.ID) error {
 			}
 		}
 		state.Blocked = false
+		state.BlockedReason = ""
 		state.Exhausted = false
 		state.TimerID = ""
 		state.RetryEventID = ""
