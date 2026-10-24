@@ -1,0 +1,94 @@
+{
+  "version": 1,
+  "settings": {},
+  "connections": [],
+  "scopes": [
+    {
+      "id": "parent",
+      "name": "parent",
+      "authorization": {
+        "connections": [],
+        "operations": [
+          "emit",
+          "read_context",
+          "declare_outcome"
+        ],
+        "read_scopes": []
+      },
+      "bindings": [
+        {
+          "name": "run",
+          "executor": "shell",
+          "requires": {
+            "toolbelt": "cli"
+          },
+          "operations": [
+            "emit",
+            "read_context",
+            "declare_outcome"
+          ],
+          "secret_names": [],
+          "config": {
+            "command": "printf hello"
+          }
+        }
+      ],
+      "routes": [
+        {
+          "name": "incoming",
+          "handler": "manual",
+          "binding": "run",
+          "active_policy": "queue",
+          "config": {}
+        },
+        {
+          "name": "second",
+          "handler": "manual",
+          "binding": "run",
+          "active_policy": "queue",
+          "config": {}
+        }
+      ],
+      "secret_refs": {
+        "temporary": "cmd:printf fixture",
+        "retained": "env:RETAINED"
+      }
+    },
+    {
+      "id": "child",
+      "name": "child",
+      "parent": "parent",
+      "bindings": [
+        {
+          "name": "run",
+          "executor": "shell",
+          "requires": {
+            "toolbelt": "cli"
+          },
+          "operations": [
+            "emit",
+            "read_context",
+            "declare_outcome"
+          ],
+          "secret_names": [],
+          "config": {
+            "command": "printf hello"
+          }
+        }
+      ],
+      "routes": [
+        {
+          "name": "incoming",
+          "handler": "manual",
+          "binding": "run",
+          "active_policy": "inject",
+          "config": {},
+          "unsupported_fallback": "queue"
+        }
+      ],
+      "secret_refs": {
+        "temporary": false
+      }
+    }
+  ]
+}

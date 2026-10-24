@@ -1,0 +1,77 @@
+{
+  "version": 1,
+  "settings": {},
+  "connections": [
+    {
+      "id": "chat",
+      "type": "chat",
+      "config": {
+        "account": "account-a"
+      },
+      "secret_refs": {
+        "token": "keyring:chat_token"
+      }
+    }
+  ],
+  "scopes": [
+    {
+      "id": "support",
+      "name": "support",
+      "authorization": {
+        "connections": [
+          "chat"
+        ],
+        "operations": [
+          "emit",
+          "read_context",
+          "declare_outcome"
+        ],
+        "read_scopes": []
+      },
+      "bindings": [
+        {
+          "name": "run",
+          "executor": "support_agent",
+          "requires": {
+            "toolbelt": "mcp",
+            "inject": true
+          },
+          "operations": [
+            "emit",
+            "read_context",
+            "declare_outcome"
+          ],
+          "secret_names": [
+            "support_key"
+          ],
+          "config": {},
+          "connection": "chat"
+        }
+      ],
+      "routes": [
+        {
+          "name": "incoming",
+          "handler": "thread",
+          "binding": "run",
+          "active_policy": "inject",
+          "config": {}
+        }
+      ],
+      "secret_refs": {
+        "support_key": "env:SUPPORT_KEY"
+      },
+      "extensions": [
+        {
+          "name": "threads",
+          "type": "chat_ingress",
+          "connection": "chat",
+          "secret_names": [],
+          "config": {
+            "namespace": "chat/account-a/channel-b",
+            "scope": "support"
+          }
+        }
+      ]
+    }
+  ]
+}

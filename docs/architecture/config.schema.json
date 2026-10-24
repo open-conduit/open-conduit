@@ -1,0 +1,496 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://open-conduit.invalid/contracts/config-v1",
+  "title": "Open Conduit configuration v1",
+  "type": "object",
+  "properties": {
+    "version": {
+      "const": 1
+    },
+    "settings": {
+      "$ref": "#/$defs/settings"
+    },
+    "connections": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/connection"
+      }
+    },
+    "scopes": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "$ref": "#/$defs/scope"
+      }
+    }
+  },
+  "required": [
+    "version",
+    "settings",
+    "connections",
+    "scopes"
+  ],
+  "additionalProperties": false,
+  "$defs": {
+    "settings": {
+      "type": "object",
+      "properties": {
+        "concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "default": 4
+        },
+        "admission_limit": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "default": 10
+        },
+        "reconcile_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "default": 900
+        },
+        "timeout_seconds": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "default": 3600
+        },
+        "kept_executions": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "default": 20
+        },
+        "retry_delays_seconds": {
+          "type": "array",
+          "maxItems": 100,
+          "items": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 2147483647
+          },
+          "default": [
+            300,
+            600
+          ]
+        },
+        "causal_max_depth": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "default": 32
+        },
+        "causal_per_minute": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "default": 128
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "authorization": {
+      "type": "object",
+      "properties": {
+        "connections": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+          },
+          "uniqueItems": true
+        },
+        "operations": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_.-]*$"
+          },
+          "uniqueItems": true
+        },
+        "read_scopes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+          },
+          "uniqueItems": true
+        }
+      },
+      "required": [
+        "connections",
+        "operations",
+        "read_scopes"
+      ],
+      "additionalProperties": false
+    },
+    "connection": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+        },
+        "type": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+        },
+        "config": {
+          "type": "object"
+        },
+        "secret_refs": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+          },
+          "additionalProperties": {
+            "type": "string",
+            "pattern": "^(keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\\r\\n]+)$",
+            "not": {
+              "pattern": "[\\r\\n]"
+            }
+          }
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "config"
+      ],
+      "additionalProperties": false
+    },
+    "requires": {
+      "type": "object",
+      "properties": {
+        "interrupt": {
+          "type": "boolean",
+          "default": false
+        },
+        "inject": {
+          "type": "boolean",
+          "default": false
+        },
+        "resume": {
+          "type": "boolean",
+          "default": false
+        },
+        "workspace": {
+          "type": "boolean",
+          "default": false
+        },
+        "toolbelt": {
+          "enum": [
+            "none",
+            "cli",
+            "mcp",
+            "sdk"
+          ]
+        }
+      },
+      "required": [],
+      "additionalProperties": false
+    },
+    "binding": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            },
+            "disabled": {
+              "const": true
+            }
+          },
+          "required": [
+            "name",
+            "disabled"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            },
+            "executor": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            },
+            "connection": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            },
+            "requires": {
+              "$ref": "#/$defs/requires"
+            },
+            "operations": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.-]*$"
+              },
+              "uniqueItems": true
+            },
+            "secret_names": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              },
+              "uniqueItems": true
+            },
+            "resource": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+                },
+                "config": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "provider",
+                "config"
+              ],
+              "additionalProperties": false
+            },
+            "config": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "name",
+            "executor",
+            "requires",
+            "operations",
+            "secret_names",
+            "config"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "route": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            },
+            "disabled": {
+              "const": true
+            }
+          },
+          "required": [
+            "name",
+            "disabled"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            },
+            "handler": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            },
+            "binding": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            },
+            "active_policy": {
+              "enum": [
+                "queue",
+                "drop",
+                "inject",
+                "interrupt"
+              ]
+            },
+            "unsupported_fallback": {
+              "enum": [
+                "queue",
+                "drop"
+              ]
+            },
+            "error_fallback": {
+              "enum": [
+                "queue",
+                "drop"
+              ]
+            },
+            "config": {
+              "type": "object"
+            }
+          },
+          "required": [
+            "name",
+            "handler",
+            "binding",
+            "active_policy",
+            "config"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "extension": {
+      "oneOf": [
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            },
+            "disabled": {
+              "const": true
+            }
+          },
+          "required": [
+            "name",
+            "disabled"
+          ],
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "properties": {
+            "name": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            },
+            "type": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            },
+            "connection": {
+              "type": "string",
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            },
+            "config": {
+              "type": "object"
+            },
+            "secret_names": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              },
+              "uniqueItems": true
+            }
+          },
+          "required": [
+            "name",
+            "type",
+            "config",
+            "secret_names"
+          ],
+          "additionalProperties": false
+        }
+      ]
+    },
+    "scope": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+        },
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "parent": {
+          "type": "string",
+          "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+        },
+        "enabled": {
+          "type": "boolean",
+          "default": true
+        },
+        "limits": {
+          "type": "object",
+          "properties": {
+            "concurrency": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            },
+            "admission_limit": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 2147483647
+            }
+          },
+          "required": [],
+          "additionalProperties": false
+        },
+        "authorization": {
+          "$ref": "#/$defs/authorization"
+        },
+        "bindings": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/binding"
+          }
+        },
+        "routes": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/route"
+          }
+        },
+        "extensions": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/extension"
+          }
+        },
+        "secret_refs": {
+          "type": "object",
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+          },
+          "additionalProperties": {
+            "oneOf": [
+              {
+                "type": "string",
+                "pattern": "^(keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\\r\\n]+)$",
+                "not": {
+                  "pattern": "[\\r\\n]"
+                }
+              },
+              {
+                "const": false
+              }
+            ]
+          }
+        }
+      },
+      "required": [
+        "id",
+        "name"
+      ],
+      "additionalProperties": false
+    }
+  }
+}

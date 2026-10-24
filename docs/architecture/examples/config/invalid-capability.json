@@ -1,0 +1,48 @@
+{
+  "version": 1,
+  "settings": {},
+  "connections": [],
+  "scopes": [
+    {
+      "id": "invalid",
+      "name": "invalid",
+      "authorization": {
+        "connections": [],
+        "operations": [
+          "emit",
+          "read_context",
+          "declare_outcome"
+        ],
+        "read_scopes": []
+      },
+      "bindings": [
+        {
+          "name": "run",
+          "executor": "shell",
+          "requires": {
+            "inject": true,
+            "toolbelt": "cli"
+          },
+          "operations": [
+            "emit",
+            "read_context",
+            "declare_outcome"
+          ],
+          "secret_names": [],
+          "config": {
+            "command": "printf hello"
+          }
+        }
+      ],
+      "routes": [
+        {
+          "name": "incoming",
+          "handler": "manual",
+          "binding": "run",
+          "active_policy": "inject",
+          "config": {}
+        }
+      ]
+    }
+  ]
+}
