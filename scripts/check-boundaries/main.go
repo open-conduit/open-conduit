@@ -36,7 +36,7 @@ func allowed(owner, dependency string, test bool) bool {
 	if owner == dependency {
 		return true
 	}
-	if dependency == "conformance" && test && owner != "domain" && owner != "extension" && owner != "storage" && owner != "observability" {
+	if test && !public(owner) && (dependency == "conformance" || public(dependency)) {
 		return true
 	}
 	switch {
@@ -52,6 +52,8 @@ func allowed(owner, dependency string, test bool) bool {
 		return dependency == "domain" || dependency == "storage" || under(dependency, "internal/storage/sqlite")
 	case under(owner, "internal/artifacts"):
 		return dependency == "domain" || dependency == "storage" || under(dependency, "internal/artifacts")
+	case under(owner, "internal/backup"):
+		return dependency == "domain" || dependency == "storage" || under(dependency, "internal/backup") || under(dependency, "internal/storage/sqlite") || under(dependency, "internal/artifacts")
 	case under(owner, "internal/config"):
 		return dependency == "domain" || dependency == "extension" || under(dependency, "internal/config")
 	case under(owner, "client"):

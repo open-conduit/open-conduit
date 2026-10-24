@@ -27,6 +27,7 @@ func TestDependencyClosures(t *testing.T) {
 		{"reference_runtime_leak", []pkg{project("conformance/reference", "internal/runtime")}, "internal/runtime"},
 		{"domain_payload_leak", []pkg{project("domain", "extensions/slack")}, "extensions/slack"},
 		{"executor_sqlite_leak", []pkg{project("executors/shell", "internal/storage/sqlite")}, "internal/storage/sqlite"},
+		{"backup_runtime_leak", []pkg{project("internal/backup", "internal/runtime")}, "internal/runtime"},
 		{"unknown_package_leak", []pkg{project("newpackage", "domain")}, "domain"},
 		{"external_bridge", []pkg{project("internal/runtime"), {ImportPath: "external.test/helper", Imports: []string{module + "extensions/git"}}}, ""},
 	} {
@@ -44,6 +45,20 @@ func TestDependencyClosures(t *testing.T) {
 				t.Fatalf("weakened graph not rejected: %v", failures)
 			}
 		})
+	}
+}
+
+func TestStorageHarnessClosure(t *testing.T) {
+	variant := project("internal/storage/sqlite_test [" + module + "internal/storage/sqlite.test]")
+	variant.ForTest = module + "internal/storage/sqlite"
+	variant.Imports = []string{module + "conformance"}
+	graph := []pkg{variant, project("conformance", "domain", "storage", "extension", "observability")}
+	if failures := violations(graph); len(failures) != 0 {
+		t.Fatal(failures)
+	}
+	production := project("internal/storage/sqlite", "extension")
+	if failures := violations([]pkg{production}); len(failures) == 0 {
+		t.Fatal("test harness allowance widened production imports")
 	}
 }
 

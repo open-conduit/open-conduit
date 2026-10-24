@@ -18,7 +18,7 @@ jobs:
       - uses: actions/setup-go@v5
         with:
           go-version: ${{ matrix.go }}
-          cache: false # No external Go modules yet.
+          cache: true
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'

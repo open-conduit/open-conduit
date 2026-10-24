@@ -49,6 +49,7 @@ smoke: build
 cross-build:
 	@set -eu; for target in darwin/amd64 darwin/arm64 linux/amd64 linux/arm64; do \
 		target_os=$${target%/*}; target_arch=$${target#*/}; \
+		CGO_ENABLED=0 GOOS=$$target_os GOARCH=$$target_arch $(GO) build ./...; \
 		mkdir -p dist/$$target_os-$$target_arch; \
 		for binary in open-conduit os; do \
 			CGO_ENABLED=0 GOOS=$$target_os GOARCH=$$target_arch $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$$target_os-$$target_arch/$$binary ./cmd/$$binary; \

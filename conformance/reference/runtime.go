@@ -27,6 +27,13 @@ type Runtime struct {
 
 func NewRuntime(o conformance.RuntimeOptions) conformance.RuntimeFixture {
 	s, c := New(), conformance.NewClock()
+	return NewRuntimeWithStore(o, s, c)
+}
+
+// NewRuntimeWithStore runs the executable specification over supplied storage.
+// Backend integration tests use it to prove persistence/reopen compatibility;
+// it is still a reference coordinator, never a production runtime adapter.
+func NewRuntimeWithStore(o conformance.RuntimeOptions, s storage.Store, c *conformance.Clock) conformance.RuntimeFixture {
 	r := &Runtime{store: s, clock: c, options: o}
 	if r.options.MaxAttempts == 0 {
 		r.options.MaxAttempts = 3

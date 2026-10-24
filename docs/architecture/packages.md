@@ -12,6 +12,7 @@ Decision B01, ticket 01-01. These are ownership and import rules for the interfa
 | `internal/runtime` | Durable event acceptance, observation diffing, routing serialization, scheduling, leases, retry, wait/wake, causation limits | Public packages above except `conformance` |
 | `internal/storage/sqlite` | SQLite transactions, migrations and durability | `storage`, `domain` |
 | `internal/artifacts` | Streaming local logs/outputs and retention implementation | `storage`, `domain` |
+| `internal/backup` | Local SQLite/artifact snapshot composition, manifest verification and isolated restore | `storage`, `domain`, `internal/storage/sqlite`, `internal/artifacts`; never runtime or adapters |
 | `internal/config` | Scope configuration loading, validation, secret resolution, reload snapshots | `domain`, `extension` |
 | `internal/management` | Local authenticated management and toolbelt server, calling generic runtime operations | Public packages, `internal/runtime`, `internal/config` |
 | `client` | Public local API client and wire types for operators/extensions | `domain`; public contracts where needed, never server internals |
@@ -22,7 +23,7 @@ Decision B01, ticket 01-01. These are ownership and import rules for the interfa
 | `executors/shell`, `executors/claudecode` | Execution processes, adoption and executor-private continuity; CLI/MCP toolbelt presentation | Public packages, `client`, generic process helpers; no runtime/SQLite imports |
 | `internal/bootstrap`, `cmd/open-conduit`, `cmd/os` | Composition root and entrypoints; wire implementations and optional registrations | Packages required to assemble the binary; `cmd/os` uses `client` |
 
-Arrows below mean “imports”; implementations point toward contracts. Bootstrap is the only place that assembles all implementations.
+Arrows below mean “imports”; implementations point toward contracts. Bootstrap assembles runtime implementations; the local backup service composes only SQLite and artifact storage.
 
 ```mermaid
 flowchart TD
@@ -44,7 +45,7 @@ flowchart TD
 
 Runtime must not import extensions, executors, client, management, config implementation, SQLite or Git workspace code, directly or transitively. Domain behavior belongs outside runtime. The executor owns session identity, resume-versus-fresh decisions, handoff assignment/feedback telemetry and opaque adoption state; runtime owns generic authority and execution history. Extensions use storage only through the public transaction/KV surface, never implementation tables. Resource consumers bind the public provider interface rather than importing `extensions/git`.
 
-01-06 enforces this graph with [the boundary checker](../../scripts/check-boundaries/main.go) and [gate documentation](contracts-gate.md). Runtime tests may import the public `conformance` harness, but not `conformance/reference`, adapters or SQLite; real backend/workload composition belongs in `integration/` outside runtime. The current command scaffolds share `internal/cli` for inert help/version only; `cmd/os` will use `client` for execution calls. It traverses `go list -deps -test -json` output, including runtime tests so test imports cannot smuggle in an adapter. Conformance suites run without runtime/SQLite. In 02-09 and 05-04 run a core slice with no Git or service registration; exercise opaque synthetic payloads. Go's `internal` rules alone do not enforce these boundaries.
+01-06 enforces this graph with [the boundary checker](../../scripts/check-boundaries/main.go) and [gate documentation](contracts-gate.md). Implementation tests may import public contracts and the public `conformance` harness (including its public-contract dependency closure). Runtime tests may use that harness, but not `conformance/reference`, adapters or SQLite; real backend/workload composition belongs in `integration/` outside runtime. The current command scaffolds share `internal/cli` for inert help/version only; `cmd/os` will use `client` for execution calls. It traverses `go list -deps -test -json` output, including runtime tests so test imports cannot smuggle in an adapter. Conformance suites run without runtime/SQLite. In 02-09 and 05-04 run a core slice with no Git or service registration; exercise opaque synthetic payloads. Go's `internal` rules alone do not enforce these boundaries.
 
 Non-goals for stages 01–06: no Effect primitive/outbox state machine, DAG, workflow language, remote management or third-party extension protocol/manifest. Adapters reconcile writes and mark messages whose effects cannot be re-derived. Namespaced KV is mandatory coordination storage, not a second event log or artifact warehouse. Subprocess transport and schema evolution are deferred to 07-01–07-03 after shipped workload evidence.
 
