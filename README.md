@@ -12,6 +12,7 @@ The project is implementing the core after completing the contracts gate. Primit
 - [Configuration, secrets and local management contract](docs/architecture/config-management.md)
 - [SQLite and local artifact guarantees](docs/architecture/sqlite-artifacts.md)
 - [Verified backup bundles](docs/architecture/backup-bundles.md)
+- [Durable event acceptance and reconciliation](docs/architecture/event-ingress.md)
 - [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)
 - [Pinned source test index](docs/baseline/source-tests.md)
