@@ -61,6 +61,7 @@ type Tx interface {
 	FireTimer(domain.ID, domain.Revision, *domain.Timer) error
 	ListWaits(domain.ID) ([]domain.Wait, error)
 	Wait(domain.ID) (domain.Wait, error)
+	// Timeout Timer must exist at registration; history remains valid after firing/deletion.
 	PutWait(domain.Wait, domain.Revision) error
 	ListScopes() ([]domain.Scope, error)
 	Scope(domain.ID) (domain.Scope, error)

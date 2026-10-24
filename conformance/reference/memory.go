@@ -536,7 +536,8 @@ func (t *transaction) PutWait(v domain.Wait, expected domain.Revision) error {
 			return storage.ErrInvalid
 		}
 	}
-	if v.TimeoutTimerID != "" {
+	// A timeout may have fired/deleted before the historical wait transitions.
+	if !exists && v.TimeoutTimerID != "" {
 		if _, ok := t.data.Timers[v.TimeoutTimerID]; !ok {
 			return storage.ErrNotFound
 		}
