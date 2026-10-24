@@ -1,0 +1,28 @@
+name: contracts
+on:
+  push:
+    branches: [main]
+  pull_request:
+permissions:
+  contents: read
+jobs:
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+        go: ['1.24.2', stable]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: ${{ matrix.go }}
+          cache: false # No external Go modules yet.
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: make config-deps
+      - run: make check
+      - run: make cross-build
+        if: matrix.os == 'ubuntu-latest' && matrix.go == 'stable'

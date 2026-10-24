@@ -10,11 +10,14 @@ The project is in the contracts stage. Primitive, storage, ingress, executor, to
 - [Ingress, executor, toolbelt and observability contracts](docs/architecture/extensions.md)
 - [Routing, waits and recovery semantics with executable scenarios](docs/architecture/runtime-semantics.md)
 - [Configuration, secrets and local management contract](docs/architecture/config-management.md)
+- [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)
 - [Pinned source test index](docs/baseline/source-tests.md)
 
 Ticket identifiers in these documents refer to the local delivery plan. The baseline records required outcomes and verification work; it does not claim that the rewrite passes those scenarios yet.
 
-Run the current contract checks with `go test -race ./...` and `go vet ./...` (Go 1.24.2 or later). Command scaffolding and CI follow in the contracts gate ticket.
+Use Go 1.24.2 or later, Python 3.10+ and Make. Run `make config-deps` once to install the isolated schema checker, then `make check` for formatting, vet, race tests, dependency boundaries, config fixtures and binary smoke checks. `make cross-build` checks Darwin/Linux amd64/arm64 compilation.
+
+`make build` creates `bin/open-conduit` and `bin/os`. Both currently support help/version only; runtime/toolbelt commands return an explicit unavailable error. Hosted CI runs the same checks on Linux/macOS; no production runtime is implemented.
 
 Configuration schema/example checks: see [the fixture instructions](docs/architecture/examples/config/README.md). These validate the design contract; local server, config reload and secret resolution follow in stage 02.
