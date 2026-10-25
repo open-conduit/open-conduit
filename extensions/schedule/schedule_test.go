@@ -64,7 +64,10 @@ func TestParseExtension(t *testing.T) {
 	if err := sc.ValidateRoute(json.RawMessage(`{"jobs":["a"]}`)); err != nil {
 		t.Fatal(err)
 	}
-	if sc.ValidateRoute(json.RawMessage(`{"job":"a"}`)) == nil || sc.ValidateRoute(json.RawMessage(`{"jobs":["A b"]}`)) == nil {
+	if err := sc.ValidateRoute(json.RawMessage(`{"jobs":["a"],"triggers":["timer","manual"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	if sc.ValidateRoute(json.RawMessage(`{"job":"a"}`)) == nil || sc.ValidateRoute(json.RawMessage(`{"jobs":["A b"]}`)) == nil || sc.ValidateRoute(json.RawMessage(`{"triggers":["slot"]}`)) == nil {
 		t.Fatal("bad route config accepted")
 	}
 }
@@ -135,6 +138,10 @@ func TestJobPathsFilterPushes(t *testing.T) {
 	if j.Matches(sc.Delivery{Event: "push", Ref: "refs/heads/main", SHA: strings.Repeat("0", 40)}) {
 		t.Error("a deleted branch changes nothing")
 	}
+	// 05-02: a possibly truncated list is unknown, so it never skips wrongly.
+	if !j.Matches(sc.Delivery{Event: "push", Ref: "refs/heads/main", SHA: "eee", Files: []string{"README.md"}, Truncated: true}) {
+		t.Error("a truncated file list must run anyway")
+	}
 }
 
 func scopeWith(entries ...string) domain.Scope {
@@ -171,6 +178,12 @@ func TestRouteMatch(t *testing.T) {
 		{trigger("github.issue.open", "schedule/demo", "report"), route, nil, false}, // not a trigger
 		{trigger(sc.TypeSlot, "schedule/demo", "report"), domain.Route{Config: domain.Payload{Data: []byte(`{"jobs":["deploy"]}`)}}, nil, false},
 		{trigger(sc.TypeSlot, "schedule/demo", "report"), domain.Route{Config: domain.Payload{Data: []byte(`{"jobs":["report"]}`)}}, nil, true},
+		// 05-02: triggers narrows a route to trigger kinds (detached jobs:
+		// timer slots queue, deliveries and manual runs drop).
+		{trigger(sc.TypeSlot, "schedule/demo", "report"), domain.Route{Config: domain.Payload{Data: []byte(`{"triggers":["timer"]}`)}}, nil, true},
+		{trigger(sc.TypeWebhook, "schedule/demo", "deploy"), domain.Route{Config: domain.Payload{Data: []byte(`{"triggers":["timer"]}`)}}, nil, false},
+		{trigger("schedule.run", sc.ManualSource, "report"), domain.Route{Config: domain.Payload{Data: []byte(`{"triggers":["webhook","event","manual"]}`)}}, nil, true},
+		{trigger(sc.TypeSlot, "schedule/demo", "report"), domain.Route{Config: domain.Payload{Data: []byte(`{"jobs":["report"],"triggers":["manual"]}`)}}, nil, false},
 		{trigger(sc.TypeSlot, "schedule/demo", "report"), route, &domain.Work{ID: "w", Kind: sc.WorkKind}, true},
 		{trigger(sc.TypeSlot, "schedule/demo", "report"), route, &domain.Work{ID: "w", Kind: "manual.work"}, false},
 	} {

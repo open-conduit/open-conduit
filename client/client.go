@@ -643,23 +643,32 @@ type Retention struct {
 // Run is one attempt in the unified history, identical for every executor.
 type Run struct {
 	Execution
-	WorkKind                string       `json:"work_kind"`
-	WorkState               string       `json:"work_state"`
-	Trigger                 *Trigger     `json:"trigger,omitempty"`
-	CurrentTrigger          *Trigger     `json:"current_trigger,omitempty"`
-	Executor                string       `json:"executor,omitempty"`
-	ConfigGeneration        string       `json:"config_generation,omitempty"`
-	LaunchState             string       `json:"launch_state,omitempty"`
-	ResourceExcluded        bool         `json:"resource_excluded"`
-	Deadline                string       `json:"deadline,omitempty"`
-	RemainingTimeoutSeconds int64        `json:"remaining_timeout_seconds,omitempty"`
-	DurationMS              int64        `json:"duration_ms,omitempty"`
-	Usage                   *Usage       `json:"usage,omitempty"`
-	Inputs                  int          `json:"inputs"`
-	WaitID                  string       `json:"wait_id,omitempty"`
-	WakeEventID             string       `json:"wake_event_id,omitempty"`
-	Retry                   *RetryStatus `json:"retry,omitempty"`
-	Retention               Retention    `json:"retention"`
+	WorkKind                string        `json:"work_kind"`
+	WorkState               string        `json:"work_state"`
+	Trigger                 *Trigger      `json:"trigger,omitempty"`
+	CurrentTrigger          *Trigger      `json:"current_trigger,omitempty"`
+	Executor                string        `json:"executor,omitempty"`
+	ConfigGeneration        string        `json:"config_generation,omitempty"`
+	LaunchState             string        `json:"launch_state,omitempty"`
+	ResourceExcluded        bool          `json:"resource_excluded"`
+	Deadline                string        `json:"deadline,omitempty"`
+	RemainingTimeoutSeconds int64         `json:"remaining_timeout_seconds,omitempty"`
+	DurationMS              int64         `json:"duration_ms,omitempty"`
+	Usage                   *Usage        `json:"usage,omitempty"`
+	Workspace               *RunWorkspace `json:"workspace,omitempty"`
+	Inputs                  int           `json:"inputs"`
+	WaitID                  string        `json:"wait_id,omitempty"`
+	WakeEventID             string        `json:"wake_event_id,omitempty"`
+	Retry                   *RetryStatus  `json:"retry,omitempty"`
+	Retention               Retention     `json:"retention"`
+}
+
+// RunWorkspace is the resource a run's executor reported it ran in.
+type RunWorkspace struct {
+	Kind    string `json:"kind,omitempty"`
+	Ref     string `json:"ref"`
+	Dir     string `json:"dir,omitempty"`
+	Summary string `json:"summary,omitempty"`
 }
 type Check struct {
 	Name   string   `json:"name"`

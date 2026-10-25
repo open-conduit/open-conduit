@@ -541,7 +541,7 @@ func (s *Snapshot) DomainScopes() []domain.Scope {
 		}
 		d := domain.Scope{ID: e.ID, Name: e.Name, ParentID: e.ParentID, SecretRefs: maps.Clone(e.SecretRefs)}
 		for _, b := range e.Bindings {
-			d.Bindings = append(d.Bindings, domain.Binding{Name: b.Name, Executor: b.Executor, Requires: b.Requires,
+			d.Bindings = append(d.Bindings, domain.Binding{Name: b.Name, Executor: b.Executor, Requires: b.Requires, TimeoutSeconds: b.TimeoutSeconds,
 				Config: domain.Payload{Schema: BindingSchema, Data: slices.Clone(b.Config)}})
 			meta.Bindings[b.Name] = bindingMeta{b.Connection, b.Operations, b.SecretNames, b.Resource}
 		}

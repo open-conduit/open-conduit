@@ -185,6 +185,9 @@ type Capabilities struct {
 type Binding struct {
 	Name, Executor string
 	Requires       Capabilities
+	// TimeoutSeconds, when positive, replaces the runtime's default execution
+	// deadline for attempts of this binding. Zero inherits the default.
+	TimeoutSeconds int `json:",omitempty"`
 	Config         Payload
 }
 type Route struct {

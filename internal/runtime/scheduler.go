@@ -548,7 +548,13 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 		}
 		attempt.Lease = ref
 		if parked == "" {
-			state.Deadline = s.now().Add(s.options.Timeout)
+			// One deadline model for every executor (05-02): the binding's
+			// own timeout when it sets one, else the runtime default.
+			timeout := s.options.Timeout
+			if seconds := state.Binding.TimeoutSeconds; seconds > 0 {
+				timeout = time.Duration(seconds) * time.Second
+			}
+			state.Deadline = s.now().Add(timeout)
 		} else {
 			if state.RemainingTimeout <= 0 {
 				return storage.ErrInvalid

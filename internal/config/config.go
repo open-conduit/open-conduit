@@ -89,7 +89,11 @@ type Binding struct {
 	Requires                   domain.Capabilities
 	Operations, SecretNames    []string
 	Resource                   *Resource
-	Config                     json.RawMessage
+	// TimeoutSeconds overrides settings.timeout_seconds for attempts of this
+	// binding (05-02): one deadline model for every executor, with a
+	// per-binding value for long jobs or short turns. Zero inherits.
+	TimeoutSeconds int
+	Config         json.RawMessage
 }
 type Route struct {
 	Name, Handler, Binding, ActivePolicy, UnsupportedFallback, ErrorFallback string
@@ -328,7 +332,7 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 		return BindingEntry{Binding: Binding{Name: name}, Disabled: true}
 	}
 	var b Binding
-	if !c.object(n, path, []string{"name", "executor", "requires", "operations", "secret_names", "config"}, "connection", "resource") {
+	if !c.object(n, path, []string{"name", "executor", "requires", "operations", "secret_names", "config"}, "connection", "resource", "timeout_seconds") {
 		return BindingEntry{Binding: b}
 	}
 	b.Name, _ = c.str(n.field("name"), path+"/name", idPattern)
@@ -352,6 +356,9 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 		b.Resource = &Resource{}
 		b.Resource.Provider, _ = c.str(r.field("provider"), path+"/resource/provider", idPattern)
 		b.Resource.Config = c.opaque(r.field("config"), path+"/resource/config")
+	}
+	if t := n.field("timeout_seconds"); t != nil {
+		b.TimeoutSeconds, _ = c.integer(t, path+"/timeout_seconds")
 	}
 	b.Config = c.opaque(n.field("config"), path+"/config")
 	return BindingEntry{Binding: b}
@@ -502,6 +509,9 @@ func (b BindingEntry) normalized() any {
 	}
 	if b.Resource != nil {
 		m["resource"] = b.Resource
+	}
+	if b.TimeoutSeconds > 0 {
+		m["timeout_seconds"] = b.TimeoutSeconds
 	}
 	return m
 }

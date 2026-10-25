@@ -156,9 +156,12 @@ type recovery struct {
 // workspaceRecord is the acquired resource's opaque lease reference and
 // description, kept with the segment and reported in its result.
 type workspaceRecord struct {
-	Ref    string          `json:"ref"`
-	Schema string          `json:"schema,omitempty"`
-	Data   json.RawMessage `json:"data,omitempty"`
+	Ref     string          `json:"ref"`
+	Schema  string          `json:"schema,omitempty"`
+	Data    json.RawMessage `json:"data,omitempty"`
+	Kind    string          `json:"kind,omitempty"`
+	Dir     string          `json:"dir,omitempty"`
+	Summary string          `json:"summary,omitempty"`
 }
 
 // Run starts a new attempt segment.
@@ -225,7 +228,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 		}
 		res, err := r.Context.Resources.Acquire(ctx, extension.ResourceRequest{Log: log})
 		if res.Ref != "" {
-			_ = writeJSON(filepath.Join(dir, "workspace.json"), workspaceRecord{Ref: res.Ref, Schema: res.Data.Schema, Data: res.Data.Data})
+			_ = writeJSON(filepath.Join(dir, "workspace.json"), workspaceRecord{Ref: res.Ref, Schema: res.Data.Schema, Data: res.Data.Data, Kind: res.Kind, Dir: res.Dir, Summary: res.Summary})
 		}
 		switch {
 		case errors.Is(err, extension.ErrResourceSetup):

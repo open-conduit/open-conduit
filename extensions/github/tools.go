@@ -90,6 +90,10 @@ type ToolsOptions struct {
 	// Sources returns the registered sources (the host's live registry).
 	Sources func() []Source
 	Now     func() time.Time
+	// Jobs resolves a `job:<name>` condition (05-02): the named job's
+	// correlation key in the scope and the Event types announcing one of its
+	// runs ending. Nil, or an unknown job, refuses the condition.
+	Jobs func(ctx context.Context, scope domain.ID, name string) (key domain.CorrelationKey, types []string, ok bool)
 }
 
 // Tools implements the operations.

@@ -553,3 +553,28 @@ func TestResourceConfigValidation(t *testing.T) {
 		t.Fatalf("diagnostics %+v", got)
 	}
 }
+
+// TestBindingTimeout: a binding's timeout_seconds (05-02) reaches the domain
+// binding the scheduler pins, survives normalization, and is bounded like
+// settings.timeout_seconds.
+func TestBindingTimeout(t *testing.T) {
+	m := generic(t, example(t, "git-scope"))
+	entry(m, 0, "bindings", 0)["timeout_seconds"] = 21600
+	snap, err := Validate(encode(t, m), registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := snap.DomainScopes()[0].Bindings[0]; b.TimeoutSeconds != 21600 {
+		t.Fatalf("domain binding %+v", b)
+	}
+	if !strings.Contains(string(snap.Redacted()), `"timeout_seconds":21600`) {
+		t.Fatal("normalized config dropped the binding timeout")
+	}
+	for _, bad := range []any{0, -1, "60", 1.5} {
+		m := generic(t, example(t, "git-scope"))
+		entry(m, 0, "bindings", 0)["timeout_seconds"] = bad
+		if _, err := Validate(encode(t, m), registry()); err == nil {
+			t.Fatalf("timeout_seconds %v accepted", bad)
+		}
+	}
+}

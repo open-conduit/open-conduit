@@ -18,6 +18,7 @@ import (
 	"github.com/alsiola/open-conduit/extension"
 	gh "github.com/alsiola/open-conduit/extensions/github"
 	"github.com/alsiola/open-conduit/extensions/github/playbooks"
+	sc "github.com/alsiola/open-conduit/extensions/schedule"
 	sl "github.com/alsiola/open-conduit/extensions/slack"
 	"github.com/alsiola/open-conduit/internal/config"
 	"github.com/alsiola/open-conduit/internal/management"
@@ -46,8 +47,13 @@ func registry(executors map[string]extension.Executor) config.Registry {
 func ValidateConfig(data []byte) ([]config.Diagnostic, error) {
 	// Capability and config checks need only the registrations: executors'
 	// capabilities and config validators do not touch their runtime state.
-	reg := registry(map[string]extension.Executor{"shell": &shell.Executor{}, ClaudeCodeExecutor: &claudecode.Executor{}, gh.HoldExecutor: gh.NewHoldExecutor()})
-	_, err := config.Validate(data, reg)
+	inner := &shell.Executor{}
+	legacy, err := sc.NewLegacyExecutor(sc.LegacyOptions{Inner: inner})
+	if err != nil {
+		return nil, err
+	}
+	reg := registry(map[string]extension.Executor{"shell": inner, ClaudeCodeExecutor: &claudecode.Executor{}, gh.HoldExecutor: gh.NewHoldExecutor(), sc.LegacyExecutorName: legacy})
+	_, err = config.Validate(data, reg)
 	var invalid *config.ValidationError
 	if errors.As(err, &invalid) {
 		return invalid.Diagnostics, nil

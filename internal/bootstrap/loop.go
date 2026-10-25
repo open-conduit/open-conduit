@@ -49,6 +49,7 @@ func (d *daemon) loop(ctx context.Context) error {
 			d.report("ingress", "", errorCode(err))
 		}
 		d.translateSchedule(ctx)
+		d.publishJobRuns(ctx)
 		if snapshot, _ := d.configs.Current(); snapshot != nil {
 			d.ensureSchedules(ctx, c, snapshot, false)
 		}

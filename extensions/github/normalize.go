@@ -174,7 +174,18 @@ type DeliveryPayload struct {
 	Before   string   `json:"before,omitempty"`
 	After    string   `json:"after,omitempty"`
 	Files    []string `json:"files,omitempty"`
+	// Commits is how many commits the push listed. Files covers only those,
+	// capped at MaxDeliveryFiles, so a consumer can tell a possibly
+	// truncated list from a complete one.
+	Commits int `json:"commits,omitempty"`
 }
+
+// MaxDeliveryFiles caps DeliveryPayload.Files; GitHub itself lists at most
+// MaxPushCommits commits in a push delivery.
+const (
+	MaxDeliveryFiles = 1000
+	MaxPushCommits   = 2048
+)
 
 // IssueKey is the correlation external ID of an issue generation.
 func IssueKey(number int, generation string) string {

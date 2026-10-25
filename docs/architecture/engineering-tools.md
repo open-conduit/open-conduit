@@ -62,7 +62,7 @@ Not ported:
 Behaviour:
 
 - **Refusals.** As in v1, the call checks each condition before any side effect and refuses one that has already happened (`already_met`: carry on), an unknown project, a past time or nothing to wait for. A race between that read and registration is closed by the subscription backscan.
-- **Jobs.** Jobs arrive in stage 05, so `job:` refuses with `jobs_unavailable`.
+- **Jobs.** `job:<name>` (05-02) is a FromNow dependency on the job's key in its schedule entry, over the `schedule.run.completed|failed|cancelled|handoff` Events the host announces for each finished run, so the job's next run wakes it ([job waits](schedule-extension.md#job-waits)). A job the scope's schedule entries do not declare refuses with `no_job`.
 - **The reason.** It is posted on the issue with v1's hold marker, so people, and Open Supervisor, see what is awaited.
 - **What wakes the Wait.** The Wait matches the Work's own keys with the alias type plus the own-key inputs that still reach a waiting agent: human comments, closes, merges and check results. A comment therefore wakes the agent, as in v1.
 - **Intentional difference.** One wake ends a core Wait, so the agent waits again if the prerequisite is still pending. The playbook says so. Agent comments are excluded, because the wait's own reason comment is one.
@@ -120,5 +120,5 @@ go test -race -run 'TestTranslatedWait|TestGitHubTools|TestGitHubWait|TestGitHub
 ## Limitations and follow-on work
 
 - **Fixtures only.** No real GitHub write or real Claude Code session ran. Real-issue evidence of the tools, waits and holds is 03-06.
-- **Not ported yet.** Job waits wait for 05-02 (`jobs_unavailable` until then). A hold condition nothing here can meet (a job, an unknown project) leaves only the hold's time; with no time the issue starts at once and its first turn says why, rather than being held for ever. Sweep and triage consume `github.notes` in 05-03. The setup command and operator controls are delivered by 03-05 ([operator setup](operator-setup.md)).
+- **Not ported yet.** Job waits are delivered by 05-02. A hold condition nothing here can meet (an unknown job or project) leaves only the hold's time; with no time the issue starts at once and its first turn says why, rather than being held for ever. Sweep and triage consume `github.notes` in 05-03. The setup command and operator controls are delivered by 03-05 ([operator setup](operator-setup.md)).
 - **Intentional differences from v1.** One wake ends a wait, so the agent waits again. There is no `--cancel`. The checks debounce is gone. Since 03-06 an injected comment that claude echoed is consumed with its turn (`Result.ConsumedInputs`). Since 04-02 the proof also counts when the turn ends before the dispatch acknowledgement commits, and on waiting and failed turns, so an injected comment is never listed again once claude echoed it; the playbook's "may be listed again" caveat is removed.

@@ -284,14 +284,14 @@ func (g *Ingress) deliveryEvent(env envelope, p webhookPayload, received time.Ti
 	for _, c := range p.Commits {
 		for _, list := range [][]string{c.Added, c.Removed, c.Modified} {
 			for _, f := range list {
-				if !seen[f] && len(files) < 1000 {
+				if !seen[f] && len(files) < MaxDeliveryFiles {
 					seen[f] = true
 					files = append(files, f)
 				}
 			}
 		}
 	}
-	data, _ := json.Marshal(DeliveryPayload{Event: env.Event, Action: p.Action, Delivery: env.Delivery, Repo: g.s.Repo, Ref: ref, Before: p.Before, After: p.After, Files: files})
+	data, _ := json.Marshal(DeliveryPayload{Event: env.Event, Action: p.Action, Delivery: env.Delivery, Repo: g.s.Repo, Ref: ref, Before: p.Before, After: p.After, Files: files, Commits: len(p.Commits)})
 	delivery := "delivery/" + env.Delivery
 	return domain.Event{ID: domain.ID("github-" + digest(g.s.Namespace, delivery)[:40]), Type: TypeDelivery, Source: g.s.Namespace,
 		DeliveryID: delivery, OccurredAt: received, ReceivedAt: received, Data: domain.Payload{Schema: SchemaDelivery, Data: data}}

@@ -84,10 +84,22 @@ type injected struct {
 // workspaceRecord is the acquired resource's opaque lease reference and
 // description, kept with the segment and reported in its result.
 type workspaceRecord struct {
-	Ref    string          `json:"ref"`
-	Dir    string          `json:"dir,omitempty"`
-	Schema string          `json:"schema,omitempty"`
-	Data   json.RawMessage `json:"data,omitempty"`
+	Ref     string          `json:"ref"`
+	Dir     string          `json:"dir,omitempty"`
+	Schema  string          `json:"schema,omitempty"`
+	Data    json.RawMessage `json:"data,omitempty"`
+	Kind    string          `json:"kind,omitempty"`
+	Summary string          `json:"summary,omitempty"`
+}
+
+// historyWorkspace is the generic history record of the segment's resource
+// (extension.Result.Workspace), read before the private copy drops Dir.
+func historyWorkspace(dir string) *extension.WorkspaceRecord {
+	var ws workspaceRecord
+	if readJSON(filepath.Join(dir, "workspace.json"), &ws) != nil || ws.Ref == "" {
+		return nil
+	}
+	return &extension.WorkspaceRecord{Kind: ws.Kind, Ref: ws.Ref, Dir: ws.Dir, Summary: ws.Summary, Data: domain.Payload{Schema: ws.Schema, Data: ws.Data}}
 }
 
 func newNonce() (string, error) {
@@ -161,7 +173,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	if r.Context.Resources != nil {
 		res, err := e.workspace(ctx, r, cfg, prev, errLog)
 		if res.Ref != "" {
-			_ = writeJSON(filepath.Join(dir, "workspace.json"), workspaceRecord{Ref: res.Ref, Dir: res.Dir, Schema: res.Data.Schema, Data: res.Data.Data})
+			_ = writeJSON(filepath.Join(dir, "workspace.json"), workspaceRecord{Ref: res.Ref, Dir: res.Dir, Schema: res.Data.Schema, Data: res.Data.Data, Kind: res.Kind, Summary: res.Summary})
 		}
 		switch {
 		case errors.Is(err, extension.ErrResourceSetup):
@@ -338,7 +350,7 @@ func (e *Executor) preset(ctx context.Context, rn *run, schema, reason, summary 
 		ws.Dir = ""
 		f.Workspace = &ws
 	}
-	res := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: summary, Data: resultData(schema, f)}, RetryHint: hint}
+	res := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: summary, Data: resultData(schema, f)}, RetryHint: hint, Workspace: historyWorkspace(rn.dir)}
 	if _, err := e.finalizeWith(ctx, rn, &res); err != nil {
 		return nil, err
 	}
@@ -1033,6 +1045,7 @@ func (e *Executor) settle(ctx context.Context, rn *run) (extension.Result, error
 		f.Workspace = &ws
 	}
 	result.Outcome.Data = resultData(turn.StatusSchema, f)
+	result.Workspace = historyWorkspace(rn.dir)
 	if fresh {
 		if end.ended != nil {
 			e.reportTrialEnd(rec, end.ended, "finished", StateFinished)

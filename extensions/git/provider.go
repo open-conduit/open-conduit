@@ -290,7 +290,40 @@ func newLease(ref, mode string, cfg Config, checkout string, o extension.Resourc
 func resource(l lease, w workspace) extension.Resource {
 	w.Mode, w.Dir, w.Remote, w.Base, w.Branch = l.Mode, l.Path, l.Remote, l.Base, l.Branch
 	data, _ := json.Marshal(w)
-	return extension.Resource{Kind: "workspace", Ref: l.Ref, Dir: l.Path, Env: environment(l.Checkout, l.DotEnv, l.Sign), Data: domain.Payload{Schema: WorkspaceSchema, Data: data}}
+	return extension.Resource{Kind: "workspace", Ref: l.Ref, Dir: l.Path, Env: environment(l.Checkout, l.DotEnv, l.Sign), Data: domain.Payload{Schema: WorkspaceSchema, Data: data}, Summary: summary(w)}
+}
+
+// summary is the workspace in one line for run history (05-02).
+func summary(w workspace) string {
+	remote := w.Remote + "/" + w.Base
+	switch w.Mode {
+	case extension.ResourceShared:
+		s := "main checkout"
+		switch {
+		case w.Updated > 0:
+			s += fmt.Sprintf(", fast-forwarded %d commit(s) to %s", w.Updated, remote)
+		case w.Behind > 0:
+			s += fmt.Sprintf(", %d commit(s) behind %s: %s", w.Behind, remote, w.Stale)
+		case w.Stale != "":
+			s += ", " + w.Stale
+		default:
+			s += ", up to date with " + remote
+		}
+		if w.Dirty > 0 {
+			s += fmt.Sprintf(", %d uncommitted path(s)", w.Dirty)
+		}
+		return s
+	case extension.ResourceFresh:
+		return "fresh worktree at " + remote + " " + w.Head[:min(7, len(w.Head))]
+	}
+	s := "worktree on branch " + w.Branch
+	if w.Reused {
+		s += ", reused"
+	}
+	if w.Dirty > 0 {
+		s += fmt.Sprintf(", %d uncommitted path(s) inherited", w.Dirty)
+	}
+	return s
 }
 
 // shared hands out the main checkout. The first user catches it up with a

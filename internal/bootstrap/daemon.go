@@ -30,6 +30,7 @@ import (
 	"github.com/alsiola/open-conduit/executors/shell"
 	"github.com/alsiola/open-conduit/extension"
 	gh "github.com/alsiola/open-conduit/extensions/github"
+	sc "github.com/alsiola/open-conduit/extensions/schedule"
 	sl "github.com/alsiola/open-conduit/extensions/slack"
 	"github.com/alsiola/open-conduit/internal/artifacts"
 	"github.com/alsiola/open-conduit/internal/config"
@@ -248,7 +249,11 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.closeClaudeCode()
-	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor, gh.HoldExecutor: gh.NewHoldExecutor()}
+	legacy, err := sc.NewLegacyExecutor(sc.LegacyOptions{Inner: d.shell, StateDir: filepath.Join(o.StateDir, "executors", sc.LegacyExecutorName), Artifacts: d.artifacts})
+	if err != nil {
+		return err
+	}
+	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor, gh.HoldExecutor: gh.NewHoldExecutor(), sc.LegacyExecutorName: legacy}
 	if err = d.openTools(); err != nil {
 		return err
 	}

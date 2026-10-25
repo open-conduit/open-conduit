@@ -3,6 +3,7 @@ package schedule
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 
 	"github.com/alsiola/open-conduit/domain"
@@ -67,9 +68,16 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	if !ok {
 		return extension.RouteDecision{}, nil
 	}
+	kind := ""
 	switch {
-	case e.Source == key.Source && (e.Type == TypeSlot || e.Type == TypeWebhook || e.Type == TypeEvent):
+	case e.Source == key.Source && e.Type == TypeSlot:
+		kind = KindTimer
+	case e.Source == key.Source && e.Type == TypeWebhook:
+		kind = KindWebhook
+	case e.Source == key.Source && e.Type == TypeEvent:
+		kind = KindEvent
 	case e.Source == ManualSource:
+		kind = KindManual
 	default:
 		return extension.RouteDecision{}, nil
 	}
@@ -88,14 +96,11 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		if err != nil {
 			return extension.RouteDecision{}, nil
 		}
-		if len(rc.Jobs) > 0 {
-			selected := false
-			for _, j := range rc.Jobs {
-				selected = selected || j == name
-			}
-			if !selected {
-				return extension.RouteDecision{}, nil
-			}
+		if len(rc.Jobs) > 0 && !slices.Contains(rc.Jobs, name) {
+			return extension.RouteDecision{}, nil
+		}
+		if len(rc.Triggers) > 0 && !slices.Contains(rc.Triggers, kind) {
+			return extension.RouteDecision{}, nil
 		}
 	}
 	if in.Work == nil {

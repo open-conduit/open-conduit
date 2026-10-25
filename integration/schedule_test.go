@@ -46,6 +46,8 @@ type jobExecutor struct {
 	mu      sync.Mutex
 	runs    []jobRun
 	outcome domain.OutcomeKind
+	// hint, when set, rides a failed outcome as an executor retry hint.
+	hint *time.Time
 }
 
 func (x *jobExecutor) Capabilities() domain.Capabilities {
@@ -66,7 +68,11 @@ func (x *jobExecutor) Run(_ context.Context, r extension.RunRequest) (extension.
 	if kind == "" {
 		kind = domain.OutcomeCompleted
 	}
-	return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: kind, Summary: "job ran"}}}, nil
+	res := extension.Result{Outcome: domain.Outcome{Kind: kind, Summary: "job ran"}}
+	if x.hint != nil && kind == domain.OutcomeFailed {
+		res.RetryHint = &extension.RetryHint{ResetAt: x.hint}
+	}
+	return &schedulerHandle{result: res}, nil
 }
 func (x *jobExecutor) Recover(context.Context, extension.RunRequest, domain.Payload) (extension.RunHandle, error) {
 	return nil, extension.ErrNotAdoptable

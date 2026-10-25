@@ -119,7 +119,56 @@ func (t *Tools) target(ctx context.Context, b *bound, c Cond) (issue, code Sourc
 	return issue, code, scope, nil
 }
 
+// jobScope is the scope a job condition names: its own when Project is
+// empty, else a scope by ID or name (a job's scope needs no repository).
+func (t *Tools) jobScope(ctx context.Context, b *bound, c Cond) (domain.ID, error) {
+	if c.Project == "" || c.Project == string(b.work.ScopeID) {
+		return b.work.ScopeID, nil
+	}
+	var scopes []domain.Scope
+	if err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		var er error
+		scopes, er = tx.ListScopes()
+		return er
+	}); err != nil {
+		return "", err
+	}
+	for _, s := range scopes {
+		if string(s.ID) == c.Project || strings.EqualFold(s.Name, c.Project) {
+			return s.ID, nil
+		}
+	}
+	return "", refuse("no_project", "%s: no project here is called %s", c, c.Project)
+}
+
+// resolveJob translates `job:<name>`: the next run of the job ending, in any
+// way, is a dependency on the job's own key (v1 waited for the next run, not
+// an earlier one).
+func (t *Tools) resolveJob(ctx context.Context, b *bound, c Cond) (resolvedCond, error) {
+	r := resolvedCond{cond: c}
+	if t.o.Jobs == nil {
+		return r, refuse("jobs_unavailable", "%s: no scheduled jobs are configured here; wait until a time instead", c)
+	}
+	scope, err := t.jobScope(ctx, b, c)
+	if err != nil {
+		return r, err
+	}
+	key, types, ok := t.o.Jobs(ctx, scope, c.Ref)
+	if !ok {
+		return r, refuse("no_job", "%s: there is no job called %s", c, c.Ref)
+	}
+	if scope != b.work.ScopeID {
+		r.dep.SourceScopeID = scope
+	}
+	r.dep.ID, r.dep.Label, r.dep.AliasType = c.String(), c.String(), TypeDependencyMet
+	r.dep.SourceKey, r.dep.Types, r.dep.FromNow = key, types, true
+	return r, nil
+}
+
 func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond, error) {
+	if c.Kind == CondJob {
+		return t.resolveJob(ctx, b, c)
+	}
 	r := resolvedCond{cond: c}
 	issueSrc, codeSrc, scope, err := t.target(ctx, b, c)
 	if err != nil {
@@ -178,8 +227,6 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 			r.dep.Types, r.dep.FromNow = []string{TypeAgentTurn}, true
 			r.dep.Filter = filterPayload(dependencyFilter{Kind: "turn", Repo: repo, Number: c.Number(), State: c.On})
 		}
-	case CondJob:
-		return r, refuse("jobs_unavailable", "%s: job waits arrive with scheduled jobs; wait until a time instead", c)
 	}
 	return r, nil
 }
@@ -272,7 +319,7 @@ type HoldStatus struct {
 	Reason    string     `json:"reason,omitempty"` // when not held: scheduled_now, cancelled or time_came
 	Until     *time.Time `json:"until,omitempty"`
 	Waits     []string   `json:"waits,omitempty"`
-	Unmatched []string   `json:"unmatched,omitempty"` // conditions nothing here can meet (jobs, unknown projects)
+	Unmatched []string   `json:"unmatched,omitempty"` // conditions nothing here can meet (unknown jobs or projects)
 }
 
 func (t *Tools) status(ctx context.Context, b *bound) (HoldStatus, *Hold, error) {
@@ -331,8 +378,8 @@ func (t *Tools) holdPlan(ctx context.Context, b *bound, data json.RawMessage) (e
 	for _, c := range h.Conds {
 		r, err := t.resolveCond(ctx, b, c)
 		if err != nil {
-			// Conditions nothing here can meet (a job before stage 05, an
-			// unknown project) leave only the time, as in v1.
+			// Conditions nothing here can meet (an unknown job or project)
+			// leave only the time, as in v1.
 			s.Unmatched = append(s.Unmatched, c.String())
 			continue
 		}

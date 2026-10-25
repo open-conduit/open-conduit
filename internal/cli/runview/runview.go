@@ -141,6 +141,13 @@ func Detail(r client.Run, attempts []client.Run, now time.Time) string {
 		line("timeout left", (time.Duration(r.RemainingTimeoutSeconds) * time.Second).String())
 	}
 	line("usage", usageText(r.Usage))
+	if ws := r.Workspace; ws != nil {
+		v := strings.TrimSpace(ws.Kind + " " + ws.Dir)
+		if ws.Summary != "" {
+			v += " (" + ws.Summary + ")"
+		}
+		line("workspace", v)
+	}
 	line("inputs", strconv.Itoa(r.Inputs))
 	line("wait", r.WaitID)
 	if rt := r.Retry; rt != nil {

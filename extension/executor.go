@@ -66,6 +66,19 @@ type Result struct {
 	// stays pending and is presented again, explicitly, to the next attempt
 	// or wake.
 	ConsumedInputs []domain.ID
+	// Workspace describes the resource the attempt ran in, when its binding
+	// declared one (B07, 05-02). An executor that acquired a resource reports
+	// the provider's description here, so history shows the workspace for
+	// every executor without interpreting executor payloads.
+	Workspace *WorkspaceRecord
+}
+
+// WorkspaceRecord is the history description of an acquired resource: the
+// provider's kind, opaque lease reference, working location, one-line
+// human summary and opaque description data.
+type WorkspaceRecord struct {
+	Kind, Ref, Dir, Summary string
+	Data                    domain.Payload
 }
 
 // RetryHint classifies a retryable executor limit without provider-specific

@@ -206,3 +206,14 @@ Intentional differences: one wake ends a wait (the agent waits again), and `--ca
 - **C07.** Reload is config apply: timing edits rearm (with v1's last-slot rule), other edits do not, removals cancel timers while a run carries on, and a disabled scope keeps its timers. `.open-supervisor.yaml` conversion is 06-02.
 - **X04.** Custom webhook POSTs are one-shot with a declared loss. GitHub push/release/workflow_run triggers ride `github.delivery` (declared non-re-derivable). Their reconstructable history is classified, and reconstruction is recorded for 05-02.
 - **Intentional differences.** Interval jobs no longer run at every daemon start. Two triggers before an idle job starts collapse into one run. Job names are identifiers.
+
+05-02 update: [job run parity](../architecture/schedule-extension.md#job-run-parity-05-02) ports the job workload onto Executions.
+
+- **B06/B09.** Detached jobs are ordinary shell runs (detached and adopted by construction) with a long binding `timeout_seconds`. Deliveries and manual runs while one runs drop through a trigger-kind route; a timer slot queues. The `legacy-job` wrapper translates `last.json`, and `busy` retries in ten minutes within the slot's six hours through a retry hint that standing Work now honours.
+- **B10.** `fresh` and `shared` job workspaces through ordinary bindings, with stale/behind reporting and the summary in history.
+- **B11.** Jobs and turns share `runtime.Run`, `kept_executions` (20; v1's 30 deliberately not reproduced; content only, metadata kept) and one deadline model (`settings.timeout_seconds`, per-binding `timeout_seconds`). The delivery body is a run artifact, released with the run's content.
+- **C06.** `OPEN_SUPERVISOR_*` job, delivery and workspace names live only in the `legacy-job` wrapper, below the binding's env and secrets and never over `OS_*`.
+- **B07.** `job:<name>` waits translate to a FromNow dependency on `schedule.run.*` Events (v1 `TestJobRunEndsAWait`).
+- **O05/AC01.** One run view: `TestJobAndTurnShareTheView` (v1 `TestRunDetail`) and the mixed daemon history in `TestDaemonWorkflowC`.
+- **Decisions.** No `git diff` path check (a possibly truncated list runs); no code-host delivery reconstruction (the declared loss stays); jobs keep no failure-budget retry.
+- **Intentional differences.** No implicit five-minute job timeout (06-02 writes it); a code-host event's file is the trigger payload, not GitHub's raw body; dry-run triggers wait instead of being dropped; a slot queued behind a run longer than six hours still runs.

@@ -41,8 +41,10 @@ type toolsEnv struct {
 	tools     *gh.Tools
 	extra     []gh.Source
 	aliasOK   bool
-	mu        sync.Mutex
-	tokens    map[domain.ID]string
+	// jobs resolves job: conditions (05-02); nil refuses them.
+	jobs   func(context.Context, domain.ID, string) (domain.CorrelationKey, []string, bool)
+	mu     sync.Mutex
+	tokens map[domain.ID]string
 }
 
 var agentOps = append([]string{extension.ReadContext, extension.Emit, extension.Wait, extension.DeclareOutcome}, gh.Operations()...)
@@ -115,7 +117,7 @@ func (e *toolsEnv) compose() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Sources: func() []gh.Source {
+	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, Sources: func() []gh.Source {
 		return append([]gh.Source{{Settings: e.settings, Client: e.client, Projector: e.projector}}, e.extra...)
 	}}); err != nil {
 		t.Fatal(err)

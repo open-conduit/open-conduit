@@ -26,8 +26,11 @@ type Run struct {
 	Deadline                time.Time
 	RemainingTimeout        time.Duration
 	Usage                   *extension.Usage
-	Inputs                  int
-	WaitID, WakeEventID     domain.ID
+	// Workspace is the resource the attempt ran in, as its executor reported
+	// it (B07): the same record for every executor.
+	Workspace           *extension.WorkspaceRecord
+	Inputs              int
+	WaitID, WakeEventID domain.ID
 	// Retry is the Work's retry eligibility when this attempt is the latest
 	// recorded failure.
 	Retry     *RetryState
@@ -77,6 +80,7 @@ func runInTx(tx storage.Tx, x domain.Execution, works map[domain.ID]domain.Work)
 			if u.InputTokens != nil || u.OutputTokens != nil || u.CachedTokens != nil || u.Cost != nil {
 				run.Usage = &u
 			}
+			run.Workspace = state.Result.Workspace
 		}
 	}
 	retry, err := retryState(tx, x.WorkID)

@@ -22,6 +22,10 @@ type Delivery struct {
 	Event, Action    string
 	Ref, Before, SHA string
 	Files            []string
+	// Truncated marks a changed-file list that may be incomplete (the
+	// delivery hit its commit or file cap): path filters then treat the
+	// changed files as unknown and run, rather than skip on a partial list.
+	Truncated bool
 }
 
 // zeroSHA is the head a push names for a created or deleted branch.
@@ -31,7 +35,9 @@ func zeroSHA(sha string) bool { return sha != "" && strings.Trim(sha, "0") == ""
 // names it ("push") or it and its action ("release.published"), its ref is on
 // one of the job's branches when it has any, and a push changes a file its
 // paths take (v1 engine/jobs.go matches and OnEvent). A push whose changed
-// files are unknown runs anyway, as in v1; a deleted branch changes nothing.
+// files are unknown, or possibly truncated, runs anyway, as in v1 (05-02
+// decided against v1's `git diff` in the checkout: the extension reads no
+// repository); a deleted branch changes nothing.
 func (j Job) Matches(d Delivery) bool {
 	if j.On == nil {
 		return false
@@ -67,7 +73,7 @@ func (j Job) Matches(d Delivery) bool {
 		if zeroSHA(d.SHA) {
 			return false
 		}
-		if len(d.Files) > 0 && !PathsMatch(j.On.Paths, d.Files) {
+		if len(d.Files) > 0 && !d.Truncated && !PathsMatch(j.On.Paths, d.Files) {
 			return false
 		}
 	}

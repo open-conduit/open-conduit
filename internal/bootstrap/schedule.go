@@ -254,7 +254,8 @@ func translateDeliveries(ctx context.Context, store storage.Store, now time.Time
 			if a.Event.Data.Schema != gh.SchemaDelivery || json.Unmarshal(a.Event.Data.Data, &p) != nil {
 				continue
 			}
-			delivery := sc.Delivery{EventID: a.Event.ID, ID: p.Delivery, Event: p.Event, Action: p.Action, Ref: p.Ref, Before: p.Before, SHA: p.After, Files: p.Files}
+			delivery := sc.Delivery{EventID: a.Event.ID, ID: p.Delivery, Event: p.Event, Action: p.Action, Ref: p.Ref, Before: p.Before, SHA: p.After, Files: p.Files,
+				Truncated: len(p.Files) >= gh.MaxDeliveryFiles || p.Commits >= gh.MaxPushCommits}
 			for _, s := range entries[scope] {
 				for _, j := range s.Jobs {
 					if !j.Matches(delivery) {
@@ -432,4 +433,68 @@ func (d *daemon) scheduleWebhookCheck(ctx context.Context) runtime.Check {
 	}
 	sort.Strings(check.Items)
 	return check
+}
+
+// scheduleJob resolves a `job:<name>` wait (05-02) against the current
+// generation: the job's key in its schedule entry and the run-ended types.
+func (d *daemon) scheduleJob(_ context.Context, scope domain.ID, name string) (domain.CorrelationKey, []string, bool) {
+	snapshot, _ := d.configs.Current()
+	for _, e := range scheduleEntries(snapshot) {
+		if e.Scope != scope {
+			continue
+		}
+		if _, ok := e.Settings.Job(name); ok {
+			return domain.CorrelationKey{Source: e.Settings.Namespace, ExternalID: sc.JobKey(name)}, append([]string(nil), sc.RunTypes...), true
+		}
+	}
+	return domain.CorrelationKey{}, nil, false
+}
+
+// publishJobRuns announces each finished job run (05-02) as a derived Event
+// of its trigger on the job's key, in one transaction with the job's
+// checkpoint, so `job:` waits wake through ordinary dependency aliases and a
+// crash repeats nothing.
+func (d *daemon) publishJobRuns(ctx context.Context) {
+	snapshot, _ := d.configs.Current()
+	limits := runtime.CausalLimits{}
+	if snapshot != nil {
+		limits = runtime.CausalLimits{MaxDepth: snapshot.Settings.CausalMaxDepth, PerMinute: snapshot.Settings.CausalPerMinute}
+	}
+	n, codes, err := publishJobRuns(ctx, d.coord, d.now(), limits, passLimit)
+	code := strings.Join(codes, ",")
+	if err != nil && ctx.Err() == nil {
+		code = errorCode(err)
+	}
+	d.report("schedule_runs", "", code)
+	if n > 0 {
+		d.poke()
+	}
+}
+
+func publishJobRuns(ctx context.Context, store storage.Store, now time.Time, limits runtime.CausalLimits, limit int) (int, []string, error) {
+	var published int
+	var codes []string
+	err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		published, codes = 0, nil
+		ended, err := sc.EndedRunsInTx(tx, now, limit)
+		if err != nil {
+			return err
+		}
+		for _, e := range ended {
+			if e.Event.ID != "" {
+				if _, _, err := runtime.AcceptDerivedInTx(tx, now, limits, e.Scope, e.Parent, e.Event); errors.Is(err, runtime.ErrCausalRejected) {
+					codes = append(codes, "causal_rejected")
+				} else if err != nil {
+					return err
+				} else {
+					published++
+				}
+			}
+			if err := sc.MarkEndedInTx(tx, e.Work, e.Attempt); err != nil {
+				return err
+			}
+		}
+		return nil
+	})
+	return published, codes, err
 }

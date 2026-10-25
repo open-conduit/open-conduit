@@ -101,6 +101,8 @@ A shell binding with a resource runs in `Resource.Dir` with the provider layer. 
 
 - 03-03 binds Claude Code to `work`: a new segment acquires and a resumed segment uses `Lookup` ([Claude Code executor](claude-code-executor.md)).
 - v1's agent-driven `worktree setup/remove` toolbelt commands are replaced by executor acquisition and host reconcile. 03-04 decided the playbook needs neither: turns run in the acquired workspace and no workspace operation is registered ([engineering tools](engineering-tools.md)).
-- Legacy `OPEN_SUPERVISOR_BASE_BRANCH`, `OPEN_SUPERVISOR_WORKTREE` and similar variables belong to explicit compatibility adapters (C06). `Resource.Data` carries the base, branch and directory.
-- Pending-run coalescing for in-checkout jobs stays with 05-01/05-02.
+- Legacy `OPEN_SUPERVISOR_BASE_BRANCH`, `OPEN_SUPERVISOR_WORKTREE` and `OPEN_SUPERVISOR_REMOTE` are added by the 05-02 `legacy-job` wrapper from `Resource.Data` and `Resource.Dir`, as part of the provider layer ([job run parity](schedule-extension.md#open-supervisor-compatibility-legacy-job)).
+- Pending-run coalescing for in-checkout jobs is resolved by 05-01 (one standing Work per job).
 - Windows has no process-group setup cleanup or stray-process search (B06).
+
+05-02 update: `Resource.Summary` is the provider's one-line description for history (the Git provider: `main checkout, fast-forwarded 2 commit(s) to origin/main`, `main checkout, 1 commit(s) behind origin/main: another execution is using the checkout`, `fresh worktree at origin/main 1a2b3c4`, `worktree on branch agent/work-x, reused`). Executors report the acquired resource (never its environment) as `extension.Result.Workspace`, and run history and the TUI show it. Jobs use `fresh` and `shared` through ordinary bindings ([job run parity](schedule-extension.md#job-run-parity-05-02)); `TestDaemonJobParity` ports v1 `TestJobCatchesUpTheMainCheckout` and `TestDaemonWorkflowC` the fresh-checkout job.

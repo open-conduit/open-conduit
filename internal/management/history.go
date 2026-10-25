@@ -29,6 +29,12 @@ type wireUsage struct {
 	Cost         *float64 `json:"cost,omitempty"`
 	Currency     string   `json:"currency,omitempty"`
 }
+type wireWorkspace struct {
+	Kind    string `json:"kind,omitempty"`
+	Ref     string `json:"ref"`
+	Dir     string `json:"dir,omitempty"`
+	Summary string `json:"summary,omitempty"`
+}
 type wireRetry struct {
 	FailureCount  int    `json:"failure_count"`
 	EligibleAt    string `json:"eligible_at,omitempty"`
@@ -47,23 +53,24 @@ type wireRetention struct {
 // shape serves every executor.
 type wireRun struct {
 	wireExecution
-	WorkKind                string        `json:"work_kind"`
-	WorkState               string        `json:"work_state"`
-	Trigger                 *wireTrigger  `json:"trigger,omitempty"`
-	CurrentTrigger          *wireTrigger  `json:"current_trigger,omitempty"`
-	Executor                string        `json:"executor,omitempty"`
-	ConfigGeneration        string        `json:"config_generation,omitempty"`
-	LaunchState             string        `json:"launch_state,omitempty"`
-	ResourceExcluded        bool          `json:"resource_excluded"`
-	Deadline                string        `json:"deadline,omitempty"`
-	RemainingTimeoutSeconds int64         `json:"remaining_timeout_seconds,omitempty"`
-	DurationMS              int64         `json:"duration_ms,omitempty"`
-	Usage                   *wireUsage    `json:"usage,omitempty"`
-	Inputs                  int           `json:"inputs"`
-	WaitID                  string        `json:"wait_id,omitempty"`
-	WakeEventID             string        `json:"wake_event_id,omitempty"`
-	Retry                   *wireRetry    `json:"retry,omitempty"`
-	Retention               wireRetention `json:"retention"`
+	WorkKind                string         `json:"work_kind"`
+	WorkState               string         `json:"work_state"`
+	Trigger                 *wireTrigger   `json:"trigger,omitempty"`
+	CurrentTrigger          *wireTrigger   `json:"current_trigger,omitempty"`
+	Executor                string         `json:"executor,omitempty"`
+	ConfigGeneration        string         `json:"config_generation,omitempty"`
+	LaunchState             string         `json:"launch_state,omitempty"`
+	ResourceExcluded        bool           `json:"resource_excluded"`
+	Deadline                string         `json:"deadline,omitempty"`
+	RemainingTimeoutSeconds int64          `json:"remaining_timeout_seconds,omitempty"`
+	DurationMS              int64          `json:"duration_ms,omitempty"`
+	Usage                   *wireUsage     `json:"usage,omitempty"`
+	Workspace               *wireWorkspace `json:"workspace,omitempty"`
+	Inputs                  int            `json:"inputs"`
+	WaitID                  string         `json:"wait_id,omitempty"`
+	WakeEventID             string         `json:"wake_event_id,omitempty"`
+	Retry                   *wireRetry     `json:"retry,omitempty"`
+	Retention               wireRetention  `json:"retention"`
 }
 
 func trigger(e *domain.Event) *wireTrigger {
@@ -87,6 +94,9 @@ func toRun(r runtime.Run) wireRun {
 	}
 	if u := r.Usage; u != nil {
 		out.Usage = &wireUsage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, Cost: u.Cost, Currency: u.Currency}
+	}
+	if ws := r.Workspace; ws != nil {
+		out.Workspace = &wireWorkspace{Kind: ws.Kind, Ref: ws.Ref, Dir: ws.Dir, Summary: ws.Summary}
 	}
 	if rt := r.Retry; rt != nil {
 		out.Retry = &wireRetry{FailureCount: rt.FailureCount, EligibleAt: ts(rt.EligibleAt), Blocked: rt.Blocked, Exhausted: rt.Exhausted, BlockedReason: rt.BlockedReason}

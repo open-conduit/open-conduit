@@ -20,7 +20,7 @@ type CondKind string
 const (
 	CondPR    CondKind = "pr"    // a PR merging or closing
 	CondIssue CondKind = "issue" // an issue closing, or the agent on it ending a turn in a state
-	CondJob   CondKind = "job"   // a run of one of a scope's jobs ending (stage 05)
+	CondJob   CondKind = "job"   // the next run of one of a scope's jobs ending (05-02)
 )
 
 // TurnStates are the states an agent ends a turn in (the claude status
@@ -156,6 +156,8 @@ func (c Cond) Happened(sourceType string) string {
 			return fmt.Sprintf("#%s%s was closed", c.Ref, where)
 		}
 		return fmt.Sprintf("the agent on #%s%s ended a turn in %s", c.Ref, where, c.On)
+	case CondJob:
+		return fmt.Sprintf("a run of the %s job%s %s", c.Ref, where, jobEnded(sourceType))
 	}
 	return c.Describe()
 }
@@ -278,4 +280,21 @@ func ParseTime(s string) (time.Time, error) {
 		}
 	}
 	return time.Time{}, fmt.Errorf("%q isn't an ISO time", s)
+}
+
+// jobEnded is how a job's run ended, from the run-ended Event type the
+// schedule extension announces (schedule.run.<outcome>); GitHub does not
+// import the schedule extension, so it reads the type's last segment.
+func jobEnded(sourceType string) string {
+	switch sourceType[strings.LastIndexByte(sourceType, '.')+1:] {
+	case "completed":
+		return "ended: completed"
+	case "failed":
+		return "ended: failed"
+	case "cancelled":
+		return "was cancelled"
+	case "handoff":
+		return "ended: handed off"
+	}
+	return "ended"
 }

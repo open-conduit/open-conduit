@@ -34,7 +34,7 @@ The environment follows the B05 order:
 - `OS_INPUT_FILE`: the trigger plus the acceptance-ordered input batch
 - `OS_OUTPUT_DIR`
 
-Any future legacy `OPEN_SUPERVISOR_*` compatibility belongs in an explicit conversion/adapter (06-02), never in this executor or core.
+Legacy `OPEN_SUPERVISOR_*` compatibility never enters this executor or core. 05-02 delivers it as the `legacy-job` wrapper in the schedule extension, which adds its layer through the binding config and the resource broker ([job run parity](schedule-extension.md#open-supervisor-compatibility-legacy-job)).
 
 `os` calls `POST /v1/toolbelt/call` through the public client. It supports these commands:
 
@@ -127,3 +127,5 @@ The shell executor implements `InjectExecutor`, the second implementation of the
 - **Scripts that never read the inbox.** Nothing is consumed. Injected input stays pending and reaches attempt N+1, exactly as `queue` would.
 
 Binding an inject route to shell therefore no longer needs an unsupported-capability fallback. `TestSharedInjectConformance`, `TestInboxIgnoresForgedAcknowledgements` and `TestToolbeltInbox` cover it.
+
+05-02 update: a result reports the acquired workspace generically as `extension.Result.Workspace` (kind, lease reference, directory, the provider's one-line summary and description), beside the existing `workspace` field of the result data, so run history shows it for every executor. The `legacy-job` wrapper in [scheduled jobs](schedule-extension.md#job-run-parity-05-02) runs this executor for v1 job scripts.

@@ -277,9 +277,14 @@ func ValidateExtension(data json.RawMessage, secretNames []string) error {
 
 // RouteConfig is the opaque config of a `schedule` route: the jobs it
 // selects (all jobs of every schedule entry in the scope when empty). One
-// route per binding lets each job run its own command.
+// route per binding lets each job run its own command. Triggers narrows the
+// route to trigger kinds (timer, webhook, event, manual; all when empty), so
+// two routes to one binding can give kinds different active policies: v1's
+// detached jobs queued a timer slot behind the run going but started
+// nothing for a delivery or a manual run (05-02).
 type RouteConfig struct {
-	Jobs []string `json:"jobs,omitempty"`
+	Jobs     []string `json:"jobs,omitempty"`
+	Triggers []string `json:"triggers,omitempty"`
 }
 
 // ParseRoute decodes a route config.
@@ -291,6 +296,13 @@ func ParseRoute(data []byte) (RouteConfig, error) {
 	for _, j := range c.Jobs {
 		if !namePattern.MatchString(j) {
 			return c, errors.New("schedule route: jobs must be job names")
+		}
+	}
+	for _, k := range c.Triggers {
+		switch k {
+		case KindTimer, KindWebhook, KindEvent, KindManual:
+		default:
+			return c, errors.New("schedule route: triggers must be timer, webhook, event or manual")
 		}
 	}
 	return c, nil

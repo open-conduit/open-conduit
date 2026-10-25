@@ -127,3 +127,53 @@ func TestExpiredLogIsReportedNotFetched(t *testing.T) {
 		t.Fatalf("expired log:\n%s", m.View())
 	}
 }
+
+// TestJobAndTurnShareTheView ports v1 tui/jobs_test.go TestRunDetail onto
+// the one run view (05-02): a shell job run and an agent turn are listed by
+// the same rows, and a job's detail shows its trigger, outcome, workspace and
+// log through the same renderer as the turn's usage.
+func TestJobAndTurnShareTheView(t *testing.T) {
+	job := run("job-1", "failed", "schedule.job", 1, "1")
+	job.Executor, job.ExecutorBinding = "shell", "post-reels"
+	job.Trigger = &client.Trigger{ID: "t1", Type: "schedule.event", Source: "schedule/demo"}
+	job.Outcome = &client.Outcome{Kind: "failed", Summary: "exit status 1"}
+	job.Workspace = &client.RunWorkspace{Kind: "workspace", Ref: "fresh-1", Dir: "/tmp/ws/fresh-1", Summary: "fresh worktree at origin/main 1a2b3c4"}
+	turn := run("turn-1", "completed", "github.issue", 1, "2")
+	turn.Executor, turn.ExecutorBinding = "claude-code", "agent"
+	cost, in := 0.0123, uint64(42)
+	turn.Usage = &client.Usage{Cost: &cost, Currency: "USD", InputTokens: &in}
+	src := &fakeSource{runs: []client.Run{job, turn}, content: "posting 2 reels\nfailed: 401\n"}
+	var m tea.Model = New(src, time.Hour)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 160, Height: 30})
+	m = exec(t, m, m.(Model).fetch())
+	view := m.View()
+	for _, want := range []string{"shell", "claude-code", "schedule.job", "github.issue", "schedule.event"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("list lacks %q:\n%s", want, view)
+		}
+	}
+	// The newest (the turn) is first; the job's detail is one row down.
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = exec(t, m, cmd)
+	view = m.View()
+	for _, want := range []string{"Run job-1", "schedule.event from schedule/demo", "failed: exit status 1", "workspace", "/tmp/ws/fresh-1 (fresh worktree at origin/main 1a2b3c4)"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("job detail lacks %q:\n%s", want, view)
+		}
+	}
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
+	m = exec(t, m, cmd)
+	if !strings.Contains(m.View(), "failed: 401") {
+		t.Fatalf("job log:\n%s", m.View())
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = exec(t, m, cmd)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyUp})
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = exec(t, m, cmd)
+	if view = m.View(); !strings.Contains(view, "Run turn-1") || !strings.Contains(view, "cost 0.0123 USD") || strings.Contains(view, "workspace") {
+		t.Fatalf("turn detail:\n%s", view)
+	}
+}

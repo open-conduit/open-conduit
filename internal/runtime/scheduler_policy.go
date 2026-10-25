@@ -170,10 +170,17 @@ func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, resul
 	}
 	state := RetryState{FailureSequence: failureSequence, WorkID: w.ID, FailedExecutionID: x.ID, Binding: x.ExecutorBinding, FailureCount: failures, Blocked: true, Exhausted: failures >= policy.MaxAttempts, TimerID: domain.ID("retry/" + string(w.ID))}
 	standing := s.options.WorkKinds[w.Kind].Standing
-	if standing {
-		// Standing Work arms no automatic retry: its next routed input is
-		// its next attempt. The record still fences a duplicate failure.
+	retryable := !standing || hint != nil
+	if standing && hint == nil {
+		// Standing Work arms no automatic budget retry: its next routed
+		// input is its next attempt. The record still fences a duplicate
+		// failure.
 		state.Blocked, state.Exhausted, state.TimerID = false, false, ""
+	} else if standing {
+		// An executor's retry hint is honoured for every Work kind (05-02):
+		// it is the executor saying when to try again, not a failure budget,
+		// so standing Work is never exhausted by it.
+		state.Exhausted = false
 	}
 	w.State = domain.WorkReady
 	if state.Exhausted && policy.TerminalOnExhaustion {
@@ -195,13 +202,15 @@ func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, resul
 			return er
 		}
 	}
-	if !state.Exhausted && !standing {
-		delay := policy.Delays[failures-1]
+	if !state.Exhausted && retryable {
+		var delay time.Duration
 		if hint != nil {
 			delay, err = RetryDelay(now, *hint)
 			if err != nil {
 				return err
 			}
+		} else {
+			delay = policy.Delays[failures-1]
 		}
 		state.EligibleAt = now.Add(delay)
 		state.RetryEventID = domain.ID("retry-event/" + identity(string(x.ID)))

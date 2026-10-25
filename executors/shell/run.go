@@ -388,6 +388,7 @@ func (e *Executor) finalizeWith(ctx context.Context, rn *run, preset *domain.Out
 	var ws workspaceRecord
 	if readJSON(filepath.Join(rn.dir, "workspace.json"), &ws) == nil && ws.Ref != "" {
 		f.Workspace = &ws
+		result.Workspace = &extension.WorkspaceRecord{Kind: ws.Kind, Ref: ws.Ref, Dir: ws.Dir, Summary: ws.Summary, Data: domain.Payload{Schema: ws.Schema, Data: ws.Data}}
 	}
 	outcome.Data = resultData(f)
 	result.Outcome = outcome

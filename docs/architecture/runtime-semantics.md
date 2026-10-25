@@ -124,3 +124,5 @@ This resolves the coalescing question 01-04 left open (summary decision "whether
 - **Route config reaches its handler.** `extension.RouteInput.Route` is the evaluated route with its opaque handler config. One handler can serve several routes (one per binding) deterministically.
 
 Executable cases: `TestScheduleTriggersCoalesce` and `TestWorkKindPolicyContract` on SQLite, and `TestSelectTrigger`. See [scheduled jobs](schedule-extension.md).
+
+05-02 update: the remaining job behaviors need no coalesce option either. v1's detached-busy delivery rule is a `drop` route selected by trigger kind (`schedule` route config `triggers`), and its `busy` status retry is an executor retry hint, which standing Work now honours (the failure budget stays off for it). Job runs are announced as `schedule.run.*` Events for `job:` waits. See [job run parity](schedule-extension.md#job-run-parity-05-02).

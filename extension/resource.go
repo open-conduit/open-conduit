@@ -55,13 +55,15 @@ type ResourceRequest struct {
 // location, if the resource has one. Env is the provider's environment layer,
 // applied after the sanitized process baseline and before binding variables
 // (B05); it is never persisted by the provider. Data describes the acquisition
-// (for example how far a shared checkout is behind) for history.
+// (for example how far a shared checkout is behind) for history, and Summary
+// says the same in one human-readable line.
 type Resource struct {
-	Kind string
-	Ref  string
-	Dir  string
-	Env  map[string]string
-	Data domain.Payload
+	Kind    string
+	Ref     string
+	Dir     string
+	Env     map[string]string
+	Data    domain.Payload
+	Summary string
 }
 
 // ResourceAcquisition is the trusted request a provider receives: the bound
