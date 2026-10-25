@@ -181,7 +181,7 @@ The message lists what happened since your last turn, each under its own heading
 
 ### Mid-turn: `## Arrived during this turn`
 
-A comment or a message from the owner that lands while you're working is handed to you straight away, as a message headed `## Arrived during this turn`. Take it in now: if it changes the ask, change course before you go further, and handle it like any event above (reply, log a correction). Don't end the turn early to deal with it. It may be listed again in the next turn's events; don't act on it twice.
+A comment or a message from the owner that lands while you're working is handed to you straight away, as a message headed `## Arrived during this turn`. Take it in now: if it changes the ask, change course before you go further, and handle it like any event above (reply, log a correction). Don't end the turn early to deal with it. Once it reaches you this way it is not handed to you again.
 
 If you pushed, end with `building`; Open Conduit comes back with the checks. Otherwise end with `help` if you asked something back, `done` if the owner approved or nothing is left, and `review` otherwise.
 

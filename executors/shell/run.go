@@ -391,6 +391,7 @@ func (e *Executor) finalizeWith(ctx context.Context, rn *run, preset *domain.Out
 	}
 	outcome.Data = resultData(f)
 	result.Outcome = outcome
+	result.ConsumedInputs = consumedInputs(rn.dir)
 	if err = writeJSON(filepath.Join(rn.dir, "result.json"), result); err != nil {
 		return extension.Result{}, err
 	}

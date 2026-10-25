@@ -733,6 +733,11 @@ func (s *Scheduler) fail(ctx context.Context, ref domain.LeaseRef, result extens
 		if err = putAttemptState(tx, state); err != nil {
 			return err
 		}
+		// A failed attempt's proved injections were taken in like its
+		// claimed inputs: the retry does not see them again either.
+		if err = consumeInjectedInTx(tx, x, result.ConsumedInputs); err != nil {
+			return err
+		}
 		if hint != nil {
 			return s.failureWithHintInTx(tx, x, result, s.now(), hint)
 		}

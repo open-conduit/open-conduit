@@ -134,7 +134,7 @@ func New(o Options) (*Executor, error) {
 }
 
 func (e *Executor) Capabilities() domain.Capabilities {
-	return domain.Capabilities{Interrupt: true, Resume: e.o.Resume, Toolbelt: extension.ToolbeltCLI, Workspace: true}
+	return domain.Capabilities{Interrupt: true, Inject: true, Resume: e.o.Resume, Toolbelt: extension.ToolbeltCLI, Workspace: true}
 }
 
 func executionKey(id domain.ID) string {
@@ -190,6 +190,9 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	key := executionKey(r.Execution.ID)
 	dir := filepath.Join(e.o.StateDir, "runs", key, nonce)
 	if err = os.MkdirAll(filepath.Join(dir, "outputs"), 0o700); err != nil {
+		return nil, err
+	}
+	if err = os.MkdirAll(filepath.Join(dir, inboxDir, "consumed"), 0o700); err != nil {
 		return nil, err
 	}
 	rn := &run{id: r.Execution.ID, dir: dir, nonce: nonce, epoch: r.Execution.Lease.Epoch}
@@ -351,6 +354,7 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, l
 	vars["OS_TRIGGER_TYPE"] = r.Trigger.Type
 	vars["OS_INPUT_FILE"] = filepath.Join(dir, "input.json")
 	vars["OS_OUTPUT_DIR"] = filepath.Join(dir, "outputs")
+	vars["OS_INBOX"] = filepath.Join(dir, inboxDir)
 	out := make([]string, 0, len(vars))
 	for name, value := range vars {
 		out = append(out, name+"="+value)

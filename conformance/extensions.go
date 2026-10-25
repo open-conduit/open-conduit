@@ -184,6 +184,105 @@ func RunExecutor(t *testing.T, factory func() extension.Executor, r extension.Ru
 	}
 }
 
+// InjectFixture drives an inject-capable executor through the generic inject
+// acknowledgement contract (B04, 04-02). Request starts an attempt that stays
+// running until Finish. Ready returns once the running attempt can take input.
+// Finish lets the attempt take in everything injected so far and finish (for
+// example a fake process reading its inbox, or a fake claude echoing).
+type InjectFixture struct {
+	Executor extension.Executor
+	Request  extension.RunRequest
+	Ready    func() error
+	Finish   func() error
+}
+
+// CheckInjectExecutor verifies, for an executor that advertises inject:
+//   - Inject to an execution the executor does not hold is ErrNotAccepting;
+//   - Inject to the running attempt is accepted (nil), and delivering the same
+//     Event identity again (a retried ambiguous dispatch) is accepted too;
+//   - the finished result proves consumption of what the attempt took in, at
+//     most once per Event and never naming an Event it was not given;
+//   - after the result, Inject is ErrNotAccepting (nothing can take input);
+//   - Recover returns the identical proof (it is durable executor state).
+func CheckInjectExecutor(f InjectFixture) error {
+	e := f.Executor
+	if !e.Capabilities().Inject {
+		return fmt.Errorf("executor does not advertise inject")
+	}
+	if err := extension.ValidateBinding(domain.Binding{Name: "inject", Requires: domain.Capabilities{Inject: true}}, e); err != nil {
+		return err
+	}
+	injector := e.(extension.InjectExecutor)
+	ctx := context.Background()
+	r := f.Request
+	var state domain.Payload
+	r.PersistRecovery = func(s domain.Payload) error { state = s; return nil }
+	h, err := e.Run(ctx, r)
+	if err != nil {
+		return err
+	}
+	if f.Ready != nil {
+		if err := f.Ready(); err != nil {
+			return err
+		}
+	}
+	first := domain.Event{ID: "inject-conformance-first", Type: "fixture.message", Source: "fixture", DeliveryID: "first", Data: domain.Payload{Schema: "fixture.message.v1", Data: []byte(`{"text":"also this"}`)}}
+	if err := injector.Inject(ctx, "inject-conformance-unknown", first); !errors.Is(err, extension.ErrNotAccepting) {
+		return fmt.Errorf("inject to an unknown execution: %v, want ErrNotAccepting", err)
+	}
+	if err := injector.Inject(ctx, r.Execution.ID, first); err != nil {
+		return fmt.Errorf("inject to the running attempt: %w", err)
+	}
+	if err := injector.Inject(ctx, r.Execution.ID, first); err != nil {
+		return fmt.Errorf("retried inject of the same event: %w", err)
+	}
+	if f.Finish != nil {
+		if err := f.Finish(); err != nil {
+			return err
+		}
+	}
+	result, err := h.Wait(ctx)
+	if err != nil {
+		return err
+	}
+	if err := extension.ValidateResult(result); err != nil {
+		return err
+	}
+	if len(result.ConsumedInputs) != 1 || result.ConsumedInputs[0] != first.ID {
+		return fmt.Errorf("consumption proof %v, want exactly [%s]", result.ConsumedInputs, first.ID)
+	}
+	late := domain.Event{ID: "inject-conformance-late", Type: "fixture.message", Source: "fixture", DeliveryID: "late"}
+	if err := injector.Inject(ctx, r.Execution.ID, late); !errors.Is(err, extension.ErrNotAccepting) {
+		return fmt.Errorf("inject after the result: %v, want ErrNotAccepting", err)
+	}
+	r.PersistRecovery = func(p domain.Payload) error {
+		if !reflect.DeepEqual(p, state) {
+			return fmt.Errorf("recovery launched replacement")
+		}
+		return nil
+	}
+	adopted, err := e.Recover(ctx, r, state)
+	if err != nil {
+		return err
+	}
+	recovered, err := adopted.Wait(ctx)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(recovered.ConsumedInputs, result.ConsumedInputs) {
+		return fmt.Errorf("recovery changed the consumption proof: %v vs %v", recovered.ConsumedInputs, result.ConsumedInputs)
+	}
+	return nil
+}
+
+// RunInjectExecutor runs CheckInjectExecutor as a test.
+func RunInjectExecutor(t *testing.T, factory func() InjectFixture) {
+	t.Helper()
+	if err := CheckInjectExecutor(factory()); err != nil {
+		t.Fatal(err)
+	}
+}
+
 // ToolbeltFixture exposes only public interfaces plus trusted test controls.
 // Factory starts a running execution and issues a token for all five builtins
 // and fixture.echo; fixture.changed.v1 is its declared emitted event family.

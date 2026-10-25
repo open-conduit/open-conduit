@@ -265,6 +265,11 @@ func (s *Scheduler) waitInTx(tx storage.Tx, ref domain.LeaseRef, wait domain.Wai
 		if err = putJSON(tx, waitNamespace, identity(string(wait.ID)), meta); err != nil {
 			return err
 		}
+		// Proved injections are consumed before the registration scan, so the
+		// parked turn is never woken by (or handed again) what it took in.
+		if err = consumeInjectedInTx(tx, x, result.ConsumedInputs); err != nil {
+			return err
+		}
 		if err = tx.PutWait(wait, 0); err != nil {
 			return err
 		}
@@ -334,6 +339,17 @@ func WakeWaitInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.I
 	for _, a := range all {
 		if !waitMatches(wait, a) && !timeoutMatches(meta, a) {
 			continue
+		}
+		if !timeoutMatches(meta, a) {
+			// Input this Work already consumed (an injection the parked
+			// attempt proved it took in) is history, not news.
+			consumed, er := consumedInTx(tx, work.ID, a.Sequence)
+			if er != nil {
+				return "", er
+			}
+			if consumed {
+				continue
+			}
 		}
 		scope, er := scopeForEvent(tx, a)
 		if er != nil {

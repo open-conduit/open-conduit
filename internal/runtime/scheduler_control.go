@@ -61,7 +61,7 @@ func (s *Scheduler) DispatchControl(ctx context.Context, id string) error {
 		if err != nil && !errors.Is(err, storage.ErrNotFound) {
 			return err
 		}
-		if state.Status == "accepted" || state.Status == "stale" || state.Status == "fallback" {
+		if state.Status == "accepted" || state.Status == "stale" || state.Status == "fallback" || state.Status == "consumed" || state.Status == "not_accepting" {
 			return nil
 		}
 		now := s.now()
@@ -156,6 +156,12 @@ func (s *Scheduler) DispatchControl(ctx context.Context, id string) error {
 		if current.Token != state.Token || !s.now().Before(current.LeaseUntil) {
 			return ErrControlBusy
 		}
+		if current.Status == "consumed" {
+			// The finished result proved consumption while this dispatch was
+			// in flight: that proof is final.
+			current.Token, current.LeaseUntil = "", time.Time{}
+			return putJSON(tx, controlNamespace, id, current)
+		}
 		x, err := tx.Execution(intent.ExecutionID)
 		if err != nil {
 			return err
@@ -163,6 +169,13 @@ func (s *Scheduler) DispatchControl(ctx context.Context, id string) error {
 		if x.Lease.Epoch != intent.Epoch || intent.Policy == "inject" && (x.State != domain.ExecutionRunning || x.Lease.Owner == "" || !s.now().Before(x.Lease.ExpiresAt)) {
 			current.Status = "stale"
 			current.Reason = "target_finished_or_superseded"
+		} else if intent.Policy == "inject" && errors.Is(callErr, extension.ErrNotAccepting) {
+			// Definitely not delivered: stop dispatching. The input was
+			// never removed from the Work's pending input, so the next
+			// attempt or wake presents it (no queue is inferred; nothing is
+			// dropped).
+			current.Status = "not_accepting"
+			current.Reason = "executor_not_accepting_input_retained"
 		} else if callErr == nil {
 			current.Status = "accepted"
 			current.Reason = "accepted_not_consumed"
@@ -195,7 +208,7 @@ func (s *Scheduler) DispatchControl(ctx context.Context, id string) error {
 	if commitErr != nil {
 		return commitErr
 	}
-	if callErr != nil {
+	if callErr != nil && !(intent.Policy == "inject" && errors.Is(callErr, extension.ErrNotAccepting)) {
 		return ErrControlDispatch
 	}
 	return nil
@@ -224,16 +237,23 @@ func (s *Scheduler) handoffContinuationInTx(tx storage.Tx, x domain.Execution, n
 	return tx.MarkRouted(accepted.Event.ID, work.ID, "handoff")
 }
 
-// consumeInjectedInTx applies an executor's consumption proof for injected
-// input. Only an Event with an accepted inject intent targeting this execution
-// (at any of its lease epochs) and still pending for its Work is consumed, with
-// the same durable consumed-input history as a claim; anything else is
-// ignored, so the executor's claim cannot remove input it was never given.
+// consumeInjectedInTx applies an executor's consumption proof (the generic
+// inject acknowledgement) for injected input, atomically with the result that
+// carries it. Only an Event with an inject intent targeting this execution (at
+// any of its lease epochs) whose dispatch was attempted and not definitively
+// refused, and that is still pending for its Work, is consumed, with the same
+// durable consumed-input history as a claim; anything else is ignored, so the
+// executor's claim cannot remove input it was never given. A dispatch still
+// in flight (its acknowledgement not yet committed) counts: the proof shows
+// the process took the input in. The intent is marked consumed, so neither a
+// late acknowledgement nor a retry dispatches it again.
 func consumeInjectedInTx(tx storage.Tx, x domain.Execution, ids []domain.ID) error {
 	for _, id := range ids {
 		injected := false
+		var intentID string
+		var control ControlState
 		for epoch := uint64(1); epoch <= x.Lease.Epoch && !injected; epoch++ {
-			intentID := identity(string(id), string(x.ID), fmt.Sprint(epoch), "inject")
+			intentID = identity(string(id), string(x.ID), fmt.Sprint(epoch), "inject")
 			var intent ControlIntent
 			if err := getJSON(tx, intentNamespace, intentID, &intent); err != nil {
 				if errors.Is(err, storage.ErrNotFound) {
@@ -248,7 +268,8 @@ func consumeInjectedInTx(tx storage.Tx, x domain.Execution, ids []domain.ID) err
 				}
 				return err
 			}
-			injected = intent.ExecutionID == x.ID && intent.WorkID == x.WorkID && intent.Policy == "inject" && state.Status == "accepted"
+			control = state
+			injected = intent.ExecutionID == x.ID && intent.WorkID == x.WorkID && intent.Policy == "inject" && state.Attempts > 0 && state.Status != "not_accepting" && state.Status != "consumed"
 		}
 		if !injected {
 			continue
@@ -277,6 +298,17 @@ func consumeInjectedInTx(tx storage.Tx, x domain.Execution, ids []domain.ID) err
 		if err = tx.Delete(queueNamespace, key); err != nil {
 			return err
 		}
+		control.Status, control.Reason = "consumed", "consumption_proved"
+		if err = putJSON(tx, controlNamespace, intentID, control); err != nil {
+			return err
+		}
 	}
 	return nil
+}
+
+// consumedInTx reports whether the Work's input at sequence has consumed-input
+// history (claimed by an attempt or proved consumed by an injection).
+func consumedInTx(tx storage.Tx, work domain.ID, sequence uint64) (bool, error) {
+	rows, err := tx.List(consumedNamespace, queueKey(work, sequence)+"/")
+	return len(rows) > 0, err
 }

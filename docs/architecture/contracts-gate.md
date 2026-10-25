@@ -58,7 +58,7 @@ All five commands passed locally on macOS arm64 with Go 1.27.3, including a sepa
 | Local auth/config reload/secret provider enforcement | 02-06/02-07 | B05's transport and authority decisions are settled; add implementation/crash/race tests. |
 | OTel instrumentation/export coverage | 02-08 | Required B03 lifecycle correlation and redaction remain mandatory. |
 | Optional workspace fresh/shared/copy/setup/cleanup | 03-02 | Generic resource descriptor only; no mandatory repository in Scope. |
-| Inject consumption/completion acknowledgement | 04-02 | Current Inject success means accepted, never proof of consumption; preserve pending input. |
+| Inject consumption/completion acknowledgement | 04-02 (resolved: [generic inject acknowledgement](runtime-semantics.md#generic-inject-acknowledgement-04-02)) | Inject success means accepted, never proof of consumption; `Result.ConsumedInputs` is the proof on every outcome; `ErrNotAccepting` is definitive; preserve pending input. |
 | One pending job rerun/replacement and possible coalescing | 05-01 | No speculative coalesce policy before workload evidence; preserve ordinary queue ordering. |
 | Ownership transfer, active-state conversion and fallback | 03-07, 06-02 | No dual scope owner; independent state and rehearsed fallback. |
 | Subprocess transport/manifest/schema evolution | 07-01 through 07-03 | No speculative third-party protocol before shipped workloads/cutover. |

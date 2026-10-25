@@ -17,6 +17,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"math/rand/v2"
 	"os"
 	"path/filepath"
@@ -65,9 +66,10 @@ var (
 	// ErrUnknownExecution means this instance holds no live segment for the
 	// execution; it never acts on unowned or unverified processes.
 	ErrUnknownExecution = errors.New("no claude process owned for execution")
-	// ErrNotAccepting means the segment's input is closed: it was adopted
-	// (stdin went with the daemon that started it) or its result arrived.
-	ErrNotAccepting = errors.New("claude process is not accepting input")
+	// ErrNotAccepting (extension.ErrNotAccepting) means the segment's input
+	// is closed: it was adopted (stdin went with the daemon that started it)
+	// or its result arrived. Core keeps the input for the next attempt or wake.
+	ErrNotAccepting = extension.ErrNotAccepting
 	// ErrSuperseded means a newer lease epoch adopted the process.
 	ErrSuperseded = errors.New("claude process adopted by a newer lease epoch")
 	// ErrNotStopped means the process tree could not be verified stopped.
@@ -344,7 +346,9 @@ func (e *Executor) Inject(ctx context.Context, id domain.ID, ev domain.Event) er
 	rn := e.runs[id]
 	e.mu.Unlock()
 	if rn == nil {
-		return ErrUnknownExecution
+		// Nothing this instance holds can take the input: definitively not
+		// delivered.
+		return fmt.Errorf("%w: %w", ErrNotAccepting, ErrUnknownExecution)
 	}
 	return rn.send(ev.ID, interjection(e.o.Render, ev))
 }

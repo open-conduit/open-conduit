@@ -236,3 +236,85 @@ func TestWeakenedExtensionContractsAreRejected(t *testing.T) {
 		t.Fatalf("missing telemetry undetected: %v", err)
 	}
 }
+
+func injectFixture(e *reference.InjectExecutor, finish func()) conformance.InjectFixture {
+	return conformance.InjectFixture{Executor: e, Request: extension.RunRequest{Work: domain.Work{ID: "work"}, Execution: domain.Execution{ID: "execution", WorkID: "work"}},
+		Finish: func() error { e.Consume(); finish(); return nil }}
+}
+
+func TestReferenceInjectExecutor(t *testing.T) {
+	conformance.RunInjectExecutor(t, func() conformance.InjectFixture {
+		e := &reference.InjectExecutor{}
+		return injectFixture(e, e.Finish)
+	})
+}
+
+// Weakened inject executors must fail the shared case: one claiming an Event
+// it was never given, one still accepting input after its result, one
+// accepting input for an execution it does not hold, and one whose recovery
+// loses the proof.
+type overclaimingInject struct{ *reference.InjectExecutor }
+
+type lateAcceptingInject struct{ *reference.InjectExecutor }
+
+func (e lateAcceptingInject) Inject(ctx context.Context, id domain.ID, ev domain.Event) error {
+	if ev.ID == "inject-conformance-late" {
+		return nil
+	}
+	return e.InjectExecutor.Inject(ctx, id, ev)
+}
+
+type promiscuousInject struct{ *reference.InjectExecutor }
+
+func (e promiscuousInject) Inject(ctx context.Context, id domain.ID, ev domain.Event) error {
+	if id == "inject-conformance-unknown" {
+		return nil
+	}
+	return e.InjectExecutor.Inject(ctx, id, ev)
+}
+
+type forgetfulInject struct{ *reference.InjectExecutor }
+type proofless struct{ extension.RunHandle }
+
+func (h proofless) Wait(ctx context.Context) (extension.Result, error) {
+	r, err := h.RunHandle.Wait(ctx)
+	r.ConsumedInputs = nil
+	return r, err
+}
+func (e forgetfulInject) Recover(ctx context.Context, r extension.RunRequest, p domain.Payload) (extension.RunHandle, error) {
+	h, err := e.InjectExecutor.Recover(ctx, r, p)
+	if err != nil {
+		return nil, err
+	}
+	return proofless{h}, nil
+}
+
+func TestInjectExecutorNegativeControls(t *testing.T) {
+	base := extension.RunRequest{Work: domain.Work{ID: "work"}, Execution: domain.Execution{ID: "execution", WorkID: "work"}}
+	over := &reference.InjectExecutor{}
+	cases := map[string]conformance.InjectFixture{
+		"overclaim": {Executor: overclaimingInject{over}, Request: base, Finish: func() error {
+			over.Consume()
+			_ = over.Inject(context.Background(), "execution", domain.Event{ID: "never-given-by-core"})
+			over.Consume()
+			over.Finish()
+			return nil
+		}},
+	}
+	late := &reference.InjectExecutor{}
+	cases["late"] = conformance.InjectFixture{Executor: lateAcceptingInject{late}, Request: base, Finish: func() error { late.Consume(); late.Finish(); return nil }}
+	prom := &reference.InjectExecutor{}
+	cases["unknown"] = conformance.InjectFixture{Executor: promiscuousInject{prom}, Request: base, Finish: func() error { prom.Consume(); prom.Finish(); return nil }}
+	forget := &reference.InjectExecutor{}
+	cases["recovery"] = conformance.InjectFixture{Executor: forgetfulInject{forget}, Request: base, Finish: func() error { forget.Consume(); forget.Finish(); return nil }}
+	lazy := &reference.InjectExecutor{}
+	cases["unconsumed"] = conformance.InjectFixture{Executor: lazy, Request: base, Finish: func() error { lazy.Finish(); return nil }}
+	for name, f := range cases {
+		if err := conformance.CheckInjectExecutor(f); err == nil {
+			t.Errorf("%s: weakened inject executor passed", name)
+		}
+	}
+	if err := conformance.CheckInjectExecutor(conformance.InjectFixture{Executor: &reference.Executor{}, Request: base}); err == nil {
+		t.Error("an executor without inject passed")
+	}
+}

@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -8,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -27,6 +30,8 @@ Commands:
   wait --type T[,T...] [--key-source S --key-external-id X]... [--timeout SECONDS] [--after-sequence N]
   outcome completed|failed|handoff [--summary TEXT] [--schema S --data JSON]
   call OPERATION [--schema S] [--data JSON | --data-file PATH|-]
+  inbox                                     print input injected into this running execution since the last
+                                            read (JSON lines) and acknowledge it as taken in (OS_INBOX)
   mcp                                       serve these operations as an MCP server on stdio
   version
 
@@ -83,6 +88,8 @@ func RunToolbelt(version, commit string, args []string, env Env, stdin io.Reader
 		return t.call(args[1:])
 	case "mcp":
 		return t.mcp(args[1:])
+	case "inbox":
+		return t.inbox(args[1:])
 	}
 	return t.usage("unknown command")
 }
@@ -370,4 +377,63 @@ func (t *toolbelt) call(args []string) int {
 		}
 		return shown
 	})
+}
+
+// inbox reads the executor's inject inbox (OS_INBOX; the shell executor's
+// file protocol): each delivered <order>-<digest>.json not yet acknowledged is
+// printed as one JSON line and acknowledged with consumed/<digest>, which the
+// executor reports as consumption with the attempt's result. Nothing goes
+// through the endpoint, so it also works for an adopted process.
+func (t *toolbelt) inbox(args []string) int {
+	if len(args) != 0 {
+		return t.usage("inbox takes no arguments")
+	}
+	dir := t.env.Getenv("OS_INBOX")
+	if dir == "" {
+		fmt.Fprintln(t.errOut, "os: OS_INBOX is not set: this execution has no inject inbox")
+		return 1
+	}
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		fmt.Fprintln(t.errOut, "os: the inbox is unreadable")
+		return 1
+	}
+	if err = os.MkdirAll(filepath.Join(dir, "consumed"), 0o700); err != nil {
+		fmt.Fprintln(t.errOut, "os: the inbox is not writable")
+		return 1
+	}
+	names := []string{}
+	for _, e := range entries {
+		n := e.Name()
+		if e.Type().IsRegular() && strings.HasSuffix(n, ".json") && !strings.HasPrefix(n, ".") && strings.Contains(n, "-") {
+			names = append(names, n)
+		}
+	}
+	sort.Strings(names)
+	for _, n := range names {
+		digest := n[strings.LastIndex(n, "-")+1 : len(n)-len(".json")]
+		ack := filepath.Join(dir, "consumed", digest)
+		if _, err := os.Stat(ack); err == nil {
+			continue
+		}
+		data, err := os.ReadFile(filepath.Join(dir, n))
+		if err != nil || !json.Valid(data) {
+			fmt.Fprintln(t.errOut, "os: an inbox entry is unreadable")
+			return 1
+		}
+		var line bytes.Buffer
+		if err = json.Compact(&line, data); err != nil {
+			return 1
+		}
+		line.WriteByte('\n')
+		if _, err = t.out.Write(line.Bytes()); err != nil {
+			return 1
+		}
+		// Acknowledge only once the event was handed over.
+		if err = os.WriteFile(ack, nil, 0o600); err != nil {
+			fmt.Fprintln(t.errOut, "os: could not acknowledge an inbox entry")
+			return 1
+		}
+	}
+	return 0
 }

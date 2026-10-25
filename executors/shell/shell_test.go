@@ -162,6 +162,34 @@ func TestSharedExecutorConformance(t *testing.T) {
 	conformance.RunExecutor(t, func() extension.Executor { return newExecutor(t, dir, art) }, r)
 }
 
+// TestSharedInjectConformance: injected Events land in the segment's inbox
+// (OS_INBOX); the process reads and acknowledges them (here with the file
+// protocol `os inbox` implements) and the result proves exactly those.
+func TestSharedInjectConformance(t *testing.T) {
+	dir := stateDir(t)
+	gate := filepath.Join(stateDir(t), "go")
+	script := `while [ ! -e '` + gate + `' ]; do sleep 0.02; done; for f in "$OS_INBOX"/*.json; do [ -e "$f" ] || continue; d=${f##*-}; d=${d%.json}; : > "$OS_INBOX/consumed/$d"; done`
+	cfg, _ := json.Marshal(map[string]string{"command": script})
+	r, _ := request("exec-inject-conformance", 1, string(cfg))
+	conformance.RunInjectExecutor(t, func() conformance.InjectFixture {
+		return conformance.InjectFixture{Executor: newExecutor(t, dir, nil), Request: r,
+			Finish: func() error { return os.WriteFile(gate, nil, 0o600) }}
+	})
+}
+
+// An acknowledgement for something core never delivered is not proof.
+func TestInboxIgnoresForgedAcknowledgements(t *testing.T) {
+	e := newExecutor(t, stateDir(t), nil)
+	r, _ := request("exec-forged", 1, `{"command":": > \"$OS_INBOX/consumed/forged\"; printf x > \"$OS_INBOX/000009-forged.json\""}`)
+	res := run(t, e, r)
+	if len(res.ConsumedInputs) != 0 {
+		t.Fatalf("forged proof %v", res.ConsumedInputs)
+	}
+	if !e.Capabilities().Inject {
+		t.Fatal("shell does not advertise inject")
+	}
+}
+
 func TestCompletedResultLogAndOutputs(t *testing.T) {
 	art := &memoryArtifacts{data: map[string][]byte{}}
 	e := newExecutor(t, stateDir(t), art)
@@ -437,7 +465,7 @@ func TestResumeIsExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := resumable.Capabilities(); !c.Resume || !c.Interrupt || c.Toolbelt != extension.ToolbeltCLI || !c.Workspace || c.Inject {
+	if c := resumable.Capabilities(); !c.Resume || !c.Interrupt || c.Toolbelt != extension.ToolbeltCLI || !c.Workspace || !c.Inject {
 		t.Fatalf("capabilities: %+v", c)
 	}
 	if err = extension.ValidateBinding(domain.Binding{Requires: domain.Capabilities{Resume: true, Interrupt: true, Toolbelt: "cli"}}, resumable); err != nil {

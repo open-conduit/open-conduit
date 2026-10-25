@@ -1,6 +1,6 @@
 # Shell executor and CLI toolbelt
 
-Ticket 02-07 delivers the first real executor, [`executors/shell`](../../executors/shell), and the [`os` CLI](../../internal/cli/toolbelt.go). It proves the architecture with no agent session, no tracker and no workspace. The executor imports only public contracts. It implements `extension.Executor`, `InterruptExecutor` and `ResumeExecutor`, and advertises `toolbelt: cli` and `interrupt`. `resume` is advertised only when `Options.Resume` is set. Workspace and inject are not advertised. Daemon composition (a `serve` command, routing and poll loops) is delivered by 02-09 ([daemon composition](daemon-core-gate.md)); the host role in this document's evidence is played by integration tests that compose the production scheduler, toolbelt, management server, SQLite and artifacts.
+Ticket 02-07 delivers the first real executor, [`executors/shell`](../../executors/shell), and the [`os` CLI](../../internal/cli/toolbelt.go). It proves the architecture with no agent session, no tracker and no workspace. The executor imports only public contracts. It implements `extension.Executor`, `InterruptExecutor` and `ResumeExecutor`, and advertises `toolbelt: cli` and `interrupt`. `resume` is advertised only when `Options.Resume` is set. Workspace was added in 03-02 and inject in 04-02 (see [Inject inbox](#inject-inbox-04-02)). Daemon composition (a `serve` command, routing and poll loops) is delivered by 02-09 ([daemon composition](daemon-core-gate.md)); the host role in this document's evidence is played by integration tests that compose the production scheduler, toolbelt, management server, SQLite and artifacts.
 
 ## Binding config
 
@@ -115,3 +115,15 @@ The scheduler now preserves executor outcome data when it converts a declared wa
   - Apply-time config rejection is covered, and so are CLI exit codes and non-echo behavior.
 
 The restart here is an in-process teardown and rebuild of every host component; the shell process is a real OS process in its own session. Killing an actual daemon process at each boundary is the 02-09 gate, delivered in [daemon composition](daemon-core-gate.md). 02-08 adds `Forget` for the shared retention policy: it removes an expired execution's run directories and refuses while a verified process still runs. It also adds history/TUI presentation with log tailing from published artifacts ([observability and history](observability-history.md)). Live log streaming during a run is not provided.
+
+## Inject inbox (04-02)
+
+The shell executor implements `InjectExecutor`, the second implementation of the [generic inject acknowledgement](runtime-semantics.md#generic-inject-acknowledgement-04-02).
+
+- **The inbox.** Each segment has `inbox/` in its run directory, named to the process as `OS_INBOX`. `Inject` writes the Event as `<order>-<id digest>.json`, in the `OS_INPUT_FILE` event shape, under the segment's finalize lock. A repeated Event identity is not written again. After the result is recorded, or for an execution this instance does not hold, `Inject` returns `ErrNotAccepting`.
+- **Taking input in.** The process reads the inbox and acknowledges each event by creating `inbox/consumed/<id digest>`. `os inbox` does both: it prints the unacknowledged events in order as JSON lines and acknowledges each one after printing it, without any call to the endpoint.
+- **The proof.** The result reports acknowledged, delivered events as `Result.ConsumedInputs`. An acknowledgement for a file core never delivered is ignored.
+- **Adoption.** The inbox is on disk, so an adopted process keeps receiving input.
+- **Scripts that never read the inbox.** Nothing is consumed. Injected input stays pending and reaches attempt N+1, exactly as `queue` would.
+
+Binding an inject route to shell therefore no longer needs an unsupported-capability fallback. `TestSharedInjectConformance`, `TestInboxIgnoresForgedAcknowledgements` and `TestToolbeltInbox` cover it.

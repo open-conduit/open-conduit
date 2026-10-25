@@ -467,6 +467,15 @@ func (rn *run) send(id domain.ID, text string) error {
 	rn.readNew()
 	rn.mu.Lock()
 	defer rn.mu.Unlock()
+	var in injected
+	_ = readJSON(filepath.Join(rn.dir, "injected.json"), &in)
+	for _, a := range in.Accepted {
+		if a == string(id) && rn.open {
+			// A retried ambiguous dispatch of the same Event: it is already
+			// on claude's stdin, so it is not written (or echoed) twice.
+			return nil
+		}
+	}
 	if !rn.write(text) {
 		return ErrNotAccepting
 	}

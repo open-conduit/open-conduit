@@ -164,7 +164,17 @@ Handler `slack` reads only the detached Event, Scope and Work. It finds its entr
 
   A reply therefore cannot start an event loop. Ingress Events are external roots, so provenance travels in the marker instead, and the core chain limits still bound every derived Event.
 
-Completed Work keeps its thread key, and later messages are checkpointed against the terminal Work. A support binding should hand back or wait rather than complete while the conversation is open. That policy, the active-execution inject path and context accumulation are 04-02.
+Completed Work keeps its thread key, and later messages are checkpointed against the terminal Work.
+
+## Support execution and conversation lifecycle (04-02)
+
+The support binding reuses the Claude Code executor through the public contract, with its own investigation tools and no resource. `requires` has `workspace: false` and there is no Git provider. The session lives in the executor's private per-Work directory. The binding uses playbook [`support-conversation`](../../extensions/slack/playbooks/support-conversation.md) with args `{key}` (the thread key), and bootstrap writes that playbook into the Claude Code plugin beside the GitHub ones. `init slack` writes exactly this binding.
+
+**Decision: wait while the conversation is open; complete only on resolution.** A turn replies once with `slack.reply`. It then calls the builtin `wait` on the thread: `{"match": {"types": ["slack.message.human"]}, "timeout_seconds": 604800}`. A type-only wait matches the Work's own thread key, and `slack.context` returns this input as `wait`. The attempt parks with the turn's status. A human message wakes it as an accepted Event (B04), and the same session resumes with the accumulated messages. When the seven-day timeout fires instead, the turn ends `done`: a handoff, so the Work stays `ready`, owns its thread, and the next message starts attempt N+1. Only a person's confirmation that the matter is resolved ends the turn `finished`, which completes the Work. Later messages in that thread are then audited as `terminal`, and a new top-level message starts a new conversation. The playbook says "when in doubt, wait". The cost of an open conversation is that its thread stays in reconcile's owned-thread set.
+
+**Active messages.** The route's active policy is `inject`. A human message during a running turn is written to claude's stdin, echoed and proved consumed with the turn's result, including a waiting result. The parked wait is therefore not woken by what the turn already answered ([generic inject acknowledgement](runtime-semantics.md#generic-inject-acknowledgement-04-02)). A message that arrives after the turn stopped reading is not consumed: it wakes the wait or starts the next attempt. A binding on an executor without inject needs an explicit `unsupported_fallback` (`queue`). The shell executor now supports inject through its inbox.
+
+[`TestDaemonSlackSupportConversation`](../../integration/daemon_slack_support_test.go) drives this with a fake claude on the composed daemon over Socket Mode. The first turn replies and parks. A reply resumes the same session. A message mid-turn is injected once and consumed, with no wake and no extra segment. A restart mid-wait keeps the thread's Work, and the next reply resumes the same session. The run uses no workspace, `github` stays `not_configured`, and only fixtures are involved. Real-Slack and multi-day evidence is 04-03.
 
 ## Marked replies
 
@@ -227,6 +237,6 @@ make drill
 ## Limitations and follow-on work
 
 - **Real Slack (04-03).** No real Slack API, Socket Mode connection or Events API delivery has been exercised. Metadata visibility, real rate limits and `app_mention` duplication are checked on the real app.
-- **Support execution and setup (04-02).** Executor binding, inject acknowledgement, the generic extension `Setup` hook with Slack's setup on it, and the extension-owned doctor scope comparison.
+- **Support execution and setup (04-02, delivered on fixtures).** The support binding, conversation lifecycle, generic inject acknowledgement, `init slack` and the extension-owned doctor scope comparison are delivered. The real app, real tokens, the `slack-cli` path, metadata visibility and a real multi-day wait are 04-03.
 - **Registration lifetime.** As for GitHub, ingress registrations are startup-only. A changed entry reports `restart_required`.
 - **Volume.** The projector reads every Work in its scope each pass, and the router's per-event cost grows with a Work's queued input. Both are adequate for a support channel, with no high-volume claim.

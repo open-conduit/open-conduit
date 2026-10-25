@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"time"
@@ -52,14 +53,18 @@ type Result struct {
 	// result also establishes that the attempt finished. Only failed outcomes
 	// may carry it.
 	RetryHint *RetryHint
-	// ConsumedInputs optionally names Events that core delivered to this
-	// attempt through Inject and that the executor has evidence the running
-	// process took in (for example an echo of the injected message). Core
-	// consumes such an input only when it holds an accepted inject intent for
-	// this execution and the input is still pending; any other ID is ignored,
-	// so the field grants no authority. It is applied when a completed or
-	// handoff result is recorded. Without it an accepted injection stays
-	// pending and is presented again to the next attempt.
+	// ConsumedInputs is the generic inject acknowledgement (B04, 04-02). It
+	// names Events core delivered to this attempt through Inject that the
+	// executor has evidence the running process took in (an echo of the
+	// injected message, a read of its inbox). It may accompany any outcome
+	// (completed, handoff, waiting or failed) and is applied atomically with
+	// that result. Core consumes such an input only when it holds an inject
+	// intent for this execution whose dispatch was attempted, and the input is
+	// still pending; any other ID is ignored, so the field grants no
+	// authority. A consumed input is never presented again (not to attempt
+	// N+1, not as the wake of a parked wait). Without proof an injected input
+	// stays pending and is presented again, explicitly, to the next attempt
+	// or wake.
 	ConsumedInputs []domain.ID
 }
 
@@ -88,13 +93,28 @@ type InterruptExecutor interface {
 	Interrupt(context.Context, domain.ID) error
 }
 
-// Success here means accepted for delivery, never proof that an event was
-// consumed by the running process. Consumption is proved only by the finished
-// result's ConsumedInputs. Further acknowledgement/completion races are refined
-// in 04-02.
+// InjectExecutor delivers an accepted Event to the running attempt.
+//
+//   - nil means accepted for delivery, never proof that the process took it
+//     in. Consumption is proved only by the finished result's ConsumedInputs.
+//   - ErrNotAccepting means the Event was definitely not delivered: no live
+//     process of this execution can take input here (it finished, it was
+//     adopted without an input channel, or this executor instance does not
+//     hold it). Core stops dispatching that intent and keeps the input
+//     pending for the next attempt or wake; it is not retried.
+//   - Any other error is ambiguous (the Event may have been delivered). Core
+//     retries with the same intent and Event identity, or applies the
+//     binding's configured error fallback.
+//
+// Delivering one Event identity twice (a retried ambiguous dispatch) must not
+// make the executor report it consumed twice.
 type InjectExecutor interface {
 	Inject(context.Context, domain.ID, domain.Event) error
 }
+
+// ErrNotAccepting is the definitive "not delivered" answer of Inject.
+var ErrNotAccepting = errors.New("execution is not accepting input")
+
 type ResumeExecutor interface {
 	Resume(context.Context, RunRequest, domain.Payload) (RunHandle, error)
 }

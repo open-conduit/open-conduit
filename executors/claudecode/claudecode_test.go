@@ -26,6 +26,27 @@ func TestSharedExecutorConformance(t *testing.T) {
 	conformance.RunExecutor(t, func() extension.Executor { return h.executor() }, r)
 }
 
+// TestSharedInjectConformance runs the generic inject acknowledgement case:
+// the fake claude echoes the injected message (consumption), a retried
+// dispatch is not written twice, a finished turn takes nothing more and the
+// recorded proof survives recovery.
+func TestSharedInjectConformance(t *testing.T) {
+	h := newHarness(t)
+	h.mode("wait")
+	r, _ := h.request("work/ci", "exec-inject-conformance", 1, map[string]any{"env": map[string]string{"FAKE_DIR": h.fake, "FAKE_MESSAGES": "2"}})
+	conformance.RunInjectExecutor(t, func() conformance.InjectFixture {
+		return conformance.InjectFixture{Executor: h.executor(), Request: r,
+			Ready: func() error {
+				waitFor(t, "the turn started", func() bool { _, err := os.Stat(filepath.Join(h.fake, "started")); return err == nil })
+				return nil
+			},
+			Finish: func() error {
+				waitFor(t, "the echo", func() bool { _, err := os.Stat(filepath.Join(h.fake, "pid")); return err == nil })
+				return os.WriteFile(filepath.Join(h.fake, "release"), nil, 0o600)
+			}}
+	})
+}
+
 func TestCapabilitiesAndBinding(t *testing.T) {
 	h := newHarness(t)
 	e := h.executor()
