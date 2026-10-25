@@ -842,6 +842,9 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 		if err = putAttemptState(tx, state); err != nil {
 			return err
 		}
+		if err = consumeInjectedInTx(tx, x, result.ConsumedInputs); err != nil {
+			return err
+		}
 		pending, err := PendingInputsInTx(tx, w.ID)
 		if err != nil {
 			return err

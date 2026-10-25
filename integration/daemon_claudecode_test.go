@@ -187,24 +187,29 @@ func TestDaemonClaudeCodeExecution(t *testing.T) {
 		t.Fatalf("a handed-back Work is %s", got.State)
 	}
 
-	// An event during a running turn is injected into it and consumed. The
-	// injection acknowledgement is not consumption (04-02), so core also
-	// presents that input to the next attempt.
+	// An event during a running turn is injected into it and consumed. claude's
+	// echo is the executor's consumption proof (Result.ConsumedInputs), so core
+	// consumes the input with that turn and starts no further attempt for it
+	// (v1 TestInterjectionReachesTheRunningTurn).
 	os.Remove(filepath.Join(d.root, "started"))
 	set("hold-for", "agent.more")
 	submit("agent.more", "more-1")
 	d.until("second turn started", 30*time.Second, func() bool { return len(invocations()) == 3 && exists(filepath.Join(d.root, "started")) })
 	submit("agent.interject", "interject-1")
-	d.until("injected input re-presented and handed back", 30*time.Second, func() bool {
+	d.until("injected turn handed back", 30*time.Second, func() bool {
 		x := d.executions(w.ID)
-		return len(x) == 3 && x[1].State == "handoff" && x[2].State == "handoff"
+		return len(x) == 2 && x[1].State == "handoff"
 	})
+	time.Sleep(time.Second)
+	if x := d.executions(w.ID); len(x) != 2 {
+		t.Fatalf("a consumed interjection started another attempt: %d attempts", len(x))
+	}
 	injected, _ := data(d.executions(w.ID)[1])["injected"].(map[string]any)
 	if injected == nil || injected["accepted"] != float64(1) || injected["consumed"] != float64(1) {
 		t.Fatalf("injection %v", data(d.executions(w.ID)[1]))
 	}
-	if strings.Count(readFile(t, filepath.Join(d.root, "stdin")), "agent.interject") != 2 || !strings.Contains(readFile(t, filepath.Join(d.root, "stdin")), "Arrived during this turn") {
-		t.Fatalf("the interjection did not reach claude mid-turn and then the next attempt:\n%s", readFile(t, filepath.Join(d.root, "stdin")))
+	if strings.Count(readFile(t, filepath.Join(d.root, "stdin")), "agent.interject") != 1 || !strings.Contains(readFile(t, filepath.Join(d.root, "stdin")), "Arrived during this turn") {
+		t.Fatalf("the interjection did not reach claude exactly once, mid-turn:\n%s", readFile(t, filepath.Join(d.root, "stdin")))
 	}
 
 	// A turn running when the daemon dies is adopted, not relaunched.
@@ -223,11 +228,11 @@ func TestDaemonClaudeCodeExecution(t *testing.T) {
 	set("release", "")
 	d.until("adopted turn finished", 60*time.Second, func() bool {
 		x := d.executions(w.ID)
-		return len(x) == 4 && x[3].State == "handoff"
+		return len(x) == 3 && x[2].State == "handoff"
 	})
 	launches := 0
 	for _, line := range invocations() {
-		if strings.HasPrefix(line, d.executions(w.ID)[3].ID+" ") {
+		if strings.HasPrefix(line, d.executions(w.ID)[2].ID+" ") {
 			launches++
 		}
 	}
@@ -258,8 +263,8 @@ func TestDaemonClaudeCodeExecution(t *testing.T) {
 			turns++
 		}
 	}
-	if turns != 5 {
-		t.Fatalf("%d agent_turn records for five segments", turns)
+	if turns != 4 {
+		t.Fatalf("%d agent_turn records for four segments", turns)
 	}
 }
 

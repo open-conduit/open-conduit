@@ -153,3 +153,26 @@ Intentional differences: one wake ends a wait (the agent waits again), and `--ca
 - **O04 and B15.** The TUI and CLI offer claim by hand (overriding labels), run/retry, hold/release, attach (input queues, the next turn continues the session), cancel attempt/Work and reconcile, all through local management and recorded as causal `core.manual` Events. Stale revisions are refused.
 - **O06.** Covered by validated CLI edits; the full-screen editor is 06-01.
 - **ngrok, cloudflared and static.** Ported with process fixtures, restart and URL reporting, plus `manage_webhook` repointing. Real tunnel exposure is 03-06/03-07 evidence.
+
+03-06 update (gate in progress, **not passed**): workflow A was checked against the fixture matrix and a first set of real runs.
+
+- **Fixture matrix.** It passes at 66d26c6 with the race detector. It covers claims and override, projections and drift, comments, reviews, checks, merges and closes, webhook/reconcile overlap, interjection, PR, issue and turn waits, holds, retries and usage-limit holds, GitHub primary/secondary rate limits, capacity, detached adoption, handoff A/B, workspaces and tools.
+- **Real Claude Code, workspace-free scope, no GitHub.** These ran with real `claude` on `haiku`:
+  - `--json-schema` status;
+  - the MCP toolbelt (tools listed and called; `OS_ENDPOINT`/`OS_TOKEN_FILE` only in the server env);
+  - resume of an existing session with per-turn deltas;
+  - the injection echo;
+  - a daemon SIGKILL mid-turn, adopted at a higher epoch, with a toolbelt call succeeding after the credential replacement;
+  - a cold handoff draw (`arm=handoff`);
+  - MCP wait park and wake;
+  - attach;
+  - keyring `secret set`;
+  - a real usage limit (`resets 3pm (Europe/London)` parsed to 15:00Z, retry at the reset plus 2 minutes).
+- **B04 regression fixed.** A consumed interjection started another attempt; v1 `TestInterjectionReachesTheRunningTurn` forbids that. Contract fix: a finished result may carry the consumption proof `extension.Result.ConsumedInputs`. Core consumes only inputs it injected into that execution through an accepted intent. The claude-code executor reports echoed injections. Regressions: `TestProductionSchedulerInjectConsumptionProof` and the updated `TestDaemonClaudeCodeExecution`.
+- **Pending: all real GitHub evidence.** The supplied credentials could not create the controlled sandbox repository, so none of the following ran:
+  - real claims, labels, comments and tools;
+  - webhooks and tunnels, reconcile-only operation and dry run;
+  - marker recovery and reopen;
+  - feedback comments with reactions;
+  - a real GitHub rate limit;
+  - the v1 cost comparison.

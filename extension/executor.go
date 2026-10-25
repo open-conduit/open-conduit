@@ -52,6 +52,15 @@ type Result struct {
 	// result also establishes that the attempt finished. Only failed outcomes
 	// may carry it.
 	RetryHint *RetryHint
+	// ConsumedInputs optionally names Events that core delivered to this
+	// attempt through Inject and that the executor has evidence the running
+	// process took in (for example an echo of the injected message). Core
+	// consumes such an input only when it holds an accepted inject intent for
+	// this execution and the input is still pending; any other ID is ignored,
+	// so the field grants no authority. It is applied when a completed or
+	// handoff result is recorded. Without it an accepted injection stays
+	// pending and is presented again to the next attempt.
+	ConsumedInputs []domain.ID
 }
 
 // RetryHint classifies a retryable executor limit without provider-specific
@@ -79,8 +88,10 @@ type InterruptExecutor interface {
 	Interrupt(context.Context, domain.ID) error
 }
 
-// Injection acknowledgement/completion races are refined in 04-02. Success here
-// means accepted, never proof that an event was consumed by the running process.
+// Success here means accepted for delivery, never proof that an event was
+// consumed by the running process. Consumption is proved only by the finished
+// result's ConsumedInputs. Further acknowledgement/completion races are refined
+// in 04-02.
 type InjectExecutor interface {
 	Inject(context.Context, domain.ID, domain.Event) error
 }
@@ -133,6 +144,13 @@ func ValidateResult(r Result) error {
 	}
 	if r.RetryHint != nil && r.Outcome.Kind != domain.OutcomeFailed {
 		return fmt.Errorf("%w: retry hint on a non-failed outcome", ErrInvalid)
+	}
+	seen := map[domain.ID]bool{}
+	for _, id := range r.ConsumedInputs {
+		if id == "" || seen[id] {
+			return fmt.Errorf("%w: consumed inputs", ErrInvalid)
+		}
+		seen[id] = true
 	}
 	if r.Usage.Cost != nil && (math.IsNaN(*r.Usage.Cost) || math.IsInf(*r.Usage.Cost, 0) || *r.Usage.Cost < 0 || r.Usage.Currency == "") {
 		return fmt.Errorf("%w: cost", ErrInvalid)

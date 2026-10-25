@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/alsiola/open-conduit/domain"
@@ -221,4 +222,61 @@ func (s *Scheduler) handoffContinuationInTx(tx storage.Tx, x domain.Execution, n
 		return err
 	}
 	return tx.MarkRouted(accepted.Event.ID, work.ID, "handoff")
+}
+
+// consumeInjectedInTx applies an executor's consumption proof for injected
+// input. Only an Event with an accepted inject intent targeting this execution
+// (at any of its lease epochs) and still pending for its Work is consumed, with
+// the same durable consumed-input history as a claim; anything else is
+// ignored, so the executor's claim cannot remove input it was never given.
+func consumeInjectedInTx(tx storage.Tx, x domain.Execution, ids []domain.ID) error {
+	for _, id := range ids {
+		injected := false
+		for epoch := uint64(1); epoch <= x.Lease.Epoch && !injected; epoch++ {
+			intentID := identity(string(id), string(x.ID), fmt.Sprint(epoch), "inject")
+			var intent ControlIntent
+			if err := getJSON(tx, intentNamespace, intentID, &intent); err != nil {
+				if errors.Is(err, storage.ErrNotFound) {
+					continue
+				}
+				return err
+			}
+			state, err := controlState(tx, intentID)
+			if err != nil {
+				if errors.Is(err, storage.ErrNotFound) {
+					continue
+				}
+				return err
+			}
+			injected = intent.ExecutionID == x.ID && intent.WorkID == x.WorkID && intent.Policy == "inject" && state.Status == "accepted"
+		}
+		if !injected {
+			continue
+		}
+		a, err := tx.Event(id)
+		if err != nil {
+			return err
+		}
+		key := queueKey(x.WorkID, a.Sequence)
+		var input QueuedInput
+		if err = getJSON(tx, queueNamespace, key, &input); err != nil {
+			if errors.Is(err, storage.ErrNotFound) {
+				continue
+			}
+			return err
+		}
+		if input.EventID != id {
+			continue
+		}
+		if err = putJSON(tx, consumedNamespace, key+"/"+identity(string(x.ID)), struct {
+			Input       QueuedInput
+			ExecutionID domain.ID
+		}{input, x.ID}); err != nil {
+			return err
+		}
+		if err = tx.Delete(queueNamespace, key); err != nil {
+			return err
+		}
+	}
+	return nil
 }

@@ -332,9 +332,10 @@ func (e *Executor) Interrupt(ctx context.Context, id domain.ID) error {
 // Inject hands an accepted Event to the running turn as a user message.
 // claude takes it in after the tool call in progress, before its next model
 // call, and echoes it back; the echo is recorded as consumption in the
-// result's injected counts. Success means accepted for delivery only (04-02
-// defines generic consumption acknowledgement), so core keeps the input
-// eligible for the next attempt.
+// result's injected counts and reported in Result.ConsumedInputs, so core
+// consumes it with the turn instead of presenting it to the next attempt.
+// Success itself means accepted for delivery only: an input that was never
+// echoed stays eligible for the next attempt.
 func (e *Executor) Inject(ctx context.Context, id domain.ID, ev domain.Event) error {
 	if err := ctx.Err(); err != nil {
 		return err

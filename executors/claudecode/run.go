@@ -994,6 +994,15 @@ func (e *Executor) settle(ctx context.Context, rn *run) (extension.Result, error
 	}
 	outcome, hint := mapOutcome(p, &f)
 	result := extension.Result{Outcome: outcome, Usage: usageOf(p), RetryHint: hint}
+	// claude echoed these injected inputs back (--replay-user-messages): the
+	// running turn took them in, so core need not present them again.
+	seen := map[domain.ID]bool{}
+	for _, id := range in.Consumed {
+		if id != "" && !seen[domain.ID(id)] {
+			seen[domain.ID(id)] = true
+			result.ConsumedInputs = append(result.ConsumedInputs, domain.ID(id))
+		}
+	}
 	if e.o.Artifacts != nil {
 		for _, a := range []struct {
 			file, media string

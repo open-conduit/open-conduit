@@ -434,6 +434,9 @@ func TestInterjection(t *testing.T) {
 	if d.Injected == nil || d.Injected.Accepted != 1 || d.Injected.Consumed != 1 {
 		t.Fatalf("injection %+v", d.Injected)
 	}
+	if len(res.ConsumedInputs) != 1 || res.ConsumedInputs[0] != "ev-more" {
+		t.Fatalf("consumption proof %+v", res.ConsumedInputs)
+	}
 	if p := h.prompts(); len(p) != 2 || !strings.HasPrefix(p[1], "## Arrived during this turn") || !strings.Contains(p[1], "also the footer") {
 		t.Fatalf("interjection %q", p)
 	}

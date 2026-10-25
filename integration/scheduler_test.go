@@ -724,6 +724,62 @@ func TestProductionSchedulerInjectCompletionRaceRetainsInput(t *testing.T) {
 	}
 }
 
+// TestProductionSchedulerInjectConsumptionProof: a finished result's
+// ConsumedInputs consumes an input core injected into that attempt (accepted
+// intent) with the turn, so the next attempt is not given it again (v1
+// TestInterjectionReachesTheRunningTurn: an interjected message starts no
+// other turn). An input that was only routed (no accepted injection) or an
+// unknown Event named in the proof stays pending: the proof grants no
+// authority. Duplicate IDs are an invalid result.
+func TestProductionSchedulerInjectConsumptionProof(t *testing.T) {
+	o := routingOptions(routingHandlerFunc(routingDecision), "inject")
+	o.Capabilities = domain.Capabilities{Inject: true}
+	f, e := schedulerFixture(t, "reopen", o)
+	work := seedSchedulerWork(t, f, "consume")
+	s := f.Driver.(*schedulerDriver).scheduler
+	handle := &schedulerHandle{}
+	e.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+			return nil, err
+		}
+		return handle, nil
+	}
+	a, err := s.Start(context.Background(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "consume"}
+	requireAccept(t, f, "injected", &key)
+	requireRoute(t, f.Driver, "injected")
+	requireAccept(t, f, "undelivered", &key)
+	requireRoute(t, f.Driver, "undelivered")
+	intents, err := f.Driver.(*schedulerDriver).router.Intents(context.Background(), work)
+	if err != nil || len(intents) != 2 {
+		t.Fatalf("intents: %+v %v", intents, err)
+	}
+	for _, intent := range intents {
+		if intent.EventID == "injected" {
+			if err := s.DispatchControl(context.Background(), intent.ID); err != nil {
+				t.Fatal(err)
+			}
+		}
+	}
+	if err := extension.ValidateResult(extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff}, ConsumedInputs: []domain.ID{"injected", "injected"}}); !errors.Is(err, extension.ErrInvalid) {
+		t.Fatalf("duplicate consumption proof accepted: %v", err)
+	}
+	handle.result = extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Summary: "took it in"}, ConsumedInputs: []domain.ID{"injected", "undelivered", "never-accepted"}}
+	if err := s.Observe(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	pending, err := f.Driver.(*schedulerDriver).router.PendingInputs(context.Background(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(pending) != 1 || pending[0].EventID != "undelivered" {
+		t.Fatalf("consumption proof: pending %+v, want only the undelivered input", pending)
+	}
+}
+
 func TestProductionSchedulerInterruptNeedsStopProof(t *testing.T) {
 	o := routingOptions(routingHandlerFunc(routingDecision), "interrupt")
 	o.Capabilities = domain.Capabilities{Interrupt: true}
