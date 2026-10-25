@@ -217,6 +217,14 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	args, text := body(d.Kind, expand(cfg.Args, r.Work), rec.Handoff, e.o.Render(inputs))
 	text = withAdditions(text, projectAdditions(workdir, cfg.Playbook))
 	first := prompt(cfg.Playbook, args, text)
+	model := cfg.Model
+	if e.o.DryRun {
+		model = e.o.DryRunModel
+		if model == "" {
+			model = "haiku"
+		}
+		first = dryRunPrompt(first, cfg.structured())
+	}
 	turn := turnRecord{ExecutionID: string(r.Execution.ID), WorkID: string(r.Work.ID), ScopeID: string(r.Work.ScopeID), Nonce: nonce, StartedAt: now, Kind: d.Kind, Resume: d.Resume, Arm: d.Arm, Structured: cfg.structured(), StatusSchema: cfg.StatusSchema, FollowUps: len(inputs)}
 	for _, ev := range inputs {
 		turn.InputTypes = append(turn.InputTypes, ev.Type)
@@ -224,7 +232,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	if err = writeJSON(filepath.Join(dir, "turn.json"), turn); err != nil {
 		return e.preset(ctx, rn, cfg.StatusSchema, "start_failed", "could not prepare claude process", nil)
 	}
-	argv := []string{cfg.Binary, "-p", "--model", cfg.Model, "--permission-mode", cfg.PermissionMode,
+	argv := []string{cfg.Binary, "-p", "--model", model, "--permission-mode", cfg.PermissionMode,
 		"--input-format", "stream-json", "--output-format", "stream-json", "--verbose", "--replay-user-messages"}
 	if cfg.PluginDir != "" {
 		argv = append(argv, "--plugin-dir", cfg.PluginDir)

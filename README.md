@@ -2,7 +2,7 @@
 
 A Go rewrite of Open Supervisor around Work, Event, Execution, Timer/Wait and Scope.
 
-The project is implementing the core after completing the contracts gate. Primitive, ingress, executor, toolbelt and observability contracts have shared conformance suites. Production components include SQLite storage, local artifacts, verified backups, durable ingress, routing, Work lifecycle, causal limits, execution scheduling/recovery, timers and event-based waits, toolbelt authority, configuration/secrets, the local management API with its operator client, the restart-safe shell executor with the `os` CLI toolbelt, the Claude Code executor with its MCP toolbelt (`os mcp`) and private session continuity, and lifecycle telemetry with unified run history, a minimal TUI, shared retention and doctor checks. Daemon composition remains in progress. The delivery baseline is pinned to Open Supervisor revision `c2461e55a9d7ca32527bace9db5ecec8c5e60cb0`; the existing runtime remains independently installable as the fallback.
+The project is implementing the core after completing the contracts gate. Primitive, ingress, executor, toolbelt and observability contracts have shared conformance suites. Production components include SQLite storage, local artifacts, verified backups, durable ingress, routing, Work lifecycle, causal limits, execution scheduling/recovery, timers and event-based waits, toolbelt authority, configuration/secrets, the local management API with its operator client, the restart-safe shell executor with the `os` CLI toolbelt, the Claude Code executor with its MCP toolbelt (`os mcp`) and private session continuity, lifecycle telemetry with unified run history, shared retention and doctor checks, and operator setup (`init`, `config set`, `secret set`), GitHub/Claude Code doctor checks, operator controls in the CLI and TUI (claim, run/retry, hold, attach, cancel, rebind, reconcile) and webhook exposure with tunnels. Daemon composition remains in progress. The delivery baseline is pinned to Open Supervisor revision `c2461e55a9d7ca32527bace9db5ecec8c5e60cb0`; the existing runtime remains independently installable as the fallback.
 
 - [Core in one page](docs/architecture/core.md)
 - [Package boundaries and dependency rules](docs/architecture/packages.md)
@@ -24,6 +24,7 @@ The project is implementing the core after completing the contracts gate. Primit
 - [Optional workspaces and the Git provider](docs/architecture/workspaces.md)
 - [Claude Code executor and private continuity](docs/architecture/claude-code-executor.md)
 - [Engineering tools, waits and playbooks](docs/architecture/engineering-tools.md)
+- [Operator setup, doctor and engineering controls](docs/architecture/operator-setup.md)
 - [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)
 - [Pinned source test index](docs/baseline/source-tests.md)

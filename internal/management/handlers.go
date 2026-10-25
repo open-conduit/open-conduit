@@ -129,7 +129,11 @@ func (s *Server) getWork(c *call) (int, any, error) {
 	if etag(c, w.Revision) {
 		return 0, nil, nil
 	}
-	return 200, toWork(w), nil
+	d, err := s.detail(c.ctx, w)
+	if err != nil {
+		return 0, nil, err
+	}
+	return 200, d, nil
 }
 
 // ---- events ----

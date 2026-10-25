@@ -88,6 +88,9 @@ func retryState(tx storage.Tx, work domain.ID) (RetryState, error) {
 	return state, err
 }
 func retryEligibleInTx(tx storage.Tx, work domain.ID) error {
+	if err := heldInTx(tx, work); err != nil {
+		return err
+	}
 	state, err := retryState(tx, work)
 	if errors.Is(err, storage.ErrNotFound) {
 		return nil

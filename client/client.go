@@ -38,6 +38,23 @@ type Work struct {
 	Revision        string   `json:"revision"`
 	CreatedAt       string   `json:"created_at"`
 	UpdatedAt       string   `json:"updated_at"`
+	// Hold and Annotations are present on GET /work/{id} only.
+	Hold        *Hold        `json:"hold,omitempty"`
+	Annotations []Annotation `json:"annotations,omitempty"`
+}
+
+// Hold is an operator scheduling hold on Work.
+type Hold struct {
+	EventID string `json:"event_id"`
+	Reason  string `json:"reason,omitempty"`
+	At      string `json:"at"`
+}
+
+// Annotation is extension-contributed, display-only Work context.
+type Annotation struct {
+	Source string `json:"source"`
+	Name   string `json:"name"`
+	Value  string `json:"value"`
 }
 type Event struct {
 	ID             string   `json:"id"`
@@ -464,6 +481,59 @@ func (c *Client) RetryWork(ctx context.Context, id, revision, reason, key string
 }
 func (c *Client) CancelExecution(ctx context.Context, id, revision, reason, key string) (out ControlResult, err error) {
 	err = c.Do(ctx, "POST", "executions/"+esc(id)+"/cancel", nil, controlRequest{revision, reason}, key, &out)
+	return
+}
+
+// RebindWork moves ready Work's queued input to another binding of its scope.
+func (c *Client) RebindWork(ctx context.Context, id, revision, binding, reason, key string) (out ControlResult, err error) {
+	body := struct {
+		ExpectedRevision string `json:"expected_revision"`
+		Binding          string `json:"binding"`
+		Reason           string `json:"reason"`
+	}{revision, binding, reason}
+	err = c.Do(ctx, "POST", "work/"+esc(id)+"/rebind", nil, body, key, &out)
+	return
+}
+
+// HoldWork stops attempts starting or resuming for Work until released.
+func (c *Client) HoldWork(ctx context.Context, id, revision, reason, key string) (out ControlResult, err error) {
+	err = c.Do(ctx, "POST", "work/"+esc(id)+"/hold", nil, controlRequest{revision, reason}, key, &out)
+	return
+}
+
+// ReleaseWork removes an operator hold.
+func (c *Client) ReleaseWork(ctx context.Context, id, revision, reason, key string) (out ControlResult, err error) {
+	err = c.Do(ctx, "POST", "work/"+esc(id)+"/release", nil, controlRequest{revision, reason}, key, &out)
+	return
+}
+
+// AttachSpec is the local command that attaches to a Work's session.
+type AttachSpec struct {
+	WorkID   string   `json:"work_id"`
+	Executor string   `json:"executor"`
+	Argv     []string `json:"argv"`
+	Dir      string   `json:"dir,omitempty"`
+}
+
+// AttachWork returns the attach command for held Work.
+func (c *Client) AttachWork(ctx context.Context, id, key string) (out AttachSpec, err error) {
+	err = c.Do(ctx, "POST", "work/"+esc(id)+"/attach", nil, struct{}{}, key, &out)
+	return
+}
+
+// ReconcileResult names the ingress sources made due.
+type ReconcileResult struct {
+	EventID string   `json:"event_id"`
+	ScopeID string   `json:"scope_id"`
+	Sources []string `json:"sources"`
+}
+
+// ReconcileScope requests an immediate reconcile of a scope's sources.
+func (c *Client) ReconcileScope(ctx context.Context, id, revision, key string) (out ReconcileResult, err error) {
+	body := struct {
+		ExpectedRevision string `json:"expected_revision"`
+	}{revision}
+	err = c.Do(ctx, "POST", "scopes/"+esc(id)+"/reconcile", nil, body, key, &out)
 	return
 }
 

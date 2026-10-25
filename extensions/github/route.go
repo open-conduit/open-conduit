@@ -13,6 +13,14 @@ import (
 // WorkKind is the kind of Work claimed for an issue generation.
 const WorkKind = "github.issue"
 
+// TypeClaimRequested is an operator's claim by hand: a core.manual Event
+// whose correlation key is the entry's `issue/N`. It creates Work for the
+// issue whatever its labels (v1 manual claim overriding routes).
+const TypeClaimRequested = "github.claim.requested"
+
+// ManualSource is the core source of operator-submitted Events.
+const ManualSource = "core.manual"
+
 // Route is the deterministic `github` route handler: the adapter's opt-in/skip
 // claim policy and input selection. It reads only the detached Event, Scope
 // and Work snapshot. Labels inform the claim decision for an unowned issue and
@@ -117,9 +125,24 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		// Emitted by the hold executor: its source is the execution.
 		source = e.CorrelationKey.Source
 	}
+	if e.Type == TypeClaimRequested {
+		// Only an operator claims by hand; the key names the entry's issue.
+		if e.Source != ManualSource || e.CorrelationKey == nil {
+			return extension.RouteDecision{}, nil
+		}
+		if _, generation, ok := ParseIssueKey(e.CorrelationKey.ExternalID); !ok || generation != "" {
+			return extension.RouteDecision{}, nil
+		}
+		source = e.CorrelationKey.Source
+	}
 	s, ok := settingsFor(in.Scope, source)
 	if !ok || e.CorrelationKey == nil {
 		return extension.RouteDecision{}, nil
+	}
+	if e.Type == TypeClaimRequested {
+		// A manual claim overrides the admission labels (v1 claim by hand).
+		// It never feeds existing Work, which already owns the issue.
+		return extension.RouteDecision{Match: in.Work == nil, Kind: WorkKind}, nil
 	}
 	if in.Work == nil {
 		if e.Type != TypeIssueOpen || e.Data.Schema != SchemaIssue {

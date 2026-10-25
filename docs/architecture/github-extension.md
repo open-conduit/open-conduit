@@ -60,7 +60,7 @@ The issue payload deliberately omits `updated_at`, comment counts and the projec
 
 **PR attachment (v1 `recordForPR`).** A PR, and every comment, review and check on it, is keyed to its tracker issue. The issue is found from the branch pattern first, then from a closing or reference keyword in the PR body. A shared tracker accepts only `owner/repo#N` naming it. Deriving the key deterministically means no route has to attach keys, and PR state changes reach the issue's Work directly. A reference to a missing issue falls back to `pr/N`.
 
-**Push.** `VerifyDelivery` checks `X-Hub-Signature-256` (HMAC-SHA256, constant time; an empty secret never verifies) before parsing. It wraps GitHub's event name and delivery GUID, which travel in headers, into the Delivery body (`application/vnd.open-conduit.github-delivery+json`). `WebhookHandler` maps outcomes to HTTP statuses: 202 only after the runtime durably accepted the delivery, 401 for a bad signature and 503 when the delivery was not accepted. The listener and tunnel that expose it belong to 03-05. Without them the daemon runs reconcile-only, which loses only latency.
+**Push.** `VerifyDelivery` checks `X-Hub-Signature-256` (HMAC-SHA256, constant time; an empty secret never verifies) before parsing. It wraps GitHub's event name and delivery GUID, which travel in headers, into the Delivery body (`application/vnd.open-conduit.github-delivery+json`). `WebhookHandler` maps outcomes to HTTP statuses: 202 only after the runtime durably accepted the delivery, 401 for a bad signature and 503 when the delivery was not accepted. The listener and tunnel that expose it are delivered by 03-05 ([operator setup](operator-setup.md#webhooks-tunnels-and-reconcile-only-operation)). Without them the daemon runs reconcile-only, which loses only latency.
 
 Push makes read-only service calls for generation history, PR details and aggregate checks, and no coordination writes. Check events re-read the aggregate state of each open PR whose head is the delivery's commit, exactly as reconcile evaluates it. A status event finds its PRs through `commits/{sha}/pulls`.
 
@@ -150,7 +150,7 @@ The [SQLite integration cases](../../integration/github_test.go) run the real ru
 ## Limitations and follow-on work
 
 - **Not proven yet.** No real GitHub API was called; all evidence uses fixtures. Real issues, real rate limits and real webhooks are 03-06/03-07 gate evidence.
-- **Webhook exposure.** The listener, tunnel and HTTP route mounting, together with dry-run operator controls, belong to 03-05. `WebhookHandler` is ready for that.
+- **Webhook exposure (03-05).** Delivered in [operator setup](operator-setup.md): the separate listener mounting `WebhookHandler` per entry, ngrok/cloudflared/static tunnels, `manage_webhook` (`Client.EnsureWebhook`), `serve --dry-run`, the manual claim (`github.claim.requested`), `Client.Verify` for doctor's `github_auth`, and `Annotate` for operator views.
 - **Holds, waits and tools (03-04).** Delivered in [engineering tools, waits and playbooks](engineering-tools.md):
   - the agent-facing operations, posting through `Projector.Deliver` durable intents (re-driven by `Converge`) and `CreateIssue`;
   - translated waits with dependency filters;

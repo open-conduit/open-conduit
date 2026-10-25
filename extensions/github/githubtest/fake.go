@@ -139,7 +139,32 @@ type Server struct {
 	branches  map[string]bool
 	files     map[string]string // /files/<name> → redirect target
 	fileData  map[string][]byte
+	hooks     []*Hook
+	perms     map[string]bool
 }
+
+// Hook is a repository webhook.
+type Hook struct {
+	ID     int64
+	URL    string
+	Secret string
+	Events []string
+	Active bool
+}
+
+// Hooks returns copies of the repository webhooks.
+func (s *Server) Hooks() []Hook {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	out := make([]Hook, 0, len(s.hooks))
+	for _, h := range s.hooks {
+		out = append(out, *h)
+	}
+	return out
+}
+
+// SetPermissions makes GET /repos/{repo} report the caller's permissions.
+func (s *Server) SetPermissions(p map[string]bool) { s.mu.Lock(); s.perms = p; s.mu.Unlock() }
 
 type limit struct {
 	status     int
@@ -881,7 +906,41 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 	q := r.URL.Query()
 	switch {
 	case get && rest == "":
-		return http.StatusOK, map[string]any{"full_name": s.Repo, "default_branch": "main"}
+		out := map[string]any{"full_name": s.Repo, "default_branch": "main"}
+		if s.perms != nil {
+			out["permissions"] = s.perms
+		}
+		return http.StatusOK, out
+	case get && rest == "/hooks":
+		list := []map[string]any{}
+		for _, h := range s.hooks {
+			list = append(list, map[string]any{"id": h.ID, "active": h.Active, "events": h.Events, "config": map[string]any{"url": h.URL, "content_type": "json"}})
+		}
+		return http.StatusOK, paged(r, list)
+	case (r.Method == http.MethodPost && rest == "/hooks") || (r.Method == http.MethodPatch && strings.HasPrefix(rest, "/hooks/")):
+		var req struct {
+			Active bool     `json:"active"`
+			Events []string `json:"events"`
+			Config struct {
+				URL    string `json:"url"`
+				Secret string `json:"secret"`
+			} `json:"config"`
+		}
+		if json.Unmarshal(body, &req) != nil || req.Config.URL == "" {
+			return http.StatusUnprocessableEntity, map[string]any{"message": "invalid hook"}
+		}
+		if r.Method == http.MethodPost {
+			h := &Hook{ID: s.id(), URL: req.Config.URL, Secret: req.Config.Secret, Events: req.Events, Active: req.Active}
+			s.hooks = append(s.hooks, h)
+			return http.StatusCreated, map[string]any{"id": h.ID}
+		}
+		for _, h := range s.hooks {
+			if strconv.FormatInt(h.ID, 10) == strings.TrimPrefix(rest, "/hooks/") {
+				h.URL, h.Secret, h.Events, h.Active = req.Config.URL, req.Config.Secret, req.Events, req.Active
+				return http.StatusOK, map[string]any{"id": h.ID}
+			}
+		}
+		return http.StatusNotFound, map[string]any{"message": "Not Found"}
 	case get && rest == "/issues":
 		var list []map[string]any
 		for _, n := range s.sortedIssues() {

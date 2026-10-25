@@ -92,7 +92,7 @@ Projections (v1): held Work carries only `scheduled` (not claimed) until its fir
 ## Playbooks and setup
 
 - **work-issue.** `extensions/github/playbooks/work-issue.md` keeps v1's operational instructions, with tool calls rewritten to the operations above. The worktree steps become "you are in the issue's workspace", and cleanup becomes host removal on completion. Waits gain the one-wake rule, and the in-flight list is dropped.
-- **Setup guide.** `setup/setup.md` is the setup guide for Open Conduit's JSON config, `config validate|apply`, scopes, bindings, routes, the GitHub entry and the git resource. Its example config validates against the daemon's registry. The setup command itself is 03-05.
+- **Setup guide.** `setup/setup.md` is the setup guide for Open Conduit's JSON config, `config validate|apply`, scopes, bindings, routes, the GitHub entry and the git resource. Its example config validates against the daemon's registry. The setup command (`init --with claude`) is delivered by 03-05, which also extends the guide with `init`, `config set`, `secret set`, webhooks, permissions, dry run and the TUI controls.
 - **Plugin.** Bootstrap writes the plugin (`.claude-plugin/plugin.json`, `skills/<name>/SKILL.md`) to `<state>/playbooks/plugin` at every start. A `claude-code` binding without `plugin_dir` uses it.
 - **Project additions.** Read from the turn's workspace at `.open-conduit/playbooks/<playbook>.md`. Open Supervisor's `.open-supervisor/playbooks/` is a documented fallback when the project has no Open Conduit file. The additions are appended as "This project's additions to the playbook".
 
@@ -115,5 +115,5 @@ go test -race -run 'TestTranslatedWait|TestGitHubTools|TestGitHubWait|TestGitHub
 ## Limitations and follow-on work
 
 - **Fixtures only.** No real GitHub write or real Claude Code session ran. Real-issue evidence of the tools, waits and holds is 03-06.
-- **Not ported yet.** Job waits wait for 05-02 (`jobs_unavailable` until then). A hold condition nothing here can meet (a job, an unknown project) leaves only the hold's time; with no time the issue starts at once and its first turn says why, rather than being held for ever. Sweep and triage consume `github.notes` in 05-03. The setup command and operator controls are 03-05.
+- **Not ported yet.** Job waits wait for 05-02 (`jobs_unavailable` until then). A hold condition nothing here can meet (a job, an unknown project) leaves only the hold's time; with no time the issue starts at once and its first turn says why, rather than being held for ever. Sweep and triage consume `github.notes` in 05-03. The setup command and operator controls are delivered by 03-05 ([operator setup](operator-setup.md)).
 - **Intentional differences from v1.** One wake ends a wait, so the agent waits again. There is no `--cancel`. The checks debounce is gone. Inject consumption is still 04-02, so an injected comment may be listed again (the playbook says so).

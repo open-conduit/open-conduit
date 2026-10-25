@@ -182,6 +182,9 @@ type ExtensionConfig struct {
 	Projection         Projection `json:"projection,omitempty"`
 	// WebhookSecret names a selected scope secret used to verify deliveries.
 	WebhookSecret string `json:"webhook_secret,omitempty"`
+	// ManageWebhook lets the host create or re-point the repository's
+	// webhook at the listener's public URL (needs hook admin permission).
+	ManageWebhook bool `json:"manage_webhook,omitempty"`
 	// BaseBranch is the branch PRs target (default: the repository's).
 	BaseBranch string `json:"base_branch,omitempty"`
 	// NoChecksMinutes is how long a PR head with no checks at all waits
@@ -200,6 +203,7 @@ type Settings struct {
 	Projection                 Projection
 	VerifyInterval             time.Duration
 	WebhookSecret              string
+	ManageWebhook              bool
 	BaseBranch                 string
 	NoChecks                   time.Duration
 }
@@ -229,7 +233,7 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 		return s, errors.New("github extension: repo must be owner/name")
 	}
 	s = Settings{Namespace: c.Namespace, Scope: c.Scope, Repo: c.Repo, TrackerRepo: c.Repo, TrackerNS: c.Namespace, TrackIssues: true,
-		Labels: DefaultLabels(), ClosedHorizon: 168 * time.Hour, Projection: c.Projection, WebhookSecret: c.WebhookSecret}
+		Labels: DefaultLabels(), ClosedHorizon: 168 * time.Hour, Projection: c.Projection, WebhookSecret: c.WebhookSecret, ManageWebhook: c.ManageWebhook}
 	if c.Tracker != nil {
 		if !repoPattern.MatchString(c.Tracker.Repo) || !validNamespace(c.Tracker.Namespace) {
 			return s, errors.New("github extension: tracker needs repo owner/name and a namespace")
@@ -297,6 +301,9 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 		return s, errors.New("github extension: no_checks_minutes must be 1-1440, or -1 to disable")
 	case c.NoChecksMinutes > 0:
 		s.NoChecks = time.Duration(c.NoChecksMinutes) * time.Minute
+	}
+	if c.ManageWebhook && c.WebhookSecret == "" {
+		return s, errors.New("github extension: manage_webhook needs webhook_secret")
 	}
 	if c.WebhookSecret != "" && checkSecrets {
 		found := false

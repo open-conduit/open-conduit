@@ -48,6 +48,7 @@ func (d *daemon) loop(ctx context.Context) error {
 			d.report("ingress", "", errorCode(err))
 		}
 		d.projectGitHub(ctx)
+		d.manageHooks(ctx)
 		d.reconcileResources(c)
 		d.maintainClaudeCode(ctx)
 		if d.now().Sub(lastSweep) >= d.o.RetentionInterval {
@@ -99,7 +100,16 @@ func (d *daemon) startReady(ctx context.Context, c *components) {
 	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 		works, err := tx.ListWorks()
 		for _, w := range works {
-			if w.State == domain.WorkReady {
+			if w.State != domain.WorkReady {
+				continue
+			}
+			// Idle Work (handed back with no input yet) waits quietly for
+			// its next event instead of reporting invalid_state every pass.
+			inputs, e := runtime.PendingInputsInTx(tx, w.ID)
+			if e != nil {
+				return e
+			}
+			if len(inputs) > 0 {
 				ready = append(ready, w.ID)
 			}
 		}

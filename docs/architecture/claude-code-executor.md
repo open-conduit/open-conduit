@@ -184,10 +184,10 @@ The config is strict and validated at load. Every field is optional:
 
 - **No real claude.** No real Claude Code session ran; all evidence uses fake binaries and fixture transcripts. Real-agent turns, real limits, real resume and real handoff telemetry are 03-06 evidence.
 - **Playbooks and tools (03-04).** The playbooks, plugin preparation (v1 `Prepare`), the v1 renderer's reply commands and the engineering tools.
-- **Operator controls (03-05).** Attach, transcript and activity views, the subscription usage windows (v1 `Usage`, the OAuth endpoint) and the setup command.
-- **Not ported yet.** v1's dry-run model and the cross-issue "in flight" list have no Open Conduit equivalent yet.
+- **Operator controls (03-05).** Delivered in [operator setup](operator-setup.md): attach through `POST /work/{id}/attach` under an operator hold, transcripts reachable as run artifacts, `Usage` (opt-in, doctor), `Version` (doctor), `Options.DryRun` (a stub turn on `haiku`) and the `init --with claude` setup command. A rendered transcript and activity view is not ported.
+- **Not ported yet.** The cross-issue "in flight" list has no Open Conduit equivalent.
 - **Inject consumption (04-02).** Because injection acknowledgement is not consumption, an injected input is presented again to the next attempt.
-- **Idle `ready` Work.** Handed-back Work sits `ready` with no pending input. The host loop's `Start` reports one deduplicated `invalid_state` diagnostic for it.
+- **Idle `ready` Work.** Handed-back Work sits `ready` with no pending input. Since 03-05 the host loop skips it quietly.
 
 03-04 update: [engineering tools, waits and playbooks](engineering-tools.md) delivers the following:
 

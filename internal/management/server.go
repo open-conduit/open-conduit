@@ -55,6 +55,16 @@ type Options struct {
 	Scheduler *runtime.Scheduler
 	Resolver  *config.Resolver
 	Checks    []func(context.Context) runtime.Check
+	// DeepChecks run only for check_secrets=true: they resolve credentials
+	// and may call external services (connection authentication).
+	DeepChecks []func(context.Context) runtime.Check
+	// Annotate contributes extension context to GET /work/{id}.
+	Annotate func(context.Context, domain.Work) []Annotation
+	// Attach returns the attach command of the Work's latest attempt's
+	// executor registration (ErrAttachUnsupported, ErrNoSession).
+	Attach func(ctx context.Context, executor string, work domain.Work) (AttachSpec, error)
+	// Nudge asks the host loop for an immediate pass (optional).
+	Nudge func()
 }
 
 type Server struct {
@@ -121,6 +131,12 @@ func mapError(err error) *apiError {
 		return fail(409, "generation_conflict", "expected generation is stale")
 	case errors.Is(err, ErrScopeInUse):
 		return fail(409, "scope_in_use", "scope has nonterminal work; drain it first")
+	case errors.Is(err, runtime.ErrHeld):
+		return fail(409, "hold_conflict", "the Work is already held, or not held")
+	case errors.Is(err, ErrNoSession):
+		return fail(409, "no_session", "the Work's executor has no session to attach to yet")
+	case errors.Is(err, ErrAttachUnsupported):
+		return fail(422, "attach_unsupported", "the Work's executor does not support attach")
 	case errors.Is(err, ErrHashMismatch):
 		return fail(422, "candidate_hash_mismatch", "candidate hash does not match the submitted config")
 	case errors.Is(err, storage.ErrConflict), errors.Is(err, runtime.ErrNotEligible), errors.Is(err, storage.ErrClaimed):
@@ -253,6 +269,11 @@ var routes = []route{
 	{"POST", []string{"work", "*", "cancel"}, true, true, (*Server).cancelWork},
 	{"POST", []string{"work", "*", "retry"}, true, true, (*Server).retryWork},
 	{"POST", []string{"work", "*", "wake"}, true, true, (*Server).wakeWork},
+	{"POST", []string{"work", "*", "rebind"}, true, true, (*Server).rebindWork},
+	{"POST", []string{"work", "*", "hold"}, true, true, (*Server).holdWork},
+	{"POST", []string{"work", "*", "release"}, true, true, (*Server).releaseWork},
+	{"POST", []string{"work", "*", "attach"}, true, true, (*Server).attachWork},
+	{"POST", []string{"scopes", "*", "reconcile"}, true, true, (*Server).reconcileScope},
 	{"POST", []string{"executions", "*", "cancel"}, true, true, (*Server).cancelExecution},
 	{"POST", []string{"config", "validate"}, true, false, (*Server).validateConfig},
 	{"POST", []string{"config", "apply"}, true, true, (*Server).applyConfig},

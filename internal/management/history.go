@@ -183,6 +183,13 @@ func (s *Server) doctor(c *call) (int, any, error) {
 			checks = append(checks, check(c.ctx))
 		}
 	}
+	if checkSecrets {
+		for _, check := range s.o.DeepChecks {
+			if check != nil {
+				checks = append(checks, check(c.ctx))
+			}
+		}
+	}
 	state, out := runtime.CheckOK, []wireCheck{}
 	for _, ch := range checks {
 		if checkRank(ch.Status) > checkRank(state) {

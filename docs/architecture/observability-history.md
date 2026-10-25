@@ -167,3 +167,5 @@ Extension checks (`management.Options.Checks`), such as `telemetry.Pipeline.Heal
 - **TUI and shell unit tests**: TUI filters, detail, log tail and scroll, errors and expired content; shell `Forget` live-segment refusal and idempotency.
 
 These tests compose the host in-process. 02-09 wires the pipeline, SDK providers, retention schedule and doctor inputs into `open-conduit serve` and asserts lifecycle traces through real kill drills ([daemon composition](daemon-core-gate.md)).
+
+03-05 update: bootstrap contributes the `github` (registration, rate limit, reconcile and projection per entry), `github_capability`, `webhooks` and `claude_code` checks, plus a `github_auth` deep check that runs only with `check_secrets=true`. Management's `DeepChecks` option carries it. The TUI keeps one run model and adds operator controls and Work context as data; see [operator setup](operator-setup.md).

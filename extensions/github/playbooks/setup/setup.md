@@ -7,7 +7,12 @@ description: Set Open Conduit up for its owner, from nothing or over an existing
 
 Open Conduit watches GitHub repositories, claims open issues, and works each one in its own coding-agent session in a git worktree, a turn at a time; comments, check results and merges become the next turn's events. Your job is to set it up for the person you're talking to: find out what they use, write the config, and leave them with a daemon that `doctor` passes and they understand.
 
-The command is `{{bin}}`. The configuration is one JSON file (default `~/.config/open-conduit/config.json`; `serve --config` or `OPEN_CONDUIT_CONFIG` choose another). Before the daemon has ever run, write it there directly. Once it runs, write a draft beside it, check it with `{{bin}} config validate <draft>`, and activate it with `{{bin}} config apply <draft> --generation <n>` (`validate` prints the current generation): apply validates again, saves the file atomically and keeps the last good one. A disk edit alone never changes what a running daemon does. Validation prints every problem as a JSON pointer, a code and a remedy; fix them all before applying.
+The command is `{{bin}}`. The configuration is one JSON file (default `~/.config/open-conduit/config.json`; `serve --config` or `OPEN_CONDUIT_CONFIG` choose another; `{{bin}} config path` prints it). These commands edit it locally and validate against the daemon's own registrations before saving, so an invalid edit never lands:
+
+- `{{bin}} init --repo OWNER/NAME --scope ID [--checkout DIR | --no-workspace] [--token REF] [--holds] --dry-run` prints the scope `init` would add (a connection, an agent binding with the GitHub tools, optionally the hold route); without `--dry-run` it adds it to the file. The owner may prefer to run `init` themselves.
+- `{{bin}} config show` (references redacted), `config get /pointer`, `config set /pointer JSON`, `config unset /pointer` and `config check`. Pointers address array elements by `id` or `name`: `/scopes/web/bindings/agent/config/model`.
+
+Before the daemon has ever run, that is all. Once it runs, a disk edit alone never changes what it does: check the file with `{{bin}} config validate <file>` and activate it with `{{bin}} config apply <file> --generation <n>` (`validate` prints the current generation): apply validates again, saves the file atomically and keeps the last good one. Validation prints every problem as a JSON pointer, a code and a remedy; fix them all before applying.
 
 This is a conversation. Open by saying in two or three sentences what you'll do together, then look around (below) before your first question, so the questions you ask are about what you found. Go one topic at a time, and wait for answers.
 
@@ -16,8 +21,7 @@ This is a conversation. Open by saying in two or three sentences what you'll do 
 - **Secrets never pass through you.** Never ask for a token in the chat, never put one in the config or on a command line, never echo one. A credential goes in a connection's `secret_refs` as a reference:
   - `env:GITHUB_TOKEN`: the variable must be set wherever the daemon runs, not only in this shell.
   - `cmd:gh auth token`: any command that prints the secret (the gh CLI login, 1Password's `op read …`, `security find-generic-password -w …`).
-  - `keyring:<name>`: the owner stores it in the OS keyring under the `open-conduit` service themselves.
-  - `file:<name>`: a key in the owner-only `secrets.json` beside the config.
+  - `keyring:<name>` or `file:<name>`: the owner runs `{{bin}} secret set <name>` in their own terminal. It reads the value without echoing it and stores it in the OS keyring (`open-conduit` service), falling back to the owner-only `secrets.json` beside the config, then prints the reference to use. Never run it for them with a value.
 
   Offer these, let them choose, and wait for them to say it's done.
 - **GitHub** needs no separate token when the `gh` CLI is signed in: `"token": "cmd:gh auth token"`. Check with `gh auth status`; if they're signed out, they run `gh auth login`. A GitHub App (`"auth": "app"` with `app_id` and an `app_private_key` reference) and a bot App for writes (`bot_app_id`, `bot_private_key`) are also supported.
@@ -44,9 +48,9 @@ Look for the owner's checkouts. Try the current directory and the usual places (
 1. **Coding agent.** The `claude-code` executor, the agent running you. The defaults are a good start: model `opus`, and permission mode `bypassPermissions`, because turns run unattended. Say what that permission mode means and let them choose. Note too that by default sessions use the machine's Claude login rather than an API key.
 2. **Repositories.** Which GitHub repositories Open Conduit watches. Each is one `github` extension entry in a scope, with a stable `namespace` (for example `github/github.com/owner/repo`).
 3. **Scopes.** A scope is one project: its repository, its checkout, its agent binding and its routes. Usually one scope per repository. A shared tracker repository whose issues several code repositories' PRs close is a `tracker` on each code repository's entry.
-4. **Checkouts.** The local clone each scope's worktrees come from, the remote (default `origin`) and, only if it isn't the repository's default, the base branch PRs target.
+4. **Checkouts.** The local clone each scope's worktrees come from, the remote (default `origin`) and, only if it isn't the repository's default, the base branch PRs target. A checkout is optional: a scope without a `resource` is workspace-free, and its turns run in a private directory (fine for triage or questions; code changes need a checkout).
 5. **Holds.** Whether issues labelled `scheduled` (opened by an agent with a wait, or by people with a `<!-- runAt: … -->` marker) should be held and then started. That needs the `github-hold` route and binding below.
-6. **Webhooks.** Without them the daemon reconciles every 15 minutes (`settings.reconcile_seconds`). Reconcile always runs as well, so nothing is missed either way.
+6. **Webhooks.** Without them the daemon reconciles every 15 minutes (`settings.reconcile_seconds`). Reconcile always runs as well, so nothing is missed either way: webhooks only cut latency. To add them, the entry names a scope secret in `webhook_secret` (select it in the entry's `secret_names`, with a reference in the scope's `secret_refs`), and the daemon runs with `serve --webhook-addr 127.0.0.1:8787`. That listener serves only `POST /github/<scope>/<entry>` and never the management API. Something must forward a public URL to it: `--tunnel ngrok` (with `--tunnel-domain` for a stable URL), `--tunnel cloudflared` (quick, or `--tunnel-name` with `--tunnel-hostname`), or `--public-url` for a reverse proxy they already run. With `"manage_webhook": true` the daemon creates and re-points the repository's webhook itself, which needs admin access to the repository's hooks; otherwise they add the webhook (JSON, the secret, the issues, comments, pull request, review, check and status events) by hand.
 7. **Limits.** How many attempts may run at once (`settings.concurrency`, default 4) and how many issues each scope holds at a time (`settings.admission_limit`, default 10). Suggest starting low, around 2 and 3, so they can watch it work.
 
 ## Write the config
@@ -108,6 +112,10 @@ Other `git` resource fields: `remote`, `base_branch`, `copy` (files copied into 
 
 A wait on another project (`pr:api/88:merged`) needs the waiting scope to list that scope in its `authorization.read_scopes`. Ask before adding one.
 
+## Permissions
+
+The connection's identity needs, on each repository: read access to issues, pull requests, checks and statuses and contents (reconcile and the agent's reads); write access to issues and pull requests (labels, comments, opening PRs) and to contents for the agent's pushes and attachment uploads; and administration of webhooks only for `manage_webhook`. A fine-grained token or a GitHub App with Issues, Pull requests and Contents read/write plus Checks, Commit statuses and Metadata read covers it (add Webhooks read/write for `manage_webhook`). A classic token needs `repo` (and `admin:repo_hook` for `manage_webhook`). `{{bin}} doctor --check-secrets` resolves the credential privately and reports what it can do on each repository.
+
 ## Behaviour worth telling the owner
 
 - **What gets claimed.** An open issue is claimed when it lacks the claimed label (`agent-in-progress`) and every skip label (`backlog`, `human`, `milestone`, `later`), and carries a required label when any are configured.
@@ -118,7 +126,7 @@ A wait on another project (`pr:api/88:merged`) needs the waiting scope to list t
 ## Finish
 
 1. Run `{{bin}} config validate <draft>`, then `{{bin}} config apply <draft> --generation <n>` (or, before the first start, save the file as the config).
-2. Run `{{bin}} doctor`. It checks storage, the config, bindings, connections, secrets (`--check-secrets`), GitHub and resources. Fix anything it flags.
+2. Run `{{bin}} doctor --check-secrets` once the daemon runs. It checks storage, the config, bindings, connections and secrets, then GitHub: each entry's reconcile and projection, its credential and access (`github_auth`), whether the scope can claim and hold (`github_capability`), the webhook listener, Claude Code's `--version`, and resources. Fix anything it flags.
 3. Summarise in a few lines:
    - the connection;
    - the scopes, their repositories and checkouts;
@@ -126,7 +134,8 @@ A wait on another project (`pr:api/88:merged`) needs the waiting scope to list t
    - webhooks or reconcile only;
    - the limits.
 4. Tell them:
-   - start it with `{{bin}} serve`, and watch it with `{{bin}} tui` or `{{bin}} runs list`;
-   - `projection.dry_run` first if they'd like to watch without anything changing on GitHub.
+   - start it with `{{bin}} serve` (add `--webhook-addr` and a tunnel for webhooks), and watch it with `{{bin}} tui` or `{{bin}} runs list`;
+   - `{{bin}} serve --dry-run` first if they'd like to watch without anything changing on GitHub: no labels, comments or hooks are written and agent turns are cheap stubs (`projection.dry_run` does the GitHub half for one entry);
+   - in the TUI, `c` claims an issue by hand (`scope#12`, whatever its labels), `R` runs or retries, `H` holds or releases, `a` attaches to the agent's session (new events queue until they exit), `x`/`X` cancel, and `l`/`t` show logs and transcripts. The same controls exist as commands: `{{bin}} claim`, `work retry|hold|release|attach|cancel|rebind` and `scopes reconcile`.
 
 Don't start the daemon yourself: it's long-running, and they should run it in their own terminal.

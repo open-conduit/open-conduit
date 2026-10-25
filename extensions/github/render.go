@@ -49,6 +49,12 @@ func RenderEvent(e domain.Event) (string, bool) {
 		return fmt.Sprintf("### PR #%d %s", p.Number, action), true
 	case TypeIssueClosed:
 		return "### The issue was closed", true
+	case TypeClaimRequested:
+		n := 0
+		if e.CorrelationKey != nil {
+			n, _, _ = ParseIssueKey(e.CorrelationKey.ExternalID)
+		}
+		return fmt.Sprintf("### Claimed by hand\nYour operator claimed issue #%d for you. Read it with `call %s` before you start.", n, OpContext), true
 	case TypeDependencyMet:
 		var p struct {
 			SourceType string `json:"source_type"`

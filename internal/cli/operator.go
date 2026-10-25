@@ -29,6 +29,15 @@ type Env struct {
 	TUI func(*client.Client) error
 	// Serve runs the daemon; only the open-conduit entrypoint supplies it.
 	Serve func(ServeRequest) int
+	// Stdin is the terminal input for interactive commands (default os.Stdin).
+	Stdin io.Reader
+	// Attach runs an attach command (default: with the terminal).
+	Attach func(argv []string, dir string) error
+	// ValidateConfig validates a config file offline against the daemon's
+	// registrations; only the open-conduit entrypoint supplies it.
+	ValidateConfig func(data []byte) ([]client.Detail, error)
+	// Setup starts a coding agent with the setup guide (init --with).
+	Setup func(SetupRequest) int
 }
 
 type operator struct {
@@ -51,11 +60,19 @@ Usage: open-conduit [--endpoint unix:///path] [--token-file PATH] [--socket PATH
 
 Commands:
   serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m]
+        [--webhook-addr 127.0.0.1:8787] [--tunnel ngrok|cloudflared|static] [--tunnel-domain D] [--tunnel-name N] [--public-url URL]
+        [--no-tunnel] [--dry-run] [--claude-usage]
   health
-  scopes list [--parent-id ID] [--enabled true|false] | scopes get ID
+  init [--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF] [--holds] [--force] [--dry-run]
+  init --with claude         start Claude Code with the setup guide
+  secret set NAME [--store keyring|file] | secret path   (value read from stdin, never an argument)
+  scopes list [--parent-id ID] [--enabled true|false] | scopes get ID | scopes reconcile ID [--revision N]
   work list [--scope-id --state --kind --parent-id] | work get ID
   work create --scope-id S --kind K --binding B [--schema S --data JSON] [--key K]
-  work cancel|retry ID --revision N [--reason TEXT] [--key K]
+  work cancel|retry|hold|release ID --revision N [--reason TEXT] [--key K]
+  work rebind ID --revision N --binding B [--reason TEXT] [--key K]
+  work attach ID [--keep-held]   hold, attach to the executor's session, release on exit
+  claim [SCOPE#]N [--scope S] [--entry NAME]   claim a GitHub issue by hand
   work wake ID --revision N --type T --delivery-id D --key-source S --key-external-id X [--schema S --data JSON] [--key K]
   events list [--scope-id --work-id --type --after-sequence] | events get ID | events chain ID
   events emit --scope-id S --type T --delivery-id D [--key-source S --key-external-id X] [--work-id W] [--causation-id E] [--schema S --data JSON] [--key K]
@@ -67,6 +84,8 @@ Commands:
   doctor [--check-secrets] [--json]
   tui
   config validate FILE | config apply FILE --generation N [--key K]
+  config path | config show [--file F] | config check [--file F]
+  config get POINTER | config set POINTER JSON | config unset POINTER   [--file F] (local file, validated before saving)
   auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
   version
 
@@ -110,7 +129,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "serve": o.serve}
+	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "serve": o.serve, "claim": o.claim, "init": o.init, "secret": o.secret}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.
@@ -266,6 +285,9 @@ func (o *operator) health(args []string) int {
 }
 
 func (o *operator) scopes(args []string) int {
+	if len(args) > 0 && args[0] == "reconcile" {
+		return o.reconcileScope(args[1:])
+	}
 	return o.listOrGet(args, []string{"parent-id", "enabled"}, func(c *client.Client, q url.Values) (any, error) {
 		cx, cancel := ctx()
 		defer cancel()
@@ -324,6 +346,8 @@ func (o *operator) work(args []string) int {
 			defer cancel()
 			return c.RetryWork(cx, id, rev, reason, key)
 		})
+	case "hold", "release", "rebind", "attach":
+		return o.workControl(args[0], args[1:])
 	case "wake":
 		f := newFlags("wake", "revision", "type", "delivery-id", "key-source", "key-external-id", "schema", "data", "key")
 		pos, err := f.parse(args[1:])
@@ -467,6 +491,9 @@ func (o *operator) artifacts(args []string) int {
 func (o *operator) config(args []string) int {
 	if len(args) == 0 {
 		return usageError(o.errOut, "missing config subcommand")
+	}
+	if code, ok := o.localConfig(args); ok {
+		return code
 	}
 	f := newFlags(args[0], "generation", "key")
 	pos, err := f.parse(args[1:])

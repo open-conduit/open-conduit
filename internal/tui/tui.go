@@ -1,7 +1,9 @@
-// Package tui is the minimal operator terminal view over the unified run
-// history. It uses only the public management client: every executor's
-// attempts render through the same row, detail and log code, with no
-// executor, work-kind or domain branches.
+// Package tui is the operator terminal view over the unified run history.
+// It uses only the public management client: every executor's attempts
+// render through the same row, detail and log code, with no executor,
+// work-kind or domain branches. With Controls it also offers manual claim,
+// run/retry, hold/release, cancel and attach, and shows extension context
+// (Work annotations and Waits) as data.
 package tui
 
 import (
@@ -67,13 +69,31 @@ type Model struct {
 	height   int
 	err      string
 	now      func() time.Time
+	// Operator controls (nil when the source offers none).
+	ctl      Controls
+	work     *client.Work
+	waits    []client.Wait
+	confirm  *pending
+	input    *string
+	notice   string
+	artifact int
+}
+
+// pending is an action awaiting y/n confirmation.
+type pending struct {
+	prompt string
+	cmd    tea.Cmd
 }
 
 func New(src Source, interval time.Duration) Model {
 	if interval <= 0 {
 		interval = 2 * time.Second
 	}
-	return Model{src: src, interval: interval, width: 120, height: 30, now: time.Now}
+	m := Model{src: src, interval: interval, width: 120, height: 30, now: time.Now}
+	if ctl, ok := src.(Controls); ok {
+		m.ctl = ctl
+	}
+	return m
 }
 
 type runsMsg struct {
@@ -143,11 +163,15 @@ func (m Model) fetchDetail(id, work string) tea.Cmd {
 }
 
 func (m Model) fetchLog(r client.Run) tea.Cmd {
-	src := m.src
+	src, index := m.src, m.artifact
 	return func() tea.Msg {
 		a, ok := runview.LogArtifact(r)
 		if !ok {
 			return logMsg{err: fmt.Errorf("run has no artifacts")}
+		}
+		if index > 0 && len(r.Artifacts) > 0 {
+			// t cycles through every artifact (log, transcript, stderr).
+			a = r.Artifacts[index%len(r.Artifacts)]
 		}
 		if r.Retention.State == "expired" {
 			return logMsg{err: fmt.Errorf("artifact content expired under the retention policy")}
@@ -224,8 +248,67 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if len(m.log) > m.page() {
 			m.offset = len(m.log) - m.page()
 		}
+	case workMsg:
+		if msg.err != nil {
+			m.err = errText(msg.err)
+		}
+		if msg.work.ID != "" {
+			w := msg.work
+			m.work, m.waits = &w, msg.waits
+		}
+	case actionMsg:
+		if msg.err != nil {
+			m.err, m.notice = errText(msg.err), ""
+		} else {
+			m.err, m.notice = "", msg.text
+		}
+		if m.mode == detailMode && m.detail != nil {
+			return m, tea.Batch(m.fetchDetail(m.detail.ID, m.detail.WorkID), m.fetchWork(m.detail.WorkID))
+		}
+		return m, m.fetch()
 	case tea.KeyMsg:
 		return m.key(msg.String())
+	}
+	return m, nil
+}
+
+// prompted handles keys while a confirmation or text prompt is open.
+func (m Model) prompted(k string) (tea.Model, tea.Cmd) {
+	if m.confirm != nil {
+		p := m.confirm
+		m.confirm = nil
+		if k == "y" || k == "Y" {
+			return m, p.cmd
+		}
+		m.notice = "cancelled"
+		return m, nil
+	}
+	switch k {
+	case "esc", "ctrl+c":
+		m.input = nil
+	case "enter":
+		ref := strings.TrimSpace(*m.input)
+		m.input = nil
+		ctl := m.ctl
+		return m, func() tea.Msg {
+			ctx, cancel := call()
+			defer cancel()
+			id, err := ctl.Claim(ctx, ref)
+			if err != nil {
+				return actionMsg{err: err}
+			}
+			return actionMsg{text: "claim " + ref + " accepted (event " + id + ")"}
+		}
+	case "backspace":
+		if r := []rune(*m.input); len(r) > 0 {
+			v := string(r[:len(r)-1])
+			m.input = &v
+		}
+	default:
+		if len([]rune(k)) == 1 {
+			v := *m.input + k
+			m.input = &v
+		}
 	}
 	return m, nil
 }
@@ -233,13 +316,27 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) page() int { return max(m.height-4, 1) }
 
 func (m Model) key(k string) (tea.Model, tea.Cmd) {
+	if m.confirm != nil || m.input != nil {
+		return m.prompted(k)
+	}
 	switch k {
 	case "ctrl+c", "q":
 		return m, tea.Quit
 	}
+	m.notice = ""
 	switch m.mode {
 	case listMode:
+		if r, ok := m.selected(); ok {
+			if next, cmd, handled := m.controlKey(k, r); handled {
+				return next, cmd
+			}
+		}
 		switch k {
+		case "c":
+			if m.ctl != nil {
+				empty := ""
+				m.input = &empty
+			}
 		case "up", "k":
 			if m.cursor > 0 {
 				m.cursor--
@@ -255,25 +352,33 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 			return m, m.fetch()
 		case "enter":
 			if r, ok := m.selected(); ok {
-				return m, m.fetchDetail(r.ID, r.WorkID)
+				m.work, m.waits = nil, nil
+				return m, tea.Batch(m.fetchDetail(r.ID, r.WorkID), m.fetchWork(r.WorkID))
 			}
 		case "l":
 			if r, ok := m.selected(); ok {
+				m.artifact = 0
 				return m, m.fetchLog(r)
 			}
 		}
 	case detailMode:
+		if m.detail != nil {
+			if next, cmd, handled := m.controlKey(k, *m.detail); handled {
+				return next, cmd
+			}
+		}
 		switch k {
 		case "esc", "backspace", "h", "left":
 			m.mode, m.err = listMode, ""
 			return m, m.fetch()
 		case "l":
 			if m.detail != nil {
+				m.artifact = 0
 				return m, m.fetchLog(*m.detail)
 			}
 		case "r":
 			if m.detail != nil {
-				return m, m.fetchDetail(m.detail.ID, m.detail.WorkID)
+				return m, tea.Batch(m.fetchDetail(m.detail.ID, m.detail.WorkID), m.fetchWork(m.detail.WorkID))
 			}
 		}
 	case logMode:
@@ -293,9 +398,23 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 			m.offset = max(m.offset-m.page(), 0)
 		case "pgdown", " ":
 			m.offset = min(m.offset+m.page(), max(len(m.log)-m.page(), 0))
+		case "t":
+			// Next artifact of the run (log, transcript, stderr).
+			if r, ok := m.logRun(); ok {
+				m.artifact++
+				return m, m.fetchLog(r)
+			}
 		}
 	}
 	return m, nil
+}
+
+// logRun is the run whose log is shown.
+func (m Model) logRun() (client.Run, bool) {
+	if m.detail != nil {
+		return *m.detail, true
+	}
+	return m.selected()
 }
 
 func errText(err error) string {
@@ -314,7 +433,11 @@ func (m Model) View() string {
 		if filter == "" {
 			filter = "all"
 		}
-		b.WriteString(boldS.Render("Open Conduit runs") + dimS.Render(fmt.Sprintf("  filter: %s  %d run(s)   enter detail · l log · f filter · r refresh · q quit", filter, len(m.runs))) + "\n")
+		keys := "enter detail · l log · f filter · r refresh · q quit"
+		if m.ctl != nil {
+			keys += " · c claim · R run/retry · H hold · a attach · x/X cancel"
+		}
+		b.WriteString(boldS.Render("Open Conduit runs") + dimS.Render(fmt.Sprintf("  filter: %s  %d run(s)   %s", filter, len(m.runs), keys)) + "\n")
 		b.WriteString(dimS.Render(runview.Header) + "\n")
 		visible := max(m.height-4, 1)
 		start := 0
@@ -335,13 +458,26 @@ func (m Model) View() string {
 		if m.detail != nil {
 			b.WriteString(runview.Detail(*m.detail, m.attempts, now))
 		}
-		b.WriteString("\n" + dimS.Render("l log · r refresh · esc back · q quit") + "\n")
+		b.WriteString(WorkContext(m.work, m.waits))
+		keys := "l log · r refresh · esc back · q quit"
+		if m.ctl != nil {
+			keys += " · R run/retry · H hold/release · a attach · x cancel run · X cancel work"
+		}
+		b.WriteString("\n" + dimS.Render(keys) + "\n")
 	case logMode:
-		b.WriteString(boldS.Render("Log "+m.logTitle) + dimS.Render("  ↑/↓ pgup/pgdn scroll · esc back · q quit") + "\n")
+		b.WriteString(boldS.Render("Log "+m.logTitle) + dimS.Render("  ↑/↓ pgup/pgdn scroll · t next artifact · esc back · q quit") + "\n")
 		end := min(m.offset+m.page(), len(m.log))
 		for _, l := range m.log[m.offset:end] {
 			b.WriteString(l + "\n")
 		}
+	}
+	switch {
+	case m.confirm != nil:
+		b.WriteString(boldS.Render(m.confirm.prompt+" y/n") + "\n")
+	case m.input != nil:
+		b.WriteString(boldS.Render("claim (scope#number): "+*m.input+"▏") + dimS.Render("  enter submit · esc cancel") + "\n")
+	case m.notice != "":
+		b.WriteString(dimS.Render(m.notice) + "\n")
 	}
 	if m.err != "" {
 		b.WriteString(errS.Render("error: "+m.err) + "\n")

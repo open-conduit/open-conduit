@@ -48,7 +48,7 @@ func (d *daemon) openClaudeCode() error {
 	d.claude.executor, err = claudecode.New(claudecode.Options{
 		StateDir: filepath.Join(d.o.StateDir, "executors", ClaudeCodeExecutor), Store: d.coord, Artifacts: d.artifacts,
 		ToolbeltDir: d.o.ToolbeltDir, Feedback: githubFeedback{d}, Report: d.claudeReport, Now: d.now,
-		Render: renderEvents, PluginDir: d.pluginDir(),
+		Render: renderEvents, PluginDir: d.pluginDir(), DryRun: d.o.DryRun,
 	})
 	if err != nil {
 		f.Close()

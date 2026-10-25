@@ -115,6 +115,8 @@ type drill struct {
 	log    *os.File
 	c      *client.Client
 	starts int
+	// extra serve flags
+	extra []string
 }
 
 func newDrill(t *testing.T) *drill {
@@ -159,7 +161,7 @@ func (d *drill) start(fault string) {
 	d.t.Helper()
 	d.starts++
 	fmt.Fprintf(d.log, "--- start %d fault=%q\n", d.starts, fault)
-	cmd := exec.Command(daemonBinary(d.t), "--data-dir", d.state, "serve", "--config", d.config, "--poll-interval", "50ms", "--lease-duration", drillLease.String())
+	cmd := exec.Command(daemonBinary(d.t), append([]string{"--data-dir", d.state, "serve", "--config", d.config, "--poll-interval", "50ms", "--lease-duration", drillLease.String()}, d.extra...)...)
 	cmd.Env = append(os.Environ(), "OPEN_CONDUIT_FAULT="+fault)
 	cmd.Stdout, cmd.Stderr = d.log, d.log
 	if err := cmd.Start(); err != nil {

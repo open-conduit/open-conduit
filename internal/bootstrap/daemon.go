@@ -68,6 +68,24 @@ type Options struct {
 	ExecutorInterval time.Duration
 	// Ready, when set, is called once the management socket is listening.
 	Ready func()
+	// WebhookAddr enables the webhook listener on this TCP address (for
+	// example 127.0.0.1:8787). Empty means reconcile-only.
+	WebhookAddr string
+	// Tunnel exposes the webhook listener (optional).
+	Tunnel TunnelOptions
+	// NoTunnel disables the listener and tunnel (reconcile-only).
+	NoTunnel bool
+	// DryRun makes no external writes: GitHub projections, tool writes and
+	// webhook management report dry_run, and Claude Code turns run as
+	// stubs on a cheap model.
+	DryRun bool
+	// ClaudeUsage lets doctor read the Claude subscription usage windows
+	// with the machine's Claude login (off by default).
+	ClaudeUsage bool
+	// ClaudeUsageURL and ClaudeUsageToken override the usage endpoint and
+	// token source (tests).
+	ClaudeUsageURL   string
+	ClaudeUsageToken func(context.Context) (string, error)
 }
 
 // components are rebuilt for every committed configuration generation; the
@@ -102,6 +120,7 @@ type daemon struct {
 	github    githubSources
 	resources resourceState
 	claude    claudeState
+	hooks     webhookState
 	tools     *gh.Tools
 	endpoint  string
 	cursorKey []byte
@@ -155,7 +174,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = o.defaults(); err != nil {
 		return err
 	}
-	d := &daemon{o: o, log: slog.New(slog.NewTextHandler(o.Log, nil)), now: time.Now, inflight: map[attemptKey]domain.LeaseRef{}, reported: map[string]string{}, nudge: make(chan struct{}, 1), resolver: &config.Resolver{}}
+	d := &daemon{o: o, log: slog.New(slog.NewTextHandler(o.Log, nil)), now: time.Now, inflight: map[attemptKey]domain.LeaseRef{}, reported: map[string]string{}, nudge: make(chan struct{}, 1), resolver: &config.Resolver{SecretsFile: filepath.Join(filepath.Dir(o.ConfigPath), "secrets.json")}}
 	suffix := make([]byte, 4)
 	if _, err = rand.Read(suffix); err != nil {
 		return err
@@ -229,13 +248,10 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = d.openTools(); err != nil {
 		return err
 	}
-	registry := config.Registry{Executors: d.executors, Handlers: handlerNames(), Operations: gh.Operations()}
-	githubRegistry(&registry)
-	resourceRegistry(&registry)
 	if err = d.openResources(); err != nil {
 		return err
 	}
-	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, registry, o.ConfigPath); err != nil {
+	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, registry(d.executors), o.ConfigPath); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
 	if d.ingress, err = runtime.NewIngress(d.coord, d.now, runtime.IngressOptions{}); err != nil {
@@ -273,10 +289,15 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err != nil {
 		return err
 	}
+	stopWebhooks, err := d.startWebhooks(loopCtx)
+	if err != nil {
+		return err
+	}
+	defer stopWebhooks()
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) { d.current.Load().server.ServeHTTP(w, r) }), ReadHeaderTimeout: 5 * time.Second}
 	served := make(chan error, 1)
 	go func() { served <- srv.Serve(listener) }()
-	d.log.Info("open-conduit serving", "version", o.Version, "commit", o.Commit, "endpoint", d.endpoint, "generation", generation, "owner", d.owner)
+	d.log.Info("open-conduit serving", "version", o.Version, "commit", o.Commit, "endpoint", d.endpoint, "generation", generation, "owner", d.owner, "dry_run", o.DryRun)
 	if o.Ready != nil {
 		o.Ready()
 	}
@@ -361,7 +382,8 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.resourceCheck}}); err != nil {
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck},
+		DeepChecks: []func(context.Context) runtime.Check{d.githubAuthCheck}, Annotate: d.annotate, Attach: d.attach, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
 	return c, nil

@@ -144,3 +144,12 @@ Real-agent evidence is pending for 03-06.
 - **C04 (checks part).** No-checks after 10 minutes (`github.checks.none`). Intentional divergence: no 20-second debounce.
 
 Intentional differences: one wake ends a wait (the agent waits again), and `--cancel` is gone. Real-issue evidence is pending for 03-06.
+
+03-05 update: [operator setup, doctor and engineering controls](../architecture/operator-setup.md). Evidence uses fixtures only (the GitHub fake, fake claude and tunnel processes, and the composed daemon):
+
+- **O01.** `serve --dry-run` (no GitHub writes, stub turns), `--no-tunnel` and listener-less reconcile-only operation; explicit `--config` wins. Automatic TUI/headless selection on the root command is 06-03.
+- **O02.** `init` (found-git detection, workspace-free scopes, validated before saving), `init --with claude` (a separate setup plugin, limited allowed tools) and doctor for invalid bindings, missing secrets, GitHub auth, capability and reconcile failures. Adapter listing and route explanation remain 06-01/06-03.
+- **O03 and C05.** `config path/show/get/set/unset/check` over JSON pointers (references redacted, key order kept, refused when invalid) and `secret set` (keyring, else a reported 0600 file; only the reference persists). Connection tests are doctor `--check-secrets`.
+- **O04 and B15.** The TUI and CLI offer claim by hand (overriding labels), run/retry, hold/release, attach (input queues, the next turn continues the session), cancel attempt/Work and reconcile, all through local management and recorded as causal `core.manual` Events. Stale revisions are refused.
+- **O06.** Covered by validated CLI edits; the full-screen editor is 06-01.
+- **ngrok, cloudflared and static.** Ported with process fixtures, restart and URL reporting, plus `manage_webhook` repointing. Real tunnel exposure is 03-06/03-07 evidence.

@@ -27,9 +27,11 @@ import (
 // (0.50 USD, 10 input and 100 cache-read tokens per turn so far). The mode
 // file selects review, finished, limit, error or wait (block until released).
 const fakeClaude = `#!/bin/sh
-session=""; resume=0; mcp=""
+[ "$1" = --version ] && { echo "9.9.9 (Claude Code)"; exit 0; }
+session=""; resume=0; mcp=""; model=""
 while [ $# -gt 0 ]; do
   case "$1" in
+    --model) model=$2; shift ;;
     --session-id) session=$2; shift ;;
     --resume) session=$2; resume=1; shift ;;
     --mcp-config) mcp=$2; shift ;;
@@ -39,6 +41,7 @@ done
 f=${FAKE_DIR:?}
 mode=$(cat "$f/mode" 2>/dev/null || echo review)
 printf 'session=%s resume=%s mcp=%s\n' "$session" "$resume" "$mcp" >> "$f/invocations"
+printf '%s\n' "$model" >> "$f/models"
 env | grep -E '^(ANTHROPIC_API_KEY|CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|OS_[A-Z_]+|UNRELATED)=' | sort > "$f/env"
 t="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$t"

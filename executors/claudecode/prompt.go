@@ -78,6 +78,16 @@ func prompt(playbook, args, body string) string {
 	return text
 }
 
+// dryRunPrompt wraps a turn's prompt for a dry run (v1 parity): the agent
+// is told to do nothing and call no tools.
+func dryRunPrompt(text string, structured bool) string {
+	end := "End with a one-line summary."
+	if structured {
+		end = `End with state=review and summary="dry run".`
+	}
+	return "This is an Open Conduit dry run: do nothing and call no tools. The real prompt would have been:\n\n" + text + "\n\n" + end
+}
+
 // interjection is an Event handed to a turn that is already running.
 func interjection(render Renderer, e domain.Event) string {
 	return "## Arrived during this turn\n\nThis came in while you were working. Take it into account now, in this turn, as you would the events at the start of one.\n\n" + render([]domain.Event{e})

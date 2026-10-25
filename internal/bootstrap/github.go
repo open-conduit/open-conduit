@@ -12,13 +12,13 @@ import (
 	"github.com/alsiola/open-conduit/extension"
 	gh "github.com/alsiola/open-conduit/extensions/github"
 	"github.com/alsiola/open-conduit/internal/config"
-	"github.com/alsiola/open-conduit/internal/runtime"
 )
 
 // githubSource is one registered GitHub extension entry: its ingress pair and
 // the projector converging its tracker labels and marked comments.
 type githubSource struct {
 	name      string
+	scope     domain.ID
 	config    json.RawMessage
 	client    *gh.Client
 	ingress   *gh.Ingress
@@ -33,6 +33,7 @@ func (c githubCode) Error() string { return string(c) }
 type githubSources struct {
 	mu      sync.Mutex
 	sources map[string]*githubSource // by source namespace
+	failed  map[string]string        // registration failure code by namespace
 	last    time.Time
 	running bool
 }
@@ -76,6 +77,7 @@ func (d *daemon) registerGitHub(ctx context.Context, s *config.Snapshot) {
 	defer d.github.mu.Unlock()
 	if d.github.sources == nil {
 		d.github.sources = map[string]*githubSource{}
+		d.github.failed = map[string]string{}
 	}
 	for _, id := range s.Order {
 		scope := s.Scopes[id]
@@ -103,6 +105,9 @@ func (d *daemon) registerGitHub(ctx context.Context, s *config.Snapshot) {
 					code = string(named)
 				}
 				d.report("github", domain.ID(settings.Namespace), code)
+				d.github.failed[settings.Namespace] = code
+			} else {
+				delete(d.github.failed, settings.Namespace)
 			}
 		}
 	}
@@ -129,6 +134,11 @@ func (d *daemon) addGitHub(ctx context.Context, s *config.Snapshot, scope domain
 	if err != nil {
 		return err
 	}
+	if d.o.DryRun {
+		// A daemon dry run makes no GitHub writes: projections and tool
+		// writes report dry_run.
+		settings.Projection.DryRun = true
+	}
 	in := gh.NewIngress(settings, client, d.now, gh.IngressOptions{})
 	interval := time.Duration(s.Settings.ReconcileSeconds) * time.Second
 	name := "github/" + string(scope) + "/" + x.Name
@@ -139,7 +149,7 @@ func (d *daemon) addGitHub(ctx context.Context, s *config.Snapshot, scope domain
 	if err != nil {
 		return err
 	}
-	d.github.sources[settings.Namespace] = &githubSource{name: name, config: append(json.RawMessage(nil), x.Config...), client: client, ingress: in, projector: projector}
+	d.github.sources[settings.Namespace] = &githubSource{name: name, scope: scope, config: append(json.RawMessage(nil), x.Config...), client: client, ingress: in, projector: projector}
 	d.log.Info("github ingress registered", "name", name, "namespace", settings.Namespace)
 	return nil
 }
@@ -181,22 +191,4 @@ func (d *daemon) projectGitHub(ctx context.Context) {
 			d.report("github_turns", domain.ID(src.name), d.publishTurns(ctx, src))
 		}
 	}()
-}
-
-// githubCheck reports rate-limit pauses for doctor.
-func (d *daemon) githubCheck(context.Context) runtime.Check {
-	d.github.mu.Lock()
-	defer d.github.mu.Unlock()
-	check := runtime.Check{Name: "github", Status: "ok", Code: "ok"}
-	if len(d.github.sources) == 0 {
-		check.Status, check.Code = "info", "not_configured"
-		return check
-	}
-	for ns, src := range d.github.sources {
-		if until, paused := src.client.PausedUntil(); paused {
-			check.Status, check.Code = "warn", "rate_limited"
-			check.Items = append(check.Items, ns+" until "+until.UTC().Format(time.RFC3339))
-		}
-	}
-	return check
 }
