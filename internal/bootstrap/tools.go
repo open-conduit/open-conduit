@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -11,6 +12,7 @@ import (
 	gh "github.com/alsiola/open-conduit/extensions/github"
 	"github.com/alsiola/open-conduit/extensions/github/playbooks"
 	sl "github.com/alsiola/open-conduit/extensions/slack"
+	slplaybooks "github.com/alsiola/open-conduit/extensions/slack/playbooks"
 	"github.com/alsiola/open-conduit/internal/runtime"
 )
 
@@ -67,8 +69,27 @@ func (d *daemon) authorizeAlias(_ context.Context, a runtime.AliasAuthorization)
 func (d *daemon) pluginDir() string { return filepath.Join(d.o.StateDir, "playbooks", "plugin") }
 
 // preparePlaybooks writes the plugin (rewritten at every start, so an
-// upgrade replaces old playbook text).
-func (d *daemon) preparePlaybooks() error { return playbooks.Prepare(d.pluginDir()) }
+// upgrade replaces old playbook text): the GitHub playbooks, then the Slack
+// support playbook beside them.
+func (d *daemon) preparePlaybooks() error {
+	if err := playbooks.Prepare(d.pluginDir()); err != nil {
+		return err
+	}
+	for name, text := range slplaybooks.All() {
+		dir := filepath.Join(d.pluginDir(), "skills", name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			return err
+		}
+		tmp := filepath.Join(dir, ".SKILL.md.tmp")
+		if err := os.WriteFile(tmp, []byte(text), 0o644); err != nil {
+			return err
+		}
+		if err := os.Rename(tmp, filepath.Join(dir, "SKILL.md")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
 
 // renderEvents renders GitHub and Slack Events with their reply hints and falls back to
 // the executor's generic renderer for everything else.

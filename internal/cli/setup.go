@@ -3,6 +3,7 @@ package cli
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,15 +15,19 @@ import (
 	"regexp"
 	goruntime "runtime"
 	"sort"
+	"strconv"
 	"strings"
 
+	"github.com/alsiola/open-conduit/extension"
 	"github.com/charmbracelet/x/term"
 )
 
-// Setup (03-05): the v1 wizard and config CLI concepts mapped onto scopes,
-// connections and bindings. Everything here edits the local config file and
-// validates it offline against the daemon's registrations before saving; a
-// running daemon changes only through `config apply`.
+// Setup (03-05; extension-owned since 04-02): `init <type>` hosts the
+// optional extension.Setup of a registered extension. Core supplies only the
+// setup host (prompts, opening a URL, the secret store, the run of a helper
+// command), merges the result into the local config file and validates it
+// offline against the daemon's registrations before saving; a running daemon
+// changes only through `config apply`. Nothing here knows any service.
 
 // SetupRequest starts a coding agent with the setup guide (`init --with`).
 type SetupRequest struct {
@@ -31,20 +36,7 @@ type SetupRequest struct {
 
 var (
 	scopeIDPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
-	repoPattern    = regexp.MustCompile(`^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$`)
 	refPattern     = regexp.MustCompile(`^(keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\r\n]+)$`)
-	remotePattern  = regexp.MustCompile(`github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$`)
-)
-
-// AgentOperations are the toolbelt operations an agent binding gets for a
-// GitHub scope (the builtins it uses plus the github.* tools); HoldOperations
-// those of the github-hold binding. They mirror the setup guide.
-var (
-	AgentOperations = []string{"read_context", "wait", "declare_outcome",
-		"github.context", "github.issue.view", "github.issue.comment", "github.issue.list", "github.issue.create",
-		"github.pr.list", "github.pr.view", "github.pr.create", "github.pr.comment", "github.pr.reply", "github.checks",
-		"github.attachment.upload", "github.attachment.get", "github.wait", "github.correction", "github.problem"}
-	HoldOperations = []string{"emit", "github.hold.status", "github.hold"}
 )
 
 func (o *operator) configPath(flag string) string {
@@ -57,101 +49,20 @@ func (o *operator) configPath(flag string) string {
 	return defaultConfigPath(o.env)
 }
 
-// GitHubRepo reads a checkout's GitHub repository from its origin remote
-// (v1 wizard's found-git detection). ok is false when there is none.
-func GitHubRepo(dir string) (string, bool) {
-	out, err := exec.Command("git", "-C", dir, "remote", "get-url", "origin").Output()
-	if err != nil {
-		return "", false
-	}
-	m := remotePattern.FindStringSubmatch(strings.TrimSpace(string(out)))
-	if m == nil {
-		return "", false
-	}
-	return m[1], true
-}
-
-// ScopeID derives a scope id from a repository name.
-func ScopeID(repo string) string {
-	name := strings.ToLower(repo[strings.LastIndex(repo, "/")+1:])
-	var b strings.Builder
-	for _, r := range name {
-		switch {
-		case r >= 'a' && r <= 'z', r >= '0' && r <= '9':
-			b.WriteRune(r)
-		default:
-			b.WriteByte('-')
-		}
-	}
-	id := strings.Trim(b.String(), "-")
-	if id == "" || id[0] < 'a' || id[0] > 'z' {
-		id = "repo-" + id
-	}
-	if len(id) > 63 {
-		id = id[:63]
-	}
-	return id
-}
-
-// GitHubScope is what `init` adds for one repository.
-type GitHubScope struct {
-	Repo, Scope, Connection, Token string
-	Checkout                       string // empty: workspace-free scope
-	Holds                          bool
-}
-
-func obj(kv ...any) map[string]any {
-	m := map[string]any{}
-	for i := 0; i+1 < len(kv); i += 2 {
-		m[kv[i].(string)] = kv[i+1]
-	}
-	return m
-}
-
-// ScopeConfig is the scope JSON for g: an agent binding on claude-code with
-// the GitHub tools, a git work resource when a checkout is given, and
-// optionally the hold route and binding.
-func (g GitHubScope) ScopeConfig() map[string]any {
-	ops := append([]string{}, AgentOperations...)
-	authOps := append([]string{"emit"}, AgentOperations...)
-	requires := obj("toolbelt", "mcp", "inject", true, "resume", true, "workspace", g.Checkout != "")
-	agent := obj("name", "agent", "executor", "claude-code", "connection", g.Connection, "requires", requires,
-		"operations", ops, "secret_names", []string{},
-		"config", obj("status_schema", "github.status.v1", "branch", "agent/issue-{number}"))
-	if g.Checkout != "" {
-		agent["resource"] = obj("provider", "git", "config", obj("checkout", g.Checkout, "mode", "work"))
-	}
-	bindings := []any{agent}
-	routes := []any{}
-	if g.Holds {
-		authOps = append(authOps, "github.hold.status", "github.hold")
-		bindings = append(bindings, obj("name", "hold", "executor", "github-hold", "connection", g.Connection,
-			"requires", obj("toolbelt", "sdk"), "operations", HoldOperations, "secret_names", []string{}, "config", obj()))
-		routes = append(routes, obj("name", "held", "handler", "github-hold", "binding", "hold", "active_policy", "queue", "config", obj()))
-	}
-	routes = append(routes, obj("name", "issues", "handler", "github", "binding", "agent", "active_policy", "inject", "config", obj()))
-	host := "github.com"
-	return obj("id", g.Scope, "name", g.Repo,
-		"authorization", obj("connections", []string{g.Connection}, "read_scopes", []string{}, "operations", authOps),
-		"bindings", bindings, "routes", routes,
-		"extensions", []any{obj("name", g.Scope, "type", "github", "connection", g.Connection, "secret_names", []string{},
-			"config", obj("namespace", "github/"+host+"/"+g.Repo, "scope", g.Scope, "repo", g.Repo))},
-		"secret_refs", obj())
-}
-
 func toNode(v any) *node {
 	b, _ := json.Marshal(v)
 	n, _ := parseNode(b)
 	return n
 }
 
-// AddGitHubScope merges g into a config document (nil starts a new one).
-// An existing connection with g's id is kept; an existing scope with g's id
-// is replaced only with force.
-func AddGitHubScope(doc []byte, g GitHubScope, force bool) ([]byte, error) {
+// MergeSetup merges a setup result into a config document (nil starts a new
+// one). A connection whose id already exists is kept; an existing scope with
+// the result's id is replaced only with force. Key order and untouched text
+// of the existing document are preserved.
+func MergeSetup(doc []byte, r extension.SetupResult, force bool) ([]byte, error) {
 	var root *node
 	if len(bytes.TrimSpace(doc)) == 0 {
-		root = toNode(obj("version", 1, "settings", obj("concurrency", 2, "admission_limit", 3), "connections", []any{}, "scopes", []any{}))
+		root, _ = parseNode([]byte(`{"version": 1, "settings": {"concurrency": 2, "admission_limit": 3}, "connections": [], "scopes": []}`))
 	} else {
 		var err error
 		if root, err = parseNode(doc); err != nil || root.kind != 'o' {
@@ -163,15 +74,40 @@ func AddGitHubScope(doc []byte, g GitHubScope, force bool) ([]byte, error) {
 			_ = root.set([]string{k}, toNode([]any{}))
 		}
 	}
+	id := func(raw json.RawMessage) (*node, string, error) {
+		n, err := parseNode(raw)
+		if err != nil || n.kind != 'o' {
+			return nil, "", fmt.Errorf("setup returned an invalid object")
+		}
+		var v struct {
+			ID string `json:"id"`
+		}
+		if json.Unmarshal(raw, &v) != nil || !scopeIDPattern.MatchString(v.ID) {
+			return nil, "", fmt.Errorf("setup returned an object without a valid id")
+		}
+		return n, v.ID, nil
+	}
 	conns := root.field("connections")
-	if _, ok := conns.index(g.Connection); !ok {
-		conns.arr = append(conns.arr, toNode(obj("id", g.Connection, "type", "github", "config", obj(), "secret_refs", obj("token", g.Token))))
+	for _, raw := range r.Connections {
+		n, cid, err := id(raw)
+		if err != nil {
+			return nil, err
+		}
+		if _, ok := conns.index(cid); !ok {
+			conns.arr = append(conns.arr, n)
+		}
+	}
+	if len(r.Scope) == 0 {
+		return root.bytes(), nil
+	}
+	scope, sid, err := id(r.Scope)
+	if err != nil {
+		return nil, err
 	}
 	scopes := root.field("scopes")
-	scope := toNode(g.ScopeConfig())
-	if i, ok := scopes.index(g.Scope); ok {
+	if i, ok := scopes.index(sid); ok {
 		if !force {
-			return nil, fmt.Errorf("scope %s already exists; choose --scope or pass --force to replace it", g.Scope)
+			return nil, fmt.Errorf("scope %s already exists; choose --scope or pass --force to replace it", sid)
 		}
 		scopes.arr[i] = scope
 	} else {
@@ -225,63 +161,114 @@ func (o *operator) validate(data []byte) bool {
 	return len(details) == 0
 }
 
+// splitInitFlags removes the host's own flags (--config, --force, --dry-run,
+// --with) wherever they appear; everything else belongs to the extension.
+func splitInitFlags(args []string) (config, with string, force, dry bool, rest []string, err error) {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		name, value, hasValue := strings.Cut(strings.TrimLeft(a, "-"), "=")
+		if !strings.HasPrefix(a, "-") || a == "-" || a == "--" {
+			rest = append(rest, a)
+			continue
+		}
+		switch name {
+		case "force", "dry-run":
+			b := true
+			if hasValue {
+				if b, err = strconv.ParseBool(value); err != nil {
+					return
+				}
+			}
+			if name == "force" {
+				force = b
+			} else {
+				dry = b
+			}
+		case "config", "with":
+			if !hasValue {
+				if i+1 >= len(args) {
+					err = fmt.Errorf("--%s needs a value", name)
+					return
+				}
+				i++
+				value = args[i]
+			}
+			if name == "config" {
+				config = value
+			} else {
+				with = value
+			}
+		default:
+			rest = append(rest, a)
+		}
+	}
+	return
+}
+
+func (o *operator) setups() []extension.Setup {
+	out := append([]extension.Setup(nil), o.env.Setups...)
+	sort.Slice(out, func(i, j int) bool { return out[i].SetupInfo().Type < out[j].SetupInfo().Type })
+	return out
+}
+
+func (o *operator) listSetups(w io.Writer) {
+	fmt.Fprintln(w, "Usage: open-conduit init TYPE [flags] [--config PATH] [--force] [--dry-run]")
+	fmt.Fprintln(w, "       open-conduit init --with claude   start Claude Code with the setup guide")
+	fmt.Fprintln(w, "\nTypes (from the registered extensions):")
+	list := o.setups()
+	if len(list) == 0 {
+		fmt.Fprintln(w, "  none: no registered extension offers setup")
+	}
+	for _, s := range list {
+		info := s.SetupInfo()
+		fmt.Fprintf(w, "  %-8s %s\n           %s\n", info.Type, info.Summary, info.Usage)
+	}
+}
+
 func (o *operator) init(args []string) int {
-	f := newFlags("init", "repo", "scope", "checkout", "token", "connection", "with", "config")
-	noWorkspace := f.fs.Bool("no-workspace", false, "")
-	holds := f.fs.Bool("holds", false, "")
-	force := f.fs.Bool("force", false, "")
-	dry := f.fs.Bool("dry-run", false, "")
-	if pos, err := f.parse(args); err != nil || len(pos) != 0 {
+	configFlag, with, force, dry, rest, err := splitInitFlags(args)
+	if err != nil {
 		return usageError(o.errOut, "invalid init flags")
 	}
-	path := o.configPath(f.get("config"))
-	if agent := f.get("with"); agent != "" {
+	path := o.configPath(configFlag)
+	if with != "" {
 		if o.env.Setup == nil {
 			fmt.Fprintln(o.errOut, "open-conduit: init --with is not available in this binary")
 			return 1
 		}
-		return o.env.Setup(SetupRequest{Agent: agent, ConfigPath: path, StateDir: o.stateDir(), Cwd: o.env.Cwd})
+		return o.env.Setup(SetupRequest{Agent: with, ConfigPath: path, StateDir: o.stateDir(), Cwd: o.env.Cwd})
 	}
-	g := GitHubScope{Repo: f.get("repo"), Scope: f.get("scope"), Connection: f.get("connection"), Token: f.get("token"), Holds: *holds}
-	checkout := o.abs(f.get("checkout"))
-	if checkout == "" && !*noWorkspace {
-		// Found git: the current directory, when it is a GitHub checkout.
-		if repo, ok := GitHubRepo(o.env.Cwd); ok && (g.Repo == "" || strings.EqualFold(repo, g.Repo)) {
-			checkout = o.env.Cwd
-			if g.Repo == "" {
-				g.Repo = repo
-			}
+	if len(rest) == 0 {
+		o.listSetups(o.out)
+		return 0
+	}
+	if strings.HasPrefix(rest[0], "-") {
+		o.listSetups(o.errOut)
+		return usageError(o.errOut, "init needs a TYPE first, for example init github")
+	}
+	var setup extension.Setup
+	for _, s := range o.setups() {
+		if s.SetupInfo().Type == rest[0] {
+			setup = s
 		}
-	} else if checkout != "" && g.Repo == "" {
-		g.Repo, _ = GitHubRepo(checkout)
 	}
-	if *noWorkspace {
-		checkout = ""
-	}
-	g.Checkout = checkout
-	if !repoPattern.MatchString(g.Repo) {
-		return usageError(o.errOut, "init needs --repo OWNER/NAME (or run it in a GitHub checkout)")
-	}
-	if g.Scope == "" {
-		g.Scope = ScopeID(g.Repo)
-	}
-	if g.Connection == "" {
-		g.Connection = "github"
-	}
-	if g.Token == "" {
-		g.Token = "cmd:gh auth token"
-	}
-	if !scopeIDPattern.MatchString(g.Scope) || !scopeIDPattern.MatchString(g.Connection) {
-		return usageError(o.errOut, "--scope and --connection must match [a-z][a-z0-9_-]*")
-	}
-	if !refPattern.MatchString(g.Token) {
-		return usageError(o.errOut, "--token takes a reference (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND), never a token")
+	if setup == nil {
+		o.listSetups(o.errOut)
+		return usageError(o.errOut, fmt.Sprintf("no registered extension offers setup %q", rest[0]))
 	}
 	existing, err := os.ReadFile(path)
 	if err != nil && !errors.Is(err, os.ErrNotExist) {
 		return o.emit(nil, fmt.Errorf("config file unreadable"))
 	}
-	out, err := AddGitHubScope(existing, g, *force)
+	host := &setupHost{o: o, config: existing, configPath: path, dry: dry}
+	result, err := setup.Setup(context.Background(), host, rest[1:])
+	if errors.Is(err, extension.ErrSetupUsage) {
+		return usageError(o.errOut, strings.TrimPrefix(err.Error(), extension.ErrSetupUsage.Error()+": "))
+	}
+	if err != nil {
+		return o.emit(nil, fmt.Errorf("init %s: %w", rest[0], err))
+	}
+	out, err := MergeSetup(existing, result, force)
 	if err != nil {
 		return o.emit(nil, err)
 	}
@@ -289,30 +276,157 @@ func (o *operator) init(args []string) int {
 		fmt.Fprintln(o.errOut, "open-conduit: not saved; nothing changed")
 		return 1
 	}
-	if *dry {
+	if dry {
 		_, _ = o.out.Write(out)
 		return 0
 	}
 	if err = writePrivate(path, out); err != nil {
 		return o.emit(nil, fmt.Errorf("could not save the config"))
 	}
-	workspace := "none (workspace-free; turns run in a private directory)"
-	if g.Checkout != "" {
-		workspace = g.Checkout + " (a worktree per issue)"
+	fmt.Fprintf(o.out, "Saved %s\n\n", path)
+	for _, line := range result.Summary {
+		fmt.Fprintf(o.out, "  %s\n", line)
 	}
-	fmt.Fprintf(o.out, "Saved %s\n\n  scope      %s\n  repository %s\n  credential %s connection, token %s\n  workspace  %s\n  holds      %t\n\n",
-		path, g.Scope, g.Repo, g.Connection, refKind(g.Token), workspace, g.Holds)
-	fmt.Fprintf(o.out, "Next:\n  open-conduit serve                 start the daemon (reconcile every 15 minutes; add --webhook-addr for webhooks)\n  open-conduit doctor --check-secrets  check the credential privately and GitHub access\n  open-conduit tui                   watch it work\n")
+	if len(result.Next) > 0 {
+		fmt.Fprintln(o.out, "\nNext:")
+		for _, line := range result.Next {
+			fmt.Fprintf(o.out, "  %s\n", line)
+		}
+	}
 	if existing != nil {
 		fmt.Fprintf(o.out, "A running daemon keeps its configuration until you run: open-conduit config apply %s --generation N\n", path)
 	}
 	return 0
 }
 
-// refKind names a reference's scheme without its text.
-func refKind(ref string) string {
-	scheme, _, _ := strings.Cut(ref, ":")
-	return scheme + ":…"
+// setupHost is the terminal host of an extension setup.
+type setupHost struct {
+	o          *operator
+	config     []byte
+	configPath string
+	dry        bool
+	reader     *bufio.Reader
+}
+
+func (h *setupHost) Printf(format string, args ...any) { fmt.Fprintf(h.o.errOut, format, args...) }
+func (h *setupHost) Config() []byte                    { return h.config }
+func (h *setupHost) Cwd() string                       { return h.o.env.Cwd }
+func (h *setupHost) StateDir() string                  { return h.o.stateDir() }
+func (h *setupHost) DryRun() bool                      { return h.dry }
+
+func (h *setupHost) stdin() io.Reader {
+	if h.o.env.Stdin != nil {
+		return h.o.env.Stdin
+	}
+	return os.Stdin
+}
+
+// readLine reads one answer; a terminal does not echo a secret.
+func (h *setupHost) readLine(secret bool) (string, error) {
+	in := h.stdin()
+	if file, ok := in.(*os.File); ok && secret && term.IsTerminal(file.Fd()) {
+		b, err := term.ReadPassword(file.Fd())
+		fmt.Fprintln(h.o.errOut)
+		return string(b), err
+	}
+	if h.reader == nil {
+		h.reader = bufio.NewReader(io.LimitReader(in, 1<<20))
+	}
+	line, err := h.reader.ReadString('\n')
+	if err != nil && (!errors.Is(err, io.EOF) || line == "") {
+		if errors.Is(err, io.EOF) {
+			return "", extension.ErrSetupNoInput
+		}
+		return "", err
+	}
+	return strings.TrimRight(line, "\r\n"), nil
+}
+
+func (h *setupHost) Prompt(question string, p extension.Prompt) (string, error) {
+	if p.Default != "" && !p.Secret {
+		fmt.Fprintf(h.o.errOut, "%s [%s]: ", question, p.Default)
+	} else {
+		fmt.Fprintf(h.o.errOut, "%s: ", question)
+	}
+	answer, err := h.readLine(p.Secret)
+	if err != nil {
+		if errors.Is(err, extension.ErrSetupNoInput) && p.Default != "" {
+			return p.Default, nil
+		}
+		return "", err
+	}
+	if p.Secret {
+		fmt.Fprintln(h.o.errOut)
+	}
+	if strings.TrimSpace(answer) == "" {
+		return p.Default, nil
+	}
+	return strings.TrimSpace(answer), nil
+}
+
+func (h *setupHost) Choose(question string, options []string) (int, error) {
+	if len(options) == 0 {
+		return -1, errors.New("nothing to choose from")
+	}
+	fmt.Fprintln(h.o.errOut, question)
+	for i, opt := range options {
+		fmt.Fprintf(h.o.errOut, "  %d) %s\n", i+1, opt)
+	}
+	for tries := 0; tries < 3; tries++ {
+		answer, err := h.Prompt("Choose a number", extension.Prompt{Default: "1"})
+		if err != nil {
+			return -1, err
+		}
+		if n, err := strconv.Atoi(answer); err == nil && n >= 1 && n <= len(options) {
+			return n - 1, nil
+		}
+		fmt.Fprintf(h.o.errOut, "Enter a number from 1 to %d.\n", len(options))
+	}
+	return -1, errors.New("no valid choice")
+}
+
+func (h *setupHost) OpenURL(url string) error {
+	fmt.Fprintf(h.o.errOut, "Opening %s\n", url)
+	if h.o.env.OpenURL != nil {
+		return h.o.env.OpenURL(url)
+	}
+	name := "xdg-open"
+	if goruntime.GOOS == "darwin" {
+		name = "open"
+	}
+	if _, err := exec.LookPath(name); err != nil {
+		fmt.Fprintln(h.o.errOut, "No browser opener found: open the URL above yourself.")
+		return nil
+	}
+	return exec.Command(name, url).Run()
+}
+
+func (h *setupHost) StoreSecret(name, value string) (string, error) {
+	if !scopeIDPattern.MatchString(name) {
+		return "", errors.New("secret names match [a-z][a-z0-9_-]*")
+	}
+	if h.dry {
+		return "keyring:" + name, nil
+	}
+	return h.o.storeSecret(name, value, "", h.configPath)
+}
+
+func (h *setupHost) LookPath(name string) (string, bool) {
+	if h.o.env.LookPath != nil {
+		return h.o.env.LookPath(name)
+	}
+	p, err := exec.LookPath(name)
+	return p, err == nil
+}
+
+func (h *setupHost) Run(ctx context.Context, dir, name string, args ...string) error {
+	if h.o.env.RunCommand != nil {
+		return h.o.env.RunCommand(ctx, dir, name, args...)
+	}
+	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = h.stdin(), h.o.errOut, h.o.errOut
+	return cmd.Run()
 }
 
 func (o *operator) secretsPath(flag string) string {
@@ -388,49 +502,9 @@ func (o *operator) secret(args []string) int {
 	if value == "" {
 		return usageError(o.errOut, "empty value; nothing stored")
 	}
-	ref := ""
-	if store != "file" {
-		if err := keyringStore(name, value); err == nil {
-			ref = "keyring:" + name
-		} else if store == "keyring" {
-			return o.emit(nil, errors.New("the platform keyring refused the secret"))
-		} else {
-			fmt.Fprintln(o.errOut, "open-conduit: no usable keyring; falling back to the owner-only secrets file")
-		}
-	}
-	if ref == "" {
-		path := o.secretsPath(f.get("config"))
-		values := map[string]string{}
-		if data, err := os.ReadFile(path); err == nil {
-			if json.Unmarshal(data, &values) != nil {
-				return o.emit(nil, fmt.Errorf("%s is not a JSON object of strings; fix it by hand", path))
-			}
-		} else if !errors.Is(err, os.ErrNotExist) {
-			return o.emit(nil, errors.New("secrets file unreadable"))
-		}
-		values[name] = value
-		names := make([]string, 0, len(values))
-		for k := range values {
-			names = append(names, k)
-		}
-		sort.Strings(names)
-		var b bytes.Buffer
-		b.WriteString("{\n")
-		for i, k := range names {
-			kb, _ := marshal(k)
-			vb, _ := marshal(values[k])
-			fmt.Fprintf(&b, "  %s: %s", kb, vb)
-			if i < len(names)-1 {
-				b.WriteByte(',')
-			}
-			b.WriteByte('\n')
-		}
-		b.WriteString("}\n")
-		if err := writePrivate(path, b.Bytes()); err != nil {
-			return o.emit(nil, errors.New("could not save the secrets file"))
-		}
-		ref = "file:" + name
-		fmt.Fprintf(o.errOut, "Stored in %s (0600)\n", path)
+	ref, err := o.storeSecret(name, value, store, f.get("config"))
+	if err != nil {
+		return o.emit(nil, err)
 	}
 	return o.emit(map[string]string{"reference": ref}, nil)
 }
@@ -522,4 +596,55 @@ func (o *operator) localConfig(args []string) (int, bool) {
 	}
 	fmt.Fprintf(o.errOut, "Saved %s. A running daemon changes only with: open-conduit config apply %s --generation N\n", path, path)
 	return 0, true
+}
+
+// storeSecret stores a value in the platform keyring (preferred) or the
+// owner-only secrets.json beside the config, and returns its reference. The
+// value is never echoed or logged.
+func (o *operator) storeSecret(name, value, store, configFlag string) (string, error) {
+	ref := ""
+	if store != "file" {
+		if err := keyringStore(name, value); err == nil {
+			ref = "keyring:" + name
+		} else if store == "keyring" {
+			return "", errors.New("the platform keyring refused the secret")
+		} else {
+			fmt.Fprintln(o.errOut, "open-conduit: no usable keyring; falling back to the owner-only secrets file")
+		}
+	}
+	if ref == "" {
+		path := o.secretsPath(configFlag)
+		values := map[string]string{}
+		if data, err := os.ReadFile(path); err == nil {
+			if json.Unmarshal(data, &values) != nil {
+				return "", fmt.Errorf("%s is not a JSON object of strings; fix it by hand", path)
+			}
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return "", errors.New("secrets file unreadable")
+		}
+		values[name] = value
+		names := make([]string, 0, len(values))
+		for k := range values {
+			names = append(names, k)
+		}
+		sort.Strings(names)
+		var b bytes.Buffer
+		b.WriteString("{\n")
+		for i, k := range names {
+			kb, _ := marshal(k)
+			vb, _ := marshal(values[k])
+			fmt.Fprintf(&b, "  %s: %s", kb, vb)
+			if i < len(names)-1 {
+				b.WriteByte(',')
+			}
+			b.WriteByte('\n')
+		}
+		b.WriteString("}\n")
+		if err := writePrivate(path, b.Bytes()); err != nil {
+			return "", errors.New("could not save the secrets file")
+		}
+		ref = "file:" + name
+		fmt.Fprintf(o.errOut, "Stored in %s (0600)\n", path)
+	}
+	return ref, nil
 }

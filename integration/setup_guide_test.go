@@ -13,6 +13,7 @@ import (
 	gitws "github.com/alsiola/open-conduit/extensions/git"
 	gh "github.com/alsiola/open-conduit/extensions/github"
 	"github.com/alsiola/open-conduit/extensions/github/playbooks"
+	sl "github.com/alsiola/open-conduit/extensions/slack"
 	"github.com/alsiola/open-conduit/internal/bootstrap"
 	"github.com/alsiola/open-conduit/internal/cli"
 	"github.com/alsiola/open-conduit/internal/config"
@@ -66,12 +67,15 @@ func TestOfflineValidationMatchesTheDaemonRegistry(t *testing.T) {
 		t.Fatalf("setup guide example: %v %v", diags, err)
 	}
 	var doc []byte
-	for _, s := range []cli.GitHubScope{
+	for _, s := range []gh.GitHubScope{
 		{Repo: "acme/web", Scope: "web", Connection: "github", Token: "cmd:gh auth token", Checkout: t.TempDir(), Holds: true},
 		{Repo: "acme/support", Scope: "support", Connection: "github", Token: "keyring:github"},
 	} {
-		var err error
-		if doc, err = cli.AddGitHubScope(doc, s, false); err != nil {
+		r, err := s.Result()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if doc, err = cli.MergeSetup(doc, r, false); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -81,6 +85,40 @@ func TestOfflineValidationMatchesTheDaemonRegistry(t *testing.T) {
 	bad := strings.Replace(string(doc), `"executor": "claude-code"`, `"executor": "nope"`, 1)
 	if diags, err := bootstrap.ValidateConfig([]byte(bad)); err != nil || len(diags) == 0 {
 		t.Fatalf("invalid executor accepted: %v %v", diags, err)
+	}
+}
+
+// init slack's workspace-free support scope (here from token references,
+// so nothing is called) merges beside a GitHub scope and validates against
+// the daemon registry, with no git resource or provider in it.
+func TestSlackSetupScopeValidatesOffline(t *testing.T) {
+	r, err := sl.Setup{}.Setup(context.Background(), nil, []string{"--bot-token", "keyring:slack-bot-token", "--app-token", "keyring:slack-app-token", "--team", "T0123", "--channel", "C0SUPPORT"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, err := gh.GitHubScope{Repo: "acme/web", Scope: "web", Connection: "github", Token: "cmd:gh auth token"}.Result()
+	if err != nil {
+		t.Fatal(err)
+	}
+	doc, err := cli.MergeSetup(nil, g, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if doc, err = cli.MergeSetup(doc, r, false); err != nil {
+		t.Fatal(err)
+	}
+	if diags, err := bootstrap.ValidateConfig(doc); err != nil || len(diags) != 0 {
+		t.Fatalf("init slack output: %v %v\n%s", diags, err, doc)
+	}
+	if strings.Contains(string(r.Scope), `"resource"`) || strings.Contains(string(r.Scope), "git") {
+		t.Fatalf("support scope reaches a Git concept: %s", r.Scope)
+	}
+	names := []string{}
+	for _, s := range bootstrap.Setups() {
+		names = append(names, s.SetupInfo().Type)
+	}
+	if strings.Join(names, ",") != "github,slack" {
+		t.Fatalf("registered setups: %v", names)
 	}
 }
 

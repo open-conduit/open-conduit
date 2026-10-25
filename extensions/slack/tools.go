@@ -177,7 +177,10 @@ func (t *Tools) context(_ context.Context, b *bound, data json.RawMessage) (any,
 		return nil, err
 	}
 	return map[string]any{"team": b.src.Settings.Team, "channel": b.channel, "thread_ts": b.thread, "work": string(b.work.ID), "scope": string(b.work.ScopeID),
-		"reply": fmt.Sprintf("call %s {\"text\": …}", OpReply), "read": fmt.Sprintf("call %s {}", OpThread)}, nil
+		"reply": fmt.Sprintf("call %s {\"text\": …}", OpReply), "read": fmt.Sprintf("call %s {}", OpThread),
+		// The builtin wait's input for "until a person writes in this
+		// thread": a type-only wait matches the Work's own thread key.
+		"wait": map[string]any{"match": map[string]any{"types": []string{TypeMessageHuman}}, "timeout_seconds": SupportWaitSeconds}}, nil
 }
 
 // MessageView is one thread message as the tools present it.

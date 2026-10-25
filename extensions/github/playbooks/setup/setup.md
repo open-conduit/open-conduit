@@ -9,7 +9,7 @@ Open Conduit watches GitHub repositories, claims open issues, and works each one
 
 The command is `{{bin}}`. The configuration is one JSON file (default `~/.config/open-conduit/config.json`; `serve --config` or `OPEN_CONDUIT_CONFIG` choose another; `{{bin}} config path` prints it). These commands edit it locally and validate against the daemon's own registrations before saving, so an invalid edit never lands:
 
-- `{{bin}} init --repo OWNER/NAME --scope ID [--checkout DIR | --no-workspace] [--token REF] [--holds] --dry-run` prints the scope `init` would add (a connection, an agent binding with the GitHub tools, optionally the hold route); without `--dry-run` it adds it to the file. The owner may prefer to run `init` themselves.
+- `{{bin}} init github --dry-run --repo OWNER/NAME --scope ID [--checkout DIR | --no-workspace] [--token REF] [--holds]` prints the scope `init github` would add (a connection, an agent binding with the GitHub tools, optionally the hold route); without `--dry-run` it adds it to the file. The owner may prefer to run `init` themselves.
 - `{{bin}} config show` (references redacted), `config get /pointer`, `config set /pointer JSON`, `config unset /pointer` and `config check`. Pointers address array elements by `id` or `name`: `/scopes/web/bindings/agent/config/model`.
 
 Before the daemon has ever run, that is all. Once it runs, a disk edit alone never changes what it does: check the file with `{{bin}} config validate <file>` and activate it with `{{bin}} config apply <file> --generation <n>` (`validate` prints the current generation): apply validates again, saves the file atomically and keeps the last good one. Validation prints every problem as a JSON pointer, a code and a remedy; fix them all before applying.

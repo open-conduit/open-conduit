@@ -2,13 +2,17 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/alsiola/open-conduit/client"
+	"github.com/alsiola/open-conduit/extension"
 )
 
 func TestJSONEditKeepsOrderAndAddressesByName(t *testing.T) {
@@ -45,44 +49,90 @@ func TestJSONEditKeepsOrderAndAddressesByName(t *testing.T) {
 	}
 }
 
-func TestAddGitHubScope(t *testing.T) {
-	ws := GitHubScope{Repo: "acme/web", Scope: "web", Connection: "github", Token: "cmd:gh auth token", Checkout: "/src/web", Holds: true}
-	out, err := AddGitHubScope(nil, ws, false)
+// fakeSetup stands in for an extension's setup: internal/cli never imports
+// one (B01), so the host is tested against the public contract.
+type fakeSetup struct{ calls int }
+
+func (f *fakeSetup) SetupInfo() extension.SetupInfo {
+	return extension.SetupInfo{Type: "fake", Summary: "a fake scope", Usage: "--repo NAME [--token REF] [--holds]"}
+}
+
+func (f *fakeSetup) Setup(_ context.Context, host extension.SetupHost, args []string) (extension.SetupResult, error) {
+	f.calls++
+	var repo, token string
+	holds := false
+	for i := 0; i < len(args); i++ {
+		switch args[i] {
+		case "--repo":
+			i++
+			repo = args[i]
+		case "--token":
+			i++
+			token = args[i]
+		case "--holds":
+			holds = true
+		default:
+			return extension.SetupResult{}, fmt.Errorf("%w: unknown flag %s", extension.ErrSetupUsage, args[i])
+		}
+	}
+	if repo == "" {
+		return extension.SetupResult{}, fmt.Errorf("%w: init fake needs --repo", extension.ErrSetupUsage)
+	}
+	if !strings.Contains(token, ":") {
+		return extension.SetupResult{}, fmt.Errorf("%w: --token takes a reference", extension.ErrSetupUsage)
+	}
+	if token == "prompt:" {
+		value, err := host.Prompt("Token", extension.Prompt{Secret: true})
+		if err != nil {
+			return extension.SetupResult{}, err
+		}
+		if token, err = host.StoreSecret("fake-token", value); err != nil {
+			return extension.SetupResult{}, err
+		}
+	}
+	routes := `{"name": "issues", "handler": "fake", "binding": "agent", "active_policy": "queue", "config": {}}`
+	if holds {
+		routes = `{"name": "held", "handler": "fake-hold", "binding": "agent", "active_policy": "queue", "config": {}}, ` + routes
+	}
+	return extension.SetupResult{
+		Connections: []json.RawMessage{json.RawMessage(`{"id": "github", "type": "fake", "config": {}, "secret_refs": {"token": "` + token + `"}}`)},
+		Scope:       json.RawMessage(`{"id": "web", "name": "` + repo + `", "bindings": [{"name": "agent", "executor": "shell", "config": {}}], "routes": [` + routes + `], "secret_refs": {}}`),
+		Summary:     []string{"scope web", "workspace  none (workspace-free)"},
+		Next:        []string{"open-conduit serve"},
+	}, nil
+}
+
+func TestMergeSetup(t *testing.T) {
+	first := extension.SetupResult{Connections: []json.RawMessage{json.RawMessage(`{"id":"github","type":"github"}`)}, Scope: json.RawMessage(`{"id":"web","bindings":[]}`)}
+	out, err := MergeSetup(nil, first, false)
 	if err != nil {
 		t.Fatal(err)
 	}
 	var cfg struct {
+		Version     int              `json:"version"`
 		Connections []map[string]any `json:"connections"`
-		Scopes      []struct {
-			ID       string           `json:"id"`
-			Bindings []map[string]any `json:"bindings"`
-			Routes   []map[string]any `json:"routes"`
-		} `json:"scopes"`
+		Scopes      []map[string]any `json:"scopes"`
 	}
-	if err = json.Unmarshal(out, &cfg); err != nil || len(cfg.Connections) != 1 || len(cfg.Scopes) != 1 {
+	if err = json.Unmarshal(out, &cfg); err != nil || cfg.Version != 1 || len(cfg.Connections) != 1 || len(cfg.Scopes) != 1 || strings.Index(string(out), `"version"`) > strings.Index(string(out), `"scopes"`) {
 		t.Fatalf("%v %s", err, out)
 	}
-	s := cfg.Scopes[0]
-	if len(s.Bindings) != 2 || s.Bindings[0]["resource"] == nil || len(s.Routes) != 2 || s.Routes[0]["handler"] != "github-hold" {
-		t.Fatalf("scope: %+v", s)
-	}
-	// A second, workspace-free scope merges and keeps the first.
-	free := GitHubScope{Repo: "acme/support", Scope: "support", Connection: "github", Token: "env:GH"}
-	out, err = AddGitHubScope(out, free, false)
+	// A second scope merges, keeps the first and reuses the connection.
+	second := extension.SetupResult{Connections: []json.RawMessage{json.RawMessage(`{"id":"github","type":"other"}`), json.RawMessage(`{"id":"slack","type":"slack"}`)}, Scope: json.RawMessage(`{"id":"support"}`)}
+	out, err = MergeSetup(out, second, false)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = json.Unmarshal(out, &cfg); err != nil || len(cfg.Connections) != 1 || len(cfg.Scopes) != 2 {
+	if err = json.Unmarshal(out, &cfg); err != nil || len(cfg.Connections) != 2 || len(cfg.Scopes) != 2 || cfg.Connections[0]["type"] != "github" {
 		t.Fatalf("merge: %v %s", err, out)
 	}
-	if b := cfg.Scopes[1].Bindings[0]; b["resource"] != nil || b["requires"].(map[string]any)["workspace"] != false {
-		t.Fatalf("workspace-free binding: %+v", b)
-	}
-	if _, err = AddGitHubScope(out, free, false); err == nil {
+	if _, err = MergeSetup(out, second, false); err == nil {
 		t.Fatal("replaced an existing scope without --force")
 	}
-	if _, err = AddGitHubScope(out, free, true); err != nil {
+	if _, err = MergeSetup(out, second, true); err != nil {
 		t.Fatal(err)
+	}
+	if _, err = MergeSetup(out, extension.SetupResult{Scope: json.RawMessage(`{"id":"Bad id"}`)}, false); err == nil {
+		t.Fatal("invalid scope id accepted")
 	}
 }
 
@@ -105,11 +155,15 @@ type setupEnv struct {
 	env   map[string]string
 	stdin string
 	valid func([]byte) ([]client.Detail, error)
+	setup *fakeSetup
 }
 
 func (s *setupEnv) run(args ...string) (string, string, int) {
 	var out, errOut bytes.Buffer
-	e := Env{Getenv: func(k string) string { return s.env[k] }, Cwd: s.root, Stdin: strings.NewReader(s.stdin), ValidateConfig: s.valid}
+	if s.setup == nil {
+		s.setup = &fakeSetup{}
+	}
+	e := Env{Getenv: func(k string) string { return s.env[k] }, Cwd: s.root, Stdin: strings.NewReader(s.stdin), ValidateConfig: s.valid, Setups: []extension.Setup{s.setup}}
 	code := RunOperator("test", "abc", args, e, &out, &errOut)
 	return out.String(), errOut.String(), code
 }
@@ -125,21 +179,32 @@ func TestInitSecretAndConfigEditing(t *testing.T) {
 		return nil, nil
 	}}
 	path := filepath.Join(root, "cfg", "open-conduit", "config.json")
-	if _, errOut, code := s.run("init", "--token", "ghp_literal"); code != 2 || !strings.Contains(errOut, "--repo") {
+	// init lists the registered setups; a missing or unknown type is a
+	// usage error.
+	if out, _, code := s.run("init"); code != 0 || !strings.Contains(out, "fake") || !strings.Contains(out, "a fake scope") {
+		t.Fatalf("init listing: %d %s", code, out)
+	}
+	if _, errOut, code := s.run("init", "--repo", "acme/web"); code != 2 || !strings.Contains(errOut, "TYPE") {
+		t.Fatalf("init without type: %d %s", code, errOut)
+	}
+	if _, errOut, code := s.run("init", "nope"); code != 2 || !strings.Contains(errOut, "nope") {
+		t.Fatalf("unknown type: %d %s", code, errOut)
+	}
+	if _, errOut, code := s.run("init", "fake", "--token", "ghp_literal"); code != 2 || !strings.Contains(errOut, "--repo") {
 		t.Fatalf("init without repo: %d %s", code, errOut)
 	}
-	if _, errOut, code := s.run("init", "--repo", "acme/web", "--token", "ghp_literal"); code != 2 || !strings.Contains(errOut, "reference") {
+	if _, errOut, code := s.run("init", "fake", "--repo", "acme/web", "--token", "ghp_literal"); code != 2 || !strings.Contains(errOut, "reference") {
 		t.Fatalf("literal token accepted: %d %s", code, errOut)
 	}
-	out, errOut, code := s.run("init", "--repo", "acme/web", "--no-workspace", "--token", "file:github-token", "--dry-run")
-	if code != 0 || !strings.Contains(out, `"repo": "acme/web"`) {
+	out, errOut, code := s.run("init", "fake", "--repo", "acme/web", "--token", "file:github-token", "--dry-run")
+	if code != 0 || !strings.Contains(out, `"name": "acme/web"`) {
 		t.Fatalf("dry run: %d %s %s", code, out, errOut)
 	}
 	if _, err := os.Stat(path); err == nil {
 		t.Fatal("dry run wrote the config")
 	}
-	out, errOut, code = s.run("init", "--repo", "acme/web", "--no-workspace", "--token", "file:github-token", "--holds")
-	if code != 0 || !strings.Contains(out, "workspace-free") || validated == 0 {
+	out, errOut, code = s.run("init", "fake", "--repo", "acme/web", "--token", "file:github-token", "--holds")
+	if code != 0 || !strings.Contains(out, "workspace-free") || !strings.Contains(out, "open-conduit serve") || validated == 0 {
 		t.Fatalf("init: %d %s %s", code, out, errOut)
 	}
 	if info, err := os.Stat(path); err != nil || info.Mode().Perm() != 0o600 {
@@ -193,5 +258,25 @@ func TestInitSecretAndConfigEditing(t *testing.T) {
 	}
 	if out, _, code = s.run("config", "check"); code != 0 || strings.TrimSpace(out) != "valid" {
 		t.Fatalf("check: %d %s", code, out)
+	}
+	// The host's secret prompt stores through the secret store and hands the
+	// setup only the reference; a dry run stores nothing.
+	restore := keyringStore
+	keyringStore = func(string, string) error { return errors.New("no keyring in tests") }
+	defer func() { keyringStore = restore }()
+	s.stdin = "prompted-value\n"
+	out, errOut, code = s.run("init", "fake", "--repo", "acme/web", "--token", "prompt:", "--force", "--dry-run")
+	if code != 0 || strings.Contains(out+errOut, "prompted-value") {
+		t.Fatalf("dry-run prompt: %d %s %s", code, out, errOut)
+	}
+	if b, _ := os.ReadFile(secrets); strings.Contains(string(b), "fake-token") {
+		t.Fatal("dry run stored a secret")
+	}
+	s.stdin = "prompted-value\n"
+	if out, errOut, code = s.run("init", "fake", "--repo", "acme/web", "--token", "prompt:", "--force"); code != 0 || strings.Contains(out+errOut, "prompted-value") {
+		t.Fatalf("prompt: %d %s %s", code, out, errOut)
+	}
+	if b, _ := os.ReadFile(secrets); !strings.Contains(string(b), `"fake-token": "prompted-value"`) {
+		t.Fatalf("prompted secret not stored: %s", b)
 	}
 }

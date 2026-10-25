@@ -156,6 +156,12 @@ func (c *Client) call(ctx context.Context, method string, form url.Values, body 
 }
 
 func (c *Client) callWith(ctx context.Context, secret, method string, form url.Values, body any, out any) error {
+	return c.callHeaders(ctx, secret, method, form, body, out, nil)
+}
+
+// callHeaders is callWith that also returns the successful response's
+// headers (auth.test reports granted scopes in X-OAuth-Scopes).
+func (c *Client) callHeaders(ctx context.Context, secret, method string, form url.Values, body any, out any, headers *http.Header) error {
 	if limit := c.pausedFor(method); limit != nil {
 		return limit
 	}
@@ -228,6 +234,9 @@ func (c *Client) callWith(ctx context.Context, secret, method string, form url.V
 				return ErrCredential
 			}
 			return &APIError{Method: method, Code: code}
+		}
+		if headers != nil {
+			*headers = res.Header.Clone()
 		}
 		if out != nil {
 			return json.Unmarshal(data, out)
@@ -376,12 +385,15 @@ func (c *Client) PostMessage(ctx context.Context, p Post) (string, error) {
 	return out.TS, nil
 }
 
-// Identity is what auth.test reports for the bot token.
+// Identity is what auth.test reports for the bot token. Scopes are the
+// token's granted scopes (the X-OAuth-Scopes header); nil when Slack did not
+// report them.
 type Identity struct {
-	Team   string `json:"team_id"`
-	User   string `json:"user_id"`
-	BotID  string `json:"bot_id"`
-	TeamNm string `json:"team"`
+	Team   string   `json:"team_id"`
+	User   string   `json:"user_id"`
+	BotID  string   `json:"bot_id"`
+	TeamNm string   `json:"team"`
+	Scopes []string `json:"-"`
 }
 
 // OpenConnection asks for a Socket Mode WebSocket URL with the app-level
@@ -402,6 +414,51 @@ func (c *Client) OpenConnection(ctx context.Context) (string, error) {
 // AuthTest verifies the token (doctor's connection test).
 func (c *Client) AuthTest(ctx context.Context) (Identity, error) {
 	var out Identity
-	err := c.call(ctx, "auth.test", url.Values{}, nil, &out)
+	var headers http.Header
+	err := c.callHeaders(ctx, SecretBotToken, "auth.test", url.Values{}, nil, &out, &headers)
+	if err == nil && headers != nil {
+		if raw := headers.Get("X-OAuth-Scopes"); raw != "" {
+			out.Scopes = []string{}
+			for _, s := range strings.Split(raw, ",") {
+				if s = strings.TrimSpace(s); s != "" {
+					out.Scopes = append(out.Scopes, s)
+				}
+			}
+		}
+	}
 	return out, err
+}
+
+// Channel is a conversation the bot is a member of.
+type Channel struct {
+	ID        string `json:"id"`
+	Name      string `json:"name"`
+	IsPrivate bool   `json:"is_private"`
+}
+
+// Channels lists the public and private channels the bot is a member of
+// (users.conversations; channels:read and groups:read), at most 1000.
+func (c *Client) Channels(ctx context.Context) ([]Channel, error) {
+	var all []Channel
+	cursor := ""
+	for page := 0; page < 5; page++ {
+		form := url.Values{"types": {"public_channel,private_channel"}, "exclude_archived": {"true"}, "limit": {"200"}}
+		if cursor != "" {
+			form.Set("cursor", cursor)
+		}
+		var out struct {
+			Channels []Channel `json:"channels"`
+			Meta     struct {
+				Next string `json:"next_cursor"`
+			} `json:"response_metadata"`
+		}
+		if err := c.call(ctx, "users.conversations", form, nil, &out); err != nil {
+			return nil, err
+		}
+		all = append(all, out.Channels...)
+		if cursor = out.Meta.Next; cursor == "" {
+			break
+		}
+	}
+	return all, nil
 }

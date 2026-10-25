@@ -54,7 +54,10 @@ func TestManifestCoversWhatTheExtensionUses(t *testing.T) {
 	f.sync()
 	f.scan()
 	f.push(f.fake.MessageEvent(chanA, root))
-	if _, err := f.client.AuthTest(context.Background()); err != nil {
+	if id, err := f.client.AuthTest(context.Background()); err != nil || len(slack.MissingScopes(id.Scopes)) != 0 {
+		t.Fatal(err, id.Scopes)
+	}
+	if _, err := f.client.Channels(context.Background()); err != nil {
 		t.Fatal(err)
 	}
 	if _, err := f.client.PostMessage(context.Background(), slack.Post{Channel: chanA, ThreadTS: root, Text: "hi"}); err != nil {

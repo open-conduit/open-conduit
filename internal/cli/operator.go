@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/alsiola/open-conduit/client"
+	"github.com/alsiola/open-conduit/extension"
 )
 
 // Env carries process inputs so operator commands are testable.
@@ -38,6 +39,15 @@ type Env struct {
 	ValidateConfig func(data []byte) ([]client.Detail, error)
 	// Setup starts a coding agent with the setup guide (init --with).
 	Setup func(SetupRequest) int
+	// Setups are the registered extensions' optional setup flows that
+	// `init <type>` hosts; only the open-conduit entrypoint supplies them,
+	// so this package never imports an extension.
+	Setups []extension.Setup
+	// OpenURL, LookPath and RunCommand replace the setup host's browser
+	// opener, PATH lookup and attached command runner (tests).
+	OpenURL    func(string) error
+	LookPath   func(string) (string, bool)
+	RunCommand func(ctx context.Context, dir, name string, args ...string) error
 }
 
 type operator struct {
@@ -63,7 +73,8 @@ Commands:
         [--webhook-addr 127.0.0.1:8787] [--tunnel ngrok|cloudflared|static] [--tunnel-domain D] [--tunnel-name N] [--public-url URL]
         [--no-tunnel] [--dry-run] [--claude-usage]
   health
-  init [--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF] [--holds] [--force] [--dry-run]
+  init                       list the setups the registered extensions offer
+  init TYPE [flags] [--config PATH] [--force] [--dry-run]   run one (for example init github --repo OWNER/NAME, init slack)
   init --with claude         start Claude Code with the setup guide
   secret set NAME [--store keyring|file] | secret path   (value read from stdin, never an argument)
   scopes list [--parent-id ID] [--enabled true|false] | scopes get ID | scopes reconcile ID [--revision N]

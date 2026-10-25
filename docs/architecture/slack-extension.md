@@ -12,7 +12,7 @@ All evidence so far uses fixtures and the [`slacktest`](../../extensions/slack/s
 | --- | --- |
 | Socket Mode | On (the default receiver needs no public endpoint) |
 | Bot user | Yes, always online |
-| Bot token scopes | `channels:history`, `groups:history`, `channels:read`, `groups:read`, `chat:write`, `reactions:write`, `users:read`, `app_mentions:read` |
+| Bot token scopes | `channels:history`, `groups:history`, `channels:read`, `groups:read`, `chat:write`, `metadata.message:read`, `reactions:write`, `users:read`, `app_mentions:read` |
 | Bot events | `message.channels`, `message.groups`, `app_mention` |
 | App-level token | `connections:write` (Socket Mode only) |
 
@@ -21,25 +21,33 @@ The extension's own calls need only part of this:
 - `conversations.history` and `conversations.replies` need `channels:history` (public channels) or `groups:history` (private channels).
 - `chat.postMessage` needs `chat:write`.
 - `auth.test` needs no scope.
+- `users.conversations` (the setup channel picker) needs `channels:read`/`groups:read`.
 - `apps.connections.open` uses the app-level token.
 
-The setup channel picker will use `channels:read`/`groups:read`. `users:read`, `reactions:write` and `app_mentions:read` are granted for later use (names, acknowledgements); nothing in 04-01 depends on them. `app_mention` duplicates a `message` event, so push ignores it.
+`users:read`, `reactions:write` and `app_mentions:read` are granted for later use (names, acknowledgements); nothing depends on them. `app_mention` duplicates a `message` event, so push ignores it.
 
-The extension relies on no scope outside this list. Reply markers use Slack **message metadata**. Posting metadata needs only `chat:write`. Reading it back uses `include_all_metadata` on history and replies. Whether Slack returns metadata to a token without `metadata.message:read` is not yet confirmed (04-03 checks it on the real app). The extension does not depend on it, as described under [marked replies](#marked-replies).
+The extension relies on no scope outside this list. Reply markers use Slack **message metadata**. Posting metadata needs only `chat:write`. Reading it back uses `include_all_metadata` on history and replies.
 
-### Intended setup flow (04-02)
+**Decision (04-02): the manifest requests `metadata.message:read`.** Slack documents this scope as the one that lets an app read message metadata in its channels. Without it, marker recovery may fall back to matching the bot user and the exact text, which can confuse two identical replies in one thread. Setup now creates the app from the manifest, so asking costs the operator nothing. It is read-only, covers only channels the app is in, and adds no write or user-data access. The text fallback stays for tokens installed without it (an older manifest, or a workspace admin who refused the scope). Doctor reports the missing scope as a warning naming that cost. 04-03 confirms on the real app that metadata comes back with the scope (and whether it comes back without it).
 
-Setup belongs to the extension, not to core. 04-02 adds an optional, generic `extension.Setup` hook. Core `open-conduit init <type>` dispatches to the registered extensions that implement it and supplies only a setup host: prompts, opening a URL, the secret store (`secret set`), config merge and offline validation, and running verification. The existing GitHub init moves behind the same hook. Core CLI packages import no extension, and a boundary check enforces this.
+### Setup: `init slack`
 
-Slack's `Setup` implementation will:
+Setup belongs to the extension. [`setup.go`](../../extensions/slack/setup.go) implements the generic optional [`extension.Setup`](../../extension/setup.go) hook (see [operator setup](operator-setup.md#extension-owned-setup-04-02)). Core hosts it and supplies the prompts, the browser opener, the secret store, the merge and offline validation. `open-conduit init slack`:
 
-1. Have the host open `CreateAppURL(name)`, which is `https://api.slack.com/apps?new_app=1&manifest_json=<urlencoded manifest>`. An optional `slack-cli` path is offered only when the `slack` CLI is on PATH.
-2. Ask the user to create the app-level token with `connections:write` (Slack has no API for this) and paste it with the bot token.
-3. Store both through the host's secret store.
-4. Verify them with `auth.test` and `apps.connections.open`.
-5. List the channels the bot is in so the user can pick, then return the scope config for the host to merge and validate.
+1. **Creates the app from the manifest.** By default the host opens `CreateAppURL(name)` (`--name`, default "Open Conduit"; `--no-open` prints it instead). With `--via slack-cli`, and only when `slack` is on PATH, setup writes a minimal local-manifest project under `<state>/slack-app/<scope>` instead: `manifest.json`, a `get-manifest` hook that prints it, and `manifest.source: local`. It then runs `slack app install --environment deployed` attached to the terminal. When the CLI is on PATH but not chosen, setup mentions it.
+2. **Explains the tokens.** It says where to find the bot token (OAuth & Permissions, `xoxb-`). It explains how to create the app-level token, which Slack has no API for: Basic Information → App-Level Tokens with `connections:write`, giving `xapp-`. It also says to invite the app to the channel.
+3. **Prompts for both tokens and verifies them.** The prompts are secret and checked by prefix. The tokens are verified before anything is stored: `auth.test` gives the team, the bot user and the granted scopes (`X-OAuth-Scopes`), and missing manifest scopes are warned about. `apps.connections.open` checks that the app token can open Socket Mode. A refusal stops setup with nothing stored.
+4. **Picks the channel.** It lists the channels the bot is in (`users.conversations`). If there are none, it asks the user to invite the app and paste the channel ID. A given `--channel` is checked for membership.
+5. **Stores the tokens and returns the scope.** Both tokens go through the host's secret store (`<connection>-bot-token`, `<connection>-app-token`; only references reach the config). Setup returns the `slack` connection and a workspace-free support scope:
+   - a `support` binding on `claude-code` (`requires` toolbelt mcp, inject, resume, `workspace: false`, no `resource`), with playbook `support-conversation`, args `{key}` and the operations `read_context`, `wait`, `declare_outcome`, `slack.context`, `slack.thread` and `slack.reply`;
+   - the `conversations` route (handler `slack`, active policy `inject`);
+   - the entry (`namespace` `slack/<team>`, the channel, `bot_user_id`, `receiver: socket`, `start` from `--start`).
 
-The extension will also own a doctor check that reports scopes missing compared with the manifest (`MissingScopes`). All of this is assigned to 04-02. Until then, write the config by hand as below.
+With `--bot-token REF --app-token REF --team T… --channel C…`, setup prompts for nothing and verifies nothing (it never resolves references); it says to run `doctor --check-secrets` instead. `--scope` (default `support`) and `--connection` (default `slack`) name the result. `--api-url` points at another API base (the tests use the fake).
+
+The `slack-cli` path is unverified against a real Slack CLI and is 04-03 evidence. So are the create-app URL and the real token checks.
+
+**Doctor.** `slack_auth` (`--check-secrets`) now runs the extension-owned `slack.CheckAuth`. It checks that the token's team is the entry's team and its user is the entry's bot user. It also compares the granted scopes with the manifest (`MissingScopes`). A missing `chat:write`, or both history scopes missing, fails with `scopes_missing`. Any other missing scope warns with `scopes_missing` and says what it costs (for `metadata.message:read`: markers found only by the text fallback). Bootstrap only maps the severity onto the check.
 
 ## Configuration
 

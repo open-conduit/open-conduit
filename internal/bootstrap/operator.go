@@ -54,6 +54,11 @@ func ValidateConfig(data []byte) ([]config.Diagnostic, error) {
 	return nil, err
 }
 
+// Setups are the registered extensions' optional setup flows (`open-conduit
+// init <type>`). Core CLI hosts them through cli.Env.Setups and imports no
+// extension.
+func Setups() []extension.Setup { return []extension.Setup{gh.Setup{}, sl.Setup{}} }
+
 // SetupOptions start a coding agent with the setup guide.
 type SetupOptions struct {
 	// Agent is claude or claude-code.
@@ -97,7 +102,7 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	// The prompt first and the tools last: --allowedTools takes every
 	// argument after it.
 	args := []string{"/" + playbooks.PluginName + ":setup", "--plugin-dir", dir, "--allowedTools"}
-	for _, sub := range []string{"config", "doctor", "health", "secret path", "init --dry-run"} {
+	for _, sub := range []string{"config", "doctor", "health", "secret path", "init github --dry-run"} {
 		args = append(args, "Bash("+o.Bin+" "+sub+":*)")
 	}
 	cmd := exec.Command(o.Binary, args...)

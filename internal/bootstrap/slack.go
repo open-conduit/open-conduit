@@ -384,9 +384,10 @@ func (d *daemon) slackCheck(ctx context.Context) runtime.Check {
 	return check
 }
 
-// slackAuthCheck (check_secrets only) resolves each entry's bot token
-// privately and calls auth.test, checking the token belongs to the entry's
-// team. It reports codes, never the reference or the token.
+// slackAuthCheck (check_secrets only) runs the extension-owned connection
+// test per entry (sl.CheckAuth: team, bot user and the granted scopes
+// compared with the manifest). It reports codes, never the reference or the
+// token.
 func (d *daemon) slackAuthCheck(ctx context.Context) runtime.Check {
 	check := runtime.Check{Name: "slack_auth", Status: runtime.CheckOK, Code: "verified"}
 	d.slack.mu.Lock()
@@ -402,30 +403,19 @@ func (d *daemon) slackAuthCheck(ctx context.Context) runtime.Check {
 	for _, src := range sources {
 		s := src.ingress.Settings()
 		cx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		id, err := src.client.AuthTest(cx)
+		r := sl.CheckAuth(cx, src.client, s)
 		cancel()
-		item := s.Namespace + ": "
-		switch {
-		case err != nil:
-			code := sl.ErrorCode(err)
-			if rank(runtime.CheckFail) > rank(check.Status) {
-				check.Status, check.Code = runtime.CheckFail, code
-			}
-			item += code
-		case id.Team != s.Team:
-			if rank(runtime.CheckFail) > rank(check.Status) {
-				check.Status, check.Code = runtime.CheckFail, "team_mismatch"
-			}
-			item += "the token belongs to another workspace"
-		default:
-			item += "authenticated as " + id.User
-			if s.BotUser != "" && s.BotUser != id.User {
-				if check.Status == runtime.CheckOK {
-					check.Status, check.Code = runtime.CheckWarn, "bot_user_mismatch"
-				}
-				item += " (bot_user_id is " + s.BotUser + ")"
-			}
+		status := runtime.CheckOK
+		switch r.Severity {
+		case sl.DoctorFail:
+			status = runtime.CheckFail
+		case sl.DoctorWarn:
+			status = runtime.CheckWarn
 		}
+		if rank(status) > rank(check.Status) {
+			check.Status, check.Code = status, r.Code
+		}
+		item := s.Namespace + ": " + r.Item
 		check.Items = append(check.Items, item)
 	}
 	sort.Strings(check.Items)

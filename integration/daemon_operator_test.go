@@ -46,7 +46,7 @@ func validateOffline(data []byte) ([]client.Detail, error) {
 
 func (o *operatorCLI) run(args ...string) (string, string, int) {
 	var out, errOut bytes.Buffer
-	env := cli.Env{Getenv: func(k string) string { return o.env[k] }, Cwd: o.cwd, Stdin: strings.NewReader(o.stdin), ValidateConfig: validateOffline, Attach: o.attach}
+	env := cli.Env{Getenv: func(k string) string { return o.env[k] }, Cwd: o.cwd, Stdin: strings.NewReader(o.stdin), ValidateConfig: validateOffline, Attach: o.attach, Setups: bootstrap.Setups()}
 	code := cli.RunOperator("test", "abc", args, env, &out, &errOut)
 	return out.String(), errOut.String(), code
 }
@@ -99,7 +99,7 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 	}
 
 	// 1. init writes a workspace-free GitHub scope with the hold route.
-	out := o.must(nil, "init", "--repo", "octo/widgets", "--scope", "eng", "--no-workspace", "--token", "file:github-token", "--holds")
+	out := o.must(nil, "init", "github", "--repo", "octo/widgets", "--scope", "eng", "--no-workspace", "--token", "file:github-token", "--holds")
 	config := filepath.Join(d.root, "xdg", "open-conduit", "config.json")
 	if !strings.Contains(out, "Saved "+config) || !strings.Contains(out, "workspace-free") {
 		t.Fatalf("init: %s", out)

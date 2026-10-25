@@ -13,7 +13,7 @@ Core gains only domain-free controls (rebind, hold/release, scope reconcile). Th
 These are the documented steps, which [`TestDaemonFreshInstallGitHubIssue`](../../integration/daemon_operator_test.go) runs end to end:
 
 ```sh
-open-conduit init --repo acme/web --scope web --checkout ~/Code/web   # or --no-workspace; --holds; --token REF
+open-conduit init github --repo acme/web --scope web --checkout ~/Code/web   # or --no-workspace; --holds; --token REF
 open-conduit secret set github-token                                   # only when the token is not cmd:gh auth token
 open-conduit config set /connections/github/secret_refs/token '"keyring:github-token"'
 open-conduit config check
@@ -22,7 +22,7 @@ open-conduit doctor --check-secrets
 open-conduit tui
 ```
 
-- **`init`** ports the v1 wizard's outcomes:
+- **`init`** lists the setups the registered extensions offer, and **`init <type>`** runs one (04-02: setup is extension-owned; see [Extension-owned setup](#extension-owned-setup-04-02)). **`init github`** ports the v1 wizard's outcomes:
   - It detects the current directory's GitHub remote (v1 found-git).
   - It adds one scope for a repository: a `github` connection (default secret `cmd:gh auth token`), an agent binding on `claude-code` with the GitHub tools, the `github` route, and the `github-hold` binding and route with `--holds`.
   - It adds a `git` work resource only when there is a checkout. `--no-workspace` writes a workspace-free scope whose turns run in a private directory.
@@ -44,7 +44,7 @@ open-conduit tui
 - **`init --with claude`** ports v1 `init --with`:
   - The setup guide ([`playbooks.Setup`](../../extensions/github/playbooks/setup/setup.md)) is written as its own one-skill plugin under `<state>/playbooks/setup`, apart from the turn plugin.
   - The command is an interactive `claude /open-conduit:setup --plugin-dir … --allowedTools …` with `OPEN_CONDUIT_CONFIG` set.
-  - Only `open-conduit config`, `doctor`, `health`, `secret path` and `init --dry-run` are pre-allowed, and `OS_*` credentials are removed from the environment.
+  - Only `open-conduit config`, `doctor`, `health`, `secret path` and `init github --dry-run` are pre-allowed, and `OS_*` credentials are removed from the environment.
   - The guide now teaches `init`, `config set`, `secret set`, webhooks, permissions, dry run and the TUI controls. Its example config still validates against the daemon registry.
 
 A schema-driven interactive editor (v1 `forms`/editor) is not ported. The commands above cover its outcomes: validated edits, add/remove bindings, references for secrets and handwritten routes kept. The full-screen editor is deferred to 06-01.
@@ -162,3 +162,18 @@ make check && GOTOOLCHAIN=go1.24.2 make check && make cross-build && make drill
 - **Rebind and reload.** A rebind takes effect at the next scheduling decision, which pins the binding from the generation the scheduler runs.
 
 04-01 update: the webhook listener also mounts `POST /slack/<scope>/<entry>` for Slack entries with `receiver: http`. The default Slack receiver is Socket Mode, which needs no listener or tunnel; see the [Slack extension](slack-extension.md), including the intended setup flow (04-02): a generic optional extension `Setup` hook that core `init <type>` dispatches to, with core supplying only the setup host.
+
+## Extension-owned setup (04-02)
+
+Setup moved out of core CLI. The public, optional [`extension.Setup`](../../extension/setup.go) contract has two methods. `SetupInfo` gives the type, a summary and a usage line. `Setup(ctx, host, args)` returns a `SetupResult`: connections, one scope, summary lines and next steps.
+
+`open-conduit init` lists the registered setups. `init <type> [flags]` runs one. Core keeps only the host:
+
+- **Its own flags.** `--config`, `--force`, `--dry-run` and `--with` are removed wherever they appear; every other argument goes to the extension.
+- **The `SetupHost`.** It offers prompts (a secret prompt does not echo on a terminal), a numbered choice, a browser opener and a `LookPath`. It runs a helper command attached to the terminal. `StoreSecret` uses the `secret set` store (keyring, else the owner-only `secrets.json`) and returns only the reference. A dry run stores nothing and returns the reference it would use.
+- **Merge and save.** `MergeSetup` keeps an existing connection with the same id and replaces a scope only with `--force`. The result is validated offline against the daemon registry, then saved 0600 (or printed with `--dry-run`).
+
+An `extension.ErrSetupUsage` refusal is a usage error (exit 2).
+
+The entrypoint injects the setups through `cli.Env.Setups` (`bootstrap.Setups()`: GitHub and Slack). `internal/cli` imports no extension. The B01 checker already forbids it, and `scripts/check-boundaries` now has explicit direct and transitive cases for core CLI and TUI. The GitHub init (remote detection, `ScopeConfig`, tool lists) lives in [`extensions/github/setup.go`](../../extensions/github/setup.go) as `init github`, with the same flags and behavior. Slack's setup is described in the [Slack extension](slack-extension.md#setup-init-slack).
+

@@ -12,11 +12,18 @@ import (
 
 // BotScopes are the bot token scopes the app is granted. The extension calls
 // conversations.history and conversations.replies (channels:history,
-// groups:history), chat.postMessage (chat:write) and auth.test (none);
-// channels:read, groups:read, users:read, reactions:write and
-// app_mentions:read are granted for the setup channel picker, names and
+// groups:history), chat.postMessage (chat:write), auth.test (none) and, in
+// setup, users.conversations (channels:read, groups:read).
+// metadata.message:read lets history and replies return the reply marker
+// (message metadata) to this token, so marker recovery does not depend on the
+// bot-user/text fallback (04-02 decision; see the extension doc). users:read,
+// reactions:write and app_mentions:read are granted for names and
 // acknowledgements, and are not required by this extension's calls.
-var BotScopes = []string{"channels:history", "groups:history", "channels:read", "groups:read", "chat:write", "reactions:write", "users:read", "app_mentions:read"}
+var BotScopes = []string{"channels:history", "groups:history", "channels:read", "groups:read", "chat:write", "metadata.message:read", "reactions:write", "users:read", "app_mentions:read"}
+
+// MarkerScope is the scope that lets reads return reply markers. A token
+// without it still works through the text fallback; doctor reports it.
+const MarkerScope = "metadata.message:read"
 
 // BotEvents are the subscribed bot events. Push observes `message` events
 // from public and private channels; app_mention duplicates a message event
@@ -33,6 +40,7 @@ var MethodScopes = map[string][]string{
 	"conversations.history": {"channels:history", "groups:history"},
 	"conversations.replies": {"channels:history", "groups:history"},
 	"chat.postMessage":      {"chat:write"},
+	"users.conversations":   {"channels:read", "groups:read"},
 	"auth.test":             {},
 }
 

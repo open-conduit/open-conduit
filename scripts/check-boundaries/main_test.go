@@ -29,6 +29,12 @@ func TestDependencyClosures(t *testing.T) {
 		{"executor_sqlite_leak", []pkg{project("executors/shell", "internal/storage/sqlite")}, "internal/storage/sqlite"},
 		{"telemetry_uses_contracts", []pkg{project("internal/telemetry", "observability"), project("observability", "domain")}, ""},
 		{"telemetry_runtime_leak", []pkg{project("internal/telemetry", "internal/runtime")}, "internal/runtime"},
+		// Setup is extension-owned (04-02): core CLI hosts extension.Setup
+		// values injected by the entrypoint and never imports an extension.
+		{"cli_hosts_setup_contract", []pkg{project("internal/cli", "extension", "client"), project("extension", "domain"), project("client", "domain")}, ""},
+		{"cli_cannot_import_github", []pkg{project("internal/cli", "extensions/github")}, "extensions/github"},
+		{"cli_cannot_import_slack_transitively", []pkg{project("internal/cli", "client"), project("client", "extensions/slack")}, "extensions/slack"},
+		{"tui_cannot_import_extension", []pkg{project("internal/tui", "extensions/slack")}, "extensions/slack"},
 		{"os_cannot_carry_tui", []pkg{project("cmd/os", "internal/cli"), project("internal/cli", "internal/tui")}, "internal/tui"},
 		{"backup_runtime_leak", []pkg{project("internal/backup", "internal/runtime")}, "internal/runtime"},
 		{"unknown_package_leak", []pkg{project("newpackage", "domain")}, "domain"},

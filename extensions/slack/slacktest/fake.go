@@ -39,6 +39,8 @@ type Server struct {
 	events   int
 
 	noMeta    bool
+	scopes    []string          // nil: the manifest's BotScopes
+	members   map[string]string // channel ID -> name the bot is a member of
 	appTokens map[string]bool
 	sockets   []*socket
 	connects  int
@@ -56,6 +58,20 @@ func New(team string, tokens ...string) *Server {
 	s.srv = httptest.NewServer(http.HandlerFunc(s.serve))
 	s.URL = s.srv.URL + "/api"
 	return s
+}
+
+// SetScopes sets the bot token's granted scopes auth.test reports (nil: the
+// manifest's).
+func (s *Server) SetScopes(scopes []string) { s.mu.Lock(); s.scopes = scopes; s.mu.Unlock() }
+
+// AddMember makes the bot a member of a channel (users.conversations).
+func (s *Server) AddMember(channel, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.members == nil {
+		s.members = map[string]string{}
+	}
+	s.members[channel] = name
 }
 
 // Close stops the server and its sockets.
@@ -320,6 +336,22 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	switch method {
 	case "auth.test":
 		answer = apiAnswer{"ok": true, "team_id": s.Team, "team": "Fake", "user_id": s.botUser, "bot_id": s.botID}
+		scopes := s.scopes
+		if scopes == nil {
+			scopes = slack.BotScopes
+		}
+		w.Header().Set("X-OAuth-Scopes", strings.Join(scopes, ","))
+	case "users.conversations":
+		ids := make([]string, 0, len(s.members))
+		for id := range s.members {
+			ids = append(ids, id)
+		}
+		sort.Strings(ids)
+		list := []map[string]any{}
+		for _, id := range ids {
+			list = append(list, map[string]any{"id": id, "name": s.members[id], "is_private": strings.HasPrefix(id, "G")})
+		}
+		answer = apiAnswer{"ok": true, "channels": list, "response_metadata": map[string]any{"next_cursor": ""}}
 	case "conversations.history":
 		_ = r.ParseForm()
 		answer = s.history(r)
