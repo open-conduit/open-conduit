@@ -212,6 +212,30 @@ func TestPushAndReconcileAgreeForEveryFamily(t *testing.T) {
 	sameIdentity(t, "status", o, scanned["pr/"+strconv.Itoa(pr)+"/checks"])
 }
 
+// A review with no body (GitHub wraps every inline comment and reply in one,
+// the agent's own replies included) is observed by neither push nor
+// reconcile: on the real sandbox (03-06) it was classified human and woke a
+// waiting agent after each of its own replies, a wake loop. v1 kept only
+// reviews with a body.
+func TestEmptyReviewIsNotObserved(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	fk.OpenIssue("Header", "wobbles", alice, "bug")
+	pr := fk.OpenPull("Blue header", "Closes #1", "feature/blue", "sha1", alice)
+	empty := fk.AddReview(pr, alice, "COMMENTED", "")
+	approved := fk.AddReview(pr, alice, "APPROVED", "  ")
+	scanned := f.scan(t)
+	for _, id := range []int64{empty, approved} {
+		item := "pr/" + strconv.Itoa(pr) + "/review/" + strconv.FormatInt(id, 10)
+		if _, ok := scanned[item]; ok {
+			t.Fatalf("reconcile observed the bodiless review %s", item)
+		}
+		if res := f.push(t, "pull_request_review", "d-empty-"+strconv.FormatInt(id, 10), fk.ReviewHook("submitted", pr, id)); len(res.Observations) != 0 {
+			t.Fatalf("push observed the bodiless review %s: %+v", item, res.Observations)
+		}
+	}
+}
+
 func TestRawDeliveryIsDeclaredOneShot(t *testing.T) {
 	f := newFixture(t, "")
 	res := f.push(t, "push", "d-push", f.fake.PushHook("refs/heads/main", "a", "b", "README.md"))

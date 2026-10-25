@@ -22,6 +22,17 @@ func TestVerifyReportsAccess(t *testing.T) {
 	if a, err = client.Verify(context.Background(), "octo/widgets"); err != nil || !a.Known || !a.Push || a.Admin {
 		t.Fatalf("verify: %+v %v", a, err)
 	}
+	if a.Checks != "check_runs" {
+		t.Fatalf("checks access %q", a.Checks)
+	}
+	fake.RefuseCheckRuns(true)
+	if a, _ = client.Verify(context.Background(), "octo/widgets"); a.Checks != "workflow_runs" {
+		t.Fatalf("fine-grained token with Actions read: %q", a.Checks)
+	}
+	fake.RefuseCheckRuns(false)
+	if a, _ = client.Verify(context.Background(), "octo/widgets"); a.Checks != "unreadable" {
+		t.Fatalf("fine-grained token without Actions read: %q", a.Checks)
+	}
 	fake.RevokeToken("tok")
 	if _, err = client.Verify(context.Background(), "octo/widgets"); !IsStatus(err, http.StatusUnauthorized) {
 		t.Fatalf("revoked token: %v", err)

@@ -187,7 +187,7 @@ func (g *Ingress) pushObservations(ctx context.Context, n *normalizer, event str
 		n.remember(*p.PullRequest)
 		return one(n.pullObservation(ctx, *p.PullRequest))
 	case "pull_request_review":
-		if p.PullRequest == nil || p.Review == nil || p.Review.State == "PENDING" || strings.EqualFold(p.Review.State, "pending") {
+		if p.PullRequest == nil || p.Review == nil || p.Review.State == "PENDING" || strings.EqualFold(p.Review.State, "pending") || strings.TrimSpace(p.Review.Body) == "" {
 			return nil, nil
 		}
 		n.remember(*p.PullRequest)

@@ -290,6 +290,15 @@ func (d *daemon) githubAuthCheck(ctx context.Context) runtime.Check {
 		if a.Writer {
 			notes = append(notes, "bot writer authenticated")
 		}
+		switch a.Checks {
+		case "workflow_runs":
+			notes = append(notes, "check runs refused (a fine-grained token cannot hold Checks): CI is read from Actions workflow runs and commit statuses")
+		case "unreadable":
+			if check.Status == runtime.CheckOK {
+				check.Status, check.Code = runtime.CheckWarn, "checks_unreadable"
+			}
+			notes = append(notes, "neither check runs nor Actions workflow runs are readable: only commit statuses are seen and no-checks is never reported; grant Actions: read or use a GitHub App")
+		}
 		check.Items = append(check.Items, item+strings.Join(notes, "; "))
 	}
 	sort.Strings(check.Items)

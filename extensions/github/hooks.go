@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 )
@@ -26,6 +27,11 @@ type Access struct {
 	Writer bool
 	// DefaultBranch is the repository's default branch.
 	DefaultBranch string
+	// Checks is how CI results can be read: "check_runs", "workflow_runs"
+	// (check runs refused, as for a fine-grained token, which cannot hold the
+	// Checks permission; Actions workflow runs stand in) or "unreadable"
+	// (only commit statuses). Empty when the probe could not tell.
+	Checks string
 }
 
 // Verify authenticates both identities and reads the repository: the doctor
@@ -42,6 +48,21 @@ func (c *Client) Verify(ctx context.Context, repo string) (Access, error) {
 	if out.Permissions != nil {
 		p := *out.Permissions
 		a.Known, a.Pull, a.Push, a.Admin = true, p["pull"], p["push"] || p["maintain"] || p["admin"], p["admin"]
+	}
+	if out.DefaultBranch != "" {
+		_, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/commits/%s/check-runs?per_page=1", url.PathEscape(out.DefaultBranch)), nil, nil)
+		switch {
+		case err == nil:
+			a.Checks = "check_runs"
+		case IsStatus(err, http.StatusForbidden):
+			_, err = c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/actions/runs?per_page=1"), nil, nil)
+			switch {
+			case err == nil:
+				a.Checks = "workflow_runs"
+			case IsStatus(err, http.StatusForbidden) || IsStatus(err, http.StatusNotFound):
+				a.Checks = "unreadable"
+			}
+		}
 	}
 	if c.write != c.read {
 		if _, err := c.call(ctx, true, repo, http.MethodGet, "/repos/"+repo, nil, nil); err != nil {

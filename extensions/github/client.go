@@ -366,8 +366,33 @@ func (c *Client) Reviews(ctx context.Context, repo string, n int) ([]rawComment,
 	return all[rawComment](ctx, c, repo, repoPath(repo, "/pulls/%d/reviews", n))
 }
 
-// checkState reads a commit's check runs and combined statuses.
-func (c *Client) checkState(ctx context.Context, repo, sha string) ([]rawCheckRun, []rawStatus, error) {
+// checkState reads a commit's check runs and combined statuses. A
+// fine-grained personal access token cannot be granted the Checks permission,
+// so GitHub refuses check runs with an ordinary 403. Then the commit's GitHub
+// Actions workflow runs (Actions: read) stand in for its check runs; when
+// those are refused as well, unreadable reports that the commit's runs could
+// not be read at all, and only its statuses are known. A rate limit is never
+// treated as a refusal.
+func (c *Client) checkState(ctx context.Context, repo, sha string) (runs []rawCheckRun, statuses []rawStatus, unreadable bool, err error) {
+	if runs, err = c.checkRuns(ctx, repo, sha); IsStatus(err, http.StatusForbidden) {
+		runs, err = c.workflowRuns(ctx, repo, sha)
+		if IsStatus(err, http.StatusForbidden) || IsStatus(err, http.StatusNotFound) {
+			runs, err, unreadable = nil, nil, true
+		}
+	}
+	if err != nil {
+		return nil, nil, false, err
+	}
+	var status struct {
+		Statuses []rawStatus `json:"statuses"`
+	}
+	if _, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/commits/%s/status", url.PathEscape(sha)), nil, &status); err != nil {
+		return nil, nil, false, err
+	}
+	return runs, status.Statuses, unreadable, nil
+}
+
+func (c *Client) checkRuns(ctx context.Context, repo, sha string) ([]rawCheckRun, error) {
 	var runs []rawCheckRun
 	for n := 1; n <= 20; n++ {
 		var pageRuns struct {
@@ -375,23 +400,55 @@ func (c *Client) checkState(ctx context.Context, repo, sha string) ([]rawCheckRu
 			CheckRuns  []rawCheckRun `json:"check_runs"`
 		}
 		if _, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/commits/%s/check-runs?per_page=100&page=%d", url.PathEscape(sha), n), nil, &pageRuns); err != nil {
-			return nil, nil, err
+			return nil, err
 		}
 		runs = append(runs, pageRuns.CheckRuns...)
 		if len(pageRuns.CheckRuns) < 100 || len(runs) >= pageRuns.TotalCount {
 			break
 		}
 		if n == 20 {
-			return nil, nil, errors.New("github: check runs exceed the page bound")
+			return nil, errors.New("github: check runs exceed the page bound")
 		}
 	}
-	var status struct {
-		Statuses []rawStatus `json:"statuses"`
+	return runs, nil
+}
+
+// workflowRuns reads the GitHub Actions workflow runs for a head commit as
+// check runs (name, status, conclusion and link), the fallback when check
+// runs are refused.
+func (c *Client) workflowRuns(ctx context.Context, repo, sha string) ([]rawCheckRun, error) {
+	var runs []rawCheckRun
+	for n := 1; n <= 20; n++ {
+		var page struct {
+			TotalCount int `json:"total_count"`
+			Runs       []struct {
+				ID         int64      `json:"id"`
+				Name       string     `json:"name"`
+				Status     string     `json:"status"`
+				Conclusion string     `json:"conclusion"`
+				HTMLURL    string     `json:"html_url"`
+				StartedAt  *time.Time `json:"run_started_at"`
+				UpdatedAt  *time.Time `json:"updated_at"`
+			} `json:"workflow_runs"`
+		}
+		if _, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/actions/runs?head_sha=%s&per_page=100&page=%d", url.QueryEscape(sha), n), nil, &page); err != nil {
+			return nil, err
+		}
+		for _, r := range page.Runs {
+			run := rawCheckRun{ID: r.ID, Name: r.Name, Status: r.Status, Conclusion: r.Conclusion, HTMLURL: r.HTMLURL, StartedAt: r.StartedAt}
+			if r.Status == "completed" {
+				run.CompletedAt = r.UpdatedAt
+			}
+			runs = append(runs, run)
+		}
+		if len(page.Runs) < 100 || len(runs) >= page.TotalCount {
+			break
+		}
+		if n == 20 {
+			return nil, errors.New("github: workflow runs exceed the page bound")
+		}
 	}
-	if _, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/commits/%s/status", url.PathEscape(sha)), nil, &status); err != nil {
-		return nil, nil, err
-	}
-	return runs, status.Statuses, nil
+	return runs, nil
 }
 
 // pullsForCommit lists the PRs whose head (or history) includes sha.

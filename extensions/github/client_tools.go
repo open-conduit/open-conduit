@@ -97,8 +97,10 @@ func (c *Client) ReplyReview(ctx context.Context, repo string, n int, commentID 
 	return out, err
 }
 
-// CheckState reads a commit's check runs and statuses.
-func (c *Client) CheckState(ctx context.Context, repo, sha string) ([]rawCheckRun, []rawStatus, error) {
+// CheckState reads a commit's check runs (or, when those are refused, its
+// Actions workflow runs) and statuses; unreadable reports that neither kind of
+// run could be read.
+func (c *Client) CheckState(ctx context.Context, repo, sha string) ([]rawCheckRun, []rawStatus, bool, error) {
 	return c.checkState(ctx, repo, sha)
 }
 

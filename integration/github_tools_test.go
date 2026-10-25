@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -761,6 +762,44 @@ func TestGitHubNoChecksRanIsObserved(t *testing.T) {
 	if e.countType(gh.TypeChecksNone) != before {
 		t.Fatal("no-checks observed twice for one head")
 	}
+}
+
+// A fine-grained personal access token cannot hold the Checks permission,
+// so GitHub refuses check runs with an ordinary 403 (seen on the real sandbox
+// in 03-06, where it failed every reconcile once a PR existed). Reconcile must
+// keep working: Actions workflow runs stand in for check runs when readable;
+// when they are refused too, nothing is observed for the head (never a false
+// "No checks ran") and the checks tool says why.
+func TestGitHubChecksWithoutTheChecksPermission(t *testing.T) {
+	t.Run("workflow runs stand in", func(t *testing.T) {
+		e := newToolsEnv(t)
+		_, w := e.claim("CI via Actions", "", "bug")
+		e.fake.OpenPull("Change", "", "agent/issue-1", "h1", ghAlice)
+		e.fake.SetCheck("h1", "build", "completed", "success")
+		e.fake.RefuseCheckRuns(true)
+		e.sync()
+		if q := e.queued(w.ID); len(q) == 0 || q[len(q)-1] != gh.TypeChecksPassed {
+			t.Fatalf("queued: %v", q)
+		}
+	})
+	t.Run("nothing readable", func(t *testing.T) {
+		e := newToolsEnv(t)
+		_, w := e.claim("No readable CI", "", "bug")
+		pr := e.fake.OpenPull("Change", "", "agent/issue-1", "h1", ghAlice)
+		e.fake.RefuseCheckRuns(false)
+		e.sync()
+		e.clock.Add(11 * time.Minute)
+		e.sync()
+		if n := e.countType(gh.TypeChecksNone); n != 0 {
+			t.Fatalf("no-checks reported although check runs are unreadable (%d)", n)
+		}
+		a := e.start(w.ID)
+		out := e.must(a, gh.OpChecks, "", map[string]any{"number": pr})
+		if out["state"] != "unknown" || !strings.Contains(fmt.Sprint(out["note"]), "Checks permission") {
+			t.Fatalf("checks tool: %v", out)
+		}
+		e.finish(a, nil)
+	})
 }
 
 // A tool comment or issue whose response is lost is never written twice:

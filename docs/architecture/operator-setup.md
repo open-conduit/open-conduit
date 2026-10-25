@@ -114,7 +114,8 @@ Webhooks are an accelerator: reconcile always runs, so with no listener the daem
 
 That maps to these grants:
 
-- **Fine-grained token or GitHub App.** Issues, Pull requests and Contents read/write; Checks, Commit statuses and Metadata read; Webhooks read/write for `manage_webhook`.
+- **Fine-grained token.** Issues, Pull requests and Contents read/write; Commit statuses, Metadata and Actions read; Webhooks read/write for `manage_webhook`. A fine-grained token cannot be granted Checks. CI is then read from Actions workflow runs and commit statuses, and doctor says so (03-06).
+- **GitHub App.** The same, plus Checks read.
 - **Classic token.** `repo`, plus `admin:repo_hook` for `manage_webhook`.
 - **Bot App (`bot_app_id`).** It performs the writes and needs only the write permissions.
 

@@ -114,33 +114,36 @@ type Server struct {
 	*httptest.Server
 	Repo string
 
-	mu        sync.Mutex
-	now       time.Time
-	nextID    int64
-	issues    map[int]*Issue
-	pulls     map[int]*Pull
-	comments  []*Comment
-	events    map[int][]IssueEvent
-	checks    map[string][]CheckRun
-	statuses  map[string][]Status
-	tokens    map[string]bool
-	apps      map[string]*rsa.PublicKey
-	installs  map[string]string // installation token → app id
-	writes    []Write
-	requests  []string
-	notMod    int
-	limitNext []limit
-	failNext  map[string]int
-	loseNext  map[string]int
-	tokenTTL  time.Duration
-	issued    int
-	commits   map[string]time.Time
-	contents  map[string][]byte // attachments branch path → content
-	branches  map[string]bool
-	files     map[string]string // /files/<name> → redirect target
-	fileData  map[string][]byte
-	hooks     []*Hook
-	perms     map[string]bool
+	mu       sync.Mutex
+	now      time.Time
+	nextID   int64
+	issues   map[int]*Issue
+	pulls    map[int]*Pull
+	comments []*Comment
+	events   map[int][]IssueEvent
+	checks   map[string][]CheckRun
+	// refuseRuns makes check runs an ordinary 403 (a fine-grained token);
+	// refuseActions does the same for Actions workflow runs.
+	refuseRuns, refuseActions bool
+	statuses                  map[string][]Status
+	tokens                    map[string]bool
+	apps                      map[string]*rsa.PublicKey
+	installs                  map[string]string // installation token → app id
+	writes                    []Write
+	requests                  []string
+	notMod                    int
+	limitNext                 []limit
+	failNext                  map[string]int
+	loseNext                  map[string]int
+	tokenTTL                  time.Duration
+	issued                    int
+	commits                   map[string]time.Time
+	contents                  map[string][]byte // attachments branch path → content
+	branches                  map[string]bool
+	files                     map[string]string // /files/<name> → redirect target
+	fileData                  map[string][]byte
+	hooks                     []*Hook
+	perms                     map[string]bool
 }
 
 // Hook is a repository webhook.
@@ -478,6 +481,16 @@ func (s *Server) RateLimitPrimary(reset time.Time) {
 func (s *Server) RateLimitSecondary(retryAfter int) {
 	s.mu.Lock()
 	s.limitNext = append(s.limitNext, limit{status: http.StatusForbidden, retryAfter: retryAfter, message: "You have exceeded a secondary rate limit"})
+	s.mu.Unlock()
+}
+
+// RefuseCheckRuns makes every check-runs read an ordinary 403, as GitHub
+// answers a fine-grained personal access token (which cannot hold the Checks
+// permission). With actions false, Actions workflow runs are refused too;
+// otherwise they serve the same runs as workflow runs.
+func (s *Server) RefuseCheckRuns(actions bool) {
+	s.mu.Lock()
+	s.refuseRuns, s.refuseActions = true, !actions
 	s.mu.Unlock()
 }
 
@@ -1141,6 +1154,24 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 			list = append(list, reviewJSON(rv, s.web(p.Number)))
 		}
 		return http.StatusOK, paged(r, list)
+	}
+	if rest == "/actions/runs" && get {
+		if s.refuseActions {
+			return http.StatusForbidden, map[string]any{"message": "Resource not accessible by personal access token"}
+		}
+		runs := []map[string]any{}
+		for _, c := range s.checks[r.URL.Query().Get("head_sha")] {
+			var conclusion any
+			if c.Conclusion != "" {
+				conclusion = c.Conclusion
+			}
+			runs = append(runs, map[string]any{"id": c.ID, "name": c.Name, "status": c.Status, "conclusion": conclusion, "html_url": s.URL + "/actions/runs/" + strconv.FormatInt(c.ID, 10),
+				"run_started_at": ts(c.Started), "updated_at": ts(c.Started)})
+		}
+		return http.StatusOK, map[string]any{"total_count": len(runs), "workflow_runs": runs}
+	}
+	if x := reCheckRuns.FindStringSubmatch(rest); x != nil && get && s.refuseRuns {
+		return http.StatusForbidden, map[string]any{"message": "Resource not accessible by personal access token"}
 	}
 	if x := reCheckRuns.FindStringSubmatch(rest); x != nil && get {
 		var runs []map[string]any

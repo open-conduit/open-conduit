@@ -169,10 +169,32 @@ Intentional differences: one wake ends a wait (the agent waits again), and `--ca
   - keyring `secret set`;
   - a real usage limit (`resets 3pm (Europe/London)` parsed to 15:00Z, retry at the reset plus 2 minutes).
 - **B04 regression fixed.** A consumed interjection started another attempt; v1 `TestInterjectionReachesTheRunningTurn` forbids that. Contract fix: a finished result may carry the consumption proof `extension.Result.ConsumedInputs`. Core consumes only inputs it injected into that execution through an accepted intent. The claude-code executor reports echoed injections. Regressions: `TestProductionSchedulerInjectConsumptionProof` and the updated `TestDaemonClaudeCodeExecution`.
-- **Pending: all real GitHub evidence.** The supplied credentials could not create the controlled sandbox repository, so none of the following ran:
-  - real claims, labels, comments and tools;
-  - webhooks and tunnels, reconcile-only operation and dry run;
-  - marker recovery and reopen;
-  - feedback comments with reactions;
-  - a real GitHub rate limit;
-  - the v1 cost comparison.
+- **Real GitHub** (private sandbox, fine-grained token, single identity). Items demonstrated:
+  - `init`, keyring secrets, and doctor (`github_auth verified`, `claude_code installed`).
+  - `serve --dry-run`: claimed and ran a haiku stub with no GitHub writes.
+  - Reconcile-only claims, including held follow-ups.
+  - A manual claim of a skip-labelled issue.
+  - Claim, status and drift-repair labels.
+  - Marked outcome and tool comments, with `+1` acknowledgements on human comments.
+  - Every `github.*` tool: PR create with `Closes #N`, inline reply, attachment upload and signed private fetch, notes, held follow-ups.
+  - `github.wait` on a PR merge.
+  - A merge-released hold and a time-released hold.
+  - A cross-scope `issue:sandbox/1:finished` turn wait.
+  - No-checks on a repository without CI.
+  - The injection consumed with no extra turn.
+  - A cold handoff draw, with the blinded question posted and a real `+1` read as `maintained`, and the trial ended by `finished`.
+  - The PR merge closing the issue.
+  - A reopened issue starting a successor generation.
+  - A `manage_webhook` hook created and re-pointed after a restart.
+  - Real signed GitHub deliveries accepted with 202, with webhook/reconcile overlap deduplicated.
+- **Two GitHub regressions fixed.**
+  - **Check runs refused.** A fine-grained token cannot hold Checks, so check-run reads got a 403 and every reconcile failed once a PR existed. The fix reads Actions workflow runs instead, falls back to statuses only, never reports a false no-checks, and adds a doctor note.
+  - **Bodiless reviews.** Reviews without a body (GitHub wraps every inline comment and reply, the agent's own included) were observed as human comments and woke waits in a loop. They are no longer observed, matching v1.
+- **Pending.**
+  - A tunnel-delivered webhook: a second ngrok session would collide with v1's single free endpoint.
+  - Real marker recovery of an ambiguous comment (fixture and kill drill only).
+  - A real rate limit.
+  - App auth and check runs read through an App.
+  - A `github.wait` timeout (the timer path was shown by the time hold).
+  - A second human identity.
+  - The v1 cost comparison.

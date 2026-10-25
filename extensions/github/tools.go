@@ -715,13 +715,19 @@ func (t *Tools) checks(ctx context.Context, b *bound, data json.RawMessage) (any
 			return nil, refuse("no_open_pr", "the issue has no open PR")
 		}
 	}
-	runs, statuses, err := c.CheckState(ctx, repo, p.Head.SHA)
+	runs, statuses, unreadable, err := c.CheckState(ctx, repo, p.Head.SHA)
 	if err != nil {
 		return nil, err
 	}
 	n := &normalizer{s: b.code.Settings, c: c, m: newMemo()}
 	n.remember(p)
 	out := map[string]any{"pr": p.Number, "sha": p.Head.SHA, "state": "no checks", "runs": []CheckRun{}}
+	if unreadable {
+		out["note"] = "this connection cannot read check runs or workflow runs (a fine-grained token has no Checks permission; grant Actions: read or use a GitHub App), so only commit statuses are shown"
+		if len(statuses) == 0 {
+			out["state"] = "unknown"
+		}
+	}
 	if o, ok, err := n.checksObservation(ctx, p, runs, statuses); err != nil {
 		return nil, err
 	} else if ok {

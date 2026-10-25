@@ -677,11 +677,17 @@ func (n *normalizer) checksForPull(ctx context.Context, p rawPull) (extension.Ob
 	if p.State != "open" || p.Head.SHA == "" {
 		return extension.Observation{}, false, nil
 	}
-	runs, statuses, err := n.c.checkState(ctx, n.s.Repo, p.Head.SHA)
+	runs, statuses, unreadable, err := n.c.checkState(ctx, n.s.Repo, p.Head.SHA)
 	if err != nil {
 		return extension.Observation{}, false, err
 	}
 	if len(runs)+len(statuses) == 0 {
+		if unreadable {
+			// Neither check runs nor workflow runs are readable with this
+			// credential, so "no checks" cannot be told apart from checks
+			// it may not see: observe nothing rather than a false none.
+			return extension.Observation{}, false, nil
+		}
 		return n.noChecksObservation(ctx, p)
 	}
 	return n.checksObservation(ctx, p, runs, statuses)
@@ -723,7 +729,12 @@ func (n *normalizer) reviewObservations(ctx context.Context, p rawPull) ([]exten
 	}
 	var out []extension.Observation
 	for _, r := range reviews {
-		if r.State == "PENDING" || r.ID == 0 {
+		// A review without a body carries nothing to read (its inline
+		// comments are observed on their own). GitHub creates one around
+		// every inline comment and reply, including the agent's own, so
+		// observing it would wake waits with nothing (v1 Comments keeps
+		// only reviews with a body).
+		if r.State == "PENDING" || r.ID == 0 || strings.TrimSpace(r.Body) == "" {
 			continue
 		}
 		o, err := n.commentObservation(KindReview, p.Number, r, key)

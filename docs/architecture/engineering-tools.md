@@ -86,6 +86,11 @@ Projections (v1): held Work carries only `scheduled` (not claimed) until its fir
 
 ## Checks timing
 
+- **Checks without the Checks permission (03-06).** A fine-grained personal access token cannot be granted Checks, and GitHub answers its check-run reads with an ordinary 403. On the real sandbox that failed every reconcile once a PR existed. Now:
+  - The client falls back to the head's GitHub Actions workflow runs (Actions: read).
+  - When those are refused too, only commit statuses are evaluated, and a head with nothing readable is never reported as having no checks.
+  - The `github.checks` tool returns state `unknown` with a note.
+  - Doctor's `github_auth` reports `workflow_runs` as a note and `checks_unreadable` as a warning. A GitHub App covers check runs fully.
 - **No checks.** `github.checks.none` replaces v1's no-checks event. An open PR head with no runs or statuses is observed as having no checks once its commit is older than `no_checks_minutes` (default 10; `-1` disables). The occurrence is the commit time plus the delay, so it is deterministic for push and reconcile. The route delivers it, and the renderer prints v1's "No checks ran" text. A failed commit read observes nothing rather than failing a scan.
 - **No debounce.** v1's 20-second debounce is intentionally not ported. Deliveries are state-versioned aggregates, so repeated evaluations of one head state deduplicate. A check suite that starts after the others completed can still produce an early `passed`, as it could in v1 beyond 20 seconds.
 
@@ -116,4 +121,4 @@ go test -race -run 'TestTranslatedWait|TestGitHubTools|TestGitHubWait|TestGitHub
 
 - **Fixtures only.** No real GitHub write or real Claude Code session ran. Real-issue evidence of the tools, waits and holds is 03-06.
 - **Not ported yet.** Job waits wait for 05-02 (`jobs_unavailable` until then). A hold condition nothing here can meet (a job, an unknown project) leaves only the hold's time; with no time the issue starts at once and its first turn says why, rather than being held for ever. Sweep and triage consume `github.notes` in 05-03. The setup command and operator controls are delivered by 03-05 ([operator setup](operator-setup.md)).
-- **Intentional differences from v1.** One wake ends a wait, so the agent waits again. There is no `--cancel`. The checks debounce is gone. Inject consumption is still 04-02, so an injected comment may be listed again (the playbook says so).
+- **Intentional differences from v1.** One wake ends a wait, so the agent waits again. There is no `--cancel`. The checks debounce is gone. Since 03-06 an injected comment that claude echoed is consumed with its turn (`Result.ConsumedInputs`). One accepted too late to be echoed may still be listed again, and the playbook says not to act on it twice.
