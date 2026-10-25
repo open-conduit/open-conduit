@@ -2,7 +2,7 @@
 
 Decision B04 · ticket 01-04. This resolves the runtime choices left by [B02](domain-storage.md) and [B03](extensions.md). Normative “must” requirements apply to stage 02 implementations. The executable specification is [the shared runtime suite](../../conformance/runtime_cases.go), using [a public test adapter](../../conformance/runtime.go) and [a volatile reference coordinator](../../conformance/reference/runtime.go). Route handlers use [the public extension contract](../../extension/routing.go). No production scheduler, daemon or backend is delivered here.
 
-Run `go test -race ./...`, `go vet ./...` and `go build ./...`. Tests use explicit clocks and channel barriers; wall-clock deadlines only detect a stalled test. The suite must be adapted to the real runtime in 02-03–02-05, then rerun through SQLite reopen and process boundaries in 02-09. Passing this reference does not prove process control, throughput, durability or real service parity.
+Run `go test -race ./...`, `go vet ./...` and `go build ./...`. Tests use explicit clocks and channel barriers; wall-clock deadlines only detect a stalled test. The suite must be adapted to the real runtime in 02-03–02-05, then rerun through SQLite reopen and process boundaries in 02-09 ([daemon kill drills](daemon-core-gate.md)). Passing this reference does not prove process control, throughput, durability or real service parity.
 
 ## Routing and ownership
 

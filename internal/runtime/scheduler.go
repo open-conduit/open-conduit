@@ -653,6 +653,13 @@ func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt,
 		}
 		attempt.Lease = ref
 		current.Epoch, current.Excluded, current.LaunchState = ref.Epoch, false, "recovering"
+		// An unapplied toolbelt declaration belongs to the segment being
+		// adopted (Recover never relaunches, and wait registration clears it
+		// before any resume). A crash between the declaration and the host's
+		// handshake must not drop it, so it moves to the recovering epoch.
+		if current.Declaration != nil {
+			current.Declaration.Epoch = ref.Epoch
+		}
 		if e = putAttemptState(tx, current); e != nil {
 			return e
 		}

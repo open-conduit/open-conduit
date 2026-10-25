@@ -27,6 +27,8 @@ type Env struct {
 	// TUI runs the interactive history view; the open-conduit entrypoint
 	// supplies it so the os toolbelt binary carries no terminal UI.
 	TUI func(*client.Client) error
+	// Serve runs the daemon; only the open-conduit entrypoint supplies it.
+	Serve func(ServeRequest) int
 }
 
 type operator struct {
@@ -48,6 +50,7 @@ const operatorHelp = `open-conduit — Open Conduit operator client
 Usage: open-conduit [--endpoint unix:///path] [--token-file PATH] [--socket PATH] [--data-dir DIR] COMMAND
 
 Commands:
+  serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m]
   health
   scopes list [--parent-id ID] [--enabled true|false] | scopes get ID
   work list [--scope-id --state --kind --parent-id] | work get ID
@@ -55,7 +58,7 @@ Commands:
   work cancel|retry ID --revision N [--reason TEXT] [--key K]
   work wake ID --revision N --type T --delivery-id D --key-source S --key-external-id X [--schema S --data JSON] [--key K]
   events list [--scope-id --work-id --type --after-sequence] | events get ID | events chain ID
-  events emit --scope-id S --type T --delivery-id D [--work-id W] [--causation-id E] [--schema S --data JSON] [--key K]
+  events emit --scope-id S --type T --delivery-id D [--key-source S --key-external-id X] [--work-id W] [--causation-id E] [--schema S --data JSON] [--key K]
   executions list [--scope-id --work-id --state] | executions get ID | executions cancel ID --revision N [--reason TEXT] [--key K]
   waits list [--scope-id --work-id --execution-id --state] | waits get ID
   artifacts list [--work-id --execution-id --kind] | artifacts cat ID [--range bytes=A-B]
@@ -107,7 +110,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui}
+	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "serve": o.serve}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.
@@ -364,10 +367,14 @@ func (o *operator) events(args []string) int {
 		return o.emit(c.EventChain(cx, args[1]))
 	}
 	if len(args) > 0 && args[0] == "emit" {
-		f := newFlags("emit", "scope-id", "type", "delivery-id", "work-id", "causation-id", "schema", "data", "key")
+		f := newFlags("emit", "scope-id", "type", "delivery-id", "work-id", "causation-id", "schema", "data", "key", "key-source", "key-external-id")
 		pos, err := f.parse(args[1:])
-		if err != nil || len(pos) != 0 {
+		if err != nil || len(pos) != 0 || (f.get("key-source") == "") != (f.get("key-external-id") == "") {
 			return usageError(o.errOut, "invalid events emit flags")
+		}
+		var correlation *client.Key
+		if f.get("key-source") != "" {
+			correlation = &client.Key{Source: f.get("key-source"), ExternalID: f.get("key-external-id")}
 		}
 		p, err := f.payload()
 		if err != nil {
@@ -379,7 +386,7 @@ func (o *operator) events(args []string) int {
 		}
 		cx, cancel := ctx()
 		defer cancel()
-		return o.emit(c.SubmitEvent(cx, client.EventRequest{ScopeID: f.get("scope-id"), Type: f.get("type"), DeliveryID: f.get("delivery-id"), WorkID: f.get("work-id"), CausationID: f.get("causation-id"), Data: p}, f.key()))
+		return o.emit(c.SubmitEvent(cx, client.EventRequest{ScopeID: f.get("scope-id"), Type: f.get("type"), DeliveryID: f.get("delivery-id"), WorkID: f.get("work-id"), CausationID: f.get("causation-id"), CorrelationKey: correlation, Data: p}, f.key()))
 	}
 	return o.listOrGet(args, []string{"scope-id", "work-id", "type", "after-sequence"}, func(c *client.Client, q url.Values) (any, error) {
 		cx, cancel := ctx()

@@ -744,6 +744,15 @@ func (t *Toolbelt) declareWaitInTx(tx storage.Tx, x domain.Execution, w domain.W
 	if len(request.Match.Keys) == 0 && len(request.Match.Types) == 0 {
 		return nil, extension.ErrInvalid
 	}
+	// A Wait is a subscription on its Work's keys (B04). A type-only request
+	// subscribes on every key the Work owns; Work without keys cannot wait, and
+	// is refused here rather than at the later registration handshake.
+	if len(request.Match.Keys) == 0 {
+		if len(w.CorrelationKeys) == 0 {
+			return nil, extension.ErrInvalid
+		}
+		request.Match.Keys = append([]domain.CorrelationKey(nil), w.CorrelationKeys...)
+	}
 	for _, key := range request.Match.Keys {
 		if !containsKey(w, key) {
 			return nil, extension.ErrUnauthorized

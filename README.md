@@ -19,6 +19,7 @@ The project is implementing the core after completing the contracts gate. Primit
 - [Toolbelt authority, configuration and local management](docs/architecture/toolbelt-management.md)
 - [Shell executor and CLI toolbelt](docs/architecture/shell-executor.md)
 - [Lifecycle telemetry, unified run history and doctor](docs/architecture/observability-history.md)
+- [Daemon composition and the core kill/restart gate](docs/architecture/daemon-core-gate.md)
 - [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)
 - [Pinned source test index](docs/baseline/source-tests.md)

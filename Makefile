@@ -5,7 +5,7 @@ VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short HEAD)
 LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
-.PHONY: build fmt fmt-check vet test boundaries config-check config-deps check cross-build smoke
+.PHONY: build fmt fmt-check vet test boundaries config-check config-deps check cross-build smoke drill
 
 build:
 	$(GO) build ./...
@@ -20,6 +20,7 @@ fmt-check:
 
 vet:
 	$(GO) vet ./...
+	$(GO) vet -tags faultinject ./internal/bootstrap ./cmd/open-conduit
 
 test:
 	$(GO) test -race ./...
@@ -55,3 +56,7 @@ cross-build:
 			CGO_ENABLED=0 GOOS=$$target_os GOARCH=$$target_arch $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/$$target_os-$$target_arch/$$binary ./cmd/$$binary; \
 		done; \
 	done
+
+# Stage 02 gate evidence: real daemon kill/restart drills (also part of test).
+drill:
+	$(GO) test -race -count=1 -v -run 'TestDaemon|TestServeCommand|TestToolbeltTypeOnlyWait|TestDeclarationSurvivesRecovery' ./integration

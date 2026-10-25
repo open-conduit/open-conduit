@@ -6,7 +6,7 @@ Ticket 02-08 implements the [B03 observability contract](extensions.md#required-
 - **Export** in [`internal/telemetry`](../../internal/telemetry): a buffered pipeline, the OpenTelemetry mapping and a local JSON log exporter.
 - **Inspection**: the [history](../../internal/runtime/history.go), [retention](../../internal/runtime/retention.go) and [doctor](../../internal/runtime/doctor.go) runtime reads, served by [management](../../internal/management/history.go) and presented by the [client](../../client/client.go), the [`open-conduit` commands](../../internal/cli/history.go), [`runview`](../../internal/cli/runview/runview.go) and the [TUI](../../internal/tui/tui.go).
 
-Exporter configuration (OTLP endpoints, PostHog), host watches and connection reachability probes belong to extensions. Daemon composition, including the poll loops that call the retention sweep, is 02-09.
+Exporter configuration (OTLP endpoints, PostHog), host watches and connection reachability probes belong to extensions. Daemon composition, including the poll loops that call the retention sweep, is delivered by 02-09 ([daemon composition](daemon-core-gate.md)).
 
 ## Instrumentation
 
@@ -166,4 +166,4 @@ Extension checks (`management.Options.Checks`), such as `telemetry.Pipeline.Heal
 - **[Pipeline and OTel unit tests](../../internal/telemetry)**: the shared observer contract; non-blocking drop accounting under a hung exporter; retries, panics and safe diagnostics; JSON log redaction; and the real OpenTelemetry SDK for span trace and parent identity, attempt duration, error status, correlated logs and low-cardinality metrics with usage.
 - **TUI and shell unit tests**: TUI filters, detail, log tail and scroll, errors and expired content; shell `Forget` live-segment refusal and idempotency.
 
-These tests compose the host in-process. Wiring the pipeline and SDK into the daemon, the retention schedule and kill drills belong to 02-09.
+These tests compose the host in-process. 02-09 wires the pipeline, SDK providers, retention schedule and doctor inputs into `open-conduit serve` and asserts lifecycle traces through real kill drills ([daemon composition](daemon-core-gate.md)).
