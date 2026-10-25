@@ -117,3 +117,11 @@ Documentation-only delivery: pinned revision/clean source, source paths and test
 - Routing and projection: the opt-in/skip claim policy, self/bot comment suppression, label projections with drift repair, marked comments with intent recovery, and acknowledgement reactions.
 
 These rows remain pending real-issue evidence in 03-06: B01–B04 (GitHub parts), B15 claim/override, and the GitHub row of the integration table. Holds and waits (03-04), webhook exposure (03-05) and the handoff feedback (03-03) remain with their tickets.
+
+03-02 update: [B07 workspaces](../architecture/workspaces.md) ports B10 and the workspace parts of C03/C06 into the optional `git` resource provider, verified with local bare repositories only:
+
+- B10: shared main-checkout catch-up (fast-forward only, behind/stale reason), fresh at the remote head with success cleanup and one-day failure retention, copy/setup/setupWhen, a configured remote and stray-process cleanup on removal.
+- C03: the remote and signing policy, the base branch, branch templates and work-branch reuse.
+- C06: the opted-in checkout `.env` layer before binding env, with no layer when there is no workspace.
+
+Legacy `OPEN_SUPERVISOR_*` variables remain explicit compatibility work. Agent use (03-03) and real-repository evidence (03-06) remain with their tickets.

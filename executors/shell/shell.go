@@ -134,7 +134,7 @@ func New(o Options) (*Executor, error) {
 }
 
 func (e *Executor) Capabilities() domain.Capabilities {
-	return domain.Capabilities{Interrupt: true, Resume: e.o.Resume, Toolbelt: extension.ToolbeltCLI}
+	return domain.Capabilities{Interrupt: true, Resume: e.o.Resume, Toolbelt: extension.ToolbeltCLI, Workspace: true}
 }
 
 func executionKey(id domain.ID) string {
@@ -151,6 +151,14 @@ func newNonce() (string, error) {
 
 type recovery struct {
 	Run string `json:"run"`
+}
+
+// workspaceRecord is the acquired resource's opaque lease reference and
+// description, kept with the segment and reported in its result.
+type workspaceRecord struct {
+	Ref    string          `json:"ref"`
+	Schema string          `json:"schema,omitempty"`
+	Data   json.RawMessage `json:"data,omitempty"`
 }
 
 // Run starts a new attempt segment.
@@ -198,6 +206,34 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	if err != nil {
 		return e.preset(ctx, rn, "invalid_config", "invalid shell binding config")
 	}
+	log, err := os.OpenFile(filepath.Join(dir, "output.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
+	if err != nil {
+		return e.preset(ctx, rn, "start_failed", "could not prepare shell process")
+	}
+	defer log.Close()
+	workdir := cfg.Dir
+	var layer map[string]string
+	if r.Context.Resources != nil {
+		// The binding declares a resource provider: run in its workspace with
+		// its environment layer. The provider records the lease before creating
+		// anything, so a crash here is cleaned up from durable owner state.
+		if cfg.Dir != "" {
+			return e.preset(ctx, rn, "invalid_config", "shell dir conflicts with the binding's workspace")
+		}
+		res, err := r.Context.Resources.Acquire(ctx, extension.ResourceRequest{Log: log})
+		if res.Ref != "" {
+			_ = writeJSON(filepath.Join(dir, "workspace.json"), workspaceRecord{Ref: res.Ref, Schema: res.Data.Schema, Data: res.Data.Data})
+		}
+		switch {
+		case errors.Is(err, extension.ErrResourceSetup):
+			return e.preset(ctx, rn, "workspace_setup_failed", "workspace setup failed")
+		case err != nil || res.Dir == "":
+			return e.preset(ctx, rn, "workspace_unavailable", "workspace acquisition failed")
+		}
+		workdir, layer = res.Dir, res.Env
+	}
+	// The process deadline starts after workspace preparation (setup has its
+	// own provider timeout).
 	rn.timeout = cfg.TimeoutSeconds
 	if cfg.TimeoutSeconds > 0 {
 		rn.deadline = e.o.Now().Add(time.Duration(cfg.TimeoutSeconds) * time.Second).UTC()
@@ -209,7 +245,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	if err = writeJSON(filepath.Join(dir, "intent.json"), in); err != nil {
 		return e.preset(ctx, rn, "start_failed", "could not prepare shell process")
 	}
-	env, err := e.environment(cfg, r, dir)
+	env, err := e.environment(cfg, r, dir, layer)
 	if err != nil {
 		return e.preset(ctx, rn, "invalid_config", "invalid shell binding config")
 	}
@@ -221,7 +257,6 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 			return e.preset(ctx, rn, "start_failed", "could not prepare shell process")
 		}
 	}
-	workdir := cfg.Dir
 	if workdir == "" {
 		workdir = filepath.Join(dir, "work")
 		if err = os.Mkdir(workdir, 0o700); err != nil {
@@ -232,16 +267,10 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	if cfg.Command != "" {
 		argv = []string{"/bin/sh", "-c", cfg.Command}
 	}
-	log, err := os.OpenFile(filepath.Join(dir, "output.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
-	if err != nil {
-		return e.preset(ctx, rn, "start_failed", "could not prepare shell process")
-	}
 	cmd := exec.Command("/bin/sh", append([]string{"-c", wrapper, marker + nonce, dir}, argv...)...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workdir, env, log, log
 	detach(cmd)
-	err = cmd.Start()
-	log.Close()
-	if err != nil {
+	if err = cmd.Start(); err != nil {
 		return e.preset(ctx, rn, "start_failed", "could not start shell process")
 	}
 	rn.pid, rn.done = cmd.Process.Pid, make(chan struct{})
@@ -275,10 +304,10 @@ func (e *Executor) register(rn *run) {
 	e.mu.Unlock()
 }
 
-// environment applies the B05 order: sanitized baseline → binding config.env →
-// selected secrets → trusted toolbelt and execution variables, which no earlier
-// layer can override.
-func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string) ([]string, error) {
+// environment applies the B05 order: sanitized baseline → resource-provider
+// layer → binding config.env → selected secrets → trusted toolbelt and
+// execution variables, which no earlier layer can override.
+func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, layer map[string]string) ([]string, error) {
 	vars := map[string]string{}
 	for _, kv := range e.o.Environ() {
 		name, value, ok := strings.Cut(kv, "=")
@@ -288,6 +317,13 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string) (
 	}
 	if vars["PATH"] == "" {
 		vars["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
+	}
+	for name, value := range layer {
+		// A provider layer (such as a checkout .env) can never supply toolbelt
+		// variables, even where the transport is none.
+		if envName.MatchString(name) && !reserved(name) && !strings.ContainsRune(value, 0) {
+			vars[name] = value
+		}
 	}
 	for name, value := range cfg.Env {
 		vars[name] = value

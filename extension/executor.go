@@ -16,15 +16,13 @@ const (
 	ToolbeltSDK  = "sdk"
 )
 
-// Resource is optional and provider-defined. Acquisition/cleanup are 03-02.
-type Resource struct {
-	Kind string
-	Data domain.Payload
-}
 type ExecutionContext struct {
-	Config                          domain.Payload
-	Secrets                         map[string]string
-	Resources                       []Resource
+	Config  domain.Payload
+	Secrets map[string]string
+	// Resources is nil unless the binding declares a resource provider. An
+	// executor acquires what it needs through it (see resource.go); absence is
+	// valid and every executor must operate without it.
+	Resources                       ResourceBroker
 	ToolbeltEndpoint, ToolbeltToken string
 }
 type RunRequest struct {

@@ -25,6 +25,9 @@ type Registry struct {
 	Connections map[string]func(config json.RawMessage) error // nil func accepts any object
 	Operations  []string
 	Resources   map[string]bool
+	// ResourceConfig optionally validates a registered provider's binding
+	// resource config at load/apply time. Its error text is never echoed.
+	ResourceConfig map[string]func(json.RawMessage) error
 }
 
 // ExtensionType Ingress entries must target their containing scope.
@@ -360,6 +363,10 @@ func (v *validator) registration(p string, b Binding) {
 	}
 	if b.Resource != nil && !v.reg.Resources[b.Resource.Provider] {
 		v.fail(p+"/resource/provider", "unknown_registration", "resource provider is not registered; use a registered provider")
+	} else if b.Resource != nil {
+		if check := v.reg.ResourceConfig[b.Resource.Provider]; check != nil && check(b.Resource.Config) != nil {
+			v.fail(p+"/resource/config", "invalid_config", fmt.Sprintf("resource provider %s rejected this config; correct it against the provider's documented config", b.Resource.Provider))
+		}
 	}
 	exec, ok := v.reg.Executors[b.Executor]
 	if !ok {

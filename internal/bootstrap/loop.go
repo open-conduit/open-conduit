@@ -48,6 +48,7 @@ func (d *daemon) loop(ctx context.Context) error {
 			d.report("ingress", "", errorCode(err))
 		}
 		d.projectGitHub(ctx)
+		d.reconcileResources(c)
 		if d.now().Sub(lastSweep) >= d.o.RetentionInterval {
 			if _, err = c.scheduler.SweepRetention(ctx, passLimit); err != nil && ctx.Err() == nil {
 				d.report("retention", "", errorCode(err))

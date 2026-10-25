@@ -333,3 +333,25 @@ func (c *ConfigService) Secrets(resolver *config.Resolver) func(context.Context,
 		return resolver.ResolveNames(ctx, cs, names)
 	}
 }
+
+// Resource returns the attempt's pinned binding resource descriptor (provider
+// and opaque config), or nil when the binding declares none. A pinned attempt
+// keeps its generation's descriptor; the binding must still exist in an
+// enabled scope of the current generation.
+func (c *ConfigService) Resource(state runtime.AttemptState) (*config.Resource, error) {
+	pinned := c.snapshotFor(state.Generation)
+	current, _ := c.Current()
+	if pinned == nil {
+		pinned = current
+	}
+	ps, ok := pinned.Scope(state.ScopeID)
+	cs, cok := current.Scope(state.ScopeID)
+	if !ok || !cok || !cs.Enabled {
+		return nil, config.ErrDenied
+	}
+	pb, ok := ps.Binding(state.Binding.Name)
+	if _, cok := cs.Binding(state.Binding.Name); !ok || !cok {
+		return nil, config.ErrDenied
+	}
+	return pb.Resource, nil
+}

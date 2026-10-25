@@ -60,6 +60,8 @@ type Options struct {
 	LeaseDuration time.Duration
 	// RetentionInterval paces the kept_executions sweep (default 10m).
 	RetentionInterval time.Duration
+	// ResourceInterval paces resource lease reconciliation (default 5s).
+	ResourceInterval time.Duration
 	// Ready, when set, is called once the management socket is listening.
 	Ready func()
 }
@@ -94,6 +96,7 @@ type daemon struct {
 	pipeline  *telemetry.Pipeline
 	ingress   *runtime.Ingress
 	github    githubSources
+	resources resourceState
 	endpoint  string
 	cursorKey []byte
 	current   atomic.Pointer[components]
@@ -128,7 +131,10 @@ func (o *Options) defaults() error {
 	if o.RetentionInterval == 0 {
 		o.RetentionInterval = 10 * time.Minute
 	}
-	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 {
+	if o.ResourceInterval == 0 {
+		o.ResourceInterval = 5 * time.Second
+	}
+	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ResourceInterval <= 0 {
 		return errors.New("intervals must be positive")
 	}
 	return nil
@@ -209,6 +215,10 @@ func Serve(ctx context.Context, o Options) (err error) {
 	d.executors = map[string]extension.Executor{"shell": d.shell}
 	registry := config.Registry{Executors: d.executors, Handlers: handlerNames()}
 	githubRegistry(&registry)
+	resourceRegistry(&registry)
+	if err = d.openResources(); err != nil {
+		return err
+	}
 	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, registry, o.ConfigPath); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
@@ -316,7 +326,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		GlobalLimit: set.Concurrency, Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
 		Toolbelt: belt, ToolbeltEndpoint: d.endpoint, Secrets: d.configs.Secrets(d.resolver),
-		KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
+		Resources: d.bindResources, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
 	}); err != nil {
 		return nil, err
 	}
@@ -331,7 +341,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck}}); err != nil {
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.resourceCheck}}); err != nil {
 		return nil, err
 	}
 	return c, nil

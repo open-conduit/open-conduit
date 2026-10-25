@@ -437,7 +437,7 @@ func TestResumeIsExplicit(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if c := resumable.Capabilities(); !c.Resume || !c.Interrupt || c.Toolbelt != extension.ToolbeltCLI || c.Workspace || c.Inject {
+	if c := resumable.Capabilities(); !c.Resume || !c.Interrupt || c.Toolbelt != extension.ToolbeltCLI || !c.Workspace || c.Inject {
 		t.Fatalf("capabilities: %+v", c)
 	}
 	if err = extension.ValidateBinding(domain.Binding{Requires: domain.Capabilities{Resume: true, Interrupt: true, Toolbelt: "cli"}}, resumable); err != nil {
@@ -479,5 +479,87 @@ func TestForgetRefusesLiveSegment(t *testing.T) {
 	}
 	if err = e.Forget(context.Background(), "exec-forget"); err != nil {
 		t.Fatalf("forget is not idempotent: %v", err)
+	}
+}
+
+// fakeBroker is a public-contract resource broker for unit tests.
+type fakeBroker struct {
+	dir   string
+	env   map[string]string
+	err   error
+	calls int
+}
+
+func (b *fakeBroker) Acquire(_ context.Context, r extension.ResourceRequest) (extension.Resource, error) {
+	b.calls++
+	if r.Log != nil {
+		fmt.Fprintln(r.Log, "open-conduit: workspace: running 2 commit(s) behind origin/main: on feature, not main")
+	}
+	res := extension.Resource{Kind: "workspace", Ref: "lease-1", Dir: b.dir, Env: b.env, Data: domain.Payload{Schema: "fixture.workspace.v1", Data: json.RawMessage(`{"behind":2}`)}}
+	return res, b.err
+}
+func (b *fakeBroker) Lookup(context.Context, string) (extension.Resource, error) {
+	return extension.Resource{}, extension.ErrResourceNotFound
+}
+
+// TestWorkspaceThroughBroker: a binding with a resource provider runs the
+// command in the acquired workspace, applies the provider environment layer
+// after the baseline and before binding env (never supplying OS_* variables)
+// and reports the workspace and its explanation in the result and log.
+func TestWorkspaceThroughBroker(t *testing.T) {
+	art := &memoryArtifacts{data: map[string][]byte{}}
+	e := newExecutor(t, stateDir(t), art, "PATH=/usr/bin:/bin", "HOME=/home/x")
+	ws := t.TempDir()
+	broker := &fakeBroker{dir: ws, env: map[string]string{"FROM_DOTENV": "1", "MODE": "dotenv", "OS_TOKEN": "forged", "GIT_CONFIG_COUNT": "2"}}
+	r, _ := request("exec-ws", 1, `{"command":"pwd -P > \"$OS_OUTPUT_DIR/pwd.txt\"; env > \"$OS_OUTPUT_DIR/env.txt\"","env":{"MODE":"binding"}}`)
+	r.Context.Resources = broker
+	res := run(t, e, r)
+	if res.Outcome.Kind != domain.OutcomeCompleted || broker.calls != 1 {
+		t.Fatalf("workspace run: %+v calls=%d", res.Outcome, broker.calls)
+	}
+	f := data(t, res)
+	real, _ := filepath.EvalSymlinks(ws)
+	if got := strings.TrimSpace(art.content(f.Outputs["pwd.txt"])); got != real {
+		t.Fatalf("ran in %q, want the workspace %q", got, real)
+	}
+	env := art.content(f.Outputs["env.txt"])
+	for _, want := range []string{"FROM_DOTENV=1\n", "MODE=binding\n", "GIT_CONFIG_COUNT=2\n"} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("env lacks %q:\n%s", want, env)
+		}
+	}
+	if strings.Contains(env, "OS_TOKEN") {
+		t.Fatal("the provider layer supplied a toolbelt variable")
+	}
+	var full struct {
+		Workspace struct {
+			Ref    string          `json:"ref"`
+			Schema string          `json:"schema"`
+			Data   json.RawMessage `json:"data"`
+		} `json:"workspace"`
+	}
+	if json.Unmarshal(res.Outcome.Data.Data, &full) != nil || full.Workspace.Ref != "lease-1" || full.Workspace.Schema != "fixture.workspace.v1" || string(full.Workspace.Data) != `{"behind":2}` {
+		t.Fatalf("result workspace: %s", res.Outcome.Data.Data)
+	}
+	if !strings.Contains(art.content(f.Log), "behind origin/main") {
+		t.Fatalf("log lacks the provider's explanation: %q", art.content(f.Log))
+	}
+
+	// Setup failure and acquisition failure are structured failed results with
+	// no process; dir conflicts with a bound workspace.
+	for _, c := range []struct {
+		name, config, reason string
+		err                  error
+	}{
+		{"setup", `{"command":"true"}`, "workspace_setup_failed", fmt.Errorf("%w: exit 1", extension.ErrResourceSetup)},
+		{"unavailable", `{"command":"true"}`, "workspace_unavailable", errors.New("checkout missing")},
+		{"conflict", `{"command":"true","dir":"/tmp"}`, "invalid_config", nil},
+	} {
+		r, _ := request("exec-ws-"+c.name, 1, c.config)
+		r.Context.Resources = &fakeBroker{dir: ws, err: c.err}
+		res := run(t, e, r)
+		if res.Outcome.Kind != domain.OutcomeFailed || data(t, res).Reason != c.reason {
+			t.Fatalf("%s: %+v %s", c.name, res.Outcome, res.Outcome.Data.Data)
+		}
 	}
 }

@@ -21,6 +21,7 @@ var ErrCapacity = errors.New("execution capacity exhausted")
 var ErrResourceHeld = errors.New("previous attempt resource exclusion unresolved")
 var ErrExecutorCall = errors.New("executor operation failed")
 var ErrSecretUnavailable = errors.New("execution secrets unavailable")
+var ErrResourceUnavailable = errors.New("execution resource provider unavailable")
 
 type SchedulerOptions struct {
 	Owner                string
@@ -44,6 +45,10 @@ type SchedulerOptions struct {
 	// before Run/Recover/Resume, outside coordination transactions. Values are
 	// never persisted; failure blocks this attempt with a safe diagnostic.
 	Secrets func(context.Context, AttemptState) (map[string]string, error)
+	// Resources binds the attempt's optional resource provider immediately
+	// before Run/Recover/Resume, outside coordination transactions. A nil
+	// broker means the binding declares no resource. Core never inspects it.
+	Resources func(context.Context, AttemptState) (extension.ResourceBroker, error)
 	// KeptExecutions is the per-Work retention count shared by every executor
 	// (B05 kept_executions, default 20). Artifacts receives content deletion
 	// for expired attempts; nil keeps content and still records expiration.
@@ -589,6 +594,14 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 			return attempt, errors.Join(ErrSecretUnavailable, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
 		}
 		attempt.Request.Context.Secrets = secrets
+	}
+	if s.options.Resources != nil {
+		broker, resourceErr := s.options.Resources(ctx, state)
+		if resourceErr != nil {
+			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "resource provider unavailable"}}
+			return attempt, errors.Join(ErrResourceUnavailable, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
+		}
+		attempt.Request.Context.Resources = broker
 	}
 	if recovering {
 		handle, err = executor.Recover(ctx, attempt.Request, state.Recovery)

@@ -531,3 +531,25 @@ func TestAuthorize(t *testing.T) {
 		t.Fatal("read widened")
 	}
 }
+
+// TestResourceConfigValidation: a registered provider's config check rejects a
+// binding's resource config at load time without echoing it.
+func TestResourceConfigValidation(t *testing.T) {
+	reg := registry()
+	reg.ResourceConfig = map[string]func(json.RawMessage) error{"git": func(c json.RawMessage) error {
+		if strings.Contains(string(c), "\"mode\":\"clone\"") {
+			return errors.New("bad: clone")
+		}
+		return nil
+	}}
+	if _, err := Validate(example(t, "git-scope"), reg); err != nil {
+		t.Fatal(err)
+	}
+	m := generic(t, example(t, "git-scope"))
+	entry(m, 0, "bindings", 0)["resource"].(map[string]any)["config"].(map[string]any)["mode"] = "clone"
+	_, err := Validate(encode(t, m), reg)
+	got := diagnostics(t, err)
+	if len(got) != 1 || got[0].Path != "scopes/0/bindings/0/resource/config" || got[0].Code != "invalid_config" || strings.Contains(got[0].Message, "clone") {
+		t.Fatalf("diagnostics %+v", got)
+	}
+}

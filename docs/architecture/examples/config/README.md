@@ -1,6 +1,6 @@
 # B05 configuration fixtures
 
-These are complete version-1 documents for synthetic in-process registrations, not runnable service credentials or a release setup guide. `workspace-free.json` deliberately has no repository/resource; `git-scope.json` opts into the `git` resource; `shell-job.json` binds a shell executor and schedule extension; `inheritance.json` overrides a named route/binding and removes a secret. Provider-specific acquisition/setup remains 03-02 and real extension schemas arrive with their implementations.
+These are complete version-1 documents for synthetic in-process registrations, not runnable service credentials or a release setup guide. `workspace-free.json` deliberately has no repository/resource; `git-scope.json` opts into the `git` resource; `shell-job.json` binds a shell executor and schedule extension; `inheritance.json` overrides a named route/binding and removes a secret. Its `checkout`/`mode` resource config is also valid for the delivered [Git provider](../../workspaces.md) (03-02); other real extension schemas arrive with their implementations.
 
 `invalid-capability.json` is structurally valid but must fail semantic validation with this safe diagnostic (the schema alone cannot know executor capabilities):
 

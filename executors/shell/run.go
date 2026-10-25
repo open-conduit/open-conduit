@@ -286,6 +286,8 @@ type resultFields struct {
 	Log            string            `json:"log,omitempty"`
 	Outputs        map[string]string `json:"outputs,omitempty"`
 	ArtifactError  string            `json:"artifact_error,omitempty"`
+	// Workspace describes the resource the segment ran in, if any.
+	Workspace *workspaceRecord `json:"workspace,omitempty"`
 }
 
 func resultData(f resultFields) domain.Payload {
@@ -382,6 +384,10 @@ func (e *Executor) finalizeWith(ctx context.Context, rn *run, preset *domain.Out
 			f.Outputs[name] = ref.ID
 			result.Artifacts = append(result.Artifacts, ref)
 		}
+	}
+	var ws workspaceRecord
+	if readJSON(filepath.Join(rn.dir, "workspace.json"), &ws) == nil && ws.Ref != "" {
+		f.Workspace = &ws
 	}
 	outcome.Data = resultData(f)
 	result.Outcome = outcome
