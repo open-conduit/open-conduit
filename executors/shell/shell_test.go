@@ -444,3 +444,40 @@ func TestResumeIsExplicit(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestForgetRefusesLiveSegment: retention release never touches a running
+// process's state, and removes a finished execution's run directories.
+func TestForgetRefusesLiveSegment(t *testing.T) {
+	dir := stateDir(t)
+	e := newExecutor(t, dir, nil)
+	child := filepath.Join(dir, "forget.pid")
+	r, _ := request("exec-forget", 1, `{"command":"echo $$ > `+child+`; sleep 30"}`)
+	h, err := e.Run(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFile(t, child)
+	if err = e.Forget(context.Background(), "exec-forget"); !errors.Is(err, shell.ErrLiveSegment) {
+		t.Fatalf("forget of a live segment: %v", err)
+	}
+	if err = e.Stop(context.Background(), "exec-forget", 1); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = h.Wait(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	runs := filepath.Join(dir, "runs")
+	entries, _ := os.ReadDir(runs)
+	if len(entries) != 1 {
+		t.Fatalf("run directories before forget: %d", len(entries))
+	}
+	if err = e.Forget(context.Background(), "exec-forget"); err != nil {
+		t.Fatal(err)
+	}
+	if entries, _ = os.ReadDir(runs); len(entries) != 0 {
+		t.Fatalf("run directory kept after forget: %d", len(entries))
+	}
+	if err = e.Forget(context.Background(), "exec-forget"); err != nil {
+		t.Fatalf("forget is not idempotent: %v", err)
+	}
+}

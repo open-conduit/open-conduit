@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"syscall"
 	"testing"
 	"time"
@@ -26,6 +27,8 @@ import (
 	"github.com/alsiola/open-conduit/internal/management"
 	"github.com/alsiola/open-conduit/internal/runtime"
 	"github.com/alsiola/open-conduit/internal/storage/sqlite"
+	"github.com/alsiola/open-conduit/internal/telemetry"
+	"github.com/alsiola/open-conduit/observability"
 	"github.com/alsiola/open-conduit/storage"
 )
 
@@ -89,6 +92,31 @@ type shellHost struct {
 	srv       *http.Server
 	lock      *management.Lock
 	closed    bool
+	// coord is the coordination store every component uses: SQLite itself,
+	// or SQLite behind lifecycle instrumentation when telemetry is enabled.
+	coord     storage.Store
+	toolbelt  *runtime.Toolbelt
+	timers    *runtime.Timers
+	ingress   *runtime.Ingress
+	pipeline  *telemetry.Pipeline
+	memory    *telemetry.Memory
+	diagnosed []string
+	diagMu    sync.Mutex
+}
+
+// shellHostOptions enables optional 02-08 composition: lifecycle telemetry
+// (pipeline with an in-memory exporter plus any extra exporters), retention
+// and extension doctor checks.
+type shellHostOptions struct {
+	telemetry bool
+	exporters []observability.Exporter
+	buffer    int
+	kept      int
+	checks    []func(context.Context) runtime.Check
+	ingress   bool
+	// executors and handlers add fake registrations beside the shell.
+	executors map[string]extension.Executor
+	handlers  map[string]extension.RouteHandler
 }
 
 func shellState(t *testing.T, cfg string) (string, string) {
@@ -120,6 +148,11 @@ func shellState(t *testing.T, cfg string) (string, string) {
 
 func newShellHost(t *testing.T, state, bin string, clock *conformance.Clock, owner string, resume bool) *shellHost {
 	t.Helper()
+	return newShellHostWith(t, state, bin, clock, owner, resume, shellHostOptions{})
+}
+
+func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock, owner string, resume bool, o shellHostOptions) *shellHost {
+	t.Helper()
 	ctx := context.Background()
 	h := &shellHost{t: t, state: state, clock: clock}
 	var err error
@@ -128,6 +161,22 @@ func newShellHost(t *testing.T, state, bin string, clock *conformance.Clock, own
 	}
 	if h.store, err = sqlite.Open(ctx, filepath.Join(state, "conduit.db")); err != nil {
 		t.Fatal(err)
+	}
+	h.coord = h.store
+	var observer observability.Observer
+	if o.telemetry {
+		h.memory = &telemetry.Memory{}
+		if h.pipeline, err = telemetry.New(telemetry.Options{Exporters: append([]observability.Exporter{h.memory}, o.exporters...), Buffer: o.buffer, FlushInterval: 10 * time.Millisecond, ExportTimeout: 200 * time.Millisecond, Attempts: 2, Secrets: func() []string { return []string{"shell-secret"} }}); err != nil {
+			t.Fatal(err)
+		}
+		observer = h.pipeline
+		if h.coord, err = runtime.Instrument(h.store, runtime.TelemetryOptions{Observer: h.pipeline, Diagnostic: func(code string) {
+			h.diagMu.Lock()
+			h.diagnosed = append(h.diagnosed, code)
+			h.diagMu.Unlock()
+		}}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	if err = os.MkdirAll(filepath.Join(state, "artifacts"), 0o700); err != nil {
 		t.Fatal(err)
@@ -140,16 +189,28 @@ func newShellHost(t *testing.T, state, bin string, clock *conformance.Clock, own
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	registry := config.Registry{Executors: map[string]extension.Executor{"shell": h.executor}, Handlers: map[string]bool{"manual": true}}
-	configs, err := management.OpenConfig(ctx, h.store, clock.Now, registry, filepath.Join(state, "config", "config.json"))
+	executors := map[string]extension.Executor{"shell": h.executor}
+	routeBindings := map[string]runtime.RouteBinding{"shell": {Executor: h.executor, Capabilities: h.executor.Capabilities()}}
+	for name, e := range o.executors {
+		executors[name] = e
+		routeBindings[name] = runtime.RouteBinding{Executor: e, Capabilities: e.Capabilities()}
+	}
+	handlers := map[string]extension.RouteHandler{"manual": routingHandlerFunc(shellRoute)}
+	handlerNames := map[string]bool{"manual": true}
+	for name, handler := range o.handlers {
+		handlers[name] = handler
+		handlerNames[name] = true
+	}
+	registry := config.Registry{Executors: executors, Handlers: handlerNames}
+	configs, err := management.OpenConfig(ctx, h.coord, clock.Now, registry, filepath.Join(state, "config", "config.json"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if h.router, err = runtime.NewRouter(h.store, clock.Now, runtime.RouterOptions{Generation: "1", Handlers: map[string]extension.RouteHandler{"manual": routingHandlerFunc(shellRoute)}, Bindings: map[string]runtime.RouteBinding{"shell": {Executor: h.executor, Capabilities: h.executor.Capabilities()}}}); err != nil {
+	if h.router, err = runtime.NewRouter(h.coord, clock.Now, runtime.RouterOptions{Generation: "1", Handlers: handlers, Bindings: routeBindings}); err != nil {
 		t.Fatal(err)
 	}
 	var belt *runtime.Toolbelt
-	belt, err = runtime.NewToolbelt(h.store, clock.Now, h.router, runtime.ToolbeltOptions{Authorize: configs.Authorize, Grant: configs.Grant(func() []string { return belt.EventTypes() })})
+	belt, err = runtime.NewToolbelt(h.coord, clock.Now, h.router, runtime.ToolbeltOptions{Authorize: configs.Authorize, Grant: configs.Grant(func() []string { return belt.EventTypes() }), Observer: observer})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -158,18 +219,27 @@ func newShellHost(t *testing.T, state, bin string, clock *conformance.Clock, own
 	}
 	socket := filepath.Join(state, "management.sock")
 	h.endpoint = "unix://" + socket
-	if h.scheduler, err = runtime.NewScheduler(h.store, clock.Now, h.router, runtime.SchedulerOptions{Owner: owner, Generation: "1", Executors: map[string]extension.Executor{"shell": h.executor}, Toolbelt: belt, ToolbeltEndpoint: h.endpoint, Secrets: configs.Secrets(&config.Resolver{})}); err != nil {
+	if h.scheduler, err = runtime.NewScheduler(h.coord, clock.Now, h.router, runtime.SchedulerOptions{Owner: owner, Generation: "1", Executors: executors, Toolbelt: belt, ToolbeltEndpoint: h.endpoint, Secrets: configs.Secrets(&config.Resolver{}), KeptExecutions: o.kept, Artifacts: h.artifacts}); err != nil {
 		t.Fatal(err)
 	}
-	control, err := runtime.NewControl(h.store, clock.Now, h.router, h.scheduler, runtime.CausalLimits{})
+	h.toolbelt = belt
+	if o.ingress {
+		if h.ingress, err = runtime.NewIngress(h.coord, clock.Now, runtime.IngressOptions{}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if h.timers, err = runtime.NewTimers(h.coord, clock.Now, runtime.TimerOptions{}); err != nil {
+		t.Fatal(err)
+	}
+	control, err := runtime.NewControl(h.coord, clock.Now, h.router, h.scheduler, runtime.CausalLimits{})
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := management.NewServer(management.Options{Store: h.store, Artifacts: h.artifacts, Now: clock.Now, Control: control, Toolbelt: belt, Config: configs, Version: "test", InstanceID: owner})
+	server, err := management.NewServer(management.Options{Store: h.coord, Artifacts: h.artifacts, Now: clock.Now, Control: control, Toolbelt: belt, Config: configs, Version: "test", InstanceID: owner, Scheduler: h.scheduler, Resolver: &config.Resolver{}, Checks: o.checks, Ingress: h.ingress})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = management.BootstrapOperator(ctx, h.store, clock.Now, filepath.Join(state, "private", "operator.token")); err != nil && !errors.Is(err, management.ErrCredentialExists) {
+	if err = management.BootstrapOperator(ctx, h.coord, clock.Now, filepath.Join(state, "private", "operator.token")); err != nil && !errors.Is(err, management.ErrCredentialExists) {
 		t.Fatal(err)
 	}
 	listener, err := management.Listen(h.lock, socket)
@@ -187,6 +257,11 @@ func (h *shellHost) close() {
 		return
 	}
 	h.closed = true
+	if h.pipeline != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		_ = h.pipeline.Shutdown(ctx)
+		cancel()
+	}
 	h.srv.Close()
 	h.store.Close()
 	h.artifacts.Close()
@@ -221,7 +296,7 @@ func (h *shellHost) operator() *client.Client {
 func (h *shellHost) routeAll() {
 	h.t.Helper()
 	var pending []domain.Event
-	err := h.store.Transact(context.Background(), storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error {
+	err := h.coord.Transact(context.Background(), storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error {
 		events, err := tx.Events(0, 0)
 		for _, a := range events {
 			if !a.Routed {

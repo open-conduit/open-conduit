@@ -485,6 +485,46 @@ func (e *Executor) Stop(ctx context.Context, id domain.ID, epoch uint64) error {
 	return nil
 }
 
+// ErrLiveSegment refuses Forget while a segment's verified process still runs.
+var ErrLiveSegment = errors.New("shell: segment still running")
+
+// Forget removes every run directory of an execution once runtime retention
+// expired it. It never signals: a segment without a recorded result whose
+// verified leader is still alive is refused, leaving its state intact.
+func (e *Executor) Forget(ctx context.Context, id domain.ID) error {
+	base := filepath.Join(e.o.StateDir, "runs", executionKey(id))
+	entries, err := os.ReadDir(base)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil
+	} else if err != nil {
+		return err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() || !hexName.MatchString(entry.Name()) {
+			continue
+		}
+		dir := filepath.Join(base, entry.Name())
+		if _, ok, _ := readResult(dir); ok {
+			continue
+		}
+		rn := &run{id: id, dir: dir, nonce: entry.Name()}
+		if err := rn.load(); err != nil {
+			continue // Unreadable metadata names no process to protect.
+		}
+		if alive, err := e.leaderAlive(rn); err != nil {
+			return err
+		} else if alive {
+			return ErrLiveSegment
+		}
+	}
+	e.mu.Lock()
+	if held := e.runs[id]; held != nil {
+		delete(e.runs, id)
+	}
+	e.mu.Unlock()
+	return os.RemoveAll(base)
+}
+
 // stopTree terminates and waits for one segment's process tree.
 func (e *Executor) stopTree(ctx context.Context, rn *run) error {
 	if alive, err := e.leaderAlive(rn); err != nil {
@@ -535,4 +575,5 @@ var _ interface {
 	extension.Executor
 	extension.InterruptExecutor
 	extension.ResumeExecutor
+	extension.ForgetExecutor
 } = (*Executor)(nil)

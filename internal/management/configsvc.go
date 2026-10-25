@@ -98,6 +98,28 @@ func (c *ConfigService) Current() (*config.Snapshot, uint64) {
 	return c.current, c.generation
 }
 
+// Registry returns the in-process registrations used for validation.
+func (c *ConfigService) Registry() config.Registry { return c.registry }
+
+// DiskStatus compares the config file with the committed generation without
+// applying it: "current", "pending_edit" (valid but not applied), "invalid"
+// or "unreadable". It never returns file content or diagnostics text.
+func (c *ConfigService) DiskStatus() string {
+	data, err := config.ReadFile(c.path)
+	if err != nil {
+		return "unreadable"
+	}
+	snapshot, err := c.Validate(data)
+	if err != nil {
+		return "invalid"
+	}
+	current, _ := c.Current()
+	if current == nil || snapshot.Hash != current.Hash {
+		return "pending_edit"
+	}
+	return "current"
+}
+
 // Validate is side-effect free.
 func (c *ConfigService) Validate(data []byte) (*config.Snapshot, error) {
 	return config.Validate(data, c.registry)

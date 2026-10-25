@@ -44,6 +44,11 @@ type SchedulerOptions struct {
 	// before Run/Recover/Resume, outside coordination transactions. Values are
 	// never persisted; failure blocks this attempt with a safe diagnostic.
 	Secrets func(context.Context, AttemptState) (map[string]string, error)
+	// KeptExecutions is the per-Work retention count shared by every executor
+	// (B05 kept_executions, default 20). Artifacts receives content deletion
+	// for expired attempts; nil keeps content and still records expiration.
+	KeptExecutions int
+	Artifacts      storage.Artifacts
 }
 type Scheduler struct {
 	store   storage.Store
@@ -116,6 +121,12 @@ func NewScheduler(store storage.Store, now func() time.Time, router *Router, o S
 	}
 	if o.GlobalLimit == 0 {
 		o.GlobalLimit = 4
+	}
+	if o.KeptExecutions == 0 {
+		o.KeptExecutions = DefaultKeptExecutions
+	}
+	if o.KeptExecutions < 1 || o.KeptExecutions > 2147483647 {
+		return nil, storage.ErrInvalid
 	}
 	if o.LeaseDuration == 0 {
 		o.LeaseDuration = time.Minute

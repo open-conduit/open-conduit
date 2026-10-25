@@ -24,6 +24,9 @@ import (
 type Env struct {
 	Getenv func(string) string
 	Cwd    string
+	// TUI runs the interactive history view; the open-conduit entrypoint
+	// supplies it so the os toolbelt binary carries no terminal UI.
+	TUI func(*client.Client) error
 }
 
 type operator struct {
@@ -56,6 +59,10 @@ Commands:
   executions list [--scope-id --work-id --state] | executions get ID | executions cancel ID --revision N [--reason TEXT] [--key K]
   waits list [--scope-id --work-id --execution-id --state] | waits get ID
   artifacts list [--work-id --execution-id --kind] | artifacts cat ID [--range bytes=A-B]
+  runs list|table [--scope-id --work-id --state --executor-binding --executor --work-kind --outcome] | runs get ID
+  runs log ID [--range bytes=A-B]
+  doctor [--check-secrets] [--json]
+  tui
   config validate FILE | config apply FILE --generation N [--key K]
   auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
   version
@@ -100,7 +107,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth}
+	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.

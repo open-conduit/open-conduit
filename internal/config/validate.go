@@ -53,7 +53,9 @@ type Snapshot struct {
 	Settings   Settings
 	Order      []domain.ID
 	Scopes     map[domain.ID]*EffectiveScope
-	redacted   json.RawMessage
+	// Connections contain secret reference text: never log or return them.
+	Connections []Connection
+	redacted    json.RawMessage
 }
 
 // slots implement B04 stable slots: replacement keeps the ancestor position.
@@ -416,6 +418,13 @@ func (v *validator) snapshot() *Snapshot {
 	s := &Snapshot{Hash: hash, Normalized: normalized, Settings: v.doc.Settings, Scopes: map[domain.ID]*EffectiveScope{},
 		redacted: canonical(v.doc.normalized(true))}
 	s.Settings.RetryDelaysSeconds = slices.Clone(s.Settings.RetryDelaysSeconds)
+	for _, c := range v.doc.Connections {
+		refs := make(map[string]string, len(c.SecretRefs))
+		for k, ref := range c.SecretRefs {
+			refs[k] = ref
+		}
+		s.Connections = append(s.Connections, Connection{ID: c.ID, Type: c.Type, Config: slices.Clone(c.Config), SecretRefs: refs})
+	}
 	for _, sc := range v.doc.Scopes {
 		e := v.state[sc.ID]
 		id := domain.ID(sc.ID)

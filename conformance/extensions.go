@@ -365,6 +365,12 @@ func CheckObserver(o observability.Observer, records func() []observability.Reco
 			return fmt.Errorf("missing %s correlation accepted", field)
 		}
 	}
+	// A scan record precedes any Event; it must be anchored by its source
+	// rather than accepted with neither an Event nor a source.
+	unanchored := observability.Record{Name: "ingress.scan_failed", At: valid.At, Correlation: observability.Correlation{ScopeID: "scope", TraceID: "trace"}, Attributes: map[string]string{}}
+	if err := o.Observe(ctx, unanchored); err == nil {
+		return fmt.Errorf("unanchored ingress record accepted")
+	}
 	if err := o.Observe(ctx, valid); err != nil {
 		return err
 	}

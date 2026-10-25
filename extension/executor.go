@@ -84,6 +84,15 @@ type ResumeExecutor interface {
 	Resume(context.Context, RunRequest, domain.Payload) (RunHandle, error)
 }
 
+// ForgetExecutor is optional. Forget releases executor-private state (for
+// example a run directory) for a terminal execution whose resource exclusion is
+// confirmed and whose history runtime retention has expired. Runtime never
+// calls it for an attempt that could still be recovered or resumed. It must be
+// idempotent and must never signal or adopt processes.
+type ForgetExecutor interface {
+	Forget(context.Context, domain.ID) error
+}
+
 func ValidateBinding(b domain.Binding, e Executor) error {
 	c, r := e.Capabilities(), b.Requires
 	valid := func(s string) bool {

@@ -66,6 +66,8 @@ Executors report usage/cost on that same execution correlation; shared `Measurem
 
 The Observer contract is required even with no exporter configured. Exporters are optional and must support shutdown. Export failures produce safe diagnostics and cannot roll back durable transitions, stop scheduling or change execution outcomes. Local observability, buffering/drop accounting and exporter fault tests arrive in 02-08; passing the reference observer proves validation/redaction only, not OpenTelemetry coverage.
 
+02-08 update: [lifecycle telemetry, run history and doctor](observability-history.md) instruments every committed transition from the durable writes themselves and exports through a non-blocking, drop-accounted pipeline with an OpenTelemetry mapping. Clarification: host-polled ingress scan records (`ingress.` prefix) have no trigger Event, so they are anchored by their source attribute and a scan-derived trace. `Validate` accepts that anchor only for these records.
+
 B04 update: [runtime semantics and shared executable scenarios](runtime-semantics.md) resolve route order/first match, explicit active-policy fallback, completion/inject races, wait arbitration, adoption and causal bounds. Use those decisions wherever this document assigns work to 01-04; generic consumption acknowledgement remains 04-02.
 
 ## Verification and follow-on decisions

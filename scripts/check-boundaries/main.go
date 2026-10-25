@@ -54,6 +54,9 @@ func allowed(owner, dependency string, test bool) bool {
 		return dependency == "domain" || dependency == "storage" || under(dependency, "internal/artifacts")
 	case under(owner, "internal/backup"):
 		return dependency == "domain" || dependency == "storage" || under(dependency, "internal/backup") || under(dependency, "internal/storage/sqlite") || under(dependency, "internal/artifacts")
+	case under(owner, "internal/telemetry"):
+		// Lifecycle export pipeline: public contracts plus the OpenTelemetry API.
+		return public(dependency) || under(dependency, "internal/telemetry")
 	case under(owner, "internal/config"):
 		return dependency == "domain" || dependency == "extension" || under(dependency, "internal/config")
 	case under(owner, "client"):

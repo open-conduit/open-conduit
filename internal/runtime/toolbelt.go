@@ -11,12 +11,14 @@ import (
 	"fmt"
 	"regexp"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/alsiola/open-conduit/domain"
 	"github.com/alsiola/open-conduit/extension"
+	"github.com/alsiola/open-conduit/observability"
 	"github.com/alsiola/open-conduit/storage"
 )
 
@@ -51,6 +53,10 @@ type ToolbeltOptions struct {
 	Authorize func(context.Context, AuthorityCheck) error
 	// Lifetime bounds a token after issue; zero uses the attempt deadline or one hour.
 	Lifetime time.Duration
+	// Observer receives a toolbelt.called or toolbelt.rejected record for every
+	// call whose credential resolves to an execution authority. State changes
+	// made by a call are reported separately by the instrumented store.
+	Observer observability.Observer
 }
 
 // Toolbelt is the production B03 authority path. Token plaintext is returned
@@ -442,6 +448,56 @@ func (t *Toolbelt) authorizedInTx(tx storage.Tx, digest string) (tokenRecord, do
 	return record, x, w, state, nil
 }
 
+// callCode classifies a call result without provider or request text.
+func callCode(err error) string {
+	switch {
+	case err == nil:
+		return "ok"
+	case errors.Is(err, extension.ErrUnauthorized), errors.Is(err, storage.ErrLeaseLost), errors.Is(err, storage.ErrNotFound):
+		return "unauthorized"
+	case errors.Is(err, extension.ErrUndeclared):
+		return "undeclared"
+	case errors.Is(err, ErrCausalRejected):
+		return "causal_limit"
+	case errors.Is(err, ErrRequestConflict):
+		return "request_conflict"
+	case errors.Is(err, storage.ErrConflict):
+		return "conflict"
+	case errors.Is(err, storage.ErrInvalid), errors.Is(err, extension.ErrInvalid), errors.Is(err, extension.ErrUnsupported):
+		return "invalid"
+	}
+	return "failed"
+}
+
+func (t *Toolbelt) observeCall(ctx context.Context, record tokenRecord, operation, requestID string, callErr error) {
+	a := record.Authority
+	name := "toolbelt.called"
+	if callErr != nil {
+		name = "toolbelt.rejected"
+	}
+	rec := observability.Record{Name: name, At: t.now(), Correlation: observability.Correlation{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, ExecutorBinding: record.Binding}, Attributes: map[string]string{"toolbelt.operation": operation, "toolbelt.result": callCode(callErr), "lease.epoch": strconv.FormatUint(a.Lease.Epoch, 10)}}
+	// A call has no durable revision; a per-call nonce keeps the identity of
+	// this one record stable across exporter retries without colliding.
+	nonce, _ := randomToken()
+	rec.Attributes["record_id"] = identity(name, string(a.ExecutionID), strconv.FormatUint(a.Lease.Epoch, 10), operation, requestID, nonce)
+	if err := t.store.Transact(context.WithoutCancel(ctx), storage.Guard{Now: t.now()}, func(tx storage.Tx) error {
+		x, e := tx.Execution(a.ExecutionID)
+		if e != nil {
+			return e
+		}
+		rec.Correlation.TraceID = x.TraceID
+		trigger, e := executionTriggerInTx(tx, x)
+		if e != nil {
+			return e
+		}
+		rec.Correlation.EventID = trigger
+		return nil
+	}); err != nil {
+		return
+	}
+	observeDirect(ctx, t.options.Observer, rec)
+}
+
 func requestHash(c extension.ToolCall) string {
 	c.ScopeID, c.WorkID, c.ExecutionID = "", "", ""
 	b, _ := json.Marshal(c)
@@ -471,6 +527,9 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 	record, err := t.load(ctx, token)
 	if err != nil {
 		return out, err
+	}
+	if t.options.Observer != nil {
+		defer func() { t.observeCall(ctx, record, c.Operation, requestID, err) }()
 	}
 	a := record.Authority
 	if record.Revoked || !t.now().Before(a.ExpiresAt) || c.ScopeID != "" && c.ScopeID != a.ScopeID || c.WorkID != "" && c.WorkID != a.WorkID || c.ExecutionID != "" && c.ExecutionID != a.ExecutionID {

@@ -92,6 +92,7 @@ The client dials only the configured socket, with the fixed host `localhost`, no
 - emit, work create/cancel/retry/wake and execution cancel
 - config validate/apply
 - auth rotate/revoke
+- since 02-08: unified run history (`runs list|get|table|log`), `doctor` and `tui` ([observability and history](observability-history.md))
 
 Rebind and scope reconcile endpoints are deferred to operator controls in 03-05.
 

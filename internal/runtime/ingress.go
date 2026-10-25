@@ -238,6 +238,8 @@ type IngressStatus struct {
 	LastError                  string
 	LastComplete               time.Time
 	LimitedRecovery            bool
+	Interval                   time.Duration
+	Failures                   uint32
 }
 
 func (i *Ingress) Inspect(ctx context.Context) ([]IngressStatus, error) {
@@ -255,7 +257,7 @@ func (i *Ingress) Inspect(ctx context.Context) ([]IngressStatus, error) {
 			if err := getJSON(tx, sourceNamespace(r.source), "state", &state); err != nil {
 				return err
 			}
-			status := IngressStatus{Name: r.name, Source: r.source, Checkpoint: state.Checkpoint, ScanID: state.ScanID, Cursor: state.Cursor, NextDue: state.NextDue, LastError: state.LastError, LastComplete: state.LastComplete}
+			status := IngressStatus{Name: r.name, Source: r.source, Checkpoint: state.Checkpoint, ScanID: state.ScanID, Cursor: state.Cursor, NextDue: state.NextDue, LastError: state.LastError, LastComplete: state.LastComplete, Interval: r.interval, Failures: state.Failures}
 			for _, family := range r.families {
 				status.Families = append(status.Families, family)
 				if !family.ReDerivable {

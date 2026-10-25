@@ -46,6 +46,14 @@ type Options struct {
 	// Components supplies safe readiness diagnostics; nil reports ready.
 	Components func() map[string]string
 	CursorKey  []byte
+	// Doctor inputs, all optional: ingress state for reconcile lag and loss
+	// declarations, the scheduler for pinned-executor checks, a resolver for
+	// explicit check_secrets runs and extension-contributed checks (telemetry
+	// exporters, host watches, connection reachability).
+	Ingress   *runtime.Ingress
+	Scheduler *runtime.Scheduler
+	Resolver  *config.Resolver
+	Checks    []func(context.Context) runtime.Check
 }
 
 type Server struct {
@@ -218,6 +226,9 @@ var routes = []route{
 	{"GET", []string{"executions", "*"}, false, false, (*Server).getExecution},
 	{"GET", []string{"waits"}, false, false, (*Server).listWaits},
 	{"GET", []string{"waits", "*"}, false, false, (*Server).getWait},
+	{"GET", []string{"runs"}, false, false, (*Server).listRuns},
+	{"GET", []string{"runs", "*"}, false, false, (*Server).getRun},
+	{"GET", []string{"doctor"}, false, false, (*Server).doctor},
 	{"GET", []string{"artifacts"}, false, false, (*Server).listArtifacts},
 	{"GET", []string{"artifacts", "*", "content"}, false, false, (*Server).artifactContent},
 	{"POST", []string{"events"}, true, true, (*Server).postEvent},

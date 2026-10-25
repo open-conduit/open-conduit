@@ -540,3 +540,84 @@ func (c *Client) ToolbeltCall(ctx context.Context, call ToolCall) (out ToolResul
 	err = c.Do(ctx, "POST", "toolbelt/call", nil, call, "", &out)
 	return
 }
+
+// ---- unified run history and doctor ----
+
+type Trigger struct {
+	ID          string `json:"id"`
+	Type        string `json:"type"`
+	Source      string `json:"source"`
+	OccurredAt  string `json:"occurred_at,omitempty"`
+	CausationID string `json:"causation_id,omitempty"`
+}
+type Usage struct {
+	InputTokens  *uint64  `json:"input_tokens,omitempty"`
+	OutputTokens *uint64  `json:"output_tokens,omitempty"`
+	CachedTokens *uint64  `json:"cached_tokens,omitempty"`
+	Cost         *float64 `json:"cost,omitempty"`
+	Currency     string   `json:"currency,omitempty"`
+}
+type RetryStatus struct {
+	FailureCount  int    `json:"failure_count"`
+	EligibleAt    string `json:"eligible_at,omitempty"`
+	Blocked       bool   `json:"blocked"`
+	Exhausted     bool   `json:"exhausted"`
+	BlockedReason string `json:"blocked_reason,omitempty"`
+}
+type Retention struct {
+	State           string `json:"state"`
+	ExpiredAt       string `json:"expired_at,omitempty"`
+	ContentReleased bool   `json:"content_released"`
+}
+
+// Run is one attempt in the unified history, identical for every executor.
+type Run struct {
+	Execution
+	WorkKind                string       `json:"work_kind"`
+	WorkState               string       `json:"work_state"`
+	Trigger                 *Trigger     `json:"trigger,omitempty"`
+	CurrentTrigger          *Trigger     `json:"current_trigger,omitempty"`
+	Executor                string       `json:"executor,omitempty"`
+	ConfigGeneration        string       `json:"config_generation,omitempty"`
+	LaunchState             string       `json:"launch_state,omitempty"`
+	ResourceExcluded        bool         `json:"resource_excluded"`
+	Deadline                string       `json:"deadline,omitempty"`
+	RemainingTimeoutSeconds int64        `json:"remaining_timeout_seconds,omitempty"`
+	DurationMS              int64        `json:"duration_ms,omitempty"`
+	Usage                   *Usage       `json:"usage,omitempty"`
+	Inputs                  int          `json:"inputs"`
+	WaitID                  string       `json:"wait_id,omitempty"`
+	WakeEventID             string       `json:"wake_event_id,omitempty"`
+	Retry                   *RetryStatus `json:"retry,omitempty"`
+	Retention               Retention    `json:"retention"`
+}
+type Check struct {
+	Name   string   `json:"name"`
+	Status string   `json:"status"`
+	Code   string   `json:"code"`
+	Detail string   `json:"detail,omitempty"`
+	Items  []string `json:"items,omitempty"`
+}
+type Doctor struct {
+	State  string  `json:"state"`
+	Checks []Check `json:"checks"`
+}
+
+// Runs lists the unified history. Filters: scope_id, work_id, state,
+// executor_binding, executor, work_kind, outcome, limit, cursor.
+func (c *Client) Runs(ctx context.Context, q url.Values) (Page[Run], error) {
+	return list[Run](c, ctx, "runs", q)
+}
+func (c *Client) Run(ctx context.Context, id string) (Run, error) {
+	return get[Run](c, ctx, "runs/"+esc(id))
+}
+
+// Doctor runs health checks; checkSecrets explicitly resolves references.
+func (c *Client) Doctor(ctx context.Context, checkSecrets bool) (out Doctor, err error) {
+	q := url.Values{}
+	if checkSecrets {
+		q.Set("check_secrets", "true")
+	}
+	err = c.Do(ctx, "GET", "doctor", q, nil, "", &out)
+	return
+}

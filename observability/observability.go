@@ -39,9 +39,14 @@ type Exporter interface {
 	Shutdown(context.Context) error
 }
 
+// Validate requires name, trusted time, scope, causal Event and trace. An
+// ingress scan record ("ingress." prefix) precedes any accepted Event: it is
+// anchored instead by its source namespace attribute (ingress.source) and a
+// trace derived from the scan, and must not carry a fabricated Event ID.
 func Validate(r Record) error {
 	c := r.Correlation
-	if r.Name == "" || r.At.IsZero() || c.ScopeID == "" || c.EventID == "" || c.TraceID == "" {
+	anchored := c.EventID != "" || strings.HasPrefix(r.Name, "ingress.") && r.Attributes["ingress.source"] != ""
+	if r.Name == "" || r.At.IsZero() || c.ScopeID == "" || !anchored || c.TraceID == "" {
 		return fmt.Errorf("missing lifecycle correlation")
 	}
 	if strings.HasPrefix(r.Name, "execution.") && (c.WorkID == "" || c.ExecutionID == "" || c.ExecutorBinding == "") {

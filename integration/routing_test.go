@@ -152,6 +152,8 @@ func routingFixture(t *testing.T, mode string, o conformance.RuntimeOptions) con
 	var backend storage.Store
 	if mode == "reopen" {
 		backend = &routingReopening{path: path}
+	} else if mode == "instrumented" {
+		backend = instrumentedBackend(t, path)
 	} else {
 		db, err := sqlite.Open(context.Background(), path)
 		if err != nil {

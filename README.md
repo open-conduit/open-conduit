@@ -2,7 +2,7 @@
 
 A Go rewrite of Open Supervisor around Work, Event, Execution, Timer/Wait and Scope.
 
-The project is implementing the core after completing the contracts gate. Primitive, ingress, executor, toolbelt and observability contracts have shared conformance suites. Production components include SQLite storage, local artifacts, verified backups, durable ingress, routing, Work lifecycle, causal limits, execution scheduling/recovery, timers and event-based waits, toolbelt authority, configuration/secrets, the local management API with its operator client, and the restart-safe shell executor with the `os` CLI toolbelt. Daemon composition remains in progress. The delivery baseline is pinned to Open Supervisor revision `c2461e55a9d7ca32527bace9db5ecec8c5e60cb0`; the existing runtime remains independently installable as the fallback.
+The project is implementing the core after completing the contracts gate. Primitive, ingress, executor, toolbelt and observability contracts have shared conformance suites. Production components include SQLite storage, local artifacts, verified backups, durable ingress, routing, Work lifecycle, causal limits, execution scheduling/recovery, timers and event-based waits, toolbelt authority, configuration/secrets, the local management API with its operator client, the restart-safe shell executor with the `os` CLI toolbelt, and lifecycle telemetry with unified run history, a minimal TUI, shared retention and doctor checks. Daemon composition remains in progress. The delivery baseline is pinned to Open Supervisor revision `c2461e55a9d7ca32527bace9db5ecec8c5e60cb0`; the existing runtime remains independently installable as the fallback.
 
 - [Core in one page](docs/architecture/core.md)
 - [Package boundaries and dependency rules](docs/architecture/packages.md)
@@ -18,6 +18,7 @@ The project is implementing the core after completing the contracts gate. Primit
 - [Durable timers, waits and dependency aliases](docs/architecture/timers-waits.md)
 - [Toolbelt authority, configuration and local management](docs/architecture/toolbelt-management.md)
 - [Shell executor and CLI toolbelt](docs/architecture/shell-executor.md)
+- [Lifecycle telemetry, unified run history and doctor](docs/architecture/observability-history.md)
 - [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)
 - [Pinned source test index](docs/baseline/source-tests.md)

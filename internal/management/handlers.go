@@ -374,14 +374,28 @@ func (s *Server) artifactContent(c *call) (int, any, error) {
 		return 0, nil, err
 	}
 	var ref *domain.ArtifactRef
+	owner := ""
 	for _, a := range all {
 		if a.ID == c.params[0] {
 			ref = &domain.ArtifactRef{ID: a.ID, Size: a.Size, MediaType: a.MediaType}
+			owner = a.ExecutionID
 			break
 		}
 	}
 	if ref == nil {
 		return 0, nil, storage.ErrNotFound
+	}
+	var retention runtime.RetentionStatus
+	if err = s.read(c.ctx, func(tx storage.Tx) error {
+		var e error
+		retention, e = runtime.RetentionInTx(tx, domain.ID(owner))
+		return e
+	}); err != nil {
+		return 0, nil, err
+	}
+	if retention.Expired {
+		// Metadata stays in history; content is gone under the retention policy.
+		return 0, nil, fail(404, "artifact_expired", "artifact content expired under the retention policy")
 	}
 	start, end := int64(0), ref.Size-1
 	partial := false
