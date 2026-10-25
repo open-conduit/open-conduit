@@ -33,7 +33,7 @@ func (manualRoute) Match(_ context.Context, in extension.RouteInput) (extension.
 }
 
 func handlers() map[string]extension.RouteHandler {
-	return map[string]extension.RouteHandler{"manual": manualRoute{}, gh.Type: gh.Route{}}
+	return map[string]extension.RouteHandler{"manual": manualRoute{}, gh.Type: gh.Route{}, gh.HoldHandler: gh.HoldRoute{}}
 }
 
 func handlerNames() map[string]bool {

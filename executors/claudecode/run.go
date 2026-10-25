@@ -177,6 +177,9 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	if err != nil {
 		return e.preset(ctx, rn, cfg.StatusSchema, "invalid_config", "invalid claude code binding config", nil)
 	}
+	if cfg.PluginDir == "" && cfg.Playbook != "-" {
+		cfg.PluginDir = e.o.PluginDir
+	}
 	configDir := claudeConfigDir(env)
 	sessionExists := func(session string) bool { return transcriptExists(configDir, workdir, session) }
 	attach := attachInfo{Dir: workdir, Binary: cfg.Binary, Model: cfg.Model, PermissionMode: cfg.PermissionMode, PluginDir: cfg.PluginDir, ExtraArgs: cfg.ExtraArgs}
@@ -212,6 +215,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		inputs = []domain.Event{r.Trigger}
 	}
 	args, text := body(d.Kind, expand(cfg.Args, r.Work), rec.Handoff, e.o.Render(inputs))
+	text = withAdditions(text, projectAdditions(workdir, cfg.Playbook))
 	first := prompt(cfg.Playbook, args, text)
 	turn := turnRecord{ExecutionID: string(r.Execution.ID), WorkID: string(r.Work.ID), ScopeID: string(r.Work.ScopeID), Nonce: nonce, StartedAt: now, Kind: d.Kind, Resume: d.Resume, Arm: d.Arm, Structured: cfg.structured(), StatusSchema: cfg.StatusSchema, FollowUps: len(inputs)}
 	for _, ev := range inputs {

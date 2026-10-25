@@ -16,6 +16,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,12 +87,28 @@ func fail(status int, code, message string) *apiError {
 }
 
 // mapError never discloses backend/provider error text.
+var refusalCode = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
+
 func mapError(err error) *apiError {
 	var api *apiError
 	var invalid *config.ValidationError
+	var refusal *extension.OperationError
 	switch {
 	case errors.As(err, &api):
 		return api
+	case errors.As(err, &refusal):
+		code := refusal.Code
+		if !refusalCode.MatchString(code) {
+			code = "operation_refused"
+		}
+		msg := strings.ToValidUTF8(refusal.Message, "")
+		if len(msg) > 500 {
+			msg = strings.ToValidUTF8(msg[:500], "")
+		}
+		if strings.TrimSpace(msg) == "" {
+			msg = "the operation refused the request"
+		}
+		return fail(422, code, msg)
 	case errors.As(err, &invalid):
 		return &apiError{http.StatusUnprocessableEntity, "invalid_config", "configuration is invalid", invalid.Diagnostics}
 	case errors.Is(err, storage.ErrNotFound):

@@ -23,6 +23,7 @@ The project is implementing the core after completing the contracts gate. Primit
 - [GitHub ingress, routing policy and projections](docs/architecture/github-extension.md)
 - [Optional workspaces and the Git provider](docs/architecture/workspaces.md)
 - [Claude Code executor and private continuity](docs/architecture/claude-code-executor.md)
+- [Engineering tools, waits and playbooks](docs/architecture/engineering-tools.md)
 - [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)
 - [Pinned source test index](docs/baseline/source-tests.md)

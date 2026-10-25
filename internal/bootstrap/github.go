@@ -178,6 +178,7 @@ func (d *daemon) projectGitHub(ctx context.Context) {
 				code = errorCode(err)
 			}
 			d.report("github_projection", domain.ID(src.name), code)
+			d.report("github_turns", domain.ID(src.name), d.publishTurns(ctx, src))
 		}
 	}()
 }

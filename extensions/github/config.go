@@ -182,6 +182,11 @@ type ExtensionConfig struct {
 	Projection         Projection `json:"projection,omitempty"`
 	// WebhookSecret names a selected scope secret used to verify deliveries.
 	WebhookSecret string `json:"webhook_secret,omitempty"`
+	// BaseBranch is the branch PRs target (default: the repository's).
+	BaseBranch string `json:"base_branch,omitempty"`
+	// NoChecksMinutes is how long a PR head with no checks at all waits
+	// before the agent hears none ran (default 10; -1 disables).
+	NoChecksMinutes int `json:"no_checks_minutes,omitempty"`
 }
 
 // Settings is a parsed, defaulted extension entry.
@@ -195,6 +200,8 @@ type Settings struct {
 	Projection                 Projection
 	VerifyInterval             time.Duration
 	WebhookSecret              string
+	BaseBranch                 string
+	NoChecks                   time.Duration
 }
 
 func validNamespace(ns string) bool {
@@ -275,6 +282,21 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 			return s, errors.New("github extension: projection.verify_seconds must be 10-86400")
 		}
 		s.VerifyInterval = time.Duration(c.Projection.VerifySeconds) * time.Second
+	}
+	if c.BaseBranch != "" {
+		if strings.ContainsAny(c.BaseBranch, " \t\r\n~^:?*[\\") || len(c.BaseBranch) > 255 {
+			return s, errors.New("github extension: base_branch must be a branch name")
+		}
+		s.BaseBranch = c.BaseBranch
+	}
+	s.NoChecks = 10 * time.Minute
+	switch {
+	case c.NoChecksMinutes == -1:
+		s.NoChecks = 0
+	case c.NoChecksMinutes < -1 || c.NoChecksMinutes > 24*60:
+		return s, errors.New("github extension: no_checks_minutes must be 1-1440, or -1 to disable")
+	case c.NoChecksMinutes > 0:
+		s.NoChecks = time.Duration(c.NoChecksMinutes) * time.Minute
 	}
 	if c.WebhookSecret != "" && checkSecrets {
 		found := false

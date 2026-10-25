@@ -27,10 +27,13 @@ type toolbeltHarness struct {
 	echoes    *int
 	deny      *bool
 	mu        *sync.Mutex
+	// plan translates the fixture.wait operation (see translated wait cases).
+	plan    func(extension.Authority, domain.Payload) (extension.WaitPlan, error)
+	aliasOK bool
 }
 
 func allToolbeltOperations() []string {
-	return []string{extension.Emit, extension.CreateWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext, "fixture.echo"}
+	return []string{extension.Emit, extension.CreateWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext, "fixture.echo", "fixture.wait"}
 }
 
 // newToolbeltHarness runs a real scheduled attempt whose token is issued by the
@@ -54,6 +57,14 @@ func newToolbeltHarness(t *testing.T, mode string) *toolbeltHarness {
 			}
 			return nil
 		},
+		AuthorizeAlias: func(context.Context, runtime.AliasAuthorization) error {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if !h.aliasOK {
+				return errors.New("denied")
+			}
+			return nil
+		},
 	})
 	if err != nil {
 		t.Fatal(err)
@@ -63,11 +74,27 @@ func newToolbeltHarness(t *testing.T, mode string) *toolbeltHarness {
 		*h.echoes++
 		h.mu.Unlock()
 		return in, nil
-	}}}}); err != nil {
+	}}, {Name: "fixture.wait", Wait: func(_ context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
+		if h.plan == nil {
+			return extension.WaitPlan{}, extension.ErrInvalid
+		}
+		return h.plan(a, in)
+	}}}, DependencyFilter: func(filter domain.Payload, e domain.Event) bool {
+		return string(filter.Data) == string(e.Data.Data)
+	}}); err != nil {
 		t.Fatal(err)
 	}
 	options := base.options
 	options.Toolbelt, options.ToolbeltEndpoint = belt, "unix:///fixture/management.sock"
+	options.AliasFilter = belt.DependencyFilter
+	options.AuthorizeAlias = func(context.Context, runtime.AliasAuthorization) error {
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		if !h.aliasOK {
+			return errors.New("denied")
+		}
+		return nil
+	}
 	h.scheduler = newTestScheduler(t, f, options)
 	h.belt = belt
 	executor.onRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {

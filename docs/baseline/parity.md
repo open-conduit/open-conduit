@@ -134,3 +134,13 @@ Legacy `OPEN_SUPERVISOR_*` variables remain explicit compatibility work. Agent u
 - C08: the work-issue status schema and the playbook invocation (`/open-conduit:<playbook>`). Playbook content, plugin preparation and setup remain 03-04/03-05.
 
 Real-agent evidence is pending for 03-06.
+
+03-04 update: [engineering tools, waits and playbooks](../architecture/engineering-tools.md). Evidence uses fixtures (the GitHub fake, fake executors, the composed daemon) only:
+
+- **C08.** The work-issue playbook is ported onto registered operations, with project additions (Open Conduit path, legacy fallback), plugin preparation and the Open Conduit setup guide. Its example config validates against the daemon registry; the setup command itself is 03-05.
+- **C09.** Context, issue view/comment/list/create (including held follow-up), PR list/create/view/comment/reply, checks, attachment upload/get (signed-in, host-only), wait/until, and correction/problem, all through one toolbelt authority. Worktree commands are replaced by B07 acquisition; inflight is not ported; upstream reporting is 03-08.
+- **B07.** PR merged/closed, issue closed, issue turn-state and cross-scope prerequisites become dependency subscriptions with adapter filters. The cases ported are already-met (refused for agents, aliased for holds), timeout, another agent reporting and reconcile-recovered merges. Job waits wait for 05-02.
+- **B08 (holds part).** Scheduled holds are core timeout timers and dependency aliases on `github.issue.held` Work.
+- **C04 (checks part).** No-checks after 10 minutes (`github.checks.none`). Intentional divergence: no 20-second debounce.
+
+Intentional differences: one wake ends a wait (the agent waits again), and `--cancel` is gone. Real-issue evidence is pending for 03-06.

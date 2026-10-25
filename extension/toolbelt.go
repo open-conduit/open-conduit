@@ -71,6 +71,47 @@ type Operation struct {
 	Name string
 	// Handler receives validated authority, not a bearer token or secrets.
 	Handler func(context.Context, Authority, domain.Payload) (domain.Payload, error)
+	// Wait, set instead of Handler, translates domain wait syntax into a
+	// generic plan for the current Work. The toolbelt declares the returned
+	// request exactly like the builtin wait (same fence, watermark, authority
+	// release and host handshake) and installs the dependencies once the Wait
+	// is registered. Domain conditions never enter core: only event types,
+	// correlation keys, a timeout and opaque dependency filters do.
+	Wait func(context.Context, Authority, domain.Payload) (WaitPlan, error)
+}
+
+// WaitPlan is a translated wait. Wait matches the current Work's own keys
+// (empty keys mean every key the Work owns); a dependency's AliasType must
+// pass its type filter. Output is returned to the caller.
+type WaitPlan struct {
+	Wait         WaitRequest
+	Dependencies []Dependency
+	Output       domain.Payload
+}
+
+// Dependency is a B04 authorized dependency subscription: Events accepted on
+// SourceKey (another Work's correlation, or one no Work owns yet) are aliased
+// into the waiting Work as AliasType Events with the original Event as
+// causation. It never attaches the foreign key to the waiting Work.
+type Dependency struct {
+	// ID is stable within the plan (for example the condition text).
+	ID string
+	// SourceScopeID names the scope owning SourceKey; empty means the waiting
+	// Work's scope. Another scope requires explicit alias authorization.
+	SourceScopeID domain.ID
+	SourceKey     domain.CorrelationKey
+	Types         []string
+	AliasType     string
+	// Filter is opaque to core. When set, the registering extension's
+	// DependencyFilter decides whether a type-matching source Event counts.
+	Filter domain.Payload
+	// Label is a short, secret-free description carried in the alias payload
+	// (for example "pr:12:merged").
+	Label string
+	// FromNow scans only Events accepted after the wait is declared (an
+	// occurrence such as "the next run ends"). Otherwise all accepted history
+	// counts, so an already-met state wakes the wait at once.
+	FromNow bool
 }
 
 // ContractVersion versions the in-process API, not the deferred subprocess protocol.
@@ -81,6 +122,35 @@ type Registration struct {
 	Name       string
 	EventTypes []string
 	Operations []Operation
+	// DependencyFilter evaluates the opaque Filter of this registration's
+	// dependencies against a type-matching source Event. It must be pure and
+	// deterministic: core calls it inside coordination transactions.
+	DependencyFilter func(filter domain.Payload, event domain.Event) bool
+}
+
+// OperationError is a refusal an extension handler authored for its caller:
+// a stable code ([a-z][a-z0-9_]*) and a short message the agent can act on
+// ("PR #12 is already merged: carry on now"). Both must be secret-free; the
+// transport returns them verbatim instead of a generic failure.
+type OperationError struct{ Code, Message string }
+
+func (e *OperationError) Error() string { return e.Code + ": " + e.Message }
+
+type requestIDKey struct{}
+
+// WithCallRequestID records the caller's toolbelt request identity for an
+// extension handler. Trusted toolbelt code sets it; it is empty when the
+// caller supplied none.
+func WithCallRequestID(ctx context.Context, id string) context.Context {
+	return context.WithValue(ctx, requestIDKey{}, id)
+}
+
+// CallRequestID is the toolbelt request identity of the call a handler is
+// serving (empty when none was supplied). Handlers making non-re-derivable
+// external writes derive stable intent identities from it.
+func CallRequestID(ctx context.Context) string {
+	id, _ := ctx.Value(requestIDKey{}).(string)
+	return id
 }
 
 // Registration is atomic. Duplicate names, reserved operations and undeclared

@@ -16,6 +16,17 @@ import (
 const waitNamespace = "core.waits"
 const wakeReadyNamespace = "core.waits.ready"
 const subscriptionNamespace = "core.waits.subscriptions"
+const pendingSubscriptionNamespace = "core.waits.pending_subscriptions"
+
+// pendingSubscriptions are a registered Wait's translated dependencies not
+// yet installed. Registration persists them atomically with the Wait, so a
+// crash before installation only delays it to the next reconcile pass;
+// installation backscans source history, so nothing is missed meanwhile.
+type pendingSubscriptions struct {
+	WaitID   domain.ID
+	Requests []SubscriptionRequest
+	Refused  []string `json:",omitempty"`
+}
 
 type waitMetadata struct {
 	Timer   domain.Timer
@@ -80,8 +91,74 @@ func (s *Scheduler) registerDeclaredWait(ctx context.Context, ref domain.LeaseRe
 				return err
 			}
 		}
-		return s.waitInTx(tx, ref, *declared.Wait, state.Capabilities.Resume, result)
+		if err = s.waitInTx(tx, ref, *declared.Wait, state.Capabilities.Resume, result); err != nil {
+			return err
+		}
+		if len(declared.Subscriptions) == 0 {
+			return nil
+		}
+		if current, err := tx.Wait(declared.Wait.ID); err != nil || current.State != domain.WaitActive {
+			return err // an own-key match already woke it: nothing to install
+		}
+		return putJSON(tx, pendingSubscriptionNamespace, identity(string(declared.Wait.ID)), pendingSubscriptions{WaitID: declared.Wait.ID, Requests: declared.Subscriptions})
 	})
+}
+
+// installPendingSubscriptions installs registered Waits' translated
+// dependencies through Subscribe (authorization, atomic install and
+// backscan). Refusals are recorded and never retried; storage errors leave
+// the entry for the next pass.
+func (s *Scheduler) installPendingSubscriptions(ctx context.Context, limit int) error {
+	var rows []storage.Entry
+	if err := s.transact(ctx, nil, func(tx storage.Tx) error {
+		var er error
+		rows, er = tx.List(pendingSubscriptionNamespace, "")
+		return er
+	}); err != nil {
+		return err
+	}
+	for i, row := range rows {
+		if i >= limit {
+			break
+		}
+		var p pendingSubscriptions
+		if err := json.Unmarshal(row.Value, &p); err != nil {
+			return err
+		}
+		var active bool
+		if err := s.transact(ctx, nil, func(tx storage.Tx) error {
+			w, er := tx.Wait(p.WaitID)
+			active = er == nil && w.State == domain.WaitActive
+			if errors.Is(er, storage.ErrNotFound) {
+				return nil
+			}
+			return er
+		}); err != nil {
+			return err
+		}
+		for active && len(p.Requests) > 0 {
+			err := s.Subscribe(ctx, p.Requests[0])
+			if err != nil && (errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)) {
+				return err
+			}
+			if err != nil && !errors.Is(err, extension.ErrUnauthorized) && !errors.Is(err, storage.ErrInvalid) && !errors.Is(err, storage.ErrConflict) && !errors.Is(err, ErrCausalRejected) && !errors.Is(err, storage.ErrNotFound) {
+				break // transient: keep the remainder for the next pass
+			}
+			if err != nil {
+				p.Refused = append(p.Refused, p.Requests[0].ID)
+			}
+			p.Requests = p.Requests[1:]
+		}
+		if err := s.transact(ctx, nil, func(tx storage.Tx) error {
+			if !active || len(p.Requests) == 0 {
+				return tx.Delete(pendingSubscriptionNamespace, row.Key)
+			}
+			return putJSON(tx, pendingSubscriptionNamespace, row.Key, p)
+		}); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 func (s *Scheduler) waitInTx(tx storage.Tx, ref domain.LeaseRef, wait domain.Wait, resume bool, result extension.Result) error {
 	{
@@ -452,6 +529,13 @@ type SubscriptionRequest struct {
 	Types         []string
 	TargetKey     domain.CorrelationKey
 	AliasType     string
+	// After is the exclusive acceptance sequence the source scan starts
+	// from: zero scans all accepted history (an already-met state counts).
+	After uint64 `json:",omitempty"`
+	// Filter is opaque; SchedulerOptions.AliasFilter evaluates it for the
+	// namespace. Label is a short secret-free description for the alias.
+	Filter *domain.Payload `json:",omitempty"`
+	Label  string          `json:",omitempty"`
 }
 type subscription struct {
 	Request               SubscriptionRequest
@@ -487,7 +571,7 @@ func (s *Scheduler) Subscribe(ctx context.Context, request SubscriptionRequest) 
 	if len(request.Namespace) > 1024 {
 		return storage.ErrInvalid
 	}
-	if request.ID == "" || len(request.ID) > 1024 || request.SourceKey.Source == "" || request.SourceKey.ExternalID == "" || request.WaitID == "" || !validType(request.AliasType) || strings.HasPrefix(request.AliasType, "core.") {
+	if len(request.Label) > 200 || request.ID == "" || len(request.ID) > 1024 || request.SourceKey.Source == "" || request.SourceKey.ExternalID == "" || request.WaitID == "" || !validType(request.AliasType) || strings.HasPrefix(request.AliasType, "core.") {
 		return storage.ErrInvalid
 	}
 	for _, typ := range request.Types {
@@ -585,7 +669,7 @@ func (s *Scheduler) Subscribe(ctx context.Context, request SubscriptionRequest) 
 		if er != nil {
 			return er
 		}
-		sub = subscription{Request: request, WorkID: work.ID, TargetScopeID: work.ScopeID, Active: true}
+		sub = subscription{Request: request, WorkID: work.ID, TargetScopeID: work.ScopeID, Checkpoint: request.After, Active: true}
 		return nil
 	})
 	if err != nil {
@@ -641,6 +725,9 @@ func (s *Scheduler) authorizeAlias(ctx context.Context, sub subscription) error 
 func (s *Scheduler) ReconcileSubscriptions(ctx context.Context, limit int) error {
 	if limit < 1 || limit > 200 {
 		return storage.ErrInvalid
+	}
+	if err := s.installPendingSubscriptions(ctx, limit); err != nil {
+		return err
 	}
 	var rows []storage.Entry
 	var cursor string
@@ -752,6 +839,11 @@ func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *su
 		if !typeMatch {
 			continue
 		}
+		if sub.Request.Filter != nil {
+			if s.options.AliasFilter == nil || !s.options.AliasFilter(sub.Request.Namespace, *sub.Request.Filter, source.Event) {
+				continue
+			}
+		}
 		scope, er := scopeForEvent(tx, source)
 		if er != nil {
 			return er
@@ -759,7 +851,12 @@ func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *su
 		if scope != sub.Request.SourceScopeID {
 			return storage.ErrConflict
 		}
-		data, _ := json.Marshal(struct{ Subscription, Event string }{sub.Request.ID, string(source.Event.ID)})
+		data, _ := json.Marshal(struct {
+			Subscription string `json:"subscription"`
+			Event        string `json:"event"`
+			SourceType   string `json:"source_type"`
+			Label        string `json:"label,omitempty"`
+		}{sub.Request.ID, string(source.Event.ID), source.Event.Type, sub.Request.Label})
 		event := domain.Event{ID: domain.ID("alias/" + identity(sub.Request.Namespace, sub.Request.ID, string(source.Event.ID))), Source: "core.subscription", DeliveryID: identity(sub.Request.Namespace, sub.Request.ID, string(source.Event.ID)), Type: sub.Request.AliasType, WorkID: sub.WorkID, CorrelationKey: &sub.Request.TargetKey, CausationID: source.Event.ID, OccurredAt: source.Event.OccurredAt, ReceivedAt: s.now(), Data: domain.Payload{Schema: "core.subscription.alias.v1", Data: data}}
 		_, _, er = AcceptDerivedInTx(tx, s.now(), s.options.CausalLimits, work.ScopeID, source.Event.ID, event)
 		if er != nil && !errors.Is(er, ErrCausalRejected) {

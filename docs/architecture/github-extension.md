@@ -26,6 +26,8 @@ A `github` extension entry (an ingress entry: `config.scope` must be the contain
 | `preview_pattern` | Default `deploy-preview`. |
 | `projection` | `disabled`, `verify_seconds` (default 900) and `dry_run`. |
 | `webhook_secret` | Names a selected scope secret. |
+| `base_branch` | The branch PRs target (default: the repository's). Since 03-04. |
+| `no_checks_minutes` | Default 10; `-1` disables. How long a PR head with no checks waits before `github.checks.none`. Since 03-04. |
 
 The entry also needs a `connection`. A route uses handler `github`.
 
@@ -81,7 +83,7 @@ Handler `github` reads only the detached Event, Scope and Work. It finds its ext
   - It has no skip label.
   - It has a required label, if any are configured.
   - It does not carry the claimed label, unless it is a reopened generation. A claimed issue with no Work belongs to another owner, which preserves a single owner while Open Supervisor runs.
-  - Scheduled issues wait for hold translation in 03-04.
+  - Scheduled issues are claimed by the `github-hold` route (03-04), never by `github`.
 - **Existing Work** receives these as input: new human comments, reviews with a body, other Works' agent comments (including Open Supervisor-marked notes from other issues), closes, merges and completed checks.
 - **Never delivered:** edits, unmarked bot comments, this Work's own notes, open-state updates, pending checks and absence.
 
@@ -149,7 +151,12 @@ The [SQLite integration cases](../../integration/github_test.go) run the real ru
 
 - **Not proven yet.** No real GitHub API was called; all evidence uses fixtures. Real issues, real rate limits and real webhooks are 03-06/03-07 gate evidence.
 - **Webhook exposure.** The listener, tunnel and HTTP route mounting, together with dry-run operator controls, belong to 03-05. `WebhookHandler` is ready for that.
-- **Holds and waits.** The scheduled label and hold markers, PR/check/issue waits, dependency subscriptions, and agent-facing comment, PR and attachment operations belong to 03-04. Those tools must post through `Projector.Deliver` with stable intent IDs.
+- **Holds, waits and tools (03-04).** Delivered in [engineering tools, waits and playbooks](engineering-tools.md):
+  - the agent-facing operations, posting through `Projector.Deliver` durable intents (re-driven by `Converge`) and `CreateIssue`;
+  - translated waits with dependency filters;
+  - `github.agent.turn` from durable outcomes;
+  - the `github-hold` route and executor, with the `scheduled` label managed while held or waiting;
+  - `github.checks.none`.
 - **Claude Code continuity.** Delivered by 03-03: `WorkComments` posts a Work's marked comment exactly once per intent (`Deliver` plus `IntentComment`) and reads its reactions. The [Claude Code executor](claude-code-executor.md)'s handoff feedback uses it through bootstrap.
 - **Projection volume.** The projector reads every Work in its scope each pass. That is enough for the first switch, but it has no high-volume claim.
 - **Unenforced setting.** `settings.admission_limit` (v1's claimed-per-project cap) is still not enforced.

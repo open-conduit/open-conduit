@@ -41,6 +41,7 @@ const (
 	TypeChecksPending = "github.checks.pending"
 	TypeChecksPassed  = "github.checks.passed"
 	TypeChecksFailed  = "github.checks.failed"
+	TypeChecksNone    = "github.checks.none"
 	TypeDelivery      = "github.delivery"
 )
 
@@ -60,7 +61,7 @@ const DeliveryLoss = "Raw webhook deliveries (github.delivery, the trigger input
 func Families() []extension.EventFamily {
 	var out []extension.EventFamily
 	for _, t := range []string{TypeIssueOpen, TypeIssueClosed, TypePullOpen, TypePullClosed, TypePullMerged,
-		TypeCommentHuman, TypeCommentBot, TypeCommentAgent, TypeChecksPending, TypeChecksPassed, TypeChecksFailed} {
+		TypeCommentHuman, TypeCommentBot, TypeCommentAgent, TypeChecksPending, TypeChecksPassed, TypeChecksFailed, TypeChecksNone} {
 		out = append(out, extension.EventFamily{Type: t, ReDerivable: true})
 	}
 	return append(out, extension.EventFamily{Type: TypeDelivery, Loss: DeliveryLoss})
@@ -158,6 +159,9 @@ type ChecksPayload struct {
 	Failed   []string   `json:"failed"`
 	Preview  string     `json:"preview,omitempty"`
 	Runs     []CheckRun `json:"runs"`
+	// None marks a head that has had no checks at all for no_checks_minutes
+	// (the repository has no CI): v1's "No checks ran".
+	None bool `json:"none,omitempty"`
 }
 
 // DeliveryPayload is a raw webhook delivery (non-re-derivable).
@@ -677,7 +681,33 @@ func (n *normalizer) checksForPull(ctx context.Context, p rawPull) (extension.Ob
 	if err != nil {
 		return extension.Observation{}, false, err
 	}
+	if len(runs)+len(statuses) == 0 {
+		return n.noChecksObservation(ctx, p)
+	}
 	return n.checksObservation(ctx, p, runs, statuses)
+}
+
+// noChecksObservation reports a head with no checks at all once its commit
+// is older than NoChecks (v1 noChecksMinutes): a repository without CI is
+// not waited on for ever. Its occurrence is the commit time plus the delay,
+// so push and reconcile agree once both see it; before then nothing is
+// observed. It is a latency signal only, so a failed commit read observes
+// nothing rather than failing the scan.
+func (n *normalizer) noChecksObservation(ctx context.Context, p rawPull) (extension.Observation, bool, error) {
+	if n.s.NoChecks <= 0 || n.received.IsZero() {
+		return extension.Observation{}, false, nil
+	}
+	at, err := n.c.CommitTime(ctx, n.s.Repo, p.Head.SHA)
+	if err != nil || at.IsZero() || n.received.Sub(at) < n.s.NoChecks {
+		return extension.Observation{}, false, nil
+	}
+	key, _, err := n.pullKey(ctx, p)
+	if err != nil {
+		return extension.Observation{}, false, err
+	}
+	out := ChecksPayload{Repo: n.s.Repo, Number: p.Number, SHA: p.Head.SHA, Complete: true, Failed: []string{}, Runs: []CheckRun{}, None: true}
+	o, err := n.observation("pr/"+strconv.Itoa(p.Number)+"/checks", TypeChecksNone, key, at.Add(n.s.NoChecks), SchemaChecks, out)
+	return o, err == nil, err
 }
 
 // reviewObservations normalizes a PR's submitted reviews (pending reviews are

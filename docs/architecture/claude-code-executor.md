@@ -188,3 +188,12 @@ The config is strict and validated at load. Every field is optional:
 - **Not ported yet.** v1's dry-run model and the cross-issue "in flight" list have no Open Conduit equivalent yet.
 - **Inject consumption (04-02).** Because injection acknowledgement is not consumption, an injected input is presented again to the next attempt.
 - **Idle `ready` Work.** Handed-back Work sits `ready` with no pending input. The host loop's `Start` reports one deduplicated `invalid_state` diagnostic for it.
+
+03-04 update: [engineering tools, waits and playbooks](engineering-tools.md) delivers the following:
+
+- **Playbooks.** The playbooks and the plugin that bootstrap writes to `<state>/playbooks/plugin`, the default `Options.PluginDir` for bindings without `plugin_dir`.
+- **Project additions.** Read from the turn's workspace (`.open-conduit/playbooks/<playbook>.md`, falling back to `.open-supervisor/playbooks/`) and appended to the turn body.
+- **Rendering.** A GitHub `Options.Render` with v1's reply hints, now naming toolbelt calls.
+- **Tool calls.** The MCP `call` tool sends its `input` object as payload data, with the `file_path`/`save_to` file conventions.
+
+A `call github.wait` parks the attempt exactly like `wait`, because `Complete` applies the declaration.

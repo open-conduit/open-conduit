@@ -65,7 +65,7 @@ func has(labels []string, name string) bool {
 // Admits is the claim admission rule (Open Supervisor parity): no skip label,
 // one of the required labels when any are configured, and not carrying the
 // claimed label unless this is a reopened generation (a claimed, unowned issue
-// belongs to another owner). Scheduled issues wait for hold translation.
+// belongs to another owner). Scheduled issues are claimed by HoldRoute.
 func (l Labels) Admits(p IssuePayload) bool {
 	if p.State != "open" || has(p.Labels, l.Scheduled) {
 		return false
@@ -112,7 +112,12 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	if !strings.HasPrefix(e.Type, "github.") || e.Type == TypeDelivery {
 		return extension.RouteDecision{}, nil
 	}
-	s, ok := settingsFor(in.Scope, e.Source)
+	source := e.Source
+	if e.Type == TypeHoldReleased && e.CorrelationKey != nil {
+		// Emitted by the hold executor: its source is the execution.
+		source = e.CorrelationKey.Source
+	}
+	s, ok := settingsFor(in.Scope, source)
 	if !ok || e.CorrelationKey == nil {
 		return extension.RouteDecision{}, nil
 	}
@@ -127,8 +132,10 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		return extension.RouteDecision{Match: true, Kind: WorkKind}, nil
 	}
 	switch e.Type {
-	case TypeIssueClosed, TypePullMerged, TypePullClosed, TypeChecksPassed, TypeChecksFailed:
+	case TypeIssueClosed, TypePullMerged, TypePullClosed, TypeChecksPassed, TypeChecksFailed, TypeChecksNone:
 		return extension.RouteDecision{Match: true}, nil
+	case TypeHoldReleased:
+		return extension.RouteDecision{Match: in.Event.Event.WorkID == in.Work.ID}, nil
 	case TypeCommentHuman, TypeCommentAgent:
 		var p CommentPayload
 		if json.Unmarshal(e.Data.Data, &p) != nil || p.Edited {

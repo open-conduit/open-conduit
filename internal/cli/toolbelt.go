@@ -355,12 +355,19 @@ func (t *toolbelt) call(args []string) int {
 	}
 	var in any
 	if data != nil {
+		if data.Data, err = fileInput(data.Data); err != nil {
+			return t.usage(err.Error())
+		}
 		in = data
 	}
 	return t.do(f, pos[0], in, func(r client.ToolResult) any {
 		if r.Output == nil {
 			return client.Payload{}
 		}
-		return r.Output
+		shown, err := fileOutput(r.Output)
+		if err != nil {
+			return map[string]string{"error": err.Error()}
+		}
+		return shown
 	})
 }

@@ -29,6 +29,7 @@ import (
 	"github.com/alsiola/open-conduit/domain"
 	"github.com/alsiola/open-conduit/executors/shell"
 	"github.com/alsiola/open-conduit/extension"
+	gh "github.com/alsiola/open-conduit/extensions/github"
 	"github.com/alsiola/open-conduit/internal/artifacts"
 	"github.com/alsiola/open-conduit/internal/config"
 	"github.com/alsiola/open-conduit/internal/management"
@@ -101,6 +102,7 @@ type daemon struct {
 	github    githubSources
 	resources resourceState
 	claude    claudeState
+	tools     *gh.Tools
 	endpoint  string
 	cursorKey []byte
 	current   atomic.Pointer[components]
@@ -223,8 +225,11 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.closeClaudeCode()
-	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor}
-	registry := config.Registry{Executors: d.executors, Handlers: handlerNames()}
+	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor, gh.HoldExecutor: gh.NewHoldExecutor()}
+	if err = d.openTools(); err != nil {
+		return err
+	}
+	registry := config.Registry{Executors: d.executors, Handlers: handlerNames(), Operations: gh.Operations()}
 	githubRegistry(&registry)
 	resourceRegistry(&registry)
 	if err = d.openResources(); err != nil {
@@ -316,8 +321,11 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return nil, err
 	}
 	var belt *runtime.Toolbelt
-	belt, err = runtime.NewToolbelt(d.coord, d.now, c.router, runtime.ToolbeltOptions{Authorize: d.configs.Authorize, Grant: d.configs.Grant(func() []string { return belt.EventTypes() }), Observer: d.pipeline})
+	belt, err = runtime.NewToolbelt(d.coord, d.now, c.router, runtime.ToolbeltOptions{Authorize: d.configs.Authorize, Grant: d.configs.Grant(func() []string { return belt.EventTypes() }), Observer: d.pipeline, AuthorizeAlias: d.authorizeAlias})
 	if err != nil {
+		return nil, err
+	}
+	if err = d.registerTools(belt); err != nil {
 		return nil, err
 	}
 	c.toolbelt = belt
@@ -338,6 +346,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
 		Toolbelt: belt, ToolbeltEndpoint: d.endpoint, Secrets: d.configs.Secrets(d.resolver),
 		Resources: d.bindResources, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
+		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
 	}); err != nil {
 		return nil, err
 	}

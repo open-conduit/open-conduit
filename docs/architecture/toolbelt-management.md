@@ -103,3 +103,5 @@ Rebind and scope reconcile endpoints are deferred to operator controls in 03-05.
 - [Config tests](../../internal/config) cover the four examples, the invalid-capability diagnostic, every oracle mutation, all four secret schemes and file safety.
 
 This is local in-process and socket evidence. It makes no daemon-restart, multi-process or real-keyring claims.
+
+03-04 update: bootstrap registers the GitHub tool operations on every generation's toolbelt and lists them in the config registry (`Registry.Operations`), so a binding may grant them. Translated wait operations are declared like `wait` ([engineering tools, waits and playbooks](engineering-tools.md)). Handler refusals (`extension.OperationError`) return `422` with the handler's code and message.

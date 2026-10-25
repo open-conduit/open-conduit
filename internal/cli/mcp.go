@@ -75,9 +75,9 @@ var mcpTools = []mcpTool{
 		"summary": map[string]any{"type": "string"},
 		"data":    payloadSchema,
 	}, "kind")},
-	{Name: "call", Description: "Call an operation an extension registered on the toolbelt.", InputSchema: object(map[string]any{
+	{Name: "call", Description: "Call an operation an extension registered on the toolbelt (for example github.issue.comment). A file_path in the input is read and sent as content_base64; a downloaded file is written to the input's save_to.", InputSchema: object(map[string]any{
 		"operation": map[string]any{"type": "string"},
-		"input":     map[string]any{"description": "The operation's input (any JSON value)."},
+		"input":     map[string]any{"type": "object", "description": "The operation's input object, for example {\"body\": \"…\"}."},
 	}, "operation")},
 }
 
@@ -205,7 +205,11 @@ func (t *toolbelt) mcpCall(name string, arguments json.RawMessage) map[string]an
 			return fail("call requires an operation")
 		}
 		if input, ok := args["input"]; ok && string(input) != "null" {
-			call.Input = input
+			wrapped, err := callInput(input)
+			if err != nil {
+				return fail(err.Error())
+			}
+			call.Input = wrapped
 		}
 	case "read_context":
 	default:
@@ -250,8 +254,34 @@ func (t *toolbelt) mcpCall(name string, arguments json.RawMessage) map[string]an
 		shown = result.Output
 		if shown == (*client.Payload)(nil) {
 			shown = client.Payload{}
+		} else if shown, err = fileOutput(result.Output); err != nil {
+			return fail(err.Error())
 		}
 	}
 	text, _ := json.MarshalIndent(shown, "", "  ")
 	return map[string]any{"content": []map[string]any{{"type": "text", "text": string(text)}}, "isError": false}
+}
+
+// callInput is a `call` tool input as the toolbelt wire expects it: the
+// operation's input object becomes the payload's data (an explicit
+// {schema, data} payload passes through), with file_path filled in.
+func callInput(input json.RawMessage) (json.RawMessage, error) {
+	var probe map[string]json.RawMessage
+	if json.Unmarshal(input, &probe) == nil {
+		_, hasData := probe["data"]
+		_, hasSchema := probe["schema"]
+		if hasData && len(probe) <= 2 && (len(probe) == 1 || hasSchema) {
+			data, err := fileInput(probe["data"])
+			if err != nil {
+				return nil, err
+			}
+			probe["data"] = data
+			return json.Marshal(probe)
+		}
+	}
+	data, err := fileInput(input)
+	if err != nil {
+		return nil, err
+	}
+	return json.Marshal(map[string]json.RawMessage{"data": data})
 }

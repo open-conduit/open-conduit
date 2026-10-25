@@ -37,6 +37,11 @@ type SchedulerOptions struct {
 	ControlErrorFallback map[string]string
 	Timeout              time.Duration
 	AuthorizeAlias       func(context.Context, AliasAuthorization) error
+	// AliasFilter evaluates a subscription's opaque Filter with the filter its
+	// namespace's extension declared (Toolbelt.DependencyFilter). It is pure
+	// and runs inside coordination transactions. A subscription with a filter
+	// and no AliasFilter never matches.
+	AliasFilter func(namespace string, filter domain.Payload, e domain.Event) bool
 	// Toolbelt issues a fresh per-epoch credential after claim/recovery/resume
 	// for executors advertising a toolbelt transport other than none.
 	Toolbelt         *Toolbelt
@@ -769,7 +774,15 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 		if err := extension.ValidateResult(result); err != nil {
 			return err
 		}
-		return s.registerDeclaredWait(ctx, ref, *declared, result)
+		if err := s.registerDeclaredWait(ctx, ref, *declared, result); err != nil {
+			return err
+		}
+		if len(declared.Subscriptions) > 0 {
+			// Best effort: a failure leaves the durable pending entry for the
+			// next ReconcileSubscriptions pass.
+			_ = s.installPendingSubscriptions(ctx, 20)
+		}
+		return nil
 	}
 	if declared != nil && declared.Outcome != nil {
 		result.Outcome = *declared.Outcome

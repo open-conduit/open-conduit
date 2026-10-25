@@ -134,6 +134,11 @@ type Server struct {
 	loseNext  map[string]int
 	tokenTTL  time.Duration
 	issued    int
+	commits   map[string]time.Time
+	contents  map[string][]byte // attachments branch path → content
+	branches  map[string]bool
+	files     map[string]string // /files/<name> → redirect target
+	fileData  map[string][]byte
 }
 
 type limit struct {
@@ -147,7 +152,8 @@ type limit struct {
 func New(repo string, tokens ...string) *Server {
 	s := &Server{Repo: repo, now: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), nextID: 1000, issues: map[int]*Issue{}, pulls: map[int]*Pull{},
 		events: map[int][]IssueEvent{}, checks: map[string][]CheckRun{}, statuses: map[string][]Status{}, tokens: map[string]bool{},
-		apps: map[string]*rsa.PublicKey{}, installs: map[string]string{}, failNext: map[string]int{}, loseNext: map[string]int{}, tokenTTL: time.Hour}
+		apps: map[string]*rsa.PublicKey{}, installs: map[string]string{}, failNext: map[string]int{}, loseNext: map[string]int{}, tokenTTL: time.Hour,
+		commits: map[string]time.Time{}, contents: map[string][]byte{}, branches: map[string]bool{}, files: map[string]string{}, fileData: map[string][]byte{}}
 	for _, t := range tokens {
 		s.tokens[t] = true
 	}
@@ -249,8 +255,33 @@ func (s *Server) OpenPull(title, body, head, sha string, user User) int {
 	t := s.tick()
 	s.issues[n] = &Issue{Number: n, Title: title, Body: body, User: user, State: "open", Created: t, Updated: t, Pull: true}
 	s.pulls[n] = &Pull{Number: n, HeadRef: head, HeadSHA: sha, BaseRef: "main", CreatedAt: t}
+	if _, ok := s.commits[sha]; !ok {
+		s.commits[sha] = t
+	}
 	return n
 }
+
+// CommitAt records a commit's committer date (default: when first seen).
+func (s *Server) CommitAt(sha string, at time.Time) { s.mu.Lock(); s.commits[sha] = at; s.mu.Unlock() }
+
+// Content returns an uploaded attachment's content.
+func (s *Server) Content(path string) ([]byte, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	b, ok := s.contents[path]
+	return b, ok
+}
+
+// ServeFile makes GET /files/<name> serve data to an authenticated reader,
+// or redirect to target when it is set (a signed storage link elsewhere).
+func (s *Server) ServeFile(name string, data []byte, target string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.fileData[name], s.files[name] = data, target
+}
+
+// Pull returns a copy of a pull request's state.
+func (s *Server) Pull(n int) Pull { s.mu.Lock(); defer s.mu.Unlock(); return *s.pulls[n] }
 
 // PushPull moves a PR head.
 func (s *Server) PushPull(n int, sha string) {
@@ -258,6 +289,9 @@ func (s *Server) PushPull(n int, sha string) {
 	defer s.mu.Unlock()
 	s.pulls[n].HeadSHA = sha
 	s.issue(n).Updated = s.tick()
+	if _, ok := s.commits[sha]; !ok {
+		s.commits[sha] = s.now
+	}
 }
 
 // MergePull merges a PR.
@@ -356,6 +390,19 @@ func (s *Server) Comments(n int) []Comment {
 	var out []Comment
 	for _, c := range s.comments {
 		if c.Number == n && !c.Inline {
+			out = append(out, *c)
+		}
+	}
+	return out
+}
+
+// InlineComments returns a PR's inline review comments (and replies).
+func (s *Server) InlineComments(n int) []Comment {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	var out []Comment
+	for _, c := range s.comments {
+		if c.Number == n && c.Inline {
 			out = append(out, *c)
 		}
 	}
@@ -618,7 +665,7 @@ var (
 )
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (string, bool) {
-	auth := strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")
+	auth := strings.TrimPrefix(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), "token ")
 	if reInstall.MatchString(r.URL.Path) || reAccessToken.MatchString(r.URL.Path) {
 		app, ok := s.verifyJWT(auth)
 		if !ok {
@@ -696,6 +743,19 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	token, ok := s.authorize(w, r)
 	if !ok {
+		return
+	}
+	if name, found := strings.CutPrefix(r.URL.Path, "/files/"); found && r.Method == http.MethodGet {
+		if target := s.files[name]; target != "" {
+			http.Redirect(w, r, target, http.StatusFound)
+			return
+		}
+		if data, ok := s.fileData[name]; ok {
+			w.Header().Set("Content-Type", "image/png")
+			_, _ = w.Write(data)
+			return
+		}
+		http.NotFound(w, r)
 		return
 	}
 	var body json.RawMessage
@@ -792,6 +852,9 @@ var (
 	reCheckRuns    = regexp.MustCompile(`^/commits/([^/]+)/check-runs$`)
 	reStatus       = regexp.MustCompile(`^/commits/([^/]+)/status$`)
 	reCommitPulls  = regexp.MustCompile(`^/commits/([^/]+)/pulls$`)
+	reCommit       = regexp.MustCompile(`^/commits/([^/]+)$`)
+	rePullComments = regexp.MustCompile(`^/pulls/([0-9]+)/comments$`)
+	reReply        = regexp.MustCompile(`^/pulls/([0-9]+)/comments/([0-9]+)/replies$`)
 )
 
 func atoi(s string) int { n, _ := strconv.Atoi(s); return n }
@@ -815,21 +878,97 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 	}
 	rest, _ := url.PathUnescape(m[2])
 	get := r.Method == http.MethodGet
+	q := r.URL.Query()
 	switch {
+	case get && rest == "":
+		return http.StatusOK, map[string]any{"full_name": s.Repo, "default_branch": "main"}
 	case get && rest == "/issues":
 		var list []map[string]any
 		for _, n := range s.sortedIssues() {
-			list = append(list, s.issueJSON(s.issues[n]))
+			i := s.issues[n]
+			if st := q.Get("state"); st != "" && st != "all" && i.State != st {
+				continue
+			}
+			list = append(list, s.issueJSON(i))
 		}
 		return http.StatusOK, paged(r, list)
+	case r.Method == http.MethodPost && rest == "/issues":
+		var req struct {
+			Title  string   `json:"title"`
+			Body   string   `json:"body"`
+			Labels []string `json:"labels"`
+		}
+		_ = json.Unmarshal(body, &req)
+		n := len(s.issues) + 1
+		t := s.tick()
+		s.issues[n] = &Issue{Number: n, Title: req.Title, Body: req.Body, User: User{Login: "open-conduit[bot]", Type: "Bot"}, Labels: req.Labels, State: "open", Created: t, Updated: t}
+		return http.StatusCreated, s.issueJSON(s.issues[n])
 	case get && rest == "/pulls":
+		owner, _, _ := strings.Cut(s.Repo, "/")
 		var list []map[string]any
 		for _, n := range s.sortedIssues() {
-			if s.issues[n].Pull {
-				list = append(list, s.pullJSON(n))
+			if !s.issues[n].Pull {
+				continue
 			}
+			if st := q.Get("state"); st == "open" && s.issues[n].State != "open" {
+				continue
+			}
+			if head := q.Get("head"); head != "" && head != owner+":"+s.pulls[n].HeadRef {
+				continue
+			}
+			list = append(list, s.pullJSON(n))
 		}
 		return http.StatusOK, paged(r, list)
+	case r.Method == http.MethodPost && rest == "/pulls":
+		var req struct {
+			Title, Body, Head, Base string
+			Draft                   bool
+		}
+		_ = json.Unmarshal(body, &req)
+		for _, n := range s.sortedIssues() {
+			if p, ok := s.pulls[n]; ok && p.HeadRef == req.Head && s.issues[n].State == "open" {
+				return http.StatusUnprocessableEntity, map[string]any{"message": "Validation Failed: A pull request already exists"}
+			}
+		}
+		n := len(s.issues) + 1
+		t := s.tick()
+		sha := fmt.Sprintf("sha-%s-%d", strings.ReplaceAll(req.Head, "/", "-"), n)
+		s.issues[n] = &Issue{Number: n, Title: req.Title, Body: req.Body, User: User{Login: "open-conduit[bot]", Type: "Bot"}, State: "open", Created: t, Updated: t, Pull: true}
+		s.pulls[n] = &Pull{Number: n, HeadRef: req.Head, HeadSHA: sha, BaseRef: req.Base, Draft: req.Draft, CreatedAt: t}
+		s.commits[sha] = t
+		return http.StatusCreated, s.pullJSON(n)
+	case get && strings.HasPrefix(rest, "/branches/"):
+		if s.branches[strings.TrimPrefix(rest, "/branches/")] {
+			return http.StatusOK, map[string]any{"name": strings.TrimPrefix(rest, "/branches/")}
+		}
+		return 0, nil
+	case r.Method == http.MethodPost && rest == "/git/trees":
+		return http.StatusCreated, map[string]any{"sha": "tree-1"}
+	case r.Method == http.MethodPost && rest == "/git/commits":
+		return http.StatusCreated, map[string]any{"sha": "commit-1"}
+	case r.Method == http.MethodPost && rest == "/git/refs":
+		var req struct {
+			Ref string `json:"ref"`
+		}
+		_ = json.Unmarshal(body, &req)
+		name := strings.TrimPrefix(req.Ref, "refs/heads/")
+		if s.branches[name] {
+			return http.StatusUnprocessableEntity, map[string]any{"message": "Reference already exists"}
+		}
+		s.branches[name] = true
+		return http.StatusCreated, map[string]any{"ref": req.Ref}
+	case r.Method == http.MethodPut && strings.HasPrefix(rest, "/contents/"):
+		path := strings.TrimPrefix(rest, "/contents/")
+		if _, exists := s.contents[path]; exists {
+			return http.StatusUnprocessableEntity, map[string]any{"message": "Invalid request. \"sha\" wasn't supplied."}
+		}
+		var req struct {
+			Content string `json:"content"`
+		}
+		_ = json.Unmarshal(body, &req)
+		data, _ := base64.StdEncoding.DecodeString(req.Content)
+		s.contents[path] = data
+		return http.StatusCreated, map[string]any{"content": map[string]any{"path": path}}
 	case get && rest == "/issues/comments", get && rest == "/pulls/comments":
 		inline, from := rest == "/pulls/comments", since(r)
 		var list []map[string]any
@@ -965,6 +1104,45 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 			list = append(list, map[string]any{"id": st.ID, "context": st.Context, "state": st.State, "target_url": st.Target, "created_at": ts(st.At), "updated_at": ts(st.At)})
 		}
 		return http.StatusOK, map[string]any{"state": "pending", "statuses": list}
+	}
+	if x := reCommit.FindStringSubmatch(rest); x != nil && get {
+		at, ok := s.commits[x[1]]
+		if !ok {
+			return 0, nil
+		}
+		return http.StatusOK, map[string]any{"sha": x[1], "commit": map[string]any{"committer": map[string]any{"date": ts(at)}}}
+	}
+	if x := rePullComments.FindStringSubmatch(rest); x != nil {
+		n := atoi(x[1])
+		if _, ok := s.pulls[n]; !ok {
+			return 0, nil
+		}
+		var list []map[string]any
+		for _, c := range s.comments {
+			if c.Number == n && c.Inline {
+				list = append(list, s.commentJSON(c))
+			}
+		}
+		return http.StatusOK, paged(r, list)
+	}
+	if x := reReply.FindStringSubmatch(rest); x != nil && r.Method == http.MethodPost {
+		n, parent := atoi(x[1]), int64(atoi(x[2]))
+		var p *Comment
+		for _, c := range s.comments {
+			if c.ID == parent && c.Inline && c.Number == n {
+				p = c
+			}
+		}
+		if p == nil {
+			return 0, nil
+		}
+		var req struct {
+			Body string `json:"body"`
+		}
+		_ = json.Unmarshal(body, &req)
+		id := s.addComment(n, User{Login: "open-conduit[bot]", Type: "Bot"}, req.Body, true, p.Path, p.Line)
+		s.comment(id).ReplyTo = parent
+		return http.StatusCreated, s.commentJSON(s.comment(id))
 	}
 	if x := reCommitPulls.FindStringSubmatch(rest); x != nil && get {
 		var list []map[string]any

@@ -53,6 +53,11 @@ type ToolbeltOptions struct {
 	Authorize func(context.Context, AuthorityCheck) error
 	// Lifetime bounds a token after issue; zero uses the attempt deadline or one hour.
 	Lifetime time.Duration
+	// AuthorizeAlias answers whether a translated wait may depend on another
+	// scope's correlations (B04 cross-scope aliases). It is called outside
+	// storage transactions when the wait is declared; registration rechecks it.
+	// A nil AuthorizeAlias refuses every cross-scope dependency.
+	AuthorizeAlias func(context.Context, AliasAuthorization) error
 	// Observer receives a toolbelt.called or toolbelt.rejected record for every
 	// call whose credential resolves to an execution authority. State changes
 	// made by a call are reported separately by the instrumented store.
@@ -70,6 +75,8 @@ type Toolbelt struct {
 	mu            sync.RWMutex
 	registrations map[string]bool
 	operations    map[string]extension.Operation
+	owners        map[string]string // operation → registration name
+	filters       map[string]func(domain.Payload, domain.Event) bool
 	events        map[string]bool
 }
 
@@ -90,6 +97,9 @@ type ToolbeltDeclaration struct {
 	Outcome *domain.Outcome
 	Wait    *domain.Wait
 	Timer   *domain.Timer
+	// Subscriptions are a translated wait's dependency aliases, installed
+	// once the Wait is registered (see Scheduler.ReconcileSubscriptions).
+	Subscriptions []SubscriptionRequest `json:",omitempty"`
 }
 
 type toolbeltReplay struct {
@@ -106,7 +116,7 @@ func NewToolbelt(store storage.Store, now func() time.Time, router *Router, opti
 		return nil, err
 	}
 	options.CausalLimits = limits
-	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, events: map[string]bool{}}, nil
+	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) bool{}, events: map[string]bool{}}, nil
 }
 
 var operationName = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
@@ -132,10 +142,10 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 	}
 	names, events := map[string]bool{}, map[string]bool{}
 	for _, op := range r.Operations {
-		if op.Handler == nil || !operationName.MatchString(op.Name) {
+		if (op.Handler == nil) == (op.Wait == nil) || !operationName.MatchString(op.Name) {
 			return extension.ErrInvalid
 		}
-		if builtinOperation(op.Name) || t.operations[op.Name].Handler != nil || names[op.Name] {
+		if builtinOperation(op.Name) || t.declaredLocked(op.Name) || names[op.Name] {
 			return extension.ErrConflict
 		}
 		names[op.Name] = true
@@ -152,6 +162,10 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 	t.registrations[r.Name] = true
 	for _, op := range r.Operations {
 		t.operations[op.Name] = op
+		t.owners[op.Name] = r.Name
+	}
+	if r.DependencyFilter != nil {
+		t.filters[r.Name] = r.DependencyFilter
 	}
 	for name := range events {
 		t.events[name] = true
@@ -186,7 +200,20 @@ func (t *Toolbelt) EventTypes() []string {
 func (t *Toolbelt) declared(op string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return builtinOperation(op) || t.operations[op].Handler != nil
+	return builtinOperation(op) || t.declaredLocked(op)
+}
+func (t *Toolbelt) declaredLocked(op string) bool {
+	return t.operations[op].Handler != nil || t.operations[op].Wait != nil
+}
+
+// DependencyFilter evaluates a translated dependency's opaque filter with the
+// filter its registering extension declared. Composition passes it to the
+// scheduler (SchedulerOptions.AliasFilter); an unknown namespace never matches.
+func (t *Toolbelt) DependencyFilter(namespace string, filter domain.Payload, e domain.Event) bool {
+	t.mu.RLock()
+	f := t.filters[namespace]
+	t.mu.RUnlock()
+	return f != nil && f(filter, e)
 }
 func (t *Toolbelt) declaredEvent(name string) bool {
 	t.mu.RLock()
@@ -574,11 +601,16 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 		}
 		t.mu.RLock()
 		op := t.operations[c.Operation]
+		owner := t.owners[c.Operation]
 		t.mu.RUnlock()
 		handlerAuthority := a
 		handlerAuthority.Operations = append([]string(nil), a.Operations...)
 		handlerAuthority.EventTypes = append([]string(nil), a.EventTypes...)
-		output, e := op.Handler(ctx, handlerAuthority, c.Input)
+		hctx := extension.WithCallRequestID(ctx, requestID)
+		if op.Wait != nil {
+			return t.declareTranslatedWait(hctx, record, digest, owner, op, handlerAuthority, c.Input)
+		}
+		output, e := op.Handler(hctx, handlerAuthority, c.Input)
 		if e != nil {
 			return out, e
 		}

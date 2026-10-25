@@ -83,3 +83,11 @@ B05 update: [configuration, secrets and local management](config-management.md) 
 03-03 update: the [Claude Code executor](claude-code-executor.md) is the first `mcp` toolbelt executor. `os mcp` presents the same five builtins plus `call` over MCP stdio, through the CLI's authority path, with a replaceable credential file. Session, resume-versus-fresh, handoff note, attachment and the handoff experiment are executor-private continuity in namespaced KV, keyed by Work ID. Contract clarification: `extension.Result.RetryHint` lets a structured *failed* result carry a retry hint (for example a usage limit's reset). Core applies it like a `RetryHintProvider` error, but the observed result also establishes that the attempt finished, so no uncertain hold remains. `ValidateResult` rejects a hint on any other outcome.
 
 03-02 update: [B07 workspaces](workspaces.md) replaces the run context's resource descriptor list with an optional `ResourceBroker` (nil without a binding resource) and adds the public `ResourceProvider` contract: idempotent per-owner acquisition recorded before creation, `Lookup` without creation, and host-driven `Reconcile` from durable owner state (terminal plus confirmed exclusion). Core only passes the host-bound broker through `SchedulerOptions.Resources`.
+
+03-04 update: [engineering tools, waits and playbooks](engineering-tools.md) adds extension-neutral contract surface and no domain type:
+
+- `Operation.Wait` (an operation whose handler returns a `WaitPlan`, declared like the builtin wait), `Dependency` (a B04 dependency subscription with an opaque filter and `FromNow`) and `Registration.DependencyFilter` (a pure filter core evaluates inside the reconcile transaction).
+- `CallRequestID(ctx)`, the caller's request identity for stable intent IDs.
+- `OperationError`, a handler-authored safe refusal (code plus message) returned verbatim instead of a generic failure.
+
+The reference toolbelt double still supports pure handlers only.

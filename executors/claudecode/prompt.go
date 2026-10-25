@@ -3,6 +3,8 @@ package claudecode
 import (
 	"encoding/json"
 	"fmt"
+	"os"
+	"path/filepath"
 	"regexp"
 	"strings"
 	"time"
@@ -151,4 +153,47 @@ func renderEvent(e domain.Event) string {
 		out += "\n\n" + text
 	}
 	return out
+}
+
+// AdditionsDir is where a project keeps additions to a playbook, in its
+// checkout: <dir>/<playbook>.md. Open Supervisor's .open-supervisor/playbooks
+// is read when the project has no Open Conduit file (documented legacy
+// fallback, so a project need not move its additions to switch).
+const AdditionsDir = ".open-conduit/playbooks"
+
+const legacyAdditionsDir = ".open-supervisor/playbooks"
+
+// projectAdditions reads a project's additions to a playbook from the turn's
+// working directory, without any frontmatter; empty when it has none. They
+// only ever add to the built-in playbook, never replace it.
+func projectAdditions(root, playbook string) string {
+	if playbook == "" || playbook == "-" || root == "" {
+		return ""
+	}
+	for _, dir := range []string{AdditionsDir, legacyAdditionsDir} {
+		data, err := os.ReadFile(filepath.Join(root, dir, playbook+".md"))
+		if err != nil {
+			continue
+		}
+		text := strings.ReplaceAll(string(data), "\r\n", "\n")
+		if strings.HasPrefix(text, "---\n") {
+			if i := strings.Index(text[4:], "\n---\n"); i >= 0 {
+				text = text[4+i+5:]
+			}
+		}
+		return strings.TrimSpace(text)
+	}
+	return ""
+}
+
+// withAdditions adds a project's additions to a turn's message (v1 withExtra).
+func withAdditions(body, extra string) string {
+	if extra == "" {
+		return body
+	}
+	add := "## This project's additions to the playbook\n\nFollow these as well as the playbook. They add to its steps and never replace them.\n\n" + extra
+	if body == "" {
+		return add
+	}
+	return body + "\n\n" + add
 }

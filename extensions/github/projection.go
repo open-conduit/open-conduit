@@ -92,6 +92,10 @@ type intentRecord struct {
 	AttemptedAt time.Time `json:"attempted_at,omitempty"`
 	CommentID   int64     `json:"comment_id,omitempty"`
 	URL         string    `json:"url,omitempty"`
+	// Durable intents (agent tool calls) keep their body, so a pass can
+	// finish an ambiguous delivery after the call returned.
+	Body    string `json:"body,omitempty"`
+	ReplyTo int64  `json:"reply_to,omitempty"`
 }
 
 const (
@@ -107,6 +111,13 @@ type Intent struct {
 	Work   domain.ID
 	Number int
 	Body   string
+	// ReplyTo replies in the inline review thread of that comment on PR
+	// Number instead of posting to the conversation.
+	ReplyTo int64
+	// Durable keeps the body in the intent record so Converge finishes a
+	// delivery whose caller is gone (tool calls); outcome intents are
+	// re-derived from durable outcomes instead.
+	Durable bool
 }
 
 func (p *Projector) get(tx storage.Tx, key string, v any) (bool, error) {
@@ -149,10 +160,13 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 			return err
 		}
 		if !found {
-			rec = intentRecord{ID: in.ID, Work: in.Work, Repo: repo, Number: in.Number, BodyDigest: bodyDigest, State: intentPending, CreatedAt: p.o.Now().UTC()}
+			rec = intentRecord{ID: in.ID, Work: in.Work, Repo: repo, Number: in.Number, BodyDigest: bodyDigest, State: intentPending, CreatedAt: p.o.Now().UTC(), ReplyTo: in.ReplyTo}
+			if in.Durable {
+				rec.Body = in.Body
+			}
 			return p.put(tx, key, rec)
 		}
-		if rec.BodyDigest != bodyDigest || rec.Number != in.Number || rec.Repo != repo {
+		if rec.BodyDigest != bodyDigest || rec.Number != in.Number || rec.Repo != repo || rec.ReplyTo != in.ReplyTo {
 			return ErrIntentConflict
 		}
 		return nil
@@ -165,7 +179,13 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		if p.o.Now().Sub(rec.AttemptedAt) < p.o.SearchDelay {
 			return rec.State, nil
 		}
-		comments, err := p.o.Client.IssueComments(ctx, repo, in.Number, rec.CreatedAt.Add(-time.Minute))
+		var comments []rawComment
+		var err error
+		if in.ReplyTo != 0 {
+			comments, err = p.o.Client.PullComments(ctx, repo, in.Number)
+		} else {
+			comments, err = p.o.Client.IssueComments(ctx, repo, in.Number, rec.CreatedAt.Add(-time.Minute))
+		}
 		if err != nil {
 			return rec.State, err
 		}
@@ -192,7 +212,12 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	if err != nil {
 		return rec.State, err
 	}
-	posted, err := p.o.Client.Comment(ctx, repo, in.Number, WithMarker(in.Body, string(in.Work), marker))
+	var posted PostedComment
+	if in.ReplyTo != 0 {
+		posted, err = p.o.Client.ReplyReview(ctx, repo, in.Number, in.ReplyTo, WithMarker(in.Body, string(in.Work), marker))
+	} else {
+		posted, err = p.o.Client.Comment(ctx, repo, in.Number, WithMarker(in.Body, string(in.Work), marker))
+	}
 	if err != nil {
 		// Ambiguous: the marker search decides after SearchDelay.
 		return intentAttempted, err
@@ -287,6 +312,7 @@ type projected struct {
 	number  int
 	latest  *domain.Execution
 	intents []Intent
+	held    bool
 }
 
 func declaration(x *domain.Execution) (StatusDeclaration, bool) {
@@ -301,10 +327,23 @@ func declaration(x *domain.Execution) (StatusDeclaration, bool) {
 // claimed label while the Work owns the issue, and at most one status label,
 // absent while an attempt runs (v1: the status comes off while a turn runs).
 func (p *Projector) Desired(w domain.Work, latest *domain.Execution) []string {
+	return p.desired(w, latest, false)
+}
+
+// desired adds the hold projections (v1): a held issue carries only the
+// scheduled label until its first agent turn starts (then it is claimed),
+// and Work parked on an agent's wait carries scheduled with no status.
+func (p *Projector) desired(w domain.Work, latest *domain.Execution, held bool) []string {
 	l := p.o.Settings.Labels
+	if held && !w.State.Terminal() {
+		return []string{l.Scheduled}
+	}
 	out := []string{l.Claimed}
 	if w.State == domain.WorkRunning || w.State == domain.WorkCancelled {
 		return out
+	}
+	if w.State == domain.WorkWaiting {
+		return append(out, l.Scheduled)
 	}
 	status := ""
 	if d, ok := declaration(latest); ok {
@@ -355,9 +394,14 @@ func (p *Projector) snapshot(ctx context.Context) ([]projected, error) {
 				return err
 			}
 			sort.Slice(xs, func(i, j int) bool { return xs[i].Attempt < xs[j].Attempt })
-			item := projected{work: w, number: number}
+			item := projected{work: w, number: number, held: w.Kind == WorkKindHeld}
 			for i := range xs {
 				x := xs[i]
+				if item.held {
+					if trigger, er := tx.Event(x.TriggerID); er == nil && trigger.Event.Type == TypeHoldReleased {
+						item.held = false
+					}
+				}
 				if x.Outcome != nil {
 					item.latest = &x
 				}
@@ -411,7 +455,7 @@ func (p *Projector) converge(ctx context.Context, item projected, desired []stri
 		return err
 	}
 	l := p.o.Settings.Labels
-	managed := append([]string{l.Claimed}, l.Statuses()...)
+	managed := append([]string{l.Claimed, l.Scheduled}, l.Statuses()...)
 	var current []string
 	for _, x := range issue.Labels {
 		current = append(current, x.Name)
@@ -466,7 +510,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			if budget <= 0 {
 				break
 			}
-			desired := p.Desired(item.work, item.latest)
+			desired := p.desired(item.work, item.latest, item.held)
 			want := labelDigest(desired)
 			key := "labels/" + strconv.Itoa(item.number)
 			var st labelState
@@ -520,6 +564,42 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			case state == intentPosted:
 				res.Posted++
 			}
+		}
+	}
+	// Durable intents (agent tool calls) whose delivery is unfinished.
+	var pending []intentRecord
+	if err := p.transact(ctx, func(tx storage.Tx) error {
+		rows, err := tx.List(p.ns, "intent/")
+		for _, row := range rows {
+			var rec intentRecord
+			if json.Unmarshal(row.Value, &rec) == nil && rec.Body != "" && rec.State != intentPosted {
+				pending = append(pending, rec)
+			}
+		}
+		return err
+	}); err != nil {
+		return res, err
+	}
+	for _, rec := range pending {
+		if intents >= limit {
+			break
+		}
+		intents++
+		state, err := p.Deliver(ctx, Intent{ID: rec.ID, Work: rec.Work, Number: rec.Number, Body: rec.Body, ReplyTo: rec.ReplyTo, Durable: true})
+		switch {
+		case err != nil:
+			if stop := fail("comment", err); stop != nil {
+				return res, stop
+			}
+		case state == "recovered":
+			res.Recovered++
+		case state == intentPosted:
+			res.Posted++
+		}
+	}
+	if err := p.redriveIssues(ctx, limit); err != nil {
+		if stop := fail("issue", err); stop != nil {
+			return res, stop
 		}
 	}
 	reacted, err := p.acknowledge(ctx, 200)

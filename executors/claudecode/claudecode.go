@@ -105,6 +105,9 @@ type Options struct {
 	Environ func() []string
 	// Render turns input Events into prompt markdown (default RenderEvents).
 	Render Renderer
+	// PluginDir is the default --plugin-dir (the host-prepared playbook
+	// plugin) for bindings that set no plugin_dir and use a playbook.
+	PluginDir string
 	// Feedback enables the handoff experiment's blinded feedback questions.
 	Feedback FeedbackHook
 	// Report receives experiment and per-turn telemetry outside core.
