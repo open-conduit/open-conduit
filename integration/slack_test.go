@@ -53,6 +53,8 @@ type slEnv struct {
 	projector *sl.Projector
 	settings  sl.Settings
 	webhook   http.Handler
+	// binding is the router's view of the "fixture" executor (zero: none).
+	binding runtime.RouteBinding
 }
 
 func slExtensionConfig(extra string) string {
@@ -92,7 +94,7 @@ func (e *slEnv) open() {
 		t.Fatal(err)
 	}
 	if e.router, err = runtime.NewRouter(store, e.clock.Now, runtime.RouterOptions{Generation: "1", Handlers: map[string]extension.RouteHandler{"slack": sl.Route{}},
-		Bindings: map[string]runtime.RouteBinding{"fixture": {}}}); err != nil {
+		Bindings: map[string]runtime.RouteBinding{"fixture": e.binding}}); err != nil {
 		t.Fatal(err)
 	}
 	cfg, err := sl.ParseConnection([]byte(`{"api_url":"` + e.fake.URL + `"}`))

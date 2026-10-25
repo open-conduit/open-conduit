@@ -2,7 +2,7 @@
 
 Ticket 04-01 delivers the first-party Slack extension in [`extensions/slack`](../../extensions/slack). It is the second workload (PRD workflow B) and is built only against the public contracts: [B03 ingress](extensions.md), [B04 routing](runtime-semantics.md) and [B02 storage/KV](domain-storage.md). It has no workspace, repository or tracker concept, and the runtime does not import it. [`internal/bootstrap`](../../internal/bootstrap/slack.go) registers it. Open Supervisor v1 has no Slack adapter, so there is no behavioral baseline: the PRD is the only reference.
 
-All evidence so far uses fixtures and the [`slacktest`](../../extensions/slack/slacktest) fake (Web API, Socket Mode and Events API). No real Slack workspace was called. Real-Slack evidence is 04-03.
+04-01 and 04-02 used only fixtures and the [`slacktest`](../../extensions/slack/slacktest) fake (Web API, Socket Mode and Events API). 04-03 adds a short real-Slack run and a fake-clock multi-day scenario (see [Real Slack evidence (04-03)](#real-slack-evidence-04-03)).
 
 ## The Slack app
 
@@ -28,7 +28,7 @@ The extension's own calls need only part of this:
 
 The extension relies on no scope outside this list. Reply markers use Slack **message metadata**. Posting metadata needs only `chat:write`. Reading it back uses `include_all_metadata` on history and replies.
 
-**Decision (04-02): the manifest requests `metadata.message:read`.** Slack documents this scope as the one that lets an app read message metadata in its channels. Without it, marker recovery may fall back to matching the bot user and the exact text, which can confuse two identical replies in one thread. Setup now creates the app from the manifest, so asking costs the operator nothing. It is read-only, covers only channels the app is in, and adds no write or user-data access. The text fallback stays for tokens installed without it (an older manifest, or a workspace admin who refused the scope). Doctor reports the missing scope as a warning naming that cost. 04-03 confirms on the real app that metadata comes back with the scope (and whether it comes back without it).
+**Decision (04-02): the manifest requests `metadata.message:read`.** Slack documents this scope as the one that lets an app read message metadata in its channels. Without it, marker recovery may fall back to matching the bot user and the exact text, which can confuse two identical replies in one thread. Setup now creates the app from the manifest, so asking costs the operator nothing. It is read-only, covers only channels the app is in, and adds no write or user-data access. The text fallback stays for tokens installed without it (an older manifest, or a workspace admin who refused the scope). Doctor reports the missing scope as a warning naming that cost. 04-03 confirmed on the real app that metadata comes back with the scope. Whether it comes back without the scope is untested.
 
 ### Setup: `init slack`
 
@@ -45,7 +45,7 @@ Setup belongs to the extension. [`setup.go`](../../extensions/slack/setup.go) im
 
 With `--bot-token REF --app-token REF --team T… --channel C…`, setup prompts for nothing and verifies nothing (it never resolves references); it says to run `doctor --check-secrets` instead. `--scope` (default `support`) and `--connection` (default `slack`) name the result. `--api-url` points at another API base (the tests use the fake).
 
-The `slack-cli` path is unverified against a real Slack CLI and is 04-03 evidence. So are the create-app URL and the real token checks.
+The `slack-cli` path is unverified against a real Slack CLI. The user's real app was created through the manifest URL and the real token checks (04-03).
 
 **Doctor.** `slack_auth` (`--check-secrets`) now runs the extension-owned `slack.CheckAuth`. It checks that the token's team is the entry's team and its user is the entry's bot user. It also compares the granted scopes with the manifest (`MissingScopes`). A missing `chat:write`, or both history scopes missing, fails with `scopes_missing`. Any other missing scope warns with `scopes_missing` and says what it costs (for `metadata.message:read`: markers found only by the text fallback). Bootstrap only maps the severity onto the check.
 
@@ -76,7 +76,7 @@ A `slack` extension entry is an ingress entry: `config.scope` must be the contai
 
 The entry needs a `connection`. A route uses handler `slack`. Bindings may grant the operations `slack.context`, `slack.thread` and `slack.reply`.
 
-For 04-03, the real values come from `OPEN_CONDUIT_SLACK_BOT_TOKEN`, `OPEN_CONDUIT_SLACK_APP_TOKEN`, `OPEN_CONDUIT_SLACK_SIGNING_SECRET` and `OPEN_CONDUIT_SLACK_TEST_CHANNEL`, referenced as `env:` secrets. 04-01 never read them.
+`init slack` stores the tokens through the secret store (the keyring by default) and writes `keyring:` references. The 04-03 real run used those. `env:` references work the same way.
 
 ```json
 {"id": "slack", "type": "slack", "config": {},
@@ -148,7 +148,7 @@ Messages that disappear become generic `core.ingress.absent`, which the route ig
 - **Old threads.** Threads older than `history_hours` and owned by no live Work are not reconciled. A reply there arrives only by push.
 - **What is never observed.** Non-content subtypes, reactions and file contents.
 - **Ordering.** Slack keeps an unacknowledged Socket Mode envelope for three retries. After that, only reconcile recovers the message, at the reconcile interval. Reconcile is not a total order: per-Work order is acceptance order, so pushed messages can precede older reconciled ones.
-- **Rate limits.** `conversations.history` and `conversations.replies` are Tier 3 for internal apps. Slack's 2025 limits for commercially distributed non-Marketplace apps (one request per minute, 15 messages) would make reconcile far slower, but a workspace-internal app is not subject to them. 04-03 confirms the real app's limits.
+- **Rate limits.** `conversations.history` and `conversations.replies` are Tier 3 for internal apps. Slack's 2025 limits for commercially distributed non-Marketplace apps (one request per minute, 15 messages) would make reconcile far slower, but a workspace-internal app is not subject to them. The short 04-03 real run hit no 429, so the real limits are unmeasured.
 - **Retention.** History the workspace's retention or plan hides is unrecoverable.
 
 ## Route policy
@@ -174,7 +174,7 @@ The support binding reuses the Claude Code executor through the public contract,
 
 **Active messages.** The route's active policy is `inject`. A human message during a running turn is written to claude's stdin, echoed and proved consumed with the turn's result, including a waiting result. The parked wait is therefore not woken by what the turn already answered ([generic inject acknowledgement](runtime-semantics.md#generic-inject-acknowledgement-04-02)). A message that arrives after the turn stopped reading is not consumed: it wakes the wait or starts the next attempt. A binding on an executor without inject needs an explicit `unsupported_fallback` (`queue`). The shell executor now supports inject through its inbox.
 
-[`TestDaemonSlackSupportConversation`](../../integration/daemon_slack_support_test.go) drives this with a fake claude on the composed daemon over Socket Mode. The first turn replies and parks. A reply resumes the same session. A message mid-turn is injected once and consumed, with no wake and no extra segment. A restart mid-wait keeps the thread's Work, and the next reply resumes the same session. The run uses no workspace, `github` stays `not_configured`, and only fixtures are involved. Real-Slack and multi-day evidence is 04-03.
+[`TestDaemonSlackSupportConversation`](../../integration/daemon_slack_support_test.go) drives this with a fake claude on the composed daemon over Socket Mode. The first turn replies and parks. A reply resumes the same session. A message mid-turn is injected once and consumed, with no wake and no extra segment. A restart mid-wait keeps the thread's Work, and the next reply resumes the same session. The run uses no workspace, `github` stays `not_configured`, and only fixtures are involved. 04-03 repeated this on real Slack and real Claude (see below). The multi-day wait is the fake-clock scenario under Verification.
 
 ## Marked replies
 
@@ -224,6 +224,7 @@ make drill
 - Reconcile-only recovery, with the start window holding.
 - Identity across a restart mid-generation, an edit and a removal.
 - An ambiguous reply recovered by its marker, with provenance kept and never fed back as input.
+- The multi-day scenario ([`slack_multiday_test.go`](../../integration/slack_multiday_test.go), 04-03), with a fake clock, for a resume-capable and a non-resumable executor. A turn parks on the playbook's seven-day wait. Three days later, after a restart, a reply missed by push, whose parent has left `history_hours`, is recovered by the owned-thread scan and wakes the same Work: the same execution resumes, or attempt N+1 starts with only the new message. The next wait times out after seven quiet days (`core.wait.timeout` continues the conversation), the turn hands back, and a message on day 12 still reaches the same Work.
 - A real SIGKILL between Slack creating a reply and local completion, recovered without a duplicate.
 - The reply tool: a retried call writes once, a lost answer is finished by the projector, and a refusal is not retried.
 - A rate-limited scan infers no absence.
@@ -234,9 +235,18 @@ make drill
 - Reconcile starts the conversation and the shell stand-in replies through `os call slack.reply`. A human reply over Socket Mode is acknowledged and resumes the same Work. The agent's own replies pushed back start nothing, and doctor is `slack: ok` with `github: not_configured`. A restart reconnects and posts nothing.
 - The HTTP receiver echoes URL verification, refuses forgeries and accepts a signed callback.
 
+## Real Slack evidence (04-03)
+
+A short run on 2026-10-25 used a real workspace app created with `init slack` from the manifest (Socket Mode, tokens in the keyring) and the support binding on Claude Code with `model: haiku`:
+
+- `doctor --check-secrets`: `slack_auth verified`, with the granted scopes equal to the manifest's (no `scopes_missing`).
+- **Metadata.** With `metadata.message:read`, `conversations.replies` with `include_all_metadata=true` returns the marker's full payload `{work, execution, intent}`. Without `include_all_metadata`, only the `event_type` comes back. The case without the scope was not tested (it needs an install without it), so the text fallback remains fixture-proven.
+- **One real thread.** The top-level message created one `slack.conversation` Work over Socket Mode. The marked reply came back as `slack.message.agent` and was never input. The first thread reply woke the wait and resumed the same execution and Claude session. The daemon was SIGKILLed mid-wait and restarted, and the next reply woke the same Work, execution and session. A message posted 14 s into that turn was routed `inject`, echoed (`injected {accepted 1, consumed 1}`) and answered in the same reply. It neither woke the next wait nor started an attempt. Attempt 1 was the only execution, across three turns.
+- **No workspace or Git.** `github` stayed `not_configured`, with 0 resource leases.
+- **Not observed.** No 429 was seen, so real rate limits are unmeasured. No mention was posted, so `app_mention` duplication was not seen. `--via slack-cli` was not run.
+
 ## Limitations and follow-on work
 
-- **Real Slack (04-03).** No real Slack API, Socket Mode connection or Events API delivery has been exercised. Metadata visibility, real rate limits and `app_mention` duplication are checked on the real app.
-- **Support execution and setup (04-02, delivered on fixtures).** The support binding, conversation lifecycle, generic inject acknowledgement, `init slack` and the extension-owned doctor scope comparison are delivered. The real app, real tokens, the `slack-cli` path, metadata visibility and a real multi-day wait are 04-03.
+- **Real Slack.** Covered by the short 04-03 run above. Not covered: a real rate limit, `app_mention` duplication, the HTTP Events API, the `slack-cli` setup path, a real reply missed by push and recovered by reconcile, and a SIGKILL during an active real turn (the drills cover the last two). **A real multi-day wait was deferred to real-world operation by user decision.** The fake-clock scenario covers it in CI.
 - **Registration lifetime.** As for GitHub, ingress registrations are startup-only. A changed entry reports `restart_required`.
 - **Volume.** The projector reads every Work in its scope each pass, and the router's per-event cost grows with a Work's queued input. Both are adequate for a support channel, with no high-volume claim.
