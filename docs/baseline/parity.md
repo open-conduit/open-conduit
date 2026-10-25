@@ -109,3 +109,11 @@ Documentation-only delivery: pinned revision/clean source, source paths and test
 01-02 update: [B02](../architecture/domain-storage.md) now delivers the public primitive/storage APIs, 21 reference conformance cases, lifecycle matrices and negative controls. Reference checks pass; SQLite durability, artifact implementation and runtime/operational scenarios remain pending with their assigned tickets.
 
 01-04 update: [B04](../architecture/runtime-semantics.md) delivers deterministic routing, generation-qualified successors, active-policy/fallback acknowledgements, event-based wait arbitration/subscription aliases, fenced adoption/retry/cancellation and causal bounds. Nineteen shared runtime scenarios and two negative controls pass against a volatile public-storage reference. Stage 02 runtime/SQLite/process proofs, actual subscription delivery and injection consumption remain pending; pending-job coalescing stays with 05-01.
+
+03-01 update: the [GitHub extension](../architecture/github-extension.md) ports these v1 behaviors onto public contracts, verified against fixtures only:
+
+- Transport and auth: conditional requests, primary/secondary rate-limit pauses, the ordinary-403 case, token/App/bot-App auth with refresh, and webhook signatures.
+- Ingress: push/reconcile normalization of issues, comments, reviews, checks, merges, closes and reopen generations, plus PR-to-issue correlation including shared trackers.
+- Routing and projection: the opt-in/skip claim policy, self/bot comment suppression, label projections with drift repair, marked comments with intent recovery, and acknowledgement reactions.
+
+These rows remain pending real-issue evidence in 03-06: B01–B04 (GitHub parts), B15 claim/override, and the GitHub row of the integration table. Holds and waits (03-04), webhook exposure (03-05) and the handoff feedback (03-03) remain with their tickets.

@@ -47,6 +47,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		if _, err = d.ingress.ReconcileDue(ctx, passLimit); err != nil && ctx.Err() == nil {
 			d.report("ingress", "", errorCode(err))
 		}
+		d.projectGitHub(ctx)
 		if d.now().Sub(lastSweep) >= d.o.RetentionInterval {
 			if _, err = c.scheduler.SweepRetention(ctx, passLimit); err != nil && ctx.Err() == nil {
 				d.report("retention", "", errorCode(err))

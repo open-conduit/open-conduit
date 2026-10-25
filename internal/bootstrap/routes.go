@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/alsiola/open-conduit/extension"
+	gh "github.com/alsiola/open-conduit/extensions/github"
 	"github.com/alsiola/open-conduit/internal/runtime"
 )
 
@@ -32,7 +33,7 @@ func (manualRoute) Match(_ context.Context, in extension.RouteInput) (extension.
 }
 
 func handlers() map[string]extension.RouteHandler {
-	return map[string]extension.RouteHandler{"manual": manualRoute{}}
+	return map[string]extension.RouteHandler{"manual": manualRoute{}, gh.Type: gh.Route{}}
 }
 
 func handlerNames() map[string]bool {

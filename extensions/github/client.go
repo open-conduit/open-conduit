@@ -1,0 +1,481 @@
+package github
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net/http"
+	"net/url"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+)
+
+// StatusError is a non-2xx API answer. Message is GitHub's short "message"
+// field only (never the request, credentials or full body).
+type StatusError struct {
+	Status  int
+	Message string
+}
+
+func (e *StatusError) Error() string {
+	if e.Message == "" {
+		return fmt.Sprintf("github: HTTP %d", e.Status)
+	}
+	return fmt.Sprintf("github: HTTP %d: %s", e.Status, e.Message)
+}
+
+// IsStatus reports whether err is a StatusError with that HTTP status.
+func IsStatus(err error, status int) bool {
+	var s *StatusError
+	return errors.As(err, &s) && s.Status == status
+}
+
+// ClientOptions are test/host seams.
+type ClientOptions struct {
+	// HTTP supplies the base round tripper/timeout (default http.DefaultClient).
+	HTTP *http.Client
+	Now  func() time.Time
+}
+
+// Client is one GitHub connection. Reads use the sign-in identity; writes use
+// the optional bot App so people can see who acted. All GETs are conditional
+// and every call honours the shared rate-limit pause.
+type Client struct {
+	api, web, host string
+	http           *http.Client
+	tr             *transport
+	now            func() time.Time
+	read, write    tokenSource
+}
+
+// NewClient builds a client from validated connection config. No secret is
+// resolved until the first call.
+func NewClient(cfg ConnectionConfig, secrets SecretFunc, o ClientOptions) (*Client, error) {
+	u, err := url.Parse(cfg.APIURL)
+	if err != nil || u.Host == "" {
+		return nil, errors.New("github: invalid api_url")
+	}
+	if o.Now == nil {
+		o.Now = time.Now
+	}
+	base := o.HTTP
+	if base == nil {
+		base = &http.Client{Timeout: 30 * time.Second}
+	}
+	c := &Client{api: cfg.APIURL, now: o.Now}
+	c.tr = newTransport(base.Transport, u.Host, o.Now)
+	c.http = &http.Client{Transport: c.tr, Timeout: base.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
+	if u.Host == "api.github.com" {
+		c.web, c.host = "https://github.com", "github.com"
+	} else {
+		c.web, c.host = u.Scheme+"://"+u.Host, u.Host
+	}
+	switch cfg.Auth {
+	case "token", "":
+		c.read = &staticToken{secrets: secrets, name: SecretToken}
+	case "app":
+		c.read = newAppToken(cfg.AppID, secrets, SecretAppPrivateKey, c)
+	default:
+		return nil, errors.New("github: unknown auth")
+	}
+	c.write = c.read
+	if cfg.BotAppID != "" {
+		c.write = newAppToken(cfg.BotAppID, secrets, SecretBotPrivateKey, c)
+	}
+	return c, nil
+}
+
+// Host is the web host (github.com or an Enterprise host).
+func (c *Client) Host() string { return c.host }
+
+// PausedUntil reports an active rate-limit pause.
+func (c *Client) PausedUntil() (time.Time, bool) { return c.tr.PausedUntil() }
+
+// call makes one API call as the reader (or writer) of repo, signing in again
+// once after a 401.
+func (c *Client) call(ctx context.Context, write bool, repo, method, path string, body, out any) (*http.Response, error) {
+	src := c.read
+	if write {
+		src = c.write
+	}
+	var res *http.Response
+	var err error
+	for attempt := 0; attempt < 2; attempt++ {
+		var tok string
+		if tok, err = src.token(ctx, repo); err != nil {
+			return nil, err
+		}
+		res, err = c.raw(ctx, "Bearer "+tok, method, path, body, out)
+		if attempt == 0 && IsStatus(err, http.StatusUnauthorized) {
+			src.invalidate(repo)
+			continue
+		}
+		break
+	}
+	return res, err
+}
+
+// raw performs one request with an explicit Authorization header value.
+func (c *Client) raw(ctx context.Context, authorization, method, path string, body, out any) (*http.Response, error) {
+	var reader io.Reader
+	if body != nil {
+		data, err := json.Marshal(body)
+		if err != nil {
+			return nil, err
+		}
+		reader = bytes.NewReader(data)
+	}
+	target := path
+	if !strings.HasPrefix(path, "http://") && !strings.HasPrefix(path, "https://") {
+		target = c.api + path
+	}
+	req, err := http.NewRequestWithContext(ctx, method, target, reader)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", authorization)
+	req.Header.Set("Accept", "application/vnd.github+json")
+	req.Header.Set("X-Github-Api-Version", "2022-11-28")
+	req.Header.Set("User-Agent", "open-conduit")
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	res, err := c.http.Do(req)
+	if err != nil {
+		var limit *RateLimitError
+		if errors.As(err, &limit) {
+			return nil, limit
+		}
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("github: %s %s: transport failure", method, redactPath(path))
+	}
+	defer res.Body.Close()
+	data, err := io.ReadAll(io.LimitReader(res.Body, 64<<20))
+	if err != nil {
+		return res, fmt.Errorf("github: reading response: %w", err)
+	}
+	if res.StatusCode < 200 || res.StatusCode > 299 {
+		var e struct {
+			Message string `json:"message"`
+		}
+		_ = json.Unmarshal(data, &e)
+		msg := strings.Join(strings.Fields(e.Message), " ")
+		if len(msg) > 200 {
+			msg = msg[:200]
+		}
+		return res, &StatusError{Status: res.StatusCode, Message: msg}
+	}
+	if out != nil && len(bytes.TrimSpace(data)) > 0 {
+		if err := json.Unmarshal(data, out); err != nil {
+			return res, fmt.Errorf("github: decoding %s: %w", redactPath(path), err)
+		}
+	}
+	return res, nil
+}
+
+func redactPath(path string) string {
+	if i := strings.IndexByte(path, '?'); i >= 0 {
+		return path[:i]
+	}
+	return path
+}
+
+var nextLink = regexp.MustCompile(`<([^>]+)>;\s*rel="next"`)
+
+// page reads one page of a list endpoint and reports whether another follows.
+func page[T any](ctx context.Context, c *Client, repo, path string, n, perPage int) ([]T, bool, error) {
+	sep := "?"
+	if strings.Contains(path, "?") {
+		sep = "&"
+	}
+	var items []T
+	res, err := c.call(ctx, false, repo, http.MethodGet, fmt.Sprintf("%s%sper_page=%d&page=%d", path, sep, perPage, n), nil, &items)
+	if err != nil {
+		return nil, false, err
+	}
+	more := len(items) >= perPage
+	if res != nil {
+		if link := res.Header.Get("Link"); link != "" {
+			more = nextLink.MatchString(link)
+		}
+	}
+	return items, more, nil
+}
+
+// all reads every page (bounded) of a list endpoint. An unfinished listing is
+// an error, never a short successful answer.
+func all[T any](ctx context.Context, c *Client, repo, path string) ([]T, error) {
+	var out []T
+	for n := 1; n <= 100; n++ {
+		items, more, err := page[T](ctx, c, repo, path, n, 100)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, items...)
+		if !more {
+			return out, nil
+		}
+	}
+	return nil, errors.New("github: listing exceeds the page bound")
+}
+
+// ---- API shapes -----------------------------------------------------------
+
+type rawUser struct {
+	Login string `json:"login"`
+	Type  string `json:"type"`
+}
+
+type rawLabel struct {
+	Name string `json:"name"`
+}
+
+type rawIssue struct {
+	Number      int              `json:"number"`
+	Title       string           `json:"title"`
+	Body        string           `json:"body"`
+	HTMLURL     string           `json:"html_url"`
+	User        rawUser          `json:"user"`
+	Labels      []rawLabel       `json:"labels"`
+	State       string           `json:"state"`
+	StateReason string           `json:"state_reason"`
+	CreatedAt   time.Time        `json:"created_at"`
+	UpdatedAt   time.Time        `json:"updated_at"`
+	ClosedAt    *time.Time       `json:"closed_at"`
+	PullRequest *json.RawMessage `json:"pull_request"`
+	Milestone   *struct {
+		Title string `json:"title"`
+	} `json:"milestone"`
+	Assignees []rawUser `json:"assignees"`
+	Type      *struct {
+		Name string `json:"name"`
+	} `json:"type"`
+}
+
+type rawComment struct {
+	ID             int64      `json:"id"`
+	User           rawUser    `json:"user"`
+	Body           string     `json:"body"`
+	HTMLURL        string     `json:"html_url"`
+	IssueURL       string     `json:"issue_url"`
+	PullRequestURL string     `json:"pull_request_url"`
+	CreatedAt      *time.Time `json:"created_at"`
+	UpdatedAt      *time.Time `json:"updated_at"`
+	SubmittedAt    *time.Time `json:"submitted_at"`
+	Path           string     `json:"path"`
+	Line           *int       `json:"line"`
+	OriginalLine   *int       `json:"original_line"`
+	InReplyTo      int64      `json:"in_reply_to_id"`
+	State          string     `json:"state"`
+	CommitID       string     `json:"commit_id"`
+}
+
+type rawPull struct {
+	Number    int        `json:"number"`
+	Title     string     `json:"title"`
+	Body      string     `json:"body"`
+	HTMLURL   string     `json:"html_url"`
+	State     string     `json:"state"`
+	Draft     bool       `json:"draft"`
+	Merged    bool       `json:"merged"`
+	MergedAt  *time.Time `json:"merged_at"`
+	ClosedAt  *time.Time `json:"closed_at"`
+	CreatedAt time.Time  `json:"created_at"`
+	UpdatedAt time.Time  `json:"updated_at"`
+	User      rawUser    `json:"user"`
+	Labels    []rawLabel `json:"labels"`
+	Head      struct {
+		Ref string `json:"ref"`
+		SHA string `json:"sha"`
+	} `json:"head"`
+	Base struct {
+		Ref string `json:"ref"`
+	} `json:"base"`
+}
+
+type rawCheckRun struct {
+	ID          int64      `json:"id"`
+	Name        string     `json:"name"`
+	Status      string     `json:"status"`
+	Conclusion  string     `json:"conclusion"`
+	HTMLURL     string     `json:"html_url"`
+	DetailsURL  string     `json:"details_url"`
+	StartedAt   *time.Time `json:"started_at"`
+	CompletedAt *time.Time `json:"completed_at"`
+}
+
+type rawStatus struct {
+	ID        int64      `json:"id"`
+	Context   string     `json:"context"`
+	State     string     `json:"state"`
+	TargetURL string     `json:"target_url"`
+	CreatedAt *time.Time `json:"created_at"`
+	UpdatedAt *time.Time `json:"updated_at"`
+}
+
+type rawIssueEvent struct {
+	ID        int64     `json:"id"`
+	Event     string    `json:"event"`
+	CreatedAt time.Time `json:"created_at"`
+}
+
+// ---- reads ----------------------------------------------------------------
+
+func repoPath(repo, format string, args ...any) string {
+	return "/repos/" + repo + fmt.Sprintf(format, args...)
+}
+
+// Issue reads one issue (or the issue face of a PR).
+func (c *Client) Issue(ctx context.Context, repo string, n int) (rawIssue, error) {
+	var i rawIssue
+	_, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/issues/%d", n), nil, &i)
+	return i, err
+}
+
+// Pull reads one pull request.
+func (c *Client) Pull(ctx context.Context, repo string, n int) (rawPull, error) {
+	var p rawPull
+	_, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/pulls/%d", n), nil, &p)
+	return p, err
+}
+
+// reopenings lists an issue's reopened events in time order.
+func (c *Client) reopenings(ctx context.Context, repo string, n int) ([]rawIssueEvent, error) {
+	events, err := all[rawIssueEvent](ctx, c, repo, repoPath(repo, "/issues/%d/events", n))
+	if err != nil {
+		return nil, err
+	}
+	var out []rawIssueEvent
+	for _, e := range events {
+		if e.Event == "reopened" {
+			out = append(out, e)
+		}
+	}
+	return out, nil
+}
+
+// Reviews lists a PR's reviews.
+func (c *Client) Reviews(ctx context.Context, repo string, n int) ([]rawComment, error) {
+	return all[rawComment](ctx, c, repo, repoPath(repo, "/pulls/%d/reviews", n))
+}
+
+// checkState reads a commit's check runs and combined statuses.
+func (c *Client) checkState(ctx context.Context, repo, sha string) ([]rawCheckRun, []rawStatus, error) {
+	var runs []rawCheckRun
+	for n := 1; n <= 20; n++ {
+		var pageRuns struct {
+			TotalCount int           `json:"total_count"`
+			CheckRuns  []rawCheckRun `json:"check_runs"`
+		}
+		if _, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/commits/%s/check-runs?per_page=100&page=%d", url.PathEscape(sha), n), nil, &pageRuns); err != nil {
+			return nil, nil, err
+		}
+		runs = append(runs, pageRuns.CheckRuns...)
+		if len(pageRuns.CheckRuns) < 100 || len(runs) >= pageRuns.TotalCount {
+			break
+		}
+		if n == 20 {
+			return nil, nil, errors.New("github: check runs exceed the page bound")
+		}
+	}
+	var status struct {
+		Statuses []rawStatus `json:"statuses"`
+	}
+	if _, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/commits/%s/status", url.PathEscape(sha)), nil, &status); err != nil {
+		return nil, nil, err
+	}
+	return runs, status.Statuses, nil
+}
+
+// pullsForCommit lists the PRs whose head (or history) includes sha.
+func (c *Client) pullsForCommit(ctx context.Context, repo, sha string) ([]rawPull, error) {
+	return all[rawPull](ctx, c, repo, repoPath(repo, "/commits/%s/pulls", url.PathEscape(sha)))
+}
+
+// IssueComments lists an issue's (or PR conversation's) comments.
+func (c *Client) IssueComments(ctx context.Context, repo string, n int, since time.Time) ([]rawComment, error) {
+	path := repoPath(repo, "/issues/%d/comments", n)
+	if !since.IsZero() {
+		path += "?since=" + url.QueryEscape(since.UTC().Format(time.RFC3339))
+	}
+	return all[rawComment](ctx, c, repo, path)
+}
+
+// Reactions reads the reaction counts on an issue comment.
+func (c *Client) Reactions(ctx context.Context, repo string, commentID int64) (map[string]int, error) {
+	var out struct {
+		Reactions map[string]any `json:"reactions"`
+	}
+	if _, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/issues/comments/%d", commentID), nil, &out); err != nil {
+		return nil, err
+	}
+	counts := map[string]int{}
+	for k, v := range out.Reactions {
+		if n, ok := v.(float64); ok && k != "total_count" && k != "url" {
+			counts[k] = int(n)
+		}
+	}
+	return counts, nil
+}
+
+// ---- writes ---------------------------------------------------------------
+
+// EditLabels adds and removes issue labels as the writer. Removing a label the
+// issue does not carry is not an error; both operations are idempotent.
+func (c *Client) EditLabels(ctx context.Context, repo string, n int, add, remove []string) error {
+	if len(add) > 0 {
+		if _, err := c.call(ctx, true, repo, http.MethodPost, repoPath(repo, "/issues/%d/labels", n), map[string][]string{"labels": add}, nil); err != nil {
+			return err
+		}
+	}
+	for _, l := range remove {
+		_, err := c.call(ctx, true, repo, http.MethodDelete, repoPath(repo, "/issues/%d/labels/%s", n, url.PathEscape(l)), nil, nil)
+		if err != nil && !IsStatus(err, http.StatusNotFound) {
+			return err
+		}
+	}
+	return nil
+}
+
+// PostedComment identifies a comment created by Comment.
+type PostedComment struct {
+	ID  int64  `json:"id"`
+	URL string `json:"html_url"`
+}
+
+// Comment posts an issue/PR conversation comment as the writer. Callers must
+// include a discoverable marker: a lost response cannot be retried blindly.
+func (c *Client) Comment(ctx context.Context, repo string, n int, body string) (PostedComment, error) {
+	var out PostedComment
+	_, err := c.call(ctx, true, repo, http.MethodPost, repoPath(repo, "/issues/%d/comments", n), map[string]string{"body": body}, &out)
+	return out, err
+}
+
+// React acknowledges a comment with a reaction. GitHub returns the existing
+// reaction for a repeat, so retries are idempotent and need no marker. Kinds:
+// issue/pull_request conversation comments and inline review comments.
+func (c *Client) React(ctx context.Context, repo, kind string, commentID int64, content string) error {
+	var path string
+	switch kind {
+	case KindIssue, KindPullRequest:
+		path = repoPath(repo, "/issues/comments/%d/reactions", commentID)
+	case KindReviewComment:
+		path = repoPath(repo, "/pulls/comments/%d/reactions", commentID)
+	default:
+		return nil // reviews have no reactions endpoint
+	}
+	_, err := c.call(ctx, true, repo, http.MethodPost, path, map[string]string{"content": content}, nil)
+	return err
+}
+
+func parseNumber(s string) (int, bool) {
+	n, err := strconv.Atoi(s)
+	return n, err == nil && n > 0
+}

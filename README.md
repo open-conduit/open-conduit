@@ -20,6 +20,7 @@ The project is implementing the core after completing the contracts gate. Primit
 - [Shell executor and CLI toolbelt](docs/architecture/shell-executor.md)
 - [Lifecycle telemetry, unified run history and doctor](docs/architecture/observability-history.md)
 - [Daemon composition and the core kill/restart gate](docs/architecture/daemon-core-gate.md)
+- [GitHub ingress, routing policy and projections](docs/architecture/github-extension.md)
 - [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)
 - [Pinned source test index](docs/baseline/source-tests.md)

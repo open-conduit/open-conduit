@@ -1,0 +1,471 @@
+package github_test
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"reflect"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/alsiola/open-conduit/conformance"
+	"github.com/alsiola/open-conduit/domain"
+	"github.com/alsiola/open-conduit/extension"
+	gh "github.com/alsiola/open-conduit/extensions/github"
+	"github.com/alsiola/open-conduit/extensions/github/githubtest"
+)
+
+const (
+	repo   = "octo/widgets"
+	ns     = "github/github.com/octo/widgets"
+	secret = "s3cret"
+)
+
+var (
+	alice = githubtest.User{Login: "alice", Type: "User"}
+	ci    = githubtest.User{Login: "ci[bot]", Type: "Bot"}
+	src   = extension.Source{Namespace: ns, ScopeID: "eng"}
+)
+
+type fixture struct {
+	fake *githubtest.Server
+	in   *gh.Ingress
+	now  time.Time
+}
+
+func newFixture(t *testing.T, extra string) *fixture {
+	t.Helper()
+	fake := githubtest.New(repo, "tok")
+	t.Cleanup(fake.Close)
+	f := &fixture{fake: fake, now: time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)}
+	cfg, err := gh.ParseConnection([]byte(`{"api_url":"` + fake.URL + `"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	client, err := gh.NewClient(cfg, func(context.Context, string) (string, error) { return "tok", nil }, gh.ClientOptions{Now: func() time.Time { return f.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	s, err := gh.ParseExtension([]byte(`{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`"`+extra+`}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.in = gh.NewIngress(s, client, func() time.Time { return f.now }, gh.IngressOptions{BatchUnits: 1000, PageBudget: time.Minute})
+	return f
+}
+
+func (f *fixture) push(t *testing.T, event, delivery string, body []byte) extension.PushResult {
+	t.Helper()
+	d, err := gh.VerifyDelivery(secret, githubtest.Sign(secret, event, delivery, body), body, f.now)
+	if err != nil {
+		t.Fatal(err)
+	}
+	res, err := f.in.Push(context.Background(), src, d)
+	if err != nil {
+		t.Fatalf("push %s: %v", event, err)
+	}
+	return res
+}
+
+// scan runs a whole generation and returns its observations by item.
+func (f *fixture) scan(t *testing.T) map[string]extension.Observation {
+	t.Helper()
+	out := map[string]extension.Observation{}
+	scan := extension.Scan{Source: src}
+	for i := 0; i < 1000; i++ {
+		page, err := f.in.Reconcile(context.Background(), scan)
+		if err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		for _, o := range page.Observations {
+			if prev, ok := out[o.ID]; ok && prev.Version != o.Version {
+				t.Fatalf("item %s repeated with another version in one generation", o.ID)
+			}
+			out[o.ID] = o
+		}
+		if page.Complete {
+			if page.NextCursor != "" {
+				t.Fatal("complete page with a cursor")
+			}
+			return out
+		}
+		if page.NextCursor == "" {
+			t.Fatalf("partial scan: %+v", page)
+		}
+		scan.ScanID, scan.Cursor, scan.Checkpoint = page.ScanID, page.NextCursor, page.Checkpoint
+	}
+	t.Fatal("scan did not finish")
+	return nil
+}
+
+func key(o extension.Observation) string { return o.Event.CorrelationKey.ExternalID }
+
+func payload[T any](t *testing.T, o extension.Observation) T {
+	t.Helper()
+	var v T
+	if err := json.Unmarshal(o.Event.Data.Data, &v); err != nil {
+		t.Fatal(err)
+	}
+	return v
+}
+
+func TestIngressConformance(t *testing.T) {
+	conformance.RunIngress(t, func() conformance.IngressFixture {
+		f := newFixture(t, "")
+		n := f.fake.OpenIssue("Fix the header", "it wobbles", alice)
+		for i := 0; i < 3; i++ {
+			f.fake.OpenIssue("filler "+strconv.Itoa(i), "", alice)
+		}
+		body := f.fake.IssuesHook("opened", n)
+		d, _ := gh.VerifyDelivery(secret, githubtest.Sign(secret, "issues", "d-1", body), body, f.now)
+		res, err := f.in.Push(context.Background(), src, d)
+		if err != nil || len(res.Observations) != 1 {
+			t.Fatalf("push: %v %+v", err, res)
+		}
+		return conformance.IngressFixture{Ingress: f.in, Source: src, Delivery: d, Canonical: res.Observations[0], OneShotType: gh.TypeDelivery}
+	})
+}
+
+// sameIdentity requires push and reconcile to agree on everything except the
+// actual receipt time.
+func sameIdentity(t *testing.T, label string, pushed, scanned extension.Observation) {
+	t.Helper()
+	pushed.Event.ReceivedAt, scanned.Event.ReceivedAt = time.Time{}, time.Time{}
+	if !reflect.DeepEqual(pushed, scanned) {
+		t.Fatalf("%s: push and reconcile differ\npush: %+v\n%s\nscan: %+v\n%s", label, pushed, pushed.Event.Data.Data, scanned, scanned.Event.Data.Data)
+	}
+}
+
+func onlyObservation(t *testing.T, res extension.PushResult) extension.Observation {
+	t.Helper()
+	if len(res.Observations) != 1 {
+		t.Fatalf("observations = %d", len(res.Observations))
+	}
+	if len(res.Events) != 1 || res.Events[0].Type != gh.TypeDelivery {
+		t.Fatalf("raw delivery missing: %+v", res.Events)
+	}
+	return res.Observations[0]
+}
+
+func TestPushAndReconcileAgreeForEveryFamily(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	issue := fk.OpenIssue("Header", "wobbles", alice, "bug")
+	human := fk.AddComment(issue, alice, "please make it blue")
+	bot := fk.AddComment(issue, ci, "coverage 80%")
+	agent := fk.AddComment(issue, ci, gh.WithMarker("on it", "work/x", "i1"))
+	pr := fk.OpenPull("Blue header", "Closes #1", "feature/blue", "sha1", alice)
+	review := fk.AddReview(pr, alice, "CHANGES_REQUESTED", "rename it")
+	inline := fk.AddReviewComment(pr, alice, "nit", "header.go", 12)
+	prComment := fk.AddComment(pr, alice, "looks close")
+	fk.SetCheck("sha1", "build", "completed", "failure")
+	fk.SetStatus("sha1", "deploy-preview", "success", "https://preview.example/1")
+	closed := fk.OpenIssue("Old", "", alice)
+	fk.CloseIssue(closed, "completed")
+
+	cases := []struct {
+		label, event string
+		body         []byte
+		item, typ    string
+	}{
+		{"issue", "issues", fk.IssuesHook("labeled", issue), "issue/1", gh.TypeIssueOpen},
+		{"closed issue", "issues", fk.IssuesHook("closed", closed), "issue/" + strconv.Itoa(closed), gh.TypeIssueClosed},
+		{"human comment", "issue_comment", fk.CommentHook("created", human), "issue/1/comment/" + strconv.FormatInt(human, 10), gh.TypeCommentHuman},
+		{"bot comment", "issue_comment", fk.CommentHook("created", bot), "issue/1/comment/" + strconv.FormatInt(bot, 10), gh.TypeCommentBot},
+		{"agent comment", "issue_comment", fk.CommentHook("created", agent), "issue/1/comment/" + strconv.FormatInt(agent, 10), gh.TypeCommentAgent},
+		{"pr", "pull_request", fk.PullHook("opened", pr), "pr/" + strconv.Itoa(pr), gh.TypePullOpen},
+		{"review", "pull_request_review", fk.ReviewHook("submitted", pr, review), "pr/" + strconv.Itoa(pr) + "/review/" + strconv.FormatInt(review, 10), gh.TypeCommentHuman},
+		{"inline", "pull_request_review_comment", fk.ReviewCommentHook("created", inline), "pr/" + strconv.Itoa(pr) + "/review_comment/" + strconv.FormatInt(inline, 10), gh.TypeCommentHuman},
+		{"pr conversation", "issue_comment", fk.CommentHook("created", prComment), "pr/" + strconv.Itoa(pr) + "/comment/" + strconv.FormatInt(prComment, 10), gh.TypeCommentHuman},
+		{"checks", "check_run", fk.CheckRunHook("sha1", pr), "pr/" + strconv.Itoa(pr) + "/checks", gh.TypeChecksFailed},
+	}
+	scanned := f.scan(t)
+	for i, tc := range cases {
+		o := onlyObservation(t, f.push(t, tc.event, "d-"+strconv.Itoa(i), tc.body))
+		if o.ID != tc.item || o.Event.Type != tc.typ {
+			t.Fatalf("%s: item %s type %s", tc.label, o.ID, o.Event.Type)
+		}
+		s, ok := scanned[tc.item]
+		if !ok {
+			t.Fatalf("%s: reconcile did not observe %s", tc.label, tc.item)
+		}
+		sameIdentity(t, tc.label, o, s)
+	}
+	// Everything on the PR correlates with the issue it closes (v1 attachment).
+	for _, item := range []string{"pr/" + strconv.Itoa(pr), "pr/" + strconv.Itoa(pr) + "/review/" + strconv.FormatInt(review, 10), "pr/" + strconv.Itoa(pr) + "/review_comment/" + strconv.FormatInt(inline, 10), "pr/" + strconv.Itoa(pr) + "/checks", "pr/" + strconv.Itoa(pr) + "/comment/" + strconv.FormatInt(prComment, 10)} {
+		if k := key(scanned[item]); k != "issue/1" {
+			t.Fatalf("%s correlates with %s, want issue/1", item, k)
+		}
+	}
+	checks := payload[gh.ChecksPayload](t, scanned["pr/"+strconv.Itoa(pr)+"/checks"])
+	if !checks.Complete || !reflect.DeepEqual(checks.Failed, []string{"build"}) || checks.Preview != "https://preview.example/1" {
+		t.Fatalf("checks: %+v", checks)
+	}
+	agentPayload := payload[gh.CommentPayload](t, scanned["issue/1/comment/"+strconv.FormatInt(agent, 10)])
+	if agentPayload.Agent == nil || agentPayload.Agent.Work != "work/x" {
+		t.Fatalf("agent marker: %+v", agentPayload)
+	}
+	// A status event on the same head yields the same aggregate.
+	o := onlyObservation(t, f.push(t, "status", "d-status", fk.StatusHook("sha1", "success")))
+	sameIdentity(t, "status", o, scanned["pr/"+strconv.Itoa(pr)+"/checks"])
+}
+
+func TestRawDeliveryIsDeclaredOneShot(t *testing.T) {
+	f := newFixture(t, "")
+	res := f.push(t, "push", "d-push", f.fake.PushHook("refs/heads/main", "a", "b", "README.md"))
+	if len(res.Observations) != 0 || len(res.Events) != 1 {
+		t.Fatalf("push delivery: %+v", res)
+	}
+	e := res.Events[0]
+	var p gh.DeliveryPayload
+	_ = json.Unmarshal(e.Data.Data, &p)
+	if e.DeliveryID != "delivery/d-push" || p.Event != "push" || p.Ref != "refs/heads/main" || !reflect.DeepEqual(p.Files, []string{"README.md"}) {
+		t.Fatalf("raw delivery: %+v %+v", e, p)
+	}
+	for _, fam := range f.in.Spec().Families {
+		if fam.Type == gh.TypeDelivery && (fam.ReDerivable || fam.Loss == "") {
+			t.Fatal("raw delivery must be declared non-re-derivable with a loss limitation")
+		}
+	}
+	// Another repository's delivery and pings are ignored.
+	other := []byte(`{"repository":{"full_name":"someone/else"},"action":"opened"}`)
+	if res := f.push(t, "issues", "d-other", other); len(res.Observations)+len(res.Events) != 0 {
+		t.Fatal("foreign repository delivery accepted")
+	}
+	if res := f.push(t, "ping", "d-ping", []byte(`{"repository":{"full_name":"`+repo+`"}}`)); len(res.Observations)+len(res.Events) != 0 {
+		t.Fatal("ping produced events")
+	}
+}
+
+func TestReopenedIssueIsANewGeneration(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	n := fk.OpenIssue("Header", "", alice)
+	before := fk.AddComment(n, alice, "first")
+	fk.CloseIssue(n, "completed")
+	closedPush := onlyObservation(t, f.push(t, "issues", "d-close", fk.IssuesHook("closed", n)))
+	if key(closedPush) != "issue/1" || closedPush.Event.Type != gh.TypeIssueClosed {
+		t.Fatalf("close: %s %s", key(closedPush), closedPush.Event.Type)
+	}
+	reopen := fk.ReopenIssue(n)
+	gen := "reopen-" + strconv.FormatInt(reopen, 10)
+	after := fk.AddComment(n, alice, "again")
+	reopened := onlyObservation(t, f.push(t, "issues", "d-reopen", fk.IssuesHook("reopened", n)))
+	p := payload[gh.IssuePayload](t, reopened)
+	if key(reopened) != "issue/1/generation/"+gen || p.Generation != gen || p.Predecessor != "issue/1" || reopened.Event.Type != gh.TypeIssueOpen {
+		t.Fatalf("reopen: key %s payload %+v", key(reopened), p)
+	}
+	scanned := f.scan(t)
+	sameIdentity(t, "reopened", reopened, scanned["issue/1"])
+	if k := key(scanned["issue/1/comment/"+strconv.FormatInt(before, 10)]); k != "issue/1" {
+		t.Fatalf("comment before reopening correlates with %s", k)
+	}
+	if k := key(scanned["issue/1/comment/"+strconv.FormatInt(after, 10)]); k != "issue/1/generation/"+gen {
+		t.Fatalf("comment after reopening correlates with %s", k)
+	}
+	// Closing the reopened generation addresses that generation's Work.
+	fk.CloseIssue(n, "not_planned")
+	closedAgain := onlyObservation(t, f.push(t, "issues", "d-close-2", fk.IssuesHook("closed", n)))
+	if key(closedAgain) != "issue/1/generation/"+gen || closedAgain.Version == closedPush.Version {
+		t.Fatalf("second close: %s", key(closedAgain))
+	}
+	// A second reopening moves on again and names the first as predecessor.
+	second := fk.ReopenIssue(n)
+	o := onlyObservation(t, f.push(t, "issues", "d-reopen-2", fk.IssuesHook("reopened", n)))
+	p = payload[gh.IssuePayload](t, o)
+	if p.Generation != "reopen-"+strconv.FormatInt(second, 10) || p.Predecessor != "issue/1/generation/"+gen {
+		t.Fatalf("second reopen: %+v", p)
+	}
+}
+
+func TestProjectedLabelsDoNotChangeIssueIdentity(t *testing.T) {
+	f := newFixture(t, "")
+	n := f.fake.OpenIssue("Header", "", alice, "bug")
+	base := f.scan(t)["issue/1"]
+	// Status labels are excluded: projecting them never produces input.
+	f.fake.SetLabels(n, "bug", "ready-for-review")
+	if again := f.scan(t)["issue/1"]; again.Version != base.Version {
+		t.Fatal("a status label changed the issue version")
+	}
+	// A comment bumps updated_at only.
+	f.fake.AddComment(n, alice, "hello")
+	if again := f.scan(t)["issue/1"]; again.Version != base.Version {
+		t.Fatal("a comment changed the issue version")
+	}
+	// Labels routes can see (including the claim) are observed.
+	f.fake.SetLabels(n, "bug", "agent-in-progress")
+	claimed := f.scan(t)["issue/1"]
+	if claimed.Version == base.Version || !reflect.DeepEqual(payload[gh.IssuePayload](t, claimed).Labels, []string{"agent-in-progress", "bug"}) {
+		t.Fatal("claim label not observed")
+	}
+}
+
+func TestPullRequestCorrelation(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	fk.OpenIssue("One", "", alice)
+	fk.OpenIssue("Two", "", alice)
+	byBranch := fk.OpenPull("Two", "no refs here", "agent/issue-2", "s2", alice)
+	byBody := fk.OpenPull("One", "Fixes #1 and refs #2", "x", "s1", alice)
+	orphan := fk.OpenPull("Chore", "Bump deps", "chore", "s3", alice)
+	foreign := fk.OpenPull("Elsewhere", "Closes other/repo#2", "y", "s4", alice)
+	missing := fk.OpenPull("Typo", "Closes #999", "z", "s5", alice)
+	scanned := f.scan(t)
+	want := map[int]string{byBranch: "issue/2", byBody: "issue/1", orphan: "pr/" + strconv.Itoa(orphan), foreign: "pr/" + strconv.Itoa(foreign), missing: "pr/" + strconv.Itoa(missing)}
+	for n, k := range want {
+		if got := key(scanned["pr/"+strconv.Itoa(n)]); got != k {
+			t.Fatalf("PR %d correlates with %s, want %s", n, got, k)
+		}
+	}
+	fk.MergePull(byBody)
+	merged := onlyObservation(t, f.push(t, "pull_request", "d-merge", fk.PullHook("closed", byBody)))
+	if merged.Event.Type != gh.TypePullMerged || key(merged) != "issue/1" {
+		t.Fatalf("merge: %s %s", merged.Event.Type, key(merged))
+	}
+	sameIdentity(t, "merged", merged, f.scan(t)["pr/"+strconv.Itoa(byBody)])
+}
+
+func TestSharedTrackerReferences(t *testing.T) {
+	f := newFixture(t, `,"track_issues":false,"tracker":{"repo":"octo/tracker","namespace":"github/github.com/octo/tracker"}`)
+	fk := f.fake
+	local := fk.OpenIssue("Local issue", "", alice)
+	bare := fk.OpenPull("Bare", "Closes #1", "x", "s1", alice)
+	scanned := f.scan(t)
+	if _, ok := scanned["issue/"+strconv.Itoa(local)]; ok {
+		t.Fatal("track_issues=false still observed the repository's issues")
+	}
+	// A bare #1 names this repository, not the shared tracker.
+	if o := scanned["pr/"+strconv.Itoa(bare)]; key(o) != "pr/"+strconv.Itoa(bare) || o.Event.CorrelationKey.Source != ns {
+		t.Fatalf("bare reference in a shared-tracker repo: %+v", o.Event.CorrelationKey)
+	}
+}
+
+func TestClosedItemsAgeOutOfTheHorizon(t *testing.T) {
+	f := newFixture(t, `,"closed_horizon_hours":1`)
+	fk := f.fake
+	open := fk.OpenIssue("Open", "", alice)
+	old := fk.OpenIssue("Old", "", alice)
+	fk.CloseIssue(old, "completed")
+	f.now = fk.Now().Add(30 * time.Minute)
+	scanned := f.scan(t)
+	if _, ok := scanned["issue/"+strconv.Itoa(old)]; !ok {
+		t.Fatal("recently closed issue not observed")
+	}
+	f.now = fk.Now().Add(3 * time.Hour)
+	scanned = f.scan(t)
+	if _, ok := scanned["issue/"+strconv.Itoa(old)]; ok {
+		t.Fatal("closed issue beyond the horizon still observed")
+	}
+	if _, ok := scanned["issue/"+strconv.Itoa(open)]; !ok {
+		t.Fatal("old open issue must stay observed regardless of age")
+	}
+}
+
+func TestScanPagesAreStableAndBounded(t *testing.T) {
+	f := newFixture(t, "")
+	for i := 0; i < 230; i++ {
+		f.fake.OpenIssue("issue "+strconv.Itoa(i), "", alice)
+	}
+	f.in = gh.NewIngress(f.in.Settings(), clientFor(t, f), func() time.Time { return f.now }, gh.IngressOptions{BatchUnits: 1})
+	scanned := f.scan(t)
+	if len(scanned) != 230 {
+		t.Fatalf("observed %d issues, want 230", len(scanned))
+	}
+	// Unchanged pages are revalidated conditionally on the next generation.
+	before := f.fake.NotModified()
+	f.scan(t)
+	if f.fake.NotModified() <= before {
+		t.Fatal("second generation made no conditional requests")
+	}
+}
+
+func clientFor(t *testing.T, f *fixture) *gh.Client {
+	cfg, _ := gh.ParseConnection([]byte(`{"api_url":"` + f.fake.URL + `"}`))
+	c, err := gh.NewClient(cfg, func(context.Context, string) (string, error) { return "tok", nil }, gh.ClientOptions{Now: func() time.Time { return f.now }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return c
+}
+
+func TestRateLimitedScanIsAnErrorAndResumes(t *testing.T) {
+	f := newFixture(t, "")
+	f.fake.OpenIssue("One", "", alice)
+	page, err := f.in.Reconcile(context.Background(), extension.Scan{Source: src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.fake.RateLimitPrimary(f.now.Add(time.Hour))
+	next := extension.Scan{Source: src, ScanID: page.ScanID, Cursor: page.NextCursor}
+	var limit *gh.RateLimitError
+	if _, err := f.in.Reconcile(context.Background(), next); !errors.As(err, &limit) {
+		t.Fatalf("rate limited page must fail, not complete: %v", err)
+	}
+	if _, err := f.in.Reconcile(context.Background(), next); !errors.As(err, &limit) {
+		t.Fatalf("paused page must fail locally: %v", err)
+	}
+	f.now = f.now.Add(time.Hour)
+	if _, err := f.in.Reconcile(context.Background(), next); err != nil {
+		t.Fatalf("after reset: %v", err)
+	}
+}
+
+func TestRepeatedlyRejectedPageRestartsTheGeneration(t *testing.T) {
+	f := newFixture(t, "")
+	f.fake.OpenIssue("One", "", alice)
+	page, err := f.in.Reconcile(context.Background(), extension.Scan{Source: src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	next := extension.Scan{Source: src, ScanID: page.ScanID, Cursor: page.NextCursor}
+	for i := 0; i < 3; i++ { // the runtime keeps asking for the same page again
+		if p, err := f.in.Reconcile(context.Background(), next); err != nil || p.NextCursor == "" && !p.Complete {
+			t.Fatalf("attempt %d: %+v %v", i, p, err)
+		}
+	}
+	p, err := f.in.Reconcile(context.Background(), next)
+	if err != nil || p.Complete || p.NextCursor != "" || len(p.Observations) != 0 {
+		t.Fatalf("expected an exhausted partial page to restart: %+v %v", p, err)
+	}
+	// So does a generation older than MaxScanAge.
+	f.now = f.now.Add(7 * time.Hour)
+	p, err = f.in.Reconcile(context.Background(), extension.Scan{Source: src, ScanID: page.ScanID, Cursor: page.NextCursor})
+	if err != nil || p.Complete || p.NextCursor != "" {
+		t.Fatalf("stale generation: %+v %v", p, err)
+	}
+}
+
+func TestPushRejectsUnverifiedShapes(t *testing.T) {
+	f := newFixture(t, "")
+	for name, d := range map[string]extension.Delivery{
+		"raw body":     {ID: "x", ContentType: "application/json", Body: []byte(`{}`)},
+		"id mismatch":  {ID: "x", ContentType: gh.DeliveryContentType, Body: []byte(`{"event":"issues","delivery":"y","payload":{}}`)},
+		"wrong source": {ID: "x", ContentType: gh.DeliveryContentType, Body: []byte(`{"event":"issues","delivery":"x","payload":{}}`)},
+	} {
+		s := src
+		if name == "wrong source" {
+			s.Namespace = "other"
+		}
+		if _, err := f.in.Push(context.Background(), s, d); err == nil {
+			t.Fatalf("%s accepted", name)
+		}
+	}
+}
+
+func TestEditedCommentIsANewVersion(t *testing.T) {
+	f := newFixture(t, "")
+	n := f.fake.OpenIssue("One", "", alice)
+	id := f.fake.AddComment(n, alice, "first")
+	created := onlyObservation(t, f.push(t, "issue_comment", "d-1", f.fake.CommentHook("created", id)))
+	f.fake.EditComment(id, "edited")
+	edited := onlyObservation(t, f.push(t, "issue_comment", "d-2", f.fake.CommentHook("edited", id)))
+	if created.Version == edited.Version || !payload[gh.CommentPayload](t, edited).Edited || payload[gh.CommentPayload](t, created).Edited {
+		t.Fatal("edit not distinguished")
+	}
+	if !strings.HasPrefix(created.Event.DeliveryID, "issue/1/comment/") || created.Event.Source != ns {
+		t.Fatalf("delivery identity: %+v", created.Event)
+	}
+	_ = domain.ID("")
+}

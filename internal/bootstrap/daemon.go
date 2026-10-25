@@ -93,6 +93,7 @@ type daemon struct {
 	resolver  *config.Resolver
 	pipeline  *telemetry.Pipeline
 	ingress   *runtime.Ingress
+	github    githubSources
 	endpoint  string
 	cursorKey []byte
 	current   atomic.Pointer[components]
@@ -207,6 +208,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	d.executors = map[string]extension.Executor{"shell": d.shell}
 	registry := config.Registry{Executors: d.executors, Handlers: handlerNames()}
+	githubRegistry(&registry)
 	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, registry, o.ConfigPath); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
@@ -214,6 +216,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	snapshot, generation := d.configs.Current()
+	d.registerGitHub(ctx, snapshot)
 	c, err := d.build(snapshot, generation)
 	if err != nil {
 		return err
@@ -228,6 +231,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 			return
 		}
 		d.current.Store(next)
+		d.registerGitHub(d.ctx, s)
 		d.log.Info("configuration generation activated", "generation", g)
 		d.poke()
 	}
@@ -327,7 +331,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck}}); err != nil {
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck}}); err != nil {
 		return nil, err
 	}
 	return c, nil
