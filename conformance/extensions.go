@@ -21,6 +21,10 @@ type IngressFixture struct {
 	Delivery    extension.Delivery
 	Canonical   extension.Observation
 	OneShotType string
+	// OneShot, when set, is a separate delivery yielding the one-shot event,
+	// for services whose one-shot family never accompanies an observation
+	// (Slack's push-only deletions). Delivery then yields only Canonical.
+	OneShot *extension.Delivery
 }
 
 func CheckIngress(f IngressFixture) error {
@@ -53,10 +57,22 @@ func CheckIngress(f IngressFixture) error {
 	if len(push.Observations) != 1 || !reflect.DeepEqual(push.Observations[0], f.Canonical) {
 		return fmt.Errorf("push canonical observation mismatch")
 	}
-	if len(push.Events) != 1 || push.Events[0].Type != f.OneShotType {
+	oneShot := push
+	if f.OneShot != nil {
+		if len(push.Events) != 0 {
+			return fmt.Errorf("canonical delivery carries unexpected one-shot events")
+		}
+		if oneShot, err = f.Ingress.Push(ctx, f.Source, *f.OneShot); err != nil {
+			return err
+		}
+		if len(oneShot.Observations) != 0 {
+			return fmt.Errorf("one-shot delivery carries observations")
+		}
+	}
+	if len(oneShot.Events) != 1 || oneShot.Events[0].Type != f.OneShotType {
 		return fmt.Errorf("one-shot fixture missing")
 	}
-	for _, e := range push.Events {
+	for _, e := range oneShot.Events {
 		if family, ok := families[e.Type]; !ok || family.ReDerivable {
 			return fmt.Errorf("undeclared non-re-derivable event")
 		}

@@ -91,3 +91,5 @@ B05 update: [configuration, secrets and local management](config-management.md) 
 - `OperationError`, a handler-authored safe refusal (code plus message) returned verbatim instead of a generic failure.
 
 The reference toolbelt double still supports pure handlers only.
+
+04-01 update: the [Slack extension](slack-extension.md) is the second real ingress. Its only non-re-derivable family (push-only deletions) never accompanies an observation in one delivery, so `conformance.IngressFixture` gains an optional `OneShot` delivery: when set, the canonical delivery must yield exactly the canonical observation and no direct Event, and the one-shot family is checked from `OneShot`. Existing fixtures are unchanged. Socket Mode is a push transport whose authenticated connection, not a signature, is the transport-authentication boundary; envelopes are acknowledged only after durable acceptance, exactly as the HTTP status is.

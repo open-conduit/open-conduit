@@ -12,6 +12,7 @@ import (
 
 	"github.com/alsiola/open-conduit/extension"
 	gh "github.com/alsiola/open-conduit/extensions/github"
+	sl "github.com/alsiola/open-conduit/extensions/slack"
 	"github.com/alsiola/open-conduit/extensions/tunnel"
 	"github.com/alsiola/open-conduit/internal/runtime"
 )
@@ -20,7 +21,8 @@ import (
 // runs, so without a listener the daemon is reconcile-only and loses only
 // latency. When enabled, a separate HTTP server on its own TCP address
 // serves exactly one route per registered GitHub entry that names a
-// webhook_secret: POST /github/<scope>/<entry>. It never mounts /v1, never
+// webhook_secret (POST /github/<scope>/<entry>) and per Slack entry that
+// names a signing_secret (POST /slack/<scope>/<entry>, 04-01). It never mounts /v1, never
 // sees management credentials and never forwards to the management socket.
 // An optional tunnel (ngrok, cloudflared or a static URL) exposes only that
 // listener; entries with manage_webhook point the repository webhook at it.
@@ -142,6 +144,14 @@ func (d *daemon) webhookSecret(src *githubSource) func(context.Context) (string,
 func (d *daemon) webhookHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")
+		if strings.HasPrefix(name, sl.Type+"/") {
+			if h := d.slackWebhook(name); h != nil {
+				h.ServeHTTP(w, r)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
 		var src *githubSource
 		d.github.mu.Lock()
 		for _, s := range d.github.sources {
@@ -301,6 +311,7 @@ func (d *daemon) webhookCheck(context.Context) runtime.Check {
 		check.Items = append(check.Items, item)
 	}
 	d.github.mu.Unlock()
+	check.Items = append(check.Items, d.slackWebhookItems()...)
 	sort.Strings(check.Items)
 	return check
 }

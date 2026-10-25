@@ -18,6 +18,7 @@ import (
 	"github.com/alsiola/open-conduit/extension"
 	gh "github.com/alsiola/open-conduit/extensions/github"
 	"github.com/alsiola/open-conduit/extensions/github/playbooks"
+	sl "github.com/alsiola/open-conduit/extensions/slack"
 	"github.com/alsiola/open-conduit/internal/config"
 	"github.com/alsiola/open-conduit/internal/management"
 	"github.com/alsiola/open-conduit/internal/runtime"
@@ -31,8 +32,9 @@ import (
 // registry is the daemon's registration of executors, route handlers,
 // operations, connection and extension types and resource providers.
 func registry(executors map[string]extension.Executor) config.Registry {
-	reg := config.Registry{Executors: executors, Handlers: handlerNames(), Operations: gh.Operations()}
+	reg := config.Registry{Executors: executors, Handlers: handlerNames(), Operations: append(gh.Operations(), sl.Operations()...)}
 	githubRegistry(&reg)
+	slackRegistry(&reg)
 	resourceRegistry(&reg)
 	return reg
 }

@@ -105,3 +105,5 @@ Rebind and scope reconcile endpoints are delivered by 03-05 ([operator setup and
 This is local in-process and socket evidence. It makes no daemon-restart, multi-process or real-keyring claims.
 
 03-04 update: bootstrap registers the GitHub tool operations on every generation's toolbelt and lists them in the config registry (`Registry.Operations`), so a binding may grant them. Translated wait operations are declared like `wait` ([engineering tools, waits and playbooks](engineering-tools.md)). Handler refusals (`extension.OperationError`) return `422` with the handler's code and message.
+
+04-01 update: bootstrap also registers the Slack operations (`slack.context`, `slack.thread`, `slack.reply`) as a second extension registration and lists them in `Registry.Operations` ([Slack extension](slack-extension.md)).

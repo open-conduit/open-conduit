@@ -24,6 +24,7 @@ The project is implementing the core after completing the contracts gate. Primit
 - [Optional workspaces and the Git provider](docs/architecture/workspaces.md)
 - [Claude Code executor and private continuity](docs/architecture/claude-code-executor.md)
 - [Engineering tools, waits and playbooks](docs/architecture/engineering-tools.md)
+- [Slack ingress, conversations and marked replies](docs/architecture/slack-extension.md)
 - [Operator setup, doctor and engineering controls](docs/architecture/operator-setup.md)
 - [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)

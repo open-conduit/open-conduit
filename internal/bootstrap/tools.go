@@ -10,6 +10,7 @@ import (
 	"github.com/alsiola/open-conduit/executors/claudecode"
 	gh "github.com/alsiola/open-conduit/extensions/github"
 	"github.com/alsiola/open-conduit/extensions/github/playbooks"
+	sl "github.com/alsiola/open-conduit/extensions/slack"
 	"github.com/alsiola/open-conduit/internal/runtime"
 )
 
@@ -38,12 +39,18 @@ func (d *daemon) openTools() error {
 		return err
 	}
 	d.tools = tools
+	if d.slackTools, err = sl.NewTools(sl.ToolsOptions{Store: d.coord, Sources: d.slackSourcesList, Now: d.now}); err != nil {
+		return err
+	}
 	return nil
 }
 
 // registerTools adds the extension operations to a generation's toolbelt.
 func (d *daemon) registerTools(belt *runtime.Toolbelt) error {
-	return belt.Register(d.tools.Registration())
+	if err := belt.Register(d.tools.Registration()); err != nil {
+		return err
+	}
+	return belt.Register(d.slackTools.Registration())
 }
 
 // authorizeAlias is the B04 cross-scope dependency ceiling: the waiting
@@ -63,12 +70,16 @@ func (d *daemon) pluginDir() string { return filepath.Join(d.o.StateDir, "playbo
 // upgrade replaces old playbook text).
 func (d *daemon) preparePlaybooks() error { return playbooks.Prepare(d.pluginDir()) }
 
-// renderEvents renders GitHub Events with their reply hints and falls back to
+// renderEvents renders GitHub and Slack Events with their reply hints and falls back to
 // the executor's generic renderer for everything else.
 func renderEvents(events []domain.Event) string {
 	parts := make([]string, 0, len(events))
 	for _, e := range events {
 		if text, ok := gh.RenderEvent(e); ok {
+			parts = append(parts, text)
+			continue
+		}
+		if text, ok := sl.RenderEvent(e); ok {
 			parts = append(parts, text)
 			continue
 		}
