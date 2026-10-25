@@ -72,7 +72,10 @@ func (r *Router) Complete(ctx context.Context, ref domain.LeaseRef) error {
 // Physical process cleanup is performed by later scheduler/executor dispatch.
 // Historical accepted inputs and control intents remain available for audit.
 func (r *Router) Cancel(ctx context.Context, id domain.ID) error {
-	return r.transact(ctx, nil, func(tx storage.Tx) error {
+	return r.transact(ctx, nil, func(tx storage.Tx) error { return cancelWorkInTx(tx, id) })
+}
+func cancelWorkInTx(tx storage.Tx, id domain.ID) error {
+	{
 		w, err := tx.Work(id)
 		if err != nil {
 			return err
@@ -150,7 +153,7 @@ func (r *Router) Cancel(ctx context.Context, id domain.ID) error {
 		}
 		w.State = domain.WorkCancelled
 		return tx.PutWork(w, w.Revision)
-	})
+	}
 }
 
 type ChildRequest struct {

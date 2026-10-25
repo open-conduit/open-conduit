@@ -20,6 +20,7 @@ const attemptNamespace = "core.scheduler.attempts"
 var ErrCapacity = errors.New("execution capacity exhausted")
 var ErrResourceHeld = errors.New("previous attempt resource exclusion unresolved")
 var ErrExecutorCall = errors.New("executor operation failed")
+var ErrSecretUnavailable = errors.New("execution secrets unavailable")
 
 type SchedulerOptions struct {
 	Owner                string
@@ -35,6 +36,14 @@ type SchedulerOptions struct {
 	ControlErrorFallback map[string]string
 	Timeout              time.Duration
 	AuthorizeAlias       func(context.Context, AliasAuthorization) error
+	// Toolbelt issues a fresh per-epoch credential after claim/recovery/resume
+	// for executors advertising a toolbelt transport other than none.
+	Toolbelt         *Toolbelt
+	ToolbeltEndpoint string
+	// Secrets resolves only the attempt's binding-selected secrets immediately
+	// before Run/Recover/Resume, outside coordination transactions. Values are
+	// never persisted; failure blocks this attempt with a safe diagnostic.
+	Secrets func(context.Context, AttemptState) (map[string]string, error)
 }
 type Scheduler struct {
 	store   storage.Store
@@ -67,6 +76,7 @@ type AttemptState struct {
 	ObservedSequence                  uint64
 	InputEventIDs                     []domain.ID
 	RemainingTimeout                  time.Duration
+	Declaration                       *ToolbeltDeclaration
 }
 
 func attemptState(tx storage.Tx, id domain.ID) (state AttemptState, err error) {
@@ -75,6 +85,14 @@ func attemptState(tx storage.Tx, id domain.ID) (state AttemptState, err error) {
 	normalizePayload(&state.Binding.Config)
 	if state.Result != nil {
 		normalizePayload(&state.Result.Outcome.Data)
+	}
+	if d := state.Declaration; d != nil {
+		if d.Outcome != nil {
+			normalizePayload(&d.Outcome.Data)
+		}
+		if d.Timer != nil {
+			normalizePayload(&d.Timer.Event.Data)
+		}
 	}
 	return
 }
@@ -545,6 +563,22 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 	}
 	var handle extension.RunHandle
 	var err error
+	if s.options.Toolbelt != nil && state.Capabilities.Toolbelt != "" && state.Capabilities.Toolbelt != extension.ToolbeltNone {
+		token, issueErr := s.options.Toolbelt.issueForAttempt(ctx, attempt.Lease, state)
+		if issueErr != nil {
+			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "toolbelt authority unavailable"}}
+			return attempt, errors.Join(extension.ErrUnauthorized, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
+		}
+		attempt.Request.Context.ToolbeltEndpoint, attempt.Request.Context.ToolbeltToken = s.options.ToolbeltEndpoint, token
+	}
+	if s.options.Secrets != nil {
+		secrets, secretErr := s.options.Secrets(ctx, state)
+		if secretErr != nil {
+			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "secret resolution failed"}}
+			return attempt, errors.Join(ErrSecretUnavailable, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
+		}
+		attempt.Request.Context.Secrets = secrets
+	}
 	if recovering {
 		handle, err = executor.Recover(ctx, attempt.Request, state.Recovery)
 	} else if resume {
@@ -681,6 +715,22 @@ func (s *Scheduler) Fail(ctx context.Context, ref domain.LeaseRef, result extens
 func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result extension.Result) error {
 	if err := extension.ValidateResult(result); err != nil {
 		return err
+	}
+	var declared *ToolbeltDeclaration
+	if err := s.transact(ctx, nil, func(tx storage.Tx) error { var e error; declared, e = declarationInTx(tx, ref); return e }); err != nil {
+		return err
+	}
+	if declared != nil && declared.Wait != nil {
+		// The finished/suspended segment is the trusted handshake that turns
+		// the earlier toolbelt wait request into durable registration.
+		result.Outcome = domain.Outcome{Kind: domain.OutcomeWaiting, Summary: result.Outcome.Summary}
+		if err := extension.ValidateResult(result); err != nil {
+			return err
+		}
+		return s.registerDeclaredWait(ctx, ref, *declared, result)
+	}
+	if declared != nil && declared.Outcome != nil {
+		result.Outcome = *declared.Outcome
 	}
 	if result.Outcome.Kind == domain.OutcomeWaiting {
 		return s.acknowledgeWaiting(ctx, ref, result)

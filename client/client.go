@@ -1,0 +1,542 @@
+// Package client is the public local management API client and wire types.
+// It dials only the configured Unix socket, ignores proxy environment
+// variables and never follows redirects.
+package client
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"net"
+	"net/http"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"time"
+)
+
+type Payload struct {
+	Schema string          `json:"schema,omitempty"`
+	Data   json.RawMessage `json:"data,omitempty"`
+}
+type Key struct {
+	Source     string `json:"source"`
+	ExternalID string `json:"external_id"`
+}
+type Work struct {
+	ID              string   `json:"id"`
+	Kind            string   `json:"kind"`
+	ScopeID         string   `json:"scope_id"`
+	State           string   `json:"state"`
+	CorrelationKeys []Key    `json:"correlation_keys"`
+	Context         *Payload `json:"context,omitempty"`
+	ParentID        string   `json:"parent_id,omitempty"`
+	Revision        string   `json:"revision"`
+	CreatedAt       string   `json:"created_at"`
+	UpdatedAt       string   `json:"updated_at"`
+}
+type Event struct {
+	ID             string   `json:"id"`
+	Type           string   `json:"type"`
+	Source         string   `json:"source"`
+	DeliveryID     string   `json:"delivery_id"`
+	OccurredAt     string   `json:"occurred_at"`
+	ReceivedAt     string   `json:"received_at"`
+	CorrelationKey *Key     `json:"correlation_key,omitempty"`
+	CausationID    string   `json:"causation_id,omitempty"`
+	WorkID         string   `json:"work_id,omitempty"`
+	ExecutionID    string   `json:"execution_id,omitempty"`
+	Data           *Payload `json:"data,omitempty"`
+	ScopeID        string   `json:"scope_id,omitempty"`
+	Sequence       string   `json:"sequence"`
+	Routed         bool     `json:"routed"`
+	RoutedWorkID   string   `json:"routed_work_id,omitempty"`
+	Disposition    string   `json:"disposition,omitempty"`
+}
+type Outcome struct {
+	Kind    string   `json:"kind"`
+	Summary string   `json:"summary,omitempty"`
+	Data    *Payload `json:"data,omitempty"`
+}
+type Artifact struct {
+	ID          string `json:"id"`
+	Size        int64  `json:"size"`
+	MediaType   string `json:"media_type,omitempty"`
+	WorkID      string `json:"work_id,omitempty"`
+	ExecutionID string `json:"execution_id,omitempty"`
+}
+type Lease struct {
+	Owner     string `json:"owner,omitempty"`
+	Epoch     string `json:"epoch"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+type Execution struct {
+	ID              string     `json:"id"`
+	WorkID          string     `json:"work_id"`
+	ScopeID         string     `json:"scope_id,omitempty"`
+	ExecutorBinding string     `json:"executor_binding"`
+	Attempt         uint32     `json:"attempt"`
+	State           string     `json:"state"`
+	TriggerID       string     `json:"trigger_id"`
+	Lease           Lease      `json:"lease"`
+	Outcome         *Outcome   `json:"outcome,omitempty"`
+	Artifacts       []Artifact `json:"artifacts"`
+	TraceID         string     `json:"trace_id,omitempty"`
+	StartedAt       string     `json:"started_at,omitempty"`
+	FinishedAt      string     `json:"finished_at,omitempty"`
+	Revision        string     `json:"revision"`
+	CreatedAt       string     `json:"created_at"`
+	UpdatedAt       string     `json:"updated_at"`
+}
+type Match struct {
+	Keys  []Key    `json:"keys"`
+	Types []string `json:"types"`
+}
+type Wait struct {
+	ID             string `json:"id"`
+	WorkID         string `json:"work_id"`
+	ExecutionID    string `json:"execution_id"`
+	State          string `json:"state"`
+	Match          Match  `json:"match"`
+	TimeoutTimerID string `json:"timeout_timer_id,omitempty"`
+	AfterSequence  string `json:"after_sequence"`
+	WakeEventID    string `json:"wake_event_id,omitempty"`
+	Revision       string `json:"revision"`
+	CreatedAt      string `json:"created_at,omitempty"`
+	UpdatedAt      string `json:"updated_at,omitempty"`
+}
+type Requires struct {
+	Interrupt bool   `json:"interrupt"`
+	Inject    bool   `json:"inject"`
+	Resume    bool   `json:"resume"`
+	Workspace bool   `json:"workspace"`
+	Toolbelt  string `json:"toolbelt,omitempty"`
+}
+type Binding struct {
+	Name     string   `json:"name"`
+	Executor string   `json:"executor"`
+	Requires Requires `json:"requires"`
+}
+type Route struct {
+	Name         string `json:"name"`
+	Handler      string `json:"handler"`
+	Binding      string `json:"binding"`
+	ActivePolicy string `json:"active_policy"`
+}
+type Scope struct {
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	ParentID   string            `json:"parent_id,omitempty"`
+	Enabled    bool              `json:"enabled"`
+	Bindings   []Binding         `json:"bindings"`
+	Routes     []Route           `json:"routes"`
+	Config     json.RawMessage   `json:"config,omitempty"`
+	SecretRefs map[string]string `json:"secret_refs"`
+	Revision   string            `json:"revision"`
+	CreatedAt  string            `json:"created_at"`
+	UpdatedAt  string            `json:"updated_at"`
+}
+type Health struct {
+	State            string            `json:"state"`
+	Version          string            `json:"version"`
+	InstanceID       string            `json:"instance_id"`
+	ConfigGeneration string            `json:"config_generation"`
+	Components       map[string]string `json:"components"`
+}
+type Page[T any] struct {
+	Items      []T    `json:"items"`
+	NextCursor string `json:"next_cursor"`
+}
+type ControlResult struct {
+	EventID     string `json:"event_id"`
+	WorkID      string `json:"work_id,omitempty"`
+	ExecutionID string `json:"execution_id,omitempty"`
+}
+type Detail struct {
+	Path    string `json:"path"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// Error is a safe server error envelope.
+type Error struct {
+	Status    int      `json:"-"`
+	Code      string   `json:"code"`
+	Message   string   `json:"message"`
+	RequestID string   `json:"request_id"`
+	Details   []Detail `json:"details,omitempty"`
+}
+
+func (e *Error) Error() string {
+	s := fmt.Sprintf("%d %s: %s", e.Status, e.Code, e.Message)
+	for _, d := range e.Details {
+		s += fmt.Sprintf("\n  %s: %s: %s", d.Path, d.Code, d.Message)
+	}
+	return s
+}
+
+// ErrNotModified reports a 304 for a conditional read.
+var ErrNotModified = errors.New("not modified")
+
+type Client struct {
+	http  *http.Client
+	token string
+}
+
+// ParseEndpoint accepts only unix:///absolute/path.
+func ParseEndpoint(endpoint string) (string, error) {
+	path, ok := strings.CutPrefix(endpoint, "unix://")
+	if !ok || !filepath.IsAbs(path) || filepath.Clean(path) != path {
+		return "", fmt.Errorf("endpoint must be unix:///absolute/path")
+	}
+	return path, nil
+}
+
+// New builds a client for one endpoint and bearer token.
+func New(endpoint, token string) (*Client, error) {
+	socket, err := ParseEndpoint(endpoint)
+	if err != nil {
+		return nil, err
+	}
+	if token == "" {
+		return nil, fmt.Errorf("missing bearer token")
+	}
+	transport := &http.Transport{
+		Proxy: nil,
+		DialContext: func(ctx context.Context, _, _ string) (net.Conn, error) {
+			var d net.Dialer
+			return d.DialContext(ctx, "unix", socket)
+		},
+		MaxIdleConns: 4, IdleConnTimeout: 30 * time.Second,
+	}
+	return &Client{http: &http.Client{Transport: transport, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}, token: token}, nil
+}
+
+// DiscoverEndpoint applies --endpoint → OPEN_CONDUIT_ENDPOINT → socket
+// discovery (--socket → OPEN_CONDUIT_SOCKET → <state>/management.sock).
+func DiscoverEndpoint(flag, socket, stateDir string, env func(string) string) string {
+	if flag != "" {
+		return flag
+	}
+	if e := env("OPEN_CONDUIT_ENDPOINT"); e != "" {
+		return e
+	}
+	if socket == "" {
+		socket = env("OPEN_CONDUIT_SOCKET")
+	}
+	if socket == "" {
+		socket = filepath.Join(stateDir, "management.sock")
+	}
+	return "unix://" + socket
+}
+
+// TokenFile is the private operator credential shape.
+type TokenFile struct {
+	TokenID string `json:"token_id"`
+	Token   string `json:"token"`
+}
+
+// ReadTokenFile refuses group/world-readable or non-regular credential files.
+func ReadTokenFile(path string) (TokenFile, error) {
+	var f TokenFile
+	info, err := os.Lstat(path)
+	if err != nil {
+		return f, fmt.Errorf("operator token file unavailable")
+	}
+	if !info.Mode().IsRegular() || info.Mode().Perm()&0o077 != 0 {
+		return f, fmt.Errorf("operator token file must be a private 0600 regular file")
+	}
+	b, err := os.ReadFile(path)
+	if err != nil {
+		return f, fmt.Errorf("operator token file unreadable")
+	}
+	d := json.NewDecoder(bytes.NewReader(b))
+	d.DisallowUnknownFields()
+	if err = d.Decode(&f); err != nil || f.Token == "" || f.TokenID == "" {
+		return TokenFile{}, fmt.Errorf("operator token file is malformed")
+	}
+	return f, nil
+}
+
+// Do performs one request and decodes the data envelope into out.
+func (c *Client) Do(ctx context.Context, method, path string, query url.Values, body any, idempotencyKey string, out any) error {
+	return c.do(ctx, method, path, query, body, idempotencyKey, nil, out)
+}
+func (c *Client) do(ctx context.Context, method, path string, query url.Values, body any, key string, header http.Header, out any) error {
+	u := "http://localhost/v1/" + strings.TrimPrefix(path, "/")
+	if len(query) > 0 {
+		u += "?" + query.Encode()
+	}
+	var reader io.Reader
+	if body != nil {
+		b, err := json.Marshal(body)
+		if err != nil {
+			return err
+		}
+		reader = bytes.NewReader(b)
+	}
+	req, err := http.NewRequestWithContext(ctx, method, u, reader)
+	if err != nil {
+		return err
+	}
+	for k, v := range header {
+		req.Header[k] = v
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	if key != "" {
+		req.Header.Set("Idempotency-Key", key)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("management endpoint unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode == http.StatusNotModified {
+		return ErrNotModified
+	}
+	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
+	if err != nil {
+		return err
+	}
+	if resp.StatusCode >= 400 {
+		var env struct {
+			Error Error `json:"error"`
+		}
+		if json.Unmarshal(data, &env) != nil || env.Error.Code == "" {
+			return &Error{Status: resp.StatusCode, Code: "http_error", Message: http.StatusText(resp.StatusCode)}
+		}
+		env.Error.Status = resp.StatusCode
+		return &env.Error
+	}
+	if out == nil {
+		return nil
+	}
+	var env struct {
+		Data json.RawMessage `json:"data"`
+	}
+	if err = json.Unmarshal(data, &env); err != nil {
+		return err
+	}
+	return json.Unmarshal(env.Data, out)
+}
+
+func (c *Client) Health(ctx context.Context) (h Health, err error) {
+	err = c.Do(ctx, "GET", "health", nil, nil, "", &h)
+	return
+}
+func get[T any](c *Client, ctx context.Context, path string) (out T, err error) {
+	err = c.Do(ctx, "GET", path, nil, nil, "", &out)
+	return
+}
+func list[T any](c *Client, ctx context.Context, path string, q url.Values) (out Page[T], err error) {
+	err = c.Do(ctx, "GET", path, q, nil, "", &out)
+	return
+}
+func esc(id string) string { return url.PathEscape(id) }
+
+func (c *Client) Scopes(ctx context.Context, q url.Values) (Page[Scope], error) {
+	return list[Scope](c, ctx, "scopes", q)
+}
+func (c *Client) Scope(ctx context.Context, id string) (Scope, error) {
+	return get[Scope](c, ctx, "scopes/"+esc(id))
+}
+func (c *Client) Works(ctx context.Context, q url.Values) (Page[Work], error) {
+	return list[Work](c, ctx, "work", q)
+}
+func (c *Client) Work(ctx context.Context, id string) (Work, error) {
+	return get[Work](c, ctx, "work/"+esc(id))
+}
+func (c *Client) Events(ctx context.Context, q url.Values) (Page[Event], error) {
+	return list[Event](c, ctx, "events", q)
+}
+func (c *Client) Event(ctx context.Context, id string) (Event, error) {
+	return get[Event](c, ctx, "events/"+esc(id))
+}
+func (c *Client) Executions(ctx context.Context, q url.Values) (Page[Execution], error) {
+	return list[Execution](c, ctx, "executions", q)
+}
+func (c *Client) Execution(ctx context.Context, id string) (Execution, error) {
+	return get[Execution](c, ctx, "executions/"+esc(id))
+}
+func (c *Client) Waits(ctx context.Context, q url.Values) (Page[Wait], error) {
+	return list[Wait](c, ctx, "waits", q)
+}
+func (c *Client) Wait(ctx context.Context, id string) (Wait, error) {
+	return get[Wait](c, ctx, "waits/"+esc(id))
+}
+func (c *Client) Artifacts(ctx context.Context, q url.Values) (Page[Artifact], error) {
+	return list[Artifact](c, ctx, "artifacts", q)
+}
+
+// ArtifactContent streams one artifact, optionally with a Range header value.
+func (c *Client) ArtifactContent(ctx context.Context, id, byteRange string, w io.Writer) error {
+	req, err := http.NewRequestWithContext(ctx, "GET", "http://localhost/v1/artifacts/"+esc(id)+"/content", nil)
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+c.token)
+	if byteRange != "" {
+		req.Header.Set("Range", byteRange)
+	}
+	resp, err := c.http.Do(req)
+	if err != nil {
+		return fmt.Errorf("management endpoint unreachable: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		var env struct {
+			Error Error `json:"error"`
+		}
+		_ = json.NewDecoder(resp.Body).Decode(&env)
+		env.Error.Status = resp.StatusCode
+		return &env.Error
+	}
+	_, err = io.Copy(w, resp.Body)
+	return err
+}
+
+// EventChain walks causation links from id to its root (inclusive), newest first.
+func (c *Client) EventChain(ctx context.Context, id string) ([]Event, error) {
+	var chain []Event
+	for id != "" && len(chain) < 1024 {
+		e, err := c.Event(ctx, id)
+		if err != nil {
+			return chain, err
+		}
+		chain = append(chain, e)
+		id = e.CausationID
+	}
+	return chain, nil
+}
+
+type EventRequest struct {
+	ScopeID        string   `json:"scope_id"`
+	Type           string   `json:"type"`
+	DeliveryID     string   `json:"delivery_id"`
+	Data           *Payload `json:"data,omitempty"`
+	CorrelationKey *Key     `json:"correlation_key,omitempty"`
+	WorkID         string   `json:"work_id,omitempty"`
+	CausationID    string   `json:"causation_id,omitempty"`
+}
+
+func (c *Client) SubmitEvent(ctx context.Context, r EventRequest, key string) (e Event, err error) {
+	err = c.Do(ctx, "POST", "events", nil, r, key, &e)
+	return
+}
+
+type WorkRequest struct {
+	ScopeID         string   `json:"scope_id"`
+	Kind            string   `json:"kind"`
+	Context         *Payload `json:"context,omitempty"`
+	CorrelationKeys []Key    `json:"correlation_keys,omitempty"`
+	ParentID        string   `json:"parent_id,omitempty"`
+	Binding         string   `json:"binding"`
+}
+type WorkCreated struct {
+	Work    Work   `json:"work"`
+	EventID string `json:"event_id"`
+}
+
+func (c *Client) CreateWork(ctx context.Context, r WorkRequest, key string) (out WorkCreated, err error) {
+	err = c.Do(ctx, "POST", "work", nil, r, key, &out)
+	return
+}
+
+type controlRequest struct {
+	ExpectedRevision string `json:"expected_revision"`
+	Reason           string `json:"reason"`
+}
+
+func (c *Client) CancelWork(ctx context.Context, id, revision, reason, key string) (out ControlResult, err error) {
+	err = c.Do(ctx, "POST", "work/"+esc(id)+"/cancel", nil, controlRequest{revision, reason}, key, &out)
+	return
+}
+func (c *Client) RetryWork(ctx context.Context, id, revision, reason, key string) (out ControlResult, err error) {
+	err = c.Do(ctx, "POST", "work/"+esc(id)+"/retry", nil, controlRequest{revision, reason}, key, &out)
+	return
+}
+func (c *Client) CancelExecution(ctx context.Context, id, revision, reason, key string) (out ControlResult, err error) {
+	err = c.Do(ctx, "POST", "executions/"+esc(id)+"/cancel", nil, controlRequest{revision, reason}, key, &out)
+	return
+}
+
+type WakeRequest struct {
+	ExpectedRevision string   `json:"expected_revision"`
+	Type             string   `json:"type"`
+	DeliveryID       string   `json:"delivery_id"`
+	Data             *Payload `json:"data,omitempty"`
+	CorrelationKey   *Key     `json:"correlation_key"`
+}
+type WakeResult struct {
+	Event   Event `json:"event"`
+	Matched bool  `json:"matched"`
+}
+
+func (c *Client) Wake(ctx context.Context, id string, r WakeRequest, key string) (out WakeResult, err error) {
+	err = c.Do(ctx, "POST", "work/"+esc(id)+"/wake", nil, r, key, &out)
+	return
+}
+
+type ConfigValidation struct {
+	Valid         bool            `json:"valid"`
+	CandidateHash string          `json:"candidate_hash"`
+	Config        json.RawMessage `json:"config"`
+}
+type ConfigApplied struct {
+	Generation string `json:"generation"`
+	Hash       string `json:"hash"`
+}
+
+func (c *Client) ValidateConfig(ctx context.Context, config json.RawMessage) (out ConfigValidation, err error) {
+	err = c.Do(ctx, "POST", "config/validate", nil, map[string]json.RawMessage{"config": config}, "", &out)
+	return
+}
+func (c *Client) ApplyConfig(ctx context.Context, config json.RawMessage, hash, generation, key string) (out ConfigApplied, err error) {
+	err = c.Do(ctx, "POST", "config/apply", nil, map[string]any{"config": config, "candidate_hash": hash, "expected_generation": generation}, key, &out)
+	return
+}
+
+// Rotate returns the one-time replacement credential.
+func (c *Client) Rotate(ctx context.Context, expectedTokenID string) (out TokenFile, err error) {
+	err = c.Do(ctx, "POST", "auth/rotate", nil, map[string]string{"expected_token_id": expectedTokenID}, "", &out)
+	return
+}
+
+type Revocation struct {
+	TokenID   string `json:"token_id"`
+	RevokedAt string `json:"revoked_at"`
+}
+
+func (c *Client) Revoke(ctx context.Context, tokenID, reason, key string) (out Revocation, err error) {
+	err = c.Do(ctx, "POST", "auth/revoke", nil, map[string]string{"token_id": tokenID, "reason": reason}, key, &out)
+	return
+}
+
+// ToolCall is the execution toolbelt request; input is operation-specific JSON.
+type ToolCall struct {
+	Operation   string          `json:"operation"`
+	Input       json.RawMessage `json:"input,omitempty"`
+	RequestID   string          `json:"request_id,omitempty"`
+	ScopeID     string          `json:"scope_id,omitempty"`
+	WorkID      string          `json:"work_id,omitempty"`
+	ExecutionID string          `json:"execution_id,omitempty"`
+}
+type ToolResult struct {
+	Event   *Event   `json:"event,omitempty"`
+	Work    *Work    `json:"work,omitempty"`
+	Wait    *Wait    `json:"wait,omitempty"`
+	Context *Payload `json:"context,omitempty"`
+	Output  *Payload `json:"output,omitempty"`
+}
+
+func (c *Client) ToolbeltCall(ctx context.Context, call ToolCall) (out ToolResult, err error) {
+	err = c.Do(ctx, "POST", "toolbelt/call", nil, call, "", &out)
+	return
+}

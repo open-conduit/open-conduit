@@ -63,7 +63,28 @@ func (s *Scheduler) WaitWithResult(ctx context.Context, ref domain.LeaseRef, wai
 	if err := extension.ValidateResult(result); err != nil {
 		return err
 	}
+	return s.transact(ctx, &ref, func(tx storage.Tx) error { return s.waitInTx(tx, ref, wait, resume, result) })
+}
+
+// registerDeclaredWait applies a toolbelt wait declaration after the trusted
+// host observed the segment finish or suspend. The timeout timer is armed in
+// the same registration transaction. Resume-capable executors park.
+func (s *Scheduler) registerDeclaredWait(ctx context.Context, ref domain.LeaseRef, declared ToolbeltDeclaration, result extension.Result) error {
 	return s.transact(ctx, &ref, func(tx storage.Tx) error {
+		state, err := attemptState(tx, ref.ExecutionID)
+		if err != nil {
+			return err
+		}
+		if declared.Timer != nil {
+			if err = armDeclaredTimerInTx(tx, s.now(), state.ScopeID, *declared.Timer); err != nil {
+				return err
+			}
+		}
+		return s.waitInTx(tx, ref, *declared.Wait, state.Capabilities.Resume, result)
+	})
+}
+func (s *Scheduler) waitInTx(tx storage.Tx, ref domain.LeaseRef, wait domain.Wait, resume bool, result extension.Result) error {
+	{
 		x, err := tx.Execution(ref.ExecutionID)
 		if err != nil {
 			return err
@@ -160,6 +181,7 @@ func (s *Scheduler) WaitWithResult(ctx context.Context, ref domain.LeaseRef, wai
 		// process. It releases scheduling capacity while preserving the same attempt.
 		state.Excluded = true
 		state.Result = &result
+		state.Declaration = nil
 		if err = putAttemptState(tx, state); err != nil {
 			return err
 		}
@@ -171,7 +193,7 @@ func (s *Scheduler) WaitWithResult(ctx context.Context, ref domain.LeaseRef, wai
 		}
 		_, err = WakeWaitInTx(tx, s.now(), s.options.CausalLimits, wait.ID)
 		return err
-	})
+	}
 }
 
 func waitMatches(wait domain.Wait, a domain.AcceptedEvent) bool {

@@ -1,5 +1,5 @@
-// Package cli currently provides help/version scaffolding only. Runtime commands
-// must use the local client when stage 02 supplies it.
+// Package cli provides operator commands over the public local client
+// (RunOperator) and the still-inert toolbelt scaffold used by os until 02-07.
 package cli
 
 import (

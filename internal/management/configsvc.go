@@ -1,0 +1,313 @@
+package management
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"reflect"
+	"strconv"
+	"sync"
+	"time"
+
+	"github.com/alsiola/open-conduit/domain"
+	"github.com/alsiola/open-conduit/internal/config"
+	"github.com/alsiola/open-conduit/internal/runtime"
+	"github.com/alsiola/open-conduit/storage"
+)
+
+const configNamespace = "core.config"
+
+var (
+	ErrGenerationConflict = errors.New("config generation conflict")
+	ErrHashMismatch       = errors.New("candidate hash does not match")
+	ErrScopeInUse         = errors.New("scope in use")
+)
+
+type activation struct {
+	Generation  uint64
+	Hash        string
+	ActivatedAt time.Time
+}
+
+// ConfigService owns validation, atomic file save and durable generation
+// activation. One generation is published with its scope records in a single
+// coordination transaction; a crash before that commit retains the old one.
+type ConfigService struct {
+	mu         sync.RWMutex
+	store      storage.Store
+	now        func() time.Time
+	registry   config.Registry
+	path       string
+	current    *config.Snapshot
+	generation uint64
+	history    map[uint64]*config.Snapshot
+	// OnApply lets the host rebuild generation-pinned components after commit.
+	OnApply func(context.Context, *config.Snapshot, uint64)
+}
+
+// OpenConfig restores the committed generation. With no activation record it
+// validates the config file and activates it as generation 1. Disk edits alone
+// never change an already committed generation.
+func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string) (*ConfigService, error) {
+	c := &ConfigService{store: store, now: now, registry: registry, path: path, history: map[uint64]*config.Snapshot{}}
+	var active activation
+	var normalized []byte
+	err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+		b, err := tx.Get(configNamespace, "active")
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err = json.Unmarshal(b, &active); err != nil {
+			return err
+		}
+		normalized, err = tx.Get(configNamespace, "generation/"+u64(active.Generation))
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	if active.Generation == 0 {
+		data, err := config.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		snapshot, err := config.Validate(data, registry)
+		if err != nil {
+			return nil, err
+		}
+		if err = c.publish(ctx, snapshot, 0); err != nil {
+			return nil, err
+		}
+		return c, nil
+	}
+	snapshot, err := config.Validate(normalized, registry)
+	if err != nil {
+		return nil, err
+	}
+	c.current, c.generation = snapshot, active.Generation
+	c.history[active.Generation] = snapshot
+	return c, nil
+}
+
+func (c *ConfigService) Current() (*config.Snapshot, uint64) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	return c.current, c.generation
+}
+
+// Validate is side-effect free.
+func (c *ConfigService) Validate(data []byte) (*config.Snapshot, error) {
+	return config.Validate(data, c.registry)
+}
+
+// Apply fully revalidates, checks hash and generation, saves the file
+// atomically (keeping last-good), then publishes the generation durably.
+func (c *ConfigService) Apply(ctx context.Context, data []byte, hash string, expected uint64) (uint64, string, error) {
+	snapshot, err := c.Validate(data)
+	if err != nil {
+		return 0, "", err
+	}
+	if snapshot.Hash != hash {
+		return 0, "", ErrHashMismatch
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if expected != c.generation {
+		return 0, "", ErrGenerationConflict
+	}
+	if err = config.SaveAtomic(c.path, data); err != nil {
+		return 0, "", err
+	}
+	if err = c.publishLocked(ctx, snapshot, expected); err != nil {
+		return 0, "", err
+	}
+	if c.OnApply != nil {
+		c.OnApply(ctx, snapshot, c.generation)
+	}
+	return c.generation, snapshot.Hash, nil
+}
+
+func (c *ConfigService) publish(ctx context.Context, s *config.Snapshot, expected uint64) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.publishLocked(ctx, s, expected)
+}
+func (c *ConfigService) publishLocked(ctx context.Context, s *config.Snapshot, expected uint64) error {
+	next := expected + 1
+	err := c.store.Transact(ctx, storage.Guard{Now: c.now()}, func(tx storage.Tx) error {
+		var active activation
+		if b, err := tx.Get(configNamespace, "active"); err == nil {
+			if err = json.Unmarshal(b, &active); err != nil {
+				return err
+			}
+		} else if !errors.Is(err, storage.ErrNotFound) {
+			return err
+		}
+		if active.Generation != expected {
+			return ErrGenerationConflict
+		}
+		wanted := map[domain.ID]bool{}
+		for _, scope := range s.DomainScopes() {
+			wanted[scope.ID] = true
+			old, err := tx.Scope(scope.ID)
+			if err == nil {
+				if old.Name == scope.Name && old.ParentID == scope.ParentID && reflect.DeepEqual(old.Bindings, scope.Bindings) && reflect.DeepEqual(old.Routes, scope.Routes) && reflect.DeepEqual(old.Config, scope.Config) && reflect.DeepEqual(old.SecretRefs, scope.SecretRefs) {
+					continue
+				}
+				if old.ParentID != scope.ParentID {
+					if err = scopeIdle(tx, scope.ID); err != nil {
+						return err
+					}
+				}
+				err = tx.PutScope(scope, old.Revision)
+			} else if errors.Is(err, storage.ErrNotFound) {
+				err = tx.PutScope(scope, 0)
+			}
+			if err != nil {
+				return err
+			}
+		}
+		existing, err := tx.ListScopes()
+		if err != nil {
+			return err
+		}
+		for _, scope := range existing {
+			if !wanted[scope.ID] {
+				// Removal requires drained nonterminal Work; history keeps its record.
+				if err = scopeIdle(tx, scope.ID); err != nil {
+					return err
+				}
+			}
+		}
+		if err = tx.Put(configNamespace, "generation/"+u64(next), s.Normalized); err != nil {
+			return err
+		}
+		b, _ := json.Marshal(activation{Generation: next, Hash: s.Hash, ActivatedAt: c.now()})
+		return tx.Put(configNamespace, "active", b)
+	})
+	if err != nil {
+		return err
+	}
+	c.current, c.generation = s, next
+	c.history[next] = s
+	return nil
+}
+
+func scopeIdle(tx storage.Tx, scope domain.ID) error {
+	works, err := tx.ListWorks()
+	if err != nil {
+		return err
+	}
+	for _, w := range works {
+		if w.ScopeID == scope && !w.State.Terminal() {
+			return ErrScopeInUse
+		}
+	}
+	return nil
+}
+
+// Enabled reports the current effective enabled state; removed scopes are disabled.
+func (c *ConfigService) Enabled(scope domain.ID) bool {
+	s, _ := c.Current()
+	e, ok := s.Scope(scope)
+	return ok && e.Enabled
+}
+
+// Authorize is the runtime toolbelt ceiling: current config can only narrow.
+func (c *ConfigService) Authorize(_ context.Context, check runtime.AuthorityCheck) error {
+	s, _ := c.Current()
+	return s.AuthorizeOperation(check.ScopeID, check.Binding, check.Operation)
+}
+
+func (c *ConfigService) snapshotFor(generation string) *config.Snapshot {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	n, err := strconv.ParseUint(generation, 10, 64)
+	if err != nil {
+		return nil
+	}
+	if s := c.history[n]; s != nil {
+		return s
+	}
+	var data []byte
+	if c.store.Transact(context.Background(), storage.Guard{Now: c.now()}, func(tx storage.Tx) error {
+		var e error
+		data, e = tx.Get(configNamespace, "generation/"+u64(n))
+		return e
+	}) != nil {
+		return nil
+	}
+	s, err := config.Validate(data, c.registry)
+	if err != nil {
+		return nil
+	}
+	c.history[n] = s
+	return s
+}
+
+// Grant returns the attempt's pinned binding operations intersected with the
+// current ceiling, plus the registered emitted families.
+func (c *ConfigService) Grant(events func() []string) func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
+	return func(ctx context.Context, state runtime.AttemptState) (runtime.ToolbeltGrant, error) {
+		grant := runtime.ToolbeltGrant{}
+		pinned := c.snapshotFor(state.Generation)
+		if pinned == nil {
+			pinned, _ = c.Current()
+		}
+		scope, ok := pinned.Scope(state.ScopeID)
+		if !ok {
+			return grant, nil
+		}
+		binding, ok := scope.Binding(state.Binding.Name)
+		if !ok {
+			return grant, nil
+		}
+		for _, op := range binding.Operations {
+			if c.Authorize(ctx, runtime.AuthorityCheck{ScopeID: state.ScopeID, Binding: state.Binding.Name, Operation: op}) == nil {
+				grant.Operations = append(grant.Operations, op)
+			}
+		}
+		if events != nil {
+			grant.EventTypes = events()
+		}
+		return grant, nil
+	}
+}
+
+// Secrets resolves the attempt's pinned binding secret names that the current
+// generation still grants, using current references (rotation affects future
+// resolution). Nothing is cached across attempts or persisted.
+func (c *ConfigService) Secrets(resolver *config.Resolver) func(context.Context, runtime.AttemptState) (map[string]string, error) {
+	return func(ctx context.Context, state runtime.AttemptState) (map[string]string, error) {
+		pinned := c.snapshotFor(state.Generation)
+		current, _ := c.Current()
+		if pinned == nil {
+			pinned = current
+		}
+		ps, ok := pinned.Scope(state.ScopeID)
+		cs, cok := current.Scope(state.ScopeID)
+		if !ok || !cok || !cs.Enabled {
+			return nil, config.ErrDenied
+		}
+		pb, ok := ps.Binding(state.Binding.Name)
+		cb, cok := cs.Binding(state.Binding.Name)
+		if !ok || !cok {
+			return nil, config.ErrDenied
+		}
+		var names []string
+		for _, name := range pb.SecretNames {
+			for _, still := range cb.SecretNames {
+				if name == still {
+					names = append(names, name)
+				}
+			}
+		}
+		if len(names) == 0 {
+			return map[string]string{}, nil
+		}
+		return resolver.ResolveNames(ctx, cs, names)
+	}
+}

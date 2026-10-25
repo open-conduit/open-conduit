@@ -2,7 +2,7 @@
 
 A Go rewrite of Open Supervisor around Work, Event, Execution, Timer/Wait and Scope.
 
-The project is implementing the core after completing the contracts gate. Primitive, ingress, executor, toolbelt and observability contracts have shared conformance suites. Production components include SQLite storage, local artifacts, verified backups, durable ingress, routing, Work lifecycle, causal limits, execution scheduling/recovery, timers and event-based waits. The daemon, local management and shell executor remain in progress. The delivery baseline is pinned to Open Supervisor revision `c2461e55a9d7ca32527bace9db5ecec8c5e60cb0`; the existing runtime remains independently installable as the fallback.
+The project is implementing the core after completing the contracts gate. Primitive, ingress, executor, toolbelt and observability contracts have shared conformance suites. Production components include SQLite storage, local artifacts, verified backups, durable ingress, routing, Work lifecycle, causal limits, execution scheduling/recovery, timers and event-based waits, toolbelt authority, configuration/secrets and the local management API with its operator client. The daemon composition and shell executor remain in progress. The delivery baseline is pinned to Open Supervisor revision `c2461e55a9d7ca32527bace9db5ecec8c5e60cb0`; the existing runtime remains independently installable as the fallback.
 
 - [Core in one page](docs/architecture/core.md)
 - [Package boundaries and dependency rules](docs/architecture/packages.md)
@@ -16,6 +16,7 @@ The project is implementing the core after completing the contracts gate. Primit
 - [Durable routing, Work lifecycle and causal limits](docs/architecture/routing-lifecycle.md)
 - [Execution scheduling, recovery and control](docs/architecture/execution-scheduling.md)
 - [Durable timers, waits and dependency aliases](docs/architecture/timers-waits.md)
+- [Toolbelt authority, configuration and local management](docs/architecture/toolbelt-management.md)
 - [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)
 - [Pinned source test index](docs/baseline/source-tests.md)

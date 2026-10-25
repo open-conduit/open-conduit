@@ -50,6 +50,8 @@ Tokens are unpredictable, per execution and lease epoch, bounded in lifetime, re
 | `declare_outcome` | Validate structured outcome; fence persistence and release attempt authority. Work completion/retry is runtime policy. Waiting requires the `wait` operation's predicate/timeout and cannot be declared without registration. |
 | `read_context` | Return only accumulated context authorized for this Work; never neighboring Work, raw secrets, tokens or executor continuity metadata. |
 
+02-06 implementation note: the production toolbelt ([toolbelt-management.md](toolbelt-management.md)) records `wait`/`declare_outcome` as fenced per-epoch declarations that release toolbelt authority immediately. The predicate/timeout registration or outcome is applied when the trusted host observes the segment finish or suspend, because a client request alone is not exclusion proof. The declared exclusive watermark ensures registration backscans everything accepted in between.
+
 Core derives causation from the current trusted trigger, never from client-selected roots. Child creation and timeout Events carry that ancestry. Emission does not bypass the core chain-depth/per-chain-rate controls defined in 01-04. Production implementations join all coordination changes in the fenced B02 transaction. Extension operations performing external writes must revalidate authority for each subsequent coordination mutation; a successful initial check cannot grant indefinitely valid authority.
 
 ## Required lifecycle telemetry

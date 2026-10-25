@@ -10,5 +10,6 @@ var version = "dev"
 var commit = "unknown"
 
 func main() {
-	os.Exit(cli.Run("open-conduit", version, commit, os.Args[1:], os.Stdout, os.Stderr))
+	cwd, _ := os.Getwd()
+	os.Exit(cli.RunOperator(version, commit, os.Args[1:], cli.Env{Getenv: os.Getenv, Cwd: cwd}, os.Stdout, os.Stderr))
 }
