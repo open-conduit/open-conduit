@@ -129,7 +129,14 @@ func CheckExecutor(e extension.Executor, r extension.RunRequest) error {
 		return err
 	}
 	// Recovery must not call Run or overwrite metadata and must keep the outcome.
-	r.PersistRecovery = func(domain.Payload) error { return fmt.Errorf("recovery launched replacement") }
+	// It may re-acknowledge the identical metadata under its new lease, which
+	// the production scheduler requires before accepting an adopted handle.
+	r.PersistRecovery = func(p domain.Payload) error {
+		if !reflect.DeepEqual(p, state) {
+			return fmt.Errorf("recovery launched replacement")
+		}
+		return nil
+	}
 	adopted, err := e.Recover(context.Background(), r, state)
 	if err != nil {
 		return err

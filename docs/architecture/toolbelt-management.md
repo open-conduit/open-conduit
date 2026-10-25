@@ -1,6 +1,6 @@
 # Toolbelt authority and local management
 
-Ticket 02-06 implements [B03](extensions.md) toolbelt authority and [B05](config-management.md) configuration, secrets and the local management API. The pieces are the runtime [toolbelt](../../internal/runtime/toolbelt.go) and [operator control](../../internal/runtime/manual.go) operations, [configuration loading/validation/secrets](../../internal/config), the [management server](../../internal/management), the public [client](../../client/client.go) and the [`open-conduit` operator commands](../../internal/cli/operator.go). Composing a long-running daemon (scheduler/poll loops plus server lifetime) is left to the core gate. Shell environment construction and the `os` CLI transport remain 02-07.
+Ticket 02-06 implements [B03](extensions.md) toolbelt authority and [B05](config-management.md) configuration, secrets and the local management API. The pieces are the runtime [toolbelt](../../internal/runtime/toolbelt.go) and [operator control](../../internal/runtime/manual.go) operations, [configuration loading/validation/secrets](../../internal/config), the [management server](../../internal/management), the public [client](../../client/client.go) and the [`open-conduit` operator commands](../../internal/cli/operator.go). Composing a long-running daemon (scheduler/poll loops plus server lifetime) is left to the core gate. Shell environment construction and the `os` CLI transport are delivered by 02-07 ([shell executor](shell-executor.md)).
 
 ## Toolbelt authority
 

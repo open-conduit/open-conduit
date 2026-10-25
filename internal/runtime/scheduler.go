@@ -723,7 +723,7 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 	if declared != nil && declared.Wait != nil {
 		// The finished/suspended segment is the trusted handshake that turns
 		// the earlier toolbelt wait request into durable registration.
-		result.Outcome = domain.Outcome{Kind: domain.OutcomeWaiting, Summary: result.Outcome.Summary}
+		result.Outcome = domain.Outcome{Kind: domain.OutcomeWaiting, Summary: result.Outcome.Summary, Data: result.Outcome.Data}
 		if err := extension.ValidateResult(result); err != nil {
 			return err
 		}

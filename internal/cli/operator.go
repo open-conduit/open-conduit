@@ -1,3 +1,5 @@
+// Package cli provides the operator commands (RunOperator) and the execution
+// toolbelt CLI used by os (RunToolbelt), both over the public local client.
 package cli
 
 import (

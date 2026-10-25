@@ -385,7 +385,19 @@ func (v *validator) registration(p string, b Binding) {
 	if err := extension.ValidateBinding(domain.Binding{Name: b.Name, Executor: b.Executor, Requires: r}, exec); errors.Is(err, extension.ErrInvalid) {
 		v.fail(p+"/executor", "invalid_registration", "executor registration does not implement its advertised capabilities")
 	}
+	// Executor config is opaque to core and strictly checked by its owner. The
+	// owner's error text is never echoed: it could quote configured values.
+	if owner, ok := exec.(ConfigValidator); ok && owner.ValidateConfig(b.Config, b.SecretNames) != nil {
+		v.fail(p+"/config", "invalid_config", fmt.Sprintf("executor %s rejected this binding config; correct it against the executor's documented config", b.Executor))
+	}
 }
+
+// ConfigValidator is optionally implemented by an executor registration to
+// reject its binding config at load/apply time instead of at launch.
+type ConfigValidator interface {
+	ValidateConfig(config json.RawMessage, secretNames []string) error
+}
+
 func (v *validator) operation(op string) bool {
 	return slices.Contains(Builtins, op) || slices.Contains(v.reg.Operations, op)
 }

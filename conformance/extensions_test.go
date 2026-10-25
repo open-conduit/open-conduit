@@ -124,6 +124,44 @@ func TestReferenceExecutor(t *testing.T) {
 		})
 	}
 }
+
+// replacingExecutor relaunches on recovery, persisting new metadata; the
+// shared case must reject it while permitting identical re-acknowledgement.
+type replacingExecutor struct{ reference.Executor }
+
+func (e *replacingExecutor) Recover(ctx context.Context, r extension.RunRequest, state domain.Payload) (extension.RunHandle, error) {
+	if state.Schema == "" {
+		return nil, extension.ErrNotAdoptable
+	}
+	if err := r.PersistRecovery(domain.Payload{Schema: "fixture.adoption.v1", Data: []byte(`{"handle":"replacement"}`)}); err != nil {
+		return nil, err
+	}
+	return e.Executor.Recover(ctx, r, state)
+}
+
+type reacknowledgingExecutor struct{ reference.Executor }
+
+func (e *reacknowledgingExecutor) Recover(ctx context.Context, r extension.RunRequest, state domain.Payload) (extension.RunHandle, error) {
+	if state.Schema == "" {
+		return nil, extension.ErrNotAdoptable
+	}
+	if err := r.PersistRecovery(state); err != nil {
+		return nil, err
+	}
+	return e.Executor.Recover(ctx, r, state)
+}
+
+func TestExecutorRecoveryReplacement(t *testing.T) {
+	r := extension.RunRequest{Work: domain.Work{ID: "work"}, Execution: domain.Execution{ID: "execution", WorkID: "work"}}
+	result := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}
+	if err := conformance.CheckExecutor(&replacingExecutor{reference.Executor{Result: result}}, r); err == nil || !strings.Contains(err.Error(), "replacement") {
+		t.Fatalf("replacement recovery accepted: %v", err)
+	}
+	if err := conformance.CheckExecutor(&reacknowledgingExecutor{reference.Executor{Result: result}}, r); err != nil {
+		t.Fatalf("identical re-acknowledgement rejected: %v", err)
+	}
+}
+
 func TestBindingRejection(t *testing.T) {
 	e := &reference.Executor{}
 	for _, requires := range []domain.Capabilities{{Inject: true}, {Interrupt: true}, {Resume: true}, {Workspace: true}, {Toolbelt: extension.ToolbeltMCP}} {

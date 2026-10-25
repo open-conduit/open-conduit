@@ -24,6 +24,15 @@ func (fakeExecutor) Recover(context.Context, extension.RunRequest, domain.Payloa
 	return nil, extension.ErrNotAdoptable
 }
 
+type validatingExecutor struct{ fakeExecutor }
+
+func (validatingExecutor) ValidateConfig(c json.RawMessage, names []string) error {
+	if !strings.Contains(string(c), "command") || len(names) != 0 {
+		return errors.New("rejected secret-looking value")
+	}
+	return nil
+}
+
 type injectExecutor struct{ fakeExecutor }
 
 func (injectExecutor) Inject(context.Context, domain.ID, domain.Event) error { return nil }
@@ -293,6 +302,18 @@ func TestOwnerValidationAndRegistrations(t *testing.T) {
 	}
 	if _, err := Validate(example(t, "workspace-free"), reg); err == nil || diagnostics(t, err)[0].Code != "invalid_config" {
 		t.Fatalf("connection owner validation: %v", err)
+	}
+	// An executor owner rejects its binding config without the error text.
+	reg = registry()
+	reg.Executors["shell"] = validatingExecutor{fakeExecutor{domain.Capabilities{Toolbelt: "cli"}}}
+	if _, err := Validate(example(t, "shell-job"), reg); err != nil {
+		t.Fatal(err)
+	}
+	m = generic(t, example(t, "shell-job"))
+	entry(m, 0, "bindings", 0)["config"] = map[string]any{"cmd": "x"}
+	_, err = Validate(encode(t, m), reg)
+	if got := diagnostics(t, err); len(got) != 1 || got[0].Path != "scopes/0/bindings/0/config" || got[0].Code != "invalid_config" || strings.Contains(got[0].Message, "secret") {
+		t.Fatalf("executor config diagnostics %v", got)
 	}
 	// An executor advertising inject without implementing it is rejected.
 	reg = registry()

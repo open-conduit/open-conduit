@@ -52,6 +52,8 @@ Tokens are unpredictable, per execution and lease epoch, bounded in lifetime, re
 
 02-06 implementation note: the production toolbelt ([toolbelt-management.md](toolbelt-management.md)) records `wait`/`declare_outcome` as fenced per-epoch declarations that release toolbelt authority immediately. The predicate/timeout registration or outcome is applied when the trusted host observes the segment finish or suspend, because a client request alone is not exclusion proof. The declared exclusive watermark ensures registration backscans everything accepted in between.
 
+02-07 implementation note: the [shell executor](shell-executor.md) presents this surface as `OS_ENDPOINT`/`OS_TOKEN` (plus a replaceable `OS_TOKEN_FILE`) and the `os` CLI. Its `Recover` re-acknowledges identical metadata under the new lease, which the shared executor case now permits while still rejecting replacement metadata.
+
 Core derives causation from the current trusted trigger, never from client-selected roots. Child creation and timeout Events carry that ancestry. Emission does not bypass the core chain-depth/per-chain-rate controls defined in 01-04. Production implementations join all coordination changes in the fenced B02 transaction. Extension operations performing external writes must revalidate authority for each subsequent coordination mutation; a successful initial check cannot grant indefinitely valid authority.
 
 ## Required lifecycle telemetry

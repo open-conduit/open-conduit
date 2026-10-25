@@ -10,5 +10,6 @@ var version = "dev"
 var commit = "unknown"
 
 func main() {
-	os.Exit(cli.Run("os", version, commit, os.Args[1:], os.Stdout, os.Stderr))
+	cwd, _ := os.Getwd()
+	os.Exit(cli.RunToolbelt(version, commit, os.Args[1:], cli.Env{Getenv: os.Getenv, Cwd: cwd}, os.Stdin, os.Stdout, os.Stderr))
 }
