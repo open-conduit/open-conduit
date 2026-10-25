@@ -25,6 +25,7 @@ import (
 //	outcome  PutExecution entering completed
 //	wait     PutWait registering an active Wait
 //	timer    FireTimer (optionally for a timer of the given event type)
+//	kv       an extension KV Put (optionally in the given namespace)
 //
 // Phase "before" kills inside the open transaction, so SQLite must roll it
 // back; "after" kills immediately after the commit is acknowledged, before
@@ -155,6 +156,14 @@ func (t *faultyTx) FireTimer(id domain.ID, expected domain.Revision, replacement
 	err := t.Tx.FireTimer(id, expected, replacement)
 	if err == nil {
 		t.trigger("timer", typ)
+	}
+	return err
+}
+
+func (t *faultyTx) Put(namespace, key string, value []byte) error {
+	err := t.Tx.Put(namespace, key, value)
+	if err == nil {
+		t.trigger("kv", namespace)
 	}
 	return err
 }

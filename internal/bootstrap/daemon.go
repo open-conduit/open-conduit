@@ -1,6 +1,6 @@
 // Package bootstrap composes the Open Conduit daemon (`open-conduit serve`).
 // It owns no domain logic: it wires SQLite coordination behind lifecycle
-// instrumentation, local artifacts, the shell executor, configuration, the
+// instrumentation, local artifacts, the shell and Claude Code executors, configuration, the
 // router, scheduler, timers, toolbelt and the local management server, and
 // drives them with one host loop (routing, polling, starting, observation,
 // lease renewal, physical-stop confirmation and retention).
@@ -62,6 +62,9 @@ type Options struct {
 	RetentionInterval time.Duration
 	// ResourceInterval paces resource lease reconciliation (default 5s).
 	ResourceInterval time.Duration
+	// ExecutorInterval paces executor housekeeping such as the Claude Code
+	// handoff feedback questions and reactions (default 30s).
+	ExecutorInterval time.Duration
 	// Ready, when set, is called once the management socket is listening.
 	Ready func()
 }
@@ -97,6 +100,7 @@ type daemon struct {
 	ingress   *runtime.Ingress
 	github    githubSources
 	resources resourceState
+	claude    claudeState
 	endpoint  string
 	cursorKey []byte
 	current   atomic.Pointer[components]
@@ -134,7 +138,10 @@ func (o *Options) defaults() error {
 	if o.ResourceInterval == 0 {
 		o.ResourceInterval = 5 * time.Second
 	}
-	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ResourceInterval <= 0 {
+	if o.ExecutorInterval == 0 {
+		o.ExecutorInterval = 30 * time.Second
+	}
+	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ResourceInterval <= 0 || o.ExecutorInterval <= 0 {
 		return errors.New("intervals must be positive")
 	}
 	return nil
@@ -212,7 +219,11 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if d.shell, err = shell.New(shell.Options{StateDir: filepath.Join(o.StateDir, "executors", "shell"), Artifacts: d.artifacts, ToolbeltDir: o.ToolbeltDir}); err != nil {
 		return err
 	}
-	d.executors = map[string]extension.Executor{"shell": d.shell}
+	if err = d.openClaudeCode(); err != nil {
+		return err
+	}
+	defer d.closeClaudeCode()
+	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor}
 	registry := config.Registry{Executors: d.executors, Handlers: handlerNames()}
 	githubRegistry(&registry)
 	resourceRegistry(&registry)

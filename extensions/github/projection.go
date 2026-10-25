@@ -203,6 +203,67 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	return p.complete(ctx, key, posted.ID, posted.URL, false)
 }
 
+// IntentComment returns the comment an intent published, once its durable
+// record is posted (ok is false while delivery is pending or attempted).
+func (p *Projector) IntentComment(ctx context.Context, id string) (commentID int64, url string, ok bool, err error) {
+	var rec intentRecord
+	err = p.transact(ctx, func(tx storage.Tx) error {
+		found, err := p.get(tx, "intent/"+digest(id)[:40], &rec)
+		ok = found && rec.State == intentPosted && rec.CommentID != 0
+		return err
+	})
+	return rec.CommentID, rec.URL, ok, err
+}
+
+// WorkComments posts marked comments on a Work's issue exactly once per
+// stable intent and reads their reactions. An executor's private feedback
+// (the Claude Code handoff experiment's blinded question) uses it through a
+// host adapter; no extension-specific type crosses into the executor.
+type WorkComments struct {
+	Projector *Projector
+	Client    *Client
+}
+
+// Issue is the issue number a Work owns in this projector's namespace.
+func (c WorkComments) Issue(w domain.Work) (int, bool) {
+	for _, k := range w.CorrelationKeys {
+		if k.Source != c.Projector.o.Settings.Namespace {
+			continue
+		}
+		if n, _, ok := ParseIssueKey(k.ExternalID); ok {
+			return n, true
+		}
+	}
+	return 0, false
+}
+
+// Comment delivers body once for intent and returns the posted comment's ID,
+// or "" while delivery is still in progress (an ambiguous post waits for its
+// marker search; a dry run never posts).
+func (c WorkComments) Comment(ctx context.Context, w domain.Work, intent, body string) (string, error) {
+	number, ok := c.Issue(w)
+	if !ok {
+		return "", storage.ErrNotFound
+	}
+	if _, err := c.Projector.Deliver(ctx, Intent{ID: intent, Work: w.ID, Number: number, Body: body}); err != nil {
+		return "", err
+	}
+	id, _, posted, err := c.Projector.IntentComment(ctx, intent)
+	if err != nil || !posted {
+		return "", err
+	}
+	return strconv.FormatInt(id, 10), nil
+}
+
+// Reactions reads the reaction counts on a comment Comment returned.
+func (c WorkComments) Reactions(ctx context.Context, _ domain.Work, ref string) (map[string]int, error) {
+	id, err := strconv.ParseInt(ref, 10, 64)
+	if err != nil || id <= 0 {
+		return nil, storage.ErrInvalid
+	}
+	return c.Client.Reactions(ctx, c.Projector.o.Settings.Repo, id)
+}
+
 func (p *Projector) complete(ctx context.Context, key string, id int64, url string, recovered bool) (string, error) {
 	err := p.transact(ctx, func(tx storage.Tx) error {
 		var cur intentRecord

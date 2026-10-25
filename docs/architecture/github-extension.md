@@ -150,7 +150,7 @@ The [SQLite integration cases](../../integration/github_test.go) run the real ru
 - **Not proven yet.** No real GitHub API was called; all evidence uses fixtures. Real issues, real rate limits and real webhooks are 03-06/03-07 gate evidence.
 - **Webhook exposure.** The listener, tunnel and HTTP route mounting, together with dry-run operator controls, belong to 03-05. `WebhookHandler` is ready for that.
 - **Holds and waits.** The scheduled label and hold markers, PR/check/issue waits, dependency subscriptions, and agent-facing comment, PR and attachment operations belong to 03-04. Those tools must post through `Projector.Deliver` with stable intent IDs.
-- **Claude Code continuity.** Handoff feedback reactions (`Client.Reactions`) belong to 03-03.
+- **Claude Code continuity.** Delivered by 03-03: `WorkComments` posts a Work's marked comment exactly once per intent (`Deliver` plus `IntentComment`) and reads its reactions. The [Claude Code executor](claude-code-executor.md)'s handoff feedback uses it through bootstrap.
 - **Projection volume.** The projector reads every Work in its scope each pass. That is enough for the first switch, but it has no high-volume claim.
 - **Unenforced setting.** `settings.admission_limit` (v1's claimed-per-project cap) is still not enforced.
 - **Registration lifetime.** Ingress registrations are startup-only (B05). A changed or removed entry reports `restart_required` until the daemon restarts.

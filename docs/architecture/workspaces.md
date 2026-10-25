@@ -99,7 +99,7 @@ A shell binding with a resource runs in `Resource.Dir` with the provider layer. 
 
 ## Deferred
 
-- 03-03 binds Claude Code to `work` (session continuity across restarts uses `Lookup`).
+- 03-03 binds Claude Code to `work`: a new segment acquires and a resumed segment uses `Lookup` ([Claude Code executor](claude-code-executor.md)).
 - v1's agent-driven `worktree setup/remove` toolbelt commands are replaced by executor acquisition and host reconcile. If a playbook still needs them, 03-04 decides.
 - Legacy `OPEN_SUPERVISOR_BASE_BRANCH`, `OPEN_SUPERVISOR_WORKTREE` and similar variables belong to explicit compatibility adapters (C06). `Resource.Data` carries the base, branch and directory.
 - Pending-run coalescing for in-checkout jobs stays with 05-01/05-02.

@@ -609,6 +609,48 @@ func TestProductionSchedulerRetryHintValidation(t *testing.T) {
 	}
 }
 
+// TestProductionSchedulerResultRetryHint: a structured failed result may carry
+// the retry hint itself (a usage limit with its reset). Core applies it like a
+// hinted executor error, but the observed result also proves the attempt
+// finished, so no uncertain resource hold remains. A hint on any other
+// outcome is invalid.
+func TestProductionSchedulerResultRetryHint(t *testing.T) {
+	f, e := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	work := seedSchedulerWork(t, f, "result-hint")
+	s := f.Driver.(*schedulerDriver).scheduler
+	reset := f.Clock.Now().Add(40 * time.Minute)
+	e.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+			return nil, err
+		}
+		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "usage limit"}, RetryHint: &extension.RetryHint{ResetAt: &reset}}}, nil
+	}
+	a, err := s.Start(context.Background(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Observe(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+	state, err := s.RetryStatus(context.Background(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !state.EligibleAt.Equal(reset.Add(2 * time.Minute)) {
+		t.Fatalf("result retry hint not applied: %+v", state)
+	}
+	attempt, err := s.InspectAttempt(context.Background(), a.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !attempt.Excluded {
+		t.Fatalf("an observed hinted result left an uncertain hold: %+v", attempt)
+	}
+	if err := extension.ValidateResult(extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff}, RetryHint: &extension.RetryHint{}}); !errors.Is(err, extension.ErrInvalid) {
+		t.Fatalf("a hint on a handoff outcome was accepted: %v", err)
+	}
+}
+
 func TestProductionSchedulerInjectCompletionRaceRetainsInput(t *testing.T) {
 	o := routingOptions(routingHandlerFunc(routingDecision), "inject")
 	o.Capabilities = domain.Capabilities{Inject: true}

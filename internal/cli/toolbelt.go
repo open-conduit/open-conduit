@@ -27,6 +27,7 @@ Commands:
   wait --type T[,T...] [--key-source S --key-external-id X]... [--timeout SECONDS] [--after-sequence N]
   outcome completed|failed|handoff [--summary TEXT] [--schema S --data JSON]
   call OPERATION [--schema S] [--data JSON | --data-file PATH|-]
+  mcp                                       serve these operations as an MCP server on stdio
   version
 
 Every command accepts --request-id ID to retry safely. Results print as JSON.
@@ -80,6 +81,8 @@ func RunToolbelt(version, commit string, args []string, env Env, stdin io.Reader
 		return t.outcome(args[1:])
 	case "call":
 		return t.call(args[1:])
+	case "mcp":
+		return t.mcp(args[1:])
 	}
 	return t.usage("unknown command")
 }

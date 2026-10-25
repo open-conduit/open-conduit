@@ -46,6 +46,12 @@ type Result struct {
 	Outcome   domain.Outcome
 	Usage     Usage
 	Artifacts []domain.ArtifactRef
+	// RetryHint optionally classifies a structured failed outcome as a
+	// retryable executor limit (for example a usage limit with its reset).
+	// Core treats it like a RetryHintProvider error, except that the observed
+	// result also establishes that the attempt finished. Only failed outcomes
+	// may carry it.
+	RetryHint *RetryHint
 }
 
 // RetryHint classifies a retryable executor limit without provider-specific
@@ -124,6 +130,9 @@ func ValidateResult(r Result) error {
 	case domain.OutcomeCompleted, domain.OutcomeFailed, domain.OutcomeWaiting, domain.OutcomeHandoff:
 	default:
 		return fmt.Errorf("%w: outcome", ErrInvalid)
+	}
+	if r.RetryHint != nil && r.Outcome.Kind != domain.OutcomeFailed {
+		return fmt.Errorf("%w: retry hint on a non-failed outcome", ErrInvalid)
 	}
 	if r.Usage.Cost != nil && (math.IsNaN(*r.Usage.Cost) || math.IsInf(*r.Usage.Cost, 0) || *r.Usage.Cost < 0 || r.Usage.Currency == "") {
 		return fmt.Errorf("%w: cost", ErrInvalid)

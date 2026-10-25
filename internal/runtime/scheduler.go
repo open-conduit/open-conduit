@@ -741,8 +741,19 @@ func (s *Scheduler) Fail(ctx context.Context, ref domain.LeaseRef, result extens
 	if err := extension.ValidateResult(result); err != nil {
 		return err
 	}
-	return s.fail(ctx, ref, result, true, nil)
+	var cause error
+	if result.RetryHint != nil {
+		cause = resultHint{*result.RetryHint}
+	}
+	return s.fail(ctx, ref, result, true, cause)
 }
+
+// resultHint presents a structured result's retry hint to the failure path
+// exactly as an executor error's RetryHintProvider would be.
+type resultHint struct{ hint RetryHint }
+
+func (h resultHint) Error() string        { return "executor retry hint" }
+func (h resultHint) RetryHint() RetryHint { return h.hint }
 func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result extension.Result) error {
 	if err := extension.ValidateResult(result); err != nil {
 		return err

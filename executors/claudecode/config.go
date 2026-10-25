@@ -1,0 +1,214 @@
+package claudecode
+
+import (
+	"bytes"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"io"
+	"path/filepath"
+	"regexp"
+	"slices"
+	"strings"
+)
+
+// Config is the strictly checked binding `config` object owned by this
+// executor. Every field is optional.
+type Config struct {
+	// Binary is the Claude Code CLI (default "claude", found on the
+	// sanitized PATH).
+	Binary string `json:"binary,omitempty"`
+	// Model is the model alias or ID for turns (default "opus").
+	Model string `json:"model,omitempty"`
+	// PermissionMode grants permissions up front, because turns run
+	// unattended (default "bypassPermissions").
+	PermissionMode string `json:"permission_mode,omitempty"`
+	// Playbook is the skill a turn starts on, as /open-conduit:<playbook>
+	// (default "work-issue"; "-" starts turns with the rendered body alone).
+	Playbook string `json:"playbook,omitempty"`
+	// PluginDir is a directory of playbook skills passed with --plugin-dir.
+	PluginDir string `json:"plugin_dir,omitempty"`
+	// Args is the playbook argument template. {key} is the Work's first
+	// correlation key, {number} the first number in it (the key when it has
+	// none) and {work} the Work ID (default "{number}").
+	Args string `json:"args,omitempty"`
+	// Structured asks for the work-issue status with --json-schema and maps it
+	// to the outcome (default true). Otherwise a turn that ends cleanly is
+	// completed with its final text as the summary.
+	Structured *bool `json:"structured,omitempty"`
+	// StatusSchema names the outcome data schema the parsed status is
+	// reported under, so a projection can read it (for example
+	// "github.status.v1"). Default ResultSchema.
+	StatusSchema string `json:"status_schema,omitempty"`
+	// Branch is the optional workspace branch template ({key}, {number},
+	// {work}) requested from a `work` resource.
+	Branch string `json:"branch,omitempty"`
+	// WorkspaceMode is the resource mode requested (default "work": a
+	// session's transcript is tied to its working directory).
+	WorkspaceMode string `json:"workspace_mode,omitempty"`
+	// HandoffMinutes is how long after a turn the session counts as cold
+	// (default 55, Open Supervisor's prompt-cache horizon).
+	HandoffMinutes *int `json:"handoff_minutes,omitempty"`
+	// HandoffShare is the share of cold turns the experiment hands to a fresh
+	// session (default 0.5; 0 turns the experiment off).
+	HandoffShare *float64 `json:"handoff_share,omitempty"`
+	// Env adds explicit non-secret variables after the sanitized baseline.
+	Env map[string]string `json:"env,omitempty"`
+	// PassEnv names additional process variables admitted to the baseline
+	// (for example a proxy or CLAUDE_CONFIG_DIR).
+	PassEnv []string `json:"pass_env,omitempty"`
+	// SecretEnv maps binding secret names to variable names (for example an
+	// API key to ANTHROPIC_API_KEY). Unmapped selected secrets use their
+	// upper-cased name.
+	SecretEnv map[string]string `json:"secret_env,omitempty"`
+	// ExtraArgs are added to every claude invocation.
+	ExtraArgs []string `json:"extra_args,omitempty"`
+}
+
+var (
+	envName   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	skillName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	// ErrConfig is returned for a binding config the executor rejects.
+	// Messages never echo configured values.
+	ErrConfig = errors.New("invalid claude code binding config")
+)
+
+var permissionModes = []string{"bypassPermissions", "acceptEdits", "auto", "default", "plan", "dontAsk"}
+
+func configError(msg string) error { return fmt.Errorf("%w: %s", ErrConfig, msg) }
+
+// reserved reports toolbelt protocol variables no configured layer may set.
+func reserved(name string) bool { return strings.HasPrefix(strings.ToUpper(name), "OS_") }
+
+// ParseConfig strictly decodes, validates and defaults a binding config.
+func ParseConfig(data []byte) (Config, error) {
+	var c Config
+	if trimmed := bytes.TrimSpace(data); len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
+		d := json.NewDecoder(bytes.NewReader(data))
+		d.DisallowUnknownFields()
+		if err := d.Decode(&c); err != nil {
+			return Config{}, configError("malformed config or unknown field")
+		}
+		if _, err := d.Token(); err != io.EOF {
+			return Config{}, configError("trailing data after config object")
+		}
+	}
+	strs := append([]string{c.Binary, c.Model, c.PermissionMode, c.Playbook, c.PluginDir, c.Args, c.StatusSchema, c.Branch, c.WorkspaceMode}, c.ExtraArgs...)
+	for _, s := range strs {
+		if strings.ContainsRune(s, 0) {
+			return Config{}, configError("strings must not contain NUL")
+		}
+	}
+	if c.Binary == "" {
+		c.Binary = "claude"
+	}
+	if c.Model == "" {
+		c.Model = "opus"
+	}
+	if c.PermissionMode == "" {
+		c.PermissionMode = "bypassPermissions"
+	}
+	if !slices.Contains(permissionModes, c.PermissionMode) {
+		return Config{}, configError("permission_mode is not a Claude Code permission mode")
+	}
+	switch c.Playbook {
+	case "":
+		c.Playbook = "work-issue"
+	case "-":
+	default:
+		if !skillName.MatchString(c.Playbook) {
+			return Config{}, configError("playbook must be a skill name")
+		}
+	}
+	if c.PluginDir != "" && (!filepath.IsAbs(c.PluginDir) || filepath.Clean(c.PluginDir) != c.PluginDir) {
+		return Config{}, configError("plugin_dir must be a clean absolute path")
+	}
+	if c.Args == "" {
+		c.Args = "{number}"
+	}
+	if c.Structured == nil {
+		yes := true
+		c.Structured = &yes
+	}
+	if c.StatusSchema == "" {
+		c.StatusSchema = ResultSchema
+	}
+	if c.WorkspaceMode == "" {
+		c.WorkspaceMode = "work"
+	}
+	if c.HandoffMinutes == nil {
+		n := 55
+		c.HandoffMinutes = &n
+	}
+	if *c.HandoffMinutes < 0 || *c.HandoffMinutes > 7*24*60 {
+		return Config{}, configError("handoff_minutes must be between 0 and 10080")
+	}
+	if c.HandoffShare == nil {
+		share := 0.5
+		c.HandoffShare = &share
+	}
+	if !(*c.HandoffShare >= 0 && *c.HandoffShare <= 1) {
+		return Config{}, configError("handoff_share must be between 0 and 1")
+	}
+	for name, value := range c.Env {
+		if !envName.MatchString(name) || reserved(name) || strings.ContainsRune(value, 0) {
+			return Config{}, configError("env names must be valid, non-reserved (OS_*) variables")
+		}
+	}
+	for _, name := range c.PassEnv {
+		if !envName.MatchString(name) || reserved(name) {
+			return Config{}, configError("pass_env names must be valid, non-reserved (OS_*) variables")
+		}
+	}
+	for secret, name := range c.SecretEnv {
+		if secret == "" || !envName.MatchString(name) || reserved(name) {
+			return Config{}, configError("secret_env must map secret names to valid, non-reserved (OS_*) variables")
+		}
+	}
+	for _, a := range c.ExtraArgs {
+		if a == "--mcp-config" || strings.HasPrefix(a, "--mcp-config=") || a == "--session-id" || a == "--resume" || a == "-p" || a == "--print" {
+			return Config{}, configError("extra_args must not override the executor's own session, print or toolbelt flags")
+		}
+	}
+	return c, nil
+}
+
+func (c Config) structured() bool { return c.Structured == nil || *c.Structured }
+
+// secretVariable is the environment name for one selected secret.
+func (c Config) secretVariable(secret string) string {
+	if name, ok := c.SecretEnv[secret]; ok {
+		return name
+	}
+	b := []byte(strings.ToUpper(secret))
+	for i, ch := range b {
+		if !(ch >= 'A' && ch <= 'Z' || ch >= '0' && ch <= '9' || ch == '_') {
+			b[i] = '_'
+		}
+	}
+	name := string(b)
+	if name == "" || name[0] >= '0' && name[0] <= '9' {
+		name = "_" + name
+	}
+	return name
+}
+
+// ValidateConfig lets configuration loading reject an invalid binding before
+// any execution is scheduled. secretNames are the binding's selected secrets.
+func (e *Executor) ValidateConfig(raw json.RawMessage, secretNames []string) error {
+	c, err := ParseConfig(raw)
+	if err != nil {
+		return err
+	}
+	for secret := range c.SecretEnv {
+		if !slices.Contains(secretNames, secret) {
+			return configError("secret_env names a secret the binding does not select")
+		}
+	}
+	for _, secret := range secretNames {
+		if reserved(c.secretVariable(secret)) {
+			return configError("a selected secret maps to a reserved OS_* variable; set secret_env")
+		}
+	}
+	return nil
+}

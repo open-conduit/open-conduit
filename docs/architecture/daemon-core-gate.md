@@ -98,6 +98,8 @@ The fixture is a scope with one shell binding and the `manual` route. Its script
 | Config reload | Apply generation 2 while parked | Pass. Attempt 1 stays pinned to generation 1, the wake runs under 2, and a restart restores 2. |
 | Operator CLI | `events emit` with key, `runs table`, `doctor` | Pass, using only the shipped CLI. |
 
+03-03 adds a `kv` boundary (an extension KV `Put`, optionally in one namespace). [`TestDaemonClaudeCodeContinuityKill`](../../integration/daemon_claudecode_test.go) arms it at the Claude Code executor's pre-launch continuity decision, before and after the commit. [`TestDaemonClaudeCodeExecution`](../../integration/daemon_claudecode_test.go) kills the daemon externally while a claude turn runs. See [the Claude Code executor](claude-code-executor.md).
+
 When the test binary is race-enabled, as under `make check`, the daemon is also built with `-race`. Any data race report in a daemon log fails the drill. Telemetry is at most once from memory, so records queued when a daemon is killed can be lost. The durable history is asserted in full. Lifecycle completeness is required only for records produced after the last kill.
 
 ## Scope and limitations

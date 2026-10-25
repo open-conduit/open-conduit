@@ -125,3 +125,12 @@ These rows remain pending real-issue evidence in 03-06: B01–B04 (GitHub parts)
 - C06: the opted-in checkout `.env` layer before binding env, with no layer when there is no workspace.
 
 Legacy `OPEN_SUPERVISOR_*` variables remain explicit compatibility work. Agent use (03-03) and real-repository evidence (03-06) remain with their tickets.
+
+03-03 update: the [Claude Code executor](../architecture/claude-code-executor.md) ports the agent behavior behind the executor contract. Evidence uses fake claude binaries and fixture transcripts only:
+
+- B06: detached claude turns are adopted at a higher epoch with credential replacement and no relaunch, including a daemon SIGKILL during a turn and kills at the continuity write.
+- B12: executor-owned 55-minute/0.5 draw, handoff and resume arms, the identical blinded question posted exactly once by marker, the seven-day reaction window, trial accounting to the next draw, the finish or a dropped Work, attach forcing resume, and arm/trial continuity across restart. Telemetry goes to `logs/claude-code.jsonl`, outside core.
+- C04: usage-limit detection and its reset (+2 minutes, 30 minutes unknown), an executor-wide hold and per-turn cost/token deltas. Divergence: a hinted failure uses core's bounded failure budget.
+- C08: the work-issue status schema and the playbook invocation (`/open-conduit:<playbook>`). Playbook content, plugin preparation and setup remain 03-04/03-05.
+
+Real-agent evidence is pending for 03-06.
