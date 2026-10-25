@@ -198,3 +198,11 @@ Intentional differences: one wake ends a wait (the agent waits again), and `--ca
   - A `github.wait` timeout (the timer path was shown by the time hold).
   - A second human identity.
   - The v1 cost comparison.
+
+05-01 update: [scheduled jobs](../architecture/schedule-extension.md) port B08, B09 (decision), C07 and the job part of C10 onto timer Events and standing Work.
+
+- **B08.** Every/at/cron/time-zone definitions on durable core timers with an extension calendar recurrence. The latest missed slot strictly within six hours runs once; exactly six hours is skipped, tested against v1's algorithm. A skipped DST time has no slot, and a repeated one runs once by name. Recurrence is atomic fire/rearm across crash and restart.
+- **B09.** One pending run per job: the next attempt takes every trigger accepted while a run goes. The newest delivery is its trigger, else the earliest request. No core coalesce option. Detached-busy behavior is mapped for 05-02.
+- **C07.** Reload is config apply: timing edits rearm (with v1's last-slot rule), other edits do not, removals cancel timers while a run carries on, and a disabled scope keeps its timers. `.open-supervisor.yaml` conversion is 06-02.
+- **X04.** Custom webhook POSTs are one-shot with a declared loss. GitHub push/release/workflow_run triggers ride `github.delivery` (declared non-re-derivable). Their reconstructable history is classified, and reconstruction is recorded for 05-02.
+- **Intentional differences.** Interval jobs no longer run at every daemon start. Two triggers before an idle job starts collapse into one run. Job names are identifiers.

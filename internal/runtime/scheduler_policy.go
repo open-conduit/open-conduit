@@ -169,6 +169,12 @@ func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, resul
 		failureSequence = history[len(history)-1].Sequence
 	}
 	state := RetryState{FailureSequence: failureSequence, WorkID: w.ID, FailedExecutionID: x.ID, Binding: x.ExecutorBinding, FailureCount: failures, Blocked: true, Exhausted: failures >= policy.MaxAttempts, TimerID: domain.ID("retry/" + string(w.ID))}
+	standing := s.options.WorkKinds[w.Kind].Standing
+	if standing {
+		// Standing Work arms no automatic retry: its next routed input is
+		// its next attempt. The record still fences a duplicate failure.
+		state.Blocked, state.Exhausted, state.TimerID = false, false, ""
+	}
 	w.State = domain.WorkReady
 	if state.Exhausted && policy.TerminalOnExhaustion {
 		w.State = domain.WorkFailed
@@ -189,7 +195,7 @@ func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, resul
 			return er
 		}
 	}
-	if !state.Exhausted {
+	if !state.Exhausted && !standing {
 		delay := policy.Delays[failures-1]
 		if hint != nil {
 			delay, err = RetryDelay(now, *hint)

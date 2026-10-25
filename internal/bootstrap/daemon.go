@@ -120,6 +120,7 @@ type daemon struct {
 	ingress    *runtime.Ingress
 	github     githubSources
 	slack      slackSources
+	schedule   scheduleState
 	resources  resourceState
 	claude     claudeState
 	hooks      webhookState
@@ -263,11 +264,13 @@ func Serve(ctx context.Context, o Options) (err error) {
 	snapshot, generation := d.configs.Current()
 	d.registerGitHub(ctx, snapshot)
 	d.registerSlack(ctx, snapshot)
+	d.registerSchedule(ctx, snapshot)
 	c, err := d.build(snapshot, generation)
 	if err != nil {
 		return err
 	}
 	d.current.Store(c)
+	d.ensureSchedules(ctx, c, snapshot, true)
 	// A committed reload swaps generation-pinned components; attempts already
 	// running keep their pinned generation through HistoricalExecutors.
 	d.configs.OnApply = func(_ context.Context, s *config.Snapshot, g uint64) {
@@ -279,6 +282,8 @@ func Serve(ctx context.Context, o Options) (err error) {
 		d.current.Store(next)
 		d.registerGitHub(d.ctx, s)
 		d.registerSlack(d.ctx, s)
+		d.registerSchedule(d.ctx, s)
+		d.ensureSchedules(d.ctx, next, s, true)
 		d.log.Info("configuration generation activated", "generation", g)
 		d.poke()
 	}
@@ -373,10 +378,11 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		Toolbelt: belt, ToolbeltEndpoint: d.endpoint, Secrets: d.configs.Secrets(d.resolver),
 		Resources: d.bindResources, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
+		WorkKinds: scheduleWorkKinds(),
 	}); err != nil {
 		return nil, err
 	}
-	if c.timers, err = runtime.NewTimers(d.coord, d.now, runtime.TimerOptions{CausalLimits: limits}); err != nil {
+	if c.timers, err = runtime.NewTimers(d.coord, d.now, runtime.TimerOptions{CausalLimits: limits, Recurrences: scheduleRecurrences()}); err != nil {
 		return nil, err
 	}
 	control, err := runtime.NewControl(d.coord, d.now, c.router, c.scheduler, limits)
@@ -387,8 +393,8 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck},
-		DeepChecks: []func(context.Context) runtime.Check{d.githubAuthCheck, d.slackAuthCheck}, Annotate: d.annotate, Attach: d.attach, Nudge: d.poke}); err != nil {
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.scheduleCheck},
+		DeepChecks: []func(context.Context) runtime.Check{d.githubAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck}, Annotate: d.annotate, Attach: d.attach, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
 	return c, nil

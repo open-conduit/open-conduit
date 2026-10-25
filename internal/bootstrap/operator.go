@@ -35,6 +35,7 @@ func registry(executors map[string]extension.Executor) config.Registry {
 	reg := config.Registry{Executors: executors, Handlers: handlerNames(), Operations: append(gh.Operations(), sl.Operations()...)}
 	githubRegistry(&reg)
 	slackRegistry(&reg)
+	scheduleRegistry(&reg)
 	resourceRegistry(&reg)
 	return reg
 }

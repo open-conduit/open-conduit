@@ -28,6 +28,9 @@ type Registry struct {
 	// ResourceConfig optionally validates a registered provider's binding
 	// resource config at load/apply time. Its error text is never echoed.
 	ResourceConfig map[string]func(json.RawMessage) error
+	// HandlerConfig optionally validates a registered route handler's opaque
+	// route config at load/apply time (05-01). Its error text is never echoed.
+	HandlerConfig map[string]func(json.RawMessage) error
 }
 
 // ExtensionType Ingress entries must target their containing scope.
@@ -308,6 +311,8 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		p, own := at("routes", name, s.scope, s.index)
 		if own && !v.reg.Handlers[r.Handler] {
 			v.fail(p+"/handler", "unknown_registration", "route handler is not registered; use a registered handler")
+		} else if check := v.reg.HandlerConfig[r.Handler]; own && check != nil && check(r.Config) != nil {
+			v.fail(p+"/config", "invalid_config", "route config rejected by its registered handler; fix it against the handler's documented config")
 		}
 		b, ok := e.bindings.byName[r.Binding]
 		if !ok || b.disabled {

@@ -12,6 +12,10 @@ type RouteInput struct {
 	Event domain.AcceptedEvent
 	Scope domain.Scope
 	Work  *domain.Work
+	// Route is the effective route being evaluated, including its opaque
+	// handler Config, so one handler can serve several routes (for example
+	// one per binding) and select only the input its own route declares.
+	Route domain.Route
 }
 
 // RouteDecision describes a first match. CreateID/Kind are used only when no

@@ -7,6 +7,7 @@ import (
 
 	"github.com/alsiola/open-conduit/domain"
 	"github.com/alsiola/open-conduit/extension"
+	sc "github.com/alsiola/open-conduit/extensions/schedule"
 	"github.com/alsiola/open-conduit/internal/runtime"
 	"github.com/alsiola/open-conduit/storage"
 )
@@ -46,6 +47,10 @@ func (d *daemon) loop(ctx context.Context) error {
 		}
 		if _, err = d.ingress.ReconcileDue(ctx, passLimit); err != nil && ctx.Err() == nil {
 			d.report("ingress", "", errorCode(err))
+		}
+		d.translateSchedule(ctx)
+		if snapshot, _ := d.configs.Current(); snapshot != nil {
+			d.ensureSchedules(ctx, c, snapshot, false)
 		}
 		d.projectGitHub(ctx)
 		d.runSlackSockets(ctx)
@@ -103,6 +108,10 @@ func (d *daemon) startReady(ctx context.Context, c *components) {
 		works, err := tx.ListWorks()
 		for _, w := range works {
 			if w.State != domain.WorkReady {
+				continue
+			}
+			// A dry run starts no scheduled job (v1); its triggers wait.
+			if d.o.DryRun && w.Kind == sc.WorkKind {
 				continue
 			}
 			// Idle Work (handed back with no input yet) waits quietly for

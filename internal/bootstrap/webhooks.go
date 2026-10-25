@@ -12,6 +12,7 @@ import (
 
 	"github.com/alsiola/open-conduit/extension"
 	gh "github.com/alsiola/open-conduit/extensions/github"
+	sc "github.com/alsiola/open-conduit/extensions/schedule"
 	sl "github.com/alsiola/open-conduit/extensions/slack"
 	"github.com/alsiola/open-conduit/extensions/tunnel"
 	"github.com/alsiola/open-conduit/internal/runtime"
@@ -144,6 +145,17 @@ func (d *daemon) webhookSecret(src *githubSource) func(context.Context) (string,
 func (d *daemon) webhookHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")
+		if strings.HasPrefix(name, sc.Type+"/") {
+			h, rest := d.scheduleWebhook(name)
+			if h == nil {
+				http.NotFound(w, r)
+				return
+			}
+			r2 := r.Clone(r.Context())
+			r2.URL.Path, r2.URL.RawPath = rest, ""
+			h.ServeHTTP(w, r2)
+			return
+		}
 		if strings.HasPrefix(name, sl.Type+"/") {
 			if h := d.slackWebhook(name); h != nil {
 				h.ServeHTTP(w, r)
@@ -312,6 +324,7 @@ func (d *daemon) webhookCheck(context.Context) runtime.Check {
 	}
 	d.github.mu.Unlock()
 	check.Items = append(check.Items, d.slackWebhookItems()...)
+	check.Items = append(check.Items, d.scheduleWebhookItems()...)
 	sort.Strings(check.Items)
 	return check
 }

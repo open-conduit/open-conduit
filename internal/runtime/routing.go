@@ -316,7 +316,10 @@ func (r *Router) evaluate(ctx context.Context, s routeSnapshot) (p routePlan, er
 				return p, extension.ErrUnsupported
 			}
 		}
-		d, e := h.Match(ctx, detachedInput(s))
+		in := detachedInput(s)
+		in.Route = route
+		in.Route.Config.Data = append([]byte(nil), route.Config.Data...)
+		d, e := h.Match(ctx, in)
 		if e != nil {
 			return p, e
 		}

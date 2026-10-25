@@ -59,6 +59,26 @@ type SchedulerOptions struct {
 	// for expired attempts; nil keeps content and still records expiration.
 	KeptExecutions int
 	Artifacts      storage.Artifacts
+	// WorkKinds are extension-registered lifecycle policies by Work kind
+	// (05-01). Kinds without an entry keep the default lifecycle.
+	WorkKinds map[string]WorkKindPolicy
+}
+
+// WorkKindPolicy is the lifecycle an extension declares for the Work kind it
+// creates (05-01, first used by scheduled jobs).
+type WorkKindPolicy struct {
+	// Standing Work is an objective that outlives its attempts: a completed
+	// attempt leaves it ready and idle (it waits quietly for its next input,
+	// as handed-back Work does) instead of completing it, and a failed attempt
+	// arms no automatic retry, because the next routed input is its next
+	// attempt. Only cancellation makes standing Work terminal.
+	Standing bool
+	// Trigger optionally selects which pending input triggers an attempt
+	// from the acceptance-ordered batch the attempt takes (the attempt still
+	// receives the whole batch as RunRequest.Inputs). It must be pure and
+	// deterministic; an index outside the batch selects the first input. A
+	// wake winner always takes precedence.
+	Trigger func(inputs []domain.Event) int
 }
 type Scheduler struct {
 	store   storage.Store
@@ -149,6 +169,14 @@ func NewScheduler(store storage.Store, now func() time.Time, router *Router, o S
 		return nil, err
 	}
 	o.Retry = retry
+	kinds := map[string]WorkKindPolicy{}
+	for kind, policy := range o.WorkKinds {
+		if kind == "" {
+			return nil, storage.ErrInvalid
+		}
+		kinds[kind] = policy
+	}
+	o.WorkKinds = kinds
 	if _, err = normalizeCausalLimits(o.CausalLimits); err != nil {
 		return nil, err
 	}
@@ -373,6 +401,19 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 			return storage.ErrInvalid
 		}
 		input = inputs[0]
+		if pick := s.options.WorkKinds[ready.Kind].Trigger; pick != nil && len(inputs) > 1 {
+			events := make([]domain.Event, 0, len(inputs))
+			for _, in := range inputs {
+				a, e := tx.Event(in.EventID)
+				if e != nil {
+					return e
+				}
+				events = append(events, a.Event)
+			}
+			if i := pick(events); i >= 0 && i < len(inputs) {
+				input = inputs[i]
+			}
+		}
 		wakeErr := getJSON(tx, wakeReadyNamespace, identity(string(id)), &wake)
 		if wakeErr != nil && !errors.Is(wakeErr, storage.ErrNotFound) {
 			return wakeErr
@@ -855,7 +896,7 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 			return err
 		}
 		w.State = domain.WorkReady
-		if result.Outcome.Kind == domain.OutcomeCompleted && len(pending) == 0 {
+		if result.Outcome.Kind == domain.OutcomeCompleted && len(pending) == 0 && !s.options.WorkKinds[w.Kind].Standing {
 			w.State = domain.WorkCompleted
 		}
 		if err = tx.PutWork(w, w.Revision); err != nil {

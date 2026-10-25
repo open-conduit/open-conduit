@@ -113,3 +113,14 @@ This resolves the PRD's open "executor `inject` contract" and the summary's "gen
 - **Resume, N+1 and tokens.** These are unchanged from 02-05. A resume-capable binding parks and resumes the same attempt at a higher epoch with a new token. The old token is refused, and the executor replaces any credential file before acknowledging. A binding without resume ends its waiting attempt and starts N+1 with the winner and the accumulated context (`RunRequest.Inputs`). No service-specific runtime code was added.
 
 The executor conformance suite gains `conformance.CheckInjectExecutor`, run by the reference inject double, `executors/shell` and `executors/claudecode`. It has negative controls for an executor that over-claims, accepts input after its result, accepts input for an execution it does not hold, loses the proof on recovery, or never consumes. Production-scheduler races on reopened SQLite are in [`inject_ack_test.go`](../../integration/inject_ack_test.go). The composed daemon proof is [`TestDaemonSlackSupportConversation`](../../integration/daemon_slack_support_test.go).
+
+## Pending-job coalescing and standing Work (05-01)
+
+This resolves the coalescing question 01-04 left open (summary decision "whether coalescing is needed for one pending job rerun"). v1 permits one pending rerun while a job runs; a delivery takes the place of a waiting timer request and the newest delivery takes the place of older ones.
+
+- **No core coalesce option.** The queue stays lossless and ordered; `coalesce` remains a validation error. One pending run comes from existing semantics: one nonterminal attempt per Work, and `Scheduler.Start` hands one attempt every pending input. A job is one Work, so any number of triggers accepted while it runs become exactly one next run, and every trigger stays in that attempt's consumption history.
+- **Extension trigger selection.** `SchedulerOptions.WorkKinds[kind].Trigger` is a pure function an extension registers for its Work kind. It picks which input of the batch triggers the attempt (`Execution.TriggerID`, `RunRequest.Trigger`), and an out-of-range answer selects the first. A wake winner always takes precedence. The schedule extension picks the newest delivery, else the earliest request.
+- **Standing Work.** `WorkKindPolicy.Standing` marks an objective that outlives its attempts. A completed attempt leaves it ready and idle instead of completing it. A failed attempt arms no automatic retry, because its next routed input is its next attempt. Only cancellation makes it terminal; after that, later input is `terminal` as for any Work.
+- **Route config reaches its handler.** `extension.RouteInput.Route` is the evaluated route with its opaque handler config. One handler can serve several routes (one per binding) deterministically.
+
+Executable cases: `TestScheduleTriggersCoalesce` and `TestWorkKindPolicyContract` on SQLite, and `TestSelectTrigger`. See [scheduled jobs](schedule-extension.md).
