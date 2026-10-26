@@ -5,7 +5,7 @@ VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short HEAD)
 LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
-.PHONY: build fmt fmt-check vet test boundaries config-check config-deps check cross-build smoke drill protocol-prototype packages certify
+.PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check check cross-build smoke drill protocol-prototype packages certify
 
 build:
 	$(GO) build ./...
@@ -36,7 +36,12 @@ config-deps:
 config-check:
 	$(CONFIG_PYTHON) scripts/check-config-contract.py
 
-check: fmt-check vet test boundaries config-check build smoke
+# The README and docs index: example configs pass offline validation (what
+# config check runs) and every open-conduit command shown is in the help.
+docs-check:
+	$(GO) test -count=1 -run 'TestDocs' ./integration
+
+check: fmt-check vet test boundaries config-check docs-check build smoke
 
 smoke: build
 	bin/open-conduit --help
