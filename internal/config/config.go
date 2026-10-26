@@ -6,6 +6,8 @@ import (
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
+	"net"
+	"net/url"
 	"regexp"
 	"sort"
 	"strings"
@@ -77,6 +79,15 @@ type Settings struct {
 	// JobConcurrency bounds running job attempts (shell and other non-agent
 	// executors) apart from Concurrency, which then bounds agent turns (#13).
 	JobConcurrency int
+	// Webhooks is the stored webhook listener and tunnel (settings.webhooks);
+	// serve flags override it for one run. Zero means reconcile-only.
+	Webhooks Webhooks
+}
+
+// Webhooks records how serve exposes the webhook listener. Tunnel is ngrok,
+// cloudflared or static; "" with PublicURL means static, as with the flags.
+type Webhooks struct {
+	Addr, Tunnel, TunnelDomain, TunnelName, TunnelHostname, PublicURL string
 }
 type Authorization struct {
 	Connections []string `json:"connections"`
@@ -192,7 +203,7 @@ func (c *checker) document(n *node) *Document {
 	return doc
 }
 func (c *checker) settings(n *node) Settings {
-	s := Settings{4, 10, 900, 3600, 20, []int{300, 600}, 32, 128, 4}
+	s := Settings{4, 10, 900, 3600, 20, []int{300, 600}, 32, 128, 4, Webhooks{}}
 	fields := []struct {
 		key string
 		dst *int
@@ -200,7 +211,7 @@ func (c *checker) settings(n *node) Settings {
 		{"timeout_seconds", &s.TimeoutSeconds}, {"kept_executions", &s.KeptExecutions},
 		{"causal_max_depth", &s.CausalMaxDepth}, {"causal_per_minute", &s.CausalPerMinute},
 		{"job_concurrency", &s.JobConcurrency}}
-	names := []string{"retry_delays_seconds"}
+	names := []string{"retry_delays_seconds", "webhooks"}
 	for _, f := range fields {
 		names = append(names, f.key)
 	}
@@ -223,7 +234,59 @@ func (c *checker) settings(n *node) Settings {
 			}
 		}
 	}
+	s.Webhooks = c.webhooks(n.field("webhooks"))
 	return s
+}
+
+// webhooks checks settings.webhooks offline: the same combinations serve
+// accepts as flags, without binding the address or starting a tunnel.
+func (c *checker) webhooks(n *node) Webhooks {
+	const path = "settings/webhooks"
+	var w Webhooks
+	fields := []struct {
+		key string
+		dst *string
+	}{{"addr", &w.Addr}, {"tunnel_domain", &w.TunnelDomain}, {"tunnel_name", &w.TunnelName}, {"tunnel_hostname", &w.TunnelHostname}, {"public_url", &w.PublicURL}}
+	names := []string{"tunnel"}
+	for _, f := range fields {
+		names = append(names, f.key)
+	}
+	if n == nil || !c.object(n, path, []string{"addr"}, names...) {
+		return w
+	}
+	for _, f := range fields {
+		if v, ok := c.str(n.field(f.key), ptr(path, f.key), nil); ok {
+			*f.dst = v
+		}
+	}
+	if t := n.field("tunnel"); t != nil {
+		w.Tunnel, _ = c.enum(t, path+"/tunnel", "ngrok", "cloudflared", "static")
+	}
+	if a := n.field("addr"); a != nil && a.kind == kString {
+		if _, port, err := net.SplitHostPort(w.Addr); err != nil || port == "" {
+			c.fail(path+"/addr", "invalid_value", "use host:port, for example 127.0.0.1:8787")
+		}
+	}
+	kind := w.Tunnel
+	if kind == "" && w.PublicURL != "" {
+		kind = "static"
+	}
+	if w.TunnelDomain != "" && kind != "ngrok" {
+		c.fail(path+"/tunnel_domain", "invalid_value", "tunnel_domain is for the ngrok tunnel")
+	}
+	if (w.TunnelName != "" || w.TunnelHostname != "") && kind != "cloudflared" {
+		c.fail(path+"/tunnel_name", "invalid_value", "tunnel_name and tunnel_hostname are for the cloudflared tunnel")
+	} else if kind == "cloudflared" && (w.TunnelName == "") != (w.TunnelHostname == "") {
+		c.fail(path+"/tunnel_name", "invalid_value", "a named cloudflared tunnel needs both tunnel_name and tunnel_hostname")
+	}
+	if w.PublicURL != "" && kind != "static" {
+		c.fail(path+"/public_url", "invalid_value", "public_url is for the static tunnel")
+	} else if kind == "static" {
+		if u, err := url.Parse(w.PublicURL); err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
+			c.fail(path+"/public_url", "invalid_value", "the static tunnel needs an http(s) public URL without credentials")
+		}
+	}
+	return w
 }
 func (c *checker) secretRefs(n *node, path string, overlay bool) map[string]string {
 	if n == nil || !c.typed(n, path, kObject, "object") {
@@ -486,13 +549,25 @@ func (d *Document) normalized(redact bool) any {
 		}
 		scopes = append(scopes, m)
 	}
+	settings := map[string]any{
+		"concurrency": s.Concurrency, "admission_limit": s.AdmissionLimit, "reconcile_seconds": s.ReconcileSeconds,
+		"timeout_seconds": s.TimeoutSeconds, "kept_executions": s.KeptExecutions, "retry_delays_seconds": s.RetryDelaysSeconds,
+		"causal_max_depth": s.CausalMaxDepth, "causal_per_minute": s.CausalPerMinute, "job_concurrency": s.JobConcurrency,
+	}
+	// Only a stored listener joins the hash, so configurations without one
+	// keep their generation hash.
+	if w := s.Webhooks; w != (Webhooks{}) {
+		hooks := map[string]any{"addr": w.Addr}
+		for k, v := range map[string]string{"tunnel": w.Tunnel, "tunnel_domain": w.TunnelDomain, "tunnel_name": w.TunnelName, "tunnel_hostname": w.TunnelHostname, "public_url": w.PublicURL} {
+			if v != "" {
+				hooks[k] = v
+			}
+		}
+		settings["webhooks"] = hooks
+	}
 	return map[string]any{
-		"version": d.Version,
-		"settings": map[string]any{
-			"concurrency": s.Concurrency, "admission_limit": s.AdmissionLimit, "reconcile_seconds": s.ReconcileSeconds,
-			"timeout_seconds": s.TimeoutSeconds, "kept_executions": s.KeptExecutions, "retry_delays_seconds": s.RetryDelaysSeconds,
-			"causal_max_depth": s.CausalMaxDepth, "causal_per_minute": s.CausalPerMinute, "job_concurrency": s.JobConcurrency,
-		},
+		"version":     d.Version,
+		"settings":    settings,
 		"connections": connections,
 		"scopes":      scopes,
 	}

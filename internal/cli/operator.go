@@ -73,6 +73,9 @@ type Env struct {
 	// open-conduit entrypoint supplies them.
 	Migrate func(MigrateRequest) (MigrateResult, error)
 	State   *StateOps
+	// Service runs the background service commands and doctor's service
+	// check; only the open-conduit entrypoint supplies it.
+	Service *ServiceHost
 	// OpenURL, LookPath and RunCommand replace the setup host's browser
 	// opener, PATH lookup and attached command runner (tests).
 	OpenURL    func(string) error
@@ -101,9 +104,12 @@ Usage: open-conduit [--endpoint unix:///path] [--token-file PATH] [--socket PATH
 
 Commands:
   serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h]
-        [--webhook-addr 127.0.0.1:8787] [--tunnel ngrok|cloudflared|static] [--tunnel-domain D] [--tunnel-name N] [--public-url URL]
+        [--webhook-addr 127.0.0.1:8787] [--tunnel ngrok|cloudflared|static] [--tunnel-domain D] [--tunnel-name N] [--tunnel-hostname H] [--public-url URL]
+                             (override the config's settings.webhooks for this run)
         [--no-tunnel] [--dry-run] [--claude-usage]
         (--webhook-addr takes any free local port; 8787 is only an example)
+  service install [--no-start] [serve flags] | service uninstall|start|stop|status
+                             run the daemon in the background (launchd on macOS, systemd --user on Linux)
   health
   init                       list the setups the registered extensions offer
   init TYPE [flags] [--config PATH] [--force] [--dry-run]   run one (for example init github --repo OWNER/NAME, init slack)
@@ -186,7 +192,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "serve": o.serve, "claim": o.claim, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "migrate": o.migrate, "backup": o.backup, "state": o.state, "extension": o.extension}
+	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "serve": o.serve, "claim": o.claim, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "migrate": o.migrate, "backup": o.backup, "state": o.state, "extension": o.extension, "service": o.service}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.

@@ -97,8 +97,9 @@ func Adapters() []cli.Adapter {
 			Binding: []cli.Field{req("checkout", "the main checkout"), opt("mode", "work", []string{"work", "fresh", "shared"}, ""), f("remote", ""), f("base_branch", ""), f("branch_template", ""),
 				f("sign", ""), f("copy", ""), f("setup", ""), f("setup_when", ""), f("setup_timeout_seconds", ""),
 				def("disk_full_percent", "90", "a new workspace may not leave the disk fuller; 100 turns the check off"), f("disk_reserve_bytes", "the most kept free, default 10 GiB")}},
-		{Type: "tunnel", Title: "Webhook tunnels", Description: "Exposes the webhook listener: ngrok, cloudflared or a static public URL (serve flags, not config).",
-			Kinds:   []string{"serve"},
-			Binding: []cli.Field{opt("--tunnel", "", []string{"ngrok", "cloudflared", "static"}, ""), f("--tunnel-domain", "ngrok domain"), f("--tunnel-name", "cloudflared named tunnel"), f("--public-url", "static")}},
+		{Type: "tunnel", Title: "Webhook tunnels", Description: "Exposes the webhook listener: ngrok, cloudflared or a static public URL (settings.webhooks; serve flags of the same names override it for one run).",
+			Kinds: []string{"serve"},
+			Binding: []cli.Field{req("addr", "the listener, for example 127.0.0.1:8787"), opt("tunnel", "", []string{"ngrok", "cloudflared", "static"}, ""), f("tunnel_domain", "ngrok reserved domain"),
+				f("tunnel_name", "cloudflared named tunnel"), f("tunnel_hostname", "its hostname"), f("public_url", "static")}},
 	}
 }

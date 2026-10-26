@@ -80,9 +80,11 @@ type Options struct {
 	// Ready, when set, is called once the management socket is listening.
 	Ready func()
 	// WebhookAddr enables the webhook listener on this TCP address (for
-	// example 127.0.0.1:8787). Empty means reconcile-only.
+	// example 127.0.0.1:8787). Empty falls back to settings.webhooks, and
+	// with neither the daemon is reconcile-only.
 	WebhookAddr string
-	// Tunnel exposes the webhook listener (optional).
+	// Tunnel exposes the webhook listener (optional). Any tunnel field
+	// replaces the stored settings.webhooks tunnel; Binary applies to both.
 	Tunnel TunnelOptions
 	// NoTunnel disables the listener and tunnel (reconcile-only).
 	NoTunnel bool
@@ -371,7 +373,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err != nil {
 		return err
 	}
-	stopWebhooks, err := d.startWebhooks(loopCtx)
+	stopWebhooks, err := d.startWebhooks(loopCtx, snapshot.Settings.Webhooks)
 	if err != nil {
 		return err
 	}

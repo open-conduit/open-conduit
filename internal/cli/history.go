@@ -84,6 +84,17 @@ func (o *operator) doctor(args []string) int {
 	if err != nil {
 		return o.emit(nil, err)
 	}
+	if svc, ok := o.serviceCheck(); ok {
+		// Offline, it follows the daemon's own check.
+		at := len(d.Checks)
+		if len(d.Checks) > 0 && d.Checks[0].Name == "daemon" {
+			at = 1
+		}
+		d.Checks = append(d.Checks[:at], append([]client.Check{svc}, d.Checks[at:]...)...)
+		if svc.Status == "warn" && d.State == "ok" {
+			d.State = "warn"
+		}
+	}
 	if *asJSON {
 		if code := o.emit(d, nil); code != 0 {
 			return code

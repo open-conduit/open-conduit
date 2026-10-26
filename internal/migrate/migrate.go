@@ -196,8 +196,8 @@ func (c *converter) settings() obj {
 	return out
 }
 
-// globalNotes reports v1 settings that become serve flags or have no
-// configuration counterpart.
+// globalNotes reports v1 settings that become settings.webhooks or serve
+// flags, or have no configuration counterpart.
 func (c *converter) globalNotes() {
 	s := c.v1.Settings
 	port := s.Port
@@ -207,20 +207,20 @@ func (c *converter) globalNotes() {
 	if s.Tunnel != "" {
 		conn := c.v1.Connections[s.Tunnel]
 		kind := str(conn["type"])
-		flags := "--webhook-addr 127.0.0.1:<port> --tunnel " + kind
+		hooks := `"addr": "127.0.0.1:<port>", "tunnel": "` + kind + `"`
 		switch kind {
 		case "ngrok":
 			if d := str(conn["domain"]); d != "" {
-				flags += " --tunnel-domain <the reserved domain>"
+				hooks += `, "tunnel_domain": "<the reserved domain>"`
 			}
 		case "cloudflared":
-			flags += " --tunnel-name <named tunnel> --public-url <hostname>"
+			hooks += `, "tunnel_name": "<named tunnel>", "tunnel_hostname": "<hostname>"`
 		case "static":
-			flags = "--webhook-addr 127.0.0.1:<port> --tunnel static --public-url <url>"
+			hooks += `, "public_url": "<url>"`
 		}
-		c.note(Action, "settings.tunnel", "", "webhooks are a serve flag, not config: open-conduit serve %s. While v1 still runs other projects it holds port %d and its tunnel: use another port, and move (do not duplicate) an ngrok free endpoint only when its last project transfers", flags, port)
+		c.note(Action, "settings.tunnel", "", "store the webhook listener and tunnel in the config: open-conduit config set /settings/webhooks '{%s}', then a plain open-conduit serve starts them (serve --webhook-addr/--tunnel override it for one run). While v1 still runs other projects it holds port %d and its tunnel: use another port, and move (do not duplicate) an ngrok free endpoint only when its last project transfers", hooks, port)
 	} else {
-		c.note(Info, "settings.tunnel", "", "no tunnel: Open Conduit runs reconcile-only (no --webhook-addr), as v1 did")
+		c.note(Info, "settings.tunnel", "", "no tunnel: Open Conduit runs reconcile-only (no settings.webhooks), as v1 did")
 	}
 	if s.UsageMinutes > 0 {
 		c.note(Changed, "settings.usageMinutes", "", "usage windows are read only with serve --claude-usage (doctor claude_code)")
@@ -280,7 +280,7 @@ func shellWord(s string) string {
 
 // convertConnections maps the v1 connections Open Conduit has a connection
 // type for. claude-code connections become binding config, tunnels become
-// serve flags.
+// settings.webhooks (reported as an action).
 func (c *converter) convertConnections() {
 	for _, name := range sortedKeys(c.v1.Connections) {
 		v := c.v1.Connections[name]
