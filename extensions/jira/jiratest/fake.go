@@ -62,6 +62,10 @@ type Fake struct {
 	NoEnhancedSearch bool
 	// NotAdmin refuses the webhook admin API with 403.
 	NotAdmin bool
+	// NoCategories leaves the status category out of issues and refuses
+	// the status list with 403; done-category issues still carry a
+	// resolution.
+	NoCategories bool
 	// LoseCommentResponse creates the next comments but answers 502.
 	LoseCommentResponse int
 	// TooMany answers the next N calls 429 with Retry-After.
@@ -144,8 +148,16 @@ const jiraTime = "2006-01-02T15:04:05.000-0700"
 
 func (f *Fake) issueJSON(i *Issue) map[string]any {
 	st := f.status(i.Status)
+	status := map[string]any{"id": st.ID, "name": st.Name, "statusCategory": map[string]any{"key": st.Category}}
+	if f.NoCategories {
+		delete(status, "statusCategory")
+	}
+	var resolution any
+	if st.Category == "done" {
+		resolution = map[string]any{"name": "Done"}
+	}
 	fields := map[string]any{"summary": i.Summary, "description": i.Description, "labels": i.Labels,
-		"status":  map[string]any{"id": st.ID, "name": st.Name, "statusCategory": map[string]any{"key": st.Category}},
+		"status": status, "resolution": resolution,
 		"created": i.Created.Format(jiraTime), "updated": i.Updated.Format(jiraTime),
 		"reporter": map[string]any{"displayName": i.Reporter}, "project": map[string]any{"key": i.Project, "name": i.Project + " project"},
 		"issuetype": map[string]any{"name": "Task"}, "priority": map[string]any{"name": i.Priority},
@@ -247,6 +259,10 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 	case p == "/rest/api/2/myself":
 		f.write(w, 200, map[string]any{"displayName": "Fake Owner"})
 	case p == "/rest/api/2/status":
+		if f.NoCategories {
+			f.write(w, 403, nil)
+			return
+		}
 		var out []any
 		for _, s := range f.Statuses {
 			out = append(out, map[string]any{"id": s.ID, "name": s.Name, "statusCategory": map[string]any{"key": s.Category}})
@@ -411,7 +427,15 @@ func (f *Fake) serve(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Query().Get("expand") == "changelog" {
 			var hs []any
 			for _, h := range i.History {
-				hs = append(hs, map[string]any{"created": h.At.Format(jiraTime), "items": []any{map[string]any{"field": "status", "from": h.From, "to": h.To}}})
+				items := []any{map[string]any{"field": "status", "from": h.From, "to": h.To}}
+				// Entering a done-category status sets the resolution; leaving one clears it.
+				switch from, to := f.status(h.From).Category == "done", f.status(h.To).Category == "done"; {
+				case !from && to:
+					items = append(items, map[string]any{"field": "resolution", "from": "", "to": "10000"})
+				case from && !to:
+					items = append(items, map[string]any{"field": "resolution", "from": "10000", "to": ""})
+				}
+				hs = append(hs, map[string]any{"created": h.At.Format(jiraTime), "items": items})
 			}
 			out["changelog"] = map[string]any{"histories": hs}
 		}

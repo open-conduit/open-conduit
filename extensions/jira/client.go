@@ -187,8 +187,18 @@ type rawFields struct {
 	Components  []rawNamed `json:"components"`
 	FixVersions []rawNamed `json:"fixVersions"`
 	Parent      *rawNamed  `json:"parent"`
+	Resolution  *rawNamed  `json:"resolution"`
 	// all are every field as it came, for the extra ones routes match on.
 	all map[string]json.RawMessage
+}
+
+// open is false once the status is in the done category or, where the
+// category can't be read, once the issue has a resolution.
+func (f *rawFields) open() bool {
+	if k := f.Status.StatusCategory.Key; k != "" {
+		return k != "done"
+	}
+	return f.Resolution == nil
 }
 
 func (f *rawFields) UnmarshalJSON(data []byte) error {
@@ -218,7 +228,7 @@ type rawItem struct {
 	To    string `json:"to"`
 }
 
-const issueFields = "summary,labels,status,created,updated,description,reporter,assignee,project,issuetype,priority,components,fixVersions,parent"
+const issueFields = "summary,labels,status,created,updated,description,reporter,assignee,project,issuetype,priority,components,fixVersions,parent,resolution"
 
 func (c *Client) fields() []string { return append(strings.Split(issueFields, ","), c.s.Fields...) }
 
@@ -268,7 +278,7 @@ func flatten(raw json.RawMessage) []string {
 func (c *Client) issue(r rawIssue) tracker.Issue {
 	f := r.Fields
 	i := tracker.Issue{Key: strings.ToUpper(r.Key), Title: f.Summary, Body: ToMarkdown(f.Description), URL: c.IssueURL(r.Key),
-		Labels: f.Labels, Open: f.Status.StatusCategory.Key != "done", Status: f.Status.Name,
+		Labels: f.Labels, Open: f.open(), Status: f.Status.Name,
 		CreatedAt: parseTime(f.Created), UpdatedAt: parseTime(f.Updated), Attrs: map[string][]string{}}
 	set := func(name string, vs ...string) {
 		for _, v := range vs {
