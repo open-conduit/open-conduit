@@ -2,6 +2,8 @@
 
 **An agent-native orchestration platform for work of every kind.**
 
+***Open Conduit builds itself!*** Its own issues are worked by Open Conduit agents: they claim them, open the pull requests, answer the reviews and fix the problems they run into along the way.
+
 Work turns up in many places: an issue on GitHub, a ticket in Linear or Jira, a question in a Slack thread, a job due at 7am, a defect an agent ran into yesterday. Open Conduit picks each one up, gives it to the right agent or command, and sees it through. It waits on checks, reviews and replies, survives restarts and failures, and keeps going until the work is done. You watch and steer it all from one terminal UI.
 
 - **One daemon, every source.** GitHub, Linear, Jira, Slack, schedules and webhooks all feed the same core. That means one history, one retry and timeout model, and one view of everything in flight.
@@ -26,7 +28,7 @@ Open Conduit is the heart of that orchestrator, re-architected around the right 
 - **Timer** and **Wait** make time and suspension durable.
 - **Scope** holds the configuration, routes and bindings for one area of work.
 
-GitHub, Slack, schedules and introspection are integrations that plug in around that core, not the core itself. Open Conduit now works its own issues: this README was written by an agent working [issue #26](https://github.com/open-conduit/open-conduit/issues/26).
+GitHub, Slack, schedules and introspection are integrations that plug in around that core, not the core itself. And it builds itself: this README was written by an Open Conduit agent working [issue #26](https://github.com/open-conduit/open-conduit/issues/26).
 
 ## Get going
 
