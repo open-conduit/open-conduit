@@ -462,7 +462,8 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	if c.scheduler, err = runtime.NewScheduler(d.coord, d.now, c.router, runtime.SchedulerOptions{
 		Owner: d.owner, LeaseDuration: d.o.LeaseDuration, Generation: c.generation,
 		Executors: d.executors, HistoricalExecutors: history,
-		GlobalLimit: set.Concurrency, Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
+		GlobalLimit: set.Concurrency, ExecutorPools: jobExecutors(), PoolLimits: map[string]int{jobPool: set.JobConcurrency},
+		Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
 		Toolbelt: belt, ToolbeltEndpoint: d.endpoint, Secrets: d.configs.Secrets(d.resolver),
 		Resources: d.bindResources, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
@@ -483,7 +484,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck, d.posthogCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.scheduleCheck, d.introspectionCheck, d.extensionCheck},
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck, d.posthogCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.capacityCheck, d.scheduleCheck, d.introspectionCheck, d.extensionCheck},
 		DeepChecks: []func(context.Context) runtime.Check{d.githubAuthCheck, d.trackerAuthCheck, d.posthogAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck, d.extensionDeepCheck}, Annotate: d.annotate, Attach: d.attach, Live: d.live, Nudge: d.poke}); err != nil {
 		return nil, err
 	}

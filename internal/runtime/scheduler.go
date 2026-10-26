@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"sort"
 	"strings"
 	"sync/atomic"
 	"time"
@@ -18,18 +19,48 @@ import (
 const attemptNamespace = "core.scheduler.attempts"
 
 var ErrCapacity = errors.New("execution capacity exhausted")
+
+// GlobalPool names the capacity pool GlobalLimit bounds in a CapacityError
+// and in PoolUsage.
+const GlobalPool = "global"
+
+// CapacityError says which limit holds a start back. It matches ErrCapacity.
+type CapacityError struct {
+	// Pool is GlobalPool, a PoolLimits name, or "scope" for a scope limit
+	// (Scope then names the scope).
+	Pool         string
+	Scope        domain.ID
+	Running, Max int
+}
+
+func (e *CapacityError) Error() string {
+	name := e.Pool
+	if e.Scope != "" {
+		name += " " + string(e.Scope)
+	}
+	return fmt.Sprintf("%s: %s limit %d reached (%d running)", ErrCapacity, name, e.Max, e.Running)
+}
+func (e *CapacityError) Is(target error) bool { return target == ErrCapacity }
+
 var ErrResourceHeld = errors.New("previous attempt resource exclusion unresolved")
 var ErrExecutorCall = errors.New("executor operation failed")
 var ErrSecretUnavailable = errors.New("execution secrets unavailable")
 var ErrResourceUnavailable = errors.New("execution resource provider unavailable")
 
 type SchedulerOptions struct {
-	Owner                string
-	LeaseDuration        time.Duration
-	Generation           string
-	Executors            map[string]extension.Executor
-	HistoricalExecutors  map[string]map[string]extension.Executor
-	GlobalLimit          int
+	Owner               string
+	LeaseDuration       time.Duration
+	Generation          string
+	Executors           map[string]extension.Executor
+	HistoricalExecutors map[string]map[string]extension.Executor
+	// GlobalLimit bounds running attempts whose executor has no pool in
+	// ExecutorPools (default 4).
+	GlobalLimit int
+	// ExecutorPools gives an executor registration its own capacity pool,
+	// bounded by PoolLimits[pool] (zero or absent: unbounded) instead of
+	// GlobalLimit, so one kind of work cannot starve another (#13).
+	ExecutorPools        map[string]string
+	PoolLimits           map[string]int
 	ScopeLimits          map[domain.ID]int
 	Retry                RetryPolicy
 	CausalLimits         CausalLimits
@@ -216,6 +247,22 @@ func NewScheduler(store storage.Store, now func() time.Time, router *Router, o S
 		limits[scope] = limit
 	}
 	o.ScopeLimits = limits
+	pools := map[string]string{}
+	for executor, pool := range o.ExecutorPools {
+		if executor == "" || pool == "" || pool == GlobalPool {
+			return nil, storage.ErrInvalid
+		}
+		pools[executor] = pool
+	}
+	o.ExecutorPools = pools
+	poolLimits := map[string]int{}
+	for pool, limit := range o.PoolLimits {
+		if pool == "" || pool == GlobalPool || limit < 0 {
+			return nil, storage.ErrInvalid
+		}
+		poolLimits[pool] = limit
+	}
+	o.PoolLimits = poolLimits
 	fallbacks := map[string]string{}
 	for name, fallback := range o.ControlErrorFallback {
 		if fallback != "queue" && fallback != "drop" {
@@ -268,24 +315,56 @@ func scopeChain(tx storage.Tx, id domain.ID) ([]domain.ID, error) {
 	}
 	return chain, nil
 }
-func (s *Scheduler) checkCapacity(tx storage.Tx, work domain.Work, recovering domain.ID) error {
+
+// pool is the capacity pool an executor's attempts count against.
+func (s *Scheduler) pool(executor string) string {
+	if p := s.options.ExecutorPools[executor]; p != "" {
+		return p
+	}
+	return GlobalPool
+}
+
+// poolLimit is the limit of a pool; zero is unbounded.
+func (s *Scheduler) poolLimit(pool string) int {
+	if pool == GlobalPool {
+		return s.options.GlobalLimit
+	}
+	return s.options.PoolLimits[pool]
+}
+
+// held lists the attempts holding capacity: every nonterminal, unparked
+// attempt and every finished one without confirmed exclusion.
+func held(tx storage.Tx, fn func(x domain.Execution, executor string) error) error {
 	xs, err := tx.ListExecutions("")
 	if err != nil {
 		return err
 	}
-	total := 0
-	counts := map[domain.ID]int{}
 	for _, x := range xs {
 		state, e := attemptState(tx, x.ID)
 		if e != nil && !errors.Is(e, storage.ErrNotFound) {
 			return e
 		}
-		held := e == nil && !state.Excluded
+		holds := e == nil && !state.Excluded
 		if !x.State.Terminal() && x.State != domain.ExecutionParked {
-			held = true
+			holds = true
 		}
-		if !held || x.ID == recovering {
+		if !holds {
 			continue
+		}
+		if err = fn(x, state.Executor); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func (s *Scheduler) checkCapacity(tx storage.Tx, work domain.Work, executor string, recovering domain.ID) error {
+	pool := s.pool(executor)
+	total := 0
+	counts := map[domain.ID]int{}
+	err := held(tx, func(x domain.Execution, other string) error {
+		if x.ID == recovering {
+			return nil
 		}
 		if x.WorkID == work.ID {
 			return ErrResourceHeld
@@ -298,13 +377,19 @@ func (s *Scheduler) checkCapacity(tx storage.Tx, work domain.Work, recovering do
 		if e != nil {
 			return e
 		}
-		total++
+		if s.pool(other) == pool {
+			total++
+		}
 		for _, scope := range chain {
 			counts[scope]++
 		}
+		return nil
+	})
+	if err != nil {
+		return err
 	}
-	if s.options.GlobalLimit > 0 && total >= s.options.GlobalLimit {
-		return ErrCapacity
+	if limit := s.poolLimit(pool); limit > 0 && total >= limit {
+		return &CapacityError{Pool: pool, Running: total, Max: limit}
 	}
 	chain, err := scopeChain(tx, work.ScopeID)
 	if err != nil {
@@ -312,10 +397,47 @@ func (s *Scheduler) checkCapacity(tx storage.Tx, work domain.Work, recovering do
 	}
 	for _, scope := range chain {
 		if limit := s.options.ScopeLimits[scope]; limit > 0 && counts[scope] >= limit {
-			return ErrCapacity
+			return &CapacityError{Pool: "scope", Scope: scope, Running: counts[scope], Max: limit}
 		}
 	}
 	return nil
+}
+
+// PoolUsage is one capacity pool's running attempts against its limit
+// (zero: unbounded).
+type PoolUsage struct {
+	Pool           string
+	Running, Limit int
+}
+
+// Capacity reports every pool's usage, GlobalPool first, then the
+// configured pools by name.
+func (s *Scheduler) Capacity(ctx context.Context) ([]PoolUsage, error) {
+	counts := map[string]int{}
+	err := s.transact(ctx, nil, func(tx storage.Tx) error {
+		clear(counts)
+		return held(tx, func(_ domain.Execution, executor string) error { counts[s.pool(executor)]++; return nil })
+	})
+	if err != nil {
+		return nil, err
+	}
+	names := map[string]bool{}
+	for _, p := range s.options.ExecutorPools {
+		names[p] = true
+	}
+	for p := range s.options.PoolLimits {
+		names[p] = true
+	}
+	sorted := make([]string, 0, len(names))
+	for p := range names {
+		sorted = append(sorted, p)
+	}
+	sort.Strings(sorted)
+	out := []PoolUsage{{GlobalPool, counts[GlobalPool], s.options.GlobalLimit}}
+	for _, p := range sorted {
+		out = append(out, PoolUsage{p, counts[p], s.options.PoolLimits[p]})
+	}
+	return out, nil
 }
 func effectiveBinding(tx storage.Tx, scope domain.ID, name string) (domain.Binding, error) {
 	seen := map[domain.ID]bool{}
@@ -505,7 +627,7 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 		if e = retryEligibleInTx(tx, id); e != nil {
 			return e
 		}
-		if e = s.checkCapacity(tx, current, parked); e != nil {
+		if e = s.checkCapacity(tx, current, state.Executor, parked); e != nil {
 			return e
 		}
 		inputs, e := PendingInputsInTx(tx, id)

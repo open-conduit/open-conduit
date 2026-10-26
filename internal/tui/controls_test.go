@@ -183,7 +183,7 @@ func TestListGroupsTurnsByWork(t *testing.T) {
 	second.Trigger = &client.Trigger{Type: "github.checks.failed"}
 	thread := run("r3", "completed", "slack.thread", 1, "2")
 	src := &labelSource{controlSource: controlSource{fakeSource: fakeSource{runs: []client.Run{first, second, thread}}}, works: map[string]client.Work{
-		"w-issue":        {ID: "w-issue", Annotations: []client.Annotation{{Name: "issue", Value: "open-conduit/open-conduit#1"}, {Name: "url", Value: "https://github.com/x"}}},
+		"w-issue":        {ID: "w-issue", Annotations: []client.Annotation{{Source: "runtime", Name: "waiting", Value: "limit reached: jobs (settings.job_concurrency) 1/1 running"}, {Name: "issue", Value: "open-conduit/open-conduit#1"}, {Name: "url", Value: "https://github.com/x"}}},
 		"w-slack.thread": {ID: "w-slack.thread", CorrelationKeys: []client.Key{{Source: "slack", ExternalID: "thread/C1/17"}}},
 	}}
 	var m tea.Model = New(src, time.Hour)

@@ -341,6 +341,67 @@ func TestProductionSchedulerCapacityAcrossInstances(t *testing.T) {
 	}
 }
 
+// Executor pools (#13): attempts of a pooled executor count against their
+// pool's limit only, so a full global (agent) limit does not hold back a job
+// and a full job pool does not hold back an agent turn.
+func TestProductionSchedulerExecutorPools(t *testing.T) {
+	f, executor := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	o := schedulerDefaultOptions(f, executor)
+	o.Executors["job"] = executor
+	o.GlobalLimit, o.ExecutorPools, o.PoolLimits = 1, map[string]string{"job": "jobs"}, map[string]int{"jobs": 1}
+	s := newTestScheduler(t, f, o)
+	bind := func(name string) {
+		routingRead(t, f, func(tx storage.Tx) error {
+			scope, err := tx.Scope("routing-scope")
+			if err != nil {
+				return err
+			}
+			scope.Bindings = []domain.Binding{{Name: "fixture", Executor: name}}
+			return tx.PutScope(scope, scope.Revision)
+		})
+	}
+	// The fixture router knows only the fixture executor, so route first and
+	// pin the binding's executor at Start.
+	start := func(id, executor string) error {
+		bind("fixture")
+		work := seedSchedulerWork(t, f, id)
+		bind(executor)
+		_, err := s.Start(context.Background(), work)
+		return err
+	}
+	if err := start("agent-1", "fixture"); err != nil {
+		t.Fatal(err)
+	}
+	if err := start("job-1", "job"); err != nil {
+		t.Fatalf("a full agent limit held back a job: %v", err)
+	}
+	var capacity *runtime.CapacityError
+	if err := start("job-2", "job"); !errors.As(err, &capacity) || !errors.Is(err, runtime.ErrCapacity) || capacity.Pool != "jobs" || capacity.Running != 1 || capacity.Max != 1 {
+		t.Fatalf("job pool: %v", err)
+	}
+	if err := start("agent-2", "fixture"); !errors.As(err, &capacity) || capacity.Pool != runtime.GlobalPool || capacity.Running != 1 {
+		t.Fatalf("global pool: %v", err)
+	}
+	usage, err := s.Capacity(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []runtime.PoolUsage{{Pool: runtime.GlobalPool, Running: 1, Limit: 1}, {Pool: "jobs", Running: 1, Limit: 1}}
+	if !reflect.DeepEqual(usage, want) {
+		t.Fatalf("capacity = %+v, want %+v", usage, want)
+	}
+	for _, bad := range []runtime.SchedulerOptions{
+		{ExecutorPools: map[string]string{"job": runtime.GlobalPool}},
+		{ExecutorPools: map[string]string{"job": ""}},
+		{PoolLimits: map[string]int{"jobs": -1}},
+	} {
+		bad.Owner, bad.Generation = "owner", "generation"
+		if _, err := runtime.NewScheduler(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).router, bad); !errors.Is(err, storage.ErrInvalid) {
+			t.Fatalf("NewScheduler(%+v) = %v", bad, err)
+		}
+	}
+}
+
 func TestProductionSchedulerRecoveryFencesAndPreservesAttempt(t *testing.T) {
 	f, executor := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	work := seedSchedulerWork(t, f, "recover")

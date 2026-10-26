@@ -41,6 +41,12 @@
           "maximum": 2147483647,
           "default": 4
         },
+        "job_concurrency": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "default": 4
+        },
         "admission_limit": {
           "type": "integer",
           "minimum": 1,

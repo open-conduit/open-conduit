@@ -74,6 +74,9 @@ type Settings struct {
 	Concurrency, AdmissionLimit, ReconcileSeconds, TimeoutSeconds, KeptExecutions int
 	RetryDelaysSeconds                                                            []int
 	CausalMaxDepth, CausalPerMinute                                               int
+	// JobConcurrency bounds running job attempts (shell and other non-agent
+	// executors) apart from Concurrency, which then bounds agent turns (#13).
+	JobConcurrency int
 }
 type Authorization struct {
 	Connections []string `json:"connections"`
@@ -189,13 +192,14 @@ func (c *checker) document(n *node) *Document {
 	return doc
 }
 func (c *checker) settings(n *node) Settings {
-	s := Settings{4, 10, 900, 3600, 20, []int{300, 600}, 32, 128}
+	s := Settings{4, 10, 900, 3600, 20, []int{300, 600}, 32, 128, 4}
 	fields := []struct {
 		key string
 		dst *int
 	}{{"concurrency", &s.Concurrency}, {"admission_limit", &s.AdmissionLimit}, {"reconcile_seconds", &s.ReconcileSeconds},
 		{"timeout_seconds", &s.TimeoutSeconds}, {"kept_executions", &s.KeptExecutions},
-		{"causal_max_depth", &s.CausalMaxDepth}, {"causal_per_minute", &s.CausalPerMinute}}
+		{"causal_max_depth", &s.CausalMaxDepth}, {"causal_per_minute", &s.CausalPerMinute},
+		{"job_concurrency", &s.JobConcurrency}}
 	names := []string{"retry_delays_seconds"}
 	for _, f := range fields {
 		names = append(names, f.key)
@@ -487,7 +491,7 @@ func (d *Document) normalized(redact bool) any {
 		"settings": map[string]any{
 			"concurrency": s.Concurrency, "admission_limit": s.AdmissionLimit, "reconcile_seconds": s.ReconcileSeconds,
 			"timeout_seconds": s.TimeoutSeconds, "kept_executions": s.KeptExecutions, "retry_delays_seconds": s.RetryDelaysSeconds,
-			"causal_max_depth": s.CausalMaxDepth, "causal_per_minute": s.CausalPerMinute,
+			"causal_max_depth": s.CausalMaxDepth, "causal_per_minute": s.CausalPerMinute, "job_concurrency": s.JobConcurrency,
 		},
 		"connections": connections,
 		"scopes":      scopes,

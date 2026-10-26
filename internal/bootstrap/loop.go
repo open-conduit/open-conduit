@@ -301,11 +301,14 @@ func (d *daemon) releaseAll(ctx context.Context) {
 
 // errorCode maps runtime errors to safe stable diagnostic codes.
 func errorCode(err error) string {
+	var capacity *runtime.CapacityError
 	switch {
 	case err == nil:
 		return ""
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "cancelled"
+	case errors.As(err, &capacity):
+		return capacityCode(capacity)
 	case errors.Is(err, runtime.ErrCapacity):
 		return "capacity"
 	case errors.Is(err, runtime.ErrNotEligible):

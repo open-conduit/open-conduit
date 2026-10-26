@@ -165,7 +165,7 @@ func (d *daemon) annotate(ctx context.Context, w domain.Work) []management.Annot
 		sources = append(sources, s)
 	}
 	d.github.mu.Unlock()
-	var out []management.Annotation
+	out := d.capacityAnnotation(ctx, w)
 	for _, a := range d.extensionAnnotations(ctx, w) {
 		out = append(out, management.Annotation{Source: a[0], Name: a[1], Value: a[2]})
 	}
