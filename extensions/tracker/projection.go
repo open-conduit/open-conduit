@@ -79,6 +79,9 @@ type projectionState struct {
 	Work       domain.ID `json:"work"`
 	Applied    string    `json:"applied"`
 	VerifiedAt time.Time `json:"verified_at"`
+	// Closed is the issue's state when the projection was last applied: a
+	// completed Work's issue is verified until it closes.
+	Closed bool `json:"closed,omitempty"`
 }
 
 // Intent is one non-re-derivable comment. ID must be stable across retries
@@ -182,9 +185,19 @@ func (p *Projector) declaration(x *domain.Execution) (StatusDeclaration, bool) {
 // "claimed" before any, kept while a turn runs; cancelled Work leaves the
 // workflow status alone. latest is nil while the newest attempt is live;
 // last is the newest declared status whether or not an attempt is live.
+// It assumes the issue is open.
 func (p *Projector) Desired(w domain.Work, latest *domain.Execution, last string) (labels []string, state string) {
+	return p.desired(w, latest, last, false)
+}
+
+// desired drops the claimed label from a completed Work's closed issue:
+// admission never claims a closed issue, and a reopening starts a new
+// generation, which is admitted with or without it.
+func (p *Projector) desired(w domain.Work, latest *domain.Execution, last string, closed bool) (labels []string, state string) {
 	l := p.o.Settings.Labels
-	labels = []string{l.Claimed}
+	if !closed || w.State != domain.WorkCompleted {
+		labels = append(labels, l.Claimed)
+	}
 	switch w.State {
 	case domain.WorkCancelled:
 		return labels, ""
@@ -302,15 +315,20 @@ func projectionDigest(labels []string, state string) string {
 }
 
 // converge applies one issue's managed labels and workflow status against
-// what the tracker shows. It reports whether a transition was made.
-func (p *Projector) converge(ctx context.Context, item projected, desired []string, state string) (bool, error) {
+// what the tracker shows. It returns the digest it projected, whether the
+// issue is closed (a deleted issue counts as closed: there is nothing left
+// to project) and whether a transition was made.
+func (p *Projector) converge(ctx context.Context, item projected) (applied string, closed, moved bool, err error) {
 	issue, err := p.o.Service.Issue(ctx, item.issue)
 	if errors.Is(err, ErrNotFound) {
-		return false, nil
+		return projectionDigest(p.desired(item.work, item.latest, item.last, true)), true, false, nil
 	}
 	if err != nil {
-		return false, err
+		return "", false, false, err
 	}
+	closed = !issue.Open
+	desired, state := p.desired(item.work, item.latest, item.last, closed)
+	applied = projectionDigest(desired, state)
 	l := p.o.Settings.Labels
 	managed := append([]string{l.Claimed}, l.Statuses()...)
 	var add, remove []string
@@ -324,22 +342,22 @@ func (p *Projector) converge(ctx context.Context, item projected, desired []stri
 		}
 	}
 	if p.o.Settings.Projection.DryRun {
-		return false, nil
+		return applied, closed, false, nil
 	}
 	if len(add) > 0 || len(remove) > 0 {
 		if err := p.o.Service.EditLabels(ctx, item.issue, add, remove); err != nil {
-			return false, err
+			return "", false, false, err
 		}
 	}
 	target := p.o.Settings.Transitions[state]
 	if target == "" || strings.EqualFold(strings.TrimSpace(issue.Status), target) {
-		return false, nil
+		return applied, closed, false, nil
 	}
-	if !issue.Open && item.work.State.Terminal() {
+	if closed && item.work.State.Terminal() {
 		// A closed issue is never moved back by a terminal owner.
-		return false, nil
+		return applied, closed, false, nil
 	}
-	return true, p.o.Service.Transition(ctx, item.issue, target)
+	return applied, closed, true, p.o.Service.Transition(ctx, item.issue, target)
 }
 
 // Converge runs one bounded projection pass: labels and workflow statuses,
@@ -370,19 +388,21 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		if budget <= 0 {
 			break
 		}
-		desired, state := p.Desired(item.work, item.latest, item.last)
-		want := projectionDigest(desired, state)
 		key := "issue/" + item.issue
 		var st projectionState
 		if err := p.transact(ctx, func(tx storage.Tx) error { _, e := p.get(tx, key, &st); return e }); err != nil {
 			return res, err
 		}
-		verifyDue := !item.work.State.Terminal() && p.o.Now().Sub(st.VerifiedAt) >= p.o.Settings.VerifyInterval
+		want := projectionDigest(p.desired(item.work, item.latest, item.last, st.Work == item.work.ID && st.Closed))
+		// Terminal Work is settled, except a completed Work whose issue is
+		// still open: it drops the claimed label once the issue closes.
+		watch := !item.work.State.Terminal() || item.work.State == domain.WorkCompleted && !st.Closed
+		verifyDue := watch && p.o.Now().Sub(st.VerifiedAt) >= p.o.Settings.VerifyInterval
 		if st.Applied == want && st.Work == item.work.ID && !verifyDue {
 			continue
 		}
 		budget--
-		moved, err := p.converge(ctx, item, desired, state)
+		applied, closed, moved, err := p.converge(ctx, item)
 		if err != nil {
 			if stop := fail("labels", err); stop != nil {
 				return res, stop
@@ -397,7 +417,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			res.Transitioned++
 		}
 		if err := p.transact(ctx, func(tx storage.Tx) error {
-			return p.put(tx, key, projectionState{Work: item.work.ID, Applied: want, VerifiedAt: p.o.Now().UTC()})
+			return p.put(tx, key, projectionState{Work: item.work.ID, Applied: applied, VerifiedAt: p.o.Now().UTC(), Closed: closed})
 		}); err != nil {
 			return res, err
 		}

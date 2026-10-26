@@ -20,7 +20,8 @@ Ticket 06-01 ports the baseline adapters outside the GitHub reference path ([par
   - Input: closes, human comments and other Works' agent comments; never edits, bot comments or the Work's own notes.
   - An operator's `<type>.claim.requested` overrides the policy.
 - **Projector.** It is level-triggered from durable Work state:
-  - Labels: claimed while owned, plus at most one of the help, review or done labels, none while an attempt runs.
+  - Labels: claimed while owned, plus at most one of the help, review or done labels, none while an attempt runs. The claimed label comes off once completed Work's issue is closed: admission never claims a closed issue, and a reopening starts a new generation, which is claimed again. Failed and cancelled Work keep it.
+  - It re-reads the issue when desired state changes, and at `verify_seconds` for nonterminal Work and for completed Work whose issue is still open, until the issue closes.
   - Workflow status: claimed, then the declared status (`<type>.status.v1` `{status, comment}`), done or help for completed or failed Work. It is moved only when the entry names a status for that state.
   - Each outcome comment goes through the `Outbox`: pending → attempted (recorded before the write) → posted, with mark search after a lost answer, so nothing is posted twice across a crash.
 - **Tools.** `<type>.context`, `.issue.view`, `.issue.comment` (a durable intent, idempotent per request), `.issue.list` and `.issue.create` (never repeated after an ambiguous answer).
