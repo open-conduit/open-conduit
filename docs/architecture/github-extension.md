@@ -95,11 +95,11 @@ Labels influence only this claim decision. Work lifecycle never reads them.
 
 **Labels** are level-triggered:
 
-- `claimed` is present while Work owns the issue.
+- `claimed` is present while Work owns the issue. It comes off once completed Work's issue is closed: admission never claims a closed issue, and a reopening starts a new generation, which is claimed again. Failed and cancelled Work keep it.
 - No status label is set while an attempt runs (v1 parity).
 - After an attempt, the status comes from an outcome declaring `github.status.v1` `{status}`. Otherwise completed Work projects `done`, failed Work projects `help` and cancelled Work projects none.
 
-The projector re-reads the issue and changes only managed labels. It reapplies them when desired state changes, and at `verify_seconds` for nonterminal Work, which repairs drift.
+The projector re-reads the issue and changes only managed labels. It reapplies them when desired state changes, and at `verify_seconds` for nonterminal Work, which repairs drift. Completed Work whose issue is still open is also re-read at `verify_seconds` until the issue closes.
 
 **Comments** are not re-derivable. An outcome's `github.status.v1` `{comment}` becomes an intent with the stable ID `outcome/<execution id>` and a durable KV record. The record moves through these states:
 

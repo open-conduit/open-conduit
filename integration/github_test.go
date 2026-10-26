@@ -474,6 +474,64 @@ func TestGitHubProjectionConvergesAndRepairsDrift(t *testing.T) {
 	}
 }
 
+// TestGitHubCompletedClosedIssueDropsTheClaim covers the label set a
+// Work's end projects: a completed Work's closed issue no longer reads as
+// claimed, and is still never claimed again.
+func TestGitHubCompletedClosedIssueDropsTheClaim(t *testing.T) {
+	e := newGitHubEnv(t)
+	fk := e.fake
+	done, finished, failed := fk.OpenIssue("Done", "", ghAlice), fk.OpenIssue("Finished", "", ghAlice), fk.OpenIssue("Failed", "", ghAlice)
+	e.reconcile()
+	e.route()
+	end := func(n int, state domain.WorkState, status string) {
+		w, _ := e.workFor("issue/" + strconv.Itoa(n))
+		e.finishAttempt(e.startAttempt(w.ID), state, &gh.StatusDeclaration{Status: status})
+	}
+	end(done, domain.WorkReady, "done")
+	end(finished, domain.WorkCompleted, "finished")
+	end(failed, domain.WorkFailed, "")
+	e.converge()
+	if !equal(fk.Labels(done), "agent-in-progress", "might-be-done") {
+		t.Fatalf("done projection: %v", fk.Labels(done))
+	}
+	// Finished while the issue is open (its PR merged, the close not yet
+	// landed): still claimed, so nobody else picks it up.
+	if !equal(fk.Labels(finished), "agent-in-progress") {
+		t.Fatalf("finished open projection: %v", fk.Labels(finished))
+	}
+	if !equal(fk.Labels(failed), "agent-in-progress", "agent-needs-help") {
+		t.Fatalf("failed projection: %v", fk.Labels(failed))
+	}
+	for _, n := range []int{finished, failed} {
+		fk.CloseIssue(n, "completed")
+		e.deliver("issues", "d-close-"+strconv.Itoa(n), fk.IssuesHook("closed", n))
+	}
+	e.route()
+	e.clock.Add(61 * time.Second)
+	e.converge()
+	if labels := fk.Labels(finished); len(labels) != 0 {
+		t.Fatalf("closed finished issue still labelled: %v", labels)
+	}
+	// Failed work still asks for help, closed or not.
+	if !equal(fk.Labels(failed), "agent-in-progress", "agent-needs-help") {
+		t.Fatalf("closed failed projection: %v", fk.Labels(failed))
+	}
+	// Settled: no more reads or writes for the closed issues.
+	writes := len(fk.Writes())
+	e.clock.Add(time.Hour)
+	if e.converge(); len(fk.Writes()) != writes {
+		t.Fatal("settled projection wrote again")
+	}
+	// Without the claimed label the closed issue is still not claimed again.
+	e.reconcile()
+	e.route()
+	var works int
+	e.read(func(tx storage.Tx) error { ws, err := tx.ListWorks(); works = len(ws); return err })
+	if works != 3 {
+		t.Fatalf("completed issue claimed again: %d Works", works)
+	}
+}
+
 func equal(got []string, want ...string) bool {
 	return strings.Join(got, ",") == strings.Join(want, ",")
 }
@@ -598,6 +656,10 @@ func TestGitHubReopenedIssueCreatesASuccessorGeneration(t *testing.T) {
 	fk.CloseIssue(n, "completed")
 	e.deliver("issues", "d-close", fk.IssuesHook("closed", n))
 	e.route()
+	e.converge()
+	if !equal(fk.Labels(n), "might-be-done") {
+		t.Fatalf("closed completed projection: %v", fk.Labels(n))
+	}
 	// Late input for the terminal Work is audited, not reopened.
 	reopen := fk.ReopenIssue(n)
 	e.deliver("issues", "d-reopen", fk.IssuesHook("reopened", n))
