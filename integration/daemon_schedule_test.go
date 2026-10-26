@@ -168,3 +168,70 @@ func TestDaemonScheduledJobs(t *testing.T) {
 		return err == nil && strings.Contains(items, "job nightly: next ") && !strings.Contains(items, "job tick")
 	})
 }
+
+// TestDaemonJobConcurrency (#13): jobs have their own limit,
+// settings.job_concurrency. With it at one and a job running, a second due
+// job waits, and doctor and the Work's detail say which limit holds it back;
+// it starts once the first finishes.
+func TestDaemonJobConcurrency(t *testing.T) {
+	fake := githubtest.New("octo/widgets", "tok")
+	defer fake.Close()
+	t.Setenv("OC_TEST_GITHUB_TOKEN", "tok")
+	t.Setenv("OC_TEST_HOOK_SECRET", "hook-secret")
+	d := newDrill(t)
+	var cfg map[string]any
+	_ = json.Unmarshal(scheduleDaemonConfig(fake.URL, d.root), &cfg)
+	cfg["settings"] = map[string]any{"concurrency": 1, "job_concurrency": 1}
+	scope := cfg["scopes"].([]any)[0].(map[string]any)
+	for _, b := range scope["bindings"].([]any) {
+		if bm := b.(map[string]any); bm["name"] == "job" {
+			bm["config"].(map[string]any)["command"] = `echo "$OS_TRIGGER_TYPE" >> "$JOB_DIR/jobs"; while [ ! -f "$JOB_DIR/release" ]; do sleep 0.1; done`
+		}
+	}
+	data, _ := json.Marshal(cfg)
+	if err := os.WriteFile(d.config, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.extra = []string{"--webhook-addr", "127.0.0.1:0", "--public-url", "https://hooks.example.test"}
+	d.start("")
+	ctx := context.Background()
+	jobs := func() string { b, _ := os.ReadFile(filepath.Join(d.root, "jobs")); return string(b) }
+	d.until("the interval job runs and blocks", 30*time.Second, func() bool { return strings.Contains(jobs(), sc.TypeSlot) })
+	var addr string
+	d.until("webhook listener", 30*time.Second, func() bool {
+		r, err := d.c.Doctor(ctx, false)
+		if m := listenerAddr.FindStringSubmatch(check(r, "webhooks").Detail); err == nil && m != nil {
+			addr = m[1]
+		}
+		return addr != ""
+	})
+	token := sc.Token("hook-secret", "schedule/eng", "poke")
+	res, err := http.Post("http://"+addr+"/schedule/eng/jobs/poke/"+token, "application/json", strings.NewReader(`{}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	res.Body.Close()
+	var waiting string
+	d.until("doctor names the job limit", 30*time.Second, func() bool {
+		r, err := d.c.Doctor(ctx, false)
+		c := check(r, "capacity")
+		if err != nil || c.Code != "waiting" || len(c.Items) != 1 || !strings.Contains(c.Detail, "jobs (settings.job_concurrency) 1/1 running") ||
+			!strings.Contains(c.Detail, "agent turns (settings.concurrency) 0/1 running") || !strings.Contains(c.Items[0], "waiting for jobs (settings.job_concurrency) 1/1 running") {
+			return false
+		}
+		waiting, _, _ = strings.Cut(c.Items[0], ":")
+		return true
+	})
+	w, err := d.c.Work(ctx, waiting)
+	if err != nil || len(w.Annotations) == 0 || w.Annotations[0].Name != "waiting" || !strings.Contains(w.Annotations[0].Value, "settings.job_concurrency") {
+		t.Fatalf("waiting Work detail: %+v %v", w, err)
+	}
+	if err := os.WriteFile(filepath.Join(d.root, "release"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.until("the waiting job runs", 30*time.Second, func() bool { return strings.Contains(jobs(), sc.TypeWebhook) })
+	d.until("doctor clears", 30*time.Second, func() bool {
+		r, err := d.c.Doctor(ctx, false)
+		return err == nil && check(r, "capacity").Status == "ok"
+	})
+}

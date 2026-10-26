@@ -152,7 +152,7 @@ func TestInheritance(t *testing.T) {
 	if !slices.Equal(child.Authorization.Operations, []string{"emit", "read_context", "declare_outcome"}) {
 		t.Fatalf("inherited authorization %+v", child.Authorization)
 	}
-	if !slices.Equal(snap.Order, []domain.ID{"parent", "child"}) || snap.Settings.TimeoutSeconds != 3600 || !slices.Equal(snap.Settings.RetryDelaysSeconds, []int{300, 600}) {
+	if !slices.Equal(snap.Order, []domain.ID{"parent", "child"}) || snap.Settings.TimeoutSeconds != 3600 || snap.Settings.JobConcurrency != 4 || !slices.Equal(snap.Settings.RetryDelaysSeconds, []int{300, 600}) {
 		t.Fatalf("snapshot %+v", snap)
 	}
 }
@@ -424,7 +424,7 @@ func TestHash(t *testing.T) {
 	if changed.Hash == a.Hash {
 		t.Fatal("content change kept hash")
 	}
-	if !strings.Contains(string(a.Normalized), `"enabled":true`) || !strings.Contains(string(a.Normalized), `"kept_executions":20`) {
+	if !strings.Contains(string(a.Normalized), `"enabled":true`) || !strings.Contains(string(a.Normalized), `"kept_executions":20`) || !strings.Contains(string(a.Normalized), `"job_concurrency":4`) {
 		t.Fatalf("defaults missing: %s", a.Normalized)
 	}
 }

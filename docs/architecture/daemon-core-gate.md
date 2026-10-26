@@ -20,7 +20,8 @@ The router, toolbelt, scheduler, timers, control and management server are rebui
 
 | Setting | Maps to |
 | --- | --- |
-| `concurrency` | `GlobalLimit` |
+| `concurrency` | `GlobalLimit`: attempts of every executor without a pool, which are the agent turns (`claude-code`) and installed extension executors |
+| `job_concurrency` | `PoolLimits["jobs"]`, with `ExecutorPools` placing `shell`, `legacy-job` and `github-hold` in the `jobs` pool |
 | `timeout_seconds` | `Timeout` |
 | `kept_executions` | `KeptExecutions`, with `Artifacts` for content deletion |
 | `retry_delays_seconds` | `RetryPolicy.Delays` |
