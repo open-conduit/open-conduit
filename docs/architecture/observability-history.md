@@ -151,6 +151,8 @@ The shell executor's `Forget` removes the execution's run directories. It refuse
 
 Extension checks (`management.Options.Checks`), such as `telemetry.Pipeline.Health` for exporters or host watches, are appended. Provider error text never appears.
 
+When no daemon is reachable (it has never run, so there is no operator token, or nothing listens on its socket), `open-conduit health` says so and to run `open-conduit serve`. `open-conduit doctor` then runs its offline checks instead: `daemon` (`warn`, `not_running`), `config` validated offline, `github_capability` and `claude_code` (`claude --version` for each claude-code binding). A `skipped` check names the checks that need the daemon. A missing token file while a daemon is listening is still reported as a token error.
+
 ## Evidence
 
 - **[Telemetry integration](../../integration/telemetry_test.go)**:

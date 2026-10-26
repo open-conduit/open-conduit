@@ -199,6 +199,10 @@ func (e *Error) Error() string {
 // ErrNotModified reports a 304 for a conditional read.
 var ErrNotModified = errors.New("not modified")
 
+// ErrUnreachable wraps a failure to reach the management endpoint at all
+// (no socket, nothing listening), as opposed to an error the daemon returned.
+var ErrUnreachable = errors.New("management endpoint unreachable")
+
 type Client struct {
 	http  *http.Client
 	token string
@@ -312,7 +316,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("management endpoint unreachable: %w", err)
+		return fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotModified {
@@ -426,7 +430,7 @@ func (c *Client) ArtifactContent(ctx context.Context, id, byteRange string, w io
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("management endpoint unreachable: %w", err)
+		return fmt.Errorf("%w: %w", ErrUnreachable, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {
