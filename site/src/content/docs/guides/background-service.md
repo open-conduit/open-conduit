@@ -1,0 +1,25 @@
+---
+title: Run it in the background
+description: Run the daemon as a per-user launchd or systemd service.
+---
+
+`service install` runs the daemon as a per-user service: a launchd LaunchAgent on macOS, a systemd user unit on Linux. It starts at login, restarts if the daemon exits with an error, and runs in your session, so the OS keyring and your `gh` and Claude Code logins work as they do in a terminal.
+
+```sh
+open-conduit service install                         # takes serve's flags
+open-conduit service status
+open-conduit service stop                            # until the next start or login
+open-conduit service start
+open-conduit service uninstall
+```
+
+- `install` records the config path, the state directory, the `serve` flags you give it and a PATH built from your shell's PATH and wherever `claude`, `git`, `gh` and the tunnel binary are. It warns about any it can't find.
+- Run `install` again after changing flags or installing a tool the daemon needs (a repository's toolchain, say): it replaces the unit and restarts the daemon.
+- Webhooks come from the config's `settings.webhooks`, as with `serve`.
+- Output goes to `~/.local/state/open-conduit/logs/service.log` (under `--data-dir` if you give one). `open-conduit doctor` reports whether the service is installed and running.
+- The unit lives at `~/Library/LaunchAgents/com.open-conduit.daemon.plist` or `~/.config/systemd/user/open-conduit.service`.
+- Stop the service before `backup create` or `state check`, which need the daemon stopped.
+
+:::note[Linux]
+A systemd user unit runs only while you're logged in unless you run `loginctl enable-linger`. Without a desktop session the keyring may be locked, so prefer `file:` or `cmd:` secret references there.
+:::

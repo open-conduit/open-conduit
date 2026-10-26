@@ -3,6 +3,7 @@ package integration_test
 import (
 	"bytes"
 	"encoding/json"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -17,7 +18,19 @@ import (
 // written: complete example configs validate offline, every open-conduit
 // command they show exists with the flags it uses, and every make target
 // they show is in the Makefile.
-var userDocs = []string{"../README.md", "../docs/README.md", "../CONTRIBUTING.md", "../SECURITY.md"}
+var userDocs = append([]string{"../README.md", "../docs/README.md", "../CONTRIBUTING.md", "../SECURITY.md"}, siteDocs()...)
+
+// siteDocs are the Markdown pages of the published docs site.
+func siteDocs() []string {
+	var out []string
+	_ = filepath.WalkDir("../site/src/content/docs", func(path string, d fs.DirEntry, err error) error {
+		if err == nil && !d.IsDir() && (strings.HasSuffix(path, ".md") || strings.HasSuffix(path, ".mdx")) {
+			out = append(out, path)
+		}
+		return nil
+	})
+	return out
+}
 
 // fencedBlocks returns the bodies of the ```lang blocks in a Markdown file.
 func fencedBlocks(t *testing.T, path, lang string) []string {

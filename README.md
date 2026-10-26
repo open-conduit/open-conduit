@@ -12,6 +12,8 @@ Everything is built from five primitives:
 
 Integrations and executors plug in around that core, so GitHub, Slack, scheduled jobs and introspection all share one history, one retry and timeout model, and one view. See [the core in one page](docs/architecture/core.md).
 
+The full user docs are at [open-conduit.github.io/open-conduit](https://open-conduit.github.io/open-conduit/).
+
 Open Conduit succeeds [Open Supervisor](https://github.com/alsiola/open-supervisor). It keeps its own configuration and state, so Open Supervisor stays installable alongside it as a fallback while you move scopes across. See [Moving from Open Supervisor](#moving-from-open-supervisor).
 
 ## Install
