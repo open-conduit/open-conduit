@@ -16,7 +16,7 @@ Open Conduit succeeds [Open Supervisor](https://github.com/alsiola/open-supervis
 
 ## Install
 
-**Homebrew** (coming with the first release):
+**Homebrew**:
 
 ```sh
 brew install open-conduit/tap/open-conduit
@@ -24,13 +24,24 @@ brew install open-conduit/tap/open-conduit
 
 The cask puts only `open-conduit` on your PATH. `os` stays beside it in the cask's own directory, where the daemon finds it, so it can't clash with another command of that name. Open Supervisor's `open-supervisor` cask installs side by side.
 
-**Release binaries** (coming with the first release): archives for macOS and Linux, on amd64 and arm64, will be published on the [releases page](https://github.com/open-conduit/open-conduit/releases) with a `checksums.txt`. Each holds `open-conduit` and `os`. Keep them in the same directory. The install script downloads the latest one, verifies its checksum, puts both binaries in `~/.local/lib/open-conduit` and links `open-conduit` into `~/.local/bin`:
+**Release binaries**: archives for macOS and Linux, on amd64 and arm64, are on the [releases page](https://github.com/open-conduit/open-conduit/releases) as `open-conduit_<version>_<os>_<arch>.tar.gz`, with a `checksums.txt`. Each holds `open-conduit` and `os`. Keep them in the same directory. The install script downloads the latest one, verifies its checksum against `checksums.txt`, puts both binaries in `~/.local/lib/open-conduit` and links `open-conduit` into `~/.local/bin`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/open-conduit/open-conduit/main/install.sh | sh
 ```
 
-**From source** (works today). You need Go 1.24.2 or later, Git and Make:
+Set `OPEN_CONDUIT_VERSION=v0.1.0` (or another tag) to install a particular release rather than the latest, and `BIN_DIR` or `INSTALL_DIR` to change where the link and the binaries go.
+
+**go install**: you need Go 1.24.2 or later. Install both commands, which puts them side by side in `$(go env GOBIN)` (default `~/go/bin`):
+
+```sh
+go install github.com/open-conduit/open-conduit/cmd/open-conduit@latest
+go install github.com/open-conduit/open-conduit/cmd/os@latest
+```
+
+`os` must sit beside `open-conduit` for the daemon to find it, and it lands on your PATH there under that generic name. Install both into the same directory, or point the daemon elsewhere with `serve --toolbelt-dir DIR`.
+
+**From source**. You need Go 1.24.2 or later, Git and Make:
 
 ```sh
 git clone https://github.com/open-conduit/open-conduit.git
