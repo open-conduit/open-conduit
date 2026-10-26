@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"testing"
@@ -435,6 +436,9 @@ func TestTrackerReconcileClaimProjectAndRecover(t *testing.T) {
 			x2 := e.startAttempt(w.ID)
 			e.finishAttempt(x2, domain.WorkCompleted, &tracker.StatusDeclaration{Status: "finished"})
 			e.converge()
+			if labels, _, _ := f.snapshot(f.key1); strings.Join(labels, ",") != "bug" {
+				t.Fatalf("closed completed issue: %v", labels)
+			}
 			// Reopened: a successor generation claims it although it is labelled claimed.
 			e.clock.Add(time.Hour)
 			f.move(f.key1, f.open)
@@ -447,6 +451,85 @@ func TestTrackerReconcileClaimProjectAndRecover(t *testing.T) {
 			}
 			if old, _ := e.workFor("issue/" + f.key1); old.ID != w.ID || old.State != domain.WorkCompleted {
 				t.Fatal("the terminal owner keeps its key")
+			}
+		})
+	}
+}
+
+// TestTrackerCompletedClosedIssueDropsTheClaim covers the label set a
+// Work's end projects, for Linear and Jira: a completed Work's closed issue
+// no longer reads as claimed, and is still never claimed again.
+func TestTrackerCompletedClosedIssueDropsTheClaim(t *testing.T) {
+	for name, make := range trackerKinds() {
+		t.Run(name, func(t *testing.T) {
+			e := newTrackerEnv(t, make, false)
+			f := e.f
+			l := f.settings.Labels
+			done, finished, failed := f.key1, f.key2, f.key3
+			for _, key := range []string{done, finished, failed} {
+				f.addIssue(key, "Issue "+key, f.open)
+			}
+			e.reconcile(e.source)
+			e.route()
+			works := map[string]domain.ID{}
+			end := func(key string, state domain.WorkState, status string) {
+				w, ok := e.workFor("issue/" + key)
+				if !ok {
+					t.Fatalf("%s not claimed", key)
+				}
+				works[key] = w.ID
+				e.finishAttempt(e.startAttempt(w.ID), state, &tracker.StatusDeclaration{Status: status})
+			}
+			end(done, domain.WorkReady, "done")
+			end(finished, domain.WorkCompleted, "finished")
+			end(failed, domain.WorkFailed, "")
+			e.converge()
+			labelled := func(key string, want ...string) {
+				t.Helper()
+				got, _, _ := f.snapshot(key)
+				got = append([]string(nil), got...)
+				sort.Strings(got)
+				sort.Strings(want)
+				if strings.Join(got, ",") != strings.Join(want, ",") {
+					t.Fatalf("%s labels %v, want %v", key, got, want)
+				}
+			}
+			labelled(done, l.Claimed, l.Status("done"))
+			// Finished while the issue is open (its PR merged, the close not
+			// yet landed): still claimed, so nobody else picks it up.
+			labelled(finished, l.Claimed)
+			labelled(failed, l.Claimed, l.Status("help"))
+			for _, key := range []string{finished, failed} {
+				f.move(key, f.done)
+			}
+			e.reconcile(e.source)
+			e.route()
+			e.clock.Add(f.settings.VerifyInterval + time.Second)
+			e.converge()
+			labelled(finished)
+			// Failed work still asks for help, closed or not.
+			labelled(failed, l.Claimed, l.Status("help"))
+			if _, status, _ := f.snapshot(finished); status != f.done {
+				t.Fatalf("closed issue moved back to %s", status)
+			}
+			// Settled: the closed issues are not re-read; only the open,
+			// still-owned issue is verified.
+			e.clock.Add(f.settings.VerifyInterval + time.Second)
+			if res := e.converge(); res.Labeled != 1 {
+				t.Fatalf("settled projection re-read the closed issues: %+v", res)
+			}
+			// Without the claimed label the closed issue is still not claimed again.
+			e.reconcile(e.source)
+			e.route()
+			for key, id := range works {
+				if w, _ := e.workFor("issue/" + key); w.ID != id {
+					t.Fatalf("%s claimed again: %s", key, w.ID)
+				}
+			}
+			var n int
+			e.read(func(tx storage.Tx) error { ws, err := tx.ListWorks(); n = len(ws); return err })
+			if n != 3 {
+				t.Fatalf("completed issue claimed again: %d Works", n)
 			}
 		})
 	}
