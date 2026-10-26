@@ -6,8 +6,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	sc "github.com/alsiola/open-conduit/extensions/schedule"
+	"github.com/open-conduit/open-conduit/domain"
+	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 )
 
 func latestName(j sc.Job, now time.Time) string {

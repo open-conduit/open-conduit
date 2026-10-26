@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // DiskSpaceFunc reports the size of the filesystem path is on and what an

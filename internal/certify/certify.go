@@ -27,15 +27,15 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/internal/artifacts"
-	"github.com/alsiola/open-conduit/internal/extproc"
-	"github.com/alsiola/open-conduit/internal/storage/sqlite"
-	"github.com/alsiola/open-conduit/protocol"
-	"github.com/alsiola/open-conduit/protocol/jsonrpc"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/artifacts"
+	"github.com/open-conduit/open-conduit/internal/extproc"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Runner identifies this runner in reports.

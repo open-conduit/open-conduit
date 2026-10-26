@@ -12,7 +12,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alsiola/open-conduit/client"
+	"github.com/open-conduit/open-conduit/client"
 )
 
 type fakeSource struct {

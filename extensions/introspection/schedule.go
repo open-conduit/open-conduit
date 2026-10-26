@@ -10,8 +10,8 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // The daily sweep and triage are each scope's standing Work, started by the

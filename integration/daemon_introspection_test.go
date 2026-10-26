@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	is "github.com/alsiola/open-conduit/extensions/introspection"
+	"github.com/open-conduit/open-conduit/client"
+	is "github.com/open-conduit/open-conduit/extensions/introspection"
 )
 
 // Workflow D (05-03) on the real `open-conduit serve` daemon with shell

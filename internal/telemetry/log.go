@@ -7,7 +7,7 @@ import (
 	"sort"
 	"sync"
 
-	"github.com/alsiola/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/observability"
 	otellog "go.opentelemetry.io/otel/log"
 )
 

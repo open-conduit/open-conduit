@@ -5,11 +5,11 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/internal/runtime"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Generic inject acknowledgement (B04, 04-02) through the production

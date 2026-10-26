@@ -1,13 +1,13 @@
 package bootstrap
 
 import (
-	bb "github.com/alsiola/open-conduit/extensions/bitbucket"
-	gh "github.com/alsiola/open-conduit/extensions/github"
-	"github.com/alsiola/open-conduit/extensions/jira"
-	"github.com/alsiola/open-conduit/extensions/linear"
-	sl "github.com/alsiola/open-conduit/extensions/slack"
-	"github.com/alsiola/open-conduit/extensions/tracker"
-	"github.com/alsiola/open-conduit/internal/cli"
+	bb "github.com/open-conduit/open-conduit/extensions/bitbucket"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
+	"github.com/open-conduit/open-conduit/extensions/jira"
+	"github.com/open-conduit/open-conduit/extensions/linear"
+	sl "github.com/open-conduit/open-conduit/extensions/slack"
+	"github.com/open-conduit/open-conduit/extensions/tracker"
+	"github.com/open-conduit/open-conduit/internal/cli"
 )
 
 // Adapters is the catalog of the integrations this daemon registers (v1

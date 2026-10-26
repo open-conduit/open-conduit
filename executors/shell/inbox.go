@@ -11,8 +11,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // The inbox is the shell executor's inject channel (04-02, the generic inject

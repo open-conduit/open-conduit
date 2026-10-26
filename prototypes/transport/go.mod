@@ -1,4 +1,4 @@
-module github.com/alsiola/open-conduit/prototypes/transport
+module github.com/open-conduit/open-conduit/prototypes/transport
 
 go 1.24.2
 

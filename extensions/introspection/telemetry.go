@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alsiola/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/observability"
 )
 
 // Telemetry events (05-03): v1 captured named product-telemetry events

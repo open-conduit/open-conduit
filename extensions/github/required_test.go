@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/extensions/github/githubtest"
+	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
 )
 
 func handlerClient(t *testing.T, h http.Handler) *Client {

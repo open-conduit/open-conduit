@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
+	"github.com/open-conduit/open-conduit/client"
 )
 
 // daemonClaude is a fake Claude Code CLI for the composed daemon. It reads

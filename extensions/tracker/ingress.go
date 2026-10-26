@@ -11,8 +11,8 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // DeliveryContentType marks a Delivery body produced by VerifyDelivery for

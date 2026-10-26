@@ -5,7 +5,7 @@ import (
 	"context"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // Source identifies an account/resource namespace within one configured ingress.

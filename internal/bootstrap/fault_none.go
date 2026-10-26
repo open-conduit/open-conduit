@@ -5,7 +5,7 @@ package bootstrap
 import (
 	"log/slog"
 
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // faultStore is the identity in production builds. The faultinject build tag

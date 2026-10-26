@@ -29,7 +29,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alsiola/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 const (

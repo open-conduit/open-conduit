@@ -8,8 +8,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Extension packages (07-03): install, update, rollback, removal, listing,

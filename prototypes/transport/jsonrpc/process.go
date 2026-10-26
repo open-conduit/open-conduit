@@ -10,7 +10,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/alsiola/open-conduit/prototypes/transport/scenario"
+	"github.com/open-conduit/open-conduit/prototypes/transport/scenario"
 )
 
 // Start launches binary with the protocol on its stdin/stdout, forwards its

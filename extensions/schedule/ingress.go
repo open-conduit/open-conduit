@@ -14,8 +14,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // WebhookLoss is the declared loss limitation of custom webhook POSTs (X04).

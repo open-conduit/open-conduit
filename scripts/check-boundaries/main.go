@@ -12,7 +12,7 @@ import (
 	"strings"
 )
 
-const module = "github.com/alsiola/open-conduit/"
+const module = "github.com/open-conduit/open-conduit/"
 
 type pkg struct {
 	ImportPath string

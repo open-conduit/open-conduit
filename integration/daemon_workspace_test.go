@@ -13,7 +13,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
+	"github.com/open-conduit/open-conduit/client"
 )
 
 // workspaceScript records where and with what it ran. ws.slow runs until

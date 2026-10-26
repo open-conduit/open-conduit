@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/executors/claudecode"
+	"github.com/open-conduit/open-conduit/executors/claudecode"
 )
 
 // A dry run runs the turn as a stub on the cheap model, told to do nothing.

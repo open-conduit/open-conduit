@@ -13,12 +13,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/extensions/github/githubtest"
-	is "github.com/alsiola/open-conduit/extensions/introspection"
-	sc "github.com/alsiola/open-conduit/extensions/schedule"
-	"github.com/alsiola/open-conduit/extensions/slack/slacktest"
-	"github.com/alsiola/open-conduit/internal/cli/runview"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
+	is "github.com/open-conduit/open-conduit/extensions/introspection"
+	sc "github.com/open-conduit/open-conduit/extensions/schedule"
+	"github.com/open-conduit/open-conduit/extensions/slack/slacktest"
+	"github.com/open-conduit/open-conduit/internal/cli/runview"
 )
 
 // The stage 05 gate (05-04): workflows A–D together on one composed

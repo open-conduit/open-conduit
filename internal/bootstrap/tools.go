@@ -7,17 +7,17 @@ import (
 	"path/filepath"
 	"strings"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/executors/claudecode"
-	gh "github.com/alsiola/open-conduit/extensions/github"
-	"github.com/alsiola/open-conduit/extensions/github/playbooks"
-	is "github.com/alsiola/open-conduit/extensions/introspection"
-	isplaybooks "github.com/alsiola/open-conduit/extensions/introspection/playbooks"
-	sl "github.com/alsiola/open-conduit/extensions/slack"
-	slplaybooks "github.com/alsiola/open-conduit/extensions/slack/playbooks"
-	trackerplaybooks "github.com/alsiola/open-conduit/extensions/tracker/playbooks"
-	"github.com/alsiola/open-conduit/internal/config"
-	"github.com/alsiola/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/executors/claudecode"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
+	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
+	is "github.com/open-conduit/open-conduit/extensions/introspection"
+	isplaybooks "github.com/open-conduit/open-conduit/extensions/introspection/playbooks"
+	sl "github.com/open-conduit/open-conduit/extensions/slack"
+	slplaybooks "github.com/open-conduit/open-conduit/extensions/slack/playbooks"
+	trackerplaybooks "github.com/open-conduit/open-conduit/extensions/tracker/playbooks"
+	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
 // Engineering tools, waits and playbooks (03-04). The GitHub extension's

@@ -12,11 +12,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/internal/runtime"
-	"github.com/alsiola/open-conduit/internal/storage/sqlite"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 func timerEvent(id string) domain.Event {

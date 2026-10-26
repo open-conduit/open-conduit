@@ -14,7 +14,7 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/alsiola/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/observability"
 )
 
 // Options configures a Pipeline. Zero values select bounded defaults.

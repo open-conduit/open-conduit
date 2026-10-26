@@ -8,8 +8,8 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/extensions/tracker"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/tracker"
 )
 
 // Setup is the Linear extension's `init linear`: one scope working one or

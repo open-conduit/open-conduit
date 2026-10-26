@@ -14,9 +14,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	sc "github.com/alsiola/open-conduit/extensions/schedule"
-	"github.com/alsiola/open-conduit/internal/cli/runview"
+	"github.com/open-conduit/open-conduit/client"
+	sc "github.com/open-conduit/open-conduit/extensions/schedule"
+	"github.com/open-conduit/open-conduit/internal/cli/runview"
 )
 
 // Workflow C (05-02) on the composed daemon: scheduled jobs run as ordinary

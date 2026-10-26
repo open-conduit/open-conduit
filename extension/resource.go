@@ -6,7 +6,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // Resource modes an executor may request from a provider. A provider documents

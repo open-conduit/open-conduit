@@ -1,6 +1,6 @@
 # Planned Go package boundaries
 
-Decision B01, ticket 01-01. These are ownership and import rules for the interfaces and scaffold in 01-02–01-06. Ticket 01-03 adds `extension`, `observability` and their conformance fixtures ([B03](extensions.md)). Ticket 01-02 implements `domain`, `storage`, shared storage cases in `conformance` and a volatile double in `conformance/reference`. It introduces `github.com/alsiola/open-conduit` with the source baseline’s Go minimum (1.24.2) to run those contracts; 01-06 reviews the supported toolchain/platforms and adds the remaining scaffold/CI.
+Decision B01, ticket 01-01. These are ownership and import rules for the interfaces and scaffold in 01-02–01-06. Ticket 01-03 adds `extension`, `observability` and their conformance fixtures ([B03](extensions.md)). Ticket 01-02 implements `domain`, `storage`, shared storage cases in `conformance` and a volatile double in `conformance/reference`. It introduces `github.com/open-conduit/open-conduit` with the source baseline’s Go minimum (1.24.2) to run those contracts; 01-06 reviews the supported toolchain/platforms and adds the remaining scaffold/CI.
 
 | Package | Owns | Allowed project dependencies |
 | --- | --- | --- |

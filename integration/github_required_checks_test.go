@@ -7,8 +7,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	gh "github.com/alsiola/open-conduit/extensions/github"
+	"github.com/open-conduit/open-conduit/domain"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
 )
 
 // lastChecks is the latest observed checks Event of a type.

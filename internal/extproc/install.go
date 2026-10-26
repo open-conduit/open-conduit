@@ -12,7 +12,7 @@ import (
 	"sort"
 	"time"
 
-	"github.com/alsiola/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // Package layout (07-03, provisional). A package is one directory:

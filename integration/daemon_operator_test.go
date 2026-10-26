@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/extensions/github/githubtest"
-	"github.com/alsiola/open-conduit/internal/bootstrap"
-	"github.com/alsiola/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
+	"github.com/open-conduit/open-conduit/internal/bootstrap"
+	"github.com/open-conduit/open-conduit/internal/cli"
 )
 
 // operatorCLI runs open-conduit commands in process against a drill's state

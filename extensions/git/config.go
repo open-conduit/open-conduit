@@ -10,7 +10,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Type is the registered resource provider name.

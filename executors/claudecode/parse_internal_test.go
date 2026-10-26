@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 var now = time.Date(2026, 10, 24, 8, 11, 0, 0, time.UTC)

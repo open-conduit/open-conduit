@@ -9,10 +9,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/protocol"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // memoryKV is a minimal extension KV for the suite's own controls; scoped

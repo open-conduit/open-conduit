@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/alsiola/open-conduit/client"
+	"github.com/open-conduit/open-conduit/client"
 )
 
 // routeExplanation is `route KEY`: the Work owning the key and, for each

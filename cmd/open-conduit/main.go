@@ -9,10 +9,10 @@ import (
 	"path/filepath"
 	"syscall"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/internal/bootstrap"
-	"github.com/alsiola/open-conduit/internal/cli"
-	"github.com/alsiola/open-conduit/internal/tui"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/internal/bootstrap"
+	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/tui"
 )
 
 var version = "dev"

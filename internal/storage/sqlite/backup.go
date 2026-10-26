@@ -9,7 +9,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/storage"
 	modernsqlite "modernc.org/sqlite"
 )
 

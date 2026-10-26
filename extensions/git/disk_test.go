@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 func (f *fixture) sweep() extension.ResourceSweepReport {

@@ -6,11 +6,11 @@ import (
 	"io"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	sl "github.com/alsiola/open-conduit/extensions/slack"
-	"github.com/alsiola/open-conduit/extensions/slack/slacktest"
-	"github.com/alsiola/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	sl "github.com/open-conduit/open-conduit/extensions/slack"
+	"github.com/open-conduit/open-conduit/extensions/slack/slacktest"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // Certification is the package's certification.json: a fixture command

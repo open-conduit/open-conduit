@@ -10,9 +10,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/extensions/slack"
-	"github.com/alsiola/open-conduit/extensions/slack/slacktest"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/slack"
+	"github.com/open-conduit/open-conduit/extensions/slack/slacktest"
 )
 
 // scriptedHost answers prompts and choices in order and records what the

@@ -4,9 +4,9 @@ import (
 	"context"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // RuntimeDriver is a test adapter, not the production management API. Stage 02

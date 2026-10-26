@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"sort"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Ingress is a synthetic service-free fixture. Both paths use caller-supplied

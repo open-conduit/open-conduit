@@ -9,11 +9,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/conformance/reference"
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/conformance/reference"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
 // TestManagementOperatorControls covers the 03-05 controls through the real

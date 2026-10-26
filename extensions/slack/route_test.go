@@ -9,10 +9,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/extensions/slack"
-	"github.com/alsiola/open-conduit/extensions/slack/slacktest"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/slack"
+	"github.com/open-conduit/open-conduit/extensions/slack/slacktest"
 )
 
 func scopeWith(t *testing.T, extra string) domain.Scope {

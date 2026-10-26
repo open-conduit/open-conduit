@@ -4,8 +4,8 @@ import (
 	"context"
 	"sync"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Executor models detached completion without exposing a PID or session to core.

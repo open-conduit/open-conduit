@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/extensions/introspection/host"
-	"github.com/alsiola/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/introspection/host"
+	"github.com/open-conduit/open-conduit/observability"
 )
 
 func at(s string) time.Time {

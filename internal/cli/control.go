@@ -12,7 +12,7 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/alsiola/open-conduit/client"
+	"github.com/open-conduit/open-conduit/client"
 )
 
 // Operator controls added for engineering operation (03-05). Each is a thin

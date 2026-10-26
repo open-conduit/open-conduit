@@ -7,8 +7,8 @@ import (
 	"maps"
 	"slices"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // ErrDenied is returned when current configuration does not authorize a call.

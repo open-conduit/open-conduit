@@ -12,10 +12,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/internal/storage/sqlite"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 var now = time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)

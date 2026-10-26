@@ -11,14 +11,14 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	bb "github.com/alsiola/open-conduit/extensions/bitbucket"
-	"github.com/alsiola/open-conduit/extensions/jira"
-	"github.com/alsiola/open-conduit/extensions/linear"
-	"github.com/alsiola/open-conduit/extensions/tracker"
-	"github.com/alsiola/open-conduit/internal/config"
-	"github.com/alsiola/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	bb "github.com/open-conduit/open-conduit/extensions/bitbucket"
+	"github.com/open-conduit/open-conduit/extensions/jira"
+	"github.com/open-conduit/open-conduit/extensions/linear"
+	"github.com/open-conduit/open-conduit/extensions/tracker"
+	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
 // Installed integration parity (06-01): the Linear and Jira trackers (one

@@ -6,12 +6,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	gh "github.com/alsiola/open-conduit/extensions/github"
-	sc "github.com/alsiola/open-conduit/extensions/schedule"
-	"github.com/alsiola/open-conduit/internal/runtime"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
+	sc "github.com/open-conduit/open-conduit/extensions/schedule"
+	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // `job:<name>` waits (05-02) over the production toolbelt, scheduler and

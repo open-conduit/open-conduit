@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/extensions/github/githubtest"
+	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
 )
 
 // githubDaemonConfig binds a GitHub scope whose shell binding completes with a

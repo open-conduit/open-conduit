@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	gh "github.com/alsiola/open-conduit/extensions/github"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
 )
 
 var opName = regexp.MustCompile("[`\"](github\\.[a-z.]+)[`\"]")

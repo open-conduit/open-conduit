@@ -5,8 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // PendingInputsInTx exposes ordered input for a scheduler's atomic claim. It

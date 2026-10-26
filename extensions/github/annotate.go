@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Annotation is one line of operator context about Work this entry owns.

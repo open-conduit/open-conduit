@@ -11,14 +11,14 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/internal/artifacts"
-	"github.com/alsiola/open-conduit/internal/backup"
-	"github.com/alsiola/open-conduit/internal/cli"
-	"github.com/alsiola/open-conduit/internal/management"
-	"github.com/alsiola/open-conduit/internal/migrate"
-	"github.com/alsiola/open-conduit/internal/storage/sqlite"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/internal/artifacts"
+	"github.com/open-conduit/open-conduit/internal/backup"
+	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/management"
+	"github.com/open-conduit/open-conduit/internal/migrate"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // 06-02: explicit Open Supervisor conversion and the offline state

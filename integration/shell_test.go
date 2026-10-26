@@ -16,20 +16,20 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/executors/shell"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/internal/artifacts"
-	"github.com/alsiola/open-conduit/internal/cli"
-	"github.com/alsiola/open-conduit/internal/config"
-	"github.com/alsiola/open-conduit/internal/management"
-	"github.com/alsiola/open-conduit/internal/runtime"
-	"github.com/alsiola/open-conduit/internal/storage/sqlite"
-	"github.com/alsiola/open-conduit/internal/telemetry"
-	"github.com/alsiola/open-conduit/observability"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/executors/shell"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/artifacts"
+	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/management"
+	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/internal/telemetry"
+	"github.com/open-conduit/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // TestMain lets this test binary act as the `os` toolbelt CLI when invoked
@@ -44,7 +44,7 @@ func TestMain(m *testing.M) {
 	}
 	dir, err := os.MkdirTemp("", "oc-osbin-")
 	if err == nil {
-		build := exec.Command("go", "build", "-o", filepath.Join(dir, "os"), "github.com/alsiola/open-conduit/cmd/os")
+		build := exec.Command("go", "build", "-o", filepath.Join(dir, "os"), "github.com/open-conduit/open-conduit/cmd/os")
 		if build.Run() == nil {
 			builtToolbelt = filepath.Join(dir, "os")
 		}

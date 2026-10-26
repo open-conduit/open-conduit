@@ -8,12 +8,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/conformance/reference"
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/observability"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/conformance/reference"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 func ingressFixture() conformance.IngressFixture {

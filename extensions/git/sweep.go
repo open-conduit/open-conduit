@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Spare reasons and the reasons a sweep keeps a spare workspace.

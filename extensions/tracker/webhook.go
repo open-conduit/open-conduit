@@ -11,7 +11,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // MaxDeliveryBytes bounds a webhook body.

@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
+	"github.com/open-conduit/open-conduit/client"
 )
 
 // 06-02: explicit Open Supervisor conversion and the offline recovery

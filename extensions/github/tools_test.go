@@ -7,10 +7,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	gh "github.com/alsiola/open-conduit/extensions/github"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Ported from Open Supervisor's core wait tests and toolbelt

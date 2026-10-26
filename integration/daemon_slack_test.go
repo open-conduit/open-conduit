@@ -12,7 +12,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/extensions/slack/slacktest"
+	"github.com/open-conduit/open-conduit/extensions/slack/slacktest"
 )
 
 // slackDaemonConfig binds a workspace-free support scope: no resource, no Git

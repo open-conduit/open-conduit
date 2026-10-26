@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
+	"github.com/open-conduit/open-conduit/client"
 )
 
 // diskSafetyConfig binds a work-workspace scope whose run fails, and a fresh

@@ -8,10 +8,10 @@ import (
 	"slices"
 	"strings"
 
-	gh "github.com/alsiola/open-conduit/extensions/github"
-	is "github.com/alsiola/open-conduit/extensions/introspection"
-	sc "github.com/alsiola/open-conduit/extensions/schedule"
-	"github.com/alsiola/open-conduit/extensions/tracker"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
+	is "github.com/open-conduit/open-conduit/extensions/introspection"
+	sc "github.com/open-conduit/open-conduit/extensions/schedule"
+	"github.com/open-conduit/open-conduit/extensions/tracker"
 )
 
 // feed is the v1 source route that feeds a project without a tracker of its

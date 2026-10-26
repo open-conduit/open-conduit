@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/extensions/github/githubtest"
+	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
 )
 
 func TestVerifyReportsAccess(t *testing.T) {

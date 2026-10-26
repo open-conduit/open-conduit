@@ -6,8 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/internal/cli"
 )
 
 const editDoc = `{

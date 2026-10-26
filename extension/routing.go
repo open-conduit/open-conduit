@@ -3,7 +3,7 @@ package extension
 import (
 	"context"
 
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // RouteInput is a detached, read-only snapshot. A handler may be evaluated again

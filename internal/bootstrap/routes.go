@@ -4,12 +4,12 @@ import (
 	"context"
 	"strings"
 
-	"github.com/alsiola/open-conduit/extension"
-	gh "github.com/alsiola/open-conduit/extensions/github"
-	is "github.com/alsiola/open-conduit/extensions/introspection"
-	sc "github.com/alsiola/open-conduit/extensions/schedule"
-	sl "github.com/alsiola/open-conduit/extensions/slack"
-	"github.com/alsiola/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/extension"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
+	is "github.com/open-conduit/open-conduit/extensions/introspection"
+	sc "github.com/open-conduit/open-conduit/extensions/schedule"
+	sl "github.com/open-conduit/open-conduit/extensions/slack"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
 // manualRoute is the first-party "manual" route handler. It matches only

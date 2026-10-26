@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // ManifestFile is the manifest's file name inside an extension's directory.

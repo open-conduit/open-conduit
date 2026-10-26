@@ -16,7 +16,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 var ctx = context.Background()

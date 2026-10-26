@@ -1,7 +1,7 @@
 package domain_test
 
 import (
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 	"testing"
 )
 

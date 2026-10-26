@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 type Correlation struct {

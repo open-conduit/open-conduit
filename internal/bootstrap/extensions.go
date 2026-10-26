@@ -14,13 +14,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/internal/config"
-	"github.com/alsiola/open-conduit/internal/extproc"
-	"github.com/alsiola/open-conduit/internal/runtime"
-	"github.com/alsiola/open-conduit/observability"
-	"github.com/alsiola/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/extproc"
+	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // Installed extension packages (07-03). At start the daemon discovers

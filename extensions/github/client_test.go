@@ -14,8 +14,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/extensions/github/githubtest"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
 )
 
 type clock struct {

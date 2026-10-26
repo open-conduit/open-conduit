@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"github.com/alsiola/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // writePackage lays out a minimal package (a shell script command) in

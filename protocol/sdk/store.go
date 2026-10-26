@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/protocol"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // ErrReadOnly refuses a core-record write through Store: over the protocol

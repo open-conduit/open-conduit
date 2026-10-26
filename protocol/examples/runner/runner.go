@@ -26,10 +26,10 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/protocol"
-	"github.com/alsiola/open-conduit/protocol/sdk"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol/sdk"
 )
 
 const (

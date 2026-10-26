@@ -6,7 +6,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/observability"
 	"go.opentelemetry.io/otel/codes"
 	sdklog "go.opentelemetry.io/otel/sdk/log"
 	sdkmetric "go.opentelemetry.io/otel/sdk/metric"

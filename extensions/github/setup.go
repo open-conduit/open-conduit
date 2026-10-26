@@ -11,7 +11,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Setup (03-05, moved behind the generic extension.Setup hook in 04-02):

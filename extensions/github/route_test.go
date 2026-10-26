@@ -5,9 +5,9 @@ import (
 	"encoding/json"
 	"testing"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	gh "github.com/alsiola/open-conduit/extensions/github"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
 )
 
 func scopeWith(t *testing.T, config string) domain.Scope {

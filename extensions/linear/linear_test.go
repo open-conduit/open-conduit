@@ -10,11 +10,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/extensions/linear"
-	"github.com/alsiola/open-conduit/extensions/linear/lineartest"
-	"github.com/alsiola/open-conduit/extensions/tracker"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/linear"
+	"github.com/open-conduit/open-conduit/extensions/linear/lineartest"
+	"github.com/open-conduit/open-conduit/extensions/tracker"
 )
 
 const entry = `{"namespace":"linear/eng","scope":"eng","teams":["ENG"],"webhook_secret":"hook","transitions":{"claimed":"In Progress","review":"in review"}}`

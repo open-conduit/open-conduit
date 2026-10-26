@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/extensions/github/githubtest"
-	sc "github.com/alsiola/open-conduit/extensions/schedule"
+	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
+	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 )
 
 // scheduleDaemonConfig adds scheduled jobs to the GitHub webhook scope: an

@@ -7,8 +7,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // IssueIntent is one issue an agent opens (follow-up child work). Like a

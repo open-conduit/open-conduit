@@ -13,9 +13,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/extensions/bitbucket/bitbuckettest"
-	"github.com/alsiola/open-conduit/extensions/jira/jiratest"
-	"github.com/alsiola/open-conduit/extensions/linear/lineartest"
+	"github.com/open-conduit/open-conduit/extensions/bitbucket/bitbuckettest"
+	"github.com/open-conduit/open-conduit/extensions/jira/jiratest"
+	"github.com/open-conduit/open-conduit/extensions/linear/lineartest"
 )
 
 // posthogFake records captured events (no real PostHog is ever called).

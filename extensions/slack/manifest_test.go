@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/extensions/slack"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/slack"
 )
 
 // TestManifestCoversWhatTheExtensionUses exercises every Slack call the

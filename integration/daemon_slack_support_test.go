@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/extensions/slack/slacktest"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/extensions/slack/slacktest"
 )
 
 // supportClaude is a fake Claude Code CLI for the Slack support binding. Each

@@ -19,7 +19,7 @@ import (
 	"strconv"
 	"strings"
 
-	gh "github.com/alsiola/open-conduit/extensions/github"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
 )
 
 // RepoFile is the v1 repository file a project's checkout could hold.

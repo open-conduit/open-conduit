@@ -10,10 +10,10 @@ import (
 	"sync"
 	"testing"
 
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/internal/certify"
-	"github.com/alsiola/open-conduit/protocol"
-	"github.com/alsiola/open-conduit/protocol/examples/weakened"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/internal/certify"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol/examples/weakened"
 )
 
 // 07-03 packaging and certification: the first-party subprocess packages

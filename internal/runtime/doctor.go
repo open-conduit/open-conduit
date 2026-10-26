@@ -7,8 +7,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Check statuses. Info carries declared limitations that are not faults.

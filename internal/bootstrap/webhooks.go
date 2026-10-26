@@ -10,12 +10,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alsiola/open-conduit/extension"
-	gh "github.com/alsiola/open-conduit/extensions/github"
-	sc "github.com/alsiola/open-conduit/extensions/schedule"
-	sl "github.com/alsiola/open-conduit/extensions/slack"
-	"github.com/alsiola/open-conduit/extensions/tunnel"
-	"github.com/alsiola/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/extension"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
+	sc "github.com/open-conduit/open-conduit/extensions/schedule"
+	sl "github.com/open-conduit/open-conduit/extensions/slack"
+	"github.com/open-conduit/open-conduit/extensions/tunnel"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
 // Webhook exposure (03-05). Webhooks are an accelerator: reconcile always

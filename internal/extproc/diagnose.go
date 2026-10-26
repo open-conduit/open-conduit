@@ -5,7 +5,7 @@ import (
 	"errors"
 	"fmt"
 
-	"github.com/alsiola/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // Diagnostic is an operator-facing explanation of an extension that could

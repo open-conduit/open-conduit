@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/protocol/examples/notes"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/protocol/examples/notes"
 )
 
 // TestDaemonExtensionPackages is the 07-03 daemon wiring drill: packages

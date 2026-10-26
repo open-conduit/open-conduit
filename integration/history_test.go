@@ -17,15 +17,15 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/internal/cli"
-	"github.com/alsiola/open-conduit/internal/cli/runview"
-	"github.com/alsiola/open-conduit/internal/config"
-	"github.com/alsiola/open-conduit/internal/tui"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/cli/runview"
+	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/tui"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // historyExecutor is a fake executor whose result is chosen per request. It

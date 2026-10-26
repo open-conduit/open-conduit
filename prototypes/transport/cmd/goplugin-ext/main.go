@@ -2,8 +2,8 @@
 package main
 
 import (
-	"github.com/alsiola/open-conduit/prototypes/transport/goplugin"
-	"github.com/alsiola/open-conduit/prototypes/transport/scenario"
+	"github.com/open-conduit/open-conduit/prototypes/transport/goplugin"
+	"github.com/open-conduit/open-conduit/prototypes/transport/scenario"
 )
 
 func main() { goplugin.Serve("goplugin-ext", scenario.Extension) }

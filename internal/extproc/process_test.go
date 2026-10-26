@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alsiola/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 func TestSanitizedEnvironment(t *testing.T) {

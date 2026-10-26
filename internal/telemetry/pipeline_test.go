@@ -11,8 +11,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/observability"
 )
 
 func record(name string, i int) observability.Record {

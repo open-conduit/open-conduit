@@ -8,9 +8,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extensions/introspection/host"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extensions/introspection/host"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Extension-originated reports (05-03). An adapter of the extension itself,

@@ -10,7 +10,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // MaxSize bounds configuration, secrets files and command secret output reads.

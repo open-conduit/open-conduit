@@ -8,10 +8,10 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	gh "github.com/alsiola/open-conduit/extensions/github"
-	"github.com/alsiola/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
+	"github.com/open-conduit/open-conduit/internal/config"
 )
 
 // githubSource is one registered GitHub extension entry: its ingress pair and

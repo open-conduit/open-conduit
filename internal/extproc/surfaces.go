@@ -9,11 +9,11 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/observability"
-	"github.com/alsiola/open-conduit/protocol"
-	"github.com/alsiola/open-conduit/protocol/jsonrpc"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
 )
 
 // Surfaces adapted in 07-03: validation, webhooks, resource providers,

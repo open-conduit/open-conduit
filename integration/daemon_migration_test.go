@@ -15,9 +15,9 @@ import (
 
 	_ "modernc.org/sqlite"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/extensions/github/githubtest"
-	"github.com/alsiola/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
+	"github.com/open-conduit/open-conduit/internal/cli"
 )
 
 // stop is a graceful SIGTERM stop (a drained switch, not a crash).

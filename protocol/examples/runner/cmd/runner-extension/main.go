@@ -8,8 +8,8 @@ import (
 	"os"
 	"sync/atomic"
 
-	"github.com/alsiola/open-conduit/protocol/examples/runner"
-	"github.com/alsiola/open-conduit/protocol/sdk"
+	"github.com/open-conduit/open-conduit/protocol/examples/runner"
+	"github.com/open-conduit/open-conduit/protocol/sdk"
 )
 
 func main() {

@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alsiola/open-conduit/extensions/slack"
+	"github.com/open-conduit/open-conduit/extensions/slack"
 )
 
 // Server is the fake. URL is the Web API base (a connection's api_url).

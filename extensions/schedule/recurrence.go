@@ -7,7 +7,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // RecurrenceKind names this package's RecurrenceFunc in the runtime's timer

@@ -12,16 +12,16 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/internal/extproc"
-	"github.com/alsiola/open-conduit/internal/runtime"
-	"github.com/alsiola/open-conduit/internal/storage/sqlite"
-	"github.com/alsiola/open-conduit/protocol"
-	"github.com/alsiola/open-conduit/protocol/examples/notes"
-	"github.com/alsiola/open-conduit/protocol/jsonrpc"
-	"github.com/alsiola/open-conduit/protocol/sdk"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/internal/extproc"
+	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol/examples/notes"
+	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
+	"github.com/open-conduit/open-conduit/protocol/sdk"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Example external extension binaries (07-02), built once per test binary.

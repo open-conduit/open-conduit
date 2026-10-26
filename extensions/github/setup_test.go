@@ -7,8 +7,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alsiola/open-conduit/extension"
-	gh "github.com/alsiola/open-conduit/extensions/github"
+	"github.com/open-conduit/open-conduit/extension"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
 )
 
 // host is a minimal non-interactive setup host.

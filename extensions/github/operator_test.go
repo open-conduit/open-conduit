@@ -5,9 +5,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alsiola/open-conduit/domain"
-	gh "github.com/alsiola/open-conduit/extensions/github"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // A manual claim (an operator core.manual Event keyed to the entry's issue)

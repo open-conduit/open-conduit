@@ -3,7 +3,7 @@ package main
 import (
 	"os"
 
-	"github.com/alsiola/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/cli"
 )
 
 var version = "dev"

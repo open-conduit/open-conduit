@@ -4,7 +4,7 @@ import (
 	"context"
 	"sync"
 
-	"github.com/alsiola/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/observability"
 )
 
 type Observer struct {

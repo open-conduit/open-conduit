@@ -8,11 +8,11 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/internal/certify"
-	"github.com/alsiola/open-conduit/internal/cli"
-	"github.com/alsiola/open-conduit/internal/extproc"
-	"github.com/alsiola/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/certify"
+	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/extproc"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // ExtensionOps implements `open-conduit extension …` (07-03) offline: the

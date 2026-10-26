@@ -6,8 +6,8 @@ import (
 	"sort"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Run-ended Events (05-02). Each finished run of a job is announced by one

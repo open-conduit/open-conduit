@@ -30,12 +30,12 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	sl "github.com/alsiola/open-conduit/extensions/slack"
-	"github.com/alsiola/open-conduit/protocol"
-	"github.com/alsiola/open-conduit/protocol/sdk"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	sl "github.com/open-conduit/open-conduit/extensions/slack"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol/sdk"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Name is the package's registration name: the first-party Slack name, so

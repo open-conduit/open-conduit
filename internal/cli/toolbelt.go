@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
+	"github.com/open-conduit/open-conduit/client"
 )
 
 const toolbeltHelp = `os — Open Conduit execution toolbelt (CLI transport)

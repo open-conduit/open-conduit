@@ -8,9 +8,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/observability"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // TelemetryOptions configures lifecycle instrumentation. Observer must not

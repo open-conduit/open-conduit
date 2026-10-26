@@ -18,7 +18,7 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 var idPattern = regexp.MustCompile(`^[a-f0-9]{64}$`)

@@ -1,4 +1,4 @@
-module github.com/alsiola/open-conduit
+module github.com/open-conduit/open-conduit
 
 go 1.24.2
 

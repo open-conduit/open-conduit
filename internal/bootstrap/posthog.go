@@ -8,10 +8,10 @@ import (
 	"sync"
 	"sync/atomic"
 
-	"github.com/alsiola/open-conduit/extensions/posthog"
-	"github.com/alsiola/open-conduit/internal/config"
-	"github.com/alsiola/open-conduit/internal/management"
-	"github.com/alsiola/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/extensions/posthog"
+	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/management"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
 // PostHog telemetry (06-01). An enabled scope's `posthog` entry sends that

@@ -9,7 +9,7 @@ import (
 	"io"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
+	"github.com/open-conduit/open-conduit/client"
 )
 
 // mcpProtocolVersion is the newest MCP revision this server speaks. A client

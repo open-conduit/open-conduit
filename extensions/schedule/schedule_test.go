@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	sc "github.com/alsiola/open-conduit/extensions/schedule"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 )
 
 // TestJobValidate ports v1 config/jobs_test.go TestJobValidate (run

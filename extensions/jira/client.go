@@ -16,7 +16,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alsiola/open-conduit/extensions/tracker"
+	"github.com/open-conduit/open-conduit/extensions/tracker"
 )
 
 // MarkProperty is the comment entity property that marks an agent's comment

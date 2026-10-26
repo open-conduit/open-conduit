@@ -3,8 +3,8 @@ package sqlite
 import (
 	"errors"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 func (t *transaction) Timer(id domain.ID) (domain.Timer, error) {

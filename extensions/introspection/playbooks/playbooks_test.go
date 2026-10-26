@@ -6,7 +6,7 @@ import (
 	"strings"
 	"testing"
 
-	is "github.com/alsiola/open-conduit/extensions/introspection"
+	is "github.com/open-conduit/open-conduit/extensions/introspection"
 )
 
 // Every introspection operation a playbook names is registered, and none

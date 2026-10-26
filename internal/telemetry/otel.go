@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/observability"
 	"go.opentelemetry.io/otel/attribute"
 	"go.opentelemetry.io/otel/codes"
 	otellog "go.opentelemetry.io/otel/log"
@@ -21,7 +21,7 @@ import (
 )
 
 // Scope is the OpenTelemetry instrumentation scope name.
-const Scope = "github.com/alsiola/open-conduit"
+const Scope = "github.com/open-conduit/open-conduit"
 
 // OTelOptions supplies host-configured providers. The host (bootstrap) owns
 // SDK setup and exporters, which come from extensions; nil selects no-op.

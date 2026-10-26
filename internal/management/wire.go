@@ -5,7 +5,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // Wire types use snake_case B02 names. Sequences, revisions, epochs and

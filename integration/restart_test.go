@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // Regressions for defects found by the 02-09 kill drills.

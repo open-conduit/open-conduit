@@ -9,8 +9,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alsiola/open-conduit/internal/bootstrap"
-	"github.com/alsiola/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/bootstrap"
+	"github.com/open-conduit/open-conduit/internal/cli"
 )
 
 // userDocs are the user-facing documents whose examples must work as

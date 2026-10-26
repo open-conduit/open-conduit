@@ -15,9 +15,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/prototypes/transport/goplugin"
-	"github.com/alsiola/open-conduit/prototypes/transport/jsonrpc"
-	"github.com/alsiola/open-conduit/prototypes/transport/scenario"
+	"github.com/open-conduit/open-conduit/prototypes/transport/goplugin"
+	"github.com/open-conduit/open-conduit/prototypes/transport/jsonrpc"
+	"github.com/open-conduit/open-conduit/prototypes/transport/scenario"
 )
 
 var binaries = map[string]string{}

@@ -7,8 +7,8 @@ import (
 	"os"
 	"sync/atomic"
 
-	shellext "github.com/alsiola/open-conduit/packages/shell"
-	"github.com/alsiola/open-conduit/protocol/sdk"
+	shellext "github.com/open-conduit/open-conduit/packages/shell"
+	"github.com/open-conduit/open-conduit/protocol/sdk"
 )
 
 func main() {

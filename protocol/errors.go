@@ -5,8 +5,8 @@ import (
 	"errors"
 	"time"
 
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Error is an authored protocol error: a stable code and a short,

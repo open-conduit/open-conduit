@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/alsiola/open-conduit/internal/runtime"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 const authNamespace = "core.management.auth"

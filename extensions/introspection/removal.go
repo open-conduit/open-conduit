@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Removal policy for existing Work (05-03). Removing an `introspection`

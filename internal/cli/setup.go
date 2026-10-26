@@ -18,8 +18,8 @@ import (
 	"strconv"
 	"strings"
 
-	"github.com/alsiola/open-conduit/extension"
 	"github.com/charmbracelet/x/term"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Setup (03-05; extension-owned since 04-02): `init <type>` hosts the

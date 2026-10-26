@@ -9,10 +9,10 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/extension"
-	"github.com/alsiola/open-conduit/extensions/tracker"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/tracker"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // The agent-facing code-host tools: Open Supervisor's `agent pr …` and

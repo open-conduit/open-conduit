@@ -7,9 +7,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/internal/runtime"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 func linkedClaim(t *testing.T, db storage.Store, now time.Time, work, trigger domain.ID) domain.LeaseRef {

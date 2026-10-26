@@ -13,13 +13,13 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	is "github.com/alsiola/open-conduit/extensions/introspection"
-	"github.com/alsiola/open-conduit/extensions/introspection/host"
-	"github.com/alsiola/open-conduit/extensions/posthog"
-	"github.com/alsiola/open-conduit/internal/config"
-	"github.com/alsiola/open-conduit/internal/runtime"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	is "github.com/open-conduit/open-conduit/extensions/introspection"
+	"github.com/open-conduit/open-conduit/extensions/introspection/host"
+	"github.com/open-conduit/open-conduit/extensions/posthog"
+	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Introspection (03-08 reporting; 05-03 sweep, triage, fixes, host watch and

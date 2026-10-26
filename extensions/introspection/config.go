@@ -10,7 +10,7 @@ import (
 
 	"github.com/robfig/cron/v3"
 
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // DefaultNotes is the coordination KV namespace of the agents' notes the

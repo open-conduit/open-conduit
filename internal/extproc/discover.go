@@ -26,8 +26,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/protocol"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Dir is the install location under the configuration directory (beside

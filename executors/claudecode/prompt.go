@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // PluginName is the plugin the playbooks are loaded as, and so the prefix of

@@ -12,8 +12,8 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/alsiola/open-conduit/protocol/examples/notes"
-	"github.com/alsiola/open-conduit/protocol/sdk"
+	"github.com/open-conduit/open-conduit/protocol/examples/notes"
+	"github.com/open-conduit/open-conduit/protocol/sdk"
 )
 
 func main() {

@@ -9,7 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/alsiola/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/cli"
 )
 
 // The full-screen config editor (06-01, v1's schema-driven forms editor):

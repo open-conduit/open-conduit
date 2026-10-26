@@ -7,7 +7,7 @@ import (
 	"strings"
 	"sync"
 
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // Delivery is a code-host webhook delivery as the composition reads it from

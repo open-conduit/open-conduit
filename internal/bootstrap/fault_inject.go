@@ -11,8 +11,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // The kill-drill crash injector exists only in binaries built with the

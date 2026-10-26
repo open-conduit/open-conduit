@@ -4,10 +4,10 @@ import (
 	"context"
 	"errors"
 
-	"github.com/alsiola/open-conduit/domain"
-	"github.com/alsiola/open-conduit/protocol"
-	"github.com/alsiola/open-conduit/protocol/jsonrpc"
-	"github.com/alsiola/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Host is the extension's client for the scoped extension-to-host methods.

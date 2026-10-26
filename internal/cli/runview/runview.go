@@ -9,7 +9,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
+	"github.com/open-conduit/open-conduit/client"
 )
 
 // LogArtifact selects the run's log: the first text artifact, else the first.

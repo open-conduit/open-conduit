@@ -4,9 +4,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/alsiola/open-conduit/conformance"
-	"github.com/alsiola/open-conduit/conformance/reference"
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/conformance"
+	"github.com/open-conduit/open-conduit/conformance/reference"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 func TestReferenceRuntime(t *testing.T) { conformance.RunRuntime(t, reference.NewRuntime) }

@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/observability"
 )
 
 func TestConfig(t *testing.T) {

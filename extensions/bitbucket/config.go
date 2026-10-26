@@ -20,7 +20,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/extensions/tracker"
+	"github.com/open-conduit/open-conduit/extensions/tracker"
 )
 
 // Type is the registered connection, extension and route handler name.

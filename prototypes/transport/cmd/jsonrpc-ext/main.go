@@ -2,8 +2,8 @@
 package main
 
 import (
-	"github.com/alsiola/open-conduit/prototypes/transport/jsonrpc"
-	"github.com/alsiola/open-conduit/prototypes/transport/scenario"
+	"github.com/open-conduit/open-conduit/prototypes/transport/jsonrpc"
+	"github.com/open-conduit/open-conduit/prototypes/transport/scenario"
 )
 
 func main() { jsonrpc.Serve("jsonrpc-ext", scenario.Extension) }

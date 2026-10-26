@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"os"
 
-	slackext "github.com/alsiola/open-conduit/packages/slack"
-	"github.com/alsiola/open-conduit/protocol/sdk"
+	slackext "github.com/open-conduit/open-conduit/packages/slack"
+	"github.com/open-conduit/open-conduit/protocol/sdk"
 )
 
 func main() {

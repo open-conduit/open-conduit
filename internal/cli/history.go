@@ -7,8 +7,8 @@ import (
 	"text/tabwriter"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/internal/cli/runview"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/internal/cli/runview"
 )
 
 var runFilters = []string{"scope-id", "work-id", "state", "executor-binding", "executor", "work-kind", "outcome"}

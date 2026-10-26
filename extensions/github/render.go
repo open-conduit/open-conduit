@@ -6,7 +6,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // RenderEvent renders one GitHub Event the way an agent reads it at the

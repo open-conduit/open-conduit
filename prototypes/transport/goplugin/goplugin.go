@@ -22,7 +22,7 @@ import (
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/types/known/wrapperspb"
 
-	"github.com/alsiola/open-conduit/prototypes/transport/scenario"
+	"github.com/open-conduit/open-conduit/prototypes/transport/scenario"
 )
 
 const hostBrokerID = 1

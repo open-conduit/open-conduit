@@ -19,8 +19,8 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/internal/cli/runview"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/internal/cli/runview"
 )
 
 // Source is the subset of the management client the view needs.

@@ -18,8 +18,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	"github.com/alsiola/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/internal/cli"
 )
 
 // The 02-09 core gate drives the real `open-conduit serve` daemon as a child

@@ -19,8 +19,8 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/alsiola/open-conduit/protocol"
-	"github.com/alsiola/open-conduit/protocol/jsonrpc"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
 )
 
 // ErrRefused wraps a deterministic handshake refusal: no common protocol

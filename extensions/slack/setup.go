@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Setup (04-02) is the Slack extension's `open-conduit init slack`, behind

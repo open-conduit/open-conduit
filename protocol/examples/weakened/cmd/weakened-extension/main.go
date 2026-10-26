@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/alsiola/open-conduit/protocol/examples/weakened"
+	"github.com/open-conduit/open-conduit/protocol/examples/weakened"
 )
 
 func main() {

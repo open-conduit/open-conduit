@@ -6,7 +6,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Playbook is the tracker work-issue playbook skill (Claude Code plugin).

@@ -7,7 +7,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Socket Mode receiver. The app opens an outbound WebSocket with its

@@ -24,7 +24,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/alsiola/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/observability"
 )
 
 // Type is the registered connection and extension name.

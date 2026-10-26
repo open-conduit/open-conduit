@@ -10,8 +10,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/alsiola/open-conduit/client"
-	is "github.com/alsiola/open-conduit/extensions/introspection"
+	"github.com/open-conduit/open-conduit/client"
+	is "github.com/open-conduit/open-conduit/extensions/introspection"
 )
 
 // Issue reporting through public extension hooks (03-08), on the real

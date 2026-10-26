@@ -13,7 +13,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/alsiola/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // ErrSignature means a delivery failed HMAC verification. Its body is never

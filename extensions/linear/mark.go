@@ -4,7 +4,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/alsiola/open-conduit/extensions/tracker"
+	"github.com/open-conduit/open-conduit/extensions/tracker"
 )
 
 // Linear keeps Markdown but drops HTML comments, so an agent's comment is
