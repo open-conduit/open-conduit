@@ -55,7 +55,7 @@ The code is [`internal/migrate`](../../internal/migrate). It has its own boundar
 | --- | --- |
 | `settings.maxTurns`, `maxOpenPerProject`, `reconcileMinutes` | `settings.concurrency`, `admission_limit` (recorded, not yet enforced), `reconcile_seconds`. Only values that differ from the defaults are written. |
 | `settings.maxAttempts` (3) | `retry_delays_seconds`: N attempts become N−1 delays (300 s, 600 s, …); 3 is the default `[300,600]`. Jobs keep v1's no-retry rule. |
-| `settings.port`, `tunnel` | Serve flags (`--webhook-addr`, `--tunnel …`), reported as an action. With a tunnel, entries get a fresh `webhook_secret` and `manage_webhook`. |
+| `settings.port`, `tunnel` | `settings.webhooks` (`addr`, `tunnel`, …), reported as an action. With a tunnel, entries get a fresh `webhook_secret` and `manage_webhook`. |
 | `settings.agent` / project `agent` (a claude-code connection) | Each scope's `claude-code` binding config: `binary` (with `~` expanded), `model`, `permission_mode`, `extra_args`, plus `handoff_minutes` and `handoff_share`. `useApiKey` becomes `pass_env: [ANTHROPIC_API_KEY]`. |
 | `settings.labels`, project and source `labels` | The entry's `labels`, written only when they differ from v1's defaults (which are Open Conduit's defaults). For Jira, spaces become dashes. `unrouted` is not projected (reported). |
 | `settings.branch`, project `branch` | GitHub: `{key}` → `{number}`, giving the same branch names. Trackers: the default becomes 06-01's `agent/{key}` (`agent/issue/ENG-12`). A custom tracker template is kept, with a warning that `{key}` is now `issue/KEY`. |

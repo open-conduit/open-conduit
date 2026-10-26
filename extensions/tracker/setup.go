@@ -167,7 +167,7 @@ func (g ScopeSpec) Result() (extension.SetupResult, error) {
 		Scope:       scope,
 		Summary:     summary,
 		Next: []string{
-			"open-conduit serve                 start the daemon (reconcile every 15 minutes; add --webhook-addr for webhooks)",
+			"open-conduit serve                 start the daemon (reconcile every 15 minutes; store settings.webhooks for webhooks)",
 			"open-conduit doctor --check-secrets  check the credential privately and " + g.Type + " access",
 			"open-conduit tui                   watch it work"},
 	}, nil

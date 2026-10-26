@@ -146,7 +146,7 @@ func (g GitHubScope) Result() (extension.SetupResult, error) {
 			fmt.Sprintf("credential %s connection, token %s:…", g.Connection, scheme),
 			"workspace  " + workspace, fmt.Sprintf("holds      %t", g.Holds)},
 		Next: []string{
-			"open-conduit serve                 start the daemon (reconcile every 15 minutes; add --webhook-addr for webhooks)",
+			"open-conduit serve                 start the daemon (reconcile every 15 minutes; store settings.webhooks for webhooks)",
 			"open-conduit doctor --check-secrets  check the credential privately and GitHub access",
 			"open-conduit tui                   watch it work"},
 	}, nil

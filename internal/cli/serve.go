@@ -14,7 +14,8 @@ type ServeRequest struct {
 	PollInterval, LeaseDuration, RetentionInterval          time.Duration
 	// SweepInterval paces the spare-workspace sweep (default 6h).
 	SweepInterval time.Duration
-	// WebhookAddr enables the webhook listener; Tunnel* expose it.
+	// WebhookAddr enables the webhook listener; Tunnel* expose it. Empty
+	// values fall back to the config's settings.webhooks.
 	WebhookAddr                                                   string
 	TunnelKind, TunnelBinary, TunnelDomain, TunnelName, PublicURL string
 	TunnelHostname                                                string
@@ -47,9 +48,6 @@ func (o *operator) serve(args []string) int {
 	case "", "ngrok", "cloudflared", "static":
 	default:
 		return usageError(o.errOut, "--tunnel is ngrok, cloudflared or static")
-	}
-	if (fs.get("tunnel") != "" || fs.get("public-url") != "") && fs.get("webhook-addr") == "" && !*noTunnel {
-		return usageError(o.errOut, "a tunnel exposes the webhook listener: add --webhook-addr (for example 127.0.0.1:8787)")
 	}
 	if o.env.Serve == nil {
 		fmt.Fprintln(o.errOut, "open-conduit: serve is not available in this binary")

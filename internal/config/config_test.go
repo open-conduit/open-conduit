@@ -578,3 +578,70 @@ func TestBindingTimeout(t *testing.T) {
 		}
 	}
 }
+
+func TestWebhookSettings(t *testing.T) {
+	with := func(hooks any) (*Snapshot, error) {
+		m := generic(t, example(t, "git-scope"))
+		settings, _ := m["settings"].(map[string]any)
+		if settings == nil {
+			settings = map[string]any{}
+			m["settings"] = settings
+		}
+		settings["webhooks"] = hooks
+		return Validate(encode(t, m), registry())
+	}
+	plain, err := Validate(example(t, "git-scope"), registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plain.Settings.Webhooks != (Webhooks{}) || strings.Contains(string(plain.Normalized), "webhooks") {
+		t.Fatalf("no stored listener: %+v %s", plain.Settings.Webhooks, plain.Normalized)
+	}
+	snap, err := with(map[string]any{"addr": "127.0.0.1:8787", "tunnel": "cloudflared", "tunnel_name": "oc", "tunnel_hostname": "hooks.example.com"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Webhooks{Addr: "127.0.0.1:8787", Tunnel: "cloudflared", TunnelName: "oc", TunnelHostname: "hooks.example.com"}
+	if snap.Settings.Webhooks != want || snap.Hash == plain.Hash {
+		t.Fatalf("stored listener %+v", snap.Settings.Webhooks)
+	}
+	// The normalized form (what a committed generation restores) keeps it.
+	again, err := Validate(snap.Normalized, registry())
+	if err != nil || again.Settings.Webhooks != want || again.Hash != snap.Hash {
+		t.Fatalf("round trip %+v %v", again, err)
+	}
+	for _, ok := range []map[string]any{
+		{"addr": "127.0.0.1:0"},
+		{"addr": ":8787", "tunnel": "ngrok", "tunnel_domain": "hooks.ngrok.app"},
+		{"addr": "127.0.0.1:8787", "public_url": "https://hooks.example.com"},
+		{"addr": "127.0.0.1:8787", "tunnel": "static", "public_url": "http://box.tail.ts.net"},
+	} {
+		if _, err := with(ok); err != nil {
+			t.Fatalf("%v rejected: %v", ok, err)
+		}
+	}
+	for _, c := range []struct {
+		hooks any
+		path  string
+	}{
+		{map[string]any{"tunnel": "ngrok"}, "settings/webhooks/addr"},
+		{map[string]any{"addr": "8787"}, "settings/webhooks/addr"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "frp"}, "settings/webhooks/tunnel"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "cloudflared", "tunnel_domain": "x"}, "settings/webhooks/tunnel_domain"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "cloudflared", "tunnel_name": "oc"}, "settings/webhooks/tunnel_name"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "ngrok", "tunnel_hostname": "h"}, "settings/webhooks/tunnel_name"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "ngrok", "public_url": "https://x"}, "settings/webhooks/public_url"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "static"}, "settings/webhooks/public_url"},
+		{map[string]any{"addr": "127.0.0.1:8787", "public_url": "https://u:p@x"}, "settings/webhooks/public_url"},
+		{map[string]any{"addr": "127.0.0.1:8787", "port": 8787}, "settings/webhooks/port"},
+		{"127.0.0.1:8787", "settings/webhooks"},
+	} {
+		_, err := with(c.hooks)
+		if err == nil {
+			t.Fatalf("%v accepted", c.hooks)
+		}
+		if d := diagnostics(t, err); len(d) != 1 || d[0].Path != c.path {
+			t.Fatalf("%v: %v", c.hooks, d)
+		}
+	}
+}

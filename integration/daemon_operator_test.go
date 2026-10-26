@@ -354,6 +354,44 @@ func TestDaemonGitHubWebhookListener(t *testing.T) {
 	})
 }
 
+// TestDaemonStoredWebhookSettings: a bare serve starts the listener and
+// tunnel the config stores in settings.webhooks, and doctor says so; on the
+// next start a tunnel flag overrides the stored tunnel while the stored
+// address still applies.
+func TestDaemonStoredWebhookSettings(t *testing.T) {
+	fake := githubtest.New("octo/widgets", "tok")
+	defer fake.Close()
+	t.Setenv("OC_TEST_GITHUB_TOKEN", "tok")
+	t.Setenv("OC_TEST_HOOK_SECRET", "hook-secret")
+	d := newDrill(t)
+	var cfg map[string]any
+	_ = json.Unmarshal(webhookConfig(fake.URL), &cfg)
+	cfg["settings"].(map[string]any)["webhooks"] = map[string]any{"addr": "127.0.0.1:0", "public_url": "https://stored.example.test"}
+	b, _ := json.Marshal(cfg)
+	if err := os.WriteFile(d.config, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	hooked := func(what, detail, url string) {
+		t.Helper()
+		d.until(what, 30*time.Second, func() bool {
+			r, err := d.c.Doctor(ctx, false)
+			if err != nil {
+				return false
+			}
+			c := check(r, "webhooks")
+			hooks := fake.Hooks()
+			return c.Code == "listening" && strings.Contains(c.Detail, detail) && len(hooks) == 1 && hooks[0].URL == url
+		})
+	}
+	d.start("")
+	hooked("stored listener and tunnel", "(from settings.webhooks); public https://stored.example.test (static, from settings.webhooks)", "https://stored.example.test/github/eng/widgets")
+	d.stop()
+	d.extra = []string{"--public-url", "https://flag.example.test"}
+	d.start("")
+	hooked("flag tunnel over the stored address", "(from settings.webhooks); public https://flag.example.test (static, from serve flags)", "https://flag.example.test/github/eng/widgets")
+}
+
 // TestDaemonGitHubDryRun: serve --dry-run makes no GitHub writes (labels,
 // comments, reactions, hooks) while issues are still claimed and worked, and
 // doctor says so.
