@@ -118,7 +118,7 @@ The connection's identity needs, on each repository: read access to issues, pull
 
 ## Behaviour worth telling the owner
 
-- **What gets claimed.** An open issue is claimed when it lacks the claimed label (`agent-in-progress`) and every skip label (`backlog`, `human`, `milestone`, `later`), and carries a required label when any are configured.
+- **What gets claimed.** An open issue is claimed when it lacks the claimed label (`agent-in-progress`) and every skip label (`backlog`, `human`, `milestone`, `later`), and carries a required label when any are configured. When an issue's work completes and the issue is closed, the claimed label comes off; reopening the issue claims it again.
 - **Held issues.** With the `held` route, a `scheduled` issue is claimed but not worked until its time comes or what it waits for happens; it keeps the `scheduled` label until then.
 - **What the agents do.** They label and comment on issues and open PRs as the identity whose credentials the connection uses, unless the connection has a bot App.
 - **Workspaces.** Each issue gets its own worktree on its own branch, kept across turns and removed when the issue's work completes; the branch always stays.
