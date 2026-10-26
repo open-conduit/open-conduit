@@ -1,0 +1,46 @@
+# Changelog
+
+## 1.0.0 (2026-10-26)
+
+### Features
+
+* **claudecode:** port Claude Code execution with MCP toolbelt and private continuity ([c891215](https://github.com/open-conduit/open-conduit/commit/c8912153a359212b4cb47d292501602ef076e387))
+* **contracts:** define configuration secrets and local management ([d592e45](https://github.com/open-conduit/open-conduit/commit/d592e45e8ffcb1ebc5f5c9230d0efc3b05d6c0af))
+* **contracts:** define extension and observability interfaces ([f05020b](https://github.com/open-conduit/open-conduit/commit/f05020badaaff98a82130298c371183e43d748c8))
+* **contracts:** specify routing waits and recovery with executable scenarios ([7771e72](https://github.com/open-conduit/open-conduit/commit/7771e72a147ded2efcf44d5d5266e1ccd0d94267))
+* **daemon:** compose open-conduit serve and close the core kill/restart gate ([c56a2dd](https://github.com/open-conduit/open-conduit/commit/c56a2dd432e69569c3d689a9b349b08582653058))
+* establish primitive and transactional storage contracts ([7e0e65f](https://github.com/open-conduit/open-conduit/commit/7e0e65f810e7a442ec373884bf0dd78698e771b2))
+* **executors:** ship restart-safe shell executor with the os CLI toolbelt ([bd4964f](https://github.com/open-conduit/open-conduit/commit/bd4964ff7b3c2669dd6bd63891f1b5ec232fc7eb))
+* **extensions:** wire installed extension packages into the daemon, package and certify them, and round-trip Slack and shell through the subprocess boundary ([1162b14](https://github.com/open-conduit/open-conduit/commit/1162b14f100f1301cb2570bfd50dbe5191178325))
+* **extproc:** load extension subprocesses with a scoped host runtime, payload and KV schema evolution and an example extension and executor ([fabc908](https://github.com/open-conduit/open-conduit/commit/fabc908ee087854fc481879ca2286576dd0eca5f))
+* **git:** add optional workspace resource contract and Git workspace provider ([ee1c181](https://github.com/open-conduit/open-conduit/commit/ee1c181abd0fc852410a03a0ec0736d81f34e274))
+* **github:** port engineering tools, translated waits, scheduled holds and playbooks ([38ec849](https://github.com/open-conduit/open-conduit/commit/38ec8492e1f9a57c0ccb1a38f913afcc12a49c7e))
+* **github:** port GitHub push/reconcile ingress, claim routing and projections ([56f9d04](https://github.com/open-conduit/open-conduit/commit/56f9d042d4fdc9a80ff1ded427e3b9069551ec8a))
+* **github:** wait for the checks the base branch requires before reporting a pass ([2054a3d](https://github.com/open-conduit/open-conduit/commit/2054a3d2e2787396ab265e9772943ddd1e765def)), closes [#64](https://github.com/open-conduit/open-conduit/issues/64)
+* **integrations:** port Linear, Jira, Bitbucket and PostHog onto a shared tracker kit with adapters, route explanation and a config editor ([1586863](https://github.com/open-conduit/open-conduit/commit/1586863795d3eb8a9be1b0ad4dbeb8580e7ed8d1))
+* **introspection:** report issues through a translated toolbelt emission with a user-bound route and manual triage ([4090979](https://github.com/open-conduit/open-conduit/commit/409097949f018d9d19b04bbb9bc257c47d097631))
+* **introspection:** schedule sweep and triage, aggregate evidence and trace fix work to reports through cited causation ([a4e7c39](https://github.com/open-conduit/open-conduit/commit/a4e7c39d00c3e37b686b57b9b62e577080255cfa))
+* **migrate:** convert Open Supervisor configs and add offline backup, restore, state check and credential recovery with a migration rehearsal ([778944e](https://github.com/open-conduit/open-conduit/commit/778944e8399d9e4788e3882d0eb0fe29a9f8a688))
+* **observability:** add lifecycle telemetry, unified run history and doctor ([16904c8](https://github.com/open-conduit/open-conduit/commit/16904c89fc0da098b69f0607c3b76627dcf1da02))
+* **operator:** deliver setup, doctor, operator controls and webhook exposure ([66d26c6](https://github.com/open-conduit/open-conduit/commit/66d26c6554aeb01172d23ddd3b85447dc3a9e927))
+* **protocol:** extract the extension subprocess protocol from shipped workloads with a transport prototype, manifest and method catalogue ([ab678c2](https://github.com/open-conduit/open-conduit/commit/ab678c2b148bf3289d0aae0cc68e226242c53eac))
+* **runtime:** implement durable timers and event-based waits ([2ecb11f](https://github.com/open-conduit/open-conduit/commit/2ecb11f7c15e92da7490005bdd8567d6e4793486))
+* **runtime:** implement ordered routing and work lifecycle ([5a72e1b](https://github.com/open-conduit/open-conduit/commit/5a72e1b1e75f9e60038a57b70118ac42cc6cadd0))
+* **runtime:** implement toolbelt authority and local management ([afca4bd](https://github.com/open-conduit/open-conduit/commit/afca4bd6fea15847f15f1f89fd9f700b1057d6fe))
+* **runtime:** persist event acceptance and reconciliation ([4dcc936](https://github.com/open-conduit/open-conduit/commit/4dcc936fea2f8290d963630ca18f262652665c9f))
+* **runtime:** schedule fenced executions and recovery ([dc19362](https://github.com/open-conduit/open-conduit/commit/dc193623b33fe0fe9bf8bc79a46a86ee9b62398a))
+* **schedule:** port job runs onto executions with legacy compatibility, job waits and shared history ([27a840c](https://github.com/open-conduit/open-conduit/commit/27a840c5afce5ebc04713f88530fba79135bcb43))
+* **schedule:** port schedule definitions, six-hour catch-up and one-pending-run jobs ([9268d26](https://github.com/open-conduit/open-conduit/commit/9268d26f91cb4b6e4e7b3790403b268a067658ac))
+* **setup:** make setup extension-owned with init <type> and add Slack setup ([e823602](https://github.com/open-conduit/open-conduit/commit/e823602494b172c2442ead01d7ff7833d31ec796))
+* **slack:** add Slack push/reconcile ingress, conversations and marked replies ([f5591e3](https://github.com/open-conduit/open-conduit/commit/f5591e31bf7f837ece3076d85f511674273b4a84))
+* **slack:** bind the workspace-free support agent and resolve generic inject acknowledgement ([81fa948](https://github.com/open-conduit/open-conduit/commit/81fa948b72d8fadf9581710e3c1168146cbafc88))
+* **storage:** implement SQLite artifacts and verified backups ([71944cd](https://github.com/open-conduit/open-conduit/commit/71944cd552e7b83492de8aa263cf0ff6173f8a24))
+* **workspaces:** refuse workspaces on a full disk and sweep spare ones ([aa6908a](https://github.com/open-conduit/open-conduit/commit/aa6908addad399fb6697881c08400c8638fd941d)), closes [#63](https://github.com/open-conduit/open-conduit/issues/63)
+
+### Bug Fixes
+
+* **claudecode:** read the rest of a finished turn's output before settling it ([04ff2c4](https://github.com/open-conduit/open-conduit/commit/04ff2c41ba428698d567be2af66d1e8bacc2c7ff))
+* **github:** survive refused check runs and ignore bodiless reviews (03-06) ([a6e753c](https://github.com/open-conduit/open-conduit/commit/a6e753c31ea11348636e4977d0e88437cf428021))
+* **playbooks:** keep body files out of the checkout, defer scratch folders to the project and add design rules ([17eed5c](https://github.com/open-conduit/open-conduit/commit/17eed5c4110c9105c686d3307ab3beafea27ec53)), closes [#54](https://github.com/open-conduit/open-conduit/issues/54)
+* **runtime:** consume proved injections with the turn (03-06 parity evidence) ([17435a4](https://github.com/open-conduit/open-conduit/commit/17435a4cfc501a2c38b663650069600081a703a6))
+* **sqlite:** wait out competing writers when switching a new database to WAL ([80c2042](https://github.com/open-conduit/open-conduit/commit/80c204260325d69495fe6fb28bb2e0eb62c45842))
