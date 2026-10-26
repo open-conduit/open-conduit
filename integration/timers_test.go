@@ -9,6 +9,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
@@ -229,23 +230,31 @@ type timerCrashTx struct {
 
 func (t timerCrashTx) FireTimer(id domain.ID, revision domain.Revision, next *domain.Timer) error {
 	if t.phase == "between" {
-		fmt.Println("staged")
-		select {}
+		crashAtTimerBoundary()
 	}
 	err := t.Tx.FireTimer(id, revision, next)
 	if err == nil && t.phase == "staged" {
-		fmt.Println("staged")
-		select {}
+		crashAtTimerBoundary()
 	}
 	return err
 }
 func (s timerCrashStore) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
 	err := s.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(timerCrashTx{tx, s.phase}) })
 	if err == nil && s.phase == "committed" {
-		fmt.Println("staged")
-		select {}
+		crashAtTimerBoundary()
 	}
 	return err
+}
+
+// crashAtTimerBoundary reports the boundary to the parent and SIGKILLs the
+// helper there. Parking in `select {}` instead let the Go runtime find every
+// goroutine asleep and exit with a deadlock fatal before the parent's kill.
+func crashAtTimerBoundary() {
+	fmt.Println("staged")
+	_ = syscall.Kill(os.Getpid(), syscall.SIGKILL)
+	for {
+		time.Sleep(time.Hour)
+	}
 }
 func TestDurableTimerCrashHelper(t *testing.T) {
 	if os.Getenv("CONDUIT_TIMER_HELPER") == "" {
@@ -298,10 +307,12 @@ func TestDurableTimerCrashAtomicFireAndRearm(t *testing.T) {
 			case <-time.After(10 * time.Second):
 				t.Fatal("helper never reached boundary")
 			}
-			if err = cmd.Process.Kill(); err != nil {
-				t.Fatal(err)
+			// The helper must die by its own SIGKILL at the boundary, not by
+			// any other exit (such as a runtime fatal) on the way there.
+			var exit *exec.ExitError
+			if err = cmd.Wait(); !errors.As(err, &exit) || exit.Sys().(syscall.WaitStatus).Signal() != syscall.SIGKILL {
+				t.Fatalf("helper was not killed at the %s boundary: %v", phase, err)
 			}
-			_ = cmd.Wait()
 			db, err = sqlite.Open(ctx, path)
 			if err != nil {
 				t.Fatal(err)

@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/url"
 	"os"
@@ -449,13 +450,21 @@ func TestDaemonKillDrills(t *testing.T) {
 		// beforeKill drives the flow up to the fault; afterRestart finishes it.
 		trigger func(d *drill) client.Event
 	}
+	// submitThroughKill submits the root Event to a daemon armed at a
+	// boundary that the submission itself drives. The accept commits before
+	// the response, and the host loop routes and claims asynchronously, so a
+	// claim (or later) fault may SIGKILL the daemon before the response is
+	// written. Only a transport failure is tolerated (d.killed then proves
+	// the fault killed the daemon); an API error answer fails the drill. The
+	// client retries with the same idempotency key after restart.
 	submitThroughKill := func(typ string) func(d *drill) client.Event {
 		return func(d *drill) client.Event {
 			e, err := d.submit(typ)
-			if err == nil {
-				return e
+			var apiErr *client.Error
+			if errors.As(err, &apiErr) {
+				d.t.Fatalf("submission refused before the fault: %v", err)
 			}
-			return client.Event{} // request died with the daemon; retried after restart
+			return e
 		}
 	}
 	submit := func(typ string) func(d *drill) client.Event {
@@ -475,10 +484,10 @@ func TestDaemonKillDrills(t *testing.T) {
 	scenarios := []scenario{
 		{"accept", "drill.event", "drill.event", "woken by drill.reply", submitThroughKill("drill.event")},
 		{"route", "drill.event", "drill.event", "woken by drill.reply", submitThroughKill("drill.event")},
-		{"claim", "", "drill.event", "woken by drill.reply", submit("drill.event")},
-		{"wait", "", "drill.event", "woken by drill.reply", submit("drill.event")},
+		{"claim", "", "drill.event", "woken by drill.reply", submitThroughKill("drill.event")},
+		{"wait", "", "drill.event", "woken by drill.reply", submitThroughKill("drill.event")},
 		{"outcome", "", "drill.event", "woken by drill.reply", wakeThroughKill},
-		{"timer", "core.wait.timeout", "drill.timer", "woken by core.wait.timeout", submit("drill.timer")},
+		{"timer", "core.wait.timeout", "drill.timer", "woken by core.wait.timeout", submitThroughKill("drill.timer")},
 	}
 	for _, s := range scenarios {
 		for _, phase := range []string{"before", "after"} {

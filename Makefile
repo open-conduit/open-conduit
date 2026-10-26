@@ -4,6 +4,9 @@ CONFIG_PYTHON ?= .venv-contracts/bin/python
 VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short HEAD)
 LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT)
+# Per-package test timeout. The integration package (real daemon drills) takes
+# about 8 minutes on hosted runners under -race, close to go test's 10m default.
+TEST_TIMEOUT ?= 20m
 
 .PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check check cross-build smoke smoke-run drill protocol-prototype packages certify release-snapshot
 
@@ -23,7 +26,7 @@ vet:
 	$(GO) vet -tags faultinject ./internal/bootstrap ./cmd/open-conduit
 
 test:
-	$(GO) test -race ./...
+	$(GO) test -race -timeout $(TEST_TIMEOUT) ./...
 
 boundaries:
 	$(GO) run ./scripts/check-boundaries
@@ -40,7 +43,7 @@ config-check:
 # offline validation (what config check runs), every open-conduit command
 # shown is in the help and every make target shown is in this Makefile.
 docs-check:
-	$(GO) test -count=1 -run 'TestDocs' ./integration
+	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -run 'TestDocs' ./integration
 
 check: fmt-check vet test boundaries config-check docs-check build smoke
 
@@ -72,13 +75,13 @@ cross-build:
 
 # Stage 02 gate evidence: real daemon kill/restart drills (also part of test).
 drill:
-	$(GO) test -race -count=1 -v -run 'TestDaemon|TestServeCommand|TestToolbeltTypeOnlyWait|TestDeclarationSurvivesRecovery' ./integration
+	$(GO) test -race -timeout $(TEST_TIMEOUT) -count=1 -v -run 'TestDaemon|TestServeCommand|TestToolbeltTypeOnlyWait|TestDeclarationSurvivesRecovery' ./integration
 
 # 07-01 transport evidence: JSON-RPC over stdio versus go-plugin/gRPC on one
 # workload. A separate module keeps go-plugin and gRPC out of go.mod; it
 # downloads those modules on first run, so it is not part of check.
 protocol-prototype:
-	cd prototypes/transport && $(GO) test -count=1 -v ./...
+	cd prototypes/transport && $(GO) test -timeout $(TEST_TIMEOUT) -count=1 -v ./...
 
 # 07-03 extension packages: each first-party subprocess package and example
 # as an installable directory (manifest, binary, certification fixture).
@@ -103,7 +106,7 @@ certify: build packages
 	@set -eu; for name in slack shell notes runner; do \
 		bin/open-conduit extension certify $(PACKAGES_DIR)/$$name --report $(PACKAGES_DIR)/$$name.certification.json; \
 	done
-	$(GO) test -count=1 -v -run 'TestCertification' ./integration
+	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -v -run 'TestCertification' ./integration
 
 # 09-03 release packaging without publishing: GoReleaser --snapshot builds
 # every platform's archive, the checksums and the Homebrew cask into
