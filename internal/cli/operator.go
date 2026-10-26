@@ -43,6 +43,13 @@ type Env struct {
 	// `init <type>` hosts; only the open-conduit entrypoint supplies them,
 	// so this package never imports an extension.
 	Setups []extension.Setup
+	// Adapters is the registered integrations' catalog (`adapters`, the
+	// config editor); only the open-conduit entrypoint supplies it.
+	Adapters func() []Adapter
+	// EditConfig runs the full-screen config editor and reports whether it
+	// saved; only the open-conduit entrypoint supplies it (the os binary
+	// carries no terminal UI).
+	EditConfig func(EditRequest) (bool, error)
 	// OpenURL, LookPath and RunCommand replace the setup host's browser
 	// opener, PATH lookup and attached command runner (tests).
 	OpenURL    func(string) error
@@ -84,6 +91,8 @@ Commands:
   work rebind ID --revision N --binding B [--reason TEXT] [--key K]
   work attach ID [--keep-held]   hold, attach to the executor's session, release on exit
   claim [SCOPE#]N [--scope S] [--entry NAME]   claim a GitHub issue by hand
+  adapters [TYPE] [--json]   the registered integrations and the fields each takes
+  route KEY [--scope S] [--limit N]   explain how a key's Events were routed (KEY: ENG-12, issue/ENG-12, #12 or an external ID)
   work wake ID --revision N --type T --delivery-id D --key-source S --key-external-id X [--schema S --data JSON] [--key K]
   events list [--scope-id --work-id --type --after-sequence] | events get ID | events chain ID
   events emit --scope-id S --type T --delivery-id D [--key-source S --key-external-id X] [--work-id W] [--causation-id E] [--schema S --data JSON] [--key K]
@@ -97,6 +106,7 @@ Commands:
   config validate FILE | config apply FILE --generation N [--key K]
   config path | config show [--file F] | config check [--file F]
   config get POINTER | config set POINTER JSON | config unset POINTER   [--file F] (local file, validated before saving)
+  config edit [--file F]     full-screen editor with the adapters' documented fields, validated before saving
   auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
   version
 
@@ -140,7 +150,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "serve": o.serve, "claim": o.claim, "init": o.init, "secret": o.secret}
+	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "serve": o.serve, "claim": o.claim, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.
@@ -502,6 +512,9 @@ func (o *operator) artifacts(args []string) int {
 func (o *operator) config(args []string) int {
 	if len(args) == 0 {
 		return usageError(o.errOut, "missing config subcommand")
+	}
+	if args[0] == "edit" {
+		return o.editConfig(args[1:])
 	}
 	if code, ok := o.localConfig(args); ok {
 		return code

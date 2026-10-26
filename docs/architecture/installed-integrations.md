@@ -1,0 +1,104 @@
+# Installed integration parity: Linear, Jira, Bitbucket, PostHog and operator tools
+
+Ticket 06-01 ports the baseline adapters outside the GitHub reference path ([parity register](../baseline/parity.md#adapters)) and the remaining operator surfaces. All evidence uses fixtures and fakes (`lineartest`, `jiratest`, `bitbuckettest` and a PostHog capture fake). No real service was called; real checks against configured accounts are live-operation evidence for the deferred 03-07, 03-09 or 06-04.
+
+## The shared tracker kit
+
+[`extensions/tracker`](../../extensions/tracker) is the code every non-GitHub tracker shares. It imports only public contracts. A tracker supplies a `Service` (its API client and webhook format), and the kit supplies:
+
+- **Ingress.** Push and reconcile share one normalizer, so equal state has an equal delivery ID from either transport.
+  - Families are `<type>.issue.open|closed`, `<type>.comment.human|bot|agent` and the one-shot `<type>.delivery`.
+  - An issue is keyed `issue/KEY`, or `issue/KEY/generation/reopen-<unix>` after a reopening. The generation is derived from the service's immutable reopen history. A comment joins the generation current when it was written.
+  - The issue payload omits update times, status labels and any workflow status the entry's `transitions` manage, so projection never feeds back as input.
+  - Reconcile lists open issues and issues updated within `closed_horizon_hours` in creation order, plus each listed issue's comments. Pages are bounded by detail reads and wall time. Failures are errors, so no absence is inferred.
+  - Push re-reads exactly the issue or comment a verified delivery reports.
+- **Route** (handler = type). The opt-in/skip claim policy:
+  - The issue must be open and not *waiting*: outside Linear's claim states.
+  - It must have no skip label, and a required label when any are configured.
+  - It must not carry the claimed label, unless it is a reopened generation.
+  - An optional route `match` on attributes (labels, status, title, team, project, priority, assignee, components, custom fields) selects issues per route.
+  - Input: closes, human comments and other Works' agent comments; never edits, bot comments or the Work's own notes.
+  - An operator's `<type>.claim.requested` overrides the policy.
+- **Projector.** It is level-triggered from durable Work state:
+  - Labels: claimed while owned, plus at most one of the help, review or done labels, none while an attempt runs.
+  - Workflow status: claimed, then the declared status (`<type>.status.v1` `{status, comment}`), done or help for completed or failed Work. It is moved only when the entry names a status for that state.
+  - Each outcome comment goes through the `Outbox`: pending → attempted (recorded before the write) → posted, with mark search after a lost answer, so nothing is posted twice across a crash.
+- **Tools.** `<type>.context`, `.issue.view`, `.issue.comment` (a durable intent, idempotent per request), `.issue.list` and `.issue.create` (never repeated after an ambiguous answer).
+
+The runtime holds no tracker vocabulary. Labels and transitions exist only in the kit's projector, and the same SQLite runtime cases run for both trackers (`TestTrackerReconcileClaimProjectAndRecover`).
+
+**Boundary decision (provisional).** `extensions/linear`, `extensions/jira` and `extensions/bitbucket` may import the public-only kit. No other extension may, and the kit reaches no extension. The boundary checker and its cases enforce this.
+
+## Linear
+
+[`extensions/linear`](../../extensions/linear) works one or more teams over the GraphQL API.
+
+- **Connection.** `api_url` and `agent_account`. The secret is `token`: a personal key, or `lin_oauth_…` sent as a bearer token.
+- **Entry.** `teams` and `states` (claim-from state types or names; default unstarted, started), plus the kit's fields.
+- **Rate limits and credentials.** A `RATELIMITED` answer pauses the client until `X-RateLimit-Requests-Reset`. A 401 re-resolves the token once.
+- **Marks.** Linear drops HTML comments, so a comment carries Open Supervisor's visible footer (`*Posted by an open-supervisor agent working on KEY*`), which v1 still reads, plus a second line `*open-conduit work=… intent=…*`. The second line is visible in Linear: a provisional decision, and a rendering check is deferred to live use.
+- **Webhooks.** `Linear-Signature` (hex HMAC-SHA256), a ten-minute replay window and `Linear-Delivery` as the identity. `manage_webhook` creates a team's hook, or an all-public-teams hook for several teams. That needs a workspace admin.
+- **Labels.** A missing managed label is created on first use, replacing v1's EnsureLabels.
+
+## Jira
+
+[`extensions/jira`](../../extensions/jira) works Cloud or Data Center projects over REST API v2.
+
+- **Connection.** `base_url`, `auth` (basic with `email`, or bearer) and `agent_account`. The secret is `token`.
+- **Entry.** `projects`, `jql` and `fields` (custom fields routes can match), plus the kit's fields. Labels cannot contain spaces.
+- **Bodies.** Wiki markup is converted to and from Markdown (v1 `wiki.go`).
+- **Listing.** The enhanced search (`/search/jql`, token pages) falls back to the classic search on a 404.
+- **Reopens.** They come from the changelog against status categories, or from a cleared resolution when the categories are unreadable.
+- **Marks.** Comments carry the `open-supervisor` entity property (`agent`, `from`, plus `work` and `intent`), which v1 still reads.
+- **Transitions.** Matched by target status first, then by transition name.
+- **Webhooks.** `X-Hub-Signature` HMAC through the admin API (needs an administrator, refusal code `hook_permission_denied`). **Intentional difference:** unsigned deliveries are refused rather than accepted with a log line; reconcile recovers what they would have said.
+
+## Bitbucket Cloud
+
+[`extensions/bitbucket`](../../extensions/bitbucket) is the code host for a tracker scope.
+
+- **Families.** `bitbucket.pull_request.open|closed|merged`, `bitbucket.comment.*`, `bitbucket.checks.pending|passed|failed` (commit statuses, with the preview URL from `preview_pattern`) and the one-shot `bitbucket.delivery`.
+- **Correlation.** A PR is keyed to its tracker issue in the tracker entry's namespace (`tracker {namespace, keys}`). The issue comes from the branch (`agent/issue/KEY`, the claude-code `agent/{key}` branch) first, then from a key in the title or description, and the key uses the issue generation current at the PR's creation. Bootstrap resolves the generation through the registered tracker's reopen history. Otherwise the PR keeps `pr/N`.
+- **Route** (`bitbucket`). It never creates Work. Input: merges, closes, finished checks, human comments and other agents' comments.
+- **Tools.** `bitbucket.context`, `.pr.list`, `.pr.view`, `.pr.create` (idempotent by state: an open PR from the branch is the answer; the body gets the issue reference `issue_ref`), `.pr.comment` and `.pr.reply`. The comment tools use the outbox with an invisible Markdown mark (v1's line plus Open Conduit's intent). `.checks` completes the set.
+- **Webhooks.** `X-Hub-Signature` HMAC, `X-Event-Key`, and `X-Request-UUID` as the identity. Pagination never follows a link off the configured API.
+
+## PostHog
+
+[`extensions/posthog`](../../extensions/posthog) is configured by a `posthog` connection (`host`, `distinct_id`, secret `token` = `phc_…`) and a non-ingress `posthog` entry in a scope (`turns`, `introspection`, both default true).
+
+- **Exporter.** It is on the observability pipeline. It sends `agent_turn` for each finished execution of the entry's scope: outcome, attempt, executor, work kind, duration, tokens and cost. A failing PostHog loses telemetry (counted, reported as doctor `capture_failing`) and never delays the runtime.
+- **Introspection events.** The extension's telemetry events go to a fan-out sink: the JSON log first, then every PostHog entry that takes them.
+- **Dry run.** A daemon dry run sends nothing.
+
+## Composition, doctor, setup and dry run
+
+[`internal/bootstrap/trackers.go`](../../internal/bootstrap/trackers.go) and [`posthog.go`](../../internal/bootstrap/posthog.go) register the types, the route-config validators, the tools on every generation, and the webhook routes `POST /<type>/<scope>/<entry>` on the listener. They also run `manage_webhook` re-pointing through the same retry and doctor paths as GitHub, and a background projection pass.
+
+- **Doctor.** `trackers` (registration, rate limit, reconcile, projection, a Bitbucket entry whose tracker is not registered, dry run), `trackers_auth` (check_secrets: sign-in), `posthog` and `posthog_auth` (key form; PostHog cannot be asked about a key without sending an event, as in v1). The `webhooks` check lists tracker routes and hooks.
+- **Setup.** `init linear --teams ENG[,OPS]` and `init jira --site … --projects …`. Both take `--bitbucket WORKSPACE/SLUG --bitbucket-username … --bitbucket-token REF` and an optional `--checkout`. They write a claude-code binding on the `work-tracker-issue` playbook (`args {key}`, branch `agent/{key}`, `<type>.status.v1`) and validate offline. Scopes stay workspace-free unless a checkout is given.
+- **Dry run.** `serve --dry-run` makes every tracker client write nothing. Projection, tools and webhook management report `dry_run`.
+
+## Operator tools
+
+- **`open-conduit adapters [TYPE] [--json]`** lists the registered integrations (v1 `adapters`) and the connection, secret, entry, route and binding fields each takes, from `bootstrap.Adapters()`.
+- **`open-conduit route KEY [--scope S]`** explains how a key's Events were routed: the owning Work, and for each correlated Event its disposition and the router's durable decision (route, binding, generation, policy, reason). It reads them through the new `GET /v1/events/{id}/route`, so the explanation is what execution used. **Intentional difference:** v1 predicted a project for an unclaimed issue; the decision here is recorded, not predicted.
+- **`open-conduit config edit [--file F]`** is the full-screen editor (v1 forms editor). It shows the config tree and the catalog's documented fields for the selected connection, entry, route, binding or resource, marking those present. It makes the same pointer edits as `config set/unset`, shows secret references redacted (and they must stay references), and saves only a document that validates offline.
+- **Rendered activity.** The Claude Code executor writes each turn's `activity.txt` (agent text, tool calls, tool results, the turn's end) as the first run artifact. The TUI's log view and `runs log` show it; `t` cycles to the raw transcript and stderr. The executor owns the transcript format, so the TUI stays free of executor branches.
+
+## Evidence
+
+- **Unit and contract tests.** Each extension's tests include the shared ingress conformance, ported v1 cases (wiki conversion, marks, pagination and fallback, transitions, reopens, webhooks and admin refusals, rate limits and credentials) and the kit's route, generation and config cases.
+- **SQLite.** [`integration/tracker_test.go`](../../integration/tracker_test.go) runs for both trackers: claim policy, input, labels and status convergence without feedback, a lost comment answer recovered after a restart, close and reopen generations, the tools, and Bitbucket PR, checks, comment and merge input to the tracker Work.
+- **Daemon drill.** `TestDaemonTrackersAndPostHog` (in `make drill`) runs Linear and Jira scopes, Bitbucket and PostHog on fakes. It covers `os call` tools, projection, PostHog `agent_turn`, doctor, `route` and `adapters`, and a restart that posts nothing again.
+- **Setup.** `TestTrackerSetupScopesValidateOffline`.
+- **Editor.** `TestConfigEditor`.
+
+## Limitations and deferrals
+
+- **Live evidence (deferred).** Real accounts, webhooks, rate limits and admin hooks for Linear, Jira, Bitbucket and PostHog. Which integrations are actually installed is to be confirmed from the operator's v1 config during 06-04; none is excluded here.
+- **Deleted issues.** A deleted issue ages out as absence; it is not delivered as a close.
+- **Multi-scope routing.** One entry per scope with a route `match`, kept single-owner by the claimed label. Overlapping matches can double-claim a reopened generation, so keep matches disjoint.
+- **Tracker waits and holds.** `issue:`/`pr:` waits and scheduled holds are GitHub-only. Tracker agents use the builtin `wait`.
+- **Bitbucket comment tools.** An ambiguous answer is confirmed by calling again; there is no background redrive.
+- **Comment detection.** Linear comments on issues that are not listed are read only while the issue is listed: open, or updated within the horizon.

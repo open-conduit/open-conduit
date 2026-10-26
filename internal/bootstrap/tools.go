@@ -15,6 +15,7 @@ import (
 	isplaybooks "github.com/alsiola/open-conduit/extensions/introspection/playbooks"
 	sl "github.com/alsiola/open-conduit/extensions/slack"
 	slplaybooks "github.com/alsiola/open-conduit/extensions/slack/playbooks"
+	trackerplaybooks "github.com/alsiola/open-conduit/extensions/tracker/playbooks"
 	"github.com/alsiola/open-conduit/internal/config"
 	"github.com/alsiola/open-conduit/internal/runtime"
 )
@@ -50,7 +51,7 @@ func (d *daemon) openTools() error {
 	if d.reports, err = is.NewTools(is.ToolsOptions{Store: d.coord, Now: d.now}); err != nil {
 		return err
 	}
-	return nil
+	return d.openTrackerTools()
 }
 
 // registerTools adds the extension operations to a generation's toolbelt.
@@ -60,6 +61,9 @@ func (d *daemon) registerTools(belt *runtime.Toolbelt, s *config.Snapshot) error
 		return err
 	}
 	if err := belt.Register(d.slackTools.Registration()); err != nil {
+		return err
+	}
+	if err := d.registerTrackerTools(belt); err != nil {
 		return err
 	}
 	if introspectionEnabled(s) {
@@ -90,6 +94,9 @@ func (d *daemon) preparePlaybooks() error {
 	}
 	books := slplaybooks.All()
 	for name, text := range isplaybooks.All() {
+		books[name] = text
+	}
+	for name, text := range trackerplaybooks.All() {
 		books[name] = text
 	}
 	for name, text := range books {

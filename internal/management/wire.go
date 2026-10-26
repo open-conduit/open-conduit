@@ -32,6 +32,22 @@ type wireWork struct {
 	CreatedAt       string       `json:"created_at"`
 	UpdatedAt       string       `json:"updated_at"`
 }
+
+// wireEventRoute is an Event's routing explanation.
+type wireEventRoute struct {
+	EventID      string `json:"event_id"`
+	Type         string `json:"type"`
+	ScopeID      string `json:"scope_id,omitempty"`
+	Routed       bool   `json:"routed"`
+	Disposition  string `json:"disposition,omitempty"`
+	RoutedWorkID string `json:"routed_work_id,omitempty"`
+	Route        string `json:"route,omitempty"`
+	Binding      string `json:"binding,omitempty"`
+	Generation   string `json:"generation,omitempty"`
+	Policy       string `json:"policy,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
 type wireEvent struct {
 	ID             string       `json:"id"`
 	Type           string       `json:"type"`

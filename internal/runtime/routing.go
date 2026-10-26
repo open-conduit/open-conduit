@@ -734,6 +734,19 @@ func (r *Router) Intents(ctx context.Context, work domain.ID) (out []ControlInte
 	})
 	return
 }
+
+// RouteDecisionInTx reads the durable routing decision recorded for an
+// accepted Event (operator route explanation). ok is false while the Event
+// is unrouted or matched no route.
+func RouteDecisionInTx(tx storage.Tx, event domain.ID) (RouteRecord, bool, error) {
+	var out RouteRecord
+	err := getJSON(tx, routeNamespace, identity(string(event)), &out)
+	if errors.Is(err, storage.ErrNotFound) {
+		return out, false, nil
+	}
+	return out, err == nil, err
+}
+
 func (r *Router) Decision(ctx context.Context, event domain.ID) (out RouteRecord, err error) {
 	err = r.transact(ctx, nil, func(tx storage.Tx) error { return getJSON(tx, routeNamespace, identity(string(event)), &out) })
 	return

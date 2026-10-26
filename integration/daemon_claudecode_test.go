@@ -168,6 +168,11 @@ func TestDaemonClaudeCodeExecution(t *testing.T) {
 	if len(execs) != 1 || execs[0].State != "parked" || execs[0].Outcome == nil || execs[0].Outcome.Kind != "waiting" || data(execs[0])["status"] != "building" {
 		t.Fatalf("parked attempt %+v", execs)
 	}
+	// The rendered activity (06-01) is the first artifact, so the log view
+	// shows what the agent said and did; the raw transcript follows.
+	if id, _ := data(execs[0])["activity"].(string); id == "" || len(execs[0].Artifacts) == 0 || execs[0].Artifacts[0].ID != id {
+		t.Fatalf("activity artifact: %v %+v", data(execs[0])["activity"], execs[0].Artifacts)
+	}
 	session := strings.TrimPrefix(strings.Fields(invocations()[0])[1], "session=")
 
 	// The wake resumes the same attempt and session as a new segment.

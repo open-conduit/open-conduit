@@ -217,3 +217,12 @@ Intentional differences: one wake ends a wait (the agent waits again), and `--ca
 - **O05/AC01.** One run view: `TestJobAndTurnShareTheView` (v1 `TestRunDetail`) and the mixed daemon history in `TestDaemonWorkflowC`.
 - **Decisions.** No `git diff` path check (a possibly truncated list runs); no code-host delivery reconstruction (the declared loss stays); jobs keep no failure-budget retry.
 - **Intentional differences.** No implicit five-minute job timeout (06-02 writes it); a code-host event's file is the trigger payload, not GitHub's raw body; dry-run triggers wait instead of being dropped; a slot queued behind a run longer than six hours still runs.
+
+06-01 update (code part; live evidence deferred to 03-07, 03-09 and 06-04 by user decision 2026-10-26): [installed integrations](../architecture/installed-integrations.md). Fixtures and fakes only.
+
+- **Jira, Linear, Bitbucket Cloud.** Ported onto the shared tracker kit with ingress conformance and ported v1 cases. Covered: wiki conversion; comment-property and visible-footer marks (both readable by v1); pagination with the classic-search fallback; transitions; reopens; webhooks with admin refusals; multi-project and multi-team routing through route `match`; custom-field attributes; PR, check and comment correlation to tracker issues. The same SQLite runtime cases run for both trackers.
+- **PostHog.** `agent_turn` exporter plus the introspection fan-out, with doctor checks. Failures never touch the runtime.
+- **ngrok, cloudflared, static.** Already ported (03-05). Host watch: delivered in 05-03, with the PostHog sink now added. Platform and live host coverage stays with 06-04.
+- **O02 and O06.** `adapters [TYPE]`, `route KEY` (recorded decisions via `GET /v1/events/{id}/route`) and `config edit` (the full-screen, catalog-driven editor, validated before saving). The rendered activity artifact is the Claude Code transcript view.
+- **Installation.** Which accounts are installed is not inferred. Confirmation from the operator's config is a 06-04 step, and no integration is excluded.
+- **Intentional differences.** Unsigned Jira deliveries are refused. `route` explains recorded decisions rather than predicting one. Missing Linear labels are created on first use.

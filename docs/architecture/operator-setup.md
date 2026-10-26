@@ -177,3 +177,5 @@ An `extension.ErrSetupUsage` refusal is a usage error (exit 2).
 
 The entrypoint injects the setups through `cli.Env.Setups` (`bootstrap.Setups()`: GitHub and Slack). `internal/cli` imports no extension. The B01 checker already forbids it, and `scripts/check-boundaries` now has explicit direct and transitive cases for core CLI and TUI. The GitHub init (remote detection, `ScopeConfig`, tool lists) lives in [`extensions/github/setup.go`](../../extensions/github/setup.go) as `init github`, with the same flags and behavior. Slack's setup is described in the [Slack extension](slack-extension.md#setup-init-slack).
 
+
+06-01 adds `init linear`, `init jira` (each with an optional `--bitbucket` code host), `adapters [TYPE]`, `route KEY`, `config edit` (the full-screen editor) and the tracker, Bitbucket and PostHog doctor checks and webhook routes. See [installed integrations](installed-integrations.md).

@@ -853,6 +853,7 @@ type resultFields struct {
 		Accepted int `json:"accepted"`
 		Consumed int `json:"consumed"`
 	} `json:"injected,omitempty"`
+	Activity      string           `json:"activity,omitempty"`
 	Transcript    string           `json:"transcript,omitempty"`
 	Log           string           `json:"log,omitempty"`
 	ArtifactError string           `json:"artifact_error,omitempty"`
@@ -1025,10 +1026,15 @@ func (e *Executor) settle(ctx context.Context, rn *run) (extension.Result, error
 		}
 	}
 	if e.o.Artifacts != nil {
+		// The rendered activity comes first, so an operator's log view shows
+		// it; the raw transcript and stderr follow.
+		if activity := RenderActivity(readText(filepath.Join(rn.dir, "out.jsonl"))); activity != "" {
+			_ = os.WriteFile(filepath.Join(rn.dir, "activity.txt"), []byte(activity), 0o600)
+		}
 		for _, a := range []struct {
 			file, media string
 			field       *string
-		}{{"out.jsonl", TranscriptMediaType, &f.Transcript}, {"err.log", LogMediaType, &f.Log}} {
+		}{{"activity.txt", ActivityMediaType, &f.Activity}, {"out.jsonl", TranscriptMediaType, &f.Transcript}, {"err.log", LogMediaType, &f.Log}} {
 			ref, err := e.publish(ctx, filepath.Join(rn.dir, a.file), a.media)
 			switch {
 			case err == nil:

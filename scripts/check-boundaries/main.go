@@ -25,6 +25,14 @@ func clean(path string) string { return strings.SplitN(path, " [", 2)[0] }
 func under(path, prefix string) bool {
 	return path == prefix || strings.HasPrefix(path, prefix+"/")
 }
+
+// trackerKitUser names the first-party tracker extensions allowed to use the
+// shared tracker kit (extensions/tracker): Linear and Jira, and Bitbucket,
+// whose pull requests correlate with a tracker's issue keys.
+func trackerKitUser(family string) bool {
+	return family == "extensions/linear" || family == "extensions/jira" || family == "extensions/bitbucket"
+}
+
 func public(path string) bool {
 	return path == "domain" || path == "extension" || path == "storage" || path == "observability"
 }
@@ -65,10 +73,17 @@ func allowed(owner, dependency string, test bool) bool {
 		return public(dependency) || under(dependency, "internal/management") || under(dependency, "internal/runtime") || under(dependency, "internal/config")
 	case under(owner, "internal/cli"), under(owner, "internal/tui"):
 		return public(dependency) || under(dependency, "client") || under(dependency, "internal/cli") || under(dependency, "internal/tui")
+	case under(owner, "extensions/tracker"):
+		// The shared tracker kit (06-01) is public contracts only.
+		return public(dependency) || under(dependency, "extensions/tracker")
 	case under(owner, "extensions"), under(owner, "executors"):
 		// An extension/executor cannot reach another implementation indirectly.
+		// The tracker extensions share the public-only tracker kit.
 		parts := strings.Split(owner, "/")
 		family := strings.Join(parts[:min(len(parts), 2)], "/")
+		if trackerKitUser(family) && under(dependency, "extensions/tracker") {
+			return true
+		}
 		return public(dependency) || under(dependency, "client") || under(dependency, family)
 	case owner == "cmd/os":
 		return public(dependency) || under(dependency, "client") || under(dependency, "internal/cli")

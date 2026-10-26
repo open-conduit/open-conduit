@@ -221,6 +221,41 @@ func (s *Server) getEvent(c *call) (int, any, error) {
 	return 200, out, nil
 }
 
+// eventRoute explains how an accepted Event was routed: its disposition and
+// the durable route decision (route, binding, generation, policy, reason).
+func (s *Server) eventRoute(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	var out wireEventRoute
+	err := s.read(c.ctx, func(tx storage.Tx) error {
+		a, e := tx.Event(domain.ID(c.params[0]))
+		if e != nil {
+			return e
+		}
+		scope, e := runtime.EventScopeInTx(tx, a)
+		if e != nil {
+			return e
+		}
+		rec, ok, e := runtime.RouteDecisionInTx(tx, a.Event.ID)
+		if e != nil {
+			return e
+		}
+		out = wireEventRoute{EventID: string(a.Event.ID), Type: a.Event.Type, ScopeID: string(scope), Routed: a.Routed, Disposition: a.Disposition, RoutedWorkID: string(a.RoutedWorkID)}
+		if ok {
+			out.Route, out.Binding, out.Generation, out.Policy, out.Reason = rec.Route, rec.Binding, rec.Generation, rec.Policy, rec.Reason
+			if out.RoutedWorkID == "" {
+				out.RoutedWorkID = string(rec.WorkID)
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	return 200, out, nil
+}
+
 // ---- executions ----
 
 func (s *Server) listExecutions(c *call) (int, any, error) {

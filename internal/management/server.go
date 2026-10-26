@@ -255,6 +255,7 @@ var routes = []route{
 	{"GET", []string{"work", "*"}, false, false, (*Server).getWork},
 	{"GET", []string{"events"}, false, false, (*Server).listEvents},
 	{"GET", []string{"events", "*"}, false, false, (*Server).getEvent},
+	{"GET", []string{"events", "*", "route"}, false, false, (*Server).eventRoute},
 	{"GET", []string{"executions"}, false, false, (*Server).listExecutions},
 	{"GET", []string{"executions", "*"}, false, false, (*Server).getExecution},
 	{"GET", []string{"waits"}, false, false, (*Server).listWaits},

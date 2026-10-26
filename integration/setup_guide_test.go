@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,10 +11,14 @@ import (
 
 	"github.com/alsiola/open-conduit/executors/claudecode"
 	"github.com/alsiola/open-conduit/extension"
+	bb "github.com/alsiola/open-conduit/extensions/bitbucket"
 	gitws "github.com/alsiola/open-conduit/extensions/git"
 	gh "github.com/alsiola/open-conduit/extensions/github"
 	"github.com/alsiola/open-conduit/extensions/github/playbooks"
+	"github.com/alsiola/open-conduit/extensions/jira"
+	"github.com/alsiola/open-conduit/extensions/linear"
 	sl "github.com/alsiola/open-conduit/extensions/slack"
+	"github.com/alsiola/open-conduit/extensions/tracker"
 	"github.com/alsiola/open-conduit/internal/bootstrap"
 	"github.com/alsiola/open-conduit/internal/cli"
 	"github.com/alsiola/open-conduit/internal/config"
@@ -117,10 +122,63 @@ func TestSlackSetupScopeValidatesOffline(t *testing.T) {
 	for _, s := range bootstrap.Setups() {
 		names = append(names, s.SetupInfo().Type)
 	}
-	if strings.Join(names, ",") != "github,slack" {
+	if strings.Join(names, ",") != "github,slack,linear,jira" {
 		t.Fatalf("registered setups: %v", names)
 	}
 }
+
+// init linear and init jira (06-01) write scopes, here with a Bitbucket code
+// host and a checkout, that merge beside each other and validate against the
+// daemon registry; the kit's Bitbucket operation list matches the extension.
+func TestTrackerSetupScopesValidateOffline(t *testing.T) {
+	ctx := context.Background()
+	lr, err := linear.Setup{}.Setup(ctx, nil, []string{"--teams", "eng,ops", "--token", "keyring:linear-token", "--no-workspace",
+		"--bitbucket", "acme/app", "--bitbucket-username", "me@example.com", "--bitbucket-token", "keyring:bitbucket-token"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	jr, err := jira.Setup{}.Setup(ctx, &setupHost{cwd: t.TempDir()}, []string{"--site", "https://acme.atlassian.net", "--projects", "PROJ", "--email", "me@example.com",
+		"--token", "env:JIRA_TOKEN", "--checkout", t.TempDir(), "--jql", "component = Web", "--fields", "customfield_10010"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc []byte
+	for _, r := range []extension.SetupResult{lr, jr} {
+		if doc, err = cli.MergeSetup(doc, r, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if diags, err := bootstrap.ValidateConfig(doc); err != nil || len(diags) != 0 {
+		t.Fatalf("init linear/jira output: %v %v\n%s", diags, err, doc)
+	}
+	for _, want := range []string{`"handler": "linear"`, `"handler": "bitbucket"`, `"handler": "jira"`, `"status_schema": "linear.status.v1"`, `"playbook": "work-tracker-issue"`, `"issue_ref": "Closes {key}"`} {
+		if !strings.Contains(string(doc), want) {
+			t.Errorf("setup output lacks %s", want)
+		}
+	}
+	if strings.Join(tracker.BitbucketOperations, ",") != strings.Join(bb.Operations(), ",") {
+		t.Fatal("the kit's Bitbucket operation list drifted from the extension's")
+	}
+	if _, err := (linear.Setup{}).Setup(ctx, nil, []string{"--teams", "ENG", "--token", "plain-secret"}); !errors.Is(err, extension.ErrSetupUsage) {
+		t.Fatalf("a secret value as --token: %v", err)
+	}
+}
+
+type setupHost struct{ cwd string }
+
+func (h *setupHost) Printf(string, ...any) {}
+func (h *setupHost) Prompt(string, extension.Prompt) (string, error) {
+	return "", extension.ErrSetupNoInput
+}
+func (h *setupHost) Choose(string, []string) (int, error)                 { return 0, extension.ErrSetupNoInput }
+func (h *setupHost) OpenURL(string) error                                 { return nil }
+func (h *setupHost) StoreSecret(name, _ string) (string, error)           { return "keyring:" + name, nil }
+func (h *setupHost) LookPath(string) (string, bool)                       { return "", false }
+func (h *setupHost) Run(context.Context, string, string, ...string) error { return nil }
+func (h *setupHost) Config() []byte                                       { return nil }
+func (h *setupHost) Cwd() string                                          { return h.cwd }
+func (h *setupHost) StateDir() string                                     { return h.cwd }
+func (h *setupHost) DryRun() bool                                         { return true }
 
 // init --with claude prepares the setup guide as its own plugin and starts
 // claude on it, pre-allowing only open-conduit's config, doctor and health.

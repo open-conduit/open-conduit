@@ -29,10 +29,12 @@ import (
 	"github.com/alsiola/open-conduit/domain"
 	"github.com/alsiola/open-conduit/executors/shell"
 	"github.com/alsiola/open-conduit/extension"
+	bb "github.com/alsiola/open-conduit/extensions/bitbucket"
 	gh "github.com/alsiola/open-conduit/extensions/github"
 	is "github.com/alsiola/open-conduit/extensions/introspection"
 	sc "github.com/alsiola/open-conduit/extensions/schedule"
 	sl "github.com/alsiola/open-conduit/extensions/slack"
+	"github.com/alsiola/open-conduit/extensions/tracker"
 	"github.com/alsiola/open-conduit/internal/artifacts"
 	"github.com/alsiola/open-conduit/internal/config"
 	"github.com/alsiola/open-conduit/internal/management"
@@ -109,31 +111,35 @@ type attemptKey struct {
 }
 
 type daemon struct {
-	o             Options
-	log           *slog.Logger
-	now           func() time.Time
-	owner         string
-	coord         storage.Store
-	artifacts     *artifacts.Store
-	shell         *shell.Executor
-	executors     map[string]extension.Executor
-	configs       *management.ConfigService
-	resolver      *config.Resolver
-	pipeline      *telemetry.Pipeline
-	ingress       *runtime.Ingress
-	github        githubSources
-	slack         slackSources
-	schedule      scheduleState
-	introspection introspectionState
-	resources     resourceState
-	claude        claudeState
-	hooks         webhookState
-	tools         *gh.Tools
-	slackTools    *sl.Tools
-	reports       *is.Tools
-	endpoint      string
-	cursorKey     []byte
-	current       atomic.Pointer[components]
+	o              Options
+	log            *slog.Logger
+	now            func() time.Time
+	owner          string
+	coord          storage.Store
+	artifacts      *artifacts.Store
+	shell          *shell.Executor
+	executors      map[string]extension.Executor
+	configs        *management.ConfigService
+	resolver       *config.Resolver
+	pipeline       *telemetry.Pipeline
+	ingress        *runtime.Ingress
+	github         githubSources
+	slack          slackSources
+	trackers       trackerSources
+	posthog        posthogState
+	schedule       scheduleState
+	introspection  introspectionState
+	resources      resourceState
+	claude         claudeState
+	hooks          webhookState
+	tools          *gh.Tools
+	slackTools     *sl.Tools
+	reports        *is.Tools
+	trackerTools   map[string]*tracker.Tools
+	bitbucketTools *bb.Tools
+	endpoint       string
+	cursorKey      []byte
+	current        atomic.Pointer[components]
 
 	ctx      context.Context
 	mu       sync.Mutex
@@ -223,7 +229,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.closeIntrospectionTelemetry()
-	d.pipeline, err = telemetry.New(telemetry.Options{Exporters: []observability.Exporter{telemetry.NewLogExporter(logFile), otel, introspectionTelemetry}, FlushInterval: 200 * time.Millisecond, Diagnostic: func(x telemetry.Diagnostic) {
+	d.pipeline, err = telemetry.New(telemetry.Options{Exporters: []observability.Exporter{telemetry.NewLogExporter(logFile), otel, introspectionTelemetry, d.posthogExporter()}, FlushInterval: 200 * time.Millisecond, Diagnostic: func(x telemetry.Diagnostic) {
 		d.log.Warn("telemetry export degraded", "exporter", x.Exporter, "code", x.Code, "records", x.Records)
 	}})
 	if err != nil {
@@ -272,11 +278,13 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, registry(d.executors), o.ConfigPath); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
+	d.posthog.configs.Store(d.configs)
 	if d.ingress, err = runtime.NewIngress(d.coord, d.now, runtime.IngressOptions{}); err != nil {
 		return err
 	}
 	snapshot, generation := d.configs.Current()
 	d.registerGitHub(ctx, snapshot)
+	d.registerTrackers(ctx, snapshot)
 	d.registerSlack(ctx, snapshot)
 	d.registerSchedule(ctx, snapshot)
 	c, err := d.build(snapshot, generation)
@@ -297,6 +305,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		}
 		d.current.Store(next)
 		d.registerGitHub(d.ctx, s)
+		d.registerTrackers(d.ctx, s)
 		d.registerSlack(d.ctx, s)
 		d.registerSchedule(d.ctx, s)
 		d.introspection.telemetry.Store(introspectionTelemetryOn(s))
@@ -420,8 +429,8 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.scheduleCheck, d.introspectionCheck},
-		DeepChecks: []func(context.Context) runtime.Check{d.githubAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck}, Annotate: d.annotate, Attach: d.attach, Nudge: d.poke}); err != nil {
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck, d.posthogCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.scheduleCheck, d.introspectionCheck},
+		DeepChecks: []func(context.Context) runtime.Check{d.githubAuthCheck, d.trackerAuthCheck, d.posthogAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck}, Annotate: d.annotate, Attach: d.attach, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
 	return c, nil

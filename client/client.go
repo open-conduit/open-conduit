@@ -376,6 +376,28 @@ func (c *Client) Events(ctx context.Context, q url.Values) (Page[Event], error) 
 func (c *Client) Event(ctx context.Context, id string) (Event, error) {
 	return get[Event](c, ctx, "events/"+esc(id))
 }
+
+// EventRoute explains how an accepted Event was routed: its disposition and
+// the durable route decision.
+func (c *Client) EventRoute(ctx context.Context, id string) (EventRoute, error) {
+	return get[EventRoute](c, ctx, "events/"+esc(id)+"/route")
+}
+
+// EventRoute is an Event's routing explanation.
+type EventRoute struct {
+	EventID      string `json:"event_id"`
+	Type         string `json:"type"`
+	ScopeID      string `json:"scope_id,omitempty"`
+	Routed       bool   `json:"routed"`
+	Disposition  string `json:"disposition,omitempty"`
+	RoutedWorkID string `json:"routed_work_id,omitempty"`
+	Route        string `json:"route,omitempty"`
+	Binding      string `json:"binding,omitempty"`
+	Generation   string `json:"generation,omitempty"`
+	Policy       string `json:"policy,omitempty"`
+	Reason       string `json:"reason,omitempty"`
+}
+
 func (c *Client) Executions(ctx context.Context, q url.Values) (Page[Execution], error) {
 	return list[Execution](c, ctx, "executions", q)
 }

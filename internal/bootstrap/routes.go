@@ -36,7 +36,9 @@ func (manualRoute) Match(_ context.Context, in extension.RouteInput) (extension.
 }
 
 func handlers() map[string]extension.RouteHandler {
-	return map[string]extension.RouteHandler{"manual": manualRoute{}, gh.Type: gh.Route{}, gh.HoldHandler: gh.HoldRoute{}, sl.Type: sl.Route{}, sc.Type: sc.Route{}, is.Type: is.Route{}}
+	h := map[string]extension.RouteHandler{"manual": manualRoute{}, gh.Type: gh.Route{}, gh.HoldHandler: gh.HoldRoute{}, sl.Type: sl.Route{}, sc.Type: sc.Route{}, is.Type: is.Route{}}
+	trackerHandlers(h)
+	return h
 }
 
 func handlerNames() map[string]bool {

@@ -156,6 +156,14 @@ func (d *daemon) webhookHandler() http.Handler {
 			h.ServeHTTP(w, r2)
 			return
 		}
+		if isTrackerRoute(name) {
+			if h := d.trackerWebhook(name); h != nil {
+				h.ServeHTTP(w, r)
+				return
+			}
+			http.NotFound(w, r)
+			return
+		}
 		if strings.HasPrefix(name, sl.Type+"/") {
 			if h := d.slackWebhook(name); h != nil {
 				h.ServeHTTP(w, r)
@@ -215,7 +223,8 @@ func (d *daemon) manageHooks(ctx context.Context) {
 		jobs = append(jobs, job{src, target})
 	}
 	d.github.mu.Unlock()
-	if len(jobs) == 0 {
+	trackerJobs := d.trackerHookJobs(public)
+	if len(jobs) == 0 && len(trackerJobs) == 0 {
 		d.hooks.mu.Unlock()
 		return
 	}
@@ -256,6 +265,24 @@ func (d *daemon) manageHooks(ctx context.Context) {
 			d.hooks.hooks[s.Namespace] = st
 			d.hooks.mu.Unlock()
 			d.report("github_webhook", "", st.code)
+		}
+		for _, j := range trackerJobs {
+			st := &hookState{url: j.url}
+			d.hooks.mu.Lock()
+			if prev := d.hooks.hooks[j.src.namespace]; prev != nil {
+				st.id = prev.id
+			}
+			d.hooks.mu.Unlock()
+			cx, cancel := context.WithTimeout(ctx, 30*time.Second)
+			st.id, st.code = d.ensureTrackerHook(cx, j, st.id)
+			cancel()
+			if st.code != "ok" && st.code != "dry_run" {
+				st.next = d.now().Add(time.Minute)
+			}
+			d.hooks.mu.Lock()
+			d.hooks.hooks[j.src.namespace] = st
+			d.hooks.mu.Unlock()
+			d.report(j.src.typ+"_webhook", "", st.code)
 		}
 	}()
 }
@@ -324,6 +351,12 @@ func (d *daemon) webhookCheck(context.Context) runtime.Check {
 	}
 	d.github.mu.Unlock()
 	check.Items = append(check.Items, d.slackWebhookItems()...)
+	for _, item := range d.trackerWebhookItems(hooks) {
+		if strings.Contains(item, "; hook ") && !strings.HasSuffix(item, "hook ok") && !strings.HasSuffix(item, "hook dry_run") && !strings.HasSuffix(item, "hook pending") && check.Status == runtime.CheckOK {
+			check.Status, check.Code = runtime.CheckWarn, "hook_update_failed"
+		}
+		check.Items = append(check.Items, item)
+	}
 	check.Items = append(check.Items, d.scheduleWebhookItems()...)
 	sort.Strings(check.Items)
 	return check

@@ -46,6 +46,13 @@ func TestDependencyClosures(t *testing.T) {
 		{"runtime_cannot_import_introspection", []pkg{project("internal/runtime", "extensions/introspection")}, "extensions/introspection"},
 		{"management_cannot_import_introspection", []pkg{project("internal/management", "extensions/introspection")}, "extensions/introspection"},
 		{"introspection_cannot_reach_github", []pkg{project("extensions/introspection", "extensions/github")}, "extensions/github"},
+		// The shared tracker kit (06-01) is public-only; only the tracker
+		// extensions may use it, and it reaches no other extension.
+		{"trackers_use_kit", []pkg{project("extensions/linear", "extensions/tracker", "domain"), project("extensions/jira", "extensions/tracker"), project("extensions/bitbucket", "extensions/tracker"), project("extensions/tracker", "domain", "extension", "storage")}, ""},
+		{"kit_cannot_reach_github", []pkg{project("extensions/tracker", "extensions/github")}, "extensions/github"},
+		{"slack_cannot_use_kit", []pkg{project("extensions/slack", "extensions/tracker")}, "extensions/tracker"},
+		{"linear_cannot_reach_jira", []pkg{project("extensions/linear", "extensions/jira")}, "extensions/jira"},
+		{"runtime_cannot_import_kit", []pkg{project("internal/runtime", "extensions/tracker")}, "extensions/tracker"},
 		{"backup_runtime_leak", []pkg{project("internal/backup", "internal/runtime")}, "internal/runtime"},
 		{"unknown_package_leak", []pkg{project("newpackage", "domain")}, "domain"},
 		{"external_bridge", []pkg{project("internal/runtime"), {ImportPath: "external.test/helper", Imports: []string{module + "extensions/git"}}}, ""},

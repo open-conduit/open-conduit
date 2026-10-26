@@ -18,6 +18,8 @@ import (
 	"github.com/alsiola/open-conduit/extension"
 	gh "github.com/alsiola/open-conduit/extensions/github"
 	"github.com/alsiola/open-conduit/extensions/github/playbooks"
+	"github.com/alsiola/open-conduit/extensions/jira"
+	"github.com/alsiola/open-conduit/extensions/linear"
 	sc "github.com/alsiola/open-conduit/extensions/schedule"
 	sl "github.com/alsiola/open-conduit/extensions/slack"
 	"github.com/alsiola/open-conduit/internal/config"
@@ -33,8 +35,10 @@ import (
 // registry is the daemon's registration of executors, route handlers,
 // operations, connection and extension types and resource providers.
 func registry(executors map[string]extension.Executor) config.Registry {
-	reg := config.Registry{Executors: executors, Handlers: handlerNames(), Operations: append(gh.Operations(), sl.Operations()...)}
+	reg := config.Registry{Executors: executors, Handlers: handlerNames(), Operations: append(append(gh.Operations(), sl.Operations()...), trackerOperations()...)}
 	githubRegistry(&reg)
+	trackerRegistry(&reg)
+	posthogRegistry(&reg)
 	slackRegistry(&reg)
 	scheduleRegistry(&reg)
 	introspectionRegistry(&reg)
@@ -65,7 +69,9 @@ func ValidateConfig(data []byte) ([]config.Diagnostic, error) {
 // Setups are the registered extensions' optional setup flows (`open-conduit
 // init <type>`). Core CLI hosts them through cli.Env.Setups and imports no
 // extension.
-func Setups() []extension.Setup { return []extension.Setup{gh.Setup{}, sl.Setup{}} }
+func Setups() []extension.Setup {
+	return []extension.Setup{gh.Setup{}, sl.Setup{}, linear.Setup{}, jira.Setup{}}
+}
 
 // SetupOptions start a coding agent with the setup guide.
 type SetupOptions struct {

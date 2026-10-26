@@ -16,6 +16,7 @@ import (
 	"github.com/alsiola/open-conduit/domain"
 	is "github.com/alsiola/open-conduit/extensions/introspection"
 	"github.com/alsiola/open-conduit/extensions/introspection/host"
+	"github.com/alsiola/open-conduit/extensions/posthog"
 	"github.com/alsiola/open-conduit/internal/config"
 	"github.com/alsiola/open-conduit/internal/runtime"
 	"github.com/alsiola/open-conduit/storage"
@@ -54,7 +55,7 @@ type introspectionState struct {
 	watcher    is.HostWatcher
 	lastRead   time.Time
 	readErr    string
-	sink       *is.JSONSink
+	sink       is.Sink
 	file       *os.File
 	// telemetry mirrors whether the current generation turns telemetry on,
 	// for the exporter's pipeline goroutine.
@@ -330,7 +331,10 @@ func (d *daemon) openIntrospectionTelemetry() (*is.Exporter, error) {
 	if err != nil {
 		return nil, err
 	}
-	d.introspection.file, d.introspection.sink = f, is.NewJSONSink(f)
+	// The events log is the primary sink; enabled PostHog entries that take
+	// introspection telemetry receive the same events (06-01).
+	d.introspection.file = f
+	d.introspection.sink = &posthog.Fanout{Primary: is.NewJSONSink(f), Targets: d.posthogTargets, Diagnostic: func(code string) { d.report("posthog", "", code) }}
 	return &is.Exporter{Sink: d.introspection.sink, Enabled: d.introspectionTelemetry}, nil
 }
 
