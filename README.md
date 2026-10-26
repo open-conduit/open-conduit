@@ -10,7 +10,8 @@ Work turns up in many places: an issue on GitHub, a ticket in Linear or Jira, a 
 - **Built for agents.** Each run gets a toolbelt of outcomes it can ask for, like "comment on this issue", "open a pull request" or "wait until that PR merges". Agents never deal with labels, markers or a tracker's conventions.
 - **Durable by design.** Every event is recorded before anything acts on it. Work can park for hours or days and wake on the event it is waiting for, even after a restart.
 - **It improves itself.** Agents report what trips them up and log the corrections they are given. A daily triage turns the reports into fixes, and a sweep folds the corrections into your project's rules.
-- **Runs on your machine.** It is a single local daemon with your own Claude Code, `gh` and keyring logins. Nothing is hosted for you and no credential ever sits in the config.
+- **Any executor you can imagine.** An Execution is just one attempt to move Work forward. Claude Code is one executor, a shell command is another, and an extension can add any other agent, model or tool. Swap them per workflow without touching the rest.
+- **Runs on your machine.** It is a single local daemon that uses your own CLI and keyring logins. Nothing is hosted for you and no credential ever sits in the config.
 
 ## Why it exists
 
@@ -24,11 +25,11 @@ Open Conduit is the heart of that orchestrator, re-architected around the right 
 
 - **Work** is a durable objective, such as an issue to fix or a thread to answer.
 - **Event** is an immutable record of something that happened.
-- **Execution** is one attempt to advance Work, through Claude Code, a shell command or another executor.
+- **Execution** is one attempt to advance Work, through whichever executor fits: Claude Code, a shell command, or one you plug in.
 - **Timer** and **Wait** make time and suspension durable.
 - **Scope** holds the configuration, routes and bindings for one area of work.
 
-GitHub, Slack, schedules and introspection are integrations that plug in around that core, not the core itself. And it builds itself: this README was written by an Open Conduit agent working [issue #26](https://github.com/open-conduit/open-conduit/issues/26).
+GitHub, Slack, schedules and introspection are integrations that plug in around that core, and Claude Code is just one executor among any you care to add. None of them is the core itself. And it builds itself: this README was written by an Open Conduit agent working [issue #26](https://github.com/open-conduit/open-conduit/issues/26).
 
 ## Get going
 
@@ -44,7 +45,7 @@ open-conduit doctor --check-secrets                  # every connection, credent
 open-conduit tui                                     # watch and control runs
 ```
 
-You also need [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in, and optionally the GitHub CLI (`gh`). Release binaries, an install script and `go install` are covered in [Install](https://open-conduit.github.io/open-conduit/start/install/).
+The GitHub setup above runs its agents with the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) executor, so sign in to Claude Code first; the GitHub CLI's (`gh`) login is its default credential. To run something else, point a binding at a shell command or at an executor from an extension. Release binaries, an install script and `go install` are covered in [Install](https://open-conduit.github.io/open-conduit/start/install/).
 
 Where to go next:
 
