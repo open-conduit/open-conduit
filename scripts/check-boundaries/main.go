@@ -56,6 +56,17 @@ func allowed(owner, dependency string, test bool) bool {
 		// The extracted subprocess protocol (07-01) describes the public
 		// contracts on the wire; it never reaches an implementation.
 		return public(dependency)
+	case strings.HasPrefix(owner, "protocol/"):
+		// The wire transport, the extension-side SDK and the example
+		// external extension and executor (07-02) use only the public
+		// contracts and the protocol, exactly as a third party would.
+		return public(dependency) || under(dependency, "protocol")
+	case under(owner, "internal/extproc"):
+		// The host runtime for extension processes (07-02) adapts the
+		// protocol onto the public contracts and the runtime's trusted
+		// acceptance, causal and timer surfaces; never SQLite, bootstrap
+		// or another extension.
+		return public(dependency) || under(dependency, "protocol") || under(dependency, "internal/runtime") || under(dependency, "internal/extproc")
 	case under(owner, "conformance"):
 		return public(dependency) || under(dependency, "conformance")
 	case under(owner, "internal/runtime"):

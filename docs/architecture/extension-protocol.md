@@ -1,6 +1,6 @@
 # Extension subprocess protocol
 
-Decision B08 · ticket 07-01 · **provisional, for user review**. The executable definition is package [`protocol`](../../protocol/protocol.go): the version, the [manifest](../../protocol/manifest.go) and its validation, and the [method catalogue](../../protocol/methods.go). Each wire method names the public contract it carries and the shipped first-party users that needed it. The [transport prototype](../../prototypes/transport) supplies the evidence (`make protocol-prototype`). 07-02 implements loading, handshake, supervision and the message types. 07-03 adds packaging and certification.
+Decision B08 · ticket 07-01 · **provisional, for user review**. The executable definition is package [`protocol`](../../protocol/protocol.go): the version, the [manifest](../../protocol/manifest.go) and its validation, and the [method catalogue](../../protocol/methods.go). Each wire method names the public contract it carries and the shipped first-party users that needed it. The [transport prototype](../../prototypes/transport) supplies the evidence (`make protocol-prototype`). 07-02 implemented loading, handshake, supervision, the message types, the trust model and payload schema evolution ([below](#runtime-trust-model-and-schema-evolution-07-02); also provisional). 07-03 adds packaging and certification.
 
 The protocol was extracted from the code that shipped through 05-04 and the 06-01/06-02 code: the GitHub, Slack, Linear, Jira, Bitbucket, schedule, introspection and PostHog extensions, the Git resource provider, and the shell, claude-code and legacy-job executors. It was not designed in the abstract. It adds **no core primitive**. Every method is an adapter over an existing public contract (`extension`, `storage` KV and reads, `observability`), or over a host composition hook the daemon already drives for in-process extensions. First-party extensions stay in-process. The user is the only protocol consumer, so the protocol is cheap to revise.
 
@@ -213,7 +213,7 @@ If the *host* crashes, extensions see EOF and exit. The new daemon starts them a
 
 ## Authority and scoping
 
-The trust model is 07-02's. Process separation is not sandboxing: an extension runs with the operator's user privileges. 07-01 fixes the protocol-level scoping, which the host applies to every extension-to-host call from the identity it bound at start. The extension never supplies that identity.
+The trust model is defined in [07-02's section](#trust-model). Process separation is not sandboxing: an extension runs with the operator's user privileges. 07-01 fixes the protocol-level scoping, which the host applies to every extension-to-host call from the identity it bound at start. The extension never supplies that identity.
 
 - **KV.** Only the extension's own namespaces: its name, or `name.` + suffix (`protocol.Namespace`, the existing `extension.Record` rule).
 - **Families, operations, kinds, recurrences, types, handlers, executors, providers, tasks.** Only names under its own name (`Manifest.Validate`).
@@ -246,6 +246,7 @@ Validation rules:
 - task intervals are at least one second;
 - the command and playbooks stay inside the extension directory;
 - external stores name a declared connection type;
+- payload schema bases (07-02) are dotted names under the extension's name without a version suffix, with positive, strictly increasing readable versions; `kv_version` is not negative;
 - unknown fields are rejected.
 
 `TestManifestRejections` covers each rule, including a `storage` capability and a semantic executor label.
@@ -260,6 +261,141 @@ The first-party extensions are not given manifests. They stay in-process, and `i
 - `extension.AttachExecutor`, `extension.AttachSpec`, `extension.ErrNothingToAttach`: attach is now a public optional executor method. Bootstrap no longer branches on claude-code. The management wire code `no_session` becomes `nothing_to_attach` (05-04's note), and `claudecode.ErrNoSession` wraps `ErrNothingToAttach`. The unused attach environment that claude-code computed is gone; the operator's shell supplies it, as before.
 - `extension.ContractVersion` still versions the in-process API. `protocol.Version` versions the wire.
 
+## Runtime, trust model and schema evolution (07-02)
+
+Ticket 07-02 · **provisional, for user review**. Code:
+
+- [`protocol`](../../protocol/wire.go): the snake_case wire types and method params ([messages](../../protocol/messages.go)), the [error mapping](../../protocol/errors.go) onto the public sentinels, and [schema evolution](../../protocol/schema.go).
+- [`protocol/jsonrpc`](../../protocol/jsonrpc/conn.go): the transport, hardened from the prototype.
+- [`protocol/sdk`](../../protocol/sdk/sdk.go): a minimal extension-side runtime that serves the public Go contracts and gives the extension a [`Host`](../../protocol/sdk/host.go) client. 07-03 decides the SDK's final shape.
+- [`internal/extproc`](../../internal/extproc/discover.go): the host runtime. It covers discovery, conflicts, the [supervised process](../../internal/extproc/process.go), the [scoped host service](../../internal/extproc/service.go) and the [adapters](../../internal/extproc/adapters.go).
+- Examples:
+  - [`protocol/examples/notes`](../../protocol/examples/notes/notes.go) is the example external extension. It covers ingress, a route, operations, an emission with committed records, a recurrence, tasks, three releases and a KV migration.
+  - [`protocol/examples/runner`](../../protocol/examples/runner/runner.go) is the example external executor: detached jobs with inject, interrupt, stop and forget.
+
+### Loading
+
+- **Install location.** `<config dir>/extensions/<name>/open-conduit-extension.json`, beside `config.json` (`extproc.Dir`). The directory must be named after the manifest's name. 07-03 owns install, update and removal.
+- **Discovery.** `extproc.Discover` parses every manifest strictly and offline. Invalid or misnamed manifests are reported and skipped. A missing root means no extensions.
+- **Conflicts.** `extproc.CheckConflicts` checks a whole set atomically against names already taken in-process, and against each other. The checked kinds are the name, config types, handlers, executors, resource types, operations, families, work kinds, recurrences and schemas. Either every extension is admitted or none is.
+- **Start.**
+  - The command runs in the extension directory, in its own process group.
+  - The environment is the B05 baseline only (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, `TERM`). No credential or Open Conduit setting reaches it.
+  - stderr goes to a bounded log, `<state>/logs/extensions/<name>.log`. It is truncated with a marker at 1 MiB.
+  - The private state directory is `<state>/extensions/<name>`.
+- **Handshake.**
+  - `initialize` refuses the extension when there is no common version, or when the returned manifest differs from the file. The comparison is semantic, not byte-for-byte.
+  - `configure` sends the generation's entries and `kv: {stored, declared}`. It checks that every registered source name, source namespace, family and webhook path stays in the extension's namespace and matches the manifest.
+  - `Process.Reconfigure` re-sends configure without a restart (config apply, tunnel URL change).
+  - Deterministic refusals (`extproc.ErrRefused`) are never restarted: a version mismatch, a manifest mismatch or a KV downgrade.
+- **Supervision.**
+  - A crash restarts the process with exponential backoff (100 ms to 30 s; the backoff resets after a minute of uptime), followed by `initialize` and `configure`.
+  - Open artifact writers are aborted.
+  - `Process.Call` waits, bounded by its context, for a running process, but never retries a call. A crash mid-call is `protocol.ErrTransport`, and the caller applies the crash table above.
+  - `Close` sends `shutdown`, closes stdin, then sends SIGTERM and SIGKILL to the group.
+  - The SDK exits on stdin EOF, so a host crash never orphans an extension.
+- **Adapters.** `extproc.Remote` presents a process through the same interfaces in-process extensions implement:
+  - `Ingress(SourceDecl)` is an `extension.Ingress`;
+  - `RouteHandler`;
+  - `Registration()` is an `extension.Registration` for the toolbelt, with handler, wait and emit operations, `emit.commit` and `dependency.filter`;
+  - `Executor(name)` implements every optional executor interface;
+  - `Recurrence(kind)` is a `runtime.RecurrenceFunc`;
+  - `WorkKind(kind)` is a `runtime.WorkKindPolicy`;
+  - `Render`, `Task` and `Check`.
+
+  Core registers these exactly as it registers in-process extensions.
+- **In-transaction calls.** `Process.CallInTx` enforces the 250 ms deadline, does not wait for a restart, and refuses every extension-to-host callback with `reentrant_call` while one is outstanding. Two outcomes cannot fail a transaction:
+  - The `bool` dependency filter counts a failure as "no match". The event is not lost; a later matching event still wakes the wait.
+  - Work-kind trigger selection falls back to the runtime's documented first input.
+
+  The other two in-transaction methods return errors and abort the transaction, which is retried.
+
+### Executors across extension restarts
+
+An extension crash is not an execution failure. `remoteHandle.Wait` notices that the process generation changed, either through a transport error or because the new process does not know the handle. It then calls `executor.recover` on the restarted process with the last metadata persisted through its run. Re-adoption therefore needs the run's lease-fenced `PersistRecovery`: it goes through the scheduler's fenced function, so an observer whose lease has been superseded is refused. A crash before anything was persisted, and `not_adoptable`, are returned to the scheduler's stop-and-retry policy.
+
+Runs are addressed by unguessable host-assigned IDs. A closed run refuses persistence and resources, so a stale or restarted process cannot persist for an attempt the host no longer serves through it. When the host refused the persistence that made the extension's `Run` fail, `Run` returns the host's own error, so the conformance check that `PersistRecovery` failures propagate holds across the wire.
+
+### Trust model
+
+An extension process runs with the operator's user privileges. **Process separation is fault isolation, not a sandbox.** An extension can read and write anything the operator's account can, open network connections, and spawn processes. Installing an extension is therefore the same trust decision as installing any program the operator runs. 07-03's certification checks protocol conformance. It cannot make a malicious extension safe.
+
+What the host does enforce is the protocol surface. Every extension-to-host call is bound to the identity the host started the process with, never to anything the extension sends:
+
+- **KV.** Only the extension's namespaces (`name`, `name.*`). `kv.commit` batches are all-or-nothing with version or absence preconditions; a batch touching any foreign namespace applies nothing. The extension's KV layout version lives in the reserved `core.extensions` namespace, which no extension can address.
+- **State reads.** Only scopes whose configuration uses the extension. A record outside them is `not_found`, so a read is never an existence oracle. Scope reads drop secret references.
+- **`event.accept`.**
+  - The scope must be configured. The family must be declared. The source must be the extension's (`name`, `name/*`). The payload must be its current schema version.
+  - The host assigns causation, execution and the Event ID.
+  - The parent must be an accepted Event of the same scope.
+  - Causal depth and per-minute limits are the runtime's (`AcceptDerivedInTx`), and records commit atomically with a newly added Event.
+  - **A subprocess never mints a causal root outside ingress.** A root acceptance would let routing → extension → event loops escape the chain bounds. Introspection's host-watch roots, which are in-process, have no subprocess equivalent; a third party would model them as ingress.
+- **`timer.*` and `work.cancel`.** Only declared recurrences and the extension's own families and Work kinds in configured scopes. Cancellation keys are prefixed with the extension name.
+- **`ingress.deliver`.** Only sources the last `configure` registered. The answer comes after durable acceptance.
+- **`secret.resolve`.** Only configured scopes, through a host resolver that must admit only the names bound to the extension's entries (B05).
+- **`execution.persist_recovery` and `resource.*`.** Only through a run the host opened for this process (described above).
+- **Methods.** Only methods the manifest enables (`Manifest.Enabled`). A host-to-extension method sent to the host is `method_not_found`.
+
+Restarts cannot widen authority. A restarted process gets the same identity. Causal chains, leases, KV layout records and canonical ingress identities all live in host storage, so a restart neither resets a chain nor revives a superseded lease.
+
+### Event payload schema evolution
+
+The payload schema identifier is `<base>.v<N>`. The manifest's `provides.schemas` declares each base, in the extension's namespace, with the versions the running release can read, in strictly increasing order. The last of them is the version it writes. Persisted envelopes are immutable: the host never rewrites a stored Event. `Manifest.PayloadStatus` classifies a payload deterministically:
+
+| Status | Meaning | Outcome |
+| --- | --- | --- |
+| `foreign` | absent, or outside the extension's namespace | passed verbatim; reading it is a data contract |
+| `current` | the version the extension writes | passed |
+| `upcast` | an older version still listed | passed verbatim; the SDK chains `Upcaster`s up to the current version before extension code sees it |
+| `retired` | own, older than every listed version | not passed for decisions |
+| `newer` | own, newer than the written version (persisted before a downgrade) | not passed for decisions |
+| `undeclared` | own namespace, undeclared base or no version suffix | not passed for decisions |
+
+The host applies the gate before any call, so an unreadable payload never depends on what a process does with it. `route.match` answers "no match", so the event falls through to later routes or the unmatched disposition, as for any non-matching route. `dependency.filter` answers false, `event.render` falls back to generic rendering, and `Remote.SchemaSkips` counts each answer. Executors receive their inputs verbatim, because executors are generic. **Writes** are strict (`Manifest.CheckWrite`): every payload an extension produces must be absent or the current version of one of its own schemas, otherwise it is refused with `unreadable_schema`. This covers ingress observations and events, `event.accept`, emissions, recurrence occurrences and armed timers.
+
+Ingress identity is part of evolution. Core binds an observation's `(item, version)` and `(source, delivery)` to a canonical signature of the envelope. A release that changes the payload for unchanged items must therefore mint new observation versions and delivery IDs, for example by including the schema version (`rev.s2`). That re-observes each item once, as a visible change. An extension that keeps its identities across a payload change gets core's deterministic `conflict` on every page: nothing is accepted and no checkpoint advances (`TestExternalSchemaEvolution/stable_identity_conflicts`).
+
+**Extension KV layout.**
+- The manifest's `kv_version` (default 0) versions the extension's own KV layout. The host records the version the extension last reported from a successful `configure`.
+- Starting a manifest with an older `kv_version` is refused before the process starts (`kv_downgrade`).
+- For a newer version, `configure` carries `kv.stored < kv.declared`. The SDK runs the extension's `Migrate` before `Configure`, using ordinary precondition-guarded `kv.commit` batches, which must be idempotent. The host records the new version only after `configure` succeeds, so a crash mid-migration is retried at the next start.
+
+**Rolling upgrades and downgrades.**
+- There are no rolling upgrades. One daemon owns a state directory and runs one process per extension, so old and new releases never run at once. An upgrade stops the old process before the new one starts.
+- There is no automatic downgrade. Once a release has migrated KV, the older release is refused. The operator restores a 06-02 backup or reinstalls the newer release.
+- An older release that does run against newer events, with an unchanged `kv_version`, answers them deterministically as `newer`.
+- Retiring a version is a release decision, and events still in use should be re-observed first.
+
+### Evidence
+
+- **Same suites, both ways.** `integration/extension_suites_test.go` runs the shared ingress, executor, inject, toolbelt (persistent and reopen) and the new extension KV suites (`conformance.RunExtensionKV`) against the example code in-process and as a subprocess. `TestWeakenedExtensionKVIsRejected` shows that the KV suite catches an unscoped or non-atomic KV.
+- **Failures.** `integration/extension_faults_test.go` covers:
+  - durable acceptance across a crash and a partial response, plus reconcile across a crash;
+  - the in-transaction deadline and the `reentrant_call` refusal;
+  - an emission commit that hangs or crashes (nothing accepted, then exactly one Event with its record on retry);
+  - protocol mismatches (version, manifest, KV downgrade);
+  - schema evolution across three releases;
+  - causal limits across a restart;
+  - host-surface scoping;
+  - discovery and atomic conflicts;
+  - executor lease fencing across restarts, through the real scheduler.
+- **Unit tests.** `protocol/evolution_test.go`, `protocol/jsonrpc/conn_test.go`, `protocol/sdk/sdk_test.go` and `internal/extproc/process_test.go`.
+
+### Not done in 07-02
+
+- **Daemon wiring.** `open-conduit serve` does not discover or start extensions yet. `extproc` provides every piece:
+  - `Discover` and `CheckConflicts` against the bootstrap registries;
+  - `Load` with `Deps` from runtime ingress, timers, control, artifacts and the secret resolver;
+  - registering `Remote`'s adapters next to the first-party ones;
+  - feeding config entries through `configure` and `validate`.
+
+  Wiring it into bootstrap is deferred to 07-03, together with install, the `config validate` hook and the round trip of two first-party integrations. It touches config validation and the daemon's composition, which 07-03 reshapes anyway.
+- **Surfaces not adapted yet.** These are deferred to 07-03, where the round trip needs them:
+  - host-to-extension: `webhook.handle`, `provider.*` (an external resource provider), `telemetry.export`, `work.annotate`, `validate` and `setup.run`;
+  - extension-to-host: `provider.owner_status` and the `setup.*` callbacks.
+
+  They stay catalogued. Until then the SDK answers the host-to-extension ones `method_not_found`, and the host answers the extension-to-host ones `unsupported`.
+
 ## Provisional decisions for user review
 
 1. JSON-RPC 2.0 over stdio, line-delimited, standard library only, symmetric, rather than go-plugin/gRPC.
@@ -273,17 +409,24 @@ The first-party extensions are not given manifests. They stay in-process, and `i
 9. Playbooks as a manifest-declared directory: a first-party convention for agent executors, not a core concept.
 10. The listed cross-extension couplings stay in-process and are not offered to subprocesses.
 
+Added by 07-02, also provisional:
+
+11. The install location `<config dir>/extensions/<name>/`, with the directory named after the manifest.
+12. The trust model: process separation is fault isolation, not a sandbox; the host enforces only the protocol surface.
+13. A subprocess never mints a causal root outside ingress: `event.accept` requires a parent in a configured scope.
+14. Payload schemas `<base>.v<N>` declared per base with readable versions. The host gates reads deterministically (no-match, false, generic render). Writes must be current. Envelopes are never rewritten, and older versions are upcast in the extension.
+15. A payload change requires new observation and delivery identities (include the schema version). Otherwise core's canonical-identity conflict applies.
+16. `kv_version` with host-recorded migration and no downgrade. There are no rolling upgrades.
+17. Executor re-adoption after an extension crash happens inside the host adapter, through the run's fenced persistence.
+18. Fallbacks for the in-transaction calls that cannot fail a transaction: the dependency filter counts a failure as false, and trigger selection falls back to the first input.
+19. Reentrancy is refused for every callback while any in-transaction call to that extension is outstanding. This is coarse: a concurrent background callback in that 250 ms window is refused too.
+20. Daemon wiring, and the remaining host-to-extension surfaces, are deferred to 07-03.
+
 ## Follow-on work
 
-- **07-02:**
-  - message types;
-  - the host runtime (discovery, conflicts, start, `initialize`/`configure`, supervision with backoff, stderr capture);
-  - the bounded in-transaction calls and `reentrant_call`;
-  - the scoped extension-to-host surface;
-  - the trust model;
-  - event payload evolution;
-  - an example external extension and executor run through the same ingress, storage and toolbelt suites, with reconnect, partial response, timeout and protocol-mismatch cases.
+- **07-02 (done, see above):** message types, the host runtime, bounded in-transaction calls, the scoped surface, the trust model, payload and KV evolution, and the example extension and executor through the shared suites.
 - **07-03:**
+  - daemon wiring of discovered extensions (bootstrap registries, `config validate`, configure on apply) and the remaining adapters (`webhook.handle`, `provider.*`, `telemetry.export`, `work.annotate`, `validate`, `setup.*`);
   - SDK and package layout, and the install location;
   - certification;
   - a round trip of two materially different first-party integrations that avoid the in-process couplings. Suggested: Slack (workspace-free ingress, receiver, tools, projector task, setup) and the shell executor (execution with resume, inject, interrupt, stop, artifacts).

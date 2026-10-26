@@ -37,8 +37,12 @@ type Manifest struct {
 	// Command is the argv that starts the process; a relative argv[0] is
 	// resolved against the manifest's directory. It receives the protocol
 	// on stdin/stdout; stderr is its diagnostic log.
-	Command  []string `json:"command"`
-	Provides Provides `json:"provides"`
+	Command []string `json:"command"`
+	// KVVersion is the layout version of the extension's own KV namespaces
+	// (07-02). The host records the version an extension last migrated to
+	// and refuses to start a manifest declaring an older one (kv_downgrade).
+	KVVersion int      `json:"kv_version,omitempty"`
+	Provides  Provides `json:"provides"`
 }
 
 // Provides lists the surfaces an extension implements. Each enables the
@@ -53,6 +57,10 @@ type Provides struct {
 	// Families are every event family the extension produces through
 	// ingress, event.accept or toolbelt emission, with recoverability.
 	Families []Family `json:"families,omitempty"`
+	// Schemas are the payload schemas the extension writes and reads, each
+	// with the versions it can read; the highest is the one it writes
+	// (07-02, schema evolution).
+	Schemas []SchemaDecl `json:"schemas,omitempty"`
 	// Routes are route handler names; Config marks a handler that
 	// validates its routes' opaque config.
 	Routes []RouteDecl `json:"routes,omitempty"`
@@ -287,6 +295,24 @@ func (m Manifest) Validate() error {
 		if f.ReDerivable && f.Loss != "" {
 			fail("family %q is re-derivable and cannot declare a loss", f.Type)
 		}
+	}
+	for _, sc := range p.Schemas {
+		dotted("schema", sc.Name)
+		if len(sc.Versions) == 0 {
+			fail("schema %q must list its readable versions", sc.Name)
+		}
+		for i, v := range sc.Versions {
+			if v < 1 || i > 0 && v <= sc.Versions[i-1] {
+				fail("schema %q versions must be positive and strictly increasing", sc.Name)
+				break
+			}
+		}
+		if versionSegment.MatchString(sc.Name[strings.LastIndex(sc.Name, ".")+1:]) {
+			fail("schema %q must name a base without a version suffix", sc.Name)
+		}
+	}
+	if m.KVVersion < 0 {
+		fail("kv_version must not be negative")
 	}
 	if ingress && len(p.Families) == 0 {
 		fail("an ingress extension type must declare its event families")

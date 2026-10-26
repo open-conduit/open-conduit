@@ -73,7 +73,14 @@ const (
 	CodeCancelled          = "cancelled"                    // the caller cancelled the request
 	CodeShuttingDown       = "shutting_down"                // the peer is draining after shutdown
 	CodeInternal           = "internal"                     // unauthored failure; details stay in the peer's log
+	CodeSchema             = "unreadable_schema"            // a payload schema version the running manifest cannot read or write (07-02)
+	CodeKVDowngrade        = "kv_downgrade"                 // stored extension KV is newer than the manifest's kv_version (07-02)
 )
+
+// ErrTransport means the connection to the peer failed: the process exited,
+// a pipe broke, or a malformed or truncated message closed the stream. It is
+// never an authored refusal; every request in flight fails with it.
+var ErrTransport = errors.New("protocol: transport closed")
 
 // Limits are the provisional framing and flow-control bounds of version 1.
 const (
