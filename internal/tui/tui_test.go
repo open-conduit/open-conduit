@@ -19,7 +19,11 @@ type fakeSource struct {
 	runs    []client.Run
 	queries []url.Values
 	content string
-	fail    error
+	// contents, when set, is each artifact's content by ID.
+	contents map[string]string
+	// live is a running run's output; nil answers not_live.
+	live *client.LiveRun
+	fail error
 }
 
 func (f *fakeSource) Runs(_ context.Context, q url.Values) (client.Page[client.Run], error) {
@@ -44,8 +48,18 @@ func (f *fakeSource) Run(_ context.Context, id string) (client.Run, error) {
 	return client.Run{}, errors.New("not found")
 }
 func (f *fakeSource) ArtifactContent(_ context.Context, id, byteRange string, w io.Writer) error {
-	_, err := io.WriteString(w, f.content)
+	content := f.content
+	if c, ok := f.contents[id]; ok {
+		content = c
+	}
+	_, err := io.WriteString(w, content)
 	return err
+}
+func (f *fakeSource) RunLive(_ context.Context, id string, tail int64) (client.LiveRun, error) {
+	if f.live == nil {
+		return client.LiveRun{}, &client.Error{Status: 409, Code: "not_live"}
+	}
+	return *f.live, nil
 }
 
 func run(id, state, kind string, attempt uint32, created string) client.Run {
@@ -175,5 +189,100 @@ func TestJobAndTurnShareTheView(t *testing.T) {
 	m = exec(t, m, cmd)
 	if view = m.View(); !strings.Contains(view, "Run turn-1") || !strings.Contains(view, "cost 0.0123 USD") || strings.Contains(view, "workspace") {
 		t.Fatalf("turn detail:\n%s", view)
+	}
+}
+
+// A running turn's log follows its live output, t steps to its transcript,
+// and once it ends the view settles on its artifacts.
+func TestRunningRunLogFollows(t *testing.T) {
+	r := run("r1", "running", "github.issue", 1, "1")
+	r.Artifacts = nil
+	src := &fakeSource{runs: []client.Run{r}}
+	setLive := func(activity string) {
+		src.live = &client.LiveRun{RunID: "r1", Outputs: []client.LiveOutput{
+			{Name: "activity", MediaType: "text/plain; charset=utf-8", Content: activity},
+			{Name: "transcript", MediaType: "application/x-ndjson", Content: `{"type":"system"}`},
+			{Name: "stderr", MediaType: "text/plain; charset=utf-8"},
+		}}
+	}
+	setLive("session started\nassistant: reading the issue\n")
+	var m tea.Model = New(src, time.Hour)
+	m = exec(t, m, m.(Model).fetch())
+	if !strings.Contains(m.View(), "t transcript") {
+		t.Fatalf("list footer lacks t:\n%s", m.View())
+	}
+	m, cmd := press(m, "l")
+	m = exec(t, m, cmd)
+	if v := m.View(); !strings.Contains(v, "assistant: reading the issue") || !strings.Contains(v, "following") {
+		t.Fatalf("live log:\n%s", v)
+	}
+	// A tick refetches while the view follows.
+	if _, cmd = m.Update(tickMsg{}); cmd == nil {
+		t.Fatal("a tick must refetch a followed log")
+	}
+	setLive("session started\nassistant: reading the issue\n  tool Bash ls\n")
+	m = exec(t, m, m.(Model).refreshLog())
+	if !strings.Contains(m.View(), "tool Bash ls") {
+		t.Fatalf("followed log:\n%s", m.View())
+	}
+	m, cmd = press(m, "t")
+	m = exec(t, m, cmd)
+	if v := m.View(); !strings.Contains(v, `{"type":"system"}`) || !strings.Contains(v, "r1 transcript") {
+		t.Fatalf("live transcript:\n%s", v)
+	}
+	// The turn ends: the view settles on the published transcript.
+	src.live = nil
+	src.runs[0].State = "completed"
+	src.runs[0].Artifacts = []client.Artifact{{ID: "act", MediaType: "text/plain; charset=utf-8", Size: 5}, {ID: "tr", MediaType: "application/x-ndjson", Size: 5}}
+	src.contents = map[string]string{"act": "final activity", "tr": "final transcript"}
+	m = exec(t, m, m.(Model).refreshLog())
+	if v := m.View(); !strings.Contains(v, "final transcript") || strings.Contains(v, "following") {
+		t.Fatalf("ended log:\n%s", v)
+	}
+	if _, cmd = m.Update(tickMsg{}); cmd == nil {
+		t.Fatal("tick keeps ticking")
+	}
+	if m.(Model).live {
+		t.Fatal("an ended run is not followed")
+	}
+}
+
+// t from a run's detail opens its transcript; a run without one says so.
+func TestTranscriptKey(t *testing.T) {
+	turn := run("turn-1", "completed", "github.issue", 1, "2")
+	turn.Artifacts = []client.Artifact{{ID: "act", MediaType: "text/plain; charset=utf-8", Size: 5}, {ID: "tr", MediaType: "application/x-ndjson", Size: 5}, {ID: "err", MediaType: "text/plain; charset=utf-8", Size: 5}}
+	job := run("job-1", "failed", "schedule.job", 1, "1")
+	src := &fakeSource{runs: []client.Run{turn, job}, contents: map[string]string{"act": "activity", "tr": "transcript lines", "err": "stderr"}}
+	var m tea.Model = New(src, time.Hour)
+	m = exec(t, m, m.(Model).fetch())
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = exec(t, m, cmd)
+	if !strings.Contains(m.View(), "t transcript") {
+		t.Fatalf("detail footer lacks t:\n%s", m.View())
+	}
+	m, cmd = press(m, "t")
+	m = exec(t, m, cmd)
+	if !strings.Contains(m.View(), "transcript lines") {
+		t.Fatalf("transcript:\n%s", m.View())
+	}
+	// t in the log view steps on to stderr, then wraps to the activity.
+	m, cmd = press(m, "t")
+	m = exec(t, m, cmd)
+	if !strings.Contains(m.View(), "stderr") {
+		t.Fatalf("next output:\n%s", m.View())
+	}
+	m, cmd = press(m, "t")
+	m = exec(t, m, cmd)
+	if !strings.Contains(m.View(), "activity") {
+		t.Fatalf("wrapped output:\n%s", m.View())
+	}
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	m = exec(t, m, cmd)
+	m, _ = m.Update(tea.KeyMsg{Type: tea.KeyDown})
+	m, cmd = press(m, "t")
+	m = exec(t, m, cmd)
+	if !strings.Contains(m.View(), "run has no transcript") {
+		t.Fatalf("job transcript:\n%s", m.View())
 	}
 }

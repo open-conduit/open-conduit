@@ -235,7 +235,14 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := management.NewServer(management.Options{Store: h.coord, Artifacts: h.artifacts, Now: clock.Now, Control: control, Toolbelt: belt, Config: configs, Version: "test", InstanceID: owner, Scheduler: h.scheduler, Resolver: &config.Resolver{}, Checks: o.checks, Ingress: h.ingress})
+	server, err := management.NewServer(management.Options{Store: h.coord, Artifacts: h.artifacts, Now: clock.Now, Control: control, Toolbelt: belt, Config: configs, Version: "test", InstanceID: owner, Scheduler: h.scheduler, Resolver: &config.Resolver{}, Checks: o.checks, Ingress: h.ingress,
+		Live: func(ctx context.Context, executor string, id domain.ID, tail int64) ([]extension.LiveOutput, error) {
+			l, ok := executors[executor].(extension.LiveExecutor)
+			if !ok {
+				return nil, management.ErrLiveUnsupported
+			}
+			return l.Live(ctx, id, tail)
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -484,7 +484,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
 	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck, d.posthogCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.scheduleCheck, d.introspectionCheck, d.extensionCheck},
-		DeepChecks: []func(context.Context) runtime.Check{d.githubAuthCheck, d.trackerAuthCheck, d.posthogAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck, d.extensionDeepCheck}, Annotate: d.annotate, Attach: d.attach, Nudge: d.poke}); err != nil {
+		DeepChecks: []func(context.Context) runtime.Check{d.githubAuthCheck, d.trackerAuthCheck, d.posthogAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck, d.extensionDeepCheck}, Annotate: d.annotate, Attach: d.attach, Live: d.live, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
 	return c, nil

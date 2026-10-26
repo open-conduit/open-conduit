@@ -63,6 +63,9 @@ type Options struct {
 	// Attach returns the attach command of the Work's latest attempt's
 	// executor registration (ErrAttachUnsupported, ErrNothingToAttach).
 	Attach func(ctx context.Context, executor string, work domain.Work) (AttachSpec, error)
+	// Live returns a running attempt's output so far from its executor
+	// registration (ErrLiveUnsupported, ErrNotLive).
+	Live func(ctx context.Context, executor string, execution domain.ID, tail int64) ([]extension.LiveOutput, error)
 	// Nudge asks the host loop for an immediate pass (optional).
 	Nudge func()
 }
@@ -137,6 +140,10 @@ func mapError(err error) *apiError {
 		return fail(409, "nothing_to_attach", "the Work's executor has nothing to attach to yet")
 	case errors.Is(err, ErrAttachUnsupported):
 		return fail(422, "attach_unsupported", "the Work's executor does not support attach")
+	case errors.Is(err, ErrNotLive):
+		return fail(409, "not_live", "the run is not running; its output is in its artifacts")
+	case errors.Is(err, ErrLiveUnsupported):
+		return fail(422, "live_unsupported", "the run's executor does not show output while it runs")
 	case errors.Is(err, ErrHashMismatch):
 		return fail(422, "candidate_hash_mismatch", "candidate hash does not match the submitted config")
 	case errors.Is(err, storage.ErrConflict), errors.Is(err, runtime.ErrNotEligible), errors.Is(err, storage.ErrClaimed):
@@ -262,6 +269,7 @@ var routes = []route{
 	{"GET", []string{"waits", "*"}, false, false, (*Server).getWait},
 	{"GET", []string{"runs"}, false, false, (*Server).listRuns},
 	{"GET", []string{"runs", "*"}, false, false, (*Server).getRun},
+	{"GET", []string{"runs", "*", "live"}, false, false, (*Server).liveRun},
 	{"GET", []string{"doctor"}, false, false, (*Server).doctor},
 	{"GET", []string{"artifacts"}, false, false, (*Server).listArtifacts},
 	{"GET", []string{"artifacts", "*", "content"}, false, false, (*Server).artifactContent},

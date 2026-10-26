@@ -195,6 +195,16 @@ func (d *daemon) attach(ctx context.Context, executor string, w domain.Work) (ma
 	return management.AttachSpec{Argv: spec.Argv, Dir: spec.Dir}, nil
 }
 
+// live returns a running attempt's output so far from its executor
+// registration, through the optional public extension.LiveExecutor.
+func (d *daemon) live(ctx context.Context, executor string, execution domain.ID, tail int64) ([]extension.LiveOutput, error) {
+	l, ok := d.executors[executor].(extension.LiveExecutor)
+	if !ok {
+		return nil, management.ErrLiveUnsupported
+	}
+	return l.Live(ctx, execution, tail)
+}
+
 // githubCheck reports registration, rate-limit, reconcile and projection
 // state per GitHub entry. It makes no service calls; credentials are
 // checked by githubAuthCheck under check_secrets.

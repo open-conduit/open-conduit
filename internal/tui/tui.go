@@ -12,6 +12,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -32,6 +33,7 @@ type Source interface {
 	Runs(context.Context, url.Values) (client.Page[client.Run], error)
 	Run(context.Context, string) (client.Run, error)
 	ArtifactContent(ctx context.Context, id, byteRange string, w io.Writer) error
+	RunLive(ctx context.Context, id string, tail int64) (client.LiveRun, error)
 }
 
 // Filters cycles through state filters with the f key.
@@ -46,6 +48,13 @@ const (
 	listMode mode = iota
 	detailMode
 	logMode
+)
+
+// The log view shows the run's log, its transcript, or the output at an
+// index (t steps through them).
+const (
+	pickLog        = -1
+	pickTranscript = -2
 )
 
 var (
@@ -76,13 +85,19 @@ type Model struct {
 	err      string
 	now      func() time.Time
 	// Operator controls (nil when the source offers none).
-	ctl      Controls
-	work     *client.Work
-	waits    []client.Wait
-	confirm  *pending
-	input    *string
-	notice   string
+	ctl     Controls
+	work    *client.Work
+	waits   []client.Wait
+	confirm *pending
+	input   *string
+	notice  string
+	// artifact is what the log view asked for (pickLog, pickTranscript or
+	// an index); shown is the index it shows. live means it follows a
+	// running run, refetched on every tick.
 	artifact int
+	shown    int
+	live     bool
+	logID    string
 }
 
 // pending is an action awaiting y/n confirmation.
@@ -115,6 +130,12 @@ type logMsg struct {
 	title string
 	text  string
 	err   error
+	// index is the output shown; live means the run is still running;
+	// refresh means a follow tick fetched it.
+	index   int
+	live    bool
+	refresh bool
+	run     string
 }
 type tickMsg struct{}
 type labelsMsg map[string]string
@@ -170,33 +191,41 @@ func (m Model) fetchDetail(id, work string) tea.Cmd {
 }
 
 func (m Model) fetchLog(r client.Run) tea.Cmd {
-	src, index := m.src, m.artifact
+	src, want := m.src, m.artifact
 	return func() tea.Msg {
-		a, ok := runview.LogArtifact(r)
-		if !ok {
-			return logMsg{err: fmt.Errorf("run has no artifacts")}
-		}
-		if index > 0 && len(r.Artifacts) > 0 {
-			// t cycles through every artifact (log, transcript, stderr).
-			a = r.Artifacts[index%len(r.Artifacts)]
-		}
-		if r.Retention.State == "expired" {
-			return logMsg{err: fmt.Errorf("artifact content expired under the retention policy")}
-		}
 		ctx, cancel := call()
 		defer cancel()
-		var b strings.Builder
-		byteRange := ""
-		if a.Size > LogTail {
-			byteRange = "bytes=-" + strconv.Itoa(LogTail)
+		if runview.Running(r) {
+			msg, ok := fetchLive(ctx, src, r.ID, want)
+			if ok {
+				return msg
+			}
+			// It ended (or shows nothing while it runs): read its artifacts.
+			if fresh, err := src.Run(ctx, r.ID); err == nil {
+				r = fresh
+			}
 		}
-		if a.Size == 0 {
-			return logMsg{title: a.ID}
+		return fetchArtifact(ctx, src, r, want)
+	}
+}
+
+// refreshLog refetches a followed run's output on a tick.
+func (m Model) refreshLog() tea.Cmd {
+	src, id, want := m.src, m.logID, m.shown
+	return func() tea.Msg {
+		ctx, cancel := call()
+		defer cancel()
+		if msg, ok := fetchLive(ctx, src, id, want); ok {
+			msg.refresh = true
+			return msg
 		}
-		if err := src.ArtifactContent(ctx, a.ID, byteRange, &b); err != nil {
+		r, err := src.Run(ctx, id)
+		if err != nil {
 			return logMsg{err: err}
 		}
-		return logMsg{title: a.ID, text: b.String()}
+		msg := fetchArtifact(ctx, src, r, want)
+		msg.refresh = true
+		return msg
 	}
 }
 
@@ -302,6 +331,84 @@ func (m *Model) focus(id, work string) {
 	}
 }
 
+func pick(n, want, log, transcript int, hasTranscript bool) (int, error) {
+	switch {
+	case want == pickTranscript && !hasTranscript:
+		return 0, fmt.Errorf("run has no transcript")
+	case want == pickTranscript:
+		return transcript, nil
+	case want == pickLog:
+		return log, nil
+	}
+	return want % n, nil
+}
+
+// fetchLive reads a running run's output; ok is false when it is not
+// running or its executor shows nothing until it ends.
+func fetchLive(ctx context.Context, src Source, id string, want int) (logMsg, bool) {
+	live, err := src.RunLive(ctx, id, LogTail)
+	var e *client.Error
+	if errors.As(err, &e) && (e.Code == "not_live" || e.Code == "live_unsupported") {
+		return logMsg{}, false
+	}
+	if err != nil {
+		return logMsg{err: err}, true
+	}
+	if len(live.Outputs) == 0 {
+		return logMsg{title: id + " (running, following)", live: true, run: id}, true
+	}
+	log, _ := runview.LiveLog(live.Outputs)
+	transcript, has := runview.LiveTranscript(live.Outputs)
+	i, err := pick(len(live.Outputs), want, log, transcript, has)
+	if err != nil {
+		return logMsg{err: err}, true
+	}
+	o := live.Outputs[i]
+	return logMsg{title: id + " " + o.Name + " (running, following)", text: o.Content, index: i, live: true, run: id}, true
+}
+
+func fetchArtifact(ctx context.Context, src Source, r client.Run, want int) logMsg {
+	if len(r.Artifacts) == 0 {
+		return logMsg{err: fmt.Errorf("run has no artifacts")}
+	}
+	log := 0
+	if a, ok := runview.LogArtifact(r); ok {
+		for i := range r.Artifacts {
+			if r.Artifacts[i].ID == a.ID {
+				log = i
+			}
+		}
+	}
+	transcript, has := 0, false
+	if a, ok := runview.TranscriptArtifact(r); ok {
+		for i := range r.Artifacts {
+			if r.Artifacts[i].ID == a.ID {
+				transcript, has = i, true
+			}
+		}
+	}
+	i, err := pick(len(r.Artifacts), want, log, transcript, has)
+	if err != nil {
+		return logMsg{err: err}
+	}
+	a := r.Artifacts[i]
+	if r.Retention.State == "expired" {
+		return logMsg{err: fmt.Errorf("artifact content expired under the retention policy")}
+	}
+	if a.Size == 0 {
+		return logMsg{title: a.ID, index: i, run: r.ID}
+	}
+	var b strings.Builder
+	byteRange := ""
+	if a.Size > LogTail {
+		byteRange = "bytes=-" + strconv.Itoa(LogTail)
+	}
+	if err := src.ArtifactContent(ctx, a.ID, byteRange, &b); err != nil {
+		return logMsg{err: err}
+	}
+	return logMsg{title: a.ID, text: b.String(), index: i, run: r.ID}
+}
+
 func (m Model) Init() tea.Cmd { return tea.Batch(m.fetch(), m.tick()) }
 
 func (m Model) selected() (client.Run, bool) {
@@ -319,6 +426,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tickMsg:
 		if m.mode == listMode {
 			return m, tea.Batch(m.fetch(), m.tick())
+		}
+		if m.mode == logMode && m.live {
+			return m, tea.Batch(m.refreshLog(), m.tick())
 		}
 		return m, m.tick()
 	case runsMsg:
@@ -346,14 +456,23 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.detail, m.attempts, m.mode = &run, msg.attempts, detailMode
 		}
 	case logMsg:
+		if msg.refresh && (m.mode != logMode || msg.run != m.logID || msg.index != m.shown) {
+			return m, nil // a follow tick for a view since left or changed
+		}
 		if msg.err != nil {
 			m.err = errText(msg.err)
 			return m, nil
 		}
 		m.err = ""
-		m.log, m.logTitle, m.offset, m.mode = strings.Split(strings.TrimRight(msg.text, "\n"), "\n"), msg.title, 0, logMode
-		if len(m.log) > m.page() {
-			m.offset = len(m.log) - m.page()
+		// A refresh keeps the scroll position unless it was at the end,
+		// which follows new output.
+		bottom := !msg.refresh || m.offset >= max(len(m.log)-m.page(), 0)
+		m.log, m.logTitle, m.mode = strings.Split(strings.TrimRight(msg.text, "\n"), "\n"), msg.title, logMode
+		m.shown, m.live, m.logID = msg.index, msg.live, msg.run
+		if bottom {
+			m.offset = max(len(m.log)-m.page(), 0)
+		} else {
+			m.offset = min(m.offset, max(len(m.log)-m.page(), 0))
 		}
 	case workMsg:
 		if msg.err != nil {
@@ -466,9 +585,9 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 				m.work, m.waits = nil, nil
 				return m, tea.Batch(m.fetchDetail(r.ID, r.WorkID), m.fetchWork(r.WorkID))
 			}
-		case "l":
+		case "l", "t":
 			if r, ok := m.selected(); ok {
-				m.artifact = 0
+				m.artifact = map[string]int{"l": pickLog, "t": pickTranscript}[k]
 				return m, m.fetchLog(r)
 			}
 		}
@@ -482,9 +601,9 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 		case "esc", "backspace", "h", "left":
 			m.mode, m.err = listMode, ""
 			return m, m.fetch()
-		case "l":
+		case "l", "t":
 			if m.detail != nil {
-				m.artifact = 0
+				m.artifact = map[string]int{"l": pickLog, "t": pickTranscript}[k]
 				return m, m.fetchLog(*m.detail)
 			}
 		case "r":
@@ -495,7 +614,7 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 	case logMode:
 		switch k {
 		case "esc", "backspace", "h", "left":
-			m.err = ""
+			m.err, m.live = "", false
 			if m.detail != nil {
 				m.mode = detailMode
 			} else {
@@ -510,9 +629,9 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 		case "pgdown", " ":
 			m.offset = min(m.offset+m.page(), max(len(m.log)-m.page(), 0))
 		case "t":
-			// Next artifact of the run (log, transcript, stderr).
+			// Next output of the run (log, transcript, stderr).
 			if r, ok := m.logRun(); ok {
-				m.artifact++
+				m.artifact = m.shown + 1
 				return m, m.fetchLog(r)
 			}
 		}
@@ -557,9 +676,9 @@ func (m Model) View() string {
 			filter = "all"
 		}
 		items := m.items()
-		view, keys := "by work", "enter detail · g every turn · l log · f filter · r refresh · q quit"
+		view, keys := "by work", "enter detail · g every turn · l log · t transcript · f filter · r refresh · q quit"
 		if m.perTurn {
-			view, keys = "every turn", "enter detail · g by work · l log · f filter · r refresh · q quit"
+			view, keys = "every turn", "enter detail · g by work · l log · t transcript · f filter · r refresh · q quit"
 		}
 		if m.ctl != nil {
 			keys += " · c claim · R run/retry · H hold · a attach · x/X cancel"
@@ -591,13 +710,13 @@ func (m Model) View() string {
 			b.WriteString(runview.Detail(*m.detail, m.attempts, now))
 		}
 		b.WriteString(WorkContext(m.work, m.waits))
-		keys := "l log · r refresh · esc back · q quit"
+		keys := "l log · t transcript · r refresh · esc back · q quit"
 		if m.ctl != nil {
 			keys += " · R run/retry · H hold/release · a attach · x cancel run · X cancel work"
 		}
 		b.WriteString("\n" + dimS.Render(keys) + "\n")
 	case logMode:
-		b.WriteString(boldS.Render("Log "+m.logTitle) + dimS.Render("  ↑/↓ pgup/pgdn scroll · t next artifact · esc back · q quit") + "\n")
+		b.WriteString(boldS.Render("Log "+m.logTitle) + dimS.Render("  ↑/↓ pgup/pgdn scroll · t next output · esc back · q quit") + "\n")
 		end := min(m.offset+m.page(), len(m.log))
 		for _, l := range m.log[m.offset:end] {
 			b.WriteString(l + "\n")

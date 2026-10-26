@@ -15,6 +15,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -711,6 +712,38 @@ func (c *Client) Runs(ctx context.Context, q url.Values) (Page[Run], error) {
 }
 func (c *Client) Run(ctx context.Context, id string) (Run, error) {
 	return get[Run](c, ctx, "runs/"+esc(id))
+}
+
+// LiveOutput is one output of a running run, as far as it has got.
+type LiveOutput struct {
+	Name      string `json:"name"`
+	MediaType string `json:"media_type,omitempty"`
+	Size      int64  `json:"size"`
+	Content   string `json:"content"`
+}
+
+// LiveRun is what a running run has written so far.
+type LiveRun struct {
+	RunID   string       `json:"run_id"`
+	Outputs []LiveOutput `json:"outputs"`
+}
+
+// RunLive returns a running run's output so far, each output at most its
+// last tail bytes (the server's default when tail is not positive). A run
+// that is not running answers 409 not_live; its output is in its artifacts.
+func (c *Client) RunLive(ctx context.Context, id string, tail int64) (out LiveRun, err error) {
+	q := url.Values{}
+	if tail > 0 {
+		q.Set("tail", strconv.FormatInt(tail, 10))
+	}
+	err = c.Do(ctx, "GET", "runs/"+esc(id)+"/live", q, nil, "", &out)
+	return
+}
+
+// IsNotLive reports a RunLive answer that the run is not running.
+func IsNotLive(err error) bool {
+	var e *Error
+	return errors.As(err, &e) && e.Code == "not_live"
 }
 
 // Doctor runs health checks; checkSecrets explicitly resolves references.

@@ -447,4 +447,5 @@ var _ interface {
 	extension.InjectExecutor
 	extension.ResumeExecutor
 	extension.ForgetExecutor
+	extension.LiveExecutor
 } = (*Executor)(nil)

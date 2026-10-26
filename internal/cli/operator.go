@@ -118,7 +118,7 @@ Commands:
   waits list [--scope-id --work-id --execution-id --state] | waits get ID
   artifacts list [--work-id --execution-id --kind] | artifacts cat ID [--range bytes=A-B]
   runs list|table [--scope-id --work-id --state --executor-binding --executor --work-kind --outcome] | runs get ID
-  runs log ID [--range bytes=A-B]
+  runs log ID [--follow] [--transcript] [--range bytes=A-B]
   doctor [--check-secrets] [--json]
   tui
   config validate FILE | config apply FILE --generation N [--key K]

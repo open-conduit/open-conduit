@@ -55,30 +55,7 @@ func (o *operator) runs(args []string) int {
 		}
 		return 0
 	case "log":
-		f := newFlags("log", "range")
-		pos, err := f.parse(args[1:])
-		if err != nil || len(pos) != 1 {
-			return usageError(o.errOut, "expected runs log ID")
-		}
-		c, _, err := o.client()
-		if err != nil {
-			return o.emit(nil, err)
-		}
-		cx, cancel := ctx()
-		defer cancel()
-		run, err := c.Run(cx, pos[0])
-		if err != nil {
-			return o.emit(nil, err)
-		}
-		a, ok := runview.LogArtifact(run)
-		if !ok {
-			fmt.Fprintln(o.errOut, "open-conduit: run has no artifacts")
-			return 1
-		}
-		if err = c.ArtifactContent(cx, a.ID, f.get("range"), o.out); err != nil {
-			return o.emit(nil, err)
-		}
-		return 0
+		return o.runLog(args[1:])
 	}
 	return usageError(o.errOut, "expected runs list|get|table|log")
 }

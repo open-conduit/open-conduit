@@ -223,3 +223,25 @@ func ValidateResult(r Result) error {
 	}
 	return nil
 }
+
+// LiveExecutor is optional. Live returns what a running execution has
+// written so far, in the same order and media types as the artifacts its
+// result will publish (for example rendered activity, then the raw
+// transcript), so an operator can follow an attempt before it ends. Each
+// output's Content holds at most its last tail bytes (all of it when tail
+// is not positive); Size is the whole output's length. ErrNotLive means no
+// segment of the execution is running here: its output is, or will be, in
+// its artifacts.
+type LiveExecutor interface {
+	Live(ctx context.Context, execution domain.ID, tail int64) ([]LiveOutput, error)
+}
+
+// LiveOutput is one output of a running execution.
+type LiveOutput struct {
+	Name, MediaType string
+	Size            int64
+	Content         []byte
+}
+
+// ErrNotLive is the definitive "not running here" answer of Live.
+var ErrNotLive = errors.New("execution is not running")
