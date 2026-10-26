@@ -118,7 +118,7 @@ func TestRouteHoldsAndToolInputs(t *testing.T) {
 	if match(t, scope, released, work).Match {
 		t.Fatal("another Work's release accepted")
 	}
-	for typ, want := range map[string]bool{gh.TypeChecksNone: true, gh.TypeAgentTurn: false, gh.TypeDependencyMet: false} {
+	for typ, want := range map[string]bool{gh.TypeChecksNone: true, gh.TypeChecksMissing: true, gh.TypeChecksPending: false, gh.TypeAgentTurn: false, gh.TypeDependencyMet: false} {
 		if got := match(t, scope, event(typ, "issue/3", "", struct{}{}), work).Match; got != want {
 			t.Fatalf("%s: match=%v want %v", typ, got, want)
 		}
@@ -133,15 +133,18 @@ func TestRenderEventsWithReplyHints(t *testing.T) {
 	}
 	cases := map[string]domain.Event{
 		"### Inline comment on PR #4 at a.go:9 by bob (2026-10-01T09:00:00Z; reply with `call github.pr.reply {\"number\": 4, \"comment_id\": 77, \"body\": …}`)": ev(gh.TypeCommentHuman, gh.SchemaComment, gh.CommentPayload{Kind: gh.KindReviewComment, Number: 4, ID: 77, Path: "a.go", Line: 9, Author: "bob", CreatedAt: at, Body: "x"}),
-		"### Comment on the issue by bob":                    ev(gh.TypeCommentHuman, gh.SchemaComment, gh.CommentPayload{Kind: gh.KindIssue, Number: 4, Author: "bob", CreatedAt: at}),
-		"### Review on PR #4 (changes requested)":            ev(gh.TypeCommentHuman, gh.SchemaComment, gh.CommentPayload{Kind: gh.KindReview, Number: 4, State: "CHANGES_REQUESTED", CreatedAt: at}),
-		"### Checks failed on PR #4 at abcdef1: ci":          ev(gh.TypeChecksFailed, gh.SchemaChecks, gh.ChecksPayload{Number: 4, SHA: "abcdef1234", Failed: []string{"ci"}}),
-		"### Checks passed on PR #4 at abcdef1\nPreview: u":  ev(gh.TypeChecksPassed, gh.SchemaChecks, gh.ChecksPayload{Number: 4, SHA: "abcdef1234", Preview: "u"}),
-		"### No checks ran on PR #4":                         ev(gh.TypeChecksNone, gh.SchemaChecks, gh.ChecksPayload{Number: 4, SHA: "abcdef1234", None: true}),
-		"### PR #4 merged":                                   ev(gh.TypePullMerged, gh.SchemaPull, gh.PullPayload{Number: 4}),
-		"### What you were waiting for\nThis issue was held": ev(gh.TypeHoldReleased, gh.SchemaHoldReleased, gh.ReleasedPayload{Why: "This issue was held."}),
+		"### Comment on the issue by bob":                   ev(gh.TypeCommentHuman, gh.SchemaComment, gh.CommentPayload{Kind: gh.KindIssue, Number: 4, Author: "bob", CreatedAt: at}),
+		"### Review on PR #4 (changes requested)":           ev(gh.TypeCommentHuman, gh.SchemaComment, gh.CommentPayload{Kind: gh.KindReview, Number: 4, State: "CHANGES_REQUESTED", CreatedAt: at}),
+		"### Checks failed on PR #4 at abcdef1: ci":         ev(gh.TypeChecksFailed, gh.SchemaChecks, gh.ChecksPayload{Number: 4, SHA: "abcdef1234", Failed: []string{"ci"}}),
+		"### Checks passed on PR #4 at abcdef1\nPreview: u": ev(gh.TypeChecksPassed, gh.SchemaChecks, gh.ChecksPayload{Number: 4, SHA: "abcdef1234", Preview: "u"}),
+		"### No checks ran on PR #4":                        ev(gh.TypeChecksNone, gh.SchemaChecks, gh.ChecksPayload{Number: 4, SHA: "abcdef1234", None: true}),
+		// v1 c37edf1 core TestRender: a required check that never reported.
+		"### Required checks never reported on PR #5 at 995bdda: netlify/site/deploy-preview\nThe PR can't merge without them.":                                          ev(gh.TypeChecksMissing, gh.SchemaChecks, gh.ChecksPayload{Number: 5, SHA: "995bdda12", Missing: []string{"netlify/site/deploy-preview"}}),
+		"### Checks failed on PR #6 at abcdef1: lint\nSee `call github.checks {\"number\": 6}` for links to each.\nThese required checks never reported either: deploy.": ev(gh.TypeChecksFailed, gh.SchemaChecks, gh.ChecksPayload{Number: 6, SHA: "abcdef1234", Failed: []string{"lint"}, Missing: []string{"deploy"}}),
+		"### PR #4 merged": ev(gh.TypePullMerged, gh.SchemaPull, gh.PullPayload{Number: 4}),
+		"### What you were waiting for\nThis issue was held":                                                                      ev(gh.TypeHoldReleased, gh.SchemaHoldReleased, gh.ReleasedPayload{Why: "This issue was held."}),
 		"### What you were waiting for\nYou were waiting for PR #9 to merge. That has happened: PR #9 was closed without merging": ev(gh.TypeDependencyMet, "core.subscription.alias.v1", map[string]string{"label": "pr:9:merged", "source_type": gh.TypePullClosed}),
-		"### What you were waiting for\nIt is now past": {Type: "core.wait.timeout"},
+		"### What you were waiting for\nIt is now past":                                                                           {Type: "core.wait.timeout"},
 	}
 	for want, e := range cases {
 		got, ok := gh.RenderEvent(e)

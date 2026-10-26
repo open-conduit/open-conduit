@@ -27,7 +27,7 @@ A `github` extension entry (an ingress entry: `config.scope` must be the contain
 | `projection` | `disabled`, `verify_seconds` (default 900) and `dry_run`. |
 | `webhook_secret` | Names a selected scope secret. |
 | `base_branch` | The branch PRs target (default: the repository's). Since 03-04. |
-| `no_checks_minutes` | Default 10; `-1` disables. How long a PR head with no checks waits before `github.checks.none`. Since 03-04. |
+| `no_checks_minutes` | Default 10; `-1` disables. How long a PR head with no checks waits before `github.checks.none` (since 03-04), and how long a head without a check the base branch requires is held before `github.checks.missing` (since 08-01). With `-1` such a head stays pending. |
 
 The entry also needs a `connection`. A route uses handler `github`.
 
@@ -50,7 +50,7 @@ The client enforces these rules:
 | `github.issue.open`, `github.issue.closed` | `issue/N` | `issue/N`, or `issue/N/generation/reopen-<event id>` after a reopening |
 | `github.pull_request.open`, `.closed`, `.merged` | `pr/N` | The tracker issue the PR belongs to, else `pr/N` |
 | `github.comment.human`, `.bot`, `.agent` (conversation, inline and review; `kind` in the payload) | `issue/N/comment/ID`, `pr/N/comment/ID`, `pr/N/review_comment/ID`, `pr/N/review/ID` | Their issue or PR's key |
-| `github.checks.pending`, `.passed`, `.failed` | `pr/N/checks` | The PR's key |
+| `github.checks.pending`, `.passed`, `.failed`, `.none`, `.missing` | `pr/N/checks` | The PR's key |
 
 Push and reconcile share one normalizer. The observation version hashes the whole normalized envelope (type, key, occurrence time, payload). Equal external state from either transport therefore has the same version and delivery ID (`item@version`), and B02 deduplication keeps the first accepted envelope. Any difference is a new version, so the runtime's canonical-identity check can never wedge a source. Types name observed state, not webhook actions, because reconcile sees state. Author class is in the type, so a Wait can filter out agent and bot notes without a payload predicate.
 
@@ -84,7 +84,7 @@ Handler `github` reads only the detached Event, Scope and Work. It finds its ext
   - It has a required label, if any are configured.
   - It does not carry the claimed label, unless it is a reopened generation. A claimed issue with no Work belongs to another owner, which preserves a single owner while Open Supervisor runs.
   - Scheduled issues are claimed by the `github-hold` route (03-04), never by `github`.
-- **Existing Work** receives these as input: new human comments, reviews with a body, other Works' agent comments (including Open Supervisor-marked notes from other issues), closes, merges and completed checks.
+- **Existing Work** receives these as input: new human comments, reviews with a body, other Works' agent comments (including Open Supervisor-marked notes from other issues), closes, merges and completed checks (passed, failed, none and missing required checks).
 - **Never delivered:** edits, unmarked bot comments, this Work's own notes, open-state updates, pending checks and absence.
 
 Labels influence only this claim decision. Work lifecycle never reads them.

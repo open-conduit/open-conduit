@@ -34,7 +34,7 @@ An agent reaches an operation as MCP `call {operation, input}` or `os call <oper
 | `github.issue.create` | `agent issue create [--wait] [--until]` | Follow-up child work as a marked, intent-backed issue: an ambiguous create is found again by its marker. With `wait`/`until`, the conditions are validated and the hold marker and `scheduled` label are added. |
 | `github.pr.list` / `.view` / `.create` | `agent pr list/view/create` | Create adds `Closes #N` (or `owner/repo#N`) and uses GitHub's one-open-PR-per-head rule for idempotency: a retried or lost create returns the open PR. View includes inline comments and reviews with reply calls. |
 | `github.pr.comment` / `.reply` | `agent pr comment/reply` | Durable intents. A reply records `ReplyTo` and recovers by searching the PR's review comments. |
-| `github.checks` | `agent checks` | The PR head's evaluated runs, failures and preview, using the ingress evaluation. |
+| `github.checks` | `agent checks` | The PR head's evaluated runs, failures and preview, using the ingress evaluation. Since 08-01 it also returns the base branch's `required` checks with their sources, any `missing` ones, the states `waiting on required checks` and `required checks missing`, and a note when a source was refused. |
 | `github.attachment.upload` | `agent attachment upload` | Committed to the orphan `open-conduit-attachments` branch at `<issue>/<intent digest>-<name>`, so a retry keeps one file. |
 | `github.attachment.get` | `agent attachment get` | Signed-in fetch, only for this host, its API host or `*.githubusercontent.com`. A redirect that leaves the host drops `Authorization`, and foreign links are refused without a request. The result uses the generic `open-conduit.toolbelt.file.v1` schema; the `os` client writes it to `save_to` in the agent's own directory. A `file_path` input is read and sent as `content_base64` the same way. |
 | `github.wait` | `agent wait`, `agent schedule` | See below. |
@@ -92,6 +92,20 @@ Projections (v1): held Work carries only `scheduled` (not claimed) until its fir
   - The `github.checks` tool returns state `unknown` with a note.
   - Doctor's `github_auth` reports `workflow_runs` as a note and `checks_unreadable` as a warning. A GitHub App covers check runs fully.
 - **No checks.** `github.checks.none` replaces v1's no-checks event. An open PR head with no runs or statuses is observed as having no checks once its commit is older than `no_checks_minutes` (default 10; `-1` disables). The occurrence is the commit time plus the delay, so it is deterministic for push and reconcile. The route delivers it, and the renderer prints v1's "No checks ran" text. A failed commit read observes nothing rather than failing a scan.
+- **Required checks (08-01, v1 `c37edf1`).** GitHub already names the checks a PR needs, so there is no new setting. The checks the PR's base branch requires come from two sources:
+  - the branch read's `protection.required_status_checks`, which needs no Administration permission;
+  - the branch rules read (`rules/branches/{branch}`, rulesets).
+
+  Both are conditional GETs under the client's rate-limit pause, and each evaluation memoizes them per base branch. When the evaluation would be a pass, the extension compares the head's runs and statuses with the required names:
+  - **Something missing.** A head missing a required check is held: it is observed as `github.checks.pending` with `missing`, which is never delivered. Once `no_checks_minutes` has passed since the commit, it becomes `github.checks.missing`. Its occurrence is the later of the last run and the commit time plus the delay, so push and reconcile agree. The agent hears v1's "Required checks never reported on PR #N at sha: …" with its advice, not "Checks passed".
+  - **Nothing ran at all.** A head with no runs or statuses on a branch that requires checks reports `github.checks.missing` naming every required check, never "No checks ran".
+  - **A failure too.** A failed head lists its missing checks as well ("These required checks never reported either").
+
+  States stay deduplicated, with no debounce. The playbook gains the "Required checks never reported" line. The v1 change to `noChecksMinutes` was only to its comment, so the 06-02 converter needs nothing new.
+- **Degrading explicitly.** Required checks can be unreadable in three ways, and none of them fails a reconcile:
+  - **A refused source.** GitHub can refuse a source with 403 or 404: a token without the permission, or rulesets on a plan that lacks them, as on a private GitHub Free repository. That source is skipped and recorded under `refused`. The `github.checks` tool's note says which sources were read. Doctor's `github_auth` names the required checks and their source. It notes refused rulesets and warns `required_checks_unreadable` when the protection read is refused.
+  - **No check runs.** Required names are job names, while Actions workflow runs carry workflow names. So when check runs were refused (03-06), required checks are not verified at all, rather than every job looking missing. The note and doctor say so.
+  - **Rate limits and failed reads.** These stay errors, so a missing requirement is never inferred from them.
 - **No debounce.** v1's 20-second debounce is intentionally not ported. Deliveries are state-versioned aggregates, so repeated evaluations of one head state deduplicate. A check suite that starts after the others completed can still produce an early `passed`, as it could in v1 beyond 20 seconds.
 
 ## Playbooks and setup
@@ -105,7 +119,7 @@ Projections (v1): held Work carries only `scheduled` (not claimed) until its fir
 
 ```sh
 go test -race ./extensions/github/... ./internal/cli ./executors/claudecode
-go test -race -run 'TestTranslatedWait|TestGitHubTools|TestGitHubWait|TestGitHubAlready|TestGitHubHeld|TestGitHubCrossScope|TestGitHubNoChecks|TestGitHubToolWrites|TestSetupGuide|TestDaemonGitHub' ./integration
+go test -race -run 'TestTranslatedWait|TestGitHubTools|TestGitHubWait|TestGitHubAlready|TestGitHubHeld|TestGitHubCrossScope|TestGitHubNoChecks|TestGitHubRequiredChecks|TestGitHubToolWrites|TestSetupGuide|TestDaemonGitHub' ./integration
 ```
 
 - **Translated waits.** [`translated_wait_test.go`](../../integration/translated_wait_test.go) runs translated waits through the production toolbelt and scheduler on SQLite, persistent and reopened. It covers an already-met dependency waking at once with alias lineage and no key transfer, `FromNow` ignoring history and then waking once, a filter selecting the named item, own-key input still waking, cross-scope refusal and authorization, and the timeout timer.

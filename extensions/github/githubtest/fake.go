@@ -125,25 +125,29 @@ type Server struct {
 	// refuseRuns makes check runs an ordinary 403 (a fine-grained token);
 	// refuseActions does the same for Actions workflow runs.
 	refuseRuns, refuseActions bool
-	statuses                  map[string][]Status
-	tokens                    map[string]bool
-	apps                      map[string]*rsa.PublicKey
-	installs                  map[string]string // installation token → app id
-	writes                    []Write
-	requests                  []string
-	notMod                    int
-	limitNext                 []limit
-	failNext                  map[string]int
-	loseNext                  map[string]int
-	tokenTTL                  time.Duration
-	issued                    int
-	commits                   map[string]time.Time
-	contents                  map[string][]byte // attachments branch path → content
-	branches                  map[string]bool
-	files                     map[string]string // /files/<name> → redirect target
-	fileData                  map[string][]byte
-	hooks                     []*Hook
-	perms                     map[string]bool
+	// protection and rulesets are the checks each branch requires;
+	// refuseProtection and refuseRulesets make those reads an ordinary 403.
+	protection, rulesets             map[string][]string
+	refuseProtection, refuseRulesets bool
+	statuses                         map[string][]Status
+	tokens                           map[string]bool
+	apps                             map[string]*rsa.PublicKey
+	installs                         map[string]string // installation token → app id
+	writes                           []Write
+	requests                         []string
+	notMod                           int
+	limitNext                        []limit
+	failNext                         map[string]int
+	loseNext                         map[string]int
+	tokenTTL                         time.Duration
+	issued                           int
+	commits                          map[string]time.Time
+	contents                         map[string][]byte // attachments branch path → content
+	branches                         map[string]bool
+	files                            map[string]string // /files/<name> → redirect target
+	fileData                         map[string][]byte
+	hooks                            []*Hook
+	perms                            map[string]bool
 }
 
 // Hook is a repository webhook.
@@ -181,7 +185,8 @@ func New(repo string, tokens ...string) *Server {
 	s := &Server{Repo: repo, now: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), nextID: 1000, issues: map[int]*Issue{}, pulls: map[int]*Pull{},
 		events: map[int][]IssueEvent{}, checks: map[string][]CheckRun{}, statuses: map[string][]Status{}, tokens: map[string]bool{},
 		apps: map[string]*rsa.PublicKey{}, installs: map[string]string{}, failNext: map[string]int{}, loseNext: map[string]int{}, tokenTTL: time.Hour,
-		commits: map[string]time.Time{}, contents: map[string][]byte{}, branches: map[string]bool{}, files: map[string]string{}, fileData: map[string][]byte{}}
+		commits: map[string]time.Time{}, contents: map[string][]byte{}, branches: map[string]bool{}, files: map[string]string{}, fileData: map[string][]byte{},
+		protection: map[string][]string{}, rulesets: map[string][]string{}}
 	for _, t := range tokens {
 		s.tokens[t] = true
 	}
@@ -491,6 +496,31 @@ func (s *Server) RateLimitSecondary(retryAfter int) {
 func (s *Server) RefuseCheckRuns(actions bool) {
 	s.mu.Lock()
 	s.refuseRuns, s.refuseActions = true, !actions
+	s.mu.Unlock()
+}
+
+// RequireChecks makes branch protection on branch require contexts (the
+// branch read's protection.required_status_checks).
+func (s *Server) RequireChecks(branch string, contexts ...string) {
+	s.mu.Lock()
+	s.protection[branch] = append([]string(nil), contexts...)
+	s.mu.Unlock()
+}
+
+// RequireRulesetChecks makes a ruleset on branch require contexts (a
+// required_status_checks rule from the branch rules read).
+func (s *Server) RequireRulesetChecks(branch string, contexts ...string) {
+	s.mu.Lock()
+	s.rulesets[branch] = append([]string(nil), contexts...)
+	s.mu.Unlock()
+}
+
+// RefuseRequiredChecks makes branch reads (protection) and branch rules
+// reads (rulesets) an ordinary 403, as GitHub answers an identity without
+// the permission or a plan without rulesets.
+func (s *Server) RefuseRequiredChecks(protection, rulesets bool) {
+	s.mu.Lock()
+	s.refuseProtection, s.refuseRulesets = protection, rulesets
 	s.mu.Unlock()
 }
 
@@ -854,6 +884,23 @@ func (s *Server) link(r *http.Request, out any) string {
 	return ""
 }
 
+// baseBranch reports whether name is a branch the fake knows as a base:
+// main, any PR's base, or a branch given required checks.
+func (s *Server) baseBranch(name string) bool {
+	if name == "main" {
+		return true
+	}
+	if _, ok := s.protection[name]; ok {
+		return true
+	}
+	for _, p := range s.pulls {
+		if p.BaseRef == name {
+			return true
+		}
+	}
+	return false
+}
+
 func paged[T any](r *http.Request, all []T) []any {
 	q := r.URL.Query()
 	per, _ := strconv.Atoi(q.Get("per_page"))
@@ -1010,10 +1057,37 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		s.commits[sha] = t
 		return http.StatusCreated, s.pullJSON(n)
 	case get && strings.HasPrefix(rest, "/branches/"):
-		if s.branches[strings.TrimPrefix(rest, "/branches/")] {
-			return http.StatusOK, map[string]any{"name": strings.TrimPrefix(rest, "/branches/")}
+		name := strings.TrimPrefix(rest, "/branches/")
+		if s.branches[name] {
+			return http.StatusOK, map[string]any{"name": name}
 		}
-		return 0, nil
+		if !s.baseBranch(name) {
+			return 0, nil
+		}
+		if s.refuseProtection {
+			return http.StatusForbidden, map[string]any{"message": "Resource not accessible by personal access token"}
+		}
+		required := s.protection[name]
+		checks := []map[string]any{}
+		for _, c := range required {
+			checks = append(checks, map[string]any{"context": c, "app_id": nil})
+		}
+		return http.StatusOK, map[string]any{"name": name, "protected": len(required) > 0, "protection": map[string]any{"enabled": len(required) > 0,
+			"required_status_checks": map[string]any{"enforcement_level": "non_admins", "contexts": append([]string{}, required...), "checks": checks}}}
+	case get && strings.HasPrefix(rest, "/rules/branches/"):
+		if s.refuseRulesets {
+			return http.StatusForbidden, map[string]any{"message": "Upgrade to GitHub Pro or make this repository public to enable this feature."}
+		}
+		list := []map[string]any{}
+		if required := s.rulesets[strings.TrimPrefix(rest, "/rules/branches/")]; len(required) > 0 {
+			checks := []map[string]any{}
+			for _, c := range required {
+				checks = append(checks, map[string]any{"context": c})
+			}
+			list = append(list, map[string]any{"type": "deletion", "ruleset_id": 1},
+				map[string]any{"type": "required_status_checks", "ruleset_id": 1, "parameters": map[string]any{"strict_required_status_checks_policy": false, "required_status_checks": checks}})
+		}
+		return http.StatusOK, paged(r, list)
 	case r.Method == http.MethodPost && rest == "/git/trees":
 		return http.StatusCreated, map[string]any{"sha": "tree-1"}
 	case r.Method == http.MethodPost && rest == "/git/commits":

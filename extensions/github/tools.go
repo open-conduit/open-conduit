@@ -719,31 +719,62 @@ func (t *Tools) checks(ctx context.Context, b *bound, data json.RawMessage) (any
 			return nil, refuse("no_open_pr", "the issue has no open PR")
 		}
 	}
-	runs, statuses, unreadable, err := c.CheckState(ctx, repo, p.Head.SHA)
+	runs, statuses, from, err := c.CheckState(ctx, repo, p.Head.SHA)
 	if err != nil {
 		return nil, err
 	}
-	n := &normalizer{s: b.code.Settings, c: c, m: newMemo()}
+	n := &normalizer{s: b.code.Settings, c: c, m: newMemo(), received: t.o.Now()}
 	n.remember(p)
+	// The checks the base branch requires (08-01), read once here and
+	// shared with the evaluation through the normalizer's memo.
+	req, err := n.requiredChecks(ctx, p.Base.Ref)
+	if err != nil {
+		return nil, err
+	}
 	out := map[string]any{"pr": p.Number, "sha": p.Head.SHA, "state": "no checks", "runs": []CheckRun{}}
-	if unreadable {
-		out["note"] = "this connection cannot read check runs or workflow runs (a fine-grained token has no Checks permission; grant Actions: read or use a GitHub App), so only commit statuses are shown"
+	if len(req.Names) > 0 || len(req.Refused) > 0 {
+		out["required"] = map[string]any{"names": nonNil(req.Names), "from": nonNil(req.From), "refused": req.Refused}
+	}
+	var notes []string
+	if from == RunsUnreadable {
+		notes = append(notes, "this connection cannot read check runs or workflow runs (a fine-grained token has no Checks permission; grant Actions: read or use a GitHub App), so only commit statuses are shown")
 		if len(statuses) == 0 {
 			out["state"] = "unknown"
 		}
 	}
-	if o, ok, err := n.checksObservation(ctx, p, runs, statuses); err != nil {
+	if note := RequiredNote(req, from); note != "" {
+		notes = append(notes, note)
+	}
+	if len(notes) > 0 {
+		out["note"] = strings.Join(notes, "; ")
+	}
+	verify := from == RunsFromCheckRuns
+	if len(runs)+len(statuses) == 0 && verify && len(req.Names) > 0 {
+		// Nothing reported at all, though the base branch requires checks.
+		out["state"], out["missing"] = "waiting on required checks", req.Names
+		if _, due := n.checksDue(ctx, p); due {
+			out["state"] = "required checks missing"
+		}
+	}
+	if o, ok, err := n.checksObservation(ctx, p, runs, statuses, from); err != nil {
 		return nil, err
 	} else if ok {
 		var cp ChecksPayload
 		_ = json.Unmarshal(o.Event.Data.Data, &cp)
-		switch o.Event.Type {
-		case TypeChecksPassed:
+		switch {
+		case o.Event.Type == TypeChecksPassed:
 			out["state"] = "passed"
-		case TypeChecksFailed:
+		case o.Event.Type == TypeChecksFailed:
 			out["state"], out["failed"] = "failed", cp.Failed
+		case o.Event.Type == TypeChecksMissing:
+			out["state"] = "required checks missing"
+		case cp.Complete && len(cp.Missing) > 0:
+			out["state"] = "waiting on required checks"
 		default:
 			out["state"] = "pending"
+		}
+		if len(cp.Missing) > 0 {
+			out["missing"] = cp.Missing
 		}
 		out["runs"] = cp.Runs
 		if cp.Preview != "" {
@@ -751,6 +782,13 @@ func (t *Tools) checks(ctx context.Context, b *bound, data json.RawMessage) (any
 		}
 	}
 	return out, nil
+}
+
+func nonNil(s []string) []string {
+	if s == nil {
+		return []string{}
+	}
+	return s
 }
 
 // ---- attachments ---------------------------------------------------------------

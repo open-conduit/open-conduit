@@ -21,7 +21,7 @@ func RenderEvent(e domain.Event) (string, bool) {
 			return "", false
 		}
 		return renderComment(c), true
-	case TypeChecksPassed, TypeChecksFailed, TypeChecksNone:
+	case TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing:
 		var c ChecksPayload
 		if e.Data.Schema != SchemaChecks || json.Unmarshal(e.Data.Data, &c) != nil {
 			return "", false
@@ -35,8 +35,14 @@ func RenderEvent(e domain.Event) (string, bool) {
 				s += "\nPreview: " + c.Preview
 			}
 			return s, true
+		case TypeChecksMissing:
+			return fmt.Sprintf("### Required checks never reported on PR #%d at %s: %s\n%s", c.Number, short(c.SHA), strings.Join(c.Missing, ", "), missingAdvice), true
 		}
-		return fmt.Sprintf("### Checks failed on PR #%d at %s: %s\nSee `call %s {\"number\": %d}` for links to each.", c.Number, short(c.SHA), strings.Join(c.Failed, ", "), OpChecks, c.Number), true
+		s := fmt.Sprintf("### Checks failed on PR #%d at %s: %s\nSee `call %s {\"number\": %d}` for links to each.", c.Number, short(c.SHA), strings.Join(c.Failed, ", "), OpChecks, c.Number)
+		if len(c.Missing) > 0 {
+			s += fmt.Sprintf("\nThese required checks never reported either: %s. %s", strings.Join(c.Missing, ", "), missingAdvice)
+		}
+		return s, true
 	case TypePullMerged, TypePullClosed:
 		var p PullPayload
 		if e.Data.Schema != SchemaPull || json.Unmarshal(e.Data.Data, &p) != nil {
@@ -75,6 +81,10 @@ func RenderEvent(e domain.Event) (string, bool) {
 	}
 	return "", false
 }
+
+// missingAdvice follows the required checks that never reported (v1
+// c37edf1).
+const missingAdvice = "The PR can't merge without them. Find out why they didn't start (a `[skip …]` in the PR title or a commit message stops some deploys) and start them, often with a new push; if they shouldn't run on this PR, say so in your report."
 
 func short(sha string) string {
 	if len(sha) > 7 {

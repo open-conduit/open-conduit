@@ -152,6 +152,20 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 	if blob, _ := json.Marshal(report); bytes.Contains(blob, []byte("file:github-token")) || bytes.Contains(blob, []byte(`tok"`)) {
 		t.Fatalf("doctor disclosed a reference or value: %s", blob)
 	}
+	// 5a. Required checks (08-01): doctor names them and their source, notes
+	//     rulesets the plan lacks and warns when protection is refused.
+	fake.RequireChecks("main", "test")
+	fake.RefuseRequiredChecks(false, true)
+	if r, err := d.c.Doctor(ctx, true); err != nil || check(r, "github_auth").Code != "verified" ||
+		!strings.Contains(strings.Join(check(r, "github_auth").Items, " "), "main requires test (from branch_protection); required checks were read from branch_protection only: GitHub refused rulesets") {
+		t.Fatalf("required checks: %+v %v", check(r, "github_auth"), err)
+	}
+	fake.RefuseRequiredChecks(true, false)
+	if r, err := d.c.Doctor(ctx, true); err != nil || check(r, "github_auth").Status != "warn" || check(r, "github_auth").Code != "required_checks_unreadable" {
+		t.Fatalf("refused protection: %+v %v", check(r, "github_auth"), err)
+	}
+	fake.RefuseRequiredChecks(false, false)
+	fake.RequireChecks("main")
 
 	// 6. The issue is claimed and worked by the agent.
 	workFor := func(issue int) (client.Work, bool) {

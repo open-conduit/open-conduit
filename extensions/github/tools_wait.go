@@ -21,7 +21,7 @@ import (
 // waitInputTypes are the own-key families that still reach an agent while
 // it waits (v1: comments, check results and merges arrive meanwhile). Agent
 // comments are excluded: the wait's own reason comment is one.
-var waitInputTypes = []string{TypeDependencyMet, TypeCommentHuman, TypeIssueClosed, TypePullMerged, TypePullClosed, TypeChecksPassed, TypeChecksFailed, TypeChecksNone}
+var waitInputTypes = []string{TypeDependencyMet, TypeCommentHuman, TypeIssueClosed, TypePullMerged, TypePullClosed, TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing}
 
 // TurnPayload is a TypeAgentTurn event: an agent on an issue ended a turn.
 type TurnPayload struct {

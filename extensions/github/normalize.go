@@ -42,6 +42,7 @@ const (
 	TypeChecksPassed  = "github.checks.passed"
 	TypeChecksFailed  = "github.checks.failed"
 	TypeChecksNone    = "github.checks.none"
+	TypeChecksMissing = "github.checks.missing"
 	TypeDelivery      = "github.delivery"
 )
 
@@ -61,7 +62,7 @@ const DeliveryLoss = "Raw webhook deliveries (github.delivery, the trigger input
 func Families() []extension.EventFamily {
 	var out []extension.EventFamily
 	for _, t := range []string{TypeIssueOpen, TypeIssueClosed, TypePullOpen, TypePullClosed, TypePullMerged,
-		TypeCommentHuman, TypeCommentBot, TypeCommentAgent, TypeChecksPending, TypeChecksPassed, TypeChecksFailed, TypeChecksNone} {
+		TypeCommentHuman, TypeCommentBot, TypeCommentAgent, TypeChecksPending, TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing} {
 		out = append(out, extension.EventFamily{Type: t, ReDerivable: true})
 	}
 	return append(out, extension.EventFamily{Type: TypeDelivery, Loss: DeliveryLoss})
@@ -162,6 +163,12 @@ type ChecksPayload struct {
 	// None marks a head that has had no checks at all for no_checks_minutes
 	// (the repository has no CI): v1's "No checks ran".
 	None bool `json:"none,omitempty"`
+	// Missing are checks the base branch requires (branch protection,
+	// rulesets) that have not reported on the head at all. A head missing
+	// one is pending until no_checks_minutes, then github.checks.missing,
+	// or failed when something also failed. Omitted when empty, so a head
+	// with nothing missing keeps its observation identity.
+	Missing []string `json:"missing,omitempty"`
 }
 
 // DeliveryPayload is a raw webhook delivery (non-re-derivable).
@@ -235,10 +242,11 @@ type memo struct {
 	pulls    map[int]rawPull
 	reopens  map[string][]rawIssueEvent
 	notFound map[string]bool
+	required map[string]RequiredChecks
 }
 
 func newMemo() *memo {
-	return &memo{issues: map[string]rawIssue{}, pulls: map[int]rawPull{}, reopens: map[string][]rawIssueEvent{}, notFound: map[string]bool{}}
+	return &memo{issues: map[string]rawIssue{}, pulls: map[int]rawPull{}, reopens: map[string][]rawIssueEvent{}, notFound: map[string]bool{}, required: map[string]RequiredChecks{}}
 }
 
 // normalizer turns service objects into canonical observations. Push and
@@ -598,8 +606,10 @@ func (n *normalizer) pullComment(ctx context.Context, kind string, number int, c
 var badConclusions = map[string]bool{"failure": true, "timed_out": true, "cancelled": true, "action_required": true, "startup_failure": true}
 
 // checksObservation evaluates a PR head's runs and statuses (v1 semantics).
-// It reports false when there is nothing to observe yet.
-func (n *normalizer) checksObservation(ctx context.Context, p rawPull, runs []rawCheckRun, statuses []rawStatus) (extension.Observation, bool, error) {
+// It reports false when there is nothing to observe yet. from is how the runs
+// were read (checkState): only with check runs are the base branch's
+// required checks verified (08-01).
+func (n *normalizer) checksObservation(ctx context.Context, p rawPull, runs []rawCheckRun, statuses []rawStatus, from string) (extension.Observation, bool, error) {
 	if len(runs)+len(statuses) == 0 {
 		return extension.Observation{}, false, nil
 	}
@@ -679,6 +689,24 @@ func (n *normalizer) checksObservation(ctx context.Context, p rawPull, runs []ra
 	case out.Complete:
 		typ = TypeChecksPassed
 	}
+	if out.Complete && from == RunsFromCheckRuns {
+		// A required check that never started (a deploy skipped by
+		// "[skip …]", say) is not a pass: hold the head as pending until
+		// no_checks_minutes, then report which never reported (v1 c37edf1).
+		req, err := n.requiredChecks(ctx, p.Base.Ref)
+		if err != nil {
+			return extension.Observation{}, false, err
+		}
+		if out.Missing = missingChecks(out.Runs, req.Names); len(out.Missing) > 0 && typ == TypeChecksPassed {
+			typ = TypeChecksPending
+			if due, ok := n.checksDue(ctx, p); ok {
+				typ = TypeChecksMissing
+				if due.After(occurred) {
+					occurred = due
+				}
+			}
+		}
+	}
 	o, err := n.observation("pr/"+strconv.Itoa(p.Number)+"/checks", typ, key, occurred, SchemaChecks, out)
 	return o, err == nil, err
 }
@@ -688,34 +716,47 @@ func (n *normalizer) checksForPull(ctx context.Context, p rawPull) (extension.Ob
 	if p.State != "open" || p.Head.SHA == "" {
 		return extension.Observation{}, false, nil
 	}
-	runs, statuses, unreadable, err := n.c.checkState(ctx, n.s.Repo, p.Head.SHA)
+	runs, statuses, from, err := n.c.checkState(ctx, n.s.Repo, p.Head.SHA)
 	if err != nil {
 		return extension.Observation{}, false, err
 	}
 	if len(runs)+len(statuses) == 0 {
-		if unreadable {
+		if from == RunsUnreadable {
 			// Neither check runs nor workflow runs are readable with this
 			// credential, so "no checks" cannot be told apart from checks
 			// it may not see: observe nothing rather than a false none.
 			return extension.Observation{}, false, nil
 		}
-		return n.noChecksObservation(ctx, p)
+		return n.noChecksObservation(ctx, p, from)
 	}
-	return n.checksObservation(ctx, p, runs, statuses)
+	return n.checksObservation(ctx, p, runs, statuses, from)
 }
 
-// noChecksObservation reports a head with no checks at all once its commit
-// is older than NoChecks (v1 noChecksMinutes): a repository without CI is
-// not waited on for ever. Its occurrence is the commit time plus the delay,
-// so push and reconcile agree once both see it; before then nothing is
-// observed. It is a latency signal only, so a failed commit read observes
-// nothing rather than failing the scan.
-func (n *normalizer) noChecksObservation(ctx context.Context, p rawPull) (extension.Observation, bool, error) {
+// checksDue reports when a head still short of checks stops being waited
+// on: its commit time plus NoChecks (v1 noChecksMinutes), once the
+// normalizer's receive time has reached it. The commit time makes it
+// deterministic, so push and reconcile agree once both see it. It is a
+// latency signal only, so a failed commit read is "not yet" rather than a
+// failed scan. NoChecks disabled (-1) never stops waiting.
+func (n *normalizer) checksDue(ctx context.Context, p rawPull) (time.Time, bool) {
 	if n.s.NoChecks <= 0 || n.received.IsZero() {
-		return extension.Observation{}, false, nil
+		return time.Time{}, false
 	}
 	at, err := n.c.CommitTime(ctx, n.s.Repo, p.Head.SHA)
 	if err != nil || at.IsZero() || n.received.Sub(at) < n.s.NoChecks {
+		return time.Time{}, false
+	}
+	return at.Add(n.s.NoChecks), true
+}
+
+// noChecksObservation reports a head with no checks at all once checksDue
+// says it is no longer waited on: a repository without CI is not waited on
+// for ever. When the base branch requires checks, none of them reported, so
+// the head is github.checks.missing naming every required check rather than
+// "no checks ran". Before then nothing is observed.
+func (n *normalizer) noChecksObservation(ctx context.Context, p rawPull, from string) (extension.Observation, bool, error) {
+	due, ok := n.checksDue(ctx, p)
+	if !ok {
 		return extension.Observation{}, false, nil
 	}
 	key, _, err := n.pullKey(ctx, p)
@@ -723,7 +764,17 @@ func (n *normalizer) noChecksObservation(ctx context.Context, p rawPull) (extens
 		return extension.Observation{}, false, err
 	}
 	out := ChecksPayload{Repo: n.s.Repo, Number: p.Number, SHA: p.Head.SHA, Complete: true, Failed: []string{}, Runs: []CheckRun{}, None: true}
-	o, err := n.observation("pr/"+strconv.Itoa(p.Number)+"/checks", TypeChecksNone, key, at.Add(n.s.NoChecks), SchemaChecks, out)
+	typ := TypeChecksNone
+	if from == RunsFromCheckRuns {
+		req, err := n.requiredChecks(ctx, p.Base.Ref)
+		if err != nil {
+			return extension.Observation{}, false, err
+		}
+		if len(req.Names) > 0 {
+			typ, out.None, out.Missing = TypeChecksMissing, false, req.Names
+		}
+	}
+	o, err := n.observation("pr/"+strconv.Itoa(p.Number)+"/checks", typ, key, due, SchemaChecks, out)
 	return o, err == nil, err
 }
 

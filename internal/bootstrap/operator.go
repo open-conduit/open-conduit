@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -342,10 +343,47 @@ func (d *daemon) githubAuthCheck(ctx context.Context) runtime.Check {
 			}
 			notes = append(notes, "neither check runs nor Actions workflow runs are readable: only commit statuses are seen and no-checks is never reported; grant Actions: read or use a GitHub App")
 		}
+		if note, warn := d.requiredChecksNote(ctx, src.client, s, a); note != "" {
+			if warn && check.Status == runtime.CheckOK {
+				check.Status, check.Code = runtime.CheckWarn, "required_checks_unreadable"
+			}
+			notes = append(notes, note)
+		}
 		check.Items = append(check.Items, item+strings.Join(notes, "; "))
 	}
 	sort.Strings(check.Items)
 	return check
+}
+
+// requiredChecksNote reports where the checks the base branch requires
+// (08-01) are read from: the branch protection and rulesets of the entry's
+// base branch. A refused protection read warns, since a check it requires is
+// then not waited for; refused rulesets (a plan without them) are a note.
+func (d *daemon) requiredChecksNote(ctx context.Context, c *gh.Client, s gh.Settings, a gh.Access) (string, bool) {
+	cx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	base := s.BaseBranch
+	if base == "" && s.Repo == s.TrackerRepo {
+		base = a.DefaultBranch
+	}
+	if base == "" {
+		var err error
+		if base, err = c.DefaultBranch(cx, s.Repo); err != nil || base == "" {
+			return "", false
+		}
+	}
+	req, err := c.RequiredChecks(cx, s.Repo, base)
+	if err != nil {
+		return "required checks on " + base + " could not be read", false
+	}
+	var parts []string
+	if len(req.Names) > 0 {
+		parts = append(parts, fmt.Sprintf("%s requires %s (from %s)", base, strings.Join(req.Names, ", "), strings.Join(req.From, " and ")))
+	}
+	if note := gh.RequiredNote(req, a.Checks); note != "" {
+		parts = append(parts, note)
+	}
+	return strings.Join(parts, "; "), slices.Contains(req.Refused, gh.RequiredFromProtection)
 }
 
 // capabilityCheck reports engineering configuration gaps the validator

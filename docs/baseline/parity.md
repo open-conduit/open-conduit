@@ -234,3 +234,8 @@ Intentional differences: one wake ends a wait (the agent waits again), and `--ca
 - **C08.** Playbook addition renames are reported (`triage` → `triage-reports`, a tracker's `work-issue` → `work-tracker-issue`); the same-named ones are read as a fallback.
 - **O07.** Ownership transfer is drain-and-reconcile with no state import (provisional). Shared labels and two-way marker recognition: GitHub comments now also carry v1's own-note marker. Backup, verify, restore, `auth recover` and `state check` cover recovery, and `TestDaemonMigrationRehearsal` rehearses it on synthetic state.
 - **Not converted (reported).** A GitHub tracker in another repository, any/all/not and glob route matches, the unrouted label, and the dry-run model. Live rollback evidence stays with 03-07 and 06-04.
+
+08-01 update: [required checks](../architecture/engineering-tools.md#checks-timing) port v1 1.3.0's required-checks behavior (open-supervisor #64, `c37edf1`). Fixtures and fakes only.
+
+- **C04 (required checks).** The base branch's protection and rulesets name the checks a PR needs, so there is no new setting. A head missing one is held as pending until `no_checks_minutes`, then `github.checks.missing` says which never reported, rather than "Checks passed". `github.checks` and the playbook follow, and doctor's `github_auth` names the source.
+- **Intentional differences.** A refused source (403 or 404) degrades to the other one and is reported, rather than failing reconcile. Required checks are not verified while check runs are unreadable, because workflow-run names are not job names. `no_checks_minutes: -1` holds such a head indefinitely.

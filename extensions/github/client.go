@@ -370,26 +370,28 @@ func (c *Client) Reviews(ctx context.Context, repo string, n int) ([]rawComment,
 // fine-grained personal access token cannot be granted the Checks permission,
 // so GitHub refuses check runs with an ordinary 403. Then the commit's GitHub
 // Actions workflow runs (Actions: read) stand in for its check runs; when
-// those are refused as well, unreadable reports that the commit's runs could
-// not be read at all, and only its statuses are known. A rate limit is never
-// treated as a refusal.
-func (c *Client) checkState(ctx context.Context, repo, sha string) (runs []rawCheckRun, statuses []rawStatus, unreadable bool, err error) {
+// those are refused as well, the commit's runs could not be read at all, and
+// only its statuses are known. from says which happened (RunsFrom*,
+// RunsUnreadable). A rate limit is never treated as a refusal.
+func (c *Client) checkState(ctx context.Context, repo, sha string) (runs []rawCheckRun, statuses []rawStatus, from string, err error) {
+	from = RunsFromCheckRuns
 	if runs, err = c.checkRuns(ctx, repo, sha); IsStatus(err, http.StatusForbidden) {
+		from = RunsFromWorkflows
 		runs, err = c.workflowRuns(ctx, repo, sha)
 		if IsStatus(err, http.StatusForbidden) || IsStatus(err, http.StatusNotFound) {
-			runs, err, unreadable = nil, nil, true
+			runs, err, from = nil, nil, RunsUnreadable
 		}
 	}
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, "", err
 	}
 	var status struct {
 		Statuses []rawStatus `json:"statuses"`
 	}
 	if _, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/commits/%s/status", url.PathEscape(sha)), nil, &status); err != nil {
-		return nil, nil, false, err
+		return nil, nil, "", err
 	}
-	return runs, status.Statuses, unreadable, nil
+	return runs, status.Statuses, from, nil
 }
 
 func (c *Client) checkRuns(ctx context.Context, repo, sha string) ([]rawCheckRun, error) {
