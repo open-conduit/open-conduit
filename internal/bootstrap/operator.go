@@ -391,8 +391,14 @@ func (d *daemon) requiredChecksNote(ctx context.Context, c *gh.Client, s gh.Sett
 // agent binding without the GitHub tools, scheduled issues with no hold
 // route, and a hold route after the github route.
 func (d *daemon) capabilityCheck(context.Context) runtime.Check {
-	check := runtime.Check{Name: "github_capability", Status: runtime.CheckOK, Code: "ok"}
 	snapshot, _ := d.configs.Current()
+	return capabilityCheckFor(snapshot, d.executors)
+}
+
+// capabilityCheckFor is capabilityCheck for a config snapshot and the
+// executors it is checked against (offline doctor uses the registrations).
+func capabilityCheckFor(snapshot *config.Snapshot, executors map[string]extension.Executor) runtime.Check {
+	check := runtime.Check{Name: "github_capability", Status: runtime.CheckOK, Code: "ok"}
 	if snapshot == nil {
 		return check
 	}
@@ -433,7 +439,7 @@ func (d *daemon) capabilityCheck(context.Context) runtime.Check {
 					githubAt = i
 				}
 				b := bindings[r.Binding]
-				if c, ok := d.executors[b.Executor]; ok && c.Capabilities().Toolbelt == extension.ToolbeltNone {
+				if c, ok := executors[b.Executor]; ok && c.Capabilities().Toolbelt == extension.ToolbeltNone {
 					warn("no_toolbelt", fmt.Sprintf("%s: route %s binds %s, whose executor has no toolbelt to report status", id, r.Name, r.Binding))
 				}
 				missing := []string{}
@@ -480,8 +486,38 @@ func (d *daemon) capabilityCheck(context.Context) runtime.Check {
 // claudeCheck runs `claude --version` for every claude-code binding's
 // binary and, when enabled, reads the subscription usage windows.
 func (d *daemon) claudeCheck(ctx context.Context) runtime.Check {
-	check := runtime.Check{Name: "claude_code", Status: runtime.CheckOK, Code: "installed"}
 	snapshot, _ := d.configs.Current()
+	check := claudeVersionCheck(ctx, snapshot)
+	if check.Code == "not_configured" {
+		return check
+	}
+	if d.o.DryRun {
+		check.Items = append(check.Items, "dry run: turns are stubs on a cheap model")
+	}
+	if !d.o.ClaudeUsage {
+		return check
+	}
+	cx, cancel := context.WithTimeout(ctx, 15*time.Second)
+	defer cancel()
+	windows, err := claudecode.Usage(cx, claudecode.UsageOptions{URL: d.o.ClaudeUsageURL, Token: d.o.ClaudeUsageToken, HTTP: &http.Client{Timeout: 10 * time.Second}})
+	if err != nil {
+		check.Items = append(check.Items, "usage unknown")
+		return check
+	}
+	for _, w := range windows {
+		item := fmt.Sprintf("usage %s: %.0f%% (resets %s)", w.Name, w.Used, w.ResetsAt.UTC().Format(time.RFC3339))
+		if w.Used >= 90 && check.Status == runtime.CheckOK {
+			check.Status, check.Code = runtime.CheckWarn, "usage_high"
+		}
+		check.Items = append(check.Items, item)
+	}
+	return check
+}
+
+// claudeVersionCheck runs `claude --version` for every claude-code binding's
+// binary in snapshot.
+func claudeVersionCheck(ctx context.Context, snapshot *config.Snapshot) runtime.Check {
+	check := runtime.Check{Name: "claude_code", Status: runtime.CheckOK, Code: "installed"}
 	binaries := map[string][]string{}
 	if snapshot != nil {
 		for _, id := range snapshot.Order {
@@ -523,25 +559,38 @@ func (d *daemon) claudeCheck(ctx context.Context) runtime.Check {
 		}
 		check.Items = append(check.Items, fmt.Sprintf("%s: %s", filepath.Base(bin), v))
 	}
-	if d.o.DryRun {
-		check.Items = append(check.Items, "dry run: turns are stubs on a cheap model")
-	}
-	if !d.o.ClaudeUsage {
-		return check
-	}
-	cx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	windows, err := claudecode.Usage(cx, claudecode.UsageOptions{URL: d.o.ClaudeUsageURL, Token: d.o.ClaudeUsageToken, HTTP: &http.Client{Timeout: 10 * time.Second}})
-	if err != nil {
-		check.Items = append(check.Items, "usage unknown")
-		return check
-	}
-	for _, w := range windows {
-		item := fmt.Sprintf("usage %s: %.0f%% (resets %s)", w.Name, w.Used, w.ResetsAt.UTC().Format(time.RFC3339))
-		if w.Used >= 90 && check.Status == runtime.CheckOK {
-			check.Status, check.Code = runtime.CheckWarn, "usage_high"
-		}
-		check.Items = append(check.Items, item)
-	}
 	return check
+}
+
+// daemonChecks are the doctor checks only a running daemon makes.
+var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource_holds", "retention", "reconcile_lag", "bindings", "connections", "secrets", "pinned_executors", "telemetry", "github", "trackers", "slack", "posthog", "webhooks", "schedule", "resources", "introspection", "extensions"}
+
+// OfflineChecks are the doctor checks that need no daemon: the config file
+// validated against the same registrations `serve` uses, the GitHub
+// capability gaps in it, and `claude --version` for its claude-code
+// bindings, then a skipped check naming the daemon's own. The CLI runs them
+// when no daemon is reachable.
+func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtime.Check {
+	skipped := runtime.Check{Name: "skipped", Status: runtime.CheckInfo, Code: "daemon_not_running", Detail: "need a running daemon: " + strings.Join(daemonChecks, ", ")}
+	executors := offlineExecutors()
+	reg := registry(executors)
+	offlineExternal(&reg, configPath, "")
+	snapshot, err := config.Validate(data, reg)
+	var invalid *config.ValidationError
+	switch {
+	case errors.As(err, &invalid):
+		check := runtime.Check{Name: "config", Status: runtime.CheckFail, Code: "invalid", Detail: fmt.Sprintf("%s has %d problem(s); see open-conduit config check", configPath, len(invalid.Diagnostics))}
+		for _, d := range invalid.Diagnostics {
+			check.Items = append(check.Items, fmt.Sprintf("%s: %s: %s", d.Path, d.Code, d.Message))
+		}
+		return []runtime.Check{check, skipped}
+	case err != nil:
+		return []runtime.Check{{Name: "config", Status: runtime.CheckFail, Code: "unvalidated", Detail: "config could not be validated: " + err.Error()}, skipped}
+	}
+	return []runtime.Check{
+		{Name: "config", Status: runtime.CheckOK, Code: "valid", Detail: configPath},
+		capabilityCheckFor(snapshot, executors),
+		claudeVersionCheck(ctx, snapshot),
+		skipped,
+	}
 }

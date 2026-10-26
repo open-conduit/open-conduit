@@ -27,6 +27,7 @@ func main() {
 	env.Migrate, env.State = bootstrap.Migrate, bootstrap.StateOps()
 	env.ValidateConfigAt, env.Extensions = validateAt, bootstrap.ExtensionOps(version, commit)
 	env.CommandWarnings = config.CommandWarnings
+	env.OfflineChecks = offlineChecks
 	os.Exit(cli.RunOperator(version, commit, os.Args[1:], env, os.Stdout, os.Stderr))
 }
 
@@ -58,6 +59,15 @@ func validateAt(path string, data []byte) ([]client.Detail, error) {
 		out = append(out, client.Detail{Path: d.Path, Code: d.Code, Message: d.Message})
 	}
 	return out, nil
+}
+
+// offlineChecks runs the doctor checks that need no daemon.
+func offlineChecks(ctx context.Context, path string, data []byte) []client.Check {
+	var out []client.Check
+	for _, c := range bootstrap.OfflineChecks(ctx, path, data) {
+		out = append(out, client.Check{Name: c.Name, Status: c.Status, Code: c.Code, Detail: c.Detail, Items: c.Items})
+	}
+	return out
 }
 
 // setup starts Claude Code with the setup guide in this terminal.

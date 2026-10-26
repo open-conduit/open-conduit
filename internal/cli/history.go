@@ -1,8 +1,11 @@
 package cli
 
 import (
+	"context"
+	"encoding/json"
 	"fmt"
 	"net/url"
+	"os"
 	"strings"
 	"text/tabwriter"
 	"time"
@@ -91,13 +94,16 @@ func (o *operator) doctor(args []string) int {
 	if pos, err := fs.parse(args); err != nil || len(pos) != 0 {
 		return usageError(o.errOut, "invalid doctor flags")
 	}
-	c, _, err := o.client()
-	if err != nil {
-		return o.emit(nil, err)
-	}
 	cx, cancel := ctx()
 	defer cancel()
-	d, err := c.Doctor(cx, *checkSecrets)
+	c, _, err := o.client()
+	var d client.Doctor
+	if err == nil {
+		d, err = c.Doctor(cx, *checkSecrets)
+	}
+	if nr, ok := daemonDown(err); ok {
+		d, err = o.offlineDoctor(cx, nr), nil
+	}
 	if err != nil {
 		return o.emit(nil, err)
 	}
@@ -120,6 +126,31 @@ func (o *operator) doctor(args []string) int {
 		return 1
 	}
 	return 0
+}
+
+// offlineDoctor runs the checks that need no daemon (the config file, its
+// bindings, the agent CLIs) and reports the daemon's own as skipped.
+func (o *operator) offlineDoctor(cx context.Context, nr *notRunningError) client.Doctor {
+	d := client.Doctor{Checks: []client.Check{{Name: "daemon", Status: "warn", Code: "not_running", Detail: nr.Error()}}}
+	path := o.configPath("")
+	if data, err := os.ReadFile(path); err != nil {
+		d.Checks = append(d.Checks, client.Check{Name: "config", Status: "fail", Code: "missing", Detail: fmt.Sprintf("no config at %s; create one with open-conduit init", path)})
+	} else if o.env.OfflineChecks != nil {
+		// The entrypoint's checks end with the daemon's own, as skipped.
+		d.Checks = append(d.Checks, o.env.OfflineChecks(cx, path, data)...)
+	} else if !json.Valid(data) {
+		d.Checks = append(d.Checks, client.Check{Name: "config", Status: "fail", Code: "invalid", Detail: path + " is not valid JSON"})
+	}
+	if last := d.Checks[len(d.Checks)-1]; last.Name != "skipped" {
+		d.Checks = append(d.Checks, client.Check{Name: "skipped", Status: "info", Code: "daemon_not_running", Detail: "the checks that need a running daemon"})
+	}
+	d.State = "warn"
+	for _, ch := range d.Checks {
+		if ch.Status == "fail" {
+			d.State = "fail"
+		}
+	}
+	return d
 }
 
 // tui opens the interactive run history view on the controlling terminal.

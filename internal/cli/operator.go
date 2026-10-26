@@ -11,10 +11,12 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
@@ -45,6 +47,10 @@ type Env struct {
 	// is not found on the resolver's PATH; only the open-conduit entrypoint
 	// supplies it. Warnings never fail a check.
 	CommandWarnings func(data []byte) []string
+	// OfflineChecks are the doctor checks that need no daemon (the config,
+	// its bindings, the agent CLIs); doctor runs them when no daemon is
+	// reachable. Only the open-conduit entrypoint supplies it.
+	OfflineChecks func(ctx context.Context, configPath string, data []byte) []client.Check
 	// Extensions manages installed extension packages and runs the
 	// conformance runner (07-03); only the open-conduit entrypoint
 	// supplies it.
@@ -207,19 +213,67 @@ func (o *operator) tokenPath() string {
 	return filepath.Join(o.stateDir(), "private", "operator.token")
 }
 func (o *operator) client() (*client.Client, client.TokenFile, error) {
+	endpoint := client.DiscoverEndpoint(o.endpoint, o.abs(o.socket), o.stateDir(), o.env.Getenv)
 	file, err := client.ReadTokenFile(o.tokenPath())
 	if err != nil {
+		// The first serve writes the token: with none and nothing listening,
+		// say the daemon has never run rather than that a file is missing.
+		if _, statErr := os.Lstat(o.tokenPath()); errors.Is(statErr, os.ErrNotExist) {
+			if !listening(endpoint) {
+				return nil, file, &notRunningError{neverStarted: true}
+			}
+			return nil, file, fmt.Errorf("operator token file unavailable: %s does not exist, but a daemon is running at %s; pass that daemon's token with --token-file or OPEN_CONDUIT_TOKEN_FILE", o.tokenPath(), endpoint)
+		}
 		return nil, file, err
 	}
-	endpoint := client.DiscoverEndpoint(o.endpoint, o.abs(o.socket), o.stateDir(), o.env.Getenv)
 	c, err := client.New(endpoint, file.Token)
 	return c, file, err
+}
+
+// notRunningError reports that no daemon answers on the management endpoint.
+type notRunningError struct{ neverStarted bool }
+
+func (e *notRunningError) Error() string {
+	if e.neverStarted {
+		return "no Open Conduit daemon is running (it has never been started on this machine); start one with `open-conduit serve`"
+	}
+	return "no Open Conduit daemon is running; start one with `open-conduit serve`"
+}
+
+// listening reports whether something accepts connections on a unix
+// endpoint; an endpoint that does not parse is left to the client to report.
+func listening(endpoint string) bool {
+	socket, err := client.ParseEndpoint(endpoint)
+	if err != nil {
+		return true
+	}
+	conn, err := net.DialTimeout("unix", socket, 2*time.Second)
+	if err != nil {
+		return false
+	}
+	_ = conn.Close()
+	return true
+}
+
+// daemonDown reports whether err means no daemon is reachable at all: never
+// started, or nothing listening on its socket.
+func daemonDown(err error) (*notRunningError, bool) {
+	var nr *notRunningError
+	if errors.As(err, &nr) {
+		return nr, true
+	}
+	if errors.Is(err, client.ErrUnreachable) && (errors.Is(err, syscall.ENOENT) || errors.Is(err, syscall.ECONNREFUSED)) {
+		return &notRunningError{}, true
+	}
+	return nil, false
 }
 
 func (o *operator) emit(v any, err error) int {
 	if err != nil {
 		var api *client.Error
-		if errors.As(err, &api) {
+		if nr, ok := daemonDown(err); ok {
+			fmt.Fprintf(o.errOut, "open-conduit: %s\n", nr)
+		} else if errors.As(err, &api) {
 			fmt.Fprintf(o.errOut, "open-conduit: %s\n", api.Error())
 		} else {
 			fmt.Fprintf(o.errOut, "open-conduit: %s\n", err)
