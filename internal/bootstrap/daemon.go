@@ -30,6 +30,7 @@ import (
 	"github.com/alsiola/open-conduit/executors/shell"
 	"github.com/alsiola/open-conduit/extension"
 	gh "github.com/alsiola/open-conduit/extensions/github"
+	is "github.com/alsiola/open-conduit/extensions/introspection"
 	sc "github.com/alsiola/open-conduit/extensions/schedule"
 	sl "github.com/alsiola/open-conduit/extensions/slack"
 	"github.com/alsiola/open-conduit/internal/artifacts"
@@ -127,6 +128,7 @@ type daemon struct {
 	hooks      webhookState
 	tools      *gh.Tools
 	slackTools *sl.Tools
+	reports    *is.Tools
 	endpoint   string
 	cursorKey  []byte
 	current    atomic.Pointer[components]
@@ -357,11 +359,19 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return nil, err
 	}
 	var belt *runtime.Toolbelt
-	belt, err = runtime.NewToolbelt(d.coord, d.now, c.router, runtime.ToolbeltOptions{Authorize: d.configs.Authorize, Grant: d.configs.Grant(func() []string { return belt.EventTypes() }), Observer: d.pipeline, AuthorizeAlias: d.authorizeAlias})
+	grant := d.configs.Grant(func() []string { return belt.EventTypes() })
+	// The configured causal limits bound toolbelt emissions too (03-08 fix:
+	// they were applied only to routing, timers and control, so an execution's
+	// emissions pinned the default limits on a new root).
+	belt, err = runtime.NewToolbelt(d.coord, d.now, c.router, runtime.ToolbeltOptions{CausalLimits: limits, Authorize: d.configs.Authorize, Grant: func(ctx context.Context, state runtime.AttemptState) (runtime.ToolbeltGrant, error) {
+		g, err := grant(ctx, state)
+		g.Operations = registeredOnly(g.Operations, belt.Operations())
+		return g, err
+	}, Observer: d.pipeline, AuthorizeAlias: d.authorizeAlias})
 	if err != nil {
 		return nil, err
 	}
-	if err = d.registerTools(belt); err != nil {
+	if err = d.registerTools(belt, s); err != nil {
 		return nil, err
 	}
 	c.toolbelt = belt

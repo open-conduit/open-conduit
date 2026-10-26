@@ -112,6 +112,8 @@ Fix: <where you think the fix belongs: a file in this project, the machine's set
 
 Log each distinct problem once per session. A problem you fixed properly in your own PR needs no note. The daily triage fixes or files what you report.
 
+When the fix belongs to Open Conduit itself (a toolbelt operation that fails or misbehaves, a playbook that is wrong, a run that went astray), also report it with `introspection.report-issue` (`kind`, a one-line `title` and the same `body`) if your toolbelt has it. A refusal means reporting isn't enabled here: the problem note is enough.
+
 ## First turn: `work-issue <number>`
 
 ### 1. Read the issue

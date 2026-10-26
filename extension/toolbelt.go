@@ -78,6 +78,57 @@ type Operation struct {
 	// is registered. Domain conditions never enter core: only event types,
 	// correlation keys, a timeout and opaque dependency filters do.
 	Wait func(context.Context, Authority, domain.Payload) (WaitPlan, error)
+	// Emit, set instead of Handler or Wait, translates domain input into one
+	// Event the toolbelt accepts exactly like the builtin emit (declared
+	// family, authority allowlist, trusted execution source and trigger
+	// causation, core chain-depth and per-chain rate limits), together with
+	// the registration's own coordination records in the same transaction
+	// (03-08). It grants no trusted control-plane authority.
+	Emit func(context.Context, Authority, domain.Payload) (EmitPlan, error)
+}
+
+// EmitPlan is a translated emission. Event supplies only Type, DeliveryID,
+// optional OccurredAt, CorrelationKey and Data; the toolbelt assigns its
+// identity, source, causation and target. Type must be a family the same
+// registration declared.
+//
+// Without a CorrelationKey, or with one the current Work owns, the Event is
+// the current Work's (like the builtin emit). A key the current Work does not
+// own must lie in the registration's own source namespace (Source equal to
+// the registration name or beginning with name + "/"): the Event is then
+// addressed to that key rather than to the emitting Work, so the
+// registration's own route can give it Work of its own, while trusted source
+// and causation still record which execution emitted it.
+type EmitPlan struct {
+	Event domain.Event
+	// Commit runs inside the accepting transaction once the Event is
+	// accepted. It must be pure and deterministic. Its Records are written
+	// only when the Event was newly added (a replayed delivery writes none);
+	// its Output is returned to the caller either way.
+	Commit func(Emitted) (EmitCommit, error)
+}
+
+// Emitted describes the accepted Event of a translated emission: Added is
+// false for a delivery already accepted; Root and Depth are its causal chain
+// position.
+type Emitted struct {
+	Event domain.AcceptedEvent
+	Added bool
+	Root  domain.ID
+	Depth int
+}
+
+// EmitCommit is what a translated emission writes and returns.
+type EmitCommit struct {
+	Records []Record
+	Output  domain.Payload
+}
+
+// Record is a coordination KV write. Namespace must be the registration name
+// or begin with name + ".".
+type Record struct {
+	Namespace, Key string
+	Value          []byte
 }
 
 // WaitPlan is a translated wait. Wait matches the current Work's own keys

@@ -77,7 +77,7 @@ type Toolbelt struct {
 	operations    map[string]extension.Operation
 	owners        map[string]string // operation → registration name
 	filters       map[string]func(domain.Payload, domain.Event) bool
-	events        map[string]bool
+	events        map[string]string // emitted family → registration name
 }
 
 type tokenRecord struct {
@@ -116,7 +116,7 @@ func NewToolbelt(store storage.Store, now func() time.Time, router *Router, opti
 		return nil, err
 	}
 	options.CausalLimits = limits
-	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) bool{}, events: map[string]bool{}}, nil
+	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) bool{}, events: map[string]string{}}, nil
 }
 
 var operationName = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
@@ -142,7 +142,13 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 	}
 	names, events := map[string]bool{}, map[string]bool{}
 	for _, op := range r.Operations {
-		if (op.Handler == nil) == (op.Wait == nil) || !operationName.MatchString(op.Name) {
+		set := 0
+		for _, ok := range []bool{op.Handler != nil, op.Wait != nil, op.Emit != nil} {
+			if ok {
+				set++
+			}
+		}
+		if set != 1 || !operationName.MatchString(op.Name) {
 			return extension.ErrInvalid
 		}
 		if builtinOperation(op.Name) || t.declaredLocked(op.Name) || names[op.Name] {
@@ -154,7 +160,7 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 		if !validType(name) || strings.HasPrefix(name, "core.") {
 			return extension.ErrInvalid
 		}
-		if events[name] || t.events[name] {
+		if events[name] || t.events[name] != "" {
 			return extension.ErrConflict
 		}
 		events[name] = true
@@ -168,7 +174,7 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 		t.filters[r.Name] = r.DependencyFilter
 	}
 	for name := range events {
-		t.events[name] = true
+		t.events[name] = r.Name
 	}
 	return nil
 }
@@ -203,7 +209,8 @@ func (t *Toolbelt) declared(op string) bool {
 	return builtinOperation(op) || t.declaredLocked(op)
 }
 func (t *Toolbelt) declaredLocked(op string) bool {
-	return t.operations[op].Handler != nil || t.operations[op].Wait != nil
+	o := t.operations[op]
+	return o.Handler != nil || o.Wait != nil || o.Emit != nil
 }
 
 // DependencyFilter evaluates a translated dependency's opaque filter with the
@@ -218,7 +225,7 @@ func (t *Toolbelt) DependencyFilter(namespace string, filter domain.Payload, e d
 func (t *Toolbelt) declaredEvent(name string) bool {
 	t.mu.RLock()
 	defer t.mu.RUnlock()
-	return t.events[name]
+	return t.events[name] != ""
 }
 
 // TokenDigest is the persisted lookup key for a bearer credential.
@@ -609,6 +616,9 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 		hctx := extension.WithCallRequestID(ctx, requestID)
 		if op.Wait != nil {
 			return t.declareTranslatedWait(hctx, record, digest, owner, op, handlerAuthority, c.Input)
+		}
+		if op.Emit != nil {
+			return t.translatedEmit(hctx, digest, owner, op, handlerAuthority, c.Input, replayKey, hash)
 		}
 		output, e := op.Handler(hctx, handlerAuthority, c.Input)
 		if e != nil {

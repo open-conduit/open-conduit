@@ -37,6 +37,7 @@ func registry(executors map[string]extension.Executor) config.Registry {
 	githubRegistry(&reg)
 	slackRegistry(&reg)
 	scheduleRegistry(&reg)
+	introspectionRegistry(&reg)
 	resourceRegistry(&reg)
 	return reg
 }

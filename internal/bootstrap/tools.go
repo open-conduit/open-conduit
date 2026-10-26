@@ -11,8 +11,11 @@ import (
 	"github.com/alsiola/open-conduit/executors/claudecode"
 	gh "github.com/alsiola/open-conduit/extensions/github"
 	"github.com/alsiola/open-conduit/extensions/github/playbooks"
+	is "github.com/alsiola/open-conduit/extensions/introspection"
+	isplaybooks "github.com/alsiola/open-conduit/extensions/introspection/playbooks"
 	sl "github.com/alsiola/open-conduit/extensions/slack"
 	slplaybooks "github.com/alsiola/open-conduit/extensions/slack/playbooks"
+	"github.com/alsiola/open-conduit/internal/config"
 	"github.com/alsiola/open-conduit/internal/runtime"
 )
 
@@ -44,15 +47,25 @@ func (d *daemon) openTools() error {
 	if d.slackTools, err = sl.NewTools(sl.ToolsOptions{Store: d.coord, Sources: d.slackSourcesList, Now: d.now}); err != nil {
 		return err
 	}
+	if d.reports, err = is.NewTools(is.ToolsOptions{Store: d.coord, Now: d.now}); err != nil {
+		return err
+	}
 	return nil
 }
 
 // registerTools adds the extension operations to a generation's toolbelt.
-func (d *daemon) registerTools(belt *runtime.Toolbelt) error {
+// Issue reporting is registered only for a generation that enables it.
+func (d *daemon) registerTools(belt *runtime.Toolbelt, s *config.Snapshot) error {
 	if err := belt.Register(d.tools.Registration()); err != nil {
 		return err
 	}
-	return belt.Register(d.slackTools.Registration())
+	if err := belt.Register(d.slackTools.Registration()); err != nil {
+		return err
+	}
+	if introspectionEnabled(s) {
+		return belt.Register(d.reports.Registration())
+	}
+	return nil
 }
 
 // authorizeAlias is the B04 cross-scope dependency ceiling: the waiting
@@ -70,12 +83,16 @@ func (d *daemon) pluginDir() string { return filepath.Join(d.o.StateDir, "playbo
 
 // preparePlaybooks writes the plugin (rewritten at every start, so an
 // upgrade replaces old playbook text): the GitHub playbooks, then the Slack
-// support playbook beside them.
+// support and introspection triage playbooks beside them.
 func (d *daemon) preparePlaybooks() error {
 	if err := playbooks.Prepare(d.pluginDir()); err != nil {
 		return err
 	}
-	for name, text := range slplaybooks.All() {
+	books := slplaybooks.All()
+	for name, text := range isplaybooks.All() {
+		books[name] = text
+	}
+	for name, text := range books {
 		dir := filepath.Join(d.pluginDir(), "skills", name)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
 			return err
@@ -101,6 +118,10 @@ func renderEvents(events []domain.Event) string {
 			continue
 		}
 		if text, ok := sl.RenderEvent(e); ok {
+			parts = append(parts, text)
+			continue
+		}
+		if text, ok := is.RenderEvent(e); ok {
 			parts = append(parts, text)
 			continue
 		}

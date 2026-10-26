@@ -26,6 +26,7 @@ The project is implementing the core after completing the contracts gate. Primit
 - [Engineering tools, waits and playbooks](docs/architecture/engineering-tools.md)
 - [Slack ingress, conversations and marked replies](docs/architecture/slack-extension.md)
 - [Scheduled jobs: definitions, catch-up, the one-pending-run rule and job run parity](docs/architecture/schedule-extension.md)
+- [Issue reporting through public extension hooks](docs/architecture/issue-reporting.md)
 - [Operator setup, doctor and engineering controls](docs/architecture/operator-setup.md)
 - [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)

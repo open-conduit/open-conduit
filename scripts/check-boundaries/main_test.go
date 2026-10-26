@@ -1,6 +1,10 @@
 package main
 
 import (
+	"io/fs"
+	"os"
+	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 )
@@ -36,6 +40,12 @@ func TestDependencyClosures(t *testing.T) {
 		{"cli_cannot_import_slack_transitively", []pkg{project("internal/cli", "client"), project("client", "extensions/slack")}, "extensions/slack"},
 		{"tui_cannot_import_extension", []pkg{project("internal/tui", "extensions/slack")}, "extensions/slack"},
 		{"os_cannot_carry_tui", []pkg{project("cmd/os", "internal/cli"), project("internal/cli", "internal/tui")}, "internal/tui"},
+		// Issue reporting is an ordinary extension (03-08): it uses public
+		// contracts only, and no core package can reach it.
+		{"introspection_uses_contracts", []pkg{project("extensions/introspection", "domain", "extension", "storage"), project("extensions/introspection/playbooks")}, ""},
+		{"runtime_cannot_import_introspection", []pkg{project("internal/runtime", "extensions/introspection")}, "extensions/introspection"},
+		{"management_cannot_import_introspection", []pkg{project("internal/management", "extensions/introspection")}, "extensions/introspection"},
+		{"introspection_cannot_reach_github", []pkg{project("extensions/introspection", "extensions/github")}, "extensions/github"},
 		{"backup_runtime_leak", []pkg{project("internal/backup", "internal/runtime")}, "internal/runtime"},
 		{"unknown_package_leak", []pkg{project("newpackage", "domain")}, "domain"},
 		{"external_bridge", []pkg{project("internal/runtime"), {ImportPath: "external.test/helper", Imports: []string{module + "extensions/git"}}}, ""},
@@ -100,5 +110,31 @@ func TestRuntimeTestVariantBoundaries(t *testing.T) {
 	contractTests.ForTest = module + "conformance"
 	if failures := violations(append(graph, contractTests)); len(failures) > 0 {
 		t.Fatal(failures)
+	}
+}
+
+// TestNoPrivilegedReportingPath checks the PRD's introspection criterion at
+// the source level (03-08): no core package, contract or operator surface
+// names self-improvement, issue reporting or triage. They exist only as the
+// introspection extension's public registrations.
+func TestNoPrivilegedReportingPath(t *testing.T) {
+	vocabulary := regexp.MustCompile(`(?i)introspection|triage|report-issue|report_issue|self-improvement`)
+	for _, dir := range []string{"domain", "extension", "storage", "observability", "conformance", "client", "internal/runtime", "internal/config", "internal/management", "internal/storage", "internal/cli", "internal/tui", "internal/telemetry"} {
+		err := filepath.WalkDir(filepath.Join("..", "..", dir), func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if loc := vocabulary.FindIndex(data); loc != nil {
+				t.Errorf("%s names %q: core has no reporting or triage path", path, data[loc[0]:loc[1]])
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
 	}
 }

@@ -45,7 +45,7 @@ Not ported:
 
 - **Worktree commands.** `agent worktree setup/remove` are replaced by B07: the Claude Code binding acquires the issue's `work` workspace before the turn, and the host removes it when the Work completes. No workspace operation is registered, and agents get no removal authority.
 - **`inflight`.** Not ported (03-03 note), so the playbook drops it.
-- **`--upstream` reporting.** Belongs to 03-08.
+- **`--upstream` reporting.** Not reproduced as a GitHub flag. 03-08 delivers reporting as the introspection extension's own operations (`introspection.report-issue`), which never hold ([issue reporting](issue-reporting.md)).
 - **Dry-run.** Handled per entry by `projection.dry_run`: writes report `dry_run` and make no change.
 
 ## Waits
