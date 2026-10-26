@@ -12,6 +12,7 @@ import (
 	"github.com/open-conduit/open-conduit/client"
 	"github.com/open-conduit/open-conduit/internal/bootstrap"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/tui"
 )
 
@@ -25,6 +26,7 @@ func main() {
 	env.EditConfig = func(r cli.EditRequest) (bool, error) { return tui.EditConfig(r, os.Stdin, os.Stdout) }
 	env.Migrate, env.State = bootstrap.Migrate, bootstrap.StateOps()
 	env.ValidateConfigAt, env.Extensions = validateAt, bootstrap.ExtensionOps(version, commit)
+	env.CommandWarnings = config.CommandWarnings
 	os.Exit(cli.RunOperator(version, commit, os.Args[1:], env, os.Stdout, os.Stderr))
 }
 

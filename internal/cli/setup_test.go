@@ -151,11 +151,12 @@ func TestParseClaim(t *testing.T) {
 }
 
 type setupEnv struct {
-	root  string
-	env   map[string]string
-	stdin string
-	valid func([]byte) ([]client.Detail, error)
-	setup *fakeSetup
+	root     string
+	env      map[string]string
+	stdin    string
+	valid    func([]byte) ([]client.Detail, error)
+	warnings func([]byte) []string
+	setup    *fakeSetup
 }
 
 func (s *setupEnv) run(args ...string) (string, string, int) {
@@ -163,7 +164,7 @@ func (s *setupEnv) run(args ...string) (string, string, int) {
 	if s.setup == nil {
 		s.setup = &fakeSetup{}
 	}
-	e := Env{Getenv: func(k string) string { return s.env[k] }, Cwd: s.root, Stdin: strings.NewReader(s.stdin), ValidateConfig: s.valid, Setups: []extension.Setup{s.setup}}
+	e := Env{Getenv: func(k string) string { return s.env[k] }, Cwd: s.root, Stdin: strings.NewReader(s.stdin), ValidateConfig: s.valid, CommandWarnings: s.warnings, Setups: []extension.Setup{s.setup}}
 	code := RunOperator("test", "abc", args, e, &out, &errOut)
 	return out.String(), errOut.String(), code
 }
@@ -278,5 +279,36 @@ func TestInitSecretAndConfigEditing(t *testing.T) {
 	}
 	if b, _ := os.ReadFile(secrets); !strings.Contains(string(b), `"fake-token": "prompted-value"`) {
 		t.Fatalf("prompted secret not stored: %s", b)
+	}
+}
+
+// config check prints the entrypoint's cmd: warnings without failing.
+func TestConfigCheckWarnsMissingCommand(t *testing.T) {
+	root := t.TempDir()
+	s := &setupEnv{root: root, env: map[string]string{"XDG_CONFIG_HOME": filepath.Join(root, "cfg"), "HOME": root}, warnings: func(data []byte) []string {
+		if bytes.Contains(data, []byte("missing-gh-oc-test")) {
+			return []string{"cmd: reference runs missing-gh-oc-test, which is not found"}
+		}
+		return nil
+	}}
+	path := filepath.Join(root, "cfg", "open-conduit", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	write := func(ref string) {
+		t.Helper()
+		body := `{"connections": [{"id": "github", "secret_refs": {"token": "` + ref + `"}}]}`
+		if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("cmd:missing-gh-oc-test auth --token hunter2")
+	out, errOut, code := s.run("config", "check")
+	if code != 0 || strings.TrimSpace(out) != "valid" || errOut != "open-conduit: warning: cmd: reference runs missing-gh-oc-test, which is not found\n" {
+		t.Fatalf("check: %d %q %q", code, out, errOut)
+	}
+	write("cmd:sh -c 'printf x'")
+	if _, errOut, code = s.run("config", "check"); code != 0 || errOut != "" {
+		t.Fatalf("found command warned: %d %q", code, errOut)
 	}
 }
