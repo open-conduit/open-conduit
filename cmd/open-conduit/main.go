@@ -28,6 +28,7 @@ func main() {
 	env.ValidateConfigAt, env.Extensions = validateAt, bootstrap.ExtensionOps(version, commit)
 	env.CommandWarnings = config.CommandWarnings
 	env.OfflineChecks = offlineChecks
+	env.Service = cli.SystemServiceHost()
 	os.Exit(cli.RunOperator(version, commit, os.Args[1:], env, os.Stdout, os.Stderr))
 }
 
