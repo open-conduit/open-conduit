@@ -5,7 +5,7 @@ VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short HEAD)
 LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
-.PHONY: build fmt fmt-check vet test boundaries config-check config-deps check cross-build smoke drill protocol-prototype
+.PHONY: build fmt fmt-check vet test boundaries config-check config-deps check cross-build smoke drill protocol-prototype packages certify
 
 build:
 	$(GO) build ./...
@@ -66,3 +66,28 @@ drill:
 # downloads those modules on first run, so it is not part of check.
 protocol-prototype:
 	cd prototypes/transport && $(GO) test -count=1 -v ./...
+
+# 07-03 extension packages: each first-party subprocess package and example
+# as an installable directory (manifest, binary, certification fixture).
+PACKAGES_DIR ?= dist/packages
+EXTENSION_PACKAGES = slack:./packages/slack/cmd/slack-extension shell:./packages/shell/cmd/shell-extension notes:./protocol/examples/notes/cmd/notes-extension runner:./protocol/examples/runner/cmd/runner-extension
+
+packages:
+	@set -eu; for spec in $(EXTENSION_PACKAGES); do \
+		name=$${spec%%:*}; pkg=$${spec#*:}; dir=$(PACKAGES_DIR)/$$name; \
+		rm -rf $$dir; mkdir -p $$dir; \
+		$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $$dir/$$name-extension $$pkg; \
+		$$dir/$$name-extension package-manifest > $$dir/open-conduit-extension.json; \
+		$$dir/$$name-extension package-certification > $$dir/certification.json; \
+		echo "packaged $$dir"; \
+	done
+	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(PACKAGES_DIR)/shell/os ./cmd/os
+
+# 07-03 certification: the public runner over the two first-party workloads
+# and the examples (reports beside the packages), then the negative
+# controls, which must each fail their criterion.
+certify: build packages
+	@set -eu; for name in slack shell notes runner; do \
+		bin/open-conduit extension certify $(PACKAGES_DIR)/$$name --report $(PACKAGES_DIR)/$$name.certification.json; \
+	done
+	$(GO) test -count=1 -v -run 'TestCertification' ./integration

@@ -24,6 +24,7 @@ func main() {
 	env.TUI = func(c *client.Client) error { return tui.Run(tui.Operator(c), os.Stdin, os.Stdout) }
 	env.EditConfig = func(r cli.EditRequest) (bool, error) { return tui.EditConfig(r, os.Stdin, os.Stdout) }
 	env.Migrate, env.State = bootstrap.Migrate, bootstrap.StateOps()
+	env.ValidateConfigAt, env.Extensions = validateAt, bootstrap.ExtensionOps(version, commit)
 	os.Exit(cli.RunOperator(version, commit, os.Args[1:], env, os.Stdout, os.Stderr))
 }
 
@@ -42,8 +43,11 @@ func serve(r cli.ServeRequest) int {
 }
 
 // validate checks a config offline against the daemon's registrations.
-func validate(data []byte) ([]client.Detail, error) {
-	diags, err := bootstrap.ValidateConfig(data)
+func validate(data []byte) ([]client.Detail, error) { return validateAt("", data) }
+
+// validateAt also knows the extension packages installed beside path.
+func validateAt(path string, data []byte) ([]client.Detail, error) {
+	diags, err := bootstrap.ValidateConfigAt(path, data)
 	if err != nil {
 		return nil, err
 	}

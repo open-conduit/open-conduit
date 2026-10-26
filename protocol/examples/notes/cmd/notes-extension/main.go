@@ -1,10 +1,13 @@
 // Command notes-extension serves the example external extension over
-// protocol version 1 on stdin/stdout (07-02).
+// protocol version 1 on stdin/stdout (07-02). The package-manifest,
+// package-certification and certify-fixture subcommands serve packaging
+// and certification (07-03).
 package main
 
 import (
 	"context"
 	"flag"
+	"fmt"
 	"os"
 	"sync/atomic"
 	"time"
@@ -14,6 +17,16 @@ import (
 )
 
 func main() {
+	if sdk.PackageCommand(os.Args[1:], notes.Manifest(notes.Options{Release: 2}), notes.Certification(), os.Stdout) {
+		return
+	}
+	if len(os.Args) == 2 && os.Args[1] == "certify-fixture" {
+		if err := notes.ServeFixture(os.Stdin, os.Stdout); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		return
+	}
 	release := flag.Int("release", 2, "release to serve (1, 2 or 3)")
 	stable := flag.Bool("stable-identity", false, "omit the payload schema from observation identities (negative test)")
 	fixture := flag.Bool("fixture", false, "serve the shared toolbelt suite's fixture profile")

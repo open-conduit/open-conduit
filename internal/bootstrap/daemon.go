@@ -137,6 +137,7 @@ type daemon struct {
 	reports        *is.Tools
 	trackerTools   map[string]*tracker.Tools
 	bitbucketTools *bb.Tools
+	external       externalState
 	endpoint       string
 	cursorKey      []byte
 	current        atomic.Pointer[components]
@@ -229,7 +230,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.closeIntrospectionTelemetry()
-	d.pipeline, err = telemetry.New(telemetry.Options{Exporters: []observability.Exporter{telemetry.NewLogExporter(logFile), otel, introspectionTelemetry, d.posthogExporter()}, FlushInterval: 200 * time.Millisecond, Diagnostic: func(x telemetry.Diagnostic) {
+	d.pipeline, err = telemetry.New(telemetry.Options{Exporters: []observability.Exporter{telemetry.NewLogExporter(logFile), otel, introspectionTelemetry, d.posthogExporter(), extensionExporter{d}}, FlushInterval: 200 * time.Millisecond, Diagnostic: func(x telemetry.Diagnostic) {
 		d.log.Warn("telemetry export degraded", "exporter", x.Exporter, "code", x.Code, "records", x.Records)
 	}})
 	if err != nil {
@@ -275,7 +276,13 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = d.openResources(); err != nil {
 		return err
 	}
-	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, registry(d.executors), o.ConfigPath); err != nil {
+	// Installed extension packages start before the configuration opens,
+	// so their validators check it (07-03).
+	d.openExtensions(ctx)
+	defer d.closeExtensions()
+	reg := registry(d.executors)
+	d.extensionRegistry(&reg)
+	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
 	d.posthog.configs.Store(d.configs)
@@ -287,6 +294,8 @@ func Serve(ctx context.Context, o Options) (err error) {
 	d.registerTrackers(ctx, snapshot)
 	d.registerSlack(ctx, snapshot)
 	d.registerSchedule(ctx, snapshot)
+	d.publishGeneration(snapshot, generation)
+	d.configureExtensions(ctx)
 	c, err := d.build(snapshot, generation)
 	if err != nil {
 		return err
@@ -308,6 +317,8 @@ func Serve(ctx context.Context, o Options) (err error) {
 		d.registerTrackers(d.ctx, s)
 		d.registerSlack(d.ctx, s)
 		d.registerSchedule(d.ctx, s)
+		d.publishGeneration(s, g)
+		d.configureExtensions(d.ctx)
 		d.introspection.telemetry.Store(introspectionTelemetryOn(s))
 		d.ensureSchedules(d.ctx, next, s, true)
 		d.ensureIntrospection(d.ctx, next, s, true)
@@ -375,7 +386,9 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		bindings[name] = runtime.RouteBinding{Executor: e}
 	}
 	var err error
-	if c.router, err = runtime.NewRouter(d.coord, d.now, runtime.RouterOptions{Generation: c.generation, Handlers: handlers(), Bindings: bindings, CausalLimits: limits}); err != nil {
+	routeHandlers := handlers()
+	d.extensionHandlers(routeHandlers)
+	if c.router, err = runtime.NewRouter(d.coord, d.now, runtime.RouterOptions{Generation: c.generation, Handlers: routeHandlers, Bindings: bindings, CausalLimits: limits}); err != nil {
 		return nil, err
 	}
 	var belt *runtime.Toolbelt
@@ -394,6 +407,9 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	if err = d.registerTools(belt, s); err != nil {
 		return nil, err
 	}
+	if err = d.registerExtensionTools(belt); err != nil {
+		return nil, err
+	}
 	c.toolbelt = belt
 	// One binary registers the same executor implementations for every
 	// generation, so earlier pinned attempts are reinstalled exactly.
@@ -401,6 +417,10 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	for g := uint64(1); g < gen; g++ {
 		history[strconv.FormatUint(g, 10)] = d.executors
 	}
+	kinds := workKinds()
+	d.extensionWorkKinds(kinds)
+	recurring := recurrences()
+	d.extensionRecurrences(recurring)
 	delays := make([]time.Duration, len(set.RetryDelaysSeconds))
 	for i, seconds := range set.RetryDelaysSeconds {
 		delays[i] = time.Duration(seconds) * time.Second
@@ -413,11 +433,11 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		Toolbelt: belt, ToolbeltEndpoint: d.endpoint, Secrets: d.configs.Secrets(d.resolver),
 		Resources: d.bindResources, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
-		WorkKinds: workKinds(),
+		WorkKinds: kinds,
 	}); err != nil {
 		return nil, err
 	}
-	if c.timers, err = runtime.NewTimers(d.coord, d.now, runtime.TimerOptions{CausalLimits: limits, Recurrences: recurrences()}); err != nil {
+	if c.timers, err = runtime.NewTimers(d.coord, d.now, runtime.TimerOptions{CausalLimits: limits, Recurrences: recurring}); err != nil {
 		return nil, err
 	}
 	control, err := runtime.NewControl(d.coord, d.now, c.router, c.scheduler, limits)
@@ -429,8 +449,8 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck, d.posthogCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.scheduleCheck, d.introspectionCheck},
-		DeepChecks: []func(context.Context) runtime.Check{d.githubAuthCheck, d.trackerAuthCheck, d.posthogAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck}, Annotate: d.annotate, Attach: d.attach, Nudge: d.poke}); err != nil {
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck, d.posthogCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.scheduleCheck, d.introspectionCheck, d.extensionCheck},
+		DeepChecks: []func(context.Context) runtime.Check{d.githubAuthCheck, d.trackerAuthCheck, d.posthogAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck, d.extensionDeepCheck}, Annotate: d.annotate, Attach: d.attach, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
 	return c, nil

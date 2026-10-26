@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
 	"strconv"
 	"strings"
 	"sync"
@@ -53,6 +54,18 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 		}
 		return nil
 	}
+	ext.Validate = func(_ context.Context, p protocol.ValidateParams) error {
+		if p.Kind != protocol.ValidateExtension || p.Type != "notes" {
+			return nil
+		}
+		var cfg struct {
+			Service string `json:"service"`
+		}
+		if json.Unmarshal(p.Config, &cfg) != nil || cfg.Service == "" {
+			return errors.New("a notes entry needs a service file")
+		}
+		return nil
+	}
 	ext.Configure = func(ctx context.Context, h *sdk.Host, p protocol.ConfigureParams) (protocol.ConfigureResult, error) {
 		var out protocol.ConfigureResult
 		next := map[string]*Ingress{}
@@ -68,6 +81,7 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 			}
 			name := Name + "/" + e.ScopeID
 			next[name] = &Ingress{Service: cfg.Service, Release: o.Release, StableIdentity: o.StableIdentity}
+			out.WebhookPaths = append(out.WebhookPaths, "/"+name)
 			out.Sources = append(out.Sources, protocol.SourceDecl{Name: name, Source: protocol.Source{Namespace: name, ScopeID: e.ScopeID}, IntervalSeconds: 60, Families: []protocol.EventFamily{{Type: Changed, ReDerivable: true}, {Type: Deleted, Loss: m.Provides.Families[1].Loss}}})
 		}
 		mu.Lock()
@@ -146,6 +160,20 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 		"notes-derive": func(ctx context.Context, h *sdk.Host) error { return derive(ctx, h) },
 	}
 	ext.Checks = map[string]func(context.Context, *sdk.Host, bool) (string, error){"notes": func(context.Context, *sdk.Host, bool) (string, error) { return "ok", nil }}
+	ext.Webhooks = func(path string) (http.Handler, bool) {
+		name := strings.TrimPrefix(path, "/")
+		mu.Lock()
+		_, ok := sources[name]
+		mu.Unlock()
+		if !ok {
+			return nil, false
+		}
+		return webhook(name), true
+	}
+	ext.Providers = map[string]extension.ResourceProvider{Scratch: scratch{stateDir: o.StateDir}}
+	ext.Exporter = exporter{stateDir: o.StateDir}
+	ext.Annotate = annotate
+	ext.Setups = map[string]extension.Setup{Name: Setup{}}
 	ext.Render = func(e domain.Event) (string, bool) {
 		if e.Type != Changed || e.CorrelationKey == nil {
 			return "", false

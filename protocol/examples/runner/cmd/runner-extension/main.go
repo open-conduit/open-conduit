@@ -13,6 +13,9 @@ import (
 )
 
 func main() {
+	if sdk.PackageCommand(os.Args[1:], runner.Manifest(), runner.Certification(), os.Stdout) {
+		return
+	}
 	if len(os.Args) == 3 && os.Args[1] == "job" {
 		if err := runner.Job(os.Args[2]); err != nil {
 			fmt.Fprintln(os.Stderr, err)

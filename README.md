@@ -31,6 +31,7 @@ The project is implementing the core after completing the contracts gate. Primit
 - [Installed integrations: Linear, Jira, Bitbucket, PostHog and operator tools](docs/architecture/installed-integrations.md)
 - [Migration from Open Supervisor, ownership transfer and recovery](docs/architecture/migration-recovery.md)
 - [Extension subprocess protocol: inventory, transport decision, manifest, runtime, trust model and schema evolution (provisional)](docs/architecture/extension-protocol.md)
+- [Extension packaging, SDK, install/update/removal and certification (provisional)](docs/architecture/extension-packaging.md)
 - [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)
 - [Pinned source test index](docs/baseline/source-tests.md)

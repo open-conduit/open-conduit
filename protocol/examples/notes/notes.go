@@ -108,6 +108,12 @@ func Manifest(o Options) protocol.Manifest {
 		Tasks:       []protocol.TaskDecl{{Name: "notes-index", IntervalSeconds: 60}, {Name: "notes-derive", IntervalSeconds: 60}},
 		Checks:      []protocol.CheckDecl{{Name: "notes"}},
 		Render:      true,
+		// 07-03 surfaces.
+		Webhooks:  true,
+		Resources: []protocol.ResourceDecl{{Type: Scratch, Modes: []string{extension.ResourceWork}}},
+		Exporters: true,
+		Annotate:  true,
+		Setup:     &protocol.SetupDecl{Type: Name, Summary: "add a scope watching a note service file", Usage: "[--service FILE]"},
 	}}
 }
 

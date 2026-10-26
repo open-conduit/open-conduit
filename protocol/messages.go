@@ -35,6 +35,11 @@ type ConfigEntry struct {
 	Config  json.RawMessage `json:"config,omitempty"`
 	// Secrets lists the secret names the entry may resolve.
 	Secrets []string `json:"secrets,omitempty"`
+	// Name is the entry's name in its scope (07-03).
+	Name string `json:"name,omitempty"`
+	// Connection is the connection the entry names, when it names one of
+	// the extension's declared connection types (07-03).
+	Connection *ConnectionEntry `json:"connection,omitempty"`
 }
 
 // KVState tells the extension which KV layout the host has recorded for it
@@ -303,9 +308,15 @@ type ArtifactWriteParams struct {
 type ArtifactTarget struct {
 	Writer string `json:"writer"`
 }
+
+// SecretResolveParams resolves secret names bound to one of the
+// extension's entries in a configured scope: the entry's selected secret
+// names, or, with Connection set, the secret names of that connection when
+// an entry of the extension in the scope names it (07-03).
 type SecretResolveParams struct {
-	ScopeID string   `json:"scope_id"`
-	Names   []string `json:"names"`
+	ScopeID    string   `json:"scope_id"`
+	Connection string   `json:"connection,omitempty"`
+	Names      []string `json:"names"`
 }
 type SecretResolveResult struct {
 	Values map[string]string `json:"values"`

@@ -239,12 +239,7 @@ func (o *operator) editConfig(args []string) int {
 	if o.env.Adapters != nil {
 		catalog = o.env.Adapters()
 	}
-	validate := func(b []byte) ([]client.Detail, error) {
-		if o.env.ValidateConfig == nil {
-			return nil, nil
-		}
-		return o.env.ValidateConfig(b)
-	}
+	validate := func(b []byte) ([]client.Detail, error) { return o.validateConfig(path, b) }
 	saved, err := o.env.EditConfig(EditRequest{Path: path, Doc: doc, Catalog: catalog, Validate: validate, Save: func(b []byte) error { return writePrivate(path, b) }})
 	if err != nil {
 		return o.emit(nil, err)

@@ -50,20 +50,40 @@ func registry(executors map[string]extension.Executor) config.Registry {
 // registrations `serve` uses, without a daemon, storage or secret
 // resolution. It returns the diagnostics (empty when valid).
 func ValidateConfig(data []byte) ([]config.Diagnostic, error) {
-	// Capability and config checks need only the registrations: executors'
-	// capabilities and config validators do not touch their runtime state.
-	inner := &shell.Executor{}
-	legacy, err := sc.NewLegacyExecutor(sc.LegacyOptions{Inner: inner})
-	if err != nil {
-		return nil, err
-	}
-	reg := registry(map[string]extension.Executor{"shell": inner, ClaudeCodeExecutor: &claudecode.Executor{}, gh.HoldExecutor: gh.NewHoldExecutor(), sc.LegacyExecutorName: legacy})
-	_, err = config.Validate(data, reg)
+	return ValidateConfigAt("", data)
+}
+
+// ValidateConfigAt is ValidateConfig for a config file at configPath: the
+// extension packages installed beside it contribute their declared types
+// (their opaque config is checked by the package once a daemon validates or
+// applies it; an offline check never starts a process).
+func ValidateConfigAt(configPath string, data []byte) ([]config.Diagnostic, error) {
+	return validateWith(configPath, "", data)
+}
+
+// validateWith validates offline, leaving out the installed package named
+// exclude (the removal check).
+func validateWith(configPath, exclude string, data []byte) ([]config.Diagnostic, error) {
+	reg := registry(offlineExecutors())
+	offlineExternal(&reg, configPath, exclude)
+	_, err := config.Validate(data, reg)
 	var invalid *config.ValidationError
 	if errors.As(err, &invalid) {
 		return invalid.Diagnostics, nil
 	}
 	return nil, err
+}
+
+// offlineExecutors are the first-party executor registrations for offline
+// checks: capability and config checks need only the registrations, and
+// executors' capabilities and config validators do not touch runtime state.
+func offlineExecutors() map[string]extension.Executor {
+	inner := &shell.Executor{}
+	out := map[string]extension.Executor{"shell": inner, ClaudeCodeExecutor: &claudecode.Executor{}, gh.HoldExecutor: gh.NewHoldExecutor()}
+	if legacy, err := sc.NewLegacyExecutor(sc.LegacyOptions{Inner: inner}); err == nil {
+		out[sc.LegacyExecutorName] = legacy
+	}
+	return out
 }
 
 // Setups are the registered extensions' optional setup flows (`open-conduit
@@ -145,6 +165,9 @@ func (d *daemon) annotate(ctx context.Context, w domain.Work) []management.Annot
 	}
 	d.github.mu.Unlock()
 	var out []management.Annotation
+	for _, a := range d.extensionAnnotations(ctx, w) {
+		out = append(out, management.Annotation{Source: a[0], Name: a[1], Value: a[2]})
+	}
 	for _, src := range sources {
 		lines, ok := gh.Annotate(ctx, d.coord, src.ingress.Settings(), src.client.Web(), w)
 		if !ok {

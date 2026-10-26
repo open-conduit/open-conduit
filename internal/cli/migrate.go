@@ -162,8 +162,12 @@ func (o *operator) migrate(args []string) int {
 		return o.emit(nil, err)
 	}
 	var details []client.Detail
-	if o.env.ValidateConfig != nil {
-		if details, err = o.env.ValidateConfig(res.Config); err != nil {
+	if o.env.ValidateConfig != nil || o.env.ValidateConfigAt != nil {
+		vpath := target
+		if vpath == "" {
+			vpath = o.configPath("")
+		}
+		if details, err = o.validateConfig(vpath, res.Config); err != nil {
 			return o.emit(nil, fmt.Errorf("config could not be validated: %w", err))
 		}
 	}

@@ -26,8 +26,10 @@ type Armer interface {
 	Cancel(ctx context.Context, id domain.ID, expected domain.Revision) error
 }
 
-// Deps are the trusted host surfaces the service adapts. Store and Now are
-// required; a nil optional surface refuses its methods as unsupported.
+// Deps are the trusted host surfaces the service adapts. Now is required;
+// a nil optional surface refuses its methods as unsupported. Store is
+// optional only for a CLI-time process (setup), which has no coordination
+// store: KV, state and event methods then refuse as unsupported.
 type Deps struct {
 	Store  storage.Store
 	Now    func() time.Time
@@ -36,9 +38,14 @@ type Deps struct {
 	// extension. State reads, event.accept, timers, secrets and work.cancel
 	// are limited to them.
 	Scopes func() []domain.ID
-	// Secrets resolves names bound to the extension's entry in scope; the
-	// host refuses any other name (B05 isolation).
-	Secrets func(ctx context.Context, scope domain.ID, names []string) (map[string]string, error)
+	// Secrets resolves names bound to the extension's entries in scope: an
+	// entry's selected secret names, or with connection set the secret names
+	// of a connection one of its entries names. The host refuses any other
+	// name (B05 isolation).
+	Secrets func(ctx context.Context, scope domain.ID, connection string, names []string) (map[string]string, error)
+	// CurrentLimits, when set, supplies the causal limits of the current
+	// configuration generation instead of Limits.
+	CurrentLimits func() runtime.CausalLimits
 	// Deliver is the runtime ingress push for one of the extension's own
 	// registered sources; it returns after durable acceptance.
 	Deliver    func(ctx context.Context, name string, d extension.Delivery) ([]domain.AcceptedEvent, error)
@@ -70,10 +77,13 @@ type Service struct {
 	// of this extension; any callback then is refused (reentrant_call).
 	inTx func() bool
 
-	mu      sync.Mutex
-	runs    map[string]*run
-	writers map[string]storage.ArtifactWriter
-	sources map[string]bool
+	mu         sync.Mutex
+	runs       map[string]*run
+	writers    map[string]storage.ArtifactWriter
+	sources    map[string]bool
+	reconciles map[string]extension.ResourceStatusFunc
+	setups     map[string]extension.SetupHost
+	refused    int64
 }
 
 // NewService returns the scoped service for a validated manifest.
@@ -81,13 +91,13 @@ func NewService(m protocol.Manifest, deps Deps) (*Service, error) {
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}
-	if deps.Store == nil || deps.Now == nil {
+	if deps.Now == nil {
 		return nil, storage.ErrInvalid
 	}
 	if deps.Scopes == nil {
 		deps.Scopes = func() []domain.ID { return nil }
 	}
-	s := &Service{name: m.Name, manifest: m, enabled: map[string]bool{}, deps: deps, inTx: func() bool { return false }, runs: map[string]*run{}, writers: map[string]storage.ArtifactWriter{}, sources: map[string]bool{}}
+	s := &Service{name: m.Name, manifest: m, enabled: map[string]bool{}, deps: deps, inTx: func() bool { return false }, runs: map[string]*run{}, writers: map[string]storage.ArtifactWriter{}, sources: map[string]bool{}, reconciles: map[string]extension.ResourceStatusFunc{}, setups: map[string]extension.SetupHost{}}
 	for _, method := range m.Enabled() {
 		s.enabled[method] = true
 	}
@@ -133,8 +143,29 @@ func (s *Service) allowedScopes() map[domain.ID]bool {
 func unauthorized(msg string) error { return protocol.Errorf(protocol.CodeUnauthorized, msg) }
 func invalid(msg string) error      { return protocol.Errorf(protocol.CodeInvalid, msg) }
 
+// Refused counts authorization refusals (unauthorized answers) served to
+// the extension: a certification signal that it reached outside its
+// namespaces, scopes or sources.
+func (s *Service) Refused() int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.refused
+}
+
 // Handle serves one extension-to-host request.
 func (s *Service) Handle(ctx context.Context, method string, raw json.RawMessage) (any, error) {
+	out, err := s.handle(ctx, method, raw)
+	if protocol.ErrorCode(err) == protocol.CodeUnauthorized {
+		s.mu.Lock()
+		s.refused++
+		s.mu.Unlock()
+	}
+	return out, err
+}
+
+var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.event": true, "state.events": true, "state.scopes": true, "state.timers": true, "event.accept": true, "timer.cancel": true, "work.cancel": true}
+
+func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	m, ok := protocol.Lookup(method)
 	if !ok || m.Direction == protocol.HostToExtension {
 		return nil, protocol.Errorf(protocol.CodeMethodNotFound, "no such host method")
@@ -144,6 +175,9 @@ func (s *Service) Handle(ctx context.Context, method string, raw json.RawMessage
 	}
 	if s.inTx() {
 		return nil, protocol.Errorf(protocol.CodeReentrant, "callback while serving an in-transaction method")
+	}
+	if s.deps.Store == nil && storeMethods[method] {
+		return nil, protocol.Errorf(protocol.CodeUnsupported, "no coordination store in this host process")
 	}
 	switch method {
 	case "kv.get":
@@ -207,7 +241,7 @@ func (s *Service) Handle(ctx context.Context, method string, raw json.RawMessage
 		if s.deps.Secrets == nil {
 			return nil, protocol.Errorf(protocol.CodeUnsupported, "secrets")
 		}
-		values, err := s.deps.Secrets(ctx, domain.ID(p.ScopeID), p.Names)
+		values, err := s.deps.Secrets(ctx, domain.ID(p.ScopeID), p.Connection, p.Names)
 		if err != nil {
 			return nil, err
 		}
@@ -242,6 +276,24 @@ func (s *Service) Handle(ctx context.Context, method string, raw json.RawMessage
 		return struct{}{}, r.persist(p.State.Domain())
 	case "resource.acquire", "resource.lookup":
 		return s.resource(ctx, method, raw)
+	case "provider.owner_status":
+		var p protocol.OwnerStatusParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		status := s.reconciles[p.Reconcile]
+		s.mu.Unlock()
+		if status == nil {
+			return nil, protocol.Errorf(protocol.CodeConflict, "no provider.reconcile in progress under that ID")
+		}
+		st, err := status(ctx, p.Owner.Extension())
+		if err != nil {
+			return nil, err
+		}
+		return protocol.FromOwnerStatus(st), nil
+	case "setup.print", "setup.prompt", "setup.choose", "setup.open_url", "setup.store_secret", "setup.look_path", "setup.run_command":
+		return s.setup(ctx, method, raw)
 	}
 	return nil, protocol.Errorf(protocol.CodeUnsupported, "host method not offered in this release")
 }
@@ -534,7 +586,11 @@ func (s *Service) accept(ctx context.Context, p protocol.EventAcceptParams) (pro
 		if err := s.applyKV(tx, p.Checks, nil, nil); err != nil {
 			return err
 		}
-		accepted, added, err := runtime.AcceptDerivedInTx(tx, now, s.deps.Limits, scope, parent.Event.ID, e)
+		limits := s.deps.Limits
+		if s.deps.CurrentLimits != nil {
+			limits = s.deps.CurrentLimits()
+		}
+		accepted, added, err := runtime.AcceptDerivedInTx(tx, now, limits, scope, parent.Event.ID, e)
 		if errors.Is(err, runtime.ErrCausalRejected) {
 			refusal = protocol.Errorf(protocol.CodeCausalLimit, "causal depth or rate bound")
 			return nil // commit only the redacted diagnostic

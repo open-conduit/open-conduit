@@ -6,7 +6,11 @@
 // the same conformance suites as an in-process one, because the host adapts
 // the wire back onto the same interfaces.
 //
-// It is provisional: 07-03 decides the SDK's final shape and packaging.
+// 07-03 gave it its shape (provisional): one Extension field per manifest
+// surface, Host for the scoped extension-to-host methods, Store
+// (storage.Store over the host) and Artifacts (storage.Artifacts over the
+// host) so in-process code runs unchanged, and PackageCommand for packaging.
+// The guide is docs/architecture/extension-packaging.md.
 package sdk
 
 import (
@@ -16,12 +20,14 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/alsiola/open-conduit/domain"
 	"github.com/alsiola/open-conduit/extension"
+	"github.com/alsiola/open-conduit/observability"
 	"github.com/alsiola/open-conduit/protocol"
 	"github.com/alsiola/open-conduit/protocol/jsonrpc"
 )
@@ -59,6 +65,28 @@ type Extension struct {
 	Render      func(domain.Event) (string, bool)
 	// Upcasters by schema base name.
 	Upcasters map[string]Upcaster
+
+	// Surfaces adapted in 07-03.
+
+	// Validate checks one opaque config object of a declared connection,
+	// extension, route, executor or resource type (the config.Registry
+	// validators). A nil Validate accepts every object of a declared type.
+	// Return an error to refuse; the host reports only that the object is
+	// invalid, never the message.
+	Validate func(ctx context.Context, p protocol.ValidateParams) error
+	// Webhooks returns the handler of a webhook path the last configure
+	// registered. The handler verifies the request and pushes through
+	// Host.Deliver before writing a 2xx status.
+	Webhooks func(path string) (http.Handler, bool)
+	// Providers are resource providers by declared type.
+	Providers map[string]extension.ResourceProvider
+	// Exporter receives telemetry batches (manifest exporters) and is shut
+	// down with the extension.
+	Exporter observability.Exporter
+	// Annotate contributes Work annotations (manifest annotate).
+	Annotate func(ctx context.Context, h *Host, w domain.Work) ([]protocol.Annotation, error)
+	// Setups are `open-conduit init <type>` flows by declared setup type.
+	Setups map[string]extension.Setup
 }
 
 // Server is one served connection.
@@ -142,7 +170,12 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 		s.mu.Lock()
 		s.draining = true
 		s.mu.Unlock()
+		if s.ext.Exporter != nil {
+			_ = s.ext.Exporter.Shutdown(ctx)
+		}
 		return struct{}{}, nil
+	case "validate", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "telemetry.export", "work.annotate", "setup.run":
+		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)
 	case "route.match":
@@ -610,4 +643,34 @@ func (b *broker) Lookup(ctx context.Context, ref string) (extension.Resource, er
 		return extension.Resource{}, err
 	}
 	return out.Resource.Extension(), nil
+}
+
+// PackageCommand answers the packaging subcommands every packaged binary
+// serves (07-03): `package-manifest` prints the manifest file's JSON and
+// `package-certification` prints the package's certification.json content
+// (certification is marshaled as is; nil prints nothing). It reports
+// whether args named one, so main returns after it.
+func PackageCommand(args []string, m protocol.Manifest, certification any, out io.Writer) bool {
+	if len(args) != 1 {
+		return false
+	}
+	var v any
+	switch args[0] {
+	case "package-manifest":
+		v = m
+	case "package-certification":
+		if certification == nil {
+			return true
+		}
+		v = certification
+	default:
+		return false
+	}
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	_, _ = out.Write(append(b, '\n'))
+	return true
 }

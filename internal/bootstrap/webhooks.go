@@ -145,6 +145,10 @@ func (d *daemon) webhookSecret(src *githubSource) func(context.Context) (string,
 func (d *daemon) webhookHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")
+		if h := d.extensionWebhook(name); h != nil {
+			h.ServeHTTP(w, r)
+			return
+		}
 		if strings.HasPrefix(name, sc.Type+"/") {
 			h, rest := d.scheduleWebhook(name)
 			if h == nil {

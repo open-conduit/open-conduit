@@ -31,6 +31,15 @@ var ErrRefused = errors.New("extproc: extension refused at handshake")
 // ErrStopped means the process was closed by the host.
 var ErrStopped = errors.New("extproc: extension stopped")
 
+// Failure kinds of a start, for diagnostics (Diagnose). ErrManifestMismatch
+// is also an ErrRefused.
+var (
+	ErrStart            = errors.New("extproc: extension command could not be started")
+	ErrHandshake        = errors.New("extproc: extension handshake failed")
+	ErrConfigure        = errors.New("extproc: extension configure refused")
+	ErrManifestMismatch = errors.New("extproc: the process returned a manifest that differs from its file")
+)
+
 // KVMarker records the KV layout version an extension last reported.
 type KVMarker interface {
 	StoredKV(ctx context.Context, name string) (int, error)
@@ -244,18 +253,29 @@ func (p *Process) stderr() io.Writer {
 	return &boundedLog{f: f, max: p.o.MaxLogBytes, size: size}
 }
 
+// Environment is the sanitized environment an extension process gets from
+// environ (the B05 baseline only).
+func Environment(environ []string) []string { return sanitized(environ) }
+
+// Argv resolves the manifest's command: a relative argv[0] that names a
+// path, or a file inside the extension directory, is resolved against it.
+func (f Found) Argv() []string {
+	argv := append([]string(nil), f.Manifest.Command...)
+	if !filepath.IsAbs(argv[0]) && strings.ContainsRune(argv[0], filepath.Separator) {
+		argv[0] = filepath.Join(f.Dir, argv[0])
+	} else if !filepath.IsAbs(argv[0]) {
+		if local := filepath.Join(f.Dir, argv[0]); fileExists(local) {
+			argv[0] = local
+		}
+	}
+	return argv
+}
+
 // launch starts one process and completes its handshake. It returns the
 // channel closed when that process exits.
 func (p *Process) launch(ctx context.Context) (chan struct{}, error) {
 	m := p.o.Found.Manifest
-	argv := append([]string(nil), m.Command...)
-	if !filepath.IsAbs(argv[0]) && strings.ContainsRune(argv[0], filepath.Separator) {
-		argv[0] = filepath.Join(p.o.Found.Dir, argv[0])
-	} else if !filepath.IsAbs(argv[0]) {
-		if local := filepath.Join(p.o.Found.Dir, argv[0]); fileExists(local) {
-			argv[0] = local
-		}
-	}
+	argv := p.o.Found.Argv()
 	if p.o.KV != nil {
 		stored, err := p.o.KV.StoredKV(ctx, p.name)
 		if err != nil {
@@ -280,7 +300,7 @@ func (p *Process) launch(ctx context.Context) (chan struct{}, error) {
 		return nil, err
 	}
 	if err = cmd.Start(); err != nil {
-		return nil, fmt.Errorf("extproc: start %s: %w", p.name, err)
+		return nil, fmt.Errorf("%w: %s: %w", ErrStart, p.name, err)
 	}
 	exited := make(chan struct{})
 	conn := jsonrpc.NewConn(stdout, stdin, p.o.Service.Handle, jsonrpc.Options{OnProtocolError: func(err error) {
@@ -346,13 +366,13 @@ func (p *Process) handshake(ctx context.Context, conn *jsonrpc.Conn) error {
 		return p.refuse(err)
 	}
 	if err != nil {
-		return fmt.Errorf("extproc: initialize %s: %w", p.name, err)
+		return fmt.Errorf("%w: initialize %s: %w", ErrHandshake, p.name, err)
 	}
 	if _, err := protocol.Negotiate([]int{init.ProtocolVersion}, p.o.Versions); err != nil {
 		return p.refuse(err)
 	}
 	if !sameManifest(init.Manifest, p.o.Found.Manifest) {
-		return p.refuse(errors.New("the process returned a manifest that differs from its file"))
+		return p.refuse(ErrManifestMismatch)
 	}
 	params := protocol.ConfigureParams{}
 	if p.o.Configure != nil {
@@ -370,10 +390,13 @@ func (p *Process) handshake(ctx context.Context, conn *jsonrpc.Conn) error {
 func (p *Process) configure(ctx context.Context, conn *jsonrpc.Conn, params protocol.ConfigureParams) error {
 	var res protocol.ConfigureResult
 	if err := conn.Call(ctx, "configure", params, &res); err != nil {
-		return fmt.Errorf("extproc: configure %s: %w", p.name, err)
+		if errors.Is(err, protocol.ErrTransport) || errors.Is(err, context.DeadlineExceeded) {
+			return fmt.Errorf("%w: configure %s: %w", ErrHandshake, p.name, err)
+		}
+		return fmt.Errorf("%w: %s: %w", ErrConfigure, p.name, err)
 	}
 	if res.KVVersion != p.o.Found.Manifest.KVVersion {
-		return fmt.Errorf("extproc: configure %s: KV layout %d, manifest %d", p.name, res.KVVersion, p.o.Found.Manifest.KVVersion)
+		return fmt.Errorf("%w: %s: KV layout %d, manifest %d", ErrConfigure, p.name, res.KVVersion, p.o.Found.Manifest.KVVersion)
 	}
 	if err := p.checkSources(res); err != nil {
 		return err
@@ -407,17 +430,17 @@ func (p *Process) checkSources(res protocol.ConfigureResult) error {
 	}
 	for _, s := range res.Sources {
 		if !protocol.SourceNamespace(m.Name, s.Name) || !protocol.SourceNamespace(m.Name, s.Source.Namespace) {
-			return fmt.Errorf("extproc: configure %s: source %q is outside its namespace", p.name, s.Name)
+			return fmt.Errorf("%w: %s: source %q is outside its namespace", ErrConfigure, p.name, s.Name)
 		}
 		for _, f := range s.Families {
 			if d, ok := families[f.Type]; !ok || d.ReDerivable != f.ReDerivable || d.Loss != f.Loss {
-				return fmt.Errorf("extproc: configure %s: source family %q differs from the manifest", p.name, f.Type)
+				return fmt.Errorf("%w: %s: source family %q differs from the manifest", ErrConfigure, p.name, f.Type)
 			}
 		}
 	}
 	for _, path := range res.WebhookPaths {
 		if !strings.HasPrefix(path, "/"+m.Name+"/") {
-			return fmt.Errorf("extproc: configure %s: webhook path %q is outside /%s/", p.name, path, m.Name)
+			return fmt.Errorf("%w: %s: webhook path %q is outside /%s/", ErrConfigure, p.name, path, m.Name)
 		}
 	}
 	return nil

@@ -2,6 +2,7 @@ package extproc
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sync"
@@ -31,6 +32,12 @@ func NewRemote(p *Process, s *Service) *Remote {
 
 // Process returns the supervised process.
 func (r *Remote) Process() *Process { return r.p }
+
+// Manifest returns the extension's manifest.
+func (r *Remote) Manifest() protocol.Manifest { return r.m }
+
+// Service returns the extension's scoped host service.
+func (r *Remote) Service() *Service { return r.s }
 
 // SchemaSkips counts host-side deterministic answers for unreadable
 // payload schemas (route no-match, filter false, generic render).
@@ -317,6 +324,13 @@ type remoteExecutor struct {
 }
 
 func (e *remoteExecutor) Capabilities() domain.Capabilities { return e.decl.Capabilities.Domain() }
+
+// ValidateConfig checks a binding's executor config through validate
+// (config.ConfigValidator), so a binding is refused at load or apply time,
+// exactly as for an in-process executor.
+func (e *remoteExecutor) ValidateConfig(raw json.RawMessage, secretNames []string) error {
+	return e.r.Validator(protocol.ValidateExecutor, e.decl.Name)(raw, secretNames)
+}
 
 // open binds the RunRequest's trusted callbacks to a fresh run ID. The run
 // remembers the last metadata persisted through it, so the host can

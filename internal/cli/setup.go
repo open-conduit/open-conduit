@@ -142,15 +142,15 @@ func writePrivate(path string, data []byte) error {
 
 // validate checks a candidate offline; problems are printed as pointer,
 // code and remedy (like `config validate`).
-func (o *operator) validate(data []byte) bool {
+func (o *operator) validate(path string, data []byte) bool {
 	if !json.Valid(data) {
 		fmt.Fprintln(o.errOut, "open-conduit: config is not valid JSON")
 		return false
 	}
-	if o.env.ValidateConfig == nil {
+	if o.env.ValidateConfig == nil && o.env.ValidateConfigAt == nil {
 		return true
 	}
-	details, err := o.env.ValidateConfig(data)
+	details, err := o.validateConfig(path, data)
 	if err != nil {
 		fmt.Fprintf(o.errOut, "open-conduit: config could not be validated: %s\n", err)
 		return false
@@ -205,17 +205,20 @@ func splitInitFlags(args []string) (config, with string, force, dry bool, rest [
 	return
 }
 
-func (o *operator) setups() []extension.Setup {
+func (o *operator) setups(configPath string) []extension.Setup {
 	out := append([]extension.Setup(nil), o.env.Setups...)
+	if o.env.Extensions != nil && o.env.Extensions.Setups != nil {
+		out = append(out, o.env.Extensions.Setups(configPath, o.stateDir())...)
+	}
 	sort.Slice(out, func(i, j int) bool { return out[i].SetupInfo().Type < out[j].SetupInfo().Type })
 	return out
 }
 
-func (o *operator) listSetups(w io.Writer) {
+func (o *operator) listSetups(w io.Writer, configPath string) {
 	fmt.Fprintln(w, "Usage: open-conduit init TYPE [flags] [--config PATH] [--force] [--dry-run]")
 	fmt.Fprintln(w, "       open-conduit init --with claude   start Claude Code with the setup guide")
 	fmt.Fprintln(w, "\nTypes (from the registered extensions):")
-	list := o.setups()
+	list := o.setups(configPath)
 	if len(list) == 0 {
 		fmt.Fprintln(w, "  none: no registered extension offers setup")
 	}
@@ -239,21 +242,21 @@ func (o *operator) init(args []string) int {
 		return o.env.Setup(SetupRequest{Agent: with, ConfigPath: path, StateDir: o.stateDir(), Cwd: o.env.Cwd})
 	}
 	if len(rest) == 0 {
-		o.listSetups(o.out)
+		o.listSetups(o.out, path)
 		return 0
 	}
 	if strings.HasPrefix(rest[0], "-") {
-		o.listSetups(o.errOut)
+		o.listSetups(o.errOut, path)
 		return usageError(o.errOut, "init needs a TYPE first, for example init github")
 	}
 	var setup extension.Setup
-	for _, s := range o.setups() {
+	for _, s := range o.setups(path) {
 		if s.SetupInfo().Type == rest[0] {
 			setup = s
 		}
 	}
 	if setup == nil {
-		o.listSetups(o.errOut)
+		o.listSetups(o.errOut, path)
 		return usageError(o.errOut, fmt.Sprintf("no registered extension offers setup %q", rest[0]))
 	}
 	existing, err := os.ReadFile(path)
@@ -272,7 +275,7 @@ func (o *operator) init(args []string) int {
 	if err != nil {
 		return o.emit(nil, err)
 	}
-	if !o.validate(out) {
+	if !o.validate(path, out) {
 		fmt.Fprintln(o.errOut, "open-conduit: not saved; nothing changed")
 		return 1
 	}
@@ -541,7 +544,7 @@ func (o *operator) localConfig(args []string) (int, bool) {
 		_, _ = o.out.Write(root.bytes())
 		return 0, true
 	case "check":
-		if !o.validate(data) {
+		if !o.validate(path, data) {
 			return 1, true
 		}
 		fmt.Fprintln(o.out, "valid")
@@ -587,7 +590,7 @@ func (o *operator) localConfig(args []string) (int, bool) {
 		return o.emit(nil, err), true
 	}
 	out := root.bytes()
-	if !o.validate(out) {
+	if !o.validate(path, out) {
 		fmt.Fprintln(o.errOut, "open-conduit: not saved; the config file is unchanged")
 		return 1, true
 	}

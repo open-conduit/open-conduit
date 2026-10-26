@@ -60,6 +60,8 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.runSlackSockets(ctx)
 		d.projectSlack(ctx)
 		d.manageHooks(ctx)
+		d.reconfigureOnURLChange(ctx)
+		d.runExtensionTasks(ctx)
 		d.reconcileResources(c)
 		d.maintainClaudeCode(ctx)
 		if d.now().Sub(lastSweep) >= d.o.RetentionInterval {

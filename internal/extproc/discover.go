@@ -32,7 +32,8 @@ import (
 
 // Dir is the install location under the configuration directory (beside
 // config.json): <config dir>/extensions/<name>/open-conduit-extension.json.
-// Provisional (07-02); 07-03 owns install, update and removal.
+// Provisional (07-02); install, update, rollback and removal are Install,
+// Rollback and Remove (07-03).
 const Dir = "extensions"
 
 // Found is one discovered extension: its directory, parsed manifest and the
@@ -58,7 +59,8 @@ func Discover(root string) ([]Found, []error) {
 	var found []Found
 	var errs []error
 	for _, e := range entries {
-		if !e.IsDir() {
+		// Dot entries are the installer's (staging, kept releases).
+		if !e.IsDir() || strings.HasPrefix(e.Name(), ".") {
 			continue
 		}
 		dir := filepath.Join(root, e.Name())

@@ -1,6 +1,6 @@
 # Extension subprocess protocol
 
-Decision B08 · ticket 07-01 · **provisional, for user review**. The executable definition is package [`protocol`](../../protocol/protocol.go): the version, the [manifest](../../protocol/manifest.go) and its validation, and the [method catalogue](../../protocol/methods.go). Each wire method names the public contract it carries and the shipped first-party users that needed it. The [transport prototype](../../prototypes/transport) supplies the evidence (`make protocol-prototype`). 07-02 implemented loading, handshake, supervision, the message types, the trust model and payload schema evolution ([below](#runtime-trust-model-and-schema-evolution-07-02); also provisional). 07-03 adds packaging and certification.
+Decision B08 · ticket 07-01 · **provisional, for user review**. The executable definition is package [`protocol`](../../protocol/protocol.go): the version, the [manifest](../../protocol/manifest.go) and its validation, and the [method catalogue](../../protocol/methods.go). Each wire method names the public contract it carries and the shipped first-party users that needed it. The [transport prototype](../../prototypes/transport) supplies the evidence (`make protocol-prototype`). 07-02 implemented loading, handshake, supervision, the message types, the trust model and payload schema evolution ([below](#runtime-trust-model-and-schema-evolution-07-02); also provisional). 07-03 added daemon wiring, the remaining adapters, packaging, the SDK's final shape and certification: see [Extension packaging, SDK and certification](extension-packaging.md) (also provisional).
 
 The protocol was extracted from the code that shipped through 05-04 and the 06-01/06-02 code: the GitHub, Slack, Linear, Jira, Bitbucket, schedule, introspection and PostHog extensions, the Git resource provider, and the shell, claude-code and legacy-job executors. It was not designed in the abstract. It adds **no core primitive**. Every method is an adapter over an existing public contract (`extension`, `storage` KV and reads, `observability`), or over a host composition hook the daemon already drives for in-process extensions. First-party extensions stay in-process. The user is the only protocol consumer, so the protocol is cheap to revise.
 
@@ -275,7 +275,7 @@ Ticket 07-02 · **provisional, for user review**. Code:
 
 ### Loading
 
-- **Install location.** `<config dir>/extensions/<name>/open-conduit-extension.json`, beside `config.json` (`extproc.Dir`). The directory must be named after the manifest's name. 07-03 owns install, update and removal.
+- **Install location.** `<config dir>/extensions/<name>/open-conduit-extension.json`, beside `config.json` (`extproc.Dir`). The directory must be named after the manifest's name. Install, update, rollback and removal are 07-03's (`open-conduit extension …`).
 - **Discovery.** `extproc.Discover` parses every manifest strictly and offline. Invalid or misnamed manifests are reported and skipped. A missing root means no extensions.
 - **Conflicts.** `extproc.CheckConflicts` checks a whole set atomically against names already taken in-process, and against each other. The checked kinds are the name, config types, handlers, executors, resource types, operations, families, work kinds, recurrences and schemas. Either every extension is admitted or none is.
 - **Start.**
@@ -381,7 +381,9 @@ Ingress identity is part of evolution. Core binds an observation's `(item, versi
   - executor lease fencing across restarts, through the real scheduler.
 - **Unit tests.** `protocol/evolution_test.go`, `protocol/jsonrpc/conn_test.go`, `protocol/sdk/sdk_test.go` and `internal/extproc/process_test.go`.
 
-### Not done in 07-02
+### Not done in 07-02 (delivered by 07-03)
+
+Both items below were delivered by 07-03: `serve` now discovers, admits, starts and registers installed packages, and every catalogued surface is adapted ([extension-packaging.md](extension-packaging.md)). They are kept here as the 07-02 record.
 
 - **Daemon wiring.** `open-conduit serve` does not discover or start extensions yet. `extproc` provides every piece:
   - `Discover` and `CheckConflicts` against the bootstrap registries;
@@ -420,12 +422,14 @@ Added by 07-02, also provisional:
 17. Executor re-adoption after an extension crash happens inside the host adapter, through the run's fenced persistence.
 18. Fallbacks for the in-transaction calls that cannot fail a transaction: the dependency filter counts a failure as false, and trigger selection falls back to the first input.
 19. Reentrancy is refused for every callback while any in-transaction call to that extension is outstanding. This is coarse: a concurrent background callback in that 250 ms window is refused too.
-20. Daemon wiring, and the remaining host-to-extension surfaces, are deferred to 07-03.
+20. Daemon wiring, and the remaining host-to-extension surfaces, are deferred to 07-03 (since delivered).
+
+Added by 07-03, also provisional: decisions 21–32 in [extension-packaging.md](extension-packaging.md#provisional-decisions-for-user-review-07-03).
 
 ## Follow-on work
 
 - **07-02 (done, see above):** message types, the host runtime, bounded in-transaction calls, the scoped surface, the trust model, payload and KV evolution, and the example extension and executor through the shared suites.
-- **07-03:**
+- **07-03 (done, see [extension-packaging.md](extension-packaging.md)):**
   - daemon wiring of discovered extensions (bootstrap registries, `config validate`, configure on apply) and the remaining adapters (`webhook.handle`, `provider.*`, `telemetry.export`, `work.annotate`, `validate`, `setup.*`);
   - SDK and package layout, and the install location;
   - certification;

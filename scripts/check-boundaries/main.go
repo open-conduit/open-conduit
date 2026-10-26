@@ -67,6 +67,20 @@ func allowed(owner, dependency string, test bool) bool {
 		// acceptance, causal and timer surfaces; never SQLite, bootstrap
 		// or another extension.
 		return public(dependency) || under(dependency, "protocol") || under(dependency, "internal/runtime") || under(dependency, "internal/extproc")
+	case under(owner, "internal/certify"):
+		// The extension conformance runner (07-03) starts a package exactly
+		// as the daemon does: the host runtime behind real SQLite and
+		// artifact stores, judged by the public conformance checks (never
+		// the reference doubles, bootstrap or an extension).
+		return public(dependency) || under(dependency, "protocol") || under(dependency, "internal/extproc") || under(dependency, "internal/runtime") || under(dependency, "internal/storage/sqlite") || under(dependency, "internal/artifacts") || under(dependency, "internal/certify") || dependency == "conformance"
+	case under(owner, "packages"):
+		// A first-party subprocess package (07-03) serves exactly one
+		// in-process implementation over the protocol, as a third party
+		// would: packages/<name> wraps extensions/<name> or
+		// executors/<name>, never another implementation or the host.
+		parts := strings.Split(owner, "/")
+		name := parts[min(len(parts)-1, 1)]
+		return public(dependency) || under(dependency, "protocol") || under(dependency, "packages/"+name) || under(dependency, "extensions/"+name) || under(dependency, "executors/"+name)
 	case under(owner, "conformance"):
 		return public(dependency) || under(dependency, "conformance")
 	case under(owner, "internal/runtime"):
@@ -109,8 +123,10 @@ func allowed(owner, dependency string, test bool) bool {
 		return public(dependency) || under(dependency, "client") || under(dependency, "internal/cli")
 	case under(owner, "internal/bootstrap"), owner == "cmd/open-conduit", under(owner, "integration"):
 		// Composition and integration tests assemble implementations. Production
-		// code must still never acquire volatile reference doubles.
-		return test || !under(dependency, "conformance")
+		// code must still never acquire volatile reference doubles; it reaches
+		// the public conformance checks only through the certification runner
+		// (07-03), which ships them as `open-conduit extension certify`.
+		return test || !under(dependency, "conformance") || dependency == "conformance"
 	case owner == "scripts/check-boundaries":
 		return false
 	default:

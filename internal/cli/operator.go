@@ -37,6 +37,14 @@ type Env struct {
 	// ValidateConfig validates a config file offline against the daemon's
 	// registrations; only the open-conduit entrypoint supplies it.
 	ValidateConfig func(data []byte) ([]client.Detail, error)
+	// ValidateConfigAt is ValidateConfig for a config file at path, so the
+	// extension packages installed beside it (07-03) are known; it takes
+	// precedence when set.
+	ValidateConfigAt func(path string, data []byte) ([]client.Detail, error)
+	// Extensions manages installed extension packages and runs the
+	// conformance runner (07-03); only the open-conduit entrypoint
+	// supplies it.
+	Extensions *ExtensionOps
 	// Setup starts a coding agent with the setup guide (init --with).
 	Setup func(SetupRequest) int
 	// Setups are the registered extensions' optional setup flows that
@@ -119,6 +127,8 @@ Commands:
                              convert an Open Supervisor config (preview unless --out/--write; v1 files are never modified)
   backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR   (daemon stopped; restore writes a new state directory)
   state check [--json]       (daemon stopped) diagnose the state directory: permissions, schema, integrity, artifacts, drain status
+  extension list|inspect DIR|install DIR|update DIR|rollback NAME|remove NAME [--force]   manage extension packages (next serve)
+  extension certify DIR [--json] [--report FILE]   run the conformance runner on a package
   version
 
 Lists accept --limit and --cursor. Mutations accept --key to retry safely with the same Idempotency-Key.
@@ -161,7 +171,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "serve": o.serve, "claim": o.claim, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "migrate": o.migrate, "backup": o.backup, "state": o.state}
+	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "serve": o.serve, "claim": o.claim, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "migrate": o.migrate, "backup": o.backup, "state": o.state, "extension": o.extension}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.

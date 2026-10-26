@@ -135,6 +135,15 @@ func (h *Host) Secrets(ctx context.Context, scope domain.ID, names ...string) (m
 	return out.Values, err
 }
 
+// ConnectionSecrets resolves secret names of a connection one of the
+// extension's entries in scope names (07-03): the keys of the
+// connection's secret_refs, never the references.
+func (h *Host) ConnectionSecrets(ctx context.Context, scope domain.ID, connection string, names ...string) (map[string]string, error) {
+	var out protocol.SecretResolveResult
+	err := h.conn.Call(ctx, "secret.resolve", protocol.SecretResolveParams{ScopeID: string(scope), Connection: connection, Names: names}, &out)
+	return out.Values, err
+}
+
 // Artifact writes an immutable artifact in acknowledged chunks.
 func (h *Host) Artifact(ctx context.Context, mediaType string, data []byte) (domain.ArtifactRef, error) {
 	var created protocol.ArtifactCreateResult

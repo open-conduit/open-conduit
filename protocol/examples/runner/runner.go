@@ -299,3 +299,14 @@ func Job(dir string) error {
 		return writeJSON(filepath.Join(dir, "result.json"), protocol.FromResult(extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted, Summary: "finished"}, ConsumedInputs: consumed}))
 	}
 }
+
+// Certification is the package's certification.json (07-03): a static
+// fixture. The executor case finishes at once ({"auto":true}); the inject
+// case runs until the runner creates its finish file.
+func Certification() protocol.CertificationFile {
+	return protocol.CertificationFile{Fixture: &protocol.Fixture{
+		Executor: &protocol.ExecutorCase{Executor: Name, Config: protocol.Payload{Schema: "runner.config.v1", Data: []byte(`{"auto":true}`)}},
+		Inject: &protocol.InjectCase{Executor: Name, Config: protocol.Payload{Schema: "runner.config.v1", Data: []byte(`{}`)},
+			ReadyFile: "{state}/runs/certify-inject/ready", FinishFile: "{state}/runs/certify-inject/finish"},
+	}}
+}
