@@ -25,7 +25,7 @@ make check         # what CI runs
 - `docs-check`: the README and docs examples (below).
 - `build` and `smoke`: builds `bin/open-conduit` and `bin/os`, and runs their help and version commands.
 
-CI runs `make check` on Linux and macOS with Go 1.24.2 and the current stable Go. To check the minimum toolchain locally:
+CI runs `make check` on Linux and macOS with Go 1.24.2 and the current stable Go. A pull request that only changes docs (`site/`, `docs/**/*.md` and the Markdown at the repository root) skips it and runs `make docs-check` instead; the docs site only builds when `site/` changes. To check the minimum toolchain locally:
 
 ```sh
 GOTOOLCHAIN=go1.24.2 make check
@@ -54,7 +54,7 @@ Keep each commit to one change, and run `make check` before you push. If a chang
 
 Releases are cut by hand from the release workflow (Actions, release, Run workflow) on `main`. It runs `make check` and `make release-snapshot`, then semantic-release picks the next version from the Conventional Commits since the last tag, writes `CHANGELOG.md`, tags it, and GoReleaser publishes the GitHub release: `open-conduit` and `os` for macOS and Linux on amd64 and arm64, with `checksums.txt`. With no `feat`, `fix` or breaking commit since the last tag, nothing is released. The Homebrew cask in `open-conduit/homebrew-tap` is updated only when the `HOMEBREW_TAP_TOKEN` secret is set. Run the workflow with `dry_run` to see the next version and its notes.
 
-`make release-snapshot` runs the same GoReleaser build locally with `--snapshot` (CI runs it on every pull request). It needs `goreleaser` v2 on your PATH. It writes every archive, the checksums and the cask into `dist/release`, then smoke-tests this machine's archive and checks the version the binaries report.
+`make release-snapshot` runs the same GoReleaser build locally with `--snapshot` (CI runs it on every pull request that changes code). It needs `goreleaser` v2 on your PATH. It writes every archive, the checksums and the cask into `dist/release`, then smoke-tests this machine's archive and checks the version the binaries report.
 
 ## Package boundaries
 
