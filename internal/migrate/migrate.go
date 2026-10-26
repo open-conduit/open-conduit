@@ -237,6 +237,7 @@ func (c *converter) globalNotes() {
 	} else {
 		c.note(Info, "settings.host.disk", "", "git resources refuse a new worktree that would leave its disk over 90%% full (disk_full_percent, at most 10 GiB kept free) and the git provider sweeps spare worktrees every 6 hours (serve --sweep-interval), as v1 1.3.0 did")
 	}
+	c.note(Action, "state tasks/", "", "v1 1.3.0's `agent task` records (tasks/ in each project's state folder) are not read or imported, and Open Conduit has no `agent task` (rejected): before switching a project, let its running tasks end in v1 (`agent task list --all`); a worktree a task runs from stays until the task ends")
 	c.note(Info, "paths", "", "Open Conduit keeps its own config (${XDG_CONFIG_HOME:-~/.config}/open-conduit/config.json), state (${XDG_STATE_HOME:-~/.local/state}/open-conduit), secrets.json and keyring service open-conduit; v1's open-supervisor config, state, secrets.yaml and keyring stay untouched")
 	c.note(Info, "env OPEN_SUPERVISOR_CONFIG, OPEN_SUPERVISOR_STATE", "", "not read by Open Conduit: use --config/OPEN_CONDUIT_CONFIG and --data-dir/OPEN_CONDUIT_DATA_DIR")
 }

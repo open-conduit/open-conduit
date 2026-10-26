@@ -1,10 +1,28 @@
 # Parity and verification baseline
 
-Ticket 01-01 · inspected 2026-10-24 · Open Supervisor source revision **`c2461e55a9d7ca32527bace9db5ecec8c5e60cb0`**. `git -C ../open-supervisor status --short` was empty. Source files and test symbols below refer to that revision, relative to `../open-supervisor`. The [source test index](source-tests.md) lists the available source tests. The source remains untouched.
+Ticket 01-01 · inspected 2026-10-24 · re-pinned by 08-05 on 2026-10-26 · Open Supervisor source revision **`0894a3bae38b5adff994db63fb03fe20b1ef2b42`** (1.3.0). `git -C ../open-supervisor status --short` was empty. The first pin was `c2461e55a9d7ca32527bace9db5ecec8c5e60cb0`. The rows below were written against it and still hold at `0894a3b`, except where [the v1 delta](#v1-delta-since-the-first-pin) says otherwise. Source files and test symbols refer to `../open-supervisor`. The [source test index](source-tests.md) lists the available source tests. The source remains untouched.
 
 The local PRD dated Oct 24, 2026 is authoritative. Classifications: **R** = required PRD outcome; **K** = compatible existing behavior to retain; **X** = intentionally replaced by the PRD. A row may separate a required outcome from its replaced implementation. Source tests are seeds to adapt, not passing evidence for Open Conduit. “Gap” means source implementation/documentation exists but no focused source test was found, or a new PRD behavior has no v1 equivalent. All target scenarios below remain pending.
 
 Ticket IDs identify the local delivery plan's stage and sequence (for example 03-03 is the Claude Code executor ticket). This tracked baseline is self-contained; the local plan is intentionally ignored by Git. No runtime, contract suite or live service evidence is claimed by this documentation ticket.
+
+## v1 delta since the first pin
+
+v1 kept shipping after `c2461e55`. Every commit in `c2461e55..0894a3b` (9 commits, 1.2.1 and 1.3.0) has a disposition:
+
+| v1 commit | Change | Disposition |
+| --- | --- | --- |
+| `c3045d1` | docs: design rules from corrections | **Ported** (08-04): both rules are in this repository's `AGENTS.md`. |
+| `f904597` (#54) | sweep and triage playbooks keep body files out of the checkout | **Ported** (08-04): `sweep`, `triage-reports` and `fix-report` pass bodies on stdin or from a temporary directory outside the checkout. |
+| `f46045c` | release 1.2.1 | Not applicable (release commit). |
+| `de775ef` (#61) | fall back to the bot token, and to git, when rate limited | **Rejected by user decision (2026-10-26)** (08-03): a bot-token read fallback breaks least-privilege scoping. The bot App is the write identity. For a higher read budget, configure the reader as a GitHub App. The git worktree-removal half is not applicable: Open Conduit removes workspaces from its own records. |
+| `265fe98` (#62) | create `.local/` scratch folders in new worktrees | **Not ported (user decision)** (08-04): the client repository's own agent instructions say where scratch files go. No shipped playbook names `.local/`. |
+| `7df2456` (#65) | `agent task`: long commands that outlive the turn and the issue | **Rejected by user decision (2026-10-26)** (08-05): agents built it for themselves from their own feedback, and the user is unconvinced. Not ported. `migrate config` reports a v1 job command, worktree setup or playbook addition that uses `agent task` as unsupported. It also reports that v1's `tasks/` records are not imported, and that running tasks must end in v1 before a switch. |
+| `c37edf1` (#64) | wait for the checks the base branch requires | **Ported** (08-01): `github.checks.missing`, with the base branch's protection and rulesets as the source. No config change; the converter already maps `noChecksMinutes`. |
+| `3dcf60c` (#63) | refuse a worktree on a full disk; sweep spare worktrees | **Ported** (08-02): git resource `disk_full_percent` and `disk_reserve_bytes`, and the provider's sweep (`serve --sweep-interval`). The converter maps v1's `settings.host.disk`, which became the disk threshold. 1.3.0 added no other config field. |
+| `0894a3b` | release 1.3.0 | Not applicable (release commit). |
+
+**Keeping track.** v1 stays the fallback until one release after the daily cutover (06-04), so it can still change. Before each scope switch (03-07, 06-04) and before v1 is retired, run the [v1 delta check](../architecture/migration-recovery.md#tracking-v1-changes): diff `../open-supervisor` from the revision pinned above, classify each new commit as port, not applicable or rejected, record it in this table, and re-pin.
 
 ## Commands and operator surface
 
@@ -239,3 +257,5 @@ Intentional differences: one wake ends a wait (the agent waits again), and `--ca
 
 - **C04 (required checks).** The base branch's protection and rulesets name the checks a PR needs, so there is no new setting. A head missing one is held as pending until `no_checks_minutes`, then `github.checks.missing` says which never reported, rather than "Checks passed". `github.checks` and the playbook follow, and doctor's `github_auth` names the source.
 - **Intentional differences.** A refused source (403 or 404) degrades to the other one and is reported, rather than failing reconcile. Required checks are not verified while check runs are unreadable, because workflow-run names are not job names. `no_checks_minutes: -1` holds such a head indefinitely.
+
+08-05 update: the baseline is re-pinned at `0894a3b` (1.3.0), and each delta commit has a disposition in [the v1 delta](#v1-delta-since-the-first-pin). `migrate config` takes a v1 1.3.0 config: `host.disk` is the worktree disk threshold (08-02), and uses of `agent task` and its `tasks/` records are reported. The recurring [v1 delta check](../architecture/migration-recovery.md#tracking-v1-changes) is a precondition of every switch and of retiring v1.

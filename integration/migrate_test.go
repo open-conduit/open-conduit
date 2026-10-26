@@ -79,7 +79,7 @@ func TestMigrateConfigCommand(t *testing.T) {
 
 	// 1. Preview: valid, reported, nothing written.
 	out := o.must(nil, "migrate", "config", "--from", v1, "--time-zone", "Europe/London")
-	for _, want := range []string{"Validation: valid", "Preview (nothing written", "Scopes: web, api, ops", "cmd:[redacted]", "open-conduit secret set gh-app-private-key", "/schedule/web/jobs/poke/<token>", "triage-reports"} {
+	for _, want := range []string{"Validation: valid", "Preview (nothing written", "Scopes: web, api, ops", "cmd:[redacted]", "open-conduit secret set gh-app-private-key", "/schedule/web/jobs/poke/<token>", "triage-reports", "projects.api.worktree.setup", "`agent task`", "state tasks/"} {
 		if !strings.Contains(out, want) {
 			t.Fatalf("preview lacks %q:\n%s", want, out)
 		}

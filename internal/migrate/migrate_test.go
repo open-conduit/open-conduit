@@ -237,6 +237,10 @@ func TestConvertFixture(t *testing.T) {
 		{Changed, "projects.web.jobs.Refresh data.status", "21600"},
 		{Warn, "connections.ghtok.token", "literal"},
 		{Warn, "projects.api.branch", "issue/KEY"},
+		// v1 1.3.0: `agent task` (#65) is rejected and flagged wherever it is used.
+		{Unsupported, "projects.api.worktree.setup", "agent task"},
+		{Unsupported, "projects.web .open-supervisor/playbooks/work-issue.md", "agent task"},
+		{Action, "state tasks/", "not read or imported"},
 	} {
 		if !hasItem(res, want.level, want.path, want.text) {
 			t.Errorf("report lacks %s %s %q", want.level, want.path, want.text)
@@ -336,5 +340,31 @@ func TestIDsAndTimes(t *testing.T) {
 	}
 	if _, ok := cronAt("8.41"); ok {
 		t.Error("cronAt accepted a bad time")
+	}
+}
+
+// TestConvertFlagsAgentTask: v1 1.3.0's `agent task` (#65) is rejected, so a
+// job that calls it is reported as unsupported; a word merely containing
+// "task" is not.
+func TestConvertFlagsAgentTask(t *testing.T) {
+	src := []byte(`
+connections: {gh: {type: github, auth: token, token: "env:GH_TOKEN"}}
+projects:
+  - name: w
+    root: /srv/w
+    repo: {connection: gh, repo: o/w}
+    jobs:
+      - {name: fill, command: [sh, -c, "$OPEN_SUPERVISOR agent  task start fill -- ./fill.sh"], everyMinutes: 5}
+      - {name: tasks, command: [./agent-tasks.sh], everyMinutes: 5}
+`)
+	res, err := Convert(src, Options{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !hasItem(res, Unsupported, "projects.w.jobs.fill.command", "agent task") || hasItem(res, Unsupported, "projects.w.jobs.tasks", "") {
+		t.Fatalf("report: %+v", res.Items)
+	}
+	if !hasItem(res, Action, "state tasks/", "agent task list --all") {
+		t.Fatalf("tasks/ note: %+v", res.Items)
 	}
 }

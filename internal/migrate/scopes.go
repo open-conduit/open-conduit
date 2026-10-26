@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"net/url"
 	"path/filepath"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -238,6 +239,9 @@ func (c *converter) gitConfig(p *v1Project, checkout string) obj {
 	}
 	if p.Worktree.Setup != "" {
 		cfg["setup"] = p.Worktree.Setup
+		if usesAgentTask(p.Worktree.Setup) {
+			c.agentTask("projects." + p.Name + ".worktree.setup")
+		}
 	}
 	// v1 1.3.0 (#63) also refuses a new worktree that would leave its disk
 	// fuller than settings.host.disk, whether or not the host watch runs.
@@ -555,6 +559,9 @@ func (c *converter) jobs(b *scopeBuilder, p *v1Project, checkout string, git obj
 			c.note(Warn, j.origin, "", "a job without a name or command is left out (as v1 did)")
 			continue
 		}
+		if usesAgentTask(strings.Join(j.Command, " ")) {
+			c.agentTask(jw + ".command")
+		}
 		jn := ID(j.Name, "job")
 		for n := 2; seen[jn]; n++ {
 			jn = name("", ID(j.Name, "job"), fmt.Sprintf("-%d", n))
@@ -815,15 +822,30 @@ func (c *converter) additions(p *v1Project, checkout, trackerType string) {
 		renames["work-issue"] = tracker.Playbook
 	}
 	for _, old := range sortedKeys(renames) {
-		if _, ok := c.opts.ReadFile(filepath.Join(checkout, ".open-supervisor", "playbooks", old+".md")); !ok {
+		text, ok := c.opts.ReadFile(filepath.Join(checkout, ".open-supervisor", "playbooks", old+".md"))
+		if !ok {
 			continue
 		}
 		next := renames[old]
 		where := "projects." + p.Name + " .open-supervisor/playbooks/" + old + ".md"
+		if usesAgentTask(string(text)) {
+			c.agentTask(where)
+		}
 		if next == old {
 			c.note(Info, where, "", "read as a fallback while the checkout has no .open-conduit/playbooks/%s.md; move it there when v1 is retired", next)
 		} else {
 			c.note(Action, where, "", "the playbook is now %s: copy it to .open-conduit/playbooks/%s.md (the v1 name is not read for this playbook)", next, next)
 		}
 	}
+}
+
+// agentTaskPattern finds v1 1.3.0's `agent task` toolbelt command (#65).
+var agentTaskPattern = regexp.MustCompile(`\bagent\s+task\b`)
+
+func usesAgentTask(s string) bool { return agentTaskPattern.MatchString(s) }
+
+// agentTask reports a use of v1's `agent task`, which Open Conduit rejected
+// (08-05): it is converted as written and fails there.
+func (c *converter) agentTask(where string) {
+	c.note(Unsupported, where, "", "uses v1's `agent task`, which Open Conduit does not support (rejected): rewrite it before switching, for example as a schedule job or a command the turn itself runs")
 }

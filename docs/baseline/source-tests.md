@@ -1,6 +1,6 @@
 # Pinned source test index
 
-Source revision: `c2461e55a9d7ca32527bace9db5ecec8c5e60cb0` (clean working tree, inspected 2026-10-24).
+Source revision: `0894a3bae38b5adff994db63fb03fe20b1ef2b42` (open-supervisor 1.3.0, clean working tree, re-pinned 2026-10-26 by 08-05). It was first pinned at `c2461e55a9d7ca32527bace9db5ecec8c5e60cb0` (2026-10-24). Tests added since then are marked with the delta commit and its disposition (see [the v1 delta](parity.md#v1-delta-since-the-first-pin)).
 
 These are source test names, not Open Conduit test results. References in the [parity baseline](parity.md) use this revision. Paths below are relative to `../open-supervisor`.
 
@@ -22,11 +22,11 @@ These are source test names, not Open Conduit test results. References in the [p
 
 ## `internal/adapters/github/github_test.go`
 
-`TestRegistered`, `TestCandidatesPaginatesAndSkipsPRs`, `TestChecksEvaluation`, `TestMarkers`, `TestCommentsFilterSinceAndKinds`, `TestEditLabelsIgnoresMissing`, `TestDetectRepo`, `TestWebhookSignature`, `TestWebhookSignals`, `TestWebhookEvents`, `TestWantEventsSubscribes`, `TestEnsureWebhookPatchesOrCreates`, `TestAppTokens`, `TestOpenIssue`, `TestReactions`, `TestPRsForReadsBranchAndTimeline`, `TestPRsForReadsSharedTrackerTimeline`
+`TestRegistered`, `TestCandidatesPaginatesAndSkipsPRs`, `TestChecksEvaluation`, `TestMarkers`, `TestCommentsFilterSinceAndKinds`, `TestEditLabelsIgnoresMissing`, `TestDetectRepo`, `TestWebhookSignature`, `TestWebhookSignals`, `TestWebhookEvents`, `TestWantEventsSubscribes`, `TestEnsureWebhookPatchesOrCreates`, `TestAppTokens`, `TestOpenIssue`, `TestReactions`, `TestPRsForReadsBranchAndTimeline`, `TestPRsForReadsSharedTrackerTimeline`, `TestRequiredChecks` (#64 `c37edf1`, ported: 08-01)
 
 ## `internal/adapters/github/transport_test.go`
 
-`TestUnchangedPollsAreConditional`, `TestRateLimitPausesUntilReset`, `TestSecondaryRateLimitWaitsForRetryAfter`, `TestForbiddenWithoutRateLimitIsAnOrdinaryError`
+`TestUnchangedPollsAreConditional`, `TestRateLimitPausesUntilReset`, `TestSecondaryRateLimitWaitsForRetryAfter`, `TestForbiddenWithoutRateLimitIsAnOrdinaryError`, `TestRateLimitedReadsGoAsTheBot` (#61 `de775ef`, rejected: 08-03)
 
 ## `internal/adapters/jira/jira_test.go`
 
@@ -54,7 +54,7 @@ These are source test names, not Open Conduit test results. References in the [p
 
 ## `internal/core/core_test.go`
 
-`TestRunAtIn`, `TestRender`, `TestEventSame`
+`TestRunAtIn`, `TestRender`, `TestEventSame`, `TestChecksMissing` (#64 `c37edf1`, ported: 08-01)
 
 ## `internal/core/wait_test.go`
 
@@ -62,7 +62,7 @@ These are source test names, not Open Conduit test results. References in the [p
 
 ## `internal/engine/engine_test.go`
 
-`TestClaimRunAndLabel`, `TestCommentsBecomeTheNextTurnsEvents`, `TestStatusLabelComesOffWhileATurnRuns`, `TestInterjectionReachesTheRunningTurn`, `TestFailedTurnRetriesLater`, `TestUsageLimitHoldsTurnsUntilItLifts`, `TestScheduledIssueWaitsForItsTime`, `TestHoldInAnUnlabelledBodyIsKept`, `TestChecksAndMergeReachTheAgent`, `TestConcurrencyCap`, `TestDotEnv`, `TestColdSessionHandsOffToAFreshOne`, `TestDroppingAnIssueEndsItsTrial`, `TestOptInClaimingAndTheTurnsGitAndAdditions`, `TestSigningKeptWhenAskedFor`
+`TestClaimRunAndLabel`, `TestCommentsBecomeTheNextTurnsEvents`, `TestStatusLabelComesOffWhileATurnRuns`, `TestInterjectionReachesTheRunningTurn`, `TestFailedTurnRetriesLater`, `TestUsageLimitHoldsTurnsUntilItLifts`, `TestScheduledIssueWaitsForItsTime`, `TestHoldInAnUnlabelledBodyIsKept`, `TestChecksAndMergeReachTheAgent`, `TestConcurrencyCap`, `TestDotEnv`, `TestColdSessionHandsOffToAFreshOne`, `TestDroppingAnIssueEndsItsTrial`, `TestOptInClaimingAndTheTurnsGitAndAdditions`, `TestSigningKeptWhenAskedFor`, `TestMissingRequiredCheckIsNotAPass` (#64 `c37edf1`, ported: 08-01)
 
 ## `internal/engine/host_test.go`
 
@@ -80,6 +80,10 @@ These are source test names, not Open Conduit test results. References in the [p
 
 `TestSourceRoutesToProjects`, `TestRoutedIssueStaysWhereItWasClaimed`, `TestUnroutedIssueRoutesOnceItCan`, `TestClaimByHandCanOverrideRoutes`, `TestImplicitSourceKeepsTheOldShape`, `TestHooksAreSharedByTarget`, `TestReloadWithNewRoutesKeepsProjects`, `TestWaitingIssuesAreNeitherClaimedNorUnrouted`, `TestDeliveriesResolveLaterAndRetriesGetThrough`, `TestReloadCarriesAHookToItsNewOwner`
 
+## `internal/engine/tasks_test.go`
+
+New in #65 (`7df2456`), rejected (08-05): `TestTaskRecordsHowItEnded`, `TestStoppedTaskStopsWhatItStarted`, `TestEndedTaskIsToldOnTheIssueAndToTheAgent`, `TestTaskKeepsAFinishedIssuesWorktreeUntilItEnds` (plus a `TestMain` helper). Not ported.
+
 ## `internal/engine/triage_test.go`
 
 `TestTriageRunsOnTheProblems`, `TestIsUpstream`, `TestProblemsGoToTelemetryOnce`
@@ -87,6 +91,10 @@ These are source test names, not Open Conduit test results. References in the [p
 ## `internal/engine/waits_test.go`
 
 `TestWaitOnAnotherPRWakesTheAgentWhenItMerges`, `TestHeldIssueStartsWhenAnotherAgentReports`, `TestWaitMetWhileNobodyHeardIsReadAtTheReconcile`, `TestAlreadyMetWaitWakesAtOnce`, `TestJobRunEndsAWait`, `TestWaitTimesOutAndCancels`, `TestFinishedIssueDropsItsWait`
+
+## `internal/engine/worktrees_test.go`
+
+New in #63 (`3dcf60c`), ported (08-02): `TestIssueWorktrees`
 
 ## `internal/forms/forms_test.go`
 
@@ -150,4 +158,4 @@ These are source test names, not Open Conduit test results. References in the [p
 
 ## `internal/worktree/worktree_test.go`
 
-`TestSetupAndRemove`, `TestSetupSkippedWithoutWatchedFiles`, `TestRefresh`, `TestFresh`, `TestSetupFromAnotherRemote`, `TestCatchUp`
+`TestSetupAndRemove`, `TestSetupSkippedWithoutWatchedFiles`, `TestRefresh`, `TestFresh`, `TestSetupFromAnotherRemote`, `TestCatchUp`, `TestUnpushed`, `TestSetupRefusesAFullDisk`, `TestSetupClearsAHalfMadeWorktree` (#63 `3dcf60c`, ported: 08-02)

@@ -19,7 +19,7 @@ This finalizes the plan's "migration of active work versus drain-and-reconcile; 
 - **One owner per scope, never two.** A scope moves only after v1 has drained it: no v1 turn running, no v1 job running, and every waiting or held issue either resolved or explicitly released. v1 must not run the project while Open Conduit owns it. Both daemons may run at the same time on *different* scopes.
 - **Shared projections are the ownership signal.** Both runtimes use the same label names by default, and the converter keeps custom ones. An open issue with the claimed label and no local record belongs to someone else in both runtimes (v1 `TestClaimRunAndLabel`; Open Conduit's GitHub and tracker claim policies). So neither runtime picks up the other's issues. A transfer is an explicit manual claim.
 - **Marked writes are recognised both ways.** Open Conduit reads v1's comment markers (`<!-- open-supervisor:agent -->`, `<!-- claude-agent -->`, Linear's visible footer, Jira's entity property). Since 06-02, every GitHub comment Open Conduit writes also carries v1's own-note marker after its own (`github.LegacyMarker`). A v1 that takes a scope back therefore reads Open Conduit's comments as agent notes, never as human input that would wake its agents. Linear and Jira already wrote v1's marks (06-01).
-- **Fallback support window.** v1 stays installed, with its config and state untouched, until one release after the daily cutover (06-04) has succeeded, as the PRD requires. Its binary is pinned at the baseline revision.
+- **Fallback support window.** v1 stays installed, with its config and state untouched, until one release after the daily cutover (06-04) has succeeded, as the PRD requires. Its binary is pinned at the baseline revision, which the [v1 delta check](#tracking-v1-changes) keeps current.
   - Each scope switch has an observation window of **7 days** (provisional default).
   - The rollback triggers are any of:
     - a duplicate claim, comment or agent on one issue;
@@ -62,6 +62,7 @@ The code is [`internal/migrate`](../../internal/migrate). It has its own boundar
 | `settings.git`, project `git`, `baseBranch`, `worktree` | The git resource: `remote`, `sign`, `base_branch`, `copy`, `setup`, `setup_when`. `dotenv: true` keeps v1's checkout `.env` layer, which is opt-in in Open Conduit. |
 | `settings.sweepAt`/`triageAt` and project `sweep`/`triage` | The `introspection` entry's `sweep` and `triage` (a daily cron in `--time-zone`, else the machine's zone, else UTC with a warning), with `rules`, `guide`, `land` and `file_issues`. Adds claude-code `sweep`, `triage` and `fix` bindings and routes (playbooks `sweep`, `triage-reports`, `fix-report`). |
 | `settings.host` | `host_watch` in the first converted scope (it is machine-wide). v1 1.3.0 (#63) also uses `host.disk` as the worktree disk threshold, whether or not the watch runs. A value other than its default of 90 becomes each converted git resource's `disk_full_percent`, capped at 100. v1's six-hourly spare-worktree sweep is the git provider's (`serve --sweep-interval`, default 6h) ([disk safety](workspaces.md#disk-safety-and-the-spare-workspace-sweep)). |
+| `agent task` (v1 1.3.0, #65) | Not supported: rejected by user decision (08-05). A job command, worktree `setup` or playbook addition that uses it is reported as unsupported and converted as written, so rewrite it before switching. v1's `tasks/` records in its state folder are never read or imported, and the report always says so (`state tasks/`). |
 | `settings.telemetry` (PostHog) | A `posthog` connection, a `posthog` entry in each scope, and introspection `telemetry: true`. |
 | `settings.usageMinutes`, `checksDebounceSeconds`, `dryRun` | Reported: `serve --claude-usage`; no debounce (03-04); `serve --dry-run`. |
 | Connections `github` (gh, token, app, bot app), `linear`, `jira`, `bitbucket`, `posthog` | Connections of the same type with snake_case config. The ids are made valid (`[a-z][a-z0-9_-]{0,62}`), and a rename is reported. `auth: gh` becomes `cmd:gh auth token`. |
@@ -102,6 +103,20 @@ Playbook additions are read from `.open-conduit/playbooks/<playbook>.md`. v1's `
 
 Turn variables (`OPEN_SUPERVISOR_PROJECT`, `_ISSUE`, `_BRANCH`) are not set for agent turns: the playbook reads its context through the toolbelt. Job variables are kept by `legacy-job`.
 
+## Tracking v1 changes
+
+The parity baseline pins v1 at one revision ([v1 delta](../baseline/parity.md#v1-delta-since-the-first-pin)). v1 keeps shipping while it is the fallback. So before each scope switch, and again before v1 is retired, run the delta check on an up-to-date, clean source checkout of v1's main branch:
+
+```sh
+git -C ../open-supervisor log --oneline <pinned>..HEAD
+```
+
+1. Classify each commit: **port** (a ticket that ports it), **not applicable** (releases, docs, v1-only mechanics), or **rejected** (a recorded user decision).
+2. For a config change, update `internal/migrate` and its fixture, and rerun `TestMigrateConfigCommand`.
+3. Record each disposition in the parity table and the source test index. Re-pin both at the new revision.
+
+A switch waits until every commit is classified and every port the switch depends on is delivered. Reading v1's history is all the check does: it never touches v1's config, state or processes.
+
 ## Scope-by-scope transfer (v1 → Open Conduit)
 
 Move one scope at a time, smallest and least active first. For each scope:
@@ -115,6 +130,7 @@ Move one scope at a time, smallest and least active first. For each scope:
    - Let running turns finish (watch v1's TUI). Do not stop a turn mid-write.
    - Waiting issues (PR, checks, `--until`) and held (`scheduled`) issues either resolve in v1 first, or are released: drop them in v1, which keeps the claimed label, and note their keys for the manual claim in step 4. Their Claude session is not carried over; the new turn starts fresh from the issue, its comments and its branch.
    - Let a running job finish, including a detached job's run (its `running.json` gone, `last.json` written). Choose a switch time **between** timed slots, after v1's last run and well before the next one. A converted timed job never re-runs a slot v1 already ran, because its first run waits for the next slot. So a slot that falls between stopping v1 and starting Open Conduit is not run by either.
+   - Let running `agent task` commands end (v1 1.3.0: `agent task list --all`, or the JSON records in the project's state `tasks/`). A worktree a task runs from stays until the task ends. Open Conduit neither adopts nor imports them.
    - Then set the project `disabled: true` in v1's config and restart v1, or stop v1 when this is its last project. From here v1 must not run this project.
 3. **Hand over the external surfaces.**
    - Webhooks: with `manage_webhook`, Open Conduit re-points the repository or tracker hook when the scope starts. v1 must not manage it any more (it no longer runs the project).
