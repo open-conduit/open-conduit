@@ -475,6 +475,38 @@ func TestInterjection(t *testing.T) {
 	}
 }
 
+// TestInterjectionEchoedAsTheTurnEnds: claude echoes an injected input and
+// ends its turn at once, before the follower polls its output again (the
+// follower is held back here, so this is deterministic). Settling the turn
+// still finds the echo, so the input is reported consumed and core does not
+// start another attempt to present it (hosted CI run 40293639876).
+func TestInterjectionEchoedAsTheTurnEnds(t *testing.T) {
+	release := make(chan struct{})
+	defer claudecode.HoldFollowers(release)()
+	defer close(release)
+	h := newHarness(t)
+	h.mode("review")
+	e := h.executor()
+	cfg := map[string]any{"env": map[string]string{"FAKE_DIR": h.fake, "FAKE_MESSAGES": "2"}}
+	r, _ := h.request("work/e", "exec-e", 1, cfg)
+	handle, err := e.Run(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the turn started", func() bool { _, err := os.Stat(filepath.Join(h.fake, "started")); return err == nil })
+	ev := domain.Event{ID: "ev-last", Type: "github.comment.human", Data: domain.Payload{Data: json.RawMessage(`{"author":"bob","body":"one last thing"}`)}}
+	if err := e.Inject(context.Background(), "exec-e", ev); err != nil {
+		t.Fatal(err)
+	}
+	res := h.wait(handle)
+	if d := dataOf(t, res); d.Injected == nil || d.Injected.Accepted != 1 || d.Injected.Consumed != 1 {
+		t.Fatalf("injection %+v", d.Injected)
+	}
+	if len(res.ConsumedInputs) != 1 || res.ConsumedInputs[0] != "ev-last" {
+		t.Fatalf("consumption proof %+v", res.ConsumedInputs)
+	}
+}
+
 // TestUsageLimitDelaysTurns: a turn stopped by the usage limit fails with a
 // retry hint at the reset, is not counted against its trial, and holds every
 // later turn on the executor (another Work's included) without launching it.

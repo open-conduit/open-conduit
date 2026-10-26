@@ -295,7 +295,13 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		rn.mu.Unlock()
 		close(rn.done)
 	}()
-	go e.follow(rn)
+	hold := testHookFollow
+	go func() {
+		if hold != nil {
+			hold()
+		}
+		e.follow(rn)
+	}()
 	e.register(rn)
 	return &handle{e: e, r: rn}, nil
 }
@@ -512,6 +518,11 @@ func (rn *run) recordInjected(accepted, consumed string) error {
 	}
 	return writeJSON(filepath.Join(rn.dir, "injected.json"), in)
 }
+
+// testHookFollow, when a test sets it, runs before a launched turn's
+// follower reads anything, so a test can hold the follower back and show
+// that settling a turn does not depend on how far it got.
+var testHookFollow func()
 
 // follow reads what claude writes while this instance holds its stdin: the
 // echoes of injected input and the result, after which stdin is closed so
@@ -968,6 +979,13 @@ func (e *Executor) settle(ctx context.Context, rn *run) (extension.Result, error
 	if stopped {
 		p.OK, p.Status, p.Limited, p.Error = false, nil, false, "claude turn "+stop.Reason
 	}
+	// The process has ended, so its output is complete. Read the rest of it
+	// here rather than trusting the follower to have got there first: claude
+	// can echo an injected input and end the turn within one poll, and the
+	// follower's last read races this settle once done is closed. Missing
+	// that echo would leave a consumed input unconsumed, and core would start
+	// another attempt to present it again.
+	rn.readNew()
 	var in injected
 	_ = readJSON(filepath.Join(rn.dir, "injected.json"), &in)
 	if len(in.Accepted) > 0 {
