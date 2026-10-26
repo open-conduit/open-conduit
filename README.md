@@ -29,6 +29,7 @@ The project is implementing the core after completing the contracts gate. Primit
 - [Introspection: reporting, sweep, triage and fixes](docs/architecture/issue-reporting.md)
 - [Operator setup, doctor and engineering controls](docs/architecture/operator-setup.md)
 - [Installed integrations: Linear, Jira, Bitbucket, PostHog and operator tools](docs/architecture/installed-integrations.md)
+- [Migration from Open Supervisor, ownership transfer and recovery](docs/architecture/migration-recovery.md)
 - [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)
 - [Pinned source test index](docs/baseline/source-tests.md)

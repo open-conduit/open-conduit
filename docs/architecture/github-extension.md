@@ -109,6 +109,8 @@ The projector re-reads the issue and changes only managed labels. It reapplies t
 
 The body carries `<!-- open-conduit:agent work=<id> intent=<digest> -->`. If a post's result is ambiguous (a lost response, or a crash after GitHub created the comment), the record stays `attempted`. After a 30-second search delay, the projector finds the marker in the issue's comments and completes the record instead of posting again. A changed body under a reused ID is refused (`intent_conflict`).
 
+**Fallback-window marker (06-02).** `WithMarker` appends Open Supervisor's own-note marker (`<!-- open-supervisor:agent -->`, `LegacyMarker`) after the Open Conduit marker. A v1 that takes a scope back during the fallback window then reads Open Conduit's comments as agent notes rather than human input. `ParseAgent` reads the Open Conduit marker first ([migration and recovery](migration-recovery.md)).
+
 **Reactions:** a `+1` acknowledges each human comment the router delivered to Work (the v1 "heard" signal). Reactions are idempotent at GitHub. The cursor never passes an unrouted comment. It retries rate-limit and credential failures, and skips permanent refusals.
 
 ## Verification

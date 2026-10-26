@@ -1,0 +1,6 @@
+# The synthetic web checkout's repository file (06-02 fixture).
+jobs:
+  - name: from repo
+    command: [echo, hi]
+    everyMinutes: 60
+  - name: broken

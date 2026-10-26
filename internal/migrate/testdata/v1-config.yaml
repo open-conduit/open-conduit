@@ -1,0 +1,123 @@
+# A synthetic Open Supervisor v1 config (06-02 conversion fixture). Every
+# name, path and reference here is made up; no real account is described.
+version: 1
+settings:
+  maxTurns: 6
+  maxOpenPerProject: 3
+  reconcileMinutes: 10
+  port: 8787
+  agent: claude
+  telemetry: [ph]
+  tunnel: tun
+  labels:
+    claimed: claude-in-progress
+    help: claude needs help
+  branch: claude/issue-{key}
+  sweepAt: "08:41"
+  triageAt: "08:51"
+  jobs: true
+  maxAttempts: 4
+  checksDebounceSeconds: 20
+  noChecksMinutes: 15
+  handoffMinutes: 40
+  host:
+    minutes: 5
+    disk: 80
+    disks: ["~/work"]
+connections:
+  gh:
+    type: github
+    auth: app
+    appId: "123"
+    appPrivateKey: keyring:gh-app-key
+    botAppId: "456"
+    botPrivateKey: file:bot-key
+  ghtok:
+    type: github
+    auth: token
+    token: ghp_not_a_real_token_literal
+  claude:
+    type: claude-code
+    binary: ~/bin/claude
+    model: sonnet
+    extraArgs: --verbose --debug
+  lin:
+    type: linear
+    token: env:LINEAR_TOKEN
+    agentAccount: bot@example.test
+  jira:
+    type: jira
+    baseUrl: https://acme.example.test
+    email: ops@example.test
+    token: cmd:op read op://vault/jira/token
+  bb:
+    type: bitbucket
+    username: ops@example.test
+    token: keyring:bb-token
+    previewPattern: preview
+  ph:
+    type: posthog
+    token: keyring:posthog
+  tun:
+    type: ngrok
+    domain: hooks.example.test
+projects:
+  - name: web
+    root: ~/Code/web
+    repo: {connection: gh, repo: octo/web}
+    tracker: {connection: gh, repo: octo/web}
+    baseBranch: main
+    worktree:
+      copy: [.env]
+      setup: pnpm install
+      setupWhen: [pnpm-lock.yaml]
+    sweep: {ruleFiles: [CLAUDE.md], land: pr}
+    triage: {openIssues: true}
+    env:
+      API_URL: https://api.example.test
+      POST_TOKEN: keyring:post-token
+    jobs:
+      - name: Nightly report
+        command: [sh, -c, ./scripts/report.sh]
+        cron: "0 9 * * *"
+        timeZone: Europe/London
+      - name: Refresh data
+        command: [./scripts/refresh.sh]
+        at: ["05:17"]
+        status: .status/refresh
+      - name: deploy
+        command: [./scripts/deploy.sh]
+        on: {events: [push], branches: [main]}
+        checkout: fresh
+        timeoutMinutes: 20
+        keepRuns: 50
+      - name: poke
+        command: [./scripts/poke.sh]
+        on: {webhook: true}
+  - name: api
+    root: /srv/api
+    repo: {connection: bb, repo: acme/api}
+    sweep: {disabled: true}
+  - name: ops
+    root: /srv/ops
+    repo: {connection: bb, repo: acme/ops}
+    tracker:
+      connection: jira
+      project: OPS
+      transitionClaimed: In Progress
+      transitionDone: Done
+    disabled: true
+  - name: legacy
+    root: /srv/legacy
+    repo: {connection: ghtok, repo: octo/legacy}
+    tracker: {connection: ghtok, repo: octo/tracker}
+sources:
+  - name: linear-src
+    tracker: {connection: lin, team: "ENG, OPS", states: "unstarted, started", stateClaimed: In Progress}
+    unrouted: label
+    routes:
+      - project: api
+        when:
+          team: ENG
+          labels: [api, "back*"]
+          any: [{labels: urgent}]

@@ -45,6 +45,12 @@ func ParseAgent(body string) *Agent {
 	return nil
 }
 
+// LegacyMarker is Open Supervisor's own-note marker, appended after the Open
+// Conduit marker for the fallback window (06-02): an Open Supervisor that
+// takes a scope back reads Open Conduit's comments as agent notes rather
+// than as human input. ParseAgent reads the Open Conduit marker first.
+const LegacyMarker = "<!-- open-supervisor:agent -->"
+
 // WithMarker appends the discoverable agent marker. work and intent must be
 // secret-free identifiers; invalid values are omitted rather than escaped.
 func WithMarker(body, work, intent string) string {
@@ -55,7 +61,7 @@ func WithMarker(body, work, intent string) string {
 	if markValue.MatchString(intent) {
 		marker += " intent=" + intent
 	}
-	return strings.TrimRight(body, "\n") + "\n\n" + marker + " -->\n"
+	return strings.TrimRight(body, "\n") + "\n\n" + marker + " -->\n" + LegacyMarker + "\n"
 }
 
 // hasIntent reports whether body carries the marker for intent.

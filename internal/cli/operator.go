@@ -50,6 +50,11 @@ type Env struct {
 	// saved; only the open-conduit entrypoint supplies it (the os binary
 	// carries no terminal UI).
 	EditConfig func(EditRequest) (bool, error)
+	// Migrate converts an Open Supervisor v1 config (06-02); State runs the
+	// offline backup, restore, diagnosis and credential recovery. Only the
+	// open-conduit entrypoint supplies them.
+	Migrate func(MigrateRequest) (MigrateResult, error)
+	State   *StateOps
 	// OpenURL, LookPath and RunCommand replace the setup host's browser
 	// opener, PATH lookup and attached command runner (tests).
 	OpenURL    func(string) error
@@ -64,6 +69,7 @@ type operator struct {
 	tokenFile   string
 	socket      string
 	dataDir     string
+	build       string
 }
 
 func usageError(errOut io.Writer, msg string) int {
@@ -108,6 +114,11 @@ Commands:
   config get POINTER | config set POINTER JSON | config unset POINTER   [--file F] (local file, validated before saving)
   config edit [--file F]     full-screen editor with the adapters' documented fields, validated before saving
   auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
+  auth recover               (daemon stopped) revoke every operator credential and write a fresh token file
+  migrate config --from V1_CONFIG [--out FILE | --write] [--force] [--no-repo-files] [--time-zone ZONE] [--shell-jobs] [--detached-timeout S] [--json]
+                             convert an Open Supervisor config (preview unless --out/--write; v1 files are never modified)
+  backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR   (daemon stopped; restore writes a new state directory)
+  state check [--json]       (daemon stopped) diagnose the state directory: permissions, schema, integrity, artifacts, drain status
   version
 
 Lists accept --limit and --cursor. Mutations accept --key to retry safely with the same Idempotency-Key.
@@ -128,7 +139,7 @@ func (o *operator) abs(p string) string {
 
 // RunOperator dispatches operator commands through the public client only.
 func RunOperator(version, commit string, args []string, env Env, out, errOut io.Writer) int {
-	o := &operator{out: out, errOut: errOut, env: env}
+	o := &operator{out: out, errOut: errOut, env: env, build: version + " (" + commit + ")"}
 	global := flag.NewFlagSet("open-conduit", flag.ContinueOnError)
 	global.SetOutput(io.Discard)
 	global.StringVar(&o.endpoint, "endpoint", "", "")
@@ -150,7 +161,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "serve": o.serve, "claim": o.claim, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route}
+	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "serve": o.serve, "claim": o.claim, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "migrate": o.migrate, "backup": o.backup, "state": o.state}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.
@@ -558,6 +569,11 @@ func (o *operator) auth(args []string) int {
 		return usageError(o.errOut, "missing auth subcommand")
 	}
 	switch args[0] {
+	case "recover":
+		if len(args) != 1 {
+			return usageError(o.errOut, "auth recover takes no arguments")
+		}
+		return o.recoverOperator()
 	case "rotate":
 		if len(args) != 1 {
 			return usageError(o.errOut, "auth rotate takes no arguments")
@@ -573,7 +589,7 @@ func (o *operator) auth(args []string) int {
 			return o.emit(nil, err)
 		}
 		if err = writePrivateJSON(o.tokenPath(), replacement); err != nil {
-			return o.emit(nil, fmt.Errorf("rotation committed but the credential file could not be saved; recover with the locked local credential reset"))
+			return o.emit(nil, fmt.Errorf("rotation committed but the credential file could not be saved; stop the daemon and run open-conduit auth recover"))
 		}
 		return o.emit(map[string]string{"token_id": replacement.TokenID}, nil)
 	case "revoke":
@@ -590,7 +606,7 @@ func (o *operator) auth(args []string) int {
 		defer cancel()
 		return o.emit(c.Revoke(cx, pos[0], f.get("reason"), f.key()))
 	}
-	return usageError(o.errOut, "expected auth rotate|revoke")
+	return usageError(o.errOut, "expected auth rotate|revoke|recover")
 }
 
 func writePrivateJSON(path string, v any) error {

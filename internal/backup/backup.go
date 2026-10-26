@@ -318,3 +318,21 @@ func syncDirectory(path string) error {
 	defer f.Close()
 	return f.Sync()
 }
+
+// Info summarizes a bundle's manifest.
+type Info struct {
+	Schema    uint32
+	Build     string
+	CreatedAt time.Time
+	Artifacts int
+}
+
+// Inspect reads and checks a bundle's manifest. It does not verify the
+// bundle's bytes; Restore does.
+func Inspect(bundle string) (Info, error) {
+	m, err := readManifest(filepath.Join(bundle, "manifest.json"))
+	if err != nil {
+		return Info{}, err
+	}
+	return Info{Schema: m.Schema, Build: m.Build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts)}, nil
+}

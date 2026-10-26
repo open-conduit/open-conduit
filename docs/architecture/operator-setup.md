@@ -179,3 +179,5 @@ The entrypoint injects the setups through `cli.Env.Setups` (`bootstrap.Setups()`
 
 
 06-01 adds `init linear`, `init jira` (each with an optional `--bitbucket` code host), `adapters [TYPE]`, `route KEY`, `config edit` (the full-screen editor) and the tracker, Bitbucket and PostHog doctor checks and webhook routes. See [installed integrations](installed-integrations.md).
+
+06-02 adds explicit conversion and offline recovery commands ([migration and recovery](migration-recovery.md)): `migrate config --from V1 [--out FILE | --write]`, `backup create|verify|restore`, `state check` and `auth recover`. The state commands take the daemon lock and refuse while a daemon owns the directory.

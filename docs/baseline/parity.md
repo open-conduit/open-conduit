@@ -226,3 +226,11 @@ Intentional differences: one wake ends a wait (the agent waits again), and `--ca
 - **O02 and O06.** `adapters [TYPE]`, `route KEY` (recorded decisions via `GET /v1/events/{id}/route`) and `config edit` (the full-screen, catalog-driven editor, validated before saving). The rendered activity artifact is the Claude Code transcript view.
 - **Installation.** Which accounts are installed is not inferred. Confirmation from the operator's config is a 06-04 step, and no integration is excluded.
 - **Intentional differences.** Unsigned Jira deliveries are refused. `route` explains recorded decisions rather than predicting one. Missing Linear labels are created on first use.
+
+06-02 update (code part; live rehearsal deferred to 03-07 and 06-04 by user decision 2026-10-26): [migration and recovery](../architecture/migration-recovery.md). Fixtures, fakes and drills only; no Open Supervisor data was read.
+
+- **O03, C01, C03, C05.** `migrate config` converts settings, connections, projects, sources, labels, branches, git, worktree and env, with secret-reference mappings (never values) and a report of changed defaults. It validates offline before writing, and v1 files are never modified.
+- **C07, B11.** `.open-supervisor.yaml` and project jobs become the scope's schedule entry. `legacy-job` is the default, with an explicit five-minute timeout, a six-hour binding deadline for status jobs, trigger-kind routes, and `keepRuns` reported against `kept_executions`.
+- **C08.** Playbook addition renames are reported (`triage` → `triage-reports`, a tracker's `work-issue` → `work-tracker-issue`); the same-named ones are read as a fallback.
+- **O07.** Ownership transfer is drain-and-reconcile with no state import (provisional). Shared labels and two-way marker recognition: GitHub comments now also carry v1's own-note marker. Backup, verify, restore, `auth recover` and `state check` cover recovery, and `TestDaemonMigrationRehearsal` rehearses it on synthetic state.
+- **Not converted (reported).** A GitHub tracker in another repository, any/all/not and glob route matches, the unrouted label, and the dry-run model. Live rollback evidence stays with 03-07 and 06-04.

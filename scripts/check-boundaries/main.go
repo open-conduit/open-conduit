@@ -69,6 +69,11 @@ func allowed(owner, dependency string, test bool) bool {
 		return dependency == "domain" || dependency == "extension" || under(dependency, "internal/config")
 	case under(owner, "client"):
 		return public(dependency) || under(dependency, "client")
+	case under(owner, "internal/migrate"):
+		// Explicit Open Supervisor conversion (06-02) writes extension and
+		// executor config: it may read their exported names and setup shapes,
+		// never runtime, SQLite, management or bootstrap.
+		return public(dependency) || under(dependency, "internal/migrate") || under(dependency, "client") || under(dependency, "extensions") || under(dependency, "executors")
 	case under(owner, "internal/management"):
 		return public(dependency) || under(dependency, "internal/management") || under(dependency, "internal/runtime") || under(dependency, "internal/config")
 	case under(owner, "internal/cli"), under(owner, "internal/tui"):

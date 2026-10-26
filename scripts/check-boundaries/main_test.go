@@ -53,6 +53,12 @@ func TestDependencyClosures(t *testing.T) {
 		{"slack_cannot_use_kit", []pkg{project("extensions/slack", "extensions/tracker")}, "extensions/tracker"},
 		{"linear_cannot_reach_jira", []pkg{project("extensions/linear", "extensions/jira")}, "extensions/jira"},
 		{"runtime_cannot_import_kit", []pkg{project("internal/runtime", "extensions/tracker")}, "extensions/tracker"},
+		// 06-02: the v1 converter reads extension config names, never the
+		// runtime, storage or composition; the CLI reaches it by injection.
+		{"migrate_reads_extensions", []pkg{project("internal/migrate", "extensions/github", "extensions/tracker"), project("extensions/github", "client", "domain"), project("extensions/tracker", "domain")}, ""},
+		{"migrate_cannot_reach_runtime", []pkg{project("internal/migrate", "internal/runtime")}, "internal/runtime"},
+		{"migrate_cannot_reach_sqlite", []pkg{project("internal/migrate", "internal/storage/sqlite")}, "internal/storage/sqlite"},
+		{"cli_cannot_import_migrate", []pkg{project("internal/cli", "internal/migrate")}, "internal/migrate"},
 		{"backup_runtime_leak", []pkg{project("internal/backup", "internal/runtime")}, "internal/runtime"},
 		{"unknown_package_leak", []pkg{project("newpackage", "domain")}, "domain"},
 		{"external_bridge", []pkg{project("internal/runtime"), {ImportPath: "external.test/helper", Imports: []string{module + "extensions/git"}}}, ""},

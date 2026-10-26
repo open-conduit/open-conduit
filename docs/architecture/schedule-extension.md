@@ -43,7 +43,7 @@ Routes use one registered handler, `schedule`. Its route config `{"jobs": [...],
 
 Two generic contract additions make this possible. `extension.RouteInput.Route` carries the evaluated route, including its opaque handler config. `config.Registry.HandlerConfig` lets a registered handler validate that config at load/apply time. Put a `schedule` route before a `manual` route in the same scope, or the manual route would create `manual.work` for a job key.
 
-**Repository-scoped declarations.** v1 projects were repositories, and v1 read extra jobs from the checkout's `.open-supervisor.yaml` every minute. In Open Conduit the repository's scope declares its jobs. B05 forbids reading `.open-supervisor.yaml` implicitly and requires an explicit apply before disk edits change behavior; 06-02 converts those files into scope entries, routes and bindings. Job reload is therefore config reload.
+**Repository-scoped declarations.** v1 projects were repositories, and v1 read extra jobs from the checkout's `.open-supervisor.yaml` every minute. In Open Conduit the repository's scope declares its jobs. B05 forbids reading `.open-supervisor.yaml` implicitly and requires an explicit apply before disk edits change behavior; 06-02 converts those files into scope entries, routes and bindings (`open-conduit migrate config`, [migration and recovery](migration-recovery.md)). Job reload is therefore config reload.
 
 ## Triggers
 
