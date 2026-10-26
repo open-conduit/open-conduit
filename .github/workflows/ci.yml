@@ -5,55 +5,139 @@ on:
   pull_request:
 permissions:
   contents: read
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 jobs:
+  # What a PR touches. Docs are site/, docs/**/*.md and the Markdown at the
+  # repository root; anything else is code (the playbooks' Markdown is
+  # embedded in the binaries, so it is code too). The required jobs below
+  # always run, so branch protection sees every check report, but skip
+  # their steps when there is nothing for them to check. Pushes to main
+  # check everything.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.diff.outputs.code }}
+      docs: ${{ steps.diff.outputs.docs }}
+      workflows: ${{ steps.diff.outputs.workflows }}
+    steps:
+      - uses: actions/checkout@v7
+        if: github.event_name == 'pull_request'
+        with:
+          fetch-depth: 0
+      - id: diff
+        env:
+          EVENT: ${{ github.event_name }}
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}
+        run: |
+          if [ "$EVENT" != pull_request ]; then
+            printf 'code=true\ndocs=true\nworkflows=true\n' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          code=false docs=false workflows=false
+          while IFS= read -r f; do
+            case "$f" in
+              .github/workflows/*) workflows=true; code=true ;;
+              site/*|docs/*.md) docs=true ;;
+              */*) code=true ;;
+              *.md) docs=true ;;
+              *) code=true ;;
+            esac
+          done < <(git diff --name-only "$BASE...$HEAD")
+          printf 'code=%s\ndocs=%s\nworkflows=%s\n' "$code" "$docs" "$workflows" | tee -a "$GITHUB_OUTPUT"
   # make check includes docs-check and the daemon drills (they are part of
   # test); drill and certify also run on their own so their evidence shows
   # as separate steps. 1.24.2 is the go.mod minimum.
   check:
+    needs: changes
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-latest, macos-latest]
         go: ['1.24.2', stable]
     runs-on: ${{ matrix.os }}
+    env:
+      RUN: ${{ needs.changes.outputs.code }}
     steps:
+      - if: env.RUN != 'true'
+        run: echo "No code changed; nothing to check."
       - uses: actions/checkout@v7
+        if: env.RUN == 'true'
       - uses: actions/setup-go@v7
+        if: env.RUN == 'true'
         with:
           go-version: ${{ matrix.go }}
           cache: true
       - uses: actions/setup-python@v7
+        if: env.RUN == 'true'
         with:
           python-version: '3.12'
       - run: make config-deps
+        if: env.RUN == 'true'
       - run: make check
+        if: env.RUN == 'true'
       - run: make drill
+        if: env.RUN == 'true'
       - run: make certify
+        if: env.RUN == 'true'
       - run: make cross-build
-        if: matrix.os == 'ubuntu-latest' && matrix.go == 'stable'
-  # Packaging breaks show up here, before anyone tags: every platform's
-  # archive, the checksums and the Homebrew cask, built and smoke-tested
-  # without publishing anything.
-  release-snapshot:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-        with:
-          fetch-depth: 0
-      - uses: actions/setup-go@v7
-        with:
-          go-version-file: go.mod
-          cache: true
-      - uses: goreleaser/goreleaser-action@v7
-        with:
-          version: "~> v2"
-          install-only: true
-      - run: make release-snapshot
-  workflows:
+        if: env.RUN == 'true' && matrix.os == 'ubuntu-latest' && matrix.go == 'stable'
+  # A docs-only change still has its examples checked: the configs validate,
+  # and the commands and make targets they show exist. A change with code
+  # gets this from make check above.
+  docs-check:
+    needs: changes
+    if: needs.changes.outputs.docs == 'true' && needs.changes.outputs.code != 'true'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
       - uses: actions/setup-go@v7
         with:
           go-version: stable
+          cache: true
+      - run: make docs-check
+  # Packaging breaks show up here, before anyone tags: every platform's
+  # archive, the checksums and the Homebrew cask, built and smoke-tested
+  # without publishing anything.
+  release-snapshot:
+    needs: changes
+    runs-on: ubuntu-latest
+    env:
+      RUN: ${{ needs.changes.outputs.code }}
+    steps:
+      - if: env.RUN != 'true'
+        run: echo "No code changed; nothing to package."
+      - uses: actions/checkout@v7
+        if: env.RUN == 'true'
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v7
+        if: env.RUN == 'true'
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: goreleaser/goreleaser-action@v7
+        if: env.RUN == 'true'
+        with:
+          version: "~> v2"
+          install-only: true
+      - run: make release-snapshot
+        if: env.RUN == 'true'
+  workflows:
+    needs: changes
+    runs-on: ubuntu-latest
+    env:
+      RUN: ${{ needs.changes.outputs.workflows }}
+    steps:
+      - if: env.RUN != 'true'
+        run: echo "No workflow changed; nothing to lint."
+      - uses: actions/checkout@v7
+        if: env.RUN == 'true'
+      - uses: actions/setup-go@v7
+        if: env.RUN == 'true'
+        with:
+          go-version: stable
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+        if: env.RUN == 'true'

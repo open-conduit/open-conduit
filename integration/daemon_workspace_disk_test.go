@@ -144,9 +144,11 @@ func TestDaemonWorkspaceDiskSafety(t *testing.T) {
 	if _, err := d.c.CancelWork(context.Background(), w.ID, w.Revision, "drill", "cancel-work-1"); err != nil {
 		t.Fatal(err)
 	}
+	// Doctor shows only the last sweep, and the idle orphan usually goes in
+	// an earlier one than the cancelled Work's workspace, so the orphan's
+	// removal is checked on disk.
 	d.until("sweep removed the finished and orphaned workspaces", 60*time.Second, func() bool {
-		c := resources()
-		return slices.Contains(c.Items, "swept work "+ref+" finished_work") && slices.Contains(c.Items, "swept work "+filepath.Base(orphanClean)+" orphaned")
+		return slices.Contains(resources().Items, "swept work "+ref+" finished_work") && !exists(orphanClean)
 	})
 	c := resources()
 	if !slices.Contains(c.Items, "kept fresh "+filepath.Base(orphanDirty)+" orphaned: uncommitted") || c.Code != "spare_kept" || !strings.Contains(c.Detail, "the sweep at") {
