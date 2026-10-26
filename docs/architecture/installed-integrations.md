@@ -21,7 +21,7 @@ Ticket 06-01 ports the baseline adapters outside the GitHub reference path ([par
   - An operator's `<type>.claim.requested` overrides the policy.
 - **Projector.** It is level-triggered from durable Work state:
   - Labels: claimed while owned, plus at most one of the help, review or done labels, none while an attempt runs. The claimed label comes off once completed Work's issue is closed: admission never claims a closed issue, and a reopening starts a new generation, which is claimed again. Failed and cancelled Work keep it.
-  - It re-reads the issue when desired state changes, and at `verify_seconds` for nonterminal Work and for completed Work whose issue is still open, until the issue closes.
+  - It re-reads the issue when desired state changes, and at `verify_seconds` for nonterminal Work and for completed Work whose issue is still open, until the issue closes. After it moves a completed Work's issue (a `finished` transition that may close it), the next pass re-reads it at once.
   - Workflow status: claimed, then the declared status (`<type>.status.v1` `{status, comment}`), done or help for completed or failed Work. It is moved only when the entry names a status for that state.
   - Each outcome comment goes through the `Outbox`: pending → attempted (recorded before the write) → posted, with mark search after a lost answer, so nothing is posted twice across a crash.
 - **Tools.** `<type>.context`, `.issue.view`, `.issue.comment` (a durable intent, idempotent per request), `.issue.list` and `.issue.create` (never repeated after an ambiguous answer).
@@ -49,6 +49,7 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 - **Entry.** `projects`, `jql` and `fields` (custom fields routes can match), plus the kit's fields. Labels cannot contain spaces.
 - **Bodies.** Wiki markup is converted to and from Markdown (v1 `wiki.go`).
 - **Listing.** The enhanced search (`/search/jql`, token pages) falls back to the classic search on a 404.
+- **Closed.** An issue is closed once its status is in the done category or, when the issue carries no category, once it has a resolution. A `finished` or `done` transition to a done-category status therefore closes it, and completed Work then loses the claimed label.
 - **Reopens.** They come from the changelog against status categories, or from a cleared resolution when the categories are unreadable.
 - **Marks.** Comments carry the `open-supervisor` entity property (`agent`, `from`, plus `work` and `intent`), which v1 still reads.
 - **Transitions.** Matched by target status first, then by transition name.

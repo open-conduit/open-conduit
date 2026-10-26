@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -79,9 +80,16 @@ func linearFake(t *testing.T, clock *ghClock) *trackerFake {
 }
 
 func jiraFake(t *testing.T, clock *ghClock) *trackerFake {
+	return jiraFakeWith(t, clock, `{"claimed":"In Progress","review":"In Review","done":"Done"}`, false)
+}
+
+// jiraFakeWith is jiraFake with its own transitions and, with noCategories,
+// a site that reports no status categories (closed means resolved).
+func jiraFakeWith(t *testing.T, clock *ghClock, transitions string, noCategories bool) *trackerFake {
 	f := jiratest.New("me@example.com", "tok")
 	f.Now = clock.Now
-	entry := `{"namespace":"jira/acme/proj","scope":"proj","projects":["PROJ"],"transitions":{"claimed":"In Progress","review":"In Review","done":"Done"},"webhook_secret":"hook"}`
+	f.NoCategories = noCategories
+	entry := `{"namespace":"jira/acme/proj","scope":"proj","projects":["PROJ"],"transitions":` + transitions + `,"webhook_secret":"hook"}`
 	s, err := jira.ParseExtension([]byte(entry), []string{"hook"})
 	if err != nil {
 		t.Fatal(err)
@@ -530,6 +538,106 @@ func TestTrackerCompletedClosedIssueDropsTheClaim(t *testing.T) {
 			e.read(func(tx storage.Tx) error { ws, err := tx.ListWorks(); n = len(ws); return err })
 			if n != 3 {
 				t.Fatalf("completed issue claimed again: %d Works", n)
+			}
+		})
+	}
+}
+
+// TestTrackerJiraClosedIssueDropsTheClaim checks Jira's own close semantics
+// against the claimed label: an issue is closed once its status is in the
+// done category or, on a site that reports no categories, once it is
+// resolved. The projector's own finished/done transition to Done closes it,
+// and the next pass drops the label from completed Work without moving it
+// again. Failed Work keeps the label; a reopened issue is claimed again.
+func TestTrackerJiraClosedIssueDropsTheClaim(t *testing.T) {
+	for name, noCategories := range map[string]bool{"categories": false, "resolution": true} {
+		t.Run(name, func(t *testing.T) {
+			e := newTrackerEnv(t, func(t *testing.T, clock *ghClock) *trackerFake {
+				return jiraFakeWith(t, clock, `{"claimed":"In Progress","review":"In Review","done":"Done","finished":"Done"}`, noCategories)
+			}, false)
+			f := e.f
+			l := f.settings.Labels
+			finished, done, failed := f.key1, f.key2, f.key3
+			for _, key := range []string{finished, done, failed} {
+				f.addIssue(key, "Issue "+key, f.open)
+			}
+			e.reconcile(e.source)
+			e.route()
+			works := map[string]domain.ID{}
+			end := func(key string, state domain.WorkState, status string) {
+				t.Helper()
+				w, ok := e.workFor("issue/" + key)
+				if !ok {
+					t.Fatalf("%s not claimed", key)
+				}
+				works[key] = w.ID
+				e.finishAttempt(e.startAttempt(w.ID), state, &tracker.StatusDeclaration{Status: status})
+			}
+			is := func(key, status string, want ...string) {
+				t.Helper()
+				got, st, _ := f.snapshot(key)
+				got = append([]string(nil), got...)
+				sort.Strings(got)
+				sort.Strings(want)
+				if strings.Join(got, ",") != strings.Join(want, ",") || st != status {
+					t.Fatalf("%s: %v in %s, want %v in %s", key, got, st, want, status)
+				}
+			}
+			end(finished, domain.WorkCompleted, "finished")
+			end(done, domain.WorkReady, "done")
+			end(failed, domain.WorkFailed, "")
+			if res := e.converge(); res.Transitioned != 2 {
+				t.Fatalf("first pass %+v", res)
+			}
+			// The projector moved finished and done to Done itself: it read
+			// them open, so the claim stays for this pass.
+			is(finished, f.done, l.Claimed)
+			is(done, f.done, l.Claimed, l.Status("done"))
+			is(failed, f.open, l.Claimed, l.Status("help"))
+			// The next pass reads finished closed and drops its claim, with no
+			// further transition. done's Work is still live, so it keeps it.
+			if res := e.converge(); res.Transitioned != 0 || res.Labeled != 1 {
+				t.Fatalf("second pass %+v", res)
+			}
+			is(finished, f.done)
+			is(done, f.done, l.Claimed, l.Status("done"))
+			// done's Work hears of the close and finishes: its claim comes off too.
+			e.reconcile(e.source)
+			e.route()
+			end(done, domain.WorkCompleted, "finished")
+			if res := e.converge(); res.Transitioned != 0 {
+				t.Fatalf("finishing a closed issue moved it: %+v", res)
+			}
+			is(done, f.done)
+			// Failed Work keeps the claim and asks for help, closed or not.
+			f.move(failed, f.done)
+			e.clock.Add(f.settings.VerifyInterval + time.Second)
+			e.converge()
+			is(failed, f.done, l.Claimed, l.Status("help"))
+			// Settled: nothing is re-read, and nothing is claimed again.
+			e.clock.Add(f.settings.VerifyInterval + time.Second)
+			if res := e.converge(); res.Labeled != 0 {
+				t.Fatalf("settled projection re-read: %+v", res)
+			}
+			e.reconcile(e.source)
+			e.route()
+			for key, id := range works {
+				if w, _ := e.workFor("issue/" + key); w.ID != id {
+					t.Fatalf("%s claimed again: %s", key, w.ID)
+				}
+			}
+			// Reopened: the changelog makes a new generation, which is claimed.
+			e.clock.Add(time.Hour)
+			f.move(finished, f.open)
+			e.reconcile(e.source)
+			e.route()
+			gen := "issue/" + finished + "/generation/reopen-" + strconv.FormatInt(e.clock.Now().Unix(), 10)
+			if succ, ok := e.workFor(gen); !ok || succ.ID == works[finished] {
+				t.Fatalf("reopened issue made no successor Work (%s)", gen)
+			}
+			e.converge()
+			if got, _, _ := f.snapshot(finished); !slices.Contains(got, l.Claimed) {
+				t.Fatalf("reopened issue not claimed: %v", got)
 			}
 		})
 	}

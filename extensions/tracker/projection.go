@@ -416,8 +416,14 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		if moved {
 			res.Transitioned++
 		}
+		verified := p.o.Now().UTC()
+		if moved && item.work.State == domain.WorkCompleted {
+			// The transition may have closed the issue: read it again on the
+			// next pass rather than at verify_seconds.
+			verified = time.Time{}
+		}
 		if err := p.transact(ctx, func(tx storage.Tx) error {
-			return p.put(tx, key, projectionState{Work: item.work.ID, Applied: applied, VerifiedAt: p.o.Now().UTC(), Closed: closed})
+			return p.put(tx, key, projectionState{Work: item.work.ID, Applied: applied, VerifiedAt: verified, Closed: closed})
 		}); err != nil {
 			return res, err
 		}
