@@ -264,7 +264,9 @@ func TestUnifiedHistoryMixedExecutors(t *testing.T) {
 			t.Fatalf("list view lacks %s:\n%s", id, view)
 		}
 	}
-	// Select the first job attempt (the list is newest first).
+	// List every turn (g), then select the first job attempt (the list is
+	// newest first).
+	model, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("g")})
 	runs, _ := tui.FetchRuns(c, "")
 	target := -1
 	for i, r := range runs {

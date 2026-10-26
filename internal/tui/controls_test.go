@@ -160,3 +160,61 @@ func TestNoControlsWithoutASource(t *testing.T) {
 		t.Fatal("x acted without controls")
 	}
 }
+
+// labelSource answers each Work by its ID.
+type labelSource struct {
+	controlSource
+	works map[string]client.Work
+	looks int
+}
+
+func (l *labelSource) Work(_ context.Context, id string) (client.Work, error) {
+	l.looks++
+	return l.works[id], nil
+}
+
+// TestListGroupsTurnsByWork: a later turn of an issue is not a new row; the
+// row names the issue and counts its turns, and g lists every turn.
+func TestListGroupsTurnsByWork(t *testing.T) {
+	first := run("r1", "completed", "github.issue", 1, "1")
+	first.WorkID = "w-issue"
+	second := run("r2", "running", "github.issue", 2, "3")
+	second.WorkID = "w-issue"
+	second.Trigger = &client.Trigger{Type: "github.checks.failed"}
+	thread := run("r3", "completed", "slack.thread", 1, "2")
+	src := &labelSource{controlSource: controlSource{fakeSource: fakeSource{runs: []client.Run{first, second, thread}}}, works: map[string]client.Work{
+		"w-issue":        {ID: "w-issue", Annotations: []client.Annotation{{Name: "issue", Value: "open-conduit/open-conduit#1"}, {Name: "url", Value: "https://github.com/x"}}},
+		"w-slack.thread": {ID: "w-slack.thread", CorrelationKeys: []client.Key{{Source: "slack", ExternalID: "thread/C1/17"}}},
+	}}
+	var m tea.Model = New(src, time.Hour)
+	m, _ = m.Update(tea.WindowSizeMsg{Width: 200, Height: 20})
+	for range 2 {
+		var cmd tea.Cmd
+		m, cmd = m.Update(m.(Model).fetch()())
+		m = drain(t, m, cmd)
+	}
+	view := m.View()
+	if src.looks != 2 {
+		t.Fatalf("each Work is looked up once, got %d", src.looks)
+	}
+	if !strings.Contains(view, "2 work · 3 run(s)") || strings.Count(view, "open-conduit#1") != 1 || strings.Contains(view, "open-conduit/open-conduit") || !strings.Contains(view, "slack thread/C1/17") {
+		t.Fatalf("by work:\n%s", view)
+	}
+	for _, l := range strings.Split(view, "\n") {
+		if strings.Contains(l, "open-conduit#1") && (!strings.Contains(l, "running") || !strings.Contains(l, " 2 ")) {
+			t.Fatalf("issue row shows its latest turn and count: %q", l)
+		}
+	}
+	// g lists every turn, each placed among its Work's turns, and keeps the
+	// selection on the same Work.
+	m, _ = press(m, "g")
+	view = m.View()
+	if strings.Count(view, "open-conduit#1") != 2 || !strings.Contains(view, "1/2") || !strings.Contains(view, "2/2") || !strings.Contains(view, "every turn") {
+		t.Fatalf("every turn:\n%s", view)
+	}
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = drain(t, m, cmd)
+	if !strings.Contains(m.View(), "Run r2") {
+		t.Fatalf("selection moved:\n%s", m.View())
+	}
+}
