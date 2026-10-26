@@ -3,6 +3,7 @@ package sqlite_test
 import (
 	"bufio"
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
@@ -324,6 +325,63 @@ func TestConcurrentFirstOpen(t *testing.T) {
 	s := open(t, path)
 	if err := s.IntegrityCheck(context.Background()); err != nil {
 		t.Fatal(err)
+	}
+}
+
+// A first open can reach the switch to WAL while a competing first open holds
+// the write lock (it is in its migration, or switching to WAL itself). SQLite
+// fails that switch at once with SQLITE_BUSY instead of waiting, so Open must
+// wait for the lock rather than fail. Here a rollback-journal database is
+// write-locked by another connection while Open runs.
+func TestOpenWaitsForWriteLockBeforeWAL(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conduit.db")
+	s := open(t, path)
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", "file:"+path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	conn, err := db.Conn(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	var journal string
+	if err = conn.QueryRowContext(context.Background(), "PRAGMA journal_mode=DELETE").Scan(&journal); err != nil || journal != "delete" {
+		t.Fatalf("journal mode %q: %v", journal, err)
+	}
+	if _, err = conn.ExecContext(context.Background(), "BEGIN IMMEDIATE"); err != nil {
+		t.Fatal(err)
+	}
+	opened := make(chan error, 1)
+	go func() {
+		s, err := sqlite.Open(context.Background(), path)
+		if err == nil {
+			err = s.Close()
+		}
+		opened <- err
+	}()
+	select {
+	case err = <-opened:
+		t.Fatalf("Open returned while the write lock was held: %v", err)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if _, err = conn.ExecContext(context.Background(), "ROLLBACK"); err != nil {
+		t.Fatal(err)
+	}
+	if err = <-opened; err != nil {
+		t.Fatal(err)
+	}
+	// A read makes this connection see the WAL flag that Open wrote to the header.
+	var version int
+	if err = conn.QueryRowContext(context.Background(), "PRAGMA user_version").Scan(&version); err != nil {
+		t.Fatal(err)
+	}
+	if err = conn.QueryRowContext(context.Background(), "PRAGMA journal_mode").Scan(&journal); err != nil || journal != "wal" {
+		t.Fatalf("journal mode after Open %q: %v", journal, err)
 	}
 }
 func TestKVPrefixIsLiteralBytes(t *testing.T) {

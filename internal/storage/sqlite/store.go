@@ -21,6 +21,9 @@ import (
 
 const SchemaVersion uint32 = 1
 
+// busyTimeout bounds how long a connection waits for a competing connection's lock.
+const busyTimeout = 5 * time.Second
+
 type Store struct {
 	db   *sql.DB
 	path string
@@ -63,7 +66,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 	u := url.URL{Scheme: "file", Path: abs}
 	q := u.Query()
-	q.Add("_pragma", "busy_timeout(5000)")
+	q.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", busyTimeout.Milliseconds()))
 	q.Add("_pragma", "foreign_keys(1)")
 	q.Add("_pragma", "synchronous(FULL)")
 	u.RawQuery = q.Encode()
@@ -99,18 +102,47 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, fmt.Errorf("sqlite: schema metadata mismatch")
 	}
 
-	var journal string
-	if err = db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&journal); err != nil {
+	if err = enableWAL(ctx, db); err != nil {
 		return nil, err
-	}
-	if journal != "wal" {
-		return nil, fmt.Errorf("sqlite: WAL unavailable")
 	}
 	if err = s.IntegrityCheck(ctx); err != nil {
 		return nil, err
 	}
 	ok = true
 	return s, nil
+}
+
+// enableWAL switches the database to WAL, waiting out competing connections.
+// The switch takes a read transaction and then upgrades it to an exclusive
+// write. SQLite fails that upgrade with SQLITE_BUSY at once, without calling the
+// busy handler, when another connection holds the write lock, which a
+// concurrent first open does during its migration or its own switch to WAL.
+// So the switch is retried here, within the same budget as the busy timeout.
+func enableWAL(ctx context.Context, db *sql.DB) error {
+	deadline := time.Now().Add(busyTimeout)
+	delay := time.Millisecond
+	for {
+		var journal string
+		err := db.QueryRowContext(ctx, "PRAGMA journal_mode=WAL").Scan(&journal)
+		if err == nil {
+			if journal != "wal" {
+				return fmt.Errorf("sqlite: WAL unavailable")
+			}
+			return nil
+		}
+		var e *modernsqlite.Error
+		if !errors.As(err, &e) || e.Code()&255 != 5 || time.Now().Add(delay).After(deadline) {
+			return err
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return ctx.Err()
+		case <-timer.C:
+		}
+		delay = min(2*delay, 50*time.Millisecond)
+	}
 }
 func (s *Store) Close() error          { return s.db.Close() }
 func (s *Store) SchemaVersion() uint32 { return SchemaVersion }
