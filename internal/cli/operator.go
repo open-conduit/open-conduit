@@ -41,6 +41,10 @@ type Env struct {
 	// extension packages installed beside it (07-03) are known; it takes
 	// precedence when set.
 	ValidateConfigAt func(path string, data []byte) ([]client.Detail, error)
+	// CommandWarnings names the config's cmd: secret references whose program
+	// is not found on the resolver's PATH; only the open-conduit entrypoint
+	// supplies it. Warnings never fail a check.
+	CommandWarnings func(data []byte) []string
 	// Extensions manages installed extension packages and runs the
 	// conformance runner (07-03); only the open-conduit entrypoint
 	// supplies it.

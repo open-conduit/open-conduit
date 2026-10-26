@@ -272,7 +272,7 @@ func (s *Server) configChecks(ctx context.Context, checkSecrets bool) []runtime.
 		for _, name := range sortedKeys(cn.SecretRefs) {
 			total++
 			if _, err := s.o.Resolver.Resolve(ctx, cn.SecretRefs[name]); err != nil {
-				failed = append(failed, fmt.Sprintf("connection %s secret %s: %s", cn.ID, name, config.SecretCode(err)))
+				failed = append(failed, fmt.Sprintf("connection %s secret %s: %s", cn.ID, name, secretFailure(cn.SecretRefs[name], err)))
 			}
 		}
 	}
@@ -284,7 +284,7 @@ func (s *Server) configChecks(ctx context.Context, checkSecrets bool) []runtime.
 			}
 			total++
 			if _, err := s.o.Resolver.Resolve(ctx, scope.SecretRefs[name]); err != nil {
-				failed = append(failed, fmt.Sprintf("scope %s secret %s: %s", id, name, config.SecretCode(err)))
+				failed = append(failed, fmt.Sprintf("scope %s secret %s: %s", id, name, secretFailure(scope.SecretRefs[name], err)))
 			}
 		}
 	}
@@ -292,6 +292,21 @@ func (s *Server) configChecks(ctx context.Context, checkSecrets bool) []runtime.
 		return append(checks, runtime.Check{Name: "secrets", Status: runtime.CheckFail, Code: "unresolved", Detail: fmt.Sprintf("%d of %d secret reference(s) failed to resolve", len(failed), total), Items: failed})
 	}
 	return append(checks, runtime.Check{Name: "secrets", Status: runtime.CheckOK, Code: "resolved", Detail: fmt.Sprintf("%d secret reference(s) resolved; values were discarded", total)})
+}
+
+// secretFailure is a failed reference's code, with a remedy naming the
+// program when a cmd: reference's command was not found. Only the program is
+// named, never its arguments.
+func secretFailure(ref string, err error) string {
+	code := config.SecretCode(err)
+	if code != "command_not_found" {
+		return code
+	}
+	name := config.CommandName(ref)
+	if name == "" {
+		name = "the command"
+	}
+	return fmt.Sprintf("%s (%s not found on PATH %s; give its absolute path in the cmd: reference)", code, name, config.CommandPath)
 }
 
 func sortedKeys(m map[string]string) []string {

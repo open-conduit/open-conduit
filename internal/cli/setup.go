@@ -147,6 +147,7 @@ func (o *operator) validate(path string, data []byte) bool {
 		fmt.Fprintln(o.errOut, "open-conduit: config is not valid JSON")
 		return false
 	}
+	o.warnCommands(data)
 	if o.env.ValidateConfig == nil && o.env.ValidateConfigAt == nil {
 		return true
 	}
@@ -159,6 +160,17 @@ func (o *operator) validate(path string, data []byte) bool {
 		fmt.Fprintf(o.errOut, "  %s  %s  %s\n", d.Path, d.Code, d.Message)
 	}
 	return len(details) == 0
+}
+
+// warnCommands prints the entrypoint's warnings about the config's cmd:
+// references (a program not on the resolver's PATH); they never fail it.
+func (o *operator) warnCommands(data []byte) {
+	if o.env.CommandWarnings == nil {
+		return
+	}
+	for _, w := range o.env.CommandWarnings(data) {
+		fmt.Fprintf(o.errOut, "open-conduit: warning: %s\n", w)
+	}
 }
 
 // splitInitFlags removes the host's own flags (--config, --force, --dry-run,

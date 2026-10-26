@@ -2,10 +2,14 @@ package config
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"regexp"
 	"runtime"
+	"sort"
 	"strings"
 	"sync"
 	"syscall"
@@ -155,10 +159,91 @@ func (r *Resolver) platformKeyring(ctx context.Context, name string) (string, er
 	return out, nil
 }
 
+// CommandPath is the fixed PATH cmd: references run with: the system
+// directories, then the usual Homebrew prefixes (Apple silicon, Intel and
+// Linux) so a Homebrew-installed CLI such as gh is found.
+const CommandPath = "/usr/bin:/bin:/usr/sbin:/sbin:/opt/homebrew/bin:/usr/local/bin:/home/linuxbrew/.linuxbrew/bin"
+
+var commandWord = regexp.MustCompile(`^[A-Za-z0-9._/+-]+$`)
+
+// CommandName returns the program a cmd: reference runs (its first word),
+// or "" when ref is not a cmd: reference or does not start with a plain
+// program name (an assignment, quoting or shell syntax). Only the program is
+// returned, never its arguments.
+func CommandName(ref string) string {
+	rest, ok := strings.CutPrefix(ref, "cmd:")
+	if !ok {
+		return ""
+	}
+	fields := strings.Fields(rest)
+	if len(fields) == 0 || !commandWord.MatchString(fields[0]) {
+		return ""
+	}
+	return fields[0]
+}
+
+// CommandFound reports whether name is an executable at its absolute path or
+// in a CommandPath directory. Shell builtins are not considered.
+func CommandFound(name string) bool {
+	executable := func(p string) bool {
+		fi, err := os.Stat(p)
+		return err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0
+	}
+	if strings.Contains(name, "/") {
+		return filepath.IsAbs(name) && executable(name)
+	}
+	for _, dir := range filepath.SplitList(CommandPath) {
+		if executable(filepath.Join(dir, name)) {
+			return true
+		}
+	}
+	return false
+}
+
+// CommandWarnings returns one warning per program run by a cmd: reference in
+// a secret_refs object of the config that CommandFound does not find, sorted
+// and naming only the program, never its arguments.
+func CommandWarnings(data []byte) []string {
+	var root any
+	if json.Unmarshal(data, &root) != nil {
+		return nil
+	}
+	missing := map[string]bool{}
+	var walk func(v any)
+	walk = func(v any) {
+		switch v := v.(type) {
+		case map[string]any:
+			for k, c := range v {
+				if refs, ok := c.(map[string]any); ok && k == "secret_refs" {
+					for _, ref := range refs {
+						ref, _ := ref.(string)
+						if name := CommandName(ref); name != "" && !CommandFound(name) {
+							missing[name] = true
+						}
+					}
+					continue
+				}
+				walk(c)
+			}
+		case []any:
+			for _, c := range v {
+				walk(c)
+			}
+		}
+	}
+	walk(root)
+	out := make([]string, 0, len(missing))
+	for name := range missing {
+		out = append(out, "cmd: reference runs "+name+", which is not found on PATH "+CommandPath+"; give its absolute path")
+	}
+	sort.Strings(out)
+	return out
+}
+
 // baseEnv is the minimal command environment: no toolbelt token, endpoint,
 // Open Conduit settings or inherited credentials.
 func (r *Resolver) baseEnv() []string {
-	env := []string{"PATH=/usr/bin:/bin:/usr/sbin:/sbin"}
+	env := []string{"PATH=" + CommandPath}
 	for _, k := range []string{"HOME", "USER", "LOGNAME", "LANG", "TMPDIR"} {
 		if v, ok := r.lookup(k); ok {
 			env = append(env, k+"="+v)
@@ -213,6 +298,11 @@ func (r *Resolver) run(ctx context.Context, env []string, name string, args ...s
 	case ctx.Err() != nil:
 		return "", "cancelled"
 	case err != nil:
+		// sh exits 127 when the command is not found on PATH.
+		var exit *exec.ExitError
+		if errors.As(err, &exit) && exit.ExitCode() == 127 {
+			return "", "command_not_found"
+		}
 		return "", "command_failed"
 	}
 	s := string(out.buf)
