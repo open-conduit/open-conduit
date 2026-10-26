@@ -1,0 +1,37 @@
+---
+title: Open Conduit
+description: Run coding and support agents against GitHub issues, Slack threads, schedules and their own defect reports.
+template: splash
+hero:
+  tagline: Run coding and support agents where your work arrives, and keep them going across waits, restarts and failures.
+  actions:
+    - text: Quick start
+      link: /open-conduit/start/quick-start/
+      icon: right-arrow
+    - text: Install
+      link: /open-conduit/start/install/
+      variant: minimal
+---
+
+import { Card, CardGrid } from '@astrojs/starlight/components';
+
+Open Conduit is a single local daemon. It accepts what happens in GitHub, Slack, on a schedule or in its own defect reports, decides which agent or command handles it, runs that attempt, and keeps going until the work is done. You watch and steer it from a terminal UI.
+
+<CardGrid>
+	<Card title="GitHub engineering" icon="github">
+		Claims issues, works each on its own branch and checkout with Claude Code, opens a pull request and answers checks and review comments.
+		[Set it up](/open-conduit/workflows/github/)
+	</Card>
+	<Card title="Slack support" icon="slack">
+		Answers threads in a channel. Follow-ups reach the agent mid-turn, and it never answers itself.
+		[Set it up](/open-conduit/workflows/slack/)
+	</Card>
+	<Card title="Scheduled jobs" icon="seti:clock">
+		Runs commands or agent turns on cron, at fixed times, every N minutes, on a webhook or by hand, and catches up on missed slots.
+		[Set it up](/open-conduit/workflows/scheduled-jobs/)
+	</Card>
+	<Card title="Introspection" icon="magnifier">
+		Agents report what breaks for them; a daily triage groups the reports and lands fixes.
+		[Set it up](/open-conduit/workflows/introspection/)
+	</Card>
+</CardGrid>

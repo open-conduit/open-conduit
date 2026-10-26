@@ -1,6 +1,6 @@
 # Open Conduit documentation
 
-These documents are for people working on Open Conduit itself. To install and run it, start at [the top-level README](../README.md). [CONTRIBUTING.md](../CONTRIBUTING.md) covers setup, commits, boundaries and tests, and [SECURITY.md](../SECURITY.md) covers reporting vulnerabilities and the trust model.
+These documents are for people working on Open Conduit itself. To install and run it, start at [the user docs](https://open-conduit.github.io/open-conduit/) (built from `site/`) or [the top-level README](../README.md). [CONTRIBUTING.md](../CONTRIBUTING.md) covers setup, commits, boundaries and tests, and [SECURITY.md](../SECURITY.md) covers reporting vulnerabilities and the trust model.
 
 ## Building and checking
 
@@ -15,6 +15,8 @@ Use Go 1.24.2 or later, Python 3.10+ and Make.
 - `make protocol-prototype` reruns the transport comparison behind the extension protocol in its own module. It downloads its dependencies on first use, so it is not part of `make check`.
 
 Hosted CI runs the same checks on Linux and macOS.
+
+The user docs site lives in `site/` and is built with [Starlight](https://starlight.astro.build/). Run `npm ci` then `npm run dev` there to preview it; the `docs` workflow builds it on every pull request and publishes it to GitHub Pages from `main`. Its pages are checked by `make docs-check` like the README.
 
 ## Architecture
 
