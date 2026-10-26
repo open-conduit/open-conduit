@@ -710,3 +710,48 @@ var (
 	_ extension.StopExecutor   = (*claudecode.Executor)(nil)
 	_ extension.AttachExecutor = (*claudecode.Executor)(nil)
 )
+
+// TestLiveOutput: a running turn shows its activity and transcript so far,
+// in the order its artifacts will have, and is not live once it ends.
+func TestLiveOutput(t *testing.T) {
+	h := newHarness(t)
+	h.mode("wait")
+	e := h.executor()
+	cfg := map[string]any{"env": map[string]string{"FAKE_DIR": h.fake}}
+	r, _ := h.request("work/l", "exec-l", 1, cfg)
+	if _, err := e.Live(context.Background(), "exec-l", 0); !errors.Is(err, extension.ErrNotLive) {
+		t.Fatalf("live before launch: %v", err)
+	}
+	handle, err := e.Run(context.Background(), r)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, "the turn is running", func() bool { _, err := os.Stat(filepath.Join(h.fake, "pid")); return err == nil })
+	out, err := e.Live(context.Background(), "exec-l", 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(out) != 3 || out[0].Name != "activity" || out[1].Name != "transcript" || out[2].Name != "stderr" {
+		t.Fatalf("live outputs %+v", out)
+	}
+	if !strings.Contains(string(out[0].Content), "session started") || out[0].MediaType != claudecode.ActivityMediaType {
+		t.Fatalf("live activity %q", out[0].Content)
+	}
+	if !strings.Contains(string(out[1].Content), `"subtype":"init"`) || out[1].MediaType != claudecode.TranscriptMediaType || out[1].Size != int64(len(out[1].Content)) {
+		t.Fatalf("live transcript %+v", out[1])
+	}
+	tail, err := e.Live(context.Background(), "exec-l", 5)
+	if err != nil || len(tail[1].Content) != 5 || tail[1].Size != out[1].Size {
+		t.Fatalf("tailed transcript %+v %v", tail, err)
+	}
+	if err := os.WriteFile(filepath.Join(h.fake, "release"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	res := h.wait(handle)
+	if len(res.Artifacts) != 2 || res.Artifacts[0].MediaType != claudecode.ActivityMediaType || res.Artifacts[1].MediaType != claudecode.TranscriptMediaType {
+		t.Fatalf("final artifacts %+v", res.Artifacts)
+	}
+	if _, err := e.Live(context.Background(), "exec-l", 0); !errors.Is(err, extension.ErrNotLive) {
+		t.Fatalf("live after the turn: %v", err)
+	}
+}

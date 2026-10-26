@@ -38,6 +38,10 @@ var (
 	// ErrNothingToAttach means the executor has nothing to attach to yet
 	// (extension.ErrNothingToAttach).
 	ErrNothingToAttach = extension.ErrNothingToAttach
+	// ErrLiveUnsupported means the run's executor offers no live output.
+	ErrLiveUnsupported = errors.New("executor does not support live output")
+	// ErrNotLive means the run is not running (extension.ErrNotLive).
+	ErrNotLive = extension.ErrNotLive
 )
 
 type wireHold struct {

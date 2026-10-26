@@ -325,7 +325,7 @@ State lives in `~/.local/state/open-conduit` (or `$XDG_STATE_HOME/open-conduit`)
 
 - `open-conduit --help` lists every command, and `open-conduit init --help` lists every setup's flags.
 - `open-conduit doctor --check-secrets` checks connections, credentials, webhooks, bindings and the executors' CLIs, and says what to fix.
-- `open-conduit route KEY` explains how an issue's or thread's Events were routed, and `open-conduit runs log ID` shows a run's output.
+- `open-conduit route KEY` explains how an issue's or thread's Events were routed, and `open-conduit runs log ID` shows a run's output (`--follow` follows a running turn).
 - Report bugs and ask questions in [GitHub issues](https://github.com/open-conduit/open-conduit/issues). Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes.
 
 To work on Open Conduit itself, read [CONTRIBUTING.md](CONTRIBUTING.md) and [the docs index](docs/README.md).

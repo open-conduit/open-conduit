@@ -79,6 +79,7 @@ All paths below are under `/v1`. A success is `{ "data": ... }`; list data is `{
 | `GET /executions`, `/executions/{id}` | Shared attempt record, trigger/wake links, lease epoch/state (no token), outcome/usage; list accepts `scope_id`, `work_id`, `state`. Never a separate job history. |
 | `GET /waits`, `/waits/{id}` | Predicate/boundary, timer/winner link and state; list accepts `scope_id`, `work_id`, `execution_id`, `state`. |
 | `GET /runs`, `/runs/{id}` | 02-08 unified history: one record per attempt for every executor, with trigger/current trigger, executor/generation, timeout, usage, retry, retention and artifacts. List accepts `scope_id`, `work_id`, `state`, `executor_binding`, `executor`, `work_kind`, `outcome`. |
+| `GET /runs/{id}/live` | A running run's outputs so far (`tail` bytes each) from its executor's optional `LiveExecutor`; `409 not_live` once it has ended. |
 | `GET /doctor` | 02-08 checks (`ok/info/warn/fail` with safe codes): storage, leases, resource holds, retention, reconcile lag, non-re-derivable families, config, bindings, connections, pinned executors and extension checks. `check_secrets=true` explicitly resolves references and reports names and codes only. |
 | `GET /artifacts` | Metadata refs; list accepts `work_id`, `execution_id`, `kind`. |
 | `GET /artifacts/{id}/content` | Authenticated byte stream (`application/octet-stream`), one optional standard byte Range, 206/416 as appropriate. Resolve via metadata, never caller path; return 404 after retention deletion, preserve metadata/tombstone. No JSON envelope for content. |

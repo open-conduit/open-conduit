@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"sort"
 	"strconv"
+	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -148,6 +149,52 @@ func (s *Server) getRun(c *call) (int, any, error) {
 		return 0, nil, nil
 	}
 	return 200, toRun(r), nil
+}
+
+// LiveTail bounds each output GET /runs/{id}/live returns by default;
+// MaxLiveTail bounds what a caller may ask for.
+const (
+	LiveTail    = 64 << 10
+	MaxLiveTail = 4 << 20
+)
+
+// liveRun returns what a running attempt has written so far, through its
+// executor's optional extension.LiveExecutor: the same outputs, in the same
+// order, as the artifacts its result will publish.
+func (s *Server) liveRun(c *call) (int, any, error) {
+	values := c.r.URL.Query()
+	tail := int64(LiveTail)
+	for k := range values {
+		if k != "tail" {
+			return 0, nil, fail(400, "invalid_filter", "this endpoint accepts only tail")
+		}
+	}
+	if v := values.Get("tail"); v != "" {
+		n, err := strconv.ParseInt(v, 10, 64)
+		if err != nil || n <= 0 || n > MaxLiveTail {
+			return 0, nil, fail(400, "invalid_filter", "tail is a positive byte count up to "+strconv.Itoa(MaxLiveTail))
+		}
+		tail = n
+	}
+	var r runtime.Run
+	if err := s.read(c.ctx, func(tx storage.Tx) error { var e error; r, e = runtime.RunInTx(tx, domain.ID(c.params[0])); return e }); err != nil {
+		return 0, nil, err
+	}
+	if r.Execution.State != domain.ExecutionPending && r.Execution.State != domain.ExecutionRunning {
+		return 0, nil, ErrNotLive
+	}
+	if s.o.Live == nil {
+		return 0, nil, ErrLiveUnsupported
+	}
+	outputs, err := s.o.Live(c.ctx, r.Executor, r.Execution.ID, tail)
+	if err != nil {
+		return 0, nil, err
+	}
+	items := make([]map[string]any, 0, len(outputs))
+	for _, o := range outputs {
+		items = append(items, map[string]any{"name": o.Name, "media_type": o.MediaType, "size": o.Size, "content": strings.ToValidUTF8(string(o.Content), "")})
+	}
+	return 200, map[string]any{"run_id": string(r.Execution.ID), "outputs": items}, nil
 }
 
 // ---- doctor ----

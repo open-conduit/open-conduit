@@ -90,7 +90,8 @@ A manual claim is an operator Event `github.claim.requested` keyed to the entry'
 - `H` holds or releases;
 - `a` attaches, through `tea.Exec` with the same hold/release flow;
 - `x` cancels the attempt and `X` the Work, each after a y/n prompt;
-- `t` cycles a run's artifacts (log, stream-json transcript, stderr).
+- `l` opens a run's log; on a running run it shows the output so far and follows it;
+- `t` opens a run's transcript (live or final) from the list or detail, and in the log view steps to the next output (log, stream-json transcript, stderr).
 
 Detail shows the Work's correlation keys, hold, annotations and active or woken Waits as data, with no executor or domain branch. A read-only source shows none of this.
 
