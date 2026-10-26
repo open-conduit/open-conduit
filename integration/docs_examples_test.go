@@ -14,9 +14,10 @@ import (
 )
 
 // userDocs are the user-facing documents whose examples must work as
-// written: complete example configs validate offline, and every
-// open-conduit command they show exists with the flags it uses.
-var userDocs = []string{"../README.md", "../docs/README.md"}
+// written: complete example configs validate offline, every open-conduit
+// command they show exists with the flags it uses, and every make target
+// they show is in the Makefile.
+var userDocs = []string{"../README.md", "../docs/README.md", "../CONTRIBUTING.md", "../SECURITY.md"}
 
 // fencedBlocks returns the bodies of the ```lang blocks in a Markdown file.
 func fencedBlocks(t *testing.T, path, lang string) []string {
@@ -70,6 +71,8 @@ func TestDocsExampleConfigsValidate(t *testing.T) {
 
 var (
 	docCommand     = regexp.MustCompile(`^open-conduit\s+(.*)$`)
+	docMake        = regexp.MustCompile(`^(?:[A-Z][A-Z0-9_]*=\S+\s+)*make\s+([a-z][a-z0-9-]*)`)
+	makeTarget     = regexp.MustCompile(`(?m)^([a-z][a-z0-9-]*):`)
 	docFlag        = regexp.MustCompile(`(?:^|\s)(--[a-z][a-z0-9-]*)`)
 	subcommandLike = regexp.MustCompile(`^[a-z]+$`)
 )
@@ -131,5 +134,37 @@ func TestDocsCommandsExist(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no open-conduit commands found in the user docs")
+	}
+}
+
+// Every make command in the user docs' shell blocks (optionally after
+// environment assignments such as GOTOOLCHAIN=go1.24.2) names a target the
+// Makefile defines.
+func TestDocsMakeTargetsExist(t *testing.T) {
+	makefile, err := os.ReadFile("../Makefile")
+	if err != nil {
+		t.Fatal(err)
+	}
+	targets := map[string]bool{}
+	for _, m := range makeTarget.FindAllStringSubmatch(string(makefile), -1) {
+		targets[m[1]] = true
+	}
+	checked := 0
+	for _, path := range userDocs {
+		for _, block := range fencedBlocks(t, path, "sh") {
+			for _, line := range strings.Split(block, "\n") {
+				m := docMake.FindStringSubmatch(strings.TrimSpace(line))
+				if m == nil {
+					continue
+				}
+				checked++
+				if !targets[m[1]] {
+					t.Errorf("%s: %q: make target %q is not in the Makefile", filepath.Base(path), strings.TrimSpace(line), m[1])
+				}
+			}
+		}
+	}
+	if checked == 0 {
+		t.Fatal("no make commands found in the user docs")
 	}
 }

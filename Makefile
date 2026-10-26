@@ -36,8 +36,9 @@ config-deps:
 config-check:
 	$(CONFIG_PYTHON) scripts/check-config-contract.py
 
-# The README and docs index: example configs pass offline validation (what
-# config check runs) and every open-conduit command shown is in the help.
+# The README, docs index, CONTRIBUTING and SECURITY: example configs pass
+# offline validation (what config check runs), every open-conduit command
+# shown is in the help and every make target shown is in this Makefile.
 docs-check:
 	$(GO) test -count=1 -run 'TestDocs' ./integration
 
