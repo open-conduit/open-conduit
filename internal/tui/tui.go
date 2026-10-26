@@ -4,6 +4,10 @@
 // work-kind or domain branches. With Controls it also offers manual claim,
 // run/retry, hold/release, cancel and attach, and shows extension context
 // (Work annotations and Waits) as data.
+//
+// The list shows one row per Work by default, named by the Work's label
+// (its first annotation, else its first correlation key), with how many
+// turns it has had; g switches to one row per turn.
 package tui
 
 import (
@@ -57,6 +61,8 @@ type Model struct {
 	src      Source
 	interval time.Duration
 	runs     []client.Run
+	labels   map[string]string
+	perTurn  bool
 	cursor   int
 	filter   int
 	mode     mode
@@ -89,7 +95,7 @@ func New(src Source, interval time.Duration) Model {
 	if interval <= 0 {
 		interval = 2 * time.Second
 	}
-	m := Model{src: src, interval: interval, width: 120, height: 30, now: time.Now}
+	m := Model{src: src, interval: interval, width: 120, height: 30, now: time.Now, labels: map[string]string{}}
 	if ctl, ok := src.(Controls); ok {
 		m.ctl = ctl
 	}
@@ -111,6 +117,7 @@ type logMsg struct {
 	err   error
 }
 type tickMsg struct{}
+type labelsMsg map[string]string
 
 func call() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 15*time.Second)
@@ -193,13 +200,116 @@ func (m Model) fetchLog(r client.Run) tea.Cmd {
 	}
 }
 
+// fetchLabels names the listed Work not yet named. Labels don't change, so
+// each Work is looked up once; without controls the view has no Work to read.
+func (m Model) fetchLabels() tea.Cmd {
+	if m.ctl == nil {
+		return nil
+	}
+	var ids []string
+	for _, r := range m.runs {
+		if _, ok := m.labels[r.WorkID]; !ok {
+			m.labels[r.WorkID] = ""
+			ids = append(ids, r.WorkID)
+		}
+	}
+	if len(ids) == 0 {
+		return nil
+	}
+	ctl := m.ctl
+	return func() tea.Msg {
+		out := labelsMsg{}
+		for _, id := range ids {
+			ctx, cancel := call()
+			w, err := ctl.Work(ctx, id)
+			cancel()
+			if err == nil {
+				out[id] = WorkLabel(w)
+			}
+		}
+		return out
+	}
+}
+
+// WorkLabel is the human name of Work: the first annotation an extension
+// gives it, with an "owner/repo#12" reference shortened to "repo#12", else
+// its first correlation key, else its ID.
+func WorkLabel(w client.Work) string {
+	for _, a := range w.Annotations {
+		if a.Value == "" {
+			continue
+		}
+		if repo, ref, ok := strings.Cut(a.Value, "#"); ok && !strings.ContainsAny(a.Value, " :") {
+			return repo[strings.LastIndex(repo, "/")+1:] + "#" + ref
+		}
+		return a.Value
+	}
+	for _, k := range w.CorrelationKeys {
+		return k.Source + " " + k.ExternalID
+	}
+	return w.ID
+}
+
+func (m Model) label(workID string) string {
+	if l := m.labels[workID]; l != "" {
+		return l
+	}
+	return workID
+}
+
+// item is one list row: a run and its place among its Work's turns.
+type item struct {
+	run   client.Run
+	turns string
+}
+
+// items are the list rows: the latest turn of each Work with its turn count,
+// or with perTurn every turn as "k/n" of its Work (counting the runs listed).
+func (m Model) items() []item {
+	total := map[string]int{}
+	for _, r := range m.runs {
+		total[r.WorkID]++
+	}
+	seen := map[string]int{}
+	var out []item
+	for _, r := range m.runs {
+		seen[r.WorkID]++
+		n := total[r.WorkID]
+		switch {
+		case m.perTurn:
+			out = append(out, item{r, fmt.Sprintf("%d/%d", n-seen[r.WorkID]+1, n)})
+		case seen[r.WorkID] == 1:
+			out = append(out, item{r, strconv.Itoa(n)})
+		}
+	}
+	return out
+}
+
+// focus moves the cursor to the row of run id, else of its Work.
+func (m *Model) focus(id, work string) {
+	m.cursor = 0
+	items := m.items()
+	for i, it := range items {
+		if it.run.WorkID == work {
+			m.cursor = i
+			break
+		}
+	}
+	for i, it := range items {
+		if it.run.ID == id {
+			m.cursor = i
+		}
+	}
+}
+
 func (m Model) Init() tea.Cmd { return tea.Batch(m.fetch(), m.tick()) }
 
 func (m Model) selected() (client.Run, bool) {
-	if m.cursor < 0 || m.cursor >= len(m.runs) {
+	items := m.items()
+	if m.cursor < 0 || m.cursor >= len(items) {
 		return client.Run{}, false
 	}
-	return m.runs[m.cursor], true
+	return items[m.cursor].run, true
 }
 
 func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
@@ -217,16 +327,13 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		m.err = ""
-		var current string
-		if r, ok := m.selected(); ok {
-			current = r.ID
-		}
+		current, _ := m.selected()
 		m.runs = msg.runs
-		m.cursor = 0
-		for i, r := range m.runs {
-			if r.ID == current {
-				m.cursor = i
-			}
+		m.focus(current.ID, current.WorkID)
+		return m, m.fetchLabels()
+	case labelsMsg:
+		for id, l := range msg {
+			m.labels[id] = l
 		}
 	case detailMsg:
 		if msg.err != nil {
@@ -342,9 +449,13 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 				m.cursor--
 			}
 		case "down", "j":
-			if m.cursor < len(m.runs)-1 {
+			if m.cursor < len(m.items())-1 {
 				m.cursor++
 			}
+		case "g":
+			current, _ := m.selected()
+			m.perTurn = !m.perTurn
+			m.focus(current.ID, current.WorkID)
 		case "r":
 			return m, m.fetch()
 		case "f":
@@ -417,6 +528,18 @@ func (m Model) logRun() (client.Run, bool) {
 	return m.selected()
 }
 
+// listHeader prefixes the shared run columns with the Work and its turns.
+const listHeader = "WORK                     TURNS " + runview.Header
+
+// fitTail pads to n runes, or keeps the last n so an issue's number shows.
+func fitTail(s string, n int) string {
+	r := []rune(s)
+	if len(r) > n {
+		return "…" + string(r[len(r)-n+1:])
+	}
+	return runview.Fit(s, n)
+}
+
 func errText(err error) string {
 	if err == nil {
 		return ""
@@ -433,25 +556,34 @@ func (m Model) View() string {
 		if filter == "" {
 			filter = "all"
 		}
-		keys := "enter detail · l log · f filter · r refresh · q quit"
+		items := m.items()
+		view, keys := "by work", "enter detail · g every turn · l log · f filter · r refresh · q quit"
+		if m.perTurn {
+			view, keys = "every turn", "enter detail · g by work · l log · f filter · r refresh · q quit"
+		}
 		if m.ctl != nil {
 			keys += " · c claim · R run/retry · H hold · a attach · x/X cancel"
 		}
-		b.WriteString(boldS.Render("Open Conduit runs") + dimS.Render(fmt.Sprintf("  filter: %s  %d run(s)   %s", filter, len(m.runs), keys)) + "\n")
-		b.WriteString(dimS.Render(runview.Header) + "\n")
+		works := map[string]bool{}
+		for _, r := range m.runs {
+			works[r.WorkID] = true
+		}
+		b.WriteString(boldS.Render("Open Conduit runs") + dimS.Render(fmt.Sprintf("  filter: %s  %s  %d work · %d run(s)   %s", filter, view, len(works), len(m.runs), keys)) + "\n")
+		b.WriteString(dimS.Render(listHeader) + "\n")
 		visible := max(m.height-4, 1)
 		start := 0
 		if m.cursor >= visible {
 			start = m.cursor - visible + 1
 		}
-		for i := start; i < len(m.runs) && i < start+visible; i++ {
-			row := runview.Fit(runview.Row(m.runs[i], now), max(m.width, 20))
+		for i := start; i < len(items) && i < start+visible; i++ {
+			it := items[i]
+			row := runview.Fit(fitTail(m.label(it.run.WorkID), 24)+" "+runview.Fit(it.turns, 5)+" "+runview.Row(it.run, now), max(m.width, 20))
 			if i == m.cursor {
 				row = selS.Render(row)
 			}
 			b.WriteString(row + "\n")
 		}
-		if len(m.runs) == 0 {
+		if len(items) == 0 {
 			b.WriteString(dimS.Render("no runs") + "\n")
 		}
 	case detailMode:

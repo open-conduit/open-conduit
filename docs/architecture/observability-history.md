@@ -115,7 +115,7 @@ Operator commands:
 - `runs log ID` streams the run's log artifact, which is the first text artifact.
 - `open-conduit tui` opens the interactive view.
 
-The TUI is a bubbletea model over the client only. It provides a refreshing list with state filters, a detail view with trigger, timeout, usage, retry, retention, artifacts and every attempt of the Work, and a log view that tails the last 64 KiB with scrolling. Rows and details are rendered by `runview`, so shell and future agent attempts go through the same code. The `os` binary carries no terminal UI: the entrypoint injects the TUI through `cli.Env`.
+The TUI is a bubbletea model over the client only. It provides a refreshing list with state filters, a detail view with trigger, timeout, usage, retry, retention, artifacts and every attempt of the Work, and a log view that tails the last 64 KiB with scrolling. The list shows one row per Work by default: its latest turn, its turn count and its name, which is the first annotation an extension gives it (`repo#12` for a GitHub issue) or else its first correlation key. `g` switches to one row per turn, each marked as turn `k/n` of its Work. Rows and details are rendered by `runview`, so shell and future agent attempts go through the same code. The `os` binary carries no terminal UI: the entrypoint injects the TUI through `cli.Env`.
 
 ## Retention
 
