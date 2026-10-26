@@ -2,7 +2,7 @@
 
 ## Supported versions
 
-Open Conduit has not published a release yet. Until it does, security fixes go to the `main` branch only. After the first release, fixes go to the latest release and `main`. Older releases do not get backports.
+Security fixes go to the latest release and the `main` branch. Older releases do not get backports.
 
 Open Supervisor is a separate project with its own policy. Report its issues there.
 
