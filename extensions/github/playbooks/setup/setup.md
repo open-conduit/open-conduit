@@ -134,8 +134,10 @@ The connection's identity needs, on each repository: read access to issues, pull
    - webhooks or reconcile only;
    - the limits.
 4. Tell them:
-   - start it with `{{bin}} serve` (it uses `settings.webhooks` for webhooks when stored), and watch it with `{{bin}} tui` or `{{bin}} runs list`;
-   - `{{bin}} serve --dry-run` first if they'd like to watch without anything changing on GitHub: no labels, comments or hooks are written and agent turns are cheap stubs (`projection.dry_run` does the GitHub half for one entry);
+   - `{{bin}} serve --dry-run` in a terminal first if they'd like to watch without anything changing on GitHub: no labels, comments or hooks are written and agent turns are cheap stubs (`projection.dry_run` does the GitHub half for one entry);
+   - `{{bin}} serve` runs the daemon (it uses `settings.webhooks` for webhooks when stored); watch it with `{{bin}} tui` or `{{bin}} runs list`;
    - in the TUI, `c` claims an issue by hand (`scope#12`, whatever its labels), `R` runs or retries, `H` holds or releases, `a` attaches to the agent's session (new events queue until they exit), `x`/`X` cancel, and `l`/`t` show logs and transcripts. The same controls exist as commands: `{{bin}} claim`, `work retry|hold|release|attach|cancel|rebind` and `scopes reconcile`.
 
-Don't start the daemon yourself: it's long-running, and they should run it in their own terminal.
+5. End with how to run it in the background, so they don't need a terminal open: `{{bin}} service install` (with any flags they'd give `serve`; the service reads `settings.webhooks` from the config like `serve` does) installs a per-user service (launchd on macOS, systemd on Linux) that starts at login, restarts if the daemon fails, and logs to `service.log` in the state directory's `logs/`. `{{bin}} service status` (which prints the log path), `stop`, `start` and `uninstall` manage it, and `{{bin}} doctor` reports it. They rerun `service install` after changing flags or installing a tool the daemon needs.
+
+Don't start the daemon or install the service yourself: offer the commands and let them run them.

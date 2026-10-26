@@ -33,6 +33,20 @@ func defaultConfigPath(env Env) string {
 // default; --data-dir → OPEN_CONDUIT_DATA_DIR → default; --socket →
 // OPEN_CONDUIT_SOCKET → <state>/management.sock.
 func (o *operator) serve(args []string) int {
+	r, code := o.parseServe(args)
+	if code >= 0 {
+		return code
+	}
+	if o.env.Serve == nil {
+		fmt.Fprintln(o.errOut, "open-conduit: serve is not available in this binary")
+		return 1
+	}
+	return o.env.Serve(r)
+}
+
+// parseServe resolves serve's flags (shared with service install); code is
+// the exit code when they are invalid, else -1.
+func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "webhook-addr", "tunnel", "tunnel-binary", "tunnel-domain", "tunnel-name", "tunnel-hostname", "public-url")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
@@ -42,16 +56,12 @@ func (o *operator) serve(args []string) int {
 	retention := fs.fs.Duration("retention-interval", 10*time.Minute, "")
 	sweep := fs.fs.Duration("sweep-interval", 6*time.Hour, "")
 	if pos, err := fs.parse(args); err != nil || len(pos) != 0 || *poll <= 0 || *lease <= 0 || *retention <= 0 || *sweep <= 0 {
-		return usageError(o.errOut, "invalid serve flags")
+		return ServeRequest{}, usageError(o.errOut, "invalid serve flags")
 	}
 	switch fs.get("tunnel") {
 	case "", "ngrok", "cloudflared", "static":
 	default:
-		return usageError(o.errOut, "--tunnel is ngrok, cloudflared or static")
-	}
-	if o.env.Serve == nil {
-		fmt.Fprintln(o.errOut, "open-conduit: serve is not available in this binary")
-		return 1
+		return ServeRequest{}, usageError(o.errOut, "--tunnel is ngrok, cloudflared or static")
 	}
 	r := ServeRequest{StateDir: o.stateDir(), ConfigPath: o.abs(fs.get("config")), Socket: o.abs(o.socket), ToolbeltDir: o.abs(fs.get("toolbelt-dir")), LifecycleLog: o.abs(fs.get("lifecycle-log")), PollInterval: *poll, LeaseDuration: *lease, RetentionInterval: *retention, SweepInterval: *sweep,
 		WebhookAddr: fs.get("webhook-addr"), TunnelKind: fs.get("tunnel"), TunnelBinary: fs.get("tunnel-binary"), TunnelDomain: fs.get("tunnel-domain"),
@@ -65,5 +75,5 @@ func (o *operator) serve(args []string) int {
 	if r.Socket == "" {
 		r.Socket = o.abs(o.env.Getenv("OPEN_CONDUIT_SOCKET"))
 	}
-	return o.env.Serve(r)
+	return r, -1
 }

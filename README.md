@@ -22,7 +22,7 @@ Open Conduit succeeds [Open Supervisor](https://github.com/alsiola/open-supervis
 brew install open-conduit/tap/open-conduit
 ```
 
-The cask puts only `open-conduit` on your PATH. `os` stays beside it in the cask's own directory, where the daemon finds it, so it can't clash with another command of that name. Open Supervisor's `open-supervisor` cask installs side by side.
+The cask puts only `open-conduit` on your PATH, and `open-conduit service install` runs it in the background (see [Run it in the background](#run-it-in-the-background)); uninstalling the cask removes that service. `os` stays beside it in the cask's own directory, where the daemon finds it, so it can't clash with another command of that name. Open Supervisor's `open-supervisor` cask installs side by side.
 
 **Release binaries**: archives for macOS and Linux, on amd64 and arm64, are on the [releases page](https://github.com/open-conduit/open-conduit/releases) as `open-conduit_<version>_<os>_<arch>.tar.gz`, with a `checksums.txt`. Each holds `open-conduit` and `os`. Keep them in the same directory. The install script downloads the latest one, verifies its checksum against `checksums.txt`, puts both binaries in `~/.local/lib/open-conduit` and links `open-conduit` into `~/.local/bin`:
 
@@ -63,15 +63,12 @@ open-conduit init                                    # list the available setups
 open-conduit init github --repo acme/web --checkout ~/Code/web
 open-conduit init slack                              # creates the Slack app, asks for its tokens, picks a channel
 open-conduit config check                            # validate the config offline
-open-conduit serve                                   # run the daemon (leave it running)
-```
-
-In another terminal:
-
-```sh
+open-conduit service install                         # run the daemon in the background
 open-conduit doctor --check-secrets                  # every connection, credential and binding
 open-conduit tui                                     # watch and control runs
 ```
+
+`open-conduit serve` runs the same daemon in the foreground instead, for trying a setup out (`serve --dry-run`) or watching its output.
 
 - `init TYPE` adds one scope to the config (`open-conduit config path` shows where it lives) and never replaces an existing scope without `--force`. `--dry-run` prints the result instead of saving it, and `open-conduit init --help` lists every setup's flags. `init --with claude` instead starts Claude Code with a setup guide that walks you through the same steps.
 - The config never holds a credential, only a reference to one: `env:NAME`, `file:NAME`, `keyring:NAME` or `cmd:COMMAND`. By default GitHub uses `cmd:gh auth token`. To store a token instead, enter it with `secret set` (it is read from stdin, never shown) and point the connection at the reference it prints:
@@ -85,6 +82,23 @@ open-conduit tui                                     # watch and control runs
 - `serve --dry-run` makes no external writes and runs agents as cheap stubs, which is a safe way to watch a new setup. Storing a listener and tunnel in the config's `settings.webhooks` (for example `{"addr": "127.0.0.1:8787", "tunnel": "ngrok"}`) adds webhooks for lower latency; 8787 is only an example, and any free local port works. `serve --webhook-addr … --tunnel …` overrides it for one run. Without webhooks the daemon reconciles on an interval, so nothing is lost.
 - The TUI lists one row per issue or thread, with its latest turn and how many turns it has had; `g` lists every turn and `enter` shows one with all of its Work's turns.
 - In the TUI, `c` claims an issue by hand, `R` runs or retries, `H` holds or releases, `a` attaches to the agent's session, and `x`/`X` cancel a run or its Work. The same controls exist on the command line: `claim`, `work retry|hold|release|attach|cancel`, `runs list`, `runs log ID` and `events chain ID`.
+
+## Run it in the background
+
+`service install` runs the daemon as a per-user service: a launchd LaunchAgent on macOS, a systemd user unit on Linux. It starts at login, restarts if the daemon exits with an error, and runs in your session, so the OS keyring and your `gh` and Claude Code logins work as they do in a terminal.
+
+```sh
+open-conduit service install                         # takes serve's flags
+open-conduit service status
+open-conduit service stop                            # until the next start or login
+open-conduit service start
+open-conduit service uninstall
+```
+
+- `install` records the config path, the state directory, the `serve` flags you give it (webhooks come from the config's `settings.webhooks`, as with `serve`) and a PATH built from your shell's PATH and wherever `claude`, `git`, `gh` and the tunnel binary are. It warns about any it can't find. Run it again after changing flags or installing a tool the daemon needs (a repository's toolchain, say): it replaces the unit and restarts the daemon.
+- Output goes to `~/.local/state/open-conduit/logs/service.log` (under `--data-dir` if you give one). `open-conduit doctor` reports whether the service is installed and running.
+- The unit lives at `~/Library/LaunchAgents/com.open-conduit.daemon.plist` or `~/.config/systemd/user/open-conduit.service`. On Linux a user unit runs only while you're logged in unless you run `loginctl enable-linger`; without a desktop session the keyring may be locked, so prefer `file:` or `cmd:` secret references there.
+- Stop the service before `backup create` or `state check`, which need the daemon stopped.
 
 ## Workflows
 
