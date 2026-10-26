@@ -39,15 +39,22 @@ make drill                # the daemon kill and restart drills on their own
 make certify              # builds the extension packages and certifies them, plus the negative controls
 make protocol-prototype   # the extension transport comparison; downloads its own modules on first run
 make docs-check           # only the docs example checks
+make release-snapshot     # a local release build with GoReleaser (below); publishes nothing
 ```
 
 `make protocol-prototype` lives in its own Go module under `prototypes/transport`, so its dependencies never enter `go.mod`. It needs the network the first time, which is why it isn't part of `make check`.
 
 ## Commits and pull requests
 
-Use [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`, for example `feat(slack): …` or `fix(runtime): …`. The history uses `feat`, `fix`, `docs`, `test` and `build`; `refactor` and `chore` are fine too. The scope is usually the package or area, such as `runtime`, `github`, `workspaces` or `readme`. Nothing enforces this yet, but please follow it.
+Use [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`, for example `feat(slack): …` or `fix(runtime): …`. The history uses `feat`, `fix`, `docs`, `test` and `build`; `refactor` and `chore` are fine too. The scope is usually the package or area, such as `runtime`, `github`, `workspaces` or `readme`. The commitlint workflow checks every pull request's title and commits, because the release workflow reads them to pick the next version.
 
 Keep each commit to one change, and run `make check` before you push. If a change alters behavior that an architecture document describes, update that document in the same change. If it changes a README example or command, `make docs-check` tells you when the docs and the code disagree.
+
+## Releases
+
+Releases are cut by hand from the release workflow (Actions, release, Run workflow) on `main`. It runs `make check` and `make release-snapshot`, then semantic-release picks the next version from the Conventional Commits since the last tag, writes `CHANGELOG.md`, tags it, and GoReleaser publishes the GitHub release: `open-conduit` and `os` for macOS and Linux on amd64 and arm64, with `checksums.txt`. With no `feat`, `fix` or breaking commit since the last tag, nothing is released. The Homebrew cask in `open-conduit/homebrew-tap` is updated only when the `HOMEBREW_TAP_TOKEN` secret is set. Run the workflow with `dry_run` to see the next version and its notes.
+
+`make release-snapshot` runs the same GoReleaser build locally with `--snapshot` (CI runs it on every pull request). It needs `goreleaser` v2 on your PATH. It writes every archive, the checksums and the cask into `dist/release`, then smoke-tests this machine's archive and checks the version the binaries report.
 
 ## Package boundaries
 

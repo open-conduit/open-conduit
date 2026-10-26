@@ -156,12 +156,37 @@ type daemon struct {
 	nudge    chan struct{}
 }
 
+// toolbeltBeside finds the directory holding the `os` toolbelt next to the
+// executable at self. A link to the executable (Homebrew links only
+// open-conduit onto PATH, and the install script does the same) is resolved
+// first, so the toolbelt is found in the real install directory, never an
+// unrelated `os` that happens to sit beside the link. It returns "" when
+// neither directory has one; the executors then run without a toolbelt.
+func toolbeltBeside(self string) string {
+	dirs := []string{}
+	if real, err := filepath.EvalSymlinks(self); err == nil {
+		dirs = append(dirs, filepath.Dir(real))
+	}
+	dirs = append(dirs, filepath.Dir(self))
+	for _, dir := range dirs {
+		if info, err := os.Stat(filepath.Join(dir, "os")); err == nil && info.Mode().IsRegular() {
+			return dir
+		}
+	}
+	return ""
+}
+
 func (o *Options) defaults() error {
 	if !filepath.IsAbs(o.StateDir) || !filepath.IsAbs(o.ConfigPath) {
 		return errors.New("state and config paths must be absolute")
 	}
 	if o.Socket == "" {
 		o.Socket = filepath.Join(o.StateDir, "management.sock")
+	}
+	if o.ToolbeltDir == "" {
+		if self, err := os.Executable(); err == nil {
+			o.ToolbeltDir = toolbeltBeside(self)
+		}
 	}
 	if o.LifecycleLog == "" {
 		o.LifecycleLog = filepath.Join(o.StateDir, "logs", "lifecycle.jsonl")

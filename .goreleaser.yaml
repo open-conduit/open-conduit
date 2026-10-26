@@ -1,0 +1,89 @@
+# Release builds. The release workflow (.github/workflows/release.yml, run by
+# hand) has semantic-release tag the next version, then runs this with the
+# notes it wrote. `make release-snapshot` runs it locally (and CI on pull
+# requests) with --snapshot, which builds everything and publishes nothing.
+version: 2
+project_name: open-conduit
+# dist/ also holds `make cross-build` and `make packages` output; --clean
+# removes only this directory.
+dist: dist/release
+
+before:
+  hooks:
+    - go mod tidy -diff
+
+builds:
+  - id: open-conduit
+    main: ./cmd/open-conduit
+    binary: open-conduit
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}}
+  # The toolbelt that runs call. It lives beside open-conduit, which finds it
+  # there (through a symlink too); it is never put on PATH by the cask.
+  - id: os
+    main: ./cmd/os
+    binary: os
+    env: [CGO_ENABLED=0]
+    goos: [darwin, linux]
+    goarch: [amd64, arm64]
+    flags: [-trimpath]
+    ldflags:
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}}
+
+archives:
+  - ids: [open-conduit, os]
+    formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files: [README.md, SECURITY.md, docs/**/*]
+
+checksum:
+  name_template: checksums.txt
+
+snapshot:
+  version_template: "{{ incpatch .Version }}-snapshot.{{ .ShortCommit }}"
+
+# semantic-release writes the notes from the Conventional Commits and passes
+# them in with --release-notes.
+changelog:
+  disable: true
+
+release:
+  github:
+    owner: open-conduit
+    name: open-conduit
+
+# `brew install open-conduit/tap/open-conduit`. Needs the repo
+# open-conduit/homebrew-tap and a HOMEBREW_TAP_TOKEN secret that can push to
+# it; without the secret this step is skipped and the release goes ahead.
+# Only open-conduit is linked onto PATH: `os` is a generic name, so it stays
+# in the cask's own directory beside open-conduit, which resolves its link to
+# find it. Nothing here touches Open Supervisor's cask (open-supervisor in
+# alsiola/homebrew-tap), its binary or its config and state directories.
+# The project is unlicensed, so the cask states no license.
+homebrew_casks:
+  - name: open-conduit
+    ids: [default]
+    binaries: [open-conduit]
+    skip_upload: '{{ if index .Env "HOMEBREW_TAP_TOKEN" }}false{{ else }}true{{ end }}'
+    repository:
+      owner: open-conduit
+      name: homebrew-tap
+      token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+    homepage: https://github.com/open-conduit/open-conduit
+    description: Runs coding and support agents against GitHub issues, Slack threads and schedules from one local daemon
+    # The binaries aren't notarized, so the quarantine flag comes off after
+    # install. Written as postflight_steps rather than through hooks, which
+    # GoReleaser renders as the `postflight` block Homebrew deprecates.
+    custom_block: |
+      postflight_steps do
+        on_macos do
+          run "/usr/bin/xattr",
+              args:           ["-dr", "com.apple.quarantine", "open-conduit", "os"],
+              chdir:          ".",
+              writable_paths: ["open-conduit", "os"]
+        end
+      end

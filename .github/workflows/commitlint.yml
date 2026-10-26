@@ -1,0 +1,31 @@
+# Holds a PR to Conventional Commits, which the release workflow reads to pick
+# the next version. A squash merge lands as the commit's own message when the
+# PR has one commit and as the PR title when it has more; a rebase or merge
+# commit keeps every commit. Linting the title and every commit covers all
+# three.
+name: commitlint
+on:
+  pull_request:
+    types: [opened, edited, synchronize, reopened]
+permissions:
+  contents: read
+jobs:
+  commitlint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --no-save --no-package-lock --no-audit --no-fund @commitlint/cli@21 @commitlint/config-conventional@21
+      - name: PR title
+        run: printf '%s\n' "$TITLE" | npx commitlint --verbose
+        env:
+          TITLE: ${{ github.event.pull_request.title }}
+      - name: Commits
+        run: npx commitlint --verbose --from "$BASE" --to "$HEAD"
+        env:
+          BASE: ${{ github.event.pull_request.base.sha }}
+          HEAD: ${{ github.event.pull_request.head.sha }}

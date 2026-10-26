@@ -156,6 +156,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 	global.StringVar(&o.tokenFile, "token-file", "", "")
 	global.StringVar(&o.socket, "socket", "", "")
 	global.StringVar(&o.dataDir, "data-dir", "", "")
+	showVersion := global.Bool("version", false, "")
 	if err := global.Parse(args); errors.Is(err, flag.ErrHelp) {
 		fmt.Fprint(out, operatorHelp)
 		return 0
@@ -163,11 +164,14 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		return usageError(errOut, "invalid global flag")
 	}
 	rest := global.Args()
+	if *showVersion && len(rest) == 0 {
+		rest = []string{"version"}
+	}
 	if len(rest) == 0 || rest[0] == "help" || rest[0] == "--help" || rest[0] == "-h" {
 		fmt.Fprint(out, operatorHelp)
 		return 0
 	}
-	if rest[0] == "version" || rest[0] == "--version" {
+	if *showVersion || rest[0] == "version" || rest[0] == "--version" {
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}

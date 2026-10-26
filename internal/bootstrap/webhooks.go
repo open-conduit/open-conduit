@@ -21,12 +21,19 @@ import (
 // Webhook exposure (03-05). Webhooks are an accelerator: reconcile always
 // runs, so without a listener the daemon is reconcile-only and loses only
 // latency. When enabled, a separate HTTP server on its own TCP address
-// serves exactly one route per registered GitHub entry that names a
-// webhook_secret (POST /github/<scope>/<entry>) and per Slack entry that
-// names a signing_secret (POST /slack/<scope>/<entry>, 04-01). It never mounts /v1, never
-// sees management credentials and never forwards to the management socket.
-// An optional tunnel (ngrok, cloudflared or a static URL) exposes only that
-// listener; entries with manage_webhook point the repository webhook at it.
+// serves only the routes registered entries name, each verified by its own
+// adapter before anything is accepted:
+//   - POST /github/<scope>/<entry> for a GitHub entry with a webhook_secret;
+//   - POST /slack/<scope>/<entry> for a Slack entry with receiver http (04-01);
+//   - POST /linear|jira|bitbucket/<scope>/<entry> for tracker and code-host
+//     entries (06-01);
+//   - POST /schedule/<scope>/<entry>/<job>/<token>, a schedule job's signed
+//     URL (05-01);
+//   - the paths an installed extension package registers at configure (07-02, 07-03).
+// Anything else is 404. It never mounts /v1, never sees management
+// credentials and never forwards to the management socket. An optional
+// tunnel (ngrok, cloudflared or a static URL) exposes only that listener;
+// entries with manage_webhook point the service's webhook at it.
 
 // TunnelOptions select webhook exposure.
 type TunnelOptions struct {
@@ -141,7 +148,7 @@ func (d *daemon) webhookSecret(src *githubSource) func(context.Context) (string,
 	}
 }
 
-// webhookHandler serves only registered GitHub entry routes.
+// webhookHandler serves only the registered routes listed above.
 func (d *daemon) webhookHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")

@@ -5,7 +5,7 @@ VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short HEAD)
 LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
-.PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check check cross-build smoke drill protocol-prototype packages certify
+.PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check check cross-build smoke smoke-run drill protocol-prototype packages certify release-snapshot
 
 build:
 	$(GO) build ./...
@@ -44,13 +44,20 @@ docs-check:
 
 check: fmt-check vet test boundaries config-check docs-check build smoke
 
-smoke: build
-	bin/open-conduit --help
-	bin/open-conduit version
-	bin/os --help
-	bin/os version
-	@bin/open-conduit run >/dev/null 2>&1; result=$$?; test $$result -eq 2
-	@bin/os emit >/dev/null 2>&1; result=$$?; test $$result -eq 2
+smoke: build smoke-run
+
+# The smoke tests over the binaries in SMOKE_BIN (release-snapshot points it
+# at an extracted release archive).
+SMOKE_BIN ?= bin
+smoke-run:
+	$(SMOKE_BIN)/open-conduit --help
+	$(SMOKE_BIN)/open-conduit version
+	$(SMOKE_BIN)/open-conduit --version
+	$(SMOKE_BIN)/os --help
+	$(SMOKE_BIN)/os version
+	$(SMOKE_BIN)/os --version
+	@$(SMOKE_BIN)/open-conduit run >/dev/null 2>&1; result=$$?; test $$result -eq 2
+	@$(SMOKE_BIN)/os emit >/dev/null 2>&1; result=$$?; test $$result -eq 2
 
 # Build evidence only; cross compilation is not runtime/platform verification.
 cross-build:
@@ -97,3 +104,29 @@ certify: build packages
 		bin/open-conduit extension certify $(PACKAGES_DIR)/$$name --report $(PACKAGES_DIR)/$$name.certification.json; \
 	done
 	$(GO) test -count=1 -v -run 'TestCertification' ./integration
+
+# 09-03 release packaging without publishing: GoReleaser --snapshot builds
+# every platform's archive, the checksums and the Homebrew cask into
+# dist/release (.goreleaser.yaml). Then this host's archive is extracted and
+# smoke-tested, its binaries must report the snapshot version, and the cask
+# must link only open-conduit and state no license. CI runs it on pull
+# requests; the release workflow runs it before publishing.
+GORELEASER ?= goreleaser
+RELEASE_DIR = dist/release
+release-snapshot:
+	$(GORELEASER) release --snapshot --clean
+	@set -eu; host=$$($(GO) env GOOS)_$$($(GO) env GOARCH); \
+		test $$(ls $(RELEASE_DIR)/open-conduit_*.tar.gz | wc -l) -eq 4; \
+		test $$(wc -l < $(RELEASE_DIR)/checksums.txt) -eq 4; \
+		(cd $(RELEASE_DIR) && if command -v sha256sum >/dev/null 2>&1; then sha256sum -c checksums.txt; else shasum -a 256 -c checksums.txt; fi); \
+		archive=$$(ls $(RELEASE_DIR)/open-conduit_*_$$host.tar.gz); \
+		version=$$(basename $$archive .tar.gz); version=$${version#open-conduit_}; version=$${version%_$$host}; \
+		rm -rf $(RELEASE_DIR)/smoke; mkdir -p $(RELEASE_DIR)/smoke; tar -xzf $$archive -C $(RELEASE_DIR)/smoke; \
+		$(RELEASE_DIR)/smoke/open-conduit --version | grep -q "^open-conduit $$version "; \
+		$(RELEASE_DIR)/smoke/os --version | grep -q "^os $$version "; \
+		cask=$(RELEASE_DIR)/homebrew/Casks/open-conduit.rb; \
+		grep -q '^  binary "open-conduit"$$' $$cask; \
+		test $$(grep -c '^  binary ' $$cask) -eq 1; \
+		! grep -qi 'license' $$cask; \
+		echo "snapshot $$version: 4 archives, checksums verified, cask links open-conduit only"
+	$(MAKE) --no-print-directory smoke-run SMOKE_BIN=$(RELEASE_DIR)/smoke

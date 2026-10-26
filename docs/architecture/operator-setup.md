@@ -98,8 +98,15 @@ Detail shows the Work's correlation keys, hold, annotations and active or woken 
 
 Webhooks are an accelerator: reconcile always runs, so with no listener the daemon is **reconcile-only** and loses only latency (`settings.reconcile_seconds`, default 15 minutes). `serve --no-tunnel` forces this.
 
-- **Listener.** `serve --webhook-addr HOST:PORT` binds a separate HTTP server on its own TCP address. It serves exactly one route per registered GitHub entry that names a `webhook_secret`: `POST /github/<scope>/<entry>`. Anything else is 404, including `/v1/...`. It never sees management credentials and never forwards to the Unix socket.
-  - Each request resolves the entry's scope secret from the current generation and is verified by `github.WebhookHandler` (HMAC before parsing, 401 on a bad signature).
+- **Listener.** `serve --webhook-addr HOST:PORT` binds a separate HTTP server on its own TCP address. It serves only the routes that registered entries name:
+  - `POST /github/<scope>/<entry>` for each GitHub entry that names a `webhook_secret`;
+  - `POST /slack/<scope>/<entry>` for each Slack entry with `receiver: http` ([Slack extension](slack-extension.md));
+  - `POST /linear/…`, `POST /jira/…` and `POST /bitbucket/<scope>/<entry>` for tracker and code-host entries ([installed integrations](installed-integrations.md));
+  - `POST /schedule/<scope>/<entry>/<job>/<token>`, a schedule job's signed URL ([scheduled jobs](schedule-extension.md));
+  - the paths an installed extension package registers when it is configured ([extension packaging](extension-packaging.md)).
+
+  Anything else is 404, including `/v1/...`. It never sees management credentials and never forwards to the Unix socket.
+  - Each request is verified by its entry's adapter against the entry's secret from the current generation before anything is parsed or accepted. For GitHub that is `github.WebhookHandler` (HMAC before parsing, 401 on a bad signature).
   - A delivery is pushed with `Ingress.Push`, and 202 is returned only after durable acceptance. A refusal is 503: GitHub may redeliver, and reconcile recovers the state either way.
 - **Tunnel.** `extensions/tunnel` ports v1's providers: `ngrok` (`--tunnel-domain` for a reserved domain), `cloudflared` (a quick tunnel, or `--tunnel-name` with `--tunnel-hostname`) and `static` (`--public-url`, for a reverse proxy or Tailscale Funnel).
   - A provider process that exits is restarted with a growing wait (5 seconds, doubling to 5 minutes), and each public URL it reports is passed to the host.

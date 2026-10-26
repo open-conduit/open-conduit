@@ -22,7 +22,13 @@ Open Conduit succeeds [Open Supervisor](https://github.com/alsiola/open-supervis
 brew install open-conduit/tap/open-conduit
 ```
 
-**Release binaries** (coming with the first release): archives for macOS and Linux, on amd64 and arm64, will be published on the [releases page](https://github.com/open-conduit/open-conduit/releases). Each holds `open-conduit` and `os`. Keep them in the same directory.
+The cask puts only `open-conduit` on your PATH. `os` stays beside it in the cask's own directory, where the daemon finds it, so it can't clash with another command of that name. Open Supervisor's `open-supervisor` cask installs side by side.
+
+**Release binaries** (coming with the first release): archives for macOS and Linux, on amd64 and arm64, will be published on the [releases page](https://github.com/open-conduit/open-conduit/releases) with a `checksums.txt`. Each holds `open-conduit` and `os`. Keep them in the same directory. The install script downloads the latest one, verifies its checksum, puts both binaries in `~/.local/lib/open-conduit` and links `open-conduit` into `~/.local/bin`:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/open-conduit/open-conduit/main/install.sh | sh
+```
 
 **From source** (works today). You need Go 1.24.2 or later, Git and Make:
 

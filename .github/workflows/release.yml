@@ -1,0 +1,53 @@
+# Cuts a release by hand: Actions → release → Run workflow. semantic-release
+# reads the Conventional Commits since the last tag to pick the next version,
+# writes CHANGELOG.md, commits and tags it on main, then hands the tag to
+# GoReleaser (.goreleaser.yaml), which builds every platform, publishes the
+# GitHub release with the same notes and, when the HOMEBREW_TAP_TOKEN secret
+# is set, updates the open-conduit/homebrew-tap cask. With no feat, fix or
+# breaking commit since the last tag, it releases nothing. The full checks
+# run first, on the exact commit being released.
+name: release
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Only print the next version and its notes
+        type: boolean
+        default: false
+permissions:
+  contents: write
+concurrency: release
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          install-only: true
+      - run: make config-deps
+      - run: make check
+      - run: make release-snapshot
+      - run: >-
+          npm install --no-save --no-package-lock --no-audit --no-fund
+          semantic-release@25
+          @semantic-release/changelog@7
+          @semantic-release/git@11
+          @semantic-release/exec@7
+          conventional-changelog-conventionalcommits@9
+      - run: npx semantic-release ${{ inputs.dry_run && '--dry-run' || '' }}
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}

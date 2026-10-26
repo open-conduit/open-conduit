@@ -6,6 +6,9 @@ on:
 permissions:
   contents: read
 jobs:
+  # make check includes docs-check and the daemon drills (they are part of
+  # test); drill and certify also run on their own so their evidence shows
+  # as separate steps. 1.24.2 is the go.mod minimum.
   check:
     strategy:
       fail-fast: false
@@ -24,5 +27,33 @@ jobs:
           python-version: '3.12'
       - run: make config-deps
       - run: make check
+      - run: make drill
+      - run: make certify
       - run: make cross-build
         if: matrix.os == 'ubuntu-latest' && matrix.go == 'stable'
+  # Packaging breaks show up here, before anyone tags: every platform's
+  # archive, the checksums and the Homebrew cask, built and smoke-tested
+  # without publishing anything.
+  release-snapshot:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+          cache: true
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          version: "~> v2"
+          install-only: true
+      - run: make release-snapshot
+  workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: stable
+      - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
