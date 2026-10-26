@@ -154,3 +154,105 @@ func TestManagementOperatorControls(t *testing.T) {
 		t.Fatalf("stale reconcile: %s", errOut)
 	}
 }
+
+// blockingIngress holds its next Reconcile call until released, so a test can
+// commit an operator request while a page is in flight.
+type blockingIngress struct {
+	reference.Ingress
+	entered, release chan struct{}
+}
+
+func (b *blockingIngress) Reconcile(ctx context.Context, s extension.Scan) (extension.Snapshot, error) {
+	if b.entered != nil {
+		b.entered <- struct{}{}
+		<-b.release
+	}
+	return b.Ingress.Reconcile(ctx, s)
+}
+
+// TestScopeReconcileDuringScanRunsAgain (05-04 regression): an operator
+// scope reconcile that commits while a generation is under way (a page in
+// flight, or between the pages of a multi-page generation) must not be
+// absorbed by it. The generation may predate the request, so its completion
+// leaves the source due instead of a full interval away; a generation that
+// starts after the request completes normally.
+func TestScopeReconcileDuringScanRunsAgain(t *testing.T) {
+	h := newManagementHarness(t)
+	ctx := context.Background()
+	in, err := runtime.NewIngress(h.store, h.clock.Now, runtime.IngressOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	adapter := &blockingIngress{Ingress: reference.Ingress{Declaration: extension.IngressSpec{Families: []extension.EventFamily{{Type: "fixture.changed", ReDerivable: true}}},
+		Pages: map[string]extension.Snapshot{
+			"":      {ScanID: "g", NextCursor: "page2", Checkpoint: "p1"},
+			"page2": {ScanID: "g", Complete: true, Checkpoint: "c1"},
+		}}}
+	if err = in.Register(ctx, "fixture/ops", extension.Source{Namespace: "fixture/ops", ScopeID: "ops"}, adapter, time.Hour); err != nil {
+		t.Fatal(err)
+	}
+	due := func() bool {
+		statuses, err := in.Inspect(ctx)
+		if err != nil || len(statuses) != 1 {
+			t.Fatalf("inspect: %+v %v", statuses, err)
+		}
+		return !statuses[0].NextDue.After(h.clock.Now())
+	}
+	scan := func() runtime.ReconcileResult {
+		t.Helper()
+		results, err := in.ReconcileDue(ctx, 1)
+		if err != nil || len(results) != 1 {
+			t.Fatalf("scan: %+v %v", results, err)
+		}
+		return results[0]
+	}
+	request := func(key string) {
+		t.Helper()
+		var res client.ReconcileResult
+		h.mustCLI(&res, "scopes", "reconcile", "ops", "--key", key)
+		if len(res.Sources) != 1 {
+			t.Fatalf("reconcile: %+v", res)
+		}
+	}
+
+	// A request between the pages of a generation.
+	if r := scan(); r.Complete {
+		t.Fatalf("first page completed: %+v", r)
+	}
+	request("between-pages")
+	if r := scan(); !r.Complete {
+		t.Fatalf("second page: %+v", r)
+	}
+	if !due() {
+		t.Fatal("a request during a generation was absorbed by it")
+	}
+	// The next generation starts after the request and completes normally.
+	scan()
+	scan()
+	if due() {
+		t.Fatal("a generation after the request left the source due")
+	}
+
+	// A request while the first page's call is in flight.
+	h.clock.Advance(time.Hour)
+	adapter.entered, adapter.release = make(chan struct{}), make(chan struct{})
+	done := make(chan runtime.ReconcileResult)
+	go func() {
+		results, _ := in.ReconcileDue(ctx, 1)
+		if len(results) == 1 {
+			done <- results[0]
+		}
+		close(done)
+	}()
+	<-adapter.entered
+	adapter.entered = nil
+	request("in-flight")
+	close(adapter.release)
+	<-done
+	if r := scan(); !r.Complete {
+		t.Fatalf("second page: %+v", r)
+	}
+	if !due() {
+		t.Fatal("a request during an in-flight page was absorbed by the generation")
+	}
+}

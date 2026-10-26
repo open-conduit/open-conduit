@@ -87,6 +87,12 @@ type ingressState struct {
 	Failures                                   uint32
 	LastError                                  string
 	LastComplete                               time.Time
+	// Requests counts operator reconcile requests; GenerationRequests is its
+	// value when the current generation's first page was claimed. A request
+	// that arrives after that claim (a page in flight, or a generation part
+	// way through its pages) may not be reflected in the generation, so its
+	// completion leaves the source due instead of waiting a full interval.
+	Requests, GenerationRequests uint64
 }
 
 func (i *Ingress) Register(ctx context.Context, name string, source extension.Source, adapter extension.Ingress, interval time.Duration) error {

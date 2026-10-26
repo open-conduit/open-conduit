@@ -124,6 +124,9 @@ func (i *Ingress) reconcile(ctx context.Context, name string, onlyDue bool) (res
 		}
 		claimed.LeaseToken = token
 		claimed.LeaseUntil = now.Add(i.options.ScanLease)
+		if claimed.ScanID == "" {
+			claimed.GenerationRequests = claimed.Requests
+		}
 		return putJSON(tx, ns, "state", claimed)
 	})
 	if err != nil {
@@ -226,6 +229,10 @@ func (i *Ingress) reconcile(ctx context.Context, name string, onlyDue bool) (res
 			state.Checkpoint = page.Checkpoint
 			state.LastComplete = now
 			state.NextDue = now.Add(r.interval)
+			if state.Requests != state.GenerationRequests {
+				// An operator request arrived during this generation.
+				state.NextDue = now
+			}
 			state.ScanID = ""
 			state.Cursor = ""
 			state.PageCheckpoint = ""

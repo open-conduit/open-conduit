@@ -17,7 +17,8 @@ const (
 	// example a scope's main checkout). It is never reset on a user's behalf.
 	ResourceShared = "shared"
 	// ResourceWork is private to one Work and reused by each of its attempts
-	// until the Work is terminal (for example an issue branch worktree).
+	// until the Work is terminal (for example a directory that keeps a Work's
+	// local changes between attempts).
 	ResourceWork = "work"
 	// ResourceFresh is private to one execution, created for it and cleaned up
 	// after it finishes (kept for inspection after a failure).

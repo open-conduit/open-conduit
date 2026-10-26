@@ -45,7 +45,7 @@ type SetupHost interface {
 	OpenURL(url string) error
 	// StoreSecret stores a value through the host's secret store (keyring,
 	// else the owner-only secrets file) and returns its reference, for
-	// example "keyring:slack-bot-token". In a dry run it stores nothing and
+	// example "keyring:bot-token". In a dry run it stores nothing and
 	// returns the reference it would use.
 	StoreSecret(name, value string) (string, error)
 	// LookPath reports whether an executable is on PATH.

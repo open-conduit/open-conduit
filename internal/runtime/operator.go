@@ -256,7 +256,9 @@ func (c *Control) ReleaseWork(ctx context.Context, workID domain.ID, expected do
 // RequestReconcile accepts an operator core.manual.reconcile Event in the
 // scope and makes every ingress source registered for that scope due now.
 // The scan itself is the normal asynchronous reconcile; the returned source
-// names are those made due.
+// names are those made due. A generation already under way when the request
+// commits completes and leaves the source due, so a fresh generation always
+// starts after the request.
 func (c *Control) RequestReconcile(ctx context.Context, scopeID domain.ID, expected domain.Revision, key string) (event domain.ID, sources []string, err error) {
 	if !validDelivery(key) || scopeID == "" {
 		return "", nil, storage.ErrInvalid
@@ -316,11 +318,15 @@ func (c *Control) RequestReconcile(ctx context.Context, scopeID domain.ID, expec
 			return e
 		}
 		for _, state := range states {
+			// Counting the request lets a scan already under way finish and
+			// then run again, so the request sees state at least as new as
+			// itself.
+			state.Requests++
 			if state.NextDue.After(now) {
 				state.NextDue = now
-				if e = putJSON(tx, sourceNamespace(state.Source), "state", state); e != nil {
-					return e
-				}
+			}
+			if e = putJSON(tx, sourceNamespace(state.Source), "state", state); e != nil {
+				return e
 			}
 		}
 		return nil

@@ -108,3 +108,31 @@ When the test binary is race-enabled, as under `make check`, the daemon is also 
 - **Unenforced settings.** `settings.admission_limit` is validated but not enforced, and per-scope `ScopeLimits` are not configurable. `reconcile_seconds` applies only to ingress registrations, and none are loaded in stage 02.
 - **Telemetry redaction.** The pipeline redacts sensitive attribute keys. Resolved secret values are not fed to `Options.Secrets`, because lifecycle records never carry executor environment or payloads.
 - **Platforms.** Drills ran on macOS (darwin/arm64, host Go and Go 1.24.2, race-enabled) and in a Linux arm64 `golang:1.24.2` container (not race-enabled). Other targets are cross-built only. No hosted CI or Windows run is claimed.
+
+## All four workflows on one daemon (05-04)
+
+The stage 05 gate reruns the composed daemon with every workload at once. [`TestDaemonAllWorkflows`](../../integration/daemon_all_workflows_test.go) (in `make drill`) starts one `serve` process on three scopes, with fakes only: the GitHub and Slack fakes, a fake Claude Code CLI, and shell and legacy-job executors calling the real `os` toolbelt.
+
+| Scope | Workflow | Executors |
+| --- | --- | --- |
+| `eng` | A: the GitHub route claims an issue; the agent reports a defect and parks on the issue. D: a report-about-a-report loop on the report binding; the extension's triage timer; fix Work that parks on a timeout and then resolves the reports | shell |
+| `support` | B: a workspace-free Slack conversation that replies and parks on the thread | claude-code (fake) |
+| `ops` | C: an interval job that reads its context and parks on a timeout, plus a manual legacy job | shell, legacy-job |
+
+The drill checks the following, in order:
+
+1. **Crash at a boundary during mixed startup.** The daemon is SIGKILLed right after the interval job's slot fire (and rearm) commits, while the GitHub and Slack registrations come up. After a restart, the job runs exactly once.
+2. **Concurrent progress.** A parks, B replies and parks, C's timeout wakes its next attempt, and the core depth limit (`causal_max_depth` 5) stops the report loop without the extension's cooperation.
+3. **External SIGKILL mid-wait.** A and B keep their Work and stay waiting across the restart.
+4. **Webhooks off.** The human comment and the thread reply are never pushed. An operator scope reconcile, standing in for the next poll, finds both. A's next attempt finishes the issue (one marked comment, converged labels), and B resumes the same session.
+5. **Workflow D.** Editing triage to an hour ago catches up one slot. Triage requests one fix for the open reports, and `events chain <fix>` traces fix → report → … → the GitHub origin.
+6. **One wake path.** Each parked Work has exactly one woken Wait: A and B by reconciled ingress Events, C and D by their timeout timers. Each also has a `wait.woken` lifecycle record naming the waking type. The executor's capability alone decides the effect: the resumable claude-code attempt continues through `core.wait.woken`, while the shell attempts end and the wake Event triggers the next attempt. Every wake goes through `WakeWaitInTx` (routing, subscriptions, timers and the operator wake all call it).
+7. **One history, view and retention model.** `/v1/runs` across all scopes holds shell, claude-code and legacy-job runs of `github.issue`, `slack.conversation`, `schedule.job` and the three introspection kinds. Every run renders in `runview` and carries its trigger, executor and binding. `kept_executions` 1 (swept every second) expires the earlier attempts of the A, C and D Work alike.
+8. **Explainability.** Every attempt after the last kill has a start record with its trigger type and executor and a stop record with its outcome. The triage's fix request appears as a `toolbelt.called` record.
+9. **Namespace isolation.** Every routed Event reaches Work in its own scope, and every Work's keys lie in its scope's namespaces.
+10. **Redaction.** No secret value appears in any file under the drill root (SQLite, logs, artifacts, executor state, fixture output) or in the management API's runs, events and Work.
+11. **Doctor.** The `github`, `schedule` and `introspection` checks pass on the shared daemon.
+
+**Regression found and fixed.** An operator scope reconcile that committed while a generation was under way (a page in flight, or between pages) was absorbed by that generation. The generation could predate the request, yet its completion scheduled the next scan a full interval away. The ingress state now counts requests, and a generation that saw a request after its first claim leaves the source due on completion. The regression is [`TestScopeReconcileDuringScanRunsAgain`](../../integration/operator_controls_test.go), covering both cases. See [operator controls](operator-setup.md) and [event ingress](event-ingress.md).
+
+**Storage negative controls on SQLite.** [`TestWeakenedSQLiteIsRejected`](../../internal/storage/sqlite/negative_test.go) wraps the real backend three ways: lost atomicity (a failed callback still commits), lost deduplication (the delivery identity includes the Event ID) and lost fencing (the lease guard is dropped). Each wrapper is rejected by the shared cases it weakens, and the same cases pass on plain SQLite. The reference-backend controls in `conformance` still run.
