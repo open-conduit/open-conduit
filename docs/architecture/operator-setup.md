@@ -99,7 +99,7 @@ Detail shows the Work's correlation keys, hold, annotations and active or woken 
 
 Webhooks are an accelerator: reconcile always runs, so with no listener the daemon is **reconcile-only** and loses only latency (`settings.reconcile_seconds`, default 15 minutes). `serve --no-tunnel` forces this.
 
-- **Listener.** `serve --webhook-addr HOST:PORT` binds a separate HTTP server on its own TCP address. It serves only the routes that registered entries name:
+- **Listener.** `serve --webhook-addr HOST:PORT` binds a separate HTTP server on its own TCP address. Any free local port works (the docs use 8787 as an example); if the bind fails, `serve` exits saying why (for example, the address is already in use) and suggests another port. It serves only the routes that registered entries name:
   - `POST /github/<scope>/<entry>` for each GitHub entry that names a `webhook_secret`;
   - `POST /slack/<scope>/<entry>` for each Slack entry with `receiver: http` ([Slack extension](slack-extension.md));
   - `POST /linear/…`, `POST /jira/…` and `POST /bitbucket/<scope>/<entry>` for tracker and code-host entries ([installed integrations](installed-integrations.md));

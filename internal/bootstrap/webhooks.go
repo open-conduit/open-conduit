@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/open-conduit/open-conduit/extension"
@@ -57,6 +58,25 @@ type webhookState struct {
 	server    *http.Server
 }
 
+// bindError explains a failed webhook listener bind: why it failed and that
+// any free local port works, since the address is only ever set by
+// --webhook-addr.
+func bindError(addr string, err error) error {
+	var why string
+	switch {
+	case errors.Is(err, syscall.EADDRINUSE):
+		why = "the address is already in use"
+	case errors.Is(err, syscall.EACCES), errors.Is(err, syscall.EPERM):
+		why = "permission denied"
+	case errors.Is(err, syscall.EADDRNOTAVAIL):
+		why = "the address is not available on this machine"
+	default:
+		why = err.Error()
+	}
+	return errors.New("webhook listener: cannot bind " + addr + ": " + why +
+		"; choose another free local port with --webhook-addr (for example 127.0.0.1:8788)")
+}
+
 // startWebhooks binds the listener and starts the tunnel. It returns a stop
 // function; with no address configured, or --no-tunnel, nothing starts.
 func (d *daemon) startWebhooks(ctx context.Context) (func(), error) {
@@ -65,7 +85,7 @@ func (d *daemon) startWebhooks(ctx context.Context) (func(), error) {
 	}
 	ln, err := net.Listen("tcp", d.o.WebhookAddr)
 	if err != nil {
-		return nil, errors.New("webhook listener: cannot bind " + d.o.WebhookAddr)
+		return nil, bindError(d.o.WebhookAddr, err)
 	}
 	srv := &http.Server{Handler: d.webhookHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: time.Minute, MaxHeaderBytes: 64 << 10}
 	d.hooks.mu.Lock()
