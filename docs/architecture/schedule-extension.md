@@ -64,6 +64,8 @@ Every trigger carries the `schedule.trigger.v1` payload: job, kind, v1's run lab
 
 Timed jobs use a core timer with a calendar recurrence. `runtime.TimerOptions.Recurrences` registers pure `RecurrenceFunc` policies by kind. `Timers.ArmRecurrence` stores the opaque spec with the timer. Inside the firing transaction core asks the policy which occurrence this firing publishes (or none) and when the timer fires next. Acceptance, the firing ledger and the rearm commit together, so a crash never separates them; replaying a firing returns its original result. A substituted or skipped firing never accepts the template. Core keeps no calendar knowledge.
 
+05-03: the introspection extension registers a second recurrence kind (`introspection.v1`) for its daily sweep and triage, with the same v1 calendar rules. It is not a `schedule` entry, because the PRD makes them Work kinds the introspection extension defines ([introspection](issue-reporting.md#the-sweep-and-triage-schedules)). Bootstrap merges both kinds into `TimerOptions.Recurrences` and both standing Work policies into `SchedulerOptions.WorkKinds`.
+
 The schedule policy (`schedule.Recurrence`) ports v1's `dueSlot`/`cronSlot`:
 
 - **At and cron.** A firing publishes the latest slot at or before now and strictly within six hours of it (`now − slot < 6h`), unless that slot's wall-clock name is the one that ran last. Exactly six hours late, or more, is skipped: v1's algorithm is exclusive, whatever its README prose says. Older missed slots are always skipped. The timer rearms for the next slot after now whose name differs from the one that ran last.

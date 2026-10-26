@@ -114,11 +114,13 @@ func TestRuntimeTestVariantBoundaries(t *testing.T) {
 }
 
 // TestNoPrivilegedReportingPath checks the PRD's introspection criterion at
-// the source level (03-08): no core package, contract or operator surface
-// names self-improvement, issue reporting or triage. They exist only as the
-// introspection extension's public registrations.
+// the source level (03-08, 05-03): no core package, contract or operator
+// surface names self-improvement, issue reporting, triage, the daily sweep's
+// Events, fix requests or the host watch config. They exist only as the
+// introspection extension's public registrations. (Plain "sweep" is core
+// vocabulary for the retention sweep.)
 func TestNoPrivilegedReportingPath(t *testing.T) {
-	vocabulary := regexp.MustCompile(`(?i)introspection|triage|report-issue|report_issue|self-improvement`)
+	vocabulary := regexp.MustCompile(`(?i)introspection|triage|report-issue|report_issue|self-improvement|sweep\.due|fix\.requested|fix-report|host_?watch`)
 	for _, dir := range []string{"domain", "extension", "storage", "observability", "conformance", "client", "internal/runtime", "internal/config", "internal/management", "internal/storage", "internal/cli", "internal/tui", "internal/telemetry"} {
 		err := filepath.WalkDir(filepath.Join("..", "..", dir), func(path string, d fs.DirEntry, err error) error {
 			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") {

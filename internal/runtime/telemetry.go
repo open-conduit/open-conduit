@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -239,7 +240,9 @@ func (r *recorder) FireTimer(id domain.ID, expected domain.Revision, next *domai
 			r.fired = map[domain.ID]bool{}
 		}
 		r.fired[id] = true
-		if before != nil {
+		// The firing path accepts the template through AcceptEvent first
+		// (05-03 fix: it was reported twice, as two event.accepted records).
+		if before != nil && !slices.ContainsFunc(r.accepted, func(f acceptedFact) bool { return f.id == before.Event.ID }) {
 			r.accepted = append(r.accepted, acceptedFact{before.Event.ID, true})
 		}
 	}

@@ -83,7 +83,7 @@ func (d *daemon) pluginDir() string { return filepath.Join(d.o.StateDir, "playbo
 
 // preparePlaybooks writes the plugin (rewritten at every start, so an
 // upgrade replaces old playbook text): the GitHub playbooks, then the Slack
-// support and introspection triage playbooks beside them.
+// support and introspection (sweep, triage, fix) playbooks beside them.
 func (d *daemon) preparePlaybooks() error {
 	if err := playbooks.Prepare(d.pluginDir()); err != nil {
 		return err

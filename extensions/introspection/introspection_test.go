@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alsiola/open-conduit/domain"
 	"github.com/alsiola/open-conduit/extension"
@@ -36,6 +37,44 @@ func TestConfigValidation(t *testing.T) {
 	if ValidateExtension(json.RawMessage(`{}`), []string{"token"}) == nil {
 		t.Error("secrets accepted")
 	}
+	for _, ok := range []string{
+		`{"notes":["github.notes","other.notes"],"telemetry":true}`,
+		`{"sweep":{"cron":"41 8 * * *","rules":["CLAUDE.md"],"guide":"docs/rules.md","land":"pr","remote":"upstream"}}`,
+		`{"triage":{"cron":"51 8 * * *","time_zone":"Europe/London","file_issues":true}}`,
+		`{"host_watch":{}}`,
+		`{"host_watch":{"interval_seconds":30,"load":2,"memory":80,"disk":95,"disks":["~/work"]}}`,
+	} {
+		if err := ValidateExtension(json.RawMessage(ok), nil); err != nil {
+			t.Errorf("%s: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{
+		`{"notes":["core.causal"]}`, `{"notes":[""]}`, `{"notes":["a b"]}`,
+		`{"sweep":{}}`, `{"sweep":{"cron":"@every 1m"}}`, `{"sweep":{"cron":"61 8 * * *"}}`,
+		`{"triage":{"cron":"* * * * *","time_zone":"Mars/Base"}}`, `{"triage":{"cron":"* * * * *","land":"merge"}}`,
+		`{"triage":{"cron":"* * * * *","rules":["CLAUDE.md"]}}`, `{"sweep":{"cron":"* * * * *","file_issues":true}}`,
+		`{"sweep":{"cron":"* * * * *","rules":[""]}}`,
+		`{"host_watch":{"interval_seconds":1}}`, `{"host_watch":{"memory":101}}`, `{"host_watch":{"disks":[""]}}`,
+	} {
+		if ValidateExtension(json.RawMessage(bad), nil) == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+	for _, ok := range []string{`{"work":"report"}`, `{"work":"sweep"}`, `{"work":"triage"}`, `{"work":"fix"}`} {
+		if err := ValidateRoute(json.RawMessage(ok)); err != nil {
+			t.Errorf("route %s: %v", ok, err)
+		}
+	}
+	if ValidateRoute(json.RawMessage(`{"work":"jobs"}`)) == nil {
+		t.Error("unknown work accepted")
+	}
+	c, _ := ParseConfig(json.RawMessage(`{}`))
+	if ns := c.NoteNamespaces(); len(ns) != 1 || ns[0] != DefaultNotes {
+		t.Fatalf("default notes: %v", ns)
+	}
+	if l, m, d := (HostWatch{}).Thresholds(); l != 1.5 || m != 90 || d != 90 || (HostWatch{}).Interval() != time.Minute {
+		t.Fatal("host watch defaults")
+	}
 }
 
 func TestEnabled(t *testing.T) {
@@ -54,7 +93,7 @@ func TestRoute(t *testing.T) {
 	}
 	report := domain.AcceptedEvent{Event: domain.Event{Type: TypeReported, CorrelationKey: &key}}
 	match := func(s domain.Scope, e domain.AcceptedEvent, w *domain.Work) extension.RouteDecision {
-		d, err := Route{}.Match(context.Background(), extension.RouteInput{Event: e, Scope: s, Work: w})
+		d, err := Route{}.Match(context.Background(), extension.RouteInput{Event: e, Scope: s, Work: w, Route: domain.Route{Config: domain.Payload{Data: []byte(`{}`)}}})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -86,6 +125,18 @@ func TestRenderEvent(t *testing.T) {
 	if !ok || !strings.Contains(text, "os call failed") || !strings.Contains(text, OpResolve) || !strings.Contains(text, "execution x") {
 		t.Fatalf("render: %q %v", text, ok)
 	}
+	data, _ = json.Marshal(Report{ID: "h", Kind: "env", Title: "host: disk / is at 95%", Body: "full", Origin: OriginHostWatch})
+	if text, ok := RenderEvent(domain.Event{ID: "introspection-1", Type: TypeReported, Data: domain.Payload{Schema: SchemaReport, Data: data}}); !ok || !strings.Contains(text, "extension's host-watch") {
+		t.Fatalf("origin render: %q", text)
+	}
+	due, _ := json.Marshal(Due{Run: WorkTriage, Slot: "2026-10-26 08:51 UTC", Epoch: "e"})
+	if text, ok := RenderEvent(domain.Event{Type: TypeTriageDue, Data: domain.Payload{Schema: SchemaDue, Data: due}}); !ok || !strings.Contains(text, OpEvidence) || !strings.Contains(text, "08:51") {
+		t.Fatalf("due render: %q", text)
+	}
+	fix, _ := json.Marshal(Fix{ID: "f", Title: "Skills call reply.sh", Body: "edit", Reports: []string{"r1"}, Work: "w", Execution: "x"})
+	if text, ok := RenderEvent(domain.Event{ID: "emit/f", Type: TypeFixRequested, CausationID: "emit/r1", Data: domain.Payload{Schema: SchemaFix, Data: fix}}); !ok || !strings.Contains(text, "caused by report Event emit/r1") || !strings.Contains(text, OpResolve) {
+		t.Fatalf("fix render: %q", text)
+	}
 	if _, ok := RenderEvent(domain.Event{Type: "github.comment"}); ok {
 		t.Fatal("rendered another family")
 	}
@@ -97,7 +148,7 @@ func TestRegistration(t *testing.T) {
 		t.Fatal("tools without a store")
 	}
 	r := (&Tools{}).Registration()
-	if r.Name != Type || len(r.EventTypes) != 1 || r.EventTypes[0] != TypeReported || len(r.Operations) != len(Operations()) {
+	if r.Name != Type || len(r.EventTypes) != 2 || r.EventTypes[0] != TypeReported || r.EventTypes[1] != TypeFixRequested || len(r.Operations) != len(Operations()) {
 		t.Fatalf("registration: %+v", r)
 	}
 	for _, op := range r.Operations {

@@ -134,60 +134,107 @@ func deliveryDuplicate(tx storage.Tx, e domain.Event) (domain.AcceptedEvent, boo
 	return domain.AcceptedEvent{}, false, nil
 }
 func checkDerived(tx storage.Tx, now time.Time, limits CausalLimits, parent domain.ID, e domain.Event) (CausalInfo, int, bool, error) {
+	info, charges, duplicate, err := checkCausal(tx, now, limits, parent, "", e)
+	count := 0
+	if len(charges) > 0 {
+		count = charges[0].count
+	}
+	return info, count, duplicate, err
+}
+
+// causalCharge is one chain's per-minute bucket a derived Event spends.
+type causalCharge struct {
+	root  domain.ID
+	count int
+}
+
+// checkCausal checks a derived Event against its parent's chain. A floor
+// (05-03 cited causation: the attempt's trigger when an extension cites
+// another Event as the parent) also bounds it: the Event's depth is one more
+// than the deeper of parent and floor, checked against the stricter of both
+// chains' depth limits, and both chains' per-minute budgets must have room
+// and are charged. A cited parent therefore never shortens a chain nor
+// escapes the trigger's limits.
+func checkCausal(tx storage.Tx, now time.Time, limits CausalLimits, parent, floor domain.ID, e domain.Event) (CausalInfo, []causalCharge, bool, error) {
 	limits, err := normalizeCausalLimits(limits)
 	if err != nil {
-		return CausalInfo{}, 0, false, err
+		return CausalInfo{}, nil, false, err
 	}
 	d := CausalRejection{EventID: e.ID, ParentID: parent, WorkID: e.WorkID, ExecutionID: e.ExecutionID, DeliveryHash: identity(e.Source, e.DeliveryID, string(parent)), Limits: limits, Minute: minuteOf(now), At: now}
-	reject := func(reason string) (CausalInfo, int, bool, error) {
+	reject := func(reason string) (CausalInfo, []causalCharge, bool, error) {
 		d.Reason = reason
-		return CausalInfo{}, 0, false, &causalError{d}
+		return CausalInfo{}, nil, false, &causalError{d}
 	}
 	if parent == "" || e.CausationID != "" && e.CausationID != parent {
 		return reject("invalid_parent")
 	}
 	old, duplicate, err := deliveryDuplicate(tx, e)
 	if err != nil {
-		return CausalInfo{}, 0, false, err
+		return CausalInfo{}, nil, false, err
 	}
 	if duplicate {
 		if old.Event.CausationID != parent {
 			return reject("delivery_parent_conflict")
 		}
-		return CausalInfo{}, 0, true, nil
+		return CausalInfo{}, nil, true, nil
 	}
 	info, err := ancestry(tx, parent, limits)
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrInvalid) {
 			return reject("missing_or_invalid_parent")
 		}
-		return info, 0, false, err
+		return info, nil, false, err
 	}
 	info.Depth++
+	maxDepth := info.Limits.MaxDepth
+	chains := []CausalInfo{info}
+	if floor != "" && floor != parent {
+		fl, err := ancestry(tx, floor, limits)
+		if err != nil {
+			if errors.Is(err, storage.ErrNotFound) || errors.Is(err, storage.ErrInvalid) {
+				return reject("missing_or_invalid_parent")
+			}
+			return info, nil, false, err
+		}
+		if fl.Depth+1 > info.Depth {
+			info.Depth = fl.Depth + 1
+		}
+		maxDepth = min(maxDepth, fl.Limits.MaxDepth)
+		if fl.Root != info.Root {
+			chains = append(chains, fl)
+		}
+	}
 	d.RootID = info.Root
 	d.Depth = info.Depth
 	d.Limits = info.Limits
-	count := 0
-	err = getJSON(tx, causalNamespace, causalBucket(info.Root, d.Minute), &count)
-	if err != nil && !errors.Is(err, storage.ErrNotFound) {
-		return info, 0, false, err
+	charges := make([]causalCharge, 0, len(chains))
+	for _, c := range chains {
+		count := 0
+		err = getJSON(tx, causalNamespace, causalBucket(c.Root, d.Minute), &count)
+		if err != nil && !errors.Is(err, storage.ErrNotFound) {
+			return info, nil, false, err
+		}
+		charges = append(charges, causalCharge{root: c.Root, count: count})
 	}
-	d.Count = count
+	d.Count = charges[0].count
 	if e.ExecutionID != "" {
 		x, er := tx.Execution(e.ExecutionID)
 		if er == nil {
 			d.TraceID = x.TraceID
 		} else if !errors.Is(er, storage.ErrNotFound) {
-			return info, 0, false, er
+			return info, nil, false, er
 		}
 	}
-	if info.Depth > info.Limits.MaxDepth {
+	if info.Depth > maxDepth {
 		return reject("depth_limit")
 	}
-	if count >= info.Limits.PerMinute {
-		return reject("rate_limit")
+	for i, c := range charges {
+		if c.count >= chains[i].Limits.PerMinute {
+			d.RootID, d.Count, d.Limits = c.root, c.count, chains[i].Limits
+			return reject("rate_limit")
+		}
 	}
-	return info, count, false, nil
+	return info, charges, false, nil
 }
 func recordCausalRejection(tx storage.Tx, err error) error {
 	var refused *causalError
@@ -217,7 +264,12 @@ func CheckDerivedInTx(tx storage.Tx, now time.Time, limits CausalLimits, parent 
 // refusal the caller must commit only the diagnostic, or roll back all effects
 // and record the refusal separately. Acknowledge acceptance only after commit.
 func AcceptDerivedInTx(tx storage.Tx, now time.Time, limits CausalLimits, scope, parent domain.ID, e domain.Event) (domain.AcceptedEvent, bool, error) {
-	info, count, duplicate, err := checkDerived(tx, now, limits, parent, e)
+	return acceptCausalInTx(tx, now, limits, scope, parent, "", e)
+}
+
+// acceptCausalInTx is AcceptDerivedInTx with an optional floor (checkCausal).
+func acceptCausalInTx(tx storage.Tx, now time.Time, limits CausalLimits, scope, parent, floor domain.ID, e domain.Event) (domain.AcceptedEvent, bool, error) {
+	info, charges, duplicate, err := checkCausal(tx, now, limits, parent, floor, e)
 	if err != nil {
 		if errors.Is(err, ErrCausalRejected) {
 			if auditErr := recordCausalRejection(tx, err); auditErr != nil {
@@ -242,8 +294,10 @@ func AcceptDerivedInTx(tx storage.Tx, now time.Time, limits CausalLimits, scope,
 	if err = putJSON(tx, causalNamespace, causalKey(accepted.Event.ID), info); err != nil {
 		return domain.AcceptedEvent{}, false, err
 	}
-	if err = putJSON(tx, causalNamespace, causalBucket(info.Root, minuteOf(now)), count+1); err != nil {
-		return domain.AcceptedEvent{}, false, err
+	for _, c := range charges {
+		if err = putJSON(tx, causalNamespace, causalBucket(c.root, minuteOf(now)), c.count+1); err != nil {
+			return domain.AcceptedEvent{}, false, err
+		}
 	}
 	return accepted, true, nil
 }

@@ -128,3 +128,14 @@ Executable cases: `TestScheduleTriggersCoalesce` and `TestWorkKindPolicyContract
 05-02 update: the remaining job behaviors need no coalesce option either. v1's detached-busy delivery rule is a `drop` route selected by trigger kind (`schedule` route config `triggers`), and its `busy` status retry is an executor retry hint, which standing Work now honours (the failure budget stays off for it). Job runs are announced as `schedule.run.*` Events for `job:` waits. See [job run parity](schedule-extension.md#job-run-parity-05-02).
 
 03-08 update: the causal bounds apply unchanged to translated toolbelt emissions (`extension.Operation.Emit`). A report-about-a-report loop under issue reporting is stopped at `causal_max_depth` by `AcceptDerivedInTx`, with a durable `depth_limit` diagnostic and no cooperation from the extension. A burst on one chain hits `causal_per_minute`. The daemon now applies the configured limits to toolbelt emissions as well as to routing, timers and control. See [issue reporting](issue-reporting.md).
+
+## Cited causation (05-03)
+
+A translated emission (`extension.EmitPlan`) may cite a cause (`EmitPlan.Cause`) other than the attempt's trigger. Workflow D needs it: a fix requested by the daily triage must trace through causation to the report it fixes, while the triage's own trigger is a timer slot. The rule keeps loop-breaking a core property that needs no extension cooperation:
+
+- **Eligible causes.** An accepted Event in the emitting Work's scope whose correlation key lies in the registration's own source namespace. Citing the trigger itself is the default. Any other Event, a missing one included, is refused before anything commits.
+- **Chain position.** The new Event's causation is the cause and its root is the cause's root. Its depth is `max(depth(cause), depth(trigger)) + 1`, checked against the stricter of the two roots' `causal_max_depth`. Every emission is still deeper than the attempt's trigger, so any execution → emission → execution cycle grows in depth and stops at the limit however its emissions cite.
+- **Budgets.** The Event is charged to the per-minute bucket of the cause's root and of the trigger's root, and refused when either is full. A burst cannot spread across cited chains to escape the trigger's chain budget.
+- **Evidence.** A refusal writes the same durable diagnostic (`depth_limit` or `rate_limit`, with the cited parent). `TestCitedCausationKeepsCoreLimits` shows a fix from a trigger at the depth limit refused although it cites a shallow report. `TestCitedCauseContract` covers eligible causes and the double charge.
+
+Implementation: `checkCausal`/`acceptCausalInTx` in `internal/runtime/causal.go` with the trigger as a floor; `AcceptDerivedInTx` is unchanged (no floor).

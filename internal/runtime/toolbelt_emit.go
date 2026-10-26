@@ -16,8 +16,9 @@ import (
 // registration declared and the token allows, trusted execution source and
 // trigger causation, and AcceptDerivedInTx's chain-depth and per-chain rate
 // limits. The registration's own records join that transaction. Nothing in
-// the plan can select a root, a parent, another Work's identity or a
-// namespace the registration does not own.
+// the plan can select a root, another Work's identity or a namespace the
+// registration does not own; a plan may cite one of the registration's own
+// Events in the scope as its cause (05-03), which the trigger still floors.
 func (t *Toolbelt) translatedEmit(ctx context.Context, digest, owner string, op extension.Operation, a extension.Authority, input domain.Payload, replayKey, hash string) (out extension.ToolResult, err error) {
 	plan, err := op.Emit(ctx, a, input)
 	if err != nil {
@@ -74,7 +75,27 @@ func (t *Toolbelt) translatedEmit(ctx context.Context, digest, owner string, op 
 		if e2.OccurredAt.IsZero() {
 			e2.OccurredAt = now
 		}
-		accepted, added, er := AcceptDerivedInTx(tx, now, t.options.CausalLimits, w.ScopeID, trigger, e2)
+		// A cited cause (05-03) must be one of the registration's own Events
+		// in this scope; the trigger then floors the chain position.
+		parent, floor := trigger, domain.ID("")
+		if plan.Cause != "" && plan.Cause != trigger {
+			cause, er := tx.Event(plan.Cause)
+			if errors.Is(er, storage.ErrNotFound) {
+				return extension.ErrUnauthorized
+			}
+			if er != nil {
+				return er
+			}
+			scope, er := scopeForEvent(tx, cause)
+			if er != nil {
+				return er
+			}
+			if k := cause.Event.CorrelationKey; scope != w.ScopeID || k == nil || !ownedNamespace(k.Source, owner, "/") {
+				return extension.ErrUnauthorized
+			}
+			parent, floor = plan.Cause, trigger
+		}
+		accepted, added, er := acceptCausalInTx(tx, now, t.options.CausalLimits, w.ScopeID, parent, floor, e2)
 		if errors.Is(er, ErrCausalRejected) {
 			refusal = er
 			return nil

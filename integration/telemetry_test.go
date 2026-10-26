@@ -267,6 +267,9 @@ esac`
 	if armed.Attributes["timer.id"] != fired.Attributes["timer.id"] || fired.Correlation.WorkID != work {
 		t.Fatalf("retry timer: %+v %+v", armed, fired)
 	}
+	// A fired timer's Event is accepted once (05-03 regression: the firing
+	// reported it twice).
+	rs.one(t, "event.accepted", func(r observability.Record) bool { return r.Attributes["event.type"] == "core.retry.due" })
 	rs.one(t, "route.decided", func(r observability.Record) bool {
 		return r.Correlation.EventID == fired.Correlation.EventID && r.To == "retry"
 	})

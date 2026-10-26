@@ -99,6 +99,7 @@ type components struct {
 	toolbelt   *runtime.Toolbelt
 	scheduler  *runtime.Scheduler
 	timers     *runtime.Timers
+	control    *runtime.Control
 	server     *management.Server
 }
 
@@ -108,30 +109,31 @@ type attemptKey struct {
 }
 
 type daemon struct {
-	o          Options
-	log        *slog.Logger
-	now        func() time.Time
-	owner      string
-	coord      storage.Store
-	artifacts  *artifacts.Store
-	shell      *shell.Executor
-	executors  map[string]extension.Executor
-	configs    *management.ConfigService
-	resolver   *config.Resolver
-	pipeline   *telemetry.Pipeline
-	ingress    *runtime.Ingress
-	github     githubSources
-	slack      slackSources
-	schedule   scheduleState
-	resources  resourceState
-	claude     claudeState
-	hooks      webhookState
-	tools      *gh.Tools
-	slackTools *sl.Tools
-	reports    *is.Tools
-	endpoint   string
-	cursorKey  []byte
-	current    atomic.Pointer[components]
+	o             Options
+	log           *slog.Logger
+	now           func() time.Time
+	owner         string
+	coord         storage.Store
+	artifacts     *artifacts.Store
+	shell         *shell.Executor
+	executors     map[string]extension.Executor
+	configs       *management.ConfigService
+	resolver      *config.Resolver
+	pipeline      *telemetry.Pipeline
+	ingress       *runtime.Ingress
+	github        githubSources
+	slack         slackSources
+	schedule      scheduleState
+	introspection introspectionState
+	resources     resourceState
+	claude        claudeState
+	hooks         webhookState
+	tools         *gh.Tools
+	slackTools    *sl.Tools
+	reports       *is.Tools
+	endpoint      string
+	cursorKey     []byte
+	current       atomic.Pointer[components]
 
 	ctx      context.Context
 	mu       sync.Mutex
@@ -216,7 +218,12 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err != nil {
 		return err
 	}
-	d.pipeline, err = telemetry.New(telemetry.Options{Exporters: []observability.Exporter{telemetry.NewLogExporter(logFile), otel}, FlushInterval: 200 * time.Millisecond, Diagnostic: func(x telemetry.Diagnostic) {
+	introspectionTelemetry, err := d.openIntrospectionTelemetry()
+	if err != nil {
+		return err
+	}
+	defer d.closeIntrospectionTelemetry()
+	d.pipeline, err = telemetry.New(telemetry.Options{Exporters: []observability.Exporter{telemetry.NewLogExporter(logFile), otel, introspectionTelemetry}, FlushInterval: 200 * time.Millisecond, Diagnostic: func(x telemetry.Diagnostic) {
 		d.log.Warn("telemetry export degraded", "exporter", x.Exporter, "code", x.Code, "records", x.Records)
 	}})
 	if err != nil {
@@ -277,7 +284,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	d.current.Store(c)
+	d.introspection.telemetry.Store(introspectionTelemetryOn(snapshot))
 	d.ensureSchedules(ctx, c, snapshot, true)
+	d.ensureIntrospection(ctx, c, snapshot, true)
 	// A committed reload swaps generation-pinned components; attempts already
 	// running keep their pinned generation through HistoricalExecutors.
 	d.configs.OnApply = func(_ context.Context, s *config.Snapshot, g uint64) {
@@ -290,7 +299,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 		d.registerGitHub(d.ctx, s)
 		d.registerSlack(d.ctx, s)
 		d.registerSchedule(d.ctx, s)
+		d.introspection.telemetry.Store(introspectionTelemetryOn(s))
 		d.ensureSchedules(d.ctx, next, s, true)
+		d.ensureIntrospection(d.ctx, next, s, true)
 		d.log.Info("configuration generation activated", "generation", g)
 		d.poke()
 	}
@@ -393,22 +404,23 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		Toolbelt: belt, ToolbeltEndpoint: d.endpoint, Secrets: d.configs.Secrets(d.resolver),
 		Resources: d.bindResources, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
-		WorkKinds: scheduleWorkKinds(),
+		WorkKinds: workKinds(),
 	}); err != nil {
 		return nil, err
 	}
-	if c.timers, err = runtime.NewTimers(d.coord, d.now, runtime.TimerOptions{CausalLimits: limits, Recurrences: scheduleRecurrences()}); err != nil {
+	if c.timers, err = runtime.NewTimers(d.coord, d.now, runtime.TimerOptions{CausalLimits: limits, Recurrences: recurrences()}); err != nil {
 		return nil, err
 	}
 	control, err := runtime.NewControl(d.coord, d.now, c.router, c.scheduler, limits)
 	if err != nil {
 		return nil, err
 	}
+	c.control = control
 	pipelineCheck := func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.scheduleCheck},
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.scheduleCheck, d.introspectionCheck},
 		DeepChecks: []func(context.Context) runtime.Check{d.githubAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck}, Annotate: d.annotate, Attach: d.attach, Nudge: d.poke}); err != nil {
 		return nil, err
 	}

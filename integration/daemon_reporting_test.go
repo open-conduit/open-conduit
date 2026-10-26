@@ -185,7 +185,7 @@ func TestDaemonIssueReporting(t *testing.T) {
 	}
 
 	// Triage runs by hand as ordinary Work, after the restart.
-	created, err := d.c.CreateWork(ctx, client.WorkRequest{ScopeID: "eng", Kind: "introspection.triage", Binding: "triage"}, "triage-1")
+	created, err := d.c.CreateWork(ctx, client.WorkRequest{ScopeID: "eng", Kind: "manual.triage", Binding: "triage"}, "triage-1")
 	if err != nil {
 		t.Fatal(err)
 	}

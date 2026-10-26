@@ -71,8 +71,8 @@ The complete registration inventory is `internal/adapters/all/all.go`; tunnel re
 | cloudflared K | Same file: binary/named tunnel/hostname and quick-tunnel URL lifecycle. Gap: no tunnel-specific tests | 03-05 if used; 06-01 otherwise: named/quick fixtures and restart; required exposure blocks switch. |
 | static K | Same file: externally forwarded public URL. Gap: no tunnel-specific tests | 03-05 if used; 06-01 otherwise: validate configured URL and signed delivery path. |
 | Git workspace R | `internal/worktree`, tests in B10; Unix descendant cleanup `TestKillWithinFindsProcessesByWorkingDirectory` | 03-02: optional resource provider, not adapter imported by runtime. |
-| Host watch K/X | `internal/host`, Linux/macOS parse/read tests; engine alert tests B13; Windows disk files | 06-01: observability extension, load/memory on Linux/macOS and disk support, threshold crossing/recovery at 95%, watched paths/dedup and opt-out; gap: platform/live coverage. |
-| Schedule/introspection R/X | v1 `engine/jobs.go,waits.go,triage_test.go`, `internal/problems`, playbooks | 05-01–05-03: move built-ins to public extensions; 03-08 reporting bootstrap. New Slack 04-01–04-03 has no shipped v1 adapter/tests. |
+| Host watch K/X | `internal/host`, Linux/macOS parse/read tests; engine alert tests B13; Windows disk files | 05-03 (delivered inside the introspection extension, `extensions/introspection/host`, optional `host_watch`): load/memory on Linux/macOS and disk support, threshold crossing/recovery at 95%, watched paths/dedup and opt-out, crossings as reports, `host_metrics`/`host_alert` telemetry events. 06-01: platform/live coverage and a PostHog sink. |
+| Schedule/introspection R/X | v1 `engine/jobs.go,waits.go,triage_test.go`, `internal/problems`, playbooks | 05-01–05-03: move built-ins to public extensions; 03-08 reporting bootstrap; 05-03 sweep/triage schedules, `github.notes` evidence, fix Work with cited causation, removal policy ([introspection](../architecture/issue-reporting.md)). New Slack 04-01–04-03 has no shipped v1 adapter/tests. |
 
 ## PRD acceptance coverage
 

@@ -49,6 +49,7 @@ type repEnv struct {
 	belt      *runtime.Toolbelt
 	scheduler *runtime.Scheduler
 	control   *runtime.Control
+	timers    *runtime.Timers
 	exec      *schedulerExecutor
 
 	mu     sync.Mutex
@@ -130,8 +131,14 @@ func (e *repEnv) open() {
 		}
 	}
 	e.belt = belt
+	// As bootstrap: the standing sweep/triage policy and the extension's
+	// calendar recurrence are generic host options.
 	if e.scheduler, err = runtime.NewScheduler(store, e.clock.Now, e.router, runtime.SchedulerOptions{Owner: "test", LeaseDuration: time.Hour, Generation: "1",
-		CausalLimits: e.limits, Executors: map[string]extension.Executor{"fixture": e.exec}, Toolbelt: belt, ToolbeltEndpoint: "unix:///fixture.sock"}); err != nil {
+		CausalLimits: e.limits, Executors: map[string]extension.Executor{"fixture": e.exec}, Toolbelt: belt, ToolbeltEndpoint: "unix:///fixture.sock",
+		WorkKinds: map[string]runtime.WorkKindPolicy{is.WorkKindSweep: {Standing: true}, is.WorkKindTriage: {Standing: true}}}); err != nil {
+		t.Fatal(err)
+	}
+	if e.timers, err = runtime.NewTimers(store, e.clock.Now, runtime.TimerOptions{CausalLimits: e.limits, Recurrences: map[string]runtime.RecurrenceFunc{is.RecurrenceKind: is.Recurrence}}); err != nil {
 		t.Fatal(err)
 	}
 	if e.control, err = runtime.NewControl(store, e.clock.Now, e.router, e.scheduler, e.limits); err != nil {
@@ -371,7 +378,7 @@ func TestReportIssueFromAnEngineeringExecution(t *testing.T) {
 	e.finish(p)
 
 	// Triage runs by hand as ordinary Work: it lists and resolves.
-	tr := e.manual(repScope, "introspection.triage", "triage")
+	tr := e.manual(repScope, "manual.triage", "triage")
 	list := e.must(tr, is.OpList, "", map[string]any{})
 	if n := len(list["reports"].([]any)); n != 2 {
 		t.Fatalf("open reports: %v", list)
@@ -396,7 +403,7 @@ func TestReportIssueFromAnEngineeringExecution(t *testing.T) {
 	if got := e.event(ev.Event.ID); got.Event.CausationID != root.ID {
 		t.Fatalf("event after restart: %+v", got.Event)
 	}
-	tr2 := e.manual(repScope, "introspection.triage", "triage")
+	tr2 := e.manual(repScope, "manual.triage", "triage")
 	if open := e.must(tr2, is.OpList, "", map[string]any{"state": "all"}); len(open["reports"].([]any)) != 2 {
 		t.Fatalf("triage after restart: %v", open)
 	}
@@ -499,7 +506,7 @@ func TestReportingPermissionBoundaries(t *testing.T) {
 	_, err := e.call(bare, is.OpReport, "", defect("no entry"))
 	refused(t, err, "not_enabled")
 	e.finish(bare)
-	other := e.manual(repSecond, "introspection.triage", "triage")
+	other := e.manual(repSecond, "manual.triage", "triage")
 	if list := e.must(other, is.OpList, "", map[string]any{"state": "all"}); len(list["reports"].([]any)) != 0 {
 		t.Fatalf("cross-scope read: %v", list)
 	}

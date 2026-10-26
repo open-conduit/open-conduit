@@ -24,16 +24,29 @@ const (
 	OpReport = "introspection.report-issue"
 	// OpList lists the calling scope's reports (for triage).
 	OpList = "introspection.reports"
-	// OpResolve records how a report was handled (for triage).
+	// OpResolve records how a report was handled (for triage and fixes).
 	OpResolve = "introspection.report.resolve"
+	// OpEvidence aggregates a sweep's or triage's evidence: the scope's open
+	// reports and unhandled notes, grouped, with the run's settings.
+	OpEvidence = "introspection.evidence"
+	// OpNotesResolve records notes a sweep or triage handled, so the next
+	// run's evidence leaves them out.
+	OpNotesResolve = "introspection.notes.resolve"
+	// OpFix requests fix Work for reports and notes: a durable
+	// `introspection.fix.requested` Event citing the earliest report as its
+	// cause.
+	OpFix = "introspection.fix"
 )
 
 // Operations lists every operation (for binding operation lists).
-func Operations() []string { return []string{OpReport, OpList, OpResolve} }
+func Operations() []string {
+	return []string{OpReport, OpList, OpResolve, OpEvidence, OpNotesResolve, OpFix}
+}
 
-// Report states.
+// Report states. Fixing is derived: an open report a requested fix names.
 const (
 	StateOpen     = "open"
+	StateFixing   = "fixing"
 	StateResolved = "resolved"
 )
 
@@ -60,6 +73,11 @@ type Report struct {
 	At         time.Time             `json:"at"`
 	State      string                `json:"state,omitempty"`
 	Resolution *Resolution           `json:"resolution,omitempty"`
+	// Origin names the extension adapter that made an extension-originated
+	// report (host-watch); empty for a report an execution made.
+	Origin string `json:"origin,omitempty"`
+	// Fix is the requested fix naming this report (derived on read).
+	Fix string `json:"fix,omitempty"`
 }
 
 // Resolution records how triage handled a report.
@@ -94,11 +112,14 @@ func NewTools(o ToolsOptions) (*Tools, error) {
 // Registration declares the operations and the report family through the
 // public Registrar.
 func (t *Tools) Registration() extension.Registration {
-	return extension.Registration{Version: extension.ContractVersion, Name: Type, EventTypes: []string{TypeReported},
+	return extension.Registration{Version: extension.ContractVersion, Name: Type, EventTypes: []string{TypeReported, TypeFixRequested},
 		Operations: []extension.Operation{
 			{Name: OpReport, Emit: t.report},
 			{Name: OpList, Handler: t.list},
 			{Name: OpResolve, Handler: t.resolve},
+			{Name: OpEvidence, Handler: t.evidence},
+			{Name: OpNotesResolve, Handler: t.notesResolve},
+			{Name: OpFix, Emit: t.fix},
 		}}
 }
 
@@ -109,18 +130,25 @@ func refuse(code, format string, args ...any) error {
 // enabled refuses a scope without an `introspection` entry: registration is
 // global per generation, enablement is per scope.
 func (t *Tools) enabled(ctx context.Context, a extension.Authority) error {
+	_, err := t.entry(ctx, a)
+	return err
+}
+
+// entry is the calling scope's effective entry config.
+func (t *Tools) entry(ctx context.Context, a extension.Authority) (Config, error) {
 	var scope domain.Scope
 	if err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
 		var err error
 		scope, err = tx.Scope(a.ScopeID)
 		return err
 	}); err != nil {
-		return extension.ErrUnauthorized
+		return Config{}, extension.ErrUnauthorized
 	}
-	if !Enabled(scope) {
-		return refuse("not_enabled", "issue reporting is not enabled for this scope")
+	c, ok := scopeEntry(scope)
+	if !ok {
+		return Config{}, refuse("not_enabled", "introspection is not enabled for this scope")
 	}
-	return nil
+	return c, nil
 }
 
 type reportInput struct {
@@ -196,10 +224,26 @@ func Reports(tx storage.Tx, scope domain.ID) ([]Report, error) {
 		return nil, err
 	}
 	sort.Slice(rows, func(i, j int) bool { return rows[i].Key < rows[j].Key })
+	fixes, err := Fixes(tx, scope)
+	if err != nil {
+		return nil, err
+	}
+	fixing := map[string]string{}
+	for _, f := range fixes {
+		for _, id := range f.Reports {
+			fixing[id] = f.ID
+		}
+	}
 	out := make([]Report, 0, len(rows))
 	for _, row := range rows {
 		var r Report
 		if json.Unmarshal(row.Value, &r) == nil {
+			if f, ok := fixing[r.ID]; ok {
+				r.Fix = f
+				if r.State == StateOpen {
+					r.State = StateFixing
+				}
+			}
 			out = append(out, r)
 		}
 	}
@@ -227,8 +271,8 @@ func (t *Tools) list(ctx context.Context, a extension.Authority, in domain.Paylo
 	if q.State == "" {
 		q.State = StateOpen
 	}
-	if q.State != StateOpen && q.State != StateResolved && q.State != "all" {
-		return domain.Payload{}, refuse("invalid_state", "state must be open, resolved or all")
+	if q.State != StateOpen && q.State != StateFixing && q.State != StateResolved && q.State != "all" {
+		return domain.Payload{}, refuse("invalid_state", "state must be open, fixing, resolved or all")
 	}
 	var all []Report
 	if err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {

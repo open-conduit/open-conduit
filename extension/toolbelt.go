@@ -101,6 +101,15 @@ type Operation struct {
 // and causation still record which execution emitted it.
 type EmitPlan struct {
 	Event domain.Event
+	// Cause optionally cites an accepted Event the emission derives from
+	// instead of the attempt's trigger (05-03 cited causation): an Event of
+	// the emitting Work's scope whose correlation key lies in the
+	// registration's own source namespace (anything else is unauthorized).
+	// The new Event's causation is Cause and it joins Cause's chain, but its
+	// depth is one more than the deeper of Cause and the trigger, and it is
+	// charged to both chains' per-minute budgets, so citing never shortens
+	// a chain or escapes the trigger's limits.
+	Cause domain.ID
 	// Commit runs inside the accepting transaction once the Event is
 	// accepted. It must be pure and deterministic. Its Records are written
 	// only when the Event was newly added (a replayed delivery writes none);
