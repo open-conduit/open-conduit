@@ -141,6 +141,39 @@ type ForgetExecutor interface {
 	Forget(context.Context, domain.ID) error
 }
 
+// StopExecutor is optional trusted host cleanup for a fenced attempt (for
+// example after operator cancel, a deadline, ErrNotAdoptable or a failed
+// observation). Stop terminates any verified live part of the execution at
+// that lease epoch and returns nil only once nothing of it can still run, so
+// the host may confirm physical exclusion. A newer adopting epoch must make
+// it fail. Without it the host cannot prove a stop and replacement stays
+// blocked. Promoted from the daemon's private interface in 07-01; shell,
+// claude-code and legacy-job implement it.
+type StopExecutor interface {
+	Stop(ctx context.Context, execution domain.ID, epoch uint64) error
+}
+
+// AttachExecutor is optional. Attach returns an interactive command an
+// operator runs locally to take over a Work's executor-private continuity
+// (for example an agent conversation), for Work the operator holds with no
+// attempt running. It carries no environment: the operator's own shell
+// supplies it. ErrNothingToAttach means the Work has nothing to attach to
+// yet; an executor without this interface does not support attach. Derived
+// from the operator attach control (03-05) in 07-01.
+type AttachExecutor interface {
+	Attach(context.Context, domain.ID) (AttachSpec, error)
+}
+
+// AttachSpec is an attach command: argv and an optional working directory.
+type AttachSpec struct {
+	Argv []string
+	Dir  string
+}
+
+// ErrNothingToAttach is the definitive "nothing to attach to yet" answer of
+// Attach.
+var ErrNothingToAttach = errors.New("nothing to attach to")
+
 func ValidateBinding(b domain.Binding, e Executor) error {
 	c, r := e.Capabilities(), b.Requires
 	valid := func(s string) bool {

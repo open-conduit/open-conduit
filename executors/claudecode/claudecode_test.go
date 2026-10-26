@@ -279,6 +279,12 @@ func TestResumedFreshAndHandoffExperiment(t *testing.T) {
 		t.Fatalf("second feedback %v", fb)
 	}
 
+	// Attach is the public optional executor surface; Work without a
+	// session has nothing to attach to.
+	var attacher extension.AttachExecutor = e
+	if _, err := attacher.Attach(context.Background(), "work/none"); !errors.Is(err, extension.ErrNothingToAttach) {
+		t.Fatalf("attach without a session: %v", err)
+	}
 	// After the operator attaches, the next turn resumes even when cold.
 	spec, err := e.Attach(context.Background(), "work/8")
 	if err != nil || spec.Argv[0] != h.binary || spec.Argv[1] != "--resume" || spec.Argv[2] != fresh || spec.Dir == "" {
@@ -665,3 +671,10 @@ func TestWorkspaceAndResume(t *testing.T) {
 		t.Fatalf("wake prompt %q", p[1])
 	}
 }
+
+// The daemon proves physical stops and attaches through the public optional
+// interfaces.
+var (
+	_ extension.StopExecutor   = (*claudecode.Executor)(nil)
+	_ extension.AttachExecutor = (*claudecode.Executor)(nil)
+)

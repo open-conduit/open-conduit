@@ -591,3 +591,6 @@ func TestWorkspaceThroughBroker(t *testing.T) {
 		}
 	}
 }
+
+// The daemon proves physical stops through the public optional interface.
+var _ extension.StopExecutor = (*shell.Executor)(nil)

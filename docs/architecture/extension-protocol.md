@@ -1,0 +1,289 @@
+# Extension subprocess protocol
+
+Decision B08 · ticket 07-01 · **provisional, for user review**. The executable definition is package [`protocol`](../../protocol/protocol.go): the version, the [manifest](../../protocol/manifest.go) and its validation, and the [method catalogue](../../protocol/methods.go). Each wire method names the public contract it carries and the shipped first-party users that needed it. The [transport prototype](../../prototypes/transport) supplies the evidence (`make protocol-prototype`). 07-02 implements loading, handshake, supervision and the message types. 07-03 adds packaging and certification.
+
+The protocol was extracted from the code that shipped through 05-04 and the 06-01/06-02 code: the GitHub, Slack, Linear, Jira, Bitbucket, schedule, introspection and PostHog extensions, the Git resource provider, and the shell, claude-code and legacy-job executors. It was not designed in the abstract. It adds **no core primitive**. Every method is an adapter over an existing public contract (`extension`, `storage` KV and reads, `observability`), or over a host composition hook the daemon already drives for in-process extensions. First-party extensions stay in-process. The user is the only protocol consumer, so the protocol is cheap to revise.
+
+## Decision summary
+
+| Question | Decision (provisional) |
+| --- | --- |
+| Transport | JSON-RPC 2.0 over the extension process's stdin/stdout, one JSON object per line, standard library only, symmetric (both sides send requests). Not go-plugin/gRPC. |
+| Version | Integer protocol versions. `initialize` picks the highest common version. No common version is a deterministic refusal before any other call (`unsupported_protocol_version`). Version 1 is the first. |
+| Manifest | `open-conduit-extension.json` beside the binary: name, own version, command, and `provides` (mechanical declarations only). Validated offline. The handshake must return the same manifest. |
+| Capabilities | Executor labels are exactly the PRD's (`interrupt`, `inject`, `resume`, `workspace`, `toolbelt: none\|cli\|mcp\|sdk`), plus optional controls (`stop`, `forget`, `attach`) that are methods, not suitability claims. Unknown fields are rejected, so a semantic label cannot be expressed. |
+| Storage | Mandatory namespaced KV under the extension's name, always available and never negotiated (a `storage` field is rejected). A store larger than coordination state is an `external_stores` entry naming a connection type, so it is explicit in config. |
+| Transactions | The host never holds a coordination transaction across an open-ended call. Four pure callbacks run inside a transaction today (`recurrence.next`, `work_kind.trigger`, `dependency.filter`, `emit.commit`). They are bounded (250 ms) and may make no callback. KV writes from an extension are one atomic `kv.commit` with preconditions. |
+| Process model | Extension processes are disposable. Durable state lives in host KV, executor recovery metadata or the extension's own state directory, so a crash or host restart means restart plus recover. The host never reattaches to an old process. |
+
+## Inventory of shipped interactions
+
+The table groups what the first-party code actually does across the host boundary today, as found in `internal/bootstrap` and the extension packages. Users: GH GitHub, SL Slack, TR tracker kit (Linear and Jira), BB Bitbucket, SC schedule, IS introspection, PH PostHog, GIT Git provider, SH shell, CC claude-code, LJ legacy-job.
+
+| Interaction | In-process surface today | Users | Wire method(s) |
+| --- | --- | --- | --- |
+| Config validation | `config.Registry` validators (connection, extension, route `HandlerConfig`, `ResourceConfig`, executor `ValidateConfig`) | all | `validate` |
+| Config apply and source registration | `register<Extension>` on apply: parse, build client, `ingress.Register(name, Source, adapter, interval)`, mount webhook paths | GH SL TR BB SC IS PH | `configure` (returns sources and webhook paths) |
+| Ingress push | `Ingress.Push` behind host-mounted `WebhookHandler`s (verify, then push; 2xx only after durable acceptance) | GH SL TR BB SC | `webhook.handle`, `ingress.push` |
+| Ingress reconcile | `Ingress.Reconcile`, driven by `ReconcileDue` with page timeout and item/byte limits | GH SL TR BB SC | `ingress.reconcile` |
+| Extension-owned receiver | Slack Socket Mode calls the host push func and acks the envelope only after it returns | SL | `ingress.deliver` (E→H) |
+| Routing | `RouteHandler.Match` on a detached snapshot, outside any transaction | GH SL TR BB SC IS | `route.match` |
+| Work kind policy | `WorkKindPolicy{Standing, Trigger}`. `Trigger` is pure and runs in the start transaction | SC (IS standing only) | manifest `work_kinds`, `work_kind.trigger` |
+| Calendar recurrence | `RecurrenceFunc` in the timer fire-and-rearm transaction. `Armer.ArmRecurrence/Cancel` from `Ensure` | SC IS | `recurrence.next`, `timer.arm`, `timer.cancel` |
+| Toolbelt operations | `Registration{Name, EventTypes, Operations, DependencyFilter}`. `Operation.Handler` (all), `.Wait` (GH), `.Emit` with in-transaction `Commit` (IS) | GH SL TR BB IS | `operation.call`, `operation.wait`, `operation.emit`, `emit.commit`, `dependency.filter` |
+| Prompt rendering | bootstrap `renderEvents` chain over `<extension>.RenderEvent` | GH SL IS | `event.render` |
+| Executor lifecycle | `Executor.Run/Recover`, `RunHandle.Wait`, `Resume`, `Interrupt`, `Inject`, `Forget`, `PersistRecovery` | SH CC LJ (GH hold) | `executor.*`, `execution.persist_recovery` (E→H) |
+| Physical-stop evidence | bootstrap's private `stopper` interface (`Stop(execution, epoch)`), so the host can `ConfirmStopped` | SH CC LJ | `executor.stop`. **Promoted** to public `extension.StopExecutor` |
+| Operator attach | bootstrap special-cased claude-code (`Attach`, `ErrNoSession`, wire `no_session`) | CC | `executor.attach`. **Generalised** to `extension.AttachExecutor`, `ErrNothingToAttach`, wire `nothing_to_attach` |
+| Workspaces | `ResourceBroker.Acquire/Lookup` (executor side). `ResourceProvider.Acquire/Lookup/Reconcile` with the host's `ResourceStatusFunc` | CC LJ, GIT | `resource.*` (E→H), `provider.*`, `provider.owner_status` (E→H) |
+| Namespaced KV | `Store.Transact` with `Get/Put/Delete/List` in the extension's namespaces (`github.notes`, `github.projection.*`, `executor.claudecode`, `schedule.runs`, `introspection.*`, `<type>.tools.*` …) | GH SL TR BB SC IS CC | `kv.get`, `kv.list`, `kv.commit` |
+| Read-only state | `Work`, `ListWorks`, `ListExecutions`, `Event`, `Events` (cursor), `ListScopes`/`Scope`, `ListTimers` | GH SL TR BB SC IS CC | `state.*` |
+| Derived and root events with records | `runtime.Causal.Derive` (GitHub turns), `AcceptDerivedInTx` (schedule translation, job runs), `AcceptInTx` + `PutOriginInTx` (host-watch reports) | GH SC IS | `event.accept` (E→H, KV records join the transaction) |
+| Control | `Control.CancelWork` for retired introspection Work | IS | `work.cancel` (E→H) |
+| Artifacts | `Artifacts.Create`, write, `Commit` (transcripts, logs, output files) | SH CC LJ | `artifact.*` (E→H) |
+| Secrets | `connectionSecrets` and `resolver.ResolveNames` (lazy, current generation) | GH SL TR BB SC PH | `secret.resolve` (E→H) |
+| Background passes | `Projector.Converge` (GH SL TR), `Ensure` (SC IS), `Executor.Maintain` (CC), `manageHooks`/`EnsureWebhook` (GH TR BB), `hostWatch` (IS), `publishJobRuns` (SC) | GH SL TR BB SC IS CC | manifest `tasks`, `task.run` |
+| Telemetry export | `observability.Exporter.Export/Shutdown` on the pipeline goroutine | PH IS | `telemetry.export`, `shutdown` |
+| Doctor | `runtime.Check` functions (`Checks`, `DeepChecks` with secrets) | all but SH | `check.run` |
+| Annotations | management `Annotate` | GH | `work.annotate` |
+| Setup | `extension.Setup` with `SetupHost` prompts, browser, secret store, `LookPath`, `Run` | GH SL TR | `setup.run` plus `setup.*` callbacks |
+| Playbooks | embedded playbooks written into the agent executor's plugin directory | GH SL TR IS | manifest `playbooks` (first-party convention) |
+
+`TestCatalogueCoversThePublicContract` checks mechanically that every method of every public interface an extension implements or consumes is carried by a wire method. `TestCatalogueMapsEveryMethodToAShippedUse` checks that every wire method names at least one shipped user. Core-record writes (`AcceptEvent`, `PutWork`, leases, timers, waits) never cross the boundary. They are reached only through `event.accept`, `timer.arm` and `work.cancel`, which apply the same causal limits and fencing as in-process callers.
+
+### What does not cross the boundary
+
+Some couplings exist only as bootstrap glue between first-party packages. They have no protocol equivalent, because a subprocess extension may depend on another only through events, correlation keys and public state reads:
+
+- claude-code's handoff `FeedbackHook` reads and writes GitHub comments (`githubFeedback`);
+- GitHub `job:` waits resolve schedule job keys (`scheduleJob`), and the schedule translator decodes GitHub delivery payloads;
+- Bitbucket reads the tracker's reopen generations;
+- legacy-job wraps the shell executor in-process;
+- PostHog receives introspection telemetry through a fan-out;
+- bootstrap parses Slack thread keys for the socket's active-thread filter. That one can move into the extension as a `state.works` read.
+
+These stay in-process. They are allowed by the PRD ("first-party extensions in-process behind the public interfaces"). They also decide which integrations 07-03 can round-trip without change.
+
+In-process extensions also hold the whole `storage.Store` and the daemon's clock and dry-run flag. A subprocess gets only its KV namespaces, scoped reads, its own clock, and `dry_run` in `configure`.
+
+## Transport comparison
+
+The prototype runs one workload over both candidates: the same extension-side methods (`scenario.Extension`) and host callbacks (`scenario.Host`). Each transport is a separate binary.
+
+- **JSON-RPC.** 345 lines, standard library only.
+- **go-plugin.** 229 lines on go-plugin v1.7.0 with gRPC v1.61.0. protoc is not in the toolchain, so its services are hand-written `grpc.ServiceDesc`s that carry the same JSON envelope in protobuf `BytesValue`s. A real implementation would add generated protobuf types and a protoc step.
+
+The prototype lives in its own Go module (`prototypes/transport`), so go-plugin and gRPC never enter `go.mod`.
+
+Both transports pass the same semantic checks, `TestTransportCompatibility`:
+
+- handshake and manifest;
+- deterministic version-mismatch refusal;
+- 2,000 sequential echoes, and 32×50 concurrent echoes matched to their responses;
+- structured errors carried verbatim, and a distinct unknown-method code;
+- 1,000 nested extension-to-host callbacks while serving one host request;
+- a 16 MiB chunked artifact upload acknowledged per chunk;
+- an extension-initiated push answered by the host;
+- prompt cancellation that reaches the extension's handler;
+- stray stdout from extension code that leaves the stream intact;
+- a crash mid-call reported as a transport error (not a hang, not an authored error), with later calls failing the same way and a restarted process serving again.
+
+Measured on darwin/arm64 with Go 1.27.3, without `-race`. Representative run:
+
+| Transport | Cold start | Warm restart | Version mismatch | Echo p50 | Echo p99 | Host callback | Artifact 16 MiB / 64 KiB chunks | Cancel seen by extension | Crash detected | Binary | Module deps |
+| --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- | --- |
+| JSON-RPC over stdio | 105 ms | 10 ms | 6 ms | 32 µs | 61 µs | 29 µs | 143 MiB/s | 173 µs | 1.0 ms | 3.8 MiB | 0 |
+| go-plugin over gRPC | 231 ms | 20 ms | 12 ms | 51 µs | 179 µs | 55 µs | 92 MiB/s | 155 µs | 1.5 ms | 17.8 MiB | 14 |
+
+Cold start includes the OS's first launch of a new binary and varies between runs (100–350 ms for both). Under `-race`, both slow by about 3× and keep the same ordering.
+
+| Property | JSON-RPC over stdio | go-plugin over gRPC |
+| --- | --- | --- |
+| Dependencies and toolchain | None. The repository already speaks JSON-RPC 2.0 over stdio, hand-written, in `os mcp` (`internal/cli/mcp.go`) | go-plugin, gRPC, protobuf, yamux and hclog (14 modules), plus protoc and codegen for typed messages |
+| Language neutrality | Any language with JSON and pipes. A shell or Python extension is plausible | Needs gRPC and go-plugin's stdout handshake line, mTLS and broker conventions. In practice Go |
+| Extension-to-host calls | Native: either side sends requests on one stream. Nested callbacks work, provided the reader is never blocked (see flow control) | Needs the GRPCBroker to open a second multiplexed connection to a host-served service |
+| Versioning | Explicit `initialize` negotiation over a version list | Handshake cookie plus one `ProtocolVersion` per client config. Several versions need `VersionedPlugins` or a retry per version |
+| Cancellation | `$/cancel {id}` notification, the LSP convention; implemented in the prototype | Native gRPC context propagation |
+| Streaming | Request/response per chunk. Simple and acknowledged | Native gRPC streams (not used, so the comparison stays fair) |
+| Stdout hazard | Stray stdout corrupts the stream. The SDK moves `os.Stdout` to stderr before serving (proved). Non-Go child processes must be told the same | Stdout is only for the handshake line; after that go-plugin captures it |
+| Reattach after host restart | Not offered | `ReattachConfig` is offered, but it is unnecessary here: processes are disposable and executions are adopted through `executor.recover` |
+| Debuggability | Human-readable lines; a session can be replayed from a log | Binary frames |
+
+**Decision: JSON-RPC 2.0 over stdio.** It meets every semantic the shipped workloads need with no new dependency. It is faster on this workload, and it is symmetric, which the inventory shows is essential: KV, state reads, artifacts, persist-recovery, resources, push and setup are all extension-to-host calls made while serving a host call. It is language-neutral without codegen, and it matches the repository's existing MCP implementation.
+
+go-plugin's real advantages are native cancellation and streaming, and built-in reattach. The first two cost about 20 lines in the prototype. The third is not needed by this process model.
+
+What would reverse the decision: a need for very high-throughput streaming (the per-chunk acknowledgement already gives 143 MiB/s), or a third-party ecosystem that standardises on go-plugin. Neither exists, and the user is the only consumer.
+
+## Wire format
+
+- **Framing.** UTF-8 JSON, one object per line (`\n`), at most `MaxMessageBytes` (16 MiB; above the runtime's default 8 MiB reconcile page). A longer line or invalid JSON is a protocol error that closes the connection. stderr is the extension's diagnostic log. In 07-02 the host will capture it to a bounded per-extension log under the state directory.
+- **Messages.** JSON-RPC 2.0 requests (`id`, `method`, `params`), responses (`result` or `error`) and notifications (no `id`). Ids are unique per sender while in flight. Responses may arrive in any order.
+- **Payloads.** Wire types are snake_case JSON defined in package `protocol` by 07-02. They mirror the management API's wire shapes (`client`) where those exist. `domain.Payload.Data` is raw JSON. Byte fields (delivery bodies, artifact chunks) are base64.
+- **Errors.** Transport errors use the JSON-RPC reserved codes: `-32700` parse, `-32601` method not found, `-32602` invalid params, `-32603` internal, `-32800` cancelled. Anything authored uses `-32000` with `data.code`, a stable `[a-z][a-z0-9_]*` code. The protocol's codes (`protocol.Code*`) map one-to-one onto the public sentinel errors (table below). An operation handler's `OperationError` code and message cross verbatim. Unauthored errors cross as `internal` with no detail; the detail stays in the side's own log, as the management API already does.
+
+| Code | Go error |
+| --- | --- |
+| `invalid` | `extension.ErrInvalid` |
+| `unsupported` | `extension.ErrUnsupported` |
+| `unauthorized` | `extension.ErrUnauthorized` |
+| `undeclared` | `extension.ErrUndeclared` |
+| `not_found` | `storage.ErrNotFound` |
+| `conflict` | `storage.ErrConflict` / lease fence |
+| `causal_limit` | runtime causal rejection |
+| `not_adoptable` | `extension.ErrNotAdoptable` |
+| `not_accepting` | `extension.ErrNotAccepting` |
+| `nothing_to_attach` | `extension.ErrNothingToAttach` |
+| `resource_setup_failed` | `extension.ErrResourceSetup` (the resource still returned) |
+| `resource_not_found` | `extension.ErrResourceNotFound` |
+| `retry_after` | `extension.RetryHint` (`data.reset_at` optional) |
+
+The protocol also has its own codes: `unsupported_protocol_version`, `reentrant_call`, `overloaded`, `cancelled`, `shutting_down` and `internal`.
+
+## Lifecycle
+
+1. **Discovery.** The host reads `open-conduit-extension.json` from each extension directory. 07-02 decides the install location; 07-03 decides install/update/removal. `ParseManifest` validates it strictly and offline, so `config validate` and `migrate` never start a process. Conflicts with first-party or other registrations (names, types, operations, families) are refused atomically, as `Registrar` does in-process.
+2. **Start.** The host runs `command` with a sanitized environment (the B05 baseline, no secrets), the protocol on stdin/stdout, and the extension's private state directory. The process is a child of the daemon, in its own process group.
+3. **`initialize`.** The host sends `{protocol_versions, host: {name, version}, state_dir}`. The extension returns `{protocol_version, manifest}`. The host refuses a manifest that differs from the file, or no common version. No other method is valid before `initialize` succeeds.
+4. **`configure`.** The host sends the current generation's entries, connections (secret references only), `public_url` and `dry_run`. The extension returns the ingress sources and webhook paths it registers (under its own namespaces). It is sent again on every config apply and tunnel URL change, without a restart.
+5. **Running.** The host calls the surfaces the manifest enables (`Manifest.Enabled`): routing, operations, executor and provider methods, and `task.run` at each declared interval. The extension calls the host's KV, state, artifact, secret, timer, event and resource methods, and `ingress.deliver` from its own receivers.
+6. **Shutdown.** The host sends `shutdown`. The extension answers `shutting_down` to new requests, finishes or cancels in-flight work, and exits. Then the host closes stdin, sends SIGTERM after a grace period, and SIGKILL. An extension must also exit when stdin reaches EOF, so a host crash never leaves an orphaned extension serving nobody.
+
+An executor extension's *executions* are separate. Its detached processes survive the extension and the daemon, exactly as the shell and claude-code executors' processes do today. They are adopted through `executor.recover` with their recovery metadata, never by reattaching to the old extension process.
+
+## Cancellation
+
+Either side cancels an in-flight request with the `$/cancel {id}` notification. The canceller returns `context.Canceled` at once and discards a late response. The receiver cancels the handler's context and answers `-32800`, if it answers at all. Cancellation means "stop serving this request". It never means "undo":
+
+- cancelling `executor.wait` cancels observation only. The execution keeps running, as `RunHandle.Wait` documents.
+- `executor.interrupt` and `executor.stop` are the controls that act on a process.
+- a cancelled `operation.call` may already have made its external write. Its `request_id` (`CallRequestID`) makes a retry idempotent, and adapters keep their reconcile markers.
+
+The host cancels everything in flight when it stops. Ingress pages run under the runtime's page timeout, and in-transaction methods under their own deadline (below).
+
+## Flow control
+
+- **Per-call acknowledgement** is the backpressure for streams. An artifact is written in chunks of at most 256 KiB (`MaxChunkBytes`), each acknowledged before the next. The prototype moves 143 MiB/s with 64 KiB chunks. Reconcile is paged by the runtime's existing item and byte limits. Telemetry batches are requests with a deadline: a slow exporter fills the host pipeline's bounded buffer, and the host drops with accounting exactly as it does for in-process exporters, never blocking scheduling.
+- **Bounded concurrency without blocking the reader.** Each side serves at most `MaxInflight` (64) requests at once. Over the bound it answers `overloaded` instead of pausing its reader. The reader also delivers the responses that in-flight handlers' nested callbacks wait for, so pausing it deadlocks. The prototype found this, and the bound is implemented that way. The caller retries `overloaded` with backoff.
+- **Message bound.** `MaxMessageBytes` caps one message. Anything larger, such as a big transcript, is an artifact, which is the existing rule against large coordination payloads.
+
+## Transactions and in-transaction calls
+
+The host never makes an open-ended call while it holds a coordination (SQLite) transaction. A hung extension would otherwise stall every writer. The inventory found four pure callbacks that core runs inside a transaction today:
+
+- `RecurrenceFunc`, in the fire-and-rearm transaction;
+- `WorkKindPolicy.Trigger`, in the start transaction;
+- `DependencyFilter`, in the subscription transaction;
+- `EmitPlan.Commit`, in the emission transaction. It needs the accepted Event's ID, sequence, root and depth, which exist only inside the transaction.
+
+Over the protocol these are **bounded in-transaction methods** (`Method.InTransaction`):
+
+- they must be pure and deterministic;
+- the host enforces a hard deadline (`InTransactionDeadlineMillis`, 250 ms, against a measured p99 round trip of 61 µs);
+- any callback while serving one is refused with `reentrant_call`;
+- a timeout or transport failure aborts that transaction with a retryable error, and the work stays pending.
+
+07-02 may move the first three to evaluation before the transaction, with in-transaction revalidation, where that is simpler. `emit.commit` keeps the bounded call, because its records must join the emission atomically.
+
+Extension KV writes are never interactive transactions:
+
+- `kv.get` returns a value and a version (a digest of the value, or absent);
+- `kv.commit` applies preconditions (`version` or `absent`) and puts/deletes as one atomic unit. A failed precondition is `conflict`, and the extension re-reads and retries;
+- `event.accept` takes the same checks and records, so an Event and its index records commit together. That keeps the PRD's "KV writes join the same atomic unit as an event emission".
+
+This is an adapter over `storage.Tx` (`Get`, compare, `Put`/`Delete` in one `Transact`), not a new storage capability.
+
+## Crash and reconnect
+
+A broken pipe or process exit fails every pending request with a transport error (detected in about 1 ms in the prototype). It is never a hang or an authored error. The host restarts the process with backoff, then runs `initialize` and `configure` again. What a crash means depends on the call:
+
+| In flight | Outcome |
+| --- | --- |
+| `webhook.handle` / `ingress.push` | Nothing accepted, so the delivery is not acknowledged (non-2xx). The service retries, and reconcile is the backstop. |
+| `ingress.deliver` (receiver) | The extension acknowledges upstream only after the host's answer. A crash before that leaves the delivery unacknowledged, and the service redelivers. |
+| `ingress.reconcile` | Partial scan: no absence is inferred and no checkpoint advances. The runtime retries the generation. |
+| `route.match` | The routing pass fails and the Event stays pending. Routing is deterministic and retried. |
+| `operation.call` / `.wait` / `.emit` | The toolbelt caller gets a retryable internal error. Its `request_id` makes the retry idempotent. A declared wait or emission either committed or did not. |
+| In-transaction method | The transaction aborts and is retried after restart. |
+| `executor.*` | The extension's crash is not the execution's failure. After restart the host calls `executor.recover` with the persisted recovery metadata, as after a daemon restart. `not_adoptable` leads to `executor.stop`, `ConfirmStopped` and retry policy. Old per-execution tokens stay fenced by lease epoch. |
+| `provider.*` | Acquisition is idempotent per owner and mode, and `provider.reconcile` repairs the rest (the existing contract). |
+| `task.run`, `check.run`, `telemetry.export` | Reported, and retried next pass. A dropped telemetry batch is accounted. |
+
+If the *host* crashes, extensions see EOF and exit. The new daemon starts them again. Durable progress is all in host storage, recovery metadata or the extension's own state directory, so there is nothing to reattach to.
+
+## Authority and scoping
+
+The trust model is 07-02's. Process separation is not sandboxing: an extension runs with the operator's user privileges. 07-01 fixes the protocol-level scoping, which the host applies to every extension-to-host call from the identity it bound at start. The extension never supplies that identity.
+
+- **KV.** Only the extension's own namespaces: its name, or `name.` + suffix (`protocol.Namespace`, the existing `extension.Record` rule).
+- **Families, operations, kinds, recurrences, types, handlers, executors, providers, tasks.** Only names under its own name (`Manifest.Validate`).
+- **Source namespaces.** Its own name, or `name/` + suffix (`protocol.SourceNamespace`, the `EmitPlan` rule).
+- **State reads.** Provisionally limited to scopes whose config uses the extension. This covers every shipped read: projectors filter Works by their own correlation sources, and the schedule translator reads its configured scopes.
+- **`secret.resolve`.** Only the connections bound to the extension's configured entries (B05 isolation).
+- **`operation.call`.** Receives the validated `Authority`, never the bearer token, exactly as in-process handlers do. Executors receive the per-execution endpoint and token in `RunRequest`, as today.
+- **`event.accept` and `work.cancel`.** Apply the same declared-family, causal-limit and own-kind checks as their in-process callers.
+
+## Manifest
+
+`protocol.Manifest` is the specification. Its example manifests are in `protocol/testdata`:
+
+- [`ingress-support.json`](../../protocol/testdata/ingress-support.json): a workspace-free ingress workload shaped like Slack. It declares no executor and no resource, and enables no execution method.
+- [`executor-workspace.json`](../../protocol/testdata/executor-workspace.json): an execution workload. A resumable, injectable executor with stop, forget and attach controls, plus the workspace provider it runs in.
+- [`scheduled-reporting.json`](../../protocol/testdata/scheduled-reporting.json): timers, standing Work with trigger selection, and a committed emission.
+
+Validation rules:
+
+- the protocol list includes a supported version;
+- the name is an identifier and not reserved (`core`, `execution`, `manual`, `os`, `open-conduit`);
+- identifier-shaped names are `name` or `name-…`, and dotted names are `name.…`, with no duplicates;
+- a non-re-derivable family states its loss, and a re-derivable one cannot;
+- an ingress type declares families, and webhooks need an ingress type;
+- work kinds need a route handler;
+- operation kinds are `handler`, `wait` or `emit`, and only emit may `commit`;
+- `dependency_filter` needs a wait operation;
+- toolbelt labels are `none`, `cli`, `mcp` or `sdk`;
+- resource modes are distinct `shared`, `work` or `fresh`;
+- task intervals are at least one second;
+- the command and playbooks stay inside the extension directory;
+- external stores name a declared connection type;
+- unknown fields are rejected.
+
+`TestManifestRejections` covers each rule, including a `storage` capability and a semantic executor label.
+
+The same format and the same catalogue cover both workload shapes. Nothing in core distinguishes an "ingress extension" from an "executor extension". A manifest enables the methods of the surfaces it declares, and the host registers those surfaces through the same runtime interfaces it uses for in-process extensions (`TestExampleManifests`, `TestEveryMethodIsReachable`).
+
+The first-party extensions are not given manifests. They stay in-process, and `internal/migrate` writes their config from exported names (06-02). A third-party extension's config entries are validated through `validate`; 07-03 owns any conversion story.
+
+## Contract changes made in 07-01
+
+- `extension.StopExecutor`: the daemon's private `stopper` interface, now public, because an external executor must be able to supply physical-stop evidence. Shell, claude-code and legacy-job implement it unchanged.
+- `extension.AttachExecutor`, `extension.AttachSpec`, `extension.ErrNothingToAttach`: attach is now a public optional executor method. Bootstrap no longer branches on claude-code. The management wire code `no_session` becomes `nothing_to_attach` (05-04's note), and `claudecode.ErrNoSession` wraps `ErrNothingToAttach`. The unused attach environment that claude-code computed is gone; the operator's shell supplies it, as before.
+- `extension.ContractVersion` still versions the in-process API. `protocol.Version` versions the wire.
+
+## Provisional decisions for user review
+
+1. JSON-RPC 2.0 over stdio, line-delimited, standard library only, symmetric, rather than go-plugin/gRPC.
+2. Integer protocol versions negotiated in `initialize`, with a deterministic refusal on mismatch.
+3. The manifest file name, its fields, and the namespacing rule: identifier names are `name`/`name-…`, dotted names `name.…`, sources `name/…`.
+4. Bounded in-transaction callbacks (250 ms, no reentrancy) for the four existing pure callbacks, rather than restructuring core.
+5. KV through precondition batches (`kv.commit`) rather than interactive transactions.
+6. Disposable processes with no reattach. Crash means restart plus `executor.recover`.
+7. State reads limited to the extension's configured scopes.
+8. Limits: 16 MiB messages, 256 KiB chunks, 64 in flight with an `overloaded` refusal.
+9. Playbooks as a manifest-declared directory: a first-party convention for agent executors, not a core concept.
+10. The listed cross-extension couplings stay in-process and are not offered to subprocesses.
+
+## Follow-on work
+
+- **07-02:**
+  - message types;
+  - the host runtime (discovery, conflicts, start, `initialize`/`configure`, supervision with backoff, stderr capture);
+  - the bounded in-transaction calls and `reentrant_call`;
+  - the scoped extension-to-host surface;
+  - the trust model;
+  - event payload evolution;
+  - an example external extension and executor run through the same ingress, storage and toolbelt suites, with reconnect, partial response, timeout and protocol-mismatch cases.
+- **07-03:**
+  - SDK and package layout, and the install location;
+  - certification;
+  - a round trip of two materially different first-party integrations that avoid the in-process couplings. Suggested: Slack (workspace-free ingress, receiver, tools, projector task, setup) and the shell executor (execution with resume, inject, interrupt, stop, artifacts).

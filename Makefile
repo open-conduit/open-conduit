@@ -5,7 +5,7 @@ VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short HEAD)
 LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 
-.PHONY: build fmt fmt-check vet test boundaries config-check config-deps check cross-build smoke drill
+.PHONY: build fmt fmt-check vet test boundaries config-check config-deps check cross-build smoke drill protocol-prototype
 
 build:
 	$(GO) build ./...
@@ -60,3 +60,9 @@ cross-build:
 # Stage 02 gate evidence: real daemon kill/restart drills (also part of test).
 drill:
 	$(GO) test -race -count=1 -v -run 'TestDaemon|TestServeCommand|TestToolbeltTypeOnlyWait|TestDeclarationSurvivesRecovery' ./integration
+
+# 07-01 transport evidence: JSON-RPC over stdio versus go-plugin/gRPC on one
+# workload. A separate module keeps go-plugin and gRPC out of go.mod; it
+# downloads those modules on first run, so it is not part of check.
+protocol-prototype:
+	cd prototypes/transport && $(GO) test -count=1 -v ./...

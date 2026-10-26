@@ -6,6 +6,7 @@ import (
 	"sort"
 
 	"github.com/alsiola/open-conduit/domain"
+	"github.com/alsiola/open-conduit/extension"
 	"github.com/alsiola/open-conduit/internal/runtime"
 	"github.com/alsiola/open-conduit/storage"
 )
@@ -24,7 +25,7 @@ type Annotation struct {
 }
 
 // AttachSpec is an interactive command an operator runs locally to attach
-// to a Work's executor-private session. It carries no environment: the
+// to a Work's executor-private continuity. It carries no environment: the
 // operator's own shell supplies it.
 type AttachSpec struct {
 	Argv []string `json:"argv"`
@@ -34,8 +35,9 @@ type AttachSpec struct {
 var (
 	// ErrAttachUnsupported means the Work's executor offers no attach.
 	ErrAttachUnsupported = errors.New("executor does not support attach")
-	// ErrNoSession means the executor has no session to attach to yet.
-	ErrNoSession = errors.New("no session to attach to")
+	// ErrNothingToAttach means the executor has nothing to attach to yet
+	// (extension.ErrNothingToAttach).
+	ErrNothingToAttach = extension.ErrNothingToAttach
 )
 
 type wireHold struct {
@@ -177,14 +179,14 @@ func (s *Server) attachWork(c *call) (int, any, error) {
 		return 0, nil, err
 	}
 	if executor == "" {
-		return 0, nil, ErrNoSession
+		return 0, nil, ErrNothingToAttach
 	}
 	spec, err := s.o.Attach(c.ctx, executor, w)
 	if err != nil {
 		return 0, nil, err
 	}
 	if len(spec.Argv) == 0 {
-		return 0, nil, ErrNoSession
+		return 0, nil, ErrNothingToAttach
 	}
 	return 200, map[string]any{"work_id": string(w.ID), "executor": executor, "argv": spec.Argv, "dir": spec.Dir}, nil
 }

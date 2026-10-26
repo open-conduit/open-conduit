@@ -93,7 +93,7 @@ Outcome data (`open-conduit.shell.result.v1`) carries `reason`, plus `exit_code`
 
 The scheduler now preserves executor outcome data when it converts a declared wait into the waiting outcome.
 
-`Interrupt(execution)` acts only on a segment this instance holds. It verifies identity and epoch, records the stop reason and sends SIGTERM to the group; escalation happens during observation. Success means delivered, not stopped. `Stop(execution, epoch)` is trusted host cleanup for a fenced attempt, for example after operator cancel, a scheduler deadline, `ErrNotAdoptable` or an observation error. It terminates any verified live segment and returns nil only when every segment's tree is verified gone. The host then calls `Scheduler.ConfirmStopped(execution, epoch)`. A toolbelt outcome declaration is still never stop evidence. An observed structured result is, because the tree has been drained before `Wait` returns.
+`Interrupt(execution)` acts only on a segment this instance holds. It verifies identity and epoch, records the stop reason and sends SIGTERM to the group; escalation happens during observation. Success means delivered, not stopped. `Stop(execution, epoch)` (the public optional `extension.StopExecutor` since 07-01) is trusted host cleanup for a fenced attempt, for example after operator cancel, a scheduler deadline, `ErrNotAdoptable` or an observation error. It terminates any verified live segment and returns nil only when every segment's tree is verified gone. The host then calls `Scheduler.ConfirmStopped(execution, epoch)`. A toolbelt outcome declaration is still never stop evidence. An observed structured result is, because the tree has been drained before `Wait` returns.
 
 ## Evidence
 

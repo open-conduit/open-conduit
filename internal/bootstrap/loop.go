@@ -253,11 +253,6 @@ func (d *daemon) observe(c *components, a runtime.Attempt) {
 	}()
 }
 
-// stopper is the trusted physical-stop evidence a host executor provides.
-type stopper interface {
-	Stop(context.Context, domain.ID, uint64) error
-}
-
 // confirmStopped proves an attempt is not running before releasing its
 // resource hold. An epoch of zero uses the attempt's current epoch. A
 // superseded epoch is refused by the executor and confirms nothing.
@@ -272,7 +267,7 @@ func (d *daemon) confirmStopped(ctx context.Context, c *components, id domain.ID
 	if epoch != state.Epoch {
 		return
 	}
-	s, ok := d.executors[state.Executor].(stopper)
+	s, ok := d.executors[state.Executor].(extension.StopExecutor)
 	if !ok {
 		d.report("stop", id, "executor_cannot_prove_stop")
 		return

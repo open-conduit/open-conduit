@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/alsiola/open-conduit/domain"
+	"github.com/alsiola/open-conduit/extension"
 	"github.com/alsiola/open-conduit/storage"
 )
 
@@ -538,22 +539,16 @@ func (e *Executor) maintainOne(ctx context.Context, rec record, w domain.Work, k
 	return errors.Join(errs...)
 }
 
-// AttachSpec is an interactive `claude --resume` on a Work's session, for an
-// operator to attach to. The next turn resumes the session even when it is
-// cold, since what the operator did in it is not in the handoff note.
-type AttachSpec struct {
-	Argv []string
-	Dir  string
-	Env  []string
-}
+// ErrNoSession means the Work has no Claude Code session to attach to. It
+// is the executor's extension.ErrNothingToAttach.
+var ErrNoSession = fmt.Errorf("claude code: no session for this work: %w", extension.ErrNothingToAttach)
 
-// ErrNoSession means the Work has no Claude Code session to attach to.
-var ErrNoSession = errors.New("claude code: no session for this work")
-
-// Attach returns the attach command for a Work's session and clears its
-// handoff note so the next turn resumes.
-func (e *Executor) Attach(ctx context.Context, work domain.ID) (AttachSpec, error) {
-	var spec AttachSpec
+// Attach implements extension.AttachExecutor: an interactive `claude
+// --resume` on the Work's session, for an operator to attach to. It clears
+// the handoff note, so the next turn resumes the session even when it is
+// cold, since what the operator did in it is not in the note.
+func (e *Executor) Attach(ctx context.Context, work domain.ID) (extension.AttachSpec, error) {
+	var spec extension.AttachSpec
 	err := e.o.Store.Transact(ctx, storage.Guard{Now: e.o.Now()}, func(tx storage.Tx) error {
 		var rec record
 		found, err := getJSON(tx, e.o.Namespace, workKey(work), &rec)
@@ -573,12 +568,7 @@ func (e *Executor) Attach(ctx context.Context, work domain.ID) (AttachSpec, erro
 		return putJSON(tx, e.o.Namespace, workKey(work), rec)
 	})
 	if err != nil {
-		return AttachSpec{}, err
-	}
-	for _, kv := range e.o.Environ() {
-		if name, _, ok := strings.Cut(kv, "="); ok && baseline(name, nil) {
-			spec.Env = append(spec.Env, kv)
-		}
+		return extension.AttachSpec{}, err
 	}
 	return spec, nil
 }

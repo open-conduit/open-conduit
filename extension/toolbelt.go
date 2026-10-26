@@ -174,7 +174,8 @@ type Dependency struct {
 	FromNow bool
 }
 
-// ContractVersion versions the in-process API, not the deferred subprocess protocol.
+// ContractVersion versions the in-process API. The subprocess wire protocol
+// is versioned separately (protocol.Version, 07-01).
 const ContractVersion uint32 = 1
 
 type Registration struct {

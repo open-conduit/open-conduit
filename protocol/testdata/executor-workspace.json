@@ -1,0 +1,19 @@
+{
+  "protocol": [1],
+  "name": "runner",
+  "version": "0.1.0",
+  "summary": "An execution workload: a resumable, injectable process executor and the workspace provider it runs in (shaped like the first-party shell/claude-code executors and the Git provider).",
+  "command": ["bin/runner", "serve"],
+  "provides": {
+    "executors": [
+      {
+        "name": "runner",
+        "capabilities": {"interrupt": true, "inject": true, "resume": true, "workspace": true, "toolbelt": "cli"},
+        "controls": {"stop": true, "forget": true, "attach": true}
+      }
+    ],
+    "resources": [{"type": "runner-ws", "modes": ["shared", "work", "fresh"]}],
+    "tasks": [{"name": "runner-maintain", "interval_seconds": 30}],
+    "checks": [{"name": "runner"}]
+  }
+}

@@ -61,7 +61,7 @@ type Options struct {
 	// Annotate contributes extension context to GET /work/{id}.
 	Annotate func(context.Context, domain.Work) []Annotation
 	// Attach returns the attach command of the Work's latest attempt's
-	// executor registration (ErrAttachUnsupported, ErrNoSession).
+	// executor registration (ErrAttachUnsupported, ErrNothingToAttach).
 	Attach func(ctx context.Context, executor string, work domain.Work) (AttachSpec, error)
 	// Nudge asks the host loop for an immediate pass (optional).
 	Nudge func()
@@ -133,8 +133,8 @@ func mapError(err error) *apiError {
 		return fail(409, "scope_in_use", "scope has nonterminal work; drain it first")
 	case errors.Is(err, runtime.ErrHeld):
 		return fail(409, "hold_conflict", "the Work is already held, or not held")
-	case errors.Is(err, ErrNoSession):
-		return fail(409, "no_session", "the Work's executor has no session to attach to yet")
+	case errors.Is(err, ErrNothingToAttach):
+		return fail(409, "nothing_to_attach", "the Work's executor has nothing to attach to yet")
 	case errors.Is(err, ErrAttachUnsupported):
 		return fail(422, "attach_unsupported", "the Work's executor does not support attach")
 	case errors.Is(err, ErrHashMismatch):

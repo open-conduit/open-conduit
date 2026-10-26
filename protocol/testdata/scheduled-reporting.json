@@ -1,0 +1,24 @@
+{
+  "protocol": [1],
+  "name": "audit",
+  "version": "0.1.0",
+  "summary": "Timer-driven standing Work plus a reporting operation that indexes what it emits (shaped like the first-party schedule and introspection extensions).",
+  "command": ["./audit"],
+  "provides": {
+    "extensions": [{"type": "audit"}],
+    "families": [
+      {"type": "audit.slot.due", "re_derivable": true},
+      {"type": "audit.finding.reported", "re_derivable": true}
+    ],
+    "routes": [{"handler": "audit", "config": true}],
+    "work_kinds": [{"kind": "audit.run", "standing": true, "trigger": true}],
+    "recurrences": ["audit.calendar"],
+    "operations": [
+      {"name": "audit.report", "kind": "emit", "commit": true},
+      {"name": "audit.list", "kind": "handler"}
+    ],
+    "tasks": [{"name": "audit-ensure", "interval_seconds": 60}],
+    "exporters": true,
+    "checks": [{"name": "audit"}]
+  }
+}

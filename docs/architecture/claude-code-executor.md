@@ -89,7 +89,7 @@ The resume and handoff rules are Open Supervisor's:
 - A session whose transcript exists in the workspace (`<config>/projects/<cwd with non-alphanumerics as ->/<session>.jsonl`) resumes, even when its first turn never ended.
 - A session with a handoff note that was never written starts afresh from the note.
 - A session is *cold* when its last turn ended more than `handoff_minutes` ago (default 55). A cold session is drawn into the experiment: `handoff_share` of the draws (default 0.5) go to a fresh session started from the note (arm `handoff`), and the rest resume (arm `resume`).
-- `Attach` returns `claude --resume <session>` in the workspace and clears the note, so the next turn resumes even when cold.
+- `Attach` returns `claude --resume <session>` in the workspace and clears the note, so the next turn resumes even when cold. Since 07-01 it implements the public `extension.AttachExecutor`; Work without a session returns `ErrNoSession`, which wraps `extension.ErrNothingToAttach`.
 
 **Trials and feedback.**
 

@@ -61,6 +61,6 @@ All five commands passed locally on macOS arm64 with Go 1.27.3, including a sepa
 | Inject consumption/completion acknowledgement | 04-02 (resolved: [generic inject acknowledgement](runtime-semantics.md#generic-inject-acknowledgement-04-02)) | Inject success means accepted, never proof of consumption; `Result.ConsumedInputs` is the proof on every outcome; `ErrNotAccepting` is definitive; preserve pending input. |
 | One pending job rerun/replacement and possible coalescing | 05-01 | No speculative coalesce policy before workload evidence; preserve ordinary queue ordering. |
 | Ownership transfer, active-state conversion and fallback | 03-07, 06-02 | No dual scope owner; independent state and rehearsed fallback. |
-| Subprocess transport/manifest/schema evolution | 07-01 through 07-03 | No speculative third-party protocol before shipped workloads/cutover. |
+| Subprocess transport/manifest/schema evolution | 07-01 through 07-03 (07-01 provisional: [extension protocol](extension-protocol.md), JSON-RPC 2.0 over stdio) | No speculative third-party protocol before shipped workloads; schema evolution and packaging remain 07-02/07-03. |
 
 No unresolved blocking contract defect remains after local checks and review. Stage 02 may start only once this ticket's final checks, evidence and commit are complete. Runtime implementation must pass the same public suites; a later primitive defect first updates contracts and negative controls, then reruns previous workload gates.

@@ -1,0 +1,29 @@
+{
+  "protocol": [1],
+  "name": "chat",
+  "version": "0.1.0",
+  "summary": "Workspace-free chat support: thread ingress, marked replies and thread tools (shaped like the first-party Slack extension).",
+  "command": ["./chat-extension"],
+  "provides": {
+    "connections": [{"type": "chat"}],
+    "extensions": [{"type": "chat", "ingress": true}],
+    "families": [
+      {"type": "chat.message.posted", "re_derivable": true},
+      {"type": "chat.message.edited", "re_derivable": true},
+      {"type": "chat.message.deleted", "re_derivable": false, "loss": "Deletions arrive only by push; a deletion missed while push is down is never observed."}
+    ],
+    "routes": [{"handler": "chat", "config": true}],
+    "work_kinds": [{"kind": "chat.conversation"}],
+    "operations": [
+      {"name": "chat.context", "kind": "handler"},
+      {"name": "chat.thread", "kind": "handler"},
+      {"name": "chat.reply", "kind": "handler"}
+    ],
+    "tasks": [{"name": "chat-project", "interval_seconds": 5}],
+    "webhooks": true,
+    "checks": [{"name": "chat"}, {"name": "chat-auth", "deep": true}],
+    "setup": {"type": "chat", "summary": "Connect a chat workspace and a support channel.", "usage": "[--channel C] [--receiver socket|http]"},
+    "render": true,
+    "playbooks": "playbooks"
+  }
+}

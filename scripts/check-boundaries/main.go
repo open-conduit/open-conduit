@@ -34,7 +34,7 @@ func trackerKitUser(family string) bool {
 }
 
 func public(path string) bool {
-	return path == "domain" || path == "extension" || path == "storage" || path == "observability"
+	return path == "domain" || path == "extension" || path == "storage" || path == "observability" || path == "protocol"
 }
 
 // allowed includes the entire permitted project dependency closure, not just
@@ -52,6 +52,10 @@ func allowed(owner, dependency string, test bool) bool {
 		return false
 	case owner == "extension", owner == "storage", owner == "observability":
 		return dependency == "domain"
+	case owner == "protocol":
+		// The extracted subprocess protocol (07-01) describes the public
+		// contracts on the wire; it never reaches an implementation.
+		return public(dependency)
 	case under(owner, "conformance"):
 		return public(dependency) || under(dependency, "conformance")
 	case under(owner, "internal/runtime"):

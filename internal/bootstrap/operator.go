@@ -157,15 +157,14 @@ func (d *daemon) annotate(ctx context.Context, w domain.Work) []management.Annot
 	return out
 }
 
-// attach returns the attach command of the Work's executor registration.
+// attach returns the attach command of the Work's executor registration,
+// through the optional public extension.AttachExecutor.
 func (d *daemon) attach(ctx context.Context, executor string, w domain.Work) (management.AttachSpec, error) {
-	if executor != ClaudeCodeExecutor || d.claude.executor == nil {
+	a, ok := d.executors[executor].(extension.AttachExecutor)
+	if !ok {
 		return management.AttachSpec{}, management.ErrAttachUnsupported
 	}
-	spec, err := d.claude.executor.Attach(ctx, w.ID)
-	if errors.Is(err, claudecode.ErrNoSession) {
-		return management.AttachSpec{}, management.ErrNoSession
-	}
+	spec, err := a.Attach(ctx, w.ID)
 	if err != nil {
 		return management.AttachSpec{}, err
 	}

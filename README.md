@@ -30,13 +30,14 @@ The project is implementing the core after completing the contracts gate. Primit
 - [Operator setup, doctor and engineering controls](docs/architecture/operator-setup.md)
 - [Installed integrations: Linear, Jira, Bitbucket, PostHog and operator tools](docs/architecture/installed-integrations.md)
 - [Migration from Open Supervisor, ownership transfer and recovery](docs/architecture/migration-recovery.md)
+- [Extension subprocess protocol: inventory, transport decision and manifest (provisional)](docs/architecture/extension-protocol.md)
 - [Contracts gate, supported build targets and development tooling](docs/architecture/contracts-gate.md)
 - [Parity inventory, workflows and acceptance scenarios](docs/baseline/parity.md)
 - [Pinned source test index](docs/baseline/source-tests.md)
 
 Ticket identifiers in these documents refer to the local delivery plan. The baseline records required outcomes and verification work; it does not claim that the rewrite passes those scenarios yet.
 
-Use Go 1.24.2 or later, Python 3.10+ and Make. Run `make config-deps` once to install the isolated schema checker, then `make check` for formatting, vet, race tests, dependency boundaries, config fixtures and binary smoke checks. `make cross-build` checks Darwin/Linux amd64/arm64 compilation.
+Use Go 1.24.2 or later, Python 3.10+ and Make. Run `make config-deps` once to install the isolated schema checker, then `make check` for formatting, vet, race tests, dependency boundaries, config fixtures and binary smoke checks. `make cross-build` checks Darwin/Linux amd64/arm64 compilation. `make protocol-prototype` reruns the 07-01 transport comparison in its own module (it downloads go-plugin and gRPC on first use, so it is not part of `make check`).
 
 `make build` creates `bin/open-conduit` (operator client) and `bin/os` (the execution toolbelt CLI used inside shell executions). Hosted CI is configured for the same checks on Linux/macOS; the daemon is not implemented yet.
 
