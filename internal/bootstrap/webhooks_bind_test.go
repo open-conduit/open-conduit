@@ -17,8 +17,8 @@ func TestBindErrorExplainsPortInUse(t *testing.T) {
 	if err == nil {
 		t.Fatal("second bind succeeded")
 	}
-	msg := bindError(addr, err).Error()
-	for _, want := range []string{"cannot bind " + addr, "already in use", "--webhook-addr", "another free local port"} {
+	msg := bindError(addr, fromFlags, err).Error()
+	for _, want := range []string{"cannot bind " + addr + " (from serve flags)", "already in use", "--webhook-addr", "another free local port"} {
 		if !strings.Contains(msg, want) {
 			t.Errorf("error %q does not mention %q", msg, want)
 		}

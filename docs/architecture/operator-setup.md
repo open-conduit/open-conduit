@@ -17,7 +17,7 @@ open-conduit init github --repo acme/web --scope web --checkout ~/Code/web   # o
 open-conduit secret set github-token                                   # only when the token is not cmd:gh auth token
 open-conduit config set /connections/github/secret_refs/token '"keyring:github-token"'
 open-conduit config check
-open-conduit serve                                                     # --webhook-addr … for webhooks, --dry-run to watch
+open-conduit serve                                                     # settings.webhooks for webhooks, --dry-run to watch
 open-conduit doctor --check-secrets
 open-conduit tui
 ```
@@ -58,7 +58,7 @@ A schema-driven interactive editor (v1 `forms`/editor) is not ported. The comman
 | `github` | Per entry: registration failures (`fail`, for example `github_connection_required`), rate-limit pauses, reconcile state (`reconcile_failing` with the scan error code and failure count, first scan pending, or the age of the last complete scan), projection failures (`projection_failing`) and dry run. No service calls. |
 | `github_auth` | Only with `check_secrets=true`. Resolves each entry's credentials privately, authenticates the reader and any bot writer, and reads the repository (`Client.Verify`). Codes: `verified`; `credential_unavailable`, `credential_rejected`, `repo_unreachable` or `rate_limited` (`fail`); `read_only` when the identity cannot push and projections are live; `hook_admin_missing` when `manage_webhook` lacks hook admin. Reports `pull/push/admin` when GitHub returns them. |
 | `github_capability` | Config gaps the validator accepts but that stop GitHub work: no `github` route, a route whose binding has no toolbelt, a claude-code binding without `github.context`/`declare_outcome`, a hold route that does not bind `github-hold` or comes after `github`, and (info) scheduled issues not claimed without a hold route. |
-| `webhooks` | `reconcile_only` (info) with no listener; otherwise the bound address, the tunnel and public URL (`tunnel_down`, `tunnel_failed`), and per entry its route, a missing `webhook_secret` (not mounted) and the managed hook state (`ok`, `dry_run`, `hook_permission_denied`, …). |
+| `webhooks` | `reconcile_only` (info) with no listener; otherwise the bound address, the tunnel and public URL (`tunnel_down`, `tunnel_failed`), where the address and the tunnel came from (`serve flags` or `settings.webhooks`), `restart_required` when an applied generation changed `settings.webhooks` since `serve` started, and per entry its route, a missing `webhook_secret` (not mounted) and the managed hook state (`ok`, `dry_run`, `hook_permission_denied`, …). |
 | `claude_code` | Runs `--version` for each claude-code binding's binary (`installed`, or `claude_missing` as `fail`); reports dry run. With `serve --claude-usage` it also reads the subscription's 5-hour and 7-day usage windows (v1 `Usage`, the undocumented OAuth endpoint, with the machine's Claude login) and warns at 90%. A read failure is "usage unknown", never a fault. Usage reading is opt-in because it reads the login token. |
 
 ## Operator controls
@@ -99,7 +99,16 @@ Detail shows the Work's correlation keys, hold, annotations and active or woken 
 
 Webhooks are an accelerator: reconcile always runs, so with no listener the daemon is **reconcile-only** and loses only latency (`settings.reconcile_seconds`, default 15 minutes). `serve --no-tunnel` forces this.
 
-- **Listener.** `serve --webhook-addr HOST:PORT` binds a separate HTTP server on its own TCP address. Any free local port works (the docs use 8787 as an example); if the bind fails, `serve` exits saying why (for example, the address is already in use) and suggests another port. It serves only the routes that registered entries name:
+- **Stored settings.** The owner records the listener and tunnel once in the config, and a bare `open-conduit serve` uses them:
+
+  ```json
+  "settings": {"webhooks": {"addr": "127.0.0.1:8787", "tunnel": "ngrok", "tunnel_domain": "hooks.example.ngrok.app"}}
+  ```
+
+  - `addr` is required. `tunnel` is `ngrok` (optional `tunnel_domain`), `cloudflared` (optional `tunnel_name` with `tunnel_hostname`) or `static` (`public_url`; `public_url` alone means `static`). `config check` rejects a field that does not belong to the chosen tunnel.
+  - The serve flags of the same names (`--webhook-addr`, `--tunnel`, `--tunnel-domain`, `--tunnel-name`, `--tunnel-hostname`, `--public-url`) override it for one run. The address and the tunnel override separately, and any tunnel flag replaces the whole stored tunnel. `--tunnel-binary` is a flag only.
+  - The listener starts with `serve`, so a change made with `config apply` takes effect at the next restart (doctor reports `restart_required` until then).
+- **Listener.** `settings.webhooks.addr` (or `serve --webhook-addr HOST:PORT`) binds a separate HTTP server on its own TCP address. Any free local port works (the docs use 8787 as an example); if the bind fails, `serve` exits saying why (for example, the address is already in use) and suggests another port. It serves only the routes that registered entries name:
   - `POST /github/<scope>/<entry>` for each GitHub entry that names a `webhook_secret`;
   - `POST /slack/<scope>/<entry>` for each Slack entry with `receiver: http` ([Slack extension](slack-extension.md));
   - `POST /linear/…`, `POST /jira/…` and `POST /bitbucket/<scope>/<entry>` for tracker and code-host entries ([installed integrations](installed-integrations.md));
@@ -109,7 +118,7 @@ Webhooks are an accelerator: reconcile always runs, so with no listener the daem
   Anything else is 404, including `/v1/...`. It never sees management credentials and never forwards to the Unix socket.
   - Each request is verified by its entry's adapter against the entry's secret from the current generation before anything is parsed or accepted. For GitHub that is `github.WebhookHandler` (HMAC before parsing, 401 on a bad signature).
   - A delivery is pushed with `Ingress.Push`, and 202 is returned only after durable acceptance. A refusal is 503: GitHub may redeliver, and reconcile recovers the state either way.
-- **Tunnel.** `extensions/tunnel` ports v1's providers: `ngrok` (`--tunnel-domain` for a reserved domain), `cloudflared` (a quick tunnel, or `--tunnel-name` with `--tunnel-hostname`) and `static` (`--public-url`, for a reverse proxy or Tailscale Funnel).
+- **Tunnel.** `extensions/tunnel` ports v1's providers: `ngrok` (`tunnel_domain` for a reserved domain), `cloudflared` (a quick tunnel, or `tunnel_name` with `tunnel_hostname`) and `static` (`public_url`, for a reverse proxy or Tailscale Funnel).
   - A provider process that exits is restarted with a growing wait (5 seconds, doubling to 5 minutes), and each public URL it reports is passed to the host.
   - It forwards only to the webhook listener.
 - **Managed hooks.** An entry with `"manage_webhook": true` (which requires `webhook_secret`) has its repository webhook created or re-pointed at `<public URL>/github/<scope>/<entry>`, with the secret and the events the normalizer understands (`github.HookEvents`). The host finds the hook by its path suffix after a restart, makes no write when it already matches, and retries failures after a minute. Without `manage_webhook` the owner adds the webhook by hand.

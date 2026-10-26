@@ -226,7 +226,7 @@ func TestConvertFixture(t *testing.T) {
 		{Unsupported, "projects.legacy", "not converted"},
 		{Unsupported, "sources.linear-src.routes.api", "any/all/not"},
 		{Unsupported, "sources.linear-src.unrouted", "unrouted label"},
-		{Action, "settings.tunnel", "--tunnel ngrok"},
+		{Action, "settings.tunnel", `"tunnel": "ngrok"`},
 		{Action, "projects.web.jobs.poke.on.webhook", "/schedule/web/jobs/poke/<token>"},
 		{Action, "projects.web .open-supervisor/playbooks/triage.md", "triage-reports"},
 		{Info, "projects.web .open-supervisor/playbooks/work-issue.md", "fallback"},

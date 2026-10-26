@@ -16,6 +16,7 @@ import (
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/extensions/tunnel"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
@@ -52,16 +53,51 @@ type webhookState struct {
 	listening string // bound address, "" when reconcile-only
 	public    string // current public URL, "" while down or none
 	tunnel    string // provider kind
+	// listenFrom and tunnelFrom name where the address and tunnel came from:
+	// fromFlags or fromSettings ("" for no tunnel).
+	listenFrom, tunnelFrom string
+	// stored is the settings.webhooks the listener started from; the
+	// listener never follows a reload, so doctor flags a change.
+	stored    config.Webhooks
 	tunnelErr string
 	hooks     map[string]*hookState // by source namespace
 	managing  bool
 	server    *http.Server
 }
 
-// bindError explains a failed webhook listener bind: why it failed and that
-// any free local port works, since the address is only ever set by
-// --webhook-addr.
-func bindError(addr string, err error) error {
+// Where the effective listener and tunnel came from, as doctor names them.
+const (
+	fromFlags    = "serve flags"
+	fromSettings = "settings.webhooks"
+)
+
+// exposure resolves the listener address and tunnel from the serve flags
+// over the stored settings.webhooks. The address and the tunnel override
+// separately, and a tunnel flag replaces the whole stored tunnel, so a stored
+// ngrok domain never leaks into a --tunnel cloudflared run. --tunnel-binary
+// is a flag only and applies to either.
+func exposure(o Options, stored config.Webhooks) (addr, addrFrom string, t TunnelOptions, tunnelFrom string) {
+	addr, t = o.WebhookAddr, o.Tunnel
+	if addr != "" {
+		addrFrom = fromFlags
+	} else if stored.Addr != "" {
+		addr, addrFrom = stored.Addr, fromSettings
+	}
+	if t.Kind != "" || t.Domain != "" || t.Name != "" || t.Hostname != "" || t.PublicURL != "" {
+		tunnelFrom = fromFlags
+	} else if stored.Tunnel != "" || stored.PublicURL != "" {
+		t = TunnelOptions{Kind: stored.Tunnel, Binary: t.Binary, Domain: stored.TunnelDomain, Name: stored.TunnelName, Hostname: stored.TunnelHostname, PublicURL: stored.PublicURL}
+		tunnelFrom = fromSettings
+	}
+	if t.Kind == "" && t.PublicURL != "" {
+		t.Kind = "static"
+	}
+	return addr, addrFrom, t, tunnelFrom
+}
+
+// bindError explains a failed webhook listener bind: why it failed, where
+// the address came from, and that any free local port works.
+func bindError(addr, from string, err error) error {
 	var why string
 	switch {
 	case errors.Is(err, syscall.EADDRINUSE):
@@ -73,23 +109,35 @@ func bindError(addr string, err error) error {
 	default:
 		why = err.Error()
 	}
-	return errors.New("webhook listener: cannot bind " + addr + ": " + why +
-		"; choose another free local port with --webhook-addr (for example 127.0.0.1:8788)")
+	return errors.New("webhook listener: cannot bind " + addr + " (from " + from + "): " + why +
+		"; choose another free local port with settings.webhooks.addr or --webhook-addr (for example 127.0.0.1:8788)")
 }
 
 // startWebhooks binds the listener and starts the tunnel. It returns a stop
-// function; with no address configured, or --no-tunnel, nothing starts.
-func (d *daemon) startWebhooks(ctx context.Context) (func(), error) {
-	if d.o.WebhookAddr == "" || d.o.NoTunnel {
+// function; with no address in the flags or settings.webhooks, or with
+// --no-tunnel, nothing starts.
+func (d *daemon) startWebhooks(ctx context.Context, stored config.Webhooks) (func(), error) {
+	d.hooks.mu.Lock()
+	d.hooks.stored = stored
+	d.hooks.mu.Unlock()
+	if d.o.NoTunnel {
 		return func() {}, nil
 	}
-	ln, err := net.Listen("tcp", d.o.WebhookAddr)
+	addr, addrFrom, t, tunnelFrom := exposure(d.o, stored)
+	if addr == "" {
+		if t.Kind != "" {
+			return nil, errors.New("webhook listener: a tunnel exposes the webhook listener: add --webhook-addr (for example 127.0.0.1:8787) or settings.webhooks.addr")
+		}
+		return func() {}, nil
+	}
+	ln, err := net.Listen("tcp", addr)
 	if err != nil {
-		return nil, bindError(d.o.WebhookAddr, err)
+		return nil, bindError(addr, addrFrom, err)
 	}
 	srv := &http.Server{Handler: d.webhookHandler(), ReadHeaderTimeout: 10 * time.Second, ReadTimeout: time.Minute, MaxHeaderBytes: 64 << 10}
 	d.hooks.mu.Lock()
 	d.hooks.listening = ln.Addr().String()
+	d.hooks.listenFrom, d.hooks.tunnelFrom = addrFrom, tunnelFrom
 	d.hooks.server = srv
 	d.hooks.hooks = map[string]*hookState{}
 	d.hooks.mu.Unlock()
@@ -97,10 +145,6 @@ func (d *daemon) startWebhooks(ctx context.Context) (func(), error) {
 	d.log.Info("webhook listener serving", "address", ln.Addr().String())
 	tctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
-	t := d.o.Tunnel
-	if t.Kind == "" && t.PublicURL != "" {
-		t.Kind = "static"
-	}
 	if t.Kind != "" {
 		provider, err := tunnel.New(tunnel.Options{Kind: t.Kind, Binary: t.Binary, Domain: t.Domain, Name: t.Name, Hostname: t.Hostname, URL: t.PublicURL,
 			Log: func(msg string, args ...any) { d.log.Warn(msg, args...) }})
@@ -334,31 +378,41 @@ func hookCode(err error) string {
 }
 
 // webhookCheck reports listener, tunnel and per-entry webhook exposure.
-func (d *daemon) webhookCheck(context.Context) runtime.Check {
+func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 	d.hooks.mu.Lock()
 	listening, public, kind, terr := d.hooks.listening, d.hooks.public, d.hooks.tunnel, d.hooks.tunnelErr
+	listenFrom, tunnelFrom, stored := d.hooks.listenFrom, d.hooks.tunnelFrom, d.hooks.stored
 	hooks := map[string]hookState{}
 	for k, v := range d.hooks.hooks {
 		hooks[k] = *v
 	}
 	d.hooks.mu.Unlock()
-	check := runtime.Check{Name: "webhooks", Status: runtime.CheckOK, Code: "listening"}
+	check = runtime.Check{Name: "webhooks", Status: runtime.CheckOK, Code: "listening"}
+	if snapshot, _ := d.configs.Current(); snapshot != nil && snapshot.Settings.Webhooks != stored {
+		defer func() {
+			check.Status, check.Code = runtime.CheckWarn, "restart_required"
+			check.Detail += "; settings.webhooks changed since serve started: restart serve to use it"
+		}()
+	}
 	if listening == "" {
-		check.Status, check.Code, check.Detail = runtime.CheckInfo, "reconcile_only", "no webhook listener: events arrive through reconcile (settings.reconcile_seconds); start serve with --webhook-addr to add webhooks"
+		check.Status, check.Code, check.Detail = runtime.CheckInfo, "reconcile_only", "no webhook listener: events arrive through reconcile (settings.reconcile_seconds); store settings.webhooks (or start serve with --webhook-addr) to add webhooks"
+		if d.o.NoTunnel {
+			check.Detail = "no webhook listener (serve --no-tunnel): events arrive through reconcile (settings.reconcile_seconds)"
+		}
 		return check
 	}
-	check.Detail = "listener " + listening
+	check.Detail = "listener " + listening + " (from " + listenFrom + ")"
 	switch {
 	case kind == "":
-		check.Detail += "; no tunnel (forward a public URL to the listener, or use --tunnel)"
+		check.Detail += "; no tunnel (forward a public URL to the listener, or set settings.webhooks.tunnel)"
 	case terr != "":
 		check.Status, check.Code = runtime.CheckWarn, terr
-		check.Detail += "; tunnel " + kind + " stopped"
+		check.Detail += "; tunnel " + kind + " (from " + tunnelFrom + ") stopped"
 	case public == "":
 		check.Status, check.Code = runtime.CheckWarn, "tunnel_down"
-		check.Detail += "; tunnel " + kind + " has no public URL yet"
+		check.Detail += "; tunnel " + kind + " (from " + tunnelFrom + ") has no public URL yet"
 	default:
-		check.Detail += "; public " + public + " (" + kind + ")"
+		check.Detail += "; public " + public + " (" + kind + ", from " + tunnelFrom + ")"
 	}
 	d.github.mu.Lock()
 	for ns, src := range d.github.sources {
