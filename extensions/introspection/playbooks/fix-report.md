@@ -28,4 +28,5 @@ Call an operation with the `call` tool (`mcp__open-conduit__call`), giving the `
 ## Don't
 
 - Don't fix anything that needs a judgement call: say so in your summary and resolve nothing, so the next triage files it.
+- Don't write an issue, comment or PR body into the checkout: pass it on stdin (`-` for `<file>` or `--body-file`), or write it in a temporary directory outside the checkout. A stray file there leaves the checkout dirty, so the next fix won't start.
 - Don't report a defect about this fix with `introspection.report-issue` unless it is a real new defect: Open Conduit's chain limits stop report loops.

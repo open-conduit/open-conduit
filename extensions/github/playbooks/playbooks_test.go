@@ -38,7 +38,7 @@ func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 		if found == 0 {
 			t.Errorf("%s names no operation", name)
 		}
-		for _, legacy := range []string{"$OPEN_SUPERVISOR", "agent worktree", "OPEN_SUPERVISOR_REMOTE", "open-supervisor:"} {
+		for _, legacy := range []string{"$OPEN_SUPERVISOR", "agent worktree", "OPEN_SUPERVISOR_REMOTE", "open-supervisor:", ".local/"} {
 			if strings.Contains(text, legacy) {
 				t.Errorf("%s still says %q", name, legacy)
 			}

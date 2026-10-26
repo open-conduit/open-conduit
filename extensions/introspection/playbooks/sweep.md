@@ -37,5 +37,6 @@ The `area` of a correction is a hint, not the answer: a `writing` correction abo
 ## Don't
 
 - Don't commit anything in a sweep except the rule files.
+- Don't write an issue, comment or PR body into the checkout: pass it on stdin (`-` for `<file>` or `--body-file`), or write it in a temporary directory outside the checkout. Nothing cleans up a stray file left there.
 - Don't touch another project's files: a sweep works on the checkout it starts in.
 - Don't report a defect about this sweep with `introspection.report-issue` unless it is a real new defect: Open Conduit's chain limits stop report loops.

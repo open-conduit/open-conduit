@@ -139,7 +139,7 @@ Post a short start comment on the issue with `github.issue.comment`, e.g. "Worki
 ### 3. Do the work
 
 - Follow the project's rules, and load each rule skill they list before the work it covers.
-- Keep scratch files in the workspace's `.local/` (or another ignored folder the rules name).
+- Keep scratch files where the project's rules say, and never commit them.
 - Before opening the PR, run what the rules say must pass (typecheck, tests, build) and make it pass.
 - Commit on the issue's branch with clear messages. Open Conduit sets up commit signing (off unless the project asks for it), so don't pass signing flags.
 
@@ -167,7 +167,7 @@ Keep it brief; the PR has the detail.
 
 The message lists what happened since your last turn, each under its own heading. Re-read the issue (`github.issue.view`) and the PR (`github.pr.view`) before acting, so each comment is read in context, then take the events in order:
 
-- **A comment** (on the issue, the PR, an inline review thread, or a review). A comment that is only an image is often pointing at something: fetch it (`github.attachment.get` with the `url` and `"save_to": ".local/<name>.png"`, or `curl` for a link elsewhere) and look. Then:
+- **A comment** (on the issue, the PR, an inline review thread, or a review). A comment that is only an image is often pointing at something: fetch it (`github.attachment.get` with the `url` and a `save_to` path where the project keeps scratch files, or `curl` for a link elsewhere) and look. Then:
   - A change request: make it, commit, push.
   - A question: answer it. A request you think is wrong, or one you can't act on: say why, briefly, and ask.
   - If the comment corrects something you did, log it (see Log corrections).

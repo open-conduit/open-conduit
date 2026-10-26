@@ -27,7 +27,7 @@ func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 		if found == 0 {
 			t.Fatalf("%s names no operation", name)
 		}
-		for _, v1 := range []string{"$OPEN_SUPERVISOR", "agent problem", "agent correction", "--upstream", "open-supervisor/"} {
+		for _, v1 := range []string{"$OPEN_SUPERVISOR", "agent problem", "agent correction", "--upstream", "open-supervisor/", ".local/"} {
 			if strings.Contains(text, v1) {
 				t.Errorf("%s still names %s", name, v1)
 			}

@@ -40,4 +40,5 @@ File issues with whatever tracker access this triage has, when `file_issues` is 
 
 - Don't edit or commit anything in a triage: fixes are their own Work.
 - Don't request a fix for anything that needs a judgement call: file it.
+- Don't write an issue, comment or PR body into the checkout: pass it on stdin (`-` for `<file>` or `--body-file`), or write it in a temporary directory outside the checkout. A stray file there leaves the checkout dirty, so the fixes this triage requests can't land.
 - Don't report a defect about this triage with `introspection.report-issue` unless it is a real new defect: a report made here is a report about a report, and Open Conduit's chain limits stop such loops.
