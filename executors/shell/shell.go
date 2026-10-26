@@ -233,6 +233,10 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 		switch {
 		case errors.Is(err, extension.ErrResourceSetup):
 			return e.preset(ctx, rn, "workspace_setup_failed", "workspace setup failed")
+		case errors.Is(err, extension.ErrResourceExhausted):
+			// Refused before anything was made (a full disk); the provider's
+			// message says what to free.
+			return e.preset(ctx, rn, "workspace_no_space", err.Error())
 		case err != nil || res.Dir == "":
 			return e.preset(ctx, rn, "workspace_unavailable", "workspace acquisition failed")
 		}

@@ -67,6 +67,7 @@ const (
 	CodeNothingToAttach    = "nothing_to_attach"            // executor.attach has nothing yet (extension.ErrNothingToAttach)
 	CodeResourceSetup      = "resource_setup_failed"        // resource exists, setup failed (extension.ErrResourceSetup)
 	CodeResourceNotFound   = "resource_not_found"           // no owned lease (extension.ErrResourceNotFound)
+	CodeResourceExhausted  = "resource_exhausted"           // capacity too low to create a resource (extension.ErrResourceExhausted)
 	CodeRetryAfter         = "retry_after"                  // retryable executor limit; data.reset_at optional (extension.RetryHint)
 	CodeReentrant          = "reentrant_call"               // a callback was made while serving an in-transaction method
 	CodeOverloaded         = "overloaded"                   // too many requests in flight; retry later

@@ -581,6 +581,7 @@ func TestWorkspaceThroughBroker(t *testing.T) {
 	}{
 		{"setup", `{"command":"true"}`, "workspace_setup_failed", fmt.Errorf("%w: exit 1", extension.ErrResourceSetup)},
 		{"unavailable", `{"command":"true"}`, "workspace_unavailable", errors.New("checkout missing")},
+		{"no-space", `{"command":"true"}`, "workspace_no_space", fmt.Errorf("%w: not enough disk space; free space, then retry", extension.ErrResourceExhausted)},
 		{"conflict", `{"command":"true","dir":"/tmp"}`, "invalid_config", nil},
 	} {
 		r, _ := request("exec-ws-"+c.name, 1, c.config)
@@ -588,6 +589,9 @@ func TestWorkspaceThroughBroker(t *testing.T) {
 		res := run(t, e, r)
 		if res.Outcome.Kind != domain.OutcomeFailed || data(t, res).Reason != c.reason {
 			t.Fatalf("%s: %+v %s", c.name, res.Outcome, res.Outcome.Data.Data)
+		}
+		if c.reason == "workspace_no_space" && !strings.Contains(res.Outcome.Summary, "free space, then retry") {
+			t.Fatalf("the refusal lost its advice: %q", res.Outcome.Summary)
 		}
 	}
 }

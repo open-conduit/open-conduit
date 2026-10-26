@@ -30,6 +30,7 @@ import (
 	"github.com/alsiola/open-conduit/executors/shell"
 	"github.com/alsiola/open-conduit/extension"
 	bb "github.com/alsiola/open-conduit/extensions/bitbucket"
+	gitws "github.com/alsiola/open-conduit/extensions/git"
 	gh "github.com/alsiola/open-conduit/extensions/github"
 	is "github.com/alsiola/open-conduit/extensions/introspection"
 	sc "github.com/alsiola/open-conduit/extensions/schedule"
@@ -68,6 +69,11 @@ type Options struct {
 	RetentionInterval time.Duration
 	// ResourceInterval paces resource lease reconciliation (default 5s).
 	ResourceInterval time.Duration
+	// SweepInterval paces the spare-workspace sweep (default 6h, as in v1).
+	// The first sweep runs one interval after start.
+	SweepInterval time.Duration
+	// ResourceDiskSpace overrides the git provider's free-space probe (tests).
+	ResourceDiskSpace gitws.DiskSpaceFunc
 	// ExecutorInterval paces executor housekeeping such as the Claude Code
 	// handoff feedback questions and reactions (default 30s).
 	ExecutorInterval time.Duration
@@ -178,7 +184,10 @@ func (o *Options) defaults() error {
 	if o.ExecutorInterval == 0 {
 		o.ExecutorInterval = 30 * time.Second
 	}
-	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ResourceInterval <= 0 || o.ExecutorInterval <= 0 {
+	if o.SweepInterval == 0 {
+		o.SweepInterval = 6 * time.Hour
+	}
+	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ResourceInterval <= 0 || o.ExecutorInterval <= 0 || o.SweepInterval <= 0 {
 		return errors.New("intervals must be positive")
 	}
 	return nil

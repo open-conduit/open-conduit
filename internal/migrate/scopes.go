@@ -239,6 +239,11 @@ func (c *converter) gitConfig(p *v1Project, checkout string) obj {
 	if p.Worktree.Setup != "" {
 		cfg["setup"] = p.Worktree.Setup
 	}
+	// v1 1.3.0 (#63) also refuses a new worktree that would leave its disk
+	// fuller than settings.host.disk, whether or not the host watch runs.
+	if d := c.v1.Settings.Host.Disk; d > 0 && d != 90 {
+		cfg["disk_full_percent"] = min(d, 100)
+	}
 	if len(p.Worktree.SetupWhen) > 0 {
 		cfg["setup_when"] = p.Worktree.SetupWhen
 	}

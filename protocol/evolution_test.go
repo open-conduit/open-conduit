@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"testing"
@@ -99,11 +100,16 @@ func TestKVLayoutTransitions(t *testing.T) {
 
 func TestErrorCodesRoundTrip(t *testing.T) {
 	reset := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
-	for _, err := range []error{extension.ErrInvalid, extension.ErrUnsupported, extension.ErrUnauthorized, extension.ErrUndeclared, storage.ErrNotFound, storage.ErrConflict, extension.ErrNotAdoptable, extension.ErrNotAccepting, extension.ErrNothingToAttach, extension.ErrResourceSetup, extension.ErrResourceNotFound} {
+	for _, err := range []error{extension.ErrInvalid, extension.ErrUnsupported, extension.ErrUnauthorized, extension.ErrUndeclared, storage.ErrNotFound, storage.ErrConflict, extension.ErrNotAdoptable, extension.ErrNotAccepting, extension.ErrNothingToAttach, extension.ErrResourceSetup, extension.ErrResourceNotFound, extension.ErrResourceExhausted} {
 		e := protocol.Encode(errors.Join(errors.New("context"), err))
 		if got := protocol.Decode(e.Code, e.Message, e.ResetAt); !errors.Is(got, err) {
 			t.Errorf("%v crossed as %v", err, got)
 		}
+	}
+	// A capacity refusal keeps the provider's advice across the boundary.
+	full := protocol.Encode(fmt.Errorf("%w: not enough disk space; free space, then retry", extension.ErrResourceExhausted))
+	if got := protocol.Decode(full.Code, full.Message, nil); full.Code != protocol.CodeResourceExhausted || !errors.Is(got, extension.ErrResourceExhausted) || !strings.Contains(got.Error(), "free space, then retry") {
+		t.Errorf("capacity refusal crossed as %+v", full)
 	}
 	if e := protocol.Encode(storage.ErrLeaseLost); e.Code != protocol.CodeConflict {
 		t.Errorf("lease loss crossed as %s", e.Code)

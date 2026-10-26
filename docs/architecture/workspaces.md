@@ -15,6 +15,7 @@ Core knows nothing about repositories, branches, worktrees or filesystem layout.
 | `ResourceOwner` | Trusted `{ScopeID, WorkID, ExecutionID}` taken from the attempt, never from the executor. |
 | `ResourceRequest` | Executor-chosen `Mode` (empty selects the binding's default), provider-defined opaque `Params`, and an optional `Log` writer for human-readable progress. |
 | `Resource` | `Kind`, opaque lease `Ref`, `Dir`, `Env` (the provider's environment layer, never persisted) and `Data` (a description for history). |
+| `ResourceSweeper` | Optional `Sweep(status)`: removes spare resources owner-driven release doesn't reach and reports those it kept (08-02). |
 | `ResourceStatusFunc` | Host-reported durable owner state for `Reconcile`. An execution is *done* only when it is terminal **and** its physical resource exclusion is confirmed (`AttemptState.Excluded`). |
 
 These are the guarantees a provider must meet:
@@ -47,6 +48,20 @@ The provider keeps a private ledger (`<state>/resources/git/leases/<ref>.json`, 
 
 The daemon reconciles every `ResourceInterval` (default 5s) in the background. Doctor shows `ok`, `info retained` with each retained lease and its expiry, or `warn cleanup_failed/reconcile_failed`.
 
+## Disk safety and the spare-workspace sweep
+
+Ticket 08-02 ports v1 1.3.0's worktree disk safety (open-supervisor #63, `3dcf60c`).
+
+- **Full-disk refusal.** Before it makes a `work` or `fresh` workspace (agent and job checkouts alike), the provider measures the target filesystem at the workspace root and sizes the checkout (`git ls-tree -r -l` of the start ref). It refuses when the checkout would leave less free than `100 − disk_full_percent` of the disk keeps, counting at most `disk_reserve_bytes`. The defaults are v1's: 90% and 10 GiB. `disk_full_percent: 100` turns the check off. A disk it can't read doesn't stop it, as in v1. Re-acquiring an existing workspace and `shared` mode need no room. The refusal is a `NoSpaceError` wrapping the public `extension.ErrResourceExhausted` (protocol code `resource_exhausted`, which carries the message). It says how much is free, what the checkout needs and what is kept, then lists which of the scope's workspaces can go: those retained after their owner finished, or with failed cleanup, plus workspace directories no lease holds. Nothing is created and the lease is dropped, so trying again is refused the same way until space is freed. The executor's normal retry budget still applies. Shell and Claude Code report it as a structured failed result, `workspace_no_space`, whose summary is the message, and the run log carries it too. The free-space probe is injectable (`Options.DiskSpace`; the daemon's `ResourceDiskSpace`), so tests never fill a disk.
+- **Partial-failure cleanup.** When creation fails partway, for example when git leaves a half-made checkout on a full disk, the provider stops anything in the directory, runs `git worktree remove --force`, deletes the directory and prunes. It then drops the lease, so the workspace is never reused as if it were whole. If that cleanup itself fails, the lease becomes `cleanup_failed` and `Reconcile` retries it. A partial directory left by a crash is cleared before the next creation at that path.
+- **Sweep.** The optional public `extension.ResourceSweeper` covers spare workspaces that owner-driven release doesn't reach. The daemon calls it every `--sweep-interval` (default 6h, as in v1; the first sweep runs one interval after start). The Git provider's `Sweep` removes these:
+  - workspaces of finished Work it still keeps: a failed or cancelled Work's, inside its retention, and a fresh run's once both its execution and its Work are done
+  - workspaces whose owner no record holds
+  - directories under its workspace root that no lease holds
+
+  The last two must be idle for a day (directory mtime, v1 `spareAge`). The sweep never removes a workspace that has uncommitted changes (copied files aside), that has commits on `HEAD` no remote-tracking branch has (with no remote, every commit counts), that git can't read, or that a running process uses (by command line or working directory). It reports each of these as kept, with `uncommitted`, `unpushed`, `unreadable` or `in_use`. Branches are always kept. Leases that are acquiring or failed cleanup, and shared checkouts, are left to `Reconcile`. The doctor `resources` check adds the last sweep's time and counts to its detail, with a `swept <mode> <ref> <reason>` item for each removal and a `kept <mode> <ref> <reason>: <why>` item for each kept workspace. Kept workspaces show as `info spare_kept` when nothing else needs attention, and a failed sweep as `warn sweep_failed`.
+- **Migration.** The 06-02 converter maps v1 `settings.host.disk` (which 1.3.0 also uses as the worktree threshold) to each converted git resource's `disk_full_percent` when it is not v1's default of 90 ([migration](migration-recovery.md)).
+
 ## Copy, setup and environment
 
 - **`copy`.** Checkout-relative clean paths (never absolute, `..` or `.git/…`) are copied into `work`/`fresh` workspaces on every acquisition, so a reused workspace picks up keys added since (v1 `Refresh`). A destination that is a symlink, or whose directory resolves outside the workspace, is skipped and logged. Unchanged files are not rewritten. File modes are preserved.
@@ -70,10 +85,11 @@ The daemon reconciles every `ResourceInterval` (default 5s) in the background. D
 | `copy`, `setup`, `setup_when`, `setup_timeout_seconds` | See above. |
 | `dotenv` | Opt into the checkout `.env` layer (default false). |
 | `retain_failed_seconds` | Failure retention (default 86400). |
+| `disk_full_percent`, `disk_reserve_bytes` | Full-disk refusal threshold (default 90; 100 turns it off) and the most it keeps free (default 10 GiB). See [disk safety](#disk-safety-and-the-spare-workspace-sweep). |
 
 ## Shell executor
 
-A shell binding with a resource runs in `Resource.Dir` with the provider layer. `dir` and a bound workspace together are rejected (`invalid_config`). Acquisition happens after recovery intent and before the process deadline starts. The provider's explanation (fast-forward, behind/stale reason, copied files, setup output) is written to the run's log artifact. The structured result carries `workspace: {ref, schema, data}`. A setup failure or unavailable workspace becomes a structured failed result with no process (`workspace_setup_failed`, `workspace_unavailable`), so no uncertain hold remains. The shell executor now advertises the mechanical `workspace` capability.
+A shell binding with a resource runs in `Resource.Dir` with the provider layer. `dir` and a bound workspace together are rejected (`invalid_config`). Acquisition happens after recovery intent and before the process deadline starts. The provider's explanation (fast-forward, behind/stale reason, copied files, setup output) is written to the run's log artifact. The structured result carries `workspace: {ref, schema, data}`. A setup failure or unavailable workspace becomes a structured failed result with no process (`workspace_setup_failed`, `workspace_unavailable`, and `workspace_no_space` for a full-disk refusal), so no uncertain hold remains. The shell executor now advertises the mechanical `workspace` capability.
 
 ## Verification
 
@@ -96,6 +112,12 @@ A shell binding with a resource runs in `Resource.Dir` with the provider layer. 
   - a failed fresh run is retained and reported by doctor
   - a shared run fast-forwards the main checkout and keeps an unrelated local edit
   - a scope with no resource runs with no `.env` layer
+- [Disk safety tests](../../extensions/git/disk_test.go), ports of v1 `internal/worktree/worktree_test.go` and `internal/engine/worktrees_test.go` (08-02):
+  - full-disk refusal through the injected probe, with the actionable message, the scope's spare workspaces and nothing made or leased
+  - reuse without a check, `disk_full_percent: 100` and a capped reserve
+  - a half-made workspace cleared, deregistered and unleased
+  - the sweep removing finished, owner-unknown and orphaned clean workspaces (branches kept) and keeping dirty, unpushed, in-use, unreadable, live and still-retained ones
+- [Disk safety drill](../../integration/daemon_workspace_disk_test.go) on the composed daemon: a structured `workspace_no_space` refusal with nothing run, then the sweep removing a cancelled Work's workspace and an idle orphan while keeping a dirty orphan, all reported by doctor.
 
 ## Deferred
 

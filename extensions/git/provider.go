@@ -54,6 +54,9 @@ type Options struct {
 	Environ func() []string
 	// Git is the git binary (default "git").
 	Git string
+	// DiskSpace measures free space before a work or fresh workspace is made
+	// (default: the filesystem's own figures).
+	DiskSpace DiskSpaceFunc
 }
 
 // Provider implements extension.ResourceProvider.
@@ -87,6 +90,9 @@ func New(o Options) (*Provider, error) {
 	if o.Git == "" {
 		o.Git = "git"
 	}
+	if o.DiskSpace == nil {
+		o.DiskSpace = diskSpace
+	}
 	return &Provider{o: o, locks: map[string]*sync.Mutex{}}, nil
 }
 
@@ -117,6 +123,7 @@ type lease struct {
 	Branch        string                  `json:"branch,omitempty"`
 	Sign          bool                    `json:"sign,omitempty"`
 	DotEnv        bool                    `json:"dotenv,omitempty"`
+	Copy          []string                `json:"copy,omitempty"`
 	RetainSeconds int64                   `json:"retain_seconds"`
 	Code          string                  `json:"code,omitempty"`
 	Attempts      int                     `json:"cleanup_attempts,omitempty"`
@@ -284,7 +291,7 @@ func (p *Provider) Acquire(ctx context.Context, a extension.ResourceAcquisition)
 }
 
 func newLease(ref, mode string, cfg Config, checkout string, o extension.ResourceOwner) lease {
-	return lease{Ref: ref, Mode: mode, State: stateAcquiring, Owner: o, Checkout: checkout, Remote: cfg.Remote, Sign: cfg.Sign, DotEnv: cfg.DotEnv, RetainSeconds: cfg.RetainFailedSeconds}
+	return lease{Ref: ref, Mode: mode, State: stateAcquiring, Owner: o, Checkout: checkout, Remote: cfg.Remote, Sign: cfg.Sign, DotEnv: cfg.DotEnv, Copy: cfg.Copy, RetainSeconds: cfg.RetainFailedSeconds}
 }
 
 func resource(l lease, w workspace) extension.Resource {
@@ -400,7 +407,7 @@ func (p *Provider) fresh(ctx context.Context, cfg Config, checkout string, a ext
 			return extension.Resource{}, err
 		}
 		if err = p.createFresh(ctx, cfg, checkout, &l); err != nil {
-			p.abandon(ctx, &l)
+			p.abandon(ctx, &l, log, err)
 			return extension.Resource{}, err
 		}
 		logf(log, "checked out %s/%s at %s in %s", cfg.Remote, l.Base, p.head(ctx, l.Path), l.Path)
@@ -415,7 +422,11 @@ func (p *Provider) createFresh(ctx context.Context, cfg Config, checkout string,
 	if _, err := p.git(ctx, checkout, "fetch", "-q", cfg.Remote, l.Base); err != nil {
 		return err
 	}
-	_, err := p.git(ctx, checkout, "worktree", "add", "-q", "--detach", l.Path, cfg.Remote+"/"+l.Base)
+	start := cfg.Remote + "/" + l.Base
+	if err := p.roomFor(ctx, cfg, l, start); err != nil {
+		return err
+	}
+	_, err := p.git(ctx, checkout, "worktree", "add", "-q", "--detach", l.Path, start)
 	return err
 }
 
@@ -451,14 +462,14 @@ func (p *Provider) work(ctx context.Context, cfg Config, checkout string, prm pa
 			return extension.Resource{}, err
 		}
 		if err = p.createWork(ctx, cfg, checkout, &l, log); err != nil {
-			p.abandon(ctx, &l)
+			p.abandon(ctx, &l, log, err)
 			return extension.Resource{}, err
 		}
 	}
 	if !slices.Contains(l.Holders, a.Owner.ExecutionID) {
 		l.Holders = append(l.Holders, a.Owner.ExecutionID)
 	}
-	l.Sign, l.DotEnv, l.RetainSeconds = cfg.Sign, cfg.DotEnv, cfg.RetainFailedSeconds
+	l.Sign, l.DotEnv, l.Copy, l.RetainSeconds = cfg.Sign, cfg.DotEnv, cfg.Copy, cfg.RetainFailedSeconds
 	w.Dirty = p.dirty(ctx, l.Path, cfg.Copy)
 	if w.Dirty > 0 {
 		logf(log, "the workspace has %d uncommitted path(s) from earlier runs; they were kept", w.Dirty)
@@ -475,28 +486,36 @@ func (p *Provider) createWork(ctx context.Context, cfg Config, checkout string, 
 			logf(log, "fetch failed, carrying on: %s", firstLine(err.Error()))
 		}
 	}
+	// start is what the checkout is made from; tracking, a remote branch it
+	// follows.
+	var start, tracking, done string
+	var args []string
 	switch {
 	case p.refExists(ctx, checkout, "refs/heads/"+l.Branch):
-		if _, err := p.git(ctx, checkout, "worktree", "add", "-q", l.Path, l.Branch); err != nil {
-			return err
-		}
-		logf(log, "checked out the existing branch %s in %s", l.Branch, l.Path)
+		start, args = l.Branch, []string{l.Path, l.Branch}
+		done = fmt.Sprintf("checked out the existing branch %s in %s", l.Branch, l.Path)
 	case p.refExists(ctx, checkout, "refs/remotes/"+cfg.Remote+"/"+l.Branch):
-		if _, err := p.git(ctx, checkout, "worktree", "add", "-q", "-b", l.Branch, l.Path, cfg.Remote+"/"+l.Branch); err != nil {
-			return err
-		}
-		_, _ = p.git(ctx, l.Path, "branch", "-q", "--set-upstream-to", cfg.Remote+"/"+l.Branch)
-		logf(log, "checked out %s from %s in %s", l.Branch, cfg.Remote, l.Path)
+		start = cfg.Remote + "/" + l.Branch
+		tracking, args = start, []string{"-b", l.Branch, l.Path, start}
+		done = fmt.Sprintf("checked out %s from %s in %s", l.Branch, cfg.Remote, l.Path)
 	default:
-		start := cfg.Remote + "/" + l.Base
+		start = cfg.Remote + "/" + l.Base
 		if !p.refExists(ctx, checkout, "refs/remotes/"+start) {
 			start = l.Base
 		}
-		if _, err := p.git(ctx, checkout, "worktree", "add", "-q", "--no-track", "-b", l.Branch, l.Path, start); err != nil {
-			return err
-		}
-		logf(log, "created %s from %s in %s", l.Branch, start, l.Path)
+		args = []string{"--no-track", "-b", l.Branch, l.Path, start}
+		done = fmt.Sprintf("created %s from %s in %s", l.Branch, start, l.Path)
 	}
+	if err := p.roomFor(ctx, cfg, l, start); err != nil {
+		return err
+	}
+	if _, err := p.git(ctx, checkout, append([]string{"worktree", "add", "-q"}, args...)...); err != nil {
+		return err
+	}
+	if tracking != "" {
+		_, _ = p.git(ctx, l.Path, "branch", "-q", "--set-upstream-to", tracking)
+	}
+	logf(log, "%s", done)
 	return nil
 }
 
@@ -534,13 +553,20 @@ func (p *Provider) clearStale(ctx context.Context, checkout, path string) {
 	_, _ = p.git(ctx, checkout, "worktree", "prune")
 }
 
-// abandon cleans up a creation that failed before the workspace was usable.
-// If that cleanup fails the lease is left for Reconcile.
-func (p *Provider) abandon(ctx context.Context, l *lease) {
+// abandon cleans up a creation that failed before the workspace was usable
+// (refused for disk space, or a checkout git left half-made by a full disk),
+// so it is never reused as if it were whole, and drops the lease. If that
+// cleanup fails the lease is recorded as cleanup_failed for Reconcile.
+func (p *Provider) abandon(ctx context.Context, l *lease, log io.Writer, cause error) {
+	logf(log, "%s", cause)
 	if err := p.removeWorkspace(ctx, *l); err != nil {
 		l.State, l.Code = stateCleanupFailed, "cleanup_failed"
 		_ = p.save(l)
+		logf(log, "couldn't clear the unfinished workspace; it will be removed later")
 		return
+	}
+	if !errors.Is(cause, extension.ErrResourceExhausted) {
+		logf(log, "the unfinished workspace was cleared")
 	}
 	_ = p.drop(l.Ref)
 }

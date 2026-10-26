@@ -58,6 +58,17 @@ type fixture struct {
 	status               map[domain.ID]extension.ResourceOwnerStatus
 	mu                   sync.Mutex
 	workDone, workFailed map[domain.ID]bool
+	// total and free are what the injected disk probe reports; probed lists
+	// the paths it was asked about.
+	total, free uint64
+	probed      []string
+}
+
+// setDisk changes what the injected free-space probe reports.
+func (f *fixture) setDisk(total, free uint64) {
+	f.mu.Lock()
+	f.total, f.free = total, free
+	f.mu.Unlock()
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -67,7 +78,8 @@ func newFixture(t *testing.T) *fixture {
 		dir = real
 	}
 	f := &fixture{t: t, dir: dir, origin: filepath.Join(dir, "origin.git"), root: filepath.Join(dir, "repo"), other: filepath.Join(dir, "other"),
-		clock: time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC), status: map[domain.ID]extension.ResourceOwnerStatus{}}
+		clock: time.Date(2026, 10, 25, 12, 0, 0, 0, time.UTC), status: map[domain.ID]extension.ResourceOwnerStatus{},
+		total: 1 << 40, free: 1 << 39}
 	runGit(t, dir, "init", "-q", "--bare", "-b", "main", f.origin)
 	runGit(t, dir, "clone", "-q", f.origin, f.root)
 	runGit(t, f.root, "checkout", "-q", "-B", "main")
@@ -87,6 +99,11 @@ func (f *fixture) newProvider() *Provider {
 		f.mu.Lock()
 		defer f.mu.Unlock()
 		return f.clock
+	}, DiskSpace: func(path string) (uint64, uint64, error) {
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		f.probed = append(f.probed, path)
+		return f.total, f.free, nil
 	}})
 	if err != nil {
 		f.t.Fatal(err)
@@ -687,7 +704,8 @@ func TestUnknownOwnerIsRetainedNotDeleted(t *testing.T) {
 
 func TestConfigValidation(t *testing.T) {
 	good, err := ParseConfig([]byte(`{"checkout":"repo"}`))
-	if err != nil || good.Mode != "shared" || good.Remote != "origin" || good.RetainFailedSeconds != 86400 || good.SetupTimeoutSeconds != 1800 || good.BranchTemplate != "agent/work-{work}" {
+	if err != nil || good.Mode != "shared" || good.Remote != "origin" || good.RetainFailedSeconds != 86400 || good.SetupTimeoutSeconds != 1800 || good.BranchTemplate != "agent/work-{work}" ||
+		good.DiskFullPercent != 90 || good.DiskReserveBytes != 10<<30 {
 		t.Fatalf("defaults: %+v %v", good, err)
 	}
 	for _, bad := range []string{
@@ -695,6 +713,7 @@ func TestConfigValidation(t *testing.T) {
 		`{"checkout":"r","remote":"../x"}`, `{"checkout":"r","base_branch":"-x"}`, `{"checkout":"r","base_branch":"a..b"}`,
 		`{"checkout":"r","branch_template":"agent/{key}"}`, `{"checkout":"r","copy":["/etc/passwd"]}`, `{"checkout":"r","copy":["../x"]}`,
 		`{"checkout":"r","copy":[".git/config"]}`, `{"checkout":"r","setup_when":["a/../../b"]}`, `{"checkout":"r","retain_failed_seconds":-1}`,
+		`{"checkout":"r","disk_full_percent":-1}`, `{"checkout":"r","disk_full_percent":100.5}`, `{"checkout":"r","disk_reserve_bytes":-1}`,
 	} {
 		if _, err := ParseConfig([]byte(bad)); !errors.Is(err, ErrConfig) {
 			t.Errorf("accepted %s", bad)

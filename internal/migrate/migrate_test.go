@@ -127,7 +127,8 @@ func TestConvertFixture(t *testing.T) {
 		t.Fatalf("agent env: %v", cfg)
 	}
 	git := agent["resource"].(map[string]any)["config"].(map[string]any)
-	if git["checkout"] != "/home/op/Code/web" || git["mode"] != "work" || git["dotenv"] != true || git["setup"] != "pnpm install" || git["base_branch"] != "main" {
+	// settings.host.disk: 80 is also v1 1.3.0's worktree disk check (#63).
+	if git["checkout"] != "/home/op/Code/web" || git["mode"] != "work" || git["dotenv"] != true || git["setup"] != "pnpm install" || git["base_branch"] != "main" || git["disk_full_percent"] != 80.0 {
 		t.Fatalf("agent resource: %v", git)
 	}
 	entry := find(web["extensions"], "type", "github")["config"].(map[string]any)

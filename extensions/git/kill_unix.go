@@ -185,3 +185,20 @@ func pidList(fields []string) []int {
 	}
 	return pids
 }
+
+// inUse reports whether a process other than this one and its ancestors runs
+// from the workspace: its command line names the path or its working
+// directory is inside it.
+func inUse(path string) bool {
+	parents := processTable()
+	spared := map[int]bool{}
+	for pid := os.Getpid(); pid > 1 && !spared[pid]; pid = parents[pid] {
+		spared[pid] = true
+	}
+	for _, pid := range append(pgrep(path+string(filepath.Separator)), cwdWithin(path)...) {
+		if !spared[pid] && pid > 1 {
+			return true
+		}
+	}
+	return false
+}

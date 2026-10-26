@@ -43,6 +43,7 @@ var sentinels = []struct {
 	{CodeNothingToAttach, extension.ErrNothingToAttach},
 	{CodeResourceSetup, extension.ErrResourceSetup},
 	{CodeResourceNotFound, extension.ErrResourceNotFound},
+	{CodeResourceExhausted, extension.ErrResourceExhausted},
 	{CodeUnsupportedVersion, ErrIncompatible},
 	{CodeCancelled, context.Canceled},
 }
@@ -90,6 +91,11 @@ func Encode(err error) *Error {
 	if errors.Is(err, extension.ErrConflict) {
 		return &Error{Code: CodeConflict, Message: "registration conflict"}
 	}
+	if errors.Is(err, extension.ErrResourceExhausted) {
+		// The refusal says what to free; providers author it from sizes and
+		// workspace names only.
+		return &Error{Code: CodeResourceExhausted, Message: err.Error()}
+	}
 	for _, s := range sentinels {
 		if errors.Is(err, s.err) {
 			return &Error{Code: s.code, Message: s.code}
@@ -111,7 +117,7 @@ func Decode(code, message string, resetAt *time.Time) error {
 // Known reports whether code is one of the protocol's own codes.
 func Known(code string) bool {
 	switch code {
-	case CodeUnsupportedVersion, CodeMethodNotFound, CodeInvalid, CodeUnsupported, CodeUnauthorized, CodeUndeclared, CodeNotFound, CodeConflict, CodeCausalLimit, CodeNotAdoptable, CodeNotAccepting, CodeNothingToAttach, CodeResourceSetup, CodeResourceNotFound, CodeRetryAfter, CodeReentrant, CodeOverloaded, CodeCancelled, CodeShuttingDown, CodeInternal, CodeSchema, CodeKVDowngrade:
+	case CodeUnsupportedVersion, CodeMethodNotFound, CodeInvalid, CodeUnsupported, CodeUnauthorized, CodeUndeclared, CodeNotFound, CodeConflict, CodeCausalLimit, CodeNotAdoptable, CodeNotAccepting, CodeNothingToAttach, CodeResourceSetup, CodeResourceNotFound, CodeResourceExhausted, CodeRetryAfter, CodeReentrant, CodeOverloaded, CodeCancelled, CodeShuttingDown, CodeInternal, CodeSchema, CodeKVDowngrade:
 		return true
 	}
 	return false

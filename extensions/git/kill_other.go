@@ -26,3 +26,6 @@ func runGroup(ctx context.Context, cmd *exec.Cmd) error {
 }
 
 func killWithin(string) {}
+
+// inUse can't tell here, so a sweep keeps the workspace.
+func inUse(string) bool { return true }

@@ -63,6 +63,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.reconfigureOnURLChange(ctx)
 		d.runExtensionTasks(ctx)
 		d.reconcileResources(c)
+		d.sweepResources(c)
 		d.maintainClaudeCode(ctx)
 		if d.now().Sub(lastSweep) >= d.o.RetentionInterval {
 			if _, err = c.scheduler.SweepRetention(ctx, passLimit); err != nil && ctx.Err() == nil {

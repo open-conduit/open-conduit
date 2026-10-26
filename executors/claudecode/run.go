@@ -178,6 +178,10 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		switch {
 		case errors.Is(err, extension.ErrResourceSetup):
 			return e.preset(ctx, rn, cfg.StatusSchema, "workspace_setup_failed", "workspace setup failed", nil)
+		case errors.Is(err, extension.ErrResourceExhausted):
+			// Refused before anything was made (a full disk); the provider's
+			// message says what to free.
+			return e.preset(ctx, rn, cfg.StatusSchema, "workspace_no_space", err.Error(), nil)
 		case err != nil || res.Dir == "":
 			return e.preset(ctx, rn, cfg.StatusSchema, "workspace_unavailable", "workspace acquisition failed", nil)
 		}

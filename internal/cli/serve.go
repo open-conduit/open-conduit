@@ -12,6 +12,8 @@ import (
 type ServeRequest struct {
 	StateDir, ConfigPath, Socket, ToolbeltDir, LifecycleLog string
 	PollInterval, LeaseDuration, RetentionInterval          time.Duration
+	// SweepInterval paces the spare-workspace sweep (default 6h).
+	SweepInterval time.Duration
 	// WebhookAddr enables the webhook listener; Tunnel* expose it.
 	WebhookAddr                                                   string
 	TunnelKind, TunnelBinary, TunnelDomain, TunnelName, PublicURL string
@@ -37,7 +39,8 @@ func (o *operator) serve(args []string) int {
 	poll := fs.fs.Duration("poll-interval", time.Second, "")
 	lease := fs.fs.Duration("lease-duration", time.Minute, "")
 	retention := fs.fs.Duration("retention-interval", 10*time.Minute, "")
-	if pos, err := fs.parse(args); err != nil || len(pos) != 0 || *poll <= 0 || *lease <= 0 || *retention <= 0 {
+	sweep := fs.fs.Duration("sweep-interval", 6*time.Hour, "")
+	if pos, err := fs.parse(args); err != nil || len(pos) != 0 || *poll <= 0 || *lease <= 0 || *retention <= 0 || *sweep <= 0 {
 		return usageError(o.errOut, "invalid serve flags")
 	}
 	switch fs.get("tunnel") {
@@ -52,7 +55,7 @@ func (o *operator) serve(args []string) int {
 		fmt.Fprintln(o.errOut, "open-conduit: serve is not available in this binary")
 		return 1
 	}
-	r := ServeRequest{StateDir: o.stateDir(), ConfigPath: o.abs(fs.get("config")), Socket: o.abs(o.socket), ToolbeltDir: o.abs(fs.get("toolbelt-dir")), LifecycleLog: o.abs(fs.get("lifecycle-log")), PollInterval: *poll, LeaseDuration: *lease, RetentionInterval: *retention,
+	r := ServeRequest{StateDir: o.stateDir(), ConfigPath: o.abs(fs.get("config")), Socket: o.abs(o.socket), ToolbeltDir: o.abs(fs.get("toolbelt-dir")), LifecycleLog: o.abs(fs.get("lifecycle-log")), PollInterval: *poll, LeaseDuration: *lease, RetentionInterval: *retention, SweepInterval: *sweep,
 		WebhookAddr: fs.get("webhook-addr"), TunnelKind: fs.get("tunnel"), TunnelBinary: fs.get("tunnel-binary"), TunnelDomain: fs.get("tunnel-domain"),
 		TunnelName: fs.get("tunnel-name"), TunnelHostname: fs.get("tunnel-hostname"), PublicURL: fs.get("public-url"), NoTunnel: *noTunnel, DryRun: *dryRun, ClaudeUsage: *usage}
 	if r.ConfigPath == "" {

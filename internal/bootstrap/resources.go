@@ -23,7 +23,7 @@ import (
 const ResourceConfigSchema = "core.config.resource.v1"
 
 // resourceState is the host side of the optional resource providers: the
-// registered providers and the last reconcile report for doctor.
+// registered providers and the last reconcile and sweep reports for doctor.
 type resourceState struct {
 	providers map[string]extension.ResourceProvider
 	mu        sync.Mutex
@@ -31,6 +31,13 @@ type resourceState struct {
 	last      time.Time
 	report    extension.ResourceReport
 	err       error
+	// The spare-workspace sweep: when it last ran (or the daemon started),
+	// what it found and whether it failed.
+	sweeping  bool
+	swept     bool
+	lastSweep time.Time
+	sweep     extension.ResourceSweepReport
+	sweepErr  error
 }
 
 func resourceRegistry(r *config.Registry) {
@@ -39,12 +46,49 @@ func resourceRegistry(r *config.Registry) {
 }
 
 func (d *daemon) openResources() error {
-	p, err := gitws.New(gitws.Options{StateDir: filepath.Join(d.o.StateDir, "resources", gitws.Type), BaseDir: filepath.Dir(d.o.ConfigPath), Now: d.now})
+	p, err := gitws.New(gitws.Options{StateDir: filepath.Join(d.o.StateDir, "resources", gitws.Type), BaseDir: filepath.Dir(d.o.ConfigPath), Now: d.now, DiskSpace: d.o.ResourceDiskSpace})
 	if err != nil {
 		return err
 	}
 	d.resources.providers = map[string]extension.ResourceProvider{gitws.Type: p}
+	d.resources.lastSweep = d.now()
 	return nil
+}
+
+// sweepResources runs each sweeping provider's spare-workspace sweep in the
+// background, once per SweepInterval (v1: every 6 hours).
+func (d *daemon) sweepResources(c *components) {
+	r := &d.resources
+	r.mu.Lock()
+	if r.sweeping || len(r.providers) == 0 || d.now().Sub(r.lastSweep) < d.o.SweepInterval {
+		r.mu.Unlock()
+		return
+	}
+	r.sweeping = true
+	r.mu.Unlock()
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		var total extension.ResourceSweepReport
+		var errs []error
+		for _, name := range providerNames(r.providers) {
+			s, ok := r.providers[name].(extension.ResourceSweeper)
+			if !ok {
+				continue
+			}
+			report, err := s.Sweep(d.ctx, func(ctx context.Context, o extension.ResourceOwner) (extension.ResourceOwnerStatus, error) {
+				return d.ownerStatus(ctx, c, o)
+			})
+			total.Removed = append(total.Removed, report.Removed...)
+			total.Kept = append(total.Kept, report.Kept...)
+			if err != nil && d.ctx.Err() == nil {
+				errs = append(errs, err)
+			}
+		}
+		r.mu.Lock()
+		r.sweeping, r.swept, r.lastSweep, r.sweep, r.sweepErr = false, true, d.now(), total, errors.Join(errs...)
+		r.mu.Unlock()
+	}()
 }
 
 // bindResources gives an attempt its binding's resource provider, bound to the
@@ -174,6 +218,23 @@ func (d *daemon) resourceCheck(context.Context) runtime.Check {
 			check.Status, check.Code = runtime.CheckWarn, "cleanup_failed"
 		} else if check.Status == runtime.CheckOK {
 			check.Status, check.Code = runtime.CheckInfo, "retained"
+		}
+	}
+	if r.swept {
+		// The last sweep: what it removed, and the spare workspaces it kept
+		// because they hold unsaved work or something runs from them.
+		check.Detail += fmt.Sprintf("; the sweep at %s removed %d spare workspace(s) and kept %d", r.lastSweep.UTC().Format(time.RFC3339), len(r.sweep.Removed), len(r.sweep.Kept))
+		for _, s := range r.sweep.Removed {
+			check.Items = append(check.Items, "swept "+s.Mode+" "+s.Ref+" "+s.Spare)
+		}
+		for _, s := range r.sweep.Kept {
+			check.Items = append(check.Items, "kept "+s.Mode+" "+s.Ref+" "+s.Spare+": "+s.Kept)
+			if check.Status == runtime.CheckOK {
+				check.Status, check.Code = runtime.CheckInfo, "spare_kept"
+			}
+		}
+		if r.sweepErr != nil && check.Status != runtime.CheckWarn {
+			check.Status, check.Code = runtime.CheckWarn, "sweep_failed"
 		}
 	}
 	if r.err != nil {

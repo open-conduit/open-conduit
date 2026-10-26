@@ -136,6 +136,7 @@ What would reverse the decision: a need for very high-throughput streaming (the 
 | `nothing_to_attach` | `extension.ErrNothingToAttach` |
 | `resource_setup_failed` | `extension.ErrResourceSetup` (the resource still returned) |
 | `resource_not_found` | `extension.ErrResourceNotFound` |
+| `resource_exhausted` | `extension.ErrResourceExhausted` (the provider's message, which says what to free, crosses with it; 08-02) |
 | `retry_after` | `extension.RetryHint` (`data.reset_at` optional) |
 
 The protocol also has its own codes: `unsupported_protocol_version`, `reentrant_call`, `overloaded`, `cancelled`, `shutting_down` and `internal`.

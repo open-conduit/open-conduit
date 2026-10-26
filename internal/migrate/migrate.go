@@ -232,6 +232,11 @@ func (c *converter) globalNotes() {
 		c.note(Action, "settings.dryRun", "", "dry run is a serve flag: open-conduit serve --dry-run")
 	}
 	c.note(Changed, "projects (checkout .env)", "", "the checkout's .env layer is opt-in in Open Conduit; converted git resources set dotenv: true to keep v1's environment")
+	if d := s.Host.Disk; d > 0 && d != 90 {
+		c.note(Changed, "settings.host.disk", "", "the worktree disk check is per git resource: converted resources set disk_full_percent: %g (at most 10 GiB kept free, disk_reserve_bytes); the six-hourly spare-worktree sweep is the git provider's (serve --sweep-interval)", min(d, 100))
+	} else {
+		c.note(Info, "settings.host.disk", "", "git resources refuse a new worktree that would leave its disk over 90%% full (disk_full_percent, at most 10 GiB kept free) and the git provider sweeps spare worktrees every 6 hours (serve --sweep-interval), as v1 1.3.0 did")
+	}
 	c.note(Info, "paths", "", "Open Conduit keeps its own config (${XDG_CONFIG_HOME:-~/.config}/open-conduit/config.json), state (${XDG_STATE_HOME:-~/.local/state}/open-conduit), secrets.json and keyring service open-conduit; v1's open-supervisor config, state, secrets.yaml and keyring stay untouched")
 	c.note(Info, "env OPEN_SUPERVISOR_CONFIG, OPEN_SUPERVISOR_STATE", "", "not read by Open Conduit: use --config/OPEN_CONDUIT_CONFIG and --data-dir/OPEN_CONDUIT_DATA_DIR")
 }

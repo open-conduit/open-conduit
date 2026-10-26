@@ -33,6 +33,11 @@ var (
 	// ErrResourceNotFound means no lease with that reference is owned by the
 	// caller. Lookup never creates a resource.
 	ErrResourceNotFound = errors.New("resource lease not found")
+	// ErrResourceExhausted means the provider refused to create a resource
+	// because a host capacity it guards (such as free disk space) is too low.
+	// Nothing was created. Trying again is refused the same way until the
+	// capacity is freed, so the message says what to free.
+	ErrResourceExhausted = errors.New("resource capacity exhausted")
 )
 
 // ResourceOwner is the trusted identity a lease is acquired for. It is bound by
@@ -99,6 +104,28 @@ type ResourceLeaseReport struct {
 type ResourceReport struct {
 	Active, Released, Removed, Retained int
 	Attention                           []ResourceLeaseReport
+}
+
+// ResourceSpare is one spare resource a sweep found: why it was spare
+// (Spare: finished_work, owner_unknown or orphaned) and, when the sweep kept
+// it, why (Kept: uncommitted, unpushed, in_use, unreadable or remove_failed).
+type ResourceSpare struct {
+	Ref, Mode, Spare, Kept string
+}
+
+// ResourceSweepReport summarizes one sweep.
+type ResourceSweepReport struct {
+	Removed, Kept []ResourceSpare
+}
+
+// ResourceSweeper is optionally implemented by a provider that can find spare
+// resources no lease release covers: those of finished Work it still keeps,
+// those whose owner no record holds and those no lease holds at all. A sweep
+// never removes one with unsaved changes or one a running process uses. The
+// host calls it on a slow cadence (default every 6 hours) with the same
+// trusted status as Reconcile.
+type ResourceSweeper interface {
+	Sweep(context.Context, ResourceStatusFunc) (ResourceSweepReport, error)
 }
 
 // ResourceProvider is an optional extension that supplies execution resources.
