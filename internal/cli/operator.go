@@ -103,6 +103,7 @@ Commands:
   serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h]
         [--webhook-addr 127.0.0.1:8787] [--tunnel ngrok|cloudflared|static] [--tunnel-domain D] [--tunnel-name N] [--public-url URL]
         [--no-tunnel] [--dry-run] [--claude-usage]
+        (--webhook-addr takes any free local port; 8787 is only an example)
   health
   init                       list the setups the registered extensions offer
   init TYPE [flags] [--config PATH] [--force] [--dry-run]   run one (for example init github --repo OWNER/NAME, init slack)

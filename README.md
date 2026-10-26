@@ -82,7 +82,7 @@ open-conduit tui                                     # watch and control runs
   ```
 
 - `config show`, `config get POINTER`, `config set POINTER JSON` and `config unset POINTER` edit the file by JSON pointer and validate before saving. `config edit` opens a full-screen editor. A running daemon picks up a changed file only when you restart it or run `config apply FILE --generation N`.
-- `serve --dry-run` makes no external writes and runs agents as cheap stubs, which is a safe way to watch a new setup. `serve --webhook-addr 127.0.0.1:8787 --tunnel ngrok|cloudflared|static` adds webhooks for lower latency. Without webhooks the daemon reconciles on an interval, so nothing is lost.
+- `serve --dry-run` makes no external writes and runs agents as cheap stubs, which is a safe way to watch a new setup. `serve --webhook-addr 127.0.0.1:8787 --tunnel ngrok|cloudflared|static` adds webhooks for lower latency; 8787 is only an example, and any free local port works. Without webhooks the daemon reconciles on an interval, so nothing is lost.
 - The TUI lists one row per issue or thread, with its latest turn and how many turns it has had; `g` lists every turn and `enter` shows one with all of its Work's turns.
 - In the TUI, `c` claims an issue by hand, `R` runs or retries, `H` holds or releases, `a` attaches to the agent's session, and `x`/`X` cancel a run or its Work. The same controls exist on the command line: `claim`, `work retry|hold|release|attach|cancel`, `runs list`, `runs log ID` and `events chain ID`.
 
