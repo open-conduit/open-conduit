@@ -47,8 +47,8 @@ type slackSources struct {
 	running bool
 }
 
-// slackRegistry registers the connection type, the ingress extension type
-// and (through handlers) the `slack` route handler.
+// slackRegistry registers the connection type, the ingress extension type,
+// the `slack` route's config validator and (through handlers) its handler.
 func slackRegistry(reg *config.Registry) {
 	if reg.Connections == nil {
 		reg.Connections = map[string]func(json.RawMessage) error{}
@@ -56,8 +56,12 @@ func slackRegistry(reg *config.Registry) {
 	if reg.Extensions == nil {
 		reg.Extensions = map[string]config.ExtensionType{}
 	}
+	if reg.HandlerConfig == nil {
+		reg.HandlerConfig = map[string]func(json.RawMessage) error{}
+	}
 	reg.Connections[sl.Type] = sl.ValidateConnection
 	reg.Extensions[sl.Type] = config.ExtensionType{Ingress: true, Validate: sl.ValidateExtension}
+	reg.HandlerConfig[sl.Type] = sl.ValidateRoute
 }
 
 // registerSlack registers every enabled scope's Slack entry not yet

@@ -15,7 +15,8 @@ const WorkKind = "slack.conversation"
 
 // Route is the deterministic `slack` route handler: the start policy for an
 // unowned thread and the input selection for its conversation. It reads only
-// the detached Event, Scope and Work snapshot. The thread key is the Work's
+// the detached Event, Scope and Work snapshot and its own route config, whose
+// channels narrow the threads it claims. The thread key is the Work's
 // identity, so every later message of the thread reaches the same Work
 // through its owned correlation, across any number of messages and restarts.
 type Route struct{}
@@ -96,8 +97,15 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	if !ok {
 		return extension.RouteDecision{}, nil
 	}
-	if _, _, ok := ParseThreadKey(e.CorrelationKey.ExternalID); !ok {
+	channel, _, ok := ParseThreadKey(e.CorrelationKey.ExternalID)
+	if !ok {
 		return extension.RouteDecision{}, nil
+	}
+	if len(in.Route.Config.Data) > 0 {
+		rc, err := ParseRoute(in.Route.Config.Data)
+		if err != nil || !rc.Selects(channel) {
+			return extension.RouteDecision{}, nil
+		}
 	}
 	if e.Type == TypeMessageRemoved || e.Type == TypeMessageDeleted || e.Type == TypeMessageBot {
 		return extension.RouteDecision{}, nil

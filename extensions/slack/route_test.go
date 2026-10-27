@@ -239,3 +239,38 @@ func TestReceiverConfig(t *testing.T) {
 		t.Fatal("unknown receiver")
 	}
 }
+
+func TestRouteChannelsNarrowTheRoute(t *testing.T) {
+	sc := scopeWith(t, "")
+	written := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	root := event(t, slack.TypeMessageHuman, slack.MessagePayload{TS: slack.TS(written), User: alice, Text: "help"}, written)
+	route := func(cfg string) domain.Route {
+		return domain.Route{Name: "r", Handler: "slack", Config: domain.Payload{Data: json.RawMessage(cfg)}}
+	}
+	for cfg, want := range map[string]bool{
+		``:                               true,
+		`{}`:                             true,
+		`{"channels":["` + chanA + `"]}`: true,
+		`{"channels":["` + chanB + `"]}`: false,
+		`{"channels":["` + chanB + `","` + chanA + `"]}`: true,
+		`{"channels":"` + chanA + `"}`:                   false,
+	} {
+		for _, w := range []*domain.Work{nil, {ID: "w", Kind: slack.WorkKind}} {
+			d, err := slack.Route{}.Match(context.Background(), extension.RouteInput{Event: root, Scope: sc, Work: w, Route: route(cfg)})
+			if err != nil || d.Match != want {
+				t.Fatalf("config %q (work %v): match %v, want %v (%v)", cfg, w != nil, d.Match, want, err)
+			}
+		}
+	}
+	for cfg, ok := range map[string]bool{
+		`{}`:                             true,
+		`{"channels":["` + chanA + `"]}`: true,
+		`{"channels":["#support"]}`:      false,
+		`{"channels":["` + chanA + `","` + chanA + `"]}`: false,
+		`{"channel":["` + chanA + `"]}`:                  false,
+	} {
+		if err := slack.ValidateRoute(json.RawMessage(cfg)); (err == nil) != ok {
+			t.Fatalf("ValidateRoute(%s) = %v, want ok %v", cfg, err, ok)
+		}
+	}
+}

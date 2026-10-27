@@ -155,7 +155,7 @@ Messages that disappear become generic `core.ingress.absent`, which the route ig
 
 ## Route policy
 
-Handler `slack` reads only the detached Event, Scope and Work. It finds its entry in the scope metadata by namespace.
+Handler `slack` reads only the detached Event, Scope and Work, and its own route config. It finds its entry in the scope metadata by namespace. A route's config may list `channels`: the route then claims only threads in those channels, so one entry can serve several routes, each with its own binding and playbook ([example](../../workflows/slack/#start-a-different-playbook-per-channel)). Config validation rejects anything but distinct Slack channel IDs.
 
 - **Unowned threads.** A human, non-deleted message creates `slack.conversation` Work. The kind is namespaced because B02 requires every Work kind to be. It must also pass the start policy: it is a top-level message (`all`), or it mentions the bot (`mention`), and it was received within `start_window_hours` of being written. A parent first seen in its edited form still starts the conversation, because its push may have been missed.
 - **Existing conversations receive:** human messages (including edits) and replies marked by *another* Work.

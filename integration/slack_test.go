@@ -19,6 +19,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/extensions/slack/slacktest"
+	"github.com/open-conduit/open-conduit/internal/bootstrap"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
@@ -53,27 +54,43 @@ type slEnv struct {
 	projector *sl.Projector
 	settings  sl.Settings
 	webhook   http.Handler
+	// channels the entry watches (default: slChannel).
+	channels []string
 	// binding is the router's view of the "fixture" executor (zero: none).
 	binding runtime.RouteBinding
 }
 
 func slExtensionConfig(extra string) string {
-	return `{"namespace":"` + slNS + `","scope":"` + slScope + `","team":"` + slTeam + `","channels":["` + slChannel + `"],"bot_user_id":"UBOT","signing_secret":"signing"` + extra + `}`
+	return slExtensionConfigFor([]string{slChannel}, extra)
+}
+
+func slExtensionConfigFor(channels []string, extra string) string {
+	list, _ := json.Marshal(channels)
+	return `{"namespace":"` + slNS + `","scope":"` + slScope + `","team":"` + slTeam + `","channels":` + string(list) + `,"bot_user_id":"UBOT","signing_secret":"signing"` + extra + `}`
 }
 
 func newSlackEnv(t *testing.T, extra string, o sl.IngressOptions) *slEnv {
 	t.Helper()
+	return newSlackEnvWith(t, extra, o, []string{slChannel}, []domain.Binding{{Name: "agent", Executor: "fixture"}},
+		[]domain.Route{{Name: "threads", Handler: "slack", Binding: "agent", ActivePolicy: "queue"}})
+}
+
+// newSlackEnvWith is newSlackEnv for one entry watching channels, with the
+// scope's own bindings and routes.
+func newSlackEnvWith(t *testing.T, extra string, o sl.IngressOptions, channels []string, bindings []domain.Binding, routes []domain.Route) *slEnv {
+	t.Helper()
 	fake := slacktest.New(slTeam, "xoxb-test")
 	t.Cleanup(fake.Close)
-	fake.Join(slChannel, slBob)
-	e := &slEnv{t: t, fake: fake, clock: &ghClock{t: fake.Now()}, path: filepath.Join(t.TempDir(), "conduit.db"), extra: extra, opts: o}
+	for _, c := range channels {
+		fake.Join(c, slBob)
+	}
+	e := &slEnv{t: t, fake: fake, clock: &ghClock{t: fake.Now()}, path: filepath.Join(t.TempDir(), "conduit.db"), extra: extra, opts: o, channels: channels}
 	e.open()
 	meta, _ := json.Marshal(map[string]any{"enabled": true, "extensions": []map[string]any{
-		{"name": "helpdesk", "type": "slack", "connection": "slack", "config": json.RawMessage(slExtensionConfig(extra)), "secret_names": []string{"signing"}},
+		{"name": "helpdesk", "type": "slack", "connection": "slack", "config": json.RawMessage(slExtensionConfigFor(channels, extra)), "secret_names": []string{"signing"}},
 	}})
 	if err := e.store.Transact(context.Background(), storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
-		return tx.PutScope(domain.Scope{ID: slScope, Name: "support", Bindings: []domain.Binding{{Name: "agent", Executor: "fixture"}},
-			Routes: []domain.Route{{Name: "threads", Handler: "slack", Binding: "agent", ActivePolicy: "queue"}},
+		return tx.PutScope(domain.Scope{ID: slScope, Name: "support", Bindings: bindings, Routes: routes,
 			Config: domain.Payload{Schema: "core.config.scope.v1", Data: meta}}, 0)
 	}); err != nil {
 		t.Fatal(err)
@@ -104,7 +121,7 @@ func (e *slEnv) open() {
 	if e.client, err = sl.NewClient(cfg, func(context.Context, string) (string, error) { return "xoxb-test", nil }, sl.ClientOptions{Now: e.clock.Now}); err != nil {
 		t.Fatal(err)
 	}
-	if e.settings, err = sl.ParseExtension([]byte(slExtensionConfig(e.extra)), []string{"signing"}); err != nil {
+	if e.settings, err = sl.ParseExtension([]byte(slExtensionConfigFor(e.channels, e.extra)), []string{"signing"}); err != nil {
 		t.Fatal(err)
 	}
 	o := e.opts
@@ -754,5 +771,87 @@ func TestSlackLostReplyRecoveredWithoutMetadata(t *testing.T) {
 	}
 	if q := e.queued(w.ID); len(q) != 0 {
 		t.Fatalf("own reply became input: %v", q)
+	}
+}
+
+// TestSlackRoutesSelectBindingByChannel: one entry watching two channels
+// serves two routes, each narrowed by its config's channels to its own
+// binding (and so its own playbook). First match wins: the catch-all route
+// declared last takes no thread a narrower route claimed first.
+func TestSlackRoutesSelectBindingByChannel(t *testing.T) {
+	const reviews = "C0REVIEWS"
+	bindings := []domain.Binding{
+		{Name: "review", Executor: "fixture", Config: domain.Payload{Schema: "core.config.binding.v1", Data: json.RawMessage(`{"playbook":"review-pr","args":"{key}"}`)}},
+		{Name: "support", Executor: "fixture", Config: domain.Payload{Schema: "core.config.binding.v1", Data: json.RawMessage(`{"playbook":"support-conversation","args":"{key}"}`)}},
+	}
+	routes := []domain.Route{
+		{Name: "reviews", Handler: "slack", Binding: "review", ActivePolicy: "queue", Config: domain.Payload{Data: json.RawMessage(`{"channels":["` + reviews + `"]}`)}},
+		{Name: "support", Handler: "slack", Binding: "support", ActivePolicy: "queue"},
+	}
+	e := newSlackEnvWith(t, "", sl.IngressOptions{}, []string{slChannel, reviews}, bindings, routes)
+	review := e.fake.Post(reviews, slAlice, "Please review #12")
+	help := e.fake.Post(slChannel, slAlice, "Exports time out")
+	e.sync()
+	for _, m := range []struct{ channel, ts string }{{reviews, review}, {slChannel, help}} {
+		if code := e.deliver(e.fake.MessageEvent(m.channel, m.ts)); code != http.StatusOK {
+			t.Fatalf("delivery %s: %d", m.channel, code)
+		}
+	}
+	reply := e.fake.Reply(reviews, review, slBob, "on it")
+	e.sync()
+	if code := e.deliver(e.fake.MessageEvent(reviews, reply)); code != http.StatusOK {
+		t.Fatalf("reply delivery: %d", code)
+	}
+	e.route()
+	if works := e.works(); len(works) != 2 {
+		t.Fatalf("works: %+v", works)
+	}
+	want := map[string]string{sl.ThreadKey(reviews, review): "review", sl.ThreadKey(slChannel, help): "support"}
+	got := map[string][]string{}
+	for _, a := range e.events("slack.message.human") {
+		d, err := e.router.Decision(context.Background(), a.Event.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got[a.Event.CorrelationKey.ExternalID] = append(got[a.Event.CorrelationKey.ExternalID], d.Route+"/"+d.Binding)
+	}
+	for key, binding := range want {
+		if len(got[key]) == 0 {
+			t.Fatalf("no decision for %s: %v", key, got)
+		}
+		for _, d := range got[key] {
+			if !strings.HasSuffix(d, "/"+binding) {
+				t.Fatalf("thread %s routed %v, want binding %s", key, got[key], binding)
+			}
+		}
+	}
+	if n := len(got[sl.ThreadKey(reviews, review)]); n != 2 {
+		t.Fatalf("review thread decisions = %d, want root and reply", n)
+	}
+}
+
+// TestSlackRouteChannelsValidateAtLoad: the documented per-channel config
+// validates offline, and a route naming a channel that is not a Slack
+// channel ID is rejected at its config path.
+func TestSlackRouteChannelsValidateAtLoad(t *testing.T) {
+	var doc string
+	for _, block := range fencedBlocks(t, "../site/src/content/docs/workflows/slack.md", "json") {
+		if strings.Contains(block, `"C0REVIEWS01"]}}`) {
+			doc = block
+		}
+	}
+	if doc == "" {
+		t.Fatal("the Slack docs lost the per-channel example")
+	}
+	if diags, err := bootstrap.ValidateConfig([]byte(doc)); err != nil || len(diags) != 0 {
+		t.Fatalf("documented config: %v %v", diags, err)
+	}
+	bad := strings.Replace(doc, `"config": {"channels": ["C0REVIEWS01"]}`, `"config": {"channels": ["#reviews"]}`, 1)
+	if bad == doc {
+		t.Fatal("route config not found in the example")
+	}
+	diags, err := bootstrap.ValidateConfig([]byte(bad))
+	if err != nil || len(diags) != 1 || diags[0].Path != "scopes/0/routes/0/config" || diags[0].Code != "invalid_config" {
+		t.Fatalf("diagnostics %+v %v", diags, err)
 	}
 }

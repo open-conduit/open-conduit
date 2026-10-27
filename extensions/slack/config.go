@@ -17,6 +17,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -260,4 +261,42 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 func ValidateExtension(data json.RawMessage, secretNames []string) error {
 	_, err := ParseExtension(data, secretNames)
 	return err
+}
+
+// RouteConfig is the opaque config of a `slack` route. Channels narrows the
+// threads the route claims to those in the listed channels (every channel
+// the entry watches when empty), so one entry can serve several routes, each
+// with its own binding and playbook; first match wins as usual.
+type RouteConfig struct {
+	Channels []string `json:"channels,omitempty"`
+}
+
+// ParseRoute decodes and validates a route config.
+func ParseRoute(data []byte) (RouteConfig, error) {
+	var r RouteConfig
+	if err := strict(data, &r); err != nil {
+		return r, fmt.Errorf("slack route: %w", err)
+	}
+	if len(r.Channels) > 100 {
+		return r, errors.New("slack route: channels must list at most 100 channel IDs")
+	}
+	seen := map[string]bool{}
+	for _, ch := range r.Channels {
+		if !slackIDPattern.MatchString(ch) || seen[ch] {
+			return r, errors.New("slack route: channels must be distinct Slack channel IDs (C… or G…)")
+		}
+		seen[ch] = true
+	}
+	return r, nil
+}
+
+// ValidateRoute is the config.Registry route-config validator.
+func ValidateRoute(data json.RawMessage) error {
+	_, err := ParseRoute(data)
+	return err
+}
+
+// Selects reports whether the route claims a thread in channel.
+func (r RouteConfig) Selects(channel string) bool {
+	return len(r.Channels) == 0 || slices.Contains(r.Channels, channel)
 }
