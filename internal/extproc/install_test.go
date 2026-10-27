@@ -133,6 +133,7 @@ func TestDiagnoseStartFailures(t *testing.T) {
 		{ErrStart, "start_failed"},
 		{errors.Join(ErrHandshake, protocol.ErrTransport), "handshake_failed"},
 		{ErrConfigure, "configure_refused"},
+		{protocol.ErrNewerManifest, "needs_newer_host"},
 	} {
 		d := Diagnose("acme", c.err, Paths{Log: "/state/logs/extensions/acme.log"})
 		if d.Code != c.code || d.Hint == "" || d.Summary == "" {

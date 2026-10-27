@@ -14,7 +14,7 @@ The protocol was extracted from the shipped first-party code: the GitHub, Slack,
 | Question | Decision (provisional) |
 | --- | --- |
 | Transport | JSON-RPC 2.0 over the extension process's stdin/stdout, one JSON object per line, standard library only, symmetric (both sides send requests). Not go-plugin/gRPC. |
-| Version | Integer protocol versions. `initialize` picks the highest common version. No common version is a deterministic refusal before any other call (`unsupported_protocol_version`). Version 1 is the first. |
+| Version | Integer protocol versions. `initialize` picks the highest common version. No common version is a deterministic refusal before any other call (`unsupported_protocol_version`). Version 1 is the first. A version changes only for a breaking change; additive methods and manifest fields ship in a release without one, and an older host refuses a manifest that uses them as needing a newer Open Conduit. |
 | Manifest | `open-conduit-extension.json` beside the binary: name, own version, command, and `provides` (mechanical declarations only). Validated offline. The handshake must return the same manifest. |
 | Capabilities | Executor labels are exactly the core's mechanical labels (`interrupt`, `inject`, `resume`, `workspace`, `toolbelt: none\|cli\|mcp\|sdk`), plus optional controls (`stop`, `forget`, `attach`) that are methods, not suitability claims. Unknown fields are rejected, so a semantic label cannot be expressed. |
 | Storage | Mandatory namespaced KV under the extension's name, always available and never negotiated (a `storage` field is rejected). A store larger than coordination state is an `external_stores` entry naming a connection type, so it is explicit in config. |
@@ -252,7 +252,7 @@ Validation rules:
 - the command and playbooks stay inside the extension directory;
 - external stores name a declared connection type;
 - payload schema bases are dotted names under the extension's name without a version suffix, with positive, strictly increasing readable versions; `kv_version` is not negative;
-- unknown fields are rejected.
+- unknown fields are rejected. Additive manifest fields ship without a protocol version bump, so an unknown field is refused as `ErrNewerManifest` (the package needs a newer Open Conduit), not as an invalid manifest.
 
 `TestManifestRejections` covers each rule, including a `storage` capability and a semantic executor label.
 

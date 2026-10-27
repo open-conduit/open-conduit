@@ -45,6 +45,9 @@ func Diagnose(name string, err error, paths Paths) Diagnostic {
 	case errors.Is(err, ErrConflict):
 		d.Code, d.Summary = "registration_conflict", "the package claims a name another registration owns"
 		d.Hint = "remove the conflicting package; first-party names (slack, shell, …) are registered in-process and cannot be installed alongside"
+	case errors.Is(err, protocol.ErrNewerManifest):
+		d.Code, d.Summary = "needs_newer_host", "the package needs a newer Open Conduit than this one"
+		d.Hint = "upgrade Open Conduit to the release the package was built against or later, or install a release of the package built for this one"
 	case errors.Is(err, protocol.ErrManifest), errors.Is(err, ErrPackage):
 		d.Code, d.Summary = "invalid_package", "the package layout or manifest is invalid"
 		d.Hint = "fix the manifest (open-conduit extension inspect DIR shows each rule it breaks) and reinstall"
