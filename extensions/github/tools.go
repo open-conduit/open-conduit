@@ -63,6 +63,7 @@ const (
 	OpPRCreate     = "github.pr.create"
 	OpPRComment    = "github.pr.comment"
 	OpPRReply      = "github.pr.reply"
+	OpPRReview     = "github.pr.review"
 	OpChecks       = "github.checks"
 	OpUpload       = "github.attachment.upload"
 	OpFetch        = "github.attachment.get"
@@ -76,7 +77,7 @@ const (
 // Operations lists every tool operation (for binding operation lists).
 func Operations() []string {
 	return []string{OpContext, OpIssueView, OpIssueComment, OpIssueList, OpIssueCreate, OpPRList, OpPRView, OpPRCreate,
-		OpPRComment, OpPRReply, OpChecks, OpUpload, OpFetch, OpWait, OpCorrection, OpProblem, OpHoldStatus, OpHold}
+		OpPRComment, OpPRReply, OpPRReview, OpChecks, OpUpload, OpFetch, OpWait, OpCorrection, OpProblem, OpHoldStatus, OpHold}
 }
 
 // Source is one registered GitHub extension entry the tools can act on.
@@ -156,6 +157,7 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpPRCreate, Handler: h(t.prCreate)},
 			{Name: OpPRComment, Handler: pr(t.prComment)},
 			{Name: OpPRReply, Handler: pr(t.prReply)},
+			{Name: OpPRReview, Handler: pr(t.prReview)},
 			{Name: OpChecks, Handler: pr(t.checks)},
 			{Name: OpUpload, Handler: h(t.upload)},
 			{Name: OpFetch, Handler: h(t.fetch)},
@@ -781,6 +783,74 @@ func (t *Tools) prReply(ctx context.Context, b *bound, data json.RawMessage) (an
 		return nil, err
 	}
 	return t.post(ctx, b, src, Intent{ID: intentID(ctx, b, OpPRReply, data), Work: b.work.ID, Number: in.Number, ReplyTo: id, Body: in.Body, Durable: true})
+}
+
+// reviewEvents maps the operation's review events onto GitHub's.
+var reviewEvents = map[string]string{"approve": "APPROVE", "request_changes": "REQUEST_CHANGES", "comment": "COMMENT"}
+
+// prReview submits one review: an approval, a change request or a comment,
+// with any inline comments. It is a marked durable intent like a comment, so
+// a retry or a lost response never submits a second review. GitHub posts it
+// as the connection's writer (the bot App, or the token's account), never as
+// the person who asked for it.
+func (t *Tools) prReview(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
+	var in struct {
+		Number   int    `json:"number"`
+		Event    string `json:"event"`
+		Body     string `json:"body"`
+		Repo     string `json:"repo"`
+		Comments []struct {
+			Path string `json:"path"`
+			Line int    `json:"line"`
+			Side string `json:"side"`
+			Body string `json:"body"`
+		} `json:"comments"`
+	}
+	if err := decode(data, &in); err != nil {
+		return nil, err
+	}
+	event, ok := reviewEvents[strings.ToLower(strings.TrimSpace(in.Event))]
+	if in.Number <= 0 || !ok {
+		return nil, refuse("missing_field", "number (the PR) and event (approve, request_changes or comment) are required")
+	}
+	if event != "APPROVE" && strings.TrimSpace(in.Body) == "" {
+		return nil, refuse("missing_field", "body is required to request changes or comment")
+	}
+	review := &Review{Event: event}
+	for i, c := range in.Comments {
+		side := strings.ToUpper(strings.TrimSpace(c.Side))
+		if strings.TrimSpace(c.Path) == "" || c.Line <= 0 || strings.TrimSpace(c.Body) == "" || (side != "" && side != "LEFT" && side != "RIGHT") {
+			return nil, refuse("invalid_comment", "comments[%d] needs path, line (a line of the diff) and body; side is LEFT (the old file) or RIGHT (the new, the default)", i)
+		}
+		review.Comments = append(review.Comments, ReviewInline{Path: c.Path, Line: c.Line, Side: side, Body: c.Body})
+	}
+	src, err := t.pullSource(b, in.Repo)
+	if err != nil {
+		return nil, err
+	}
+	out, err := t.post(ctx, b, src, Intent{ID: intentID(ctx, b, OpPRReview, data), Work: b.work.ID, Number: in.Number, Body: in.Body, Review: review, Durable: true})
+	var status *StatusError
+	switch {
+	case err == nil:
+	case errors.As(err, &status) && status.Status == http.StatusUnprocessableEntity && strings.Contains(strings.ToLower(status.Message), "own pull request"):
+		return nil, refuse("own_pull_request", "GitHub doesn't let the account that opened PR #%d approve it or request changes on it, and this connection opened it; submit a comment review instead, or ask a person to review it", in.Number)
+	case IsStatus(err, http.StatusUnprocessableEntity):
+		return nil, refuse("github_unprocessable", "GitHub rejected the review: each inline comment must be on a line of the PR's diff (side RIGHT for the new file, LEFT for the old), and the PR must be open; nothing was posted")
+	case IsStatus(err, http.StatusForbidden):
+		return nil, refuse("github_forbidden", "this connection can't submit reviews on %s: it needs Pull requests write access", src.Settings.Repo)
+	default:
+		return nil, err
+	}
+	if m, ok := out.(map[string]any); ok {
+		if id, ok := m["comment_id"]; ok {
+			delete(m, "comment_id")
+			m["review_id"] = id
+		}
+		if m["state"] == "pending" {
+			m["note"] = "the review is being confirmed and will appear once; do not submit it again"
+		}
+	}
+	return out, nil
 }
 
 func (t *Tools) checks(ctx context.Context, b *bound, data json.RawMessage) (any, error) {

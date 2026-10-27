@@ -29,7 +29,7 @@ Runtime (B04): a translated wait's dependencies are stored in the toolbelt decla
 
 An agent reaches an operation as MCP `call {operation, input}` or `os call <operation> --data <json>`. The MCP `call` tool sends its `input` object as the payload's data; an explicit `{schema, data}` payload still passes through. Every handler reads the Work it serves from durable state, finds the issue it owns (`issue/N` in a registered namespace) and acts on that issue and its repository. With a shared tracker, PR operations use the code repository whose entry names the tracker.
 
-`github.pr.view`, `github.pr.comment`, `github.pr.reply` and `github.checks` also act on a PR the Work doesn't own, so Work started elsewhere (a Slack request to review a PR, a job) can read and answer one:
+`github.pr.view`, `github.pr.comment`, `github.pr.reply`, `github.pr.review` and `github.checks` also act on a PR the Work doesn't own, so Work started elsewhere (a Slack request to review a PR, a job) can read and answer one:
 
 - They take an optional `repo`. Without it they use the Work's own code repository, or the scope's only registered repository when the Work owns no issue. A scope with several refuses `repo_required` and lists them, and a repository the scope doesn't register is refused `unregistered_repo`.
 - Posts are the same marked durable intents, carrying the calling Work's marker, so they are exactly-once, recovered by marker and never handed back to the caller. The PR's key is never attached to the calling Work: the PR stays keyed to its tracker issue, and the Work that owns it hears the posts as another agent's comments.
@@ -44,6 +44,7 @@ An agent reaches an operation as MCP `call {operation, input}` or `os call <oper
 | `github.issue.create` | Follow-up child work as a marked, intent-backed issue: an ambiguous create is found again by its marker. With `wait`/`until`, the conditions are validated and the hold marker and `scheduled` label are added. |
 | `github.pr.list` / `.view` / `.create` | Create adds `Closes #N` (or `owner/repo#N`) and uses GitHub's one-open-PR-per-head rule for idempotency: a retried or lost create returns the open PR. View includes inline comments and reviews with reply calls. |
 | `github.pr.comment` / `.reply` | Durable intents. A reply records `ReplyTo` and recovers by searching the PR's review comments. |
+| `github.pr.review` | `{number, event, body, comments?, repo?}` submits one review: `event` is `approve`, `request_changes` or `comment`, and `comments` are inline `{path, line, side?, body}` on lines of the diff (`side` `RIGHT`, the default, or `LEFT`). It is a durable intent like a comment, recovered by searching the PR's reviews for its marker, so a retry or a lost response submits one review. The review and each inline comment carry the Work's marker, so neither the review nor GitHub's thread around an inline comment is handed back as a person's news. `body` may be empty only for an approval. GitHub's refusals post nothing and are not redone: `own_pull_request` (see below), `github_unprocessable` (a line outside the diff, or a closed PR) and `github_forbidden` (the connection lacks Pull requests write). |
 | `github.checks` | The PR head's evaluated runs, failures and preview, using the ingress evaluation. It also returns the base branch's `required` checks with their sources, any `missing` ones, the states `waiting on required checks` and `required checks missing`, and a note when a source was refused. |
 | `github.attachment.upload` | Committed to the orphan `open-conduit-attachments` branch at `<issue>/<intent digest>-<name>`, so a retry keeps one file. |
 | `github.attachment.get` | Signed-in fetch, only for this host, its API host or `*.githubusercontent.com`. A redirect that leaves the host drops `Authorization`, and foreign links are refused without a request. The result uses the generic `open-conduit.toolbelt.file.v1` schema; the `os` client writes it to `save_to` in the agent's own directory. A `file_path` input is read and sent as `content_base64` the same way. |
@@ -52,6 +53,11 @@ An agent reaches an operation as MCP `call {operation, input}` or `os call <oper
 | `github.hold.status` / `github.hold` | Used by the hold executor. |
 
 Dry-run is handled per entry by `projection.dry_run`: writes report `dry_run` and make no change.
+
+**Whose review it is.** GitHub records a review as the connection's writer: the bot App (`bot_app_id`) when there is one, otherwise the token's account. It is never the person who asked for the review or approved the decision to submit it. Two consequences follow:
+
+- GitHub doesn't let the account that opened a PR approve it or request changes on it. Agents open their PRs as the same connection, so on an agent's own PR the operation refuses `own_pull_request` and a `comment` review is the only kind it can submit.
+- An approval counts toward branch protection's required reviews only when the writer is an identity whose approval that rule accepts: an account with write access, a code owner where code-owner review is required, and not the account that pushed last where that is excluded. Where protection needs a particular person's review, the agent's approval doesn't satisfy it, and a person still has to approve.
 
 ## Waits
 

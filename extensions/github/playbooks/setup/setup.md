@@ -70,7 +70,7 @@ Connections first, then one scope per project. A scope's `authorization` is its 
       "authorization": {"connections": ["github"], "read_scopes": [], "operations": [
         "read_context", "emit", "wait", "declare_outcome",
         "github.context", "github.issue.view", "github.issue.comment", "github.issue.list", "github.issue.create",
-        "github.pr.list", "github.pr.view", "github.pr.create", "github.pr.comment", "github.pr.reply", "github.checks",
+        "github.pr.list", "github.pr.view", "github.pr.create", "github.pr.comment", "github.pr.reply", "github.pr.review", "github.checks",
         "github.attachment.upload", "github.attachment.get", "github.wait", "github.correction", "github.problem",
         "github.hold.status", "github.hold"]},
       "bindings": [
@@ -78,7 +78,7 @@ Connections first, then one scope per project. A scope's `authorization` is its 
          "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": true},
          "operations": ["read_context", "wait", "declare_outcome",
            "github.context", "github.issue.view", "github.issue.comment", "github.issue.list", "github.issue.create",
-           "github.pr.list", "github.pr.view", "github.pr.create", "github.pr.comment", "github.pr.reply", "github.checks",
+           "github.pr.list", "github.pr.view", "github.pr.create", "github.pr.comment", "github.pr.reply", "github.pr.review", "github.checks",
            "github.attachment.upload", "github.attachment.get", "github.wait", "github.correction", "github.problem"],
          "secret_names": [],
          "config": {"status_schema": "github.status.v1", "branch": "agent/issue-{number}"},

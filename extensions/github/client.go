@@ -163,10 +163,26 @@ func (c *Client) raw(ctx context.Context, authorization, method, path string, bo
 	}
 	if res.StatusCode < 200 || res.StatusCode > 299 {
 		var e struct {
-			Message string `json:"message"`
+			Message string            `json:"message"`
+			Errors  []json.RawMessage `json:"errors"`
 		}
 		_ = json.Unmarshal(data, &e)
-		msg := strings.Join(strings.Fields(e.Message), " ")
+		// A 422 says why in errors, as strings ("Can not approve your own
+		// pull request") or objects with a message.
+		parts := []string{e.Message}
+		for _, raw := range e.Errors {
+			var text string
+			var obj struct {
+				Message string `json:"message"`
+			}
+			if json.Unmarshal(raw, &text) != nil && json.Unmarshal(raw, &obj) == nil {
+				text = obj.Message
+			}
+			if text != "" {
+				parts = append(parts, text)
+			}
+		}
+		msg := strings.Join(strings.Fields(strings.Join(parts, ": ")), " ")
 		if len(msg) > 200 {
 			msg = msg[:200]
 		}

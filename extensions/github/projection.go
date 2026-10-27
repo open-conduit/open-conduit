@@ -97,8 +97,9 @@ type intentRecord struct {
 	URL         string    `json:"url,omitempty"`
 	// Durable intents (agent tool calls) keep their body, so a pass can
 	// finish an ambiguous delivery after the call returned.
-	Body    string `json:"body,omitempty"`
-	ReplyTo int64  `json:"reply_to,omitempty"`
+	Body    string  `json:"body,omitempty"`
+	ReplyTo int64   `json:"reply_to,omitempty"`
+	Review  *Review `json:"review,omitempty"`
 }
 
 const (
@@ -117,6 +118,10 @@ type Intent struct {
 	// ReplyTo replies in the inline review thread of that comment on PR
 	// Number instead of posting to the conversation.
 	ReplyTo int64
+	// Review submits a review on PR Number instead: Body is its summary
+	// (which may be empty for an approval) and the record's ID is the
+	// review's.
+	Review *Review
 	// Durable keeps the body in the intent record so Converge finishes a
 	// delivery whose caller is gone (tool calls); outcome intents are
 	// re-derived from durable outcomes instead.
@@ -148,14 +153,48 @@ func (p *Projector) transact(ctx context.Context, fn func(storage.Tx) error) err
 
 func markerID(intent string) string { return "i" + digest(intent)[:32] }
 
+// Review is a pull request review an intent submits: its event (APPROVE,
+// REQUEST_CHANGES or COMMENT) and any inline comments, which GitHub
+// publishes with the review as one.
+type Review struct {
+	Event    string         `json:"event"`
+	Comments []ReviewInline `json:"comments,omitempty"`
+}
+
+// ReviewInline is one inline comment of a review, on a line of the diff.
+type ReviewInline struct {
+	Path string `json:"path"`
+	Line int    `json:"line"`
+	Side string `json:"side,omitempty"`
+	Body string `json:"body"`
+}
+
+// intentDigest identifies what an intent publishes, so a retry that changes
+// it is a conflict rather than a second post.
+func intentDigest(in Intent) string {
+	if in.Review == nil {
+		return digest(in.Body)
+	}
+	spec, _ := json.Marshal(in.Review)
+	return digest(in.Body + "\x00" + string(spec))
+}
+
+// refused reports a write GitHub definitely did not perform: it answered
+// with a client error, so nothing was published and no marker search can
+// find one.
+func refused(err error) bool {
+	var s *StatusError
+	return errors.As(err, &s) && s.Status >= 400 && s.Status < 500 && s.Status != http.StatusTooManyRequests
+}
+
 // Deliver publishes an intent at most once as observed through its marker.
 // It returns the durable record state ("posted", or "attempted"/"pending"
 // when delivery is still in progress or waiting for its marker search).
 func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
-	if in.ID == "" || in.Number <= 0 || strings.TrimSpace(in.Body) == "" {
+	if in.ID == "" || in.Number <= 0 || (strings.TrimSpace(in.Body) == "" && in.Review == nil) {
 		return "", storage.ErrInvalid
 	}
-	repo, key, bodyDigest := p.o.Settings.Repo, "intent/"+digest(in.ID)[:40], digest(in.Body)
+	repo, key, bodyDigest := p.o.Settings.Repo, "intent/"+digest(in.ID)[:40], intentDigest(in)
 	var rec intentRecord
 	err := p.transact(ctx, func(tx storage.Tx) error {
 		found, err := p.get(tx, key, &rec)
@@ -165,7 +204,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		if !found {
 			rec = intentRecord{ID: in.ID, Work: in.Work, Repo: repo, Number: in.Number, BodyDigest: bodyDigest, State: intentPending, CreatedAt: p.o.Now().UTC(), ReplyTo: in.ReplyTo}
 			if in.Durable {
-				rec.Body = in.Body
+				rec.Body, rec.Review = in.Body, in.Review
 			}
 			return p.put(tx, key, rec)
 		}
@@ -184,7 +223,9 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		}
 		var comments []rawComment
 		var err error
-		if in.ReplyTo != 0 {
+		if in.Review != nil {
+			comments, err = p.o.Client.Reviews(ctx, repo, in.Number)
+		} else if in.ReplyTo != 0 {
 			comments, err = p.o.Client.PullComments(ctx, repo, in.Number)
 		} else {
 			comments, err = p.o.Client.IssueComments(ctx, repo, in.Number, rec.CreatedAt.Add(-time.Minute))
@@ -216,9 +257,21 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		return rec.State, err
 	}
 	var posted PostedComment
-	if in.ReplyTo != 0 {
+	switch {
+	case in.Review != nil:
+		posted, err = p.o.Client.CreateReview(ctx, repo, in.Number, markReview(in, marker))
+		if refused(err) {
+			// GitHub refused the review (a line outside the diff, the
+			// connection's own PR): nothing was posted, so forget the intent
+			// and let a corrected call try again.
+			if e := p.transact(ctx, func(tx storage.Tx) error { return tx.Delete(p.ns, key) }); e != nil {
+				return intentAttempted, e
+			}
+			return "", err
+		}
+	case in.ReplyTo != 0:
 		posted, err = p.o.Client.ReplyReview(ctx, repo, in.Number, in.ReplyTo, WithMarker(in.Body, string(in.Work), marker))
-	} else {
+	default:
 		posted, err = p.o.Client.Comment(ctx, repo, in.Number, WithMarker(in.Body, string(in.Work), marker))
 	}
 	if err != nil {
@@ -229,6 +282,18 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 		p.o.AfterPost(in.ID)
 	}
 	return p.complete(ctx, key, posted.ID, posted.URL, false)
+}
+
+// markReview marks the review and each of its inline comments as the
+// Work's, so neither the review nor GitHub's thread around each inline
+// comment is handed back to anyone as news from a person.
+func markReview(in Intent, marker string) ReviewRequest {
+	r := ReviewRequest{Event: in.Review.Event, Body: WithMarker(in.Body, string(in.Work), marker)}
+	for _, c := range in.Review.Comments {
+		c.Body = WithMarker(c.Body, string(in.Work), "")
+		r.Comments = append(r.Comments, c)
+	}
+	return r
 }
 
 // IntentComment returns the comment an intent published, once its durable
@@ -589,7 +654,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		rows, err := tx.List(p.ns, "intent/")
 		for _, row := range rows {
 			var rec intentRecord
-			if json.Unmarshal(row.Value, &rec) == nil && rec.Body != "" && rec.State != intentPosted {
+			if json.Unmarshal(row.Value, &rec) == nil && (rec.Body != "" || rec.Review != nil) && rec.State != intentPosted {
 				pending = append(pending, rec)
 			}
 		}
@@ -602,7 +667,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			break
 		}
 		intents++
-		state, err := p.Deliver(ctx, Intent{ID: rec.ID, Work: rec.Work, Number: rec.Number, Body: rec.Body, ReplyTo: rec.ReplyTo, Durable: true})
+		state, err := p.Deliver(ctx, Intent{ID: rec.ID, Work: rec.Work, Number: rec.Number, Body: rec.Body, ReplyTo: rec.ReplyTo, Review: rec.Review, Durable: true})
 		switch {
 		case err != nil:
 			if stop := fail("comment", err); stop != nil {
