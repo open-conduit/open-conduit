@@ -21,7 +21,7 @@ Unknown fields, trailing data, NUL bytes, invalid names and any `OS_*` target ar
 
 The environment follows the B05 order:
 
-1. A sanitized baseline: only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR` and `TERM` survive. Unrelated credentials, `OPEN_CONDUIT_*`, `OPEN_SUPERVISOR_*` and inherited `OS_*` variables are dropped.
+1. A sanitized baseline: only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR` and `TERM` survive. Unrelated credentials, `OPEN_CONDUIT_*` and inherited `OS_*` variables are dropped.
 2. No resource layer exists, because there is no workspace.
 3. Binding `env`.
 4. Binding-selected secrets, resolved by the scheduler immediately before launch.
@@ -33,8 +33,6 @@ The environment follows the B05 order:
 - `OS_TRIGGER_ID`, `OS_TRIGGER_TYPE`
 - `OS_INPUT_FILE`: the trigger plus the acceptance-ordered input batch
 - `OS_OUTPUT_DIR`
-
-Legacy `OPEN_SUPERVISOR_*` compatibility never enters this executor or core. 05-02 delivers it as the `legacy-job` wrapper in the schedule extension, which adds its layer through the binding config and the resource broker ([job run parity](schedule-extension.md#open-supervisor-compatibility-legacy-job)).
 
 `os` calls `POST /v1/toolbelt/call` through the public client. It supports these commands:
 
@@ -128,4 +126,4 @@ The shell executor implements `InjectExecutor`, the second implementation of the
 
 Binding an inject route to shell therefore no longer needs an unsupported-capability fallback. `TestSharedInjectConformance`, `TestInboxIgnoresForgedAcknowledgements` and `TestToolbeltInbox` cover it.
 
-05-02 update: a result reports the acquired workspace generically as `extension.Result.Workspace` (kind, lease reference, directory, the provider's one-line summary and description), beside the existing `workspace` field of the result data, so run history shows it for every executor. The `legacy-job` wrapper in [scheduled jobs](schedule-extension.md#job-run-parity-05-02) runs this executor for v1 job scripts.
+05-02 update: a result reports the acquired workspace generically as `extension.Result.Workspace` (kind, lease reference, directory, the provider's one-line summary and description), beside the existing `workspace` field of the result data, so run history shows it for every executor.

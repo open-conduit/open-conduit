@@ -14,11 +14,11 @@ make cross-build
 
 `make check` checks formatting without modifying files, vets, race-tests all packages, checks the resolved production/test import graph, validates the configuration schema/examples, builds both binaries and smoke-checks help/version and unsupported commands. It does not install dependencies. `make fmt` formats Go sources; `make build` writes ignored `bin/open-conduit` and `bin/os`. Set `CONFIG_PYTHON=/path/to/venv/bin/python` to reuse an existing checker environment; `make config-deps` bootstraps the ignored `.venv-contracts/` otherwise. Build metadata uses `VERSION` and `COMMIT`, with local defaults `dev` and the current short revision.
 
-The binaries are honest scaffolds: help/version work; runtime/operator/toolbelt commands return exit code 2 and open no configuration, database, socket or service. They provide no install, daemon, execution or ownership-switch behavior. `os` keeps its PRD protocol identity. Stage 02 will replace the scaffold with authenticated local client calls.
+The binaries are honest scaffolds: help/version work; runtime/operator/toolbelt commands return exit code 2 and open no configuration, database, socket or service. They provide no install, daemon, execution or ownership-transfer behavior. `os` keeps its PRD protocol identity. Stage 02 will replace the scaffold with authenticated local client calls.
 
 The [CI workflow](../../.github/workflows/ci.yml) runs `make check` on Ubuntu and macOS with the exact Go compatibility minimum and the stable Go selector; stable Ubuntu also cross-compiles both commands for Darwin/Linux amd64/arm64 with `CGO_ENABLED=0`. No hosted CI run is claimed by this local gate. Cross-builds prove compilation only; actual platform/runtime behavior must be verified as implementations arrive.
 
-The source baseline built Darwin/Linux/Windows amd64/arm64. This plan retains Darwin/Linux architectures and deliberately defers Windows because B05 specifies Unix sockets and ownership/mode enforcement. Windows support requires a local transport/auth/permissions decision and equivalent tests first. The compatibility minimum is not a claim that an old toolchain remains security-supported; deployment builds must use a maintained toolchain, reviewed again at distribution (06-03). Go 1.24.2 remains useful as an explicit API/language compatibility check.
+This plan targets Darwin/Linux architectures and deliberately defers Windows because B05 specifies Unix sockets and ownership/mode enforcement. Windows support requires a local transport/auth/permissions decision and equivalent tests first. The compatibility minimum is not a claim that an old toolchain remains security-supported; deployment builds must use a maintained toolchain, reviewed again at distribution (06-03). Go 1.24.2 remains useful as an explicit API/language compatibility check.
 
 ## Boundary enforcement
 
@@ -48,7 +48,7 @@ go test -race -count=1 -v ./conformance -run 'TestWeakened'
 git diff --check
 ```
 
-All five commands passed locally on macOS arm64 with Go 1.27.3, including a separate Go 1.24.2 minimum-toolchain `make check`. Both commands cross-built successfully for all four OS/architecture pairs. The verbose negative-control run confirmed all three weakened-storage cases, both weakened-runtime cases and four weakened extension/authority/telemetry controls were rejected. The local ticket records review and resulting commit. Hosted CI, SQLite durability, real process kill/restart, socket/auth/secret resolution and real provider parity are **not** demonstrated by this gate. They remain stage-02 and workload gates, not defects hidden by a reference fixture.
+All five commands passed locally on macOS arm64 with Go 1.27.3, including a separate Go 1.24.2 minimum-toolchain `make check`. Both commands cross-built successfully for all four OS/architecture pairs. The verbose negative-control run confirmed all three weakened-storage cases, both weakened-runtime cases and four weakened extension/authority/telemetry controls were rejected. The local ticket records review and resulting commit. Hosted CI, SQLite durability, real process kill/restart, socket/auth/secret resolution and real provider behavior are **not** demonstrated by this gate. They remain stage-02 and workload gates, not defects hidden by a reference fixture.
 
 ## Deferred decisions and stage-02 handoff
 
@@ -60,7 +60,7 @@ All five commands passed locally on macOS arm64 with Go 1.27.3, including a sepa
 | Optional workspace fresh/shared/copy/setup/cleanup | 03-02 | Generic resource descriptor only; no mandatory repository in Scope. |
 | Inject consumption/completion acknowledgement | 04-02 (resolved: [generic inject acknowledgement](runtime-semantics.md#generic-inject-acknowledgement-04-02)) | Inject success means accepted, never proof of consumption; `Result.ConsumedInputs` is the proof on every outcome; `ErrNotAccepting` is definitive; preserve pending input. |
 | One pending job rerun/replacement and possible coalescing | 05-01 | No speculative coalesce policy before workload evidence; preserve ordinary queue ordering. |
-| Ownership transfer, active-state conversion and fallback | 03-07, 06-02 | No dual scope owner; independent state and rehearsed fallback. |
+| Ownership transfer and active-state handling | 03-07, 06-02 | No dual scope owner; independent state. |
 | Subprocess transport/manifest/schema evolution | 07-01 through 07-03 (07-01 provisional: [extension protocol](extension-protocol.md), JSON-RPC 2.0 over stdio) | No speculative third-party protocol before shipped workloads; schema evolution and packaging remain 07-02/07-03. |
 
 No unresolved blocking contract defect remains after local checks and review. Stage 02 may start only once this ticket's final checks, evidence and commit are complete. Runtime implementation must pass the same public suites; a later primitive defect first updates contracts and negative controls, then reruns previous workload gates.

@@ -56,16 +56,9 @@ The architecture documents record the design and the evidence behind it, in roug
 - [Introspection: reporting, sweep, triage and fixes](architecture/issue-reporting.md)
 - [Operator setup, doctor and engineering controls](architecture/operator-setup.md)
 - [Installed integrations: Linear, Jira, Bitbucket, PostHog and operator tools](architecture/installed-integrations.md)
-- [Migration from Open Supervisor, ownership transfer and recovery](architecture/migration-recovery.md)
+- [Backup, restore and state recovery](architecture/recovery.md)
 
 **Extensions** (provisional)
 
 - [Extension subprocess protocol: transport, manifest, runtime, trust model and schema evolution](architecture/extension-protocol.md)
 - [Extension packaging, SDK, install, update, removal and certification](architecture/extension-packaging.md)
-
-## Parity with Open Supervisor
-
-- [Parity inventory, workflows and acceptance scenarios](baseline/parity.md)
-- [Pinned source test index](baseline/source-tests.md)
-
-The parity baseline records the outcomes Open Conduit must preserve from a pinned Open Supervisor release, and the verification behind each.

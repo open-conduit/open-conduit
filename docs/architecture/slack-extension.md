@@ -1,6 +1,6 @@
 # Slack ingress, conversations and marked replies
 
-Ticket 04-01 delivers the first-party Slack extension in [`extensions/slack`](../../extensions/slack). It is the second workload (PRD workflow B) and is built only against the public contracts: [B03 ingress](extensions.md), [B04 routing](runtime-semantics.md) and [B02 storage/KV](domain-storage.md). It has no workspace, repository or tracker concept, and the runtime does not import it. [`internal/bootstrap`](../../internal/bootstrap/slack.go) registers it. Open Supervisor v1 has no Slack adapter, so there is no behavioral baseline: the PRD is the only reference.
+Ticket 04-01 delivers the first-party Slack extension in [`extensions/slack`](../../extensions/slack). It is the second workload (PRD workflow B) and is built only against the public contracts: [B03 ingress](extensions.md), [B04 routing](runtime-semantics.md) and [B02 storage/KV](domain-storage.md). It has no workspace, repository or tracker concept, and the runtime does not import it. [`internal/bootstrap`](../../internal/bootstrap/slack.go) registers it. The PRD is the only reference.
 
 04-01 and 04-02 used only fixtures and the [`slacktest`](../../extensions/slack/slacktest) fake (Web API, Socket Mode and Events API). 04-03 adds a short real-Slack run and a fake-clock multi-day scenario (see [Real Slack evidence (04-03)](#real-slack-evidence-04-03)).
 
@@ -117,7 +117,7 @@ The TLS connection opened with the app token is the authentication boundary. Boo
 - It answers 200 only after durable acceptance, 401 for a bad signature, 400 for a malformed body and 503 when the delivery was not accepted (Slack retries).
 - It acknowledges `app_rate_limited` and other callbacks.
 
-The listener never serves `/v1`. Because v1 holds the machine's only free ngrok endpoint, Socket Mode is the practical default.
+The listener never serves `/v1`. Socket Mode is the practical default.
 
 `Push` makes no service calls and no coordination writes:
 

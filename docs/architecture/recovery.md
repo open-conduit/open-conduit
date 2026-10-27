@@ -1,0 +1,60 @@
+# Backup, restore and state recovery
+
+Ticket 06-02 delivers the offline recovery commands: backup bundles with verify and restore, a locked local credential reset (`auth recover`), and a read-only state diagnosis (`state check`), with the runbooks for SQLite migration recovery and corrupted state.
+
+`TestDaemonMigrationRehearsal` (in `make drill`) exercises them on the composed daemon: offline commands refused beside the daemon, `state check` drained after a graceful stop, a backup created and verified, a restore into a new directory with a fresh credential (the bundle's refused) and no repeated external write, claim or job run after a reconcile, corrupted and newer-schema databases diagnosed, and a tampered bundle refused.
+
+## Backup, restore and credential recovery
+
+These commands are offline. They take the state directory's exclusive daemon lock, so they refuse while a daemon owns it ("stop the daemon first"). Use `doctor` while it runs.
+
+```sh
+open-conduit backup create ~/backups/oc-2026-10-26        # an absent path; the database snapshot plus referenced artifacts, with a SHA-256 manifest
+open-conduit backup verify ~/backups/oc-2026-10-26        # restores into a private temporary directory, checks every digest and reference, removes it
+open-conduit backup restore ~/backups/oc-2026-10-26 --to ~/.local/state/open-conduit-restored
+open-conduit --data-dir ~/.local/state/open-conduit-restored serve
+open-conduit auth recover                                 # a lost or ambiguous operator token: revokes every operator credential, writes a fresh one
+```
+
+- **What a bundle holds.** A bundle holds `conduit.db` and the artifacts the database references ([backup bundles](backup-bundles.md)). Keep bundles owner-only: they hold private Work, Events, config snapshots and executor continuity.
+- **What a bundle does not hold.** It holds no credentials, config, secrets, executor run directories (`executors/`), workspaces (`resources/git/`) or logs.
+- **Restore.**
+  - A restore never replaces an existing directory.
+  - It fences every backed-up lease, so an old execution credential can never commit.
+  - It revokes the bundle's operator credential and writes a fresh `private/operator.token` (`auth recover` under the lock).
+  - A process running at backup time is not adopted after a restore: its attempt recovers or retries through ordinary recovery. Take bundles after a drain.
+  - Worktrees of the old state directory stay registered in the checkout: run `git worktree prune` once the old directory is gone.
+- **Timing.** Back up before every binary upgrade. A daily bundle with the daemon briefly stopped is the minimal routine; online bundles through the management API are not provided.
+
+## SQLite migration recovery
+
+Schema migrations run inside one immediate transaction at open (`internal/storage/sqlite`). A failure rolls back and leaves the database unchanged ("migration rolled back"). Open refuses three cases:
+
+| Symptom | Cause | Recovery |
+| --- | --- | --- |
+| `schema N is newer than supported` (`state check`: `schema_newer`) | A newer binary migrated the database, and an older binary was started on it | Run the newer binary again. To go back to the older binary, restore the bundle taken before the upgrade into a new directory. Never edit `user_version`. |
+| `unversioned nonempty database; explicit migration required` or `schema metadata mismatch` (`schema_unrecognized`) | The file is not an Open Conduit database, or was altered by hand | Point `--data-dir` at the right directory, or restore the latest bundle. |
+| `migration rolled back: …` | The upgrade failed part way (disk full, I/O) | Fix the cause and start again: the old schema is intact. If it keeps failing, restore the pre-upgrade bundle and report the defect. |
+
+The upgrade routine is: stop the daemon, run `backup create` and `backup verify`, install the new binary, then start it. Keep the old binary and the bundle until the observation window passes.
+
+## Corrupted-state diagnosis
+
+Run `open-conduit state check [--json]` with the daemon stopped. It examines a private copy of the database, so diagnosis never changes the state. It reports:
+
+| Check | Meaning |
+| --- | --- |
+| `lock` | Fails when a daemon owns the directory (`in_use_or_unsafe`), or when its permissions are not owner-only. |
+| `socket` | A leftover socket from an unclean stop (info: the next start removes it after its ownership checks). |
+| `database` | `schema_1` (integrity and foreign keys pass), or `corrupt` / `schema_newer` / `schema_unrecognized` / `open_failed`, with the remedy. |
+| `artifacts` | Referenced artifacts missing. A backup refuses missing content, so restore the directory or the latest bundle. |
+| `timers` | The number of durable timers that resume on start. |
+
+Per scope it also gives Work by state, live executions, active waits, and `drained` (no running or waiting Work, live execution or active wait), which is the drain check before an upgrade or restore.
+
+Recovery order:
+
+1. Copy the whole state directory aside (daemon stopped).
+2. If `database` fails, restore the newest bundle that `backup verify` accepts into a new directory, and start there. Reconcile then re-reads the services: work accepted after the bundle is re-derived from them, apart from declared one-shot deliveries.
+3. If only artifacts are missing, the coordination state is sound. The run content of those executions is lost; take a fresh bundle once `state check` passes.
+4. A stale socket or lock needs nothing: start the daemon.

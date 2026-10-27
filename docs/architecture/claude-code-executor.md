@@ -1,6 +1,6 @@
 # Claude Code executor and private continuity
 
-Ticket 03-03 delivers [`executors/claudecode`](../../executors/claudecode), the agent executor behind the [B03 executor contract](extensions.md), and `os mcp`, the toolbelt's MCP transport in [`internal/cli`](../../internal/cli/mcp.go). The Open Supervisor `internal/adapters/claudecode` package and the session, handoff and limit parts of `internal/engine/project.go` (pinned `c2461e55`) were the behavioral reference. Like the shell executor, the package imports only public contracts. Its process identity helpers are copied from `executors/shell`, because B01 forbids one executor importing another. `internal/bootstrap` registers it as executor `claude-code`.
+Ticket 03-03 delivers [`executors/claudecode`](../../executors/claudecode), the agent executor behind the [B03 executor contract](extensions.md), and `os mcp`, the toolbelt's MCP transport in [`internal/cli`](../../internal/cli/mcp.go). Like the shell executor, the package imports only public contracts. Its process identity helpers are copied from `executors/shell`, because B01 forbids one executor importing another. `internal/bootstrap` registers it as executor `claude-code`.
 
 The executor advertises `interrupt`, `inject`, `resume`, `workspace` and `toolbelt: mcp`.
 
@@ -28,11 +28,11 @@ The segment runs detached, like the shell executor's:
 - It refuses lower epochs, tampered metadata, and a dead process with no recorded exit or stop (`ErrNotAdoptable`).
 - It never launches.
 
-An adopted segment keeps running and finishes its turn. Its stdin went with the daemon that started it, so it takes no injected input (v1 parity). `Stop`, `Interrupt` (SIGTERM, then SIGKILL after the grace period) and `Forget` behave as they do in the shell executor.
+An adopted segment keeps running and finishes its turn. Its stdin went with the daemon that started it, so it takes no injected input. `Stop`, `Interrupt` (SIGTERM, then SIGKILL after the grace period) and `Forget` behave as they do in the shell executor.
 
 ## Prompt, inputs and injection
 
-A turn starts on the playbook skill `/open-conduit:<playbook> <args>` (the default playbook is `work-issue`). The body follows Open Supervisor's `turnBody`:
+A turn starts on the playbook skill `/open-conduit:<playbook> <args>` (the default playbook is `work-issue`). The body is:
 
 | Turn | Arguments | Body |
 | --- | --- | --- |
@@ -40,13 +40,13 @@ A turn starts on the playbook skill `/open-conduit:<playbook> <args>` (the defau
 | Another turn, or a resumed wake | `<args> events` | `## Since your last turn` + inputs |
 | A handoff to a fresh session | `<args> handoff` | `## Handoff from your last session` + note + `## Since your last turn` + inputs |
 
-`args` and `branch` are templates. `{key}` is the Work's first correlation key, `{number}` is the first number in it (the key itself when it has none) and `{work}` is the Work ID. The inputs are the acceptance-ordered `RunRequest.Inputs`. The default renderer knows no service schema: it shows each Event's type, the common payload fields (author, kind, number, path, line, state, title, URL) and the body or text. A tracker extension may supply a richer `Renderer`. The reply-command hints in the v1 renderer depend on the engineering tools, so they belong to 03-04, along with the playbooks themselves and the cross-issue "in flight" list.
+`args` and `branch` are templates. `{key}` is the Work's first correlation key, `{number}` is the first number in it (the key itself when it has none) and `{work}` is the Work ID. The inputs are the acceptance-ordered `RunRequest.Inputs`. The default renderer knows no service schema: it shows each Event's type, the common payload fields (author, kind, number, path, line, state, title, URL) and the body or text. A tracker extension may supply a richer `Renderer`. Reply-command hints depend on the engineering tools, so they belong to 03-04, along with the playbooks themselves and the cross-issue "in flight" list.
 
-`Inject` writes the Event as a stream-json user message (`## Arrived during this turn …`). claude takes it in before its next model call and echoes it back (`--replay-user-messages`). The echo is recorded as consumption. The result data reports `injected: {accepted, consumed}`, and the echoed Event IDs are returned as `Result.ConsumedInputs`, so core consumes them with the turn and starts no further attempt for them (v1 `TestInterjectionReachesTheRunningTurn`; added in 03-06 after a real turn showed the extra attempt). `Inject` success alone still means accepted for delivery: an input that was never echoed stays eligible for the next attempt. A segment that is adopted or already has its result, or an execution this instance does not hold, returns `ErrNotAccepting` (now `extension.ErrNotAccepting`). Core then records the intent as not delivered and keeps the input for the next attempt or wake. Since 04-02 a retried dispatch of an Event already on stdin is not written twice. The echo proof applies on waiting and failed turns too, and also when the turn ends before core commits the dispatch acknowledgement ([generic inject acknowledgement](runtime-semantics.md#generic-inject-acknowledgement-04-02)).
+`Inject` writes the Event as a stream-json user message (`## Arrived during this turn …`). claude takes it in before its next model call and echoes it back (`--replay-user-messages`). The echo is recorded as consumption. The result data reports `injected: {accepted, consumed}`, and the echoed Event IDs are returned as `Result.ConsumedInputs`, so core consumes them with the turn and starts no further attempt for them (added in 03-06 after a real turn showed the extra attempt). `Inject` success alone still means accepted for delivery: an input that was never echoed stays eligible for the next attempt. A segment that is adopted or already has its result, or an execution this instance does not hold, returns `ErrNotAccepting` (now `extension.ErrNotAccepting`). Core then records the intent as not delivered and keeps the input for the next attempt or wake. Since 04-02 a retried dispatch of an Event already on stdin is not written twice. The echo proof applies on waiting and failed turns too, and also when the turn ends before core commits the dispatch acknowledgement ([generic inject acknowledgement](runtime-semantics.md#generic-inject-acknowledgement-04-02)).
 
 ## Outcomes
 
-No core state was added. The structured status keeps v1's `--json-schema` (state, summary, prs, preview, touches, handoff). It maps as follows:
+No core state was added. The structured status uses `--json-schema` (state, summary, prs, preview, touches, handoff). It maps as follows:
 
 | Turn ended | Outcome | Work afterwards |
 | --- | --- | --- |
@@ -56,7 +56,7 @@ No core state was added. The structured status keeps v1's `--json-schema` (state
 | Error, no result, no status, interrupt | failed | retry policy |
 | Usage limit | failed with `Result.RetryHint{ResetAt}` | retried at the reset plus two minutes (or after 30 minutes if unknown) |
 
-The outcome data schema is the binding's `status_schema`. The default is `open-conduit.claudecode.result.v1`. A GitHub binding sets `github.status.v1`, so the projector reads `status` directly. The projector maps `help`, `review` and `done` to labels. `building` and `finished` project no status label, which is v1 parity. The other data fields are:
+The outcome data schema is the binding's `status_schema`. The default is `open-conduit.claudecode.result.v1`. A GitHub binding sets `github.status.v1`, so the projector reads `status` directly. The projector maps `help`, `review` and `done` to labels. `building` and `finished` project no status label. The other data fields are:
 
 - `reason`, `prs`, `preview`, `touches` and `kind`
 - `models`, `model_calls`, `tool_calls` and `tokens` (input, output, cache read, cache creation)
@@ -67,7 +67,7 @@ The outcome data schema is the binding's `status_schema`. The default is `open-c
 
 The data never carries the session, the handoff note or the experiment arm. Usage maps to `extension.Usage`, with cost in USD and `CachedTokens` holding the cache-read count. A resumed session reports cumulative totals, so the per-turn delta subtracts the session's previous totals, which are kept in continuity. Totals that went backwards (a fork) are left as reported.
 
-**Usage limits.** The executor detects a limit from `api_error: usage_limit_reached`, the `rate_limit_event`/`api_error_params` reset, or claude's wording ("resets 9:40am (Europe/London)"). A limit records a hold for the whole executor until the reset plus the grace period. While the hold lasts, `Run` returns a failed result with the same hint and launches nothing, matching v1's "no turns on this agent until the limit lifts". Contract clarification: `extension.Result.RetryHint` lets a structured failed result carry the hint. Core treats it like a `RetryHintProvider` error, but the observed result also proves the attempt finished, so no uncertain hold remains. A hint on any other outcome is invalid. A hinted failure still uses the bounded failure budget (02-04), unlike v1, which did not count limit hits.
+**Usage limits.** The executor detects a limit from `api_error: usage_limit_reached`, the `rate_limit_event`/`api_error_params` reset, or claude's wording ("resets 9:40am (Europe/London)"). A limit records a hold for the whole executor until the reset plus the grace period. While the hold lasts, `Run` returns a failed result with the same hint and launches nothing. Contract clarification: `extension.Result.RetryHint` lets a structured failed result carry the hint. Core treats it like a `RetryHintProvider` error, but the observed result also proves the attempt finished, so no uncertain hold remains. A hint on any other outcome is invalid. A hinted failure still uses the bounded failure budget (02-04).
 
 ## Private continuity
 
@@ -84,7 +84,7 @@ Continuity lives in namespaced coordination KV (`executor.claudecode`, key `work
 
 Before launch, `Run` decides between resume and fresh and records that decision in a transaction fenced by the attempt's lease. A crash after the record is written, but before launch, leaves an attempt that cannot be adopted. Its retry takes the recorded decision over (same session and arm) instead of drawing again. Finishing a segment applies the turn exactly once per segment (the same per-turn delta every time), before the result is recorded. Applying it again after a crash changes nothing.
 
-The resume and handoff rules are Open Supervisor's:
+The resume and handoff rules are:
 
 - A session whose transcript exists in the workspace (`<config>/projects/<cwd with non-alphanumerics as ->/<session>.jsonl`) resumes, even when its first turn never ended.
 - A session with a handoff note that was never written starts afresh from the note.
@@ -183,7 +183,7 @@ The config is strict and validated at load. Every field is optional:
 ## Limits and follow-on work
 
 - **No real claude.** No real Claude Code session ran; all evidence uses fake binaries and fixture transcripts. Real-agent turns, real limits, real resume and real handoff telemetry are 03-06 evidence.
-- **Playbooks and tools (03-04).** The playbooks, plugin preparation (v1 `Prepare`), the v1 renderer's reply commands and the engineering tools.
+- **Playbooks and tools (03-04).** The playbooks, plugin preparation, the reply commands and the engineering tools.
 - **Operator controls (03-05).** Delivered in [operator setup](operator-setup.md): attach through `POST /work/{id}/attach` under an operator hold, transcripts reachable as run artifacts, `Usage` (opt-in, doctor), `Version` (doctor), `Options.DryRun` (a stub turn on `haiku`) and the `init --with claude` setup command. A rendered transcript and activity view is not ported.
 - **Not ported yet.** The cross-issue "in flight" list has no Open Conduit equivalent.
 - **Inject consumption.** Since 03-06 an echoed injection is consumed with its turn through `Result.ConsumedInputs`. Since 04-02 this holds on every outcome and in the in-flight acknowledgement race. Injected input that was never echoed (for example, accepted just before the result) is presented again to the next attempt or wake. The executor passes `conformance.CheckInjectExecutor`.
@@ -192,8 +192,8 @@ The config is strict and validated at load. Every field is optional:
 03-04 update: [engineering tools, waits and playbooks](engineering-tools.md) delivers the following:
 
 - **Playbooks.** The playbooks and the plugin that bootstrap writes to `<state>/playbooks/plugin`, the default `Options.PluginDir` for bindings without `plugin_dir`.
-- **Project additions.** Read from the turn's workspace (`.open-conduit/playbooks/<playbook>.md`, falling back to `.open-supervisor/playbooks/`) and appended to the turn body.
-- **Rendering.** A GitHub `Options.Render` with v1's reply hints, now naming toolbelt calls.
+- **Project additions.** Read from the turn's workspace (`.open-conduit/playbooks/<playbook>.md`) and appended to the turn body.
+- **Rendering.** A GitHub `Options.Render` with reply hints naming toolbelt calls.
 - **Tool calls.** The MCP `call` tool sends its `input` object as payload data, with the `file_path`/`save_to` file conventions.
 
 A `call github.wait` parks the attempt exactly like `wait`, because `Complete` applies the declaration.

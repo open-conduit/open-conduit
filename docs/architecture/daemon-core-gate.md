@@ -21,7 +21,7 @@ The router, toolbelt, scheduler, timers, control and management server are rebui
 | Setting | Maps to |
 | --- | --- |
 | `concurrency` | `GlobalLimit`: attempts of every executor without a pool, which are the agent turns (`claude-code`) and installed extension executors |
-| `job_concurrency` | `PoolLimits["jobs"]`, with `ExecutorPools` placing `shell`, `legacy-job` and `github-hold` in the `jobs` pool |
+| `job_concurrency` | `PoolLimits["jobs"]`, with `ExecutorPools` placing `shell` and `github-hold` in the `jobs` pool |
 | `timeout_seconds` | `Timeout` |
 | `kept_executions` | `KeptExecutions`, with `Artifacts` for content deletion |
 | `retry_delays_seconds` | `RetryPolicy.Delays` |
@@ -112,13 +112,13 @@ When the test binary is race-enabled, as under `make check`, the daemon is also 
 
 ## All four workflows on one daemon (05-04)
 
-The stage 05 gate reruns the composed daemon with every workload at once. [`TestDaemonAllWorkflows`](../../integration/daemon_all_workflows_test.go) (in `make drill`) starts one `serve` process on three scopes, with fakes only: the GitHub and Slack fakes, a fake Claude Code CLI, and shell and legacy-job executors calling the real `os` toolbelt.
+The stage 05 gate reruns the composed daemon with every workload at once. [`TestDaemonAllWorkflows`](../../integration/daemon_all_workflows_test.go) (in `make drill`) starts one `serve` process on three scopes, with fakes only: the GitHub and Slack fakes, a fake Claude Code CLI, and a shell executor calling the real `os` toolbelt.
 
 | Scope | Workflow | Executors |
 | --- | --- | --- |
 | `eng` | A: the GitHub route claims an issue; the agent reports a defect and parks on the issue. D: a report-about-a-report loop on the report binding; the extension's triage timer; fix Work that parks on a timeout and then resolves the reports | shell |
 | `support` | B: a workspace-free Slack conversation that replies and parks on the thread | claude-code (fake) |
-| `ops` | C: an interval job that reads its context and parks on a timeout, plus a manual legacy job | shell, legacy-job |
+| `ops` | C: an interval job that reads its context and parks on a timeout, plus a manual job | shell |
 
 The drill checks the following, in order:
 
@@ -128,7 +128,7 @@ The drill checks the following, in order:
 4. **Webhooks off.** The human comment and the thread reply are never pushed. An operator scope reconcile, standing in for the next poll, finds both. A's next attempt finishes the issue (one marked comment, converged labels), and B resumes the same session.
 5. **Workflow D.** Editing triage to an hour ago catches up one slot. Triage requests one fix for the open reports, and `events chain <fix>` traces fix → report → … → the GitHub origin.
 6. **One wake path.** Each parked Work has exactly one woken Wait: A and B by reconciled ingress Events, C and D by their timeout timers. Each also has a `wait.woken` lifecycle record naming the waking type. The executor's capability alone decides the effect: the resumable claude-code attempt continues through `core.wait.woken`, while the shell attempts end and the wake Event triggers the next attempt. Every wake goes through `WakeWaitInTx` (routing, subscriptions, timers and the operator wake all call it).
-7. **One history, view and retention model.** `/v1/runs` across all scopes holds shell, claude-code and legacy-job runs of `github.issue`, `slack.conversation`, `schedule.job` and the three introspection kinds. Every run renders in `runview` and carries its trigger, executor and binding. `kept_executions` 1 (swept every second) expires the earlier attempts of the A, C and D Work alike.
+7. **One history, view and retention model.** `/v1/runs` across all scopes holds shell and claude-code runs of `github.issue`, `slack.conversation`, `schedule.job` and the three introspection kinds. Every run renders in `runview` and carries its trigger, executor and binding. `kept_executions` 1 (swept every second) expires the earlier attempts of the A, C and D Work alike.
 8. **Explainability.** Every attempt after the last kill has a start record with its trigger type and executor and a stop record with its outcome. The triage's fix request appears as a `toolbelt.called` record.
 9. **Namespace isolation.** Every routed Event reaches Work in its own scope, and every Work's keys lie in its scope's namespaces.
 10. **Redaction.** No secret value appears in any file under the drill root (SQLite, logs, artifacts, executor state, fixture output) or in the management API's runs, events and Work.
