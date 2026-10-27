@@ -18,7 +18,7 @@ import (
 type CondKind string
 
 const (
-	CondPR    CondKind = "pr"    // a PR merging or closing
+	CondPR    CondKind = "pr"    // a PR merging, closing, being commented on or pushed to
 	CondIssue CondKind = "issue" // an issue closing, or the agent on it ending a turn in a state
 	CondJob   CondKind = "job"   // the next run of one of a scope's jobs ending (05-02)
 )
@@ -35,19 +35,25 @@ type Cond struct {
 	// name); empty is the waiting Work's own.
 	Project string `json:"project,omitempty"`
 	Ref     string `json:"ref"`
-	// On is merged or closed for a PR; closed or a turn state for an issue;
+	// On is merged, closed, commented or pushed for a PR; closed or a turn
+	// state for an issue;
 	// empty for a job.
 	On string `json:"on,omitempty"`
 }
 
 var issueOns = append([]string{"closed"}, TurnStates...)
 
+// prOns are what a PR can be waited on for: commented (the next human
+// comment, review or review-thread reply) and pushed (the next new head
+// commit) are about what happens from the wait on.
+var prOns = []string{"merged", "closed", "commented", "pushed"}
+
 // ParseCond reads a condition as an agent writes it. A PR's defaults to
 // merged, an issue's to closed.
 func ParseCond(s string) (Cond, error) {
 	parts := strings.Split(strings.TrimSpace(s), ":")
 	if len(parts) < 2 || len(parts) > 3 || parts[1] == "" {
-		return Cond{}, fmt.Errorf("%q isn't a condition: write pr:<n>[:merged|closed], issue:<n>[:closed|<state>] or job:<name>", s)
+		return Cond{}, fmt.Errorf("%q isn't a condition: write pr:<n>[:merged|closed|commented|pushed], issue:<n>[:closed|<state>] or job:<name>", s)
 	}
 	c := Cond{Kind: CondKind(strings.ToLower(parts[0])), Ref: parts[1]}
 	if len(parts) == 3 {
@@ -68,8 +74,12 @@ func ParseCond(s string) (Cond, error) {
 		if c.On == "" {
 			c.On = "merged"
 		}
-		if c.On != "merged" && c.On != "closed" {
-			return Cond{}, fmt.Errorf("%q: a PR can be waited on to be merged or closed", s)
+		ok := false
+		for _, o := range prOns {
+			ok = ok || c.On == o
+		}
+		if !ok {
+			return Cond{}, fmt.Errorf("%q: a PR can be waited on to be %s", s, strings.Join(prOns, ", "))
 		}
 	case CondIssue:
 		c.Ref = strings.TrimPrefix(c.Ref, "#")
@@ -119,11 +129,15 @@ func (c Cond) Describe() string {
 	}
 	switch c.Kind {
 	case CondPR:
-		verb := "merge"
-		if c.On == "closed" {
-			verb = "close"
+		switch c.On {
+		case "commented":
+			return fmt.Sprintf("a reply or review on PR #%s%s", c.Ref, where)
+		case "pushed":
+			return fmt.Sprintf("a new push to PR #%s%s", c.Ref, where)
+		case "closed":
+			return fmt.Sprintf("PR #%s%s to close", c.Ref, where)
 		}
-		return fmt.Sprintf("PR #%s%s to %s", c.Ref, where, verb)
+		return fmt.Sprintf("PR #%s%s to merge", c.Ref, where)
 	case CondIssue:
 		if c.On == "closed" {
 			return fmt.Sprintf("#%s%s to close", c.Ref, where)
@@ -144,6 +158,12 @@ func (c Cond) Happened(sourceType string) string {
 	}
 	switch c.Kind {
 	case CondPR:
+		switch c.On {
+		case "commented":
+			return fmt.Sprintf("someone replied on PR #%s%s", c.Ref, where)
+		case "pushed":
+			return fmt.Sprintf("PR #%s%s got a new push", c.Ref, where)
+		}
 		if sourceType == TypePullClosed && c.On == "merged" {
 			return fmt.Sprintf("PR #%s%s was closed without merging, so it won't merge", c.Ref, where)
 		}

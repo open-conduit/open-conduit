@@ -13,7 +13,8 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// Wait translation. `pr:N:merged`, `issue:N:closed`, `issue:N:<state>` and
+// Wait translation. `pr:N:merged`, `pr:N:commented`, `pr:N:pushed`,
+// `issue:N:closed`, `issue:N:<state>` and
 // `--until` become a generic plan: a Wait on the Work's own keys (types plus
 // a timeout) and B04 dependency subscriptions on the named item's
 // correlation key, with an opaque filter selecting the item. Already-met
@@ -37,11 +38,14 @@ type TurnPayload struct {
 
 // dependencyFilter is the opaque filter of a translated dependency.
 type dependencyFilter struct {
-	Kind   string `json:"kind"` // pr, issue, turn or peer
+	Kind   string `json:"kind"` // pr, pr_comment, pr_push, issue, turn or peer
 	Repo   string `json:"repo"`
 	Number int    `json:"number"`
 	State  string `json:"state,omitempty"`
-	Work   string `json:"work,omitempty"` // peer: the waiting Work
+	// Work is the waiting Work: a peer or pr_comment wait never meets its
+	// own comments. Head is the PR's head commit when a pr_push wait began.
+	Work string `json:"work,omitempty"`
+	Head string `json:"head,omitempty"`
 }
 
 // peerLabel labels the dependency that wakes a parked agent when another
@@ -81,6 +85,14 @@ func DependencyFilter(filter domain.Payload, e domain.Event) bool {
 	case "pr":
 		var p PullPayload
 		return e.Data.Schema == SchemaPull && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo)
+	case "pr_push":
+		var p PullPayload
+		return e.Data.Schema == SchemaPull && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo) && p.HeadSHA != "" && p.HeadSHA != f.Head
+	case "pr_comment":
+		// A new comment, review or thread reply on the PR (not an edit), from
+		// anyone but the waiting Work itself.
+		var p CommentPayload
+		return e.Data.Schema == SchemaComment && json.Unmarshal(e.Data.Data, &p) == nil && p.Kind != KindIssue && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo) && !p.Edited && (p.Agent == nil || p.Agent.Work == "" || p.Agent.Work != f.Work)
 	case "issue":
 		var p IssuePayload
 		return e.Data.Schema == SchemaIssue && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo)
@@ -149,6 +161,20 @@ func (t *Tools) target(ctx context.Context, b *bound, c Cond) (issue, code Sourc
 		}
 	}
 	return issue, code, scope, nil
+}
+
+// trackerOf is the registered source holding a code repository's issues:
+// its shared tracker when it has one, else itself.
+func (t *Tools) trackerOf(code Source) Source {
+	if !code.Settings.SharedTracker {
+		return code
+	}
+	for _, s := range t.o.Sources() {
+		if s.Settings.Scope == code.Settings.Scope && s.Settings.TrackIssues && s.Settings.Namespace == code.Settings.TrackerNS {
+			return s
+		}
+	}
+	return code
 }
 
 // jobScope is the scope a job condition names: its own when Project is
@@ -220,16 +246,30 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 			}
 			return r, err
 		}
-		if p.State != "open" {
-			r.met = "PR #" + c.Ref + " is already " + pullState(p)
-		}
 		n := &normalizer{s: codeSrc.Settings, c: codeSrc.Client, m: newMemo()}
 		key, _, err := n.pullKey(ctx, p)
 		if err != nil {
 			return r, err
 		}
-		r.dep.SourceKey, r.dep.Types = key, []string{TypePullMerged, TypePullClosed}
-		r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr", Repo: repo, Number: c.Number()})
+		r.dep.SourceKey = key
+		switch c.On {
+		case "commented":
+			// The next comment from now on, not an earlier one.
+			r.dep.Types, r.dep.FromNow = []string{TypeCommentHuman, TypeCommentAgent}, true
+			r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr_comment", Repo: repo, Number: c.Number(), Work: string(b.work.ID)})
+		case "pushed":
+			if p.State != "open" {
+				return r, refuse("invalid_condition", "%s: PR #%d is already %s, so it won't get new pushes", c, c.Number(), pullState(p))
+			}
+			r.dep.Types, r.dep.FromNow = []string{TypePullOpen}, true
+			r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr_push", Repo: repo, Number: c.Number(), Head: p.Head.SHA})
+		default:
+			if p.State != "open" {
+				r.met = "PR #" + c.Ref + " is already " + pullState(p)
+			}
+			r.dep.Types = []string{TypePullMerged, TypePullClosed}
+			r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr", Repo: repo, Number: c.Number()})
+		}
 	case CondIssue:
 		repo := issueSrc.Settings.TrackerRepo
 		i, err := issueSrc.Client.Issue(ctx, repo, c.Number())
@@ -267,7 +307,13 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 // github.hold (a held issue's first attempt).
 func (t *Tools) waitPlan(hold bool) func(context.Context, extension.Authority, domain.Payload) (extension.WaitPlan, error) {
 	return func(ctx context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
-		b, err := t.bind(ctx, a)
+		// A hold is its issue's; an agent's wait binds any Work, with or
+		// without a GitHub issue of its own (a Slack request reviewing a PR).
+		bind := t.bindWork
+		if hold {
+			bind = t.bind
+		}
+		b, err := bind(ctx, a)
 		if err != nil {
 			return extension.WaitPlan{}, err
 		}
@@ -289,6 +335,7 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 		Conditions []string `json:"conditions"`
 		Until      string   `json:"until"`
 		Reason     string   `json:"reason"`
+		Repo       string   `json:"repo"`
 	}
 	if err := decode(data, &in); err != nil {
 		return extension.WaitPlan{}, err
@@ -296,9 +343,37 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 	if strings.TrimSpace(in.Reason) == "" {
 		return extension.WaitPlan{}, refuse("missing_field", "reason (what you're waiting for and why) is required")
 	}
-	h, resolved, err := t.holdFor(ctx, b, in.Conditions, in.Until)
+	// Conditions in this project name the repository the call names, else
+	// the Work's own, else the scope's only one (as the PR operations do).
+	rb := b
+	if b.number == 0 || strings.TrimSpace(in.Repo) != "" {
+		src, err := t.pullSource(b, in.Repo)
+		if err != nil {
+			return extension.WaitPlan{}, err
+		}
+		c := *b
+		c.code, c.issue = src, t.trackerOf(src)
+		rb = &c
+	}
+	h, resolved, err := t.holdFor(ctx, rb, in.Conditions, in.Until)
 	if err != nil {
 		return extension.WaitPlan{}, err
+	}
+	if b.number == 0 {
+		// No issue to carry the reason: the Work's own conversation (a Slack
+		// thread) is where people hear it, from the agent. Only what it
+		// waits for (or its time) wakes it, never its own posts.
+		if len(b.work.CorrelationKeys) == 0 {
+			return extension.WaitPlan{}, refuse("cannot_wait", "this Work has nothing of its own to be woken on")
+		}
+		plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: []string{TypeDependencyMet}}, Timeout: h.Until}}
+		for _, r := range resolved {
+			plan.Dependencies = append(plan.Dependencies, r.dep)
+		}
+		out, _ := json.Marshal(map[string]any{"waiting_for": h.Describe(), "reason": strings.TrimSpace(in.Reason),
+			"next": "if the people you work for should know what you're waiting for, tell them where you talk to them; then end your turn now: you are resumed with what happened"})
+		plan.Output = domain.Payload{Schema: "github.tool.v1", Data: out}
+		return plan, nil
 	}
 	resolved, kept, err := t.keepHeld(ctx, b, &h, resolved)
 	if err != nil {

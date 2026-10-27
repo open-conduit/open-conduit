@@ -18,7 +18,7 @@ import (
 func TestParseCondAndHoldMarkers(t *testing.T) {
 	for in, want := range map[string]string{
 		"pr:12": "pr:12:merged", "pr:#12:closed": "pr:12:closed", "issue:7": "issue:7:closed", "issue:7:review": "issue:7:review",
-		"job:backup": "job:backup", "pr:club/88:merged": "pr:club/88:merged",
+		"job:backup": "job:backup", "pr:club/88:merged": "pr:club/88:merged", "pr:5:commented": "pr:5:commented", "pr:5:Pushed": "pr:5:pushed",
 	} {
 		c, err := gh.ParseCond(in)
 		if err != nil || c.String() != want {
@@ -55,6 +55,12 @@ func TestParseCondAndHoldMarkers(t *testing.T) {
 	}
 	if _, ok := gh.HoldIn("<!-- waitFor: -->"); ok {
 		t.Fatal("empty hold parsed")
+	}
+	if c, _ := gh.ParseCond("pr:9:commented"); c.Describe() != "a reply or review on PR #9" || c.Happened(gh.TypeCommentHuman) != "someone replied on PR #9" {
+		t.Fatal(c.Describe(), c.Happened(gh.TypeCommentHuman))
+	}
+	if _, err := gh.ParseCond("pr:9:reviewed"); err == nil || !strings.Contains(err.Error(), "merged, closed, commented, pushed") {
+		t.Fatal(err)
 	}
 	if c, _ := gh.ParseCond("pr:9:merged"); c.Happened(gh.TypePullClosed) != "PR #9 was closed without merging, so it won't merge" {
 		t.Fatal(c.Happened(gh.TypePullClosed))
@@ -97,6 +103,26 @@ func TestDependencyFilterSelectsTheNamedItem(t *testing.T) {
 	} {
 		if got := gh.DependencyFilter(peer, ev(gh.SchemaComment, gh.CommentPayload{Kind: gh.KindIssue, Body: "x", Agent: c.agent, Edited: c.edit})); got != c.want {
 			t.Fatalf("peer filter on %+v (edited %v) = %v", c.agent, c.edit, got)
+		}
+	}
+	// A push is a new head; any other change to the PR (a title, a label) is not.
+	push := filter(map[string]any{"kind": "pr_push", "repo": repo, "number": 8, "head": "s1"})
+	if !gh.DependencyFilter(push, ev(gh.SchemaPull, gh.PullPayload{Repo: repo, Number: 8, HeadSHA: "s2"})) || gh.DependencyFilter(push, ev(gh.SchemaPull, gh.PullPayload{Repo: repo, Number: 8, HeadSHA: "s1", Title: "Renamed"})) || gh.DependencyFilter(push, ev(gh.SchemaPull, gh.PullPayload{Repo: repo, Number: 7, HeadSHA: "s2"})) {
+		t.Fatal("push filter")
+	}
+	// A new comment, review or thread reply on the PR from anyone but the
+	// waiting Work; not an edit, nor a comment on an issue of the same number.
+	comment := filter(map[string]any{"kind": "pr_comment", "repo": repo, "number": 8, "work": "work/me"})
+	for _, c := range []gh.CommentPayload{{Kind: gh.KindPullRequest}, {Kind: gh.KindReview}, {Kind: gh.KindReviewComment, InReplyTo: 4}, {Kind: gh.KindPullRequest, Agent: &gh.Agent{Work: "work/author"}}} {
+		c.Repo, c.Number = repo, 8
+		if !gh.DependencyFilter(comment, ev(gh.SchemaComment, c)) {
+			t.Fatalf("comment filter rejected %+v", c)
+		}
+	}
+	for _, c := range []gh.CommentPayload{{Kind: gh.KindPullRequest, Edited: true}, {Kind: gh.KindIssue}, {Kind: gh.KindPullRequest, Agent: &gh.Agent{Work: "work/me"}}} {
+		c.Repo, c.Number = repo, 8
+		if gh.DependencyFilter(comment, ev(gh.SchemaComment, c)) {
+			t.Fatalf("comment filter accepted %+v", c)
 		}
 	}
 	if gh.DependencyFilter(domain.Payload{Schema: "other"}, ev(gh.SchemaPull, gh.PullPayload{Repo: repo, Number: 8})) {
