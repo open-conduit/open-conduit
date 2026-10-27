@@ -25,6 +25,7 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | `github.pr.view` | `number` | a PR and every comment, inline comment and review on it |
 | `github.pr.comment` | `number`, `body` | comment on a PR's conversation |
 | `github.pr.reply` | `number`, `comment_id`, `body` | reply in an inline review thread |
+| `github.pr.review` | `number`, `event`, `body`, `comments`? | submit one review: `event` is `approve`, `request_changes` or `comment`, with inline `comments` as `{path, line, side?, body}` on lines of the diff. It is posted as this connection's GitHub account, not the owner's |
 | `github.checks` | `number`? | every check on the PR's head, with links |
 | `github.attachment.upload` | `file_path` | upload a file (an image, a zip, a document) and get a link to put in a comment |
 | `github.attachment.get` | `url`, `save_to` | download a file a comment links to into `save_to`, signed in (a private repo's attachments need it) |

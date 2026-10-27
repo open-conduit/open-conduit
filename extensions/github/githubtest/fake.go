@@ -380,6 +380,13 @@ func (s *Server) AddReview(n int, user User, state, body string) int64 {
 	return r.ID
 }
 
+// Reviews returns a PR's submitted reviews.
+func (s *Server) Reviews(n int) []Review {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]Review(nil), s.pulls[n].Reviews...)
+}
+
 // SetCheck adds or updates a named check run on sha.
 func (s *Server) SetCheck(sha, name, status, conclusion string) {
 	s.mu.Lock()
@@ -1217,6 +1224,43 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 			return http.StatusOK, pr
 		}
 		return 0, nil
+	}
+	if x := rePullReviews.FindStringSubmatch(rest); x != nil && r.Method == http.MethodPost {
+		p, ok := s.pulls[atoi(x[1])]
+		if !ok {
+			return 0, nil
+		}
+		var req struct {
+			Event    string `json:"event"`
+			Body     string `json:"body"`
+			Comments []struct {
+				Path string `json:"path"`
+				Line int    `json:"line"`
+				Body string `json:"body"`
+			} `json:"comments"`
+		}
+		_ = json.Unmarshal(body, &req)
+		writer := User{Login: "open-conduit[bot]", Type: "Bot"}
+		states := map[string]string{"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}
+		state, known := states[req.Event]
+		if !known {
+			return http.StatusUnprocessableEntity, map[string]any{"message": "Unprocessable Entity", "errors": []string{"Event is not included in the list"}}
+		}
+		if req.Event != "COMMENT" && s.issue(p.Number).User.Login == writer.Login {
+			verb := map[string]string{"APPROVE": "approve", "REQUEST_CHANGES": "request changes on"}[req.Event]
+			return http.StatusUnprocessableEntity, map[string]any{"message": "Unprocessable Entity", "errors": []string{"Review Can not " + verb + " your own pull request"}}
+		}
+		for _, c := range req.Comments {
+			if c.Line <= 0 || c.Line > 1000 {
+				return http.StatusUnprocessableEntity, map[string]any{"message": "Unprocessable Entity", "errors": []string{"Line could not be resolved"}}
+			}
+		}
+		rv := Review{ID: s.id(), User: writer, Body: req.Body, State: state, Submitted: s.tick(), CommitID: p.HeadSHA}
+		p.Reviews = append(p.Reviews, rv)
+		for _, c := range req.Comments {
+			s.addComment(p.Number, writer, c.Body, true, c.Path, c.Line)
+		}
+		return http.StatusOK, reviewJSON(rv, s.web(p.Number))
 	}
 	if x := rePullReviews.FindStringSubmatch(rest); x != nil && get {
 		p, ok := s.pulls[atoi(x[1])]

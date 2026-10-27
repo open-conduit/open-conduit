@@ -97,6 +97,21 @@ func (c *Client) ReplyReview(ctx context.Context, repo string, n int, commentID 
 	return out, err
 }
 
+// ReviewRequest is a pull request review to submit.
+type ReviewRequest struct {
+	Event    string         `json:"event"`
+	Body     string         `json:"body"`
+	Comments []ReviewInline `json:"comments,omitempty"`
+}
+
+// CreateReview submits a review, with its inline comments, as the writer.
+// Callers must mark the body: a lost response cannot be retried blindly.
+func (c *Client) CreateReview(ctx context.Context, repo string, n int, r ReviewRequest) (PostedComment, error) {
+	var out PostedComment
+	_, err := c.call(ctx, true, repo, http.MethodPost, repoPath(repo, "/pulls/%d/reviews", n), r, &out)
+	return out, err
+}
+
 // CheckState reads a commit's check runs (or, when those are refused, its
 // Actions workflow runs) and statuses; from is RunsFromCheckRuns,
 // RunsFromWorkflows or RunsUnreadable (neither kind of run could be read).

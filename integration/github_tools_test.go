@@ -971,3 +971,81 @@ func TestGitHubPROperationsNeedARegisteredRepository(t *testing.T) {
 	}
 	e.finish(a, nil)
 }
+
+// A review is one marked durable intent: requesting changes with inline
+// comments posts one review across a retry and a lost response, recovered by
+// marker, and neither the review nor its inline comments come back as a
+// person's news. GitHub's refusals post nothing and leave nothing to redo.
+func TestGitHubPRReviewIsSubmittedOnce(t *testing.T) {
+	e := newToolsEnv(t)
+	n, owner := e.claim("Header wobbles", "", "bug")
+	pr := e.fake.OpenPull("Fix the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "h1", ghAlice)
+	own := e.fake.OpenPull("The bot's own change", "", "agent/elsewhere", "h2", githubtest.User{Login: "open-conduit[bot]", Type: "Bot"})
+	e.sync()
+	w := e.request("thread-review")
+	a := e.start(w.ID)
+
+	_, err := e.call(a, gh.OpPRReview, "", map[string]any{"number": pr, "event": "merge"})
+	refused(t, err, "missing_field")
+	_, err = e.call(a, gh.OpPRReview, "", map[string]any{"number": pr, "event": "request_changes"})
+	refused(t, err, "missing_field")
+	_, err = e.call(a, gh.OpPRReview, "", map[string]any{"number": pr, "event": "comment", "body": "x", "comments": []map[string]any{{"path": "a.go", "body": "no line"}}})
+	refused(t, err, "invalid_comment")
+	_, err = e.call(a, gh.OpPRReview, "bad-line", map[string]any{"number": pr, "event": "comment", "body": "x", "comments": []map[string]any{{"path": "a.go", "line": 5000, "body": "off the diff"}}})
+	refused(t, err, "github_unprocessable")
+	_, err = e.call(a, gh.OpPRReview, "own", map[string]any{"number": own, "event": "approve"})
+	refused(t, err, "own_pull_request")
+	// An approval needs no body and reports the review it posted.
+	if out := e.must(a, gh.OpPRReview, "approve", map[string]any{"number": pr, "event": "approve"}); out["state"] != "posted" || out["review_id"] == nil {
+		t.Fatalf("approve: %v", out)
+	}
+
+	review := map[string]any{"number": pr, "event": "request_changes", "body": "The offset needs a constant.",
+		"comments": []map[string]any{{"path": "header.go", "line": 12, "body": "Name this."}, {"path": "header.go", "line": 30, "side": "left", "body": "Why removed?"}}}
+	e.fake.LoseNextResponse("/repos/"+ghRepo+"/pulls/"+itoa(pr)+"/reviews", 1)
+	if out := e.must(a, gh.OpPRReview, "review", review); out["state"] != "pending" {
+		t.Fatalf("lost review: %v", out)
+	}
+	if again := e.must(a, gh.OpPRReview, "review", review); again["state"] != "pending" {
+		t.Fatalf("retry: %v", again)
+	}
+	e.finish(a, nil)
+	e.clock.Add(31 * time.Second)
+	if res := e.converge(); res.Recovered != 1 {
+		t.Fatalf("recovery: %+v", res)
+	}
+	e.converge()
+	reviews := e.fake.Reviews(pr)
+	if len(reviews) != 2 || reviews[0].State != "APPROVED" || reviews[1].State != "CHANGES_REQUESTED" || gh.ParseAgent(reviews[1].Body).Work != string(w.ID) {
+		t.Fatalf("reviews: %+v", reviews)
+	}
+	inline := e.fake.InlineComments(pr)
+	if len(inline) != 2 {
+		t.Fatalf("inline: %+v", inline)
+	}
+	for _, c := range inline {
+		if a := gh.ParseAgent(c.Body); a == nil || a.Work != string(w.ID) {
+			t.Fatalf("unmarked inline comment: %+v", c)
+		}
+	}
+	if len(e.fake.Reviews(own)) != 0 {
+		t.Fatalf("refused review posted")
+	}
+	posts := 0
+	for _, x := range e.fake.Writes() {
+		if x.Method == "POST" && strings.HasSuffix(x.Path, "/reviews") {
+			posts++
+		}
+	}
+	if posts != 4 { // the bad line, the own PR, the approval and the lost review, each once
+		t.Fatalf("%d review posts", posts)
+	}
+
+	e.sync()
+	if q := e.queued(w.ID); len(q) != 0 {
+		t.Fatalf("requester heard: %v", q)
+	}
+	if q := strings.Join(e.queued(owner.ID), " "); strings.Contains(q, gh.TypeCommentHuman) || !strings.Contains(q, gh.TypeCommentAgent) {
+		t.Fatalf("owner queued: %v", q)
+	}
+}
