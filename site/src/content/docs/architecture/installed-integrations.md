@@ -24,7 +24,7 @@ Besides GitHub, Open Conduit ships adapters for Linear and Jira (trackers), Bitb
 - **Projector.** It is level-triggered from durable Work state:
   - Labels: claimed while owned, plus at most one of the help, review or done labels, none while an attempt runs. The claimed label comes off once completed Work's issue is closed: admission never claims a closed issue, and a reopening starts a new generation, which is claimed again. Failed and cancelled Work keep it.
   - It re-reads the issue when desired state changes, and at `verify_seconds` for nonterminal Work and for completed Work whose issue is still open, until the issue closes. After it moves a completed Work's issue (a `finished` transition that may close it), the next pass re-reads it at once.
-  - Workflow status: claimed, then the declared status (`<type>.status.v1` `{status, comment}`), done or help for completed or failed Work. It is moved only when the entry names a status for that state.
+  - Workflow status: claimed, then the declared status (`core.turn.v1` `{status, comment}`, or for one release the `<type>.status.v1` stored outcomes keep), done or help for completed or failed Work. It is moved only when the entry names a status for that state.
   - Each outcome comment goes through the `Outbox`: pending → attempted (recorded before the write) → posted, with mark search after a lost answer, so nothing is posted twice across a crash.
 - **Tools.** `<type>.context`, `.issue.view`, `.issue.comment` (a durable intent, idempotent per request), `.issue.list` and `.issue.create` (never repeated after an ambiguous answer).
 
@@ -80,7 +80,7 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 [`internal/bootstrap/trackers.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/trackers.go) and [`posthog.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/posthog.go) register the types, the route-config validators, the tools on every generation, and the webhook routes `POST /<type>/<scope>/<entry>` on the listener. They also run `manage_webhook` re-pointing through the same retry and doctor paths as GitHub, and a background projection pass.
 
 - **Doctor.** `trackers` (registration, rate limit, reconcile, projection, a Bitbucket entry whose tracker is not registered, dry run), `trackers_auth` (check_secrets: sign-in), `posthog` and `posthog_auth` (key form; PostHog cannot be asked about a key without sending an event). The `webhooks` check lists tracker routes and hooks.
-- **Setup.** `init linear --teams ENG[,OPS]` and `init jira --site … --projects …`. Both take `--bitbucket WORKSPACE/SLUG --bitbucket-username … --bitbucket-token REF` and an optional `--checkout`. They write a claude-code binding on the `work-tracker-issue` playbook (`args {key}`, branch `agent/{key}`, `<type>.status.v1`) and validate offline. Scopes stay workspace-free unless a checkout is given.
+- **Setup.** `init linear --teams ENG[,OPS]` and `init jira --site … --projects …`. Both take `--bitbucket WORKSPACE/SLUG --bitbucket-username … --bitbucket-token REF` and an optional `--checkout`. They write a claude-code binding on the `work-tracker-issue` playbook (`args {key}`, branch `agent/{key}`) and validate offline. Scopes stay workspace-free unless a checkout is given.
 - **Dry run.** `serve --dry-run` makes every tracker client write nothing. Projection, tools and webhook management report `dry_run`.
 
 ## Operator tools

@@ -86,6 +86,13 @@ func TestConfigValidation(t *testing.T) {
 	if err := e.ValidateConfig(nil, nil); err != nil {
 		t.Errorf("an empty config takes every default: %v", err)
 	}
+	// A turn is declared under the core schema; source-named schemas from
+	// earlier setups read as it, and other schemas are kept.
+	for in, want := range map[string]string{`{}`: domain.TurnSchema, `{"status_schema":"github.status.v1"}`: domain.TurnSchema, `{"status_schema":"linear.status.v1"}`: domain.TurnSchema, `{"status_schema":"acme.result.v2"}`: "acme.result.v2"} {
+		if c, err := claudecode.ParseConfig([]byte(in)); err != nil || c.StatusSchema != want {
+			t.Errorf("%s: status schema %q (%v), want %q", in, c.StatusSchema, err, want)
+		}
+	}
 }
 
 // TestTurnInvocationEnvironmentAndResult checks the first turn: a fresh
@@ -104,7 +111,7 @@ func TestTurnInvocationEnvironmentAndResult(t *testing.T) {
 	if saved.Schema != claudecode.RecoverySchema {
 		t.Fatalf("recovery metadata %+v", saved)
 	}
-	if res.Outcome.Kind != domain.OutcomeHandoff || res.Outcome.Summary != "turn 1" || res.Outcome.Data.Schema != "github.status.v1" {
+	if res.Outcome.Kind != domain.OutcomeHandoff || res.Outcome.Summary != "turn 1" || res.Outcome.Data.Schema != domain.TurnSchema {
 		t.Fatalf("outcome %+v", res.Outcome)
 	}
 	d := dataOf(t, res)

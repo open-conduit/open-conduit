@@ -3,7 +3,6 @@ package github
 import (
 	"context"
 	"encoding/json"
-	"sort"
 	"strings"
 	"time"
 
@@ -159,91 +158,4 @@ func (p *Projector) redriveIssues(ctx context.Context, limit int) error {
 		}
 	}
 	return nil
-}
-
-// Turn is a TypeAgentTurn event the host publishes for a finished agent
-// turn, with the causal parent it derives from (the attempt's trigger).
-type Turn struct {
-	Scope  domain.ID
-	Parent domain.ID
-	Event  domain.Event
-}
-
-// Turns returns agent turns that ended with a declared status and have not
-// been reported yet: the source of `issue:N:<state>` waits. Turn events are
-// derived from durable outcomes, so a host crash only re-derives the same
-// delivery identity. The host accepts them as derived Events and records
-// each with MarkTurn.
-func (p *Projector) Turns(ctx context.Context, limit int) ([]Turn, error) {
-	var out []Turn
-	err := p.transact(ctx, func(tx storage.Tx) error {
-		out = nil
-		works, err := tx.ListWorks()
-		if err != nil {
-			return err
-		}
-		for _, w := range works {
-			if string(w.ScopeID) != p.o.Settings.Scope {
-				continue
-			}
-			var key domain.CorrelationKey
-			number := 0
-			for _, k := range w.CorrelationKeys {
-				if n, _, ok := ParseIssueKey(k.ExternalID); ok && k.Source == p.o.Settings.Namespace {
-					key, number = k, n
-					break
-				}
-			}
-			if number == 0 {
-				continue
-			}
-			xs, err := tx.ListExecutions(w.ID)
-			if err != nil {
-				return err
-			}
-			sort.Slice(xs, func(i, j int) bool { return xs[i].Attempt < xs[j].Attempt })
-			for i := range xs {
-				x := xs[i]
-				d, ok := declaration(&x)
-				if !ok || !validTurnState(d.Status) || x.State == domain.ExecutionRunning || x.State == domain.ExecutionPending {
-					continue
-				}
-				if found, err := p.get(tx, "turn/"+string(x.ID), new(bool)); err != nil {
-					return err
-				} else if found {
-					continue
-				}
-				data, _ := json.Marshal(TurnPayload{Repo: p.o.Settings.TrackerRepo, Number: number, State: d.Status, Work: string(w.ID), Execution: string(x.ID)})
-				at := x.UpdatedAt
-				if x.FinishedAt != nil {
-					at = *x.FinishedAt
-				}
-				k := key
-				delivery := "turn/" + string(x.ID)
-				out = append(out, Turn{Scope: w.ScopeID, Parent: x.TriggerID, Event: domain.Event{
-					ID: domain.ID("github-" + digest(p.o.Settings.Namespace, delivery)[:40]), Type: TypeAgentTurn, Source: p.o.Settings.Namespace,
-					DeliveryID: delivery, WorkID: w.ID, CorrelationKey: &k, OccurredAt: at.UTC(), ReceivedAt: p.o.Now().UTC(),
-					Data: domain.Payload{Schema: SchemaTurn, Data: data}}})
-				if len(out) >= limit {
-					return nil
-				}
-			}
-		}
-		return nil
-	})
-	return out, err
-}
-
-// MarkTurn records a reported turn so later passes skip it.
-func (p *Projector) MarkTurn(ctx context.Context, execution domain.ID) error {
-	return p.transact(ctx, func(tx storage.Tx) error { return p.put(tx, "turn/"+string(execution), true) })
-}
-
-func validTurnState(s string) bool {
-	for _, t := range TurnStates {
-		if s == t {
-			return true
-		}
-	}
-	return false
 }

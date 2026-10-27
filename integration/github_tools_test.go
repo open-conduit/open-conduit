@@ -509,7 +509,7 @@ func itoa(n int) string { return strconv.Itoa(n) }
 
 func statusData(state string) domain.Payload {
 	data, _ := json.Marshal(map[string]string{"status": state})
-	return domain.Payload{Schema: gh.StatusSchema, Data: data}
+	return domain.Payload{Schema: domain.TurnSchema, Data: data}
 }
 
 // v1 TestAlreadyMetWaitWakesAtOnce: the agent hears it already happened;
@@ -620,8 +620,8 @@ func TestGitHubHeldIssueStartsAtItsTime(t *testing.T) {
 	e.finish(a, nil)
 }
 
-// v1 TestHeldIssueStartsWhenAnotherAgentReports: issue:21:review waits on a
-// turn Event the host derives from the other agent's durable outcome.
+// v1 TestHeldIssueStartsWhenAnotherAgentReports: issue:21:review waits on
+// the turn-ended Event the host publishes with the other agent's outcome.
 func TestGitHubHeldIssueStartsWhenAnotherAgentReports(t *testing.T) {
 	e := newToolsEnv(t)
 	n21, w21 := e.claim("Wave 1", "", "bug")
@@ -648,37 +648,19 @@ func TestGitHubHeldIssueStartsWhenAnotherAgentReports(t *testing.T) {
 	}
 	// Turn Events are never input for the reporting issue's own Work.
 	for _, typ := range e.queued(w21.ID) {
-		if typ == gh.TypeAgentTurn {
+		if typ == domain.TypeTurnEnded {
 			t.Fatal("turn event queued for its own Work")
 		}
 	}
-	// Publishing again is a no-op.
-	before := e.countType(gh.TypeAgentTurn)
-	e.publishTurns()
-	if e.countType(gh.TypeAgentTurn) != before {
-		t.Fatal("turn published twice")
+	// One Event per turn on the issue's key.
+	if got := e.countType(domain.TypeTurnEnded); got != 2 {
+		t.Fatalf("turn events: %d", got)
 	}
 }
 
-// publishTurns does what bootstrap's projection pass does.
+// publishTurns lets the host's turn-ended Events reach their waiters.
 func (e *toolsEnv) publishTurns() {
 	e.t.Helper()
-	turns, err := e.projector.Turns(context.Background(), 50)
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	causal, err := runtime.NewCausal(e.store, e.clock.Now, runtime.CausalLimits{})
-	if err != nil {
-		e.t.Fatal(err)
-	}
-	for _, turn := range turns {
-		if _, _, err := causal.Derive(context.Background(), turn.Scope, turn.Parent, turn.Event); err != nil {
-			e.t.Fatalf("turn: %v", err)
-		}
-		if err := e.projector.MarkTurn(context.Background(), domain.ID(strings.TrimPrefix(turn.Event.DeliveryID, "turn/"))); err != nil {
-			e.t.Fatal(err)
-		}
-	}
 	e.route()
 	if err := e.scheduler.ReconcileSubscriptions(context.Background(), 50); err != nil {
 		e.t.Fatal(err)

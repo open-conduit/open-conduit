@@ -1033,6 +1033,9 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 		if err = resetRetryInTx(tx, w.ID); err != nil {
 			return err
 		}
+		if err = s.turnEndedInTx(tx, x, s.now()); err != nil {
+			return err
+		}
 		if result.Outcome.Kind == domain.OutcomeHandoff && state.AutoContinueHandoff {
 			return s.handoffContinuationInTx(tx, x, s.now())
 		}

@@ -325,7 +325,7 @@ func (e *trEnv) startAttempt(work domain.ID) domain.ID {
 	return id
 }
 
-func (e *trEnv) finishAttempt(id domain.ID, state domain.WorkState, decl *tracker.StatusDeclaration) {
+func (e *trEnv) finishAttempt(id domain.ID, state domain.WorkState, decl *domain.TurnDeclaration) {
 	e.t.Helper()
 	e.read(func(tx storage.Tx) error {
 		x, err := tx.Execution(id)
@@ -336,7 +336,7 @@ func (e *trEnv) finishAttempt(id domain.ID, state domain.WorkState, decl *tracke
 		x.Outcome = &domain.Outcome{Kind: domain.OutcomeCompleted, Summary: "done"}
 		if decl != nil {
 			data, _ := json.Marshal(decl)
-			x.Outcome.Data = domain.Payload{Schema: tracker.StatusSchema(e.f.typ), Data: data}
+			x.Outcome.Data = domain.Payload{Schema: domain.TurnSchema, Data: data}
 		}
 		if err := tx.PutExecution(x, x.Revision); err != nil {
 			return err
@@ -408,7 +408,7 @@ func TestTrackerReconcileClaimProjectAndRecover(t *testing.T) {
 			}
 			// The attempt declares review with one comment; the answer is lost.
 			f.loseComment()
-			e.finishAttempt(x, domain.WorkReady, &tracker.StatusDeclaration{Status: "review", Comment: "Ready: see the PR"})
+			e.finishAttempt(x, domain.WorkReady, &domain.TurnDeclaration{Status: "review", Comment: "Ready: see the PR"})
 			res, _ := e.projector.Converge(context.Background(), 50)
 			labels, status, bodies := f.snapshot(f.key1)
 			if strings.Join(labels, ",") != "agent-in-progress,bug,ready-for-review" || status != f.review {
@@ -442,7 +442,7 @@ func TestTrackerReconcileClaimProjectAndRecover(t *testing.T) {
 				t.Fatalf("reply and close: %v", got)
 			}
 			x2 := e.startAttempt(w.ID)
-			e.finishAttempt(x2, domain.WorkCompleted, &tracker.StatusDeclaration{Status: "finished"})
+			e.finishAttempt(x2, domain.WorkCompleted, &domain.TurnDeclaration{Status: "finished"})
 			e.converge()
 			if labels, _, _ := f.snapshot(f.key1); strings.Join(labels, ",") != "bug" {
 				t.Fatalf("closed completed issue: %v", labels)
@@ -486,7 +486,7 @@ func TestTrackerCompletedClosedIssueDropsTheClaim(t *testing.T) {
 					t.Fatalf("%s not claimed", key)
 				}
 				works[key] = w.ID
-				e.finishAttempt(e.startAttempt(w.ID), state, &tracker.StatusDeclaration{Status: status})
+				e.finishAttempt(e.startAttempt(w.ID), state, &domain.TurnDeclaration{Status: status})
 			}
 			end(done, domain.WorkReady, "done")
 			end(finished, domain.WorkCompleted, "finished")
@@ -571,7 +571,7 @@ func TestTrackerJiraClosedIssueDropsTheClaim(t *testing.T) {
 					t.Fatalf("%s not claimed", key)
 				}
 				works[key] = w.ID
-				e.finishAttempt(e.startAttempt(w.ID), state, &tracker.StatusDeclaration{Status: status})
+				e.finishAttempt(e.startAttempt(w.ID), state, &domain.TurnDeclaration{Status: status})
 			}
 			is := func(key, status string, want ...string) {
 				t.Helper()

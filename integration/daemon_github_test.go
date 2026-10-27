@@ -15,7 +15,7 @@ import (
 // githubDaemonConfig binds a GitHub scope whose shell binding completes with a
 // declared tracker status and comment.
 func githubDaemonConfig(apiURL string) []byte {
-	script := `os outcome completed --summary fixed --schema github.status.v1 --data '{"status":"done","comment":"Fixed by the daemon."}' --request-id done >/dev/null`
+	script := `os outcome completed --summary fixed --schema core.turn.v1 --data '{"status":"done","comment":"Fixed by the daemon."}' --request-id done >/dev/null`
 	cfg := map[string]any{
 		"version": 1, "settings": map[string]any{},
 		"connections": []any{map[string]any{"id": "github", "type": "github", "config": map[string]any{"api_url": apiURL},
@@ -102,7 +102,7 @@ func TestDaemonGitHubReconcileToProjection(t *testing.T) {
 // shell binding calling the GitHub tools through `os call`).
 func githubToolsDaemonConfig(apiURL string) []byte {
 	script := `os call github.issue.comment --data '{"body":"Picked up by the daemon."}' --request-id start >/dev/null && ` +
-		`os outcome completed --summary fixed --schema github.status.v1 --data '{"status":"done"}' --request-id done >/dev/null`
+		`os outcome completed --summary fixed --schema core.turn.v1 --data '{"status":"done"}' --request-id done >/dev/null`
 	runOps := []string{"read_context", "declare_outcome", "github.issue.comment", "github.context"}
 	holdOps := []string{"emit", "github.hold.status", "github.hold"}
 	cfg := map[string]any{

@@ -12,18 +12,6 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// StatusSchema is the outcome data schema an execution uses to declare the
-// projected status ("building", "review", "help", "done", "finished") and,
-// optionally, one comment to publish, for tracker type typ.
-func StatusSchema(typ string) string { return typ + ".status.v1" }
-
-// StatusDeclaration is the StatusSchema payload (unknown fields, such as the
-// Claude Code executor's usage, are ignored).
-type StatusDeclaration struct {
-	Status  string `json:"status,omitempty"`
-	Comment string `json:"comment,omitempty"`
-}
-
 // ProjectorOptions configure a Projector.
 type ProjectorOptions struct {
 	Store    storage.Store
@@ -169,12 +157,14 @@ type projected struct {
 	intents []Intent
 }
 
-func (p *Projector) declaration(x *domain.Execution) (StatusDeclaration, bool) {
-	var d StatusDeclaration
-	if x == nil || x.Outcome == nil || x.Outcome.Data.Schema != StatusSchema(p.o.Settings.Type) || json.Unmarshal(x.Outcome.Data.Data, &d) != nil {
-		return d, false
+// declaration is an execution's declared turn (domain.TurnSchema): the
+// projected status ("building", "review", "help", "done", "finished") and,
+// optionally, one comment to publish.
+func (p *Projector) declaration(x *domain.Execution) (domain.TurnDeclaration, bool) {
+	if x == nil {
+		return domain.TurnDeclaration{}, false
 	}
-	return d, true
+	return domain.TurnOf(x.Outcome)
 }
 
 // Desired returns the managed labels and the workflow state a Work's durable

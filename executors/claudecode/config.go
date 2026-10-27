@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // Config is the strictly checked binding `config` object owned by this
@@ -37,8 +39,10 @@ type Config struct {
 	// completed with its final text as the summary.
 	Structured *bool `json:"structured,omitempty"`
 	// StatusSchema names the outcome data schema the parsed status is
-	// reported under, so a projection can read it (for example
-	// "github.status.v1"). Default ResultSchema.
+	// reported under. Optional: the default, domain.TurnSchema, is what
+	// every projector reads and what the host publishes a turn's end from.
+	// A source-named "<source>.status.v1" (written by earlier setups) is
+	// read as domain.TurnSchema.
 	StatusSchema string `json:"status_schema,omitempty"`
 	// Branch is the optional workspace branch template ({key}, {number},
 	// {work}) requested from a `work` resource.
@@ -141,8 +145,8 @@ func ParseConfig(data []byte) (Config, error) {
 		yes := true
 		c.Structured = &yes
 	}
-	if c.StatusSchema == "" {
-		c.StatusSchema = ResultSchema
+	if c.StatusSchema == "" || c.StatusSchema != domain.TurnSchema && domain.IsTurnSchema(c.StatusSchema) {
+		c.StatusSchema = domain.TurnSchema
 	}
 	if c.WorkspaceMode == "" {
 		c.WorkspaceMode = "work"

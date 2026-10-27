@@ -15,18 +15,6 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// StatusSchema is the outcome data schema an execution uses to declare the
-// projected tracker status ("help", "review", "done") and, optionally, one
-// comment to publish. The projector publishes that comment exactly once per
-// execution, recovering ambiguous posts through its marker.
-const StatusSchema = "github.status.v1"
-
-// StatusDeclaration is the StatusSchema payload.
-type StatusDeclaration struct {
-	Status  string `json:"status,omitempty"`
-	Comment string `json:"comment,omitempty"`
-}
-
 // ErrIntentConflict means a stable intent ID was reused for different content.
 var ErrIntentConflict = errors.New("github intent reused with different content")
 
@@ -334,12 +322,15 @@ type projected struct {
 	held    bool
 }
 
-func declaration(x *domain.Execution) (StatusDeclaration, bool) {
-	var d StatusDeclaration
-	if x == nil || x.Outcome == nil || x.Outcome.Data.Schema != StatusSchema || json.Unmarshal(x.Outcome.Data.Data, &d) != nil {
-		return d, false
+// declaration is an execution's declared turn (domain.TurnSchema): the
+// projected status and, optionally, one comment, which the projector
+// publishes exactly once per execution, recovering ambiguous posts through
+// its marker.
+func declaration(x *domain.Execution) (domain.TurnDeclaration, bool) {
+	if x == nil {
+		return domain.TurnDeclaration{}, false
 	}
-	return d, true
+	return domain.TurnOf(x.Outcome)
 }
 
 // Desired returns the managed labels a Work's durable state projects: the

@@ -92,7 +92,7 @@ func (g ScopeSpec) ScopeConfig() map[string]any {
 	requires := obj("toolbelt", "mcp", "inject", true, "resume", true, "workspace", g.Checkout != "")
 	agent := obj("name", "agent", "executor", "claude-code", "connection", g.Connection, "requires", requires,
 		"operations", ops, "secret_names", []string{},
-		"config", obj("status_schema", StatusSchema(g.Type), "playbook", Playbook, "args", "{key}", "branch", "agent/{key}"))
+		"config", obj("playbook", Playbook, "args", "{key}", "branch", "agent/{key}"))
 	if g.Checkout != "" {
 		agent["resource"] = obj("provider", "git", "config", obj("checkout", g.Checkout, "mode", "work"))
 	}

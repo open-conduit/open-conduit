@@ -33,16 +33,12 @@ const (
 	// TypeDependencyMet is the alias a satisfied wait condition delivers to
 	// the waiting Work (B04 dependency subscription).
 	TypeDependencyMet = "github.dependency.met"
-	// TypeAgentTurn records that an agent on an issue ended a turn in a state
-	// (published by the host from durable outcomes; never routed as input).
-	TypeAgentTurn = "github.agent.turn"
 	// TypeHoldReleased starts a held issue's first agent turn.
 	TypeHoldReleased = "github.hold.released"
 )
 
 // Payload schemas of the tools' families and outputs.
 const (
-	SchemaTurn         = "github.agent.turn.v1"
 	SchemaHoldReleased = "github.hold.released.v1"
 	SchemaFilter       = "github.dependency.filter.v1"
 	SchemaHold         = "github.hold.v1"

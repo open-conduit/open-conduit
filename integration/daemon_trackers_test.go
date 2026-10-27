@@ -13,6 +13,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extensions/bitbucket/bitbuckettest"
 	"github.com/open-conduit/open-conduit/extensions/jira/jiratest"
 	"github.com/open-conduit/open-conduit/extensions/linear/lineartest"
@@ -56,7 +57,7 @@ func (p *posthogFake) named(name string) []map[string]any {
 
 func trackersDaemonConfig(linearURL, jiraURL, bbURL, posthogURL string) []byte {
 	linearScript := `os call linear.issue.comment --data '{"body":"Picked up."}' --request-id start >/dev/null && ` +
-		`os outcome completed --summary fixed --schema linear.status.v1 --data '{"status":"review","comment":"Ready for review."}' --request-id done >/dev/null`
+		`os outcome completed --summary fixed --schema core.turn.v1 --data '{"status":"review","comment":"Ready for review."}' --request-id done >/dev/null`
 	jiraScript := `os call jira.issue.comment --data '{"body":"Picked up."}' --request-id start >/dev/null && ` +
 		`os call bitbucket.pr.comment --data '{"number":1,"body":"Pushed the fix."}' --request-id pr >/dev/null && ` +
 		`os outcome completed --summary fixed --schema jira.status.v1 --data '{"status":"done","comment":"Done in the daemon."}' --request-id done >/dev/null`
@@ -183,6 +184,24 @@ func TestDaemonTrackersAndPostHog(t *testing.T) {
 	for _, e := range ph.named("agent_turn") {
 		if props, _ := e["properties"].(map[string]any); props["scope"] != "proj" {
 			t.Fatalf("a scope without a posthog entry was sent: %v", props)
+		}
+	}
+	// Tracker turns end in the host's core turn-ended Event on the issue's
+	// key: Linear's declared under core.turn.v1, Jira's under the legacy
+	// jira.status.v1 that outcomes stored before it keep.
+	for scope, want := range map[string]string{"eng": "review", "proj": "done"} {
+		page, err := d.c.Events(context.Background(), url.Values{"scope_id": {scope}, "type": {domain.TypeTurnEnded}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(page.Items) == 0 {
+			t.Fatalf("%s: no turn event", scope)
+		}
+		for _, e := range page.Items {
+			var ended domain.TurnEnded
+			if e.Data == nil || json.Unmarshal(e.Data.Data, &ended) != nil || ended.Status != want || e.CorrelationKey == nil || e.Source != "core.execution" {
+				t.Fatalf("%s turn event: %+v", scope, e)
+			}
 		}
 	}
 	report, err := d.c.Doctor(context.Background(), true)

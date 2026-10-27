@@ -312,7 +312,7 @@ func (h *harness) mode(m string) {
 }
 
 func (h *harness) bindingConfig(extra map[string]any) json.RawMessage {
-	cfg := map[string]any{"binary": h.binary, "env": map[string]string{"FAKE_DIR": h.fake}, "status_schema": "github.status.v1"}
+	cfg := map[string]any{"binary": h.binary, "env": map[string]string{"FAKE_DIR": h.fake}}
 	for k, v := range extra {
 		cfg[k] = v
 	}

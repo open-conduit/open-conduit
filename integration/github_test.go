@@ -262,7 +262,7 @@ func (e *ghEnv) startAttempt(work domain.ID) domain.ID {
 }
 
 // finishAttempt ends the attempt and moves Work to state.
-func (e *ghEnv) finishAttempt(id domain.ID, state domain.WorkState, decl *gh.StatusDeclaration) {
+func (e *ghEnv) finishAttempt(id domain.ID, state domain.WorkState, decl *domain.TurnDeclaration) {
 	e.t.Helper()
 	e.read(func(tx storage.Tx) error {
 		x, err := tx.Execution(id)
@@ -273,7 +273,7 @@ func (e *ghEnv) finishAttempt(id domain.ID, state domain.WorkState, decl *gh.Sta
 		x.Outcome = &domain.Outcome{Kind: domain.OutcomeCompleted, Summary: "done"}
 		if decl != nil {
 			data, _ := json.Marshal(decl)
-			x.Outcome.Data = domain.Payload{Schema: gh.StatusSchema, Data: data}
+			x.Outcome.Data = domain.Payload{Schema: domain.TurnSchema, Data: data}
 		}
 		if err := tx.PutExecution(x, x.Revision); err != nil {
 			return err
@@ -428,7 +428,7 @@ func TestGitHubProjectionConvergesAndRepairsDrift(t *testing.T) {
 	if res := e.converge(); res.Labeled != 1 || !equal(e.fake.Labels(n), "agent-in-progress") {
 		t.Fatalf("claim projection: %+v labels %v", res, e.fake.Labels(n))
 	}
-	e.finishAttempt(attempt, domain.WorkReady, &gh.StatusDeclaration{Status: "review"})
+	e.finishAttempt(attempt, domain.WorkReady, &domain.TurnDeclaration{Status: "review"})
 	e.converge()
 	if !equal(e.fake.Labels(n), "agent-in-progress", "ready-for-review") {
 		t.Fatalf("review projection: %v", e.fake.Labels(n))
@@ -485,7 +485,7 @@ func TestGitHubCompletedClosedIssueDropsTheClaim(t *testing.T) {
 	e.route()
 	end := func(n int, state domain.WorkState, status string) {
 		w, _ := e.workFor("issue/" + strconv.Itoa(n))
-		e.finishAttempt(e.startAttempt(w.ID), state, &gh.StatusDeclaration{Status: status})
+		e.finishAttempt(e.startAttempt(w.ID), state, &domain.TurnDeclaration{Status: status})
 	}
 	end(done, domain.WorkReady, "done")
 	end(finished, domain.WorkCompleted, "finished")
@@ -545,7 +545,7 @@ func TestGitHubAmbiguousCommentIsRecoveredByMarker(t *testing.T) {
 	attempt := e.startAttempt(w.ID)
 	// The comment is created but its response is lost in transit.
 	e.fake.LoseNextResponse("/repos/"+ghRepo+"/issues/"+strconv.Itoa(n)+"/comments", 1)
-	e.finishAttempt(attempt, domain.WorkReady, &gh.StatusDeclaration{Status: "help", Comment: "I need the design tokens."})
+	e.finishAttempt(attempt, domain.WorkReady, &domain.TurnDeclaration{Status: "help", Comment: "I need the design tokens."})
 	res, _ := e.projector.Converge(context.Background(), 50)
 	if len(res.Codes) == 0 || len(e.fake.Comments(n)) != 1 {
 		t.Fatalf("ambiguous post: %+v comments %d", res, len(e.fake.Comments(n)))
@@ -579,7 +579,7 @@ func TestGitHubCommentCrashAfterPostIsRecoveredOnRestart(t *testing.T) {
 	e.route()
 	w, _ := e.workFor("issue/" + strconv.Itoa(n))
 	attempt := e.startAttempt(w.ID)
-	e.finishAttempt(attempt, domain.WorkReady, &gh.StatusDeclaration{Status: "review", Comment: "PR is ready: #12"})
+	e.finishAttempt(attempt, domain.WorkReady, &domain.TurnDeclaration{Status: "review", Comment: "PR is ready: #12"})
 	_ = e.store.Close()
 	// A separate process converges and is SIGKILLed right after GitHub created
 	// the comment, before it records local completion.
