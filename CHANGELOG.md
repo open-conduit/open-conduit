@@ -1,5 +1,7 @@
 # Changelog
 
+Releases after 1.0.0 are listed on [GitHub Releases](https://github.com/open-conduit/open-conduit/releases), with their notes.
+
 ## 1.0.0 (2026-10-26)
 
 ### Features

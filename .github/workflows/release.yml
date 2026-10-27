@@ -1,8 +1,9 @@
 # Cuts a release by hand: Actions → release → Run workflow. semantic-release
 # reads the Conventional Commits since the last tag to pick the next version,
-# writes CHANGELOG.md, commits and tags it on main, then hands the tag to
+# tags the released commit (main is protected, so nothing is committed back to
+# it; the GitHub release is the changelog), then hands the tag to
 # GoReleaser (.goreleaser.yaml), which builds every platform, publishes the
-# GitHub release with the same notes and, when the HOMEBREW_TAP_TOKEN secret
+# GitHub release with the generated notes and, when the HOMEBREW_TAP_TOKEN secret
 # is set, updates the open-conduit/homebrew-tap cask. With no feat, fix or
 # breaking commit since the last tag, it releases nothing. The full checks
 # run first, on the exact commit being released. Releases are built with the
@@ -45,8 +46,6 @@ jobs:
       - run: >-
           npm install --no-save --no-package-lock --no-audit --no-fund
           semantic-release@25
-          @semantic-release/changelog@7
-          @semantic-release/git@11
           @semantic-release/exec@7
           conventional-changelog-conventionalcommits@9
       - run: npx semantic-release ${{ inputs.dry_run && '--dry-run' || '' }}
