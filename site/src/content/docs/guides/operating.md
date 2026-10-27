@@ -13,7 +13,8 @@ The TUI lists one row per issue or thread, with its latest turn and how many tur
 
 | Key | Does |
 | --- | --- |
-| `c` | claim an issue by hand |
+| `c` | the scopes' actions, such as claiming an issue by hand |
+| `1`–`9` | in a Work's detail, the actions its extensions offer now |
 | `R` | run or retry |
 | `H` | hold or release |
 | `a` | attach to the agent's session |
@@ -23,6 +24,7 @@ The TUI lists one row per issue or thread, with its latest turn and how many tur
 
 ```sh
 open-conduit claim 12                                # claim issue #12 by hand
+open-conduit actions list --work ID                  # what extensions offer on a Work now
 open-conduit work list --state waiting
 open-conduit work retry ID --revision N
 open-conduit work hold ID --revision N --reason "needs a decision"

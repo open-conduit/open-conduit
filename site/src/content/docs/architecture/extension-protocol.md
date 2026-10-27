@@ -51,6 +51,7 @@ The table groups what the first-party code actually does across the host boundar
 | Telemetry export | `observability.Exporter.Export/Shutdown` on the pipeline goroutine | PH IS | `telemetry.export`, `shutdown` |
 | Doctor | `runtime.Check` functions (`Checks`, `DeepChecks` with secrets) | all but SH | `check.run` |
 | Annotations | management `Annotate` | GH | `work.annotate` |
+| Actions | `extension.ActionProvider` (list, authorise, plan one Event the host accepts under `core.action`) | GH | `work.actions`, `work.act` |
 | Setup | `extension.Setup` with `SetupHost` prompts, browser, secret store, `LookPath`, `Run` | GH SL TR | `setup.run` plus `setup.*` callbacks |
 | Playbooks | embedded playbooks written into the agent executor's plugin directory | GH SL TR IS | manifest `playbooks` (first-party convention) |
 

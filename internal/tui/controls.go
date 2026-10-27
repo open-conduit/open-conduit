@@ -19,7 +19,9 @@ import (
 // supports them. Every action is a management API call, so it commits an
 // accepted core.manual.* Event with the operator's causal identity; the view
 // has no private path to state. Extension context arrives as Work
-// annotations and Wait records, rendered without domain branches.
+// annotations and Wait records, and extension actions (claim, answer, …)
+// as named actions the view lists and invokes, all without domain
+// branches: the extension authorises an action and writes its Event.
 type Controls interface {
 	Work(ctx context.Context, id string) (client.Work, error)
 	Waits(ctx context.Context, q url.Values) (client.Page[client.Wait], error)
@@ -28,30 +30,20 @@ type Controls interface {
 	RetryWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	HoldWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	ReleaseWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
-	// Claim claims an item by hand from "scope#ref" text.
-	Claim(ctx context.Context, ref string) (string, error)
+	Scopes(ctx context.Context, q url.Values) (client.Page[client.Scope], error)
+	// Actions lists what extensions offer on a scope or Work now, and
+	// InvokeAction invokes one as the local operator.
+	Actions(ctx context.Context, t client.ActionTarget) ([]client.Action, error)
+	InvokeAction(ctx context.Context, t client.ActionTarget, provider, id, input, key string) (client.ActionResult, error)
 	// AttachCommand holds, attaches to and then releases Work.
 	AttachCommand(id string) tea.ExecCommand
 }
 
-// OperatorSource is the management client with claim and attach.
+// OperatorSource is the management client with attach.
 type OperatorSource struct{ *client.Client }
 
 // Operator wraps a management client for the interactive view.
 func Operator(c *client.Client) OperatorSource { return OperatorSource{c} }
-
-// Claim submits a GitHub manual claim ("scope#12").
-func (o OperatorSource) Claim(ctx context.Context, ref string) (string, error) {
-	scope, n, ok := cli.ParseClaim(ref)
-	if !ok || scope == "" {
-		return "", fmt.Errorf("claim takes scope#number")
-	}
-	e, err := cli.Claim(ctx, o.Client, scope, "", n, "tui-claim-"+fmt.Sprint(n)+"-"+scope)
-	if err != nil {
-		return "", err
-	}
-	return e.ID, nil
-}
 
 // AttachCommand runs the attach flow with the terminal.
 func (o OperatorSource) AttachCommand(id string) tea.ExecCommand {
@@ -75,9 +67,33 @@ func (a *attachCmd) Run() error {
 }
 
 type workMsg struct {
-	work  client.Work
-	waits []client.Wait
-	err   error
+	work    client.Work
+	waits   []client.Wait
+	actions []client.Action
+	err     error
+}
+
+// targeted is an action and what it applies to.
+type targeted struct {
+	target client.ActionTarget
+	action client.Action
+}
+
+// actionMenu lists actions to pick from by number.
+type actionMenu struct {
+	title string
+	items []targeted
+}
+
+type menuMsg struct {
+	menu actionMenu
+	err  error
+}
+
+// asking is an open one-line text prompt.
+type asking struct {
+	label, text string
+	submit      func(string) tea.Cmd
 }
 
 type actionMsg struct {
@@ -101,8 +117,93 @@ func (m Model) fetchWork(id string) tea.Cmd {
 		if err != nil {
 			return workMsg{work: w, err: err}
 		}
-		return workMsg{work: w, waits: page.Items}
+		actions, err := ctl.Actions(ctx, client.ActionTarget{WorkID: id})
+		return workMsg{work: w, waits: page.Items, actions: actions, err: err}
 	}
+}
+
+// fetchScopeActions gathers every scope's actions into a menu.
+func (m Model) fetchScopeActions() tea.Cmd {
+	ctl := m.ctl
+	return func() tea.Msg {
+		ctx, cancel := call()
+		defer cancel()
+		scopes, err := ctl.Scopes(ctx, url.Values{"limit": {"200"}})
+		if err != nil {
+			return menuMsg{err: err}
+		}
+		menu := actionMenu{title: "scope actions"}
+		for _, sc := range scopes.Items {
+			t := client.ActionTarget{ScopeID: sc.ID}
+			actions, err := ctl.Actions(ctx, t)
+			if err != nil {
+				return menuMsg{err: err}
+			}
+			for _, a := range actions {
+				menu.items = append(menu.items, targeted{t, a})
+			}
+		}
+		return menuMsg{menu: menu}
+	}
+}
+
+// choose asks for an action's input (or a y/n when it takes none) and
+// then invokes it.
+func (m Model) choose(it targeted) Model {
+	ctl := m.ctl
+	invoke := func(input string) tea.Cmd {
+		return func() tea.Msg {
+			ctx, cancel := call()
+			defer cancel()
+			res, err := ctl.InvokeAction(ctx, it.target, it.action.Provider, it.action.ID, input, key())
+			if err != nil {
+				return actionMsg{err: err}
+			}
+			text := it.action.Label + " accepted"
+			if res.Message != "" {
+				text = res.Message
+			}
+			return actionMsg{text: text + " (event " + res.Event.ID + ")"}
+		}
+	}
+	where := it.target.ScopeID
+	if it.target.WorkID != "" {
+		where = it.target.WorkID
+	}
+	if it.action.Prompt == "" {
+		m.confirm = &pending{prompt: it.action.Label + " (" + where + ")?", cmd: invoke("")}
+		return m
+	}
+	m.ask = &asking{label: it.action.Label + " (" + where + ") " + it.action.Prompt, submit: invoke}
+	return m
+}
+
+// actionLine renders numbered actions for picking.
+func actionLine(items []targeted, scoped bool) string {
+	var parts []string
+	for i, it := range items {
+		if i == 9 {
+			break
+		}
+		label := it.action.Label
+		if scoped {
+			label = it.target.ScopeID + ": " + label
+		}
+		parts = append(parts, fmt.Sprintf("%d %s", i+1, label))
+	}
+	return strings.Join(parts, " · ")
+}
+
+// pick returns the action a digit key selects.
+func pickAction(items []targeted, k string) (targeted, bool) {
+	if len(k) != 1 || k[0] < '1' || k[0] > '9' {
+		return targeted{}, false
+	}
+	i := int(k[0] - '1')
+	if i >= len(items) {
+		return targeted{}, false
+	}
+	return items[i], true
 }
 
 // action runs one control against the current Work revision.

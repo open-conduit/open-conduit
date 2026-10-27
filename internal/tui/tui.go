@@ -1,9 +1,10 @@
 // Package tui is the operator terminal view over the unified run history.
 // It uses only the public management client: every executor's attempts
 // render through the same row, detail and log code, with no executor,
-// work-kind or domain branches. With Controls it also offers manual claim,
-// run/retry, hold/release, cancel and attach, and shows extension context
-// (Work annotations and Waits) as data.
+// work-kind or domain branches. With Controls it also offers run/retry,
+// hold/release, cancel and attach, shows extension context (Work
+// annotations and Waits) as data, and lists and invokes the actions
+// extensions offer on scopes and Work (claim, answer, …) by name.
 //
 // The list shows one row per Work by default, named by the Work's label
 // (its first annotation, else its first correlation key), with how many
@@ -89,7 +90,9 @@ type Model struct {
 	work    *client.Work
 	waits   []client.Wait
 	confirm *pending
-	input   *string
+	ask     *asking
+	menu    *actionMenu
+	actions []client.Action
 	notice  string
 	// artifact is what the log view asked for (pickLog, pickTranscript or
 	// an index); shown is the index it shows. live means it follows a
@@ -480,7 +483,17 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.work.ID != "" {
 			w := msg.work
-			m.work, m.waits = &w, msg.waits
+			m.work, m.waits, m.actions = &w, msg.waits, msg.actions
+		}
+	case menuMsg:
+		switch {
+		case msg.err != nil:
+			m.err = errText(msg.err)
+		case len(msg.menu.items) == 0:
+			m.notice = "no " + msg.menu.title + " are available"
+		default:
+			menu := msg.menu
+			m.menu = &menu
 		}
 	case actionMsg:
 		if msg.err != nil {
@@ -498,7 +511,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
-// prompted handles keys while a confirmation or text prompt is open.
+// prompted handles keys while a confirmation, action menu or text prompt
+// is open.
 func (m Model) prompted(k string) (tea.Model, tea.Cmd) {
 	if m.confirm != nil {
 		p := m.confirm
@@ -509,40 +523,54 @@ func (m Model) prompted(k string) (tea.Model, tea.Cmd) {
 		m.notice = "cancelled"
 		return m, nil
 	}
+	if m.menu != nil {
+		menu := m.menu
+		if it, ok := pickAction(menu.items, k); ok {
+			m.menu = nil
+			return m.choose(it), nil
+		}
+		if k == "esc" || k == "ctrl+c" {
+			m.menu = nil
+		}
+		return m, nil
+	}
+	a := *m.ask
 	switch k {
 	case "esc", "ctrl+c":
-		m.input = nil
+		m.ask = nil
+		return m, nil
 	case "enter":
-		ref := strings.TrimSpace(*m.input)
-		m.input = nil
-		ctl := m.ctl
-		return m, func() tea.Msg {
-			ctx, cancel := call()
-			defer cancel()
-			id, err := ctl.Claim(ctx, ref)
-			if err != nil {
-				return actionMsg{err: err}
-			}
-			return actionMsg{text: "claim " + ref + " accepted (event " + id + ")"}
-		}
+		m.ask = nil
+		return m, a.submit(strings.TrimSpace(a.text))
 	case "backspace":
-		if r := []rune(*m.input); len(r) > 0 {
-			v := string(r[:len(r)-1])
-			m.input = &v
+		if r := []rune(a.text); len(r) > 0 {
+			a.text = string(r[:len(r)-1])
 		}
 	default:
 		if len([]rune(k)) == 1 {
-			v := *m.input + k
-			m.input = &v
+			a.text += k
 		}
 	}
+	m.ask = &a
 	return m, nil
+}
+
+// workActions are the open Work's actions, for picking by number.
+func (m Model) workActions() []targeted {
+	if m.detail == nil || m.work == nil || m.work.ID != m.detail.WorkID {
+		return nil
+	}
+	out := make([]targeted, 0, len(m.actions))
+	for _, a := range m.actions {
+		out = append(out, targeted{client.ActionTarget{WorkID: m.work.ID}, a})
+	}
+	return out
 }
 
 func (m Model) page() int { return max(m.height-4, 1) }
 
 func (m Model) key(k string) (tea.Model, tea.Cmd) {
-	if m.confirm != nil || m.input != nil {
+	if m.confirm != nil || m.ask != nil || m.menu != nil {
 		return m.prompted(k)
 	}
 	switch k {
@@ -560,8 +588,7 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 		switch k {
 		case "c":
 			if m.ctl != nil {
-				empty := ""
-				m.input = &empty
+				return m, m.fetchScopeActions()
 			}
 		case "up", "k":
 			if m.cursor > 0 {
@@ -582,7 +609,7 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 			return m, m.fetch()
 		case "enter":
 			if r, ok := m.selected(); ok {
-				m.work, m.waits = nil, nil
+				m.work, m.waits, m.actions = nil, nil, nil
 				return m, tea.Batch(m.fetchDetail(r.ID, r.WorkID), m.fetchWork(r.WorkID))
 			}
 		case "l", "t":
@@ -596,6 +623,9 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 			if next, cmd, handled := m.controlKey(k, *m.detail); handled {
 				return next, cmd
 			}
+		}
+		if it, ok := pickAction(m.workActions(), k); ok && m.ctl != nil {
+			return m.choose(it), nil
 		}
 		switch k {
 		case "esc", "backspace", "h", "left":
@@ -681,7 +711,7 @@ func (m Model) View() string {
 			view, keys = "every turn", "enter detail · g by work · l log · t transcript · f filter · r refresh · q quit"
 		}
 		if m.ctl != nil {
-			keys += " · c claim · R run/retry · H hold · a attach · x/X cancel"
+			keys += " · c scope actions · R run/retry · H hold · a attach · x/X cancel"
 		}
 		works := map[string]bool{}
 		for _, r := range m.runs {
@@ -713,6 +743,10 @@ func (m Model) View() string {
 		keys := "l log · t transcript · r refresh · esc back · q quit"
 		if m.ctl != nil {
 			keys += " · R run/retry · H hold/release · a attach · x cancel run · X cancel work"
+			if items := m.workActions(); len(items) > 0 {
+				b.WriteString("\n" + boldS.Render("Actions") + "  " + actionLine(items, false) + "\n")
+				keys += " · 1-9 action"
+			}
 		}
 		b.WriteString("\n" + dimS.Render(keys) + "\n")
 	case logMode:
@@ -725,8 +759,10 @@ func (m Model) View() string {
 	switch {
 	case m.confirm != nil:
 		b.WriteString(boldS.Render(m.confirm.prompt+" y/n") + "\n")
-	case m.input != nil:
-		b.WriteString(boldS.Render("claim (scope#number): "+*m.input+"▏") + dimS.Render("  enter submit · esc cancel") + "\n")
+	case m.menu != nil:
+		b.WriteString(boldS.Render(m.menu.title+": ") + actionLine(m.menu.items, true) + dimS.Render("  1-9 choose · esc cancel") + "\n")
+	case m.ask != nil:
+		b.WriteString(boldS.Render(m.ask.label+": "+m.ask.text+"▏") + dimS.Render("  enter submit · esc cancel") + "\n")
 	case m.notice != "":
 		b.WriteString(dimS.Render(m.notice) + "\n")
 	}
