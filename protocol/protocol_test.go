@@ -172,7 +172,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m := load(t, "ingress-support.json")
 	e := load(t, "executor-workspace.json").Provides
 	m.Provides.Executors, m.Provides.Resources = e.Executors, e.Resources
-	m.Provides.Recurrences, m.Provides.Exporters, m.Provides.Annotate = []string{"chat.calendar"}, true, true
+	m.Provides.Recurrences, m.Provides.Exporters, m.Provides.Annotate, m.Provides.Actions = []string{"chat.calendar"}, true, true, true
 	m.Provides.Operations = append(m.Provides.Operations, protocol.OperationDecl{Name: "chat.wait", Kind: protocol.OperationWait}, protocol.OperationDecl{Name: "chat.note", Kind: protocol.OperationEmit, Commit: true})
 	m.Provides.DependencyFilter = true
 	m.Provides.WorkKinds = append(m.Provides.WorkKinds, protocol.WorkKindDecl{Kind: "chat.job", Standing: true, Trigger: true})

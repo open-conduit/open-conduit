@@ -232,3 +232,29 @@ func TestExternalExtensionKVSharedSuite(t *testing.T) {
 		conformance.RunExtensionKV(t, func() conformance.ExtensionKVFixture { return fixture(t, true) })
 	})
 }
+
+func notesActionFixture(p extension.ActionProvider) conformance.ActionFixture {
+	scope := domain.Scope{ID: extensionScope}
+	open := domain.Work{ID: "work-note", ScopeID: extensionScope, State: domain.WorkWaiting, CorrelationKeys: []domain.CorrelationKey{{Source: notes.Name, ExternalID: "a"}}}
+	done := open
+	done.State = domain.WorkCompleted
+	empty := ""
+	return conformance.ActionFixture{Provider: p, Available: extension.ActionTarget{Scope: scope, Work: &open}, Unavailable: extension.ActionTarget{Scope: scope, Work: &done},
+		Action: "remark", Input: "looks right", BadInput: &empty, Caller: extension.LocalOperator, Stranger: extension.Caller{Kind: "slack_user", ID: "U1"}, EventType: notes.Annotated}
+}
+
+func TestExternalActionsSharedSuite(t *testing.T) {
+	notesPath, _ := extensionBinaries(t)
+	t.Run("in_process", func(t *testing.T) {
+		conformance.RunActions(t, func() conformance.ActionFixture { return notesActionFixture(notes.Actions{}) })
+	})
+	t.Run("subprocess", func(t *testing.T) {
+		e := newExtEnv(t)
+		r := e.load(e.install(notes.Manifest(notes.Options{Release: 2}), notesPath), e.deps(), e.options(notes.Name))
+		p, ok := r.Actions()
+		if !ok {
+			t.Fatal("notes declares no actions")
+		}
+		conformance.RunActions(t, func() conformance.ActionFixture { return notesActionFixture(p) })
+	})
+}

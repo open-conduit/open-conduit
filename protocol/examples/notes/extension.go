@@ -173,6 +173,12 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 	ext.Providers = map[string]extension.ResourceProvider{Scratch: scratch{stateDir: o.StateDir}}
 	ext.Exporter = exporter{stateDir: o.StateDir}
 	ext.Annotate = annotate
+	ext.Actions = func(ctx context.Context, _ *sdk.Host, t extension.ActionTarget) ([]extension.Action, error) {
+		return Actions{}.Actions(ctx, t)
+	}
+	ext.Act = func(ctx context.Context, _ *sdk.Host, c extension.ActionCall) (extension.ActionPlan, error) {
+		return Actions{}.Invoke(ctx, c)
+	}
 	ext.Setups = map[string]extension.Setup{Name: Setup{}}
 	ext.Render = func(e domain.Event) (string, bool) {
 		if e.Type != Changed || e.CorrelationKey == nil {

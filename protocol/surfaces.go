@@ -211,6 +211,61 @@ type WorkAnnotateResult struct {
 	Annotations []Annotation `json:"annotations,omitempty"`
 }
 
+// Actions (work.actions, work.act): an extension lists the actions
+// available on a target now and authorises an invocation, returning the one
+// Event the host accepts under core.action (extension.ActionProvider).
+
+type ActionTarget struct {
+	Scope Scope `json:"scope"`
+	Work  *Work `json:"work,omitempty"`
+}
+
+func FromActionTarget(t extension.ActionTarget) ActionTarget {
+	out := ActionTarget{Scope: FromScope(t.Scope)}
+	if t.Work != nil {
+		w := FromWork(*t.Work)
+		out.Work = &w
+	}
+	return out
+}
+func (t ActionTarget) Extension() extension.ActionTarget {
+	out := extension.ActionTarget{Scope: t.Scope.Domain()}
+	if t.Work != nil {
+		w := t.Work.Domain()
+		out.Work = &w
+	}
+	return out
+}
+
+type Action struct {
+	ID     string `json:"id"`
+	Label  string `json:"label"`
+	Prompt string `json:"prompt,omitempty"`
+}
+type WorkActionsParams struct {
+	Target ActionTarget `json:"target"`
+}
+type WorkActionsResult struct {
+	Actions []Action `json:"actions,omitempty"`
+}
+type Caller struct {
+	Kind string `json:"kind"`
+	ID   string `json:"id"`
+}
+type WorkActParams struct {
+	Target ActionTarget `json:"target"`
+	Action string       `json:"action"`
+	Input  string       `json:"input,omitempty"`
+	Caller Caller       `json:"caller"`
+}
+
+// WorkActResult is an authorised invocation: Event carries only type,
+// correlation key and data; the host assigns everything else.
+type WorkActResult struct {
+	Event   Event  `json:"event"`
+	Message string `json:"message,omitempty"`
+}
+
 // Setup: setup.run is called at CLI time; the extension drives the operator
 // through the setup.* callbacks while it runs, all quoting the run ID.
 
