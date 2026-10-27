@@ -164,7 +164,7 @@ func (s *setupEnv) run(args ...string) (string, string, int) {
 	if s.setup == nil {
 		s.setup = &fakeSetup{}
 	}
-	e := Env{Getenv: func(k string) string { return s.env[k] }, Cwd: s.root, Stdin: strings.NewReader(s.stdin), ValidateConfig: s.valid, CommandWarnings: s.warnings, Setups: []extension.Setup{s.setup}}
+	e := Env{Getenv: func(k string) string { return s.env[k] }, Cwd: s.root, Stdin: strings.NewReader(s.stdin), ValidateConfig: s.valid, ConfigWarnings: s.warnings, Setups: []extension.Setup{s.setup}}
 	code := RunOperator("test", "abc", args, e, &out, &errOut)
 	return out.String(), errOut.String(), code
 }

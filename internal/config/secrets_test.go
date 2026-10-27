@@ -231,3 +231,16 @@ func TestCommandWarnings(t *testing.T) {
 		t.Fatalf("found command warned: %q", got)
 	}
 }
+
+// TestUnenforcedWarnings: config check warns about each admission_limit the
+// config sets, since nothing enforces it yet (#39).
+func TestUnenforcedWarnings(t *testing.T) {
+	cfg := `{"settings": {"concurrency": 2, "admission_limit": 3}, "scopes": [{"id": "web", "limits": {"admission_limit": 1}}, {"id": "api", "limits": {"concurrency": 1}}]}`
+	got := UnenforcedWarnings([]byte(cfg))
+	if len(got) != 2 || !strings.HasPrefix(got[0], "settings.admission_limit has no effect") || !strings.HasPrefix(got[1], "scope web limits.admission_limit has no effect") {
+		t.Fatalf("%q", got)
+	}
+	if got := Warnings([]byte(`{"settings": {"concurrency": 2}, "scopes": [{"id": "api", "limits": {"concurrency": 1}}]}`)); len(got) != 0 {
+		t.Fatalf("config without admission_limit warned: %q", got)
+	}
+}

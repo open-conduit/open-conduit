@@ -51,6 +51,8 @@ Capacity is split by executor, so scheduled jobs and agent turns do not take slo
 
 The daemon puts the job executors (`shell`, `github-hold`) in the `jobs` pool, bounded by `settings.job_concurrency` (default 4). `settings.concurrency` (default 4) then bounds agent turns (`claude-code`) and installed extension executors. With the agent limit reached a due job still starts, subject to `job_concurrency`, and the reverse holds. A job and a turn can run at once up to the sum of the two limits. A config that relies on `concurrency` to bound jobs as well should add `job_concurrency`. An agent job (a `claude-code` binding selected by a `schedule` route) is an agent turn and counts against `concurrency`.
 
+A scope's `limits.concurrency` narrows this further: the daemon passes each scope whose limit is below its parent's (or `settings.concurrency` at the root) as `ScopeLimits`, and the scheduler checks the attempt's scope and every ancestor, counting attempts from both pools.
+
 A start held back by a limit is reported with the code of its setting: `capacity_concurrency`, `capacity_job_concurrency` or `capacity_scope`. `open-conduit doctor` has a `capacity` check: each pool's running attempts against its limit, and each ready Work waiting for one with the limit holding it back. The Work's detail (`GET /v1/work/{id}`, the CLI and the TUI) carries a `waiting` annotation with the same limit.
 
 ## Evidence
