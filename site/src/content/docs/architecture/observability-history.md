@@ -144,7 +144,7 @@ A crash between phases is completed by a later sweep.
 
 Coordination history (records, outcomes, usage and artifact metadata) is never deleted. The history shows `retention.state=expired`. Artifact content then returns 404 `artifact_expired`, and the TUI reports expiry instead of fetching the content.
 
-The shell executor's `Forget` removes the execution's run directories. It refuses (`ErrLiveSegment`) and never signals while a verified process still runs. The host decides when to sweep: the daemon loop runs `SweepRetention` every `--retention-interval` (default 10 minutes).
+The shell executor's `Forget` removes the execution's run directories. It refuses (`ErrLiveSegment`) and never signals while a verified process still runs. The host decides when to sweep: the daemon loop runs `SweepRetention` every `--retention-interval` (default 10 minutes), then collects artifact content that no execution references and that is more than 24 hours old ([artifact recovery and retention](../sqlite-artifacts/#recovery-and-retention)).
 
 ## Doctor
 

@@ -67,6 +67,9 @@ type Options struct {
 	LeaseDuration time.Duration
 	// RetentionInterval paces the kept_executions sweep (default 10m).
 	RetentionInterval time.Duration
+	// ArtifactGrace is how old unreferenced artifact content must be before
+	// the retention pass collects it (default 24h).
+	ArtifactGrace time.Duration
 	// ResourceInterval paces resource lease reconciliation (default 5s).
 	ResourceInterval time.Duration
 	// SweepInterval paces the spare-workspace sweep (default 6h, as in v1).
@@ -205,6 +208,9 @@ func (o *Options) defaults() error {
 	if o.RetentionInterval == 0 {
 		o.RetentionInterval = 10 * time.Minute
 	}
+	if o.ArtifactGrace == 0 {
+		o.ArtifactGrace = 24 * time.Hour
+	}
 	if o.ResourceInterval == 0 {
 		o.ResourceInterval = 5 * time.Second
 	}
@@ -214,7 +220,7 @@ func (o *Options) defaults() error {
 	if o.SweepInterval == 0 {
 		o.SweepInterval = 6 * time.Hour
 	}
-	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ResourceInterval <= 0 || o.ExecutorInterval <= 0 || o.SweepInterval <= 0 {
+	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ArtifactGrace <= 0 || o.ResourceInterval <= 0 || o.ExecutorInterval <= 0 || o.SweepInterval <= 0 {
 		return errors.New("intervals must be positive")
 	}
 	return nil
@@ -291,6 +297,11 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.artifacts.Close()
+	// The state lock is held and nothing writes yet: pending streams are a
+	// killed process's unfinished writes.
+	if err = d.artifacts.Recover(ctx); err != nil {
+		return fmt.Errorf("artifact recovery: %w", err)
+	}
 	if err = os.MkdirAll(filepath.Join(o.StateDir, "executors"), 0o700); err != nil {
 		return err
 	}
