@@ -34,7 +34,7 @@ func trackerKitUser(family string) bool {
 }
 
 func public(path string) bool {
-	return path == "domain" || path == "extension" || path == "storage" || path == "observability" || path == "protocol"
+	return path == "domain" || path == "extension" || path == "storage" || path == "observability" || path == "protocol" || path == "extension/inproc"
 }
 
 // allowed includes the entire permitted project dependency closure, not just
@@ -52,6 +52,11 @@ func allowed(owner, dependency string, test bool) bool {
 		return false
 	case owner == "extension", owner == "storage", owner == "observability":
 		return dependency == "domain"
+	case owner == "extension/inproc":
+		// The in-process extension contract (issue #66) is stated in the
+		// public contracts and the protocol's configure shape only, so a
+		// first-party extension reaches nothing an installed package could not.
+		return public(dependency)
 	case owner == "protocol":
 		// The extracted subprocess protocol (07-01) describes the public
 		// contracts on the wire; it never reaches an implementation.

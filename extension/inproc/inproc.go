@@ -1,0 +1,177 @@
+// Package inproc is the in-process extension contract (issue #66): what an
+// extension running inside the daemon offers the host, and the host
+// services it is given. Bootstrap composes every in-process extension
+// through it by iterating one list, never by naming an extension, so a
+// first-party extension reaches nothing an installed package could not.
+//
+// Every surface but Name is optional: an extension implements the
+// interfaces of the surfaces it has. Types, Operations and Routes are read
+// before Start and offline (config validation), so they must not depend on
+// host services; every other surface is used only after Start, except
+// Exporter, which joins the telemetry pipeline before it.
+//
+// The surfaces mirror the subprocess manifest (protocol.Manifest): Configure
+// receives the same protocol.ConfigureParams an installed package does.
+package inproc
+
+import (
+	"context"
+	"encoding/json"
+	"log/slog"
+	"time"
+
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/storage"
+)
+
+// Extension is an in-process extension. Name identifies it in diagnostics,
+// task keys and doctor items.
+type Extension interface {
+	Name() string
+}
+
+// ConfigType is a config type the extension owns. Kind is
+// protocol.ValidateConnection, protocol.ValidateExtension or
+// protocol.ValidateRoute. Validate checks an entry's opaque config at load
+// and apply (nil accepts any object); its error text is never echoed.
+type ConfigType struct {
+	Kind     string
+	Type     string
+	Ingress  bool
+	Validate func(config json.RawMessage, secretNames []string) error
+}
+
+// Typed extensions own config types.
+type Typed interface {
+	Types() []ConfigType
+}
+
+// Operator extensions name the toolbelt operations config may grant.
+type Operator interface {
+	Operations() []string
+}
+
+// Router extensions provide route handlers by name.
+type Router interface {
+	Routes() map[string]extension.RouteHandler
+}
+
+// Host is what the host gives an extension at Start.
+type Host struct {
+	Store storage.Store
+	Now   func() time.Time
+	Log   *slog.Logger
+	// Secrets resolves names bound to the extension's own entries in scope:
+	// an entry's selected secret names, or with connection set the secret
+	// names of a connection one of its entries names (B05, as for an
+	// installed package).
+	Secrets func(ctx context.Context, scope domain.ID, connection string, names []string) (map[string]string, error)
+	// Report records a safe diagnostic code for the extension (logged once
+	// per change; "" clears it).
+	Report func(code string)
+}
+
+// Starter extensions start once the host services exist, before the first
+// generation is configured.
+type Starter interface {
+	Start(ctx context.Context, h Host) error
+}
+
+// Stopper extensions release what Start acquired at shutdown.
+type Stopper interface {
+	Stop()
+}
+
+// Configurer extensions receive every applied generation (and every public
+// URL change): the enabled scopes' entries of their own config types, with
+// the connection each names when that is one of their connection types.
+type Configurer interface {
+	Configure(ctx context.Context, p protocol.ConfigureParams)
+}
+
+// Tooled extensions register toolbelt operations on every generation's
+// toolbelt.
+type Tooled interface {
+	Registration() extension.Registration
+}
+
+// Actor extensions offer action providers on a scope, by provider name.
+type Actor interface {
+	Actions(scope domain.ID) map[string]extension.ActionProvider
+}
+
+// Annotation is one line an extension contributes to a Work's view.
+type Annotation struct {
+	Source, Name, Value string
+}
+
+// Annotator extensions annotate Work (GET /work/{id}).
+type Annotator interface {
+	Annotate(ctx context.Context, w domain.Work) []Annotation
+}
+
+// Renderer extensions render their own Event families for agent prompts;
+// false leaves the Event to the next renderer.
+type Renderer interface {
+	Render(ctx context.Context, e domain.Event) (string, bool)
+}
+
+// Task is background work the host loop runs. Pace is the least time
+// between starts (zero: every loop pass). A task never overlaps itself.
+type Task struct {
+	Name string
+	Pace time.Duration
+	Run  func(ctx context.Context) error
+}
+
+// Tasker extensions have background tasks.
+type Tasker interface {
+	Tasks() []Task
+}
+
+// Check statuses, as doctor reports them.
+const (
+	CheckOK   = "ok"
+	CheckInfo = "info"
+	CheckWarn = "warn"
+	CheckFail = "fail"
+)
+
+// CheckResult is one doctor check.
+type CheckResult struct {
+	Name, Status, Code, Detail string
+	Items                      []string
+}
+
+// Check is a doctor check. A deep check runs only when secrets are checked
+// and may call services; an ordinary one must not.
+type Check struct {
+	Deep bool
+	Run  func(ctx context.Context) CheckResult
+}
+
+// Checker extensions contribute doctor checks.
+type Checker interface {
+	Checks() []Check
+}
+
+// Playbooker extensions contribute agent playbooks: skill name to its
+// SKILL.md text, written into the Claude Code plugin.
+type Playbooker interface {
+	Playbooks() map[string]string
+}
+
+// Exporting extensions receive lifecycle telemetry. The exporter joins the
+// pipeline before Start, so it must send nothing until configured.
+type Exporting interface {
+	Exporter() observability.Exporter
+}
+
+// Sink extensions receive the named telemetry events the host writes to its
+// telemetry events log, besides that log. A failure never fails the log.
+type Sink interface {
+	Capture(ctx context.Context, name string, at time.Time, props map[string]any) error
+}

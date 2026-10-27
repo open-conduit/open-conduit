@@ -375,57 +375,7 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 			}
 			return out
 		},
-		// Secrets admits only names bound to the package's own entries in
-		// the scope: their selected secret names, or the secret names of a
-		// connection of a declared type one of them names (B05).
-		Secrets: func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
-			s := snapshot()
-			if s == nil || s.Scopes[id] == nil {
-				return nil, extension.ErrUnauthorized
-			}
-			scope := s.Scopes[id]
-			allowed := map[string]bool{}
-			usesConn := false
-			for _, x := range scope.Extensions {
-				if !extTypes[x.Type] {
-					continue
-				}
-				for _, n := range x.SecretNames {
-					allowed[n] = true
-				}
-				usesConn = usesConn || connection != "" && x.Connection == connection
-			}
-			if connection == "" {
-				for _, n := range names {
-					if !allowed[n] {
-						return nil, extension.ErrUnauthorized
-					}
-				}
-				return d.resolver.ResolveNames(ctx, scope, names)
-			}
-			if !usesConn {
-				return nil, extension.ErrUnauthorized
-			}
-			for _, c := range s.Connections {
-				if c.ID != connection || !connTypes[c.Type] {
-					continue
-				}
-				out := map[string]string{}
-				for _, n := range names {
-					ref, ok := c.SecretRefs[n]
-					if !ok || ref == "" {
-						return nil, extension.ErrUnauthorized
-					}
-					v, err := d.resolver.Resolve(ctx, ref)
-					if err != nil {
-						return nil, err
-					}
-					out[n] = v
-				}
-				return out, nil
-			}
-			return nil, extension.ErrUnauthorized
-		},
+		Secrets: d.scopedSecrets(extTypes, connTypes),
 		Deliver: func(ctx context.Context, name string, delivery extension.Delivery) ([]domain.AcceptedEvent, error) {
 			accepted, err := d.ingress.Push(ctx, name, delivery)
 			if err == nil {
@@ -438,6 +388,61 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		CancelWork: func(ctx context.Context, work domain.ID, expected domain.Revision, reason, key string) (domain.ID, error) {
 			return d.current.Load().control.CancelWork(ctx, work, expected, reason, key)
 		},
+	}
+}
+
+// scopedSecrets resolves, for an extension whose entry and connection types
+// are extTypes and connTypes, only names bound to its own entries in the
+// scope: their selected secret names, or the secret names of a connection
+// of one of its types that one of them names (B05).
+func (d *daemon) scopedSecrets(extTypes, connTypes map[string]bool) func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
+	return func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
+		s, _ := d.extensionSnapshot()
+		if s == nil || s.Scopes[id] == nil {
+			return nil, extension.ErrUnauthorized
+		}
+		scope := s.Scopes[id]
+		allowed := map[string]bool{}
+		usesConn := false
+		for _, x := range scope.Extensions {
+			if !extTypes[x.Type] {
+				continue
+			}
+			for _, n := range x.SecretNames {
+				allowed[n] = true
+			}
+			usesConn = usesConn || connection != "" && x.Connection == connection
+		}
+		if connection == "" {
+			for _, n := range names {
+				if !allowed[n] {
+					return nil, extension.ErrUnauthorized
+				}
+			}
+			return d.resolver.ResolveNames(ctx, scope, names)
+		}
+		if !usesConn {
+			return nil, extension.ErrUnauthorized
+		}
+		for _, c := range s.Connections {
+			if c.ID != connection || !connTypes[c.Type] {
+				continue
+			}
+			out := map[string]string{}
+			for _, n := range names {
+				ref, ok := c.SecretRefs[n]
+				if !ok || ref == "" {
+					return nil, extension.ErrUnauthorized
+				}
+				v, err := d.resolver.Resolve(ctx, ref)
+				if err != nil {
+					return nil, err
+				}
+				out[n] = v
+			}
+			return out, nil
+		}
+		return nil, extension.ErrUnauthorized
 	}
 }
 
@@ -466,9 +471,23 @@ func (d *daemon) extensionOptions(f extproc.Found, paths extproc.Paths) extproc.
 }
 
 // extensionConfigure builds a package's configure params from the current
-// generation: every enabled scope's entries of its declared types, with the
-// connection each names when that is of one of its declared types.
+// generation.
 func (d *daemon) extensionConfigure(m protocol.Manifest) protocol.ConfigureParams {
+	types := map[string]bool{}
+	for _, x := range m.Provides.Extensions {
+		types[x.Type] = true
+	}
+	connTypes := map[string]bool{}
+	for _, c := range m.Provides.Connections {
+		connTypes[c.Type] = true
+	}
+	return d.configureParams(types, connTypes)
+}
+
+// configureParams are an extension's configure params: every enabled
+// scope's entries of its entry types, with the connection each names when
+// that is of one of its connection types.
+func (d *daemon) configureParams(types, connTypes map[string]bool) protocol.ConfigureParams {
 	params := protocol.ConfigureParams{DryRun: d.o.DryRun}
 	d.hooks.mu.Lock()
 	params.PublicURL = d.hooks.public
@@ -478,14 +497,6 @@ func (d *daemon) extensionConfigure(m protocol.Manifest) protocol.ConfigureParam
 		return params
 	}
 	params.Generation = strconv.FormatUint(gen, 10)
-	types := map[string]bool{}
-	for _, x := range m.Provides.Extensions {
-		types[x.Type] = true
-	}
-	connTypes := map[string]bool{}
-	for _, c := range m.Provides.Connections {
-		connTypes[c.Type] = true
-	}
 	for _, id := range s.Order {
 		scope := s.Scopes[id]
 		if scope == nil || !scope.Enabled {
@@ -566,6 +577,7 @@ func (d *daemon) lifetime() context.Context {
 // apply, tunnel URL change); a failure is reported and retried at the next
 // apply or URL change.
 func (d *daemon) configureExtensions(ctx context.Context) {
+	d.configureInproc(ctx)
 	for _, r := range d.extensionRemotes() {
 		cx, cancel := context.WithTimeout(ctx, 30*time.Second)
 		err := r.Process().Reconfigure(cx)
@@ -590,7 +602,7 @@ func (d *daemon) reconfigureOnURLChange(ctx context.Context) {
 	public := d.hooks.public
 	d.hooks.mu.Unlock()
 	d.external.mu.Lock()
-	changed := public != d.external.public && len(d.external.remotes) > 0
+	changed := public != d.external.public
 	d.external.mu.Unlock()
 	if changed {
 		d.configureExtensions(ctx)
@@ -653,38 +665,46 @@ func (d *daemon) extensionWebhook(name string) http.Handler {
 }
 
 // runExtensionTasks starts each declared task when its interval has
-// elapsed, on its own goroutine; one task never overlaps itself.
+// elapsed.
 func (d *daemon) runExtensionTasks(ctx context.Context) {
 	for _, r := range d.extensionRemotes() {
 		for _, t := range r.Manifest().Provides.Tasks {
-			key := r.Process().Name() + "/" + t.Name
-			interval := time.Duration(t.IntervalSeconds) * time.Second
-			d.external.mu.Lock()
-			due := !d.external.running[key] && d.now().Sub(d.external.tasks[key]) >= interval
-			if due {
-				d.external.running[key], d.external.tasks[key] = true, d.now()
-			}
-			d.external.mu.Unlock()
-			if !due {
-				continue
-			}
-			d.wg.Add(1)
-			go func(r *extproc.Remote, task, key string, bound time.Duration) {
-				defer d.wg.Done()
-				cx, cancel := context.WithTimeout(ctx, min(max(bound, time.Minute), 10*time.Minute))
-				err := r.Task(cx, task)
-				cancel()
-				d.external.mu.Lock()
-				d.external.running[key] = false
-				d.external.mu.Unlock()
-				if err != nil && ctx.Err() == nil {
-					d.report("extension_task", domain.ID(key), errorCode(err))
-				} else {
-					d.clear("extension_task", domain.ID(key))
-				}
-			}(r, t.Name, key, interval)
+			d.runTask(ctx, r.Process().Name()+"/"+t.Name, time.Duration(t.IntervalSeconds)*time.Second, func(ctx context.Context) error { return r.Task(ctx, t.Name) })
 		}
 	}
+}
+
+// runTask starts an extension task, keyed extension/task, on its own
+// goroutine once pace has elapsed since its last start; one task never
+// overlaps itself. Its error is reported as an extension_task diagnostic.
+func (d *daemon) runTask(ctx context.Context, key string, pace time.Duration, run func(context.Context) error) {
+	d.external.mu.Lock()
+	if d.external.tasks == nil {
+		d.external.tasks, d.external.running = map[string]time.Time{}, map[string]bool{}
+	}
+	due := !d.external.running[key] && d.now().Sub(d.external.tasks[key]) >= pace
+	if due {
+		d.external.running[key], d.external.tasks[key] = true, d.now()
+	}
+	d.external.mu.Unlock()
+	if !due {
+		return
+	}
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		cx, cancel := context.WithTimeout(ctx, min(max(pace, time.Minute), 10*time.Minute))
+		err := run(cx)
+		cancel()
+		d.external.mu.Lock()
+		d.external.running[key] = false
+		d.external.mu.Unlock()
+		if err != nil && ctx.Err() == nil {
+			d.report("extension_task", domain.ID(key), errorCode(err))
+		} else {
+			d.clear("extension_task", domain.ID(key))
+		}
+	}()
 }
 
 // extensionCheck reports each installed package for doctor: refused or

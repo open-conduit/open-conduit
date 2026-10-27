@@ -11,7 +11,6 @@ import (
 	"github.com/open-conduit/open-conduit/executors/claudecode"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
-	hu "github.com/open-conduit/open-conduit/extensions/human"
 	is "github.com/open-conduit/open-conduit/extensions/introspection"
 	isplaybooks "github.com/open-conduit/open-conduit/extensions/introspection/playbooks"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
@@ -52,9 +51,6 @@ func (d *daemon) openTools() error {
 	if d.reports, err = is.NewTools(is.ToolsOptions{Store: d.coord, Now: d.now}); err != nil {
 		return err
 	}
-	if d.humanTools, err = hu.NewTools(hu.Options{Store: d.coord, Entry: d.humanEntry, Now: d.now}); err != nil {
-		return err
-	}
 	return d.openTrackerTools()
 }
 
@@ -65,9 +61,6 @@ func (d *daemon) registerTools(belt *runtime.Toolbelt, s *config.Snapshot) error
 		return err
 	}
 	if err := belt.Register(d.slackTools.Registration()); err != nil {
-		return err
-	}
-	if err := belt.Register(d.humanTools.Registration()); err != nil {
 		return err
 	}
 	if err := d.registerTrackerTools(belt); err != nil {
@@ -106,6 +99,7 @@ func (d *daemon) preparePlaybooks() error {
 	for name, text := range trackerplaybooks.All() {
 		books[name] = text
 	}
+	d.inprocPlaybooks(books)
 	for name, text := range books {
 		dir := filepath.Join(d.pluginDir(), "skills", name)
 		if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -144,7 +138,7 @@ func (d *daemon) renderEvents(events []domain.Event) string {
 			parts = append(parts, text)
 			continue
 		}
-		if text, ok := hu.RenderEvent(e, hu.Lookup(context.Background(), d.coord, d.now)); ok {
+		if text, ok := d.inprocRender(e); ok {
 			parts = append(parts, text)
 			continue
 		}
