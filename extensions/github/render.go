@@ -67,6 +67,9 @@ func RenderEvent(e domain.Event) (string, bool) {
 			Label      string `json:"label"`
 		}
 		_ = json.Unmarshal(e.Data.Data, &p)
+		if p.Label == peerLabel {
+			return "### What you were waiting for\nAnother agent commented while you waited; its comment is with this turn. Act on it if it bears on your work, then wait again if what you were waiting for still hasn't happened.", true
+		}
 		c, err := ParseCond(p.Label)
 		if err != nil {
 			return "### What you were waiting for\nWhat you were waiting for has happened.", true

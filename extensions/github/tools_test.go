@@ -81,6 +81,24 @@ func TestDependencyFilterSelectsTheNamedItem(t *testing.T) {
 	if !gh.DependencyFilter(turn, ev(gh.SchemaTurn, gh.TurnPayload{Repo: repo, Number: 21, State: "review"})) || gh.DependencyFilter(turn, ev(gh.SchemaTurn, gh.TurnPayload{Repo: repo, Number: 21, State: "building"})) {
 		t.Fatal("turn state filter")
 	}
+	peer := filter(map[string]any{"kind": "peer", "number": 5, "work": "work/1"})
+	for _, c := range []struct {
+		agent *gh.Agent
+		edit  bool
+		want  bool
+	}{
+		{&gh.Agent{Work: "work/9"}, false, true},
+		{&gh.Agent{From: "#9"}, false, true},
+		{&gh.Agent{Work: "work/1"}, false, false},
+		{&gh.Agent{From: "5"}, false, false},
+		{&gh.Agent{}, false, false},
+		{nil, false, false},
+		{&gh.Agent{Work: "work/9"}, true, false},
+	} {
+		if got := gh.DependencyFilter(peer, ev(gh.SchemaComment, gh.CommentPayload{Kind: gh.KindIssue, Body: "x", Agent: c.agent, Edited: c.edit})); got != c.want {
+			t.Fatalf("peer filter on %+v (edited %v) = %v", c.agent, c.edit, got)
+		}
+	}
 	if gh.DependencyFilter(domain.Payload{Schema: "other"}, ev(gh.SchemaPull, gh.PullPayload{Repo: repo, Number: 8})) {
 		t.Fatal("foreign filter schema accepted")
 	}
