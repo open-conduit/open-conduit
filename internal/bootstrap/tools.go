@@ -117,15 +117,11 @@ func (d *daemon) preparePlaybooks() error {
 }
 
 // renderEvents renders GitHub and Slack Events with their reply hints, then
-// installed packages' own families (event.render), and falls back to the
-// executor's generic renderer for everything else.
+// extensions' own families, first-party and installed (event.render), and
+// falls back to the executor's generic renderer for everything else.
 func (d *daemon) renderEvents(events []domain.Event) string {
 	parts := make([]string, 0, len(events))
 	for _, e := range events {
-		if text, ok := d.extensionRender(e); ok {
-			parts = append(parts, text)
-			continue
-		}
 		if text, ok := gh.RenderEvent(e); ok {
 			parts = append(parts, text)
 			continue

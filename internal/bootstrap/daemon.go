@@ -331,9 +331,8 @@ func Serve(ctx context.Context, o Options) (err error) {
 	// Installed extension packages start before the configuration opens,
 	// so their validators check it (07-03).
 	d.openExtensions(ctx)
-	defer d.closeExtensions()
 	reg := registry(d.executors)
-	d.extensionRegistry(&reg)
+	d.installedRegistry(&reg)
 	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
@@ -447,7 +446,6 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	var err error
 	routeHandlers := handlers()
 	inprocHandlers(routeHandlers, d.inproc)
-	d.extensionHandlers(routeHandlers)
 	if c.router, err = runtime.NewRouter(d.coord, d.now, runtime.RouterOptions{Generation: c.generation, Handlers: routeHandlers, Bindings: bindings, CausalLimits: limits}); err != nil {
 		return nil, err
 	}
@@ -468,9 +466,6 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return nil, err
 	}
 	if err = d.registerInprocTools(belt); err != nil {
-		return nil, err
-	}
-	if err = d.registerExtensionTools(belt); err != nil {
 		return nil, err
 	}
 	c.toolbelt = belt

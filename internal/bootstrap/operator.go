@@ -167,9 +167,6 @@ func (d *daemon) annotate(ctx context.Context, w domain.Work) []management.Annot
 	d.github.mu.Unlock()
 	out := d.capacityAnnotation(ctx, w)
 	out = append(out, d.inprocAnnotations(ctx, w)...)
-	for _, a := range d.extensionAnnotations(ctx, w) {
-		out = append(out, management.Annotation{Source: a[0], Name: a[1], Value: a[2]})
-	}
 	for _, src := range sources {
 		lines, ok := gh.Annotate(ctx, d.coord, src.ingress.Settings(), src.client.Web(), w)
 		if !ok {
@@ -194,7 +191,6 @@ func (d *daemon) actions(_ context.Context, scope domain.ID) map[string]extensio
 	}
 	d.github.mu.Unlock()
 	d.inprocActions(scope, out)
-	d.extensionActions(scope, out)
 	return out
 }
 
