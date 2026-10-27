@@ -61,11 +61,13 @@ Dry-run is handled per entry by `projection.dry_run`: writes report `dry_run` an
 
 ## Waits
 
-`github.wait {conditions, until, reason}` takes `pr:N[:merged|closed]`, `issue:N[:closed|<turn state>]`, `job:<name>`, `<project>/` prefixes and `until`. It translates as follows:
+`github.wait {conditions, until, reason}` takes `pr:N[:merged|closed|commented|pushed]`, `issue:N[:closed|<turn state>]`, `job:<name>`, `<project>/` prefixes and `until`. It translates as follows:
 
 | Condition | Source key | Types | Filter | History |
 | --- | --- | --- | --- | --- |
-| `pr:N:*` | the PR's correlation (its issue's, by branch or closing keyword, else `pr/N`) | `merged`, `closed` (either ends the wait) | `{kind: pr, repo, number}` | all |
+| `pr:N:merged`, `pr:N:closed` | the PR's correlation (its issue's, by branch or closing keyword, else `pr/N`) | `merged`, `closed` (either ends the wait) | `{kind: pr, repo, number}` | all |
+| `pr:N:commented` | the PR's correlation | `github.comment.human`, `github.comment.agent` | `{kind: pr_comment, …, work}`: a new (not edited) PR conversation comment, review or review comment, not marked as the waiting Work's own | from now |
+| `pr:N:pushed` | the PR's correlation | `github.pull_request.open` | `{kind: pr_push, …, head}`: a head SHA other than the one read at registration; refused on a closed PR | from now |
 | `issue:N:closed` | `issue/N` at its current generation | `github.issue.closed` | `{kind: issue, …}` | all |
 | `issue:N:<state>` | `issue/N` | `github.agent.turn` | `{kind: turn, …, state}` | from now |
 | `until` | (none) | (none) | (none) | core timeout timer |

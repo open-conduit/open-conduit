@@ -13,7 +13,8 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// Wait translation. `pr:N:merged`, `issue:N:closed`, `issue:N:<state>` and
+// Wait translation. `pr:N:merged`, `pr:N:commented`, `pr:N:pushed`,
+// `issue:N:closed`, `issue:N:<state>` and
 // `--until` become a generic plan: a Wait on the Work's own keys (types plus
 // a timeout) and B04 dependency subscriptions on the named item's
 // correlation key, with an opaque filter selecting the item. Already-met
@@ -37,11 +38,14 @@ type TurnPayload struct {
 
 // dependencyFilter is the opaque filter of a translated dependency.
 type dependencyFilter struct {
-	Kind   string `json:"kind"` // pr, issue, turn or peer
+	Kind   string `json:"kind"` // pr, pr_comment, pr_push, issue, turn or peer
 	Repo   string `json:"repo"`
 	Number int    `json:"number"`
 	State  string `json:"state,omitempty"`
-	Work   string `json:"work,omitempty"` // peer: the waiting Work
+	// Work is the waiting Work: a peer or pr_comment wait never meets its
+	// own comments. Head is the PR's head commit when a pr_push wait began.
+	Work string `json:"work,omitempty"`
+	Head string `json:"head,omitempty"`
 }
 
 // peerLabel labels the dependency that wakes a parked agent when another
@@ -81,6 +85,14 @@ func DependencyFilter(filter domain.Payload, e domain.Event) bool {
 	case "pr":
 		var p PullPayload
 		return e.Data.Schema == SchemaPull && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo)
+	case "pr_push":
+		var p PullPayload
+		return e.Data.Schema == SchemaPull && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo) && p.HeadSHA != "" && p.HeadSHA != f.Head
+	case "pr_comment":
+		// A new comment, review or thread reply on the PR (not an edit), from
+		// anyone but the waiting Work itself.
+		var p CommentPayload
+		return e.Data.Schema == SchemaComment && json.Unmarshal(e.Data.Data, &p) == nil && p.Kind != KindIssue && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo) && !p.Edited && (p.Agent == nil || p.Agent.Work == "" || p.Agent.Work != f.Work)
 	case "issue":
 		var p IssuePayload
 		return e.Data.Schema == SchemaIssue && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo)
@@ -220,16 +232,30 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 			}
 			return r, err
 		}
-		if p.State != "open" {
-			r.met = "PR #" + c.Ref + " is already " + pullState(p)
-		}
 		n := &normalizer{s: codeSrc.Settings, c: codeSrc.Client, m: newMemo()}
 		key, _, err := n.pullKey(ctx, p)
 		if err != nil {
 			return r, err
 		}
-		r.dep.SourceKey, r.dep.Types = key, []string{TypePullMerged, TypePullClosed}
-		r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr", Repo: repo, Number: c.Number()})
+		r.dep.SourceKey = key
+		switch c.On {
+		case "commented":
+			// The next comment from now on, not an earlier one.
+			r.dep.Types, r.dep.FromNow = []string{TypeCommentHuman, TypeCommentAgent}, true
+			r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr_comment", Repo: repo, Number: c.Number(), Work: string(b.work.ID)})
+		case "pushed":
+			if p.State != "open" {
+				return r, refuse("invalid_condition", "%s: PR #%d is already %s, so it won't get new pushes", c, c.Number(), pullState(p))
+			}
+			r.dep.Types, r.dep.FromNow = []string{TypePullOpen}, true
+			r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr_push", Repo: repo, Number: c.Number(), Head: p.Head.SHA})
+		default:
+			if p.State != "open" {
+				r.met = "PR #" + c.Ref + " is already " + pullState(p)
+			}
+			r.dep.Types = []string{TypePullMerged, TypePullClosed}
+			r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr", Repo: repo, Number: c.Number()})
+		}
 	case CondIssue:
 		repo := issueSrc.Settings.TrackerRepo
 		i, err := issueSrc.Client.Issue(ctx, repo, c.Number())
