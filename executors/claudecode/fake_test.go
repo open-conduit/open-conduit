@@ -225,7 +225,7 @@ func (c *clock) Advance(d time.Duration) {
 	c.mu.Unlock()
 }
 
-// reports collects experiment and turn telemetry.
+// reports collects turn telemetry.
 type reports struct {
 	mu  sync.Mutex
 	all []report
@@ -252,57 +252,18 @@ func (r *reports) named(name string) []map[string]any {
 	return out
 }
 
-// feedbackHook is a fake tracker: questions post once per intent.
-type feedbackHook struct {
-	mu        sync.Mutex
-	posted    map[string]string
-	bodies    []string
-	reactions map[string]map[string]int
-}
-
-func (f *feedbackHook) Ask(_ context.Context, w domain.Work, intent, body string) (string, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.posted == nil {
-		f.posted = map[string]string{}
-	}
-	if ref, ok := f.posted[intent]; ok {
-		return ref, nil
-	}
-	ref := fmt.Sprintf("comment-%d", len(f.posted)+1)
-	f.posted[intent] = ref
-	f.bodies = append(f.bodies, body)
-	return ref, nil
-}
-func (f *feedbackHook) Reactions(_ context.Context, _ domain.Work, ref string) (map[string]int, error) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.reactions[ref], nil
-}
-func (f *feedbackHook) react(ref string, counts map[string]int) {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	if f.reactions == nil {
-		f.reactions = map[string]map[string]int{}
-	}
-	f.reactions[ref] = counts
-}
-
 // harness is one test's executor environment.
 type harness struct {
-	t        *testing.T
-	root     string
-	fake     string
-	binary   string
-	config   string
-	state    string
-	store    *memStore
-	art      *memoryArtifacts
-	clock    *clock
-	reports  *reports
-	feedback *feedbackHook
-	draw     float64
-	drawMu   sync.Mutex
+	t       *testing.T
+	root    string
+	fake    string
+	binary  string
+	config  string
+	state   string
+	store   *memStore
+	art     *memoryArtifacts
+	clock   *clock
+	reports *reports
 }
 
 func newHarness(t *testing.T) *harness {
@@ -313,7 +274,7 @@ func newHarness(t *testing.T) *harness {
 	}
 	t.Cleanup(func() { os.RemoveAll(root) })
 	h := &harness{t: t, root: root, fake: filepath.Join(root, "fake"), binary: filepath.Join(root, "claude"), config: filepath.Join(root, "claude-config"), state: filepath.Join(root, "state"),
-		store: newMemStore(), art: &memoryArtifacts{data: map[string][]byte{}}, clock: &clock{now: time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)}, reports: &reports{}, feedback: &feedbackHook{}, draw: 0.99}
+		store: newMemStore(), art: &memoryArtifacts{data: map[string][]byte{}}, clock: &clock{now: time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)}, reports: &reports{}}
 	for _, d := range []string{h.fake, h.config} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
@@ -325,12 +286,6 @@ func newHarness(t *testing.T) *harness {
 	return h
 }
 
-func (h *harness) setDraw(v float64) {
-	h.drawMu.Lock()
-	h.draw = v
-	h.drawMu.Unlock()
-}
-
 func (h *harness) executor() *claudecode.Executor {
 	h.t.Helper()
 	bin := filepath.Join(h.root, "bin")
@@ -340,12 +295,7 @@ func (h *harness) executor() *claudecode.Executor {
 		Environ: func() []string {
 			return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + h.root, "CLAUDE_CONFIG_DIR=" + h.config, "CLAUDECODE=1", "CLAUDE_CODE_ENTRYPOINT=cli", "ANTHROPIC_API_KEY=ambient", "UNRELATED=x"}
 		},
-		Feedback: h.feedback, Report: h.reports.add, Now: h.clock.Now,
-		Draw: func() float64 {
-			h.drawMu.Lock()
-			defer h.drawMu.Unlock()
-			return h.draw
-		},
+		Report: h.reports.add, Now: h.clock.Now,
 		Grace: 300 * time.Millisecond, PollInterval: 20 * time.Millisecond,
 	})
 	if err != nil {

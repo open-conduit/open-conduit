@@ -59,7 +59,6 @@ type turnRecord struct {
 	StartedAt    time.Time `json:"started_at"`
 	Kind         turnKind  `json:"kind"`
 	Resume       bool      `json:"resume"`
-	Arm          string    `json:"arm,omitempty"`
 	Structured   bool      `json:"structured"`
 	StatusSchema string    `json:"status_schema"`
 	FollowUps    int       `json:"follow_ups"`
@@ -201,29 +200,20 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	attach := attachInfo{Dir: workdir, Binary: cfg.Binary, Model: cfg.Model, PermissionMode: cfg.PermissionMode, PluginDir: cfg.PluginDir, ExtraArgs: cfg.ExtraArgs}
 
 	// Decide resume or fresh and record the decision before launch, fenced by
-	// this attempt's lease, so a restart reuses the same draw.
+	// this attempt's lease, so a restart reuses the same decision.
 	var d decision
 	var rec record
-	var endedTrial *Trial
 	err = e.o.Store.Transact(ctx, e.guard(r.Execution.ID, r.Execution.Lease), func(tx storage.Tx) error {
 		var err error
 		if rec, err = e.loadRecord(tx, r.Work); err != nil {
 			return err
 		}
 		d = e.decide(rec, cfg, now, sessionExists)
-		endedTrial = beginTurn(&rec, d, r.Execution.ID, nonce, now, attach)
+		beginTurn(&rec, d, r.Execution.ID, nonce, now, attach)
 		return putJSON(tx, e.o.Namespace, workKey(r.Work.ID), rec)
 	})
 	if err != nil {
 		return e.preset(ctx, rn, cfg.StatusSchema, "continuity_unavailable", "claude code continuity unavailable", nil)
-	}
-	if endedTrial != nil {
-		e.reportTrialEnd(rec, endedTrial, "next_draw", "")
-	}
-	if d.Arm != "" && !d.Reused {
-		a := trialAttrs(rec, rec.Trial)
-		a["session"] = d.Session
-		e.report("handoff_assigned", a)
 	}
 
 	inputs := r.Inputs
@@ -241,7 +231,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		}
 		first = dryRunPrompt(first, cfg.structured())
 	}
-	turn := turnRecord{ExecutionID: string(r.Execution.ID), WorkID: string(r.Work.ID), ScopeID: string(r.Work.ScopeID), Nonce: nonce, StartedAt: now, Kind: d.Kind, Resume: d.Resume, Arm: d.Arm, Structured: cfg.structured(), StatusSchema: cfg.StatusSchema, FollowUps: len(inputs)}
+	turn := turnRecord{ExecutionID: string(r.Execution.ID), WorkID: string(r.Work.ID), ScopeID: string(r.Work.ScopeID), Nonce: nonce, StartedAt: now, Kind: d.Kind, Resume: d.Resume, Structured: cfg.structured(), StatusSchema: cfg.StatusSchema, FollowUps: len(inputs)}
 	for _, ev := range inputs {
 		turn.InputTypes = append(turn.InputTypes, ev.Type)
 	}
@@ -847,7 +837,7 @@ func (e *Executor) escalate(rn *run) error {
 }
 
 // resultFields is the structured outcome data. It never carries the session,
-// the handoff note or the experiment arm: those are private continuity.
+// or the handoff note: those are private continuity.
 type resultFields struct {
 	// Status is the turn's reported state (building, review, help, done,
 	// finished) for projections; empty without a status.
@@ -1005,9 +995,8 @@ func (e *Executor) settle(ctx context.Context, rn *run) (extension.Result, error
 			return err
 		}
 		fresh = rec.Applied != rn.nonce
-		end = finishTurn(&rec, rn.nonce, domain.ID(turn.ExecutionID), p, now, turn.FollowUps+len(in.Consumed), e.o.Feedback != nil)
+		end = finishTurn(&rec, rn.nonce, p, now)
 		if !fresh {
-			end.ended, end.askFeedback, end.arm = nil, false, turn.Arm
 			return nil
 		}
 		if p.Limited {
@@ -1075,9 +1064,6 @@ func (e *Executor) settle(ctx context.Context, rn *run) (extension.Result, error
 	result.Outcome.Data = resultData(turn.StatusSchema, f)
 	result.Workspace = historyWorkspace(rn.dir)
 	if fresh {
-		if end.ended != nil {
-			e.reportTrialEnd(rec, end.ended, "finished", StateFinished)
-		}
 		e.reportTurn(turn, end, outcome, now)
 	}
 	return result, nil
@@ -1105,12 +1091,6 @@ func (e *Executor) reportTurn(turn turnRecord, end turnEnd, outcome domain.Outco
 	if p.Tokens != nil {
 		a["input_tokens"], a["output_tokens"] = p.Tokens.Input, p.Tokens.Output
 		a["cache_read_tokens"], a["cache_creation_tokens"] = p.Tokens.CacheRead, p.Tokens.CacheCreation
-	}
-	if turn.Arm != "" {
-		a["handoff_arm"] = turn.Arm
-	}
-	if end.trial != nil {
-		a["trial"], a["trial_arm"] = end.trial.ID, end.trial.Arm
 	}
 	e.report("agent_turn", a)
 }

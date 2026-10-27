@@ -115,7 +115,7 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 	o.stdin = ""
 	// 3. Local edits (validated before saving): the fake API and fake claude.
 	o.must(nil, "config", "set", "/connections/github/config", `{"api_url":"`+fake.URL+`"}`)
-	agent := map[string]any{"binary": binary, "status_schema": "github.status.v1", "branch": "agent/issue-{number}", "handoff_share": 0,
+	agent := map[string]any{"binary": binary, "status_schema": "github.status.v1", "branch": "agent/issue-{number}", "cold_turns": "resume",
 		"env": map[string]string{"FAKE_DIR": d.root, "CLAUDE_CONFIG_DIR": filepath.Join(d.root, "claude-config")}}
 	b, _ := json.Marshal(agent)
 	o.must(nil, "config", "set", "/scopes/eng/bindings/agent/config", string(b))

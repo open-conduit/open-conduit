@@ -6,8 +6,8 @@
 // The toolbelt is presented as an MCP server (`os mcp`) named in a per-segment
 // --mcp-config whose credential file is replaced on adoption.
 //
-// Session identity, resume-versus-fresh, the handoff note, attachment and the
-// handoff experiment are executor-private continuity in namespaced KV (see
+// Session identity, resume-versus-fresh, the handoff note and attachment are
+// executor-private continuity in namespaced KV (see
 // continuity.go); outcomes carry only structured, session-free metadata.
 package claudecode
 
@@ -18,7 +18,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"math/rand/v2"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -79,15 +78,6 @@ var (
 	hexName        = regexp.MustCompile(`^[0-9a-f]{32}$`)
 )
 
-// FeedbackHook asks the handoff experiment's blinded question on the Work's
-// tracker and reads its reactions. A host implements it from a tracker
-// extension's marked, exactly-once comment delivery (GitHub: Projector.Deliver
-// and Client.Reactions). Ask returns "" while delivery is still in progress.
-type FeedbackHook interface {
-	Ask(ctx context.Context, work domain.Work, intent, body string) (ref string, err error)
-	Reactions(ctx context.Context, work domain.Work, ref string) (map[string]int, error)
-}
-
 // Options configure one executor registration.
 type Options struct {
 	// StateDir is a private absolute directory for segment state and logs.
@@ -110,12 +100,8 @@ type Options struct {
 	// PluginDir is the default --plugin-dir (the host-prepared playbook
 	// plugin) for bindings that set no plugin_dir and use a playbook.
 	PluginDir string
-	// Feedback enables the handoff experiment's blinded feedback questions.
-	Feedback FeedbackHook
-	// Report receives experiment and per-turn telemetry outside core.
+	// Report receives per-turn telemetry outside core.
 	Report func(name string, attrs map[string]any)
-	// Draw returns a uniform draw in [0,1) for the handoff experiment.
-	Draw func() float64
 	// Grace is the delay between SIGTERM and SIGKILL (default 10s).
 	Grace time.Duration
 	// PollInterval paces output following and observation (default 1s).
@@ -171,9 +157,6 @@ func New(o Options) (*Executor, error) {
 	}
 	if o.Render == nil {
 		o.Render = RenderEvents
-	}
-	if o.Draw == nil {
-		o.Draw = rand.Float64
 	}
 	if o.Grace <= 0 {
 		o.Grace = 10 * time.Second

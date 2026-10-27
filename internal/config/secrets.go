@@ -201,9 +201,36 @@ func CommandFound(name string) bool {
 }
 
 // Warnings returns everything config check warns about without failing:
-// CommandWarnings, then UnenforcedWarnings.
+// CommandWarnings, then UnenforcedWarnings, then RemovedWarnings.
 func Warnings(data []byte) []string {
-	return append(CommandWarnings(data), UnenforcedWarnings(data)...)
+	return append(append(CommandWarnings(data), UnenforcedWarnings(data)...), RemovedWarnings(data)...)
+}
+
+// RemovedWarnings returns one warning per binding whose config still sets
+// handoff_share: the Claude Code handoff experiment is gone, and the setting
+// is ignored for one release and then rejected.
+func RemovedWarnings(data []byte) []string {
+	var doc struct {
+		Scopes []struct {
+			ID       string `json:"id"`
+			Bindings []struct {
+				Name   string                     `json:"name"`
+				Config map[string]json.RawMessage `json:"config"`
+			} `json:"bindings"`
+		} `json:"scopes"`
+	}
+	if json.Unmarshal(data, &doc) != nil {
+		return nil
+	}
+	var out []string
+	for _, sc := range doc.Scopes {
+		for _, b := range sc.Bindings {
+			if _, ok := b.Config["handoff_share"]; ok {
+				out = append(out, "scope "+sc.ID+" binding "+b.Name+" config.handoff_share is ignored: the handoff experiment was removed and a later release rejects it; remove it, and set cold_turns (handoff or resume) to choose what a cold turn does")
+			}
+		}
+	}
+	return out
 }
 
 // UnenforcedWarnings returns one warning per admission_limit the config sets,

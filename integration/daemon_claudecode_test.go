@@ -84,7 +84,7 @@ func claudeDrillConfig(root, binary string) []byte {
 			"id": "drill", "name": "Drill",
 			"authorization": map[string]any{"connections": []any{}, "operations": ops, "read_scopes": []any{}},
 			"bindings": []any{map[string]any{"name": "agent", "executor": "claude-code", "requires": map[string]any{"toolbelt": "mcp", "inject": true, "resume": true}, "operations": ops, "secret_names": []any{},
-				"config": map[string]any{"binary": binary, "status_schema": "github.status.v1", "handoff_share": 0,
+				"config": map[string]any{"binary": binary, "status_schema": "github.status.v1", "cold_turns": "resume",
 					"env": map[string]string{"FAKE_DIR": root, "CLAUDE_CONFIG_DIR": filepath.Join(root, "claude-config")}}}},
 			"routes":      []any{map[string]any{"name": "incoming", "handler": "manual", "binding": "agent", "active_policy": "inject", "config": map[string]any{}}},
 			"secret_refs": map[string]any{},

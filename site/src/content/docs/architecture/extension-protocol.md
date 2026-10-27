@@ -61,7 +61,6 @@ The table groups what the first-party code actually does across the host boundar
 
 Some couplings exist only as bootstrap glue between first-party packages. They have no protocol equivalent, because a subprocess extension may depend on another only through events, correlation keys and public state reads:
 
-- claude-code's handoff `FeedbackHook` reads and writes GitHub comments (`githubFeedback`);
 - GitHub `job:` waits resolve schedule job keys (`scheduleJob`), and the schedule translator decodes GitHub delivery payloads;
 - Bitbucket reads the tracker's reopen generations;
 - PostHog receives introspection telemetry through a fan-out;

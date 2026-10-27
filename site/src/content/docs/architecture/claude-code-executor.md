@@ -68,7 +68,7 @@ The outcome data schema is the binding's `status_schema`. The default is `open-c
 - the `transcript` and `log` artifact IDs
 - `workspace` `{ref, schema, data}`
 
-The data never carries the session, the handoff note or the experiment arm. Usage maps to `extension.Usage`, with cost in USD and `CachedTokens` holding the cache-read count. A resumed session reports cumulative totals, so the per-turn delta subtracts the session's previous totals, which are kept in continuity. Totals that went backwards (a fork) are left as reported.
+The data never carries the session or the handoff note. Usage maps to `extension.Usage`, with cost in USD and `CachedTokens` holding the cache-read count. A resumed session reports cumulative totals, so the per-turn delta subtracts the session's previous totals, which are kept in continuity. Totals that went backwards (a fork) are left as reported.
 
 **Usage limits.** The executor detects a limit from `api_error: usage_limit_reached`, the `rate_limit_event`/`api_error_params` reset, or claude's wording ("resets 9:40am (Europe/London)"). A limit records a hold for the whole executor until the reset plus the grace period. While the hold lasts, `Run` returns a failed result with the same hint and launches nothing. `extension.Result.RetryHint` lets a structured failed result carry the hint. Core treats it like a `RetryHintProvider` error, but the observed result also proves the attempt finished, so no uncertain hold remains. A hint on any other outcome is invalid. A hinted failure still uses the bounded failure budget.
 
@@ -82,34 +82,22 @@ Continuity lives in namespaced coordination KV (`executor.claudecode`, key `work
 - the last turn's end time
 - the session's cumulative totals
 - the in-flight decision
-- the open trial and the feedback questions
 - the attach command
 
-Before launch, `Run` decides between resume and fresh and records that decision in a transaction fenced by the attempt's lease. A crash after the record is written, but before launch, leaves an attempt that cannot be adopted. Its retry takes the recorded decision over (same session and arm) instead of drawing again. Finishing a segment applies the turn exactly once per segment (the same per-turn delta every time), before the result is recorded. Applying it again after a crash changes nothing.
+Before launch, `Run` decides between resume and fresh and records that decision in a transaction fenced by the attempt's lease. A crash after the record is written, but before launch, leaves an attempt that cannot be adopted. Its retry takes the recorded decision over (same session and kind) instead of deciding again. Finishing a segment applies the turn exactly once per segment (the same per-turn delta every time), before the result is recorded. Applying it again after a crash changes nothing.
 
 The resume and handoff rules are:
 
 - A session whose transcript exists in the workspace (`<config>/projects/<cwd with non-alphanumerics as ->/<session>.jsonl`) resumes, even when its first turn never ended.
 - A session with a handoff note that was never written starts afresh from the note.
-- A session is *cold* when its last turn ended more than `handoff_minutes` ago (default 55). A cold session is drawn into the experiment: `handoff_share` of the draws (default 0.5) go to a fresh session started from the note (arm `handoff`), and the rest resume (arm `resume`).
+- A session is *cold* when its last turn ended more than `handoff_minutes` ago (default 55). A cold session follows `cold_turns`: `handoff` (the default, and what the playbook tells agents to expect) starts a fresh session from the note, `resume` resumes it.
 - `Attach` returns `claude --resume <session>` in the workspace and clears the note, so the next turn resumes even when cold. It implements the public `extension.AttachExecutor`; Work without a session returns `ErrNoSession`, which wraps `extension.ErrNothingToAttach`.
 
-**Trials and feedback.**
+**Release.** `Maintain` releases terminal Work's continuity. Records written while the handoff experiment ran may still carry a trial and feedback questions; they are ignored.
 
-- **Trials.** Each draw starts a trial. The trial adds up turns, failures (usage limits excluded), cost, tokens, model and tool calls, agent seconds and follow-ups, until the next draw (`next_draw`), a `finished` status (`finished`) or the Work becoming terminal (`dropped`, with its last state).
-- **The question.** A successful drawn turn queues the blinded `FeedbackText`, which is identical for both arms. `Maintain` asks it through the host's `FeedbackHook`. For GitHub, bootstrap uses `extensions/github.WorkComments`: a `Projector.Deliver` intent with a stable ID and marker, so the comment posts exactly once even after an ambiguous post.
-- **The answer.** `Maintain` reads reactions for up to seven days. 👍 means `maintained`, 👎 means `worse`, and both mean `mixed`.
-- **Release.** Terminal Work's continuity is released once nothing is left to watch.
+Telemetry goes to `Options.Report`. The daemon writes it to `logs/claude-code.jsonl`, outside core, as one `agent_turn` record per turn.
 
-Telemetry goes to `Options.Report`. The daemon writes it to `logs/claude-code.jsonl`, outside core, in these records:
-
-- `agent_turn`
-- `handoff_assigned`
-- `handoff_trial`
-- `handoff_feedback_asked`
-- `handoff_feedback`
-
-Like core telemetry, it is at most once across a kill. The durable trial counters are not affected.
+Like core telemetry, it is at most once across a kill.
 
 ## Toolbelt over MCP
 
@@ -170,7 +158,8 @@ The config is strict and validated at load. Every field is optional:
 | `structured` | Default true. |
 | `status_schema` | The outcome data schema. |
 | `branch`, `workspace_mode` | The workspace request. |
-| `handoff_minutes`, `handoff_share` | The experiment (55 and 0.5; a share of 0 turns it off). |
+| `handoff_minutes` | How long after a turn the session counts as cold (default 55). |
+| `cold_turns` | What a cold turn does: `handoff` (default) or `resume`. `handoff_share`, the removed experiment's setting, is ignored with a `config check` warning for one release, then rejected. |
 | `env`, `pass_env`, `secret_env` | The environment. |
 | `extra_args` | Extra arguments. These may not override `-p`, the session or the MCP flags. |
 
@@ -180,9 +169,9 @@ The config is strict and validated at load. Every field is optional:
   - the shared executor conformance case
   - the invocation, the MCP config and the sanitized environment
   - resumed and fresh sessions with per-turn usage deltas
-  - the complete port of `TestColdSessionHandsOffToAFreshOne`: warm resume, handoff arm, resume arm, blinded identical questions, reactions, attach forcing resume and trial accounting to the next draw and the finish
-  - arm and trial continuity across executor restart: adopting the drawn turn, taking over an undone decision and answering feedback from a new instance
-  - `TestDroppingAnIssueEndsItsTrial`
+  - the port of `TestColdSessionHandsOffToAFreshOne`: warm resume, a cold handoff, a cold resume under `cold_turns: resume`, attach forcing resume and release of terminal Work
+  - the cold decision across executor restart: adopting the running turn and taking over an undone decision
+  - continuity left by the handoff experiment loading and releasing without error
   - interjection consumption
   - usage-limit delay and the executor-wide hold
   - failures, interrupt and missing binary
@@ -191,7 +180,6 @@ The config is strict and validated at load. Every field is optional:
   - config validation
   - the ported parser tests (parse, limits, reset text, call counts, `perTurn`)
 - [`TestProductionSchedulerResultRetryHint`](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_test.go) checks that a result hint delays the retry and leaves no uncertain hold.
-- [`TestGitHubWorkCommentsForExecutorFeedback`](https://github.com/open-conduit/open-conduit/blob/main/integration/github_test.go) covers the marked comment, which posts exactly once and recovers by marker, and the reaction read.
 - [`TestDaemonClaudeCodeExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) runs against the composed daemon:
   - a fake claude drives the real `os mcp` (initialize, tools/list, read_context, wait) and parks
   - the wake resumes the same session
@@ -218,3 +206,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - At 03-03 the refusal was documented as `ErrNotAccepting`; it is now `extension.ErrNotAccepting`.
 - **07-01** made `Attach` implement the public `extension.AttachExecutor`.
 - `extension.Result.RetryHint` was a contract clarification made for this executor; the bounded failure budget it still uses dates from 02-04.
+- **#73** removed the handoff experiment (the draw, trials, the blinded feedback question and `handoff_share`); a cold turn now follows the binding's `cold_turns`.

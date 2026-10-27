@@ -23,7 +23,7 @@ func TestDryRunTurnIsAStub(t *testing.T) {
 		Environ: func() []string {
 			return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + h.root, "CLAUDE_CONFIG_DIR=" + h.config}
 		},
-		PollInterval: 20 * time.Millisecond, Draw: func() float64 { return 0.99 }})
+		PollInterval: 20 * time.Millisecond})
 	if err != nil {
 		t.Fatal(err)
 	}

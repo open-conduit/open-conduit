@@ -66,7 +66,7 @@ func TestConfigValidation(t *testing.T) {
 	e := newHarness(t).executor()
 	for _, bad := range []string{
 		`{"unknown":1}`, `{"permission_mode":"yolo"}`, `{"playbook":"../x"}`, `{"plugin_dir":"rel"}`,
-		`{"env":{"OS_TOKEN":"x"}}`, `{"pass_env":["OS_ENDPOINT"]}`, `{"handoff_share":2}`, `{"handoff_minutes":-1}`,
+		`{"env":{"OS_TOKEN":"x"}}`, `{"pass_env":["OS_ENDPOINT"]}`, `{"cold_turns":"draw"}`, `{"handoff_minutes":-1}`,
 		`{"extra_args":["--mcp-config","x"]}`, `{"extra_args":["--resume"]}`, `{} {}`,
 	} {
 		if err := e.ValidateConfig(json.RawMessage(bad), nil); !errors.Is(err, claudecode.ErrConfig) {
@@ -76,8 +76,12 @@ func TestConfigValidation(t *testing.T) {
 	if err := e.ValidateConfig(json.RawMessage(`{"secret_env":{"key":"ANTHROPIC_API_KEY"}}`), nil); err == nil {
 		t.Error("secret_env naming an unselected secret accepted")
 	}
-	if err := e.ValidateConfig(json.RawMessage(`{"secret_env":{"key":"ANTHROPIC_API_KEY"},"model":"sonnet","handoff_share":0}`), []string{"key"}); err != nil {
+	if err := e.ValidateConfig(json.RawMessage(`{"secret_env":{"key":"ANTHROPIC_API_KEY"},"model":"sonnet","cold_turns":"resume"}`), []string{"key"}); err != nil {
 		t.Errorf("valid config rejected: %v", err)
+	}
+	// The removed experiment's setting is still accepted for one release.
+	if err := e.ValidateConfig(json.RawMessage(`{"handoff_share":0.5}`), nil); err != nil {
+		t.Errorf("handoff_share rejected: %v", err)
 	}
 	if err := e.ValidateConfig(nil, nil); err != nil {
 		t.Errorf("an empty config takes every default: %v", err)
@@ -162,19 +166,17 @@ func TestTurnInvocationEnvironmentAndResult(t *testing.T) {
 	}
 }
 
-// TestResumedFreshAndHandoffExperiment follows Open Supervisor's
+// TestResumedFreshAndColdTurns follows Open Supervisor's
 // TestColdSessionHandsOffToAFreshOne through the executor: a warm turn
-// resumes outside the experiment with its own cumulative usage delta; a cold
-// turn drawn for the handoff starts a fresh session from the note, keeps the
-// old one and asks the blinded question; a cold turn drawn to resume resumes
-// and gets the same question; reactions become feedback telemetry; attaching
-// forces the next turn to resume; and each draw is a trial accounted to the
-// next draw or the finish.
-func TestResumedFreshAndHandoffExperiment(t *testing.T) {
+// resumes with its own cumulative usage delta; a cold turn starts a fresh
+// session from the note and keeps the old one (cold_turns: handoff, the
+// default); with cold_turns: resume a cold turn resumes; attaching forces the
+// next turn to resume; and terminal Work's continuity is released.
+func TestResumedFreshAndColdTurns(t *testing.T) {
 	h := newHarness(t)
 	h.mode("review")
 	e := h.executor()
-	cfg := map[string]any{"handoff_share": 1}
+	cfg := map[string]any{}
 	turn := func(n int) extension.Result {
 		t.Helper()
 		r, _ := h.request("work/8", "exec-8-"+strconv.Itoa(n), 1, cfg)
@@ -189,7 +191,7 @@ func TestResumedFreshAndHandoffExperiment(t *testing.T) {
 		t.Fatal("the handoff note wasn't kept")
 	}
 
-	// A warm session resumes, outside the experiment, measuring its own turn.
+	// A warm session resumes, measuring its own turn.
 	h.clock.Advance(10 * time.Minute)
 	warm := turn(2)
 	if inv := h.invocations(); !strings.Contains(inv[1], "session="+first+" resume=1") {
@@ -201,12 +203,8 @@ func TestResumedFreshAndHandoffExperiment(t *testing.T) {
 	if !strings.HasPrefix(h.prompts()[1], "/open-conduit:work-issue 12 events\n\n## Since your last turn") {
 		t.Fatalf("warm prompt %q", h.prompts()[1])
 	}
-	if len(h.reports.named("handoff_assigned")) != 0 {
-		t.Fatal("a warm turn was drawn")
-	}
 
-	// A cold one drawn for the handoff starts afresh from the note.
-	h.setDraw(0)
+	// A cold one starts afresh from the note.
 	cold()
 	turn(3)
 	fresh := session()
@@ -221,63 +219,19 @@ func TestResumedFreshAndHandoffExperiment(t *testing.T) {
 	if past := rec["past_sessions"].([]any); len(past) != 1 || past[0] != first {
 		t.Fatalf("earlier sessions %v", past)
 	}
-	assigned := h.reports.named("handoff_assigned")
-	if len(assigned) != 1 || assigned[0]["arm"] != claudecode.ArmHandoff || assigned[0]["session"] != fresh {
-		t.Fatalf("assignment telemetry %v", assigned)
-	}
 	turns := h.reports.named("agent_turn")
-	if last := turns[len(turns)-1]; last["handoff_arm"] != claudecode.ArmHandoff || last["handoff"] != true || last["session"] != fresh {
+	if last := turns[len(turns)-1]; last["handoff"] != true || last["session"] != fresh {
 		t.Fatalf("turn telemetry %v", last)
 	}
-	// The blinded question is asked by Maintain, once.
-	for i := 0; i < 2; i++ {
-		if _, err := e.Maintain(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	if len(h.feedback.bodies) != 1 || h.feedback.bodies[0] != claudecode.FeedbackText {
-		t.Fatalf("feedback asked %v", h.feedback.bodies)
-	}
-	// A 👎 is one feedback record, and the question is no longer watched.
-	h.feedback.react("comment-1", map[string]int{"-1": 1})
-	for i := 0; i < 2; i++ {
-		if _, err := e.Maintain(context.Background()); err != nil {
-			t.Fatal(err)
-		}
-	}
-	fb := h.reports.named("handoff_feedback")
-	if len(fb) != 1 || fb[0]["session"] != fresh || fb[0]["arm"] != claudecode.ArmHandoff || fb[0]["verdict"] != "worse" || fb[0]["comment"] != "comment-1" {
-		t.Fatalf("feedback telemetry %v", fb)
-	}
-	if f := h.store.record(t, "work/8")["feedback"]; f != nil {
-		t.Fatalf("still watching %v", f)
-	}
 
-	// A cold one drawn to resume resumes and gets the same question.
-	cfg["handoff_share"] = 0.5
-	h.setDraw(0.99)
+	// With cold_turns: resume, a cold one resumes.
+	cfg["cold_turns"] = "resume"
 	cold()
 	turn(4)
 	if session() != fresh || !strings.Contains(h.invocations()[3], "session="+fresh+" resume=1") {
-		t.Fatalf("a cold turn drawn to resume: %v", h.invocations())
+		t.Fatalf("a cold turn set to resume: %v", h.invocations())
 	}
-	trials := h.reports.named("handoff_trial")
-	if len(trials) != 1 || trials[0]["arm"] != claudecode.ArmHandoff || trials[0]["ended_by"] != "next_draw" || trials[0]["completed"] != false || trials[0]["turns"] != 1 || trials[0]["tool_calls"] != 2 {
-		t.Fatalf("the handoff trial ended by the next draw: %v", trials)
-	}
-	if _, err := e.Maintain(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if len(h.feedback.bodies) != 2 || h.feedback.bodies[1] != claudecode.FeedbackText {
-		t.Fatalf("the resume arm's question differs: %v", h.feedback.bodies)
-	}
-	h.feedback.react("comment-2", map[string]int{"+1": 1})
-	if _, err := e.Maintain(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if fb := h.reports.named("handoff_feedback"); len(fb) != 2 || fb[1]["arm"] != claudecode.ArmResume || fb[1]["verdict"] != "maintained" {
-		t.Fatalf("second feedback %v", fb)
-	}
+	delete(cfg, "cold_turns")
 
 	// Attach is the public optional executor surface; Work without a
 	// session has nothing to attach to.
@@ -295,26 +249,20 @@ func TestResumedFreshAndHandoffExperiment(t *testing.T) {
 	if !strings.Contains(h.invocations()[4], "session="+fresh+" resume=1") {
 		t.Fatalf("a turn after attaching didn't resume: %v", h.invocations())
 	}
-	if n := len(h.reports.named("handoff_assigned")); n != 2 {
-		t.Fatalf("%d draws for two cold turns and an attached one", n)
-	}
 
-	// The finish ends the open trial, accounted through to completion.
 	h.mode("finished")
 	res := turn(6)
 	if res.Outcome.Kind != domain.OutcomeCompleted || dataOf(t, res).Status != "finished" {
 		t.Fatalf("a finished turn %+v", res.Outcome)
 	}
-	trials = h.reports.named("handoff_trial")
-	if len(trials) != 2 {
-		t.Fatalf("trials %v", trials)
+	// Terminal Work's continuity is released.
+	if _, err := e.Maintain(context.Background()); err != nil {
+		t.Fatal(err)
 	}
-	if b := trials[1]; b["arm"] != claudecode.ArmResume || b["ended_by"] != "finished" || b["completed"] != true || b["turns"] != 3 || b["final_state"] != "finished" {
-		t.Fatalf("the resume trial: %v", b)
+	if rec := h.store.record(t, "work/8"); len(rec) == 0 {
+		t.Fatal("a live Work's continuity was released")
 	}
-	// Terminal Work's continuity is released once nothing is watched.
 	h.store.setWork(domain.Work{ID: "work/8", ScopeID: "eng", State: domain.WorkCompleted})
-	h.clock.Advance(8 * 24 * time.Hour)
 	if _, err := e.Maintain(context.Background()); err != nil {
 		t.Fatal(err)
 	}
@@ -323,36 +271,32 @@ func TestResumedFreshAndHandoffExperiment(t *testing.T) {
 	}
 }
 
-// TestArmAndTrialSurviveRestart covers continuity across restart: a draw is
-// recorded before launch, so an executor restarted while the drawn turn runs
-// adopts it and accounts it to the same arm; a decision whose launch never
-// finished is taken over by the next segment instead of drawing again; and a
-// trial and its feedback continue in a new executor instance.
-func TestArmAndTrialSurviveRestart(t *testing.T) {
+// TestColdDecisionSurvivesRestart covers continuity across restart: the
+// decision is recorded before launch, so an executor restarted while a cold
+// handoff turn runs adopts it; and a decision whose launch never finished is
+// taken over by the next segment instead of deciding again.
+func TestColdDecisionSurvivesRestart(t *testing.T) {
 	h := newHarness(t)
 	h.mode("review")
-	cfg := map[string]any{"handoff_share": 1}
 	first := h.executor()
-	r, _ := h.request("work/9", "exec-9-1", 1, cfg)
+	r, _ := h.request("work/9", "exec-9-1", 1, nil)
 	h.run(first, r)
+	original := h.store.record(t, "work/9")["session"].(string)
 
-	// The cold turn is drawn for the handoff and still runs when the daemon
-	// goes away.
-	h.setDraw(0)
+	// The cold turn hands off and still runs when the daemon goes away.
 	h.clock.Advance(2 * time.Hour)
 	h.mode("wait")
-	r2, saved := h.request("work/9", "exec-9-2", 1, cfg)
+	r2, saved := h.request("work/9", "exec-9-2", 1, nil)
 	if _, err := first.Run(context.Background(), r2); err != nil {
 		t.Fatal(err)
 	}
-	waitFor(t, "the drawn turn running", func() bool { _, err := os.Stat(filepath.Join(h.fake, "pid")); return err == nil })
-	drawn := h.store.record(t, "work/9")["trial"].(map[string]any)
-	if drawn["arm"] != claudecode.ArmHandoff {
-		t.Fatalf("draw not recorded before launch: %v", drawn)
+	waitFor(t, "the cold turn running", func() bool { _, err := os.Stat(filepath.Join(h.fake, "pid")); return err == nil })
+	pending := h.store.record(t, "work/9")["pending"].(map[string]any)
+	if pending["kind"] != "handoff" || pending["session"] == original {
+		t.Fatalf("decision not recorded before launch: %v", pending)
 	}
 
-	// A new instance adopts at a higher epoch; the arm is not drawn again.
-	h.setDraw(0.99)
+	// A new instance adopts at a higher epoch.
 	second := h.executor()
 	r2.Execution.Lease.Epoch = 2
 	r2.Context.ToolbeltToken = "tok-2"
@@ -368,71 +312,51 @@ func TestArmAndTrialSurviveRestart(t *testing.T) {
 		t.Fatalf("adopted outcome %+v", res.Outcome)
 	}
 	rec := h.store.record(t, "work/9")
-	trial := rec["trial"].(map[string]any)
-	if trial["id"] != drawn["id"] || trial["arm"] != claudecode.ArmHandoff || trial["turns"] != float64(1) || rec["pending"] != nil {
-		t.Fatalf("trial after adoption %v", rec)
-	}
-	if len(rec["feedback"].([]any)) != 1 {
-		t.Fatalf("feedback after adoption %v", rec["feedback"])
+	if rec["session"] != pending["session"] || rec["turns"] != float64(2) || rec["pending"] != nil {
+		t.Fatalf("continuity after adoption %v", rec)
 	}
 
 	// A decision whose launch never finished (a crash after recording it) is
-	// reused: same session and arm, no new draw.
+	// reused: the same session resumes though the turn is cold.
 	os.Remove(filepath.Join(h.fake, "release"))
 	os.Remove(filepath.Join(h.fake, "pid"))
 	h.mode("review")
 	h.store.edit(t, "work/9", func(m map[string]any) {
-		m["pending"] = map[string]any{"execution": "exec-9-crashed", "segment": "x", "session": rec["session"], "kind": "events", "arm": claudecode.ArmResume, "started_at": h.clock.Now()}
+		m["pending"] = map[string]any{"execution": "exec-9-crashed", "segment": "x", "session": rec["session"], "kind": "events", "started_at": h.clock.Now()}
 	})
 	h.clock.Advance(2 * time.Hour)
 	third := h.executor()
-	r3, _ := h.request("work/9", "exec-9-3", 1, cfg)
+	r3, _ := h.request("work/9", "exec-9-3", 1, nil)
 	h.run(third, r3)
-	if n := len(h.reports.named("handoff_assigned")); n != 1 {
-		t.Fatalf("a taken-over decision was drawn again (%d draws)", n)
-	}
 	if inv := h.invocations(); !strings.Contains(inv[len(inv)-1], "session="+rec["session"].(string)+" resume=1") {
 		t.Fatalf("taken-over decision did not resume its session: %v", inv)
 	}
-
-	// The question is asked and answered from yet another instance.
-	fourth := h.executor()
-	if _, err := fourth.Maintain(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	h.feedback.react("comment-1", map[string]int{"+1": 2, "-1": 1})
-	if _, err := h.executor().Maintain(context.Background()); err != nil {
-		t.Fatal(err)
-	}
-	if fb := h.reports.named("handoff_feedback"); len(fb) != 1 || fb[0]["verdict"] != "mixed" || fb[0]["arm"] != claudecode.ArmHandoff {
-		t.Fatalf("feedback across restart %v", fb)
-	}
 }
 
-// TestDroppedWorkEndsItsTrial: a Work that ends without finishing (cancelled
-// by the operator) ends its open trial as dropped, with its last state.
-func TestDroppedWorkEndsItsTrial(t *testing.T) {
+// TestExperimentRecordsAreIgnored: continuity written while the handoff
+// experiment ran (a trial, feedback questions, a drawn arm) still loads, and
+// a Work that ends releases it.
+func TestExperimentRecordsAreIgnored(t *testing.T) {
 	h := newHarness(t)
 	h.mode("review")
 	e := h.executor()
 	r, _ := h.request("work/d", "exec-d-1", 1, nil)
 	h.run(e, r)
 	h.store.edit(t, "work/d", func(m map[string]any) {
-		m["trial"] = map[string]any{"id": "work/d-2", "arm": claudecode.ArmResume, "started_at": h.clock.Now(), "turns": 1}
+		m["trial"] = map[string]any{"id": "work/d-2", "arm": "resume", "started_at": h.clock.Now(), "turns": 1}
+		m["feedback"] = []any{map[string]any{"intent": "claude-code/handoff-feedback/x/y", "arm": "resume", "state": "watching", "ref": "comment-1"}}
 	})
-	if _, err := e.Maintain(context.Background()); err != nil {
-		t.Fatal(err)
+	h.clock.Advance(10 * time.Minute)
+	r2, _ := h.request("work/d", "exec-d-2", 1, nil)
+	if res := h.run(e, r2); res.Outcome.Kind != domain.OutcomeHandoff {
+		t.Fatalf("a turn on an experiment record: %+v", res.Outcome)
 	}
-	if n := len(h.reports.named("handoff_trial")); n != 0 {
-		t.Fatalf("a live Work's trial ended (%d)", n)
+	if inv := h.invocations(); !strings.Contains(inv[1], "resume=1") {
+		t.Fatalf("the warm turn didn't resume: %v", inv)
 	}
 	h.store.setWork(domain.Work{ID: "work/d", ScopeID: "eng", State: domain.WorkCancelled})
 	if _, err := e.Maintain(context.Background()); err != nil {
 		t.Fatal(err)
-	}
-	trials := h.reports.named("handoff_trial")
-	if len(trials) != 1 || trials[0]["ended_by"] != "dropped" || trials[0]["completed"] != false || trials[0]["final_state"] != "review" || trials[0]["arm"] != claudecode.ArmResume {
-		t.Fatalf("the dropped trial %v", trials)
 	}
 	if rec := h.store.record(t, "work/d"); len(rec) != 0 {
 		t.Fatalf("continuity outlived its cancelled Work: %v", rec)

@@ -49,8 +49,13 @@ type Config struct {
 	// HandoffMinutes is how long after a turn the session counts as cold
 	// (default 55, Open Supervisor's prompt-cache horizon).
 	HandoffMinutes *int `json:"handoff_minutes,omitempty"`
-	// HandoffShare is the share of cold turns the experiment hands to a fresh
-	// session (default 0.5; 0 turns the experiment off).
+	// ColdTurns is what a cold turn does: "handoff" starts a fresh session
+	// from the last turn's handoff note, "resume" resumes the session
+	// (default "handoff").
+	ColdTurns string `json:"cold_turns,omitempty"`
+	// HandoffShare is the removed handoff experiment's setting. It is
+	// accepted and ignored for one release (config check warns about it),
+	// then rejected.
 	HandoffShare *float64 `json:"handoff_share,omitempty"`
 	// Env adds explicit non-secret variables after the sanitized baseline.
 	Env map[string]string `json:"env,omitempty"`
@@ -74,6 +79,12 @@ var (
 )
 
 var permissionModes = []string{"bypassPermissions", "acceptEdits", "auto", "default", "plan", "dontAsk"}
+
+// What a cold turn does (Config.ColdTurns).
+const (
+	ColdHandoff = "handoff"
+	ColdResume  = "resume"
+)
 
 func configError(msg string) error { return fmt.Errorf("%w: %s", ErrConfig, msg) }
 
@@ -143,12 +154,12 @@ func ParseConfig(data []byte) (Config, error) {
 	if *c.HandoffMinutes < 0 || *c.HandoffMinutes > 7*24*60 {
 		return Config{}, configError("handoff_minutes must be between 0 and 10080")
 	}
-	if c.HandoffShare == nil {
-		share := 0.5
-		c.HandoffShare = &share
-	}
-	if !(*c.HandoffShare >= 0 && *c.HandoffShare <= 1) {
-		return Config{}, configError("handoff_share must be between 0 and 1")
+	switch c.ColdTurns {
+	case "":
+		c.ColdTurns = ColdHandoff
+	case ColdHandoff, ColdResume:
+	default:
+		return Config{}, configError("cold_turns must be handoff or resume")
 	}
 	for name, value := range c.Env {
 		if !envName.MatchString(name) || reserved(name) || strings.ContainsRune(value, 0) {
