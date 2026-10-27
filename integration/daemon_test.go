@@ -659,7 +659,7 @@ func TestDaemonGracefulRestart(t *testing.T) {
 
 // TestDaemonConfigReload applies a new generation to the running daemon: the
 // parked attempt keeps generation 1, the wake runs under generation 2, and a
-// restart restores the committed generation.
+// restart restores the committed generation and warns about an unapplied edit.
 func TestDaemonConfigReload(t *testing.T) {
 	if testing.Short() {
 		t.Skip("process drills")
@@ -696,11 +696,20 @@ func TestDaemonConfigReload(t *testing.T) {
 	if gens[1] != "1" || gens[2] != "2" {
 		t.Fatalf("generation pinning: %v", gens)
 	}
+	// An edit saved to the file while stopped is not applied by the restart,
+	// and the daemon says so at startup.
 	d.kill()
+	if err = os.WriteFile(d.config, drillConfig(d.root, map[string]any{"retry_delays_seconds": []int{1, 1}, "kept_executions": 6}), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	d.start("")
 	if h, err := d.c.Health(ctx); err != nil || h.ConfigGeneration != "2" {
 		t.Fatalf("restart generation: %+v %v", h, err)
 	}
+	d.until("pending edit warning", 5*time.Second, func() bool {
+		b, _ := os.ReadFile(d.log.Name())
+		return bytes.Contains(b, []byte("config file differs from the active generation")) && bytes.Contains(b, []byte("config apply "+d.config+" --generation 2"))
+	})
 }
 
 // TestServeCommandResolution checks B05 path precedence for `serve` and that

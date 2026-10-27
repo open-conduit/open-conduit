@@ -32,7 +32,7 @@ open-conduit config edit                             # a full-screen editor
 open-conduit config check                            # validate offline
 ```
 
-`get`, `set` and `unset` take a JSON pointer and validate before saving. A running daemon picks up a changed file only when you restart it or run `config apply FILE --generation N`.
+`get`, `set` and `unset` take a JSON pointer and validate before saving. A running daemon picks up a changed file only when you run `config apply FILE --generation N`. Restarting does not apply it: the daemon resumes its active stored generation and logs a warning at startup when the file differs.
 
 ## Secrets
 
