@@ -22,6 +22,7 @@ settings:
   checksDebounceSeconds: 20
   noChecksMinutes: 15
   handoffMinutes: 40
+  handoffShare: 0
   host:
     minutes: 5
     disk: 80

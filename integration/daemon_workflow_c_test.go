@@ -63,7 +63,7 @@ printf '{"slot":"x","outcome":"done","finishedAt":"2026-10-21T05:30:00Z","sha":"
 				legacy("report-cmd", `echo "$OPEN_SUPERVISOR_JOB_TRIGGER" >> "$DIR/report"`, nil),
 				fresh, refresh,
 				map[string]any{"name": "agent", "executor": "claude-code", "requires": map[string]any{"toolbelt": "mcp"}, "operations": ops, "secret_names": []any{},
-					"config": map[string]any{"binary": claude, "status_schema": "github.status.v1", "handoff_share": 0,
+					"config": map[string]any{"binary": claude, "status_schema": "github.status.v1", "cold_turns": "resume",
 						"env": map[string]string{"FAKE_DIR": root, "CLAUDE_CONFIG_DIR": filepath.Join(root, "claude-config")}}},
 			},
 			"routes": []any{

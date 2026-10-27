@@ -78,7 +78,7 @@ func supportDaemonConfig(apiURL, root, binary string) []byte {
 			"bindings": []any{map[string]any{"name": "support", "executor": "claude-code", "connection": "slack",
 				"requires":   map[string]any{"toolbelt": "mcp", "inject": true, "resume": true, "workspace": false},
 				"operations": ops, "secret_names": []any{},
-				"config": map[string]any{"binary": binary, "playbook": "support-conversation", "args": "{key}", "handoff_share": 0,
+				"config": map[string]any{"binary": binary, "playbook": "support-conversation", "args": "{key}", "cold_turns": "resume",
 					"env": map[string]string{"FAKE_DIR": root, "CLAUDE_CONFIG_DIR": filepath.Join(root, "claude-config")}}}},
 			"routes": []any{map[string]any{"name": "conversations", "handler": "slack", "binding": "support", "active_policy": "inject", "config": map[string]any{}}},
 			"extensions": []any{map[string]any{"name": "support", "type": "slack", "connection": "slack", "secret_names": []any{},

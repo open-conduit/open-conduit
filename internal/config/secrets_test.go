@@ -244,3 +244,13 @@ func TestUnenforcedWarnings(t *testing.T) {
 		t.Fatalf("config without admission_limit warned: %q", got)
 	}
 }
+
+// TestRemovedWarnings: config check warns about a binding that still sets the
+// removed handoff experiment's handoff_share.
+func TestRemovedWarnings(t *testing.T) {
+	cfg := `{"scopes": [{"id": "eng", "bindings": [{"name": "agent", "config": {"handoff_share": 0}}, {"name": "other", "config": {"cold_turns": "resume"}}]}]}`
+	got := Warnings([]byte(cfg))
+	if len(got) != 1 || !strings.HasPrefix(got[0], "scope eng binding agent config.handoff_share is ignored") {
+		t.Fatalf("%q", got)
+	}
+}

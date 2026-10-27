@@ -125,6 +125,7 @@ type converter struct {
 	scopeIDs    map[string]bool
 	posthog     []string
 	introNoted  bool
+	shareNoted  bool
 }
 
 func (c *converter) note(level, path, target, format string, args ...any) {
@@ -419,8 +420,15 @@ func (c *converter) agentConfig(p *v1Project, where string) obj {
 	if h := c.v1.Settings.HandoffMinutes; h != nil && *h != 55 {
 		cfg["handoff_minutes"] = *h
 	}
-	if h := c.v1.Settings.HandoffShare; h != nil && *h != 0.5 {
-		cfg["handoff_share"] = *h
+	// The handoff experiment is gone: a share of 0 kept every cold turn on
+	// its session, any other share now hands every cold turn off.
+	switch h := c.v1.Settings.HandoffShare; {
+	case h == nil || *h == 1:
+	case *h == 0:
+		cfg["cold_turns"] = "resume"
+	case !c.shareNoted:
+		c.shareNoted = true
+		c.note(Changed, "settings.handoffShare", "", "the handoff experiment was removed: every cold turn hands off to a fresh session (cold_turns: handoff)")
 	}
 	return cfg
 }

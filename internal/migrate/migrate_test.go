@@ -120,7 +120,7 @@ func TestConvertFixture(t *testing.T) {
 	web := scope(d, "web")
 	agent := find(web["bindings"], "name", "agent")
 	cfg := agent["config"].(map[string]any)
-	if cfg["branch"] != "claude/issue-{number}" || cfg["model"] != "sonnet" || cfg["binary"] != "/home/op/bin/claude" || cfg["handoff_minutes"] != 40.0 {
+	if cfg["branch"] != "claude/issue-{number}" || cfg["model"] != "sonnet" || cfg["binary"] != "/home/op/bin/claude" || cfg["handoff_minutes"] != 40.0 || cfg["cold_turns"] != "resume" {
 		t.Fatalf("agent config: %v", cfg)
 	}
 	if cfg["env"].(map[string]any)["API_URL"] != "https://api.example.test" || cfg["secret_env"].(map[string]any)["env-post_token"] != "POST_TOKEN" {

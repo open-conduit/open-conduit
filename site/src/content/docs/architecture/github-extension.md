@@ -168,7 +168,6 @@ The [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob
   - `github.agent.turn` from durable outcomes;
   - the `github-hold` route and executor, with the `scheduled` label managed while held or waiting;
   - `github.checks.none` and `github.checks.missing`.
-- **Claude Code continuity.** `WorkComments` posts a Work's marked comment exactly once per intent (`Deliver` plus `IntentComment`) and reads its reactions. The [Claude Code executor](../claude-code-executor/)'s handoff feedback uses it through bootstrap.
 
 ## History
 
@@ -177,7 +176,7 @@ These notes record how this part was built and the evidence gathered at each sta
 :::
 
 - **03-01** delivered the extension: configuration, client and transport, ingress and canonical identity, route policy, projections and marked comments, with the fixture and integration evidence listed under Verification. No real GitHub API was called; all evidence used fixtures, and real issues, real rate limits and real webhooks were left to the 03-06/03-07 gate.
-- **03-03** added `WorkComments` for the Claude Code executor's handoff feedback.
+- **03-03** added `WorkComments` for the Claude Code executor's handoff feedback. It was removed with the handoff experiment (#73).
 - **03-04** added `base_branch`, `no_checks_minutes` and `github.checks.none`, the agent-facing tools, translated waits, `github.agent.turn` and the `github-hold` route.
 - **03-05** delivered the webhook listener, tunnels, managed hooks, dry run, the manual claim, `Client.Verify` and `Annotate`. Until then the daemon ran reconcile-only.
 - **03-06** added the Actions workflow-run fallback for check runs after a fine-grained token failed every reconcile on the real sandbox once a PR existed.
