@@ -29,10 +29,10 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/executors/shell"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	bb "github.com/open-conduit/open-conduit/extensions/bitbucket"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
-	hu "github.com/open-conduit/open-conduit/extensions/human"
 	is "github.com/open-conduit/open-conduit/extensions/introspection"
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
@@ -131,6 +131,7 @@ type daemon struct {
 	artifacts      *artifacts.Store
 	shell          *shell.Executor
 	executors      map[string]extension.Executor
+	inproc         []inproc.Extension
 	configs        *management.ConfigService
 	resolver       *config.Resolver
 	pipeline       *telemetry.Pipeline
@@ -138,7 +139,6 @@ type daemon struct {
 	github         githubSources
 	slack          slackSources
 	trackers       trackerSources
-	posthog        posthogState
 	schedule       scheduleState
 	introspection  introspectionState
 	resources      resourceState
@@ -147,8 +147,6 @@ type daemon struct {
 	tools          *gh.Tools
 	slackTools     *sl.Tools
 	reports        *is.Tools
-	humanTools     *hu.Tools
-	human          humanState
 	trackerTools   map[string]*tracker.Tools
 	bitbucketTools *bb.Tools
 	external       externalState
@@ -235,7 +233,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = o.defaults(); err != nil {
 		return err
 	}
-	d := &daemon{o: o, log: slog.New(slog.NewTextHandler(o.Log, nil)), now: time.Now, inflight: map[attemptKey]domain.LeaseRef{}, reported: map[string]string{}, nudge: make(chan struct{}, 1), resolver: &config.Resolver{SecretsFile: filepath.Join(filepath.Dir(o.ConfigPath), "secrets.json")}}
+	d := &daemon{o: o, log: slog.New(slog.NewTextHandler(o.Log, nil)), now: time.Now, inproc: firstParty(), inflight: map[attemptKey]domain.LeaseRef{}, reported: map[string]string{}, nudge: make(chan struct{}, 1), resolver: &config.Resolver{SecretsFile: filepath.Join(filepath.Dir(o.ConfigPath), "secrets.json")}}
 	suffix := make([]byte, 4)
 	if _, err = rand.Read(suffix); err != nil {
 		return err
@@ -275,7 +273,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.closeIntrospectionTelemetry()
-	d.pipeline, err = telemetry.New(telemetry.Options{Exporters: []observability.Exporter{telemetry.NewLogExporter(logFile), otel, introspectionTelemetry, d.posthogExporter(), extensionExporter{d}}, FlushInterval: 200 * time.Millisecond, Diagnostic: func(x telemetry.Diagnostic) {
+	d.pipeline, err = telemetry.New(telemetry.Options{Exporters: append(append([]observability.Exporter{telemetry.NewLogExporter(logFile), otel, introspectionTelemetry}, d.inprocExporters()...), extensionExporter{d}), FlushInterval: 200 * time.Millisecond, Diagnostic: func(x telemetry.Diagnostic) {
 		d.log.Warn("telemetry export degraded", "exporter", x.Exporter, "code", x.Code, "records", x.Records)
 	}})
 	if err != nil {
@@ -320,6 +318,10 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor, gh.HoldExecutor: gh.NewHoldExecutor(), sc.LegacyExecutorName: legacy}
+	if err = d.startInproc(ctx); err != nil {
+		return err
+	}
+	defer d.stopInproc()
 	if err = d.openTools(); err != nil {
 		return err
 	}
@@ -335,7 +337,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
-	d.posthog.configs.Store(d.configs)
 	if d.ingress, err = runtime.NewIngress(d.coord, d.now, runtime.IngressOptions{}); err != nil {
 		return err
 	}
@@ -445,6 +446,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	}
 	var err error
 	routeHandlers := handlers()
+	inprocHandlers(routeHandlers, d.inproc)
 	d.extensionHandlers(routeHandlers)
 	if c.router, err = runtime.NewRouter(d.coord, d.now, runtime.RouterOptions{Generation: c.generation, Handlers: routeHandlers, Bindings: bindings, CausalLimits: limits}); err != nil {
 		return nil, err
@@ -463,6 +465,9 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return nil, err
 	}
 	if err = d.registerTools(belt, s); err != nil {
+		return nil, err
+	}
+	if err = d.registerInprocTools(belt); err != nil {
 		return nil, err
 	}
 	if err = d.registerExtensionTools(belt); err != nil {
@@ -508,8 +513,8 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: []func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck, d.posthogCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.capacityCheck, d.scheduleCheck, d.introspectionCheck, d.extensionCheck},
-		DeepChecks: []func(context.Context) runtime.Check{d.githubAuthCheck, d.trackerAuthCheck, d.posthogAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck, d.extensionDeepCheck}, Annotate: d.annotate, Actions: d.actions, Attach: d.attach, Live: d.live, Nudge: d.poke}); err != nil {
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: append(append([]func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck}, d.inprocChecks(false)...), d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.capacityCheck, d.scheduleCheck, d.introspectionCheck, d.extensionCheck),
+		DeepChecks: append(append([]func(context.Context) runtime.Check{d.githubAuthCheck, d.trackerAuthCheck}, d.inprocChecks(true)...), d.slackAuthCheck, d.scheduleWebhookCheck, d.extensionDeepCheck), Annotate: d.annotate, Actions: d.actions, Attach: d.attach, Live: d.live, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
 	return c, nil

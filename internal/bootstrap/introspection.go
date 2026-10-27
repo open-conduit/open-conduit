@@ -16,7 +16,6 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	is "github.com/open-conduit/open-conduit/extensions/introspection"
 	"github.com/open-conduit/open-conduit/extensions/introspection/host"
-	"github.com/open-conduit/open-conduit/extensions/posthog"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
@@ -331,10 +330,10 @@ func (d *daemon) openIntrospectionTelemetry() (*is.Exporter, error) {
 	if err != nil {
 		return nil, err
 	}
-	// The events log is the primary sink; enabled PostHog entries that take
-	// introspection telemetry receive the same events (06-01).
+	// The events log is the primary sink; extensions that take telemetry
+	// events (PostHog entries, 06-01) receive the same events.
 	d.introspection.file = f
-	d.introspection.sink = &posthog.Fanout{Primary: is.NewJSONSink(f), Targets: d.posthogTargets, Diagnostic: func(code string) { d.report("posthog", "", code) }}
+	d.introspection.sink = telemetryFanout{primary: is.NewJSONSink(f), sinks: d.inprocSinks()}
 	return &is.Exporter{Sink: d.introspection.sink, Enabled: d.introspectionTelemetry}, nil
 }
 

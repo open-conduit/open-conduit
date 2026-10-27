@@ -46,6 +46,11 @@ func TestDependencyClosures(t *testing.T) {
 		{"runtime_cannot_import_introspection", []pkg{project("internal/runtime", "extensions/introspection")}, "extensions/introspection"},
 		{"management_cannot_import_introspection", []pkg{project("internal/management", "extensions/introspection")}, "extensions/introspection"},
 		{"introspection_cannot_reach_github", []pkg{project("extensions/introspection", "extensions/github")}, "extensions/github"},
+		// The in-process extension contract (issue #66) is public: an
+		// extension implements it with public contracts only, and it
+		// reaches no runtime.
+		{"extensions_implement_inproc", []pkg{project("extensions/human", "extension/inproc"), project("extension/inproc", "domain", "extension", "storage", "observability", "protocol")}, ""},
+		{"inproc_cannot_reach_runtime", []pkg{project("extension/inproc", "internal/runtime")}, "internal/runtime"},
 		// The shared tracker kit (06-01) is public-only; only the tracker
 		// extensions may use it, and it reaches no other extension.
 		{"trackers_use_kit", []pkg{project("extensions/linear", "extensions/tracker", "domain"), project("extensions/jira", "extensions/tracker"), project("extensions/bitbucket", "extensions/tracker"), project("extensions/tracker", "domain", "extension", "storage")}, ""},
