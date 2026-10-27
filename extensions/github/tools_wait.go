@@ -27,15 +27,6 @@ import (
 // agent's comment wakes it through peerComments instead.
 var waitInputTypes = []string{TypeDependencyMet, TypeCommentHuman, TypeIssueClosed, TypePullMerged, TypePullClosed, TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing}
 
-// TurnPayload is a TypeAgentTurn event: an agent on an issue ended a turn.
-type TurnPayload struct {
-	Repo      string `json:"repo"`
-	Number    int    `json:"number"`
-	State     string `json:"state"`
-	Work      string `json:"work"`
-	Execution string `json:"execution"`
-}
-
 // dependencyFilter is the opaque filter of a translated dependency.
 type dependencyFilter struct {
 	Kind   string `json:"kind"` // pr, pr_comment, pr_push, issue, turn or peer
@@ -97,8 +88,10 @@ func DependencyFilter(filter domain.Payload, e domain.Event) bool {
 		var p IssuePayload
 		return e.Data.Schema == SchemaIssue && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo)
 	case "turn":
-		var p TurnPayload
-		return e.Data.Schema == SchemaTurn && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && p.State == f.State && strings.EqualFold(p.Repo, f.Repo)
+		// The host's turn-ended Event on the issue's key (the dependency's
+		// source key) names the state.
+		var p domain.TurnEnded
+		return e.Type == domain.TypeTurnEnded && e.Data.Schema == domain.SchemaTurnEnded && json.Unmarshal(e.Data.Data, &p) == nil && p.Status == f.State
 	case "peer":
 		var p CommentPayload
 		return e.Data.Schema == SchemaComment && json.Unmarshal(e.Data.Data, &p) == nil && f.peer(p)
@@ -296,7 +289,7 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 			r.dep.Filter = filterPayload(dependencyFilter{Kind: "issue", Repo: repo, Number: c.Number()})
 		} else {
 			// The next turn ending in that state, not an earlier one (v1).
-			r.dep.Types, r.dep.FromNow = []string{TypeAgentTurn}, true
+			r.dep.Types, r.dep.FromNow = []string{domain.TypeTurnEnded}, true
 			r.dep.Filter = filterPayload(dependencyFilter{Kind: "turn", Repo: repo, Number: c.Number(), State: c.On})
 		}
 	}

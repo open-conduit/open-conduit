@@ -223,7 +223,10 @@ func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, resul
 			return err
 		}
 	}
-	return putJSON(tx, retryNamespace, identity(string(w.ID)), state)
+	if err = putJSON(tx, retryNamespace, identity(string(w.ID)), state); err != nil {
+		return err
+	}
+	return s.turnEndedInTx(tx, x, now)
 }
 
 // ProcessRetry consumes an accepted trusted retry Event. Timer dispatch must

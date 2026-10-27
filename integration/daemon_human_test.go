@@ -19,7 +19,7 @@ import (
 // next, keeping what it was resumed with.
 func humanDaemonConfig(apiURL, root string) []byte {
 	script := `if [ -f ` + root + `/asked ]; then cp "$OS_INPUT_FILE" ` + root + `/resumed.json && ` +
-		`os outcome completed --summary decided --schema github.status.v1 --data '{"status":"done"}' --request-id done >/dev/null; ` +
+		`os outcome completed --summary decided --schema core.turn.v1 --data '{"status":"done"}' --request-id done >/dev/null; ` +
 		`else touch ` + root + `/asked && os call human.ask --data '{"question":"Private: ship the migration tonight?","options":["yes","no"]}' --request-id ask >/dev/null; fi`
 	ops := []string{"read_context", "declare_outcome", "human.ask"}
 	cfg := map[string]any{

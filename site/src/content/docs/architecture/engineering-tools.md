@@ -70,7 +70,7 @@ Dry-run is handled per entry by `projection.dry_run`: writes report `dry_run` an
 | `pr:N:commented` | the PR's correlation | `github.comment.human`, `github.comment.agent` | `{kind: pr_comment, …, work}`: a new (not edited) PR conversation comment, review or review comment, not marked as the waiting Work's own | from now |
 | `pr:N:pushed` | the PR's correlation | `github.pull_request.open` | `{kind: pr_push, …, head}`: a head SHA other than the one read at registration; refused on a closed PR | from now |
 | `issue:N:closed` | `issue/N` at its current generation | `github.issue.closed` | `{kind: issue, …}` | all |
-| `issue:N:<state>` | `issue/N` | `github.agent.turn` | `{kind: turn, …, state}` | from now |
+| `issue:N:<state>` | `issue/N` | `core.execution.turn` | `{kind: turn, …, state}`: the Event's `status` | from now |
 | `until` | (none) | (none) | (none) | core timeout timer |
 
 Behaviour:
@@ -85,7 +85,7 @@ Behaviour:
 - **Unmeetable holds.** A hold condition nothing here can meet (an unknown job or project) leaves only the hold's time; with no time the issue starts at once and its first turn says why, rather than being held for ever.
 - **Ending the turn.** `github.wait` releases authority, so it is the turn's last call. Not waiting is the cancel.
 
-`issue:N:<state>` needs an Event: the projector derives `github.agent.turn` (`{repo, number, state}`) from each finished attempt whose outcome declares a `github.status.v1` status. Bootstrap accepts it as a trusted derived Event of that attempt's trigger, with delivery `turn/<execution>`, so a crash only repeats a deduplicated delivery. The `github` route never delivers it.
+`issue:N:<state>` waits on the host's turn-ended Event (`core.execution.turn`, [execution scheduling](../execution-scheduling/)), which every turn declaring `core.turn.v1` publishes on its Work's keys, whatever source the Work came from. The issue's key selects the issue and the filter the state. The `github` route never delivers it. A wait registered on the `github.agent.turn` Event of earlier releases is not met by the new Event: give it an `until`, or wait again after upgrading.
 
 The renderer (`RenderEvent`, wired as the Claude Code `Options.Render`) uses this wording: `You were waiting for PR #50 to merge. That has happened: PR #50 was merged.` A timeout reads that the latest time has come. Comments carry their reply call (for example `call github.pr.reply {"number": 4, "comment_id": 77, …}`).
 

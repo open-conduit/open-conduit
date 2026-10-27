@@ -97,7 +97,7 @@ func (g GitHubScope) ScopeConfig() map[string]any {
 	requires := obj("toolbelt", "mcp", "inject", true, "resume", true, "workspace", g.Checkout != "")
 	agent := obj("name", "agent", "executor", "claude-code", "connection", g.Connection, "requires", requires,
 		"operations", ops, "secret_names", []string{},
-		"config", obj("status_schema", "github.status.v1", "branch", "agent/issue-{number}"))
+		"config", obj("branch", "agent/issue-{number}"))
 	if g.Checkout != "" {
 		agent["resource"] = obj("provider", "git", "config", obj("checkout", g.Checkout, "mode", "work"))
 	}

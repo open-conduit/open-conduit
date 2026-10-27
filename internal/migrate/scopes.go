@@ -364,7 +364,6 @@ func (c *converter) githubScope(b *scopeBuilder, p *v1Project, repoB *v1Binding,
 	if intro {
 		ops = append(ops, is.OpReport)
 	}
-	agent["status_schema"] = "github.status.v1"
 	agent["branch"] = c.branch(p, "github")
 	b.conn(conn)
 	b.binding(obj{"name": "agent", "executor": "claude-code", "connection": conn,
@@ -478,7 +477,6 @@ func (c *converter) trackerScope(b *scopeBuilder, p *v1Project, typ string, trac
 	if intro {
 		ops = append(ops, is.OpReport)
 	}
-	agent["status_schema"] = tracker.StatusSchema(typ)
 	agent["playbook"] = tracker.Playbook
 	agent["args"] = "{key}"
 	agent["branch"] = c.branch(p, typ)

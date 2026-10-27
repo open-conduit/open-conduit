@@ -102,11 +102,11 @@ Labels influence only this claim decision. Work lifecycle never reads them.
 
 - `claimed` is present while Work owns the issue. It comes off once completed Work's issue is closed: admission never claims a closed issue, and a reopening starts a new generation, which is claimed again. Failed and cancelled Work keep it.
 - No status label is set while an attempt runs.
-- After an attempt, the status comes from an outcome declaring `github.status.v1` `{status}`. Otherwise completed Work projects `done`, failed Work projects `help` and cancelled Work projects none.
+- After an attempt, the status comes from an outcome declaring `core.turn.v1` `{status}` (or, for one release, the `github.status.v1` stored outcomes keep). Otherwise completed Work projects `done`, failed Work projects `help` and cancelled Work projects none.
 
 The projector re-reads the issue and changes only managed labels. It reapplies them when desired state changes, and at `verify_seconds` for nonterminal Work, which repairs drift. Completed Work whose issue is still open is also re-read at `verify_seconds` until the issue closes.
 
-**Comments** are not re-derivable. An outcome's `github.status.v1` `{comment}` becomes an intent with the stable ID `outcome/<execution id>` and a durable KV record. The record moves through these states:
+**Comments** are not re-derivable. An outcome's `core.turn.v1` `{comment}` becomes an intent with the stable ID `outcome/<execution id>` and a durable KV record. The record moves through these states:
 
 1. `pending`
 2. `attempted`, recorded before the POST
@@ -165,7 +165,7 @@ The [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob
 - **Holds, waits and tools.** [Engineering tools, waits and playbooks](../engineering-tools/) covers:
   - the agent-facing operations, posting through `Projector.Deliver` durable intents (re-driven by `Converge`) and `CreateIssue`;
   - translated waits with dependency filters;
-  - `github.agent.turn` from durable outcomes;
+  - `issue:N:<state>` waits on the host's `core.execution.turn` Event;
   - the `github-hold` route and executor, with the `scheduled` label managed while held or waiting;
   - `github.checks.none` and `github.checks.missing`.
 

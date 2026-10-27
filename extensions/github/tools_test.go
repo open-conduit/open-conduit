@@ -84,7 +84,12 @@ func TestDependencyFilterSelectsTheNamedItem(t *testing.T) {
 		t.Fatal("another PR on the same key accepted")
 	}
 	turn := filter(map[string]any{"kind": "turn", "repo": repo, "number": 21, "state": "review"})
-	if !gh.DependencyFilter(turn, ev(gh.SchemaTurn, gh.TurnPayload{Repo: repo, Number: 21, State: "review"})) || gh.DependencyFilter(turn, ev(gh.SchemaTurn, gh.TurnPayload{Repo: repo, Number: 21, State: "building"})) {
+	ended := func(status string) domain.Event {
+		e := ev(domain.SchemaTurnEnded, domain.TurnEnded{Status: status, Work: "work/21", Execution: "x/1"})
+		e.Type = domain.TypeTurnEnded
+		return e
+	}
+	if !gh.DependencyFilter(turn, ended("review")) || gh.DependencyFilter(turn, ended("building")) {
 		t.Fatal("turn state filter")
 	}
 	peer := filter(map[string]any{"kind": "peer", "number": 5, "work": "work/1"})
@@ -162,7 +167,7 @@ func TestRouteHoldsAndToolInputs(t *testing.T) {
 	if match(t, scope, released, work).Match {
 		t.Fatal("another Work's release accepted")
 	}
-	for typ, want := range map[string]bool{gh.TypeChecksNone: true, gh.TypeChecksMissing: true, gh.TypeChecksPending: false, gh.TypeAgentTurn: false, gh.TypeDependencyMet: false} {
+	for typ, want := range map[string]bool{gh.TypeChecksNone: true, gh.TypeChecksMissing: true, gh.TypeChecksPending: false, domain.TypeTurnEnded: false, gh.TypeDependencyMet: false} {
 		if got := match(t, scope, event(typ, "issue/3", "", struct{}{}), work).Match; got != want {
 			t.Fatalf("%s: match=%v want %v", typ, got, want)
 		}

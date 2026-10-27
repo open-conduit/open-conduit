@@ -33,7 +33,8 @@ import (
 const (
 	// RecoverySchema identifies the opaque metadata persisted before launch.
 	RecoverySchema = "open-conduit.claudecode.recovery.v1"
-	// ResultSchema is the default outcome data schema (see Config.StatusSchema).
+	// ResultSchema is the outcome data schema of a turn that could not start
+	// on its binding's config (see Config.StatusSchema for the others).
 	ResultSchema = "open-conduit.claudecode.result.v1"
 	// marker prefixes the wrapper's $0 so process identity is checked by an
 	// unguessable per-segment nonce in the argument vector, not by PID alone.

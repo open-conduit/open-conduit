@@ -59,7 +59,7 @@ The executor adds no core state. The structured status uses `--json-schema` (sta
 | Error, no result, no status, interrupt | failed | retry policy |
 | Usage limit | failed with `Result.RetryHint{ResetAt}` | retried at the reset plus two minutes (or after 30 minutes if unknown) |
 
-The outcome data schema is the binding's `status_schema`. The default is `open-conduit.claudecode.result.v1`. A GitHub binding sets `github.status.v1`, so the projector reads `status` directly. The projector maps `help`, `review` and `done` to labels. `building` and `finished` project no status label. The other data fields are:
+The outcome data schema is the binding's optional `status_schema`. The default is `core.turn.v1`, which every projector reads and from which the host publishes the turn-ended Event; a source-named `<source>.status.v1` that earlier setups wrote is read as `core.turn.v1`. A config that cannot be read fails under `open-conduit.claudecode.result.v1`. The projector maps `help`, `review` and `done` to labels. `building` and `finished` project no status label. The other data fields are:
 
 - `reason`, `prs`, `preview`, `touches` and `kind`
 - `models`, `model_calls`, `tool_calls` and `tokens` (input, output, cache read, cache creation)
@@ -156,7 +156,7 @@ The config is strict and validated at load. Every field is optional:
 | `plugin_dir` | The playbook skills directory. |
 | `args` | Default `{number}`. |
 | `structured` | Default true. |
-| `status_schema` | The outcome data schema. |
+| `status_schema` | The outcome data schema (default `core.turn.v1`). |
 | `branch`, `workspace_mode` | The workspace request. |
 | `handoff_minutes` | How long after a turn the session counts as cold (default 55). |
 | `cold_turns` | What a cold turn does: `handoff` (default) or `resume`. `handoff_share`, the removed experiment's setting, is ignored with a `config check` warning for one release, then rejected. |

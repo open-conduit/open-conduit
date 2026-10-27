@@ -151,7 +151,7 @@ func TestTrackerSetupScopesValidateOffline(t *testing.T) {
 	if diags, err := bootstrap.ValidateConfig(doc); err != nil || len(diags) != 0 {
 		t.Fatalf("init linear/jira output: %v %v\n%s", diags, err, doc)
 	}
-	for _, want := range []string{`"handler": "linear"`, `"handler": "bitbucket"`, `"handler": "jira"`, `"status_schema": "linear.status.v1"`, `"playbook": "work-tracker-issue"`, `"issue_ref": "Closes {key}"`} {
+	for _, want := range []string{`"handler": "linear"`, `"handler": "bitbucket"`, `"handler": "jira"`, `"playbook": "work-tracker-issue"`, `"issue_ref": "Closes {key}"`} {
 		if !strings.Contains(string(doc), want) {
 			t.Errorf("setup output lacks %s", want)
 		}

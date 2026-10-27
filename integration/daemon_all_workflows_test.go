@@ -56,7 +56,7 @@ const gateAgentScript = `set -e
 case "$OS_TRIGGER_TYPE" in
 github.comment.human)
   echo "$OS_EXECUTION_ID woke $OS_TRIGGER_TYPE" >> "$W_DIR/agent"
-  os outcome completed --summary fixed --schema github.status.v1 --data '{"status":"done","comment":"Fixed after the reply."}' --request-id done >/dev/null ;;
+  os outcome completed --summary fixed --schema core.turn.v1 --data '{"status":"done","comment":"Fixed after the reply."}' --request-id done >/dev/null ;;
 *)
   echo "$OS_EXECUTION_ID $OS_TRIGGER_TYPE" >> "$W_DIR/agent"
   os call introspection.report-issue --request-id defect --data '{"kind":"runtime","title":"os call failed","body":"Tried os context; got 503."}' >> "$W_DIR/agent.out"

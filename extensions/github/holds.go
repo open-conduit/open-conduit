@@ -6,6 +6,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/open-conduit/open-conduit/domain"
 )
 
 // Wait conditions and hold markers, ported from Open Supervisor's
@@ -23,9 +25,9 @@ const (
 	CondJob   CondKind = "job"   // the next run of one of a scope's jobs ending (05-02)
 )
 
-// TurnStates are the states an agent ends a turn in (the claude status
-// schema), which an issue condition can wait for.
-var TurnStates = []string{"building", "review", "help", "done", "finished"}
+// TurnStates are the states an agent ends a turn in (domain.TurnSchema),
+// which an issue condition can wait for.
+var TurnStates = domain.TurnStates
 
 // Cond is one thing a Work can wait on: `pr:1257:merged`, `issue:12:review`,
 // `job:backup`, each optionally in another scope (`pr:club/88:merged`).

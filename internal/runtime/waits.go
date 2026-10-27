@@ -269,6 +269,9 @@ func (s *Scheduler) waitInTx(tx storage.Tx, ref domain.LeaseRef, wait domain.Wai
 		if err = tx.PutWait(wait, 0); err != nil {
 			return err
 		}
+		if err = s.turnEndedInTx(tx, x, s.now()); err != nil {
+			return err
+		}
 		_, err = WakeWaitInTx(tx, s.now(), s.options.CausalLimits, wait.ID)
 		return err
 	}
@@ -276,6 +279,10 @@ func (s *Scheduler) waitInTx(tx storage.Tx, ref domain.LeaseRef, wait domain.Wai
 
 func waitMatches(wait domain.Wait, a domain.AcceptedEvent) bool {
 	if a.Sequence <= wait.AfterSequence || a.Event.CorrelationKey == nil {
+		return false
+	}
+	// A Work's own turn ending never wakes it.
+	if a.Event.Type == domain.TypeTurnEnded && a.Event.WorkID == wait.WorkID {
 		return false
 	}
 	matched := false
@@ -1049,6 +1056,9 @@ func (s *Scheduler) acknowledgeWaiting(ctx context.Context, ref domain.LeaseRef,
 			x.Outcome = &result.Outcome
 			x.Artifacts = append([]domain.ArtifactRef(nil), result.Artifacts...)
 			if err = tx.PutExecution(x, x.Revision); err != nil {
+				return err
+			}
+			if err = s.turnEndedInTx(tx, x, s.now()); err != nil {
 				return err
 			}
 		} else if x.Outcome == nil || !reflect.DeepEqual(*x.Outcome, result.Outcome) || !(len(x.Artifacts) == 0 && len(result.Artifacts) == 0 || reflect.DeepEqual(x.Artifacts, result.Artifacts)) {

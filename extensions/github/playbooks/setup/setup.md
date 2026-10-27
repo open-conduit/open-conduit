@@ -81,7 +81,7 @@ Connections first, then one scope per project. A scope's `authorization` is its 
            "github.pr.list", "github.pr.view", "github.pr.create", "github.pr.comment", "github.pr.reply", "github.pr.review", "github.checks",
            "github.attachment.upload", "github.attachment.get", "github.wait", "github.correction", "github.problem"],
          "secret_names": [],
-         "config": {"status_schema": "github.status.v1", "branch": "agent/issue-{number}"},
+         "config": {"branch": "agent/issue-{number}"},
          "resource": {"provider": "git", "config": {"checkout": "/Users/me/Code/web", "mode": "work", "copy": [".env"], "setup": "npm ci", "setup_when": ["package-lock.json"]}}},
         {"name": "hold", "executor": "github-hold", "connection": "github", "requires": {"toolbelt": "sdk"},
          "operations": ["emit", "github.hold.status", "github.hold"], "secret_names": [], "config": {}}
