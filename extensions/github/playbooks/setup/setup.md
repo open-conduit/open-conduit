@@ -51,7 +51,7 @@ Look for the owner's checkouts. Try the current directory and the usual places (
 4. **Checkouts.** The local clone each scope's worktrees come from, the remote (default `origin`) and, only if it isn't the repository's default, the base branch PRs target. A checkout is optional: a scope without a `resource` is workspace-free, and its turns run in a private directory (fine for triage or questions; code changes need a checkout).
 5. **Holds.** Whether issues labelled `scheduled` (opened by an agent with a wait, or by people with a `<!-- runAt: … -->` marker) should be held and then started. That needs the `github-hold` route and binding below.
 6. **Webhooks.** Without them the daemon reconciles every 15 minutes (`settings.reconcile_seconds`). Reconcile always runs as well, so nothing is missed either way: webhooks only cut latency. To add them, the entry names a scope secret in `webhook_secret` (select it in the entry's `secret_names`, with a reference in the scope's `secret_refs`), and the config stores the listener in `settings.webhooks` (`{{bin}} config set /settings/webhooks '{"addr": "127.0.0.1:8787", "tunnel": "ngrok"}'`), so a plain `{{bin}} serve` starts it. The port is only an example: any free local port works, so pick another if something already listens on 8787. That listener serves only the webhook routes of the registered extensions (this entry's `POST /github/<scope>/<entry>`, and the Slack, Linear, Jira, Bitbucket, schedule and installed-package routes of any others) and never the management API; anything else is 404. Something must forward a public URL to it: `"tunnel": "ngrok"` (with `tunnel_domain` for a stable URL), `"tunnel": "cloudflared"` (quick, or `tunnel_name` with `tunnel_hostname`), or `"public_url"` for a reverse proxy they already run. The serve flags of the same names (`--webhook-addr`, `--tunnel`, …) override the stored values for one run. With `"manage_webhook": true` the daemon creates and re-points the repository's webhook itself, which needs admin access to the repository's hooks; otherwise they add the webhook (JSON, the secret, the issues, comments, pull request, review, check and status events) by hand.
-7. **Limits.** How many attempts may run at once (`settings.concurrency`, default 4) and how many issues each scope holds at a time (`settings.admission_limit`, default 10). Suggest starting low, around 2 and 3, so they can watch it work.
+7. **Limits.** How many agent turns may run at once (`settings.concurrency`, default 4), and optionally fewer for one scope (its `limits.concurrency`). Suggest starting low, around 2, so they can watch it work. Don't set `admission_limit`: it isn't enforced yet, and `config check` warns about it.
 
 ## Write the config
 
@@ -60,7 +60,7 @@ Connections first, then one scope per project. A scope's `authorization` is its 
 ```json
 {
   "version": 1,
-  "settings": {"concurrency": 2, "admission_limit": 3},
+  "settings": {"concurrency": 2},
   "connections": [
     {"id": "github", "type": "github", "config": {}, "secret_refs": {"token": "cmd:gh auth token"}}
   ],

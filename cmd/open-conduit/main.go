@@ -26,7 +26,7 @@ func main() {
 	env.EditConfig = func(r cli.EditRequest) (bool, error) { return tui.EditConfig(r, os.Stdin, os.Stdout) }
 	env.Migrate, env.State = bootstrap.Migrate, bootstrap.StateOps()
 	env.ValidateConfigAt, env.Extensions = validateAt, bootstrap.ExtensionOps(version, commit)
-	env.CommandWarnings = config.CommandWarnings
+	env.ConfigWarnings = config.Warnings
 	env.OfflineChecks = offlineChecks
 	env.Service = cli.SystemServiceHost()
 	os.Exit(cli.RunOperator(version, commit, os.Args[1:], env, os.Stdout, os.Stderr))

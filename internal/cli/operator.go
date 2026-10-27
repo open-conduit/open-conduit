@@ -43,10 +43,11 @@ type Env struct {
 	// extension packages installed beside it (07-03) are known; it takes
 	// precedence when set.
 	ValidateConfigAt func(path string, data []byte) ([]client.Detail, error)
-	// CommandWarnings names the config's cmd: secret references whose program
-	// is not found on the resolver's PATH; only the open-conduit entrypoint
+	// ConfigWarnings names what in the config is accepted but suspect: cmd:
+	// secret references whose program is not found on the resolver's PATH,
+	// and settings that have no effect yet. Only the open-conduit entrypoint
 	// supplies it. Warnings never fail a check.
-	CommandWarnings func(data []byte) []string
+	ConfigWarnings func(data []byte) []string
 	// OfflineChecks are the doctor checks that need no daemon (the config,
 	// its bindings, the agent CLIs); doctor runs them when no daemon is
 	// reachable. Only the open-conduit entrypoint supplies it.

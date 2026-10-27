@@ -465,7 +465,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		Owner: d.owner, LeaseDuration: d.o.LeaseDuration, Generation: c.generation,
 		Executors: d.executors, HistoricalExecutors: history,
 		GlobalLimit: set.Concurrency, ExecutorPools: jobExecutors(), PoolLimits: map[string]int{jobPool: set.JobConcurrency},
-		Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
+		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
 		Toolbelt: belt, ToolbeltEndpoint: d.endpoint, Secrets: d.configs.Secrets(d.resolver),
 		Resources: d.bindResources, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
@@ -491,6 +491,23 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return nil, err
 	}
 	return c, nil
+}
+
+// scopeLimits gives the scheduler each scope whose limits.concurrency
+// narrows its parent's (or settings.concurrency at the root). The scheduler
+// checks every ancestor, so an inherited limit needs no entry of its own.
+func scopeLimits(s *config.Snapshot) map[domain.ID]int {
+	out := map[domain.ID]int{}
+	for id, sc := range s.Scopes {
+		inherited := s.Settings.Concurrency
+		if p, ok := s.Scopes[sc.ParentID]; ok {
+			inherited = p.Concurrency
+		}
+		if sc.Concurrency > 0 && sc.Concurrency < inherited {
+			out[id] = sc.Concurrency
+		}
+	}
+	return out
 }
 
 func (d *daemon) poke() {

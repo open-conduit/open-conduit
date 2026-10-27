@@ -109,7 +109,7 @@ When the test binary is race-enabled, as under `make check`, the daemon is also 
 ## Limitations
 
 - **Recurring timer rearm.** `FireTimer` is a single storage operation (fire plus delete or replace). The drills above kill around the one-shot wait timeout. Atomic recurring rearm under SIGKILL is proven at storage and runtime level ([timers](../timers-waits/)), and the [all-workflows drill](#all-four-workflows-on-one-daemon) kills the daemon right after an interval job's slot fire and rearm commit.
-- **Unenforced settings.** `settings.admission_limit` is validated but not enforced, and per-scope `ScopeLimits` are not configurable. `reconcile_seconds` applies only to ingress registrations.
+- **Unenforced setting.** `settings.admission_limit` and a scope's `limits.admission_limit` are validated but not enforced, and `config check` warns where a config sets them. A scope's `limits.concurrency` is enforced: the daemon passes each scope that narrows its parent's limit to `SchedulerOptions.ScopeLimits` ([capacity pools](../execution-scheduling/#capacity-pools)). `reconcile_seconds` applies only to ingress registrations.
 - **Telemetry redaction.** The pipeline redacts sensitive attribute keys. Resolved secret values are not fed to `Options.Secrets`, because lifecycle records never carry executor environment or payloads.
 
 ## All four workflows on one daemon

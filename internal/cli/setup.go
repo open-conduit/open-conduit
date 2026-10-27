@@ -62,7 +62,7 @@ func toNode(v any) *node {
 func MergeSetup(doc []byte, r extension.SetupResult, force bool) ([]byte, error) {
 	var root *node
 	if len(bytes.TrimSpace(doc)) == 0 {
-		root, _ = parseNode([]byte(`{"version": 1, "settings": {"concurrency": 2, "admission_limit": 3}, "connections": [], "scopes": []}`))
+		root, _ = parseNode([]byte(`{"version": 1, "settings": {"concurrency": 2}, "connections": [], "scopes": []}`))
 	} else {
 		var err error
 		if root, err = parseNode(doc); err != nil || root.kind != 'o' {
@@ -147,7 +147,7 @@ func (o *operator) validate(path string, data []byte) bool {
 		fmt.Fprintln(o.errOut, "open-conduit: config is not valid JSON")
 		return false
 	}
-	o.warnCommands(data)
+	o.warnConfig(data)
 	if o.env.ValidateConfig == nil && o.env.ValidateConfigAt == nil {
 		return true
 	}
@@ -162,13 +162,14 @@ func (o *operator) validate(path string, data []byte) bool {
 	return len(details) == 0
 }
 
-// warnCommands prints the entrypoint's warnings about the config's cmd:
-// references (a program not on the resolver's PATH); they never fail it.
-func (o *operator) warnCommands(data []byte) {
-	if o.env.CommandWarnings == nil {
+// warnConfig prints the entrypoint's warnings about the config (a cmd:
+// program not on the resolver's PATH, a setting with no effect); they never
+// fail it.
+func (o *operator) warnConfig(data []byte) {
+	if o.env.ConfigWarnings == nil {
 		return
 	}
-	for _, w := range o.env.CommandWarnings(data) {
+	for _, w := range o.env.ConfigWarnings(data) {
 		fmt.Fprintf(o.errOut, "open-conduit: warning: %s\n", w)
 	}
 }
