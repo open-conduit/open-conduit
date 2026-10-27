@@ -7,6 +7,10 @@ Open Conduit claims open issues, works each one on its own branch and checkout w
 
 ## Set it up
 
+The quickest way is `open-conduit init --with claude`: Claude Code finds your checkouts, asks which repositories to watch, and writes and checks the GitHub scopes for you. See the [quick start](/open-conduit/start/quick-start/#set-it-up-with-claude).
+
+To write a scope yourself:
+
 ```sh
 open-conduit init github --repo acme/web --checkout ~/Code/web
 open-conduit config check
