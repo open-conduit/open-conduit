@@ -32,7 +32,7 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | `github.wait` | `conditions`?, `until`?, `reason` | park the issue until something happens or a time comes (see Waiting) |
 | `github.correction` | `area`, `body` | log a correction (see Log corrections) |
 | `github.problem` | `kind`, `body` | log a problem you worked around (see Report problems) |
-| `human.ask` | `question`, `options`?, `context`?, `deadline`? | ask a person for a private decision and park until they answer (see Asking a person) |
+| `human.ask` | `question`, `options`?, `context`?, `deadline`? | if your toolbelt has it: ask a person for a private decision and park until they answer (see Asking a person) |
 
 `file_path` and `save_to` are paths in your own directory: Open Conduit's client reads or writes the file for you. Post every comment this way: it marks the comment as yours, so it is never handed back to you as news, and a retried call never posts twice (give the same `request_id` when you retry). Use `git` itself for commits and pushes.
 
@@ -56,7 +56,7 @@ When follow-up work shouldn't start yet (wave 2 once wave 1 merges, a check once
 
 ## Asking a person
 
-When you need a decision that doesn't belong on the issue (a credential, a cost, anything private), ask with `human.ask`: `{"question": "…", "options": ["…", "…"]}`, with `context` for what they need to know and `deadline` (an ISO time) if the answer stops mattering after a point. The question goes to whoever the project has set up to answer, never to the issue, so don't repeat it in a comment. Like `github.wait`, it is the last thing you do in a turn: end the turn with `help`, and Open Conduit resumes you with the answer, or at the deadline without one. If the call is refused as `not_configured`, ask on the issue instead or say what you need in your status.
+When you need a decision that doesn't belong on the issue (a credential, a cost, anything private), ask with `human.ask` if your toolbelt has it: `{"question": "…", "options": ["…", "…"]}`, with `context` for what they need to know and `deadline` (an ISO time) if the answer stops mattering after a point. The question goes to whoever the project has set up to answer, never to the issue, so don't repeat it in a comment. Like `github.wait`, it is the last thing you do in a turn: end the turn with `help`, and Open Conduit resumes you with the answer, or at the deadline without one. If your toolbelt doesn't have it, or the call is refused as `not_configured`, ask on the issue instead or say what you need in your status.
 
 ## Ending a turn
 
