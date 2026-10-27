@@ -20,7 +20,8 @@ import (
 
 // In-process extensions (issue #66). Each surface is composed by iterating
 // the list below through the public inproc contract; nothing here names an
-// extension except to build the list. Extensions not yet on the contract
+// extension except to build the list. Installed packages join the same list
+// once started (installed.go, issue #69). Extensions not yet on the contract
 // are still wired by their own files.
 
 // firstParty is the list of first-party in-process extensions. Adding one
@@ -141,10 +142,16 @@ func (d *daemon) configureInproc(ctx context.Context) {
 	}
 }
 
+// registerInprocTools registers each extension's toolbelt registration; one
+// with neither operations nor event families adds nothing and is skipped.
 func (d *daemon) registerInprocTools(belt *runtime.Toolbelt) error {
 	for _, x := range d.inproc {
 		if t, ok := x.(inproc.Tooled); ok {
-			if err := belt.Register(t.Registration()); err != nil {
+			reg := t.Registration()
+			if len(reg.Operations) == 0 && len(reg.EventTypes) == 0 {
+				continue
+			}
+			if err := belt.Register(reg); err != nil {
 				return fmt.Errorf("extension %s toolbelt registration: %w", x.Name(), err)
 			}
 		}
@@ -199,12 +206,14 @@ func (d *daemon) runInprocTasks(ctx context.Context) {
 	}
 }
 
-// inprocChecks are the extensions' doctor checks, ordinary or deep.
+// inprocChecks are the extensions' doctor checks, ordinary or deep. An
+// installed package's checks are reported inside the extensions check
+// instead (extensionCheck), so they are left out here.
 func (d *daemon) inprocChecks(deep bool) []func(context.Context) runtime.Check {
 	var out []func(context.Context) runtime.Check
 	for _, x := range d.inproc {
 		c, ok := x.(inproc.Checker)
-		if !ok {
+		if _, pkg := x.(*installed); !ok || pkg {
 			continue
 		}
 		for _, check := range c.Checks() {

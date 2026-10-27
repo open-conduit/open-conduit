@@ -2,8 +2,11 @@ package bootstrap
 
 import (
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/extension/inproc"
+	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // The first-party list composes through the contract alone: each
@@ -37,5 +40,38 @@ func TestFirstPartyCompose(t *testing.T) {
 				}
 			}
 		}
+	}
+}
+
+// An installed package's manifest reaches the registry through the same
+// contract: its types (configurable routes too), handlers, operations and
+// resource types, with its tasks paced by their intervals.
+func TestInstalledCompose(t *testing.T) {
+	m := protocol.Manifest{Name: "acme", Provides: protocol.Provides{
+		Connections: []protocol.TypeDecl{{Type: "acme_conn"}},
+		Extensions:  []protocol.ExtensionDecl{{Type: "acme", Ingress: true}},
+		Routes:      []protocol.RouteDecl{{Handler: "acme_route", Config: true}, {Handler: "acme_plain"}},
+		Operations:  []protocol.OperationDecl{{Name: "acme.ping", Kind: protocol.OperationHandler}},
+		Resources:   []protocol.ResourceDecl{{Type: "acme_box"}},
+		Tasks:       []protocol.TaskDecl{{Name: "sweep", IntervalSeconds: 90}},
+	}}
+	x := &installed{m: m}
+	reg := config.Registry{}
+	x.resourceTypes(&reg)
+	inprocRegistry(&reg, []inproc.Extension{x})
+	if reg.Connections["acme_conn"] == nil || !reg.Extensions["acme"].Ingress || reg.HandlerConfig["acme_route"] == nil {
+		t.Fatalf("types not registered: %+v", reg)
+	}
+	if !reg.Handlers["acme_route"] || !reg.Handlers["acme_plain"] || reg.HandlerConfig["acme_plain"] != nil {
+		t.Fatalf("handlers: %v %v", reg.Handlers, reg.HandlerConfig)
+	}
+	if len(reg.Operations) != 1 || reg.Operations[0] != "acme.ping" || !reg.Resources["acme_box"] {
+		t.Fatalf("operations %v resources %v", reg.Operations, reg.Resources)
+	}
+	if err := reg.Extensions["acme"].Validate([]byte(`{}`), nil); err != nil {
+		t.Fatalf("offline validator: %v", err)
+	}
+	if tasks := x.Tasks(); len(tasks) != 1 || tasks[0].Name != "sweep" || tasks[0].Pace != 90*time.Second {
+		t.Fatalf("tasks %+v", tasks)
 	}
 }

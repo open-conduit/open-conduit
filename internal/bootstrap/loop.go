@@ -62,7 +62,6 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.manageHooks(ctx)
 		d.reconfigureOnURLChange(ctx)
 		d.runInprocTasks(ctx)
-		d.runExtensionTasks(ctx)
 		d.reconcileResources(c)
 		d.sweepResources(c)
 		d.maintainClaudeCode(ctx)

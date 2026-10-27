@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -27,11 +27,13 @@ import (
 // <config dir>/extensions/<name>/open-conduit-extension.json, refuses any
 // set that conflicts with the first-party registrations (atomically, as the
 // in-process Registrar does), starts each package behind its scoped host
-// service and registers the adapters next to the first-party ones: config
-// types and validators, route handlers, executors, resource providers, work
-// kinds, recurrences, toolbelt operations, ingress sources, webhook paths,
-// tasks, checks, annotations, prompt rendering and telemetry export. Nothing
-// here names an extension: every decision reads the manifest. Packages are
+// service and appends it to the in-process list (installed.go), so config
+// types and validators, route handlers, toolbelt operations, configure,
+// tasks, checks, actions, annotations, prompt rendering and telemetry export
+// go through the same path as first-party extensions. Executors, resource
+// providers, work kinds, recurrences, ingress sources and webhook paths are
+// registered here until the contract has them. Nothing here names an
+// extension: every decision reads the manifest. Packages are
 // read only at start, so install, update and removal take effect at the
 // next serve; configuration changes reach running packages through
 // configure on every apply and tunnel URL change.
@@ -44,14 +46,14 @@ type externalState struct {
 	current atomic.Pointer[generationSnapshot]
 
 	mu       sync.Mutex
-	remotes  []*extproc.Remote
-	byName   map[string]*extproc.Remote
+	packages []*installed
+	byName   map[string]*installed
 	failed   []extproc.Diagnostic
-	sources  map[string]bool            // registered ingress names
-	webhooks map[string]*extproc.Remote // webhook path (no leading slash) → package
-	tasks    map[string]time.Time       // last start by package/task
-	running  map[string]bool            // task in flight
-	public   string                     // public URL last sent in configure
+	sources  map[string]bool       // registered ingress names
+	webhooks map[string]*installed // webhook path (no leading slash) → package
+	tasks    map[string]time.Time  // last start by package/task
+	running  map[string]bool       // task in flight
+	public   string                // public URL last sent in configure
 }
 
 type generationSnapshot struct {
@@ -139,58 +141,6 @@ func (e manifestExecutor) Attach(context.Context, domain.ID) (extension.AttachSp
 	return extension.AttachSpec{}, extension.ErrUnsupported
 }
 
-// validatorFunc supplies the validator of one declared type of a package.
-type validatorFunc func(m protocol.Manifest, kind, typ string) func(json.RawMessage, []string) error
-
-// externalRegistry adds the packages' declared config types, handlers,
-// resource types and operations to a registry. Executors are added by the
-// caller (live adapters, or manifestExecutor offline).
-func externalRegistry(reg *config.Registry, manifests []protocol.Manifest, validator validatorFunc) {
-	if reg.Connections == nil {
-		reg.Connections = map[string]func(json.RawMessage) error{}
-	}
-	if reg.Extensions == nil {
-		reg.Extensions = map[string]config.ExtensionType{}
-	}
-	if reg.Handlers == nil {
-		reg.Handlers = map[string]bool{}
-	}
-	if reg.HandlerConfig == nil {
-		reg.HandlerConfig = map[string]func(json.RawMessage) error{}
-	}
-	if reg.Resources == nil {
-		reg.Resources = map[string]bool{}
-	}
-	if reg.ResourceConfig == nil {
-		reg.ResourceConfig = map[string]func(json.RawMessage) error{}
-	}
-	for _, m := range manifests {
-		p := m.Provides
-		for _, c := range p.Connections {
-			v := validator(m, protocol.ValidateConnection, c.Type)
-			reg.Connections[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
-		}
-		for _, x := range p.Extensions {
-			reg.Extensions[x.Type] = config.ExtensionType{Ingress: x.Ingress, Validate: validator(m, protocol.ValidateExtension, x.Type)}
-		}
-		for _, r := range p.Routes {
-			reg.Handlers[r.Handler] = true
-			if r.Config {
-				v := validator(m, protocol.ValidateRoute, r.Handler)
-				reg.HandlerConfig[r.Handler] = func(raw json.RawMessage) error { return v(raw, nil) }
-			}
-		}
-		for _, r := range p.Resources {
-			reg.Resources[r.Type] = true
-			v := validator(m, protocol.ValidateResource, r.Type)
-			reg.ResourceConfig[r.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
-		}
-		for _, o := range p.Operations {
-			reg.Operations = append(reg.Operations, o.Name)
-		}
-	}
-}
-
 // offlineExternal adds the packages installed beside configPath to an
 // offline registry: declared types are known, but their opaque config is
 // checked by the package only when a daemon validates or applies it (an
@@ -209,27 +159,28 @@ func offlineExternal(reg *config.Registry, configPath, exclude string) {
 	if len(found) == 0 || extproc.CheckConflicts(found, takenNames(*reg)) != nil {
 		return
 	}
-	var manifests []protocol.Manifest
+	var xs []inproc.Extension
 	for _, f := range found {
-		manifests = append(manifests, f.Manifest)
-		for _, x := range f.Manifest.Provides.Executors {
-			reg.Executors[x.Name] = manifestExecutor{x}
+		x := &installed{m: f.Manifest}
+		xs = append(xs, x)
+		x.resourceTypes(reg)
+		for _, e := range f.Manifest.Provides.Executors {
+			reg.Executors[e.Name] = manifestExecutor{e}
 		}
 	}
-	externalRegistry(reg, manifests, func(protocol.Manifest, string, string) func(json.RawMessage, []string) error {
-		return func(json.RawMessage, []string) error { return nil }
-	})
+	inprocRegistry(reg, xs)
 }
 
-// openExtensions discovers, admits and starts the installed packages, and
-// registers their executors and resource providers. It runs before the
+// openExtensions discovers, admits and starts the installed packages,
+// appends them to the in-process list and registers their executors and
+// resource providers. It runs before the
 // configuration opens, so the packages' validators can check it; the first
 // configure carries an empty generation, and configureExtensions sends the
 // real one once the configuration and ingress exist.
 func (d *daemon) openExtensions(ctx context.Context) {
 	x := &d.external
 	x.root = extensionsRoot(d.o.ConfigPath)
-	x.byName, x.sources, x.webhooks, x.tasks, x.running = map[string]*extproc.Remote{}, map[string]bool{}, map[string]*extproc.Remote{}, map[string]time.Time{}, map[string]bool{}
+	x.byName, x.sources, x.webhooks, x.tasks, x.running = map[string]*installed{}, map[string]bool{}, map[string]*installed{}, map[string]time.Time{}, map[string]bool{}
 	found, errs := extproc.Discover(x.root)
 	for _, err := range errs {
 		name, _, _ := strings.Cut(err.Error(), ":")
@@ -255,10 +206,14 @@ func (d *daemon) openExtensions(ctx context.Context) {
 			d.log.Error("extension not started", "extension", name, "code", diag.Code, "hint", diag.Hint)
 			continue
 		}
+		pkg := &installed{m: f.Manifest, r: r, d: d}
 		x.mu.Lock()
-		x.remotes = append(x.remotes, r)
-		x.byName[name] = r
+		x.packages = append(x.packages, pkg)
+		x.byName[name] = pkg
 		x.mu.Unlock()
+		// Nothing reads the list concurrently yet: the loop, servers and
+		// configuration start after this.
+		d.inproc = append(d.inproc, pkg)
 		for _, e := range f.Manifest.Provides.Executors {
 			if adapter, ok := r.Executor(e.Name); ok {
 				d.executors[e.Name] = adapter
@@ -273,34 +228,21 @@ func (d *daemon) openExtensions(ctx context.Context) {
 	}
 }
 
-// closeExtensions shuts every package down (shutdown, stdin closed, then
-// signals to its process group). Executor jobs it detached keep running and
-// are adopted by the next daemon through executor.recover.
-func (d *daemon) closeExtensions() {
-	for _, r := range d.extensionRemotes() {
-		_ = r.Process().Close()
-	}
-}
-
-func (d *daemon) extensionRemotes() []*extproc.Remote {
+func (d *daemon) extensionPackages() []*installed {
 	d.external.mu.Lock()
 	defer d.external.mu.Unlock()
-	return append([]*extproc.Remote(nil), d.external.remotes...)
+	return append([]*installed(nil), d.external.packages...)
 }
 
-// extensionRegistry adds the running packages' declared types, validated
+// installedRegistry adds the running packages' declared types, validated
 // through their validate method, to the serve registry.
-func (d *daemon) extensionRegistry(reg *config.Registry) {
-	var manifests []protocol.Manifest
-	for _, r := range d.extensionRemotes() {
-		manifests = append(manifests, r.Manifest())
+func (d *daemon) installedRegistry(reg *config.Registry) {
+	var xs []inproc.Extension
+	for _, x := range d.extensionPackages() {
+		x.resourceTypes(reg)
+		xs = append(xs, x)
 	}
-	externalRegistry(reg, manifests, func(m protocol.Manifest, kind, typ string) func(json.RawMessage, []string) error {
-		d.external.mu.Lock()
-		r := d.external.byName[m.Name]
-		d.external.mu.Unlock()
-		return r.Validator(kind, typ)
-	})
+	inprocRegistry(reg, xs)
 }
 
 // usesExtension reports whether a scope's configuration uses one of the
@@ -555,7 +497,7 @@ func (d *daemon) extensionConfigured(name string, res protocol.ConfigureResult) 
 				interval = time.Duration(s.Settings.ReconcileSeconds) * time.Second
 			}
 		}
-		if err := d.ingress.Register(d.lifetime(), decl.Name, decl.Source.Extension(), r.Ingress(decl), interval); err != nil {
+		if err := d.ingress.Register(d.lifetime(), decl.Name, decl.Source.Extension(), r.r.Ingress(decl), interval); err != nil {
 			x.mu.Lock()
 			delete(x.sources, decl.Name)
 			x.mu.Unlock()
@@ -573,21 +515,10 @@ func (d *daemon) lifetime() context.Context {
 	return context.Background()
 }
 
-// configureExtensions sends configure to every running package (config
-// apply, tunnel URL change); a failure is reported and retried at the next
-// apply or URL change.
+// configureExtensions configures every extension, first-party and
+// installed (config apply, tunnel URL change).
 func (d *daemon) configureExtensions(ctx context.Context) {
 	d.configureInproc(ctx)
-	for _, r := range d.extensionRemotes() {
-		cx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		err := r.Process().Reconfigure(cx)
-		cancel()
-		if err != nil {
-			d.report("extension_configure", domain.ID(r.Process().Name()), errorCode(err))
-			continue
-		}
-		d.clear("extension_configure", domain.ID(r.Process().Name()))
-	}
 	d.hooks.mu.Lock()
 	d.external.mu.Lock()
 	d.external.public = d.hooks.public
@@ -609,21 +540,12 @@ func (d *daemon) reconfigureOnURLChange(ctx context.Context) {
 	}
 }
 
-// extensionHandlers, extensionWorkKinds and extensionRecurrences are the
-// packages' runtime callbacks for one generation's router, scheduler and
-// timers.
-func (d *daemon) extensionHandlers(into map[string]extension.RouteHandler) {
-	for _, r := range d.extensionRemotes() {
-		for _, h := range r.Manifest().Provides.Routes {
-			into[h.Handler] = r.RouteHandler(h.Handler)
-		}
-	}
-}
-
+// extensionWorkKinds and extensionRecurrences are the packages' runtime
+// callbacks for one generation's scheduler and timers.
 func (d *daemon) extensionWorkKinds(into map[string]runtime.WorkKindPolicy) {
-	for _, r := range d.extensionRemotes() {
-		for _, k := range r.Manifest().Provides.WorkKinds {
-			if p, ok := r.WorkKind(k.Kind); ok {
+	for _, x := range d.extensionPackages() {
+		for _, k := range x.m.Provides.WorkKinds {
+			if p, ok := x.r.WorkKind(k.Kind); ok {
 				into[k.Kind] = p
 			}
 		}
@@ -631,25 +553,11 @@ func (d *daemon) extensionWorkKinds(into map[string]runtime.WorkKindPolicy) {
 }
 
 func (d *daemon) extensionRecurrences(into map[string]runtime.RecurrenceFunc) {
-	for _, r := range d.extensionRemotes() {
-		for _, kind := range r.Manifest().Provides.Recurrences {
-			into[kind] = r.Recurrence(kind)
+	for _, x := range d.extensionPackages() {
+		for _, kind := range x.m.Provides.Recurrences {
+			into[kind] = x.r.Recurrence(kind)
 		}
 	}
-}
-
-// registerExtensionTools adds each package's toolbelt registration.
-func (d *daemon) registerExtensionTools(belt *runtime.Toolbelt) error {
-	for _, r := range d.extensionRemotes() {
-		m := r.Manifest()
-		if len(m.Provides.Operations) == 0 && len(m.Provides.Families) == 0 {
-			continue
-		}
-		if err := belt.Register(r.Registration()); err != nil {
-			return fmt.Errorf("extension %s toolbelt registration: %w", m.Name, err)
-		}
-	}
-	return nil
 }
 
 // extensionWebhook returns the handler of a webhook path a package
@@ -661,17 +569,7 @@ func (d *daemon) extensionWebhook(name string) http.Handler {
 	if r == nil {
 		return nil
 	}
-	return r.Webhook("/"+name, 0)
-}
-
-// runExtensionTasks starts each declared task when its interval has
-// elapsed.
-func (d *daemon) runExtensionTasks(ctx context.Context) {
-	for _, r := range d.extensionRemotes() {
-		for _, t := range r.Manifest().Provides.Tasks {
-			d.runTask(ctx, r.Process().Name()+"/"+t.Name, time.Duration(t.IntervalSeconds)*time.Second, func(ctx context.Context) error { return r.Task(ctx, t.Name) })
-		}
-	}
+	return r.r.Webhook("/"+name, 0)
 }
 
 // runTask starts an extension task, keyed extension/task, on its own
@@ -709,6 +607,11 @@ func (d *daemon) runTask(ctx context.Context, key string, pace time.Duration, ru
 
 // extensionCheck reports each installed package for doctor: refused or
 // failed packages, process state and restarts, and its declared checks.
+//
+// The declared checks come through the contract (installed.Checks) but are
+// folded into this one check rather than listed beside the first-party
+// extensions' own checks, so doctor's output is what it was before installed
+// packages joined the in-process list (inprocChecks leaves them out).
 func (d *daemon) extensionCheck(ctx context.Context) runtime.Check {
 	return d.runExtensionChecks(ctx, false)
 }
@@ -732,8 +635,8 @@ func (d *daemon) runExtensionChecks(ctx context.Context, deep bool) runtime.Chec
 	d.external.mu.Lock()
 	failed := append([]extproc.Diagnostic(nil), d.external.failed...)
 	d.external.mu.Unlock()
-	remotes := d.extensionRemotes()
-	if len(remotes) == 0 && len(failed) == 0 {
+	packages := d.extensionPackages()
+	if len(packages) == 0 && len(failed) == 0 {
 		check.Status, check.Code, check.Detail = runtime.CheckInfo, "not_installed", "no extension packages are installed"
 		return check
 	}
@@ -743,8 +646,8 @@ func (d *daemon) runExtensionChecks(ctx context.Context, deep bool) runtime.Chec
 			check.Items = append(check.Items, f.String())
 		}
 	}
-	for _, r := range remotes {
-		p, m := r.Process(), r.Manifest()
+	for _, x := range packages {
+		p, m := x.r.Process(), x.m
 		if !deep {
 			state := "running"
 			if err := p.Err(); err != nil {
@@ -753,7 +656,7 @@ func (d *daemon) runExtensionChecks(ctx context.Context, deep bool) runtime.Chec
 				state = "stopped: " + diag.Summary + " (" + diag.Code + ")"
 			}
 			item := fmt.Sprintf("%s %s: %s, protocol %d, %d restart(s)", m.Name, m.Version, state, protocol.Version, p.Restarts())
-			if n := r.SchemaSkips(); n > 0 {
+			if n := x.r.SchemaSkips(); n > 0 {
 				item += fmt.Sprintf(", %d unreadable payload(s) skipped", n)
 			}
 			if p.Restarts() > 0 {
@@ -761,23 +664,15 @@ func (d *daemon) runExtensionChecks(ctx context.Context, deep bool) runtime.Chec
 			}
 			check.Items = append(check.Items, item)
 		}
-		for _, c := range m.Provides.Checks {
+		for _, c := range x.Checks() {
 			if c.Deep != deep {
 				continue
 			}
-			cx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			res, err := r.Check(cx, c.Name, deep)
-			cancel()
-			switch {
-			case err != nil:
-				raise(runtime.CheckWarn, "extension_check_failed")
-				check.Items = append(check.Items, m.Name+" check "+c.Name+": unavailable ("+errorCode(err)+")")
-			case !res.OK:
-				raise(runtime.CheckWarn, "extension_check_failed")
-				check.Items = append(check.Items, m.Name+" check "+c.Name+": "+res.Detail)
-			default:
-				check.Items = append(check.Items, m.Name+" check "+c.Name+": ok "+res.Detail)
+			res := c.Run(ctx)
+			if res.Status != inproc.CheckOK {
+				raise(res.Status, res.Code)
 			}
+			check.Items = append(check.Items, res.Name+": "+res.Detail)
 		}
 	}
 	if deep && len(check.Items) == 0 {
@@ -787,57 +682,15 @@ func (d *daemon) runExtensionChecks(ctx context.Context, deep bool) runtime.Chec
 	return check
 }
 
-// extensionAnnotations are the packages' contributions to GET /work/{id}.
-func (d *daemon) extensionAnnotations(ctx context.Context, w domain.Work) [][3]string {
-	var out [][3]string
-	for _, r := range d.extensionRemotes() {
-		for _, a := range r.Annotate(ctx, w) {
-			out = append(out, [3]string{r.Process().Name(), a.Name, a.Value})
-		}
-	}
-	return out
-}
-
-// extensionActions are the action providers of the packages a scope's
-// current configuration uses, by package name.
-func (d *daemon) extensionActions(scope domain.ID, out map[string]extension.ActionProvider) {
-	s, _ := d.extensionSnapshot()
-	if s == nil || s.Scopes[scope] == nil || !s.Scopes[scope].Enabled {
-		return
-	}
-	for _, r := range d.extensionRemotes() {
-		if p, ok := r.Actions(); ok && usesExtension(s.Scopes[scope], r.Manifest()) {
-			out[r.Process().Name()] = p
-		}
-	}
-}
-
-// extensionRender renders an Event through the package that owns its
-// family, for agent prompts; false falls back to generic rendering.
-func (d *daemon) extensionRender(e domain.Event) (string, bool) {
-	for _, r := range d.extensionRemotes() {
-		if !strings.HasPrefix(e.Type, r.Process().Name()+".") {
-			continue
-		}
-		ctx, cancel := context.WithTimeout(d.lifetime(), 5*time.Second)
-		text, ok := r.Render(ctx, e)
-		cancel()
-		return text, ok
-	}
-	return "", false
-}
-
-// extensionExporter fans telemetry out to the packages that export it. It
-// joins the pipeline at start, before packages load, and reaches whichever
-// are running.
+// extensionExporter fans telemetry out to the packages. It joins the
+// pipeline at start, before packages load, and reaches whichever are
+// running through their contract exporter.
 type extensionExporter struct{ d *daemon }
 
 func (e extensionExporter) Export(ctx context.Context, records []observability.Record) error {
 	var errs []error
-	for _, r := range e.d.extensionRemotes() {
-		if x, ok := r.Exporter(); ok {
-			errs = append(errs, x.Export(ctx, records))
-		}
+	for _, x := range e.d.extensionPackages() {
+		errs = append(errs, x.Exporter().Export(ctx, records))
 	}
 	return errors.Join(errs...)
 }
