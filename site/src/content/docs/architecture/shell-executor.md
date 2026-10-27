@@ -1,6 +1,8 @@
-# Shell executor and CLI toolbelt
+---
+title: "Shell executor and CLI toolbelt"
+---
 
-Ticket 02-07 delivers the first real executor, [`executors/shell`](../../executors/shell), and the [`os` CLI](../../internal/cli/toolbelt.go). It proves the architecture with no agent session, no tracker and no workspace. The executor imports only public contracts. It implements `extension.Executor`, `InterruptExecutor` and `ResumeExecutor`, and advertises `toolbelt: cli` and `interrupt`. `resume` is advertised only when `Options.Resume` is set. Workspace was added in 03-02 and inject in 04-02 (see [Inject inbox](#inject-inbox-04-02)). Daemon composition (a `serve` command, routing and poll loops) is delivered by 02-09 ([daemon composition](daemon-core-gate.md)); the host role in this document's evidence is played by integration tests that compose the production scheduler, toolbelt, management server, SQLite and artifacts.
+Ticket 02-07 delivers the first real executor, [`executors/shell`](https://github.com/open-conduit/open-conduit/tree/main/executors/shell), and the [`os` CLI](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/toolbelt.go). It proves the architecture with no agent session, no tracker and no workspace. The executor imports only public contracts. It implements `extension.Executor`, `InterruptExecutor` and `ResumeExecutor`, and advertises `toolbelt: cli` and `interrupt`. `resume` is advertised only when `Options.Resume` is set. Workspace was added in 03-02 and inject in 04-02 (see [Inject inbox](#inject-inbox-04-02)). Daemon composition (a `serve` command, routing and poll loops) is delivered by 02-09 ([daemon composition](../daemon-core-gate/)); the host role in this document's evidence is played by integration tests that compose the production scheduler, toolbelt, management server, SQLite and artifacts.
 
 ## Binding config
 
@@ -45,7 +47,7 @@ The environment follows the B05 order:
 | `os outcome completed\|failed\|handoff` | `declare_outcome` |
 | `os call OP` | registered extension operations |
 
-Every command accepts `--request-id`. Results print as JSON. Exit status is 0 on success, 1 for a rejected or failed call (safe error code only) and 2 for usage or missing environment. Arguments and credentials are never echoed. A declared wait or outcome takes effect only when the host observes the process finish: `Scheduler.Observe` applies the declaration through `Complete`, as [02-06](toolbelt-management.md) requires.
+Every command accepts `--request-id`. Results print as JSON. Exit status is 0 on success, 1 for a rejected or failed call (safe error code only) and 2 for usage or missing environment. Arguments and credentials are never echoed. A declared wait or outcome takes effect only when the host observes the process finish: `Scheduler.Observe` applies the declaration through `Complete`, as [02-06](../toolbelt-management/) requires.
 
 ## Process model, identity and adoption
 
@@ -95,7 +97,7 @@ The scheduler now preserves executor outcome data when it converts a declared wa
 
 ## Evidence
 
-- [Unit cases](../../executors/shell/shell_test.go) cover:
+- [Unit cases](https://github.com/open-conduit/open-conduit/blob/main/executors/shell/shell_test.go) cover:
   - the shared executor conformance case
   - log and output artifacts, the input file and the scratch directory
   - every environment layer and the stripping of credentials and reserved variables
@@ -106,17 +108,17 @@ The scheduler now preserves executor outcome data when it converts a declared wa
   - adoption by a second instance with a replaced token and no duplicate launch, lower-epoch refusal, and superseded interrupt/stop refusal
   - identity beyond PID: a reused PID is neither adopted nor signaled, and tampered metadata is refused
   - explicit resume capability
-- [Integration cases](../../integration/shell_test.go) run the real shipped `os` binary against the Unix-socket management server, production scheduler/toolbelt and SQLite:
+- [Integration cases](https://github.com/open-conduit/open-conduit/blob/main/integration/shell_test.go) run the real shipped `os` binary against the Unix-socket management server, production scheduler/toolbelt and SQLite:
   - The 02-07 acceptance workflow runs with N+1 wake and with resume. A no-workspace script reads context, emits, creates child Work and waits, then after an operator wake declares an outcome. The test asserts the causal chain, artifacts and a secret delivered only through the selected binding.
   - Exit failure applies retry policy; timeout establishes exclusion; operator cancel plus `Stop` and `ConfirmStopped` hold.
   - A host torn down mid-execution and restarted on the same state adopts the still-running process at a higher epoch. The old credential is rejected and the adopted process emits with its replaced credential, with exactly one launch.
   - Apply-time config rejection is covered, and so are CLI exit codes and non-echo behavior.
 
-The restart here is an in-process teardown and rebuild of every host component; the shell process is a real OS process in its own session. Killing an actual daemon process at each boundary is the 02-09 gate, delivered in [daemon composition](daemon-core-gate.md). 02-08 adds `Forget` for the shared retention policy: it removes an expired execution's run directories and refuses while a verified process still runs. It also adds history/TUI presentation with log tailing from published artifacts ([observability and history](observability-history.md)). Live log streaming during a run is not provided.
+The restart here is an in-process teardown and rebuild of every host component; the shell process is a real OS process in its own session. Killing an actual daemon process at each boundary is the 02-09 gate, delivered in [daemon composition](../daemon-core-gate/). 02-08 adds `Forget` for the shared retention policy: it removes an expired execution's run directories and refuses while a verified process still runs. It also adds history/TUI presentation with log tailing from published artifacts ([observability and history](../observability-history/)). Live log streaming during a run is not provided.
 
 ## Inject inbox (04-02)
 
-The shell executor implements `InjectExecutor`, the second implementation of the [generic inject acknowledgement](runtime-semantics.md#generic-inject-acknowledgement-04-02).
+The shell executor implements `InjectExecutor`, the second implementation of the [generic inject acknowledgement](../runtime-semantics/#generic-inject-acknowledgement-04-02).
 
 - **The inbox.** Each segment has `inbox/` in its run directory, named to the process as `OS_INBOX`. `Inject` writes the Event as `<order>-<id digest>.json`, in the `OS_INPUT_FILE` event shape, under the segment's finalize lock. A repeated Event identity is not written again. After the result is recorded, or for an execution this instance does not hold, `Inject` returns `ErrNotAccepting`.
 - **Taking input in.** The process reads the inbox and acknowledges each event by creating `inbox/consumed/<id digest>`. `os inbox` does both: it prints the unacknowledged events in order as JSON lines and acknowledges each one after printing it, without any call to the endpoint.

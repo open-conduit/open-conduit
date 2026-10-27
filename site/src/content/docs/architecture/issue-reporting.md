@@ -1,6 +1,8 @@
-# Introspection: reporting, sweep, triage and fixes
+---
+title: "Introspection: reporting, sweep, triage and fixes"
+---
 
-Introspection is the first-party extension [`extensions/introspection`](../../extensions/introspection), composed by [`internal/bootstrap/introspection.go`](../../internal/bootstrap/introspection.go). It uses only the public registration, toolbelt, route, timer-recurrence, coordination KV and observability interfaces. Nothing about it is core (PRD workflow D: "no core code for self-improvement").
+Introspection is the first-party extension [`extensions/introspection`](https://github.com/open-conduit/open-conduit/tree/main/extensions/introspection), composed by [`internal/bootstrap/introspection.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/introspection.go). It uses only the public registration, toolbelt, route, timer-recurrence, coordination KV and observability interfaces. Nothing about it is core (PRD workflow D: "no core code for self-improvement").
 
 - Ticket 03-08 delivered issue reporting, the PRD's sequence-step-3 requirement: the agents' own `report-issue` and triage surface what breaks in early daily use. Its live-use validation is 03-09 (deferred).
 - Ticket 05-03 completed the workload:
@@ -72,7 +74,7 @@ Reports are 03-08's translated emissions. See [the 03-08 contract](#the-report-e
 
 ## The sweep and triage schedules
 
-The runs are timed by the extension's own calendar, not by a `schedule` entry, because the PRD makes them "scheduled Work of their own kinds, defined by the introspection extension". Each configured block gets a durable core timer `introspection/<scope>/<run>` whose recurrence is the extension's `RecurrenceFunc` (`introspection.v1`), registered with the generic `runtime.TimerOptions.Recurrences`. The calendar rules are those of [scheduled jobs](schedule-extension.md):
+The runs are timed by the extension's own calendar, not by a `schedule` entry, because the PRD makes them "scheduled Work of their own kinds, defined by the introspection extension". Each configured block gets a durable core timer `introspection/<scope>/<run>` whose recurrence is the extension's `RecurrenceFunc` (`introspection.v1`), registered with the generic `runtime.TimerOptions.Recurrences`. The calendar rules are those of [scheduled jobs](../schedule-extension/):
 
 - A new schedule waits for its next slot.
 - A firing publishes the latest slot strictly within six hours, unless that slot ran last, and rearms. A slot missed by six hours or more is skipped.
@@ -106,7 +108,7 @@ Notes are read from the configured namespaces through public storage, filtered b
 - the requesting execution, its Work and its trigger;
 - the cause, the fix Event, its root and depth, and the fix Work.
 
-The fix Event **cites the earliest report's Event as its cause**. This uses the new generic `extension.EmitPlan.Cause` (see [extensions](extensions.md) and [runtime semantics](runtime-semantics.md#cited-causation-05-03)). The fix's chain is therefore:
+The fix Event **cites the earliest report's Event as its cause**. This uses the new generic `extension.EmitPlan.Cause` (see [extensions](../extensions/) and [runtime semantics](../runtime-semantics/#cited-causation-05-03)). The fix's chain is therefore:
 
 ```
 origin (e.g. core.work.created of the engineering Work)
@@ -202,17 +204,17 @@ Open Conduit's own reports are the upstream intake.
 
 ## Evidence
 
-- [`integration/introspection_test.go`](../../integration/introspection_test.go) runs production router, scheduler, toolbelt and timers on SQLite:
+- [`integration/introspection_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/introspection_test.go) runs production router, scheduler, toolbelt and timers on SQLite:
   - `TestWorkflowDReportTriageFix`: timers armed and kept; slots fired on a fake clock into standing sweep and triage; triage evidence covering reports and the GitHub tools' problem notes across scopes; a fix citing the earliest report, replayed once, with refusals; a fix Work traced fix → report → engineering root and naming the triage execution; reports resolved by the fix; the sweep folding corrections; a restart, and the next day seeing only what is left.
   - `TestCitedCausationKeepsCoreLimits`: a shallow cause cannot escape the depth limit.
   - `TestCitedCauseContract`: only the registration's own same-scope Events can be cited, and both chains' budgets are charged.
   - `TestIntrospectionRemovalPolicy`: timers cancelled, idle Work retired, running work finishing first, records kept, re-add as a new epoch, a disabled scope kept, schedule-only removal.
   - `TestExtensionOriginatedReportChain`: a host report is its own root, processed, triaged and fixed.
-- [`integration/reporting_test.go`](../../integration/reporting_test.go) is 03-08's reporting suite.
-- [`integration/daemon_introspection_test.go`](../../integration/daemon_introspection_test.go) (in `make drill`) uses the real daemon with shell executors calling `os`:
+- [`integration/reporting_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/reporting_test.go) is 03-08's reporting suite.
+- [`integration/daemon_introspection_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_introspection_test.go) (in `make drill`) uses the real daemon with shell executors calling `os`:
   - `TestDaemonIntrospection` (workflow D): an engineering report; the standing triage caught up by a config edit; evidence and a fix request; the fix Work resolving the report; `events chain` fix → report → operator root, the fix source naming the triage run and the fix trigger being the fix Event; telemetry events exactly once; SIGKILL and restart keeping the schedule; removal by apply retiring the standing triage, with the operations undeclared and the records kept.
   - `TestDaemonHostWatch`: a disk over threshold becomes a root report processed on the report binding, doctor shows `host over`, and host telemetry is written.
-- [`integration/daemon_reporting_test.go`](../../integration/daemon_reporting_test.go) (`TestDaemonIssueReporting`) is 03-08's loop stopped at depth 4, retention across SIGKILL, by-hand triage and disable by apply.
+- [`integration/daemon_reporting_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_reporting_test.go) (`TestDaemonIssueReporting`) is 03-08's loop stopped at depth 4, retention across SIGKILL, by-hand triage and disable by apply.
 - Unit tests cover config, routes, the calendar (catch-up, six hours, DST, epochs), the host watcher, the telemetry mapping, rendering, the registration and each playbook's operations.
 
 Real use (real reports, a real triage and a real fix) is recorded under the deferred 03-09.

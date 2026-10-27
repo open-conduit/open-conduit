@@ -1,6 +1,8 @@
-# Optional workspaces and the Git provider
+---
+title: "Optional workspaces and the Git provider"
+---
 
-Decision B07 · ticket 03-02. This resolves the PRD's open "workspace provider contract" and the summary's "workspace fresh/shared, copy/setup and cleanup" decision. The public contract is [`extension/resource.go`](../../extension/resource.go). The first provider is [`extensions/git`](../../extensions/git). [`executors/shell`](../../executors/shell) is its first consumer, and [`internal/bootstrap`](../../internal/bootstrap/resources.go) composes them.
+Decision B07 · ticket 03-02. This resolves the PRD's open "workspace provider contract" and the summary's "workspace fresh/shared, copy/setup and cleanup" decision. The public contract is [`extension/resource.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/resource.go). The first provider is [`extensions/git`](https://github.com/open-conduit/open-conduit/tree/main/extensions/git). [`executors/shell`](https://github.com/open-conduit/open-conduit/tree/main/executors/shell) is its first consumer, and [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/resources.go) composes them.
 
 ## What core knows
 
@@ -92,7 +94,7 @@ A shell binding with a resource runs in `Resource.Dir` with the provider layer. 
 
 ## Verification
 
-- [Provider tests](../../extensions/git/provider_test.go):
+- [Provider tests](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/provider_test.go):
   - shared catch-up with dirty-elsewhere, dirty-in-the-way, other-branch, diverged and no-remote cases, with nothing stashed or rewritten
   - concurrent shared users only compare
   - fresh at the remote head, isolation, idempotent re-acquire, `Lookup` ownership, success removal, failure retention and expiry
@@ -103,26 +105,26 @@ A shell binding with a resource runs in `Resource.Dir` with the provider layer. 
   - `.env`/signing layer precedence, with no values persisted
   - restart with a crashed `acquiring` lease, failed cleanup retried after restart, unknown owners retained
   - strict config, symlink copy escapes and credential redaction
-  - the ported [stray-process test](../../extensions/git/kill_unix_test.go)
-- [Shell broker test](../../executors/shell/shell_test.go): workspace cwd, layer order and reserved-name drop, the result/log explanation and structured failures.
-- [Scheduler hook test](../../integration/scheduler_resources_test.go): the broker is passed opaquely, a nil broker without a resource, and a binding failure fails the attempt before any executor call.
-- [Composed daemon test](../../integration/daemon_workspace_test.go), using local bare repositories only:
+  - the ported [stray-process test](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/kill_unix_test.go)
+- [Shell broker test](https://github.com/open-conduit/open-conduit/blob/main/executors/shell/shell_test.go): workspace cwd, layer order and reserved-name drop, the result/log explanation and structured failures.
+- [Scheduler hook test](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_resources_test.go): the broker is passed opaquely, a nil broker without a resource, and a binding failure fails the attempt before any executor call.
+- [Composed daemon test](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_workspace_test.go), using local bare repositories only:
   - a fresh run at the remote head with the copied `.env` layer and setup survives a daemon SIGKILL by adoption (one attempt), and its worktree is removed and deregistered after success
   - a failed fresh run is retained and reported by doctor
   - a shared run fast-forwards the main checkout and keeps an unrelated local edit
   - a scope with no resource runs with no `.env` layer
-- [Disk safety tests](../../extensions/git/disk_test.go) (08-02):
+- [Disk safety tests](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/disk_test.go) (08-02):
   - full-disk refusal through the injected probe, with the actionable message, the scope's spare workspaces and nothing made or leased
   - reuse without a check, `disk_full_percent: 100` and a capped reserve
   - a half-made workspace cleared, deregistered and unleased
   - the sweep removing finished, owner-unknown and orphaned clean workspaces (branches kept) and keeping dirty, unpushed, in-use, unreadable, live and still-retained ones
-- [Disk safety drill](../../integration/daemon_workspace_disk_test.go) on the composed daemon: a structured `workspace_no_space` refusal with nothing run, then the sweep removing a cancelled Work's workspace and an idle orphan while keeping a dirty orphan, all reported by doctor.
+- [Disk safety drill](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_workspace_disk_test.go) on the composed daemon: a structured `workspace_no_space` refusal with nothing run, then the sweep removing a cancelled Work's workspace and an idle orphan while keeping a dirty orphan, all reported by doctor.
 
 ## Deferred
 
-- 03-03 binds Claude Code to `work`: a new segment acquires and a resumed segment uses `Lookup` ([Claude Code executor](claude-code-executor.md)).
-- Workspaces are made by executor acquisition and removed by host reconcile, so agents need no worktree commands: turns run in the acquired workspace and no workspace operation is registered ([engineering tools](engineering-tools.md)).
+- 03-03 binds Claude Code to `work`: a new segment acquires and a resumed segment uses `Lookup` ([Claude Code executor](../claude-code-executor/)).
+- Workspaces are made by executor acquisition and removed by host reconcile, so agents need no worktree commands: turns run in the acquired workspace and no workspace operation is registered ([engineering tools](../engineering-tools/)).
 - Pending-run coalescing for in-checkout jobs is resolved by 05-01 (one standing Work per job).
 - Windows has no process-group setup cleanup or stray-process search (B06).
 
-05-02 update: `Resource.Summary` is the provider's one-line description for history (the Git provider: `main checkout, fast-forwarded 2 commit(s) to origin/main`, `main checkout, 1 commit(s) behind origin/main: another execution is using the checkout`, `fresh worktree at origin/main 1a2b3c4`, `worktree on branch agent/work-x, reused`). Executors report the acquired resource (never its environment) as `extension.Result.Workspace`, and run history and the TUI show it. Jobs use `fresh` and `shared` through ordinary bindings ([job runs](schedule-extension.md#job-runs-05-02)); `TestDaemonJobParity` covers `TestJobCatchesUpTheMainCheckout` and `TestDaemonWorkflowC` the fresh-checkout job.
+05-02 update: `Resource.Summary` is the provider's one-line description for history (the Git provider: `main checkout, fast-forwarded 2 commit(s) to origin/main`, `main checkout, 1 commit(s) behind origin/main: another execution is using the checkout`, `fresh worktree at origin/main 1a2b3c4`, `worktree on branch agent/work-x, reused`). Executors report the acquired resource (never its environment) as `extension.Result.Workspace`, and run history and the TUI show it. Jobs use `fresh` and `shared` through ordinary bindings ([job runs](../schedule-extension/#job-runs-05-02)); `TestDaemonJobParity` covers `TestJobCatchesUpTheMainCheckout` and `TestDaemonWorkflowC` the fresh-checkout job.

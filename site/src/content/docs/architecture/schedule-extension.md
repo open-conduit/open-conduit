@@ -1,6 +1,8 @@
-# Scheduled jobs: definitions, catch-up, the one-pending-run rule and job runs
+---
+title: "Scheduled jobs: definitions, catch-up, the one-pending-run rule and job runs"
+---
 
-Ticket 05-01 puts job triggers on the five primitives. A timed job is a configured independent root on a durable core timer; every trigger is an accepted Event; the `schedule` route makes it input of the job's one standing Work; the scheduler runs it as an ordinary Execution through the job's binding. Nothing schedules work outside event → route → Work → Execution. The extension is [`extensions/schedule`](../../extensions/schedule); [`internal/bootstrap/schedule.go`](../../internal/bootstrap/schedule.go) composes it. Job runs (fresh checkout, detached runs, env and secret precedence, payload artifacts, timeouts, kept runs, the job history view) is delivered by 05-02; see [Job runs](#job-runs-05-02).
+Ticket 05-01 puts job triggers on the five primitives. A timed job is a configured independent root on a durable core timer; every trigger is an accepted Event; the `schedule` route makes it input of the job's one standing Work; the scheduler runs it as an ordinary Execution through the job's binding. Nothing schedules work outside event → route → Work → Execution. The extension is [`extensions/schedule`](https://github.com/open-conduit/open-conduit/tree/main/extensions/schedule); [`internal/bootstrap/schedule.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/schedule.go) composes it. Job runs (fresh checkout, detached runs, env and secret precedence, payload artifacts, timeouts, kept runs, the job history view) is delivered by 05-02; see [Job runs](#job-runs-05-02).
 
 ## Configuration
 
@@ -64,7 +66,7 @@ Every trigger carries the `schedule.trigger.v1` payload: job, kind, run label (`
 
 Timed jobs use a core timer with a calendar recurrence. `runtime.TimerOptions.Recurrences` registers pure `RecurrenceFunc` policies by kind. `Timers.ArmRecurrence` stores the opaque spec with the timer. Inside the firing transaction core asks the policy which occurrence this firing publishes (or none) and when the timer fires next. Acceptance, the firing ledger and the rearm commit together, so a crash never separates them; replaying a firing returns its original result. A substituted or skipped firing never accepts the template. Core keeps no calendar knowledge.
 
-05-03: the introspection extension registers a second recurrence kind (`introspection.v1`) for its daily sweep and triage, with the same calendar rules. It is not a `schedule` entry, because the PRD makes them Work kinds the introspection extension defines ([introspection](issue-reporting.md#the-sweep-and-triage-schedules)). Bootstrap merges both kinds into `TimerOptions.Recurrences` and both standing Work policies into `SchedulerOptions.WorkKinds`.
+05-03: the introspection extension registers a second recurrence kind (`introspection.v1`) for its daily sweep and triage, with the same calendar rules. It is not a `schedule` entry, because the PRD makes them Work kinds the introspection extension defines ([introspection](../issue-reporting/#the-sweep-and-triage-schedules)). Bootstrap merges both kinds into `TimerOptions.Recurrences` and both standing Work policies into `SchedulerOptions.WorkKinds`.
 
 The schedule policy (`schedule.Recurrence`) decides catch-up:
 
@@ -145,7 +147,7 @@ Turning off webhooks (`--no-tunnel`, no listener) affects only these explicitly 
 
 | Job | Open Conduit binding |
 | --- | --- |
-| A command in the main checkout | `shell` with `command`/`argv`, plus `resource: {"provider": "git", "config": {"checkout": …, "mode": "shared"}}`. The checkout is fast-forwarded when no other execution holds it; otherwise the run is told how far behind it is and why ([workspaces](workspaces.md)). |
+| A command in the main checkout | `shell` with `command`/`argv`, plus `resource: {"provider": "git", "config": {"checkout": …, "mode": "shared"}}`. The checkout is fast-forwarded when no other execution holds it; otherwise the run is told how far behind it is and why ([workspaces](../workspaces/)). |
 | A fresh checkout | The same with `"mode": "fresh"`: a detached worktree at the remote head, removed after success and retained `retain_failed_seconds` (default one day) after failure. |
 | No checkout | `shell` with no resource (a private scratch directory, or `dir`). |
 | An agent job | Any executor: a `claude-code` binding selected by a `schedule` route runs a turn per trigger. |
@@ -164,7 +166,7 @@ Jobs get no automatic failure-budget retry, because a job is often not idempoten
 
 ### Detached long-running jobs
 
-Every shell segment is already detached by construction: its own process group, file-backed output, identity-checked adoption after a daemon restart without relaunch ([shell executor](shell-executor.md)). A detached job is therefore an ordinary job binding with a long binding `timeout_seconds`. One rule needs no core change:
+Every shell segment is already detached by construction: its own process group, file-backed output, identity-checked adoption after a daemon restart without relaunch ([shell executor](../shell-executor/)). A detached job is therefore an ordinary job binding with a long binding `timeout_seconds`. One rule needs no core change:
 
 - **Deliveries and manual runs start nothing while it runs.** Two `schedule` routes to the same binding: one selecting `"triggers": ["timer"]` with `active_policy: "queue"` (a slot due during the run waits for it), then one for the job's remaining kinds with `active_policy: "drop"`. Drop applies only while the Work is running, as for every route.
 

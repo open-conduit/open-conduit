@@ -1,6 +1,8 @@
-# Durable acceptance and reconciliation
+---
+title: "Durable acceptance and reconciliation"
+---
 
-Ticket 02-02 implements [B02 storage](domain-storage.md), [B03 ingress](extensions.md) and the acceptance portions of [B04](runtime-semantics.md). The [implementation](../../internal/runtime) depends on public contracts only. It has no service, Git, SQLite, config-loader or reference-double dependency. [SQLite integration cases](../../integration/ingress_test.go) exercise the production boundary. Routing/dispatch, derived-event budgets and execution lifecycle remain 02-03 onward; this ticket never launches an executor or changes Work state.
+Ticket 02-02 implements [B02 storage](../domain-storage/), [B03 ingress](../extensions/) and the acceptance portions of [B04](../runtime-semantics/). The [implementation](https://github.com/open-conduit/open-conduit/tree/main/internal/runtime) depends on public contracts only. It has no service, Git, SQLite, config-loader or reference-double dependency. [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob/main/integration/ingress_test.go) exercise the production boundary. Routing/dispatch, derived-event budgets and execution lifecycle remain 02-03 onward; this ticket never launches an executor or changes Work state.
 
 ## One acceptance boundary
 
@@ -48,4 +50,4 @@ Default limits are 1,000 observations/direct Events per page, 10,000 staged item
 
 Run `make check`, `GOTOOLCHAIN=go1.24.2 make check` and the ingress integration cases with `go test -race -count=1 ./integration -run 'Ingress'`. The SQLite fixtures demonstrate reconcile-only convergence, complete/staged checkpoint reopening, repeated/partial/mixed generations, push/reconcile/late-delivery dedup, source/scope isolation, declaration/canonical identity rejection, page-lease fencing, pending identity-conflict isolation and post-commit/pre-ack process kill recovery. B02 weakened-backend controls still run unchanged. No real provider, webhook transport, router, executor or ownership transfer is claimed.
 
-07-02 note: an external extension's ingress runs through the same `Ingress.Push`/`Reconcile` path. A crash mid-push accepts nothing, and a crash mid-page advances nothing. Because canonical identity binds `(item, version)` to the envelope, a release that changes payloads must mint new observation versions and delivery IDs ([schema evolution](extension-protocol.md#event-payload-schema-evolution)); otherwise every page fails with a deterministic conflict.
+07-02 note: an external extension's ingress runs through the same `Ingress.Push`/`Reconcile` path. A crash mid-push accepts nothing, and a crash mid-page advances nothing. Because canonical identity binds `(item, version)` to the envelope, a release that changes payloads must mint new observation versions and delivery IDs ([schema evolution](../extension-protocol/#event-payload-schema-evolution)); otherwise every page fails with a deterministic conflict.

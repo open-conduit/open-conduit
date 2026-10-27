@@ -1,6 +1,8 @@
-# Local backup bundles
+---
+title: "Local backup bundles"
+---
 
-Ticket 02-01 implements [backup composition](../../internal/backup/backup.go) alongside [SQLite and artifacts](sqlite-artifacts.md). Operator commands and recovery runbooks remain 06-02. These APIs do not start a daemon or transfer scope ownership.
+Ticket 02-01 implements [backup composition](https://github.com/open-conduit/open-conduit/blob/main/internal/backup/backup.go) alongside [SQLite and artifacts](../sqlite-artifacts/). Operator commands and recovery runbooks remain 06-02. These APIs do not start a daemon or transfer scope ownership.
 
 `backup.Create(ctx, destination, database, artifacts, build)` requires a previously absent destination under an operator-controlled parent directory. It pins artifact deletion **before** taking a SQLite online snapshot, reads Execution references from that snapshot, copies every referenced artifact with streaming integrity checks, and writes a versioned manifest containing the database schema, build identity and SHA-256 digests. Missing content fails the backup; this first implementation does not omit expired references. No logs or artifact bytes enter coordination KV.
 
@@ -12,4 +14,4 @@ Digests detect corruption and incomplete copies; they do not authenticate a bund
 
 `go test -race ./internal/backup` exercises captured correlation/timer/history/content, exclusion of later live changes, lease fencing, existing-destination refusal, manifest/database/artifact corruption and missing-reference rejection. SQLite and artifact suites separately exercise process kill/reopen and transaction/publication fault boundaries.
 
-06-02 adds the operator commands and runbooks ([recovery](recovery.md)). `open-conduit backup create DEST`, `backup verify BUNDLE` and `backup restore BUNDLE --to DIR` run offline under the state directory's daemon lock (`internal/bootstrap/state.go`). A restore also revokes the bundle's operator credential and writes a fresh `private/operator.token` through the locked local reset (`auth recover`). `backup.Inspect` reads a manifest without verifying its bytes. `TestDaemonMigrationRehearsal` restores a bundle and restarts on it with no repeated external write, claim or job run, and refuses a tampered bundle.
+06-02 adds the operator commands and runbooks ([recovery](../recovery/)). `open-conduit backup create DEST`, `backup verify BUNDLE` and `backup restore BUNDLE --to DIR` run offline under the state directory's daemon lock (`internal/bootstrap/state.go`). A restore also revokes the bundle's operator credential and writes a fresh `private/operator.token` through the locked local reset (`auth recover`). `backup.Inspect` reads a manifest without verifying its bytes. `TestDaemonMigrationRehearsal` restores a bundle and restarts on it with no repeated external write, claim or job run, and refuses a tampered bundle.

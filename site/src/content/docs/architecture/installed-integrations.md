@@ -1,10 +1,12 @@
-# Installed integrations: Linear, Jira, Bitbucket, PostHog and operator tools
+---
+title: "Installed integrations: Linear, Jira, Bitbucket, PostHog and operator tools"
+---
 
 Ticket 06-01 delivers the adapters outside the GitHub path and the remaining operator surfaces. All evidence uses fixtures and fakes (`lineartest`, `jiratest`, `bitbuckettest` and a PostHog capture fake). No real service was called; real checks against configured accounts are live-operation evidence for the deferred 03-07, 03-09 or 06-04.
 
 ## The shared tracker kit
 
-[`extensions/tracker`](../../extensions/tracker) is the code every non-GitHub tracker shares. It imports only public contracts. A tracker supplies a `Service` (its API client and webhook format), and the kit supplies:
+[`extensions/tracker`](https://github.com/open-conduit/open-conduit/tree/main/extensions/tracker) is the code every non-GitHub tracker shares. It imports only public contracts. A tracker supplies a `Service` (its API client and webhook format), and the kit supplies:
 
 - **Ingress.** Push and reconcile share one normalizer, so equal state has an equal delivery ID from either transport.
   - Families are `<type>.issue.open|closed`, `<type>.comment.human|bot|agent` and the one-shot `<type>.delivery`.
@@ -32,7 +34,7 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 
 ## Linear
 
-[`extensions/linear`](../../extensions/linear) works one or more teams over the GraphQL API.
+[`extensions/linear`](https://github.com/open-conduit/open-conduit/tree/main/extensions/linear) works one or more teams over the GraphQL API.
 
 - **Connection.** `api_url` and `agent_account`. The secret is `token`: a personal key, or `lin_oauth_…` sent as a bearer token.
 - **Entry.** `teams` and `states` (claim-from state types or names; default unstarted, started), plus the kit's fields.
@@ -43,7 +45,7 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 
 ## Jira
 
-[`extensions/jira`](../../extensions/jira) works Cloud or Data Center projects over REST API v2.
+[`extensions/jira`](https://github.com/open-conduit/open-conduit/tree/main/extensions/jira) works Cloud or Data Center projects over REST API v2.
 
 - **Connection.** `base_url`, `auth` (basic with `email`, or bearer) and `agent_account`. The secret is `token`.
 - **Entry.** `projects`, `jql` and `fields` (custom fields routes can match), plus the kit's fields. Labels cannot contain spaces.
@@ -57,7 +59,7 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 
 ## Bitbucket Cloud
 
-[`extensions/bitbucket`](../../extensions/bitbucket) is the code host for a tracker scope.
+[`extensions/bitbucket`](https://github.com/open-conduit/open-conduit/tree/main/extensions/bitbucket) is the code host for a tracker scope.
 
 - **Families.** `bitbucket.pull_request.open|closed|merged`, `bitbucket.comment.*`, `bitbucket.checks.pending|passed|failed` (commit statuses, with the preview URL from `preview_pattern`) and the one-shot `bitbucket.delivery`.
 - **Correlation.** A PR is keyed to its tracker issue in the tracker entry's namespace (`tracker {namespace, keys}`). The issue comes from the branch (`agent/issue/KEY`, the claude-code `agent/{key}` branch) first, then from a key in the title or description, and the key uses the issue generation current at the PR's creation. Bootstrap resolves the generation through the registered tracker's reopen history. Otherwise the PR keeps `pr/N`.
@@ -67,7 +69,7 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 
 ## PostHog
 
-[`extensions/posthog`](../../extensions/posthog) is configured by a `posthog` connection (`host`, `distinct_id`, secret `token` = `phc_…`) and a non-ingress `posthog` entry in a scope (`turns`, `introspection`, both default true).
+[`extensions/posthog`](https://github.com/open-conduit/open-conduit/tree/main/extensions/posthog) is configured by a `posthog` connection (`host`, `distinct_id`, secret `token` = `phc_…`) and a non-ingress `posthog` entry in a scope (`turns`, `introspection`, both default true).
 
 - **Exporter.** It is on the observability pipeline. It sends `agent_turn` for each finished execution of the entry's scope: outcome, attempt, executor, work kind, duration, tokens and cost. A failing PostHog loses telemetry (counted, reported as doctor `capture_failing`) and never delays the runtime.
 - **Introspection events.** The extension's telemetry events go to a fan-out sink: the JSON log first, then every PostHog entry that takes them.
@@ -75,7 +77,7 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 
 ## Composition, doctor, setup and dry run
 
-[`internal/bootstrap/trackers.go`](../../internal/bootstrap/trackers.go) and [`posthog.go`](../../internal/bootstrap/posthog.go) register the types, the route-config validators, the tools on every generation, and the webhook routes `POST /<type>/<scope>/<entry>` on the listener. They also run `manage_webhook` re-pointing through the same retry and doctor paths as GitHub, and a background projection pass.
+[`internal/bootstrap/trackers.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/trackers.go) and [`posthog.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/posthog.go) register the types, the route-config validators, the tools on every generation, and the webhook routes `POST /<type>/<scope>/<entry>` on the listener. They also run `manage_webhook` re-pointing through the same retry and doctor paths as GitHub, and a background projection pass.
 
 - **Doctor.** `trackers` (registration, rate limit, reconcile, projection, a Bitbucket entry whose tracker is not registered, dry run), `trackers_auth` (check_secrets: sign-in), `posthog` and `posthog_auth` (key form; PostHog cannot be asked about a key without sending an event). The `webhooks` check lists tracker routes and hooks.
 - **Setup.** `init linear --teams ENG[,OPS]` and `init jira --site … --projects …`. Both take `--bitbucket WORKSPACE/SLUG --bitbucket-username … --bitbucket-token REF` and an optional `--checkout`. They write a claude-code binding on the `work-tracker-issue` playbook (`args {key}`, branch `agent/{key}`, `<type>.status.v1`) and validate offline. Scopes stay workspace-free unless a checkout is given.
@@ -91,7 +93,7 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 ## Evidence
 
 - **Unit and contract tests.** Each extension's tests include the shared ingress conformance, cases (wiki conversion, marks, pagination and fallback, transitions, reopens, webhooks and admin refusals, rate limits and credentials) and the kit's route, generation and config cases.
-- **SQLite.** [`integration/tracker_test.go`](../../integration/tracker_test.go) runs for both trackers: claim policy, input, labels and status convergence without feedback, a lost comment answer recovered after a restart, close and reopen generations, the tools, and Bitbucket PR, checks, comment and merge input to the tracker Work.
+- **SQLite.** [`integration/tracker_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/tracker_test.go) runs for both trackers: claim policy, input, labels and status convergence without feedback, a lost comment answer recovered after a restart, close and reopen generations, the tools, and Bitbucket PR, checks, comment and merge input to the tracker Work.
 - **Daemon drill.** `TestDaemonTrackersAndPostHog` (in `make drill`) runs Linear and Jira scopes, Bitbucket and PostHog on fakes. It covers `os call` tools, projection, PostHog `agent_turn`, doctor, `route` and `adapters`, and a restart that posts nothing again.
 - **Setup.** `TestTrackerSetupScopesValidateOffline`.
 - **Editor.** `TestConfigEditor`.

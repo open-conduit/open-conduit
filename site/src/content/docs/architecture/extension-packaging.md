@@ -1,16 +1,18 @@
-# Extension packaging, SDK and certification
+---
+title: "Extension packaging, SDK and certification"
+---
 
-Ticket 07-03 · **provisional, for user review**. This guide covers writing, packaging, installing, upgrading, rolling back, removing and certifying a third-party extension. It builds on the [subprocess protocol](extension-protocol.md) (07-01) and its [runtime, trust model and schema evolution](extension-protocol.md#runtime-trust-model-and-schema-evolution-07-02) (07-02). Decisions 21–32 at the end are provisional.
+Ticket 07-03 · **provisional, for user review**. This guide covers writing, packaging, installing, upgrading, rolling back, removing and certifying a third-party extension. It builds on the [subprocess protocol](../extension-protocol/) (07-01) and its [runtime, trust model and schema evolution](../extension-protocol/#runtime-trust-model-and-schema-evolution-07-02) (07-02). Decisions 21–32 at the end are provisional.
 
 Code:
 
-- [`protocol/sdk`](../../protocol/sdk/sdk.go): the extension-side SDK;
-- [`protocol/certification.go`](../../protocol/certification.go): the certification fixture format;
-- [`conformance.Criteria`](../../conformance/certification.go): the criteria;
-- [`internal/certify`](../../internal/certify/certify.go): the runner;
-- [`internal/extproc/install.go`](../../internal/extproc/install.go): install, update, rollback and removal;
-- [`internal/extproc/diagnose.go`](../../internal/extproc/diagnose.go): diagnostics;
-- [`internal/bootstrap/extensions.go`](../../internal/bootstrap/extensions.go): daemon wiring.
+- [`protocol/sdk`](https://github.com/open-conduit/open-conduit/blob/main/protocol/sdk/sdk.go): the extension-side SDK;
+- [`protocol/certification.go`](https://github.com/open-conduit/open-conduit/blob/main/protocol/certification.go): the certification fixture format;
+- [`conformance.Criteria`](https://github.com/open-conduit/open-conduit/blob/main/conformance/certification.go): the criteria;
+- [`internal/certify`](https://github.com/open-conduit/open-conduit/blob/main/internal/certify/certify.go): the runner;
+- [`internal/extproc/install.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/install.go): install, update, rollback and removal;
+- [`internal/extproc/diagnose.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/diagnose.go): diagnostics;
+- [`internal/bootstrap/extensions.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/extensions.go): daemon wiring.
 
 ## Writing an extension with the SDK
 
@@ -34,7 +36,7 @@ func main() {
 }
 ```
 
-The SDK serves the public Go contracts unchanged, so code written for the in-process interfaces (`extension.Ingress`, `extension.Executor` and its optional controls, `extension.RouteHandler`, `extension.Operation`, `extension.ResourceProvider`, `observability.Exporter`, `extension.Setup`) runs in a subprocess as it is. The first-party Slack extension and shell executor run this way with no change to their packages ([`packages/slack`](../../packages/slack/slack.go), [`packages/shell`](../../packages/shell/shell.go)).
+The SDK serves the public Go contracts unchanged, so code written for the in-process interfaces (`extension.Ingress`, `extension.Executor` and its optional controls, `extension.RouteHandler`, `extension.Operation`, `extension.ResourceProvider`, `observability.Exporter`, `extension.Setup`) runs in a subprocess as it is. The first-party Slack extension and shell executor run this way with no change to their packages ([`packages/slack`](https://github.com/open-conduit/open-conduit/blob/main/packages/slack/slack.go), [`packages/shell`](https://github.com/open-conduit/open-conduit/blob/main/packages/shell/shell.go)).
 
 | `sdk.Extension` field | Manifest declaration | Wire methods |
 | --- | --- | --- |
@@ -71,9 +73,9 @@ Any language works: the protocol is newline-delimited JSON-RPC 2.0, and the cert
 
 ### Examples
 
-- [`protocol/examples/notes`](../../protocol/examples/notes): every extension surface. It has ingress with a webhook receiver, a route with a trigger, operations including a committed emission, a recurrence, tasks, a resource provider, a telemetry exporter, annotations, a setup flow, validation, three releases with schema evolution, and a KV migration.
-- [`protocol/examples/runner`](../../protocol/examples/runner): an executor with detached jobs, inject, interrupt, stop and forget.
-- [`packages/slack`](../../packages/slack) and [`packages/shell`](../../packages/shell): real first-party workloads packaged.
+- [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/notes): every extension surface. It has ingress with a webhook receiver, a route with a trigger, operations including a committed emission, a recurrence, tasks, a resource provider, a telemetry exporter, annotations, a setup flow, validation, three releases with schema evolution, and a KV migration.
+- [`protocol/examples/runner`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/runner): an executor with detached jobs, inject, interrupt, stop and forget.
+- [`packages/slack`](https://github.com/open-conduit/open-conduit/tree/main/packages/slack) and [`packages/shell`](https://github.com/open-conduit/open-conduit/tree/main/packages/shell): real first-party workloads packaged.
 
 ## Package layout
 
@@ -225,7 +227,7 @@ A report states:
 
 ### Negative controls
 
-[`protocol/examples/weakened`](../../protocol/examples/weakened/weakened.go) packages the examples with one defect each. `TestCertificationNegativeControls` proves that each fails the criterion it names, and is never certified:
+[`protocol/examples/weakened`](https://github.com/open-conduit/open-conduit/blob/main/protocol/examples/weakened/weakened.go) packages the examples with one defect each. `TestCertificationNegativeControls` proves that each fails the criterion it names, and is never certified:
 
 - version-blind negotiation;
 - manifest drift;

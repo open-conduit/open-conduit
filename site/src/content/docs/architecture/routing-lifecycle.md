@@ -1,6 +1,8 @@
-# Durable routing and Work lifecycle
+---
+title: "Durable routing and Work lifecycle"
+---
 
-Ticket 02-03 implements the routing, Work lifecycle and causal limits from [B04](runtime-semantics.md). The [runtime](../../internal/runtime) uses public storage and extension contracts; [integration tests](../../integration/routing_test.go) compose it with real SQLite. A host still needs the scheduler, timer driver and authenticated management service delivered by subsequent tickets.
+Ticket 02-03 implements the routing, Work lifecycle and causal limits from [B04](../runtime-semantics/). The [runtime](https://github.com/open-conduit/open-conduit/tree/main/internal/runtime) uses public storage and extension contracts; [integration tests](https://github.com/open-conduit/open-conduit/blob/main/integration/routing_test.go) compose it with real SQLite. A host still needs the scheduler, timer driver and authenticated management service delivered by subsequent tickets.
 
 `NewRouter(store, now, RouterOptions)` takes a trusted clock, a configuration generation, deterministic route handlers and registered executor implementations/fallbacks. `RouterOptions.Bindings` is keyed by executor registration, while routes refer to effective Scope binding names. The router checks implementations with `extension.ValidateBinding`; capability flags alone cannot establish control support. Queue-only fixtures may omit an executor, but cannot claim optional capabilities. Router option maps are copied at construction. Stored Scope routes resolve root to leaf, preserving override slots, and inherited routes use the target Scope's effective named bindings. Configuration loading, authorization ceilings and reload publication remain 02-06.
 

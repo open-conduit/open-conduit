@@ -1,6 +1,8 @@
-# Daemon composition and the core gate
+---
+title: "Daemon composition and the core gate"
+---
 
-Ticket 02-09 composes the first long-running daemon, `open-conduit serve`, and closes the stage 02 gate with real process kill/restart drills. The composition root is [`internal/bootstrap`](../../internal/bootstrap). The [`serve` command](../../internal/cli/serve.go) resolves paths and hands them to it through `cli.Env.Serve`, so neither the CLI package nor the `os` binary links the runtime. The drills are in [`integration/daemon_test.go`](../../integration/daemon_test.go).
+Ticket 02-09 composes the first long-running daemon, `open-conduit serve`, and closes the stage 02 gate with real process kill/restart drills. The composition root is [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/tree/main/internal/bootstrap). The [`serve` command](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/serve.go) resolves paths and hands them to it through `cli.Env.Serve`, so neither the CLI package nor the `os` binary links the runtime. The drills are in [`integration/daemon_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_test.go).
 
 ## Composition
 
@@ -60,14 +62,14 @@ Shutdown is handled in two ways:
 
 ## Contract clarifications
 
-The drills found two runtime defects. Both are fixed, with regressions in [`integration/restart_test.go`](../../integration/restart_test.go):
+The drills found two runtime defects. Both are fixed, with regressions in [`integration/restart_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/restart_test.go):
 
 - **Type-only waits (B03/B04).** A Wait is a subscription on its Work's keys. A toolbelt `wait` with types but no keys now subscribes on every key the Work owns. Work without keys is refused at declaration with `invalid`. Previously the declaration was accepted, but the handshake registration failed against storage, which requires keys.
 - **Declarations survive recovery (02-06 handshake).** An unapplied toolbelt declaration belongs to the segment being adopted: `Recover` never relaunches, and wait registration clears the declaration before any resume. `Recover` now moves it to the new epoch. Previously, a crash between the declaration and the host's `Complete` lost it. A declared wait then completed the Work instead, and a declared outcome was replaced by the raw exit status.
 
 ## Kill drills
 
-The test builds `open-conduit` with the `faultinject` build tag; production builds compile [`fault_none.go`](../../internal/bootstrap/fault_none.go) instead. In that build, `OPEN_CONDUIT_FAULT=<boundary>:<phase>[:<event type>]` wraps raw SQLite, beneath instrumentation, and SIGKILLs the daemon at the first matching write:
+The test builds `open-conduit` with the `faultinject` build tag; production builds compile [`fault_none.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/fault_none.go) instead. In that build, `OPEN_CONDUIT_FAULT=<boundary>:<phase>[:<event type>]` wraps raw SQLite, beneath instrumentation, and SIGKILLs the daemon at the first matching write:
 
 | Phase | When the daemon is killed | What it proves |
 | --- | --- | --- |
@@ -99,7 +101,7 @@ The fixture is a scope with one shell binding and the `manual` route. Its script
 | Config reload | Apply generation 2 while parked | Pass. Attempt 1 stays pinned to generation 1, the wake runs under 2, and a restart restores 2. |
 | Operator CLI | `events emit` with key, `runs table`, `doctor` | Pass, using only the shipped CLI. |
 
-03-03 adds a `kv` boundary (an extension KV `Put`, optionally in one namespace). [`TestDaemonClaudeCodeContinuityKill`](../../integration/daemon_claudecode_test.go) arms it at the Claude Code executor's pre-launch continuity decision, before and after the commit. [`TestDaemonClaudeCodeExecution`](../../integration/daemon_claudecode_test.go) kills the daemon externally while a claude turn runs. See [the Claude Code executor](claude-code-executor.md).
+03-03 adds a `kv` boundary (an extension KV `Put`, optionally in one namespace). [`TestDaemonClaudeCodeContinuityKill`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) arms it at the Claude Code executor's pre-launch continuity decision, before and after the commit. [`TestDaemonClaudeCodeExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) kills the daemon externally while a claude turn runs. See [the Claude Code executor](../claude-code-executor/).
 
 When the test binary is race-enabled, as under `make check`, the daemon is also built with `-race`. Any data race report in a daemon log fails the drill. Telemetry is at most once from memory, so records queued when a daemon is killed can be lost. The durable history is asserted in full. Lifecycle completeness is required only for records produced after the last kill.
 
@@ -112,7 +114,7 @@ When the test binary is race-enabled, as under `make check`, the daemon is also 
 
 ## All four workflows on one daemon (05-04)
 
-The stage 05 gate reruns the composed daemon with every workload at once. [`TestDaemonAllWorkflows`](../../integration/daemon_all_workflows_test.go) (in `make drill`) starts one `serve` process on three scopes, with fakes only: the GitHub and Slack fakes, a fake Claude Code CLI, and a shell executor calling the real `os` toolbelt.
+The stage 05 gate reruns the composed daemon with every workload at once. [`TestDaemonAllWorkflows`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_all_workflows_test.go) (in `make drill`) starts one `serve` process on three scopes, with fakes only: the GitHub and Slack fakes, a fake Claude Code CLI, and a shell executor calling the real `os` toolbelt.
 
 | Scope | Workflow | Executors |
 | --- | --- | --- |
@@ -134,6 +136,6 @@ The drill checks the following, in order:
 10. **Redaction.** No secret value appears in any file under the drill root (SQLite, logs, artifacts, executor state, fixture output) or in the management API's runs, events and Work.
 11. **Doctor.** The `github`, `schedule` and `introspection` checks pass on the shared daemon.
 
-**Regression found and fixed.** An operator scope reconcile that committed while a generation was under way (a page in flight, or between pages) was absorbed by that generation. The generation could predate the request, yet its completion scheduled the next scan a full interval away. The ingress state now counts requests, and a generation that saw a request after its first claim leaves the source due on completion. The regression is [`TestScopeReconcileDuringScanRunsAgain`](../../integration/operator_controls_test.go), covering both cases. See [operator controls](operator-setup.md) and [event ingress](event-ingress.md).
+**Regression found and fixed.** An operator scope reconcile that committed while a generation was under way (a page in flight, or between pages) was absorbed by that generation. The generation could predate the request, yet its completion scheduled the next scan a full interval away. The ingress state now counts requests, and a generation that saw a request after its first claim leaves the source due on completion. The regression is [`TestScopeReconcileDuringScanRunsAgain`](https://github.com/open-conduit/open-conduit/blob/main/integration/operator_controls_test.go), covering both cases. See [operator controls](../operator-setup/) and [event ingress](../event-ingress/).
 
-**Storage negative controls on SQLite.** [`TestWeakenedSQLiteIsRejected`](../../internal/storage/sqlite/negative_test.go) wraps the real backend three ways: lost atomicity (a failed callback still commits), lost deduplication (the delivery identity includes the Event ID) and lost fencing (the lease guard is dropped). Each wrapper is rejected by the shared cases it weakens, and the same cases pass on plain SQLite. The reference-backend controls in `conformance` still run.
+**Storage negative controls on SQLite.** [`TestWeakenedSQLiteIsRejected`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/negative_test.go) wraps the real backend three ways: lost atomicity (a failed callback still commits), lost deduplication (the delivery identity includes the Event ID) and lost fencing (the lease guard is dropped). Each wrapper is rejected by the shared cases it weakens, and the same cases pass on plain SQLite. The reference-backend controls in `conformance` still run.

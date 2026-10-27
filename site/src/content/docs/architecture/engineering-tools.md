@@ -1,12 +1,14 @@
-# Engineering tools, waits and playbooks
+---
+title: "Engineering tools, waits and playbooks"
+---
 
 Ticket 03-04 adds the agent-facing engineering workflow on public extension points. The pieces are:
 
-- the GitHub tool operations ([`extensions/github/tools.go`](../../extensions/github/tools.go), [`tools_wait.go`](../../extensions/github/tools_wait.go)), registered through `extension.Registrar`;
-- translated waits: a public `Operation.Wait` contract and the runtime that declares and installs them ([`internal/runtime/toolbelt_wait.go`](../../internal/runtime/toolbelt_wait.go), [`waits.go`](../../internal/runtime/waits.go));
-- scheduled holds: the `github-hold` route and in-process executor ([`extensions/github/hold.go`](../../extensions/github/hold.go));
-- the playbooks and setup guide ([`extensions/github/playbooks`](../../extensions/github/playbooks));
-- composition in [`internal/bootstrap/tools.go`](../../internal/bootstrap/tools.go).
+- the GitHub tool operations ([`extensions/github/tools.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/tools.go), [`tools_wait.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/tools_wait.go)), registered through `extension.Registrar`;
+- translated waits: a public `Operation.Wait` contract and the runtime that declares and installs them ([`internal/runtime/toolbelt_wait.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/toolbelt_wait.go), [`waits.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/waits.go));
+- scheduled holds: the `github-hold` route and in-process executor ([`extensions/github/hold.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/hold.go));
+- the playbooks and setup guide ([`extensions/github/playbooks`](https://github.com/open-conduit/open-conduit/tree/main/extensions/github/playbooks));
+- composition in [`internal/bootstrap/tools.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/tools.go).
 
 No domain condition, issue, PR or label type entered core. Core gained only generic, extension-neutral additions: an operation kind that translates to a wait, opaque dependency filters, a request identity for handlers, and authored refusals.
 
@@ -57,7 +59,7 @@ Dry-run is handled per entry by `projection.dry_run`: writes report `dry_run` an
 Behaviour:
 
 - **Refusals.** The call checks each condition before any side effect and refuses one that has already happened (`already_met`: carry on), an unknown project, a past time or nothing to wait for. A race between that read and registration is closed by the subscription backscan.
-- **Jobs.** `job:<name>` (05-02) is a FromNow dependency on the job's key in its schedule entry, over the `schedule.run.completed|failed|cancelled|handoff` Events the host announces for each finished run, so the job's next run wakes it ([job waits](schedule-extension.md#job-waits)). A job the scope's schedule entries do not declare refuses with `no_job`.
+- **Jobs.** `job:<name>` (05-02) is a FromNow dependency on the job's key in its schedule entry, over the `schedule.run.completed|failed|cancelled|handoff` Events the host announces for each finished run, so the job's next run wakes it ([job waits](../schedule-extension/#job-waits)). A job the scope's schedule entries do not declare refuses with `no_job`.
 - **The reason.** It is posted on the issue with the hold marker, so people see what is awaited.
 - **What wakes the Wait.** The Wait matches the Work's own keys with the alias type plus the own-key inputs that still reach a waiting agent: human comments, closes, merges and check results. A comment therefore wakes the agent.
 - **One wake.** One wake ends a core Wait, so the agent waits again if the prerequisite is still pending. The playbook says so. Agent comments are excluded, because the wait's own reason comment is one.
@@ -117,17 +119,17 @@ go test -race ./extensions/github/... ./internal/cli ./executors/claudecode
 go test -race -run 'TestTranslatedWait|TestGitHubTools|TestGitHubWait|TestGitHubAlready|TestGitHubHeld|TestGitHubCrossScope|TestGitHubNoChecks|TestGitHubRequiredChecks|TestGitHubToolWrites|TestSetupGuide|TestDaemonGitHub' ./integration
 ```
 
-- **Translated waits.** [`translated_wait_test.go`](../../integration/translated_wait_test.go) runs translated waits through the production toolbelt and scheduler on SQLite, persistent and reopened. It covers an already-met dependency waking at once with alias lineage and no key transfer, `FromNow` ignoring history and then waking once, a filter selecting the named item, own-key input still waking, cross-scope refusal and authorization, and the timeout timer.
-- **Tools and holds.** [`github_tools_test.go`](../../integration/github_tools_test.go) runs against the GitHub fake, through the real toolbelt, router, scheduler, projector and hold executor. It covers:
+- **Translated waits.** [`translated_wait_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/translated_wait_test.go) runs translated waits through the production toolbelt and scheduler on SQLite, persistent and reopened. It covers an already-met dependency waking at once with alias lineage and no key transfer, `FromNow` ignoring history and then waking once, a filter selecting the named item, own-key input still waking, cross-scope refusal and authorization, and the timeout timer.
+- **Tools and holds.** [`github_tools_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/github_tools_test.go) runs against the GitHub fake, through the real toolbelt, router, scheduler, projector and hold executor. It covers:
   - every tool, including retried comments, PRs, replies, uploads, notes and issues being written once, and authenticated fetch with no token leaving the host;
   - lost responses recovered by marker;
   - `TestWaitOnAnotherPRWakesTheAgentWhenItMerges`, `TestAlreadyMetWaitWakesAtOnce`, `TestHeldIssueStartsWhenAnotherAgentReports`, and a held issue starting at its time;
   - a cross-scope wait and no-checks.
-- **Daemon.** [`TestDaemonGitHubHeldIssueAndTools`](../../integration/daemon_github_test.go) drives the composed daemon: config validation of the operations, the hold route, the in-process executor over the real socket, a timer release, and `os call github.issue.comment` posting once.
+- **Daemon.** [`TestDaemonGitHubHeldIssueAndTools`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_github_test.go) drives the composed daemon: config validation of the operations, the hold route, the in-process executor over the real socket, a timer release, and `os call github.issue.comment` posting once.
 - **Unit and contract tests.** These cover condition and marker parsing, filters, routes, rendering and the registration, the playbooks naming only registered operations, plugin preparation, project additions, and the `os` client's file conventions.
 
 ## Limitations and follow-on work
 
 - **Fixtures only.** No real GitHub write or real Claude Code session ran. Real-issue evidence of the tools, waits and holds is 03-06.
-- **Not ported yet.** Job waits are delivered by 05-02. A hold condition nothing here can meet (an unknown job or project) leaves only the hold's time; with no time the issue starts at once and its first turn says why, rather than being held for ever. Sweep and triage consume `github.notes` since 05-03: the introspection extension reads these records through public storage as evidence and records the notes it handled in its own namespace, leaving `github.notes` untouched ([introspection](issue-reporting.md#evidence-aggregation)). The setup command and operator controls are delivered by 03-05 ([operator setup](operator-setup.md)).
+- **Not ported yet.** Job waits are delivered by 05-02. A hold condition nothing here can meet (an unknown job or project) leaves only the hold's time; with no time the issue starts at once and its first turn says why, rather than being held for ever. Sweep and triage consume `github.notes` since 05-03: the introspection extension reads these records through public storage as evidence and records the notes it handled in its own namespace, leaving `github.notes` untouched ([introspection](../issue-reporting/#evidence-aggregation)). The setup command and operator controls are delivered by 03-05 ([operator setup](../operator-setup/)).
 - **Waits and injected comments.** One wake ends a wait, so the agent waits again. Since 03-06 an injected comment that claude echoed is consumed with its turn (`Result.ConsumedInputs`). Since 04-02 the proof also counts when the turn ends before the dispatch acknowledgement commits, and on waiting and failed turns, so an injected comment is never listed again once claude echoed it; the playbook's "may be listed again" caveat is removed.

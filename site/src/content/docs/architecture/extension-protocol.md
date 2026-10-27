@@ -1,6 +1,8 @@
-# Extension subprocess protocol
+---
+title: "Extension subprocess protocol"
+---
 
-Decision B08 · ticket 07-01 · **provisional, for user review**. The executable definition is package [`protocol`](../../protocol/protocol.go): the version, the [manifest](../../protocol/manifest.go) and its validation, and the [method catalogue](../../protocol/methods.go). Each wire method names the public contract it carries and the shipped first-party users that needed it. The [transport prototype](../../prototypes/transport) supplies the evidence (`make protocol-prototype`). 07-02 implemented loading, handshake, supervision, the message types, the trust model and payload schema evolution ([below](#runtime-trust-model-and-schema-evolution-07-02); also provisional). 07-03 added daemon wiring, the remaining adapters, packaging, the SDK's final shape and certification: see [Extension packaging, SDK and certification](extension-packaging.md) (also provisional).
+Decision B08 · ticket 07-01 · **provisional, for user review**. The executable definition is package [`protocol`](https://github.com/open-conduit/open-conduit/blob/main/protocol/protocol.go): the version, the [manifest](https://github.com/open-conduit/open-conduit/blob/main/protocol/manifest.go) and its validation, and the [method catalogue](https://github.com/open-conduit/open-conduit/blob/main/protocol/methods.go). Each wire method names the public contract it carries and the shipped first-party users that needed it. The [transport prototype](https://github.com/open-conduit/open-conduit/tree/main/prototypes/transport) supplies the evidence (`make protocol-prototype`). 07-02 implemented loading, handshake, supervision, the message types, the trust model and payload schema evolution ([below](#runtime-trust-model-and-schema-evolution-07-02); also provisional). 07-03 added daemon wiring, the remaining adapters, packaging, the SDK's final shape and certification: see [Extension packaging, SDK and certification](../extension-packaging/) (also provisional).
 
 The protocol was extracted from the code that shipped through 05-04 and the 06-01/06-02 code: the GitHub, Slack, Linear, Jira, Bitbucket, schedule, introspection and PostHog extensions, the Git resource provider, and the shell and claude-code executors. It was not designed in the abstract. It adds **no core primitive**. Every method is an adapter over an existing public contract (`extension`, `storage` KV and reads, `observability`), or over a host composition hook the daemon already drives for in-process extensions. First-party extensions stay in-process. The user is the only protocol consumer, so the protocol is cheap to revise.
 
@@ -227,9 +229,9 @@ The trust model is defined in [07-02's section](#trust-model). Process separatio
 
 `protocol.Manifest` is the specification. Its example manifests are in `protocol/testdata`:
 
-- [`ingress-support.json`](../../protocol/testdata/ingress-support.json): a workspace-free ingress workload shaped like Slack. It declares no executor and no resource, and enables no execution method.
-- [`executor-workspace.json`](../../protocol/testdata/executor-workspace.json): an execution workload. A resumable, injectable executor with stop, forget and attach controls, plus the workspace provider it runs in.
-- [`scheduled-reporting.json`](../../protocol/testdata/scheduled-reporting.json): timers, standing Work with trigger selection, and a committed emission.
+- [`ingress-support.json`](https://github.com/open-conduit/open-conduit/blob/main/protocol/testdata/ingress-support.json): a workspace-free ingress workload shaped like Slack. It declares no executor and no resource, and enables no execution method.
+- [`executor-workspace.json`](https://github.com/open-conduit/open-conduit/blob/main/protocol/testdata/executor-workspace.json): an execution workload. A resumable, injectable executor with stop, forget and attach controls, plus the workspace provider it runs in.
+- [`scheduled-reporting.json`](https://github.com/open-conduit/open-conduit/blob/main/protocol/testdata/scheduled-reporting.json): timers, standing Work with trigger selection, and a committed emission.
 
 Validation rules:
 
@@ -265,13 +267,13 @@ The first-party extensions are not given manifests. They stay in-process. A thir
 
 Ticket 07-02 · **provisional, for user review**. Code:
 
-- [`protocol`](../../protocol/wire.go): the snake_case wire types and method params ([messages](../../protocol/messages.go)), the [error mapping](../../protocol/errors.go) onto the public sentinels, and [schema evolution](../../protocol/schema.go).
-- [`protocol/jsonrpc`](../../protocol/jsonrpc/conn.go): the transport, hardened from the prototype.
-- [`protocol/sdk`](../../protocol/sdk/sdk.go): a minimal extension-side runtime that serves the public Go contracts and gives the extension a [`Host`](../../protocol/sdk/host.go) client. 07-03 decides the SDK's final shape.
-- [`internal/extproc`](../../internal/extproc/discover.go): the host runtime. It covers discovery, conflicts, the [supervised process](../../internal/extproc/process.go), the [scoped host service](../../internal/extproc/service.go) and the [adapters](../../internal/extproc/adapters.go).
+- [`protocol`](https://github.com/open-conduit/open-conduit/blob/main/protocol/wire.go): the snake_case wire types and method params ([messages](https://github.com/open-conduit/open-conduit/blob/main/protocol/messages.go)), the [error mapping](https://github.com/open-conduit/open-conduit/blob/main/protocol/errors.go) onto the public sentinels, and [schema evolution](https://github.com/open-conduit/open-conduit/blob/main/protocol/schema.go).
+- [`protocol/jsonrpc`](https://github.com/open-conduit/open-conduit/blob/main/protocol/jsonrpc/conn.go): the transport, hardened from the prototype.
+- [`protocol/sdk`](https://github.com/open-conduit/open-conduit/blob/main/protocol/sdk/sdk.go): a minimal extension-side runtime that serves the public Go contracts and gives the extension a [`Host`](https://github.com/open-conduit/open-conduit/blob/main/protocol/sdk/host.go) client. 07-03 decides the SDK's final shape.
+- [`internal/extproc`](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/discover.go): the host runtime. It covers discovery, conflicts, the [supervised process](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/process.go), the [scoped host service](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/service.go) and the [adapters](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/adapters.go).
 - Examples:
-  - [`protocol/examples/notes`](../../protocol/examples/notes/notes.go) is the example external extension. It covers ingress, a route, operations, an emission with committed records, a recurrence, tasks, three releases and a KV migration.
-  - [`protocol/examples/runner`](../../protocol/examples/runner/runner.go) is the example external executor: detached jobs with inject, interrupt, stop and forget.
+  - [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/blob/main/protocol/examples/notes/notes.go) is the example external extension. It covers ingress, a route, operations, an emission with committed records, a recurrence, tasks, three releases and a KV migration.
+  - [`protocol/examples/runner`](https://github.com/open-conduit/open-conduit/blob/main/protocol/examples/runner/runner.go) is the example external executor: detached jobs with inject, interrupt, stop and forget.
 
 ### Loading
 
@@ -383,7 +385,7 @@ Ingress identity is part of evolution. Core binds an observation's `(item, versi
 
 ### Not done in 07-02 (delivered by 07-03)
 
-Both items below were delivered by 07-03: `serve` now discovers, admits, starts and registers installed packages, and every catalogued surface is adapted ([extension-packaging.md](extension-packaging.md)). They are kept here as the 07-02 record.
+Both items below were delivered by 07-03: `serve` now discovers, admits, starts and registers installed packages, and every catalogued surface is adapted ([extension-packaging.md](../extension-packaging/)). They are kept here as the 07-02 record.
 
 - **Daemon wiring.** `open-conduit serve` does not discover or start extensions yet. `extproc` provides every piece:
   - `Discover` and `CheckConflicts` against the bootstrap registries;
@@ -424,12 +426,12 @@ Added by 07-02, also provisional:
 19. Reentrancy is refused for every callback while any in-transaction call to that extension is outstanding. This is coarse: a concurrent background callback in that 250 ms window is refused too.
 20. Daemon wiring, and the remaining host-to-extension surfaces, are deferred to 07-03 (since delivered).
 
-Added by 07-03, also provisional: decisions 21–32 in [extension-packaging.md](extension-packaging.md#provisional-decisions-for-user-review-07-03).
+Added by 07-03, also provisional: decisions 21–32 in [extension-packaging.md](../extension-packaging/#provisional-decisions-for-user-review-07-03).
 
 ## Follow-on work
 
 - **07-02 (done, see above):** message types, the host runtime, bounded in-transaction calls, the scoped surface, the trust model, payload and KV evolution, and the example extension and executor through the shared suites.
-- **07-03 (done, see [extension-packaging.md](extension-packaging.md)):**
+- **07-03 (done, see [extension-packaging.md](../extension-packaging/)):**
   - daemon wiring of discovered extensions (bootstrap registries, `config validate`, configure on apply) and the remaining adapters (`webhook.handle`, `provider.*`, `telemetry.export`, `work.annotate`, `validate`, `setup.*`);
   - SDK and package layout, and the install location;
   - certification;

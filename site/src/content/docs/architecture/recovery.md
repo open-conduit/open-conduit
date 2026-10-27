@@ -1,4 +1,6 @@
-# Backup, restore and state recovery
+---
+title: "Backup, restore and state recovery"
+---
 
 Ticket 06-02 delivers the offline recovery commands: backup bundles with verify and restore, a locked local credential reset (`auth recover`), and a read-only state diagnosis (`state check`), with the runbooks for SQLite migration recovery and corrupted state.
 
@@ -16,7 +18,7 @@ open-conduit --data-dir ~/.local/state/open-conduit-restored serve
 open-conduit auth recover                                 # a lost or ambiguous operator token: revokes every operator credential, writes a fresh one
 ```
 
-- **What a bundle holds.** A bundle holds `conduit.db` and the artifacts the database references ([backup bundles](backup-bundles.md)). Keep bundles owner-only: they hold private Work, Events, config snapshots and executor continuity.
+- **What a bundle holds.** A bundle holds `conduit.db` and the artifacts the database references ([backup bundles](../backup-bundles/)). Keep bundles owner-only: they hold private Work, Events, config snapshots and executor continuity.
 - **What a bundle does not hold.** It holds no credentials, config, secrets, executor run directories (`executors/`), workspaces (`resources/git/`) or logs.
 - **Restore.**
   - A restore never replaces an existing directory.

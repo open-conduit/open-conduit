@@ -1,6 +1,8 @@
-# GitHub ingress, routing policy and projections
+---
+title: "GitHub ingress, routing policy and projections"
+---
 
-Ticket 03-01 delivers the first-party GitHub extension in [`extensions/github`](../../extensions/github). It is built against the public contracts: [B03 ingress](extensions.md), [B04 routing](runtime-semantics.md) and [B02 storage/KV](domain-storage.md). It imports only public packages, and the runtime does not import it. [`internal/bootstrap`](../../internal/bootstrap/github.go) registers it with the daemon.
+Ticket 03-01 delivers the first-party GitHub extension in [`extensions/github`](https://github.com/open-conduit/open-conduit/tree/main/extensions/github). It is built against the public contracts: [B03 ingress](../extensions/), [B04 routing](../runtime-semantics/) and [B02 storage/KV](../domain-storage/). It imports only public packages, and the runtime does not import it. [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/github.go) registers it with the daemon.
 
 ## Configuration
 
@@ -60,9 +62,9 @@ The issue payload deliberately omits `updated_at`, comment counts and the projec
 
 **PR attachment.** A PR, and every comment, review and check on it, is keyed to its tracker issue. The issue is found from the branch pattern first, then from a closing or reference keyword in the PR body. A shared tracker accepts only `owner/repo#N` naming it. Deriving the key deterministically means no route has to attach keys, and PR state changes reach the issue's Work directly. A reference to a missing issue falls back to `pr/N`.
 
-**Push.** `VerifyDelivery` checks `X-Hub-Signature-256` (HMAC-SHA256, constant time; an empty secret never verifies) before parsing. It wraps GitHub's event name and delivery GUID, which travel in headers, into the Delivery body (`application/vnd.open-conduit.github-delivery+json`). `WebhookHandler` maps outcomes to HTTP statuses: 202 only after the runtime durably accepted the delivery, 401 for a bad signature and 503 when the delivery was not accepted. The listener and tunnel that expose it are delivered by 03-05 ([operator setup](operator-setup.md#webhooks-tunnels-and-reconcile-only-operation)). Without them the daemon runs reconcile-only, which loses only latency.
+**Push.** `VerifyDelivery` checks `X-Hub-Signature-256` (HMAC-SHA256, constant time; an empty secret never verifies) before parsing. It wraps GitHub's event name and delivery GUID, which travel in headers, into the Delivery body (`application/vnd.open-conduit.github-delivery+json`). `WebhookHandler` maps outcomes to HTTP statuses: 202 only after the runtime durably accepted the delivery, 401 for a bad signature and 503 when the delivery was not accepted. The listener and tunnel that expose it are delivered by 03-05 ([operator setup](../operator-setup/#webhooks-tunnels-and-reconcile-only-operation)). Without them the daemon runs reconcile-only, which loses only latency.
 
-Push makes read-only service calls for generation history, PR details and aggregate checks, and no coordination writes. When check runs are refused (a fine-grained token cannot hold Checks), the aggregate uses the head's Actions workflow runs, else statuses only (03-06, see [engineering tools](engineering-tools.md#checks-timing)). A review without a body is never observed. GitHub wraps every inline comment and reply in one, the agent's own included. Observed as a human comment, it woke waiting agents in a loop on the real sandbox. Check events re-read the aggregate state of each open PR whose head is the delivery's commit, exactly as reconcile evaluates it. A status event finds its PRs through `commits/{sha}/pulls`.
+Push makes read-only service calls for generation history, PR details and aggregate checks, and no coordination writes. When check runs are refused (a fine-grained token cannot hold Checks), the aggregate uses the head's Actions workflow runs, else statuses only (03-06, see [engineering tools](../engineering-tools/#checks-timing)). A review without a body is never observed. GitHub wraps every inline comment and reply in one, the agent's own included. Observed as a human comment, it woke waiting agents in a loop on the real sandbox. Check events re-read the aggregate state of each open PR whose head is the delivery's commit, exactly as reconcile evaluates it. A status event finds its PRs through `commits/{sha}/pulls`.
 
 **Reconcile.** GitHub has no snapshot token. A generation lists every issue and every PR in stable creation order, so pagination cannot repeat an item; a deletion can only skip one. It observes open items and items closed within the horizon, then the repository's conversation and inline comments updated within the horizon. Reviews and checks are read for each listed PR.
 
@@ -123,7 +125,7 @@ GOTOOLCHAIN=go1.24.2 make check
 make cross-build
 ```
 
-The [shared ingress conformance](../../conformance/extensions.go) passes against the real adapter, using the [githubtest](../../extensions/github/githubtest) REST fake (test support only).
+The [shared ingress conformance](https://github.com/open-conduit/open-conduit/blob/main/conformance/extensions.go) passes against the real adapter, using the [githubtest](https://github.com/open-conduit/open-conduit/tree/main/extensions/github/githubtest) REST fake (test support only).
 
 The unit fixtures cover:
 
@@ -133,7 +135,7 @@ The unit fixtures cover:
 - Webhook signatures and HTTP mapping, primary and secondary rate limits, ordinary 403s, token re-resolution after a 401, App token caching and refresh, bot-App writes, reactions, markers, and config validation.
 - Admission and input-selection rules.
 
-The [SQLite integration cases](../../integration/github_test.go) run the real runtime ingress and router, and cover:
+The [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob/main/integration/github_test.go) run the real runtime ingress and router, and cover:
 
 - Reconcile-only recovery of missed webhooks (claim and skip rules, with the comment queued behind the issue).
 - Webhook/reconcile overlap and redelivery deduplication. A close made while push was down is recovered, and a forged delivery is rejected.
@@ -145,19 +147,19 @@ The [SQLite integration cases](../../integration/github_test.go) run the real ru
 - Acknowledgements of routed comments only.
 - Restart in the middle of a generation.
 
-[`TestDaemonGitHubReconcileToProjection`](../../integration/daemon_github_test.go) drives the composed `serve` daemon. The registered ingress reconciles the fake, the `github` route claims the issue and a shell attempt declares a status and comment. Labels and the marked comment converge, and doctor's `github` check is `ok`. A restart posts nothing again.
+[`TestDaemonGitHubReconcileToProjection`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_github_test.go) drives the composed `serve` daemon. The registered ingress reconciles the fake, the `github` route claims the issue and a shell attempt declares a status and comment. Labels and the marked comment converge, and doctor's `github` check is `ok`. A restart posts nothing again.
 
 ## Limitations and follow-on work
 
 - **Not proven yet.** No real GitHub API was called; all evidence uses fixtures. Real issues, real rate limits and real webhooks are 03-06/03-07 gate evidence.
-- **Webhook exposure (03-05).** Delivered in [operator setup](operator-setup.md): the separate listener mounting `WebhookHandler` per entry, ngrok/cloudflared/static tunnels, `manage_webhook` (`Client.EnsureWebhook`), `serve --dry-run`, the manual claim (`github.claim.requested`), `Client.Verify` for doctor's `github_auth`, and `Annotate` for operator views.
-- **Holds, waits and tools (03-04).** Delivered in [engineering tools, waits and playbooks](engineering-tools.md):
+- **Webhook exposure (03-05).** Delivered in [operator setup](../operator-setup/): the separate listener mounting `WebhookHandler` per entry, ngrok/cloudflared/static tunnels, `manage_webhook` (`Client.EnsureWebhook`), `serve --dry-run`, the manual claim (`github.claim.requested`), `Client.Verify` for doctor's `github_auth`, and `Annotate` for operator views.
+- **Holds, waits and tools (03-04).** Delivered in [engineering tools, waits and playbooks](../engineering-tools/):
   - the agent-facing operations, posting through `Projector.Deliver` durable intents (re-driven by `Converge`) and `CreateIssue`;
   - translated waits with dependency filters;
   - `github.agent.turn` from durable outcomes;
   - the `github-hold` route and executor, with the `scheduled` label managed while held or waiting;
   - `github.checks.none`.
-- **Claude Code continuity.** Delivered by 03-03: `WorkComments` posts a Work's marked comment exactly once per intent (`Deliver` plus `IntentComment`) and reads its reactions. The [Claude Code executor](claude-code-executor.md)'s handoff feedback uses it through bootstrap.
+- **Claude Code continuity.** Delivered by 03-03: `WorkComments` posts a Work's marked comment exactly once per intent (`Deliver` plus `IntentComment`) and reads its reactions. The [Claude Code executor](../claude-code-executor/)'s handoff feedback uses it through bootstrap.
 - **Projection volume.** The projector reads every Work in its scope each pass. That is enough for the first deployment, but it has no high-volume claim.
 - **Unenforced setting.** `settings.admission_limit` (the claimed-per-project cap) is still not enforced.
 - **Registration lifetime.** Ingress registrations are startup-only (B05). A changed or removed entry reports `restart_required` until the daemon restarts.

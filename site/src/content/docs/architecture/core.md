@@ -1,4 +1,6 @@
-# The core in one page
+---
+title: "The core in one page"
+---
 
 The core coordinates five primitives: **Work, Event, Execution, Timer/Wait and Scope**. The user binds behavior to a Scope. Behavior interprets opaque data; the core manages durability and progress.
 
@@ -14,6 +16,6 @@ The core coordinates five primitives: **Work, Event, Execution, Timer/Wait and S
 
 Ingress combines push with reconcile: it supplies current external observations and the core diffs them against durable observations to emit Events. Non-re-derivable deliveries must be declared. All producers use the same acceptance path. Executions receive a scoped toolbelt to emit Events, create Work, wait, declare outcomes and read context, with additional operations supplied outside the core. Storage provides atomic updates, revision checks, leases, Timers and namespaced coordination KV; a separate streaming artifact store carries larger outputs. Lifecycle telemetry links the triggering Event, Work, Scope, binding and Execution through to emissions and outcome.
 
-Reviewed against the implemented runtime at the stage 02 gate: the daemon then composed only these primitives, a shell executor and a generic operator route ([daemon composition](daemon-core-gate.md)).
+Reviewed against the implemented runtime at the stage 02 gate: the daemon then composed only these primitives, a shell executor and a generic operator route ([daemon composition](../daemon-core-gate/)).
 
-Reviewed again at the stage 05 gate (05-04), with four workloads composed on one daemon: a tracker workload, a chat support workload, scheduled jobs and self-reporting. Each is an extension, an executor or both, registered by the composition root alone. The core packages import none of them, and the page above needed no change: every workload reached the core only as Events, routes, Work, Executions, Timers, Waits and Scope configuration. Its additions during stages 03–05 were all extension-neutral (resource brokering, translated waits and emissions, cited causation, calendar recurrences, standing Work kinds, binding deadlines). See [the stage 05 gate](daemon-core-gate.md#all-four-workflows-on-one-daemon-05-04).
+Reviewed again at the stage 05 gate (05-04), with four workloads composed on one daemon: a tracker workload, a chat support workload, scheduled jobs and self-reporting. Each is an extension, an executor or both, registered by the composition root alone. The core packages import none of them, and the page above needed no change: every workload reached the core only as Events, routes, Work, Executions, Timers, Waits and Scope configuration. Its additions during stages 03–05 were all extension-neutral (resource brokering, translated waits and emissions, cited causation, calendar recurrences, standing Work kinds, binding deadlines). See [the stage 05 gate](../daemon-core-gate/#all-four-workflows-on-one-daemon-05-04).

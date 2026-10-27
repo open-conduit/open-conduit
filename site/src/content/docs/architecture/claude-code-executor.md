@@ -1,6 +1,8 @@
-# Claude Code executor and private continuity
+---
+title: "Claude Code executor and private continuity"
+---
 
-Ticket 03-03 delivers [`executors/claudecode`](../../executors/claudecode), the agent executor behind the [B03 executor contract](extensions.md), and `os mcp`, the toolbelt's MCP transport in [`internal/cli`](../../internal/cli/mcp.go). Like the shell executor, the package imports only public contracts. Its process identity helpers are copied from `executors/shell`, because B01 forbids one executor importing another. `internal/bootstrap` registers it as executor `claude-code`.
+Ticket 03-03 delivers [`executors/claudecode`](https://github.com/open-conduit/open-conduit/tree/main/executors/claudecode), the agent executor behind the [B03 executor contract](../extensions/), and `os mcp`, the toolbelt's MCP transport in [`internal/cli`](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/mcp.go). Like the shell executor, the package imports only public contracts. Its process identity helpers are copied from `executors/shell`, because B01 forbids one executor importing another. `internal/bootstrap` registers it as executor `claude-code`.
 
 The executor advertises `interrupt`, `inject`, `resume`, `workspace` and `toolbelt: mcp`.
 
@@ -42,7 +44,7 @@ A turn starts on the playbook skill `/open-conduit:<playbook> <args>` (the defau
 
 `args` and `branch` are templates. `{key}` is the Work's first correlation key, `{number}` is the first number in it (the key itself when it has none) and `{work}` is the Work ID. The inputs are the acceptance-ordered `RunRequest.Inputs`. The default renderer knows no service schema: it shows each Event's type, the common payload fields (author, kind, number, path, line, state, title, URL) and the body or text. A tracker extension may supply a richer `Renderer`. Reply-command hints depend on the engineering tools, so they belong to 03-04, along with the playbooks themselves and the cross-issue "in flight" list.
 
-`Inject` writes the Event as a stream-json user message (`## Arrived during this turn …`). claude takes it in before its next model call and echoes it back (`--replay-user-messages`). The echo is recorded as consumption. The result data reports `injected: {accepted, consumed}`, and the echoed Event IDs are returned as `Result.ConsumedInputs`, so core consumes them with the turn and starts no further attempt for them (added in 03-06 after a real turn showed the extra attempt). `Inject` success alone still means accepted for delivery: an input that was never echoed stays eligible for the next attempt. A segment that is adopted or already has its result, or an execution this instance does not hold, returns `ErrNotAccepting` (now `extension.ErrNotAccepting`). Core then records the intent as not delivered and keeps the input for the next attempt or wake. Since 04-02 a retried dispatch of an Event already on stdin is not written twice. The echo proof applies on waiting and failed turns too, and also when the turn ends before core commits the dispatch acknowledgement ([generic inject acknowledgement](runtime-semantics.md#generic-inject-acknowledgement-04-02)).
+`Inject` writes the Event as a stream-json user message (`## Arrived during this turn …`). claude takes it in before its next model call and echoes it back (`--replay-user-messages`). The echo is recorded as consumption. The result data reports `injected: {accepted, consumed}`, and the echoed Event IDs are returned as `Result.ConsumedInputs`, so core consumes them with the turn and starts no further attempt for them (added in 03-06 after a real turn showed the extra attempt). `Inject` success alone still means accepted for delivery: an input that was never echoed stays eligible for the next attempt. A segment that is adopted or already has its result, or an execution this instance does not hold, returns `ErrNotAccepting` (now `extension.ErrNotAccepting`). Core then records the intent as not delivered and keeps the input for the next attempt or wake. Since 04-02 a retried dispatch of an Event already on stdin is not written twice. The echo proof applies on waiting and failed turns too, and also when the turn ends before core commits the dispatch acknowledgement ([generic inject acknowledgement](../runtime-semantics/#generic-inject-acknowledgement-04-02)).
 
 ## Outcomes
 
@@ -156,7 +158,7 @@ The config is strict and validated at load. Every field is optional:
 
 ## Verification
 
-- [Unit tests](../../executors/claudecode) run a fake `claude`, which records its invocation, echoes stream-json replays, writes the transcript and reports cumulative totals. They cover:
+- [Unit tests](https://github.com/open-conduit/open-conduit/tree/main/executors/claudecode) run a fake `claude`, which records its invocation, echoes stream-json replays, writes the transcript and reports cumulative totals. They cover:
   - the shared executor conformance case
   - the invocation, the MCP config and the sanitized environment
   - resumed and fresh sessions with per-turn usage deltas
@@ -170,26 +172,26 @@ The config is strict and validated at load. Every field is optional:
   - work-workspace acquisition and resume by lookup
   - config validation
   - the ported parser tests (parse, limits, reset text, call counts, `perTurn`)
-- [`TestProductionSchedulerResultRetryHint`](../../integration/scheduler_test.go) checks that a result hint delays the retry and leaves no uncertain hold.
-- [`TestGitHubWorkCommentsForExecutorFeedback`](../../integration/github_test.go) covers the marked comment, which posts exactly once and recovers by marker, and the reaction read.
-- [`TestDaemonClaudeCodeExecution`](../../integration/daemon_claudecode_test.go) runs against the composed daemon:
+- [`TestProductionSchedulerResultRetryHint`](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_test.go) checks that a result hint delays the retry and leaves no uncertain hold.
+- [`TestGitHubWorkCommentsForExecutorFeedback`](https://github.com/open-conduit/open-conduit/blob/main/integration/github_test.go) covers the marked comment, which posts exactly once and recovers by marker, and the reaction read.
+- [`TestDaemonClaudeCodeExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) runs against the composed daemon:
   - a fake claude drives the real `os mcp` (initialize, tools/list, read_context, wait) and parks
   - the wake resumes the same session
   - an event mid-turn is injected and consumed
   - a turn running at a daemon SIGKILL is adopted with one launch
   - no runtime API shows the session
-- [`TestDaemonClaudeCodeContinuityKill`](../../integration/daemon_claudecode_test.go) uses the new `kv` fault boundary to SIGKILL the daemon before and after the decision commit. The retry launches once and resumes the Work's session.
+- [`TestDaemonClaudeCodeContinuityKill`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) uses the new `kv` fault boundary to SIGKILL the daemon before and after the decision commit. The retry launches once and resumes the Work's session.
 
 ## Limits and follow-on work
 
 - **No real claude.** No real Claude Code session ran; all evidence uses fake binaries and fixture transcripts. Real-agent turns, real limits, real resume and real handoff telemetry are 03-06 evidence.
 - **Playbooks and tools (03-04).** The playbooks, plugin preparation, the reply commands and the engineering tools.
-- **Operator controls (03-05).** Delivered in [operator setup](operator-setup.md): attach through `POST /work/{id}/attach` under an operator hold, transcripts reachable as run artifacts, `Usage` (opt-in, doctor), `Version` (doctor), `Options.DryRun` (a stub turn on `haiku`) and the `init --with claude` setup command. A rendered transcript and activity view is not ported.
+- **Operator controls (03-05).** Delivered in [operator setup](../operator-setup/): attach through `POST /work/{id}/attach` under an operator hold, transcripts reachable as run artifacts, `Usage` (opt-in, doctor), `Version` (doctor), `Options.DryRun` (a stub turn on `haiku`) and the `init --with claude` setup command. A rendered transcript and activity view is not ported.
 - **Not ported yet.** The cross-issue "in flight" list has no Open Conduit equivalent.
 - **Inject consumption.** Since 03-06 an echoed injection is consumed with its turn through `Result.ConsumedInputs`. Since 04-02 this holds on every outcome and in the in-flight acknowledgement race. Injected input that was never echoed (for example, accepted just before the result) is presented again to the next attempt or wake. The executor passes `conformance.CheckInjectExecutor`.
 - **Idle `ready` Work.** Handed-back Work sits `ready` with no pending input. Since 03-05 the host loop skips it quietly.
 
-03-04 update: [engineering tools, waits and playbooks](engineering-tools.md) delivers the following:
+03-04 update: [engineering tools, waits and playbooks](../engineering-tools/) delivers the following:
 
 - **Playbooks.** The playbooks and the plugin that bootstrap writes to `<state>/playbooks/plugin`, the default `Options.PluginDir` for bindings without `plugin_dir`.
 - **Project additions.** Read from the turn's workspace (`.open-conduit/playbooks/<playbook>.md`) and appended to the turn body.

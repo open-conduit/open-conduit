@@ -1,6 +1,8 @@
-# SQLite coordination and file artifacts
+---
+title: "SQLite coordination and file artifacts"
+---
 
-Ticket 02-01 implements [B02](domain-storage.md) after the [contracts gate](contracts-gate.md). The public coordination and artifact interfaces remain separate. This supplies durable storage, not event routing, execution scheduling, provider clients or an operational ownership transfer.
+Ticket 02-01 implements [B02](../domain-storage/) after the [contracts gate](../contracts-gate/). The public coordination and artifact interfaces remain separate. This supplies durable storage, not event routing, execution scheduling, provider clients or an operational ownership transfer.
 
 ## Coordination backend
 
@@ -14,7 +16,7 @@ The persisted schema starts at version 1. Opening a newer schema fails without m
 
 ## Artifact publication and integrity
 
-[`internal/artifacts`](../../internal/artifacts/files.go) implements `storage.Artifacts`. `artifacts.Open(root)` creates owner-only directories and takes an exclusive nonblocking filesystem lock on `.lock`; another process or Store handle cannot own the same artifact tree. `Close()` aborts active writers and releases ownership. Lock lifetime includes backup pins. Directory ownership and modes are checked; symlink roots, object directories and content/metadata files are rejected. Artifact IDs are random 256-bit hex identifiers; caller paths never select a file.
+[`internal/artifacts`](https://github.com/open-conduit/open-conduit/blob/main/internal/artifacts/files.go) implements `storage.Artifacts`. `artifacts.Open(root)` creates owner-only directories and takes an exclusive nonblocking filesystem lock on `.lock`; another process or Store handle cannot own the same artifact tree. `Close()` aborts active writers and releases ownership. Lock lifetime includes backup pins. Directory ownership and modes are checked; symlink roots, object directories and content/metadata files are rejected. Artifact IDs are random 256-bit hex identifiers; caller paths never select a file.
 
 The layout contains `pending/{id}/data` for unpublished streams and `objects/{id}/{data,meta.json}` for committed immutable objects. Files are `0600`; directories are `0700`. Publication performs these steps:
 
@@ -34,7 +36,7 @@ After process death, acquire exclusive ownership again and call `Recover(ctx)`. 
 
 ## Complete backup bundles
 
-[`internal/backup`](../../internal/backup) composes the SQLite snapshot and artifacts with a versioned, complete manifest. Its `Create` operation acquires an artifact `Pin()` **before** the SQLite snapshot, enumerates references from that exact snapshot, copies them through `Pinned.Open` with streaming integrity checks, and publishes the manifest only after all required copies are durable. A pin holds retention/deletion until closed; use `Pinned.Open`, not nested `Store.Open`, while pinned. Concurrent producers can publish new objects, but they are outside the captured database reference set. Missing referenced content fails the backup rather than silently claiming a complete restore point.
+[`internal/backup`](https://github.com/open-conduit/open-conduit/tree/main/internal/backup) composes the SQLite snapshot and artifacts with a versioned, complete manifest. Its `Create` operation acquires an artifact `Pin()` **before** the SQLite snapshot, enumerates references from that exact snapshot, copies them through `Pinned.Open` with streaming integrity checks, and publishes the manifest only after all required copies are durable. A pin holds retention/deletion until closed; use `Pinned.Open`, not nested `Store.Open`, while pinned. Concurrent producers can publish new objects, but they are outside the captured database reference set. Missing referenced content fails the backup rather than silently claiming a complete restore point.
 
 `Store.Import(ctx, ref, reader)` restores an immutable reference ID and metadata in a new artifact store, streaming bytes and requiring exact length and successful source EOF. Root backup composition additionally verifies SHA-256 against the bundle manifest. A failed/partial copy is unpublished. Restore uses new isolated destinations, validates manifest/schema/content and fences SQLite leases before exposing a completed state directory. Partial staging directories are not restore points. Operational conversion and disaster-recovery commands remain 06-02; these are backend APIs and tested bundle mechanics.
 
