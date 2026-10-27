@@ -30,8 +30,8 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | `github.attachment.upload` | `file_path` | upload a file (an image, a zip, a document) and get a link to put in a comment |
 | `github.attachment.get` | `url`, `save_to` | download a file a comment links to into `save_to`, signed in (a private repo's attachments need it) |
 | `github.wait` | `conditions`?, `until`?, `reason` | park the issue until something happens or a time comes (see Waiting) |
-| `github.correction` | `area`, `body` | log a correction (see Log corrections) |
-| `github.problem` | `kind`, `body` | log a problem you worked around (see Report problems) |
+| `introspection.correction` | `area`, `body` | if your toolbelt has it: log a correction (see Log corrections) |
+| `introspection.problem` | `kind`, `body` | if your toolbelt has it: log a problem you worked around (see Report problems) |
 | `human.ask` | `question`, `options`?, `context`?, `deadline`? | if your toolbelt has it: ask a person for a private decision and park until they answer (see Asking a person) |
 
 `file_path` and `save_to` are paths in your own directory: Open Conduit's client reads or writes the file for you. Post every comment this way: it marks the comment as yours, so it is never handed back to you as news, and a retried call never posts twice (give the same `request_id` when you retry). Use `git` itself for commits and pushes.
@@ -93,7 +93,7 @@ Comments from other agents arrive as events like the owner's, but you don't need
 
 Whenever someone corrects you, write the lesson down as you go: a comment saying you got something wrong, a change request that undoes a choice you made, or the owner typing a correction into your session. Record the broad theme, not the exact exchange. "Wrote a lede that summarised the page" is a theme; "Removed the sentence starting 'Below you'll find'" is not. Skip plain new requests that don't say you did something wrong.
 
-`github.correction` with `area` one of `writing`, `design`, `data`, `code` or `workflow`, and a `body`:
+`introspection.correction` with `area` one of `writing`, `design`, `data`, `code` or `workflow`, and a `body`:
 
 ```
 <The theme in one sentence.>
@@ -101,13 +101,13 @@ Whenever someone corrects you, write the lesson down as you go: a comment saying
 <The rule a future agent should follow, in one or two sentences.>
 ```
 
-The daily sweep folds these into the project's rules.
+The daily sweep folds these into the project's rules. If your toolbelt doesn't have the operation, or it refuses, the project doesn't collect corrections: carry on.
 
 ## Report problems
 
 Whenever you work around something rather than doing the task the way your instructions say, log it as you go, then carry on. That covers a variable that isn't set, a command or script that doesn't exist, a path that has moved, a tool call that failed, a permission you had to route round, or a service call that only worked on a retry. Nobody else hears about a workaround, so without a note the next session hits the same thing.
 
-`github.problem` with `kind` one of `env` (a missing variable, tool or credential), `docs` (a skill or rule that's wrong or stale), `tooling` (a toolbelt operation that failed or is missing), `service` (the tracker, code host or deploy service misbehaving) or `other`, and a `body`:
+`introspection.problem` with `kind` one of `env` (a missing variable, tool or credential), `docs` (a skill or rule that's wrong or stale), `tooling` (a toolbelt operation that failed or is missing), `service` (the tracker, code host or deploy service misbehaving) or `other`, and a `body`:
 
 ```
 <What you tried to do, in one line.>
@@ -117,7 +117,7 @@ Workaround: <what you did instead, or "none">
 Fix: <where you think the fix belongs: a file in this project, the machine's setup, or Open Conduit itself>
 ```
 
-Log each distinct problem once per session. A problem you fixed properly in your own PR needs no note. The daily triage fixes or files what you report.
+Log each distinct problem once per session. A problem you fixed properly in your own PR needs no note. The daily triage fixes or files what you report. If your toolbelt doesn't have the operation, or it refuses, the project doesn't collect problems: carry on.
 
 When the fix belongs to Open Conduit itself (a toolbelt operation that fails or misbehaves, a playbook that is wrong, a run that went astray), also report it with `introspection.report-issue` (`kind`, a one-line `title` and the same `body`) if your toolbelt has it. A refusal means reporting isn't enabled here: the problem note is enough.
 

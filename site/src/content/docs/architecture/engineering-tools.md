@@ -50,7 +50,6 @@ An agent reaches an operation as MCP `call {operation, input}` or `os call <oper
 | `github.attachment.upload` | Committed to the orphan `open-conduit-attachments` branch at `<issue>/<intent digest>-<name>`, so a retry keeps one file. |
 | `github.attachment.get` | Signed-in fetch, only for this host, its API host or `*.githubusercontent.com`. A redirect that leaves the host drops `Authorization`, and foreign links are refused without a request. The result uses the generic `open-conduit.toolbelt.file.v1` schema; the `os` client writes it to `save_to` in the agent's own directory. A `file_path` input is read and sent as `content_base64` the same way. |
 | `github.wait` | See below. |
-| `github.correction` / `.problem` | Durable notes in KV namespace `github.notes` (one per request) for sweep and triage. The introspection extension reads these records through public storage as evidence and records the notes it handled in its own namespace, leaving `github.notes` untouched ([introspection](../issue-reporting/#evidence-aggregation)). |
 | `github.hold.status` / `github.hold` | Used by the hold executor. |
 
 Dry-run is handled per entry by `projection.dry_run`: writes report `dry_run` and make no change.
@@ -159,5 +158,5 @@ These notes record how this part was built and the evidence gathered at each sta
 - **03-06** added the Actions workflow-run and commit-status fallback for checks after a fine-grained token, refused check runs, failed every reconcile on the real sandbox once a PR existed. It also made an injected comment that claude echoed consumed with its turn.
 - **04-02** extended that consumption proof to turns that end before the dispatch acknowledgement commits and to waiting and failed turns. The playbook's "may be listed again" caveat was removed.
 - **05-02** delivered `job:<name>` waits.
-- **05-03** made sweep and triage consume `github.notes` through the introspection extension.
+- **05-03** made sweep and triage consume `github.notes` through the introspection extension. Issue #70 removed `github.correction`, `github.problem` and `github.notes`: agents log notes with `introspection.correction` and `introspection.problem`.
 - **08-01** added required checks: `github.checks.missing`, the `required` and `missing` fields of `github.checks`, the degraded-source handling and the playbook's "Required checks never reported" line.

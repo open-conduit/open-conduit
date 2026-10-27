@@ -2,9 +2,10 @@
 title: "Introspection: reporting, sweep, triage and fixes"
 ---
 
-Introspection is the first-party extension [`extensions/introspection`](https://github.com/open-conduit/open-conduit/tree/main/extensions/introspection), composed by [`internal/bootstrap/introspection.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/introspection.go). It lets agents report what breaks in daily use and turns those reports, and the corrections and problems agents note, into improvements:
+Introspection is the first-party extension [`extensions/introspection`](https://github.com/open-conduit/open-conduit/tree/main/extensions/introspection), which the daemon composes through the [in-process extension contract](../extensions/#subprocess-extensions) like any other first-party extension. It lets agents report what breaks in daily use and turns those reports, and the corrections and problems agents note, into improvements:
 
 - `report-issue`, with report processing and triage;
+- the agents' notes: the corrections they are given and the problems they work around;
 - the daily sweep and triage as the extension's own scheduled Work;
 - evidence aggregation over reports and the agents' notes;
 - fix Work that traces to the report through causation;
@@ -12,7 +13,7 @@ Introspection is the first-party extension [`extensions/introspection`](https://
 - telemetry events;
 - an explicit removal policy.
 
-It uses only the public registration, toolbelt, route, timer-recurrence, coordination KV and observability interfaces. Nothing about it is core: self-improvement needs no core code.
+It uses only the public `extension/inproc` surfaces and host services (registration, toolbelt, route, Work kind and timer-recurrence policies, timers, root acceptance of its own families, Work cancellation, coordination KV, telemetry capture and observability). Nothing about it is core: self-improvement needs no core code.
 
 ## Configuration
 
@@ -20,7 +21,7 @@ A scope's `introspection` entry enables the extension for that scope and the sco
 
 ```json
 {"extensions": [{"name": "introspection", "type": "introspection", "secret_names": [], "config": {
-   "notes": ["github.notes"],
+   "notes": ["team.notes"],
    "sweep":  {"cron": "41 8 * * *", "time_zone": "UTC", "rules": ["CLAUDE.md"], "guide": "docs/rules.md", "land": "pr", "remote": "origin"},
    "triage": {"cron": "51 8 * * *", "land": "push", "file_issues": true},
    "host_watch": {"interval_seconds": 60, "load": 1.5, "memory": 90, "disk": 90, "disks": ["~/work"]},
@@ -31,7 +32,7 @@ A scope's `introspection` entry enables the extension for that scope and the sco
    {"name": "triage",  "handler": "introspection", "binding": "triage", "active_policy": "queue", "config": {"work": "triage"}},
    {"name": "fixes",   "handler": "introspection", "binding": "fix",    "active_policy": "queue", "config": {"work": "fix"}}],
  "bindings": [
-   {"name": "agent",  "executor": "claude-code", "operations": ["…", "introspection.report-issue"], "…": "…"},
+   {"name": "agent",  "executor": "claude-code", "operations": ["…", "introspection.report-issue", "introspection.correction", "introspection.problem"], "…": "…"},
    {"name": "sweep",  "executor": "claude-code", "operations": ["introspection.evidence", "introspection.notes.resolve"],
     "config": {"playbook": "sweep"}, "resource": {"provider": "git", "config": {"mode": "shared", "…": "…"}}, "…": "…"},
    {"name": "triage", "executor": "claude-code", "operations": ["introspection.evidence", "introspection.reports", "introspection.fix",
@@ -42,7 +43,7 @@ A scope's `introspection` entry enables the extension for that scope and the sco
 
 | Field | Meaning |
 | --- | --- |
-| `notes` | Coordination KV namespaces whose records the sweep and triage read (default `github.notes`, the GitHub tools' corrections and problems). This is a data contract (namespace and JSON shape), not an import. |
+| `notes` | Further coordination KV namespaces whose records (the same JSON shape) the sweep and triage read besides the extension's own `introspection.notes`. None by default. This is a data contract, not an import. |
 | `sweep`, `triage` | Standard five-field `cron` and IANA `time_zone`. If a block is absent, that run is not scheduled; it can still run by hand. `rules`/`guide` are sweep settings. `land` is `push` or `pr`, and `remote` defaults to `origin`. `file_issues` is a triage setting. |
 | `host_watch` | Reading interval, load per CPU / memory % / disk % thresholds (defaults 1.5/90/90) and extra disk paths besides the state directory's. If absent, the watch is off. |
 | `telemetry` | Writes the extension's telemetry events to `logs/introspection-telemetry.jsonl`. |
@@ -58,7 +59,7 @@ The `introspection` route's `work` is `report` (the default), `sweep`, `triage` 
 | `introspection.triage` (standing) | an `introspection.triage.due` slot | `triage/<epoch>` | `introspection/<scope>/triage/<epoch>` |
 | `introspection.fix` | an `introspection.fix.requested` Event | `fix/<id>` | `introspection/<scope>/fix/<id>` |
 
-The sweep and triage are standing Work: bootstrap declares the generic `runtime.WorkKindPolicy{Standing: true}` for their kinds, the same policy scheduled jobs use. A completed run leaves the Work ready and idle for its next slot. A slot that arrives while a run is going waits as one pending run. A failed run arms no automatic retry, because the next slot is its next attempt. A by-hand run is ordinary manual Work of any other kind on the same binding, for example `open-conduit work create --scope-id eng --kind manual.triage --binding triage`.
+The sweep and triage are standing Work: the extension declares `Standing` for their kinds through the contract's `WorkKinds` surface, the same policy scheduled jobs use. A completed run leaves the Work ready and idle for its next slot. A slot that arrives while a run is going waits as one pending run. A failed run arms no automatic retry, because the next slot is its next attempt. A by-hand run is ordinary manual Work of any other kind on the same binding, for example `open-conduit work create --scope-id eng --kind manual.triage --binding triage`.
 
 ## Operations
 
@@ -70,19 +71,21 @@ The sweep and triage are standing Work: bootstrap declares the generic `runtime.
 | `introspection.evidence` | `for` (`sweep` or `triage`) | The run's evidence and settings. |
 | `introspection.notes.resolve` | `notes` (ids), `summary` | Records the notes a run handled. |
 | `introspection.fix` | `reports`? and/or `notes`?, `title`, `body` | Requests fix Work for one cause. |
+| `introspection.correction` | `area` (`writing`, `design`, `data`, `code`, `workflow`; default `workflow`), `body` | Logs a correction the agent was given, one per request. |
+| `introspection.problem` | `kind` (`env`, `docs`, `tooling`, `service`, `other`), `body` | Logs a problem the agent worked around, one per request. |
 
 Reports are translated emissions. See [the report Event](#the-report-event) below.
 
 ## The sweep and triage schedules
 
-The runs are timed by the extension's own calendar, not by a `schedule` entry, because they are scheduled Work of their own kinds, defined by the introspection extension. Each configured block gets a durable core timer `introspection/<scope>/<run>` whose recurrence is the extension's `RecurrenceFunc` (`introspection.v1`), registered with the generic `runtime.TimerOptions.Recurrences`. The calendar rules are those of [scheduled jobs](../schedule-extension/):
+The runs are timed by the extension's own calendar, not by a `schedule` entry, because they are scheduled Work of their own kinds, defined by the introspection extension. Each configured block gets a durable core timer `introspection/<scope>/<run>` whose recurrence is the extension's `RecurrenceFunc` (`introspection.v1`), declared through the contract's `Recurrences` surface and armed through the host's timers. The calendar rules are those of [scheduled jobs](../schedule-extension/):
 
 - A new schedule waits for its next slot.
 - A firing publishes the latest slot strictly within six hours, unless that slot ran last, and rearms. A slot missed by six hours or more is skipped.
 - An edited timing catches up its latest slot within six hours, unless it ran.
 - On DST nights, a skipped wall-clock time has no run, and a repeated one runs once by name.
 
-`introspection.Ensure` reconciles the timers at startup, at every committed apply and every minute. A dry run arms nothing.
+`introspection.Ensure` reconciles the timers in the extension's task: after every configure (startup and each committed apply) and every minute. A dry run arms nothing.
 
 A slot Event's identity is its instant, so a replayed firing is deduplicated. Its key carries the schedule's **epoch**, the time its timer was first armed, which edits keep. A schedule that is removed and added again therefore starts a new standing Work instead of addressing a retired one. Core keeps terminal ownership final.
 
@@ -97,9 +100,9 @@ A slot Event's identity is its instant, so a replayed firing is deduplicated. It
 - **Sweep**: the scope's unhandled `correction` notes, grouped by area and leading line.
 - **Settings**: `notes`, `rules`, `guide`, `land`, `remote`, `file_issues` and the schedule, read from the current generation.
 
-Each group has its count, the report or note ids, the distinct Work they came from, the issue numbers notes name, first and last times, and up to two sample bodies. The groups are a starting point. The playbooks still group by cause.
+Each group has its count, the report or note ids, the distinct Work they came from, the distinct correlation keys of the Work notes came from, first and last times, and up to two sample bodies. The groups are a starting point. The playbooks still group by cause.
 
-Notes are read from the configured namespaces through public storage, filtered by the note's `scope`. A note's id is `<namespace>:<key>`. The extension never writes another extension's namespace. `introspection.notes.resolve` records a handled note in its own namespace `introspection.notes` (`handled/<scope>/<id>`), and later evidence leaves it out. The GitHub tools' records stay intact.
+`introspection.correction` and `introspection.problem` write the extension's own namespace `introspection.notes` (`<kind>/<time>/<digest>`). A note records the logging Work's first correlation key rather than any source's issue number, so a GitHub, tracker or Slack Work logs notes the same way. The evidence reads that namespace, then the configured ones, through public storage, filtered by the note's `scope`. A note's id is `<namespace>:<key>`. The extension never writes another extension's namespace. `introspection.notes.resolve` records a handled note in `introspection.notes` too (`handled/<scope>/<id>`), and later evidence leaves it out. Records in other namespaces stay intact.
 
 ## Fix work and cited causation
 
@@ -130,7 +133,7 @@ Citing is bounded by core, not by the extension:
 
 With `host_watch`, a host pass reads the machine's load, memory and disks (`extensions/introspection/host`). An alert fires when a reading goes over its threshold, and recovery under 95% of it.
 
-Each crossing over the threshold becomes an **extension-originated report** in every enabled scope that watches the host: a root `introspection.issue.reported` Event in the scope's report namespace, of kind `env` and origin `host-watch`, with the same index record. It is accepted with its record in one transaction (`is.HostReport`, `runtime.AcceptInTx`, `is.PutOriginInTx`), and the crossing's identity deduplicates a repeat.
+Each crossing over the threshold becomes an **extension-originated report** in every enabled scope that watches the host: a root `introspection.issue.reported` Event in the scope's report namespace, of kind `env` and origin `host-watch`, with the same index record. It is accepted with its record in one transaction (`is.HostReport`, the host's `AcceptInTx` for the extension's own families, `is.PutOriginInTx`), and the crossing's identity deduplicates a repeat.
 
 From there it is an ordinary report:
 
@@ -144,8 +147,8 @@ The watch state is in memory, so after a restart a reading that is still over co
 
 Named product-telemetry events (`introspection_report`, `introspection_fix`, `introspection_run_due`, `host_metrics`, `host_alert`) are an optional adapter on the public observability contract:
 
-- `introspection.Exporter` is an `observability.Exporter` that bootstrap adds to the lifecycle pipeline. It turns the committed `event.accepted` records of the extension's families into `introspection_report`, `introspection_fix` and `introspection_run_due`. Each appears exactly once.
-- The host watch captures `host_metrics` (with the fullest disk first) and `host_alert` on the same JSON-lines sink.
+- `introspection.Exporter` is an `observability.Exporter` the extension offers through the contract's `Exporter` surface, so it joins the lifecycle pipeline. It turns the committed `event.accepted` records of the extension's families into `introspection_report`, `introspection_fix` and `introspection_run_due`. Each appears exactly once.
+- The host watch captures `host_metrics` (with the fullest disk first) and `host_alert` the same way: both go through the host's `Capture` service to its JSON-lines telemetry events log.
 
 Nothing is written unless an enabled entry sets `telemetry`. When it is on, enabled PostHog entries that set `telemetry_events` receive the same events through a fan-out sink ([PostHog](../installed-integrations/#posthog)).
 
@@ -155,15 +158,15 @@ Core reports a fired timer's Event as exactly one `event.accepted` record, which
 
 Removing the `introspection` entry, or one of its schedules, takes effect on the next generation:
 
-- **Operations and routes.** The operations are undeclared, the route matches nothing (even for Events in flight), and bindings that still list the operations keep running, because bootstrap narrows grants to registered operations.
+- **Operations and routes.** The operations are undeclared, the route matches nothing (even for Events in flight), and bindings that still list the operations keep running, because the extension is entry-gated (`inproc.EntryGated`: its registration joins only a generation with an entry) and the host narrows grants to registered operations.
 - **Timers.** `Ensure` cancels the schedule's timers. A run already going carries on.
 - **Existing Work.** Work of the extension's kinds is **retired** once idle. The rules are in `is.Retired`:
   - every non-terminal, not-running Work of the extension's kinds in a configured scope that has no entry is retired;
   - standing sweep or triage Work whose run key is no longer a live timer's is retired (its schedule was removed or replaced);
-  - bootstrap cancels retired Work with the ordinary operator cancellation and the reason `introspection removed from configuration`;
+  - the extension cancels retired Work through the host's `CancelWork`, the ordinary operator cancellation, and the reason `introspection removed from configuration`;
   - a running attempt finishes first, and its calls to the operations are undeclared. Standing Work that is idle afterwards is cancelled by the next pass.
 - **Records.** Reports, fixes, handled notes, Events and run history stay readable. Retiring cancels Work and never deletes records.
-- **Disabled scopes.** Disabling a scope is not removal. Its timers and Work wait for re-enable (B05), as scheduled jobs do.
+- **Disabled scopes.** Disabling a scope is not removal. Its timers and Work wait for re-enable (B05), as scheduled jobs do. Configure carries only enabled scopes' entries, so the extension reads a disabled scope's entry from its stored configuration.
 
 No core code changes. `scripts/check-boundaries` keeps core packages from importing the extension. Its `TestNoPrivilegedReportingPath` finds no introspection, reporting, triage, sweep-slot, fix-request or host-watch vocabulary in core, contract or operator packages.
 
@@ -211,7 +214,7 @@ Open Conduit's own reports are the upstream intake.
   - `TestCitedCauseContract`: only the registration's own same-scope Events can be cited, and both chains' budgets are charged.
   - `TestIntrospectionRemovalPolicy`: timers cancelled, idle Work retired, running work finishing first, records kept, re-add as a new epoch, a disabled scope kept, schedule-only removal.
   - `TestExtensionOriginatedReportChain`: a host report is its own root, processed, triaged and fixed.
-- [`integration/reporting_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/reporting_test.go) is the reporting suite: a report from an engineering execution, report-about-a-report loops stopped at the chain depth, a burst hitting the chain rate, permission boundaries, the translated-emission contract and disabled reporting.
+- [`integration/reporting_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/reporting_test.go) is the reporting suite: a report from an engineering execution, the agents' notes (`TestAgentNotes`), report-about-a-report loops stopped at the chain depth, a burst hitting the chain rate, permission boundaries, the translated-emission contract and disabled reporting.
 - [`integration/daemon_introspection_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_introspection_test.go) (in `make drill`) uses the real daemon with shell executors calling `os`:
   - `TestDaemonIntrospection` (workflow D): an engineering report; the standing triage caught up by a config edit; evidence and a fix request; the fix Work resolving the report; `events chain` fix → report → operator root, the fix source naming the triage run and the fix trigger being the fix Event; telemetry events exactly once; SIGKILL and restart keeping the schedule; removal by apply retiring the standing triage, with the operations undeclared and the records kept.
   - `TestDaemonHostWatch`: a disk over threshold becomes a root report processed on the report binding, doctor shows `host over`, and host telemetry is written.
@@ -232,3 +235,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - Ticket 05-03 completed the workload: the daily sweep and triage as the extension's own scheduled Work, evidence aggregation, fix Work with cited causation (the then-new generic `extension.EmitPlan.Cause`, after which a plan could name one of its own Events as cause), extension-originated reports from the host watch, telemetry events, the removal policy and the `fix-report` playbook. Its telemetry work found a core defect, a fired timer's Event reported as two `event.accepted` records, which was fixed and is now asserted by `TestLifecycleTelemetryRetriesAndRecovery`.
 - At 05-03, telemetry went only to the JSON-lines log; a PostHog sink was left to 06-01, which added it ([installed integrations](../installed-integrations/#posthog)).
 - Real use (real reports, a real triage and a real fix) was left to the deferred 03-09.
+- Issue #70 moved the extension onto the in-process contract (bootstrap's `introspection.go` went away) and, per #67's plan, replaced the GitHub tools' `github.correction`/`github.problem` and their `github.notes` namespace with `introspection.correction`/`introspection.problem`.

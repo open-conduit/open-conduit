@@ -1,14 +1,12 @@
 package github_test
 
 import (
-	"context"
 	"strings"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
-	"github.com/open-conduit/open-conduit/storage"
 )
 
 // A manual claim (the claim action's Event keyed to the entry's issue)
@@ -49,38 +47,20 @@ func TestRouteManualClaim(t *testing.T) {
 }
 
 func TestAnnotate(t *testing.T) {
-	store := notesStore{rows: []storage.Entry{{Key: "problem/x", Value: []byte(`{"kind":"problem","work":"w1"}`)}}}
 	s, err := gh.ParseExtension([]byte(`{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","projection":{"dry_run":true}}`), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	w := domain.Work{ID: "w1", Kind: gh.WorkKindHeld, State: domain.WorkWaiting, CorrelationKeys: []domain.CorrelationKey{{Source: ns, ExternalID: "issue/12"}}}
-	lines, ok := gh.Annotate(context.Background(), store, s, "https://github.com", w)
+	lines, ok := gh.Annotate(s, "https://github.com", w)
 	got := map[string]string{}
 	for _, l := range lines {
 		got[l.Name] = l.Value
 	}
-	if !ok || got["issue"] != repo+"#12" || got["url"] != "https://github.com/"+repo+"/issues/12" || got["held"] == "" || got["projection"] == "" || got["problems"] != "1" {
+	if !ok || got["issue"] != repo+"#12" || got["url"] != "https://github.com/"+repo+"/issues/12" || got["held"] == "" || got["projection"] == "" {
 		t.Fatalf("annotations: %v %v", got, ok)
 	}
-	if _, ok := gh.Annotate(context.Background(), store, s, "https://github.com", domain.Work{ID: "x", CorrelationKeys: []domain.CorrelationKey{{Source: "other", ExternalID: "issue/1"}}}); ok {
+	if _, ok := gh.Annotate(s, "https://github.com", domain.Work{ID: "x", CorrelationKeys: []domain.CorrelationKey{{Source: "other", ExternalID: "issue/1"}}}); ok {
 		t.Fatal("annotated Work of another entry")
 	}
-}
-
-// notesStore serves only List over the notes namespace.
-type notesStore struct{ rows []storage.Entry }
-type notesTx struct {
-	storage.Tx
-	rows []storage.Entry
-}
-
-func (n notesStore) Transact(_ context.Context, _ storage.Guard, fn func(storage.Tx) error) error {
-	return fn(notesTx{rows: n.rows})
-}
-func (n notesTx) List(namespace, _ string) ([]storage.Entry, error) {
-	if namespace != gh.NotesNamespace {
-		return nil, nil
-	}
-	return n.rows, nil
 }

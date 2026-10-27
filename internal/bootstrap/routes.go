@@ -6,7 +6,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/extension"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
-	is "github.com/open-conduit/open-conduit/extensions/introspection"
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -36,7 +35,7 @@ func (manualRoute) Match(_ context.Context, in extension.RouteInput) (extension.
 }
 
 func handlers() map[string]extension.RouteHandler {
-	h := map[string]extension.RouteHandler{"manual": manualRoute{}, gh.Type: gh.Route{}, gh.HoldHandler: gh.HoldRoute{}, sl.Type: sl.Route{}, sc.Type: sc.Route{}, is.Type: is.Route{}}
+	h := map[string]extension.RouteHandler{"manual": manualRoute{}, gh.Type: gh.Route{}, gh.HoldHandler: gh.HoldRoute{}, sl.Type: sl.Route{}, sc.Type: sc.Route{}}
 	trackerHandlers(h)
 	return h
 }

@@ -391,23 +391,6 @@ func TestGitHubToolsWorkAnIssue(t *testing.T) {
 		t.Fatal("a foreign link was fetched with the token")
 	}
 
-	// Corrections and problems are durable notes for the stage 05 sweep.
-	if out := e.must(a, gh.OpCorrection, "c1", map[string]any{"area": "code", "body": "Used magic numbers.\n\nName constants."}); out["logged"] == nil {
-		t.Fatalf("correction: %v", out)
-	}
-	e.must(a, gh.OpCorrection, "c1", map[string]any{"area": "code", "body": "Used magic numbers.\n\nName constants."})
-	_, err = e.call(a, gh.OpProblem, "", map[string]any{"kind": "bogus", "body": "x"})
-	refused(t, err, "invalid_kind")
-	e.must(a, gh.OpProblem, "p1", map[string]any{"kind": "tooling", "body": "pr list failed\n\nError: x\nWorkaround: none\nFix: open-conduit"})
-	e.read(func(tx storage.Tx) error {
-		c, _ := tx.List(gh.NotesNamespace, "correction/")
-		p, _ := tx.List(gh.NotesNamespace, "problem/")
-		if len(c) != 1 || len(p) != 1 {
-			t.Fatalf("notes: %d corrections, %d problems", len(c), len(p))
-		}
-		return nil
-	})
-
 	// Follow-up child work, held until a PR merges; opened once.
 	for i := 0; i < 2; i++ {
 		out := e.must(a, gh.OpIssueCreate, "wave2", map[string]any{"title": "Wave 2", "body": "After wave 1.", "wait": []string{"pr:2:merged"}})

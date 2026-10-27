@@ -5,7 +5,7 @@ description: Fold the corrections agents have logged in this scope into the proj
 
 # Sweep corrections
 
-Agents log each correction they get with `github.correction` (a durable note with an `area` and a body). Fold them into the project's rule files and land them on the main branch.
+Agents log each correction they get with `introspection.correction` (a durable note with an `area` and a body). Fold them into the project's rule files and land them on the main branch.
 
 ## Your tools
 

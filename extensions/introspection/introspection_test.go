@@ -38,7 +38,7 @@ func TestConfigValidation(t *testing.T) {
 		t.Error("secrets accepted")
 	}
 	for _, ok := range []string{
-		`{"notes":["github.notes","other.notes"],"telemetry":true}`,
+		`{"notes":["team.notes","other.notes"],"telemetry":true}`,
 		`{"sweep":{"cron":"41 8 * * *","rules":["CLAUDE.md"],"guide":"docs/rules.md","land":"pr","remote":"upstream"}}`,
 		`{"triage":{"cron":"51 8 * * *","time_zone":"Europe/London","file_issues":true}}`,
 		`{"host_watch":{}}`,
@@ -69,8 +69,12 @@ func TestConfigValidation(t *testing.T) {
 		t.Error("unknown work accepted")
 	}
 	c, _ := ParseConfig(json.RawMessage(`{}`))
-	if ns := c.NoteNamespaces(); len(ns) != 1 || ns[0] != DefaultNotes {
+	if ns := c.NoteNamespaces(); len(ns) != 1 || ns[0] != NotesNamespace {
 		t.Fatalf("default notes: %v", ns)
+	}
+	c, _ = ParseConfig(json.RawMessage(`{"notes":["team.notes","introspection.notes"]}`))
+	if ns := c.NoteNamespaces(); len(ns) != 2 || ns[0] != NotesNamespace || ns[1] != "team.notes" {
+		t.Fatalf("named notes: %v", ns)
 	}
 	if l, m, d := (HostWatch{}).Thresholds(); l != 1.5 || m != 90 || d != 90 || (HostWatch{}).Interval() != time.Minute {
 		t.Fatal("host watch defaults")

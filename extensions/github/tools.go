@@ -64,8 +64,6 @@ const (
 	OpUpload       = "github.attachment.upload"
 	OpFetch        = "github.attachment.get"
 	OpWait         = "github.wait"
-	OpCorrection   = "github.correction"
-	OpProblem      = "github.problem"
 	OpHoldStatus   = "github.hold.status"
 	OpHold         = "github.hold"
 )
@@ -73,7 +71,7 @@ const (
 // Operations lists every tool operation (for binding operation lists).
 func Operations() []string {
 	return []string{OpContext, OpIssueView, OpIssueComment, OpIssueList, OpIssueCreate, OpPRList, OpPRView, OpPRCreate,
-		OpPRComment, OpPRReply, OpPRReview, OpChecks, OpUpload, OpFetch, OpWait, OpCorrection, OpProblem, OpHoldStatus, OpHold}
+		OpPRComment, OpPRReply, OpPRReview, OpChecks, OpUpload, OpFetch, OpWait, OpHoldStatus, OpHold}
 }
 
 // Source is one registered GitHub extension entry the tools can act on.
@@ -157,8 +155,6 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpChecks, Handler: pr(t.checks)},
 			{Name: OpUpload, Handler: h(t.upload)},
 			{Name: OpFetch, Handler: h(t.fetch)},
-			{Name: OpCorrection, Handler: h(t.correction)},
-			{Name: OpProblem, Handler: h(t.problem)},
 			{Name: OpHoldStatus, Handler: h(t.holdStatus)},
 			{Name: OpWait, Wait: t.waitPlan(false)},
 			{Name: OpHold, Wait: t.waitPlan(true)},
@@ -1020,82 +1016,4 @@ func (t *Tools) fetch(ctx context.Context, b *bound, data json.RawMessage) (any,
 	}
 	file, _ := json.Marshal(map[string]any{"name": name, "content_type": ctype, "size": len(content), "base64": base64.StdEncoding.EncodeToString(content), "save_to": in.SaveTo})
 	return domain.Payload{Schema: FileSchema, Data: file}, nil
-}
-
-// ---- corrections and problems (inputs to stage 05 sweep/triage) ----------------
-
-// NotesNamespace holds corrections and problems agents log, for the daily
-// sweep and triage extensions (05-03) to read through public storage.
-const NotesNamespace = "github.notes"
-
-// Note is one logged correction or problem.
-type Note struct {
-	Kind      string    `json:"kind"` // correction or problem
-	Area      string    `json:"area"` // a correction's area or a problem's kind
-	Scope     string    `json:"scope"`
-	Work      string    `json:"work"`
-	Execution string    `json:"execution"`
-	Issue     int       `json:"issue"`
-	Body      string    `json:"body"`
-	At        time.Time `json:"at"`
-}
-
-var (
-	correctionAreas = []string{"writing", "design", "data", "code", "workflow"}
-	problemKinds    = []string{"env", "docs", "tooling", "service", "other"}
-)
-
-func (t *Tools) note(ctx context.Context, b *bound, data json.RawMessage, kind string, allowed []string, field string) (any, error) {
-	var in map[string]string
-	if err := decode(data, &in); err != nil {
-		return nil, err
-	}
-	area, body := in[field], strings.TrimSpace(in["body"])
-	for k := range in {
-		if k != field && k != "body" {
-			return nil, refuse("invalid_input", "unknown field %q", k)
-		}
-	}
-	if area == "" && kind == "correction" {
-		area = "workflow"
-	}
-	ok := false
-	for _, a := range allowed {
-		ok = ok || a == area
-	}
-	if !ok {
-		return nil, refuse("invalid_"+field, "%s must be one of %s", field, strings.Join(allowed, ", "))
-	}
-	if body == "" || len(body) > 8<<10 {
-		return nil, refuse("invalid_body", "the body must be 1 to 8192 bytes")
-	}
-	n := Note{Kind: kind, Area: area, Scope: string(b.work.ScopeID), Work: string(b.work.ID), Execution: string(b.a.ExecutionID), Issue: b.number, Body: body, At: t.o.Now().UTC()}
-	key := kind + "/" + n.At.Format("20060102T150405.000Z") + "/" + digest(intentID(ctx, b, kind, data))[:12]
-	raw, _ := json.Marshal(n)
-	if err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
-		// One note per request: a retried call finds the note it wrote.
-		rows, err := tx.List(NotesNamespace, kind+"/")
-		if err != nil {
-			return err
-		}
-		suffix := key[strings.LastIndex(key, "/"):]
-		for _, r := range rows {
-			if strings.HasSuffix(r.Key, suffix) {
-				key = r.Key
-				return nil
-			}
-		}
-		return tx.Put(NotesNamespace, key, raw)
-	}); err != nil {
-		return nil, err
-	}
-	return map[string]any{"logged": key}, nil
-}
-
-func (t *Tools) correction(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	return t.note(ctx, b, data, "correction", correctionAreas, "area")
-}
-
-func (t *Tools) problem(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	return t.note(ctx, b, data, "problem", problemKinds, "kind")
 }

@@ -362,7 +362,7 @@ func (c *converter) githubScope(b *scopeBuilder, p *v1Project, repoB *v1Binding,
 	}
 	ops := slices.Clone(gh.AgentOperations)
 	if intro {
-		ops = append(ops, is.OpReport)
+		ops = append(ops, is.OpReport, is.OpCorrection, is.OpProblem)
 	}
 	agent["branch"] = c.branch(p, "github")
 	b.conn(conn)
@@ -475,7 +475,7 @@ func (c *converter) trackerScope(b *scopeBuilder, p *v1Project, typ string, trac
 	}
 	ops := tracker.AgentOperations(typ)
 	if intro {
-		ops = append(ops, is.OpReport)
+		ops = append(ops, is.OpReport, is.OpCorrection, is.OpProblem)
 	}
 	agent["playbook"] = tracker.Playbook
 	agent["args"] = "{key}"

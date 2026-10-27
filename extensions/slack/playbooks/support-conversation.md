@@ -19,6 +19,8 @@ Everything that touches Slack goes through Open Conduit's toolbelt, which alread
 | `slack.thread` | `limit`? | the whole thread, oldest first, each message classed as human, agent or bot |
 | `slack.reply` | `text`, `broadcast`? | reply in the thread (`broadcast` also posts it to the channel) |
 | `human.ask` | `question`, `options`?, `context`?, `deadline`? | if your toolbelt has it: ask a person privately (never in the thread) and park until they answer; end the turn after it. Without it, say in your status what you need |
+| `introspection.correction` | `area`, `body` | if your toolbelt has it: log a correction you were given (see Notes) |
+| `introspection.problem` | `kind`, `body` | if your toolbelt has it: log a problem you worked around (see Notes) |
 
 Post every reply with `slack.reply`: it marks the reply as yours, so it is never handed back to you as news, and a retried call never posts twice (give the same `request_id` when you retry). Never post through any other route.
 
@@ -30,6 +32,10 @@ Post every reply with `slack.reply`: it marks the reply as yours, so it is never
 4. Unless the conversation is over, wait on the thread: call `wait` with the `wait` object `slack.context` returns (`{"match": {"types": ["slack.message.human"]}, "timeout_seconds": 604800}`), then end the turn. Waiting keeps your session: when a person writes in the thread, Open Conduit resumes you with what they wrote, even days later and across restarts.
 
 A message that arrives while you are working is handed to you straight away, headed `## Arrived during this turn`. Take it into account now, in this turn (it may change the question), and answer it in the same reply where you can. It is not handed to you again.
+
+## Notes
+
+When someone corrects you, log the lesson with `introspection.correction`: `area` one of `writing`, `design`, `data`, `code` or `workflow`, and a `body` giving the broad theme in one sentence, then the rule a future agent should follow. When you work around something rather than doing the task the way your instructions say (a missing variable, a command that doesn't exist, a tool call that failed), log it with `introspection.problem`: `kind` one of `env`, `docs`, `tooling`, `service` or `other`, and a `body` saying what you tried, the exact error, your workaround and where the fix belongs. Log each distinct problem once per session. The daily sweep and triage act on them. If your toolbelt doesn't have these operations, or they refuse, the project doesn't collect notes: carry on.
 
 ## Ending a turn
 

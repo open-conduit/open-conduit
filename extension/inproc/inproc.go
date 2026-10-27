@@ -5,9 +5,9 @@
 // first-party extension reaches nothing an installed package could not.
 //
 // Every surface but Name is optional: an extension implements the
-// interfaces of the surfaces it has. Types, Operations and Routes are read
-// before Start and offline (config validation), so they must not depend on
-// host services; every other surface is used only after Start, except
+// interfaces of the surfaces it has. Types, Operations, Routes, WorkKinds
+// and Recurrences are read before Start and offline (config validation), so
+// they must not depend on host services; every other surface is used only after Start, except
 // Exporter, which joins the telemetry pipeline before it.
 //
 // The surfaces mirror the subprocess manifest (protocol.Manifest): Configure
@@ -17,6 +17,7 @@ package inproc
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"time"
 
@@ -72,6 +73,39 @@ type Host struct {
 	// Report records a safe diagnostic code for the extension (logged once
 	// per change; "" clears it).
 	Report func(code string)
+	// Nudge asks the host loop for an early pass, after the extension made
+	// something the loop acts on (an accepted Event, an armed timer).
+	Nudge func()
+	// StateDir is the daemon's state directory, and DryRun whether the
+	// daemon makes no external writes and starts no timed work.
+	StateDir string
+	DryRun   bool
+	// AcceptInTx accepts a root Event of one of the extension's own
+	// families (Event types named <Name>.*) into scope, inside the
+	// extension's own transaction, so its own records commit with it.
+	AcceptInTx func(tx storage.Tx, scope domain.ID, e domain.Event) (domain.AcceptedEvent, bool, error)
+	// Timers arms and cancels the extension's recurring timers through the
+	// current generation: only its own recurrence kinds and timers whose
+	// Event is of its own families.
+	Timers Timers
+	// CancelWork cancels Work of the extension's own kinds (the operator's
+	// cancellation, idempotent per key and guarded by the Work's revision:
+	// a stale revision is storage.ErrConflict).
+	CancelWork func(ctx context.Context, work domain.ID, expected domain.Revision, reason, key string) (domain.ID, error)
+	// Capture writes a named telemetry event to the host's telemetry events
+	// log and hands it to every Sink. scope is "" for one about the machine.
+	Capture func(ctx context.Context, scope, name string, at time.Time, props map[string]any) error
+}
+
+// ErrNotOwn refuses a host service call on something that is not the
+// extension's own: an Event family, a recurrence kind, a timer or a Work
+// kind it did not declare.
+var ErrNotOwn = errors.New("not the extension's own")
+
+// Timers is the host's timer control.
+type Timers interface {
+	ArmRecurrence(ctx context.Context, scope domain.ID, timer domain.Timer, expected domain.Revision, kind string, spec []byte) error
+	Cancel(ctx context.Context, id domain.ID, expected domain.Revision) error
 }
 
 // Starter extensions start once the host services exist, before the first
@@ -85,6 +119,32 @@ type Stopper interface {
 	Stop()
 }
 
+// WorkKind is the lifecycle of a Work kind the extension's routes create.
+// Standing Work outlives its attempts (only cancellation ends it); Trigger,
+// when set, picks the input that triggers an attempt from the pending batch
+// and must be pure and deterministic.
+type WorkKind struct {
+	Kind     string
+	Standing bool
+	Trigger  func(inputs []domain.Event) int
+}
+
+// WorkKinder extensions declare the lifecycle of their own Work kinds.
+type WorkKinder interface {
+	WorkKinds() []WorkKind
+}
+
+// RecurrenceFunc is a pure, deterministic recurrence policy run inside the
+// timer's firing transaction: given the stored spec, the fired timer and the
+// firing time, the occurrence Event to accept (nil skips this firing) and
+// the replacement timer (nil ends the recurrence). It does no I/O.
+type RecurrenceFunc func(spec []byte, fired domain.Timer, now time.Time) (occurrence *domain.Event, next *domain.Timer, err error)
+
+// Recurring extensions own timer recurrence kinds, by kind.
+type Recurring interface {
+	Recurrences() map[string]RecurrenceFunc
+}
+
 // Configurer extensions receive every applied generation (and every public
 // URL change): the enabled scopes' entries of their own config types, with
 // the connection each names when that is one of their connection types.
@@ -96,6 +156,14 @@ type Configurer interface {
 // toolbelt.
 type Tooled interface {
 	Registration() extension.Registration
+}
+
+// EntryGated extensions' toolbelt registration joins only a generation in
+// which an enabled scope has one of their entries: removing the last entry
+// removes their operations, and a binding still granting them keeps running
+// (its calls are undeclared).
+type EntryGated interface {
+	EntryGated()
 }
 
 // Actor extensions offer action providers on a scope, by provider name.

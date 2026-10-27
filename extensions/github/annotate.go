@@ -1,14 +1,10 @@
 package github
 
 import (
-	"context"
-	"encoding/json"
 	"fmt"
 	"strings"
-	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Annotation is one line of operator context about Work this entry owns.
@@ -19,10 +15,9 @@ type Annotation struct{ Name, Value string }
 func (c *Client) Web() string { return c.web }
 
 // Annotate describes Work owned by this entry for operator views: the issue
-// and its URL, whether it is a held issue, projection dry run and the
-// corrections and problems its agent logged. It reads only durable state and
-// makes no service calls. ok is false for Work this entry does not own.
-func Annotate(ctx context.Context, store storage.Store, s Settings, web string, w domain.Work) ([]Annotation, bool) {
+// and its URL, whether it is a held issue and projection dry run. It makes
+// no service calls. ok is false for Work this entry does not own.
+func Annotate(s Settings, web string, w domain.Work) ([]Annotation, bool) {
 	n := 0
 	for _, k := range w.CorrelationKeys {
 		if k.Source != s.Namespace {
@@ -47,25 +42,6 @@ func Annotate(ctx context.Context, store storage.Store, s Settings, web string, 
 		out = append(out, Annotation{"projection", "dry run: labels and comments are not written"})
 	} else if s.Projection.Disabled {
 		out = append(out, Annotation{"projection", "disabled"})
-	}
-	counts := map[string]int{}
-	_ = store.Transact(ctx, storage.Guard{Now: time.Now()}, func(tx storage.Tx) error {
-		rows, err := tx.List(NotesNamespace, "")
-		if err != nil {
-			return err
-		}
-		for _, r := range rows {
-			var note Note
-			if json.Unmarshal(r.Value, &note) == nil && note.Work == string(w.ID) {
-				counts[note.Kind]++
-			}
-		}
-		return nil
-	})
-	for _, kind := range []string{"correction", "problem"} {
-		if counts[kind] > 0 {
-			out = append(out, Annotation{kind + "s", fmt.Sprint(counts[kind])})
-		}
 	}
 	return out, true
 }

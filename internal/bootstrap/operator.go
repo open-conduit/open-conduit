@@ -41,7 +41,6 @@ func registry(executors map[string]extension.Executor) config.Registry {
 	trackerRegistry(&reg)
 	slackRegistry(&reg)
 	scheduleRegistry(&reg)
-	introspectionRegistry(&reg)
 	inprocRegistry(&reg, firstParty())
 	resourceRegistry(&reg)
 	return reg
@@ -168,7 +167,7 @@ func (d *daemon) annotate(ctx context.Context, w domain.Work) []management.Annot
 	out := d.capacityAnnotation(ctx, w)
 	out = append(out, d.inprocAnnotations(ctx, w)...)
 	for _, src := range sources {
-		lines, ok := gh.Annotate(ctx, d.coord, src.ingress.Settings(), src.client.Web(), w)
+		lines, ok := gh.Annotate(src.ingress.Settings(), src.client.Web(), w)
 		if !ok {
 			continue
 		}

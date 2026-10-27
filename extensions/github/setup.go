@@ -27,7 +27,7 @@ var (
 	AgentOperations = []string{"read_context", "wait", "declare_outcome",
 		"github.context", "github.issue.view", "github.issue.comment", "github.issue.list", "github.issue.create",
 		"github.pr.list", "github.pr.view", "github.pr.create", "github.pr.comment", "github.pr.reply", "github.pr.review", "github.checks",
-		"github.attachment.upload", "github.attachment.get", "github.wait", "github.correction", "github.problem"}
+		"github.attachment.upload", "github.attachment.get", "github.wait"}
 	HoldOperations = []string{"emit", "github.hold.status", "github.hold"}
 )
 

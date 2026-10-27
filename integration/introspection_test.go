@@ -5,13 +5,13 @@ import (
 	"encoding/json"
 	"errors"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	gh "github.com/open-conduit/open-conduit/extensions/github"
 	is "github.com/open-conduit/open-conduit/extensions/introspection"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
@@ -120,20 +120,21 @@ func (e *repEnv) standing(scope domain.ID, kind string) []domain.Work {
 	return out
 }
 
-// putNote writes an agent's note exactly as the GitHub tools do (the data
-// contract the extension reads through public storage).
+// putNote writes an agent's note exactly as introspection.correction and
+// introspection.problem do, keyed by the Work's GitHub issue.
 func (e *repEnv) putNote(kind, area string, scope domain.ID, work, body string, issue int) string {
 	e.t.Helper()
 	e.seq++
 	at := e.clock.Now().Add(time.Duration(e.seq) * time.Millisecond).UTC()
 	key := kind + "/" + at.Format("20060102T150405.000Z") + "/" + strings.Repeat("a", 11) + string(rune('a'+e.seq%26))
-	raw, _ := json.Marshal(gh.Note{Kind: kind, Area: area, Scope: string(scope), Work: work, Execution: "x-" + work, Issue: issue, Body: body, At: at})
+	key2 := domain.CorrelationKey{Source: "github/eng", ExternalID: "issue/" + strconv.Itoa(issue)}
+	raw, _ := json.Marshal(is.Note{Kind: kind, Area: area, Scope: string(scope), Work: work, Execution: "x-" + work, Key: &key2, Body: body, At: at})
 	if err := e.store.Transact(context.Background(), storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
-		return tx.Put(gh.NotesNamespace, key, raw)
+		return tx.Put(is.NotesNamespace, key, raw)
 	}); err != nil {
 		e.t.Fatal(err)
 	}
-	return gh.NotesNamespace + ":" + key
+	return is.NotesNamespace + ":" + key
 }
 
 func decode[T any](t *testing.T, m map[string]any) T {
@@ -215,7 +216,7 @@ func TestWorkflowDReportTriageFix(t *testing.T) {
 	if ev.Reports == nil || ev.Reports.Count != 3 || len(ev.Reports.Groups) != 2 || ev.Reports.Groups[0].Count != 2 || ev.Reports.Groups[0].Works[0] != string(engineering) {
 		t.Fatalf("report evidence: %+v", ev.Reports)
 	}
-	if ev.Problems == nil || ev.Problems.Count != 2 || len(ev.Problems.Groups) != 1 || len(ev.Problems.Groups[0].Issues) != 2 || ev.Settings.Land != is.LandPR || ev.Settings.Notes[0] != gh.NotesNamespace {
+	if ev.Problems == nil || ev.Problems.Count != 2 || len(ev.Problems.Groups) != 1 || len(ev.Problems.Groups[0].Keys) != 2 || ev.Settings.Land != is.LandPR || len(ev.Settings.Notes) != 1 || ev.Settings.Notes[0] != is.NotesNamespace {
 		t.Fatalf("problem evidence: %+v %+v", ev.Problems, ev.Settings)
 	}
 	_, err = e.call(tr, is.OpEvidence, "", map[string]any{"for": "jobs"})
@@ -234,7 +235,7 @@ func TestWorkflowDReportTriageFix(t *testing.T) {
 	}
 	for name, in := range map[string]map[string]any{
 		"unknown report": {"reports": []any{"nope"}, "title": "t", "body": "b"},
-		"unknown note":   {"notes": []any{"github.notes:problem/x"}, "title": "t", "body": "b"},
+		"unknown note":   {"notes": []any{is.NotesNamespace + ":problem/x"}, "title": "t", "body": "b"},
 		"nothing named":  {"title": "t", "body": "b"},
 	} {
 		if _, err := e.call(tr, is.OpFix, "", in); err == nil {
@@ -244,7 +245,7 @@ func TestWorkflowDReportTriageFix(t *testing.T) {
 	if res := e.must(tr, is.OpNotesResolve, "", map[string]any{"notes": []any{p1, p2}, "summary": "fix requested"}); res["handled"] != float64(2) {
 		t.Fatalf("notes resolve: %v", res)
 	}
-	_, err = e.call(tr, is.OpNotesResolve, "", map[string]any{"notes": []any{"github.notes:problem/none"}, "summary": "x"})
+	_, err = e.call(tr, is.OpNotesResolve, "", map[string]any{"notes": []any{is.NotesNamespace + ":problem/none"}, "summary": "x"})
 	refused(t, err, "not_found")
 	e.finish(tr)
 	if w, _ := e.work(triage.ID); w.State != domain.WorkReady {

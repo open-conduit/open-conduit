@@ -11,12 +11,9 @@ import (
 	"github.com/open-conduit/open-conduit/executors/claudecode"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
-	is "github.com/open-conduit/open-conduit/extensions/introspection"
-	isplaybooks "github.com/open-conduit/open-conduit/extensions/introspection/playbooks"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	slplaybooks "github.com/open-conduit/open-conduit/extensions/slack/playbooks"
 	trackerplaybooks "github.com/open-conduit/open-conduit/extensions/tracker/playbooks"
-	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
@@ -48,28 +45,18 @@ func (d *daemon) openTools() error {
 	if d.slackTools, err = sl.NewTools(sl.ToolsOptions{Store: d.coord, Sources: d.slackSourcesList, Now: d.now}); err != nil {
 		return err
 	}
-	if d.reports, err = is.NewTools(is.ToolsOptions{Store: d.coord, Now: d.now}); err != nil {
-		return err
-	}
 	return d.openTrackerTools()
 }
 
 // registerTools adds the extension operations to a generation's toolbelt.
-// Issue reporting is registered only for a generation that enables it.
-func (d *daemon) registerTools(belt *runtime.Toolbelt, s *config.Snapshot) error {
+func (d *daemon) registerTools(belt *runtime.Toolbelt) error {
 	if err := belt.Register(d.tools.Registration()); err != nil {
 		return err
 	}
 	if err := belt.Register(d.slackTools.Registration()); err != nil {
 		return err
 	}
-	if err := d.registerTrackerTools(belt); err != nil {
-		return err
-	}
-	if introspectionEnabled(s) {
-		return belt.Register(d.reports.Registration())
-	}
-	return nil
+	return d.registerTrackerTools(belt)
 }
 
 // authorizeAlias is the B04 cross-scope dependency ceiling: the waiting
@@ -87,15 +74,12 @@ func (d *daemon) pluginDir() string { return filepath.Join(d.o.StateDir, "playbo
 
 // preparePlaybooks writes the plugin (rewritten at every start, so an
 // upgrade replaces old playbook text): the GitHub playbooks, then the Slack
-// support and introspection (sweep, triage, fix) playbooks beside them.
+// support and tracker playbooks and the extensions' own beside them.
 func (d *daemon) preparePlaybooks() error {
 	if err := playbooks.Prepare(d.pluginDir()); err != nil {
 		return err
 	}
 	books := slplaybooks.All()
-	for name, text := range isplaybooks.All() {
-		books[name] = text
-	}
 	for name, text := range trackerplaybooks.All() {
 		books[name] = text
 	}
@@ -127,10 +111,6 @@ func (d *daemon) renderEvents(events []domain.Event) string {
 			continue
 		}
 		if text, ok := sl.RenderEvent(e); ok {
-			parts = append(parts, text)
-			continue
-		}
-		if text, ok := is.RenderEvent(e); ok {
 			parts = append(parts, text)
 			continue
 		}
