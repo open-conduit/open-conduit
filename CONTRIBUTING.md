@@ -1,6 +1,6 @@
 # Contributing to Open Conduit
 
-This guide covers setting up a checkout, the checks a change must pass, and the rules the code follows. [The docs index](docs/README.md) lists the architecture documents behind each part. AI coding agents should also follow [AGENTS.md](AGENTS.md).
+This guide covers setting up a checkout, the checks a change must pass, and the rules the code follows. [The architecture section of the docs site](https://open-conduit.github.io/open-conduit/architecture/) describes how each part is built and what it guarantees, and [the docs index](docs/README.md) lists the build and check commands. AI coding agents should also follow [AGENTS.md](AGENTS.md).
 
 Open Conduit is released under the [MIT License](LICENSE), and contributions are accepted under it. Ask before you start a large change.
 
@@ -58,14 +58,14 @@ Releases are cut by hand from the release workflow (Actions, release, Run workfl
 
 ## Package boundaries
 
-The core knows nothing about GitHub, Slack, Git or Claude. Decision B01 in [package boundaries](docs/architecture/packages.md) sets out who may import what:
+The core knows nothing about GitHub, Slack, Git or Claude. Decision B01 in [package boundaries](https://open-conduit.github.io/open-conduit/architecture/packages/) sets out who may import what:
 
 - `domain`, `extension`, `storage`, `observability` and `protocol` are the public contracts.
 - `internal/runtime` uses only the public contracts. It never imports an extension, executor, SQLite, config or management code.
 - Extensions (`extensions/<name>`) and executors (`executors/<name>`) use the public contracts and `client`, never the runtime, SQLite or each other. The one exception is the shared tracker kit, which Linear, Jira and Bitbucket may use.
 - `internal/bootstrap` and `cmd/open-conduit` are the composition root that wires implementations together.
 
-`scripts/check-boundaries` (`make boundaries`) enforces these rules over Go's resolved production and test dependency graph, so a test import can't bring in an adapter either. A new top-level package is refused until it has a rule. Add the rule to `scripts/check-boundaries/main.go`, add a case to its tests, and record the ownership in `docs/architecture/packages.md`.
+`scripts/check-boundaries` (`make boundaries`) enforces these rules over Go's resolved production and test dependency graph, so a test import can't bring in an adapter either. A new top-level package is refused until it has a rule. Add the rule to `scripts/check-boundaries/main.go`, add a case to its tests, and record the ownership in `site/src/content/docs/architecture/packages.md`.
 
 ## Shared conformance suites and negative controls
 
@@ -86,7 +86,7 @@ There are two ways to add an extension. Both implement the same public contracts
 
 **In-process (first-party).** Add a package under `extensions/<name>` (or `executors/<name>`) that imports only the public contracts. Register it in `internal/bootstrap`: its config types and validators, handlers, operations, executors and doctor checks. `internal/bootstrap/schedule.go` and `slack.go` are good models. Run the shared suites against it in its own tests, and add an end-to-end case in `integration/` when it changes daemon behavior. Domain types stay in the extension: core gets no new primitive, and the runtime never learns the service's vocabulary.
 
-**Subprocess (installed package).** Write a program on `protocol/sdk` that speaks the extension protocol over stdin and stdout, then package, install and certify it with `open-conduit extension`. [Extension packaging](docs/architecture/extension-packaging.md) is the guide, and `protocol/examples/notes` and `protocol/examples/runner` are complete examples. `packages/slack` and `packages/shell` wrap first-party code the same way. `make certify` runs the conformance runner over all four. The protocol and packaging are provisional.
+**Subprocess (installed package).** Write a program on `protocol/sdk` that speaks the extension protocol over stdin and stdout, then package, install and certify it with `open-conduit extension`. [Extension packaging](https://open-conduit.github.io/open-conduit/architecture/extension-packaging/) is the guide, and `protocol/examples/notes` and `protocol/examples/runner` are complete examples. `packages/slack` and `packages/shell` wrap first-party code the same way. `make certify` runs the conformance runner over all four. The protocol and packaging are provisional.
 
 An extension runs with the operator's privileges either way. The host enforces the protocol surface, but it is not a sandbox (see [SECURITY.md](SECURITY.md#trust-model)).
 

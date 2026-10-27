@@ -10,4 +10,4 @@ description: Diagnose a setup, find out why something happened, and report bugs.
 
 Report bugs and ask questions in [GitHub issues](https://github.com/open-conduit/open-conduit/issues). Report vulnerabilities privately, as [SECURITY.md](https://github.com/open-conduit/open-conduit/blob/main/SECURITY.md) describes.
 
-To work on Open Conduit itself, read [CONTRIBUTING.md](https://github.com/open-conduit/open-conduit/blob/main/CONTRIBUTING.md) and [the developer docs index](https://github.com/open-conduit/open-conduit/blob/main/docs/README.md).
+To work on Open Conduit itself, read [CONTRIBUTING.md](https://github.com/open-conduit/open-conduit/blob/main/CONTRIBUTING.md) and the [Architecture](../../architecture/) pages.

@@ -20,45 +20,6 @@ The user docs site lives in `site/` and is built with [Starlight](https://starli
 
 ## Architecture
 
-The architecture documents record the design and the evidence behind it, in roughly the order it was built. Their notes and headings carry milestone numbers (such as `03-05`) from that history.
+The architecture documents are published as [the Architecture section of the docs site](https://open-conduit.github.io/open-conduit/architecture/), and their source is in `site/src/content/docs/architecture/`. Each page separates current behaviour and guarantees from the design decisions (B01 to B08) and from a History section recording how that part was built. [Performance](https://open-conduit.github.io/open-conduit/architecture/performance/) gathers the performance evidence and what is still unmeasured.
 
-**Core**
-
-- [The core in one page](architecture/core.md)
-- [Package boundaries and dependency rules](architecture/packages.md)
-- [Primitive and transactional storage contracts](architecture/domain-storage.md)
-- [Ingress, executor, toolbelt and observability contracts](architecture/extensions.md)
-- [Routing, waits and recovery semantics with executable scenarios](architecture/runtime-semantics.md)
-- [Configuration, secrets and local management contract](architecture/config-management.md) and [the configuration schema](architecture/config.schema.json), with [schema fixtures](architecture/examples/config/README.md)
-- [Contracts, supported build targets and development tooling](architecture/contracts-gate.md)
-
-**Runtime**
-
-- [SQLite and local artifact guarantees](architecture/sqlite-artifacts.md)
-- [Verified backup bundles](architecture/backup-bundles.md)
-- [Durable event acceptance and reconciliation](architecture/event-ingress.md)
-- [Durable routing, Work lifecycle and causal limits](architecture/routing-lifecycle.md)
-- [Execution scheduling, recovery and control](architecture/execution-scheduling.md)
-- [Durable timers, waits and dependency aliases](architecture/timers-waits.md)
-- [Toolbelt authority, configuration and local management](architecture/toolbelt-management.md)
-- [Shell executor and CLI toolbelt](architecture/shell-executor.md)
-- [Lifecycle telemetry, unified run history and doctor](architecture/observability-history.md)
-- [Daemon composition and the kill and restart drills](architecture/daemon-core-gate.md)
-
-**Workloads and integrations**
-
-- [GitHub ingress, routing policy and projections](architecture/github-extension.md)
-- [Optional workspaces and the Git provider](architecture/workspaces.md)
-- [Claude Code executor and private continuity](architecture/claude-code-executor.md)
-- [Engineering tools, waits and playbooks](architecture/engineering-tools.md)
-- [Slack ingress, conversations and marked replies](architecture/slack-extension.md)
-- [Scheduled jobs: definitions, catch-up, the one-pending-run rule and job runs](architecture/schedule-extension.md)
-- [Introspection: reporting, sweep, triage and fixes](architecture/issue-reporting.md)
-- [Operator setup, doctor and engineering controls](architecture/operator-setup.md)
-- [Installed integrations: Linear, Jira, Bitbucket, PostHog and operator tools](architecture/installed-integrations.md)
-- [Backup, restore and state recovery](architecture/recovery.md)
-
-**Extensions** (provisional)
-
-- [Extension subprocess protocol: transport, manifest, runtime, trust model and schema evolution](architecture/extension-protocol.md)
-- [Extension packaging, SDK, install, update, removal and certification](architecture/extension-packaging.md)
+This directory keeps only [the configuration schema](architecture/config.schema.json) and [its fixtures](architecture/examples/config/README.md), which `make config-check` and the config tests read.

@@ -2,7 +2,7 @@
 title: "Scheduled jobs: definitions, catch-up, the one-pending-run rule and job runs"
 ---
 
-Ticket 05-01 puts job triggers on the five primitives. A timed job is a configured independent root on a durable core timer; every trigger is an accepted Event; the `schedule` route makes it input of the job's one standing Work; the scheduler runs it as an ordinary Execution through the job's binding. Nothing schedules work outside event → route → Work → Execution. The extension is [`extensions/schedule`](https://github.com/open-conduit/open-conduit/tree/main/extensions/schedule); [`internal/bootstrap/schedule.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/schedule.go) composes it. Job runs (fresh checkout, detached runs, env and secret precedence, payload artifacts, timeouts, kept runs, the job history view) is delivered by 05-02; see [Job runs](#job-runs-05-02).
+Scheduled jobs run on the five primitives. A timed job is a configured independent root on a durable core timer; every trigger is an accepted Event; the `schedule` route makes it input of the job's one standing Work; the scheduler runs it as an ordinary Execution through the job's binding. Nothing schedules work outside event → route → Work → Execution. The extension is [`extensions/schedule`](https://github.com/open-conduit/open-conduit/tree/main/extensions/schedule); [`internal/bootstrap/schedule.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/schedule.go) composes it. How a job runs (fresh checkout, detached runs, env and secret precedence, payload artifacts, timeouts, kept runs, the job history view) is covered under [Job runs](#job-runs).
 
 ## Configuration
 
@@ -37,13 +37,13 @@ A scope's `schedule` extension entry declares its jobs. Run settings are not her
 
 A job with no timing and no `on` is manual only. Validation never echoes values.
 
-Routes use one registered handler, `schedule`. Its route config `{"jobs": [...], "triggers": [...]}` selects jobs and, since 05-02, trigger kinds (`timer`, `webhook`, `event`, `manual`); empty selects every job of every schedule entry in the scope, and every kind. One route per binding gives each job its own command:
+Routes use one registered handler, `schedule`. Its route config `{"jobs": [...], "triggers": [...]}` selects jobs and trigger kinds (`timer`, `webhook`, `event`, `manual`); empty selects every job of every schedule entry in the scope, and every kind. One route per binding gives each job its own command:
 
 ```json
 {"name": "jobs-report", "handler": "schedule", "binding": "report-cmd", "active_policy": "queue", "config": {"jobs": ["report"]}}
 ```
 
-Two generic contract additions make this possible. `extension.RouteInput.Route` carries the evaluated route, including its opaque handler config. `config.Registry.HandlerConfig` lets a registered handler validate that config at load/apply time. Put a `schedule` route before a `manual` route in the same scope, or the manual route would create `manual.work` for a job key.
+Two generic contract pieces make this possible. `extension.RouteInput.Route` carries the evaluated route, including its opaque handler config. `config.Registry.HandlerConfig` lets a registered handler validate that config at load/apply time. Put a `schedule` route before a `manual` route in the same scope, or the manual route would create `manual.work` for a job key.
 
 **Repository-scoped declarations.** The repository's scope declares its jobs. B05 requires an explicit apply before disk edits change behavior. Job reload is therefore config reload.
 
@@ -66,7 +66,7 @@ Every trigger carries the `schedule.trigger.v1` payload: job, kind, run label (`
 
 Timed jobs use a core timer with a calendar recurrence. `runtime.TimerOptions.Recurrences` registers pure `RecurrenceFunc` policies by kind. `Timers.ArmRecurrence` stores the opaque spec with the timer. Inside the firing transaction core asks the policy which occurrence this firing publishes (or none) and when the timer fires next. Acceptance, the firing ledger and the rearm commit together, so a crash never separates them; replaying a firing returns its original result. A substituted or skipped firing never accepts the template. Core keeps no calendar knowledge.
 
-05-03: the introspection extension registers a second recurrence kind (`introspection.v1`) for its daily sweep and triage, with the same calendar rules. It is not a `schedule` entry, because the PRD makes them Work kinds the introspection extension defines ([introspection](../issue-reporting/#the-sweep-and-triage-schedules)). Bootstrap merges both kinds into `TimerOptions.Recurrences` and both standing Work policies into `SchedulerOptions.WorkKinds`.
+The introspection extension registers a second recurrence kind (`introspection.v1`) for its daily sweep and triage, with the same calendar rules. It is not a `schedule` entry, because the sweep and triage are Work kinds the introspection extension defines ([introspection](../issue-reporting/#the-sweep-and-triage-schedules)). Bootstrap merges both kinds into `TimerOptions.Recurrences` and both standing Work policies into `SchedulerOptions.WorkKinds`.
 
 The schedule policy (`schedule.Recurrence`) decides catch-up:
 
@@ -92,7 +92,7 @@ One pending rerun is permitted while a job runs: at most one waits, a delivery t
 2. **The next attempt takes the whole batch.** `Scheduler.Start` already gives one attempt every pending input (`RunRequest.Inputs`), so however many triggers arrive while a run goes, exactly one run is pending. Nothing is dropped from history: each trigger is consumed by that one attempt.
 3. **The extension picks the batch's trigger.** `runtime.SchedulerOptions.WorkKinds` registers a lifecycle policy per Work kind. The job kind's `Trigger` function, `schedule.SelectTrigger`, chooses the newest delivery (webhook or code-host event), else the earliest request. That choice becomes `Execution.TriggerID` and `RunRequest.Trigger`. A wake winner still takes precedence.
 
-The same policy makes job Work **standing**. A completed attempt leaves it ready and idle instead of completing it. A failed attempt arms no automatic retry: the next trigger is its retry. Only cancellation ends job Work. A cancelled job Work is terminal, and its later triggers are audited as `terminal`. 05-02 kept this (jobs do not adopt the B04 failure budget) and made an executor's retry hint apply to standing Work too; see [Retry](#retry).
+The same policy makes job Work **standing**. A completed attempt leaves it ready and idle instead of completing it. A failed attempt arms no automatic retry: the next trigger is its retry. Only cancellation ends job Work. A cancelled job Work is terminal, and its later triggers are audited as `terminal`. Jobs do not adopt the B04 failure budget, but an executor's retry hint applies to standing Work too; see [Retry](#retry).
 
 Contract tests cover all of these orders:
 
@@ -108,7 +108,7 @@ In a dry run no timers are armed and job Work does not start. Triggers wait and 
 | Timed slot | The durable timer and firing ledger | Not ingress. It survives restarts and catches up within six hours, and needs no webhook. |
 | Manual run | Operator acceptance | Not ingress. |
 | Custom webhook POST (`schedule.webhook`) | None | One-shot, declared loss (`schedule.WebhookLoss`): a POST sent while the listener or tunnel is down is lost, and the sender sees the failure. Reconcile returns an empty complete snapshot. |
-| GitHub push, release, workflow_run (through `github.delivery`) | GitHub keeps branch heads, releases and workflow runs readable, but no per-delivery history | Jobs rely on `github.delivery`, which the GitHub ingress declares non-re-derivable (`DeliveryLoss`). Reconstruction is possible for a moved branch head (collapsing intermediate pushes, which coalescing tolerates), for published releases and for workflow runs within Actions retention. 05-02 keeps the declared loss: a branch-head poll would run a job for a push it never saw described (no files, no before), and a scheduled job is the documented fallback for anything that must not be missed. |
+| GitHub push, release, workflow_run (through `github.delivery`) | GitHub keeps branch heads, releases and workflow runs readable, but no per-delivery history | Jobs rely on `github.delivery`, which the GitHub ingress declares non-re-derivable (`DeliveryLoss`). Reconstruction is possible for a moved branch head (collapsing intermediate pushes, which coalescing tolerates), for published releases and for workflow runs within Actions retention. The loss stays declared: a branch-head poll would run a job for a push it never saw described (no files, no before), and a scheduled job is the documented fallback for anything that must not be missed. |
 
 Turning off webhooks (`--no-tunnel`, no listener) affects only these explicitly declared one-shot families: timed and manual runs are unaffected (`TestScheduleWebhookOff`).
 
@@ -139,9 +139,9 @@ Turning off webhooks (`--no-tunnel`, no listener) affects only these explicitly 
 - **Runtime recurrence contract** (`integration/recurrence_test.go`): substitution without accepting the template, skip ledger replay across restart, an unregistered kind and invalid answers.
 - **Composed daemon** (`TestDaemonScheduledJobs`, part of `make drill`): an interval job at start and not again after a restart; a signed GitHub push selecting a job by event and branch, with a non-matching branch running nothing; a signed job webhook, a wrong token refused, and the deep doctor URL.
 
-## Job runs (05-02)
+## Job runs
 
-05-02 runs jobs as the same Executions, with no job record, job scheduler or job history of its own. What a job runs is still the binding of the `schedule` route that selects it; everything below is binding configuration or a generic runtime rule.
+Jobs run as the same Executions as every other Work, with no job record, job scheduler or job history of its own. What a job runs is still the binding of the `schedule` route that selects it; everything below is binding configuration or a generic runtime rule.
 
 ### Bindings
 
@@ -154,7 +154,7 @@ Turning off webhooks (`--no-tunnel`, no listener) affects only these explicitly 
 
 ### Timeouts: one deadline model
 
-Every attempt has one runtime deadline, `settings.timeout_seconds` (default 3600), now overridable per binding with `bindings[].timeout_seconds` for any executor. The attempt pins it with its binding, the host times the attempt out when it passes (stop, then confirmed exclusion), and history shows the deadline and remaining budget the same way for jobs and turns. The shell's own `config.timeout_seconds` remains the process-tree deadline the executor enforces across restarts (SIGTERM, then SIGKILL), and its result reads `shell command timed out`. A long detached job gets a binding `timeout_seconds` above its longest run.
+Every attempt has one runtime deadline, `settings.timeout_seconds` (default 3600), overridable per binding with `bindings[].timeout_seconds` for any executor. The attempt pins it with its binding, the host times the attempt out when it passes (stop, then confirmed exclusion), and history shows the deadline and remaining budget the same way for jobs and turns. The shell's own `config.timeout_seconds` remains the process-tree deadline the executor enforces across restarts (SIGTERM, then SIGKILL), and its result reads `shell command timed out`. A long detached job gets a binding `timeout_seconds` above its longest run.
 
 ### Kept runs: one retention policy
 
@@ -162,7 +162,7 @@ A job's history is its standing Work's Executions, kept by the one per-Work `kep
 
 ### Retry
 
-Jobs get no automatic failure-budget retry, because a job is often not idempotent (posting, deploying) and its next trigger is its retry. One generic change (05-02): an executor's `Result.RetryHint` is honoured for every Work kind, standing Work included; it is the executor saying when to try again, not a failure budget, so it never exhausts standing Work. While that backoff runs, new triggers queue and join the retry's batch. A Claude Code usage limit on an agent job waits for its reset exactly as an issue turn does.
+Jobs get no automatic failure-budget retry, because a job is often not idempotent (posting, deploying) and its next trigger is its retry. An executor's `Result.RetryHint` is honoured for every Work kind, standing Work included; it is the executor saying when to try again, not a failure budget, so it never exhausts standing Work. While that backoff runs, new triggers queue and join the retry's batch. A Claude Code usage limit on an agent job waits for its reset exactly as an issue turn does.
 
 ### Detached long-running jobs
 
@@ -180,17 +180,28 @@ The `job:<name>` wait condition translates. The host announces each finished job
 
 ### Dry run
 
-Unchanged from 05-01 and the same for every trigger kind: a dry run arms no schedule timers and starts no job Work, while webhook, code-host and manual triggers are still accepted and routed. They wait as input and run, coalesced into one run, after a normal start. Open Conduit keeps accepted input lossless.
+The same for every trigger kind: a dry run arms no schedule timers and starts no job Work, while webhook, code-host and manual triggers are still accepted and routed. They wait as input and run, coalesced into one run, after a normal start. Open Conduit keeps accepted input lossless.
 
 ### History and the run view
 
-A job run is a `runtime.Run` like a turn: trigger, binding, executor, deadline, outcome, usage, artifacts and retention, filtered by `work_kind=schedule.job` or not at all. 05-02 adds generic workspace metadata for every executor: `extension.Result.Workspace` (`Kind`, `Ref`, `Dir`, `Summary`, `Data`), reported by the shell and Claude Code executors from the acquired resource, with a provider one-line `Resource.Summary` (`main checkout, 1 commit(s) behind origin/main: another execution is using the checkout`, `fresh worktree at origin/main 1a2b3c4`, `worktree on branch agent/work-x, reused`). `GET /v1/runs` returns it as `workspace`, and `runview.Detail` (CLI and TUI) prints it. Nothing in history branches on executor or Work kind.
+A job run is a `runtime.Run` like a turn: trigger, binding, executor, deadline, outcome, usage, artifacts and retention, filtered by `work_kind=schedule.job` or not at all. Workspace metadata is generic across executors: `extension.Result.Workspace` (`Kind`, `Ref`, `Dir`, `Summary`, `Data`), reported by the shell and Claude Code executors from the acquired resource, with a provider one-line `Resource.Summary` (`main checkout, 1 commit(s) behind origin/main: another execution is using the checkout`, `fresh worktree at origin/main 1a2b3c4`, `worktree on branch agent/work-x, reused`). `GET /v1/runs` returns it as `workspace`, and `runview.Detail` (CLI and TUI) prints it. Nothing in history branches on executor or Work kind.
 
-### Verification (05-02)
+### Job run verification
 
 - **Unit tests:** route trigger kinds and truncated file lists (`TestRouteMatch`, `TestJobPathsFilterPushes`); binding `timeout_seconds` (`TestBindingTimeout`); one TUI for a job and a turn with a workspace (`TestJobAndTurnShareTheView`).
 - **SQLite integration:** the binding deadline, a hinted retry on standing Work with triggers joining its batch, no hintless retry, and run-ended Events (`TestJobDeadlineRetryHintAndRunEvents`); holds and agent waits (`TestJobRunEndsAWait`).
 - **Composed daemon, part of `make drill`:**
   - `TestDaemonWorkflowC`: crash-safe recurrence (SIGKILL right after the interval timer's fire commits; one run after restart), six-hour catch-up by config edit (one hour past runs once, seven hours past is skipped), a fresh checkout at the remote head with removal after success, a detached job adopted across a daemon SIGKILL with a manual run dropped while it ran, a shell job's `os context` toolbelt call, and an agent turn and the jobs in one `/v1/runs` history rendered by one run view with the workspace shown.
   - `TestDaemonJobParity`: `TestJobDeliveryWhileRunningRunsAgain` (deliveries 1 then 3), `TestJobRunsAreKept` under `kept_executions`, `TestJobCatchesUpTheMainCheckout` (stale while another execution holds the checkout, then fast-forwarded), `TestJobEnvResolvesSecrets`, `TestJobTimesOut` (shell deadline) and a binding `timeout_seconds`.
-- **Reload** is config apply, covered by 05-01 (`TestScheduleConfigEditsAndRemoval`, `TestDaemonScheduledJobs`) and the 02-09 reload drill for bindings.
+- **Reload** is config apply, covered by `TestScheduleConfigEditsAndRemoval`, `TestDaemonScheduledJobs` and the daemon reload drill for bindings (`TestDaemonConfigReload`).
+
+## History
+
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
+
+- Ticket 05-01 put job triggers on the five primitives: job definitions, the timed, webhook, code-host and manual triggers, the `schedule.Recurrence` catch-up policy, the one-pending-run rule and the dry-run behaviour. It added the generic contract pieces `extension.RouteInput.Route` and `config.Registry.HandlerConfig`, and the runtime recurrence contract. Job runs were left to 05-02.
+- Ticket 05-02 delivered job runs: route selection by trigger kind, per-binding `timeout_seconds`, `Result.RetryHint` honoured for standing Work, run-ended Events and `job:` waits, and the generic `extension.Result.Workspace` metadata shown by `GET /v1/runs` and the run view. It kept 05-01's standing-Work rule (no B04 failure budget for jobs), kept 05-01's dry-run behaviour, and kept the declared loss for code-host triggers rather than adding a branch-head poll. Its tests are listed under [Job run verification](#job-run-verification).
+- Ticket 05-03 added the introspection extension's `introspection.v1` recurrence kind beside the schedule kind.
+- The binding reload drill (`TestDaemonConfigReload`) dates from ticket 02-09.

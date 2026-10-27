@@ -7,7 +7,7 @@
 // callback types). Nothing in core distinguishes an external extension once
 // it is adapted.
 //
-// Trust model (docs/architecture/extension-protocol.md): an extension
+// Trust model (site/src/content/docs/architecture/extension-protocol.md): an extension
 // process runs with the operator's user privileges. Process separation is
 // fault isolation, not a sandbox. What the host enforces is the protocol
 // surface: every extension-to-host call is scoped by the identity bound at

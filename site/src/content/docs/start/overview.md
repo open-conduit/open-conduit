@@ -23,4 +23,4 @@ Each run gets a scoped **toolbelt**: the operations its binding allows, such as 
 
 Because GitHub, Slack, scheduled jobs and introspection all go through the same core, they share one history, one retry and timeout model, and one view in the terminal UI.
 
-For the design in depth, see [the core in one page](https://github.com/open-conduit/open-conduit/blob/main/docs/architecture/core.md).
+For the design in depth, see [the core in one page](../../architecture/core/).

@@ -1,8 +1,9 @@
 ---
 title: "Toolbelt authority and local management"
+description: "How Open Conduit authorizes toolbelt calls, loads configuration and secrets, and serves the local management API."
 ---
 
-Ticket 02-06 implements [B03](../extensions/) toolbelt authority and [B05](../config-management/) configuration, secrets and the local management API. The pieces are the runtime [toolbelt](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/toolbelt.go) and [operator control](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/manual.go) operations, [configuration loading/validation/secrets](https://github.com/open-conduit/open-conduit/tree/main/internal/config), the [management server](https://github.com/open-conduit/open-conduit/tree/main/internal/management), the public [client](https://github.com/open-conduit/open-conduit/blob/main/client/client.go) and the [`open-conduit` operator commands](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/operator.go). Composing a long-running daemon (scheduler/poll loops plus server lifetime) is delivered by the core gate ([daemon composition](../daemon-core-gate/)), which also clarifies that a type-only `wait` subscribes on the Work's keys and that an unapplied declaration survives recovery. Shell environment construction and the `os` CLI transport are delivered by 02-07 ([shell executor](../shell-executor/)).
+The toolbelt is how a running execution asks Open Conduit for outcomes, and the local management API is how an operator controls the daemon. Together they implement [B03](../extensions/) toolbelt authority and [B05](../config-management/) configuration, secrets and the local management API. The pieces are the runtime [toolbelt](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/toolbelt.go) and [operator control](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/manual.go) operations, [configuration loading/validation/secrets](https://github.com/open-conduit/open-conduit/tree/main/internal/config), the [management server](https://github.com/open-conduit/open-conduit/tree/main/internal/management), the public [client](https://github.com/open-conduit/open-conduit/blob/main/client/client.go) and the [`open-conduit` operator commands](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/operator.go). The daemon composes them with the scheduler and poll loops and owns the server's lifetime ([daemon composition](../daemon-core-gate/)); the shell executor builds the execution environment and the `os` CLI transport ([shell executor](../shell-executor/)).
 
 ## Toolbelt authority
 
@@ -16,7 +17,7 @@ Every call, reads included, passes these checks in order:
 4. The current B05 ceiling, checked through `ToolbeltOptions.Authorize` outside storage. A config reload or disabled scope therefore revokes immediately.
 5. Under the lease guard in the call's transaction: the execution is running at the token's epoch, the owner matches, the lease is not expired, the Work is running in the token scope and the segment has no pending declaration.
 
-Emit uses only declared and allowed families. It assigns trusted execution source, Work, Execution and continuation causation, rejects forged sources/parents/targets and unowned correlations, and accepts through `AcceptDerivedInTx`, which applies causal bounds. `create_work` joins child creation and its causal `core.work.created` in one transaction. Extension handlers run outside storage after a fenced authority check. They receive validated authority and never the token.
+Emit uses only declared and allowed families. It assigns trusted execution source, Work, Execution and continuation causation, rejects forged sources/parents/targets and unowned correlations, and accepts through `AcceptDerivedInTx`, which applies causal bounds. The daemon passes the configured `causal_max_depth`/`causal_per_minute` to the toolbelt, so an execution's first emission off a new root pins the configured limits. `create_work` joins child creation and its causal `core.work.created` in one transaction. Extension handlers run outside storage after a fenced authority check. They receive validated authority and never the token. Handler refusals (`extension.OperationError`) return `422` with the handler's code and message.
 
 Idempotency semantics:
 
@@ -26,12 +27,22 @@ Idempotency semantics:
 - **Extension handlers**: run at most once per request ID.
 - **wait and declare_outcome**: release authority, so a duplicate after a lost response fails authorization. Resolve it by inspection, as B05 requires.
 
-`wait` and `declare_outcome` are recorded under the fence as a per-epoch declaration. Toolbelt authority is released at once. A request alone does not register a predicate or establish physical exclusion; this resolves the B03 "atomic release" wording against the 02-04/02-05 handshake rule. When the trusted host observes the segment finish or suspend, `Scheduler.Complete` applies the declaration:
+`wait` and `declare_outcome` are recorded under the fence as a per-epoch declaration. Toolbelt authority is released at once. A request alone does not register a predicate or establish physical exclusion; this resolves the B03 "atomic release" wording against the scheduler's handshake rule ([execution scheduling](../execution-scheduling/), [timers and waits](../timers-waits/)). When the trusted host observes the segment finish or suspend, `Scheduler.Complete` applies the declaration:
 
 - **Declared wait**: arms its timeout timer and registers the Wait in one transaction (via `WaitWithResult`), keeping executor usage/artifacts. Resume-capable executors park; other executors end waiting.
 - **Declared outcome**: replaces the executor's structured outcome.
 
-The declared watermark defaults to the attempt's acknowledged input, so registration backscans every Event accepted in between. Transport/observation errors still follow failure policy.
+The declared watermark defaults to the attempt's acknowledged input, so registration backscans every Event accepted in between. A type-only `wait` subscribes on the Work's keys, and an unapplied declaration survives recovery ([daemon composition](../daemon-core-gate/)). Transport/observation errors still follow failure policy.
+
+### Registered operations
+
+The daemon registers each extension's operations on every generation's toolbelt and lists them in the config registry (`Registry.Operations`), so a binding may grant them:
+
+- GitHub tool operations, with translated wait operations declared like `wait` ([engineering tools, waits and playbooks](../engineering-tools/)).
+- Slack operations (`slack.context`, `slack.thread`, `slack.reply`) as a second extension registration ([Slack extension](../slack-extension/)).
+- Introspection operations, only for a generation with an enabled `introspection` entry.
+
+Translated emissions (`Operation.Emit`) are accepted under the same fence, replay and causal checks as `emit` ([issue reporting](../issue-reporting/)). The daemon narrows each binding's grant to the operations registered on the generation's toolbelt, so a binding that still lists the operations of a disabled extension keeps running (its calls are `undeclared`) instead of failing token issuance.
 
 ## Configuration and secrets
 
@@ -85,18 +96,18 @@ Operator controls go through `runtime.Control`:
 - **Retry**: `core.manual.retry` processed by retry policy.
 - **Wake**: an ordinary owned-key event that reports whether it matched.
 
+Rebind, hold/release, attach and scope reconcile are described in [operator setup and controls](../operator-setup/).
+
 Control checkpoints keep the Work in the envelope but use an empty routed association, so earlier runnable input cannot delay fencing. `artifacts/{id}/content` streams through `storage.Artifacts` and supports one byte range.
 
-The client dials only the configured socket, with the fixed host `localhost`, no proxy and no redirects. `open-conduit` resolves the endpoint (`--endpoint`, then `OPEN_CONDUIT_ENDPOINT`, then socket discovery) and the token file (`--token-file`, then `OPEN_CONDUIT_TOKEN_FILE`, then `state/private/operator.token`). It supports:
+The client dials only the configured socket, with the fixed host `localhost`, no proxy and no redirects. `open-conduit` resolves the endpoint (`--endpoint`, then `OPEN_CONDUIT_ENDPOINT`, then socket discovery) and the token file (`--token-file`, then `OPEN_CONDUIT_TOKEN_FILE`, then `state/private/operator.token`). It supports, among other commands:
 
 - health
 - scopes, work, events (including causal `events chain`), executions, waits and artifacts (`artifacts cat` for logs)
 - emit, work create/cancel/retry/wake and execution cancel
 - config validate/apply
 - auth rotate/revoke
-- since 02-08: unified run history (`runs list|get|table|log`), `doctor` and `tui` ([observability and history](../observability-history/))
-
-Rebind and scope reconcile endpoints are delivered by 03-05 ([operator setup and controls](../operator-setup/)), together with hold/release and attach.
+- unified run history (`runs list|get|table|log`), `doctor` and `tui` ([observability and history](../observability-history/))
 
 ## Evidence
 
@@ -104,10 +115,16 @@ Rebind and scope reconcile endpoints are delivered by 03-05 ([operator setup and
 - The [management integration cases](https://github.com/open-conduit/open-conduit/blob/main/integration/management_test.go) start the real server on a Unix socket and drive it only through the CLI and client. They cover socket permissions and lock exclusion, credential-class separation, the causal chain from operator root to toolbelt emission, execution cancel with idempotent response-loss replay, confirmed-stop hold and manual retry, artifact range reads, Work cancel, rotation/revocation/lease expiry, config validate/apply with diagnostics, stale-generation conflict, immediate narrowing of a live token, atomic save/backup, restart restoring the committed generation despite a disk edit, pagination with tamper/filter mismatch, strict request validation, toolbelt wait plus operator wake, and the absence of secrets/references/tokens in responses and coordination storage.
 - [Config tests](https://github.com/open-conduit/open-conduit/tree/main/internal/config) cover the four examples, the invalid-capability diagnostic, every oracle mutation, all four secret schemes and file safety.
 
-This is local in-process and socket evidence. It makes no daemon-restart, multi-process or real-keyring claims.
+These cases are local in-process and socket evidence; they do not exercise a real keyring. Daemon restart and multi-process drills are described in [daemon composition](../daemon-core-gate/).
 
-03-04 update: bootstrap registers the GitHub tool operations on every generation's toolbelt and lists them in the config registry (`Registry.Operations`), so a binding may grant them. Translated wait operations are declared like `wait` ([engineering tools, waits and playbooks](../engineering-tools/)). Handler refusals (`extension.OperationError`) return `422` with the handler's code and message.
+## History
 
-04-01 update: bootstrap also registers the Slack operations (`slack.context`, `slack.thread`, `slack.reply`) as a second extension registration and lists them in `Registry.Operations` ([Slack extension](../slack-extension/)).
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
 
-03-08 update: translated emissions (`Operation.Emit`) are accepted under the same fence, replay and causal checks as `emit` ([issue reporting](../issue-reporting/)). Bootstrap now passes the configured `causal_max_depth`/`causal_per_minute` to the toolbelt. Previously an execution's first emission off a new root pinned the default limits. Bootstrap also narrows each binding's grant to the operations registered on the generation's toolbelt, so a binding that still lists the operations of a disabled extension keeps running (its calls are `undeclared`) instead of failing token issuance. The introspection operations are registered only for a generation with an enabled `introspection` entry.
+- Ticket 02-06 implemented toolbelt authority, configuration and secrets, the management server, the client and the operator commands. Composing a long-running daemon was left to the core gate (02-09), which also clarified that a type-only `wait` subscribes on the Work's keys and that an unapplied declaration survives recovery. Shell environment construction and the `os` CLI transport were left to 02-07. The 02-06 evidence made no daemon-restart, multi-process or real-keyring claims.
+- Ticket 02-08 added `runs`, `doctor` and `tui`. Ticket 03-05 added rebind and scope reconcile endpoints, together with hold/release and attach.
+- Ticket 03-04 registered the GitHub tool operations, added translated wait operations and made handler refusals return `422`.
+- Ticket 04-01 registered the Slack operations.
+- Ticket 03-08 added translated emissions, passed the configured causal limits to the toolbelt and narrowed binding grants to registered operations. Before it, an execution's first emission off a new root pinned the default causal limits.

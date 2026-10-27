@@ -1,10 +1,13 @@
 ---
 title: "Extension subprocess protocol"
+description: "How third-party extensions run as separate processes that speak JSON-RPC 2.0 over stdio: transport, manifest, lifecycle, runtime, trust model and schema evolution."
 ---
 
-Decision B08 · ticket 07-01 · **provisional, for user review**. The executable definition is package [`protocol`](https://github.com/open-conduit/open-conduit/blob/main/protocol/protocol.go): the version, the [manifest](https://github.com/open-conduit/open-conduit/blob/main/protocol/manifest.go) and its validation, and the [method catalogue](https://github.com/open-conduit/open-conduit/blob/main/protocol/methods.go). Each wire method names the public contract it carries and the shipped first-party users that needed it. The [transport prototype](https://github.com/open-conduit/open-conduit/tree/main/prototypes/transport) supplies the evidence (`make protocol-prototype`). 07-02 implemented loading, handshake, supervision, the message types, the trust model and payload schema evolution ([below](#runtime-trust-model-and-schema-evolution-07-02); also provisional). 07-03 added daemon wiring, the remaining adapters, packaging, the SDK's final shape and certification: see [Extension packaging, SDK and certification](../extension-packaging/) (also provisional).
+This page records decision B08: an extension that is not built into Open Conduit runs as a separate process and speaks JSON-RPC 2.0 to the daemon over its stdin and stdout. **The protocol is provisional**: it may still change, and the decisions it rests on are listed for review at the end of this page.
 
-The protocol was extracted from the code that shipped through 05-04 and the 06-01/06-02 code: the GitHub, Slack, Linear, Jira, Bitbucket, schedule, introspection and PostHog extensions, the Git resource provider, and the shell and claude-code executors. It was not designed in the abstract. It adds **no core primitive**. Every method is an adapter over an existing public contract (`extension`, `storage` KV and reads, `observability`), or over a host composition hook the daemon already drives for in-process extensions. First-party extensions stay in-process. The user is the only protocol consumer, so the protocol is cheap to revise.
+The executable definition is package [`protocol`](https://github.com/open-conduit/open-conduit/blob/main/protocol/protocol.go): the version, the [manifest](https://github.com/open-conduit/open-conduit/blob/main/protocol/manifest.go) and its validation, the [method catalogue](https://github.com/open-conduit/open-conduit/blob/main/protocol/methods.go) and the [wire types](https://github.com/open-conduit/open-conduit/blob/main/protocol/wire.go). Each wire method names the public contract it carries and the shipped first-party users that need it. The host side, [`internal/extproc`](https://github.com/open-conduit/open-conduit/tree/main/internal/extproc), loads, supervises and scopes extension processes and adapts them onto the same interfaces in-process extensions implement ([below](#runtime-trust-model-and-schema-evolution)). Packaging, installation, the Go SDK and certification are covered in [Extension packaging, SDK and certification](../extension-packaging/), which is provisional too. The [transport prototype](https://github.com/open-conduit/open-conduit/tree/main/prototypes/transport) supplies the evidence for the transport choice (`make protocol-prototype`).
+
+The protocol was extracted from the shipped first-party code: the GitHub, Slack, Linear, Jira, Bitbucket, schedule, introspection and PostHog extensions, the Git resource provider, and the shell and claude-code executors. It was not designed in the abstract. It adds **no core primitive**. Every method is an adapter over an existing public contract (`extension`, `storage` KV and reads, `observability`), or over a host composition hook the daemon already drives for in-process extensions. First-party extensions stay in-process. The protocol has no consumers outside this project, so it is cheap to revise.
 
 ## Decision summary
 
@@ -13,14 +16,14 @@ The protocol was extracted from the code that shipped through 05-04 and the 06-0
 | Transport | JSON-RPC 2.0 over the extension process's stdin/stdout, one JSON object per line, standard library only, symmetric (both sides send requests). Not go-plugin/gRPC. |
 | Version | Integer protocol versions. `initialize` picks the highest common version. No common version is a deterministic refusal before any other call (`unsupported_protocol_version`). Version 1 is the first. |
 | Manifest | `open-conduit-extension.json` beside the binary: name, own version, command, and `provides` (mechanical declarations only). Validated offline. The handshake must return the same manifest. |
-| Capabilities | Executor labels are exactly the PRD's (`interrupt`, `inject`, `resume`, `workspace`, `toolbelt: none\|cli\|mcp\|sdk`), plus optional controls (`stop`, `forget`, `attach`) that are methods, not suitability claims. Unknown fields are rejected, so a semantic label cannot be expressed. |
+| Capabilities | Executor labels are exactly the core's mechanical labels (`interrupt`, `inject`, `resume`, `workspace`, `toolbelt: none\|cli\|mcp\|sdk`), plus optional controls (`stop`, `forget`, `attach`) that are methods, not suitability claims. Unknown fields are rejected, so a semantic label cannot be expressed. |
 | Storage | Mandatory namespaced KV under the extension's name, always available and never negotiated (a `storage` field is rejected). A store larger than coordination state is an `external_stores` entry naming a connection type, so it is explicit in config. |
 | Transactions | The host never holds a coordination transaction across an open-ended call. Four pure callbacks run inside a transaction today (`recurrence.next`, `work_kind.trigger`, `dependency.filter`, `emit.commit`). They are bounded (250 ms) and may make no callback. KV writes from an extension are one atomic `kv.commit` with preconditions. |
 | Process model | Extension processes are disposable. Durable state lives in host KV, executor recovery metadata or the extension's own state directory, so a crash or host restart means restart plus recover. The host never reattaches to an old process. |
 
 ## Inventory of shipped interactions
 
-The table groups what the first-party code actually does across the host boundary today, as found in `internal/bootstrap` and the extension packages. Users: GH GitHub, SL Slack, TR tracker kit (Linear and Jira), BB Bitbucket, SC schedule, IS introspection, PH PostHog, GIT Git provider, SH shell, CC claude-code.
+The table groups what the first-party code actually does across the host boundary today, as found in `internal/bootstrap` and the extension packages. Users: GH GitHub, SL Slack, TR tracker kit (Linear and Jira), BB Bitbucket, SC schedule, IS introspection, PH PostHog, GIT Git provider, SH shell, CC claude-code, LJ the schedule extension's `legacy-job` executor.
 
 | Interaction | In-process surface today | Users | Wire method(s) |
 | --- | --- | --- | --- |
@@ -35,8 +38,8 @@ The table groups what the first-party code actually does across the host boundar
 | Toolbelt operations | `Registration{Name, EventTypes, Operations, DependencyFilter}`. `Operation.Handler` (all), `.Wait` (GH), `.Emit` with in-transaction `Commit` (IS) | GH SL TR BB IS | `operation.call`, `operation.wait`, `operation.emit`, `emit.commit`, `dependency.filter` |
 | Prompt rendering | bootstrap `renderEvents` chain over `<extension>.RenderEvent` | GH SL IS | `event.render` |
 | Executor lifecycle | `Executor.Run/Recover`, `RunHandle.Wait`, `Resume`, `Interrupt`, `Inject`, `Forget`, `PersistRecovery` | SH CC LJ (GH hold) | `executor.*`, `execution.persist_recovery` (E→H) |
-| Physical-stop evidence | bootstrap's private `stopper` interface (`Stop(execution, epoch)`), so the host can `ConfirmStopped` | SH CC LJ | `executor.stop`. **Promoted** to public `extension.StopExecutor` |
-| Operator attach | bootstrap special-cased claude-code (`Attach`, `ErrNoSession`, wire `no_session`) | CC | `executor.attach`. **Generalised** to `extension.AttachExecutor`, `ErrNothingToAttach`, wire `nothing_to_attach` |
+| Physical-stop evidence | `extension.StopExecutor` (`Stop(execution, epoch)`), so the host can `ConfirmStopped` | SH CC LJ | `executor.stop` |
+| Operator attach | `extension.AttachExecutor` (`Attach`, `ErrNothingToAttach`, wire `nothing_to_attach`) | CC | `executor.attach` |
 | Workspaces | `ResourceBroker.Acquire/Lookup` (executor side). `ResourceProvider.Acquire/Lookup/Reconcile` with the host's `ResourceStatusFunc` | CC LJ, GIT | `resource.*` (E→H), `provider.*`, `provider.owner_status` (E→H) |
 | Namespaced KV | `Store.Transact` with `Get/Put/Delete/List` in the extension's namespaces (`github.notes`, `github.projection.*`, `executor.claudecode`, `schedule.runs`, `introspection.*`, `<type>.tools.*` …) | GH SL TR BB SC IS CC | `kv.get`, `kv.list`, `kv.commit` |
 | Read-only state | `Work`, `ListWorks`, `ListExecutions`, `Event`, `Events` (cursor), `ListScopes`/`Scope`, `ListTimers` | GH SL TR BB SC IS CC | `state.*` |
@@ -63,7 +66,7 @@ Some couplings exist only as bootstrap glue between first-party packages. They h
 - PostHog receives introspection telemetry through a fan-out;
 - bootstrap parses Slack thread keys for the socket's active-thread filter. That one can move into the extension as a `state.works` read.
 
-These stay in-process. They are allowed by the PRD ("first-party extensions in-process behind the public interfaces"). They also decide which integrations 07-03 can round-trip without change.
+These stay in-process, which the design allows: first-party extensions run in-process behind the public interfaces. They also decide which first-party integrations can run as a subprocess package without change.
 
 In-process extensions also hold the whole `storage.Store` and the daemon's clock and dry-run flag. A subprocess gets only its KV namespaces, scoped reads, its own clock, and `dry_run` in `configure`.
 
@@ -114,13 +117,13 @@ Cold start includes the OS's first launch of a new binary and varies between run
 
 go-plugin's real advantages are native cancellation and streaming, and built-in reattach. The first two cost about 20 lines in the prototype. The third is not needed by this process model.
 
-What would reverse the decision: a need for very high-throughput streaming (the per-chunk acknowledgement already gives 143 MiB/s), or a third-party ecosystem that standardises on go-plugin. Neither exists, and the user is the only consumer.
+What would reverse the decision: a need for very high-throughput streaming (the per-chunk acknowledgement already gives 143 MiB/s), or a third-party ecosystem that standardises on go-plugin. Neither exists, and the protocol has no consumers outside this project.
 
 ## Wire format
 
-- **Framing.** UTF-8 JSON, one object per line (`\n`), at most `MaxMessageBytes` (16 MiB; above the runtime's default 8 MiB reconcile page). A longer line or invalid JSON is a protocol error that closes the connection. stderr is the extension's diagnostic log. In 07-02 the host will capture it to a bounded per-extension log under the state directory.
+- **Framing.** UTF-8 JSON, one object per line (`\n`), at most `MaxMessageBytes` (16 MiB; above the runtime's default 8 MiB reconcile page). A longer line or invalid JSON is a protocol error that closes the connection. stderr is the extension's diagnostic log. The host captures it to a bounded per-extension log under the state directory ([Loading](#loading)).
 - **Messages.** JSON-RPC 2.0 requests (`id`, `method`, `params`), responses (`result` or `error`) and notifications (no `id`). Ids are unique per sender while in flight. Responses may arrive in any order.
-- **Payloads.** Wire types are snake_case JSON defined in package `protocol` by 07-02. They mirror the management API's wire shapes (`client`) where those exist. `domain.Payload.Data` is raw JSON. Byte fields (delivery bodies, artifact chunks) are base64.
+- **Payloads.** Wire types are snake_case JSON defined in package `protocol` ([`wire.go`](https://github.com/open-conduit/open-conduit/blob/main/protocol/wire.go), [`messages.go`](https://github.com/open-conduit/open-conduit/blob/main/protocol/messages.go)). They mirror the management API's wire shapes (`client`) where those exist. `domain.Payload.Data` is raw JSON. Byte fields (delivery bodies, artifact chunks) are base64.
 - **Errors.** Transport errors use the JSON-RPC reserved codes: `-32700` parse, `-32601` method not found, `-32602` invalid params, `-32603` internal, `-32800` cancelled. Anything authored uses `-32000` with `data.code`, a stable `[a-z][a-z0-9_]*` code. The protocol's codes (`protocol.Code*`) map one-to-one onto the public sentinel errors (table below). An operation handler's `OperationError` code and message cross verbatim. Unauthored errors cross as `internal` with no detail; the detail stays in the side's own log, as the management API already does.
 
 | Code | Go error |
@@ -137,15 +140,15 @@ What would reverse the decision: a need for very high-throughput streaming (the 
 | `nothing_to_attach` | `extension.ErrNothingToAttach` |
 | `resource_setup_failed` | `extension.ErrResourceSetup` (the resource still returned) |
 | `resource_not_found` | `extension.ErrResourceNotFound` |
-| `resource_exhausted` | `extension.ErrResourceExhausted` (the provider's message, which says what to free, crosses with it; 08-02) |
+| `resource_exhausted` | `extension.ErrResourceExhausted` (the provider's message, which says what to free, crosses with it) |
 | `retry_after` | `extension.RetryHint` (`data.reset_at` optional) |
 
 The protocol also has its own codes: `unsupported_protocol_version`, `reentrant_call`, `overloaded`, `cancelled`, `shutting_down` and `internal`.
 
 ## Lifecycle
 
-1. **Discovery.** The host reads `open-conduit-extension.json` from each extension directory. 07-02 decides the install location; 07-03 decides install/update/removal. `ParseManifest` validates it strictly and offline, so `config validate` never starts a process. Conflicts with first-party or other registrations (names, types, operations, families) are refused atomically, as `Registrar` does in-process.
-2. **Start.** The host runs `command` with a sanitized environment (the B05 baseline, no secrets), the protocol on stdin/stdout, and the extension's private state directory. The process is a child of the daemon, in its own process group.
+1. **Discovery.** The host reads `open-conduit-extension.json` from each extension directory. The install location is described under [Loading](#loading); installing, updating and removing packages is in [packaging](../extension-packaging/#install-update-rollback-and-removal). `ParseManifest` validates it strictly and offline, so `config validate` never starts a process. Conflicts with first-party or other registrations (names, types, operations, families) are refused atomically, as `Registrar` does in-process.
+2. **Start.** The host runs `command` with a sanitised environment (the B05 baseline, no secrets), the protocol on stdin/stdout, and the extension's private state directory. The process is a child of the daemon, in its own process group.
 3. **`initialize`.** The host sends `{protocol_versions, host: {name, version}, state_dir}`. The extension returns `{protocol_version, manifest}`. The host refuses a manifest that differs from the file, or no common version. No other method is valid before `initialize` succeeds.
 4. **`configure`.** The host sends the current generation's entries, connections (secret references only), `public_url` and `dry_run`. The extension returns the ingress sources and webhook paths it registers (under its own namespaces). It is sent again on every config apply and tunnel URL change, without a restart.
 5. **Running.** The host calls the surfaces the manifest enables (`Manifest.Enabled`): routing, operations, executor and provider methods, and `task.run` at each declared interval. The extension calls the host's KV, state, artifact, secret, timer, event and resource methods, and `ingress.deliver` from its own receivers.
@@ -185,13 +188,13 @@ Over the protocol these are **bounded in-transaction methods** (`Method.InTransa
 - any callback while serving one is refused with `reentrant_call`;
 - a timeout or transport failure aborts that transaction with a retryable error, and the work stays pending.
 
-07-02 may move the first three to evaluation before the transaction, with in-transaction revalidation, where that is simpler. `emit.commit` keeps the bounded call, because its records must join the emission atomically.
+All four run as bounded calls (`Process.CallInTx`). `emit.commit` in particular needs one, because its records must join the emission atomically. Two of the four have fallbacks that cannot fail a transaction ([Loading](#loading)).
 
 Extension KV writes are never interactive transactions:
 
 - `kv.get` returns a value and a version (a digest of the value, or absent);
 - `kv.commit` applies preconditions (`version` or `absent`) and puts/deletes as one atomic unit. A failed precondition is `conflict`, and the extension re-reads and retries;
-- `event.accept` takes the same checks and records, so an Event and its index records commit together. That keeps the PRD's "KV writes join the same atomic unit as an event emission".
+- `event.accept` takes the same checks and records, so an Event and its index records commit together. KV writes join the same atomic unit as an event emission.
 
 This is an adapter over `storage.Tx` (`Get`, compare, `Put`/`Delete` in one `Transact`), not a new storage capability.
 
@@ -215,14 +218,14 @@ If the *host* crashes, extensions see EOF and exit. The new daemon starts them a
 
 ## Authority and scoping
 
-The trust model is defined in [07-02's section](#trust-model). Process separation is not sandboxing: an extension runs with the operator's user privileges. 07-01 fixes the protocol-level scoping, which the host applies to every extension-to-host call from the identity it bound at start. The extension never supplies that identity.
+The trust model is defined [below](#trust-model). Process separation is not sandboxing: an extension runs with the operator's user privileges. The protocol fixes the scoping, which the host applies to every extension-to-host call from the identity it bound at start. The extension never supplies that identity.
 
 - **KV.** Only the extension's own namespaces: its name, or `name.` + suffix (`protocol.Namespace`, the existing `extension.Record` rule).
 - **Families, operations, kinds, recurrences, types, handlers, executors, providers, tasks.** Only names under its own name (`Manifest.Validate`).
 - **Source namespaces.** Its own name, or `name/` + suffix (`protocol.SourceNamespace`, the `EmitPlan` rule).
 - **State reads.** Provisionally limited to scopes whose config uses the extension. This covers every shipped read: projectors filter Works by their own correlation sources, and the schedule translator reads its configured scopes.
 - **`secret.resolve`.** Only the connections bound to the extension's configured entries (B05 isolation).
-- **`operation.call`.** Receives the validated `Authority`, never the bearer token, exactly as in-process handlers do. Executors receive the per-execution endpoint and token in `RunRequest`, as today.
+- **`operation.call`.** Receives the validated `Authority`, never the bearer token, exactly as in-process handlers do. Executors receive the per-execution endpoint and token in `RunRequest`, as in-process executors do.
 - **`event.accept` and `work.cancel`.** Apply the same declared-family, causal-limit and own-kind checks as their in-process callers.
 
 ## Manifest
@@ -248,28 +251,28 @@ Validation rules:
 - task intervals are at least one second;
 - the command and playbooks stay inside the extension directory;
 - external stores name a declared connection type;
-- payload schema bases (07-02) are dotted names under the extension's name without a version suffix, with positive, strictly increasing readable versions; `kv_version` is not negative;
+- payload schema bases are dotted names under the extension's name without a version suffix, with positive, strictly increasing readable versions; `kv_version` is not negative;
 - unknown fields are rejected.
 
 `TestManifestRejections` covers each rule, including a `storage` capability and a semantic executor label.
 
 The same format and the same catalogue cover both workload shapes. Nothing in core distinguishes an "ingress extension" from an "executor extension". A manifest enables the methods of the surfaces it declares, and the host registers those surfaces through the same runtime interfaces it uses for in-process extensions (`TestExampleManifests`, `TestEveryMethodIsReachable`).
 
-The first-party extensions are not given manifests. They stay in-process. A third-party extension's config entries are validated through `validate`; 07-03 owns any conversion story.
+First-party extensions registered in-process have no manifest. The Slack extension and the shell executor are also built as subprocess packages with manifests ([packaging](../extension-packaging/)), but they stay registered in-process. A third-party extension's config entries are validated through `validate`.
 
-## Contract changes made in 07-01
+## Public executor controls
 
-- `extension.StopExecutor`: the daemon's private `stopper` interface, now public, because an external executor must be able to supply physical-stop evidence. Shell and claude-code implement it unchanged.
-- `extension.AttachExecutor`, `extension.AttachSpec`, `extension.ErrNothingToAttach`: attach is now a public optional executor method. Bootstrap no longer branches on claude-code. The management wire code `no_session` becomes `nothing_to_attach` (05-04's note), and `claudecode.ErrNoSession` wraps `ErrNothingToAttach`. The unused attach environment that claude-code computed is gone; the operator's shell supplies it, as before.
-- `extension.ContractVersion` still versions the in-process API. `protocol.Version` versions the wire.
+- `extension.StopExecutor` is public because an external executor must be able to supply physical-stop evidence. The shell, claude-code and `legacy-job` executors implement it.
+- `extension.AttachExecutor`, `extension.AttachSpec` and `extension.ErrNothingToAttach` make attach a public optional executor method. Bootstrap does not branch on claude-code. The management wire code is `nothing_to_attach`, and `claudecode.ErrNoSession` wraps `ErrNothingToAttach`. The operator's shell supplies the attach environment.
+- `extension.ContractVersion` versions the in-process API. `protocol.Version` versions the wire.
 
-## Runtime, trust model and schema evolution (07-02)
+## Runtime, trust model and schema evolution
 
-Ticket 07-02 · **provisional, for user review**. Code:
+Provisional, like the rest of the protocol. Code:
 
 - [`protocol`](https://github.com/open-conduit/open-conduit/blob/main/protocol/wire.go): the snake_case wire types and method params ([messages](https://github.com/open-conduit/open-conduit/blob/main/protocol/messages.go)), the [error mapping](https://github.com/open-conduit/open-conduit/blob/main/protocol/errors.go) onto the public sentinels, and [schema evolution](https://github.com/open-conduit/open-conduit/blob/main/protocol/schema.go).
 - [`protocol/jsonrpc`](https://github.com/open-conduit/open-conduit/blob/main/protocol/jsonrpc/conn.go): the transport, hardened from the prototype.
-- [`protocol/sdk`](https://github.com/open-conduit/open-conduit/blob/main/protocol/sdk/sdk.go): a minimal extension-side runtime that serves the public Go contracts and gives the extension a [`Host`](https://github.com/open-conduit/open-conduit/blob/main/protocol/sdk/host.go) client. 07-03 decides the SDK's final shape.
+- [`protocol/sdk`](https://github.com/open-conduit/open-conduit/blob/main/protocol/sdk/sdk.go): a minimal extension-side runtime that serves the public Go contracts and gives the extension a [`Host`](https://github.com/open-conduit/open-conduit/blob/main/protocol/sdk/host.go) client. [Writing an extension with the SDK](../extension-packaging/#writing-an-extension-with-the-sdk) describes its full shape.
 - [`internal/extproc`](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/discover.go): the host runtime. It covers discovery, conflicts, the [supervised process](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/process.go), the [scoped host service](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/service.go) and the [adapters](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/adapters.go).
 - Examples:
   - [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/blob/main/protocol/examples/notes/notes.go) is the example external extension. It covers ingress, a route, operations, an emission with committed records, a recurrence, tasks, three releases and a KV migration.
@@ -277,7 +280,7 @@ Ticket 07-02 · **provisional, for user review**. Code:
 
 ### Loading
 
-- **Install location.** `<config dir>/extensions/<name>/open-conduit-extension.json`, beside `config.json` (`extproc.Dir`). The directory must be named after the manifest's name. Install, update, rollback and removal are 07-03's (`open-conduit extension …`).
+- **Install location.** `<config dir>/extensions/<name>/open-conduit-extension.json`, beside `config.json` (`extproc.Dir`). The directory must be named after the manifest's name. Install, update, rollback and removal are `open-conduit extension` commands ([packaging](../extension-packaging/#install-update-rollback-and-removal)).
 - **Discovery.** `extproc.Discover` parses every manifest strictly and offline. Invalid or misnamed manifests are reported and skipped. A missing root means no extensions.
 - **Conflicts.** `extproc.CheckConflicts` checks a whole set atomically against names already taken in-process, and against each other. The checked kinds are the name, config types, handlers, executors, resource types, operations, families, work kinds, recurrences and schemas. Either every extension is admitted or none is.
 - **Start.**
@@ -320,7 +323,7 @@ Runs are addressed by unguessable host-assigned IDs. A closed run refuses persis
 
 ### Trust model
 
-An extension process runs with the operator's user privileges. **Process separation is fault isolation, not a sandbox.** An extension can read and write anything the operator's account can, open network connections, and spawn processes. Installing an extension is therefore the same trust decision as installing any program the operator runs. 07-03's certification checks protocol conformance. It cannot make a malicious extension safe.
+An extension process runs with the operator's user privileges. **Process separation is fault isolation, not a sandbox.** An extension can read and write anything the operator's account can, open network connections, and spawn processes. Installing an extension is therefore the same trust decision as installing any program the operator runs. [Certification](../extension-packaging/#certification) checks protocol conformance. It cannot make a malicious extension safe.
 
 What the host does enforce is the protocol surface. Every extension-to-host call is bound to the identity the host started the process with, never to anything the extension sends:
 
@@ -364,13 +367,13 @@ Ingress identity is part of evolution. Core binds an observation's `(item, versi
 
 **Rolling upgrades and downgrades.**
 - There are no rolling upgrades. One daemon owns a state directory and runs one process per extension, so old and new releases never run at once. An upgrade stops the old process before the new one starts.
-- There is no automatic downgrade. Once a release has migrated KV, the older release is refused. The operator restores a 06-02 backup or reinstalls the newer release.
+- There is no automatic downgrade. Once a release has migrated KV, the older release is refused. The operator restores a backup taken before the upgrade ([backup bundles](../backup-bundles/)) or reinstalls the newer release.
 - An older release that does run against newer events, with an unchanged `kv_version`, answers them deterministically as `newer`.
 - Retiring a version is a release decision, and events still in use should be re-observed first.
 
 ### Evidence
 
-- **Same suites, both ways.** `integration/extension_suites_test.go` runs the shared ingress, executor, inject, toolbelt (persistent and reopen) and the new extension KV suites (`conformance.RunExtensionKV`) against the example code in-process and as a subprocess. `TestWeakenedExtensionKVIsRejected` shows that the KV suite catches an unscoped or non-atomic KV.
+- **Same suites, both ways.** `integration/extension_suites_test.go` runs the shared ingress, executor, inject, toolbelt (persistent and reopen) and extension KV (`conformance.RunExtensionKV`) suites against the example code in-process and as a subprocess. `TestWeakenedExtensionKVIsRejected` shows that the KV suite catches an unscoped or non-atomic KV.
 - **Failures.** `integration/extension_faults_test.go` covers:
   - durable acceptance across a crash and a partial response, plus reconcile across a crash;
   - the in-transaction deadline and the `reentrant_call` refusal;
@@ -382,23 +385,6 @@ Ingress identity is part of evolution. Core binds an observation's `(item, versi
   - discovery and atomic conflicts;
   - executor lease fencing across restarts, through the real scheduler.
 - **Unit tests.** `protocol/evolution_test.go`, `protocol/jsonrpc/conn_test.go`, `protocol/sdk/sdk_test.go` and `internal/extproc/process_test.go`.
-
-### Not done in 07-02 (delivered by 07-03)
-
-Both items below were delivered by 07-03: `serve` now discovers, admits, starts and registers installed packages, and every catalogued surface is adapted ([extension-packaging.md](../extension-packaging/)). They are kept here as the 07-02 record.
-
-- **Daemon wiring.** `open-conduit serve` does not discover or start extensions yet. `extproc` provides every piece:
-  - `Discover` and `CheckConflicts` against the bootstrap registries;
-  - `Load` with `Deps` from runtime ingress, timers, control, artifacts and the secret resolver;
-  - registering `Remote`'s adapters next to the first-party ones;
-  - feeding config entries through `configure` and `validate`.
-
-  Wiring it into bootstrap is deferred to 07-03, together with install, the `config validate` hook and the round trip of two first-party integrations. It touches config validation and the daemon's composition, which 07-03 reshapes anyway.
-- **Surfaces not adapted yet.** These are deferred to 07-03, where the round trip needs them:
-  - host-to-extension: `webhook.handle`, `provider.*` (an external resource provider), `telemetry.export`, `work.annotate`, `validate` and `setup.run`;
-  - extension-to-host: `provider.owner_status` and the `setup.*` callbacks.
-
-  They stay catalogued. Until then the SDK answers the host-to-extension ones `method_not_found`, and the host answers the extension-to-host ones `unsupported`.
 
 ## Provisional decisions for user review
 
@@ -413,7 +399,7 @@ Both items below were delivered by 07-03: `serve` now discovers, admits, starts 
 9. Playbooks as a manifest-declared directory: a first-party convention for agent executors, not a core concept.
 10. The listed cross-extension couplings stay in-process and are not offered to subprocesses.
 
-Added by 07-02, also provisional:
+Runtime, trust model and schema evolution:
 
 11. The install location `<config dir>/extensions/<name>/`, with the directory named after the manifest.
 12. The trust model: process separation is fault isolation, not a sandbox; the host enforces only the protocol surface.
@@ -424,15 +410,22 @@ Added by 07-02, also provisional:
 17. Executor re-adoption after an extension crash happens inside the host adapter, through the run's fenced persistence.
 18. Fallbacks for the in-transaction calls that cannot fail a transaction: the dependency filter counts a failure as false, and trigger selection falls back to the first input.
 19. Reentrancy is refused for every callback while any in-transaction call to that extension is outstanding. This is coarse: a concurrent background callback in that 250 ms window is refused too.
-20. Daemon wiring, and the remaining host-to-extension surfaces, are deferred to 07-03 (since delivered).
 
-Added by 07-03, also provisional: decisions 21–32 in [extension-packaging.md](../extension-packaging/#provisional-decisions-for-user-review-07-03).
+Packaging, SDK and certification: decisions 21–32 in [extension packaging](../extension-packaging/#provisional-decisions-for-user-review).
 
-## Follow-on work
+## History
 
-- **07-02 (done, see above):** message types, the host runtime, bounded in-transaction calls, the scoped surface, the trust model, payload and KV evolution, and the example extension and executor through the shared suites.
-- **07-03 (done, see [extension-packaging.md](../extension-packaging/)):**
-  - daemon wiring of discovered extensions (bootstrap registries, `config validate`, configure on apply) and the remaining adapters (`webhook.handle`, `provider.*`, `telemetry.export`, `work.annotate`, `validate`, `setup.*`);
-  - SDK and package layout, and the install location;
-  - certification;
-  - a round trip of two materially different first-party integrations that avoid the in-process couplings. Suggested: Slack (workspace-free ingress, receiver, tools, projector task, setup) and the shell executor (execution with resume, inject, interrupt, stop, artifacts).
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
+
+- **07-01 (decision B08).** Extracted the protocol from the code that shipped through 05-04 and the 06-01/06-02 code, built the transport prototype and the method catalogue, and recorded decisions 1–10. The transport measurements above come from that prototype. 07-01 also changed two contracts:
+  - the daemon's private `stopper` interface was promoted to the public `extension.StopExecutor`; shell and claude-code implemented it unchanged;
+  - bootstrap's claude-code special case for attach (`Attach`, `ErrNoSession`, wire `no_session`) was generalised to `extension.AttachExecutor`, `AttachSpec` and `ErrNothingToAttach`. The management wire code `no_session` became `nothing_to_attach` (05-04's note), `claudecode.ErrNoSession` was made to wrap `ErrNothingToAttach`, and the unused attach environment that claude-code computed was removed.
+
+  At 07-01 the wire types, the install location and the capture of extension stderr were left to 07-02, and install, update and removal to 07-03. 07-01 allowed 07-02 to move `recurrence.next`, `work_kind.trigger` and `dependency.filter` to evaluation before the transaction with in-transaction revalidation; 07-02 kept all four in-transaction methods as bounded calls. The list of in-process couplings decided which integrations 07-03 could round-trip without change.
+- **07-02.** Implemented the wire types, `protocol/jsonrpc`, a minimal `protocol/sdk`, the host runtime in `internal/extproc` (loading, handshake, supervision, scoping, adapters), the trust model, payload and KV schema evolution, and the example extension and executor through the shared suites. It recorded decisions 11–20. Not done in 07-02:
+  - **Daemon wiring.** `open-conduit serve` did not discover or start extensions. `extproc` provided every piece: `Discover` and `CheckConflicts` against the bootstrap registries; `Load` with `Deps` from runtime ingress, timers, control, artifacts and the secret resolver; registering `Remote`'s adapters next to the first-party ones; feeding config entries through `configure` and `validate`. Wiring it into bootstrap was deferred to 07-03, together with install, the `config validate` hook and the round trip of two first-party integrations, because it touched config validation and the daemon's composition, which 07-03 reshaped anyway.
+  - **Surfaces not adapted.** Host-to-extension `webhook.handle`, `provider.*`, `telemetry.export`, `work.annotate`, `validate` and `setup.run`, and extension-to-host `provider.owner_status` and the `setup.*` callbacks, stayed catalogued but unadapted. The SDK answered the host-to-extension ones `method_not_found`, and the host answered the extension-to-host ones `unsupported`.
+  - Decision 20 recorded that deferral.
+- **07-03.** Delivered both deferred items: `serve` discovers, admits, starts and registers installed packages, and every catalogued surface is adapted. It also delivered the SDK's final shape, the package layout and install location, certification, and the suggested round trip of two materially different first-party integrations that avoid the in-process couplings: Slack (workspace-free ingress, receiver, tools, projector task, setup) and the shell executor (execution with resume, inject, interrupt, stop, artifacts). See [extension packaging](../extension-packaging/), decisions 21–32.

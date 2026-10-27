@@ -81,4 +81,4 @@ Leave out `resource` (and set `workspace` to `false`) for a scope whose turns ne
 
 ## Linear, Jira and Bitbucket
 
-Linear and Jira trackers, with GitHub or Bitbucket as the code host, have their own setups (`init linear`, `init jira`). See [installed integrations](https://github.com/open-conduit/open-conduit/blob/main/docs/architecture/installed-integrations.md).
+Linear and Jira trackers, with GitHub or Bitbucket as the code host, have their own setups (`init linear`, `init jira`). See [installed integrations](../../architecture/installed-integrations/).

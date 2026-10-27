@@ -2,9 +2,7 @@
 title: "Backup, restore and state recovery"
 ---
 
-Ticket 06-02 delivers the offline recovery commands: backup bundles with verify and restore, a locked local credential reset (`auth recover`), and a read-only state diagnosis (`state check`), with the runbooks for SQLite migration recovery and corrupted state.
-
-`TestDaemonMigrationRehearsal` (in `make drill`) exercises them on the composed daemon: offline commands refused beside the daemon, `state check` drained after a graceful stop, a backup created and verified, a restore into a new directory with a fresh credential (the bundle's refused) and no repeated external write, claim or job run after a reconcile, corrupted and newer-schema databases diagnosed, and a tampered bundle refused.
+Open Conduit's offline recovery commands are backup bundles with verify and restore, a locked local credential reset (`auth recover`) and a read-only state diagnosis (`state check`). This page describes them, with the runbooks for SQLite migration recovery and corrupted state. The commands live in [`internal/backup`](https://github.com/open-conduit/open-conduit/tree/main/internal/backup) and [`internal/cli`](https://github.com/open-conduit/open-conduit/tree/main/internal/cli).
 
 ## Backup, restore and credential recovery
 
@@ -60,3 +58,22 @@ Recovery order:
 2. If `database` fails, restore the newest bundle that `backup verify` accepts into a new directory, and start there. Reconcile then re-reads the services: work accepted after the bundle is re-derived from them, apart from declared one-shot deliveries.
 3. If only artifacts are missing, the coordination state is sound. The run content of those executions is lost; take a fresh bundle once `state check` passes.
 4. A stale socket or lock needs nothing: start the daemon.
+
+## Evidence
+
+`TestDaemonMigrationRehearsal` (in [`integration/daemon_migration_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_migration_test.go), part of `make drill`) exercises the commands on the composed daemon:
+
+- offline commands refused beside the daemon;
+- `state check` drained after a graceful stop;
+- a backup created and verified;
+- a restore into a new directory with a fresh credential (the bundle's refused) and no repeated external write, claim or job run after a reconcile;
+- corrupted and newer-schema databases diagnosed;
+- a tampered bundle refused.
+
+## History
+
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
+
+- Ticket 06-02 delivered the offline recovery commands (backup create, verify and restore, `auth recover`, `state check`) and the runbooks above, with `TestDaemonMigrationRehearsal` as its drill.

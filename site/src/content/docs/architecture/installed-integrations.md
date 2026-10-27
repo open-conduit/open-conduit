@@ -2,7 +2,7 @@
 title: "Installed integrations: Linear, Jira, Bitbucket, PostHog and operator tools"
 ---
 
-Ticket 06-01 delivers the adapters outside the GitHub path and the remaining operator surfaces. All evidence uses fixtures and fakes (`lineartest`, `jiratest`, `bitbuckettest` and a PostHog capture fake). No real service was called; real checks against configured accounts are live-operation evidence for the deferred 03-07, 03-09 or 06-04.
+Besides GitHub, Open Conduit ships adapters for Linear and Jira (trackers), Bitbucket Cloud (a code host for a tracker scope) and PostHog (telemetry), plus operator tools that work across every integration. The trackers share the kit in [`extensions/tracker`](https://github.com/open-conduit/open-conduit/tree/main/extensions/tracker); each adapter is its own extension under [`extensions/`](https://github.com/open-conduit/open-conduit/tree/main/extensions), and [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/tree/main/internal/bootstrap) composes them. The tests run them against fakes (`lineartest`, `jiratest`, `bitbuckettest` and a PostHog capture fake); they have not been checked against real accounts (see [Limitations](#limitations)).
 
 ## The shared tracker kit
 
@@ -39,7 +39,7 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 - **Connection.** `api_url` and `agent_account`. The secret is `token`: a personal key, or `lin_oauth_…` sent as a bearer token.
 - **Entry.** `teams` and `states` (claim-from state types or names; default unstarted, started), plus the kit's fields.
 - **Rate limits and credentials.** A `RATELIMITED` answer pauses the client until `X-RateLimit-Requests-Reset`. A 401 re-resolves the token once.
-- **Marks.** Linear drops HTML comments, so a comment carries a visible line `*open-conduit work=… intent=…*`. The line is visible in Linear: a provisional decision, and a rendering check is deferred to live use.
+- **Marks.** Linear drops HTML comments, so a comment carries a visible line `*open-conduit work=… intent=…*`. The line is visible in Linear: a provisional decision, not yet checked against how Linear renders it.
 - **Webhooks.** `Linear-Signature` (hex HMAC-SHA256), a ten-minute replay window and `Linear-Delivery` as the identity. `manage_webhook` creates a team's hook, or an all-public-teams hook for several teams. That needs a workspace admin.
 - **Labels.** A missing managed label is created on first use.
 
@@ -86,7 +86,7 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 ## Operator tools
 
 - **`open-conduit adapters [TYPE] [--json]`** lists the registered integrations and the connection, secret, entry, route and binding fields each takes, from `bootstrap.Adapters()`.
-- **`open-conduit route KEY [--scope S]`** explains how a key's Events were routed: the owning Work, and for each correlated Event its disposition and the router's durable decision (route, binding, generation, policy, reason). It reads them through the new `GET /v1/events/{id}/route`, so the explanation is what execution used. The decision is recorded, not predicted.
+- **`open-conduit route KEY [--scope S]`** explains how a key's Events were routed: the owning Work, and for each correlated Event its disposition and the router's durable decision (route, binding, generation, policy, reason). It reads them through `GET /v1/events/{id}/route`, so the explanation is what execution used. The decision is recorded, not predicted.
 - **`open-conduit config edit [--file F]`** is the full-screen editor. It shows the config tree and the catalog's documented fields for the selected connection, entry, route, binding or resource, marking those present. It makes the same pointer edits as `config set/unset`, shows secret references redacted (and they must stay references), and saves only a document that validates offline.
 - **Rendered activity.** The Claude Code executor writes each turn's `activity.txt` (agent text, tool calls, tool results, the turn's end) as the first run artifact. The TUI's log view and `runs log` show it; `t` cycles to the raw transcript and stderr. While a turn runs, the executor's `Live` renders the same activity from the segment's `out.jsonl` so far and returns it with the transcript and stderr, so `l`, `t` and `runs log --follow` work before the artifacts are published. The executor owns the transcript format, so the TUI stays free of executor branches.
 
@@ -98,11 +98,20 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 - **Setup.** `TestTrackerSetupScopesValidateOffline`.
 - **Editor.** `TestConfigEditor`.
 
-## Limitations and deferrals
+## Limitations
 
-- **Live evidence (deferred).** Real accounts, webhooks, rate limits and admin hooks for Linear, Jira, Bitbucket and PostHog.
+- **No live evidence.** Real accounts, webhooks, rate limits and admin hooks for Linear, Jira, Bitbucket and PostHog are untested; all evidence uses fixtures and fakes.
 - **Deleted issues.** A deleted issue ages out as absence; it is not delivered as a close.
 - **Multi-scope routing.** One entry per scope with a route `match`, kept single-owner by the claimed label. Overlapping matches can double-claim a reopened generation, so keep matches disjoint.
 - **Tracker waits and holds.** `issue:`/`pr:` waits and scheduled holds are GitHub-only. Tracker agents use the builtin `wait`.
 - **Bitbucket comment tools.** An ambiguous answer is confirmed by calling again; there is no background redrive.
 - **Comment detection.** Linear comments on issues that are not listed are read only while the issue is listed: open, or updated within the horizon.
+
+## History
+
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
+
+- Ticket 06-01 delivered the shared tracker kit, the Linear, Jira, Bitbucket and PostHog adapters, `init linear` and `init jira`, and the operator tools (`adapters`, `route`, `config edit`, rendered activity). `GET /v1/events/{id}/route` was added for `route`.
+- All 06-01 evidence used fixtures and fakes. No real service was called; checks against configured accounts were left as live-operation evidence for the deferred tickets 03-07, 03-09 and 06-04, and the Linear mark's rendering check was deferred to live use.

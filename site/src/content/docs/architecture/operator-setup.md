@@ -1,14 +1,15 @@
 ---
 title: "Operator setup, doctor and engineering controls"
+description: "How an operator sets up, checks and controls Open Conduit: init and config commands, secrets, doctor checks, Work controls, webhooks and tunnels, and dry run."
 ---
 
-Ticket 03-05 makes the GitHub path operable for the first deployment. It adds setup and config commands over scopes, connections and bindings, local secret entry, GitHub/Claude Code doctor checks, operator controls in the management API, the CLI and the TUI, the webhook listener with tunnels, and dry run. All of it uses public surfaces:
+This page covers what an operator uses to set up and run Open Conduit on a repository: the `init`, `config` and `secret` commands, the GitHub and Claude Code doctor checks, the Work controls in the management API, the CLI and the TUI, the webhook listener with its tunnels, and dry run. All of it uses public surfaces:
 
 - the management API ([B05](../config-management/));
 - the extension contracts;
 - composition in [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/tree/main/internal/bootstrap).
 
-Core gains only domain-free controls (rebind, hold/release, scope reconcile). 
+Core has only domain-free controls (rebind, hold/release, scope reconcile).
 
 ## Setup from nothing
 
@@ -24,7 +25,7 @@ open-conduit doctor --check-secrets
 open-conduit tui
 ```
 
-- **`init`** lists the setups the registered extensions offer, and **`init <type>`** runs one (04-02: setup is extension-owned; see [Extension-owned setup](#extension-owned-setup-04-02)). **`init github`**:
+- **`init`** lists the setups the registered extensions offer, and **`init <type>`** runs one (setup is extension-owned; see [extension-owned setup](#extension-owned-setup)). **`init github`**:
   - It detects the current directory's GitHub remote.
   - It adds one scope for a repository: a `github` connection (default secret `cmd:gh auth token`), an agent binding on `claude-code` with the GitHub tools, the `github` route, and the `github-hold` binding and route with `--holds`.
   - It adds a `git` work resource only when there is a checkout. `--no-workspace` writes a workspace-free scope whose turns run in a private directory.
@@ -42,18 +43,18 @@ open-conduit tui
   - It stores the value in the platform keyring under the `open-conduit` service: on macOS through `security -i`, so the value is not in any argv; on Linux through `secret-tool`.
   - Otherwise it falls back, and says so, to the owner-only `secrets.json` beside the config.
   - It prints only the reference. `--store keyring|file` forces one store.
-  - The daemon's resolver now reads `file:` references from that file. Before this ticket it had no secrets file configured.
+  - The daemon's resolver reads `file:` references from that file.
 - **`init --with claude`**:
   - The setup guide ([`playbooks.Setup`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/playbooks/setup/setup.md)) is written as its own one-skill plugin under `<state>/playbooks/setup`, apart from the turn plugin.
   - The command is an interactive `claude /open-conduit:setup --plugin-dir … --allowedTools …` with `OPEN_CONDUIT_CONFIG` set.
   - Only `open-conduit config`, `doctor`, `health`, `secret path` and `init github --dry-run` are pre-allowed, and `OS_*` credentials are removed from the environment.
-  - The guide now teaches `init`, `config set`, `secret set`, webhooks, permissions, dry run and the TUI controls. Its example config still validates against the daemon registry.
+  - The guide teaches `init`, `config set`, `secret set`, webhooks, permissions, dry run and the TUI controls. Its example config still validates against the daemon registry.
 
-A schema-driven interactive editor is not ported. The commands above cover its outcomes: validated edits, add/remove bindings, references for secrets and handwritten routes kept. The full-screen editor is deferred to 06-01.
+`config edit` opens a full-screen editor with the adapters' documented fields, validated before saving ([installed integrations](../installed-integrations/)). The commands above cover the same outcomes from a script: validated edits, add/remove bindings, references for secrets and handwritten routes kept.
 
 ## Doctor
 
-`GET /v1/doctor` (`open-conduit doctor [--check-secrets]`) keeps the 02-08 checks and adds extension checks contributed by bootstrap. Details carry codes, identifiers and counts, never references or values.
+`GET /v1/doctor` (`open-conduit doctor [--check-secrets]`) runs the core checks ([doctor](../observability-history/#doctor)) and the extension checks contributed by bootstrap. Details carry codes, identifiers and counts, never references or values.
 
 | Check | Status and codes |
 | --- | --- |
@@ -71,8 +72,8 @@ Every control is a management call with the operator credential and an `Idempote
 | --- | --- |
 | `POST /work/{id}/rebind` `{expected_revision,binding,reason}` | B05 rebind. Ready Work with no live or parked attempt only. The binding must be an enabled binding of the Work's scope. Moves every queued input (and the retry state) to it. `core.manual.rebind` records the binding, the previous bindings and the scheduler's generation. Never moves scope. |
 | `POST /work/{id}/hold`, `/release` `{expected_revision,reason}` | A domain-free scheduling hold (`core.manual.hold`/`release`), held in its own KV record. While held, `Start` refuses (`not_eligible`), including a parked attempt's resume, but input keeps queueing and Waits keep resolving. Release lets the next attempt see everything that arrived. Allowed on nonterminal Work with no pending or running attempt. `GET /work/{id}` shows `hold`. |
-| `POST /work/{id}/attach` `{}` | Held Work with no pending or running attempt. Returns the attach command (`argv`, `dir`) of the executor registration that ran the latest attempt, through the optional public `extension.AttachExecutor` (`attach_unsupported`, `nothing_to_attach`; the code was `no_session` before 07-01). For claude-code this is `claude --resume <session>` in the workspace, and the handoff note is cleared, so the next turn continues the attached session. No environment is returned: the operator's own shell supplies it. |
-| `POST /scopes/{id}/reconcile` `{expected_revision}` | B05 operator reconcile. Accepts `core.manual.reconcile` in the scope and makes every ingress source registered for the scope due now. The scan is the normal asynchronous reconcile. A generation already under way when the request commits (a page in flight, or part way through its pages) completes and leaves the source due, so a fresh generation always starts after the request (05-04 fix; previously such a request was absorbed and the next scan waited a full interval). Returns 202 with the Event and the source names. |
+| `POST /work/{id}/attach` `{}` | Held Work with no pending or running attempt. Returns the attach command (`argv`, `dir`) of the executor registration that ran the latest attempt, through the optional public `extension.AttachExecutor` (`attach_unsupported`, `nothing_to_attach`). For claude-code this is `claude --resume <session>` in the workspace, and the handoff note is cleared, so the next turn continues the attached session. No environment is returned: the operator's own shell supplies it. |
+| `POST /scopes/{id}/reconcile` `{expected_revision}` | B05 operator reconcile. Accepts `core.manual.reconcile` in the scope and makes every ingress source registered for the scope due now. The scan is the normal asynchronous reconcile. A generation already under way when the request commits (a page in flight, or part way through its pages) completes and leaves the source due, so a fresh generation always starts after the request. Returns 202 with the Event and the source names. |
 
 `GET /work/{id}` also carries `annotations`: display-only lines an extension contributes. For GitHub these are the issue, its URL, a held issue's state, projection dry run and the counts of corrections and problems the agent logged (`github.Annotate`, durable state only).
 
@@ -112,7 +113,7 @@ Webhooks are an accelerator: reconcile always runs, so with no listener the daem
   - The listener starts with `serve`, so a change made with `config apply` takes effect at the next restart (doctor reports `restart_required` until then).
 - **Listener.** `settings.webhooks.addr` (or `serve --webhook-addr HOST:PORT`) binds a separate HTTP server on its own TCP address. Any free local port works (the docs use 8787 as an example); if the bind fails, `serve` exits saying why (for example, the address is already in use) and suggests another port. It serves only the routes that registered entries name:
   - `POST /github/<scope>/<entry>` for each GitHub entry that names a `webhook_secret`;
-  - `POST /slack/<scope>/<entry>` for each Slack entry with `receiver: http` ([Slack extension](../slack-extension/));
+  - `POST /slack/<scope>/<entry>` for each Slack entry with `receiver: http` ([Slack extension](../slack-extension/)); the default Slack receiver is Socket Mode, which needs no listener or tunnel;
   - `POST /linear/…`, `POST /jira/…` and `POST /bitbucket/<scope>/<entry>` for tracker and code-host entries ([installed integrations](../installed-integrations/));
   - `POST /schedule/<scope>/<entry>/<job>/<token>`, a schedule job's signed URL ([scheduled jobs](../schedule-extension/));
   - the paths an installed extension package registers when it is configured ([extension packaging](../extension-packaging/)).
@@ -133,7 +134,7 @@ Webhooks are an accelerator: reconcile always runs, so with no listener the daem
 
 That maps to these grants:
 
-- **Fine-grained token.** Issues, Pull requests and Contents read/write; Commit statuses, Metadata and Actions read; Webhooks read/write for `manage_webhook`. A fine-grained token cannot be granted Checks. CI is then read from Actions workflow runs and commit statuses, and doctor says so (03-06).
+- **Fine-grained token.** Issues, Pull requests and Contents read/write; Commit statuses, Metadata and Actions read; Webhooks read/write for `manage_webhook`. A fine-grained token cannot be granted Checks. CI is then read from Actions workflow runs and commit statuses, and doctor says so.
 - **GitHub App.** The same, plus Checks read.
 - **Classic token.** `repo`, plus `admin:repo_hook` for `manage_webhook`.
 - **Bot App (`bot_app_id`).** It performs the writes and needs only the write permissions.
@@ -146,12 +147,31 @@ That maps to these grants:
 - Managed hooks are only reported (`dry_run`).
 - Claude Code turns run as stubs on a cheap model (`claudecode.Options.DryRun`, model `haiku`), told to do nothing and call no tools.
 
-Continuity, outcomes and history behave as usual. Shell executions are not altered, since they are the operator's own commands. Job dry-run semantics belong to 05-02. Doctor reports dry run on `github` and `claude_code`.
+Continuity, outcomes and history behave as usual. Shell executions are not altered, since they are the operator's own commands. Jobs follow their own dry-run rules ([scheduled jobs](../schedule-extension/#dry-run)). Doctor reports dry run on `github` and `claude_code`.
 
-## Smaller changes
+## Host loop and attempt state
 
-- The host loop no longer reports idle `ready` Work (handed back, with no input) as `invalid_state` on every pass: Work without pending input is skipped quietly.
+- The host loop skips idle `ready` Work (handed back, with no input) quietly rather than reporting it as `invalid_state` on every pass.
 - `runtime.AttemptStateInTx` exposes an attempt's pinned executor registration to composition and management.
+
+## Extension-owned setup
+
+Setup belongs to extensions, not the core CLI. The public, optional [`extension.Setup`](https://github.com/open-conduit/open-conduit/blob/main/extension/setup.go) contract has two methods. `SetupInfo` gives the type, a summary and a usage line. `Setup(ctx, host, args)` returns a `SetupResult`: connections, one scope, summary lines and next steps.
+
+`open-conduit init` lists the registered setups. `init <type> [flags]` runs one. Core keeps only the host:
+
+- **Its own flags.** `--config`, `--force`, `--dry-run` and `--with` are removed wherever they appear; every other argument goes to the extension.
+- **The `SetupHost`.** It offers prompts (a secret prompt does not echo on a terminal), a numbered choice, a browser opener and a `LookPath`. It runs a helper command attached to the terminal. `StoreSecret` uses the `secret set` store (keyring, else the owner-only `secrets.json`) and returns only the reference. A dry run stores nothing and returns the reference it would use.
+- **Merge and save.** `MergeSetup` keeps an existing connection with the same id and replaces a scope only with `--force`. The result is validated offline against the daemon registry, then saved 0600 (or printed with `--dry-run`).
+
+An `extension.ErrSetupUsage` refusal is a usage error (exit 2).
+
+The entrypoint injects the setups through `cli.Env.Setups` (`bootstrap.Setups()`: GitHub, Slack, Linear and Jira). `internal/cli` imports no extension. The B01 checker forbids it, and `scripts/check-boundaries` has explicit direct and transitive cases for core CLI and TUI. The GitHub init (remote detection, `ScopeConfig`, tool lists) lives in [`extensions/github/setup.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/setup.go) as `init github`, with the same flags and behavior. Slack's setup is described in the [Slack extension](../slack-extension/#setup-init-slack).
+
+## Other setup and recovery commands
+
+- **Trackers and code hosts.** `init linear` and `init jira` (each with an optional `--bitbucket` code host), `adapters [TYPE]`, `route KEY`, `config edit`, and the tracker, Bitbucket and PostHog doctor checks and webhook routes are described in [installed integrations](../installed-integrations/).
+- **Offline recovery.** `backup create|verify|restore`, `state check` and `auth recover` are described in [recovery](../recovery/). The state commands take the daemon lock and refuse while a daemon owns the directory.
 
 ## Verification
 
@@ -174,29 +194,27 @@ make check && GOTOOLCHAIN=go1.24.2 make check && make cross-build && make drill
 - **Offline validation and setup.** [`setup_guide_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/setup_guide_test.go) checks that offline validation accepts the guide's example and every scope `init` writes and rejects an unknown executor, and that the setup command builds the right plugin, arguments and environment.
 - **Unit tests.** They cover JSON pointer editing, `init`/`secret`/`config` behavior, the tunnel providers (fake ngrok and cloudflared processes, restart, static), `Verify`, `EnsureWebhook` (create, unchanged, re-point by suffix, dry run), the manual claim route, annotations, Claude Code `Version`, `Usage` against a fake endpoint, the dry-run turn, and TUI controls with confirmation, the claim prompt and Work context.
 
-## Limitations and follow-on work
+`LoginToken` is not exercised in tests, because on macOS it reads the real Keychain.
 
-- **Fixtures only.** No real GitHub write, webhook, tunnel process or Claude Code session ran. Real evidence (a real repository, a real tunnel and a real agent turn) belongs to 03-06; `LoginToken` is not exercised in tests because on macOS it reads the real Keychain.
-- **Not ported.** The full-screen config editor (06-01), a rendered transcript and activity view (raw transcripts are reachable as artifacts with `t`), and automatic headless/TUI selection on the root command (06-03 packaging). `settings.admission_limit` is still not enforced (02-09 open item).
+## Limitations
+
+- **Root command.** A bare `open-conduit` prints help; it does not choose between the daemon and the TUI.
+- **Unenforced setting.** `settings.admission_limit` is validated but not enforced.
 - **Rebind and reload.** A rebind takes effect at the next scheduling decision, which pins the binding from the generation the scheduler runs.
 
-04-01 update: the webhook listener also mounts `POST /slack/<scope>/<entry>` for Slack entries with `receiver: http`. The default Slack receiver is Socket Mode, which needs no listener or tunnel; see the [Slack extension](../slack-extension/), including the intended setup flow (04-02): a generic optional extension `Setup` hook that core `init <type>` dispatches to, with core supplying only the setup host.
+## History
 
-## Extension-owned setup (04-02)
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
 
-Setup moved out of core CLI. The public, optional [`extension.Setup`](https://github.com/open-conduit/open-conduit/blob/main/extension/setup.go) contract has two methods. `SetupInfo` gives the type, a summary and a usage line. `Setup(ctx, host, args)` returns a `SetupResult`: connections, one scope, summary lines and next steps.
-
-`open-conduit init` lists the registered setups. `init <type> [flags]` runs one. Core keeps only the host:
-
-- **Its own flags.** `--config`, `--force`, `--dry-run` and `--with` are removed wherever they appear; every other argument goes to the extension.
-- **The `SetupHost`.** It offers prompts (a secret prompt does not echo on a terminal), a numbered choice, a browser opener and a `LookPath`. It runs a helper command attached to the terminal. `StoreSecret` uses the `secret set` store (keyring, else the owner-only `secrets.json`) and returns only the reference. A dry run stores nothing and returns the reference it would use.
-- **Merge and save.** `MergeSetup` keeps an existing connection with the same id and replaces a scope only with `--force`. The result is validated offline against the daemon registry, then saved 0600 (or printed with `--dry-run`).
-
-An `extension.ErrSetupUsage` refusal is a usage error (exit 2).
-
-The entrypoint injects the setups through `cli.Env.Setups` (`bootstrap.Setups()`: GitHub and Slack). `internal/cli` imports no extension. The B01 checker already forbids it, and `scripts/check-boundaries` now has explicit direct and transitive cases for core CLI and TUI. The GitHub init (remote detection, `ScopeConfig`, tool lists) lives in [`extensions/github/setup.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/setup.go) as `init github`, with the same flags and behavior. Slack's setup is described in the [Slack extension](../slack-extension/#setup-init-slack).
-
-
-06-01 adds `init linear`, `init jira` (each with an optional `--bitbucket` code host), `adapters [TYPE]`, `route KEY`, `config edit` (the full-screen editor) and the tracker, Bitbucket and PostHog doctor checks and webhook routes. See [installed integrations](../installed-integrations/).
-
-06-02 adds offline recovery commands ([recovery](../recovery/)): `backup create|verify|restore`, `state check` and `auth recover`. The state commands take the daemon lock and refuse while a daemon owns the directory.
+- **03-05** made the GitHub path operable for the first deployment: `init github`, the `config` and `secret` commands, `init --with claude`, the GitHub and Claude Code doctor checks, the operator controls, the webhook listener and tunnels, and dry run. Before it the daemon's resolver had no secrets file configured. It also stopped the host loop reporting idle `ready` Work as `invalid_state` and exposed `runtime.AttemptStateInTx`.
+- At 03-05 no real GitHub write, webhook, tunnel process or Claude Code session ran; all evidence used fixtures. Real evidence (a real repository, a real tunnel and a real agent turn) was left to 03-06.
+- At 03-05 the schema-driven interactive config editor was not ported (deferred to 06-01), nor a rendered transcript and activity view (raw transcripts were reachable as artifacts with `t`), nor automatic headless/TUI selection on the root command (left to 06-03 packaging). `settings.admission_limit` was a 02-09 open item.
+- **03-06** added the fine-grained-token fallback to Actions workflow runs and commit statuses, and doctor's note about it.
+- **04-01** mounted `POST /slack/<scope>/<entry>` on the webhook listener for Slack entries with `receiver: http`, and set out the intended setup flow: a generic optional extension `Setup` hook that core `init <type>` dispatches to, with core supplying only the setup host.
+- **04-02** moved setup out of the core CLI into the extension-owned `extension.Setup` contract, with `init github` keeping the same flags and behaviour. At that point the injected setups were GitHub and Slack.
+- **05-04** fixed scope reconcile: before it, a request that arrived while a generation was under way was absorbed, and the next scan waited a full interval.
+- **06-01** added `init linear`, `init jira`, `adapters`, `route`, `config edit` (the full-screen editor) and the tracker, Bitbucket and PostHog doctor checks and webhook routes. A rendered activity artifact for Claude Code turns, shown by the TUI and `runs log`, was added alongside them.
+- **06-02** added the offline recovery commands.
+- **07-01** renamed the attach refusal `no_session` to `nothing_to_attach`.

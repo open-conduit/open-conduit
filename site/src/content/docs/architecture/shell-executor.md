@@ -1,8 +1,9 @@
 ---
 title: "Shell executor and CLI toolbelt"
+description: "How the shell executor runs, adopts, interrupts and stops detached processes, and how the os CLI reaches the toolbelt."
 ---
 
-Ticket 02-07 delivers the first real executor, [`executors/shell`](https://github.com/open-conduit/open-conduit/tree/main/executors/shell), and the [`os` CLI](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/toolbelt.go). It proves the architecture with no agent session, no tracker and no workspace. The executor imports only public contracts. It implements `extension.Executor`, `InterruptExecutor` and `ResumeExecutor`, and advertises `toolbelt: cli` and `interrupt`. `resume` is advertised only when `Options.Resume` is set. Workspace was added in 03-02 and inject in 04-02 (see [Inject inbox](#inject-inbox-04-02)). Daemon composition (a `serve` command, routing and poll loops) is delivered by 02-09 ([daemon composition](../daemon-core-gate/)); the host role in this document's evidence is played by integration tests that compose the production scheduler, toolbelt, management server, SQLite and artifacts.
+The shell executor, [`executors/shell`](https://github.com/open-conduit/open-conduit/tree/main/executors/shell), runs a binding's command as a detached process tree, and the [`os` CLI](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/toolbelt.go) gives that process the toolbelt. The daemon uses it for scheduled jobs and any other shell binding ([daemon composition](../daemon-core-gate/)). The executor imports only public contracts. It implements `extension.Executor`, `InterruptExecutor`, `InjectExecutor`, `ResumeExecutor` and the optional `StopExecutor` and `ForgetExecutor`, and advertises `toolbelt: cli`, `interrupt`, `inject` and `workspace`. `resume` is advertised only when `Options.Resume` is set.
 
 ## Binding config
 
@@ -12,29 +13,34 @@ Binding `config` is opaque to core and strictly checked by the executor. `Execut
 | --- | --- |
 | `command` | Run with `/bin/sh -c`. Exactly one of `command` or `argv` is required. |
 | `argv` | Run directly. Exactly one of `command` or `argv` is required. |
-| `dir` | Clean absolute working directory. Without it the command runs in a private per-segment scratch directory. |
+| `dir` | Clean absolute working directory. Without it, and without a bound workspace, the command runs in a private per-segment scratch directory. `dir` and a bound workspace together are rejected. |
 | `env` | Explicit non-secret variables. |
 | `secret_env` | Maps a selected secret name to a variable. Unmapped secrets use their upper-cased name with other characters replaced by `_`. |
 | `timeout_seconds` | Process-tree deadline. It is persisted and enforced across restart. |
 
 Unknown fields, trailing data, NUL bytes, invalid names and any `OS_*` target are rejected. A configuration that bypassed validation, or a program that cannot start, produces a structured failed result with no process, so no uncertain resource hold remains.
 
+## Workspaces
+
+A shell binding whose Scope binds a resource provider runs in the acquired workspace, as described in [workspaces](../workspaces/). Acquisition happens after the recovery intent is persisted and before the process deadline starts. A setup failure, unavailable workspace or full-disk refusal becomes a structured failed result with no process (`workspace_setup_failed`, `workspace_unavailable`, `workspace_no_space`). A result reports the acquired workspace generically as `extension.Result.Workspace` (kind, lease reference, directory, the provider's one-line summary and description), beside the `workspace` field of the result data, so run history shows it for every executor.
+
 ## Environment and toolbelt protocol
 
 The environment follows the B05 order:
 
 1. A sanitized baseline: only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR` and `TERM` survive. Unrelated credentials, `OPEN_CONDUIT_*` and inherited `OS_*` variables are dropped.
-2. No resource layer exists, because there is no workspace.
+2. The workspace provider's layer, when a workspace is bound. Reserved and invalid names are dropped from it. With no workspace there is no provider layer.
 3. Binding `env`.
 4. Binding-selected secrets, resolved by the scheduler immediately before launch.
 5. The trusted toolbelt and execution variables, which no earlier layer can override.
 
-`OS_ENDPOINT`, `OS_TOKEN` and the `os` binary are the PRD's toolbelt protocol names and stay unchanged despite the product rename. The executor prepends `Options.ToolbeltDir` (by default the directory of the running executable when it contains `os`) to `PATH`. `OS_TOKEN_FILE` points at a private 0600 file holding the same credential. Adoption replaces that file, so the `os` CLI reads it first and falls back to `OS_TOKEN`. Without a toolbelt token none of the three transport variables is set. Identity variables are always present:
+`OS_ENDPOINT`, `OS_TOKEN` and the `os` binary are the toolbelt protocol names and keep their `OS_` form despite the product rename. The executor prepends `Options.ToolbeltDir` (by default the directory of the running executable when it contains `os`) to `PATH`. `OS_TOKEN_FILE` points at a private 0600 file holding the same credential. Adoption replaces that file, so the `os` CLI reads it first and falls back to `OS_TOKEN`. Without a toolbelt token none of the three transport variables is set. Identity variables are always present:
 
 - `OS_SCOPE_ID`, `OS_WORK_ID`, `OS_EXECUTION_ID`, `OS_ATTEMPT`
 - `OS_TRIGGER_ID`, `OS_TRIGGER_TYPE`
 - `OS_INPUT_FILE`: the trigger plus the acceptance-ordered input batch
 - `OS_OUTPUT_DIR`
+- `OS_INBOX` ([inject inbox](#inject-inbox))
 
 `os` calls `POST /v1/toolbelt/call` through the public client. It supports these commands:
 
@@ -47,7 +53,7 @@ The environment follows the B05 order:
 | `os outcome completed\|failed\|handoff` | `declare_outcome` |
 | `os call OP` | registered extension operations |
 
-Every command accepts `--request-id`. Results print as JSON. Exit status is 0 on success, 1 for a rejected or failed call (safe error code only) and 2 for usage or missing environment. Arguments and credentials are never echoed. A declared wait or outcome takes effect only when the host observes the process finish: `Scheduler.Observe` applies the declaration through `Complete`, as [02-06](../toolbelt-management/) requires.
+Every command accepts `--request-id`. Results print as JSON. Exit status is 0 on success, 1 for a rejected or failed call (safe error code only) and 2 for usage or missing environment. Arguments and credentials are never echoed. A declared wait or outcome takes effect only when the host observes the process finish: `Scheduler.Observe` applies the declaration through `Complete`, as the [toolbelt](../toolbelt-management/#toolbelt-authority) requires.
 
 ## Process model, identity and adoption
 
@@ -70,7 +76,7 @@ The wrapper's `$0` carries an unguessable per-segment nonce. Process identity is
 
 A lower-epoch recoverer is refused. A superseded instance can neither interrupt nor stop a process that a newer epoch adopted (`ErrSuperseded`); this is how lease ownership is respected at the process boundary.
 
-Contract clarification recorded here: the production scheduler requires `PersistRecovery` to succeed before it accepts an adopted handle, but the 01-03 shared executor case treated any recovery-time call as a replacement launch. The shared case now permits re-acknowledging the identical metadata and still rejects new metadata, with a negative control (`TestExecutorRecoveryReplacement`).
+The production scheduler requires `PersistRecovery` to succeed before it accepts an adopted handle, so re-acknowledging the identical metadata during recovery is allowed. The shared executor case permits that re-acknowledgement and still rejects new metadata as a replacement launch, with a negative control (`TestExecutorRecoveryReplacement`).
 
 ## Results, interruption and stop evidence
 
@@ -91,9 +97,25 @@ Outcome data (`open-conduit.shell.result.v1`) carries `reason`, plus `exit_code`
 | `signal` | failed | the process was killed by a signal |
 | `invalid_config`, `start_failed` | failed | no process ran |
 
-The scheduler now preserves executor outcome data when it converts a declared wait into the waiting outcome.
+The scheduler preserves executor outcome data when it converts a declared wait into the waiting outcome.
 
-`Interrupt(execution)` acts only on a segment this instance holds. It verifies identity and epoch, records the stop reason and sends SIGTERM to the group; escalation happens during observation. Success means delivered, not stopped. `Stop(execution, epoch)` (the public optional `extension.StopExecutor` since 07-01) is trusted host cleanup for a fenced attempt, for example after operator cancel, a scheduler deadline, `ErrNotAdoptable` or an observation error. It terminates any verified live segment and returns nil only when every segment's tree is verified gone. The host then calls `Scheduler.ConfirmStopped(execution, epoch)`. A toolbelt outcome declaration is still never stop evidence. An observed structured result is, because the tree has been drained before `Wait` returns.
+`Interrupt(execution)` acts only on a segment this instance holds. It verifies identity and epoch, records the stop reason and sends SIGTERM to the group; escalation happens during observation. Success means delivered, not stopped. `Stop(execution, epoch)` (the public optional `extension.StopExecutor`) is trusted host cleanup for a fenced attempt, for example after operator cancel, a scheduler deadline, `ErrNotAdoptable` or an observation error. It terminates any verified live segment and returns nil only when every segment's tree is verified gone. The host then calls `Scheduler.ConfirmStopped(execution, epoch)`. A toolbelt outcome declaration is never stop evidence. An observed structured result is, because the tree has been drained before `Wait` returns.
+
+## Retention and logs
+
+`Forget` implements the shared retention policy for the shell executor: it removes an expired execution's run directories and refuses while a verified process still runs. Run history and the TUI show logs from published artifacts ([observability and history](../observability-history/)). The shell executor does not implement `extension.LiveExecutor`, so a running shell segment's log is not streamed; it is readable once the segment finishes and the log is published.
+
+## Inject inbox
+
+The shell executor implements `InjectExecutor`, the second implementation of the [generic inject acknowledgement](../runtime-semantics/#generic-inject-acknowledgement).
+
+- **The inbox.** Each segment has `inbox/` in its run directory, named to the process as `OS_INBOX`. `Inject` writes the Event as `<order>-<id digest>.json`, in the `OS_INPUT_FILE` event shape, under the segment's finalize lock. A repeated Event identity is not written again. After the result is recorded, or for an execution this instance does not hold, `Inject` returns `ErrNotAccepting`.
+- **Taking input in.** The process reads the inbox and acknowledges each event by creating `inbox/consumed/<id digest>`. `os inbox` does both: it prints the unacknowledged events in order as JSON lines and acknowledges each one after printing it, without any call to the endpoint.
+- **The proof.** The result reports acknowledged, delivered events as `Result.ConsumedInputs`. An acknowledgement for a file core never delivered is ignored.
+- **Adoption.** The inbox is on disk, so an adopted process keeps receiving input.
+- **Scripts that never read the inbox.** Nothing is consumed. Injected input stays pending and reaches attempt N+1, exactly as `queue` would.
+
+Binding an inject route to shell therefore needs no unsupported-capability fallback.
 
 ## Evidence
 
@@ -108,24 +130,21 @@ The scheduler now preserves executor outcome data when it converts a declared wa
   - adoption by a second instance with a replaced token and no duplicate launch, lower-epoch refusal, and superseded interrupt/stop refusal
   - identity beyond PID: a reused PID is neither adopted nor signaled, and tampered metadata is refused
   - explicit resume capability
-- [Integration cases](https://github.com/open-conduit/open-conduit/blob/main/integration/shell_test.go) run the real shipped `os` binary against the Unix-socket management server, production scheduler/toolbelt and SQLite:
-  - The 02-07 acceptance workflow runs with N+1 wake and with resume. A no-workspace script reads context, emits, creates child Work and waits, then after an operator wake declares an outcome. The test asserts the causal chain, artifacts and a secret delivered only through the selected binding.
+- [Integration cases](https://github.com/open-conduit/open-conduit/blob/main/integration/shell_test.go) run the real shipped `os` binary against the Unix-socket management server, production scheduler/toolbelt and SQLite, with the tests playing the host:
+  - The acceptance workflow runs with N+1 wake and with resume. A no-workspace script reads context, emits, creates child Work and waits, then after an operator wake declares an outcome. The test asserts the causal chain, artifacts and a secret delivered only through the selected binding.
   - Exit failure applies retry policy; timeout establishes exclusion; operator cancel plus `Stop` and `ConfirmStopped` hold.
-  - A host torn down mid-execution and restarted on the same state adopts the still-running process at a higher epoch. The old credential is rejected and the adopted process emits with its replaced credential, with exactly one launch.
+  - A host torn down mid-execution and restarted on the same state adopts the still-running process at a higher epoch. The old credential is rejected and the adopted process emits with its replaced credential, with exactly one launch. This restart is an in-process teardown and rebuild of every host component; the shell process is a real OS process in its own session. Killing an actual daemon process at each boundary is covered in [daemon composition](../daemon-core-gate/).
   - Apply-time config rejection is covered, and so are CLI exit codes and non-echo behavior.
+- `TestSharedInjectConformance`, `TestInboxIgnoresForgedAcknowledgements` and `TestToolbeltInbox` cover the inject inbox.
 
-The restart here is an in-process teardown and rebuild of every host component; the shell process is a real OS process in its own session. Killing an actual daemon process at each boundary is the 02-09 gate, delivered in [daemon composition](../daemon-core-gate/). 02-08 adds `Forget` for the shared retention policy: it removes an expired execution's run directories and refuses while a verified process still runs. It also adds history/TUI presentation with log tailing from published artifacts ([observability and history](../observability-history/)). Live log streaming during a run is not provided.
+## History
 
-## Inject inbox (04-02)
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
 
-The shell executor implements `InjectExecutor`, the second implementation of the [generic inject acknowledgement](../runtime-semantics/#generic-inject-acknowledgement-04-02).
-
-- **The inbox.** Each segment has `inbox/` in its run directory, named to the process as `OS_INBOX`. `Inject` writes the Event as `<order>-<id digest>.json`, in the `OS_INPUT_FILE` event shape, under the segment's finalize lock. A repeated Event identity is not written again. After the result is recorded, or for an execution this instance does not hold, `Inject` returns `ErrNotAccepting`.
-- **Taking input in.** The process reads the inbox and acknowledges each event by creating `inbox/consumed/<id digest>`. `os inbox` does both: it prints the unacknowledged events in order as JSON lines and acknowledges each one after printing it, without any call to the endpoint.
-- **The proof.** The result reports acknowledged, delivered events as `Result.ConsumedInputs`. An acknowledgement for a file core never delivered is ignored.
-- **Adoption.** The inbox is on disk, so an adopted process keeps receiving input.
-- **Scripts that never read the inbox.** Nothing is consumed. Injected input stays pending and reaches attempt N+1, exactly as `queue` would.
-
-Binding an inject route to shell therefore no longer needs an unsupported-capability fallback. `TestSharedInjectConformance`, `TestInboxIgnoresForgedAcknowledgements` and `TestToolbeltInbox` cover it.
-
-05-02 update: a result reports the acquired workspace generically as `extension.Result.Workspace` (kind, lease reference, directory, the provider's one-line summary and description), beside the existing `workspace` field of the result data, so run history shows it for every executor.
+- Ticket 02-07 delivered the shell executor and the `os` CLI as the first real executor, proving the architecture with no agent session, no tracker and no workspace. At that stage the environment had no resource layer because there was no workspace, and the host role in its evidence was played by integration tests composing the production scheduler, toolbelt, management server, SQLite and artifacts. Daemon composition (a `serve` command, routing and poll loops) followed in 02-09.
+- While building 02-07, the 01-03 shared executor case was found to treat any recovery-time `PersistRecovery` call as a replacement launch. It was changed to permit re-acknowledging identical metadata, and `TestExecutorRecoveryReplacement` was added as a negative control.
+- Ticket 02-08 added `Forget` for the shared retention policy and history/TUI presentation with log tailing from published artifacts.
+- Ticket 03-02 added workspace support. Ticket 04-02 added the inject inbox; before it, binding an inject route to shell needed an unsupported-capability fallback. Ticket 05-02 added `extension.Result.Workspace`.
+- `extension.StopExecutor` became a public optional interface in 07-01.
