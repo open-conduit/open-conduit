@@ -35,21 +35,29 @@ GitHub, Slack, schedules and introspection are integrations that plug in around 
 
 **[Read the docs at open-conduit.github.io/open-conduit](https://open-conduit.github.io/open-conduit/)**: install, a quick start, each workflow and how to operate it day to day.
 
-The short version, on macOS or Linux:
+The quickest way in, on macOS or Linux, is to let Claude Code set it up with you:
 
 ```sh
 brew install open-conduit/tap/open-conduit
+open-conduit init --with claude
+```
+
+`init --with claude` opens a Claude Code session with Open Conduit's setup guide. Claude looks at your checkouts and logins, then asks which repositories to watch, how issues map to scopes and how the agent should run. It writes the config and validates it, and checks the result with `open-conduit doctor`. It never asks for a token in the chat: credentials stay as references to your `gh` login, keyring or environment. It ends with the commands to start the daemon, which you run yourself. You need [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and signed in.
+
+Prefer to do it by hand? The same setup takes four commands:
+
+```sh
 open-conduit init github --repo acme/web --checkout ~/Code/web
 open-conduit service install                         # run the daemon in the background
 open-conduit doctor --check-secrets                  # every connection, credential and binding
 open-conduit tui                                     # watch and control runs
 ```
 
-The GitHub setup above runs its agents with the [Claude Code](https://docs.anthropic.com/en/docs/claude-code) executor, so sign in to Claude Code first; the GitHub CLI's (`gh`) login is its default credential. To run something else, point a binding at a shell command or at an executor from an extension. Release binaries, an install script and `go install` are covered in [Install](https://open-conduit.github.io/open-conduit/start/install/).
+The GitHub setup runs its agents with the Claude Code executor, and the GitHub CLI's (`gh`) login is its default credential. To run something else, point a binding at a shell command or at an executor from an extension. Release binaries, an install script and `go install` are covered in [Install](https://open-conduit.github.io/open-conduit/start/install/).
 
 Where to go next:
 
-- [Quick start](https://open-conduit.github.io/open-conduit/start/quick-start/): set up a scope, start the daemon and check it.
+- [Quick start](https://open-conduit.github.io/open-conduit/start/quick-start/): set it up with Claude, or by hand, then start the daemon and check it.
 - Workflows: [GitHub engineering](https://open-conduit.github.io/open-conduit/workflows/github/), [Slack support](https://open-conduit.github.io/open-conduit/workflows/slack/), [scheduled jobs](https://open-conduit.github.io/open-conduit/workflows/scheduled-jobs/) and [introspection](https://open-conduit.github.io/open-conduit/workflows/introspection/).
 - [Extensions](https://open-conduit.github.io/open-conduit/reference/extensions/): add integrations and executors of your own.
 - [The core in one page](docs/architecture/core.md): the design in depth.

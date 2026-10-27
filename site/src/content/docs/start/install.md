@@ -52,4 +52,4 @@ make build                 # writes bin/open-conduit and bin/os
 cp bin/open-conduit bin/os /usr/local/bin/   # or anywhere on your PATH, side by side
 ```
 
-Next: the [quick start](/open-conduit/start/quick-start/).
+Next: run `open-conduit init --with claude` and let Claude Code set it up with you, as the [quick start](/open-conduit/start/quick-start/) describes.
