@@ -52,9 +52,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.publishJobRuns(ctx)
 		if snapshot, _ := d.configs.Current(); snapshot != nil {
 			d.ensureSchedules(ctx, c, snapshot, false)
-			d.ensureIntrospection(ctx, c, snapshot, false)
 		}
-		d.hostWatch(ctx)
 		d.projectGitHub(ctx)
 		d.projectTrackers(ctx)
 		d.runSlackSockets(ctx)

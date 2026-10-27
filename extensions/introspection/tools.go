@@ -36,11 +36,15 @@ const (
 	// `introspection.fix.requested` Event citing the earliest report as its
 	// cause.
 	OpFix = "introspection.fix"
+	// OpCorrection and OpProblem log an agent's note: a correction it was
+	// given, or a problem it worked around (inputs to sweep and triage).
+	OpCorrection = "introspection.correction"
+	OpProblem    = "introspection.problem"
 )
 
 // Operations lists every operation (for binding operation lists).
 func Operations() []string {
-	return []string{OpReport, OpList, OpResolve, OpEvidence, OpNotesResolve, OpFix}
+	return []string{OpReport, OpList, OpResolve, OpEvidence, OpNotesResolve, OpFix, OpCorrection, OpProblem}
 }
 
 // Report states. Fixing is derived: an open report a requested fix names.
@@ -120,6 +124,8 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpEvidence, Handler: t.evidence},
 			{Name: OpNotesResolve, Handler: t.notesResolve},
 			{Name: OpFix, Emit: t.fix},
+			{Name: OpCorrection, Handler: t.correction},
+			{Name: OpProblem, Handler: t.problem},
 		}}
 }
 

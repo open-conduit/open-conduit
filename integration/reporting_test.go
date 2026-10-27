@@ -62,7 +62,7 @@ func newRepEnv(t *testing.T, limits runtime.CausalLimits) *repEnv {
 	t.Helper()
 	e := &repEnv{t: t, clock: &ghClock{t: time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)}, path: filepath.Join(t.TempDir(), "conduit.db"), limits: limits,
 		tokens: map[domain.ID]string{}, grants: map[string][]string{
-			"agent":     {is.OpReport, extension.ReadContext},
+			"agent":     {is.OpReport, is.OpCorrection, is.OpProblem, extension.ReadContext},
 			"processor": {is.OpReport},
 			"triage":    {is.OpList, is.OpResolve},
 		}}
@@ -525,6 +525,50 @@ func TestReportingPermissionBoundaries(t *testing.T) {
 	if _, ok := e.work(is.WorkID(repScope, second["reported"].(string))); ok {
 		t.Fatal("a report was processed after the entry was removed")
 	}
+}
+
+// An agent logs corrections and problems as introspection's own notes,
+// keyed by its Work's correlation key: once per request, validated, and
+// refused in a scope without an entry. Sweep and triage evidence reads them
+// beside the legacy GitHub notes.
+func TestAgentNotes(t *testing.T) {
+	e := newRepEnv(t, runtime.CausalLimits{})
+	key := domain.CorrelationKey{Source: "tracker/eng", ExternalID: "issue/ENG-7"}
+	w, _, err := e.control.CreateWork(context.Background(), runtime.ManualWork{ScopeID: repScope, Kind: "engineering.issue", Binding: "agent", DeliveryID: "notes-1", Keys: []domain.CorrelationKey{key}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	a := e.start(w.ID)
+	c := e.must(a, is.OpCorrection, "c1", map[string]any{"area": "writing", "body": "Summarised the page in the lede.\n\nSay what the page is for."})
+	if again := e.must(a, is.OpCorrection, "c1", map[string]any{"area": "writing", "body": "Summarised the page in the lede.\n\nSay what the page is for."}); again["logged"] != c["logged"] {
+		t.Fatalf("retried correction: %v / %v", c, again)
+	}
+	e.must(a, is.OpProblem, "p1", map[string]any{"kind": "tooling", "body": "pr list failed\n\nError: x\nWorkaround: none\nFix: the tool"})
+	for _, bad := range []struct {
+		op    string
+		input map[string]any
+	}{{is.OpProblem, map[string]any{"kind": "bogus", "body": "x"}}, {is.OpCorrection, map[string]any{"area": "writing", "body": " "}}, {is.OpCorrection, map[string]any{"body": "x", "issue": "7"}}} {
+		if _, err := e.call(a, bad.op, "", bad.input); err == nil {
+			t.Fatalf("invalid note accepted: %s %v", bad.op, bad.input)
+		}
+	}
+	e.read(func(tx storage.Tx) error {
+		notes, err := is.Notes(tx, []string{is.NotesNamespace}, repScope, is.NoteCorrection, true)
+		if err != nil || len(notes) != 1 || notes[0].Key == nil || *notes[0].Key != key || notes[0].Area != "writing" || notes[0].Work != string(w.ID) {
+			t.Fatalf("corrections: %+v %v", notes, err)
+		}
+		counts, err := is.WorkNotes(tx, w.ID)
+		if err != nil || counts[is.NoteCorrection] != 1 || counts[is.NoteProblem] != 1 {
+			t.Fatalf("work notes: %v %v", counts, err)
+		}
+		return nil
+	})
+	e.finish(a)
+
+	bare := e.manual(repBare, "engineering.issue", "agent")
+	_, err = e.call(bare, is.OpCorrection, "", map[string]any{"area": "code", "body": "x"})
+	refused(t, err, "not_enabled")
+	e.finish(bare)
 }
 
 // TestTranslatedEmitContract exercises the generic contract with a rogue

@@ -71,7 +71,7 @@ Connections first, then one scope per project. A scope's `authorization` is its 
         "read_context", "emit", "wait", "declare_outcome",
         "github.context", "github.issue.view", "github.issue.comment", "github.issue.list", "github.issue.create",
         "github.pr.list", "github.pr.view", "github.pr.create", "github.pr.comment", "github.pr.reply", "github.pr.review", "github.checks",
-        "github.attachment.upload", "github.attachment.get", "github.wait", "github.correction", "github.problem",
+        "github.attachment.upload", "github.attachment.get", "github.wait",
         "github.hold.status", "github.hold"]},
       "bindings": [
         {"name": "agent", "executor": "claude-code", "connection": "github",
@@ -79,7 +79,7 @@ Connections first, then one scope per project. A scope's `authorization` is its 
          "operations": ["read_context", "wait", "declare_outcome",
            "github.context", "github.issue.view", "github.issue.comment", "github.issue.list", "github.issue.create",
            "github.pr.list", "github.pr.view", "github.pr.create", "github.pr.comment", "github.pr.reply", "github.pr.review", "github.checks",
-           "github.attachment.upload", "github.attachment.get", "github.wait", "github.correction", "github.problem"],
+           "github.attachment.upload", "github.attachment.get", "github.wait"],
          "secret_names": [],
          "config": {"branch": "agent/issue-{number}"},
          "resource": {"provider": "git", "config": {"checkout": "/Users/me/Code/web", "mode": "work", "copy": [".env"], "setup": "npm ci", "setup_when": ["package-lock.json"]}}},

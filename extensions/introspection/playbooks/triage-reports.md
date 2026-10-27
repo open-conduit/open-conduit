@@ -5,7 +5,7 @@ description: Act on the issue reports and problems agents have filed in this sco
 
 # Triage issue reports
 
-Agents report each defect they hit with `introspection.report-issue`: a `kind` (`env`, `docs`, `tooling`, `service`, `runtime` or `other`), a one-line `title` and a `body` with what they tried, the exact error, their workaround and where they think the fix belongs. Each report is a durable Event linked to the execution that hit it; the host watch reports the machine running out of load, memory or disk the same way. Agents on GitHub issues also log the problems they work around with `github.problem` (a note with a `kind` and a body). Find the causes behind them and act on each one.
+Agents report each defect they hit with `introspection.report-issue`: a `kind` (`env`, `docs`, `tooling`, `service`, `runtime` or `other`), a one-line `title` and a `body` with what they tried, the exact error, their workaround and where they think the fix belongs. Each report is a durable Event linked to the execution that hit it; the host watch reports the machine running out of load, memory or disk the same way. Agents also log the problems they work around with `introspection.problem` (a note with a `kind` and a body). Find the causes behind them and act on each one.
 
 ## Your tools
 

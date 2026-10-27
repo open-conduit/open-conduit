@@ -1,4 +1,4 @@
-package playbooks
+package playbooks_test
 
 import (
 	"regexp"
@@ -7,13 +7,14 @@ import (
 	"testing"
 
 	is "github.com/open-conduit/open-conduit/extensions/introspection"
+	"github.com/open-conduit/open-conduit/extensions/introspection/playbooks"
 )
 
 // Every introspection operation a playbook names is registered, and none
 // tells the agent to use Open Supervisor's commands.
 func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 	for _, name := range []string{"sweep", "triage-reports", "fix-report"} {
-		text, ok := All()[name]
+		text, ok := playbooks.All()[name]
 		if !ok || !strings.HasPrefix(text, "---\nname: "+name+"\n") {
 			t.Fatalf("no %s playbook", name)
 		}
@@ -33,15 +34,15 @@ func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 			}
 		}
 	}
-	if len(All()) != 3 {
-		t.Fatalf("playbooks: %d", len(All()))
+	if len(playbooks.All()) != 3 {
+		t.Fatalf("playbooks: %d", len(playbooks.All()))
 	}
 }
 
 // The sweep and triage start from the evidence; only the triage requests
 // fixes, and only the fix resolves the reports a fix covers.
 func TestPlaybookRoles(t *testing.T) {
-	books := All()
+	books := playbooks.All()
 	for _, name := range []string{"sweep", "triage-reports"} {
 		if !strings.Contains(books[name], "`"+is.OpEvidence+"`") || !strings.Contains(books[name], "`"+is.OpNotesResolve+"`") {
 			t.Errorf("%s does not start from the evidence and resolve notes", name)

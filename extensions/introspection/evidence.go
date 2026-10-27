@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -19,27 +20,28 @@ import (
 // start from OpEvidence: the scope's open reports and the notes no earlier
 // run handled, grouped by kind and leading line with counts, the Work they
 // came from and sample bodies, plus the run's settings (v1's message lines).
-// Notes are read from the configured namespaces through public storage (the
-// GitHub tools write `github.notes`); the extension never writes another
-// extension's namespace, so handling a note records it in HandledNamespace.
+// Notes are the extension's own (OpCorrection, OpProblem) plus any other
+// namespaces an entry names, read through public storage; the extension
+// never writes another extension's namespace, so handling a note records it
+// in HandledNamespace.
 
 // HandledNamespace records the notes a sweep or triage handled.
 const HandledNamespace = "introspection.notes"
 
-// Note is an agent's note as the notes namespaces hold it (the GitHub tools'
-// record shape: kind correction or problem, area the correction's area or
-// the problem's kind).
+// Note is an agent's note as the notes namespaces hold it: kind correction
+// or problem, area the correction's area or the problem's kind. Key is the
+// logging Work's correlation key.
 type Note struct {
 	// ID is "<namespace>:<key>", set when read.
-	ID        string    `json:"id"`
-	Kind      string    `json:"kind"`
-	Area      string    `json:"area"`
-	Scope     string    `json:"scope"`
-	Work      string    `json:"work"`
-	Execution string    `json:"execution"`
-	Issue     int       `json:"issue,omitempty"`
-	Body      string    `json:"body"`
-	At        time.Time `json:"at"`
+	ID        string                 `json:"id"`
+	Kind      string                 `json:"kind"`
+	Area      string                 `json:"area"`
+	Scope     string                 `json:"scope"`
+	Work      string                 `json:"work"`
+	Execution string                 `json:"execution"`
+	Key       *domain.CorrelationKey `json:"key,omitempty"`
+	Body      string                 `json:"body"`
+	At        time.Time              `json:"at"`
 }
 
 // Note kinds.
@@ -114,18 +116,18 @@ type Group struct {
 	Lead  string `json:"lead"`
 	Count int    `json:"count"`
 	// IDs are the report or note IDs, Works the distinct Work they came
-	// from, Issues the issue numbers notes name.
-	IDs     []string  `json:"ids"`
-	Works   []string  `json:"works"`
-	Issues  []int     `json:"issues,omitempty"`
-	First   time.Time `json:"first"`
-	Last    time.Time `json:"last"`
-	Samples []string  `json:"samples"`
+	// from, Keys the distinct correlation keys of the Work notes came from.
+	IDs     []string                `json:"ids"`
+	Works   []string                `json:"works"`
+	Keys    []domain.CorrelationKey `json:"keys,omitempty"`
+	First   time.Time               `json:"first"`
+	Last    time.Time               `json:"last"`
+	Samples []string                `json:"samples"`
 }
 
 type item struct {
 	id, kind, lead, work, body string
-	issue                      int
+	key                        *domain.CorrelationKey
 	at                         time.Time
 }
 
@@ -159,8 +161,8 @@ func groups(items []item) []Group {
 		if it.work != "" && !contains(g.Works, it.work) {
 			g.Works = append(g.Works, it.work)
 		}
-		if it.issue > 0 && !containsInt(g.Issues, it.issue) {
-			g.Issues = append(g.Issues, it.issue)
+		if it.key != nil && !slices.Contains(g.Keys, *it.key) {
+			g.Keys = append(g.Keys, *it.key)
 		}
 		if it.at.After(g.Last) {
 			g.Last = it.at
@@ -181,15 +183,6 @@ func groups(items []item) []Group {
 }
 
 func contains(xs []string, x string) bool {
-	for _, y := range xs {
-		if y == x {
-			return true
-		}
-	}
-	return false
-}
-
-func containsInt(xs []int, x int) bool {
 	for _, y := range xs {
 		if y == x {
 			return true
@@ -258,7 +251,7 @@ func Aggregate(tx storage.Tx, cfg Config, scope domain.ID, run string) (Evidence
 		}
 		items := make([]item, 0, len(notes))
 		for _, n := range notes {
-			items = append(items, item{id: n.ID, kind: n.Area, lead: lead(n.Body), work: n.Work, body: n.Body, issue: n.Issue, at: n.At})
+			items = append(items, item{id: n.ID, kind: n.Area, lead: lead(n.Body), work: n.Work, body: n.Body, key: n.Key, at: n.At})
 		}
 		return &Section{Count: len(notes), Groups: groups(items)}, nil
 	}

@@ -3,19 +3,23 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/extensions/human"
+	"github.com/open-conduit/open-conduit/extensions/introspection"
 	"github.com/open-conduit/open-conduit/extensions/posthog"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/observability"
 	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // In-process extensions (issue #66). Each surface is composed by iterating
@@ -27,7 +31,7 @@ import (
 // firstParty is the list of first-party in-process extensions. Adding one
 // touches its own package and this list.
 func firstParty() []inproc.Extension {
-	return []inproc.Extension{posthog.New(), human.New()}
+	return []inproc.Extension{posthog.New(), human.New(), introspection.New()}
 }
 
 // typeSets are an extension's own entry and connection types: what its
@@ -104,7 +108,8 @@ func inprocHandlers(into map[string]extension.RouteHandler, xs []inproc.Extensio
 
 // startInproc starts each extension behind its host services. Secrets are
 // scoped to the extension's own entries and connections (B05), exactly as
-// for an installed package.
+// for an installed package, and acceptance, timers and cancellation to its
+// own Event families, recurrence kinds and Work kinds.
 func (d *daemon) startInproc(ctx context.Context) error {
 	for _, x := range d.inproc {
 		s, ok := x.(inproc.Starter)
@@ -113,14 +118,146 @@ func (d *daemon) startInproc(ctx context.Context) error {
 		}
 		name := x.Name()
 		entries, connections := typeSets(x)
+		own := ownership{x: x}
 		h := inproc.Host{Store: d.coord, Now: d.now, Log: d.log.With("extension", name),
-			Secrets: d.scopedSecrets(entries, connections),
-			Report:  func(code string) { d.report(name, "", code) }}
+			Secrets:  d.scopedSecrets(entries, connections),
+			Report:   func(code string) { d.report(name, "", code) },
+			Nudge:    d.poke,
+			StateDir: d.o.StateDir, DryRun: d.o.DryRun,
+			AcceptInTx: func(tx storage.Tx, scope domain.ID, e domain.Event) (domain.AcceptedEvent, bool, error) {
+				if !own.family(e.Type) {
+					return domain.AcceptedEvent{}, false, inproc.ErrNotOwn
+				}
+				return runtime.AcceptInTx(tx, scope, e)
+			},
+			Timers: inprocTimers{d: d, own: own},
+			CancelWork: func(ctx context.Context, work domain.ID, expected domain.Revision, reason, key string) (domain.ID, error) {
+				var w domain.Work
+				if err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+					var err error
+					w, err = tx.Work(work)
+					return err
+				}); err != nil {
+					return "", err
+				}
+				if !own.workKind(w.Kind) {
+					return "", inproc.ErrNotOwn
+				}
+				id, err := d.current.Load().control.CancelWork(ctx, work, expected, reason, name+"/"+key)
+				if errors.Is(err, runtime.ErrRevision) {
+					err = fmt.Errorf("%w: %w", storage.ErrConflict, err)
+				}
+				return id, err
+			},
+			Capture: d.telemetry.Capture,
+		}
 		if err := s.Start(ctx, h); err != nil {
 			return fmt.Errorf("extension %s: %w", name, err)
 		}
 	}
 	return nil
+}
+
+// ownership answers what an extension declared as its own.
+type ownership struct{ x inproc.Extension }
+
+// family: an extension's Event families are the types named after it.
+func (o ownership) family(eventType string) bool {
+	return strings.HasPrefix(eventType, o.x.Name()+".")
+}
+
+func (o ownership) recurrence(kind string) bool {
+	r, ok := o.x.(inproc.Recurring)
+	if !ok {
+		return false
+	}
+	_, own := r.Recurrences()[kind]
+	return own
+}
+
+func (o ownership) workKind(kind string) bool {
+	k, ok := o.x.(inproc.WorkKinder)
+	if !ok {
+		return false
+	}
+	for _, w := range k.WorkKinds() {
+		if w.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// errNoGeneration refuses a timer call before the first generation is
+// built; the extension's next pass retries.
+var errNoGeneration = errors.New("no active generation")
+
+// inprocTimers arms an extension's own recurrences through the current
+// generation's timers.
+type inprocTimers struct {
+	d   *daemon
+	own ownership
+}
+
+func (t inprocTimers) ArmRecurrence(ctx context.Context, scope domain.ID, timer domain.Timer, expected domain.Revision, kind string, spec []byte) error {
+	if !t.own.recurrence(kind) || !t.own.family(timer.Event.Type) {
+		return inproc.ErrNotOwn
+	}
+	c := t.d.current.Load()
+	if c == nil {
+		return errNoGeneration
+	}
+	return c.timers.ArmRecurrence(ctx, scope, timer, expected, kind, spec)
+}
+
+func (t inprocTimers) Cancel(ctx context.Context, id domain.ID, expected domain.Revision) error {
+	own := true
+	if err := t.d.coord.Transact(ctx, storage.Guard{Now: t.d.now()}, func(tx storage.Tx) error {
+		timer, err := tx.Timer(id)
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil // cancelling an absent timer is a no-op
+		}
+		own = err == nil && t.own.family(timer.Event.Type)
+		return err
+	}); err != nil {
+		return err
+	}
+	if !own {
+		return inproc.ErrNotOwn
+	}
+	c := t.d.current.Load()
+	if c == nil {
+		return errNoGeneration
+	}
+	return c.timers.Cancel(ctx, id, expected)
+}
+
+// workKinds are the scheduler's Work kind policies: scheduled jobs and the
+// in-process extensions' own kinds.
+func workKinds(xs []inproc.Extension) map[string]runtime.WorkKindPolicy {
+	kinds := scheduleWorkKinds()
+	for _, x := range xs {
+		if k, ok := x.(inproc.WorkKinder); ok {
+			for _, w := range k.WorkKinds() {
+				kinds[w.Kind] = runtime.WorkKindPolicy{Standing: w.Standing, Trigger: w.Trigger}
+			}
+		}
+	}
+	return kinds
+}
+
+// recurrences are the timer recurrences: scheduled jobs and the in-process
+// extensions' own kinds.
+func recurrences(xs []inproc.Extension) map[string]runtime.RecurrenceFunc {
+	r := scheduleRecurrences()
+	for _, x := range xs {
+		if rc, ok := x.(inproc.Recurring); ok {
+			for kind, f := range rc.Recurrences() {
+				r[kind] = runtime.RecurrenceFunc(f)
+			}
+		}
+	}
+	return r
 }
 
 func (d *daemon) stopInproc() {
@@ -143,10 +280,15 @@ func (d *daemon) configureInproc(ctx context.Context) {
 }
 
 // registerInprocTools registers each extension's toolbelt registration; one
-// with neither operations nor event families adds nothing and is skipped.
-func (d *daemon) registerInprocTools(belt *runtime.Toolbelt) error {
+// with neither operations nor event families adds nothing and is skipped,
+// as is an entry-gated one no enabled scope of the generation has an entry
+// for.
+func (d *daemon) registerInprocTools(belt *runtime.Toolbelt, s *config.Snapshot) error {
 	for _, x := range d.inproc {
 		if t, ok := x.(inproc.Tooled); ok {
+			if _, gated := x.(inproc.EntryGated); gated && !hasEntry(s, x) {
+				continue
+			}
 			reg := t.Registration()
 			if len(reg.Operations) == 0 && len(reg.EventTypes) == 0 {
 				continue
@@ -157,6 +299,27 @@ func (d *daemon) registerInprocTools(belt *runtime.Toolbelt) error {
 		}
 	}
 	return nil
+}
+
+// hasEntry reports whether an enabled scope of the generation has an entry
+// of one of the extension's types.
+func hasEntry(s *config.Snapshot, x inproc.Extension) bool {
+	entries, _ := typeSets(x)
+	if s == nil {
+		return false
+	}
+	for _, id := range s.Order {
+		scope := s.Scopes[id]
+		if scope == nil || !scope.Enabled {
+			continue
+		}
+		for _, e := range scope.Extensions {
+			if entries[e.Type] {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (d *daemon) inprocActions(scope domain.ID, out map[string]extension.ActionProvider) {

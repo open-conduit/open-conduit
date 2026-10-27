@@ -13,17 +13,11 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 )
 
-// DefaultNotes is the coordination KV namespace of the agents' notes the
-// sweep and triage read when an entry names none: the GitHub tools'
-// corrections and problems (03-04). It is a data contract (a namespace and
-// a JSON record shape), not an import.
-const DefaultNotes = "github.notes"
-
 // Config is an entry's opaque config. An empty object enables reporting
 // alone (03-08); each optional block adds one feature.
 type Config struct {
 	// Notes are the KV namespaces whose records (Note) sweep and triage
-	// read; default [DefaultNotes].
+	// read besides NotesNamespace (none by default).
 	Notes []string `json:"notes,omitempty"`
 	// Sweep and Triage schedule the daily runs (absent: not scheduled; each
 	// can still run by hand as ordinary Work).
@@ -93,12 +87,16 @@ func (h HostWatch) Interval() time.Duration {
 	return time.Minute
 }
 
-// NoteNamespaces are the namespaces sweep and triage read.
+// NoteNamespaces are the namespaces sweep and triage read: the extension's
+// own, then the entry's.
 func (c Config) NoteNamespaces() []string {
-	if len(c.Notes) == 0 {
-		return []string{DefaultNotes}
+	out := []string{NotesNamespace}
+	for _, ns := range c.Notes {
+		if !slices.Contains(out, ns) {
+			out = append(out, ns)
+		}
 	}
-	return c.Notes
+	return out
 }
 
 // ParseConfig decodes and validates an entry's config.
@@ -177,6 +175,13 @@ func ValidateExtension(config json.RawMessage, secretNames []string) error {
 // (core.config.scope.v1 metadata): ok only when the scope is enabled and has
 // one.
 func scopeEntry(scope domain.Scope) (Config, bool) {
+	c, enabled, ok := storedEntry(scope)
+	return c, ok && enabled
+}
+
+// storedEntry is a stored scope's `introspection` entry, if it has one, and
+// whether the scope is enabled. An invalid entry reads as an empty config.
+func storedEntry(scope domain.Scope) (Config, bool, bool) {
 	var meta struct {
 		Enabled    bool `json:"enabled"`
 		Extensions []struct {
@@ -184,19 +189,19 @@ func scopeEntry(scope domain.Scope) (Config, bool) {
 			Config json.RawMessage `json:"config"`
 		} `json:"extensions"`
 	}
-	if len(scope.Config.Data) == 0 || json.Unmarshal(scope.Config.Data, &meta) != nil || !meta.Enabled {
-		return Config{}, false
+	if len(scope.Config.Data) == 0 || json.Unmarshal(scope.Config.Data, &meta) != nil {
+		return Config{}, false, false
 	}
 	for _, x := range meta.Extensions {
 		if x.Type == Type {
 			c, err := ParseConfig(x.Config)
 			if err != nil {
-				return Config{}, true
+				return Config{}, meta.Enabled, true
 			}
-			return c, true
+			return c, meta.Enabled, true
 		}
 	}
-	return Config{}, false
+	return Config{}, meta.Enabled, false
 }
 
 // Enabled reports whether the effective scope (core.config.scope.v1
