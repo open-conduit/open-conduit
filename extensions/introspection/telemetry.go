@@ -29,9 +29,10 @@ const (
 	EventHostAlert   = "host_alert"
 )
 
-// Sink receives telemetry events.
+// Sink receives telemetry events. scope is the event's scope, "" for one
+// about the machine (a host reading).
 type Sink interface {
-	Capture(ctx context.Context, name string, at time.Time, props map[string]any) error
+	Capture(ctx context.Context, scope, name string, at time.Time, props map[string]any) error
 }
 
 // JSONSink writes one JSON line per event.
@@ -43,8 +44,16 @@ type JSONSink struct {
 // NewJSONSink writes to w.
 func NewJSONSink(w io.Writer) *JSONSink { return &JSONSink{w: w} }
 
-// Capture writes the event.
-func (s *JSONSink) Capture(_ context.Context, name string, at time.Time, props map[string]any) error {
+// Capture writes the event, with its scope (when it has one) among the
+// properties.
+func (s *JSONSink) Capture(_ context.Context, scope, name string, at time.Time, props map[string]any) error {
+	if scope != "" {
+		all := map[string]any{"scope": scope}
+		for k, v := range props {
+			all[k] = v
+		}
+		props = all
+	}
 	line, err := json.Marshal(map[string]any{"event": name, "at": at.UTC(), "properties": props})
 	if err != nil {
 		return err
@@ -75,14 +84,14 @@ func (x *Exporter) Export(ctx context.Context, records []observability.Record) e
 		if !ok {
 			continue
 		}
-		props := map[string]any{"scope": string(r.Correlation.ScopeID), "event_id": string(r.Correlation.EventID), "event_type": r.Attributes["event.type"], "source": r.Attributes["event.source"]}
+		props := map[string]any{"event_id": string(r.Correlation.EventID), "event_type": r.Attributes["event.type"], "source": r.Attributes["event.source"]}
 		if c := r.Attributes["event.causation_id"]; c != "" {
 			props["causation_id"] = c
 		}
 		if w := r.Correlation.WorkID; w != "" {
 			props["work_id"] = string(w)
 		}
-		if err := x.Sink.Capture(ctx, name, r.At, props); err != nil {
+		if err := x.Sink.Capture(ctx, string(r.Correlation.ScopeID), name, r.At, props); err != nil {
 			return err
 		}
 	}

@@ -63,7 +63,7 @@ Some couplings exist only as bootstrap glue between first-party packages. They h
 
 - GitHub `job:` waits resolve schedule job keys (`scheduleJob`), and the schedule translator decodes GitHub delivery payloads;
 - Bitbucket reads the tracker's reopen generations;
-- PostHog receives introspection telemetry through a fan-out;
+- PostHog receives the host's telemetry events through the `inproc.Sink` surface, with the scope as an explicit argument;
 - bootstrap parses Slack thread keys for the socket's active-thread filter. That one can move into the extension as a `state.works` read.
 
 These stay in-process, which the design allows: first-party extensions run in-process behind the public interfaces. They also decide which first-party integrations can run as a subprocess package without change.

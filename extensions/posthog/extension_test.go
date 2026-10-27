@@ -34,15 +34,23 @@ func TestExtensionConfigureAndChecks(t *testing.T) {
 	if r := x.authCheck(context.Background()); r.Code != "posthog_connection_type" || len(asked) != 1 || asked[0] != "eng/ph" {
 		t.Fatalf("auth check %+v, secrets asked %v", r, asked)
 	}
-	if err := x.Capture(context.Background(), "host_metrics", time.Now(), map[string]any{"scope": "eng"}); err != nil || len(c.events) != 1 {
+	if err := x.Capture(context.Background(), "eng", "host_metrics", time.Now(), map[string]any{}); err != nil || len(c.events) != 1 {
 		t.Fatalf("capture: %v, %d sent", err, len(c.events))
 	}
 	c.status = http.StatusBadRequest
-	_ = x.Capture(context.Background(), "host_metrics", time.Now(), map[string]any{"scope": "eng"})
+	_ = x.Capture(context.Background(), "eng", "host_metrics", time.Now(), map[string]any{})
 	params.Entries, params.DryRun = params.Entries[:1], false
 	x.Configure(context.Background(), params)
 	if r := x.check(context.Background()); r.Status != inproc.CheckWarn || r.Code != "capture_failing" {
 		t.Fatalf("a failed capture warns: %+v", r)
+	}
+	x.mu.Lock()
+	x.failing = ""
+	x.mu.Unlock()
+	params.Entries[0].Config = json.RawMessage(`{"introspection":false}`)
+	x.Configure(context.Background(), params)
+	if r := x.check(context.Background()); r.Status != inproc.CheckWarn || r.Code != "renamed_setting" || len(r.Items) != 2 {
+		t.Fatalf("the old setting name warns: %+v", r)
 	}
 	params.DryRun = true
 	x.Configure(context.Background(), params)

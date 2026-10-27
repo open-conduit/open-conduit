@@ -205,7 +205,7 @@ func TestHostWatcher(t *testing.T) {
 
 type captured struct{ names []string }
 
-func (c *captured) Capture(_ context.Context, name string, _ time.Time, _ map[string]any) error {
+func (c *captured) Capture(_ context.Context, _, name string, _ time.Time, _ map[string]any) error {
 	c.names = append(c.names, name)
 	return nil
 }

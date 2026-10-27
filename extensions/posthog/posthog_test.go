@@ -25,8 +25,15 @@ func TestConfig(t *testing.T) {
 		t.Fatal(c, err)
 	}
 	s, err := ParseExtension([]byte(`{"turns":false}`))
-	if err != nil || s.Turns || !s.Introspection {
+	if err != nil || s.Turns || !s.TelemetryEvents || len(s.OldNames) != 0 {
 		t.Fatal(s, err)
+	}
+	// The old name is accepted for one release and reported; both is a mistake.
+	if s, err = ParseExtension([]byte(`{"introspection":false}`)); err != nil || s.TelemetryEvents || len(s.OldNames) != 1 || Renamed[s.OldNames[0]] != "telemetry_events" {
+		t.Fatal(s, err)
+	}
+	if ValidateExtension(json.RawMessage(`{"introspection":true,"telemetry_events":true}`), nil) == nil {
+		t.Fatal("old and new name together")
 	}
 	if ValidateExtension(json.RawMessage(`{"other":1}`), nil) == nil {
 		t.Fatal("unknown field")
@@ -87,7 +94,7 @@ func TestExporterAndFanout(t *testing.T) {
 	e := c.events[0]
 	props := e["properties"].(map[string]any)
 	if e["event"] != EventTurn || e["api_key"] != "phc_x" || e["distinct_id"] != "me" || props["outcome"] != "completed" || props["duration_ms"] != 1500.0 ||
-		props["input_tokens"] != 10.0 || props["cost"] != 0.25 || props["executor"] != "claude-code" || props["$lib"] != "open-conduit" {
+		props["input_tokens"] != 10.0 || props["cost"] != 0.25 || props["executor"] != "claude-code" || props["$lib"] != "open-conduit" || props["scope"] != "eng" {
 		t.Fatalf("event %v", e)
 	}
 	c.status = http.StatusBadRequest
@@ -98,20 +105,31 @@ func TestExporterAndFanout(t *testing.T) {
 	primary := &capture{}
 	f := &Fanout{Primary: sinkFunc(func(name string) { primary.events = append(primary.events, map[string]any{"event": name}) }),
 		Targets: func() []Target {
-			return []Target{{Scope: "eng", Settings: Settings{Introspection: true}, Sink: sink}, {Scope: "ops", Settings: Settings{Introspection: false}, Sink: sink}}
+			return []Target{{Scope: "eng", Settings: Settings{TelemetryEvents: true}, Sink: sink}, {Scope: "ops", Settings: Settings{TelemetryEvents: false}, Sink: sink},
+				{Scope: "web", Settings: Settings{TelemetryEvents: true}, Sink: sink}}
 		}}
 	before := len(c.events)
-	if err := f.Capture(context.Background(), "host_metrics", time.Now(), map[string]any{"load": 1}); err != nil {
+	if err := f.Capture(context.Background(), "", "host_metrics", time.Now(), map[string]any{"load": 1}); err != nil {
 		t.Fatal(err)
 	}
-	if len(primary.events) != 1 || len(c.events) != before+1 {
-		t.Fatalf("fanout: primary %d posthog %d", len(primary.events), len(c.events)-before)
+	if len(primary.events) != 1 || len(c.events) != before+2 {
+		t.Fatalf("an event with no scope goes to every entry that takes them: primary %d posthog %d", len(primary.events), len(c.events)-before)
+	}
+	if _, ok := c.events[before]["properties"].(map[string]any)["scope"]; ok {
+		t.Fatal("no scope, no scope property")
+	}
+	before = len(c.events)
+	if err := f.Capture(context.Background(), "web", "introspection_report", time.Now(), map[string]any{}); err != nil {
+		t.Fatal(err)
+	}
+	if len(c.events) != before+1 || c.events[before]["properties"].(map[string]any)["scope"] != "web" {
+		t.Fatalf("a scoped event goes to its scope's entries, with its scope: %v", c.events[before:])
 	}
 }
 
 type sinkFunc func(string)
 
-func (s sinkFunc) Capture(_ context.Context, name string, _ time.Time, _ map[string]any) error {
+func (s sinkFunc) Capture(_ context.Context, _, name string, _ time.Time, _ map[string]any) error {
 	s(name)
 	return nil
 }

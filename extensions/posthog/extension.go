@@ -159,8 +159,8 @@ func (x *Extension) Exporter() observability.Exporter {
 }
 
 // Capture forwards a telemetry event to every entry that takes them.
-func (x *Extension) Capture(ctx context.Context, name string, at time.Time, props map[string]any) error {
-	return x.fanout.Capture(ctx, name, at, props)
+func (x *Extension) Capture(ctx context.Context, scope, name string, at time.Time, props map[string]any) error {
+	return x.fanout.Capture(ctx, scope, name, at, props)
 }
 
 func (x *Extension) Checks() []inproc.Check {
@@ -186,8 +186,8 @@ func (x *Extension) check(context.Context) inproc.CheckResult {
 		if e.settings.Turns {
 			parts = append(parts, "agent_turn events")
 		}
-		if e.settings.Introspection {
-			parts = append(parts, "introspection telemetry")
+		if e.settings.TelemetryEvents {
+			parts = append(parts, "host telemetry events")
 		}
 		if dry {
 			parts = append(parts, "dry run (nothing sent)")
@@ -197,11 +197,17 @@ func (x *Extension) check(context.Context) inproc.CheckResult {
 			what = strings.Join(parts, ", ")
 		}
 		check.Items = append(check.Items, item+what)
+		for _, old := range e.settings.OldNames {
+			if check.Status == inproc.CheckOK {
+				check.Status, check.Code = inproc.CheckWarn, "renamed_setting"
+			}
+			check.Items = append(check.Items, item+"`"+old+"` is now `"+Renamed[old]+"`; the old name is accepted for one release (open-conduit migrate upgrade renames it)")
+		}
 	}
 	x.mu.Lock()
 	failing := x.failing
 	x.mu.Unlock()
-	if failing != "" && check.Status == inproc.CheckOK {
+	if failing != "" && check.Status != inproc.CheckFail {
 		check.Status, check.Code = inproc.CheckWarn, "capture_failing"
 		check.Items = append(check.Items, "last capture failed: "+failing)
 	}

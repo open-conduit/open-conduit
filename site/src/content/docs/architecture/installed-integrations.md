@@ -69,10 +69,10 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 
 ## PostHog
 
-[`extensions/posthog`](https://github.com/open-conduit/open-conduit/tree/main/extensions/posthog) is configured by a `posthog` connection (`host`, `distinct_id`, secret `token` = `phc_…`) and a non-ingress `posthog` entry in a scope (`turns`, `introspection`, both default true).
+[`extensions/posthog`](https://github.com/open-conduit/open-conduit/tree/main/extensions/posthog) is configured by a `posthog` connection (`host`, `distinct_id`, secret `token` = `phc_…`) and a non-ingress `posthog` entry in a scope (`turns`, `telemetry_events`, both default true). `telemetry_events` was called `introspection` before. The old name is still accepted for one release: doctor warns `renamed_setting` and `config check` warns too. `open-conduit migrate upgrade [--write]` renames it in place.
 
 - **Exporter.** It is on the observability pipeline. It sends `agent_turn` for each finished execution of the entry's scope: outcome, attempt, executor, work kind, duration, tokens and cost. A failing PostHog loses telemetry (counted, reported as doctor `capture_failing`) and never delays the runtime.
-- **Introspection events.** The extension's telemetry events go to a fan-out sink: the JSON log first, then every PostHog entry that takes them.
+- **Host telemetry events.** The host writes its telemetry events (reports, fixes, host readings) to its JSON log, then hands each one to every extension implementing `inproc.Sink`: `Capture(ctx, scope, name, at, props)`. `scope` is the event's scope, or `""` for one about the machine, and `props` never carry it. PostHog sends a scoped event to that scope's entries that set `telemetry_events`, and an unscoped one to every such entry. It adds the scope as the `scope` property.
 - **Dry run.** A daemon dry run sends nothing.
 
 ## Composition, doctor, setup and dry run

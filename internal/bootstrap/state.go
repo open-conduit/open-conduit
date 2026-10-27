@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extensions/posthog"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
@@ -58,6 +59,37 @@ func Migrate(r cli.MigrateRequest) (cli.MigrateResult, error) {
 		out.Secrets = append(out.Secrets, cli.MigrateSecret(s))
 	}
 	return out, nil
+}
+
+// renames are the extension settings this release renamed, from each
+// extension's own table.
+var renames = migrate.Renames{posthog.Type: posthog.Renamed}
+
+// Upgrade renames them in an Open Conduit config (`migrate upgrade`).
+func Upgrade(config []byte) (cli.MigrateResult, error) {
+	res, err := migrate.Upgrade(config, renames)
+	if err != nil {
+		return cli.MigrateResult{}, err
+	}
+	out := cli.MigrateResult{Config: res.Config, Scopes: res.Scopes, Items: []cli.MigrateItem{}, Secrets: []cli.MigrateSecret{}}
+	for _, it := range res.Items {
+		out.Items = append(out.Items, cli.MigrateItem(it))
+	}
+	return out, nil
+}
+
+// RenamedWarnings is one warning per renamed setting a config still uses,
+// for `config check` and setup; the old names work for one release.
+func RenamedWarnings(config []byte) []string {
+	res, err := migrate.Upgrade(config, renames)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	for _, it := range res.Items {
+		out = append(out, it.Path+" is a renamed setting ("+it.Message+"); the old name works for one release: run open-conduit migrate upgrade")
+	}
+	return out
 }
 
 // localZone is the machine's IANA zone from TZ or /etc/localtime, else "".

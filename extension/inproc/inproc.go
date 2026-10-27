@@ -172,6 +172,8 @@ type Exporting interface {
 
 // Sink extensions receive the named telemetry events the host writes to its
 // telemetry events log, besides that log. A failure never fails the log.
+// scope is the scope the event belongs to, "" for one about the machine
+// (a host reading); props never carry it.
 type Sink interface {
-	Capture(ctx context.Context, name string, at time.Time, props map[string]any) error
+	Capture(ctx context.Context, scope, name string, at time.Time, props map[string]any) error
 }

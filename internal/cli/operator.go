@@ -73,6 +73,9 @@ type Env struct {
 	// offline backup, restore, diagnosis and credential recovery. Only the
 	// open-conduit entrypoint supplies them.
 	Migrate func(MigrateRequest) (MigrateResult, error)
+	// Upgrade renames the extension settings a release renamed in an Open
+	// Conduit config (`migrate upgrade`), keeping the rest of the file.
+	Upgrade func(config []byte) (MigrateResult, error)
 	State   *StateOps
 	// Service runs the background service commands and doctor's service
 	// check; only the open-conduit entrypoint supplies it.
@@ -144,6 +147,7 @@ Commands:
   auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
   auth recover               (daemon stopped) revoke every operator credential and write a fresh token file
   migrate config --from V1_CONFIG [--out FILE | --write] [--force] [--no-repo-files] [--time-zone ZONE] [--shell-jobs] [--detached-timeout S] [--json]
+  migrate upgrade [--config FILE] [--write] [--json]
                              convert an Open Supervisor config (preview unless --out/--write; v1 files are never modified)
   backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR   (daemon stopped; restore writes a new state directory)
   state check [--json]       (daemon stopped) diagnose the state directory: permissions, schema, integrity, artifacts, drain status
