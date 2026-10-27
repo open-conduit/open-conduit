@@ -55,6 +55,7 @@ type managementHarness struct {
 	tokens     chan string
 	secrets    chan map[string]string
 	lock       *management.Lock
+	actions    map[string]extension.ActionProvider
 }
 
 func newManagementHarness(t *testing.T) *managementHarness {
@@ -123,7 +124,8 @@ func newManagementHarness(t *testing.T) *managementHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := management.NewServer(management.Options{Store: db, Artifacts: h.artifacts, Now: h.clock.Now, Control: control, Toolbelt: h.belt, Config: h.configs, Version: "test", InstanceID: "instance-1"})
+	server, err := management.NewServer(management.Options{Store: db, Artifacts: h.artifacts, Now: h.clock.Now, Control: control, Toolbelt: h.belt, Config: h.configs, Version: "test", InstanceID: "instance-1",
+		Actions: func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions }})
 	if err != nil {
 		t.Fatal(err)
 	}

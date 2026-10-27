@@ -778,6 +778,20 @@ func (d *daemon) extensionAnnotations(ctx context.Context, w domain.Work) [][3]s
 	return out
 }
 
+// extensionActions are the action providers of the packages a scope's
+// current configuration uses, by package name.
+func (d *daemon) extensionActions(scope domain.ID, out map[string]extension.ActionProvider) {
+	s, _ := d.extensionSnapshot()
+	if s == nil || s.Scopes[scope] == nil || !s.Scopes[scope].Enabled {
+		return
+	}
+	for _, r := range d.extensionRemotes() {
+		if p, ok := r.Actions(); ok && usesExtension(s.Scopes[scope], r.Manifest()) {
+			out[r.Process().Name()] = p
+		}
+	}
+}
+
 // extensionRender renders an Event through the package that owns its
 // family, for agent prompts; false falls back to generic rendering.
 func (d *daemon) extensionRender(e domain.Event) (string, bool) {
