@@ -5,7 +5,9 @@
 # GitHub release with the same notes and, when the HOMEBREW_TAP_TOKEN secret
 # is set, updates the open-conduit/homebrew-tap cask. With no feat, fix or
 # breaking commit since the last tag, it releases nothing. The full checks
-# run first, on the exact commit being released.
+# run first, on the exact commit being released. Releases are built with the
+# current stable Go, not the go.mod minimum, which no longer gets security fixes
+# (B06); CI still tests the minimum.
 name: release
 on:
   workflow_dispatch:
@@ -26,7 +28,7 @@ jobs:
           fetch-depth: 0
       - uses: actions/setup-go@v7
         with:
-          go-version-file: go.mod
+          go-version: stable
       - uses: actions/setup-python@v7
         with:
           python-version: '3.12'

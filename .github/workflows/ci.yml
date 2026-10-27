@@ -100,7 +100,7 @@ jobs:
       - run: make docs-check
   # Packaging breaks show up here, before anyone tags: every platform's
   # archive, the checksums and the Homebrew cask, built and smoke-tested
-  # without publishing anything.
+  # without publishing anything, with the same stable Go the release uses.
   release-snapshot:
     needs: changes
     runs-on: ubuntu-latest
@@ -116,7 +116,7 @@ jobs:
       - uses: actions/setup-go@v7
         if: env.RUN == 'true'
         with:
-          go-version-file: go.mod
+          go-version: stable
           cache: true
       - uses: goreleaser/goreleaser-action@v7
         if: env.RUN == 'true'

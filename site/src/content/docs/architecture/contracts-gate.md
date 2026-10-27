@@ -36,7 +36,7 @@ On a pull request, CI first classifies the changed files. The required jobs alwa
 
 Open Conduit targets Darwin and Linux on amd64 and arm64, and deliberately does not support Windows, because B05 specifies Unix sockets and ownership/mode enforcement. Windows support requires a local transport/auth/permissions decision and equivalent tests first.
 
-The compatibility minimum is not a claim that an old toolchain remains security-supported; deployment builds must use a maintained toolchain. Go 1.24.2 remains useful as an explicit API/language compatibility check.
+The compatibility minimum is not a claim that an old toolchain remains security-supported; deployment builds must use a maintained toolchain. The [release workflow](https://github.com/open-conduit/open-conduit/blob/main/.github/workflows/release.yml) and the release snapshot in CI build with the current stable Go for that reason. Go 1.24.2 remains useful as an explicit API/language compatibility check.
 
 ## Boundary enforcement
 
