@@ -123,6 +123,8 @@ var ErrIncompatiblePackage = errors.New("extproc: the package is incompatible wi
 
 // Install copies a package into root/<name>. Rules:
 //   - the package layout and manifest are valid (ReadPackage);
+//   - its command, when it is a compiled executable, is built for this
+//     host's OS and architecture;
 //   - it speaks a protocol version this host speaks;
 //   - its names conflict neither with in-process registrations nor with
 //     another installed package (atomic, as at discovery);
@@ -135,6 +137,9 @@ var ErrIncompatiblePackage = errors.New("extproc: the package is incompatible wi
 func Install(root, src string, o InstallOptions) (InstallResult, error) {
 	pkg, err := ReadPackage(src)
 	if err != nil {
+		return InstallResult{}, err
+	}
+	if err := checkPlatform(filepath.Join(pkg.Dir, pkg.Manifest.Command[0])); err != nil {
 		return InstallResult{}, err
 	}
 	m := pkg.Manifest
