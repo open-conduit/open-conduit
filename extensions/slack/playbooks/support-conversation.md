@@ -18,6 +18,7 @@ Everything that touches Slack goes through Open Conduit's toolbelt, which alread
 | `slack.context` | | the team, channel, thread and the exact `wait` input for this thread |
 | `slack.thread` | `limit`? | the whole thread, oldest first, each message classed as human, agent or bot |
 | `slack.reply` | `text`, `broadcast`? | reply in the thread (`broadcast` also posts it to the channel) |
+| `human.ask` | `question`, `options`?, `context`?, `deadline`? | ask a person privately (never in the thread) and park until they answer; end the turn after it |
 
 Post every reply with `slack.reply`: it marks the reply as yours, so it is never handed back to you as news, and a retried call never posts twice (give the same `request_id` when you retry). Never post through any other route.
 

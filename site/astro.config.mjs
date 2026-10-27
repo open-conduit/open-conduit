@@ -33,6 +33,7 @@ export default defineConfig({
 						{ label: 'Slack support', slug: 'workflows/slack' },
 						{ label: 'Scheduled jobs', slug: 'workflows/scheduled-jobs' },
 						{ label: 'Introspection', slug: 'workflows/introspection' },
+						{ label: 'Human decisions', slug: 'workflows/human-decisions' },
 					],
 				},
 				{

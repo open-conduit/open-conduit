@@ -32,6 +32,7 @@ import (
 	bb "github.com/open-conduit/open-conduit/extensions/bitbucket"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
+	hu "github.com/open-conduit/open-conduit/extensions/human"
 	is "github.com/open-conduit/open-conduit/extensions/introspection"
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
@@ -146,6 +147,8 @@ type daemon struct {
 	tools          *gh.Tools
 	slackTools     *sl.Tools
 	reports        *is.Tools
+	humanTools     *hu.Tools
+	human          humanState
 	trackerTools   map[string]*tracker.Tools
 	bitbucketTools *bb.Tools
 	external       externalState

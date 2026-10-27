@@ -19,6 +19,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
+	hu "github.com/open-conduit/open-conduit/extensions/human"
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
@@ -43,6 +44,7 @@ func registry(executors map[string]extension.Executor) config.Registry {
 	slackRegistry(&reg)
 	scheduleRegistry(&reg)
 	introspectionRegistry(&reg)
+	humanRegistry(&reg)
 	resourceRegistry(&reg)
 	return reg
 }
@@ -166,6 +168,7 @@ func (d *daemon) annotate(ctx context.Context, w domain.Work) []management.Annot
 	}
 	d.github.mu.Unlock()
 	out := d.capacityAnnotation(ctx, w)
+	out = append(out, d.humanAnnotations(ctx, w)...)
 	for _, a := range d.extensionAnnotations(ctx, w) {
 		out = append(out, management.Annotation{Source: a[0], Name: a[1], Value: a[2]})
 	}
@@ -192,6 +195,9 @@ func (d *daemon) actions(_ context.Context, scope domain.ID) map[string]extensio
 		}
 	}
 	d.github.mu.Unlock()
+	if entry, ok := d.humanEntry(scope); ok {
+		out[entry.Name] = hu.Actions{Store: d.coord, Entry: entry, Now: d.now}
+	}
 	d.extensionActions(scope, out)
 	return out
 }

@@ -59,6 +59,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.projectTrackers(ctx)
 		d.runSlackSockets(ctx)
 		d.projectSlack(ctx)
+		d.syncHuman(ctx)
 		d.manageHooks(ctx)
 		d.reconfigureOnURLChange(ctx)
 		d.runExtensionTasks(ctx)
