@@ -74,4 +74,4 @@ Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes. Pleas
 
 ## License
 
-The repository has no license yet. Take licensing questions to the maintainer in a GitHub issue.
+Open Conduit is released under the [MIT License](LICENSE).

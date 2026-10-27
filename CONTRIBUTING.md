@@ -2,7 +2,7 @@
 
 This guide covers setting up a checkout, the checks a change must pass, and the rules the code follows. [The docs index](docs/README.md) lists the architecture documents behind each part. AI coding agents should also follow [AGENTS.md](AGENTS.md).
 
-The repository has no license yet. Take licensing questions to the maintainer, for example in a GitHub issue, and ask before you start a large change.
+Open Conduit is released under the [MIT License](LICENSE), and contributions are accepted under it. Ask before you start a large change.
 
 To report a vulnerability, follow [SECURITY.md](SECURITY.md). Don't open a public issue for it.
 

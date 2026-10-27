@@ -63,7 +63,6 @@ release:
 # in the cask's own directory beside open-conduit, which resolves its link to
 # find it. Nothing here touches Open Supervisor's cask (open-supervisor in
 # alsiola/homebrew-tap), its binary or its config and state directories.
-# The project is unlicensed, so the cask states no license.
 homebrew_casks:
   - name: open-conduit
     ids: [default]
