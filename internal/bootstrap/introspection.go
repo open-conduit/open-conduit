@@ -271,7 +271,7 @@ func (d *daemon) hostWatch(ctx context.Context) {
 	at := d.now()
 	telemetry := d.introspectionTelemetry()
 	if telemetry {
-		_ = d.introspection.sink.Capture(ctx, is.EventHostMetrics, at, is.HostProps(sample))
+		_ = d.introspection.sink.Capture(ctx, "", is.EventHostMetrics, at, is.HostProps(sample))
 	}
 	// One watcher for the machine; the first watching entry's thresholds
 	// decide (a machine has one set of readings).
@@ -284,7 +284,7 @@ func (d *daemon) hostWatch(ctx context.Context) {
 			if a.Path != "" {
 				props["path"] = a.Path
 			}
-			_ = d.introspection.sink.Capture(ctx, is.EventHostAlert, at, props)
+			_ = d.introspection.sink.Capture(ctx, "", is.EventHostAlert, at, props)
 		}
 		if !a.Over {
 			continue

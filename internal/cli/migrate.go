@@ -115,10 +115,13 @@ func offlineCtx() (context.Context, context.CancelFunc) {
 	return context.WithTimeout(context.Background(), 30*time.Minute)
 }
 
-// migrate implements `migrate config`.
+// migrate implements `migrate config` and `migrate upgrade`.
 func (o *operator) migrate(args []string) int {
+	if len(args) > 0 && args[0] == "upgrade" {
+		return o.upgrade(args[1:])
+	}
 	if len(args) == 0 || args[0] != "config" {
-		return usageError(o.errOut, "expected migrate config --from FILE")
+		return usageError(o.errOut, "expected migrate config --from FILE or migrate upgrade")
 	}
 	fs := flag.NewFlagSet("migrate config", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
@@ -203,6 +206,81 @@ func (o *operator) migrate(args []string) int {
 	o.printMigration(source, res, details, written, target)
 	if !valid {
 		return 1
+	}
+	return 0
+}
+
+// upgrade implements `migrate upgrade`: it renames the extension settings
+// this release renamed in an Open Conduit config, previews the result and,
+// with --write, replaces the file once the result validates.
+func (o *operator) upgrade(args []string) int {
+	fs := flag.NewFlagSet("migrate upgrade", flag.ContinueOnError)
+	fs.SetOutput(io.Discard)
+	file := fs.String("config", "", "")
+	write := fs.Bool("write", false, "")
+	asJSON := fs.Bool("json", false, "")
+	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
+		return usageError(o.errOut, "expected migrate upgrade [--config FILE] [--write] [--json]")
+	}
+	if o.env.Upgrade == nil {
+		return usageError(o.errOut, "upgrade is not available in this binary")
+	}
+	path := o.configPath(*file)
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return o.emit(nil, fmt.Errorf("cannot read %s", path))
+	}
+	res, err := o.env.Upgrade(data)
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	changed := string(res.Config) != string(data)
+	var details []client.Detail
+	if changed && (o.env.ValidateConfig != nil || o.env.ValidateConfigAt != nil) {
+		if details, err = o.validateConfig(path, res.Config); err != nil {
+			return o.emit(nil, fmt.Errorf("config could not be validated: %w", err))
+		}
+	}
+	valid := len(details) == 0
+	written := ""
+	if *write && changed && valid {
+		if err := writePrivate(path, res.Config); err != nil {
+			return o.emit(nil, fmt.Errorf("cannot write %s", path))
+		}
+		written = path
+	}
+	if *asJSON {
+		if details == nil {
+			details = []client.Detail{}
+		}
+		code := o.emit(map[string]any{"config_path": path, "changed": changed, "valid": valid, "diagnostics": details, "written": written, "items": res.Items}, nil)
+		if !valid || code != 0 {
+			return 1
+		}
+		return 0
+	}
+	w := o.out
+	fmt.Fprintf(w, "Open Conduit config: %s\n", path)
+	if len(res.Items) == 0 {
+		fmt.Fprintln(w, "Nothing to upgrade: the config uses no renamed setting.")
+		return 0
+	}
+	for _, it := range res.Items {
+		fmt.Fprintf(w, "  %s: %s: %s\n", it.Level, it.Path, it.Message)
+	}
+	switch {
+	case !valid:
+		fmt.Fprintln(w, "Validation FAILED (offline, against the daemon's registrations):")
+		for _, d := range details {
+			fmt.Fprintf(w, "  %s  %s  %s\n", d.Path, d.Code, d.Message)
+		}
+		fmt.Fprintln(w, "Not written.")
+		return 1
+	case written != "":
+		fmt.Fprintf(w, "Written: %s (0600).\n", written)
+	case changed:
+		fmt.Fprintln(w, "Preview (nothing written; add --write to save):")
+		_, _ = w.Write(redactCommands(res.Config))
 	}
 	return 0
 }

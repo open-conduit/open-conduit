@@ -3,8 +3,8 @@
 // PostHog's capture endpoint directly (nothing else is installed): an
 // `agent_turn` event for every finished execution (outcome, duration,
 // tokens and cost, from the lifecycle records the observability pipeline
-// delivers once each) and, when the introspection extension turns telemetry
-// on, its events (reports, fixes, host readings) too. It is an exporter on
+// delivers once each) and the host's telemetry events (reports, fixes, host
+// readings) too. It is an exporter on
 // the public observability contract: a failing or slow PostHog loses
 // telemetry (counted by the pipeline) and never delays the runtime.
 package posthog
@@ -95,18 +95,29 @@ func ValidateConnection(data json.RawMessage) error {
 }
 
 // ExtensionConfig is a `posthog` extension entry: it sends the telemetry of
-// its scope (and, with `introspection`, the introspection extension's
-// telemetry events) through its connection.
+// its scope (and, with `telemetry_events`, the host's telemetry events)
+// through its connection.
 type ExtensionConfig struct {
 	// Turns sends agent_turn events (default true).
 	Turns *bool `json:"turns,omitempty"`
-	// Introspection forwards the introspection extension's telemetry events
-	// (reports, fixes, host readings) when it has telemetry on (default true).
+	// TelemetryEvents forwards the host's telemetry events (reports, fixes,
+	// host readings) while the host writes them (default true).
+	TelemetryEvents *bool `json:"telemetry_events,omitempty"`
+	// Introspection is TelemetryEvents' old name, accepted for one release
+	// with a doctor warning; `migrate upgrade` renames it.
 	Introspection *bool `json:"introspection,omitempty"`
 }
 
-// Settings is a parsed entry.
-type Settings struct{ Turns, Introspection bool }
+// Renamed maps each entry setting renamed in this release to its new name,
+// for `migrate upgrade`.
+var Renamed = map[string]string{"introspection": "telemetry_events"}
+
+// Settings is a parsed entry. OldNames lists the renamed settings it still
+// uses.
+type Settings struct {
+	Turns, TelemetryEvents bool
+	OldNames               []string
+}
 
 // ParseExtension decodes and defaults an entry.
 func ParseExtension(data []byte) (Settings, error) {
@@ -114,12 +125,19 @@ func ParseExtension(data []byte) (Settings, error) {
 	if err := strict(data, &c); err != nil {
 		return Settings{}, fmt.Errorf("posthog extension: %w", err)
 	}
-	s := Settings{Turns: true, Introspection: true}
+	s := Settings{Turns: true, TelemetryEvents: true}
 	if c.Turns != nil {
 		s.Turns = *c.Turns
 	}
 	if c.Introspection != nil {
-		s.Introspection = *c.Introspection
+		if c.TelemetryEvents != nil {
+			return Settings{}, errors.New("posthog extension: introspection is the old name of telemetry_events; give only telemetry_events")
+		}
+		c.TelemetryEvents = c.Introspection
+		s.OldNames = append(s.OldNames, "introspection")
+	}
+	if c.TelemetryEvents != nil {
+		s.TelemetryEvents = *c.TelemetryEvents
 	}
 	return s, nil
 }
@@ -166,8 +184,9 @@ type StatusError struct{ Status int }
 
 func (e *StatusError) Error() string { return "posthog answered " + strconv.Itoa(e.Status) }
 
-// Capture sends one event.
-func (s *Sink) Capture(ctx context.Context, name string, at time.Time, props map[string]any) error {
+// Capture sends one event, with its scope (when it has one) as the `scope`
+// property.
+func (s *Sink) Capture(ctx context.Context, scope, name string, at time.Time, props map[string]any) error {
 	key, err := s.token(ctx)
 	if err != nil {
 		return err
@@ -175,6 +194,9 @@ func (s *Sink) Capture(ctx context.Context, name string, at time.Time, props map
 	all := map[string]any{"$lib": "open-conduit"}
 	for k, v := range props {
 		all[k] = v
+	}
+	if scope != "" {
+		all["scope"] = scope
 	}
 	body, err := json.Marshal(map[string]any{"api_key": key, "event": name, "distinct_id": s.conn.DistinctID, "timestamp": at.UTC(), "properties": all})
 	if err != nil {
@@ -222,7 +244,7 @@ func TurnEvent(r observability.Record) (map[string]any, bool) {
 	default:
 		return nil, false
 	}
-	props := map[string]any{"scope": string(r.Correlation.ScopeID), "work_id": string(r.Correlation.WorkID),
+	props := map[string]any{"work_id": string(r.Correlation.WorkID),
 		"execution_id": string(r.Correlation.ExecutionID), "outcome": strings.TrimPrefix(r.Name, "execution.")}
 	for attr, prop := range map[string]string{"execution.attempt": "attempt", "executor": "executor", "execution.duration_ms": "duration_ms", "work.kind": "work_kind"} {
 		if v := r.Attributes[attr]; v != "" {
@@ -272,7 +294,7 @@ func (x *Exporter) Export(ctx context.Context, records []observability.Record) e
 			if !t.Settings.Turns || t.Scope != string(r.Correlation.ScopeID) {
 				continue
 			}
-			if err := t.Sink.Capture(ctx, EventTurn, r.At, props); err != nil {
+			if err := t.Sink.Capture(ctx, t.Scope, EventTurn, r.At, props); err != nil {
 				failed = err
 				if x.Diagnostic != nil {
 					x.Diagnostic(code(err))
@@ -305,12 +327,13 @@ func code(err error) string {
 // Code maps a capture failure onto a safe diagnostic code.
 func Code(err error) string { return code(err) }
 
-// Fanout forwards named telemetry events (the introspection extension's
-// Sink interface) to every enabled entry that takes them, besides a
-// primary sink (its JSON log). Forwarding failures never fail the primary.
+// Fanout forwards the host's named telemetry events to every enabled entry
+// that takes them (all of them for an event with no scope, else that
+// scope's), besides an optional primary sink. Forwarding failures never
+// fail the primary.
 type Fanout struct {
 	Primary interface {
-		Capture(ctx context.Context, name string, at time.Time, props map[string]any) error
+		Capture(ctx context.Context, scope, name string, at time.Time, props map[string]any) error
 	}
 	Targets    func() []Target
 	Diagnostic func(code string)
@@ -318,23 +341,22 @@ type Fanout struct {
 }
 
 // Capture writes to the primary, then forwards.
-func (f *Fanout) Capture(ctx context.Context, name string, at time.Time, props map[string]any) error {
+func (f *Fanout) Capture(ctx context.Context, scope, name string, at time.Time, props map[string]any) error {
 	var err error
 	if f.Primary != nil {
-		err = f.Primary.Capture(ctx, name, at, props)
+		err = f.Primary.Capture(ctx, scope, name, at, props)
 	}
 	if f.Targets == nil {
 		return err
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	scope, _ := props["scope"].(string)
 	for _, t := range f.Targets() {
-		if !t.Settings.Introspection || (scope != "" && t.Scope != scope) {
+		if !t.Settings.TelemetryEvents || (scope != "" && t.Scope != scope) {
 			continue
 		}
 		cx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		if e := t.Sink.Capture(cx, name, at, props); e != nil && f.Diagnostic != nil {
+		if e := t.Sink.Capture(cx, scope, name, at, props); e != nil && f.Diagnostic != nil {
 			f.Diagnostic(code(e))
 		}
 		cancel()

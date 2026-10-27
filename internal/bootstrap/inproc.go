@@ -246,15 +246,15 @@ func (d *daemon) inprocExporters() []observability.Exporter {
 // never fails the log.
 type telemetryFanout struct {
 	primary interface {
-		Capture(ctx context.Context, name string, at time.Time, props map[string]any) error
+		Capture(ctx context.Context, scope, name string, at time.Time, props map[string]any) error
 	}
 	sinks []inproc.Sink
 }
 
-func (f telemetryFanout) Capture(ctx context.Context, name string, at time.Time, props map[string]any) error {
-	err := f.primary.Capture(ctx, name, at, props)
+func (f telemetryFanout) Capture(ctx context.Context, scope, name string, at time.Time, props map[string]any) error {
+	err := f.primary.Capture(ctx, scope, name, at, props)
 	for _, s := range f.sinks {
-		_ = s.Capture(ctx, name, at, props)
+		_ = s.Capture(ctx, scope, name, at, props)
 	}
 	return err
 }

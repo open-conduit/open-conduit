@@ -147,7 +147,7 @@ Named product-telemetry events (`introspection_report`, `introspection_fix`, `in
 - `introspection.Exporter` is an `observability.Exporter` that bootstrap adds to the lifecycle pipeline. It turns the committed `event.accepted` records of the extension's families into `introspection_report`, `introspection_fix` and `introspection_run_due`. Each appears exactly once.
 - The host watch captures `host_metrics` (with the fullest disk first) and `host_alert` on the same JSON-lines sink.
 
-Nothing is written unless an enabled entry sets `telemetry`. When it is on, enabled PostHog entries that take introspection telemetry receive the same events through a fan-out sink ([PostHog](../installed-integrations/#posthog)).
+Nothing is written unless an enabled entry sets `telemetry`. When it is on, enabled PostHog entries that set `telemetry_events` receive the same events through a fan-out sink ([PostHog](../installed-integrations/#posthog)).
 
 Core reports a fired timer's Event as exactly one `event.accepted` record, which `TestLifecycleTelemetryRetriesAndRecovery` asserts.
 
