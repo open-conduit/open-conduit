@@ -34,6 +34,7 @@ An agent reaches an operation as MCP `call {operation, input}` or `os call <oper
 - They take an optional `repo`. Without it they use the Work's own code repository, or the scope's only registered repository when the Work owns no issue. A scope with several refuses `repo_required` and lists them, and a repository the scope doesn't register is refused `unregistered_repo`.
 - Posts are the same marked durable intents, carrying the calling Work's marker, so they are exactly-once, recovered by marker and never handed back to the caller. The PR's key is never attached to the calling Work: the PR stays keyed to its tracker issue, and the Work that owns it hears the posts as another agent's comments.
 - `github.checks` needs `number` outside the Work's own issue. View's reply calls carry `repo` there.
+- `github.wait` also binds Work without an issue: see below.
 - Every other operation still needs the Work's own issue and refuses `no_issue` without one.
 
 | Operation | Notes |
@@ -76,8 +77,9 @@ Behaviour:
 
 - **Refusals.** The call checks each condition before any side effect and refuses one that has already happened (`already_met`: carry on), an unknown project, a past time or nothing to wait for. A race between that read and registration is closed by the subscription backscan.
 - **Jobs.** `job:<name>` is a FromNow dependency on the job's key in its schedule entry, over the `schedule.run.completed|failed|cancelled|handoff` Events the host announces for each finished run, so the job's next run wakes it ([job waits](../schedule-extension/#job-waits)). A job the scope's schedule entries do not declare refuses with `no_job`.
-- **The reason.** It is posted on the issue with the hold marker, so people see what is awaited.
-- **What wakes the Wait.** The Wait matches the Work's own keys with the alias type plus the own-key inputs that still reach a waiting agent: human comments, closes, merges and check results. A comment therefore wakes the agent.
+- **Work without an issue.** `github.wait` binds any Work in the scope and takes an optional `repo`, resolved like the PR operations' (`repo_required`, `unregistered_repo`). Conditions without a project name that repository. Holds stay issue-bound.
+- **The reason.** It is posted on the issue with the hold marker, so people see what is awaited. Work without an issue has nowhere on GitHub to put it: the call returns it, and the agent tells its own conversation (a Slack thread) if people should know. Nothing goes on the PR.
+- **What wakes the Wait.** The Wait matches the Work's own keys with the alias type plus the own-key inputs that still reach a waiting agent: human comments, closes, merges and check results. A comment therefore wakes the agent. Work without an issue matches only the alias type (and its time), since GitHub can't tell its own surface's input from its own posts.
 - **One wake.** One wake ends a core Wait, so the agent waits again if the prerequisite is still pending. The playbook says so. Agent comments are excluded, because the wait's own reason comment is one.
 - **Injected comments.** A comment injected into a running turn that claude echoed is consumed with its turn (`Result.ConsumedInputs`), on every outcome and even when the turn ends before the dispatch acknowledgement commits, so it is never listed again ([Claude Code executor](../claude-code-executor/#prompt-inputs-and-injection)).
 - **Unmeetable holds.** A hold condition nothing here can meet (an unknown job or project) leaves only the hold's time; with no time the issue starts at once and its first turn says why, rather than being held for ever.

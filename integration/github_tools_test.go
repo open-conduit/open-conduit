@@ -1120,3 +1120,86 @@ func TestGitHubWaitOnPRActivity(t *testing.T) {
 		})
 	}
 }
+
+// A Slack-started Work (no GitHub issue) reviewing a PR waits for the next
+// reply, then for the next push: each wakes it once, its own posts don't,
+// the reason goes on no issue or PR, and the wait survives a restart.
+func TestGitHubWaitOnPRActivityWithoutAnIssue(t *testing.T) {
+	ghBob := githubtest.User{Login: "bob", Type: "User"}
+	e := newToolsEnv(t)
+	n, _ := e.claim("Header wobbles", "", "bug")
+	pr := e.fake.OpenPull("Fix the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "h1", ghBob)
+	e.sync()
+	w := e.request("thread-2")
+	wakeText := func(wait *domain.Wait) string {
+		var wake domain.Event
+		e.read(func(tx storage.Tx) error {
+			got, err := tx.Wait(wait.ID)
+			if err != nil {
+				return err
+			}
+			a, err := tx.Event(got.WakeEventID)
+			wake = a.Event
+			return err
+		})
+		text, _ := gh.RenderEvent(wake)
+		return text
+	}
+	before := len(e.fake.Comments(n)) + len(e.fake.Comments(pr))
+
+	a := e.start(w.ID)
+	e.must(a, gh.OpPRComment, "c1", map[string]any{"number": pr, "body": "Please explain the offset."})
+	out, err := e.call(a, gh.OpWait, "w1", map[string]any{"conditions": []string{"pr:" + itoa(pr) + ":commented"}, "reason": "Waiting for the author's answer."})
+	if err != nil || out.Wait == nil {
+		t.Fatalf("wait: %v", err)
+	}
+	var res map[string]any
+	_ = json.Unmarshal(out.Output.Data, &res)
+	if res["waiting_for"] != "a reply or review on PR #"+itoa(pr) || res["comment"] != nil {
+		t.Fatalf("wait output: %v", res)
+	}
+	e.finish(a, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("done")}})
+	e.sync()
+	if got := e.work(w.ID); got.State != domain.WorkWaiting {
+		t.Fatalf("woke on its own post: %v", got.State)
+	}
+	if after := len(e.fake.Comments(n)) + len(e.fake.Comments(pr)); after != before+1 {
+		t.Fatalf("the reason was posted on GitHub: %d comments, want %d", after, before+1)
+	}
+	e.reopen()
+	e.compose()
+	e.fake.AddComment(pr, ghBob, "It centres the logo.")
+	e.sync()
+	if got := e.work(w.ID); got.State != domain.WorkReady {
+		t.Fatalf("reply did not wake: %v", got.State)
+	}
+	if text := wakeText(out.Wait); !strings.Contains(text, "someone replied on PR #"+itoa(pr)) {
+		t.Fatalf("wake reads:\n%s", text)
+	}
+
+	a = e.start(w.ID)
+	out, err = e.call(a, gh.OpWait, "w2", map[string]any{"conditions": []string{"pr:" + itoa(pr) + ":pushed"}, "repo": ghRepo, "reason": "Waiting for the fix."})
+	if err != nil || out.Wait == nil {
+		t.Fatalf("second wait: %v", err)
+	}
+	e.finish(a, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("done")}})
+	e.fake.AddComment(pr, ghBob, "Pushing shortly.")
+	e.sync()
+	if got := e.work(w.ID); got.State != domain.WorkWaiting {
+		t.Fatalf("a comment woke a push wait: %v", got.State)
+	}
+	e.fake.PushPull(pr, "h2")
+	e.sync()
+	if got := e.work(w.ID); got.State != domain.WorkReady {
+		t.Fatalf("push did not wake: %v", got.State)
+	}
+	if text := wakeText(out.Wait); !strings.Contains(text, "got a new push") {
+		t.Fatalf("wake reads:\n%s", text)
+	}
+
+	// Work without an issue still can't wait on a repository its scope
+	// doesn't register.
+	a = e.start(w.ID)
+	_, err = e.call(a, gh.OpWait, "w3", map[string]any{"conditions": []string{"pr:" + itoa(pr) + ":merged"}, "repo": "elsewhere/repo", "reason": "x"})
+	refused(t, err, "unregistered_repo")
+}
