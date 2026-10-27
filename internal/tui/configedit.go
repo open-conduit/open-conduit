@@ -242,7 +242,7 @@ func (m EditModel) browse(k string) (tea.Model, tea.Cmd) {
 			m.errs = []string{"could not save the config"}
 			return m, nil
 		}
-		m.saved, m.dirty, m.notice = true, false, "saved "+m.req.Path+" (a running daemon changes only with config apply)"
+		m.saved, m.dirty, m.notice = true, false, "saved "+m.req.Path+" (a running daemon, even after a restart, changes only with config apply)"
 	}
 	return m, nil
 }
