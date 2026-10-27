@@ -67,7 +67,9 @@ type BackupInfo struct {
 	Build     string    `json:"build"`
 	CreatedAt time.Time `json:"created_at"`
 	Artifacts int       `json:"artifacts"`
-	Scopes    []string  `json:"scopes,omitempty"`
+	// OmittedArtifacts counts references whose content retention expired.
+	OmittedArtifacts int      `json:"omitted_artifacts,omitempty"`
+	Scopes           []string `json:"scopes,omitempty"`
 	// TokenFile is the fresh operator credential a restore wrote.
 	TokenFile string `json:"token_file,omitempty"`
 }

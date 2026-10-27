@@ -138,6 +138,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		change func(*manifest)
 	}{
 		{"missing_reference", func(m *manifest) { m.Artifacts = nil }},
+		{"omitted_unexpired_reference", func(m *manifest) { m.Omitted, m.Artifacts = []domain.ArtifactRef{m.Artifacts[0].Ref}, nil }},
 		{"changed_artifact_digest", func(m *manifest) { m.Artifacts[0].SHA256 = strings.Repeat("0", 64) }},
 		{"changed_database_digest", func(m *manifest) { m.DatabaseSHA256 = strings.Repeat("0", 64) }},
 		{"newer_manifest", func(m *manifest) { m.Version++ }},

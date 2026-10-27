@@ -17,6 +17,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/migrate"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -125,7 +126,7 @@ func bundleInfo(bundle string) (cli.BackupInfo, error) {
 	if err != nil {
 		return cli.BackupInfo{}, err
 	}
-	return cli.BackupInfo{Path: bundle, Schema: info.Schema, Build: info.Build, CreatedAt: info.CreatedAt, Artifacts: info.Artifacts}, nil
+	return cli.BackupInfo{Path: bundle, Schema: info.Schema, Build: info.Build, CreatedAt: info.CreatedAt, Artifacts: info.Artifacts, OmittedArtifacts: info.Omitted}, nil
 }
 
 // VerifyBundle restores a bundle into a private temporary directory, checks
@@ -300,6 +301,12 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 					s.LiveExecutions++
 				}
 				if ferr != nil {
+					continue
+				}
+				// Retention released expired content on purpose; a backup omits it.
+				if retention, err := runtime.RetentionInTx(tx, x.ID); err != nil {
+					return err
+				} else if retention.Expired {
 					continue
 				}
 				for _, ref := range x.Artifacts {

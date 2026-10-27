@@ -21,6 +21,7 @@ import (
 	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/cli/runview"
 	"github.com/open-conduit/open-conduit/internal/config"
@@ -384,6 +385,20 @@ esac`
 	x2, _ := h.operator().Execution(ctx, string(second))
 	if err = h.operator().ArtifactContent(ctx, x2.Artifacts[0].ID, "", &b); err != nil || !strings.Contains(b.String(), "retried-ok") {
 		t.Fatalf("kept artifact: %v %q", err, b.String())
+	}
+
+	// A backup after the sweep records the expired attempt's references as
+	// omitted instead of failing on their missing content, and restores.
+	bundle := filepath.Join(state, "backup")
+	if err = backup.Create(ctx, bundle, h.store, h.artifacts, "test-build"); err != nil {
+		t.Fatalf("backup after retention: %v", err)
+	}
+	info, err := backup.Inspect(bundle)
+	if err != nil || info.Omitted != len(x1.Artifacts) || info.Artifacts != len(x2.Artifacts) {
+		t.Fatalf("bundle after retention: %+v %v", info, err)
+	}
+	if err = backup.Restore(ctx, bundle, filepath.Join(state, "restored"), clock.Now()); err != nil {
+		t.Fatalf("restore after retention: %v", err)
 	}
 }
 
