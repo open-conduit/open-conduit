@@ -60,11 +60,11 @@ Where to go next:
 - [Quick start](https://open-conduit.github.io/open-conduit/start/quick-start/): set it up with Claude, or by hand, then start the daemon and check it.
 - Workflows: [GitHub engineering](https://open-conduit.github.io/open-conduit/workflows/github/), [Slack support](https://open-conduit.github.io/open-conduit/workflows/slack/), [scheduled jobs](https://open-conduit.github.io/open-conduit/workflows/scheduled-jobs/) and [introspection](https://open-conduit.github.io/open-conduit/workflows/introspection/).
 - [Extensions](https://open-conduit.github.io/open-conduit/reference/extensions/): add integrations and executors of your own.
-- [The core in one page](docs/architecture/core.md): the design in depth.
+- [The core in one page](https://open-conduit.github.io/open-conduit/architecture/core/): the design in depth.
 
 ## Contributing
 
-Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for setting up a checkout, the checks a change must pass and the rules the code follows. [The docs index](docs/README.md) lists the architecture documents behind each part. AI coding agents should also follow [AGENTS.md](AGENTS.md).
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for setting up a checkout, the checks a change must pass and the rules the code follows. [The architecture section of the docs site](https://open-conduit.github.io/open-conduit/architecture/) describes how each part is built and what it guarantees, and [the docs index](docs/README.md) lists the build and check commands. AI coding agents should also follow [AGENTS.md](AGENTS.md).
 
 Report bugs and ask questions in [GitHub issues](https://github.com/open-conduit/open-conduit/issues). Ask before starting a large change.
 

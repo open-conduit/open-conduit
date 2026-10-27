@@ -62,4 +62,4 @@ Each workflow is a scope in the config. The example below is a complete, minimal
 }
 ```
 
-See [Slack ingress, conversations and marked replies](https://github.com/open-conduit/open-conduit/blob/main/docs/architecture/slack-extension.md) for the details.
+See [Slack ingress, conversations and marked replies](../../architecture/slack-extension/) for the details.

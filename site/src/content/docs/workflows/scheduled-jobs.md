@@ -56,4 +56,4 @@ Each workflow is a scope in the config. The example below is a complete, minimal
 open-conduit events emit --scope-id ops --type schedule.run --delivery-id run-1 --key-source schedule/ops --key-external-id job/nightly-report
 ```
 
-See [scheduled jobs](https://github.com/open-conduit/open-conduit/blob/main/docs/architecture/schedule-extension.md) for every trigger.
+See [scheduled jobs](../../architecture/schedule-extension/) for every trigger.

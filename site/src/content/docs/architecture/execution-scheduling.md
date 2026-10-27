@@ -1,0 +1,72 @@
+---
+title: "Execution scheduling, recovery and control"
+description: "How Open Conduit starts, recovers, retries and controls execution attempts under B04 policy."
+---
+
+The scheduler starts execution attempts for ready Work, recovers them after lost authority, applies retry policy and dispatches inject/interrupt controls. It implements [B04 execution policy](../runtime-semantics/) over the public storage and executor contracts. [The scheduler](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/scheduler.go), [retry policy](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/scheduler_policy.go) and [control dispatch](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/scheduler_control.go) compose with the production [router](../routing-lifecycle/). They contain no process, service, SQLite or configuration-loader dependency. A host drives these operations: in the daemon, the host loop in [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/tree/main/internal/bootstrap) starts ready Work, observes attempts, renews leases, dispatches controls and confirms physical stops ([daemon](../daemon-core-gate/)).
+
+## Starting attempts
+
+`NewScheduler(store, now, router, options)` takes a trusted clock, owner, configuration generation and mechanically validated executor registrations. Defaults are four concurrent attempts, a one-minute lease, a one-hour execution timeout and three total failure attempts. Scope limits apply to the selected scope and its ancestors. Constructor options are copied. Binding inheritance resolves before claim; the commit rechecks Work, input and Scope snapshots.
+
+`Start` atomically selects ordered pending input, creates the next monotonic attempt, claims its lease, pins behavior and records consumed-input history. The durable launch intent precedes `Run`. Executor calls, capability methods and retry-hint callbacks run outside coordination transactions; a blocked executor cannot retain the storage lock. No process-local global lock coordinates claims. Real serializable storage prevents competing schedulers from creating simultaneous attempts or exceeding configured capacity.
+
+The attempt snapshot retains its configuration generation, full binding, executor registration, capabilities, retry policy, timeout deadline, control error fallback and handoff policy. `HistoricalExecutors[generation][registration]` must reinstall the exact older implementation for recovery/control after reload. A missing generation is unsupported; it never selects a replacement executor silently. Future attempts use current validated bindings and policy. Secret resolution and authorization ceilings belong to the [configuration](../config-management/) composition, not the scheduler; secrets are not part of durable attempt snapshots.
+
+A binding may set `timeout_seconds`, which replaces `SchedulerOptions.Timeout` for its attempts (pinned with the binding in the attempt state; a resumed segment keeps its remaining budget).
+
+`SchedulerOptions.WorkKinds` registers an extension's lifecycle policy for the Work kind it creates. `Standing` Work returns to ready (idle) after a completed attempt and arms no automatic retry after a failed one; `Trigger` selects which input of the pending batch triggers the attempt. Scheduled jobs use both for the one-pending-run rule ([runtime semantics](../runtime-semantics/#pending-job-coalescing-and-standing-work)).
+
+## Recovery and resource exclusion
+
+`Start` and `Recover` return an `Attempt` containing its lease, request and handle. An executor must successfully use the fenced `PersistRecovery` callback before returning a successful handle. The scheduler validates bounded opaque JSON recovery metadata and checks current authority around launch acknowledgement. Missing acknowledgement or an ambiguous operation records a safe failure and retains resource exclusion. Executors own closing the process launch/persist crash window through deterministic discovery, prelaunch intent or cleanup, as required by B03.
+
+`Recover` claims the same nonterminal attempt at a higher epoch and persists recovery-in-progress before calling `Recover` outside storage. It never calls `Run` to replace that attempt. An unapplied toolbelt declaration carries over to the new epoch. Renew/release use the exact lease; release makes that same attempt recoverable. Old outcomes, metadata callbacks and renewals fail after expiry, release, cancellation or a newer epoch. Observation cancellation cancels `Wait` observation only and does not assert that a detached process stopped.
+
+Lease fencing and physical resource exclusion are separate. Durable attempt holds survive restart, including terminal attempts with uncertain external processes, and count against Work/global/ancestor capacity. `ErrNotAdoptable`, transport errors, timeout and a successful interrupt request do not prove that resources stopped. Replacement remains blocked until the trusted host supplies `ConfirmStopped(executionID, expectedEpoch)`. A successfully observed structured terminal result establishes finished attempt resources. Confirmations cannot target an attempt that has since been adopted at another epoch. The generic scheduler does not inspect process IDs or executor metadata: the [shell executor](../shell-executor/) supplies verified-stop evidence through `Stop(execution, epoch)`, and the [daemon](../daemon-core-gate/) renews observed leases and performs that stop/confirm after lost authority, observation failure or a failed recovery.
+
+## Outcomes, handoff and retry
+
+`Observe` waits outside storage, then applies a lease-fenced structured result. Completed Work cannot overtake accepted unrouted input; queued or unconfirmed injected input leaves it ready for N+1. Results preserve common outcome, usage and artifact-reference history. Failed attempts return Work to ready with bounded retry eligibility, unless an explicit terminal-on-exhaustion policy fails Work. `Timeout` requires the persisted deadline to be due and current lease authority, then records failure and retains the uncertain resource hold. A host must recover expired authority before applying such a mutation; a clock deadline does not grant a stale lease authority.
+
+Handoff ends the attempt and leaves Work ready for eligible input. Automatic continuation is off by default. If explicitly enabled, a stable derived `core.execution.handoff` Event and queue checkpoint join the outcome transaction. Causal refusal records a diagnostic and stops that continuation branch while preserving the handoff outcome. A bare waiting outcome cannot bypass event-based suspension; predicate registration, structured waiting results and fenced acknowledgement are described in [timers and waits](../timers-waits/).
+
+Failures arm a durable retry Timer template with the failed attempt generation and trigger ancestry. Default delays are five and ten minutes; an explicit four-attempt policy adds fifteen minutes. Failure counts are separate from attempt numbers. Up to 100 configured delays yield 101 total attempts, matching the B05 schema. Generic retry hints select reset time plus two minutes, or thirty minutes for an unknown reset; invalid/past/excessive hints fail explicitly. Hinted failures still consume the bounded failure budget. Provider classification stays outside core.
+
+An executor's retry hint also applies to standing Work: a hinted failure arms the retry timer and blocks scheduling until it fires, without exhausting the Work, while a hintless failure of standing Work arms nothing. A hint's delay does not index the failure-budget delays, so a standing Work with many failures cannot overrun them.
+
+Executor errors implement the optional public `extension.RetryHintProvider`; they do not import runtime implementation types. `Complete`/`Fail` accept a trusted host's finished structured result. A toolbelt outcome or wait declaration is recorded under the current fence but applied only when the host observes the executor finishing or suspending that segment through `Complete`, so process/resource exclusion is established before replacement capacity is granted; a client declaration alone is not stop evidence.
+
+`ProcessRetry` consumes an already accepted trusted retry Event. The timer driver must first accept through `AcceptDerivedInTx` and atomically remove/fire the timer. A due clock alone never clears eligibility. `core.retry.requested` (B04) and `core.manual.retry` (B05) are manual aliases. The event must follow the current failure's acceptance-sequence boundary, and a processed Event cannot clear a later failure. Manual retry resets the automatic failure budget, not attempt numbering. Old due generations, terminal Work and replay remain historical; live attempts/Waits prevent retry. Ordinary queued input during backoff does not clear it.
+
+## Control dispatch
+
+`DispatchControl` claims a durable intent, performs `Inject`/`Interrupt` outside storage, and acknowledges only with the same live dispatch token. It uses the pinned attempt executor, capabilities, target and epoch. A new executor registration cannot grant control capability to an older attempt. Inject acknowledgement means accepted, not consumed: pending input remains eligible for subsequent presentation. Ambiguous delivery retries the same intent/Event identity, with no exactly-once transport promise. An explicit pinned queue/drop error fallback is recorded; provider error text is not persisted. Late acknowledgements, completed targets and superseded epochs cannot retarget a newer attempt. An `ErrNotAccepting` answer settles the intent as `not_accepting` (no retry, input retained). A result's `ConsumedInputs`, on any outcome and even while the dispatch acknowledgement is in flight, settles it as `consumed` ([generic inject acknowledgement](../runtime-semantics/#generic-inject-acknowledgement)).
+
+Interrupt fences the old attempt and leaves Work ready before sending control, but retains its resource hold until stopping is verified. Work cancellation atomically fences attempts, Waits, owned timers and queue eligibility through the router. Physical cleanup follows that commit. The host must not treat acknowledgement of a stop request as proof of resource exclusion.
+
+## Capacity pools
+
+Capacity is split by executor, so scheduled jobs and agent turns do not take slots from each other. `SchedulerOptions.ExecutorPools` gives an executor registration its own pool, bounded by `PoolLimits[pool]`; an executor without a pool counts against `GlobalLimit`. An attempt counts only against its own pool, and `Start` refuses with a `CapacityError` (it matches `ErrCapacity`) naming the full pool, or the scope for a scope limit. Scope limits still count every pool.
+
+The daemon puts the job executors (`shell`, `github-hold`) in the `jobs` pool, bounded by `settings.job_concurrency` (default 4). `settings.concurrency` (default 4) then bounds agent turns (`claude-code`) and installed extension executors. With the agent limit reached a due job still starts, subject to `job_concurrency`, and the reverse holds. A job and a turn can run at once up to the sum of the two limits. A config that relies on `concurrency` to bound jobs as well should add `job_concurrency`. An agent job (a `claude-code` binding selected by a `schedule` route) is an agent turn and counts against `concurrency`.
+
+A start held back by a limit is reported with the code of its setting: `capacity_concurrency`, `capacity_job_concurrency` or `capacity_scope`. `open-conduit doctor` has a `capacity` check: each pool's running attempts against its limit, and each ready Work waiting for one with the limit holding it back. The Work's detail (`GET /v1/work/{id}`, the CLI and the TUI) carries a `waiting` annotation with the same limit.
+
+## Evidence
+
+[SQLite scheduler tests](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_test.go) run eleven applicable shared runtime cases through the production scheduler with persistent and independently reopened handles. A small explicit timer-contract adapter accepts the retry Event and fires its stored timer for these tests. Additional cases cover blocked Run progress, global/scope/ancestor capacity, same-attempt recovery, stale callbacks, uncertain-launch restart, resource holds, cancellation orders, inject/completion races, interruption, deadlines and handoff. [Policy regressions](https://github.com/open-conduit/open-conduit/blob/main/integration/policy_test.go) cover generation-pinned retry/capabilities, missing launch acknowledgement, retry bounds and explicit control error policies. [`TestProductionSchedulerExecutorPools`](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_test.go) and [`TestDaemonJobConcurrency`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_schedule_test.go) cover capacity pools.
+
+## History
+
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
+
+- Ticket 02-04 implemented the scheduler, retry policy and control dispatch. The daemon, authenticated toolbelt, durable timer driver and shell process implementation were left to later tickets; secret resolution and authorization ceilings were assigned to 02-06. Its tests used a small timer-contract adapter because the production due-event driver arrived in 02-05, and claimed no real process, daemon crash drill, service integration or hosted CI execution.
+- Real shell cleanup, adoption and resource evidence were assigned to 02-07 and 02-09. 02-07 added the shell executor's `Stop(execution, epoch)` evidence; 02-09 added daemon lease renewal and stop/confirmation, and made `Recover` carry an unapplied toolbelt declaration to the new epoch.
+- Ticket 02-05 supplied wait predicate registration, structured waiting results and fenced acknowledgement.
+- Ticket 04-02 added the `not_accepting` and `consumed` inject settlements.
+- Ticket 05-01 added `SchedulerOptions.WorkKinds` (standing Work and trigger selection).
+- Ticket 05-02 added binding `timeout_seconds` and retry hints for standing Work; before it, a hint's delay indexed the failure-budget delays.
+- Capacity pools (#13) replaced a single `settings.concurrency` bound on every running attempt, under which two long agent turns held every due job back and two long jobs held back agent work. Existing configs kept working unchanged.

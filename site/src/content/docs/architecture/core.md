@@ -1,4 +1,9 @@
-# The core in one page
+---
+title: "The core in one page"
+description: "The five primitives the Open Conduit core coordinates, and what it leaves to extensions and executors."
+---
+
+This page summarises the core of Open Conduit: the five primitives it coordinates and what it leaves to behaviour supplied outside it. The primitive records are in [`domain`](https://github.com/open-conduit/open-conduit/tree/main/domain), the public contracts in [`extension`](https://github.com/open-conduit/open-conduit/tree/main/extension), [`storage`](https://github.com/open-conduit/open-conduit/tree/main/storage) and [`observability`](https://github.com/open-conduit/open-conduit/tree/main/observability), and the runtime that drives them in [`internal/runtime`](https://github.com/open-conduit/open-conduit/tree/main/internal/runtime). Every workload (trackers, chat support, scheduled jobs, self-reporting) is an extension, an executor or both, registered by the composition root alone; the core packages import none of them.
 
 The core coordinates five primitives: **Work, Event, Execution, Timer/Wait and Scope**. The user binds behavior to a Scope. Behavior interprets opaque data; the core manages durability and progress.
 
@@ -14,6 +19,13 @@ The core coordinates five primitives: **Work, Event, Execution, Timer/Wait and S
 
 Ingress combines push with reconcile: it supplies current external observations and the core diffs them against durable observations to emit Events. Non-re-derivable deliveries must be declared. All producers use the same acceptance path. Executions receive a scoped toolbelt to emit Events, create Work, wait, declare outcomes and read context, with additional operations supplied outside the core. Storage provides atomic updates, revision checks, leases, Timers and namespaced coordination KV; a separate streaming artifact store carries larger outputs. Lifecycle telemetry links the triggering Event, Work, Scope, binding and Execution through to emissions and outcome.
 
-Reviewed against the implemented runtime at the stage 02 gate: the daemon then composed only these primitives, a shell executor and a generic operator route ([daemon composition](daemon-core-gate.md)).
+The core's additions beyond these primitives are extension-neutral: resource brokering, translated waits and emissions, cited causation, calendar recurrences, standing Work kinds and binding deadlines. None of them names a service or a domain type.
 
-Reviewed again at the stage 05 gate (05-04), with four workloads composed on one daemon: a tracker workload, a chat support workload, scheduled jobs and self-reporting. Each is an extension, an executor or both, registered by the composition root alone. The core packages import none of them, and the page above needed no change: every workload reached the core only as Events, routes, Work, Executions, Timers, Waits and Scope configuration. Its additions during stages 03–05 were all extension-neutral (resource brokering, translated waits and emissions, cited causation, calendar recurrences, standing Work kinds, binding deadlines). See [the stage 05 gate](daemon-core-gate.md#all-four-workflows-on-one-daemon-05-04).
+## History
+
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
+
+- **Stage 02 gate.** The page was reviewed against the implemented runtime. The daemon then composed only these primitives, a shell executor and a generic operator route ([daemon composition](../daemon-core-gate/)).
+- **Stage 05 gate (05-04).** The page was reviewed again with four workloads composed on one daemon: a tracker workload, a chat support workload, scheduled jobs and self-reporting. Each was an extension, an executor or both, registered by the composition root alone. The core packages imported none of them, and the page needed no change: every workload reached the core only as Events, routes, Work, Executions, Timers, Waits and Scope configuration. The core's additions during stages 03–05 were all extension-neutral (resource brokering, translated waits and emissions, cited causation, calendar recurrences, standing Work kinds, binding deadlines). See [the stage 05 gate](../daemon-core-gate/#all-four-workflows-on-one-daemon).

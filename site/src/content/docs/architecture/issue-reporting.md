@@ -1,15 +1,18 @@
-# Introspection: reporting, sweep, triage and fixes
+---
+title: "Introspection: reporting, sweep, triage and fixes"
+---
 
-Introspection is the first-party extension [`extensions/introspection`](../../extensions/introspection), composed by [`internal/bootstrap/introspection.go`](../../internal/bootstrap/introspection.go). It uses only the public registration, toolbelt, route, timer-recurrence, coordination KV and observability interfaces. Nothing about it is core (PRD workflow D: "no core code for self-improvement").
+Introspection is the first-party extension [`extensions/introspection`](https://github.com/open-conduit/open-conduit/tree/main/extensions/introspection), composed by [`internal/bootstrap/introspection.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/introspection.go). It lets agents report what breaks in daily use and turns those reports, and the corrections and problems agents note, into improvements:
 
-- Ticket 03-08 delivered issue reporting, the PRD's sequence-step-3 requirement: the agents' own `report-issue` and triage surface what breaks in early daily use. Its live-use validation is 03-09 (deferred).
-- Ticket 05-03 completed the workload:
-  - the daily sweep and triage as the extension's own scheduled Work;
-  - evidence aggregation over reports and the agents' notes;
-  - fix Work that traces to the report through causation;
-  - extension-originated reports from an optional host watch;
-  - telemetry events;
-  - an explicit removal policy.
+- `report-issue`, with report processing and triage;
+- the daily sweep and triage as the extension's own scheduled Work;
+- evidence aggregation over reports and the agents' notes;
+- fix Work that traces to the report through causation;
+- extension-originated reports from an optional host watch;
+- telemetry events;
+- an explicit removal policy.
+
+It uses only the public registration, toolbelt, route, timer-recurrence, coordination KV and observability interfaces. Nothing about it is core: self-improvement needs no core code.
 
 ## Configuration
 
@@ -44,7 +47,7 @@ A scope's `introspection` entry enables the extension for that scope and the sco
 | `host_watch` | Reading interval, load per CPU / memory % / disk % thresholds (defaults 1.5/90/90) and extra disk paths besides the state directory's. If absent, the watch is off. |
 | `telemetry` | Writes the extension's telemetry events to `logs/introspection-telemetry.jsonl`. |
 
-The `introspection` route's `work` is `report` (the default, as in 03-08), `sweep`, `triage` or `fix`. Each route gives that kind of Work to the binding the user chose. No executor is built in: without a route, the extension's Events are kept but not processed. The scope's `authorization.operations` ceiling must list each operation, and each binding names the operations it may call. Registering an operation grants nothing.
+The `introspection` route's `work` is `report` (the default), `sweep`, `triage` or `fix`. Each route gives that kind of Work to the binding the user chose. No executor is built in: without a route, the extension's Events are kept but not processed. The scope's `authorization.operations` ceiling must list each operation, and each binding names the operations it may call. Registering an operation grants nothing.
 
 ## Work kinds, Events and keys
 
@@ -61,18 +64,18 @@ The sweep and triage are standing Work: bootstrap declares the generic `runtime.
 
 | Operation | Input | Does |
 | --- | --- | --- |
-| `introspection.report-issue` | `kind` (`env`, `docs`, `tooling`, `service`, `runtime`, `other`), `title`, `body` | Accepts one report Event and its index record in one transaction (03-08). |
+| `introspection.report-issue` | `kind` (`env`, `docs`, `tooling`, `service`, `runtime`, `other`), `title`, `body` | Accepts one report Event and its index record in one transaction. |
 | `introspection.reports` | `state`? (`open` default, `fixing`, `resolved`, `all`) | The calling scope's reports, oldest first. `fixing` is derived: an open report that a requested fix names. |
 | `introspection.report.resolve` | `id`, `summary`, `link`? | Records how a report was handled. Repeating it changes nothing. |
 | `introspection.evidence` | `for` (`sweep` or `triage`) | The run's evidence and settings. |
 | `introspection.notes.resolve` | `notes` (ids), `summary` | Records the notes a run handled. |
 | `introspection.fix` | `reports`? and/or `notes`?, `title`, `body` | Requests fix Work for one cause. |
 
-Reports are 03-08's translated emissions. See [the 03-08 contract](#the-report-event-03-08) below.
+Reports are translated emissions. See [the report Event](#the-report-event) below.
 
 ## The sweep and triage schedules
 
-The runs are timed by the extension's own calendar, not by a `schedule` entry, because the PRD makes them "scheduled Work of their own kinds, defined by the introspection extension". Each configured block gets a durable core timer `introspection/<scope>/<run>` whose recurrence is the extension's `RecurrenceFunc` (`introspection.v1`), registered with the generic `runtime.TimerOptions.Recurrences`. The calendar rules are those of [scheduled jobs](schedule-extension.md):
+The runs are timed by the extension's own calendar, not by a `schedule` entry, because they are scheduled Work of their own kinds, defined by the introspection extension. Each configured block gets a durable core timer `introspection/<scope>/<run>` whose recurrence is the extension's `RecurrenceFunc` (`introspection.v1`), registered with the generic `runtime.TimerOptions.Recurrences`. The calendar rules are those of [scheduled jobs](../schedule-extension/):
 
 - A new schedule waits for its next slot.
 - A firing publishes the latest slot strictly within six hours, unless that slot ran last, and rearms. A slot missed by six hours or more is skipped.
@@ -106,7 +109,7 @@ Notes are read from the configured namespaces through public storage, filtered b
 - the requesting execution, its Work and its trigger;
 - the cause, the fix Event, its root and depth, and the fix Work.
 
-The fix Event **cites the earliest report's Event as its cause**. This uses the new generic `extension.EmitPlan.Cause` (see [extensions](extensions.md) and [runtime semantics](runtime-semantics.md#cited-causation-05-03)). The fix's chain is therefore:
+The fix Event **cites the earliest report's Event as its cause**. This uses the generic `extension.EmitPlan.Cause` (see [extensions](../extensions/) and [runtime semantics](../runtime-semantics/#cited-causation)). The fix's chain is therefore:
 
 ```
 origin (e.g. core.work.created of the engineering Work)
@@ -144,15 +147,15 @@ Named product-telemetry events (`introspection_report`, `introspection_fix`, `in
 - `introspection.Exporter` is an `observability.Exporter` that bootstrap adds to the lifecycle pipeline. It turns the committed `event.accepted` records of the extension's families into `introspection_report`, `introspection_fix` and `introspection_run_due`. Each appears exactly once.
 - The host watch captures `host_metrics` (with the fullest disk first) and `host_alert` on the same JSON-lines sink.
 
-Nothing is written unless an enabled entry sets `telemetry`. A PostHog sink belongs to 06-01.
+Nothing is written unless an enabled entry sets `telemetry`. When it is on, enabled PostHog entries that take introspection telemetry receive the same events through a fan-out sink ([PostHog](../installed-integrations/#posthog)).
 
-A defect this found was fixed: core reported a fired timer's Event as two `event.accepted` records. `TestLifecycleTelemetryRetriesAndRecovery` now asserts exactly one.
+Core reports a fired timer's Event as exactly one `event.accepted` record, which `TestLifecycleTelemetryRetriesAndRecovery` asserts.
 
 ## Removal policy
 
 Removing the `introspection` entry, or one of its schedules, takes effect on the next generation:
 
-- **Operations and routes.** The operations are undeclared, the route matches nothing (even for Events in flight), and bindings that still list the operations keep running, because bootstrap narrows grants to registered operations (03-08).
+- **Operations and routes.** The operations are undeclared, the route matches nothing (even for Events in flight), and bindings that still list the operations keep running, because bootstrap narrows grants to registered operations.
 - **Timers.** `Ensure` cancels the schedule's timers. A run already going carries on.
 - **Existing Work.** Work of the extension's kinds is **retired** once idle. The rules are in `is.Retired`:
   - every non-terminal, not-running Work of the extension's kinds in a configured scope that has no entry is retired;
@@ -164,7 +167,7 @@ Removing the `introspection` entry, or one of its schedules, takes effect on the
 
 No core code changes. `scripts/check-boundaries` keeps core packages from importing the extension. Its `TestNoPrivilegedReportingPath` finds no introspection, reporting, triage, sweep-slot, fix-request or host-watch vocabulary in core, contract or operator packages.
 
-## The report Event (03-08)
+## The report Event
 
 A report is a **translated emission** (`extension.Operation.Emit`). The handler validates the input and returns an `EmitPlan`. The toolbelt accepts the Event exactly as it accepts the builtin `emit`:
 
@@ -172,7 +175,7 @@ A report is a **translated emission** (`extension.Operation.Emit`). The handler 
 - trusted source `execution/<id>` and the execution's trigger as causation;
 - the chain-depth and per-chain rate limits.
 
-The plan's KV records go in the same transaction. Nothing in the plan can select a root, another Work or a namespace the registration does not own. Since 05-03, the only cause a plan can name is one of its own Events, as above.
+The plan's KV records go in the same transaction. Nothing in the plan can select a root, another Work or a namespace the registration does not own. The only cause a plan can name is one of the registration's own Events, as above.
 
 Each report has the correlation key `introspection/<scope>` / `report/<id>`. No Work owns that key, and it lies in the registration's own source namespace. The Event is therefore addressed to the key: its envelope has no Work or Execution, but its source and causation still name the execution. The report's identity is its request ID, else its input, under the reporting execution. A retried call never reports twice, and a reused request ID with other input is `idempotency_conflict`. Reports never hold or wait.
 
@@ -196,23 +199,36 @@ The playbooks join the Claude Code plugin with the other playbooks, and every in
 
 - **`sweep`** corrections are folded into the rule files and landed as a push or PR, then resolved.
 - **`triage-reports`** starts from the evidence and groups by cause. Causes in the project's own files get a requested fix instead of an inline commit, so each fix is its own traceable Work. Remaining causes are filed when `file_issues` is set, or else written up. Handled reports and problems are resolved.
-- **`fix-report`** (new) makes the smallest edit, lands it and resolves the fix's reports.
+- **`fix-report`** makes the smallest edit, lands it and resolves the fix's reports.
 
 Open Conduit's own reports are the upstream intake.
 
 ## Evidence
 
-- [`integration/introspection_test.go`](../../integration/introspection_test.go) runs production router, scheduler, toolbelt and timers on SQLite:
+- [`integration/introspection_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/introspection_test.go) runs production router, scheduler, toolbelt and timers on SQLite:
   - `TestWorkflowDReportTriageFix`: timers armed and kept; slots fired on a fake clock into standing sweep and triage; triage evidence covering reports and the GitHub tools' problem notes across scopes; a fix citing the earliest report, replayed once, with refusals; a fix Work traced fix → report → engineering root and naming the triage execution; reports resolved by the fix; the sweep folding corrections; a restart, and the next day seeing only what is left.
   - `TestCitedCausationKeepsCoreLimits`: a shallow cause cannot escape the depth limit.
   - `TestCitedCauseContract`: only the registration's own same-scope Events can be cited, and both chains' budgets are charged.
   - `TestIntrospectionRemovalPolicy`: timers cancelled, idle Work retired, running work finishing first, records kept, re-add as a new epoch, a disabled scope kept, schedule-only removal.
   - `TestExtensionOriginatedReportChain`: a host report is its own root, processed, triaged and fixed.
-- [`integration/reporting_test.go`](../../integration/reporting_test.go) is 03-08's reporting suite.
-- [`integration/daemon_introspection_test.go`](../../integration/daemon_introspection_test.go) (in `make drill`) uses the real daemon with shell executors calling `os`:
+- [`integration/reporting_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/reporting_test.go) is the reporting suite: a report from an engineering execution, report-about-a-report loops stopped at the chain depth, a burst hitting the chain rate, permission boundaries, the translated-emission contract and disabled reporting.
+- [`integration/daemon_introspection_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_introspection_test.go) (in `make drill`) uses the real daemon with shell executors calling `os`:
   - `TestDaemonIntrospection` (workflow D): an engineering report; the standing triage caught up by a config edit; evidence and a fix request; the fix Work resolving the report; `events chain` fix → report → operator root, the fix source naming the triage run and the fix trigger being the fix Event; telemetry events exactly once; SIGKILL and restart keeping the schedule; removal by apply retiring the standing triage, with the operations undeclared and the records kept.
   - `TestDaemonHostWatch`: a disk over threshold becomes a root report processed on the report binding, doctor shows `host over`, and host telemetry is written.
-- [`integration/daemon_reporting_test.go`](../../integration/daemon_reporting_test.go) (`TestDaemonIssueReporting`) is 03-08's loop stopped at depth 4, retention across SIGKILL, by-hand triage and disable by apply.
+- [`integration/daemon_reporting_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_reporting_test.go) (`TestDaemonIssueReporting`): a report loop stopped at depth 4, retention across SIGKILL, by-hand triage and disable by apply.
 - Unit tests cover config, routes, the calendar (catch-up, six hours, DST, epochs), the host watcher, the telemetry mapping, rendering, the registration and each playbook's operations.
 
-Real use (real reports, a real triage and a real fix) is recorded under the deferred 03-09.
+## Limitations
+
+- **No recorded real-use evidence.** The evidence above uses fake clocks, fakes and shell stand-ins; real reports, a real triage and a real fix are not recorded here.
+
+## History
+
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
+
+- Ticket 03-08 delivered issue reporting, a sequence-step-3 requirement of the planning document: the agents' own `report-issue` and triage surface what breaks in early daily use. It added the report Event contract, the `introspection.reports` index, the `report` route kind, bootstrap's narrowing of grants to registered operations, and the suites `integration/reporting_test.go` and `TestDaemonIssueReporting`. Its live-use validation was assigned to 03-09, which was deferred.
+- Ticket 05-03 completed the workload: the daily sweep and triage as the extension's own scheduled Work, evidence aggregation, fix Work with cited causation (the then-new generic `extension.EmitPlan.Cause`, after which a plan could name one of its own Events as cause), extension-originated reports from the host watch, telemetry events, the removal policy and the `fix-report` playbook. Its telemetry work found a core defect, a fired timer's Event reported as two `event.accepted` records, which was fixed and is now asserted by `TestLifecycleTelemetryRetriesAndRecovery`.
+- At 05-03, telemetry went only to the JSON-lines log; a PostHog sink was left to 06-01, which added it ([installed integrations](../installed-integrations/#posthog)).
+- Real use (real reports, a real triage and a real fix) was left to the deferred 03-09.

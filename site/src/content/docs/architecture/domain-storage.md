@@ -1,0 +1,111 @@
+---
+title: "Primitive and storage contract"
+description: "Decision B02: the public records for the five primitives and the transactional guarantees every storage backend keeps."
+---
+
+This page records decision B02: the public Go records for the five primitives and the storage contract every backend must keep, covering identity, lifecycle, transactions, lease fencing, timers, waits, KV, artifacts and schema compatibility. The records are in [`domain`](https://github.com/open-conduit/open-conduit/blob/main/domain/types.go) and the contract in [`storage`](https://github.com/open-conduit/open-conduit/blob/main/storage/storage.go). [Shared cases](https://github.com/open-conduit/open-conduit/blob/main/conformance/storage.go) check any backend; they run against a [volatile reference double](https://github.com/open-conduit/open-conduit/blob/main/conformance/reference/memory.go) and against the production SQLite backend and file artifact store ([SQLite and artifacts](../sqlite-artifacts/)). [Negative controls](https://github.com/open-conduit/open-conduit/blob/main/conformance/storage_test.go) prove the cases catch broken backends. Runtime behaviour above this boundary (routing, waits, retry, causation) is [B04](../runtime-semantics/).
+
+## Records and identity
+
+There are five primitives: Work, Event, Execution, Timer/Wait and Scope. Supporting values (IDs, revisions, bindings, outcomes, leases, matches, artifact references) are not additional primitives.
+
+- IDs are opaque, nonempty strings, allocated by the caller before a transaction. Work and Execution IDs are never reused. Revision zero means “create if absent”; updates supply the exact persisted revision. The backend assigns revision and creation/update timestamps from the trusted transaction clock. Supplied record revisions/timestamps are not authority. Returned values, including slices/maps/JSON, are detached copies.
+- Work kind and Event type are opaque dotted namespace identifiers. Payload has a namespaced schema identifier and valid JSON bytes; an absent payload is permitted. The core does not inspect domain fields. These Go records do not define the subprocess wire protocol; payload schema evolution for extension payloads is defined in [the extension protocol](../extension-protocol/#event-payload-schema-evolution), and envelopes stay immutable.
+- A correlation key is `(source, external_id)`. Source must identify the external account/resource namespace, not merely the service name. A key has at most one owning Work, across scopes and terminal states. Work can append keys; it cannot remove or transfer them. Conflicting create/attach fails atomically. Correlation is not event identity. Shared prerequisite subscriptions must not steal another Work's key: [B04](../runtime-semantics/#wait-registration-observation-and-exactly-one-wake) defines subscriptions/alias events and adapters supply dependent correlations.
+- Work kind, scope and parent are fixed at creation. Parent must already exist; child creation cannot introduce cycles because parent links are immutable. Terminal Work remains an ownership tombstone so replay cannot accidentally create a new objective for an old key. Reopening external work needs an explicit extension policy ([B04 successor rule](../runtime-semantics/#routing-and-ownership)); it cannot silently rewrite terminal records. A later distinct objective needs distinct identity/correlations or a reviewed contract change.
+- Event envelopes are immutable, including an absent Work ID. Acceptance returns the stored envelope and `added=false` for duplicate `(source, delivery_id)`, even if the retried request uses another internal ID/correlation. An existing internal ID for a different delivery conflicts. Different deliveries sharing a key are all retained. Derived Events reference an existing causation Event, which prevents dangling/cyclic causation; mandatory derivation checks and chain limits are runtime contracts ([B03](../extensions/), [B04](../runtime-semantics/#causal-bounds-and-rejection-evidence)).
+- Scope supports parent, routes, bindings, opaque config and secret references without requiring any workspace. Parents must exist; scope updates cannot form cycles. Inheritance/merge, reload validation and secret resolution are defined by [B05](../config-management/), not by the storage contract. [B04](../runtime-semantics/) fixes route ordering/overrides and binding lookup; B05 supplies configuration syntax and reload/auth. Bindings expose mechanical requirements only; no semantic suitability claims.
+
+## Work and Execution lifecycle
+
+Same-state Work updates are allowed for nonterminal records; a same-state write still checks and advances revision. Terminal records are immutable. The transition predicates describe actual state changes, so equality is not a transition.
+
+| From Work state | Allowed next states |
+| --- | --- |
+| ready | running, failed, cancelled |
+| running | ready, waiting, completed, failed, cancelled |
+| waiting | ready, running, failed, cancelled |
+| completed / failed / cancelled | none |
+
+A failed Execution does not itself fail Work. Retry policy returns Work to ready and arms a backoff timer while automatic retries remain. The default stops automatic retries at exhaustion but keeps Work nonterminal so a manual event can request attempt N+1; an explicit terminal-failure policy may instead mark Work failed. The runtime commits those choices with the failed attempt and routing progress in one transaction. Attempt counters start at 1 and advance without gaps; no second nonterminal attempt for one Work is allowed. Work may remain ready pending capacity or a retry timer. Retry eligibility and the backoff delays are runtime policy ([B04](../runtime-semantics/#lease-recovery-retry-and-cancellation)), not storage-side scheduling.
+
+| From Execution state | Allowed next states |
+| --- | --- |
+| pending | running (Claim only), cancelled |
+| running | parked, completed, failed, waiting, handoff, cancelled |
+| parked | running (Claim only), failed, cancelled |
+| completed / failed / waiting / handoff / cancelled | none |
+
+Execution outcome kinds are completed, failed, waiting and handoff. Completed/failed/handoff terminal states require their matching outcome. Pending/running/cancelled have no outcome. `parked` is nonterminal with waiting outcome for a resume-capable executor; terminal `waiting` is the outcome for an executor without resume. Both release authority. Wake is an accepted Event; it resumes the parked attempt through a new Claim or creates attempt N+1 after terminal waiting. No direct wake bypass exists in this storage API. Resume capability is checked when a binding is validated ([B03](../extensions/#executor-lifecycle-and-continuity)), with wake matching/race semantics in [B04](../runtime-semantics/#wait-registration-observation-and-exactly-one-wake).
+
+Handoff terminates an attempt and returns Work to ready under policy; it does not imply completion of Work. Continuity data remains in executor-owned namespaced KV or opaque outcomes. Cancellation is an explicit Work transition and invalidates execution authority immediately at the serializable transaction boundary; control-plane code cancels the attempt, marks/cancels waits and removes timeout/retry timers before setting the terminal Work state in the same transaction. Any process interruption happens after that commit. Stale completion cannot reverse cancellation. Operator retry of exhausted but nonterminal Work creates the next attempt. Explicitly terminal failed Work needs a successor Work rather than mutation; the failed record is preserved. [B04](../runtime-semantics/) requires a distinct generation-qualified successor key; terminal correlations never transfer.
+
+Claim assigns first-start time; terminal Execution writes assign finish time. Parked/resumed execution keeps its original start and no finish until terminal. All executor types use the same attempt record, trace ID, outcome and artifact references. Retention selection is generic runtime policy ([retention](../observability-history/#retention)).
+
+## Transactions and checkpoints
+
+`Store.Transact(ctx, Guard, callback)` is the only coordination mutation boundary. It is serializable and invokes the callback once, without transparent callback retries. Callback error, panic (propagated) or context cancellation before commit leaves no writes. Conflicts must be retried by a caller using reread state and deterministic logic. All callback operations are short local computations; no external writes, network calls or executor launch inside a transaction. Commit cannot roll back a service side effect.
+
+A successful production transaction acknowledges only after durable commit. The reference double serializes transactions and copies state on commit; it intentionally cannot prove crash durability or throughput. It does not implement scheduling, routing handlers, process adoption, SQLite or network management. A transaction and its Tx must not escape or be used by concurrent goroutines/nested transactions.
+
+One transaction can include Event acceptance, Work create/correlate/revision update, route progress, Execution creation/claim, Wait registration, Timer changes and namespaced KV. Per-operation validation errors must be returned by the callback. The API distinguishes:
+
+1. **Acceptance checkpoint:** commit Event before acknowledgement or route execution. `AcceptEvent` returning within a callback is not a durable acknowledgement; the outer transaction must succeed. A newly accepted Event has a monotonic acceptance sequence and no routing checkpoint.
+2. **Processing checkpoint:** a later transaction commits route effects and `MarkRouted(event, work, disposition)` together. Routing association/disposition are separate metadata, never edits to the Event. Same checkpoint replay is idempotent; changing an already committed association/disposition conflicts. Drops and unmatched Events retain a disposition for audit.
+
+A crash after acceptance leaves an unrouted Event to replay. A crash during processing leaves either every effect/checkpoint or none. Global sequence supports replay pagination, not global routing serialization. Route progress for one Work follows acceptance order for Events explicitly targeting it or currently resolving through its keys; independent Work has no global processing dependency. [B04](../runtime-semantics/#routing-and-ownership) specifies ordering for concurrently attached keys, previously unresolved Events and multiple route handlers.
+
+Enumeration of scopes, Work, attempts, timers and waits enables recovery without process-private indexes. Returned lists are sorted by ID; execution/wait scans may filter by Work (empty means all). Events are sorted by acceptance sequence, with exclusive cursor and optional positive limit. All reads/scans return backend errors. A backend may add pagination and index selection without weakening these guarantees.
+
+## Lease authority and recovery
+
+`Guard.Now` is trusted runtime time, fixed at a transaction's serializable admission point; executors cannot supply it. Runtime supplies a nondecreasing UTC clock. Lease expiry is exclusive: `Now == ExpiresAt` has already expired. The production backend must preserve this admission/commit ordering under competing connections; the SQLite backend's tests cover competing connections and process death ([SQLite and artifacts](../sqlite-artifacts/#evidence)).
+
+Claim enters running for Work and Execution and assigns owner, expiry and a strictly increasing per-Execution epoch. A live lease rejects competing Claim. An expired or explicitly released lease permits recovery of that same attempt with a higher epoch, even for the same owner string. Claim alone does not prove an old process can be adopted: runtime/executor recovery first determines whether to adopt or record a failed attempt ([B03](../extensions/#executor-lifecycle-and-continuity), [B04](../runtime-semantics/#lease-recovery-retry-and-cancellation)). Storage never reads session/process metadata.
+
+Every executor-originated transaction supplies its lease reference in Guard. Before its callback can mutate anything, the store verifies Work is nonterminal, Execution is running, owner/epoch match and expiry has not passed. This fences all writes, including Work/context, emissions, outcomes, timers and KV. Epoch/owner/expiry cannot be changed by PutExecution. Renew and Release check the same authority; renew cannot shorten or revive an expired lease. Release clears owner/expiry but preserves epoch; parked/terminal transitions also release it. A nil Guard lease is trusted control-plane authority, never the public toolbelt default. Scope/token authorization is the layer above this contract ([B03](../extensions/#toolbelt-authority-and-registration), [B05](../config-management/)).
+
+## Timers, waits, reconciliation and KV
+
+A Timer stores a fire time and Event template. Fire fills occurrence time with the due time and receipt time with the trusted clock. `FireTimer(id, revision, next)` accepts that Event and either removes a one-shot timer or rearms the same timer ID in one transaction. Recurrence calculation is extension-owned; next time must be later and its Event identity must differ. Timer templates cannot reuse already accepted Event identities. Early/stale fires fail. KV cursor updates join the same transaction; crash recovery cannot commit a recurrence cursor without its Event.
+
+Timer revisions stay monotonic across deletion/recreation, so an old fire command cannot operate on a replacement timer with revision 1. Timer deletion requires the current revision. Any compacted revision tombstone must preserve that guarantee. A next occurrence may already be overdue when rearmed; the schedule extension applies missed-slot policy. The storage layer has no clock polling loop; the runtime's timer scheduler fires due timers ([timers and waits](../timers-waits/)).
+
+Wait registration stores Work/Execution identity, keys/type filters, an exclusive acceptance-sequence boundary and optional timeout Timer ID. It must join the transaction parking the attempt, releasing authority and marking Work waiting. Its keys belong to that Work; the reference double rejects foreign matches. Timer presence is required at registration only; a timeout can fire/delete before the historical Wait transitions. The predicate/boundary/timeout are immutable after registration. Wait state changes once from active to woken (with an existing accepted Event ID) or cancelled; the storage layer checks identity/revision, while [B04](../runtime-semantics/#wait-registration-observation-and-exactly-one-wake) specifies matching, already-observed events, boundary races and timeout tie-breaking. A wake transaction records the winner, consumes/cancels the timeout and updates Work/Execution together. History remains inspectable.
+
+Namespaced KV provides get/put/delete/list-by-prefix; namespaces/keys are nonempty and delete of an absent key is safe. Results and values are copies. KV is for coordination: executor-private continuity, observations, cursors and small extension state. Reconciliation stores per-source/scope observation and cursor keys with resulting Events in one transaction. A page cursor may advance only for durably accepted page changes; snapshot completion controls absence detection. The observation/completeness schema and push overlap are [B03](../extensions/#ingress-identity-observations-and-recovery). No large logs, indexes or artifact bytes in KV. External stores are explicit extension connections.
+
+## Artifacts and local state compatibility
+
+Artifacts are separate from the coordination transaction. `Create(mediaType)` yields a streaming writer; `Commit(ctx)` closes/publishes immutable bytes and returns an `ArtifactRef` (opaque ID, size, media type). Close without successful Commit aborts; repeated commit and write after close return an error (the file artifact store returns `ErrClosed`). `Open` returns a streaming reader for a committed reference, and Delete is idempotent. References live on the durable Execution record; they are not an Effect primitive.
+
+Publish first, then attach the reference in a coordination transaction. If attachment rolls back or the process dies between these steps, published content may be orphaned and is eligible for age-based garbage collection. A failed/ambiguous publish returns no usable reference; implementation cleanup may leave temporary bytes. Partial/uncommitted streams are never returned by Open. Crash during streaming may lose the uncommitted tail; logs needing bounded tail loss can publish immutable chunks and append their references in fenced transactions. An artifact reference does not grant authority to mutate Work.
+
+Artifacts are not transactionally durable with SQLite. A backend must state filesystem flush/publish guarantees and whether power failure can lose a recently published file; the file artifact store states its guarantees in [SQLite and artifacts](../sqlite-artifacts/#artifact-publication-and-integrity). Missing/retained-away content is a reported artifact error and must not invalidate coordination history. Retention deletes content only after policy has released live references (or explicitly recorded expiration); it preserves run metadata and never deletes active writers.
+
+The local coordination schema is version **1**, recorded durably in backend metadata on creation. The Go API and schema version are separate. Every backend exposes its actual persisted schema when opened (`sqlite.Open` with `SchemaVersion`). Older binaries refuse newer schemas with an actionable error, without modification. Future upgrades require explicit ordered transactional migrations and fixture/reopen tests. No automatic downgrade or destructive reset.
+
+Back up a consistent SQLite snapshot using its backup API (not an arbitrary live file copy), plus committed referenced artifacts and schema/build metadata. Capture durable references from that snapshot, retain their artifacts while copying, verify them, then publish a complete backup manifest. A partial backup is not a restore point. Restore into a stopped, isolated data directory, validate version/integrity/references, and fence/recover old leases before any executor can commit. The contract permits a backup to omit explicitly expired artifacts if it records the omission; `internal/backup` omits none, and missing referenced content fails the backup. The operator commands are `open-conduit backup create|verify|restore` ([backup bundles](../backup-bundles/), [recovery](../recovery/)). Never run both runtimes as owners of one scope.
+
+The routing, wait and recovery rules in [B04](../runtime-semantics/) (successor identity, ordered multi-key attachment, subscription aliases, timeout arbitration, retry eligibility and causal bounds) apply above the storage boundary; Claim alone does not enforce eligibility.
+
+## Evidence
+
+Run `go test -race ./...` and `go vet ./...` from the repository root; no external service is needed.
+
+Twenty-one shared storage scenarios exercise delivery identity versus correlation, route replay, atomic route effects, revisions/copy isolation, concurrent key ownership and claims, lease expiry/recovery/renew/release, cancellation fencing, timer rollback/one-shot/recreation, wait park/wake and timer cancellation, KV checkpoints, cancellation/panic rollback, parent cycles, attempt exhaustion, handoff/wait outcomes, per-Work order and recovery inventory. They run against the reference double and against SQLite. Lifecycle tests cover all state pairs, including unknown/terminal states. Negative controls select the actual shared cases and require the expected failure diagnostic for broken deduplication and atomicity, without making the test invocation fail intentionally.
+
+Passing the memory double proves reference semantics only. SQLite transaction isolation, crash durability, WAL/reopen/backup and competing connections are proved by the SQLite backend's own tests ([SQLite and artifacts](../sqlite-artifacts/#evidence)).
+
+## History
+
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
+
+- **01-02** defined these public Go contracts and the volatile reference double. It delivered no daemon or production backend. The module took Go 1.24.2 as its minimum so the contracts could execute; command scaffolding, the supported-platform and toolchain review, CI and the stage gate were left to 01-06 ([contracts gate](../contracts-gate/)).
+- At 01-02, several decisions were assigned to later tickets: subscriptions, alias events, ordering, wake races and retry eligibility to 01-04 ([B04](../runtime-semantics/)); ingress observation schema, resume capability checks and derivation checks to 01-03 ([B03](../extensions/)); configuration syntax, inheritance, reload and authorization to 01-05 ([B05](../config-management/)); reopening policy to 01-04 and 03-01; payload schema evolution to stage 07, defined in 07-02. B04 later resolved the 01-04 items and was noted here as the "B04 update".
+- At 01-02, artifacts were interfaces only and the artifact contract said repeated commit and write after close would return an error "in future implementations". 02-01 implemented the SQLite backend and the file artifact store, with real backend and process-boundary tests, publication failure, partial write cleanup, reopen and retention behaviour, and the SQLite backup/reopen proof.
+- The 5/10/15 minute backoff and retry hints were assigned to 01-04 and 02-04; retention selection to 02-08 and 05-02; production pagination and index selection to 02-01.
+- Exact backup commands and the compatibility policy were left to 06-02, which added `open-conduit backup` and the recovery runbooks.
+- When 01-02 closed there was still no production runtime, and 01-06 had to close the complete contract gate before stage 02 began.

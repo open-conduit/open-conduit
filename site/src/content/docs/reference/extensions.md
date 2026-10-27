@@ -21,4 +21,4 @@ open-conduit extension remove my-extension           # refused while the config 
 The protocol and packaging are provisional and may still change.
 :::
 
-See [extension packaging](https://github.com/open-conduit/open-conduit/blob/main/docs/architecture/extension-packaging.md) for writing one with the Go SDK, and [the extension protocol](https://github.com/open-conduit/open-conduit/blob/main/docs/architecture/extension-protocol.md) for the wire format.
+See [extension packaging](../../architecture/extension-packaging/) for writing one with the Go SDK, and [the extension protocol](../../architecture/extension-protocol/) for the wire format.

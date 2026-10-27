@@ -1,20 +1,23 @@
-# Daemon composition and the core gate
+---
+title: "Daemon composition and the core gate"
+description: "How open-conduit serve composes the runtime into one daemon, drives it with a host loop, and the kill drills that prove it survives crashes."
+---
 
-Ticket 02-09 composes the first long-running daemon, `open-conduit serve`, and closes the stage 02 gate with real process kill/restart drills. The composition root is [`internal/bootstrap`](../../internal/bootstrap). The [`serve` command](../../internal/cli/serve.go) resolves paths and hands them to it through `cli.Env.Serve`, so neither the CLI package nor the `os` binary links the runtime. The drills are in [`integration/daemon_test.go`](../../integration/daemon_test.go).
+`open-conduit serve` is the long-running daemon. It composes storage, telemetry, executors, configuration, routing, scheduling, timers, the toolbelt and the management API into one process and drives them with a single host loop. Real process kill/restart drills prove that it survives a crash at each durable boundary. The composition root is [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/tree/main/internal/bootstrap). The [`serve` command](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/serve.go) resolves paths and hands them to it through `cli.Env.Serve`, so neither the CLI package nor the `os` binary links the runtime. The drills are in [`integration/daemon_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_test.go).
 
 ## Composition
 
-`open-conduit [--data-dir DIR] [--socket PATH] serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h]` follows B05 precedence: `--config` → `OPEN_CONDUIT_CONFIG` → `${XDG_CONFIG_HOME:-$HOME/.config}/open-conduit/config.json`; `--data-dir` → `OPEN_CONDUIT_DATA_DIR` → `${XDG_STATE_HOME:-$HOME/.local/state}/open-conduit`; `--socket` → `OPEN_CONDUIT_SOCKET` → `<state>/management.sock`. SIGINT/SIGTERM shut down gracefully.
+`open-conduit [--data-dir DIR] [--socket PATH] serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h]` (plus the webhook, tunnel, dry-run and usage flags listed by `open-conduit --help`) follows B05 precedence: `--config` → `OPEN_CONDUIT_CONFIG` → `${XDG_CONFIG_HOME:-$HOME/.config}/open-conduit/config.json`; `--data-dir` → `OPEN_CONDUIT_DATA_DIR` → `${XDG_STATE_HOME:-$HOME/.local/state}/open-conduit`; `--socket` → `OPEN_CONDUIT_SOCKET` → `<state>/management.sock`. SIGINT/SIGTERM shut down gracefully.
 
 `bootstrap.Serve` assembles the pieces in this order:
 
 1. Takes the exclusive state lock before it touches the database or socket.
 2. Opens SQLite (`conduit.db`).
-3. Builds the telemetry pipeline. Its exporters are the JSON lifecycle log (`<state>/logs/lifecycle.jsonl`, 0600, appended across restarts) and `telemetry.OTel` over OpenTelemetry SDK tracer, meter and logger providers. The providers have no span processors or readers yet: OTLP and other exporter configuration remains extension work, as 02-08 decided.
+3. Builds the telemetry pipeline. Its exporters are the JSON lifecycle log (`<state>/logs/lifecycle.jsonl`, 0600, appended across restarts), `telemetry.OTel` over OpenTelemetry SDK tracer, meter and logger providers, the introspection telemetry exporter, the PostHog exporter and installed extensions' exporters. The OpenTelemetry providers have no span processors or readers: OTLP and other exporter configuration is extension work ([observability](../observability-history/)).
 4. Wraps SQLite in `runtime.Instrument`, so every component shares one instrumented coordination store.
-5. Opens local artifacts and the shell executor, with run state under `<state>/executors/shell` and `os` taken from beside the binary unless `--toolbelt-dir` is given.
-6. Loads the config service against the in-process registry: executor `shell` and route handler `manual`.
-7. Bootstraps the operator credential and serves the management API on the owner-only socket.
+5. Opens local artifacts and the executors: shell (run state under `<state>/executors/shell`, `os` taken from beside the binary unless `--toolbelt-dir` is given), Claude Code, the GitHub hold executor and the schedule extension's legacy job executor. It then opens tools, resource providers and installed extension packages, so their validators check the configuration.
+6. Loads the config service against the in-process registry of those executors, the first-party route handlers (`manual`, GitHub, Slack, schedule, introspection and the trackers) and their operations, then registers each extension's ingress sources.
+7. Bootstraps the operator credential and serves the management API on the owner-only socket, and starts the webhook listener when configured.
 
 The router, toolbelt, scheduler, timers, control and management server are rebuilt for each committed configuration generation, through `ConfigService.OnApply`. The HTTP handler always delegates to the current server. Settings map as follows:
 
@@ -33,14 +36,14 @@ Each daemon start has a unique lease owner and instance ID, `open-conduit/<host>
 
 ### The manual route handler
 
-`manual` is the first-party route handler. It matches only operator-submitted Events: source `core.manual`, never `core.*` types.
+`manual` is the first-party route handler for operator input. It matches only operator-submitted Events: source `core.manual`, never `core.*` types.
 
 - An Event addressed to existing Work, by Work ID or an owned key, becomes that Work's queued input.
 - An Event with an unowned correlation key creates Work of kind `manual.work` that owns the key.
 - Execution emissions, timer Events and core Events never match, so they cannot create Work through this handler.
 - A waiting Work's wake is decided by its Wait, not by a route.
 
-`open-conduit events emit` now accepts `--key-source/--key-external-id`, so an operator can submit keyed Events from the CLI.
+`open-conduit events emit` accepts `--key-source/--key-external-id`, so an operator can submit keyed Events from the CLI.
 
 ### Host loop
 
@@ -49,25 +52,25 @@ One loop runs every `--poll-interval`. It also runs immediately after an observe
 1. Route every accepted, unrouted Event in acceptance order (`Ingress.Pending` → `Router.Route`). This includes Events accepted by timer fires and execution emissions.
 2. Run `Scheduler.Poll`, which covers due timers, retry and timeout Events, active Waits and expired leases. Recovered attempts are observed. An `executor_recovery_failed` diagnostic leads to a trusted stop (see below). Events from fired timers are routed in the same pass.
 3. `Start` every ready Work. Ineligible Work (capacity, backoff, no input) reports a safe code once per subject, not on every pass.
-4. Dispatch committed inject and interrupt intents for running Work, run `ReconcileSubscriptions` and `Ingress.ReconcileDue`, and run `SweepRetention` every `--retention-interval`.
+4. Dispatch committed inject and interrupt intents for running Work, run `ReconcileSubscriptions` and `Ingress.ReconcileDue`, run the extension passes (schedules, GitHub, tracker and Slack projection, webhooks, resources and others), and run `SweepRetention` every `--retention-interval`.
 
-Every attempt from `Start` or `Recover` is observed by a goroutine that renews its lease every third of the lease duration. On `ErrConflict` it routes pending input and re-observes, as 02-07 requires. A lost lease covers operator cancel, the scheduler deadline and supersession by a newer epoch. A lost lease or an observation failure leads to `executor.Stop(execution, epoch)` and then `ConfirmStopped`. A superseded epoch is refused by the shell executor and confirms nothing.
+Every attempt from `Start` or `Recover` is observed by a goroutine that renews its lease every third of the lease duration. On `ErrConflict` it routes pending input and re-observes. A lost lease covers operator cancel, the scheduler deadline and supersession by a newer epoch. A lost lease or an observation failure leads to `executor.Stop(execution, epoch)` and then `ConfirmStopped`. A superseded epoch is refused by the shell executor and confirms nothing.
 
 Shutdown is handled in two ways:
 
 - **Graceful shutdown** stops observing without signalling the detached processes, and releases their live leases, so the next daemon recovers them at once.
 - **After a crash**, the dead daemon's lease stays live until it expires (one minute by default). Only then does `Poll` recover the attempt under a higher epoch. The exclusive lock proves the old daemon is dead, but storage deliberately has no lease override, so a restart after a crash adopts work only once the lease expires.
 
-## Contract clarifications
+## Waits and declarations across recovery
 
-The drills found two runtime defects. Both are fixed, with regressions in [`integration/restart_test.go`](../../integration/restart_test.go):
+Two rules keep toolbelt waits and declarations correct across a crash. Regressions are in [`integration/restart_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/restart_test.go):
 
-- **Type-only waits (B03/B04).** A Wait is a subscription on its Work's keys. A toolbelt `wait` with types but no keys now subscribes on every key the Work owns. Work without keys is refused at declaration with `invalid`. Previously the declaration was accepted, but the handshake registration failed against storage, which requires keys.
-- **Declarations survive recovery (02-06 handshake).** An unapplied toolbelt declaration belongs to the segment being adopted: `Recover` never relaunches, and wait registration clears the declaration before any resume. `Recover` now moves it to the new epoch. Previously, a crash between the declaration and the host's `Complete` lost it. A declared wait then completed the Work instead, and a declared outcome was replaced by the raw exit status.
+- **Type-only waits (B03/B04).** A Wait is a subscription on its Work's keys. A toolbelt `wait` with types but no keys subscribes on every key the Work owns. Work without keys is refused at declaration with `invalid`.
+- **Declarations survive recovery.** An unapplied toolbelt declaration belongs to the segment being adopted: `Recover` never relaunches, and wait registration clears the declaration before any resume. `Recover` moves it to the new epoch, so a crash between the declaration and the host's `Complete` does not lose it.
 
 ## Kill drills
 
-The test builds `open-conduit` with the `faultinject` build tag; production builds compile [`fault_none.go`](../../internal/bootstrap/fault_none.go) instead. In that build, `OPEN_CONDUIT_FAULT=<boundary>:<phase>[:<event type>]` wraps raw SQLite, beneath instrumentation, and SIGKILLs the daemon at the first matching write:
+The test builds `open-conduit` with the `faultinject` build tag; production builds compile [`fault_none.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/fault_none.go) instead. In that build, `OPEN_CONDUIT_FAULT=<boundary>:<phase>[:<event type>]` wraps raw SQLite, beneath instrumentation, and SIGKILLs the daemon at the first matching write:
 
 | Phase | When the daemon is killed | What it proves |
 | --- | --- | --- |
@@ -99,20 +102,19 @@ The fixture is a scope with one shell binding and the `manual` route. Its script
 | Config reload | Apply generation 2 while parked | Pass. Attempt 1 stays pinned to generation 1, the wake runs under 2, and a restart restores 2. |
 | Operator CLI | `events emit` with key, `runs table`, `doctor` | Pass, using only the shipped CLI. |
 
-03-03 adds a `kv` boundary (an extension KV `Put`, optionally in one namespace). [`TestDaemonClaudeCodeContinuityKill`](../../integration/daemon_claudecode_test.go) arms it at the Claude Code executor's pre-launch continuity decision, before and after the commit. [`TestDaemonClaudeCodeExecution`](../../integration/daemon_claudecode_test.go) kills the daemon externally while a claude turn runs. See [the Claude Code executor](claude-code-executor.md).
+A `kv` boundary (an extension KV `Put`, optionally in one namespace) is also available. [`TestDaemonClaudeCodeContinuityKill`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) arms it at the Claude Code executor's pre-launch continuity decision, before and after the commit. [`TestDaemonClaudeCodeExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) kills the daemon externally while a claude turn runs. See [the Claude Code executor](../claude-code-executor/).
 
 When the test binary is race-enabled, as under `make check`, the daemon is also built with `-race`. Any data race report in a daemon log fails the drill. Telemetry is at most once from memory, so records queued when a daemon is killed can be lost. The durable history is asserted in full. Lifecycle completeness is required only for records produced after the last kill.
 
-## Scope and limitations
+## Limitations
 
-- **Recurring timer rearm.** `FireTimer` is a single storage operation (fire plus delete or replace). The drills kill around the one-shot wait timeout. Atomic recurring rearm under SIGKILL is proven at storage and runtime level by 02-05. The core has no recurring producer until schedules (05-01).
-- **Unenforced settings.** `settings.admission_limit` is validated but not enforced, and per-scope `ScopeLimits` are not configurable. `reconcile_seconds` applies only to ingress registrations, and none are loaded in stage 02.
+- **Recurring timer rearm.** `FireTimer` is a single storage operation (fire plus delete or replace). The drills above kill around the one-shot wait timeout. Atomic recurring rearm under SIGKILL is proven at storage and runtime level ([timers](../timers-waits/)), and the [all-workflows drill](#all-four-workflows-on-one-daemon) kills the daemon right after an interval job's slot fire and rearm commit.
+- **Unenforced settings.** `settings.admission_limit` is validated but not enforced, and per-scope `ScopeLimits` are not configurable. `reconcile_seconds` applies only to ingress registrations.
 - **Telemetry redaction.** The pipeline redacts sensitive attribute keys. Resolved secret values are not fed to `Options.Secrets`, because lifecycle records never carry executor environment or payloads.
-- **Platforms.** Drills ran on macOS (darwin/arm64, host Go and Go 1.24.2, race-enabled) and in a Linux arm64 `golang:1.24.2` container (not race-enabled). Other targets are cross-built only. No hosted CI or Windows run is claimed.
 
-## All four workflows on one daemon (05-04)
+## All four workflows on one daemon
 
-The stage 05 gate reruns the composed daemon with every workload at once. [`TestDaemonAllWorkflows`](../../integration/daemon_all_workflows_test.go) (in `make drill`) starts one `serve` process on three scopes, with fakes only: the GitHub and Slack fakes, a fake Claude Code CLI, and a shell executor calling the real `os` toolbelt.
+This drill runs the composed daemon with every workload at once. [`TestDaemonAllWorkflows`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_all_workflows_test.go) (in `make drill`) starts one `serve` process on three scopes, with fakes only: the GitHub and Slack fakes, a fake Claude Code CLI, and a shell executor calling the real `os` toolbelt.
 
 | Scope | Workflow | Executors |
 | --- | --- | --- |
@@ -134,6 +136,20 @@ The drill checks the following, in order:
 10. **Redaction.** No secret value appears in any file under the drill root (SQLite, logs, artifacts, executor state, fixture output) or in the management API's runs, events and Work.
 11. **Doctor.** The `github`, `schedule` and `introspection` checks pass on the shared daemon.
 
-**Regression found and fixed.** An operator scope reconcile that committed while a generation was under way (a page in flight, or between pages) was absorbed by that generation. The generation could predate the request, yet its completion scheduled the next scan a full interval away. The ingress state now counts requests, and a generation that saw a request after its first claim leaves the source due on completion. The regression is [`TestScopeReconcileDuringScanRunsAgain`](../../integration/operator_controls_test.go), covering both cases. See [operator controls](operator-setup.md) and [event ingress](event-ingress.md).
+An operator scope reconcile that commits while a generation is under way (a page in flight, or between pages) leaves the source due when that generation completes, so the request is answered by a generation that starts after it. [`TestScopeReconcileDuringScanRunsAgain`](https://github.com/open-conduit/open-conduit/blob/main/integration/operator_controls_test.go) covers both cases. See [operator controls](../operator-setup/) and [event ingress](../event-ingress/#bounded-scheduling-and-inspection).
 
-**Storage negative controls on SQLite.** [`TestWeakenedSQLiteIsRejected`](../../internal/storage/sqlite/negative_test.go) wraps the real backend three ways: lost atomicity (a failed callback still commits), lost deduplication (the delivery identity includes the Event ID) and lost fencing (the lease guard is dropped). Each wrapper is rejected by the shared cases it weakens, and the same cases pass on plain SQLite. The reference-backend controls in `conformance` still run.
+**Storage negative controls on SQLite.** [`TestWeakenedSQLiteIsRejected`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/negative_test.go) wraps the real backend three ways: lost atomicity (a failed callback still commits), lost deduplication (the delivery identity includes the Event ID) and lost fencing (the lease guard is dropped). Each wrapper is rejected by the shared cases it weakens, and the same cases pass on plain SQLite. The reference-backend controls in `conformance` still run.
+
+## History
+
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
+
+- Ticket 02-09 composed the first long-running daemon and closed the stage 02 gate with the kill drills. At that stage the in-process registry held only executor `shell` and route handler `manual`, the telemetry exporters were the JSON lifecycle log and `telemetry.OTel`, and no ingress registrations were loaded, so `reconcile_seconds` had no effect. The core had no recurring timer producer until schedules arrived in 05-01. `events emit` gained `--key-source/--key-external-id` in this ticket.
+- The 02-09 drills found two runtime defects, both fixed then:
+  - **Type-only waits.** A toolbelt `wait` with types but no keys was accepted at declaration, but the handshake registration then failed against storage, which requires keys.
+  - **Declarations lost on recovery.** A crash between a toolbelt declaration and the host's `Complete` lost the declaration (from the 02-06 handshake). A declared wait then completed the Work instead, and a declared outcome was replaced by the raw exit status.
+- The 02-09 drills ran on macOS (darwin/arm64, host Go and Go 1.24.2, race-enabled) and in a Linux arm64 `golang:1.24.2` container (not race-enabled). Other targets were cross-built only. No hosted CI or Windows run was claimed.
+- Ticket 03-03 added the `kv` fault boundary, which `TestDaemonClaudeCodeContinuityKill` arms.
+- Ticket 05-04 added the all-workflows drill as the stage 05 gate. It found a regression: an operator scope reconcile that committed while a generation was under way was absorbed by that generation, which could predate the request, yet its completion scheduled the next scan a full interval away. The ingress state now counts requests, and `TestScopeReconcileDuringScanRunsAgain` was added.

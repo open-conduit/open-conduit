@@ -10,7 +10,7 @@
 // surface, Host for the scoped extension-to-host methods, Store
 // (storage.Store over the host) and Artifacts (storage.Artifacts over the
 // host) so in-process code runs unchanged, and PackageCommand for packaging.
-// The guide is docs/architecture/extension-packaging.md.
+// The guide is site/src/content/docs/architecture/extension-packaging.md.
 package sdk
 
 import (

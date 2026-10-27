@@ -1,16 +1,19 @@
-# Extension packaging, SDK and certification
+---
+title: "Extension packaging, SDK and certification"
+description: "How to write, package, install, upgrade, roll back, remove and certify a third-party extension package."
+---
 
-Ticket 07-03 · **provisional, for user review**. This guide covers writing, packaging, installing, upgrading, rolling back, removing and certifying a third-party extension. It builds on the [subprocess protocol](extension-protocol.md) (07-01) and its [runtime, trust model and schema evolution](extension-protocol.md#runtime-trust-model-and-schema-evolution-07-02) (07-02). Decisions 21–32 at the end are provisional.
+This guide covers writing, packaging, installing, upgrading, rolling back, removing and certifying a third-party extension. Installed packages run as separate processes that speak the [subprocess protocol](../extension-protocol/) (decision B08) and are supervised under its [runtime, trust model and schema evolution](../extension-protocol/#runtime-trust-model-and-schema-evolution). **Packaging, the SDK and certification are provisional**, like the protocol: they may still change, and decisions 21–32 at the end are listed for review.
 
 Code:
 
-- [`protocol/sdk`](../../protocol/sdk/sdk.go): the extension-side SDK;
-- [`protocol/certification.go`](../../protocol/certification.go): the certification fixture format;
-- [`conformance.Criteria`](../../conformance/certification.go): the criteria;
-- [`internal/certify`](../../internal/certify/certify.go): the runner;
-- [`internal/extproc/install.go`](../../internal/extproc/install.go): install, update, rollback and removal;
-- [`internal/extproc/diagnose.go`](../../internal/extproc/diagnose.go): diagnostics;
-- [`internal/bootstrap/extensions.go`](../../internal/bootstrap/extensions.go): daemon wiring.
+- [`protocol/sdk`](https://github.com/open-conduit/open-conduit/blob/main/protocol/sdk/sdk.go): the extension-side SDK;
+- [`protocol/certification.go`](https://github.com/open-conduit/open-conduit/blob/main/protocol/certification.go): the certification fixture format;
+- [`conformance.Criteria`](https://github.com/open-conduit/open-conduit/blob/main/conformance/certification.go): the criteria;
+- [`internal/certify`](https://github.com/open-conduit/open-conduit/blob/main/internal/certify/certify.go): the runner;
+- [`internal/extproc/install.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/install.go): install, update, rollback and removal;
+- [`internal/extproc/diagnose.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/diagnose.go): diagnostics;
+- [`internal/bootstrap/extensions.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/extensions.go): daemon wiring.
 
 ## Writing an extension with the SDK
 
@@ -34,7 +37,7 @@ func main() {
 }
 ```
 
-The SDK serves the public Go contracts unchanged, so code written for the in-process interfaces (`extension.Ingress`, `extension.Executor` and its optional controls, `extension.RouteHandler`, `extension.Operation`, `extension.ResourceProvider`, `observability.Exporter`, `extension.Setup`) runs in a subprocess as it is. The first-party Slack extension and shell executor run this way with no change to their packages ([`packages/slack`](../../packages/slack/slack.go), [`packages/shell`](../../packages/shell/shell.go)).
+The SDK serves the public Go contracts unchanged, so code written for the in-process interfaces (`extension.Ingress`, `extension.Executor` and its optional controls, `extension.RouteHandler`, `extension.Operation`, `extension.ResourceProvider`, `observability.Exporter`, `extension.Setup`) runs in a subprocess as it is. The first-party Slack extension and shell executor run this way with no change to their packages ([`packages/slack`](https://github.com/open-conduit/open-conduit/blob/main/packages/slack/slack.go), [`packages/shell`](https://github.com/open-conduit/open-conduit/blob/main/packages/shell/shell.go)).
 
 | `sdk.Extension` field | Manifest declaration | Wire methods |
 | --- | --- | --- |
@@ -71,9 +74,9 @@ Any language works: the protocol is newline-delimited JSON-RPC 2.0, and the cert
 
 ### Examples
 
-- [`protocol/examples/notes`](../../protocol/examples/notes): every extension surface. It has ingress with a webhook receiver, a route with a trigger, operations including a committed emission, a recurrence, tasks, a resource provider, a telemetry exporter, annotations, a setup flow, validation, three releases with schema evolution, and a KV migration.
-- [`protocol/examples/runner`](../../protocol/examples/runner): an executor with detached jobs, inject, interrupt, stop and forget.
-- [`packages/slack`](../../packages/slack) and [`packages/shell`](../../packages/shell): real first-party workloads packaged.
+- [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/notes): every extension surface. It has ingress with a webhook receiver, a route with a trigger, operations including a committed emission, a recurrence, tasks, a resource provider, a telemetry exporter, annotations, a setup flow, validation, three releases with schema evolution, and a KV migration.
+- [`protocol/examples/runner`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/runner): an executor with detached jobs, inject, interrupt, stop and forget.
+- [`packages/slack`](https://github.com/open-conduit/open-conduit/tree/main/packages/slack) and [`packages/shell`](https://github.com/open-conduit/open-conduit/tree/main/packages/shell): real first-party workloads packaged.
 
 ## Package layout
 
@@ -88,7 +91,7 @@ acme/
   …                             anything else the command needs (the shell package ships its toolbelt `os` binary)
 ```
 
-`open-conduit extension inspect DIR` checks a directory offline. It checks the strict manifest rules (07-01), a relative command inside the package that exists and is executable, and the declared playbooks directory. A package is self-contained: install copies it, resolving symlinks.
+`open-conduit extension inspect DIR` checks a directory offline. It checks the [strict manifest rules](../extension-protocol/#manifest), a relative command inside the package that exists and is executable, and the declared playbooks directory. A package is self-contained: install copies it, resolving symlinks.
 
 Packaged Go binaries also answer `package-manifest` and `package-certification` (`sdk.PackageCommand`), so the manifest has one source of truth in code. `make packages` builds the first-party packages and the examples into `dist/packages/<name>/` this way.
 
@@ -100,7 +103,7 @@ Packaged Go binaries also answer `package-manifest` and `package-certification` 
 | Host build | No host-version field. The protocol version is the contract. An additive surface (a new method or manifest field) is a new protocol version, and the host keeps speaking the previous one for at least one release. | — |
 | Own release | `version` is informational: shown in `list`, doctor and reports. | — |
 | KV layout | `kv_version` never goes down. A newer release migrates from the stored layout at configure. | at update (refused) and at start (`kv_downgrade`) |
-| Payload schemas | `schemas[].versions` lists what the release reads; the last is what it writes (07-02). | every call (deterministic read gate) |
+| Payload schemas | `schemas[].versions` lists what the release reads; the last is what it writes ([schema evolution](../extension-protocol/#event-payload-schema-evolution)). | every call (deterministic read gate) |
 | Executor capabilities | Bindings `requires` mechanical labels; a package declares exactly what it implements. | at config validation (as for in-process executors) |
 
 ## Install, update, rollback and removal
@@ -109,16 +112,16 @@ Installed packages live in `<config dir>/extensions/<name>/`, beside `config.jso
 
 - **`open-conduit extension install DIR`** checks the layout and protocol compatibility. It refuses, atomically, any name that conflicts with a first-party registration or another installed package. It then copies into a staging directory and renames into place, so a failed install changes nothing. A package named after a first-party extension (`slack`, `shell`, `github`, …) is refused while that extension is registered in-process (`registration_conflict`).
 - **`open-conduit extension update DIR`** does the same for an installed name. A lower `kv_version` is refused. The replaced release is kept as `.previous/<name>`.
-- **`open-conduit extension rollback NAME`** swaps the kept release back. If the newer release already migrated the extension's KV layout, the daemon refuses the older one at start with `kv_downgrade`, because there is no automatic downgrade (07-02). The remedy is to restore a 06-02 backup taken before the update.
+- **`open-conduit extension rollback NAME`** swaps the kept release back. If the newer release already migrated the extension's KV layout, the daemon refuses the older one at start with `kv_downgrade`, because there is no automatic downgrade. The remedy is to restore a backup taken before the update ([backup bundles](../backup-bundles/)).
 - **`open-conduit extension remove NAME`** is refused while the config at `--config` still uses the package's types (it validates the config without the package). `--force` overrides. Removal deletes the package and its kept release, never its durable state. Its KV namespaces and recorded layout stay in the coordination store, and `<state>/extensions/<name>` and its log stay on disk, so reinstalling the same or a newer release resumes from them. To purge, delete those directories after removal.
 - **`open-conduit extension list`** shows installed packages, their protocol versions, what they provide, the release kept for rollback, and any discovery or conflict problems.
 
 ### Upgrade procedure
 
 1. `open-conduit extension certify NEW_DIR` (below).
-2. `open-conduit backup create DEST` with the daemon stopped (06-02), if the new release raises `kv_version`.
+2. `open-conduit backup create DEST` with the daemon stopped, if the new release raises `kv_version`.
 3. `open-conduit extension update NEW_DIR`.
-4. Restart the daemon. At start the old process is gone; the new one migrates its KV at `configure`, and payloads it cannot read are skipped deterministically. There are no rolling upgrades (07-02).
+4. Restart the daemon. At start the old process is gone; the new one migrates its KV at `configure`, and payloads it cannot read are skipped deterministically. There are no rolling upgrades.
 5. Check `open-conduit doctor` (the `extensions` check). On trouble, run `open-conduit extension rollback NAME` and restart. If the new release migrated KV, the rollback is refused at start and you restore the backup instead.
 
 ### Removal procedure
@@ -149,10 +152,9 @@ It then sends `configure` again on every config apply and every tunnel URL chang
 
 Secrets reach a package only through `secret.resolve`. It returns the secret names selected by the package's own entries in a configured scope, or, with `connection` set, the secret names of a connection one of those entries names (B05). `config check` offline knows the installed packages' types. Their opaque config is checked by the package only when a daemon validates or applies it; an offline check never starts a process. `open-conduit init TYPE` offers installed packages' setups by starting the package for the duration of the flow, without a coordination store.
 
-Not wired, and recorded as follow-ons:
+An installed package's `work_kind.trigger`, `recurrence.next` and `dependency.filter` run through the [bounded in-transaction calls](../extension-protocol/#transactions-and-in-transaction-calls), with the same fallbacks.
 
-- Playbooks of installed packages are not copied into the Claude Code plugin directory; that remains a first-party convention.
-- `work_kind.trigger`, `recurrence.next` and `dependency.filter` of installed packages run through the 07-02 bounded in-transaction calls, with the same fallbacks.
+Playbooks of installed packages are not copied into the Claude Code plugin directory; playbooks remain a first-party convention.
 
 ## Diagnostics
 
@@ -225,7 +227,7 @@ A report states:
 
 ### Negative controls
 
-[`protocol/examples/weakened`](../../protocol/examples/weakened/weakened.go) packages the examples with one defect each. `TestCertificationNegativeControls` proves that each fails the criterion it names, and is never certified:
+[`protocol/examples/weakened`](https://github.com/open-conduit/open-conduit/blob/main/protocol/examples/weakened/weakened.go) packages the examples with one defect each. `TestCertificationNegativeControls` proves that each fails the criterion it names, and is never certified:
 
 - version-blind negotiation;
 - manifest drift;
@@ -240,7 +242,7 @@ A report states:
 - replacement on recover;
 - inject accepted for unknown executions.
 
-### Evidence (07-03)
+## Evidence
 
 - `TestCertificationFirstPartyPackages`: Slack, shell, notes and runner are certified, and their reports state versions and limits.
 - `TestCertificationNegativeControls` and `TestCertificationInvalidPackage`.
@@ -252,17 +254,26 @@ A report states:
 - Unit tests in `internal/extproc` (install, update, rollback, removal, diagnostics).
 - The first-party in-process suites still run unchanged: Slack and shell keep their in-process registration, and workflows A–D pass (`TestDaemonAllWorkflows`).
 
-## Provisional decisions for user review (07-03)
+## Provisional decisions for user review
 
 21. Packages are directories under `<config dir>/extensions/<name>/`, read only at daemon start. Install, update, rollback and removal are offline CLI commands that take effect at the next serve; there is no hot load.
 22. Install stages and renames atomically, keeps exactly one previous release for rollback, refuses a lower `kv_version`, and refuses first-party names. A first-party package (Slack, shell) therefore cannot replace its in-process registration; the packages exist to prove and certify the boundary.
 23. Removal keeps durable state (KV, recorded layout, state directory, log) and is refused while the config uses the package, unless forced.
 24. Compatibility is the protocol version alone (no host-version range), with a policy of keeping the previous protocol version for at least one release after an additive change.
 25. The SDK's final shape: `sdk.Extension` fields per surface, `sdk.Host`, `sdk.Store` (precondition-on-read optimistic commits; prefix ranges not protected) and `sdk.Artifacts`, plus `sdk.PackageCommand` for packaging.
-26. `secret.resolve` gained a `connection` field and `configure` entries gained `name` and `connection`, so a package reaches its connections' secrets without bootstrap glue (B05 scoping kept).
+26. `secret.resolve` takes a `connection` field and `configure` entries carry `name` and `connection`, so a package reaches its connections' secrets without bootstrap glue (B05 scoping kept).
 27. Packages start before the configuration opens. A package that fails to start leaves its types unregistered, so a config using them fails validation and the daemon refuses to start with the diagnostic.
 28. Certification criteria version 1 (above), run against the package's own fixture by `open-conduit extension certify`. The fixture format lives in `protocol`. A declared ingress type or executor requires a fixture case.
 29. `receive_time_varies` relaxes only `received_at` equality for packages that stamp reconcile observations with their own clock.
-30. The certification runner is production code in the `open-conduit` binary, so composition may depend on the public `conformance` checks (never `conformance/reference`); the boundary rule was narrowed to say so.
+30. The certification runner is production code in the `open-conduit` binary, so composition may depend on the public `conformance` checks (never `conformance/reference`); the boundary rule says so.
 31. The Slack package requires source namespaces `slack` or `slack/…` (the subprocess namespacing rule), which the in-process extension does not.
 32. Playbooks of installed packages are not wired into agent executors (left as a first-party convention).
+
+## History
+
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
+
+- **07-03.** Built on the protocol (07-01) and its runtime (07-02). It wired installed packages into the daemon, adapted the surfaces 07-02 had left catalogued (`webhook.handle`, `provider.*` with `provider.owner_status`, `telemetry.export`, `work.annotate`, `validate`, `setup.run` with the `setup.*` callbacks), settled the SDK's final shape, added the package layout, the `open-conduit extension` commands, diagnostics and certification, and packaged the Slack extension and the shell executor as the round trip of two first-party integrations. It added the `connection` field to `secret.resolve` and the `name` and `connection` fields to `configure` entries, and narrowed the package boundary rule so composition may depend on the public `conformance` checks. It recorded decisions 21–32 and the evidence listed above.
+- 07-03 listed two items as "not wired, and recorded as follow-ons": playbooks of installed packages were not copied into the Claude Code plugin directory, and installed packages' `work_kind.trigger`, `recurrence.next` and `dependency.filter` ran through 07-02's bounded in-transaction calls with the same fallbacks.

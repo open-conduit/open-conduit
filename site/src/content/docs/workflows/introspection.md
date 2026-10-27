@@ -54,4 +54,4 @@ Each workflow is a scope in the config. The example below is a complete, minimal
 }
 ```
 
-In practice the introspection entry sits in the same scope as your GitHub agent. See [introspection](https://github.com/open-conduit/open-conduit/blob/main/docs/architecture/issue-reporting.md) for the sweep, the host watch and by-hand runs.
+In practice the introspection entry sits in the same scope as your GitHub agent. See [introspection](../../architecture/issue-reporting/) for the sweep, the host watch and by-hand runs.

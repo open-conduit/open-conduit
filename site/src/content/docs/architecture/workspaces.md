@@ -1,6 +1,9 @@
-# Optional workspaces and the Git provider
+---
+title: "Optional workspaces and the Git provider"
+description: "Decision B07: how executors acquire optional workspaces from a resource provider, and how the Git provider creates, reuses and cleans up checkouts and worktrees."
+---
 
-Decision B07 · ticket 03-02. This resolves the PRD's open "workspace provider contract" and the summary's "workspace fresh/shared, copy/setup and cleanup" decision. The public contract is [`extension/resource.go`](../../extension/resource.go). The first provider is [`extensions/git`](../../extensions/git). [`executors/shell`](../../executors/shell) is its first consumer, and [`internal/bootstrap`](../../internal/bootstrap/resources.go) composes them.
+This page records decision B07: the workspace provider contract, and how workspaces are made fresh or shared, copied into, set up and cleaned up. A Scope may bind a resource provider; an executor acquires a workspace from it for each attempt, and the host reconciles and removes workspaces once their owners finish. The public contract is [`extension/resource.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/resource.go). The Git provider in [`extensions/git`](https://github.com/open-conduit/open-conduit/tree/main/extensions/git) implements it. The [shell](https://github.com/open-conduit/open-conduit/tree/main/executors/shell) and [Claude Code](../claude-code-executor/) executors consume it, and [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/resources.go) composes them.
 
 ## What core knows
 
@@ -14,8 +17,8 @@ Core knows nothing about repositories, branches, worktrees or filesystem layout.
 | `ResourceBroker` | What an executor sees: `Acquire(ResourceRequest)`, `Lookup(ref)`. `BindResources(provider, owner, config)` creates it. Only the host binds, so an executor cannot act for another owner. |
 | `ResourceOwner` | Trusted `{ScopeID, WorkID, ExecutionID}` taken from the attempt, never from the executor. |
 | `ResourceRequest` | Executor-chosen `Mode` (empty selects the binding's default), provider-defined opaque `Params`, and an optional `Log` writer for human-readable progress. |
-| `Resource` | `Kind`, opaque lease `Ref`, `Dir`, `Env` (the provider's environment layer, never persisted) and `Data` (a description for history). |
-| `ResourceSweeper` | Optional `Sweep(status)`: removes spare resources owner-driven release doesn't reach and reports those it kept (08-02). |
+| `Resource` | `Kind`, opaque lease `Ref`, `Dir`, `Env` (the provider's environment layer, never persisted), `Data` (a description for history) and `Summary` (a one-line description for history). |
+| `ResourceSweeper` | Optional `Sweep(status)`: removes spare resources owner-driven release doesn't reach and reports those it kept. |
 | `ResourceStatusFunc` | Host-reported durable owner state for `Reconcile`. An execution is *done* only when it is terminal **and** its physical resource exclusion is confirmed (`AttemptState.Excluded`). |
 
 These are the guarantees a provider must meet:
@@ -34,7 +37,7 @@ These are the guarantees a provider must meet:
 | `work` | Work | Creates a worktree on a branch private to the Work, reused by each of its attempts until the Work is terminal. An existing local branch is checked out. A remote-only branch is tracked from the configured remote. Otherwise a new branch starts at `remote/base` (or the local base). Reuse never resets: local commits and uncommitted edits stay, and the run is told how many uncommitted paths it inherited. Copied files do not count. A branch checked out elsewhere fails clearly. Executors may request a branch through `Params` (`{"branch": …}`); otherwise `branch_template` applies. |
 | `fresh` | execution | Creates a detached worktree at the base branch's freshly fetched remote head, isolated per execution. The main checkout never moves. |
 
-Claude Code issue work (03-03) uses `work`, with `Lookup` after restart. Fresh-checkout and in-checkout jobs (05-02) use `fresh` and `shared`. Slack (04) and research work have no resource.
+Claude Code issue work uses `work`: a new segment acquires and a resumed segment uses `Lookup` ([Claude Code executor](../claude-code-executor/#workspace-and-environment)). Fresh-checkout and in-checkout jobs use `fresh` and `shared` through ordinary bindings ([job runs](../schedule-extension/#job-runs)). Slack and research work have no resource.
 
 ## Lease ownership, recovery and cleanup
 
@@ -49,8 +52,6 @@ The provider keeps a private ledger (`<state>/resources/git/leases/<ref>.json`, 
 The daemon reconciles every `ResourceInterval` (default 5s) in the background. Doctor shows `ok`, `info retained` with each retained lease and its expiry, or `warn cleanup_failed/reconcile_failed`.
 
 ## Disk safety and the spare-workspace sweep
-
-Ticket 08-02 adds worktree disk safety.
 
 - **Full-disk refusal.** Before it makes a `work` or `fresh` workspace (agent and job checkouts alike), the provider measures the target filesystem at the workspace root and sizes the checkout (`git ls-tree -r -l` of the start ref). It refuses when the checkout would leave less free than `100 − disk_full_percent` of the disk keeps, counting at most `disk_reserve_bytes`. The defaults are 90% and 10 GiB. `disk_full_percent: 100` turns the check off. A disk it can't read doesn't stop it. Re-acquiring an existing workspace and `shared` mode need no room. The refusal is a `NoSpaceError` wrapping the public `extension.ErrResourceExhausted` (protocol code `resource_exhausted`, which carries the message). It says how much is free, what the checkout needs and what is kept, then lists which of the scope's workspaces can go: those retained after their owner finished, or with failed cleanup, plus workspace directories no lease holds. Nothing is created and the lease is dropped, so trying again is refused the same way until space is freed. The executor's normal retry budget still applies. Shell and Claude Code report it as a structured failed result, `workspace_no_space`, whose summary is the message, and the run log carries it too. The free-space probe is injectable (`Options.DiskSpace`; the daemon's `ResourceDiskSpace`), so tests never fill a disk.
 - **Partial-failure cleanup.** When creation fails partway, for example when git leaves a half-made checkout on a full disk, the provider stops anything in the directory, runs `git worktree remove --force`, deletes the directory and prunes. It then drops the lease, so the workspace is never reused as if it were whole. If that cleanup itself fails, the lease becomes `cleanup_failed` and `Reconcile` retries it. A partial directory left by a crash is cleared before the next creation at that path.
@@ -88,11 +89,26 @@ Ticket 08-02 adds worktree disk safety.
 
 ## Shell executor
 
-A shell binding with a resource runs in `Resource.Dir` with the provider layer. `dir` and a bound workspace together are rejected (`invalid_config`). Acquisition happens after recovery intent and before the process deadline starts. The provider's explanation (fast-forward, behind/stale reason, copied files, setup output) is written to the run's log artifact. The structured result carries `workspace: {ref, schema, data}`. A setup failure or unavailable workspace becomes a structured failed result with no process (`workspace_setup_failed`, `workspace_unavailable`, and `workspace_no_space` for a full-disk refusal), so no uncertain hold remains. The shell executor now advertises the mechanical `workspace` capability.
+A shell binding with a resource runs in `Resource.Dir` with the provider layer. `dir` and a bound workspace together are rejected (`invalid_config`). Acquisition happens after recovery intent and before the process deadline starts. The provider's explanation (fast-forward, behind/stale reason, copied files, setup output) is written to the run's log artifact. The structured result carries `workspace: {ref, schema, data}`. A setup failure or unavailable workspace becomes a structured failed result with no process (`workspace_setup_failed`, `workspace_unavailable`, and `workspace_no_space` for a full-disk refusal), so no uncertain hold remains. The shell executor advertises the mechanical `workspace` capability.
+
+## Run summaries
+
+`Resource.Summary` is the provider's one-line description for history. The Git provider's summaries read like these:
+
+- `main checkout, fast-forwarded 2 commit(s) to origin/main`
+- `main checkout, 1 commit(s) behind origin/main: another execution is using the checkout`
+- `fresh worktree at origin/main 1a2b3c4`
+- `worktree on branch agent/work-x, reused`
+
+Executors report the acquired resource (never its environment) as `extension.Result.Workspace`, and run history and the TUI show it.
+
+## Agents and workspaces
+
+Workspaces are made by executor acquisition and removed by host reconcile, so agents need no worktree commands: turns run in the acquired workspace and no workspace operation is registered ([engineering tools](../engineering-tools/)).
 
 ## Verification
 
-- [Provider tests](../../extensions/git/provider_test.go):
+- [Provider tests](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/provider_test.go):
   - shared catch-up with dirty-elsewhere, dirty-in-the-way, other-branch, diverged and no-remote cases, with nothing stashed or rewritten
   - concurrent shared users only compare
   - fresh at the remote head, isolation, idempotent re-acquire, `Lookup` ownership, success removal, failure retention and expiry
@@ -103,26 +119,35 @@ A shell binding with a resource runs in `Resource.Dir` with the provider layer. 
   - `.env`/signing layer precedence, with no values persisted
   - restart with a crashed `acquiring` lease, failed cleanup retried after restart, unknown owners retained
   - strict config, symlink copy escapes and credential redaction
-  - the ported [stray-process test](../../extensions/git/kill_unix_test.go)
-- [Shell broker test](../../executors/shell/shell_test.go): workspace cwd, layer order and reserved-name drop, the result/log explanation and structured failures.
-- [Scheduler hook test](../../integration/scheduler_resources_test.go): the broker is passed opaquely, a nil broker without a resource, and a binding failure fails the attempt before any executor call.
-- [Composed daemon test](../../integration/daemon_workspace_test.go), using local bare repositories only:
+  - the ported [stray-process test](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/kill_unix_test.go)
+- [Shell broker test](https://github.com/open-conduit/open-conduit/blob/main/executors/shell/shell_test.go): workspace cwd, layer order and reserved-name drop, the result/log explanation and structured failures.
+- [Scheduler hook test](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_resources_test.go): the broker is passed opaquely, a nil broker without a resource, and a binding failure fails the attempt before any executor call.
+- [Composed daemon test](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_workspace_test.go), using local bare repositories only:
   - a fresh run at the remote head with the copied `.env` layer and setup survives a daemon SIGKILL by adoption (one attempt), and its worktree is removed and deregistered after success
   - a failed fresh run is retained and reported by doctor
   - a shared run fast-forwards the main checkout and keeps an unrelated local edit
   - a scope with no resource runs with no `.env` layer
-- [Disk safety tests](../../extensions/git/disk_test.go) (08-02):
+- [Disk safety tests](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/disk_test.go):
   - full-disk refusal through the injected probe, with the actionable message, the scope's spare workspaces and nothing made or leased
   - reuse without a check, `disk_full_percent: 100` and a capped reserve
   - a half-made workspace cleared, deregistered and unleased
   - the sweep removing finished, owner-unknown and orphaned clean workspaces (branches kept) and keeping dirty, unpushed, in-use, unreadable, live and still-retained ones
-- [Disk safety drill](../../integration/daemon_workspace_disk_test.go) on the composed daemon: a structured `workspace_no_space` refusal with nothing run, then the sweep removing a cancelled Work's workspace and an idle orphan while keeping a dirty orphan, all reported by doctor.
+- [Disk safety drill](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_workspace_disk_test.go) on the composed daemon: a structured `workspace_no_space` refusal with nothing run, then the sweep removing a cancelled Work's workspace and an idle orphan while keeping a dirty orphan, all reported by doctor.
+- [Job tests](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_job_parity_test.go): `TestDaemonJobParity` covers a job catching up a stale shared checkout (the ported `TestJobCatchesUpTheMainCheckout`), and [`TestDaemonWorkflowC`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_workflow_c_test.go) the fresh-checkout job.
 
-## Deferred
+## Limitations
 
-- 03-03 binds Claude Code to `work`: a new segment acquires and a resumed segment uses `Lookup` ([Claude Code executor](claude-code-executor.md)).
-- Workspaces are made by executor acquisition and removed by host reconcile, so agents need no worktree commands: turns run in the acquired workspace and no workspace operation is registered ([engineering tools](engineering-tools.md)).
-- Pending-run coalescing for in-checkout jobs is resolved by 05-01 (one standing Work per job).
 - Windows has no process-group setup cleanup or stray-process search (B06).
 
-05-02 update: `Resource.Summary` is the provider's one-line description for history (the Git provider: `main checkout, fast-forwarded 2 commit(s) to origin/main`, `main checkout, 1 commit(s) behind origin/main: another execution is using the checkout`, `fresh worktree at origin/main 1a2b3c4`, `worktree on branch agent/work-x, reused`). Executors report the acquired resource (never its environment) as `extension.Result.Workspace`, and run history and the TUI show it. Jobs use `fresh` and `shared` through ordinary bindings ([job runs](schedule-extension.md#job-runs-05-02)); `TestDaemonJobParity` covers `TestJobCatchesUpTheMainCheckout` and `TestDaemonWorkflowC` the fresh-checkout job.
+## History
+
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
+
+- **03-02** recorded decision B07, resolving the open "workspace provider contract" and "workspace fresh/shared, copy/setup and cleanup" questions from planning. It delivered the contract, the Git provider and the shell executor as its first consumer. At that point Claude Code's binding to `work`, the agents' view of workspaces and pending-run coalescing for in-checkout jobs were deferred.
+- **03-03** bound Claude Code to `work`: a new segment acquires and a resumed segment uses `Lookup`.
+- **03-04** settled that agents need no worktree commands and that no workspace operation is registered.
+- **05-01** resolved pending-run coalescing for in-checkout jobs (one standing Work per job).
+- **05-02** added `Resource.Summary` and `extension.Result.Workspace`, shown in run history and the TUI, and moved jobs onto `fresh` and `shared` through ordinary bindings.
+- **08-02** added worktree disk safety: full-disk refusal, partial-failure cleanup, `ResourceSweeper` and the spare-workspace sweep, with the disk safety tests and drill.

@@ -1,12 +1,15 @@
-# Lifecycle telemetry, unified run history and doctor
+---
+title: "Lifecycle telemetry, unified run history and doctor"
+description: "How Open Conduit reports lifecycle telemetry, keeps one run history for every executor, applies retention and runs doctor checks."
+---
 
-Ticket 02-08 implements the [B03 observability contract](extensions.md#required-lifecycle-telemetry) for the runtime, the PRD's single run history and TUI, and the health/doctor checks. There are three parts:
+Open Conduit reports every committed lifecycle change as telemetry, keeps one run history for every executor, applies one retention policy and answers health and doctor checks. This implements the [B03 observability contract](../extensions/#required-lifecycle-telemetry) for the runtime. There are three parts:
 
-- **Instrumentation** in [`internal/runtime/telemetry.go`](../../internal/runtime/telemetry.go).
-- **Export** in [`internal/telemetry`](../../internal/telemetry): a buffered pipeline, the OpenTelemetry mapping and a local JSON log exporter.
-- **Inspection**: the [history](../../internal/runtime/history.go), [retention](../../internal/runtime/retention.go) and [doctor](../../internal/runtime/doctor.go) runtime reads, served by [management](../../internal/management/history.go) and presented by the [client](../../client/client.go), the [`open-conduit` commands](../../internal/cli/history.go), [`runview`](../../internal/cli/runview/runview.go) and the [TUI](../../internal/tui/tui.go).
+- **Instrumentation** in [`internal/runtime/telemetry.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/telemetry.go).
+- **Export** in [`internal/telemetry`](https://github.com/open-conduit/open-conduit/tree/main/internal/telemetry): a buffered pipeline, the OpenTelemetry mapping and a local JSON log exporter.
+- **Inspection**: the [history](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/history.go), [retention](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/retention.go) and [doctor](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/doctor.go) runtime reads, served by [management](https://github.com/open-conduit/open-conduit/blob/main/internal/management/history.go) and presented by the [client](https://github.com/open-conduit/open-conduit/blob/main/client/client.go), the [`open-conduit` commands](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/history.go), [`runview`](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/runview/runview.go) and the [TUI](https://github.com/open-conduit/open-conduit/blob/main/internal/tui/tui.go).
 
-Exporter configuration (OTLP endpoints, PostHog), host watches and connection reachability probes belong to extensions. Daemon composition, including the poll loops that call the retention sweep, is delivered by 02-09 ([daemon composition](daemon-core-gate.md)).
+Exporter configuration (OTLP endpoints, PostHog), host watches and connection reachability probes belong to extensions. The daemon composes the pipeline, its exporters and SDK providers, the retention sweep and the doctor inputs into `open-conduit serve` ([daemon composition](../daemon-core-gate/)).
 
 ## Instrumentation
 
@@ -62,7 +65,9 @@ Correlation always comes from trusted runtime state, never from an executor payl
 
 Recovery keeps the attempt trace and records the new epoch. `execution.queued` carries `trigger.trace_id`, so an operator can follow an Event chain into the attempt it started.
 
-B03 clarification: a reconcile scan is host-polled, so no trigger Event exists to anchor it. Ingress scan records (`ingress.` prefix) are instead anchored by their `ingress.source` attribute and a trace derived from source and scan. `observability.Validate` accepts that anchor only for `ingress.` records, and no Event ID is fabricated. A pre-acceptance push rejection is returned synchronously to the ingress caller and is not a lifecycle record. The shared observer case now also rejects an unanchored ingress record.
+A reconcile scan is host-polled, so no trigger Event exists to anchor it. Ingress scan records (`ingress.` prefix) are instead anchored by their `ingress.source` attribute and a trace derived from source and scan. `observability.Validate` accepts that anchor only for `ingress.` records, and no Event ID is fabricated. A pre-acceptance push rejection is returned synchronously to the ingress caller and is not a lifecycle record. The shared observer case rejects an unanchored ingress record.
+
+A fired timer's Event is reported once as `event.accepted`, not once by the acceptance and again by `FireTimer`.
 
 ## Export pipeline
 
@@ -91,6 +96,11 @@ Delivery is at most once, from memory: records still queued at a crash are lost 
 
 `telemetry.LogExporter` writes the same records as local JSON lines, for operation without a collector. Executors report cost and tokens through `extension.Result.Usage` on their structured outcome. The usage appears as `Usage` on the terminal record and in run history.
 
+Host watch and telemetry events are extension adapters on the public observability contract, with no runtime branch ([introspection](../issue-reporting/)):
+
+- **Telemetry exporter.** `introspection.Exporter` is an `observability.Exporter` in the lifecycle pipeline. It turns the committed `event.accepted` records of the extension's families into named telemetry events, each once, written to `logs/introspection-telemetry.jsonl` only while an entry sets `telemetry`.
+- **Host watch.** The optional host watch runs as a pass of the daemon loop and reports threshold crossings as extension-originated reports.
+
 ## Unified run history and TUI
 
 `runtime.Run` is one attempt's history record, with the same shape for every executor. It contains:
@@ -105,6 +115,7 @@ Delivery is at most once, from memory: records still queued at a crash are lost 
 - wait and wake links
 - the Work's retry eligibility when this is the latest failed attempt
 - retention status
+- the resource the attempt ran in (`workspace` in `GET /v1/runs`), from the executor's generic `extension.Result.Workspace`: kind, lease reference, directory and the provider's one-line summary
 
 Nothing in it interprets executor payloads or Work kinds. Management serves it at `GET /v1/runs`, filtered by `scope_id`, `work_id`, `state`, `executor_binding`, `executor`, `work_kind` or `outcome`, with the standard keyset pagination, and at `GET /v1/runs/{id}` with an ETag. `GET /v1/runs/{id}/live?tail=N` returns a running run's outputs so far (each at most its last `N` bytes, 64 KiB by default) through the executor's optional `extension.LiveExecutor`, in the order its artifacts will have; a run that is not running answers `409 not_live`, and an executor without live output `422 live_unsupported`.
 
@@ -115,7 +126,11 @@ Operator commands:
 - `runs log ID` streams the run's log artifact, which is the first text artifact. On a running run it prints the output so far, and `--follow` keeps printing new output until the run ends. `--transcript` picks the transcript (the JSON-lines output) instead.
 - `open-conduit tui` opens the interactive view.
 
-The TUI is a bubbletea model over the client only. It provides a refreshing list with state filters, a detail view with trigger, timeout, usage, retry, retention, artifacts and every attempt of the Work, and a log view that tails the last 64 KiB with scrolling. On a running run the log view follows the live output, refetching on every tick and staying at the end unless scrolled up; once the run ends it settles on the artifacts. The list shows one row per Work by default: its latest turn, its turn count and its name, which is the first annotation an extension gives it (`repo#12` for a GitHub issue) or else its first correlation key. `g` switches to one row per turn, each marked as turn `k/n` of its Work. Rows and details are rendered by `runview`, so shell and future agent attempts go through the same code. The `os` binary carries no terminal UI: the entrypoint injects the TUI through `cli.Env`.
+The TUI is a bubbletea model over the client only. It provides a refreshing list with state filters, a detail view with trigger, timeout, usage, retry, retention, artifacts and every attempt of the Work, and a log view that tails the last 64 KiB with scrolling. On a running run the log view follows the live output, refetching on every tick and staying at the end unless scrolled up; once the run ends it settles on the artifacts. The list shows one row per Work by default: its latest turn, its turn count and its name, which is the first annotation an extension gives it (`repo#12` for a GitHub issue) or else its first correlation key. `g` switches to one row per turn, each marked as turn `k/n` of its Work. Rows and details are rendered by `runview`, so shell, job and agent attempts go through the same code. The `os` binary carries no terminal UI: the entrypoint injects the TUI through `cli.Env`. The TUI keeps one run model and adds operator controls and Work context as data; see [operator setup](../operator-setup/).
+
+`runview.Detail` prints an attempt's workspace, so the CLI and TUI show a shell job's fresh worktree or stale shared checkout exactly as they would an agent's issue worktree. Shell jobs and agent turns share this record, the retention policy (`kept_executions`, default 20) and the deadline model (`settings.timeout_seconds`, overridable per binding). See [job run parity](../schedule-extension/#job-runs).
+
+Issue reports are ordinary derived Events, so `events chain <report event>` traces a report from its external root through every report to the execution that made it. Each processing run is an ordinary `introspection.report` Work in `runs` and the TUI. Report records live in the extension's coordination KV namespace `introspection.reports`, not in run history ([issue reporting](../issue-reporting/)). A fix's trace is `events chain <fix event>`: fix → report → the report's origin. The fix Event's source names the requesting triage execution.
 
 ## Retention
 
@@ -129,7 +144,7 @@ A crash between phases is completed by a later sweep.
 
 Coordination history (records, outcomes, usage and artifact metadata) is never deleted. The history shows `retention.state=expired`. Artifact content then returns 404 `artifact_expired`, and the TUI reports expiry instead of fetching the content.
 
-The shell executor's `Forget` removes the execution's run directories. It refuses (`ErrLiveSegment`) and never signals while a verified process still runs. The host decides when to sweep; the daemon loop is 02-09.
+The shell executor's `Forget` removes the execution's run directories. It refuses (`ErrLiveSegment`) and never signals while a verified process still runs. The host decides when to sweep: the daemon loop runs `SweepRetention` every `--retention-interval` (default 10 minutes).
 
 ## Doctor
 
@@ -149,38 +164,37 @@ The shell executor's `Forget` removes the execution's run directories. It refuse
 | `secrets` | Resolved only with `check_secrets`, reporting names and codes, never values or references. |
 | `pinned_executors` | Live or held attempts whose pinned generation or registration is not installed. |
 
-Extension checks (`management.Options.Checks`), such as `telemetry.Pipeline.Health` for exporters or host watches, are appended. Provider error text never appears.
+Extension checks (`management.Options.Checks`), such as `telemetry.Pipeline.Health` for exporters or host watches, are appended. Provider error text never appears. The daemon contributes, among others, the `github` (registration, rate limit, reconcile and projection per entry), `github_capability`, `webhooks` and `claude_code` checks, plus a `github_auth` deep check that runs only with `check_secrets=true`; management's `DeepChecks` option carries it. An `introspection` check lists each entry's schedules (next slot), host readings over threshold, telemetry and note namespaces.
 
 When no daemon is reachable (it has never run, so there is no operator token, or nothing listens on its socket), `open-conduit health` says so and to run `open-conduit serve`. `open-conduit doctor` then runs its offline checks instead: `daemon` (`warn`, `not_running`), `config` validated offline, `github_capability` and `claude_code` (`claude --version` for each claude-code binding). A `skipped` check names the checks that need the daemon. A missing token file while a daemon is listening is still reported as a token error.
 
 ## Evidence
 
-- **[Telemetry integration](../../integration/telemetry_test.go)**:
+- **[Telemetry integration](https://github.com/open-conduit/open-conduit/blob/main/integration/telemetry_test.go)**:
   - The real shell and `os` workflow answers from records alone: why each attempt started (route, trigger and wake winner), who ran it (binding, executor, generation, owner), what it emitted (emission, child Work, toolbelt calls and the refused post-wait call) and why it stopped (declared wait, wake, completion). It also checks work transition order, trace continuity, record identity and redaction of secrets and tokens.
   - Retry failure, backoff timer, fire, unblock and the retried attempt's trigger, plus lease recovery with adoption on the original trace.
   - A hung and a failing exporter beside a healthy one do not block durable progress, are isolated, are accounted for and surface through doctor without error text.
   - All shared runtime cases pass through instrumented production components with every record validating.
   - Rollback emits nothing.
-- **[History integration](../../integration/history_test.go)**:
+- **[History integration](https://github.com/open-conduit/open-conduit/blob/main/integration/history_test.go)**:
   - A real shell attempt and fake agent and job attempts appear in one record schema, filters, rows, detail, TUI navigation and log view, with usage, retry status and attempts.
   - Shared retention expires only the older attempt, keeps its metadata, releases content and executor state (including real shell run directories) and is idempotent.
   - Doctor covers baseline, check_secrets, scan failure, expired lease and unapplied edit, with ingress scan telemetry, and the CLI.
-- **[Pipeline and OTel unit tests](../../internal/telemetry)**: the shared observer contract; non-blocking drop accounting under a hung exporter; retries, panics and safe diagnostics; JSON log redaction; and the real OpenTelemetry SDK for span trace and parent identity, attempt duration, error status, correlated logs and low-cardinality metrics with usage.
+- **[Pipeline and OTel unit tests](https://github.com/open-conduit/open-conduit/tree/main/internal/telemetry)**: the shared observer contract; non-blocking drop accounting under a hung exporter; retries, panics and safe diagnostics; JSON log redaction; and the real OpenTelemetry SDK for span trace and parent identity, attempt duration, error status, correlated logs and low-cardinality metrics with usage.
 - **TUI and shell unit tests**: TUI filters, detail, log tail and scroll, errors and expired content; shell `Forget` live-segment refusal and idempotency.
 
-These tests compose the host in-process. 02-09 wires the pipeline, SDK providers, retention schedule and doctor inputs into `open-conduit serve` and asserts lifecycle traces through real kill drills ([daemon composition](daemon-core-gate.md)).
+- `TestLifecycleTelemetryRetriesAndRecovery` asserts that a fired timer's Event is reported once.
 
-03-05 update: bootstrap contributes the `github` (registration, rate limit, reconcile and projection per entry), `github_capability`, `webhooks` and `claude_code` checks, plus a `github_auth` deep check that runs only with `check_secrets=true`. Management's `DeepChecks` option carries it. The TUI keeps one run model and adds operator controls and Work context as data; see [operator setup](operator-setup.md).
+These tests compose the host in-process. The [daemon composition](../daemon-core-gate/) drills assert lifecycle traces through real process kills of `open-conduit serve`.
 
-05-02 update: `runtime.Run` (and `GET /v1/runs` as `workspace`) carries the resource an attempt ran in, from the executor's generic `extension.Result.Workspace`: kind, lease reference, directory and the provider's one-line summary. `runview.Detail` prints it, so the CLI and TUI show a shell job's fresh worktree or stale shared checkout exactly as they would an agent's issue worktree. Shell jobs and agent turns share this record, the retention policy (`kept_executions`, default 20) and the deadline model (`settings.timeout_seconds`, overridable per binding). See [job run parity](schedule-extension.md#job-runs-05-02).
+## History
 
-03-08 update: issue reports are ordinary derived Events, so `events chain <report event>` traces a report from its external root through every report to the execution that made it. Each processing run is an ordinary `introspection.report` Work in `runs` and the TUI. Report records live in the extension's coordination KV namespace `introspection.reports`, not in run history ([issue reporting](issue-reporting.md)).
+:::note
+These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
+:::
 
-05-03 update: host watch and telemetry events are extension adapters on the public observability contract, with no runtime branch ([introspection](issue-reporting.md)):
-
-- **Telemetry exporter.** `introspection.Exporter` is an `observability.Exporter` in the lifecycle pipeline. It turns the committed `event.accepted` records of the extension's families into named telemetry events, each once, written to `logs/introspection-telemetry.jsonl` only while an entry sets `telemetry`.
-- **Host watch.** The optional host watch runs as a bootstrap pass and reports threshold crossings as extension-originated reports.
-- **Doctor.** An `introspection` doctor check lists each entry's schedules (next slot), host readings over threshold, telemetry and note namespaces.
-- **Regression fixed.** A fired timer's Event was reported as two `event.accepted` records, once by the acceptance and once by `FireTimer`. The recorder now reports it once, and `TestLifecycleTelemetryRetriesAndRecovery` asserts it.
-
-A fix's trace is `events chain <fix event>`: fix → report → the report's origin. The fix Event's source names the requesting triage execution.
+- Ticket 02-08 implemented lifecycle instrumentation, the export pipeline, the single run history and TUI, retention and the health/doctor checks, with the host composed in-process by tests. It also clarified B03 so that host-polled ingress scan records are anchored by their source rather than a trigger Event, and extended the shared observer case to reject an unanchored ingress record. Daemon composition, including the poll loop that calls the retention sweep, was left to 02-09, which wired the pipeline, SDK providers, retention schedule and doctor inputs into `open-conduit serve` and added the kill drills.
+- Ticket 03-05 added the daemon's `github`, `github_capability`, `webhooks` and `claude_code` checks, the `github_auth` deep check and the TUI's operator controls and Work context.
+- Ticket 03-08 made issue reports ordinary derived Events traceable with `events chain`.
+- Ticket 05-02 added the workspace to `runtime.Run` and `runview.Detail` for job run parity.
+- Ticket 05-03 added the introspection telemetry exporter, host watch and `introspection` doctor check. It also fixed a regression in which a fired timer's Event was reported as two `event.accepted` records, once by the acceptance and once by `FireTimer`, and added the assertion to `TestLifecycleTelemetryRetriesAndRecovery`.

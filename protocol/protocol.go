@@ -8,7 +8,7 @@
 // stdout, one JSON object per line, symmetric (both sides send requests).
 // The decision, its prototype evidence and the lifecycle, cancellation,
 // flow-control, crash and error semantics are recorded in
-// docs/architecture/extension-protocol.md. The decision is provisional for
+// site/src/content/docs/architecture/extension-protocol.md. The decision is provisional for
 // user review; 07-02 implements loading, handshake and supervision against
 // this package.
 //
