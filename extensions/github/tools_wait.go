@@ -3,6 +3,8 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"strconv"
 	"strings"
 	"time"
 
@@ -20,7 +22,8 @@ import (
 
 // waitInputTypes are the own-key families that still reach an agent while
 // it waits (v1: comments, check results and merges arrive meanwhile). Agent
-// comments are excluded: the wait's own reason comment is one.
+// comments are excluded: the wait's own reason comment is one. Another
+// agent's comment wakes it through peerComments instead.
 var waitInputTypes = []string{TypeDependencyMet, TypeCommentHuman, TypeIssueClosed, TypePullMerged, TypePullClosed, TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing}
 
 // TurnPayload is a TypeAgentTurn event: an agent on an issue ended a turn.
@@ -34,10 +37,36 @@ type TurnPayload struct {
 
 // dependencyFilter is the opaque filter of a translated dependency.
 type dependencyFilter struct {
-	Kind   string `json:"kind"` // pr, issue or turn
+	Kind   string `json:"kind"` // pr, issue, turn or peer
 	Repo   string `json:"repo"`
 	Number int    `json:"number"`
 	State  string `json:"state,omitempty"`
+	Work   string `json:"work,omitempty"` // peer: the waiting Work
+}
+
+// peerLabel labels the dependency that wakes a parked agent when another
+// agent comments on its issue or PR.
+const peerLabel = "comment:peer"
+
+// peerComments is the agent comments on the Work's own key that don't come
+// from the Work itself. Agent comments can't join waitInputTypes: the
+// agent's own, its wait's reason comment among them, would wake it too.
+func peerComments(b *bound) extension.Dependency {
+	return extension.Dependency{ID: peerLabel, Label: peerLabel, SourceKey: b.key, Types: []string{TypeCommentAgent}, AliasType: TypeDependencyMet, FromNow: true,
+		Filter: filterPayload(dependencyFilter{Kind: "peer", Number: b.number, Work: string(b.work.ID)})}
+}
+
+// peer reports whether an agent comment came from another Work: the
+// route's selfAuthored, from the filter's Work and issue number.
+func (f dependencyFilter) peer(p CommentPayload) bool {
+	a := p.Agent
+	if a == nil || p.Edited || p.Kind == KindReview && strings.TrimSpace(p.Body) == "" {
+		return false
+	}
+	if a.Work != "" {
+		return a.Work != f.Work
+	}
+	return a.From != "" && strings.TrimPrefix(a.From, "#") != strconv.Itoa(f.Number)
 }
 
 // DependencyFilter selects the named item among Events on a shared
@@ -58,6 +87,9 @@ func DependencyFilter(filter domain.Payload, e domain.Event) bool {
 	case "turn":
 		var p TurnPayload
 		return e.Data.Schema == SchemaTurn && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && p.State == f.State && strings.EqualFold(p.Repo, f.Repo)
+	case "peer":
+		var p CommentPayload
+		return e.Data.Schema == SchemaComment && json.Unmarshal(e.Data.Data, &p) == nil && f.peer(p)
 	}
 	return false
 }
@@ -268,6 +300,10 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 	if err != nil {
 		return extension.WaitPlan{}, err
 	}
+	resolved, kept, err := t.keepHeld(ctx, b, &h, resolved)
+	if err != nil {
+		return extension.WaitPlan{}, err
+	}
 	// The reason goes on the issue with the hold marker, as in v1: people see
 	// what the agent waits for, and Open Supervisor reads the same marker.
 	posted, err := t.post(ctx, b, b.issue, Intent{ID: intentID(ctx, b, OpWait, data), Work: b.work.ID, Number: b.number, Body: strings.TrimSpace(in.Reason) + "\n\n" + h.Marker(), Durable: true})
@@ -278,10 +314,54 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 	for _, r := range resolved {
 		plan.Dependencies = append(plan.Dependencies, r.dep)
 	}
-	out, _ := json.Marshal(map[string]any{"waiting_for": h.Describe(), "comment": posted,
-		"next": "end your turn now; you are resumed with what happened (comments and check results also resume you)"})
+	plan.Dependencies = append(plan.Dependencies, peerComments(b))
+	result := map[string]any{"waiting_for": h.Describe(), "comment": posted,
+		"next": "end your turn now; you are resumed with what happened (comments and check results also resume you)"}
+	if len(kept) > 0 {
+		result["kept"] = kept
+		result["note"] = "the issue was already waiting for " + strings.Join(kept, ", ") + "; that still wakes you too"
+	}
+	out, _ := json.Marshal(result)
 	plan.Output = domain.Payload{Schema: "github.tool.v1", Data: out}
 	return plan, nil
+}
+
+// keepHeld carries the issue's last hold's unmet conditions into a new
+// wait, so parking again (say until a time) never drops what the Work was
+// held for. Conditions are alternatives: a kept one can only wake the agent
+// sooner. The earlier time is not kept; the new wait's replaces it. A
+// condition that has happened or can no longer be met here is let go.
+func (t *Tools) keepHeld(ctx context.Context, b *bound, h *Hold, resolved []resolvedCond) ([]resolvedCond, []string, error) {
+	prev, _, err := t.latestHold(ctx, b)
+	if err != nil || prev == nil {
+		return resolved, nil, err
+	}
+	have := map[string]bool{}
+	for _, c := range h.Conds {
+		have[c.String()] = true
+	}
+	var kept []string
+	for _, c := range prev.Conds {
+		if have[c.String()] {
+			continue
+		}
+		have[c.String()] = true
+		r, err := t.resolveCond(ctx, b, c)
+		var op *extension.OperationError
+		if errors.As(err, &op) {
+			continue
+		}
+		if err != nil {
+			return nil, nil, err
+		}
+		if r.met != "" {
+			continue
+		}
+		h.Conds = append(h.Conds, r.cond)
+		resolved = append(resolved, r)
+		kept = append(kept, c.String())
+	}
+	return resolved, kept, nil
 }
 
 // latestHold is the latest hold marker on an issue: its body, then its
