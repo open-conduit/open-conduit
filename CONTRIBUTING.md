@@ -25,7 +25,7 @@ make check         # what CI runs
 - `docs-check`: the README and docs examples (below).
 - `build` and `smoke`: builds `bin/open-conduit` and `bin/os`, and runs their help and version commands.
 
-CI runs `make check` on Linux and macOS with Go 1.24.2 and the current stable Go. A pull request that only changes docs (`site/`, `docs/**/*.md` and the Markdown at the repository root) skips it and runs `make docs-check` instead; the docs site only builds when `site/` changes. To check the minimum toolchain locally:
+CI runs `make check` and `make certify` on one Linux runner with the current stable Go, and `make cross-build` alongside. It doesn't test macOS or the Go 1.24.2 minimum, so check those locally when a change could affect them. A pull request that only changes docs (`site/`, `docs/**/*.md` and the Markdown at the repository root) skips it and runs `make docs-check` instead; the docs site only builds when `site/` changes. To check the minimum toolchain locally:
 
 ```sh
 GOTOOLCHAIN=go1.24.2 make check

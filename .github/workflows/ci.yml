@@ -47,17 +47,13 @@ jobs:
             esac
           done < <(git diff --name-only "$BASE...$HEAD")
           printf 'code=%s\ndocs=%s\nworkflows=%s\n' "$code" "$docs" "$workflows" | tee -a "$GITHUB_OUTPUT"
-  # make check includes docs-check and the daemon drills (they are part of
-  # test); drill and certify also run on their own so their evidence shows
-  # as separate steps. 1.24.2 is the go.mod minimum.
+  # One runner: make check includes docs-check and the daemon drills (they
+  # are part of test), so drill isn't run again. certify adds the CLI's
+  # certification of the built packages. cross-build runs in its own job
+  # alongside, not after.
   check:
     needs: changes
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [ubuntu-latest, macos-latest]
-        go: ['1.24.2', stable]
-    runs-on: ${{ matrix.os }}
+    runs-on: ubuntu-latest
     env:
       RUN: ${{ needs.changes.outputs.code }}
     steps:
@@ -68,7 +64,7 @@ jobs:
       - uses: actions/setup-go@v7
         if: env.RUN == 'true'
         with:
-          go-version: ${{ matrix.go }}
+          go-version: stable
           cache: true
       - uses: actions/setup-python@v7
         if: env.RUN == 'true'
@@ -78,12 +74,19 @@ jobs:
         if: env.RUN == 'true'
       - run: make check
         if: env.RUN == 'true'
-      - run: make drill
-        if: env.RUN == 'true'
       - run: make certify
         if: env.RUN == 'true'
+  cross-build:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version: stable
+          cache: true
       - run: make cross-build
-        if: env.RUN == 'true' && matrix.os == 'ubuntu-latest' && matrix.go == 'stable'
   # A docs-only change still has its examples checked: the configs validate,
   # and the commands and make targets they show exist. A change with code
   # gets this from make check above.

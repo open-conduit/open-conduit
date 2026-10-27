@@ -28,7 +28,7 @@ Other targets run evidence that `make check` does not show on its own:
 
 ## Continuous integration
 
-The [CI workflow](https://github.com/open-conduit/open-conduit/blob/main/.github/workflows/ci.yml) runs `make config-deps`, `make check`, `make drill` and `make certify` on Ubuntu and macOS, each with the exact Go compatibility minimum (1.24.2) and the stable Go selector. Stable Ubuntu also runs `make cross-build`, which compiles both commands for Darwin/Linux amd64/arm64 with `CGO_ENABLED=0`. Cross-builds prove compilation only; platform/runtime behaviour is verified by the tests on each CI runner.
+The [CI workflow](https://github.com/open-conduit/open-conduit/blob/main/.github/workflows/ci.yml) runs `make config-deps`, `make check` (which includes the drills) and `make certify` on one Ubuntu runner with the stable Go selector. A second job runs `make cross-build`, which compiles both commands for Darwin/Linux amd64/arm64 with `CGO_ENABLED=0`. Cross-builds prove compilation only. CI verifies runtime behaviour on Linux alone; macOS and the Go 1.24.2 minimum are checked locally.
 
 On a pull request, CI first classifies the changed files. The required jobs always report, but skip their steps when nothing they check has changed. A docs-only change runs `make docs-check` instead of the full checks. A change with code also runs `make release-snapshot`, and a change to a workflow is linted with `actionlint`. Pushes to `main` check everything.
 
