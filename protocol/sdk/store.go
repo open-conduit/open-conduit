@@ -269,6 +269,43 @@ func (t *storeTx) Events(after uint64, limit int) ([]domain.AcceptedEvent, error
 	}
 }
 
+// The indexed event lookups are answered from Events: the protocol has no
+// dedicated call for them and an extension's reads are not on the hot path.
+func (t *storeTx) UnroutedEvents(after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	all, err := t.Events(after, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := []domain.AcceptedEvent{}
+	for _, a := range all {
+		if !a.Routed && (limit <= 0 || len(out) < limit) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+func (t *storeTx) LatestSequence() (uint64, error) {
+	all, err := t.Events(0, 0)
+	if err != nil || len(all) == 0 {
+		return 0, err
+	}
+	return all[len(all)-1].Sequence, nil
+}
+
+func (t *storeTx) EventByDelivery(source, deliveryID string) (domain.AcceptedEvent, error) {
+	all, err := t.Events(0, 0)
+	if err != nil {
+		return domain.AcceptedEvent{}, err
+	}
+	for _, a := range all {
+		if a.Event.Source == source && a.Event.DeliveryID == deliveryID {
+			return a, nil
+		}
+	}
+	return domain.AcceptedEvent{}, storage.ErrNotFound
+}
+
 func (t *storeTx) ListScopes() ([]domain.Scope, error) {
 	var out []protocol.Scope
 	if err := t.h.Call(t.ctx, "state.scopes", protocol.StateParams{}, &out); err != nil {

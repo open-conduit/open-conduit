@@ -36,6 +36,13 @@ type Tx interface {
 	Event(domain.ID) (domain.AcceptedEvent, error)
 	// Events returns acceptance order, exclusively after sequence; zero limit = all.
 	Events(after uint64, limit int) ([]domain.AcceptedEvent, error)
+	// UnroutedEvents is Events restricted to events not yet marked routed.
+	// Its cost follows the unrouted backlog, not retained history.
+	UnroutedEvents(after uint64, limit int) ([]domain.AcceptedEvent, error)
+	// LatestSequence is the last accepted sequence, zero before any event.
+	LatestSequence() (uint64, error)
+	// EventByDelivery finds an event by its delivery identity.
+	EventByDelivery(source, deliveryID string) (domain.AcceptedEvent, error)
 	// MarkRouted commits alongside route effects; replay with identical args is safe.
 	MarkRouted(eventID, workID domain.ID, disposition string) error
 	ListWorks() ([]domain.Work, error)

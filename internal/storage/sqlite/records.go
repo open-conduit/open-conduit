@@ -36,12 +36,35 @@ func (t *transaction) Events(after uint64, limit int) ([]domain.AcceptedEvent, e
 	}
 	return list[domain.AcceptedEvent](t, "SELECT record FROM events WHERE sequence>? ORDER BY sequence LIMIT ?", after, limit)
 }
+func (t *transaction) UnroutedEvents(after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	if !t.live {
+		return nil, storage.ErrInvalid
+	}
+	if after > 1<<63-1 {
+		return []domain.AcceptedEvent{}, nil
+	}
+	if limit <= 0 {
+		limit = -1
+	}
+	return list[domain.AcceptedEvent](t, "SELECT record FROM events WHERE sequence>? AND "+unrouted+" ORDER BY sequence LIMIT ?", after, limit)
+}
+func (t *transaction) LatestSequence() (uint64, error) {
+	if !t.live {
+		return 0, storage.ErrInvalid
+	}
+	var sequence uint64
+	err := t.conn.QueryRowContext(t.ctx, "SELECT coalesce(max(sequence),0) FROM events").Scan(&sequence)
+	return sequence, mapError(err)
+}
+func (t *transaction) EventByDelivery(source, deliveryID string) (domain.AcceptedEvent, error) {
+	return read[domain.AcceptedEvent](t, "SELECT record FROM events WHERE source=? AND delivery_id=?", source, deliveryID)
+}
 func (t *transaction) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, error) {
 	fail := func(err error) (domain.AcceptedEvent, bool, error) { return domain.AcceptedEvent{}, false, err }
 	if e.ID == "" || !namespaced(e.Type) || e.Source == "" || e.DeliveryID == "" || e.OccurredAt.IsZero() || e.ReceivedAt.IsZero() || !payload(e.Data) || e.CorrelationKey != nil && !keyOK(*e.CorrelationKey) {
 		return fail(storage.ErrInvalid)
 	}
-	old, err := read[domain.AcceptedEvent](t, "SELECT record FROM events WHERE source=? AND delivery_id=?", e.Source, e.DeliveryID)
+	old, err := t.EventByDelivery(e.Source, e.DeliveryID)
 	if err == nil {
 		return old, false, nil
 	}
@@ -118,7 +141,8 @@ func (t *transaction) MarkRouted(id, work domain.ID, disposition string) error {
 		if _, err = t.Work(work); err != nil {
 			return err
 		}
-		earlier, err := list[domain.AcceptedEvent](t, "SELECT record FROM events WHERE sequence<? ORDER BY sequence", a.Sequence)
+		// Only an earlier unrouted input for this Work blocks the mark.
+		earlier, err := list[domain.AcceptedEvent](t, "SELECT record FROM events WHERE sequence<? AND "+unrouted+" ORDER BY sequence", a.Sequence)
 		if err != nil {
 			return err
 		}

@@ -180,13 +180,9 @@ func (s *Scheduler) waitInTx(tx storage.Tx, ref domain.LeaseRef, wait domain.Wai
 		if resume && !state.Capabilities.Resume {
 			return extension.ErrUnsupported
 		}
-		all, err := tx.Events(0, 0)
+		max, err := tx.LatestSequence()
 		if err != nil {
 			return err
-		}
-		var max uint64
-		if len(all) > 0 {
-			max = all[len(all)-1].Sequence
 		}
 		if wait.AfterSequence > max || wait.AfterSequence < state.ObservedSequence {
 			return storage.ErrInvalid
@@ -331,9 +327,18 @@ func WakeWaitInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.I
 	if meta.Blocked {
 		return "", nil
 	}
-	all, err := tx.Events(0, 0)
+	// Only input after the wait's boundary can match it; its timeout Event,
+	// should it precede the boundary, is still first in acceptance order.
+	all, err := tx.Events(wait.AfterSequence, 0)
 	if err != nil {
 		return "", err
+	}
+	if meta.Timer.ID != "" {
+		if t, er := tx.Event(meta.Timer.Event.ID); er == nil && t.Sequence <= wait.AfterSequence {
+			all = append([]domain.AcceptedEvent{t}, all...)
+		} else if er != nil && !errors.Is(er, storage.ErrNotFound) {
+			return "", er
+		}
 	}
 	var winner domain.AcceptedEvent
 	for _, a := range all {
@@ -952,7 +957,7 @@ func routeWaitingInTx(tx storage.Tx, now time.Time, limits CausalLimits, id doma
 	if err = getJSON(tx, waitNamespace, identity(string(active.ID)), &meta); err != nil {
 		return false, err
 	}
-	all, err := tx.Events(0, 0)
+	all, err := tx.UnroutedEvents(0, 0)
 	if err != nil {
 		return false, err
 	}

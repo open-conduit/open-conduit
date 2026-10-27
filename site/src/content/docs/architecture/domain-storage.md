@@ -55,7 +55,7 @@ One transaction can include Event acceptance, Work create/correlate/revision upd
 
 A crash after acceptance leaves an unrouted Event to replay. A crash during processing leaves either every effect/checkpoint or none. Global sequence supports replay pagination, not global routing serialization. Route progress for one Work follows acceptance order for Events explicitly targeting it or currently resolving through its keys; independent Work has no global processing dependency. [B04](../runtime-semantics/#routing-and-ownership) specifies ordering for concurrently attached keys, previously unresolved Events and multiple route handlers.
 
-Enumeration of scopes, Work, attempts, timers and waits enables recovery without process-private indexes. Returned lists are sorted by ID; execution/wait scans may filter by Work (empty means all). Events are sorted by acceptance sequence, with exclusive cursor and optional positive limit. All reads/scans return backend errors. A backend may add pagination and index selection without weakening these guarantees.
+Enumeration of scopes, Work, attempts, timers and waits enables recovery without process-private indexes. Returned lists are sorted by ID; execution/wait scans may filter by Work (empty means all). Events are sorted by acceptance sequence, with exclusive cursor and optional positive limit. The same scan restricted to unrouted Events, the latest accepted sequence and lookup by delivery identity are separate reads, so routing and scheduling never need to read retained history. All reads/scans return backend errors. A backend may add pagination and index selection without weakening these guarantees.
 
 ## Lease authority and recovery
 

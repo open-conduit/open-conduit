@@ -28,7 +28,7 @@ func (r *Router) Complete(ctx context.Context, ref domain.LeaseRef) error {
 		if err != nil {
 			return err
 		}
-		events, err := tx.Events(0, 0)
+		events, err := tx.UnroutedEvents(0, 0)
 		if err != nil {
 			return err
 		}

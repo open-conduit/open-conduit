@@ -160,13 +160,9 @@ func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, resul
 	if err = tx.PutExecution(x, x.Revision); err != nil {
 		return err
 	}
-	history, err := tx.Events(0, 0)
+	failureSequence, err := tx.LatestSequence()
 	if err != nil {
 		return err
-	}
-	var failureSequence uint64
-	if len(history) > 0 {
-		failureSequence = history[len(history)-1].Sequence
 	}
 	state := RetryState{FailureSequence: failureSequence, WorkID: w.ID, FailedExecutionID: x.ID, Binding: x.ExecutorBinding, FailureCount: failures, Blocked: true, Exhausted: failures >= policy.MaxAttempts, TimerID: domain.ID("retry/" + string(w.ID))}
 	standing := s.options.WorkKinds[w.Kind].Standing

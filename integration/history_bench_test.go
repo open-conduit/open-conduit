@@ -18,7 +18,7 @@ import (
 
 // How the daemon's hot paths cost as retained history grows (#36). History
 // is one operator's: events of about 1 KiB spread over threads of 25 events,
-// every one routed and its Work finished. 1k, 10k and 50k events are roughly
+// every one routed, and each thread's Work finished by one attempt. 1k, 10k and 50k events are roughly
 // days, months and a year or more. Run with `make bench-history`.
 var historySizes = []int{1_000, 10_000, 50_000}
 
@@ -77,18 +77,30 @@ func seedHistory(b *testing.B, n int) *history {
 					return e
 				}
 				if i%historyThread == historyThread-1 || i == n-1 {
+					// One finished attempt per thread, triggered by its first event.
+					xid := domain.ID("execution/" + thread)
+					trigger := domain.ID(fmt.Sprintf("history-%d", i/historyThread*historyThread))
+					if e := tx.PutExecution(domain.Execution{ID: xid, WorkID: domain.ID("work/" + thread), ExecutorBinding: "fixture", Attempt: 1, State: domain.ExecutionPending, TriggerID: trigger}, 0); e != nil {
+						return e
+					}
+					if _, e := tx.Claim(xid, "fixture-owner", time.Minute); e != nil {
+						return e
+					}
+					x, e := tx.Execution(xid)
+					if e != nil {
+						return e
+					}
+					x.State, x.Outcome = domain.ExecutionCompleted, &domain.Outcome{Kind: domain.OutcomeCompleted}
+					if e = tx.PutExecution(x, x.Revision); e != nil {
+						return e
+					}
 					w, e := tx.Work(domain.ID("work/" + thread))
 					if e != nil {
 						return e
 					}
-					for _, state := range []domain.WorkState{domain.WorkRunning, domain.WorkCompleted} {
-						w.State = state
-						if e = tx.PutWork(w, w.Revision); e != nil {
-							return e
-						}
-						if w, e = tx.Work(w.ID); e != nil {
-							return e
-						}
+					w.State = domain.WorkCompleted
+					if e = tx.PutWork(w, w.Revision); e != nil {
+						return e
 					}
 				}
 			}
@@ -174,6 +186,15 @@ func BenchmarkHistoryRoutePending(b *testing.B) {
 func BenchmarkHistoryPoll(b *testing.B) {
 	benchHistory(b, func(b *testing.B, h *history) {
 		if _, err := h.sched.Poll(context.Background(), h.timers, 100); err != nil {
+			b.Fatal(err)
+		}
+	})
+}
+
+// The read startReady makes each pass: every Work, in one transaction.
+func BenchmarkHistoryListWorks(b *testing.B) {
+	benchHistory(b, func(b *testing.B, h *history) {
+		if err := h.store.Transact(context.Background(), storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error { _, e := tx.ListWorks(); return e }); err != nil {
 			b.Fatal(err)
 		}
 	})

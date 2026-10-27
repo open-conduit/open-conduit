@@ -147,7 +147,7 @@ type PendingPage struct {
 	More         bool
 }
 
-// Pending scans every accepted event, including events accepted by storage's
+// Pending scans every unrouted event, including events accepted by storage's
 // atomic FireTimer. Its cursor counts examined rows, not only pending results.
 // Start again at sequence zero after a traversal to find still-pending old rows.
 func (i *Ingress) Pending(ctx context.Context, after uint64, limit int) (page PendingPage, err error) {
@@ -157,7 +157,7 @@ func (i *Ingress) Pending(ctx context.Context, after uint64, limit int) (page Pe
 	page.Items = []PendingEvent{}
 	page.NextSequence = after
 	err = i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error {
-		events, e := tx.Events(after, limit+1)
+		events, e := tx.UnroutedEvents(after, limit+1)
 		if e != nil {
 			return e
 		}

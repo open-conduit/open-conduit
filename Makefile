@@ -8,7 +8,7 @@ LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 # about 8 minutes on hosted runners under -race, close to go test's 10m default.
 TEST_TIMEOUT ?= 20m
 
-.PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check check cross-build smoke smoke-run drill protocol-prototype packages certify release-snapshot
+.PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot
 
 build:
 	$(GO) build ./...
@@ -76,6 +76,11 @@ cross-build:
 # Stage 02 gate evidence: real daemon kill/restart drills (also part of test).
 drill:
 	$(GO) test -race -timeout $(TEST_TIMEOUT) -count=1 -v -run 'TestDaemon|TestServeCommand|TestToolbeltTypeOnlyWait|TestDeclarationSurvivesRecovery' ./integration
+
+# #36 history growth: routing, the idle routing pass, Poll and the Work list
+# against 1k, 10k and 50k retained events on real SQLite. Not part of check.
+bench-history:
+	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -run '^$$' -bench 'BenchmarkHistory' -benchtime 20x -benchmem ./integration
 
 # 07-01 transport evidence: JSON-RPC over stdio versus go-plugin/gRPC on one
 # workload. A separate module keeps go-plugin and gRPC out of go.mod; it

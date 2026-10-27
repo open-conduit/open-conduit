@@ -151,10 +151,27 @@ func eventIdentity(s storage.Store) error {
 		if len(page) != 1 || page[0].Event.ID != "b" {
 			return fmt.Errorf("event pagination skipped or duplicated records")
 		}
+		if latest, err := tx.LatestSequence(); err != nil || latest != rows[2].Sequence {
+			return fmt.Errorf("latest sequence %d, want %d: %v", latest, rows[2].Sequence, err)
+		}
+		if found, err := tx.EventByDelivery("another-source", "second"); err != nil || found.Event.ID != "c" {
+			return fmt.Errorf("delivery lookup lost source namespace: %v", err)
+		}
+		if err := wantError(func() error { _, err := tx.EventByDelivery("test", "missing"); return err }(), storage.ErrNotFound); err != nil {
+			return err
+		}
 		e.ID = "b"
 		e.DeliveryID = "third"
 		return wantError(func() error { _, _, err := tx.AcceptEvent(e); return err }(), storage.ErrConflict)
 	})
+}
+func hasEvent(events []domain.AcceptedEvent, id domain.ID) bool {
+	for _, a := range events {
+		if a.Event.ID == id {
+			return true
+		}
+	}
+	return false
 }
 func routeReplay(s storage.Store) error {
 	c := NewClock()
@@ -178,11 +195,24 @@ func routeReplay(s storage.Store) error {
 		if a.Routed {
 			return fmt.Errorf("route rollback lost replay checkpoint")
 		}
+		unrouted, err := tx.UnroutedEvents(0, 0)
+		if err != nil {
+			return err
+		}
+		if !hasEvent(unrouted, "trigger") {
+			return fmt.Errorf("unrouted events omitted an unrouted event")
+		}
 		if err := tx.MarkRouted("trigger", "work", "queue"); err != nil {
 			return err
 		}
 		if err := tx.MarkRouted("trigger", "work", "queue"); err != nil {
 			return err
+		}
+		if unrouted, err = tx.UnroutedEvents(0, 0); err != nil {
+			return err
+		}
+		if hasEvent(unrouted, "trigger") {
+			return fmt.Errorf("unrouted events kept a routed event")
 		}
 		if err := wantError(tx.MarkRouted("trigger", "work", "drop"), storage.ErrConflict); err != nil {
 			return err
