@@ -1,12 +1,12 @@
 # Operator setup, doctor and engineering controls
 
-Ticket 03-05 makes the GitHub path operable for the first switch. It adds setup and config commands over scopes, connections and bindings, local secret entry, GitHub/Claude Code doctor checks, operator controls in the management API, the CLI and the TUI, the webhook listener with tunnels, and dry run. All of it uses public surfaces:
+Ticket 03-05 makes the GitHub path operable for the first deployment. It adds setup and config commands over scopes, connections and bindings, local secret entry, GitHub/Claude Code doctor checks, operator controls in the management API, the CLI and the TUI, the webhook listener with tunnels, and dry run. All of it uses public surfaces:
 
 - the management API ([B05](config-management.md));
 - the extension contracts;
 - composition in [`internal/bootstrap`](../../internal/bootstrap).
 
-Core gains only domain-free controls (rebind, hold/release, scope reconcile). The Open Supervisor references were `internal/wizard`, `internal/configcli`, `internal/forms`, `internal/tui` and `internal/adapters/tunnel` at the pinned baseline.
+Core gains only domain-free controls (rebind, hold/release, scope reconcile). 
 
 ## Setup from nothing
 
@@ -22,32 +22,32 @@ open-conduit doctor --check-secrets
 open-conduit tui
 ```
 
-- **`init`** lists the setups the registered extensions offer, and **`init <type>`** runs one (04-02: setup is extension-owned; see [Extension-owned setup](#extension-owned-setup-04-02)). **`init github`** ports the v1 wizard's outcomes:
-  - It detects the current directory's GitHub remote (v1 found-git).
+- **`init`** lists the setups the registered extensions offer, and **`init <type>`** runs one (04-02: setup is extension-owned; see [Extension-owned setup](#extension-owned-setup-04-02)). **`init github`**:
+  - It detects the current directory's GitHub remote.
   - It adds one scope for a repository: a `github` connection (default secret `cmd:gh auth token`), an agent binding on `claude-code` with the GitHub tools, the `github` route, and the `github-hold` binding and route with `--holds`.
   - It adds a `git` work resource only when there is a checkout. `--no-workspace` writes a workspace-free scope whose turns run in a private directory.
   - It merges into an existing config and never replaces a scope without `--force`.
   - `--dry-run` prints the result without writing it.
   - It refuses a token literal: `--token` takes only a reference.
-- **`config path|show|get|set|unset|check`** port v1 `config show/get/set/unset` onto JSON pointers:
+- **`config path|show|get|set|unset|check`** work on JSON pointers:
   - Array elements are addressed by `id` or `name`, for example `/scopes/web/bindings/agent/config/model`.
   - Edits keep the owner's key order and untouched text, including handwritten routes.
   - `show` and `get` redact `secret_refs`.
   - `set` refuses a value that is not a reference under `secret_refs`.
   - Every edit is validated offline by `bootstrap.ValidateConfig` before saving: the same registrations as `serve`, without a daemon, storage or secret resolution. An invalid edit leaves the file unchanged. A running daemon changes only through `config apply`, so a disk edit never alters it.
-- **`secret set NAME`** ports v1's secret entry:
+- **`secret set NAME`**:
   - It reads the value from stdin, with no echo on a terminal, and never takes it as an argument.
   - It stores the value in the platform keyring under the `open-conduit` service: on macOS through `security -i`, so the value is not in any argv; on Linux through `secret-tool`.
   - Otherwise it falls back, and says so, to the owner-only `secrets.json` beside the config.
   - It prints only the reference. `--store keyring|file` forces one store.
   - The daemon's resolver now reads `file:` references from that file. Before this ticket it had no secrets file configured.
-- **`init --with claude`** ports v1 `init --with`:
+- **`init --with claude`**:
   - The setup guide ([`playbooks.Setup`](../../extensions/github/playbooks/setup/setup.md)) is written as its own one-skill plugin under `<state>/playbooks/setup`, apart from the turn plugin.
   - The command is an interactive `claude /open-conduit:setup --plugin-dir … --allowedTools …` with `OPEN_CONDUIT_CONFIG` set.
   - Only `open-conduit config`, `doctor`, `health`, `secret path` and `init github --dry-run` are pre-allowed, and `OS_*` credentials are removed from the environment.
   - The guide now teaches `init`, `config set`, `secret set`, webhooks, permissions, dry run and the TUI controls. Its example config still validates against the daemon registry.
 
-A schema-driven interactive editor (v1 `forms`/editor) is not ported. The commands above cover its outcomes: validated edits, add/remove bindings, references for secrets and handwritten routes kept. The full-screen editor is deferred to 06-01.
+A schema-driven interactive editor is not ported. The commands above cover its outcomes: validated edits, add/remove bindings, references for secrets and handwritten routes kept. The full-screen editor is deferred to 06-01.
 
 ## Doctor
 
@@ -59,7 +59,7 @@ A schema-driven interactive editor (v1 `forms`/editor) is not ported. The comman
 | `github_auth` | Only with `check_secrets=true`. Resolves each entry's credentials privately, authenticates the reader and any bot writer, and reads the repository (`Client.Verify`). Codes: `verified`; `credential_unavailable`, `credential_rejected`, `repo_unreachable` or `rate_limited` (`fail`); `read_only` when the identity cannot push and projections are live; `hook_admin_missing` when `manage_webhook` lacks hook admin. Reports `pull/push/admin` when GitHub returns them. |
 | `github_capability` | Config gaps the validator accepts but that stop GitHub work: no `github` route, a route whose binding has no toolbelt, a claude-code binding without `github.context`/`declare_outcome`, a hold route that does not bind `github-hold` or comes after `github`, and (info) scheduled issues not claimed without a hold route. |
 | `webhooks` | `reconcile_only` (info) with no listener; otherwise the bound address, the tunnel and public URL (`tunnel_down`, `tunnel_failed`), where the address and the tunnel came from (`serve flags` or `settings.webhooks`), `restart_required` when an applied generation changed `settings.webhooks` since `serve` started, and per entry its route, a missing `webhook_secret` (not mounted) and the managed hook state (`ok`, `dry_run`, `hook_permission_denied`, …). |
-| `claude_code` | Runs `--version` for each claude-code binding's binary (`installed`, or `claude_missing` as `fail`); reports dry run. With `serve --claude-usage` it also reads the subscription's 5-hour and 7-day usage windows (v1 `Usage`, the undocumented OAuth endpoint, with the machine's Claude login) and warns at 90%. A read failure is "usage unknown", never a fault. Usage reading is opt-in because it reads the login token. |
+| `claude_code` | Runs `--version` for each claude-code binding's binary (`installed`, or `claude_missing` as `fail`); reports dry run. With `serve --claude-usage` it also reads the subscription's 5-hour and 7-day usage windows (the undocumented OAuth endpoint, with the machine's Claude login) and warns at 90%. A read failure is "usage unknown", never a fault. Usage reading is opt-in because it reads the login token. |
 
 ## Operator controls
 
@@ -81,7 +81,7 @@ Every control is a management call with the operator credential and an `Idempote
 - `scopes reconcile ID`;
 - `claim [SCOPE#]N [--entry NAME]`.
 
-A manual claim is an operator Event `github.claim.requested` keyed to the entry's `issue/N` (schema `github.claim.v1`). The `github` route creates `github.issue` Work for it whatever the labels (v1 claim by hand overriding routes). It never feeds existing Work, ignores non-operator sources and generation keys, and renders for the agent as "claimed by hand".
+A manual claim is an operator Event `github.claim.requested` keyed to the entry's `issue/N` (schema `github.claim.v1`). The `github` route creates `github.issue` Work for it whatever the labels. It never feeds existing Work, ignores non-operator sources and generation keys, and renders for the agent as "claimed by hand".
 
 **TUI.** The shared view keeps one run model for every executor. With a controlling source (`tui.Operator`) it adds these keys:
 
@@ -118,7 +118,7 @@ Webhooks are an accelerator: reconcile always runs, so with no listener the daem
   Anything else is 404, including `/v1/...`. It never sees management credentials and never forwards to the Unix socket.
   - Each request is verified by its entry's adapter against the entry's secret from the current generation before anything is parsed or accepted. For GitHub that is `github.WebhookHandler` (HMAC before parsing, 401 on a bad signature).
   - A delivery is pushed with `Ingress.Push`, and 202 is returned only after durable acceptance. A refusal is 503: GitHub may redeliver, and reconcile recovers the state either way.
-- **Tunnel.** `extensions/tunnel` ports v1's providers: `ngrok` (`tunnel_domain` for a reserved domain), `cloudflared` (a quick tunnel, or `tunnel_name` with `tunnel_hostname`) and `static` (`public_url`, for a reverse proxy or Tailscale Funnel).
+- **Tunnel.** `extensions/tunnel` provides: `ngrok` (`tunnel_domain` for a reserved domain), `cloudflared` (a quick tunnel, or `tunnel_name` with `tunnel_hostname`) and `static` (`public_url`, for a reverse proxy or Tailscale Funnel).
   - A provider process that exits is restarted with a growing wait (5 seconds, doubling to 5 minutes), and each public URL it reports is passed to the host.
   - It forwards only to the webhook listener.
 - **Managed hooks.** An entry with `"manage_webhook": true` (which requires `webhook_secret`) has its repository webhook created or re-pointed at `<public URL>/github/<scope>/<entry>`, with the secret and the events the normalizer understands (`github.HookEvents`). The host finds the hook by its path suffix after a restart, makes no write when it already matches, and retries failures after a minute. Without `manage_webhook` the owner adds the webhook by hand.
@@ -138,7 +138,7 @@ That maps to these grants:
 
 ## Dry run
 
-`serve --dry-run` makes no external writes (v1 `--dry-run`):
+`serve --dry-run` makes no external writes:
 
 - Every GitHub entry runs with `projection.dry_run`, so labels, comments, reactions and the GitHub tools' writes report `dry_run`.
 - Managed hooks are only reported (`dry_run`).
@@ -175,7 +175,7 @@ make check && GOTOOLCHAIN=go1.24.2 make check && make cross-build && make drill
 ## Limitations and follow-on work
 
 - **Fixtures only.** No real GitHub write, webhook, tunnel process or Claude Code session ran. Real evidence (a real repository, a real tunnel and a real agent turn) belongs to 03-06; `LoginToken` is not exercised in tests because on macOS it reads the real Keychain.
-- **Not ported.** The full-screen config editor (06-01), a rendered transcript and activity view (raw transcripts are reachable as artifacts with `t`), and v1's automatic headless/TUI selection on the root command (06-03 packaging). `settings.admission_limit` is still not enforced (02-09 open item).
+- **Not ported.** The full-screen config editor (06-01), a rendered transcript and activity view (raw transcripts are reachable as artifacts with `t`), and automatic headless/TUI selection on the root command (06-03 packaging). `settings.admission_limit` is still not enforced (02-09 open item).
 - **Rebind and reload.** A rebind takes effect at the next scheduling decision, which pins the binding from the generation the scheduler runs.
 
 04-01 update: the webhook listener also mounts `POST /slack/<scope>/<entry>` for Slack entries with `receiver: http`. The default Slack receiver is Socket Mode, which needs no listener or tunnel; see the [Slack extension](slack-extension.md), including the intended setup flow (04-02): a generic optional extension `Setup` hook that core `init <type>` dispatches to, with core supplying only the setup host.
@@ -197,4 +197,4 @@ The entrypoint injects the setups through `cli.Env.Setups` (`bootstrap.Setups()`
 
 06-01 adds `init linear`, `init jira` (each with an optional `--bitbucket` code host), `adapters [TYPE]`, `route KEY`, `config edit` (the full-screen editor) and the tracker, Bitbucket and PostHog doctor checks and webhook routes. See [installed integrations](installed-integrations.md).
 
-06-02 adds explicit conversion and offline recovery commands ([migration and recovery](migration-recovery.md)): `migrate config --from V1 [--out FILE | --write]`, `backup create|verify|restore`, `state check` and `auth recover`. The state commands take the daemon lock and refuse while a daemon owns the directory.
+06-02 adds offline recovery commands ([recovery](recovery.md)): `backup create|verify|restore`, `state check` and `auth recover`. The state commands take the daemon lock and refuse while a daemon owns the directory.

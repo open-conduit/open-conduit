@@ -1,6 +1,6 @@
 # GitHub ingress, routing policy and projections
 
-Ticket 03-01 delivers the first-party GitHub extension in [`extensions/github`](../../extensions/github). It is built against the public contracts: [B03 ingress](extensions.md), [B04 routing](runtime-semantics.md) and [B02 storage/KV](domain-storage.md). It imports only public packages, and the runtime does not import it. [`internal/bootstrap`](../../internal/bootstrap/github.go) registers it with the daemon. The Open Supervisor adapter (`internal/adapters/github` at the pinned baseline) was the behavioral reference.
+Ticket 03-01 delivers the first-party GitHub extension in [`extensions/github`](../../extensions/github). It is built against the public contracts: [B03 ingress](extensions.md), [B04 routing](runtime-semantics.md) and [B02 storage/KV](domain-storage.md). It imports only public packages, and the runtime does not import it. [`internal/bootstrap`](../../internal/bootstrap/github.go) registers it with the daemon.
 
 ## Configuration
 
@@ -20,7 +20,7 @@ A `github` extension entry (an ingress entry: `config.scope` must be the contain
 | `repo` | The repository (`owner/name`). |
 | `tracker` | Optional shared tracker `{repo, namespace}` whose issues this repository's PRs reference as `owner/repo#N`. |
 | `track_issues` | Default true. False observes only PRs, comments, reviews and checks. |
-| `labels` | `claimed`, `scheduled`, `help`, `review`, `done`, `skip[]`, `require[]`. The defaults are Open Supervisor's names, so either runtime sees the other's claim. |
+| `labels` | `claimed`, `scheduled`, `help`, `review`, `done`, `skip[]`, `require[]`. |
 | `closed_horizon_hours` | Default 168. How long closed items stay observed. |
 | `branch_pattern` | Default `^agent/issue-(\d+)$`. `""` disables branch correlation. |
 | `preview_pattern` | Default `deploy-preview`. |
@@ -58,11 +58,11 @@ The issue payload deliberately omits `updated_at`, comment counts and the projec
 
 **Reopen generations (B04).** An issue's generation is the latest `reopened` event at or before the observation time: the issue's current state, a comment's creation time, or the creation time of the PR that references it. This depends only on immutable history, so push and reconcile agree. An open issue whose `state_reason` is not `reopened` needs no history read. Old keys stay with the terminal owner. The first observation of a new generation creates successor Work, and its payload names the previous generation as `predecessor` (opaque lineage). A reopened issue always starts a new generation. If the previous generation's Work is still active, it receives the close as input and winds down. PR keys are not generation-qualified: a PR correlates with the issue generation current when it was created.
 
-**PR attachment (v1 `recordForPR`).** A PR, and every comment, review and check on it, is keyed to its tracker issue. The issue is found from the branch pattern first, then from a closing or reference keyword in the PR body. A shared tracker accepts only `owner/repo#N` naming it. Deriving the key deterministically means no route has to attach keys, and PR state changes reach the issue's Work directly. A reference to a missing issue falls back to `pr/N`.
+**PR attachment.** A PR, and every comment, review and check on it, is keyed to its tracker issue. The issue is found from the branch pattern first, then from a closing or reference keyword in the PR body. A shared tracker accepts only `owner/repo#N` naming it. Deriving the key deterministically means no route has to attach keys, and PR state changes reach the issue's Work directly. A reference to a missing issue falls back to `pr/N`.
 
 **Push.** `VerifyDelivery` checks `X-Hub-Signature-256` (HMAC-SHA256, constant time; an empty secret never verifies) before parsing. It wraps GitHub's event name and delivery GUID, which travel in headers, into the Delivery body (`application/vnd.open-conduit.github-delivery+json`). `WebhookHandler` maps outcomes to HTTP statuses: 202 only after the runtime durably accepted the delivery, 401 for a bad signature and 503 when the delivery was not accepted. The listener and tunnel that expose it are delivered by 03-05 ([operator setup](operator-setup.md#webhooks-tunnels-and-reconcile-only-operation)). Without them the daemon runs reconcile-only, which loses only latency.
 
-Push makes read-only service calls for generation history, PR details and aggregate checks, and no coordination writes. When check runs are refused (a fine-grained token cannot hold Checks), the aggregate uses the head's Actions workflow runs, else statuses only (03-06, see [engineering tools](engineering-tools.md#checks-timing)). A review without a body is never observed. GitHub wraps every inline comment and reply in one, the agent's own included. Observed as a human comment, it woke waiting agents in a loop on the real sandbox; v1 likewise kept only reviews with a body. Check events re-read the aggregate state of each open PR whose head is the delivery's commit, exactly as reconcile evaluates it. A status event finds its PRs through `commits/{sha}/pulls`.
+Push makes read-only service calls for generation history, PR details and aggregate checks, and no coordination writes. When check runs are refused (a fine-grained token cannot hold Checks), the aggregate uses the head's Actions workflow runs, else statuses only (03-06, see [engineering tools](engineering-tools.md#checks-timing)). A review without a body is never observed. GitHub wraps every inline comment and reply in one, the agent's own included. Observed as a human comment, it woke waiting agents in a loop on the real sandbox. Check events re-read the aggregate state of each open PR whose head is the delivery's commit, exactly as reconcile evaluates it. A status event finds its PRs through `commits/{sha}/pulls`.
 
 **Reconcile.** GitHub has no snapshot token. A generation lists every issue and every PR in stable creation order, so pagination cannot repeat an item; a deletion can only skip one. It observes open items and items closed within the horizon, then the repository's conversation and inline comments updated within the horizon. Reviews and checks are read for each listed PR.
 
@@ -78,13 +78,13 @@ Two safety nets restart a generation by returning an exhausted partial page: a g
 
 Handler `github` reads only the detached Event, Scope and Work. It finds its extension entry in the scope metadata by namespace.
 
-- **Unowned issue observations** create `github.issue` Work only when the issue is admitted (Open Supervisor parity):
+- **Unowned issue observations** create `github.issue` Work only when the issue is admitted:
   - The issue is open.
   - It has no skip label.
   - It has a required label, if any are configured.
-  - It does not carry the claimed label, unless it is a reopened generation. A claimed issue with no Work belongs to another owner, which preserves a single owner while Open Supervisor runs.
+  - It does not carry the claimed label, unless it is a reopened generation. A claimed issue with no Work belongs to another owner, which preserves a single owner.
   - Scheduled issues are claimed by the `github-hold` route (03-04), never by `github`.
-- **Existing Work** receives these as input: new human comments, reviews with a body, other Works' agent comments (including Open Supervisor-marked notes from other issues), closes, merges and completed checks (passed, failed, none and missing required checks).
+- **Existing Work** receives these as input: new human comments, reviews with a body, other Works' agent comments, closes, merges and completed checks (passed, failed, none and missing required checks).
 - **Never delivered:** edits, unmarked bot comments, this Work's own notes, open-state updates, pending checks and absence.
 
 Labels influence only this claim decision. Work lifecycle never reads them.
@@ -96,7 +96,7 @@ Labels influence only this claim decision. Work lifecycle never reads them.
 **Labels** are level-triggered:
 
 - `claimed` is present while Work owns the issue. It comes off once completed Work's issue is closed: admission never claims a closed issue, and a reopening starts a new generation, which is claimed again. Failed and cancelled Work keep it.
-- No status label is set while an attempt runs (v1 parity).
+- No status label is set while an attempt runs.
 - After an attempt, the status comes from an outcome declaring `github.status.v1` `{status}`. Otherwise completed Work projects `done`, failed Work projects `help` and cancelled Work projects none.
 
 The projector re-reads the issue and changes only managed labels. It reapplies them when desired state changes, and at `verify_seconds` for nonterminal Work, which repairs drift. Completed Work whose issue is still open is also re-read at `verify_seconds` until the issue closes.
@@ -109,9 +109,7 @@ The projector re-reads the issue and changes only managed labels. It reapplies t
 
 The body carries `<!-- open-conduit:agent work=<id> intent=<digest> -->`. If a post's result is ambiguous (a lost response, or a crash after GitHub created the comment), the record stays `attempted`. After a 30-second search delay, the projector finds the marker in the issue's comments and completes the record instead of posting again. A changed body under a reused ID is refused (`intent_conflict`).
 
-**Fallback-window marker (06-02).** `WithMarker` appends Open Supervisor's own-note marker (`<!-- open-supervisor:agent -->`, `LegacyMarker`) after the Open Conduit marker. A v1 that takes a scope back during the fallback window then reads Open Conduit's comments as agent notes rather than human input. `ParseAgent` reads the Open Conduit marker first ([migration and recovery](migration-recovery.md)).
-
-**Reactions:** a `+1` acknowledges each human comment the router delivered to Work (the v1 "heard" signal). Reactions are idempotent at GitHub. The cursor never passes an unrouted comment. It retries rate-limit and credential failures, and skips permanent refusals.
+**Reactions:** a `+1` acknowledges each human comment the router delivered to Work. Reactions are idempotent at GitHub. The cursor never passes an unrouted comment. It retries rate-limit and credential failures, and skips permanent refusals.
 
 ## Verification
 
@@ -132,7 +130,7 @@ The unit fixtures cover:
 - Push/reconcile identity for every family, including merges, closes, reopen generations, PR attachment and shared-tracker references.
 - Horizon ageing, stable pagination with conditional revalidation, and rate-limited pages that fail and then resume.
 - Restart of rejected or stale generations.
-- Webhook signatures and HTTP mapping, primary and secondary rate limits, ordinary 403s, token re-resolution after a 401, App token caching and refresh, bot-App writes, reactions, markers including Open Supervisor's, and config validation.
+- Webhook signatures and HTTP mapping, primary and secondary rate limits, ordinary 403s, token re-resolution after a 401, App token caching and refresh, bot-App writes, reactions, markers, and config validation.
 - Admission and input-selection rules.
 
 The [SQLite integration cases](../../integration/github_test.go) run the real runtime ingress and router, and cover:
@@ -160,7 +158,7 @@ The [SQLite integration cases](../../integration/github_test.go) run the real ru
   - the `github-hold` route and executor, with the `scheduled` label managed while held or waiting;
   - `github.checks.none`.
 - **Claude Code continuity.** Delivered by 03-03: `WorkComments` posts a Work's marked comment exactly once per intent (`Deliver` plus `IntentComment`) and reads its reactions. The [Claude Code executor](claude-code-executor.md)'s handoff feedback uses it through bootstrap.
-- **Projection volume.** The projector reads every Work in its scope each pass. That is enough for the first switch, but it has no high-volume claim.
-- **Unenforced setting.** `settings.admission_limit` (v1's claimed-per-project cap) is still not enforced.
+- **Projection volume.** The projector reads every Work in its scope each pass. That is enough for the first deployment, but it has no high-volume claim.
+- **Unenforced setting.** `settings.admission_limit` (the claimed-per-project cap) is still not enforced.
 - **Registration lifetime.** Ingress registrations are startup-only (B05). A changed or removed entry reports `restart_required` until the daemon restarts.
 - **Raw deliveries.** `github.delivery` events are non-re-derivable by declaration. Which delivery families a webhook job may rely on is decided in 05-01.

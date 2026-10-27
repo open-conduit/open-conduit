@@ -62,10 +62,6 @@ Where to go next:
 - [Extensions](https://open-conduit.github.io/open-conduit/reference/extensions/): add integrations and executors of your own.
 - [The core in one page](docs/architecture/core.md): the design in depth.
 
-### Coming from Open Supervisor
-
-Open Conduit succeeds [Open Supervisor](https://github.com/alsiola/open-supervisor). It keeps its own config and state, so both can be installed side by side while you move scopes across. `open-conduit migrate config` converts your config, and [migration and recovery](docs/architecture/migration-recovery.md) covers the rest.
-
 ## Contributing
 
 Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for setting up a checkout, the checks a change must pass and the rules the code follows. [The docs index](docs/README.md) lists the architecture documents behind each part. AI coding agents should also follow [AGENTS.md](AGENTS.md).
@@ -78,4 +74,4 @@ Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes. Pleas
 
 ## License
 
-The repository has no license yet. Take licensing questions to the maintainer in a GitHub issue.
+Open Conduit is released under the [MIT License](LICENSE).

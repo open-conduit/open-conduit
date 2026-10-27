@@ -1,6 +1,6 @@
 # SQLite coordination and file artifacts
 
-Ticket 02-01 implements [B02](domain-storage.md) after the [contracts gate](contracts-gate.md). The public coordination and artifact interfaces remain separate. This supplies durable storage, not event routing, execution scheduling, provider clients or an operational ownership switch.
+Ticket 02-01 implements [B02](domain-storage.md) after the [contracts gate](contracts-gate.md). The public coordination and artifact interfaces remain separate. This supplies durable storage, not event routing, execution scheduling, provider clients or an operational ownership transfer.
 
 ## Coordination backend
 
@@ -8,7 +8,7 @@ Ticket 02-01 implements [B02](domain-storage.md) after the [contracts gate](cont
 
 Indexed tables store the five primitive records, delivery identity, exclusive correlation ownership, processing checkpoints, timer revision tombstones and namespaced coordination KV. The database is not a serialized in-memory state blob. Revision/lease checks and event/KV/timer changes share the same transaction. A successful callback result is acknowledged only after commit; callback errors, panics and cancellation before commit roll back.
 
-The persisted schema starts at version 1. Opening a newer schema fails without modifying it; migrations are ordered and transactional and failure must preserve the prior schema and records. The daemon and its independent state directory are never shared with Open Supervisor. SQL data is coordination/history, not a place for transcripts or large binary artifacts.
+The persisted schema starts at version 1. Opening a newer schema fails without modifying it; migrations are ordered and transactional and failure must preserve the prior schema and records. SQL data is coordination/history, not a place for transcripts or large binary artifacts.
 
 `Store.Backup(ctx, destination)` requires a previously absent destination and uses SQLite's online backup API for a consistent standalone snapshot, including committed WAL data. Copying a live `.db` file directly is not a backup. `sqlite.Restore(ctx, snapshot, destination, now)` validates schema/integrity, requires a new isolated destination and fences retained lease authority before the restored database can be used. Restoration is a stopped-state operation; lease fencing alone does not stop old external processes or authorize two daemons to own the same external scope.
 

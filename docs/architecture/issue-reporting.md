@@ -37,11 +37,11 @@ A scope's `introspection` entry enables the extension for that scope and the sco
     "config": {"playbook": "fix-report"}, "resource": {"provider": "git", "config": {"mode": "work", "…": "…"}}, "…": "…"}]}
 ```
 
-| Field | Meaning (v1 equivalent) |
+| Field | Meaning |
 | --- | --- |
 | `notes` | Coordination KV namespaces whose records the sweep and triage read (default `github.notes`, the GitHub tools' corrections and problems). This is a data contract (namespace and JSON shape), not an import. |
-| `sweep`, `triage` | Standard five-field `cron` and IANA `time_zone` (v1: 08:41 and 08:51 UTC). If a block is absent, that run is not scheduled; it can still run by hand. `rules`/`guide` are sweep settings (v1 ruleFiles/guide). `land` is `push` or `pr`, and `remote` defaults to `origin`. `file_issues` is a triage setting (v1 openIssues). |
-| `host_watch` | v1 settings.host: reading interval, load per CPU / memory % / disk % thresholds (defaults 1.5/90/90) and extra disk paths besides the state directory's. If absent, the watch is off. |
+| `sweep`, `triage` | Standard five-field `cron` and IANA `time_zone`. If a block is absent, that run is not scheduled; it can still run by hand. `rules`/`guide` are sweep settings. `land` is `push` or `pr`, and `remote` defaults to `origin`. `file_issues` is a triage setting. |
+| `host_watch` | Reading interval, load per CPU / memory % / disk % thresholds (defaults 1.5/90/90) and extra disk paths besides the state directory's. If absent, the watch is off. |
 | `telemetry` | Writes the extension's telemetry events to `logs/introspection-telemetry.jsonl`. |
 
 The `introspection` route's `work` is `report` (the default, as in 03-08), `sweep`, `triage` or `fix`. Each route gives that kind of Work to the binding the user chose. No executor is built in: without a route, the extension's Events are kept but not processed. The scope's `authorization.operations` ceiling must list each operation, and each binding names the operations it may call. Registering an operation grants nothing.
@@ -72,7 +72,7 @@ Reports are 03-08's translated emissions. See [the 03-08 contract](#the-report-e
 
 ## The sweep and triage schedules
 
-The runs are timed by the extension's own calendar, not by a `schedule` entry, because the PRD makes them "scheduled Work of their own kinds, defined by the introspection extension". Each configured block gets a durable core timer `introspection/<scope>/<run>` whose recurrence is the extension's `RecurrenceFunc` (`introspection.v1`), registered with the generic `runtime.TimerOptions.Recurrences`. The calendar rules are v1's, as [scheduled jobs](schedule-extension.md) port them:
+The runs are timed by the extension's own calendar, not by a `schedule` entry, because the PRD makes them "scheduled Work of their own kinds, defined by the introspection extension". Each configured block gets a durable core timer `introspection/<scope>/<run>` whose recurrence is the extension's `RecurrenceFunc` (`introspection.v1`), registered with the generic `runtime.TimerOptions.Recurrences`. The calendar rules are those of [scheduled jobs](schedule-extension.md):
 
 - A new schedule waits for its next slot.
 - A firing publishes the latest slot strictly within six hours, unless that slot ran last, and rearms. A slot missed by six hours or more is skipped.
@@ -85,7 +85,7 @@ A slot Event's identity is its instant, so a replayed firing is deduplicated. It
 
 ## Evidence aggregation
 
-`introspection.evidence` gives a run what v1's message lines and folders gave it:
+`introspection.evidence` gives a run:
 
 - **Triage**:
   - the scope's open reports, grouped by kind and normalized leading line (the title);
@@ -96,7 +96,7 @@ A slot Event's identity is its instant, so a replayed firing is deduplicated. It
 
 Each group has its count, the report or note ids, the distinct Work they came from, the issue numbers notes name, first and last times, and up to two sample bodies. The groups are a starting point. The playbooks still group by cause.
 
-Notes are read from the configured namespaces through public storage, filtered by the note's `scope`. A note's id is `<namespace>:<key>`. The extension never writes another extension's namespace. `introspection.notes.resolve` records a handled note in its own namespace `introspection.notes` (`handled/<scope>/<id>`), and later evidence leaves it out. This replaces v1's deletion of the note files, and the GitHub tools' records stay intact.
+Notes are read from the configured namespaces through public storage, filtered by the note's `scope`. A note's id is `<namespace>:<key>`. The extension never writes another extension's namespace. `introspection.notes.resolve` records a handled note in its own namespace `introspection.notes` (`handled/<scope>/<id>`), and later evidence leaves it out. The GitHub tools' records stay intact.
 
 ## Fix work and cited causation
 
@@ -125,7 +125,7 @@ Citing is bounded by core, not by the extension:
 
 ## Extension-originated reports and the host watch
 
-With `host_watch`, a host pass reads the machine's load, memory and disks (v1 `internal/host`, ported to `extensions/introspection/host`). It keeps v1's crossing rule: an alert when a reading goes over its threshold, and recovery under 95% of it.
+With `host_watch`, a host pass reads the machine's load, memory and disks (`extensions/introspection/host`). An alert fires when a reading goes over its threshold, and recovery under 95% of it.
 
 Each crossing over the threshold becomes an **extension-originated report** in every enabled scope that watches the host: a root `introspection.issue.reported` Event in the scope's report namespace, of kind `env` and origin `host-watch`, with the same index record. It is accepted with its record in one transaction (`is.HostReport`, `runtime.AcceptInTx`, `is.PutOriginInTx`), and the crossing's identity deduplicates a repeat.
 
@@ -135,14 +135,14 @@ From there it is an ordinary report:
 - it is listed in the triage evidence;
 - a fix for it cites it, so the fix traces to the reading.
 
-The watch state is in memory, as in v1, so after a restart a reading that is still over counts as a new crossing. The doctor check lists readings over threshold (`host_over_threshold`).
+The watch state is in memory, so after a restart a reading that is still over counts as a new crossing. The doctor check lists readings over threshold (`host_over_threshold`).
 
 ## Telemetry events
 
-v1 captured named product-telemetry events on its sinks (`agent_problem`, `host_metrics`, `host_alert`). Here they are an optional adapter on the public observability contract:
+Named product-telemetry events (`introspection_report`, `introspection_fix`, `introspection_run_due`, `host_metrics`, `host_alert`) are an optional adapter on the public observability contract:
 
-- `introspection.Exporter` is an `observability.Exporter` that bootstrap adds to the lifecycle pipeline. It turns the committed `event.accepted` records of the extension's families into `introspection_report`, `introspection_fix` and `introspection_run_due`. Each appears exactly once, which keeps v1's `TestProblemsGoToTelemetryOnce` guarantee.
-- The host watch captures `host_metrics` (v1 `hostProps`, with the fullest disk first) and `host_alert` on the same JSON-lines sink.
+- `introspection.Exporter` is an `observability.Exporter` that bootstrap adds to the lifecycle pipeline. It turns the committed `event.accepted` records of the extension's families into `introspection_report`, `introspection_fix` and `introspection_run_due`. Each appears exactly once.
+- The host watch captures `host_metrics` (with the fullest disk first) and `host_alert` on the same JSON-lines sink.
 
 Nothing is written unless an enabled entry sets `telemetry`. A PostHog sink belongs to 06-01.
 
@@ -174,7 +174,7 @@ A report is a **translated emission** (`extension.Operation.Emit`). The handler 
 
 The plan's KV records go in the same transaction. Nothing in the plan can select a root, another Work or a namespace the registration does not own. Since 05-03, the only cause a plan can name is one of its own Events, as above.
 
-Each report has the correlation key `introspection/<scope>` / `report/<id>`. No Work owns that key, and it lies in the registration's own source namespace. The Event is therefore addressed to the key: its envelope has no Work or Execution, but its source and causation still name the execution. The report's identity is its request ID, else its input, under the reporting execution. A retried call never reports twice, and a reused request ID with other input is `idempotency_conflict`. Reports never hold or wait (v1's `TestUpstreamIssueIsNeverHeld`).
+Each report has the correlation key `introspection/<scope>` / `report/<id>`. No Work owns that key, and it lies in the registration's own source namespace. The Event is therefore addressed to the key: its envelope has no Work or Execution, but its source and causation still name the execution. The report's identity is its request ID, else its input, under the reporting execution. A retried call never reports twice, and a reused request ID with other input is `idempotency_conflict`. Reports never hold or wait.
 
 The namespace `introspection.reports` has one record per report at `report/<scope>/<acceptance sequence>/<id>`. A record holds:
 
@@ -194,11 +194,11 @@ The namespace `introspection.reports` has one record per report at `report/<scop
 
 The playbooks join the Claude Code plugin with the other playbooks, and every introspection action goes through the `introspection.*` operations:
 
-- **`sweep`** ports v1 `sweep.md`: corrections are folded into the rule files and landed as a push or PR, then resolved.
-- **`triage-reports`** ports v1 `triage.md`. It starts from the evidence and groups by cause. Causes in the project's own files get a requested fix instead of an inline commit, so each fix is its own traceable Work. Remaining causes are filed when `file_issues` is set, or else written up. Handled reports and problems are resolved.
+- **`sweep`** corrections are folded into the rule files and landed as a push or PR, then resolved.
+- **`triage-reports`** starts from the evidence and groups by cause. Causes in the project's own files get a requested fix instead of an inline commit, so each fix is its own traceable Work. Remaining causes are filed when `file_issues` is set, or else written up. Handled reports and problems are resolved.
 - **`fix-report`** (new) makes the smallest edit, lands it and resolves the fix's reports.
 
-v1's `--upstream` flag is not reproduced: Open Conduit's own reports are the upstream intake.
+Open Conduit's own reports are the upstream intake.
 
 ## Evidence
 

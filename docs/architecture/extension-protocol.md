@@ -2,7 +2,7 @@
 
 Decision B08 · ticket 07-01 · **provisional, for user review**. The executable definition is package [`protocol`](../../protocol/protocol.go): the version, the [manifest](../../protocol/manifest.go) and its validation, and the [method catalogue](../../protocol/methods.go). Each wire method names the public contract it carries and the shipped first-party users that needed it. The [transport prototype](../../prototypes/transport) supplies the evidence (`make protocol-prototype`). 07-02 implemented loading, handshake, supervision, the message types, the trust model and payload schema evolution ([below](#runtime-trust-model-and-schema-evolution-07-02); also provisional). 07-03 added daemon wiring, the remaining adapters, packaging, the SDK's final shape and certification: see [Extension packaging, SDK and certification](extension-packaging.md) (also provisional).
 
-The protocol was extracted from the code that shipped through 05-04 and the 06-01/06-02 code: the GitHub, Slack, Linear, Jira, Bitbucket, schedule, introspection and PostHog extensions, the Git resource provider, and the shell, claude-code and legacy-job executors. It was not designed in the abstract. It adds **no core primitive**. Every method is an adapter over an existing public contract (`extension`, `storage` KV and reads, `observability`), or over a host composition hook the daemon already drives for in-process extensions. First-party extensions stay in-process. The user is the only protocol consumer, so the protocol is cheap to revise.
+The protocol was extracted from the code that shipped through 05-04 and the 06-01/06-02 code: the GitHub, Slack, Linear, Jira, Bitbucket, schedule, introspection and PostHog extensions, the Git resource provider, and the shell and claude-code executors. It was not designed in the abstract. It adds **no core primitive**. Every method is an adapter over an existing public contract (`extension`, `storage` KV and reads, `observability`), or over a host composition hook the daemon already drives for in-process extensions. First-party extensions stay in-process. The user is the only protocol consumer, so the protocol is cheap to revise.
 
 ## Decision summary
 
@@ -18,7 +18,7 @@ The protocol was extracted from the code that shipped through 05-04 and the 06-0
 
 ## Inventory of shipped interactions
 
-The table groups what the first-party code actually does across the host boundary today, as found in `internal/bootstrap` and the extension packages. Users: GH GitHub, SL Slack, TR tracker kit (Linear and Jira), BB Bitbucket, SC schedule, IS introspection, PH PostHog, GIT Git provider, SH shell, CC claude-code, LJ legacy-job.
+The table groups what the first-party code actually does across the host boundary today, as found in `internal/bootstrap` and the extension packages. Users: GH GitHub, SL Slack, TR tracker kit (Linear and Jira), BB Bitbucket, SC schedule, IS introspection, PH PostHog, GIT Git provider, SH shell, CC claude-code.
 
 | Interaction | In-process surface today | Users | Wire method(s) |
 | --- | --- | --- | --- |
@@ -58,7 +58,6 @@ Some couplings exist only as bootstrap glue between first-party packages. They h
 - claude-code's handoff `FeedbackHook` reads and writes GitHub comments (`githubFeedback`);
 - GitHub `job:` waits resolve schedule job keys (`scheduleJob`), and the schedule translator decodes GitHub delivery payloads;
 - Bitbucket reads the tracker's reopen generations;
-- legacy-job wraps the shell executor in-process;
 - PostHog receives introspection telemetry through a fan-out;
 - bootstrap parses Slack thread keys for the socket's active-thread filter. That one can move into the extension as a `state.works` read.
 
@@ -143,7 +142,7 @@ The protocol also has its own codes: `unsupported_protocol_version`, `reentrant_
 
 ## Lifecycle
 
-1. **Discovery.** The host reads `open-conduit-extension.json` from each extension directory. 07-02 decides the install location; 07-03 decides install/update/removal. `ParseManifest` validates it strictly and offline, so `config validate` and `migrate` never start a process. Conflicts with first-party or other registrations (names, types, operations, families) are refused atomically, as `Registrar` does in-process.
+1. **Discovery.** The host reads `open-conduit-extension.json` from each extension directory. 07-02 decides the install location; 07-03 decides install/update/removal. `ParseManifest` validates it strictly and offline, so `config validate` never starts a process. Conflicts with first-party or other registrations (names, types, operations, families) are refused atomically, as `Registrar` does in-process.
 2. **Start.** The host runs `command` with a sanitized environment (the B05 baseline, no secrets), the protocol on stdin/stdout, and the extension's private state directory. The process is a child of the daemon, in its own process group.
 3. **`initialize`.** The host sends `{protocol_versions, host: {name, version}, state_dir}`. The extension returns `{protocol_version, manifest}`. The host refuses a manifest that differs from the file, or no common version. No other method is valid before `initialize` succeeds.
 4. **`configure`.** The host sends the current generation's entries, connections (secret references only), `public_url` and `dry_run`. The extension returns the ingress sources and webhook paths it registers (under its own namespaces). It is sent again on every config apply and tunnel URL change, without a restart.
@@ -254,11 +253,11 @@ Validation rules:
 
 The same format and the same catalogue cover both workload shapes. Nothing in core distinguishes an "ingress extension" from an "executor extension". A manifest enables the methods of the surfaces it declares, and the host registers those surfaces through the same runtime interfaces it uses for in-process extensions (`TestExampleManifests`, `TestEveryMethodIsReachable`).
 
-The first-party extensions are not given manifests. They stay in-process, and `internal/migrate` writes their config from exported names (06-02). A third-party extension's config entries are validated through `validate`; 07-03 owns any conversion story.
+The first-party extensions are not given manifests. They stay in-process. A third-party extension's config entries are validated through `validate`; 07-03 owns any conversion story.
 
 ## Contract changes made in 07-01
 
-- `extension.StopExecutor`: the daemon's private `stopper` interface, now public, because an external executor must be able to supply physical-stop evidence. Shell, claude-code and legacy-job implement it unchanged.
+- `extension.StopExecutor`: the daemon's private `stopper` interface, now public, because an external executor must be able to supply physical-stop evidence. Shell and claude-code implement it unchanged.
 - `extension.AttachExecutor`, `extension.AttachSpec`, `extension.ErrNothingToAttach`: attach is now a public optional executor method. Bootstrap no longer branches on claude-code. The management wire code `no_session` becomes `nothing_to_attach` (05-04's note), and `claudecode.ErrNoSession` wraps `ErrNothingToAttach`. The unused attach environment that claude-code computed is gone; the operator's shell supplies it, as before.
 - `extension.ContractVersion` still versions the in-process API. `protocol.Version` versions the wire.
 
