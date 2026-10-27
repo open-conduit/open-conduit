@@ -68,6 +68,8 @@ type ActionCall struct {
 // ActionPlan is an authorised invocation: the Event to accept (Type,
 // CorrelationKey and Data only; the host assigns identity, source, delivery
 // and causation) and an optional short, secret-free Message for the caller.
+// An Event with a CorrelationKey is addressed by that key; without one, an
+// action on Work produces an Event addressed to that Work.
 type ActionPlan struct {
 	Event   domain.Event
 	Message string

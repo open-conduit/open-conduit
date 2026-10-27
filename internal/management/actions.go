@@ -123,7 +123,9 @@ func (s *Server) invokeAction(c *call, work bool) (int, any, error) {
 		return 0, nil, err
 	}
 	a := runtime.ActionEvent{ScopeID: t.Scope.ID, Provider: name, Action: id, Key: c.key, Event: plan.Event}
-	if t.Work != nil {
+	// An Event that names a correlation key is addressed by it (an answer
+	// on a key no Work owns, say); one without is the target Work's.
+	if t.Work != nil && plan.Event.CorrelationKey == nil {
 		a.WorkID = t.Work.ID
 	}
 	accepted, added, err := s.o.Control.SubmitAction(c.ctx, a)
