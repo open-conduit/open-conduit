@@ -32,11 +32,28 @@ type manifest struct {
 	CreatedAt      time.Time
 	DatabaseSHA256 string
 	Artifacts      []entry
+	// Omitted lists references whose content retention expired. Their bytes
+	// are not in the bundle; restore accepts them only on expired Executions.
+	Omitted []domain.ArtifactRef `json:",omitempty"`
+}
+
+// Expired reports whether retention has expired an Execution's content. The
+// runtime owns the retention ledger, so callers supply the lookup; nil means
+// no Execution has expired.
+type Expired func(tx storage.Tx, id domain.ID) (bool, error)
+
+func (e Expired) of(tx storage.Tx, id domain.ID) (bool, error) {
+	if e == nil {
+		return false, nil
+	}
+	return e(tx, id)
 }
 
 // Create publishes a complete immutable bundle at a previously absent path.
 // Pinning precedes the database snapshot so retention cannot remove captured refs.
-func Create(ctx context.Context, destination string, db *sqlite.Store, files *artifacts.Store, build string) error {
+// References of Executions whose retention expired are recorded as omitted
+// rather than copied, since their content may already be gone.
+func Create(ctx context.Context, destination string, db *sqlite.Store, files *artifacts.Store, build string, expired Expired) error {
 	return publish(ctx, destination, func(stage string) error {
 		pin, err := files.Pin()
 		if err != nil {
@@ -52,17 +69,24 @@ func Create(ctx context.Context, destination string, db *sqlite.Store, files *ar
 			return err
 		}
 		refs := map[string]domain.ArtifactRef{}
+		live := map[string]bool{}
 		err = snapshot.Transact(ctx, storage.Guard{Now: time.Now().UTC()}, func(tx storage.Tx) error {
 			xs, err := tx.ListExecutions("")
 			if err != nil {
 				return err
 			}
 			for _, x := range xs {
+				gone, err := expired.of(tx, x.ID)
+				if err != nil {
+					return err
+				}
 				for _, ref := range x.Artifacts {
 					if old, ok := refs[ref.ID]; ok && old != ref {
 						return storage.ErrConflict
 					}
 					refs[ref.ID] = ref
+					// A ref shared with an unexpired Execution must be copied.
+					live[ref.ID] = live[ref.ID] || !gone
 				}
 			}
 			return nil
@@ -82,6 +106,10 @@ func Create(ctx context.Context, destination string, db *sqlite.Store, files *ar
 		m := manifest{Version: 1, Schema: db.SchemaVersion(), Build: build, CreatedAt: time.Now().UTC()}
 		// Sorting makes manifests reproducible apart from their creation time.
 		for _, ref := range sortedRefs(refs) {
+			if !live[ref.ID] {
+				m.Omitted = append(m.Omitted, ref)
+				continue
+			}
 			r, err := pin.Open(ctx, ref)
 			if err != nil {
 				return err
@@ -112,7 +140,7 @@ func Create(ctx context.Context, destination string, db *sqlite.Store, files *ar
 // Restore verifies all bundle bytes before publishing a new isolated state
 // directory. The SQLite restore fences old lease authority. No daemon may own
 // destination; an existing path is rejected, never overwritten.
-func Restore(ctx context.Context, bundle, destination string, now time.Time) error {
+func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired) error {
 	if now.IsZero() {
 		return storage.ErrInvalid
 	}
@@ -175,6 +203,14 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time) err
 			return err
 		}
 		defer restored.Close()
+		omitted := map[string]domain.ArtifactRef{}
+		for _, ref := range m.Omitted {
+			if seen[ref.ID] {
+				return fmt.Errorf("backup: duplicate artifact")
+			}
+			seen[ref.ID] = true
+			omitted[ref.ID] = ref
+		}
 		return restored.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
 			xs, err := tx.ListExecutions("")
 			if err != nil {
@@ -185,10 +221,18 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time) err
 				captured[item.Ref.ID] = item.Ref
 			}
 			for _, x := range xs {
+				gone, err := expired.of(tx, x.ID)
+				if err != nil {
+					return err
+				}
 				for _, ref := range x.Artifacts {
-					if captured[ref.ID] != ref {
-						return fmt.Errorf("backup: referenced artifact omitted or changed")
+					if captured[ref.ID] == ref {
+						continue
 					}
+					if gone && omitted[ref.ID] == ref {
+						continue
+					}
+					return fmt.Errorf("backup: referenced artifact omitted or changed")
 				}
 			}
 			return nil
@@ -325,6 +369,8 @@ type Info struct {
 	Build     string
 	CreatedAt time.Time
 	Artifacts int
+	// Omitted counts references whose expired content the bundle leaves out.
+	Omitted int
 }
 
 // Inspect reads and checks a bundle's manifest. It does not verify the
@@ -334,5 +380,5 @@ func Inspect(bundle string) (Info, error) {
 	if err != nil {
 		return Info{}, err
 	}
-	return Info{Schema: m.Schema, Build: m.Build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts)}, nil
+	return Info{Schema: m.Schema, Build: m.Build, CreatedAt: m.CreatedAt, Artifacts: len(m.Artifacts), Omitted: len(m.Omitted)}, nil
 }

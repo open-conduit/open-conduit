@@ -47,7 +47,7 @@ Run `open-conduit state check [--json]` with the daemon stopped. It examines a p
 | `lock` | Fails when a daemon owns the directory (`in_use_or_unsafe`), or when its permissions are not owner-only. |
 | `socket` | A leftover socket from an unclean stop (info: the next start removes it after its ownership checks). |
 | `database` | `schema_1` (integrity and foreign keys pass), or `corrupt` / `schema_newer` / `schema_unrecognized` / `open_failed`, with the remedy. |
-| `artifacts` | Referenced artifacts missing. A backup refuses missing content, so restore the directory or the latest bundle. |
+| `artifacts` | Referenced artifacts missing, not counting content retention released on purpose. A backup refuses missing content, so restore the directory or the latest bundle. |
 | `timers` | The number of durable timers that resume on start. |
 
 Per scope it also gives Work by state, live executions, active waits, and `drained` (no running or waiting Work, live execution or active wait), which is the drain check before an upgrade or restore.

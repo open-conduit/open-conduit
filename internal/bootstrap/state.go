@@ -17,6 +17,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/migrate"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -114,10 +115,17 @@ func BackupState(ctx context.Context, stateDir, destination, build string) (cli.
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return cli.BackupInfo{}, err
 	}
-	if err := backup.Create(ctx, destination, store, files, build); err != nil {
+	if err := backup.Create(ctx, destination, store, files, build, retentionExpired); err != nil {
 		return cli.BackupInfo{}, err
 	}
 	return bundleInfo(destination)
+}
+
+// retentionExpired tells the backup package which Executions' content the
+// runtime's retention sweep has expired.
+func retentionExpired(tx storage.Tx, id domain.ID) (bool, error) {
+	r, err := runtime.RetentionInTx(tx, id)
+	return r.Expired, err
 }
 
 func bundleInfo(bundle string) (cli.BackupInfo, error) {
@@ -125,7 +133,7 @@ func bundleInfo(bundle string) (cli.BackupInfo, error) {
 	if err != nil {
 		return cli.BackupInfo{}, err
 	}
-	return cli.BackupInfo{Path: bundle, Schema: info.Schema, Build: info.Build, CreatedAt: info.CreatedAt, Artifacts: info.Artifacts}, nil
+	return cli.BackupInfo{Path: bundle, Schema: info.Schema, Build: info.Build, CreatedAt: info.CreatedAt, Artifacts: info.Artifacts, OmittedArtifacts: info.Omitted}, nil
 }
 
 // VerifyBundle restores a bundle into a private temporary directory, checks
@@ -141,7 +149,7 @@ func VerifyBundle(ctx context.Context, bundle string) (cli.BackupInfo, error) {
 	}
 	defer os.RemoveAll(tmp)
 	dest := filepath.Join(tmp, "state")
-	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC()); err != nil {
+	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC(), retentionExpired); err != nil {
 		return info, err
 	}
 	store, err := sqlite.Open(ctx, filepath.Join(dest, "conduit.db"))
@@ -176,7 +184,7 @@ func RestoreState(ctx context.Context, bundle, destination string) (cli.BackupIn
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return info, err
 	}
-	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC()); err != nil {
+	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC(), retentionExpired); err != nil {
 		return info, err
 	}
 	if err := os.Chmod(destination, 0o700); err != nil {
@@ -300,6 +308,12 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 					s.LiveExecutions++
 				}
 				if ferr != nil {
+					continue
+				}
+				// Retention released expired content on purpose; a backup omits it.
+				if retention, err := runtime.RetentionInTx(tx, x.ID); err != nil {
+					return err
+				} else if retention.Expired {
 					continue
 				}
 				for _, ref := range x.Artifacts {
