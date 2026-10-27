@@ -809,13 +809,9 @@ func (t *Toolbelt) declareWaitInTx(tx storage.Tx, x domain.Execution, w domain.W
 	if after == 0 {
 		after = state.ObservedSequence
 	}
-	all, err := tx.Events(0, 0)
+	max, err := tx.LatestSequence()
 	if err != nil {
 		return nil, err
-	}
-	var max uint64
-	if len(all) > 0 {
-		max = all[len(all)-1].Sequence
 	}
 	if after > max || after < state.ObservedSequence {
 		return nil, extension.ErrInvalid

@@ -152,13 +152,9 @@ func rejectExecutionTimeoutInTx(tx storage.Tx, now time.Time, event domain.Event
 	if err = putAttemptState(tx, state); err != nil {
 		return err
 	}
-	history, err := tx.Events(0, 0)
+	boundary, err := tx.LatestSequence()
 	if err != nil {
 		return err
-	}
-	var boundary uint64
-	if len(history) > 0 {
-		boundary = history[len(history)-1].Sequence
 	}
 	retry := RetryState{WorkID: w.ID, FailedExecutionID: x.ID, Binding: x.ExecutorBinding, FailureCount: old.FailureCount + 1, FailureSequence: boundary, Blocked: true, BlockedReason: "causal_rejection"}
 	return putJSON(tx, retryNamespace, identity(string(w.ID)), retry)
@@ -371,7 +367,7 @@ func (s *Scheduler) Poll(ctx context.Context, timers *Timers, limit int) (result
 			}
 			switch phase {
 			case "events":
-				events, e := tx.Events(0, 0)
+				events, e := tx.UnroutedEvents(0, 0)
 				if e != nil {
 					return e
 				}

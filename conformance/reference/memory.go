@@ -161,6 +161,31 @@ func (t *transaction) Events(after uint64, limit int) ([]domain.AcceptedEvent, e
 	}
 	return out, nil
 }
+func (t *transaction) UnroutedEvents(after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	all, _ := t.Events(after, 0)
+	out := []domain.AcceptedEvent{}
+	for _, v := range all {
+		if !v.Routed && (limit <= 0 || len(out) < limit) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+func (t *transaction) LatestSequence() (uint64, error) {
+	var latest uint64
+	for _, v := range t.data.Events {
+		latest = max(latest, v.Sequence)
+	}
+	return latest, nil
+}
+func (t *transaction) EventByDelivery(source, deliveryID string) (domain.AcceptedEvent, error) {
+	for _, v := range t.data.Events {
+		if v.Event.Source == source && v.Event.DeliveryID == deliveryID {
+			return copyOf(v), nil
+		}
+	}
+	return domain.AcceptedEvent{}, storage.ErrNotFound
+}
 func (t *transaction) MarkRouted(id, work domain.ID, disposition string) error {
 	a, ok := t.data.Events[id]
 	if !ok {

@@ -61,11 +61,9 @@ func (t *Toolbelt) declareTranslatedWait(ctx context.Context, record tokenRecord
 		if e != nil {
 			return e
 		}
-		var latest uint64
-		if all, er := tx.Events(0, 0); er != nil {
+		latest, er := tx.LatestSequence()
+		if er != nil {
 			return er
-		} else if len(all) > 0 {
-			latest = all[len(all)-1].Sequence
 		}
 		for _, d := range plan.Dependencies {
 			if len(decl.Wait.Match.Types) > 0 && !contains(decl.Wait.Match.Types, d.AliasType) {

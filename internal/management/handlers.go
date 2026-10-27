@@ -160,12 +160,9 @@ func (s *Server) listEvents(c *call) (int, any, error) {
 				after = last
 			}
 		} else {
-			all, e := tx.Events(0, 0)
-			if e != nil {
+			var e error
+			if bound, e = tx.LatestSequence(); e != nil {
 				return e
-			}
-			if len(all) > 0 {
-				bound = all[len(all)-1].Sequence
 			}
 		}
 		for {

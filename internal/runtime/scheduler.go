@@ -977,7 +977,7 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 			return err
 		}
 		if result.Outcome.Kind == domain.OutcomeCompleted {
-			events, err := tx.Events(0, 0)
+			events, err := tx.UnroutedEvents(0, 0)
 			if err != nil {
 				return err
 			}

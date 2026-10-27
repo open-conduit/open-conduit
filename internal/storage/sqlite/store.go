@@ -105,6 +105,11 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err = enableWAL(ctx, db); err != nil {
 		return nil, err
 	}
+	for _, statement := range indexes {
+		if _, err = db.ExecContext(ctx, statement); err != nil {
+			return nil, fmt.Errorf("sqlite: index: %w", err)
+		}
+	}
 	if err = s.IntegrityCheck(ctx); err != nil {
 		return nil, err
 	}
@@ -217,6 +222,19 @@ var schema = []string{
 	`CREATE TABLE waits (id TEXT PRIMARY KEY, work_id TEXT NOT NULL REFERENCES works(id), execution_id TEXT NOT NULL REFERENCES executions(id), record BLOB NOT NULL)`,
 	`CREATE TABLE kv (namespace TEXT NOT NULL CHECK(length(namespace)>0), key TEXT NOT NULL CHECK(length(key)>0), value BLOB NOT NULL, PRIMARY KEY(namespace,key))`,
 	`PRAGMA user_version=1`,
+}
+
+// unrouted selects events not yet marked routed. The routed flag lives in the
+// record, so the partial index below covers exactly the unrouted backlog and
+// routing never reads retained history (#36). Queries must repeat this exact
+// expression for SQLite to use the index.
+const unrouted = "json_extract(CAST(record AS TEXT),'$.Routed')=0"
+
+// indexes are derived from records, so they are created on every open: an
+// older database gains them without a schema version change, and an older
+// binary that opens a database with them keeps them current.
+var indexes = []string{
+	`CREATE INDEX IF NOT EXISTS events_unrouted ON events(sequence) WHERE ` + unrouted,
 }
 
 func (s *Store) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {

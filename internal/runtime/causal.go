@@ -122,16 +122,11 @@ func ancestry(tx storage.Tx, parent domain.ID, limits CausalLimits) (CausalInfo,
 	return info, nil
 }
 func deliveryDuplicate(tx storage.Tx, e domain.Event) (domain.AcceptedEvent, bool, error) {
-	all, err := tx.Events(0, 0)
-	if err != nil {
-		return domain.AcceptedEvent{}, false, err
+	a, err := tx.EventByDelivery(e.Source, e.DeliveryID)
+	if errors.Is(err, storage.ErrNotFound) {
+		return domain.AcceptedEvent{}, false, nil
 	}
-	for _, a := range all {
-		if a.Event.Source == e.Source && a.Event.DeliveryID == e.DeliveryID {
-			return a, true, nil
-		}
-	}
-	return domain.AcceptedEvent{}, false, nil
+	return a, err == nil, err
 }
 func checkDerived(tx storage.Tx, now time.Time, limits CausalLimits, parent domain.ID, e domain.Event) (CausalInfo, int, bool, error) {
 	info, charges, duplicate, err := checkCausal(tx, now, limits, parent, "", e)

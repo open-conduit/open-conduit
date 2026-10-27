@@ -231,7 +231,7 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 	} else if !errors.Is(e, storage.ErrNotFound) {
 		return s, e
 	}
-	s.events, err = tx.Events(0, 0)
+	s.events, err = tx.UnroutedEvents(0, 0)
 	return
 }
 func detachedInput(s routeSnapshot) extension.RouteInput {
