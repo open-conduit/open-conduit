@@ -85,6 +85,12 @@ type Extension struct {
 	Exporter observability.Exporter
 	// Annotate contributes Work annotations (manifest annotate).
 	Annotate func(ctx context.Context, h *Host, w domain.Work) ([]protocol.Annotation, error)
+	// Actions lists the actions available on a target now and Act
+	// authorises one invocation (manifest actions; extension.ActionProvider).
+	// Act refuses with *extension.OperationError, which reaches the caller
+	// verbatim.
+	Actions func(ctx context.Context, h *Host, t extension.ActionTarget) ([]extension.Action, error)
+	Act     func(ctx context.Context, h *Host, c extension.ActionCall) (extension.ActionPlan, error)
 	// Setups are `open-conduit init <type>` flows by declared setup type.
 	Setups map[string]extension.Setup
 }
@@ -174,7 +180,7 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			_ = s.ext.Exporter.Shutdown(ctx)
 		}
 		return struct{}{}, nil
-	case "validate", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "telemetry.export", "work.annotate", "setup.run":
+	case "validate", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "telemetry.export", "work.annotate", "work.actions", "work.act", "setup.run":
 		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)

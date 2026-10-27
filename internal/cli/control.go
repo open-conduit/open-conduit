@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -188,11 +187,6 @@ func (o *operator) reconcileScope(args []string) int {
 	return o.emit(c.ReconcileScope(cx, pos[0], rev, f.key()))
 }
 
-// ClaimType is the GitHub extension's operator claim Event
-// (github.claim.requested): routed by the `github` handler, it creates Work
-// for the named issue whatever its labels.
-const ClaimType = "github.claim.requested"
-
 // claimRef is v1's claim syntax: [scope#]N, also #N.
 var claimRef = regexp.MustCompile(`^(?:([a-z][a-z0-9_-]{0,62})?#)?([0-9]{1,10})$`)
 
@@ -209,51 +203,39 @@ func ParseClaim(s string) (scope string, number int, ok bool) {
 	return m[1], n, true
 }
 
-// githubNamespaces lists a scope's github extension entries (name →
-// namespace) from its effective metadata.
-func githubNamespaces(s client.Scope) map[string]string {
-	var meta struct {
-		Extensions []struct {
-			Name   string `json:"name"`
-			Type   string `json:"type"`
-			Config struct {
-				Namespace string `json:"namespace"`
-				Scope     string `json:"scope"`
-			} `json:"config"`
-		} `json:"extensions"`
-	}
-	out := map[string]string{}
-	if json.Unmarshal(s.Config, &meta) != nil {
-		return out
-	}
-	for _, x := range meta.Extensions {
-		if x.Type == "github" && x.Config.Scope == s.ID && x.Config.Namespace != "" {
-			out[x.Name] = x.Config.Namespace
-		}
-	}
-	return out
-}
+// ClaimAction is the scope action extensions offer for claiming an item
+// by hand.
+const ClaimAction = "claim"
 
-// Claim submits an operator claim for issue n in scope's github entry
-// (entry may be empty when the scope has exactly one).
-func Claim(cx context.Context, c *client.Client, scope, entry string, n int, key string) (client.Event, error) {
-	s, err := c.Scope(cx, scope)
+// InvokeNamed invokes action id on t through the provider named provider
+// (its full name or its last path segment), or the only provider that
+// offers the action when provider is empty. The extension authorises the
+// call and writes the Event; this only addresses it.
+func InvokeNamed(cx context.Context, c *client.Client, t client.ActionTarget, provider, id, input, key string) (client.ActionResult, error) {
+	actions, err := c.Actions(cx, t)
 	if err != nil {
-		return client.Event{}, err
+		return client.ActionResult{}, err
 	}
-	entries := githubNamespaces(s)
-	ns := entries[entry]
-	if entry == "" && len(entries) == 1 {
-		for _, v := range entries {
-			ns = v
+	var found []client.Action
+	for _, a := range actions {
+		if a.ID != id {
+			continue
+		}
+		if provider == "" || a.Provider == provider || strings.HasSuffix(a.Provider, "/"+provider) {
+			found = append(found, a)
 		}
 	}
-	if ns == "" {
-		return client.Event{}, fmt.Errorf("scope %s has no single github entry%s; pass --entry", scope, map[bool]string{true: "", false: " named " + entry}[entry == ""])
+	where := "scope " + t.ScopeID
+	if t.WorkID != "" {
+		where = "Work " + t.WorkID
 	}
-	data, _ := json.Marshal(map[string]int{"number": n})
-	return c.SubmitEvent(cx, client.EventRequest{ScopeID: scope, Type: ClaimType, DeliveryID: fmt.Sprintf("claim/%s/%d/%s", scope, n, key),
-		CorrelationKey: &client.Key{Source: ns, ExternalID: "issue/" + strconv.Itoa(n)}, Data: &client.Payload{Schema: "github.claim.v1", Data: data}}, key)
+	switch len(found) {
+	case 0:
+		return client.ActionResult{}, fmt.Errorf("%s offers no %s action%s", where, id, map[bool]string{true: "", false: " from " + provider}[provider == ""])
+	case 1:
+		return c.InvokeAction(cx, t, found[0].Provider, id, input, key)
+	}
+	return client.ActionResult{}, fmt.Errorf("%s has several %s actions; pass --entry with one of their providers", where, id)
 }
 
 func (o *operator) claim(args []string) int {
@@ -278,5 +260,29 @@ func (o *operator) claim(args []string) int {
 	}
 	cx, cancel := ctx()
 	defer cancel()
-	return o.emit(Claim(cx, c, scope, f.get("entry"), n, f.key()))
+	return o.emit(InvokeNamed(cx, c, client.ActionTarget{ScopeID: scope}, f.get("entry"), ClaimAction, strconv.Itoa(n), f.key()))
+}
+
+// actions lists or invokes the actions extensions offer on a scope or Work.
+func (o *operator) actions(args []string) int {
+	usage := "expected actions list (--scope S | --work W) | actions run PROVIDER ID (--scope S | --work W) [--input TEXT] [--key K]"
+	if len(args) == 0 || args[0] != "list" && args[0] != "run" {
+		return usageError(o.errOut, usage)
+	}
+	f := newFlags("actions", "scope", "work", "input", "key")
+	pos, err := f.parse(args[1:])
+	t := client.ActionTarget{ScopeID: f.get("scope"), WorkID: f.get("work")}
+	if err != nil || (t.ScopeID == "") == (t.WorkID == "") || args[0] == "list" && len(pos) != 0 || args[0] == "run" && len(pos) != 2 {
+		return usageError(o.errOut, usage)
+	}
+	c, _, err := o.client()
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	if args[0] == "list" {
+		return o.emit(c.Actions(cx, t))
+	}
+	return o.emit(c.InvokeAction(cx, t, pos[0], pos[1], f.get("input"), f.key()))
 }

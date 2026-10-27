@@ -170,6 +170,53 @@ func (r *Remote) Annotate(ctx context.Context, w domain.Work) []protocol.Annotat
 	return out.Annotations
 }
 
+// Actions returns the extension's action provider (manifest actions). A
+// listing failure offers nothing; an invocation's plan is checked before
+// the host accepts it: a family the extension declared, a payload it may
+// write and, when keyed, a correlation key in its own source namespace.
+func (r *Remote) Actions() (extension.ActionProvider, bool) {
+	if !r.m.Provides.Actions {
+		return nil, false
+	}
+	return remoteActions{r}, true
+}
+
+type remoteActions struct{ r *Remote }
+
+func (a remoteActions) Actions(ctx context.Context, t extension.ActionTarget) ([]extension.Action, error) {
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var out protocol.WorkActionsResult
+	if err := a.r.p.Call(ctx, "work.actions", protocol.WorkActionsParams{Target: protocol.FromActionTarget(t)}, &out); err != nil {
+		return nil, err
+	}
+	actions := make([]extension.Action, 0, len(out.Actions))
+	for _, x := range out.Actions {
+		actions = append(actions, extension.Action{ID: x.ID, Label: x.Label, Prompt: x.Prompt})
+	}
+	return actions, nil
+}
+
+func (a remoteActions) Invoke(ctx context.Context, c extension.ActionCall) (extension.ActionPlan, error) {
+	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
+	defer cancel()
+	var out protocol.WorkActResult
+	if err := a.r.p.Call(ctx, "work.act", protocol.WorkActParams{Target: protocol.FromActionTarget(c.Target), Action: c.Action, Input: c.Input, Caller: protocol.Caller{Kind: c.Caller.Kind, ID: c.Caller.ID}}, &out); err != nil {
+		return extension.ActionPlan{}, err
+	}
+	e := out.Event.Domain()
+	if !a.r.s.ownFamily(e.Type) {
+		return extension.ActionPlan{}, protocol.Errorf(protocol.CodeUndeclared, "family not declared")
+	}
+	if e.CorrelationKey != nil && !protocol.SourceNamespace(a.r.m.Name, e.CorrelationKey.Source) {
+		return extension.ActionPlan{}, protocol.Errorf(protocol.CodeUnauthorized, "correlation key is outside the extension's namespace")
+	}
+	if err := a.r.m.CheckWrite(e.Data); err != nil {
+		return extension.ActionPlan{}, schemaError(err)
+	}
+	return extension.ActionPlan{Event: domain.Event{Type: e.Type, CorrelationKey: e.CorrelationKey, Data: e.Data}, Message: out.Message}, nil
+}
+
 // Setup returns the extension's `open-conduit init <type>` flow. Its
 // setup.* callbacks are answered by the SetupHost of the run in progress
 // and refused for any other run ID.

@@ -119,6 +119,36 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.WorkAnnotateResult{Annotations: lines}, nil
+	case "work.actions":
+		var p protocol.WorkActionsParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.ext.Actions == nil {
+			return nil, notFound(method)
+		}
+		actions, err := s.ext.Actions(ctx, s.host, p.Target.Extension())
+		if err != nil {
+			return nil, err
+		}
+		out := protocol.WorkActionsResult{}
+		for _, a := range actions {
+			out.Actions = append(out.Actions, protocol.Action{ID: a.ID, Label: a.Label, Prompt: a.Prompt})
+		}
+		return out, nil
+	case "work.act":
+		var p protocol.WorkActParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.ext.Act == nil {
+			return nil, notFound(method)
+		}
+		plan, err := s.ext.Act(ctx, s.host, extension.ActionCall{Target: p.Target.Extension(), Action: p.Action, Input: p.Input, Caller: extension.Caller{Kind: p.Caller.Kind, ID: p.Caller.ID}})
+		if err != nil {
+			return nil, err
+		}
+		return protocol.WorkActResult{Event: protocol.FromEvent(plan.Event), Message: plan.Message}, nil
 	case "setup.run":
 		var p protocol.SetupRunParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

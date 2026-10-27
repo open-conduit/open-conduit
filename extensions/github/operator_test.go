@@ -6,16 +6,18 @@ import (
 	"testing"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// A manual claim (an operator core.manual Event keyed to the entry's issue)
-// creates Work whatever the labels; nothing else can claim this way.
+// A manual claim (the claim action's Event keyed to the entry's issue)
+// creates Work whatever the labels; nothing else can claim this way, not
+// even the same Event posted by the operator through POST /v1/events.
 func TestRouteManualClaim(t *testing.T) {
 	scope := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`"}`)
 	claim := event(gh.TypeClaimRequested, "issue/7", "github.claim.v1", map[string]int{"number": 7})
-	claim.Event.Source = gh.ManualSource
+	claim.Event.Source = extension.ActionSource
 	if d := match(t, scope, claim, nil); !d.Match || d.Kind != gh.WorkKind {
 		t.Fatalf("manual claim: %+v", d)
 	}
@@ -23,17 +25,19 @@ func TestRouteManualClaim(t *testing.T) {
 		t.Fatal("a claim fed existing Work")
 	}
 	forged := event(gh.TypeClaimRequested, "issue/7", "github.claim.v1", nil)
-	forged.Event.Source = "execution/x"
-	if match(t, scope, forged, nil).Match {
-		t.Fatal("a non-operator claim matched")
+	for _, source := range []string{"execution/x", "core.manual"} {
+		forged.Event.Source = source
+		if match(t, scope, forged, nil).Match {
+			t.Fatalf("a claim from %s matched", source)
+		}
 	}
 	gen := event(gh.TypeClaimRequested, "issue/7/generation/reopen-1", "github.claim.v1", nil)
-	gen.Event.Source = gh.ManualSource
+	gen.Event.Source = extension.ActionSource
 	if match(t, scope, gen, nil).Match {
 		t.Fatal("a generation key was claimed by hand")
 	}
 	other := event(gh.TypeClaimRequested, "issue/7", "github.claim.v1", nil)
-	other.Event.Source = gh.ManualSource
+	other.Event.Source = extension.ActionSource
 	other.Event.CorrelationKey.Source = "github/github.com/other/repo"
 	if match(t, scope, other, nil).Match {
 		t.Fatal("a claim for another entry matched")

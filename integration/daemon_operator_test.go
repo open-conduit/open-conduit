@@ -224,16 +224,43 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 		t.Fatal("attach left the Work held")
 	}
 
-	// 8. Manual claim overrides the skip label.
-	var claim client.Event
+	// 8. Manual claim overrides the skip label. It is the GitHub entry's
+	// claim action: posting the same Event claims nothing, and claiming an
+	// issue that already has Work is refused and leaves no Event.
+	ns := ""
+	for _, k := range w.CorrelationKeys {
+		if strings.HasPrefix(k.ExternalID, "issue/") {
+			ns = k.Source
+		}
+	}
+	if ns == "" {
+		t.Fatalf("no issue key on %+v", w)
+	}
+	var forged client.Event
+	o.must(&forged, "events", "emit", "--scope-id", "eng", "--type", "github.claim.requested", "--delivery-id", "forged-claim", "--key-source", ns, "--key-external-id", "issue/"+itoa(later), "--schema", "github.claim.v1", "--data", `{"number":`+itoa(later)+`}`)
+	if forged.Source != "core.manual" || forged.RoutedWorkID != "" {
+		t.Fatalf("a posted claim created Work: %+v", forged)
+	}
+	var claim client.ActionResult
 	o.must(&claim, "claim", "eng#"+itoa(later))
-	if claim.Type != "github.claim.requested" || claim.Source != "core.manual" {
+	if claim.Event.Type != "github.claim.requested" || claim.Event.Source != "core.action" {
 		t.Fatalf("claim event: %+v", claim)
 	}
 	d.until("claimed by hand", 30*time.Second, func() bool {
 		lw, ok := workFor(later)
 		return ok && lw.Kind == "github.issue"
 	})
+	before, err := d.c.Events(ctx, url.Values{"scope_id": {"eng"}, "type": {"github.claim.requested"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := cli.InvokeNamed(ctx, d.c, client.ActionTarget{ScopeID: "eng"}, "", cli.ClaimAction, itoa(later), "again"); err == nil || !strings.Contains(err.Error(), "already_claimed") {
+		t.Fatalf("claiming a claimed issue: %v", err)
+	}
+	after, err := d.c.Events(ctx, url.Values{"scope_id": {"eng"}, "type": {"github.claim.requested"}})
+	if err != nil || len(after.Items) != len(before.Items) {
+		t.Fatalf("a refused claim left an Event: %d → %d %v", len(before.Items), len(after.Items), err)
+	}
 
 	// 9. Scope reconcile on demand.
 	var rec client.ReconcileResult

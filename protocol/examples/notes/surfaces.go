@@ -213,3 +213,48 @@ func (Setup) Setup(_ context.Context, host extension.SetupHost, args []string) (
 		"extensions": []any{map[string]any{"name": "notes", "type": Name, "config": map[string]string{"service": service}, "secret_names": []string{}}}})
 	return extension.SetupResult{Scope: scope, Summary: []string{"notes scope watching " + service}}, nil
 }
+
+// Actions is the example action provider: on Work that follows a note and
+// is still open, the local operator may add a remark, which becomes a
+// notes.note.annotated Event on the note. The same value serves in-process
+// and behind work.actions and work.act.
+type Actions struct{}
+
+var _ extension.ActionProvider = Actions{}
+
+// noteKey is the note a live Work follows, if any.
+func noteKey(w *domain.Work) (domain.CorrelationKey, bool) {
+	if w == nil || w.State.Terminal() {
+		return domain.CorrelationKey{}, false
+	}
+	for _, k := range w.CorrelationKeys {
+		if k.Source == Name {
+			return k, true
+		}
+	}
+	return domain.CorrelationKey{}, false
+}
+
+func (Actions) Actions(_ context.Context, t extension.ActionTarget) ([]extension.Action, error) {
+	if _, ok := noteKey(t.Work); !ok {
+		return nil, nil
+	}
+	return []extension.Action{{ID: "remark", Label: "Add a remark to the note", Prompt: "remark"}}, nil
+}
+
+func (Actions) Invoke(_ context.Context, c extension.ActionCall) (extension.ActionPlan, error) {
+	if c.Action != "remark" {
+		return extension.ActionPlan{}, &extension.OperationError{Code: "unknown_action", Message: "notes offers no action " + c.Action}
+	}
+	k, ok := noteKey(c.Target.Work)
+	if !ok {
+		return extension.ActionPlan{}, &extension.OperationError{Code: "not_outstanding", Message: "this Work no longer follows an open note"}
+	}
+	if c.Caller.Kind != extension.CallerOperator {
+		return extension.ActionPlan{}, &extension.OperationError{Code: "not_allowed", Message: "only the operator may remark on a note"}
+	}
+	if strings.TrimSpace(c.Input) == "" {
+		return extension.ActionPlan{}, &extension.OperationError{Code: "invalid_input", Message: "a remark needs some text"}
+	}
+	return extension.ActionPlan{Event: domain.Event{Type: Annotated, CorrelationKey: &k}, Message: "remark recorded on note " + k.ExternalID}, nil
+}

@@ -13,13 +13,12 @@ import (
 // WorkKind is the kind of Work claimed for an issue generation.
 const WorkKind = "github.issue"
 
-// TypeClaimRequested is an operator's claim by hand: a core.manual Event
+// TypeClaimRequested is an operator's claim by hand: the Event of the
+// entry's "claim" action (Actions), accepted under extension.ActionSource,
 // whose correlation key is the entry's `issue/N`. It creates Work for the
-// issue whatever its labels (v1 manual claim overriding routes).
+// issue whatever its labels (v1 manual claim overriding routes). The same
+// Event posted any other way claims nothing.
 const TypeClaimRequested = "github.claim.requested"
-
-// ManualSource is the core source of operator-submitted Events.
-const ManualSource = "core.manual"
 
 // Route is the deterministic `github` route handler: the adapter's opt-in/skip
 // claim policy and input selection. It reads only the detached Event, Scope
@@ -126,8 +125,8 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		source = e.CorrelationKey.Source
 	}
 	if e.Type == TypeClaimRequested {
-		// Only an operator claims by hand; the key names the entry's issue.
-		if e.Source != ManualSource || e.CorrelationKey == nil {
+		// Only the claim action claims by hand; the key names the entry's issue.
+		if e.Source != extension.ActionSource || e.CorrelationKey == nil {
 			return extension.RouteDecision{}, nil
 		}
 		if _, generation, ok := ParseIssueKey(e.CorrelationKey.ExternalID); !ok || generation != "" {

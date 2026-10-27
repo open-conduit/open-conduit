@@ -181,6 +181,21 @@ func (d *daemon) annotate(ctx context.Context, w domain.Work) []management.Annot
 	return out
 }
 
+// actions are the action providers on a scope: each GitHub entry the scope
+// configures (by entry name, as its annotations) and each package it uses.
+func (d *daemon) actions(_ context.Context, scope domain.ID) map[string]extension.ActionProvider {
+	out := map[string]extension.ActionProvider{}
+	d.github.mu.Lock()
+	for _, src := range d.github.sources {
+		if src.scope == scope {
+			out[src.name] = gh.Actions{Store: d.coord, Settings: src.ingress.Settings()}
+		}
+	}
+	d.github.mu.Unlock()
+	d.extensionActions(scope, out)
+	return out
+}
+
 // attach returns the attach command of the Work's executor registration,
 // through the optional public extension.AttachExecutor.
 func (d *daemon) attach(ctx context.Context, executor string, w domain.Work) (management.AttachSpec, error) {

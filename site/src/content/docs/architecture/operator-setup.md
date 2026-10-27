@@ -82,13 +82,16 @@ Every control is a management call with the operator credential and an `Idempote
 - `work rebind|hold|release`;
 - `work attach ID [--keep-held]`, which holds (refetching the revision when the host moved the Work), attaches, runs the command with the terminal and releases the hold it placed;
 - `scopes reconcile ID`;
-- `claim [SCOPE#]N [--entry NAME]`.
+- `claim [SCOPE#]N [--entry NAME]`, which invokes the scope's `claim` action;
+- `actions list (--scope S | --work W)` and `actions run PROVIDER ID (--scope S | --work W) [--input TEXT]`.
 
-A manual claim is an operator Event `github.claim.requested` keyed to the entry's `issue/N` (schema `github.claim.v1`). The `github` route creates `github.issue` Work for it whatever the labels. It never feeds existing Work, ignores non-operator sources and generation keys, and renders for the agent as "claimed by hand".
+**Extension actions.** An extension declares the actions available on a scope or Work now (`extension.ActionProvider`, or `work.actions` and `work.act` for a package), each with a stable ID, a label and an optional input prompt. `GET /v1/scopes/{id}/actions` and `GET /v1/work/{id}/actions` list them by provider (a GitHub entry or a package). `POST …/actions/{provider}/{action}` with `{"input": "…"}` and an `Idempotency-Key` invokes one. The call carries the caller (`{kind: "operator", id: "local"}` on the management socket). The provider authorises it and either refuses with its own code and message, leaving no Event, or returns the one Event to accept. The host accepts that Event under the source `core.action`, as the root of its own chain, with delivery `provider/action/key`. Only this path assigns `core.action`, so posting an Event of the same family and key through `POST /v1/events` grants none of an action's authority.
+
+A manual claim is the GitHub entry's `claim` scope action. It refuses any caller but the local operator, input that is not an issue number, and an issue that already has Work. Otherwise it produces `github.claim.requested` keyed to the entry's `issue/N` (schema `github.claim.v1`). The `github` route creates `github.issue` Work for it whatever the labels. The route only accepts the Event from `core.action`, never feeds existing Work, ignores generation keys, and renders it for the agent as "claimed by hand".
 
 **TUI.** The shared view keeps one run model for every executor. With a controlling source (`tui.Operator`) it adds these keys:
 
-- `c` claims (`scope#N` prompt);
+- `c` lists the scopes' actions (claim among them); a number picks one, then its prompt or a y/n;
 - `R` runs or retries;
 - `H` holds or releases;
 - `a` attaches, through `tea.Exec` with the same hold/release flow;
@@ -96,7 +99,7 @@ A manual claim is an operator Event `github.claim.requested` keyed to the entry'
 - `l` opens a run's log; on a running run it shows the output so far and follows it;
 - `t` opens a run's transcript (live or final) from the list or detail, and in the log view steps to the next output (log, stream-json transcript, stderr).
 
-Detail shows the Work's correlation keys, hold, annotations and active or woken Waits as data, with no executor or domain branch. A read-only source shows none of this.
+Detail shows the Work's correlation keys, hold, annotations and active or woken Waits as data, and its actions numbered `1`–`9`, with no executor or domain branch. A refused action shows the provider's code and message. A read-only source shows none of this.
 
 ## Webhooks, tunnels and reconcile-only operation
 

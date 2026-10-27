@@ -17,9 +17,11 @@ import (
 // every call with the revision it used.
 type controlSource struct {
 	fakeSource
-	work  client.Work
-	waits []client.Wait
-	calls []string
+	work         client.Work
+	waits        []client.Wait
+	calls        []string
+	scopeActions map[string][]client.Action
+	workActions  []client.Action
 }
 
 func (c *controlSource) Work(context.Context, string) (client.Work, error) { return c.work, nil }
@@ -47,9 +49,27 @@ func (c *controlSource) ReleaseWork(_ context.Context, id, rev, _, _ string) (cl
 	c.work.Hold = nil
 	return c.rec("release", id, rev)
 }
-func (c *controlSource) Claim(_ context.Context, ref string) (string, error) {
-	c.calls = append(c.calls, "claim "+ref)
-	return "manual/claim", nil
+func (c *controlSource) Scopes(context.Context, url.Values) (client.Page[client.Scope], error) {
+	var out client.Page[client.Scope]
+	for id := range c.scopeActions {
+		out.Items = append(out.Items, client.Scope{ID: id})
+	}
+	return out, nil
+}
+func (c *controlSource) Actions(_ context.Context, t client.ActionTarget) ([]client.Action, error) {
+	if t.WorkID != "" {
+		return c.workActions, nil
+	}
+	return c.scopeActions[t.ScopeID], nil
+}
+
+// InvokeAction records the call; input "refuse" is refused like a provider.
+func (c *controlSource) InvokeAction(_ context.Context, t client.ActionTarget, provider, id, input, _ string) (client.ActionResult, error) {
+	c.calls = append(c.calls, "action "+t.ScopeID+t.WorkID+" "+provider+" "+id+" "+input)
+	if input == "refuse" {
+		return client.ActionResult{}, &client.Error{Status: 422, Code: "not_allowed", Message: "you are not the one asked"}
+	}
+	return client.ActionResult{Event: client.Event{ID: "action/" + id}, Message: id + " done"}, nil
 }
 func (c *controlSource) AttachCommand(id string) tea.ExecCommand { return &fakeAttach{c: c, id: id} }
 
@@ -94,10 +114,12 @@ func TestOperatorControls(t *testing.T) {
 	src := &controlSource{fakeSource: fakeSource{runs: []client.Run{live}}, work: client.Work{ID: "w-github.issue", State: "running", Revision: "9",
 		CorrelationKeys: []client.Key{{Source: "github/github.com/o/r", ExternalID: "issue/12"}},
 		Annotations:     []client.Annotation{{Source: "github/eng/r", Name: "url", Value: "https://github.com/o/r/issues/12"}}},
-		waits: []client.Wait{{ID: "wait-1", State: "active", Match: client.Match{Types: []string{"github.pull_request.merged"}}}}}
+		waits:        []client.Wait{{ID: "wait-1", State: "active", Match: client.Match{Types: []string{"github.pull_request.merged"}}}},
+		scopeActions: map[string][]client.Action{"eng": {{Provider: "github/eng/r", ID: "claim", Label: "Claim an issue by hand", Prompt: "issue number"}}},
+		workActions:  []client.Action{{Provider: "human", ID: "approve", Label: "Approve"}, {Provider: "human", ID: "answer", Label: "Answer the question", Prompt: "answer"}}}
 	var m tea.Model = New(src, time.Hour)
 	m = drain(t, m, m.(Model).fetch())
-	if !strings.Contains(m.View(), "c claim") {
+	if !strings.Contains(m.View(), "c scope actions") {
 		t.Fatalf("control keys not offered:\n%s", m.View())
 	}
 	// x asks before cancelling the live attempt at its revision.
@@ -125,16 +147,22 @@ func TestOperatorControls(t *testing.T) {
 	if strings.Join(src.calls[1:], ",") != "retry w-github.issue 9,hold w-github.issue 9,release w-github.issue 9" {
 		t.Fatalf("calls: %v", src.calls)
 	}
-	// c opens the claim prompt; enter submits the text.
-	m, _ = press(m, "c")
-	m, _ = press(m, "eng#12")
-	if !strings.Contains(m.View(), "claim (scope#number): eng#12") {
+	// c lists the scopes' actions; a number picks one, its prompt takes
+	// the input, and enter invokes it by name.
+	m, cmd = press(m, "c")
+	m = drain(t, m, cmd)
+	if !strings.Contains(m.View(), "1 eng: Claim an issue by hand") {
+		t.Fatalf("menu:\n%s", m.View())
+	}
+	m, _ = press(m, "1")
+	m, _ = press(m, "12")
+	if !strings.Contains(m.View(), "Claim an issue by hand (eng) issue number: 12") {
 		t.Fatalf("prompt:\n%s", m.View())
 	}
 	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = drain(t, m, cmd)
-	if src.calls[len(src.calls)-1] != "claim eng#12" {
-		t.Fatalf("claim: %v", src.calls)
+	if src.calls[len(src.calls)-1] != "action eng github/eng/r claim 12" || !strings.Contains(m.View(), "claim done (event action/claim)") {
+		t.Fatalf("claim: %v\n%s", src.calls, m.View())
 	}
 	// Detail shows extension context as data: keys, annotations, waits.
 	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
@@ -145,6 +173,24 @@ func TestOperatorControls(t *testing.T) {
 			t.Fatalf("detail lacks %q:\n%s", want, view)
 		}
 	}
+	// Detail lists the Work's actions; one without a prompt asks y/n, and
+	// a refusal shows the provider's code and message.
+	if !strings.Contains(view, "1 Approve · 2 Answer the question") {
+		t.Fatalf("detail lacks actions:\n%s", view)
+	}
+	m, _ = press(m, "1")
+	m, cmd = press(m, "y")
+	m = drain(t, m, cmd)
+	if src.calls[len(src.calls)-1] != "action w-github.issue human approve " {
+		t.Fatalf("approve: %v", src.calls)
+	}
+	m, _ = press(m, "2")
+	m, _ = press(m, "refuse")
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = drain(t, m, cmd)
+	if !strings.Contains(m.View(), "not_allowed: you are not the one asked") {
+		t.Fatalf("refusal not shown:\n%s", m.View())
+	}
 	if _, cmd = press(m, "a"); cmd == nil {
 		t.Fatal("a must attach")
 	}
@@ -153,7 +199,7 @@ func TestOperatorControls(t *testing.T) {
 func TestNoControlsWithoutASource(t *testing.T) {
 	var m tea.Model = New(&fakeSource{runs: []client.Run{run("r1", "running", "job", 1, "1")}}, time.Hour)
 	m = drain(t, m, m.(Model).fetch())
-	if strings.Contains(m.View(), "c claim") {
+	if strings.Contains(m.View(), "c scope actions") {
 		t.Fatal("controls offered by a read-only source")
 	}
 	if _, cmd := press(m, "x"); cmd != nil {

@@ -53,6 +53,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Tasks`, `Checks` | `tasks`, `checks` | `task.run`, `check.run` |
 | `Exporter` | `exporters` | `telemetry.export` |
 | `Annotate` | `annotate` | `work.annotate` |
+| `Actions`, `Act` | `actions` | `work.actions`, `work.act` |
 | `Render` | `render` | `event.render` |
 | `Setups` | `setup` | `setup.run` with the `setup.*` callbacks |
 | `Upcasters` | `schemas` | applied before extension code sees an older payload |

@@ -113,6 +113,7 @@ func Manifest(o Options) protocol.Manifest {
 		Resources: []protocol.ResourceDecl{{Type: Scratch, Modes: []string{extension.ResourceWork}}},
 		Exporters: true,
 		Annotate:  true,
+		Actions:   true,
 		Setup:     &protocol.SetupDecl{Type: Name, Summary: "add a scope watching a note service file", Usage: "[--service FILE]"},
 	}}
 }

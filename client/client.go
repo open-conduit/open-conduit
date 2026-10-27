@@ -534,6 +534,48 @@ func (c *Client) ReleaseWork(ctx context.Context, id, revision, reason, key stri
 	return
 }
 
+// Action is an action an extension offers on a scope or Work now.
+// Provider and ID address it; Prompt, when set, asks for one line of input.
+type Action struct {
+	Provider string `json:"provider"`
+	ID       string `json:"id"`
+	Label    string `json:"label"`
+	Prompt   string `json:"prompt,omitempty"`
+}
+
+// ActionTarget names what actions apply to: a scope, or Work.
+type ActionTarget struct{ ScopeID, WorkID string }
+
+func (t ActionTarget) path() string {
+	if t.WorkID != "" {
+		return "work/" + esc(t.WorkID) + "/actions"
+	}
+	return "scopes/" + esc(t.ScopeID) + "/actions"
+}
+
+// ActionResult is an invoked action's accepted Event and the provider's
+// message.
+type ActionResult struct {
+	Event   Event  `json:"event"`
+	Message string `json:"message,omitempty"`
+}
+
+// Actions lists the actions available on a target now.
+func (c *Client) Actions(ctx context.Context, t ActionTarget) ([]Action, error) {
+	var out struct {
+		Actions []Action `json:"actions"`
+	}
+	err := c.Do(ctx, "GET", t.path(), nil, nil, "", &out)
+	return out.Actions, err
+}
+
+// InvokeAction invokes one action as the local operator. A refusal is an
+// *Error carrying the provider's code and message.
+func (c *Client) InvokeAction(ctx context.Context, t ActionTarget, provider, id, input, key string) (out ActionResult, err error) {
+	err = c.Do(ctx, "POST", t.path()+"/"+esc(provider)+"/"+esc(id), nil, map[string]string{"input": input}, key, &out)
+	return
+}
+
 // AttachSpec is the local command that attaches to a Work's session.
 type AttachSpec struct {
 	WorkID   string   `json:"work_id"`

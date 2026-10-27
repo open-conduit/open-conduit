@@ -20,7 +20,7 @@ Besides GitHub, Open Conduit ships adapters for Linear and Jira (trackers), Bitb
   - It must not carry the claimed label, unless it is a reopened generation.
   - An optional route `match` on attributes (labels, status, title, team, project, priority, assignee, components, custom fields) selects issues per route.
   - Input: closes, human comments and other Works' agent comments; never edits, bot comments or the Work's own notes.
-  - An operator's `<type>.claim.requested` overrides the policy.
+  - An operator's `<type>.claim.requested` overrides the policy. For GitHub this is the entry's `claim` action, accepted under `core.action`.
 - **Projector.** It is level-triggered from durable Work state:
   - Labels: claimed while owned, plus at most one of the help, review or done labels, none while an attempt runs. The claimed label comes off once completed Work's issue is closed: admission never claims a closed issue, and a reopening starts a new generation, which is claimed again. Failed and cancelled Work keep it.
   - It re-reads the issue when desired state changes, and at `verify_seconds` for nonterminal Work and for completed Work whose issue is still open, until the issue closes. After it moves a completed Work's issue (a `finished` transition that may close it), the next pass re-reads it at once.

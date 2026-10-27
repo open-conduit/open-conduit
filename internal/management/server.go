@@ -60,6 +60,9 @@ type Options struct {
 	DeepChecks []func(context.Context) runtime.Check
 	// Annotate contributes extension context to GET /work/{id}.
 	Annotate func(context.Context, domain.Work) []Annotation
+	// Actions returns the extension action providers of a scope by
+	// provider name (an extension entry or package). Optional.
+	Actions func(ctx context.Context, scope domain.ID) map[string]extension.ActionProvider
 	// Attach returns the attach command of the Work's latest attempt's
 	// executor registration (ErrAttachUnsupported, ErrNothingToAttach).
 	Attach func(ctx context.Context, executor string, work domain.Work) (AttachSpec, error)
@@ -260,6 +263,8 @@ var routes = []route{
 	{"GET", []string{"scopes", "*"}, false, false, (*Server).getScope},
 	{"GET", []string{"work"}, false, false, (*Server).listWork},
 	{"GET", []string{"work", "*"}, false, false, (*Server).getWork},
+	{"GET", []string{"work", "*", "actions"}, false, false, (*Server).listWorkActions},
+	{"GET", []string{"scopes", "*", "actions"}, false, false, (*Server).listScopeActions},
 	{"GET", []string{"events"}, false, false, (*Server).listEvents},
 	{"GET", []string{"events", "*"}, false, false, (*Server).getEvent},
 	{"GET", []string{"events", "*", "route"}, false, false, (*Server).eventRoute},
@@ -282,7 +287,9 @@ var routes = []route{
 	{"POST", []string{"work", "*", "hold"}, true, true, (*Server).holdWork},
 	{"POST", []string{"work", "*", "release"}, true, true, (*Server).releaseWork},
 	{"POST", []string{"work", "*", "attach"}, true, true, (*Server).attachWork},
+	{"POST", []string{"work", "*", "actions", "*", "*"}, true, true, (*Server).invokeWorkAction},
 	{"POST", []string{"scopes", "*", "reconcile"}, true, true, (*Server).reconcileScope},
+	{"POST", []string{"scopes", "*", "actions", "*", "*"}, true, true, (*Server).invokeScopeAction},
 	{"POST", []string{"executions", "*", "cancel"}, true, true, (*Server).cancelExecution},
 	{"POST", []string{"config", "validate"}, true, false, (*Server).validateConfig},
 	{"POST", []string{"config", "apply"}, true, true, (*Server).applyConfig},

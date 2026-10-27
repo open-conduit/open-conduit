@@ -116,6 +116,8 @@ var Methods = []Method{
 	{Name: "telemetry.export", Direction: HostToExtension, Provides: "exporters", Contract: []string{"observability.Exporter.Export"}, UseCases: []string{"posthog", "introspection"}},
 	{Name: "check.run", Direction: HostToExtension, Provides: "checks", Contract: []string{"host:runtime.Check (Checks, DeepChecks)"}, UseCases: []string{"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "claude-code"}},
 	{Name: "work.annotate", Direction: HostToExtension, Provides: "annotate", Contract: []string{"host:management Annotate"}, UseCases: []string{"github"}},
+	{Name: "work.actions", Direction: HostToExtension, Provides: "actions", Contract: []string{"extension.ActionProvider.Actions", "extension.ActionTarget", "extension.Action"}, UseCases: []string{"github"}},
+	{Name: "work.act", Direction: HostToExtension, Provides: "actions", Contract: []string{"extension.ActionProvider.Invoke", "extension.ActionCall", "extension.Caller", "extension.ActionPlan", "extension.OperationError"}, UseCases: []string{"github"}},
 
 	// Setup runs at CLI time with host prompts and the secret store.
 	{Name: "setup.run", Direction: HostToExtension, Provides: "setup", Contract: []string{"extension.Setup.Setup", "extension.Setup.SetupInfo", "extension.SetupResult", "extension.SetupHost.Config", "extension.SetupHost.Cwd", "extension.SetupHost.StateDir", "extension.SetupHost.DryRun"}, UseCases: []string{"github", "slack", "linear", "jira"}},
