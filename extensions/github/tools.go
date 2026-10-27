@@ -23,7 +23,9 @@ import (
 // `os call <operation> --data <json>` (CLI). Every handler receives validated
 // authority, reads the Work it serves from durable state, and acts only on
 // that Work's issue and repository (or another scope's, for an authorized
-// cross-scope wait). Non-re-derivable writes are marked and idempotent.
+// cross-scope wait). The PR operations also reach any PR in a repository the
+// Work's scope registers, so Work without an issue (a Slack request, a job)
+// can review one. Non-re-derivable writes are marked and idempotent.
 
 // Event families the tools and the host add to the extension's ingress
 // families.
@@ -113,9 +115,10 @@ func NewTools(o ToolsOptions) (*Tools, error) {
 // Registration is the toolbelt registration: every operation, the families
 // executions may emit, and the dependency filter.
 func (t *Tools) Registration() extension.Registration {
-	h := func(f func(context.Context, *bound, json.RawMessage) (any, error)) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+	type handler = func(context.Context, *bound, json.RawMessage) (any, error)
+	wrap := func(bind func(context.Context, extension.Authority) (*bound, error), f handler) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
 		return func(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
-			b, err := t.bind(ctx, a)
+			b, err := bind(ctx, a)
 			if err != nil {
 				return domain.Payload{}, err
 			}
@@ -133,6 +136,13 @@ func (t *Tools) Registration() extension.Registration {
 			return domain.Payload{Schema: "github.tool.v1", Data: data}, nil
 		}
 	}
+	// h binds the Work's issue; pr binds the Work with or without one.
+	h := func(f handler) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+		return wrap(t.bind, f)
+	}
+	pr := func(f handler) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+		return wrap(t.bindWork, f)
+	}
 	return extension.Registration{Version: extension.ContractVersion, Name: Type, EventTypes: []string{TypeHoldReleased},
 		DependencyFilter: DependencyFilter,
 		Operations: []extension.Operation{
@@ -142,11 +152,11 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpIssueList, Handler: h(t.issueList)},
 			{Name: OpIssueCreate, Handler: h(t.issueCreate)},
 			{Name: OpPRList, Handler: h(t.prList)},
-			{Name: OpPRView, Handler: h(t.prView)},
+			{Name: OpPRView, Handler: pr(t.prView)},
 			{Name: OpPRCreate, Handler: h(t.prCreate)},
-			{Name: OpPRComment, Handler: h(t.prComment)},
-			{Name: OpPRReply, Handler: h(t.prReply)},
-			{Name: OpChecks, Handler: h(t.checks)},
+			{Name: OpPRComment, Handler: pr(t.prComment)},
+			{Name: OpPRReply, Handler: pr(t.prReply)},
+			{Name: OpChecks, Handler: pr(t.checks)},
 			{Name: OpUpload, Handler: h(t.upload)},
 			{Name: OpFetch, Handler: h(t.fetch)},
 			{Name: OpCorrection, Handler: h(t.correction)},
@@ -195,10 +205,24 @@ type bound struct {
 	key    domain.CorrelationKey
 	issue  Source // owns the issue (its tracker)
 	code   Source // owns the code (PRs); equal to issue without a shared tracker
-	number int
+	number int    // the issue; 0 when the Work owns none (bindWork only)
 }
 
+// bind resolves the Work a call serves and the GitHub issue it owns.
 func (t *Tools) bind(ctx context.Context, a extension.Authority) (*bound, error) {
+	b, err := t.bindWork(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	if b.number == 0 {
+		return nil, refuse("no_issue", "this Work is not a GitHub issue of a registered repository")
+	}
+	return b, nil
+}
+
+// bindWork resolves the Work a call serves, with the GitHub issue it owns
+// when it owns one.
+func (t *Tools) bindWork(ctx context.Context, a extension.Authority) (*bound, error) {
 	var w domain.Work
 	if err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
 		var err error
@@ -235,7 +259,60 @@ func (t *Tools) bind(ctx context.Context, a extension.Authority) (*bound, error)
 		}
 		return b, nil
 	}
-	return nil, refuse("no_issue", "this Work is not a GitHub issue of a registered repository")
+	return &bound{a: a, work: w}, nil
+}
+
+// pullSource is the registered repository a PR operation acts on: the one
+// the call names, else the Work's own code repository, else the scope's
+// only one. The PR need not belong to this Work, and its key is never
+// attached to it: PRs are keyed to their tracker issue and may be another
+// Work's (B04).
+func (t *Tools) pullSource(b *bound, repo string) (Source, error) {
+	repo = strings.TrimSpace(repo)
+	if b.number > 0 && (repo == "" || strings.EqualFold(repo, b.code.Settings.Repo)) {
+		return b.code, nil
+	}
+	var registered []Source
+	seen := map[string]bool{}
+	for _, s := range t.o.Sources() {
+		if s.Settings.Scope != string(b.work.ScopeID) {
+			continue
+		}
+		if repo != "" && strings.EqualFold(s.Settings.Repo, repo) {
+			return s, nil
+		}
+		if r := strings.ToLower(s.Settings.Repo); !seen[r] {
+			seen[r] = true
+			registered = append(registered, s)
+		}
+	}
+	switch {
+	case repo != "":
+		return Source{}, refuse("unregistered_repo", "%s isn't a repository this Work's scope registers", repo)
+	case len(registered) == 1:
+		return registered[0], nil
+	case len(registered) == 0:
+		return Source{}, refuse("no_repository", "this Work's scope registers no GitHub repository")
+	}
+	names := make([]string, len(registered))
+	for i, s := range registered {
+		names[i] = s.Settings.Repo
+	}
+	return Source{}, refuse("repo_required", "this Work's scope registers several repositories (%s): name one with repo", strings.Join(names, ", "))
+}
+
+// ownRepo reports whether src is the code repository of the Work's issue.
+func (b *bound) ownRepo(src Source) bool {
+	return b.number > 0 && src.Settings.Repo == b.code.Settings.Repo
+}
+
+// replyRepo is the repo field a reply hint carries: empty for the Work's own
+// code repository, which the call finds without it.
+func replyRepo(b *bound, src Source) string {
+	if b.ownRepo(src) {
+		return ""
+	}
+	return fmt.Sprintf("\"repo\": %q, ", src.Settings.Repo)
 }
 
 func decode(data json.RawMessage, v any) error {
@@ -567,7 +644,8 @@ func (t *Tools) prList(ctx context.Context, b *bound, data json.RawMessage) (any
 
 func (t *Tools) prView(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
 	var in struct {
-		Number int `json:"number"`
+		Number int    `json:"number"`
+		Repo   string `json:"repo"`
 	}
 	if err := decode(data, &in); err != nil {
 		return nil, err
@@ -575,7 +653,11 @@ func (t *Tools) prView(ctx context.Context, b *bound, data json.RawMessage) (any
 	if in.Number <= 0 {
 		return nil, refuse("missing_field", "number (the PR) is required")
 	}
-	repo, c := b.code.Settings.Repo, b.code.Client
+	src, err := t.pullSource(b, in.Repo)
+	if err != nil {
+		return nil, err
+	}
+	repo, c, hint := src.Settings.Repo, src.Client, replyRepo(b, src)
 	p, err := c.Pull(ctx, repo, in.Number)
 	if err != nil {
 		return nil, err
@@ -594,19 +676,19 @@ func (t *Tools) prView(ctx context.Context, b *bound, data json.RawMessage) (any
 	}
 	views := []commentView{}
 	for _, x := range conv {
-		views = append(views, view(KindPullRequest, x, fmt.Sprintf("call %s {\"number\": %d, \"body\": …}", OpPRComment, in.Number)))
+		views = append(views, view(KindPullRequest, x, fmt.Sprintf("call %s {%s\"number\": %d, \"body\": …}", OpPRComment, hint, in.Number)))
 	}
 	for _, x := range inline {
-		views = append(views, view(KindReviewComment, x, fmt.Sprintf("call %s {\"number\": %d, \"comment_id\": %d, \"body\": …}", OpPRReply, in.Number, x.ID)))
+		views = append(views, view(KindReviewComment, x, fmt.Sprintf("call %s {%s\"number\": %d, \"comment_id\": %d, \"body\": …}", OpPRReply, hint, in.Number, x.ID)))
 	}
 	for _, x := range reviews {
 		if x.State == "PENDING" {
 			continue
 		}
-		views = append(views, view(KindReview, x, fmt.Sprintf("call %s {\"number\": %d, \"body\": …}", OpPRComment, in.Number)))
+		views = append(views, view(KindReview, x, fmt.Sprintf("call %s {%s\"number\": %d, \"body\": …}", OpPRComment, hint, in.Number)))
 	}
 	sort.SliceStable(views, func(i, j int) bool { return views[i].At < views[j].At })
-	return map[string]any{"number": p.Number, "title": p.Title, "url": p.HTMLURL, "state": pullState(p), "branch": p.Head.Ref, "base": p.Base.Ref,
+	return map[string]any{"repo": repo, "number": p.Number, "title": p.Title, "url": p.HTMLURL, "state": pullState(p), "branch": p.Head.Ref, "base": p.Base.Ref,
 		"head": p.Head.SHA, "body": strings.TrimSpace(p.Body), "comments": views}, nil
 }
 
@@ -665,6 +747,7 @@ func (t *Tools) prComment(ctx context.Context, b *bound, data json.RawMessage) (
 	var in struct {
 		Number int    `json:"number"`
 		Body   string `json:"body"`
+		Repo   string `json:"repo"`
 	}
 	if err := decode(data, &in); err != nil {
 		return nil, err
@@ -672,7 +755,11 @@ func (t *Tools) prComment(ctx context.Context, b *bound, data json.RawMessage) (
 	if in.Number <= 0 || strings.TrimSpace(in.Body) == "" {
 		return nil, refuse("missing_field", "number (the PR) and body are required")
 	}
-	return t.post(ctx, b, b.code, Intent{ID: intentID(ctx, b, OpPRComment, data), Work: b.work.ID, Number: in.Number, Body: in.Body, Durable: true})
+	src, err := t.pullSource(b, in.Repo)
+	if err != nil {
+		return nil, err
+	}
+	return t.post(ctx, b, src, Intent{ID: intentID(ctx, b, OpPRComment, data), Work: b.work.ID, Number: in.Number, Body: in.Body, Durable: true})
 }
 
 func (t *Tools) prReply(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
@@ -680,6 +767,7 @@ func (t *Tools) prReply(ctx context.Context, b *bound, data json.RawMessage) (an
 		Number    int             `json:"number"`
 		CommentID json.RawMessage `json:"comment_id"`
 		Body      string          `json:"body"`
+		Repo      string          `json:"repo"`
 	}
 	if err := decode(data, &in); err != nil {
 		return nil, err
@@ -688,20 +776,32 @@ func (t *Tools) prReply(ctx context.Context, b *bound, data json.RawMessage) (an
 	if in.Number <= 0 || err != nil || id <= 0 || strings.TrimSpace(in.Body) == "" {
 		return nil, refuse("missing_field", "number (the PR), comment_id (the inline comment) and body are required")
 	}
-	return t.post(ctx, b, b.code, Intent{ID: intentID(ctx, b, OpPRReply, data), Work: b.work.ID, Number: in.Number, ReplyTo: id, Body: in.Body, Durable: true})
+	src, err := t.pullSource(b, in.Repo)
+	if err != nil {
+		return nil, err
+	}
+	return t.post(ctx, b, src, Intent{ID: intentID(ctx, b, OpPRReply, data), Work: b.work.ID, Number: in.Number, ReplyTo: id, Body: in.Body, Durable: true})
 }
 
 func (t *Tools) checks(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
 	var in struct {
-		Number int `json:"number"`
+		Number int    `json:"number"`
+		Repo   string `json:"repo"`
 	}
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
-	repo, c := b.code.Settings.Repo, b.code.Client
+	src, err := t.pullSource(b, in.Repo)
+	if err != nil {
+		return nil, err
+	}
+	if in.Number <= 0 && !b.ownRepo(src) {
+		// Only the Work's own issue has PRs to default to.
+		return nil, refuse("missing_field", "number (the PR) is required outside this Work's own issue")
+	}
+	repo, c := src.Settings.Repo, src.Client
 	var p rawPull
 	if in.Number > 0 {
-		var err error
 		if p, err = c.Pull(ctx, repo, in.Number); err != nil {
 			return nil, err
 		}
@@ -723,7 +823,7 @@ func (t *Tools) checks(ctx context.Context, b *bound, data json.RawMessage) (any
 	if err != nil {
 		return nil, err
 	}
-	n := &normalizer{s: b.code.Settings, c: c, m: newMemo(), received: t.o.Now()}
+	n := &normalizer{s: src.Settings, c: c, m: newMemo(), received: t.o.Now()}
 	n.remember(p)
 	// The checks the base branch requires (08-01), read once here and
 	// shared with the evaluation through the normalizer's memo.

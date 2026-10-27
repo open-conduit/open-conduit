@@ -29,6 +29,13 @@ Runtime (B04): a translated wait's dependencies are stored in the toolbelt decla
 
 An agent reaches an operation as MCP `call {operation, input}` or `os call <operation> --data <json>`. The MCP `call` tool sends its `input` object as the payload's data; an explicit `{schema, data}` payload still passes through. Every handler reads the Work it serves from durable state, finds the issue it owns (`issue/N` in a registered namespace) and acts on that issue and its repository. With a shared tracker, PR operations use the code repository whose entry names the tracker.
 
+`github.pr.view`, `github.pr.comment`, `github.pr.reply` and `github.checks` also act on a PR the Work doesn't own, so Work started elsewhere (a Slack request to review a PR, a job) can read and answer one:
+
+- They take an optional `repo`. Without it they use the Work's own code repository, or the scope's only registered repository when the Work owns no issue. A scope with several refuses `repo_required` and lists them, and a repository the scope doesn't register is refused `unregistered_repo`.
+- Posts are the same marked durable intents, carrying the calling Work's marker, so they are exactly-once, recovered by marker and never handed back to the caller. The PR's key is never attached to the calling Work: the PR stays keyed to its tracker issue, and the Work that owns it hears the posts as another agent's comments.
+- `github.checks` needs `number` outside the Work's own issue. View's reply calls carry `repo` there.
+- Every other operation still needs the Work's own issue and refuses `no_issue` without one.
+
 | Operation | Notes |
 | --- | --- |
 | `github.context` | repo, tracker, issue and URL, branch (`agent/issue-N` when the branch pattern allows it), base branch (`base_branch` or the repository default). |

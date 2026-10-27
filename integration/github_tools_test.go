@@ -67,7 +67,8 @@ func (e *toolsEnv) putScope(id domain.ID, ext string) {
 	}})
 	if err := e.store.Transact(context.Background(), storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
 		return tx.PutScope(domain.Scope{ID: id, Name: string(id), Bindings: []domain.Binding{{Name: "agent", Executor: "fixture", Requires: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}, {Name: "hold", Executor: gh.HoldExecutor, Requires: domain.Capabilities{Toolbelt: extension.ToolbeltSDK}}},
-			Routes: []domain.Route{{Name: "held", Handler: gh.HoldHandler, Binding: "hold", ActivePolicy: "queue"}, {Name: "issues", Handler: "github", Binding: "agent", ActivePolicy: "queue"}},
+			Routes: []domain.Route{{Name: "held", Handler: gh.HoldHandler, Binding: "hold", ActivePolicy: "queue"}, {Name: "issues", Handler: "github", Binding: "agent", ActivePolicy: "queue"},
+				{Name: "requests", Handler: "request", Binding: "agent", ActivePolicy: "queue"}},
 			Config: domain.Payload{Schema: "core.config.scope.v1", Data: meta}}, 0)
 	}); err != nil {
 		e.t.Fatal(err)
@@ -91,7 +92,7 @@ func (e *toolsEnv) compose() {
 	executors := map[string]extension.Executor{"fixture": e.agent, gh.HoldExecutor: e.hold}
 	var err error
 	e.router, err = runtime.NewRouter(e.store, e.clock.Now, runtime.RouterOptions{Generation: "1",
-		Handlers: map[string]extension.RouteHandler{"github": gh.Route{}, gh.HoldHandler: gh.HoldRoute{}},
+		Handlers: map[string]extension.RouteHandler{"github": gh.Route{}, gh.HoldHandler: gh.HoldRoute{}, "request": requestRoute},
 		Bindings: map[string]runtime.RouteBinding{"fixture": {Executor: e.agent}, gh.HoldExecutor: {Executor: e.hold}}})
 	if err != nil {
 		t.Fatal(err)
@@ -845,4 +846,128 @@ func TestGitHubToolWritesWithLostResponsesAreRecovered(t *testing.T) {
 	if issues != 1 {
 		t.Fatalf("%d follow-up issues", issues)
 	}
+}
+
+// requestRoute stands in for a Slack route: a request Event starts Work keyed
+// to its thread, which owns no GitHub issue.
+var requestRoute = routingHandlerFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
+	e := in.Event.Event
+	if e.Type != "fixture.request" || e.CorrelationKey == nil {
+		return extension.RouteDecision{}, nil
+	}
+	return extension.RouteDecision{Match: true, CreateID: domain.ID("work/" + e.CorrelationKey.ExternalID), Kind: "fixture.request"}, nil
+})
+
+// request starts Work from a Slack-like thread in the GitHub scope.
+func (e *toolsEnv) request(thread string) domain.Work {
+	e.t.Helper()
+	key := domain.CorrelationKey{Source: "slack/T1", ExternalID: thread}
+	at := e.clock.Now()
+	if _, _, err := e.ingress.Accept(context.Background(), ghScope, domain.Event{ID: domain.ID("request-" + thread), Type: "fixture.request", Source: "slack/T1",
+		DeliveryID: thread, OccurredAt: at, ReceivedAt: at, CorrelationKey: &key}); err != nil {
+		e.t.Fatal(err)
+	}
+	e.route()
+	return e.work(domain.ID("work/" + thread))
+}
+
+// Work that owns no issue (a Slack request to review a PR) reaches a PR in a
+// repository its scope registers: it views it, comments and replies in a
+// review thread through marked durable intents, recovered by marker after a
+// lost response, without taking the PR from the Work that owns it.
+func TestGitHubPROperationsWithoutAnIssue(t *testing.T) {
+	e := newToolsEnv(t)
+	n, owner := e.claim("Header wobbles", "", "bug")
+	pr := e.fake.OpenPull("Fix the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "h1", ghAlice)
+	inline := e.fake.AddReviewComment(pr, ghAlice, "Why this offset?", "header.go", 12)
+	e.fake.SetCheck("h1", "ci", "completed", "success")
+	e.sync()
+	w := e.request("thread-1")
+	a := e.start(w.ID)
+
+	// Issue-bound operations keep refusing Work without an issue.
+	for _, op := range []string{gh.OpContext, gh.OpIssueComment, gh.OpPRCreate, gh.OpPRList} {
+		_, err := e.call(a, op, "", map[string]any{"title": "t", "body": "b"})
+		var refusal *extension.OperationError
+		if !errors.As(err, &refusal) || (refusal.Code != "no_issue" && refusal.Code != "invalid_input") {
+			t.Fatalf("%s without an issue: %v", op, err)
+		}
+	}
+	view := e.must(a, gh.OpPRView, "", map[string]any{"number": pr})
+	if view["repo"] != ghRepo || view["title"] != "Fix the header" || !strings.Contains(string(mustJSON(view["comments"])), `\"repo\": \"`+ghRepo+`\"`) {
+		t.Fatalf("view: %v", view)
+	}
+	if c := e.must(a, gh.OpChecks, "", map[string]any{"number": pr, "repo": ghRepo}); c["state"] != "passed" {
+		t.Fatalf("checks: %v", c)
+	}
+	_, err := e.call(a, gh.OpChecks, "", map[string]any{})
+	refused(t, err, "missing_field")
+
+	// A lost response leaves each post pending; the marker confirms it once.
+	e.fake.LoseNextResponse("/repos/"+ghRepo+"/issues/"+itoa(pr)+"/comments", 1)
+	if out := e.must(a, gh.OpPRComment, "review", map[string]any{"number": pr, "body": "Looks good apart from the offset."}); out["state"] != "pending" {
+		t.Fatalf("lost PR comment: %v", out)
+	}
+	e.fake.LoseNextResponse("/repos/"+ghRepo+"/pulls/"+itoa(pr)+"/comments/", 1)
+	if out := e.must(a, gh.OpPRReply, "reply", map[string]any{"number": pr, "comment_id": inline, "body": "Same question here."}); out["state"] != "pending" {
+		t.Fatalf("lost reply: %v", out)
+	}
+	if again := e.must(a, gh.OpPRComment, "review", map[string]any{"number": pr, "body": "Looks good apart from the offset."}); again["state"] != "pending" {
+		t.Fatalf("retry: %v", again)
+	}
+	e.finish(a, nil)
+	e.clock.Add(31 * time.Second)
+	if res := e.converge(); res.Recovered != 2 {
+		t.Fatalf("recovery: %+v", res)
+	}
+	e.converge()
+	if mine := e.agentComments(pr); len(mine) != 1 || gh.ParseAgent(mine[0].Body).Work != string(w.ID) {
+		t.Fatalf("PR comments: %+v", mine)
+	}
+	replies := 0
+	for _, c := range e.fake.InlineComments(pr) {
+		if a := gh.ParseAgent(c.Body); a != nil && a.Work == string(w.ID) {
+			replies++
+		}
+	}
+	if replies != 1 {
+		t.Fatalf("%d replies", replies)
+	}
+
+	// The PR stays the issue Work's: it hears the review, the requester
+	// neither takes the PR's key nor hears its own posts back.
+	e.sync()
+	if got := e.work(w.ID); len(got.CorrelationKeys) != 1 || got.CorrelationKeys[0].Source != "slack/T1" {
+		t.Fatalf("requester keys: %+v", got.CorrelationKeys)
+	}
+	if q := e.queued(w.ID); len(q) != 0 {
+		t.Fatalf("requester heard: %v", q)
+	}
+	if q := strings.Join(e.queued(owner.ID), " "); !strings.Contains(q, gh.TypeCommentAgent) {
+		t.Fatalf("owner queued: %v", q)
+	}
+}
+
+// The repository must be one the scope registers, and named when it
+// registers several.
+func TestGitHubPROperationsNeedARegisteredRepository(t *testing.T) {
+	e := newToolsEnv(t)
+	pr := e.fake.OpenPull("Change", "", "feature", "h1", ghAlice)
+	s, err := gh.ParseExtension([]byte(`{"namespace":"github/github.com/octo/gadgets","scope":"`+ghScope+`","repo":"octo/gadgets"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	w := e.request("thread-2")
+	a := e.start(w.ID)
+	_, err = e.call(a, gh.OpPRComment, "", map[string]any{"number": pr, "body": "x", "repo": "octo/elsewhere"})
+	refused(t, err, "unregistered_repo")
+	e.mu.Lock()
+	e.extra = []gh.Source{{Settings: s, Client: e.client, Projector: e.projector}}
+	e.mu.Unlock()
+	_, err = e.call(a, gh.OpPRView, "", map[string]any{"number": pr})
+	refused(t, err, "repo_required")
+	if v := e.must(a, gh.OpPRView, "", map[string]any{"number": pr, "repo": ghRepo}); v["title"] != "Change" {
+		t.Fatalf("named repo: %v", v)
+	}
+	e.finish(a, nil)
 }
