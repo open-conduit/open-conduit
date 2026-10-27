@@ -71,10 +71,10 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	bundle := filepath.Join(root, "backup")
-	if err := Create(ctx, bundle, db, files, "test-build"); err != nil {
+	if err := Create(ctx, bundle, db, files, "test-build", nil); err != nil {
 		t.Fatal(err)
 	}
-	if err := Create(ctx, bundle, db, files, "test-build"); err == nil {
+	if err := Create(ctx, bundle, db, files, "test-build", nil); err == nil {
 		t.Fatal("overwrote existing backup")
 	}
 	// Later coordination state is deliberately outside the captured snapshot.
@@ -82,7 +82,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	destination := filepath.Join(root, "restored")
-	if err := Restore(ctx, bundle, destination, now); err != nil {
+	if err := Restore(ctx, bundle, destination, now, nil); err != nil {
 		t.Fatal(err)
 	}
 	restored, err := sqlite.Open(ctx, filepath.Join(destination, "conduit.db"))
@@ -125,7 +125,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 	if err != nil || string(data) != "durable transcript" {
 		t.Fatalf("restored content: %q, %v", data, err)
 	}
-	if err := Restore(ctx, bundle, destination, now); err == nil {
+	if err := Restore(ctx, bundle, destination, now, nil); err == nil {
 		t.Fatal("overwrote restored state")
 	}
 	manifestPath := filepath.Join(bundle, "manifest.json")
@@ -157,7 +157,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 				t.Fatal(err)
 			}
 			target := filepath.Join(root, test.name)
-			if err := Restore(ctx, bundle, target, now); err == nil {
+			if err := Restore(ctx, bundle, target, now, nil); err == nil {
 				t.Fatal("accepted invalid bundle")
 			}
 			if _, err := os.Lstat(target); !errors.Is(err, os.ErrNotExist) {
@@ -172,7 +172,7 @@ func TestBundleRoundTripAndRefusal(t *testing.T) {
 		t.Fatal(err)
 	}
 	failed := filepath.Join(root, "missing-content-backup")
-	if err := Create(ctx, failed, db, files, "test-build"); err == nil {
+	if err := Create(ctx, failed, db, files, "test-build", nil); err == nil {
 		t.Fatal("accepted backup missing referenced content")
 	}
 	if _, err := os.Lstat(failed); !errors.Is(err, os.ErrNotExist) {

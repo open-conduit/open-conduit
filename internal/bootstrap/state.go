@@ -115,10 +115,17 @@ func BackupState(ctx context.Context, stateDir, destination, build string) (cli.
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return cli.BackupInfo{}, err
 	}
-	if err := backup.Create(ctx, destination, store, files, build); err != nil {
+	if err := backup.Create(ctx, destination, store, files, build, retentionExpired); err != nil {
 		return cli.BackupInfo{}, err
 	}
 	return bundleInfo(destination)
+}
+
+// retentionExpired tells the backup package which Executions' content the
+// runtime's retention sweep has expired.
+func retentionExpired(tx storage.Tx, id domain.ID) (bool, error) {
+	r, err := runtime.RetentionInTx(tx, id)
+	return r.Expired, err
 }
 
 func bundleInfo(bundle string) (cli.BackupInfo, error) {
@@ -142,7 +149,7 @@ func VerifyBundle(ctx context.Context, bundle string) (cli.BackupInfo, error) {
 	}
 	defer os.RemoveAll(tmp)
 	dest := filepath.Join(tmp, "state")
-	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC()); err != nil {
+	if err := backup.Restore(ctx, bundle, dest, time.Now().UTC(), retentionExpired); err != nil {
 		return info, err
 	}
 	store, err := sqlite.Open(ctx, filepath.Join(dest, "conduit.db"))
@@ -177,7 +184,7 @@ func RestoreState(ctx context.Context, bundle, destination string) (cli.BackupIn
 	if err := os.MkdirAll(filepath.Dir(destination), 0o700); err != nil {
 		return info, err
 	}
-	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC()); err != nil {
+	if err := backup.Restore(ctx, bundle, destination, time.Now().UTC(), retentionExpired); err != nil {
 		return info, err
 	}
 	if err := os.Chmod(destination, 0o700); err != nil {

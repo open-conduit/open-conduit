@@ -17,7 +17,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
-	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -38,11 +37,23 @@ type manifest struct {
 	Omitted []domain.ArtifactRef `json:",omitempty"`
 }
 
+// Expired reports whether retention has expired an Execution's content. The
+// runtime owns the retention ledger, so callers supply the lookup; nil means
+// no Execution has expired.
+type Expired func(tx storage.Tx, id domain.ID) (bool, error)
+
+func (e Expired) of(tx storage.Tx, id domain.ID) (bool, error) {
+	if e == nil {
+		return false, nil
+	}
+	return e(tx, id)
+}
+
 // Create publishes a complete immutable bundle at a previously absent path.
 // Pinning precedes the database snapshot so retention cannot remove captured refs.
 // References of Executions whose retention expired are recorded as omitted
 // rather than copied, since their content may already be gone.
-func Create(ctx context.Context, destination string, db *sqlite.Store, files *artifacts.Store, build string) error {
+func Create(ctx context.Context, destination string, db *sqlite.Store, files *artifacts.Store, build string, expired Expired) error {
 	return publish(ctx, destination, func(stage string) error {
 		pin, err := files.Pin()
 		if err != nil {
@@ -65,7 +76,7 @@ func Create(ctx context.Context, destination string, db *sqlite.Store, files *ar
 				return err
 			}
 			for _, x := range xs {
-				retention, err := runtime.RetentionInTx(tx, x.ID)
+				gone, err := expired.of(tx, x.ID)
 				if err != nil {
 					return err
 				}
@@ -75,7 +86,7 @@ func Create(ctx context.Context, destination string, db *sqlite.Store, files *ar
 					}
 					refs[ref.ID] = ref
 					// A ref shared with an unexpired Execution must be copied.
-					live[ref.ID] = live[ref.ID] || !retention.Expired
+					live[ref.ID] = live[ref.ID] || !gone
 				}
 			}
 			return nil
@@ -129,7 +140,7 @@ func Create(ctx context.Context, destination string, db *sqlite.Store, files *ar
 // Restore verifies all bundle bytes before publishing a new isolated state
 // directory. The SQLite restore fences old lease authority. No daemon may own
 // destination; an existing path is rejected, never overwritten.
-func Restore(ctx context.Context, bundle, destination string, now time.Time) error {
+func Restore(ctx context.Context, bundle, destination string, now time.Time, expired Expired) error {
 	if now.IsZero() {
 		return storage.ErrInvalid
 	}
@@ -210,7 +221,7 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time) err
 				captured[item.Ref.ID] = item.Ref
 			}
 			for _, x := range xs {
-				retention, err := runtime.RetentionInTx(tx, x.ID)
+				gone, err := expired.of(tx, x.ID)
 				if err != nil {
 					return err
 				}
@@ -218,7 +229,7 @@ func Restore(ctx context.Context, bundle, destination string, now time.Time) err
 					if captured[ref.ID] == ref {
 						continue
 					}
-					if retention.Expired && omitted[ref.ID] == ref {
+					if gone && omitted[ref.ID] == ref {
 						continue
 					}
 					return fmt.Errorf("backup: referenced artifact omitted or changed")

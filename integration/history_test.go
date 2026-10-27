@@ -25,6 +25,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/cli/runview"
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/tui"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -390,14 +391,18 @@ esac`
 	// A backup after the sweep records the expired attempt's references as
 	// omitted instead of failing on their missing content, and restores.
 	bundle := filepath.Join(state, "backup")
-	if err = backup.Create(ctx, bundle, h.store, h.artifacts, "test-build"); err != nil {
+	expired := func(tx storage.Tx, id domain.ID) (bool, error) {
+		r, err := runtime.RetentionInTx(tx, id)
+		return r.Expired, err
+	}
+	if err = backup.Create(ctx, bundle, h.store, h.artifacts, "test-build", expired); err != nil {
 		t.Fatalf("backup after retention: %v", err)
 	}
 	info, err := backup.Inspect(bundle)
 	if err != nil || info.Omitted != len(x1.Artifacts) || info.Artifacts != len(x2.Artifacts) {
 		t.Fatalf("bundle after retention: %+v %v", info, err)
 	}
-	if err = backup.Restore(ctx, bundle, filepath.Join(state, "restored"), clock.Now()); err != nil {
+	if err = backup.Restore(ctx, bundle, filepath.Join(state, "restored"), clock.Now(), expired); err != nil {
 		t.Fatalf("restore after retention: %v", err)
 	}
 }
