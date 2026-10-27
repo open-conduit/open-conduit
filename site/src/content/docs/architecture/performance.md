@@ -29,7 +29,7 @@ Open Conduit is a single local daemon ([overview](../../start/overview/)). Its m
 - **Volume in correctness tests, untimed.** [`TestSlackPushReconcileOverlapOneWork`](https://github.com/open-conduit/open-conduit/blob/main/integration/slack_test.go) pushes and reconciles 300 replies in one thread (150 under `-race`) and checks they become 301 distinct Events on one Work, each queued once. It shows correctness at that volume, not speed.
 - **Informal observations.** Two code comments record timings that nobody measured systematically: the [Makefile](https://github.com/open-conduit/open-conduit/blob/main/Makefile) says the integration package takes about 8 minutes on hosted runners under `-race`, and [`slack_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/slack_test.go) says the race-instrumented SQLite driver is about 30× slower per transaction.
 
-The history benchmarks are the only Go benchmark functions in the repository. There is no load test, and no CI job that records a performance number. CI runs `make check`, `make drill`, `make certify` and `make cross-build` ([`ci.yml`](https://github.com/open-conduit/open-conduit/blob/main/.github/workflows/ci.yml)), and all of them check correctness.
+The history benchmarks are the only Go benchmark functions in the repository. There is no load test, and no CI job that records a performance number. CI runs `make check`, `make certify` and `make cross-build` ([`ci.yml`](https://github.com/open-conduit/open-conduit/blob/main/.github/workflows/ci.yml)), and all of them check correctness.
 
 ## Event-ingress throughput
 
