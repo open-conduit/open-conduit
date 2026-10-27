@@ -71,6 +71,7 @@ func (d *daemon) loop(ctx context.Context) error {
 			} else {
 				lastSweep = d.now()
 			}
+			d.collectArtifacts(ctx)
 		}
 		select {
 		case <-ctx.Done():
@@ -333,4 +334,35 @@ func errorCode(err error) string {
 		return "invalid_state"
 	}
 	return "internal"
+}
+
+// collectArtifacts removes artifact content no execution references once it
+// is older than ArtifactGrace: orphans an interrupted publication left, or
+// content published but never attached. Executors attach what they publish
+// in the same result, so the grace far exceeds the publish-to-attach window.
+func (d *daemon) collectArtifacts(ctx context.Context) {
+	if d.artifacts == nil {
+		return
+	}
+	live := map[string]bool{}
+	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		xs, err := tx.ListExecutions("")
+		if err != nil {
+			return err
+		}
+		for _, x := range xs {
+			for _, ref := range x.Artifacts {
+				live[ref.ID] = true
+			}
+		}
+		return nil
+	})
+	if err == nil {
+		err = d.artifacts.Collect(ctx, d.now().Add(-d.o.ArtifactGrace), live)
+	}
+	if err != nil && ctx.Err() == nil {
+		d.report("artifacts", "", errorCode(err))
+		return
+	}
+	d.clear("artifacts", "")
 }
