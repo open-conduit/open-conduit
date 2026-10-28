@@ -11,10 +11,32 @@ The command is `{{bin}}`. The configuration is one JSON file (default `~/.config
 
 - `{{bin}} init github --dry-run --repo OWNER/NAME --scope ID [--checkout DIR | --no-workspace] [--token REF] [--holds]` prints the scope `init github` would add (a connection, an agent binding with the GitHub tools, optionally the hold route); without `--dry-run` it adds it to the file. The owner may prefer to run `init` themselves.
 - `{{bin}} config show` (references redacted), `config get /pointer`, `config set /pointer JSON`, `config unset /pointer` and `config check`. Pointers address array elements by `id` or `name`: `/scopes/web/bindings/agent/config/model`.
+- `{{bin}} adapters` lists every integration this binary registers (GitHub, Slack, Linear, Jira, Bitbucket, scheduled jobs, `human`, `introspection`, PostHog, the executors and the git workspace); `{{bin}} adapters TYPE` shows the fields each part takes and its tool operations. Read it rather than guessing a field or an operation name.
 
-Before the daemon has ever run, that is all. Once it runs, a disk edit alone never changes what it does: check the file with `{{bin}} config validate <file>` and activate it with `{{bin}} config apply <file> --generation <n>` (`validate` prints the current generation): apply validates again, saves the file atomically and keeps the last good one. Validation prints every problem as a JSON pointer, a code and a remedy; fix them all before applying.
+Before the daemon has ever run, that is all: `config check` validates the file against the same registrations `serve` uses, and `{{bin}} doctor` without a daemon runs the same validation plus the checks that need no daemon. `config validate` and `config apply` talk to the daemon, so they fail until one runs. Don't start a scratch daemon with a throwaway data directory to test a config; `config check` and `doctor` already do what it would.
 
-This is a conversation. Open by saying in two or three sentences what you'll do together, then look around (below) before your first question, so the questions you ask are about what you found. Go one topic at a time, and wait for answers.
+Once the daemon has run, it keeps the configuration it last activated (its *generation*) in its own store, and uses that one at every start, even after a restart: a disk edit alone never changes what it does. Check the file with `{{bin}} config validate <file>` and activate it with `{{bin}} config apply <file> --generation <n>` (`validate` prints the current generation): apply validates again, saves the file atomically and keeps the last good one. Validation prints every problem as a JSON pointer, a code and a remedy; fix them all before applying.
+
+## Open the conversation
+
+This is a conversation, and the owner may never have seen Open Conduit before. Your first message gives them a plain-language picture of the tool before any of its vocabulary, in a short paragraph or a few bullets:
+
+- **What it's for:** Open Conduit watches places where work turns up (GitHub issues, Slack threads, Linear or Jira tickets), picks up the items they allow, and has a coding agent work each one, coming back to it whenever something new happens: a comment, CI finishing, a PR merged.
+- **How it works:** a background daemon on this machine. Each item gets its own git worktree and branch from their local clone, the agent acts on GitHub or Slack as whichever account they choose, and they watch and steer it in a terminal UI (or a browser).
+- **What you'll do together:** pick which repositories or channels it watches, which account it acts as, where the code lives and how many agents run at once, then check it all works.
+
+Then ask what they want it to do, because the answer frames every later question: triage issues, open PRs for small fixes, answer questions in Slack, something else? After that, look around (below) before your next question, so the questions you ask are about what you found. Go one topic at a time, and wait for answers.
+
+Introduce Open Conduit's terms only when a question needs them, each with a one-line meaning the first time, for example "Each repository becomes a *scope*, Open Conduit's word for one project: where its work comes from, which clone it uses and what the agent may do." The ones you'll need:
+
+- **scope:** one project: where its work comes from, the clone it uses, its agents and what they may do.
+- **connection:** the account Open Conduit uses on a service (GitHub, Slack), with a reference to its credential.
+- **entry** (an extension entry): one source of work in a scope, such as one GitHub repository or one Slack app. Its name and `namespace` identify the work it brings in, so they stay fixed once the daemon has run.
+- **binding:** an agent (or another runner) and the tools it may use.
+- **route:** which binding handles which kind of work in a scope.
+- **hold:** an issue that is claimed now but only worked from a given time, or once something else happens.
+- **reconcile:** the periodic sweep that re-reads each source, so nothing is missed even without webhooks.
+- **Work:** one item Open Conduit is handling (an issue, a thread), from its first turn until it completes.
 
 ## Ground rules
 
@@ -24,7 +46,11 @@ This is a conversation. Open by saying in two or three sentences what you'll do 
   - `keyring:<name>` or `file:<name>`: the owner runs `{{bin}} secret set <name>` in their own terminal. It reads the value without echoing it and stores it in the OS keyring (`open-conduit` service), falling back to the owner-only `secrets.json` beside the config, then prints the reference to use. Never run it for them with a value.
 
   Offer these, let them choose, and wait for them to say it's done.
-- **GitHub** needs no separate token when the `gh` CLI is signed in: `"token": "cmd:gh auth token"`. Check with `gh auth status`; if they're signed out, they run `gh auth login`. A GitHub App (`"auth": "app"` with `app_id` and an `app_private_key` reference) and a bot App for writes (`bot_app_id`, `bot_private_key`) are also supported.
+- **GitHub** needs no separate token when the `gh` CLI is signed in, but pin which account it prints, for example `"token": "cmd:/opt/homebrew/bin/gh auth token --user <login>"`, with the full path from `command -v gh` and the login the agent should act as. A bare `cmd:gh auth token` prints whatever `gh` resolves where the daemon runs, which can differ from what you see here: a `GH_TOKEN` or `GITHUB_TOKEN` in the environment wins over the keyring, a `gh` earlier on one `PATH` may be a wrapper, and the active account can be switched. If the `gh` you find here is a wrapper or a shim rather than the real binary, say so and use the real one's path.
+
+  List the accounts `gh` knows with `gh auth status --json hosts --jq '.hosts[][] | [.host, .login, .active, .tokenSource, .state] | @tsv'`, and check that one account's token works with `GH_TOKEN="$(gh auth token --user <login>)" gh api user --jq .login`. Never run plain `gh auth status` or `--show-token`: in some environments it prints most of a token into the conversation. If they're signed out, they run `gh auth login` themselves.
+
+  A GitHub App (`"auth": "app"` with `app_id` and an `app_private_key` reference) and a bot App for writes (`bot_app_id`, `bot_private_key`) are also supported.
 - **Ask, don't assume.** This includes which repositories are in scope, how issues map to scopes, and anything that labels, moves or comments on issues. Read what you can find yourself (git remotes, `gh repo list`) and present it for them to confirm.
 - **Explain as you go,** in a sentence or two, what each step means for them ("claimed issues get the `agent-in-progress` label").
 - **Keep questions few and concrete.** Group them, and offer the likely answer: "Your checkouts under ~/Code with GitHub remotes are web, api and ios. All three?"
@@ -39,7 +65,23 @@ ls ~/.config/open-conduit/config.json
 {{bin}} doctor               # what the current config and daemon report
 ```
 
-An existing config may be half done. Build on it rather than starting over: read it, tell the owner what's already there and what `config validate` says, then ask whether to finish that or change something. Never remove a connection, scope, binding, route or extension entry the owner didn't ask you to remove.
+An existing config may be half done. Build on it rather than starting over: read it, tell the owner what's already there and what `config check` says (`config validate` once a daemon runs), then ask whether to finish that or change something. Never remove a connection, scope, binding, route or extension entry the owner didn't ask you to remove.
+
+### When the daemon has run before
+
+A daemon that has run keeps a state directory (`{{bin}} state check` names it and, with the daemon stopped, checks it; `{{bin}} service status` shows whether a service runs it). What the daemon does then comes from its stored generation, not the file. Even when the owner asks to start from scratch, that directory holds their history, claims and unfinished Work, so never delete it or edit its database: change the configuration through `config apply` instead.
+
+- **The daemon runs:** `{{bin}} doctor`'s `config` line says whether the active generation matches the file. Validate the finished config with `config validate` and activate it with `config apply`.
+- **It is stopped, or a service restarts it in a loop:** read the end of `service.log` (`service status` prints its path), or ask the owner for the error `serve` printed when they last ran it. If it says `configuration: invalid configuration` while `config check` passes on the file, the stored generation no longer validates, typically because an upgrade removed an operation or field it names. Explain that to the owner, have them back up the state directory, and look in `{{bin}} --help` and the release notes for a way to replace the stored generation. Without one, stop there and tell them why, rather than inventing a workaround in its database.
+
+### Integrations beyond GitHub
+
+`{{bin}} adapters` lists them. `init slack`, `init linear` and `init jira` add a scope for each, as `init github` does. Two more are worth offering once you know what the owner wants:
+
+- **`human`:** lets the agent ask the owner a private decision (a cost, a credential, whether to go ahead) with `human.ask`, answered from the TUI or the web view; nothing about it reaches the issue or thread. It is a `human` entry in the same scope as the agent (`{"name": "decisions", "type": "human", "secret_names": [], "config": {}}`), with `human.ask` in the scope's `authorization.operations` and the agent binding's `operations`.
+- **`introspection`:** lets agents report what breaks for them (a missing tool, a stale instruction), with an optional daily triage that opens fix Work and a sweep that folds their corrections into the project's rule files. `{{bin}} adapters introspection` shows its parts.
+
+A Slack scope can have a git workspace too: give its agent binding a `resource` like the GitHub one below, and each thread's agent gets its own worktree of that checkout.
 
 Look for the owner's checkouts. Try the current directory and the usual places (`~/Code`, `~/src`, `~/dev`, `~/projects`), one or two levels deep. Use `git -C <dir> remote get-url origin` to see which repository each one is. Check which tools are installed (`claude`, `gh`) with `command -v`.
 
@@ -50,7 +92,7 @@ Look for the owner's checkouts. Try the current directory and the usual places (
 3. **Scopes.** A scope is one project: its repository, its checkout, its agent binding and its routes. Usually one scope per repository. A shared tracker repository whose issues several code repositories' PRs close is a `tracker` on each code repository's entry.
 4. **Checkouts.** The local clone each scope's worktrees come from, the remote (default `origin`) and, only if it isn't the repository's default, the base branch PRs target. A checkout is optional: a scope without a `resource` is workspace-free, and its turns run in a private directory (fine for triage or questions; code changes need a checkout).
 5. **Holds.** Whether issues labelled `scheduled` (opened by an agent with a wait, or by people with a `<!-- runAt: … -->` marker) should be held and then started. That needs the `github-hold` route and binding below.
-6. **Webhooks.** Without them the daemon reconciles every 15 minutes (`settings.reconcile_seconds`). Reconcile always runs as well, so nothing is missed either way: webhooks only cut latency. To add them, the entry names a scope secret in `webhook_secret` (select it in the entry's `secret_names`, with a reference in the scope's `secret_refs`), and the config stores the listener in `settings.webhooks` (`{{bin}} config set /settings/webhooks '{"addr": "127.0.0.1:8787", "tunnel": "ngrok"}'`), so a plain `{{bin}} serve` starts it. The port is only an example: any free local port works, so pick another if something already listens on 8787. That listener serves only the webhook routes of the registered extensions (this entry's `POST /github/<scope>/<entry>`, and the Slack, Linear, Jira, Bitbucket, schedule and installed-package routes of any others) and never the management API; anything else is 404. Something must forward a public URL to it: `"tunnel": "ngrok"` (with `tunnel_domain` for a stable URL), `"tunnel": "cloudflared"` (quick, or `tunnel_name` with `tunnel_hostname`), or `"public_url"` for a reverse proxy they already run. The serve flags of the same names (`--webhook-addr`, `--tunnel`, …) override the stored values for one run. With `"manage_webhook": true` the daemon creates and re-points the repository's webhook itself, which needs admin access to the repository's hooks; otherwise they add the webhook (JSON, the secret, the issues, comments, pull request, review, check and status events) by hand.
+6. **Webhooks.** Without them the daemon reconciles every 15 minutes (`settings.reconcile_seconds`). Reconcile always runs as well, so nothing is missed either way: webhooks only cut latency. To add them, the entry names a scope secret in `webhook_secret` (select it in the entry's `secret_names`, with a reference in the scope's `secret_refs`; several scopes may point at the same reference, so one secret can serve them all), and the config stores the listener in `settings.webhooks` (`{{bin}} config set /settings/webhooks '{"addr": "127.0.0.1:8787", "tunnel": "ngrok"}'`), so a plain `{{bin}} serve` starts it. The port is only an example: any free local port works, so pick another if something already listens on 8787. That listener serves only the webhook routes of the registered extensions (this entry's `POST /github/<scope>/<entry>`, and the Slack, Linear, Jira, Bitbucket, schedule and installed-package routes of any others) and never the management API; anything else is 404. Something must forward a public URL to it: `"tunnel": "ngrok"` (with `tunnel_domain` for a stable URL), `"tunnel": "cloudflared"` (quick, or `tunnel_name` with `tunnel_hostname`), or `"public_url"` for a reverse proxy they already run. The serve flags of the same names (`--webhook-addr`, `--tunnel`, …) override the stored values for one run. With `"manage_webhook": true` the daemon creates and re-points the repository's webhook itself, which needs admin access to the repository's hooks; otherwise they add the webhook (JSON, the secret, the issues, comments, pull request, review, check and status events) by hand.
 7. **Limits.** How many agent turns may run at once (`settings.concurrency`, default 4), and optionally fewer for one scope (its `limits.concurrency`). Suggest starting low, around 2, so they can watch it work. Don't set `admission_limit`: it isn't enforced yet, and `config check` warns about it.
 
 ## Write the config
@@ -112,6 +154,13 @@ Other `git` resource fields: `remote`, `base_branch`, `copy` (files copied into 
 
 A wait on another project (`pr:api/88:merged`) needs the waiting scope to list that scope in its `authorization.read_scopes`. Ask before adding one.
 
+## Changing a config the daemon has run
+
+Before applying a config that removes a scope, an extension entry or a binding, or renames an entry, check what it would leave behind and tell the owner the consequence before going on:
+
+- **A removed scope must have no unfinished Work.** `{{bin}} work list --scope-id <id>` lists it; anything not `completed`, `failed` or `cancelled` (a `waiting` thread, say) blocks the change, and the daemon refuses it with `scope in use`. Offer to keep the scope (it may be reused with new settings under the same id), to let that Work finish, or to cancel it (`x` in the TUI, or `{{bin}} work cancel`) if the owner agrees.
+- **A renamed entry is a new source.** An entry's name and `namespace` identify the issues or threads it brought in, so renaming one leaves its open Work tied to the old name. Keep names and namespaces as they are and change only the settings, unless the owner wants a clean break and has no unfinished Work there.
+
 ## Permissions
 
 The connection's identity needs, on each repository: read access to issues, pull requests, commit statuses and contents (and check runs, where the identity can hold Checks) (reconcile and the agent's reads); write access to issues and pull requests (labels, comments, opening PRs) and to contents for the agent's pushes and attachment uploads; and administration of webhooks only for `manage_webhook`. A fine-grained token with Issues, Pull requests and Contents read/write plus Commit statuses, Metadata and Actions read covers it (add Webhooks read/write for `manage_webhook`), but a fine-grained token cannot be granted Checks: CI is then read from Actions workflow runs, falling back to commit statuses, so a PR is never falsely reported as having no checks, and the base branch's required-checks verification is skipped (`doctor` and the `github.checks` tool say so). For real check-run states use a GitHub App with the same grants plus Checks read. A classic token needs `repo` (and `admin:repo_hook` for `manage_webhook`). `{{bin}} doctor --check-secrets` resolves the credential privately and reports what it can do on each repository.
@@ -125,7 +174,7 @@ The connection's identity needs, on each repository: read access to issues, pull
 
 ## Finish
 
-1. Run `{{bin}} config validate <draft>`, then `{{bin}} config apply <draft> --generation <n>` (or, before the first start, save the file as the config).
+1. Before the daemon has ever run: save the draft as the config and run `{{bin}} config check` and `{{bin}} doctor`. Once it has run: `{{bin}} config validate <draft>`, then `{{bin}} config apply <draft> --generation <n>`.
 2. Run `{{bin}} doctor --check-secrets` once the daemon runs. It checks storage, the config, bindings, connections and secrets, then GitHub: each entry's reconcile and projection, its credential and access (`github_auth`), whether the scope can claim and hold (`github_capability`), the webhook listener, Claude Code's `--version`, and resources. Fix anything it flags.
 3. Summarise in a few lines:
    - the connection;
