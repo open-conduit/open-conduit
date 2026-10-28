@@ -17,14 +17,30 @@ const ActionAnswer = "answer"
 // Actions is a `human` entry's extension.ActionProvider. On a Work parked
 // on one of its asks it offers "answer", and only while the ask is open.
 // Invoke checks the caller against the ask's responders and the input
-// against its options, and produces TypeAnswer on the ask key.
+// against its options, and produces TypeAnswer on the ask key. It is also
+// the entry's extension.PanelProvider: the question panel on asking Work.
 type Actions struct {
 	Store storage.Store
 	Entry Entry
 	Now   func() time.Time
 }
 
-var _ extension.ActionProvider = Actions{}
+var (
+	_ extension.ActionProvider = Actions{}
+	_ extension.PanelProvider  = Actions{}
+)
+
+// Panels shows the target Work's open question.
+func (a Actions) Panels(ctx context.Context, t extension.ActionTarget) ([]extension.Panel, error) {
+	if t.Work == nil || a.Store == nil {
+		return nil, nil
+	}
+	p, ok := Panel(ctx, a.Store, a.Entry, *t.Work, a.now())
+	if !ok {
+		return nil, nil
+	}
+	return []extension.Panel{p}, nil
+}
 
 func (a Actions) now() time.Time {
 	if a.Now != nil {

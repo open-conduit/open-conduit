@@ -55,3 +55,9 @@ textarea, input[name=input] { font: inherit; padding: .4rem .5rem; border: 1px s
 button { font: inherit; padding: .35rem .8rem; border: 1px solid var(--line); border-radius: 4px; background: var(--code); color: var(--fg); cursor: pointer; }
 button:hover { border-color: var(--accent); }
 button.danger { color: var(--bad); }
+.panel { border: 1px solid var(--line); border-radius: 6px; padding: 0 1rem .75rem; max-width: 60rem; }
+.panel h3 { font-size: .9rem; margin: .75rem 0 .3rem; color: var(--dim); }
+.panel-section { margin-top: .6rem; }
+.panel p.text { white-space: pre-wrap; margin: .3rem 0; }
+.panel-links { margin: .3rem 0; padding-left: 1.2rem; }
+.panel form.action { margin-top: .6rem; }

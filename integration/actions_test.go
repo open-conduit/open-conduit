@@ -88,3 +88,42 @@ func TestManagementActions(t *testing.T) {
 		t.Fatalf("posted event source: %+v", posted)
 	}
 }
+
+// panelProvider is approveProvider with panels on the ops scope: one with
+// buttons for a listed and an unlisted action, one over the limits, and a
+// second that repeats the first's ID.
+type panelProvider struct{ approveProvider }
+
+func (panelProvider) Panels(_ context.Context, t extension.ActionTarget) ([]extension.Panel, error) {
+	if t.Scope.ID != "ops" || t.Work != nil {
+		return nil, nil
+	}
+	good := extension.Panel{ID: "request", Title: "Request", Sections: []extension.PanelSection{
+		{Text: "Deploy 1.2?", Fields: []extension.PanelField{{Name: "by", Value: "ana"}}, Actions: []string{"approve", "reject"}},
+	}}
+	bad := extension.Panel{ID: "bad", Title: "Bad", Sections: []extension.PanelSection{{Links: []extension.PanelLink{{Label: "x", URL: "javascript:alert(1)"}}}}}
+	return []extension.Panel{good, bad, good}, nil
+}
+
+// Panels are served as the provider wrote them, without those that fail
+// the document limits or repeat an ID, and each button is resolved to the
+// action it names as listed now, or dropped.
+func TestManagementPanels(t *testing.T) {
+	h := newManagementHarness(t)
+	h.actions = map[string]extension.ActionProvider{"fixture": panelProvider{}, "plain": approveProvider{}}
+	ctx := context.Background()
+	c := h.operatorClient()
+	panels, err := c.Panels(ctx, client.ActionTarget{ScopeID: "ops"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(panels) != 1 || panels[0].Provider != "fixture" || panels[0].ID != "request" || panels[0].Sections[0].Text != "Deploy 1.2?" || panels[0].Sections[0].Fields[0].Value != "ana" {
+		t.Fatalf("panels: %+v", panels)
+	}
+	if a := panels[0].Sections[0].Actions; len(a) != 1 || a[0] != (client.Action{Provider: "fixture", ID: "approve", Label: "Approve the request", Prompt: "type yes"}) {
+		t.Fatalf("buttons: %+v", a)
+	}
+	if _, err := c.Panels(ctx, client.ActionTarget{ScopeID: "nowhere"}); err == nil {
+		t.Fatal("panels of a missing scope")
+	}
+}

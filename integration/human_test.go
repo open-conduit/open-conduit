@@ -216,6 +216,13 @@ func TestHumanAskAnsweredThroughTheAction(t *testing.T) {
 			if lines, ok := hu.Annotate(ctx, h.f.Store, h.actions.Entry, work, h.f.Clock.Now()); !ok || lines[0].Value != "Ship the migration tonight?" {
 				t.Fatalf("annotation: %+v %v", lines, ok)
 			}
+			panels, err := h.actions.Panels(ctx, h.target(t))
+			if err != nil || len(panels) != 1 || panels[0].Sections[0].Text != "Ship the migration tonight?" {
+				t.Fatalf("question panel: %+v %v", panels, err)
+			}
+			if last := panels[0].Sections[len(panels[0].Sections)-1]; len(last.Actions) != 1 || last.Actions[0] != hu.ActionAnswer {
+				t.Fatalf("question panel lacks the answer button: %+v", last)
+			}
 
 			_, err = h.answer(t, extension.Caller{Kind: "slack_user", ID: "U1"}, "yes", "stranger")
 			refusedWith(t, err, "not_allowed")
@@ -397,5 +404,17 @@ func TestHumanAnswerActionContract(t *testing.T) {
 		other.Work = nil
 		return conformance.ActionFixture{Provider: h.actions, Available: h.target(t), Unavailable: other, Action: hu.ActionAnswer, Input: "yes", BadInput: &bad,
 			Caller: extension.LocalOperator, Stranger: extension.Caller{Kind: "slack_user", ID: "U9"}, EventType: hu.TypeAnswer}
+	})
+}
+
+// The question panel meets the shared panel contract: shown with its answer
+// button on Work parked on an ask, and not on the scope.
+func TestHumanQuestionPanelContract(t *testing.T) {
+	conformance.RunPanels(t, func() conformance.PanelFixture {
+		h := newHumanHarness(t, "persistent", decisions)
+		h.ask(t, `{"question":"Go?","options":["yes","no"],"context":"the migration"}`)
+		other := h.target(t)
+		other.Work = nil
+		return conformance.PanelFixture{Provider: h.actions, Shown: h.target(t), Hidden: other}
 	})
 }

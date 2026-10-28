@@ -3,11 +3,11 @@ title: Human decisions
 description: Let agents ask a person for a private decision, answered from the TUI, without anything reaching the issue or thread.
 ---
 
-An agent working a GitHub issue or a Slack thread sometimes needs a person's decision that shouldn't go on the public record: whether to spend money, which credential to use, whether to go ahead tonight. With a `human` entry in the scope, the agent asks through `human.ask`. Its Work parks, the question appears on the Work in the TUI, and the first valid answer resumes the agent.
+An agent working a GitHub issue or a Slack thread sometimes needs a person's decision that shouldn't go on the public record: whether to spend money, which credential to use, whether to go ahead tonight. With a `human` entry in the scope, the agent asks through `human.ask`. Its Work parks, the question appears on the Work in the TUI and the web view, and the first valid answer resumes the agent.
 
 - Add `human.ask` to a binding's operations, and a `human` entry to its scope.
 - The question and the answer stay in Open Conduit's store. Nothing about them is posted to the issue or thread the Work came from.
-- In the TUI, a parked Work's detail shows the question and an **Answer the agent's question** action. From the CLI, run `open-conduit actions list --work <id>` and `open-conduit actions run <entry> answer --work <id> --input <answer>`.
+- In the TUI and the web view, a parked Work's page shows a panel with the question, its context and options, who it is for and its deadline, with the answer action beside it. Elsewhere, such as the run list and the CLI, the Work is annotated with the question alone. From the CLI, run `open-conduit actions list --work <id>` and `open-conduit actions run <entry> answer --work <id> --input <answer>`.
 - When the agent gives options, answer with an option's number or its text. Any other answer is refused.
 
 ## Example config

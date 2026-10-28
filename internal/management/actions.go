@@ -61,16 +61,7 @@ func (s *Server) available(ctx context.Context, t extension.ActionTarget) []wire
 	ps := s.providers(ctx, t.Scope.ID)
 	out := []wireAction{}
 	for name, p := range ps {
-		actions, err := p.Actions(ctx, t)
-		if err != nil {
-			continue
-		}
-		for _, a := range actions {
-			if !actionID.MatchString(a.ID) || strings.TrimSpace(a.Label) == "" || len(a.Label) > 200 || len(a.Prompt) > 200 {
-				continue
-			}
-			out = append(out, wireAction{Provider: name, ID: a.ID, Label: a.Label, Prompt: a.Prompt})
-		}
+		out = append(out, offered(ctx, name, p, t)...)
 	}
 	sort.SliceStable(out, func(i, j int) bool {
 		if out[i].Provider != out[j].Provider {
@@ -78,6 +69,22 @@ func (s *Server) available(ctx context.Context, t extension.ActionTarget) []wire
 		}
 		return out[i].ID < out[j].ID
 	})
+	return out
+}
+
+// offered is one provider's well-formed actions on t.
+func offered(ctx context.Context, name string, p extension.ActionProvider, t extension.ActionTarget) []wireAction {
+	actions, err := p.Actions(ctx, t)
+	if err != nil {
+		return nil
+	}
+	var out []wireAction
+	for _, a := range actions {
+		if !actionID.MatchString(a.ID) || strings.TrimSpace(a.Label) == "" || len(a.Label) > 200 || len(a.Prompt) > 200 {
+			continue
+		}
+		out = append(out, wireAction{Provider: name, ID: a.ID, Label: a.Label, Prompt: a.Prompt})
+	}
 	return out
 }
 

@@ -26,6 +26,7 @@ type fake struct {
 	work    map[string]client.Work
 	waits   []client.Wait
 	actions map[string][]client.Action
+	panels  map[string][]client.Panel
 	scopes  []client.Scope
 	live    map[string]client.LiveRun
 	content map[string]string
@@ -94,6 +95,12 @@ func (f *fake) ReleaseWork(_ context.Context, id, rev, _, _ string) (client.Cont
 }
 func (f *fake) Actions(_ context.Context, t client.ActionTarget) ([]client.Action, error) {
 	return f.actions[t.WorkID+t.ScopeID], nil
+}
+func (f *fake) Panels(_ context.Context, t client.ActionTarget) ([]client.Panel, error) {
+	if f.panels == nil {
+		return nil, &client.Error{Status: 404, Code: "not_found"}
+	}
+	return f.panels[t.WorkID+t.ScopeID], nil
 }
 func (f *fake) InvokeAction(_ context.Context, t client.ActionTarget, provider, id, input, _ string) (client.ActionResult, error) {
 	f.invoked = append(f.invoked, invoked{t, provider, id, input})
@@ -266,6 +273,37 @@ func TestRunPageShowsContextControlsAndActions(t *testing.T) {
 	}
 	if w := do(h, "GET", "/run?id=nope", nil, s); w.Code != 404 {
 		t.Errorf("missing run: %d", w.Code)
+	}
+}
+
+func TestRunPageRendersPanelsWithTheirActions(t *testing.T) {
+	f, s, h := setup(t)
+	answer := f.actions["wrk_1"][0]
+	f.actions["wrk_1"] = append(f.actions["wrk_1"], client.Action{Provider: "github", ID: "nudge", Label: "Nudge"})
+	f.panels = map[string][]client.Panel{"wrk_1": {{Provider: "human", ID: "question", Title: "The agent asks", Sections: []client.PanelSection{
+		{Text: "Ship <b>tonight</b>?\nOr wait"},
+		{Title: "Options", Table: &client.PanelTable{Columns: []string{"#", "Option"}, Rows: [][]string{{"1", "yes"}, {"2", "no"}}}},
+		{Fields: []client.PanelField{{Name: "for", Value: "operator"}}, Links: []client.PanelLink{{Label: "Thread", URL: "https://example.com/t/1"}}, Actions: []client.Action{answer}},
+	}}}}
+	body := do(h, "GET", "/run?id=exe_2", nil, s).Body.String()
+	for _, want := range []string{
+		"The agent asks", "Ship &lt;b&gt;tonight&lt;/b&gt;?\nOr wait", "<th>Option</th>", "<td>no</td>", "<dt>for</dt><dd>operator</dd>",
+		`href="https://example.com/t/1"`, `name="work" value="wrk_1"`, `placeholder="your answer"`,
+		// An action no panel shows stays in the generic list.
+		`name="action" value="nudge"`,
+	} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	// The panel's action is shown once, in the panel.
+	if n := strings.Count(body, `name="action" value="answer"`); n != 1 {
+		t.Errorf("answer shown %d times", n)
+	}
+	// A scope's panel shows on the Scopes page.
+	f.panels["scope_a"] = []client.Panel{{Provider: "github", ID: "queue", Title: "Queue", Sections: []client.PanelSection{{Fields: []client.PanelField{{Name: "open", Value: "3"}}}}}}
+	if body := do(h, "GET", "/scopes", nil, s).Body.String(); !strings.Contains(body, "Queue") || !strings.Contains(body, "<dd>3</dd>") {
+		t.Error("scope panel missing")
 	}
 }
 

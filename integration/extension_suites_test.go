@@ -258,3 +258,31 @@ func TestExternalActionsSharedSuite(t *testing.T) {
 		conformance.RunActions(t, func() conformance.ActionFixture { return notesActionFixture(p) })
 	})
 }
+
+func notesPanelFixture(t *testing.T, p extension.ActionProvider) conformance.PanelFixture {
+	a := notesActionFixture(p)
+	pp, ok := p.(interface {
+		extension.ActionProvider
+		extension.PanelProvider
+	})
+	if !ok {
+		t.Fatal("notes shows no panels")
+	}
+	return conformance.PanelFixture{Provider: pp, Shown: a.Available, Hidden: a.Unavailable}
+}
+
+func TestExternalPanelsSharedSuite(t *testing.T) {
+	notesPath, _ := extensionBinaries(t)
+	t.Run("in_process", func(t *testing.T) {
+		conformance.RunPanels(t, func() conformance.PanelFixture { return notesPanelFixture(t, notes.Actions{}) })
+	})
+	t.Run("subprocess", func(t *testing.T) {
+		e := newExtEnv(t)
+		r := e.load(e.install(notes.Manifest(notes.Options{Release: 2}), notesPath), e.deps(), e.options(notes.Name))
+		p, ok := r.Actions()
+		if !ok {
+			t.Fatal("notes declares no actions")
+		}
+		conformance.RunPanels(t, func() conformance.PanelFixture { return notesPanelFixture(t, p) })
+	})
+}

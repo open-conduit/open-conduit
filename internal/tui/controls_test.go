@@ -22,6 +22,7 @@ type controlSource struct {
 	calls        []string
 	scopeActions map[string][]client.Action
 	workActions  []client.Action
+	panels       []client.Panel
 }
 
 func (c *controlSource) Work(context.Context, string) (client.Work, error) { return c.work, nil }
@@ -61,6 +62,13 @@ func (c *controlSource) Actions(_ context.Context, t client.ActionTarget) ([]cli
 		return c.workActions, nil
 	}
 	return c.scopeActions[t.ScopeID], nil
+}
+
+func (c *controlSource) Panels(_ context.Context, t client.ActionTarget) ([]client.Panel, error) {
+	if t.WorkID == "" {
+		return nil, nil
+	}
+	return c.panels, nil
 }
 
 // InvokeAction records the call; input "refuse" is refused like a provider.
@@ -116,7 +124,12 @@ func TestOperatorControls(t *testing.T) {
 		Annotations:     []client.Annotation{{Source: "github/eng/r", Name: "url", Value: "https://github.com/o/r/issues/12"}}},
 		waits:        []client.Wait{{ID: "wait-1", State: "active", Match: client.Match{Types: []string{"github.pull_request.merged"}}}},
 		scopeActions: map[string][]client.Action{"eng": {{Provider: "github/eng/r", ID: "claim", Label: "Claim an issue by hand", Prompt: "issue number"}}},
-		workActions:  []client.Action{{Provider: "human", ID: "approve", Label: "Approve"}, {Provider: "human", ID: "answer", Label: "Answer the question", Prompt: "answer"}}}
+		workActions:  []client.Action{{Provider: "human", ID: "approve", Label: "Approve"}, {Provider: "human", ID: "answer", Label: "Answer the question", Prompt: "answer"}},
+		panels: []client.Panel{{Provider: "human", ID: "question", Title: "The agent asks", Sections: []client.PanelSection{
+			{Text: "Ship tonight?\nThe migration is ready."},
+			{Title: "Options", Table: &client.PanelTable{Columns: []string{"#", "Option"}, Rows: [][]string{{"1", "yes"}, {"10", "not yet"}}}},
+			{Fields: []client.PanelField{{Name: "for", Value: "operator"}}, Links: []client.PanelLink{{Label: "Thread", URL: "https://example.com/t"}}, Actions: []client.Action{{Provider: "human", ID: "answer", Label: "Answer the question", Prompt: "answer"}}},
+		}}}}
 	var m tea.Model = New(src, time.Hour)
 	m = drain(t, m, m.(Model).fetch())
 	if !strings.Contains(m.View(), "c scope actions") {
@@ -168,7 +181,9 @@ func TestOperatorControls(t *testing.T) {
 	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = drain(t, m, cmd)
 	view := m.View()
-	for _, want := range []string{"Run r1", "issue/12", "https://github.com/o/r/issues/12", "wait wait-1", "github.pull_request.merged"} {
+	for _, want := range []string{"Run r1", "issue/12", "https://github.com/o/r/issues/12", "wait wait-1", "github.pull_request.merged",
+		// The panel renders as text, its button as the number that picks it.
+		"The agent asks", "  Ship tonight?\n  The migration is ready.", "  1   yes\n  10  not yet\n", "for                operator", "Thread  https://example.com/t", "  2 Answer the question\n"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("detail lacks %q:\n%s", want, view)
 		}

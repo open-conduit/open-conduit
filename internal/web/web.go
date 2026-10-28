@@ -57,6 +57,7 @@ type Source interface {
 	HoldWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	ReleaseWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	Actions(ctx context.Context, t client.ActionTarget) ([]client.Action, error)
+	Panels(ctx context.Context, t client.ActionTarget) ([]client.Panel, error)
 	InvokeAction(ctx context.Context, t client.ActionTarget, provider, id, input, key string) (client.ActionResult, error)
 }
 

@@ -150,7 +150,7 @@ var limits = []string{
 	"Certification checks protocol conformance, not safety: an extension runs with the operator's privileges (process separation is fault isolation, not a sandbox).",
 	"Only the package's own fixture is exercised, against its fakes; no live service is contacted and no real credential is used.",
 	"One host build, one platform and one protocol version are tested: the ones stated above.",
-	"Not certified by criteria version 1: webhook.handle, setup.run and setup.* callbacks, provider.* resource providers, telemetry.export, work.annotate, work.actions and work.act, event.render, emit and wait operations, the in-transaction callbacks (recurrence.next, work_kind.trigger, emit.commit, dependency.filter) and the message-size and overload limits. The host's own suites cover those adapters.",
+	"Not certified by criteria version 1: webhook.handle, setup.run and setup.* callbacks, provider.* resource providers, telemetry.export, work.annotate, work.actions and work.act, view.render, event.render, emit and wait operations, the in-transaction callbacks (recurrence.next, work_kind.trigger, emit.commit, dependency.filter) and the message-size and overload limits. The host's own suites cover those adapters.",
 	"Executor checks run one attempt each without a toolbelt endpoint or workspace; resume, interrupt and attach are not exercised.",
 }
 

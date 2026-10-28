@@ -216,11 +216,25 @@ func (Setup) Setup(_ context.Context, host extension.SetupHost, args []string) (
 
 // Actions is the example action provider: on Work that follows a note and
 // is still open, the local operator may add a remark, which becomes a
-// notes.note.annotated Event on the note. The same value serves in-process
-// and behind work.actions and work.act.
+// notes.note.annotated Event on the note. It also shows that Work a panel
+// naming the note, with the remark button. The same value serves in-process
+// and behind work.actions, work.act and view.render.
 type Actions struct{}
 
-var _ extension.ActionProvider = Actions{}
+var (
+	_ extension.ActionProvider = Actions{}
+	_ extension.PanelProvider  = Actions{}
+)
+
+func (Actions) Panels(_ context.Context, t extension.ActionTarget) ([]extension.Panel, error) {
+	k, ok := noteKey(t.Work)
+	if !ok {
+		return nil, nil
+	}
+	return []extension.Panel{{ID: "note", Title: "Note " + k.ExternalID, Sections: []extension.PanelSection{
+		{Fields: []extension.PanelField{{Name: "note", Value: k.ExternalID}}, Actions: []string{"remark"}},
+	}}}, nil
+}
 
 // noteKey is the note a live Work follows, if any.
 func noteKey(w *domain.Work) (domain.CorrelationKey, bool) {
