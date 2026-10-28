@@ -11,7 +11,7 @@ package conformance
 // CriteriaVersion versions the certification criteria. A report states it;
 // a package certified under one version is not implied certified under a
 // later one.
-const CriteriaVersion = 1
+const CriteriaVersion = 2
 
 // Criterion is one certification check.
 type Criterion struct {
@@ -41,7 +41,7 @@ var Criteria = []Criterion{
 	{"scope.host_surface", "lifecycle", "always", "No extension-to-host call is refused as unauthorized during the run: the package stays within its namespaces, configured scopes and registered sources."},
 	{"storage.kv_migration", "storage", "kv_version > 0", "configure from stored KV layout 0 migrates to the manifest's kv_version, and repeating the migration from the same stored version (a crash mid-migration) succeeds again."},
 	{"ingress.conformance", "ingress", "an ingress extension type", "The shared ingress suite (conformance.CheckIngress) passes on the fixture's source: stable push normalization, push and reconcile agree on identity, complete paging and declared loss for one-shot families (a source whose families are all re-derivable needs no one-shot case)."},
-	{"routes.decisions", "routes", "route handlers and route fixture cases", "Each route fixture case is decided deterministically (twice, identically) as the fixture expects, creating only declared Work kinds."},
+	{"routes.decisions", "routes", "route handlers and route fixture cases", "Each route fixture case is decided deterministically (twice, identically) as the fixture expects, creating only declared Work kinds, with any Work display within its limits and linking only to http or https URLs (extension.ValidateDisplay)."},
 	{"operations.cases", "operations", "operations and operation fixture cases", "Each operation fixture case returns the expected output or refusal code, and an undeclared operation is refused."},
 	{"executor.conformance", "executors", "an executor", "The shared executor suite (conformance.CheckExecutor) passes: recovery metadata before acknowledgement, adoption without replacement, an unknown state not adoptable and persistence failures propagated."},
 	{"executor.inject", "executors", "an executor with inject", "The shared inject suite (conformance.CheckInjectExecutor) passes on the fixture's inject case."},

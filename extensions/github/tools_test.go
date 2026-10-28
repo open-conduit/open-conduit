@@ -59,11 +59,23 @@ func TestParseCondAndHoldMarkers(t *testing.T) {
 	if c, _ := gh.ParseCond("pr:9:commented"); c.Describe() != "a reply or review on PR #9" || c.Happened(gh.TypeCommentHuman) != "someone replied on PR #9" {
 		t.Fatal(c.Describe(), c.Happened(gh.TypeCommentHuman))
 	}
-	if _, err := gh.ParseCond("pr:9:reviewed"); err == nil || !strings.Contains(err.Error(), "merged, closed, commented, pushed") {
+	if _, err := gh.ParseCond("pr:9:reviewed"); err == nil || !strings.Contains(err.Error(), "merged, closed, commented, pushed, checks") {
 		t.Fatal(err)
 	}
 	if c, _ := gh.ParseCond("pr:9:merged"); c.Happened(gh.TypePullClosed) != "PR #9 was closed without merging, so it won't merge" {
 		t.Fatal(c.Happened(gh.TypePullClosed))
+	}
+	if c, err := gh.ParseCond("pr:137:checks"); err != nil || c.Describe() != "checks on PR #137" || c.Happened(gh.TypeChecksFailed) != "checks on PR #137 finished" {
+		t.Fatal(c.Describe(), err)
+	}
+	// A Wait on a hold is described by its conditions, or by its time alone.
+	due := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
+	c137, _ := gh.ParseCond("pr:137:checks")
+	if d := (gh.Hold{Conds: []gh.Cond{c137}}).WaitDescription(); d != "checks on PR #137" {
+		t.Fatal(d)
+	}
+	if d := (gh.Hold{Until: &due}).WaitDescription(); d != "until 25 Oct 2026 09:00 UTC" {
+		t.Fatal(d)
 	}
 }
 
@@ -82,6 +94,13 @@ func TestDependencyFilterSelectsTheNamedItem(t *testing.T) {
 	}
 	if gh.DependencyFilter(pr, ev(gh.SchemaPull, gh.PullPayload{Repo: repo, Number: 7})) || gh.DependencyFilter(pr, ev(gh.SchemaPull, gh.PullPayload{Repo: "other/repo", Number: 8})) {
 		t.Fatal("another PR on the same key accepted")
+	}
+	checks := filter(map[string]any{"kind": "pr_checks", "repo": repo, "number": 8, "head": "aaa"})
+	if !gh.DependencyFilter(checks, ev(gh.SchemaChecks, gh.ChecksPayload{Repo: repo, Number: 8, SHA: "aaa", Complete: true})) {
+		t.Fatal("checks on the waited head rejected")
+	}
+	if gh.DependencyFilter(checks, ev(gh.SchemaChecks, gh.ChecksPayload{Repo: repo, Number: 8, SHA: "bbb", Complete: true})) || gh.DependencyFilter(checks, ev(gh.SchemaChecks, gh.ChecksPayload{Repo: repo, Number: 7, SHA: "aaa"})) {
+		t.Fatal("checks on another head or PR accepted")
 	}
 	turn := filter(map[string]any{"kind": "turn", "repo": repo, "number": 21, "state": "review"})
 	ended := func(status string) domain.Event {

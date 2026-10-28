@@ -44,6 +44,7 @@ When the work can't go on until something happens, park the issue and let Open C
 
 - `github.wait` with `{"conditions": ["pr:1257:merged"], "reason": "…"}`: until another PR merges (`:closed` for closed without merging). A PR that ends the other way wakes you too.
 - `"conditions": ["pr:1257:commented"]` or `["pr:1257:pushed"]`: until the next reply, review or review-thread reply on a PR (your own posts don't count), or the next push to it. Use these after you've asked a PR's author for changes.
+- `"conditions": ["pr:1257:checks"]`: until the checks on another PR's current head finish, passed or not.
 - `"conditions": ["issue:1267:closed"]`: until another issue closes.
 - `"conditions": ["issue:1267:review"]`: until the agent on another issue ends a turn in that state (`building`, `review`, `help`, `done`, `finished`), e.g. once it has reported.
 - `{"until": "2026-10-25T09:00Z", "reason": "…"}`: until a time (a match being played, a date the issue names). Use an ISO time with `Z` or an offset.

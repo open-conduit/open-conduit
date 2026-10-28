@@ -14,6 +14,7 @@ import (
 	"io"
 	"os"
 	"strconv"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -38,6 +39,8 @@ var Modes = []Mode{
 	{"no-eof-exit", notes.Name, "lifecycle.stdin_eof", "keeps running after its stdin closes"},
 	{"unstable-push", notes.Name, "ingress.conformance", "stamps push observations with the time of the call"},
 	{"route-drift", notes.Name, "routes.decisions", "creates Work under an ID that changes on every call"},
+	{"display-link", notes.Name, "routes.decisions", "links a Work's display to a javascript: URL"},
+	{"display-overlong", notes.Name, "routes.decisions", "gives a Work a display title over the length limit"},
 	{"operation-drift", notes.Name, "operations.cases", "answers an unknown note with a generic refusal"},
 	{"migration-once", notes.Name, "storage.kv_migration", "fails a repeated KV migration (not idempotent)"},
 	{"foreign-kv", notes.Name, "scope.host_surface", "tries to write another extension's KV namespace at configure"},
@@ -205,6 +208,17 @@ func weakenNotes(mode string, ext *sdk.Extension) {
 			d, err := base.Match(ctx, in)
 			if d.CreateID != "" {
 				d.CreateID = domain.ID(string(d.CreateID) + "-" + strconv.FormatInt(time.Now().UnixNano(), 10))
+			}
+			return d, err
+		})
+	case "display-link", "display-overlong":
+		base := ext.Routes[notes.Name]
+		ext.Routes[notes.Name] = routeFunc(func(ctx context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
+			d, err := base.Match(ctx, in)
+			if d.Display != nil && mode == "display-link" {
+				d.Display.Links = []domain.Link{{Label: "Note", URL: "javascript:alert(1)"}}
+			} else if d.Display != nil {
+				d.Display.Title = strings.Repeat("n", extension.MaxDisplayTitle+1)
 			}
 			return d, err
 		})

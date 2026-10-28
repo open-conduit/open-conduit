@@ -145,8 +145,7 @@ func (s PanelSection) validate() error {
 		if err := text("link label", l.Label, MaxPanelTitle, true); err != nil {
 			return err
 		}
-		u, err := url.Parse(l.URL)
-		if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" || len(l.URL) > MaxPanelValue {
+		if !httpURL(l.URL, MaxPanelValue) {
 			return fmt.Errorf("link %q is not an http or https URL", l.URL)
 		}
 	}
@@ -158,6 +157,13 @@ func (s PanelSection) validate() error {
 		seen[a] = true
 	}
 	return nil
+}
+
+// httpURL reports whether s is an absolute http or https URL of at most
+// limit bytes.
+func httpURL(s string, limit int) bool {
+	u, err := url.Parse(s)
+	return err == nil && (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && len(s) <= limit
 }
 
 // text checks one string of a panel: valid UTF-8 within limit, with no

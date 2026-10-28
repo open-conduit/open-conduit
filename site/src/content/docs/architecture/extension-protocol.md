@@ -32,7 +32,7 @@ The table groups what the first-party code actually does across the host boundar
 | Ingress push | `Ingress.Push` behind host-mounted `WebhookHandler`s (verify, then push; 2xx only after durable acceptance) | GH SL TR BB SC | `webhook.handle`, `ingress.push` |
 | Ingress reconcile | `Ingress.Reconcile`, driven by `ReconcileDue` with page timeout and item/byte limits | GH SL TR BB SC | `ingress.reconcile` |
 | Extension-owned receiver | Slack Socket Mode calls the host push func and acks the envelope only after it returns | SL | `ingress.deliver` (E→H) |
-| Routing | `RouteHandler.Match` on a detached snapshot, outside any transaction | GH SL TR BB SC IS | `route.match` |
+| Routing | `RouteHandler.Match` on a detached snapshot, outside any transaction, with an optional Work display | GH SL TR BB SC IS | `route.match` |
 | Work kind policy | `WorkKindPolicy{Standing, Trigger}`. `Trigger` is pure and runs in the start transaction | SC (IS standing only) | manifest `work_kinds`, `work_kind.trigger` |
 | Calendar recurrence | `RecurrenceFunc` in the timer fire-and-rearm transaction. `Armer.ArmRecurrence/Cancel` from `Ensure` | SC IS | `recurrence.next`, `timer.arm`, `timer.cancel` |
 | Toolbelt operations | `Registration{Name, EventTypes, Operations, DependencyFilter}`. `Operation.Handler` (all), `.Wait` (GH), `.Emit` with in-transaction `Commit` (IS) | GH SL TR BB IS | `operation.call`, `operation.wait`, `operation.emit`, `emit.commit`, `dependency.filter` |
@@ -387,6 +387,25 @@ Ingress identity is part of evolution. Core binds an observation's `(item, versi
   - executor lease fencing across restarts, through the real scheduler.
 - **Unit tests.** `protocol/evolution_test.go`, `protocol/jsonrpc/conn_test.go`, `protocol/sdk/sdk_test.go` and `internal/extproc/process_test.go`.
 
+## Work display and wait descriptions
+
+Operator views say what a Work is and what it waits for in the words of the source that knows, not by reading correlation keys or event types. Core stores both and never interprets the text.
+
+**Work display.** A route handler may return `display` with a match (`extension.RouteDecision.Display`, wire `route.match` result `display`): `title`, a short `ref` (`#136`, `ENG-12`), `requester`, and up to 8 `links`, each a `label` and an http or https `url`. The router stores it on the Work in the same transaction that routes the Event, replacing what was there; a match without one keeps the current display, which the handler sees on the input's `work.display`, so it can add a link to what it already said. `GET /v1/work` and `GET /v1/work/{id}` return it as `display`, and the client as `Work.Display`. Work whose source says nothing has none, and views show the label they always did.
+
+| Source | Title | Ref | Requester | Links |
+| --- | --- | --- | --- | --- |
+| GitHub issue (and held issue) | the issue title | `#N` | the issue author | `Issue #N`, then `PR #N` once a PR's merge, close, checks or comment reaches the Work |
+| Linear, Jira | the issue title | the issue key | the author | `Linear KEY` or `Jira KEY` |
+| Slack thread | the first line of the first message, without mention tokens | | the user ID | `Slack thread` |
+| Schedule job | the job name | | | |
+
+**Wait description.** A wait request may carry `description` (`extension.WaitRequest.Description`; wire `operation.wait` result `wait.description`; the builtin `wait` input `description`, and `os wait --description`). It is fixed on the Wait when it is declared. `GET /v1/waits` returns it as `description`, with `due_at` when the Wait has a timeout timer; a timed Wait whose owner gave no description is described by core as `until <RFC 3339 time>`. `github.wait` and holds describe the conditions in words (`checks on PR #137`, `PR #12 to merge, or 25 Oct 2026 09:00 UTC`), and `human.ask` says `a person's answer` without repeating the question, which may be private.
+
+**Limits.** Every field is one line of UTF-8 without control characters: title 200 bytes, ref 40, requester 100, link label 60 (required), URL 2048, wait description 200. A display needs a title or a ref. Text over a limit is refused, never truncated (`extension.ValidateDisplay`, `extension.ValidateWaitDescription`): the router fails the routing pass, the process adapter answers `invalid`, and the toolbelt refuses the wait. Extensions fit their own text with `extension.Clip`. Certification's `routes.decisions` (criteria version 2) fails a route case whose display breaks a limit or links anywhere but http or https.
+
+Not yet: a Wait's description cannot be updated after it is declared, so progress ("3 of 7 checks finished") is not shown.
+
 ## Provisional decisions for user review
 
 1. JSON-RPC 2.0 over stdio, line-delimited, standard library only, symmetric, rather than go-plugin/gRPC.
@@ -430,3 +449,4 @@ These notes record how this part was built and the evidence gathered at each sta
   - **Surfaces not adapted.** Host-to-extension `webhook.handle`, `provider.*`, `telemetry.export`, `work.annotate`, `validate` and `setup.run`, and extension-to-host `provider.owner_status` and the `setup.*` callbacks, stayed catalogued but unadapted. The SDK answered the host-to-extension ones `method_not_found`, and the host answered the extension-to-host ones `unsupported`.
   - Decision 20 recorded that deferral.
 - **07-03.** Delivered both deferred items: `serve` discovers, admits, starts and registers installed packages, and every catalogued surface is adapted. It also delivered the SDK's final shape, the package layout and install location, certification, and the suggested round trip of two materially different first-party integrations that avoid the in-process couplings: Slack (workspace-free ingress, receiver, tools, projector task, setup) and the shell executor (execution with resume, inject, interrupt, stop, artifacts). See [extension packaging](../extension-packaging/), decisions 21–32.
+- **Issue #123.** Added the Work display on route decisions and the Wait description on wait requests, both stored by core and shown through the API, supplied by GitHub, the tracker kit, Slack, schedule and `human.ask`. Certification criteria version 2 checks display limits and link schemes.

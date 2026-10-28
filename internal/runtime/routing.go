@@ -324,6 +324,9 @@ func (r *Router) evaluate(ctx context.Context, s routeSnapshot) (p routePlan, er
 			return p, e
 		}
 		if d.Match {
+			if err := extension.ValidateDisplay(d.Display); err != nil {
+				return p, fmt.Errorf("%w: route %s: %v", extension.ErrInvalid, route.Name, err)
+			}
 			selected := route
 			p.selected = &selected
 			d.AttachKeys = append([]domain.CorrelationKey(nil), d.AttachKeys...)
@@ -530,6 +533,16 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 			sort.Slice(plans, func(i, j int) bool { return plans[i].event.Sequence < plans[j].event.Sequence })
 		}
 		plans = append(plans, p)
+		// The latest matched input that says what the Work is wins.
+		var display *domain.WorkDisplay
+		for _, planned := range plans {
+			if planned.selected != nil && planned.decision.Display != nil {
+				display = planned.decision.Display
+			}
+		}
+		if projected != nil && display != nil && !projected.State.Terminal() {
+			projected.Display = display
+		}
 		err = r.transact(ctx, nil, func(tx storage.Tx) error {
 			fresh, e := snapshot(tx, id)
 			if e != nil {

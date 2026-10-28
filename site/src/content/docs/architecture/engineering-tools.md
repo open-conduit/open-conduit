@@ -61,13 +61,14 @@ Dry-run is handled per entry by `projection.dry_run`: writes report `dry_run` an
 
 ## Waits
 
-`github.wait {conditions, until, reason}` takes `pr:N[:merged|closed|commented|pushed]`, `issue:N[:closed|<turn state>]`, `job:<name>`, `<project>/` prefixes and `until`. It translates as follows:
+`github.wait {conditions, until, reason}` takes `pr:N[:merged|closed|commented|pushed|checks]`, `issue:N[:closed|<turn state>]`, `job:<name>`, `<project>/` prefixes and `until`. It translates as follows:
 
 | Condition | Source key | Types | Filter | History |
 | --- | --- | --- | --- | --- |
 | `pr:N:merged`, `pr:N:closed` | the PR's correlation (its issue's, by branch or closing keyword, else `pr/N`) | `merged`, `closed` (either ends the wait) | `{kind: pr, repo, number}` | all |
 | `pr:N:commented` | the PR's correlation | `github.comment.human`, `github.comment.agent` | `{kind: pr_comment, …, work}`: a new (not edited) PR conversation comment, review or review comment, not marked as the waiting Work's own | from now |
 | `pr:N:pushed` | the PR's correlation | `github.pull_request.open` | `{kind: pr_push, …, head}`: a head SHA other than the one read at registration; refused on a closed PR | from now |
+| `pr:N:checks` | the PR's correlation | `github.checks.passed`, `failed`, `none`, `missing` | `{kind: pr_checks, …, head}`: results for the head SHA read at registration, so results already in meet it at once and a later push's do not | all |
 | `issue:N:closed` | `issue/N` at its current generation | `github.issue.closed` | `{kind: issue, …}` | all |
 | `issue:N:<state>` | `issue/N` | `core.execution.turn` | `{kind: turn, …, state}`: the Event's `status` | from now |
 | `until` | (none) | (none) | (none) | core timeout timer |
@@ -77,6 +78,7 @@ Behaviour:
 - **Refusals.** The call checks each condition before any side effect and refuses one that has already happened (`already_met`: carry on), an unknown project, a past time or nothing to wait for. A race between that read and registration is closed by the subscription backscan.
 - **Jobs.** `job:<name>` is a FromNow dependency on the job's key in its schedule entry, over the `schedule.run.completed|failed|cancelled|handoff` Events the host announces for each finished run, so the job's next run wakes it ([job waits](../schedule-extension/#job-waits)). A job the scope's schedule entries do not declare refuses with `no_job`.
 - **Work without an issue.** `github.wait` binds any Work in the scope and takes an optional `repo`, resolved like the PR operations' (`repo_required`, `unregistered_repo`). Conditions without a project name that repository. Holds stay issue-bound.
+- **Wait description.** The plan describes the Wait in the condition's words (`checks on PR #137`, `PR #12 to merge, or 25 Oct 2026 09:00 UTC`, `until …` for a time alone), which operator views show from the Wait record ([wait descriptions](../extension-protocol/#work-display-and-wait-descriptions)).
 - **The reason.** It is posted on the issue with the hold marker, so people see what is awaited. Work without an issue has nowhere on GitHub to put it: the call returns it, and the agent tells its own conversation (a Slack thread) if people should know. Nothing goes on the PR.
 - **What wakes the Wait.** The Wait matches the Work's own keys with the alias type plus the own-key inputs that still reach a waiting agent: human comments, closes, merges and check results. A comment therefore wakes the agent. Work without an issue matches only the alias type (and its time), since GitHub can't tell its own surface's input from its own posts.
 - **One wake.** One wake ends a core Wait, so the agent waits again if the prerequisite is still pending. The playbook says so. Agent comments are excluded, because the wait's own reason comment is one.

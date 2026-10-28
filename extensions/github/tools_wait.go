@@ -29,7 +29,7 @@ var waitInputTypes = []string{TypeDependencyMet, TypeCommentHuman, TypeIssueClos
 
 // dependencyFilter is the opaque filter of a translated dependency.
 type dependencyFilter struct {
-	Kind   string `json:"kind"` // pr, pr_comment, pr_push, issue, turn or peer
+	Kind   string `json:"kind"` // pr, pr_comment, pr_push, pr_checks, issue, turn or peer
 	Repo   string `json:"repo"`
 	Number int    `json:"number"`
 	State  string `json:"state,omitempty"`
@@ -79,6 +79,9 @@ func DependencyFilter(filter domain.Payload, e domain.Event) bool {
 	case "pr_push":
 		var p PullPayload
 		return e.Data.Schema == SchemaPull && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo) && p.HeadSHA != "" && p.HeadSHA != f.Head
+	case "pr_checks":
+		var p ChecksPayload
+		return e.Data.Schema == SchemaChecks && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo) && (f.Head == "" || p.SHA == f.Head)
 	case "pr_comment":
 		// A new comment, review or thread reply on the PR (not an edit), from
 		// anyone but the waiting Work itself.
@@ -256,6 +259,11 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 			}
 			r.dep.Types, r.dep.FromNow = []string{TypePullOpen}, true
 			r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr_push", Repo: repo, Number: c.Number(), Head: p.Head.SHA})
+		case "checks":
+			// The checks on the head as the wait begins: results already in
+			// for that head meet it at once; a later push's do not.
+			r.dep.Types = []string{TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing}
+			r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr_checks", Repo: repo, Number: c.Number(), Head: p.Head.SHA})
 		default:
 			if p.State != "open" {
 				r.met = "PR #" + c.Ref + " is already " + pullState(p)
@@ -360,7 +368,7 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 		if len(b.work.CorrelationKeys) == 0 {
 			return extension.WaitPlan{}, refuse("cannot_wait", "this Work has nothing of its own to be woken on")
 		}
-		plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: []string{TypeDependencyMet}}, Timeout: h.Until}}
+		plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: []string{TypeDependencyMet}}, Timeout: h.Until, Description: h.WaitDescription()}}
 		for _, r := range resolved {
 			plan.Dependencies = append(plan.Dependencies, r.dep)
 		}
@@ -379,7 +387,7 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 	if err != nil {
 		return extension.WaitPlan{}, err
 	}
-	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: append([]string(nil), waitInputTypes...)}, Timeout: h.Until}}
+	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: append([]string(nil), waitInputTypes...)}, Timeout: h.Until, Description: h.WaitDescription()}}
 	for _, r := range resolved {
 		plan.Dependencies = append(plan.Dependencies, r.dep)
 	}
@@ -519,7 +527,7 @@ func (t *Tools) holdPlan(ctx context.Context, b *bound, data json.RawMessage) (e
 	if !s.Held {
 		return extension.WaitPlan{}, refuse("not_held", "the issue has nothing left to wait for (%s)", s.Reason)
 	}
-	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: []string{TypeDependencyMet}}}}
+	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: []string{TypeDependencyMet}}, Description: h.WaitDescription()}}
 	if h.Until != nil && h.Until.After(t.o.Now()) {
 		until := *h.Until
 		plan.Wait.Timeout = &until

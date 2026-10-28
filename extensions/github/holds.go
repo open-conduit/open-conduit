@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Wait conditions and hold markers, ported from Open Supervisor's
@@ -47,15 +48,16 @@ var issueOns = append([]string{"closed"}, TurnStates...)
 
 // prOns are what a PR can be waited on for: commented (the next human
 // comment, review or review-thread reply) and pushed (the next new head
-// commit) are about what happens from the wait on.
-var prOns = []string{"merged", "closed", "commented", "pushed"}
+// commit) are about what happens from the wait on; checks is the checks
+// on its head as the wait begins finishing, passed or not.
+var prOns = []string{"merged", "closed", "commented", "pushed", "checks"}
 
 // ParseCond reads a condition as an agent writes it. A PR's defaults to
 // merged, an issue's to closed.
 func ParseCond(s string) (Cond, error) {
 	parts := strings.Split(strings.TrimSpace(s), ":")
 	if len(parts) < 2 || len(parts) > 3 || parts[1] == "" {
-		return Cond{}, fmt.Errorf("%q isn't a condition: write pr:<n>[:merged|closed|commented|pushed], issue:<n>[:closed|<state>] or job:<name>", s)
+		return Cond{}, fmt.Errorf("%q isn't a condition: write pr:<n>[:merged|closed|commented|pushed|checks], issue:<n>[:closed|<state>] or job:<name>", s)
 	}
 	c := Cond{Kind: CondKind(strings.ToLower(parts[0])), Ref: parts[1]}
 	if len(parts) == 3 {
@@ -136,6 +138,8 @@ func (c Cond) Describe() string {
 			return fmt.Sprintf("a reply or review on PR #%s%s", c.Ref, where)
 		case "pushed":
 			return fmt.Sprintf("a new push to PR #%s%s", c.Ref, where)
+		case "checks":
+			return fmt.Sprintf("checks on PR #%s%s", c.Ref, where)
 		case "closed":
 			return fmt.Sprintf("PR #%s%s to close", c.Ref, where)
 		}
@@ -165,6 +169,8 @@ func (c Cond) Happened(sourceType string) string {
 			return fmt.Sprintf("someone replied on PR #%s%s", c.Ref, where)
 		case "pushed":
 			return fmt.Sprintf("PR #%s%s got a new push", c.Ref, where)
+		case "checks":
+			return fmt.Sprintf("checks on PR #%s%s finished", c.Ref, where)
 		}
 		if sourceType == TypePullClosed && c.On == "merged" {
 			return fmt.Sprintf("PR #%s%s was closed without merging, so it won't merge", c.Ref, where)
@@ -229,6 +235,15 @@ func (h Hold) Describe() string {
 		parts = append(parts, h.Until.UTC().Format("2 Jan 2006 15:04 UTC"))
 	}
 	return strings.Join(parts, ", or ")
+}
+
+// WaitDescription is what a Wait on the hold is for, for operator views:
+// its conditions in words, or its time alone.
+func (h Hold) WaitDescription() string {
+	if len(h.Conds) == 0 && h.Until != nil && !h.Cancel {
+		return extension.Clip("until "+h.Describe(), extension.MaxWaitDescription)
+	}
+	return extension.Clip(h.Describe(), extension.MaxWaitDescription)
 }
 
 // CondsText lists conditions in words.

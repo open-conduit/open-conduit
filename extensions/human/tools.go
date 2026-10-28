@@ -183,7 +183,8 @@ func (t *Tools) ask(ctx context.Context, a extension.Authority, in domain.Payloa
 	if err != nil {
 		return extension.WaitPlan{}, err
 	}
-	req := extension.WaitRequest{Match: domain.EventMatch{Types: []string{TypeAnswered}}}
+	// The question may be private: the description never repeats it.
+	req := extension.WaitRequest{Match: domain.EventMatch{Types: []string{TypeAnswered}}, Description: "a person's answer"}
 	if !rec.Deadline.IsZero() {
 		d := rec.Deadline
 		req.Timeout = &d

@@ -337,7 +337,7 @@ func (s *Server) listWaits(c *call) (int, any, error) {
 			if !match(q, "execution_id", string(wait.ExecutionID)) || !match(q, "state", string(wait.State)) || !match(q, "work_id", string(wait.WorkID)) {
 				continue
 			}
-			items = append(items, keyed{createdKey(wait.CreatedAt, wait.ID), toWait(wait)})
+			items = append(items, keyed{createdKey(wait.CreatedAt, wait.ID), toWait(wait, waitDue(tx, wait))})
 		}
 		return nil
 	})
@@ -351,13 +351,32 @@ func (s *Server) getWait(c *call) (int, any, error) {
 		return 0, nil, err
 	}
 	var wait domain.Wait
-	if err := s.read(c.ctx, func(tx storage.Tx) error { var e error; wait, e = tx.Wait(domain.ID(c.params[0])); return e }); err != nil {
+	var due time.Time
+	if err := s.read(c.ctx, func(tx storage.Tx) error {
+		var e error
+		wait, e = tx.Wait(domain.ID(c.params[0]))
+		due = waitDue(tx, wait)
+		return e
+	}); err != nil {
 		return 0, nil, err
 	}
 	if etag(c, wait.Revision) {
 		return 0, nil, nil
 	}
-	return 200, toWait(wait), nil
+	return 200, toWait(wait, due), nil
+}
+
+// waitDue is when a Wait's timeout fires: zero without a timer, or once
+// the timer has gone.
+func waitDue(tx storage.Tx, w domain.Wait) time.Time {
+	if w.TimeoutTimerID == "" {
+		return time.Time{}
+	}
+	t, err := tx.Timer(w.TimeoutTimerID)
+	if err != nil {
+		return time.Time{}
+	}
+	return t.FireAt
 }
 
 // ---- artifacts (logs/outputs) ----
@@ -874,11 +893,15 @@ func (s *Server) toolbeltCall(c *call) (int, any, error) {
 			} `json:"match"`
 			TimeoutSeconds int64  `json:"timeout_seconds"`
 			AfterSequence  string `json:"after_sequence"`
+			Description    string `json:"description"`
 		}
 		if err := strict(&w); err != nil {
 			return 0, nil, err
 		}
-		request := extension.WaitRequest{Match: domain.EventMatch{Types: w.Match.Types}}
+		if err := extension.ValidateWaitDescription(w.Description); err != nil {
+			return 0, nil, fail(400, "malformed", err.Error())
+		}
+		request := extension.WaitRequest{Match: domain.EventMatch{Types: w.Match.Types}, Description: w.Description}
 		for _, k := range w.Match.Keys {
 			request.Match.Keys = append(request.Match.Keys, *k.domain())
 		}
@@ -928,7 +951,9 @@ func (s *Server) toolbeltCall(c *call) (int, any, error) {
 		out["work"] = toWork(*result.Work)
 	}
 	if result.Wait != nil {
-		out["wait"] = toWait(*result.Wait)
+		var due time.Time
+		_ = s.read(c.ctx, func(tx storage.Tx) error { due = waitDue(tx, *result.Wait); return nil })
+		out["wait"] = toWait(*result.Wait, due)
 	}
 	if in.Operation == extension.ReadContext {
 		out["context"] = payload(result.Context)

@@ -156,3 +156,22 @@ func TestVerifyHMAC(t *testing.T) {
 		t.Fatal("hmac")
 	}
 }
+
+// An issue's Work says what it is: title, key, author and link.
+func TestRouteDisplay(t *testing.T) {
+	r := Route{Type: "linear"}
+	scope := scopeWith(t, "linear", `{"namespace":"linear/eng","scope":"eng","teams":["ENG"]}`)
+	tt := TypesOf("linear")
+	p := IssuePayload{Key: "ENG-12", Title: "Example widget is slow", Author: "example-user", URL: "https://linear.example/eng/issue/ENG-12", State: "open", Attrs: map[string][]string{"team": {"ENG"}}}
+	d, err := r.Match(context.Background(), extension.RouteInput{Event: event(t, tt.IssueOpen, tt.SchemaIssue, p, "issue/ENG-12"), Scope: scope})
+	if err != nil || !d.Match || d.Display == nil {
+		t.Fatalf("%+v %v", d, err)
+	}
+	want := domain.WorkDisplay{Title: "Example widget is slow", Ref: "ENG-12", Requester: "example-user", Links: []domain.Link{{Label: "Linear ENG-12", URL: p.URL}}}
+	if got := *d.Display; got.Title != want.Title || got.Ref != want.Ref || got.Requester != want.Requester || len(got.Links) != 1 || got.Links[0] != want.Links[0] {
+		t.Fatalf("display %+v", got)
+	}
+	if err := extension.ValidateDisplay(d.Display); err != nil {
+		t.Fatal(err)
+	}
+}

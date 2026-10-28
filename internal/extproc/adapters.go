@@ -129,6 +129,9 @@ func (r *Remote) RouteHandler(handler string) extension.RouteHandler {
 		if d.Match && d.Kind != "" && !r.ownKind(d.Kind) {
 			return extension.RouteDecision{}, protocol.Errorf(protocol.CodeUndeclared, "work kind not declared")
 		}
+		if err := extension.ValidateDisplay(d.Display); err != nil {
+			return extension.RouteDecision{}, protocol.Errorf(protocol.CodeInvalid, err.Error())
+		}
 		return d, nil
 	})
 }
@@ -230,6 +233,9 @@ func (r *Remote) Registration() extension.Registration {
 				var out protocol.WaitPlan
 				if err := r.p.Call(ctx, "operation.wait", params(ctx, a, in), &out); err != nil {
 					return extension.WaitPlan{}, err
+				}
+				if err := extension.ValidateWaitDescription(out.Wait.Description); err != nil {
+					return extension.WaitPlan{}, protocol.Errorf(protocol.CodeInvalid, err.Error())
 				}
 				return out.Extension(), nil
 			}

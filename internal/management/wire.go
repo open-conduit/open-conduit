@@ -28,9 +28,19 @@ type wireWork struct {
 	CorrelationKeys []wireKey    `json:"correlation_keys"`
 	Context         *wirePayload `json:"context,omitempty"`
 	ParentID        string       `json:"parent_id,omitempty"`
+	Display         *wireDisplay `json:"display,omitempty"`
 	Revision        string       `json:"revision"`
 	CreatedAt       string       `json:"created_at"`
 	UpdatedAt       string       `json:"updated_at"`
+}
+
+// wireDisplay is what a Work is, as its source said; views fall back to
+// the Work's own label when it is absent.
+type wireDisplay struct {
+	Title     string     `json:"title,omitempty"`
+	Ref       string     `json:"ref,omitempty"`
+	Requester string     `json:"requester,omitempty"`
+	Links     []wireLink `json:"links,omitempty"`
 }
 
 // wireEventRoute is an Event's routing explanation.
@@ -114,6 +124,8 @@ type wireWait struct {
 	TimeoutTimerID string    `json:"timeout_timer_id,omitempty"`
 	AfterSequence  string    `json:"after_sequence"`
 	WakeEventID    string    `json:"wake_event_id,omitempty"`
+	Description    string    `json:"description,omitempty"`
+	DueAt          string    `json:"due_at,omitempty"`
 	Revision       string    `json:"revision"`
 	CreatedAt      string    `json:"created_at,omitempty"`
 	UpdatedAt      string    `json:"updated_at,omitempty"`
@@ -218,7 +230,17 @@ func keys(ks []domain.CorrelationKey) []wireKey {
 	return out
 }
 func toWork(w domain.Work) wireWork {
-	return wireWork{ID: string(w.ID), Kind: w.Kind, ScopeID: string(w.ScopeID), State: string(w.State), CorrelationKeys: keys(w.CorrelationKeys), Context: payload(w.Context), ParentID: string(w.ParentID), Revision: u64(uint64(w.Revision)), CreatedAt: ts(w.CreatedAt), UpdatedAt: ts(w.UpdatedAt)}
+	return wireWork{ID: string(w.ID), Kind: w.Kind, ScopeID: string(w.ScopeID), State: string(w.State), CorrelationKeys: keys(w.CorrelationKeys), Context: payload(w.Context), ParentID: string(w.ParentID), Display: toDisplay(w.Display), Revision: u64(uint64(w.Revision)), CreatedAt: ts(w.CreatedAt), UpdatedAt: ts(w.UpdatedAt)}
+}
+func toDisplay(d *domain.WorkDisplay) *wireDisplay {
+	if d == nil {
+		return nil
+	}
+	out := &wireDisplay{Title: d.Title, Ref: d.Ref, Requester: d.Requester}
+	for _, l := range d.Links {
+		out.Links = append(out.Links, wireLink{l.Label, l.URL})
+	}
+	return out
 }
 func toEvent(a domain.AcceptedEvent, scope domain.ID) wireEvent {
 	e := a.Event
@@ -241,9 +263,17 @@ func toExecution(x domain.Execution, scope domain.ID) wireExecution {
 	}
 	return out
 }
-func toWait(w domain.Wait) wireWait {
+
+// toWait renders a Wait; due is its timeout timer's fire time, zero when
+// it has none. A timed Wait its owner did not describe is described by its
+// due time.
+func toWait(w domain.Wait, due time.Time) wireWait {
 	types := append([]string{}, w.Match.Types...)
-	return wireWait{ID: string(w.ID), WorkID: string(w.WorkID), ExecutionID: string(w.ExecutionID), State: string(w.State), Match: wireMatch{Keys: keys(w.Match.Keys), Types: types}, TimeoutTimerID: string(w.TimeoutTimerID), AfterSequence: u64(w.AfterSequence), WakeEventID: string(w.WakeEventID), Revision: u64(uint64(w.Revision)), CreatedAt: ts(w.CreatedAt), UpdatedAt: ts(w.UpdatedAt)}
+	out := wireWait{ID: string(w.ID), WorkID: string(w.WorkID), ExecutionID: string(w.ExecutionID), State: string(w.State), Match: wireMatch{Keys: keys(w.Match.Keys), Types: types}, TimeoutTimerID: string(w.TimeoutTimerID), AfterSequence: u64(w.AfterSequence), WakeEventID: string(w.WakeEventID), Description: w.Description, DueAt: ts(due), Revision: u64(uint64(w.Revision)), CreatedAt: ts(w.CreatedAt), UpdatedAt: ts(w.UpdatedAt)}
+	if out.Description == "" && !due.IsZero() {
+		out.Description = "until " + due.UTC().Format(time.RFC3339)
+	}
+	return out
 }
 func toScope(s domain.Scope, enabled bool) wireScope {
 	out := wireScope{ID: string(s.ID), Name: s.Name, ParentID: string(s.ParentID), Enabled: enabled, Bindings: []wireBinding{}, Routes: []wireRoute{}, SecretRefs: map[string]string{}, Revision: u64(uint64(s.Revision)), CreatedAt: ts(s.CreatedAt), UpdatedAt: ts(s.UpdatedAt)}

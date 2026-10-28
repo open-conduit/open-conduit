@@ -93,11 +93,11 @@ All paths below are under `/v1`. A success is `{ "data": ... }`; list data is `{
 | --- | --- |
 | `GET /health` | State `starting/ready/degraded/stopping`, version, instance ID, committed config generation, database/reconcile/worker readiness and safe component diagnostics. Auth required even when degraded. |
 | `GET /scopes`, `/scopes/{id}` | Effective scope plus enabled status, limits, route/binding decisions and redacted config. List accepts `parent_id`, `enabled`. |
-| `GET /work`, `/work/{id}` | Primitive Work and safe context, plus its operator `hold` and extension `annotations`; list accepts `scope_id`, `state`, `kind`, `parent_id`. |
+| `GET /work`, `/work/{id}` | Primitive Work and safe context with its source's `display` (title, ref, requester, links) when it has one, plus its operator `hold` and extension `annotations`; list accepts `scope_id`, `state`, `kind`, `parent_id`. |
 | `GET /events`, `/events/{id}` | Accepted Event, acceptance sequence, routing checkpoint/result/generation; list accepts `scope_id`, `work_id`, `type`, `after_sequence`. |
 | `GET /events/{id}/route` | How an accepted Event was routed: its disposition and the durable route decision (route, binding, generation, policy, reason). |
 | `GET /executions`, `/executions/{id}` | Shared attempt record, trigger/wake links, lease epoch/state (no token), outcome/usage; list accepts `scope_id`, `work_id`, `state`. Never a separate job history. |
-| `GET /waits`, `/waits/{id}` | Predicate/boundary, timer/winner link and state; list accepts `scope_id`, `work_id`, `execution_id`, `state`. |
+| `GET /waits`, `/waits/{id}` | Predicate/boundary, timer/winner link and state, with its owner's `description` and its timer's `due_at` ([wait descriptions](../extension-protocol/#work-display-and-wait-descriptions)); list accepts `scope_id`, `work_id`, `execution_id`, `state`. |
 | `GET /runs`, `/runs/{id}` | Unified history: one record per attempt for every executor, with trigger/current trigger, executor/generation, timeout, usage, retry, retention and artifacts. List accepts `scope_id`, `work_id`, `state`, `executor_binding`, `executor`, `work_kind`, `outcome`. |
 | `GET /runs/{id}/live` | A running run's outputs so far (`tail` bytes each) from its executor's optional `LiveExecutor`; `409 not_live` once it has ended. |
 | `GET /doctor` | Checks (`ok/info/warn/fail` with safe codes): storage, leases, resource holds, retention, reconcile lag, non-re-derivable families, config, bindings, connections, pinned executors and extension checks. `check_secrets=true` explicitly resolves references and reports names and codes only, and also runs extension deep checks (for example GitHub credential verification). |
