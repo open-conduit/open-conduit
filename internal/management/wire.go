@@ -136,6 +136,37 @@ type wireRoute struct {
 	Binding      string `json:"binding"`
 	ActivePolicy string `json:"active_policy"`
 }
+type wireConfig struct {
+	Generation  string            `json:"generation"`
+	Hash        string            `json:"hash"`
+	Connections []wireConnection  `json:"connections"`
+	Scopes      []wireConfigScope `json:"scopes"`
+}
+type wireConnection struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+}
+type wireConfigScope struct {
+	ID         string                `json:"id"`
+	Name       string                `json:"name"`
+	ParentID   string                `json:"parent_id,omitempty"`
+	Enabled    bool                  `json:"enabled"`
+	Extensions []wireConfigExtension `json:"extensions"`
+	Routes     []wireRoute           `json:"routes"`
+	Bindings   []wireConfigBinding   `json:"bindings"`
+}
+type wireConfigExtension struct {
+	Name       string `json:"name"`
+	Type       string `json:"type"`
+	Connection string `json:"connection,omitempty"`
+	Ingress    bool   `json:"ingress"`
+}
+type wireConfigBinding struct {
+	Name       string `json:"name"`
+	Executor   string `json:"executor"`
+	Connection string `json:"connection,omitempty"`
+	Resource   string `json:"resource,omitempty"`
+}
 type wireScope struct {
 	ID         string            `json:"id"`
 	Name       string            `json:"name"`

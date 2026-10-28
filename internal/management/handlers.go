@@ -633,6 +633,43 @@ func (s *Server) wakeWork(c *call) (int, any, error) {
 	return 202, map[string]any{"event": toEvent(accepted, scope), "matched": matched}, nil
 }
 
+// config is the active generation's wiring: each scope's extensions, routes
+// and bindings by name and type, and the connections they use. It carries
+// no opaque config and no secret references.
+func (s *Server) config(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	snap, generation := s.o.Config.Current()
+	reg := s.o.Config.Registry()
+	out := wireConfig{Generation: u64(generation), Hash: snap.Hash, Connections: []wireConnection{}, Scopes: []wireConfigScope{}}
+	for _, conn := range snap.Connections {
+		out.Connections = append(out.Connections, wireConnection{ID: conn.ID, Type: conn.Type})
+	}
+	for _, id := range snap.Order {
+		e := snap.Scopes[id]
+		if e == nil {
+			continue
+		}
+		sc := wireConfigScope{ID: string(e.ID), Name: e.Name, ParentID: string(e.ParentID), Enabled: e.Enabled, Extensions: []wireConfigExtension{}, Routes: []wireRoute{}, Bindings: []wireConfigBinding{}}
+		for _, x := range e.Extensions {
+			sc.Extensions = append(sc.Extensions, wireConfigExtension{Name: x.Name, Type: x.Type, Connection: x.Connection, Ingress: reg.Extensions[x.Type].Ingress})
+		}
+		for _, r := range e.Routes {
+			sc.Routes = append(sc.Routes, wireRoute{r.Name, r.Handler, r.Binding, r.ActivePolicy})
+		}
+		for _, b := range e.Bindings {
+			wb := wireConfigBinding{Name: b.Name, Executor: b.Executor, Connection: b.Connection}
+			if b.Resource != nil {
+				wb.Resource = b.Resource.Provider
+			}
+			sc.Bindings = append(sc.Bindings, wb)
+		}
+		out.Scopes = append(out.Scopes, sc)
+	}
+	return 200, out, nil
+}
+
 func (s *Server) validateConfig(c *call) (int, any, error) {
 	var in struct {
 		Config json.RawMessage `json:"config"`
