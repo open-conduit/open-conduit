@@ -60,6 +60,13 @@ type managementHarness struct {
 
 func newManagementHarness(t *testing.T) *managementHarness {
 	t.Helper()
+	return newManagementHarnessWith(t, managementConfig, nil)
+}
+
+// newManagementHarnessWith starts the harness on cfg, with registry
+// additions made by register (nil for none).
+func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Registry)) *managementHarness {
+	t.Helper()
 	ctx := context.Background()
 	state, err := os.MkdirTemp("/tmp", "oc-")
 	if err != nil {
@@ -94,10 +101,13 @@ func newManagementHarness(t *testing.T) *managementHarness {
 		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
 	}
 	h.configPath = filepath.Join(state, "config", "config.json")
-	if err = config.SaveAtomic(h.configPath, []byte(managementConfig)); err != nil {
+	if err = config.SaveAtomic(h.configPath, []byte(cfg)); err != nil {
 		t.Fatal(err)
 	}
 	registry := config.Registry{Executors: map[string]extension.Executor{"fixture": h.executor}, Handlers: map[string]bool{"manual": true}}
+	if register != nil {
+		register(&registry)
+	}
 	h.configs, err = management.OpenConfig(ctx, db, h.clock.Now, registry, h.configPath)
 	if err != nil {
 		t.Fatal(err)

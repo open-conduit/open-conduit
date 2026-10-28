@@ -147,14 +147,15 @@ type wireConnection struct {
 	Type string `json:"type"`
 }
 type wireConfigScope struct {
-	ID         string                `json:"id"`
-	Name       string                `json:"name"`
-	ParentID   string                `json:"parent_id,omitempty"`
-	Enabled    bool                  `json:"enabled"`
-	Source     string                `json:"source,omitempty"`
-	Extensions []wireConfigExtension `json:"extensions"`
-	Routes     []wireConfigRoute     `json:"routes"`
-	Bindings   []wireConfigBinding   `json:"bindings"`
+	ID            string                `json:"id"`
+	Name          string                `json:"name"`
+	ParentID      string                `json:"parent_id,omitempty"`
+	Enabled       bool                  `json:"enabled"`
+	Source        string                `json:"source,omitempty"`
+	Authorization wireAuthorization     `json:"authorization"`
+	Extensions    []wireConfigExtension `json:"extensions"`
+	Routes        []wireConfigRoute     `json:"routes"`
+	Bindings      []wireConfigBinding   `json:"bindings"`
 }
 type wireConfigRoute struct {
 	wireRoute
@@ -170,12 +171,24 @@ type wireConfigExtension struct {
 	Connection string      `json:"connection,omitempty"`
 	Ingress    bool        `json:"ingress"`
 	Entries    []wireEntry `json:"entries,omitempty"`
+	Settings   []wireEntry `json:"settings,omitempty"`
+}
+
+// wireAuthorization is a scope's effective authorization ceiling.
+type wireAuthorization struct {
+	Connections []string `json:"connections"`
+	Operations  []string `json:"operations"`
+	ReadScopes  []string `json:"read_scopes"`
 }
 type wireConfigBinding struct {
-	Name       string `json:"name"`
-	Executor   string `json:"executor"`
-	Connection string `json:"connection,omitempty"`
-	Resource   string `json:"resource,omitempty"`
+	Name             string       `json:"name"`
+	Executor         string       `json:"executor"`
+	Connection       string       `json:"connection,omitempty"`
+	Requires         wireRequires `json:"requires"`
+	Operations       []string     `json:"operations"`
+	Settings         []wireEntry  `json:"settings,omitempty"`
+	Resource         string       `json:"resource,omitempty"`
+	ResourceSettings []wireEntry  `json:"resource_settings,omitempty"`
 }
 type wireScope struct {
 	ID         string            `json:"id"`

@@ -42,6 +42,10 @@ type Work struct {
 	// Hold and Annotations are present on GET /work/{id} only.
 	Hold        *Hold        `json:"hold,omitempty"`
 	Annotations []Annotation `json:"annotations,omitempty"`
+	// Actions and Panels are present on a list asked for them
+	// (WorksWithActions).
+	Actions []Action `json:"actions,omitempty"`
+	Panels  []Panel  `json:"panels,omitempty"`
 }
 
 // Hold is an operator scheduling hold on Work.
@@ -74,6 +78,8 @@ type Event struct {
 	Routed         bool     `json:"routed"`
 	RoutedWorkID   string   `json:"routed_work_id,omitempty"`
 	Disposition    string   `json:"disposition,omitempty"`
+	// Route is present on a list asked for it (EventsWithRoutes).
+	Route *EventRoute `json:"route,omitempty"`
 }
 type Outcome struct {
 	Kind    string   `json:"kind"`
@@ -377,6 +383,29 @@ func (c *Client) Work(ctx context.Context, id string) (Work, error) {
 }
 func (c *Client) Events(ctx context.Context, q url.Values) (Page[Event], error) {
 	return list[Event](c, ctx, "events", q)
+}
+
+// WorksWithActions lists Work as Works does, each with the actions and
+// panels available on it now, as Actions and Panels return them. A page
+// holds at most 50.
+func (c *Client) WorksWithActions(ctx context.Context, q url.Values) (Page[Work], error) {
+	return list[Work](c, ctx, "work", withParam(q, "actions,panels"))
+}
+
+// EventsWithRoutes lists Events as Events does, each with its routing
+// explanation (Event.Route) as EventRoute returns it. Give work_id in q for
+// one Work's Events.
+func (c *Client) EventsWithRoutes(ctx context.Context, q url.Values) (Page[Event], error) {
+	return list[Event](c, ctx, "events", withParam(q, "route"))
+}
+
+func withParam(q url.Values, v string) url.Values {
+	out := url.Values{}
+	for k, vs := range q {
+		out[k] = vs
+	}
+	out.Set("with", v)
+	return out
 }
 func (c *Client) Event(ctx context.Context, id string) (Event, error) {
 	return get[Event](c, ctx, "events/"+esc(id))
@@ -700,10 +729,12 @@ type ConfigScope struct {
 	Enabled  bool   `json:"enabled"`
 	// Source is the included folder the scope comes from, or "" for the
 	// config file's own scopes.
-	Source     string            `json:"source,omitempty"`
-	Extensions []ConfigExtension `json:"extensions"`
-	Routes     []ConfigRoute     `json:"routes"`
-	Bindings   []ConfigBinding   `json:"bindings"`
+	Source string `json:"source,omitempty"`
+	// Authorization is the scope's effective ceiling.
+	Authorization ConfigAuthorization `json:"authorization"`
+	Extensions    []ConfigExtension   `json:"extensions"`
+	Routes        []ConfigRoute       `json:"routes"`
+	Bindings      []ConfigBinding     `json:"bindings"`
 }
 
 // ConfigRoute is a route with, when its handler says, which events it takes.
@@ -719,6 +750,16 @@ type ConfigExtension struct {
 	Connection string        `json:"connection,omitempty"`
 	Ingress    bool          `json:"ingress"`
 	Entries    []ConfigEntry `json:"entries,omitempty"`
+	// Settings summarises the entry's config, without secrets.
+	Settings []ConfigEntry `json:"settings,omitempty"`
+}
+
+// ConfigAuthorization is a scope's authorization ceiling: the connections,
+// toolbelt operations and other scopes its bindings may be granted.
+type ConfigAuthorization struct {
+	Connections []string `json:"connections"`
+	Operations  []string `json:"operations"`
+	ReadScopes  []string `json:"read_scopes"`
 }
 
 // ConfigEntry is one thing an extension entry sets up, such as a scheduled
@@ -728,12 +769,19 @@ type ConfigEntry struct {
 	Detail string `json:"detail,omitempty"`
 }
 
-// ConfigBinding names an executor and the connection and resource it uses.
+// ConfigBinding names an executor and the connection and resource it uses,
+// the capabilities it requires and the operations it is granted, with a
+// summary of its executor config (Settings) and resource config
+// (ResourceSettings), without secrets.
 type ConfigBinding struct {
-	Name       string `json:"name"`
-	Executor   string `json:"executor"`
-	Connection string `json:"connection,omitempty"`
-	Resource   string `json:"resource,omitempty"`
+	Name             string        `json:"name"`
+	Executor         string        `json:"executor"`
+	Connection       string        `json:"connection,omitempty"`
+	Requires         Requires      `json:"requires"`
+	Operations       []string      `json:"operations"`
+	Settings         []ConfigEntry `json:"settings,omitempty"`
+	Resource         string        `json:"resource,omitempty"`
+	ResourceSettings []ConfigEntry `json:"resource_settings,omitempty"`
 }
 
 func (c *Client) Config(ctx context.Context) (Config, error) {

@@ -94,11 +94,20 @@ func (s *Server) getScope(c *call) (int, any, error) {
 // ---- work ----
 
 func (s *Server) listWork(c *call) (int, any, error) {
-	q, err := s.query(c, "work", "scope_id", "state", "kind", "parent_id")
+	q, err := s.query(c, "work", "scope_id", "state", "kind", "parent_id", "with")
 	if err != nil {
 		return 0, nil, err
 	}
+	ask, err := with(q, "actions", "panels")
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(ask) > 0 && q.limit > maxWithLimit {
+		return 0, nil, fail(400, "invalid_filter", "limit must be 1-50 with actions or panels")
+	}
 	var items []keyed
+	byID := map[string]domain.Work{}
+	scopes := map[domain.ID]domain.Scope{}
 	err = s.read(c.ctx, func(tx storage.Tx) error {
 		works, e := tx.ListWorks()
 		for _, w := range works {
@@ -106,13 +115,26 @@ func (s *Server) listWork(c *call) (int, any, error) {
 				continue
 			}
 			items = append(items, keyed{createdKey(w.CreatedAt, w.ID), toWork(w)})
+			if len(ask) == 0 {
+				continue
+			}
+			byID[string(w.ID)] = w
+			if _, ok := scopes[w.ScopeID]; !ok {
+				if sc, e := tx.Scope(w.ScopeID); e == nil {
+					scopes[w.ScopeID] = sc
+				}
+			}
 		}
 		return e
 	})
 	if err != nil {
 		return 0, nil, err
 	}
-	return 200, s.page("work", q, s.nowBound(), items), nil
+	out := s.page("work", q, s.nowBound(), items)
+	if len(ask) > 0 {
+		s.decorate(c.ctx, out["items"].([]any), ask, byID, scopes)
+	}
+	return 200, out, nil
 }
 func match(q listQuery, name, value string) bool {
 	want, ok := q.filters[name]
@@ -139,7 +161,11 @@ func (s *Server) getWork(c *call) (int, any, error) {
 // ---- events ----
 
 func (s *Server) listEvents(c *call) (int, any, error) {
-	q, err := s.query(c, "events", "scope_id", "work_id", "type", "after_sequence")
+	q, err := s.query(c, "events", "scope_id", "work_id", "type", "after_sequence", "with")
+	if err != nil {
+		return 0, nil, err
+	}
+	ask, err := with(q, "route")
 	if err != nil {
 		return 0, nil, err
 	}
@@ -189,7 +215,15 @@ func (s *Server) listEvents(c *call) (int, any, error) {
 					next = s.sign(cursor{Endpoint: "events", Filters: q.norm, Bound: u64(bound), Last: u64(a.Sequence - 1), Expires: s.o.Now().Add(15 * time.Minute).Unix()})
 					return nil
 				}
-				out = append(out, toEvent(a, scope))
+				if !ask["route"] {
+					out = append(out, toEvent(a, scope))
+					continue
+				}
+				r, e := routeOf(tx, a, scope)
+				if e != nil {
+					return e
+				}
+				out = append(out, wireEventWith{wireEvent: toEvent(a, scope), Route: &r})
 			}
 		}
 	})
@@ -234,23 +268,30 @@ func (s *Server) eventRoute(c *call) (int, any, error) {
 		if e != nil {
 			return e
 		}
-		rec, ok, e := runtime.RouteDecisionInTx(tx, a.Event.ID)
-		if e != nil {
-			return e
-		}
-		out = wireEventRoute{EventID: string(a.Event.ID), Type: a.Event.Type, ScopeID: string(scope), Routed: a.Routed, Disposition: a.Disposition, RoutedWorkID: string(a.RoutedWorkID)}
-		if ok {
-			out.Route, out.Binding, out.Generation, out.Policy, out.Reason = rec.Route, rec.Binding, rec.Generation, rec.Policy, rec.Reason
-			if out.RoutedWorkID == "" {
-				out.RoutedWorkID = string(rec.WorkID)
-			}
-		}
-		return nil
+		out, e = routeOf(tx, a, scope)
+		return e
 	})
 	if err != nil {
 		return 0, nil, err
 	}
 	return 200, out, nil
+}
+
+// routeOf is a's routing explanation, for GET /events/{id}/route and
+// GET /events?with=route alike.
+func routeOf(tx storage.Tx, a domain.AcceptedEvent, scope domain.ID) (wireEventRoute, error) {
+	rec, ok, err := runtime.RouteDecisionInTx(tx, a.Event.ID)
+	if err != nil {
+		return wireEventRoute{}, err
+	}
+	out := wireEventRoute{EventID: string(a.Event.ID), Type: a.Event.Type, ScopeID: string(scope), Routed: a.Routed, Disposition: a.Disposition, RoutedWorkID: string(a.RoutedWorkID)}
+	if ok {
+		out.Route, out.Binding, out.Generation, out.Policy, out.Reason = rec.Route, rec.Binding, rec.Generation, rec.Policy, rec.Reason
+		if out.RoutedWorkID == "" {
+			out.RoutedWorkID = string(rec.WorkID)
+		}
+	}
+	return out, nil
 }
 
 // ---- executions ----
@@ -633,16 +674,19 @@ func (s *Server) wakeWork(c *call) (int, any, error) {
 	return 202, map[string]any{"event": toEvent(accepted, scope), "matched": matched}, nil
 }
 
-// config is the active generation's wiring: each scope's extensions, routes
-// and bindings by name and type, and the connections they use, with what
-// an extension or route handler says its config sets up (a schedule's
-// jobs). It carries no opaque config and no secret references.
+// config is the active generation's wiring: each scope's authorization
+// ceiling, extensions, routes and bindings by name and type, and the
+// connections they use, with what an extension or route handler says its
+// config sets up (a schedule's jobs) and a summary of each extension's,
+// executor's and resource's config. It carries no opaque config and no
+// secret reference text.
 func (s *Server) config(c *call) (int, any, error) {
 	if err := noQuery(c); err != nil {
 		return 0, nil, err
 	}
 	snap, generation := s.o.Config.Current()
 	reg := s.o.Config.Registry()
+	refs := secretRefs(snap)
 	out := wireConfig{Generation: u64(generation), Hash: snap.Hash, Connections: []wireConnection{}, Scopes: []wireConfigScope{}}
 	for _, conn := range snap.Connections {
 		out.Connections = append(out.Connections, wireConnection{ID: conn.ID, Type: conn.Type})
@@ -652,10 +696,13 @@ func (s *Server) config(c *call) (int, any, error) {
 		if e == nil {
 			continue
 		}
-		sc := wireConfigScope{ID: string(e.ID), Name: e.Name, ParentID: string(e.ParentID), Enabled: e.Enabled, Source: e.Source, Extensions: []wireConfigExtension{}, Routes: []wireConfigRoute{}, Bindings: []wireConfigBinding{}}
+		a := e.Authorization
+		sc := wireConfigScope{ID: string(e.ID), Name: e.Name, ParentID: string(e.ParentID), Enabled: e.Enabled, Source: e.Source,
+			Authorization: wireAuthorization{Connections: nonNil(a.Connections), Operations: nonNil(a.Operations), ReadScopes: nonNil(a.ReadScopes)},
+			Extensions:    []wireConfigExtension{}, Routes: []wireConfigRoute{}, Bindings: []wireConfigBinding{}}
 		for _, x := range e.Extensions {
 			t := reg.Extensions[x.Type]
-			wx := wireConfigExtension{Name: x.Name, Type: x.Type, Connection: x.Connection, Ingress: t.Ingress}
+			wx := wireConfigExtension{Name: x.Name, Type: x.Type, Connection: x.Connection, Ingress: t.Ingress, Settings: summarize(x.Config, refs)}
 			if t.Describe != nil {
 				for _, en := range t.Describe(x.Config) {
 					wx.Entries = append(wx.Entries, wireEntry{en.Name, en.Detail})
@@ -671,9 +718,11 @@ func (s *Server) config(c *call) (int, any, error) {
 			sc.Routes = append(sc.Routes, wr)
 		}
 		for _, b := range e.Bindings {
-			wb := wireConfigBinding{Name: b.Name, Executor: b.Executor, Connection: b.Connection}
+			r := b.Requires
+			wb := wireConfigBinding{Name: b.Name, Executor: b.Executor, Connection: b.Connection, Requires: wireRequires{r.Interrupt, r.Inject, r.Resume, r.Workspace, r.Toolbelt}, Operations: nonNil(b.Operations), Settings: summarize(b.Config, refs)}
 			if b.Resource != nil {
 				wb.Resource = b.Resource.Provider
+				wb.ResourceSettings = summarize(b.Resource.Config, refs)
 			}
 			sc.Bindings = append(sc.Bindings, wb)
 		}
