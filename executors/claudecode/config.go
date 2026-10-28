@@ -78,11 +78,21 @@ type Config struct {
 	SecretEnv map[string]string `json:"secret_env,omitempty"`
 	// ExtraArgs are added to every claude invocation.
 	ExtraArgs []string `json:"extra_args,omitempty"`
+	// BuiltinTools, when set, are the only built-in tools Claude Code offers
+	// (passed as --tools). An empty list turns them all off, leaving the
+	// agent only its MCP toolbelt. Unset keeps Claude Code's default set.
+	BuiltinTools *[]string `json:"builtin_tools,omitempty"`
+	// Models are models a Work may choose for its turns through a "model"
+	// field in its context (for example one an operator picked when starting
+	// it). A Work that names none, or one not listed, uses Model.
+	Models []string `json:"models,omitempty"`
 }
 
 var (
 	envName   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 	skillName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+	toolName  = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_]*$`)
+	modelName = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._:\[\]-]*$`)
 	// ErrConfig is returned for a binding config the executor rejects.
 	// Messages never echo configured values.
 	ErrConfig = errors.New("invalid claude code binding config")
@@ -114,7 +124,7 @@ func ParseConfig(data []byte) (Config, error) {
 			return Config{}, configError("trailing data after config object")
 		}
 	}
-	strs := append([]string{c.Binary, c.Model, c.PermissionMode, c.Playbook, c.PluginDir, c.Args, c.StatusSchema, c.Branch, c.WorkspaceMode, c.Dir}, c.ExtraArgs...)
+	strs := append(append([]string{c.Binary, c.Model, c.PermissionMode, c.Playbook, c.PluginDir, c.Args, c.StatusSchema, c.Branch, c.WorkspaceMode, c.Dir}, c.ExtraArgs...), c.Models...)
 	for _, s := range strs {
 		if strings.ContainsRune(s, 0) {
 			return Config{}, configError("strings must not contain NUL")
@@ -193,11 +203,49 @@ func ParseConfig(data []byte) (Config, error) {
 		if a == "--mcp-config" || strings.HasPrefix(a, "--mcp-config=") || a == "--session-id" || a == "--resume" || a == "-p" || a == "--print" {
 			return Config{}, configError("extra_args must not override the executor's own session, print or toolbelt flags")
 		}
+		if c.BuiltinTools != nil && (a == "--tools" || strings.HasPrefix(a, "--tools=")) {
+			return Config{}, configError("extra_args must not override builtin_tools")
+		}
+	}
+	if c.BuiltinTools != nil {
+		for _, t := range *c.BuiltinTools {
+			if !toolName.MatchString(t) {
+				return Config{}, configError("builtin_tools must name Claude Code tools, such as Read")
+			}
+		}
+	}
+	for _, m := range c.Models {
+		if !modelName.MatchString(m) {
+			return Config{}, configError("models must be model aliases or IDs")
+		}
 	}
 	return c, nil
 }
 
 func (c Config) structured() bool { return c.Structured == nil || *c.Structured }
+
+// model is the model for w's turns: the one its context names when the
+// binding lists it in models, else the binding's model.
+func (c Config) model(w domain.Work) string {
+	if len(c.Models) == 0 || len(w.Context.Data) == 0 {
+		return c.Model
+	}
+	var ctx struct {
+		Model string `json:"model"`
+	}
+	if json.Unmarshal(w.Context.Data, &ctx) == nil && slices.Contains(c.Models, ctx.Model) {
+		return ctx.Model
+	}
+	return c.Model
+}
+
+// toolArgs are the --tools flag for builtin_tools, if set.
+func (c Config) toolArgs() []string {
+	if c.BuiltinTools == nil {
+		return nil
+	}
+	return []string{"--tools", strings.Join(*c.BuiltinTools, ",")}
+}
 
 // secretVariable is the environment name for one selected secret.
 func (c Config) secretVariable(secret string) string {

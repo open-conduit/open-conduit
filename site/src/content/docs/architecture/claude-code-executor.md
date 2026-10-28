@@ -162,7 +162,9 @@ The config is strict and validated at load. Every field is optional:
 | `handoff_minutes` | How long after a turn the session counts as cold (default 55). |
 | `cold_turns` | What a cold turn does: `handoff` (default) or `resume`. `handoff_share`, the removed experiment's setting, is ignored with a `config check` warning for one release, then rejected. |
 | `env`, `pass_env`, `secret_env` | The environment. |
-| `extra_args` | Extra arguments. These may not override `-p`, the session or the MCP flags. |
+| `extra_args` | Extra arguments. These may not override `-p`, the session or the MCP flags, nor `--tools` when `builtin_tools` is set. |
+| `builtin_tools` | The only built-in tools Claude Code offers, passed as `--tools`. An empty list turns them all off, so the agent has only its MCP toolbelt: no shell, file access or web. Unset keeps Claude Code's default set. Attaching to the session keeps the same limit. |
+| `models` | Models a Work may pick for its turns through `model` in its context, for example one an operator chose when starting it. A Work that names none, or one not listed, uses `model`. |
 
 ## Verification
 

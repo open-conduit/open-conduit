@@ -681,6 +681,45 @@ func TestDirRunsSessionsInTheFolder(t *testing.T) {
 	}
 }
 
+// TestBuiltinToolsAndModels: builtin_tools passes --tools (an empty list
+// turns every built-in tool off) and may not be overridden by extra_args;
+// a Work's context picks one of the binding's models, and anything else
+// falls back to the binding's model.
+func TestBuiltinToolsAndModels(t *testing.T) {
+	h := newHarness(t)
+	h.mode("review")
+	e := h.executor()
+	for _, bad := range []string{`{"builtin_tools":["Bash;rm"]}`, `{"builtin_tools":[],"extra_args":["--tools","Bash"]}`, `{"models":["a b"]}`} {
+		if err := e.ValidateConfig(json.RawMessage(bad), nil); !errors.Is(err, claudecode.ErrConfig) {
+			t.Errorf("%s accepted: %v", bad, err)
+		}
+	}
+	cfg := map[string]any{"builtin_tools": []string{}, "model": "opus", "models": []string{"opus", "sonnet"}}
+	for i, c := range []struct{ context, want string }{{`{"model":"sonnet"}`, "sonnet"}, {`{"model":"haiku"}`, "opus"}, {``, "opus"}} {
+		work := "work/m" + strconv.Itoa(i)
+		r, _ := h.request(work, "exec-"+work, 1, cfg)
+		r.Work.Context = domain.Payload{Data: json.RawMessage(c.context)}
+		if res := h.run(e, r); res.Outcome.Kind != domain.OutcomeHandoff {
+			t.Fatalf("%s: outcome %+v", work, res.Outcome)
+		}
+		models, _ := os.ReadFile(filepath.Join(h.fake, "models"))
+		lines := strings.Split(strings.TrimSpace(string(models)), "\n")
+		if got := lines[len(lines)-1]; got != c.want {
+			t.Errorf("context %q ran on %q, want %q", c.context, got, c.want)
+		}
+	}
+	for _, inv := range h.invocations() {
+		if !strings.Contains(inv, " tools=[] ") {
+			t.Fatalf("built-in tools not turned off: %q", inv)
+		}
+	}
+	r, _ := h.request("work/default", "exec-default", 1, nil)
+	h.run(e, r)
+	if inv := h.invocations(); !strings.Contains(inv[len(inv)-1], " tools=- ") {
+		t.Fatalf("a binding without builtin_tools passed --tools: %q", inv[len(inv)-1])
+	}
+}
+
 // TestFolderConfig: a binding from an included folder runs in that folder
 // unless it has a resource or its own dir, and its relative paths resolve
 // against the folder.

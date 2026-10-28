@@ -93,7 +93,7 @@ func Adapters() []cli.Adapter {
 			Kinds: []string{"executor"},
 			Binding: []cli.Field{def("binary", "claude", ""), f("model", ""), def("permission_mode", "bypassPermissions", ""), def("playbook", "work-issue", "work-tracker-issue for Linear/Jira"),
 				f("plugin_dir", ""), def("args", "{number}", "{key} for Linear/Jira"), def("status_schema", "core.turn.v1", ""), f("branch", "agent/issue-{number}; agent/{key} for trackers"),
-				f("workspace_mode", ""), f("dir", "a folder a workspace-free binding runs in, as-is"), f("handoff_minutes", ""), opt("cold_turns", "handoff", []string{"handoff", "resume"}, "what a turn does once the session is handoff_minutes old"), f("env", ""), f("pass_env", ""), f("secret_env", ""), f("extra_args", "")}},
+				f("workspace_mode", ""), f("dir", "a folder a workspace-free binding runs in, as-is"), f("handoff_minutes", ""), opt("cold_turns", "handoff", []string{"handoff", "resume"}, "what a turn does once the session is handoff_minutes old"), f("env", ""), f("pass_env", ""), f("secret_env", ""), f("extra_args", ""), f("builtin_tools", "the only built-in tools offered; [] turns them all off"), f("models", "models a Work may pick with model in its context")}},
 		{Type: "shell", Title: "Shell", Description: "Runs a command as a detached, adoptable process with the os CLI toolbelt.",
 			Kinds:   []string{"executor"},
 			Binding: []cli.Field{f("command", "a shell command"), f("argv", "or an argument vector"), f("dir", ""), f("env", ""), f("secret_env", ""), f("timeout_seconds", "")}},
