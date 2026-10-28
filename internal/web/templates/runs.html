@@ -1,3 +1,204 @@
-{{define "content"}}
-<div class="page"><header class="page-head"><h1>Runs</h1></header></div>
+{{define "scripts"}}<script src="/static/runs.js" defer></script>{{end}}
+
+{{define "content"}}{{$d := .Data}}{{$p := .Page}}
+{{- if $d.Fresh}}{{template "fresh"}}{{else}}
+<div class="page runs">
+  <header class="page-head">
+    <div>
+      <h1>Runs</h1>
+      <p class="page-sub">
+        {{- if eq $d.Total 0 -}}
+        No work yet. Watching {{plural $d.Watching "scope"}}; new issues, threads and schedule firings appear here.
+        {{- else -}}
+        {{$d.Total}} pieces of work across {{plural $d.Scopes "scope"}}.
+        {{- if $d.Attention}} <a href="/attention" class="sub-signal">{{$d.Attention}} need you</a>{{end}}
+        {{- if and $d.Attention $d.Running}},{{end}}
+        {{- if $d.Running}} {{$d.Running}} running now{{end}}
+        {{- if or $d.Attention $d.Running}}.{{end}}
+        {{- end}}
+      </p>
+    </div>
+  </header>
+
+  <nav class="rail" aria-label="Filter by state">
+    {{- range $d.Rail}}
+    <a class="rail-cell{{if .On}} is-on{{end}}{{if .Signal}} is-signal{{end}}" href="{{.Href}}"{{if .On}} aria-current="true"{{end}}>
+      <span class="rail-n">{{.N}}</span>
+      <span class="rail-label">{{.Label}}</span>
+      <span class="rail-blurb">{{.Blurb}}</span>
+    </a>
+    {{- end}}
+  </nav>
+  {{- if eq $d.Query.G "waiting"}}
+  <nav class="subrail" aria-label="Waiting for">
+    <span class="subrail-lead">Waiting</span>
+    <a class="{{if $d.SubAny.On}}is-on{{end}}" href="{{$d.SubAny.Href}}"{{if $d.SubAny.On}} aria-current="true"{{end}}>{{$d.SubAny.Label}} <span>{{$d.SubAny.N}}</span></a>
+    {{- range $d.Sub}}
+    <a class="{{if .On}}is-on{{end}}" href="{{.Href}}"{{if .On}} aria-current="true"{{end}}>{{.Label}} <span>{{.N}}</span></a>
+    {{- end}}
+  </nav>
+  {{- end}}
+
+  <form class="toolbar" method="get" action="/" data-facets>
+    {{- with $d.Query}}
+    {{- if ne .G "open"}}<input type="hidden" name="g" value="{{.G}}">{{end}}
+    {{- if .W}}<input type="hidden" name="w" value="{{.W}}">{{end}}
+    {{- end}}
+    <label class="search">
+      <span class="sr-only">Search runs</span>
+      <svg width="14" height="14" viewBox="0 0 14 14" aria-hidden="true"><circle cx="6" cy="6" r="4.5" fill="none" stroke="currentColor" stroke-width="1.4"/><path d="M9.5 9.5 13 13" stroke="currentColor" stroke-width="1.4"/></svg>
+      <input type="search" name="q" value="{{$d.Query.Q}}" placeholder="Search titles, refs, summaries, people" data-search>
+      {{- if not $d.Query.Q}}<kbd class="kbd">/</kbd>{{end}}
+    </label>
+    {{- range $d.Facets}}{{template "facet" .}}{{end}}
+    <span class="toolbar-gap"></span>
+    {{- range $d.Orders}}{{template "facet" .}}{{end}}
+    <button type="submit" class="btn" data-facets-submit>Apply</button>
+  </form>
+
+  {{- with $d.Tokens}}
+  <div class="filters-on" aria-label="Active filters">
+    {{- range .}}
+    <a class="token" href="{{.Href}}" aria-label="Remove filter {{.Label}}">{{.Label}} <span aria-hidden="true">✕</span></a>
+    {{- end}}
+    <a class="link-btn" href="{{$d.ClearHref}}">Clear all</a>
+  </div>
+  {{- end}}
+
+  <form class="bulkbar" id="bulk" method="post" action="/work/bulk/hold" aria-label="Bulk actions" data-bulk>
+    <input type="hidden" name="csrf" value="{{$p.CSRF}}">
+    <input type="hidden" name="back" value="{{$p.Back}}">
+    <span><b data-bulk-n>Selected</b><span data-bulk-word> work</span></span>
+    <button class="btn" type="submit" formaction="/work/bulk/hold" data-bulk-hold>Hold</button>
+    <button class="btn" type="submit" formaction="/work/bulk/release" data-bulk-release>Release</button>
+    <button class="link-btn" type="button" data-bulk-clear hidden>Clear selection</button>
+    <dialog class="dialog" id="bulk-dialog" aria-labelledby="bulk-title">
+      <div class="dialog-body">
+        <header class="dialog-head"><h2 id="bulk-title">Hold</h2><button type="button" class="btn btn-quiet btn-icon" data-close aria-label="Close">✕</button></header>
+        <ul class="bulk-list" data-bulk-list></ul>
+        <p class="note" data-bulk-skipped hidden></p>
+        <p class="note" data-bulk-hold-note>No turn starts or resumes while held. Events keep queueing, so nothing is lost.</p>
+        <label class="field" data-bulk-reason>
+          <span>Reason</span>
+          <input name="reason" placeholder="e.g. Pausing during the release freeze">
+        </label>
+        <p class="endpoint"><code data-bulk-call>POST /v1/work/…/hold</code><span>one request per Work, each with its own expected revision</span></p>
+        <footer class="dialog-foot">
+          <button type="button" class="btn" data-close>Cancel</button>
+          <button type="submit" class="btn btn-primary" data-bulk-go>Hold</button>
+        </footer>
+      </div>
+    </dialog>
+  </form>
+
+  <div class="ledger" role="table" aria-label="Work" aria-rowcount="{{$d.Rows}}" data-ledger>
+    <div class="ledger-head" role="row">
+      <span role="columnheader" class="c-sel"><span class="sr-only">Select</span></span>
+      <span role="columnheader" class="c-work">Work</span>
+      <span role="columnheader" class="c-now">Now</span>
+      <span role="columnheader" class="c-life">Lifetime</span>
+      <span role="columnheader" class="c-turns" title="Executions">Turns</span>
+      <span role="columnheader" class="c-time" title="Active execution time against elapsed lifetime">Active / elapsed</span>
+      <span role="columnheader" class="c-upd">Changed</span>
+      <span role="columnheader" class="c-act"><span class="sr-only">Actions</span></span>
+    </div>
+    {{- range $d.Sections}}
+    <div role="rowgroup" class="ledger-group">
+      {{- if .Label}}
+      <div class="group-rule" role="row"><span role="cell">{{.Label}} <span class="group-n">{{len .Rows}}</span></span></div>
+      {{- end}}
+      {{- range .Rows}}{{template "ledger-row" .}}{{end}}
+    </div>
+    {{- end}}
+    {{- if $d.Empty}}
+    <div class="empty" role="row">
+      <div role="cell">
+        {{- if eq $d.Empty "nowork"}}
+        <h2>No work yet</h2>
+        <p>Open Conduit is configured, but no source has produced work. New issues, threads and schedule firings appear here as they arrive.</p>
+        <a class="btn" href="/config">Trace how an event would route</a>
+        {{- else if eq $d.Empty "calm"}}
+        <h2>Nothing needs you</h2>
+        <p>No open questions, failed retries or broken bindings. Agents are working or waiting on their own.</p>
+        {{- else}}
+        <h2>No work matches</h2>
+        <p>{{if eq $d.Faceted 0}}Your filters exclude everything.{{else}}{{$d.Faceted}} pieces of work match your filters, but none are {{$d.GroupLabel}}.{{end}}</p>
+        <div class="row-gap">
+          {{- if $d.Tokens}}<a class="btn" href="{{$d.ClearHref}}">Clear filters</a>{{end}}
+          {{- if ne $d.Query.G "all"}}<a class="btn btn-quiet" href="{{$d.AllHref}}">Show every state</a>{{end}}
+        </div>
+        {{- end}}
+      </div>
+    </div>
+    {{- end}}
+  </div>
+  <p class="legend" aria-label="Lifetime legend">
+    <span><i class="lg-bar"></i> executing</span>
+    <span><i class="lg-gap"></i> waiting, parked or queued</span>
+    <span><i class="lg-tick"></i> event</span>
+    <span class="legend-keys"><kbd class="kbd">j</kbd><kbd class="kbd">k</kbd> move · <kbd class="kbd">↵</kbd> open · <kbd class="kbd">x</kbd> select</span>
+  </p>
+</div>
+{{- end}}
+{{end}}
+
+{{define "facet"}}
+<label class="facet{{if .Value}} is-set{{end}}">
+  <span class="facet-label">{{.Label}}</span>
+  <select name="{{.Name}}">
+    {{- if .Any}}<option value="">{{.Any}}</option>{{end}}
+    {{- range .Opts}}<option value="{{.V}}"{{if .On}} selected{{end}}>{{.Label}}</option>{{end}}
+  </select>
+</label>
+{{end}}
+
+{{define "ledger-row"}}{{$w := .W}}
+<div role="row" data-row="{{.Index}}" data-href="/work?id={{$w.ID}}" class="ledger-row g-{{$w.Disp.Group}}"{{if .Holdable}} data-holdable{{end}}{{if .Held}} data-held{{end}}>
+  <span role="cell" class="c-sel"><input type="checkbox" name="work" value="{{$w.ID}}" form="bulk" aria-label="Select {{$w.Label}}" data-ref="{{or $w.Ref (source $w.Source)}}" data-title="{{$w.Title}}" data-kind="{{$w.Disp.Kind}}"></span>
+  <span role="cell" class="c-work">
+    <a class="row-link" href="/work?id={{$w.ID}}">
+      <span class="w-ref">{{or $w.Ref (source $w.Source)}}</span>
+      <span class="w-title">{{.Title}}</span>
+    </a>
+    <span class="w-meta">{{$w.ScopeID}}{{with $w.Display}}{{with .Requester}} · {{.}}{{end}}{{end}}</span>
+  </span>
+  <span role="cell" class="c-now">
+    <span class="now-label k-{{$w.Disp.Kind}}">{{mark $w.Disp.Kind 12 ""}}{{$w.Disp.Label}}{{with .For}}<span class="now-since">{{.}}</span>{{end}}</span>
+    <span class="now-detail">{{$w.Disp.Detail}}</span>
+  </span>
+  <span role="cell" class="c-life">{{lifeline .Life}}</span>
+  <span role="cell" class="c-turns">{{with len $w.Turns}}{{.}}{{else}}—{{end}}{{if eq $w.Disp.Group "running"}}<span class="live-tag">live</span>{{end}}</span>
+  <span role="cell" class="c-time">
+    <span class="t-active">{{if .Active}}{{durp .Active}}{{else}}—{{end}}</span>
+    <span class="t-of">of {{dur .Elapsed}}</span>
+    {{ratio .Ratio}}
+  </span>
+  <span role="cell" class="c-upd">{{since $w.Updated}}</span>
+  <span role="cell" class="c-act">
+    {{- if eq $w.Disp.Kind "decision"}}<a class="btn btn-signal btn-xs" href="/work?id={{$w.ID}}">Decide</a>{{end}}
+    {{- template "row-actions" .}}
+  </span>
+</div>
+{{end}}
+
+{{define "fresh"}}
+<div class="page">
+  <div class="fresh">
+    <div class="fresh-copy">
+      <h1>Let's connect your first source of work</h1>
+      <p class="fresh-state">The daemon is running, but nothing is configured yet.</p>
+      <p>Open Conduit watches the places work turns up — GitHub issues, Slack threads, schedules — and gives each item to an agent or command, coming back to it whenever something new happens. The setup assistant looks at this machine, proposes a configuration and applies it only when you approve.</p>
+      <div class="row-gap">
+        <a class="btn btn-primary btn-lg" href="/setup">Start the setup assistant</a>
+        <a class="btn btn-quiet" href="https://open-conduit.github.io/open-conduit/start/quick-start/" target="_blank" rel="noreferrer">Set up by hand instead</a>
+      </div>
+    </div>
+    <ol class="fresh-steps">
+      <li><span><b>Look around</b> Find agents, CLI logins and checkouts on this machine.</span></li>
+      <li><span><b>Decide together</b> Which repositories or channels, which account, how agents run.</span></li>
+      <li><span><b>Review the change set</b> Every config change is shown before it's applied.</span></li>
+      <li><span><b>Prove it works</b> Validate, run doctor, and trace a test event.</span></li>
+    </ol>
+  </div>
+</div>
 {{end}}

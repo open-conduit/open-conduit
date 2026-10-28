@@ -2,6 +2,8 @@ package web
 
 import (
 	"context"
+	"errors"
+	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -81,10 +83,13 @@ func isOpen(state string) bool {
 
 func itoa(i int) string { return strconv.Itoa(i) }
 
-// sourceFamily is the part of a source or type name before its first dot.
+// sourceFamily is the part of a source or type name before its first dot
+// or slash: "github" for "github.issue" and for the source "github/main".
 func sourceFamily(s string) string {
-	f, _, _ := strings.Cut(s, ".")
-	return f
+	if i := strings.IndexAny(s, "./"); i >= 0 {
+		return s[:i]
+	}
+	return s
 }
 
 // newTurn builds a turn's spans from its segments, or from its start and
@@ -460,17 +465,11 @@ func (s *Server) world(ctx context.Context) world {
 			mu.Unlock()
 		}
 	}
-	wg.Add(5)
+	wg.Add(4)
 	go func() {
 		defer wg.Done()
 		var err error
-		openW, err = listAll(ctx, url.Values{"state": {"ready,running,waiting"}, "limit": {"50"}}, s.src.WorksWithActions)
-		keep(err)
-	}()
-	go func() {
-		defer wg.Done()
-		var err error
-		closedW, err = listAll(ctx, url.Values{"state": {"completed,failed,cancelled"}, "limit": {"200"}}, s.src.Works)
+		openW, closedW, err = s.works(ctx)
 		keep(err)
 	}()
 	go func() {
@@ -507,6 +506,52 @@ func (s *Server) world(ctx context.Context) world {
 		out.Works = append(out.Works, newWork(w, byWork[w.ID], waitOf[w.ID], now))
 	}
 	return out
+}
+
+// works reads open Work with the actions and panels on it, and closed Work.
+// A daemon older than the list forms (#124) refuses with= and several
+// states at once; then every Work is read in one list and the offers on
+// waiting Work one Work at a time, eight at a time.
+func (s *Server) works(ctx context.Context) (openW, closedW []client.Work, err error) {
+	var cerr error
+	openW, err = listAll(ctx, url.Values{"state": {"ready,running,waiting"}, "limit": {"50"}}, s.src.WorksWithActions)
+	if err == nil {
+		closedW, cerr = listAll(ctx, url.Values{"state": {"completed,failed,cancelled"}, "limit": {"200"}}, s.src.Works)
+	}
+	var e *client.Error
+	if !errors.As(err, &e) && !errors.As(cerr, &e) || e.Status != http.StatusBadRequest {
+		if err == nil {
+			err = cerr
+		}
+		return openW, closedW, err
+	}
+	all, err := listAll(ctx, url.Values{"limit": {"200"}}, s.src.Works)
+	openW, closedW = nil, nil
+	for _, w := range all {
+		if isOpen(w.State) {
+			openW = append(openW, w)
+		} else {
+			closedW = append(closedW, w)
+		}
+	}
+	sem := make(chan struct{}, 8)
+	var wg sync.WaitGroup
+	for i := range openW {
+		if openW[i].State != "waiting" {
+			continue
+		}
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(w *client.Work) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			t := client.ActionTarget{WorkID: w.ID}
+			w.Actions, _ = s.src.Actions(ctx, t)
+			w.Panels, _ = s.src.Panels(ctx, t)
+		}(&openW[i])
+	}
+	wg.Wait()
+	return openW, closedW, err
 }
 
 // holds fills in the hold of each ready Work, eight at a time: a held Work
