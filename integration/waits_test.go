@@ -4,6 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1032,5 +1035,191 @@ func TestProductionTerminalWaitResultKeepsBackupVisibleArtifacts(t *testing.T) {
 	state, err = d.scheduler.InspectAttempt(ctx, ref.ExecutionID)
 	if err != nil || !reflect.DeepEqual(state.Result, &more) {
 		t.Fatalf("rejected terminal change altered measurements: %+v %v", state.Result, err)
+	}
+}
+
+// A parked-then-resumed attempt reports two active segments, the second
+// woken by the wake event, whose sum is its active time; the parked days
+// count in neither.
+func TestProductionResumedRunReportsActiveSegments(t *testing.T) {
+	ctx := context.Background()
+	f := waitFixture(t, "reopen", waitOptions(true))
+	d := f.Driver.(*waitDriver)
+	work := seedSchedulerWork(t, f, "segments")
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "segments"}
+	attempt, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := f.Clock.Now()
+	initial, err := d.scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := initial.Deadline.Sub(started)
+	f.Clock.Advance(10 * time.Second)
+	registerWait(t, f, attempt.Lease, "segments-wait", key, true, 1)
+	run := func() runtime.Run {
+		var r runtime.Run
+		routingRead(t, f, func(tx storage.Tx) error {
+			var e error
+			r, e = runtime.RunInTx(tx, attempt.Lease.ExecutionID)
+			return e
+		})
+		return r
+	}
+	if r := run(); len(r.Segments) != 1 || !r.Segments[0].Parked || r.ActiveTime != 10*time.Second || r.ActiveTime+r.RemainingTimeout != budget {
+		t.Fatalf("parked run: %+v active %s remaining %s of %s", r.Segments, r.ActiveTime, r.RemainingTimeout, budget)
+	}
+	f.Clock.Advance(72 * time.Hour)
+	requireAccept(t, f, "segments-wake", &key)
+	if err = d.Wake("segments-wait"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Lease.ExecutionID != attempt.Lease.ExecutionID {
+		t.Fatalf("resume started a new attempt: %s", resumed.Lease.ExecutionID)
+	}
+	woken := f.Clock.Now()
+	if r := run(); len(r.Segments) != 2 || r.Segments[1].EndedAt != nil || r.ActiveTime != 10*time.Second {
+		t.Fatalf("running resumed run: %+v active %s", r.Segments, r.ActiveTime)
+	}
+	f.Clock.Advance(5 * time.Second)
+	if err = d.scheduler.Complete(ctx, resumed.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	r := run()
+	if len(r.Segments) != 2 {
+		t.Fatalf("segments: %+v", r.Segments)
+	}
+	first, second := r.Segments[0], r.Segments[1]
+	if !first.StartedAt.Equal(started) || first.EndedAt == nil || !first.EndedAt.Equal(started.Add(10*time.Second)) || !first.Parked || first.WakeEventID != "" {
+		t.Fatalf("first segment: %+v", first)
+	}
+	if !second.StartedAt.Equal(woken) || second.EndedAt == nil || !second.EndedAt.Equal(woken.Add(5*time.Second)) || second.Parked || second.WakeEventID == "" || second.WakeEventID != r.WakeEventID {
+		t.Fatalf("second segment: %+v (run wake %s)", second, r.WakeEventID)
+	}
+	if sum := first.EndedAt.Sub(first.StartedAt) + second.EndedAt.Sub(second.StartedAt); r.ActiveTime != sum || sum != 15*time.Second {
+		t.Fatalf("active %s, segments sum %s", r.ActiveTime, sum)
+	}
+}
+
+// A recovered attempt's segments count lease-held time as its deadline
+// budget does: recovery keeps the deadline, so the lost-lease gap stays in
+// the interrupted segment, and a recovered segment starts with no gap.
+func TestProductionRecoveredRunSegmentsMatchTheDeadlineBudget(t *testing.T) {
+	ctx := context.Background()
+	f := waitFixture(t, "reopen", waitOptions(true))
+	d := f.Driver.(*waitDriver)
+	work := seedSchedulerWork(t, f, "segments-recover")
+	attempt, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := f.Clock.Now()
+	before, err := d.scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(d.options.LeaseDuration + 20*time.Second)
+	recovered, err := d.scheduler.Recover(ctx, attempt.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredAt := f.Clock.Now()
+	after, err := d.scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Deadline.Equal(before.Deadline) {
+		t.Fatalf("recovery moved the deadline: %s -> %s", before.Deadline, after.Deadline)
+	}
+	f.Clock.Advance(5 * time.Second)
+	if err = d.scheduler.Complete(ctx, recovered.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	var r runtime.Run
+	routingRead(t, f, func(tx storage.Tx) error {
+		var e error
+		r, e = runtime.RunInTx(tx, attempt.Lease.ExecutionID)
+		return e
+	})
+	if len(r.Segments) != 2 {
+		t.Fatalf("segments: %+v", r.Segments)
+	}
+	first, second := r.Segments[0], r.Segments[1]
+	if !first.StartedAt.Equal(started) || first.EndedAt == nil || !first.EndedAt.Equal(recoveredAt) || first.Parked || first.Recovered {
+		t.Fatalf("first segment should run to the recovery at %s: %+v", recoveredAt, first)
+	}
+	if !second.Recovered || !second.StartedAt.Equal(recoveredAt) || second.EndedAt == nil || !second.EndedAt.Equal(recoveredAt.Add(5*time.Second)) {
+		t.Fatalf("recovered segment: %+v", second)
+	}
+	// The budget charged from the start to the finish, gap included; so do
+	// the segments.
+	if want := f.Clock.Now().Sub(started); r.ActiveTime != want {
+		t.Fatalf("active %s, budget charged %s", r.ActiveTime, want)
+	}
+}
+
+// An attempt parked before segments were recorded stays without them after
+// it resumes, rather than reporting a partial resume-to-finish segment.
+func TestProductionPreUpgradeParkedRunStaysSegmentless(t *testing.T) {
+	ctx := context.Background()
+	f := waitFixture(t, "reopen", waitOptions(true))
+	d := f.Driver.(*waitDriver)
+	work := seedSchedulerWork(t, f, "segments-upgrade")
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "segments-upgrade"}
+	attempt, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(10 * time.Second)
+	registerWait(t, f, attempt.Lease, "segments-upgrade-wait", key, true, 1)
+	// The attempt state as an older binary wrote it: no segments.
+	h := sha256.Sum256([]byte(fmt.Sprintf("%d:%s", len(attempt.Lease.ExecutionID), attempt.Lease.ExecutionID)))
+	stateKey := hex.EncodeToString(h[:])
+	err = f.Store.Transact(ctx, storage.Guard{Now: f.Clock.Now()}, func(tx storage.Tx) error {
+		b, e := tx.Get("core.scheduler.attempts", stateKey)
+		if e != nil {
+			return e
+		}
+		var state map[string]json.RawMessage
+		if e = json.Unmarshal(b, &state); e != nil {
+			return e
+		}
+		if _, ok := state["Segments"]; !ok {
+			return fmt.Errorf("attempt state has no Segments: %s", b)
+		}
+		delete(state, "Segments")
+		b, _ = json.Marshal(state)
+		return tx.Put("core.scheduler.attempts", stateKey, b)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(time.Hour)
+	requireAccept(t, f, "segments-upgrade-wake", &key)
+	if err = d.Wake("segments-upgrade-wait"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(5 * time.Second)
+	if err = d.scheduler.Complete(ctx, resumed.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	var r runtime.Run
+	routingRead(t, f, func(tx storage.Tx) error {
+		var e error
+		r, e = runtime.RunInTx(tx, attempt.Lease.ExecutionID)
+		return e
+	})
+	if len(r.Segments) != 0 || r.ActiveTime != 0 {
+		t.Fatalf("pre-upgrade run gained partial segments: %+v active %s", r.Segments, r.ActiveTime)
 	}
 }
