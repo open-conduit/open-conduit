@@ -176,7 +176,7 @@ func TestRunsFreshInstallation(t *testing.T) {
 	f.work = map[string]client.Work{}
 	f.runs = nil
 	f.health = &client.Health{State: "ready", Version: "1", ConfigGeneration: "0"}
-	if body := do(h, "GET", "/", nil, s).Body.String(); !strings.Contains(body, "Start the setup assistant") || !strings.Contains(body, `href="/setup"`) {
+	if body := do(h, "GET", "/", nil, s).Body.String(); !strings.Contains(body, "Set up") || !strings.Contains(body, `href="/setup"`) {
 		t.Fatal("fresh installation page not shown")
 	}
 	f.health = &client.Health{State: "ready", Version: "1", ConfigGeneration: "3"}

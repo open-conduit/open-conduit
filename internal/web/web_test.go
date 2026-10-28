@@ -39,10 +39,10 @@ type fake struct {
 
 	healthErr error
 	// old is a daemon from before the list forms (#124).
-	old bool
-	invoked   []invoked
-	controls  []string
-	calls     []string
+	old      bool
+	invoked  []invoked
+	controls []string
+	calls    []string
 	// actions: the reason each control was sent with.
 	reasons   []string
 	traced    []string

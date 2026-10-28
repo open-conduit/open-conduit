@@ -518,4 +518,3 @@ func (flowScope) Edge(lit bool, top, bottom, title string) flowEdge {
 // Provider is an action provider's display name: its entry name, the last
 // segment of its path.
 func (configData) Provider(p string) string { return p[strings.LastIndex(p, "/")+1:] }
-
