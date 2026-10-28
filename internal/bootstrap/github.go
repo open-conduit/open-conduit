@@ -48,7 +48,7 @@ func githubRegistry(reg *config.Registry) {
 		reg.Extensions = map[string]config.ExtensionType{}
 	}
 	reg.Connections[gh.Type] = gh.ValidateConnection
-	reg.Extensions[gh.Type] = config.ExtensionType{Ingress: true, Validate: gh.ValidateExtension}
+	reg.Extensions[gh.Type] = config.ExtensionType{Ingress: true, Validate: gh.ValidateExtension, Settings: gh.ExtensionSettings}
 }
 
 // connectionSecrets resolves a connection's secret references lazily from the

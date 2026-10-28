@@ -13,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Config is the strictly checked binding `config` object owned by this
@@ -265,4 +266,23 @@ func (e *Executor) FolderConfig(raw json.RawMessage, folder string, resource boo
 func isDir(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && info.IsDir()
+}
+
+// Settings lists the binding config fields safe to show an operator, with
+// defaults applied (extension.SettingsDescriber). The binary, plugin
+// folder, arguments and environment are never listed.
+func (e *Executor) Settings(raw json.RawMessage) []extension.Setting {
+	c, err := ParseConfig(raw)
+	if err != nil {
+		return nil
+	}
+	return []extension.Setting{
+		{Name: "model", Value: c.Model},
+		{Name: "permission_mode", Value: c.PermissionMode},
+		{Name: "playbook", Value: c.Playbook},
+		{Name: "structured", Value: c.structured()},
+		{Name: "workspace_mode", Value: c.WorkspaceMode},
+		{Name: "cold_turns", Value: c.ColdTurns},
+		{Name: "handoff_minutes", Value: *c.HandoffMinutes},
+	}
 }

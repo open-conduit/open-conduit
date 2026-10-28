@@ -221,3 +221,20 @@ func sanitize(id string) string {
 	}
 	return s
 }
+
+// Settings lists the resource config fields safe to show an operator, with
+// defaults applied. The setup command and copied files are never listed.
+func Settings(raw json.RawMessage) []extension.Setting {
+	c, err := ParseConfig(raw)
+	if err != nil {
+		return nil
+	}
+	return []extension.Setting{
+		{Name: "checkout", Value: c.Checkout},
+		{Name: "mode", Value: c.Mode},
+		{Name: "remote", Value: c.Remote},
+		{Name: "base_branch", Value: c.BaseBranch},
+		{Name: "branch_template", Value: c.BranchTemplate},
+		{Name: "sign", Value: c.Sign},
+	}
+}
