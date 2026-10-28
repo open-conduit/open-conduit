@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -213,8 +214,8 @@ func (v *validator) resolve(id string) *effective {
 			if parent != nil && !subset(c.requested, c.current) {
 				v.fail(p, "authority_widening", "child authorization must be a subset of the parent's effective "+c.key)
 			}
-			if !all(c.requested, c.known) {
-				v.fail(p, "unknown_reference", "authorization names an undefined or unregistered "+c.key+" entry")
+			if unknown := missing(c.requested, c.known); len(unknown) > 0 {
+				v.fail(p, "unknown_reference", "authorization names an undefined or unregistered "+c.key+" entry: "+strings.Join(unknown, ", "))
 			}
 		}
 		e.auth = *a
@@ -416,6 +417,18 @@ func (v *validator) operation(op string) bool {
 	return slices.Contains(Builtins, op) || slices.Contains(v.reg.Operations, op)
 }
 func subset(a, b []string) bool { return all(a, func(s string) bool { return slices.Contains(b, s) }) }
+
+// missing returns the entries of a that f does not know, in order.
+func missing(a []string, f func(string) bool) []string {
+	var out []string
+	for _, s := range a {
+		if !f(s) {
+			out = append(out, s)
+		}
+	}
+	return out
+}
+
 func all(a []string, f func(string) bool) bool {
 	for _, s := range a {
 		if !f(s) {

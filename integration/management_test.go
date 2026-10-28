@@ -527,6 +527,54 @@ func TestManagementConfigReloadAndRedaction(t *testing.T) {
 	}
 }
 
+// A stored generation that an upgrade stopped validating (it names an
+// operation no longer registered) is replaced by a valid config file at start,
+// and the error names the operation while the file is still stale.
+func TestManagementAdoptsFileOverInvalidStoredGeneration(t *testing.T) {
+	ctx := context.Background()
+	clock := conformance.NewClock()
+	state := t.TempDir()
+	db, err := sqlite.Open(ctx, filepath.Join(state, "conduit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	path := filepath.Join(state, "config.json")
+	withOld := strings.Replace(managementConfig, `"operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "read_scopes"`, `"operations": ["emit", "read_context", "declare_outcome", "create_work", "wait", "ext.removed"], "read_scopes"`, 1)
+	if withOld == managementConfig {
+		t.Fatal("fixture replace failed")
+	}
+	if err = config.SaveAtomic(path, []byte(withOld)); err != nil {
+		t.Fatal(err)
+	}
+	executors := map[string]extension.Executor{"fixture": &schedulerExecutor{caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}}
+	older := config.Registry{Executors: executors, Handlers: map[string]bool{"manual": true}, Operations: []string{"ext.removed"}}
+	if _, err = management.OpenConfig(ctx, db, clock.Now, older, path); err != nil {
+		t.Fatal(err)
+	}
+	upgraded := config.Registry{Executors: executors, Handlers: map[string]bool{"manual": true}}
+	if _, err = management.OpenConfig(ctx, db, clock.Now, upgraded, path); err == nil || !strings.Contains(err.Error(), "ext.removed") || !strings.Contains(err.Error(), "stored generation 1") {
+		t.Fatalf("stale file: %v", err)
+	}
+	if err = config.SaveAtomic(path, []byte(managementConfig)); err != nil {
+		t.Fatal(err)
+	}
+	adopted, err := management.OpenConfig(ctx, db, clock.Now, upgraded, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, gen := adopted.Current(); gen != 2 || adopted.Adopted == nil || adopted.Adopted.Stored != 1 {
+		t.Fatalf("adopted generation %d %+v", gen, adopted.Adopted)
+	}
+	reopened, err := management.OpenConfig(ctx, db, clock.Now, upgraded, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, gen := reopened.Current(); gen != 2 || reopened.Adopted != nil {
+		t.Fatalf("restart after adoption: generation %d %+v", gen, reopened.Adopted)
+	}
+}
+
 func TestManagementPaginationAndRequestValidation(t *testing.T) {
 	h := newManagementHarness(t)
 	ctx := context.Background()

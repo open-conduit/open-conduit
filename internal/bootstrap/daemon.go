@@ -334,6 +334,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
+	if a := d.configs.Adopted; a != nil {
+		d.log.Warn("stored configuration generation no longer validates; adopted the config file", "stored_generation", a.Stored, "path", o.ConfigPath, "cause", a.Cause.Error())
+	}
 	if d.ingress, err = runtime.NewIngress(d.coord, d.now, runtime.IngressOptions{}); err != nil {
 		return err
 	}

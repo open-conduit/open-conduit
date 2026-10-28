@@ -55,7 +55,7 @@ Translated emissions (`Operation.Emit`) are accepted under the same fence, repla
 
 `config.Resolver` accepts only `keyring:`, `file:` (key in an owner-only `secrets.json`), `env:` and `cmd:`. The default keyring uses the platform helper; tests inject a backend. `cmd:` runs `sh -c` under a 10-second process-group deadline with 64 KiB bounded stdout. Stderr is discarded, the environment is minimal with no toolbelt or Open Conduit variables, exactly one trailing LF/CRLF is trimmed and empty output is rejected. Errors carry stable codes only. No resolution is cached across consumers. `SchedulerOptions.Secrets` resolves only the binding-selected names that both the pinned and the current generation grant. It runs immediately before Run/Recover/Resume, outside transactions; failure blocks that attempt with a safe diagnostic.
 
-`management.ConfigService` restores the committed generation from coordination storage. The first start activates the config file as generation 1. Apply proceeds in this order:
+`management.ConfigService` restores the committed generation from coordination storage. The first start activates the config file as generation 1. If the committed generation no longer validates at start (a release stopped registering an operation or executor it names), the config file is published over it as the next generation when the file validates, and the daemon logs the adoption; otherwise start fails naming both errors. Apply proceeds in this order:
 
 1. Revalidate and check the candidate hash and expected generation.
 2. Save the file atomically (same-directory 0600 temp, fsync, rename, parent fsync, `.last-good` backup).
