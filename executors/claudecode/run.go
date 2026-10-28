@@ -206,7 +206,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	}
 	configDir := claudeConfigDir(env)
 	sessionExists := func(session string) bool { return transcriptExists(configDir, workdir, session) }
-	attach := attachInfo{Dir: workdir, Binary: cfg.Binary, Model: cfg.Model, PermissionMode: cfg.PermissionMode, PluginDir: cfg.PluginDir, ExtraArgs: cfg.ExtraArgs}
+	attach := attachInfo{Dir: workdir, Binary: cfg.Binary, Model: cfg.model(r.Work), PermissionMode: cfg.PermissionMode, PluginDir: cfg.PluginDir, ExtraArgs: append(cfg.toolArgs(), cfg.ExtraArgs...)}
 
 	// Decide resume or fresh and record the decision before launch, fenced by
 	// this attempt's lease, so a restart reuses the same decision.
@@ -232,7 +232,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	args, text := body(d.Kind, expand(cfg.Args, r.Work), rec.Handoff, e.o.Render(inputs))
 	text = withAdditions(text, projectAdditions(workdir, cfg.Playbook))
 	first := prompt(cfg.Playbook, args, text)
-	model := cfg.Model
+	model := cfg.model(r.Work)
 	if e.o.DryRun {
 		model = e.o.DryRunModel
 		if model == "" {
@@ -266,6 +266,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	} else if mcp != "" {
 		argv = append(argv, "--mcp-config", mcp)
 	}
+	argv = append(argv, cfg.toolArgs()...)
 	argv = append(argv, cfg.ExtraArgs...)
 	out, err := os.OpenFile(filepath.Join(dir, "out.jsonl"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o600)
 	if err != nil {
