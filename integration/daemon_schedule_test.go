@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/url"
 	"os"
@@ -260,6 +261,23 @@ func TestDaemonJobConcurrency(t *testing.T) {
 	if p := pools(); len(p) != 2 || p["agents"] != (client.CapacityPool{Name: "agents", Setting: "settings.concurrency", Limit: 1}) ||
 		p["jobs"] != (client.CapacityPool{Name: "jobs", Setting: "settings.job_concurrency", Limit: 1, InUse: 1, Waiting: 1}) {
 		t.Fatalf("capacity while a job waits: %+v", p)
+	}
+	// Doctor's capacity check reads the same accounting: each pool's usage
+	// as the endpoint reports it, and the one Work waiting.
+	label := map[string]string{"agents": "agent turns (settings.concurrency)", "jobs": "jobs (settings.job_concurrency)"}
+	r, err := d.c.Doctor(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitingTotal := 0
+	for name, p := range pools() {
+		if want := fmt.Sprintf("%s %d/%d running", label[name], p.InUse, p.Limit); !strings.Contains(check(r, "capacity").Detail, want) {
+			t.Fatalf("doctor %q lacks %q", check(r, "capacity").Detail, want)
+		}
+		waitingTotal += p.Waiting
+	}
+	if n := len(check(r, "capacity").Items); n != waitingTotal {
+		t.Fatalf("doctor lists %d waiting, capacity %d", n, waitingTotal)
 	}
 	w, err := d.c.Work(ctx, waiting)
 	if err != nil || len(w.Annotations) == 0 || w.Annotations[0].Name != "waiting" || !strings.Contains(w.Annotations[0].Value, "settings.job_concurrency") {

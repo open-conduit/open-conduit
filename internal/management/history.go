@@ -44,10 +44,10 @@ type wireRetry struct {
 	BlockedReason string `json:"blocked_reason,omitempty"`
 }
 
-// wireSegment is one active stretch of a run: the first start, a resume
-// after a wake (wake_event_id) or a recovery after a lost lease, ended by a
-// park, the lost lease or the run's finish. An open segment, the one
-// running now, has no ended_at.
+// wireSegment is one stretch of a run holding its lease: the first start,
+// a resume after a wake (wake_event_id names the wake on either) or a new
+// owner's recovery, ended by a park, a recovery or the run's finish. An
+// open segment, the one running now, has no ended_at.
 type wireSegment struct {
 	StartedAt   string `json:"started_at"`
 	EndedAt     string `json:"ended_at,omitempty"`

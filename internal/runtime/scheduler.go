@@ -143,10 +143,12 @@ type AttemptState struct {
 	InputEventIDs                     []domain.ID
 	RemainingTimeout                  time.Duration
 	Declaration                       *ToolbeltDeclaration
-	// Segments are the attempt's active stretches: the first start, each
-	// resume after a wake and each recovery, each ended by a park or a lost
-	// lease. The last stays open while the attempt runs and ends when the
-	// execution finishes. Only the last MaxSegments are kept; DroppedActive
+	// Segments are the attempt's active stretches, the time it held a lease
+	// as the deadline budget counts it: the first start (with the waking
+	// event's ID when a wake started it), each resume after a wake, each
+	// recovery by a new owner (no gap: recovery keeps the deadline), each
+	// ended by a park. The last stays open while the attempt runs and ends
+	// when the execution finishes. Only the last MaxSegments are kept; DroppedActive
 	// is the active time of the ones dropped, DroppedSegments their count.
 	Segments        []Segment     `json:",omitempty"`
 	DroppedSegments int           `json:",omitempty"`
@@ -159,7 +161,7 @@ const MaxSegments = 50
 
 // Segment is one active stretch of an attempt. WakeEventID names the event
 // that woke it; Parked says it ended in a park; Recovered says it began
-// when a new owner recovered the attempt after its lease was lost.
+// when a new owner recovered the attempt.
 type Segment struct {
 	StartedAt   time.Time
 	EndedAt     *time.Time `json:",omitempty"`
@@ -887,15 +889,13 @@ func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt,
 		if execution.State != domain.ExecutionRunning {
 			return storage.ErrInvalid
 		}
-		// The time between the lost lease's expiry and this recovery (a
-		// daemon down for days, say) was not active.
+		// A segment is lease-held time, measured as the deadline budget
+		// measures it: recovery keeps the deadline, so the lost-lease gap
+		// stays in the segment it interrupted. The split only marks where a
+		// new owner took over.
 		if n := len(current.Segments); n > 0 && current.Segments[n-1].EndedAt == nil {
 			now := s.now()
-			end := now
-			if lost := execution.Lease.ExpiresAt; !lost.IsZero() && lost.Before(now) {
-				end = lost
-			}
-			current.endSegment(end, false)
+			current.endSegment(now, false)
 			current.beginSegment(Segment{StartedAt: now, Recovered: true})
 		}
 		ref, e := tx.Claim(id, s.options.Owner, s.options.LeaseDuration)

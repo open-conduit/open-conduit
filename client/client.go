@@ -853,9 +853,10 @@ type Run struct {
 	// the last 50 and SegmentsDropped counts the older ones.
 	Segments        []RunSegment `json:"segments,omitempty"`
 	SegmentsDropped int          `json:"segments_dropped,omitempty"`
-	// ActiveMS is the time the run spent active: its ended segments,
-	// dropped ones included. It leaves out the segment running now; Active
-	// adds it. Runs recorded before segments existed report neither.
+	// ActiveMS is the time the run held its lease, as its timeout budget
+	// counts it: its ended segments, dropped ones included. It leaves out
+	// the segment running now; Active adds it. Runs started before segments
+	// existed report neither.
 	ActiveMS    int64         `json:"active_ms,omitempty"`
 	Usage       *Usage        `json:"usage,omitempty"`
 	Workspace   *RunWorkspace `json:"workspace,omitempty"`
@@ -878,10 +879,11 @@ func (r Run) Active(now time.Time) time.Duration {
 	return active
 }
 
-// RunSegment is one active stretch of a run: the first start, a resume
-// after a wake (WakeEventID) or a recovery after a lost lease (Recovered),
-// ended by a park (Parked), the lost lease or the run's finish. The segment
-// running now has no EndedAt.
+// RunSegment is one stretch of a run holding its lease, as its timeout
+// budget counts it: the first start, a resume after a wake (WakeEventID
+// names the wake on either) or a new owner's recovery (Recovered, with no
+// gap before it), ended by a park (Parked), a recovery or the run's finish.
+// The segment running now has no EndedAt.
 type RunSegment struct {
 	StartedAt   string `json:"started_at"`
 	EndedAt     string `json:"ended_at,omitempty"`

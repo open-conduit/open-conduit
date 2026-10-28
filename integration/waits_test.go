@@ -1052,6 +1052,11 @@ func TestProductionResumedRunReportsActiveSegments(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := f.Clock.Now()
+	initial, err := d.scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	budget := initial.Deadline.Sub(started)
 	f.Clock.Advance(10 * time.Second)
 	registerWait(t, f, attempt.Lease, "segments-wait", key, true, 1)
 	run := func() runtime.Run {
@@ -1063,8 +1068,8 @@ func TestProductionResumedRunReportsActiveSegments(t *testing.T) {
 		})
 		return r
 	}
-	if r := run(); len(r.Segments) != 1 || !r.Segments[0].Parked || r.ActiveTime != 10*time.Second {
-		t.Fatalf("parked run: %+v active %s", r.Segments, r.ActiveTime)
+	if r := run(); len(r.Segments) != 1 || !r.Segments[0].Parked || r.ActiveTime != 10*time.Second || r.ActiveTime+r.RemainingTimeout != budget {
+		t.Fatalf("parked run: %+v active %s remaining %s of %s", r.Segments, r.ActiveTime, r.RemainingTimeout, budget)
 	}
 	f.Clock.Advance(72 * time.Hour)
 	requireAccept(t, f, "segments-wake", &key)
@@ -1102,10 +1107,10 @@ func TestProductionResumedRunReportsActiveSegments(t *testing.T) {
 	}
 }
 
-// A recovered attempt does not count the time its lease was lost (a daemon
-// down for two days, say): its segment ends at the lease's expiry and a
-// recovered segment begins at the recovery.
-func TestProductionRecoveredRunExcludesLostLeaseTime(t *testing.T) {
+// A recovered attempt's segments count lease-held time as its deadline
+// budget does: recovery keeps the deadline, so the lost-lease gap stays in
+// the interrupted segment, and a recovered segment starts with no gap.
+func TestProductionRecoveredRunSegmentsMatchTheDeadlineBudget(t *testing.T) {
 	ctx := context.Background()
 	f := waitFixture(t, "reopen", waitOptions(true))
 	d := f.Driver.(*waitDriver)
@@ -1115,13 +1120,23 @@ func TestProductionRecoveredRunExcludesLostLeaseTime(t *testing.T) {
 		t.Fatal(err)
 	}
 	started := f.Clock.Now()
-	lost := started.Add(d.options.LeaseDuration)
-	f.Clock.Advance(48 * time.Hour)
+	before, err := d.scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(d.options.LeaseDuration + 20*time.Second)
 	recovered, err := d.scheduler.Recover(ctx, attempt.Lease.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	recoveredAt := f.Clock.Now()
+	after, err := d.scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !after.Deadline.Equal(before.Deadline) {
+		t.Fatalf("recovery moved the deadline: %s -> %s", before.Deadline, after.Deadline)
+	}
 	f.Clock.Advance(5 * time.Second)
 	if err = d.scheduler.Complete(ctx, recovered.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
 		t.Fatal(err)
@@ -1136,14 +1151,16 @@ func TestProductionRecoveredRunExcludesLostLeaseTime(t *testing.T) {
 		t.Fatalf("segments: %+v", r.Segments)
 	}
 	first, second := r.Segments[0], r.Segments[1]
-	if !first.StartedAt.Equal(started) || first.EndedAt == nil || !first.EndedAt.Equal(lost) || first.Parked || first.Recovered {
-		t.Fatalf("first segment should end at the lost lease %s: %+v", lost, first)
+	if !first.StartedAt.Equal(started) || first.EndedAt == nil || !first.EndedAt.Equal(recoveredAt) || first.Parked || first.Recovered {
+		t.Fatalf("first segment should run to the recovery at %s: %+v", recoveredAt, first)
 	}
 	if !second.Recovered || !second.StartedAt.Equal(recoveredAt) || second.EndedAt == nil || !second.EndedAt.Equal(recoveredAt.Add(5*time.Second)) {
 		t.Fatalf("recovered segment: %+v", second)
 	}
-	if want := d.options.LeaseDuration + 5*time.Second; r.ActiveTime != want {
-		t.Fatalf("active %s, want %s", r.ActiveTime, want)
+	// The budget charged from the start to the finish, gap included; so do
+	// the segments.
+	if want := f.Clock.Now().Sub(started); r.ActiveTime != want {
+		t.Fatalf("active %s, budget charged %s", r.ActiveTime, want)
 	}
 }
 
