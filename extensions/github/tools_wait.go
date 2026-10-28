@@ -354,7 +354,8 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 	}
 	if b.number == 0 {
 		// No issue to carry the reason: the Work's own conversation (a Slack
-		// thread) is where people hear it, from the agent. Only what it
+		// thread) is where people hear it, from the agent, before it waits:
+		// the plan releases its authority at once. Only what it
 		// waits for (or its time) wakes it, never its own posts.
 		if len(b.work.CorrelationKeys) == 0 {
 			return extension.WaitPlan{}, refuse("cannot_wait", "this Work has nothing of its own to be woken on")
@@ -364,7 +365,7 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 			plan.Dependencies = append(plan.Dependencies, r.dep)
 		}
 		out, _ := json.Marshal(map[string]any{"waiting_for": h.Describe(), "reason": strings.TrimSpace(in.Reason),
-			"next": "if the people you work for should know what you're waiting for, tell them where you talk to them; then end your turn now: you are resumed with what happened"})
+			"next": "end your turn now; any other call is refused until you are resumed with what happened"})
 		plan.Output = domain.Payload{Schema: "github.tool.v1", Data: out}
 		return plan, nil
 	}
@@ -384,7 +385,7 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 	}
 	plan.Dependencies = append(plan.Dependencies, peerComments(b))
 	result := map[string]any{"waiting_for": h.Describe(), "comment": posted,
-		"next": "end your turn now; you are resumed with what happened (comments and check results also resume you)"}
+		"next": "end your turn now; any other call is refused until you are resumed with what happened (comments and check results also resume you)"}
 	if len(kept) > 0 {
 		result["kept"] = kept
 		result["note"] = "the issue was already waiting for " + strings.Join(kept, ", ") + "; that still wakes you too"
