@@ -101,10 +101,16 @@ export default defineConfig({
 								{ label: 'Scheduled jobs', slug: 'architecture/schedule-extension' },
 								{ label: 'Introspection', slug: 'architecture/issue-reporting' },
 								{ label: 'Operator setup', slug: 'architecture/operator-setup' },
-								{ label: 'Setup sessions (proposed)', slug: 'architecture/setup-sessions' },
 								{ label: 'Installed integrations', slug: 'architecture/installed-integrations' },
 								{ label: 'Backup and recovery', slug: 'architecture/recovery' },
 								{ label: 'Extension packaging', slug: 'architecture/extension-packaging' },
+							],
+						},
+						{
+							label: 'Proposals',
+							collapsed: true,
+							items: [
+								{ label: 'Setup sessions', slug: 'architecture/setup-sessions' },
 							],
 						},
 					],

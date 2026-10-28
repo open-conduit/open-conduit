@@ -49,7 +49,6 @@ Each page separates three kinds of material:
 - [Scheduled jobs](schedule-extension/)
 - [Introspection: reporting, sweep, triage and fixes](issue-reporting/)
 - [Operator setup, doctor and engineering controls](operator-setup/)
-- [Setup sessions and config change sets](setup-sessions/) (proposed)
 - [Installed integrations: Linear, Jira, Bitbucket, PostHog and operator tools](installed-integrations/)
 - [Backup, restore and state recovery](recovery/)
 
@@ -57,6 +56,12 @@ Each page separates three kinds of material:
 
 - [Extension subprocess protocol](extension-protocol/) (decision B08)
 - [Extension packaging, SDK and certification](extension-packaging/)
+
+## Proposals
+
+Pages here describe intended behaviour, not the code as it is. Each is rewritten to describe what was built when it lands, and the pages it changes are amended in the same change.
+
+- [Setup sessions and config change sets](setup-sessions/)
 
 ## Keeping these pages current
 
