@@ -38,6 +38,7 @@ open-conduit tui
   - `show` and `get` redact `secret_refs`.
   - `set` refuses a value that is not a reference under `secret_refs`.
   - Every edit is validated offline by `bootstrap.ValidateConfig` before saving: the same registrations as `serve`, without a daemon, storage or secret resolution. An invalid edit leaves the file unchanged. A running daemon changes only through `config apply`, so a disk edit never alters it.
+- **`config include add [FOLDER] --parent SCOPE`** and **`config include remove [FOLDER]`** add or remove an [included folder](../config-management/#included-folders) in the config file's `includes`. FOLDER defaults to the current directory and is written as an absolute path. Both validate before saving, like `set`.
 - **`secret set NAME`**:
   - It reads the value from stdin, with no echo on a terminal, and never takes it as an argument.
   - It stores the value in the platform keyring under the `open-conduit` service: on macOS through `security -i`, so the value is not in any argv; on Linux through `secret-tool`.

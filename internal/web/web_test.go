@@ -446,13 +446,13 @@ func TestConfigPage(t *testing.T) {
 		t.Fatalf("old daemon:\n%s", body)
 	}
 	f.config = &client.Config{Generation: "4", Hash: "abc", Connections: []client.ConfigConnection{{ID: "github", Type: "github"}}, Scopes: []client.ConfigScope{{
-		ID: "eng", Name: "Engineering", Enabled: true,
+		ID: "eng", Name: "Engineering", Enabled: true, Source: "/work/eng",
 		Extensions: []client.ConfigExtension{{Name: "issues", Type: "github_ingress", Connection: "github", Ingress: true}, {Name: "nightly", Type: "plugin"}, {Name: "jobs", Type: "schedule", Ingress: true, Entries: []client.ConfigEntry{{Name: "sweep", Detail: "daily at 06:00 UTC"}}}},
 		Routes:     []client.ConfigRoute{{Route: client.Route{Name: "incoming", Handler: "github.issue", Binding: "agent", ActivePolicy: "queue"}}, {Route: client.Route{Name: "stray", Handler: "schedule", Binding: "gone"}, Detail: "every job"}},
 		Bindings:   []client.ConfigBinding{{Name: "agent", Executor: "coding_agent", Resource: "git"}, {Name: "shell", Executor: "shell"}},
 	}}}
 	body := do(h, "GET", "/config", nil, s).Body.String()
-	for _, want := range []string{"Generation 4", "github_ingress", "matches github.issue", "executor coding_agent", "git workspace", "no such binding", "Also running", "nightly", "By hand", "Other Work", "executor shell", "daily at 06:00 UTC", "matches schedule: every job", `aria-current="page">Config`} {
+	for _, want := range []string{"Generation 4", "github_ingress", "matches github.issue", "executor coding_agent", "git workspace", "no such binding", "Also running", "nightly", "By hand", "Other Work", "executor shell", "from <span class=\"mono\">/work/eng</span>", "daily at 06:00 UTC", "matches schedule: every job", `aria-current="page">Config`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q:\n%s", want, body)
 		}

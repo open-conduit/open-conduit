@@ -173,7 +173,12 @@ func (d *decoder) value(path string) (*node, error) {
 }
 
 // checker reports schema-class diagnostics. Null nodes were already reported.
-type checker struct{ diags []Diagnostic }
+// file checks a config file as written (includes, no scope sources);
+// fragment checks an included folder's scopes (no secret references).
+type checker struct {
+	diags          []Diagnostic
+	file, fragment bool
+}
 
 func (c *checker) fail(path, code, msg string) {
 	c.diags = append(c.diags, Diagnostic{path, code, msg})

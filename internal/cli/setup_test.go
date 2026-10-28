@@ -155,7 +155,7 @@ type setupEnv struct {
 	env      map[string]string
 	stdin    string
 	valid    func([]byte) ([]client.Detail, error)
-	warnings func([]byte) []string
+	warnings func(string, []byte) []string
 	setup    *fakeSetup
 }
 
@@ -285,7 +285,7 @@ func TestInitSecretAndConfigEditing(t *testing.T) {
 // config check prints the entrypoint's cmd: warnings without failing.
 func TestConfigCheckWarnsMissingCommand(t *testing.T) {
 	root := t.TempDir()
-	s := &setupEnv{root: root, env: map[string]string{"XDG_CONFIG_HOME": filepath.Join(root, "cfg"), "HOME": root}, warnings: func(data []byte) []string {
+	s := &setupEnv{root: root, env: map[string]string{"XDG_CONFIG_HOME": filepath.Join(root, "cfg"), "HOME": root}, warnings: func(_ string, data []byte) []string {
 		if bytes.Contains(data, []byte("missing-gh-oc-test")) {
 			return []string{"cmd: reference runs missing-gh-oc-test, which is not found"}
 		}
@@ -310,5 +310,46 @@ func TestConfigCheckWarnsMissingCommand(t *testing.T) {
 	write("cmd:sh -c 'printf x'")
 	if _, errOut, code = s.run("config", "check"); code != 0 || errOut != "" {
 		t.Fatalf("found command warned: %d %q", code, errOut)
+	}
+}
+
+// config include adds the current folder (or a named one) under a parent
+// scope, refuses a duplicate, and removes it again.
+func TestConfigInclude(t *testing.T) {
+	root := t.TempDir()
+	s := &setupEnv{root: root, env: map[string]string{"XDG_CONFIG_HOME": filepath.Join(root, "cfg"), "HOME": root}}
+	path := filepath.Join(root, "cfg", "open-conduit", "config.json")
+	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(path, []byte(`{"version": 1, "scopes": []}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, code := s.run("config", "include", "add"); code != 2 {
+		t.Fatalf("add without --parent: %d", code)
+	}
+	if _, errOut, code := s.run("config", "include", "add", "--parent", "home"); code != 0 {
+		t.Fatalf("add: %d %s", code, errOut)
+	}
+	if _, _, code := s.run("config", "include", "add", root, "--parent", "home"); code == 0 {
+		t.Fatal("a duplicate include was added")
+	}
+	if _, errOut, code := s.run("config", "include", "add", "web", "--parent", "home"); code != 0 {
+		t.Fatalf("add web: %d %s", code, errOut)
+	}
+	var doc struct{ Includes []map[string]string }
+	data, _ := os.ReadFile(path)
+	if err := json.Unmarshal(data, &doc); err != nil || len(doc.Includes) != 2 || doc.Includes[0]["path"] != root || doc.Includes[1]["path"] != filepath.Join(root, "web") || doc.Includes[1]["parent"] != "home" {
+		t.Fatalf("includes %s", data)
+	}
+	if _, errOut, code := s.run("config", "include", "remove"); code != 0 {
+		t.Fatalf("remove: %d %s", code, errOut)
+	}
+	if _, _, code := s.run("config", "include", "remove"); code == 0 {
+		t.Fatal("removed a folder that is not included")
+	}
+	data, _ = os.ReadFile(path)
+	if err := json.Unmarshal(data, &doc); err != nil || len(doc.Includes) != 1 {
+		t.Fatalf("after remove %s", data)
 	}
 }

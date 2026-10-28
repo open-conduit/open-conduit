@@ -66,12 +66,21 @@ func ValidateConfigAt(configPath string, data []byte) ([]config.Diagnostic, erro
 func validateWith(configPath, exclude string, data []byte) ([]config.Diagnostic, error) {
 	reg := registry(offlineExecutors())
 	offlineExternal(&reg, configPath, exclude)
-	_, err := config.Validate(data, reg)
+	_, err := config.ValidateFile(data, reg, fileIncludes(configPath))
 	var invalid *config.ValidationError
 	if errors.As(err, &invalid) {
 		return invalid.Diagnostics, nil
 	}
 	return nil, err
+}
+
+// fileIncludes resolves a config file's includes beside it. Offline there is
+// no committed generation, so a folder that has gone contributes nothing.
+func fileIncludes(configPath string) config.Includes {
+	if configPath == "" {
+		return config.Includes{}
+	}
+	return config.Includes{Base: filepath.Dir(configPath)}
 }
 
 // offlineExecutors are the first-party executor registrations for offline
@@ -597,7 +606,7 @@ func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtim
 	executors := offlineExecutors()
 	reg := registry(executors)
 	offlineExternal(&reg, configPath, "")
-	snapshot, err := config.Validate(data, reg)
+	snapshot, err := config.ValidateFile(data, reg, fileIncludes(configPath))
 	var invalid *config.ValidationError
 	switch {
 	case errors.As(err, &invalid):

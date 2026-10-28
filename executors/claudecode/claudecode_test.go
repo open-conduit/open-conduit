@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -67,7 +68,7 @@ func TestConfigValidation(t *testing.T) {
 	for _, bad := range []string{
 		`{"unknown":1}`, `{"permission_mode":"yolo"}`, `{"playbook":"../x"}`, `{"plugin_dir":"rel"}`,
 		`{"env":{"OS_TOKEN":"x"}}`, `{"pass_env":["OS_ENDPOINT"]}`, `{"cold_turns":"draw"}`, `{"handoff_minutes":-1}`,
-		`{"extra_args":["--mcp-config","x"]}`, `{"extra_args":["--resume"]}`, `{} {}`, `{"dir":"rel"}`, `{"dir":"/a/../b"}`, `{"dir":"/no/such/folder"}`,
+		`{"extra_args":["--mcp-config","x"]}`, `{"extra_args":["--resume"]}`, `{} {}`, `{"dir":"rel"}`, `{"dir":"/a/../b"}`,
 	} {
 		if err := e.ValidateConfig(json.RawMessage(bad), nil); !errors.Is(err, claudecode.ErrConfig) {
 			t.Errorf("%s accepted: %v", bad, err)
@@ -649,6 +650,10 @@ func TestDirRunsSessionsInTheFolder(t *testing.T) {
 	if err := e.ValidateConfig(json.RawMessage(`{"dir":`+strconv.Quote(folder)+`}`), nil); err != nil {
 		t.Fatalf("an existing folder rejected: %v", err)
 	}
+	// A folder that has gone fails only its own turns, never the config.
+	if err := e.ValidateConfig(json.RawMessage(`{"dir":`+strconv.Quote(filepath.Join(h.root, "gone"))+`}`), nil); err != nil {
+		t.Fatalf("a missing folder failed the config: %v", err)
+	}
 	want, _ := filepath.EvalSymlinks(folder)
 	for i, work := range []string{"work/a", "work/b"} {
 		r, _ := h.request(work, "exec-"+work, 1, map[string]any{"dir": folder})
@@ -673,6 +678,37 @@ func TestDirRunsSessionsInTheFolder(t *testing.T) {
 	}
 	if inv := h.invocations(); len(inv) != 2 {
 		t.Fatalf("refused turns started claude: %v", inv)
+	}
+}
+
+// TestFolderConfig: a binding from an included folder runs in that folder
+// unless it has a resource or its own dir, and its relative paths resolve
+// against the folder.
+func TestFolderConfig(t *testing.T) {
+	e := &claudecode.Executor{}
+	cases := []struct {
+		config   string
+		resource bool
+		want     map[string]string
+	}{
+		{`{"model":"sonnet"}`, false, map[string]string{"dir": "/work/web", "model": "sonnet"}},
+		{``, false, map[string]string{"dir": "/work/web"}},
+		{`{}`, true, map[string]string{}},
+		{`{"dir":"sub","plugin_dir":"skills"}`, false, map[string]string{"dir": "/work/web/sub", "plugin_dir": "/work/web/skills"}},
+		{`{"dir":"/elsewhere"}`, false, map[string]string{"dir": "/elsewhere"}},
+	}
+	for _, tc := range cases {
+		out, err := e.FolderConfig(json.RawMessage(tc.config), "/work/web", tc.resource)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.config, err)
+		}
+		var got map[string]string
+		if err := json.Unmarshal(out, &got); err != nil || !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: got %s, want %v", tc.config, out, tc.want)
+		}
+		if err := e.ValidateConfig(out, nil); err != nil {
+			t.Fatalf("%s: adapted config invalid: %v", tc.config, err)
+		}
 	}
 }
 

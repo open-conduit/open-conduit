@@ -730,3 +730,73 @@ func TestManagementDeclaredWaitAndOperatorWake(t *testing.T) {
 		t.Fatalf("woken work did not continue: %v", err)
 	}
 }
+
+// An included folder's scopes join the generation; deleting the folder
+// leaves a configuration that still applies, with those scopes kept but
+// disabled, and putting it back enables them again.
+func TestManagementIncludedFolderSurvivesDeletion(t *testing.T) {
+	ctx := context.Background()
+	clock := conformance.NewClock()
+	state := t.TempDir()
+	db, err := sqlite.Open(ctx, filepath.Join(state, "conduit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	folder := filepath.Join(state, "web")
+	fragment := `{"version": 1, "scopes": [{"id": "web", "name": "Web",
+		"bindings": [{"name": "run", "executor": "fixture", "requires": {"toolbelt": "cli"}, "operations": ["emit"], "secret_names": ["api"], "config": {}}],
+		"routes": [{"name": "incoming", "handler": "manual", "binding": "run", "active_policy": "queue", "config": {}}]}]}`
+	writeFragment := func() {
+		if err := os.MkdirAll(filepath.Join(folder, ".open-conduit"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(folder, config.FragmentFile), []byte(fragment), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	writeFragment()
+	path := filepath.Join(state, "config.json")
+	data := []byte(strings.Replace(managementConfig, `"connections": [],`, `"connections": [], "includes": [{"path": "web", "parent": "ops"}],`, 1))
+	if err = config.SaveAtomic(path, data); err != nil {
+		t.Fatal(err)
+	}
+	registry := config.Registry{Executors: map[string]extension.Executor{"fixture": &schedulerExecutor{caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}}, Handlers: map[string]bool{"manual": true}}
+	configs, err := management.OpenConfig(ctx, db, clock.Now, registry, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !configs.Enabled("web") || configs.DiskStatus() != "current" {
+		t.Fatalf("included scope not active: %s", configs.DiskStatus())
+	}
+	apply := func(want bool) {
+		t.Helper()
+		snapshot, err := configs.Validate(data)
+		if err != nil {
+			t.Fatalf("validate: %v", err)
+		}
+		_, gen := configs.Current()
+		if _, _, err = configs.Apply(ctx, data, snapshot.Hash, gen); err != nil {
+			t.Fatalf("apply: %v", err)
+		}
+		if configs.Enabled("web") != want || !configs.Enabled("ops") {
+			t.Fatalf("web enabled %v, want %v", configs.Enabled("web"), want)
+		}
+	}
+	if err = os.RemoveAll(folder); err != nil {
+		t.Fatal(err)
+	}
+	if configs.DiskStatus() != "pending_edit" {
+		t.Fatalf("deleted folder status %s", configs.DiskStatus())
+	}
+	apply(false)
+	reopened, err := management.OpenConfig(ctx, db, clock.Now, registry, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if snap, _ := reopened.Current(); reopened.Enabled("web") || snap.Scopes["web"] == nil {
+		t.Fatal("restart lost the disabled scope or enabled it")
+	}
+	writeFragment()
+	apply(true)
+}

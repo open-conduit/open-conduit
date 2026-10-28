@@ -147,7 +147,7 @@ func (o *operator) validate(path string, data []byte) bool {
 		fmt.Fprintln(o.errOut, "open-conduit: config is not valid JSON")
 		return false
 	}
-	o.warnConfig(data)
+	o.warnConfig(path, data)
 	if o.env.ValidateConfig == nil && o.env.ValidateConfigAt == nil {
 		return true
 	}
@@ -165,11 +165,11 @@ func (o *operator) validate(path string, data []byte) bool {
 // warnConfig prints the entrypoint's warnings about the config (a cmd:
 // program not on the resolver's PATH, a setting with no effect); they never
 // fail it.
-func (o *operator) warnConfig(data []byte) {
+func (o *operator) warnConfig(path string, data []byte) {
 	if o.env.ConfigWarnings == nil {
 		return
 	}
-	for _, w := range o.env.ConfigWarnings(data) {
+	for _, w := range o.env.ConfigWarnings(path, data) {
 		fmt.Fprintf(o.errOut, "open-conduit: warning: %s\n", w)
 	}
 }
@@ -530,6 +530,8 @@ func (o *operator) secret(args []string) int {
 func (o *operator) localConfig(args []string) (int, bool) {
 	switch args[0] {
 	case "path", "show", "check", "get", "set", "unset":
+	case "include":
+		return o.includeConfig(args[1:]), true
 	default:
 		return 0, false
 	}
@@ -602,16 +604,87 @@ func (o *operator) localConfig(args []string) (int, bool) {
 	} else if err = root.unset(parts); err != nil {
 		return o.emit(nil, err), true
 	}
-	out := root.bytes()
+	return o.saveConfig(path, root.bytes()), true
+}
+
+// saveConfig validates an edited config and saves it, or leaves the file
+// unchanged.
+func (o *operator) saveConfig(path string, out []byte) int {
 	if !o.validate(path, out) {
 		fmt.Fprintln(o.errOut, "open-conduit: not saved; the config file is unchanged")
-		return 1, true
+		return 1
 	}
 	if err := writePrivate(path, out); err != nil {
-		return o.emit(nil, fmt.Errorf("could not save the config")), true
+		return o.emit(nil, fmt.Errorf("could not save the config"))
 	}
 	fmt.Fprintf(o.errOut, "Saved %s. A running daemon, even after a restart, keeps its stored configuration until you run: open-conduit config apply %s --generation N (or, if the stored configuration no longer validates, adopts this file when it next starts)\n", path, path)
-	return 0, true
+	return 0
+}
+
+// includeConfig adds or removes a folder in the config file's includes:
+// `config include add [FOLDER] --parent SCOPE` (FOLDER defaults to the
+// current directory) and `config include remove [FOLDER]`.
+func (o *operator) includeConfig(args []string) int {
+	const usage = "expected config include add [FOLDER] --parent SCOPE | config include remove [FOLDER]"
+	if len(args) == 0 || (args[0] != "add" && args[0] != "remove") {
+		return usageError(o.errOut, usage)
+	}
+	f := newFlags("include", "file", "parent")
+	pos, err := f.parse(args[1:])
+	if err != nil || len(pos) > 1 || (args[0] == "add") != (f.get("parent") != "") {
+		return usageError(o.errOut, usage)
+	}
+	folder := o.env.Cwd
+	if len(pos) == 1 {
+		folder = pos[0]
+	}
+	if !filepath.IsAbs(folder) {
+		folder = filepath.Join(o.env.Cwd, folder)
+	}
+	folder = filepath.Clean(folder)
+	path := o.configPath(f.get("file"))
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return o.emit(nil, fmt.Errorf("no config at %s; create one with open-conduit init", path))
+	}
+	root, err := parseNode(data)
+	if err != nil || root.kind != 'o' {
+		return o.emit(nil, fmt.Errorf("config is not a JSON object"))
+	}
+	includes := root.field("includes")
+	if includes == nil {
+		includes = &node{kind: 'a'}
+	} else if includes.kind != 'a' {
+		return o.emit(nil, fmt.Errorf("includes is not a list"))
+	}
+	at := -1
+	for i, el := range includes.arr {
+		var p string
+		if pn := el.field("path"); el.kind == 'o' && pn != nil && json.Unmarshal(pn.scalar, &p) == nil {
+			if !filepath.IsAbs(p) {
+				p = filepath.Join(filepath.Dir(path), p)
+			}
+			if filepath.Clean(p) == folder {
+				at = i
+			}
+		}
+	}
+	switch {
+	case args[0] == "add" && at >= 0:
+		return o.emit(nil, fmt.Errorf("%s is already included", folder))
+	case args[0] == "add":
+		entry, _ := json.Marshal(map[string]string{"path": folder, "parent": f.get("parent")})
+		n, _ := parseNode(entry)
+		includes.arr = append(includes.arr, n)
+	case at < 0:
+		return o.emit(nil, fmt.Errorf("%s is not included", folder))
+	default:
+		includes.arr = append(includes.arr[:at], includes.arr[at+1:]...)
+	}
+	if err = root.set([]string{"includes"}, includes); err != nil {
+		return o.emit(nil, err)
+	}
+	return o.saveConfig(path, root.bytes())
 }
 
 // storeSecret stores a value in the platform keyring (preferred) or the

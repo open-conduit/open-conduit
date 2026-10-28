@@ -158,7 +158,7 @@ The config is strict and validated at load. Every field is optional:
 | `structured` | Default true. |
 | `status_schema` | The outcome data schema (default `core.turn.v1`). |
 | `branch`, `workspace_mode` | The workspace request. |
-| `dir` | An existing absolute folder a workspace-free binding's sessions run in, used as-is. Checked to exist at load. |
+| `dir` | An absolute folder a workspace-free binding's sessions run in, used as-is. A folder that has gone fails only that binding's turns, as `workspace_unavailable`, never the config. In an [included folder](../config-management/#included-folders), `dir` defaults to the folder (unless the binding has a resource), and a relative `dir` or `plugin_dir` resolves against it. |
 | `handoff_minutes` | How long after a turn the session counts as cold (default 55). |
 | `cold_turns` | What a cold turn does: `handoff` (default) or `resume`. `handoff_share`, the removed experiment's setting, is ignored with a `config check` warning for one release, then rejected. |
 | `env`, `pass_env`, `secret_env` | The environment. |

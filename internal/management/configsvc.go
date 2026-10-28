@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
 	"reflect"
 	"strconv"
 	"sync"
@@ -88,7 +89,7 @@ func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 		if err != nil {
 			return nil, err
 		}
-		snapshot, err := config.Validate(data, registry)
+		snapshot, err := config.ValidateFile(data, registry, c.includes(nil))
 		if err != nil {
 			return nil, err
 		}
@@ -99,7 +100,7 @@ func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 	}
 	snapshot, err := config.Validate(normalized, registry)
 	if err != nil {
-		return c.adopt(ctx, active.Generation, err)
+		return c.adopt(ctx, active.Generation, normalized, err)
 	}
 	c.current, c.generation = snapshot, active.Generation
 	c.history[active.Generation] = snapshot
@@ -107,8 +108,8 @@ func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 }
 
 // adopt publishes the config file over a stored generation that failed
-// validation with cause.
-func (c *ConfigService) adopt(ctx context.Context, stored uint64, cause error) (*ConfigService, error) {
+// validation with cause. Its scopes still stand in for a folder that has gone.
+func (c *ConfigService) adopt(ctx context.Context, stored uint64, normalized []byte, cause error) (*ConfigService, error) {
 	fail := func(err error) (*ConfigService, error) {
 		return nil, fmt.Errorf("stored generation %d no longer validates (%w); fix %s and restart to adopt it instead: %v", stored, cause, c.path, err)
 	}
@@ -116,7 +117,7 @@ func (c *ConfigService) adopt(ctx context.Context, stored uint64, cause error) (
 	if err != nil {
 		return fail(err)
 	}
-	snapshot, err := config.Validate(data, c.registry)
+	snapshot, err := config.ValidateFile(data, c.registry, c.includes(normalized))
 	if err != nil {
 		return fail(err)
 	}
@@ -155,9 +156,21 @@ func (c *ConfigService) DiskStatus() string {
 	return "current"
 }
 
-// Validate is side-effect free.
+// Validate is side-effect free. It composes the config file's includes from
+// their folders; a folder that has gone keeps the committed generation's
+// scopes, disabled.
 func (c *ConfigService) Validate(data []byte) (*config.Snapshot, error) {
-	return config.Validate(data, c.registry)
+	var previous []byte
+	if current, _ := c.Current(); current != nil {
+		previous = current.Normalized
+	}
+	return config.ValidateFile(data, c.registry, c.includes(previous))
+}
+
+// includes resolves include paths against the config file's directory, as
+// the file applied through the API is saved there.
+func (c *ConfigService) includes(previous []byte) config.Includes {
+	return config.Includes{Base: filepath.Dir(c.path), Previous: previous}
 }
 
 // Apply fully revalidates, checks hash and generation, saves the file

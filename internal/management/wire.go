@@ -151,6 +151,7 @@ type wireConfigScope struct {
 	Name       string                `json:"name"`
 	ParentID   string                `json:"parent_id,omitempty"`
 	Enabled    bool                  `json:"enabled"`
+	Source     string                `json:"source,omitempty"`
 	Extensions []wireConfigExtension `json:"extensions"`
 	Routes     []wireConfigRoute     `json:"routes"`
 	Bindings   []wireConfigBinding   `json:"bindings"`

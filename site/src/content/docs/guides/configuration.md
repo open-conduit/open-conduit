@@ -34,6 +34,35 @@ open-conduit config check                            # validate offline
 
 `get`, `set` and `unset` take a JSON pointer and validate before saving. A running daemon picks up a changed file only when you run `config apply FILE --generation N`. Restarting does not apply it: the daemon resumes its active stored generation and logs a warning at startup when the file differs.
 
+## Config in a working folder
+
+A folder can hold everything one workflow needs: its files, the agent's instructions (`CLAUDE.md`, `AGENTS.md`), its skills (`.claude/skills`) and its Open Conduit scopes in `.open-conduit/config.json`. The main config includes the folder beneath one of its own scopes:
+
+```sh
+cd ~/Code/web
+open-conduit config include add --parent personal
+```
+
+The folder's file holds only scopes, in the same shape as the main config's:
+
+```json
+{
+  "version": 1,
+  "scopes": [{
+    "id": "web", "name": "Web",
+    "bindings": [{"name": "agent", "executor": "claude-code", "requires": {"toolbelt": "mcp"}, "operations": ["emit", "read_context", "declare_outcome"], "secret_names": [], "config": {}}],
+    "routes": [{"name": "incoming", "handler": "manual", "binding": "agent", "active_policy": "queue", "config": {}}]
+  }]
+}
+```
+
+- **Beneath the parent.** A scope without a `parent` sits under the include's parent. It inherits that scope's authorization and secrets, and can only narrow them.
+- **No credentials.** A folder can't define connections, settings or secret references. It selects the secret names its parent already has, so a cloned repository can't run a `cmd:` reference of its own.
+- **Runs in the folder.** A `claude-code` binding without a resource or `dir` runs in the folder, and a relative `dir` or `plugin_dir` is resolved against it.
+- **Safe to delete.** If the folder or its file goes, the configuration still applies. Its scopes stay as last applied, but disabled, until the folder is back. `config check` warns about it. To drop them for good, run `open-conduit config include remove FOLDER`.
+
+As with the main file, edits to a folder's config take effect on `config apply`.
+
 ## Secrets
 
 The config never holds a credential, only a reference to one:
