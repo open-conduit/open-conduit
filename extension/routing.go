@@ -37,6 +37,10 @@ type RouteDecision struct {
 	Display    *domain.WorkDisplay
 }
 
+// RouteHandler decides whether its route takes an Event. Match must be free
+// of side effects: routing may evaluate it again after a revision conflict,
+// and a route trace calls it for hypothetical Events that never happen, so it
+// decides from its input alone and records, sends or counts nothing.
 type RouteHandler interface {
 	Match(context.Context, RouteInput) (RouteDecision, error)
 }

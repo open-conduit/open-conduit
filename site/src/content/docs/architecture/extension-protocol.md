@@ -32,7 +32,7 @@ The table groups what the first-party code actually does across the host boundar
 | Ingress push | `Ingress.Push` behind host-mounted `WebhookHandler`s (verify, then push; 2xx only after durable acceptance) | GH SL TR BB SC | `webhook.handle`, `ingress.push` |
 | Ingress reconcile | `Ingress.Reconcile`, driven by `ReconcileDue` with page timeout and item/byte limits | GH SL TR BB SC | `ingress.reconcile` |
 | Extension-owned receiver | Slack Socket Mode calls the host push func and acks the envelope only after it returns | SL | `ingress.deliver` (E→H) |
-| Routing | `RouteHandler.Match` on a detached snapshot, outside any transaction, with an optional Work display | GH SL TR BB SC IS | `route.match` |
+| Routing | `RouteHandler.Match` on a detached snapshot, outside any transaction and free of side effects, with an optional Work display | GH SL TR BB SC IS | `route.match` |
 | Work kind policy | `WorkKindPolicy{Standing, Trigger}`. `Trigger` is pure and runs in the start transaction | SC (IS standing only) | manifest `work_kinds`, `work_kind.trigger` |
 | Calendar recurrence | `RecurrenceFunc` in the timer fire-and-rearm transaction. `Armer.ArmRecurrence/Cancel` from `Ensure` | SC IS | `recurrence.next`, `timer.arm`, `timer.cancel` |
 | Toolbelt operations | `Registration{Name, EventTypes, Operations, DependencyFilter}`. `Operation.Handler` (all), `.Wait` (GH), `.Emit` with in-transaction `Commit` (IS) | GH SL TR BB IS | `operation.call`, `operation.wait`, `operation.emit`, `emit.commit`, `dependency.filter` |
@@ -386,6 +386,10 @@ Ingress identity is part of evolution. Core binds an observation's `(item, versi
   - discovery and atomic conflicts;
   - executor lease fencing across restarts, through the real scheduler.
 - **Unit tests.** `protocol/evolution_test.go`, `protocol/jsonrpc/conn_test.go`, `protocol/sdk/sdk_test.go` and `internal/extproc/process_test.go`.
+
+## Route traces
+
+A route trace (`POST /v1/scopes/{id}/route/trace`, `open-conduit route --trace`) asks every route how it would decide a hypothetical Event, so `route.match` is called for Events that never happen, as often as an operator asks. A handler must therefore be free of side effects: it decides from its input alone and records, sends, counts and caches nothing. Routing may also call it again for the same Event after a revision conflict. The `reason` it returns explains the verdict in a trace and never changes the decision.
 
 ## Work display and wait descriptions
 
