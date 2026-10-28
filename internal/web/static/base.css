@@ -951,3 +951,21 @@ details.menu-wrap > summary {
 details.menu-wrap > summary::-webkit-details-marker {
   display: none;
 }
+
+/* The dark-only rules above, for dark from the system. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) .status {
+    background: #050506;
+    border-top: 1px solid var(--rule);
+  }
+  :root:not([data-theme='light']) .btn-danger, :root:not([data-theme='light']) .btn-signal {
+    color: #140804;
+  }
+  :root:not([data-theme='light']) .toast .sim-tag {
+    color: var(--signal-ink);
+  }
+}
+
+[hidden] {
+  display: none !important;
+}
