@@ -32,13 +32,23 @@ type Registry struct {
 	// HandlerConfig optionally validates a registered route handler's opaque
 	// route config at load/apply time (05-01). Its error text is never echoed.
 	HandlerConfig map[string]func(json.RawMessage) error
+	// HandlerDescribe optionally says in words which events a route with
+	// this handler and config takes, for the operator's view of the config.
+	HandlerDescribe map[string]func(json.RawMessage) string
 }
 
 // ExtensionType Ingress entries must target their containing scope.
 type ExtensionType struct {
 	Ingress  bool
 	Validate func(config json.RawMessage, secretNames []string) error
+	// Describe optionally lists what an entry's config sets up (a schedule's
+	// jobs and when they run), for the operator's view of the config. It
+	// must not reveal secrets.
+	Describe func(config json.RawMessage) []Entry
 }
+
+// Entry is one thing an extension entry sets up, named and described.
+type Entry struct{ Name, Detail string }
 
 type EffectiveScope struct {
 	ID, ParentID                domain.ID

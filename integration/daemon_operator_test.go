@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -151,6 +152,18 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 	}
 	if blob, _ := json.Marshal(report); bytes.Contains(blob, []byte("file:github-token")) || bytes.Contains(blob, []byte(`tok"`)) {
 		t.Fatalf("doctor disclosed a reference or value: %s", blob)
+	}
+	// The active config's wiring: GitHub ingress routed to the agent,
+	// with no secret reference in it.
+	cfg, err := d.c.Config(ctx)
+	if err != nil || len(cfg.Scopes) != 1 || cfg.Generation == "" {
+		t.Fatalf("config: %+v %v", cfg, err)
+	}
+	if sc := cfg.Scopes[0]; sc.ID != "eng" || len(sc.Routes) == 0 || len(sc.Bindings) == 0 || !slices.ContainsFunc(sc.Extensions, func(x client.ConfigExtension) bool { return x.Ingress }) {
+		t.Fatalf("config scope: %+v", sc)
+	}
+	if blob, _ := json.Marshal(cfg); bytes.Contains(blob, []byte("file:github-token")) {
+		t.Fatalf("config disclosed a reference: %s", blob)
 	}
 	// 5a. Required checks (08-01): doctor names them and their source, notes
 	//     rulesets the plan lacks and warns when protection is refused.

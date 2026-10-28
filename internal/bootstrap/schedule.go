@@ -58,8 +58,26 @@ func scheduleRegistry(reg *config.Registry) {
 	if reg.HandlerConfig == nil {
 		reg.HandlerConfig = map[string]func(json.RawMessage) error{}
 	}
-	reg.Extensions[sc.Type] = config.ExtensionType{Ingress: true, Validate: sc.ValidateExtension}
+	if reg.HandlerDescribe == nil {
+		reg.HandlerDescribe = map[string]func(json.RawMessage) string{}
+	}
+	reg.Extensions[sc.Type] = config.ExtensionType{Ingress: true, Validate: sc.ValidateExtension, Describe: describeJobs}
 	reg.HandlerConfig[sc.Type] = sc.ValidateRoute
+	reg.HandlerDescribe[sc.Type] = func(c json.RawMessage) string { return sc.DescribeRoute(c) }
+}
+
+// describeJobs lists a schedule entry's jobs and when each runs. The
+// entry was validated when its config loaded.
+func describeJobs(c json.RawMessage) []config.Entry {
+	var s sc.ExtensionConfig
+	if json.Unmarshal(c, &s) != nil {
+		return nil
+	}
+	out := make([]config.Entry, len(s.Jobs))
+	for i, j := range s.Jobs {
+		out[i] = config.Entry{Name: j.Name, Detail: j.Describe()}
+	}
+	return out
 }
 
 // scheduleWorkKinds is the scheduler policy for job Work: standing, with the

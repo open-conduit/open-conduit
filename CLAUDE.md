@@ -11,6 +11,12 @@
 
 Tests never call real services, never wait on real time and never touch the operator's config or state; see "Tests" in CONTRIBUTING.md.
 
+# UI
+
+- No eyebrows or sidebrows: never give an item a coloured border on one side only (a left or top accent stripe on a card, panel, row or message). Use even, neutral borders and let layout and type carry the structure.
+- No other stock AI-UI tells either: gradient text or backgrounds, glassy blur, emoji as icons, numbers in coloured circles, small uppercase tracked labels above headings, a pill on everything.
+- Look at your own screenshot before sharing it. Things that relate (a route and its binding, a row's cells) must line up; when the layout depends on the data, compute the rows and put them in one grid rather than independent stacks.
+
 # Commit messages and PR titles (commitlint)
 
 The commitlint workflow lints **the PR title and every commit on the branch** with `@commitlint/config-conventional` (`.commitlintrc.json`). semantic-release reads them to pick the next version, so a bad message fails CI and a wrong type ships the wrong release.

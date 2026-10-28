@@ -633,6 +633,55 @@ func (s *Server) wakeWork(c *call) (int, any, error) {
 	return 202, map[string]any{"event": toEvent(accepted, scope), "matched": matched}, nil
 }
 
+// config is the active generation's wiring: each scope's extensions, routes
+// and bindings by name and type, and the connections they use, with what
+// an extension or route handler says its config sets up (a schedule's
+// jobs). It carries no opaque config and no secret references.
+func (s *Server) config(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	snap, generation := s.o.Config.Current()
+	reg := s.o.Config.Registry()
+	out := wireConfig{Generation: u64(generation), Hash: snap.Hash, Connections: []wireConnection{}, Scopes: []wireConfigScope{}}
+	for _, conn := range snap.Connections {
+		out.Connections = append(out.Connections, wireConnection{ID: conn.ID, Type: conn.Type})
+	}
+	for _, id := range snap.Order {
+		e := snap.Scopes[id]
+		if e == nil {
+			continue
+		}
+		sc := wireConfigScope{ID: string(e.ID), Name: e.Name, ParentID: string(e.ParentID), Enabled: e.Enabled, Extensions: []wireConfigExtension{}, Routes: []wireConfigRoute{}, Bindings: []wireConfigBinding{}}
+		for _, x := range e.Extensions {
+			t := reg.Extensions[x.Type]
+			wx := wireConfigExtension{Name: x.Name, Type: x.Type, Connection: x.Connection, Ingress: t.Ingress}
+			if t.Describe != nil {
+				for _, en := range t.Describe(x.Config) {
+					wx.Entries = append(wx.Entries, wireEntry{en.Name, en.Detail})
+				}
+			}
+			sc.Extensions = append(sc.Extensions, wx)
+		}
+		for _, r := range e.Routes {
+			wr := wireConfigRoute{wireRoute: wireRoute{r.Name, r.Handler, r.Binding, r.ActivePolicy}}
+			if d := reg.HandlerDescribe[r.Handler]; d != nil {
+				wr.Detail = d(r.Config)
+			}
+			sc.Routes = append(sc.Routes, wr)
+		}
+		for _, b := range e.Bindings {
+			wb := wireConfigBinding{Name: b.Name, Executor: b.Executor, Connection: b.Connection}
+			if b.Resource != nil {
+				wb.Resource = b.Resource.Provider
+			}
+			sc.Bindings = append(sc.Bindings, wb)
+		}
+		out.Scopes = append(out.Scopes, sc)
+	}
+	return 200, out, nil
+}
+
 func (s *Server) validateConfig(c *call) (int, any, error) {
 	var in struct {
 		Config json.RawMessage `json:"config"`

@@ -278,6 +278,7 @@ var routes = []route{
 	{"GET", []string{"runs", "*"}, false, false, (*Server).getRun},
 	{"GET", []string{"runs", "*", "live"}, false, false, (*Server).liveRun},
 	{"GET", []string{"doctor"}, false, false, (*Server).doctor},
+	{"GET", []string{"config"}, false, false, (*Server).config},
 	{"GET", []string{"artifacts"}, false, false, (*Server).listArtifacts},
 	{"GET", []string{"artifacts", "*", "content"}, false, false, (*Server).artifactContent},
 	{"POST", []string{"events"}, true, true, (*Server).postEvent},

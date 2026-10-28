@@ -68,6 +68,27 @@ func TestDaemonScheduledJobs(t *testing.T) {
 		return n
 	}
 	d.until("the interval job runs at start", 30*time.Second, func() bool { return count(sc.TypeSlot) == 1 })
+	// The config view lists the jobs with when they run, and what the route takes.
+	if cfg, err := d.c.Config(ctx); err != nil {
+		t.Fatal(err)
+	} else {
+		var got []string
+		for _, sc := range cfg.Scopes {
+			for _, x := range sc.Extensions {
+				for _, e := range x.Entries {
+					got = append(got, e.Name+": "+e.Detail)
+				}
+			}
+			for _, r := range sc.Routes {
+				if r.Handler == "schedule" {
+					got = append(got, "route: "+r.Detail)
+				}
+			}
+		}
+		if want := "tick: every hour|deploy: on push to main|poke: on its webhook|route: every job"; strings.Join(got, "|") != want {
+			t.Fatalf("config entries: %q", got)
+		}
+	}
 	var addr string
 	d.until("webhook listener", 30*time.Second, func() bool {
 		r, err := d.c.Doctor(ctx, false)

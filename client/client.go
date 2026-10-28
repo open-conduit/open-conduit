@@ -679,6 +679,61 @@ type ConfigApplied struct {
 	Hash       string `json:"hash"`
 }
 
+// Config is the active generation's wiring: each scope's extensions,
+// routes and bindings, and the connections they use.
+type Config struct {
+	Generation  string             `json:"generation"`
+	Hash        string             `json:"hash"`
+	Connections []ConfigConnection `json:"connections"`
+	Scopes      []ConfigScope      `json:"scopes"`
+}
+type ConfigConnection struct {
+	ID   string `json:"id"`
+	Type string `json:"type"`
+}
+type ConfigScope struct {
+	ID         string            `json:"id"`
+	Name       string            `json:"name"`
+	ParentID   string            `json:"parent_id,omitempty"`
+	Enabled    bool              `json:"enabled"`
+	Extensions []ConfigExtension `json:"extensions"`
+	Routes     []ConfigRoute     `json:"routes"`
+	Bindings   []ConfigBinding   `json:"bindings"`
+}
+
+// ConfigRoute is a route with, when its handler says, which events it takes.
+type ConfigRoute struct {
+	Route
+	Detail string `json:"detail,omitempty"`
+}
+
+// ConfigExtension is an extension a scope runs; Ingress ones bring events in.
+type ConfigExtension struct {
+	Name       string        `json:"name"`
+	Type       string        `json:"type"`
+	Connection string        `json:"connection,omitempty"`
+	Ingress    bool          `json:"ingress"`
+	Entries    []ConfigEntry `json:"entries,omitempty"`
+}
+
+// ConfigEntry is one thing an extension entry sets up, such as a scheduled
+// job and when it runs.
+type ConfigEntry struct {
+	Name   string `json:"name"`
+	Detail string `json:"detail,omitempty"`
+}
+
+// ConfigBinding names an executor and the connection and resource it uses.
+type ConfigBinding struct {
+	Name       string `json:"name"`
+	Executor   string `json:"executor"`
+	Connection string `json:"connection,omitempty"`
+	Resource   string `json:"resource,omitempty"`
+}
+
+func (c *Client) Config(ctx context.Context) (Config, error) {
+	return get[Config](c, ctx, "config")
+}
 func (c *Client) ValidateConfig(ctx context.Context, config json.RawMessage) (out ConfigValidation, err error) {
 	err = c.Do(ctx, "POST", "config/validate", nil, map[string]json.RawMessage{"config": config}, "", &out)
 	return

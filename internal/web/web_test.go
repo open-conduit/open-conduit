@@ -29,6 +29,7 @@ type fake struct {
 	actions map[string][]client.Action
 	panels  map[string][]client.Panel
 	scopes  []client.Scope
+	config  *client.Config
 	live    map[string]client.LiveRun
 	content map[string]string
 
@@ -74,6 +75,12 @@ func (f *fake) Waits(context.Context, url.Values) (client.Page[client.Wait], err
 }
 func (f *fake) Scopes(context.Context, url.Values) (client.Page[client.Scope], error) {
 	return client.Page[client.Scope]{Items: f.scopes}, nil
+}
+func (f *fake) Config(context.Context) (client.Config, error) {
+	if f.config == nil {
+		return client.Config{}, &client.Error{Status: 404, Code: "not_found"}
+	}
+	return *f.config, nil
 }
 func (f *fake) control(name, id, revision string) (client.ControlResult, error) {
 	f.controls = append(f.controls, name+" "+id+"@"+revision)
@@ -403,6 +410,28 @@ func TestScopesPage(t *testing.T) {
 	body := do(h, "GET", "/scopes", nil, s).Body.String()
 	if !strings.Contains(body, "Claim an issue") || !strings.Contains(body, `name="scope" value="scope_a"`) {
 		t.Fatalf("scopes:\n%s", body)
+	}
+}
+
+func TestConfigPage(t *testing.T) {
+	f, s, h := setup(t)
+	if body := do(h, "GET", "/config", nil, s).Body.String(); !strings.Contains(body, "upgrade it to see it here") {
+		t.Fatalf("old daemon:\n%s", body)
+	}
+	f.config = &client.Config{Generation: "4", Hash: "abc", Connections: []client.ConfigConnection{{ID: "github", Type: "github"}}, Scopes: []client.ConfigScope{{
+		ID: "eng", Name: "Engineering", Enabled: true,
+		Extensions: []client.ConfigExtension{{Name: "issues", Type: "github_ingress", Connection: "github", Ingress: true}, {Name: "nightly", Type: "plugin"}, {Name: "jobs", Type: "schedule", Ingress: true, Entries: []client.ConfigEntry{{Name: "sweep", Detail: "daily at 06:00 UTC"}}}},
+		Routes:     []client.ConfigRoute{{Route: client.Route{Name: "incoming", Handler: "github.issue", Binding: "agent", ActivePolicy: "queue"}}, {Route: client.Route{Name: "stray", Handler: "schedule", Binding: "gone"}, Detail: "every job"}},
+		Bindings:   []client.ConfigBinding{{Name: "agent", Executor: "coding_agent", Resource: "git"}, {Name: "shell", Executor: "shell"}},
+	}}}
+	body := do(h, "GET", "/config", nil, s).Body.String()
+	for _, want := range []string{"Generation 4", "github_ingress", "matches github.issue", "executor coding_agent", "git workspace", "no such binding", "Also running", "nightly", "By hand", "Other Work", "executor shell", "daily at 06:00 UTC", "matches schedule: every job", `aria-current="page">Config`} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q:\n%s", want, body)
+		}
+	}
+	if strings.Index(body, "incoming") > strings.Index(body, "stray") {
+		t.Fatal("routes out of order")
 	}
 }
 
