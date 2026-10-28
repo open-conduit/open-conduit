@@ -511,6 +511,59 @@ func TestWorkBranchKeepsEditsAndCommits(t *testing.T) {
 	}
 }
 
+// A Work started again on the branch of a cancelled one (an issue closed and
+// reopened) takes over the retained workspace with what was left in it; a
+// branch still held by a live Work is refused naming that Work.
+func TestWorkTakesOverRetainedWorkspaceOnItsBranch(t *testing.T) {
+	f := newFixture(t)
+	c := cfg(map[string]any{"mode": "work", "branch_template": "agent/issue-7"})
+	a, err := f.acquire(owner("A", "a1"), c, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	write(t, a.Dir, "work.txt", "committed")
+	runGit(t, a.Dir, "add", "work.txt")
+	runGit(t, a.Dir, "commit", "-qm", "work")
+	write(t, a.Dir, "a.txt", "editing")
+	f.set("a1", extension.ResourceOwnerStatus{Known: true, ExecutionDone: true, WorkDone: true})
+	if report := f.reconcile(); report.Retained != 1 {
+		t.Fatalf("after Work A was cancelled: %+v", report)
+	}
+	var log strings.Builder
+	b, err := f.acquire(owner("B", "b1"), c, "", &log)
+	if err != nil {
+		t.Fatalf("Work B on the retained branch: %v (%s)", err, log.String())
+	}
+	if b.Ref == a.Ref || b.Dir != filepath.Join(f.dir, "state", "workspaces", b.Ref) || exists(a.Dir) {
+		t.Fatalf("takeover: %+v from %+v", b, a)
+	}
+	if w := syncOf(t, b); !w.Reused || w.Dirty != 1 || w.Branch != "agent/issue-7" {
+		t.Fatalf("takeover workspace: %+v", w)
+	}
+	if read(t, filepath.Join(b.Dir, "a.txt")) != "editing" || runGit(t, b.Dir, "log", "-1", "--format=%s") != "work" {
+		t.Fatal("the takeover lost Work A's edit or commit")
+	}
+	if !strings.Contains(log.String(), "took over the retained workspace of work A") {
+		t.Fatalf("log: %s", log.String())
+	}
+	if entries, _ := os.ReadDir(filepath.Join(f.dir, "state", "leases")); len(entries) != 1 {
+		t.Fatalf("Work A's lease outlived the takeover: %d leases", len(entries))
+	}
+	// A's retention running out takes nothing from B.
+	f.advance(48 * time.Hour)
+	f.reconcile()
+	if !exists(b.Dir) {
+		t.Fatal("Work B's workspace went when Work A's retention ran out")
+	}
+	// While B is live, another Work on the branch is refused naming B.
+	if _, err = f.acquire(owner("C", "c1"), c, "", nil); err == nil || !strings.Contains(err.Error(), "work B") {
+		t.Fatalf("branch held by a live Work: %v", err)
+	}
+	if read(t, filepath.Join(b.Dir, "a.txt")) != "editing" {
+		t.Fatal("the refused acquisition touched Work B's workspace")
+	}
+}
+
 func TestWorkTracksBranchFromConfiguredRemote(t *testing.T) {
 	dir := t.TempDir()
 	upstream, root := filepath.Join(dir, "upstream.git"), filepath.Join(dir, "repo")

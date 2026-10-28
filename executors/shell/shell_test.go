@@ -593,6 +593,9 @@ func TestWorkspaceThroughBroker(t *testing.T) {
 		if c.reason == "workspace_no_space" && !strings.Contains(res.Outcome.Summary, "free space, then retry") {
 			t.Fatalf("the refusal lost its advice: %q", res.Outcome.Summary)
 		}
+		if c.reason == "workspace_unavailable" && res.Outcome.Summary != "workspace acquisition failed: checkout missing" {
+			t.Fatalf("the unavailable summary lost the provider's reason: %q", res.Outcome.Summary)
+		}
 	}
 }
 

@@ -182,7 +182,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 			// message says what to free.
 			return e.preset(ctx, rn, cfg.StatusSchema, "workspace_no_space", err.Error(), nil)
 		case err != nil || res.Dir == "":
-			return e.preset(ctx, rn, cfg.StatusSchema, "workspace_unavailable", "workspace acquisition failed", nil)
+			return e.preset(ctx, rn, cfg.StatusSchema, "workspace_unavailable", unavailable(err), nil)
 		}
 		workdir, layer = res.Dir, res.Env
 	} else if err = os.MkdirAll(workdir, 0o700); err != nil {
@@ -1183,4 +1183,14 @@ func writeFile(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmp.Name(), path)
+}
+
+// unavailable is the workspace_unavailable summary: the provider's reason in
+// one line, so the run's history and tracker say why without the run's log.
+func unavailable(err error) string {
+	if err == nil {
+		return "workspace acquisition failed"
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(err.Error()), "\n")
+	return "workspace acquisition failed: " + line
 }

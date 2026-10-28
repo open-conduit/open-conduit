@@ -461,10 +461,15 @@ func (p *Provider) work(ctx context.Context, cfg Config, checkout string, prm pa
 		if err = p.save(&l); err != nil {
 			return extension.Resource{}, err
 		}
-		if err = p.createWork(ctx, cfg, checkout, &l, log); err != nil {
+		took, err := p.takeOver(ctx, cfg, checkout, &l, log)
+		if err == nil && !took {
+			err = p.createWork(ctx, cfg, checkout, &l, log)
+		}
+		if err != nil {
 			p.abandon(ctx, &l, log, err)
 			return extension.Resource{}, err
 		}
+		w.Reused = took
 	}
 	if !slices.Contains(l.Holders, a.Owner.ExecutionID) {
 		l.Holders = append(l.Holders, a.Owner.ExecutionID)
@@ -475,6 +480,55 @@ func (p *Provider) work(ctx context.Context, cfg Config, checkout string, prm pa
 		logf(log, "the workspace has %d uncommitted path(s) from earlier runs; they were kept", w.Dirty)
 	}
 	return p.prepare(ctx, cfg, &l, w, log)
+}
+
+// takeOver hands this lease the workspace of another Work that still has the
+// branch checked out, when that Work ended without completing and its
+// workspace is retained (a Work cancelled, then started again for the same
+// issue). The worktree is moved to this lease's path with its edits and
+// commits, and the old lease is dropped. A holder that is not retained fails
+// naming its Work. It reports false when no workspace of the provider holds
+// the branch.
+func (p *Provider) takeOver(ctx context.Context, cfg Config, checkout string, l *lease, log io.Writer) (bool, error) {
+	all, err := p.leases()
+	if err != nil {
+		return false, err
+	}
+	for _, x := range all {
+		if x.Ref == l.Ref || x.Mode != extension.ResourceWork || x.Checkout != checkout || x.Branch != l.Branch {
+			continue
+		}
+		if took, err := p.takeOverFrom(ctx, cfg, checkout, x.Ref, l, log); took || err != nil {
+			return took, err
+		}
+	}
+	return false, nil
+}
+
+func (p *Provider) takeOverFrom(ctx context.Context, cfg Config, checkout, ref string, l *lease, log io.Writer) (bool, error) {
+	defer p.lock(ref)()
+	x, ok, err := p.load(ref)
+	if err != nil || !ok || x.Path == "" || !p.owned(x.Path) || !p.validWorktree(ctx, checkout, x.Path) {
+		return false, err
+	}
+	if head, err := p.git(ctx, x.Path, "symbolic-ref", "-q", "HEAD"); err != nil || head != "refs/heads/"+l.Branch {
+		return false, nil
+	}
+	if x.State != stateRetained {
+		return false, fmt.Errorf("branch %s is checked out in the workspace of work %s (%s)", l.Branch, x.Owner.WorkID, x.State)
+	}
+	killWithin(x.Path)
+	defer p.lock("repo:" + checkout)()
+	p.clearStale(ctx, checkout, l.Path)
+	l.Base = p.base(ctx, cfg, checkout)
+	if _, err := p.git(ctx, checkout, "worktree", "move", x.Path, l.Path); err != nil {
+		return false, err
+	}
+	logf(log, "took over the retained workspace of work %s on %s, moved to %s", x.Owner.WorkID, l.Branch, l.Path)
+	// The old lease now names a path that is gone, so if dropping it fails,
+	// its later removal finds nothing to remove.
+	_ = p.drop(x.Ref)
+	return true, nil
 }
 
 func (p *Provider) createWork(ctx context.Context, cfg Config, checkout string, l *lease, log io.Writer) error {
