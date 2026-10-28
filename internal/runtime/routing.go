@@ -206,17 +206,7 @@ func routeContext(tx storage.Tx, s *routeSnapshot) error {
 	if scopeID == "" {
 		return storage.ErrInvalid
 	}
-	if err = scopeSnapshot(tx, scopeID, &s); err != nil {
-		return
-	}
-	w, e := routeOwner(tx, s.event.Event)
-	if e == nil {
-		s.work = &w
-	} else if !errors.Is(e, storage.ErrNotFound) {
-		return s, e
-	}
-	s.events, err = tx.UnroutedEvents(0, 0)
-	return
+	return scopeSnapshot(tx, scopeID, s)
 }
 
 // scopeSnapshot resolves the scope chain, its effective routes (root to leaf)
