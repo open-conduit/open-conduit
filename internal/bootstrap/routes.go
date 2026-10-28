@@ -42,7 +42,7 @@ var _ extension.RouteSampler = manualRoute{}
 
 // Samples offers an operator's event for a key, and a core event the route
 // never takes.
-func (manualRoute) Samples(domain.Scope, domain.Route) []extension.RouteSample {
+func (manualRoute) Samples(context.Context, extension.SampleInput) []extension.RouteSample {
 	key := domain.CorrelationKey{Source: runtime.ManualSource, ExternalID: "example/1"}
 	return []extension.RouteSample{
 		{ID: "operator-event", Title: "An operator sends an event for a key", Event: domain.Event{Type: "manual.note", Source: runtime.ManualSource, CorrelationKey: &key}},

@@ -164,7 +164,7 @@ func TestRegistration(t *testing.T) {
 
 func TestSamplesTraceAgainstTheScope(t *testing.T) {
 	s := scope("eng", true, Type)
-	samples := Route{}.Samples(s, domain.Route{})
+	samples := Route{}.Samples(context.Background(), extension.SampleInput{Scope: s, Now: time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC)})
 	if len(samples) == 0 {
 		t.Fatal("no samples")
 	}
@@ -177,7 +177,7 @@ func TestSamplesTraceAgainstTheScope(t *testing.T) {
 	if err != nil || !d.Match || d.Kind != WorkKind {
 		t.Fatalf("the report sample must start Work: %+v, %v", d, err)
 	}
-	if got := (Route{}).Samples(scope("eng", true), domain.Route{}); len(got) != 0 {
+	if got := (Route{}).Samples(context.Background(), extension.SampleInput{Scope: scope("eng", true)}); len(got) != 0 {
 		t.Fatal("samples offered without an entry")
 	}
 }

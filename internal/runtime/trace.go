@@ -359,7 +359,7 @@ func waitingFor(w domain.Wait) string {
 }
 
 // Samples lists the sample Events the scope's route handlers offer, in route
-// order, each sample once per handler.
+// order, each sample once per handler. Samplers are given the router's clock.
 func (r *Router) Samples(ctx context.Context, scopeID domain.ID) ([]TraceSample, error) {
 	var s routeSnapshot
 	if err := r.transact(ctx, nil, func(tx storage.Tx) error { return scopeSnapshot(tx, scopeID, &s) }); err != nil {
@@ -372,9 +372,8 @@ func (r *Router) Samples(ctx context.Context, scopeID domain.ID) ([]TraceSample,
 		if !ok {
 			continue
 		}
-		in := detachedInput(s)
-		in.Route = route
-		for _, sample := range sampler.Samples(in.Scope, route) {
+		in := extension.SampleInput{Scope: detachedInput(s).Scope, Route: route, Now: r.now()}
+		for _, sample := range sampler.Samples(ctx, in) {
 			id := route.Handler + "\x00" + sample.ID
 			if sample.ID == "" || sample.Event.Type == "" || seen[id] {
 				continue

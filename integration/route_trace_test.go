@@ -145,7 +145,7 @@ func TestRouteTraceHeldBeforeIssues(t *testing.T) {
 
 	// The issue route's own sample: a new issue.
 	var issue domain.Event
-	for _, s := range (gh.Route{}).Samples(e.scope(ghScope), domain.Route{}) {
+	for _, s := range (gh.Route{}).Samples(context.Background(), extension.SampleInput{Scope: e.scope(ghScope)}) {
 		if s.ID == "issue-opened" {
 			issue = s.Event
 		}

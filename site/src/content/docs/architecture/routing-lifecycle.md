@@ -27,7 +27,7 @@ Each route gets a verdict: `match`, `skip`, `not_reached` after the first match,
 - **Terminal Work.** Every route is `bypassed` and the effect is `drop`.
 - **Otherwise.** The effect is `start` for new Work, or the policy routing would record for existing Work, including its fallbacks.
 
-A handler may also implement `extension.RouteSampler` to offer named sample Events built from the scope's configuration; `Samples(ctx, scope)` collects them in route order.
+A handler may also implement `extension.RouteSampler` to offer named sample Events built from the scope's configuration; `Samples(ctx, scope)` collects them in route order. A sampler is given the router's clock, so a sample whose data carries a time (a Slack message written just now) stays inside the handler's window under a test clock or skew.
 
 `PendingInputsInTx` and `ConsumeInputsInTx` let a scheduler join selection, claim and consumed-input history in one guarded transaction. `PendingInputs`, `Decision` and `Intents` inspect durable coordination records. Consumption removes pending entries but preserves their attempt association; replaying a route cannot enqueue them again. These are trusted internal APIs, not an execution-facing claim or acknowledgement protocol.
 

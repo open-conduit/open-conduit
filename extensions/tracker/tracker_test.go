@@ -161,7 +161,7 @@ func TestSamplesTraceAgainstTheScope(t *testing.T) {
 	r := Route{Type: "linear"}
 	scope := scopeWith(t, "linear", `{"namespace":"linear/eng","scope":"eng","teams":["ENG"],"labels":{"require":["agent"]}}`)
 	route := domain.Route{Config: domain.Payload{Data: json.RawMessage(`{"match":{"priority":["high"]}}`)}}
-	samples := r.Samples(scope, route)
+	samples := r.Samples(context.Background(), extension.SampleInput{Scope: scope, Route: route})
 	if len(samples) == 0 {
 		t.Fatal("no samples")
 	}

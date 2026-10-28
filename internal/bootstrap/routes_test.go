@@ -9,7 +9,7 @@ import (
 )
 
 func TestManualRouteSamples(t *testing.T) {
-	samples := manualRoute{}.Samples(domain.Scope{}, domain.Route{})
+	samples := manualRoute{}.Samples(context.Background(), extension.SampleInput{Scope: domain.Scope{}})
 	if len(samples) == 0 {
 		t.Fatal("no samples")
 	}

@@ -1,6 +1,7 @@
 package tracker
 
 import (
+	"context"
 	"encoding/json"
 	"sort"
 	"time"
@@ -48,7 +49,8 @@ func sampleEvent(s Settings, typ, schema string, payload any) domain.Event {
 
 // Samples offers a new issue, a comment on an issue being worked and the
 // issue closing.
-func (r Route) Samples(scope domain.Scope, route domain.Route) []extension.RouteSample {
+func (r Route) Samples(_ context.Context, in extension.SampleInput) []extension.RouteSample {
+	scope, route := in.Scope, in.Route
 	t := TypesOf(r.Type)
 	var match map[string][]string
 	if len(route.Config.Data) > 0 {

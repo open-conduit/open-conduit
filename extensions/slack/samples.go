@@ -1,6 +1,7 @@
 package slack
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
@@ -10,8 +11,8 @@ import (
 
 // Sample Events for a route trace ("Suppose…"), one set per slack entry of
 // the scope, written as the entry's normalizer would produce them for a
-// message in its first watched channel, sent just now so the start window
-// admits it.
+// message in its first watched channel, sent now by the host's clock so
+// the start window admits it under a test clock or skew.
 
 var _ extension.RouteSampler = Route{}
 
@@ -47,10 +48,10 @@ func sampleID(all []Settings, s Settings, id string) string {
 
 // Samples offers a mention that starts a conversation, a top-level message
 // without a mention, and a reply in an existing thread.
-func (Route) Samples(scope domain.Scope, _ domain.Route) []extension.RouteSample {
+func (Route) Samples(_ context.Context, in extension.SampleInput) []extension.RouteSample {
 	var out []extension.RouteSample
-	all := scopeSettings(scope)
-	now := time.Now()
+	all := scopeSettings(in.Scope)
+	now := in.Now
 	for _, s := range all {
 		if len(s.Channels) == 0 {
 			continue

@@ -1,6 +1,7 @@
 package bitbucket
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
@@ -45,7 +46,8 @@ func sampleEvent(s Settings, typ string, key domain.CorrelationKey, schema strin
 
 // Samples offers a comment, finished checks and a merge on the pull request
 // of an issue.
-func (Route) Samples(scope domain.Scope, _ domain.Route) []extension.RouteSample {
+func (Route) Samples(_ context.Context, in extension.SampleInput) []extension.RouteSample {
+	scope := in.Scope
 	var out []extension.RouteSample
 	all := scopeSettings(scope)
 	for _, s := range all {

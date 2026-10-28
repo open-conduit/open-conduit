@@ -1,6 +1,7 @@
 package schedule
 
 import (
+	"context"
 	"encoding/json"
 	"slices"
 	"time"
@@ -25,7 +26,8 @@ func sampleEvent(typ, source, job string, p TriggerPayload) domain.Event {
 
 // Samples offers, for each job, a scheduled run coming due (when the job has
 // a timer), a POST to its webhook (when it takes one) and a run by hand.
-func (Route) Samples(scope domain.Scope, route domain.Route) []extension.RouteSample {
+func (Route) Samples(_ context.Context, in extension.SampleInput) []extension.RouteSample {
+	scope, route := in.Scope, in.Route
 	var only []string
 	if len(route.Config.Data) > 0 {
 		if rc, err := ParseRoute(route.Config.Data); err == nil {
