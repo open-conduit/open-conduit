@@ -794,8 +794,47 @@ func TestIngressDurableRegistrationNameCannotChangeNamespace(t *testing.T) {
 		t.Fatal(err)
 	}
 	_, fresh := openIngress(t, path, clock)
-	if err := fresh.Register(ctx, "same_name", extension.Source{Namespace: "fixture/replacement", ScopeID: "scope_a"}, newFixtureIngress(), time.Minute); !errors.Is(err, extension.ErrConflict) && !errors.Is(err, storage.ErrConflict) {
+	if err := fresh.Register(ctx, "same_name", extension.Source{Namespace: "fixture/replacement", ScopeID: "scope_a"}, newFixtureIngress(), time.Minute); !errors.Is(err, runtime.ErrIngressNameTaken) || !errors.Is(err, extension.ErrConflict) {
 		t.Fatalf("durable registration name changed namespace: %v", err)
+	}
+}
+
+// A renamed configuration entry keeps its namespace and Scope; its stored
+// source and checkpoint move to the new name instead of failing to register.
+func TestIngressRenamedEntryKeepsStoredSource(t *testing.T) {
+	ctx := context.Background()
+	clock := &ingressClock{at: ingressTime}
+	path := filepath.Join(t.TempDir(), "conduit.db")
+	db, r := openIngress(t, path, clock)
+	source := extension.Source{Namespace: "fixture/renamed", ScopeID: "scope_a"}
+	f := newFixtureIngress()
+	registerIngress(t, r, "slack/scope_a/support", source, f)
+	f.pushed = extension.PushResult{Observations: []extension.Observation{fixtureObservation(source, "a", "v1")}}
+	if _, err := r.Push(ctx, "slack/scope_a/support", extension.Delivery{ID: "first", ReceivedAt: ingressTime}); err != nil {
+		t.Fatal(err)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, renamed := openIngress(t, path, clock)
+	registerIngress(t, renamed, "slack/scope_a/slack", source, newFixtureIngress())
+	if got := ingressStatus(t, renamed, "slack/scope_a/slack"); got.Source != source {
+		t.Fatalf("renamed source = %+v", got.Source)
+	}
+	if got := len(ingressEvents(t, db)); got != 1 {
+		t.Fatalf("rename changed accepted events: %d", got)
+	}
+	if err := db.Close(); err != nil {
+		t.Fatal(err)
+	}
+	// The old name is released: it may now name another source, and the
+	// namespace still refuses another Scope with a specific error.
+	_, again := openIngress(t, path, clock)
+	registerIngress(t, again, "slack/scope_a/support", extension.Source{Namespace: "fixture/other", ScopeID: "scope_a"}, newFixtureIngress())
+	moved := source
+	moved.ScopeID = "scope_b"
+	if err := again.Register(ctx, "slack/scope_b/slack", moved, newFixtureIngress(), time.Minute); !errors.Is(err, runtime.ErrIngressNamespaceOwned) || !errors.Is(err, extension.ErrConflict) {
+		t.Fatalf("namespace moved scope: %v", err)
 	}
 }
 
