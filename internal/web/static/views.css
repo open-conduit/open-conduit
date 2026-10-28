@@ -3160,11 +3160,6 @@
   border-radius: 4px;
   overflow-x: auto;
 }
-.flow > *,
-.flow-row > * {
-  grid-row: calc(var(--r) + 1);
-  grid-column: var(--c);
-}
 .flow-head {
   font-size: var(--t-small);
   font-weight: 600;
@@ -3658,4 +3653,39 @@
   .c-avatar {
     display: none;
   }
+}
+
+/* The flow chart without inline placement (CSP): every cell is emitted in
+   grid order, empty ones as .flow-gap, and a route's row is display:
+   contents so its cells are the chart's. */
+.flow-row {
+  display: contents;
+}
+a.node {
+  text-decoration: none;
+}
+details.binding[open] {
+  border-color: var(--ink-3);
+}
+.binding-head {
+  list-style: none;
+}
+.binding-head::-webkit-details-marker {
+  display: none;
+}
+.trace-pick {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+.xchoice input {
+  margin: 0 4px 0 0;
+}
+@media (max-width: 1100px) {
+  .flow-gap {
+    display: none;
+  }
+}
+[data-noscript][hidden] {
+  display: none;
 }
