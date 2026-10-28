@@ -354,6 +354,45 @@ func TestHumanAskFirstAnswerWins(t *testing.T) {
 	}
 }
 
+// An Event accepted while the turn runs puts the ask after the attempt's
+// acknowledged input, the watermark its wait registers with. The ask is
+// still answerable from its panel and its action (issue #99).
+func TestHumanAskAfterInputDuringTheTurn(t *testing.T) {
+	h := newHumanHarness(t, "persistent", decisions)
+	ctx := context.Background()
+	elsewhere := domain.CorrelationKey{Source: "fixture/account", ExternalID: "elsewhere"}
+	requireAccept(t, h.f, "mid-turn", &elsewhere)
+	out := h.ask(t, `{"question":"Approve?","options":["Approve","Deny"]}`)
+	var asked uint64
+	routingRead(t, h.f, func(tx storage.Tx) error {
+		var err error
+		asked, err = tx.LatestSequence()
+		return err
+	})
+	if out.Wait.AfterSequence >= asked {
+		t.Fatalf("fixture: wait watermark %d is not before the ask's %d", out.Wait.AfterSequence, asked)
+	}
+	acts, err := h.actions.Actions(ctx, h.target(t))
+	if err != nil || len(acts) != 1 || acts[0].ID != hu.ActionAnswer {
+		t.Fatalf("answer not offered: %+v %v", acts, err)
+	}
+	panels, err := h.actions.Panels(ctx, h.target(t))
+	if err != nil || len(panels) != 1 {
+		t.Fatalf("question panel: %+v %v", panels, err)
+	}
+	if last := panels[0].Sections[len(panels[0].Sections)-1]; len(last.Actions) != 1 || last.Actions[0] != hu.ActionAnswer {
+		t.Fatalf("question panel lacks the answer button: %+v", last)
+	}
+	if _, err = h.answer(t, extension.LocalOperator, "1", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(t)
+	h.reconcile(t)
+	if w, _ := waitState(t, h.toolbeltHarness, out.Wait.ID); w.State != domain.WaitWoken {
+		t.Fatalf("answer did not wake: %v", w.State)
+	}
+}
+
 // An ask whose entry does not let the local operator answer refuses it;
 // an ask past its deadline wakes the asker without an answer and expires.
 func TestHumanAskWrongResponderAndDeadline(t *testing.T) {
