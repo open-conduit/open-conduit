@@ -43,7 +43,7 @@ Routes use one registered handler, `schedule`. Its route config `{"jobs": [...],
 {"name": "jobs-report", "handler": "schedule", "binding": "report-cmd", "active_policy": "queue", "config": {"jobs": ["report"]}}
 ```
 
-Two generic contract pieces make this possible. `extension.RouteInput.Route` carries the evaluated route, including its opaque handler config. `config.Registry.HandlerConfig` lets a registered handler validate that config at load/apply time. Put a `schedule` route before a `manual` route in the same scope, or the manual route would create `manual.work` for a job key.
+Two generic contract pieces make this possible. `extension.RouteInput.Route` carries the evaluated route, including its opaque handler config. `config.Registry.HandlerConfig` lets a registered handler validate that config at load/apply time. The extension also describes its config for the operator: each job and when it runs (`every hour; on push to main`), and the jobs and triggers each `schedule` route takes, which the web view's Config page shows. Put a `schedule` route before a `manual` route in the same scope, or the manual route would create `manual.work` for a job key.
 
 **Repository-scoped declarations.** The repository's scope declares its jobs. B05 requires an explicit apply before disk edits change behavior. Job reload is therefore config reload.
 

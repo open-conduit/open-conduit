@@ -124,6 +124,73 @@ func (j Job) Location() (*time.Location, error) {
 // Schedule is the job's cron, parsed as v1 did.
 func (j Job) Schedule() (cron.Schedule, error) { return cron.ParseStandard(j.Cron) }
 
+// Describe says when the job runs, in words: "every 30 min; on push to
+// main". A job with no triggers runs only by hand.
+func (j Job) Describe() string {
+	var parts []string
+	switch m := j.EveryMinutes; {
+	case m == 0:
+	case m%1440 == 0:
+		parts = append(parts, every(m/1440, "day"))
+	case m%60 == 0:
+		parts = append(parts, every(m/60, "hour"))
+	default:
+		parts = append(parts, every(m, "minute"))
+	}
+	if len(j.At) > 0 {
+		parts = append(parts, "daily at "+strings.Join(j.At, ", ")+" UTC")
+	}
+	if j.Cron != "" {
+		zone := j.TimeZone
+		if zone == "" {
+			zone = "UTC"
+		}
+		parts = append(parts, "cron "+j.Cron+" ("+zone+")")
+	}
+	if j.On != nil {
+		if len(j.On.Events) > 0 {
+			on := "on " + strings.Join(j.On.Events, ", ")
+			if len(j.On.Branches) > 0 {
+				on += " to " + strings.Join(j.On.Branches, ", ")
+			}
+			if len(j.On.Paths) > 0 {
+				on += " changing " + strings.Join(j.On.Paths, ", ")
+			}
+			parts = append(parts, on)
+		}
+		if j.On.Webhook {
+			parts = append(parts, "on its webhook")
+		}
+	}
+	if len(parts) == 0 {
+		return "by hand only"
+	}
+	return strings.Join(parts, "; ")
+}
+
+func every(n int, unit string) string {
+	if n == 1 {
+		return "every " + unit
+	}
+	return "every " + strconv.Itoa(n) + " " + unit + "s"
+}
+
+// DescribeRoute says which jobs and triggers a route config takes.
+func DescribeRoute(data []byte) string {
+	c, err := ParseRoute(data)
+	if err != nil {
+		return ""
+	}
+	jobs := "every job"
+	if len(c.Jobs) > 0 {
+		jobs = strings.Join(c.Jobs, ", ")
+	}
+	if len(c.Triggers) > 0 {
+		return jobs + " (" + strings.Join(c.Triggers, ", ") + ")"
+	}
+	return jobs
+}
+
 // Job finds a job by name.
 func (s Settings) Job(name string) (Job, bool) {
 	for _, j := range s.Jobs {

@@ -634,8 +634,9 @@ func (s *Server) wakeWork(c *call) (int, any, error) {
 }
 
 // config is the active generation's wiring: each scope's extensions, routes
-// and bindings by name and type, and the connections they use. It carries
-// no opaque config and no secret references.
+// and bindings by name and type, and the connections they use, with what
+// an extension or route handler says its config sets up (a schedule's
+// jobs). It carries no opaque config and no secret references.
 func (s *Server) config(c *call) (int, any, error) {
 	if err := noQuery(c); err != nil {
 		return 0, nil, err
@@ -651,12 +652,23 @@ func (s *Server) config(c *call) (int, any, error) {
 		if e == nil {
 			continue
 		}
-		sc := wireConfigScope{ID: string(e.ID), Name: e.Name, ParentID: string(e.ParentID), Enabled: e.Enabled, Extensions: []wireConfigExtension{}, Routes: []wireRoute{}, Bindings: []wireConfigBinding{}}
+		sc := wireConfigScope{ID: string(e.ID), Name: e.Name, ParentID: string(e.ParentID), Enabled: e.Enabled, Extensions: []wireConfigExtension{}, Routes: []wireConfigRoute{}, Bindings: []wireConfigBinding{}}
 		for _, x := range e.Extensions {
-			sc.Extensions = append(sc.Extensions, wireConfigExtension{Name: x.Name, Type: x.Type, Connection: x.Connection, Ingress: reg.Extensions[x.Type].Ingress})
+			t := reg.Extensions[x.Type]
+			wx := wireConfigExtension{Name: x.Name, Type: x.Type, Connection: x.Connection, Ingress: t.Ingress}
+			if t.Describe != nil {
+				for _, en := range t.Describe(x.Config) {
+					wx.Entries = append(wx.Entries, wireEntry{en.Name, en.Detail})
+				}
+			}
+			sc.Extensions = append(sc.Extensions, wx)
 		}
 		for _, r := range e.Routes {
-			sc.Routes = append(sc.Routes, wireRoute{r.Name, r.Handler, r.Binding, r.ActivePolicy})
+			wr := wireConfigRoute{wireRoute: wireRoute{r.Name, r.Handler, r.Binding, r.ActivePolicy}}
+			if d := reg.HandlerDescribe[r.Handler]; d != nil {
+				wr.Detail = d(r.Config)
+			}
+			sc.Routes = append(sc.Routes, wr)
 		}
 		for _, b := range e.Bindings {
 			wb := wireConfigBinding{Name: b.Name, Executor: b.Executor, Connection: b.Connection}

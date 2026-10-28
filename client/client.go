@@ -697,16 +697,30 @@ type ConfigScope struct {
 	ParentID   string            `json:"parent_id,omitempty"`
 	Enabled    bool              `json:"enabled"`
 	Extensions []ConfigExtension `json:"extensions"`
-	Routes     []Route           `json:"routes"`
+	Routes     []ConfigRoute     `json:"routes"`
 	Bindings   []ConfigBinding   `json:"bindings"`
+}
+
+// ConfigRoute is a route with, when its handler says, which events it takes.
+type ConfigRoute struct {
+	Route
+	Detail string `json:"detail,omitempty"`
 }
 
 // ConfigExtension is an extension a scope runs; Ingress ones bring events in.
 type ConfigExtension struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	Connection string `json:"connection,omitempty"`
-	Ingress    bool   `json:"ingress"`
+	Name       string        `json:"name"`
+	Type       string        `json:"type"`
+	Connection string        `json:"connection,omitempty"`
+	Ingress    bool          `json:"ingress"`
+	Entries    []ConfigEntry `json:"entries,omitempty"`
+}
+
+// ConfigEntry is one thing an extension entry sets up, such as a scheduled
+// job and when it runs.
+type ConfigEntry struct {
+	Name   string `json:"name"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // ConfigBinding names an executor and the connection and resource it uses.

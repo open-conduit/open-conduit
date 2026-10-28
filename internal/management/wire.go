@@ -152,14 +152,23 @@ type wireConfigScope struct {
 	ParentID   string                `json:"parent_id,omitempty"`
 	Enabled    bool                  `json:"enabled"`
 	Extensions []wireConfigExtension `json:"extensions"`
-	Routes     []wireRoute           `json:"routes"`
+	Routes     []wireConfigRoute     `json:"routes"`
 	Bindings   []wireConfigBinding   `json:"bindings"`
 }
+type wireConfigRoute struct {
+	wireRoute
+	Detail string `json:"detail,omitempty"`
+}
+type wireEntry struct {
+	Name   string `json:"name"`
+	Detail string `json:"detail,omitempty"`
+}
 type wireConfigExtension struct {
-	Name       string `json:"name"`
-	Type       string `json:"type"`
-	Connection string `json:"connection,omitempty"`
-	Ingress    bool   `json:"ingress"`
+	Name       string      `json:"name"`
+	Type       string      `json:"type"`
+	Connection string      `json:"connection,omitempty"`
+	Ingress    bool        `json:"ingress"`
+	Entries    []wireEntry `json:"entries,omitempty"`
 }
 type wireConfigBinding struct {
 	Name       string `json:"name"`

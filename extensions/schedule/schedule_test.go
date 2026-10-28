@@ -279,3 +279,25 @@ func TestWebhookIngress(t *testing.T) {
 		t.Fatal("token ignores the secret")
 	}
 }
+
+func TestJobDescribe(t *testing.T) {
+	for _, c := range []struct {
+		job  sc.Job
+		want string
+	}{
+		{sc.Job{EveryMinutes: 30}, "every 30 minutes"},
+		{sc.Job{EveryMinutes: 120}, "every 2 hours"},
+		{sc.Job{EveryMinutes: 1440}, "every day"},
+		{sc.Job{At: []string{"06:00", "18:00"}}, "daily at 06:00, 18:00 UTC"},
+		{sc.Job{Cron: "0 9 * * 1-5", TimeZone: "Europe/London"}, "cron 0 9 * * 1-5 (Europe/London)"},
+		{sc.Job{EveryMinutes: 60, On: &sc.Trigger{Events: []string{"push"}, Branches: []string{"main"}, Paths: []string{"docs/**"}, Webhook: true}}, "every hour; on push to main changing docs/**; on its webhook"},
+		{sc.Job{}, "by hand only"},
+	} {
+		if got := c.job.Describe(); got != c.want {
+			t.Errorf("%+v: %q, want %q", c.job, got, c.want)
+		}
+	}
+	if got := sc.DescribeRoute([]byte(`{"jobs":["a","b"],"triggers":["timer"]}`)); got != "a, b (timer)" {
+		t.Errorf("route: %q", got)
+	}
+}
