@@ -1,0 +1,32 @@
+{{define "content"}}{{$d := .Data}}
+<div class="bar">
+  <h1>Runs</h1>
+  <span class="dim">{{$d.Works}} work · {{$d.Runs}} run(s)</span>
+</div>
+<div class="bar filters">
+  {{range $d.Filters}}<a href="/?state={{.}}{{if $d.PerTurn}}&amp;turns=1{{end}}"{{if eq . $d.Filter}} aria-current="true"{{end}}>{{if .}}{{.}}{{else}}all{{end}}</a>{{end}}
+  <span class="sep"></span>
+  {{if $d.PerTurn}}<a href="/?state={{$d.Filter}}">by work</a>{{else}}<a href="/?state={{$d.Filter}}&amp;turns=1">every turn</a>{{end}}
+</div>
+<div id="live" data-refresh>
+<div class="scroll"><table class="runs">
+<thead><tr><th>Work</th><th>Turns</th><th>State</th><th>Att</th><th>Binding</th><th>Executor</th><th>Work kind</th><th>Trigger</th><th>Started</th><th>Duration</th><th>Outcome</th><th></th></tr></thead>
+<tbody>
+{{range $d.Rows}}<tr>
+  <td class="label"><a href="/run?id={{.Run.ID}}" title="{{.Label}}">{{.Label}}</a></td>
+  <td>{{.Turns}}</td>
+  <td><span class="state state-{{.Run.State}}">{{.Run.State}}</span></td>
+  <td>{{.Run.Attempt}}</td>
+  <td>{{.Run.ExecutorBinding}}</td>
+  <td>{{.Run.Executor}}</td>
+  <td>{{.Run.WorkKind}}</td>
+  <td>{{trigger .Run}}</td>
+  <td>{{time .Run.StartedAt}}</td>
+  <td>{{duration .Run}}</td>
+  <td class="outcome"><div title="{{outcome .Run}}">{{outcome .Run}}</div></td>
+  <td class="links"><a href="/output?run={{.Run.ID}}&amp;pick=log">log</a> <a href="/output?run={{.Run.ID}}&amp;pick=transcript">transcript</a></td>
+</tr>{{else}}<tr><td colspan="12" class="dim">no runs</td></tr>{{end}}
+</tbody>
+</table></div>
+</div>
+{{end}}

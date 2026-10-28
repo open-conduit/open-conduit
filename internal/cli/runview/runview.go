@@ -37,7 +37,8 @@ func Fit(s string, n int) string {
 	return s + strings.Repeat(" ", n-len(r))
 }
 
-func shortTime(s string) string {
+// ShortTime renders an RFC 3339 time in local time, month to second.
+func ShortTime(s string) string {
 	t, err := time.Parse(time.RFC3339Nano, s)
 	if err != nil {
 		return ""
@@ -87,7 +88,7 @@ const Header = "STATE      ATT BINDING      EXECUTOR     WORK KIND            TR
 
 // Row renders one run; it is identical for every executor.
 func Row(r client.Run, now time.Time) string {
-	return Fit(r.State, 10) + " " + Fit(strconv.FormatUint(uint64(r.Attempt), 10), 3) + " " + Fit(r.ExecutorBinding, 12) + " " + Fit(r.Executor, 12) + " " + Fit(r.WorkKind, 20) + " " + Fit(TriggerText(r), 22) + " " + Fit(shortTime(r.StartedAt), 14) + " " + Fit(Duration(r, now), 10) + " " + Outcome(r)
+	return Fit(r.State, 10) + " " + Fit(strconv.FormatUint(uint64(r.Attempt), 10), 3) + " " + Fit(r.ExecutorBinding, 12) + " " + Fit(r.Executor, 12) + " " + Fit(r.WorkKind, 20) + " " + Fit(TriggerText(r), 22) + " " + Fit(ShortTime(r.StartedAt), 14) + " " + Fit(Duration(r, now), 10) + " " + Outcome(r)
 }
 
 func usageText(u *client.Usage) string {
@@ -133,10 +134,10 @@ func Detail(r client.Run, attempts []client.Run, now time.Time) string {
 	line("attempt", strconv.FormatUint(uint64(r.Attempt), 10)+" (lease epoch "+r.Lease.Epoch+")")
 	line("state", r.State+" / work "+r.WorkState)
 	line("outcome", Outcome(r))
-	line("started", shortTime(r.StartedAt))
-	line("finished", shortTime(r.FinishedAt))
+	line("started", ShortTime(r.StartedAt))
+	line("finished", ShortTime(r.FinishedAt))
 	line("duration", Duration(r, now))
-	line("deadline", shortTime(r.Deadline))
+	line("deadline", ShortTime(r.Deadline))
 	if r.RemainingTimeoutSeconds > 0 {
 		line("timeout left", (time.Duration(r.RemainingTimeoutSeconds) * time.Second).String())
 	}
@@ -153,7 +154,7 @@ func Detail(r client.Run, attempts []client.Run, now time.Time) string {
 	if rt := r.Retry; rt != nil {
 		v := fmt.Sprintf("failures %d", rt.FailureCount)
 		if rt.EligibleAt != "" {
-			v += ", eligible " + shortTime(rt.EligibleAt)
+			v += ", eligible " + ShortTime(rt.EligibleAt)
 		}
 		if rt.Blocked {
 			v += ", blocked (" + rt.BlockedReason + ")"
@@ -166,7 +167,7 @@ func Detail(r client.Run, attempts []client.Run, now time.Time) string {
 	if !r.ResourceExcluded && (r.State == "failed" || r.State == "cancelled") {
 		line("resource", "stop not yet confirmed")
 	}
-	line("retention", r.Retention.State+map[bool]string{true: " " + shortTime(r.Retention.ExpiredAt), false: ""}[r.Retention.ExpiredAt != ""])
+	line("retention", r.Retention.State+map[bool]string{true: " " + ShortTime(r.Retention.ExpiredAt), false: ""}[r.Retention.ExpiredAt != ""])
 	line("trace", r.TraceID)
 	if len(r.Artifacts) > 0 {
 		b.WriteString("\nArtifacts\n")
@@ -185,4 +186,24 @@ func Detail(r client.Run, attempts []client.Run, now time.Time) string {
 		}
 	}
 	return b.String()
+}
+
+// WorkLabel is the human name of Work: the first annotation an extension
+// gives it (not the runtime's own, such as a capacity wait), with an
+// "owner/repo#12" reference shortened to "repo#12", else its first
+// correlation key, else its ID.
+func WorkLabel(w client.Work) string {
+	for _, a := range w.Annotations {
+		if a.Value == "" || a.Source == "runtime" {
+			continue
+		}
+		if repo, ref, ok := strings.Cut(a.Value, "#"); ok && !strings.ContainsAny(a.Value, " :") {
+			return repo[strings.LastIndex(repo, "/")+1:] + "#" + ref
+		}
+		return a.Value
+	}
+	for _, k := range w.CorrelationKeys {
+		return k.Source + " " + k.ExternalID
+	}
+	return w.ID
 }

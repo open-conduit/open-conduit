@@ -112,6 +112,9 @@ func allowed(owner, dependency string, test bool) bool {
 		return public(dependency) || under(dependency, "internal/management") || under(dependency, "internal/runtime") || under(dependency, "internal/config")
 	case under(owner, "internal/cli"), under(owner, "internal/tui"):
 		return public(dependency) || under(dependency, "client") || under(dependency, "internal/cli") || under(dependency, "internal/tui")
+	case under(owner, "internal/web"):
+		// The browser view (like the TUI) is a management client only.
+		return public(dependency) || under(dependency, "client") || under(dependency, "internal/cli") || under(dependency, "internal/web")
 	case under(owner, "extensions/tracker"):
 		// The shared tracker kit (06-01) is public contracts only.
 		return public(dependency) || under(dependency, "extensions/tracker")

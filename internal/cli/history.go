@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"strings"
@@ -156,6 +157,43 @@ func (o *operator) tui(args []string) int {
 	}
 	if err = o.env.TUI(c); err != nil {
 		fmt.Fprintf(o.errOut, "open-conduit: tui: %s\n", err)
+		return 1
+	}
+	return 0
+}
+
+// WebRequest is what open-conduit web serves: the view over Client on the
+// loopback Addr, named Host, with its sign-in URLs written to Out.
+type WebRequest struct {
+	Client *client.Client
+	Addr   string
+	Host   string
+	Out    io.Writer
+}
+
+// web serves the browser view until interrupted.
+func (o *operator) web(args []string) int {
+	f := newFlags("web", "addr", "host")
+	if rest, err := f.parse(args); err != nil || len(rest) != 0 {
+		return usageError(o.errOut, "web takes only --addr HOST:PORT and --host NAME")
+	}
+	addr, host := f.get("addr"), f.get("host")
+	if addr == "" {
+		addr = o.env.Getenv("OPEN_CONDUIT_WEB_ADDR")
+	}
+	if host == "" {
+		host = o.env.Getenv("OPEN_CONDUIT_WEB_HOST")
+	}
+	c, _, err := o.client()
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	if o.env.Web == nil {
+		fmt.Fprintln(o.errOut, "open-conduit: web is not available in this binary")
+		return 1
+	}
+	if err = o.env.Web(WebRequest{Client: c, Addr: addr, Host: host, Out: o.out}); err != nil {
+		fmt.Fprintf(o.errOut, "open-conduit: web: %s\n", err)
 		return 1
 	}
 	return 0

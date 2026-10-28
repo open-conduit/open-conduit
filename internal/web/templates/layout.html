@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>{{.Page.Title}} · Open Conduit</title>
+<link rel="stylesheet" href="/static/app.css">
+<script src="/static/app.js" defer></script>
+</head>
+<body>
+<header>
+  <a class="brand" href="/">Open Conduit</a>
+  <nav>
+    <a href="/"{{if eq .Page.Nav "runs"}} aria-current="page"{{end}}>Runs</a>
+    <a href="/scopes"{{if eq .Page.Nav "scopes"}} aria-current="page"{{end}}>Scopes</a>
+  </nav>
+</header>
+<main>
+{{with .Page.Flash}}<p class="flash{{if $.Page.FlashErr}} error{{end}}" role="status">{{.}}</p>{{end}}
+{{with .Page.Err}}<pre class="error" role="alert">{{.}}</pre>{{end}}
+{{template "content" .}}
+</main>
+</body>
+</html>

@@ -14,6 +14,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/tui"
+	"github.com/open-conduit/open-conduit/internal/web"
 )
 
 var version = "dev"
@@ -23,6 +24,7 @@ func main() {
 	cwd, _ := os.Getwd()
 	env := cli.Env{Getenv: os.Getenv, Cwd: cwd, Serve: serve, ValidateConfig: validate, Setup: setup, Setups: bootstrap.Setups(), Adapters: bootstrap.Adapters}
 	env.TUI = func(c *client.Client) error { return tui.Run(tui.Operator(c), os.Stdin, os.Stdout) }
+	env.Web = serveWeb
 	env.EditConfig = func(r cli.EditRequest) (bool, error) { return tui.EditConfig(r, os.Stdin, os.Stdout) }
 	env.Migrate, env.Upgrade, env.State = bootstrap.Migrate, bootstrap.Upgrade, bootstrap.StateOps()
 	env.ValidateConfigAt, env.Extensions = validateAt, bootstrap.ExtensionOps(version, commit)
@@ -100,4 +102,15 @@ func selfCommand() string {
 		}
 	}
 	return self
+}
+
+// serveWeb serves the browser view until interrupted.
+func serveWeb(r cli.WebRequest) error {
+	srv, err := web.New(r.Client, web.Options{Addr: r.Addr, Host: r.Host, NewKey: cli.NewKey})
+	if err != nil {
+		return err
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	return srv.Run(ctx, r.Out)
 }

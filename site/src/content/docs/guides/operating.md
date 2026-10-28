@@ -1,6 +1,6 @@
 ---
 title: Watch and steer runs
-description: Use the terminal UI and the command line to watch, claim, retry, hold and cancel work.
+description: Use the terminal UI, the web view and the command line to watch, claim, retry, hold and cancel work.
 ---
 
 ## The terminal UI
@@ -19,6 +19,21 @@ The TUI lists one row per issue or thread, with its latest turn and how many tur
 | `H` | hold or release |
 | `a` | attach to the agent's session |
 | `x` / `X` | cancel a run, or its whole Work |
+
+## The web view
+
+```sh
+open-conduit web
+```
+
+This serves the same view in a browser on this machine, at `http://open-conduit.localhost:7420`. It prints a sign-in URL; open it to start a session in that browser. Browsers resolve every `*.localhost` name to this machine without any setup. If yours doesn't, use the second URL it prints, which names `127.0.0.1`.
+
+The web view lists Work and turns with the same filters as the TUI. A run's page shows its Work's context and every turn, and links to its log, transcript and outputs, which follow a running turn live. It also offers run/retry, hold/release and cancel, and the actions extensions offer, such as answering an agent's question. Scopes lists each scope's actions, such as claiming an issue by hand. To attach to an agent's session, use the terminal.
+
+- `--addr HOST:PORT` (or `OPEN_CONDUIT_WEB_ADDR`) changes where it listens. Only a loopback address is accepted, so the view is never reachable from another machine.
+- `--host NAME` (or `OPEN_CONDUIT_WEB_HOST`) changes the name it answers to.
+
+The web view runs as its own process, a client of the daemon like the TUI. It holds the operator token itself and never gives it to the browser. Stop it with Ctrl-C.
 
 ## The same controls on the command line
 
