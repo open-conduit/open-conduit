@@ -969,3 +969,19 @@ details.menu-wrap > summary::-webkit-details-marker {
 [hidden] {
   display: none !important;
 }
+
+/* On a narrow screen the nav scrolls sideways rather than running under
+   the tools. */
+@media (max-width: 720px) {
+  .nav {
+    min-width: 0;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .nav::-webkit-scrollbar {
+    display: none;
+  }
+  .nav-item {
+    flex: none;
+  }
+}

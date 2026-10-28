@@ -6,7 +6,7 @@
   <div class="state-page">
     <h1>No configuration yet</h1>
     <p>The daemon is running without a configuration generation, so nothing is watched and nothing can route.</p>
-    <a class="btn btn-primary" href="/setup">Start the setup assistant</a>
+    <a class="btn btn-primary" href="/setup">Set up</a>
   </div>
 </div>
 {{else}}
@@ -17,7 +17,7 @@
       <p class="page-sub">Generation <b>{{$c.Generation}}</b>{{with $c.Hash}}, <code title="{{.}}">{{printf "%.19s" .}}</code>{{end}}.</p>
     </div>
     <div class="head-note">
-      <b>Read-only here.</b> Change configuration with the <a href="/setup">setup assistant</a>, which proposes each change for your approval, or <code>open-conduit config set</code>.
+      <b>Read-only here.</b> Change configuration with the setup assistant (<code>open-conduit init --with claude</code>, see <a href="/setup">Setup</a>), which asks before it writes, or <code>open-conduit config set</code>.
     </div>
   </header>
 
@@ -31,7 +31,7 @@
         <small>{{.Kinds}} · {{.Open}} open</small>
       </a>
       {{- end}}
-      <a href="/setup" class="cfg-add">+ Add a scope with the assistant</a>
+      <a href="/setup" class="cfg-add">+ Add a scope</a>
     </nav>
     <div class="cfg-main">
     {{- if $d.Scope}}{{template "cfg-scope" $d}}{{else}}{{template "cfg-overview" $d}}{{end}}

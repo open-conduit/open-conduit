@@ -3848,3 +3848,12 @@ details.c-act,
   display: block;
   grid-area: auto;
 }
+
+/* Turns, tabs and filters are links here (they work without script), so
+   they drop the underline links carry elsewhere. */
+a.score-turn,
+.tabs > a,
+a.chip,
+a.btn {
+  text-decoration: none;
+}
