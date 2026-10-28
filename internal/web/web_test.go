@@ -425,7 +425,7 @@ func TestConfigPage(t *testing.T) {
 		Bindings:   []client.ConfigBinding{{Name: "agent", Executor: "coding_agent", Resource: "git"}, {Name: "shell", Executor: "shell"}},
 	}}}
 	body := do(h, "GET", "/config", nil, s).Body.String()
-	for _, want := range []string{"Generation 4", "github_ingress", "matches github.issue", "executor coding_agent", "git workspace", "no such binding", "Also running", "nightly", "Bindings no route uses", `aria-current="page">Config`} {
+	for _, want := range []string{"Generation 4", "github_ingress", "matches github.issue", "executor coding_agent", "git workspace", "no such binding", "Also running", "nightly", "By hand", "Other Work", "executor shell", `aria-current="page">Config`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q:\n%s", want, body)
 		}

@@ -3,7 +3,7 @@
   <h1>Config</h1>
   {{if $c.Generation}}<p class="count">Generation {{$c.Generation}} <span class="mono" title="{{$c.Hash}}">{{printf "%.12s" $c.Hash}}</span></p>{{end}}
 </div>
-<p class="intro">How work flows through each scope: a source brings events in, each event is tried against the routes in order, and the first route that matches hands its Work to a binding, which runs it on an executor. Change it with <code>open-conduit config edit</code>; the daemon picks up a valid edit.</p>
+<p class="intro">Each event is tried against a scope's routes in order, and the first route that matches hands its Work to a binding. Change this with <code>open-conduit config edit</code>.</p>
 {{with $c.Connections}}
 <section class="conns">
   <h2>Connections</h2>
@@ -11,34 +11,27 @@
 </section>
 {{end}}
 <div class="scopes">
-{{range .Data.Scopes}}
+{{range .Data.Scopes}}{{$f := .}}
 <section class="scope{{if not .Scope.Enabled}} off{{end}}">
   <h2>{{.Scope.Name}} <span class="from mono">{{.Scope.ID}}</span>{{with .Scope.ParentID}} <span class="from">inherits from <span class="mono">{{.}}</span></span>{{end}}{{if not .Scope.Enabled}} <span class="state s-cancelled">disabled</span>{{end}}</h2>
+  <div class="scroll">
   <div class="flow">
-    <div class="stage">
-      <h3>Sources</h3>
-      {{range .Sources}}<div class="node source"><b>{{.Name}}</b><span class="from">{{.Type}}</span>{{with .Connection}}<span class="via">via {{.}}</span>{{end}}</div>
-      {{else}}<p class="none">No source: Work starts only by hand, on a schedule or from other Work.</p>{{end}}
-    </div>
-    <div class="link" aria-hidden="true"><span>events</span></div>
-    <div class="stage wide">
-      <div class="pair-heads"><h3>Routes <span class="from">first match wins</span></h3><h3>Runs on</h3></div>
-      {{range $i, $r := .Routes}}
-      <div class="pair">
-        <div class="node route"><b><span class="ord">{{inc $i}}</span>{{.Route.Name}}</b><span class="from">matches {{.Route.Handler}}</span>{{with .Route.ActivePolicy}}<span class="via">while busy: {{.}}</span>{{end}}</div>
-        <div class="link" aria-hidden="true"><span>Work</span></div>
-        {{with .Binding}}<div class="node binding"><b>{{.Name}}</b><span class="from">executor {{.Executor}}</span>{{with .Resource}}<span class="via">{{.}} workspace</span>{{end}}{{with .Connection}}<span class="via">via {{.}}</span>{{end}}</div>
-        {{else}}<div class="node binding missing"><b>{{.Route.Binding}}</b><span class="from">no such binding</span></div>{{end}}
-      </div>
-      {{else}}<p class="none">No routes: events here start no Work.</p>{{end}}
-    </div>
+    <h3>Sources</h3><span></span><h3>Routes <span class="from">tried in order</span></h3><span></span><h3>Runs on</h3>
+    {{range $i, $row := .Rows}}
+    {{with .Source}}<div class="node"><b>{{.Name}}</b><span class="from">{{.Kind}}</span>{{with .Via}}<span class="from">via {{.}}</span>{{end}}</div>{{else}}<span></span>{{end}}
+    <div class="bus{{if .First}} first{{end}}{{if .Last}} last{{end}}" aria-hidden="true">{{if .Source}}<i class="in"></i>{{end}}{{if .Route}}<i class="out"></i>{{end}}</div>
+    {{with .Route}}<div class="node"><b>{{inc $i}}. {{.Name}}</b><span class="from">matches {{.Handler}}</span>{{with .ActivePolicy}}<span class="from">while busy: {{.}}</span>{{end}}</div>
+    <div class="arrow" aria-hidden="true"><i class="out"></i></div>
+    {{with $row.Binding}}<div class="node"><b>{{.Name}}</b><span class="from">executor {{.Executor}}</span>{{with .Resource}}<span class="from">{{.}} workspace</span>{{end}}{{with .Connection}}<span class="from">via {{.}}</span>{{end}}</div>
+    {{else}}<div class="node missing"><b>{{.Binding}}</b><span>no such binding</span></div>{{end}}
+    {{else}}{{if not $i}}<p class="none">No routes: events here start no Work.</p>{{else}}<span></span>{{end}}<span></span><span></span>{{end}}
+    {{end}}
+    <div class="node other"><b>Other Work</b><span class="from">an agent or <code>open-conduit work create</code></span></div>
+    <div class="arrow skip" aria-hidden="true"><i class="out"></i><span>names its binding, skipping the routes</span></div>
+    <div class="stack">{{range .Unrouted}}<div class="node"><b>{{.Name}}</b><span class="from">executor {{.Executor}}</span>{{with .Resource}}<span class="from">{{.}} workspace</span>{{end}}{{with .Connection}}<span class="from">via {{.}}</span>{{end}}</div>{{else}}<p class="none">any binding above</p>{{end}}</div>
   </div>
-  {{if or .Others .Unrouted}}
-  <dl class="facts also">
-    {{with .Others}}<dt>Also running</dt><dd>{{range $i, $x := .}}{{if $i}}, {{end}}<b>{{$x.Name}}</b> <span class="from">{{$x.Type}}</span>{{end}}</dd>{{end}}
-    {{with .Unrouted}}<dt>Bindings no route uses</dt><dd>{{range $i, $b := .}}{{if $i}}, {{end}}<b>{{$b.Name}}</b> <span class="from">executor {{$b.Executor}}</span>{{end}}</dd>{{end}}
-  </dl>
-  {{end}}
+  </div>
+  {{with .Others}}<p class="also">Also running: {{range $i, $x := .}}{{if $i}}, {{end}}<b>{{$x.Name}}</b> <span class="from">{{$x.Type}}</span>{{end}}</p>{{end}}
 </section>
 {{else}}{{if $c.Generation}}<p class="empty">No scopes. Add one to the daemon's configuration to start taking Work.</p>{{end}}{{end}}
 </div>

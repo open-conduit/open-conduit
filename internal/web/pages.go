@@ -529,20 +529,29 @@ func (s *Server) scopesPage(w http.ResponseWriter, r *http.Request) {
 	s.render(w, r, "scopes", p, d)
 }
 
-// flowScope is one scope's wiring as the config page draws it: the
-// sources that bring events in, the routes tried on each event in order
-// and the binding each sends its Work to.
+// flowScope is one scope's wiring as the config page draws it, in rows
+// so a route and its binding sit level. Sources are its ingress extensions
+// and "by hand"; each feeds every route, tried in order. Other Work names
+// its binding itself, so it gets its own row, beside the bindings no
+// route uses.
 type flowScope struct {
 	Scope    client.ConfigScope
-	Sources  []client.ConfigExtension
-	Routes   []flowRoute
+	Rows     []flowRow
 	Others   []client.ConfigExtension
 	Unrouted []client.ConfigBinding
 }
 
-type flowRoute struct {
-	Route   client.Route
-	Binding *client.ConfigBinding
+// flowRow is one row of the diagram: a source, a route, or both. First
+// and Last mark where the line joining the sources to the routes ends.
+type flowRow struct {
+	Source      *flowSource
+	Route       *client.Route
+	Binding     *client.ConfigBinding
+	First, Last bool
+}
+
+type flowSource struct {
+	Name, Kind, Via string
 }
 
 type configData struct {
@@ -550,32 +559,42 @@ type configData struct {
 	Scopes []flowScope
 }
 
-// flow splits a scope's extensions into sources and the rest, pairs each
-// route with its binding, and keeps the bindings no route uses.
 func flow(sc client.ConfigScope) flowScope {
 	f := flowScope{Scope: sc}
+	var sources []flowSource
 	for _, x := range sc.Extensions {
 		if x.Ingress {
-			f.Sources = append(f.Sources, x)
+			sources = append(sources, flowSource{Name: x.Name, Kind: x.Type, Via: x.Connection})
 		} else {
 			f.Others = append(f.Others, x)
 		}
 	}
+	sources = append(sources, flowSource{Name: "By hand", Kind: "actions and events from the web view, TUI or CLI"})
 	used := map[string]bool{}
 	for _, r := range sc.Routes {
-		fr := flowRoute{Route: r}
-		for i := range sc.Bindings {
-			if sc.Bindings[i].Name == r.Binding {
-				fr.Binding = &sc.Bindings[i]
-			}
-		}
 		used[r.Binding] = true
-		f.Routes = append(f.Routes, fr)
 	}
 	for _, b := range sc.Bindings {
 		if !used[b.Name] {
 			f.Unrouted = append(f.Unrouted, b)
 		}
+	}
+	n := max(len(sources), len(sc.Routes))
+	for i := range n {
+		row := flowRow{First: i == 0, Last: i == n-1}
+		if i < len(sources) {
+			row.Source = &sources[i]
+		}
+		if i < len(sc.Routes) {
+			r := &sc.Routes[i]
+			row.Route = r
+			for j := range sc.Bindings {
+				if sc.Bindings[j].Name == r.Binding {
+					row.Binding = &sc.Bindings[j]
+				}
+			}
+		}
+		f.Rows = append(f.Rows, row)
 	}
 	return f
 }
