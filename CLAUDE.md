@@ -1,0 +1,41 @@
+@AGENTS.md
+
+# Process
+
+[CONTRIBUTING.md](CONTRIBUTING.md) is the full guide. In short:
+
+1. Branch from `main`. `main` only takes changes through pull requests.
+2. Make one change per commit. If it alters behaviour an architecture document describes, update that document in the same commit.
+3. `make check` is what CI runs (`fmt-check`, `vet`, `test -race`, `boundaries`, `config-check`, `docs-check`, `build`, `smoke`). Run `make fmt` to fix formatting. A docs-only change needs only `make docs-check`.
+4. Push and open a pull request. CI runs `make check`, `make certify`, `make cross-build` and commitlint.
+
+Tests never call real services, never wait on real time and never touch the operator's config or state; see "Tests" in CONTRIBUTING.md.
+
+# Commit messages and PR titles (commitlint)
+
+The commitlint workflow lints **the PR title and every commit on the branch** with `@commitlint/config-conventional` (`.commitlintrc.json`). semantic-release reads them to pick the next version, so a bad message fails CI and a wrong type ships the wrong release.
+
+The header is `type(scope): summary`:
+
+- `type` is lower case and one of `feat`, `fix`, `perf`, `refactor`, `docs`, `test`, `build`, `ci`, `chore`, `style` or `revert`. Nothing else passes: not `feature`, `bugfix`, `update`, `doc` or `tests`.
+  - `feat` cuts a minor release and `fix` or `perf` a patch. Use them only for changes users see; tests, docs, CI and tooling take their own type.
+- `scope` is optional, lower case, and names the package or area: `runtime`, `github`, `daemon`, `ci`, `readme`.
+- `summary` starts lower case (not `Add …` or `Fix …`), uses the imperative, and has no full stop at the end.
+- The whole header is at most 100 characters, including the scope and the ` (#123)` GitHub appends on a squash merge. Aim for under 90.
+- A breaking change takes `!` before the colon (`feat(protocol)!: …`) or a `BREAKING CHANGE:` footer.
+- Leave a blank line between the header and the body, and between the body and footers such as `Co-Authored-By:`. Body and footer lines have no length limit.
+
+Good: `fix(github): drop the claimed label once completed work's issue is closed`
+
+Bad, each fails: `Fix github label bug`, `fix(GitHub): Drop the label.`, `feature(github): drop the label`.
+
+Don't write the `(#123)` PR number into a message yourself; GitHub adds it on merge.
+
+On a squash merge, a PR with one commit lands as that commit's message and a PR with more lands as its title, so both must pass. Before pushing, lint the branch and the title you mean to use the way CI does (it needs Node):
+
+```sh
+npx -y -p @commitlint/cli@21 -p @commitlint/config-conventional@21 -- commitlint --from origin/main --to HEAD
+printf '%s\n' 'fix(github): the PR title' | npx -y -p @commitlint/cli@21 -p @commitlint/config-conventional@21 -- commitlint
+```
+
+To fix a bad message, `git commit --amend` (last commit) or rebase and reword, then force-push the branch. Edit a bad PR title on the PR; commitlint reruns on edit.
