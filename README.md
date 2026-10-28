@@ -51,6 +51,7 @@ open-conduit init github --repo acme/web --checkout ~/Code/web
 open-conduit service install                         # run the daemon in the background
 open-conduit doctor --check-secrets                  # every connection, credential and binding
 open-conduit tui                                     # watch and control runs
+open-conduit web                                     # the same in a browser, on open-conduit.localhost
 ```
 
 The GitHub setup runs its agents with the Claude Code executor, and the GitHub CLI's (`gh`) login is its default credential. To run something else, point a binding at a shell command or at an executor from an extension. Release binaries, an install script and `go install` are covered in [Install](https://open-conduit.github.io/open-conduit/start/install/).

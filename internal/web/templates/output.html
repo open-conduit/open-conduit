@@ -1,0 +1,13 @@
+{{define "content"}}{{$d := .Data}}
+<div class="bar">
+  <h1>{{$d.Out.Title}}</h1>
+  <span class="links">
+    <a href="/run?id={{$d.RunID}}">run</a>
+    <a href="/output?run={{$d.RunID}}&amp;pick=log"{{if eq $d.Pick "log"}} aria-current="true"{{end}}>log</a>
+    <a href="/output?run={{$d.RunID}}&amp;pick=transcript"{{if eq $d.Pick "transcript"}} aria-current="true"{{end}}>transcript</a>
+    {{if gt $d.Out.Count 1}}<a href="/output?run={{$d.RunID}}&amp;pick={{$d.Next}}">next output</a>{{end}}
+  </span>
+</div>
+<pre id="output" class="log"{{if $d.Out.Live}} data-follow="/output?run={{$d.RunID}}&amp;pick={{$d.Pick}}&amp;format=json"{{end}}>{{$d.Out.Text}}</pre>
+{{if $d.Out.Live}}<p class="dim" id="following">following the live output</p>{{end}}
+{{end}}

@@ -30,6 +30,9 @@ type Env struct {
 	// TUI runs the interactive history view; the open-conduit entrypoint
 	// supplies it so the os toolbelt binary carries no terminal UI.
 	TUI func(*client.Client) error
+	// Web serves the browser view until interrupted; the open-conduit
+	// entrypoint supplies it so the os toolbelt binary carries no web UI.
+	Web func(WebRequest) error
 	// Serve runs the daemon; only the open-conduit entrypoint supplies it.
 	Serve func(ServeRequest) int
 	// Stdin is the terminal input for interactive commands (default os.Stdin).
@@ -140,6 +143,7 @@ Commands:
   runs log ID [--follow] [--transcript] [--range bytes=A-B]
   doctor [--check-secrets] [--json]
   tui
+  web [--addr 127.0.0.1:7420] [--host open-conduit.localhost]   the same view in a browser on this machine (prints a sign-in URL)
   config validate FILE | config apply FILE --generation N [--key K]
   config path | config show [--file F] | config check [--file F]
   config get POINTER | config set POINTER JSON | config unset POINTER   [--file F] (local file, validated before saving)
@@ -199,7 +203,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "migrate": o.migrate, "backup": o.backup, "state": o.state, "extension": o.extension, "service": o.service}
+	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "migrate": o.migrate, "backup": o.backup, "state": o.state, "extension": o.extension, "service": o.service}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.

@@ -1,0 +1,19 @@
+{{define "content"}}{{$p := .Page}}
+<h1>Scopes</h1>
+<div id="live">
+{{range .Data}}{{$s := .}}
+<section>
+  <h2>{{.Scope.Name}} <span class="dim">{{.Scope.ID}}{{if not .Scope.Enabled}} · disabled{{end}}</span></h2>
+  {{with .Err}}<pre class="error">{{.}}</pre>{{end}}
+  {{range .Actions}}
+  <form method="post" action="/actions" class="action"{{if not .Prompt}} data-confirm="{{.Label}} ({{$s.Scope.ID}})?"{{end}}>
+    <input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}">
+    <input type="hidden" name="scope" value="{{$s.Scope.ID}}"><input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">
+    {{if .Prompt}}<label>{{.Label}} <input name="input" placeholder="{{.Prompt}}" aria-label="{{.Prompt}}"></label>{{end}}
+    <button>{{if .Prompt}}Go{{else}}{{.Label}}{{end}}</button>
+  </form>
+  {{else}}<p class="dim">no actions available</p>{{end}}
+</section>
+{{else}}<p class="dim">no scopes</p>{{end}}
+</div>
+{{end}}

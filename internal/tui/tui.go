@@ -263,24 +263,8 @@ func (m Model) fetchLabels() tea.Cmd {
 	}
 }
 
-// WorkLabel is the human name of Work: the first annotation an extension
-// gives it (not the runtime's own, such as a capacity wait), with an "owner/repo#12" reference shortened to "repo#12", else
-// its first correlation key, else its ID.
-func WorkLabel(w client.Work) string {
-	for _, a := range w.Annotations {
-		if a.Value == "" || a.Source == "runtime" {
-			continue
-		}
-		if repo, ref, ok := strings.Cut(a.Value, "#"); ok && !strings.ContainsAny(a.Value, " :") {
-			return repo[strings.LastIndex(repo, "/")+1:] + "#" + ref
-		}
-		return a.Value
-	}
-	for _, k := range w.CorrelationKeys {
-		return k.Source + " " + k.ExternalID
-	}
-	return w.ID
-}
+// WorkLabel is the human name of Work; see runview.WorkLabel.
+func WorkLabel(w client.Work) string { return runview.WorkLabel(w) }
 
 func (m Model) label(workID string) string {
 	if l := m.labels[workID]; l != "" {
