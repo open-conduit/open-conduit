@@ -109,7 +109,7 @@ func (d *daemon) routePending(ctx context.Context, c *components) {
 }
 
 func (d *daemon) startReady(ctx context.Context, c *components) {
-	var ready []domain.ID
+	var ready, idle []domain.ID
 	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 		works, err := tx.ListWorks()
 		for _, w := range works {
@@ -128,6 +128,8 @@ func (d *daemon) startReady(ctx context.Context, c *components) {
 			}
 			if len(inputs) > 0 {
 				ready = append(ready, w.ID)
+			} else {
+				idle = append(idle, w.ID)
 			}
 		}
 		return err
@@ -135,6 +137,11 @@ func (d *daemon) startReady(ctx context.Context, c *components) {
 	if err != nil {
 		d.report("start", "", errorCode(err))
 		return
+	}
+	// Idle Work is not waiting for a slot: drop any held-back marker its
+	// last start left, so capacity stops counting it.
+	for _, id := range idle {
+		d.clear("start", id)
 	}
 	for _, id := range ready {
 		if ctx.Err() != nil {
