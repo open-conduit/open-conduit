@@ -106,6 +106,13 @@ export default defineConfig({
 								{ label: 'Extension packaging', slug: 'architecture/extension-packaging' },
 							],
 						},
+						{
+							label: 'Proposals',
+							collapsed: true,
+							items: [
+								{ label: 'Setup sessions', slug: 'architecture/setup-sessions' },
+							],
+						},
 					],
 				},
 			],

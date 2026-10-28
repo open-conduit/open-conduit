@@ -243,6 +243,9 @@ func (s *Scheduler) waitInTx(tx storage.Tx, ref domain.LeaseRef, wait domain.Wai
 			state.RemainingTimeout = state.Deadline.Sub(s.now())
 		}
 		state.Deadline = time.Time{}
+		if resume {
+			state.endSegment(s.now(), true)
+		}
 		if err = CancelExecutionDeadlineInTx(tx, x.ID); err != nil {
 			return err
 		}
