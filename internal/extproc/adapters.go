@@ -119,7 +119,7 @@ func (i *remoteIngress) Reconcile(ctx context.Context, s extension.Scan) (extens
 func (r *Remote) RouteHandler(handler string) extension.RouteHandler {
 	return routeFunc(func(ctx context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 		if !r.readable(in.Event.Event.Data) {
-			return extension.RouteDecision{}, nil
+			return extension.Skip("the extension does not read this event's data schema"), nil
 		}
 		var out protocol.RouteDecision
 		if err := r.p.Call(ctx, "route.match", protocol.RouteMatchParams{Handler: handler, Input: protocol.FromRouteInput(in)}, &out); err != nil {

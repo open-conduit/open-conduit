@@ -61,12 +61,15 @@ func Entries(scope domain.Scope) []Settings {
 func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
 	key := e.CorrelationKey
-	if key == nil || strings.HasPrefix(e.Type, "core.") {
-		return extension.RouteDecision{}, nil
+	if key == nil {
+		return extension.Skip("the event names no job"), nil
+	}
+	if strings.HasPrefix(e.Type, "core.") {
+		return extension.Skip("a core event is not a job trigger"), nil
 	}
 	name, ok := ParseJobKey(key.ExternalID)
 	if !ok {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("the key is not a job"), nil
 	}
 	kind := ""
 	switch {
@@ -79,7 +82,7 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	case e.Source == ManualSource:
 		kind = KindManual
 	default:
-		return extension.RouteDecision{}, nil
+		return extension.Skip("not a trigger of the job's own source or an operator"), nil
 	}
 	declared := false
 	for _, s := range Entries(in.Scope) {
@@ -89,28 +92,28 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		_, declared = s.Job(name)
 	}
 	if !declared {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("job " + name + " is not declared"), nil
 	}
 	if len(in.Route.Config.Data) > 0 {
 		rc, err := ParseRoute(in.Route.Config.Data)
 		if err != nil {
-			return extension.RouteDecision{}, nil
+			return extension.Skip("the route config is unreadable"), nil
 		}
 		if len(rc.Jobs) > 0 && !slices.Contains(rc.Jobs, name) {
-			return extension.RouteDecision{}, nil
+			return extension.Skip("job " + name + " is not one this route selects"), nil
 		}
 		if len(rc.Triggers) > 0 && !slices.Contains(rc.Triggers, kind) {
-			return extension.RouteDecision{}, nil
+			return extension.Skip("this route does not take " + kind + " triggers"), nil
 		}
 	}
 	if in.Work == nil {
 		// A job's Work is shown by the job's name (issue #123).
-		return extension.RouteDecision{Match: true, Kind: WorkKind, CreateID: domain.ID(WorkID(key.Source, name)), Display: &domain.WorkDisplay{Title: extension.Clip(name, extension.MaxDisplayTitle)}}, nil
+		return extension.RouteDecision{Match: true, Kind: WorkKind, CreateID: domain.ID(WorkID(key.Source, name)), Reason: "the first " + kind + " trigger of job " + name, Display: &domain.WorkDisplay{Title: extension.Clip(name, extension.MaxDisplayTitle)}}, nil
 	}
 	if in.Work.Kind != WorkKind {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("the job's key is owned by other Work"), nil
 	}
-	return extension.RouteDecision{Match: true}, nil
+	return extension.RouteDecision{Match: true, Reason: "a " + kind + " trigger for the job's Work"}, nil
 }
 
 func delivery(e domain.Event) bool { return e.Type == TypeWebhook || e.Type == TypeEvent }

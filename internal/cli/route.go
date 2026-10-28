@@ -48,6 +48,14 @@ func keyMatches(external, key string) bool {
 }
 
 func (o *operator) route(args []string) int {
+	for i, a := range args {
+		if a == "--samples" || a == "-samples" {
+			return o.routeSamples(append(append([]string(nil), args[:i]...), args[i+1:]...))
+		}
+		if a == "--trace" || a == "-trace" || strings.HasPrefix(a, "--trace=") || strings.HasPrefix(a, "-trace=") {
+			return o.routeTrace(args)
+		}
+	}
 	f := newFlags("route", "scope", "limit")
 	pos, err := f.parse(args)
 	if err != nil || len(pos) != 1 || pos[0] == "" {
@@ -125,4 +133,76 @@ func (o *operator) route(args []string) int {
 		out.Note = "no Work or Event carries that key"
 	}
 	return o.emit(out, nil)
+}
+
+// routeSamples is `route --samples --scope S`: the sample Events the scope's
+// route handlers offer for --trace.
+func (o *operator) routeSamples(args []string) int {
+	f := newFlags("route", "scope")
+	pos, err := f.parse(args)
+	if err != nil || len(pos) != 0 || f.get("scope") == "" {
+		return usageError(o.errOut, "expected route --samples --scope S")
+	}
+	c, _, err := o.client()
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	return o.emit(c.RouteSamples(cx, f.get("scope")))
+}
+
+// routeTrace is `route --trace TYPE|SAMPLE --scope S`: a dry run of how a
+// hypothetical Event would route now. A sample (by its ID, or the part after
+// the handler) supplies the Event; the other flags override its fields.
+func (o *operator) routeTrace(args []string) int {
+	f := newFlags("route", "trace", "scope", "source", "key-source", "key-external-id", "work-id", "schema", "data")
+	pos, err := f.parse(args)
+	scope, name := f.get("scope"), f.get("trace")
+	if err != nil || len(pos) != 0 || scope == "" || name == "" {
+		return usageError(o.errOut, "expected route --trace TYPE|SAMPLE --scope S [--source SRC] [--key-source S --key-external-id X] [--work-id W] [--schema S --data JSON]")
+	}
+	if (f.get("key-source") == "") != (f.get("key-external-id") == "") {
+		return usageError(o.errOut, "--key-source and --key-external-id go together")
+	}
+	payload, err := f.payload()
+	if err != nil {
+		return usageError(o.errOut, err.Error())
+	}
+	c, _, err := o.client()
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	cx, cancel := ctx()
+	defer cancel()
+	e := client.TraceEvent{Type: name}
+	if !strings.Contains(name, ".") || strings.Contains(name, "/") {
+		samples, err := c.RouteSamples(cx, scope)
+		if err != nil {
+			return o.emit(nil, err)
+		}
+		found := false
+		for _, s := range samples {
+			if s.ID == name || strings.TrimPrefix(s.ID, s.Handler+"/") == name {
+				e, found = s.TraceEvent, true
+				break
+			}
+		}
+		if !found {
+			return usageError(o.errOut, "no sample "+name+" in scope "+scope+"; see route --samples --scope "+scope)
+		}
+	}
+	if v := f.get("source"); v != "" {
+		e.Source = v
+	}
+	if v := f.get("key-source"); v != "" {
+		e.CorrelationKey = &client.Key{Source: v, ExternalID: f.get("key-external-id")}
+	}
+	if v := f.get("work-id"); v != "" {
+		e.WorkID = v
+	}
+	if payload != nil {
+		e.Data = payload
+	}
+	return o.emit(c.TraceRoute(cx, scope, e))
 }

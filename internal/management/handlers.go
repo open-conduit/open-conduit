@@ -314,6 +314,63 @@ func (s *Server) eventRoute(c *call) (int, any, error) {
 	return 200, out, nil
 }
 
+// traceRoute is a read-only dry run: how a hypothetical Event would route
+// in the scope now. Nothing is accepted, routed or recorded, so it takes no
+// Idempotency-Key.
+func (s *Server) traceRoute(c *call) (int, any, error) {
+	var in struct {
+		Type           string     `json:"type"`
+		Source         string     `json:"source"`
+		CorrelationKey *keyIn     `json:"correlation_key"`
+		WorkID         string     `json:"work_id"`
+		Data           *payloadIn `json:"data"`
+	}
+	if err := c.decode(&in); err != nil {
+		return 0, nil, err
+	}
+	if in.Type == "" || len(in.Type) > 256 {
+		return 0, nil, fail(400, "malformed", "type is required")
+	}
+	if in.CorrelationKey != nil && (in.CorrelationKey.Source == "" || in.CorrelationKey.ExternalID == "") {
+		return 0, nil, fail(400, "malformed", "correlation_key needs source and external_id")
+	}
+	source := in.Source
+	if source == "" {
+		source = runtime.ManualSource
+	}
+	now := s.o.Now()
+	e := domain.Event{ID: "trace", Type: in.Type, Source: source, DeliveryID: "trace", WorkID: domain.ID(in.WorkID), CorrelationKey: in.CorrelationKey.domain(), Data: in.Data.domain(), OccurredAt: now, ReceivedAt: now}
+	t, err := s.o.Control.TraceRoute(c.ctx, domain.ID(c.params[0]), e)
+	if err != nil {
+		return 0, nil, err
+	}
+	return 200, toRouteTrace(t), nil
+}
+
+// routeSamples lists the sample Events the scope's route handlers offer
+// for a trace ("Suppose a new issue is opened").
+func (s *Server) routeSamples(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	samples, err := s.o.Control.RouteSamples(c.ctx, domain.ID(c.params[0]))
+	if err != nil {
+		return 0, nil, err
+	}
+	out := []wireRouteSample{}
+	for _, x := range samples {
+		w := wireRouteSample{ID: x.Handler + "/" + x.ID, Title: x.Title, Route: x.Route, Handler: x.Handler, Type: x.Event.Type, Source: x.Event.Source, WorkID: string(x.Event.WorkID)}
+		if k := x.Event.CorrelationKey; k != nil {
+			w.CorrelationKey = &wireKey{Source: k.Source, ExternalID: k.ExternalID}
+		}
+		if x.Event.Data.Schema != "" || len(x.Event.Data.Data) > 0 {
+			w.Data = &wirePayload{Schema: x.Event.Data.Schema, Data: x.Event.Data.Data}
+		}
+		out = append(out, w)
+	}
+	return 200, map[string]any{"items": out}, nil
+}
+
 // routeOf is a's routing explanation, for GET /events/{id}/route and
 // GET /events?with=route alike.
 func routeOf(tx storage.Tx, a domain.AcceptedEvent, scope domain.ID) (wireEventRoute, error) {

@@ -21,6 +21,9 @@ type RouteInput struct {
 // RouteDecision describes a first match. CreateID/Kind are used only when no
 // owner exists; AttachKeys are appended atomically or the entire route fails.
 // A successor must use a distinct key; terminal ownership is never transferred.
+// Reason says in a short phrase why the handler matched or skipped ("a new
+// issue the labels admit", "not an issue this entry watches"). It explains a
+// route trace and never changes the decision.
 // Display, when set on a match, replaces the Work's display (ValidateDisplay);
 // nil keeps what it has, so a handler sets it only when it has something to
 // say (the handler sees the current one on RouteInput.Work).
@@ -29,11 +32,32 @@ type RouteDecision struct {
 	CreateID   domain.ID
 	Kind       string
 	AttachKeys []domain.CorrelationKey
+	Reason     string
 	Display    *domain.WorkDisplay
 }
 
 type RouteHandler interface {
 	Match(context.Context, RouteInput) (RouteDecision, error)
+}
+
+// Skip is a non-matching decision with its reason.
+func Skip(reason string) RouteDecision { return RouteDecision{Reason: reason} }
+
+// RouteSample is a named hypothetical Event a view offers for a route trace
+// ("Suppose a new issue is opened"). Event carries the type, source,
+// correlation key and data; the host assigns identity and times.
+type RouteSample struct {
+	ID    string
+	Title string
+	Event domain.Event
+}
+
+// RouteSampler is optional on a RouteHandler: the samples it offers for a
+// route in a scope, built from the route's and scope's configuration (the
+// entry's source namespace, its labels) so they trace as written. IDs are
+// stable and unique within the handler.
+type RouteSampler interface {
+	Samples(scope domain.Scope, route domain.Route) []RouteSample
 }
 
 // InheritRoutes resolves root-to-leaf routes. A same-name override keeps the

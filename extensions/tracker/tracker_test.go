@@ -157,6 +157,25 @@ func TestVerifyHMAC(t *testing.T) {
 	}
 }
 
+func TestSamplesTraceAgainstTheScope(t *testing.T) {
+	r := Route{Type: "linear"}
+	scope := scopeWith(t, "linear", `{"namespace":"linear/eng","scope":"eng","teams":["ENG"],"labels":{"require":["agent"]}}`)
+	route := domain.Route{Config: domain.Payload{Data: json.RawMessage(`{"match":{"priority":["high"]}}`)}}
+	samples := r.Samples(scope, route)
+	if len(samples) == 0 {
+		t.Fatal("no samples")
+	}
+	for _, s := range samples {
+		if s.ID == "" || s.Title == "" || s.Event.Type == "" {
+			t.Fatalf("incomplete sample: %+v", s)
+		}
+	}
+	d, err := r.Match(context.Background(), extension.RouteInput{Event: domain.AcceptedEvent{Event: samples[0].Event}, Scope: scope, Route: route})
+	if err != nil || !d.Match || d.Kind != "linear.issue" {
+		t.Fatalf("the new-issue sample must start Work: %+v, %v", d, err)
+	}
+}
+
 // An issue's Work says what it is: title, key, author and link.
 func TestRouteDisplay(t *testing.T) {
 	r := Route{Type: "linear"}

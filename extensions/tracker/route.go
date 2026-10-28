@@ -83,6 +83,28 @@ func (l Labels) Admits(p IssuePayload) bool {
 	return false
 }
 
+// refusal says why Admits refuses p ("" when it admits it).
+func (l Labels) refusal(p IssuePayload) string {
+	switch {
+	case p.State != "open":
+		return "the issue is " + p.State
+	case p.Waiting:
+		return "the issue is waiting"
+	}
+	for _, s := range l.Skip {
+		if has(p.Labels, s) {
+			return "the issue carries the skip label " + s
+		}
+	}
+	if has(p.Labels, l.Claimed) && p.Generation == "" {
+		return "the issue already carries " + l.Claimed
+	}
+	if !l.Admits(p) {
+		return "the issue carries none of " + strings.Join(l.Require, ", ")
+	}
+	return ""
+}
+
 // selfAuthored reports whether an agent comment was written for this Work
 // (its own note), which is never handed back to it.
 func selfAuthored(a *Agent, w *domain.Work) bool {
@@ -105,46 +127,58 @@ func (r Route) Match(_ context.Context, in extension.RouteInput) (extension.Rout
 	e := in.Event.Event
 	t := TypesOf(r.Type)
 	if !strings.HasPrefix(e.Type, r.Type+".") || e.Type == t.Delivery {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("not a " + r.Type + " event"), nil
 	}
 	source := e.Source
 	if e.Type == t.ClaimRequested {
 		// Only an operator claims by hand; the key names the entry's issue.
 		if e.Source != ManualSource || e.CorrelationKey == nil {
-			return extension.RouteDecision{}, nil
+			return extension.Skip("a claim comes only from an operator"), nil
 		}
 		if _, generation, ok := ParseIssueKey(e.CorrelationKey.ExternalID); !ok || generation != "" {
-			return extension.RouteDecision{}, nil
+			return extension.Skip("a claim names an issue key"), nil
 		}
 		source = e.CorrelationKey.Source
 	}
 	s, ok := r.settingsFor(in.Scope, source)
-	if !ok || e.CorrelationKey == nil {
-		return extension.RouteDecision{}, nil
+	if !ok {
+		return extension.Skip("no " + r.Type + " entry in this scope reads " + source), nil
+	}
+	if e.CorrelationKey == nil {
+		return extension.Skip("the event names no issue"), nil
 	}
 	if e.Type == t.ClaimRequested {
 		// A manual claim overrides labels and match; it never feeds existing Work.
-		return extension.RouteDecision{Match: in.Work == nil, Kind: WorkKind(r.Type)}, nil
+		if in.Work != nil {
+			return extension.Skip("the issue already has Work"), nil
+		}
+		return extension.RouteDecision{Match: true, Kind: WorkKind(r.Type), Reason: "claimed by hand"}, nil
 	}
 	if in.Work == nil {
 		if e.Type != t.IssueOpen || e.Data.Schema != t.SchemaIssue {
-			return extension.RouteDecision{}, nil
+			return extension.Skip("only an opened issue starts Work"), nil
 		}
 		var p IssuePayload
-		if json.Unmarshal(e.Data.Data, &p) != nil || !s.Labels.Admits(p) {
-			return extension.RouteDecision{}, nil
+		if json.Unmarshal(e.Data.Data, &p) != nil {
+			return extension.Skip("the issue data is unreadable"), nil
+		}
+		if reason := s.Labels.refusal(p); reason != "" {
+			return extension.Skip(reason), nil
 		}
 		if len(in.Route.Config.Data) > 0 {
 			rc, err := ParseRoute(in.Route.Config.Data)
-			if err != nil || !rc.Matches(p) {
-				return extension.RouteDecision{}, nil
+			if err != nil {
+				return extension.Skip("the route config is unreadable"), nil
+			}
+			if !rc.Matches(p) {
+				return extension.Skip("the issue does not fit this route's match"), nil
 			}
 		}
-		return extension.RouteDecision{Match: true, Kind: WorkKind(r.Type), Display: r.display(p)}, nil
+		return extension.RouteDecision{Match: true, Kind: WorkKind(r.Type), Reason: "an open issue the labels admit", Display: r.display(p)}, nil
 	}
 	switch e.Type {
 	case t.IssueClosed:
-		d := extension.RouteDecision{Match: true}
+		d := extension.RouteDecision{Match: true, Reason: "the issue closed"}
 		var p IssuePayload
 		if e.Data.Schema == t.SchemaIssue && json.Unmarshal(e.Data.Data, &p) == nil {
 			d.Display = r.display(p)
@@ -152,15 +186,18 @@ func (r Route) Match(_ context.Context, in extension.RouteInput) (extension.Rout
 		return d, nil
 	case t.CommentHuman, t.CommentAgent:
 		var p CommentPayload
-		if json.Unmarshal(e.Data.Data, &p) != nil || p.Edited {
-			return extension.RouteDecision{}, nil
+		if json.Unmarshal(e.Data.Data, &p) != nil {
+			return extension.Skip("the comment data is unreadable"), nil
+		}
+		if p.Edited {
+			return extension.Skip("an edited comment is not news"), nil
 		}
 		if e.Type == t.CommentAgent && selfAuthored(p.Agent, in.Work) {
-			return extension.RouteDecision{}, nil
+			return extension.Skip("the agent's own comment"), nil
 		}
-		return extension.RouteDecision{Match: true}, nil
+		return extension.RouteDecision{Match: true, Reason: "a comment for the issue's agent"}, nil
 	}
-	return extension.RouteDecision{}, nil
+	return extension.Skip(e.Type + " is not passed to the agent"), nil
 }
 
 // display says what an issue's Work is (issue #123): its title, key,
