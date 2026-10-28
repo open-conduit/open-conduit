@@ -28,7 +28,7 @@ func (r *Router) displayOnly(ctx context.Context, s routeSnapshot) *domain.WorkD
 	if s.work == nil || s.work.State.Terminal() {
 		return nil
 	}
-	p, err := r.evaluate(ctx, s)
+	p, err := r.evaluate(ctx, s, nil)
 	if err != nil || p.selected == nil {
 		return nil
 	}
