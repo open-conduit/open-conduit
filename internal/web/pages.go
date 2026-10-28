@@ -45,9 +45,10 @@ func (s *Server) parse() error {
 		"plural":     plural,
 		"summary":    summary,
 		"stateGroup": stateGroup,
+		"inc":        func(i int) int { return i + 1 },
 	}
 	s.pages = map[string]*template.Template{}
-	for _, name := range []string{"list", "run", "output", "scopes"} {
+	for _, name := range []string{"list", "run", "output", "scopes", "config"} {
 		t, err := template.New("layout.html").Funcs(funcs).ParseFS(assets, "templates/layout.html", "templates/panels.html", "templates/"+name+".html")
 		if err != nil {
 			return err
@@ -526,6 +527,75 @@ func (s *Server) scopesPage(w http.ResponseWriter, r *http.Request) {
 		d = append(d, scopeActions{Scope: sc, Panels: panels, Actions: unshown(actions, panels), Err: errs})
 	}
 	s.render(w, r, "scopes", p, d)
+}
+
+// flowScope is one scope's wiring as the config page draws it: the
+// sources that bring events in, the routes tried on each event in order
+// and the binding each sends its Work to.
+type flowScope struct {
+	Scope    client.ConfigScope
+	Sources  []client.ConfigExtension
+	Routes   []flowRoute
+	Others   []client.ConfigExtension
+	Unrouted []client.ConfigBinding
+}
+
+type flowRoute struct {
+	Route   client.Route
+	Binding *client.ConfigBinding
+}
+
+type configData struct {
+	Config client.Config
+	Scopes []flowScope
+}
+
+// flow splits a scope's extensions into sources and the rest, pairs each
+// route with its binding, and keeps the bindings no route uses.
+func flow(sc client.ConfigScope) flowScope {
+	f := flowScope{Scope: sc}
+	for _, x := range sc.Extensions {
+		if x.Ingress {
+			f.Sources = append(f.Sources, x)
+		} else {
+			f.Others = append(f.Others, x)
+		}
+	}
+	used := map[string]bool{}
+	for _, r := range sc.Routes {
+		fr := flowRoute{Route: r}
+		for i := range sc.Bindings {
+			if sc.Bindings[i].Name == r.Binding {
+				fr.Binding = &sc.Bindings[i]
+			}
+		}
+		used[r.Binding] = true
+		f.Routes = append(f.Routes, fr)
+	}
+	for _, b := range sc.Bindings {
+		if !used[b.Name] {
+			f.Unrouted = append(f.Unrouted, b)
+		}
+	}
+	return f
+}
+
+func (s *Server) configPage(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := call(r)
+	defer cancel()
+	p := &page{Title: "Config", Nav: "config"}
+	cfg, err := s.src.Config(ctx)
+	switch {
+	case tooOld(err):
+		p.Err = "this daemon does not show its config; upgrade it to see it here"
+	case err != nil:
+		p.Err = errText(err)
+	}
+	d := configData{Config: cfg}
+	for _, sc := range cfg.Scopes {
+		d.Scopes = append(d.Scopes, flow(sc))
+	}
+	s.render(w, r, "config", p, d)
 }
 
 // back is where a change returns to: the page it was made on.
