@@ -1,3 +1,33 @@
-{{define "content"}}
-<div class="page"><header class="page-head"><h1>{{.Page.Title}}</h1></header></div>
+{{define "content"}}{{$d := .Data}}
+<div class="page setup">
+  <header class="page-head">
+    <div>
+      <h1>Setup</h1>
+      {{- if $d.Config.Scopes}}
+      <p class="page-sub">Generation {{$d.Generation}} is active with {{plural (len $d.Config.Scopes) "scope"}}. The assistant builds on what's there; it never removes anything you didn't ask it to.</p>
+      {{- else}}
+      <p class="page-sub">Nothing is set up yet. A Claude Code session running Open Conduit's setup playbook looks at this machine, explains what it finds and proposes a configuration; <b>you approve every change</b> before it's written.</p>
+      {{- end}}
+    </div>
+  </header>
+  <div class="returning">
+    {{- with $d.Config.Scopes}}
+    <section>
+      <h2 class="section-rule">What's set up</h2>
+      <ul class="kv-list">
+        {{- range .}}
+        <li>{{if .Enabled}}{{mark "completed" 12 ""}}{{else}}{{mark "cancelled" 12 "disabled"}}{{end}}<b><a href="/config?scope={{.ID}}">{{.Name}}</a></b><span>{{plural (len .Routes) "route"}} · {{plural (len .Bindings) "binding"}}{{with .Source}} · from {{.}}{{end}}</span></li>
+        {{- end}}
+      </ul>
+    </section>
+    {{- end}}
+    <section>
+      <h2 class="section-rule">{{if $d.Config.Scopes}}Add or change{{else}}Start{{end}}</h2>
+      <p>Setup in the browser needs setup sessions in the daemon, which this version does not offer yet. Run the same assistant in a terminal:</p>
+      <pre class="code-block">open-conduit init --with claude</pre>
+      <p>It starts Claude Code with the setup playbook in this folder. It asks before it writes the config, and <code>open-conduit config validate</code> and <code>open-conduit doctor</code> check the result. To change one value by hand, use <code>open-conduit config set</code>.</p>
+      <p><a href="{{$d.QuickStart}}">The quick start</a> covers setting up with Claude or by hand.</p>
+    </section>
+  </div>
+</div>
 {{end}}

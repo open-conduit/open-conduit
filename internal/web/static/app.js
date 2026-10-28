@@ -89,3 +89,209 @@ if (help) {
   help.hidden = false;
   help.addEventListener("click", () => window.ocDialog("keys"));
 }
+
+// ---- Keyboard and the jump palette ----
+// Pages mark what the keys act on: [data-rows] holds [data-row] rows, each
+// with an [data-open] link and an optional checkbox; [data-turn="prev"] and
+// [data-turn="next"] link to the neighbouring turns; [data-error] marks
+// failures in a transcript; [data-search] is the page's search field;
+// [data-back] is where Escape returns to.
+
+const typing = (el) => el && el.closest && el.closest("input, textarea, select, [contenteditable]");
+
+const palette = document.getElementById("palette");
+const jump = document.querySelector("[data-palette]");
+let paletteItems = null;
+let paletteAt = 0;
+
+async function openPalette() {
+  if (!palette) return;
+  window.ocDialog("palette");
+  const input = palette.querySelector(".palette-input");
+  input.value = "";
+  input.focus();
+  if (!paletteItems) {
+    try {
+      const res = await fetch("/palette.json", { credentials: "same-origin" });
+      paletteItems = res.ok ? await res.json() : [];
+    } catch (_) {
+      paletteItems = [];
+    }
+  }
+  drawPalette();
+}
+
+function paletteMatches() {
+  const q = palette.querySelector(".palette-input").value.trim().toLowerCase();
+  const all = paletteItems || [];
+  return (q ? all.filter((x) => (x.label + " " + x.hint).toLowerCase().includes(q)) : all).slice(0, 12);
+}
+
+function drawPalette() {
+  const list = palette.querySelector(".palette-list");
+  const input = palette.querySelector(".palette-input");
+  const items = paletteMatches();
+  paletteAt = Math.min(paletteAt, Math.max(items.length - 1, 0));
+  list.replaceChildren();
+  items.forEach((x, n) => {
+    const li = document.createElement("li");
+    li.id = "pal-" + n;
+    li.setAttribute("role", "option");
+    li.setAttribute("aria-selected", n === paletteAt ? "true" : "false");
+    if (n === paletteAt) li.className = "is-on";
+    if (x.mark) {
+      li.insertAdjacentHTML("beforeend", x.mark);
+    } else {
+      const dot = document.createElement("span");
+      dot.className = "pal-dot";
+      li.append(dot);
+    }
+    const label = document.createElement("span");
+    label.className = "pal-label";
+    label.textContent = x.label;
+    const hint = document.createElement("span");
+    hint.className = "pal-hint";
+    hint.textContent = x.hint;
+    li.append(label, hint);
+    li.addEventListener("mouseenter", () => { paletteAt = n; drawPalette(); });
+    li.addEventListener("click", () => { location.href = x.href; });
+    list.append(li);
+  });
+  if (items.length === 0) {
+    const li = document.createElement("li");
+    li.className = "pal-empty";
+    li.textContent = "Nothing matches “" + input.value + "”";
+    list.append(li);
+  }
+  input.setAttribute("aria-activedescendant", items.length ? "pal-" + paletteAt : "");
+}
+
+if (palette && jump) {
+  jump.hidden = false;
+  jump.addEventListener("click", openPalette);
+  const input = palette.querySelector(".palette-input");
+  input.addEventListener("input", () => { paletteAt = 0; drawPalette(); });
+  input.addEventListener("keydown", (e) => {
+    const items = paletteMatches();
+    if (e.key === "ArrowDown") { e.preventDefault(); paletteAt = Math.min(paletteAt + 1, items.length - 1); drawPalette(); }
+    if (e.key === "ArrowUp") { e.preventDefault(); paletteAt = Math.max(paletteAt - 1, 0); drawPalette(); }
+    if (e.key === "Enter" && items[paletteAt]) { e.preventDefault(); location.href = items[paletteAt].href; }
+  });
+}
+
+// The focused row of a [data-rows] list.
+let rowAt = -1;
+function rows() { return [...document.querySelectorAll("[data-rows] [data-row]")]; }
+function focusRow(i) {
+  const rs = rows();
+  if (!rs.length) return;
+  rowAt = Math.max(0, Math.min(i, rs.length - 1));
+  rs.forEach((r, n) => r.classList.toggle("is-focus", n === rowAt));
+  rs[rowAt].scrollIntoView({ block: "nearest" });
+  (rs[rowAt].querySelector("[data-open]") || rs[rowAt]).focus({ preventScroll: true });
+}
+
+let chord = false;
+let chordTimer;
+document.addEventListener("keydown", (e) => {
+  if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "k") {
+    e.preventDefault();
+    openPalette();
+    return;
+  }
+  if (typing(e.target) || e.metaKey || e.ctrlKey || e.altKey) return;
+  if (document.querySelector("dialog[open]") || document.querySelector("details.menu-wrap[open]")) return;
+  if (chord) {
+    chord = false;
+    const dest = { r: "/", a: "/attention", c: "/config", s: "/setup" }[e.key];
+    if (dest) { e.preventDefault(); location.href = dest; }
+    return;
+  }
+  const click = (sel) => { const el = document.querySelector(sel); if (el) { e.preventDefault(); el.click(); } };
+  switch (e.key) {
+    case "g":
+      chord = true;
+      clearTimeout(chordTimer);
+      chordTimer = setTimeout(() => { chord = false; }, 900);
+      break;
+    case "?":
+      e.preventDefault();
+      window.ocDialog("keys");
+      break;
+    case "/": {
+      const f = document.querySelector("[data-search]");
+      if (f) { e.preventDefault(); f.focus(); f.select(); }
+      break;
+    }
+    case "j":
+      if (rows().length) { e.preventDefault(); focusRow(rowAt + 1); } else click('[data-turn="next"]');
+      break;
+    case "k":
+      if (rows().length) { e.preventDefault(); focusRow(rowAt - 1); } else click('[data-turn="prev"]');
+      break;
+    case "]":
+      click('[data-turn="next"]');
+      break;
+    case "[":
+      click('[data-turn="prev"]');
+      break;
+    case "Enter": {
+      const r = rows()[rowAt];
+      const a = r && r.querySelector("[data-open]");
+      if (a && !e.target.closest("a, button")) { e.preventDefault(); a.click(); }
+      break;
+    }
+    case "x": {
+      const r = rows()[rowAt];
+      const box = r && r.querySelector("input[type=checkbox]");
+      if (box) { e.preventDefault(); box.click(); }
+      break;
+    }
+    case "e": {
+      const err = document.querySelector("[data-error]");
+      if (err) {
+        e.preventDefault();
+        const d = err.closest("details");
+        if (d) d.open = true;
+        err.scrollIntoView({ block: "center" });
+        err.classList.add("is-flash");
+        setTimeout(() => err.classList.remove("is-flash"), 1200);
+      }
+      break;
+    }
+    case "Escape": {
+      const back = document.querySelector("[data-back]");
+      if (back) { e.preventDefault(); location.href = back.getAttribute("href"); }
+      break;
+    }
+  }
+});
+
+// ---- Live regions ----
+// A [data-live] region is redrawn from the same URL every few seconds while
+// the tab is visible, unless something in it has focus, a dialog or menu
+// is open, or a checkbox in it is ticked: a refresh never takes what the
+// operator is doing away.
+const live = [...document.querySelectorAll("[data-live]")];
+if (live.length) {
+  setInterval(async () => {
+    if (document.hidden || document.querySelector("dialog[open], details.menu-wrap[open]")) return;
+    if (live.some((r) => r.contains(document.activeElement) && typing(document.activeElement))) return;
+    if (live.some((r) => r.querySelector("input[type=checkbox]:checked"))) return;
+    try {
+      const res = await fetch(location.href, { credentials: "same-origin" });
+      if (!res.ok) return;
+      const doc = new DOMParser().parseFromString(await res.text(), "text/html");
+      live.forEach((r) => {
+        const next = doc.querySelector('[data-live="' + r.dataset.live + '"]');
+        if (!next) return;
+        const open = new Set([...r.querySelectorAll("details[open][data-key]")].map((d) => d.dataset.key));
+        r.innerHTML = next.innerHTML;
+        r.querySelectorAll("details[data-key]").forEach((d) => { if (open.has(d.dataset.key)) d.open = true; });
+        if (rowAt >= 0 && r.matches("[data-rows], :has([data-rows])")) focusRow(rowAt);
+      });
+      const title = doc.querySelector("title");
+      if (title) document.title = title.textContent;
+    } catch (_) { /* the next tick tries again */ }
+  }, 5000);
+}
