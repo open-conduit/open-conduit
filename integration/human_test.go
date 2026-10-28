@@ -210,7 +210,7 @@ func TestHumanAskAnsweredThroughTheAction(t *testing.T) {
 			}
 
 			acts, err := h.actions.Actions(ctx, h.target(t))
-			if err != nil || len(acts) != 1 || acts[0].ID != hu.ActionAnswer || acts[0].Prompt == "" {
+			if err != nil || len(acts) != 1 || acts[0].ID != hu.ActionAnswer || acts[0].Prompt == "" || strings.Join(acts[0].Choices, ",") != "yes,no" {
 				t.Fatalf("answer not offered: %+v %v", acts, err)
 			}
 			if lines, ok := hu.Annotate(ctx, h.f.Store, h.actions.Entry, work, h.f.Clock.Now()); !ok || lines[0].Value != "Ship the migration tonight?" {

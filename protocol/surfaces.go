@@ -238,9 +238,10 @@ func (t ActionTarget) Extension() extension.ActionTarget {
 }
 
 type Action struct {
-	ID     string `json:"id"`
-	Label  string `json:"label"`
-	Prompt string `json:"prompt,omitempty"`
+	ID      string   `json:"id"`
+	Label   string   `json:"label"`
+	Prompt  string   `json:"prompt,omitempty"`
+	Choices []string `json:"choices,omitempty"`
 }
 type WorkActionsParams struct {
 	Target ActionTarget `json:"target"`

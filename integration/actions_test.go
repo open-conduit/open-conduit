@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"net/url"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -53,7 +54,7 @@ func TestManagementActions(t *testing.T) {
 
 	var listed []client.Action
 	h.mustCLI(&listed, "actions", "list", "--scope", "ops")
-	if len(listed) != 1 || listed[0] != (client.Action{Provider: "fixture", ID: "approve", Label: "Approve the request", Prompt: "type yes"}) {
+	if len(listed) != 1 || !reflect.DeepEqual(listed[0], client.Action{Provider: "fixture", ID: "approve", Label: "Approve the request", Prompt: "type yes"}) {
 		t.Fatalf("listed: %+v", listed)
 	}
 
@@ -120,7 +121,7 @@ func TestManagementPanels(t *testing.T) {
 	if len(panels) != 1 || panels[0].Provider != "fixture" || panels[0].ID != "request" || panels[0].Sections[0].Text != "Deploy 1.2?" || panels[0].Sections[0].Fields[0].Value != "ana" {
 		t.Fatalf("panels: %+v", panels)
 	}
-	if a := panels[0].Sections[0].Actions; len(a) != 1 || a[0] != (client.Action{Provider: "fixture", ID: "approve", Label: "Approve the request", Prompt: "type yes"}) {
+	if a := panels[0].Sections[0].Actions; len(a) != 1 || !reflect.DeepEqual(a[0], client.Action{Provider: "fixture", ID: "approve", Label: "Approve the request", Prompt: "type yes"}) {
 		t.Fatalf("buttons: %+v", a)
 	}
 	if _, err := c.Panels(ctx, client.ActionTarget{ScopeID: "nowhere"}); err == nil {

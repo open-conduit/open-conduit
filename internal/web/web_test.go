@@ -205,7 +205,7 @@ func TestSignInAndHostCheck(t *testing.T) {
 	if len(c) != 1 || c[0].Value != s.sess || !c[0].HttpOnly || c[0].SameSite != http.SameSiteStrictMode {
 		t.Fatalf("cookie: %+v", c)
 	}
-	if w.Header().Get("Referrer-Policy") != "no-referrer" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "default-src 'self'") {
+	if w.Header().Get("Referrer-Policy") != "same-origin" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "default-src 'self'") {
 		t.Fatalf("headers: %v", w.Header())
 	}
 	// A rebound DNS name reaches the listener but is refused, signed in or not.
@@ -315,6 +315,20 @@ func TestRunPageRendersPanelsWithTheirActions(t *testing.T) {
 	}
 }
 
+func TestAnActionWithChoicesShowsAButtonForEach(t *testing.T) {
+	f, s, h := setup(t)
+	f.actions["wrk_1"][0].Choices = []string{"yes", "not \"yet\""}
+	body := do(h, "GET", "/run?id=exe_2", nil, s).Body.String()
+	for _, want := range []string{`<button name="input" value="yes">yes</button>`, `<button name="input" value="not &#34;yet&#34;">not &#34;yet&#34;</button>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(body, `placeholder="your answer"`) {
+		t.Error("an action with choices still asks for typed input")
+	}
+}
+
 func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	f, s, h := setup(t)
 	form := url.Values{"work": {"wrk_1"}, "provider": {"human"}, "action": {"answer"}, "label": {"Answer"}, "input": {" option 2 "}, "back": {"/run?id=exe_2"}}
@@ -335,6 +349,19 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	if rec.Code != http.StatusForbidden || len(f.invoked) != 0 {
 		t.Fatalf("cross origin: %d %v", rec.Code, f.invoked)
 	}
+
+	// The view's own pages send their origin with a post.
+	req = httptest.NewRequest("POST", "/actions", strings.NewReader(form.Encode()))
+	req.Host = "open-conduit.localhost:7420"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "http://open-conduit.localhost:7420")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.sess})
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("same origin: %d %s", rec.Code, rec.Body)
+	}
+	f.invoked = nil
 
 	w := do(h, "POST", "/actions", form, s)
 	if w.Code != http.StatusSeeOther || w.Header().Get("Location") != "/run?id=exe_2" {

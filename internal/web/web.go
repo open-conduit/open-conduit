@@ -231,7 +231,9 @@ func (s *Server) Handler(addr string) http.Handler {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'")
 		h.Set("X-Content-Type-Options", "nosniff")
-		h.Set("Referrer-Policy", "no-referrer")
+		// same-origin, not no-referrer: under no-referrer a browser sends
+		// "Origin: null" with our own form posts, and changed refuses them.
+		h.Set("Referrer-Policy", "same-origin")
 		h.Set("Cache-Control", "no-store")
 		if !allowed[strings.ToLower(r.Host)] {
 			// A name that is not ours: a rebound DNS name or a typo.

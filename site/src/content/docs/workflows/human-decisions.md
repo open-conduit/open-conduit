@@ -8,7 +8,7 @@ An agent working a GitHub issue or a Slack thread sometimes needs a person's dec
 - Add `human.ask` to a binding's operations, and a `human` entry to its scope.
 - The question and the answer stay in Open Conduit's store. Nothing about them is posted to the issue or thread the Work came from.
 - In the TUI and the web view, a parked Work's page shows a panel with the question, its context and options, who it is for and its deadline, with the answer action beside it. Elsewhere, such as the run list and the CLI, the Work is annotated with the question alone. From the CLI, run `open-conduit actions list --work <id>` and `open-conduit actions run <entry> answer --work <id> --input <answer>`.
-- When the agent gives options, answer with an option's number or its text. Any other answer is refused.
+- When the agent gives options, the web view shows a button for each; click one to answer. In the TUI and the CLI, answer with an option's number or its text. Any other answer is refused.
 
 ## Example config
 
