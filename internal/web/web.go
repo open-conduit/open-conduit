@@ -1,9 +1,11 @@
 // Package web is the operator's browser view over the unified run history,
 // the web counterpart of the TUI. Like the TUI it uses only the public
 // management client: it lists Work and turns, shows a run with its Work's
-// context (annotations, Waits, hold), tails logs and transcripts, and offers
-// the operator controls and the actions extensions offer (claim, answer, …)
-// by name, with no executor, work-kind or domain branches.
+// context (annotations, Waits, hold) and its Work's turns as a timeline,
+// tails logs and transcripts, and offers the operator controls and the
+// actions extensions offer (claim, answer, …) by name, with no executor,
+// work-kind or domain branches. A transcript in the Messages API's shape
+// reads as a chat whichever executor wrote it (see conversation.go).
 //
 // It runs as its own process beside the daemon, so the daemon keeps serving
 // management only on its Unix socket. The process holds the operator token
@@ -221,6 +223,7 @@ func (s *Server) Handler(addr string) http.Handler {
 	mux.HandleFunc("GET /{$}", s.authed(s.listPage))
 	// Run IDs contain slashes, so IDs travel in the query and form.
 	mux.HandleFunc("GET /run", s.authed(s.runPage))
+	mux.HandleFunc("GET /run/conversation", s.authed(s.conversationPart))
 	mux.HandleFunc("GET /output", s.authed(s.outputPage))
 	mux.HandleFunc("GET /scopes", s.authed(s.scopesPage))
 	mux.HandleFunc("GET /config", s.authed(s.configPage))

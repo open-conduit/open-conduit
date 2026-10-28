@@ -1,0 +1,23 @@
+{{define "conversation"}}{{with .Conv}}
+{{with .Trimmed}}<p class="note">The first {{size .}} of this turn's transcript are not shown. <a href="/output?run={{$.Run.ID}}&amp;pick=transcript">Raw transcript</a></p>{{end}}
+{{if .Entries}}{{template "entries" .Entries}}{{else if not $.Live}}<p class="note">The transcript has no messages to show. <a href="/output?run={{$.Run.ID}}&amp;pick=log">Log</a></p>{{end}}
+{{else}}<p class="note">No conversation to show: {{.Missing}}. <a href="/output?run={{.Run.ID}}&amp;pick=log">Log</a></p>{{end}}
+{{if .Live}}<p class="following"><span class="pulse" aria-hidden="true"></span>Working</p>
+{{else}}{{with summary .Run}}<div class="outcome s-{{$.Run.State}}"><span class="state s-{{$.Run.State}}">{{$.Run.State}}</span><p>{{.}}</p></div>{{end}}{{end}}
+{{end}}
+
+{{define "entries"}}{{range .}}
+{{if eq .Kind "user"}}<div class="msg user"><p class="who">Prompt{{with clock .At}} <time>{{.}}</time>{{end}}</p>
+<div class="bubble">{{if .Full}}<div class="clipped">{{markdown .Text}}</div><details class="more"><summary>Show the whole prompt</summary>{{markdown .Full}}</details>{{else}}{{markdown .Text}}{{end}}</div></div>
+{{else if eq .Kind "assistant"}}<div class="msg agent"><p class="who">Agent{{with clock .At}} <time>{{.}}</time>{{end}}</p>
+<div class="bubble">{{markdown .Text}}</div></div>
+{{else if eq .Kind "thinking"}}<details class="thinking"><summary>Thinking</summary><div>{{markdown .Text}}</div></details>
+{{else if eq .Kind "tool"}}{{with .Tool}}<details class="tool{{if .Error}} failed{{end}}" data-key="{{.ID}}">
+<summary><span class="tname">{{.Name}}</span>{{with .Server}}<span class="from">{{.}}</span>{{end}}{{with .Headline}}<code class="thead">{{.}}</code>{{end}}{{with .Note}}<span class="tnote">{{.}}</span>{{end}}<span class="tstat">{{if not .Done}}<span class="pulse" aria-hidden="true"></span>running{{else if .Error}}failed{{else if .Steps}}{{plural (len .Steps) "step"}}{{end}}</span></summary>
+<div class="tbody">
+{{with .Input}}<dl class="targs">{{range .}}<dt>{{.Key}}</dt><dd>{{if .Block}}<pre>{{.Value}}</pre>{{else}}<code>{{.Value}}</code>{{end}}</dd>{{end}}</dl>{{end}}
+{{with .Steps}}<div class="steps">{{template "entries" .}}</div>{{end}}
+{{if .Lost}}<p class="from">No result was recorded</p>{{else if .Done}}<p class="tlabel">{{if .Error}}Error{{else}}Result{{end}}</p>{{if .Result}}<pre class="tres">{{.Result}}</pre>{{else}}<p class="from">Nothing returned</p>{{end}}{{with .Clipped}}<p class="from">{{size .}} more not shown</p>{{end}}{{end}}
+</div></details>{{end}}
+{{else}}<p class="note">{{.Text}}</p>{{end}}
+{{end}}{{end}}

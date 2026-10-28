@@ -46,10 +46,13 @@ func (s *Server) parse() error {
 		"summary":    summary,
 		"stateGroup": stateGroup,
 		"inc":        func(i int) int { return i + 1 },
+		"markdown":   markdown,
+		"clock":      clock,
+		"size":       size,
 	}
 	s.pages = map[string]*template.Template{}
 	for _, name := range []string{"list", "run", "output", "scopes", "config"} {
-		t, err := template.New("layout.html").Funcs(funcs).ParseFS(assets, "templates/layout.html", "templates/panels.html", "templates/"+name+".html")
+		t, err := template.New("layout.html").Funcs(funcs).ParseFS(assets, "templates/layout.html", "templates/panels.html", "templates/conversation.html", "templates/"+name+".html")
 		if err != nil {
 			return err
 		}
@@ -249,9 +252,12 @@ type runData struct {
 	Run      client.Run
 	Detail   string
 	Attempts []client.Run
-	Work     *client.Work
-	Waits    []client.Wait
-	Panels   []panelView
+	// Turns are the Work's turns as a timeline, the run shown among them
+	// with its conversation.
+	Turns  []turnView
+	Work   *client.Work
+	Waits  []client.Wait
+	Panels []panelView
 	// Actions are those the panels do not already show.
 	Actions []client.Action
 }
@@ -332,6 +338,16 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.SliceStable(d.Waits, func(i, j int) bool { return d.Waits[i].CreatedAt < d.Waits[j].CreatedAt })
 	}
+	if len(d.Attempts) == 0 {
+		d.Attempts = []client.Run{run}
+	}
+	for _, a := range d.Attempts {
+		if a.ID == run.ID {
+			d.Turns = append(d.Turns, s.turn(ctx, run))
+		} else {
+			d.Turns = append(d.Turns, turnView{Run: a, Live: runview.Running(a)})
+		}
+	}
 	target := client.ActionTarget{WorkID: run.WorkID}
 	if d.Panels, err = s.panels(ctx, p, target); err != nil {
 		errs = append(errs, errText(err))
@@ -343,6 +359,71 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 	}
 	p.Err = strings.Join(errs, "\n")
 	s.render(w, r, "run", p, d)
+}
+
+// turnView is one turn in a run's timeline. Conv is nil until it is
+// read: the run shown is read with the page, the others when opened.
+type turnView struct {
+	Run  client.Run
+	Live bool
+	Conv *conversation
+	// Missing says why the turn has no conversation to show.
+	Missing string
+}
+
+// turn reads a turn's conversation from its transcript: the live one while
+// it runs, else its artifact.
+func (s *Server) turn(ctx context.Context, run client.Run) turnView {
+	t := turnView{Run: run, Live: runview.Running(run)}
+	out, err := s.fetchOutput(ctx, run.ID, pickTranscript, TranscriptTail)
+	if err != nil {
+		t.Missing = errText(err)
+		return t
+	}
+	head, skipped, tail := out.Text, int64(0), ""
+	if cut := out.Size - int64(len(out.Text)); cut > 0 && out.Artifact != "" {
+		// An ended turn's transcript that is too long to read whole: its
+		// start too, to show what the agent was told.
+		var b strings.Builder
+		if err := s.src.ArtifactContent(ctx, out.Artifact, "bytes=0-"+strconv.FormatInt(min(cut, TranscriptHead)-1, 10), &b); err == nil {
+			head, skipped, tail = b.String(), cut-int64(b.Len()), out.Text
+			if skipped <= 0 {
+				head, skipped, tail = head+out.Text, 0, ""
+			}
+		}
+	}
+	c := parseConversation(head, skipped, tail)
+	if head == out.Text && out.Size > int64(len(out.Text)) {
+		c.Trimmed = out.Size - int64(len(out.Text))
+	}
+	if !out.Live {
+		settle(c.Entries)
+	}
+	t.Live, t.Conv = out.Live, &c
+	return t
+}
+
+// conversationPart is one turn's conversation alone, for the page to load
+// a turn when it is opened and to follow one that is running. X-Live says
+// whether it is still running.
+func (s *Server) conversationPart(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := call(r)
+	defer cancel()
+	run, err := s.src.Run(ctx, r.URL.Query().Get("run"))
+	if err != nil {
+		http.Error(w, errText(err), statusOf(err))
+		return
+	}
+	t := s.turn(ctx, run)
+	live := "0"
+	if t.Live {
+		live = "1"
+	}
+	w.Header().Set("Content-Type", "text/html; charset=utf-8")
+	w.Header().Set("X-Live", live)
+	if err := s.pages["run"].ExecuteTemplate(w, "conversation", t); err != nil {
+		http.Error(w, "render failed", http.StatusInternalServerError)
+	}
 }
 
 // actionsErr explains a daemon too old to list actions.
@@ -382,6 +463,10 @@ type output struct {
 	Count int    `json:"count"`
 	Live  bool   `json:"live"`
 	Err   string `json:"error,omitempty"`
+	// Size is the whole output's size, of which Text may be the tail.
+	Size int64 `json:"size"`
+	// Artifact is the output's artifact, once the run has ended.
+	Artifact string `json:"-"`
 }
 
 func pick(n, want, log, transcript int, hasTranscript bool) (int, error) {
@@ -409,10 +494,11 @@ func parsePick(v string) int {
 	return pickLog
 }
 
-// fetchOutput reads the output want of run id: the live output while it
-// runs, else its artifact, settling on the artifacts once it ends.
-func (s *Server) fetchOutput(ctx context.Context, id string, want int) (output, error) {
-	live, err := s.src.RunLive(ctx, id, LogTail)
+// fetchOutput reads at most the last tail bytes of the output want of run
+// id: the live output while it runs, else its artifact, settling on the
+// artifacts once it ends.
+func (s *Server) fetchOutput(ctx context.Context, id string, want int, tail int64) (output, error) {
+	live, err := s.src.RunLive(ctx, id, tail)
 	var e *client.Error
 	switch {
 	case errors.As(err, &e) && (e.Code == "not_live" || e.Code == "live_unsupported"):
@@ -428,7 +514,7 @@ func (s *Server) fetchOutput(ctx context.Context, id string, want int) (output, 
 			return output{}, err
 		}
 		o := live.Outputs[i]
-		return output{Title: o.Name + " (running)", Text: o.Content, Index: i, Count: len(live.Outputs), Live: true}, nil
+		return output{Title: o.Name + " (running)", Text: o.Content, Index: i, Count: len(live.Outputs), Live: true, Size: max(o.Size, int64(len(o.Content)))}, nil
 	}
 	run, err := s.src.Run(ctx, id)
 	if err != nil {
@@ -454,14 +540,14 @@ func (s *Server) fetchOutput(ctx context.Context, id string, want int) (output, 
 	if run.Retention.State == "expired" {
 		return output{}, fmt.Errorf("artifact content expired under the retention policy")
 	}
-	out := output{Title: a.ID + " " + a.MediaType, Index: i, Count: len(run.Artifacts)}
+	out := output{Title: a.ID + " " + a.MediaType, Index: i, Count: len(run.Artifacts), Size: a.Size, Artifact: a.ID}
 	if a.Size == 0 {
 		return out, nil
 	}
 	var b strings.Builder
 	byteRange := ""
-	if a.Size > LogTail {
-		byteRange = "bytes=-" + strconv.Itoa(LogTail)
+	if a.Size > tail {
+		byteRange = "bytes=-" + strconv.FormatInt(tail, 10)
 	}
 	if err := s.src.ArtifactContent(ctx, a.ID, byteRange, &b); err != nil {
 		return output{}, err
@@ -481,7 +567,7 @@ func (s *Server) outputPage(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := call(r)
 	defer cancel()
 	id, want := r.URL.Query().Get("run"), r.URL.Query().Get("pick")
-	out, err := s.fetchOutput(ctx, id, parsePick(want))
+	out, err := s.fetchOutput(ctx, id, parsePick(want), LogTail)
 	if err != nil {
 		out.Err = errText(err)
 	}
