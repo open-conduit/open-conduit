@@ -44,14 +44,14 @@ var (
 
 func (Setup) SetupInfo() extension.SetupInfo {
 	return extension.SetupInfo{Type: Type, Summary: "add a workspace-free support scope that answers Slack threads",
-		Usage: "[--scope ID] [--name APP] [--channel C…] [--start all|mention] [--bot-token REF --app-token REF --team T…] [--via slack-cli] [--no-open] [--connection ID]"}
+		Usage: "[--scope ID] [--name APP] [--channel C…] [--start all|mention] [--bot-token REF --app-token REF --team T…] [--via slack-cli] [--no-open] [--connection ID] [--dir FOLDER]"}
 }
 
 func setupUsage(msg string) error { return fmt.Errorf("%w: %s", extension.ErrSetupUsage, msg) }
 
 type setupFlags struct {
-	scope, name, connection, channel, start, apiURL, botRef, appRef, team, botUser, via string
-	noOpen                                                                              bool
+	scope, name, connection, channel, start, apiURL, botRef, appRef, team, botUser, via, dir string
+	noOpen                                                                                   bool
 }
 
 func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string) (extension.SetupResult, error) {
@@ -70,6 +70,7 @@ func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string)
 	fs.StringVar(&f.botUser, "bot-user", "", "")
 	fs.StringVar(&f.via, "via", "", "")
 	fs.BoolVar(&f.noOpen, "no-open", false, "")
+	fs.StringVar(&f.dir, "dir", "", "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		return extension.SetupResult{}, setupUsage("init slack " + Setup{}.SetupInfo().Usage)
 	}
@@ -90,6 +91,13 @@ func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string)
 		return extension.SetupResult{}, setupUsage("with token references, also give --team T… and --channel C… (nothing can be verified without the tokens)")
 	case strings.TrimSpace(f.name) == "" || len(f.name) > 35:
 		return extension.SetupResult{}, setupUsage("--name is the app's name (1-35 characters)")
+	}
+	if f.dir != "" {
+		dir, err := supportDir(host, f.dir)
+		if err != nil {
+			return extension.SetupResult{}, setupUsage("--dir " + err.Error())
+		}
+		f.dir = dir
 	}
 	conn := ConnectionConfig{APIURL: f.apiURL}
 	if f.apiURL != "" {
@@ -117,6 +125,11 @@ func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string)
 		if len(v.missing) > 0 {
 			summary = append(summary, "warning    the bot token lacks "+strings.Join(v.missing, ", ")+": reinstall the app from the manifest")
 		}
+		if f.dir == "" {
+			if f.dir, err = askDir(host); err != nil {
+				return extension.SetupResult{}, err
+			}
+		}
 	} else {
 		summary = append(summary, "verified   no (token references given): run open-conduit doctor --check-secrets after serve starts")
 	}
@@ -124,14 +137,50 @@ func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string)
 	if err != nil {
 		return extension.SetupResult{}, err
 	}
+	folder := "a private folder per conversation (none given)"
+	if f.dir != "" {
+		folder = f.dir + " (its CLAUDE.md and files, used as-is)"
+	}
 	r.Summary = append([]string{"scope      " + f.scope + " (workspace-free: no checkout, no Git provider)",
 		"channel    " + f.channel + " in team " + f.team + " (receiver socket, start " + f.start + ")",
 		"agent      claude-code on the " + SupportPlaybook + " playbook, active policy inject",
+		"folder     " + folder,
 		"tokens     " + f.connection + " connection: bot " + refScheme(f.botRef) + ", app " + refScheme(f.appRef)}, summary...)
 	r.Next = []string{"open-conduit serve                   start the daemon (Socket Mode needs no public endpoint)",
 		"open-conduit doctor --check-secrets  check the tokens, granted scopes and the socket",
 		"invite the app to more channels and add their IDs with: open-conduit config set /scopes/" + f.scope + "/extensions/" + f.scope + "/config/channels '[…]'"}
 	return r, nil
+}
+
+// askDir asks for the folder of instructions and knowledge the agent runs in,
+// until it names an existing directory or is left empty for none.
+func askDir(host extension.SetupHost) (string, error) {
+	for {
+		answer, err := host.Prompt("Folder of instructions and knowledge for the agent (its CLAUDE.md is read); Enter for none", extension.Prompt{})
+		if errors.Is(err, extension.ErrSetupNoInput) || err == nil && strings.TrimSpace(answer) == "" {
+			return "", nil
+		} else if err != nil {
+			return "", err
+		}
+		dir, err := supportDir(host, strings.TrimSpace(answer))
+		if err == nil {
+			return dir, nil
+		}
+		host.Printf("That folder %s.\n", err)
+	}
+}
+
+// supportDir resolves a folder against the operator's working directory and
+// checks it is an existing directory.
+func supportDir(host extension.SetupHost, dir string) (string, error) {
+	if !filepath.IsAbs(dir) {
+		dir = filepath.Join(host.Cwd(), dir)
+	}
+	dir = filepath.Clean(dir)
+	if info, err := os.Stat(dir); err != nil || !info.IsDir() {
+		return "", errors.New("must be an existing directory")
+	}
+	return dir, nil
 }
 
 func quote(s string) string { b, _ := json.Marshal(s); return string(b) }
@@ -308,9 +357,12 @@ func result(f setupFlags, conn ConnectionConfig) (extension.SetupResult, error) 
 	connection := map[string]any{"id": f.connection, "type": Type, "config": conn,
 		"secret_refs": map[string]any{SecretBotToken: f.botRef, SecretAppToken: f.appRef}}
 	requires := map[string]any{"toolbelt": "mcp", "inject": true, "resume": true, "workspace": false}
+	config := map[string]any{"playbook": SupportPlaybook, "args": "{key}"}
+	if f.dir != "" {
+		config["dir"] = f.dir
+	}
 	support := map[string]any{"name": "support", "executor": "claude-code", "connection": f.connection, "requires": requires,
-		"operations": SupportOperations, "secret_names": []string{},
-		"config": map[string]any{"playbook": SupportPlaybook, "args": "{key}"}}
+		"operations": SupportOperations, "secret_names": []string{}, "config": config}
 	entry := ExtensionConfig{Namespace: "slack/" + f.team, Scope: f.scope, Team: f.team, Channels: []string{f.channel}, Start: f.start, BotUserID: f.botUser, Receiver: ReceiverSocket}
 	scope := map[string]any{"id": f.scope, "name": "Slack support",
 		"authorization": map[string]any{"connections": []string{f.connection}, "read_scopes": []string{}, "operations": SupportOperations},
