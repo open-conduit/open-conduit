@@ -223,9 +223,8 @@ func (e *Executor) ValidateConfig(raw json.RawMessage, secretNames []string) err
 	if err != nil {
 		return err
 	}
-	if c.Dir != "" && !isDir(c.Dir) {
-		return configError("dir must be an existing directory")
-	}
+	// A dir that has gone fails its own turns as workspace_unavailable; it
+	// must not make the rest of the configuration invalid.
 	for secret := range c.SecretEnv {
 		if !slices.Contains(secretNames, secret) {
 			return configError("secret_env names a secret the binding does not select")

@@ -67,7 +67,7 @@ func TestConfigValidation(t *testing.T) {
 	for _, bad := range []string{
 		`{"unknown":1}`, `{"permission_mode":"yolo"}`, `{"playbook":"../x"}`, `{"plugin_dir":"rel"}`,
 		`{"env":{"OS_TOKEN":"x"}}`, `{"pass_env":["OS_ENDPOINT"]}`, `{"cold_turns":"draw"}`, `{"handoff_minutes":-1}`,
-		`{"extra_args":["--mcp-config","x"]}`, `{"extra_args":["--resume"]}`, `{} {}`, `{"dir":"rel"}`, `{"dir":"/a/../b"}`, `{"dir":"/no/such/folder"}`,
+		`{"extra_args":["--mcp-config","x"]}`, `{"extra_args":["--resume"]}`, `{} {}`, `{"dir":"rel"}`, `{"dir":"/a/../b"}`,
 	} {
 		if err := e.ValidateConfig(json.RawMessage(bad), nil); !errors.Is(err, claudecode.ErrConfig) {
 			t.Errorf("%s accepted: %v", bad, err)
@@ -648,6 +648,10 @@ func TestDirRunsSessionsInTheFolder(t *testing.T) {
 	}
 	if err := e.ValidateConfig(json.RawMessage(`{"dir":`+strconv.Quote(folder)+`}`), nil); err != nil {
 		t.Fatalf("an existing folder rejected: %v", err)
+	}
+	// A folder that has gone fails only its own turns, never the config.
+	if err := e.ValidateConfig(json.RawMessage(`{"dir":`+strconv.Quote(filepath.Join(h.root, "gone"))+`}`), nil); err != nil {
+		t.Fatalf("a missing folder failed the config: %v", err)
 	}
 	want, _ := filepath.EvalSymlinks(folder)
 	for i, work := range []string{"work/a", "work/b"} {
