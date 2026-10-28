@@ -107,3 +107,13 @@ func (f *fake) Wake(_ context.Context, id string, r client.WakeRequest, _ string
 func (f *fake) Doctor(context.Context, bool) (client.Doctor, error) {
 	return client.Doctor{State: "ok"}, nil
 }
+
+// work:
+func (f *fake) EventRoute(_ context.Context, id string) (client.EventRoute, error) {
+	for _, e := range f.events {
+		if e.ID == id && e.Route != nil {
+			return *e.Route, nil
+		}
+	}
+	return client.EventRoute{}, &client.Error{Status: 404, Code: "not_found"}
+}

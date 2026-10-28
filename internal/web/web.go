@@ -69,6 +69,7 @@ type Source interface {
 	WorksWithActions(ctx context.Context, q url.Values) (client.Page[client.Work], error)
 	Events(ctx context.Context, q url.Values) (client.Page[client.Event], error)
 	EventsWithRoutes(ctx context.Context, q url.Values) (client.Page[client.Event], error)
+	EventRoute(ctx context.Context, id string) (client.EventRoute, error)
 	TraceRoute(ctx context.Context, scope string, e client.TraceEvent) (client.RouteTrace, error)
 	RouteSamples(ctx context.Context, scope string) ([]client.RouteSample, error)
 	RebindWork(ctx context.Context, id, revision, binding, reason, key string) (client.ControlResult, error)

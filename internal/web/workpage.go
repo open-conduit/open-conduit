@@ -4,33 +4,12 @@ import (
 	"context"
 	"net/http"
 	"net/url"
-	"sort"
 	"strconv"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/client"
 	"github.com/open-conduit/open-conduit/internal/cli/runview"
 )
-
-type runData struct {
-	Run      client.Run
-	Detail   string
-	Attempts []client.Run
-	// Turns are the Work's turns as a timeline, the run shown among them
-	// with its conversation.
-	Turns  []turnView
-	Work   *client.Work
-	Waits  []client.Wait
-	Panels []panelView
-	// Actions are those the panels do not already show.
-	Actions []client.Action
-}
-
-// workPage is the Work page (10-05). Placeholder until the port lands: it
-// shows the Work's latest turn the old way.
-func (s *Server) workPage(w http.ResponseWriter, r *http.Request) {
-	s.runPage(w, r)
-}
 
 // runRedirect sends the old run URL to its Work and turn.
 func (s *Server) runRedirect(w http.ResponseWriter, r *http.Request) {
@@ -44,73 +23,41 @@ func (s *Server) runRedirect(w http.ResponseWriter, r *http.Request) {
 	http.Redirect(w, r, "/work?"+url.Values{"id": {run.WorkID}, "turn": {itoa(int(run.Attempt))}}.Encode(), http.StatusSeeOther)
 }
 
-func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
-	ctx, cancel := call(r)
-	defer cancel()
-	p := &page{Title: "Run", Nav: "runs"}
-	run, err := s.src.Run(ctx, r.URL.Query().Get("id"))
-	if err != nil {
-		p.Err = errText(err)
-		w.WriteHeader(statusOf(err))
-		s.render(w, r, "work", p, nil)
-		return
-	}
-	d := runData{Run: run, Detail: runview.Detail(run, nil, s.opts.Now())}
-	p.Title = run.WorkID
-	var errs []string
-	if page, err := s.src.Runs(ctx, url.Values{"work_id": {run.WorkID}, "limit": {"200"}}); err != nil {
-		errs = append(errs, errText(err))
-	} else {
-		d.Attempts = page.Items
-		sort.SliceStable(d.Attempts, func(i, j int) bool { return d.Attempts[i].Attempt < d.Attempts[j].Attempt })
-	}
-	if work, err := s.src.Work(ctx, run.WorkID); err != nil {
-		errs = append(errs, errText(err))
-	} else {
-		d.Work = &work
-	}
-	if page, err := s.src.Waits(ctx, url.Values{"work_id": {run.WorkID}, "limit": {"200"}}); err != nil {
-		errs = append(errs, errText(err))
-	} else {
-		for _, wt := range page.Items {
-			// As in the TUI: the open Waits, and those that woke the Work.
-			if wt.State == "active" || wt.WakeEventID != "" {
-				d.Waits = append(d.Waits, wt)
-			}
-		}
-		sort.SliceStable(d.Waits, func(i, j int) bool { return d.Waits[i].CreatedAt < d.Waits[j].CreatedAt })
-	}
-	if len(d.Attempts) == 0 {
-		d.Attempts = []client.Run{run}
-	}
-	for _, a := range d.Attempts {
-		if a.ID == run.ID {
-			d.Turns = append(d.Turns, s.turn(ctx, run))
-		} else {
-			d.Turns = append(d.Turns, turnView{Run: a, Live: runview.Running(a)})
-		}
-	}
-	target := client.ActionTarget{WorkID: run.WorkID}
-	if d.Panels, err = s.panels(ctx, p, target); err != nil {
-		errs = append(errs, errText(err))
-	}
-	if actions, err := s.src.Actions(ctx, target); err != nil {
-		errs = append(errs, actionsErr(err))
-	} else {
-		d.Actions = unshown(actions, d.Panels)
-	}
-	p.Err = strings.Join(errs, "\n")
-	s.render(w, r, "work", p, d)
-}
-
-// turnView is one turn in a run's timeline. Conv is nil until it is
-// read: the run shown is read with the page, the others when opened.
+// turnView is one turn's transcript as the turn panel shows it: its chat,
+// filtered by the toolbar's query string. Conv is nil when there is no
+// transcript to read, and Missing says why.
 type turnView struct {
 	Run  client.Run
 	Live bool
 	Conv *conversation
+	Chat chat
+	// Blocks are the chat's blocks the toolbar shows.
+	Blocks []chatBlock
 	// Missing says why the turn has no conversation to show.
 	Missing string
+	View    txView
+}
+
+// txView is the transcript toolbar's state, from the query string: the
+// filters on, the text to find and whether every row is open.
+type txView struct {
+	On     map[string]bool
+	Query  string
+	Expand bool
+}
+
+func txViewOf(q url.Values) txView {
+	v := txView{On: map[string]bool{}, Query: strings.TrimSpace(q.Get("q")), Expand: q.Get("expand") == "1"}
+	show, set := q["show"]
+	for _, f := range chatFilters {
+		v.On[f] = !set
+	}
+	if set {
+		for _, part := range strings.Split(strings.Join(show, ","), ",") {
+			v.On[part] = true
+		}
+	}
+	return v
 }
 
 // turn reads a turn's conversation from its transcript: the live one while
@@ -142,7 +89,14 @@ func (s *Server) turn(ctx context.Context, run client.Run) turnView {
 		settle(c.Entries)
 	}
 	t.Live, t.Conv = out.Live, &c
+	t.Chat = buildChat(c, run)
 	return t
+}
+
+// filter applies the toolbar to the turn's chat.
+func (t *turnView) filter(v txView) {
+	t.View = v
+	t.Blocks = t.Chat.show(v.On, v.Query)
 }
 
 // conversationPart is one turn's conversation alone, for the page to load
@@ -157,6 +111,7 @@ func (s *Server) conversationPart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	t := s.turn(ctx, run)
+	t.filter(txViewOf(r.URL.Query()))
 	live := "0"
 	if t.Live {
 		live = "1"
