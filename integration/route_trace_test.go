@@ -400,6 +400,13 @@ func TestManagementRouteTrace(t *testing.T) {
 	if _, err := h.operatorClient().TraceRoute(ctx, "missing", client.TraceEvent{Type: "operator.requested"}); !isStatus(err, 404) {
 		t.Fatalf("unknown scope: %v", err)
 	}
+	// What acceptance would refuse is refused, not explained: core events
+	// and sources, and a payload schema that is not namespaced.
+	for _, ev := range []client.TraceEvent{{Type: "core.wait.woken"}, {Type: "fixture.thing", Source: "core.subscription"}, {Type: "operator.requested", Data: &client.Payload{Schema: "fixture", Data: json.RawMessage(`{}`)}}} {
+		if _, err := h.operatorClient().TraceRoute(ctx, "ops", ev); !isStatus(err, 422) {
+			t.Fatalf("%+v: %v", ev, err)
+		}
+	}
 	if _, errOut, code := h.cli("route", "--trace", "no-such-sample", "--scope", "ops"); code != 2 || !strings.Contains(errOut, "no sample no-such-sample") {
 		t.Fatalf("unknown sample: %d %s", code, errOut)
 	}
@@ -410,5 +417,37 @@ func TestManagementRouteTrace(t *testing.T) {
 	}
 	if after := sqliteDump(t, filepath.Join(h.state, "conduit.db")); !reflect.DeepEqual(before, after) {
 		t.Fatal("tracing changed stored state")
+	}
+}
+
+// A trace refuses what acceptance would refuse: a malformed envelope, a core
+// type or source, and a registered source's input in another scope. A
+// source no ingress registers is not known.
+func TestRouteTraceRefusesWhatAcceptanceRefuses(t *testing.T) {
+	e := newToolsEnv(t)
+	issue := mergeEvent(ghNS, ghRepo, 1)
+	if err := runtime.CheckTraceEvent(issue); err != nil {
+		t.Fatalf("a merge: %v", err)
+	}
+	for name, ev := range map[string]domain.Event{
+		"unnamespaced type": {Type: "merged", Source: ghNS},
+		"core type":         {Type: "core.wait.woken", Source: ghNS},
+		"core source":       {Type: gh.TypePullMerged, Source: "core.subscription"},
+		"bad schema":        {Type: gh.TypePullMerged, Source: ghNS, Data: domain.Payload{Schema: "pull", Data: []byte(`{}`)}},
+		"bad data":          {Type: gh.TypePullMerged, Source: ghNS, Data: domain.Payload{Schema: gh.SchemaPull, Data: []byte(`{`)}},
+		"half a key":        {Type: gh.TypePullMerged, Source: ghNS, CorrelationKey: &domain.CorrelationKey{Source: ghNS}},
+	} {
+		if runtime.CheckTraceEvent(ev) == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+	if known, err := e.ingress.AdmitsTrace(ghScope, issue); !known || err != nil {
+		t.Fatalf("the merge from its own source: %v %v", known, err)
+	}
+	if known, err := e.ingress.AdmitsTrace("ops", issue); !known || err == nil || !strings.Contains(err.Error(), "belongs to scope "+ghScope) {
+		t.Fatalf("another scope's source: %v %v", known, err)
+	}
+	if known, err := e.ingress.AdmitsTrace(ghScope, domain.Event{Type: "nobody.thing", Source: "nobody/x"}); known || err != nil {
+		t.Fatalf("an unregistered source: %v %v", known, err)
 	}
 }

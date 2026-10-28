@@ -402,6 +402,33 @@ func (r *Router) Samples(ctx context.Context, scopeID domain.ID) ([]TraceSample,
 	return out, nil
 }
 
+// CheckTraceEvent refuses a hypothetical Event whose envelope acceptance
+// would refuse from any source: a type or payload schema that is not
+// namespaced, data that is not JSON, and the host's own core types and
+// sources, which no ingress, extension or operator may submit. Which types a
+// source may send is the caller's to check (Ingress.AdmitsTrace).
+func CheckTraceEvent(e domain.Event) error {
+	switch {
+	case !validType(e.Type):
+		return fmt.Errorf("type %q is not namespaced (source.name)", e.Type)
+	case strings.HasPrefix(e.Type, "core."):
+		return fmt.Errorf("%s is a core event; only the host records those", e.Type)
+	case e.Source == "":
+		return errors.New("source is required")
+	case strings.HasPrefix(e.Source, "core.") && e.Source != ManualSource:
+		return fmt.Errorf("source %s is the host's own", e.Source)
+	case e.CorrelationKey != nil && (e.CorrelationKey.Source == "" || e.CorrelationKey.ExternalID == ""):
+		return errors.New("a correlation key needs a source and an external ID")
+	case e.Data.Schema == "" && len(e.Data.Data) == 0:
+		return nil
+	case !validType(e.Data.Schema):
+		return fmt.Errorf("payload schema %q is not namespaced", e.Data.Schema)
+	case !json.Valid(e.Data.Data):
+		return errors.New("payload data is not JSON")
+	}
+	return nil
+}
+
 // TraceRoute is Router.Trace with the scheduler's subscription filter.
 func (c *Control) TraceRoute(ctx context.Context, scope domain.ID, e domain.Event) (RouteTrace, error) {
 	if c.router == nil {

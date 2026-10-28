@@ -200,6 +200,28 @@ func validateEvent(r ingressRegistration, event domain.Event, rederivable bool) 
 	}
 	return nil
 }
+
+// AdmitsTrace checks a hypothetical Event against the registered source it
+// names: known is false when no registered source has e.Source as its
+// namespace, and an error says the source belongs to another scope, where
+// every path accepts its Events. The type is not checked against the
+// source's families: the same namespace also carries Events its extension
+// derives or fires from timers (a schedule's slots).
+func (i *Ingress) AdmitsTrace(scope domain.ID, e domain.Event) (known bool, err error) {
+	i.mu.RLock()
+	defer i.mu.RUnlock()
+	for _, r := range i.registrations {
+		if r.source.Namespace != e.Source {
+			continue
+		}
+		if r.source.ScopeID != scope {
+			return true, fmt.Errorf("source %s belongs to scope %s", e.Source, r.source.ScopeID)
+		}
+		return true, nil
+	}
+	return false, nil
+}
+
 func (i *Ingress) Push(ctx context.Context, name string, delivery extension.Delivery) ([]domain.AcceptedEvent, error) {
 	r, err := i.registration(name)
 	if err != nil {
