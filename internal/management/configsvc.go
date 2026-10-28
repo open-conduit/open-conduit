@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strconv"
 	"sync"
@@ -41,13 +42,26 @@ type ConfigService struct {
 	current    *config.Snapshot
 	generation uint64
 	history    map[uint64]*config.Snapshot
+	// Adopted is set when OpenConfig replaced a stored generation that no
+	// longer validates with the config file, so the host can log it.
+	Adopted *Adoption
 	// OnApply lets the host rebuild generation-pinned components after commit.
 	OnApply func(context.Context, *config.Snapshot, uint64)
 }
 
+// Adoption records a stored generation that failed validation (typically
+// after an upgrade stopped registering something it names) and was replaced
+// by the config file.
+type Adoption struct {
+	Stored uint64
+	Cause  error
+}
+
 // OpenConfig restores the committed generation. With no activation record it
 // validates the config file and activates it as generation 1. Disk edits alone
-// never change an already committed generation.
+// never change an already committed generation that still validates; one that
+// no longer does is replaced by the config file when the file validates, so
+// the daemon can always start once the file is fixed.
 func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string) (*ConfigService, error) {
 	c := &ConfigService{store: store, now: now, registry: registry, path: path, history: map[uint64]*config.Snapshot{}}
 	var active activation
@@ -85,10 +99,31 @@ func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 	}
 	snapshot, err := config.Validate(normalized, registry)
 	if err != nil {
-		return nil, err
+		return c.adopt(ctx, active.Generation, err)
 	}
 	c.current, c.generation = snapshot, active.Generation
 	c.history[active.Generation] = snapshot
+	return c, nil
+}
+
+// adopt publishes the config file over a stored generation that failed
+// validation with cause.
+func (c *ConfigService) adopt(ctx context.Context, stored uint64, cause error) (*ConfigService, error) {
+	fail := func(err error) (*ConfigService, error) {
+		return nil, fmt.Errorf("stored generation %d no longer validates (%w); fix %s and restart to adopt it instead: %v", stored, cause, c.path, err)
+	}
+	data, err := config.ReadFile(c.path)
+	if err != nil {
+		return fail(err)
+	}
+	snapshot, err := config.Validate(data, c.registry)
+	if err != nil {
+		return fail(err)
+	}
+	if err = c.publish(ctx, snapshot, stored); err != nil {
+		return fail(err)
+	}
+	c.Adopted = &Adoption{Stored: stored, Cause: cause}
 	return c, nil
 }
 

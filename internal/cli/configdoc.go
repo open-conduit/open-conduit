@@ -245,7 +245,7 @@ func (o *operator) editConfig(args []string) int {
 		return o.emit(nil, err)
 	}
 	if saved {
-		fmt.Fprintf(o.errOut, "Saved %s. A running daemon, even after a restart, keeps its stored configuration until you run: open-conduit config apply %s --generation N\n", path, path)
+		fmt.Fprintf(o.errOut, "Saved %s. A running daemon, even after a restart, keeps its stored configuration until you run: open-conduit config apply %s --generation N (or, if the stored configuration no longer validates, adopts this file when it next starts)\n", path, path)
 	}
 	return 0
 }

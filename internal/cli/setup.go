@@ -310,7 +310,7 @@ func (o *operator) init(args []string) int {
 		}
 	}
 	if existing != nil {
-		fmt.Fprintf(o.out, "A running daemon, even after a restart, keeps its stored configuration until you run: open-conduit config apply %s --generation N\n", path)
+		fmt.Fprintf(o.out, "A running daemon, even after a restart, keeps its stored configuration until you run: open-conduit config apply %s --generation N (or, if the stored configuration no longer validates, adopts this file when it next starts)\n", path)
 	}
 	return 0
 }
@@ -610,7 +610,7 @@ func (o *operator) localConfig(args []string) (int, bool) {
 	if err := writePrivate(path, out); err != nil {
 		return o.emit(nil, fmt.Errorf("could not save the config")), true
 	}
-	fmt.Fprintf(o.errOut, "Saved %s. A running daemon, even after a restart, keeps its stored configuration until you run: open-conduit config apply %s --generation N\n", path, path)
+	fmt.Fprintf(o.errOut, "Saved %s. A running daemon, even after a restart, keeps its stored configuration until you run: open-conduit config apply %s --generation N (or, if the stored configuration no longer validates, adopts this file when it next starts)\n", path, path)
 	return 0, true
 }
 
