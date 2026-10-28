@@ -359,6 +359,9 @@ func (t *Tools) waitPlan(hold bool) func(context.Context, extension.Authority, d
 		if err != nil {
 			return extension.WaitPlan{}, refusal(err)
 		}
+		if err = t.watchChecks(ctx, b.work.ID, plan); err != nil {
+			return extension.WaitPlan{}, err
+		}
 		return plan, nil
 	}
 }

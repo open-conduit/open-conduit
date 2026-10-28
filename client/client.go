@@ -147,10 +147,14 @@ type Wait struct {
 	// Description is what the Wait is for, in its owner's words, or its due
 	// time when only a timer was set; DueAt is when its timeout fires.
 	Description string `json:"description,omitempty"`
-	DueAt       string `json:"due_at,omitempty"`
-	Revision    string `json:"revision"`
-	CreatedAt   string `json:"created_at,omitempty"`
-	UpdatedAt   string `json:"updated_at,omitempty"`
+	// Progress is its owner's latest note on how the wait is going ("3 of
+	// 7 checks finished"), kept as it was once the Wait is woken or
+	// cancelled.
+	Progress  string `json:"progress,omitempty"`
+	DueAt     string `json:"due_at,omitempty"`
+	Revision  string `json:"revision"`
+	CreatedAt string `json:"created_at,omitempty"`
+	UpdatedAt string `json:"updated_at,omitempty"`
 }
 type Requires struct {
 	Interrupt bool   `json:"interrupt"`

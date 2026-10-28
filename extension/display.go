@@ -24,6 +24,7 @@ const (
 	MaxDisplayLinkLabel = 60
 	MaxDisplayURL       = 2048
 	MaxWaitDescription  = 200
+	MaxWaitProgress     = 120
 )
 
 // ValidateDisplay reports why a Work display cannot be stored, or nil. A

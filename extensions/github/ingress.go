@@ -70,6 +70,9 @@ type IngressOptions struct {
 	// MaxRepeats restarts a generation whose same page keeps being re-requested
 	// after a successful answer (the runtime rejected it).
 	MaxRepeats int
+	// Observed, when set, sees each push's and scan page's observations
+	// before the host accepts them (wait progress). It cannot fail them.
+	Observed func(ctx context.Context, obs []extension.Observation)
 }
 
 // Ingress is one repository's (push, reconcile) pair.
@@ -150,6 +153,9 @@ func (g *Ingress) Push(ctx context.Context, src extension.Source, d extension.De
 	obs, err := g.pushObservations(ctx, n, env.Event, p)
 	if err != nil {
 		return extension.PushResult{}, err
+	}
+	if g.o.Observed != nil {
+		g.o.Observed(ctx, obs)
 	}
 	out.Observations = obs
 	out.Events = []domain.Event{g.deliveryEvent(env, p, received)}
@@ -400,6 +406,9 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 		return extension.Snapshot{}, err
 	}
 	snap.ScanID, snap.Checkpoint = scanID, scanID
+	if g.o.Observed != nil {
+		g.o.Observed(ctx, snap.Observations)
+	}
 	g.mu.Lock()
 	if g.memoID == scanID {
 		g.answered[answerKey]++

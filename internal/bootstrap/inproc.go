@@ -149,7 +149,8 @@ func (d *daemon) startInproc(ctx context.Context) error {
 				}
 				return id, err
 			},
-			Capture: d.telemetry.Capture,
+			WaitProgress: d.waitProgress(name),
+			Capture:      d.telemetry.Capture,
 		}
 		if err := s.Start(ctx, h); err != nil {
 			return fmt.Errorf("extension %s: %w", name, err)
