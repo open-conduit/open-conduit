@@ -47,6 +47,8 @@ open-conduit work attach ID                          # hold, attach to the agent
 open-conduit runs list
 open-conduit runs log ID --follow                    # follow a running turn
 open-conduit route issue/12                          # explain how an issue's Events were routed
+open-conduit route --samples --scope eng             # sample Events to trace
+open-conduit route --trace issue-opened --scope eng  # how a new issue would be routed now (records nothing)
 open-conduit events chain ID
 ```
 

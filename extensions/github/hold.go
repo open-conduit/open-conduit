@@ -42,23 +42,29 @@ var _ extension.RouteHandler = HoldRoute{}
 // Events for existing Work (the `github` route selects their input).
 func (HoldRoute) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
-	if in.Work != nil || e.Type != TypeIssueOpen || e.Data.Schema != SchemaIssue || e.CorrelationKey == nil {
-		return extension.RouteDecision{}, nil
+	if in.Work != nil {
+		return extension.Skip("the issue already has Work; holds claim only new issues"), nil
+	}
+	if e.Type != TypeIssueOpen || e.Data.Schema != SchemaIssue || e.CorrelationKey == nil {
+		return extension.Skip("only an opened issue is held"), nil
 	}
 	s, ok := settingsFor(in.Scope, e.Source)
 	if !ok {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("no github entry in this scope reads " + e.Source), nil
 	}
 	var p IssuePayload
-	if json.Unmarshal(e.Data.Data, &p) != nil || !has(p.Labels, s.Labels.Scheduled) {
-		return extension.RouteDecision{}, nil
+	if json.Unmarshal(e.Data.Data, &p) != nil {
+		return extension.Skip("the issue data is unreadable"), nil
+	}
+	if !has(p.Labels, s.Labels.Scheduled) {
+		return extension.Skip("the issue is not labelled " + s.Labels.Scheduled), nil
 	}
 	l := s.Labels
 	l.Scheduled = "\x00" // admit as if unscheduled: skip/require/claimed rules still apply
-	if !l.Admits(p) {
-		return extension.RouteDecision{}, nil
+	if reason := l.refusal(p); reason != "" {
+		return extension.Skip(reason), nil
 	}
-	return extension.RouteDecision{Match: true, Kind: WorkKindHeld}, nil
+	return extension.RouteDecision{Match: true, Kind: WorkKindHeld, Reason: "a new issue labelled " + s.Labels.Scheduled}, nil
 }
 
 // ReleasedPayload is a TypeHoldReleased event: why the hold ended, as the

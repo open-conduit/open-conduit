@@ -186,15 +186,31 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 	if scopeID == "" {
 		return s, storage.ErrInvalid
 	}
+	if err = scopeSnapshot(tx, scopeID, &s); err != nil {
+		return
+	}
+	w, e := routeOwner(tx, s.event.Event)
+	if e == nil {
+		s.work = &w
+	} else if !errors.Is(e, storage.ErrNotFound) {
+		return s, e
+	}
+	s.events, err = tx.UnroutedEvents(0, 0)
+	return
+}
+
+// scopeSnapshot resolves the scope chain, its effective routes (root to leaf)
+// and its effective bindings into s.
+func scopeSnapshot(tx storage.Tx, scopeID domain.ID, s *routeSnapshot) error {
 	seen := map[domain.ID]bool{}
 	for scopeID != "" {
 		if seen[scopeID] {
-			return s, extension.ErrInvalid
+			return extension.ErrInvalid
 		}
 		seen[scopeID] = true
 		scope, e := tx.Scope(scopeID)
 		if e != nil {
-			return s, e
+			return e
 		}
 		s.scopes = append(s.scopes, scope)
 		scopeID = scope.ParentID
@@ -206,7 +222,7 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 		names := map[string]bool{}
 		for _, route := range level.Routes {
 			if route.Name == "" || names[route.Name] {
-				return s, extension.ErrInvalid
+				return extension.ErrInvalid
 			}
 			names[route.Name] = true
 		}
@@ -214,7 +230,7 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 		bindingNames := map[string]bool{}
 		for _, b := range level.Bindings {
 			if b.Name == "" || b.Executor == "" || bindingNames[b.Name] {
-				return s, extension.ErrInvalid
+				return extension.ErrInvalid
 			}
 			bindingNames[b.Name] = true
 			effectiveBindings[b.Name] = b
@@ -225,14 +241,7 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 		s.scope.Bindings = append(s.scope.Bindings, b)
 	}
 	sort.Slice(s.scope.Bindings, func(i, j int) bool { return s.scope.Bindings[i].Name < s.scope.Bindings[j].Name })
-	w, e := routeOwner(tx, s.event.Event)
-	if e == nil {
-		s.work = &w
-	} else if !errors.Is(e, storage.ErrNotFound) {
-		return s, e
-	}
-	s.events, err = tx.UnroutedEvents(0, 0)
-	return
+	return nil
 }
 func detachedInput(s routeSnapshot) extension.RouteInput {
 	a := s.event
@@ -295,7 +304,10 @@ func (r *Router) binding(scope domain.Scope, name string) (RouteBinding, error) 
 	}
 	return RouteBinding{}, extension.ErrInvalid
 }
-func (r *Router) evaluate(ctx context.Context, s routeSnapshot) (p routePlan, err error) {
+
+// evaluate tries the routes in order and stops at the first match. record,
+// when set, sees each route's decision as it is made (a route trace).
+func (r *Router) evaluate(ctx context.Context, s routeSnapshot, record func(domain.Route, extension.RouteDecision)) (p routePlan, err error) {
 	p.event = s.event
 	for _, route := range s.routes {
 		h := r.options.Handlers[route.Handler]
@@ -322,6 +334,9 @@ func (r *Router) evaluate(ctx context.Context, s routeSnapshot) (p routePlan, er
 		d, e := h.Match(ctx, in)
 		if e != nil {
 			return p, e
+		}
+		if record != nil {
+			record(route, d)
 		}
 		if d.Match {
 			selected := route
@@ -442,7 +457,7 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 		// Terminal ownership is final; late input cannot ask a handler to
 		// mutate it or become runnable through a new matching route.
 		if s.work == nil || !s.work.State.Terminal() {
-			p, err = r.evaluate(ctx, s)
+			p, err = r.evaluate(ctx, s, nil)
 			if err != nil {
 				return err
 			}
@@ -512,7 +527,7 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 					bs := s
 					bs.event = a
 					bs.work = projected
-					bp, e := r.evaluate(ctx, bs)
+					bp, e := r.evaluate(ctx, bs, nil)
 					if e != nil {
 						return e
 					}

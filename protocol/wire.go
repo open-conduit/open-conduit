@@ -452,13 +452,14 @@ type RouteDecision struct {
 	CreateID   string `json:"create_id,omitempty"`
 	Kind       string `json:"kind,omitempty"`
 	AttachKeys []Key  `json:"attach_keys,omitempty"`
+	Reason     string `json:"reason,omitempty"`
 }
 
 func FromRouteDecision(d extension.RouteDecision) RouteDecision {
-	return RouteDecision{Match: d.Match, CreateID: string(d.CreateID), Kind: d.Kind, AttachKeys: fromKeys(d.AttachKeys)}
+	return RouteDecision{Match: d.Match, CreateID: string(d.CreateID), Kind: d.Kind, AttachKeys: fromKeys(d.AttachKeys), Reason: d.Reason}
 }
 func (d RouteDecision) Extension() extension.RouteDecision {
-	return extension.RouteDecision{Match: d.Match, CreateID: domain.ID(d.CreateID), Kind: d.Kind, AttachKeys: toKeys(d.AttachKeys)}
+	return extension.RouteDecision{Match: d.Match, CreateID: domain.ID(d.CreateID), Kind: d.Kind, AttachKeys: toKeys(d.AttachKeys), Reason: d.Reason}
 }
 
 // Toolbelt operations.
