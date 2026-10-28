@@ -48,9 +48,10 @@ type Env struct {
 	ValidateConfigAt func(path string, data []byte) ([]client.Detail, error)
 	// ConfigWarnings names what in the config is accepted but suspect: cmd:
 	// secret references whose program is not found on the resolver's PATH,
-	// and settings that have no effect yet. Only the open-conduit entrypoint
-	// supplies it. Warnings never fail a check.
-	ConfigWarnings func(data []byte) []string
+	// settings that have no effect yet, and included folders that have gone.
+	// path is the config file's. Only the open-conduit entrypoint supplies
+	// it. Warnings never fail a check.
+	ConfigWarnings func(path string, data []byte) []string
 	// OfflineChecks are the doctor checks that need no daemon (the config,
 	// its bindings, the agent CLIs); doctor runs them when no daemon is
 	// reachable. Only the open-conduit entrypoint supplies it.
@@ -147,6 +148,7 @@ Commands:
   config validate FILE | config apply FILE --generation N [--key K]
   config path | config show [--file F] | config check [--file F]
   config get POINTER | config set POINTER JSON | config unset POINTER   [--file F] (local file, validated before saving)
+  config include add [FOLDER] --parent SCOPE | config include remove [FOLDER]   [--file F] (compose a folder's .open-conduit/config.json)
   config edit [--file F]     full-screen editor with the adapters' documented fields, validated before saving
   auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
   auth recover               (daemon stopped) revoke every operator credential and write a fresh token file

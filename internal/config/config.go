@@ -151,6 +151,9 @@ type ScopeConfig struct {
 	Extensions       []ExtensionEntry
 	// SecretRefs overlays by name; an empty value is a false overlay.
 	SecretRefs map[string]string
+	// Source is the included folder this scope came from ("" for the config
+	// file's own scopes). Only a stored generation records it.
+	Source string
 }
 
 // Document is a strictly parsed version 1 configuration with defaults applied.
@@ -159,16 +162,31 @@ type Document struct {
 	Settings    Settings
 	Connections []Connection
 	Scopes      []ScopeConfig
+	// Includes are the folders a config file composes in (ParseFile only);
+	// Compose replaces them with their scopes.
+	Includes []Include
 }
 
-// Parse decodes strictly: duplicate keys, unknown fields, explicit null, bad
-// types and unsupported versions all fail with *ValidationError.
-func Parse(data []byte) (*Document, error) {
+// Include is one folder whose .open-conduit/config.json adds scopes under
+// Parent, a scope of the config file itself.
+type Include struct{ Path, Parent string }
+
+// Parse decodes a stored generation or a config file without includes
+// strictly: duplicate keys, unknown fields, explicit null, bad types and
+// unsupported versions all fail with *ValidationError. A scope may carry the
+// source folder a stored generation recorded for it.
+func Parse(data []byte) (*Document, error) { return parse(data, false) }
+
+// ParseFile decodes a config file as an operator wrote it: it may list
+// includes, and its scopes may not claim a source.
+func ParseFile(data []byte) (*Document, error) { return parse(data, true) }
+
+func parse(data []byte, file bool) (*Document, error) {
 	root, diags := decode(data)
 	if root == nil {
 		return nil, invalid(diags)
 	}
-	c := &checker{diags: diags}
+	c := &checker{diags: diags, file: file}
 	doc := c.document(root)
 	if len(c.diags) > 0 {
 		return nil, invalid(c.diags)
@@ -177,8 +195,28 @@ func Parse(data []byte) (*Document, error) {
 }
 func (c *checker) document(n *node) *Document {
 	doc := &Document{}
-	if !c.object(n, "", []string{"version", "settings", "connections", "scopes"}) {
+	if !c.object(n, "", []string{"version", "settings", "connections", "scopes"}, "includes") {
 		return doc
+	}
+	if is := n.field("includes"); is != nil {
+		if !c.file {
+			c.fail("includes", "unknown_field", "includes belong in the config file; validate the file with its directory")
+		} else if c.typed(is, "includes", kArray, "array") {
+			for i, item := range is.items {
+				p := ptr("includes", i)
+				if !c.object(item, p, []string{"path", "parent"}) {
+					continue
+				}
+				var inc Include
+				if path, ok := c.str(item.field("path"), p+"/path", nil); ok && path == "" {
+					c.fail(p+"/path", "invalid_value", "include path must be a folder")
+				} else {
+					inc.Path = path
+				}
+				inc.Parent, _ = c.str(item.field("parent"), p+"/parent", idPattern)
+				doc.Includes = append(doc.Includes, inc)
+			}
+		}
 	}
 	if v := n.field("version"); v != nil && c.typed(v, "version", kNumber, "integer") {
 		if v.num.String() != "1" {
@@ -325,8 +363,21 @@ func (c *checker) connection(n *node, path string) Connection {
 }
 func (c *checker) scope(n *node, path string) ScopeConfig {
 	out := ScopeConfig{Enabled: true}
-	if !c.object(n, path, []string{"id", "name"}, "parent", "enabled", "limits", "authorization", "bindings", "routes", "extensions", "secret_refs") {
+	optional := []string{"parent", "enabled", "limits", "authorization", "bindings", "routes", "extensions"}
+	switch {
+	case c.fragment:
+		// A folder's scopes select secret names their parent provides; the
+		// references (and any cmd: they run) stay in the config file.
+	case c.file:
+		optional = append(optional, "secret_refs")
+	default:
+		optional = append(optional, "secret_refs", "source")
+	}
+	if !c.object(n, path, []string{"id", "name"}, optional...) {
 		return out
+	}
+	if s := n.field("source"); s != nil {
+		out.Source, _ = c.str(s, path+"/source", nil)
 	}
 	out.ID, _ = c.str(n.field("id"), path+"/id", idPattern)
 	if name, ok := c.str(n.field("name"), path+"/name", nil); ok && name == "" {
@@ -546,6 +597,9 @@ func (d *Document) normalized(redact bool) any {
 		}
 		if sc.SecretRefs != nil {
 			m["secret_refs"] = refs(sc.SecretRefs)
+		}
+		if sc.Source != "" {
+			m["source"] = sc.Source
 		}
 		scopes = append(scopes, m)
 	}

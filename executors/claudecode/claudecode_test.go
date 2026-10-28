@@ -7,6 +7,7 @@ import (
 	"math"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strconv"
 	"strings"
 	"syscall"
@@ -677,6 +678,37 @@ func TestDirRunsSessionsInTheFolder(t *testing.T) {
 	}
 	if inv := h.invocations(); len(inv) != 2 {
 		t.Fatalf("refused turns started claude: %v", inv)
+	}
+}
+
+// TestFolderConfig: a binding from an included folder runs in that folder
+// unless it has a resource or its own dir, and its relative paths resolve
+// against the folder.
+func TestFolderConfig(t *testing.T) {
+	e := &claudecode.Executor{}
+	cases := []struct {
+		config   string
+		resource bool
+		want     map[string]string
+	}{
+		{`{"model":"sonnet"}`, false, map[string]string{"dir": "/work/web", "model": "sonnet"}},
+		{``, false, map[string]string{"dir": "/work/web"}},
+		{`{}`, true, map[string]string{}},
+		{`{"dir":"sub","plugin_dir":"skills"}`, false, map[string]string{"dir": "/work/web/sub", "plugin_dir": "/work/web/skills"}},
+		{`{"dir":"/elsewhere"}`, false, map[string]string{"dir": "/elsewhere"}},
+	}
+	for _, tc := range cases {
+		out, err := e.FolderConfig(json.RawMessage(tc.config), "/work/web", tc.resource)
+		if err != nil {
+			t.Fatalf("%s: %v", tc.config, err)
+		}
+		var got map[string]string
+		if err := json.Unmarshal(out, &got); err != nil || !reflect.DeepEqual(got, tc.want) {
+			t.Fatalf("%s: got %s, want %v", tc.config, out, tc.want)
+		}
+		if err := e.ValidateConfig(out, nil); err != nil {
+			t.Fatalf("%s: adapted config invalid: %v", tc.config, err)
+		}
 	}
 }
 

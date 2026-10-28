@@ -22,6 +22,28 @@
       "items": {
         "$ref": "#/$defs/scope"
       }
+    },
+    "includes": {
+      "description": "Folders whose .open-conduit/config.json adds scopes beneath parent, a scope of this file. path is absolute or relative to this file's directory.",
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string",
+            "minLength": 1
+          },
+          "parent": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+          }
+        },
+        "required": [
+          "path",
+          "parent"
+        ],
+        "additionalProperties": false
+      }
     }
   },
   "required": [

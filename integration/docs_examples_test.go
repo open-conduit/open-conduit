@@ -70,6 +70,10 @@ func TestDocsExampleConfigsValidate(t *testing.T) {
 			if json.Unmarshal([]byte(block), &probe) != nil || probe["version"] == nil {
 				continue
 			}
+			if probe["settings"] == nil && probe["connections"] == nil {
+				validateFolderExample(t, path, i, block)
+				continue
+			}
 			total++
 			diags, err := bootstrap.ValidateConfig([]byte(block))
 			if err != nil || len(diags) != 0 {
@@ -79,6 +83,25 @@ func TestDocsExampleConfigsValidate(t *testing.T) {
 	}
 	if total < 4 {
 		t.Fatalf("found %d example configs in the user docs, want at least one per workflow (4)", total)
+	}
+}
+
+// validateFolderExample checks an included folder's config (a document with
+// only version and scopes) composed beneath a parent scope.
+func validateFolderExample(t *testing.T, path string, i int, block string) {
+	t.Helper()
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "folder", ".open-conduit"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "folder", ".open-conduit", "config.json"), []byte(block), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	parent := `{"version": 1, "settings": {}, "connections": [], "includes": [{"path": "folder", "parent": "parent"}],
+		"scopes": [{"id": "parent", "name": "Parent", "authorization": {"connections": [], "operations": ["emit", "read_context", "declare_outcome"], "read_scopes": []}}]}`
+	diags, err := bootstrap.ValidateConfigAt(filepath.Join(dir, "config.json"), []byte(parent))
+	if err != nil || len(diags) != 0 {
+		t.Errorf("%s: json block %d is not a valid folder config: %v %v", filepath.Base(path), i+1, diags, err)
 	}
 }
 

@@ -238,6 +238,29 @@ func (e *Executor) ValidateConfig(raw json.RawMessage, secretNames []string) err
 	return nil
 }
 
+// FolderConfig adapts a binding from an included folder's config
+// (config.FolderConfigurer): relative dir and plugin_dir resolve against the
+// folder, and a workspace-free binding without dir runs in the folder itself.
+func (e *Executor) FolderConfig(raw json.RawMessage, folder string, resource bool) (json.RawMessage, error) {
+	fields := map[string]json.RawMessage{}
+	if trimmed := bytes.TrimSpace(raw); len(trimmed) > 0 && !bytes.Equal(trimmed, []byte("null")) {
+		if err := json.Unmarshal(raw, &fields); err != nil {
+			return nil, configError("malformed config")
+		}
+	}
+	for _, key := range []string{"dir", "plugin_dir"} {
+		var path string
+		if v, ok := fields[key]; !ok || json.Unmarshal(v, &path) != nil || path == "" || filepath.IsAbs(path) {
+			continue
+		}
+		fields[key], _ = json.Marshal(filepath.Join(folder, path))
+	}
+	if _, ok := fields["dir"]; !ok && !resource {
+		fields["dir"], _ = json.Marshal(folder)
+	}
+	return json.Marshal(fields)
+}
+
 // isDir reports whether path is an existing directory (following links).
 func isDir(path string) bool {
 	info, err := os.Stat(path)

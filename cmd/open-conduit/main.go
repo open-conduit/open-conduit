@@ -28,7 +28,10 @@ func main() {
 	env.EditConfig = func(r cli.EditRequest) (bool, error) { return tui.EditConfig(r, os.Stdin, os.Stdout) }
 	env.Migrate, env.Upgrade, env.State = bootstrap.Migrate, bootstrap.Upgrade, bootstrap.StateOps()
 	env.ValidateConfigAt, env.Extensions = validateAt, bootstrap.ExtensionOps(version, commit)
-	env.ConfigWarnings = func(data []byte) []string { return append(config.Warnings(data), bootstrap.RenamedWarnings(data)...) }
+	env.ConfigWarnings = func(path string, data []byte) []string {
+		warnings := append(config.Warnings(data), bootstrap.RenamedWarnings(data)...)
+		return append(warnings, config.IncludeWarnings(data, filepath.Dir(path))...)
+	}
 	env.OfflineChecks = offlineChecks
 	env.Service = cli.SystemServiceHost()
 	os.Exit(cli.RunOperator(version, commit, os.Args[1:], env, os.Stdout, os.Stderr))

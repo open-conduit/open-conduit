@@ -60,6 +60,8 @@ type EffectiveScope struct {
 	Routes                      []Route
 	Extensions                  []Extension
 	SecretRefs                  map[string]string
+	// Source is the included folder the scope came from, or "".
+	Source string
 }
 
 // Snapshot is one immutable validated generation candidate. Normalized
@@ -466,7 +468,7 @@ func (v *validator) snapshot() *Snapshot {
 		s.Order = append(s.Order, id)
 		s.Scopes[id] = &EffectiveScope{ID: id, ParentID: domain.ID(sc.Parent), Name: sc.Name, Enabled: e.enabled,
 			Concurrency: e.concurrency, AdmissionLimit: e.admission, Authorization: e.auth,
-			Bindings: e.bindings.active(), Routes: e.routes.active(), Extensions: e.extensions.active(), SecretRefs: e.refs}
+			Bindings: e.bindings.active(), Routes: e.routes.active(), Extensions: e.extensions.active(), SecretRefs: e.refs, Source: sc.Source}
 	}
 	return s
 }
