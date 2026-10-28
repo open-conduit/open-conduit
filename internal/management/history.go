@@ -43,6 +43,16 @@ type wireRetry struct {
 	Exhausted     bool   `json:"exhausted"`
 	BlockedReason string `json:"blocked_reason,omitempty"`
 }
+
+// wireSegment is one active stretch of a run: the first start or a resume
+// after a wake (wake_event_id), ended by a park or the run's finish. An
+// open segment, the one running now, has no ended_at.
+type wireSegment struct {
+	StartedAt   string `json:"started_at"`
+	EndedAt     string `json:"ended_at,omitempty"`
+	WakeEventID string `json:"wake_event_id,omitempty"`
+	Parked      bool   `json:"parked,omitempty"`
+}
 type wireRetention struct {
 	State           string `json:"state"`
 	ExpiredAt       string `json:"expired_at,omitempty"`
@@ -65,6 +75,8 @@ type wireRun struct {
 	Deadline                string         `json:"deadline,omitempty"`
 	RemainingTimeoutSeconds int64          `json:"remaining_timeout_seconds,omitempty"`
 	DurationMS              int64          `json:"duration_ms,omitempty"`
+	Segments                []wireSegment  `json:"segments,omitempty"`
+	ActiveMS                int64          `json:"active_ms,omitempty"`
 	Usage                   *wireUsage     `json:"usage,omitempty"`
 	Workspace               *wireWorkspace `json:"workspace,omitempty"`
 	Inputs                  int            `json:"inputs"`
@@ -93,6 +105,10 @@ func toRun(r runtime.Run) wireRun {
 	if x.StartedAt != nil && x.FinishedAt != nil {
 		out.DurationMS = x.FinishedAt.Sub(*x.StartedAt).Milliseconds()
 	}
+	for _, g := range r.Segments {
+		out.Segments = append(out.Segments, wireSegment{StartedAt: ts(g.StartedAt), EndedAt: tsPtr(g.EndedAt), WakeEventID: string(g.WakeEventID), Parked: g.Parked})
+	}
+	out.ActiveMS = r.ActiveTime.Milliseconds()
 	if u := r.Usage; u != nil {
 		out.Usage = &wireUsage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, Cost: u.Cost, Currency: u.Currency}
 	}

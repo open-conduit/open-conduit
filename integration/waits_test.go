@@ -1034,3 +1034,67 @@ func TestProductionTerminalWaitResultKeepsBackupVisibleArtifacts(t *testing.T) {
 		t.Fatalf("rejected terminal change altered measurements: %+v %v", state.Result, err)
 	}
 }
+
+// A parked-then-resumed attempt reports two active segments, the second
+// woken by the wake event, whose sum is its active time; the parked days
+// count in neither.
+func TestProductionResumedRunReportsActiveSegments(t *testing.T) {
+	ctx := context.Background()
+	f := waitFixture(t, "reopen", waitOptions(true))
+	d := f.Driver.(*waitDriver)
+	work := seedSchedulerWork(t, f, "segments")
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "segments"}
+	attempt, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := f.Clock.Now()
+	f.Clock.Advance(10 * time.Second)
+	registerWait(t, f, attempt.Lease, "segments-wait", key, true, 1)
+	run := func() runtime.Run {
+		var r runtime.Run
+		routingRead(t, f, func(tx storage.Tx) error {
+			var e error
+			r, e = runtime.RunInTx(tx, attempt.Lease.ExecutionID)
+			return e
+		})
+		return r
+	}
+	if r := run(); len(r.Segments) != 1 || !r.Segments[0].Parked || r.ActiveTime != 10*time.Second {
+		t.Fatalf("parked run: %+v active %s", r.Segments, r.ActiveTime)
+	}
+	f.Clock.Advance(72 * time.Hour)
+	requireAccept(t, f, "segments-wake", &key)
+	if err = d.Wake("segments-wait"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Lease.ExecutionID != attempt.Lease.ExecutionID {
+		t.Fatalf("resume started a new attempt: %s", resumed.Lease.ExecutionID)
+	}
+	woken := f.Clock.Now()
+	if r := run(); len(r.Segments) != 2 || r.Segments[1].EndedAt != nil || r.ActiveTime != 10*time.Second {
+		t.Fatalf("running resumed run: %+v active %s", r.Segments, r.ActiveTime)
+	}
+	f.Clock.Advance(5 * time.Second)
+	if err = d.scheduler.Complete(ctx, resumed.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	r := run()
+	if len(r.Segments) != 2 {
+		t.Fatalf("segments: %+v", r.Segments)
+	}
+	first, second := r.Segments[0], r.Segments[1]
+	if !first.StartedAt.Equal(started) || first.EndedAt == nil || !first.EndedAt.Equal(started.Add(10*time.Second)) || !first.Parked || first.WakeEventID != "" {
+		t.Fatalf("first segment: %+v", first)
+	}
+	if !second.StartedAt.Equal(woken) || second.EndedAt == nil || !second.EndedAt.Equal(woken.Add(5*time.Second)) || second.Parked || second.WakeEventID == "" || second.WakeEventID != r.WakeEventID {
+		t.Fatalf("second segment: %+v (run wake %s)", second, r.WakeEventID)
+	}
+	if sum := first.EndedAt.Sub(first.StartedAt) + second.EndedAt.Sub(second.StartedAt); r.ActiveTime != sum || sum != 15*time.Second {
+		t.Fatalf("active %s, segments sum %s", r.ActiveTime, sum)
+	}
+}

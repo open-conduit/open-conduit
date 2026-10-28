@@ -111,6 +111,7 @@ Host watch and telemetry events are extension adapters on the public observabili
 - executor registration and pinned config generation
 - launch state and resource exclusion
 - deadline and remaining timeout budget, and duration
+- active segments (`segments` and `active_ms` in `GET /v1/runs`): the first start and each resume after a wake (with the waking event's ID), each ended by a park or by the run's finish. The segment running now has no end. `active_ms` sums the ended segments, so a turn parked for days counts only the time it ran, while `duration_ms` spans start to finish
 - usage and input count
 - wait and wake links
 - the Work's retry eligibility when this is the latest failed attempt

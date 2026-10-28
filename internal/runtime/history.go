@@ -31,6 +31,11 @@ type Run struct {
 	Workspace           *extension.WorkspaceRecord
 	Inputs              int
 	WaitID, WakeEventID domain.ID
+	// Segments are the attempt's active stretches (AttemptState.Segments),
+	// the last ended at the execution's finish once it is terminal.
+	// ActiveTime sums the ended ones.
+	Segments   []Segment
+	ActiveTime time.Duration
 	// Retry is the Work's retry eligibility when this attempt is the latest
 	// recorded failure.
 	Retry     *RetryState
@@ -72,6 +77,7 @@ func runInTx(tx storage.Tx, x domain.Execution, works map[domain.ID]domain.Work)
 		run.Deadline, run.RemainingTimeout = state.Deadline, state.RemainingTimeout
 		run.Inputs = len(state.InputEventIDs)
 		run.WaitID, run.WakeEventID = state.WaitID, state.WakeEventID
+		run.Segments, run.ActiveTime = segments(state.Segments, x)
 		if state.CurrentTriggerID != "" && state.CurrentTriggerID != x.TriggerID {
 			run.CurrentTrigger = envelope(tx, state.CurrentTriggerID)
 		}
@@ -94,6 +100,23 @@ func runInTx(tx storage.Tx, x domain.Execution, works map[domain.ID]domain.Work)
 		return Run{}, err
 	}
 	return run, nil
+}
+
+// segments closes the open segment of a finished execution at its finish
+// and sums the ended segments.
+func segments(recorded []Segment, x domain.Execution) ([]Segment, time.Duration) {
+	out := append([]Segment(nil), recorded...)
+	var active time.Duration
+	for i := range out {
+		if out[i].EndedAt == nil && x.State.Terminal() && x.FinishedAt != nil {
+			end := *x.FinishedAt
+			out[i].EndedAt = &end
+		}
+		if out[i].EndedAt != nil {
+			active += out[i].EndedAt.Sub(out[i].StartedAt)
+		}
+	}
+	return out, active
 }
 
 // RunInTx builds the unified history record for one execution.

@@ -165,6 +165,7 @@ type Health struct {
 	ConfigGeneration string            `json:"config_generation"`
 	Components       map[string]string `json:"components"`
 }
+
 type Page[T any] struct {
 	Items      []T    `json:"items"`
 	NextCursor string `json:"next_cursor"`
@@ -829,6 +830,8 @@ type Run struct {
 	Deadline                string        `json:"deadline,omitempty"`
 	RemainingTimeoutSeconds int64         `json:"remaining_timeout_seconds,omitempty"`
 	DurationMS              int64         `json:"duration_ms,omitempty"`
+	Segments                []RunSegment  `json:"segments,omitempty"`
+	ActiveMS                int64         `json:"active_ms,omitempty"`
 	Usage                   *Usage        `json:"usage,omitempty"`
 	Workspace               *RunWorkspace `json:"workspace,omitempty"`
 	Inputs                  int           `json:"inputs"`
@@ -836,6 +839,16 @@ type Run struct {
 	WakeEventID             string        `json:"wake_event_id,omitempty"`
 	Retry                   *RetryStatus  `json:"retry,omitempty"`
 	Retention               Retention     `json:"retention"`
+}
+
+// RunSegment is one active stretch of a run: the first start or a resume
+// after a wake (WakeEventID), ended by a park (Parked) or the run's finish.
+// The segment running now has no EndedAt.
+type RunSegment struct {
+	StartedAt   string `json:"started_at"`
+	EndedAt     string `json:"ended_at,omitempty"`
+	WakeEventID string `json:"wake_event_id,omitempty"`
+	Parked      bool   `json:"parked,omitempty"`
 }
 
 // RunWorkspace is the resource a run's executor reported it ran in.

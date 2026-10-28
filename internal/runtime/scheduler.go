@@ -143,6 +143,19 @@ type AttemptState struct {
 	InputEventIDs                     []domain.ID
 	RemainingTimeout                  time.Duration
 	Declaration                       *ToolbeltDeclaration
+	// Segments are the attempt's active stretches: the first start and each
+	// resume after a wake, each ended by a park. The last stays open while
+	// the attempt runs and ends when the execution finishes.
+	Segments []Segment `json:",omitempty"`
+}
+
+// Segment is one active stretch of an attempt. WakeEventID names the event
+// that woke a resumed segment; Parked says the segment ended in a park.
+type Segment struct {
+	StartedAt   time.Time
+	EndedAt     *time.Time `json:",omitempty"`
+	WakeEventID domain.ID  `json:",omitempty"`
+	Parked      bool       `json:",omitempty"`
 }
 
 func attemptState(tx storage.Tx, id domain.ID) (state AttemptState, err error) {
@@ -699,9 +712,12 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 		}
 		state.ExecutionID, state.Epoch, state.Excluded = executionID, ref.Epoch, false
 		state.LaunchState = "launching"
+		segment := Segment{StartedAt: s.now()}
 		if parked != "" {
 			state.LaunchState = "resuming"
+			segment.WakeEventID = wake.EventID
 		}
+		state.Segments = append(state.Segments, segment)
 		if input.Sequence > state.ObservedSequence {
 			state.ObservedSequence = input.Sequence
 		}
