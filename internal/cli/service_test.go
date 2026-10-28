@@ -27,10 +27,14 @@ func (f *fakeServiceManager) run(name string, args ...string) (string, error) {
 		if !f.loaded {
 			return "Could not find service", errors.New("exit 113")
 		}
+		// The shape of launchctl print: the coalition blocks carry a state
+		// of their own after the service's.
+		state, pid := "not running", ""
 		if f.running {
-			return "\tstate = running\n\tpid = 4242\n", nil
+			state, pid = "running", "\tpid = 4242\n"
 		}
-		return "\tstate = not running\n", nil
+		return "gui/501/" + launchdLabel + " = {\n\tstate = " + state + "\n\targuments = {\n\t\t/opt/oc/open-conduit\n\t}\n" + pid +
+			"\tlast exit code = 1\n\n\tresource coalition = {\n\t\tstate = active\n\t}\n\n\tjetsam coalition = {\n\t\tstate = active\n\t}\n}\n", nil
 	case strings.Contains(call, "launchctl bootstrap"):
 		f.loaded, f.running = true, true
 	case strings.Contains(call, "launchctl bootout"):
