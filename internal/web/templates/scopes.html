@@ -1,9 +1,9 @@
 {{define "content"}}{{$p := .Page}}
-<h1>Scopes</h1>
-<div id="live">
+<div class="head"><h1>Scopes</h1></div>
+<div id="live" class="scopes">
 {{range .Data}}{{$s := .}}
-<section>
-  <h2>{{.Scope.Name}} <span class="dim">{{.Scope.ID}}{{if not .Scope.Enabled}} · disabled{{end}}</span></h2>
+<section class="scope{{if not .Scope.Enabled}} off{{end}}">
+  <h2>{{.Scope.Name}} <span class="from mono">{{.Scope.ID}}</span>{{if not .Scope.Enabled}} <span class="state s-cancelled">disabled</span>{{end}}</h2>
   {{with .Err}}<pre class="error">{{.}}</pre>{{end}}
   {{template "panels" .Panels}}
   {{range .Actions}}
@@ -11,10 +11,10 @@
     <input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}">
     <input type="hidden" name="scope" value="{{$s.Scope.ID}}"><input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">
     {{if .Prompt}}<label>{{.Label}} <input name="input" placeholder="{{.Prompt}}" aria-label="{{.Prompt}}"></label>{{end}}
-    <button>{{if .Prompt}}Go{{else}}{{.Label}}{{end}}</button>
+    <button{{if .Prompt}} class="primary"{{end}}>{{if .Prompt}}Go{{else}}{{.Label}}{{end}}</button>
   </form>
-  {{else}}{{if not .Panels}}<p class="dim">no actions available</p>{{end}}{{end}}
+  {{else}}{{if not .Panels}}<p class="empty">Nothing to do here: no extension offers an action for this scope.</p>{{end}}{{end}}
 </section>
-{{else}}<p class="dim">no scopes</p>{{end}}
+{{else}}<p class="empty">No scopes. Add one to the daemon's configuration to start taking Work.</p>{{end}}
 </div>
 {{end}}

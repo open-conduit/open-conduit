@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -228,7 +229,7 @@ func TestListByWorkAndByTurn(t *testing.T) {
 	_, s, h := setup(t)
 	w := do(h, "GET", "/", nil, s)
 	body := w.Body.String()
-	if w.Code != 200 || !strings.Contains(body, ">open-conduit#88</a>") || !strings.Contains(body, "2 work · 3 run(s)") {
+	if w.Code != 200 || !strings.Contains(body, ">open-conduit#88</a>") || !strings.Contains(body, "3 runs of 2 Work") {
 		t.Fatalf("list: %d\n%s", w.Code, body)
 	}
 	// The annotation is the Work's label and is escaped, never markup.
@@ -240,7 +241,7 @@ func TestListByWorkAndByTurn(t *testing.T) {
 		t.Fatal("by work should list only the latest turn")
 	}
 	body = do(h, "GET", "/?turns=1", nil, s).Body.String()
-	if !strings.Contains(body, `href="/run?id=exe_1"`) || !strings.Contains(body, "<td>1/2</td>") || !strings.Contains(body, "<td>2/2</td>") {
+	if !strings.Contains(body, `href="/run?id=exe_1"`) || !strings.Contains(body, `<span class="tn">1/2</span>`) || !strings.Contains(body, `<span class="tn">2/2</span>`) {
 		t.Fatalf("every turn:\n%s", body)
 	}
 	body = do(h, "GET", "/?state=running", nil, s).Body.String()
@@ -449,3 +450,28 @@ type cookieJar struct{ cookies []*http.Cookie }
 
 func (j *cookieJar) SetCookies(_ *url.URL, cs []*http.Cookie) { j.cookies = append(j.cookies, cs...) }
 func (j *cookieJar) Cookies(*url.URL) []*http.Cookie          { return j.cookies }
+
+func TestListGroupsByWhatTheOperatorDoesNext(t *testing.T) {
+	rs := []row{{Run: run("a", "w", "completed", "")}, {Run: run("b", "w", "parked", "")}, {Run: run("c", "w", "failed", "")}, {Run: run("d", "w", "pending", "")}}
+	var names []string
+	for _, g := range grouped(rs) {
+		names = append(names, g.Name)
+	}
+	if strings.Join(names, ",") != "Failed,Running,Waiting,Finished" {
+		t.Fatalf("groups: %v", names)
+	}
+	// A Work's row carries its turns, oldest first.
+	f := newFake()
+	sort.SliceStable(f.runs, func(i, j int) bool { return f.runs[i].CreatedAt > f.runs[j].CreatedAt })
+	for _, r := range rows(f.runs, false) {
+		if r.Run.ID == "exe_2" && (len(r.Trail) != 2 || r.Trail[0].ID != "exe_1") {
+			t.Fatalf("trail: %+v", r.Trail)
+		}
+	}
+	now := time.Date(2026, 10, 28, 3, 0, 0, 0, time.UTC)
+	for ts, want := range map[string]string{"2026-10-28T02:59:30Z": "just now", "2026-10-28T02:15:00Z": "45m ago", "2026-10-27T22:00:00Z": "5h ago", "2026-10-25T03:00:00Z": "3d ago", "": ""} {
+		if got := ago(ts, now); got != want {
+			t.Errorf("ago(%q) = %q, want %q", ts, got, want)
+		}
+	}
+}

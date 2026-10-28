@@ -4,12 +4,13 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>{{.Page.Title}} · Open Conduit</title>
+<link rel="preload" href="/static/fonts/atkinson-hyperlegible-next.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="/static/app.css">
 <script src="/static/app.js" defer></script>
 </head>
 <body>
-<header>
-  <a class="brand" href="/">Open Conduit</a>
+<header class="top">
+  <a class="brand" href="/"><span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>Open Conduit</a>
   <nav>
     <a href="/"{{if eq .Page.Nav "runs"}} aria-current="page"{{end}}>Runs</a>
     <a href="/scopes"{{if eq .Page.Nav "scopes"}} aria-current="page"{{end}}>Scopes</a>
