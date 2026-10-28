@@ -838,36 +838,56 @@ type Retention struct {
 // Run is one attempt in the unified history, identical for every executor.
 type Run struct {
 	Execution
-	WorkKind                string        `json:"work_kind"`
-	WorkState               string        `json:"work_state"`
-	Trigger                 *Trigger      `json:"trigger,omitempty"`
-	CurrentTrigger          *Trigger      `json:"current_trigger,omitempty"`
-	Executor                string        `json:"executor,omitempty"`
-	ConfigGeneration        string        `json:"config_generation,omitempty"`
-	LaunchState             string        `json:"launch_state,omitempty"`
-	ResourceExcluded        bool          `json:"resource_excluded"`
-	Deadline                string        `json:"deadline,omitempty"`
-	RemainingTimeoutSeconds int64         `json:"remaining_timeout_seconds,omitempty"`
-	DurationMS              int64         `json:"duration_ms,omitempty"`
-	Segments                []RunSegment  `json:"segments,omitempty"`
-	ActiveMS                int64         `json:"active_ms,omitempty"`
-	Usage                   *Usage        `json:"usage,omitempty"`
-	Workspace               *RunWorkspace `json:"workspace,omitempty"`
-	Inputs                  int           `json:"inputs"`
-	WaitID                  string        `json:"wait_id,omitempty"`
-	WakeEventID             string        `json:"wake_event_id,omitempty"`
-	Retry                   *RetryStatus  `json:"retry,omitempty"`
-	Retention               Retention     `json:"retention"`
+	WorkKind                string   `json:"work_kind"`
+	WorkState               string   `json:"work_state"`
+	Trigger                 *Trigger `json:"trigger,omitempty"`
+	CurrentTrigger          *Trigger `json:"current_trigger,omitempty"`
+	Executor                string   `json:"executor,omitempty"`
+	ConfigGeneration        string   `json:"config_generation,omitempty"`
+	LaunchState             string   `json:"launch_state,omitempty"`
+	ResourceExcluded        bool     `json:"resource_excluded"`
+	Deadline                string   `json:"deadline,omitempty"`
+	RemainingTimeoutSeconds int64    `json:"remaining_timeout_seconds,omitempty"`
+	DurationMS              int64    `json:"duration_ms,omitempty"`
+	// Segments are the run's active stretches, oldest first; the run keeps
+	// the last 50 and SegmentsDropped counts the older ones.
+	Segments        []RunSegment `json:"segments,omitempty"`
+	SegmentsDropped int          `json:"segments_dropped,omitempty"`
+	// ActiveMS is the time the run spent active: its ended segments,
+	// dropped ones included. It leaves out the segment running now; Active
+	// adds it. Runs recorded before segments existed report neither.
+	ActiveMS    int64         `json:"active_ms,omitempty"`
+	Usage       *Usage        `json:"usage,omitempty"`
+	Workspace   *RunWorkspace `json:"workspace,omitempty"`
+	Inputs      int           `json:"inputs"`
+	WaitID      string        `json:"wait_id,omitempty"`
+	WakeEventID string        `json:"wake_event_id,omitempty"`
+	Retry       *RetryStatus  `json:"retry,omitempty"`
+	Retention   Retention     `json:"retention"`
 }
 
-// RunSegment is one active stretch of a run: the first start or a resume
-// after a wake (WakeEventID), ended by a park (Parked) or the run's finish.
-// The segment running now has no EndedAt.
+// Active is the run's active time as of now: ActiveMS plus the segment
+// running now, if any.
+func (r Run) Active(now time.Time) time.Duration {
+	active := time.Duration(r.ActiveMS) * time.Millisecond
+	if n := len(r.Segments); n > 0 && r.Segments[n-1].EndedAt == "" {
+		if start, err := time.Parse(time.RFC3339Nano, r.Segments[n-1].StartedAt); err == nil && now.After(start) {
+			active += now.Sub(start)
+		}
+	}
+	return active
+}
+
+// RunSegment is one active stretch of a run: the first start, a resume
+// after a wake (WakeEventID) or a recovery after a lost lease (Recovered),
+// ended by a park (Parked), the lost lease or the run's finish. The segment
+// running now has no EndedAt.
 type RunSegment struct {
 	StartedAt   string `json:"started_at"`
 	EndedAt     string `json:"ended_at,omitempty"`
 	WakeEventID string `json:"wake_event_id,omitempty"`
 	Parked      bool   `json:"parked,omitempty"`
+	Recovered   bool   `json:"recovered,omitempty"`
 }
 
 // RunWorkspace is the resource a run's executor reported it ran in.

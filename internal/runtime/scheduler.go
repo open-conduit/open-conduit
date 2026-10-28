@@ -143,19 +143,54 @@ type AttemptState struct {
 	InputEventIDs                     []domain.ID
 	RemainingTimeout                  time.Duration
 	Declaration                       *ToolbeltDeclaration
-	// Segments are the attempt's active stretches: the first start and each
-	// resume after a wake, each ended by a park. The last stays open while
-	// the attempt runs and ends when the execution finishes.
-	Segments []Segment `json:",omitempty"`
+	// Segments are the attempt's active stretches: the first start, each
+	// resume after a wake and each recovery, each ended by a park or a lost
+	// lease. The last stays open while the attempt runs and ends when the
+	// execution finishes. Only the last MaxSegments are kept; DroppedActive
+	// is the active time of the ones dropped, DroppedSegments their count.
+	Segments        []Segment     `json:",omitempty"`
+	DroppedSegments int           `json:",omitempty"`
+	DroppedActive   time.Duration `json:",omitempty"`
 }
 
+// MaxSegments bounds the segments an attempt keeps; a standing turn can
+// resume hundreds of times.
+const MaxSegments = 50
+
 // Segment is one active stretch of an attempt. WakeEventID names the event
-// that woke a resumed segment; Parked says the segment ended in a park.
+// that woke it; Parked says it ended in a park; Recovered says it began
+// when a new owner recovered the attempt after its lease was lost.
 type Segment struct {
 	StartedAt   time.Time
 	EndedAt     *time.Time `json:",omitempty"`
 	WakeEventID domain.ID  `json:",omitempty"`
 	Parked      bool       `json:",omitempty"`
+	Recovered   bool       `json:",omitempty"`
+}
+
+// endSegment ends the open segment, if any, at end (never before it began).
+func (state *AttemptState) endSegment(end time.Time, parked bool) {
+	n := len(state.Segments)
+	if n == 0 || state.Segments[n-1].EndedAt != nil {
+		return
+	}
+	if end.Before(state.Segments[n-1].StartedAt) {
+		end = state.Segments[n-1].StartedAt
+	}
+	state.Segments[n-1].EndedAt, state.Segments[n-1].Parked = &end, parked
+}
+
+// beginSegment appends a segment, dropping the oldest beyond MaxSegments
+// into DroppedActive so the active time stays exact.
+func (state *AttemptState) beginSegment(g Segment) {
+	state.Segments = append(state.Segments, g)
+	for len(state.Segments) > MaxSegments {
+		if old := state.Segments[0]; old.EndedAt != nil {
+			state.DroppedActive += old.EndedAt.Sub(old.StartedAt)
+		}
+		state.DroppedSegments++
+		state.Segments = state.Segments[1:]
+	}
 }
 
 func attemptState(tx storage.Tx, id domain.ID) (state AttemptState, err error) {
@@ -712,12 +747,14 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 		}
 		state.ExecutionID, state.Epoch, state.Excluded = executionID, ref.Epoch, false
 		state.LaunchState = "launching"
-		segment := Segment{StartedAt: s.now()}
 		if parked != "" {
 			state.LaunchState = "resuming"
-			segment.WakeEventID = wake.EventID
 		}
-		state.Segments = append(state.Segments, segment)
+		// A parked attempt from before segments were recorded stays without
+		// them: one resume-to-finish segment would understate its active time.
+		if parked == "" || len(state.Segments) > 0 {
+			state.beginSegment(Segment{StartedAt: s.now(), WakeEventID: wake.EventID})
+		}
 		if input.Sequence > state.ObservedSequence {
 			state.ObservedSequence = input.Sequence
 		}
@@ -849,6 +886,17 @@ func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt,
 		}
 		if execution.State != domain.ExecutionRunning {
 			return storage.ErrInvalid
+		}
+		// The time between the lost lease's expiry and this recovery (a
+		// daemon down for days, say) was not active.
+		if n := len(current.Segments); n > 0 && current.Segments[n-1].EndedAt == nil {
+			now := s.now()
+			end := now
+			if lost := execution.Lease.ExpiresAt; !lost.IsZero() && lost.Before(now) {
+				end = lost
+			}
+			current.endSegment(end, false)
+			current.beginSegment(Segment{StartedAt: now, Recovered: true})
 		}
 		ref, e := tx.Claim(id, s.options.Owner, s.options.LeaseDuration)
 		if e != nil {

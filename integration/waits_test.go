@@ -4,6 +4,9 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -1096,5 +1099,110 @@ func TestProductionResumedRunReportsActiveSegments(t *testing.T) {
 	}
 	if sum := first.EndedAt.Sub(first.StartedAt) + second.EndedAt.Sub(second.StartedAt); r.ActiveTime != sum || sum != 15*time.Second {
 		t.Fatalf("active %s, segments sum %s", r.ActiveTime, sum)
+	}
+}
+
+// A recovered attempt does not count the time its lease was lost (a daemon
+// down for two days, say): its segment ends at the lease's expiry and a
+// recovered segment begins at the recovery.
+func TestProductionRecoveredRunExcludesLostLeaseTime(t *testing.T) {
+	ctx := context.Background()
+	f := waitFixture(t, "reopen", waitOptions(true))
+	d := f.Driver.(*waitDriver)
+	work := seedSchedulerWork(t, f, "segments-recover")
+	attempt, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	started := f.Clock.Now()
+	lost := started.Add(d.options.LeaseDuration)
+	f.Clock.Advance(48 * time.Hour)
+	recovered, err := d.scheduler.Recover(ctx, attempt.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	recoveredAt := f.Clock.Now()
+	f.Clock.Advance(5 * time.Second)
+	if err = d.scheduler.Complete(ctx, recovered.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	var r runtime.Run
+	routingRead(t, f, func(tx storage.Tx) error {
+		var e error
+		r, e = runtime.RunInTx(tx, attempt.Lease.ExecutionID)
+		return e
+	})
+	if len(r.Segments) != 2 {
+		t.Fatalf("segments: %+v", r.Segments)
+	}
+	first, second := r.Segments[0], r.Segments[1]
+	if !first.StartedAt.Equal(started) || first.EndedAt == nil || !first.EndedAt.Equal(lost) || first.Parked || first.Recovered {
+		t.Fatalf("first segment should end at the lost lease %s: %+v", lost, first)
+	}
+	if !second.Recovered || !second.StartedAt.Equal(recoveredAt) || second.EndedAt == nil || !second.EndedAt.Equal(recoveredAt.Add(5*time.Second)) {
+		t.Fatalf("recovered segment: %+v", second)
+	}
+	if want := d.options.LeaseDuration + 5*time.Second; r.ActiveTime != want {
+		t.Fatalf("active %s, want %s", r.ActiveTime, want)
+	}
+}
+
+// An attempt parked before segments were recorded stays without them after
+// it resumes, rather than reporting a partial resume-to-finish segment.
+func TestProductionPreUpgradeParkedRunStaysSegmentless(t *testing.T) {
+	ctx := context.Background()
+	f := waitFixture(t, "reopen", waitOptions(true))
+	d := f.Driver.(*waitDriver)
+	work := seedSchedulerWork(t, f, "segments-upgrade")
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "segments-upgrade"}
+	attempt, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(10 * time.Second)
+	registerWait(t, f, attempt.Lease, "segments-upgrade-wait", key, true, 1)
+	// The attempt state as an older binary wrote it: no segments.
+	h := sha256.Sum256([]byte(fmt.Sprintf("%d:%s", len(attempt.Lease.ExecutionID), attempt.Lease.ExecutionID)))
+	stateKey := hex.EncodeToString(h[:])
+	err = f.Store.Transact(ctx, storage.Guard{Now: f.Clock.Now()}, func(tx storage.Tx) error {
+		b, e := tx.Get("core.scheduler.attempts", stateKey)
+		if e != nil {
+			return e
+		}
+		var state map[string]json.RawMessage
+		if e = json.Unmarshal(b, &state); e != nil {
+			return e
+		}
+		if _, ok := state["Segments"]; !ok {
+			return fmt.Errorf("attempt state has no Segments: %s", b)
+		}
+		delete(state, "Segments")
+		b, _ = json.Marshal(state)
+		return tx.Put("core.scheduler.attempts", stateKey, b)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(time.Hour)
+	requireAccept(t, f, "segments-upgrade-wake", &key)
+	if err = d.Wake("segments-upgrade-wait"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(5 * time.Second)
+	if err = d.scheduler.Complete(ctx, resumed.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	var r runtime.Run
+	routingRead(t, f, func(tx storage.Tx) error {
+		var e error
+		r, e = runtime.RunInTx(tx, attempt.Lease.ExecutionID)
+		return e
+	})
+	if len(r.Segments) != 0 || r.ActiveTime != 0 {
+		t.Fatalf("pre-upgrade run gained partial segments: %+v active %s", r.Segments, r.ActiveTime)
 	}
 }
