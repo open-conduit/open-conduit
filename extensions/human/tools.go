@@ -172,7 +172,7 @@ func (t *Tools) ask(ctx context.Context, a extension.Authority, in domain.Payloa
 		if err != nil {
 			return err
 		}
-		rec = Ask{ID: id, Scope: a.ScopeID, Work: a.WorkID, Provider: entry.Name, Question: input.Question, Options: input.Options,
+		rec = Ask{ID: id, Scope: a.ScopeID, Work: a.WorkID, Execution: a.ExecutionID, Provider: entry.Name, Question: input.Question, Options: input.Options,
 			Context: input.Context, Deadline: deadline, Responders: entry.Config.Responders, Surfaces: entry.Config.Surfaces,
 			AskedAt: now, Sequence: seq, State: StateOpen}
 		if err = putAsk(tx, rec); err != nil {

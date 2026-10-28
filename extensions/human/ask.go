@@ -42,20 +42,22 @@ const (
 // Ask is one question's record. It stays in Open Conduit's store: nothing
 // in it is projected to the Work's source.
 type Ask struct {
-	ID       string    `json:"id"`
-	Scope    domain.ID `json:"scope"`
-	Work     domain.ID `json:"work"`
-	Provider string    `json:"provider"`
-	Question string    `json:"question"`
-	Options  []string  `json:"options,omitempty"`
-	Context  string    `json:"context,omitempty"`
-	Deadline time.Time `json:"deadline,omitzero"`
+	ID    string    `json:"id"`
+	Scope domain.ID `json:"scope"`
+	Work  domain.ID `json:"work"`
+	// Execution is the asking attempt, whose wait carries the ask.
+	Execution domain.ID `json:"execution,omitempty"`
+	Provider  string    `json:"provider"`
+	Question  string    `json:"question"`
+	Options   []string  `json:"options,omitempty"`
+	Context   string    `json:"context,omitempty"`
+	Deadline  time.Time `json:"deadline,omitzero"`
 	// Responders and Surfaces are the entry's at the time of asking.
 	Responders []string  `json:"responders"`
 	Surfaces   []string  `json:"surfaces"`
 	AskedAt    time.Time `json:"asked_at"`
-	// Sequence is the acceptance watermark when the ask was made: the ask's
-	// wait and its answers all come after it.
+	// Sequence is the acceptance watermark when the ask was made: its
+	// answers all come after it.
 	Sequence uint64 `json:"sequence"`
 	State    string `json:"state"`
 	Answer   *Given `json:"answer,omitempty"`
@@ -139,18 +141,29 @@ func latestAsk(tx storage.Tx, work domain.ID) (Ask, error) {
 }
 
 // askWait is the asking Work's wait for a, when it has registered: the
-// wait declared after the ask that wakes only on its answer.
+// asking attempt's wait, registered at or after the ask, that wakes only on
+// its answer, preferring one still active. The wait's watermark is the
+// attempt's acknowledged input, which can come before a.Sequence (an Event
+// accepted while the turn ran), so it does not tell the wait apart.
 func askWait(tx storage.Tx, a Ask) (domain.Wait, bool, error) {
 	waits, err := tx.ListWaits(a.Work)
 	if err != nil {
 		return domain.Wait{}, false, err
 	}
+	var found domain.Wait
+	ok := false
 	for _, w := range waits {
-		if w.AfterSequence >= a.Sequence && slices.Equal(w.Match.Types, []string{TypeAnswered}) {
+		if !slices.Equal(w.Match.Types, []string{TypeAnswered}) || w.CreatedAt.Before(a.AskedAt) || a.Execution != "" && w.ExecutionID != a.Execution {
+			continue
+		}
+		if w.State == domain.WaitActive {
 			return w, true, nil
 		}
+		if !ok {
+			found, ok = w, true
+		}
 	}
-	return domain.Wait{}, false, nil
+	return found, ok, nil
 }
 
 // expired reports whether the ask's deadline has passed.
