@@ -238,7 +238,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 			// message says what to free.
 			return e.preset(ctx, rn, "workspace_no_space", err.Error())
 		case err != nil || res.Dir == "":
-			return e.preset(ctx, rn, "workspace_unavailable", "workspace acquisition failed")
+			return e.preset(ctx, rn, "workspace_unavailable", unavailable(err))
 		}
 		workdir, layer = res.Dir, res.Env
 	}
@@ -624,3 +624,13 @@ var _ interface {
 	extension.ResumeExecutor
 	extension.ForgetExecutor
 } = (*Executor)(nil)
+
+// unavailable is the workspace_unavailable summary: the provider's reason in
+// one line, so the run's history and tracker say why without the run's log.
+func unavailable(err error) string {
+	if err == nil {
+		return "workspace acquisition failed"
+	}
+	line, _, _ := strings.Cut(strings.TrimSpace(err.Error()), "\n")
+	return "workspace acquisition failed: " + line
+}
