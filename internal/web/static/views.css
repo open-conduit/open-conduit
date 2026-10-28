@@ -1,5 +1,9 @@
 /* ── Runs ──────────────────────────────────────────────── */
 
+.runs [hidden] {
+  display: none !important;
+}
+
 .rail {
   display: grid;
   grid-template-columns: repeat(7, minmax(0, 1fr));
@@ -20,6 +24,11 @@
   align-items: baseline;
   position: relative;
   color: var(--ink-2);
+}
+a.rail-cell,
+.subrail a,
+a.token {
+  text-decoration: none;
 }
 .rail-cell:last-child {
   border-right: 0;
@@ -78,7 +87,8 @@
   color: var(--ink-3);
   margin-right: 6px;
 }
-.subrail button {
+.subrail button,
+.subrail a {
   border: 1px solid transparent;
   background: none;
   padding: 3px 9px;
@@ -87,15 +97,18 @@
   color: var(--ink-2);
   font-size: var(--t-small);
 }
-.subrail button span {
+.subrail button span,
+.subrail a span {
   font-family: var(--font-mono);
   color: var(--ink-3);
   margin-left: 3px;
 }
-.subrail button:hover:not(:disabled) {
+.subrail button:hover:not(:disabled),
+.subrail a:hover {
   background: var(--hover);
 }
-.subrail button.is-on {
+.subrail button.is-on,
+.subrail a.is-on {
   border-color: var(--ink);
   color: var(--ink);
   background: var(--sheet);
