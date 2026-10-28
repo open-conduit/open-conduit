@@ -72,7 +72,11 @@ An existing config may be half done. Build on it rather than starting over: read
 A daemon that has run keeps a state directory (`{{bin}} state check` names it and, with the daemon stopped, checks it; `{{bin}} service status` shows whether a service runs it). What the daemon does then comes from its stored generation, not the file. Even when the owner asks to start from scratch, that directory holds their history, claims and unfinished Work, so never delete it or edit its database: change the configuration through `config apply` instead.
 
 - **The daemon runs:** `{{bin}} doctor`'s `config` line says whether the active generation matches the file. Validate the finished config with `config validate` and activate it with `config apply`.
-- **It is stopped, or a service restarts it in a loop:** read the end of `service.log` (`service status` prints its path), or ask the owner for the error `serve` printed when they last ran it. If it says `configuration: invalid configuration` while `config check` passes on the file, the stored generation no longer validates, typically because an upgrade removed an operation or field it names. Explain that to the owner, have them back up the state directory, and look in `{{bin}} --help` and the release notes for a way to replace the stored generation. Without one, stop there and tell them why, rather than inventing a workaround in its database.
+- **It is stopped, or a service restarts it in a loop:** read the end of `service.log` (`service status` prints its path), or ask the owner for the error `serve` printed when they last ran it. If it says `configuration: invalid configuration` while `config check` passes on the file, the stored generation no longer validates, typically because an upgrade removed an operation or field it names. Explain that to the owner and have them back up the state directory first. Then:
+  - **`config check` passes on the file:** make sure the file holds the configuration they want, then restart the daemon (or let the service restart it). At start it adopts the file as the next generation and logs a warning saying which stored generation it replaced and why.
+  - **Both are invalid:** `serve` prints both errors, the stored generation's and the file's. Fix the file using the names the errors give (for example `github.correction, github.problem`), check it with `config check`, and restart.
+
+  Never edit the state directory's database to get past either case.
 
 ### Integrations beyond GitHub
 
