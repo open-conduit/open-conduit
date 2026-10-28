@@ -166,10 +166,19 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	}
 	defer errLog.Close()
 	// The workspace: the binding's resource (a work worktree the session's
-	// transcript is tied to), or a private directory stable for the Work.
+	// transcript is tied to), the configured dir used as-is, or a private
+	// directory stable for the Work.
 	workdir := filepath.Join(e.o.StateDir, "work", hashKey(string(r.Work.ID)))
 	var layer map[string]string
-	if r.Context.Resources != nil {
+	if cfg.Dir != "" && r.Context.Resources != nil {
+		return e.preset(ctx, rn, cfg.StatusSchema, "invalid_config", "a binding with a resource cannot also set dir; remove one", nil)
+	}
+	if cfg.Dir != "" {
+		if !isDir(cfg.Dir) {
+			return e.preset(ctx, rn, cfg.StatusSchema, "workspace_unavailable", "the binding's dir is not an existing directory", nil)
+		}
+		workdir = cfg.Dir
+	} else if r.Context.Resources != nil {
 		res, err := e.workspace(ctx, r, cfg, prev, errLog)
 		if res.Ref != "" {
 			_ = writeJSON(filepath.Join(dir, "workspace.json"), workspaceRecord{Ref: res.Ref, Dir: res.Dir, Schema: res.Data.Schema, Data: res.Data.Data, Kind: res.Kind, Summary: res.Summary})

@@ -67,7 +67,7 @@ func TestConfigValidation(t *testing.T) {
 	for _, bad := range []string{
 		`{"unknown":1}`, `{"permission_mode":"yolo"}`, `{"playbook":"../x"}`, `{"plugin_dir":"rel"}`,
 		`{"env":{"OS_TOKEN":"x"}}`, `{"pass_env":["OS_ENDPOINT"]}`, `{"cold_turns":"draw"}`, `{"handoff_minutes":-1}`,
-		`{"extra_args":["--mcp-config","x"]}`, `{"extra_args":["--resume"]}`, `{} {}`,
+		`{"extra_args":["--mcp-config","x"]}`, `{"extra_args":["--resume"]}`, `{} {}`, `{"dir":"rel"}`, `{"dir":"/a/../b"}`, `{"dir":"/no/such/folder"}`,
 	} {
 		if err := e.ValidateConfig(json.RawMessage(bad), nil); !errors.Is(err, claudecode.ErrConfig) {
 			t.Errorf("%s accepted: %v", bad, err)
@@ -632,6 +632,47 @@ func TestWorkspaceAndResume(t *testing.T) {
 	}
 	if p := h.prompts(); !strings.Contains(p[1], "### github.checks.passed #7") {
 		t.Fatalf("wake prompt %q", p[1])
+	}
+}
+
+// TestDirRunsSessionsInTheFolder: a workspace-free binding with dir runs
+// every Work's session in that folder as-is, and refuses to run when the
+// folder is gone or the binding also has a resource.
+func TestDirRunsSessionsInTheFolder(t *testing.T) {
+	h := newHarness(t)
+	h.mode("review")
+	e := h.executor()
+	folder := filepath.Join(h.root, "support")
+	if err := os.MkdirAll(folder, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := e.ValidateConfig(json.RawMessage(`{"dir":`+strconv.Quote(folder)+`}`), nil); err != nil {
+		t.Fatalf("an existing folder rejected: %v", err)
+	}
+	want, _ := filepath.EvalSymlinks(folder)
+	for i, work := range []string{"work/a", "work/b"} {
+		r, _ := h.request(work, "exec-"+work, 1, map[string]any{"dir": folder})
+		if res := h.run(e, r); res.Outcome.Kind != domain.OutcomeHandoff {
+			t.Fatalf("%s: outcome %+v", work, res.Outcome)
+		}
+		if cwd, _ := os.ReadFile(filepath.Join(h.fake, "cwd")); strings.TrimSpace(string(cwd)) != want {
+			t.Fatalf("%s ran in %q, want %q", work, cwd, want)
+		}
+		if inv := h.invocations(); len(inv) != i+1 {
+			t.Fatalf("invocations %v", inv)
+		}
+	}
+	r, _ := h.request("work/c", "exec-c", 1, map[string]any{"dir": folder})
+	r.Context.Resources = &fakeResources{dir: folder}
+	if res := h.run(e, r); res.Outcome.Kind != domain.OutcomeFailed || dataOf(t, res).Reason != "invalid_config" {
+		t.Fatalf("dir with a resource ran: %+v", res.Outcome)
+	}
+	r, _ = h.request("work/d", "exec-d", 1, map[string]any{"dir": filepath.Join(h.root, "gone")})
+	if res := h.run(e, r); res.Outcome.Kind != domain.OutcomeFailed || dataOf(t, res).Reason != "workspace_unavailable" {
+		t.Fatalf("a missing dir ran: %+v", res.Outcome)
+	}
+	if inv := h.invocations(); len(inv) != 2 {
+		t.Fatalf("refused turns started claude: %v", inv)
 	}
 }
 
