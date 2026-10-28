@@ -21,6 +21,11 @@ var (
 	ErrIngressBusy     = errors.New("ingress scan already running")
 	ErrScanLeaseLost   = errors.New("ingress scan lease expired or superseded")
 	ErrIngressProvider = errors.New("ingress provider failed")
+	// ErrIngressNamespaceOwned is a source namespace already stored for
+	// another Scope; ErrIngressNameTaken is a registration name already
+	// stored for another source. Both also match extension.ErrConflict.
+	ErrIngressNamespaceOwned = errors.New("ingress namespace belongs to another scope")
+	ErrIngressNameTaken      = errors.New("ingress name belongs to another source")
 )
 
 type IngressOptions struct {
@@ -129,7 +134,7 @@ func (i *Ingress) Register(ctx context.Context, name string, source extension.So
 		var registeredSource extension.Source
 		nameErr := getJSON(tx, "core.ingress.registration", identity(name), &registeredSource)
 		if nameErr == nil && registeredSource != source {
-			return extension.ErrConflict
+			return fmt.Errorf("%w: %w: %s is stored for namespace %s in scope %s", ErrIngressNameTaken, extension.ErrConflict, name, registeredSource.Namespace, registeredSource.ScopeID)
 		}
 		if nameErr != nil && !errors.Is(nameErr, storage.ErrNotFound) {
 			return nameErr
@@ -142,10 +147,20 @@ func (i *Ingress) Register(ctx context.Context, name string, source extension.So
 		var state ingressState
 		err := getJSON(tx, sourceNamespace(source), "state", &state)
 		if err == nil {
-			if state.Name != name || state.Source != source {
-				return extension.ErrConflict
+			if state.Source != source {
+				return fmt.Errorf("%w: %w: %s is stored for scope %s as %s", ErrIngressNamespaceOwned, extension.ErrConflict, source.Namespace, state.Source.ScopeID, state.Name)
 			}
-			return nil
+			if state.Name == name {
+				return nil
+			}
+			// The same namespace and Scope under a new name is a renamed
+			// configuration entry: the stored source, checkpoint and history
+			// move to the new name, and the old name is released.
+			if err := tx.Delete("core.ingress.registration", identity(state.Name)); err != nil && !errors.Is(err, storage.ErrNotFound) {
+				return err
+			}
+			state.Name = name
+			return putJSON(tx, sourceNamespace(source), "state", state)
 		}
 		if !errors.Is(err, storage.ErrNotFound) {
 			return err

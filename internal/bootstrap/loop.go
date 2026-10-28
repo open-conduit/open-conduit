@@ -322,6 +322,10 @@ func errorCode(err error) string {
 		return "executor_unavailable"
 	case errors.Is(err, extension.ErrUnauthorized):
 		return "unauthorized"
+	case errors.Is(err, runtime.ErrIngressNamespaceOwned):
+		return "ingress_namespace_owned"
+	case errors.Is(err, runtime.ErrIngressNameTaken):
+		return "ingress_name_taken"
 	case errors.Is(err, storage.ErrClaimed), errors.Is(err, storage.ErrLeaseLost):
 		return "authority_unavailable"
 	case errors.Is(err, storage.ErrConflict):
