@@ -102,6 +102,18 @@ type RouteMatchParams struct {
 	Handler string     `json:"handler"`
 	Input   RouteInput `json:"input"`
 }
+
+// RouteSamplesParams asks a handler for the sample Events it offers for a
+// route of a scope, written as of Now, the host's clock.
+type RouteSamplesParams struct {
+	Handler string    `json:"handler"`
+	Scope   Scope     `json:"scope"`
+	Route   Route     `json:"route"`
+	Now     time.Time `json:"now"`
+}
+type RouteSamplesResult struct {
+	Samples []RouteSample `json:"samples"`
+}
 type WorkKindTriggerParams struct {
 	Kind   string  `json:"kind"`
 	Inputs []Event `json:"inputs"`

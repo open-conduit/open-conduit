@@ -133,6 +133,33 @@ func TestExternalSlackRoundTrip(t *testing.T) {
 		t.Fatalf("the remote route started no conversation: %v", err)
 	}
 
+	// The package offers trace samples through route.samples, written as of
+	// the host's clock rather than its own.
+	hostNow := time.Date(2031, 3, 4, 5, 6, 7, 0, time.UTC)
+	var scope domain.Scope
+	if err := e.store.Transact(context.Background(), storage.Guard{Now: time.Now()}, func(tx storage.Tx) error {
+		var err error
+		scope, err = tx.Scope("support")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	sampler, ok := r.RouteHandler("slack").(extension.RouteSampler)
+	if !ok {
+		t.Fatal("a handler declared with samples is not a sampler")
+	}
+	samples := sampler.Samples(context.Background(), extension.SampleInput{Scope: scope, Route: scope.Routes[0], Now: hostNow})
+	if len(samples) == 0 || samples[0].Event.Type != sl.TypeMessageHuman {
+		t.Fatalf("samples through the subprocess: %+v", samples)
+	}
+	var mention sl.MessagePayload
+	if err := json.Unmarshal(samples[0].Event.Data.Data, &mention); err != nil || mention.TS != sl.TS(hostNow) {
+		t.Fatalf("the sample is not written by the host's clock: %+v %v", mention, err)
+	}
+	if listed, err := router.Samples(context.Background(), "support"); err != nil || len(listed) != len(samples) || listed[0].Handler != "slack" {
+		t.Fatalf("router samples: %+v %v", listed, err)
+	}
+
 	var reply extension.Operation
 	for _, op := range r.Registration().Operations {
 		if op.Name == sl.OpReply {

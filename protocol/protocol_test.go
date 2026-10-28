@@ -70,6 +70,7 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 	interfaces := map[string]reflect.Type{
 		"extension.Ingress":           reflect.TypeFor[extension.Ingress](),
 		"extension.RouteHandler":      reflect.TypeFor[extension.RouteHandler](),
+		"extension.RouteSampler":      reflect.TypeFor[extension.RouteSampler](),
 		"extension.Executor":          reflect.TypeFor[extension.Executor](),
 		"extension.RunHandle":         reflect.TypeFor[extension.RunHandle](),
 		"extension.InterruptExecutor": reflect.TypeFor[extension.InterruptExecutor](),
@@ -175,6 +176,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Recurrences, m.Provides.Exporters, m.Provides.Annotate, m.Provides.Actions, m.Provides.Panels = []string{"chat.calendar"}, true, true, true, true
 	m.Provides.Operations = append(m.Provides.Operations, protocol.OperationDecl{Name: "chat.wait", Kind: protocol.OperationWait}, protocol.OperationDecl{Name: "chat.note", Kind: protocol.OperationEmit, Commit: true})
 	m.Provides.DependencyFilter = true
+	m.Provides.Routes[0].Samples = true
 	m.Provides.WorkKinds = append(m.Provides.WorkKinds, protocol.WorkKindDecl{Kind: "chat.job", Standing: true, Trigger: true})
 	m.Provides.Executors[0].Name, m.Provides.Resources[0].Type = "chat-runner", "chat-ws"
 	if err := m.Validate(); err != nil {

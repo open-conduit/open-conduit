@@ -55,7 +55,7 @@ func Manifest() protocol.Manifest {
 		Connections: []protocol.TypeDecl{{Type: sl.Type}},
 		Extensions:  []protocol.ExtensionDecl{{Type: sl.Type, Ingress: true}},
 		Schemas:     []protocol.SchemaDecl{{Name: "slack.message", Versions: []int{1}}, {Name: "slack.message.removed", Versions: []int{1}}},
-		Routes:      []protocol.RouteDecl{{Handler: sl.Type}},
+		Routes:      []protocol.RouteDecl{{Handler: sl.Type, Samples: true}},
 		WorkKinds:   []protocol.WorkKindDecl{{Kind: sl.WorkKind}},
 		Tasks:       []protocol.TaskDecl{{Name: ProjectTask, IntervalSeconds: 5}},
 		Webhooks:    true,

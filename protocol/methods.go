@@ -55,6 +55,7 @@ var Methods = []Method{
 
 	// Routing and work kinds.
 	{Name: "route.match", Direction: HostToExtension, Provides: "routes", Contract: []string{"extension.RouteHandler.Match"}, UseCases: []string{"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection"}},
+	{Name: "route.samples", Direction: HostToExtension, Provides: "routes.samples", Contract: []string{"extension.RouteSampler.Samples"}, UseCases: []string{"slack"}},
 	{Name: "work_kind.trigger", Direction: HostToExtension, Provides: "work_kinds", InTransaction: true, Contract: []string{"host:runtime.WorkKindPolicy.Trigger"}, UseCases: []string{"schedule"}},
 	{Name: "recurrence.next", Direction: HostToExtension, Provides: "recurrences", InTransaction: true, Contract: []string{"host:runtime.RecurrenceFunc"}, UseCases: []string{"schedule", "introspection"}},
 
