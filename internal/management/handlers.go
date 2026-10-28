@@ -40,6 +40,32 @@ func (s *Server) health(c *call) (int, any, error) {
 	return 200, map[string]any{"state": state, "version": s.o.Version, "instance_id": s.o.InstanceID, "config_generation": u64(generation), "components": components}, nil
 }
 
+// Pool is one capacity pool's slots: the limit from settings (zero:
+// unbounded), the attempts holding a slot and the ready Work whose last
+// start this pool's limit held back.
+type Pool struct {
+	Name    string `json:"name"`
+	Setting string `json:"setting,omitempty"`
+	Limit   int    `json:"limit"`
+	InUse   int    `json:"in_use"`
+	Waiting int    `json:"waiting"`
+}
+
+func (s *Server) capacity(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	pools := []Pool{}
+	if s.o.Capacity != nil {
+		got, err := s.o.Capacity(c.ctx)
+		if err != nil {
+			return 0, nil, err
+		}
+		pools = append(pools, got...)
+	}
+	return 200, map[string]any{"pools": pools}, nil
+}
+
 func (s *Server) schema(c *call) (int, any, error) {
 	if err := noQuery(c); err != nil {
 		return 0, nil, err
