@@ -183,22 +183,38 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 	if err != nil || s.event.Routed {
 		return
 	}
-	scopeID, e := scopeForEvent(tx, s.event)
-	if e != nil {
+	if err = routeContext(tx, &s); err != nil {
+		return
+	}
+	w, e := routeOwner(tx, s.event.Event)
+	if e == nil {
+		s.work = &w
+	} else if !errors.Is(e, storage.ErrNotFound) {
 		return s, e
 	}
+	s.events, err = tx.UnroutedEvents(0, 0)
+	return
+}
+
+// routeContext fills in s.event's Scope chain and its effective routes and
+// bindings.
+func routeContext(tx storage.Tx, s *routeSnapshot) error {
+	scopeID, e := scopeForEvent(tx, s.event)
+	if e != nil {
+		return e
+	}
 	if scopeID == "" {
-		return s, storage.ErrInvalid
+		return storage.ErrInvalid
 	}
 	seen := map[domain.ID]bool{}
 	for scopeID != "" {
 		if seen[scopeID] {
-			return s, extension.ErrInvalid
+			return extension.ErrInvalid
 		}
 		seen[scopeID] = true
 		scope, e := tx.Scope(scopeID)
 		if e != nil {
-			return s, e
+			return e
 		}
 		s.scopes = append(s.scopes, scope)
 		scopeID = scope.ParentID
@@ -210,7 +226,7 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 		names := map[string]bool{}
 		for _, route := range level.Routes {
 			if route.Name == "" || names[route.Name] {
-				return s, extension.ErrInvalid
+				return extension.ErrInvalid
 			}
 			names[route.Name] = true
 		}
@@ -218,7 +234,7 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 		bindingNames := map[string]bool{}
 		for _, b := range level.Bindings {
 			if b.Name == "" || b.Executor == "" || bindingNames[b.Name] {
-				return s, extension.ErrInvalid
+				return extension.ErrInvalid
 			}
 			bindingNames[b.Name] = true
 			effectiveBindings[b.Name] = b
@@ -229,14 +245,7 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 		s.scope.Bindings = append(s.scope.Bindings, b)
 	}
 	sort.Slice(s.scope.Bindings, func(i, j int) bool { return s.scope.Bindings[i].Name < s.scope.Bindings[j].Name })
-	w, e := routeOwner(tx, s.event.Event)
-	if e == nil {
-		s.work = &w
-	} else if !errors.Is(e, storage.ErrNotFound) {
-		return s, e
-	}
-	s.events, err = tx.UnroutedEvents(0, 0)
-	return
+	return nil
 }
 func detachedInput(s routeSnapshot) extension.RouteInput {
 	a := s.event
@@ -411,10 +420,16 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 			return nil
 		}
 		if s.work != nil && s.work.State == domain.WorkWaiting {
+			// The Wait decides what the input does; the routes still say
+			// what the Work is, so its display follows the source.
+			display := r.displayOnly(ctx, s)
 			var handled bool
 			err := r.transact(ctx, nil, func(tx storage.Tx) error {
 				var e error
 				handled, e = routeWaitingInTx(tx, r.now(), r.options.CausalLimits, id)
+				if e == nil && handled {
+					e = putDisplayInTx(tx, *s.work, display)
+				}
 				return e
 			})
 			if err != nil {
