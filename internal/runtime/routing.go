@@ -183,12 +183,28 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 	if err != nil || s.event.Routed {
 		return
 	}
-	scopeID, e := scopeForEvent(tx, s.event)
-	if e != nil {
+	if err = routeContext(tx, &s); err != nil {
+		return
+	}
+	w, e := routeOwner(tx, s.event.Event)
+	if e == nil {
+		s.work = &w
+	} else if !errors.Is(e, storage.ErrNotFound) {
 		return s, e
 	}
+	s.events, err = tx.UnroutedEvents(0, 0)
+	return
+}
+
+// routeContext fills in s.event's Scope chain and its effective routes and
+// bindings.
+func routeContext(tx storage.Tx, s *routeSnapshot) error {
+	scopeID, e := scopeForEvent(tx, s.event)
+	if e != nil {
+		return e
+	}
 	if scopeID == "" {
-		return s, storage.ErrInvalid
+		return storage.ErrInvalid
 	}
 	if err = scopeSnapshot(tx, scopeID, &s); err != nil {
 		return
@@ -426,10 +442,16 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 			return nil
 		}
 		if s.work != nil && s.work.State == domain.WorkWaiting {
+			// The Wait decides what the input does; the routes still say
+			// what the Work is, so its display follows the source.
+			display := r.displayOnly(ctx, s)
 			var handled bool
 			err := r.transact(ctx, nil, func(tx storage.Tx) error {
 				var e error
 				handled, e = routeWaitingInTx(tx, r.now(), r.options.CausalLimits, id)
+				if e == nil && handled {
+					e = putDisplayInTx(tx, *s.work, display)
+				}
 				return e
 			})
 			if err != nil {
