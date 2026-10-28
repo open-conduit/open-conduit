@@ -652,7 +652,7 @@ func (s *Server) config(c *call) (int, any, error) {
 		if e == nil {
 			continue
 		}
-		sc := wireConfigScope{ID: string(e.ID), Name: e.Name, ParentID: string(e.ParentID), Enabled: e.Enabled, Extensions: []wireConfigExtension{}, Routes: []wireConfigRoute{}, Bindings: []wireConfigBinding{}}
+		sc := wireConfigScope{ID: string(e.ID), Name: e.Name, ParentID: string(e.ParentID), Enabled: e.Enabled, Source: e.Source, Extensions: []wireConfigExtension{}, Routes: []wireConfigRoute{}, Bindings: []wireConfigBinding{}}
 		for _, x := range e.Extensions {
 			t := reg.Extensions[x.Type]
 			wx := wireConfigExtension{Name: x.Name, Type: x.Type, Connection: x.Connection, Ingress: t.Ingress}

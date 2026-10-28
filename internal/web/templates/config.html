@@ -14,6 +14,7 @@
 {{range .Data.Scopes}}{{$f := .}}
 <section class="scope{{if not .Scope.Enabled}} off{{end}}">
   <h2>{{.Scope.Name}} <span class="from mono">{{.Scope.ID}}</span>{{with .Scope.ParentID}} <span class="from">inherits from <span class="mono">{{.}}</span></span>{{end}}{{if not .Scope.Enabled}} <span class="state s-cancelled">disabled</span>{{end}}</h2>
+  {{with .Scope.Source}}<p class="from">from <span class="mono">{{.}}</span></p>{{end}}
   <div class="scroll">
   <div class="flow">
     <h3>Sources</h3><span></span><h3>Routes <span class="from">tried in order</span></h3><span></span><h3>Runs on</h3>

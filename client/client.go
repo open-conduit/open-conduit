@@ -694,10 +694,13 @@ type ConfigConnection struct {
 	Type string `json:"type"`
 }
 type ConfigScope struct {
-	ID         string            `json:"id"`
-	Name       string            `json:"name"`
-	ParentID   string            `json:"parent_id,omitempty"`
-	Enabled    bool              `json:"enabled"`
+	ID       string `json:"id"`
+	Name     string `json:"name"`
+	ParentID string `json:"parent_id,omitempty"`
+	Enabled  bool   `json:"enabled"`
+	// Source is the included folder the scope comes from, or "" for the
+	// config file's own scopes.
+	Source     string            `json:"source,omitempty"`
 	Extensions []ConfigExtension `json:"extensions"`
 	Routes     []ConfigRoute     `json:"routes"`
 	Bindings   []ConfigBinding   `json:"bindings"`
