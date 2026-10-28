@@ -21,6 +21,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/observability"
 	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Installed extension packages (07-03). At start the daemon discovers
@@ -330,6 +331,19 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		CancelWork: func(ctx context.Context, work domain.ID, expected domain.Revision, reason, key string) (domain.ID, error) {
 			return d.current.Load().control.CancelWork(ctx, work, expected, reason, key)
 		},
+		WaitProgress: func(ctx context.Context, owner string, work domain.ID, progress string) error {
+			return d.waitProgress(owner)(ctx, work, progress)
+		},
+	}
+}
+
+// waitProgress sets the progress line of a Work's active Wait for owner,
+// the extension whose operation declared it (runtime.SetWaitProgressInTx).
+func (d *daemon) waitProgress(owner string) func(ctx context.Context, work domain.ID, progress string) error {
+	return func(ctx context.Context, work domain.ID, progress string) error {
+		return d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+			return runtime.SetWaitProgressInTx(tx, owner, work, progress)
+		})
 	}
 }
 

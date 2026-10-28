@@ -21,6 +21,13 @@ func (d *daemon) loop(ctx context.Context) error {
 	ticker := time.NewTicker(d.o.PollInterval)
 	defer ticker.Stop()
 	var lastSweep time.Time
+	// Open Work from before sources gave displays gets one from its
+	// history, once per store; a failure only leaves it without.
+	if n, err := d.current.Load().router.BackfillDisplays(ctx); err != nil && ctx.Err() == nil {
+		d.report("display_backfill", "", errorCode(err))
+	} else if n > 0 {
+		d.log.Info("work displays backfilled from history", "work", n)
+	}
 	for {
 		c := d.current.Load()
 		d.routePending(ctx, c)

@@ -189,7 +189,15 @@ type Wait struct {
 	WakeEventID             ID
 	// Description is what the Wait is for, in the waiting operation's words
 	// ("checks on PR #137"). Core stores it and never reads it.
-	Description          string `json:",omitempty"`
+	Description string `json:",omitempty"`
+	// Owner is the extension whose operation declared the Wait (a
+	// translated wait); "" for a builtin wait. Only the owner may set
+	// Progress, and only while the Wait is active.
+	Owner string `json:",omitempty"`
+	// Progress is the owner's latest one-line note on how the wait is going
+	// ("3 of 7 checks finished"). Core stores it and never reads it; it
+	// freezes once the Wait is woken or cancelled.
+	Progress             string `json:",omitempty"`
 	Revision             Revision
 	CreatedAt, UpdatedAt time.Time
 }

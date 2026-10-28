@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"reflect"
 	"strings"
 	"time"
@@ -597,6 +598,37 @@ func queueWaitInput(tx storage.Tx, work domain.ID, binding string, a domain.Acce
 }
 func (s *Scheduler) Wake(ctx context.Context, id domain.ID) error {
 	return s.transact(ctx, nil, func(tx storage.Tx) error { _, err := WakeWaitInTx(tx, s.now(), s.options.CausalLimits, id); return err })
+}
+
+// ErrNotWaiting refuses progress for Work with no active Wait.
+var ErrNotWaiting = fmt.Errorf("%w: no active wait", storage.ErrNotFound)
+
+// SetWaitProgressInTx sets the progress line of work's active Wait ("3 of 7
+// checks finished"), cut to one line within extension.MaxWaitProgress; ""
+// clears it. Only the extension whose operation declared the Wait (its
+// Owner) may: another's or a builtin Wait is extension.ErrUnauthorized, and
+// Work with no active Wait is ErrNotWaiting, so a woken or cancelled Wait's
+// progress stays as it was. Core never reads the text.
+func SetWaitProgressInTx(tx storage.Tx, owner string, work domain.ID, progress string) error {
+	waits, err := tx.ListWaits(work)
+	if err != nil {
+		return err
+	}
+	progress = extension.Clip(progress, extension.MaxWaitProgress)
+	for _, w := range waits {
+		if w.State != domain.WaitActive {
+			continue
+		}
+		if owner == "" || w.Owner != owner {
+			return extension.ErrUnauthorized
+		}
+		if w.Progress == progress {
+			return nil
+		}
+		w.Progress = progress
+		return tx.PutWait(w, w.Revision)
+	}
+	return ErrNotWaiting
 }
 
 // AliasAuthorization is supplied to trusted composition policy. The callback is

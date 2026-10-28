@@ -64,6 +64,7 @@ var Methods = []Method{
 	{Name: "operation.wait", Direction: HostToExtension, Provides: "operations.wait", Contract: []string{"extension.Operation.Wait", "extension.WaitPlan", "extension.Dependency"}, UseCases: []string{"github"}},
 	{Name: "operation.emit", Direction: HostToExtension, Provides: "operations.emit", Contract: []string{"extension.Operation.Emit", "extension.EmitPlan"}, UseCases: []string{"introspection"}},
 	{Name: "emit.commit", Direction: HostToExtension, Provides: "operations.commit", InTransaction: true, Contract: []string{"extension.EmitPlan.Commit", "extension.Emitted", "extension.EmitCommit"}, UseCases: []string{"introspection"}},
+	{Name: "wait.progress", Direction: ExtensionToHost, Provides: "operations.wait", Contract: []string{"host:runtime.SetWaitProgressInTx", "host:inproc.Host.WaitProgress"}, UseCases: []string{"github"}},
 	{Name: "dependency.filter", Direction: HostToExtension, Provides: "dependency_filter", InTransaction: true, Contract: []string{"extension.Registration.DependencyFilter"}, UseCases: []string{"github"}},
 	{Name: "event.render", Direction: HostToExtension, Provides: "render", Contract: []string{"host:renderEvents chain (<extension>.RenderEvent)"}, UseCases: []string{"github", "slack", "introspection"}},
 

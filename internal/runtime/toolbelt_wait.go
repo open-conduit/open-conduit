@@ -61,6 +61,9 @@ func (t *Toolbelt) declareTranslatedWait(ctx context.Context, record tokenRecord
 		if e != nil {
 			return e
 		}
+		// The declaring operation's extension owns the Wait: it alone may
+		// say how the wait is going (SetWaitProgressInTx).
+		decl.Wait.Owner = owner
 		latest, er := tx.LatestSequence()
 		if er != nil {
 			return er
