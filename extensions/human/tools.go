@@ -188,10 +188,12 @@ func (t *Tools) ask(ctx context.Context, a extension.Authority, in domain.Payloa
 		d := rec.Deadline
 		req.Timeout = &d
 	}
-	out := map[string]any{"asked": true, "next": "end your turn now; you are resumed with the answer"}
+	// The plan releases the execution's authority as soon as it is
+	// declared, so the agent can make no further call this turn.
+	out := map[string]any{"asked": true, "next": "end your turn now; any other call is refused until you are resumed with the answer"}
 	if !rec.Deadline.IsZero() {
 		out["deadline"] = rec.Deadline.Format(time.RFC3339)
-		out["next"] = "end your turn now; you are resumed with the answer, or at the deadline without one"
+		out["next"] = "end your turn now; any other call is refused until you are resumed with the answer, or at the deadline without one"
 	}
 	data, _ := json.Marshal(out)
 	return extension.WaitPlan{
