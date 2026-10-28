@@ -399,12 +399,25 @@ func (o *operator) serviceQuery(h *ServiceHost) (serviceState, error) {
 		if err != nil {
 			return s, nil // not loaded
 		}
+		// Only the service's own keys count: nested blocks such as the
+		// resource and jetsam coalitions carry a state of their own.
+		depth := 0
 		for _, line := range strings.Split(out, "\n") {
-			k, v, ok := strings.Cut(strings.TrimSpace(line), " = ")
+			line = strings.TrimSpace(line)
+			if strings.HasPrefix(line, "}") {
+				depth--
+				continue
+			}
+			if strings.HasSuffix(line, "{") {
+				depth++
+				continue
+			}
+			k, v, ok := strings.Cut(line, " = ")
 			switch {
-			case ok && k == "state":
+			case !ok || depth != 1:
+			case k == "state":
 				s.Running = v == "running"
-			case ok && k == "pid":
+			case k == "pid":
 				s.PID, _ = strconv.Atoi(v)
 			}
 		}
