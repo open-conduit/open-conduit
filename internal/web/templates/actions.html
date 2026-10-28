@@ -1,3 +1,167 @@
-{{/* Work actions: the Actions menu, row menus and dialogs (10-07). */}}
-{{define "work-actions"}}{{end}}
-{{define "row-actions"}}{{end}}
+{{/* Operator controls and extension actions on Work (actions.go).
+
+"work-actions" takes a workCtx {W workView; Page *page; Turn *turnInfo}:
+the Work page's primary action and its Actions menu.
+"row-actions" takes a rowCtx {W workView; Page *page}: a Runs row's
+inline action and its menu.
+Every item opens its confirmation: a dialog with script (app.js fetches
+/work/confirm?…&part=1), the confirmation page without. */}}
+
+{{define "work-actions"}}
+{{- with primary .W}}{{if .Enabled}}<a class="btn btn-primary btn-sm" href="{{confirmHref .ID $.W $.Page.Back}}" data-action-dialog>{{.Label}}</a>{{end}}{{end}}
+{{- template "action-menu" (dict "W" .W "Page" .Page "Trigger" "actions")}}
+{{end}}
+
+{{define "row-actions"}}
+{{- if eq .W.Disp.Kind "decision"}}<a class="btn btn-signal btn-xs" href="{{workHref .W.ID 0}}">Decide</a>
+{{- else}}{{with rowPrimary .W}}<a class="btn btn-xs" href="{{confirmHref .ID $.W $.Page.Back}}" data-action-dialog>{{.Label}}</a>{{end}}{{end}}
+{{- template "action-menu" (dict "W" .W "Page" .Page "Trigger" "kebab")}}
+{{end}}
+
+{{define "action-menu"}}{{$w := .W}}{{$back := .Page.Back}}
+<details class="menu-wrap">
+  <summary class="btn btn-quiet menu-trigger" aria-haspopup="menu" aria-label="Actions for {{workName $w}}">{{if eq .Trigger "kebab"}}<span class="kebab" aria-hidden="true">⋯</span>{{else}}<span class="btn-sm-label">Actions ▾</span>{{end}}</summary>
+  <div role="menu" class="menu menu-end">
+    {{- range $w.Actions}}
+    <a role="menuitem" class="menu-item" href="{{extHref . $w $back}}" data-action-dialog><span class="menu-label">{{.Label}}</span><span class="menu-hint">from {{providerName .Provider}}</span></a>
+    {{- end}}
+    {{- if $w.Actions}}<div class="menu-rule" role="separator"></div>{{end}}
+    {{- $cs := controls $w}}
+    {{- range $cs}}{{if not .Destructive}}{{template "menu-control" (dict "C" . "W" $w "Back" $back)}}{{end}}{{end}}
+    <div class="menu-rule" role="separator"></div>
+    {{- range $cs}}{{if .Destructive}}{{template "menu-control" (dict "C" . "W" $w "Back" $back)}}{{end}}{{end}}
+  </div>
+</details>
+{{end}}
+
+{{define "menu-control"}}{{with .C}}
+{{- if .Enabled}}<a role="menuitem" class="menu-item{{if .Destructive}} is-destructive{{end}}" href="{{confirmHref .ID $.W $.Back}}" data-action-dialog><span class="menu-label">{{.Label}}</span></a>
+{{- else}}<span role="menuitem" aria-disabled="true" class="menu-item{{if .Destructive}} is-destructive{{end}}"{{with .Why}} title="{{.}}"{{end}}><span class="menu-label">{{.Label}}</span>{{with .Why}}<span class="menu-why">{{.}}</span>{{end}}</span>{{end}}
+{{- end}}{{end}}
+
+{{/* A control's confirmation, from a dialogView: a <dialog> when Part,
+else the content of the confirmation page. */}}
+{{define "action-dialog"}}
+{{- if .Part}}<dialog class="dialog{{with .Tone}} tone-{{.}}{{end}}" aria-labelledby="dlg-title" data-action-dialog-el>{{end}}
+<div class="dialog-body">
+  <header class="dialog-head">
+    <h2 id="dlg-title">{{.Title}}</h2>
+    {{- if .Part}}<button type="button" class="btn btn-quiet btn-icon" data-close aria-label="Close">✕</button>{{end}}
+  </header>
+  {{- if ne .Action "ext"}}<p class="dialog-lede">{{.W.Title}}</p>{{end}}
+  {{- if .Err}}
+  <p class="callout">{{.Err}}</p>
+  <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Close")}}</footer>
+  {{- else}}{{template "dialog-content" .}}{{end}}
+</div>
+{{- if .Part}}</dialog>{{end}}
+{{end}}
+
+{{define "dialog-dismiss"}}{{if .D.Part}}<button type="button" class="btn" data-close autofocus>{{.Label}}</button>{{else}}<a class="btn" href="{{.D.Back}}">{{.Label}}</a>{{end}}{{end}}
+
+{{define "endpoint"}}<p class="endpoint"><code>{{.Call}}</code>{{if ne .Action "ext"}}<span>expected_revision {{.W.Revision}} · Idempotency-Key</span>{{else}}<span>Idempotency-Key</span>{{end}}</p>{{end}}
+
+{{define "dialog-hidden"}}<input type="hidden" name="csrf" value="{{.Page.CSRF}}"><input type="hidden" name="back" value="{{.Back}}"><input type="hidden" name="work" value="{{.W.ID}}">{{end}}
+
+{{define "dialog-content"}}{{$d := .}}{{$w := .W}}
+{{- if eq .Action "hold"}}
+<form method="post" action="/work/hold">{{template "dialog-hidden" .}}
+  <ul class="consequences">
+    <li><span>No turn starts or resumes while the hold is in place.</span></li>
+    <li><span>New events keep queueing and waits keep resolving, so the next turn sees everything that arrived meanwhile.</span></li>
+    <li><span>{{with .Parked}}Turn {{.Number}} stays parked; it cannot resume until you release.{{else}}Nothing is running now, so nothing is interrupted.{{end}}</span></li>
+  </ul>
+  <label class="field"><span>Reason · shown to anyone looking at this Work</span><input name="reason" autofocus placeholder="e.g. Waiting on a product decision" autocomplete="off"></label>
+  {{template "endpoint" .}}
+  <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Keep running")}}<button class="btn btn-primary">Hold</button></footer>
+</form>
+{{- else if eq .Action "release"}}
+<form method="post" action="/work/release">{{template "dialog-hidden" .}}
+  <ul class="consequences">
+    {{- with $w.Hold}}<li><span>Removes the hold placed {{since (parseTime .At)}}{{with .Reason}}: “{{.}}”{{end}}.</span></li>{{end}}
+    <li><span>Queued input then starts normally, when an agent slot is free.</span></li>
+  </ul>
+  {{template "endpoint" .}}
+  <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Keep holding")}}<button class="btn btn-primary" autofocus>Release</button></footer>
+</form>
+{{- else if eq .Action "retry"}}
+<form method="post" action="/work/retry">{{template "dialog-hidden" .}}
+  {{- with .LastFail}}{{if .Outcome}}{{if .Outcome.Summary}}
+  <div class="callout tone-fail"><strong>Last failure · turn {{.Number}}</strong><code>{{.Outcome.Summary}}</code></div>
+  {{- end}}{{end}}{{end}}
+  <ul class="consequences">
+    <li><span>Accepts a core.manual.retry control event and lets retry policy queue a new attempt.</span></li>
+    <li><span>{{with .Latest}}{{with .Retry}}The failure count ({{.FailureCount}}) resets; the retry budget is available again.{{else}}Retry state resets.{{end}}{{else}}Retry state resets.{{end}}</span></li>
+    <li><span>Inputs that arrived since the failure are presented to the new attempt.</span></li>
+    <li><span>If the cause is still there, it will fail the same way — check it is resolved first.</span></li>
+  </ul>
+  {{template "endpoint" .}}
+  <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Not yet")}}<button class="btn btn-primary" autofocus>Run again</button></footer>
+</form>
+{{- else if eq .Action "wake"}}
+<form method="post" action="/work/wake">{{template "dialog-hidden" .}}
+  <ul class="consequences">
+    <li><span>The event is accepted like any other declared event addressed to this Work.</span></li>
+    <li><span>If it matches the active Wait, the Work wakes and its next turn is queued. If not, it is recorded and nothing else happens — waking never forces state.</span></li>
+  </ul>
+  <label class="field"><span>Event type{{if .WaitTypes}} · from the active Wait{{end}}</span>
+    {{- if .WaitTypes}}<select name="type">{{range .WaitTypes}}<option>{{.}}</option>{{end}}</select>
+    {{- else}}<input name="type" required placeholder="a type the Wait matches" autocomplete="off">{{end}}</label>
+  {{template "endpoint" .}}
+  <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Cancel")}}<button class="btn btn-primary">Send event</button></footer>
+</form>
+{{- else if eq .Action "rebind"}}
+<form method="post" action="/work/rebind">{{template "dialog-hidden" .}}
+  <div class="callout tone-signal"><strong>Queued input is pinned to <code>{{.Pinned}}</code></strong> Generation {{or .Generation "—"}} no longer has that binding, so this Work cannot start.</div>
+  <ul class="consequences">
+    <li><span>Moves the queued input and its retry state to another enabled binding in the same scope.</span></li>
+    <li><span>Work never changes scope. The control event records both bindings and the generation.</span></li>
+  </ul>
+  {{- if .Bindings}}
+  <label class="field"><span>New binding in {{$w.ScopeID}}</span><select name="binding">{{range .Bindings}}<option value="{{.Name}}">{{.Name}} · {{.Executor}}</option>{{end}}</select></label>
+  <label class="field"><span>Reason</span><input name="reason" placeholder="{{.Pinned}} was removed in generation {{or .Generation "—"}}" autocomplete="off"></label>
+  {{template "endpoint" .}}
+  <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Cancel")}}<button class="btn btn-primary">Rebind</button></footer>
+  {{- else}}
+  <p class="quiet">The scope has no other binding to move it to. Add one to the configuration first.</p>
+  <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Close")}}</footer>
+  {{- end}}
+</form>
+{{- else if eq .Action "cancel-turn"}}{{with .Turn}}
+<form method="post" action="/run/cancel"><input type="hidden" name="csrf" value="{{$d.Page.CSRF}}"><input type="hidden" name="back" value="{{$d.Back}}"><input type="hidden" name="run" value="{{.ID}}">
+  <ul class="consequences">
+    <li><span>Fences attempt {{.Number}} and stops its process. Work done so far in the workspace is kept.</span></li>
+    <li><span>The Work stays open, but scheduling is held: <strong>an operator-cancelled turn is never retried automatically</strong>. Run it again when you are ready.</span></li>
+    <li><span>Its transcript and outputs remain inspectable.</span></li>
+  </ul>
+  {{template "endpoint" $d}}
+  <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" $d "Label" "Let it run")}}<button class="btn btn-danger">Cancel turn</button></footer>
+</form>
+{{- end}}
+{{- else if eq .Action "cancel-work"}}
+<form method="post" action="/work/cancel">{{template "dialog-hidden" .}}
+  <ul class="consequences">
+    <li><span><strong>This ends the Work permanently.</strong> It cannot be reopened; a new Event would need new Work.</span></li>
+    <li><span>{{if .Live}}Turn {{.Live.Number}} is running and will be stopped.{{else if .Parked}}Parked turn {{.Parked.Number}} is cancelled.{{else}}No turn is running.{{end}}</span></li>
+    <li><span>Its waits, timers and queued input are removed. Later events for it are recorded as terminal and ignored.</span></li>
+    {{- if $w.Actions}}<li><span>Actions extensions offer on it now ({{range $i, $a := $w.Actions}}{{if $i}}; {{end}}{{$a.Label}}{{end}}) stop being offered.</span></li>{{end}}
+    <li><span>Nothing is closed in the source for you; the source updates its own view of the Work from the cancellation.</span></li>
+  </ul>
+  <label class="field"><span>Reason</span><input name="reason" placeholder="e.g. Superseded by a newer issue" autocomplete="off"></label>
+  {{template "endpoint" .}}
+  <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Keep the Work")}}<button class="btn btn-danger">Cancel Work</button></footer>
+</form>
+{{- else if eq .Action "attach"}}
+<ul class="consequences">
+  <li><span>Attaching needs a terminal: the agent's session is an interactive process.</span></li>
+  <li><span>The command holds the Work, opens the session in its workspace, and releases the hold when you exit — so nothing resumes underneath you.</span></li>
+</ul>
+<div class="cmd"><code>open-conduit work attach {{$w.ID}}</code><button type="button" class="btn btn-quiet btn-xs" data-copy="open-conduit work attach {{$w.ID}}" hidden>Copy</button></div>
+<footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Done")}}</footer>
+{{- else if eq .Action "ext"}}
+<p class="dialog-lede">Offered by {{providerName .Ext.Provider}}. The extension checks the input and decides what happens; Open Conduit records the Event it produces.</p>
+{{template "action-control" .Ext}}
+{{template "endpoint" .}}
+{{- if not .Part}}<footer class="dialog-foot"><a class="btn" href="{{.Back}}">Back</a></footer>{{end}}
+{{- end}}
+{{end}}

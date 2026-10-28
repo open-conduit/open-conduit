@@ -66,6 +66,9 @@ func (s *Server) parse() error {
 		"source":   sourceLabel,
 		"now":      now,
 	}
+	for k, v := range s.actionFuncs() {
+		funcs[k] = v
+	}
 	s.pages = map[string]*template.Template{}
 	for _, name := range pageNames {
 		t, err := template.New("layout.html").Funcs(funcs).ParseFS(assets, append(shared, "templates/"+name+".html")...)

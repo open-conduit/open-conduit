@@ -3691,9 +3691,6 @@ details.binding[open] {
   gap: 8px;
   align-items: center;
 }
-.xchoice input {
-  margin: 0 4px 0 0;
-}
 @media (max-width: 1100px) {
   .flow-gap {
     display: none;
@@ -3701,4 +3698,48 @@ details.binding[open] {
 }
 [data-noscript][hidden] {
   display: none;
+}
+.xchoice {
+  position: relative;
+}
+/* Choices are radio inputs so they work without script; the input itself
+   is hidden and the label shows the choice. */
+.xchoice input {
+  position: absolute;
+  opacity: 0;
+  pointer-events: none;
+}
+.xchoice:has(input:checked) {
+  border-color: var(--ink);
+  box-shadow: inset 0 0 0 1px var(--ink);
+  background: var(--sheet);
+}
+.xchoice:has(input:focus-visible) {
+  outline: 2px solid var(--focus);
+  outline-offset: 2px;
+}
+
+/* Menu items are links (or, disabled, spans) rather than buttons. */
+a.menu-item,
+span.menu-item {
+  color: inherit;
+  text-decoration: none;
+}
+span.menu-item[aria-disabled='true'] {
+  cursor: default;
+}
+
+/* The confirmation page: a dialog's content on its own page, for a
+   browser without script. */
+.confirm-page .dialog-body {
+  max-width: 560px;
+  margin: 24px 0;
+  background: var(--sheet);
+  border: 1px solid var(--rule);
+  border-radius: var(--radius);
+}
+/* A Work named by a long key breaks rather than overflowing its dialog. */
+.dialog-head h2,
+.dialog-lede {
+  overflow-wrap: anywhere;
 }

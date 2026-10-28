@@ -295,3 +295,39 @@ if (live.length) {
     } catch (_) { /* the next tick tries again */ }
   }, 5000);
 }
+// Confirmations: a link marked [data-action-dialog] opens its confirmation
+// as a dialog, read fresh from the server, instead of the confirmation
+// page it links to. If that read fails the link is followed.
+document.addEventListener("click", async (e) => {
+  const a = e.target.closest && e.target.closest("a[data-action-dialog]");
+  if (!a || e.button !== 0 || e.metaKey || e.ctrlKey || e.shiftKey) return;
+  e.preventDefault();
+  const menu = a.closest("details.menu-wrap");
+  if (menu) menu.open = false;
+  try {
+    const res = await fetch(a.href + "&part=1", { credentials: "same-origin" });
+    if (!res.ok) throw new Error(String(res.status));
+    const holder = document.createElement("div");
+    holder.innerHTML = await res.text();
+    const d = holder.querySelector("dialog");
+    if (!d) throw new Error("no dialog");
+    document.body.append(d);
+    d.addEventListener("close", () => { d.remove(); a.focus(); });
+    d.querySelectorAll("[data-copy]").forEach((b) => { b.hidden = false; });
+    d.showModal();
+    d.querySelector("[autofocus]")?.focus();
+  } catch (_) {
+    location.href = a.href;
+  }
+});
+
+// Copy buttons: [data-copy] copies its value, shown only with script.
+document.querySelectorAll("[data-copy]").forEach((b) => { b.hidden = false; });
+document.addEventListener("click", (e) => {
+  const b = e.target.closest && e.target.closest("[data-copy]");
+  if (!b) return;
+  navigator.clipboard?.writeText(b.dataset.copy);
+  const was = b.textContent;
+  b.textContent = "Copied";
+  setTimeout(() => { b.textContent = was; }, 1400);
+});

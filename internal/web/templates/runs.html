@@ -175,7 +175,6 @@
   </span>
   <span role="cell" class="c-upd">{{since $w.Updated}}</span>
   <span role="cell" class="c-act">
-    {{- if eq $w.Disp.Kind "decision"}}<a class="btn btn-signal btn-xs" href="/work?id={{$w.ID}}">Decide</a>{{end}}
     {{- template "row-actions" .}}
   </span>
 </div>

@@ -1,29 +1,51 @@
-{{define "panels"}}{{range .}}{{$v := .}}
-<section class="panel">
-  <h2>{{.Title}} <span class="from">from {{.Provider}}</span></h2>
-  {{range .Sections}}
-  <div class="panel-section">
-    {{with .Title}}<h3>{{.}}</h3>{{end}}
-    {{with .Text}}<p class="text">{{.}}</p>{{end}}
-    {{with .Fields}}<dl class="facts">{{range .}}<dt>{{.Name}}</dt><dd>{{.Value}}</dd>{{end}}</dl>{{end}}
-    {{with .Table}}<div class="scroll"><table class="plain">
+{{/* What extensions contribute, drawn as data (extensions.go). "panels"
+takes []panelView, "panel" one panelView, "action-control" one actionView. */}}
+{{define "panels"}}{{range .}}{{template "panel" .}}{{end}}{{end}}
+
+{{define "panel"}}{{$v := .}}
+<section class="xpanel{{if .Prominent}} is-prominent{{end}}" aria-label="{{.Title}}">
+  <h2 class="xpanel-title">{{.Title}}</h2>
+  {{- range $i, $s := .Sections}}
+  <div class="xpanel-section">
+    {{- with .Title}}<h3>{{.}}</h3>{{end}}
+    {{- with .Text}}<div class="{{if and (eq $i 0) (not $s.Title)}}xpanel-lead{{else}}xpanel-text{{end}}">{{range paras .}}<p>{{.}}</p>{{end}}</div>{{end}}
+    {{- with .Fields}}<dl class="xpanel-fields">{{range .}}<div><dt>{{.Name}}</dt><dd>{{.Value}}</dd></div>{{end}}</dl>{{end}}
+    {{- with .Table}}<table class="xpanel-table">
       <thead><tr>{{range .Columns}}<th>{{.}}</th>{{end}}</tr></thead>
       <tbody>{{range .Rows}}<tr>{{range .}}<td>{{.}}</td>{{end}}</tr>{{end}}</tbody>
-    </table></div>{{end}}
-    {{with .Links}}<ul class="panel-links">{{range .}}<li><a href="{{.URL}}" rel="noopener noreferrer" target="_blank">{{.Label}}</a></li>{{end}}</ul>{{end}}
-    {{range .Actions}}
-    <form method="post" action="/actions" class="action"{{if not .Prompt}} data-confirm="{{.Label}}?"{{end}}>
-      <input type="hidden" name="csrf" value="{{$v.Page.CSRF}}"><input type="hidden" name="back" value="{{$v.Page.Back}}">
-      {{if $v.WorkID}}<input type="hidden" name="work" value="{{$v.WorkID}}">{{else}}<input type="hidden" name="scope" value="{{$v.ScopeID}}">{{end}}
-      <input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">
-      {{if .Choices}}<p class="choices-label">{{.Label}}</p>
-      <div class="choices">{{range .Choices}}<button name="input" value="{{.}}">{{.}}</button>{{end}}</div>
-      {{else}}{{if .Prompt}}<label>{{.Label}}
-        <textarea name="input" rows="3" placeholder="{{.Prompt}}" aria-label="{{.Prompt}}"></textarea></label>{{end}}
-      <button class="primary">{{if .Prompt}}Send{{else}}{{.Label}}{{end}}</button>{{end}}
-    </form>
-    {{end}}
+    </table>{{end}}
+    {{- with .Links}}<p class="xpanel-links">{{range .}}<a href="{{.URL}}" target="_blank" rel="noopener noreferrer">{{.Label}} ↗</a>{{end}}</p>{{end}}
+    {{- range .Actions}}{{template "action-control" (actionIn . $v)}}{{end}}
   </div>
-  {{end}}
+  {{- end}}
+  <p class="xpanel-from">From {{providerName .Provider}}</p>
 </section>
-{{end}}{{end}}
+{{end}}
+
+{{/* One action, inline: a button without a prompt; a text box with one;
+with choices, a choice is selected first and sent second, since an
+action's Event cannot be taken back. */}}
+{{define "action-control"}}
+<form method="post" action="/actions" class="xaction">
+  <input type="hidden" name="csrf" value="{{.Page.CSRF}}"><input type="hidden" name="back" value="{{.Return}}">
+  {{- if .WorkID}}<input type="hidden" name="work" value="{{.WorkID}}">{{else}}<input type="hidden" name="scope" value="{{.ScopeID}}">{{end}}
+  <input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">
+  {{- if not .Prompt}}
+  <button class="btn btn-primary">{{.Label}}</button>
+  {{- else if .Choices}}
+  <p class="xaction-label">{{.Label}}</p>
+  <div class="xchoices" role="radiogroup" aria-label="{{.Label}}">
+    {{- range .Choices}}<label class="xchoice"><input type="radio" name="input" value="{{.}}" required><span>{{.}}</span></label>{{end}}
+  </div>
+  <div class="xaction-foot">
+    <button class="btn btn-signal">Send</button>
+    <span class="xaction-note">Invokes <code>{{.ID}}</code> on {{providerName .Provider}}</span>
+  </div>
+  {{- else}}
+  <label class="field">
+    <span>{{.Hint}}</span>
+    <span class="xaction-row"><input name="input" required autocomplete="off"><button class="btn btn-primary">Send</button></span>
+  </label>
+  {{- end}}
+</form>
+{{end}}

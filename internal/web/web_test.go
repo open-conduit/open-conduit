@@ -41,6 +41,8 @@ type fake struct {
 	invoked   []invoked
 	controls  []string
 	calls     []string
+	// actions: the reason each control was sent with.
+	reasons   []string
 	traced    []string
 	withCalls int
 }
@@ -94,19 +96,24 @@ func (f *fake) control(name, id, revision string) (client.ControlResult, error) 
 	f.controls = append(f.controls, name+" "+id+"@"+revision)
 	return client.ControlResult{EventID: "evt_" + name}, nil
 }
-func (f *fake) CancelExecution(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
+func (f *fake) CancelExecution(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
 	return f.control("cancel-execution", id, rev)
 }
-func (f *fake) CancelWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
+func (f *fake) CancelWork(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
 	return f.control("cancel", id, rev)
 }
-func (f *fake) RetryWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
+func (f *fake) RetryWork(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
 	return f.control("retry", id, rev)
 }
-func (f *fake) HoldWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
+func (f *fake) HoldWork(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
 	return f.control("hold", id, rev)
 }
-func (f *fake) ReleaseWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
+func (f *fake) ReleaseWork(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
 	return f.control("release", id, rev)
 }
 func (f *fake) Actions(_ context.Context, t client.ActionTarget) ([]client.Action, error) {
@@ -290,8 +297,8 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if !strings.Contains(rec.Body.String(), "answered (event evt_answer)") {
-		t.Fatal("flash not shown")
+	if b := rec.Body.String(); !strings.Contains(b, `<div class="toast-text">answered</div>`) || !strings.Contains(b, "event evt_answer") || !strings.Contains(b, "POST /v1/work/wrk_1/actions/human/answer") {
+		t.Fatalf("flash not shown:\n%s", b)
 	}
 
 	// A scope action, and a back that would leave the view goes home.
@@ -301,6 +308,29 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	}
 	if w := do(h, "POST", "/actions", url.Values{"csrf": {s.csrf}, "provider": {"x"}}, s); w.Code != http.StatusBadRequest {
 		t.Fatalf("no target: %d", w.Code)
+	}
+
+	// Every control needs the token and the view's own origin.
+	f.controls = nil
+	for _, path := range []string{"/work/hold", "/work/release", "/work/retry", "/work/cancel", "/work/wake", "/work/rebind", "/run/cancel"} {
+		form := url.Values{"work": {"wrk_1"}, "run": {"exe_2"}, "type": {"x.y"}, "binding": {"b"}}
+		if w := do(h, "POST", path, form, s); w.Code != http.StatusForbidden {
+			t.Fatalf("%s without csrf: %d", path, w.Code)
+		}
+		form.Set("csrf", s.csrf)
+		req := httptest.NewRequest("POST", path, strings.NewReader(form.Encode()))
+		req.Host = "open-conduit.localhost:7420"
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", "http://attacker.example")
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.sess})
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s cross origin: %d", path, rec.Code)
+		}
+	}
+	if len(f.controls) != 0 {
+		t.Fatalf("refused changes reached the daemon: %v", f.controls)
 	}
 }
 
