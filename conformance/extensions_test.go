@@ -31,6 +31,35 @@ func ingressFixture() conformance.IngressFixture {
 	return conformance.IngressFixture{Ingress: i, Source: extension.Source{Namespace: o.Event.Source, ScopeID: "scope"}, Delivery: extension.Delivery{ID: "webhook", ReceivedAt: now}, Canonical: o, OneShotType: one.Type}
 }
 func TestReferenceIngress(t *testing.T) { conformance.RunIngress(t, ingressFixture) }
+
+// A source whose families are all re-derivable needs no one-shot case, but
+// may not hide a lossy family or a one-shot event behind its absence.
+func TestReconcileFirstIngress(t *testing.T) {
+	reconcileFirst := func() conformance.IngressFixture {
+		f := ingressFixture()
+		i := f.Ingress.(*reference.Ingress)
+		i.Declaration.Families = i.Declaration.Families[:1]
+		i.PushResult.Events = nil
+		f.OneShotType = ""
+		return f
+	}
+	conformance.RunIngress(t, reconcileFirst)
+	lossy := reconcileFirst()
+	lossy.Ingress = ingressFixture().Ingress
+	if err := conformance.CheckIngress(lossy); err == nil {
+		t.Fatal("a lossy family passed without a one-shot case")
+	}
+	events := reconcileFirst()
+	events.Ingress.(*reference.Ingress).PushResult.Events = ingressFixture().Ingress.(*reference.Ingress).PushResult.Events
+	if err := conformance.CheckIngress(events); err == nil {
+		t.Fatal("a one-shot event passed without a declared family")
+	}
+	stray := reconcileFirst()
+	stray.OneShot = &extension.Delivery{ID: "stray"}
+	if err := conformance.CheckIngress(stray); err == nil {
+		t.Fatal("a one-shot delivery passed without a one-shot family")
+	}
+}
 func TestObservationDiffAndPushOverlap(t *testing.T) {
 	f := ingressFixture()
 	current := f.Canonical

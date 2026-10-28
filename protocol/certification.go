@@ -40,11 +40,13 @@ type Fixture struct {
 // IngressCase drives CheckIngress: Source names a source the fixture's
 // configure registers.
 type IngressCase struct {
-	Source      string      `json:"source"`
-	Delivery    Delivery    `json:"delivery"`
-	Canonical   Observation `json:"canonical"`
-	OneShotType string      `json:"one_shot_type"`
-	OneShot     *Delivery   `json:"one_shot,omitempty"`
+	Source    string      `json:"source"`
+	Delivery  Delivery    `json:"delivery"`
+	Canonical Observation `json:"canonical"`
+	// OneShotType is the declared non-re-derivable family push yields. It
+	// is empty only when every declared family is re-derivable.
+	OneShotType string    `json:"one_shot_type"`
+	OneShot     *Delivery `json:"one_shot,omitempty"`
 	// ReceiveTimeVaries declares that the package stamps reconcile
 	// observations with its own clock's receive time (Slack does), which a
 	// separate process cannot share with the fixture: the runner then

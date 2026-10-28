@@ -210,7 +210,7 @@ A package is certified when every applicable criterion passes. A declared ingres
 `certification.json` holds either an inline `fixture` or a `command`. The command prints the fixture as one JSON line and keeps serving (for example a fake service) until stdin closes. `{tmp}` and `{state}` in the fixture are replaced with the run's temporary and state directories. The format is `protocol.Fixture`:
 
 - `entries`, sent in `configure`, with their scopes, and `secrets` for the names bound to them;
-- one `ingress` case: source, delivery, canonical observation, one-shot family and delivery;
+- one `ingress` case: source, delivery, canonical observation, one-shot family and delivery. A source whose families are all re-derivable (reconcile recovers everything) leaves the one-shot family empty;
 - `routes`, `operations` (handler operations), one `executor` case and one `inject` case with its ready and finish files.
 
 `receive_time_varies` declares a package that stamps reconcile observations with its own clock (Slack does). The runner then compares observations without `received_at` and says so in the result.
