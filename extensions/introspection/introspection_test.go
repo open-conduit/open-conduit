@@ -161,3 +161,23 @@ func TestRegistration(t *testing.T) {
 		}
 	}
 }
+
+func TestSamplesTraceAgainstTheScope(t *testing.T) {
+	s := scope("eng", true, Type)
+	samples := Route{}.Samples(s, domain.Route{})
+	if len(samples) == 0 {
+		t.Fatal("no samples")
+	}
+	for _, x := range samples {
+		if x.ID == "" || x.Title == "" || x.Event.Type == "" {
+			t.Fatalf("incomplete sample: %+v", x)
+		}
+	}
+	d, err := Route{}.Match(context.Background(), extension.RouteInput{Event: domain.AcceptedEvent{Event: samples[0].Event}, Scope: s, Route: domain.Route{Config: domain.Payload{Data: []byte(`{}`)}}})
+	if err != nil || !d.Match || d.Kind != WorkKind {
+		t.Fatalf("the report sample must start Work: %+v, %v", d, err)
+	}
+	if got := (Route{}).Samples(scope("eng", true), domain.Route{}); len(got) != 0 {
+		t.Fatal("samples offered without an entry")
+	}
+}

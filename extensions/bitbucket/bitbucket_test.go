@@ -300,3 +300,22 @@ func TestIngressConformance(t *testing.T) {
 		return conformance.IngressFixture{Ingress: in, Source: src, Delivery: d, Canonical: snap.Observations[0], OneShotType: bitbucket.TypeDelivery}
 	})
 }
+
+func TestSamplesTraceAgainstTheScope(t *testing.T) {
+	meta, _ := json.Marshal(map[string]any{"extensions": []map[string]any{{"type": "bitbucket", "config": json.RawMessage(entry)}}})
+	scope := domain.Scope{ID: "proj", Config: domain.Payload{Data: meta}}
+	samples := bitbucket.Route{}.Samples(scope, domain.Route{})
+	if len(samples) == 0 {
+		t.Fatal("no samples")
+	}
+	work := &domain.Work{ID: "w1", CorrelationKeys: []domain.CorrelationKey{{Source: "jira/acme/proj", ExternalID: "issue/PROJ-7"}}}
+	for _, s := range samples {
+		if s.ID == "" || s.Title == "" || s.Event.Type == "" {
+			t.Fatalf("incomplete sample: %+v", s)
+		}
+		d, err := bitbucket.Route{}.Match(context.Background(), extension.RouteInput{Event: domain.AcceptedEvent{Event: s.Event}, Scope: scope, Work: work})
+		if err != nil || !d.Match {
+			t.Fatalf("%s must be input for the issue's Work: %+v, %v", s.ID, d, err)
+		}
+	}
+}

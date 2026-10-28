@@ -301,3 +301,20 @@ func TestJobDescribe(t *testing.T) {
 		t.Errorf("route: %q", got)
 	}
 }
+
+func TestSamplesTraceAgainstTheScope(t *testing.T) {
+	scope := scopeWith(demoEntry)
+	samples := sc.Route{}.Samples(scope, domain.Route{})
+	if len(samples) == 0 {
+		t.Fatal("no samples")
+	}
+	for _, s := range samples {
+		if s.ID == "" || s.Title == "" || s.Event.Type == "" {
+			t.Fatalf("incomplete sample: %+v", s)
+		}
+	}
+	d, err := sc.Route{}.Match(context.Background(), extension.RouteInput{Event: domain.AcceptedEvent{Event: samples[0].Event}, Scope: scope})
+	if err != nil || !d.Match || d.Kind != sc.WorkKind {
+		t.Fatalf("the first sample must start the job: %+v, %v", d, err)
+	}
+}
