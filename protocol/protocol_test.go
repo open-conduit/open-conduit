@@ -194,10 +194,6 @@ func TestManifestRejections(t *testing.T) {
 		t.Fatal(err)
 	}
 	cases := map[string][2]string{
-		// No storage-capability negotiation: KV is mandatory and implicit.
-		"storage capability": {`"webhooks": true,`, `"webhooks": true, "storage": {"kv": true},`},
-		// No semantic suitability claims, only mechanical labels.
-		"semantic label":       {`"setup":`, `"executors": [{"name": "chat-agent", "capabilities": {"toolbelt": "mcp", "coding": true}}], "setup":`},
 		"unknown toolbelt":     {`"setup":`, `"executors": [{"name": "chat-agent", "capabilities": {"toolbelt": "http"}}], "setup":`},
 		"unsupported protocol": {`"protocol": [1]`, `"protocol": [2]`},
 		"reserved name":        {`"name": "chat"`, `"name": "core"`},
@@ -223,6 +219,35 @@ func TestManifestRejections(t *testing.T) {
 		}
 		if _, err := protocol.ParseManifest([]byte(mutated)); !errors.Is(err, protocol.ErrManifest) {
 			t.Errorf("%s: accepted (%v)", name, err)
+		}
+	}
+}
+
+// A field this module does not know is refused as needing a newer Open
+// Conduit, not as a broken package: additive surfaces arrive in a release
+// without a protocol version bump. That includes any attempt to negotiate
+// storage (KV is mandatory and implicit) or to claim semantic suitability
+// (executors declare only mechanical labels).
+func TestManifestUnknownFieldNeedsNewerHost(t *testing.T) {
+	base, err := os.ReadFile(filepath.Join("testdata", "ingress-support.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for name, c := range map[string][2]string{
+		"provides field":     {`"webhooks": true,`, `"webhooks": true, "gadgets": [{"name": "chat-gadget"}],`},
+		"top-level field":    {`"name": "chat"`, `"name": "chat", "requires": "2.0"`},
+		"storage capability": {`"webhooks": true,`, `"webhooks": true, "storage": {"kv": true},`},
+		"semantic label":     {`"setup":`, `"executors": [{"name": "chat-agent", "capabilities": {"toolbelt": "mcp", "coding": true}}], "setup":`},
+	} {
+		mutated := strings.Replace(string(base), c[0], c[1], 1)
+		if mutated == string(base) {
+			t.Fatalf("%s: mutation did not apply", name)
+		}
+		_, err := protocol.ParseManifest([]byte(mutated))
+		if !errors.Is(err, protocol.ErrNewerManifest) || errors.Is(err, protocol.ErrManifest) {
+			t.Errorf("%s: %v", name, err)
+		} else if !strings.Contains(err.Error(), "newer Open Conduit") {
+			t.Errorf("%s: %q does not say a newer Open Conduit is needed", name, err)
 		}
 	}
 }

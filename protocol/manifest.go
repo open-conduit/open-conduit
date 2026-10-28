@@ -203,6 +203,12 @@ type ExternalStore struct {
 // ErrManifest wraps every manifest validation failure.
 var ErrManifest = errors.New("protocol: invalid manifest")
 
+// ErrNewerManifest refuses a manifest that uses a field this module does not
+// know. Additive surfaces arrive in a release without a protocol version
+// bump, so an unknown field means the package was built for a newer Open
+// Conduit, not that it is broken.
+var ErrNewerManifest = errors.New("protocol: manifest field from a newer Open Conduit")
+
 var (
 	namePattern  = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 	identPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
@@ -214,12 +220,16 @@ var (
 var reserved = map[string]bool{"core": true, "execution": true, "os": true, "open-conduit": true, "manual": true}
 
 // ParseManifest decodes a manifest strictly (unknown fields, including any
-// attempt to negotiate storage, are rejected) and validates it.
+// attempt to negotiate storage, are rejected with ErrNewerManifest) and
+// validates it.
 func ParseManifest(data []byte) (Manifest, error) {
 	var m Manifest
 	dec := json.NewDecoder(bytes.NewReader(data))
 	dec.DisallowUnknownFields()
 	if err := dec.Decode(&m); err != nil {
+		if field, ok := strings.CutPrefix(err.Error(), "json: unknown field "); ok {
+			return Manifest{}, fmt.Errorf("%w: %s", ErrNewerManifest, field)
+		}
 		return Manifest{}, fmt.Errorf("%w: %v", ErrManifest, err)
 	}
 	if dec.More() {

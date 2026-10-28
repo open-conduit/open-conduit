@@ -101,7 +101,7 @@ Packaged Go binaries also answer `package-manifest` and `package-certification` 
 | What | Range | Checked |
 | --- | --- | --- |
 | Protocol | The manifest's `protocol` lists every version the package speaks. This host speaks `protocol.Versions` (`[1]`). They are compatible when the lists intersect; the highest common version is used. | at install (`incompatible_protocol`) and at every start (`initialize` refusal) |
-| Host build | No host-version field. The protocol version is the contract. An additive surface (a new method or manifest field) is a new protocol version, and the host keeps speaking the previous one for at least one release. | — |
+| Host build | No host-version field. The protocol version changes only for a breaking change, and the host then keeps speaking the previous one for at least one release. An additive surface (a new method or manifest field) arrives in a release without a version bump, so a package that uses one needs that release of Open Conduit or later. An older host does not know the field and refuses the package as needing a newer Open Conduit. | at install and at every start (`needs_newer_host`) |
 | Own release | `version` is informational: shown in `list`, doctor and reports. | — |
 | KV layout | `kv_version` never goes down. A newer release migrates from the stored layout at configure. | at update (refused) and at start (`kv_downgrade`) |
 | Payload schemas | `schemas[].versions` lists what the release reads; the last is what it writes ([schema evolution](../extension-protocol/#event-payload-schema-evolution)). | every call (deterministic read gate) |
@@ -165,6 +165,7 @@ Every refusal and failure gets a stable code, a summary and a remedy (`extproc.D
 | --- | --- | --- |
 | `invalid_package` | Layout or manifest rule broken | `extension inspect DIR` names each rule |
 | `incompatible_protocol` | No common protocol version | Install a release built for this host's protocol, or upgrade Open Conduit |
+| `needs_newer_host` | The manifest uses a field this host does not know: the package was built for a newer Open Conduit | Upgrade Open Conduit to the release the package was built against or later, or install a release of the package built for this one |
 | `manifest_mismatch` | The process announced a different manifest | Binary and manifest are from different releases; reinstall |
 | `kv_downgrade` | Older KV layout than recorded | Roll forward, or restore a backup |
 | `registration_conflict` | A name owned by a first-party or another package | Remove the conflicting package |
@@ -260,7 +261,7 @@ A report states:
 21. Packages are directories under `<config dir>/extensions/<name>/`, read only at daemon start. Install, update, rollback and removal are offline CLI commands that take effect at the next serve; there is no hot load.
 22. Install stages and renames atomically, keeps exactly one previous release for rollback, refuses a lower `kv_version`, and refuses first-party names. A first-party package (Slack, shell) therefore cannot replace its in-process registration; the packages exist to prove and certify the boundary.
 23. Removal keeps durable state (KV, recorded layout, state directory, log) and is refused while the config uses the package, unless forced.
-24. Compatibility is the protocol version alone (no host-version range), with a policy of keeping the previous protocol version for at least one release after an additive change.
+24. Compatibility is the protocol version (no host-version range), which changes only for a breaking change, with a policy of keeping the previous protocol version for at least one release after one. Additive surfaces (new methods and manifest fields) ship without a bump; a package that uses one is refused by an older host with `needs_newer_host`.
 25. The SDK's final shape: `sdk.Extension` fields per surface, `sdk.Host`, `sdk.Store` (precondition-on-read optimistic commits; prefix ranges not protected) and `sdk.Artifacts`, plus `sdk.PackageCommand` for packaging.
 26. `secret.resolve` takes a `connection` field and `configure` entries carry `name` and `connection`, so a package reaches its connections' secrets without bootstrap glue (B05 scoping kept).
 27. Packages start before the configuration opens. A package that fails to start leaves its types unregistered, so a config using them fails validation and the daemon refuses to start with the diagnostic.
