@@ -38,6 +38,8 @@ type fake struct {
 	samples map[string][]client.RouteSample
 
 	healthErr error
+	// old is a daemon from before the list forms (#124).
+	old bool
 	invoked   []invoked
 	controls  []string
 	calls     []string

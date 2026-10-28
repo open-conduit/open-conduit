@@ -186,3 +186,19 @@ func TestWorldReadsListsAndOffersOnlyForOpenWork(t *testing.T) {
 		}
 	}
 }
+
+func TestWorldOnADaemonWithoutListForms(t *testing.T) {
+	f, s, _ := setup(t)
+	f.old = true
+	f.work["wrk_1"] = client.Work{ID: "wrk_1", State: "waiting", Revision: "7"}
+	f.work["wrk_3"] = client.Work{ID: "wrk_3", State: "completed", Revision: "9"}
+	w := s.world(context.Background())
+	if len(w.Errs) != 0 || len(w.Works) != 3 {
+		t.Fatalf("works %d errs %v", len(w.Works), w.Errs)
+	}
+	for _, v := range w.Works {
+		if v.ID == "wrk_1" && v.Disp.Kind != "decision" {
+			t.Fatalf("offers on waiting Work not read one by one: %+v", v.Disp)
+		}
+	}
+}

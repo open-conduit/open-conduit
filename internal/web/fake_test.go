@@ -46,10 +46,16 @@ func (f *fake) works(q url.Values, with bool) client.Page[client.Work] {
 }
 func (f *fake) Works(_ context.Context, q url.Values) (client.Page[client.Work], error) {
 	f.calls = append(f.calls, "works "+q.Get("state"))
+	if f.old && strings.Contains(q.Get("state"), ",") {
+		return client.Page[client.Work]{}, &client.Error{Status: 400, Code: "invalid_filter"}
+	}
 	return f.works(q, false), nil
 }
 func (f *fake) WorksWithActions(_ context.Context, q url.Values) (client.Page[client.Work], error) {
 	f.calls = append(f.calls, "works+actions "+q.Get("state"))
+	if f.old {
+		return client.Page[client.Work]{}, &client.Error{Status: 400, Code: "invalid_filter"}
+	}
 	return f.works(q, true), nil
 }
 func (f *fake) Events(_ context.Context, q url.Values) (client.Page[client.Event], error) {
