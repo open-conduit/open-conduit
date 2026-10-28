@@ -134,6 +134,9 @@ Commands:
   actions run PROVIDER ID (--scope S | --work W) [--input TEXT] [--key K]   invoke one as the local operator
   adapters [TYPE] [--json]   the registered integrations and the fields each takes
   route KEY [--scope S] [--limit N]   explain how a key's Events were routed (KEY: ENG-12, issue/ENG-12, #12 or an external ID)
+  route --trace TYPE|SAMPLE --scope S [--source SRC] [--key-source S --key-external-id X] [--work-id W] [--schema S --data JSON]
+                             dry-run how an Event would route now (nothing is recorded)
+  route --samples --scope S  the sample Events the scope's routes offer for --trace
   work wake ID --revision N --type T --delivery-id D --key-source S --key-external-id X [--schema S --data JSON] [--key K]
   events list [--scope-id --work-id --type --after-sequence] | events get ID | events chain ID
   events emit --scope-id S --type T --delivery-id D [--key-source S --key-external-id X] [--work-id W] [--causation-id E] [--schema S --data JSON] [--key K]

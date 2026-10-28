@@ -40,7 +40,13 @@ func allToolbeltOperations() []string {
 // production toolbelt and delivered through RunRequest.Context.
 func newToolbeltHarness(t *testing.T, mode string) *toolbeltHarness {
 	t.Helper()
-	o := routingOptions(routingHandlerFunc(routingDecision), "queue")
+	return newToolbeltHarnessRouting(t, mode, routingHandlerFunc(routingDecision))
+}
+
+// newToolbeltHarnessRouting is newToolbeltHarness with its own route handler.
+func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.RouteHandler) *toolbeltHarness {
+	t.Helper()
+	o := routingOptions(handler, "queue")
 	o.Capabilities = domain.Capabilities{Toolbelt: extension.ToolbeltCLI}
 	f, executor := schedulerFixture(t, mode, o)
 	base := f.Driver.(*schedulerDriver)

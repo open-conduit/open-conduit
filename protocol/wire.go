@@ -487,15 +487,16 @@ type RouteDecision struct {
 	CreateID   string `json:"create_id,omitempty"`
 	Kind       string `json:"kind,omitempty"`
 	AttachKeys []Key  `json:"attach_keys,omitempty"`
+	Reason     string `json:"reason,omitempty"`
 	// Display, on a match, replaces the Work's display; absent keeps it.
 	Display *Display `json:"display,omitempty"`
 }
 
 func FromRouteDecision(d extension.RouteDecision) RouteDecision {
-	return RouteDecision{Match: d.Match, CreateID: string(d.CreateID), Kind: d.Kind, AttachKeys: fromKeys(d.AttachKeys), Display: FromDisplay(d.Display)}
+	return RouteDecision{Match: d.Match, CreateID: string(d.CreateID), Kind: d.Kind, AttachKeys: fromKeys(d.AttachKeys), Reason: d.Reason, Display: FromDisplay(d.Display)}
 }
 func (d RouteDecision) Extension() extension.RouteDecision {
-	return extension.RouteDecision{Match: d.Match, CreateID: domain.ID(d.CreateID), Kind: d.Kind, AttachKeys: toKeys(d.AttachKeys), Display: d.Display.Domain()}
+	return extension.RouteDecision{Match: d.Match, CreateID: domain.ID(d.CreateID), Kind: d.Kind, AttachKeys: toKeys(d.AttachKeys), Reason: d.Reason, Display: d.Display.Domain()}
 }
 
 // Toolbelt operations.

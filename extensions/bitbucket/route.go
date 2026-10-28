@@ -63,26 +63,35 @@ func selfAuthored(a *tracker.Agent, w *domain.Work) bool {
 // Match selects input for existing Work.
 func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
-	if !strings.HasPrefix(e.Type, Type+".") || e.Type == TypeDelivery || in.Work == nil || e.CorrelationKey == nil {
-		return extension.RouteDecision{}, nil
+	if !strings.HasPrefix(e.Type, Type+".") || e.Type == TypeDelivery {
+		return extension.Skip("not a Bitbucket event about a pull request"), nil
+	}
+	if in.Work == nil {
+		return extension.Skip("a pull request never starts Work; its issue's Work owns it"), nil
+	}
+	if e.CorrelationKey == nil {
+		return extension.Skip("the event names no issue or pull request"), nil
 	}
 	if _, ok := settingsFor(in.Scope, e.Source); !ok {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("no bitbucket entry in this scope reads " + e.Source), nil
 	}
 	switch e.Type {
 	case TypePullMerged, TypePullClosed, TypeChecksPassed, TypeChecksFailed:
-		return extension.RouteDecision{Match: true}, nil
+		return extension.RouteDecision{Match: true, Reason: "news for the issue's agent"}, nil
 	case TypeCommentHuman, TypeCommentAgent:
 		var p CommentPayload
-		if json.Unmarshal(e.Data.Data, &p) != nil || p.Edited {
-			return extension.RouteDecision{}, nil
+		if json.Unmarshal(e.Data.Data, &p) != nil {
+			return extension.Skip("the comment data is unreadable"), nil
+		}
+		if p.Edited {
+			return extension.Skip("an edited comment is not news"), nil
 		}
 		if e.Type == TypeCommentAgent && selfAuthored(p.Agent, in.Work) {
-			return extension.RouteDecision{}, nil
+			return extension.Skip("the agent's own comment"), nil
 		}
-		return extension.RouteDecision{Match: true}, nil
+		return extension.RouteDecision{Match: true, Reason: "a comment for the issue's agent"}, nil
 	}
-	return extension.RouteDecision{}, nil
+	return extension.Skip(e.Type + " is not passed to the agent"), nil
 }
 
 // MaxDeliveryBytes bounds a webhook body.

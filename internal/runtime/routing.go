@@ -183,22 +183,44 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 	if err != nil || s.event.Routed {
 		return
 	}
-	scopeID, e := scopeForEvent(tx, s.event)
-	if e != nil {
+	if err = routeContext(tx, &s); err != nil {
+		return
+	}
+	w, e := routeOwner(tx, s.event.Event)
+	if e == nil {
+		s.work = &w
+	} else if !errors.Is(e, storage.ErrNotFound) {
 		return s, e
 	}
-	if scopeID == "" {
-		return s, storage.ErrInvalid
+	s.events, err = tx.UnroutedEvents(0, 0)
+	return
+}
+
+// routeContext fills in s.event's Scope chain and its effective routes and
+// bindings.
+func routeContext(tx storage.Tx, s *routeSnapshot) error {
+	scopeID, e := scopeForEvent(tx, s.event)
+	if e != nil {
+		return e
 	}
+	if scopeID == "" {
+		return storage.ErrInvalid
+	}
+	return scopeSnapshot(tx, scopeID, s)
+}
+
+// scopeSnapshot resolves the scope chain, its effective routes (root to leaf)
+// and its effective bindings into s.
+func scopeSnapshot(tx storage.Tx, scopeID domain.ID, s *routeSnapshot) error {
 	seen := map[domain.ID]bool{}
 	for scopeID != "" {
 		if seen[scopeID] {
-			return s, extension.ErrInvalid
+			return extension.ErrInvalid
 		}
 		seen[scopeID] = true
 		scope, e := tx.Scope(scopeID)
 		if e != nil {
-			return s, e
+			return e
 		}
 		s.scopes = append(s.scopes, scope)
 		scopeID = scope.ParentID
@@ -210,7 +232,7 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 		names := map[string]bool{}
 		for _, route := range level.Routes {
 			if route.Name == "" || names[route.Name] {
-				return s, extension.ErrInvalid
+				return extension.ErrInvalid
 			}
 			names[route.Name] = true
 		}
@@ -218,7 +240,7 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 		bindingNames := map[string]bool{}
 		for _, b := range level.Bindings {
 			if b.Name == "" || b.Executor == "" || bindingNames[b.Name] {
-				return s, extension.ErrInvalid
+				return extension.ErrInvalid
 			}
 			bindingNames[b.Name] = true
 			effectiveBindings[b.Name] = b
@@ -229,14 +251,7 @@ func snapshot(tx storage.Tx, id domain.ID) (s routeSnapshot, err error) {
 		s.scope.Bindings = append(s.scope.Bindings, b)
 	}
 	sort.Slice(s.scope.Bindings, func(i, j int) bool { return s.scope.Bindings[i].Name < s.scope.Bindings[j].Name })
-	w, e := routeOwner(tx, s.event.Event)
-	if e == nil {
-		s.work = &w
-	} else if !errors.Is(e, storage.ErrNotFound) {
-		return s, e
-	}
-	s.events, err = tx.UnroutedEvents(0, 0)
-	return
+	return nil
 }
 func detachedInput(s routeSnapshot) extension.RouteInput {
 	a := s.event
@@ -306,7 +321,10 @@ func (r *Router) binding(scope domain.Scope, name string) (RouteBinding, error) 
 	}
 	return RouteBinding{}, extension.ErrInvalid
 }
-func (r *Router) evaluate(ctx context.Context, s routeSnapshot) (p routePlan, err error) {
+
+// evaluate tries the routes in order and stops at the first match. record,
+// when set, sees each route's decision as it is made (a route trace).
+func (r *Router) evaluate(ctx context.Context, s routeSnapshot, record func(domain.Route, extension.RouteDecision)) (p routePlan, err error) {
 	p.event = s.event
 	for _, route := range s.routes {
 		h := r.options.Handlers[route.Handler]
@@ -333,6 +351,9 @@ func (r *Router) evaluate(ctx context.Context, s routeSnapshot) (p routePlan, er
 		d, e := h.Match(ctx, in)
 		if e != nil {
 			return p, e
+		}
+		if record != nil {
+			record(route, d)
 		}
 		if d.Match {
 			// A display is optional: one over the limits is dropped and
@@ -411,10 +432,16 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 			return nil
 		}
 		if s.work != nil && s.work.State == domain.WorkWaiting {
+			// The Wait decides what the input does; the routes still say
+			// what the Work is, so its display follows the source.
+			display := r.displayOnly(ctx, s)
 			var handled bool
 			err := r.transact(ctx, nil, func(tx storage.Tx) error {
 				var e error
 				handled, e = routeWaitingInTx(tx, r.now(), r.options.CausalLimits, id)
+				if e == nil && handled {
+					e = putDisplayInTx(tx, *s.work, display)
+				}
 				return e
 			})
 			if err != nil {
@@ -465,7 +492,7 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 		// Terminal ownership is final; late input cannot ask a handler to
 		// mutate it or become runnable through a new matching route.
 		if s.work == nil || !s.work.State.Terminal() {
-			p, err = r.evaluate(ctx, s)
+			p, err = r.evaluate(ctx, s, nil)
 			if err != nil {
 				return err
 			}
@@ -540,7 +567,7 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 					bs := s
 					bs.event = a
 					bs.work = projected
-					bp, e := r.evaluate(ctx, bs)
+					bp, e := r.evaluate(ctx, bs, nil)
 					if e != nil {
 						return e
 					}
@@ -652,55 +679,10 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 	if w != nil && w.State.Terminal() {
 		rec.Policy, rec.Reason = "terminal", "terminal_work"
 	} else if p.selected != nil && w != nil {
-		rec.Policy = p.selected.ActivePolicy
-		if rec.Policy == "" {
-			rec.Policy = "queue"
-		}
-		rec.Reason = "matched"
-		b, err := r.binding(scope, p.selected.Binding)
-		if err != nil {
-			return err
-		}
-		if rec.Policy == "inject" && !b.Capabilities.Inject || rec.Policy == "interrupt" && !b.Capabilities.Interrupt {
-			rec.Policy = b.Fallback
-			rec.Reason = "unsupported_control"
-		}
-		if w.State != domain.WorkRunning {
-			rec.Policy = "queue"
-		}
 		var target *domain.Execution
-		if rec.Policy == "inject" || rec.Policy == "interrupt" {
-			xs, err := tx.ListExecutions(w.ID)
-			if err != nil {
-				return err
-			}
-			for i := range xs {
-				if xs[i].State == domain.ExecutionRunning {
-					target = &xs[i]
-				}
-			}
-			if target == nil {
-				return storage.ErrConflict
-			}
-			pinned, pinErr := attemptState(tx, target.ID)
-			if pinErr != nil && !errors.Is(pinErr, storage.ErrNotFound) {
-				return pinErr
-			}
-			if pinErr == nil && (rec.Policy == "inject" && !pinned.Capabilities.Inject || rec.Policy == "interrupt" && !pinned.Capabilities.Interrupt) {
-				if b.Fallback == "" {
-					return extension.ErrUnsupported
-				}
-				rec.Policy, rec.Reason = b.Fallback, "target_control_unsupported"
-			}
-			if target.ExecutorBinding != rec.Binding {
-				// The old attempt retains its original binding. Config/attempt
-				// generation pinning is owned by the scheduler, never inferred
-				// from a new route's control-capable executor registration.
-				if b.Fallback == "" {
-					return extension.ErrUnsupported
-				}
-				rec.Policy, rec.Reason = b.Fallback, "target_binding_mismatch"
-			}
+		var err error
+		if rec.Policy, rec.Reason, target, err = r.policyInTx(tx, *p.selected, *w, scope); err != nil {
+			return err
 		}
 		if rec.Policy != "drop" {
 			input := QueuedInput{p.event.Event.ID, p.event.Sequence, p.selected.Binding}
@@ -722,6 +704,62 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 		return err
 	}
 	return tx.MarkRouted(rec.EventID, rec.WorkID, rec.Policy)
+}
+
+// policyInTx decides, without writing, what a selected route does with input
+// for nonterminal Work w: the effective policy, its reason, and the running
+// attempt an inject or interrupt targets. Routing records it; a route trace
+// reports it.
+func (r *Router) policyInTx(tx storage.Tx, route domain.Route, w domain.Work, scope domain.Scope) (policy, reason string, target *domain.Execution, err error) {
+	policy, reason = route.ActivePolicy, "matched"
+	if policy == "" {
+		policy = "queue"
+	}
+	b, err := r.binding(scope, route.Binding)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if policy == "inject" && !b.Capabilities.Inject || policy == "interrupt" && !b.Capabilities.Interrupt {
+		policy, reason = b.Fallback, "unsupported_control"
+	}
+	if w.State != domain.WorkRunning {
+		policy = "queue"
+	}
+	if policy != "inject" && policy != "interrupt" {
+		return policy, reason, nil, nil
+	}
+	xs, err := tx.ListExecutions(w.ID)
+	if err != nil {
+		return "", "", nil, err
+	}
+	for i := range xs {
+		if xs[i].State == domain.ExecutionRunning {
+			target = &xs[i]
+		}
+	}
+	if target == nil {
+		return "", "", nil, storage.ErrConflict
+	}
+	pinned, pinErr := attemptState(tx, target.ID)
+	if pinErr != nil && !errors.Is(pinErr, storage.ErrNotFound) {
+		return "", "", nil, pinErr
+	}
+	if pinErr == nil && (policy == "inject" && !pinned.Capabilities.Inject || policy == "interrupt" && !pinned.Capabilities.Interrupt) {
+		if b.Fallback == "" {
+			return "", "", nil, extension.ErrUnsupported
+		}
+		policy, reason = b.Fallback, "target_control_unsupported"
+	}
+	if target.ExecutorBinding != route.Binding {
+		// The old attempt retains its original binding. Config/attempt
+		// generation pinning is owned by the scheduler, never inferred
+		// from a new route's control-capable executor registration.
+		if b.Fallback == "" {
+			return "", "", nil, extension.ErrUnsupported
+		}
+		policy, reason = b.Fallback, "target_binding_mismatch"
+	}
+	return policy, reason, target, nil
 }
 func queueKey(work domain.ID, seq uint64) string {
 	return identity(string(work)) + fmt.Sprintf("/%020d", seq)

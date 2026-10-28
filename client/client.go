@@ -477,6 +477,66 @@ type EventRoute struct {
 	DisplayRefused string `json:"display_refused,omitempty"`
 }
 
+// TraceEvent is a hypothetical Event for a route trace.
+type TraceEvent struct {
+	Type           string   `json:"type"`
+	Source         string   `json:"source,omitempty"`
+	CorrelationKey *Key     `json:"correlation_key,omitempty"`
+	WorkID         string   `json:"work_id,omitempty"`
+	Data           *Payload `json:"data,omitempty"`
+}
+
+// RouteTrace explains how a hypothetical Event would route in a scope now:
+// each route in order with its verdict (match, skip, not_reached, bypassed) and the
+// handler's reason, then the effect.
+type RouteTrace struct {
+	ScopeID    string        `json:"scope_id"`
+	Generation string        `json:"generation"`
+	Work       *Work         `json:"work,omitempty"`
+	Routes     []RouteStep   `json:"routes"`
+	Effect     RouteEffect   `json:"effect"`
+	Also       []RouteEffect `json:"also,omitempty"`
+}
+
+type RouteStep struct {
+	Route   string `json:"route"`
+	Handler string `json:"handler"`
+	Binding string `json:"binding,omitempty"`
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// RouteEffect.Kind is start, queue, inject, interrupt, wake, drop or unmatched.
+type RouteEffect struct {
+	Kind    string `json:"kind"`
+	WorkID  string `json:"work_id,omitempty"`
+	Binding string `json:"binding,omitempty"`
+	Detail  string `json:"detail"`
+}
+
+// RouteSample is a named sample Event a scope's route handler offers.
+type RouteSample struct {
+	ID      string `json:"id"`
+	Title   string `json:"title"`
+	Route   string `json:"route"`
+	Handler string `json:"handler"`
+	TraceEvent
+}
+
+// TraceRoute dry-runs routing for e in scope; it accepts and records nothing.
+func (c *Client) TraceRoute(ctx context.Context, scope string, e TraceEvent) (out RouteTrace, err error) {
+	err = c.Do(ctx, "POST", "scopes/"+esc(scope)+"/route/trace", nil, e, "", &out)
+	return
+}
+
+// RouteSamples lists the sample Events the scope's route handlers offer.
+func (c *Client) RouteSamples(ctx context.Context, scope string) ([]RouteSample, error) {
+	out, err := get[struct {
+		Items []RouteSample `json:"items"`
+	}](c, ctx, "scopes/"+esc(scope)+"/route/samples")
+	return out.Items, err
+}
+
 func (c *Client) Executions(ctx context.Context, q url.Values) (Page[Execution], error) {
 	return list[Execution](c, ctx, "executions", q)
 }

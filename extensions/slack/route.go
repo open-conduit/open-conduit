@@ -92,48 +92,92 @@ func (s Settings) Starts(e domain.Event, p MessagePayload) bool {
 //   - Deletions are recorded but are not input.
 func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
-	if !strings.HasPrefix(e.Type, "slack.message.") || e.CorrelationKey == nil || e.CorrelationKey.Source != e.Source {
-		return extension.RouteDecision{}, nil
+	if !strings.HasPrefix(e.Type, "slack.message.") {
+		return extension.Skip("not a Slack message"), nil
+	}
+	if e.CorrelationKey == nil || e.CorrelationKey.Source != e.Source {
+		return extension.Skip("the message names no thread of its own source"), nil
 	}
 	s, ok := settingsFor(in.Scope, e.Source)
 	if !ok {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("no slack entry in this scope reads " + e.Source), nil
 	}
 	channel, _, ok := ParseThreadKey(e.CorrelationKey.ExternalID)
 	if !ok {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("the key is not a Slack thread"), nil
 	}
 	if len(in.Route.Config.Data) > 0 {
 		rc, err := ParseRoute(in.Route.Config.Data)
-		if err != nil || !rc.Selects(channel) {
-			return extension.RouteDecision{}, nil
+		if err != nil {
+			return extension.Skip("the route config is unreadable"), nil
+		}
+		if !rc.Selects(channel) {
+			return extension.Skip("channel " + channel + " is not one this route selects"), nil
 		}
 	}
 	if e.Type == TypeMessageRemoved || e.Type == TypeMessageDeleted || e.Type == TypeMessageBot {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("a removed, deleted or bot message is not input"), nil
 	}
 	var p MessagePayload
-	if e.Data.Schema != SchemaMessage || json.Unmarshal(e.Data.Data, &p) != nil {
-		return extension.RouteDecision{}, nil
+	if e.Data.Schema != SchemaMessage {
+		return extension.Skip("not a Slack message payload"), nil
+	}
+	if json.Unmarshal(e.Data.Data, &p) != nil {
+		return extension.Skip("the message data is unreadable"), nil
 	}
 	if in.Work == nil {
 		if !s.Starts(e, p) {
-			return extension.RouteDecision{}, nil
+			return extension.Skip(s.startRefusal(e, p)), nil
 		}
-		return extension.RouteDecision{Match: true, Kind: WorkKind, Display: Display(p)}, nil
+		return extension.RouteDecision{Match: true, Kind: WorkKind, Reason: s.startReason(), Display: Display(p)}, nil
 	}
 	switch e.Type {
 	case TypeMessageHuman:
-		d := extension.RouteDecision{Match: !p.Deleted}
-		if d.Match && p.Root && p.Edited != "" {
+		if p.Deleted {
+			return extension.Skip("the message was deleted"), nil
+		}
+		d := extension.RouteDecision{Match: true, Reason: "a person wrote in the thread"}
+		if p.Root && p.Edited != "" {
 			d.Display = Display(p) // the thread's first message was edited
 		}
 		return d, nil
 	case TypeMessageAgent:
 		self := p.Agent == nil || p.Agent.Work == "" || p.Agent.Work == string(in.Work.ID)
-		return extension.RouteDecision{Match: !self}, nil
+		if self {
+			return extension.Skip("the conversation's own reply"), nil
+		}
+		return extension.RouteDecision{Match: true, Reason: "another Work's reply in the thread"}, nil
 	}
-	return extension.RouteDecision{}, nil
+	return extension.Skip(e.Type + " is not passed to the agent"), nil
+}
+
+// startReason says what let a message start a conversation.
+func (s Settings) startReason() string {
+	if s.Start == StartMention {
+		return "a mention in a watched channel"
+	}
+	return "a new top-level message"
+}
+
+// startRefusal says why Starts refuses the message ("" when it admits it).
+func (s Settings) startRefusal(e domain.Event, p MessagePayload) string {
+	if e.Type != TypeMessageHuman {
+		return "only a person's message starts a conversation"
+	}
+	if p.Deleted {
+		return "the message was deleted"
+	}
+	written, ok := TSTime(p.TS)
+	if !ok {
+		return "the message has no readable time"
+	}
+	if e.ReceivedAt.Sub(written) > s.StartWindow {
+		return "the message is older than the start window"
+	}
+	if s.Start == StartMention {
+		return "the message does not mention the bot"
+	}
+	return "a reply, not a top-level message"
 }
 
 // mentionRe matches Slack's user, channel and group mention tokens.

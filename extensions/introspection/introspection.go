@@ -184,28 +184,34 @@ var _ extension.RouteHandler = Route{}
 // Match selects the route's Events.
 func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
-	if e.CorrelationKey == nil || e.CorrelationKey.Source != SourceNamespace(in.Scope.ID) || !Enabled(in.Scope) {
-		return extension.RouteDecision{}, nil
+	if e.CorrelationKey == nil {
+		return extension.Skip("the event names no report, run or fix"), nil
+	}
+	if e.CorrelationKey.Source != SourceNamespace(in.Scope.ID) {
+		return extension.Skip("not a key of this scope's introspection"), nil
+	}
+	if !Enabled(in.Scope) {
+		return extension.Skip("the scope has no introspection entry"), nil
 	}
 	cfg, err := ParseRoute(in.Route.Config.Data)
 	if err != nil {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("the route config is unreadable"), nil
 	}
 	w := works[cfg.Work]
 	if e.Type != w.event {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("this route takes " + cfg.Work + " events, not " + e.Type), nil
 	}
 	suffix, ok := w.id(e.CorrelationKey.ExternalID)
 	if !ok {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("the key is not a " + cfg.Work + " key"), nil
 	}
 	if in.Work == nil {
-		return extension.RouteDecision{Match: true, Kind: w.kind, CreateID: domain.ID(SourceNamespace(in.Scope.ID) + "/" + suffix)}, nil
+		return extension.RouteDecision{Match: true, Kind: w.kind, CreateID: domain.ID(SourceNamespace(in.Scope.ID) + "/" + suffix), Reason: "a new " + cfg.Work + " starts its Work"}, nil
 	}
 	if in.Work.Kind != w.kind {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("the key is owned by other Work"), nil
 	}
-	return extension.RouteDecision{Match: true}, nil
+	return extension.RouteDecision{Match: true, Reason: "more news for the " + cfg.Work + "'s Work"}, nil
 }
 
 func strict(data []byte, out any) error {

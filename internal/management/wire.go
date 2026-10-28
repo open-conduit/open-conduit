@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
 // Wire types use snake_case B02 names. Sequences, revisions, epochs and
@@ -58,6 +59,63 @@ type wireEventRoute struct {
 	Reason       string `json:"reason,omitempty"`
 	// DisplayRefused is why the route's Work display was dropped.
 	DisplayRefused string `json:"display_refused,omitempty"`
+}
+
+// wireRouteTrace is a dry-run route trace for a hypothetical Event.
+type wireRouteTrace struct {
+	ScopeID    string            `json:"scope_id"`
+	Generation string            `json:"generation"`
+	Work       *wireWork         `json:"work,omitempty"`
+	Routes     []wireRouteStep   `json:"routes"`
+	Effect     wireRouteEffect   `json:"effect"`
+	Also       []wireRouteEffect `json:"also,omitempty"`
+}
+
+type wireRouteStep struct {
+	Route   string `json:"route"`
+	Handler string `json:"handler"`
+	Binding string `json:"binding,omitempty"`
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+type wireRouteEffect struct {
+	Kind    string `json:"kind"`
+	WorkID  string `json:"work_id,omitempty"`
+	Binding string `json:"binding,omitempty"`
+	Detail  string `json:"detail"`
+}
+
+// wireRouteSample is a named sample Event a handler offers for a trace.
+type wireRouteSample struct {
+	ID             string       `json:"id"`
+	Title          string       `json:"title"`
+	Route          string       `json:"route"`
+	Handler        string       `json:"handler"`
+	Type           string       `json:"type"`
+	Source         string       `json:"source,omitempty"`
+	CorrelationKey *wireKey     `json:"correlation_key,omitempty"`
+	WorkID         string       `json:"work_id,omitempty"`
+	Data           *wirePayload `json:"data,omitempty"`
+}
+
+func toRouteEffect(e runtime.RouteEffect) wireRouteEffect {
+	return wireRouteEffect{Kind: e.Kind, WorkID: string(e.WorkID), Binding: e.Binding, Detail: e.Detail}
+}
+
+func toRouteTrace(t runtime.RouteTrace) wireRouteTrace {
+	out := wireRouteTrace{ScopeID: string(t.ScopeID), Generation: t.Generation, Routes: []wireRouteStep{}, Effect: toRouteEffect(t.Effect)}
+	if t.Work != nil {
+		w := toWork(*t.Work)
+		out.Work = &w
+	}
+	for _, r := range t.Routes {
+		out.Routes = append(out.Routes, wireRouteStep{Route: r.Route, Handler: r.Handler, Binding: r.Binding, Verdict: r.Verdict, Reason: r.Reason})
+	}
+	for _, e := range t.Also {
+		out.Also = append(out.Also, toRouteEffect(e))
+	}
+	return out
 }
 
 type wireEvent struct {

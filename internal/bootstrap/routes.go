@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
@@ -22,16 +23,31 @@ type manualRoute struct{}
 
 func (manualRoute) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
-	if e.Source != runtime.ManualSource || strings.HasPrefix(e.Type, "core.") {
-		return extension.RouteDecision{}, nil
+	if e.Source != runtime.ManualSource {
+		return extension.Skip("not an operator's event"), nil
+	}
+	if strings.HasPrefix(e.Type, "core.") {
+		return extension.Skip("a core event is never operator input"), nil
 	}
 	if in.Work != nil {
-		return extension.RouteDecision{Match: true}, nil
+		return extension.RouteDecision{Match: true, Reason: "an operator's event for existing Work"}, nil
 	}
 	if e.CorrelationKey == nil {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("the event names no Work or key"), nil
 	}
-	return extension.RouteDecision{Match: true, Kind: "manual.work"}, nil
+	return extension.RouteDecision{Match: true, Kind: "manual.work", Reason: "an operator's event for a new key"}, nil
+}
+
+var _ extension.RouteSampler = manualRoute{}
+
+// Samples offers an operator's event for a key, and a core event the route
+// never takes.
+func (manualRoute) Samples(domain.Scope, domain.Route) []extension.RouteSample {
+	key := domain.CorrelationKey{Source: runtime.ManualSource, ExternalID: "example/1"}
+	return []extension.RouteSample{
+		{ID: "operator-event", Title: "An operator sends an event for a key", Event: domain.Event{Type: "manual.note", Source: runtime.ManualSource, CorrelationKey: &key}},
+		{ID: "operator-event-unkeyed", Title: "An operator sends an event with no key", Event: domain.Event{Type: "manual.note", Source: runtime.ManualSource}},
+	}
 }
 
 func handlers() map[string]extension.RouteHandler {

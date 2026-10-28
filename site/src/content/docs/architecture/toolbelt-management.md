@@ -77,7 +77,7 @@ Authentication:
 Request handling:
 
 - Mutations require `application/json`, a body of at most 1 MiB, strict fields (no unknown, duplicate or null fields) and no query string.
-- Every mutating POST except validate, rotate and toolbelt calls requires `Idempotency-Key`. The key is bound to principal, method, path and canonical body hash, and kept for 30 days. A replay returns the original status and body; a changed body is `409 idempotency_conflict`.
+- Every mutating POST except validate, rotate, route trace and toolbelt calls requires `Idempotency-Key`. The key is bound to principal, method, path and canonical body hash, and kept for 30 days. A replay returns the original status and body; a changed body is `409 idempotency_conflict`.
 - Operator actions derive durable identities from the key, so retrying a timed-out request completes the same operation.
 - Opaque IDs may contain `/`. Routes match escaped path segments.
 
@@ -95,6 +95,8 @@ Operator controls go through `runtime.Control`:
 - **Execution cancel**: fences one attempt and holds scheduling (`BlockedReason=operator_cancelled`) until a manual retry. Physical stop still needs trusted `ConfirmStopped`.
 - **Retry**: `core.manual.retry` processed by retry policy.
 - **Wake**: an ordinary owned-key event that reports whether it matched.
+
+**Route trace.** `POST /v1/scopes/{id}/route/trace` takes a hypothetical Event (`type`, optional `source`, which defaults to `core.manual`, `correlation_key`, `work_id` and `data`) and returns how the router would handle it now, against the active generation and current Work state. It returns each effective route in order with its verdict (`match`, `skip`, `not_reached`, or `bypassed` when the Work is waiting or finished) and the handler's reason, the Work the Event resolves to, and the `effect` (`start`, `queue`, `inject`, `interrupt`, `wake`, `drop` or `unmatched`) with a short detail. `also` lists other wakes: Work it would wake through a dependency subscription, or another input waking its own Work first. Nothing is accepted, routed or recorded, so it takes no `Idempotency-Key`. `GET /v1/scopes/{id}/route/samples` lists the named sample Events the scope's route handlers offer, so a view can show "Suppose…" choices without hard-coding them. `open-conduit route --trace TYPE|SAMPLE --scope S` and `route --samples --scope S` call these endpoints.
 
 Rebind, hold/release, attach and scope reconcile are described in [operator setup and controls](../operator-setup/).
 

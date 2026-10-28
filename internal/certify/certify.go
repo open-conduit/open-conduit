@@ -791,11 +791,16 @@ func (r *runner) routes(ctx context.Context, remote *extproc.Remote) {
 			return
 		}
 		second, err := h.Match(ctx, in)
+		// Reason explains a decision without changing it, so certification
+		// compares the decision alone.
+		first.Reason, second.Reason = "", ""
 		if err != nil || !equalJSON(protocol.FromRouteDecision(first), protocol.FromRouteDecision(second)) {
 			r.fail(id, "case %d: the decision is not deterministic", i)
 			return
 		}
-		if !equalJSON(protocol.FromRouteDecision(first), c.Want) {
+		want := c.Want
+		want.Reason = ""
+		if !equalJSON(protocol.FromRouteDecision(first), want) {
 			got, _ := json.Marshal(protocol.FromRouteDecision(first))
 			r.fail(id, "case %d: decided %s", i, got)
 			return
