@@ -36,9 +36,12 @@ type Work struct {
 	CorrelationKeys []Key    `json:"correlation_keys"`
 	Context         *Payload `json:"context,omitempty"`
 	ParentID        string   `json:"parent_id,omitempty"`
-	Revision        string   `json:"revision"`
-	CreatedAt       string   `json:"created_at"`
-	UpdatedAt       string   `json:"updated_at"`
+	// Display is what the Work is, as its source said; nil when the source
+	// said nothing, and a view shows its own label.
+	Display   *Display `json:"display,omitempty"`
+	Revision  string   `json:"revision"`
+	CreatedAt string   `json:"created_at"`
+	UpdatedAt string   `json:"updated_at"`
 	// Hold and Annotations are present on GET /work/{id} only.
 	Hold        *Hold        `json:"hold,omitempty"`
 	Annotations []Annotation `json:"annotations,omitempty"`
@@ -116,6 +119,18 @@ type Execution struct {
 	CreatedAt       string     `json:"created_at"`
 	UpdatedAt       string     `json:"updated_at"`
 }
+
+// Display is a source's short description of a Work.
+type Display struct {
+	Title     string        `json:"title,omitempty"`
+	Ref       string        `json:"ref,omitempty"`
+	Requester string        `json:"requester,omitempty"`
+	Links     []DisplayLink `json:"links,omitempty"`
+}
+type DisplayLink struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
 type Match struct {
 	Keys  []Key    `json:"keys"`
 	Types []string `json:"types"`
@@ -129,9 +144,13 @@ type Wait struct {
 	TimeoutTimerID string `json:"timeout_timer_id,omitempty"`
 	AfterSequence  string `json:"after_sequence"`
 	WakeEventID    string `json:"wake_event_id,omitempty"`
-	Revision       string `json:"revision"`
-	CreatedAt      string `json:"created_at,omitempty"`
-	UpdatedAt      string `json:"updated_at,omitempty"`
+	// Description is what the Wait is for, in its owner's words, or its due
+	// time when only a timer was set; DueAt is when its timeout fires.
+	Description string `json:"description,omitempty"`
+	DueAt       string `json:"due_at,omitempty"`
+	Revision    string `json:"revision"`
+	CreatedAt   string `json:"created_at,omitempty"`
+	UpdatedAt   string `json:"updated_at,omitempty"`
 }
 type Requires struct {
 	Interrupt bool   `json:"interrupt"`
@@ -450,6 +469,8 @@ type EventRoute struct {
 	Generation   string `json:"generation,omitempty"`
 	Policy       string `json:"policy,omitempty"`
 	Reason       string `json:"reason,omitempty"`
+	// DisplayRefused is why the route's Work display was dropped.
+	DisplayRefused string `json:"display_refused,omitempty"`
 }
 
 func (c *Client) Executions(ctx context.Context, q url.Values) (Page[Execution], error) {

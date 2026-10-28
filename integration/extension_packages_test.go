@@ -387,6 +387,17 @@ func TestExternalSurfacesRoundTrip(t *testing.T) {
 		if len(got) != 1 || got[0].Name != "note" {
 			t.Fatalf("annotations: %+v", got)
 		}
+		// A Work's display reaches an annotating extension only for Work
+		// in the extension's scopes.
+		shown := &domain.WorkDisplay{Title: "Note a"}
+		got = r.Annotate(ctx, domain.Work{ID: "work-a", ScopeID: extensionScope, Display: shown, CorrelationKeys: []domain.CorrelationKey{{Source: notes.Name, ExternalID: "a"}}})
+		if len(got) != 2 || got[1].Name != "shown" || got[1].Value != "Note a" {
+			t.Fatalf("annotations in scope: %+v", got)
+		}
+		got = r.Annotate(ctx, domain.Work{ID: "work-b", ScopeID: "another-scope", Display: shown, CorrelationKeys: []domain.CorrelationKey{{Source: notes.Name, ExternalID: "a"}}})
+		if len(got) != 1 || got[0].Name != "note" {
+			t.Fatalf("another scope's display reached the extension: %+v", got)
+		}
 	})
 	t.Run("setup", func(t *testing.T) {
 		s, ok := r.Setup()

@@ -27,7 +27,7 @@ Commands:
   emit --type T --delivery-id D [--schema S] [--data JSON | --data-file PATH|-]
        [--key-source S --key-external-id X] [--occurred-at RFC3339]
   work create --kind K [--id ID] [--key-source S --key-external-id X]... [--schema S --data JSON]
-  wait --type T[,T...] [--key-source S --key-external-id X]... [--timeout SECONDS] [--after-sequence N]
+  wait --type T[,T...] [--key-source S --key-external-id X]... [--timeout SECONDS] [--after-sequence N] [--description TEXT]
   outcome completed|failed|handoff [--summary TEXT] [--schema S --data JSON]
   call OPERATION [--schema S] [--data JSON | --data-file PATH|-]
   inbox                                     print input injected into this running execution since the last
@@ -290,7 +290,7 @@ func (t *toolbelt) createWork(args []string) int {
 }
 
 func (t *toolbelt) wait(args []string) int {
-	f := newToolFlags("type", "timeout", "after-sequence")
+	f := newToolFlags("type", "timeout", "after-sequence", "description")
 	if pos, err := f.parse(args); err != nil || len(pos) != 0 {
 		return t.usage("invalid wait flags")
 	}
@@ -321,6 +321,9 @@ func (t *toolbelt) wait(args []string) int {
 			return t.usage("--after-sequence must be a decimal sequence")
 		}
 		in["after_sequence"] = s
+	}
+	if s := f.get("description"); s != "" {
+		in["description"] = s
 	}
 	return t.do(f, "wait", in, func(r client.ToolResult) any { return r.Wait })
 }

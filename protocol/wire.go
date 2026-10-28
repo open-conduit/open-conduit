@@ -135,16 +135,51 @@ type Work struct {
 	CorrelationKeys []Key     `json:"correlation_keys"`
 	Context         Payload   `json:"context"`
 	ParentID        string    `json:"parent_id,omitempty"`
+	Display         *Display  `json:"display,omitempty"`
 	Revision        uint64    `json:"revision"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
 }
 
+// Display is what a Work is, in its source's words (domain.WorkDisplay,
+// extension.ValidateDisplay).
+type Display struct {
+	Title     string        `json:"title,omitempty"`
+	Ref       string        `json:"ref,omitempty"`
+	Requester string        `json:"requester,omitempty"`
+	Links     []DisplayLink `json:"links,omitempty"`
+}
+type DisplayLink struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+func FromDisplay(d *domain.WorkDisplay) *Display {
+	if d == nil {
+		return nil
+	}
+	out := &Display{Title: d.Title, Ref: d.Ref, Requester: d.Requester}
+	for _, l := range d.Links {
+		out.Links = append(out.Links, DisplayLink{Label: l.Label, URL: l.URL})
+	}
+	return out
+}
+func (d *Display) Domain() *domain.WorkDisplay {
+	if d == nil {
+		return nil
+	}
+	out := &domain.WorkDisplay{Title: d.Title, Ref: d.Ref, Requester: d.Requester}
+	for _, l := range d.Links {
+		out.Links = append(out.Links, domain.Link{Label: l.Label, URL: l.URL})
+	}
+	return out
+}
+
 func FromWork(w domain.Work) Work {
-	return Work{ID: string(w.ID), Kind: w.Kind, ScopeID: string(w.ScopeID), State: string(w.State), CorrelationKeys: fromKeys(w.CorrelationKeys), Context: FromPayload(w.Context), ParentID: string(w.ParentID), Revision: uint64(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
+	return Work{ID: string(w.ID), Kind: w.Kind, ScopeID: string(w.ScopeID), State: string(w.State), CorrelationKeys: fromKeys(w.CorrelationKeys), Context: FromPayload(w.Context), ParentID: string(w.ParentID), Display: FromDisplay(w.Display), Revision: uint64(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
 }
 func (w Work) Domain() domain.Work {
-	return domain.Work{ID: domain.ID(w.ID), Kind: w.Kind, ScopeID: domain.ID(w.ScopeID), State: domain.WorkState(w.State), CorrelationKeys: toKeys(w.CorrelationKeys), Context: w.Context.Domain(), ParentID: domain.ID(w.ParentID), Revision: domain.Revision(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
+	return domain.Work{ID: domain.ID(w.ID), Kind: w.Kind, ScopeID: domain.ID(w.ScopeID), State: domain.WorkState(w.State), CorrelationKeys: toKeys(w.CorrelationKeys), Context: w.Context.Domain(), ParentID: domain.ID(w.ParentID), Display: w.Display.Domain(), Revision: domain.Revision(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
 }
 
 type Lease struct {
@@ -452,13 +487,15 @@ type RouteDecision struct {
 	CreateID   string `json:"create_id,omitempty"`
 	Kind       string `json:"kind,omitempty"`
 	AttachKeys []Key  `json:"attach_keys,omitempty"`
+	// Display, on a match, replaces the Work's display; absent keeps it.
+	Display *Display `json:"display,omitempty"`
 }
 
 func FromRouteDecision(d extension.RouteDecision) RouteDecision {
-	return RouteDecision{Match: d.Match, CreateID: string(d.CreateID), Kind: d.Kind, AttachKeys: fromKeys(d.AttachKeys)}
+	return RouteDecision{Match: d.Match, CreateID: string(d.CreateID), Kind: d.Kind, AttachKeys: fromKeys(d.AttachKeys), Display: FromDisplay(d.Display)}
 }
 func (d RouteDecision) Extension() extension.RouteDecision {
-	return extension.RouteDecision{Match: d.Match, CreateID: domain.ID(d.CreateID), Kind: d.Kind, AttachKeys: toKeys(d.AttachKeys)}
+	return extension.RouteDecision{Match: d.Match, CreateID: domain.ID(d.CreateID), Kind: d.Kind, AttachKeys: toKeys(d.AttachKeys), Display: d.Display.Domain()}
 }
 
 // Toolbelt operations.
@@ -488,6 +525,7 @@ type WaitRequest struct {
 	Types         []string   `json:"types,omitempty"`
 	Timeout       *time.Time `json:"timeout,omitempty"`
 	AfterSequence uint64     `json:"after_sequence,omitempty"`
+	Description   string     `json:"description,omitempty"`
 }
 type Dependency struct {
 	ID            string   `json:"id"`
@@ -506,14 +544,14 @@ type WaitPlan struct {
 }
 
 func FromWaitPlan(p extension.WaitPlan) WaitPlan {
-	out := WaitPlan{Wait: WaitRequest{Keys: fromKeys(p.Wait.Match.Keys), Types: p.Wait.Match.Types, Timeout: p.Wait.Timeout, AfterSequence: p.Wait.AfterSequence}, Output: FromPayload(p.Output)}
+	out := WaitPlan{Wait: WaitRequest{Keys: fromKeys(p.Wait.Match.Keys), Types: p.Wait.Match.Types, Timeout: p.Wait.Timeout, AfterSequence: p.Wait.AfterSequence, Description: p.Wait.Description}, Output: FromPayload(p.Output)}
 	for _, d := range p.Dependencies {
 		out.Dependencies = append(out.Dependencies, Dependency{ID: d.ID, SourceScopeID: string(d.SourceScopeID), SourceKey: fromKey(d.SourceKey), Types: d.Types, AliasType: d.AliasType, Filter: FromPayload(d.Filter), Label: d.Label, FromNow: d.FromNow})
 	}
 	return out
 }
 func (p WaitPlan) Extension() extension.WaitPlan {
-	out := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Keys: toKeys(p.Wait.Keys), Types: p.Wait.Types}, Timeout: p.Wait.Timeout, AfterSequence: p.Wait.AfterSequence}, Output: p.Output.Domain()}
+	out := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Keys: toKeys(p.Wait.Keys), Types: p.Wait.Types}, Timeout: p.Wait.Timeout, AfterSequence: p.Wait.AfterSequence, Description: p.Wait.Description}, Output: p.Output.Domain()}
 	for _, d := range p.Dependencies {
 		out.Dependencies = append(out.Dependencies, extension.Dependency{ID: d.ID, SourceScopeID: domain.ID(d.SourceScopeID), SourceKey: d.SourceKey.domain(), Types: d.Types, AliasType: d.AliasType, Filter: d.Filter.Domain(), Label: d.Label, FromNow: d.FromNow})
 	}

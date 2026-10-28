@@ -21,11 +21,15 @@ type RouteInput struct {
 // RouteDecision describes a first match. CreateID/Kind are used only when no
 // owner exists; AttachKeys are appended atomically or the entire route fails.
 // A successor must use a distinct key; terminal ownership is never transferred.
+// Display, when set on a match, replaces the Work's display (ValidateDisplay);
+// nil keeps what it has, so a handler sets it only when it has something to
+// say (the handler sees the current one on RouteInput.Work).
 type RouteDecision struct {
 	Match      bool
 	CreateID   domain.ID
 	Kind       string
 	AttachKeys []domain.CorrelationKey
+	Display    *domain.WorkDisplay
 }
 
 type RouteHandler interface {

@@ -129,6 +129,12 @@ func (r *Remote) RouteHandler(handler string) extension.RouteHandler {
 		if d.Match && d.Kind != "" && !r.ownKind(d.Kind) {
 			return extension.RouteDecision{}, protocol.Errorf(protocol.CodeUndeclared, "work kind not declared")
 		}
+		if err := extension.ValidateDisplay(d.Display); err != nil {
+			// A display is optional: drop it rather than stop routing.
+			// Certification refuses it (routes.decisions).
+			r.p.o.Log.Warn("extension route display dropped", "extension", r.m.Name, "handler", handler, "reason", err.Error())
+			d.Display = nil
+		}
 		return d, nil
 	})
 }

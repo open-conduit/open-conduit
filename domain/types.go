@@ -45,16 +45,29 @@ func WorkTransition(from, to WorkState) bool {
 }
 
 type Work struct {
-	ID                   ID
-	Kind                 string
-	ScopeID              ID
-	State                WorkState
-	CorrelationKeys      []CorrelationKey
-	Context              Payload
-	ParentID             ID
+	ID              ID
+	Kind            string
+	ScopeID         ID
+	State           WorkState
+	CorrelationKeys []CorrelationKey
+	Context         Payload
+	ParentID        ID
+	// Display is what the Work is, in its source's words, for operator
+	// views (extension.ValidateDisplay). Core stores it and never reads it.
+	Display              *WorkDisplay `json:",omitempty"`
 	Revision             Revision
 	CreatedAt, UpdatedAt time.Time
 }
+
+// WorkDisplay is a source's short description of a Work: a title, a short
+// ref ("#136"), who asked for it and links out (an issue, a PR, a thread).
+type WorkDisplay struct {
+	Title, Ref, Requester string `json:",omitempty"`
+	Links                 []Link `json:",omitempty"`
+}
+
+// Link is a labelled http or https URL.
+type Link struct{ Label, URL string }
 type Event struct {
 	ID                               ID
 	Type, Source, DeliveryID         string
@@ -174,8 +187,11 @@ type Wait struct {
 	TimeoutTimerID          ID
 	AfterSequence           uint64
 	WakeEventID             ID
-	Revision                Revision
-	CreatedAt, UpdatedAt    time.Time
+	// Description is what the Wait is for, in the waiting operation's words
+	// ("checks on PR #137"). Core stores it and never reads it.
+	Description          string `json:",omitempty"`
+	Revision             Revision
+	CreatedAt, UpdatedAt time.Time
 }
 type Capabilities struct {
 	Interrupt, Inject, Resume bool

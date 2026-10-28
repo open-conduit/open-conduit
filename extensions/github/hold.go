@@ -58,7 +58,7 @@ func (HoldRoute) Match(_ context.Context, in extension.RouteInput) (extension.Ro
 	if !l.Admits(p) {
 		return extension.RouteDecision{}, nil
 	}
-	return extension.RouteDecision{Match: true, Kind: WorkKindHeld}, nil
+	return extension.RouteDecision{Match: true, Kind: WorkKindHeld, Display: display(nil, e)}, nil
 }
 
 // ReleasedPayload is a TypeHoldReleased event: why the hold ended, as the

@@ -140,11 +140,16 @@ func (r Route) Match(_ context.Context, in extension.RouteInput) (extension.Rout
 				return extension.RouteDecision{}, nil
 			}
 		}
-		return extension.RouteDecision{Match: true, Kind: WorkKind(r.Type)}, nil
+		return extension.RouteDecision{Match: true, Kind: WorkKind(r.Type), Display: r.display(p)}, nil
 	}
 	switch e.Type {
 	case t.IssueClosed:
-		return extension.RouteDecision{Match: true}, nil
+		d := extension.RouteDecision{Match: true}
+		var p IssuePayload
+		if e.Data.Schema == t.SchemaIssue && json.Unmarshal(e.Data.Data, &p) == nil {
+			d.Display = r.display(p)
+		}
+		return d, nil
 	case t.CommentHuman, t.CommentAgent:
 		var p CommentPayload
 		if json.Unmarshal(e.Data.Data, &p) != nil || p.Edited {
@@ -156,4 +161,21 @@ func (r Route) Match(_ context.Context, in extension.RouteInput) (extension.Rout
 		return extension.RouteDecision{Match: true}, nil
 	}
 	return extension.RouteDecision{}, nil
+}
+
+// display says what an issue's Work is (issue #123): its title, key,
+// author and link ("Linear ENG-12").
+func (r Route) display(p IssuePayload) *domain.WorkDisplay {
+	d := &domain.WorkDisplay{Title: extension.Clip(p.Title, extension.MaxDisplayTitle), Ref: extension.Clip(p.Key, extension.MaxDisplayRef), Requester: extension.Clip(p.Author, extension.MaxDisplayRequester)}
+	if d.Title == "" && d.Ref == "" {
+		return nil
+	}
+	if extension.DisplayURL(p.URL) {
+		name := r.Type
+		if name != "" {
+			name = strings.ToUpper(name[:1]) + name[1:]
+		}
+		d.Links = []domain.Link{{Label: extension.Clip(strings.TrimSpace(name+" "+p.Key), extension.MaxDisplayLinkLabel), URL: p.URL}}
+	}
+	return d
 }

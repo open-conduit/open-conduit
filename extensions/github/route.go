@@ -113,8 +113,17 @@ func selfAuthored(a *Agent, w *domain.Work) bool {
 	return a.From == ""
 }
 
-// Match selects input for existing Work and creates Work for admitted issues.
-func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
+// Match selects input for existing Work and creates Work for admitted
+// issues, saying what the Work is when the input tells (display).
+func (r Route) Match(ctx context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
+	d, err := r.match(ctx, in)
+	if err == nil && d.Match {
+		d.Display = display(in.Work, in.Event.Event)
+	}
+	return d, err
+}
+
+func (Route) match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
 	if !strings.HasPrefix(e.Type, "github.") || e.Type == TypeDelivery {
 		return extension.RouteDecision{}, nil
