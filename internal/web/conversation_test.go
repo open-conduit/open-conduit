@@ -3,8 +3,6 @@ package web
 import (
 	"strings"
 	"testing"
-
-	"github.com/open-conduit/open-conduit/client"
 )
 
 // transcript is a turn in the stream-json shape: a prompt, a reply, a tool
@@ -99,42 +97,5 @@ func TestMarkdownEscapes(t *testing.T) {
 	}
 	if strings.Contains(got, "<script>") || strings.Contains(string(markdown("[x](javascript:alert(1))")), "<a") {
 		t.Error("markup must not pass through")
-	}
-}
-
-func TestRunPageShowsTheTimelineAsAConversation(t *testing.T) {
-	f, s, h := setup(t)
-	for i := range f.runs {
-		if f.runs[i].ID == "exe_1" {
-			f.runs[i].Artifacts = append(f.runs[i].Artifacts, client.Artifact{ID: "art_transcript", MediaType: "application/x-ndjson", Size: int64(len(transcript))})
-		}
-	}
-	f.content["art_transcript"] = transcript
-	body := do(h, "GET", "/run?id=exe_1", nil, s).Body.String()
-	for _, want := range []string{
-		`id="turn-1" data-part="/run/conversation?run=exe_1" open aria-current="step" data-loaded>`,
-		`id="turn-2" data-part="/run/conversation?run=exe_2">`, `<a href="/run?id=exe_2">Go to turn</a>`,
-		"Reading the <strong>issue</strong> first.", `<span class="tname">call</span><span class="from">open-conduit</span><code class="thead">github.issue.view</code>`,
-		`<details class="tool failed" data-key="t4">`, "No result was recorded",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("missing %q", want)
-		}
-	}
-
-	// A turn opened later loads alone; a running one says it is live.
-	w := do(h, "GET", "/run/conversation?run=exe_1", nil, s)
-	if w.Header().Get("X-Live") != "0" || !strings.Contains(w.Body.String(), "Reading the <strong>issue</strong> first.") || strings.Contains(w.Body.String(), "<html") {
-		t.Errorf("finished part: %s\n%s", w.Header().Get("X-Live"), w.Body.String())
-	}
-	f.live["exe_3"] = client.LiveRun{Outputs: []client.LiveOutput{{Name: "transcript", MediaType: "application/x-ndjson", Content: transcript}}}
-	if w := do(h, "GET", "/run/conversation?run=exe_3", nil, s); w.Header().Get("X-Live") != "1" || !strings.Contains(w.Body.String(), "Working") || !strings.Contains(w.Body.String(), "running</span>") {
-		t.Errorf("live part: %s\n%s", w.Header().Get("X-Live"), w.Body.String())
-	}
-	if w := do(h, "GET", "/run/conversation?run=exe_2", nil, s); !strings.Contains(w.Body.String(), "No conversation to show: run has no artifacts") {
-		t.Errorf("turn without a transcript:\n%s", w.Body.String())
-	}
-	if w := do(h, "GET", "/run/conversation?run=nope", nil, s); w.Code != 404 {
-		t.Errorf("missing run: %d", w.Code)
 	}
 }

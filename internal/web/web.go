@@ -21,6 +21,7 @@ import (
 	"crypto/subtle"
 	"embed"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html/template"
@@ -62,6 +63,19 @@ type Source interface {
 	Actions(ctx context.Context, t client.ActionTarget) ([]client.Action, error)
 	Panels(ctx context.Context, t client.ActionTarget) ([]client.Panel, error)
 	InvokeAction(ctx context.Context, t client.ActionTarget, provider, id, input, key string) (client.ActionResult, error)
+	Health(ctx context.Context) (client.Health, error)
+	Capacity(ctx context.Context) (client.Capacity, error)
+	Works(ctx context.Context, q url.Values) (client.Page[client.Work], error)
+	WorksWithActions(ctx context.Context, q url.Values) (client.Page[client.Work], error)
+	Events(ctx context.Context, q url.Values) (client.Page[client.Event], error)
+	EventsWithRoutes(ctx context.Context, q url.Values) (client.Page[client.Event], error)
+	TraceRoute(ctx context.Context, scope string, e client.TraceEvent) (client.RouteTrace, error)
+	RouteSamples(ctx context.Context, scope string) ([]client.RouteSample, error)
+	RebindWork(ctx context.Context, id, revision, binding, reason, key string) (client.ControlResult, error)
+	AttachWork(ctx context.Context, id, key string) (client.AttachSpec, error)
+	ReconcileScope(ctx context.Context, id, revision, key string) (client.ReconcileResult, error)
+	Wake(ctx context.Context, id string, r client.WakeRequest, key string) (client.WakeResult, error)
+	Doctor(ctx context.Context, checkSecrets bool) (client.Doctor, error)
 }
 
 var _ Source = (*client.Client)(nil)
@@ -102,6 +116,11 @@ type Server struct {
 
 	mu     sync.Mutex
 	labels map[string]string
+
+	// wmu guards the short-lived read of every Work (cachedWorld).
+	wmu    sync.Mutex
+	wcache world
+	wat    time.Time
 }
 
 // New makes a Server over src.
@@ -220,16 +239,25 @@ func (s *Server) Handler(addr string) http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /login", s.loginPage)
 	mux.Handle("GET /static/", s.static)
-	mux.HandleFunc("GET /{$}", s.authed(s.listPage))
-	// Run IDs contain slashes, so IDs travel in the query and form.
-	mux.HandleFunc("GET /run", s.authed(s.runPage))
+	mux.HandleFunc("GET /{$}", s.authed(s.runsPage))
+	// Work and run IDs contain slashes, so IDs travel in the query and form.
+	mux.HandleFunc("GET /work", s.authed(s.workPage))
+	mux.HandleFunc("GET /run", s.authed(s.runRedirect))
 	mux.HandleFunc("GET /run/conversation", s.authed(s.conversationPart))
 	mux.HandleFunc("GET /output", s.authed(s.outputPage))
-	mux.HandleFunc("GET /scopes", s.authed(s.scopesPage))
+	mux.HandleFunc("GET /attention", s.authed(s.attentionPage))
 	mux.HandleFunc("GET /config", s.authed(s.configPage))
+	mux.HandleFunc("GET /scopes", s.authed(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/config", http.StatusMovedPermanently)
+	}))
+	mux.HandleFunc("GET /setup", s.authed(s.setupPage))
+	mux.HandleFunc("GET /palette.json", s.authed(s.palette))
+	mux.HandleFunc("GET /work/confirm", s.authed(s.confirmPage))
+	mux.HandleFunc("POST /work/bulk/{control}", s.authed(s.changed(s.bulkControl)))
 	mux.HandleFunc("POST /work/{control}", s.authed(s.changed(s.workControl)))
 	mux.HandleFunc("POST /run/cancel", s.authed(s.changed(s.cancelRun)))
 	mux.HandleFunc("POST /actions", s.authed(s.changed(s.invokeAction)))
+	mux.HandleFunc("POST /scopes/reconcile", s.authed(s.changed(s.reconcileScope)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
 		h.Set("Content-Security-Policy", "default-src 'self'; frame-ancestors 'none'; form-action 'self'; base-uri 'none'")
@@ -288,25 +316,36 @@ func (s *Server) changed(next http.HandlerFunc) http.HandlerFunc {
 	}
 }
 
+// flashNote is a change's outcome shown on the next page as a toast: what
+// happened, the call made and the event the daemon accepted.
+type flashNote struct {
+	Text  string `json:"t"`
+	Call  string `json:"c,omitempty"`
+	Event string `json:"e,omitempty"`
+	Err   bool   `json:"x,omitempty"`
+}
+
 // flash shows text on the next page this browser loads.
 func flash(w http.ResponseWriter, text string, failed bool) {
-	v := "ok:"
-	if failed {
-		v = "err:"
-	}
-	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: url.QueryEscape(v + text), Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 60})
+	flashWith(w, flashNote{Text: text, Err: failed})
+}
+
+func flashWith(w http.ResponseWriter, n flashNote) {
+	b, _ := json.Marshal(n)
+	http.SetCookie(w, &http.Cookie{Name: flashCookie, Value: url.QueryEscape(string(b)), Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode, MaxAge: 60})
 }
 
 // takeFlash reads and clears the pending flash.
-func takeFlash(w http.ResponseWriter, r *http.Request) (text string, failed bool) {
+func takeFlash(w http.ResponseWriter, r *http.Request) (*flashNote, bool) {
 	c, err := r.Cookie(flashCookie)
 	if err != nil {
-		return "", false
+		return nil, false
 	}
 	http.SetCookie(w, &http.Cookie{Name: flashCookie, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
 	v, _ := url.QueryUnescape(c.Value)
-	if rest, ok := strings.CutPrefix(v, "err:"); ok {
-		return rest, true
+	var n flashNote
+	if json.Unmarshal([]byte(v), &n) != nil || n.Text == "" {
+		return nil, false
 	}
-	return strings.TrimPrefix(v, "ok:"), false
+	return &n, n.Err
 }

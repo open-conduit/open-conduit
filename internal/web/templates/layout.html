@@ -3,24 +3,115 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>{{.Page.Title}} · Open Conduit</title>
-<link rel="preload" href="/static/fonts/atkinson-hyperlegible-next.woff2" as="font" type="font/woff2" crossorigin>
-<link rel="stylesheet" href="/static/app.css">
+<title>{{with .Page.NeedsYou}}({{.}}) {{end}}{{.Page.Title}} · Open Conduit</title>
+<link rel="preload" href="/static/fonts/ibm-plex-sans-latin-400-normal.woff2" as="font" type="font/woff2" crossorigin>
+<link rel="stylesheet" href="/static/fonts.css">
+<link rel="stylesheet" href="/static/tokens.css">
+<link rel="stylesheet" href="/static/base.css">
+<link rel="stylesheet" href="/static/views.css">
+<script src="/static/theme.js"></script>
 <script src="/static/app.js" defer></script>
+{{block "scripts" .}}{{end}}
 </head>
 <body>
-<header class="top">
-  <a class="brand" href="/"><span class="mark" aria-hidden="true"><i></i><i></i><i></i></span>Open Conduit</a>
-  <nav>
-    <a href="/"{{if eq .Page.Nav "runs"}} aria-current="page"{{end}}>Runs</a>
-    <a href="/scopes"{{if eq .Page.Nav "scopes"}} aria-current="page"{{end}}>Scopes</a>
-    <a href="/config"{{if eq .Page.Nav "config"}} aria-current="page"{{end}}>Config</a>
-  </nav>
-</header>
-<main>
-{{with .Page.Flash}}<p class="flash{{if $.Page.FlashErr}} error{{end}}" role="status">{{.}}</p>{{end}}
-{{with .Page.Err}}<pre class="error" role="alert">{{.}}</pre>{{end}}
-{{template "content" .}}
-</main>
+<div class="app">
+  <a href="#main" class="skip">Skip to content</a>
+  <header class="bar">
+    <a class="wordmark" href="/" aria-label="Open Conduit — Runs">
+      <svg width="22" height="22" viewBox="0 0 32 32" aria-hidden="true"><rect width="32" height="32" rx="5" fill="var(--ink)"/><path d="M7 11h11a4 4 0 0 1 0 8h-4" stroke="var(--signal)" stroke-width="3" fill="none" stroke-linecap="round"/><circle cx="10" cy="19" r="2.5" fill="var(--paper)"/></svg>
+      <span>Open<b>Conduit</b></span>
+    </a>
+    <nav class="nav" aria-label="Primary">
+      <a href="/" class="nav-item{{if eq .Page.Nav "runs"}} is-on{{end}}"{{if eq .Page.Nav "runs"}} aria-current="page"{{end}} title="g then r">Runs</a>
+      <a href="/attention" class="nav-item{{if eq .Page.Nav "attention"}} is-on{{end}}"{{if eq .Page.Nav "attention"}} aria-current="page"{{end}} title="g then a">Needs you{{with .Page.NeedsYou}}<span class="nav-count" aria-label="{{.}} items">{{.}}</span>{{end}}</a>
+      <a href="/config" class="nav-item{{if eq .Page.Nav "config"}} is-on{{end}}"{{if eq .Page.Nav "config"}} aria-current="page"{{end}} title="g then c">Configuration</a>
+      <a href="/setup" class="nav-item{{if eq .Page.Nav "setup"}} is-on{{end}}"{{if eq .Page.Nav "setup"}} aria-current="page"{{end}} title="g then s">Setup</a>
+    </nav>
+    <div class="bar-tools">
+      <button type="button" class="jump" data-palette hidden><span>Jump to work…</span><kbd class="kbd">⌘K</kbd></button>
+      <button type="button" class="btn btn-quiet btn-icon" data-theme-toggle hidden aria-label="Switch theme" title="Theme">☾</button>
+    </div>
+  </header>
+
+  <main id="main" class="main" tabindex="-1">
+  {{if .Page.Down}}{{template "unreachable" .Page}}{{else}}
+  {{- with .Page.Err}}<div class="page page-alert"><pre class="code-block is-error" role="alert">{{.}}</pre></div>{{end}}
+  {{template "content" .}}{{end}}
+  </main>
+
+  <footer class="status" aria-label="System status">
+    {{- with .Page.Health}}
+    <span class="st-item"><span class="st-dot {{if eq .State "ready"}}is-up{{else}}is-wait{{end}}" aria-hidden="true"></span>daemon {{.State}} · v{{.Version}}</span>
+    <a class="st-item" href="/config">generation {{or .ConfigGeneration "—"}}</a>
+    {{- else}}
+    <span class="st-item"><span class="st-dot is-down" aria-hidden="true"></span>daemon unreachable</span>
+    {{- end}}
+    {{- range .Page.Pools}}
+    <span class="st-item{{if ne .Name "agents"}} st-wide{{end}}"{{with .Setting}} title="{{.}}"{{end}}>{{poolName .Name}} slots <b>{{.InUse}}</b>/{{if .Limit}}{{.Limit}}{{else}}∞{{end}}{{if .Waiting}} · {{.Waiting}} waiting{{end}}</span>
+    {{- end}}
+    <span class="st-spacer"></span>
+    <button type="button" class="st-item st-help" data-help hidden aria-label="Keyboard shortcuts"><kbd class="kbd">?</kbd></button>
+  </footer>
+
+  <div class="toasts" role="status" aria-live="polite">
+    {{- with .Page.Flash}}
+    <div class="toast{{if $.Page.FlashErr}} tone-warn{{end}}" data-toast>
+      <div class="toast-text">{{.Text}}</div>
+      {{- with .Call}}<div class="toast-receipt"><code>{{.}}</code></div>{{end}}
+      {{- with .Event}}<div class="toast-receipt"><code>event {{.}}</code></div>{{end}}
+      <a class="toast-x" href="{{$.Page.Back}}" aria-label="Dismiss" data-dismiss>✕</a>
+    </div>
+    {{- end}}
+  </div>
+
+  {{template "keys-dialog"}}
+  {{template "palette-dialog"}}
+</div>
 </body>
 </html>
+
+{{define "unreachable"}}
+<div class="page">
+  <div class="state-page">
+    {{mark "failed" 18 ""}}
+    <h1>The daemon isn't answering</h1>
+    <p>Open Conduit's web view reads everything from the local daemon's management socket, and it didn't respond.</p>
+    <pre class="code-block">{{.Err}}</pre>
+    <ol class="steps">
+      <li><span>Check whether it runs: <code>open-conduit health</code></span></li>
+      <li><span>If it's installed as a service: <code>open-conduit service status</code> and the end of its log</span></li>
+      <li><span>Otherwise start it: <code>open-conduit serve</code></span></li>
+    </ol>
+    <div class="row-gap"><a class="btn btn-primary" href="{{.Back}}">Try again</a></div>
+  </div>
+</div>
+{{end}}
+
+{{define "keys-dialog"}}
+<dialog class="dialog" id="keys" aria-labelledby="keys-title">
+  <div class="dialog-body">
+    <header class="dialog-head"><h2 id="keys-title">Keyboard</h2><button type="button" class="btn btn-quiet btn-icon" data-close aria-label="Close">✕</button></header>
+    <dl class="keys">
+      <dt><kbd class="kbd">⌘K</kbd></dt><dd>Jump to any work, scope or page</dd>
+      <dt><kbd class="kbd">g</kbd> <kbd class="kbd">r</kbd> / <kbd class="kbd">a</kbd> / <kbd class="kbd">c</kbd> / <kbd class="kbd">s</kbd></dt><dd>Runs, Needs you, Configuration, Setup</dd>
+      <dt><kbd class="kbd">/</kbd></dt><dd>Search runs</dd>
+      <dt><kbd class="kbd">j</kbd> <kbd class="kbd">k</kbd></dt><dd>Move through runs, or through turns on a run</dd>
+      <dt><kbd class="kbd">Enter</kbd></dt><dd>Open the focused run</dd>
+      <dt><kbd class="kbd">x</kbd></dt><dd>Select the focused run for bulk actions</dd>
+      <dt><kbd class="kbd">[</kbd> <kbd class="kbd">]</kbd></dt><dd>Previous / next turn</dd>
+      <dt><kbd class="kbd">e</kbd></dt><dd>On a run: jump to the first error</dd>
+      <dt><kbd class="kbd">Esc</kbd></dt><dd>Close dialogs and menus; back to Runs from a run</dd>
+    </dl>
+  </div>
+</dialog>
+{{end}}
+
+{{define "palette-dialog"}}
+<dialog class="dialog" id="palette" aria-labelledby="palette-title">
+  <div class="dialog-body">
+    <header class="dialog-head"><h2 id="palette-title">Jump to</h2><button type="button" class="btn btn-quiet btn-icon" data-close aria-label="Close">✕</button></header>
+    <input class="palette-input" placeholder="Issue number, title, scope or page" aria-label="Search" aria-controls="palette-list" autocomplete="off">
+    <ul class="palette-list" id="palette-list" role="listbox" aria-label="Results"></ul>
+  </div>
+</dialog>
+{{end}}
