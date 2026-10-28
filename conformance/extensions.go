@@ -16,10 +16,13 @@ import (
 // IngressFixture supplies a service-specific fixture with two versions of one
 // item, two complete scan pages, and a declared one-shot push event.
 type IngressFixture struct {
-	Ingress     extension.Ingress
-	Source      extension.Source
-	Delivery    extension.Delivery
-	Canonical   extension.Observation
+	Ingress   extension.Ingress
+	Source    extension.Source
+	Delivery  extension.Delivery
+	Canonical extension.Observation
+	// OneShotType names the declared non-re-derivable family push yields.
+	// It may be empty only when every declared family is re-derivable, so
+	// reconcile alone recovers everything (a reconcile-first source).
 	OneShotType string
 	// OneShot, when set, is a separate delivery yielding the one-shot event,
 	// for services whose one-shot family never accompanies an observation
@@ -39,9 +42,20 @@ func CheckIngress(f IngressFixture) error {
 		}
 		families[family.Type] = family
 	}
-	one, ok := families[f.OneShotType]
-	if !ok || one.ReDerivable || one.Loss == "" {
-		return fmt.Errorf("one-shot loss limitation missing")
+	if f.OneShotType != "" {
+		one, ok := families[f.OneShotType]
+		if !ok || one.ReDerivable || one.Loss == "" {
+			return fmt.Errorf("one-shot loss limitation missing")
+		}
+	} else {
+		for _, family := range families {
+			if !family.ReDerivable {
+				return fmt.Errorf("one-shot loss limitation missing")
+			}
+		}
+		if f.OneShot != nil {
+			return fmt.Errorf("one-shot delivery without a one-shot family")
+		}
 	}
 	push, err := f.Ingress.Push(ctx, f.Source, f.Delivery)
 	if err != nil {
@@ -58,7 +72,11 @@ func CheckIngress(f IngressFixture) error {
 		return fmt.Errorf("push canonical observation mismatch")
 	}
 	oneShot := push
-	if f.OneShot != nil {
+	if f.OneShotType == "" {
+		if len(push.Events) != 0 {
+			return fmt.Errorf("undeclared non-re-derivable event")
+		}
+	} else if f.OneShot != nil {
 		if len(push.Events) != 0 {
 			return fmt.Errorf("canonical delivery carries unexpected one-shot events")
 		}
@@ -69,7 +87,7 @@ func CheckIngress(f IngressFixture) error {
 			return fmt.Errorf("one-shot delivery carries observations")
 		}
 	}
-	if len(oneShot.Events) != 1 || oneShot.Events[0].Type != f.OneShotType {
+	if f.OneShotType != "" && (len(oneShot.Events) != 1 || oneShot.Events[0].Type != f.OneShotType) {
 		return fmt.Errorf("one-shot fixture missing")
 	}
 	for _, e := range oneShot.Events {
