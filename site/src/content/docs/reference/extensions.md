@@ -11,8 +11,9 @@ A package can contribute integrations, executors, toolbelt operations, setups an
 open-conduit extension inspect ./my-extension        # check a package offline
 open-conduit extension certify ./my-extension        # run the conformance suite against it
 open-conduit extension install ./my-extension        # takes effect at the next serve
+open-conduit extension install https://example.com/my-extension-darwin-arm64.tar.gz --sha256 <hex>
 open-conduit extension list
-open-conduit extension update ./my-extension         # the replaced release is kept
+open-conduit extension update ./my-extension         # the replaced release is kept; also takes an archive
 open-conduit extension rollback my-extension
 open-conduit extension remove my-extension           # refused while the config uses it
 ```

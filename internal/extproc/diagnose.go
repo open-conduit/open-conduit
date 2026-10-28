@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"runtime"
 
 	"github.com/open-conduit/open-conduit/protocol"
 )
@@ -36,6 +37,12 @@ func Diagnose(name string, err error, paths Paths) Diagnostic {
 	case errors.Is(err, protocol.ErrIncompatible), errors.Is(err, ErrIncompatiblePackage) && !errors.Is(err, protocol.ErrKVDowngrade):
 		d.Code, d.Summary = "incompatible_protocol", "the package and this host share no protocol version or layout"
 		d.Hint = fmt.Sprintf("this host speaks protocol %v; install a release of the package built for it, or upgrade Open Conduit", protocol.Versions)
+	case errors.Is(err, ErrPlatform):
+		d.Code, d.Summary = "wrong_platform", "the package is built for another OS or architecture"
+		d.Hint = fmt.Sprintf("install the release archive built for %s/%s", runtime.GOOS, runtime.GOARCH)
+	case errors.Is(err, ErrArchive):
+		d.Code, d.Summary = "invalid_archive", "the release archive was refused"
+		d.Hint = "check the URL or path and its --sha256; an archive is a .tar.gz holding one package directory of regular files"
 	case errors.Is(err, ErrManifestMismatch):
 		d.Code, d.Summary = "manifest_mismatch", "the process announced a manifest that differs from its manifest file"
 		d.Hint = "the binary and open-conduit-extension.json come from different releases; reinstall the package"

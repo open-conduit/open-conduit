@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"path"
 	"path/filepath"
 	"time"
 
@@ -50,17 +51,20 @@ func ExtensionOps(version, commit string) *cli.ExtensionOps {
 			}
 			return describe(pkg), nil
 		},
-		Install: func(configPath, dir string, update bool) (cli.ExtensionChange, error) {
-			res, err := extproc.Install(extensionsRoot(configPath), dir, extproc.InstallOptions{Update: update, Taken: firstPartyTaken()})
+		Install: func(configPath string, r cli.InstallRequest) (cli.ExtensionChange, error) {
+			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
+			defer cancel()
+			src := extproc.Source{Location: r.Source, SHA256: r.SHA256}
+			res, err := extproc.InstallSource(ctx, extensionsRoot(configPath), src, extproc.InstallOptions{Update: r.Update, Taken: firstPartyTaken()})
 			if err != nil {
-				return cli.ExtensionChange{}, diagnosed(filepath.Base(dir), err)
+				return cli.ExtensionChange{}, diagnosed(path.Base(r.Source), err)
 			}
 			action := "installed"
-			if update {
+			if r.Update {
 				action = "updated"
 			}
 			return cli.ExtensionChange{Action: action, Name: res.Name, Version: res.Version, Previous: res.Previous, Dir: res.Dir,
-				Notes: []string{"Takes effect at the next open-conduit serve.", "Certify it first with: open-conduit extension certify " + dir}}, nil
+				Notes: []string{"Takes effect at the next open-conduit serve.", "Certify it with: open-conduit extension certify " + res.Dir}}, nil
 		},
 		Rollback: func(configPath, name string) (cli.ExtensionChange, error) {
 			res, err := extproc.Rollback(extensionsRoot(configPath), name)

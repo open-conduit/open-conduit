@@ -46,6 +46,15 @@ type ExtensionChange struct {
 	Notes    []string `json:"notes,omitempty"`
 }
 
+// InstallRequest installs or updates a package from Source: a package
+// directory, or a release archive (.tar.gz) given as a path or an http(s)
+// URL, checked against SHA256 when set.
+type InstallRequest struct {
+	Source string
+	SHA256 string
+	Update bool
+}
+
 // CertifyRequest runs the conformance runner on a package directory.
 type CertifyRequest struct {
 	Dir string
@@ -65,7 +74,7 @@ type CertifyResult struct {
 type ExtensionOps struct {
 	List     func(configPath string) (ExtensionList, error)
 	Inspect  func(dir string) (ExtensionPackage, error)
-	Install  func(configPath, dir string, update bool) (ExtensionChange, error)
+	Install  func(configPath string, r InstallRequest) (ExtensionChange, error)
 	Rollback func(configPath, name string) (ExtensionChange, error)
 	Remove   func(configPath, stateDir, name string, force bool) (ExtensionChange, error)
 	Certify  func(ctx context.Context, r CertifyRequest) (CertifyResult, error)
@@ -76,7 +85,9 @@ type ExtensionOps struct {
 const extensionHelp = `Usage: open-conduit extension COMMAND [--config PATH]
   list [--json]                 installed packages (in <config dir>/extensions)
   inspect DIR [--json]          check a package directory offline
-  install DIR | update DIR      install a package, or replace an installed one (the old release is kept for rollback)
+  install SOURCE | update SOURCE [--sha256 HEX]
+                                install a package, or replace an installed one (the old release is kept for rollback);
+                                SOURCE is a package directory, or a release .tar.gz as a path or URL (plain http needs --sha256)
   rollback NAME                 swap back the release the last update replaced
   remove NAME [--force]         remove a package (refused while the config uses its types; its state is kept)
   certify DIR [--json] [--report FILE]   run the conformance runner on a package
@@ -113,7 +124,7 @@ func (o *operator) extension(args []string) int {
 	}
 	sub := args[0]
 	rest, bools := boolFlags(args[1:], "json", "force")
-	f := newFlags(sub, "config", "report")
+	f := newFlags(sub, "config", "report", "sha256")
 	pos, err := f.parse(rest)
 	if err != nil {
 		return usageError(o.errOut, "invalid extension flags")
@@ -163,11 +174,14 @@ func (o *operator) extension(args []string) int {
 		fmt.Fprintf(o.out, "%s %s (protocol %v): valid package\n  %s\n  provides: %s\n  digest sha256:%s\n", p.Name, p.Version, p.Protocol, p.Summary, strings.Join(p.Provides, ", "), p.Digest)
 		return 0
 	case "install", "update":
-		dir, ok := one("DIR")
-		if !ok {
-			return usageError(o.errOut, "expected extension "+sub+" DIR")
+		if len(pos) != 1 {
+			return usageError(o.errOut, "expected extension "+sub+" DIR|ARCHIVE|URL [--sha256 HEX]")
 		}
-		c, err := ops.Install(path, dir, sub == "update")
+		source := pos[0]
+		if !strings.Contains(source, "://") {
+			source = o.abs(source)
+		}
+		c, err := ops.Install(path, InstallRequest{Source: source, SHA256: f.get("sha256"), Update: sub == "update"})
 		return o.change(c, err, bools["json"])
 	case "rollback":
 		name, ok := one("NAME")
