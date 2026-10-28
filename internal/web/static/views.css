@@ -937,7 +937,8 @@
   border-bottom: 1px solid var(--rule);
   margin-bottom: 14px;
 }
-.tabs button {
+.tabs button,
+.tabs a {
   background: none;
   border: 0;
   padding: 8px 12px;
@@ -946,10 +947,12 @@
   cursor: pointer;
   position: relative;
 }
-.tabs button:hover {
+.tabs button:hover,
+.tabs a:hover {
   color: var(--ink);
 }
-.tabs button.is-on {
+.tabs button.is-on,
+.tabs a.is-on {
   color: var(--ink);
   background: var(--select);
   border-radius: 3px 3px 0 0;
@@ -3658,4 +3661,108 @@
   .c-avatar {
     display: none;
   }
+}
+
+/* ── Work page port: links and disclosures where the prototype had
+   buttons, so turns, tabs, filters and events work without script ── */
+a.score-turn,
+a.chip,
+a.ev-row,
+.tabs a {
+  color: inherit;
+  text-decoration: none;
+}
+a.chip.is-on,
+.chip.is-on {
+  color: var(--ink);
+}
+.score-turn .st-trig,
+.score-turn b {
+  color: inherit;
+}
+summary.c-act-row,
+.c-rawd > summary,
+.code-more > summary {
+  list-style: none;
+}
+summary.c-act-row::-webkit-details-marker,
+.c-rawd > summary::-webkit-details-marker,
+.code-more > summary::-webkit-details-marker {
+  display: none;
+}
+details[open] > summary.c-act-row > .c-act-glyph {
+  transform: rotate(90deg);
+}
+.c-call > summary .c-act-glyph,
+.c-tool:not(:has(.c-io > *)) > summary .c-act-glyph {
+  transform: none;
+}
+.c-rawd {
+  display: grid;
+  gap: 4px;
+}
+.code-more > summary {
+  display: inline-block;
+  margin-top: 4px;
+}
+.code-more[open] > summary {
+  display: none;
+}
+.code-more > .code-block {
+  margin-top: 0;
+  border-top: 0;
+}
+.c-steps {
+  display: grid;
+  gap: 2px;
+  padding-left: 8px;
+  border-left: 1px solid var(--rule);
+  font-size: 12px;
+}
+.tx-note,
+.tx-raw {
+  color: var(--ink-3);
+  font-size: var(--t-small);
+  margin: 8px 0;
+}
+.mono-cut > span {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.transcript [hidden] {
+  display: none;
+}
+.transcript > *,
+details.c-act,
+.c-group-body > *,
+.c-io > * {
+  min-width: 0;
+}
+.c-io .code-block {
+  overflow-x: auto;
+}
+/* A failed group is red in its own row; only its failed calls are red
+   inside it. */
+.c-group.is-error .c-tool:not(.is-error) .c-act-what,
+.c-group.is-error .c-tool:not(.is-error) .c-act-label {
+  color: var(--ink-2);
+}
+.c-group.is-error .c-tool:not(.is-error) .c-act-label {
+  color: var(--ink-3);
+}
+.facts [hidden],
+.ev-detail [hidden],
+.cmd [hidden] {
+  display: none;
+}
+.ev-detail[hidden] {
+  display: none;
+}
+/* The Runs ledger's action cell is also .c-act: inside a transcript it is
+   an activity row. */
+.transcript .c-act {
+  display: block;
+  grid-area: auto;
 }

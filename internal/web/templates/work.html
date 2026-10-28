@@ -1,95 +1,226 @@
-{{define "content"}}{{$p := .Page}}{{with .Data}}{{$d := .}}
-<a class="back" href="/">All runs</a>
-<div class="head run-head s-{{.Run.State}}">
-  <div>
-    <h1>{{$p.Title}}</h1>
-    <p class="sub"><span class="state s-{{.Run.State}}">{{.Run.State}}</span><span>Turn {{.Run.Attempt}}{{with .Attempts}} of {{len .}}{{end}}</span>{{with .Run.StartedAt}}<span title="{{time .}}">started {{ago .}}</span>{{end}}<span>{{duration .Run}}</span></p>
-  </div>
-  <nav class="seg" aria-label="Output">
-    <a href="/output?run={{.Run.ID}}&amp;pick=log">Log</a><a href="/output?run={{.Run.ID}}&amp;pick=transcript">Transcript</a>
+{{define "content"}}{{$p := .Page}}{{with .Data}}{{if .Missing}}{{template "work-missing" .Missing}}{{else}}{{$d := .}}{{$w := .W}}
+<div class="page detail">
+  <nav class="crumbs" aria-label="Breadcrumb">
+    <a href="/">Runs</a><span aria-hidden="true">/</span>
+    <a href="/?scope={{$w.ScopeID}}">{{$w.ScopeID}}</a><span aria-hidden="true">/</span>
+    <span aria-current="page">{{if $w.Ref}}{{$w.Ref}}{{else}}{{$w.Title}}{{end}}</span>
   </nav>
-</div>
-{{with summary .Run}}<p class="lead">{{.}}</p>{{end}}
 
-<div class="run-grid">
-<div class="run-main">
-{{template "panels" .Panels}}
+  <header class="d-head">
+    <div class="d-title">
+      <h1>{{with $w.Ref}}<span class="d-ref">{{.}}</span> {{end}}{{$w.Title}}</h1>
+      <p class="d-state k-{{$w.Disp.Kind}}">
+        {{mark $w.Disp.Kind 13 ""}}
+        <b>{{$w.Disp.Label}}</b>
+        {{with $w.Disp.Detail}}<span>{{.}}</span>{{end}}
+        {{with .Since}}<span class="d-since">{{.}}</span>{{end}}
+      </p>
+    </div>
+    <div class="d-actions">
+      {{with $w.Display}}{{range .Links}}<a class="btn btn-quiet btn-sm" href="{{.URL}}" target="_blank" rel="noreferrer">{{.Label}} ↗</a>{{end}}{{end}}
+      {{template "work-actions" .Ctx}}
+    </div>
+  </header>
 
-{{if .Actions}}
-<section class="panel actions">
-  <h2>Actions</h2>
-  {{range .Actions}}
-  <form method="post" action="/actions" class="action"{{if not .Prompt}} data-confirm="{{.Label}}?"{{end}}>
-    <input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}">
-    <input type="hidden" name="work" value="{{$d.Run.WorkID}}"><input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">
-    {{if .Choices}}<p class="choices-label">{{.Label}} <span class="from">from {{.Provider}}</span></p>
-    <div class="choices">{{range .Choices}}<button name="input" value="{{.}}">{{.}}</button>{{end}}</div>
-    {{else}}{{if .Prompt}}<label>{{.Label}} <span class="from">from {{.Provider}}</span>
-      <textarea name="input" rows="3" placeholder="{{.Prompt}}" aria-label="{{.Prompt}}"></textarea></label>{{end}}
-    <button{{if .Prompt}} class="primary"{{end}}>{{if .Prompt}}Send{{else}}{{.Label}}{{end}}</button>{{end}}
-  </form>
+  {{with .Prominent}}{{template "panels" .}}{{end}}
+
+  {{with .Repair}}
+  <section class="repair" aria-label="Needs repair">
+    <div class="repair-head">{{mark "repair" 13 ""}}<b>{{.Label}}</b></div>
+    <p>{{.Text}}</p>
+    {{with .Retry}}{{if or .Exhausted .Blocked}}<p class="repair-next">{{if .Exhausted}}Retry policy has stopped trying after {{plural .FailureCount "failure"}}{{else}}Retries are blocked{{end}}{{with .BlockedReason}} (<code>{{.}}</code>){{end}}.</p>{{end}}{{end}}
+    <div class="row-gap">
+      <a class="btn btn-primary" href="/work/confirm?action=retry&amp;id={{$w.ID}}" data-dialog="dlg-retry">Run again…</a>
+      {{with .Inspect}}<a class="btn btn-quiet" href="/work?id={{$w.ID}}&amp;turn={{.}}">Inspect turn {{.}}</a>{{end}}
+      <a class="btn btn-quiet" href="/work/confirm?action=hold&amp;id={{$w.ID}}" data-dialog="dlg-hold">Hold instead</a>
+    </div>
+  </section>
   {{end}}
-</section>
-{{end}}
 
-<section class="timeline" aria-labelledby="timeline">
-  <div class="timeline-head"><h2 id="timeline">Timeline</h2>{{if gt (len .Turns) 1}}<button type="button" data-open-turns>Open every turn</button>{{end}}</div>
-  {{range .Turns}}<details class="turn s-{{.Run.State}}" id="turn-{{.Run.Attempt}}" data-part="/run/conversation?run={{.Run.ID}}"{{if eq .Run.ID $d.Run.ID}} open aria-current="step"{{end}}{{if .Conv}} data-loaded{{end}}{{if .Live}} data-live{{end}}>
-    <summary class="turn-mark"><span class="tm-n">Turn {{.Run.Attempt}}</span><span class="state s-{{.Run.State}}">{{.Run.State}}</span><span class="tm-w">{{trigger .Run}}</span><span class="tm-t"{{with .Run.StartedAt}} title="{{time .}}"{{end}}>{{with .Run.StartedAt}}{{ago .}}, {{end}}{{duration .Run}}</span>{{if ne .Run.ID $d.Run.ID}}<a href="/run?id={{.Run.ID}}">Go to turn</a>{{end}}</summary>
-    <div class="conv">{{if or .Conv .Missing}}{{template "conversation" .}}{{else}}<p class="note">Loading…</p>{{end}}</div>
-  </details>
+  {{with $w.Hold}}
+  <div class="callout tone-held"><strong>Held {{since (parseTime .At)}}</strong>{{with .Reason}} “{{.}}”{{end}}. No turn starts or resumes until it's released; events keep queueing.</div>
   {{end}}
-</section>
 
-{{if .Run.Artifacts}}
-<section>
-  <h2>Outputs</h2>
-  <ul class="outputs">{{range $i, $a := .Run.Artifacts}}<li><a class="mono" href="/output?run={{$d.Run.ID}}&amp;pick={{$i}}">{{$a.ID}}</a> <span class="from">{{$a.MediaType}}, {{$a.Size}} bytes</span></li>{{end}}</ul>
-</section>
-{{end}}
+  {{template "score" .}}
 
-<details class="detail">
-  <summary>Everything the daemon knows about this run</summary>
-  <pre>{{.Detail}}</pre>
-</details>
-</div>
-
-<aside class="run-side">
-<section class="controls">
-  <h2>Controls</h2>
-  <div class="btns">
-  <form method="post" action="/work/retry"><input type="hidden" name="work" value="{{.Run.WorkID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button>Run again</button></form>
-  {{if and .Work .Work.Hold}}
-  <form method="post" action="/work/release"><input type="hidden" name="work" value="{{.Run.WorkID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button>Release</button></form>
-  {{else}}
-  <form method="post" action="/work/hold"><input type="hidden" name="work" value="{{.Run.WorkID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button>Hold</button></form>
-  {{end}}
+  <div class="d-body">
+    <section class="d-main" aria-label="Turn">
+      <div class="tabs" role="tablist">
+        <a role="tab" href="/work?id={{$w.ID}}{{with .Turn}}&amp;turn={{.Number}}{{end}}" aria-selected="{{if eq .Tab ""}}true{{else}}false{{end}}"{{if eq .Tab ""}} class="is-on"{{end}}>{{with .Turn}}Turn {{.Number}}{{else}}Turns{{end}}</a>
+        <a role="tab" href="/work?id={{$w.ID}}&amp;tab=events" aria-selected="{{if eq .Tab "events"}}true{{else}}false{{end}}"{{if eq .Tab "events"}} class="is-on"{{end}}>Events <span class="tab-n">{{len $w.Events}}</span></a>
+      </div>
+      {{if eq .Tab "events"}}{{template "events-tab" .}}{{else if .Turn}}{{template "turn-panel" .}}{{else}}
+      <div class="tx-empty">{{if $w.Hold}}No turn has started: the Work was held before its first turn.{{else}}No turns yet.{{with $w.Disp.Detail}} {{.}}.{{end}}{{end}}</div>
+      {{end}}
+    </section>
+    {{template "facts" .}}
   </div>
-  <div class="btns danger-zone">
-  {{if or (live .Run) (eq .Run.State "parked")}}
-  <form method="post" action="/run/cancel" data-confirm="Cancel execution {{.Run.ID}}?"><input type="hidden" name="run" value="{{.Run.ID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button class="danger">Cancel this turn</button></form>
-  {{end}}
-  <form method="post" action="/work/cancel" data-confirm="Cancel work {{.Run.WorkID}}? This is terminal."><input type="hidden" name="work" value="{{.Run.WorkID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button class="danger">Cancel the Work</button></form>
-  </div>
-  <p class="hint">Attach from a terminal<code>open-conduit work attach {{.Run.WorkID}}</code></p>
-</section>
+</div>
+{{end}}{{end}}{{end}}
 
-{{with .Work}}
-<section>
-  <h2>Work</h2>
-  <dl class="facts">
-    {{with .Hold}}<dt>held</dt><dd class="held">{{.Reason}}, since {{time .At}}</dd>{{end}}
-    {{range .Annotations}}<dt>{{.Name}}</dt><dd>{{.Value}}</dd>{{end}}
-    {{range $d.Waits}}<dt>waiting</dt><dd>{{.State}}{{with .Match.Types}} for {{range $i, $t := .}}{{if $i}}, {{end}}{{$t}}{{end}}{{end}}{{with .WakeEventID}} (woken by {{.}}){{end}}</dd>{{end}}
-    {{range .CorrelationKeys}}<dt>key</dt><dd>{{.Source}} {{.ExternalID}}</dd>{{end}}
-    <dt>state</dt><dd>{{.State}}, revision {{.Revision}}</dd>
-    <dt>id</dt><dd class="mono">{{.ID}}</dd>
-    <dt>executor</dt><dd>{{$d.Run.ExecutorBinding}}{{with $d.Run.Executor}} ({{.}}){{end}}</dd>
-  </dl>
-</section>
+{{define "work-missing"}}
+<div class="page">
+  <div class="state-page">
+    {{if .NotFound}}<h1>No work with ID {{.ID}}</h1>
+    <p>It may belong to a different daemon, or retention may have removed it.</p>
+    {{else}}<h1>This work could not be read</h1>{{end}}
+    <a class="btn" href="/">Back to Runs</a>
+  </div>
+</div>
 {{end}}
-</aside>
+
+{{define "score"}}{{$w := .W}}{{with .Score}}
+<section class="score" aria-label="Lifecycle">
+  <div class="score-top">
+    <span class="score-k">Lifetime</span>
+    <span class="score-v"><b>{{durp .Active}}</b> executing of <b>{{dur .Elapsed}}</b> since {{at $w.Created}}</span>
+    {{ratio .Ratio}}
+    <span class="score-v score-right">{{plural (len .Turns) "turn"}} · {{plural .Events "event"}}</span>
+  </div>
+  {{lifeline .Life}}
+  <ol class="score-turns">
+    {{range .Turns}}
+    <li class="score-item">
+      {{if .GapShown}}<span class="score-gap" title="Time between turns">{{dur .Gap}}<i>{{.GapLabel}}</i></span>{{end}}
+      <a class="score-turn s-{{.T.State}}{{if .Selected}} is-on{{end}}" href="{{.Href}}"{{if .Selected}} aria-current="step"{{end}}>
+        <span class="st-row">{{mark .T.State 10 ""}}<b>Turn {{.T.Number}}</b><span class="st-dur">{{durp .Active}}</span></span>
+        <span class="st-trig">{{.Trigger}}</span>
+        {{if gt (len .T.Run.Segments) 1}}<span class="st-seg">{{len .T.Run.Segments}} segments</span>{{end}}
+      </a>
+    </li>
+    {{end}}
+    {{with .Now}}
+    <li class="score-item score-now">
+      <span class="score-gap is-open">{{dur .Gap}}<i>{{.Label}}</i></span>
+      <span class="score-next k-{{.Kind}}">{{mark .Kind 10 ""}} now</span>
+    </li>
+    {{end}}
+  </ol>
+</section>
+{{end}}{{end}}
+
+{{define "turn-panel"}}{{$w := .W}}{{$t := .Turn}}{{with .TurnPanel}}
+<div class="turn">
+  <div class="turn-head">
+    <p class="turn-trigger">{{if .Trigger}}{{.Verb}} <code>{{.Trigger}}</code><span class="turn-when"> · {{at .Started}}</span>{{else}}Started {{at .Started}}{{end}}</p>
+    {{with .Outcome}}
+    <div class="turn-result o-{{.Kind}}">
+      {{with .Summary}}{{prose .}}{{end}}
+      <p class="t-meta">{{$.TurnPanel.OutcomeNote}}</p>
+    </div>
+    {{end}}
+    <dl class="turn-stats">
+      <div><dt>Active</dt><dd>{{durp .Active}}{{if $t.Live}} so far{{end}}{{if gt .Segments 1}}<small> in {{.Segments}} segments</small>{{end}}</dd></div>
+      <div><dt>Executor</dt><dd>{{$t.ExecutorBinding}}{{with $t.Executor}} → {{.}}{{end}}</dd></div>
+      {{with .Model}}<div><dt>Model</dt><dd>{{.}}</dd></div>{{end}}
+      {{with .Usage}}{{if .Cost}}<div><dt>Cost</dt><dd>{{money (derefCost .Cost)}} <small>{{kTok (deref .OutputTokens)}} out · {{kTok (deref .CachedTokens)}} cached</small></dd></div>{{else if .OutputTokens}}<div><dt>Tokens</dt><dd>{{kTok (deref .OutputTokens)}} out <small>{{kTok (deref .CachedTokens)}} cached</small></dd></div>{{end}}{{end}}
+      {{if or .Calls .Tool}}<div><dt>Calls</dt><dd>{{.Calls}} model · {{.Tool}} tool</dd></div>{{end}}
+      {{if not .Deadline.IsZero}}<div><dt>Deadline</dt><dd>{{until .Deadline}}</dd></div>{{end}}
+    </dl>
+  </div>
+  {{template "tx-tools" $}}
+  <div class="tx" data-conv{{if $t.Live}} data-live="/run/conversation?run={{$t.ID}}{{with $.TV.View.Query}}&amp;q={{.}}{{end}}"{{end}}>
+  {{template "conversation" $.TV}}
+  </div>
+  <p class="tx-raw"><a class="link-btn" href="/output?run={{$t.ID}}&amp;pick=transcript">Raw transcript</a> · <a class="link-btn" href="/output?run={{$t.ID}}&amp;pick=log">Log</a></p>
 </div>
 {{end}}{{end}}
+
+{{define "tx-tools"}}{{$w := .W}}{{$t := .Turn}}{{$v := .TV.View}}{{$c := .TV.Chat}}
+<form class="tx-tools" role="toolbar" aria-label="Transcript controls" method="get" action="/work" data-tx-tools>
+  <input type="hidden" name="id" value="{{$w.ID}}"><input type="hidden" name="turn" value="{{$t.Number}}">
+  <div class="tx-filters" role="group" aria-label="Show">
+    {{range filters}}<a class="chip{{if index $v.On .}} is-on{{end}}" href="{{filterHref $w.ID $t.Number $v .}}" data-filter="{{.}}" aria-pressed="{{if index $v.On .}}true{{else}}false{{end}}">{{filterName .}} <span>{{index $c.Counts .}}</span></a>{{end}}
+  </div>
+  <span class="toolbar-gap"></span>
+  {{if $c.Errors}}<a class="btn btn-xs btn-fail" href="#first-error" data-jump-error>Jump to error <kbd class="kbd">e</kbd></a>{{end}}
+  {{if $v.Expand}}<a class="btn btn-xs btn-quiet" href="{{filterHref $w.ID $t.Number $v ""}}" data-expand>Collapse all</a>{{else}}<a class="btn btn-xs btn-quiet" href="{{filterHref $w.ID $t.Number $v ""}}&amp;expand=1" data-expand>Expand all</a>{{end}}
+  <input class="tx-search" type="search" name="q" value="{{$v.Query}}" placeholder="Find in turn" aria-label="Find in this turn">
+</form>
+{{end}}
+
+{{define "events-tab"}}
+<div class="events">
+  <p class="events-intro">Every event recorded for this Work, in acceptance order, with how routing handled it. Use this to answer “why did that happen?”</p>
+  {{if .Events}}
+  <ol class="ev-list">
+    {{range .Events}}
+    <li class="ev eff-{{.Effect}}" id="ev-{{.Sequence}}">
+      <a class="ev-row" href="{{.Href}}#ev-{{.Sequence}}" aria-expanded="{{if .Open}}true{{else}}false{{end}}" data-event-row{{if not .Route}} data-reload{{end}}>
+        <span class="ev-seq">{{.Sequence}}</span>
+        <time>{{at .At}}</time>
+        <code class="ev-type">{{.Type}}</code>
+        <span class="ev-sum">{{.Source}}</span>
+        <span class="ev-eff">{{.Effect}}</span>
+        {{with .Turn}}<span class="ev-turn">turn {{.}}</span>{{end}}
+      </a>
+      <dl class="ev-detail"{{if not .Open}} hidden{{end}}>
+        <dt>Routing</dt>
+        <dd>{{with .Route}}{{if .Route}}route <code>{{.Route}}</code>{{with .Binding}} → binding <code>{{.}}</code>{{end}}{{with .Policy}} · active policy <code>{{.}}</code>{{end}}{{with .Generation}} · generation {{.}}{{end}}{{else}}not routed as input{{with .Disposition}} ({{.}}){{end}}{{end}}{{else}}this daemon does not explain routing in lists; <code>open-conduit route {{$.W.ID}}</code>{{end}}</dd>
+        {{with .Route}}{{with .Reason}}<dt>Why</dt><dd>{{.}}</dd>{{end}}{{with .DisplayRefused}}<dt>Display</dt><dd>dropped: {{.}}</dd>{{end}}{{end}}
+        <dt>Source</dt><dd><code>{{.Source}}</code> · accepted {{stamp (parseTime .ReceivedAt)}}</dd>
+        <dt>Event ID</dt><dd><code>{{.ID}}</code> <button type="button" class="btn btn-quiet btn-xs" data-copy="{{.ID}}" hidden>Copy</button></dd>
+        <dt>CLI</dt><dd><code>open-conduit events chain {{.ID}}</code></dd>
+      </dl>
+    </li>
+    {{end}}
+  </ol>
+  {{else}}<p class="tx-empty">No events are recorded for this Work.</p>{{end}}
+</div>
+{{end}}
+
+{{define "facts"}}{{$w := .W}}{{$t := .Turn}}{{$f := .Facts}}
+<aside class="facts" aria-label="Details">
+  <section>
+    <h3>Work</h3>
+    <dl>
+      <dt>ID</dt><dd class="mono-cut"><span title="{{$w.ID}}">{{cut $w.ID 18}}</span> <button type="button" class="btn btn-quiet btn-xs" data-copy="{{$w.ID}}" hidden>Copy</button></dd>
+      <dt>Kind</dt><dd><code>{{$w.Kind}}</code></dd>
+      <dt>Scope</dt><dd><a href="/config?scope={{$w.ScopeID}}">{{$f.ScopeName}}</a></dd>
+      <dt>State</dt><dd><code>{{$w.State}}</code> · revision {{$w.Revision}}</dd>
+      {{with $w.CorrelationKeys}}<dt>Owns</dt><dd>{{range .}}<code class="block-code">{{.ExternalID}}</code>{{end}}</dd>{{end}}
+      {{with $w.Display}}{{with .Requester}}<dt>Requester</dt><dd>{{.}}</dd>{{end}}{{end}}
+      <dt>Created</dt><dd>{{at $w.Created}}</dd>
+    </dl>
+  </section>
+  <section>
+    <h3>Routing</h3>
+    <dl>
+      <dt>Route</dt><dd><code>{{or $f.Route "—"}}</code>{{with $f.Handler}} · handler <code>{{.}}</code>{{end}}</dd>
+      <dt>While running</dt><dd>{{with $f.Policy}}<code>{{.}}</code>{{with $f.PolicyText}} — {{.}}{{end}}{{else}}—{{end}}</dd>
+      <dt>Binding</dt><dd><code>{{or $w.Binding "—"}}</code>{{with $w.Executor}} → {{.}}{{end}}</dd>
+      <dt>Generation</dt><dd>{{or $f.Generation "—"}}</dd>
+    </dl>
+    <a class="link-btn" href="/config?scope={{$w.ScopeID}}">Trace how an event routes here →</a>
+  </section>
+  {{with $t}}
+  <section>
+    <h3>Turn {{.Number}}</h3>
+    <dl>
+      <dt>Execution</dt><dd class="mono-cut"><span title="{{.ID}}">…/attempt/{{.Number}}</span> <button type="button" class="btn btn-quiet btn-xs" data-copy="{{.ID}}" hidden>Copy</button></dd>
+      <dt>State</dt><dd><code>{{.State}}</code></dd>
+      {{with .Workspace}}<dt>Workspace</dt><dd>{{with .Kind}}{{.}} · {{end}}<code>{{.Ref}}</code></dd>{{end}}
+      <dt>Inputs</dt><dd>{{plural .Inputs "event"}}</dd>
+      {{if eq .State "failed"}}{{with .Outcome}}<dt>Error</dt><dd class="fail-text">{{or .Summary "failed"}}</dd>{{end}}{{end}}
+    </dl>
+    <div class="cmd cmd-sm"><code>open-conduit runs log {{.ID}} --transcript</code><button type="button" class="btn btn-quiet btn-xs" data-copy="open-conduit runs log {{.ID}} --transcript" hidden>Copy</button></div>
+  </section>
+  {{end}}
+  <section>
+    <h3>Totals</h3>
+    <dl>
+      <dt>Executing</dt><dd>{{durp ($w.Active now)}}</dd>
+      <dt>Lifetime</dt><dd>{{dur ($w.Elapsed now)}}</dd>
+      <dt>Cost</dt><dd>{{if $f.Reported}}{{money $f.Cost}}{{else}}—{{end}} <small>{{$f.Reported}} of {{plural (len $w.Turns) "turn"}} reported usage</small></dd>
+    </dl>
+  </section>
+  {{with .Side}}
+  <section>
+    <h3>From extensions</h3>
+    {{template "panels" .}}
+  </section>
+  {{end}}
+</aside>
+{{end}}
 
 {{define "scripts"}}<script src="/static/work.js" defer></script>{{end}}

@@ -1,23 +1,112 @@
-{{define "conversation"}}{{with .Conv}}
-{{with .Trimmed}}<p class="note">The first {{size .}} of this turn's transcript are not shown. <a href="/output?run={{$.Run.ID}}&amp;pick=transcript">Raw transcript</a></p>{{end}}
-{{if .Entries}}{{template "entries" .Entries}}{{else if not $.Live}}<p class="note">The transcript has no messages to show. <a href="/output?run={{$.Run.ID}}&amp;pick=log">Log</a></p>{{end}}
-{{else}}<p class="note">No conversation to show: {{.Missing}}. <a href="/output?run={{.Run.ID}}&amp;pick=log">Log</a></p>{{end}}
-{{if .Live}}<p class="following"><span class="pulse" aria-hidden="true"></span>Working</p>
-{{else}}{{with summary .Run}}<div class="outcome s-{{$.Run.State}}"><span class="state s-{{$.Run.State}}">{{$.Run.State}}</span><p>{{.}}</p></div>{{end}}{{end}}
+{{define "conversation"}}{{$x := .View.Expand}}
+{{- with .Conv}}{{with .Trimmed}}<p class="tx-note">The first {{size .}} of this turn's transcript are not shown. <a class="link-btn" href="/output?run={{$.Run.ID}}&amp;pick=transcript">Raw transcript</a></p>{{end}}{{end}}
+{{- if not .Conv}}<p class="tx-empty">{{if .Live}}Waiting for the first output from the executor…{{else}}This turn produced no transcript ({{.Missing}}). Executors that are not agents report only their outcome. <a class="link-btn" href="/output?run={{.Run.ID}}&amp;pick=log">Log</a>{{end}}</p>
+{{- else if not .Chat.Blocks}}<p class="tx-empty">{{if .Live}}Waiting for the first output from the executor…{{else}}This turn produced no transcript. Executors that are not agents report only their outcome.{{end}}</p>
+{{- else}}
+<div class="transcript">
+  {{- range .Blocks}}{{template "chat-block" (blockCtx . $x)}}{{end}}
+  {{- if not .Blocks}}<p class="tx-empty">Nothing in this turn matches.</p>{{end}}
+  {{- if .Live}}
+  <div class="t-live" data-live-end>
+    <span class="t-live-dot" aria-hidden="true"></span>
+    Running · new output appears here
+    <label class="t-follow" hidden><input type="checkbox" checked data-follow> follow</label>
+  </div>
+  {{- end}}
+</div>
+{{- end}}
 {{end}}
 
-{{define "entries"}}{{range .}}
-{{if eq .Kind "user"}}<div class="msg user"><p class="who">Prompt{{with clock .At}} <time>{{.}}</time>{{end}}</p>
-<div class="bubble">{{if .Full}}<div class="clipped">{{markdown .Text}}</div><details class="more"><summary>Show the whole prompt</summary>{{markdown .Full}}</details>{{else}}{{markdown .Text}}{{end}}</div></div>
-{{else if eq .Kind "assistant"}}<div class="msg agent"><p class="who">Agent{{with clock .At}} <time>{{.}}</time>{{end}}</p>
-<div class="bubble">{{markdown .Text}}</div></div>
-{{else if eq .Kind "thinking"}}<details class="thinking"><summary>Thinking</summary><div>{{markdown .Text}}</div></details>
-{{else if eq .Kind "tool"}}{{with .Tool}}<details class="tool{{if .Error}} failed{{end}}" data-key="{{.ID}}">
-<summary><span class="tname">{{.Name}}</span>{{with .Server}}<span class="from">{{.}}</span>{{end}}{{with .Headline}}<code class="thead">{{.}}</code>{{end}}{{with .Note}}<span class="tnote">{{.}}</span>{{end}}<span class="tstat">{{if not .Done}}<span class="pulse" aria-hidden="true"></span>running{{else if .Error}}failed{{else if .Steps}}{{plural (len .Steps) "step"}}{{end}}</span></summary>
-<div class="tbody">
-{{with .Input}}<dl class="targs">{{range .}}<dt>{{.Key}}</dt><dd>{{if .Block}}<pre>{{.Value}}</pre>{{else}}<code>{{.Value}}</code>{{end}}</dd>{{end}}</dl>{{end}}
-{{with .Steps}}<div class="steps">{{template "entries" .}}</div>{{end}}
-{{if .Lost}}<p class="from">No result was recorded</p>{{else if .Done}}<p class="tlabel">{{if .Error}}Error{{else}}Result{{end}}</p>{{if .Result}}<pre class="tres">{{.Result}}</pre>{{else}}<p class="from">Nothing returned</p>{{end}}{{with .Clipped}}<p class="from">{{size .}} more not shown</p>{{end}}{{end}}
-</div></details>{{end}}
-{{else}}<p class="note">{{.Text}}</p>{{end}}
+{{define "chat-block"}}{{$x := .Expand}}{{with .B}}
+{{- if eq .Kind "prompt"}}
+<details class="c-act c-prompt" data-f="{{.Filter}}" data-key="prompt"{{if $x}} open{{end}}>
+  <summary><span class="c-act-glyph" aria-hidden="true">↘</span><span class="c-act-what">Input to the executor</span><span class="c-act-label">{{.Title}}</span><time>{{stamp .At}}</time></summary>
+  <pre class="t-pre">{{.Text}}</pre>
+</details>
+{{- else if eq .Kind "agent"}}
+<div class="c-msg from-agent" data-f="{{.Filter}}">
+  <span class="c-avatar is-agent" aria-hidden="true"></span>
+  <div class="c-body">
+    <div class="c-meta"><b>Agent</b><time>{{stamp .At}}</time></div>
+    <div class="c-bubble"><div class="prose">{{markdown .Text}}</div></div>
+  </div>
+</div>
+{{- else if eq .Kind "person"}}
+<div class="c-msg from-person{{if .Injected}} is-injected{{end}}" data-f="{{.Filter}}">
+  <div class="c-body">
+    <div class="c-meta"><b>{{.Author}}</b>{{with .Via}}<span>{{.}}</span>{{end}}{{if .Injected}}<span class="c-inj">injected while running</span>{{end}}<time>{{stamp .At}}</time></div>
+    <div class="c-bubble"><div class="prose">{{markdown .Text}}</div></div>
+  </div>
+  <span class="c-avatar" aria-hidden="true">{{.Initial}}</span>
+</div>
+{{- else if eq .Kind "thinking"}}
+<details class="c-act c-prompt" data-f="{{.Filter}}"{{if $x}} open{{end}}>
+  <summary><span class="c-act-glyph" aria-hidden="true">·</span><span class="c-act-what">Thinking</span><span class="c-act-label">{{.Text}}</span><time>{{stamp .At}}</time></summary>
+  <div class="t-pre prose">{{markdown .Text}}</div>
+</details>
+{{- else if eq .Kind "sent"}}{{with .Tool}}
+<div class="c-msg from-agent is-sent" data-f="toolbelt"{{if $.B.First}} id="first-error"{{end}}>
+  <span class="c-avatar is-agent" aria-hidden="true"></span>
+  <div class="c-body">
+    <div class="c-meta"><b>Agent</b><span>sent via <code>{{.Name}}</code></span>{{with .Link}}<a href="{{.URL}}" target="_blank" rel="noreferrer">{{.Label}} ↗</a>{{end}}<time>{{stamp .At}}</time></div>
+    <div class="c-bubble">{{prose .Prose}}</div>
+    <details class="c-rawd" data-key="{{.Key}}"{{if or $x .Failed}} open{{end}}>
+      <summary class="c-raw">{{range $i, $f := .Facts}}{{if $i}} · {{end}}{{$f}}{{end}}{{if .Facts}} · {{end}}{{if .Failed}}failed · {{end}}request and response</summary>
+      <div class="c-io">
+        {{with .Raw}}{{template "code" (code "Request" . 12 false)}}{{end}}
+        {{with .Result}}{{template "code" (code "Response" . 12 $.B.Tool.Failed)}}{{end}}
+      </div>
+    </details>
+  </div>
+</div>
+{{end}}
+{{- else if eq .Kind "call"}}{{with .Tool}}
+<details class="c-act c-call{{if .Owner}} is-ext{{end}}{{if .Failed}} is-error{{end}}" data-f="toolbelt" data-key="{{.Key}}"{{if $.B.First}} id="first-error"{{end}}{{if or $x .Failed}} open{{end}}>
+  <summary class="c-act-row"><span class="c-act-glyph" aria-hidden="true">{{if .Owner}}◇{{else}}·{{end}}</span><span class="c-act-what mono">{{.Name}}</span><span class="c-act-label">{{.Label}}{{with .Facts}}<span class="c-facts"> → {{range $i, $f := .}}{{if $i}} · {{end}}{{$f}}{{end}}</span>{{end}}</span>{{if .Failed}}<span class="t-fail-n">failed</span>{{end}}{{if .Running}}<span class="t-dur">running</span>{{end}}{{with .Link}}<a href="{{.URL}}" target="_blank" rel="noreferrer" class="t-link">{{.Label}} ↗</a>{{end}}<time>{{stamp .At}}</time></summary>
+  <div class="c-io">
+    {{with .Raw}}{{template "code" (code "Request" . 12 false)}}{{end}}
+    {{with .Result}}{{template "code" (code "Response" . 12 $.B.Tool.Failed)}}{{end}}
+  </div>
+</details>
+{{end}}
+{{- else if eq .Kind "tools"}}
+<details class="c-act c-group{{if .Failed}} is-error{{end}}" data-f="tools"{{if .First}} id="first-error"{{end}}{{if or $x .Failed}} open{{end}}>
+  <summary class="c-act-row"><span class="c-act-glyph" aria-hidden="true">▸</span><span class="c-act-what">{{len .Group}} tool calls</span><span class="c-act-label">{{.Summary}}</span>{{with .Failed}}<span class="t-fail-n">{{.}} failed</span>{{end}}<time>{{with index .Group 0}}{{stamp .At}}{{end}}</time></summary>
+  <div class="c-group-body">{{range .Group}}{{template "tool-row" (toolCtx . $x)}}{{end}}</div>
+</details>
+{{- else if eq .Kind "rows"}}{{if .First}}<span id="first-error"></span>{{end}}
+{{- range .Group}}{{template "tool-row" (toolCtx . $x)}}{{end}}
+{{- else if eq .Kind "system"}}
+<div class="t-system" data-f="{{.Filter}}">{{range .Lines}}<div><time>{{stamp .At}}</time><span>{{.Text}}</span></div>{{end}}</div>
+{{- else if eq .Kind "orch"}}
+<div class="t-orch tone-{{.Tone}}" role="separator" aria-label="{{.Text}}">
+  <span class="t-orch-line"></span>
+  <span class="t-orch-text">{{mark (orchMark .Tone) 10 ""}}{{.Text}}<time>{{stamp .At}}</time></span>
+  <span class="t-orch-line"></span>
+</div>
+{{- end}}
 {{end}}{{end}}
+
+{{define "tool-row"}}{{$x := .Expand}}{{with .T}}
+<details class="c-act c-tool{{if .Failed}} is-error{{end}}" data-f="tools" data-key="{{.Key}}"{{if .Failed}} id="err-{{.Key}}"{{end}}{{if or $x .Failed}} open{{end}}>
+  <summary class="c-act-row"><span class="c-act-glyph" aria-hidden="true">▸</span><span class="c-act-what mono">{{.Name}}</span><span class="c-act-label mono">{{.Label}}</span>{{if .Failed}}<span class="t-fail-n">failed</span>{{end}}{{if .Running}}<span class="t-dur">running</span>{{end}}{{if .Lost}}<span class="t-dur">no result recorded</span>{{end}}<time>{{stamp .At}}</time></summary>
+  <div class="c-io">
+    {{with .Input}}{{$in := inputText .}}{{if ne $in $.T.Label}}{{template "code" (code "Input" $in 12 false)}}{{end}}{{end}}
+    {{with .Steps}}<div class="c-steps">{{template "steps" .}}</div>{{end}}
+    {{with .Result}}{{template "code" (code "Result" . 14 $.T.Failed)}}{{end}}
+    {{with .Clipped}}<p class="t-meta">{{size .}} more not shown</p>{{end}}
+  </div>
+</details>
+{{end}}{{end}}
+
+{{define "steps"}}{{range .}}{{if eq .Kind "tool"}}{{with .Tool}}<div class="c-step"><span class="c-act-what mono">{{.Name}}</span> <span class="c-act-label mono">{{.Headline}}</span>{{if .Error}} <span class="t-fail-n">failed</span>{{end}}</div>{{end}}{{else if eq .Kind "assistant"}}<div class="c-step prose">{{markdown .Text}}</div>{{end}}{{end}}{{end}}
+
+{{define "code"}}
+<div class="code">
+  {{with .Label}}<div class="code-label">{{.}}</div>{{end}}
+  <pre class="code-block">{{range .Shown}}<span{{with .Class}} class="{{.}}"{{end}}>{{.Text}}
+</span>{{end}}</pre>
+  {{with .More}}<details class="code-more"><summary class="link-btn">Show all {{$.Total}} lines</summary><pre class="code-block">{{range .}}<span{{with .Class}} class="{{.}}"{{end}}>{{.Text}}
+</span>{{end}}</pre></details>{{end}}
+</div>
+{{end}}
