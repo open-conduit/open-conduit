@@ -67,7 +67,7 @@ func (r Route) Samples(_ context.Context, in extension.SampleInput) []extension.
 			}
 			return id
 		}
-		now := time.Now().UTC().Truncate(time.Second)
+		now := in.Now.UTC().Truncate(time.Second)
 		issue := IssuePayload{Key: "ENG-1", Title: "Example issue", State: "open", Labels: []string{}, Attrs: map[string][]string{}, Author: "Example Person", CreatedAt: now}
 		if len(s.Labels.Require) > 0 {
 			issue.Labels = append(issue.Labels, s.Labels.Require[0])

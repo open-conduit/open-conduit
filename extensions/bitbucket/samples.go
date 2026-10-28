@@ -62,7 +62,7 @@ func (Route) Samples(_ context.Context, in extension.SampleInput) []extension.Ro
 			prefix = s.TrackerKeys[0]
 		}
 		issue := domain.CorrelationKey{Source: s.TrackerNS, ExternalID: tracker.IssueKey(prefix+"-7", "")}
-		now := time.Now().UTC().Truncate(time.Second)
+		now := in.Now.UTC().Truncate(time.Second)
 		out = append(out,
 			extension.RouteSample{ID: id("comment"), Title: "Someone comments on a pull request", Event: sampleEvent(s, TypeCommentHuman, issue, SchemaComment,
 				CommentPayload{Repo: s.Repo, Number: 2, ID: 1, Author: "Example Person", Body: "Could you also cover the edge case?", CreatedAt: now, UpdatedAt: now})},

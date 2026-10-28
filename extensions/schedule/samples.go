@@ -48,7 +48,7 @@ func (Route) Samples(_ context.Context, in extension.SampleInput) []extension.Ro
 				return j.Name + "/" + kind
 			}
 			if j.Recurring() {
-				at := time.Now().UTC().Truncate(time.Minute)
+				at := in.Now.UTC().Truncate(time.Minute)
 				out = append(out, extension.RouteSample{ID: id("due"), Title: "A scheduled job comes due: " + j.Name,
 					Event: sampleEvent(TypeSlot, s.Namespace, j.Name, TriggerPayload{Kind: KindTimer, Trigger: j.Describe(), Slot: at.Format("2006-01-02 15:04 UTC"), At: &at})})
 			}
