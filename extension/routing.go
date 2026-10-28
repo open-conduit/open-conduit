@@ -24,12 +24,16 @@ type RouteInput struct {
 // Reason says in a short phrase why the handler matched or skipped ("a new
 // issue the labels admit", "not an issue this entry watches"). It explains a
 // route trace and never changes the decision.
+// Display, when set on a match, replaces the Work's display (ValidateDisplay);
+// nil keeps what it has, so a handler sets it only when it has something to
+// say (the handler sees the current one on RouteInput.Work).
 type RouteDecision struct {
 	Match      bool
 	CreateID   domain.ID
 	Kind       string
 	AttachKeys []domain.CorrelationKey
 	Reason     string
+	Display    *domain.WorkDisplay
 }
 
 type RouteHandler interface {

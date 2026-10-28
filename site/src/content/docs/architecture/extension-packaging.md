@@ -184,7 +184,7 @@ Unsupported capabilities are refused at config validation, exactly as for in-pro
 
 `open-conduit extension certify DIR [--json] [--report FILE]` is the distributable conformance runner. It ships in the `open-conduit` binary. It starts the package exactly as the daemon does: `internal/extproc`, with a real SQLite coordination store and artifact store in a temporary directory, and the package's own fixture. It then runs the criteria and prints or writes a report. The exit status is 0 only when the package is certified. `make certify` certifies the first-party packages and the examples, and runs the negative controls.
 
-### Criteria (version 1)
+### Criteria (version 2)
 
 | ID | Applies | Requirement |
 | --- | --- | --- |
@@ -200,7 +200,7 @@ Unsupported capabilities are refused at config validation, exactly as for in-pro
 | `scope.host_surface` | always | No host call refused as unauthorized during the run |
 | `storage.kv_migration` | `kv_version > 0` | Migrates from layout 0, and again from 0 (idempotent) |
 | `ingress.conformance` | ingress type | `conformance.CheckIngress` on the fixture's case |
-| `routes.decisions` | routes and cases | Each case decided deterministically as expected |
+| `routes.decisions` | routes and cases | Each case decided deterministically as expected, with any Work display within its limits and http(s) links |
 | `operations.cases` | operations | Each case's output or refusal code; an undeclared operation is refused |
 | `executor.conformance` | executor | `conformance.CheckExecutor` |
 | `executor.inject` | inject capability | `conformance.CheckInjectExecutor` |
@@ -228,7 +228,7 @@ A report states:
 - the package's and host's protocol versions and the negotiated one;
 - the host build, Go version, OS and architecture;
 - every criterion's result;
-- the **limits**: what certification does not establish. It is not a sandbox or a safety review. Only the fixture is exercised, against fakes. One host, platform and protocol version are tested. The surfaces not covered by version 1 are webhooks, setup, providers, telemetry, annotations, rendering, emit and wait operations, the in-transaction callbacks, and the size and overload limits; the host's own suites cover those adapters.
+- the **limits**: what certification does not establish. It is not a sandbox or a safety review. Only the fixture is exercised, against fakes. One host, platform and protocol version are tested. The surfaces not covered by version 2 are webhooks, setup, providers, telemetry, annotations, rendering, emit and wait operations, the in-transaction callbacks, and the size and overload limits; the host's own suites cover those adapters.
 
 ### Negative controls
 
@@ -268,7 +268,7 @@ A report states:
 25. The SDK's final shape: `sdk.Extension` fields per surface, `sdk.Host`, `sdk.Store` (precondition-on-read optimistic commits; prefix ranges not protected) and `sdk.Artifacts`, plus `sdk.PackageCommand` for packaging.
 26. `secret.resolve` takes a `connection` field and `configure` entries carry `name` and `connection`, so a package reaches its connections' secrets without bootstrap glue (B05 scoping kept).
 27. Packages start before the configuration opens. A package that fails to start leaves its types unregistered, so a config using them fails validation and the daemon refuses to start with the diagnostic.
-28. Certification criteria version 1 (above), run against the package's own fixture by `open-conduit extension certify`. The fixture format lives in `protocol`. A declared ingress type or executor requires a fixture case.
+28. Certification criteria version 2 (above; version 2 added the Work display limits to `routes.decisions`), run against the package's own fixture by `open-conduit extension certify`. The fixture format lives in `protocol`. A declared ingress type or executor requires a fixture case.
 29. `receive_time_varies` relaxes only `received_at` equality for packages that stamp reconcile observations with their own clock.
 30. The certification runner is production code in the `open-conduit` binary, so composition may depend on the public `conformance` checks (never `conformance/reference`); the boundary rule says so.
 31. The Slack package requires source namespaces `slack` or `slack/…` (the subprocess namespacing rule), which the in-process extension does not.

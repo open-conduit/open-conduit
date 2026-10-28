@@ -805,6 +805,12 @@ func (t *Toolbelt) declareWaitInTx(tx storage.Tx, x domain.Execution, w domain.W
 			return nil, extension.ErrInvalid
 		}
 	}
+	// A description is for operator views: an agent's or an extension's
+	// that does not fit is cut to one line within the limit, never refused.
+	request.Description = extension.Clip(request.Description, extension.MaxWaitDescription)
+	if request.Description == "" && request.Timeout != nil {
+		request.Description = "until " + request.Timeout.UTC().Format(extension.DueLayout)
+	}
 	after := request.AfterSequence
 	if after == 0 {
 		after = state.ObservedSequence
@@ -817,7 +823,7 @@ func (t *Toolbelt) declareWaitInTx(tx storage.Tx, x domain.Execution, w domain.W
 		return nil, extension.ErrInvalid
 	}
 	suffix := identity(string(x.ID), fmt.Sprint(state.Epoch))
-	wait := domain.Wait{ID: domain.ID("wait/" + suffix), WorkID: w.ID, ExecutionID: x.ID, State: domain.WaitActive, Match: domain.EventMatch{Keys: append([]domain.CorrelationKey(nil), request.Match.Keys...), Types: append([]string(nil), request.Match.Types...)}, AfterSequence: after}
+	wait := domain.Wait{ID: domain.ID("wait/" + suffix), WorkID: w.ID, ExecutionID: x.ID, State: domain.WaitActive, Match: domain.EventMatch{Keys: append([]domain.CorrelationKey(nil), request.Match.Keys...), Types: append([]string(nil), request.Match.Types...)}, AfterSequence: after, Description: request.Description}
 	decl := &ToolbeltDeclaration{Epoch: state.Epoch, Wait: &wait}
 	if request.Timeout != nil {
 		if !request.Timeout.After(now) || request.Timeout.Sub(now) > 365*24*time.Hour {

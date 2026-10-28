@@ -3,6 +3,7 @@ package github_test
 import (
 	"context"
 	"encoding/json"
+	"reflect"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -121,5 +122,29 @@ func TestRouteInputSelection(t *testing.T) {
 		if got := match(t, scope, event(typ, "issue/5", "", struct{}{}), work).Match; got != want {
 			t.Fatalf("%s on existing Work: match=%v want %v", typ, got, want)
 		}
+	}
+}
+
+// A GitHub issue's Work says what it is: the issue's title, number, author
+// and link, then the link of a PR whose input reaches it.
+func TestRouteDisplay(t *testing.T) {
+	scope := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","webhook_secret":"hook"}`)
+	issue := gh.IssuePayload{Repo: repo, Number: 136, State: "open", Title: "TUI: show a held Work's reason in the list\nmore", Author: "example-user", URL: "https://github.com/" + repo + "/issues/136"}
+	d := match(t, scope, event(gh.TypeIssueOpen, "issue/136", gh.SchemaIssue, issue), nil)
+	want := domain.WorkDisplay{Title: "TUI: show a held Work's reason in the list", Ref: "#136", Requester: "example-user", Links: []domain.Link{{Label: "Issue #136", URL: "https://github.com/" + repo + "/issues/136"}}}
+	if d.Display == nil || !reflect.DeepEqual(*d.Display, want) {
+		t.Fatalf("display %+v", d.Display)
+	}
+	if err := extension.ValidateDisplay(d.Display); err != nil {
+		t.Fatal(err)
+	}
+	w := &domain.Work{ID: "work/136", Kind: gh.WorkKind, State: domain.WorkReady, Display: d.Display}
+	d = match(t, scope, event(gh.TypeChecksPassed, "issue/136", gh.SchemaChecks, gh.ChecksPayload{Repo: repo, Number: 137, Complete: true}), w)
+	if !d.Match || d.Display == nil || len(d.Display.Links) != 2 || d.Display.Links[1] != (domain.Link{Label: "PR #137", URL: "https://github.com/" + repo + "/pull/137"}) {
+		t.Fatalf("checks on PR #137: %+v", d.Display)
+	}
+	w.Display = d.Display
+	if d = match(t, scope, event(gh.TypePullMerged, "issue/136", gh.SchemaPull, gh.PullPayload{Repo: repo, Number: 137, URL: "https://github.com/" + repo + "/pull/137"}), w); !d.Match || d.Display != nil {
+		t.Fatalf("a PR already linked changed the display: %+v", d.Display)
 	}
 }

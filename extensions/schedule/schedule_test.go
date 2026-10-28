@@ -194,6 +194,10 @@ func TestRouteMatch(t *testing.T) {
 		if d.Match && c.work == nil && (d.Kind != sc.WorkKind || d.CreateID != domain.ID(sc.WorkID("schedule/demo", "report")) && d.CreateID != domain.ID(sc.WorkID("schedule/demo", "deploy"))) {
 			t.Errorf("case %d: create %+v", i, d)
 		}
+		// A job's Work is shown by the job's name.
+		if d.Match && c.work == nil && (d.Display == nil || d.Display.Title != string(d.CreateID)[strings.LastIndex(string(d.CreateID), "/")+1:]) {
+			t.Errorf("case %d: display %+v for %s", i, d.Display, d.CreateID)
+		}
 	}
 }
 

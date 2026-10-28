@@ -3,8 +3,10 @@ package slack_test
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -273,4 +275,37 @@ func TestRouteChannelsNarrowTheRoute(t *testing.T) {
 			t.Fatalf("ValidateRoute(%s) = %v, want ok %v", cfg, err, ok)
 		}
 	}
+}
+
+// A thread's Work says what it is: the first line of its first message
+// without mention tokens, who wrote it and a link to the thread; an edit
+// of that message updates it, and a reply does not.
+func TestRouteDisplay(t *testing.T) {
+	sc := scopeWith(t, "")
+	now := time.Now()
+	ts := slackTS(now)
+	root := event(t, slack.TypeMessageHuman, slack.MessagePayload{TS: ts, User: "U0EXAMPLE", Text: "<@" + botUser + ">  can you   look at the example build?\nIt fails."}, now)
+	d := match(t, sc, root, nil)
+	if !d.Match || d.Display == nil || d.Display.Title != "can you look at the example build?" || d.Display.Requester != "U0EXAMPLE" {
+		t.Fatalf("display %+v", d.Display)
+	}
+	if len(d.Display.Links) != 1 || d.Display.Links[0].URL != "https://app.slack.com/client/"+team+"/"+chanA+"/thread/"+chanA+"-"+ts {
+		t.Fatalf("links %+v", d.Display.Links)
+	}
+	if err := extension.ValidateDisplay(d.Display); err != nil {
+		t.Fatal(err)
+	}
+	w := &domain.Work{ID: "w", Kind: slack.WorkKind, Display: d.Display}
+	reply := event(t, slack.TypeMessageHuman, slack.MessagePayload{TS: slackTS(now.Add(time.Second)), Thread: ts, User: "U0EXAMPLE", Text: "any news?"}, now)
+	if d := match(t, sc, reply, w); !d.Match || d.Display != nil {
+		t.Fatalf("a reply changed the display: %+v", d)
+	}
+	edited := event(t, slack.TypeMessageHuman, slack.MessagePayload{TS: ts, User: "U0EXAMPLE", Text: "look at the example deploy instead", Edited: slackTS(now)}, now)
+	if d := match(t, sc, edited, w); !d.Match || d.Display == nil || d.Display.Title != "look at the example deploy instead" {
+		t.Fatalf("an edit of the first message: %+v", d.Display)
+	}
+}
+
+func slackTS(at time.Time) string {
+	return strconv.FormatInt(at.Unix(), 10) + "." + fmt.Sprintf("%06d", at.Nanosecond()/1000)
 }

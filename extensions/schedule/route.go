@@ -107,7 +107,8 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		}
 	}
 	if in.Work == nil {
-		return extension.RouteDecision{Match: true, Kind: WorkKind, CreateID: domain.ID(WorkID(key.Source, name)), Reason: "the first " + kind + " trigger of job " + name}, nil
+		// A job's Work is shown by the job's name (issue #123).
+		return extension.RouteDecision{Match: true, Kind: WorkKind, CreateID: domain.ID(WorkID(key.Source, name)), Reason: "the first " + kind + " trigger of job " + name, Display: &domain.WorkDisplay{Title: extension.Clip(name, extension.MaxDisplayTitle)}}, nil
 	}
 	if in.Work.Kind != WorkKind {
 		return extension.Skip("the job's key is owned by other Work"), nil

@@ -1168,3 +1168,112 @@ func TestGitHubWaitOnPRActivityWithoutAnIssue(t *testing.T) {
 	_, err = e.call(a, gh.OpWait, "w3", map[string]any{"conditions": []string{"pr:" + itoa(pr) + ":merged"}, "repo": "elsewhere/repo", "reason": "x"})
 	refused(t, err, "unregistered_repo")
 }
+
+// pr:N:checks waits for the checks on the PR's head as the wait begins:
+// a result already in is met, a re-run's earlier result never wakes it, a
+// new push or a merge first wakes it with what happened, and a closed PR
+// is refused.
+func TestGitHubWaitOnPRChecks(t *testing.T) {
+	ghBob := githubtest.User{Login: "bob", Type: "User"}
+	// waitOn parks an agent on pr:N:checks and returns its wait.
+	waitOn := func(t *testing.T, e *toolsEnv, pr int) (domain.Work, extension.ToolResult) {
+		t.Helper()
+		_, w := e.claim("Review", "", "bug")
+		a := e.start(w.ID)
+		out, err := e.call(a, gh.OpWait, "w1", map[string]any{"conditions": []string{"pr:" + itoa(pr) + ":checks"}, "reason": "Waiting for CI."})
+		if err != nil || out.Wait == nil {
+			t.Fatalf("wait: %v", err)
+		}
+		e.finish(a, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("done")}})
+		e.sync()
+		if got := e.work(w.ID); got.State != domain.WorkWaiting {
+			t.Fatalf("woke at once: %v", got.State)
+		}
+		e.read(func(tx storage.Tx) error {
+			wt, err := tx.Wait(out.Wait.ID)
+			if err != nil || wt.Description != "checks on PR #"+itoa(pr) {
+				t.Fatalf("wait description %q %v", wt.Description, err)
+			}
+			return nil
+		})
+		return w, out
+	}
+	woke := func(t *testing.T, e *toolsEnv, w domain.Work, out extension.ToolResult, says string) {
+		t.Helper()
+		if got := e.work(w.ID); got.State != domain.WorkReady {
+			t.Fatalf("did not wake: %v", got.State)
+		}
+		var wake domain.Event
+		e.read(func(tx storage.Tx) error {
+			wt, err := tx.Wait(out.Wait.ID)
+			if err != nil {
+				return err
+			}
+			a, err := tx.Event(wt.WakeEventID)
+			wake = a.Event
+			return err
+		})
+		if text, ok := gh.RenderEvent(wake); !ok || !strings.Contains(text, says) {
+			t.Fatalf("wake turn reads:\n%s", text)
+		}
+	}
+
+	t.Run("an earlier result", func(t *testing.T) {
+		e := newToolsEnv(t)
+		pr := e.fake.OpenPull("Feature", "", "feature", "c1", ghBob)
+		e.fake.SetCheck("c1", "test", "completed", "failure")
+		e.sync()
+		_, w := e.claim("Review", "", "bug")
+		a := e.start(w.ID)
+		_, err := e.call(a, gh.OpWait, "", map[string]any{"conditions": []string{"pr:" + itoa(pr) + ":checks"}, "reason": "x"})
+		refused(t, err, "already_met")
+	})
+	t.Run("a re-run", func(t *testing.T) {
+		e := newToolsEnv(t)
+		pr := e.fake.OpenPull("Feature", "", "feature", "c1", ghBob)
+		e.fake.SetCheck("c1", "test", "completed", "failure")
+		e.sync()
+		e.fake.RerunCheck("c1", "test")
+		e.sync()
+		w, out := waitOn(t, e, pr)
+		e.reopen()
+		e.compose()
+		e.sync()
+		if got := e.work(w.ID); got.State != domain.WorkWaiting {
+			t.Fatalf("the earlier run's failure woke it: %v", got.State)
+		}
+		e.fake.SetCheck("c1", "test", "completed", "success")
+		e.sync()
+		woke(t, e, w, out, "checks on PR #"+itoa(pr)+" finished: passed")
+	})
+	t.Run("a push", func(t *testing.T) {
+		e := newToolsEnv(t)
+		pr := e.fake.OpenPull("Feature", "", "feature", "c1", ghBob)
+		e.fake.SetCheck("c1", "test", "in_progress", "")
+		e.sync()
+		w, out := waitOn(t, e, pr)
+		e.fake.PushPull(pr, "c2")
+		e.sync()
+		woke(t, e, w, out, "got a new push before its checks finished")
+	})
+	t.Run("a merge", func(t *testing.T) {
+		e := newToolsEnv(t)
+		pr := e.fake.OpenPull("Feature", "", "feature", "c1", ghBob)
+		e.fake.SetCheck("c1", "test", "in_progress", "")
+		e.sync()
+		w, out := waitOn(t, e, pr)
+		e.fake.MergePull(pr)
+		e.sync()
+		woke(t, e, w, out, "was merged before its checks finished")
+	})
+	t.Run("a closed PR", func(t *testing.T) {
+		e := newToolsEnv(t)
+		pr := e.fake.OpenPull("Feature", "", "feature", "c1", ghBob)
+		e.fake.CloseIssue(pr, "")
+		e.sync()
+		_, w := e.claim("Review", "", "bug")
+		a := e.start(w.ID)
+		_, err := e.call(a, gh.OpWait, "", map[string]any{"conditions": []string{"pr:" + itoa(pr) + ":checks"}, "reason": "x"})
+		refused(t, err, "invalid_condition")
+	})
+}

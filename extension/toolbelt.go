@@ -48,6 +48,9 @@ type WaitRequest struct {
 	Match         domain.EventMatch
 	Timeout       *time.Time
 	AfterSequence uint64
+	// Description says what the Wait is for, for operator views
+	// (ValidateWaitDescription). Optional.
+	Description string
 }
 type ToolResult struct {
 	Event   *domain.AcceptedEvent

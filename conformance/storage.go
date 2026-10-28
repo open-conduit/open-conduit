@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"reflect"
 	"sync"
 	"testing"
 	"time"
@@ -70,6 +71,7 @@ func wantError(got, want error) error {
 func StorageCases() []StorageCase {
 	return []StorageCase{
 		{"handoff_and_wait_outcomes", handoffAndWait},
+		{"work_display_and_wait_description", displayAndDescription},
 		{"recovery_inventory_and_execution_revision", inventoryAndExecutionCAS},
 		{"wait_wake_and_timeout_cancellation", waitWakeAndTimerCancel},
 		{"terminal_correlation_and_causation", terminalCorrelationAndCausation},
@@ -1048,5 +1050,77 @@ func handoffAndWait(s storage.Store) error {
 			}
 		}
 		return nil
+	})
+}
+
+// displayAndDescription: a Work's display round-trips and can be replaced
+// like any other field; a Wait's description round-trips and is fixed once
+// the Wait is stored.
+func displayAndDescription(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	shown := &domain.WorkDisplay{Title: "Fix the example widget", Ref: "#1", Requester: "example-user", Links: []domain.Link{{Label: "Issue #1", URL: "https://tracker.example/issues/1"}}}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		w, err := tx.Work("work")
+		if err != nil {
+			return err
+		}
+		if w.Display != nil {
+			return fmt.Errorf("seeded Work has a display: %+v", w.Display)
+		}
+		w.Display = shown
+		return tx.PutWork(w, w.Revision)
+	}); err != nil {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		w, err := tx.Work("work")
+		if err != nil {
+			return err
+		}
+		if w.Display == nil || !reflect.DeepEqual(*w.Display, *shown) {
+			return fmt.Errorf("display did not round-trip: %+v", w.Display)
+		}
+		// A stored record is a copy: changing what was read changes nothing.
+		w.Display.Links[0].URL = "https://tracker.example/other"
+		again, err := tx.Work("work")
+		if err != nil || again.Display.Links[0].URL != shown.Links[0].URL {
+			return fmt.Errorf("display shares memory with the store: %+v %v", again.Display, err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	ref, err := claim(s, c)
+	if err != nil {
+		return err
+	}
+	if err := s.Transact(context.Background(), storage.Guard{Now: c.Now(), Lease: &ref}, func(tx storage.Tx) error {
+		if err := park(tx); err != nil {
+			return err
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		w, err := tx.Wait("wait")
+		if err != nil {
+			return err
+		}
+		// park stores no description; a described Wait is a new one.
+		described := w
+		described.ID, described.Revision, described.Description = "described-wait", 0, "a reply in the example thread"
+		if err := tx.PutWait(described, 0); err != nil {
+			return err
+		}
+		got, err := tx.Wait("described-wait")
+		if err != nil || got.Description != described.Description {
+			return fmt.Errorf("description did not round-trip: %q %v", got.Description, err)
+		}
+		got.Description, got.State = "something else", domain.WaitCancelled
+		return wantError(tx.PutWait(got, got.Revision), storage.ErrInvalid)
 	})
 }

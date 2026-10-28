@@ -409,6 +409,18 @@ func (s *Server) SetCheck(sha, name, status, conclusion string) {
 	s.checks[sha] = append(s.checks[sha], r)
 }
 
+// RerunCheck re-runs a named check on sha, as GitHub does: a new run with
+// its own ID, in progress, in place of the finished one.
+func (s *Server) RerunCheck(sha, name string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.checks[sha] {
+		if s.checks[sha][i].Name == name {
+			s.checks[sha][i] = CheckRun{ID: s.id(), Name: name, Status: "in_progress", Started: s.tick()}
+		}
+	}
+}
+
 // SetStatus sets a commit status context.
 func (s *Server) SetStatus(sha, context, state, target string) {
 	s.mu.Lock()

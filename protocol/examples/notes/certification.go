@@ -52,7 +52,7 @@ func NewFixture(dir string) (protocol.Fixture, error) {
 		Ingress: &protocol.IngressCase{Source: Name + "/" + FixtureScope, Delivery: protocol.FromDelivery(d),
 			Canonical:   protocol.FromPushResult(res).Observations[0],
 			OneShotType: Deleted, OneShot: &oneShot},
-		Routes: []protocol.RouteCase{{Handler: Name, Input: protocol.FromRouteInput(route), Want: protocol.RouteDecision{Match: true, CreateID: "notes/a", Kind: Kind}}},
+		Routes: []protocol.RouteCase{{Handler: Name, Input: protocol.FromRouteInput(route), Want: protocol.RouteDecision{Match: true, CreateID: "notes/a", Kind: Kind, Display: protocol.FromDisplay(Display("a"))}}},
 		Operations: []protocol.OperationCase{
 			{Operation: "notes.lookup", Input: protocol.Payload{Schema: "notes.lookup.request.v1", Data: json.RawMessage(`{"id":"missing"}`)}, Error: "unknown_note"},
 			{Operation: "notes.lookup", Input: protocol.Payload{Schema: "notes.lookup.request.v1", Data: json.RawMessage(`{}`)}, Error: "bad_request"},

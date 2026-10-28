@@ -103,7 +103,8 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 		if e.Type != Changed || e.CorrelationKey == nil {
 			return extension.RouteDecision{}, nil
 		}
-		return extension.RouteDecision{Match: true, CreateID: domain.ID("notes/" + e.CorrelationKey.ExternalID), Kind: Kind}, nil
+		id := e.CorrelationKey.ExternalID
+		return extension.RouteDecision{Match: true, CreateID: domain.ID("notes/" + id), Kind: Kind, Display: Display(id)}, nil
 	})}
 	ext.Triggers = map[string]func([]domain.Event) int{Kind: func(in []domain.Event) int { return len(in) - 1 }}
 	ext.Recurrences = map[string]sdk.RecurrenceFunc{Recurrence: func(_ []byte, fired domain.Timer, _ time.Time) (*domain.Event, *domain.Timer, error) {
@@ -322,4 +323,10 @@ func (f *faulty) Push(ctx context.Context, s extension.Source, d extension.Deliv
 func (f *faulty) Reconcile(ctx context.Context, s extension.Scan) (extension.Snapshot, error) {
 	f.fault("ingress.reconcile")
 	return f.in.Reconcile(ctx, s)
+}
+
+// Display is what a note's Work is: the note's name and its page on the
+// (fictional) notes service.
+func Display(id string) *domain.WorkDisplay {
+	return &domain.WorkDisplay{Title: "Note " + id, Ref: id, Links: []domain.Link{{Label: "Note", URL: "https://notes.example/" + id}}}
 }

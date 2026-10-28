@@ -3,6 +3,8 @@ package slack
 import (
 	"context"
 	"encoding/json"
+	"net/url"
+	"regexp"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -127,14 +129,18 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		if !s.Starts(e, p) {
 			return extension.Skip(s.startRefusal(e, p)), nil
 		}
-		return extension.RouteDecision{Match: true, Kind: WorkKind, Reason: s.startReason()}, nil
+		return extension.RouteDecision{Match: true, Kind: WorkKind, Reason: s.startReason(), Display: Display(p)}, nil
 	}
 	switch e.Type {
 	case TypeMessageHuman:
 		if p.Deleted {
 			return extension.Skip("the message was deleted"), nil
 		}
-		return extension.RouteDecision{Match: true, Reason: "a person wrote in the thread"}, nil
+		d := extension.RouteDecision{Match: true, Reason: "a person wrote in the thread"}
+		if p.Root && p.Edited != "" {
+			d.Display = Display(p) // the thread's first message was edited
+		}
+		return d, nil
 	case TypeMessageAgent:
 		self := p.Agent == nil || p.Agent.Work == "" || p.Agent.Work == string(in.Work.ID)
 		if self {
@@ -172,4 +178,36 @@ func (s Settings) startRefusal(e domain.Event, p MessagePayload) string {
 		return "the message does not mention the bot"
 	}
 	return "a reply, not a top-level message"
+}
+
+// mentionRe matches Slack's user, channel and group mention tokens.
+var mentionRe = regexp.MustCompile(`<[@#!][^>]*>`)
+
+// Display says what a thread's Work is (issue #123): the first line of its
+// first message without mention tokens, who wrote it and a link to the
+// thread. nil when the message has no text to show.
+func Display(p MessagePayload) *domain.WorkDisplay {
+	title := extension.Clip(strings.Join(strings.Fields(mentionRe.ReplaceAllString(firstLine(p.Text), " ")), " "), extension.MaxDisplayTitle)
+	if title == "" {
+		return nil
+	}
+	d := &domain.WorkDisplay{Title: title, Requester: extension.Clip(p.User, extension.MaxDisplayRequester)}
+	thread := p.Thread
+	if thread == "" {
+		thread = p.TS
+	}
+	link := "https://app.slack.com/client/" + url.PathEscape(p.Team) + "/" + url.PathEscape(p.Channel) + "/thread/" + url.PathEscape(p.Channel+"-"+thread)
+	if p.Team != "" && p.Channel != "" && thread != "" && extension.DisplayURL(link) {
+		d.Links = []domain.Link{{Label: "Slack thread", URL: link}}
+	}
+	return d
+}
+
+func firstLine(s string) string {
+	for _, l := range strings.Split(s, "\n") {
+		if strings.TrimSpace(l) != "" {
+			return l
+		}
+	}
+	return ""
 }
