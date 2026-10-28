@@ -170,12 +170,13 @@ func (r *Remote) Annotate(ctx context.Context, w domain.Work) []protocol.Annotat
 	return out.Annotations
 }
 
-// Actions returns the extension's action provider (manifest actions). A
-// listing failure offers nothing; an invocation's plan is checked before
-// the host accepts it: a family the extension declared, a payload it may
-// write and, when keyed, a correlation key in its own source namespace.
+// Actions returns the extension's action provider (manifest actions), which
+// is also its panel provider (manifest panels). A listing failure offers
+// nothing; an invocation's plan is checked before the host accepts it: a
+// family the extension declared, a payload it may write and, when keyed, a
+// correlation key in its own source namespace.
 func (r *Remote) Actions() (extension.ActionProvider, bool) {
-	if !r.m.Provides.Actions {
+	if !r.m.Provides.Actions && !r.m.Provides.Panels {
 		return nil, false
 	}
 	return remoteActions{r}, true
@@ -183,7 +184,26 @@ func (r *Remote) Actions() (extension.ActionProvider, bool) {
 
 type remoteActions struct{ r *Remote }
 
+var _ extension.PanelProvider = remoteActions{}
+
+// Panels returns the extension's panels on a target (view.render).
+func (a remoteActions) Panels(ctx context.Context, t extension.ActionTarget) ([]extension.Panel, error) {
+	if !a.r.m.Provides.Panels {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var out protocol.ViewRenderResult
+	if err := a.r.p.Call(ctx, "view.render", protocol.ViewRenderParams{Target: protocol.FromActionTarget(t)}, &out); err != nil {
+		return nil, err
+	}
+	return protocol.ToPanels(out.Panels), nil
+}
+
 func (a remoteActions) Actions(ctx context.Context, t extension.ActionTarget) ([]extension.Action, error) {
+	if !a.r.m.Provides.Actions {
+		return nil, nil
+	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	var out protocol.WorkActionsResult
@@ -198,6 +218,9 @@ func (a remoteActions) Actions(ctx context.Context, t extension.ActionTarget) ([
 }
 
 func (a remoteActions) Invoke(ctx context.Context, c extension.ActionCall) (extension.ActionPlan, error) {
+	if !a.r.m.Provides.Actions {
+		return extension.ActionPlan{}, &extension.OperationError{Code: "unknown_action", Message: a.r.m.Name + " offers no actions"}
+	}
 	ctx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	var out protocol.WorkActResult

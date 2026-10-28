@@ -43,7 +43,7 @@ func (s *Server) parse() error {
 	}
 	s.pages = map[string]*template.Template{}
 	for _, name := range []string{"list", "run", "output", "scopes"} {
-		t, err := template.New("layout.html").Funcs(funcs).ParseFS(assets, "templates/layout.html", "templates/"+name+".html")
+		t, err := template.New("layout.html").Funcs(funcs).ParseFS(assets, "templates/layout.html", "templates/panels.html", "templates/"+name+".html")
 		if err != nil {
 			return err
 		}
@@ -163,7 +163,49 @@ type runData struct {
 	Attempts []client.Run
 	Work     *client.Work
 	Waits    []client.Wait
-	Actions  []client.Action
+	Panels   []panelView
+	// Actions are those the panels do not already show.
+	Actions []client.Action
+}
+
+// panelView is a panel with what its buttons need: the page and the target.
+type panelView struct {
+	client.Panel
+	Page            *page
+	ScopeID, WorkID string
+}
+
+// panels fetches a target's panels for p. A daemon too old to serve them
+// shows none: its actions say it needs upgrading.
+func (s *Server) panels(ctx context.Context, p *page, t client.ActionTarget) ([]panelView, error) {
+	ps, err := s.src.Panels(ctx, t)
+	if tooOld(err) {
+		return nil, nil
+	}
+	out := make([]panelView, len(ps))
+	for i, x := range ps {
+		out[i] = panelView{Panel: x, Page: p, ScopeID: t.ScopeID, WorkID: t.WorkID}
+	}
+	return out, err
+}
+
+// unshown are the actions no panel offers.
+func unshown(actions []client.Action, panels []panelView) []client.Action {
+	in := map[[2]string]bool{}
+	for _, p := range panels {
+		for _, sec := range p.Sections {
+			for _, a := range sec.Actions {
+				in[[2]string{a.Provider, a.ID}] = true
+			}
+		}
+	}
+	var out []client.Action
+	for _, a := range actions {
+		if !in[[2]string{a.Provider, a.ID}] {
+			out = append(out, a)
+		}
+	}
+	return out
 }
 
 func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
@@ -202,10 +244,14 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 		}
 		sort.SliceStable(d.Waits, func(i, j int) bool { return d.Waits[i].CreatedAt < d.Waits[j].CreatedAt })
 	}
-	if actions, err := s.src.Actions(ctx, client.ActionTarget{WorkID: run.WorkID}); err != nil {
+	target := client.ActionTarget{WorkID: run.WorkID}
+	if d.Panels, err = s.panels(ctx, p, target); err != nil {
+		errs = append(errs, errText(err))
+	}
+	if actions, err := s.src.Actions(ctx, target); err != nil {
 		errs = append(errs, actionsErr(err))
 	} else {
-		d.Actions = actions
+		d.Actions = unshown(actions, d.Panels)
 	}
 	p.Err = strings.Join(errs, "\n")
 	s.render(w, r, "run", p, d)
@@ -213,11 +259,16 @@ func (s *Server) runPage(w http.ResponseWriter, r *http.Request) {
 
 // actionsErr explains a daemon too old to list actions.
 func actionsErr(err error) string {
-	var e *client.Error
-	if errors.As(err, &e) && e.Status == http.StatusNotFound && e.Code == "not_found" {
+	if tooOld(err) {
 		return "this daemon does not offer actions; upgrade it to answer and claim from here"
 	}
 	return errText(err)
+}
+
+// tooOld reports a daemon without the route asked for.
+func tooOld(err error) bool {
+	var e *client.Error
+	return errors.As(err, &e) && e.Status == http.StatusNotFound && e.Code == "not_found"
 }
 
 func statusOf(err error) int {
@@ -363,6 +414,7 @@ func (s *Server) outputPage(w http.ResponseWriter, r *http.Request) {
 
 type scopeActions struct {
 	Scope   client.Scope
+	Panels  []panelView
 	Actions []client.Action
 	Err     string
 }
@@ -377,8 +429,14 @@ func (s *Server) scopesPage(w http.ResponseWriter, r *http.Request) {
 	}
 	var d []scopeActions
 	for _, sc := range scopes.Items {
-		actions, err := s.src.Actions(ctx, client.ActionTarget{ScopeID: sc.ID})
-		d = append(d, scopeActions{Scope: sc, Actions: actions, Err: actionsErr(err)})
+		t := client.ActionTarget{ScopeID: sc.ID}
+		panels, perr := s.panels(ctx, p, t)
+		actions, err := s.src.Actions(ctx, t)
+		errs := actionsErr(err)
+		if perr != nil {
+			errs = strings.TrimSpace(errs + "\n" + errText(perr))
+		}
+		d = append(d, scopeActions{Scope: sc, Panels: panels, Actions: unshown(actions, panels), Err: errs})
 	}
 	s.render(w, r, "scopes", p, d)
 }

@@ -265,6 +265,8 @@ var routes = []route{
 	{"GET", []string{"work", "*"}, false, false, (*Server).getWork},
 	{"GET", []string{"work", "*", "actions"}, false, false, (*Server).listWorkActions},
 	{"GET", []string{"scopes", "*", "actions"}, false, false, (*Server).listScopeActions},
+	{"GET", []string{"work", "*", "panels"}, false, false, (*Server).listWorkPanels},
+	{"GET", []string{"scopes", "*", "panels"}, false, false, (*Server).listScopePanels},
 	{"GET", []string{"events"}, false, false, (*Server).listEvents},
 	{"GET", []string{"events", "*"}, false, false, (*Server).getEvent},
 	{"GET", []string{"events", "*", "route"}, false, false, (*Server).eventRoute},

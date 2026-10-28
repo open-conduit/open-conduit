@@ -179,6 +179,9 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 	ext.Act = func(ctx context.Context, _ *sdk.Host, c extension.ActionCall) (extension.ActionPlan, error) {
 		return Actions{}.Invoke(ctx, c)
 	}
+	ext.Panels = func(ctx context.Context, _ *sdk.Host, t extension.ActionTarget) ([]extension.Panel, error) {
+		return Actions{}.Panels(ctx, t)
+	}
 	ext.Setups = map[string]extension.Setup{Name: Setup{}}
 	ext.Render = func(e domain.Event) (string, bool) {
 		if e.Type != Changed || e.CorrelationKey == nil {

@@ -28,7 +28,7 @@ open-conduit web
 
 This serves the same view in a browser on this machine, at `http://open-conduit.localhost:7420`. It prints a sign-in URL; open it to start a session in that browser. Browsers resolve every `*.localhost` name to this machine without any setup. If yours doesn't, use the second URL it prints, which names `127.0.0.1`.
 
-The web view lists Work and turns with the same filters as the TUI. A run's page shows its Work's context and every turn, and links to its log, transcript and outputs, which follow a running turn live. It also offers run/retry, hold/release and cancel, and the actions extensions offer, such as answering an agent's question. Scopes lists each scope's actions, such as claiming an issue by hand. To attach to an agent's session, use the terminal.
+The web view lists Work and turns with the same filters as the TUI. A run's page shows its Work's context and every turn, and links to its log, transcript and outputs, which follow a running turn live. It also offers run/retry, hold/release and cancel, and the actions extensions offer, such as answering an agent's question. Extensions can add panels to a run's page and to Scopes, such as the open question with its options and the answer box beside it; the TUI shows the same panels in a run's detail. Scopes lists each scope's actions, such as claiming an issue by hand. To attach to an agent's session, use the terminal.
 
 - `--addr HOST:PORT` (or `OPEN_CONDUIT_WEB_ADDR`) changes where it listens. Only a loopback address is accepted, so the view is never reachable from another machine.
 - `--host NAME` (or `OPEN_CONDUIT_WEB_HOST`) changes the name it answers to.

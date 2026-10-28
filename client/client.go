@@ -546,11 +546,13 @@ type Action struct {
 // ActionTarget names what actions apply to: a scope, or Work.
 type ActionTarget struct{ ScopeID, WorkID string }
 
-func (t ActionTarget) path() string {
+func (t ActionTarget) path() string { return t.base() + "/actions" }
+
+func (t ActionTarget) base() string {
 	if t.WorkID != "" {
-		return "work/" + esc(t.WorkID) + "/actions"
+		return "work/" + esc(t.WorkID)
 	}
-	return "scopes/" + esc(t.ScopeID) + "/actions"
+	return "scopes/" + esc(t.ScopeID)
 }
 
 // ActionResult is an invoked action's accepted Event and the provider's
@@ -574,6 +576,50 @@ func (c *Client) Actions(ctx context.Context, t ActionTarget) ([]Action, error) 
 func (c *Client) InvokeAction(ctx context.Context, t ActionTarget, provider, id, input, key string) (out ActionResult, err error) {
 	err = c.Do(ctx, "POST", t.path()+"/"+esc(provider)+"/"+esc(id), nil, map[string]string{"input": input}, key, &out)
 	return
+}
+
+// Panel is a panel an extension shows on a scope or Work: a constrained
+// document of sections that a view renders as it is. A section's Actions
+// are the provider's actions listed on the target now, invoked with
+// InvokeAction like any other.
+type Panel struct {
+	Provider string         `json:"provider"`
+	ID       string         `json:"id"`
+	Title    string         `json:"title"`
+	Sections []PanelSection `json:"sections"`
+}
+
+type PanelSection struct {
+	Title   string       `json:"title,omitempty"`
+	Text    string       `json:"text,omitempty"`
+	Fields  []PanelField `json:"fields,omitempty"`
+	Table   *PanelTable  `json:"table,omitempty"`
+	Links   []PanelLink  `json:"links,omitempty"`
+	Actions []Action     `json:"actions,omitempty"`
+}
+
+type PanelField struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+
+type PanelTable struct {
+	Columns []string   `json:"columns"`
+	Rows    [][]string `json:"rows"`
+}
+
+type PanelLink struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+// Panels lists the panels extensions show on a target now.
+func (c *Client) Panels(ctx context.Context, t ActionTarget) ([]Panel, error) {
+	var out struct {
+		Panels []Panel `json:"panels"`
+	}
+	err := c.Do(ctx, "GET", t.base()+"/panels", nil, nil, "", &out)
+	return out.Panels, err
 }
 
 // AttachSpec is the local command that attaches to a Work's session.

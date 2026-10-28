@@ -266,6 +266,86 @@ type WorkActResult struct {
 	Message string `json:"message,omitempty"`
 }
 
+// Panels (view.render): an extension that offers actions shows panels on
+// the target, a constrained document core renders in every operator view
+// (extension.PanelProvider).
+
+type ViewRenderParams struct {
+	Target ActionTarget `json:"target"`
+}
+type ViewRenderResult struct {
+	Panels []Panel `json:"panels,omitempty"`
+}
+type Panel struct {
+	ID       string         `json:"id"`
+	Title    string         `json:"title"`
+	Sections []PanelSection `json:"sections"`
+}
+type PanelSection struct {
+	Title   string       `json:"title,omitempty"`
+	Text    string       `json:"text,omitempty"`
+	Fields  []PanelField `json:"fields,omitempty"`
+	Table   *PanelTable  `json:"table,omitempty"`
+	Links   []PanelLink  `json:"links,omitempty"`
+	Actions []string     `json:"actions,omitempty"`
+}
+type PanelField struct {
+	Name  string `json:"name"`
+	Value string `json:"value"`
+}
+type PanelTable struct {
+	Columns []string   `json:"columns"`
+	Rows    [][]string `json:"rows,omitempty"`
+}
+type PanelLink struct {
+	Label string `json:"label"`
+	URL   string `json:"url"`
+}
+
+func FromPanels(ps []extension.Panel) []Panel {
+	out := make([]Panel, 0, len(ps))
+	for _, p := range ps {
+		w := Panel{ID: p.ID, Title: p.Title, Sections: make([]PanelSection, 0, len(p.Sections))}
+		for _, s := range p.Sections {
+			ws := PanelSection{Title: s.Title, Text: s.Text, Actions: s.Actions}
+			for _, f := range s.Fields {
+				ws.Fields = append(ws.Fields, PanelField{Name: f.Name, Value: f.Value})
+			}
+			if s.Table != nil {
+				ws.Table = &PanelTable{Columns: s.Table.Columns, Rows: s.Table.Rows}
+			}
+			for _, l := range s.Links {
+				ws.Links = append(ws.Links, PanelLink{Label: l.Label, URL: l.URL})
+			}
+			w.Sections = append(w.Sections, ws)
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
+func ToPanels(ps []Panel) []extension.Panel {
+	out := make([]extension.Panel, 0, len(ps))
+	for _, p := range ps {
+		x := extension.Panel{ID: p.ID, Title: p.Title, Sections: make([]extension.PanelSection, 0, len(p.Sections))}
+		for _, s := range p.Sections {
+			xs := extension.PanelSection{Title: s.Title, Text: s.Text, Actions: s.Actions}
+			for _, f := range s.Fields {
+				xs.Fields = append(xs.Fields, extension.PanelField{Name: f.Name, Value: f.Value})
+			}
+			if s.Table != nil {
+				xs.Table = &extension.PanelTable{Columns: s.Table.Columns, Rows: s.Table.Rows}
+			}
+			for _, l := range s.Links {
+				xs.Links = append(xs.Links, extension.PanelLink{Label: l.Label, URL: l.URL})
+			}
+			x.Sections = append(x.Sections, xs)
+		}
+		out = append(out, x)
+	}
+	return out
+}
+
 // Setup: setup.run is called at CLI time; the extension drives the operator
 // through the setup.* callbacks while it runs, all quoting the run ID.
 

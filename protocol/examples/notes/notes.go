@@ -114,6 +114,7 @@ func Manifest(o Options) protocol.Manifest {
 		Exporters: true,
 		Annotate:  true,
 		Actions:   true,
+		Panels:    true,
 		Setup:     &protocol.SetupDecl{Type: Name, Summary: "add a scope watching a note service file", Usage: "[--service FILE]"},
 	}}
 }

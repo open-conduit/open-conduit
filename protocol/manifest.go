@@ -96,6 +96,9 @@ type Provides struct {
 	// Actions marks an extension that offers actions on scopes and Work
 	// (work.actions, work.act).
 	Actions bool `json:"actions,omitempty"`
+	// Panels marks an extension that shows panels on scope and Work pages
+	// (view.render). Their buttons invoke its actions.
+	Panels bool `json:"panels,omitempty"`
 	// Render marks an extension that renders its own families for agent
 	// prompts (event.render).
 	Render bool `json:"render,omitempty"`
@@ -486,6 +489,7 @@ func (m Manifest) Enabled() []string {
 	set("setup", p.Setup != nil)
 	set("annotate", p.Annotate)
 	set("actions", p.Actions)
+	set("panels", p.Panels)
 	set("render", p.Render)
 	var out []string
 	for _, method := range Methods {

@@ -2,6 +2,7 @@ package tui
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -34,6 +35,9 @@ type Controls interface {
 	// Actions lists what extensions offer on a scope or Work now, and
 	// InvokeAction invokes one as the local operator.
 	Actions(ctx context.Context, t client.ActionTarget) ([]client.Action, error)
+	// Panels lists the panels extensions show on a target now: documents
+	// the view renders as they are, whose buttons are listed actions.
+	Panels(ctx context.Context, t client.ActionTarget) ([]client.Panel, error)
 	InvokeAction(ctx context.Context, t client.ActionTarget, provider, id, input, key string) (client.ActionResult, error)
 	// AttachCommand holds, attaches to and then releases Work.
 	AttachCommand(id string) tea.ExecCommand
@@ -70,6 +74,7 @@ type workMsg struct {
 	work    client.Work
 	waits   []client.Wait
 	actions []client.Action
+	panels  []client.Panel
 	err     error
 }
 
@@ -117,8 +122,14 @@ func (m Model) fetchWork(id string) tea.Cmd {
 		if err != nil {
 			return workMsg{work: w, err: err}
 		}
-		actions, err := ctl.Actions(ctx, client.ActionTarget{WorkID: id})
-		return workMsg{work: w, waits: page.Items, actions: actions, err: err}
+		t := client.ActionTarget{WorkID: id}
+		panels, err := ctl.Panels(ctx, t)
+		var e *client.Error
+		if err != nil && !(errors.As(err, &e) && e.Status == 404 && e.Code == "not_found") {
+			return workMsg{work: w, waits: page.Items, err: err}
+		}
+		actions, err := ctl.Actions(ctx, t)
+		return workMsg{work: w, waits: page.Items, actions: actions, panels: panels, err: err}
 	}
 }
 
@@ -305,6 +316,77 @@ func WorkContext(w *client.Work, waits []client.Wait) string {
 		fmt.Fprintf(&b, "  %-18s %s\n", "wait "+wt.ID, v)
 	}
 	return b.String()
+}
+
+// PanelText renders extensions' panels as text. A button shows as the
+// number that picks it from actions (the view's numbered actions).
+func PanelText(panels []client.Panel, actions []targeted) string {
+	var b strings.Builder
+	for _, p := range panels {
+		b.WriteString("\n" + boldS.Render(p.Title) + dimS.Render("  "+p.Provider) + "\n")
+		for _, sec := range p.Sections {
+			if sec.Title != "" {
+				b.WriteString("  " + boldS.Render(sec.Title) + "\n")
+			}
+			if sec.Text != "" {
+				for _, l := range strings.Split(sec.Text, "\n") {
+					b.WriteString("  " + l + "\n")
+				}
+			}
+			for _, f := range sec.Fields {
+				fmt.Fprintf(&b, "  %-18s %s\n", f.Name, f.Value)
+			}
+			if t := sec.Table; t != nil {
+				b.WriteString(tableText(*t))
+			}
+			for _, l := range sec.Links {
+				b.WriteString("  " + l.Label + "  " + dimS.Render(l.URL) + "\n")
+			}
+			var keys []string
+			for _, a := range sec.Actions {
+				for i, it := range actions {
+					if i < 9 && it.action.Provider == a.Provider && it.action.ID == a.ID {
+						keys = append(keys, fmt.Sprintf("%d %s", i+1, a.Label))
+					}
+				}
+			}
+			if len(keys) > 0 {
+				b.WriteString("  " + strings.Join(keys, " · ") + "\n")
+			}
+		}
+	}
+	return b.String()
+}
+
+// tableText lays a panel table out in padded columns.
+func tableText(t client.PanelTable) string {
+	width := make([]int, len(t.Columns))
+	for i, c := range t.Columns {
+		width[i] = len([]rune(c))
+	}
+	for _, r := range t.Rows {
+		for i, c := range r {
+			if i < len(width) {
+				width[i] = max(width[i], len([]rune(c)))
+			}
+		}
+	}
+	line := func(cells []string) string {
+		parts := make([]string, len(cells))
+		for i, c := range cells {
+			if i == len(cells)-1 {
+				parts[i] = c
+				continue
+			}
+			parts[i] = c + strings.Repeat(" ", max(width[i]-len([]rune(c)), 0))
+		}
+		return "  " + strings.Join(parts, "  ") + "\n"
+	}
+	out := dimS.Render(strings.TrimRight(line(t.Columns), "\n")) + "\n"
+	for _, r := range t.Rows {
+		out += line(r)
+	}
+	return out
 }
 
 var _ Controls = OperatorSource{}

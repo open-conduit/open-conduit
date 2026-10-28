@@ -3,22 +3,22 @@ package human
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Line is one annotation of the asking Work.
 type Line struct{ Name, Value string }
 
-// Annotate shows the Work's open question in the TUI while it is open:
-// the question, its context and options, who it is for and its deadline.
-// ok is false when the Work has no open ask of the entry.
-func Annotate(ctx context.Context, store storage.Store, entry Entry, w domain.Work, now time.Time) ([]Line, bool) {
-	var rec Ask
-	var live bool
+// shown is the Work's latest ask of the entry while it is open, and
+// whether a person can answer it now (live) or only once the Work parks.
+// ok is false when there is nothing to show.
+func shown(ctx context.Context, store storage.Store, entry Entry, w domain.Work, now time.Time) (rec Ask, live, ok bool) {
 	err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
 		var err error
 		if rec, err = latestAsk(tx, w.ID); err != nil {
@@ -28,28 +28,73 @@ func Annotate(ctx context.Context, store storage.Store, entry Entry, w domain.Wo
 		return err
 	})
 	if err != nil || rec.Provider != entry.Name || rec.State != StateOpen || rec.expired(now) {
+		return Ask{}, false, false
+	}
+	// Asked in the running attempt: answerable once the Work parks.
+	if !live && w.State.Terminal() {
+		return Ask{}, false, false
+	}
+	return rec, live, true
+}
+
+// Annotate names the Work's open question while it is open, so lists and
+// the CLI show it; the question panel (Panels) has the rest. ok is false
+// when the Work has no open ask of the entry.
+func Annotate(ctx context.Context, store storage.Store, entry Entry, w domain.Work, now time.Time) ([]Line, bool) {
+	rec, _, ok := shown(ctx, store, entry, w, now)
+	if !ok {
 		return nil, false
+	}
+	return []Line{{"question", rec.Question}}, true
+}
+
+// PanelQuestion is the ID of the question panel.
+const PanelQuestion = "question"
+
+// Panel is the Work's open question as a panel: the question, its context
+// and options, who it is for, its status and deadline, and the answer
+// action while it can be answered. ok is false when the Work has no open
+// ask of the entry.
+func Panel(ctx context.Context, store storage.Store, entry Entry, w domain.Work, now time.Time) (extension.Panel, bool) {
+	rec, live, ok := shown(ctx, store, entry, w, now)
+	if !ok {
+		return extension.Panel{}, false
 	}
 	status := "waiting for an answer"
 	if !live {
-		// Asked in the running attempt: answerable once the Work parks.
-		if w.State.Terminal() {
-			return nil, false
-		}
 		status = "asked; answerable once the agent parks"
 	}
-	lines := []Line{{"question", rec.Question}}
+	sections := []extension.PanelSection{{Text: clean(rec.Question)}}
 	if rec.Context != "" {
-		lines = append(lines, Line{"question context", rec.Context})
+		sections = append(sections, extension.PanelSection{Title: "Context", Text: clean(rec.Context)})
 	}
 	if len(rec.Options) > 0 {
-		lines = append(lines, Line{"options", numbered(rec.Options)})
+		t := &extension.PanelTable{Columns: []string{"#", "Option"}}
+		for i, o := range rec.Options {
+			t.Rows = append(t.Rows, []string{strconv.Itoa(i + 1), clean(o)})
+		}
+		sections = append(sections, extension.PanelSection{Title: "Options", Table: t})
 	}
-	lines = append(lines, Line{"for", strings.Join(rec.Responders, ", ")}, Line{"question status", status})
+	about := extension.PanelSection{Fields: []extension.PanelField{{Name: "for", Value: clean(strings.Join(rec.Responders, ", "))}, {Name: "status", Value: status}}}
 	if !rec.Deadline.IsZero() {
-		lines = append(lines, Line{"answer by", rec.Deadline.Format(time.RFC3339)})
+		about.Fields = append(about.Fields, extension.PanelField{Name: "answer by", Value: rec.Deadline.Format(time.RFC3339)})
 	}
-	return lines, true
+	if live {
+		about.Actions = []string{ActionAnswer}
+	}
+	sections = append(sections, about)
+	return extension.Panel{ID: PanelQuestion, Title: "The agent asks", Sections: sections}, true
+}
+
+// clean drops control characters a panel may not carry (all but newline
+// and tab), which an agent's question could hold.
+func clean(s string) string {
+	return strings.Map(func(r rune) rune {
+		if r < 0x20 && r != '\n' && r != '\t' || r == 0x7f {
+			return -1
+		}
+		return r
+	}, s)
 }
 
 // RenderEvent renders the alias the asker wakes on: the question and the

@@ -52,6 +52,7 @@ The table groups what the first-party code actually does across the host boundar
 | Doctor | `runtime.Check` functions (`Checks`, `DeepChecks` with secrets) | all but SH | `check.run` |
 | Annotations | management `Annotate` | GH | `work.annotate` |
 | Actions | `extension.ActionProvider` (list, authorise, plan one Event the host accepts under `core.action`) | GH | `work.actions`, `work.act` |
+| Panels | `extension.PanelProvider` (a constrained document on a scope or Work page, its buttons naming the provider's actions) | HU | `view.render` |
 | Setup | `extension.Setup` with `SetupHost` prompts, browser, secret store, `LookPath`, `Run` | GH SL TR | `setup.run` plus `setup.*` callbacks |
 | Playbooks | embedded playbooks written into the agent executor's plugin directory | GH SL TR IS | manifest `playbooks` (first-party convention) |
 

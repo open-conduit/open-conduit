@@ -136,6 +136,19 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			out.Actions = append(out.Actions, protocol.Action{ID: a.ID, Label: a.Label, Prompt: a.Prompt})
 		}
 		return out, nil
+	case "view.render":
+		var p protocol.ViewRenderParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.ext.Panels == nil {
+			return nil, notFound(method)
+		}
+		panels, err := s.ext.Panels(ctx, s.host, p.Target.Extension())
+		if err != nil {
+			return nil, err
+		}
+		return protocol.ViewRenderResult{Panels: protocol.FromPanels(panels)}, nil
 	case "work.act":
 		var p protocol.WorkActParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

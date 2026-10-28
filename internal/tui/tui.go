@@ -93,6 +93,7 @@ type Model struct {
 	ask     *asking
 	menu    *actionMenu
 	actions []client.Action
+	panels  []client.Panel
 	notice  string
 	// artifact is what the log view asked for (pickLog, pickTranscript or
 	// an index); shown is the index it shows. live means it follows a
@@ -467,7 +468,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.work.ID != "" {
 			w := msg.work
-			m.work, m.waits, m.actions = &w, msg.waits, msg.actions
+			m.work, m.waits, m.actions, m.panels = &w, msg.waits, msg.actions, msg.panels
 		}
 	case menuMsg:
 		switch {
@@ -593,7 +594,7 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 			return m, m.fetch()
 		case "enter":
 			if r, ok := m.selected(); ok {
-				m.work, m.waits, m.actions = nil, nil, nil
+				m.work, m.waits, m.actions, m.panels = nil, nil, nil, nil
 				return m, tea.Batch(m.fetchDetail(r.ID, r.WorkID), m.fetchWork(r.WorkID))
 			}
 		case "l", "t":
@@ -724,6 +725,9 @@ func (m Model) View() string {
 			b.WriteString(runview.Detail(*m.detail, m.attempts, now))
 		}
 		b.WriteString(WorkContext(m.work, m.waits))
+		if m.work != nil && m.detail != nil && m.work.ID == m.detail.WorkID {
+			b.WriteString(PanelText(m.panels, m.workActions()))
+		}
 		keys := "l log · t transcript · r refresh · esc back · q quit"
 		if m.ctl != nil {
 			keys += " · R run/retry · H hold/release · a attach · x cancel run · X cancel work"
