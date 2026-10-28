@@ -1,79 +1,89 @@
 {{define "content"}}{{$p := .Page}}{{with .Data}}{{$d := .}}
-<div class="bar">
-  <h1>{{$p.Title}}</h1>
-  <span class="state state-{{.Run.State}}">{{.Run.State}}</span>
-  <span class="links"><a href="/output?run={{.Run.ID}}&amp;pick=log">log</a> <a href="/output?run={{.Run.ID}}&amp;pick=transcript">transcript</a></span>
+<a class="back" href="/">All runs</a>
+<div class="head run-head s-{{.Run.State}}">
+  <div>
+    <h1>{{$p.Title}}</h1>
+    <p class="sub"><span class="state s-{{.Run.State}}">{{.Run.State}}</span><span>Turn {{.Run.Attempt}}{{with .Attempts}} of {{len .}}{{end}}</span>{{with .Run.StartedAt}}<span title="{{time .}}">started {{ago .}}</span>{{end}}<span>{{duration .Run}}</span></p>
+  </div>
+  <nav class="seg" aria-label="Output">
+    <a href="/output?run={{.Run.ID}}&amp;pick=log">Log</a><a href="/output?run={{.Run.ID}}&amp;pick=transcript">Transcript</a>
+  </nav>
 </div>
+{{with summary .Run}}<p class="lead">{{.}}</p>{{end}}
 
-<section class="controls">
-  <h2>Controls</h2>
-  <form method="post" action="/work/retry"><input type="hidden" name="work" value="{{.Run.WorkID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button>Run / retry</button></form>
-  {{if and .Work .Work.Hold}}
-  <form method="post" action="/work/release"><input type="hidden" name="work" value="{{.Run.WorkID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button>Release</button></form>
-  {{else}}
-  <form method="post" action="/work/hold"><input type="hidden" name="work" value="{{.Run.WorkID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button>Hold</button></form>
-  {{end}}
-  {{if or (live .Run) (eq .Run.State "parked")}}
-  <form method="post" action="/run/cancel" data-confirm="Cancel execution {{.Run.ID}}?"><input type="hidden" name="run" value="{{.Run.ID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button class="danger">Cancel run</button></form>
-  {{end}}
-  <form method="post" action="/work/cancel" data-confirm="Cancel work {{.Run.WorkID}}? This is terminal."><input type="hidden" name="work" value="{{.Run.WorkID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button class="danger">Cancel work</button></form>
-  <p class="dim">Attach from a terminal: <code>open-conduit work attach {{.Run.WorkID}}</code></p>
-</section>
-
+<div class="run-grid">
+<div class="run-main">
 {{template "panels" .Panels}}
 
 {{if .Actions}}
-<section class="actions">
+<section class="panel actions">
   <h2>Actions</h2>
   {{range .Actions}}
-  <form method="post" action="/actions"{{if not .Prompt}} data-confirm="{{.Label}}?"{{end}}>
+  <form method="post" action="/actions" class="action"{{if not .Prompt}} data-confirm="{{.Label}}?"{{end}}>
     <input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}">
     <input type="hidden" name="work" value="{{$d.Run.WorkID}}"><input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">
-    {{if .Prompt}}<label>{{.Label}} <span class="dim">({{.Provider}})</span>
-      <textarea name="input" rows="2" placeholder="{{.Prompt}}" aria-label="{{.Prompt}}"></textarea></label>{{end}}
-    <button>{{if .Prompt}}Send{{else}}{{.Label}}{{end}}</button>
+    {{if .Prompt}}<label>{{.Label}} <span class="from">from {{.Provider}}</span>
+      <textarea name="input" rows="3" placeholder="{{.Prompt}}" aria-label="{{.Prompt}}"></textarea></label>{{end}}
+    <button{{if .Prompt}} class="primary"{{end}}>{{if .Prompt}}Send{{else}}{{.Label}}{{end}}</button>
   </form>
   {{end}}
 </section>
 {{end}}
 
-{{with .Work}}
 <section>
-  <h2>Work</h2>
-  <dl>
-    <dt>id</dt><dd>{{.ID}}</dd>
-    <dt>state</dt><dd>{{.State}} · revision {{.Revision}}</dd>
-    {{range .CorrelationKeys}}<dt>key</dt><dd>{{.Source}} {{.ExternalID}}</dd>{{end}}
-    {{with .Hold}}<dt>held</dt><dd>{{.Reason}} since {{time .At}}</dd>{{end}}
-    {{range .Annotations}}<dt>{{.Name}}</dt><dd>{{.Value}}</dd>{{end}}
-    {{range $d.Waits}}<dt>wait {{.ID}}</dt><dd>{{.State}}{{with .Match.Types}} for {{range $i, $t := .}}{{if $i}}, {{end}}{{$t}}{{end}}{{end}}{{with .WakeEventID}} (woken by {{.}}){{end}}</dd>{{end}}
-  </dl>
-</section>
-{{end}}
-
-<section>
-  <h2>Run</h2>
-  <pre class="detail">{{.Detail}}</pre>
+  <h2>Turns</h2>
+  <ol class="rail">
+  {{range .Attempts}}<li class="s-{{.State}}"{{if eq .ID $d.Run.ID}} aria-current="step"{{end}}><a href="/run?id={{.ID}}" title="{{outcome .}}"><span class="n">{{.Attempt}}</span><span class="st">{{.State}}</span><span class="tw">{{trigger .}}</span><span class="td">{{ago .StartedAt}}, {{duration .}}</span></a></li>{{end}}
+  </ol>
 </section>
 
 {{if .Run.Artifacts}}
 <section>
   <h2>Outputs</h2>
-  <ul>{{range $i, $a := .Run.Artifacts}}<li><a href="/output?run={{$d.Run.ID}}&amp;pick={{$i}}">{{$a.ID}}</a> <span class="dim">{{$a.MediaType}} · {{$a.Size}} bytes</span></li>{{end}}</ul>
+  <ul class="outputs">{{range $i, $a := .Run.Artifacts}}<li><a class="mono" href="/output?run={{$d.Run.ID}}&amp;pick={{$i}}">{{$a.ID}}</a> <span class="from">{{$a.MediaType}}, {{$a.Size}} bytes</span></li>{{end}}</ul>
 </section>
 {{end}}
 
-<section>
-  <h2>Turns of this Work</h2>
-  <div class="scroll"><table class="runs">
-  <thead><tr><th>Att</th><th>State</th><th>Trigger</th><th>Started</th><th>Duration</th><th>Outcome</th></tr></thead>
-  <tbody>
-  {{range .Attempts}}<tr{{if eq .ID $d.Run.ID}} aria-current="true"{{end}}>
-    <td><a href="/run?id={{.ID}}">{{.Attempt}}</a></td>
-    <td><span class="state state-{{.State}}">{{.State}}</span></td>
-    <td>{{trigger .}}</td><td>{{time .StartedAt}}</td><td>{{duration .}}</td><td class="outcome"><div title="{{outcome .}}">{{outcome .}}</div></td>
-  </tr>{{end}}
-  </tbody>
-  </table></div>
+<details class="detail">
+  <summary>Everything the daemon knows about this run</summary>
+  <pre>{{.Detail}}</pre>
+</details>
+</div>
+
+<aside class="run-side">
+<section class="controls">
+  <h2>Controls</h2>
+  <div class="btns">
+  <form method="post" action="/work/retry"><input type="hidden" name="work" value="{{.Run.WorkID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button>Run again</button></form>
+  {{if and .Work .Work.Hold}}
+  <form method="post" action="/work/release"><input type="hidden" name="work" value="{{.Run.WorkID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button>Release</button></form>
+  {{else}}
+  <form method="post" action="/work/hold"><input type="hidden" name="work" value="{{.Run.WorkID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button>Hold</button></form>
+  {{end}}
+  </div>
+  <div class="btns danger-zone">
+  {{if or (live .Run) (eq .Run.State "parked")}}
+  <form method="post" action="/run/cancel" data-confirm="Cancel execution {{.Run.ID}}?"><input type="hidden" name="run" value="{{.Run.ID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button class="danger">Cancel this turn</button></form>
+  {{end}}
+  <form method="post" action="/work/cancel" data-confirm="Cancel work {{.Run.WorkID}}? This is terminal."><input type="hidden" name="work" value="{{.Run.WorkID}}"><input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}"><button class="danger">Cancel the Work</button></form>
+  </div>
+  <p class="hint">Attach from a terminal<code>open-conduit work attach {{.Run.WorkID}}</code></p>
 </section>
+
+{{with .Work}}
+<section>
+  <h2>Work</h2>
+  <dl class="facts">
+    {{with .Hold}}<dt>held</dt><dd class="held">{{.Reason}}, since {{time .At}}</dd>{{end}}
+    {{range .Annotations}}<dt>{{.Name}}</dt><dd>{{.Value}}</dd>{{end}}
+    {{range $d.Waits}}<dt>waiting</dt><dd>{{.State}}{{with .Match.Types}} for {{range $i, $t := .}}{{if $i}}, {{end}}{{$t}}{{end}}{{end}}{{with .WakeEventID}} (woken by {{.}}){{end}}</dd>{{end}}
+    {{range .CorrelationKeys}}<dt>key</dt><dd>{{.Source}} {{.ExternalID}}</dd>{{end}}
+    <dt>state</dt><dd>{{.State}}, revision {{.Revision}}</dd>
+    <dt>id</dt><dd class="mono">{{.ID}}</dd>
+    <dt>executor</dt><dd>{{$d.Run.ExecutorBinding}}{{with $d.Run.Executor}} ({{.}}){{end}}</dd>
+  </dl>
+</section>
+{{end}}
+</aside>
+</div>
 {{end}}{{end}}

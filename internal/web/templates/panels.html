@@ -1,12 +1,12 @@
 {{define "panels"}}{{range .}}{{$v := .}}
 <section class="panel">
-  <h2>{{.Title}} <span class="dim">{{.Provider}}</span></h2>
+  <h2>{{.Title}} <span class="from">from {{.Provider}}</span></h2>
   {{range .Sections}}
   <div class="panel-section">
     {{with .Title}}<h3>{{.}}</h3>{{end}}
     {{with .Text}}<p class="text">{{.}}</p>{{end}}
-    {{with .Fields}}<dl>{{range .}}<dt>{{.Name}}</dt><dd>{{.Value}}</dd>{{end}}</dl>{{end}}
-    {{with .Table}}<div class="scroll"><table class="runs">
+    {{with .Fields}}<dl class="facts">{{range .}}<dt>{{.Name}}</dt><dd>{{.Value}}</dd>{{end}}</dl>{{end}}
+    {{with .Table}}<div class="scroll"><table class="plain">
       <thead><tr>{{range .Columns}}<th>{{.}}</th>{{end}}</tr></thead>
       <tbody>{{range .Rows}}<tr>{{range .}}<td>{{.}}</td>{{end}}</tr>{{end}}</tbody>
     </table></div>{{end}}
@@ -17,8 +17,8 @@
       {{if $v.WorkID}}<input type="hidden" name="work" value="{{$v.WorkID}}">{{else}}<input type="hidden" name="scope" value="{{$v.ScopeID}}">{{end}}
       <input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">
       {{if .Prompt}}<label>{{.Label}}
-        <textarea name="input" rows="2" placeholder="{{.Prompt}}" aria-label="{{.Prompt}}"></textarea></label>{{end}}
-      <button>{{if .Prompt}}Send{{else}}{{.Label}}{{end}}</button>
+        <textarea name="input" rows="3" placeholder="{{.Prompt}}" aria-label="{{.Prompt}}"></textarea></label>{{end}}
+      <button class="primary">{{if .Prompt}}Send{{else}}{{.Label}}{{end}}</button>
     </form>
     {{end}}
   </div>

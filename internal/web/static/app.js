@@ -40,8 +40,18 @@ if (out) {
       if (!o.live) {
         clearInterval(timer);
         const note = document.getElementById("following");
-        if (note) note.textContent = "the run has ended";
+        if (note) {
+          note.classList.add("ended");
+          document.getElementById("following-text").textContent = "The run has ended";
+        }
       }
     } catch (_) { /* the next tick tries again */ }
   }, INTERVAL);
+}
+
+// Keep the current turn in view on a long rail of turns.
+const cur = document.querySelector(".rail [aria-current]");
+if (cur) {
+  const rail = cur.parentElement;
+  rail.scrollLeft = Math.max(0, cur.offsetLeft + cur.offsetWidth - rail.clientWidth);
 }

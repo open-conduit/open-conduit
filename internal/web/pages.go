@@ -11,6 +11,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/open-conduit/open-conduit/client"
 	"github.com/open-conduit/open-conduit/internal/cli/runview"
@@ -35,11 +36,15 @@ type page struct {
 
 func (s *Server) parse() error {
 	funcs := template.FuncMap{
-		"trigger":  runview.TriggerText,
-		"outcome":  runview.Outcome,
-		"time":     runview.ShortTime,
-		"duration": func(r client.Run) string { return runview.Duration(r, s.opts.Now()) },
-		"live":     runview.Running,
+		"trigger":    runview.TriggerText,
+		"outcome":    runview.Outcome,
+		"time":       runview.ShortTime,
+		"duration":   func(r client.Run) string { return runview.Duration(r, s.opts.Now()) },
+		"live":       runview.Running,
+		"ago":        func(ts string) string { return ago(ts, s.opts.Now()) },
+		"plural":     plural,
+		"summary":    summary,
+		"stateGroup": stateGroup,
 	}
 	s.pages = map[string]*template.Template{}
 	for _, name := range []string{"list", "run", "output", "scopes"} {
@@ -72,21 +77,98 @@ func errText(err error) string {
 	return err.Error()
 }
 
-// row is one list row: a run, its Work's name and its place among the
-// Work's turns.
+// row is one list row: a run, its Work's name, its place among the
+// Work's turns and those turns, oldest first.
 type row struct {
 	Run   client.Run
 	Label string
 	Turns string
+	Trail []client.Run
+}
+
+// group is a run of rows that share what the operator does about them.
+type group struct {
+	Name string
+	Rows []row
 }
 
 type listData struct {
 	Filter  string
 	Filters []string
 	PerTurn bool
-	Rows    []row
+	Groups  []group
 	Works   int
 	Runs    int
+}
+
+// groups orders the states by what they ask of the operator: failures
+// first, then what is running, then what waits, then what has finished.
+var groups = []string{"Failed", "Running", "Waiting", "Finished"}
+
+func stateGroup(state string) string {
+	switch state {
+	case "failed":
+		return "Failed"
+	case "running", "pending":
+		return "Running"
+	case "parked", "waiting", "handoff":
+		return "Waiting"
+	}
+	return "Finished"
+}
+
+// grouped splits rows into the groups that have any, keeping their order.
+func grouped(rs []row) []group {
+	by := map[string][]row{}
+	for _, r := range rs {
+		g := stateGroup(r.Run.State)
+		by[g] = append(by[g], r)
+	}
+	var out []group
+	for _, name := range groups {
+		if len(by[name]) > 0 {
+			out = append(out, group{Name: name, Rows: by[name]})
+		}
+	}
+	return out
+}
+
+// ago renders a timestamp relative to now: "just now", "4m ago", "3h ago",
+// then the date.
+func ago(ts string, now time.Time) string {
+	t, err := time.Parse(time.RFC3339Nano, ts)
+	if err != nil {
+		return ""
+	}
+	d := now.Sub(t)
+	switch {
+	case d < time.Minute:
+		return "just now"
+	case d < time.Hour:
+		return strconv.Itoa(int(d/time.Minute)) + "m ago"
+	case d < 24*time.Hour:
+		return strconv.Itoa(int(d/time.Hour)) + "h ago"
+	case d < 7*24*time.Hour:
+		return strconv.Itoa(int(d/(24*time.Hour))) + "d ago"
+	}
+	return t.Local().Format("2 Jan")
+}
+
+// summary is a run's outcome without its kind when the state already
+// says it ("failed: the build broke" shows as "the build broke").
+func summary(r client.Run) string {
+	if o := r.Outcome; o != nil && o.Kind == r.State && o.Summary != "" {
+		return o.Summary
+	}
+	return runview.Outcome(r)
+}
+
+// plural counts a noun: "1 run", "3 runs".
+func plural(n int, noun string) string {
+	if n == 1 {
+		return "1 " + noun
+	}
+	return strconv.Itoa(n) + " " + noun + "s"
 }
 
 // rows are the latest turn of each Work with its turn count, or with
@@ -96,6 +178,10 @@ func rows(runs []client.Run, perTurn bool) []row {
 	for _, r := range runs {
 		total[r.WorkID]++
 	}
+	trail := map[string][]client.Run{}
+	for i := len(runs) - 1; i >= 0; i-- {
+		trail[runs[i].WorkID] = append(trail[runs[i].WorkID], runs[i])
+	}
 	seen := map[string]int{}
 	var out []row
 	for _, r := range runs {
@@ -103,9 +189,9 @@ func rows(runs []client.Run, perTurn bool) []row {
 		n := total[r.WorkID]
 		switch {
 		case perTurn:
-			out = append(out, row{Run: r, Turns: fmt.Sprintf("%d/%d", n-seen[r.WorkID]+1, n)})
+			out = append(out, row{Run: r, Turns: fmt.Sprintf("%d/%d", n-seen[r.WorkID]+1, n), Trail: trail[r.WorkID]})
 		case seen[r.WorkID] == 1:
-			out = append(out, row{Run: r, Turns: strconv.Itoa(n)})
+			out = append(out, row{Run: r, Turns: strconv.Itoa(n), Trail: trail[r.WorkID]})
 		}
 	}
 	return out
@@ -150,10 +236,11 @@ func (s *Server) listPage(w http.ResponseWriter, r *http.Request) {
 		works[run.WorkID] = true
 	}
 	d.Works, d.Runs = len(works), len(runs.Items)
-	d.Rows = rows(runs.Items, d.PerTurn)
-	for i := range d.Rows {
-		d.Rows[i].Label = s.label(ctx, d.Rows[i].Run.WorkID)
+	rs := rows(runs.Items, d.PerTurn)
+	for i := range rs {
+		rs[i].Label = s.label(ctx, rs[i].Run.WorkID)
 	}
+	d.Groups = grouped(rs)
 	s.render(w, r, "list", p, d)
 }
 
