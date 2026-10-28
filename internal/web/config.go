@@ -204,17 +204,10 @@ func flow(sc client.ConfigScope, trace *client.RouteTrace) flowScope {
 // actions no panel shows.
 type scopeOffers struct {
 	Panels  []panelView
-	Actions []scopeAction
+	Actions []actionView
 	// All are every action offered, for the overview's chips.
 	All []client.Action
 	Err string
-}
-
-// scopeAction is an action on a scope with what its form needs.
-type scopeAction struct {
-	client.Action
-	Page    *page
-	ScopeID string
 }
 
 // configScope is one scope as the page shows it.
@@ -383,7 +376,7 @@ func (s *Server) offers(ctx context.Context, p *page, scopes []configScope) {
 			}
 			c.Offers = scopeOffers{Panels: panels, All: actions, Err: strings.Join(errs, "\n")}
 			for _, a := range unshown(actions, panels) {
-				c.Offers.Actions = append(c.Offers.Actions, scopeAction{Action: a, Page: p, ScopeID: t.ScopeID})
+				c.Offers.Actions = append(c.Offers.Actions, actionView{Action: a, Page: p, ScopeID: t.ScopeID})
 			}
 		}(&scopes[i])
 	}
@@ -526,5 +519,3 @@ func (flowScope) Edge(lit bool, top, bottom, title string) flowEdge {
 // segment of its path.
 func (configData) Provider(p string) string { return p[strings.LastIndex(p, "/")+1:] }
 
-// Provider is the action's provider's display name.
-func (a scopeAction) ProviderName() string { return configData{}.Provider(a.Provider) }

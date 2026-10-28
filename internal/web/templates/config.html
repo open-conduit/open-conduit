@@ -214,7 +214,7 @@
   {{- with $s.Offers.Err}}<p class="warn small" role="alert">{{.}}</p>{{end}}
   {{- with $s.Offers.Panels}}{{template "panels" .}}{{end}}
   {{- if $s.Offers.Actions}}
-  <div class="xactions">{{range $s.Offers.Actions}}{{template "cfg-action" .}}{{end}}</div>
+  <div class="xactions">{{range $s.Offers.Actions}}{{template "action-control" .}}{{end}}</div>
   {{- else if not $s.Offers.Panels}}
   <p class="quiet">No extension offers a scope-level action or panel here.</p>
   {{- end}}
@@ -297,22 +297,4 @@
 </div>
 {{end}}
 
-{{/* One scope action, as the prototype's ActionControl: a button without a
-   prompt, a text box with one, with choices one radio each then Send. */}}
-{{define "cfg-action"}}
-<form method="post" action="/actions" class="xaction">
-  <input type="hidden" name="csrf" value="{{.Page.CSRF}}"><input type="hidden" name="back" value="{{.Page.Back}}"><input type="hidden" name="scope" value="{{.ScopeID}}">
-  <input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">
-  {{- if not .Prompt}}
-  <button class="btn btn-primary">{{.Label}}</button>
-  {{- else if .Choices}}
-  <p class="xaction-label">{{.Label}}</p>
-  <div class="xchoices" role="radiogroup" aria-label="{{.Label}}">{{range .Choices}}<label class="xchoice"><input type="radio" name="input" value="{{.}}" required> {{.}}</label>{{end}}</div>
-  <div class="xaction-foot"><button class="btn btn-signal">Send</button><span class="xaction-note">Invokes <code>{{.ID}}</code> on {{.ProviderName}}</span></div>
-  {{- else}}
-  <label class="field"><span>{{.Label}} — {{.Prompt}}</span>
-    <span class="xaction-row"><input name="input" required><button class="btn btn-primary">Send</button></span>
-  </label>
-  {{- end}}
-</form>
-{{end}}
+
