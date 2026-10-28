@@ -12,16 +12,16 @@ import (
 
 var t0 = time.Date(2026, 10, 28, 0, 0, 0, 0, time.UTC)
 
-func ts(d time.Duration) string { return t0.Add(d).Format(time.RFC3339Nano) }
+func at0(d time.Duration) string { return t0.Add(d).Format(time.RFC3339Nano) }
 
 // turnRun is a run of attempt n in state, started at start and, unless
 // zero, finished at end.
 func turnRun(n uint32, state string, start, end time.Duration) client.Run {
 	r := client.Run{}
 	r.ID, r.WorkID, r.Attempt, r.State = "work/w/attempt/"+itoa(int(n)), "w", n, state
-	r.CreatedAt, r.StartedAt = ts(start), ts(start)
+	r.CreatedAt, r.StartedAt = at0(start), at0(start)
 	if end != 0 {
-		r.FinishedAt, r.UpdatedAt = ts(end), ts(end)
+		r.FinishedAt, r.UpdatedAt = at0(end), at0(end)
 	}
 	return r
 }
@@ -33,8 +33,8 @@ func TestDisposition(t *testing.T) {
 	exhausted := failed
 	exhausted.Retry = &client.RetryStatus{FailureCount: 3, Exhausted: true}
 	retrying := failed
-	retrying.Retry = &client.RetryStatus{FailureCount: 1, EligibleAt: ts(3 * time.Hour)}
-	wait := &client.Wait{ID: "wait/1", State: "active", Match: client.Match{Types: []string{"github.check_suite.completed", "github.pull_request.merged"}}, Description: "checks on PR #137", CreatedAt: ts(4 * time.Hour)}
+	retrying.Retry = &client.RetryStatus{FailureCount: 1, EligibleAt: at0(3 * time.Hour)}
+	wait := &client.Wait{ID: "wait/1", State: "active", Match: client.Match{Types: []string{"github.check_suite.completed", "github.pull_request.merged"}}, Description: "checks on PR #137", CreatedAt: at0(4 * time.Hour)}
 	ask := []client.Action{{Provider: "acme", ID: "answer", Label: "Answer the question"}}
 	panel := []client.Panel{{Provider: "acme", ID: "ask", Title: "The agent asks", Sections: []client.PanelSection{{Text: "May I refund?"}, {Actions: ask}}}}
 	cases := []struct {
@@ -49,7 +49,7 @@ func TestDisposition(t *testing.T) {
 		waiting string
 	}{
 		{name: "completed", work: client.Work{State: "completed"}, runs: []client.Run{turnRun(1, "completed", time.Hour, 2*time.Hour)}, group: "closed", kind: "completed", label: "Completed"},
-		{name: "held beats a wait", work: client.Work{State: "ready", Hold: &client.Hold{Reason: "busy", At: ts(5 * time.Hour)}}, wait: wait, group: "held", kind: "held", detail: "busy"},
+		{name: "held beats a wait", work: client.Work{State: "ready", Hold: &client.Hold{Reason: "busy", At: at0(5 * time.Hour)}}, wait: wait, group: "held", kind: "held", detail: "busy"},
 		{name: "an offered action is a decision", work: client.Work{State: "waiting", Actions: ask, Panels: panel}, wait: wait, group: "attention", kind: "decision", label: "The agent asks", detail: "May I refund?"},
 		{name: "an action with no panel", work: client.Work{State: "waiting", Actions: ask}, group: "attention", kind: "decision", label: "Answer the question"},
 		{name: "running", work: client.Work{State: "running"}, runs: []client.Run{turnRun(1, "running", time.Hour, 0)}, group: "running", kind: "running", detail: "Turn 1"},
@@ -63,7 +63,7 @@ func TestDisposition(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			c.work.ID, c.work.CreatedAt, c.work.UpdatedAt = "w", ts(0), ts(6*time.Hour)
+			c.work.ID, c.work.CreatedAt, c.work.UpdatedAt = "w", at0(0), at0(6*time.Hour)
 			d := newWork(c.work, c.runs, c.wait, now).Disp
 			if d.Group != c.group || d.Kind != c.kind {
 				t.Fatalf("got %s/%s, want %s/%s", d.Group, d.Kind, c.group, c.kind)
@@ -85,10 +85,10 @@ func TestTimesAndSegments(t *testing.T) {
 	now := t0.Add(5 * time.Hour)
 	parked := turnRun(1, "completed", time.Hour, 3*time.Hour)
 	// Parked from 1h20m to 2h40m: two segments of 20m.
-	parked.Segments = []client.RunSegment{{StartedAt: ts(time.Hour), EndedAt: ts(80 * time.Minute), Parked: true}, {StartedAt: ts(160 * time.Minute), EndedAt: ts(3 * time.Hour)}}
+	parked.Segments = []client.RunSegment{{StartedAt: at0(time.Hour), EndedAt: at0(80 * time.Minute), Parked: true}, {StartedAt: at0(160 * time.Minute), EndedAt: at0(3 * time.Hour)}}
 	parked.ActiveMS = (40 * time.Minute).Milliseconds()
 	running := turnRun(2, "running", 4*time.Hour, 0)
-	v := newWork(client.Work{ID: "w", State: "running", CreatedAt: ts(0), UpdatedAt: ts(4 * time.Hour)}, []client.Run{running, parked}, nil, now)
+	v := newWork(client.Work{ID: "w", State: "running", CreatedAt: at0(0), UpdatedAt: at0(4 * time.Hour)}, []client.Run{running, parked}, nil, now)
 	if v.Turns[0].Number != 1 || len(v.Turns[0].Segments) != 2 {
 		t.Fatalf("turns not ordered with segments: %+v", v.Turns)
 	}
@@ -98,7 +98,7 @@ func TestTimesAndSegments(t *testing.T) {
 	if got := v.Elapsed(now); got != 5*time.Hour {
 		t.Fatalf("elapsed %s", got)
 	}
-	closed := newWork(client.Work{ID: "w", State: "completed", CreatedAt: ts(0), UpdatedAt: ts(3 * time.Hour)}, []client.Run{parked}, nil, now)
+	closed := newWork(client.Work{ID: "w", State: "completed", CreatedAt: at0(0), UpdatedAt: at0(3 * time.Hour)}, []client.Run{parked}, nil, now)
 	if got := closed.Elapsed(now); got != 3*time.Hour {
 		t.Fatalf("closed elapsed runs to its close: %s", got)
 	}
@@ -107,7 +107,7 @@ func TestTimesAndSegments(t *testing.T) {
 func TestLifeline(t *testing.T) {
 	now := t0.Add(10 * time.Hour)
 	mk := func(state string, runs ...client.Run) workView {
-		return newWork(client.Work{ID: "w", State: state, CreatedAt: ts(0), UpdatedAt: ts(10 * time.Hour)}, runs, nil, now)
+		return newWork(client.Work{ID: "w", State: state, CreatedAt: at0(0), UpdatedAt: at0(10 * time.Hour)}, runs, nil, now)
 	}
 	t.Run("single turn spans its share", func(t *testing.T) {
 		l := lifelineOf(mk("waiting", turnRun(1, "completed", 0, 5*time.Hour)), now, 22)
@@ -141,7 +141,7 @@ func TestLifeline(t *testing.T) {
 		}
 	})
 	t.Run("closed Work has no end mark", func(t *testing.T) {
-		v := newWork(client.Work{ID: "w", State: "completed", CreatedAt: ts(0), UpdatedAt: ts(2 * time.Hour)}, []client.Run{turnRun(1, "completed", 0, 2*time.Hour)}, nil, now)
+		v := newWork(client.Work{ID: "w", State: "completed", CreatedAt: at0(0), UpdatedAt: at0(2 * time.Hour)}, []client.Run{turnRun(1, "completed", 0, 2*time.Hour)}, nil, now)
 		l := lifelineOf(v, now, 22)
 		if l.Mark != "" || l.Bars[0].Width < 990 {
 			t.Fatalf("closed: %+v", l)
@@ -149,7 +149,7 @@ func TestLifeline(t *testing.T) {
 	})
 	t.Run("events outside the span are clamped", func(t *testing.T) {
 		v := mk("waiting")
-		v.Events = []client.Event{{OccurredAt: ts(-time.Hour), Source: "github"}, {OccurredAt: ts(20 * time.Hour), Source: "github-bot"}}
+		v.Events = []client.Event{{OccurredAt: at0(-time.Hour), Source: "github"}, {OccurredAt: at0(20 * time.Hour), Source: "github-bot"}}
 		l := lifelineOf(v, now, 22)
 		if l.Ticks[0].X != 4 || l.Ticks[1].X != lifeWidth-4 || !l.Ticks[0].Person || l.Ticks[1].Person {
 			t.Fatalf("ticks %+v", l.Ticks)
