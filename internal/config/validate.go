@@ -35,6 +35,10 @@ type Registry struct {
 	// HandlerDescribe optionally says in words which events a route with
 	// this handler and config takes, for the operator's view of the config.
 	HandlerDescribe map[string]func(json.RawMessage) string
+	// ResourceSettings optionally lists a resource provider's config fields
+	// that are safe to show the operator (extension.Setting). Executors
+	// declare theirs by implementing extension.SettingsDescriber.
+	ResourceSettings map[string]func(json.RawMessage) []extension.Setting
 }
 
 // ExtensionType Ingress entries must target their containing scope.
@@ -45,6 +49,10 @@ type ExtensionType struct {
 	// jobs and when they run), for the operator's view of the config. It
 	// must not reveal secrets.
 	Describe func(config json.RawMessage) []Entry
+	// Settings optionally lists the entry's config fields that are safe to
+	// show the operator, with typed values. Fields it leaves out are shown
+	// by name alone.
+	Settings func(config json.RawMessage) []extension.Setting
 }
 
 // Entry is one thing an extension entry sets up, named and described.

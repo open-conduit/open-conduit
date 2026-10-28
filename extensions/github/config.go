@@ -18,6 +18,8 @@ import (
 	"regexp"
 	"strings"
 	"time"
+
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Type is the registered connection, extension and route handler name.
@@ -321,4 +323,21 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 func ValidateExtension(data json.RawMessage, secretNames []string) error {
 	_, err := ParseExtension(data, secretNames)
 	return err
+}
+
+// ExtensionSettings lists the extension entry fields safe to show an
+// operator, with defaults applied (config.ExtensionType.Settings).
+func ExtensionSettings(data json.RawMessage) []extension.Setting {
+	s, err := parseSettings(data, nil, false)
+	if err != nil {
+		return nil
+	}
+	out := []extension.Setting{{Name: "repo", Value: s.Repo}, {Name: "track_issues", Value: s.TrackIssues}}
+	if s.SharedTracker {
+		out = append(out, extension.Setting{Name: "tracker", Value: s.TrackerRepo})
+	}
+	return append(out,
+		extension.Setting{Name: "base_branch", Value: s.BaseBranch},
+		extension.Setting{Name: "manage_webhook", Value: s.ManageWebhook},
+		extension.Setting{Name: "closed_horizon_hours", Value: int(s.ClosedHorizon.Hours())})
 }

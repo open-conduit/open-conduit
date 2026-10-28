@@ -56,9 +56,20 @@ type managementHarness struct {
 	secrets    chan map[string]string
 	lock       *management.Lock
 	actions    map[string]extension.ActionProvider
+	// providerTimeout and viewDeadline, when set, time action provider
+	// calls in place of the real timers.
+	providerTimeout func(provider string) <-chan time.Time
+	viewDeadline    func() <-chan time.Time
 }
 
 func newManagementHarness(t *testing.T) *managementHarness {
+	t.Helper()
+	return newManagementHarnessWith(t, managementConfig, nil)
+}
+
+// newManagementHarnessWith starts the harness on cfg, with registry
+// additions made by register (nil for none).
+func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Registry)) *managementHarness {
 	t.Helper()
 	ctx := context.Background()
 	state, err := os.MkdirTemp("/tmp", "oc-")
@@ -94,10 +105,13 @@ func newManagementHarness(t *testing.T) *managementHarness {
 		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
 	}
 	h.configPath = filepath.Join(state, "config", "config.json")
-	if err = config.SaveAtomic(h.configPath, []byte(managementConfig)); err != nil {
+	if err = config.SaveAtomic(h.configPath, []byte(cfg)); err != nil {
 		t.Fatal(err)
 	}
 	registry := config.Registry{Executors: map[string]extension.Executor{"fixture": h.executor}, Handlers: map[string]bool{"manual": true}}
+	if register != nil {
+		register(&registry)
+	}
 	h.configs, err = management.OpenConfig(ctx, db, h.clock.Now, registry, h.configPath)
 	if err != nil {
 		t.Fatal(err)
@@ -125,7 +139,19 @@ func newManagementHarness(t *testing.T) *managementHarness {
 		t.Fatal(err)
 	}
 	server, err := management.NewServer(management.Options{Store: db, Artifacts: h.artifacts, Now: h.clock.Now, Control: control, Toolbelt: h.belt, Config: h.configs, Version: "test", InstanceID: "instance-1",
-		Actions: func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions }})
+		Actions: func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions },
+		ProviderTimeout: func(p string) <-chan time.Time {
+			if h.providerTimeout != nil {
+				return h.providerTimeout(p)
+			}
+			return nil
+		},
+		ViewDeadline: func() <-chan time.Time {
+			if h.viewDeadline != nil {
+				return h.viewDeadline()
+			}
+			return nil
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}

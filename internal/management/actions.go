@@ -3,7 +3,6 @@ package management
 import (
 	"context"
 	"regexp"
-	"sort"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -56,29 +55,8 @@ func (s *Server) providers(ctx context.Context, scope domain.ID) map[string]exte
 	return s.o.Actions(ctx, scope)
 }
 
-// available lists the providers' actions on t, sorted by provider. A
-// provider that fails contributes nothing, like annotations.
-func (s *Server) available(ctx context.Context, t extension.ActionTarget) []wireAction {
-	ps := s.providers(ctx, t.Scope.ID)
-	out := []wireAction{}
-	for name, p := range ps {
-		out = append(out, offered(ctx, name, p, t)...)
-	}
-	sort.SliceStable(out, func(i, j int) bool {
-		if out[i].Provider != out[j].Provider {
-			return out[i].Provider < out[j].Provider
-		}
-		return out[i].ID < out[j].ID
-	})
-	return out
-}
-
-// offered is one provider's well-formed actions on t.
-func offered(ctx context.Context, name string, p extension.ActionProvider, t extension.ActionTarget) []wireAction {
-	actions, err := p.Actions(ctx, t)
-	if err != nil {
-		return nil
-	}
+// wellFormed is one provider's well-formed actions.
+func wellFormed(name string, actions []extension.Action) []wireAction {
 	var out []wireAction
 	for _, a := range actions {
 		if !actionID.MatchString(a.ID) || strings.TrimSpace(a.Label) == "" || len(a.Label) > 200 || len(a.Prompt) > 200 {
@@ -118,7 +96,9 @@ func (s *Server) listActions(c *call, work bool) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	return 200, map[string]any{"actions": s.available(c.ctx, t)}, nil
+	v, cancel := s.viewer(c.ctx)
+	defer cancel()
+	return 200, map[string]any{"actions": v.view(t, true, false).actions}, nil
 }
 
 func (s *Server) invokeAction(c *call, work bool) (int, any, error) {

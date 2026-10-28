@@ -43,6 +43,7 @@ type resourceState struct {
 func resourceRegistry(r *config.Registry) {
 	r.Resources = map[string]bool{gitws.Type: true}
 	r.ResourceConfig = map[string]func(json.RawMessage) error{gitws.Type: gitws.ValidateConfig}
+	r.ResourceSettings = map[string]func(json.RawMessage) []extension.Setting{gitws.Type: gitws.Settings}
 }
 
 func (d *daemon) openResources() error {

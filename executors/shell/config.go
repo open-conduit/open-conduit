@@ -10,6 +10,8 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Config is the strictly checked binding `config` object owned by this executor.
@@ -123,4 +125,15 @@ func (e *Executor) ValidateConfig(raw json.RawMessage, secretNames []string) err
 		}
 	}
 	return nil
+}
+
+// Settings lists the binding config fields safe to show an operator
+// (extension.SettingsDescriber): only the timeout, never the command, its
+// arguments or environment.
+func (e *Executor) Settings(raw json.RawMessage) []extension.Setting {
+	c, err := ParseConfig(raw)
+	if err != nil {
+		return nil
+	}
+	return []extension.Setting{{Name: "timeout_seconds", Value: c.TimeoutSeconds}}
 }
