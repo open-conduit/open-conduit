@@ -3,6 +3,7 @@ package bootstrap
 import (
 	bb "github.com/open-conduit/open-conduit/extensions/bitbucket"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
+	"github.com/open-conduit/open-conduit/extensions/human"
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
@@ -84,6 +85,10 @@ func Adapters() []cli.Adapter {
 			Entry: []cli.Field{f("notes", ""), f("sweep", "{cron, time_zone, rules, guide, land, remote}"), f("triage", "{cron, time_zone, file_issues}"),
 				f("host_watch", "{interval_seconds, load, memory, disk, disks}"), f("telemetry", "write telemetry events (and send them to PostHog entries)")},
 			Route: []cli.Field{opt("work", "report", []string{"report", "sweep", "triage", "fix"}, "")}},
+		{Type: human.Type, Title: "Human decisions", Description: "Lets an agent ask a person for a private decision with human.ask, answered from the TUI or web view; nothing reaches the issue or thread. Add human.ask to the agent binding's operations.",
+			Kinds:      []string{"extension"},
+			Entry:      []cli.Field{def("responders", `["operator:local"]`, "who may answer, each kind:id or a bare kind"), def("surfaces", `["tui"]`, "where the question is shown")},
+			Operations: []string{human.OpAsk}},
 		{Type: "claude-code", Title: "Claude Code", Description: "Runs Claude Code turns with sessions, handoff, attach and the MCP toolbelt.", Setup: "--with claude",
 			Kinds: []string{"executor"},
 			Binding: []cli.Field{def("binary", "claude", ""), f("model", ""), def("permission_mode", "bypassPermissions", ""), def("playbook", "work-issue", "work-tracker-issue for Linear/Jira"),
