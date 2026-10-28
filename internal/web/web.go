@@ -121,6 +121,9 @@ type Server struct {
 	wmu    sync.Mutex
 	wcache world
 	wat    time.Time
+
+	// receipts are this process's interventions, newest first (actions.go).
+	receipts receiptLog
 }
 
 // New makes a Server over src.

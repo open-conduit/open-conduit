@@ -1,3 +1,95 @@
-{{define "content"}}
-<div class="page"><header class="page-head"><h1>{{.Page.Title}}</h1></header></div>
+{{define "content"}}{{$d := .Data}}{{$p := .Page}}
+<div class="page attention" data-refresh>
+  <header class="page-head">
+    <div>
+      <h1>Needs you</h1>
+      <p class="page-sub">{{if and (not $d.Decisions) (not $d.Repairs)}}Nothing is blocked on you. Agents are working or waiting on their own.{{else}}{{len $d.Decisions}} waiting on a person, {{len $d.Repairs}} stopped and needing a repair. Everything else is moving on its own.{{end}}</p>
+    </div>
+  </header>
+
+  <section class="att-section" aria-labelledby="att-dec">
+    <h2 id="att-dec" class="section-rule">Waiting on a person <span>{{len $d.Decisions}}</span></h2>
+    {{- if not $d.Decisions}}<p class="quiet">No extension is offering an action on waiting Work.</p>{{end}}
+    {{- range $d.Decisions}}
+    <article class="att-item">
+      {{template "att-head" .W}}
+      {{template "panels" .Panels}}
+      {{- range .Extra}}{{template "action-control" .}}{{end}}
+    </article>
+    {{- end}}
+  </section>
+
+  <section class="att-section" aria-labelledby="att-rep">
+    <h2 id="att-rep" class="section-rule">Stopped, needs a repair <span>{{len $d.Repairs}}</span></h2>
+    {{- if not $d.Repairs}}<p class="quiet">No failed retries or broken bindings.</p>{{end}}
+    {{- range $d.Repairs}}{{$w := .}}
+    <article class="att-item att-repair">
+      {{template "att-head" .}}
+      <div class="att-diag">
+        <p><b>{{.Disp.Label}}.</b> {{.Disp.Detail}}</p>
+        <div class="row-gap">
+          {{- with rowPrimary .}}<a class="btn btn-primary" href="{{confirmHref .ID $w $p.Back}}" data-action-dialog>{{if eq .ID "rebind"}}Rebind…{{else}}Run again…{{end}}</a>{{end}}
+          <a class="btn btn-quiet" href="{{workHref .ID (failedTurn .)}}">Investigate</a>
+        </div>
+      </div>
+    </article>
+    {{- end}}
+  </section>
+
+  <div class="att-cols">
+    <section class="att-section" aria-labelledby="att-held">
+      <h2 id="att-held" class="section-rule">Held by an operator <span>{{len $d.Held}}</span></h2>
+      {{- if not $d.Held}}<p class="quiet">Nothing is held.</p>{{end}}
+      <ul class="att-list">
+        {{- range $d.Held}}
+        <li>
+          {{mark "held" 12 ""}}
+          <div>
+            <a href="{{workHref .ID 0}}">{{with .Ref}}<code>{{.}}</code> {{end}}{{.Title}}</a>
+            <p>{{with .Hold.Reason}}“{{.}}”{{else}}No reason given{{end}} · {{since .Disp.Since}}</p>
+          </div>
+          <a class="btn btn-xs" href="{{confirmHref "release" . $p.Back}}" data-action-dialog>Release</a>
+        </li>
+        {{- end}}
+      </ul>
+    </section>
+    <section class="att-section" aria-labelledby="att-watch">
+      <h2 id="att-watch" class="section-rule">Worth a look <span>{{len $d.Watch}}</span></h2>
+      <p class="quiet small">Not blocked on you: long waits and waiting Work whose last turn failed.</p>
+      <ul class="att-list">
+        {{- range $d.Watch}}
+        <li>
+          {{mark .Disp.Kind 12 ""}}
+          <div>
+            <a href="{{workHref .ID 0}}">{{with .Ref}}<code>{{.}}</code> {{end}}{{.Title}}</a>
+            <p>{{.Disp.Label}}{{with .Disp.Detail}} · {{.}}{{end}} · unchanged for {{dur (unchanged .)}}</p>
+          </div>
+        </li>
+        {{- end}}
+      </ul>
+    </section>
+  </div>
+
+  <section class="att-section" aria-labelledby="att-log">
+    <h2 id="att-log" class="section-rule">Interventions <span>{{len $d.Receipts}} this session</span></h2>
+    {{- if not $d.Receipts}}<p class="quiet">Answers, retries, holds and cancellations you make appear here with the exact API call.</p>{{end}}
+    <ol class="log">
+      {{- range $d.Receipts}}
+      <li>
+        <time>{{at .At}}</time>
+        <span class="log-what">{{.Summary}}{{if .Href}} on <a href="{{.Href}}">{{or .Work "the Work"}}</a>{{end}}</span>
+        <code class="log-call">{{.Call}}{{with .Event}} · event {{.}}{{end}}</code>
+      </li>
+      {{- end}}
+    </ol>
+  </section>
+</div>
+{{end}}
+
+{{define "att-head"}}
+<header class="att-head">
+  {{mark .Disp.Kind 13 ""}}
+  <a href="{{workHref .ID 0}}" class="att-title">{{with .Ref}}<code>{{.}}</code> {{end}}{{.Title}}</a>
+  <span class="att-meta">{{.ScopeID}} · {{with .Display}}{{with .Requester}}{{.}}{{else}}{{$.Kind}}{{end}}{{else}}{{.Kind}}{{end}} · {{since .Disp.Since}}</span>
+</header>
 {{end}}
