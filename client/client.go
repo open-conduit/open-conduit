@@ -750,8 +750,18 @@ type ConfigExtension struct {
 	Connection string        `json:"connection,omitempty"`
 	Ingress    bool          `json:"ingress"`
 	Entries    []ConfigEntry `json:"entries,omitempty"`
-	// Settings summarises the entry's config, without secrets.
-	Settings []ConfigEntry `json:"settings,omitempty"`
+	// Settings is the entry's config through its type's allowlist.
+	Settings []ConfigSetting `json:"settings"`
+}
+
+// ConfigSetting is one config field. A field its type declares safe to show
+// carries its effective Value (a string, bool, number or list of strings,
+// defaults included); any other field present is listed by name with Set
+// alone, its value never shown.
+type ConfigSetting struct {
+	Name  string `json:"name"`
+	Value any    `json:"value,omitempty"`
+	Set   bool   `json:"set,omitempty"`
 }
 
 // ConfigAuthorization is a scope's authorization ceiling: the connections,
@@ -770,18 +780,18 @@ type ConfigEntry struct {
 }
 
 // ConfigBinding names an executor and the connection and resource it uses,
-// the capabilities it requires and the operations it is granted, with a
-// summary of its executor config (Settings) and resource config
-// (ResourceSettings), without secrets.
+// the capabilities it requires and the operations it is granted, with its
+// executor config (Settings) and resource config (ResourceSettings) through
+// their types' allowlists.
 type ConfigBinding struct {
-	Name             string        `json:"name"`
-	Executor         string        `json:"executor"`
-	Connection       string        `json:"connection,omitempty"`
-	Requires         Requires      `json:"requires"`
-	Operations       []string      `json:"operations"`
-	Settings         []ConfigEntry `json:"settings,omitempty"`
-	Resource         string        `json:"resource,omitempty"`
-	ResourceSettings []ConfigEntry `json:"resource_settings,omitempty"`
+	Name             string          `json:"name"`
+	Executor         string          `json:"executor"`
+	Connection       string          `json:"connection,omitempty"`
+	Requires         Requires        `json:"requires"`
+	Operations       []string        `json:"operations"`
+	Settings         []ConfigSetting `json:"settings"`
+	Resource         string          `json:"resource,omitempty"`
+	ResourceSettings []ConfigSetting `json:"resource_settings,omitempty"`
 }
 
 func (c *Client) Config(ctx context.Context) (Config, error) {

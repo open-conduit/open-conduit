@@ -71,6 +71,12 @@ type Options struct {
 	Live func(ctx context.Context, executor string, execution domain.ID, tail int64) ([]extension.LiveOutput, error)
 	// Nudge asks the host loop for an immediate pass (optional).
 	Nudge func()
+	// ProviderTimeout and ViewDeadline time the action providers' calls for
+	// actions and panels: one call to the named provider (default
+	// DefaultProviderTimeout) and all of one request's calls (default
+	// DefaultViewDeadline). Tests inject them; nil uses the defaults.
+	ProviderTimeout func(provider string) <-chan time.Time
+	ViewDeadline    func() <-chan time.Time
 }
 
 type Server struct {

@@ -166,12 +166,12 @@ type wireEntry struct {
 	Detail string `json:"detail,omitempty"`
 }
 type wireConfigExtension struct {
-	Name       string      `json:"name"`
-	Type       string      `json:"type"`
-	Connection string      `json:"connection,omitempty"`
-	Ingress    bool        `json:"ingress"`
-	Entries    []wireEntry `json:"entries,omitempty"`
-	Settings   []wireEntry `json:"settings,omitempty"`
+	Name       string        `json:"name"`
+	Type       string        `json:"type"`
+	Connection string        `json:"connection,omitempty"`
+	Ingress    bool          `json:"ingress"`
+	Entries    []wireEntry   `json:"entries,omitempty"`
+	Settings   []wireSetting `json:"settings"`
 }
 
 // wireAuthorization is a scope's effective authorization ceiling.
@@ -181,14 +181,14 @@ type wireAuthorization struct {
 	ReadScopes  []string `json:"read_scopes"`
 }
 type wireConfigBinding struct {
-	Name             string       `json:"name"`
-	Executor         string       `json:"executor"`
-	Connection       string       `json:"connection,omitempty"`
-	Requires         wireRequires `json:"requires"`
-	Operations       []string     `json:"operations"`
-	Settings         []wireEntry  `json:"settings,omitempty"`
-	Resource         string       `json:"resource,omitempty"`
-	ResourceSettings []wireEntry  `json:"resource_settings,omitempty"`
+	Name             string        `json:"name"`
+	Executor         string        `json:"executor"`
+	Connection       string        `json:"connection,omitempty"`
+	Requires         wireRequires  `json:"requires"`
+	Operations       []string      `json:"operations"`
+	Settings         []wireSetting `json:"settings"`
+	Resource         string        `json:"resource,omitempty"`
+	ResourceSettings []wireSetting `json:"resource_settings,omitempty"`
 }
 type wireScope struct {
 	ID         string            `json:"id"`

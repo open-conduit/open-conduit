@@ -1,11 +1,6 @@
 package management
 
-import (
-	"context"
-	"sort"
-
-	"github.com/open-conduit/open-conduit/extension"
-)
+import "github.com/open-conduit/open-conduit/extension"
 
 // Extension panels (issue #90): GET /scopes/{id}/panels and
 // GET /work/{id}/panels return what each action provider that is also an
@@ -58,44 +53,9 @@ func (s *Server) listPanels(c *call, work bool) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	return 200, map[string]any{"panels": s.panels(c.ctx, t)}, nil
-}
-
-// panels gathers every provider's panels on t, sorted by provider.
-func (s *Server) panels(ctx context.Context, t extension.ActionTarget) []wirePanel {
-	ps := s.providers(ctx, t.Scope.ID)
-	names := make([]string, 0, len(ps))
-	for name := range ps {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	out := []wirePanel{}
-	for _, name := range names {
-		pp, ok := ps[name].(extension.PanelProvider)
-		if !ok {
-			continue
-		}
-		panels, err := pp.Panels(ctx, t)
-		if err != nil || len(panels) == 0 || len(panels) > extension.MaxPanels {
-			continue
-		}
-		var actions map[string]wireAction
-		seen := map[string]bool{}
-		for _, p := range panels {
-			if p.Validate() != nil || seen[p.ID] {
-				continue
-			}
-			seen[p.ID] = true
-			if actions == nil && refersToActions(p) {
-				actions = map[string]wireAction{}
-				for _, a := range offered(ctx, name, ps[name], t) {
-					actions[a.ID] = a
-				}
-			}
-			out = append(out, toPanel(name, p, actions))
-		}
-	}
-	return out
+	v, cancel := s.viewer(c.ctx)
+	defer cancel()
+	return 200, map[string]any{"panels": v.view(t, false, true).panels}, nil
 }
 
 func refersToActions(p extension.Panel) bool {

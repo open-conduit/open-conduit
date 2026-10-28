@@ -56,6 +56,10 @@ type managementHarness struct {
 	secrets    chan map[string]string
 	lock       *management.Lock
 	actions    map[string]extension.ActionProvider
+	// providerTimeout and viewDeadline, when set, time action provider
+	// calls in place of the real timers.
+	providerTimeout func(provider string) <-chan time.Time
+	viewDeadline    func() <-chan time.Time
 }
 
 func newManagementHarness(t *testing.T) *managementHarness {
@@ -135,7 +139,19 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 		t.Fatal(err)
 	}
 	server, err := management.NewServer(management.Options{Store: db, Artifacts: h.artifacts, Now: h.clock.Now, Control: control, Toolbelt: h.belt, Config: h.configs, Version: "test", InstanceID: "instance-1",
-		Actions: func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions }})
+		Actions: func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions },
+		ProviderTimeout: func(p string) <-chan time.Time {
+			if h.providerTimeout != nil {
+				return h.providerTimeout(p)
+			}
+			return nil
+		},
+		ViewDeadline: func() <-chan time.Time {
+			if h.viewDeadline != nil {
+				return h.viewDeadline()
+			}
+			return nil
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}

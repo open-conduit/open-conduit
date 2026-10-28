@@ -7,12 +7,14 @@ import (
 	"io"
 	"net/http"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -111,7 +113,7 @@ func (s *Server) listWork(c *call) (int, any, error) {
 	err = s.read(c.ctx, func(tx storage.Tx) error {
 		works, e := tx.ListWorks()
 		for _, w := range works {
-			if !match(q, "scope_id", string(w.ScopeID)) || !match(q, "state", string(w.State)) || !match(q, "kind", w.Kind) || !match(q, "parent_id", string(w.ParentID)) {
+			if !match(q, "scope_id", string(w.ScopeID)) || !matchAny(q, "state", string(w.State)) || !match(q, "kind", w.Kind) || !match(q, "parent_id", string(w.ParentID)) {
 				continue
 			}
 			items = append(items, keyed{createdKey(w.CreatedAt, w.ID), toWork(w)})
@@ -120,9 +122,11 @@ func (s *Server) listWork(c *call) (int, any, error) {
 			}
 			byID[string(w.ID)] = w
 			if _, ok := scopes[w.ScopeID]; !ok {
-				if sc, e := tx.Scope(w.ScopeID); e == nil {
-					scopes[w.ScopeID] = sc
+				sc, e := tx.Scope(w.ScopeID)
+				if e != nil {
+					return e
 				}
+				scopes[w.ScopeID] = sc
 			}
 		}
 		return e
@@ -139,6 +143,13 @@ func (s *Server) listWork(c *call) (int, any, error) {
 func match(q listQuery, name, value string) bool {
 	want, ok := q.filters[name]
 	return !ok || want == value
+}
+
+// matchAny is match for a filter that takes a comma-separated set, such
+// as state=ready,running,waiting.
+func matchAny(q listQuery, name, value string) bool {
+	want, ok := q.filters[name]
+	return !ok || slices.Contains(strings.Split(want, ","), value)
 }
 func (s *Server) getWork(c *call) (int, any, error) {
 	if err := noQuery(c); err != nil {
@@ -686,7 +697,6 @@ func (s *Server) config(c *call) (int, any, error) {
 	}
 	snap, generation := s.o.Config.Current()
 	reg := s.o.Config.Registry()
-	refs := secretRefs(snap)
 	out := wireConfig{Generation: u64(generation), Hash: snap.Hash, Connections: []wireConnection{}, Scopes: []wireConfigScope{}}
 	for _, conn := range snap.Connections {
 		out.Connections = append(out.Connections, wireConnection{ID: conn.ID, Type: conn.Type})
@@ -702,7 +712,7 @@ func (s *Server) config(c *call) (int, any, error) {
 			Extensions:    []wireConfigExtension{}, Routes: []wireConfigRoute{}, Bindings: []wireConfigBinding{}}
 		for _, x := range e.Extensions {
 			t := reg.Extensions[x.Type]
-			wx := wireConfigExtension{Name: x.Name, Type: x.Type, Connection: x.Connection, Ingress: t.Ingress, Settings: summarize(x.Config, refs)}
+			wx := wireConfigExtension{Name: x.Name, Type: x.Type, Connection: x.Connection, Ingress: t.Ingress, Settings: settings(x.Config, t.Settings)}
 			if t.Describe != nil {
 				for _, en := range t.Describe(x.Config) {
 					wx.Entries = append(wx.Entries, wireEntry{en.Name, en.Detail})
@@ -719,16 +729,25 @@ func (s *Server) config(c *call) (int, any, error) {
 		}
 		for _, b := range e.Bindings {
 			r := b.Requires
-			wb := wireConfigBinding{Name: b.Name, Executor: b.Executor, Connection: b.Connection, Requires: wireRequires{r.Interrupt, r.Inject, r.Resume, r.Workspace, r.Toolbelt}, Operations: nonNil(b.Operations), Settings: summarize(b.Config, refs)}
+			wb := wireConfigBinding{Name: b.Name, Executor: b.Executor, Connection: b.Connection, Requires: wireRequires{r.Interrupt, r.Inject, r.Resume, r.Workspace, r.Toolbelt}, Operations: nonNil(b.Operations), Settings: settings(b.Config, executorSettings(reg, b.Executor))}
 			if b.Resource != nil {
 				wb.Resource = b.Resource.Provider
-				wb.ResourceSettings = summarize(b.Resource.Config, refs)
+				wb.ResourceSettings = settings(b.Resource.Config, reg.ResourceSettings[b.Resource.Provider])
 			}
 			sc.Bindings = append(sc.Bindings, wb)
 		}
 		out.Scopes = append(out.Scopes, sc)
 	}
 	return 200, out, nil
+}
+
+// executorSettings is the executor registration's settings allowlist, if
+// it declares one.
+func executorSettings(reg config.Registry, executor string) func(json.RawMessage) []extension.Setting {
+	if d, ok := reg.Executors[executor].(extension.SettingsDescriber); ok {
+		return d.Settings
+	}
+	return nil
 }
 
 func (s *Server) validateConfig(c *call) (int, any, error) {
