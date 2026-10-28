@@ -58,6 +58,9 @@ type Options struct {
 	// DeepChecks run only for check_secrets=true: they resolve credentials
 	// and may call external services (connection authentication).
 	DeepChecks []func(context.Context) runtime.Check
+	// Capacity reports each capacity pool's slots for GET /capacity
+	// (optional: without it the endpoint lists no pools).
+	Capacity func(context.Context) ([]Pool, error)
 	// Annotate contributes extension context to GET /work/{id}.
 	Annotate func(context.Context, domain.Work) []Annotation
 	// Actions returns the extension action providers of a scope by
@@ -264,6 +267,7 @@ type call struct {
 
 var routes = []route{
 	{"GET", []string{"health"}, false, false, (*Server).health},
+	{"GET", []string{"capacity"}, false, false, (*Server).capacity},
 	{"GET", []string{"schema"}, false, false, (*Server).schema},
 	{"GET", []string{"scopes"}, false, false, (*Server).listScopes},
 	{"GET", []string{"scopes", "*"}, false, false, (*Server).getScope},

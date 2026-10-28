@@ -136,6 +136,33 @@ func (d *daemon) capacityCheck(ctx context.Context) runtime.Check {
 	return check
 }
 
+// capacityPools reports each pool for GET /v1/capacity from the scheduler's
+// own accounting: the agent pool as "agents", the job pool as "jobs".
+func (d *daemon) capacityPools(ctx context.Context) ([]management.Pool, error) {
+	usage, err := d.current.Load().scheduler.Capacity(ctx)
+	if err != nil {
+		return nil, err
+	}
+	waiting := map[string]int{}
+	for _, code := range d.waitingOnCapacity(ctx) {
+		if pool, _ := poolOfCode(code); pool != "" {
+			waiting[pool]++
+		}
+	}
+	out := make([]management.Pool, 0, len(usage))
+	for _, u := range usage {
+		p := management.Pool{Name: u.Pool, Limit: u.Limit, InUse: u.Running, Waiting: waiting[u.Pool]}
+		switch u.Pool {
+		case runtime.GlobalPool:
+			p.Name, p.Setting = "agents", "settings.concurrency"
+		case jobPool:
+			p.Setting = "settings.job_concurrency"
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
 // capacityAnnotation says which limit holds ready Work back, if one does.
 func (d *daemon) capacityAnnotation(ctx context.Context, w domain.Work) []management.Annotation {
 	if w.State != domain.WorkReady {
