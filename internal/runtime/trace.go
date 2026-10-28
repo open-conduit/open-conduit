@@ -74,9 +74,12 @@ type traceWait struct {
 	meta waitMetadata
 	work domain.Work
 	// wakes: the Event itself wakes the Work. first: another input (an
-	// earlier accepted Event or the due timeout) wakes it first.
-	wakes bool
-	first string
+	// earlier accepted Event or the due timeout) wakes it first. refused:
+	// the causal limits would refuse the wake's core.wait.woken bridge
+	// ("depth_limit"), so the wait would be blocked instead.
+	wakes   bool
+	first   string
+	refused string
 }
 
 // Trace explains how the router would route e in scopeID now. It reads the
@@ -139,7 +142,7 @@ func (r *Router) Trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		if waiting.wakes {
 			out.Effect = wakeEffect(*waiting, "")
 		} else {
-			out.Effect = RouteEffect{Kind: EffectQueue, WorkID: waiting.work.ID, Binding: waiting.meta.Binding, Detail: "kept as context; " + string(waiting.work.ID) + " keeps waiting" + waitingFor(waiting.wait) + contextWhy(waiting.meta)}
+			out.Effect = RouteEffect{Kind: EffectQueue, WorkID: waiting.work.ID, Binding: waiting.meta.Binding, Detail: "kept as context; " + string(waiting.work.ID) + " keeps waiting" + waitingFor(waiting.wait) + contextWhy(*waiting)}
 		}
 		return out, nil
 	}
@@ -233,9 +236,12 @@ var fallbackWhy = map[string]string{
 	"target_binding_mismatch":    "the running attempt is on another binding",
 }
 
-func contextWhy(meta waitMetadata) string {
-	if meta.Blocked {
+func contextWhy(w traceWait) string {
+	switch {
+	case w.meta.Blocked:
 		return "; its wake is blocked by the causal limits"
+	case w.refused != "":
+		return "; the causal limits would refuse its wake (" + w.refused + "), which blocks the wait"
 	}
 	return "; the event does not match its wait"
 }
@@ -279,6 +285,17 @@ func (r *Router) waitOutcomeInTx(tx storage.Tx, w domain.Work, a domain.Accepted
 		out.first = "accepted event " + string(winner.Event.ID)
 	case out.meta.Timer.ID != "" && !r.now().Before(out.meta.Timer.FireAt):
 		out.first = "its due timeout"
+		return out, nil
+	default:
+		return out, nil
+	}
+	// A wake of a parked attempt derives a bridge the causal limits may
+	// refuse, which blocks the wait rather than waking it (WakeWaitInTx).
+	if out.refused, err = wakeRefusalInTx(tx, r.now(), r.options.CausalLimits, out.wait, winner.Event.ID, !out.wakes); err != nil {
+		return nil, err
+	}
+	if out.refused != "" {
+		out.wakes, out.first = false, ""
 	}
 	return out, nil
 }
