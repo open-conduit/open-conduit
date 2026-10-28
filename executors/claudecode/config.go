@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -50,6 +51,10 @@ type Config struct {
 	// WorkspaceMode is the resource mode requested (default "work": a
 	// session's transcript is tied to its working directory).
 	WorkspaceMode string `json:"workspace_mode,omitempty"`
+	// Dir is an existing absolute folder a workspace-free binding's sessions
+	// run in, used as-is (no resource, nothing copied). Without it each Work
+	// gets a private directory. A binding with a resource must not set it.
+	Dir string `json:"dir,omitempty"`
 	// HandoffMinutes is how long after a turn the session counts as cold
 	// (default 55, Open Supervisor's prompt-cache horizon).
 	HandoffMinutes *int `json:"handoff_minutes,omitempty"`
@@ -108,7 +113,7 @@ func ParseConfig(data []byte) (Config, error) {
 			return Config{}, configError("trailing data after config object")
 		}
 	}
-	strs := append([]string{c.Binary, c.Model, c.PermissionMode, c.Playbook, c.PluginDir, c.Args, c.StatusSchema, c.Branch, c.WorkspaceMode}, c.ExtraArgs...)
+	strs := append([]string{c.Binary, c.Model, c.PermissionMode, c.Playbook, c.PluginDir, c.Args, c.StatusSchema, c.Branch, c.WorkspaceMode, c.Dir}, c.ExtraArgs...)
 	for _, s := range strs {
 		if strings.ContainsRune(s, 0) {
 			return Config{}, configError("strings must not contain NUL")
@@ -137,6 +142,9 @@ func ParseConfig(data []byte) (Config, error) {
 	}
 	if c.PluginDir != "" && (!filepath.IsAbs(c.PluginDir) || filepath.Clean(c.PluginDir) != c.PluginDir) {
 		return Config{}, configError("plugin_dir must be a clean absolute path")
+	}
+	if c.Dir != "" && (!filepath.IsAbs(c.Dir) || filepath.Clean(c.Dir) != c.Dir) {
+		return Config{}, configError("dir must be a clean absolute path")
 	}
 	if c.Args == "" {
 		c.Args = "{number}"
@@ -215,6 +223,9 @@ func (e *Executor) ValidateConfig(raw json.RawMessage, secretNames []string) err
 	if err != nil {
 		return err
 	}
+	if c.Dir != "" && !isDir(c.Dir) {
+		return configError("dir must be an existing directory")
+	}
 	for secret := range c.SecretEnv {
 		if !slices.Contains(secretNames, secret) {
 			return configError("secret_env names a secret the binding does not select")
@@ -226,4 +237,10 @@ func (e *Executor) ValidateConfig(raw json.RawMessage, secretNames []string) err
 		}
 	}
 	return nil
+}
+
+// isDir reports whether path is an existing directory (following links).
+func isDir(path string) bool {
+	info, err := os.Stat(path)
+	return err == nil && info.IsDir()
 }

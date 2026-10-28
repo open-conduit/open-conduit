@@ -137,6 +137,40 @@ func TestSlackSetupCreatesVerifiesAndPicksAChannel(t *testing.T) {
 	}
 }
 
+// TestSlackSetupTakesAFolderOfInstructions: the support binding runs in the
+// folder given with --dir or at the prompt; a folder that doesn't exist is
+// refused or asked again, and none leaves the binding without dir.
+func TestSlackSetupTakesAFolderOfInstructions(t *testing.T) {
+	folder := t.TempDir()
+	dirOf := func(r extension.SetupResult) any {
+		var s supportScope
+		if err := json.Unmarshal(r.Scope, &s); err != nil {
+			t.Fatal(err)
+		}
+		return s.Bindings[0].Config["dir"]
+	}
+	refs := []string{"--bot-token", "env:BOT", "--app-token", "env:APP", "--team", "T0123", "--channel", "C0SUPPORT"}
+	h := &scriptedHost{state: filepath.Dir(folder)}
+	r, err := slack.Setup{}.Setup(context.Background(), h, append(refs, "--dir", filepath.Base(folder)))
+	if err != nil || dirOf(r) != folder {
+		t.Fatalf("--dir relative to the working directory: %v %v", err, dirOf(r))
+	}
+	if _, err = (slack.Setup{}).Setup(context.Background(), h, append(refs, "--dir", filepath.Join(folder, "missing"))); !errors.Is(err, extension.ErrSetupUsage) {
+		t.Fatalf("a missing --dir: %v", err)
+	}
+	if r, err = (slack.Setup{}).Setup(context.Background(), h, refs); err != nil || dirOf(r) != nil {
+		t.Fatalf("no folder: %v %v", err, dirOf(r))
+	}
+	fake := slacktest.New("T0123", "xoxb-good")
+	defer fake.Close()
+	fake.AddAppToken("xapp-good")
+	h = &scriptedHost{state: t.TempDir(), answers: []string{"xoxb-good", "xapp-good", "/no/such/folder", folder}}
+	r, err = slack.Setup{}.Setup(context.Background(), h, []string{"--api-url", fake.URL, "--channel", "C0SUPPORT", "--no-open"})
+	if err != nil || dirOf(r) != folder || !strings.Contains(h.out.String(), "must be an existing directory") || !strings.Contains(strings.Join(r.Summary, "\n"), folder) {
+		t.Fatalf("prompted folder: %v %v\n%s", err, dirOf(r), h.out.String())
+	}
+}
+
 func TestSlackSetupRefusesBadTokensBeforeStoringAnything(t *testing.T) {
 	fake := slacktest.New("T0123", "xoxb-good")
 	defer fake.Close()

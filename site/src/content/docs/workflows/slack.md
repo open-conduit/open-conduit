@@ -16,6 +16,18 @@ open-conduit config check
 
 To answer only when the app is mentioned, set `"start": "mention"` with the app's `bot_user_id` in the extension's config.
 
+## Give the agent a folder of instructions and knowledge
+
+By default each thread's agent runs in an empty private directory. To give it instructions and reference files, point the binding's `dir` at a folder:
+
+```json
+"config": {"playbook": "support-conversation", "args": "{key}", "dir": "/Users/me/support"}
+```
+
+Every thread's agent then runs in that folder as it is: no git, no copy. Claude Code reads the folder's `CLAUDE.md` as its instructions, the agent starts next to the knowledge files, and an edit takes effect on the next turn. `init slack` asks for the folder, or takes it as `--dir FOLDER`.
+
+`dir` must be an absolute path to an existing directory, and a binding with `dir` takes no `resource`. The agent works in the folder with the binding's permission mode, so it can change the files there unless that mode stops it.
+
 ## Example config
 
 Each workflow is a scope in the config. The example below is a complete, minimal config that passes `open-conduit config check`; see [configuration and secrets](/open-conduit/guides/configuration/) for what each part means.

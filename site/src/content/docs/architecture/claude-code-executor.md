@@ -133,7 +133,7 @@ Handed-back Work sits `ready` with no pending input, and the host loop skips it 
 
 ## Workspace and environment
 
-With a binding resource, a new segment calls `Acquire({Mode: workspace_mode (default "work"), Params: {"branch": …} when branch is set})`. A resumed segment calls `Lookup` on the parked segment's lease reference, which never creates anything. claude then runs in `Resource.Dir`. The reference is kept with the segment and reported in the result. A setup failure or an unavailable workspace is a structured failure with no process. Without a resource, the session lives in a private directory that stays the same for the Work. The executor never removes workspaces; the host reconciles them (B07).
+With a binding resource, a new segment calls `Acquire({Mode: workspace_mode (default "work"), Params: {"branch": …} when branch is set})`. A resumed segment calls `Lookup` on the parked segment's lease reference, which never creates anything. claude then runs in `Resource.Dir`. The reference is kept with the segment and reported in the result. A setup failure or an unavailable workspace is a structured failure with no process. Without a resource, the session lives in the binding's `dir`, used as-is and shared by every Work on the binding, or else in a private directory that stays the same for the Work. A `dir` that is gone at turn start is a structured `workspace_unavailable` failure, and a binding with both a resource and `dir` fails its turns as `invalid_config`. The executor never removes workspaces; the host reconciles them (B07).
 
 The environment follows B05:
 
@@ -158,6 +158,7 @@ The config is strict and validated at load. Every field is optional:
 | `structured` | Default true. |
 | `status_schema` | The outcome data schema (default `core.turn.v1`). |
 | `branch`, `workspace_mode` | The workspace request. |
+| `dir` | An existing absolute folder a workspace-free binding's sessions run in, used as-is. Checked to exist at load. |
 | `handoff_minutes` | How long after a turn the session counts as cold (default 55). |
 | `cold_turns` | What a cold turn does: `handoff` (default) or `resume`. `handoff_share`, the removed experiment's setting, is ignored with a `config check` warning for one release, then rejected. |
 | `env`, `pass_env`, `secret_env` | The environment. |
