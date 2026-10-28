@@ -17,6 +17,9 @@ const (
 	VerdictMatch      = "match"
 	VerdictSkip       = "skip"
 	VerdictNotReached = "not_reached"
+	// VerdictBypassed: the route was not consulted (the Work is waiting
+	// or terminal).
+	VerdictBypassed = "bypassed"
 )
 
 // Route trace effects.
@@ -40,8 +43,8 @@ type RouteTrace struct {
 	Work   *domain.Work
 	Routes []RouteStep
 	Effect RouteEffect
-	// Also lists Work the Event would wake through a dependency
-	// subscription, besides its own routing.
+	// Also lists other wakes: Work woken through a dependency
+	// subscription, or another input waking the Event's own Work first.
 	Also []RouteEffect
 }
 
@@ -64,16 +67,22 @@ type TraceSample struct {
 	extension.RouteSample
 }
 
+// traceWait is what an Event would do to a waiting Work's active wait,
+// decided by the same winner selection WakeWaitInTx uses.
 type traceWait struct {
 	wait domain.Wait
 	meta waitMetadata
 	work domain.Work
+	// wakes: the Event itself wakes the Work. first: another input (an
+	// earlier accepted Event or the due timeout) wakes it first.
+	wakes bool
+	first string
 }
 
-// Trace explains how the router would route e in scopeID now. It reads one
-// snapshot and evaluates the same deterministic handlers routing uses; it
-// never writes. filter evaluates a subscription's opaque filter (nil: a
-// filtered subscription never matches, as in the scheduler).
+// Trace explains how the router would route e in scopeID now. It reads the
+// state routing reads and calls the same handlers, winner selection and
+// policy decision; it never writes. filter evaluates a subscription's opaque
+// filter (nil: a filtered subscription never matches, as in the scheduler).
 func (r *Router) Trace(ctx context.Context, scopeID domain.ID, e domain.Event, filter func(string, domain.Payload, domain.Event) bool) (RouteTrace, error) {
 	out := RouteTrace{Generation: r.options.Generation}
 	if scopeID == "" || e.Type == "" {
@@ -99,14 +108,14 @@ func (r *Router) Trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		if err == nil {
 			s.work = &w
 			if w.State == domain.WorkWaiting {
-				if waiting, err = activeWait(tx, w); err != nil {
+				if waiting, err = r.waitOutcomeInTx(tx, w, s.event); err != nil {
 					return err
 				}
 			}
 		} else if !errors.Is(err, storage.ErrNotFound) {
 			return err
 		}
-		wakes, err = subscriptionWakes(tx, s.event, filter)
+		wakes, err = r.subscriptionWakes(tx, s.scope.ID, s.event, filter)
 		return err
 	})
 	if err != nil {
@@ -119,24 +128,34 @@ func (r *Router) Trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 	}
 	for _, w := range wakes {
 		if s.work == nil || w.work.ID != s.work.ID {
-			out.Also = append(out.Also, wakeEffect(w, true))
+			out.Also = append(out.Also, wakeEffect(w, "through its dependency on this event"))
 		}
 	}
-	switch {
-	case waiting != nil:
-		// A waiting Work's wait decides, not its routes; credit the route
-		// whose binding it waits on.
-		matches := waitMatches(waiting.wait, s.event)
-		out.Effect = RouteEffect{Kind: EffectQueue, WorkID: waiting.work.ID, Binding: waiting.meta.Binding, Detail: "kept as context; " + string(waiting.work.ID) + " keeps waiting" + waitingFor(waiting.wait)}
-		reason := "its Work waits here; this event is kept as context"
-		if matches {
-			out.Effect = wakeEffect(*waiting, false)
-			reason = "its Work waits here and this event wakes it"
+	if waiting != nil && waiting.first == "" {
+		// Routes are not consulted for waiting Work: its wait decides.
+		for i := range out.Routes {
+			out.Routes[i].Verdict, out.Routes[i].Reason = VerdictBypassed, string(waiting.work.ID)+" is waiting; its wait decides, routes are not consulted"
 		}
-		creditWait(out.Routes, waiting.meta.Binding, reason)
+		if waiting.wakes {
+			out.Effect = wakeEffect(*waiting, "")
+		} else {
+			out.Effect = RouteEffect{Kind: EffectQueue, WorkID: waiting.work.ID, Binding: waiting.meta.Binding, Detail: "kept as context; " + string(waiting.work.ID) + " keeps waiting" + waitingFor(waiting.wait) + contextWhy(waiting.meta)}
+		}
 		return out, nil
-	case s.work != nil && s.work.State.Terminal():
-		out.Effect = RouteEffect{Kind: EffectDrop, WorkID: s.work.ID, Detail: string(s.work.ID) + " is " + string(s.work.State) + "; later input is recorded as terminal"}
+	}
+	if waiting != nil {
+		// Something else wakes it first; this Event then routes to the
+		// ready Work like any other input.
+		out.Also = append([]RouteEffect{{Kind: EffectWake, WorkID: waiting.work.ID, Binding: waiting.meta.Binding, Detail: waiting.first + " wakes " + string(waiting.work.ID) + " first"}}, out.Also...)
+		w := *s.work
+		w.State = domain.WorkReady
+		s.work = &w
+	}
+	if s.work != nil && s.work.State.Terminal() {
+		for i := range out.Routes {
+			out.Routes[i].Verdict, out.Routes[i].Reason = VerdictBypassed, string(s.work.ID)+" is "+string(s.work.State)+"; later input is never routed"
+		}
+		out.Effect = RouteEffect{Kind: EffectDrop, WorkID: s.work.ID, Detail: string(s.work.ID) + " is " + string(s.work.State) + "; the event is recorded as terminal"}
 		return out, nil
 	}
 	i := 0
@@ -156,13 +175,12 @@ func (r *Router) Trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		return out, err
 	}
 	if p.selected == nil {
-		if len(out.Also) > 0 && s.work == nil {
-			// The Event's only consequence is waking another Work.
+		if s.work == nil && len(out.Also) > 0 {
+			// The Event's only consequence is waking other Work.
 			out.Effect, out.Also = out.Also[0], out.Also[1:]
-			creditWait(out.Routes, out.Effect.Binding, "its waiting Work is woken by this event")
 			return out, nil
 		}
-		out.Effect = RouteEffect{Kind: EffectUnmatched, Detail: "no route matched; the event is kept unmatched"}
+		out.Effect = RouteEffect{Kind: EffectUnmatched, Detail: "no route matched; the event is recorded as unmatched"}
 		return out, nil
 	}
 	route := *p.selected
@@ -174,76 +192,101 @@ func (r *Router) Trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		if p.decision.Kind == "" {
 			return out, extension.ErrInvalid
 		}
-		id := p.decision.CreateID
 		detail := "starts new " + p.decision.Kind + " Work"
-		if id != "" {
-			detail += " " + string(id)
+		if p.decision.CreateID != "" {
+			detail += " " + string(p.decision.CreateID)
 		}
 		if e.CorrelationKey != nil {
 			detail += " owning " + e.CorrelationKey.ExternalID
 		}
-		out.Effect = RouteEffect{Kind: EffectStart, WorkID: id, Binding: route.Binding, Detail: detail + " on " + route.Binding}
+		out.Effect = RouteEffect{Kind: EffectStart, WorkID: p.decision.CreateID, Binding: route.Binding, Detail: detail + " on " + route.Binding}
 		return out, nil
 	}
-	out.Effect = r.activeEffect(s, route)
+	w := *s.work
+	var policy, reason string
+	var target *domain.Execution
+	if err = r.transact(ctx, nil, func(tx storage.Tx) error {
+		var e error
+		policy, reason, target, e = r.policyInTx(tx, route, w, s.scope)
+		return e
+	}); err != nil {
+		return out, err
+	}
+	out.Effect = RouteEffect{Kind: policy, WorkID: w.ID, Binding: route.Binding}
+	switch policy {
+	case EffectDrop:
+		out.Effect.Detail = route.Name + " drops it while " + string(w.ID) + " is running"
+	case EffectInject, EffectInterrupt:
+		out.Effect.Detail = policy + " into " + string(w.ID) + "'s running attempt " + string(target.ID)
+	default:
+		out.Effect.Detail = "queued for " + string(w.ID) + "'s next turn (it is " + string(w.State) + ")"
+	}
+	if why, ok := fallbackWhy[reason]; ok {
+		out.Effect.Detail += "; " + why + ", so the route's " + policy + " fallback applies"
+	}
 	return out, nil
 }
 
-// activeEffect is the policy apply would record for existing, nonterminal
-// Work. The attempt-level checks (pinned capabilities, binding mismatch)
-// are reported only as the configured fallback the route would use.
-func (r *Router) activeEffect(s routeSnapshot, route domain.Route) RouteEffect {
-	w := s.work
-	out := RouteEffect{WorkID: w.ID, Binding: route.Binding}
-	policy := route.ActivePolicy
-	if policy == "" {
-		policy = EffectQueue
-	}
-	b, _ := r.binding(s.scope, route.Binding)
-	note := ""
-	if policy == EffectInject && !b.Capabilities.Inject || policy == EffectInterrupt && !b.Capabilities.Interrupt {
-		note = "; " + route.Binding + " cannot " + policy + ", so its " + b.Fallback + " fallback applies"
-		policy = b.Fallback
-	}
-	if w.State != domain.WorkRunning && policy != EffectDrop {
-		out.Kind = EffectQueue
-		out.Detail = "queued for " + string(w.ID) + "'s next turn (it is " + string(w.State) + ")" + note
-		return out
-	}
-	out.Kind = policy
-	switch policy {
-	case EffectDrop:
-		out.Detail = route.Name + " drops it while " + string(w.ID) + " is active" + note
-	case EffectQueue:
-		out.Detail = "queued for " + string(w.ID) + "'s next turn" + note
-	default:
-		out.Detail = policy + " into " + string(w.ID) + "'s running turn" + note
-	}
-	return out
+var fallbackWhy = map[string]string{
+	"unsupported_control":        "the binding's executor cannot do the route's active policy",
+	"target_control_unsupported": "the running attempt's pinned executor cannot do the route's active policy",
+	"target_binding_mismatch":    "the running attempt is on another binding",
 }
 
-func activeWait(tx storage.Tx, w domain.Work) (*traceWait, error) {
+func contextWhy(meta waitMetadata) string {
+	if meta.Blocked {
+		return "; its wake is blocked by the causal limits"
+	}
+	return "; the event does not match its wait"
+}
+
+// waitOutcomeInTx decides, without writing, what a wakes Work w's active wait:
+// WakeWaitInTx's winner selection with a appended as the newest input, then
+// its due timeout. Routing refuses a waiting Work with no active wait.
+func (r *Router) waitOutcomeInTx(tx storage.Tx, w domain.Work, a domain.AcceptedEvent) (*traceWait, error) {
 	waits, err := tx.ListWaits(w.ID)
 	if err != nil {
 		return nil, err
 	}
+	var out *traceWait
 	for _, wait := range waits {
-		if wait.State != domain.WaitActive {
-			continue
+		if wait.State == domain.WaitActive {
+			out = &traceWait{wait: wait, work: w}
+			break
 		}
-		out := &traceWait{wait: wait, work: w}
-		if err = getJSON(tx, waitNamespace, identity(string(wait.ID)), &out.meta); err != nil && !errors.Is(err, storage.ErrNotFound) {
-			return nil, err
-		}
+	}
+	if out == nil {
+		return nil, storage.ErrInvalid
+	}
+	if err = getJSON(tx, waitNamespace, identity(string(out.wait.ID)), &out.meta); err != nil {
+		return nil, err
+	}
+	if out.meta.Blocked {
 		return out, nil
 	}
-	return nil, nil
+	all, err := waitCandidatesInTx(tx, out.wait, out.meta)
+	if err != nil {
+		return nil, err
+	}
+	winner, err := waitWinnerInTx(tx, out.wait, out.meta, w, append(all, a))
+	if err != nil {
+		return nil, err
+	}
+	switch {
+	case winner.Event.ID == a.Event.ID && winner.Sequence == a.Sequence:
+		out.wakes = true
+	case winner.Event.ID != "":
+		out.first = "accepted event " + string(winner.Event.ID)
+	case out.meta.Timer.ID != "" && !r.now().Before(out.meta.Timer.FireAt):
+		out.first = "its due timeout"
+	}
+	return out, nil
 }
 
-// subscriptionWakes finds the waiting Work whose active dependency
-// subscriptions a, as a source Event, would satisfy: the alias it would
-// publish matches that Work's wait.
-func subscriptionWakes(tx storage.Tx, a domain.AcceptedEvent, filter func(string, domain.Payload, domain.Event) bool) ([]traceWait, error) {
+// subscriptionWakes finds the waiting Work that active dependency
+// subscriptions on a, accepted in scope, would wake: the alias they would
+// publish wins that Work's wait.
+func (r *Router) subscriptionWakes(tx storage.Tx, scope domain.ID, a domain.AcceptedEvent, filter func(string, domain.Payload, domain.Event) bool) ([]traceWait, error) {
 	if a.Event.CorrelationKey == nil {
 		return nil, nil
 	}
@@ -258,7 +301,8 @@ func subscriptionWakes(tx storage.Tx, a domain.AcceptedEvent, filter func(string
 		if err = json.Unmarshal(row.Value, &sub); err != nil {
 			return nil, err
 		}
-		if !sub.Active || seen[sub.WorkID] || sub.Request.SourceKey != *a.Event.CorrelationKey {
+		// The subscription reads only its own source scope's input.
+		if !sub.Active || seen[sub.WorkID] || sub.Request.SourceScopeID != scope || sub.Request.SourceKey != *a.Event.CorrelationKey {
 			continue
 		}
 		if len(sub.Request.Types) > 0 && !contains(sub.Request.Types, a.Event.Type) {
@@ -274,17 +318,15 @@ func subscriptionWakes(tx storage.Tx, a domain.AcceptedEvent, filter func(string
 		if w.State != domain.WorkWaiting {
 			continue
 		}
-		wait, err := activeWait(tx, w)
+		key := sub.Request.TargetKey
+		alias := a
+		alias.Event.ID = domain.ID("alias/" + identity(sub.Request.Namespace, sub.Request.ID, string(a.Event.ID)))
+		alias.Event.Source, alias.Event.Type, alias.Event.WorkID, alias.Event.CorrelationKey = "core.subscription", sub.Request.AliasType, sub.WorkID, &key
+		wait, err := r.waitOutcomeInTx(tx, w, alias)
 		if err != nil {
 			return nil, err
 		}
-		if wait == nil || wait.wait.ID != sub.Request.WaitID {
-			continue
-		}
-		key := sub.Request.TargetKey
-		alias := a
-		alias.Event.Type, alias.Event.WorkID, alias.Event.CorrelationKey = sub.Request.AliasType, sub.WorkID, &key
-		if !waitMatches(wait.wait, alias) {
+		if wait.wait.ID != sub.Request.WaitID || !wait.wakes {
 			continue
 		}
 		seen[w.ID] = true
@@ -293,12 +335,12 @@ func subscriptionWakes(tx storage.Tx, a domain.AcceptedEvent, filter func(string
 	return out, nil
 }
 
-func wakeEffect(w traceWait, alias bool) RouteEffect {
-	detail := "wakes " + string(w.work.ID)
-	if alias {
-		detail += " through its dependency"
+func wakeEffect(w traceWait, how string) RouteEffect {
+	detail := "wakes " + string(w.work.ID) + " in scope " + string(w.work.ScopeID)
+	if how != "" {
+		detail += " " + how
 	}
-	return RouteEffect{Kind: EffectWake, WorkID: w.work.ID, Binding: w.meta.Binding, Detail: detail + waitingFor(w.wait) + " on " + w.meta.Binding}
+	return RouteEffect{Kind: EffectWake, WorkID: w.work.ID, Binding: w.meta.Binding, Detail: detail + waitingFor(w.wait) + "; it resumes on " + w.meta.Binding}
 }
 
 func waitingFor(w domain.Wait) string {
@@ -306,31 +348,14 @@ func waitingFor(w domain.Wait) string {
 	for _, k := range w.Match.Keys {
 		keys = append(keys, k.ExternalID)
 	}
-	if len(keys) == 0 {
-		return ""
+	out := " (wait " + string(w.ID)
+	if len(keys) > 0 {
+		out += " on " + strings.Join(keys, ", ")
 	}
-	out := " (waiting on " + strings.Join(keys, ", ")
 	if len(w.Match.Types) > 0 {
 		out += " for " + strings.Join(w.Match.Types, ", ")
 	}
 	return out + ")"
-}
-
-// creditWait marks the first route bound to the waiting binding as the match
-// and leaves the rest not reached: a wait, not the routes, decides.
-func creditWait(steps []RouteStep, binding, reason string) {
-	for i := range steps {
-		steps[i].Verdict, steps[i].Reason = VerdictNotReached, ""
-	}
-	for i := range steps {
-		if binding != "" && steps[i].Binding == binding {
-			steps[i].Verdict, steps[i].Reason = VerdictMatch, reason
-			for j := 0; j < i; j++ {
-				steps[j].Verdict, steps[j].Reason = VerdictSkip, "its Work waits on "+binding+", not this route's binding"
-			}
-			return
-		}
-	}
 }
 
 // Samples lists the sample Events the scope's route handlers offer, in route

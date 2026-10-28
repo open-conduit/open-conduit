@@ -413,7 +413,7 @@ type TraceEvent struct {
 }
 
 // RouteTrace explains how a hypothetical Event would route in a scope now:
-// each route in order with its verdict (match, skip, not_reached) and the
+// each route in order with its verdict (match, skip, not_reached, bypassed) and the
 // handler's reason, then the effect.
 type RouteTrace struct {
 	ScopeID    string        `json:"scope_id"`

@@ -334,51 +334,13 @@ func WakeWaitInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.I
 	if meta.Blocked {
 		return "", nil
 	}
-	// Only input after the wait's boundary can match it; its timeout Event,
-	// should it precede the boundary, is still first in acceptance order.
-	all, err := tx.Events(wait.AfterSequence, 0)
+	all, err := waitCandidatesInTx(tx, wait, meta)
 	if err != nil {
 		return "", err
 	}
-	if meta.Timer.ID != "" {
-		if t, er := tx.Event(meta.Timer.Event.ID); er == nil && t.Sequence <= wait.AfterSequence {
-			all = append([]domain.AcceptedEvent{t}, all...)
-		} else if er != nil && !errors.Is(er, storage.ErrNotFound) {
-			return "", er
-		}
-	}
-	var winner domain.AcceptedEvent
-	for _, a := range all {
-		if !waitMatches(wait, a) && !timeoutMatches(meta, a) {
-			continue
-		}
-		if !timeoutMatches(meta, a) {
-			// Input this Work already consumed (an injection the parked
-			// attempt proved it took in) is history, not news.
-			consumed, er := consumedInTx(tx, work.ID, a.Sequence)
-			if er != nil {
-				return "", er
-			}
-			if consumed {
-				continue
-			}
-		}
-		scope, er := scopeForEvent(tx, a)
-		if er != nil {
-			return "", er
-		}
-		if scope != "" && scope != work.ScopeID {
-			return "", storage.ErrConflict
-		}
-		owner, er := routeOwner(tx, a.Event)
-		if er != nil {
-			return "", er
-		}
-		if owner.ID != work.ID {
-			return "", storage.ErrInvalid
-		}
-		winner = a
-		break
+	winner, err := waitWinnerInTx(tx, wait, meta, work, all)
+	if err != nil {
+		return "", err
 	}
 	if winner.Event.ID == "" && meta.Timer.ID != "" && !now.Before(meta.Timer.FireAt) {
 		timer, er := tx.Timer(meta.Timer.ID)
@@ -528,6 +490,62 @@ func WakeWaitInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.I
 		return "", err
 	}
 	return winner.Event.ID, nil
+}
+
+// waitCandidatesInTx is the accepted input that may wake wait, in acceptance
+// order: everything after its boundary, and its timeout Event should that
+// precede the boundary.
+func waitCandidatesInTx(tx storage.Tx, wait domain.Wait, meta waitMetadata) ([]domain.AcceptedEvent, error) {
+	all, err := tx.Events(wait.AfterSequence, 0)
+	if err != nil {
+		return nil, err
+	}
+	if meta.Timer.ID != "" {
+		if t, er := tx.Event(meta.Timer.Event.ID); er == nil && t.Sequence <= wait.AfterSequence {
+			all = append([]domain.AcceptedEvent{t}, all...)
+		} else if er != nil && !errors.Is(er, storage.ErrNotFound) {
+			return nil, er
+		}
+	}
+	return all, nil
+}
+
+// waitWinnerInTx picks, without writing, the first candidate that wakes
+// wait: a matching input the Work has not already consumed, or its timeout.
+// It is empty when none does.
+func waitWinnerInTx(tx storage.Tx, wait domain.Wait, meta waitMetadata, work domain.Work, all []domain.AcceptedEvent) (domain.AcceptedEvent, error) {
+	for _, a := range all {
+		if !waitMatches(wait, a) && !timeoutMatches(meta, a) {
+			continue
+		}
+		if !timeoutMatches(meta, a) {
+			// Input this Work already consumed (an injection the parked
+			// attempt proved it took in) is history, not news.
+			consumed, er := consumedInTx(tx, work.ID, a.Sequence)
+			if er != nil {
+				return domain.AcceptedEvent{}, er
+			}
+			if consumed {
+				continue
+			}
+		}
+		scope, er := scopeForEvent(tx, a)
+		if er != nil {
+			return domain.AcceptedEvent{}, er
+		}
+		if scope != "" && scope != work.ScopeID {
+			return domain.AcceptedEvent{}, storage.ErrConflict
+		}
+		owner, er := routeOwner(tx, a.Event)
+		if er != nil {
+			return domain.AcceptedEvent{}, er
+		}
+		if owner.ID != work.ID {
+			return domain.AcceptedEvent{}, storage.ErrInvalid
+		}
+		return a, nil
+	}
+	return domain.AcceptedEvent{}, nil
 }
 func queueWaitInput(tx storage.Tx, work domain.ID, binding string, a domain.AcceptedEvent, disposition string) error {
 	if err := putJSON(tx, queueNamespace, queueKey(work, a.Sequence), QueuedInput{EventID: a.Event.ID, Sequence: a.Sequence, Binding: binding}); err != nil {

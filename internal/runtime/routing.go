@@ -638,55 +638,10 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 	if w != nil && w.State.Terminal() {
 		rec.Policy, rec.Reason = "terminal", "terminal_work"
 	} else if p.selected != nil && w != nil {
-		rec.Policy = p.selected.ActivePolicy
-		if rec.Policy == "" {
-			rec.Policy = "queue"
-		}
-		rec.Reason = "matched"
-		b, err := r.binding(scope, p.selected.Binding)
-		if err != nil {
-			return err
-		}
-		if rec.Policy == "inject" && !b.Capabilities.Inject || rec.Policy == "interrupt" && !b.Capabilities.Interrupt {
-			rec.Policy = b.Fallback
-			rec.Reason = "unsupported_control"
-		}
-		if w.State != domain.WorkRunning {
-			rec.Policy = "queue"
-		}
 		var target *domain.Execution
-		if rec.Policy == "inject" || rec.Policy == "interrupt" {
-			xs, err := tx.ListExecutions(w.ID)
-			if err != nil {
-				return err
-			}
-			for i := range xs {
-				if xs[i].State == domain.ExecutionRunning {
-					target = &xs[i]
-				}
-			}
-			if target == nil {
-				return storage.ErrConflict
-			}
-			pinned, pinErr := attemptState(tx, target.ID)
-			if pinErr != nil && !errors.Is(pinErr, storage.ErrNotFound) {
-				return pinErr
-			}
-			if pinErr == nil && (rec.Policy == "inject" && !pinned.Capabilities.Inject || rec.Policy == "interrupt" && !pinned.Capabilities.Interrupt) {
-				if b.Fallback == "" {
-					return extension.ErrUnsupported
-				}
-				rec.Policy, rec.Reason = b.Fallback, "target_control_unsupported"
-			}
-			if target.ExecutorBinding != rec.Binding {
-				// The old attempt retains its original binding. Config/attempt
-				// generation pinning is owned by the scheduler, never inferred
-				// from a new route's control-capable executor registration.
-				if b.Fallback == "" {
-					return extension.ErrUnsupported
-				}
-				rec.Policy, rec.Reason = b.Fallback, "target_binding_mismatch"
-			}
+		var err error
+		if rec.Policy, rec.Reason, target, err = r.policyInTx(tx, *p.selected, *w, scope); err != nil {
+			return err
 		}
 		if rec.Policy != "drop" {
 			input := QueuedInput{p.event.Event.ID, p.event.Sequence, p.selected.Binding}
@@ -708,6 +663,62 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 		return err
 	}
 	return tx.MarkRouted(rec.EventID, rec.WorkID, rec.Policy)
+}
+
+// policyInTx decides, without writing, what a selected route does with input
+// for nonterminal Work w: the effective policy, its reason, and the running
+// attempt an inject or interrupt targets. Routing records it; a route trace
+// reports it.
+func (r *Router) policyInTx(tx storage.Tx, route domain.Route, w domain.Work, scope domain.Scope) (policy, reason string, target *domain.Execution, err error) {
+	policy, reason = route.ActivePolicy, "matched"
+	if policy == "" {
+		policy = "queue"
+	}
+	b, err := r.binding(scope, route.Binding)
+	if err != nil {
+		return "", "", nil, err
+	}
+	if policy == "inject" && !b.Capabilities.Inject || policy == "interrupt" && !b.Capabilities.Interrupt {
+		policy, reason = b.Fallback, "unsupported_control"
+	}
+	if w.State != domain.WorkRunning {
+		policy = "queue"
+	}
+	if policy != "inject" && policy != "interrupt" {
+		return policy, reason, nil, nil
+	}
+	xs, err := tx.ListExecutions(w.ID)
+	if err != nil {
+		return "", "", nil, err
+	}
+	for i := range xs {
+		if xs[i].State == domain.ExecutionRunning {
+			target = &xs[i]
+		}
+	}
+	if target == nil {
+		return "", "", nil, storage.ErrConflict
+	}
+	pinned, pinErr := attemptState(tx, target.ID)
+	if pinErr != nil && !errors.Is(pinErr, storage.ErrNotFound) {
+		return "", "", nil, pinErr
+	}
+	if pinErr == nil && (policy == "inject" && !pinned.Capabilities.Inject || policy == "interrupt" && !pinned.Capabilities.Interrupt) {
+		if b.Fallback == "" {
+			return "", "", nil, extension.ErrUnsupported
+		}
+		policy, reason = b.Fallback, "target_control_unsupported"
+	}
+	if target.ExecutorBinding != route.Binding {
+		// The old attempt retains its original binding. Config/attempt
+		// generation pinning is owned by the scheduler, never inferred
+		// from a new route's control-capable executor registration.
+		if b.Fallback == "" {
+			return "", "", nil, extension.ErrUnsupported
+		}
+		policy, reason = b.Fallback, "target_binding_mismatch"
+	}
+	return policy, reason, target, nil
 }
 func queueKey(work domain.ID, seq uint64) string {
 	return identity(string(work)) + fmt.Sprintf("/%020d", seq)
