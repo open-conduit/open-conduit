@@ -221,28 +221,31 @@ pre.error { white-space: pre-wrap; color: var(--failed); background: color-mix(i
 .conns h2 { font-size: .95rem; }
 .chips { display: flex; flex-wrap: wrap; gap: .5rem; list-style: none; margin: 0; padding: 0; }
 .chips li { background: var(--surface); border: 1px solid var(--rule); border-radius: 6px; padding: .2rem .7rem; }
-.flow { display: grid; grid-template-columns: minmax(12rem, 1fr) 3.5rem minmax(12rem, 1fr) 3.5rem minmax(12rem, 1fr); min-width: 46rem; }
+.flow { --y: 1.6rem; align-items: start; display: grid; grid-template-columns: minmax(12rem, 1fr) 3.5rem minmax(12rem, 1fr) 3.5rem minmax(12rem, 1fr); min-width: 46rem; }
 .flow > * { margin: .3rem 0; }
 .flow h3 { color: var(--muted); font-size: .8rem; font-weight: 600; margin: 0 0 .2rem; }
 .flow h3 .from { font-size: inherit; }
 .node { display: grid; align-content: center; gap: .05rem; padding: .6rem .8rem; background: var(--ground); border: 1px solid var(--rule); border-radius: 8px; min-width: 0; overflow-wrap: anywhere; }
 .node .from { font-size: .85rem; }
+.entries { list-style: none; margin: .45rem 0 0; padding: .45rem 0 0; border-top: 1px solid var(--rule); display: grid; gap: .2rem; font-size: .88rem; }
+.entries .from { font-size: inherit; }
 .node.missing { color: var(--failed); border-color: color-mix(in srgb, var(--failed) 45%, var(--rule)); }
 .node.other { margin-top: 1.1rem; }
 .stack { display: grid; gap: .6rem; }
-.stack .none { align-self: center; }
+.stack .none { margin: .6rem 0 0; }
 .flow > .stack { margin-top: 1.1rem; }
-.bus, .arrow { position: relative; margin: 0; }
+.bus, .arrow { position: relative; margin: 0; align-self: stretch; }
 .bus::before { content: ""; position: absolute; left: 50%; top: 0; bottom: 0; border-left: 2px solid var(--rule); }
-.bus.first::before { top: 50%; }
-.bus.last::before { bottom: 50%; }
-.bus i, .arrow i { position: absolute; top: 50%; height: 0; border-top: 2px solid var(--rule); }
+.bus.first::before { top: var(--y); }
+.bus.last::before { bottom: auto; height: var(--y); }
+.bus.first.last::before { display: none; }
+.bus i, .arrow i { position: absolute; top: var(--y); height: 0; border-top: 2px solid var(--rule); }
 .bus i.in { left: 0; right: calc(50% - 1px); }
 .bus i.out { left: 50%; right: 3px; }
 .arrow i.out { left: 0; right: 3px; }
 i.out::after { content: ""; position: absolute; right: -3px; top: -7px; border: 6px solid transparent; border-left: 8px solid var(--rule); border-right: 0; }
-.arrow.skip { grid-column: 2 / 5; margin-top: 1.1rem; }
-.arrow.skip span { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -150%); font-size: .8rem; color: var(--muted); white-space: nowrap; }
+.arrow.skip { grid-column: 2 / 5; margin-top: .8rem; }
+.arrow.skip span { position: absolute; left: 50%; top: var(--y); transform: translate(-50%, -150%); font-size: .8rem; color: var(--muted); white-space: nowrap; }
 .flow .none { margin: .3rem 0; align-self: center; color: var(--muted); font-size: .9rem; }
 .also { margin: 1rem 0 0; padding-top: .9rem; border-top: 1px solid var(--rule); color: var(--muted); }
 .also b { color: var(--ink); }

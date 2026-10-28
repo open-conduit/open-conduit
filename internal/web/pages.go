@@ -545,13 +545,14 @@ type flowScope struct {
 // and Last mark where the line joining the sources to the routes ends.
 type flowRow struct {
 	Source      *flowSource
-	Route       *client.Route
+	Route       *client.ConfigRoute
 	Binding     *client.ConfigBinding
 	First, Last bool
 }
 
 type flowSource struct {
 	Name, Kind, Via string
+	Entries         []client.ConfigEntry
 }
 
 type configData struct {
@@ -564,7 +565,7 @@ func flow(sc client.ConfigScope) flowScope {
 	var sources []flowSource
 	for _, x := range sc.Extensions {
 		if x.Ingress {
-			sources = append(sources, flowSource{Name: x.Name, Kind: x.Type, Via: x.Connection})
+			sources = append(sources, flowSource{Name: x.Name, Kind: x.Type, Via: x.Connection, Entries: x.Entries})
 		} else {
 			f.Others = append(f.Others, x)
 		}

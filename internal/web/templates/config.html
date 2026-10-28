@@ -18,9 +18,9 @@
   <div class="flow">
     <h3>Sources</h3><span></span><h3>Routes <span class="from">tried in order</span></h3><span></span><h3>Runs on</h3>
     {{range $i, $row := .Rows}}
-    {{with .Source}}<div class="node"><b>{{.Name}}</b><span class="from">{{.Kind}}</span>{{with .Via}}<span class="from">via {{.}}</span>{{end}}</div>{{else}}<span></span>{{end}}
+    {{with .Source}}<div class="node"><b>{{.Name}}</b><span class="from">{{.Kind}}</span>{{with .Via}}<span class="from">via {{.}}</span>{{end}}{{with .Entries}}<ul class="entries">{{range .}}<li><b>{{.Name}}</b> <span class="from">{{.Detail}}</span></li>{{end}}</ul>{{end}}</div>{{else}}<span></span>{{end}}
     <div class="bus{{if .First}} first{{end}}{{if .Last}} last{{end}}" aria-hidden="true">{{if .Source}}<i class="in"></i>{{end}}{{if .Route}}<i class="out"></i>{{end}}</div>
-    {{with .Route}}<div class="node"><b>{{inc $i}}. {{.Name}}</b><span class="from">matches {{.Handler}}</span>{{with .ActivePolicy}}<span class="from">while busy: {{.}}</span>{{end}}</div>
+    {{with .Route}}<div class="node"><b>{{inc $i}}. {{.Name}}</b><span class="from">matches {{.Handler}}{{with .Detail}}: {{.}}{{end}}</span>{{with .ActivePolicy}}<span class="from">while busy: {{.}}</span>{{end}}</div>
     <div class="arrow" aria-hidden="true"><i class="out"></i></div>
     {{with $row.Binding}}<div class="node"><b>{{.Name}}</b><span class="from">executor {{.Executor}}</span>{{with .Resource}}<span class="from">{{.}} workspace</span>{{end}}{{with .Connection}}<span class="from">via {{.}}</span>{{end}}</div>
     {{else}}<div class="node missing"><b>{{.Binding}}</b><span>no such binding</span></div>{{end}}
