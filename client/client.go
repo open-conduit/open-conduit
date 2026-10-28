@@ -166,6 +166,21 @@ type Health struct {
 	Components       map[string]string `json:"components"`
 }
 
+// Capacity is GET /v1/capacity: each capacity pool's slots.
+type Capacity struct {
+	Pools []CapacityPool `json:"pools"`
+}
+
+// CapacityPool is one pool ("agents" for agent turns, "jobs" for jobs): the
+// limit from settings (zero: unbounded), the attempts holding a slot and the
+// ready Work waiting for one.
+type CapacityPool struct {
+	Name    string `json:"name"`
+	Setting string `json:"setting,omitempty"`
+	Limit   int    `json:"limit"`
+	InUse   int    `json:"in_use"`
+	Waiting int    `json:"waiting"`
+}
 type Page[T any] struct {
 	Items      []T    `json:"items"`
 	NextCursor string `json:"next_cursor"`
@@ -352,6 +367,10 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 
 func (c *Client) Health(ctx context.Context) (h Health, err error) {
 	err = c.Do(ctx, "GET", "health", nil, nil, "", &h)
+	return
+}
+func (c *Client) Capacity(ctx context.Context) (out Capacity, err error) {
+	err = c.Do(ctx, "GET", "capacity", nil, nil, "", &out)
 	return
 }
 func get[T any](c *Client, ctx context.Context, path string) (out T, err error) {

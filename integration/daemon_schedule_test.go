@@ -12,6 +12,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-conduit/open-conduit/client"
 	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 )
@@ -243,6 +244,23 @@ func TestDaemonJobConcurrency(t *testing.T) {
 		waiting, _, _ = strings.Cut(c.Items[0], ":")
 		return true
 	})
+	// GET /v1/capacity reports the same accounting as doctor: the job
+	// holding the one job slot, the poked job waiting for it, agents idle.
+	pools := func() map[string]client.CapacityPool {
+		c, err := d.c.Capacity(ctx)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out := map[string]client.CapacityPool{}
+		for _, p := range c.Pools {
+			out[p.Name] = p
+		}
+		return out
+	}
+	if p := pools(); len(p) != 2 || p["agents"] != (client.CapacityPool{Name: "agents", Setting: "settings.concurrency", Limit: 1}) ||
+		p["jobs"] != (client.CapacityPool{Name: "jobs", Setting: "settings.job_concurrency", Limit: 1, InUse: 1, Waiting: 1}) {
+		t.Fatalf("capacity while a job waits: %+v", p)
+	}
 	w, err := d.c.Work(ctx, waiting)
 	if err != nil || len(w.Annotations) == 0 || w.Annotations[0].Name != "waiting" || !strings.Contains(w.Annotations[0].Value, "settings.job_concurrency") {
 		t.Fatalf("waiting Work detail: %+v %v", w, err)
@@ -255,4 +273,5 @@ func TestDaemonJobConcurrency(t *testing.T) {
 		r, err := d.c.Doctor(ctx, false)
 		return err == nil && check(r, "capacity").Status == "ok"
 	})
+	d.until("capacity frees the job slot", 30*time.Second, func() bool { p := pools(); return p["jobs"].InUse == 0 && p["jobs"].Waiting == 0 })
 }

@@ -55,7 +55,7 @@ The daemon puts the job executors (`shell`, `github-hold`) in the `jobs` pool, b
 
 A scope's `limits.concurrency` narrows this further: the daemon passes each scope whose limit is below its parent's (or `settings.concurrency` at the root) as `ScopeLimits`, and the scheduler checks the attempt's scope and every ancestor, counting attempts from both pools.
 
-A start held back by a limit is reported with the code of its setting: `capacity_concurrency`, `capacity_job_concurrency` or `capacity_scope`. `open-conduit doctor` has a `capacity` check: each pool's running attempts against its limit, and each ready Work waiting for one with the limit holding it back. The Work's detail (`GET /v1/work/{id}`, the CLI and the TUI) carries a `waiting` annotation with the same limit.
+A start held back by a limit is reported with the code of its setting: `capacity_concurrency`, `capacity_job_concurrency` or `capacity_scope`. `open-conduit doctor` has a `capacity` check: each pool's running attempts against its limit, and each ready Work waiting for one with the limit holding it back. The Work's detail (`GET /v1/work/{id}`, the CLI and the TUI) carries a `waiting` annotation with the same limit. `GET /v1/capacity` gives the same accounting to clients: for each pool (`agents` for `settings.concurrency`, `jobs` for `settings.job_concurrency`), its `limit` (zero: unbounded), the attempts holding a slot (`in_use`) and the ready Work its limit held back (`waiting`). Work held back by a scope limit counts in no pool.
 
 ## Evidence
 
