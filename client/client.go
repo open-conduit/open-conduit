@@ -420,6 +420,8 @@ type EventRoute struct {
 	Generation   string `json:"generation,omitempty"`
 	Policy       string `json:"policy,omitempty"`
 	Reason       string `json:"reason,omitempty"`
+	// DisplayRefused is why the route's Work display was dropped.
+	DisplayRefused string `json:"display_refused,omitempty"`
 }
 
 func (c *Client) Executions(ctx context.Context, q url.Values) (Page[Execution], error) {

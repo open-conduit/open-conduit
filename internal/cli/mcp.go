@@ -69,7 +69,7 @@ var mcpTools = []mcpTool{
 		}},
 		"timeout_seconds": map[string]any{"type": "integer", "minimum": 1},
 		"after_sequence":  map[string]any{"type": "string"},
-		"description":     map[string]any{"type": "string", "maxLength": 200, "description": "What you are waiting for, in a few words (\"a reply in the thread\"). Shown to operators."},
+		"description":     map[string]any{"type": "string", "description": "What you are waiting for, in a few words (\"a reply in the thread\"). Shown to operators; its first line is kept, cut to 200 bytes."},
 	}, "match")},
 	{Name: "declare_outcome", Description: "Declare how this attempt ends (completed, failed or handoff); it applies when your turn finishes.", InputSchema: object(map[string]any{
 		"kind":    map[string]any{"type": "string", "enum": []string{"completed", "failed", "handoff"}},

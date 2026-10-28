@@ -163,6 +163,11 @@ func (r *Remote) Annotate(ctx context.Context, w domain.Work) []protocol.Annotat
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	// Every annotating extension sees every Work; what a source said about
+	// a Work goes only to extensions configured for its scope.
+	if r.s == nil || r.s.deps.Scopes == nil || !r.s.allowedScopes()[w.ScopeID] {
+		w.Display = nil
+	}
 	var out protocol.WorkAnnotateResult
 	if err := r.p.Call(ctx, "work.annotate", protocol.WorkAnnotateParams{Work: protocol.FromWork(w)}, &out); err != nil {
 		return nil

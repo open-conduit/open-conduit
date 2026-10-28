@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 	"time"
@@ -80,8 +81,20 @@ func DependencyFilter(filter domain.Payload, e domain.Event) bool {
 		var p PullPayload
 		return e.Data.Schema == SchemaPull && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo) && p.HeadSHA != "" && p.HeadSHA != f.Head
 	case "pr_checks":
-		var p ChecksPayload
-		return e.Data.Schema == SchemaChecks && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo) && (f.Head == "" || p.SHA == f.Head)
+		// A result for the waited head, a push of another head, or the PR
+		// merging or closing.
+		switch e.Data.Schema {
+		case SchemaChecks:
+			var p ChecksPayload
+			return json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number && strings.EqualFold(p.Repo, f.Repo) && p.SHA == f.Head
+		case SchemaPull:
+			var p PullPayload
+			if json.Unmarshal(e.Data.Data, &p) != nil || p.Number != f.Number || !strings.EqualFold(p.Repo, f.Repo) {
+				return false
+			}
+			return e.Type == TypePullMerged || e.Type == TypePullClosed || p.HeadSHA != "" && p.HeadSHA != f.Head
+		}
+		return false
 	case "pr_comment":
 		// A new comment, review or thread reply on the PR (not an edit), from
 		// anyone but the waiting Work itself.
@@ -260,10 +273,29 @@ func (t *Tools) resolveCond(ctx context.Context, b *bound, c Cond) (resolvedCond
 			r.dep.Types, r.dep.FromNow = []string{TypePullOpen}, true
 			r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr_push", Repo: repo, Number: c.Number(), Head: p.Head.SHA})
 		case "checks":
-			// The checks on the head as the wait begins: results already in
-			// for that head meet it at once; a later push's do not.
-			r.dep.Types = []string{TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing}
+			// The checks on the head as the wait begins finishing; a new push
+			// or the PR merging or closing first ends the wait too, so it
+			// never outlives what it waits for.
+			if p.State != "open" {
+				return r, refuse("invalid_condition", "%s: PR #%d is already %s, so its checks won't run", c, c.Number(), pullState(p))
+			}
+			o, ok, err := n.checksForPull(ctx, p)
+			if err != nil {
+				return r, err
+			}
+			r.dep.Types = []string{TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing, TypePullOpen, TypePullMerged, TypePullClosed}
 			r.dep.Filter = filterPayload(dependencyFilter{Kind: "pr_checks", Repo: repo, Number: c.Number(), Head: p.Head.SHA})
+			if ok && o.Event.Type != TypeChecksPending {
+				// Finished on this head: its result, in history, meets it
+				// (a hold keeps it; an agent's wait is refused as met).
+				// Earlier heads' pushes in history must not.
+				r.met = fmt.Sprintf("the checks on PR #%d have already finished (%s)", c.Number(), checksResult(o.Event.Type))
+				r.dep.Types = r.dep.Types[:4]
+			} else {
+				// Pending (perhaps re-run): only results from now count,
+				// never an earlier run's on the same head.
+				r.dep.FromNow = true
+			}
 		default:
 			if p.State != "open" {
 				r.met = "PR #" + c.Ref + " is already " + pullState(p)
@@ -548,4 +580,19 @@ func (t *Tools) holdPlan(ctx context.Context, b *bound, data json.RawMessage) (e
 	raw, _ := json.Marshal(s)
 	plan.Output = domain.Payload{Schema: SchemaHold, Data: raw}
 	return plan, nil
+}
+
+// checksResult is how a finished checks Event type reads.
+func checksResult(typ string) string {
+	switch typ {
+	case TypeChecksPassed:
+		return "passed"
+	case TypeChecksFailed:
+		return "failed"
+	case TypeChecksNone:
+		return "no checks ran"
+	case TypeChecksMissing:
+		return "required checks never reported"
+	}
+	return "finished"
 }

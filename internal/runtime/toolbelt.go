@@ -805,8 +805,11 @@ func (t *Toolbelt) declareWaitInTx(tx storage.Tx, x domain.Execution, w domain.W
 			return nil, extension.ErrInvalid
 		}
 	}
-	if extension.ValidateWaitDescription(request.Description) != nil {
-		return nil, extension.ErrInvalid
+	// A description is for operator views: an agent's or an extension's
+	// that does not fit is cut to one line within the limit, never refused.
+	request.Description = extension.Clip(request.Description, extension.MaxWaitDescription)
+	if request.Description == "" && request.Timeout != nil {
+		request.Description = "until " + request.Timeout.UTC().Format(extension.DueLayout)
 	}
 	after := request.AfterSequence
 	if after == 0 {

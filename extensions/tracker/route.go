@@ -170,7 +170,7 @@ func (r Route) display(p IssuePayload) *domain.WorkDisplay {
 	if d.Title == "" && d.Ref == "" {
 		return nil
 	}
-	if strings.HasPrefix(p.URL, "https://") || strings.HasPrefix(p.URL, "http://") {
+	if extension.DisplayURL(p.URL) {
 		name := r.Type
 		if name != "" {
 			name = strings.ToUpper(name[:1]) + name[1:]

@@ -65,7 +65,7 @@ func TestParseCondAndHoldMarkers(t *testing.T) {
 	if c, _ := gh.ParseCond("pr:9:merged"); c.Happened(gh.TypePullClosed) != "PR #9 was closed without merging, so it won't merge" {
 		t.Fatal(c.Happened(gh.TypePullClosed))
 	}
-	if c, err := gh.ParseCond("pr:137:checks"); err != nil || c.Describe() != "checks on PR #137" || c.Happened(gh.TypeChecksFailed) != "checks on PR #137 finished" {
+	if c, err := gh.ParseCond("pr:137:checks"); err != nil || c.Describe() != "checks on PR #137" || c.Happened(gh.TypeChecksFailed) != "checks on PR #137 finished: failed" || c.Happened(gh.TypePullOpen) != "PR #137 got a new push before its checks finished; wait on pr:137:checks again for the new head's" {
 		t.Fatal(c.Describe(), err)
 	}
 	// A Wait on a hold is described by its conditions, or by its time alone.

@@ -130,7 +130,10 @@ func (r *Remote) RouteHandler(handler string) extension.RouteHandler {
 			return extension.RouteDecision{}, protocol.Errorf(protocol.CodeUndeclared, "work kind not declared")
 		}
 		if err := extension.ValidateDisplay(d.Display); err != nil {
-			return extension.RouteDecision{}, protocol.Errorf(protocol.CodeInvalid, err.Error())
+			// A display is optional: drop it rather than stop routing.
+			// Certification refuses it (routes.decisions).
+			r.p.o.Log.Warn("extension route display dropped", "extension", r.m.Name, "handler", handler, "reason", err.Error())
+			d.Display = nil
 		}
 		return d, nil
 	})
@@ -233,9 +236,6 @@ func (r *Remote) Registration() extension.Registration {
 				var out protocol.WaitPlan
 				if err := r.p.Call(ctx, "operation.wait", params(ctx, a, in), &out); err != nil {
 					return extension.WaitPlan{}, err
-				}
-				if err := extension.ValidateWaitDescription(out.Wait.Description); err != nil {
-					return extension.WaitPlan{}, protocol.Errorf(protocol.CodeInvalid, err.Error())
 				}
 				return out.Extension(), nil
 			}

@@ -52,12 +52,20 @@ func ValidateDisplay(d *domain.WorkDisplay) error {
 		if err := line("display link label", l.Label, MaxDisplayLinkLabel, true); err != nil {
 			return err
 		}
-		if !httpURL(l.URL, MaxDisplayURL) {
+		if !DisplayURL(l.URL) {
 			return fmt.Errorf("display link %q is not an http or https URL", l.URL)
 		}
 	}
 	return nil
 }
+
+// DueLayout is how a due time reads in a description ("until 25 Oct 2026
+// 09:00 UTC"): core describes a timed Wait nobody described with it.
+const DueLayout = "2 Jan 2006 15:04 UTC"
+
+// DisplayURL reports whether s can be a display link's URL: an absolute
+// http or https URL within MaxDisplayURL. Producers check links with it.
+func DisplayURL(s string) bool { return httpURL(s, MaxDisplayURL) }
 
 // ValidateWaitDescription reports why a Wait description cannot be stored,
 // or nil. Empty is valid (the Wait has none).

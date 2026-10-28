@@ -42,6 +42,10 @@ type Router struct {
 type RouteRecord struct {
 	EventID, WorkID                            domain.ID
 	Route, Binding, Generation, Policy, Reason string
+	// DisplayRefused says why the route's Work display was dropped (over a
+	// limit, a link that is not http or https). The Work kept its display
+	// and the Event was routed as usual.
+	DisplayRefused string `json:",omitempty"`
 }
 type QueuedInput struct {
 	EventID  domain.ID
@@ -260,6 +264,11 @@ func detachedInput(s routeSnapshot) extension.RouteInput {
 		w := *s.work
 		w.CorrelationKeys = append([]domain.CorrelationKey(nil), w.CorrelationKeys...)
 		w.Context.Data = append([]byte(nil), w.Context.Data...)
+		if w.Display != nil {
+			d := *w.Display
+			d.Links = append([]domain.Link(nil), d.Links...)
+			w.Display = &d
+		}
 		work = &w
 	}
 	return extension.RouteInput{Event: a, Scope: scope, Work: work}
@@ -269,6 +278,8 @@ type routePlan struct {
 	event    domain.AcceptedEvent
 	selected *domain.Route
 	decision extension.RouteDecision
+	// refused is why the decision's display was dropped.
+	refused string
 }
 
 // binding resolves the whole nearest Scope binding before looking up its
@@ -324,8 +335,10 @@ func (r *Router) evaluate(ctx context.Context, s routeSnapshot) (p routePlan, er
 			return p, e
 		}
 		if d.Match {
+			// A display is optional: one over the limits is dropped and
+			// recorded, never allowed to stop the Work receiving input.
 			if err := extension.ValidateDisplay(d.Display); err != nil {
-				return p, fmt.Errorf("%w: route %s: %v", extension.ErrInvalid, route.Name, err)
+				d.Display, p.refused = nil, err.Error()
 			}
 			selected := route
 			p.selected = &selected
@@ -335,6 +348,13 @@ func (r *Router) evaluate(ctx context.Context, s routeSnapshot) (p routePlan, er
 		}
 	}
 	return
+}
+
+// setDisplay replaces the Work's display with a route's, when it gave one.
+func setDisplay(w *domain.Work, d *domain.WorkDisplay) {
+	if w != nil && d != nil && !w.State.Terminal() {
+		w.Display = d
+	}
 }
 func containsKey(w domain.Work, key domain.CorrelationKey) bool {
 	for _, k := range w.CorrelationKeys {
@@ -470,6 +490,11 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 		}
 		if projected != nil && p.selected != nil && !projected.State.Terminal() {
 			appendKeys(projected, p.decision.AttachKeys)
+			// Displays apply in evaluation order: earlier input this
+			// Event's keys bring in is evaluated below, on top of it, so
+			// each handler sees the display it replaces and nothing one
+			// added is lost.
+			setDisplay(projected, p.decision.Display)
 		}
 		plans := []routePlan{}
 		// New attachments bring earlier unprocessed events into this atomic batch.
@@ -524,6 +549,7 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 					changed = true
 					if bp.selected != nil {
 						appendKeys(projected, bp.decision.AttachKeys)
+						setDisplay(projected, bp.decision.Display)
 					}
 				}
 				if !changed {
@@ -533,16 +559,6 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 			sort.Slice(plans, func(i, j int) bool { return plans[i].event.Sequence < plans[j].event.Sequence })
 		}
 		plans = append(plans, p)
-		// The latest matched input that says what the Work is wins.
-		var display *domain.WorkDisplay
-		for _, planned := range plans {
-			if planned.selected != nil && planned.decision.Display != nil {
-				display = planned.decision.Display
-			}
-		}
-		if projected != nil && display != nil && !projected.State.Terminal() {
-			projected.Display = display
-		}
 		err = r.transact(ctx, nil, func(tx storage.Tx) error {
 			fresh, e := snapshot(tx, id)
 			if e != nil {
@@ -626,7 +642,7 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 	}
 }
 func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.Scope) error {
-	rec := RouteRecord{EventID: p.event.Event.ID, Generation: r.options.Generation, Policy: "unmatched", Reason: "no_match"}
+	rec := RouteRecord{EventID: p.event.Event.ID, Generation: r.options.Generation, Policy: "unmatched", Reason: "no_match", DisplayRefused: p.refused}
 	if p.selected != nil {
 		rec.Route, rec.Binding = p.selected.Name, p.selected.Binding
 	}

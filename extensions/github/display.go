@@ -59,10 +59,10 @@ func display(w *domain.Work, e domain.Event) *domain.WorkDisplay {
 	return nil
 }
 
-// withLink adds a link unless one with its label is there, the URL is
-// empty or not http(s), or the display is full.
+// withLink adds a link unless one with its label is there, the URL cannot
+// be a display link (extension.DisplayURL), or the display is full.
 func withLink(d domain.WorkDisplay, label, url string) domain.WorkDisplay {
-	if !strings.HasPrefix(url, "https://") && !strings.HasPrefix(url, "http://") || len(url) > extension.MaxDisplayURL || len(d.Links) >= extension.MaxDisplayLinks {
+	if !extension.DisplayURL(url) || len(d.Links) >= extension.MaxDisplayLinks {
 		return d
 	}
 	for _, l := range d.Links {

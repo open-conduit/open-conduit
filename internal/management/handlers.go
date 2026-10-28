@@ -241,6 +241,7 @@ func (s *Server) eventRoute(c *call) (int, any, error) {
 		out = wireEventRoute{EventID: string(a.Event.ID), Type: a.Event.Type, ScopeID: string(scope), Routed: a.Routed, Disposition: a.Disposition, RoutedWorkID: string(a.RoutedWorkID)}
 		if ok {
 			out.Route, out.Binding, out.Generation, out.Policy, out.Reason = rec.Route, rec.Binding, rec.Generation, rec.Policy, rec.Reason
+			out.DisplayRefused = rec.DisplayRefused
 			if out.RoutedWorkID == "" {
 				out.RoutedWorkID = string(rec.WorkID)
 			}
@@ -897,9 +898,6 @@ func (s *Server) toolbeltCall(c *call) (int, any, error) {
 		}
 		if err := strict(&w); err != nil {
 			return 0, nil, err
-		}
-		if err := extension.ValidateWaitDescription(w.Description); err != nil {
-			return 0, nil, fail(400, "malformed", err.Error())
 		}
 		request := extension.WaitRequest{Match: domain.EventMatch{Types: w.Match.Types}, Description: w.Description}
 		for _, k := range w.Match.Keys {

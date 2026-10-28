@@ -168,6 +168,16 @@ func (exporter) Shutdown(context.Context) error { return nil }
 
 // annotate shows a note's indexed text on its Work.
 func annotate(ctx context.Context, h *sdk.Host, w domain.Work) ([]protocol.Annotation, error) {
+	out, err := annotateNote(ctx, h, w)
+	if err == nil && w.Display != nil {
+		// What the Work's source said it is, which the host sends only
+		// for Work in this extension's scopes.
+		out = append(out, protocol.Annotation{Name: "shown", Value: w.Display.Title})
+	}
+	return out, err
+}
+
+func annotateNote(ctx context.Context, h *sdk.Host, w domain.Work) ([]protocol.Annotation, error) {
 	for _, k := range w.CorrelationKeys {
 		if k.Source != Name {
 			continue

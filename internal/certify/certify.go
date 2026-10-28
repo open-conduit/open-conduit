@@ -150,7 +150,7 @@ var limits = []string{
 	"Certification checks protocol conformance, not safety: an extension runs with the operator's privileges (process separation is fault isolation, not a sandbox).",
 	"Only the package's own fixture is exercised, against its fakes; no live service is contacted and no real credential is used.",
 	"One host build, one platform and one protocol version are tested: the ones stated above.",
-	"Not certified by criteria version 2: webhook.handle, setup.run and setup.* callbacks, provider.* resource providers, telemetry.export, work.annotate, work.actions and work.act, view.render, event.render, emit and wait operations (a wait plan's description is checked by the host as it is declared), the in-transaction callbacks (recurrence.next, work_kind.trigger, emit.commit, dependency.filter) and the message-size and overload limits. The host's own suites cover those adapters.",
+	"Not certified by criteria version 2: webhook.handle, setup.run and setup.* callbacks, provider.* resource providers, telemetry.export, work.annotate, work.actions and work.act, view.render, event.render, emit and wait operations (the host cuts a wait plan's description to fit as it is declared), the in-transaction callbacks (recurrence.next, work_kind.trigger, emit.commit, dependency.filter) and the message-size and overload limits. The host's own suites cover those adapters.",
 	"Executor checks run one attempt each without a toolbelt endpoint or workspace; resume, interrupt and attach are not exercised.",
 }
 
@@ -772,6 +772,17 @@ func (r *runner) routes(ctx context.Context, remote *extproc.Remote) {
 		return
 	}
 	for i, c := range r.fixture.Routes {
+		// The host drops a display over the limits; certification refuses
+		// one, so read the package's own answer first.
+		var raw protocol.RouteDecision
+		if err := remote.Process().Call(ctx, "route.match", protocol.RouteMatchParams{Handler: c.Handler, Input: c.Input}, &raw); err != nil {
+			r.fail(id, "case %d: %v", i, err)
+			return
+		}
+		if err := extension.ValidateDisplay(raw.Display.Domain()); err != nil {
+			r.fail(id, "case %d: display: %v", i, err)
+			return
+		}
 		h := remote.RouteHandler(c.Handler)
 		in := c.Input.Extension()
 		first, err := h.Match(ctx, in)

@@ -152,8 +152,9 @@ func Display(p MessagePayload) *domain.WorkDisplay {
 	if thread == "" {
 		thread = p.TS
 	}
-	if p.Team != "" && p.Channel != "" && thread != "" {
-		d.Links = []domain.Link{{Label: "Slack thread", URL: "https://app.slack.com/client/" + url.PathEscape(p.Team) + "/" + url.PathEscape(p.Channel) + "/thread/" + url.PathEscape(p.Channel+"-"+thread)}}
+	link := "https://app.slack.com/client/" + url.PathEscape(p.Team) + "/" + url.PathEscape(p.Channel) + "/thread/" + url.PathEscape(p.Channel+"-"+thread)
+	if p.Team != "" && p.Channel != "" && thread != "" && extension.DisplayURL(link) {
+		d.Links = []domain.Link{{Label: "Slack thread", URL: link}}
 	}
 	return d
 }

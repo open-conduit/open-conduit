@@ -56,6 +56,8 @@ type wireEventRoute struct {
 	Generation   string `json:"generation,omitempty"`
 	Policy       string `json:"policy,omitempty"`
 	Reason       string `json:"reason,omitempty"`
+	// DisplayRefused is why the route's Work display was dropped.
+	DisplayRefused string `json:"display_refused,omitempty"`
 }
 
 type wireEvent struct {
@@ -265,15 +267,10 @@ func toExecution(x domain.Execution, scope domain.ID) wireExecution {
 }
 
 // toWait renders a Wait; due is its timeout timer's fire time, zero when
-// it has none. A timed Wait its owner did not describe is described by its
-// due time.
+// it has none or the timer has gone.
 func toWait(w domain.Wait, due time.Time) wireWait {
 	types := append([]string{}, w.Match.Types...)
-	out := wireWait{ID: string(w.ID), WorkID: string(w.WorkID), ExecutionID: string(w.ExecutionID), State: string(w.State), Match: wireMatch{Keys: keys(w.Match.Keys), Types: types}, TimeoutTimerID: string(w.TimeoutTimerID), AfterSequence: u64(w.AfterSequence), WakeEventID: string(w.WakeEventID), Description: w.Description, DueAt: ts(due), Revision: u64(uint64(w.Revision)), CreatedAt: ts(w.CreatedAt), UpdatedAt: ts(w.UpdatedAt)}
-	if out.Description == "" && !due.IsZero() {
-		out.Description = "until " + due.UTC().Format(time.RFC3339)
-	}
-	return out
+	return wireWait{ID: string(w.ID), WorkID: string(w.WorkID), ExecutionID: string(w.ExecutionID), State: string(w.State), Match: wireMatch{Keys: keys(w.Match.Keys), Types: types}, TimeoutTimerID: string(w.TimeoutTimerID), AfterSequence: u64(w.AfterSequence), WakeEventID: string(w.WakeEventID), Description: w.Description, DueAt: ts(due), Revision: u64(uint64(w.Revision)), CreatedAt: ts(w.CreatedAt), UpdatedAt: ts(w.UpdatedAt)}
 }
 func toScope(s domain.Scope, enabled bool) wireScope {
 	out := wireScope{ID: string(s.ID), Name: s.Name, ParentID: string(s.ParentID), Enabled: enabled, Bindings: []wireBinding{}, Routes: []wireRoute{}, SecretRefs: map[string]string{}, Revision: u64(uint64(s.Revision)), CreatedAt: ts(s.CreatedAt), UpdatedAt: ts(s.UpdatedAt)}

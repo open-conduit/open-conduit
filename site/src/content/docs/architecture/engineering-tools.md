@@ -68,7 +68,7 @@ Dry-run is handled per entry by `projection.dry_run`: writes report `dry_run` an
 | `pr:N:merged`, `pr:N:closed` | the PR's correlation (its issue's, by branch or closing keyword, else `pr/N`) | `merged`, `closed` (either ends the wait) | `{kind: pr, repo, number}` | all |
 | `pr:N:commented` | the PR's correlation | `github.comment.human`, `github.comment.agent` | `{kind: pr_comment, …, work}`: a new (not edited) PR conversation comment, review or review comment, not marked as the waiting Work's own | from now |
 | `pr:N:pushed` | the PR's correlation | `github.pull_request.open` | `{kind: pr_push, …, head}`: a head SHA other than the one read at registration; refused on a closed PR | from now |
-| `pr:N:checks` | the PR's correlation | `github.checks.passed`, `failed`, `none`, `missing` | `{kind: pr_checks, …, head}`: results for the head SHA read at registration, so results already in meet it at once and a later push's do not | all |
+| `pr:N:checks` | the PR's correlation | `github.checks.passed`, `failed`, `none`, `missing`, and `github.pull_request.open`, `merged`, `closed` | `{kind: pr_checks, …, head}`: a result for the head read at registration, a push of another head, or a merge or close (the wake says which); refused on a closed PR, and refused as already met when that head's checks have finished (a hold keeps it, met from history by that head's result) | from now while the checks are pending, so an earlier run's result never counts |
 | `issue:N:closed` | `issue/N` at its current generation | `github.issue.closed` | `{kind: issue, …}` | all |
 | `issue:N:<state>` | `issue/N` | `core.execution.turn` | `{kind: turn, …, state}`: the Event's `status` | from now |
 | `until` | (none) | (none) | (none) | core timeout timer |

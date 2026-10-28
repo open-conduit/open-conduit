@@ -49,7 +49,8 @@ var issueOns = append([]string{"closed"}, TurnStates...)
 // prOns are what a PR can be waited on for: commented (the next human
 // comment, review or review-thread reply) and pushed (the next new head
 // commit) are about what happens from the wait on; checks is the checks
-// on its head as the wait begins finishing, passed or not.
+// on its head as the wait begins finishing, passed or not (a new push,
+// a merge or a close ends that wait too).
 var prOns = []string{"merged", "closed", "commented", "pushed", "checks"}
 
 // ParseCond reads a condition as an agent writes it. A PR's defaults to
@@ -170,7 +171,15 @@ func (c Cond) Happened(sourceType string) string {
 		case "pushed":
 			return fmt.Sprintf("PR #%s%s got a new push", c.Ref, where)
 		case "checks":
-			return fmt.Sprintf("checks on PR #%s%s finished", c.Ref, where)
+			switch sourceType {
+			case TypePullMerged:
+				return fmt.Sprintf("PR #%s%s was merged before its checks finished", c.Ref, where)
+			case TypePullClosed:
+				return fmt.Sprintf("PR #%s%s was closed before its checks finished", c.Ref, where)
+			case TypePullOpen:
+				return fmt.Sprintf("PR #%s%s got a new push before its checks finished; wait on %s again for the new head's", c.Ref, where, c)
+			}
+			return fmt.Sprintf("checks on PR #%s%s finished: %s", c.Ref, where, checksResult(sourceType))
 		}
 		if sourceType == TypePullClosed && c.On == "merged" {
 			return fmt.Sprintf("PR #%s%s was closed without merging, so it won't merge", c.Ref, where)
@@ -232,7 +241,7 @@ func (h Hold) Describe() string {
 		parts = append(parts, c.Describe())
 	}
 	if h.Until != nil {
-		parts = append(parts, h.Until.UTC().Format("2 Jan 2006 15:04 UTC"))
+		parts = append(parts, h.Until.UTC().Format(extension.DueLayout))
 	}
 	return strings.Join(parts, ", or ")
 }

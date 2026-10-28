@@ -8,9 +8,8 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 )
 
-// The API shows a Work's display and a Wait's description as their
-// sources gave them, and describes a timed Wait nobody described by its
-// due time.
+// The API shows a Work's display and a Wait's description as they were
+// stored, with a timed Wait's due time.
 func TestWireDisplayAndWaitDescription(t *testing.T) {
 	w := domain.Work{ID: "work/1", Kind: "fixture.work", Display: &domain.WorkDisplay{Title: "Fix the example widget", Ref: "#1", Links: []domain.Link{{Label: "Issue #1", URL: "https://tracker.example/issues/1"}}}}
 	b, _ := json.Marshal(toWork(w))
@@ -31,7 +30,8 @@ func TestWireDisplayAndWaitDescription(t *testing.T) {
 	if described.Description != "checks on PR #2" || described.DueAt != "2026-10-25T09:00:00Z" {
 		t.Fatalf("described wait %+v", described)
 	}
-	if timed := toWait(domain.Wait{ID: "wait/2", TimeoutTimerID: "t"}, due); timed.Description != "until 2026-10-25T09:00:00Z" {
+	// Core describes a timed Wait when it is declared, not here.
+	if timed := toWait(domain.Wait{ID: "wait/2", TimeoutTimerID: "t"}, due); timed.Description != "" || timed.DueAt != "2026-10-25T09:00:00Z" {
 		t.Fatalf("timed wait %+v", timed)
 	}
 	if plain := toWait(domain.Wait{ID: "wait/3"}, time.Time{}); plain.Description != "" || plain.DueAt != "" {
