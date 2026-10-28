@@ -293,6 +293,13 @@ type WorkCancelResult struct {
 	EventID string `json:"event_id"`
 }
 
+// WaitProgressParams set the progress line of a Work's active Wait, which
+// one of the extension's own operations declared; "" clears it.
+type WaitProgressParams struct {
+	WorkID   string `json:"work_id"`
+	Progress string `json:"progress"`
+}
+
 // Artifacts and secrets.
 
 type ArtifactCreateParams struct {

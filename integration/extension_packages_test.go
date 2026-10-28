@@ -10,6 +10,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -498,5 +499,51 @@ func waitFor(t *testing.T, what string, fn func() bool) {
 			t.Fatalf("timed out waiting for %s", what)
 		}
 		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// TestWaitProgressOverProtocol: wait.progress is enabled by a wait
+// operation, reaches the host as the extension's own manifest name, and the
+// host's refusal of another's Wait crosses as unauthorized.
+func TestWaitProgressOverProtocol(t *testing.T) {
+	e := newExtEnv(t)
+	type call struct {
+		owner    string
+		work     domain.ID
+		progress string
+	}
+	var calls []call
+	deps := e.deps()
+	deps.WaitProgress = func(_ context.Context, owner string, work domain.ID, progress string) error {
+		calls = append(calls, call{owner, work, progress})
+		if work == "work/other" {
+			return extension.ErrUnauthorized
+		}
+		return nil
+	}
+	ctx := context.Background()
+	// Only an extension with a wait operation can own a Wait.
+	plain, err := extproc.NewService(notes.Manifest(notes.Options{Release: 2}), deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := pipeHost(t, plain).WaitProgress(ctx, "work/example", "1 of 2 example checks finished"); !errors.Is(err, extension.ErrUndeclared) {
+		t.Fatalf("without a wait operation: %v", err)
+	}
+	m := notes.Manifest(notes.Options{Fixture: true})
+	svc, err := extproc.NewService(m, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := pipeHost(t, svc)
+	if err := host.WaitProgress(ctx, "work/example", "1 of 2 example checks finished"); err != nil {
+		t.Fatal(err)
+	}
+	if err := host.WaitProgress(ctx, "work/other", "1 of 2 example checks finished"); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("another's wait: %v", err)
+	}
+	want := []call{{m.Name, "work/example", "1 of 2 example checks finished"}, {m.Name, "work/other", "1 of 2 example checks finished"}}
+	if !reflect.DeepEqual(calls, want) {
+		t.Fatalf("calls %+v, want %+v", calls, want)
 	}
 }

@@ -118,11 +118,17 @@ func (e *toolsEnv) compose() {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, Sources: func() []gh.Source {
+	progress := func(ctx context.Context, work domain.ID, text string) error {
+		return e.store.Transact(ctx, storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
+			return runtime.SetWaitProgressInTx(tx, gh.Type, work, text)
+		})
+	}
+	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, WaitProgress: progress, Sources: func() []gh.Source {
 		return append([]gh.Source{{Settings: e.settings, Client: e.client, Projector: e.projector}}, e.extra...)
 	}}); err != nil {
 		t.Fatal(err)
 	}
+	e.observed = e.tools.ObserveChecks
 	if err = belt.Register(e.tools.Registration()); err != nil {
 		t.Fatal(err)
 	}
@@ -1245,6 +1251,39 @@ func TestGitHubWaitOnPRChecks(t *testing.T) {
 		e.fake.SetCheck("c1", "test", "completed", "success")
 		e.sync()
 		woke(t, e, w, out, "checks on PR #"+itoa(pr)+" finished: passed")
+	})
+	t.Run("progress", func(t *testing.T) {
+		e := newToolsEnv(t)
+		pr := e.fake.OpenPull("Feature", "", "feature", "c1", ghBob)
+		e.fake.SetCheck("c1", "lint", "in_progress", "")
+		e.fake.SetCheck("c1", "test", "in_progress", "")
+		e.sync()
+		w, out := waitOn(t, e, pr)
+		progress := func() string {
+			var p string
+			e.read(func(tx storage.Tx) error {
+				wt, err := tx.Wait(out.Wait.ID)
+				p = wt.Progress
+				return err
+			})
+			return p
+		}
+		e.fake.SetCheck("c1", "lint", "completed", "failure")
+		e.sync()
+		if got := e.work(w.ID); got.State != domain.WorkWaiting {
+			t.Fatalf("one of two checks woke it: %v", got.State)
+		}
+		if got := progress(); got != "1 of 2 checks finished, 1 failed" {
+			t.Fatalf("progress %q", got)
+		}
+		// The result wakes it; the progress stays as the last pending
+		// observation left it.
+		e.fake.SetCheck("c1", "test", "completed", "success")
+		e.sync()
+		woke(t, e, w, out, "checks on PR #"+itoa(pr)+" finished: failed")
+		if got := progress(); got != "1 of 2 checks finished, 1 failed" {
+			t.Fatalf("progress after waking %q", got)
+		}
 	})
 	t.Run("a push", func(t *testing.T) {
 		e := newToolsEnv(t)

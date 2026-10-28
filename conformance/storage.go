@@ -1054,8 +1054,9 @@ func handoffAndWait(s storage.Store) error {
 }
 
 // displayAndDescription: a Work's display round-trips and can be replaced
-// like any other field; a Wait's description round-trips and is fixed once
-// the Wait is stored.
+// like any other field; a Wait's description and owner round-trip and are
+// fixed once the Wait is stored, and only an owned active Wait's progress
+// changes.
 func displayAndDescription(s storage.Store) error {
 	c := NewClock()
 	if err := seed(s, c); err != nil {
@@ -1121,6 +1122,50 @@ func displayAndDescription(s storage.Store) error {
 			return fmt.Errorf("description did not round-trip: %q %v", got.Description, err)
 		}
 		got.Description, got.State = "something else", domain.WaitCancelled
-		return wantError(tx.PutWait(got, got.Revision), storage.ErrInvalid)
+		if err := wantError(tx.PutWait(got, got.Revision), storage.ErrInvalid); err != nil {
+			return err
+		}
+		// Only an owned Wait's progress changes while it is active, and it
+		// freezes once the Wait is cancelled.
+		got, err = tx.Wait("described-wait")
+		if err != nil {
+			return err
+		}
+		got.Progress = "1 of 2 example steps"
+		if err := wantError(tx.PutWait(got, got.Revision), storage.ErrInvalid); err != nil {
+			return fmt.Errorf("unowned progress: %w", err)
+		}
+		owned := w
+		owned.ID, owned.Revision, owned.Owner = "owned-wait", 0, "example"
+		if err := tx.PutWait(owned, 0); err != nil {
+			return err
+		}
+		owned, err = tx.Wait("owned-wait")
+		if err != nil {
+			return err
+		}
+		owned.Progress = "1 of 2 example steps"
+		if err := tx.PutWait(owned, owned.Revision); err != nil {
+			return fmt.Errorf("progress: %w", err)
+		}
+		owned, err = tx.Wait("owned-wait")
+		if err != nil || owned.Progress != "1 of 2 example steps" || owned.Owner != "example" {
+			return fmt.Errorf("progress did not round-trip: %+v %v", owned, err)
+		}
+		changed := owned
+		changed.Owner = "other"
+		if err := wantError(tx.PutWait(changed, changed.Revision), storage.ErrInvalid); err != nil {
+			return fmt.Errorf("owner change: %w", err)
+		}
+		owned.State = domain.WaitCancelled
+		if err := tx.PutWait(owned, owned.Revision); err != nil {
+			return err
+		}
+		owned, err = tx.Wait("owned-wait")
+		if err != nil || owned.Progress != "1 of 2 example steps" {
+			return fmt.Errorf("cancel did not keep progress: %+v %v", owned, err)
+		}
+		owned.Progress = "2 of 2 example steps"
+		return wantError(tx.PutWait(owned, owned.Revision), storage.ErrInvalid)
 	})
 }

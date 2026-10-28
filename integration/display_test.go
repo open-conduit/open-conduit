@@ -7,6 +7,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -157,6 +158,70 @@ func TestToolbeltTranslatedWaitDescription(t *testing.T) {
 		}
 		return nil
 	})
+}
+
+// A translated wait is owned by the extension whose operation declared it:
+// that extension alone may set its progress, and only while it is active.
+func TestToolbeltTranslatedWaitProgress(t *testing.T) {
+	ctx := context.Background()
+	h := newToolbeltHarness(t, "")
+	h.plan = func(extension.Authority, domain.Payload) (extension.WaitPlan, error) {
+		return extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: []string{"fixture.changed"}}, Description: "checks on PR #2"}}, nil
+	}
+	if _, err := h.belt.Call(ctx, h.token, extension.ToolCall{Operation: "fixture.wait", Input: domain.Payload{Schema: "fixture.wait.v1", Data: []byte(`{}`)}}); err != nil {
+		t.Fatalf("translated wait: %v", err)
+	}
+	if err := h.scheduler.Complete(ctx, h.attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	progress := func(owner, text string) error {
+		return conformance.RuntimeRead(h.f, func(tx storage.Tx) error { return runtime.SetWaitProgressInTx(tx, owner, "work/item", text) })
+	}
+	if err := progress("other", "1 of 2 example checks finished"); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("another extension set progress: %v", err)
+	}
+	if err := progress("fixture", "1 of 2 example checks finished\nand more "+strings.Repeat("w", extension.MaxWaitProgress)); err != nil {
+		t.Fatalf("owner progress: %v", err)
+	}
+	var wait domain.Wait
+	routingRead(t, h.f, func(tx storage.Tx) error {
+		waits, err := tx.ListWaits("work/item")
+		if err != nil || len(waits) != 1 || waits[0].Owner != "fixture" || waits[0].Progress != "1 of 2 example checks finished" || waits[0].Description != "checks on PR #2" {
+			t.Fatalf("waits %+v %v", waits, err)
+		}
+		wait = waits[0]
+		return nil
+	})
+	if err := h.scheduler.Cancel(ctx, "work/item"); err != nil {
+		t.Fatal(err)
+	}
+	if err := progress("fixture", "2 of 2 example checks finished"); !errors.Is(err, runtime.ErrNotWaiting) {
+		t.Fatalf("progress on a cancelled wait: %v", err)
+	}
+	routingRead(t, h.f, func(tx storage.Tx) error {
+		if w, err := tx.Wait(wait.ID); err != nil || w.State != domain.WaitCancelled || w.Progress != "1 of 2 example checks finished" {
+			t.Fatalf("cancelled wait %+v %v", w, err)
+		}
+		return nil
+	})
+}
+
+// A builtin wait has no owner, so no extension may set its progress.
+func TestToolbeltBuiltinWaitHasNoProgress(t *testing.T) {
+	ctx := context.Background()
+	h := newToolbeltHarness(t, "")
+	if _, err := h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.Wait, Wait: &extension.WaitRequest{Match: domain.EventMatch{Types: []string{"fixture.changed"}}}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := h.scheduler.Complete(ctx, h.attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	err := conformance.RuntimeRead(h.f, func(tx storage.Tx) error {
+		return runtime.SetWaitProgressInTx(tx, "fixture", "work/item", "1 of 2 example checks finished")
+	})
+	if !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("progress on a builtin wait: %v", err)
+	}
 }
 
 // A timed Wait nobody described is described by its due time when it is

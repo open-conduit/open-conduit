@@ -185,6 +185,7 @@ type wireWait struct {
 	AfterSequence  string    `json:"after_sequence"`
 	WakeEventID    string    `json:"wake_event_id,omitempty"`
 	Description    string    `json:"description,omitempty"`
+	Progress       string    `json:"progress,omitempty"`
 	DueAt          string    `json:"due_at,omitempty"`
 	Revision       string    `json:"revision"`
 	CreatedAt      string    `json:"created_at,omitempty"`
@@ -341,7 +342,7 @@ func toExecution(x domain.Execution, scope domain.ID) wireExecution {
 // it has none or the timer has gone.
 func toWait(w domain.Wait, due time.Time) wireWait {
 	types := append([]string{}, w.Match.Types...)
-	return wireWait{ID: string(w.ID), WorkID: string(w.WorkID), ExecutionID: string(w.ExecutionID), State: string(w.State), Match: wireMatch{Keys: keys(w.Match.Keys), Types: types}, TimeoutTimerID: string(w.TimeoutTimerID), AfterSequence: u64(w.AfterSequence), WakeEventID: string(w.WakeEventID), Description: w.Description, DueAt: ts(due), Revision: u64(uint64(w.Revision)), CreatedAt: ts(w.CreatedAt), UpdatedAt: ts(w.UpdatedAt)}
+	return wireWait{ID: string(w.ID), WorkID: string(w.WorkID), ExecutionID: string(w.ExecutionID), State: string(w.State), Match: wireMatch{Keys: keys(w.Match.Keys), Types: types}, TimeoutTimerID: string(w.TimeoutTimerID), AfterSequence: u64(w.AfterSequence), WakeEventID: string(w.WakeEventID), Description: w.Description, Progress: w.Progress, DueAt: ts(due), Revision: u64(uint64(w.Revision)), CreatedAt: ts(w.CreatedAt), UpdatedAt: ts(w.UpdatedAt)}
 }
 func toScope(s domain.Scope, enabled bool) wireScope {
 	out := wireScope{ID: string(s.ID), Name: s.Name, ParentID: string(s.ParentID), Enabled: enabled, Bindings: []wireBinding{}, Routes: []wireRoute{}, SecretRefs: map[string]string{}, Revision: u64(uint64(s.Revision)), CreatedAt: ts(s.CreatedAt), UpdatedAt: ts(s.UpdatedAt)}

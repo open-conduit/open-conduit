@@ -139,7 +139,7 @@ func (d *daemon) addGitHub(ctx context.Context, s *config.Snapshot, scope domain
 		// writes report dry_run.
 		settings.Projection.DryRun = true
 	}
-	in := gh.NewIngress(settings, client, d.now, gh.IngressOptions{})
+	in := gh.NewIngress(settings, client, d.now, gh.IngressOptions{Observed: func(ctx context.Context, obs []extension.Observation) { d.tools.ObserveChecks(ctx, obs) }})
 	interval := time.Duration(s.Settings.ReconcileSeconds) * time.Second
 	name := "github/" + string(scope) + "/" + x.Name
 	if err := d.ingress.Register(ctx, name, extension.Source{Namespace: settings.Namespace, ScopeID: scope}, in, interval); err != nil {

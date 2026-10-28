@@ -92,6 +92,12 @@ type Host struct {
 	// cancellation, idempotent per key and guarded by the Work's revision:
 	// a stale revision is storage.ErrConflict).
 	CancelWork func(ctx context.Context, work domain.ID, expected domain.Revision, reason, key string) (domain.ID, error)
+	// WaitProgress sets the progress line ("3 of 7 checks finished") of
+	// work's active Wait, when one of the extension's own operations
+	// declared it; "" clears it. Another's Wait is
+	// extension.ErrUnauthorized, and Work with no active Wait
+	// storage.ErrNotFound.
+	WaitProgress func(ctx context.Context, work domain.ID, progress string) error
 	// Capture writes a named telemetry event to the host's telemetry events
 	// log and hands it to every Sink. scope is "" for one about the machine.
 	Capture func(ctx context.Context, scope, name string, at time.Time, props map[string]any) error
