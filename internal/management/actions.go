@@ -21,10 +21,11 @@ import (
 
 // wireAction is one available action.
 type wireAction struct {
-	Provider string `json:"provider"`
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Prompt   string `json:"prompt,omitempty"`
+	Provider string   `json:"provider"`
+	ID       string   `json:"id"`
+	Label    string   `json:"label"`
+	Prompt   string   `json:"prompt,omitempty"`
+	Choices  []string `json:"choices,omitempty"`
 }
 
 var actionID = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
@@ -83,9 +84,23 @@ func offered(ctx context.Context, name string, p extension.ActionProvider, t ext
 		if !actionID.MatchString(a.ID) || strings.TrimSpace(a.Label) == "" || len(a.Label) > 200 || len(a.Prompt) > 200 {
 			continue
 		}
-		out = append(out, wireAction{Provider: name, ID: a.ID, Label: a.Label, Prompt: a.Prompt})
+		out = append(out, wireAction{Provider: name, ID: a.ID, Label: a.Label, Prompt: a.Prompt, Choices: choices(a)})
 	}
 	return out
+}
+
+// choices are a's well-formed choices: none unless it has a Prompt and
+// every choice is a short, non-empty line.
+func choices(a extension.Action) []string {
+	if a.Prompt == "" || len(a.Choices) > 20 {
+		return nil
+	}
+	for _, c := range a.Choices {
+		if strings.TrimSpace(c) == "" || len(c) > 200 || strings.ContainsAny(c, "\r\n") {
+			return nil
+		}
+	}
+	return a.Choices
 }
 
 func (s *Server) listScopeActions(c *call) (int, any, error) { return s.listActions(c, false) }

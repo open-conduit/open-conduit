@@ -10,8 +10,10 @@
   <form method="post" action="/actions" class="action"{{if not .Prompt}} data-confirm="{{.Label}} ({{$s.Scope.ID}})?"{{end}}>
     <input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}">
     <input type="hidden" name="scope" value="{{$s.Scope.ID}}"><input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">
-    {{if .Prompt}}<label>{{.Label}} <input name="input" placeholder="{{.Prompt}}" aria-label="{{.Prompt}}"></label>{{end}}
-    <button{{if .Prompt}} class="primary"{{end}}>{{if .Prompt}}Go{{else}}{{.Label}}{{end}}</button>
+    {{if .Choices}}<p class="choices-label">{{.Label}}</p>
+    <div class="choices">{{range .Choices}}<button name="input" value="{{.}}">{{.}}</button>{{end}}</div>
+    {{else}}{{if .Prompt}}<label>{{.Label}} <input name="input" placeholder="{{.Prompt}}" aria-label="{{.Prompt}}"></label>{{end}}
+    <button{{if .Prompt}} class="primary"{{end}}>{{if .Prompt}}Go{{else}}{{.Label}}{{end}}</button>{{end}}
   </form>
   {{else}}{{if not .Panels}}<p class="empty">Nothing to do here: no extension offers an action for this scope.</p>{{end}}{{end}}
 </section>

@@ -16,9 +16,11 @@
       <input type="hidden" name="csrf" value="{{$v.Page.CSRF}}"><input type="hidden" name="back" value="{{$v.Page.Back}}">
       {{if $v.WorkID}}<input type="hidden" name="work" value="{{$v.WorkID}}">{{else}}<input type="hidden" name="scope" value="{{$v.ScopeID}}">{{end}}
       <input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">
-      {{if .Prompt}}<label>{{.Label}}
+      {{if .Choices}}<p class="choices-label">{{.Label}}</p>
+      <div class="choices">{{range .Choices}}<button name="input" value="{{.}}">{{.}}</button>{{end}}</div>
+      {{else}}{{if .Prompt}}<label>{{.Label}}
         <textarea name="input" rows="3" placeholder="{{.Prompt}}" aria-label="{{.Prompt}}"></textarea></label>{{end}}
-      <button class="primary">{{if .Prompt}}Send{{else}}{{.Label}}{{end}}</button>
+      <button class="primary">{{if .Prompt}}Send{{else}}{{.Label}}{{end}}</button>{{end}}
     </form>
     {{end}}
   </div>

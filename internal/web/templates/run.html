@@ -22,9 +22,11 @@
   <form method="post" action="/actions" class="action"{{if not .Prompt}} data-confirm="{{.Label}}?"{{end}}>
     <input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{$p.Back}}">
     <input type="hidden" name="work" value="{{$d.Run.WorkID}}"><input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">
-    {{if .Prompt}}<label>{{.Label}} <span class="from">from {{.Provider}}</span>
+    {{if .Choices}}<p class="choices-label">{{.Label}} <span class="from">from {{.Provider}}</span></p>
+    <div class="choices">{{range .Choices}}<button name="input" value="{{.}}">{{.}}</button>{{end}}</div>
+    {{else}}{{if .Prompt}}<label>{{.Label}} <span class="from">from {{.Provider}}</span>
       <textarea name="input" rows="3" placeholder="{{.Prompt}}" aria-label="{{.Prompt}}"></textarea></label>{{end}}
-    <button{{if .Prompt}} class="primary"{{end}}>{{if .Prompt}}Send{{else}}{{.Label}}{{end}}</button>
+    <button{{if .Prompt}} class="primary"{{end}}>{{if .Prompt}}Send{{else}}{{.Label}}{{end}}</button>{{end}}
   </form>
   {{end}}
 </section>

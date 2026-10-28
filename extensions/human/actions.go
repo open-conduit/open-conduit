@@ -87,7 +87,7 @@ func (a Actions) Actions(ctx context.Context, t extension.ActionTarget) ([]exten
 	if len(prompt) > 200 {
 		prompt = "an option's number or text"
 	}
-	return []extension.Action{{ID: ActionAnswer, Label: "Answer the agent's question", Prompt: prompt}}, nil
+	return []extension.Action{{ID: ActionAnswer, Label: "Answer the agent's question", Prompt: prompt, Choices: rec.Options}}, nil
 }
 
 func refuseAction(code, message string) (extension.ActionPlan, error) {

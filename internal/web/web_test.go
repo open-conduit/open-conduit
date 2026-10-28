@@ -315,6 +315,20 @@ func TestRunPageRendersPanelsWithTheirActions(t *testing.T) {
 	}
 }
 
+func TestAnActionWithChoicesShowsAButtonForEach(t *testing.T) {
+	f, s, h := setup(t)
+	f.actions["wrk_1"][0].Choices = []string{"yes", "not \"yet\""}
+	body := do(h, "GET", "/run?id=exe_2", nil, s).Body.String()
+	for _, want := range []string{`<button name="input" value="yes">yes</button>`, `<button name="input" value="not &#34;yet&#34;">not &#34;yet&#34;</button>`} {
+		if !strings.Contains(body, want) {
+			t.Errorf("missing %q", want)
+		}
+	}
+	if strings.Contains(body, `placeholder="your answer"`) {
+		t.Error("an action with choices still asks for typed input")
+	}
+}
+
 func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	f, s, h := setup(t)
 	form := url.Values{"work": {"wrk_1"}, "provider": {"human"}, "action": {"answer"}, "label": {"Answer"}, "input": {" option 2 "}, "back": {"/run?id=exe_2"}}

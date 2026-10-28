@@ -50,11 +50,14 @@ type ActionTarget struct {
 // Action is one action available on a target now. ID is stable
 // ([a-z][a-z0-9_]*) and is what callers invoke; Label is what a person
 // reads. Prompt, when set, asks for one line of input (the action is then
-// invoked with that text); an action without a Prompt takes none.
+// invoked with that text); an action without a Prompt takes none. Choices,
+// when set with a Prompt, are the inputs the action accepts: a view offers
+// one button per choice rather than a text box.
 type Action struct {
-	ID     string
-	Label  string
-	Prompt string
+	ID      string
+	Label   string
+	Prompt  string
+	Choices []string
 }
 
 // ActionCall is one invocation.

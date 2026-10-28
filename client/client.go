@@ -535,12 +535,14 @@ func (c *Client) ReleaseWork(ctx context.Context, id, revision, reason, key stri
 }
 
 // Action is an action an extension offers on a scope or Work now.
-// Provider and ID address it; Prompt, when set, asks for one line of input.
+// Provider and ID address it; Prompt, when set, asks for one line of input,
+// and Choices, when set, are the inputs it accepts.
 type Action struct {
-	Provider string `json:"provider"`
-	ID       string `json:"id"`
-	Label    string `json:"label"`
-	Prompt   string `json:"prompt,omitempty"`
+	Provider string   `json:"provider"`
+	ID       string   `json:"id"`
+	Label    string   `json:"label"`
+	Prompt   string   `json:"prompt,omitempty"`
+	Choices  []string `json:"choices,omitempty"`
 }
 
 // ActionTarget names what actions apply to: a scope, or Work.

@@ -165,6 +165,8 @@ dl.facts { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap
 /* Forms */
 form.action { display: grid; gap: .6rem; justify-items: start; margin-top: .9rem; max-width: 46rem; }
 form.action label { display: grid; gap: .35rem; width: 100%; font-weight: 600; }
+form.action .choices-label { margin: 0; font-weight: 600; }
+form.action .choices { display: flex; flex-wrap: wrap; gap: .5rem; }
 textarea, input[name=input] {
   font: inherit; width: 100%; padding: .6rem .7rem; border: 1px solid var(--rule); border-radius: 8px;
   background: var(--ground); color: var(--ink); resize: vertical;
