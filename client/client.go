@@ -911,6 +911,27 @@ func (c *Client) ApplyConfig(ctx context.Context, config json.RawMessage, hash, 
 	return
 }
 
+// ApplyConfigText applies config file text as given: the daemon validates
+// it parsed and saves it byte for byte, keeping its layout and key order.
+func (c *Client) ApplyConfigText(ctx context.Context, text []byte, hash, generation, key string) (out ConfigApplied, err error) {
+	err = c.Do(ctx, "POST", "config/apply", nil, map[string]any{"config_text": string(text), "candidate_hash": hash, "expected_generation": generation}, key, &out)
+	return
+}
+
+// ConfigCandidate is the configuration a Work proposes for the operator to
+// apply (a setup session's approved changes).
+type ConfigCandidate struct {
+	ConfigText     string `json:"config_text"`
+	BaseGeneration string `json:"base_generation"`
+	CandidateHash  string `json:"candidate_hash"`
+}
+
+// WorkConfigCandidate reads the configuration a Work proposes.
+func (c *Client) WorkConfigCandidate(ctx context.Context, work string) (out ConfigCandidate, err error) {
+	err = c.Do(ctx, "GET", "work/"+esc(work)+"/config-candidate", nil, nil, "", &out)
+	return
+}
+
 // Rotate returns the one-time replacement credential.
 func (c *Client) Rotate(ctx context.Context, expectedTokenID string) (out TokenFile, err error) {
 	err = c.Do(ctx, "POST", "auth/rotate", nil, map[string]string{"expected_token_id": expectedTokenID}, "", &out)

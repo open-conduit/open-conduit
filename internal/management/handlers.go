@@ -875,9 +875,14 @@ func (s *Server) validateConfig(c *call) (int, any, error) {
 	}
 	return 200, map[string]any{"valid": true, "candidate_hash": snapshot.Hash, "config": snapshot.Redacted()}, nil
 }
+
+// applyConfig applies config, or config_text: the file's text as a JSON
+// string, validated as parsed and saved byte for byte, so the operator's
+// layout and key order survive.
 func (s *Server) applyConfig(c *call) (int, any, error) {
 	var in struct {
 		Config             json.RawMessage `json:"config"`
+		ConfigText         *string         `json:"config_text"`
 		CandidateHash      string          `json:"candidate_hash"`
 		ExpectedGeneration string          `json:"expected_generation"`
 	}
@@ -888,11 +893,45 @@ func (s *Server) applyConfig(c *call) (int, any, error) {
 	if err != nil {
 		return 0, nil, fail(400, "malformed", "expected_generation must be a decimal string")
 	}
-	generation, hash, err := s.o.Config.Apply(c.ctx, in.Config, in.CandidateHash, expected)
+	data := []byte(in.Config)
+	if in.ConfigText != nil {
+		if len(in.Config) > 0 {
+			return 0, nil, fail(400, "malformed", "give config or config_text, not both")
+		}
+		data = []byte(*in.ConfigText)
+	}
+	generation, hash, err := s.o.Config.Apply(c.ctx, data, in.CandidateHash, expected)
 	if err != nil {
 		return 0, nil, err
 	}
 	return 200, map[string]any{"generation": u64(generation), "hash": hash}, nil
+}
+
+// configCandidate is the configuration a Work proposes for the operator to
+// apply (a setup session's approved changes): the file text, the
+// generation it is based on and its hash, ready for POST /config/apply.
+// It is an operator-class read: the text may carry reference text.
+func (s *Server) configCandidate(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	if s.o.ConfigCandidate == nil {
+		return 0, nil, storage.ErrNotFound
+	}
+	var w domain.Work
+	if err := s.o.Store.Transact(c.ctx, storage.Guard{Now: s.o.Now()}, func(tx storage.Tx) error {
+		var err error
+		w, err = tx.Work(domain.ID(c.params[0]))
+		return err
+	}); err != nil {
+		return 0, nil, err
+	}
+	cand, err := s.o.ConfigCandidate(c.ctx, w)
+	if err != nil {
+		return 0, nil, err
+	}
+	c.w.Header().Set("Cache-Control", "no-store")
+	return 200, map[string]any{"config_text": string(cand.Text), "base_generation": cand.BaseGeneration, "candidate_hash": cand.Hash}, nil
 }
 
 // rotate never stores the replacement in idempotency history; a lost response

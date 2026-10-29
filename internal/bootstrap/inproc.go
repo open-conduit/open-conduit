@@ -157,6 +157,7 @@ func (d *daemon) startInproc(ctx context.Context) error {
 				return id, err
 			},
 			WaitProgress: d.waitProgress(name),
+			Config:       configHost{configs: func() *management.ConfigService { return d.configs }, path: d.o.ConfigPath, def: DefaultConfig},
 			Capture:      d.telemetry.Capture,
 		}
 		if err := s.Start(ctx, h); err != nil {

@@ -110,6 +110,20 @@ func (d *ConfigDoc) Get(ptr string) (string, error) {
 	return strings.TrimSpace(string(n.bytes())), nil
 }
 
+// Raw returns the JSON at pointer as written, references included: for the
+// daemon's own use, never a view.
+func (d *ConfigDoc) Raw(ptr string) ([]byte, error) {
+	parts, err := pointer(ptr)
+	if err != nil {
+		return nil, err
+	}
+	n, err := d.root.lookup(parts)
+	if err != nil {
+		return nil, err
+	}
+	return []byte(strings.TrimSpace(string(n.bytes()))), nil
+}
+
 // Set replaces or adds the JSON value at pointer ("-" appends to an array).
 // A secret_refs value must be a reference, never a secret.
 func (d *ConfigDoc) Set(ptr, value string) error {

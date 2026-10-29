@@ -13,6 +13,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -26,13 +27,20 @@ const (
 // Actions is a `setup` entry's extension.ActionProvider. On the scope it
 // offers "start" while the scope has no open session. On an open session's
 // Work it offers "message", and "answer" while the session waits on its
-// question. Ending a session is the operator's cancellation of its Work.
+// question. Once the agent proposes changes it also offers approve and
+// reject for each, Approve all and validate (decide.go). Ending a session
+// is the operator's cancellation of its Work.
 type Actions struct {
 	Store storage.Store
 	Now   func() time.Time
+	// Config validates the change set's candidate.
+	Config inproc.ConfigHost
 }
 
-var _ extension.ActionProvider = Actions{}
+var (
+	_ extension.ActionProvider = Actions{}
+	_ extension.PanelProvider  = Actions{}
+)
 
 func (a Actions) now() time.Time {
 	if a.Now != nil {
@@ -138,6 +146,11 @@ func (a Actions) Actions(ctx context.Context, t extension.ActionTarget) ([]exten
 			return nil
 		}
 		out = append(out, extension.Action{ID: ActionMessage, Label: "Send the agent a message", Prompt: "your message"})
+		cs, st, err := sessionChanges(tx, *t.Work)
+		if err != nil {
+			return err
+		}
+		out = append(out, changeActions(cs, st)...)
 		q, ok, err := question(tx, *t.Work)
 		if err != nil || !ok {
 			return err
@@ -170,6 +183,10 @@ func (a Actions) Invoke(ctx context.Context, c extension.ActionCall) (extension.
 		return a.message(ctx, c)
 	case c.Action == ActionAnswer && c.Target.Work != nil:
 		return a.answer(ctx, c)
+	case c.Target.Work != nil && c.Target.Work.Kind == WorkKind && !c.Target.Work.State.Terminal():
+		if plan, err, ok := a.decide(ctx, c); ok {
+			return plan, err
+		}
 	}
 	return refuseAction("unknown_action", "setup offers no action "+c.Action+" here")
 }

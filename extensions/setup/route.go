@@ -23,8 +23,9 @@ var (
 
 func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
-	if e.Source != extension.ActionSource {
-		return extension.Skip("only the operator's setup actions reach a session"), nil
+	applied := e.Source == Type && e.Type == TypeApplied
+	if e.Source != extension.ActionSource && !applied {
+		return extension.Skip("only the operator's setup actions, and the generation that applies a session's changes, reach a session"), nil
 	}
 	if e.CorrelationKey == nil {
 		return extension.Skip("the event names no setup session"), nil
@@ -53,6 +54,12 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		return extension.RouteDecision{Match: true, Reason: "the operator's message to the session"}, nil
 	case TypeAnswer:
 		return extension.RouteDecision{Match: true, Reason: "the operator's answer to the session"}, nil
+	case TypeDecision:
+		return extension.RouteDecision{Match: true, Reason: "the operator's decision on the session's changes"}, nil
+	case TypeChecks:
+		return extension.RouteDecision{Match: true, Reason: "the operator's validation of the session's changes"}, nil
+	case TypeApplied:
+		return extension.RouteDecision{Match: true, Reason: "the operator applied the session's changes"}, nil
 	}
 	return extension.Skip("the session has already started"), nil
 }

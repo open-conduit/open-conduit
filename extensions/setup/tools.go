@@ -14,17 +14,21 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
 // Agent-facing operations.
 const (
-	OpSay = "setup.say"
-	OpAsk = "setup.ask"
+	OpSay      = "setup.say"
+	OpAsk      = "setup.ask"
+	OpPropose  = "setup.propose"
+	OpWithdraw = "setup.withdraw"
+	OpValidate = "setup.validate"
 )
 
 // Operations lists every tool operation (for binding operation lists).
-func Operations() []string { return []string{OpSay, OpAsk} }
+func Operations() []string { return []string{OpSay, OpAsk, OpPropose, OpWithdraw, OpValidate} }
 
 // AskTimeout is how long a question waits for the operator. With no answer
 // by then the agent is resumed without one, sums up and finishes.
@@ -50,14 +54,16 @@ type Options struct {
 	// configuration.
 	Enabled func(scope domain.ID) bool
 	Now     func() time.Time
+	// Config reads, validates and edits config text for change sets.
+	Config inproc.ConfigHost
 }
 
-// Tools implements setup.say and setup.ask.
+// Tools implements the agent's operations.
 type Tools struct{ o Options }
 
 // NewTools validates options.
 func NewTools(o Options) (*Tools, error) {
-	if o.Store == nil || o.Accept == nil || o.Enabled == nil {
+	if o.Store == nil || o.Accept == nil || o.Enabled == nil || o.Config == nil {
 		return nil, storage.ErrInvalid
 	}
 	if o.Now == nil {
@@ -69,7 +75,8 @@ func NewTools(o Options) (*Tools, error) {
 // Registration is the toolbelt registration.
 func (t *Tools) Registration() extension.Registration {
 	return extension.Registration{Version: extension.ContractVersion, Name: Type, EventTypes: []string{TypeMessage},
-		Operations: []extension.Operation{{Name: OpSay, Emit: t.say}, {Name: OpAsk, Wait: t.ask}}}
+		Operations: []extension.Operation{{Name: OpSay, Emit: t.say}, {Name: OpAsk, Wait: t.ask},
+			{Name: OpPropose, Handler: t.propose}, {Name: OpWithdraw, Handler: t.withdraw}, {Name: OpValidate, Handler: t.validate}}}
 }
 
 func refuse(code, format string, args ...any) error {

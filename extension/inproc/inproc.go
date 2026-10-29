@@ -108,6 +108,46 @@ type Host struct {
 	// Capture writes a named telemetry event to the host's telemetry events
 	// log and hands it to every Sink. scope is "" for one about the machine.
 	Capture func(ctx context.Context, scope, name string, at time.Time, props map[string]any) error
+	// Config reads and checks configuration without changing it, for an
+	// extension that proposes config for the operator to apply (setup).
+	Config ConfigHost
+}
+
+// ConfigBase is the configuration a proposal starts from: the committed
+// generation and its hash, and the config file's text (the default
+// document when the daemon runs on it with no file). Folders are the IDs of
+// the scopes that come from included folders, whose text is not in the file.
+type ConfigBase struct {
+	Generation string
+	Hash       string
+	Text       []byte
+	Folders    []string
+}
+
+// ConfigDiagnostic is one validation problem: a JSON pointer, a code and a
+// remedy, as `config validate` prints them.
+type ConfigDiagnostic struct {
+	Path    string `json:"path"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// ConfigHost is the host's configuration service for extensions. Nothing
+// in it applies a configuration: only the operator does that.
+type ConfigHost interface {
+	// Base is the configuration now.
+	Base(ctx context.Context) (ConfigBase, error)
+	// Validate runs the side-effect-free validation POST /config/validate
+	// runs on config file text: the candidate's hash when it is valid, its
+	// diagnostics when not.
+	Validate(ctx context.Context, text []byte) (hash string, diagnostics []ConfigDiagnostic, err error)
+	// Edit makes one `config set`/`config unset` edit to config file text,
+	// keeping its layout and key order: op "add" sets (appending with "-"),
+	// "replace" sets a value that exists and "remove" removes one. It
+	// returns the new text and the value that was at pointer (nil when
+	// none). Pointers address array elements by id or name. Its errors are
+	// fixed, secret-free reasons.
+	Edit(text []byte, op, pointer string, value json.RawMessage) (out []byte, before json.RawMessage, err error)
 }
 
 // ErrNotOwn refuses a host service call on something that is not the
