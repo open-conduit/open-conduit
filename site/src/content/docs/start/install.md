@@ -52,4 +52,4 @@ make build                 # writes bin/open-conduit and bin/os
 cp bin/open-conduit bin/os /usr/local/bin/   # or anywhere on your PATH, side by side
 ```
 
-Next: run `open-conduit init --with claude` and let Claude Code set it up with you, as the [quick start](/open-conduit/start/quick-start/) describes. To talk the setup through in the browser instead, start the daemon with no config (`open-conduit serve`) and open the Setup page of `open-conduit web`; a session there plans the setup with you but can't change the config yet ([set it up in the browser](/open-conduit/start/quick-start/#set-it-up-in-the-browser)).
+Next: run `open-conduit init --with claude` and let Claude Code set it up with you, as the [quick start](/open-conduit/start/quick-start/) describes. To talk the setup through in the browser instead, start the daemon with no config (`open-conduit serve`) and open the Setup page of `open-conduit web`; a session there proposes the config and you approve and apply it ([set it up in the browser](/open-conduit/start/quick-start/#set-it-up-in-the-browser)).

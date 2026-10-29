@@ -225,17 +225,27 @@ func TestSetupCommand(t *testing.T) {
 	}
 }
 
-// Every GitHub operation the setup playbook names is one the github
-// extension registers.
+// Every GitHub and setup operation the setup playbook names is one the
+// extensions register, or a probe a session can run.
 func TestSetupPlaybookNamesRegisteredOperations(t *testing.T) {
 	ops := map[string]bool{}
-	for _, op := range gh.Operations() {
+	for _, op := range append(gh.Operations(), setupext.Operations()...) {
 		ops[op] = true
 	}
+	for _, p := range (gh.Probes{}).SetupProbes() {
+		ops[gh.Type+"."+p.Name] = true
+	}
+	for _, p := range (setupext.Probes{}).SetupProbes() {
+		ops[setupext.Type+"."+p.Name] = true
+	}
+	ops["setup.init"], ops["setup.doctor"], ops["setup.applied"] = true, true, true
+	for _, p := range (claudecode.Probes{}).SetupProbes() {
+		ops["claude-code."+p.Name] = true
+	}
 	g := setupext.Playbook("open-conduit")
-	names := regexp.MustCompile("[`\"](github\\.[a-z.]+)[`\"]").FindAllStringSubmatch(g, -1)
+	names := regexp.MustCompile("[`\"]((?:github|setup|claude-code)\\.[a-z.]+)[`\"]").FindAllStringSubmatch(g, -1)
 	if len(names) == 0 || !strings.HasPrefix(g, "---\nname: setup\n") {
-		t.Fatal("the setup playbook names no operation or has no description")
+		t.Fatal("the setup playbook names no operation or has no frontmatter")
 	}
 	for _, m := range names {
 		if !ops[m[1]] {

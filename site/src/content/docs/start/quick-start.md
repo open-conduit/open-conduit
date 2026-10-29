@@ -30,7 +30,7 @@ The web view has a **Setup** page where you start a session with a setup assista
 
 Then run `open-conduit web`, open the Setup page and start a session, choosing the model. `open-conduit actions run setup start --scope setup --input opus` starts one from a terminal.
 
-**What a session can do in this release.** The assistant has no shell and no file access, and proposing config changes for you to approve isn't built yet. It can explain Open Conduit, ask you the setup questions and plan the setup with you, but it can't look at your checkouts or logins or change the config. It ends with the commands to run yourself: `init --with claude` above, or the `init` commands below.
+**What a session can do.** The assistant has no shell and no file access. It looks around through named probes (whether Claude Code is signed in, your folders, your `gh` logins and repositories, what `init` would write) and never sees a secret. It never edits the config either: it proposes each change with its reason, and the page shows you each one's before and after. Approve or reject them one at a time, or approve all, validate, then apply. Apply is yours alone; the assistant hears when you have, and checks the result with you. Credentials still go in from your own terminal with `open-conduit secret set NAME`; the assistant proposes only the reference.
 
 ## Set it up by hand
 
