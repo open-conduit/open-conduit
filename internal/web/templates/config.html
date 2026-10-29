@@ -113,14 +113,16 @@
     {{- end}}
   </ul>
   {{- end}}
+  {{- if $d.Passed}}
   <details class="checks-ok">
-    <summary>{{if $d.Flagged}}{{plural $d.Passed "other check"}} pass{{else}}All {{plural $d.Passed "check"}} pass{{end}}</summary>
+    <summary>{{$d.PassedText}}</summary>
     <ul class="kv-list">
       {{- range .Checks}}{{if or (eq .Status "ok") (eq .Status "info")}}
       <li>{{mark ($d.CheckMark .Status) 12 .Status}}<b>{{.Name}}</b><span>{{.Detail}}</span></li>
       {{- end}}{{end}}
     </ul>
   </details>
+  {{- end}}
 </section>
 {{end}}
 {{end}}

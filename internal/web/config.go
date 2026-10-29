@@ -540,3 +540,18 @@ func (d configData) Passed() int {
 	}
 	return len(d.Doctor.Checks) - len(d.Flagged())
 }
+
+// PassedText sums up the checks that pass: "All 24 checks pass", or with
+// some flagged, "22 others pass" ("1 other passes").
+func (d configData) PassedText() string {
+	n := d.Passed()
+	switch {
+	case len(d.Flagged()) == 0 && n == 1:
+		return "The one check passes"
+	case len(d.Flagged()) == 0:
+		return "All " + itoa(n) + " checks pass"
+	case n == 1:
+		return "1 other passes"
+	}
+	return itoa(n) + " others pass"
+}

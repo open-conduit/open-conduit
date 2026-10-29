@@ -97,7 +97,7 @@ func TestMarkdownEscapes(t *testing.T) {
 			t.Errorf("missing %q in\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "<script>") || strings.Contains(string(markdown("[x](javascript:void)")), "<a") {
+	if strings.Contains(got, "<script>") || strings.Contains(string(markdown("[x](javascript:alert(1))")), "<a") {
 		t.Error("markup must not pass through")
 	}
 }
@@ -208,6 +208,13 @@ func TestClaudeCodeMarkupInUserMessages(t *testing.T) {
 	if cmd.Kind != "user" || cmd.Text != "/open-conduit:work-issue\n\nissue/12\n\nThe issue." {
 		t.Fatalf("command: %+v", cmd)
 	}
+	reordered := message("user", "<command-name>/open-conduit:work-issue</command-name>\n<command-message>open-conduit:work-issue</command-message>", "")
+	if reordered.Text != "/open-conduit:work-issue" {
+		t.Fatalf("tags in another order: %+v", reordered)
+	}
+	if said := message("user", "<task-notification>x</task-notification> and also this", ""); said.Kind != "user" {
+		t.Fatalf("a notification with more text is the person's message: %+v", said)
+	}
 	if plain := message("user", "hello", ""); plain.Kind != "user" || plain.Text != "hello" {
 		t.Fatalf("plain: %+v", plain)
 	}
@@ -224,6 +231,9 @@ func TestMarkdownLinksAreWebOnly(t *testing.T) {
 // A message sent elsewhere reads like any other: a list after a line of
 // text is a list.
 func TestProseLists(t *testing.T) {
+	if out := string(prose("*Built so far:*\n#142 fixes this\n# Heading")); !strings.Contains(out, "<strong>Built so far:</strong>") || !strings.Contains(out, "#142 fixes this") || !strings.Contains(out, `<p class="h">Heading</p>`) {
+		t.Fatalf("chat bold and headings: %s", out)
+	}
 	out := string(prose("**Built so far:**\n- one\n- two\n\n1. first\n2. second"))
 	if !strings.Contains(out, "<ul><li>one</li><li>two</li></ul>") || !strings.Contains(out, "<ol><li>first</li><li>second</li></ol>") || !strings.Contains(out, "<strong>Built so far:</strong>") {
 		t.Fatalf("prose: %s", out)

@@ -344,7 +344,10 @@ func oneLine(s string) string { return strings.Join(strings.Fields(s), " ") }
 var (
 	fence  = regexp.MustCompile("^\\s*```")
 	bullet = regexp.MustCompile(`^\s*(?:[-*+]|\d+[.)])\s+`)
-	inline = regexp.MustCompile("`[^`\n]+`|\\*\\*[^*\n]+\\*\\*|\\[[^\\]\n]+\\]\\(https?://[^)\\s]+\\)")
+	inline = regexp.MustCompile("`[^`\n]+`|\\*\\*[^*\n]+\\*\\*|\\*[^*\\s][^*\n]*\\*|\\[[^\\]\n]+\\]\\(https?://[^)\\s]+\\)")
+	// heading is a Markdown heading: hashes then a space, so "#142 fixes
+	// this" stays a line of text.
+	heading = regexp.MustCompile(`^\s*#{1,6}\s`)
 )
 
 // markdown renders the Markdown agents write as chat text: paragraphs,
@@ -377,7 +380,7 @@ func markdown(s string) template.HTML {
 			b.WriteString("<pre><code>" + html.EscapeString(strings.Join(code, "\n")) + "</code></pre>")
 		case strings.TrimSpace(ln) == "":
 			flush()
-		case strings.HasPrefix(strings.TrimSpace(ln), "#"):
+		case heading.MatchString(ln):
 			flush()
 			b.WriteString("<p class=\"h\">" + spans(strings.TrimLeft(strings.TrimSpace(ln), "# ")) + "</p>")
 		case strings.HasPrefix(strings.TrimSpace(ln), "|"):
@@ -422,8 +425,11 @@ func spans(s string) string {
 		switch {
 		case tok[0] == '`':
 			b.WriteString("<code>" + html.EscapeString(tok[1:len(tok)-1]) + "</code>")
-		case tok[0] == '*':
+		case strings.HasPrefix(tok, "**"):
 			b.WriteString("<strong>" + html.EscapeString(tok[2:len(tok)-2]) + "</strong>")
+		case tok[0] == '*':
+			// Chat apps write *bold* with one asterisk.
+			b.WriteString("<strong>" + html.EscapeString(tok[1:len(tok)-1]) + "</strong>")
 		default:
 			text, href, _ := strings.Cut(tok[1:len(tok)-1], "](")
 			b.WriteString("<a href=\"" + html.EscapeString(href) + "\" rel=\"noreferrer\">" + html.EscapeString(text) + "</a>")
@@ -457,28 +463,44 @@ func size(n int64) string {
 // Claude Code writes some of its own notes into a session as user
 // messages, in tags: a background command finishing, and the slash command
 // a turn was started with.
-var (
-	taskRe    = regexp.MustCompile(`(?s)^<task-notification>(.*)</task-notification>$`)
-	commandRe = regexp.MustCompile(`(?s)^<command-message>.*?</command-message>\s*<command-name>(.*?)</command-name>\s*(?:<command-args>(.*?)</command-args>)?`)
-)
+// tags reads a message made only of tags (and space between them) into
+// their contents by name, or reports that it is not one.
+func tags(text string) (map[string]string, bool) {
+	out := map[string]string{}
+	rest := strings.TrimSpace(text)
+	for rest != "" {
+		if rest[0] != '<' {
+			return out, false
+		}
+		end := strings.IndexByte(rest, '>')
+		if end < 2 {
+			return out, false
+		}
+		name := rest[1:end]
+		body, after, ok := strings.Cut(rest[end+1:], "</"+name+">")
+		if !ok || strings.ContainsAny(name, " /") {
+			return out, false
+		}
+		out[name] = strings.TrimSpace(body)
+		rest = strings.TrimSpace(after)
+	}
+	return out, len(out) > 0
+}
 
 // taskNote is a background command's notification as a note: what it was
 // and how it ended.
 func taskNote(text string) (string, bool) {
-	m := taskRe.FindStringSubmatch(text)
-	if m == nil {
+	t, ok := tags(text)
+	body, isTask := t["task-notification"]
+	if !ok || !isTask {
 		return "", false
 	}
-	tag := func(name string) string {
-		_, v, _ := strings.Cut(m[1], "<"+name+">")
-		v, _, _ = strings.Cut(v, "</"+name+">")
-		return strings.TrimSpace(v)
-	}
+	inner, _ := tags(body)
 	note := "Background task"
-	if s := tag("status"); s != "" {
+	if s := inner["status"]; s != "" {
 		note += " " + s
 	}
-	if s := tag("summary"); s != "" {
+	if s := inner["summary"]; s != "" {
 		note += ": " + s
 	}
 	return note, true
@@ -486,13 +508,13 @@ func taskNote(text string) (string, bool) {
 
 // command is a slash command's message as the command and its arguments.
 func command(text string) string {
-	m := commandRe.FindStringSubmatch(text)
-	if m == nil {
+	t, ok := tags(text)
+	name := t["command-name"]
+	if !ok || name == "" {
 		return text
 	}
-	out := strings.TrimSpace(m[1])
-	if args := strings.TrimSpace(m[2]); args != "" {
-		out += "\n\n" + args
+	if args := t["command-args"]; args != "" {
+		name += "\n\n" + args
 	}
-	return out
+	return name
 }

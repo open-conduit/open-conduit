@@ -3,7 +3,7 @@
   <header class="page-head">
     <div>
       <h1>Needs you</h1>
-      <p class="page-sub">{{if and (not $d.Decisions) (not $d.Repairs)}}Nothing is blocked on you. Agents are working or waiting on their own.{{else}}{{len $d.Decisions}} waiting on a person, {{len $d.Repairs}} stopped and needing a repair. Everything else is moving on its own.{{end}}</p>
+      <p class="page-sub">{{if and (not $d.Decisions) (not $d.Repairs)}}Nothing is blocked on you.{{if or $d.Held $d.Watch $d.Receipts}} Agents are working or waiting on their own.{{end}}{{else}}{{len $d.Decisions}} waiting on a person, {{len $d.Repairs}} stopped and needing a repair. Everything else is moving on its own.{{end}}</p>
     </div>
   </header>
 
@@ -78,7 +78,7 @@
   {{- end}}
 
   {{- if not (or $d.Decisions $d.Repairs $d.Held $d.Watch $d.Receipts)}}
-  <div class="empty">{{mark "completed" 18 ""}}<h2>Nothing needs you</h2><p>Nothing needs a look. Answers, retries, holds and cancellations you make here are listed on this page with the exact API call.</p></div>
+  <div class="empty">{{mark "completed" 18 ""}}<h2>All clear</h2><p>Agents are working or waiting on their own. Answers, retries, holds and cancellations you make here are listed on this page with the exact API call.</p></div>
   {{- end}}
 
   {{- if $d.Receipts}}

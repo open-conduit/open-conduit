@@ -26,7 +26,7 @@ func (s *Server) palette(w http.ResponseWriter, r *http.Request) {
 	wd := s.cachedWorld(ctx, false)
 	var items []paletteItem
 	for _, v := range wd.Works {
-		items = append(items, paletteItem{Label: v.Label(), Hint: v.ScopeID + " · " + strings.ToLower(v.Disp.Label), Href: "/work?" + url.Values{"id": {v.ID}}.Encode(), Mark: string(markSVG(v.Disp.Kind, 12, "")), Find: v.Summary})
+		items = append(items, paletteItem{Label: v.Label(), Hint: joinDot(sourceLabel(v.Source), v.ScopeID, strings.ToLower(v.Disp.Label)), Href: "/work?" + url.Values{"id": {v.ID}}.Encode(), Mark: string(markSVG(v.Disp.Kind, 12, "")), Find: v.Summary})
 	}
 	for _, sc := range wd.Scopes {
 		items = append(items, paletteItem{Label: sc.Name, Hint: "scope", Href: "/config?" + url.Values{"scope": {sc.ID}}.Encode()})

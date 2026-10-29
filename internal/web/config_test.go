@@ -191,3 +191,28 @@ func TestConfigWithoutAGeneration(t *testing.T) {
 		t.Fatal("no fresh state")
 	}
 }
+
+// The doctor list shows what warns or fails; the rest are summed up.
+func TestDoctorSummary(t *testing.T) {
+	checks := func(statuses ...string) configData {
+		d := &client.Doctor{}
+		for i, s := range statuses {
+			d.Checks = append(d.Checks, client.Check{Name: itoa(i), Status: s})
+		}
+		return configData{Doctor: d}
+	}
+	for _, c := range []struct {
+		d       configData
+		flagged int
+		text    string
+	}{
+		{checks("ok", "info", "ok"), 0, "All 3 checks pass"},
+		{checks("ok"), 0, "The one check passes"},
+		{checks("warn", "ok"), 1, "1 other passes"},
+		{checks("fail", "warn", "ok", "info"), 2, "2 others pass"},
+	} {
+		if got := len(c.d.Flagged()); got != c.flagged || c.d.PassedText() != c.text {
+			t.Errorf("%d flagged, %q; want %d, %q", got, c.d.PassedText(), c.flagged, c.text)
+		}
+	}
+}

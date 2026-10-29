@@ -48,6 +48,7 @@ else the content of the confirmation page. */}}
     <h2 id="dlg-title">{{.Title}}</h2>
     {{- if .Part}}<button type="button" class="btn btn-quiet btn-icon" data-close aria-label="Close">✕</button>{{end}}
   </header>
+  {{- if and (ne .Action "ext") .W.Ref}}<p class="dialog-lede">{{.W.Title}}</p>{{end}}
   {{- if .Err}}
   <p class="callout">{{.Err}}</p>
   <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Close")}}</footer>

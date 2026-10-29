@@ -3,6 +3,7 @@ package integration_test
 import (
 	"context"
 	"errors"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -378,5 +379,40 @@ func TestBackfillDisplays(t *testing.T) {
 	})
 	if n, err = router.BackfillDisplays(ctx); err != nil || n != 0 || display("work/item") != nil {
 		t.Fatalf("second backfill gave %d: %v", n, err)
+	}
+}
+
+// A Work whose first Event alone says what it is (a busy thread's first
+// message) is named even when that Event is older than the tail the
+// backfill reads.
+func TestBackfillDisplaysFromTheFirstEvent(t *testing.T) {
+	ctx := context.Background()
+	giving := false
+	handler := routingHandlerFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
+		d, err := routingDecision(in)
+		if giving && in.Event.Event.ID == "first" {
+			d.Display = &domain.WorkDisplay{Title: "The thread's question"}
+		}
+		return d, err
+	})
+	f := routingFixture(t, "", routingOptions(handler, "queue"))
+	thread := domain.CorrelationKey{Source: "fixture/account", ExternalID: "thread"}
+	ids := []string{"first"}
+	for i := range 60 {
+		ids = append(ids, "reply-"+strconv.Itoa(i))
+	}
+	for _, id := range ids {
+		requireAccept(t, f, id, &thread)
+		requireRoute(t, f.Driver, domain.ID(id))
+	}
+	giving = true
+	n, err := f.Driver.(*routingDriver).router.BackfillDisplays(ctx)
+	if err != nil || n != 1 {
+		t.Fatalf("backfill gave %d displays: %v", n, err)
+	}
+	var w domain.Work
+	routingRead(t, f, func(tx storage.Tx) error { var e error; w, e = tx.Work("work/thread"); return e })
+	if w.Display == nil || w.Display.Title != "The thread's question" {
+		t.Fatalf("display %+v", w.Display)
 	}
 }
