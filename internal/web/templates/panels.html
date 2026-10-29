@@ -33,7 +33,7 @@ action's Event cannot be taken back. */}}
   {{- if not .Prompt}}
   <button class="btn btn-primary">{{.Label}}</button>
   {{- else if .Choices}}
-  <p class="xaction-label">{{.Label}}</p>
+  <p class="xaction-label">{{.Hint}}</p>
   <div class="xchoices" role="radiogroup" aria-label="{{.Label}}">
     {{- range .Choices}}<label class="xchoice"><input type="radio" name="input" value="{{.}}" required><span>{{.}}</span></label>{{end}}
   </div>

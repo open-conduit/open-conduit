@@ -57,6 +57,7 @@ func TestDisposition(t *testing.T) {
 		{name: "retries left is queued", work: client.Work{State: "ready"}, runs: []client.Run{retrying}, group: "queued", kind: "queued", detail: "Retrying after turn 1 failed"},
 		{name: "an operator-cancelled turn is a repair", work: client.Work{State: "ready"}, runs: []client.Run{turnRun(1, "cancelled", time.Hour, 2*time.Hour)}, group: "attention", kind: "repair", label: "Turn cancelled"},
 		{name: "waiting says what for", work: client.Work{State: "waiting"}, runs: []client.Run{turnRun(1, "parked", time.Hour, 2*time.Hour)}, wait: wait, group: "waiting", kind: "waiting", detail: "checks on PR #137", waiting: "github"},
+		{name: "a wait with progress", work: client.Work{State: "waiting"}, wait: &client.Wait{State: "active", Description: "checks on PR #137", Progress: "3 of 7 checks finished"}, group: "waiting", kind: "waiting", detail: "checks on PR #137 · 3 of 7 checks finished", waiting: "events"},
 		{name: "a wait on a timer alone", work: client.Work{State: "waiting"}, wait: &client.Wait{State: "active", TimeoutTimerID: "timer/1", Description: "until Mon 09:00"}, group: "waiting", kind: "waiting", detail: "until Mon 09:00", waiting: "time"},
 		{name: "a wait across sources", work: client.Work{State: "waiting"}, wait: &client.Wait{State: "active", Match: client.Match{Types: []string{"github.x", "slack.y"}}}, group: "waiting", kind: "waiting", waiting: "events"},
 		{name: "queued", work: client.Work{State: "ready"}, group: "queued", kind: "queued", detail: "Ready for the next turn"},

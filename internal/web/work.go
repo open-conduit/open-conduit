@@ -246,6 +246,9 @@ func dispositionOf(v workView, now time.Time) disposition {
 			if wt.Description != "" {
 				d.Detail = wt.Description
 			}
+			if wt.Progress != "" {
+				d.Detail = joinDot(wt.Description, wt.Progress)
+			}
 			d.Waiting = waitingOn(*wt)
 		}
 		return d
@@ -599,4 +602,15 @@ func (s *Server) needsYou(ctx context.Context) int {
 		}
 	}
 	return n
+}
+
+// joinDot joins the non-empty parts with " · ".
+func joinDot(parts ...string) string {
+	var out []string
+	for _, p := range parts {
+		if p != "" {
+			out = append(out, p)
+		}
+	}
+	return strings.Join(out, " · ")
 }

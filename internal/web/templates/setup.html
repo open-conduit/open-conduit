@@ -1,12 +1,86 @@
-{{define "content"}}{{$d := .Data}}
-<div class="page setup">
+{{define "content"}}{{$d := .Data}}{{$p := .Page}}
+<div class="page setup" data-live="setup">
+{{- with $d.Session}}{{$ss := .}}
+  <header class="setup-head">
+    <div>
+      <h1>Setup</h1>
+      <p class="page-sub">A Claude Code session running Open Conduit's setup playbook. It has no shell: it only talks and asks here, and <b>nothing it says changes your configuration</b>.</p>
+    </div>
+  </header>
+  <div class="setup-grid">
+    <section class="convo" aria-label="Conversation">
+      <div class="convo-meta">
+        <span>{{.Scope}}{{with .Model}} · {{.}}{{end}} · started {{at .Started}}</span>
+        <a class="link-btn" href="{{workHref .W.ID 0}}">Turns and transcript</a>
+      </div>
+      <div class="convo-scroll" aria-live="polite">
+        {{- range .Msgs}}
+        {{- if .Question}}
+        <div class="msg msg-agent">
+          <span class="who">Assistant asks</span>
+          <div class="msg-text">{{markdown .Text}}{{with .Context}}<p class="quiet small">{{.}}</p>{{end}}</div>
+        </div>
+        {{- if and .Open $ss.Answer}}{{with $ss.Answer}}
+        <form method="post" action="/actions" class="{{if $ss.Answer.Choices}}choices{{else}}composer composer-inline{{end}}" aria-label="Answer the question">
+          {{template "setup-hidden" .}}
+          {{- if .Choices}}{{range .Choices}}<button class="choice" name="input" value="{{.}}">{{.}}</button>{{end}}
+          {{- else}}<input name="input" required autocomplete="off" placeholder="Your answer" aria-label="Your answer"><button class="btn btn-primary">Answer</button>{{end}}
+        </form>
+        {{- end}}{{else if .Choices}}
+        <div class="choices" role="group" aria-label="Choices">{{$a := .Answer}}{{range .Choices}}<button type="button" class="choice{{if eq . $a}} is-on{{end}}" disabled>{{.}}</button>{{end}}</div>
+        {{- end}}
+        {{- else if .Operator}}
+        <div class="msg msg-user"><span class="who">You · {{at .At}}</span><div class="msg-text">{{.Text}}</div></div>
+        {{- else}}
+        <div class="msg msg-agent"><span class="who">Assistant · {{at .At}}</span><div class="msg-text">{{markdown .Text}}</div></div>
+        {{- end}}
+        {{- else}}
+        <p class="quiet">The assistant hasn't said anything yet.</p>
+        {{- end}}
+        {{- with .Busy}}
+        <div class="msg msg-agent is-typing"><span class="who">Assistant</span><span class="typing" role="status" aria-label="{{.}}"><i></i><i></i><i></i></span><span class="quiet small">{{.}}</span></div>
+        {{- end}}
+        {{- if eq .W.Disp.Group "attention"}}{{if eq .W.Disp.Kind "repair"}}
+        <div class="callout tone-fail"><strong>{{or .W.Disp.Label "The session's last turn failed"}}</strong>{{with .W.Disp.Detail}}<code>{{.}}</code>{{end}} <a href="{{workHref .W.ID 0}}">Open the Work to run it again</a></div>
+        {{- end}}{{end}}
+        {{- if eq .W.Disp.Group "closed"}}
+        <p class="quiet">This session ended {{since .W.Updated}}{{with .W.Summary}}: {{.}}{{end}}. <a href="/setup">Back to Setup</a></p>
+        {{- end}}
+      </div>
+      {{- with .Message}}
+      <form method="post" action="/actions" class="composer">
+        {{template "setup-hidden" .}}
+        <input name="input" required autocomplete="off" placeholder="{{if $ss.Answer}}Message the assistant — it reads this after you answer{{else}}Message the assistant{{end}}" aria-label="Message the assistant">
+        <button class="btn">Send</button>
+      </form>
+      {{- end}}
+    </section>
+    <aside class="bench" aria-label="Session">
+      <div class="bench-body">
+        <h2 class="section-rule">Session</h2>
+        <ul class="kv-list">
+          <li>{{mark .W.Disp.Kind 12 ""}}<b>{{or .W.Disp.Label .W.State}}</b><span>{{if ne .W.Disp.Detail .W.Disp.Label}}{{.W.Disp.Detail}}{{end}}</span></li>
+          <li><span></span><b>Scope</b><span><a href="/config?scope={{.W.ScopeID}}">{{.Scope}}</a></span></li>
+          {{- with .Model}}<li><span></span><b>Model</b><span>{{.}}</span></li>{{end}}
+          <li><span></span><b>Turns</b><span>{{len .W.Turns}}</span></li>
+        </ul>
+        {{- if ne .W.Disp.Group "closed"}}
+        <h2 class="section-rule">Changes</h2>
+        <p class="quiet">Changes the assistant proposes appear here for you to approve once the daemon supports change sets. Until then a session can't change the configuration; it can tell you what to run.</p>
+        <div class="row-gap"><a class="btn btn-quiet" href="{{confirmHref "cancel" .W $p.Back}}" data-action-dialog>End session</a></div>
+        <p class="bench-note">Ending a session cancels its Work. Its conversation stays here and on the Work page.</p>
+        {{- end}}
+      </div>
+    </aside>
+  </div>
+{{- else}}
   <header class="page-head">
     <div>
       <h1>Setup</h1>
       {{- if $d.Config.Scopes}}
       <p class="page-sub">Generation {{$d.Generation}} is active with {{plural (len $d.Config.Scopes) "scope"}}. The assistant builds on what's there; it never removes anything you didn't ask it to.</p>
       {{- else}}
-      <p class="page-sub">Nothing is set up yet. A Claude Code session running Open Conduit's setup playbook looks at this machine, explains what it finds and proposes a configuration; <b>you approve every change</b> before it's written.</p>
+      <p class="page-sub">Nothing is set up yet. A Claude Code session running Open Conduit's setup playbook looks at this machine, explains what it finds and asks what you want.</p>
       {{- end}}
     </div>
   </header>
@@ -23,11 +97,44 @@
     {{- end}}
     <section>
       <h2 class="section-rule">{{if $d.Config.Scopes}}Add or change{{else}}Start{{end}}</h2>
-      <p>Setup in the browser needs setup sessions in the daemon, which this version does not offer yet. Run the same assistant in a terminal:</p>
+      {{- if $d.Starting}}
+      <div class="msg msg-agent is-typing"><span class="typing" role="status" aria-label="Starting the session"><i></i><i></i><i></i></span><span class="quiet small">Starting the session. It appears here once the daemon has routed it; if it doesn't, check <a href="/">Runs</a>.</span></div>
+      {{- else if $d.Start}}{{with $d.Start}}
+      <form method="post" action="/actions" class="setup-start">
+        {{template "setup-hidden" .}}
+        <p>Start a session in <b>{{$d.StartScope}}</b>. The assistant looks around, explains what it finds and asks before anything is decided.</p>
+        {{- if .Choices}}
+        <fieldset class="xchoices" role="radiogroup">
+          <legend>{{or .Prompt "Model"}}</legend>
+          {{- range $i, $c := .Choices}}<label class="xchoice"><input type="radio" name="input" value="{{$c}}" required{{if eq $i 0}} checked{{end}}><span>{{$c}}</span></label>{{end}}
+        </fieldset>
+        {{- end}}
+        <div class="row-gap"><button class="btn btn-primary">{{.Label}}</button></div>
+      </form>
+      {{- end}}{{else if $d.Scopes}}
+      <p class="quiet">{{range $i, $s := $d.Scopes}}{{if $i}}, {{end}}<b>{{$s.Name}}</b>{{end}} {{if eq (len $d.Scopes) 1}}has{{else}}have{{end}} a setup entry, but no new session is offered. A scope runs one session at a time{{if $d.Past}}; the last one is below{{end}}.</p>
+      {{- else}}
+      <p>Setup in the browser runs in a scope with a <code>setup</code> entry, and this configuration has none. Run the same assistant in a terminal:</p>
       <pre class="code-block">open-conduit init --with claude</pre>
       <p>It starts Claude Code with the setup playbook in this folder. It asks before it writes the config, and <code>open-conduit config validate</code> and <code>open-conduit doctor</code> check the result. To change one value by hand, use <code>open-conduit config set</code>.</p>
       <p><a href="{{$d.QuickStart}}">The quick start</a> covers setting up with Claude or by hand.</p>
+      {{- end}}
     </section>
+    {{- with $d.Past}}
+    <section>
+      <h2 class="section-rule">Earlier sessions</h2>
+      <ul class="kv-list">
+        {{- range .}}
+        <li>{{mark .Disp.Kind 12 ""}}<b><a href="/setup?session={{.ID}}">{{at .Created}}</a></b><span>{{.Disp.Label}}{{with .Summary}} · {{.}}{{end}}</span></li>
+        {{- end}}
+      </ul>
+    </section>
+    {{- end}}
   </div>
+{{- end}}
 </div>
 {{end}}
+
+{{define "setup-hidden"}}<input type="hidden" name="csrf" value="{{.Page.CSRF}}"><input type="hidden" name="back" value="{{.Return}}">
+{{- if .WorkID}}<input type="hidden" name="work" value="{{.WorkID}}">{{else}}<input type="hidden" name="scope" value="{{.ScopeID}}">{{end}}
+<input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">{{end}}

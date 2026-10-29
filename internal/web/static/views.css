@@ -3857,3 +3857,19 @@ a.chip,
 a.btn {
   text-decoration: none;
 }
+.setup-start fieldset {
+  border: 0;
+  padding: 0;
+  margin: 12px 0;
+}
+.setup-start legend {
+  font-size: var(--t-small);
+  color: var(--ink-2);
+  margin-bottom: 6px;
+}
+.setup-start legend::first-letter {
+  text-transform: uppercase;
+}
+.bench-body .section-rule:not(:first-child) {
+  margin-top: 22px;
+}

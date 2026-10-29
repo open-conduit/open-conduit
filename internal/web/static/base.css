@@ -824,6 +824,7 @@ input[type='radio'] {
 }
 .toast {
   position: relative;
+  min-width: 0;
   background: var(--ink);
   color: var(--paper);
   padding: 11px 36px 11px 14px;

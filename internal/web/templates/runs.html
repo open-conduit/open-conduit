@@ -10,7 +10,7 @@
         {{- if eq $d.Total 0 -}}
         No work yet. Watching {{plural $d.Watching "scope"}}; new issues, threads and schedule firings appear here.
         {{- else -}}
-        {{$d.Total}} pieces of work across {{plural $d.Scopes "scope"}}.
+        {{$d.Total}} {{if eq $d.Total 1}}piece{{else}}pieces{{end}} of work across {{plural $d.Scopes "scope"}}.
         {{- if $d.Attention}} <a href="/attention" class="sub-signal">{{$d.Attention}} need you</a>{{end}}
         {{- if and $d.Attention $d.Running}},{{end}}
         {{- if $d.Running}} {{$d.Running}} running now{{end}}
@@ -122,7 +122,7 @@
         <p>No open questions, failed retries or broken bindings. Agents are working or waiting on their own.</p>
         {{- else}}
         <h2>No work matches</h2>
-        <p>{{if eq $d.Faceted 0}}Your filters exclude everything.{{else}}{{$d.Faceted}} pieces of work match your filters, but none are {{$d.GroupLabel}}.{{end}}</p>
+        <p>{{if eq $d.Faceted 0}}Your filters exclude everything.{{else}}{{$d.Faceted}} {{if eq $d.Faceted 1}}piece of work matches{{else}}pieces of work match{{end}} your filters, but none are {{$d.GroupLabel}}.{{end}}</p>
         <div class="row-gap">
           {{- if $d.Tokens}}<a class="btn" href="{{$d.ClearHref}}">Clear filters</a>{{end}}
           {{- if ne $d.Query.G "all"}}<a class="btn btn-quiet" href="{{$d.AllHref}}">Show every state</a>{{end}}

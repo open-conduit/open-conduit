@@ -270,14 +270,21 @@ document.addEventListener("keydown", (e) => {
 // ---- Live regions ----
 // A [data-live] region is redrawn from the same URL every few seconds while
 // the tab is visible, unless something in it has focus, a dialog or menu
-// is open, or a checkbox in it is ticked: a refresh never takes what the
-// operator is doing away.
+// is open, a checkbox in it is ticked or the operator picked a radio or
+// select option in it: a refresh never takes what the operator is doing
+// away.
 const live = [...document.querySelectorAll("[data-live]")];
+// A choice the operator changed in a region keeps it from being redrawn.
+document.addEventListener("change", (e) => {
+  if (!e.target.matches || !e.target.matches("input[type=radio], select")) return;
+  const r = e.target.closest("[data-live]");
+  if (r) r.dataset.changed = "1";
+});
 if (live.length) {
   setInterval(async () => {
     if (document.hidden || document.querySelector("dialog[open], details.menu-wrap[open]")) return;
     if (live.some((r) => r.contains(document.activeElement) && typing(document.activeElement))) return;
-    if (live.some((r) => r.querySelector("input[type=checkbox]:checked"))) return;
+    if (live.some((r) => r.querySelector("input[type=checkbox]:checked") || r.dataset.changed)) return;
     try {
       const res = await fetch(location.href, { credentials: "same-origin" });
       if (!res.ok) return;

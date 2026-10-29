@@ -369,7 +369,7 @@ func waitedFor(prev, t turnInfo, waits []client.Wait) string {
 	}
 	for _, w := range waits {
 		if w.ExecutionID == prev.ID && w.Description != "" {
-			return "waiting · " + w.Description
+			return "waiting · " + joinDot(w.Description, w.Progress)
 		}
 	}
 	if prev.Outcome != nil && prev.Outcome.Kind != "" && prev.Outcome.Kind != "completed" {
