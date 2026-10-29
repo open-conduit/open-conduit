@@ -524,6 +524,7 @@ a.st-item:hover {
 .field input,
 .field select,
 .composer input,
+.composer textarea,
 .tx-search {
   height: 34px;
   padding: 0 10px;
@@ -540,6 +541,7 @@ a.st-item:hover {
   margin: 0;
 }
 input:focus-visible,
+textarea:focus-visible,
 select:focus-visible {
   outline: 2px solid var(--focus);
   outline-offset: 0;

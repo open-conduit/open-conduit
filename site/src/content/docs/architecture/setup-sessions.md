@@ -183,7 +183,7 @@ Each step landed with its tests and the page amendments above:
 2. Change sets: propose, withdraw, decide (including Approve all), validate, the candidate route, `config_text`, and the applied hook, with the operator-only test (`TestDaemonSetupChangeSet`: the session's own execution token is refused by apply, the candidate route, validate and the action routes, apply-shaped operation input is refused, and the generation is unchanged).
 3. Probes: `extension.SetupProbes`, the setup, `claude-code` and `github` probes, `setup.read`, the secret scanner, and `setup.trace` against the candidate.
 4. The playbook's session mode.
-5. The web view's Setup page, built from the session's Events and panels ([observability](../observability-history/)).
+5. The web view's Setup page, built from the session's Events and panels ([observability](../observability-history/)). The conversation and the session panel redraw as live regions of their own, with the message box outside them, so typing never holds back a reply. The page stays at the newest message while the operator is at the bottom and leaves them where they are once they scroll up. The message and answer boxes are textareas that grow, sending on Enter, with Shift+Enter for a new line, and an operator's line breaks are kept in the conversation.
 
 Not built: naming scopes when a session starts, the operator's `doctor` action with secrets checked recorded as `setup.checks`, and the sign-in state on the `claude_code` doctor check.
 
