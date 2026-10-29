@@ -153,6 +153,66 @@ type AttemptState struct {
 	Segments        []Segment     `json:",omitempty"`
 	DroppedSegments int           `json:",omitempty"`
 	DroppedActive   time.Duration `json:",omitempty"`
+	// EarlierUsage sums the usage of the segments before the current one.
+	// Result holds only the latest segment's result, so a resume, or a
+	// timeout replacing a parked result, moves its usage here; Usage reports the two together as the attempt's usage.
+	EarlierUsage *extension.Usage `json:",omitempty"`
+}
+
+// Usage is the attempt's usage across all its segments.
+func (state AttemptState) Usage() extension.Usage {
+	var u extension.Usage
+	if state.EarlierUsage != nil {
+		u = *state.EarlierUsage
+	}
+	if state.Result != nil {
+		u = addUsage(u, state.Result.Usage)
+	}
+	return u
+}
+
+// carryUsage moves the finished segment's usage into EarlierUsage, so the
+// resumed segment's result adds to it rather than replacing it.
+func (state *AttemptState) carryUsage() {
+	if state.Result == nil {
+		return
+	}
+	u := state.Usage()
+	if !usageEmpty(u) {
+		state.EarlierUsage = &u
+	}
+	state.Result.Usage = extension.Usage{}
+}
+
+// addUsage sums two measurements. A count either side lacks is the other
+// side's; costs in different currencies cannot be summed, so their sum is
+// unknown.
+func addUsage(a, b extension.Usage) extension.Usage {
+	count := func(x, y *uint64) *uint64 {
+		if x == nil {
+			return y
+		}
+		if y == nil {
+			return x
+		}
+		n := *x + *y
+		return &n
+	}
+	out := extension.Usage{InputTokens: count(a.InputTokens, b.InputTokens), OutputTokens: count(a.OutputTokens, b.OutputTokens), CachedTokens: count(a.CachedTokens, b.CachedTokens)}
+	switch {
+	case a.Cost == nil:
+		out.Cost, out.Currency = b.Cost, b.Currency
+	case b.Cost == nil:
+		out.Cost, out.Currency = a.Cost, a.Currency
+	case a.Currency == b.Currency:
+		c := *a.Cost + *b.Cost
+		out.Cost, out.Currency = &c, a.Currency
+	}
+	return out
+}
+
+func usageEmpty(u extension.Usage) bool {
+	return u.InputTokens == nil && u.OutputTokens == nil && u.CachedTokens == nil && u.Cost == nil
 }
 
 // MaxSegments bounds the segments an attempt keeps; a standing turn can
@@ -751,6 +811,7 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 		state.LaunchState = "launching"
 		if parked != "" {
 			state.LaunchState = "resuming"
+			state.carryUsage()
 		}
 		// A parked attempt from before segments were recorded stays without
 		// them: one resume-to-finish segment would understate its active time.
@@ -1131,6 +1192,7 @@ func (s *Scheduler) Timeout(ctx context.Context, ref domain.LeaseRef) error {
 		result := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "execution timed out"}}
 		state.Excluded = false
 		state.LaunchState = "timed_out"
+		state.carryUsage()
 		state.Result = &result
 		if err = putAttemptState(tx, state); err != nil {
 			return err
