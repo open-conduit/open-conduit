@@ -66,13 +66,25 @@ type setupSession struct {
 	Msgs    []setupMsg
 	// Message and Answer are the session's actions, when offered.
 	Message, Answer *actionView
+	// Changes is the session's change set, once the assistant proposes.
+	Changes *setupChanges
+	// Applied is the generation the session's changes last became, and
+	// Doctor the daemon's checks read since.
+	Applied string
+	Doctor  *client.Doctor
 }
+
+// CheckMark is the mark for a doctor check's status.
+func (*setupSession) CheckMark(status string) string { return configData{}.CheckMark(status) }
 
 // setupMsg is one line of the conversation.
 type setupMsg struct {
 	Operator bool
 	Text     string
 	At       time.Time
+	// Note is a change set Event drawn as a short line: a proposal, a
+	// decision, a validation or an apply.
+	Note bool
 	// A question carries its context and choices; Open says it is the one
 	// the session waits on, and Answer what the operator answered.
 	Question bool
@@ -190,6 +202,19 @@ func (s *Server) setupConversation(ctx context.Context, p *page, v workView, ent
 		return err
 	}
 	ss.Msgs = setupMsgs(events)
+	for _, e := range events {
+		if e.Type == setupTypeApplied && e.Data != nil {
+			var a struct{ Generation string }
+			if json.Unmarshal(e.Data.Data, &a) == nil && a.Generation != "" {
+				ss.Applied = a.Generation
+			}
+		}
+	}
+	if ss.Applied != "" {
+		if doc, err := s.src.Doctor(ctx, false); err == nil {
+			ss.Doctor = &doc
+		}
+	}
 	if v.Disp.Group == "closed" {
 		return nil
 	}
@@ -197,7 +222,14 @@ func (s *Server) setupConversation(ctx context.Context, p *page, v workView, ent
 	if err != nil && !tooOld(err) {
 		return err
 	}
-	back := "/setup?" + url.Values{"session": {v.ID}}.Encode()
+	back := setupBack(v.ID)
+	panels, err := s.src.Panels(ctx, client.ActionTarget{WorkID: v.ID})
+	if err != nil && !tooOld(err) {
+		return err
+	}
+	ss.Changes = setupChangeSet(panels, actions, entry, func(a client.Action) *actionView {
+		return &actionView{Action: a, Page: p, WorkID: v.ID, Back: back}
+	})
 	if a, ok := setupAction(actions, entry, setupMessage); ok {
 		ss.Message = &actionView{Action: a, Page: p, WorkID: v.ID, Back: back}
 	}
@@ -263,6 +295,10 @@ func setupMsgs(events []client.Event) []setupMsg {
 				out[i].Answer = a.Answer
 			}
 			out = append(out, setupMsg{Operator: true, Text: a.Answer, At: at})
+		case setupTypeProposal, setupTypeDecision, setupTypeChecks, setupTypeApplied:
+			if line, ok := setupNote(e); ok {
+				out = append(out, setupMsg{Note: true, Text: line, At: at})
+			}
 		}
 	}
 	return out

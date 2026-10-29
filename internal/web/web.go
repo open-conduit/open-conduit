@@ -77,6 +77,8 @@ type Source interface {
 	ReconcileScope(ctx context.Context, id, revision, key string) (client.ReconcileResult, error)
 	Wake(ctx context.Context, id string, r client.WakeRequest, key string) (client.WakeResult, error)
 	Doctor(ctx context.Context, checkSecrets bool) (client.Doctor, error)
+	WorkConfigCandidate(ctx context.Context, work string) (client.ConfigCandidate, error)
+	ApplyConfigText(ctx context.Context, text []byte, hash, generation, key string) (client.ConfigApplied, error)
 }
 
 var _ Source = (*client.Client)(nil)
@@ -261,6 +263,7 @@ func (s *Server) Handler(addr string) http.Handler {
 	mux.HandleFunc("POST /work/{control}", s.authed(s.changed(s.workControl)))
 	mux.HandleFunc("POST /run/cancel", s.authed(s.changed(s.cancelRun)))
 	mux.HandleFunc("POST /actions", s.authed(s.changed(s.invokeAction)))
+	mux.HandleFunc("POST /setup/apply", s.authed(s.changed(s.setupApply)))
 	mux.HandleFunc("POST /scopes/reconcile", s.authed(s.changed(s.reconcileScope)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()
