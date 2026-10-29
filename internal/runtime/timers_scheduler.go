@@ -148,6 +148,7 @@ func rejectExecutionTimeoutInTx(tx storage.Tx, now time.Time, event domain.Event
 	}
 	state.Excluded = false
 	state.LaunchState = "timed_out"
+	state.carryUsage()
 	state.Result = &result
 	if err = putAttemptState(tx, state); err != nil {
 		return err
@@ -280,6 +281,7 @@ func (s *Scheduler) ProcessExecutionTimeout(ctx context.Context, eventID domain.
 		result := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "execution timed out"}}
 		current.Excluded = false
 		current.LaunchState = "timed_out"
+		current.carryUsage()
 		current.Result = &result
 		if e = putAttemptState(tx, current); e != nil {
 			return e

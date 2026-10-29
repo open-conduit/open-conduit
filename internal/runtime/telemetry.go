@@ -656,9 +656,8 @@ func (r *recorder) executionRecords(add func(observability.Record), before *doma
 				attrs["execution.stop_state"] = state.LaunchState
 			}
 			attrs["execution.resource_excluded"] = strconv.FormatBool(state.Excluded)
-			if state.Result != nil {
-				usage = measurement(state.Result.Usage.InputTokens, state.Result.Usage.OutputTokens, state.Result.Usage.CachedTokens, state.Result.Usage.Cost, state.Result.Usage.Currency)
-			}
+			u := state.Usage()
+			usage = measurement(u.InputTokens, u.OutputTokens, u.CachedTokens, u.Cost, u.Currency)
 		}
 		add(observability.Record{Name: name, Correlation: c, From: string(before.State), To: string(after.State), Attributes: attrs, Usage: usage})
 	}

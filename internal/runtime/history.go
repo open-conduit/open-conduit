@@ -84,11 +84,10 @@ func runInTx(tx storage.Tx, x domain.Execution, works map[domain.ID]domain.Work)
 		if state.CurrentTriggerID != "" && state.CurrentTriggerID != x.TriggerID {
 			run.CurrentTrigger = envelope(tx, state.CurrentTriggerID)
 		}
+		if u := state.Usage(); !usageEmpty(u) {
+			run.Usage = &u
+		}
 		if state.Result != nil {
-			u := state.Result.Usage
-			if u.InputTokens != nil || u.OutputTokens != nil || u.CachedTokens != nil || u.Cost != nil {
-				run.Usage = &u
-			}
 			run.Workspace = state.Result.Workspace
 		}
 	}

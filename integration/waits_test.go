@@ -1165,6 +1165,61 @@ func TestProductionResumedRunReportsActiveSegments(t *testing.T) {
 	}
 }
 
+// A parked-then-resumed attempt's usage is the sum of its segments':
+// the resumed segment's result adds to the parked one's, never replaces it.
+func TestProductionResumedRunSumsSegmentUsage(t *testing.T) {
+	ctx := context.Background()
+	f := waitFixture(t, "reopen", waitOptions(true))
+	d := f.Driver.(*waitDriver)
+	work := seedSchedulerWork(t, f, "segment-usage")
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "segment-usage"}
+	attempt, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	usage := func(in, out uint64, cost float64) extension.Usage {
+		return extension.Usage{InputTokens: &in, OutputTokens: &out, Cost: &cost, Currency: "USD"}
+	}
+	wait := domain.Wait{ID: "segment-usage-wait", AfterSequence: 1, Match: domain.EventMatch{Keys: []domain.CorrelationKey{key}, Types: []string{"fixture.changed"}}}
+	parked := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeWaiting, Summary: "parked"}, Usage: usage(100, 865, 0.25)}
+	if err = d.scheduler.WaitWithResult(ctx, attempt.Lease, wait, true, parked); err != nil {
+		t.Fatal(err)
+	}
+	run := func() runtime.Run {
+		var r runtime.Run
+		routingRead(t, f, func(tx storage.Tx) error {
+			var e error
+			r, e = runtime.RunInTx(tx, attempt.Lease.ExecutionID)
+			return e
+		})
+		return r
+	}
+	check := func(when string, in, out uint64, cost float64) {
+		t.Helper()
+		u := run().Usage
+		if u == nil || u.InputTokens == nil || *u.InputTokens != in || u.OutputTokens == nil || *u.OutputTokens != out || u.Cost == nil || *u.Cost != cost || u.Currency != "USD" {
+			t.Fatalf("%s usage: %+v", when, u)
+		}
+	}
+	check("parked", 100, 865, 0.25)
+	requireAccept(t, f, "segment-usage-wake", &key)
+	if err = d.Wake("segment-usage-wait"); err != nil {
+		t.Fatal(err)
+	}
+	resumed, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if resumed.Lease.ExecutionID != attempt.Lease.ExecutionID {
+		t.Fatalf("resume started a new attempt: %s", resumed.Lease.ExecutionID)
+	}
+	check("resumed", 100, 865, 0.25)
+	if err = d.scheduler.Complete(ctx, resumed.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: usage(20, 499, 0.125)}); err != nil {
+		t.Fatal(err)
+	}
+	check("finished", 120, 1364, 0.375)
+}
+
 // A recovered attempt's segments count lease-held time as its deadline
 // budget does: recovery keeps the deadline, so the lost-lease gap stays in
 // the interrupted segment, and a recovered segment starts with no gap.

@@ -94,7 +94,7 @@ Delivery is at most once, from memory: records still queued at a crash are lost 
 
   Identifiers never become metric attributes.
 
-`telemetry.LogExporter` writes the same records as local JSON lines, for operation without a collector. Executors report cost and tokens through `extension.Result.Usage` on their structured outcome. The usage appears as `Usage` on the terminal record and in run history.
+`telemetry.LogExporter` writes the same records as local JSON lines, for operation without a collector. Executors report cost and tokens through `extension.Result.Usage` on their structured outcome. The usage appears as `Usage` on the terminal record and in run history. Each result reports its own segment's usage; an attempt that parks and resumes reports the sum of its segments, kept in attempt state as `EarlierUsage` beside the latest result.
 
 Host watch and telemetry events are extension adapters on the public observability contract, with no runtime branch ([introspection](../issue-reporting/)):
 
