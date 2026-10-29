@@ -1,6 +1,7 @@
 package introspection
 
 import (
+	"context"
 	"encoding/json"
 	"time"
 
@@ -22,11 +23,12 @@ func sampleEvent(typ string, key domain.CorrelationKey, schema string, payload a
 
 // Samples offers a new report, a daily sweep and triage coming due, and a
 // requested fix.
-func (Route) Samples(scope domain.Scope, _ domain.Route) []extension.RouteSample {
+func (Route) Samples(_ context.Context, in extension.SampleInput) []extension.RouteSample {
+	scope := in.Scope
 	if !Enabled(scope) {
 		return nil
 	}
-	now := time.Now().UTC().Truncate(time.Second)
+	now := in.Now.UTC().Truncate(time.Second)
 	epoch := now.Format("2006-01-02")
 	report := ReportKey(scope.ID, "example")
 	fix := FixKey(scope.ID, "example")

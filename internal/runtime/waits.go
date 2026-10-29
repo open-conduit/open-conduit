@@ -376,23 +376,10 @@ func WakeWaitInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.I
 		return "", err
 	}
 	if x.State == domain.ExecutionParked {
-		parent, er := executionTriggerInTx(tx, x)
+		parent, bridge, er := wakeBridgeInTx(tx, now, limits, wait, x, winner.Event.ID, true)
 		if er != nil {
 			return "", er
 		}
-		previousInfo, er := ancestry(tx, parent, limits)
-		if er != nil {
-			return "", er
-		}
-		winnerInfo, er := ancestry(tx, winner.Event.ID, limits)
-		if er != nil {
-			return "", er
-		}
-		if winnerInfo.Root == previousInfo.Root && winnerInfo.Depth >= previousInfo.Depth {
-			parent = winner.Event.ID
-		}
-		data, _ := json.Marshal(struct{ WaitID, WinnerID domain.ID }{wait.ID, winner.Event.ID})
-		bridge := domain.Event{ID: domain.ID("wait-woken/" + identity(string(wait.ID))), Type: "core.wait.woken", Source: "core.wait", DeliveryID: "woken/" + string(wait.ID), WorkID: work.ID, ExecutionID: x.ID, CausationID: parent, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: "core.wait.woken.v1", Data: data}}
 		accepted, _, er := AcceptDerivedInTx(tx, now, limits, work.ScopeID, parent, bridge)
 		if errors.Is(er, ErrCausalRejected) {
 			meta.Blocked = true
@@ -494,6 +481,55 @@ func WakeWaitInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.I
 		return "", err
 	}
 	return winner.Event.ID, nil
+}
+
+// wakeBridgeInTx is the core.wait.woken bridge that wakes the parked attempt
+// x with winner, and the parent it derives from: the attempt's trigger, or
+// the winner when it continues the trigger's chain at least as deep. A winner
+// that is not accepted (accepted false: a route trace's hypothetical Event)
+// is a new root, so the bridge derives from the trigger.
+func wakeBridgeInTx(tx storage.Tx, now time.Time, limits CausalLimits, wait domain.Wait, x domain.Execution, winner domain.ID, accepted bool) (domain.ID, domain.Event, error) {
+	parent, err := executionTriggerInTx(tx, x)
+	if err != nil {
+		return "", domain.Event{}, err
+	}
+	if accepted {
+		previousInfo, err := ancestry(tx, parent, limits)
+		if err != nil {
+			return "", domain.Event{}, err
+		}
+		winnerInfo, err := ancestry(tx, winner, limits)
+		if err != nil {
+			return "", domain.Event{}, err
+		}
+		if winnerInfo.Root == previousInfo.Root && winnerInfo.Depth >= previousInfo.Depth {
+			parent = winner
+		}
+	}
+	data, _ := json.Marshal(struct{ WaitID, WinnerID domain.ID }{wait.ID, winner})
+	bridge := domain.Event{ID: domain.ID("wait-woken/" + identity(string(wait.ID))), Type: "core.wait.woken", Source: "core.wait", DeliveryID: "woken/" + string(wait.ID), WorkID: wait.WorkID, ExecutionID: x.ID, CausationID: parent, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: "core.wait.woken.v1", Data: data}}
+	return parent, bridge, nil
+}
+
+// wakeRefusalInTx is, without writing, the causal-limit reason
+// WakeWaitInTx would refuse the bridge that wakes wait's attempt with winner
+// ("depth_limit", "rate_limit"), or "" when the wake would go through or the
+// attempt is not parked (only a parked attempt needs a bridge).
+func wakeRefusalInTx(tx storage.Tx, now time.Time, limits CausalLimits, wait domain.Wait, winner domain.ID, accepted bool) (string, error) {
+	x, err := tx.Execution(wait.ExecutionID)
+	if err != nil || x.State != domain.ExecutionParked {
+		return "", err
+	}
+	parent, bridge, err := wakeBridgeInTx(tx, now, limits, wait, x, winner, accepted)
+	if err != nil {
+		return "", err
+	}
+	_, _, _, err = checkCausal(tx, now, limits, parent, "", bridge)
+	var refused *causalError
+	if errors.As(err, &refused) {
+		return refused.diagnostic.Reason, nil
+	}
+	return "", err
 }
 
 // waitCandidatesInTx is the accepted input that may wake wait, in acceptance

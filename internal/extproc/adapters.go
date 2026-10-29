@@ -115,8 +115,19 @@ func (i *remoteIngress) Reconcile(ctx context.Context, s extension.Scan) (extens
 
 // RouteHandler returns the route handler adapter. An event whose payload
 // schema the running manifest cannot read is answered "no match" by the
-// host without a call, so the outcome is deterministic.
+// host without a call, so the outcome is deterministic. A handler the
+// manifest declares with samples is also an extension.RouteSampler.
 func (r *Remote) RouteHandler(handler string) extension.RouteHandler {
+	match := r.routeMatch(handler)
+	for _, d := range r.m.Provides.Routes {
+		if d.Handler == handler && d.Samples {
+			return remoteSampler{routeFunc: match, r: r, handler: handler}
+		}
+	}
+	return match
+}
+
+func (r *Remote) routeMatch(handler string) routeFunc {
 	return routeFunc(func(ctx context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 		if !r.readable(in.Event.Event.Data) {
 			return extension.Skip("the extension does not read this event's data schema"), nil
@@ -140,6 +151,32 @@ func (r *Remote) RouteHandler(handler string) extension.RouteHandler {
 }
 
 type routeFunc func(context.Context, extension.RouteInput) (extension.RouteDecision, error)
+
+// remoteSampler carries route.samples. Samples are an aid to a route trace,
+// so a failed call or a sample whose payload the extension may not write is
+// logged and left out rather than failing the list.
+type remoteSampler struct {
+	routeFunc
+	r       *Remote
+	handler string
+}
+
+func (s remoteSampler) Samples(ctx context.Context, in extension.SampleInput) []extension.RouteSample {
+	var out protocol.RouteSamplesResult
+	if err := s.r.p.Call(ctx, "route.samples", protocol.RouteSamplesParams{Handler: s.handler, Scope: protocol.FromScope(in.Scope), Route: protocol.FromRoute(in.Route), Now: in.Now}, &out); err != nil {
+		s.r.p.o.Log.Warn("extension route samples failed", "extension", s.r.m.Name, "handler", s.handler, "reason", err.Error())
+		return nil
+	}
+	var samples []extension.RouteSample
+	for _, x := range out.Samples {
+		if err := s.r.m.CheckWrite(x.Event.Data.Domain()); err != nil {
+			s.r.p.o.Log.Warn("extension route sample dropped", "extension", s.r.m.Name, "handler", s.handler, "sample", x.ID, "reason", err.Error())
+			continue
+		}
+		samples = append(samples, x.Extension())
+	}
+	return samples
+}
 
 func (f routeFunc) Match(ctx context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	return f(ctx, in)

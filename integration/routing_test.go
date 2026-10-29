@@ -178,7 +178,7 @@ func routingFixture(t *testing.T, mode string, o conformance.RuntimeOptions) con
 	}); err != nil {
 		t.Fatal(err)
 	}
-	options := runtime.RouterOptions{Generation: "fixture-generation", Handlers: handlers, Bindings: map[string]runtime.RouteBinding{"fixture": {Capabilities: o.Capabilities, Fallback: o.Fallback, Executor: routingFixtureExecutor{o.Capabilities}}}}
+	options := runtime.RouterOptions{Generation: "fixture-generation", Handlers: handlers, CausalLimits: runtime.CausalLimits{MaxDepth: o.MaxDepth, PerMinute: o.PerMinute}, Bindings: map[string]runtime.RouteBinding{"fixture": {Capabilities: o.Capabilities, Fallback: o.Fallback, Executor: routingFixtureExecutor{o.Capabilities}}}}
 	makeDriver := func() *routingDriver {
 		r, err := runtime.NewRouter(backend, clock.Now, options)
 		i, ie := runtime.NewIngress(backend, clock.Now, runtime.IngressOptions{})

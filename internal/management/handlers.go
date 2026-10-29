@@ -340,6 +340,15 @@ func (s *Server) traceRoute(c *call) (int, any, error) {
 	}
 	now := s.o.Now()
 	e := domain.Event{ID: "trace", Type: in.Type, Source: source, DeliveryID: "trace", WorkID: domain.ID(in.WorkID), CorrelationKey: in.CorrelationKey.domain(), Data: in.Data.domain(), OccurredAt: now, ReceivedAt: now}
+	// A trace refuses what acceptance would refuse, so it never explains
+	// an Event that could not happen.
+	err := runtime.CheckTraceEvent(e)
+	if err == nil && s.o.AdmitTrace != nil {
+		err = s.o.AdmitTrace(domain.ID(c.params[0]), e)
+	}
+	if err != nil {
+		return 0, nil, fail(422, "invalid_request", "acceptance would refuse this event: "+err.Error())
+	}
 	t, err := s.o.Control.TraceRoute(c.ctx, domain.ID(c.params[0]), e)
 	if err != nil {
 		return 0, nil, err

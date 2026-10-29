@@ -32,7 +32,7 @@ The table groups what the first-party code actually does across the host boundar
 | Ingress push | `Ingress.Push` behind host-mounted `WebhookHandler`s (verify, then push; 2xx only after durable acceptance) | GH SL TR BB SC | `webhook.handle`, `ingress.push` |
 | Ingress reconcile | `Ingress.Reconcile`, driven by `ReconcileDue` with page timeout and item/byte limits | GH SL TR BB SC | `ingress.reconcile` |
 | Extension-owned receiver | Slack Socket Mode calls the host push func and acks the envelope only after it returns | SL | `ingress.deliver` (E→H) |
-| Routing | `RouteHandler.Match` on a detached snapshot, outside any transaction, with an optional Work display | GH SL TR BB SC IS | `route.match` |
+| Routing | `RouteHandler.Match` on a detached snapshot, outside any transaction and free of side effects, with an optional Work display. `RouteSampler.Samples` offers named sample Events for a route trace | GH SL TR BB SC IS | `route.match`, `route.samples` |
 | Work kind policy | `WorkKindPolicy{Standing, Trigger}`. `Trigger` is pure and runs in the start transaction | SC (IS standing only) | manifest `work_kinds`, `work_kind.trigger` |
 | Calendar recurrence | `RecurrenceFunc` in the timer fire-and-rearm transaction. `Armer.ArmRecurrence/Cancel` from `Ensure` | SC IS | `recurrence.next`, `timer.arm`, `timer.cancel` |
 | Toolbelt operations | `Registration{Name, EventTypes, Operations, DependencyFilter}`. `Operation.Handler` (all), `.Wait` (GH), `.Emit` with in-transaction `Commit` (IS) | GH SL TR BB IS | `operation.call`, `operation.wait`, `operation.emit`, `emit.commit`, `dependency.filter` |
@@ -210,6 +210,7 @@ A broken pipe or process exit fails every pending request with a transport error
 | `ingress.deliver` (receiver) | The extension acknowledges upstream only after the host's answer. A crash before that leaves the delivery unacknowledged, and the service redelivers. |
 | `ingress.reconcile` | Partial scan: no absence is inferred and no checkpoint advances. The runtime retries the generation. |
 | `route.match` | The routing pass fails and the Event stays pending. Routing is deterministic and retried. |
+| `route.samples` | That handler's samples are left out of the list, which the operator can ask for again. |
 | `operation.call` / `.wait` / `.emit` | The toolbelt caller gets a retryable internal error. Its `request_id` makes the retry idempotent. A declared wait or emission either committed or did not. |
 | In-transaction method | The transaction aborts and is retried after restart. |
 | `executor.*` | The extension's crash is not the execution's failure. After restart the host calls `executor.recover` with the persisted recovery metadata, as after a daemon restart. `not_adoptable` leads to `executor.stop`, `ConfirmStopped` and retry policy. Old per-execution tokens stay fenced by lease epoch. |
@@ -387,6 +388,12 @@ Ingress identity is part of evolution. Core binds an observation's `(item, versi
   - discovery and atomic conflicts;
   - executor lease fencing across restarts, through the real scheduler.
 - **Unit tests.** `protocol/evolution_test.go`, `protocol/jsonrpc/conn_test.go`, `protocol/sdk/sdk_test.go` and `internal/extproc/process_test.go`.
+
+## Route traces
+
+A route trace (`POST /v1/scopes/{id}/route/trace`, `open-conduit route --trace`) asks every route how it would decide a hypothetical Event, so `route.match` is called for Events that never happen, as often as an operator asks. A handler must therefore be free of side effects: it decides from its input alone and records, sends, counts and caches nothing. Routing may also call it again for the same Event after a revision conflict. The `reason` it returns explains the verdict in a trace and never changes the decision.
+
+A handler declared with `"samples": true` in `provides.routes` also answers `route.samples` (`extension.RouteSampler`): given the scope, the route and the host's clock (`now`), it returns named sample Events (`id`, `title`, `event`) that `GET /v1/scopes/{id}/route/samples` and `open-conduit route --samples` offer for a trace. A sample whose data carries a time writes it as of `now`, not the process's own clock, so it traces the same under a test clock or skew. The host drops a sample whose payload the extension may not write (`Manifest.CheckWrite`). Like `route.match`, it must be free of side effects.
 
 ## Work display and wait descriptions
 
