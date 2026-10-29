@@ -54,11 +54,14 @@ func putDisplayInTx(tx storage.Tx, was domain.Work, d *domain.WorkDisplay) error
 
 // BackfillDisplays gives open Work without a display one from its accepted
 // history, once per store: for each such Work it asks the routes about its
-// latest keyed Events, newest first, until one says what the Work is, then
-// replays the Events after that one so each can add to it (a PR's link).
+// latest keyed Events and its first, newest first, until one says what
+// the Work is, then replays the Events after that one so each can add to it
+// (a PR's link).
 // No service is called. It reports how many Work it gave a display.
 func (r *Router) BackfillDisplays(ctx context.Context) (int, error) {
-	const marker = "v1"
+	// v2 runs it again for Slack threads, whose route gave no display for
+	// existing Work before.
+	const marker = "v2"
 	var done bool
 	needs := map[domain.ID]domain.Work{}
 	keys := map[domain.CorrelationKey]domain.ID{}
@@ -87,6 +90,9 @@ func (r *Router) BackfillDisplays(ctx context.Context) (int, error) {
 		return 0, err
 	}
 	tails := map[domain.ID][]domain.ID{}
+	// firsts keeps each Work's first Event, which often says what it is (a
+	// thread's first message) and falls out of a long tail.
+	firsts := map[domain.ID]domain.ID{}
 	for after := uint64(0); len(needs) > 0; {
 		var page []domain.AcceptedEvent
 		if err = r.transact(ctx, nil, func(tx storage.Tx) error { var e error; page, e = tx.Events(after, 500); return e }); err != nil {
@@ -104,6 +110,9 @@ func (r *Router) BackfillDisplays(ctx context.Context) (int, error) {
 			if _, ok := needs[id]; !ok {
 				continue
 			}
+			if _, ok := firsts[id]; !ok {
+				firsts[id] = a.Event.ID
+			}
 			tail := append(tails[id], a.Event.ID)
 			if len(tail) > displayBackfillTail {
 				tail = tail[1:]
@@ -117,6 +126,9 @@ func (r *Router) BackfillDisplays(ctx context.Context) (int, error) {
 			return given, err
 		}
 		w := needs[id]
+		if first := firsts[id]; tail[0] != first {
+			tail = append([]domain.ID{first}, tail...)
+		}
 		if d := r.historyDisplay(ctx, w, tail); d != nil {
 			ok := false
 			if err = r.transact(ctx, nil, func(tx storage.Tx) error {

@@ -63,7 +63,13 @@ func TestNeedsYouAllClear(t *testing.T) {
 	f, s, h := setup(t)
 	f.work = map[string]client.Work{"ok": {ID: "ok", State: "completed", Revision: "1"}}
 	body := do(h, "GET", "/attention", nil, s).Body.String()
-	if !strings.Contains(body, "Nothing is blocked on you.") || strings.Contains(body, "nav-count") {
+	if !strings.Contains(body, "Nothing is blocked on you.") || strings.Contains(body, "nav-count") || !strings.Contains(body, "All clear") {
 		t.Fatalf("all clear:\n%s", body)
+	}
+	// Sections with nothing in them are not shown.
+	for _, h := range []string{"Waiting on a person", "Stopped, needs a repair", "Held by an operator", "Worth a look", "Interventions"} {
+		if strings.Contains(body, h) {
+			t.Errorf("empty section %q shown", h)
+		}
 	}
 }

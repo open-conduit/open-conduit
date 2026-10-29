@@ -1674,7 +1674,7 @@ a.token {
 }
 .att-cols {
   display: grid;
-  grid-template-columns: 1fr 1fr;
+  grid-template-columns: repeat(auto-fit, minmax(0, 1fr));
   gap: 36px;
 }
 .att-list {
@@ -3745,6 +3745,7 @@ span.menu-item[aria-disabled='true'] {
 .dialog-head h2,
 .dialog-lede {
   overflow-wrap: anywhere;
+}
 /* ── Work page port: links and disclosures where the prototype had
    buttons, so turns, tabs, filters and events work without script ── */
 a.score-turn,
@@ -3872,4 +3873,85 @@ a.btn {
 }
 .bench-body .section-rule:not(:first-child) {
   margin-top: 22px;
+}
+
+/* A transcript keeps to its column: long tool output, thinking and Claude
+   Code's own notes wrap instead of widening the page. */
+.transcript,
+.t-system {
+  grid-template-columns: minmax(0, 1fr);
+}
+.t-system div > span,
+.c-act-label {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.c-bubble pre,
+.c-body pre {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* A route's cell fills its row, so the fall-through line runs from the
+   bottom of the route's box, past the taller boxes beside it, to the next
+   route; the horizontal edges meet the boxes they join. */
+.route-cell {
+  align-self: stretch;
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+}
+.route-tail {
+  flex: 1;
+  margin-left: 22px;
+  border-left: 1.5px dashed var(--rule-2);
+}
+.route-tail.is-lit {
+  border-left-color: var(--run);
+}
+.flow.is-tracing .route-tail {
+  opacity: 0.4;
+}
+.flow.is-tracing .route-tail.is-lit {
+  opacity: 1;
+}
+.edge {
+  padding: 0;
+}
+@media (max-width: 1100px) {
+  .route-tail {
+    display: none;
+  }
+}
+.checks-ok summary {
+  cursor: pointer;
+  color: var(--ink-2);
+  font-size: var(--t-small);
+  padding: 8px 0;
+}
+
+/* Long names (a key with no spaces) break rather than run off a narrow
+   screen. */
+.d-title h1,
+.crumbs,
+.crumbs a,
+.crumbs span {
+  overflow-wrap: anywhere;
+  min-width: 0;
+}
+@media (max-width: 720px) {
+  .c-act-label,
+  .c-facts {
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+}
+@media (max-width: 1100px) {
+  /* The scope list scrolls sideways; names keep to one line. */
+  .cfg-nav {
+    grid-auto-columns: max-content;
+  }
+  .cfg-nav a {
+    white-space: nowrap;
+  }
 }

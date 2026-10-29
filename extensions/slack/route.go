@@ -137,8 +137,11 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 			return extension.Skip("the message was deleted"), nil
 		}
 		d := extension.RouteDecision{Match: true, Reason: "a person wrote in the thread"}
-		if p.Root && p.Edited != "" {
-			d.Display = Display(p) // the thread's first message was edited
+		// The thread's first message says what the Work is when it was
+		// edited, or when the Work has no display yet: Work from before
+		// displays, which the router's backfill replays.
+		if p.Root && (p.Edited != "" || in.Work.Display == nil) {
+			d.Display = Display(p)
 		}
 		return d, nil
 	case TypeMessageAgent:

@@ -3,13 +3,13 @@
   <header class="page-head">
     <div>
       <h1>Needs you</h1>
-      <p class="page-sub">{{if and (not $d.Decisions) (not $d.Repairs)}}Nothing is blocked on you. Agents are working or waiting on their own.{{else}}{{len $d.Decisions}} waiting on a person, {{len $d.Repairs}} stopped and needing a repair. Everything else is moving on its own.{{end}}</p>
+      <p class="page-sub">{{if and (not $d.Decisions) (not $d.Repairs)}}Nothing is blocked on you.{{if or $d.Held $d.Watch $d.Receipts}} Agents are working or waiting on their own.{{end}}{{else}}{{len $d.Decisions}} waiting on a person, {{len $d.Repairs}} stopped and needing a repair. Everything else is moving on its own.{{end}}</p>
     </div>
   </header>
 
+  {{- if $d.Decisions}}
   <section class="att-section" aria-labelledby="att-dec">
     <h2 id="att-dec" class="section-rule">Waiting on a person <span>{{len $d.Decisions}}</span></h2>
-    {{- if not $d.Decisions}}<p class="quiet">No extension is offering an action on waiting Work.</p>{{end}}
     {{- range $d.Decisions}}
     <article class="att-item">
       {{template "att-head" .W}}
@@ -18,10 +18,11 @@
     </article>
     {{- end}}
   </section>
+  {{- end}}
 
+  {{- if $d.Repairs}}
   <section class="att-section" aria-labelledby="att-rep">
     <h2 id="att-rep" class="section-rule">Stopped, needs a repair <span>{{len $d.Repairs}}</span></h2>
-    {{- if not $d.Repairs}}<p class="quiet">No failed retries or broken bindings.</p>{{end}}
     {{- range $d.Repairs}}{{$w := .}}
     <article class="att-item att-repair">
       {{template "att-head" .}}
@@ -35,11 +36,13 @@
     </article>
     {{- end}}
   </section>
+  {{- end}}
 
+  {{- if or $d.Held $d.Watch}}
   <div class="att-cols">
+    {{- if $d.Held}}
     <section class="att-section" aria-labelledby="att-held">
       <h2 id="att-held" class="section-rule">Held by an operator <span>{{len $d.Held}}</span></h2>
-      {{- if not $d.Held}}<p class="quiet">Nothing is held.</p>{{end}}
       <ul class="att-list">
         {{- range $d.Held}}
         <li>
@@ -53,6 +56,8 @@
         {{- end}}
       </ul>
     </section>
+    {{- end}}
+    {{- if $d.Watch}}
     <section class="att-section" aria-labelledby="att-watch">
       <h2 id="att-watch" class="section-rule">Worth a look <span>{{len $d.Watch}}</span></h2>
       <p class="quiet small">Not blocked on you: long waits and waiting Work whose last turn failed.</p>
@@ -68,11 +73,17 @@
         {{- end}}
       </ul>
     </section>
+    {{- end}}
   </div>
+  {{- end}}
 
+  {{- if not (or $d.Decisions $d.Repairs $d.Held $d.Watch $d.Receipts)}}
+  <div class="empty">{{mark "completed" 18 ""}}<h2>All clear</h2><p>Agents are working or waiting on their own. Answers, retries, holds and cancellations you make here are listed on this page with the exact API call.</p></div>
+  {{- end}}
+
+  {{- if $d.Receipts}}
   <section class="att-section" aria-labelledby="att-log">
     <h2 id="att-log" class="section-rule">Interventions <span>{{len $d.Receipts}} this session</span></h2>
-    {{- if not $d.Receipts}}<p class="quiet">Answers, retries, holds and cancellations you make appear here with the exact API call.</p>{{end}}
     <ol class="log">
       {{- range $d.Receipts}}
       <li>
@@ -83,6 +94,7 @@
       {{- end}}
     </ol>
   </section>
+  {{- end}}
 </div>
 {{end}}
 

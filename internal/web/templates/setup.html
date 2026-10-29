@@ -114,7 +114,7 @@
       {{- end}}{{else if $d.Scopes}}
       <p class="quiet">{{range $i, $s := $d.Scopes}}{{if $i}}, {{end}}<b>{{$s.Name}}</b>{{end}} {{if eq (len $d.Scopes) 1}}has{{else}}have{{end}} a setup entry, but no new session is offered. A scope runs one session at a time{{if $d.Past}}; the last one is below{{end}}.</p>
       {{- else}}
-      <p>Setup in the browser runs in a scope with a <code>setup</code> entry, and this configuration has none. Run the same assistant in a terminal:</p>
+      <p>Setup in the browser runs in a scope with a <code>setup</code> entry, and this configuration has none. <code>open-conduit init setup</code> adds one to your config file; apply it with <code>open-conduit config apply</code>. Until then, run the same assistant in a terminal:</p>
       <pre class="code-block">open-conduit init --with claude</pre>
       <p>It starts Claude Code with the setup playbook in this folder. It asks before it writes the config, and <code>open-conduit config validate</code> and <code>open-conduit doctor</code> check the result. To change one value by hand, use <code>open-conduit config set</code>.</p>
       <p><a href="{{$d.QuickStart}}">The quick start</a> covers setting up with Claude or by hand.</p>

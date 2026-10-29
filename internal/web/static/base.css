@@ -986,3 +986,8 @@ details.menu-wrap > summary::-webkit-details-marker {
     flex: none;
   }
 }
+.palette-list li.pal-empty {
+  display: block;
+  color: var(--ink-3);
+  cursor: default;
+}
