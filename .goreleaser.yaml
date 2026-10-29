@@ -75,13 +75,17 @@ homebrew_casks:
     homepage: https://github.com/open-conduit/open-conduit
     description: Runs coding and support agents against GitHub issues, Slack threads and schedules from one local daemon
     # A cask can't carry a `brew services` block (that is formula-only), so
-    # `open-conduit service install` writes the LaunchAgent; uninstalling the
-    # cask unloads and removes it. The label is launchdLabel in
-    # internal/cli/service.go.
+    # `open-conduit service install` writes the LaunchAgent. Homebrew runs a
+    # cask's uninstall stanza on every upgrade as well as on uninstall, so the
+    # LaunchAgent is only removed by `brew uninstall --zap`: an upgrade keeps
+    # the service, and `service install` restarts it on the new binary. The
+    # label is launchdLabel in internal/cli/service.go.
     caveats: |
       Run the daemon in the background (a per-user launchd service that starts at login):
         open-conduit service install
-    uninstall:
+      After brew upgrade, run it again to restart the daemon on the new version.
+      Remove the service with open-conduit service uninstall (or brew uninstall --zap).
+    zap:
       launchctl:
         - com.open-conduit.daemon
     # The binaries aren't notarized, so the quarantine flag comes off after
