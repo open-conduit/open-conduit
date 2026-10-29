@@ -183,7 +183,8 @@ func hashKey(id string) string {
 }
 
 type recovery struct {
-	Run string `json:"run"`
+	Run     string `json:"run"`
+	Sandbox string `json:"sandbox,omitempty"` // SPIKE #161: the pinned policy digest
 }
 
 // Run starts a new attempt segment.
@@ -215,6 +216,12 @@ func (e *Executor) Recover(ctx context.Context, r extension.RunRequest, state do
 		return nil, extension.ErrNotAdoptable
 	}
 	if _, err := os.Stat(filepath.Join(dir, "lease")); err != nil {
+		return nil, extension.ErrNotAdoptable
+	}
+	// SPIKE #161: adopt only a segment launched under the pinned policy.
+	var meta recovery
+	_ = json.Unmarshal(state.Data, &meta)
+	if extension.VerifySandboxRecord(dir, meta.Sandbox) != nil {
 		return nil, extension.ErrNotAdoptable
 	}
 	epoch := r.Execution.Lease.Epoch

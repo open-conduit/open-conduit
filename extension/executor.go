@@ -23,7 +23,9 @@ type ExecutionContext struct {
 	// Resources is nil unless the binding declares a resource provider. An
 	// executor acquires what it needs through it (see resource.go); absence is
 	// valid and every executor must operate without it.
-	Resources                       ResourceBroker
+	Resources ResourceBroker
+	// Sandbox is nil unless the binding declares a sandbox (SPIKE #161).
+	Sandbox                         SandboxBroker
 	ToolbeltEndpoint, ToolbeltToken string
 }
 type RunRequest struct {

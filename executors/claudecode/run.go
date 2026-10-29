@@ -273,6 +273,32 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		return e.preset(ctx, rn, cfg.StatusSchema, "start_failed", "could not prepare claude process", nil)
 	}
 	defer out.Close()
+	// SPIKE #161: the one generic sandbox call, and the digest pinned with the
+	// recovery metadata before launch. Claude's own needs: its config and
+	// sign-in, the API, and the toolbelt socket.
+	home, _ := os.UserHomeDir()
+	var needs extension.SandboxNeeds
+	needs.Read = []string{filepath.Join(dir, "mcp.json"), filepath.Join(dir, "token")}
+	// Claude's Bash tool keeps its scratch in /tmp/claude-<uid>.
+	needs.Write = []string{workdir, configDir, filepath.Join(home, ".claude.json"), filepath.Join("/tmp", "claude-"+strconv.Itoa(os.Getuid())), "/tmp/claude-*-cwd"}
+	needs.Hosts = []string{"api.anthropic.com"}
+	if sock, ok := strings.CutPrefix(r.Context.ToolbeltEndpoint, "unix://"); ok && r.Context.ToolbeltToken != "" {
+		needs.Sockets = []string{sock}
+	}
+	launch, err := extension.WrapLaunch(ctx, r.Context.Sandbox, extension.SandboxRequest{Argv: argv, Dir: workdir, Env: env, RunDir: dir, Needs: needs})
+	if err != nil {
+		return e.preset(ctx, rn, cfg.StatusSchema, extension.SandboxReason(err), err.Error(), nil)
+	}
+	if launch.Digest != "" {
+		data, _ := json.Marshal(recovery{Run: key + "/" + nonce, Sandbox: launch.Digest})
+		if err = extension.WriteSandboxRecord(dir, launch); err == nil {
+			err = r.PersistRecovery(domain.Payload{Schema: RecoverySchema, Data: data})
+		}
+		if err != nil {
+			return e.preset(ctx, rn, cfg.StatusSchema, "start_failed", "could not pin the sandbox policy", nil)
+		}
+	}
+	argv, env = launch.Argv, launch.Env
 	cmd := exec.Command("/bin/sh", append([]string{"-c", wrapper, marker + nonce, dir}, argv...)...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workdir, env, out, errLog
 	detach(cmd)

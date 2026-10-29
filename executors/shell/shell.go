@@ -150,7 +150,8 @@ func newNonce() (string, error) {
 }
 
 type recovery struct {
-	Run string `json:"run"`
+	Run     string `json:"run"`
+	Sandbox string `json:"sandbox,omitempty"` // SPIKE #161: the pinned policy digest
 }
 
 // workspaceRecord is the acquired resource's opaque lease reference and
@@ -277,6 +278,28 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	if cfg.Command != "" {
 		argv = []string{"/bin/sh", "-c", cfg.Command}
 	}
+	// SPIKE #161: the one generic sandbox call, and the digest pinned with the
+	// recovery metadata before launch.
+	var needs extension.SandboxNeeds
+	needs.Read = []string{filepath.Join(dir, "input.json"), filepath.Join(dir, "token")}
+	needs.Write = []string{workdir, filepath.Join(dir, "outputs"), filepath.Join(dir, inboxDir)}
+	if sock, ok := strings.CutPrefix(r.Context.ToolbeltEndpoint, "unix://"); ok && r.Context.ToolbeltToken != "" {
+		needs.Sockets = []string{sock}
+	}
+	launch, err := extension.WrapLaunch(ctx, r.Context.Sandbox, extension.SandboxRequest{Argv: argv, Dir: workdir, Env: env, RunDir: dir, Needs: needs})
+	if err != nil {
+		return e.preset(ctx, rn, extension.SandboxReason(err), err.Error())
+	}
+	if launch.Digest != "" {
+		data, _ := json.Marshal(recovery{Run: key + "/" + nonce, Sandbox: launch.Digest})
+		if err = extension.WriteSandboxRecord(dir, launch); err == nil {
+			err = r.PersistRecovery(domain.Payload{Schema: RecoverySchema, Data: data})
+		}
+		if err != nil {
+			return e.preset(ctx, rn, "start_failed", "could not pin the sandbox policy")
+		}
+	}
+	argv, env = launch.Argv, launch.Env
 	cmd := exec.Command("/bin/sh", append([]string{"-c", wrapper, marker + nonce, dir}, argv...)...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workdir, env, log, log
 	detach(cmd)
@@ -404,6 +427,10 @@ func (e *Executor) Recover(ctx context.Context, r extension.RunRequest, state do
 	}
 	dir := filepath.Join(e.o.StateDir, "runs", key, nonce)
 	if _, err := os.Stat(filepath.Join(dir, "lease")); err != nil {
+		return nil, extension.ErrNotAdoptable
+	}
+	// SPIKE #161: adopt only a segment launched under the pinned policy.
+	if extension.VerifySandboxRecord(dir, meta.Sandbox) != nil {
 		return nil, extension.ErrNotAdoptable
 	}
 	epoch := r.Execution.Lease.Epoch
