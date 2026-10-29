@@ -4,9 +4,11 @@ package sqlite
 import (
 	"context"
 	"database/sql"
+	"database/sql/driver"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"math"
 	"net/url"
 	"os"
@@ -237,6 +239,12 @@ var indexes = []string{
 	`CREATE INDEX IF NOT EXISTS events_unrouted ON events(sequence) WHERE ` + unrouted,
 }
 
+// Transact runs fn in one write transaction. SQLite never sees the caller's
+// context: an interrupted statement can leave the transaction open on a
+// connection the pool then discards, and SQLite keeps that connection's write
+// lock while it waits to be finalized, so every later write fails busy (#155).
+// The caller's cancellation is checked between statements and before COMMIT
+// instead, and the transaction is rolled back before the connection goes back.
 func (s *Store) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
 	if g.Now.IsZero() || fn == nil {
 		return storage.ErrInvalid
@@ -249,11 +257,17 @@ func (s *Store) Transact(ctx context.Context, g storage.Guard, fn func(storage.T
 		return err
 	}
 	defer conn.Close()
-	if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+	work := context.WithoutCancel(ctx)
+	if _, err = conn.ExecContext(work, "BEGIN IMMEDIATE"); err != nil {
 		return mapError(err)
 	}
-	defer conn.ExecContext(context.Background(), "ROLLBACK")
-	t := &transaction{conn: conn, ctx: ctx, now: g.Now, live: true}
+	committed := false
+	defer func() {
+		if !committed {
+			rollback(work, conn)
+		}
+	}()
+	t := &transaction{conn: conn, caller: ctx, ctx: work, now: g.Now, live: true}
 	defer func() { t.live = false }()
 	if g.Lease != nil {
 		if err = t.authorize(*g.Lease); err != nil {
@@ -266,31 +280,75 @@ func (s *Store) Transact(ctx context.Context, g storage.Guard, fn func(storage.T
 	if err = ctx.Err(); err != nil {
 		return err
 	}
-	_, err = conn.ExecContext(ctx, "COMMIT")
-	return mapError(err)
+	if _, err = conn.ExecContext(work, "COMMIT"); err != nil {
+		return mapError(err)
+	}
+	committed = true
+	return nil
+}
+
+// rollback ends a transaction that did not commit. If ROLLBACK fails the
+// transaction may still hold the write lock, so the connection is closed, which
+// releases it, rather than returned to the pool.
+func rollback(ctx context.Context, conn *sql.Conn) {
+	if _, err := conn.ExecContext(ctx, "ROLLBACK"); err == nil {
+		return
+	}
+	_ = conn.Raw(func(c any) error {
+		if closer, ok := c.(io.Closer); ok {
+			_ = closer.Close()
+		}
+		return driver.ErrBadConn
+	})
 }
 
 type transaction struct {
-	conn *sql.Conn
-	ctx  context.Context
-	now  time.Time
-	live bool
+	conn   *sql.Conn
+	caller context.Context
+	ctx    context.Context
+	now    time.Time
+	live   bool
+}
+
+// usable reports why no more statements may run in the transaction, if any.
+func (t *transaction) usable() error {
+	if !t.live {
+		return storage.ErrInvalid
+	}
+	return t.caller.Err()
 }
 
 func (t *transaction) exec(query string, args ...any) (sql.Result, error) {
-	if !t.live {
-		return nil, storage.ErrInvalid
+	if err := t.usable(); err != nil {
+		return nil, err
 	}
 	r, err := t.conn.ExecContext(t.ctx, query, args...)
 	return r, mapError(err)
 }
+
+// queryRow is QueryRowContext on the transaction's connection, once the
+// transaction is checked usable.
+func (t *transaction) queryRow(query string, args ...any) interface{ Scan(...any) error } {
+	if err := t.usable(); err != nil {
+		return failedRow{err}
+	}
+	return t.conn.QueryRowContext(t.ctx, query, args...)
+}
+
+type failedRow struct{ err error }
+
+func (r failedRow) Scan(...any) error { return r.err }
+
+func (t *transaction) query(query string, args ...any) (*sql.Rows, error) {
+	if err := t.usable(); err != nil {
+		return nil, err
+	}
+	return t.conn.QueryContext(t.ctx, query, args...)
+}
 func read[T any](t *transaction, query string, args ...any) (T, error) {
 	var v T
-	if !t.live {
-		return v, storage.ErrInvalid
-	}
 	var b []byte
-	err := t.conn.QueryRowContext(t.ctx, query, args...).Scan(&b)
+	err := t.queryRow(query, args...).Scan(&b)
 	if err != nil {
 		return v, mapError(err)
 	}
@@ -300,10 +358,7 @@ func read[T any](t *transaction, query string, args ...any) (T, error) {
 }
 func list[T any](t *transaction, query string, args ...any) ([]T, error) {
 	out := []T{}
-	if !t.live {
-		return nil, storage.ErrInvalid
-	}
-	rows, err := t.conn.QueryContext(t.ctx, query, args...)
+	rows, err := t.query(query, args...)
 	if err != nil {
 		return nil, mapError(err)
 	}

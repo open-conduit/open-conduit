@@ -53,7 +53,7 @@ func (t *transaction) LatestSequence() (uint64, error) {
 		return 0, storage.ErrInvalid
 	}
 	var sequence uint64
-	err := t.conn.QueryRowContext(t.ctx, "SELECT coalesce(max(sequence),0) FROM events").Scan(&sequence)
+	err := t.queryRow("SELECT coalesce(max(sequence),0) FROM events").Scan(&sequence)
 	return sequence, mapError(err)
 }
 func (t *transaction) EventByDelivery(source, deliveryID string) (domain.AcceptedEvent, error) {
@@ -329,7 +329,7 @@ func (t *transaction) PutWait(v domain.Wait, expected domain.Revision) error {
 		return err
 	}
 	var sequence uint64
-	if err = t.conn.QueryRowContext(t.ctx, "SELECT COALESCE(MAX(sequence),0) FROM events").Scan(&sequence); err != nil {
+	if err = t.queryRow("SELECT COALESCE(MAX(sequence),0) FROM events").Scan(&sequence); err != nil {
 		return err
 	}
 	if v.ID == "" || x.WorkID != w.ID || w.State != domain.WorkWaiting || x.State != domain.ExecutionParked && x.State != domain.ExecutionWaiting || len(v.Match.Keys) == 0 || v.AfterSequence > sequence {

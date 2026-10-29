@@ -34,7 +34,7 @@ func (t *transaction) PutTimer(v domain.Timer, expected domain.Revision) error {
 		}
 	}
 	var n int
-	if err = t.conn.QueryRowContext(t.ctx, "SELECT count(*) FROM events WHERE id=? OR (source=? AND delivery_id=?)", v.Event.ID, v.Event.Source, v.Event.DeliveryID).Scan(&n); err != nil {
+	if err = t.queryRow("SELECT count(*) FROM events WHERE id=? OR (source=? AND delivery_id=?)", v.Event.ID, v.Event.Source, v.Event.DeliveryID).Scan(&n); err != nil {
 		return err
 	}
 	if n != 0 {
@@ -43,7 +43,7 @@ func (t *transaction) PutTimer(v domain.Timer, expected domain.Revision) error {
 	v.Revision = expected + 1
 	if !exists {
 		var previous domain.Revision
-		err = t.conn.QueryRowContext(t.ctx, "SELECT revision FROM timer_versions WHERE id=?", v.ID).Scan(&previous)
+		err = t.queryRow("SELECT revision FROM timer_versions WHERE id=?", v.ID).Scan(&previous)
 		if err != nil && !errors.Is(mapError(err), storage.ErrNotFound) {
 			return err
 		}
@@ -132,7 +132,7 @@ func (t *transaction) Get(ns, key string) ([]byte, error) {
 		return nil, storage.ErrInvalid
 	}
 	var b []byte
-	err := t.conn.QueryRowContext(t.ctx, "SELECT value FROM kv WHERE namespace=? AND key=?", ns, key).Scan(&b)
+	err := t.queryRow("SELECT value FROM kv WHERE namespace=? AND key=?", ns, key).Scan(&b)
 	return b, mapError(err)
 }
 func (t *transaction) Put(ns, key string, value []byte) error {
@@ -157,7 +157,7 @@ func (t *transaction) List(ns, prefix string) ([]storage.Entry, error) {
 		return nil, storage.ErrInvalid
 	}
 	out := []storage.Entry{}
-	rows, err := t.conn.QueryContext(t.ctx, "SELECT key,value FROM kv WHERE namespace=? AND substr(CAST(key AS BLOB),1,length(CAST(? AS BLOB)))=CAST(? AS BLOB) ORDER BY key", ns, prefix, prefix)
+	rows, err := t.query("SELECT key,value FROM kv WHERE namespace=? AND substr(CAST(key AS BLOB),1,length(CAST(? AS BLOB)))=CAST(? AS BLOB) ORDER BY key", ns, prefix, prefix)
 	if err != nil {
 		return nil, err
 	}
