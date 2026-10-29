@@ -8,20 +8,6 @@
   const INTERVAL = 2000;
   const typing = (e) => e.target.closest && e.target.closest("input, textarea, select, [contenteditable]");
 
-  // Copy buttons appear only where the clipboard can be written.
-  document.querySelectorAll("[data-copy]").forEach((b) => {
-    if (!navigator.clipboard) return;
-    b.hidden = false;
-    b.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText(b.dataset.copy);
-        const was = b.textContent;
-        b.textContent = "Copied";
-        setTimeout(() => { b.textContent = was; }, 1400);
-      } catch (_) { /* nothing copied */ }
-    });
-  });
-
   // Events open in place.
   document.querySelectorAll("[data-event-row]").forEach((row) => {
     row.addEventListener("click", (e) => {

@@ -273,8 +273,8 @@
   // the tab is visible, unless something in it has focus, a dialog or menu
   // is open, a checkbox in it is ticked or the operator picked a radio or
   // select option in it: a refresh never takes what the operator is doing
-  // away.
-  const live = [...document.querySelectorAll("[data-live]")];
+  // away. A running turn's transcript [data-conv] is followed by work.js.
+  const live = [...document.querySelectorAll("[data-live]:not([data-conv])")];
   // A choice the operator changed in a region keeps it from being redrawn.
   document.addEventListener("change", (e) => {
     if (!e.target.matches || !e.target.matches("input[type=radio], select")) return;

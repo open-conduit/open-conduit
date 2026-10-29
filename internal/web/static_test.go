@@ -50,7 +50,7 @@ func TestScriptsDeclareNoGlobals(t *testing.T) {
 			t.Fatal(err)
 		}
 		for i, l := range strings.Split(string(b), "\n") {
-			for _, kw := range []string{"const ", "let ", "var ", "function ", "async function ", "class "} {
+			for _, kw := range []string{"const ", "let ", "var ", "function ", "function* ", "async function ", "async function* ", "class ", "export "} {
 				if strings.HasPrefix(l, kw) {
 					t.Errorf("%s:%d declares a global: %s", e.Name(), i+1, l)
 				}
