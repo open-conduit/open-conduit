@@ -405,8 +405,11 @@ func (r *Router) Samples(ctx context.Context, scopeID domain.ID) ([]TraceSample,
 // CheckTraceEvent refuses a hypothetical Event whose envelope acceptance
 // would refuse from any source: a type or payload schema that is not
 // namespaced, data that is not JSON, and the host's own core types and
-// sources, which no ingress, extension or operator may submit. Which types a
-// source may send is the caller's to check (Ingress.AdmitsTrace).
+// sources, which no ingress, extension or operator may submit. An operator's
+// Event (ManualSource) and an action's (extension.ActionSource) are core
+// sources the host itself accepts for the operator, so a trace may explain
+// them. Which types a source may send is the caller's to check
+// (Ingress.AdmitsTrace).
 func CheckTraceEvent(e domain.Event) error {
 	switch {
 	case !validType(e.Type):
@@ -415,7 +418,7 @@ func CheckTraceEvent(e domain.Event) error {
 		return fmt.Errorf("%s is a core event; only the host records those", e.Type)
 	case e.Source == "":
 		return errors.New("source is required")
-	case strings.HasPrefix(e.Source, "core.") && e.Source != ManualSource:
+	case strings.HasPrefix(e.Source, "core.") && e.Source != ManualSource && e.Source != extension.ActionSource:
 		return fmt.Errorf("source %s is the host's own", e.Source)
 	case e.CorrelationKey != nil && (e.CorrelationKey.Source == "" || e.CorrelationKey.ExternalID == ""):
 		return errors.New("a correlation key needs a source and an external ID")
