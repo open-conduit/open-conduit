@@ -44,6 +44,8 @@ open-conduit init --with claude
 
 `init --with claude` opens a Claude Code session with Open Conduit's setup guide. Claude looks at your checkouts and logins, then asks which repositories to watch, how issues map to scopes and how the agent should run. It writes the config and validates it, and checks the result with `open-conduit doctor`. It never asks for a token in the chat: credentials stay as references to your `gh` login, keyring or environment. It ends with the commands to start the daemon, which you run yourself. You need [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and signed in.
 
+To talk it through in the browser instead, start the daemon with no config (`open-conduit serve`), or add a setup scope to an existing one with `open-conduit init setup`, and open the Setup page of `open-conduit web`. A browser session explains Open Conduit and plans the setup with you, then gives you the commands; in this release it has no shell and can't change the config itself. See [Set it up in the browser](https://open-conduit.github.io/open-conduit/start/quick-start/#set-it-up-in-the-browser).
+
 Prefer to do it by hand? The same setup takes four commands:
 
 ```sh
@@ -58,7 +60,7 @@ The GitHub setup runs its agents with the Claude Code executor, and the GitHub C
 
 Where to go next:
 
-- [Quick start](https://open-conduit.github.io/open-conduit/start/quick-start/): set it up with Claude, or by hand, then start the daemon and check it.
+- [Quick start](https://open-conduit.github.io/open-conduit/start/quick-start/): set it up with Claude, in the browser or by hand, then start the daemon and check it.
 - Workflows: [GitHub engineering](https://open-conduit.github.io/open-conduit/workflows/github/), [Slack support](https://open-conduit.github.io/open-conduit/workflows/slack/), [scheduled jobs](https://open-conduit.github.io/open-conduit/workflows/scheduled-jobs/) and [introspection](https://open-conduit.github.io/open-conduit/workflows/introspection/).
 - [Extensions](https://open-conduit.github.io/open-conduit/reference/extensions/): add integrations and executors of your own.
 - [The core in one page](https://open-conduit.github.io/open-conduit/architecture/core/): the design in depth.

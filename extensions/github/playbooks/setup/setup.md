@@ -11,11 +11,23 @@ The command is `{{bin}}`. The configuration is one JSON file (default `~/.config
 
 - `{{bin}} init github --dry-run --repo OWNER/NAME --scope ID [--checkout DIR | --no-workspace] [--token REF] [--holds]` prints the scope `init github` would add (a connection, an agent binding with the GitHub tools, optionally the hold route); without `--dry-run` it adds it to the file. The owner may prefer to run `init` themselves.
 - `{{bin}} config show` (references redacted), `config get /pointer`, `config set /pointer JSON`, `config unset /pointer` and `config check`. Pointers address array elements by `id` or `name`: `/scopes/web/bindings/agent/config/model`.
-- `{{bin}} adapters` lists every integration this binary registers (GitHub, Slack, Linear, Jira, Bitbucket, scheduled jobs, `human`, `introspection`, PostHog, the executors and the git workspace); `{{bin}} adapters TYPE` shows the fields each part takes and its tool operations. Read it rather than guessing a field or an operation name.
+- `{{bin}} adapters` lists every integration this binary registers (GitHub, Slack, Linear, Jira, Bitbucket, scheduled jobs, `human`, `introspection`, `setup`, PostHog, the executors and the git workspace); `{{bin}} adapters TYPE` shows the fields each part takes and its tool operations. Read it rather than guessing a field or an operation name.
 
 Before the daemon has ever run, that is all: `config check` validates the file against the same registrations `serve` uses, and `{{bin}} doctor` without a daemon runs the same validation plus the checks that need no daemon. `config validate` and `config apply` talk to the daemon, so they fail until one runs. Don't start a scratch daemon with a throwaway data directory to test a config; `config check` and `doctor` already do what it would.
 
 Once the daemon has run, it keeps the configuration it last activated (its *generation*) in its own store, and uses that one at every start, even after a restart: a disk edit alone never changes what it does. Check the file with `{{bin}} config validate <file>` and activate it with `{{bin}} config apply <file> --generation <n>` (`validate` prints the current generation): apply validates again, saves the file atomically and keeps the last good one. Validation prints every problem as a JSON pointer, a code and a remedy; fix them all before applying.
+
+## In a browser session
+
+When your argument is `session`, the owner started you from the Setup page of the web view, not a terminal. There you have no shell and no file access, so you can't run any command in this guide, read their checkouts or the config, or change the config. They see only what you send with `setup.say` (a message) and `setup.ask` (a question, with `choices` when there are a few likely answers); nothing else you write reaches them. Proposing config changes for the owner to approve from the page is not built yet.
+
+So in this release a browser session explains and plans, and the setup itself happens in a terminal:
+
+- Say so in your first message, after the picture of Open Conduit below: you can explain it and plan the setup with them, and they will run the commands.
+- Ask the questions below, without looking around first: ask where their checkouts are, which repositories and which `gh` login, rather than finding out.
+- Finish with the commands for what you agreed: `{{bin}} init --with claude` for this guide in a terminal session that can look around and write the config, or the `init` commands (`{{bin}} init github --repo OWNER/NAME --scope ID --checkout DIR`, then `{{bin}} config check`, or `config validate` and `config apply` once the daemon has run). Then end the session with `declare_outcome`.
+
+Everything below assumes a terminal; in a session, take from it what to ask and what to tell the owner.
 
 ## Open the conversation
 
@@ -80,9 +92,10 @@ A daemon that has run keeps a state directory (`{{bin}} state check` names it an
 
 ### Integrations beyond GitHub
 
-`{{bin}} adapters` lists them. `init slack`, `init linear` and `init jira` add a scope for each, as `init github` does. Two more are worth offering once you know what the owner wants:
+`{{bin}} adapters` lists them. `init slack`, `init linear` and `init jira` add a scope for each, as `init github` does. Three more are worth offering once you know what the owner wants:
 
 - **`human`:** lets the agent ask the owner a private decision (a cost, a credential, whether to go ahead) with `human.ask`, answered from the TUI or the web view; nothing about it reaches the issue or thread. It is a `human` entry in the same scope as the agent (`{"name": "decisions", "type": "human", "secret_names": [], "config": {}}`), with `human.ask` in the scope's `authorization.operations` and the agent binding's `operations`.
+- **`setup`:** setup from the browser. A `setup` scope puts a Setup page in the web view (`{{bin}} web`), where the owner starts a session, picks a model and talks to an agent that has no shell. `{{bin}} init setup [--scope ID]` adds the scope (default ID `setup`; `--dry-run` prints it). It writes the config file, so once the daemon has run, follow it with `config validate` and `config apply` on that file to make it a new generation. A daemon started with no config file and no stored generation already runs this scope as generation 1. A session starts from the Setup page, or with `{{bin}} actions run setup start --scope setup --input opus` (the model, one of the binding's `models`). Be plain about what it does in this release: the agent can explain Open Conduit and plan the setup in conversation, but it can't look at the machine or propose or apply config, so the owner still runs the commands. Offer it when the owner wants to come back to the conversation from the browser, not as a replacement for this session.
 - **`introspection`:** lets agents report what breaks for them (a missing tool, a stale instruction), with an optional daily triage that opens fix Work and a sweep that folds their corrections into the project's rule files. `{{bin}} adapters introspection` shows its parts.
 
 A support agent (a Slack scope, or any workspace-free one) often needs instructions and reference files but no repository. Offer a plain folder for them: the claude-code binding's `"dir": "/abs/folder"` runs every turn in that folder as it is, with no git and nothing copied, so its `CLAUDE.md` is the agent's instructions and an edit counts from the next turn. `init slack` asks for it (or takes `--dir`). Ask whether they have such a folder before reaching for a checkout. A binding with `dir` takes no `resource`.
