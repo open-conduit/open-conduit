@@ -77,14 +77,15 @@ homebrew_casks:
     # A cask can't carry a `brew services` block (that is formula-only), so
     # `open-conduit service install` writes the LaunchAgent. Homebrew runs a
     # cask's uninstall stanza on every upgrade as well as on uninstall, so the
-    # LaunchAgent is only removed by `brew uninstall --zap`: an upgrade keeps
-    # the service, and `service install` restarts it on the new binary. The
-    # label is launchdLabel in internal/cli/service.go.
+    # LaunchAgent is only removed by `brew uninstall --zap`. An upgrade keeps
+    # the service: the old daemon stops when its version's directory is
+    # removed (bootstrap.ErrInstallRemoved) and launchd starts the new one.
+    # The label is launchdLabel in internal/cli/service.go.
     caveats: |
       Run the daemon in the background (a per-user launchd service that starts at login):
         open-conduit service install
-      After brew upgrade, run it again to restart the daemon on the new version.
-      Remove the service with open-conduit service uninstall (or brew uninstall --zap).
+      Upgrades restart it on the new version. Remove it with
+      open-conduit service uninstall before brew uninstall, or use brew uninstall --zap.
     zap:
       launchctl:
         - com.open-conduit.daemon

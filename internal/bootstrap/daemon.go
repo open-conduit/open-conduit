@@ -13,10 +13,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"log/slog"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"sync"
 	"sync/atomic"
@@ -156,6 +158,8 @@ type daemon struct {
 	ctx      context.Context
 	mu       sync.Mutex
 	inflight map[attemptKey]domain.LeaseRef
+	// from are the executable and toolbelt the daemon started from.
+	from     []string
 	reported map[string]string
 	wg       sync.WaitGroup
 	nudge    chan struct{}
@@ -176,6 +180,37 @@ func toolbeltBeside(self string) string {
 	for _, dir := range dirs {
 		if info, err := os.Stat(filepath.Join(dir, "os")); err == nil && info.Mode().IsRegular() {
 			return dir
+		}
+	}
+	return ""
+}
+
+// ErrInstallRemoved reports that the daemon's own executable or its
+// toolbelt went away while it ran, as an upgrade does when it replaces the
+// install directory. The daemon stops rather than give executions a toolbelt
+// that is no longer there; a service manager restarts it on the new install.
+var ErrInstallRemoved = errors.New("the installed open-conduit was removed or replaced; restart to run the new version")
+
+// runningFrom is what the daemon runs from: its executable, links resolved,
+// and the toolbelt's `os`. Only paths present at startup are watched.
+func runningFrom(toolbelt string) []string {
+	var paths []string
+	if self, err := os.Executable(); err == nil {
+		if real, err := filepath.EvalSymlinks(self); err == nil {
+			paths = append(paths, real)
+		}
+	}
+	if toolbelt != "" {
+		paths = append(paths, filepath.Join(toolbelt, "os"))
+	}
+	return slices.DeleteFunc(paths, func(p string) bool { _, err := os.Stat(p); return err != nil })
+}
+
+// removed is the first of paths that no longer exists, or "".
+func removed(paths []string) string {
+	for _, p := range paths {
+		if _, err := os.Stat(p); errors.Is(err, fs.ErrNotExist) {
+			return p
 		}
 	}
 	return ""
@@ -244,6 +279,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	d.endpoint = "unix://" + o.Socket
+	d.from = runningFrom(o.ToolbeltDir)
 
 	// The exclusive lock precedes every touch of the database or socket.
 	lock, err := management.AcquireLock(o.StateDir)
