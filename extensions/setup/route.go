@@ -43,7 +43,7 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 			return extension.Skip("the start is unreadable"), nil
 		}
 		return extension.RouteDecision{Match: true, Kind: WorkKind, CreateID: WorkID(in.Scope.ID, id),
-			Context: payload(SchemaContext, s), Display: &domain.WorkDisplay{Title: "Setup session"},
+			Context: payload(SchemaContext, s), Grants: s.Grants, Display: &domain.WorkDisplay{Title: "Setup session"},
 			Reason: "the operator started a setup session"}, nil
 	}
 	if in.Work.Kind != WorkKind {

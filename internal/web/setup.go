@@ -43,6 +43,9 @@ type setupData struct {
 	Scopes     []setupScope
 	Start      *actionView
 	StartScope string
+	// StartGrants are what the start scope's setup binding offers a
+	// session, for the operator to turn on.
+	StartGrants []client.ConfigGrant
 	// Starting says a session was just started and its Work is not there
 	// yet: the route creates it when it takes the start Event.
 	Starting bool
@@ -59,9 +62,12 @@ type setupScope struct {
 // setupSession is an open session: its Work, the conversation so far and
 // what the operator can send it.
 type setupSession struct {
-	W       workView
-	Scope   string
-	Model   string
+	W     workView
+	Scope string
+	Model string
+	// Grants are the grants the operator turned on for the session, by
+	// label where the binding still offers them.
+	Grants  []string
 	Started time.Time
 	Msgs    []setupMsg
 	// Message and Answer are the session's actions, when offered.
@@ -176,6 +182,7 @@ func (s *Server) setupSessions(ctx context.Context, p *page, want string, fresh 
 		}
 		if a, ok := setupAction(actions, sc.Entry, setupStart); ok {
 			d.Start, d.StartScope = &actionView{Action: a, Page: p, ScopeID: sc.ID, Back: "/setup?starting=1"}, sc.Name
+			d.StartGrants = setupGrants(sc.ConfigScope)
 			return nil
 		}
 	}
@@ -189,12 +196,26 @@ func (s *Server) setupConversation(ctx context.Context, p *page, v workView, ent
 			ss.Scope = sc.Name
 		}
 	}
+	var offered []client.ConfigGrant
+	for _, sc := range d.Scopes {
+		if sc.ID == v.ScopeID {
+			offered = setupGrants(sc.ConfigScope)
+		}
+	}
 	if v.Context != nil {
 		var c struct {
-			Model string `json:"model"`
+			Model  string   `json:"model"`
+			Grants []string `json:"grants"`
 		}
 		_ = json.Unmarshal(v.Context.Data, &c)
 		ss.Model = c.Model
+		for _, name := range c.Grants {
+			label := name
+			if i := slices.IndexFunc(offered, func(g client.ConfigGrant) bool { return g.Name == name }); i >= 0 && offered[i].Label != "" {
+				label = offered[i].Label
+			}
+			ss.Grants = append(ss.Grants, label)
+		}
 	}
 	d.Session = ss
 	events, err := listAll(ctx, url.Values{"work_id": {v.ID}, "limit": {setupSessionEvents}}, s.src.Events)
@@ -241,6 +262,23 @@ func (s *Server) setupConversation(ctx context.Context, p *page, v workView, ent
 				break
 			}
 		}
+	}
+	return nil
+}
+
+// setupGrants are the grants the scope's setup binding offers: the one the
+// first setup route binds.
+func setupGrants(sc client.ConfigScope) []client.ConfigGrant {
+	for _, r := range sc.Routes {
+		if r.Handler != setupType {
+			continue
+		}
+		for _, b := range sc.Bindings {
+			if b.Name == r.Binding {
+				return b.Grants
+			}
+		}
+		return nil
 	}
 	return nil
 }

@@ -897,6 +897,16 @@ type ConfigBinding struct {
 	Settings         []ConfigSetting `json:"settings"`
 	Resource         string          `json:"resource,omitempty"`
 	ResourceSettings []ConfigSetting `json:"resource_settings,omitempty"`
+	// Grants are what the binding offers a Work beyond its operations,
+	// which the Work opts into when it is created.
+	Grants []ConfigGrant `json:"grants,omitempty"`
+}
+
+// ConfigGrant is one grant a binding offers.
+type ConfigGrant struct {
+	Name       string   `json:"name"`
+	Label      string   `json:"label,omitempty"`
+	Operations []string `json:"operations"`
 }
 
 func (c *Client) Config(ctx context.Context) (Config, error) {

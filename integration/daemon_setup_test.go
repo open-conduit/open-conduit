@@ -55,12 +55,14 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"ok","ses
 `
 
 // setupBinding is a setup session's agent: Claude Code with its built-in
-// tools off and only the operations a session may have.
+// tools off and only the operations a session may have, offering a shell
+// the operator may turn on for one session.
 func setupBinding(root, binary string) map[string]any {
 	return map[string]any{"name": "agent", "executor": "claude-code", "requires": map[string]any{"toolbelt": "mcp", "inject": true, "resume": true},
 		"operations": []string{"read_context", "wait", "declare_outcome", "setup.say", "setup.ask"}, "secret_names": []any{},
 		"config": map[string]any{"binary": binary, "playbook": "-", "builtin_tools": []string{}, "model": "opus", "models": []string{"opus", "sonnet"}, "cold_turns": "resume",
-			"env": map[string]string{"FAKE_DIR": root, "CLAUDE_CONFIG_DIR": filepath.Join(root, "claude-config")}}}
+			"env": map[string]string{"FAKE_DIR": root, "CLAUDE_CONFIG_DIR": filepath.Join(root, "claude-config")}},
+		"grants": []any{map[string]any{"name": "shell", "label": "A shell", "config": map[string]any{"builtin_tools": []string{"Bash"}}}}}
 }
 
 // setupDaemonConfig is a scope with a `setup` entry and route bound to
@@ -87,7 +89,8 @@ func setupDaemonConfig(binding map[string]any) []byte {
 // daemon: the operator starts it from the scope on the model they chose,
 // the agent's message and question arrive as typed Events on its Work, a
 // message sent while it is parked waits for the answer, and the answer
-// resumes it with both. An agent with a shell is refused.
+// resumes it with both. The shell the operator turned on is in every turn.
+// An agent with a shell for every session is refused.
 func TestDaemonSetupSession(t *testing.T) {
 	d := newDrill(t)
 	binary := filepath.Join(d.root, "claude")
@@ -112,6 +115,9 @@ func TestDaemonSetupSession(t *testing.T) {
 			t.Errorf("%s: %v", name, err)
 		}
 	}
+	if cfg, err := d.c.Config(ctx); err != nil || len(cfg.Scopes) != 1 || len(cfg.Scopes[0].Bindings) != 1 || len(cfg.Scopes[0].Bindings[0].Grants) != 1 || cfg.Scopes[0].Bindings[0].Grants[0].Label != "A shell" {
+		t.Fatalf("the config view's grants: %+v %v", cfg, err)
+	}
 	scope := client.ActionTarget{ScopeID: "setup"}
 	ids := func(target client.ActionTarget) string {
 		acts, _ := d.c.Actions(ctx, target)
@@ -126,7 +132,10 @@ func TestDaemonSetupSession(t *testing.T) {
 	if got := ids(scope); got != "start" {
 		t.Fatalf("scope actions: %q", got)
 	}
-	res, err := d.c.InvokeAction(ctx, scope, "setup", "start", "sonnet", "start")
+	if _, err := d.c.InvokeAction(ctx, scope, "setup", "start", "sonnet +web", "bad-start"); err == nil || !strings.Contains(err.Error(), "+shell") {
+		t.Fatalf("a grant the binding doesn't offer: %v", err)
+	}
+	res, err := d.c.InvokeAction(ctx, scope, "setup", "start", "sonnet +shell", "start")
 	if err != nil || res.Event.Type != "setup.start" || !strings.HasPrefix(res.Event.RoutedWorkID, "setup/setup/") {
 		t.Fatalf("start: %+v %v", res, err)
 	}
@@ -135,7 +144,7 @@ func TestDaemonSetupSession(t *testing.T) {
 		w, _ := d.c.Work(ctx, session.WorkID)
 		return w
 	}
-	if w := work(); w.Kind != "setup.session" || w.Display == nil || w.Display.Title != "Setup session" || w.Context == nil || string(w.Context.Data) != `{"model":"sonnet"}` {
+	if w := work(); w.Kind != "setup.session" || w.Display == nil || w.Display.Title != "Setup session" || w.Context == nil || string(w.Context.Data) != `{"model":"sonnet","grants":["shell"]}` {
 		t.Fatalf("session: %+v", w)
 	}
 	if got := ids(scope); got != "" {
@@ -178,7 +187,7 @@ func TestDaemonSetupSession(t *testing.T) {
 		t.Fatalf("turns: %q", turns)
 	}
 	for _, line := range turns {
-		if !strings.Contains(line, "--model sonnet") || !strings.Contains(line, " --tools") {
+		if !strings.Contains(line, "--model sonnet") || !strings.Contains(line, " --tools Bash") {
 			t.Fatalf("a turn ran with: %s", line)
 		}
 	}

@@ -28,8 +28,13 @@ func TestRoute(t *testing.T) {
 	key := SessionKey("setup", "abc")
 	start := domain.Event{Type: TypeStart, Source: extension.ActionSource, CorrelationKey: &key, Data: payload(SchemaStart, Start{Model: "sonnet"})}
 	d, err := Route{}.Match(context.Background(), routeIn(start, nil))
-	if err != nil || !d.Match || d.Kind != WorkKind || d.CreateID != "setup/setup/abc" || d.Display == nil || d.Context.Schema != SchemaContext || string(d.Context.Data) != `{"model":"sonnet"}` {
+	if err != nil || !d.Match || d.Kind != WorkKind || d.CreateID != "setup/setup/abc" || d.Display == nil || d.Context.Schema != SchemaContext || string(d.Context.Data) != `{"model":"sonnet"}` || d.Grants != nil {
 		t.Fatalf("start: %+v %v", d, err)
+	}
+	granted := start
+	granted.Data = payload(SchemaStart, Start{Model: "sonnet", Grants: []string{"shell"}})
+	if d, err := (Route{}).Match(context.Background(), routeIn(granted, nil)); err != nil || strings.Join(d.Grants, ",") != "shell" {
+		t.Fatalf("a session started with a shell: %+v %v", d, err)
 	}
 	session := &domain.Work{ID: d.CreateID, Kind: WorkKind, ScopeID: "setup", CorrelationKeys: []domain.CorrelationKey{key}}
 	other := &domain.Work{ID: "x", Kind: "github.issue", ScopeID: "setup"}
@@ -76,6 +81,34 @@ func TestModelsAndChoose(t *testing.T) {
 		if got, ok := choose(Models(scope), in); ok {
 			t.Errorf("%q chose %q", in, got)
 		}
+	}
+}
+
+// TestParseStart: the start input names at most one model and +name for
+// each grant to turn on; a model left out is the first offered.
+func TestParseStart(t *testing.T) {
+	models := []string{"opus", "sonnet"}
+	grants := []domain.BindingGrant{{Name: "shell"}, {Name: "connectors"}}
+	for in, want := range map[string]Start{
+		"":                          {Model: "opus"},
+		"sonnet":                    {Model: "sonnet"},
+		"+shell":                    {Model: "opus", Grants: []string{"shell"}},
+		"sonnet +connectors +Shell": {Model: "sonnet", Grants: []string{"connectors", "shell"}},
+		"+shell sonnet +shell":      {Model: "sonnet", Grants: []string{"shell"}},
+	} {
+		got, err := parseStart(in, models, grants)
+		if err != nil || got.Model != want.Model || strings.Join(got.Grants, ",") != strings.Join(want.Grants, ",") {
+			t.Errorf("%q: %+v %v", in, got, err)
+		}
+	}
+	for _, in := range []string{"haiku", "opus sonnet", "+web", "opus +"} {
+		var oe *extension.OperationError
+		if _, err := parseStart(in, models, grants); !errors.As(err, &oe) || !strings.Contains(oe.Message, "+shell") {
+			t.Errorf("%q: %v", in, err)
+		}
+	}
+	if s, err := parseStart("", nil, nil); err != nil || s.Model != "" || s.Grants != nil {
+		t.Fatalf("no models or grants: %+v %v", s, err)
 	}
 }
 
@@ -144,6 +177,7 @@ func TestInitSetup(t *testing.T) {
 			Executor   string
 			Operations []string
 			Config     json.RawMessage
+			Grants     []struct{ Name string }
 		}
 		Routes []struct{ Handler, Binding string }
 	}
@@ -151,6 +185,13 @@ func TestInitSetup(t *testing.T) {
 		t.Fatalf("scope: %s %v", r.Scope, err)
 	}
 	b := scope.Bindings[0]
+	var names []string
+	for _, g := range b.Grants {
+		names = append(names, g.Name)
+	}
+	if strings.Join(names, ",") != "shell,connectors" {
+		t.Errorf("the scope's binding offers %v", names)
+	}
 	if !strings.Contains(string(b.Config), `"strict_mcp":true`) {
 		t.Errorf("the scope's agent loads MCP servers besides the toolbelt: %s", b.Config)
 	}

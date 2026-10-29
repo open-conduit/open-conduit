@@ -73,6 +73,9 @@ const Namespace = "setup.sessions"
 type Start struct {
 	// Model is the operator's choice; empty is the binding's default.
 	Model string `json:"model,omitempty"`
+	// Grants are the setup binding's grants the operator turned on for this
+	// session, such as a shell; the session's Work takes them.
+	Grants []string `json:"grants,omitempty"`
 }
 
 // Message is a setup.message Event's data.
@@ -149,7 +152,9 @@ var builtins = []string{"read_context", "wait", "declare_outcome"}
 // executor, one with Claude Code's built-in tools (a shell, file access) on,
 // or one granted operations beyond the builtins and setup.*. Without a
 // shell, everything the agent learns or says goes through the toolbelt, and
-// nothing it is granted can change the config.
+// nothing it is granted can change the config. More (a shell, GitHub's
+// operations) is the binding's grants: the operator turns them on for one
+// session, and the config file is their ceiling, so they are not checked.
 func ValidateBinding(b extension.RouteBinding) error {
 	if b.Executor != Executor {
 		return errors.New("a setup session runs on the claude-code executor")

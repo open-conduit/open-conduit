@@ -3818,6 +3818,18 @@ details.binding[open] {
   opacity: 0;
   pointer-events: none;
 }
+/* A toggle shows its checkbox: it is on or off, not one of a set. */
+.xchoice.xtoggle {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+}
+.xchoice.xtoggle input {
+  position: static;
+  opacity: 1;
+  pointer-events: auto;
+  margin: 0;
+}
 .xchoice:has(input:checked) {
   border-color: var(--ink);
   box-shadow: inset 0 0 0 1px var(--ink);

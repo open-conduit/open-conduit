@@ -846,6 +846,9 @@ func (s *Server) config(c *call) (int, any, error) {
 				wb.Resource = b.Resource.Provider
 				wb.ResourceSettings = settings(b.Resource.Config, reg.ResourceSettings[b.Resource.Provider])
 			}
+			for _, g := range b.Grants {
+				wb.Grants = append(wb.Grants, wireGrant{Name: g.Name, Label: g.Label, Operations: nonNil(g.Operations)})
+			}
 			sc.Bindings = append(sc.Bindings, wb)
 		}
 		out.Scopes = append(out.Scopes, sc)

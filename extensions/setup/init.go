@@ -16,11 +16,24 @@ const DefaultScopeID = "setup"
 // DefaultModels are the models a session may choose in the scope Scope writes.
 var DefaultModels = []string{"opus", "sonnet"}
 
+// DefaultGrants are what the operator may turn on for one session in the
+// scope Scope writes: a shell with file access, and their own MCP servers
+// and claude.ai connectors. Both are executor config over the binding's.
+func DefaultGrants() []any {
+	return []any{
+		map[string]any{"name": "shell", "label": "A shell: run commands and read and edit files on this machine",
+			"operations": []string{}, "config": map[string]any{"builtin_tools": []string{"Bash", "Read", "Edit", "Write", "Glob", "Grep"}}},
+		map[string]any{"name": "connectors", "label": "Your MCP servers and claude.ai connectors",
+			"operations": []string{}, "config": map[string]any{"strict_mcp": false}},
+	}
+}
+
 var scopeID = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
 
 // Scope is a setup scope with the given ID: the `setup` entry and route,
 // bound to a Claude Code agent with its built-in tools off, the toolbelt as
-// its only MCP server and only the operations a session may have, starting on the setup playbook in session
+// its only MCP server and only the operations a session may have (the
+// operator may turn on DefaultGrants for one session), starting on the setup playbook in session
 // mode. It passes ValidateBinding.
 func Scope(id string) json.RawMessage {
 	ops := append(append([]string{}, builtins...), Operations()...)
@@ -31,7 +44,7 @@ func Scope(id string) json.RawMessage {
 		"routes": []any{map[string]any{"name": Type, "handler": Type, "binding": "agent", "active_policy": "inject",
 			"unsupported_fallback": "queue", "error_fallback": "queue", "config": map[string]any{}}},
 		"bindings": []any{map[string]any{"name": "agent", "executor": Executor, "requires": map[string]any{"toolbelt": "mcp"},
-			"operations": ops, "secret_names": []string{},
+			"operations": ops, "secret_names": []string{}, "grants": DefaultGrants(),
 			"config": map[string]any{"playbook": "setup", "args": "session", "builtin_tools": []string{}, "strict_mcp": true, "models": DefaultModels}}},
 		"secret_refs": map[string]any{},
 	}

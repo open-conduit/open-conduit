@@ -8,7 +8,7 @@ holds back what the assistant says. */}}
   <header class="setup-head">
     <div>
       <h1>Setup</h1>
-      <p class="page-sub">A Claude Code session running Open Conduit's setup playbook. It has no shell: it only talks and asks here, and <b>nothing it says changes your configuration</b>.</p>
+      <p class="page-sub">A Claude Code session running Open Conduit's setup playbook. {{if .Grants}}You gave it more than talking for this session: {{range $i, $g := .Grants}}{{if $i}}; {{end}}{{$g}}{{end}}.{{else}}It has no shell: it only talks and asks here, and <b>nothing it says changes your configuration</b>.{{end}}</p>
     </div>
   </header>
   <div class="setup-grid">
@@ -68,6 +68,7 @@ holds back what the assistant says. */}}
           <li>{{mark .W.Disp.Kind 12 ""}}<b>{{or .W.Disp.Label .W.State}}</b><span>{{if ne .W.Disp.Detail .W.Disp.Label}}{{.W.Disp.Detail}}{{end}}</span></li>
           <li><span></span><b>Scope</b><span><a href="/config?scope={{.W.ScopeID}}">{{.Scope}}</a></span></li>
           {{- with .Model}}<li><span></span><b>Model</b><span>{{.}}</span></li>{{end}}
+          <li><span></span><b>Access</b><span>{{if .Grants}}{{range $i, $g := .Grants}}{{if $i}}; {{end}}{{$g}}{{end}}{{else}}Talking only{{end}}</span></li>
           <li><span></span><b>Turns</b><span>{{len .W.Turns}}</span></li>
         </ul>
         {{- if ne .W.Disp.Group "closed"}}
@@ -165,6 +166,13 @@ holds back what the assistant says. */}}
           <legend>{{or .Prompt "Model"}}</legend>
           {{- range $i, $c := .Choices}}<label class="xchoice"><input type="radio" name="input" value="{{$c}}" required{{if eq $i 0}} checked{{end}}><span>{{$c}}</span></label>{{end}}
         </fieldset>
+        {{- end}}
+        {{- with $d.StartGrants}}
+        <fieldset class="xchoices">
+          <legend>Also give the assistant, for this session only</legend>
+          {{- range .}}<label class="xchoice xtoggle"><input type="checkbox" name="input" value="+{{.Name}}"><span>{{or .Label .Name}}</span></label>{{end}}
+        </fieldset>
+        <p class="quiet small">Without these it only talks and asks here. What you turn on lasts until the session ends; your config file decides what can be offered.</p>
         {{- end}}
         <div class="row-gap"><button class="btn btn-primary">{{.Label}}</button></div>
       </form>
