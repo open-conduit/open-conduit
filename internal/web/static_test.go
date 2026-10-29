@@ -32,3 +32,29 @@ func TestStylesheetsBalance(t *testing.T) {
 		}
 	}
 }
+
+// Every script keeps its names to itself. Classic scripts share one global
+// scope, so a const declared at the top of two scripts on the same page
+// makes the second throw before it does anything.
+func TestScriptsDeclareNoGlobals(t *testing.T) {
+	entries, err := assets.ReadDir("static")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, e := range entries {
+		if !strings.HasSuffix(e.Name(), ".js") {
+			continue
+		}
+		b, err := assets.ReadFile("static/" + e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		for i, l := range strings.Split(string(b), "\n") {
+			for _, kw := range []string{"const ", "let ", "var ", "function ", "function* ", "async function ", "async function* ", "class ", "export "} {
+				if strings.HasPrefix(l, kw) {
+					t.Errorf("%s:%d declares a global: %s", e.Name(), i+1, l)
+				}
+			}
+		}
+	}
+}
