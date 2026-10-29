@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -14,9 +15,9 @@ import (
 	bb "github.com/open-conduit/open-conduit/extensions/bitbucket"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
-	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
+	setupext "github.com/open-conduit/open-conduit/extensions/setup"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/extensions/tracker"
 	"github.com/open-conduit/open-conduit/internal/bootstrap"
@@ -30,7 +31,7 @@ import (
 // registers (bootstrap's registry), so an agent following it writes one
 // that `config validate` accepts.
 func TestSetupGuideExampleConfigValidates(t *testing.T) {
-	g := playbooks.Setup("open-conduit")
+	g := setupext.Playbook("open-conduit")
 	start, end := strings.Index(g, "```json\n"), strings.Index(g, "\n```\n\nOther `github`")
 	if start < 0 || end < 0 {
 		t.Fatal("no example config in the guide")
@@ -66,7 +67,7 @@ func TestSetupGuideExampleConfigValidates(t *testing.T) {
 // `config set` use) accepts the setup guide's example and every scope shape
 // `init` writes: with a checkout, workspace-free, and with holds.
 func TestOfflineValidationMatchesTheDaemonRegistry(t *testing.T) {
-	g := playbooks.Setup("open-conduit")
+	g := setupext.Playbook("open-conduit")
 	start, end := strings.Index(g, "```json\n"), strings.Index(g, "\n```\n\nOther `github`")
 	if diags, err := bootstrap.ValidateConfig([]byte(g[start+8 : end])); err != nil || len(diags) != 0 {
 		t.Fatalf("setup guide example: %v %v", diags, err)
@@ -189,7 +190,7 @@ func (h *setupHost) Cwd() string                                          { retu
 func (h *setupHost) StateDir() string                                     { return h.cwd }
 func (h *setupHost) DryRun() bool                                         { return true }
 
-// init --with claude prepares the setup guide as its own plugin and starts
+// init --with claude prepares the setup playbook as its own plugin and starts
 // claude on it, pre-allowing only open-conduit's config, doctor and health.
 func TestSetupCommand(t *testing.T) {
 	dir := t.TempDir()
@@ -221,5 +222,24 @@ func TestSetupCommand(t *testing.T) {
 	}
 	if _, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "codex", StateDir: state, Binary: fake}); err == nil {
 		t.Fatal("unknown agent accepted")
+	}
+}
+
+// Every GitHub operation the setup playbook names is one the github
+// extension registers.
+func TestSetupPlaybookNamesRegisteredOperations(t *testing.T) {
+	ops := map[string]bool{}
+	for _, op := range gh.Operations() {
+		ops[op] = true
+	}
+	g := setupext.Playbook("open-conduit")
+	names := regexp.MustCompile("[`\"](github\\.[a-z.]+)[`\"]").FindAllStringSubmatch(g, -1)
+	if len(names) == 0 || !strings.HasPrefix(g, "---\nname: setup\n") {
+		t.Fatal("the setup playbook names no operation or has no description")
+	}
+	for _, m := range names {
+		if !ops[m[1]] {
+			t.Errorf("the setup playbook names %s, which is not registered", m[1])
+		}
 	}
 }

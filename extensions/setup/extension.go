@@ -37,6 +37,7 @@ var (
 	_ inproc.EntryGated = (*Extension)(nil)
 	_ inproc.Actor      = (*Extension)(nil)
 	_ inproc.Renderer   = (*Extension)(nil)
+	_ inproc.Playbooker = (*Extension)(nil)
 )
 
 func (*Extension) Name() string { return Type }

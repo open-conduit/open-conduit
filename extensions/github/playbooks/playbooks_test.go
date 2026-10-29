@@ -26,7 +26,6 @@ func registered() map[string]bool {
 func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 	ops := registered()
 	books := All()
-	books["setup"] = Setup("open-conduit")
 	for name, text := range books {
 		found := 0
 		for _, m := range opName.FindAllStringSubmatch(text, -1) {
@@ -52,26 +51,6 @@ func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 	}
 }
 
-func TestSetupGuide(t *testing.T) {
-	g := Setup("/usr/local/bin/open-conduit")
-	if strings.Contains(g, "{{bin}}") || !strings.Contains(g, "/usr/local/bin/open-conduit config validate") || Description(g) == "" {
-		t.Fatal("guide not filled in")
-	}
-	if _, ok := All()["setup"]; ok {
-		t.Fatal("the setup guide is among the playbooks agents get for turns")
-	}
-	// The example config in the guide is valid JSON naming only registered
-	// operations (the full config contract is checked by the daemon tests).
-	start, end := strings.Index(g, "```json\n"), strings.Index(g, "\n```\n\nOther `github`")
-	if start < 0 || end < 0 {
-		t.Fatal("no example config")
-	}
-	var cfg map[string]any
-	if err := json.Unmarshal([]byte(g[start+8:end]), &cfg); err != nil {
-		t.Fatalf("example config: %v", err)
-	}
-}
-
 func TestPrepareWritesThePlugin(t *testing.T) {
 	dir := t.TempDir()
 	stale := filepath.Join(dir, "skills", "sweep")
@@ -93,11 +72,7 @@ func TestPrepareWritesThePlugin(t *testing.T) {
 	if _, err := os.Stat(stale); !os.IsNotExist(err) {
 		t.Fatal("a skill no longer shipped was kept")
 	}
-	setup := t.TempDir()
-	if err := PrepareSetup(setup, "oc"); err != nil {
-		t.Fatal(err)
-	}
-	if data, err := os.ReadFile(filepath.Join(setup, "skills", "setup", "SKILL.md")); err != nil || !strings.Contains(string(data), "oc doctor") {
-		t.Fatalf("setup skill: %v", err)
+	if _, ok := All()["setup"]; ok {
+		t.Fatal("the GitHub playbooks still carry the setup playbook")
 	}
 }

@@ -135,8 +135,8 @@ type SetupOptions struct {
 	Environ []string
 }
 
-// SetupCommand prepares the setup guide as its own one-skill plugin (kept
-// apart from the turn playbooks) and returns the interactive claude command
+// SetupCommand prepares the setup playbook as its own one-skill plugin and
+// returns the interactive claude command
 // started on it (v1 `init --with`). Reading and changing Open Conduit's own
 // config, and running doctor, go without asking; nothing else is pre-allowed.
 func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
@@ -153,7 +153,7 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	if err := os.MkdirAll(o.StateDir, 0o700); err != nil {
 		return nil, err
 	}
-	if err := playbooks.PrepareSetup(dir, o.Bin); err != nil {
+	if err := playbooks.WritePlugin(dir, "Sets Open Conduit up", map[string]string{setup.PlaybookName: setup.Playbook(o.Bin)}); err != nil {
 		return nil, err
 	}
 	if _, err := exec.LookPath(o.Binary); err != nil {
@@ -161,7 +161,7 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	}
 	// The prompt first and the tools last: --allowedTools takes every
 	// argument after it.
-	args := []string{"/" + playbooks.PluginName + ":setup", "--plugin-dir", dir, "--allowedTools"}
+	args := []string{"/" + playbooks.PluginName + ":" + setup.PlaybookName, "--plugin-dir", dir, "--allowedTools"}
 	for _, sub := range []string{"config", "doctor", "health", "secret path", "init github --dry-run"} {
 		args = append(args, "Bash("+o.Bin+" "+sub+":*)")
 	}
