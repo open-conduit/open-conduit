@@ -58,6 +58,9 @@ type ghEnv struct {
 	projector *gh.Projector
 	settings  gh.Settings
 	webhook   http.Handler
+	// observed sees the adapter's observations, as bootstrap's wait
+	// progress does; nil sees nothing.
+	observed func(context.Context, []extension.Observation)
 }
 
 func ghExtensionConfig() string {
@@ -109,7 +112,11 @@ func (e *ghEnv) open() {
 	if e.settings, err = gh.ParseExtension([]byte(ghExtensionConfig()), []string{"hook"}); err != nil {
 		t.Fatal(err)
 	}
-	e.adapter = gh.NewIngress(e.settings, e.client, e.clock.Now, gh.IngressOptions{})
+	e.adapter = gh.NewIngress(e.settings, e.client, e.clock.Now, gh.IngressOptions{Observed: func(ctx context.Context, obs []extension.Observation) {
+		if e.observed != nil {
+			e.observed(ctx, obs)
+		}
+	}})
 	if e.projector, err = gh.NewProjector(gh.ProjectorOptions{Store: store, Client: e.client, Settings: e.settings, Now: e.clock.Now, SearchDelay: 30 * time.Second}); err != nil {
 		t.Fatal(err)
 	}

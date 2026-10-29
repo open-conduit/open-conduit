@@ -128,6 +128,14 @@ func (h *Host) Works(ctx context.Context, scope domain.ID) ([]domain.Work, error
 	return works, nil
 }
 
+// WaitProgress sets the progress line of work's active Wait ("3 of 7 checks
+// finished"), which one of the extension's own operations declared; ""
+// clears it. Another's Wait is refused as unauthorized, and Work with no
+// active Wait as not found.
+func (h *Host) WaitProgress(ctx context.Context, work domain.ID, progress string) error {
+	return h.conn.Call(ctx, "wait.progress", protocol.WaitProgressParams{WorkID: string(work), Progress: progress}, nil)
+}
+
 // Secrets resolves secret names bound to the extension's entry in scope.
 func (h *Host) Secrets(ctx context.Context, scope domain.ID, names ...string) (map[string]string, error) {
 	var out protocol.SecretResolveResult

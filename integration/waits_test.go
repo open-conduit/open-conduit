@@ -13,6 +13,7 @@ import (
 	"os"
 	"os/exec"
 	"reflect"
+	"strings"
 	"testing"
 	"time"
 
@@ -683,6 +684,63 @@ func TestProductionExternalResumeCannotResetOriginalRoot(t *testing.T) {
 	}
 	if !found {
 		t.Fatalf("missing originalroot refusal: %+v", audits)
+	}
+}
+
+// A wake of a parked attempt derives a core.wait.woken bridge the causal
+// limits may refuse, which blocks the wait. The trace reports that refusal
+// without writing: the third wake of a chain capped at depth 2 is kept as
+// context, whether the traced Event or an earlier accepted one would win.
+func TestProductionTraceReportsARefusedWake(t *testing.T) {
+	o := waitOptions(true)
+	o.MaxDepth = 2
+	o.PerMinute = 100
+	f := waitFixture(t, "persistent", o)
+	work, ref, key := waitForWork(t, f, "traced-loop", true)
+	trace := func(id string) runtime.RouteTrace {
+		t.Helper()
+		tr, err := f.Driver.(*waitDriver).router.Trace(context.Background(), "routing-scope", routingEvent(f, id, &key), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return tr
+	}
+	for n := 1; n <= 3; n++ {
+		var boundary uint64
+		routingRead(t, f, func(tx storage.Tx) error {
+			all, err := tx.Events(0, 0)
+			if err == nil {
+				boundary = all[len(all)-1].Sequence
+			}
+			return err
+		})
+		id := domain.ID(fmt.Sprintf("traced-wait-%d", n))
+		registerWait(t, f, ref, id, key, true, boundary)
+		tr := trace(fmt.Sprintf("probe-%d", n))
+		if n <= 2 {
+			if tr.Effect.Kind != runtime.EffectWake || tr.Effect.WorkID != work {
+				t.Fatalf("wake %d: %+v", n, tr.Effect)
+			}
+		} else if tr.Effect.Kind != runtime.EffectQueue || !strings.Contains(tr.Effect.Detail, "causal limits would refuse its wake (depth_limit)") {
+			t.Fatalf("refused wake: %+v", tr.Effect)
+		}
+		requireAccept(t, f, fmt.Sprintf("traced-wake-%d", n), &key)
+		if n == 3 {
+			// The accepted Event wins first; its bridge is refused too.
+			if tr = trace("probe-late"); tr.Effect.Kind != runtime.EffectQueue || len(tr.Also) != 0 || !strings.Contains(tr.Effect.Detail, "depth_limit") {
+				t.Fatalf("refused earlier winner: %+v", tr)
+			}
+			break
+		}
+		d := f.Driver.(*waitDriver)
+		if err := d.Wake(id); err != nil {
+			t.Fatal(err)
+		}
+		next, err := d.Start(work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		ref = next
 	}
 }
 

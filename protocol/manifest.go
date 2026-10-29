@@ -129,6 +129,9 @@ type Family struct {
 type RouteDecl struct {
 	Handler string `json:"handler"`
 	Config  bool   `json:"config,omitempty"`
+	// Samples marks a handler that offers sample Events for a route trace
+	// through route.samples (extension.RouteSampler).
+	Samples bool `json:"samples,omitempty"`
 }
 
 // WorkKindDecl mirrors the host's WorkKindPolicy; Trigger marks a kind whose
@@ -463,6 +466,9 @@ func (m Manifest) Enabled() []string {
 	set("webhooks", p.Webhooks)
 	set("families", len(p.Families) > 0)
 	set("routes", len(p.Routes) > 0)
+	for _, r := range p.Routes {
+		set("routes.samples", r.Samples)
+	}
 	set("work_kinds", len(p.WorkKinds) > 0)
 	set("recurrences", len(p.Recurrences) > 0)
 	set("operations", len(p.Operations) > 0)

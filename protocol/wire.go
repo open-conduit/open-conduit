@@ -499,6 +499,20 @@ func (d RouteDecision) Extension() extension.RouteDecision {
 	return extension.RouteDecision{Match: d.Match, CreateID: domain.ID(d.CreateID), Kind: d.Kind, AttachKeys: toKeys(d.AttachKeys), Reason: d.Reason, Display: d.Display.Domain()}
 }
 
+// RouteSample mirrors extension.RouteSample.
+type RouteSample struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+	Event Event  `json:"event"`
+}
+
+func FromRouteSample(s extension.RouteSample) RouteSample {
+	return RouteSample{ID: s.ID, Title: s.Title, Event: FromEvent(s.Event)}
+}
+func (s RouteSample) Extension() extension.RouteSample {
+	return extension.RouteSample{ID: s.ID, Title: s.Title, Event: s.Event.Domain()}
+}
+
 // Toolbelt operations.
 
 // Authority is the validated authority an operation receives: never the

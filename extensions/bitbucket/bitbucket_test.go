@@ -304,7 +304,7 @@ func TestIngressConformance(t *testing.T) {
 func TestSamplesTraceAgainstTheScope(t *testing.T) {
 	meta, _ := json.Marshal(map[string]any{"extensions": []map[string]any{{"type": "bitbucket", "config": json.RawMessage(entry)}}})
 	scope := domain.Scope{ID: "proj", Config: domain.Payload{Data: meta}}
-	samples := bitbucket.Route{}.Samples(scope, domain.Route{})
+	samples := bitbucket.Route{}.Samples(context.Background(), extension.SampleInput{Scope: scope})
 	if len(samples) == 0 {
 		t.Fatal("no samples")
 	}

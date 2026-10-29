@@ -308,7 +308,7 @@ func TestJobDescribe(t *testing.T) {
 
 func TestSamplesTraceAgainstTheScope(t *testing.T) {
 	scope := scopeWith(demoEntry)
-	samples := sc.Route{}.Samples(scope, domain.Route{})
+	samples := sc.Route{}.Samples(context.Background(), extension.SampleInput{Scope: scope})
 	if len(samples) == 0 {
 		t.Fatal("no samples")
 	}

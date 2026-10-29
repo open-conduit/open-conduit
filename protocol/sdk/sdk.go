@@ -206,6 +206,22 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			return nil, err
 		}
 		return protocol.FromRouteDecision(d), nil
+	case "route.samples":
+		var p protocol.RouteSamplesParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		h, ok := s.ext.Routes[p.Handler]
+		if !ok {
+			return nil, notFound(method)
+		}
+		out := protocol.RouteSamplesResult{Samples: []protocol.RouteSample{}}
+		if sampler, ok := h.(extension.RouteSampler); ok {
+			for _, x := range sampler.Samples(ctx, extension.SampleInput{Scope: p.Scope.Domain(), Route: p.Route.Domain(), Now: p.Now}) {
+				out.Samples = append(out.Samples, protocol.FromRouteSample(x))
+			}
+		}
+		return out, nil
 	case "work_kind.trigger":
 		var p protocol.WorkKindTriggerParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

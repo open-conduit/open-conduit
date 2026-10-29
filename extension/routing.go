@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 )
@@ -41,6 +42,10 @@ type RouteDecision struct {
 	Context    domain.Payload
 }
 
+// RouteHandler decides whether its route takes an Event. Match must be free
+// of side effects: routing may evaluate it again after a revision conflict,
+// and a route trace calls it for hypothetical Events that never happen, so it
+// decides from its input alone and records, sends or counts nothing.
 type RouteHandler interface {
 	Match(context.Context, RouteInput) (RouteDecision, error)
 }
@@ -57,12 +62,22 @@ type RouteSample struct {
 	Event domain.Event
 }
 
+// SampleInput is what a RouteSampler builds its samples from: the scope and
+// route they are for, and the host's clock, for samples whose data carries a
+// time the handler compares with the host's (a message written just now).
+type SampleInput struct {
+	Scope domain.Scope
+	Route domain.Route
+	Now   time.Time
+}
+
 // RouteSampler is optional on a RouteHandler: the samples it offers for a
 // route in a scope, built from the route's and scope's configuration (the
 // entry's source namespace, its labels) so they trace as written. IDs are
-// stable and unique within the handler.
+// stable and unique within the handler. Like Match it must perform no side
+// effects.
 type RouteSampler interface {
-	Samples(scope domain.Scope, route domain.Route) []RouteSample
+	Samples(context.Context, SampleInput) []RouteSample
 }
 
 // InheritRoutes resolves root-to-leaf routes. A same-name override keeps the

@@ -1,6 +1,7 @@
 package github
 
 import (
+	"context"
 	"encoding/json"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -52,7 +53,8 @@ func sampleID(all []Settings, s Settings, id string) string {
 
 // Samples offers a new issue, a comment, checks finishing on the issue's
 // pull request, and a merge.
-func (Route) Samples(scope domain.Scope, _ domain.Route) []extension.RouteSample {
+func (Route) Samples(_ context.Context, in extension.SampleInput) []extension.RouteSample {
+	scope := in.Scope
 	var out []extension.RouteSample
 	all := scopeSettings(scope)
 	for _, s := range all {
@@ -75,7 +77,9 @@ func (Route) Samples(scope domain.Scope, _ domain.Route) []extension.RouteSample
 }
 
 // Samples offers a new issue carrying the scheduled label.
-func (HoldRoute) Samples(scope domain.Scope, _ domain.Route) []extension.RouteSample {
+func (HoldRoute) Samples(_ context.Context, in extension.SampleInput) []extension.RouteSample {
+	scope, route, now := in.Scope, in.Route, in.Now
+	_, _, _ = scope, route, now
 	var out []extension.RouteSample
 	all := scopeSettings(scope)
 	for _, s := range all {
