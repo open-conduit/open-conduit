@@ -9,7 +9,6 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
-	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -33,8 +32,21 @@ type fake struct {
 	live    map[string]client.LiveRun
 	content map[string]string
 
+	events  []client.Event
+	health  *client.Health
+	trace   *client.RouteTrace
+	samples map[string][]client.RouteSample
+
+	healthErr error
+	// old is a daemon from before the list forms (#124).
+	old      bool
 	invoked  []invoked
 	controls []string
+	calls    []string
+	// actions: the reason each control was sent with.
+	reasons   []string
+	traced    []string
+	withCalls int
 }
 
 func (f *fake) Runs(_ context.Context, q url.Values) (client.Page[client.Run], error) {
@@ -86,19 +98,24 @@ func (f *fake) control(name, id, revision string) (client.ControlResult, error) 
 	f.controls = append(f.controls, name+" "+id+"@"+revision)
 	return client.ControlResult{EventID: "evt_" + name}, nil
 }
-func (f *fake) CancelExecution(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
+func (f *fake) CancelExecution(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
 	return f.control("cancel-execution", id, rev)
 }
-func (f *fake) CancelWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
+func (f *fake) CancelWork(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
 	return f.control("cancel", id, rev)
 }
-func (f *fake) RetryWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
+func (f *fake) RetryWork(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
 	return f.control("retry", id, rev)
 }
-func (f *fake) HoldWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
+func (f *fake) HoldWork(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
 	return f.control("hold", id, rev)
 }
-func (f *fake) ReleaseWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
+func (f *fake) ReleaseWork(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
 	return f.control("release", id, rev)
 }
 func (f *fake) Actions(_ context.Context, t client.ActionTarget) ([]client.Action, error) {
@@ -232,103 +249,6 @@ func TestSignInAndHostCheck(t *testing.T) {
 	}
 }
 
-func TestListByWorkAndByTurn(t *testing.T) {
-	_, s, h := setup(t)
-	w := do(h, "GET", "/", nil, s)
-	body := w.Body.String()
-	if w.Code != 200 || !strings.Contains(body, ">open-conduit#88</a>") || !strings.Contains(body, "3 runs of 2 Work") {
-		t.Fatalf("list: %d\n%s", w.Code, body)
-	}
-	// The annotation is the Work's label and is escaped, never markup.
-	if strings.Contains(body, "<script>alert") || !strings.Contains(body, "&lt;script&gt;alert(1)&lt;/script&gt;") {
-		t.Fatal("annotation not escaped")
-	}
-	// By Work: wrk_1's latest turn only, with its two turns.
-	if strings.Contains(body, `href="/run?id=exe_1"`) || !strings.Contains(body, `href="/run?id=exe_2"`) {
-		t.Fatal("by work should list only the latest turn")
-	}
-	body = do(h, "GET", "/?turns=1", nil, s).Body.String()
-	if !strings.Contains(body, `href="/run?id=exe_1"`) || !strings.Contains(body, `<span class="tn">1/2</span>`) || !strings.Contains(body, `<span class="tn">2/2</span>`) {
-		t.Fatalf("every turn:\n%s", body)
-	}
-	body = do(h, "GET", "/?state=running", nil, s).Body.String()
-	if strings.Contains(body, `href="/run?id=exe_2"`) || !strings.Contains(body, `href="/run?id=exe_3"`) {
-		t.Fatal("state filter")
-	}
-}
-
-func TestRunPageShowsContextControlsAndActions(t *testing.T) {
-	f, s, h := setup(t)
-	body := do(h, "GET", "/run?id=exe_2", nil, s).Body.String()
-	for _, want := range []string{
-		"Answer the agent&#39;s question", `placeholder="your answer"`, `name="provider" value="human"`,
-		`action="/work/hold"><input type="hidden" name="work" value="wrk_1">`, `action="/run/cancel"`, `name="run" value="exe_2"`, `action="/work/cancel"`,
-		"open-conduit/open-conduit#88", `name="csrf" value="` + s.csrf + `"`, `name="back" value="/run?id=exe_2"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("missing %q", want)
-		}
-	}
-	// Held Work offers release; a running run is cancellable.
-	body = do(h, "GET", "/run?id=exe_3", nil, s).Body.String()
-	if !strings.Contains(body, `action="/work/release"><input type="hidden" name="work" value="wrk_2">`) || strings.Contains(body, `action="/work/hold"`) {
-		t.Error("held work should offer release")
-	}
-	// Run IDs carry slashes; they travel in the query.
-	f.runs = append(f.runs, run("work/wrk_1/attempt/3", "wrk_1", "completed", "2026-10-28T02:30:00Z"))
-	if w := do(h, "GET", "/run?id="+url.QueryEscape("work/wrk_1/attempt/3"), nil, s); w.Code != 200 || !strings.Contains(w.Body.String(), `name="back" value="/run?id=work%2Fwrk_1%2Fattempt%2F3"`) {
-		t.Errorf("slashed id: %d\n%s", w.Code, w.Body.String())
-	}
-	if w := do(h, "GET", "/run?id=nope", nil, s); w.Code != 404 {
-		t.Errorf("missing run: %d", w.Code)
-	}
-}
-
-func TestRunPageRendersPanelsWithTheirActions(t *testing.T) {
-	f, s, h := setup(t)
-	answer := f.actions["wrk_1"][0]
-	f.actions["wrk_1"] = append(f.actions["wrk_1"], client.Action{Provider: "github", ID: "nudge", Label: "Nudge"})
-	f.panels = map[string][]client.Panel{"wrk_1": {{Provider: "human", ID: "question", Title: "The agent asks", Sections: []client.PanelSection{
-		{Text: "Ship <b>tonight</b>?\nOr wait"},
-		{Title: "Options", Table: &client.PanelTable{Columns: []string{"#", "Option"}, Rows: [][]string{{"1", "yes"}, {"2", "no"}}}},
-		{Fields: []client.PanelField{{Name: "for", Value: "operator"}}, Links: []client.PanelLink{{Label: "Thread", URL: "https://example.com/t/1"}}, Actions: []client.Action{answer}},
-	}}}}
-	body := do(h, "GET", "/run?id=exe_2", nil, s).Body.String()
-	for _, want := range []string{
-		"The agent asks", "Ship &lt;b&gt;tonight&lt;/b&gt;?\nOr wait", "<th>Option</th>", "<td>no</td>", "<dt>for</dt><dd>operator</dd>",
-		`href="https://example.com/t/1"`, `name="work" value="wrk_1"`, `placeholder="your answer"`,
-		// An action no panel shows stays in the generic list.
-		`name="action" value="nudge"`,
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("missing %q", want)
-		}
-	}
-	// The panel's action is shown once, in the panel.
-	if n := strings.Count(body, `name="action" value="answer"`); n != 1 {
-		t.Errorf("answer shown %d times", n)
-	}
-	// A scope's panel shows on the Scopes page.
-	f.panels["scope_a"] = []client.Panel{{Provider: "github", ID: "queue", Title: "Queue", Sections: []client.PanelSection{{Fields: []client.PanelField{{Name: "open", Value: "3"}}}}}}
-	if body := do(h, "GET", "/scopes", nil, s).Body.String(); !strings.Contains(body, "Queue") || !strings.Contains(body, "<dd>3</dd>") {
-		t.Error("scope panel missing")
-	}
-}
-
-func TestAnActionWithChoicesShowsAButtonForEach(t *testing.T) {
-	f, s, h := setup(t)
-	f.actions["wrk_1"][0].Choices = []string{"yes", "not \"yet\""}
-	body := do(h, "GET", "/run?id=exe_2", nil, s).Body.String()
-	for _, want := range []string{`<button name="input" value="yes">yes</button>`, `<button name="input" value="not &#34;yet&#34;">not &#34;yet&#34;</button>`} {
-		if !strings.Contains(body, want) {
-			t.Errorf("missing %q", want)
-		}
-	}
-	if strings.Contains(body, `placeholder="your answer"`) {
-		t.Error("an action with choices still asks for typed input")
-	}
-}
-
 func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	f, s, h := setup(t)
 	form := url.Values{"work": {"wrk_1"}, "provider": {"human"}, "action": {"answer"}, "label": {"Answer"}, "input": {" option 2 "}, "back": {"/run?id=exe_2"}}
@@ -371,7 +291,7 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 		t.Fatalf("invoked: %+v", f.invoked)
 	}
 	// The outcome shows once on the page it returns to.
-	req = httptest.NewRequest("GET", "/run?id=exe_2", nil)
+	req = httptest.NewRequest("GET", "/work?id=wrk_1", nil)
 	req.Host = "open-conduit.localhost:7420"
 	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.sess})
 	for _, c := range w.Result().Cookies() {
@@ -379,8 +299,8 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	}
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
-	if !strings.Contains(rec.Body.String(), "answered (event evt_answer)") {
-		t.Fatal("flash not shown")
+	if b := rec.Body.String(); !strings.Contains(b, `<div class="toast-text">answered</div>`) || !strings.Contains(b, "event evt_answer") || !strings.Contains(b, "POST /v1/work/wrk_1/actions/human/answer") {
+		t.Fatalf("flash not shown:\n%s", b)
 	}
 
 	// A scope action, and a back that would leave the view goes home.
@@ -390,6 +310,29 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	}
 	if w := do(h, "POST", "/actions", url.Values{"csrf": {s.csrf}, "provider": {"x"}}, s); w.Code != http.StatusBadRequest {
 		t.Fatalf("no target: %d", w.Code)
+	}
+
+	// Every control needs the token and the view's own origin.
+	f.controls = nil
+	for _, path := range []string{"/work/hold", "/work/release", "/work/retry", "/work/cancel", "/work/wake", "/work/rebind", "/run/cancel"} {
+		form := url.Values{"work": {"wrk_1"}, "run": {"exe_2"}, "type": {"x.y"}, "binding": {"b"}}
+		if w := do(h, "POST", path, form, s); w.Code != http.StatusForbidden {
+			t.Fatalf("%s without csrf: %d", path, w.Code)
+		}
+		form.Set("csrf", s.csrf)
+		req := httptest.NewRequest("POST", path, strings.NewReader(form.Encode()))
+		req.Host = "open-conduit.localhost:7420"
+		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+		req.Header.Set("Origin", "http://attacker.example")
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.sess})
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusForbidden {
+			t.Fatalf("%s cross origin: %d", path, rec.Code)
+		}
+	}
+	if len(f.controls) != 0 {
+		t.Fatalf("refused changes reached the daemon: %v", f.controls)
 	}
 }
 
@@ -429,36 +372,6 @@ func TestOutputLiveAndArtifact(t *testing.T) {
 	}
 	if body := do(h, "GET", "/output?run=exe_1&pick=transcript", nil, s).Body.String(); !strings.Contains(body, "run has no transcript") {
 		t.Fatal("missing transcript should say so")
-	}
-}
-
-func TestScopesPage(t *testing.T) {
-	_, s, h := setup(t)
-	body := do(h, "GET", "/scopes", nil, s).Body.String()
-	if !strings.Contains(body, "Claim an issue") || !strings.Contains(body, `name="scope" value="scope_a"`) {
-		t.Fatalf("scopes:\n%s", body)
-	}
-}
-
-func TestConfigPage(t *testing.T) {
-	f, s, h := setup(t)
-	if body := do(h, "GET", "/config", nil, s).Body.String(); !strings.Contains(body, "upgrade it to see it here") {
-		t.Fatalf("old daemon:\n%s", body)
-	}
-	f.config = &client.Config{Generation: "4", Hash: "abc", Connections: []client.ConfigConnection{{ID: "github", Type: "github"}}, Scopes: []client.ConfigScope{{
-		ID: "eng", Name: "Engineering", Enabled: true, Source: "/work/eng",
-		Extensions: []client.ConfigExtension{{Name: "issues", Type: "github_ingress", Connection: "github", Ingress: true}, {Name: "nightly", Type: "plugin"}, {Name: "jobs", Type: "schedule", Ingress: true, Entries: []client.ConfigEntry{{Name: "sweep", Detail: "daily at 06:00 UTC"}}}},
-		Routes:     []client.ConfigRoute{{Route: client.Route{Name: "incoming", Handler: "github.issue", Binding: "agent", ActivePolicy: "queue"}}, {Route: client.Route{Name: "stray", Handler: "schedule", Binding: "gone"}, Detail: "every job"}},
-		Bindings:   []client.ConfigBinding{{Name: "agent", Executor: "coding_agent", Resource: "git"}, {Name: "shell", Executor: "shell"}},
-	}}}
-	body := do(h, "GET", "/config", nil, s).Body.String()
-	for _, want := range []string{"Generation 4", "github_ingress", "matches github.issue", "executor coding_agent", "git workspace", "no such binding", "Also running", "nightly", "By hand", "Other Work", "executor shell", "from <span class=\"mono\">/work/eng</span>", "daily at 06:00 UTC", "matches schedule: every job", `aria-current="page">Config`} {
-		if !strings.Contains(body, want) {
-			t.Fatalf("missing %q:\n%s", want, body)
-		}
-	}
-	if strings.Index(body, "incoming") > strings.Index(body, "stray") {
-		t.Fatal("routes out of order")
 	}
 }
 
@@ -506,28 +419,3 @@ type cookieJar struct{ cookies []*http.Cookie }
 
 func (j *cookieJar) SetCookies(_ *url.URL, cs []*http.Cookie) { j.cookies = append(j.cookies, cs...) }
 func (j *cookieJar) Cookies(*url.URL) []*http.Cookie          { return j.cookies }
-
-func TestListGroupsByWhatTheOperatorDoesNext(t *testing.T) {
-	rs := []row{{Run: run("a", "w", "completed", "")}, {Run: run("b", "w", "parked", "")}, {Run: run("c", "w", "failed", "")}, {Run: run("d", "w", "pending", "")}}
-	var names []string
-	for _, g := range grouped(rs) {
-		names = append(names, g.Name)
-	}
-	if strings.Join(names, ",") != "Failed,Running,Waiting,Finished" {
-		t.Fatalf("groups: %v", names)
-	}
-	// A Work's row carries its turns, oldest first.
-	f := newFake()
-	sort.SliceStable(f.runs, func(i, j int) bool { return f.runs[i].CreatedAt > f.runs[j].CreatedAt })
-	for _, r := range rows(f.runs, false) {
-		if r.Run.ID == "exe_2" && (len(r.Trail) != 2 || r.Trail[0].ID != "exe_1") {
-			t.Fatalf("trail: %+v", r.Trail)
-		}
-	}
-	now := time.Date(2026, 10, 28, 3, 0, 0, 0, time.UTC)
-	for ts, want := range map[string]string{"2026-10-28T02:59:30Z": "just now", "2026-10-28T02:15:00Z": "45m ago", "2026-10-27T22:00:00Z": "5h ago", "2026-10-25T03:00:00Z": "3d ago", "": ""} {
-		if got := ago(ts, now); got != want {
-			t.Errorf("ago(%q) = %q, want %q", ts, got, want)
-		}
-	}
-}

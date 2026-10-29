@@ -1,39 +1,300 @@
-{{define "content"}}{{$c := .Data.Config}}
-<div class="head">
-  <h1>Config</h1>
-  {{if $c.Generation}}<p class="count">Generation {{$c.Generation}} <span class="mono" title="{{$c.Hash}}">{{printf "%.12s" $c.Hash}}</span></p>{{end}}
+{{define "scripts"}}<script src="/static/config.js" defer></script>{{end}}
+
+{{define "content"}}{{$d := .Data}}{{$c := $d.Config}}
+{{if not $c.Generation}}
+<div class="page">
+  <div class="state-page">
+    <h1>No configuration yet</h1>
+    <p>The daemon is running without a configuration generation, so nothing is watched and nothing can route.</p>
+    <a class="btn btn-primary" href="/setup">Set up</a>
+  </div>
 </div>
-<p class="intro">Each event is tried against a scope's routes in order, and the first route that matches hands its Work to a binding. Change this with <code>open-conduit config edit</code>.</p>
-{{with $c.Connections}}
-<section class="conns">
-  <h2>Connections</h2>
-  <ul class="chips">{{range .}}<li><b>{{.ID}}</b> <span class="from">{{.Type}}</span></li>{{end}}</ul>
+{{else}}
+<div class="page config">
+  <header class="page-head">
+    <div>
+      <h1>Configuration</h1>
+      <p class="page-sub">Generation <b>{{$c.Generation}}</b>{{with $c.Hash}}, <code title="{{.}}">{{printf "%.19s" .}}</code>{{end}}.</p>
+    </div>
+    <div class="head-note">
+      <b>Read-only here.</b> Change configuration with the setup assistant (<code>open-conduit init --with claude</code>, see <a href="/setup">Setup</a>), which asks before it writes, or <code>open-conduit config set</code>.
+    </div>
+  </header>
+
+  <div class="cfg-layout">
+    <nav class="cfg-nav" aria-label="Scopes">
+      <a href="/config"{{if not $d.Scope}} class="is-on" aria-current="page"{{end}}><span>Overview</span></a>
+      <div class="cfg-nav-k">Scopes</div>
+      {{- range $d.Scopes}}{{$on := and $d.Scope (eq $d.Scope.Flow.Scope.ID .Flow.Scope.ID)}}
+      <a href="/config?scope={{.Flow.Scope.ID}}"{{if $on}} class="is-on" aria-current="page"{{end}}>
+        <span>{{.Flow.Scope.Name}}</span>
+        <small>{{.Kinds}} · {{.Open}} open</small>
+      </a>
+      {{- end}}
+      <a href="/setup" class="cfg-add">+ Add a scope</a>
+    </nav>
+    <div class="cfg-main">
+    {{- if $d.Scope}}{{template "cfg-scope" $d}}{{else}}{{template "cfg-overview" $d}}{{end}}
+    </div>
+  </div>
+</div>
+{{end}}
+{{end}}
+
+{{define "cfg-overview"}}{{$d := .}}
+<section class="cfg-sec">
+  <h2 class="section-rule">How work flows through this installation</h2>
+  <p class="quiet">Each scope is an independent boundary: its sources produce events, its routes decide what each event does, and its bindings say which executor does the work. Read each row left to right.</p>
+  <div class="matrix" role="table" aria-label="Scopes">
+    <div class="mx-head" role="row">
+      <span role="columnheader">Scope</span>
+      <span role="columnheader">Events come from</span>
+      <span role="columnheader">Routes, in order</span>
+      <span role="columnheader">Work goes to</span>
+      <span role="columnheader">Extensions offer</span>
+    </div>
+    {{- range $d.Scopes}}
+    <a role="row" class="mx-row" href="/config?scope={{.Flow.Scope.ID}}">
+      <span role="cell" class="mx-scope"><b>{{.Flow.Scope.Name}}</b><small>{{.Open}} open · {{.Flow.Scope.ID}}{{if not .Flow.Scope.Enabled}} · disabled{{end}}</small></span>
+      <span role="cell">{{range .Flow.Sources}}{{if not .Hand}}<span class="mx-chip">{{source .Type}} <small>{{.Name}}</small></span>{{end}}{{else}}<span class="quiet">—</span>{{end}}</span>
+      <span role="cell" class="mx-routes">{{range .Flow.Routes}}<span><i>{{.N}}</i> {{.Route.Name}} <small>{{.Route.ActivePolicy}}</small></span>{{else}}<span class="quiet">no routes</span>{{end}}</span>
+      <span role="cell">{{range .Targets}}<span class="mx-chip">{{.Route.Binding}} <small>→ {{if .Binding}}{{.Binding.Executor}}{{else}}missing{{end}}</small></span>{{else}}<span class="quiet">—</span>{{end}}</span>
+      <span role="cell">{{range .Offers.All}}<span class="mx-chip" title="{{.Label}}">{{.ID}} <small>{{$d.Provider .Provider}}</small></span>{{end}}{{range .Offers.Panels}}<span class="mx-chip">{{.Title}} <small>panel</small></span>{{end}}{{if not (or .Offers.All .Offers.Panels)}}<span class="quiet">—</span>{{end}}</span>
+    </a>
+    {{- else}}
+    <p class="quiet mx-row">No scopes in this generation. Add one to start taking Work.</p>
+    {{- end}}
+  </div>
+</section>
+
+<div class="cfg-cols">
+  <section class="cfg-sec">
+    <h2 class="section-rule">Connections</h2>
+    <ul class="kv-list">
+      {{- range $d.Config.Connections}}
+      <li><span></span><b>{{.ID}}</b><span>{{source .Type}}</span><small>secrets: <span class="redacted">references redacted</span></small></li>
+      {{- else}}
+      <li><span></span><span class="quiet">No connections</span></li>
+      {{- end}}
+    </ul>
+  </section>
+  <section class="cfg-sec">
+    <h2 class="section-rule">Executors in use</h2>
+    <ul class="kv-list">
+      {{- range $d.Executors}}
+      <li><span></span><b>{{.Name}}</b><span>{{plural (len .Bindings) "binding"}}</span><small>{{range $i, $b := .Bindings}}{{if $i}} · {{end}}{{$b}}{{end}}</small></li>
+      {{- else}}
+      <li><span></span><span class="quiet">No bindings</span></li>
+      {{- end}}
+    </ul>
+  </section>
+  <section class="cfg-sec">
+    <h2 class="section-rule">Settings</h2>
+    {{- with $d.Pools}}
+    <dl class="kv">
+      {{- range .}}
+      <dt>{{if eq .Name "agents"}}Agent turns at once{{else if eq .Name "jobs"}}Jobs at once{{else}}{{.Name}} at once{{end}}</dt>
+      <dd>{{if .Limit}}{{.Limit}}{{else}}no limit{{end}}{{with .Setting}} <code>{{.}}</code>{{end}}</dd>
+      {{- end}}
+    </dl>
+    {{- else}}
+    <p class="quiet small">This daemon does not report its slot settings.</p>
+    {{- end}}
+  </section>
+</div>
+
+{{with $d.Doctor}}
+<section class="cfg-sec">
+  <h2 class="section-rule">Daemon checks <span>open-conduit doctor</span></h2>
+  <ul class="kv-list">
+    {{- range .Checks}}
+    <li>{{mark ($d.CheckMark .Status) 12 .Status}}<b>{{.Name}}</b><span>{{.Detail}}</span></li>
+    {{- end}}
+  </ul>
 </section>
 {{end}}
-<div class="scopes">
-{{range .Data.Scopes}}{{$f := .}}
-<section class="scope{{if not .Scope.Enabled}} off{{end}}">
-  <h2>{{.Scope.Name}} <span class="from mono">{{.Scope.ID}}</span>{{with .Scope.ParentID}} <span class="from">inherits from <span class="mono">{{.}}</span></span>{{end}}{{if not .Scope.Enabled}} <span class="state s-cancelled">disabled</span>{{end}}</h2>
-  {{with .Scope.Source}}<p class="from">from <span class="mono">{{.}}</span></p>{{end}}
-  <div class="scroll">
-  <div class="flow">
-    <h3>Sources</h3><span></span><h3>Routes <span class="from">tried in order</span></h3><span></span><h3>Runs on</h3>
-    {{range $i, $row := .Rows}}
-    {{with .Source}}<div class="node"><b>{{.Name}}</b><span class="from">{{.Kind}}</span>{{with .Via}}<span class="from">via {{.}}</span>{{end}}{{with .Entries}}<ul class="entries">{{range .}}<li><b>{{.Name}}</b> <span class="from">{{.Detail}}</span></li>{{end}}</ul>{{end}}</div>{{else}}<span></span>{{end}}
-    <div class="bus{{if .First}} first{{end}}{{if .Last}} last{{end}}" aria-hidden="true">{{if .Source}}<i class="in"></i>{{end}}{{if .Route}}<i class="out"></i>{{end}}</div>
-    {{with .Route}}<div class="node"><b>{{inc $i}}. {{.Name}}</b><span class="from">matches {{.Handler}}{{with .Detail}}: {{.}}{{end}}</span>{{with .ActivePolicy}}<span class="from">while busy: {{.}}</span>{{end}}</div>
-    <div class="arrow" aria-hidden="true"><i class="out"></i></div>
-    {{with $row.Binding}}<div class="node"><b>{{.Name}}</b><span class="from">executor {{.Executor}}</span>{{with .Resource}}<span class="from">{{.}} workspace</span>{{end}}{{with .Connection}}<span class="from">via {{.}}</span>{{end}}</div>
-    {{else}}<div class="node missing"><b>{{.Binding}}</b><span>no such binding</span></div>{{end}}
-    {{else}}{{if not $i}}<p class="none">No routes: events here start no Work.</p>{{else}}<span></span>{{end}}<span></span><span></span>{{end}}
-    {{end}}
-    <div class="node other"><b>Other Work</b><span class="from">an agent or <code>open-conduit work create</code></span></div>
-    <div class="arrow skip" aria-hidden="true"><i class="out"></i><span>names its binding, skipping the routes</span></div>
-    <div class="stack">{{range .Unrouted}}<div class="node"><b>{{.Name}}</b><span class="from">executor {{.Executor}}</span>{{with .Resource}}<span class="from">{{.}} workspace</span>{{end}}{{with .Connection}}<span class="from">via {{.}}</span>{{end}}</div>{{else}}<p class="none">any binding above</p>{{end}}</div>
+{{end}}
+
+{{define "cfg-scope"}}{{$d := .}}{{$s := $d.Scope}}{{$f := $s.Flow}}{{$id := $f.Scope.ID}}
+<header class="scope-head">
+  <div>
+    <h2>{{$f.Scope.Name}}</h2>
+    <p><code>{{$id}}</code>{{with $f.Scope.ParentID}} · inherits from <code>{{.}}</code>{{end}} · {{with $f.Scope.Source}}from the folder <code>{{$d.Tilde .}}</code>{{else}}defined in the config file{{end}}{{if not $f.Scope.Enabled}} · <b>disabled</b>{{end}}</p>
   </div>
+  <div class="row-gap">
+    <form method="post" action="/scopes/reconcile">
+      <input type="hidden" name="csrf" value="{{$d.Page.CSRF}}"><input type="hidden" name="back" value="{{$d.Page.Back}}"><input type="hidden" name="scope" value="{{$id}}">
+      <button class="btn btn-sm" title="POST /v1/scopes/{id}/reconcile">Reconcile now</button>
+    </form>
+    <a class="btn btn-sm btn-quiet" href="/?scope={{$id}}">View its runs</a>
   </div>
-  {{with .Others}}<p class="also">Also running: {{range $i, $x := .}}{{if $i}}, {{end}}<b>{{$x.Name}}</b> <span class="from">{{$x.Type}}</span>{{end}}</p>{{end}}
+</header>
+
+<section class="cfg-sec">
+  <div class="cfg-h-row">
+    <h3 class="cfg-h">How events flow</h3>
+    {{- if $d.Tracing}}{{if $d.Samples}}
+    {{if $d.Sample}}<a class="btn btn-sm btn-primary" href="/config?scope={{$id}}" aria-pressed="true">Stop tracing</a>
+    {{else}}<a class="btn btn-sm" href="/config?scope={{$id}}&amp;trace={{(index $d.Samples 0).ID}}" aria-pressed="false">Trace an event</a>{{end}}
+    {{- else}}<span class="quiet small">No extension here offers sample events to trace</span>{{end}}{{end}}
+  </div>
+  {{- with $d.Sample}}
+  <div class="trace">
+    <form method="get" action="/config" class="trace-pick">
+      <input type="hidden" name="scope" value="{{$id}}">
+      <label class="field field-inline"><span>Suppose</span>
+        <select name="trace" data-autosubmit>
+          {{- range $d.Samples}}<option value="{{.ID}}"{{if eq .ID $d.Sample.ID}} selected{{end}}>{{.Title}}</option>{{end}}
+        </select>
+      </label>
+      <button class="btn btn-sm" data-noscript>Trace</button>
+    </form>
+    <div class="trace-facts">
+      <code>{{.Type}}</code>
+      <span class="quiet">from {{or .Source "the scope's sources"}}</span>
+      <ul>
+        <li>a sample for route <code>{{.Route}}</code> (handler {{.Handler}})</li>
+        {{- with .CorrelationKey}}<li>about {{.Source}} <code>{{.ExternalID}}</code></li>{{end}}
+        {{- with $f.Trace}}{{with .Work}}<li>Work <code>{{.ID}}</code> already owns it and is {{.State}}</li>{{end}}{{end}}
+      </ul>
+    </div>
+  </div>
+  {{- end}}
+  {{- with $d.TraceErr}}<p class="warn small" role="alert">The trace failed: {{.}}</p>{{end}}
+  {{template "cfg-flow" $f}}
+  {{- with $f.Trace}}
+  <div class="trace-result" role="status">
+    <b>{{$d.EffectText .Effect.Kind}}</b>
+    <p>{{.Effect.Detail}}</p>
+    {{- range .Also}}<p>Also: {{$d.EffectText .Kind}}{{with .Detail}} — {{.}}{{end}}</p>{{end}}
+    <p class="quiet small">A dry run against generation {{.Generation}}: <code>POST /v1/scopes/{{$id}}/route/trace</code> accepts and records nothing.</p>
+  </div>
+  {{- end}}
 </section>
-{{else}}{{if $c.Generation}}<p class="empty">No scopes. Add one to the daemon's configuration to start taking Work.</p>{{end}}{{end}}
+
+<section class="cfg-sec">
+  <h3 class="cfg-h">Binding details</h3>
+  <div class="bindings">
+    {{- range $f.Scope.Bindings}}
+    <details class="binding" id="binding-{{.Name}}">
+      <summary class="binding-head">
+        <b>{{.Name}}</b>
+        <span>→ {{.Executor}}</span>
+        {{- with $d.SettingOf .Settings "model"}}<small>model {{.}}</small>{{end}}
+        {{- with $d.SettingOf .ResourceSettings "checkout"}}<small>worktree of {{.}}</small>{{else}}{{with .Resource}}<small>{{.}} workspace</small>{{end}}{{end}}
+        <span class="toolbar-gap"></span>
+        <small>{{if .Operations}}{{plural (len .Operations) "operation"}}{{else if $d.Detailed}}no operations{{else}}operations not exposed{{end}}</small>
+      </summary>
+      <dl class="kv binding-body">
+        <dt>Needs</dt>
+        <dd>{{with .Requires.Toolbelt}}toolbelt <code>{{.}}</code>{{end}}{{range $d.Caps .Requires}}<code>{{.}}</code>{{end}}{{if not (or .Requires.Toolbelt ($d.Caps .Requires))}}nothing beyond running{{end}}</dd>
+        {{- with .Connection}}<dt>Connection</dt><dd><code>{{.}}</code></dd>{{end}}
+        <dt>Executor config</dt>
+        <dd>{{range .Settings}}<code>{{.Name}}: {{$d.Setting .}}</code>{{else}}{{if $d.Detailed}}defaults{{else}}<span class="quiet">not exposed by this daemon</span>{{end}}{{end}}</dd>
+        {{- with .Resource}}
+        <dt>Workspace</dt>
+        <dd>{{.}}</dd>
+        {{- end}}
+        {{- if .ResourceSettings}}<dt>Workspace config</dt><dd>{{range .ResourceSettings}}<code>{{.Name}}: {{$d.Setting .}}</code>{{end}}</dd>{{end}}
+        <dt>May call</dt>
+        <dd class="ops">{{range .Operations}}<code>{{.}}</code>{{else}}{{if $d.Detailed}}<span class="quiet">no toolbelt operations</span>{{else}}<span class="quiet">not exposed by this daemon</span>{{end}}{{end}}</dd>
+      </dl>
+    </details>
+    {{- else}}
+    <p class="quiet">No bindings in this scope.</p>
+    {{- end}}
+  </div>
+  {{- with $f.Unrouted}}
+  <p class="quiet small">No route sends to {{range $i, $b := .}}{{if $i}}, {{end}}<code>{{$b.Name}}</code>{{end}}: Work reaches {{if eq (len .) 1}}it{{else}}them{{end}} only when it names its binding itself (an agent, or <code>open-conduit work create</code>).</p>
+  {{- end}}
+</section>
+
+<section class="cfg-sec">
+  <h3 class="cfg-h">What extensions offer here</h3>
+  {{- with $s.Offers.Err}}<p class="warn small" role="alert">{{.}}</p>{{end}}
+  {{- with $s.Offers.Panels}}{{template "panels" .}}{{end}}
+  {{- if $s.Offers.Actions}}
+  <div class="xactions">{{range $s.Offers.Actions}}{{template "action-control" .}}{{end}}</div>
+  {{- else if not $s.Offers.Panels}}
+  <p class="quiet">No extension offers a scope-level action or panel here.</p>
+  {{- end}}
+  <p class="quiet small">Extensions may also offer actions and panels on individual Work while they apply, such as a question an agent is waiting on. They appear on that Work and in Needs you.</p>
+  <dl class="kv kv-wide">
+    <dt>Authorized connections</dt>
+    <dd>{{range $i, $x := $f.Scope.Authorization.Connections}}{{if $i}}, {{end}}{{$x}}{{else}}{{if $d.Detailed}}—{{else}}<span class="quiet">not exposed by this daemon</span>{{end}}{{end}}</dd>
+    <dt>Operation ceiling</dt>
+    <dd class="ops">{{range $f.Scope.Authorization.Operations}}<code>{{.}}</code>{{else}}{{if $d.Detailed}}—{{else}}<span class="quiet">not exposed by this daemon</span>{{end}}{{end}}</dd>
+    {{- with $f.Scope.Authorization.ReadScopes}}<dt>May read scopes</dt><dd class="ops">{{range .}}<code>{{.}}</code>{{end}}</dd>{{end}}
+    {{- with $f.Others}}<dt>Other extensions</dt><dd>{{range $i, $x := .}}{{if $i}}, {{end}}<b>{{$x.Name}}</b> <span class="quiet">{{source $x.Type}}</span>{{end}}</dd>{{end}}
+  </dl>
+</section>
+{{end}}
+
+{{/* The flow chart: seven columns, every cell emitted in grid order (empty
+   ones included) so nothing needs inline placement. A route's row holds its
+   route, its match edge, its binding, an edge and its executor. */}}
+{{define "cfg-flow"}}{{$f := .}}{{$tracing := $f.Tracing}}
+<div class="flow{{if $tracing}} is-tracing{{end}}" role="list" aria-label="Routing, in order">
+  <div class="flow-head">Events come from</div><span class="flow-gap"></span>
+  <div class="flow-head">Routes, in order · first match wins</div><span class="flow-gap"></span>
+  <div class="flow-head">Binding</div><span class="flow-gap"></span>
+  <div class="flow-head">Runs on</div>
+  {{- range $i, $r := $f.Routes}}
+  <div class="flow-row{{with .Verdict}} v-{{.}}{{end}}" role="listitem">
+    {{- if eq $i 0}}{{template "cfg-sources" $f}}{{template "cfg-edge" ($f.Edge $tracing "event" "" "")}}{{else}}<span class="flow-gap"></span><span class="flow-gap"></span>{{end}}
+    <div class="node node-route">
+      <div class="node-top"><span class="route-ord">{{.N}}</span><b class="mono">{{.Route.Name}}</b><small>handler {{.Route.Handler}}</small></div>
+      {{- with .Route.Detail}}<p>{{.}}</p>{{end}}
+      {{- with .Step}}<p class="verdict v-{{$r.Verdict}}">{{$r.VerdictText}}{{with .Reason}} — {{.}}{{end}}</p>{{end}}
+    </div>
+    {{- template "cfg-edge" ($f.Edge (eq .Verdict "match") "match" (print "if busy: " .Route.ActivePolicy) .Policy)}}
+    <a class="node node-binding" href="#binding-{{.Route.Binding}}" aria-label="Binding {{.Route.Binding}}, show details">
+      <div class="node-top"><b class="mono">{{.Route.Binding}}</b>{{if .Shared}}<small>same as above</small>{{end}}</div>
+      {{- with .Binding}}
+      <p class="caps">{{with .Requires.Toolbelt}}<span>{{.}} toolbelt</span>{{end}}{{range $r.Caps}}<span>{{.}}</span>{{end}}{{with .Operations}}<span>{{plural (len .) "operation"}}</span>{{end}}</p>
+      {{- else}}
+      <p class="warn">Binding not found in this scope</p>
+      {{- end}}
+    </a>
+    {{- template "cfg-edge" ($f.Edge (eq .Verdict "match") "" "" "")}}
+    <div class="node node-exec">
+      <div class="node-top"><b>{{with .Binding}}{{.Executor}}{{else}}—{{end}}</b></div>
+      {{- with .Binding}}
+      <p class="ws">{{with $r.Model}}<span>model {{.}}</span>{{end}}{{if $r.Checkout}}<span>worktree of {{$r.Checkout}}</span>{{else if .Resource}}<span>{{.Resource}} workspace</span>{{else if .Requires.Workspace}}<span>workspace</span>{{else}}<span>no workspace</span>{{end}}</p>
+      {{- end}}
+    </div>
+    <span class="flow-gap"></span><span class="flow-gap"></span>
+    <div class="fall{{if eq .Verdict "skip"}} is-lit{{end}}" aria-hidden="true"><span class="fall-line"></span><span class="edge-label">no match → next</span></div>
+    <span class="flow-gap"></span><span class="flow-gap"></span><span class="flow-gap"></span><span class="flow-gap"></span>
+  </div>
+  {{- else}}
+  {{template "cfg-sources" $f}}{{template "cfg-edge" ($f.Edge $tracing "event" "" "")}}
+  {{- end}}
+  {{- if $f.Routes}}<span class="flow-gap"></span><span class="flow-gap"></span>{{end}}
+  <div class="node node-none{{if $f.Unmatched}} is-lit{{end}}">
+    <b>No route matched</b>
+    <p>{{if $f.Routes}}The event is still accepted and recorded, then checkpointed as unmatched. <code>open-conduit route</code> explains it.{{else}}This scope has no routes: its events are recorded and start no Work.{{end}}</p>
+  </div>
 </div>
 {{end}}
+
+{{define "cfg-sources"}}
+<div class="node node-source{{if .Trace}} is-lit{{end}}">
+  {{- range .Sources}}
+  <div class="src">
+    {{- if .Hand}}<b>{{.Name}}</b><p>{{.Type}}</p>
+    {{- else}}<b>{{source .Type}}</b> <span class="mono">{{.Name}}</span>{{with .Via}}<small>via {{.}}</small>{{end}}
+    {{- range .Entries}}<p><b>{{.Name}}</b>{{with .Detail}} {{.}}{{end}}</p>{{end}}
+    {{- end}}
+  </div>
+  {{- end}}
+</div>
+{{end}}
+
+{{define "cfg-edge"}}
+<div class="edge{{if .Lit}} is-lit{{end}}"{{with .Title}} title="{{.}}"{{end}} aria-hidden="true">
+  {{- with .Top}}<span class="edge-label">{{.}}</span>{{else}}<span></span>{{end}}<span class="edge-line"></span>{{with .Bottom}}<span class="edge-label edge-label-b">{{.}}</span>{{end}}
+</div>
+{{end}}
+
+

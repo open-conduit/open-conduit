@@ -102,39 +102,97 @@ func TestMarkdownEscapes(t *testing.T) {
 	}
 }
 
-func TestRunPageShowsTheTimelineAsAConversation(t *testing.T) {
-	f, s, h := setup(t)
-	for i := range f.runs {
-		if f.runs[i].ID == "exe_1" {
-			f.runs[i].Artifacts = append(f.runs[i].Artifacts, client.Artifact{ID: "art_transcript", MediaType: "application/x-ndjson", Size: int64(len(transcript))})
-		}
-	}
-	f.content["art_transcript"] = transcript
-	body := do(h, "GET", "/run?id=exe_1", nil, s).Body.String()
-	for _, want := range []string{
-		`id="turn-1" data-part="/run/conversation?run=exe_1" open aria-current="step" data-loaded>`,
-		`id="turn-2" data-part="/run/conversation?run=exe_2">`, `<a href="/run?id=exe_2">Go to turn</a>`,
-		"Reading the <strong>issue</strong> first.", `<span class="tname">call</span><span class="from">open-conduit</span><code class="thead">github.issue.view</code>`,
-		`<details class="tool failed" data-key="t4">`, "No result was recorded",
-	} {
-		if !strings.Contains(body, want) {
-			t.Errorf("missing %q", want)
-		}
-	}
+func chatOf(t *testing.T, lines ...string) chat {
+	t.Helper()
+	c := parseConversation(strings.Join(lines, "\n"), 0, "")
+	settle(c.Entries)
+	return buildChat(c, client.Run{})
+}
 
-	// A turn opened later loads alone; a running one says it is live.
-	w := do(h, "GET", "/run/conversation?run=exe_1", nil, s)
-	if w.Header().Get("X-Live") != "0" || !strings.Contains(w.Body.String(), "Reading the <strong>issue</strong> first.") || strings.Contains(w.Body.String(), "<html") {
-		t.Errorf("finished part: %s\n%s", w.Header().Get("X-Live"), w.Body.String())
+func TestChatSendsToolbeltProseAsAMessage(t *testing.T) {
+	ch := chatOf(t,
+		`{"type":"user","message":{"content":"You are working issue #7."}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t1","name":"mcp__open-conduit__call","input":{"operation":"tracker.comment","input":{"issue":7,"body":"I have opened a pull request that fixes the flaky test."}}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t1","content":"{\"state\":\"posted\",\"number\":12}"}]}}`,
+		`{"type":"assistant","message":{"content":[{"type":"tool_use","id":"t2","name":"mcp__open-conduit__wait","input":{"match":{"types":["x.y"]}}}]}}`,
+		`{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"t2","content":"{\"state\":\"active\"}"}]}}`,
+		`{"type":"user","message":{"content":"A comment arrived while you were working."}}`,
+	)
+	kinds := []string{}
+	for _, b := range ch.Blocks {
+		kinds = append(kinds, b.Kind)
 	}
-	f.live["exe_3"] = client.LiveRun{Outputs: []client.LiveOutput{{Name: "transcript", MediaType: "application/x-ndjson", Content: transcript}}}
-	if w := do(h, "GET", "/run/conversation?run=exe_3", nil, s); w.Header().Get("X-Live") != "1" || !strings.Contains(w.Body.String(), "Working") || !strings.Contains(w.Body.String(), "running</span>") {
-		t.Errorf("live part: %s\n%s", w.Header().Get("X-Live"), w.Body.String())
+	if strings.Join(kinds, " ") != "prompt sent call person" {
+		t.Fatalf("blocks %v", kinds)
 	}
-	if w := do(h, "GET", "/run/conversation?run=exe_2", nil, s); !strings.Contains(w.Body.String(), "No conversation to show: run has no artifacts") {
-		t.Errorf("turn without a transcript:\n%s", w.Body.String())
+	sent := ch.Blocks[1].Tool
+	if sent.Name != "tracker.comment" || sent.Owner != "tracker" || sent.Prose != "I have opened a pull request that fixes the flaky test." || strings.Join(sent.Facts, " · ") != "state posted · number 12" {
+		t.Fatalf("sent %+v", sent)
 	}
-	if w := do(h, "GET", "/run/conversation?run=nope", nil, s); w.Code != 404 {
-		t.Errorf("missing run: %d", w.Code)
+	if c := ch.Blocks[2].Tool; c.Name != "wait" || c.Owner != "" || strings.Join(c.Facts, "") != "state active" {
+		t.Fatalf("call %+v", c)
+	}
+	if p := ch.Blocks[3]; !p.Injected || p.Text != "A comment arrived while you were working." {
+		t.Fatalf("injected %+v", p)
+	}
+	if ch.Counts[fToolbelt] != 2 || ch.Counts[fMessages] != 2 {
+		t.Fatalf("counts %v", ch.Counts)
+	}
+}
+
+func TestChatGroupsToolsAndHighlightsOnlyRealFailures(t *testing.T) {
+	use := func(id, name, cmd string) string {
+		return `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"` + id + `","name":"` + name + `","input":{"command":"` + cmd + `"}}]}}`
+	}
+	res := func(id, out string, failed bool) string {
+		e := "false"
+		if failed {
+			e = "true"
+		}
+		return `{"type":"user","message":{"content":[{"type":"tool_result","tool_use_id":"` + id + `","is_error":` + e + `,"content":"` + out + `"}]}}`
+	}
+	ch := chatOf(t,
+		`{"type":"user","message":{"content":"go"}}`,
+		use("a", "Bash", "go test ./..."), res("a", `--- FAIL: TestX\nok  \tother\nexit status 1`, true),
+		use("b", "Read", "x.go"), res("b", "package x", false),
+		use("c", "Bash", "ls"), res("c", "a b", false),
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"The error: was a typo; fixed."}]}}`,
+	)
+	g := ch.Blocks[1]
+	if g.Kind != "tools" || len(g.Group) != 3 || g.Summary != "Bash ×2 · Read ×1" || g.Failed != 1 || !g.First || ch.Errors != 1 {
+		t.Fatalf("group %+v", g)
+	}
+	c := codeOf("Result", g.Group[0].Result, 14, true)
+	if c.Shown[0].Class != "ln-bad" || c.Shown[1].Class != "" || c.Shown[2].Class != "ln-bad" {
+		t.Fatalf("failure lines %+v", c.Shown)
+	}
+	// A result that did not fail, and prose, are never highlighted.
+	if c := codeOf("Result", "error: not really", 14, false); c.Shown[0].Class != "" {
+		t.Fatal("highlighted a call that did not fail")
+	}
+}
+
+func TestTurnTranscriptRendersAsAChat(t *testing.T) {
+	f, s, h := setup(t)
+	f.runs[1].Artifacts = []client.Artifact{{ID: "art_tx", MediaType: "application/x-ndjson", Size: 1}}
+	f.content["art_tx"] = strings.Join([]string{
+		`{"type":"system","subtype":"init","model":"m-1"}`,
+		`{"type":"user","message":{"content":"Work issue #88."}}`,
+		`{"type":"assistant","message":{"content":[{"type":"text","text":"On it, **now**."}]}}`,
+		`{"type":"result","subtype":"success","num_turns":4}`,
+	}, "\n")
+	body := do(h, "GET", "/work?id=wrk_1&turn=2", nil, s).Body.String()
+	for _, want := range []string{"Input to the executor", `class="c-msg from-agent"`, "<strong>now</strong>", "m-1", "4 model"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("transcript lacks %q", want)
+		}
+	}
+	// Filters are links that keep the view, and a filter off hides its rows.
+	if !strings.Contains(body, "show=toolbelt%2Ctools%2Csystem") {
+		t.Error("Messages filter link missing")
+	}
+	off := do(h, "GET", "/work?id=wrk_1&turn=2&show=system", nil, s).Body.String()
+	if strings.Contains(off, `class="c-msg from-agent"`) || !strings.Contains(off, "Session started") {
+		t.Error("show=system still shows messages")
 	}
 }

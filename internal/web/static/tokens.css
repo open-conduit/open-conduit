@@ -1,0 +1,133 @@
+/* Open Conduit — design tokens
+   Ground: ledger paper and ink. One signal colour, used only for what needs
+   a person. State colours are muted and always paired with a shape. */
+
+:root {
+  --font-sans: 'IBM Plex Sans', ui-sans-serif, system-ui, sans-serif;
+  --font-cond: 'IBM Plex Sans Condensed', 'IBM Plex Sans', ui-sans-serif, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  --paper: #f1efe9;
+  --sheet: #fbfaf7;
+  --sunk: #e9e6de;
+  --ink: #15171c;
+  --ink-2: #474b54;
+  --ink-3: #686c75;
+  --rule: #dcd8ce;
+  --rule-2: #c7c2b6;
+  --hover: #ebe8e0;
+  --select: #e3dfd3;
+  --focus: #1d4ed8;
+
+  --signal: #f0531c;
+  --signal-ink: #b93a0c;
+  --signal-wash: #fbe6dc;
+
+  --run: #2d50d6;
+  --run-wash: #e2e7fa;
+  --wait: #93680a;
+  --wait-fill: #cf9a22;
+  --wait-wash: #f3ead3;
+  --held: #67599f;
+  --held-wash: #e9e5f3;
+  --fail: #b4232c;
+  --fail-wash: #f6dfdd;
+  --ok: #2e7048;
+  --ok-wash: #dcebe0;
+
+  --code-bg: #f3f1eb;
+  --shadow-pop: 0 1px 0 rgba(21, 23, 28, 0.04), 0 10px 30px -8px rgba(21, 23, 28, 0.22), 0 0 0 1px rgba(21, 23, 28, 0.08);
+
+  --t-micro: 11px;
+  --t-small: 12.5px;
+  --t-body: 13.5px;
+  --t-read: 14.5px;
+  --t-sub: 16px;
+  --t-title: 22px;
+
+  --gutter: 24px;
+  --bar-h: 52px;
+  --status-h: 30px;
+  --radius: 3px;
+
+  color-scheme: light;
+}
+
+:root[data-theme='dark'] {
+  --paper: #0f1012;
+  --sheet: #16171a;
+  --sunk: #1d1e22;
+  --ink: #ebe8e1;
+  --ink-2: #b9b6ae;
+  --ink-3: #8f8c85;
+  --rule: #2a2b30;
+  --rule-2: #3a3b41;
+  --hover: #1f2024;
+  --select: #26272c;
+  --focus: #8aa4ff;
+
+  --signal: #ff6a33;
+  --signal-ink: #ff8a5c;
+  --signal-wash: #3a1d12;
+
+  --run: #8ea2ff;
+  --run-wash: #1c2240;
+  --wait: #e2b54a;
+  --wait-fill: #d9a531;
+  --wait-wash: #33280f;
+  --held: #b4a8ec;
+  --held-wash: #26213d;
+  --fail: #ff7a76;
+  --fail-wash: #3a1718;
+  --ok: #7cc597;
+  --ok-wash: #15291d;
+
+  --code-bg: #1b1c20;
+  --shadow-pop: 0 12px 34px -8px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08);
+
+  color-scheme: dark;
+}
+
+/* Dark without a choice made follows the system; data-theme overrides it. */
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme='light']) {
+    --paper: #0f1012;
+    --sheet: #16171a;
+    --sunk: #1d1e22;
+    --ink: #ebe8e1;
+    --ink-2: #b9b6ae;
+    --ink-3: #8f8c85;
+    --rule: #2a2b30;
+    --rule-2: #3a3b41;
+    --hover: #1f2024;
+    --select: #26272c;
+    --focus: #8aa4ff;
+
+    --signal: #ff6a33;
+    --signal-ink: #ff8a5c;
+    --signal-wash: #3a1d12;
+
+    --run: #8ea2ff;
+    --run-wash: #1c2240;
+    --wait: #e2b54a;
+    --wait-fill: #d9a531;
+    --wait-wash: #33280f;
+    --held: #b4a8ec;
+    --held-wash: #26213d;
+    --fail: #ff7a76;
+    --fail-wash: #3a1718;
+    --ok: #7cc597;
+    --ok-wash: #15291d;
+
+    --code-bg: #1b1c20;
+    --shadow-pop: 0 12px 34px -8px rgba(0, 0, 0, 0.7), 0 0 0 1px rgba(255, 255, 255, 0.08);
+
+    color-scheme: dark;
+  }
+}
+
+@media (max-width: 720px) {
+  :root {
+    --gutter: 16px;
+  }
+}

@@ -1,0 +1,5 @@
+{{define "content"}}
+<div class="page confirm-page">
+  {{with .Data}}{{if .Title}}{{template "action-dialog" .}}{{end}}{{end}}
+</div>
+{{end}}

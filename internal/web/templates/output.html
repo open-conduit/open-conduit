@@ -9,3 +9,5 @@
 {{if $d.Out.Live}}<p class="following" id="following"><span class="pulse" aria-hidden="true"></span><span id="following-text">Following the live output</span></p>{{end}}
 <pre id="output" class="log"{{if $d.Out.Live}} data-follow="/output?run={{$d.RunID}}&amp;pick={{$d.Pick}}&amp;format=json"{{end}}>{{$d.Out.Text}}</pre>
 {{end}}
+
+{{define "scripts"}}<script src="/static/work.js" defer></script>{{end}}
