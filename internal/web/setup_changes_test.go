@@ -108,6 +108,7 @@ func TestSetupDrawsChangeSetEventsAndChecksAfterApply(t *testing.T) {
 	f, s := changeSetFake(t)
 	f.doctor = &client.Doctor{State: "warn", Checks: []client.Check{{Name: "config", Status: "ok", Code: "current", Detail: "generation 2 is active"}, {Name: "claude_code", Status: "warn", Detail: "not signed in"}}}
 	f.events = []client.Event{
+		{ID: "e0", Sequence: "1", WorkID: sessionID, Type: "setup.probe", OccurredAt: at0(0), Data: payloadOf("setup.probe.v1", map[string]any{"probe": "github.accounts", "command": "gh auth status", "why": "which logins you have"})},
 		{ID: "e1", Sequence: "1", WorkID: sessionID, Type: "setup.proposal", OccurredAt: at0(0), Data: payloadOf("setup.proposal.v1", map[string]any{"change": "c1", "op": "replace", "pointer": "/scopes/setup/name", "why": "x", "diagnostics": []any{map[string]string{"path": "/x"}}})},
 		{ID: "e2", Sequence: "2", WorkID: sessionID, Type: "setup.decision", OccurredAt: at0(0), Data: payloadOf("setup.decision.v1", map[string]any{"changes": []string{"c4"}, "decision": "rejected", "reason": "not yet"})},
 		{ID: "e3", Sequence: "3", WorkID: sessionID, Type: "setup.decision", OccurredAt: at0(0), Data: payloadOf("setup.decision.v1", map[string]any{"changes": []string{"c3"}, "decision": "withdrawn"})},
@@ -115,7 +116,7 @@ func TestSetupDrawsChangeSetEventsAndChecksAfterApply(t *testing.T) {
 		{ID: "e5", Sequence: "5", RoutedWorkID: sessionID, Type: "setup.applied", OccurredAt: at0(0), Data: payloadOf("setup.applied.v1", map[string]any{"generation": "2", "hash": "h", "changes": []string{"c1", "c2"}})},
 	}
 	body := do(s.Handler(addr), "GET", "/setup", nil, s).Body.String()
-	lines := []string{"Proposed c1: replace /scopes/setup/name (1 problem)", "You rejected c4: not yet", "The assistant withdrew c3", "You validated the approved changes: 2 changes, valid", "Applied c1, c2 as generation 2"}
+	lines := []string{"The assistant ran gh auth status: which logins you have", "Proposed c1: replace /scopes/setup/name (1 problem)", "You rejected c4: not yet", "The assistant withdrew c3", "You validated the approved changes: 2 changes, valid", "Applied c1, c2 as generation 2"}
 	last := -1
 	for _, want := range lines {
 		i := strings.Index(body, want)

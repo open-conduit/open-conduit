@@ -24,6 +24,7 @@ const (
 	setupTypeDecision  = "setup.decision"
 	setupTypeChecks    = "setup.checks"
 	setupTypeApplied   = "setup.applied"
+	setupTypeProbe     = "setup.probe"
 	setupValidate      = "validate"
 	setupApprove       = "approve_"
 	setupReject        = "reject_"
@@ -146,7 +147,8 @@ func setupChangeSet(panels []client.Panel, actions []client.Action, entry string
 }
 
 // setupNote is one of the session's change set Events as a short line of
-// the conversation: a proposal, a decision, a validation or an apply.
+// the conversation: a probe, a proposal, a decision, a validation or an
+// apply.
 func setupNote(e client.Event) (string, bool) {
 	switch e.Type {
 	case setupTypeProposal:
@@ -198,6 +200,29 @@ func setupNote(e client.Event) (string, bool) {
 			return fmt.Sprintf("%s validated the approved changes: %s, valid", who, plural(c.Approved, "change")), true
 		}
 		return fmt.Sprintf("%s validated the approved changes: %s", who, plural(len(c.Diagnostics), "problem")), true
+	case setupTypeProbe:
+		var p struct {
+			Probe, Command, Why, Error string
+			Redacted                   bool
+		}
+		if json.Unmarshal(e.Data.Data, &p) != nil || p.Probe == "" {
+			return "", false
+		}
+		what := p.Command
+		if what == "" {
+			what = p.Probe
+		}
+		line := "The assistant ran " + what
+		if p.Why != "" {
+			line += ": " + p.Why
+		}
+		switch {
+		case p.Error != "":
+			line += " (failed: " + p.Error + ")"
+		case p.Redacted:
+			line += " (output withheld: it looked like it held a secret)"
+		}
+		return line, true
 	case setupTypeApplied:
 		var a struct {
 			Generation string

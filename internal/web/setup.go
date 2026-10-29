@@ -295,7 +295,7 @@ func setupMsgs(events []client.Event) []setupMsg {
 				out[i].Answer = a.Answer
 			}
 			out = append(out, setupMsg{Operator: true, Text: a.Answer, At: at})
-		case setupTypeProposal, setupTypeDecision, setupTypeChecks, setupTypeApplied:
+		case setupTypeProbe, setupTypeProposal, setupTypeDecision, setupTypeChecks, setupTypeApplied:
 			if line, ok := setupNote(e); ok {
 				out = append(out, setupMsg{Note: true, Text: line, At: at})
 			}
