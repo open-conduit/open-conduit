@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -46,6 +47,15 @@ type RouteDecision struct {
 // of side effects: routing may evaluate it again after a revision conflict,
 // and a route trace calls it for hypothetical Events that never happen, so it
 // decides from its input alone and records, sends or counts nothing.
+// RouteBinding is the binding a route binds, as a route handler's binding
+// check sees it (inproc.ConfigType.Binding): its executor, the toolbelt
+// operations it grants and its executor config.
+type RouteBinding struct {
+	Executor   string
+	Operations []string
+	Config     json.RawMessage
+}
+
 type RouteHandler interface {
 	Match(context.Context, RouteInput) (RouteDecision, error)
 }

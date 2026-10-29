@@ -68,6 +68,9 @@ func inprocRegistry(reg *config.Registry, xs []inproc.Extension) {
 	if reg.HandlerConfig == nil {
 		reg.HandlerConfig = map[string]func(json.RawMessage) error{}
 	}
+	if reg.HandlerBinding == nil {
+		reg.HandlerBinding = map[string]func(extension.RouteBinding) error{}
+	}
 	for _, x := range xs {
 		if t, ok := x.(inproc.Typed); ok {
 			for _, c := range t.Types() {
@@ -82,6 +85,9 @@ func inprocRegistry(reg *config.Registry, xs []inproc.Extension) {
 					reg.Extensions[c.Type] = config.ExtensionType{Ingress: c.Ingress, Validate: v}
 				case protocol.ValidateRoute:
 					reg.HandlerConfig[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
+					if c.Binding != nil {
+						reg.HandlerBinding[c.Type] = c.Binding
+					}
 				}
 			}
 		}

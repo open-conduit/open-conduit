@@ -44,7 +44,7 @@ func (*Extension) Name() string { return Type }
 func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{
 		{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension},
-		{Kind: protocol.ValidateRoute, Type: Type, Validate: ValidateRoute},
+		{Kind: protocol.ValidateRoute, Type: Type, Validate: ValidateRoute, Binding: ValidateBinding},
 	}
 }
 

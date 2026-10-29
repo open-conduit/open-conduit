@@ -324,6 +324,29 @@ func TestOwnerValidationAndRegistrations(t *testing.T) {
 	}
 }
 
+// TestHandlerBinding: a route handler's binding check sees the binding the
+// route binds and refuses it with its own reason.
+func TestHandlerBinding(t *testing.T) {
+	reg := registry()
+	var seen []extension.RouteBinding
+	reg.HandlerBinding = map[string]func(extension.RouteBinding) error{"manual": func(b extension.RouteBinding) error {
+		seen = append(seen, b)
+		return errors.New("bind the agent executor")
+	}}
+	_, err := Validate(example(t, "shell-job"), reg)
+	got := diagnostics(t, err)
+	if len(got) != 1 || got[0].Code != "binding_refused" || !strings.HasSuffix(got[0].Path, "/binding") || !strings.Contains(got[0].Message, "route handler manual refuses this binding: bind the agent executor") {
+		t.Fatalf("diagnostics %v", got)
+	}
+	if len(seen) != 1 || seen[0].Executor != "shell" || len(seen[0].Config) == 0 {
+		t.Fatalf("seen %+v", seen)
+	}
+	reg.HandlerBinding["manual"] = func(extension.RouteBinding) error { return nil }
+	if _, err = Validate(example(t, "shell-job"), reg); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestWholeBindingReplacement(t *testing.T) {
 	m := generic(t, example(t, "inheritance"))
 	entry(m, 0, "bindings", 0)["config"].(map[string]any)["parent_only"] = true

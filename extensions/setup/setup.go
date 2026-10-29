@@ -19,9 +19,12 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Type is the extension type, the toolbelt registration name, the route
@@ -123,6 +126,36 @@ func ValidateExtension(config json.RawMessage, secretNames []string) error {
 	}
 	var c Config
 	return strict(config, &c)
+}
+
+// Executor is the one executor a setup route may bind.
+const Executor = "claude-code"
+
+// builtins are the core operations a session's agent may have besides the
+// extension's own.
+var builtins = []string{"read_context", "wait", "declare_outcome"}
+
+// ValidateBinding refuses an agent a session must not run: one on another
+// executor, one with Claude Code's built-in tools (a shell, file access) on,
+// or one granted operations beyond the builtins and setup.*. Without a
+// shell, everything the agent learns or says goes through the toolbelt, and
+// nothing it is granted can change the config.
+func ValidateBinding(b extension.RouteBinding) error {
+	if b.Executor != Executor {
+		return errors.New("a setup session runs on the claude-code executor")
+	}
+	var c struct {
+		BuiltinTools *[]string `json:"builtin_tools"`
+	}
+	if json.Unmarshal(b.Config, &c) != nil || c.BuiltinTools == nil || len(*c.BuiltinTools) > 0 {
+		return errors.New(`set "builtin_tools": [] so the agent has no shell or file access`)
+	}
+	for _, op := range b.Operations {
+		if !slices.Contains(builtins, op) && !strings.HasPrefix(op, Type+".") {
+			return fmt.Errorf("operation %q is not one a setup session may have (read_context, wait, declare_outcome and setup.*)", op)
+		}
+	}
+	return nil
 }
 
 // ValidateRoute is the route config validator: the route takes none.
