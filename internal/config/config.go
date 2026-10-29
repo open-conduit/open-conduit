@@ -9,6 +9,7 @@ import (
 	"net"
 	"net/url"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -108,6 +109,34 @@ type Binding struct {
 	// per-binding value for long jobs or short turns. Zero inherits.
 	TimeoutSeconds int
 	Config         json.RawMessage
+	// Grants are what the binding offers a Work beyond its operations and
+	// config, which the Work opts into by name when it is created (for
+	// example the shell an operator turns on for one setup session).
+	Grants []Grant
+}
+
+// domainGrants are the binding's grants as domain.BindingGrant.
+func (b Binding) domainGrants() []domain.BindingGrant {
+	var out []domain.BindingGrant
+	for _, g := range b.Grants {
+		out = append(out, domain.BindingGrant{Name: g.Name, Label: g.Label, Operations: slices.Clone(g.Operations), Config: slices.Clone(g.Config)})
+	}
+	return out
+}
+
+// Operation reports whether the binding grants op itself or offers it in
+// one of its grants: the ceiling a Work's toolbelt is checked against.
+func (b Binding) Operation(op string) bool {
+	return slices.Contains(b.Operations, op) || slices.ContainsFunc(b.Grants, func(g Grant) bool { return slices.Contains(g.Operations, op) })
+}
+
+// Grant is one grant a binding offers: more operations, within the scope
+// authorization like the binding's own, and executor config whose top-level
+// fields replace the binding config's.
+type Grant struct {
+	Name, Label string
+	Operations  []string
+	Config      json.RawMessage
 }
 type Route struct {
 	Name, Handler, Binding, ActivePolicy, UnsupportedFallback, ErrorFallback string
@@ -450,7 +479,7 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 		return BindingEntry{Binding: Binding{Name: name}, Disabled: true}
 	}
 	var b Binding
-	if !c.object(n, path, []string{"name", "executor", "requires", "operations", "secret_names", "config"}, "connection", "resource", "timeout_seconds") {
+	if !c.object(n, path, []string{"name", "executor", "requires", "operations", "secret_names", "config"}, "connection", "resource", "timeout_seconds", "grants") {
 		return BindingEntry{Binding: b}
 	}
 	b.Name, _ = c.str(n.field("name"), path+"/name", idPattern)
@@ -479,6 +508,27 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 		b.TimeoutSeconds, _ = c.integer(t, path+"/timeout_seconds")
 	}
 	b.Config = c.opaque(n.field("config"), path+"/config")
+	if g := n.field("grants"); g != nil && c.typed(g, path+"/grants", kArray, "array") {
+		for i, item := range g.items {
+			p := ptr(path+"/grants", i)
+			if !c.object(item, p, []string{"name"}, "label", "operations", "config") {
+				continue
+			}
+			var grant Grant
+			grant.Name, _ = c.str(item.field("name"), p+"/name", idPattern)
+			if l := item.field("label"); l != nil {
+				grant.Label, _ = c.str(l, p+"/label", nil)
+			}
+			grant.Operations = c.list(item.field("operations"), p+"/operations", opPattern)
+			if cfg := item.field("config"); cfg != nil {
+				grant.Config = c.opaque(cfg, p+"/config")
+			}
+			if slices.ContainsFunc(b.Grants, func(o Grant) bool { return o.Name == grant.Name }) {
+				c.fail(p+"/name", "duplicate_name", "grant name is repeated in this binding; keep one")
+			}
+			b.Grants = append(b.Grants, grant)
+		}
+	}
 	return BindingEntry{Binding: b}
 }
 func (c *checker) route(n *node, path string) RouteEntry {
@@ -645,6 +695,20 @@ func (b BindingEntry) normalized() any {
 	}
 	if b.TimeoutSeconds > 0 {
 		m["timeout_seconds"] = b.TimeoutSeconds
+	}
+	if len(b.Grants) > 0 {
+		grants := make([]any, 0, len(b.Grants))
+		for _, g := range b.Grants {
+			gm := map[string]any{"name": g.Name, "operations": g.Operations}
+			if g.Label != "" {
+				gm["label"] = g.Label
+			}
+			if g.Config != nil {
+				gm["config"] = g.Config
+			}
+			grants = append(grants, gm)
+		}
+		m["grants"] = grants
 	}
 	return m
 }

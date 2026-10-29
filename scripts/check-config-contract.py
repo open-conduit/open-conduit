@@ -126,6 +126,9 @@ def check(config):
                 fail(bp + '/resource/provider', 'unknown_registration')
             if not set(binding['operations']) <= set(result['authorization']['operations']):
                 fail(bp + '/operations', 'operation_denied')
+            for i, grant in enumerate(binding.get('grants', [])):
+                if not set(grant.get('operations', [])) <= set(result['authorization']['operations']):
+                    fail(bp + '/grants/' + str(i) + '/operations', 'operation_denied')
             for secret in binding['secret_names']:
                 if not result['secret_refs'].get(secret):
                     fail(bp + '/secret_names', 'unknown_secret')
@@ -199,6 +202,7 @@ def main():
         ('missing_binding', lambda c: c['scopes'][1]['bindings'].append({'name': 'run', 'disabled': True})),
         ('unsupported_policy', lambda c: c['scopes'][1]['routes'][0].pop('unsupported_fallback')),
         ('unknown_secret', lambda c: c['scopes'][1]['bindings'][0].update(secret_names=['temporary'])),
+        ('operation_denied', lambda c: c['scopes'][1]['bindings'][0].update(grants=[{'name': 'more', 'operations': ['wait']}])),
         ('connection_denied', lambda c: c['scopes'][1]['bindings'][0].update(connection='ungranted')),
         ('resource_required', lambda c: c['scopes'][1]['bindings'][0].update(requires={'workspace': True})),
         ('unknown_disabled_entry', lambda c: c['scopes'][1]['routes'].append({'name': 'missing', 'disabled': True})),

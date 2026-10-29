@@ -41,6 +41,10 @@ type RouteDecision struct {
 	Reason     string
 	Display    *domain.WorkDisplay
 	Context    domain.Payload
+	// Grants are the bound binding's grants a created Work opts into
+	// (domain.Work.Grants), by name. Only a decision that creates Work sets
+	// them; a name the binding does not offer is ignored when it runs.
+	Grants []string
 }
 
 // RouteHandler decides whether its route takes an Event. Match must be free
@@ -54,6 +58,9 @@ type RouteBinding struct {
 	Executor   string
 	Operations []string
 	Config     json.RawMessage
+	// Grants are what the binding offers a Work beyond Operations and
+	// Config (domain.Binding.Grants).
+	Grants []domain.BindingGrant
 }
 
 type RouteHandler interface {

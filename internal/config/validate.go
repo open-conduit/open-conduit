@@ -320,6 +320,11 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		if !subset(b.Operations, e.auth.Operations) {
 			v.fail(p+"/operations", "operation_denied", "binding operations must be registered and within the scope authorization")
 		}
+		for k, g := range b.Grants {
+			if !subset(g.Operations, e.auth.Operations) {
+				v.fail(fmt.Sprintf("%s/grants/%d/operations", p, k), "operation_denied", "grant operations must be registered and within the scope authorization")
+			}
+		}
 		if !secrets(b.SecretNames) {
 			v.fail(p+"/secret_names", "unknown_secret", "selected secret name has no effective reference in this scope")
 		}
@@ -345,7 +350,7 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 			continue
 		}
 		if check := v.reg.HandlerBinding[r.Handler]; check != nil {
-			if err := check(extension.RouteBinding{Executor: b.value.Executor, Operations: b.value.Operations, Config: b.value.Config}); err != nil {
+			if err := check(extension.RouteBinding{Executor: b.value.Executor, Operations: b.value.Operations, Config: b.value.Config, Grants: b.value.domainGrants()}); err != nil {
 				v.fail(p+"/binding", "binding_refused", fmt.Sprintf("route handler %s refuses this binding: %s", r.Handler, err))
 			}
 		}
@@ -433,6 +438,16 @@ func (v *validator) registration(p string, b Binding) {
 	// owner's error text is never echoed: it could quote configured values.
 	if owner, ok := exec.(ConfigValidator); ok && owner.ValidateConfig(b.Config, b.SecretNames) != nil {
 		v.fail(p+"/config", "invalid_config", fmt.Sprintf("executor %s rejected this binding config; correct it against the executor's documented config", b.Executor))
+	} else if ok {
+		// Each grant's config is checked as the binding a Work that takes
+		// it alone runs.
+		base := domain.Binding{Config: domain.Payload{Data: b.Config}, Grants: b.domainGrants()}
+		for k, g := range b.Grants {
+			granted, _ := base.Granted([]string{g.Name})
+			if owner.ValidateConfig(granted.Config.Data, b.SecretNames) != nil {
+				v.fail(fmt.Sprintf("%s/grants/%d/config", p, k), "invalid_config", fmt.Sprintf("executor %s rejected this binding config with the grant applied; correct it against the executor's documented config", b.Executor))
+			}
+		}
 	}
 }
 
@@ -517,7 +532,7 @@ func (s *Snapshot) AuthorizeOperation(scope domain.ID, binding, operation string
 		return ErrDenied
 	}
 	b, ok := e.Binding(binding)
-	if !ok || !slices.Contains(b.Operations, operation) || !slices.Contains(e.Authorization.Operations, operation) {
+	if !ok || !b.Operation(operation) || !slices.Contains(e.Authorization.Operations, operation) {
 		return ErrDenied
 	}
 	return nil
@@ -584,7 +599,7 @@ func (s *Snapshot) DomainScopes() []domain.Scope {
 		d := domain.Scope{ID: e.ID, Name: e.Name, ParentID: e.ParentID, SecretRefs: maps.Clone(e.SecretRefs)}
 		for _, b := range e.Bindings {
 			d.Bindings = append(d.Bindings, domain.Binding{Name: b.Name, Executor: b.Executor, Requires: b.Requires, TimeoutSeconds: b.TimeoutSeconds,
-				Config: domain.Payload{Schema: BindingSchema, Data: slices.Clone(b.Config)}})
+				Config: domain.Payload{Schema: BindingSchema, Data: slices.Clone(b.Config)}, Grants: b.domainGrants()})
 			meta.Bindings[b.Name] = bindingMeta{b.Connection, b.Operations, b.SecretNames, b.Resource}
 		}
 		for _, r := range e.Routes {

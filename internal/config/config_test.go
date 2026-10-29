@@ -602,6 +602,61 @@ func TestBindingTimeout(t *testing.T) {
 	}
 }
 
+// refusingExecutor rejects a binding config that sets "bad".
+type refusingExecutor struct{ interruptExecutor }
+
+func (refusingExecutor) ValidateConfig(c json.RawMessage, _ []string) error {
+	if strings.Contains(string(c), `"bad"`) {
+		return errors.New("bad")
+	}
+	return nil
+}
+
+// TestBindingGrants: a binding's grants are kept in the normalized config
+// and projected onto the domain binding; their operations count towards the
+// ceiling but must sit within the scope authorization, and their config is
+// checked by the executor as applied over the binding's own.
+func TestBindingGrants(t *testing.T) {
+	reg := registry()
+	reg.Executors["coding_agent"] = refusingExecutor{interruptExecutor{fakeExecutor{domain.Capabilities{Toolbelt: "mcp", Interrupt: true, Workspace: true}}}}
+	with := func(grants any) (*Snapshot, error) {
+		m := generic(t, example(t, "git-scope"))
+		b := entry(m, 0, "bindings", 0)
+		b["operations"] = []string{"read_context", "declare_outcome"}
+		b["grants"] = grants
+		return Validate(encode(t, m), reg)
+	}
+	snap, err := with([]any{map[string]any{"name": "emitting", "label": "Emit events", "operations": []string{"emit"}, "config": map[string]any{"playbook": "other"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	b := snap.DomainScopes()[0].Bindings[0]
+	if len(b.Grants) != 1 || b.Grants[0].Name != "emitting" || b.Grants[0].Label != "Emit events" || !slices.Equal(b.Grants[0].Operations, []string{"emit"}) {
+		t.Fatalf("domain grants %+v", b.Grants)
+	}
+	if !strings.Contains(string(snap.Redacted()), `"grants":[{"config":{"playbook":"other"},"label":"Emit events","name":"emitting","operations":["emit"]}]`) {
+		t.Fatalf("normalized config dropped the grants: %s", snap.Redacted())
+	}
+	if snap.AuthorizeOperation("engineering", "run", "emit") != nil || snap.AuthorizeOperation("engineering", "run", "wait") == nil {
+		t.Fatal("a grant's operation is outside the ceiling, or an unoffered one is inside it")
+	}
+	for name, c := range map[string]struct {
+		grants any
+		code   string
+	}{
+		"outside the authorization": {[]any{map[string]any{"name": "waiting", "operations": []string{"wait"}}}, "operation_denied"},
+		"refused config":            {[]any{map[string]any{"name": "worse", "config": map[string]any{"bad": true}}}, "invalid_config"},
+		"repeated name":             {[]any{map[string]any{"name": "a"}, map[string]any{"name": "a"}}, "duplicate_name"},
+		"unknown field":             {[]any{map[string]any{"name": "a", "secret_names": []string{}}}, "unknown_field"},
+		"no name":                   {[]any{map[string]any{"operations": []string{"emit"}}}, "missing_field"},
+	} {
+		_, err := with(c.grants)
+		if got := diagnostics(t, err); !slices.ContainsFunc(got, func(d Diagnostic) bool { return d.Code == c.code && strings.Contains(d.Path, "/grants") }) {
+			t.Errorf("%s: %v", name, got)
+		}
+	}
+}
+
 func TestWebhookSettings(t *testing.T) {
 	with := func(hooks any) (*Snapshot, error) {
 		m := generic(t, example(t, "git-scope"))
