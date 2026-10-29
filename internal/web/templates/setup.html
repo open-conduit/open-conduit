@@ -1,10 +1,14 @@
+{{define "scripts"}}<script src="/static/setup.js" defer></script>{{end}}
 {{define "content"}}{{$d := .Data}}{{$p := .Page}}
-<div class="page setup" data-live="setup">
+{{- /* With a session open, the conversation and the session panel redraw on
+their own and the message box stays out of them, so typing a message never
+holds back what the assistant says. */}}
+<div class="page setup"{{if not $d.Session}} data-live="setup"{{end}}>
 {{- with $d.Session}}{{$ss := .}}
   <header class="setup-head">
     <div>
       <h1>Setup</h1>
-      <p class="page-sub">A Claude Code session running Open Conduit's setup playbook. It has no shell: it only talks and asks here, and <b>nothing it says changes your configuration</b>.</p>
+      <p class="page-sub">A Claude Code session running Open Conduit's setup playbook. {{if .Grants}}You gave it more than talking for this session: {{range $i, $g := .Grants}}{{if $i}}; {{end}}{{$g}}{{end}}.{{else}}It has no shell: it only talks and asks here, and <b>nothing it says changes your configuration</b>.{{end}}</p>
     </div>
   </header>
   <div class="setup-grid">
@@ -13,7 +17,7 @@
         <span>{{.Scope}}{{with .Model}} · {{.}}{{end}} · started {{at .Started}}</span>
         <a class="link-btn" href="{{workHref .W.ID 0}}">Turns and transcript</a>
       </div>
-      <div class="convo-scroll" aria-live="polite">
+      <div class="convo-scroll" aria-live="polite" data-live="setup-convo">
         {{- range .Msgs}}
         {{- if .Question}}
         <div class="msg msg-agent">
@@ -24,7 +28,7 @@
         <form method="post" action="/actions" class="{{if $ss.Answer.Choices}}choices{{else}}composer composer-inline{{end}}" aria-label="Answer the question">
           {{template "setup-hidden" .}}
           {{- if .Choices}}{{range .Choices}}<button class="choice" name="input" value="{{.}}">{{.}}</button>{{end}}
-          {{- else}}<input name="input" required autocomplete="off" placeholder="Your answer" aria-label="Your answer"><button class="btn btn-primary">Answer</button>{{end}}
+          {{- else}}<textarea name="input" rows="1" required autocomplete="off" placeholder="Your answer" aria-label="Your answer" data-grow></textarea><button class="btn btn-primary">Answer</button>{{end}}
         </form>
         {{- end}}{{else if .Choices}}
         <div class="choices" role="group" aria-label="Choices">{{$a := .Answer}}{{range .Choices}}<button type="button" class="choice{{if eq . $a}} is-on{{end}}" disabled>{{.}}</button>{{end}}</div>
@@ -52,18 +56,19 @@
       {{- with .Message}}
       <form method="post" action="/actions" class="composer">
         {{template "setup-hidden" .}}
-        <input name="input" required autocomplete="off" placeholder="{{if $ss.Answer}}Message the assistant — it reads this after you answer{{else}}Message the assistant{{end}}" aria-label="Message the assistant">
+        <textarea name="input" rows="1" required autocomplete="off" placeholder="{{if $ss.Answer}}Message the assistant — it reads this after you answer{{else}}Message the assistant{{end}} (Shift+Enter for a new line)" aria-label="Message the assistant" data-grow></textarea>
         <button class="btn">Send</button>
       </form>
       {{- end}}
     </section>
     <aside class="bench" aria-label="Session">
-      <div class="bench-body">
+      <div class="bench-body" data-live="setup-bench">
         <h2 class="section-rule">Session</h2>
         <ul class="kv-list">
           <li>{{mark .W.Disp.Kind 12 ""}}<b>{{or .W.Disp.Label .W.State}}</b><span>{{if ne .W.Disp.Detail .W.Disp.Label}}{{.W.Disp.Detail}}{{end}}</span></li>
           <li><span></span><b>Scope</b><span><a href="/config?scope={{.W.ScopeID}}">{{.Scope}}</a></span></li>
           {{- with .Model}}<li><span></span><b>Model</b><span>{{.}}</span></li>{{end}}
+          <li><span></span><b>Access</b><span>{{if .Grants}}{{range $i, $g := .Grants}}{{if $i}}; {{end}}{{$g}}{{end}}{{else}}Talking only{{end}}</span></li>
           <li><span></span><b>Turns</b><span>{{len .W.Turns}}</span></li>
         </ul>
         {{- if ne .W.Disp.Group "closed"}}
@@ -161,6 +166,13 @@
           <legend>{{or .Prompt "Model"}}</legend>
           {{- range $i, $c := .Choices}}<label class="xchoice"><input type="radio" name="input" value="{{$c}}" required{{if eq $i 0}} checked{{end}}><span>{{$c}}</span></label>{{end}}
         </fieldset>
+        {{- end}}
+        {{- with $d.StartGrants}}
+        <fieldset class="xchoices">
+          <legend>Also give the assistant, for this session only</legend>
+          {{- range .}}<label class="xchoice xtoggle"><input type="checkbox" name="input" value="+{{.Name}}"><span>{{or .Label .Name}}</span></label>{{end}}
+        </fieldset>
+        <p class="quiet small">Without these it only talks and asks here. What you turn on lasts until the session ends; your config file decides what can be offered.</p>
         {{- end}}
         <div class="row-gap"><button class="btn btn-primary">{{.Label}}</button></div>
       </form>

@@ -153,7 +153,13 @@ func RenderEvent(e domain.Event) (string, bool) {
 		if s.Model != "" {
 			out += " (on " + s.Model + ")"
 		}
-		return out + "\nSpeak to them with `" + OpSay + "` and ask with `" + OpAsk + "`: they see nothing else you write. Look around with `" + OpProbe + "` and `" + OpRead + "`, and change the config only by proposing with `" + OpPropose + "`: they approve and apply.", true
+		out += "\nSpeak to them with `" + OpSay + "` and ask with `" + OpAsk + "`: they see nothing else you write. Look around with `" + OpProbe + "` and `" + OpRead + "`, and change the config only by proposing with `" + OpPropose + "`: they approve and apply."
+		if len(s.Grants) > 0 {
+			out += "\nThey turned on: " + strings.Join(s.Grants, ", ") + ". Even with a shell, change the config only by proposing."
+		} else {
+			out += "\nThey turned on nothing beyond talking: no shell, no MCP servers but Open Conduit's."
+		}
+		return out, true
 	case TypeMessage:
 		var m Message
 		if e.Data.Schema != SchemaMessage || json.Unmarshal(e.Data.Data, &m) != nil || m.Role != RoleOperator {

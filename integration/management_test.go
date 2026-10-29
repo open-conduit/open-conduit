@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -824,4 +825,30 @@ func TestManagementIncludedFolderSurvivesDeletion(t *testing.T) {
 	}
 	writeFragment()
 	apply(true)
+}
+
+// TestManagementGrantsBindingGrantsTheWorkTook: an attempt's toolbelt grant
+// is the binding's operations plus those of the grants its Work took, never
+// another grant's, and every granted operation passes the current ceiling.
+func TestManagementGrantsBindingGrantsTheWorkTook(t *testing.T) {
+	cfg := strings.Replace(managementConfig, `"operations": ["emit", "read_context", "declare_outcome", "create_work", "wait"], "secret_names": ["api"], "config": {}`,
+		`"operations": ["read_context", "declare_outcome"], "secret_names": ["api"], "config": {}, "grants": [{"name": "children", "operations": ["create_work", "wait"]}, {"name": "events", "operations": ["emit"]}]`, 1)
+	h := newManagementHarnessWith(t, cfg, nil)
+	grant := h.configs.Grant(nil)
+	for _, c := range []struct {
+		grants []string
+		want   []string
+	}{
+		{nil, []string{"read_context", "declare_outcome"}},
+		{[]string{"children"}, []string{"read_context", "declare_outcome", "create_work", "wait"}},
+		{[]string{"children", "events"}, []string{"read_context", "declare_outcome", "create_work", "wait", "emit"}},
+	} {
+		g, err := grant(context.Background(), runtime.AttemptState{ScopeID: "ops", Generation: "1", Binding: domain.Binding{Name: "run"}, Grants: c.grants})
+		if err != nil || !slices.Equal(g.Operations, c.want) {
+			t.Errorf("grants %v: %v (%v), want %v", c.grants, g.Operations, err, c.want)
+		}
+	}
+	if err := h.configs.Authorize(context.Background(), runtime.AuthorityCheck{ScopeID: "ops", Binding: "run", Operation: "emit"}); err != nil {
+		t.Fatalf("a grant's operation fails the ceiling: %v", err)
+	}
 }

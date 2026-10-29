@@ -28,7 +28,7 @@ import (
 // file selects review, finished, limit, error or wait (block until released).
 const fakeClaude = `#!/bin/sh
 [ "$1" = --version ] && { echo "9.9.9 (Claude Code)"; exit 0; }
-session=""; resume=0; mcp=""; model=""; tools="-"
+session=""; resume=0; mcp=""; model=""; tools="-"; strict=0
 while [ $# -gt 0 ]; do
   case "$1" in
     --model) model=$2; shift ;;
@@ -36,12 +36,13 @@ while [ $# -gt 0 ]; do
     --resume) session=$2; resume=1; shift ;;
     --mcp-config) mcp=$2; shift ;;
     --tools) tools="[$2]"; shift ;;
+    --strict-mcp-config) strict=1 ;;
   esac
   shift
 done
 f=${FAKE_DIR:?}
 mode=$(cat "$f/mode" 2>/dev/null || echo review)
-printf 'session=%s resume=%s tools=%s mcp=%s\n' "$session" "$resume" "$tools" "$mcp" >> "$f/invocations"
+printf 'session=%s resume=%s tools=%s strict=%s mcp=%s\n' "$session" "$resume" "$tools" "$strict" "$mcp" >> "$f/invocations"
 printf '%s\n' "$model" >> "$f/models"
 pwd -P > "$f/cwd"
 env | grep -E '^(ANTHROPIC_API_KEY|CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|OS_[A-Z_]+|UNRELATED)=' | sort > "$f/env"

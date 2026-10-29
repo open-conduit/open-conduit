@@ -262,6 +262,15 @@ type wireConfigBinding struct {
 	Settings         []wireSetting `json:"settings"`
 	Resource         string        `json:"resource,omitempty"`
 	ResourceSettings []wireSetting `json:"resource_settings,omitempty"`
+	Grants           []wireGrant   `json:"grants,omitempty"`
+}
+
+// wireGrant is one grant a binding offers a Work: its name, label and the
+// operations it adds (its config is executor config, shown nowhere).
+type wireGrant struct {
+	Name       string   `json:"name"`
+	Label      string   `json:"label,omitempty"`
+	Operations []string `json:"operations"`
 }
 type wireScope struct {
 	ID         string            `json:"id"`

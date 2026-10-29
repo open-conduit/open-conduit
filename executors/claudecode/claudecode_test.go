@@ -715,8 +715,13 @@ func TestBuiltinToolsAndModels(t *testing.T) {
 	}
 	r, _ := h.request("work/default", "exec-default", 1, nil)
 	h.run(e, r)
-	if inv := h.invocations(); !strings.Contains(inv[len(inv)-1], " tools=- ") {
-		t.Fatalf("a binding without builtin_tools passed --tools: %q", inv[len(inv)-1])
+	if inv := h.invocations(); !strings.Contains(inv[len(inv)-1], " tools=- ") || !strings.Contains(inv[len(inv)-1], " strict=0 ") {
+		t.Fatalf("a binding without builtin_tools or strict_mcp passed --tools or --strict-mcp-config: %q", inv[len(inv)-1])
+	}
+	r, _ = h.request("work/strict", "exec-strict", 1, map[string]any{"strict_mcp": true})
+	h.run(e, r)
+	if inv := h.invocations(); !strings.Contains(inv[len(inv)-1], " strict=1 ") {
+		t.Fatalf("strict_mcp did not pass --strict-mcp-config: %q", inv[len(inv)-1])
 	}
 }
 

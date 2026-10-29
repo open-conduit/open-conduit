@@ -457,7 +457,10 @@ func (s *Server) invokeAction(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	label, provider, id := r.PostFormValue("label"), r.PostFormValue("provider"), r.PostFormValue("action")
-	input := strings.TrimSpace(r.PostFormValue("input"))
+	// A form may send several input fields (a radio and checkboxes); the
+	// action gets them in order, separated by spaces.
+	_ = r.ParseForm()
+	input := strings.TrimSpace(strings.Join(r.PostForm["input"], " "))
 	res, err := s.src.InvokeAction(ctx, t, provider, id, input, s.opts.NewKey())
 	path := "/v1/scopes/" + shortPath(t.ScopeID)
 	if t.WorkID != "" {

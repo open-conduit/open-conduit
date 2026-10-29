@@ -126,23 +126,26 @@ type AttemptState struct {
 	ExecutionID, WorkID, ScopeID      domain.ID
 	Generation, Executor, LaunchState string
 	Binding                           domain.Binding
-	Recovery                          domain.Payload
-	RecoveryRecorded                  bool
-	Excluded                          bool
-	Epoch                             uint64
-	Result                            *extension.Result
-	Retry                             RetryPolicy
-	ControlErrorFallback              string
-	AutoContinueHandoff               bool
-	Capabilities                      domain.Capabilities
-	Deadline                          time.Time
-	CurrentTriggerID                  domain.ID
-	CausalTriggerID                   domain.ID
-	WaitID, WakeEventID               domain.ID
-	ObservedSequence                  uint64
-	InputEventIDs                     []domain.ID
-	RemainingTimeout                  time.Duration
-	Declaration                       *ToolbeltDeclaration
+	// Grants are the binding grants the Work opted into that the binding
+	// offered when the attempt started; Binding.Config has them applied.
+	Grants               []string `json:",omitempty"`
+	Recovery             domain.Payload
+	RecoveryRecorded     bool
+	Excluded             bool
+	Epoch                uint64
+	Result               *extension.Result
+	Retry                RetryPolicy
+	ControlErrorFallback string
+	AutoContinueHandoff  bool
+	Capabilities         domain.Capabilities
+	Deadline             time.Time
+	CurrentTriggerID     domain.ID
+	CausalTriggerID      domain.ID
+	WaitID, WakeEventID  domain.ID
+	ObservedSequence     uint64
+	InputEventIDs        []domain.ID
+	RemainingTimeout     time.Duration
+	Declaration          *ToolbeltDeclaration
 	// Segments are the attempt's active stretches, the time it held a lease
 	// as the deadline budget counts it: the first start (with the waking
 	// event's ID when a wake started it), each resume after a wake, each
@@ -610,6 +613,7 @@ func (s *Scheduler) requestInTx(tx storage.Tx, state AttemptState, ref domain.Le
 }
 func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, err error) {
 	var pinned domain.Binding
+	var granted []string
 	var scopeRevisions []domain.Scope
 	var ready domain.Work
 	var input QueuedInput
@@ -667,6 +671,9 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 		if e != nil {
 			return e
 		}
+		// The Work's grants change the config it runs on; the toolbelt
+		// grant reads the names from the attempt state.
+		pinned, granted = pinned.Granted(ready.Grants)
 		chain, e := scopeChain(tx, ready.ScopeID)
 		if e != nil {
 			return e
@@ -707,7 +714,7 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 			return attempt, extension.ErrUnsupported
 		}
 	} else {
-		state = AttemptState{WorkID: id, ScopeID: ready.ScopeID, Generation: s.options.Generation, Executor: pinned.Executor, Binding: pinned, LaunchState: "launching", Retry: s.options.Retry, ControlErrorFallback: s.options.ControlErrorFallback[pinned.Executor], AutoContinueHandoff: s.options.AutoContinueHandoff}
+		state = AttemptState{WorkID: id, ScopeID: ready.ScopeID, Generation: s.options.Generation, Executor: pinned.Executor, Binding: pinned, Grants: granted, LaunchState: "launching", Retry: s.options.Retry, ControlErrorFallback: s.options.ControlErrorFallback[pinned.Executor], AutoContinueHandoff: s.options.AutoContinueHandoff}
 		executor, err = s.executorFor(state)
 		if err != nil {
 			return attempt, err

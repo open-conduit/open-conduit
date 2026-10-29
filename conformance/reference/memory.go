@@ -8,6 +8,7 @@ import (
 	"encoding/gob"
 	"encoding/json"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -257,7 +258,7 @@ func (t *transaction) PutWork(w domain.Work, expected domain.Revision) error {
 	if !exists && w.State != domain.WorkReady || exists && w.State != old.State && !domain.WorkTransition(old.State, w.State) {
 		return storage.ErrInvalid
 	}
-	if exists && (old.State.Terminal() || old.Kind != w.Kind || old.ScopeID != w.ScopeID || old.ParentID != w.ParentID) {
+	if exists && (old.State.Terminal() || old.Kind != w.Kind || old.ScopeID != w.ScopeID || old.ParentID != w.ParentID || !slices.Equal(old.Grants, w.Grants)) {
 		return storage.ErrInvalid
 	}
 	if w.ParentID != "" {

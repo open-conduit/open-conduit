@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"reflect"
@@ -1081,4 +1082,54 @@ func TestProductionSchedulerControlLeaseRejectsLateAcknowledgement(t *testing.T)
 	if status.Status != "accepted" || status.Attempts != 2 {
 		t.Fatalf("control retry state: %+v", status)
 	}
+}
+
+// TestProductionSchedulerAppliesWorkGrants: a Work created opting into
+// binding grants runs on the binding's config with the grants' config
+// applied, and its attempt records the grants it took; a name the binding
+// does not offer is ignored, and the Work's grants never change after.
+func TestProductionSchedulerAppliesWorkGrants(t *testing.T) {
+	granting := routingHandlerFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
+		d, err := routingDecision(in)
+		d.Grants = []string{"shell", "unoffered"}
+		return d, err
+	})
+	f, _ := schedulerFixture(t, "reopen", routingOptions(granting, "queue"))
+	routingRead(t, f, func(tx storage.Tx) error {
+		s, err := tx.Scope("routing-scope")
+		if err != nil {
+			return err
+		}
+		s.Bindings[0].Config = domain.Payload{Schema: "fixture.config.v1", Data: []byte(`{"tools":[],"model":"opus"}`)}
+		s.Bindings[0].Grants = []domain.BindingGrant{{Name: "shell", Config: []byte(`{"tools":["Bash"]}`)}, {Name: "web", Config: []byte(`{"tools":["WebFetch"]}`)}}
+		return tx.PutScope(s, s.Revision)
+	})
+	work := seedSchedulerWork(t, f, "granted")
+	s := f.Driver.(*schedulerDriver).scheduler
+	a, err := s.Start(context.Background(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	if err = json.Unmarshal(a.Request.Context.Config.Data, &cfg); err != nil || !reflect.DeepEqual(cfg, map[string]any{"tools": []any{"Bash"}, "model": "opus"}) {
+		t.Fatalf("ran on %s (%v)", a.Request.Context.Config.Data, err)
+	}
+	state, err := s.InspectAttempt(context.Background(), a.Lease.ExecutionID)
+	if err != nil || !reflect.DeepEqual(state.Grants, []string{"shell"}) {
+		t.Fatalf("attempt grants %v (%v)", state.Grants, err)
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		w, err := tx.Work(work)
+		if err != nil {
+			return err
+		}
+		if !reflect.DeepEqual(w.Grants, []string{"shell", "unoffered"}) {
+			t.Fatalf("work grants %v", w.Grants)
+		}
+		w.Grants = nil
+		if err = tx.PutWork(w, w.Revision); !errors.Is(err, storage.ErrInvalid) {
+			t.Fatalf("changed a Work's grants: %v", err)
+		}
+		return nil
+	})
 }

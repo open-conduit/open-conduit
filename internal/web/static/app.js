@@ -274,6 +274,7 @@
   // is open, a checkbox in it is ticked or the operator picked a radio or
   // select option in it: a refresh never takes what the operator is doing
   // away. A running turn's transcript [data-conv] is followed by work.js.
+  // Each redraw ends with a live:redrawn event on the document.
   const live = [...document.querySelectorAll("[data-live]:not([data-conv])")];
   // A choice the operator changed in a region keeps it from being redrawn.
   document.addEventListener("change", (e) => {
@@ -300,6 +301,8 @@
         });
         const title = doc.querySelector("title");
         if (title) document.title = title.textContent;
+        // A page script that follows its regions (setup.js) hears of it.
+        document.dispatchEvent(new CustomEvent("live:redrawn"));
       } catch (_) { /* the next tick tries again */ }
     }, 5000);
   }

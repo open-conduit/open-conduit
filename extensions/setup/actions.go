@@ -53,26 +53,92 @@ func (a Actions) transact(ctx context.Context, fn func(storage.Tx) error) error 
 	return a.Store.Transact(ctx, storage.Guard{Now: a.now()}, fn)
 }
 
-// Models are the models the scope's setup binding lets a session choose:
-// its executor config's "models", for the first route this handler serves.
-func Models(scope domain.Scope) []string {
+// binding is the scope's setup binding: the one the first route this
+// handler serves binds.
+func binding(scope domain.Scope) (domain.Binding, bool) {
 	for _, r := range scope.Routes {
 		if r.Handler != Type {
 			continue
 		}
 		for _, b := range scope.Bindings {
-			if b.Name != r.Binding {
-				continue
+			if b.Name == r.Binding {
+				return b, true
 			}
-			var c struct {
-				Models []string `json:"models"`
-			}
-			_ = json.Unmarshal(b.Config.Data, &c)
-			return c.Models
 		}
+		return domain.Binding{}, false
+	}
+	return domain.Binding{}, false
+}
+
+// Models are the models the scope's setup binding lets a session choose:
+// its executor config's "models".
+func Models(scope domain.Scope) []string {
+	b, ok := binding(scope)
+	if !ok {
 		return nil
 	}
-	return nil
+	var c struct {
+		Models []string `json:"models"`
+	}
+	_ = json.Unmarshal(b.Config.Data, &c)
+	return c.Models
+}
+
+// Grants are what the scope's setup binding offers a session beyond talking,
+// which the operator turns on when starting it.
+func Grants(scope domain.Scope) []domain.BindingGrant {
+	b, ok := binding(scope)
+	if !ok {
+		return nil
+	}
+	return b.Grants
+}
+
+// parseStart reads the start action's input: at most one of models and a
+// "+name" for each grant to turn on, in any order and separated by spaces
+// ("opus +shell"). With models offered and none named, it is the first.
+func parseStart(input string, models []string, grants []domain.BindingGrant) (Start, error) {
+	var s Start
+	for _, tok := range strings.Fields(input) {
+		if name, ok := strings.CutPrefix(tok, "+"); ok {
+			i := slices.IndexFunc(grants, func(g domain.BindingGrant) bool { return strings.EqualFold(g.Name, name) })
+			if i < 0 {
+				return s, &extension.OperationError{Code: "invalid_input", Message: "this setup binding offers no grant " + name + startUsage(models, grants)}
+			}
+			if !slices.Contains(s.Grants, grants[i].Name) {
+				s.Grants = append(s.Grants, grants[i].Name)
+			}
+			continue
+		}
+		m, ok := choose(models, tok)
+		if !ok || s.Model != "" {
+			return s, &extension.OperationError{Code: "invalid_input", Message: "give one model" + startUsage(models, grants)}
+		}
+		s.Model = m
+	}
+	if s.Model == "" && len(models) > 0 {
+		s.Model = models[0]
+	}
+	return s, nil
+}
+
+// startUsage says what the start action's input may hold.
+func startUsage(models []string, grants []domain.BindingGrant) string {
+	var parts []string
+	if len(models) > 0 {
+		parts = append(parts, "one of "+strings.Join(models, ", "))
+	}
+	if len(grants) > 0 {
+		names := make([]string, 0, len(grants))
+		for _, g := range grants {
+			names = append(names, "+"+g.Name)
+		}
+		parts = append(parts, "any of "+strings.Join(names, ", "))
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return ": " + strings.Join(parts, ", then ")
 }
 
 // openSession reports whether the scope has a session that has not ended.
@@ -136,8 +202,20 @@ func (a Actions) Actions(ctx context.Context, t extension.ActionTarget) ([]exten
 				return err
 			}
 			start := extension.Action{ID: ActionStart, Label: "Start a setup session"}
-			if models := Models(t.Scope); len(models) > 0 {
+			models, grants := Models(t.Scope), Grants(t.Scope)
+			if len(models) > 0 {
 				start.Prompt, start.Choices = "the model the agent uses", models
+			}
+			if len(grants) > 0 {
+				// The prompt says how to turn grants on; a choice alone
+				// still starts a session with none.
+				start.Prompt = "the model the agent uses" + startUsage(models, grants)
+				if len(models) == 0 {
+					start.Prompt = "what to turn on" + startUsage(models, grants)
+				}
+				if len(start.Prompt) > 200 {
+					start.Prompt = "the model, then +name for each grant to turn on"
+				}
 			}
 			out = append(out, start)
 			return nil
@@ -203,13 +281,9 @@ func (a Actions) start(ctx context.Context, c extension.ActionCall) (extension.A
 	if open {
 		return refuseAction("session_open", "this scope already has a setup session; end it before starting another")
 	}
-	var s Start
-	models := Models(c.Target.Scope)
-	if len(models) > 0 {
-		var ok bool
-		if s.Model, ok = choose(models, c.Input); !ok {
-			return refuseAction("invalid_input", "choose one of: "+strings.Join(models, ", "))
-		}
+	s, err := parseStart(c.Input, Models(c.Target.Scope), Grants(c.Target.Scope))
+	if err != nil {
+		return extension.ActionPlan{}, err
 	}
 	var b [8]byte
 	_, _ = rand.Read(b[:])
@@ -217,6 +291,9 @@ func (a Actions) start(ctx context.Context, c extension.ActionCall) (extension.A
 	message := "started a setup session"
 	if s.Model != "" {
 		message += " on " + s.Model
+	}
+	if len(s.Grants) > 0 {
+		message += " with " + strings.Join(s.Grants, ", ")
 	}
 	return extension.ActionPlan{Event: domain.Event{Type: TypeStart, CorrelationKey: &key, Data: payload(SchemaStart, s)}, Message: message}, nil
 }

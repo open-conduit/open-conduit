@@ -3,6 +3,7 @@ package domain
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
 )
 
@@ -54,7 +55,10 @@ type Work struct {
 	ParentID        ID
 	// Display is what the Work is, in its source's words, for operator
 	// views (extension.ValidateDisplay). Core stores it and never reads it.
-	Display              *WorkDisplay `json:",omitempty"`
+	Display *WorkDisplay `json:",omitempty"`
+	// Grants are the binding grants the Work opted into when it was
+	// created (Binding.Granted); they never change after.
+	Grants               []string `json:",omitempty"`
 	Revision             Revision
 	CreatedAt, UpdatedAt time.Time
 }
@@ -213,7 +217,57 @@ type Binding struct {
 	// deadline for attempts of this binding. Zero inherits the default.
 	TimeoutSeconds int `json:",omitempty"`
 	Config         Payload
+	// Grants are what the binding offers a Work beyond its own operations
+	// and config, by name; a Work opts into some when it is created
+	// (Work.Grants). The config file is still the ceiling.
+	Grants []BindingGrant `json:",omitempty"`
 }
+
+// BindingGrant is one grant a binding offers: more toolbelt operations, and
+// executor config whose top-level fields replace the binding's own.
+type BindingGrant struct {
+	Name, Label string
+	Operations  []string        `json:",omitempty"`
+	Config      json.RawMessage `json:",omitempty"`
+}
+
+// Granted is the binding as a Work that opted into names runs it: each
+// grant it offers under one of those names, in the binding's order, has its
+// config's top-level fields replace the binding config's own. It returns the
+// names it applied; a name the binding does not offer is ignored.
+func (b Binding) Granted(names []string) (Binding, []string) {
+	var applied []string
+	if len(names) == 0 || len(b.Grants) == 0 {
+		return b, nil
+	}
+	cfg := map[string]json.RawMessage{}
+	if len(b.Config.Data) > 0 && json.Unmarshal(b.Config.Data, &cfg) != nil {
+		return b, nil
+	}
+	for _, g := range b.Grants {
+		if !slices.Contains(names, g.Name) {
+			continue
+		}
+		over := map[string]json.RawMessage{}
+		if len(g.Config) > 0 && json.Unmarshal(g.Config, &over) != nil {
+			continue
+		}
+		for k, v := range over {
+			cfg[k] = v
+		}
+		applied = append(applied, g.Name)
+	}
+	if len(applied) == 0 {
+		return b, nil
+	}
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return b, nil
+	}
+	b.Config.Data = data
+	return b, applied
+}
+
 type Route struct {
 	Name, Handler, Binding, ActivePolicy string
 	Config                               Payload

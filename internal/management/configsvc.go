@@ -8,6 +8,7 @@ import (
 	"io/fs"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"sync"
 	"time"
@@ -341,8 +342,9 @@ func (c *ConfigService) snapshotFor(generation string) *config.Snapshot {
 	return s
 }
 
-// Grant returns the attempt's pinned binding operations intersected with the
-// current ceiling, plus the registered emitted families.
+// Grant returns the attempt's pinned binding operations, with those of the
+// binding grants the attempt's Work opted into, intersected with the current
+// ceiling, plus the registered emitted families.
 func (c *ConfigService) Grant(events func() []string) func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 	return func(ctx context.Context, state runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 		grant := runtime.ToolbeltGrant{}
@@ -358,8 +360,14 @@ func (c *ConfigService) Grant(events func() []string) func(context.Context, runt
 		if !ok {
 			return grant, nil
 		}
-		for _, op := range binding.Operations {
-			if c.Authorize(ctx, runtime.AuthorityCheck{ScopeID: state.ScopeID, Binding: state.Binding.Name, Operation: op}) == nil {
+		ops := slices.Clone(binding.Operations)
+		for _, g := range binding.Grants {
+			if slices.Contains(state.Grants, g.Name) {
+				ops = append(ops, g.Operations...)
+			}
+		}
+		for _, op := range ops {
+			if !slices.Contains(grant.Operations, op) && c.Authorize(ctx, runtime.AuthorityCheck{ScopeID: state.ScopeID, Binding: state.Binding.Name, Operation: op}) == nil {
 				grant.Operations = append(grant.Operations, op)
 			}
 		}

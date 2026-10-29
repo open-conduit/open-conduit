@@ -2,6 +2,7 @@ package web
 
 import (
 	"encoding/json"
+	"net/url"
 	"strings"
 	"testing"
 
@@ -63,13 +64,19 @@ func TestSetupDrawsTheSessionAsAConversation(t *testing.T) {
 	if signed < 0 || hello < signed || asked < hello {
 		t.Fatalf("conversation out of order or unescaped (%d %d %d):\n%s", signed, hello, asked, body)
 	}
-	for _, want := range []string{`name="work" value="setup/setup/abc"`, `name="action" value="answer"`, `<button class="choice" name="input" value="dotfiles">`, `name="action" value="message"`, "it reads this after you answer", "Setup · sonnet", "End session"} {
+	for _, want := range []string{`name="work" value="setup/setup/abc"`, `name="action" value="answer"`, `<button class="choice" name="input" value="dotfiles">`, `name="action" value="message"`, "it reads this after you answer", "Setup · sonnet", "End session",
+		`<textarea name="input" rows="1"`, `data-grow`, `/static/setup.js`, `data-live="setup-convo"`, `data-live="setup-bench"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q:\n%s", want, body)
 		}
 	}
 	if strings.Contains(body, `value="start"`) {
 		t.Fatal("start offered beside an open session")
+	}
+	// The message box is outside every live region, so typing in it never
+	// holds back the conversation's redraw.
+	if strings.Contains(body, `data-live="setup"`) {
+		t.Fatal("the whole page is one live region beside an open session")
 	}
 
 	// Answered, the question shows the choice taken and offers nothing.
@@ -93,5 +100,34 @@ func TestSetupMsgsSkipOtherEvents(t *testing.T) {
 	})
 	if len(msgs) != 1 || msgs[0].Text != "hi" || msgs[0].Operator {
 		t.Fatalf("msgs %+v", msgs)
+	}
+}
+
+// TestSetupStartOffersTheBindingsGrants: the start form offers each grant
+// the setup binding offers as a checkbox, the choices it sends reach the
+// action as one input, and the session shows what was turned on.
+func TestSetupStartOffersTheBindingsGrants(t *testing.T) {
+	f, s := setupFake(t)
+	f.config.Scopes[0].Routes = []client.ConfigRoute{{Route: client.Route{Name: "setup", Handler: "setup", Binding: "agent"}}}
+	f.config.Scopes[0].Bindings = []client.ConfigBinding{{Name: "agent", Executor: "claude-code", Grants: []client.ConfigGrant{{Name: "shell", Label: "A shell on this machine"}, {Name: "connectors"}}}}
+	f.actions["setup"] = []client.Action{{Provider: "setup", ID: "start", Label: "Start a setup session", Prompt: "the model the agent uses", Choices: []string{"opus", "sonnet"}}}
+	body := do(s.Handler(addr), "GET", "/setup", nil, s).Body.String()
+	for _, want := range []string{`<input type="checkbox" name="input" value="+shell"><span>A shell on this machine</span>`, `value="+connectors"><span>connectors</span>`, "for this session only"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("missing %q:\n%s", want, body)
+		}
+	}
+	form := url.Values{"csrf": {s.csrf}, "scope": {"setup"}, "provider": {"setup"}, "action": {"start"}, "input": {"sonnet", "+shell"}, "back": {"/setup?starting=1"}}
+	do(s.Handler(addr), "POST", "/actions", form, s)
+	if len(f.invoked) != 1 || f.invoked[0].in != "sonnet +shell" {
+		t.Fatalf("invoked %+v", f.invoked)
+	}
+
+	id := "setup/setup/abc"
+	f.work[id] = client.Work{ID: id, Kind: "setup.session", ScopeID: "setup", State: "running", Revision: "1", Context: payloadOf("setup.session.v1", map[string]any{"model": "sonnet", "grants": []string{"shell", "gone"}}), CreatedAt: at0(0), UpdatedAt: at0(0)}
+	s.cachedWorld(t.Context(), true)
+	body = do(s.Handler(addr), "GET", "/setup", nil, s).Body.String()
+	if !strings.Contains(body, "<b>Access</b><span>A shell on this machine; gone</span>") || strings.Contains(body, "It has no shell") {
+		t.Fatalf("session access:\n%s", body)
 	}
 }

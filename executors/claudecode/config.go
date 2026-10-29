@@ -82,6 +82,10 @@ type Config struct {
 	// (passed as --tools). An empty list turns them all off, leaving the
 	// agent only its MCP toolbelt. Unset keeps Claude Code's default set.
 	BuiltinTools *[]string `json:"builtin_tools,omitempty"`
+	// StrictMCP leaves the agent the toolbelt as its only MCP server
+	// (--strict-mcp-config): none of the user's, a project's or claude.ai's
+	// servers and connectors load.
+	StrictMCP bool `json:"strict_mcp,omitempty"`
 	// Models are models a Work may choose for its turns through a "model"
 	// field in its context (for example one an operator picked when starting
 	// it). A Work that names none, or one not listed, uses Model.
@@ -239,12 +243,17 @@ func (c Config) model(w domain.Work) string {
 	return c.Model
 }
 
-// toolArgs are the --tools flag for builtin_tools, if set.
+// toolArgs are the --tools flag for builtin_tools, if set, and
+// --strict-mcp-config for strict_mcp.
 func (c Config) toolArgs() []string {
-	if c.BuiltinTools == nil {
-		return nil
+	var out []string
+	if c.BuiltinTools != nil {
+		out = append(out, "--tools", strings.Join(*c.BuiltinTools, ","))
 	}
-	return []string{"--tools", strings.Join(*c.BuiltinTools, ",")}
+	if c.StrictMCP {
+		out = append(out, "--strict-mcp-config")
+	}
+	return out
 }
 
 // secretVariable is the environment name for one selected secret.
