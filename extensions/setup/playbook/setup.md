@@ -19,15 +19,27 @@ Once the daemon has run, it keeps the configuration it last activated (its *gene
 
 ## In a browser session
 
-When your argument is `session`, the owner started you from the Setup page of the web view, not a terminal. There you have no shell and no file access, so you can't run any command in this guide, read their checkouts or the config, or change the config. They see only what you send with `setup.say` (a message) and `setup.ask` (a question, with `choices` when there are a few likely answers); nothing else you write reaches them. Proposing config changes for the owner to approve from the page is not built yet.
+When your argument is `session`, the owner started you from the Setup page of the web view, not a terminal. You have no shell and no file access: everything you learn comes through probes, everything you say goes through an operation, and you never edit the config. You propose changes; the owner approves or rejects each one and applies the approved set from the page. Nothing has changed until `setup.applied` arrives.
 
-So in this release a browser session explains and plans, and the setup itself happens in a terminal:
+The guide below is written for a terminal. Its introduction, ground rules, questions and config examples hold in a session too; swap its commands as follows:
 
-- Say so in your first message, after the picture of Open Conduit below: you can explain it and plan the setup with them, and they will run the commands.
-- Ask the questions below, without looking around first: ask where their checkouts are, which repositories and which `gh` login, rather than finding out.
-- Finish with the commands for what you agreed: `{{bin}} init --with claude` for this guide in a terminal session that can look around and write the config, or the `init` commands (`{{bin}} init github --repo OWNER/NAME --scope ID --checkout DIR`, then `{{bin}} config check`, or `config validate` and `config apply` once the daemon has run). Then end the session with `declare_outcome`.
+| In a terminal | In a session |
+| --- | --- |
+| check `command -v claude` along the way | start with `setup.probe` `claude-code.status`, and tell the owner first whether Claude Code can do the work, or what to fix |
+| look around with `ls`, `git`, `gh`, `config show`, `doctor` | `setup.probe` with `setup.fs.list` (a folder under their home), `setup.tools`, `github.accounts`, `github.repos` or `setup.doctor`, each with a one-line `why`; `setup.read` for the config |
+| talk and ask in the chat | `setup.say` for a message; `setup.ask` for a question, with `choices` when there are a few likely answers. They see nothing else you write |
+| `config set`, `init TYPE` | `setup.probe` `setup.init` (`type` and `flags`) to see the scope `init` would write, then `setup.propose` for each change (`op` add, replace or remove, a `pointer`, a `value`, and the `why` they will read) |
+| `config validate` and `config apply` | `setup.validate`, then ask them to review and apply the approved changes in the page; `setup.applied` tells you when they have |
+| ask them to run `secret set` | the same, then `setup.ask` whether it's done, and propose the reference (`keyring:NAME`), never a value |
+| suggest labelling a real issue to see it work | `setup.trace` with the scope and one of its samples (a trace without one lists them), then ask them to run doctor with secrets checked from the page |
+| end when they close the terminal | end with the structured status `finished` and a summary |
 
-Everything below assumes a terminal; in a session, take from it what to ask and what to tell the owner.
+How to propose:
+
+- Small, explained steps: a connection, then a scope, then its binding, so each can be judged on its own. A change that doesn't validate alone is still recorded with its problems, so a scope and its binding may come in two proposals; `setup.validate` checks the approved set together.
+- A rejected change stays rejected: don't propose it again, ask what they want instead. `setup.withdraw` takes back one they haven't decided.
+- Probes take names and arguments, never a command line. There is no probe that reads a file, prints the environment or resolves a secret, so ask when you need something they hold.
+- After a question, end your turn: their answer, decision or apply wakes you. A message they send meanwhile arrives with it.
 
 ## Open the conversation
 

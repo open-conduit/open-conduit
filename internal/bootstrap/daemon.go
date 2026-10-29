@@ -541,15 +541,21 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return nil, err
 	}
 	c.control = control
-	pipelineCheck := func(context.Context) runtime.Check {
-		status, code, detail := d.pipeline.Health()
-		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
-	}
-	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: append(append([]func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck}, d.inprocChecks(false)...), d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.capacityCheck, d.scheduleCheck, d.extensionCheck),
+	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: d.checks(),
 		DeepChecks: append(append([]func(context.Context) runtime.Check{d.githubAuthCheck, d.trackerAuthCheck}, d.inprocChecks(true)...), d.slackAuthCheck, d.scheduleWebhookCheck, d.extensionDeepCheck), Capacity: d.capacityPools, Annotate: d.annotate, Actions: d.actions, Attach: d.attach, Live: d.live, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
 	return c, nil
+}
+
+// checks are doctor's ordinary checks: none resolves a secret or calls a
+// service (GET /doctor without check_secrets, and setup's doctor probe).
+func (d *daemon) checks() []func(context.Context) runtime.Check {
+	pipelineCheck := func(context.Context) runtime.Check {
+		status, code, detail := d.pipeline.Health()
+		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
+	}
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck}, d.inprocChecks(false)...), d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.capacityCheck, d.scheduleCheck, d.extensionCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

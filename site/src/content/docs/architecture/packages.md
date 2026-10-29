@@ -79,7 +79,7 @@ Composition may depend on the public `conformance` checks, because the certifica
 
 **Executors.** `executors/shell` imports only public contracts. `executors/claudecode` ([Claude Code executor](../claude-code-executor/)) imports only public contracts. It keeps its own copy of the shell executor's process-identity helpers, because executors cannot import each other. Executors reach workspaces only through `extension.ResourceBroker`, and runtime sees only that opaque broker. The public `extension.StopExecutor` and `extension.AttachExecutor` carry physical-stop evidence and the operator attach control, so the daemon needs no private executor interface.
 
-**GitHub.** `extensions/github` imports only public contracts. It holds the ingress, the engineering tool operations, the in-process `github-hold` executor (which reaches the toolbelt through the public `client`) and `extensions/github/playbooks` (embedded playbooks and plugin preparation). Its `extensions/github/githubtest` REST fake is test support used by extension and integration tests, never by production code. `internal/bootstrap` registers it.
+**GitHub.** `extensions/github` imports only public contracts. It holds the ingress, the engineering tool operations, the in-process `github-hold` executor (which reaches the toolbelt through the public `client`) and `extensions/github/playbooks` (embedded playbooks and plugin preparation; the setup playbook is the `setup` extension's own). Its `extensions/github/githubtest` REST fake is test support used by extension and integration tests, never by production code. `internal/bootstrap` registers it.
 
 **Git workspaces.** `extensions/git` ([B07](../workspaces/)) imports only public contracts plus process/filesystem utilities.
 

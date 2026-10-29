@@ -105,7 +105,24 @@ func (f *fake) Wake(_ context.Context, id string, r client.WakeRequest, _ string
 	return client.WakeResult{Event: client.Event{ID: "evt_wake"}, Matched: true}, nil
 }
 func (f *fake) Doctor(context.Context, bool) (client.Doctor, error) {
+	f.doctorCalled++
+	if f.doctor != nil {
+		return *f.doctor, nil
+	}
 	return client.Doctor{State: "ok"}, nil
+}
+func (f *fake) WorkConfigCandidate(_ context.Context, work string) (client.ConfigCandidate, error) {
+	if f.candidate == nil {
+		return client.ConfigCandidate{}, &client.Error{Status: 404, Code: "not_found", Message: "nothing to apply"}
+	}
+	return *f.candidate, nil
+}
+func (f *fake) ApplyConfigText(_ context.Context, text []byte, hash, generation, _ string) (client.ConfigApplied, error) {
+	if f.applyErr != nil {
+		return client.ConfigApplied{}, f.applyErr
+	}
+	f.applied = append(f.applied, string(text)+"|"+hash+"|"+generation)
+	return client.ConfigApplied{Generation: "2", Hash: hash}, nil
 }
 
 // work:

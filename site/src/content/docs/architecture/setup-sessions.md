@@ -1,11 +1,11 @@
 ---
 title: "Setup sessions and config change sets"
-description: "Proposal for setup in the browser: a setup extension whose agent talks in typed events and proposes config change sets that only the operator applies."
+description: "Setup in the browser: a setup extension whose agent talks in typed events and proposes config change sets that only the operator applies."
 ---
 
-This is a proposal for [#127](https://github.com/open-conduit/open-conduit/issues/127). It describes intended behaviour, not the code as it is. When it is built, this page is rewritten to describe what was built, and every page named under [Rules this changes](#rules-this-changes) is amended in the same change.
+This page describes setup in the browser as built for [#127](https://github.com/open-conduit/open-conduit/issues/127) and [#153](https://github.com/open-conduit/open-conduit/issues/153), from the design approved in #132. Where the build differs from that design, the page says so.
 
-`open-conduit init --with claude` runs the [setup playbook](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/playbooks/setup/setup.md) as an interactive Claude Code session in a terminal ([operator setup](../operator-setup/)). There the agent edits the config file itself with `open-conduit config set`. This proposal moves the same setup into the web view:
+`open-conduit init --with claude` runs the [setup playbook](https://github.com/open-conduit/open-conduit/blob/main/extensions/setup/playbook/setup.md) as an interactive Claude Code session in a terminal ([operator setup](../operator-setup/)). There the agent edits the config file itself with `open-conduit config set`. A setup session runs the same playbook from the web view:
 
 - The agent's output arrives as typed events the page renders: a message, a probe and its result, a question with choices, a proposed change, checks, and an applied generation. There is no terminal text to parse.
 - The agent never writes the config. It proposes changes, the operator approves or rejects each one, and only the operator applies the approved set.
@@ -32,14 +32,14 @@ Setup is an in-process extension, `setup`, on `extension/inproc`, built the way 
 }
 ```
 
-The `setup` type, handler and operations don't exist yet, so this block is a sketch, not a validated fixture.
+`open-conduit init setup` writes this scope, and a daemon with no config file and no stored generation runs on it.
 
 - **Work.** A session is Work of kind `setup.session` in the setup scope, on the existing [Claude Code executor](../claude-code-executor/). Work gives the session everything it needs as it is: detached segments that survive a daemon restart, `--resume` continuity, waits that park it until the operator answers, an authorised toolbelt over MCP, and run history. The attempt pins its generation and binding like any other ([execution scheduling](../execution-scheduling/)).
 - **Route.** The `setup` route handler matches only Events the extension's own actions produce (`setup.*`, source `core.action`) on a session key of its own scope (`setup`, `session/<scope>/<id>`). A `setup.start` with an unowned key creates the session's Work, with the chosen model as the Work's context. Routes set a new Work's context through `RouteDecision.Context`, a new field, because a route had no way to before. Every later operator Event carries the session's key. During a running turn the route injects and falls back to queue. While the session waits on a question, only the answer wakes it, and a message is queued until the turn the answer starts. The agent's own Events carry no key, so they are recorded on the session and never route back to it.
 - **No shell.** The binding turns Claude Code's built-in tools off. That is a new executor option, `builtin_tools`: a list passed as `--tools`, where an empty list means none. The extension's config check refuses a setup route whose bound agent is not on `claude-code`, does not set `builtin_tools` to `[]`, or is granted operations beyond `read_context`, `wait`, `declare_outcome` and `setup.*` (`binding_refused`, at the route's `binding`). A route handler's type can now check the binding each of its routes binds (`inproc.ConfigType.Binding`); before, a handler saw only its own route config. Everything the agent learns comes through a probe, and everything it says goes through an operation.
 - **Model.** The operator picks the model when starting a session. The `start` action offers the binding's `models` as choices, and the route puts the choice in the Work's context. That is a second new executor option: a binding with `models` takes the Work context's `model` if it is one of them, and otherwise uses the binding's `model`. The model is never written to the config.
 - **One session at a time.** The `start` action is listed only while the scope has no open session.
-- **Playbook.** The setup playbook moves from `extensions/github/playbooks/setup` to `extensions/setup`, because it already covers Slack, Linear and Jira as well as GitHub. `init --with claude` and the setup binding both use it from there (see [the playbook](#the-setup-playbook-under-a-session)).
+- **Playbook.** The setup playbook moves from `extensions/github/playbooks/setup` to `extensions/setup` (built), because it already covers Slack, Linear and Jira as well as GitHub. `init --with claude` and the setup binding both use it from there (see [the playbook](#the-setup-playbook-under-a-session)).
 
 ### Why not a reserved scope
 
@@ -72,8 +72,8 @@ Every event is an operation or an action. The extension accepts each one as an E
 | `setup.question` | `setup.ask` | `question_id`, `text`, `context`, `choices` |
 | `setup.answer` | operator `answer` action | `question_id`, `answer` |
 | `setup.proposal` | `setup.propose` | `change`, `op`, `pointer`, `before`, `after`, `why`, `diagnostics` |
-| `setup.decision` | operator `approve_*`, `reject_*`, `approve_all` actions; `setup.withdraw` | `change`, `decision`, `reason` |
-| `setup.checks` | `setup.validate`, operator `doctor` action | `source`, `candidate_hash`, `diagnostics` or `checks` |
+| `setup.decision` | operator `approve_*`, `reject_*`, `approve_all_*` actions; `setup.withdraw` | `changes`, `decision`, `reason` |
+| `setup.checks` | `setup.validate`, operator `validate` action | `source`, `candidate_hash`, `valid`, `approved`, `diagnostics` |
 | `setup.applied` | the extension, on the generation that applies the set | `generation`, `hash`, `changes` |
 
 - **Questions** work like `human.ask`. `setup.ask` is an `Operation.Wait`: it records the question, parks the session, and the operator's `answer` action (one button per choice, or a text box) wakes it. Every ask has a 24-hour wait timeout. When it expires, the agent sums up where it got to and finishes.
@@ -87,11 +87,11 @@ The setup playbook's ground rules say the agent probes and never handles a secre
 
 **The candidate, and nothing else of the config.** The agent can read three things, all redacted the way `config get` is (secret references become their names with `[redacted]`):
 
-- `setup.read` returns the outline of the base config: connection IDs and types, scope IDs and names, entry types, binding names. This is the same wiring `GET /config` shows, with no opaque config and no references.
-- `setup.read` also returns, in full, the scopes the operator named when they started the session, and the scopes the session's change set touches.
-- `setup.read` also returns the candidate, which is the base plus the approved changes.
+- `setup.read` returns the outline of the candidate: connection IDs and types, scope IDs and names, entry types, binding names. This is the same wiring `GET /config` shows, with no opaque config and no references.
+- `setup.read` also returns, in full, the scopes and connections the session's change set touches, and the settings.
+- All of it is read from the candidate, the base plus the approved changes, with every change and its state.
 
-To work on an existing scope, the operator names it at the start, or approves a change to it.
+To work on an existing scope, the agent proposes a change to it; the outline names every scope. Naming scopes when the session starts is not built: `start` takes only the model.
 
 **Named probes, owned by what they're about.** `setup.probe` takes a probe name and arguments, never a command line. The probes come from `extension.SetupProbes`, a new optional interface beside `extension.Setup`, so each one lives with the code that knows its domain. Each probe declares its arguments, runs without a shell, has a short timeout and an output cap, and returns safe output plus a display command. Adding one is a code change with a test that its output carries no secret.
 
@@ -101,15 +101,15 @@ To work on an existing scope, the operator names it at the start, or approves a 
 | `setup` | `tools` | whether each of `gh`, `git`, `ngrok` and `cloudflared` is on the daemon's `PATH`, with its path and whether it's a symlink or a script |
 | `setup` | `init` | `init TYPE --dry-run` for every registered setup (`github`, `slack`, `linear`, `jira`). It calls the type's `extension.Setup` with a non-interactive host: `Prompt` returns `ErrSetupNoInput`, `StoreSecret` stores nothing and returns the reference it would use, and `Run` and `OpenURL` refuse. Flags take references as `init` does, and refuse literals |
 | `setup` | `doctor` | the daemon checks that need no secret (`config`, `webhooks`, `service`, the executors'). This is a new narrow host function over the same checks as `GET /v1/doctor`, without `check_secrets` |
-| `claude-code` | `status` | whether `claude` is on the daemon's `PATH`, its version, and whether it is signed in and how (subscription login or API key), with no account detail or key. The `claude_code` doctor check gains the same sign-in state |
+| `claude-code` | `status` | whether `claude` is on the daemon's `PATH`, its version, and whether it is signed in and how (subscription login or API key), with no account detail or key. The `claude_code` doctor check doesn't report it yet |
 | `github` | `accounts` | `gh auth status --json hosts`: each account's host, login, active flag, token source and state |
 | `github` | `repos` | `gh repo list OWNER --json nameWithOwner` |
 
 The playbook starts with `claude-code.status`, so its first words to the operator are that Claude Code is installed and signed in, so it can do the work, or what to fix first.
 
-**No probe takes a reference or a command.** There is nothing that reads an arbitrary file, prints the environment, runs a `cmd:` reference, or resolves a secret. The earlier draft's `gh.login`, which resolved `gh auth token --user LOGIN` with a login the agent chose, is dropped: B05 lets no request supply a command or reference to resolve. Proving a credential works is `doctor` with `check_secrets`, which stays an operator action. The page offers it as a `doctor` action once a change set is applied, and records the result as `setup.checks`. That result is checks and codes, as `GET /v1/doctor` returns, so the agent can read it.
+**No probe takes a reference or a command.** There is nothing that reads an arbitrary file, prints the environment, runs a `cmd:` reference, or resolves a secret. The earlier draft's `gh.login`, which resolved `gh auth token --user LOGIN` with a login the agent chose, is dropped: B05 lets no request supply a command or reference to resolve. Proving a credential works is `doctor` with `check_secrets`, which stays an operator action. Once a change set is applied, the Setup page shows doctor's checks (`GET /v1/doctor`). Running doctor with secrets checked, and recording the result for the agent as `setup.checks`, is not built yet: the playbook asks the operator to run `open-conduit doctor --check-secrets` and tell it the outcome.
 
-**Tracing the candidate.** `setup.trace` runs the route trace from [#126](https://github.com/open-conduit/open-conduit/issues/126) with one of a scope's named samples, against the session's candidate only. It never traces other scopes, and it writes nothing, like the trace itself. This is the last step of setup: it proves that a synthetic event, such as "a new issue is opened", would be picked up, without the operator labelling a real issue. It needs the trace to take a candidate snapshot as well as the active generation. That is an internal function, not a new route.
+**Tracing the candidate.** `setup.trace` runs the route trace from [#126](https://github.com/open-conduit/open-conduit/issues/126) with one of a scope's named samples, against the session's candidate only. It never traces other scopes, and it writes nothing, like the trace itself. This is the last step of setup: it proves that a synthetic event, such as "a new issue is opened", would be picked up, without the operator labelling a real issue. The runtime's `TraceCandidate` reads the candidate's scopes in place of the stored ones, through the host's config service; it is an internal function, not a new route, and a trace's generation reads `candidate`.
 
 ## Secrets and references
 
@@ -126,15 +126,15 @@ A change set is the session's list of JSON-pointer edits to the config file, eac
 
 - **Base.** A change set is based on the committed generation and the config file's text when the session starts. A change edits the file text with `config set`'s editor, which addresses array elements by `id` or `name` and appends with `-`. A pointer into a scope from an [included folder](../config-management/#included-folders) is refused `in_folder`, because that text lives in another file. Running on the default configuration with no file, the base text is the default document.
 - **Proposing.** `setup.propose {op, pointer, value?, why}` adds a `proposed` change. The extension fills in `before`, checks the pointer resolves for `replace` and `remove`, and validates the base plus the approved changes plus this one, attaching the diagnostics. A proposal that doesn't validate on its own is still recorded, since a scope and its binding may come in two proposals, and the panel shows its diagnostics. `setup.withdraw` takes back an undecided change.
-- **Deciding.** The session's panel lists each open proposal with `approve_<change>` and `reject_<change>` actions. Reject prompts for an optional reason. With more than one open, the panel also offers `approve_all`, labelled "Approve all N". Its ID carries no list. Instead, `Invoke` checks the change set's revision against the one it listed, so it approves exactly the proposals the operator saw and refuses `change_set_moved` if any changed. Each decision is still recorded as its own `setup.decision`. A rejected change stays in the list, so the agent doesn't propose it again.
+- **Deciding.** The session's panel lists each open proposal with `approve_<change>` and `reject_<change>` actions. Reject prompts for an optional reason. With more than one open, the panel also offers Approve all, labelled "Approve all N". Its ID carries no list, only the revision of the open proposals it was listed for (`approve_all_<revision>`), so it approves exactly the proposals the operator saw and refuses `change_set_moved` if any changed. One click is one action and one `setup.decision`, whose `changes` names every change it approved. Decisions are Events, since an action may not write state: a change's state is its operator's latest decision after its proposal, folded from the session's `setup.decision` Events. A rejected change stays in the list, so the agent doesn't propose it again.
 - **Validating.** `setup.validate` (agent) and the operator's `validate` action build the candidate (the base text plus the approved changes, in proposal order) and validate it. A new host function runs the same side-effect-free validation as `POST /v1/config/validate`. The result and its `candidate_hash` are recorded as `setup.checks`.
 - **Applying.** Apply is not an action and not an operation. The web view's Apply button is an operator client doing what `config apply` does:
   1. It reads the candidate from a new operator-class route, `GET /v1/work/{id}/config-candidate`, served by an optional `extension.ConfigCandidate` interface on the Work's extension. The route returns the text, `base_generation` and `candidate_hash`.
   2. It calls the existing `POST /v1/config/apply` with that `expected_generation` and `candidate_hash`.
 
-  The extension's `Configurer` receives every applied generation. When one's hash matches the candidate, it marks those changes `applied`, accepts `setup.applied` (which wakes the agent), and moves the change set's base to the new generation.
-- **Key order.** `POST /config/apply` saves what it is given in compact form (B05). To keep the operator's layout, apply gains an optional `config_text`, the file text as a JSON string, used instead of `config`. The daemon validates the parsed text and saves the text byte for byte. `open-conduit config apply FILE` can send the same.
-- **When the config moved.** If the generation or the file changed after the set's base, apply fails with `generation_conflict` and the panel marks the set stale. The operator's `rebase` action re-reads both, recomputes each change's `before`, keeps approvals whose `before` is unchanged, and returns the rest to `proposed`.
+  The extension's `Configurer` receives every applied generation while the host holds the config service, so it only notes the generation; its `applied` task, run by the host loop straight after, compares each open session's candidate with the active hash. On a match it marks those changes `applied`, moves the change set's base to the new generation, and accepts `setup.applied` on the session's key, which reaches the agent as input.
+- **Key order.** `POST /config/apply` saves `config` in compact form (B05). To keep the operator's layout, apply takes `config_text`, the file text as a JSON string, in place of `config`. The daemon validates the parsed text and saves the text byte for byte. `open-conduit config apply FILE` sends it too.
+- **When the config moved.** If the generation changed after the page read the candidate, apply fails with `generation_conflict` and the page asks the operator to reload and review. There is no `rebase` action: the next time the agent proposes, reads, validates or traces, or the operator reads the candidate, the change set moves onto the configuration now. Each change's `before` is recomputed, approvals whose `before` is unchanged stand, and the rest return to `proposed`.
 
 ### Only the operator applies
 
@@ -175,20 +175,22 @@ The build amends each of these pages in the same change:
 - **[Observability](../observability-history/):** the web view's Setup page.
 - **[#126 route trace](https://github.com/open-conduit/open-conduit/issues/126):** tracing against a candidate snapshot.
 
-## Building it
+## How it was built
 
-Each step lands with its tests and the page amendments above:
+Each step landed with its tests and the page amendments above:
 
-1. The `setup` extension with its scope, `setup.start`, `setup.say` and `setup.ask`, messages, the route, and the executor's `builtin_tools` and `models`. Built: the executor options ([#136](https://github.com/open-conduit/open-conduit/pull/136)), then the extension, its route, the `start`, `message` and `answer` actions, `setup.say`, `setup.ask` and `RouteDecision.Context`. Then the config check on the setup route's binding, and the default configuration at first start with `init setup` (the [fresh install](#a-fresh-install) section is built as written; `doctor` also reports `disk_missing` when a generation that is not the default runs without its file). Still to come in this step: the playbook's move. Until it lands, the scope `init setup` writes names the `setup` playbook, which Claude Code's plugin does not carry yet.
-2. Change sets: propose, withdraw, decide (including `approve_all`), validate, the candidate route, `config_text`, and the applied hook. The operator-only test lands here.
-3. Probes: `extension.SetupProbes`, the setup, `claude-code` and `github` probes, `setup.read`, and the secret scanner. Then `setup.trace` once #126 has merged.
+1. The `setup` extension with its scope, `setup.start`, `setup.say` and `setup.ask`, messages, the route, and the executor's `builtin_tools` and `models` ([#136](https://github.com/open-conduit/open-conduit/pull/136), [#142](https://github.com/open-conduit/open-conduit/pull/142)). Then the config check on the setup route's binding ([#143](https://github.com/open-conduit/open-conduit/pull/143)), the default configuration at first start with `init setup` ([#144](https://github.com/open-conduit/open-conduit/pull/144); `doctor` also reports `disk_missing` when a generation that is not the default runs without its file), and the playbook's move to `extensions/setup`, which adds it to the turn plugin.
+2. Change sets: propose, withdraw, decide (including Approve all), validate, the candidate route, `config_text`, and the applied hook, with the operator-only test (`TestDaemonSetupChangeSet`: the session's own execution token is refused by apply, the candidate route, validate and the action routes, apply-shaped operation input is refused, and the generation is unchanged).
+3. Probes: `extension.SetupProbes`, the setup, `claude-code` and `github` probes, `setup.read`, the secret scanner, and `setup.trace` against the candidate.
 4. The playbook's session mode.
-5. The web view's Setup page, built from the session's Events and panels.
+5. The web view's Setup page, built from the session's Events and panels ([observability](../observability-history/)).
+
+Not built: naming scopes when a session starts, the operator's `doctor` action with secrets checked recorded as `setup.checks`, and the sign-in state on the `claude_code` doctor check.
 
 ## Decided in review
 
 - **Daemon-owned session, typed events as toolbelt calls, no shell, named probes, operator-only apply:** approved on #127.
 - **Model:** chosen when the session starts and stored on its Work, not in config.
 - **Fresh install:** the daemon starts without a file, and `open-conduit web` stays a client.
-- **Approve all:** one action per click. Each decision is still its own Event.
+- **Approve all:** one action per click, recorded as one `setup.decision` naming every change it approved.
 - **Extension over reserved scope:** chosen after review, for the reasons [above](#why-not-a-reserved-scope).

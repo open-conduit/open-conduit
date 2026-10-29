@@ -87,7 +87,46 @@ type traceWait struct {
 // policy decision; it never writes. filter evaluates a subscription's opaque
 // filter (nil: a filtered subscription never matches, as in the scheduler).
 func (r *Router) Trace(ctx context.Context, scopeID domain.ID, e domain.Event, filter func(string, domain.Payload, domain.Event) bool) (RouteTrace, error) {
+	return r.trace(ctx, scopeID, e, filter, nil)
+}
+
+// CandidateGeneration is a candidate trace's generation.
+const CandidateGeneration = "candidate"
+
+// TraceCandidate is Trace against candidate scopes (a configuration not yet
+// applied, such as a setup session's) in place of the stored ones: the
+// routes and bindings it would have, over the Work and Waits there are now.
+// Like Trace, it writes nothing.
+func (r *Router) TraceCandidate(ctx context.Context, scopeID domain.ID, e domain.Event, filter func(string, domain.Payload, domain.Event) bool, scopes []domain.Scope) (RouteTrace, error) {
+	return r.trace(ctx, scopeID, e, filter, candidateScopes(scopes))
+}
+
+func candidateScopes(scopes []domain.Scope) map[domain.ID]domain.Scope {
+	out := make(map[domain.ID]domain.Scope, len(scopes))
+	for _, s := range scopes {
+		out[s.ID] = s
+	}
+	return out
+}
+
+// candidateTx reads candidate scopes in place of the stored ones.
+type candidateTx struct {
+	storage.Tx
+	scopes map[domain.ID]domain.Scope
+}
+
+func (t candidateTx) Scope(id domain.ID) (domain.Scope, error) {
+	if s, ok := t.scopes[id]; ok {
+		return s, nil
+	}
+	return domain.Scope{}, storage.ErrNotFound
+}
+
+func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, filter func(string, domain.Payload, domain.Event) bool, candidate map[domain.ID]domain.Scope) (RouteTrace, error) {
 	out := RouteTrace{Generation: r.options.Generation}
+	if candidate != nil {
+		out.Generation = CandidateGeneration
+	}
 	if scopeID == "" || e.Type == "" {
 		return out, storage.ErrInvalid
 	}
@@ -95,6 +134,9 @@ func (r *Router) Trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 	var waiting *traceWait
 	var wakes []traceWait
 	err := r.transact(ctx, nil, func(tx storage.Tx) error {
+		if candidate != nil {
+			tx = candidateTx{Tx: tx, scopes: candidate}
+		}
 		scope, err := resolveScope(tx, e, scopeID)
 		if err != nil {
 			return err
@@ -378,8 +420,22 @@ func waitingFor(w domain.Wait) string {
 // Samples lists the sample Events the scope's route handlers offer, in route
 // order, each sample once per handler. Samplers are given the router's clock.
 func (r *Router) Samples(ctx context.Context, scopeID domain.ID) ([]TraceSample, error) {
+	return r.samples(ctx, scopeID, nil)
+}
+
+// SamplesCandidate is Samples for a scope of candidate scopes.
+func (r *Router) SamplesCandidate(ctx context.Context, scopeID domain.ID, scopes []domain.Scope) ([]TraceSample, error) {
+	return r.samples(ctx, scopeID, candidateScopes(scopes))
+}
+
+func (r *Router) samples(ctx context.Context, scopeID domain.ID, candidate map[domain.ID]domain.Scope) ([]TraceSample, error) {
 	var s routeSnapshot
-	if err := r.transact(ctx, nil, func(tx storage.Tx) error { return scopeSnapshot(tx, scopeID, &s) }); err != nil {
+	if err := r.transact(ctx, nil, func(tx storage.Tx) error {
+		if candidate != nil {
+			tx = candidateTx{Tx: tx, scopes: candidate}
+		}
+		return scopeSnapshot(tx, scopeID, &s)
+	}); err != nil {
 		return nil, err
 	}
 	out := []TraceSample{}
@@ -443,4 +499,18 @@ func (c *Control) TraceRoute(ctx context.Context, scope domain.ID, e domain.Even
 // RouteSamples is Router.Samples.
 func (c *Control) RouteSamples(ctx context.Context, scope domain.ID) ([]TraceSample, error) {
 	return c.router.Samples(ctx, scope)
+}
+
+// TraceCandidate is Router.TraceCandidate with the scheduler's subscription
+// filter.
+func (c *Control) TraceCandidate(ctx context.Context, scope domain.ID, e domain.Event, scopes []domain.Scope) (RouteTrace, error) {
+	if c.router == nil {
+		return RouteTrace{}, fmt.Errorf("%w: no router", storage.ErrInvalid)
+	}
+	return c.router.TraceCandidate(ctx, scope, e, c.scheduler.options.AliasFilter, scopes)
+}
+
+// SamplesCandidate is Router.SamplesCandidate.
+func (c *Control) SamplesCandidate(ctx context.Context, scope domain.ID, scopes []domain.Scope) ([]TraceSample, error) {
+	return c.router.SamplesCandidate(ctx, scope, scopes)
 }

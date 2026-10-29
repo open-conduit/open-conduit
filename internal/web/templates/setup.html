@@ -29,6 +29,8 @@
         {{- end}}{{else if .Choices}}
         <div class="choices" role="group" aria-label="Choices">{{$a := .Answer}}{{range .Choices}}<button type="button" class="choice{{if eq . $a}} is-on{{end}}" disabled>{{.}}</button>{{end}}</div>
         {{- end}}
+        {{- else if .Note}}
+        <div class="msg msg-note"><span class="who">Change set · {{at .At}}</span><div class="msg-text">{{.Text}}</div></div>
         {{- else if .Operator}}
         <div class="msg msg-user"><span class="who">You · {{at .At}}</span><div class="msg-text">{{.Text}}</div></div>
         {{- else}}
@@ -66,7 +68,58 @@
         </ul>
         {{- if ne .W.Disp.Group "closed"}}
         <h2 class="section-rule">Changes</h2>
-        <p class="quiet">Changes the assistant proposes appear here for you to approve once the daemon supports change sets. Until then a session can't change the configuration; it can tell you what to run.</p>
+        {{- with .Changes}}
+        {{- with .Lead}}<p class="quiet small">{{.}}</p>{{end}}
+        <div class="ledger-states"><span><b>{{len .Open}}</b> open</span><span><b>{{.Approved}}</b> approved</span><span><b>{{len .All}}</b> in all</span></div>
+        {{- if or .ApproveAll .Validate .Apply}}
+        <div class="change-bar">
+          {{- with .ApproveAll}}<form method="post" action="/actions">{{template "setup-hidden" .}}<button class="btn">{{.Label}}</button></form>{{end}}
+          {{- with .Validate}}<form method="post" action="/actions">{{template "setup-hidden" .}}<button class="btn">Validate</button></form>{{end}}
+          {{- if .Apply}}
+          <form method="post" action="/setup/apply">
+            <input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{setupBack $ss.W.ID}}"><input type="hidden" name="work" value="{{$ss.W.ID}}">
+            <button class="btn btn-primary">Apply {{plural .Approved "approved change"}}</button>
+          </form>
+          {{- end}}
+        </div>
+        {{- if .Apply}}<p class="bench-note">Apply validates the approved changes again and makes them the next generation, but only if the configuration hasn't changed since they were based on it.</p>{{end}}
+        {{- end}}
+        <ul class="changes">
+          {{- range .Open}}
+          <li class="change cs-{{.State}}" id="change-{{.ID}}">
+            <div class="change-head"><span class="change-id">{{.ID}}</span><b class="change-title">{{.Op}} <code>{{.Pointer}}</code></b><span class="change-state">{{.State}}</span></div>
+            {{- with .Why}}<p class="change-why">{{.}}</p>{{end}}
+            <div class="change-diff">
+              <div><span class="diff-label">Before</span><pre>{{if .HasBefore}}{{.Before}}{{else}}(nothing){{end}}</pre></div>
+              <div><span class="diff-label">After</span><pre>{{if .HasAfter}}{{.After}}{{else}}(removed){{end}}</pre></div>
+            </div>
+            {{- with .Problems}}
+            <ul class="checks">{{range .}}<li class="ck-fail">{{mark "failed" 12 "problem"}}<span class="ck-ptr">{{.}}</span></li>{{end}}</ul>
+            {{- end}}
+            <div class="change-acts">
+              {{- with .Approve}}<form method="post" action="/actions">{{template "setup-hidden" .}}<button class="btn btn-primary">Approve</button></form>{{end}}
+              {{- with .Reject}}<form method="post" action="/actions" class="change-reject">{{template "setup-hidden" .}}<input name="input" autocomplete="off" placeholder="Why (optional)" aria-label="Why you reject it"><button class="btn">Reject</button></form>{{end}}
+            </div>
+          </li>
+          {{- end}}
+        </ul>
+        {{- with .All}}
+        <table class="change-table">
+          <thead><tr><th>Change</th><th>Op</th><th>Pointer</th><th>State</th></tr></thead>
+          <tbody>{{range .}}<tr class="cs-{{.State}}"><td>{{.ID}}</td><td>{{.Op}}</td><td><code>{{.Pointer}}</code></td><td>{{.State}}</td></tr>{{end}}</tbody>
+        </table>
+        {{- end}}
+        {{- else}}
+        <p class="quiet">The assistant hasn't proposed a change yet. Each change it proposes appears here with its before and after, for you to approve or reject. Nothing changes until you apply the approved ones.</p>
+        {{- end}}
+        {{- end}}
+        {{- with .Doctor}}
+        <h2 class="section-rule">Checks after generation {{$ss.Applied}}</h2>
+        <ul class="kv-list">
+          {{- range .Checks}}<li>{{mark ($ss.CheckMark .Status) 12 .Status}}<b>{{.Name}}</b><span>{{.Detail}}</span></li>{{end}}
+        </ul>
+        {{- end}}
+        {{- if ne .W.Disp.Group "closed"}}
         <div class="row-gap"><a class="btn btn-quiet" href="{{confirmHref "cancel" .W $p.Back}}" data-action-dialog>End session</a></div>
         <p class="bench-note">Ending a session cancels its Work. Its conversation stays here and on the Work page.</p>
         {{- end}}

@@ -46,7 +46,7 @@ open-conduit tui
   - It prints only the reference. `--store keyring|file` forces one store.
   - The daemon's resolver reads `file:` references from that file.
 - **`init --with claude`**:
-  - The setup guide ([`playbooks.Setup`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/playbooks/setup/setup.md)) is written as its own one-skill plugin under `<state>/playbooks/setup`, apart from the turn plugin.
+  - The setup playbook ([`setup.Playbook`](https://github.com/open-conduit/open-conduit/blob/main/extensions/setup/playbook/setup.md)) is written as its own one-skill plugin under `<state>/playbooks/setup`. The `setup` extension also adds it to the daemon's turn plugin, so a setup session's binding (`playbook: setup`) starts on it. With the argument `session` (the setup binding's `args`) the playbook runs in session mode: it probes instead of using a shell and proposes changes for the operator to approve and apply instead of running `config set` and `config apply` ([setup sessions](../setup-sessions/#the-setup-playbook-under-a-session)).
   - The command is an interactive `claude /open-conduit:setup --plugin-dir … --allowedTools …` with `OPEN_CONDUIT_CONFIG` set.
   - Only `open-conduit config`, `doctor`, `health`, `secret path` and `init github --dry-run` are pre-allowed, and `OS_*` credentials are removed from the environment.
   - The guide teaches `init`, `config set`, `secret set`, webhooks, permissions, dry run and the TUI controls. Its example config still validates against the daemon registry.

@@ -1,6 +1,6 @@
 // Package playbooks holds the instructions agents follow under Open Conduit
 // (ported from Open Supervisor's internal/playbooks): how to work a GitHub
-// issue in turns, and the setup guide. Everything that touches GitHub goes
+// issue in turns. Everything that touches GitHub goes
 // through the toolbelt operations the github extension registers. Claude
 // Code receives them as a plugin of skills (Prepare); a turn starts with
 // /open-conduit:<playbook>.
@@ -18,14 +18,10 @@ import (
 //go:embed *.md
 var files embed.FS
 
-//go:embed setup/setup.md
-var setupGuide string
-
 // PluginName is the plugin the playbooks load as, so the skill prefix.
 const PluginName = "open-conduit"
 
-// All returns every agent playbook by name ("work-issue"). The setup guide
-// is kept apart, so agents working issues never see it.
+// All returns every agent playbook by name ("work-issue").
 func All() map[string]string {
 	out := map[string]string{}
 	entries, _ := files.ReadDir(".")
@@ -39,23 +35,18 @@ func All() map[string]string {
 	return out
 }
 
-// Setup is the setup guide; bin is how the agent runs open-conduit.
-func Setup(bin string) string { return strings.ReplaceAll(setupGuide, "{{bin}}", bin) }
-
 // Prepare writes the playbooks as a Claude Code plugin into dir:
 // .claude-plugin/plugin.json and skills/<name>/SKILL.md (v1 Prepare). It
 // rewrites every file each time, so an upgrade replaces old text, and
 // removes skills that are no longer shipped.
 func Prepare(dir string) error {
-	return write(dir, "Playbooks for agents run by Open Conduit", All())
+	return WritePlugin(dir, "Playbooks for agents run by Open Conduit", All())
 }
 
-// PrepareSetup writes the setup guide as its own plugin (one skill, setup).
-func PrepareSetup(dir, bin string) error {
-	return write(dir, "Sets Open Conduit up", map[string]string{"setup": Setup(bin)})
-}
-
-func write(dir, description string, books map[string]string) error {
+// WritePlugin writes books as a Claude Code plugin named PluginName into dir,
+// one skill each, and removes skills it no longer carries. `init --with
+// claude` writes the setup playbook this way as its own plugin.
+func WritePlugin(dir, description string, books map[string]string) error {
 	if err := os.MkdirAll(filepath.Join(dir, ".claude-plugin"), 0o755); err != nil {
 		return err
 	}

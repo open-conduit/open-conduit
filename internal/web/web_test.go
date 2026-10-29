@@ -47,6 +47,13 @@ type fake struct {
 	reasons   []string
 	traced    []string
 	withCalls int
+
+	// A setup session's candidate and what applying it does.
+	candidate    *client.ConfigCandidate
+	applyErr     error
+	applied      []string
+	doctor       *client.Doctor
+	doctorCalled int
 }
 
 func (f *fake) Runs(_ context.Context, q url.Values) (client.Page[client.Run], error) {

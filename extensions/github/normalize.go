@@ -455,15 +455,25 @@ func (n *normalizer) pullIssue(p rawPull) (int, bool) {
 			}
 		}
 	}
-	for _, m := range refsPattern.FindAllStringSubmatch(p.Body, -1) {
-		if n.s.SharedTracker && !strings.EqualFold(m[1], n.s.TrackerRepo) || !n.s.SharedTracker && m[1] != "" && !strings.EqualFold(m[1], n.s.Repo) {
+	if refs := bodyRefs(n.s, p.Body); len(refs) > 0 {
+		return refs[0], true
+	}
+	return 0, false
+}
+
+// bodyRefs is every tracker issue a PR body names with a closing or
+// reference keyword (`Closes #N`, `Refs #N`), in order.
+func bodyRefs(s Settings, body string) []int {
+	var out []int
+	for _, m := range refsPattern.FindAllStringSubmatch(body, -1) {
+		if s.SharedTracker && !strings.EqualFold(m[1], s.TrackerRepo) || !s.SharedTracker && m[1] != "" && !strings.EqualFold(m[1], s.Repo) {
 			continue
 		}
 		if v, ok := parseNumber(m[2]); ok {
-			return v, true
+			out = append(out, v)
 		}
 	}
-	return 0, false
+	return out
 }
 
 // pullKey correlates a PR (and everything on it) with its tracker issue's

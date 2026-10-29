@@ -116,6 +116,10 @@ The body carries `<!-- open-conduit:agent work=<id> intent=<digest> -->`. If a p
 
 **Reactions:** a `+1` acknowledges each human comment the router delivered to Work. Reactions are idempotent at GitHub. The cursor never passes an unrouted comment. It retries rate-limit and credential failures, and skips permanent refusals.
 
+## Setup probes
+
+For [setup sessions](../setup-sessions/) the extension offers two probes (`extension.SetupProbes`). `github.accounts` runs `gh auth status --json hosts` and returns each account's host, login, active flag, token source and state, never the token. `github.repos` runs `gh repo list OWNER` for an owner that must be a GitHub login, and returns repository names.
+
 ## Verification
 
 Run these commands:

@@ -1,6 +1,9 @@
 package bootstrap
 
 import (
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -73,5 +76,24 @@ func TestInstalledCompose(t *testing.T) {
 	}
 	if tasks := x.Tasks(); len(tasks) != 1 || tasks[0].Name != "sweep" || tasks[0].Pace != 90*time.Second {
 		t.Fatalf("tasks %+v", tasks)
+	}
+}
+
+// The turn plugin carries the setup playbook, so a session's binding
+// (`playbook: setup`) starts on a skill Claude Code has, beside the
+// work-issue playbook and the extensions' own.
+func TestTurnPluginCarriesSetupPlaybook(t *testing.T) {
+	d := &daemon{o: Options{StateDir: t.TempDir()}, inproc: firstParty()}
+	if err := d.preparePlaybooks(); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"setup", "work-issue", "sweep"} {
+		data, err := os.ReadFile(filepath.Join(d.pluginDir(), "skills", name, "SKILL.md"))
+		if err != nil || len(data) == 0 {
+			t.Fatalf("%s skill: %v", name, err)
+		}
+		if strings.Contains(string(data), "{{bin}}") {
+			t.Errorf("%s skill is not filled in", name)
+		}
 	}
 }

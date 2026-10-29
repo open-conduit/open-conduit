@@ -3,6 +3,8 @@ package setup
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"strings"
 	"sync"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -21,6 +23,9 @@ type Extension struct {
 
 	mu      sync.Mutex
 	entries map[domain.ID]string // entry name by enabled scope
+	// applied is set by each configured generation, for the applied task
+	// to match against the sessions' candidates.
+	applied bool
 }
 
 // New returns the extension, unstarted.
@@ -37,6 +42,10 @@ var (
 	_ inproc.EntryGated = (*Extension)(nil)
 	_ inproc.Actor      = (*Extension)(nil)
 	_ inproc.Renderer   = (*Extension)(nil)
+	_ inproc.Playbooker = (*Extension)(nil)
+	_ inproc.Tasker     = (*Extension)(nil)
+
+	_ extension.ConfigCandidate = (*Extension)(nil)
 )
 
 func (*Extension) Name() string { return Type }
@@ -59,7 +68,7 @@ func (*Extension) WorkKinds() []inproc.WorkKind { return []inproc.WorkKind{{Kind
 func (*Extension) EntryGated() {}
 
 func (x *Extension) Start(_ context.Context, h inproc.Host) error {
-	tools, err := NewTools(Options{Store: h.Store, Accept: h.AcceptInTx, Enabled: x.enabled, Now: h.Now})
+	tools, err := NewTools(Options{Store: h.Store, Accept: h.AcceptInTx, Enabled: x.enabled, Now: h.Now, Config: h.Config, Probes: h.Probes})
 	if err != nil {
 		return err
 	}
@@ -78,8 +87,34 @@ func (x *Extension) Configure(_ context.Context, p protocol.ConfigureParams) {
 		entries[scope] = e.Name
 	}
 	x.mu.Lock()
-	x.entries = entries
+	x.entries, x.applied = entries, true
 	x.mu.Unlock()
+	if x.host.Nudge != nil {
+		x.host.Nudge()
+	}
+}
+
+// Tasks runs the applied hook outside Configure, which the host calls
+// while it holds the config service.
+func (x *Extension) Tasks() []inproc.Task {
+	return []inproc.Task{{Name: "applied", Run: x.checkApplied}}
+}
+
+func (x *Extension) checkApplied(ctx context.Context) error {
+	x.mu.Lock()
+	due := x.applied
+	x.applied = false
+	x.mu.Unlock()
+	if !due || x.host.Config == nil {
+		return nil
+	}
+	if err := MarkApplied(ctx, x.host.Store, x.host.Config, x.host.AcceptInTx, x.host.Now); err != nil {
+		x.mu.Lock()
+		x.applied = true
+		x.mu.Unlock()
+		return err
+	}
+	return nil
 }
 
 func (x *Extension) entry(scope domain.ID) (string, bool) {
@@ -101,7 +136,7 @@ func (x *Extension) Actions(scope domain.ID) map[string]extension.ActionProvider
 	if !ok {
 		return nil
 	}
-	return map[string]extension.ActionProvider{name: Actions{Store: x.host.Store, Now: x.host.Now}}
+	return map[string]extension.ActionProvider{name: Actions{Store: x.host.Store, Now: x.host.Now, Config: x.host.Config}}
 }
 
 func (*Extension) Render(_ context.Context, e domain.Event) (string, bool) { return RenderEvent(e) }
@@ -118,7 +153,7 @@ func RenderEvent(e domain.Event) (string, bool) {
 		if s.Model != "" {
 			out += " (on " + s.Model + ")"
 		}
-		return out + "\nSpeak to them with `" + OpSay + "` and ask with `" + OpAsk + "`: they see nothing else you write.", true
+		return out + "\nSpeak to them with `" + OpSay + "` and ask with `" + OpAsk + "`: they see nothing else you write. Look around with `" + OpProbe + "` and `" + OpRead + "`, and change the config only by proposing with `" + OpPropose + "`: they approve and apply.", true
 	case TypeMessage:
 		var m Message
 		if e.Data.Schema != SchemaMessage || json.Unmarshal(e.Data.Data, &m) != nil || m.Role != RoleOperator {
@@ -131,6 +166,27 @@ func RenderEvent(e domain.Event) (string, bool) {
 			return "", false
 		}
 		return "### The operator answered your question\n" + a.Answer, true
+	case TypeDecision:
+		return decisionRender(e)
+	case TypeChecks:
+		var c Checks
+		if e.Data.Schema != SchemaChecks || json.Unmarshal(e.Data.Data, &c) != nil {
+			return "", false
+		}
+		if c.Valid {
+			return fmt.Sprintf("### The operator validated the approved changes\nThe %d approved changes are valid.", c.Approved), true
+		}
+		out := fmt.Sprintf("### The operator validated the approved changes\n%d problems:", len(c.Diagnostics))
+		for _, d := range c.Diagnostics {
+			out += "\n- " + d.Path + ": " + d.Code + ": " + d.Message
+		}
+		return out, true
+	case TypeApplied:
+		var a Applied
+		if e.Data.Schema != SchemaApplied || json.Unmarshal(e.Data.Data, &a) != nil {
+			return "", false
+		}
+		return "### The operator applied your changes\nGeneration " + a.Generation + " is active with " + strings.Join(a.Changes, ", ") + ". Check it, then tell them what is left.", true
 	}
 	return "", false
 }

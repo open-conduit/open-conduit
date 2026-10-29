@@ -157,6 +157,8 @@ func (d *daemon) startInproc(ctx context.Context) error {
 				return id, err
 			},
 			WaitProgress: d.waitProgress(name),
+			Config:       d.configHost(),
+			Probes:       d.setupProbes,
 			Capture:      d.telemetry.Capture,
 		}
 		if err := s.Start(ctx, h); err != nil {

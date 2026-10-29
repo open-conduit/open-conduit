@@ -654,7 +654,7 @@ func (o *operator) config(args []string) int {
 		if err != nil {
 			return o.emit(nil, err)
 		}
-		return o.emit(c.ApplyConfig(cx, data, v.CandidateHash, f.get("generation"), f.key()))
+		return o.emit(c.ApplyConfigText(cx, data, v.CandidateHash, f.get("generation"), f.key()))
 	}
 	return usageError(o.errOut, "expected config validate|apply FILE")
 }

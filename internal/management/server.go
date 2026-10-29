@@ -77,6 +77,10 @@ type Options struct {
 	// extension may not write (optional: without it only the envelope is
 	// checked, by runtime.CheckTraceEvent).
 	AdmitTrace func(scope domain.ID, e domain.Event) error
+	// ConfigCandidate is the configuration a Work proposes, from the
+	// extension that owns its kind (extension.ConfigCandidate; optional:
+	// without it, no Work has one).
+	ConfigCandidate func(ctx context.Context, w domain.Work) (extension.Candidate, error)
 	// Nudge asks the host loop for an immediate pass (optional).
 	Nudge func()
 	// ProviderTimeout and ViewDeadline time the action providers' calls for
@@ -281,6 +285,7 @@ var routes = []route{
 	{"GET", []string{"work", "*", "actions"}, false, false, (*Server).listWorkActions},
 	{"GET", []string{"scopes", "*", "actions"}, false, false, (*Server).listScopeActions},
 	{"GET", []string{"work", "*", "panels"}, false, false, (*Server).listWorkPanels},
+	{"GET", []string{"work", "*", "config-candidate"}, false, false, (*Server).configCandidate},
 	{"GET", []string{"scopes", "*", "panels"}, false, false, (*Server).listScopePanels},
 	{"GET", []string{"scopes", "*", "route", "samples"}, false, false, (*Server).routeSamples},
 	{"GET", []string{"events"}, false, false, (*Server).listEvents},

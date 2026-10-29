@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -343,6 +344,17 @@ func issueRef(s Settings, number int) string {
 		return "Closes " + s.TrackerRepo + "#" + strconv.Itoa(number)
 	}
 	return "Closes #" + strconv.Itoa(number)
+}
+
+// linkBody links a PR body to its issue with `Closes #N`, unless the body
+// already names the issue: a `Refs #N` on one PR of several keeps its own
+// keyword, so merging that PR doesn't close the issue. Ingress links the PR
+// by its branch either way.
+func linkBody(s Settings, number int, body string) string {
+	if slices.Contains(bodyRefs(s, body), number) {
+		return body
+	}
+	return issueRef(s, number) + "\n\n" + body
 }
 
 func (b *bound) branch() string {
@@ -709,9 +721,7 @@ func (t *Tools) prCreate(ctx context.Context, b *bound, data json.RawMessage) (a
 		if head = b.branch(); head == "" {
 			return nil, refuse("no_branch", "the issue has no branch under this repository's branch_pattern; pass head")
 		}
-		if ref := issueRef(b.code.Settings, b.number); !strings.Contains(body, ref) {
-			body = ref + "\n\n" + body
-		}
+		body = linkBody(b.code.Settings, b.number, body)
 	}
 	base := in.Base
 	if base == "" {

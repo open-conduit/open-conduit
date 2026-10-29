@@ -2547,6 +2547,14 @@ a.token {
   gap: 8px;
   align-items: baseline;
 }
+.change-head .change-id {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.change-head:has(.change-id) {
+  grid-template-columns: 24px minmax(0, 1fr) auto;
+}
 .change-title {
   background: none;
   border: 0;
@@ -2554,6 +2562,91 @@ a.token {
   text-align: left;
   font-weight: 600;
   cursor: pointer;
+}
+.change-head b.change-title {
+  cursor: default;
+  overflow-wrap: anywhere;
+}
+.change-head b.change-title code {
+  font-weight: 400;
+  font-size: 11.5px;
+}
+/* Before and after side by side, the same two columns on every change. */
+.change-diff {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+.change-diff > div {
+  display: grid;
+  grid-template-rows: auto 1fr;
+  gap: 2px;
+  min-width: 0;
+}
+.diff-label {
+  font-size: 11px;
+  color: var(--ink-3);
+}
+.change-diff pre {
+  margin: 0;
+  padding: 6px 8px;
+  border: 1px solid var(--rule);
+  border-radius: 2px;
+  background: var(--paper);
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 220px;
+  overflow: auto;
+}
+.change-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 4px;
+}
+.change-reject {
+  display: flex;
+  gap: 6px;
+  flex: 1;
+}
+.change-reject input {
+  flex: 1;
+  min-width: 0;
+}
+.change-table {
+  width: 100%;
+  border-collapse: collapse;
+  margin-top: 12px;
+  font-size: var(--t-small);
+}
+.change-table th,
+.change-table td {
+  text-align: left;
+  padding: 4px 6px 4px 0;
+  border-bottom: 1px solid var(--rule);
+  vertical-align: baseline;
+}
+.change-table th {
+  font-weight: 600;
+  color: var(--ink-3);
+}
+.change-table code {
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+.change-table tr.cs-rejected td,
+.change-table tr.cs-withdrawn td {
+  color: var(--ink-3);
+}
+.msg-note .msg-text {
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  background: var(--sheet);
+  padding: 6px 10px;
+  font-size: var(--t-small);
+  color: var(--ink-2);
 }
 .change-state {
   font-family: var(--font-cond);
@@ -2589,6 +2682,7 @@ a.token {
 .change-acts {
   display: flex;
   gap: 6px;
+  align-items: center;
 }
 .bench-note {
   font-size: 11.5px;
