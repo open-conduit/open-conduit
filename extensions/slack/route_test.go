@@ -300,6 +300,12 @@ func TestRouteDisplay(t *testing.T) {
 	if d := match(t, sc, reply, w); !d.Match || d.Display != nil {
 		t.Fatalf("a reply changed the display: %+v", d)
 	}
+	if d := match(t, sc, root, &domain.Work{ID: "w", Kind: slack.WorkKind}); !d.Match || d.Display == nil || d.Display.Title != "can you look at the example build?" {
+		t.Fatalf("the first message for Work without a display: %+v", d.Display)
+	}
+	if d := match(t, sc, root, w); !d.Match || d.Display != nil {
+		t.Fatalf("the first message again changed the display: %+v", d)
+	}
 	edited := event(t, slack.TypeMessageHuman, slack.MessagePayload{TS: ts, User: "U0EXAMPLE", Text: "look at the example deploy instead", Edited: slackTS(now)}, now)
 	if d := match(t, sc, edited, w); !d.Match || d.Display == nil || d.Display.Title != "look at the example deploy instead" {
 		t.Fatalf("an edit of the first message: %+v", d.Display)

@@ -58,7 +58,9 @@ func putDisplayInTx(tx storage.Tx, was domain.Work, d *domain.WorkDisplay) error
 // replays the Events after that one so each can add to it (a PR's link).
 // No service is called. It reports how many Work it gave a display.
 func (r *Router) BackfillDisplays(ctx context.Context) (int, error) {
-	const marker = "v1"
+	// v2 runs it again for Slack threads, whose route gave no display for
+	// existing Work before.
+	const marker = "v2"
 	var done bool
 	needs := map[domain.ID]domain.Work{}
 	keys := map[domain.CorrelationKey]domain.ID{}
