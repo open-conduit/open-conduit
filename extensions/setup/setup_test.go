@@ -151,6 +151,9 @@ func TestInitSetup(t *testing.T) {
 		t.Fatalf("scope: %s %v", r.Scope, err)
 	}
 	b := scope.Bindings[0]
+	if !strings.Contains(string(b.Config), `"strict_mcp":true`) {
+		t.Errorf("the scope's agent loads MCP servers besides the toolbelt: %s", b.Config)
+	}
 	if err = ValidateBinding(extension.RouteBinding{Executor: b.Executor, Operations: b.Operations, Config: b.Config}); err != nil {
 		t.Fatalf("the scope's own binding is refused: %v", err)
 	}
