@@ -36,7 +36,7 @@ func TestParseConversation(t *testing.T) {
 	if got := strings.Join(kinds, " "); got != "note user assistant tool tool tool tool note" {
 		t.Fatalf("entries: %s", got)
 	}
-	if c.Entries[0].Text != "Session started on test-model" || c.Entries[7].Text != "Turn ended: 4 model calls, 1m1s, $0.50 session cost" {
+	if c.Entries[0].Text != "Session started on test-model" || c.Entries[7].Text != "Turn ended: 4 model calls, 1m1s, $0.50 for the session so far" {
 		t.Errorf("notes: %q, %q", c.Entries[0].Text, c.Entries[7].Text)
 	}
 	view := c.Entries[3].Tool
@@ -76,7 +76,7 @@ func TestParseConversationAcrossAGap(t *testing.T) {
 	for _, e := range c.Entries {
 		got = append(got, e.Kind+":"+e.Text)
 	}
-	want := "note:Session started on test-model|user:Work issue 12|assistant:Reading the **issue** first.|note:2 KB of the transcript are not shown here|tool:|note:Turn ended: 4 model calls, 1m1s, $0.50 session cost"
+	want := "note:Session started on test-model|user:Work issue 12|assistant:Reading the **issue** first.|note:2 KB of the transcript are not shown here|tool:|note:Turn ended: 4 model calls, 1m1s, $0.50 for the session so far"
 	if strings.Join(got, "|") != want {
 		t.Fatalf("got  %s\nwant %s", strings.Join(got, "|"), want)
 	}

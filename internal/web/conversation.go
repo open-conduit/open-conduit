@@ -241,7 +241,7 @@ func ending(l line) string {
 		parts = append(parts, (time.Duration(l.DurationMS) * time.Millisecond).Round(time.Second).String())
 	}
 	if l.Cost != nil {
-		parts = append(parts, fmt.Sprintf("$%.2f session cost", *l.Cost))
+		parts = append(parts, fmt.Sprintf("$%.2f for the session so far", *l.Cost))
 	}
 	if len(parts) > 0 {
 		s += ": " + strings.Join(parts, ", ")
