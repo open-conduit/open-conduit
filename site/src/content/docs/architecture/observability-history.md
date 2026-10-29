@@ -159,7 +159,7 @@ The shell executor's `Forget` removes the execution's run directories. It refuse
 | `retention` | Expired attempts with release pending. |
 | `reconcile_lag` | Sources that are failing (safe code only), have no complete scan, or are older than two intervals. |
 | `non_rederivable` | Declared delivery families with their loss statements. |
-| `config` | The active generation against the config file: `pending_edit`, invalid or unreadable. |
+| `config` | The active generation against the config file: `pending_edit`, invalid, unreadable, `disk_missing`, or `default_config` (info) while the daemon runs on the default configuration with no file. |
 | `bindings` | Each binding resolves to a registered executor that satisfies its required capabilities. |
 | `connections` | Declared connections have registered types. Reachability is extension-specific. |
 | `secrets` | Resolved only with `check_secrets`, reporting names and codes, never values or references. |

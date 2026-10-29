@@ -132,3 +132,34 @@ func TestValidateBinding(t *testing.T) {
 		}
 	}
 }
+
+func TestInitSetup(t *testing.T) {
+	r, err := Setup{}.Setup(context.Background(), nil, nil)
+	if err != nil || len(r.Connections) != 0 || len(r.Next) == 0 {
+		t.Fatalf("setup: %+v %v", r, err)
+	}
+	var scope struct {
+		ID       string
+		Bindings []struct {
+			Executor   string
+			Operations []string
+			Config     json.RawMessage
+		}
+		Routes []struct{ Handler, Binding string }
+	}
+	if err = json.Unmarshal(r.Scope, &scope); err != nil || scope.ID != DefaultScopeID || len(scope.Bindings) != 1 || len(scope.Routes) != 1 || scope.Routes[0].Handler != Type {
+		t.Fatalf("scope: %s %v", r.Scope, err)
+	}
+	b := scope.Bindings[0]
+	if err = ValidateBinding(extension.RouteBinding{Executor: b.Executor, Operations: b.Operations, Config: b.Config}); err != nil {
+		t.Fatalf("the scope's own binding is refused: %v", err)
+	}
+	if r, err = (Setup{}).Setup(context.Background(), nil, []string{"--scope", "web-setup"}); err != nil || !strings.Contains(string(r.Scope), `"id":"web-setup"`) {
+		t.Fatalf("--scope: %s %v", r.Scope, err)
+	}
+	for _, args := range [][]string{{"--scope", "Bad ID"}, {"--scope"}, {"--force-ish"}} {
+		if _, err = (Setup{}).Setup(context.Background(), nil, args); !errors.Is(err, extension.ErrSetupUsage) {
+			t.Errorf("%q: %v", args, err)
+		}
+	}
+}

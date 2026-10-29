@@ -112,7 +112,7 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 	if register != nil {
 		register(&registry)
 	}
-	h.configs, err = management.OpenConfig(ctx, db, h.clock.Now, registry, h.configPath)
+	h.configs, err = management.OpenConfig(ctx, db, h.clock.Now, registry, h.configPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -541,7 +541,7 @@ func TestManagementConfigReloadAndRedaction(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := config.Registry{Executors: map[string]extension.Executor{"fixture": h.executor}, Handlers: map[string]bool{"manual": true}}
-	reopened, err := management.OpenConfig(ctx, h.store, h.clock.Now, registry, h.configPath)
+	reopened, err := management.OpenConfig(ctx, h.store, h.clock.Now, registry, h.configPath, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -575,24 +575,24 @@ func TestManagementAdoptsFileOverInvalidStoredGeneration(t *testing.T) {
 	}
 	executors := map[string]extension.Executor{"fixture": &schedulerExecutor{caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}}
 	older := config.Registry{Executors: executors, Handlers: map[string]bool{"manual": true}, Operations: []string{"ext.removed"}}
-	if _, err = management.OpenConfig(ctx, db, clock.Now, older, path); err != nil {
+	if _, err = management.OpenConfig(ctx, db, clock.Now, older, path, nil); err != nil {
 		t.Fatal(err)
 	}
 	upgraded := config.Registry{Executors: executors, Handlers: map[string]bool{"manual": true}}
-	if _, err = management.OpenConfig(ctx, db, clock.Now, upgraded, path); err == nil || !strings.Contains(err.Error(), "ext.removed") || !strings.Contains(err.Error(), "stored generation 1") {
+	if _, err = management.OpenConfig(ctx, db, clock.Now, upgraded, path, nil); err == nil || !strings.Contains(err.Error(), "ext.removed") || !strings.Contains(err.Error(), "stored generation 1") {
 		t.Fatalf("stale file: %v", err)
 	}
 	if err = config.SaveAtomic(path, []byte(managementConfig)); err != nil {
 		t.Fatal(err)
 	}
-	adopted, err := management.OpenConfig(ctx, db, clock.Now, upgraded, path)
+	adopted, err := management.OpenConfig(ctx, db, clock.Now, upgraded, path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if _, gen := adopted.Current(); gen != 2 || adopted.Adopted == nil || adopted.Adopted.Stored != 1 {
 		t.Fatalf("adopted generation %d %+v", gen, adopted.Adopted)
 	}
-	reopened, err := management.OpenConfig(ctx, db, clock.Now, upgraded, path)
+	reopened, err := management.OpenConfig(ctx, db, clock.Now, upgraded, path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -788,7 +788,7 @@ func TestManagementIncludedFolderSurvivesDeletion(t *testing.T) {
 		t.Fatal(err)
 	}
 	registry := config.Registry{Executors: map[string]extension.Executor{"fixture": &schedulerExecutor{caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}}, Handlers: map[string]bool{"manual": true}}
-	configs, err := management.OpenConfig(ctx, db, clock.Now, registry, path)
+	configs, err := management.OpenConfig(ctx, db, clock.Now, registry, path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -816,7 +816,7 @@ func TestManagementIncludedFolderSurvivesDeletion(t *testing.T) {
 		t.Fatalf("deleted folder status %s", configs.DiskStatus())
 	}
 	apply(false)
-	reopened, err := management.OpenConfig(ctx, db, clock.Now, registry, path)
+	reopened, err := management.OpenConfig(ctx, db, clock.Now, registry, path, nil)
 	if err != nil {
 		t.Fatal(err)
 	}

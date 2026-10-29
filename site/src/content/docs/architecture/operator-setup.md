@@ -174,7 +174,7 @@ Setup belongs to extensions, not the core CLI. The public, optional [`extension.
 
 An `extension.ErrSetupUsage` refusal is a usage error (exit 2).
 
-The entrypoint injects the setups through `cli.Env.Setups` (`bootstrap.Setups()`: GitHub, Slack, Linear and Jira). `internal/cli` imports no extension. The B01 checker forbids it, and `scripts/check-boundaries` has explicit direct and transitive cases for core CLI and TUI. The GitHub init (remote detection, `ScopeConfig`, tool lists) lives in [`extensions/github/setup.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/setup.go) as `init github`, with the same flags and behavior. Slack's setup is described in the [Slack extension](../slack-extension/#setup-init-slack).
+The entrypoint injects the setups through `cli.Env.Setups` (`bootstrap.Setups()`: GitHub, Slack, Linear, Jira and setup). `init setup [--scope ID]` writes the scope a [setup session](../setup-sessions/) runs in, the same scope the daemon runs on when it starts with no config file. `internal/cli` imports no extension. The B01 checker forbids it, and `scripts/check-boundaries` has explicit direct and transitive cases for core CLI and TUI. The GitHub init (remote detection, `ScopeConfig`, tool lists) lives in [`extensions/github/setup.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/setup.go) as `init github`, with the same flags and behavior. Slack's setup is described in the [Slack extension](../slack-extension/#setup-init-slack).
 
 ## Other setup and recovery commands
 
