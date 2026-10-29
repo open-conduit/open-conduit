@@ -38,11 +38,18 @@ type Extension interface {
 // protocol.ValidateConnection, protocol.ValidateExtension or
 // protocol.ValidateRoute. Validate checks an entry's opaque config at load
 // and apply (nil accepts any object); its error text is never echoed.
+//
+// Binding, for a route handler's type only, checks the binding each route
+// with this handler binds, wherever the route is declared, so a handler can
+// refuse an agent it must not run (one with a shell, or with operations it
+// must not have). Its error is shown to the operator, so it must be a fixed,
+// secret-free reason.
 type ConfigType struct {
 	Kind     string
 	Type     string
 	Ingress  bool
 	Validate func(config json.RawMessage, secretNames []string) error
+	Binding  func(extension.RouteBinding) error
 }
 
 // Typed extensions own config types.

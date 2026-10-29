@@ -32,6 +32,10 @@ type Registry struct {
 	// HandlerConfig optionally validates a registered route handler's opaque
 	// route config at load/apply time (05-01). Its error text is never echoed.
 	HandlerConfig map[string]func(json.RawMessage) error
+	// HandlerBinding optionally checks the binding a route with this handler
+	// binds (extension.RouteBinding). Its error is a fixed, secret-free
+	// reason, shown in the diagnostic.
+	HandlerBinding map[string]func(extension.RouteBinding) error
 	// HandlerDescribe optionally says in words which events a route with
 	// this handler and config takes, for the operator's view of the config.
 	HandlerDescribe map[string]func(json.RawMessage) string
@@ -339,6 +343,11 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		if !ok || b.disabled {
 			v.fail(p+"/binding", "missing_binding", "route binding is missing or disabled in this scope; bind an enabled binding")
 			continue
+		}
+		if check := v.reg.HandlerBinding[r.Handler]; check != nil {
+			if err := check(extension.RouteBinding{Executor: b.value.Executor, Operations: b.value.Operations, Config: b.value.Config}); err != nil {
+				v.fail(p+"/binding", "binding_refused", fmt.Sprintf("route handler %s refuses this binding: %s", r.Handler, err))
+			}
 		}
 		exec, ok := v.reg.Executors[b.value.Executor]
 		if !ok {

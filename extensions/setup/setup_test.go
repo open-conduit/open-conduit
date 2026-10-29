@@ -112,3 +112,23 @@ func TestRenderEvent(t *testing.T) {
 		t.Error("rendered the agent's own message")
 	}
 }
+
+func TestValidateBinding(t *testing.T) {
+	ok := extension.RouteBinding{Executor: Executor, Operations: []string{"read_context", "wait", "declare_outcome", OpSay, OpAsk}, Config: json.RawMessage(`{"builtin_tools":[],"models":["opus"]}`)}
+	if err := ValidateBinding(ok); err != nil {
+		t.Fatalf("refused: %v", err)
+	}
+	for name, b := range map[string]extension.RouteBinding{
+		"a shell":              {Executor: "shell", Config: json.RawMessage(`{"command":"true"}`)},
+		"built-in tools unset": {Executor: Executor, Config: json.RawMessage(`{}`)},
+		"built-in tools on":    {Executor: Executor, Config: json.RawMessage(`{"builtin_tools":["Bash"]}`)},
+		"an unreadable config": {Executor: Executor, Config: json.RawMessage(`[]`)},
+		"another extension's":  {Executor: Executor, Config: ok.Config, Operations: []string{"github.issue.comment"}},
+		"core emit":            {Executor: Executor, Config: ok.Config, Operations: []string{"emit"}},
+		"core create_work":     {Executor: Executor, Config: ok.Config, Operations: []string{"create_work"}},
+	} {
+		if err := ValidateBinding(b); err == nil {
+			t.Errorf("%s: accepted", name)
+		}
+	}
+}
