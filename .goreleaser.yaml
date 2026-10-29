@@ -86,6 +86,8 @@ homebrew_casks:
         open-conduit service install
       Upgrades restart it on the new version. Remove it with
       open-conduit service uninstall before brew uninstall, or use brew uninstall --zap.
+      Upgrading from 1.6.2 or earlier removes the service once: if
+      open-conduit service status says not installed, run open-conduit service install.
     zap:
       launchctl:
         - com.open-conduit.daemon

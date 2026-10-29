@@ -30,13 +30,14 @@ func TestDaemonStopsWhenItsInstallIsRemoved(t *testing.T) {
 	}
 	d.bin = filepath.Join(install, "open-conduit")
 	d.start("")
-	if err := os.Remove(filepath.Join(install, "os")); err != nil {
+	// As Homebrew does: the old version's directory is renamed aside.
+	if err := os.Rename(install, install+".upgrading"); err != nil {
 		t.Fatal(err)
 	}
 	select {
 	case <-d.exited:
 	case <-time.After(15 * time.Second):
-		t.Fatal("the daemon kept running after its toolbelt was removed")
+		t.Fatal("the daemon kept running after its install was moved away")
 	}
 	if code := d.cmd.ProcessState.ExitCode(); code != 1 {
 		t.Fatalf("exit code %d, want 1 so a service manager restarts it", code)
