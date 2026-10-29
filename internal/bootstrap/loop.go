@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -83,6 +84,10 @@ func (d *daemon) loop(ctx context.Context) error {
 			return nil
 		case <-ticker.C:
 		case <-d.nudge:
+		}
+		if p := removed(d.from); p != "" {
+			d.log.Warn("stopping: the install this daemon runs from is gone", "path", p)
+			return fmt.Errorf("%w (%s)", ErrInstallRemoved, p)
 		}
 	}
 }

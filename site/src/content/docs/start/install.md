@@ -16,7 +16,7 @@ You also need the CLIs of the services you use: [Claude Code](https://docs.anthr
 brew install open-conduit/tap/open-conduit
 ```
 
-The cask puts only `open-conduit` on your PATH. `os` stays beside it in the cask's own directory, where the daemon finds it, so it can't clash with another command of that name. Uninstalling the cask also removes the [background service](/open-conduit/guides/background-service/).
+The cask puts only `open-conduit` on your PATH. `os` stays beside it in the cask's own directory, where the daemon finds it, so it can't clash with another command of that name. A `brew upgrade` keeps the [background service](/open-conduit/guides/background-service/) and restarts it on the new version. Run `open-conduit service uninstall` before `brew uninstall`, or use `brew uninstall --zap`, which removes the service with the cask.
 
 ## Release binaries
 

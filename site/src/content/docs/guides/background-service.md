@@ -15,6 +15,8 @@ open-conduit service uninstall
 
 - `install` records the config path, the state directory, the `serve` flags you give it and a PATH built from your shell's PATH and wherever `claude`, `git`, `gh` and the tunnel binary are. It warns about any it can't find.
 - Run `install` again after changing flags or installing a tool the daemon needs (a repository's toolchain, say): it replaces the unit and restarts the daemon.
+- An upgrade restarts the daemon on the new version. When the files the daemon runs from are removed, as `brew upgrade` does with the old version's directory, it stops with an error, and the service starts the new binary. Running turns carry on and the new daemon adopts them, but a shell step that calls `os` after the upgrade fails, since its PATH still names the removed directory. Upgrading while `open-conduit doctor` shows nothing running under `capacity` avoids that.
+- Remove the service with `service uninstall` before a plain `brew uninstall`, or use `brew uninstall --zap open-conduit`, which removes it with the cask. If the cask is already gone, `launchctl bootout gui/$(id -u)/com.open-conduit.daemon` and deleting the plist clear it.
 - Webhooks come from the config's `settings.webhooks`, as with `serve`.
 - Output goes to `~/.local/state/open-conduit/logs/service.log` (under `--data-dir` if you give one). `open-conduit doctor` reports whether the service is installed and running.
 - The unit lives at `~/Library/LaunchAgents/com.open-conduit.daemon.plist` or `~/.config/systemd/user/open-conduit.service`.
