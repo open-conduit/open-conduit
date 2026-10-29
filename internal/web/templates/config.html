@@ -106,11 +106,21 @@
 {{with $d.Doctor}}
 <section class="cfg-sec">
   <h2 class="section-rule">Daemon checks <span>open-conduit doctor</span></h2>
+  {{- with $d.Flagged}}
   <ul class="kv-list">
-    {{- range .Checks}}
+    {{- range .}}
     <li>{{mark ($d.CheckMark .Status) 12 .Status}}<b>{{.Name}}</b><span>{{.Detail}}</span></li>
     {{- end}}
   </ul>
+  {{- end}}
+  <details class="checks-ok">
+    <summary>{{if $d.Flagged}}{{plural $d.Passed "other check"}} pass{{else}}All {{plural $d.Passed "check"}} pass{{end}}</summary>
+    <ul class="kv-list">
+      {{- range .Checks}}{{if or (eq .Status "ok") (eq .Status "info")}}
+      <li>{{mark ($d.CheckMark .Status) 12 .Status}}<b>{{.Name}}</b><span>{{.Detail}}</span></li>
+      {{- end}}{{end}}
+    </ul>
+  </details>
 </section>
 {{end}}
 {{end}}
@@ -242,10 +252,13 @@
   {{- range $i, $r := $f.Routes}}
   <div class="flow-row{{with .Verdict}} v-{{.}}{{end}}" role="listitem">
     {{- if eq $i 0}}{{template "cfg-sources" $f}}{{template "cfg-edge" ($f.Edge $tracing "event" "" "")}}{{else}}<span class="flow-gap"></span><span class="flow-gap"></span>{{end}}
+    <div class="route-cell">
     <div class="node node-route">
       <div class="node-top"><span class="route-ord">{{.N}}</span><b class="mono">{{.Route.Name}}</b><small>handler {{.Route.Handler}}</small></div>
       {{- with .Route.Detail}}<p>{{.}}</p>{{end}}
       {{- with .Step}}<p class="verdict v-{{$r.Verdict}}">{{$r.VerdictText}}{{with .Reason}} — {{.}}{{end}}</p>{{end}}
+    </div>
+    <span class="route-tail{{if eq .Verdict "skip"}} is-lit{{end}}" aria-hidden="true"></span>
     </div>
     {{- template "cfg-edge" ($f.Edge (eq .Verdict "match") "match" (print "if busy: " .Route.ActivePolicy) .Policy)}}
     <a class="node node-binding" href="#binding-{{.Route.Binding}}" aria-label="Binding {{.Route.Binding}}, show details">

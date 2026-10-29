@@ -124,7 +124,7 @@ async function openPalette() {
 function paletteMatches() {
   const q = palette.querySelector(".palette-input").value.trim().toLowerCase();
   const all = paletteItems || [];
-  return (q ? all.filter((x) => (x.label + " " + x.hint).toLowerCase().includes(q)) : all).slice(0, 12);
+  return (q ? all.filter((x) => (x.label + " " + x.hint + " " + (x.find || "")).toLowerCase().includes(q)) : all).slice(0, 12);
 }
 
 function drawPalette() {

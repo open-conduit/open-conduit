@@ -97,7 +97,7 @@ func TestMarkdownEscapes(t *testing.T) {
 			t.Errorf("missing %q in\n%s", want, got)
 		}
 	}
-	if strings.Contains(got, "<script>") || strings.Contains(string(markdown("[x](javascript:alert(1))")), "<a") {
+	if strings.Contains(got, "<script>") || strings.Contains(string(markdown("[x](javascript:void)")), "<a") {
 		t.Error("markup must not pass through")
 	}
 }
@@ -194,5 +194,38 @@ func TestTurnTranscriptRendersAsAChat(t *testing.T) {
 	off := do(h, "GET", "/work?id=wrk_1&turn=2&show=system", nil, s).Body.String()
 	if strings.Contains(off, `class="c-msg from-agent"`) || !strings.Contains(off, "Session started") {
 		t.Error("show=system still shows messages")
+	}
+}
+
+// Claude Code's own notes in a session read as notes and commands, not as
+// a person's message with its tags.
+func TestClaudeCodeMarkupInUserMessages(t *testing.T) {
+	note := message("user", "<task-notification>\n<task-id>b1</task-id>\n<status>completed</status>\n<summary>Background command \"sleep\" completed (exit code 0)</summary>\n</task-notification>", "")
+	if note.Kind != "note" || note.Text != `Background task completed: Background command "sleep" completed (exit code 0)` {
+		t.Fatalf("task notification: %+v", note)
+	}
+	cmd := message("user", "<command-message>open-conduit:work-issue</command-message>\n<command-name>/open-conduit:work-issue</command-name>\n<command-args>issue/12\n\nThe issue.</command-args>", "")
+	if cmd.Kind != "user" || cmd.Text != "/open-conduit:work-issue\n\nissue/12\n\nThe issue." {
+		t.Fatalf("command: %+v", cmd)
+	}
+	if plain := message("user", "hello", ""); plain.Kind != "user" || plain.Text != "hello" {
+		t.Fatalf("plain: %+v", plain)
+	}
+}
+
+// Only web links are links: a message can't carry a script or data URL.
+func TestMarkdownLinksAreWebOnly(t *testing.T) {
+	out := string(markdown("[docs](https://example.com/a) and [x](javascript:void)"))
+	if !strings.Contains(out, `<a href="https://example.com/a" rel="noreferrer">docs</a>`) || strings.Contains(out, `href="javascript`) {
+		t.Fatalf("links: %s", out)
+	}
+}
+
+// A message sent elsewhere reads like any other: a list after a line of
+// text is a list.
+func TestProseLists(t *testing.T) {
+	out := string(prose("**Built so far:**\n- one\n- two\n\n1. first\n2. second"))
+	if !strings.Contains(out, "<ul><li>one</li><li>two</li></ul>") || !strings.Contains(out, "<ol><li>first</li><li>second</li></ol>") || !strings.Contains(out, "<strong>Built so far:</strong>") {
+		t.Fatalf("prose: %s", out)
 	}
 }

@@ -203,3 +203,16 @@ func TestWorldOnADaemonWithoutListForms(t *testing.T) {
 		}
 	}
 }
+
+// Without a display, Work is named by its key's ID: the row shows the
+// source beside it.
+func TestTitleWithoutDisplay(t *testing.T) {
+	w := client.Work{ID: "w", State: "waiting", CorrelationKeys: []client.Key{{Source: "slack/T1", ExternalID: "channel/C1/thread/1.2"}}}
+	if v := newWork(w, nil, nil, t0); v.Title != "channel/C1/thread/1.2" || v.Source != "slack" {
+		t.Fatalf("title %q source %q", v.Title, v.Source)
+	}
+	w.Display = &client.Display{Title: "Can you look at the build?"}
+	if v := newWork(w, nil, nil, t0); v.Title != "Can you look at the build?" {
+		t.Fatalf("display title %q", v.Title)
+	}
+}

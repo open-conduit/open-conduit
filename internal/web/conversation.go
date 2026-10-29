@@ -209,6 +209,12 @@ func settle(entries []entry) {
 
 func message(kind, text, at string) entry {
 	text = strings.TrimSpace(text)
+	if kind == "user" {
+		if note, ok := taskNote(text); ok {
+			return entry{Kind: "note", Text: note, At: at}
+		}
+		text = command(text)
+	}
 	e := entry{Kind: kind, Text: text, At: at}
 	if kind == "user" && len(text) > clipMessage {
 		// What the agent was told is often a whole playbook: its start
@@ -446,4 +452,47 @@ func size(n int64) string {
 		return strconv.FormatInt(n>>10, 10) + " KB"
 	}
 	return plural(int(n), "byte")
+}
+
+// Claude Code writes some of its own notes into a session as user
+// messages, in tags: a background command finishing, and the slash command
+// a turn was started with.
+var (
+	taskRe    = regexp.MustCompile(`(?s)^<task-notification>(.*)</task-notification>$`)
+	commandRe = regexp.MustCompile(`(?s)^<command-message>.*?</command-message>\s*<command-name>(.*?)</command-name>\s*(?:<command-args>(.*?)</command-args>)?`)
+)
+
+// taskNote is a background command's notification as a note: what it was
+// and how it ended.
+func taskNote(text string) (string, bool) {
+	m := taskRe.FindStringSubmatch(text)
+	if m == nil {
+		return "", false
+	}
+	tag := func(name string) string {
+		_, v, _ := strings.Cut(m[1], "<"+name+">")
+		v, _, _ = strings.Cut(v, "</"+name+">")
+		return strings.TrimSpace(v)
+	}
+	note := "Background task"
+	if s := tag("status"); s != "" {
+		note += " " + s
+	}
+	if s := tag("summary"); s != "" {
+		note += ": " + s
+	}
+	return note, true
+}
+
+// command is a slash command's message as the command and its arguments.
+func command(text string) string {
+	m := commandRe.FindStringSubmatch(text)
+	if m == nil {
+		return text
+	}
+	out := strings.TrimSpace(m[1])
+	if args := strings.TrimSpace(m[2]); args != "" {
+		out += "\n\n" + args
+	}
+	return out
 }

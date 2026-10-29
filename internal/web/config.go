@@ -518,3 +518,25 @@ func (flowScope) Edge(lit bool, top, bottom, title string) flowEdge {
 // Provider is an action provider's display name: its entry name, the last
 // segment of its path.
 func (configData) Provider(p string) string { return p[strings.LastIndex(p, "/")+1:] }
+
+// Flagged are the doctor checks that warn or fail; Passed counts the rest,
+// which pass or only report.
+func (d configData) Flagged() []client.Check {
+	var out []client.Check
+	if d.Doctor != nil {
+		for _, c := range d.Doctor.Checks {
+			if c.Status != "ok" && c.Status != "info" {
+				out = append(out, c)
+			}
+		}
+	}
+	return out
+}
+
+// Passed counts the doctor checks that pass or only report.
+func (d configData) Passed() int {
+	if d.Doctor == nil {
+		return 0
+	}
+	return len(d.Doctor.Checks) - len(d.Flagged())
+}

@@ -3,7 +3,6 @@ package web
 import (
 	"bytes"
 	"encoding/json"
-	"html"
 	"html/template"
 	"regexp"
 	"sort"
@@ -533,37 +532,11 @@ func linkIn(v any) *client.DisplayLink {
 
 // ---- formatting ----
 
-var proseSpan = regexp.MustCompile("`[^`\n]+`|\\*\\*[^*\n]+\\*\\*|\\*[^*\\s][^*\n]*\\*")
-
 // prose is light formatting for messages sent elsewhere and outcomes:
 // paragraphs, line breaks, `code`, **bold** and chat-style *bold*. All of
 // it is escaped first.
 func prose(s string) template.HTML {
-	var b strings.Builder
-	b.WriteString(`<div class="prose">`)
-	for _, p := range regexp.MustCompile(`\n{2,}`).Split(strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n")), -1) {
-		b.WriteString("<p>")
-		for i, ln := range strings.Split(p, "\n") {
-			if i > 0 {
-				b.WriteString("<br>")
-			}
-			last := 0
-			for _, m := range proseSpan.FindAllStringIndex(ln, -1) {
-				b.WriteString(html.EscapeString(ln[last:m[0]]))
-				tok := ln[m[0]:m[1]]
-				if tok[0] == '`' {
-					b.WriteString("<code>" + html.EscapeString(tok[1:len(tok)-1]) + "</code>")
-				} else {
-					b.WriteString("<b>" + html.EscapeString(strings.Trim(tok, "*")) + "</b>")
-				}
-				last = m[1]
-			}
-			b.WriteString(html.EscapeString(ln[last:]))
-		}
-		b.WriteString("</p>")
-	}
-	b.WriteString("</div>")
-	return template.HTML(b.String())
+	return `<div class="prose">` + markdown(s) + `</div>`
 }
 
 // codeLine is one line of a code block with its highlight: an added,
