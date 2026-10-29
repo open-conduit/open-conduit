@@ -40,6 +40,9 @@ func parsePropose(data []byte) (proposeInput, error) {
 	if in.Why, err = text(in.Why, maxContext, "why"); err != nil {
 		return in, err
 	}
+	if err = scanText(in.Why, string(in.Value)); err != nil {
+		return in, err
+	}
 	if !strings.HasPrefix(in.Pointer, "/") || len(in.Pointer) > 512 || strings.ContainsAny(in.Pointer, "\r\n") {
 		return in, refuse("invalid_input", "pointer is a JSON pointer into the config file, such as /scopes/web/bindings/agent/config/model")
 	}
@@ -161,6 +164,9 @@ func (t *Tools) withdraw(ctx context.Context, a extension.Authority, in domain.P
 		Reason string `json:"reason,omitempty"`
 	}
 	if err := decode(in.Data, &input, "{change, reason?}"); err != nil {
+		return domain.Payload{}, err
+	}
+	if err := scanText(input.Reason); err != nil {
 		return domain.Payload{}, err
 	}
 	if len(input.Reason) > maxContext {

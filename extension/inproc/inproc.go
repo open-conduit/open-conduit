@@ -111,6 +111,10 @@ type Host struct {
 	// Config reads and checks configuration without changing it, for an
 	// extension that proposes config for the operator to apply (setup).
 	Config ConfigHost
+	// Probes are the setup probes other extensions and executors offer
+	// (extension.SetupProbes), by full name ("claude-code.status"), and the
+	// host's own (setup.init, setup.doctor).
+	Probes func() map[string]extension.SetupProbe
 }
 
 // ConfigBase is the configuration a proposal starts from: the committed
@@ -148,6 +152,41 @@ type ConfigHost interface {
 	// none). Pointers address array elements by id or name. Its errors are
 	// fixed, secret-free reasons.
 	Edit(text []byte, op, pointer string, value json.RawMessage) (out []byte, before json.RawMessage, err error)
+	// Trace runs the route trace for one of a scope's named samples against
+	// config text instead of the active generation, writing nothing. With
+	// no sample it lists the scope's samples.
+	Trace(ctx context.Context, text []byte, scope, sample string) (CandidateTrace, error)
+}
+
+// CandidateTrace is a route trace against a candidate configuration: what
+// routing would do with the sample, route by route.
+type CandidateTrace struct {
+	Samples []CandidateSample `json:"samples,omitempty"`
+	Sample  string            `json:"sample,omitempty"`
+	Routes  []CandidateRoute  `json:"routes,omitempty"`
+	// Effect is what routing would do: start, queue, inject, interrupt,
+	// wake, drop or unmatched, with the Work and binding when there is one.
+	Effect CandidateEffect `json:"effect,omitempty"`
+}
+
+type CandidateSample struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+type CandidateRoute struct {
+	Route   string `json:"route"`
+	Handler string `json:"handler"`
+	Binding string `json:"binding,omitempty"`
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+type CandidateEffect struct {
+	Kind    string `json:"kind,omitempty"`
+	WorkID  string `json:"work_id,omitempty"`
+	Binding string `json:"binding,omitempty"`
+	Detail  string `json:"detail,omitempty"`
 }
 
 // ErrNotOwn refuses a host service call on something that is not the

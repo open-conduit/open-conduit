@@ -59,6 +59,14 @@ else
     '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.propose","input":{"op":"add","pointer":"/scopes/setup/secret_refs/token","value":"keyring:github-token","why":"the token, by reference"},"request_id":"c4"}}}' \
     '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.validate","input":{},"request_id":"v1"}}}' \
     > "$f/mcp-out"
+  call \
+    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.probe","input":{"probe":"setup.tools","why":"which tools are here"},"request_id":"p1"}}}' \
+    '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.probe","input":{"probe":"setup.cat","args":{"path":"/etc/passwd"},"why":"peek"},"request_id":"p2"}}}' \
+    '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.read","input":{},"request_id":"r1"}}}' \
+    '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.say","input":{"text":"your token is ghp_abcdefghijklmnopqrstuvwxyz0123456789"},"request_id":"leak"}}}' \
+    '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.trace","input":{"scope":"setup","sample":"setup/session-started","why":"would a session start"},"request_id":"t1"}}}' \
+    '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.trace","input":{"scope":"nowhere","why":"no such scope"},"request_id":"t2"}}}' \
+    > "$f/probe-out"
   cp "$tf" "$f/token"
   printf '%s' "$ep" > "$f/endpoint"
   while [ ! -f "$f/release" ]; do sleep 0.1; done
@@ -84,7 +92,7 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	binding := setupBinding(d.root, binary)
-	binding["operations"] = []string{"read_context", "wait", "declare_outcome", "setup.say", "setup.ask", "setup.propose", "setup.withdraw", "setup.validate"}
+	binding["operations"] = []string{"read_context", "wait", "declare_outcome", "setup.say", "setup.ask", "setup.probe", "setup.read", "setup.propose", "setup.withdraw", "setup.validate", "setup.trace"}
 	var doc bytes.Buffer
 	if err := json.Indent(&doc, setupDaemonConfig(binding), "", "    "); err != nil {
 		t.Fatal(err)
@@ -106,6 +114,17 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 	out, _ := os.ReadFile(filepath.Join(d.root, "mcp-out"))
 	if !strings.Contains(string(out), "not_a_reference") {
 		t.Fatalf("a literal secret was not refused: %s", out)
+	}
+	// Probes, the read and the trace, each through the toolbelt: an unknown
+	// probe and text with a token's shape are refused.
+	probed, _ := os.ReadFile(filepath.Join(d.root, "probe-out"))
+	for _, want := range []string{`\"name\": \"git\"`, "unknown_probe", `\"outline\"`, `\"name\": \"Setup\"`, "looks_like_secret", `\"kind\": \"start\"`, `\"verdict\": \"match\"`, "has no scope nowhere"} {
+		if !strings.Contains(string(probed), want) {
+			t.Errorf("probes without %s: %s", want, probed)
+		}
+	}
+	if strings.Contains(string(probed), "ghp_abcdef") {
+		t.Errorf("a token reached the output: %s", probed)
 	}
 
 	// Only the operator applies: the agent's own token reaches none of it.
@@ -154,6 +173,12 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 	events := func(typ string) []client.Event {
 		page, _ := d.c.Events(ctx, url.Values{"work_id": {session.WorkID}, "type": {typ}})
 		return page.Items
+	}
+	if probes := events("setup.probe"); len(probes) != 3 || !strings.Contains(string(probes[0].Data.Data), `"probe":"setup.tools"`) || !strings.Contains(string(probes[1].Data.Data), `"verdict":"match"`) || !strings.Contains(string(probes[2].Data.Data), `"error":"the candidate has no scope nowhere"`) {
+		t.Fatalf("probe events: %+v", probes)
+	}
+	if said := events("setup.message"); len(said) != 0 {
+		t.Fatalf("a message with a token's shape was recorded: %+v", said)
 	}
 	proposals := events("setup.proposal")
 	if len(proposals) != 4 {

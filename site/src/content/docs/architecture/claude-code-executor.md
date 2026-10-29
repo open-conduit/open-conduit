@@ -166,6 +166,10 @@ The config is strict and validated at load. Every field is optional:
 | `builtin_tools` | The only built-in tools Claude Code offers, passed as `--tools`. An empty list turns them all off, so the agent has only its MCP toolbelt: no shell, file access or web. Unset keeps Claude Code's default set. Attaching to the session keeps the same limit. |
 | `models` | Models a Work may pick for its turns through `model` in its context, for example one an operator chose when starting it. A Work that names none, or one not listed, uses `model`. |
 
+## Setup probe
+
+`claude-code.status` is the executor's probe for [setup sessions](../setup-sessions/) (`extension.SetupProbes`). It says whether `claude` is on the daemon's `PATH`, its version, and whether it is signed in and how: `subscription` when a Claude login is found (the macOS Keychain item or `~/.claude/.credentials.json`), `api_key` when `ANTHROPIC_API_KEY` is set in the daemon's environment. It never returns the token or account detail, and it starts no session.
+
 ## Verification
 
 - [Unit tests](https://github.com/open-conduit/open-conduit/tree/main/executors/claudecode) run a fake `claude`, which records its invocation, echoes stream-json replays, writes the transcript and reports cumulative totals. They cover:

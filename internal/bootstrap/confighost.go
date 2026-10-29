@@ -8,6 +8,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -15,6 +16,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -22,11 +24,22 @@ import (
 // reads, validates and edits config text, and never applies it.
 type configHost struct {
 	configs func() *management.ConfigService
+	control func() *runtime.Control
 	path    string
 	def     func() []byte
 }
 
 var _ inproc.ConfigHost = configHost{}
+
+func (d *daemon) configHost() configHost {
+	return configHost{configs: func() *management.ConfigService { return d.configs }, path: d.o.ConfigPath, def: DefaultConfig,
+		control: func() *runtime.Control {
+			if c := d.current.Load(); c != nil {
+				return c.control
+			}
+			return nil
+		}}
+}
 
 func (h configHost) Base(context.Context) (inproc.ConfigBase, error) {
 	c := h.configs()
@@ -116,4 +129,54 @@ func (d *daemon) configCandidate(ctx context.Context, w domain.Work) (extension.
 		}
 	}
 	return extension.Candidate{}, storage.ErrNotFound
+}
+
+func (h configHost) Trace(ctx context.Context, text []byte, scope, sample string) (inproc.CandidateTrace, error) {
+	c, control := h.configs(), h.control()
+	if c == nil || control == nil {
+		return inproc.CandidateTrace{}, errors.New("no configuration yet")
+	}
+	s, err := c.Validate(text)
+	if err != nil {
+		return inproc.CandidateTrace{}, errors.New("the candidate doesn't validate; validate it to see why")
+	}
+	if _, ok := s.Scope(domain.ID(scope)); !ok {
+		return inproc.CandidateTrace{}, errors.New("the candidate has no scope " + scope)
+	}
+	scopes := s.DomainScopes()
+	samples, err := control.SamplesCandidate(ctx, domain.ID(scope), scopes)
+	if err != nil {
+		return inproc.CandidateTrace{}, errors.New("the scope's samples can't be listed")
+	}
+	var out inproc.CandidateTrace
+	var chosen *runtime.TraceSample
+	for i, x := range samples {
+		id := x.Handler + "/" + x.ID
+		out.Samples = append(out.Samples, inproc.CandidateSample{ID: id, Title: x.Title})
+		if id == sample || x.ID == sample {
+			chosen = &samples[i]
+		}
+	}
+	if sample == "" {
+		return out, nil
+	}
+	if chosen == nil {
+		return out, errors.New("the scope has no sample " + sample)
+	}
+	now := time.Now()
+	e := chosen.Event
+	e.ID, e.DeliveryID, e.OccurredAt, e.ReceivedAt = "trace", "trace", now, now
+	if err = runtime.CheckTraceEvent(e); err != nil {
+		return out, errors.New("the sample can't be traced")
+	}
+	t, err := control.TraceCandidate(ctx, domain.ID(scope), e, scopes)
+	if err != nil {
+		return out, errors.New("the trace failed")
+	}
+	out.Samples, out.Sample = nil, chosen.Handler+"/"+chosen.ID
+	for _, r := range t.Routes {
+		out.Routes = append(out.Routes, inproc.CandidateRoute{Route: r.Route, Handler: r.Handler, Binding: r.Binding, Verdict: r.Verdict, Reason: r.Reason})
+	}
+	out.Effect = inproc.CandidateEffect{Kind: t.Effect.Kind, WorkID: string(t.Effect.WorkID), Binding: t.Effect.Binding, Detail: t.Effect.Detail}
+	return out, nil
 }

@@ -25,10 +25,14 @@ const (
 	OpPropose  = "setup.propose"
 	OpWithdraw = "setup.withdraw"
 	OpValidate = "setup.validate"
+	OpProbe    = "setup.probe"
+	OpRead     = "setup.read"
 )
 
 // Operations lists every tool operation (for binding operation lists).
-func Operations() []string { return []string{OpSay, OpAsk, OpPropose, OpWithdraw, OpValidate} }
+func Operations() []string {
+	return []string{OpSay, OpAsk, OpProbe, OpRead, OpPropose, OpWithdraw, OpValidate, OpTrace}
+}
 
 // AskTimeout is how long a question waits for the operator. With no answer
 // by then the agent is resumed without one, sums up and finishes.
@@ -56,6 +60,10 @@ type Options struct {
 	Now     func() time.Time
 	// Config reads, validates and edits config text for change sets.
 	Config inproc.ConfigHost
+	// OwnProbes are the extension's own probes, and Probes those of other
+	// extensions and executors, by full name.
+	OwnProbes Probes
+	Probes    func() map[string]extension.SetupProbe
 }
 
 // Tools implements the agent's operations.
@@ -76,7 +84,9 @@ func NewTools(o Options) (*Tools, error) {
 func (t *Tools) Registration() extension.Registration {
 	return extension.Registration{Version: extension.ContractVersion, Name: Type, EventTypes: []string{TypeMessage},
 		Operations: []extension.Operation{{Name: OpSay, Emit: t.say}, {Name: OpAsk, Wait: t.ask},
-			{Name: OpPropose, Handler: t.propose}, {Name: OpWithdraw, Handler: t.withdraw}, {Name: OpValidate, Handler: t.validate}}}
+			{Name: OpProbe, Handler: t.probe}, {Name: OpRead, Handler: t.read},
+			{Name: OpPropose, Handler: t.propose}, {Name: OpWithdraw, Handler: t.withdraw}, {Name: OpValidate, Handler: t.validate},
+			{Name: OpTrace, Handler: t.trace}}}
 }
 
 func refuse(code, format string, args ...any) error {
@@ -142,6 +152,9 @@ func (t *Tools) say(ctx context.Context, a extension.Authority, in domain.Payloa
 	if err != nil {
 		return extension.EmitPlan{}, err
 	}
+	if err = scanText(msg); err != nil {
+		return extension.EmitPlan{}, err
+	}
 	if err = t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
 		_, e := t.session(tx, a)
 		return e
@@ -200,6 +213,9 @@ func parseAsk(data []byte) (askInput, error) {
 func (t *Tools) ask(ctx context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
 	input, err := parseAsk(in.Data)
 	if err != nil {
+		return extension.WaitPlan{}, err
+	}
+	if err = scanText(append([]string{input.Question, input.Context}, input.Choices...)...); err != nil {
 		return extension.WaitPlan{}, err
 	}
 	now := t.o.Now()

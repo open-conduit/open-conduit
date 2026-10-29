@@ -44,6 +44,7 @@ const (
 	TypeDecision = "setup.decision"
 	TypeChecks   = "setup.checks"
 	TypeApplied  = "setup.applied"
+	TypeProbe    = "setup.probe"
 
 	SchemaStart    = "setup.start.v1"
 	SchemaMessage  = "setup.message.v1"
@@ -53,6 +54,7 @@ const (
 	SchemaDecision = "setup.decision.v1"
 	SchemaChecks   = "setup.checks.v1"
 	SchemaApplied  = "setup.applied.v1"
+	SchemaProbe    = "setup.probe.v1"
 	SchemaContext  = "setup.session.v1"
 	SchemaTool     = "setup.tool.v1"
 )

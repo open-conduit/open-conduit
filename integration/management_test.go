@@ -529,11 +529,10 @@ func TestManagementConfigReloadAndRedaction(t *testing.T) {
 	if _, err := exec.ToolbeltCall(ctx, client.ToolCall{Operation: "read_context"}); !isStatus(err, 403) {
 		t.Fatalf("narrowed operation still authorized: %v", err)
 	}
+	// config apply sends the file's text, which is saved as written.
 	saved, _ := os.ReadFile(h.configPath)
 	backup, _ := os.ReadFile(h.configPath + ".last-good")
-	var compact bytes.Buffer
-	_ = json.Compact(&compact, []byte(narrowed))
-	if string(saved) != compact.String() || string(backup) != managementConfig {
+	if string(saved) != narrowed || string(backup) != managementConfig {
 		t.Fatalf("atomic save/last-good backup mismatch:\n%s\n---\n%s", saved, backup)
 	}
 	// Restart: a disk edit alone never changes the committed generation.

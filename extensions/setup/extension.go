@@ -68,7 +68,7 @@ func (*Extension) WorkKinds() []inproc.WorkKind { return []inproc.WorkKind{{Kind
 func (*Extension) EntryGated() {}
 
 func (x *Extension) Start(_ context.Context, h inproc.Host) error {
-	tools, err := NewTools(Options{Store: h.Store, Accept: h.AcceptInTx, Enabled: x.enabled, Now: h.Now, Config: h.Config})
+	tools, err := NewTools(Options{Store: h.Store, Accept: h.AcceptInTx, Enabled: x.enabled, Now: h.Now, Config: h.Config, Probes: h.Probes})
 	if err != nil {
 		return err
 	}
