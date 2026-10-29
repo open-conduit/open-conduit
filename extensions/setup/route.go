@@ -58,8 +58,8 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 }
 
 // Samples offers starting a session.
-func (Route) Samples(scope domain.Scope, _ domain.Route) []extension.RouteSample {
-	key := SessionKey(scope.ID, "example")
+func (Route) Samples(_ context.Context, in extension.SampleInput) []extension.RouteSample {
+	key := SessionKey(in.Scope.ID, "example")
 	return []extension.RouteSample{{ID: "session-started", Title: "The operator starts a setup session",
 		Event: domain.Event{Type: TypeStart, Source: extension.ActionSource, CorrelationKey: &key, Data: payload(SchemaStart, Start{})}}}
 }
