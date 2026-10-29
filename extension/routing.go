@@ -2,6 +2,8 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 )
@@ -27,6 +29,10 @@ type RouteInput struct {
 // Display, when set on a match, replaces the Work's display (ValidateDisplay);
 // nil keeps what it has, so a handler sets it only when it has something to
 // say (the handler sees the current one on RouteInput.Work).
+// Context, like CreateID and Kind, applies only to Work the match creates:
+// it is the new Work's context (what read_context returns, and what an
+// executor reads per Work, such as a chosen model). It never changes an
+// existing Work's context.
 type RouteDecision struct {
 	Match      bool
 	CreateID   domain.ID
@@ -34,6 +40,20 @@ type RouteDecision struct {
 	AttachKeys []domain.CorrelationKey
 	Reason     string
 	Display    *domain.WorkDisplay
+	Context    domain.Payload
+}
+
+// RouteHandler decides whether its route takes an Event. Match must be free
+// of side effects: routing may evaluate it again after a revision conflict,
+// and a route trace calls it for hypothetical Events that never happen, so it
+// decides from its input alone and records, sends or counts nothing.
+// RouteBinding is the binding a route binds, as a route handler's binding
+// check sees it (inproc.ConfigType.Binding): its executor, the toolbelt
+// operations it grants and its executor config.
+type RouteBinding struct {
+	Executor   string
+	Operations []string
+	Config     json.RawMessage
 }
 
 type RouteHandler interface {
@@ -52,12 +72,22 @@ type RouteSample struct {
 	Event domain.Event
 }
 
+// SampleInput is what a RouteSampler builds its samples from: the scope and
+// route they are for, and the host's clock, for samples whose data carries a
+// time the handler compares with the host's (a message written just now).
+type SampleInput struct {
+	Scope domain.Scope
+	Route domain.Route
+	Now   time.Time
+}
+
 // RouteSampler is optional on a RouteHandler: the samples it offers for a
 // route in a scope, built from the route's and scope's configuration (the
 // entry's source namespace, its labels) so they trace as written. IDs are
-// stable and unique within the handler.
+// stable and unique within the handler. Like Match it must perform no side
+// effects.
 type RouteSampler interface {
-	Samples(scope domain.Scope, route domain.Route) []RouteSample
+	Samples(context.Context, SampleInput) []RouteSample
 }
 
 // InheritRoutes resolves root-to-leaf routes. A same-name override keeps the

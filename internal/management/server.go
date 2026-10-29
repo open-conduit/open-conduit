@@ -72,6 +72,11 @@ type Options struct {
 	// Live returns a running attempt's output so far from its executor
 	// registration (ErrLiveUnsupported, ErrNotLive).
 	Live func(ctx context.Context, executor string, execution domain.ID, tail int64) ([]extension.LiveOutput, error)
+	// AdmitTrace refuses a route trace's Event that acceptance would refuse
+	// from its source: a type the source never sends, or a payload its
+	// extension may not write (optional: without it only the envelope is
+	// checked, by runtime.CheckTraceEvent).
+	AdmitTrace func(scope domain.ID, e domain.Event) error
 	// Nudge asks the host loop for an immediate pass (optional).
 	Nudge func()
 	// ProviderTimeout and ViewDeadline time the action providers' calls for

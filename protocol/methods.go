@@ -55,6 +55,7 @@ var Methods = []Method{
 
 	// Routing and work kinds.
 	{Name: "route.match", Direction: HostToExtension, Provides: "routes", Contract: []string{"extension.RouteHandler.Match"}, UseCases: []string{"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection"}},
+	{Name: "route.samples", Direction: HostToExtension, Provides: "routes.samples", Contract: []string{"extension.RouteSampler.Samples"}, UseCases: []string{"slack"}},
 	{Name: "work_kind.trigger", Direction: HostToExtension, Provides: "work_kinds", InTransaction: true, Contract: []string{"host:runtime.WorkKindPolicy.Trigger"}, UseCases: []string{"schedule"}},
 	{Name: "recurrence.next", Direction: HostToExtension, Provides: "recurrences", InTransaction: true, Contract: []string{"host:runtime.RecurrenceFunc"}, UseCases: []string{"schedule", "introspection"}},
 
@@ -63,6 +64,7 @@ var Methods = []Method{
 	{Name: "operation.wait", Direction: HostToExtension, Provides: "operations.wait", Contract: []string{"extension.Operation.Wait", "extension.WaitPlan", "extension.Dependency"}, UseCases: []string{"github"}},
 	{Name: "operation.emit", Direction: HostToExtension, Provides: "operations.emit", Contract: []string{"extension.Operation.Emit", "extension.EmitPlan"}, UseCases: []string{"introspection"}},
 	{Name: "emit.commit", Direction: HostToExtension, Provides: "operations.commit", InTransaction: true, Contract: []string{"extension.EmitPlan.Commit", "extension.Emitted", "extension.EmitCommit"}, UseCases: []string{"introspection"}},
+	{Name: "wait.progress", Direction: ExtensionToHost, Provides: "operations.wait", Contract: []string{"host:runtime.SetWaitProgressInTx", "host:inproc.Host.WaitProgress"}, UseCases: []string{"github"}},
 	{Name: "dependency.filter", Direction: HostToExtension, Provides: "dependency_filter", InTransaction: true, Contract: []string{"extension.Registration.DependencyFilter"}, UseCases: []string{"github"}},
 	{Name: "event.render", Direction: HostToExtension, Provides: "render", Contract: []string{"host:renderEvents chain (<extension>.RenderEvent)"}, UseCases: []string{"github", "slack", "introspection"}},
 

@@ -46,7 +46,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Validate` | connection, extension, route (`config`), executor or resource types | `validate` |
 | `Ingress` | `extensions[].ingress` | `ingress.push`, `ingress.reconcile` |
 | `Webhooks` | `webhooks` | `webhook.handle` |
-| `Routes`, `Triggers` | `routes`, `work_kinds` | `route.match`, `work_kind.trigger` |
+| `Routes`, `Triggers` | `routes` (`samples` for a handler that is an `extension.RouteSampler`), `work_kinds` | `route.match`, `route.samples`, `work_kind.trigger` |
 | `Recurrences` | `recurrences` | `recurrence.next` |
 | `Operations`, `Filter` | `operations`, `dependency_filter` | `operation.*`, `emit.commit`, `dependency.filter` |
 | `Executors` | `executors` | `executor.*` |

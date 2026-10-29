@@ -52,6 +52,9 @@ type Deps struct {
 	Artifacts  storage.Artifacts
 	Timers     Armer
 	CancelWork func(ctx context.Context, work domain.ID, expected domain.Revision, reason, key string) (domain.ID, error)
+	// WaitProgress sets the progress line of work's active Wait for owner,
+	// the extension whose operation declared it.
+	WaitProgress func(ctx context.Context, owner string, work domain.ID, progress string) error
 }
 
 // run is the host side of one executor call: the trusted, lease-fenced
@@ -163,7 +166,7 @@ func (s *Service) Handle(ctx context.Context, method string, raw json.RawMessage
 	return out, err
 }
 
-var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.event": true, "state.events": true, "state.scopes": true, "state.timers": true, "event.accept": true, "timer.cancel": true, "work.cancel": true}
+var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.event": true, "state.events": true, "state.scopes": true, "state.timers": true, "event.accept": true, "timer.cancel": true, "work.cancel": true, "wait.progress": true}
 
 func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	m, ok := protocol.Lookup(method)
@@ -228,6 +231,15 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return s.cancelWork(ctx, p)
+	case "wait.progress":
+		var p protocol.WaitProgressParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.deps.WaitProgress == nil {
+			return nil, protocol.Errorf(protocol.CodeUnsupported, "wait.progress")
+		}
+		return struct{}{}, s.deps.WaitProgress(ctx, s.name, domain.ID(p.WorkID), p.Progress)
 	case "artifact.create", "artifact.write", "artifact.commit", "artifact.abort":
 		return s.artifact(ctx, method, raw)
 	case "secret.resolve":

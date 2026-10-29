@@ -74,9 +74,12 @@ type traceWait struct {
 	meta waitMetadata
 	work domain.Work
 	// wakes: the Event itself wakes the Work. first: another input (an
-	// earlier accepted Event or the due timeout) wakes it first.
-	wakes bool
-	first string
+	// earlier accepted Event or the due timeout) wakes it first. refused:
+	// the causal limits would refuse the wake's core.wait.woken bridge
+	// ("depth_limit"), so the wait would be blocked instead.
+	wakes   bool
+	first   string
+	refused string
 }
 
 // Trace explains how the router would route e in scopeID now. It reads the
@@ -139,7 +142,7 @@ func (r *Router) Trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		if waiting.wakes {
 			out.Effect = wakeEffect(*waiting, "")
 		} else {
-			out.Effect = RouteEffect{Kind: EffectQueue, WorkID: waiting.work.ID, Binding: waiting.meta.Binding, Detail: "kept as context; " + string(waiting.work.ID) + " keeps waiting" + waitingFor(waiting.wait) + contextWhy(waiting.meta)}
+			out.Effect = RouteEffect{Kind: EffectQueue, WorkID: waiting.work.ID, Binding: waiting.meta.Binding, Detail: "kept as context; " + string(waiting.work.ID) + " keeps waiting" + waitingFor(waiting.wait) + contextWhy(*waiting)}
 		}
 		return out, nil
 	}
@@ -233,9 +236,12 @@ var fallbackWhy = map[string]string{
 	"target_binding_mismatch":    "the running attempt is on another binding",
 }
 
-func contextWhy(meta waitMetadata) string {
-	if meta.Blocked {
+func contextWhy(w traceWait) string {
+	switch {
+	case w.meta.Blocked:
 		return "; its wake is blocked by the causal limits"
+	case w.refused != "":
+		return "; the causal limits would refuse its wake (" + w.refused + "), which blocks the wait"
 	}
 	return "; the event does not match its wait"
 }
@@ -279,6 +285,17 @@ func (r *Router) waitOutcomeInTx(tx storage.Tx, w domain.Work, a domain.Accepted
 		out.first = "accepted event " + string(winner.Event.ID)
 	case out.meta.Timer.ID != "" && !r.now().Before(out.meta.Timer.FireAt):
 		out.first = "its due timeout"
+		return out, nil
+	default:
+		return out, nil
+	}
+	// A wake of a parked attempt derives a bridge the causal limits may
+	// refuse, which blocks the wait rather than waking it (WakeWaitInTx).
+	if out.refused, err = wakeRefusalInTx(tx, r.now(), r.options.CausalLimits, out.wait, winner.Event.ID, !out.wakes); err != nil {
+		return nil, err
+	}
+	if out.refused != "" {
+		out.wakes, out.first = false, ""
 	}
 	return out, nil
 }
@@ -359,7 +376,7 @@ func waitingFor(w domain.Wait) string {
 }
 
 // Samples lists the sample Events the scope's route handlers offer, in route
-// order, each sample once per handler.
+// order, each sample once per handler. Samplers are given the router's clock.
 func (r *Router) Samples(ctx context.Context, scopeID domain.ID) ([]TraceSample, error) {
 	var s routeSnapshot
 	if err := r.transact(ctx, nil, func(tx storage.Tx) error { return scopeSnapshot(tx, scopeID, &s) }); err != nil {
@@ -372,9 +389,8 @@ func (r *Router) Samples(ctx context.Context, scopeID domain.ID) ([]TraceSample,
 		if !ok {
 			continue
 		}
-		in := detachedInput(s)
-		in.Route = route
-		for _, sample := range sampler.Samples(in.Scope, route) {
+		in := extension.SampleInput{Scope: detachedInput(s).Scope, Route: route, Now: r.now()}
+		for _, sample := range sampler.Samples(ctx, in) {
 			id := route.Handler + "\x00" + sample.ID
 			if sample.ID == "" || sample.Event.Type == "" || seen[id] {
 				continue
@@ -384,6 +400,33 @@ func (r *Router) Samples(ctx context.Context, scopeID domain.ID) ([]TraceSample,
 		}
 	}
 	return out, nil
+}
+
+// CheckTraceEvent refuses a hypothetical Event whose envelope acceptance
+// would refuse from any source: a type or payload schema that is not
+// namespaced, data that is not JSON, and the host's own core types and
+// sources, which no ingress, extension or operator may submit. Which types a
+// source may send is the caller's to check (Ingress.AdmitsTrace).
+func CheckTraceEvent(e domain.Event) error {
+	switch {
+	case !validType(e.Type):
+		return fmt.Errorf("type %q is not namespaced (source.name)", e.Type)
+	case strings.HasPrefix(e.Type, "core."):
+		return fmt.Errorf("%s is a core event; only the host records those", e.Type)
+	case e.Source == "":
+		return errors.New("source is required")
+	case strings.HasPrefix(e.Source, "core.") && e.Source != ManualSource:
+		return fmt.Errorf("source %s is the host's own", e.Source)
+	case e.CorrelationKey != nil && (e.CorrelationKey.Source == "" || e.CorrelationKey.ExternalID == ""):
+		return errors.New("a correlation key needs a source and an external ID")
+	case e.Data.Schema == "" && len(e.Data.Data) == 0:
+		return nil
+	case !validType(e.Data.Schema):
+		return fmt.Errorf("payload schema %q is not namespaced", e.Data.Schema)
+	case !json.Valid(e.Data.Data):
+		return errors.New("payload data is not JSON")
+	}
+	return nil
 }
 
 // TraceRoute is Router.Trace with the scheduler's subscription filter.

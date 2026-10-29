@@ -91,6 +91,10 @@ type ToolsOptions struct {
 	// correlation key in the scope and the Event types announcing one of its
 	// runs ending. Nil, or an unknown job, refuses the condition.
 	Jobs func(ctx context.Context, scope domain.ID, name string) (key domain.CorrelationKey, types []string, ok bool)
+	// WaitProgress sets the progress line of a Work's active Wait, when a
+	// GitHub operation declared it (the host's wait.progress). Nil shows
+	// no progress.
+	WaitProgress func(ctx context.Context, work domain.ID, progress string) error
 }
 
 // Tools implements the operations.

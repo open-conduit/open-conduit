@@ -38,11 +38,18 @@ type Extension interface {
 // protocol.ValidateConnection, protocol.ValidateExtension or
 // protocol.ValidateRoute. Validate checks an entry's opaque config at load
 // and apply (nil accepts any object); its error text is never echoed.
+//
+// Binding, for a route handler's type only, checks the binding each route
+// with this handler binds, wherever the route is declared, so a handler can
+// refuse an agent it must not run (one with a shell, or with operations it
+// must not have). Its error is shown to the operator, so it must be a fixed,
+// secret-free reason.
 type ConfigType struct {
 	Kind     string
 	Type     string
 	Ingress  bool
 	Validate func(config json.RawMessage, secretNames []string) error
+	Binding  func(extension.RouteBinding) error
 }
 
 // Typed extensions own config types.
@@ -92,6 +99,12 @@ type Host struct {
 	// cancellation, idempotent per key and guarded by the Work's revision:
 	// a stale revision is storage.ErrConflict).
 	CancelWork func(ctx context.Context, work domain.ID, expected domain.Revision, reason, key string) (domain.ID, error)
+	// WaitProgress sets the progress line ("3 of 7 checks finished") of
+	// work's active Wait, when one of the extension's own operations
+	// declared it; "" clears it. Another's Wait is
+	// extension.ErrUnauthorized, and Work with no active Wait
+	// storage.ErrNotFound.
+	WaitProgress func(ctx context.Context, work domain.ID, progress string) error
 	// Capture writes a named telemetry event to the host's telemetry events
 	// log and hands it to every Sink. scope is "" for one about the machine.
 	Capture func(ctx context.Context, scope, name string, at time.Time, props map[string]any) error

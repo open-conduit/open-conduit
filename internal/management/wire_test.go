@@ -26,8 +26,8 @@ func TestWireDisplayAndWaitDescription(t *testing.T) {
 		t.Fatal("Work without a display shows one")
 	}
 	due := time.Date(2026, 10, 25, 9, 0, 0, 0, time.UTC)
-	described := toWait(domain.Wait{ID: "wait/1", Description: "checks on PR #2", TimeoutTimerID: "t"}, due)
-	if described.Description != "checks on PR #2" || described.DueAt != "2026-10-25T09:00:00Z" {
+	described := toWait(domain.Wait{ID: "wait/1", Description: "checks on PR #2", Progress: "3 of 7 checks finished", TimeoutTimerID: "t"}, due)
+	if described.Description != "checks on PR #2" || described.Progress != "3 of 7 checks finished" || described.DueAt != "2026-10-25T09:00:00Z" {
 		t.Fatalf("described wait %+v", described)
 	}
 	// Core describes a timed Wait when it is declared, not here.

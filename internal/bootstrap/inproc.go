@@ -14,6 +14,7 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/human"
 	"github.com/open-conduit/open-conduit/extensions/introspection"
 	"github.com/open-conduit/open-conduit/extensions/posthog"
+	"github.com/open-conduit/open-conduit/extensions/setup"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -31,7 +32,7 @@ import (
 // firstParty is the list of first-party in-process extensions. Adding one
 // touches its own package and this list.
 func firstParty() []inproc.Extension {
-	return []inproc.Extension{posthog.New(), human.New(), introspection.New()}
+	return []inproc.Extension{posthog.New(), human.New(), introspection.New(), setup.New()}
 }
 
 // typeSets are an extension's own entry and connection types: what its
@@ -67,6 +68,9 @@ func inprocRegistry(reg *config.Registry, xs []inproc.Extension) {
 	if reg.HandlerConfig == nil {
 		reg.HandlerConfig = map[string]func(json.RawMessage) error{}
 	}
+	if reg.HandlerBinding == nil {
+		reg.HandlerBinding = map[string]func(extension.RouteBinding) error{}
+	}
 	for _, x := range xs {
 		if t, ok := x.(inproc.Typed); ok {
 			for _, c := range t.Types() {
@@ -81,6 +85,9 @@ func inprocRegistry(reg *config.Registry, xs []inproc.Extension) {
 					reg.Extensions[c.Type] = config.ExtensionType{Ingress: c.Ingress, Validate: v}
 				case protocol.ValidateRoute:
 					reg.HandlerConfig[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
+					if c.Binding != nil {
+						reg.HandlerBinding[c.Type] = c.Binding
+					}
 				}
 			}
 		}
@@ -149,7 +156,8 @@ func (d *daemon) startInproc(ctx context.Context) error {
 				}
 				return id, err
 			},
-			Capture: d.telemetry.Capture,
+			WaitProgress: d.waitProgress(name),
+			Capture:      d.telemetry.Capture,
 		}
 		if err := s.Start(ctx, h); err != nil {
 			return fmt.Errorf("extension %s: %w", name, err)

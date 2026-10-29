@@ -570,10 +570,15 @@ func (t *transaction) PutWait(v domain.Wait, expected domain.Revision) error {
 	if !exists && (v.WakeEventID != "" || v.State != domain.WaitActive) {
 		return storage.ErrInvalid
 	}
-	if exists && (old.State != domain.WaitActive || old.WorkID != v.WorkID || old.ExecutionID != v.ExecutionID || old.AfterSequence != v.AfterSequence || old.TimeoutTimerID != v.TimeoutTimerID || old.Description != v.Description || !reflect.DeepEqual(old.Match, v.Match)) {
+	if exists && (old.State != domain.WaitActive || old.WorkID != v.WorkID || old.ExecutionID != v.ExecutionID || old.AfterSequence != v.AfterSequence || old.TimeoutTimerID != v.TimeoutTimerID || old.Description != v.Description || old.Owner != v.Owner || !reflect.DeepEqual(old.Match, v.Match)) {
 		return storage.ErrInvalid
 	}
-	if exists && v.State != domain.WaitWoken && v.State != domain.WaitCancelled {
+	// An active Wait changes once, to woken or cancelled, keeping its
+	// progress; before that its owner may only change the progress.
+	if exists && v.State == domain.WaitActive && (v.Owner == "" || v.WakeEventID != "") {
+		return storage.ErrInvalid
+	}
+	if exists && v.State != domain.WaitActive && (v.State != domain.WaitWoken && v.State != domain.WaitCancelled || v.Progress != old.Progress) {
 		return storage.ErrInvalid
 	}
 	if (v.State == domain.WaitWoken) != (v.WakeEventID != "") {
