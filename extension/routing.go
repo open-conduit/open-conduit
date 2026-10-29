@@ -28,6 +28,10 @@ type RouteInput struct {
 // Display, when set on a match, replaces the Work's display (ValidateDisplay);
 // nil keeps what it has, so a handler sets it only when it has something to
 // say (the handler sees the current one on RouteInput.Work).
+// Context, like CreateID and Kind, applies only to Work the match creates:
+// it is the new Work's context (what read_context returns, and what an
+// executor reads per Work, such as a chosen model). It never changes an
+// existing Work's context.
 type RouteDecision struct {
 	Match      bool
 	CreateID   domain.ID
@@ -35,6 +39,7 @@ type RouteDecision struct {
 	AttachKeys []domain.CorrelationKey
 	Reason     string
 	Display    *domain.WorkDisplay
+	Context    domain.Payload
 }
 
 // RouteHandler decides whether its route takes an Event. Match must be free

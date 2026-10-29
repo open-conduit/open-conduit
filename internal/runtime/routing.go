@@ -503,7 +503,7 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 			w.CorrelationKeys = append([]domain.CorrelationKey(nil), w.CorrelationKeys...)
 			projected = &w
 		} else if p.selected != nil && (s.event.Event.CorrelationKey != nil || p.decision.CreateID != "") {
-			w := domain.Work{ID: p.decision.CreateID, Kind: p.decision.Kind, ScopeID: s.scope.ID, State: domain.WorkReady}
+			w := domain.Work{ID: p.decision.CreateID, Kind: p.decision.Kind, ScopeID: s.scope.ID, State: domain.WorkReady, Context: p.decision.Context}
 			if w.ID == "" {
 				w.ID = domain.ID("work/" + identity(string(id)))
 			}
