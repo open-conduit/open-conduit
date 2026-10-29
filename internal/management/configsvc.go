@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"path/filepath"
 	"reflect"
 	"strconv"
@@ -43,6 +44,9 @@ type ConfigService struct {
 	current    *config.Snapshot
 	generation uint64
 	history    map[uint64]*config.Snapshot
+	// defaultHash is the default configuration's hash, when OpenConfig was
+	// given one that validates.
+	defaultHash string
 	// Adopted is set when OpenConfig replaced a stored generation that no
 	// longer validates with the config file, so the host can log it.
 	Adopted *Adoption
@@ -59,12 +63,19 @@ type Adoption struct {
 }
 
 // OpenConfig restores the committed generation. With no activation record it
-// validates the config file and activates it as generation 1. Disk edits alone
+// validates the config file and activates it as generation 1; with no config
+// file either, it activates def instead when given (the default
+// configuration), writing no file: the first apply writes it. Disk edits alone
 // never change an already committed generation that still validates; one that
 // no longer does is replaced by the config file when the file validates, so
 // the daemon can always start once the file is fixed.
-func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string) (*ConfigService, error) {
+func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, registry config.Registry, path string, def []byte) (*ConfigService, error) {
 	c := &ConfigService{store: store, now: now, registry: registry, path: path, history: map[uint64]*config.Snapshot{}}
+	if def != nil {
+		if s, err := config.Validate(def, registry); err == nil {
+			c.defaultHash = s.Hash
+		}
+	}
 	var active activation
 	var normalized []byte
 	err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
@@ -86,6 +97,9 @@ func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 	}
 	if active.Generation == 0 {
 		data, err := config.ReadFile(path)
+		if errors.Is(err, fs.ErrNotExist) && def != nil {
+			data, err = def, nil
+		}
 		if err != nil {
 			return nil, err
 		}
@@ -138,10 +152,19 @@ func (c *ConfigService) Current() (*config.Snapshot, uint64) {
 func (c *ConfigService) Registry() config.Registry { return c.registry }
 
 // DiskStatus compares the config file with the committed generation without
-// applying it: "current", "pending_edit" (valid but not applied), "invalid"
-// or "unreadable". It never returns file content or diagnostics text.
+// applying it: "current", "pending_edit" (valid but not applied), "invalid",
+// "default" (no file, and the active generation is the default
+// configuration), "missing" (no file, and a generation whose file has gone)
+// or "unreadable". It never returns file
+// content or diagnostics text.
 func (c *ConfigService) DiskStatus() string {
 	data, err := config.ReadFile(c.path)
+	if errors.Is(err, fs.ErrNotExist) {
+		if current, _ := c.Current(); current != nil && c.defaultHash != "" && current.Hash == c.defaultHash {
+			return "default"
+		}
+		return "missing"
+	}
 	if err != nil {
 		return "unreadable"
 	}

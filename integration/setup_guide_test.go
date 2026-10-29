@@ -122,8 +122,17 @@ func TestSlackSetupScopeValidatesOffline(t *testing.T) {
 	for _, s := range bootstrap.Setups() {
 		names = append(names, s.SetupInfo().Type)
 	}
-	if strings.Join(names, ",") != "github,slack,linear,jira" {
+	if strings.Join(names, ",") != "github,slack,linear,jira,setup" {
 		t.Fatalf("registered setups: %v", names)
+	}
+}
+
+// The default configuration (init setup into an empty file) validates
+// against the daemon registry, so a daemon with no config file can start.
+func TestDefaultConfigValidatesOffline(t *testing.T) {
+	doc := bootstrap.DefaultConfig()
+	if diags, err := bootstrap.ValidateConfig(doc); doc == nil || err != nil || len(diags) != 0 {
+		t.Fatalf("default config: %v %v\n%s", diags, err, doc)
 	}
 }
 

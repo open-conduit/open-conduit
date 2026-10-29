@@ -22,7 +22,9 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
+	"github.com/open-conduit/open-conduit/extensions/setup"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
+	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -99,7 +101,22 @@ func offlineExecutors() map[string]extension.Executor {
 // init <type>`). Core CLI hosts them through cli.Env.Setups and imports no
 // extension.
 func Setups() []extension.Setup {
-	return []extension.Setup{gh.Setup{}, sl.Setup{}, linear.Setup{}, jira.Setup{}}
+	return []extension.Setup{gh.Setup{}, sl.Setup{}, linear.Setup{}, jira.Setup{}, setup.Setup{}}
+}
+
+// DefaultConfig is the configuration the daemon runs on when it starts with
+// no config file and no stored generation: what `init setup` would write
+// into an empty file, so the web view can start a setup session.
+func DefaultConfig() []byte {
+	r, err := setup.Setup{}.Setup(context.Background(), nil, nil)
+	if err != nil {
+		return nil
+	}
+	doc, err := cli.MergeSetup(nil, r, false)
+	if err != nil {
+		return nil
+	}
+	return doc
 }
 
 // SetupOptions start a coding agent with the setup guide.

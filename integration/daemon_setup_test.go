@@ -186,3 +186,66 @@ func TestDaemonSetupSession(t *testing.T) {
 		t.Fatalf("scope actions once the session ended: %q", got)
 	}
 }
+
+// TestDaemonDefaultConfiguration: with no config file and no stored
+// generation the daemon starts on the default configuration, a setup scope,
+// without writing the file; doctor says so and the web view can start a
+// session. The first apply writes the file, and a restart keeps it.
+func TestDaemonDefaultConfiguration(t *testing.T) {
+	d := newDrill(t)
+	if err := os.Remove(d.config); err != nil {
+		t.Fatal(err)
+	}
+	d.start("")
+	ctx := context.Background()
+	cfg, err := d.c.Config(ctx)
+	if err != nil || cfg.Generation != "1" || len(cfg.Scopes) != 1 || cfg.Scopes[0].ID != "setup" {
+		t.Fatalf("config: %+v %v", cfg, err)
+	}
+	if _, err = os.Stat(d.config); !os.IsNotExist(err) {
+		t.Fatalf("the default configuration wrote the file: %v", err)
+	}
+	code := func() string {
+		doc, err := d.c.Doctor(ctx, false)
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, c := range doc.Checks {
+			if c.Name == "config" {
+				return c.Status + "/" + c.Code
+			}
+		}
+		return ""
+	}
+	if got := code(); got != "info/default_config" {
+		t.Fatalf("doctor config: %s", got)
+	}
+	acts, err := d.c.Actions(ctx, client.ActionTarget{ScopeID: "setup"})
+	if err != nil || len(acts) != 1 || acts[0].ID != "start" || strings.Join(acts[0].Choices, ",") != "opus,sonnet" {
+		t.Fatalf("actions: %+v %v", acts, err)
+	}
+
+	d.kill()
+	d.start("")
+	if got := code(); got != "info/default_config" {
+		t.Fatalf("doctor config after a restart: %s", got)
+	}
+	binary := filepath.Join(d.root, "claude")
+	if err = os.WriteFile(binary, []byte(setupClaude), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	next := setupDaemonConfig(setupBinding(d.root, binary))
+	v, err := d.c.ValidateConfig(ctx, next)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = d.c.ApplyConfig(ctx, next, v.CandidateHash, "1", "first"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(d.config); err != nil {
+		t.Fatalf("apply wrote no file: %v", err)
+	}
+	if got := code(); got != "ok/current" {
+		t.Fatalf("doctor config after apply: %s", got)
+	}
+}

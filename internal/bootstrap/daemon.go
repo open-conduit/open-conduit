@@ -331,7 +331,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	d.openExtensions(ctx)
 	reg := registry(d.executors)
 	d.installedRegistry(&reg)
-	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath); err != nil {
+	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath, DefaultConfig()); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
 	if a := d.configs.Adopted; a != nil {
@@ -398,6 +398,8 @@ func Serve(ctx context.Context, o Options) (err error) {
 	// A restart resumes the stored generation, never the file: say so when
 	// they differ, or an edit looks applied when it is not.
 	switch d.configs.DiskStatus() {
+	case "default":
+		d.log.Info("no config file: running the default configuration, a setup scope; the first apply writes the file", "generation", generation, "config", o.ConfigPath)
 	case "pending_edit":
 		d.log.Warn("config file differs from the active generation and was not applied; restarting does not apply it", "generation", generation, "config", o.ConfigPath, "apply_with", fmt.Sprintf("open-conduit config apply %s --generation %d", o.ConfigPath, generation))
 	case "invalid":

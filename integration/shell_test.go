@@ -202,7 +202,7 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 		handlerNames[name] = true
 	}
 	registry := config.Registry{Executors: executors, Handlers: handlerNames}
-	configs, err := management.OpenConfig(ctx, h.coord, clock.Now, registry, filepath.Join(state, "config", "config.json"))
+	configs, err := management.OpenConfig(ctx, h.coord, clock.Now, registry, filepath.Join(state, "config", "config.json"), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
