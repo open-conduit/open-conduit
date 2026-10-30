@@ -95,7 +95,7 @@ func (p *Provider) sweepLease(ctx context.Context, ref string, status extension.
 			return nil
 		}
 		spare = spareUnknown
-	case st.WorkDone && (l.Mode == extension.ResourceWork || st.ExecutionDone):
+	case st.WorkDone && (perWork(l.Mode) || st.ExecutionDone):
 		spare = spareFinished
 	default:
 		return nil
@@ -127,8 +127,13 @@ func (p *Provider) sweepOrphan(ctx context.Context, ref string, report *extensio
 	}
 	mode, _, _ := strings.Cut(ref, "-")
 	item := extension.ResourceSpare{Ref: ref, Mode: mode, Spare: spareOrphaned}
-	checkout := p.checkoutOf(ctx, path)
-	if checkout == "" {
+	// A clone stands alone and needs no checkout to be removed; a worktree
+	// git can't tie to its checkout is unreadable.
+	var checkout string
+	if mode != ModeClone {
+		checkout = p.checkoutOf(ctx, path)
+	}
+	if mode != ModeClone && checkout == "" {
 		item.Kept = keptUnreadable
 	} else {
 		item.Kept = p.keep(ctx, path, nil)
@@ -137,7 +142,7 @@ func (p *Provider) sweepOrphan(ctx context.Context, ref string, report *extensio
 		report.Kept = append(report.Kept, item)
 		return nil
 	}
-	if err := p.removeWorkspace(ctx, lease{Ref: ref, Path: path, Checkout: checkout}); err != nil {
+	if err := p.removeWorkspace(ctx, lease{Ref: ref, Mode: mode, Path: path, Checkout: checkout}); err != nil {
 		item.Kept = keptFailed
 		report.Kept = append(report.Kept, item)
 		return err

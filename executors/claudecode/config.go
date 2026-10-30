@@ -296,6 +296,16 @@ func (e *Executor) ValidateConfig(raw json.RawMessage, secretNames []string) err
 	return nil
 }
 
+// ResourceMode is the resource mode a binding config requests (the
+// configuration's ResourceModer): workspace_mode, "work" by default.
+func (e *Executor) ResourceMode(raw json.RawMessage) string {
+	c, err := ParseConfig(raw)
+	if err != nil {
+		return ""
+	}
+	return c.WorkspaceMode
+}
+
 // FolderConfig adapts a binding from an included folder's config
 // (config.FolderConfigurer): relative dir and plugin_dir resolve against the
 // folder, and a workspace-free binding without dir runs in the folder itself.

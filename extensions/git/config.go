@@ -22,6 +22,12 @@ const (
 	// ParamsSchema identifies optional executor request params.
 	ParamsSchema = "open-conduit.git.request.v1"
 
+	// ModeClone is the Git provider's own mode: like work, a branch workspace
+	// private to one Work and reused by its attempts, but a separate clone of
+	// the checkout that shares no writable state with it, so a sandbox can be
+	// given the whole of it.
+	ModeClone = "clone"
+
 	defaultRemote         = "origin"
 	defaultBranchTemplate = "agent/work-{work}"
 	defaultRetainSeconds  = 24 * 60 * 60
@@ -39,7 +45,7 @@ type Config struct {
 	// the provider's base directory (the config file's directory).
 	Checkout string `json:"checkout"`
 	// Mode is the default when an executor requests none: shared (default),
-	// work or fresh.
+	// work, fresh or clone.
 	Mode string `json:"mode,omitempty"`
 	// Remote is fetched from and tracked; empty is origin.
 	Remote string `json:"remote,omitempty"`
@@ -53,10 +59,10 @@ type Config struct {
 	// default), the environment layer disables signing so commits never wait
 	// on a signer.
 	Sign bool `json:"sign,omitempty"`
-	// Copy lists checkout-relative files (such as .env) copied into work and
-	// fresh workspaces on every acquisition.
+	// Copy lists checkout-relative files (such as .env) copied into work,
+	// fresh and clone workspaces on every acquisition.
 	Copy []string `json:"copy,omitempty"`
-	// Setup runs (sh -c) in a work or fresh workspace when the command or any
+	// Setup runs (sh -c) in a work, fresh or clone workspace when the command or any
 	// SetupWhen file changed since it last succeeded there. With SetupWhen set
 	// and none of its files present, it does not run.
 	Setup     string   `json:"setup,omitempty"`
@@ -105,9 +111,9 @@ func ParseConfig(data []byte) (Config, error) {
 	switch c.Mode {
 	case "":
 		c.Mode = extension.ResourceShared
-	case extension.ResourceShared, extension.ResourceWork, extension.ResourceFresh:
+	case extension.ResourceShared, extension.ResourceWork, extension.ResourceFresh, ModeClone:
 	default:
-		return Config{}, configError("mode must be shared, work or fresh")
+		return Config{}, configError("mode must be shared, work, fresh or clone")
 	}
 	if c.Remote == "" {
 		c.Remote = defaultRemote
@@ -158,6 +164,32 @@ func ParseConfig(data []byte) (Config, error) {
 func ValidateConfig(raw json.RawMessage) error {
 	_, err := ParseConfig(raw)
 	return err
+}
+
+// ErrSandboxMode refuses a sandboxed binding whose git workspace would write
+// through to the operator's checkout.
+var ErrSandboxMode = errors.New("a sandboxed binding can't use a git workspace in work, fresh or shared mode: " +
+	"a worktree commits through the main checkout's .git (its config, hooks and branches) and shared mode is the main checkout itself; " +
+	"use mode clone, a separate clone that shares nothing writable with the checkout")
+
+// ValidateSandbox checks a git resource config for a binding that runs its
+// executor in a sandbox (B09). mode is what the executor requests, empty for
+// the config's own default. Only clone is allowed: a work or fresh worktree
+// commits through the main checkout's .git, and shared is the checkout, so
+// the sandbox would have to be able to write it. It reports the config's own
+// error first.
+func ValidateSandbox(raw json.RawMessage, mode string) error {
+	c, err := ParseConfig(raw)
+	if err != nil {
+		return err
+	}
+	if mode == "" {
+		mode = c.Mode
+	}
+	if mode != ModeClone {
+		return ErrSandboxMode
+	}
+	return nil
 }
 
 // params are the optional executor request params (ParamsSchema).

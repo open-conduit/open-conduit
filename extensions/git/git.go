@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -38,10 +39,22 @@ func (p *Provider) gitEnv() []string {
 }
 
 // git runs one git command in dir. Errors carry the redacted first line of
-// output, never a configured credential.
+// output, never a configured credential. In a clone, whose config the agent
+// may have written, it runs distrusted.
 func (p *Provider) git(ctx context.Context, dir string, args ...string) (string, error) {
-	cmd := exec.CommandContext(ctx, p.o.Git, append([]string{"-C", dir}, args...)...)
-	cmd.Env = p.gitEnv()
+	pre, env := []string{"-C", dir}, p.gitEnv()
+	if p.inClone(dir) {
+		over, err := p.distrust(ctx, dir)
+		if err != nil {
+			return "", fmt.Errorf("git %s: %w", args[0], err)
+		}
+		pre, env = append(pre, over...), append(env, "GIT_OPTIONAL_LOCKS=0", "GIT_PROTOCOL_FROM_USER=0")
+		if args[0] == "status" {
+			args = append([]string{"status", "--ignore-submodules=all"}, args[1:]...)
+		}
+	}
+	cmd := exec.CommandContext(ctx, p.o.Git, append(pre, args...)...)
+	cmd.Env = env
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		msg := redact(strings.TrimSpace(string(out)))
@@ -51,6 +64,54 @@ func (p *Provider) git(ctx context.Context, dir string, args ...string) (string,
 		return "", fmt.Errorf("git %s: %s", args[0], msg)
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// distrusted pins off the config that makes the provider's own git commands
+// run a program: the fsmonitor, hooks (a reference-transaction or
+// post-index-change hook), automatic gc and maintenance, and every transport
+// but a local path, so an insteadOf can't route a fetch to core.sshCommand,
+// core.gitProxy or a remote helper. Filters are added per driver by
+// distrust.
+var distrusted = []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+	"-c", "protocol.allow=never", "-c", "protocol.file.allow=always"}
+
+// inClone reports whether dir is a clone workspace, whose config a sandboxed
+// agent can write.
+func (p *Provider) inClone(dir string) bool {
+	return p.owned(dir) && strings.HasPrefix(filepath.Base(dir), ModeClone+"-")
+}
+
+// distrust is the -c overrides for a git command in the clone at dir:
+// distrusted, plus every filter driver the repository's own config (with
+// what it includes) defines, emptied so status never runs it. Reading config
+// runs nothing. A driver name -c can't express makes the command fail.
+func (p *Provider) distrust(ctx context.Context, dir string) ([]string, error) {
+	cmd := exec.CommandContext(ctx, p.o.Git, "-C", dir, "config", "--show-scope", "--name-only", "--get-regexp", `^filter\.`)
+	cmd.Env = p.gitEnv()
+	out, _ := cmd.Output() // exit 1: no filters
+	over := slices.Clone(distrusted)
+	seen := map[string]bool{}
+	for _, line := range strings.Split(strings.TrimSpace(string(out)), "\n") {
+		scope, key, ok := strings.Cut(line, "\t")
+		if !ok || scope == "global" || scope == "system" || scope == "command" {
+			continue
+		}
+		name := strings.TrimPrefix(key, "filter.")
+		if i := strings.LastIndex(name, "."); i > 0 {
+			name = name[:i]
+		}
+		if strings.ContainsAny(name, "=\n") {
+			return nil, errors.New("the clone's config names a filter that can't be turned off")
+		}
+		if !seen[name] {
+			seen[name] = true
+			for _, k := range []string{"clean", "smudge", "process"} {
+				over = append(over, "-c", "filter."+name+"."+k+"=")
+			}
+			over = append(over, "-c", "filter."+name+".required=false")
+		}
+	}
+	return over, nil
 }
 
 func (p *Provider) refExists(ctx context.Context, dir, ref string) bool {
