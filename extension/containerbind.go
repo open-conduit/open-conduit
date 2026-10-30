@@ -132,6 +132,13 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 		}
 	}
 	merged := needs.Merge(g.Resource)
+	// A read-only need is held by a mount over it, which a symlink would
+	// redirect: the link itself stays writable.
+	for _, r := range merged.ReadOnly {
+		if fi, err := os.Lstat(r); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			return SandboxPlan{}, fmt.Errorf("%w: %s must be held read-only but is a symlink", ErrSandboxUnavailable, r)
+		}
+	}
 	merged.Read = append(merged.Read, g.Shared...)
 	merged.Deny = append(merged.Deny, g.Protected...)
 	merged = canonicalNeeds(merged)

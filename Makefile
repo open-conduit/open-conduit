@@ -8,7 +8,7 @@ LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 # about 8 minutes on hosted runners under -race, close to go test's 10m default.
 TEST_TIMEOUT ?= 20m
 
-.PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot
+.PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check container-test check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot
 
 build:
 	$(GO) build ./...
@@ -44,6 +44,13 @@ config-check:
 # shown is in the help and every make target shown is in this Makefile.
 docs-check:
 	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -run 'TestDocs' ./integration
+
+# Real isolation tests for the Docker container provider, on the Docker
+# context OPEN_CONDUIT_DOCKER_CONTEXT names (the CLI's current one when
+# unset): the container CI job on Linux, and by hand on OrbStack or Docker
+# Desktop. A PR that touches the provider posts this run's output.
+container-test:
+	OPEN_CONDUIT_CONTAINER_TESTS=1 $(GO) test -count=1 -v -run 'TestDocker' ./integration/ ./extensions/docker/
 
 check: fmt-check vet test boundaries config-check docs-check build smoke
 

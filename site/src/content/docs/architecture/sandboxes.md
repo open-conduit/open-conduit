@@ -180,7 +180,7 @@ Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from 
 
 ## Limitations
 
-- Only macOS and Linux, through srt. Remote sandboxes need a contract of their own; containers have one, with no provider yet.
+- Only macOS and Linux, through srt. Remote sandboxes need a contract of their own; containers have one, with a Docker provider that has no network gateway or toolbelt forward yet, and no executor that launches through it.
 - On Linux, `"unix_sockets": "all"` makes every unix socket the filesystem policy leaves visible reachable; only the known container sockets are hidden.
 - The hard-link check covers the workspace, not the policy's other write grants. A package manager that hard-links from a store outside the workspace (pnpm) is refused until it is set to copy (`package-import-method=copy`).
 - On Linux srt grants only paths that exist when the segment starts.
@@ -189,7 +189,7 @@ Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from 
 
 ## Containers
 
-A binding may instead run its executor in a container. It declares `container: {provider, config}` in place of `sandbox`; a binding with both is refused at load (`sandbox_conflict`). The contract is [`extension/container.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/container.go) and the host's half [`extension/containerbind.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/containerbind.go). No provider ships yet: the Docker provider, the gateway that carries the network allowlist and the toolbelt, and the executors' use of it follow (#171).
+A binding may instead run its executor in a container. It declares `container: {provider, config}` in place of `sandbox`; a binding with both is refused at load (`sandbox_conflict`). The contract is [`extension/container.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/container.go) and the host's half [`extension/containerbind.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/containerbind.go). The [Docker provider](#the-docker-provider) ships; the gateway that carries the network allowlist and the toolbelt, and the executors' use of it, follow (#171).
 
 ### The config is the grant
 
@@ -201,7 +201,8 @@ A binding may instead run its executor in a container. It declares `container: {
     "write": ["{workspace}"],
     "read": ["~/.gitconfig"],
     "network": {"allow": ["api.anthropic.com", "github.com"]},
-    "limits": {"cpus": 4, "memory": "8g", "pids": 2048}
+    "limits": {"cpus": 4, "memory": "8g", "pids": 2048},
+    "provider": {"context": "orbstack"}
   }
 }
 ```
@@ -262,9 +263,41 @@ As for sandboxes, one hook: `SchedulerOptions.Container`, called after `Resource
 
 Attach to Work that ran in a container is refused as for sandboxed Work.
 
+### The Docker provider
+
+[`extensions/docker`](https://github.com/open-conduit/open-conduit/tree/main/extensions/docker) runs containers on Docker Engine 28 or later. Its settings name the Docker CLI context every call uses, `"provider": {"context": "<name>"}`, so the daemon never changes with the CLI's current context. A container's ID is `<context>/<docker ID>`.
+
+**Create.** `docker create --name oc-<execution key>-<segment>`, where the key hashes the host label and the execution, with the four labels, `--init`, `--cidfile` in the execution's container records and `--restart no`. It never starts it. A container that `docker create` made before failing is removed by the ID it wrote.
+
+**Hardening.** `--cap-drop ALL`, `no-new-privileges`, a read-only root with a tmpfs `/tmp`, `--user` the operator's uid and gid, a process limit (4096 unless `limits.pids` says otherwise) and no `docker.sock`. The environment goes through an env file in the records, readable only by the operator and removed once the container is created; the plan records only its keys.
+
+**Mounts, at the same paths as on the host.** The write grant and the run directory read-write; the read grant, what the host shares (the toolbelt token directory) and the records read-only. Every read-only need and every protected path inside a mount is covered: a read-only bind over it, or an empty file or directory bound over it to hide it. So the clone's `.git/config`, `hooks` and `info` are read-only over the read-write workspace. A path that can't be covered (one that doesn't exist, or a symlink, which the host refuses first) refuses the launch as `sandbox_unavailable` rather than leave it writable. A write grant that doesn't exist is refused; a read grant that doesn't exist is left out.
+
+**Networks.** Each execution has its own `--internal` bridge network, created with `com.docker.network.bridge.inhibit_ipv4=true` and without IPv6 on every platform: without that option a Linux host's ports are reachable through the bridge's IP (#176). A container on it has no route out and reaches no host port. Until the gateway ships, a grant with `network.allow`, a host need or a socket need is refused as `sandbox_unavailable`. `Remove` removes the network with the container, unless a later segment's container is already on it.
+
+**The start helper.** `Launch` returns the argv of a hidden `open-conduit container run [--records <dir>] <context>/<id>`, not a bare `docker start -a`, which can't carry TERM (#176). The helper stays in the executor's process group, so `Interrupt` reaches it. It runs `docker start -a -i` in a group of its own, turns TERM, INT and HUP into `docker kill -s` (retrying until the container runs) after recording each as one the host sent, and exits with the container's code from `docker wait`, or 125 if the container never ran. Every signal that reaches the container through the host is recorded, whichever path sent it: `Interrupt`, the executor's own deadline or the host's stop. A TERM from a Docker restart never passes through the helper, so it counts as unrequested. The helper is Go, not a shell relay: on Linux, `dash` ignores `set -m`.
+
+**The entry stub.** The container's entry point, under Docker's init, is a `/bin/sh` stub, so an image must have one. It runs the launch's argv with the container's stdin, writes `ContainerTermMarker` in the run directory when it gets TERM, passes TERM, INT and HUP on and exits with the command's status.
+
+**Recover.** `Inspect` asks the context's daemon for its ID and then the container: a daemon that holds no such container gives `Gone`, and one that can't be reached is an error, so each row of the [Recover](#recover) table holds against real Docker. `List` fails if any context the config uses fails.
+
+**Doctor.** The `container` check runs, for each context and image the enabled bindings use: the daemon reachable on the named context, with its ID; a server version of 28 or later; and a shared-path test, in which a container running as the operator writes a file into the workspace root and the host checks its owner. Any failure blocks the provider, on Docker Desktop as on anything else: `Plan` runs the same checks (a pass stands for ten minutes) and refuses as `sandbox_unavailable` when one fails. The gateway checks come with the gateway.
+
+**Platforms.** Linux is checked in CI by the `container` job on the runner's own Docker Engine. macOS isolation is checked by a local `make container-test` run on OrbStack, posted on each PR that touches the provider or the gateway, not in CI. Docker Desktop is unverified until someone runs `make container-test` on it; doctor names it when it finds it.
+
 ### Evidence
 
 [Contract tests](https://github.com/open-conduit/open-conduit/blob/main/extension/container_test.go) against a fake provider: the container created unstarted, labelled and pinned; refusals of an image not pinned by digest, a failed listing, a second container, needs outside the grant, a grant reaching the state and the shared path checks; each Recover path with the host's Stop; an unrequested TERM; reconcile, removal and mounts failing closed. `TestGuardLaunchIsShared` runs one refusal through both brokers. `TestContainerBinding` covers the config, `TestSweepKeepsMountedWorkspaces` the sweep and `TestProductionSchedulerContainerHook` the scheduler hook.
+
+[Isolation tests](https://github.com/open-conduit/open-conduit/blob/main/integration/container_test.go) against real Docker (`make container-test`; the `container` CI job on Linux), with containers created through the host's binding and started by the helper as an executor's wrapper would:
+
+- `TestDockerIsolation`: from inside, only the workspace, run directory and `/tmp` are writable; writing or moving `.git/config`, `.git/hooks` and `.git/info` fails; the own token is readable and nothing else of the state, home or config is; no default route, no host port through `host.docker.internal`, the bridge's gateway or `docker0`, and the gateway stand-in reachable; no capabilities and the operator's uid, and the workspace write owned by the operator on the host. The created container's hardening, labels and network.
+- `TestDockerFailClosed`: needs outside the grant, a grant reaching the state, `network.allow` without a gateway, a socket, an unreachable context, an image not pinned by digest, a symlinked `.git/config`, a missing read-only path and a second container, each refused with nothing created.
+- `TestDockerProcessControl`: the container's exit code and stdin through the helper; `Inject` through the run directory; `Interrupt` reaching the command's own trap and settling as the host's; a TERM sent outside the host settling as interrupted; the host's `Stop` confirmed.
+- `TestDockerRecover`: each Recover row: wrapper alive, wrapper dead with the container exited (its code) or running (stopped by the host), the container gone, another daemon and an unreachable one.
+- `TestDockerRemoveAndReconcile` and `TestDockerHealth`: removal and reconcile take the container and its network, and doctor's checks.
+
+[Unit tests](https://github.com/open-conduit/open-conduit/blob/main/extensions/docker/docker_test.go) cover the settings, the mount plan with its covers and refusals, and the names.
 
 ## History
 
@@ -277,4 +310,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - **#162** gave each execution its own toolbelt socket and token directory, and **#163** the git `clone` mode and the refusal of worktree modes: the two prerequisites.
 - **#164** delivered B09: the contract, host-side merging and pinning, recovery's boundary proof, the srt provider, both executors, doctor and the isolation tests in CI.
 - **#173** gave a sandboxed claude-code binding a config directory of its own, refused one that would share the operator's `~/.claude`, and denied the operator's claude config to its sandbox, since a user-level hook planted there would run in every host-side claude session.
-- **#171** proposed the container contract, and **#176** spiked it. **#177** added the contract, its host-side lifecycle and the shared path checks, tested against a fake provider.
+- **#171** proposed the container contract, and **#176** spiked it. **#177** added the contract, its host-side lifecycle and the shared path checks, tested against a fake provider. **#178** added the Docker provider, the `container run` helper, the doctor checks and the `container` CI job.
