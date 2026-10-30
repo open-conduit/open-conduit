@@ -1,0 +1,78 @@
+OPEN_CONDUIT_CONTAINER_TESTS=1 go test -count=1 -v -timeout 20m -run 'TestDocker' ./integration/ ./extensions/docker/...
+=== RUN   TestDockerGateway
+--- PASS: TestDockerGateway (13.41s)
+=== RUN   TestDockerShell
+--- PASS: TestDockerShell (4.26s)
+=== RUN   TestDockerIsolation
+--- PASS: TestDockerIsolation (4.71s)
+=== RUN   TestDockerFailClosed
+=== RUN   TestDockerFailClosed/write_outside_the_grant
+=== RUN   TestDockerFailClosed/read_outside_the_grant
+=== RUN   TestDockerFailClosed/grant_reaching_the_state
+=== RUN   TestDockerFailClosed/a_host_outside_network_allow
+=== RUN   TestDockerFailClosed/a_socket
+=== RUN   TestDockerFailClosed/unreachable_context
+=== RUN   TestDockerFailClosed/unpinned_image
+=== RUN   TestDockerFailClosed/no_gateway_image
+=== RUN   TestDockerFailClosed/symlinked_git_config
+=== RUN   TestDockerFailClosed/missing_git_info
+=== RUN   TestDockerFailClosed/a_second_container
+--- PASS: TestDockerFailClosed (4.22s)
+    --- PASS: TestDockerFailClosed/write_outside_the_grant (0.03s)
+    --- PASS: TestDockerFailClosed/read_outside_the_grant (0.03s)
+    --- PASS: TestDockerFailClosed/grant_reaching_the_state (0.03s)
+    --- PASS: TestDockerFailClosed/a_host_outside_network_allow (0.03s)
+    --- PASS: TestDockerFailClosed/a_socket (0.03s)
+    --- PASS: TestDockerFailClosed/unreachable_context (0.12s)
+    --- PASS: TestDockerFailClosed/unpinned_image (0.03s)
+    --- PASS: TestDockerFailClosed/no_gateway_image (0.10s)
+    --- PASS: TestDockerFailClosed/symlinked_git_config (0.09s)
+    --- PASS: TestDockerFailClosed/missing_git_info (0.09s)
+    --- PASS: TestDockerFailClosed/a_second_container (2.92s)
+=== RUN   TestDockerProcessControl
+=== RUN   TestDockerProcessControl/exit_code_and_stdin
+=== RUN   TestDockerProcessControl/inject_and_interrupt
+=== RUN   TestDockerProcessControl/unrequested_term
+=== RUN   TestDockerProcessControl/stop
+--- PASS: TestDockerProcessControl (13.74s)
+    --- PASS: TestDockerProcessControl/exit_code_and_stdin (3.38s)
+    --- PASS: TestDockerProcessControl/inject_and_interrupt (3.57s)
+    --- PASS: TestDockerProcessControl/unrequested_term (3.35s)
+    --- PASS: TestDockerProcessControl/stop (3.43s)
+=== RUN   TestDockerRecover
+=== RUN   TestDockerRecover/wrapper_alive
+=== RUN   TestDockerRecover/wrapper_dead_container_exited
+=== RUN   TestDockerRecover/wrapper_dead_container_running
+=== RUN   TestDockerRecover/container_gone
+=== RUN   TestDockerRecover/another_daemon
+=== RUN   TestDockerRecover/daemon_unreachable
+--- PASS: TestDockerRecover (23.61s)
+    --- PASS: TestDockerRecover/wrapper_alive (3.50s)
+    --- PASS: TestDockerRecover/wrapper_dead_container_exited (4.35s)
+    --- PASS: TestDockerRecover/wrapper_dead_container_running (5.65s)
+    --- PASS: TestDockerRecover/container_gone (3.38s)
+    --- PASS: TestDockerRecover/another_daemon (3.39s)
+    --- PASS: TestDockerRecover/daemon_unreachable (3.34s)
+=== RUN   TestDockerRemoveAndReconcile
+--- PASS: TestDockerRemoveAndReconcile (6.06s)
+=== RUN   TestDockerHealth
+--- PASS: TestDockerHealth (2.08s)
+PASS
+ok  	github.com/open-conduit/open-conduit/integration	72.824s
+=== RUN   TestDockerConfig
+--- PASS: TestDockerConfig (0.00s)
+=== RUN   TestDockerRefsAndMounts
+--- PASS: TestDockerRefsAndMounts (0.00s)
+=== RUN   TestDockerMountsCoverReadOnlyAndDenied
+--- PASS: TestDockerMountsCoverReadOnlyAndDenied (0.01s)
+=== RUN   TestDockerNamesAreHostScoped
+--- PASS: TestDockerNamesAreHostScoped (0.00s)
+=== RUN   TestDockerContainerEnv
+--- PASS: TestDockerContainerEnv (0.00s)
+=== RUN   TestDockerPlanNeedsAGateway
+--- PASS: TestDockerPlanNeedsAGateway (0.00s)
+PASS
+ok  	github.com/open-conduit/open-conduit/extensions/docker	0.223s
+testing: warning: no tests to run
+PASS
+ok  	github.com/open-conduit/open-conduit/extensions/docker/gateway	0.219s [no tests to run]
