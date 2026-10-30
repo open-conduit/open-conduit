@@ -10,10 +10,12 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/docker"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
@@ -24,18 +26,91 @@ import (
 const containerStopGrace = 10 * time.Second
 
 func containerRegistry(r *config.Registry) {
-	// No container provider ships yet: the Docker provider comes next.
-	r.Containers = map[string]func(json.RawMessage) error{}
+	r.Containers = map[string]func(json.RawMessage) error{docker.Type: docker.ValidateConfig}
 }
 
 // containerState is the host side of the container providers.
 type containerState struct {
 	providers map[string]extension.ContainerProvider
+	docker    *docker.Provider
 	last      time.Time
 }
 
 func (d *daemon) openContainers() {
-	d.containers.providers = map[string]extension.ContainerProvider{}
+	self, _ := os.Executable()
+	d.containers.docker = docker.New(docker.Options{Helper: self, Host: d.containerHost(), Contexts: func() []string {
+		var out []string
+		for _, b := range d.dockerBindings() {
+			out = append(out, b.context)
+		}
+		return out
+	}})
+	d.containers.providers = map[string]extension.ContainerProvider{docker.Type: d.containers.docker}
+}
+
+// dockerBinding is a binding that runs in a Docker container: its name,
+// context and image.
+type dockerBinding struct{ name, context, image string }
+
+// dockerBindings are the enabled scopes' bindings that declare a docker
+// container, in config order.
+func (d *daemon) dockerBindings() []dockerBinding {
+	snapshot, _ := d.configs.Current()
+	if snapshot == nil {
+		return nil
+	}
+	var out []dockerBinding
+	for _, id := range snapshot.Order {
+		scope := snapshot.Scopes[id]
+		if scope == nil || !scope.Enabled {
+			continue
+		}
+		for _, b := range scope.Bindings {
+			if b.Container == nil || b.Container.Provider != docker.Type {
+				continue
+			}
+			if cfg, s, err := docker.ParseConfig(b.Container.Config); err == nil {
+				out = append(out, dockerBinding{string(id) + "/" + b.Name, s.Context, cfg.Image})
+			}
+		}
+	}
+	return out
+}
+
+// containerCheck is doctor's view of the Docker provider for each context
+// and image the config uses: the daemon reachable, and its ID; Engine 28
+// or later; and a file written under --user into the workspace root owned
+// by the operator on the host. Any failure blocks the provider.
+func (d *daemon) containerCheck(ctx context.Context) runtime.Check {
+	check := runtime.Check{Name: "container"}
+	bindings := d.dockerBindings()
+	if len(bindings) == 0 {
+		check.Status, check.Code, check.Detail = runtime.CheckInfo, "not_configured", "no binding declares a container"
+		return check
+	}
+	check.Status, check.Code = runtime.CheckOK, "ok"
+	root := filepath.Join(d.o.StateDir, "resources", "git", "workspaces")
+	seen := map[string]bool{}
+	var details, names []string
+	for _, b := range bindings {
+		names = append(names, b.name)
+		if seen[b.context+"\x00"+b.image] {
+			continue
+		}
+		seen[b.context+"\x00"+b.image] = true
+		h := d.containers.docker.Health(ctx, b.context, b.image, root, false)
+		check.Items = append(check.Items, h.Items...)
+		if h.Status != "ok" && check.Status == runtime.CheckOK {
+			check.Status, check.Code = runtime.CheckFail, h.Code
+		}
+		details = append(details, h.Detail)
+	}
+	check.Detail = strings.Join(details, "; ")
+	if check.Status == runtime.CheckFail {
+		check.Detail += "; container bindings run nothing until this is fixed"
+	}
+	check.Items = append(check.Items, "in containers: "+strings.Join(names, ", "))
+	return check
 }
 
 // containerHost is this daemon's ContainerLabelHost value: a hash of its

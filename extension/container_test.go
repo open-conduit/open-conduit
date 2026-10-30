@@ -200,6 +200,11 @@ func TestContainerLaunchRefuses(t *testing.T) {
 		{"run_dir_outside_the_executor", containerConfig(testImage, ""), func(h *containerHost, _ *fakeContainers, l *extension.SandboxLaunch, _ *extension.SandboxNeeds) {
 			l.RunDir = filepath.Join(h.state, "runs", "k")
 		}, extension.ErrSandboxDenied},
+		// A mount over a symlink would hold its target, not the link.
+		{"read_only_need_is_a_symlink", containerConfig(testImage, ""), func(h *containerHost, _ *fakeContainers, _ *extension.SandboxLaunch, n *extension.SandboxNeeds) {
+			_ = os.Symlink(filepath.Join(h.ws, "elsewhere"), filepath.Join(h.ws, "config"))
+			n.ReadOnly = append(n.ReadOnly, filepath.Join(h.ws, "config"))
+		}, extension.ErrSandboxUnavailable},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

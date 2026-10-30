@@ -125,6 +125,31 @@ jobs:
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: go test -count=1 -v -run 'TestSandbox|TestSweepFindsSandboxedChildren|TestHealth' ./integration/ ./extensions/git/ ./extensions/srt/ ./extension/
         if: env.RUN == 'true'
+  # Real isolation tests for the Docker container provider on the runner's
+  # own Docker Engine: reads and writes, the network, every fail-closed
+  # case, Stop, Interrupt, Inject and each Recover path, with a stand-in for
+  # the gateway. macOS is checked by a local make container-test run, not
+  # here. OPEN_CONDUIT_CONTAINER_TESTS makes a missing Docker fail the tests
+  # instead of skipping them.
+  container:
+    needs: changes
+    runs-on: ubuntu-24.04
+    env:
+      RUN: ${{ needs.changes.outputs.code }}
+    steps:
+      - if: env.RUN != 'true'
+        run: echo "No code changed; nothing to check."
+      - uses: actions/checkout@v7
+        if: env.RUN == 'true'
+      - uses: actions/setup-go@v7
+        if: env.RUN == 'true'
+        with:
+          go-version: stable
+          cache: true
+      - run: docker version
+        if: env.RUN == 'true'
+      - run: make container-test
+        if: env.RUN == 'true'
   # A docs-only change still has its examples checked: the configs validate,
   # and the commands and make targets they show exist. A change with code
   # gets this from make check above.

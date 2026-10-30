@@ -10,6 +10,7 @@ import (
 	"syscall"
 
 	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/extensions/docker"
 	"github.com/open-conduit/open-conduit/internal/bootstrap"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
@@ -21,6 +22,10 @@ var version = "dev"
 var commit = "unknown"
 
 func main() {
+	// The hidden helper an executor's wrapper runs to start a container.
+	if len(os.Args) > 2 && os.Args[1] == "container" && os.Args[2] == "run" {
+		os.Exit(docker.RunHelper(os.Args[3:], docker.HelperOptions{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}))
+	}
 	cwd, _ := os.Getwd()
 	env := cli.Env{Getenv: os.Getenv, Cwd: cwd, Serve: serve, ValidateConfig: validate, Setup: setup, Setups: bootstrap.Setups(), Adapters: bootstrap.Adapters}
 	env.TUI = func(c *client.Client) error { return tui.Run(tui.Operator(c), os.Stdin, os.Stdout) }

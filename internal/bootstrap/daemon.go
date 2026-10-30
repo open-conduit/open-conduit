@@ -570,7 +570,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck}, d.inprocChecks(false)...), d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.capacityCheck, d.scheduleCheck, d.extensionCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck}, d.inprocChecks(false)...), d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.scheduleCheck, d.extensionCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency
