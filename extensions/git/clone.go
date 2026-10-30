@@ -13,11 +13,12 @@ import (
 // carried into a clone so its commits are made as the checkout's would be.
 var identityKeys = []string{"user.name", "user.email", "user.signingkey", "gpg.format", "commit.gpgsign", "tag.gpgsign"}
 
-// createClone makes a clone workspace: a plain local clone of the checkout,
-// so its objects are hardlinked when on the same filesystem and copied when
-// not, and never borrowed through alternates. Each clone holds its own links
-// to the object files, so a gc or repack in the checkout can't take them
-// away. Its remote is the checkout's configured remote (pushes go there, with
+// createClone makes a clone workspace: a local clone of the checkout with its
+// objects copied, never hardlinked (a hardlink is the checkout's own file,
+// which a process that can write the clone could rewrite) or borrowed
+// through alternates. Nothing in it is the checkout's, so a gc or repack in
+// the checkout can't take an object away, and nothing written in it reaches
+// the checkout. Its remote is the checkout's configured remote (pushes go there, with
 // the operator's own credential helpers), its remote-tracking branches are
 // the checkout's, and it is on the Work's branch.
 func (p *Provider) createClone(ctx context.Context, cfg Config, checkout string, l *lease, log io.Writer) error {
@@ -57,7 +58,7 @@ func (p *Provider) createClone(ctx context.Context, cfg Config, checkout string,
 	if err := p.roomFor(ctx, cfg, l, start); err != nil {
 		return err
 	}
-	if _, err := p.git(ctx, checkout, "clone", "-q", "--no-checkout", "--origin", cfg.Remote, "--", checkout, l.Path); err != nil {
+	if _, err := p.git(ctx, checkout, "clone", "-q", "--no-hardlinks", "--no-checkout", "--origin", cfg.Remote, "--", checkout, l.Path); err != nil {
 		return err
 	}
 	// The clone's remote names the checkout; point it at the real remote and
@@ -151,16 +152,8 @@ func (p *Provider) saveBranch(ctx context.Context, l lease) error {
 }
 
 // cloneObjects is what a clone of the checkout adds to the workspace's disk
-// besides its files: nothing much when its objects can be hardlinked (the
-// same filesystem), and all of them when they must be copied.
-func (p *Provider) cloneObjects(ctx context.Context, checkout, path string) uint64 {
-	common, err := p.git(ctx, checkout, "rev-parse", "--path-format=absolute", "--git-common-dir")
-	if err != nil {
-		return 0
-	}
-	if p.sameDisk(filepath.Join(common, "objects"), existingParent(path)) {
-		return 0
-	}
+// besides its files: a copy of all the checkout's objects.
+func (p *Provider) cloneObjects(ctx context.Context, checkout string) uint64 {
 	out, err := p.git(ctx, checkout, "count-objects", "-v")
 	if err != nil {
 		return 0

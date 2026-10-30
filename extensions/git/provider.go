@@ -66,9 +66,6 @@ type Provider struct {
 	o     Options
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
-	// sameDisk reports whether two paths are on one filesystem, so a clone's
-	// objects can be hardlinked (tests replace it).
-	sameDisk func(a, b string) bool
 }
 
 var refName = regexp.MustCompile(`^(shared|work|fresh|clone)-[0-9a-f]{32}$`)
@@ -98,7 +95,7 @@ func New(o Options) (*Provider, error) {
 	if o.DiskSpace == nil {
 		o.DiskSpace = diskSpace
 	}
-	return &Provider{o: o, locks: map[string]*sync.Mutex{}, sameDisk: sameDevice}, nil
+	return &Provider{o: o, locks: map[string]*sync.Mutex{}}, nil
 }
 
 // lock serializes work on one key (a lease or a repository).

@@ -54,7 +54,7 @@ func (e *NoSpaceError) Unwrap() error { return extension.ErrResourceExhausted }
 const maxSpareNames = 10
 
 // roomFor checks the workspace's disk has room for a checkout of start (and,
-// for a clone, the objects it can't hardlink), keeping the configured share
+// for a clone, the objects it copies), keeping the configured share
 // free. A disk it can't read doesn't stop it, as
 // in v1.
 func (p *Provider) roomFor(ctx context.Context, cfg Config, l *lease, start string) error {
@@ -67,7 +67,7 @@ func (p *Provider) roomFor(ctx context.Context, cfg Config, l *lease, start stri
 	}
 	need := p.checkoutSize(ctx, l.Checkout, start)
 	if l.Mode == ModeClone {
-		need += p.cloneObjects(ctx, l.Checkout, l.Path)
+		need += p.cloneObjects(ctx, l.Checkout)
 	}
 	keep := min(uint64(float64(total)*(100-cfg.DiskFullPercent)/100), cfg.DiskReserveBytes)
 	if free >= need && free-need >= keep {

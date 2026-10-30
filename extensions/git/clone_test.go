@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -164,8 +165,8 @@ func TestCloneSurvivesTheSourceBeingGarbageCollected(t *testing.T) {
 	}
 	src, err1 := os.Stat(filepath.Join(f.root, loose))
 	dst, err2 := os.Stat(filepath.Join(r.Dir, loose))
-	if err1 != nil || err2 != nil || !os.SameFile(src, dst) {
-		t.Fatalf("on one filesystem the clone's objects should be hardlinks of the checkout's: %v %v", err1, err2)
+	if err1 != nil || err2 != nil || os.SameFile(src, dst) {
+		t.Fatalf("the clone's objects must be copies, not hardlinks of the checkout's: %v %v", err1, err2)
 	}
 
 	runGit(t, f.root, "branch", "-q", "-D", "agent/issue-9")
@@ -261,9 +262,8 @@ func TestCloneRetentionSweepAndTakeOver(t *testing.T) {
 	}
 }
 
-// A clone is sized for the disk check: on the checkout's filesystem its
-// objects are hardlinks and count for nothing; on another they are copied
-// and count in full.
+// A clone is sized for the disk check as its files plus a copy of all the
+// checkout's objects.
 func TestCloneDiskRefusal(t *testing.T) {
 	f := newFixture(t)
 	ctx := context.Background()
@@ -271,34 +271,124 @@ func TestCloneDiskRefusal(t *testing.T) {
 	runGit(t, f.root, "add", ".")
 	runGit(t, f.root, "commit", "-qm", "big")
 	runGit(t, f.root, "push", "-q", "origin", "main")
-	files := f.provider.checkoutSize(ctx, f.root, "origin/main")
-	objects := func() uint64 {
-		f.provider.sameDisk = func(string, string) bool { return false }
-		defer func() { f.provider.sameDisk = sameDevice }()
-		return f.provider.cloneObjects(ctx, f.root, filepath.Join(f.dir, "state", "workspaces", "x"))
-	}()
-	if got := f.provider.cloneObjects(ctx, f.root, filepath.Join(f.dir, "state", "workspaces", "x")); got != 0 || objects == 0 {
-		t.Fatalf("objects counted %d hardlinked and %d copied", got, objects)
+	files, objects := f.provider.checkoutSize(ctx, f.root, "origin/main"), f.provider.cloneObjects(ctx, f.root)
+	if objects == 0 {
+		t.Fatal("the clone's objects were not counted")
 	}
-	// Room for the files and what is kept free, but not for copied objects.
 	keep := uint64(1 << 20)
-	f.setDisk(keep*10, keep+files+objects/2)
 	c := cfg(map[string]any{"mode": "clone"})
-	r, err := f.acquire(owner("same", "x1"), c, "", nil)
+	f.setDisk(keep*10, keep+files+objects)
+	r, err := f.acquire(owner("room", "x1"), c, "", nil)
 	if err != nil {
-		t.Fatalf("hardlinked clone refused: %v", err)
+		t.Fatalf("a clone with room refused: %v", err)
 	}
-	f.provider.sameDisk = func(string, string) bool { return false }
-	_, err = f.acquire(owner("other", "x2"), c, "", nil)
+	// Room for the files and what is kept free, but not for the objects.
+	f.setDisk(keep*10, keep+files+objects/2)
+	_, err = f.acquire(owner("full", "x2"), c, "", nil)
 	var full *NoSpaceError
 	if !errors.As(err, &full) || !errors.Is(err, extension.ErrResourceExhausted) || full.Need != files+objects {
-		t.Fatalf("copied clone: %v", err)
+		t.Fatalf("a clone without room: %v", err)
 	}
-	if exists(filepath.Join(f.dir, "state", "workspaces", refFor(ModeClone, owner("other", "x2")))) || exists(f.provider.leasePath(refFor(ModeClone, owner("other", "x2")))) {
+	if ref := refFor(ModeClone, owner("full", "x2")); exists(filepath.Join(f.dir, "state", "workspaces", ref)) || exists(f.provider.leasePath(ref)) {
 		t.Fatal("a refused clone left a workspace or a lease")
 	}
-	if again, err := f.acquire(owner("same", "x3"), c, "", nil); err != nil || again.Dir != r.Dir {
+	if again, err := f.acquire(owner("room", "x3"), c, "", nil); err != nil || again.Dir != r.Dir {
 		t.Fatalf("reuse needs no room: %v", err)
+	}
+}
+
+// The provider never runs a program the agent put in its clone's config: an
+// fsmonitor, hooks, or a filter (configured directly or through an include)
+// with the files to trigger it. Re-acquiring, the sweep and removal (with
+// its branch save) all read the clone, and none of them runs one.
+func TestCloneConfigNeverRunsOnTheHost(t *testing.T) {
+	f := newFixture(t)
+	c := cfg(map[string]any{"mode": "clone", "retain_failed_seconds": 3600})
+	r, err := f.acquire(owner("hostile", "x1"), c, "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Before the config turns hostile: a filtered file and an unpushed commit.
+	write(t, r.Dir, ".gitattributes", "*.txt filter=evil\n*.md filter=inc\n")
+	write(t, r.Dir, "notes.md", "n")
+	runGit(t, r.Dir, "add", ".")
+	runGit(t, r.Dir, "commit", "-qm", "attributes")
+
+	markers := filepath.Join(f.dir, "markers")
+	if err := os.MkdirAll(markers, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	touch := func(name string) string { return "touch " + filepath.Join(markers, name) }
+	hooks := filepath.Join(r.Dir, "hooks")
+	for _, h := range []string{"reference-transaction", "post-index-change", "pre-auto-gc", "post-checkout", "post-merge"} {
+		write(t, hooks, h, "#!/bin/sh\n"+touch(h)+"\n")
+		if err := os.Chmod(filepath.Join(hooks, h), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write(t, r.Dir, "evil.inc", "[filter \"inc\"]\n\tclean = "+touch("include-clean")+"; cat\n\tprocess = "+touch("include-process")+"\n")
+	conf := filepath.Join(r.Dir, ".git", "config")
+	for _, kv := range [][2]string{
+		{"core.fsmonitor", touch("fsmonitor") + "; false"},
+		{"core.hooksPath", hooks},
+		{"filter.evil.clean", touch("filter-clean") + "; cat"},
+		{"filter.evil.process", touch("filter-process")},
+		{"filter.evil.required", "true"},
+		{"include.path", filepath.Join(r.Dir, "evil.inc")},
+		{"gc.auto", "1"},
+	} {
+		runGit(t, f.dir, "config", "--file", conf, kv[0], kv[1])
+	}
+	ran := func() []string {
+		entries, _ := os.ReadDir(markers)
+		var names []string
+		for _, e := range entries {
+			names = append(names, e.Name())
+		}
+		return names
+	}
+	// Edits that make status read file contents through the filters.
+	dirty := func() {
+		write(t, r.Dir, "a.txt", "edited")
+		write(t, r.Dir, "notes.md", "edited")
+	}
+	dirty()
+	// The config is live: a plain git status in the clone runs it.
+	cmd := exec.Command("git", "-C", r.Dir, "status", "--porcelain")
+	_ = cmd.Run()
+	if len(ran()) == 0 {
+		t.Fatal("fixture: the hostile config ran nothing under plain git")
+	}
+	if err := os.RemoveAll(markers); err != nil || os.MkdirAll(markers, 0o755) != nil {
+		t.Fatal(err)
+	}
+	dirty()
+
+	again, err := f.acquire(owner("hostile", "x2"), c, "", nil)
+	if got := ran(); len(got) > 0 {
+		t.Fatalf("re-acquire ran the clone's config: %v", got)
+	}
+	if err != nil || !syncOf(t, again).Reused || syncOf(t, again).Dirty == 0 {
+		t.Fatalf("re-acquire: %v %+v", err, syncOf(t, again))
+	}
+	f.set("x2", extension.ResourceOwnerStatus{Known: true, ExecutionDone: true, WorkDone: true})
+	f.reconcile()
+	if report := f.sweep(); !strings.Contains(spares(report.Kept), r.Ref+" "+spareFinished+": "+keptUncommitted) {
+		t.Fatalf("sweep: %+v", report)
+	}
+	if got := ran(); len(got) > 0 {
+		t.Fatalf("the sweep ran the clone's config: %v", got)
+	}
+	head := runGit(t, f.dir, "--git-dir", filepath.Join(r.Dir, ".git"), "rev-parse", "HEAD")
+	f.advance(2 * time.Hour)
+	if report := f.reconcile(); report.Removed != 1 || exists(r.Dir) {
+		t.Fatalf("removal: %+v", report)
+	}
+	if got := ran(); len(got) > 0 {
+		t.Fatalf("removal ran the clone's config: %v", got)
+	}
+	if runGit(t, f.root, "rev-parse", "refs/heads/agent/work-hostile") != head {
+		t.Fatal("the unpushed branch was not saved")
 	}
 }
 
