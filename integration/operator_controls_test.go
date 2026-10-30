@@ -342,3 +342,88 @@ func TestManagementAttachRefusesSandboxedWork(t *testing.T) {
 		t.Fatalf("executor asked to attach %v, want only the unsandboxed Work", asked)
 	}
 }
+
+// pinningContainer is a container broker that pins each launch.
+type pinningContainer struct {
+	pin func(extension.ContainerPin) error
+}
+
+func (b pinningContainer) Launch(_ context.Context, _ extension.SandboxNeeds, l extension.SandboxLaunch) (extension.SandboxPlan, error) {
+	return extension.SandboxPlan{Argv: l.Argv, Signals: extension.SandboxTerm}, b.pin(extension.ContainerPin{Provider: "fake", Digest: "sha256:c", Image: "img@sha256:1", Daemon: "d", ID: "ctx/c1"})
+}
+func (pinningContainer) Adopt(context.Context, bool) (extension.ContainerExit, error) {
+	return extension.ContainerExit{}, nil
+}
+
+// TestManagementAttachInContainer: Work that ran in a container attaches
+// in one. Its executor may only return `container attach` (a host command
+// is refused as attach_sandboxed), which the CLI runs in-process: the
+// daemon makes the attach container for the latest attempt, the CLI starts
+// it, and removes it on exit. Nothing the agent planted in the workspace
+// runs on the host.
+func TestManagementAttachInContainer(t *testing.T) {
+	h := newManagementHarness(t)
+	ctx := context.Background()
+	var created struct {
+		Work client.Work `json:"work"`
+	}
+	h.mustCLI(&created, "work", "create", "--scope-id", "ops", "--kind", "fixture.work", "--binding", "run", "--key", "create-contained")
+	id := created.Work.ID
+	h.container = func(_ context.Context, st runtime.AttemptState, r extension.ResourceBroker, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
+		return runtime.ContainerBinding{Broker: pinningContainer{pin}, Resources: r, Home: filepath.Join(h.state, "homes", "w")}, nil
+	}
+	hook := filepath.Join(h.state, "hook-ran")
+	h.executor.onRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+		if r.Context.Container == nil || r.Context.ContainerHome == "" {
+			return nil, errors.New("no container")
+		}
+		if _, err := r.Context.Container.Launch(ctx, extension.SandboxNeeds{}, extension.SandboxLaunch{Argv: []string{"claude"}}); err != nil {
+			return nil, err
+		}
+		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+			return nil, err
+		}
+		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+	}
+	a, err := h.scheduler.Start(ctx, domain.ID(id))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.scheduler.Complete(ctx, a.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff}}); err != nil {
+		t.Fatal(err)
+	}
+	var w client.Work
+	h.mustCLI(&w, "work", "get", id)
+	h.mustCLI(nil, "work", "hold", id, "--revision", w.Revision, "--key", "hold-contained")
+
+	h.attach = func(context.Context, string, domain.Work) (management.AttachSpec, error) {
+		return management.AttachSpec{Argv: []string{"sh", "-c", "touch " + hook}}, nil
+	}
+	if _, errOut, code := h.cli("work", "attach", id, "--keep-held"); code != 1 || !strings.Contains(errOut, "attach_sandboxed") {
+		t.Fatalf("a host attach for contained Work: %d %s", code, errOut)
+	}
+	h.attach = func(_ context.Context, _ string, w domain.Work) (management.AttachSpec, error) {
+		return management.AttachSpec{Argv: []string{"open-conduit", "container", "attach", string(w.ID)}}, nil
+	}
+	var attached []domain.ID
+	var detached []string
+	h.containerAttach = func(_ context.Context, executor string, w domain.Work, x domain.ID) (management.ContainerAttachment, error) {
+		attached = append(attached, x)
+		return management.ContainerAttachment{Ref: "ctx/attach-1", Argv: []string{"true"}}, nil
+	}
+	h.containerDetach = func(_ context.Context, w domain.Work, ref string) error {
+		detached = append(detached, ref)
+		return nil
+	}
+	h.mustCLI(nil, "work", "attach", id, "--keep-held")
+	if len(attached) != 1 || attached[0] != a.Request.Execution.ID || len(detached) != 1 || detached[0] != "ctx/attach-1" {
+		t.Fatalf("attached %v, detached %v", attached, detached)
+	}
+	h.mustCLI(nil, "container", "attach", id)
+	if len(attached) != 2 || len(detached) != 2 {
+		t.Fatalf("container attach: attached %v, detached %v", attached, detached)
+	}
+	if _, err := os.Stat(hook); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("a host command ran: %v", err)
+	}
+}

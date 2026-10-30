@@ -500,3 +500,66 @@ func TestHostAllowed(t *testing.T) {
 		}
 	}
 }
+
+// TestContainerWorkHome: the Work's home is granted read-write and is an
+// exception to the protected set for that launch only: it reaches the
+// provider's paths, a need inside it passes, and the same need without it
+// is refused as inside Open Conduit's state.
+func TestContainerWorkHome(t *testing.T) {
+	h := newContainerHost(t)
+	home := filepath.Join(h.state, "homes", "abc")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	needs := h.needs()
+	needs.Write = append(needs.Write, home, filepath.Join(home, "projects"))
+	bind := func(f *fakeContainers, workHome string) *extension.BoundContainer {
+		return extension.BindContainer(extension.ContainerBinding{Provider: f, Owner: extension.ResourceOwner{ScopeID: "s", WorkID: "w", ExecutionID: "x"},
+			Config: containerConfig(testImage, ""), Host: "host-a", Segment: 1, Protected: []string{h.state}, Shared: []string{filepath.Dir(h.toolbelt)},
+			RunRoot: h.runRoot, Toolbelt: h.toolbelt, Records: h.records, Home: h.home, WorkHome: workHome, Now: func() time.Time { return h.now },
+			Pin: func(extension.ContainerPin) error { return nil }})
+	}
+	f := newFakeContainers()
+	if _, err := bind(f, home).Launch(context.Background(), needs, h.launch()); err != nil {
+		t.Fatalf("a need in the Work's home: %v", err)
+	}
+	if f.planned.policy.Paths.Home != home {
+		t.Errorf("the provider's home is %q, want %q", f.planned.policy.Paths.Home, home)
+	}
+	if _, err := bind(newFakeContainers(), "").Launch(context.Background(), needs, h.launch()); !errors.Is(err, extension.ErrSandboxDenied) {
+		t.Errorf("the home without being the Work's: %v, want sandbox_denied", err)
+	}
+	// A home holding what Open Conduit protects is refused.
+	if _, err := bind(newFakeContainers(), h.state).Launch(context.Background(), h.needs(), h.launch()); !errors.Is(err, extension.ErrSandboxDenied) {
+		t.Errorf("a home over the state directory: %v, want sandbox_denied", err)
+	}
+}
+
+// TestContainerAttachLabels: an attach container is labelled as one; a
+// segment's launch removes a running one rather than refusing, and
+// reconcile leaves a running one beside its finished execution.
+func TestContainerAttachLabels(t *testing.T) {
+	h := newContainerHost(t)
+	f := newFakeContainers()
+	b := extension.BindContainer(extension.ContainerBinding{Provider: f, Owner: extension.ResourceOwner{ScopeID: "s", WorkID: "w", ExecutionID: "x"},
+		Config: containerConfig(testImage, ""), Host: "host-a", Attach: true, Protected: []string{h.state}, Shared: []string{filepath.Dir(h.toolbelt)},
+		RunRoot: h.runRoot, Records: h.records, Home: h.home, Now: func() time.Time { return h.now },
+		Pin: func(p extension.ContainerPin) error { h.pins = append(h.pins, p); return nil }})
+	if _, err := b.Launch(context.Background(), extension.SandboxNeeds{Write: []string{h.ws}}, h.launch()); err != nil {
+		t.Fatal(err)
+	}
+	if len(f.created) != 1 || f.created[0][extension.ContainerLabelSegment] != extension.ContainerSegmentAttach || len(h.pins) != 1 {
+		t.Fatalf("created %v, pins %v", f.created, h.pins)
+	}
+	f.start("c1", h.now.Add(time.Second))
+	err := extension.ReconcileContainers(context.Background(), f, "host-a", func([]domain.ID) (map[domain.ID]bool, error) { return map[domain.ID]bool{}, nil })
+	if err != nil || len(f.removed) != 0 {
+		t.Fatalf("reconcile removed a running attach: %v, %v", f.removed, err)
+	}
+	if _, err := h.bind(f, containerConfig(testImage, ""), nil).Launch(context.Background(), h.needs(), h.launch()); err != nil {
+		t.Fatalf("a segment beside a running attach: %v", err)
+	}
+	if !contains(f.removed, "c1") {
+		t.Errorf("the attach container was not removed: %v", f.removed)
+	}
+}

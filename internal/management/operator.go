@@ -141,7 +141,10 @@ func (s *Server) releaseWork(c *call) (int, any, error) {
 
 // attachWork returns the attach command for held Work with no live attempt.
 // The hold keeps incoming input queued while the operator is in the session;
-// releasing it lets the next attempt continue that session.
+// releasing it lets the next attempt continue that session. Work that ran in
+// a process sandbox is refused; Work that ran in a container attaches in one
+// (`open-conduit container attach`), which is the only command its
+// executor may return.
 func (s *Server) attachWork(c *call) (int, any, error) {
 	var in struct{}
 	if err := c.decode(&in); err != nil {
@@ -150,24 +153,59 @@ func (s *Server) attachWork(c *call) (int, any, error) {
 	if s.o.Attach == nil {
 		return 0, nil, ErrAttachUnsupported
 	}
-	var w domain.Work
-	var executor string
+	t, err := s.attachTarget(c)
+	if err != nil {
+		return 0, nil, err
+	}
+	if t.sandboxed {
+		return 0, nil, ErrAttachSandboxed
+	}
+	spec, err := s.o.Attach(c.ctx, t.executor, t.work)
+	if err != nil {
+		return 0, nil, err
+	}
+	if len(spec.Argv) == 0 {
+		return 0, nil, ErrNothingToAttach
+	}
+	if t.contained && !ContainerAttachCommand(spec.Argv) {
+		return 0, nil, ErrAttachSandboxed
+	}
+	return 200, map[string]any{"work_id": string(t.work.ID), "executor": t.executor, "argv": spec.Argv, "dir": spec.Dir}, nil
+}
+
+// ContainerAttachCommand reports whether argv is `<open-conduit> container
+// attach <work>`, the attach of Work that ran in a container.
+func ContainerAttachCommand(argv []string) bool {
+	return len(argv) == 4 && argv[1] == "container" && argv[2] == "attach"
+}
+
+// attachTarget is held Work with no live attempt, its latest attempt's
+// execution and executor, and whether any segment ran in a process sandbox
+// or a container.
+type attachTarget struct {
+	work                 domain.Work
+	executor             string
+	execution            domain.ID
+	sandboxed, contained bool
+}
+
+func (s *Server) attachTarget(c *call) (attachTarget, error) {
+	var t attachTarget
 	err := s.read(c.ctx, func(tx storage.Tx) error {
 		var e error
-		if w, e = tx.Work(domain.ID(c.params[0])); e != nil {
+		if t.work, e = tx.Work(domain.ID(c.params[0])); e != nil {
 			return e
 		}
-		if _, held, e := runtime.HoldInTx(tx, w.ID); e != nil {
+		if _, held, e := runtime.HoldInTx(tx, t.work.ID); e != nil {
 			return e
 		} else if !held {
 			return fail(409, "not_held", "hold the Work before attaching (open-conduit work attach does this)")
 		}
-		xs, e := tx.ListExecutions(w.ID)
+		xs, e := tx.ListExecutions(t.work.ID)
 		if e != nil {
 			return e
 		}
 		var latest uint32
-		sandboxed := false
 		for _, x := range xs {
 			if x.State == domain.ExecutionPending || x.State == domain.ExecutionRunning {
 				return fail(409, "attempt_running", "an attempt is running; wait for it or cancel it first")
@@ -176,44 +214,102 @@ func (s *Server) attachWork(c *call) (int, any, error) {
 			if er != nil && !errors.Is(er, storage.ErrNotFound) {
 				return er
 			}
-			sandboxed = sandboxed || ranSandboxed(st)
+			sandboxed, contained := ranConfined(st)
+			t.sandboxed, t.contained = t.sandboxed || sandboxed, t.contained || contained
 			if x.Attempt >= latest {
 				latest = x.Attempt
-				executor = st.Executor
+				t.executor, t.execution = st.Executor, x.ID
 			}
-		}
-		if sandboxed {
-			return ErrAttachSandboxed
 		}
 		return nil
 	})
-	if err != nil {
-		return 0, nil, err
+	if err == nil && t.executor == "" {
+		err = ErrNothingToAttach
 	}
-	if executor == "" {
-		return 0, nil, ErrNothingToAttach
-	}
-	spec, err := s.o.Attach(c.ctx, executor, w)
-	if err != nil {
-		return 0, nil, err
-	}
-	if len(spec.Argv) == 0 {
-		return 0, nil, ErrNothingToAttach
-	}
-	return 200, map[string]any{"work_id": string(w.ID), "executor": executor, "argv": spec.Argv, "dir": spec.Dir}, nil
+	return t, err
 }
 
-// ranSandboxed reports whether any segment of the attempt was launched in a
-// sandbox (B09) or a container. Its agent could then write the workspace's project config
-// (claude-code's .claude/settings.json hooks, .mcp.json servers), which an
-// attach would load on the host, outside the sandbox.
-func ranSandboxed(st runtime.AttemptState) bool {
+// ranConfined reports whether any segment of the attempt was launched in a
+// process sandbox (B09), and whether any was in a container. Its agent could
+// then write the workspace's project config (claude-code's
+// .claude/settings.json hooks, .mcp.json servers), which an attach on the
+// host would load outside the boundary.
+func ranConfined(st runtime.AttemptState) (sandboxed, contained bool) {
 	for _, g := range st.Segments {
-		if g.Sandbox != nil || g.Container != nil {
-			return true
-		}
+		sandboxed = sandboxed || g.Sandbox != nil
+		contained = contained || g.Container != nil
 	}
-	return false
+	return sandboxed, contained
+}
+
+// ContainerAttachment is an attach container made for an operator: its
+// reference, and the argv and environment that start it attached on their
+// terminal.
+type ContainerAttachment struct {
+	Ref  string   `json:"ref"`
+	Argv []string `json:"argv"`
+	Env  []string `json:"env,omitempty"`
+}
+
+// containerAttach makes the attach container for held Work with no live
+// attempt whose latest session ran in a container (what `open-conduit
+// container attach` runs).
+func (s *Server) containerAttach(c *call) (int, any, error) {
+	var in struct{}
+	if err := c.decode(&in); err != nil {
+		return 0, nil, err
+	}
+	if s.o.ContainerAttach == nil {
+		return 0, nil, ErrAttachUnsupported
+	}
+	t, err := s.attachTarget(c)
+	if err != nil {
+		return 0, nil, err
+	}
+	if t.sandboxed {
+		return 0, nil, ErrAttachSandboxed
+	}
+	if !t.contained {
+		return 0, nil, fail(409, "not_contained", "the Work did not run in a container; use open-conduit work attach")
+	}
+	a, err := s.o.ContainerAttach(c.ctx, t.executor, t.work, t.execution)
+	if errors.Is(err, extension.ErrSandboxUnavailable) || errors.Is(err, extension.ErrSandboxDenied) || errors.Is(err, extension.ErrContainerRunning) {
+		// What refused the container (a path, the daemon) is the operator's
+		// to fix; it names no secret.
+		return 0, nil, fail(422, "container_unavailable", err.Error())
+	} else if err != nil {
+		return 0, nil, err
+	}
+	return 200, a, nil
+}
+
+// containerDetach removes an attach container of the Work, with what was
+// made for it, once the operator's session ends.
+func (s *Server) containerDetach(c *call) (int, any, error) {
+	var in struct {
+		Ref string `json:"ref"`
+	}
+	if err := c.decode(&in); err != nil {
+		return 0, nil, err
+	}
+	if s.o.ContainerDetach == nil {
+		return 0, nil, ErrAttachUnsupported
+	}
+	if in.Ref == "" {
+		return 0, nil, fail(400, "invalid_request", "ref is required")
+	}
+	var w domain.Work
+	if err := s.read(c.ctx, func(tx storage.Tx) error {
+		var e error
+		w, e = tx.Work(domain.ID(c.params[0]))
+		return e
+	}); err != nil {
+		return 0, nil, err
+	}
+	if err := s.o.ContainerDetach(c.ctx, w, in.Ref); err != nil {
+		return 0, nil, err
+	}
+	return 200, map[string]any{"work_id": string(w.ID), "ref": in.Ref, "removed": true}, nil
 }
 
 func (s *Server) reconcileScope(c *call) (int, any, error) {

@@ -90,6 +90,10 @@ type Config struct {
 	// field in its context (for example one an operator picked when starting
 	// it). A Work that names none, or one not listed, uses Model.
 	Models []string `json:"models,omitempty"`
+	// HomeSeed is a directory (a settings.json, plugins) copied into a
+	// container binding's per-Work home on its first use. It is a copy,
+	// never a mount, and its .credentials.json is left out.
+	HomeSeed string `json:"home_seed,omitempty"`
 }
 
 var (
@@ -128,7 +132,7 @@ func ParseConfig(data []byte) (Config, error) {
 			return Config{}, configError("trailing data after config object")
 		}
 	}
-	strs := append(append([]string{c.Binary, c.Model, c.PermissionMode, c.Playbook, c.PluginDir, c.Args, c.StatusSchema, c.Branch, c.WorkspaceMode, c.Dir}, c.ExtraArgs...), c.Models...)
+	strs := append(append([]string{c.Binary, c.Model, c.PermissionMode, c.Playbook, c.PluginDir, c.Args, c.StatusSchema, c.Branch, c.WorkspaceMode, c.Dir, c.HomeSeed}, c.ExtraArgs...), c.Models...)
 	for _, s := range strs {
 		if strings.ContainsRune(s, 0) {
 			return Config{}, configError("strings must not contain NUL")
@@ -160,6 +164,9 @@ func ParseConfig(data []byte) (Config, error) {
 	}
 	if c.Dir != "" && (!filepath.IsAbs(c.Dir) || filepath.Clean(c.Dir) != c.Dir) {
 		return Config{}, configError("dir must be a clean absolute path")
+	}
+	if c.HomeSeed != "" && (!filepath.IsAbs(c.HomeSeed) || filepath.Clean(c.HomeSeed) != c.HomeSeed) {
+		return Config{}, configError("home_seed must be a clean absolute path")
 	}
 	if c.Args == "" {
 		c.Args = "{number}"

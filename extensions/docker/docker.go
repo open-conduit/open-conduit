@@ -198,7 +198,23 @@ type Plan struct {
 	Limits  extension.ContainerLimits `json:"limits"`
 	Network string                    `json:"network"`
 	Gateway Gateway                   `json:"gateway"`
+	// Secrets is the 0600 file in the run directory holding the launch's
+	// credentials, which the entry stub reads and removes; SecretKeys their
+	// names. Neither the plan nor the container's environment holds a value.
+	Secrets    string   `json:"secrets,omitempty"`
+	SecretKeys []string `json:"secret_keys,omitempty"`
+	// TTY is an operator's interactive attach: the container gets a
+	// terminal and is started attached by the docker CLI itself.
+	TTY bool `json:"tty,omitempty"`
 }
+
+// SecretsFile is the name of a launch's credentials file in its run
+// directory.
+const SecretsFile = ".open-conduit-secrets"
+
+// secretKey is a credential's name: upper case, so no secret can stand for
+// one of the entry stub's own variables.
+var secretKey = regexp.MustCompile(`^[A-Z_][A-Z0-9_]*$`)
 
 // Gateway is the plan's gateway: its image, the hosts its proxy allows,
 // and, when the launch needs its toolbelt, the forward (unix:<socket> or
@@ -245,6 +261,15 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 			return extension.ContainerPlan{}, fmt.Errorf("%w: an environment entry can't be passed to a container", extension.ErrSandboxUnavailable)
 		}
 	}
+	var secretKeys []string
+	for _, kv := range l.Secrets {
+		k, v, _ := strings.Cut(kv, "=")
+		if !secretKey.MatchString(k) || strings.ContainsRune(v, 0) {
+			return extension.ContainerPlan{}, fmt.Errorf("%w: a secret can't be passed to a container", extension.ErrSandboxUnavailable)
+		}
+		secretKeys = append(secretKeys, k)
+	}
+	sort.Strings(secretKeys)
 	mounts, err := p.mounts(cfg, paths, needs)
 	if err != nil {
 		return extension.ContainerPlan{}, err
@@ -253,7 +278,8 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 		return extension.ContainerPlan{}, fmt.Errorf("%w: docker on context %s: %s", extension.ErrSandboxUnavailable, s.Context, h.Detail)
 	}
 	plan := Plan{Context: s.Context, User: fmt.Sprintf("%d:%d", p.o.UID, p.o.GID), Workdir: l.Dir, Mounts: mounts, Argv: l.Argv,
-		Records: paths.Records, Marker: filepath.Join(paths.Run, extension.ContainerTermMarker), Limits: cfg.Limits, Network: "internal", Gateway: gw}
+		Records: paths.Records, Marker: filepath.Join(paths.Run, extension.ContainerTermMarker), Limits: cfg.Limits, Network: "internal", Gateway: gw,
+		SecretKeys: secretKeys, TTY: l.TTY}
 	if plan.Limits.PIDs == 0 {
 		plan.Limits.PIDs = DefaultPIDs
 	}
@@ -268,6 +294,12 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 	if err := os.WriteFile(plan.EnvFile, []byte(strings.Join(env, "\n")+"\n"), 0o600); err != nil {
 		return extension.ContainerPlan{}, fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
 	}
+	if len(l.Secrets) > 0 {
+		plan.Secrets = filepath.Join(paths.Run, SecretsFile)
+		if err := writeSecrets(plan.Secrets, l.Secrets); err != nil {
+			return extension.ContainerPlan{}, fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
+		}
+	}
 	data, _ := json.Marshal(plan)
 	reach := "no hosts"
 	if len(gw.Allow) > 0 {
@@ -278,6 +310,24 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 		summary += ", toolbelt forwarded (" + p.o.Forward + ")"
 	}
 	return extension.ContainerPlan{Image: cfg.Image, Summary: summary, Data: domain.Payload{Schema: PlanSchema, Data: data}}, nil
+}
+
+// writeSecrets writes a launch's credentials as the shell exports the entry
+// stub reads, readable only by the operator. One left from an earlier plan
+// is replaced, never followed.
+func writeSecrets(path string, secrets []string) error {
+	var b strings.Builder
+	for _, kv := range secrets {
+		k, v, _ := strings.Cut(kv, "=")
+		b.WriteString("export " + k + "='" + strings.ReplaceAll(v, "'", `'\''`) + "'\n")
+	}
+	_ = os.Remove(path)
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	_, err = f.WriteString(b.String())
+	return errors.Join(err, f.Close())
 }
 
 // proxyVars are the variables that point a process at a proxy: a
@@ -327,7 +377,7 @@ func shortImage(image string) string {
 }
 
 // mounts are the grant as bind mounts at the same paths: the write grant
-// and the run directory read-write, the read grant, what the host shares
+// and the run directory (and the Work's home) read-write, the read grant, what the host shares
 // and the records read-only. Every read-only need and every denied path
 // inside a mount is covered by a read-only bind over it or an empty one
 // hiding it; one that can't be (missing, or a symlink) refuses the launch.
@@ -344,7 +394,11 @@ func (p *Provider) mounts(cfg extension.ContainerConfig, paths extension.Sandbox
 		return out
 	}
 	var rw, ro []string
-	for _, w := range append(expand(cfg.Write), extension.CanonicalPath(paths.Run)) {
+	own := []string{extension.CanonicalPath(paths.Run)}
+	if paths.Home != "" {
+		own = append(own, extension.CanonicalPath(paths.Home))
+	}
+	for _, w := range append(expand(cfg.Write), own...) {
 		if fi, err := os.Stat(w); err != nil || !fi.IsDir() && !fi.Mode().IsRegular() {
 			return nil, fmt.Errorf("%w: the write grant %s is not a file or directory here", extension.ErrSandboxUnavailable, w)
 		}
@@ -434,14 +488,16 @@ func outermost(paths []string) []string {
 	return out
 }
 
-// entryStub is the container's entry point under docker's init: it runs
+// entryStub is the container's entry point under docker's init: it reads
+// and removes the launch's credentials file (when it has one) first, runs
 // the launch's argv with the container's stdin, writes the TERM marker in
 // the run directory when the container is sent TERM, passes TERM, INT and
 // HUP on, and exits with the command's status. A trap cuts a wait short
 // (its status is the signal's), so the stub waits again for the command's
 // own; a wait with nothing left to collect (127) after one a trap ran
 // during keeps that one's status.
-const entryStub = `m=$1; shift; c=; p=; g=; l=
+const entryStub = `if [ -n "$2" ]; then . "$2" || exit 125; rm -f "$2"; fi
+m=$1; shift 2; c=; p=; g=; l=
 f() { g=1; if [ -n "$c" ]; then kill -"$1" "$c" 2>/dev/null; else p=$1; fi; }
 trap ': > "$m"; f TERM' TERM
 trap 'f INT' INT
@@ -452,6 +508,11 @@ c=$!
 exec 3<&-
 if [ -n "$p" ]; then kill -"$p" "$c" 2>/dev/null; fi
 while :; do g=; wait "$c"; s=$?; if [ -z "$g" ]; then if [ "$s" = 127 ] && [ -n "$l" ]; then s=$l; fi; exit "$s"; fi; l=$s; done`
+
+// attachStub is an attach container's entry: it reads and removes the
+// credentials file, then runs the argv in its place, on the terminal.
+const attachStub = `if [ -n "$1" ]; then . "$1" || exit 125; rm -f "$1"; fi
+shift; exec "$@"`
 
 // names are the container's and its network's names: an execution key
 // (a hash of the host and the execution, so two hosts never collide) and
@@ -475,6 +536,12 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 		return extension.ContainerCreated{}, errors.New("the plan isn't a docker plan")
 	}
 	defer os.Remove(d.EnvFile)
+	created := false
+	defer func() {
+		if !created && d.Secrets != "" {
+			_ = os.Remove(d.Secrets)
+		}
+	}()
 	daemon, _, err := p.info(ctx, d.Context)
 	if err != nil {
 		return extension.ContainerCreated{}, err
@@ -500,6 +567,9 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 	for _, k := range sortedKeys(labels) {
 		args = append(args, "--label", k+"="+labels[k])
 	}
+	if d.TTY {
+		args = append(args, "--tty")
+	}
 	if d.Limits.CPUs > 0 {
 		args = append(args, "--cpus", strconv.FormatFloat(d.Limits.CPUs, 'f', -1, 64))
 	}
@@ -513,7 +583,11 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 	// Linux os), both read-only.
 	args = append(args, "--mount", "type=volume,source="+volume+",target="+ToolbeltDir+",readonly",
 		"--mount", "type=image,source="+d.Gateway.Image+",target="+BinDir+",image-subpath=toolbelt")
-	args = append(args, "--entrypoint", "/bin/sh", plan.Image, "-c", entryStub, "open-conduit-entry", d.Marker)
+	if d.TTY {
+		args = append(args, "--entrypoint", "/bin/sh", plan.Image, "-c", attachStub, "open-conduit-attach", d.Secrets)
+	} else {
+		args = append(args, "--entrypoint", "/bin/sh", plan.Image, "-c", entryStub, "open-conduit-entry", d.Marker, d.Secrets)
+	}
 	args = append(args, d.Argv...)
 	out, err := p.docker(ctx, d.Context, args...)
 	id := strings.TrimSpace(string(out))
@@ -526,8 +600,14 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 		p.removeGateway(context.WithoutCancel(ctx), d.Context, name)
 		return extension.ContainerCreated{}, err
 	}
+	created = true
 	ref := extension.ContainerRef{ID: d.Context + "/" + id, Labels: labels}
 	argv := []string{p.o.Helper, "container", "run", "--records", d.Records, ref.ID}
+	if d.TTY {
+		// The operator's terminal drives an attach directly: the helper
+		// would put the CLI in a process group of its own, off the terminal.
+		argv = []string{p.o.Docker, "--context", d.Context, "start", "--attach", "--interactive", id}
+	}
 	return extension.ContainerCreated{Ref: ref, Daemon: daemon, Argv: argv, Env: p.cliEnv()}, nil
 }
 

@@ -41,6 +41,14 @@ type ContainerBinding struct {
 	MaxScan                    int
 	// Home expands ~ in the grant.
 	Home string
+	// WorkHome is the Work's own home (ExecutionContext.ContainerHome):
+	// granted read-write and an exception to the protected set for this
+	// Work's containers only. Empty gives the container none.
+	WorkHome string
+	// Attach makes the broker's container an operator's attach rather than
+	// a segment's: labelled ContainerSegmentAttach, and never pinned to a
+	// segment (Pin records it in the attempt's history instead).
+	Attach bool
 	// Pin records a container with the attempt's open segment, durably,
 	// before its argv is returned. An error removes the container and
 	// fails the launch.
@@ -108,7 +116,7 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	res := c.resource
 	c.mu.Unlock()
 	g, err := GuardLaunch(LaunchGuard{Protected: b.Protected, Shared: b.Shared, RunRoot: b.RunRoot, Toolbelt: b.Toolbelt, Records: b.Records,
-		MaxScan: b.MaxScan, Dir: l.Dir, RunDir: l.RunDir, Resource: res, Needs: needs})
+		MaxScan: b.MaxScan, Dir: l.Dir, RunDir: l.RunDir, Home: b.WorkHome, Resource: res, Needs: needs})
 	if err != nil {
 		return SandboxPlan{}, err
 	}
@@ -121,8 +129,11 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	if err != nil {
 		return SandboxPlan{}, fmt.Errorf("%w: could not list the execution's containers: %v", ErrSandboxUnavailable, err)
 	}
+	// An attach container left running (its terminal went away) is over
+	// once a segment launches, since the Work is no longer held; a live
+	// one blocks another attach only through the hold.
 	for _, st := range listed {
-		if st.Running {
+		if st.Running && st.Ref.Labels[ContainerLabelSegment] != ContainerSegmentAttach {
 			return SandboxPlan{}, fmt.Errorf("%w: %s", ErrContainerRunning, st.Ref.ID)
 		}
 	}
@@ -145,7 +156,7 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	if err := os.MkdirAll(b.Records, 0o700); err != nil {
 		return SandboxPlan{}, fmt.Errorf("%w: %v", ErrSandboxUnavailable, err)
 	}
-	paths := SandboxPaths{Workspace: g.Workspace, Run: g.Run, Toolbelt: b.Toolbelt, Records: b.Records}
+	paths := SandboxPaths{Workspace: g.Workspace, Run: g.Run, Toolbelt: b.Toolbelt, Records: b.Records, Home: g.Home}
 	l.Dir, l.RunDir = g.Workspace, g.Run
 	plan, err := b.Provider.Plan(ctx, b.Owner, ContainerPolicy{Config: b.Config, Paths: paths}, merged, l)
 	if err != nil {
@@ -155,10 +166,14 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 		return SandboxPlan{}, fmt.Errorf("%w: the provider returned an incomplete plan", ErrSandboxUnavailable)
 	}
 	plan.Digest = ContainerDigest(plan.Image, plan.Data)
+	segment := strconv.Itoa(b.Segment)
+	if b.Attach {
+		segment = ContainerSegmentAttach
+	}
 	labels := map[string]string{
 		ContainerLabelHost:      b.Host,
 		ContainerLabelExecution: string(b.Owner.ExecutionID),
-		ContainerLabelSegment:   strconv.Itoa(b.Segment),
+		ContainerLabelSegment:   segment,
 		ContainerLabelDigest:    plan.Digest,
 	}
 	created, err := b.Provider.Create(ctx, plan, labels)
@@ -201,6 +216,9 @@ func containerGrant(cfg ContainerConfig, g GuardedLaunch, b ContainerBinding, ne
 		return out
 	}
 	write := append(expand(cfg.Write), g.Run)
+	if g.Home != "" {
+		write = append(write, g.Home)
+	}
 	read := append(append(append([]string{}, write...), expand(cfg.Read)...), g.Shared...)
 	exceptions := append([]string{g.Workspace, g.Run}, g.Shared...)
 	var refused []string
@@ -472,6 +490,11 @@ func ReconcileContainers(ctx context.Context, p ContainerProvider, host string, 
 	for _, st := range listed {
 		id := domain.ID(st.Ref.Labels[ContainerLabelExecution])
 		if st.Ref.Labels[ContainerLabelHost] != host || id == "" || alive[id] {
+			continue
+		}
+		// An operator's attach runs beside a finished execution until they
+		// exit; their attach removes it then.
+		if st.Running && st.Ref.Labels[ContainerLabelSegment] == ContainerSegmentAttach {
 			continue
 		}
 		errs = append(errs, p.Remove(ctx, st.Ref))

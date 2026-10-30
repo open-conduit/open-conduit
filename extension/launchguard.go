@@ -21,8 +21,10 @@ type LaunchGuard struct {
 	// RunRoot is the executor's runs directory: RunDir must be a directory
 	// beneath it, reached without symbolic links.
 	RunRoot, Toolbelt string
-	// Dir and RunDir are the launch's working and run directories.
-	Dir, RunDir string
+	// Dir and RunDir are the launch's working and run directories. Home,
+	// for a container, is the Work's own home: like them, an exception to
+	// the protected set for this launch only.
+	Dir, RunDir, Home string
 	// Resource is the workspace the executor acquired for this attempt,
 	// if any: the launch must be in it, and it must say what a confined
 	// process needs from it.
@@ -38,6 +40,7 @@ type LaunchGuard struct {
 // shared paths and the acquired resource's needs.
 type GuardedLaunch struct {
 	Workspace, Run    string
+	Home              string
 	Protected, Shared []string
 	Resource          SandboxNeeds
 }
@@ -57,6 +60,11 @@ func GuardLaunch(g LaunchGuard) (GuardedLaunch, error) {
 	inside := func(p string) bool { return Within(p, protected) }
 	workspace, run := CanonicalPath(g.Dir), CanonicalPath(g.RunDir)
 	out := GuardedLaunch{Workspace: workspace, Run: run, Protected: protected}
+	own := []string{workspace, run}
+	if g.Home != "" {
+		out.Home = CanonicalPath(g.Home)
+		own = append(own, out.Home)
+	}
 	if res := g.Resource; res != nil {
 		if CanonicalPath(res.Dir) != workspace {
 			return GuardedLaunch{}, fmt.Errorf("%w: the launch is not in the acquired workspace", ErrSandboxUnavailable)
@@ -76,20 +84,20 @@ func GuardLaunch(g LaunchGuard) (GuardedLaunch, error) {
 	// The exceptions to the protected set never contain what it protects.
 	out.Shared = canonical(g.Shared)
 	records := CanonicalPath(g.Records)
-	for _, own := range []string{workspace, run} {
+	for _, o := range own {
 		for _, p := range append(append(append([]string{}, protected...), out.Shared...), records) {
-			if p == own || Within(p, []string{own}) {
-				return GuardedLaunch{}, fmt.Errorf("%w: %s would expose %s", ErrSandboxDenied, own, p)
+			if p == o || Within(p, []string{o}) {
+				return GuardedLaunch{}, fmt.Errorf("%w: %s would expose %s", ErrSandboxDenied, o, p)
 			}
 		}
 	}
 	// Beneath the protected set, an executor may only reach its own run
-	// directory and workspace, and read what the host shares.
+	// directory, workspace and home, and read what the host shares.
 	var denied []string
 	check := func(kind string, paths []string, extra []string) {
 		for _, p := range paths {
 			c := CanonicalPath(p)
-			if inside(c) && !Within(c, append([]string{workspace, run}, extra...)) {
+			if inside(c) && !Within(c, append(append([]string{}, own...), extra...)) {
 				denied = append(denied, kind+" "+p)
 			}
 		}

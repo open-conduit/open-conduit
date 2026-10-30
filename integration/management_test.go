@@ -69,6 +69,12 @@ type managementHarness struct {
 	// bindSandbox does; attach, when set, is the executors' attach.
 	sandbox func(context.Context, runtime.AttemptState, extension.ResourceBroker, func(extension.SandboxPlan) error) (extension.SandboxBroker, extension.ResourceBroker, error)
 	attach  func(context.Context, string, domain.Work) (management.AttachSpec, error)
+	// container, when set, binds each attempt's container as the daemon's
+	// bindContainer does; containerAttach and containerDetach are the
+	// daemon's attach containers.
+	container       func(context.Context, runtime.AttemptState, extension.ResourceBroker, func(extension.ContainerPin) error) (runtime.ContainerBinding, error)
+	containerAttach func(context.Context, string, domain.Work, domain.ID) (management.ContainerAttachment, error)
+	containerDetach func(context.Context, domain.Work, string) error
 }
 
 func newManagementHarness(t *testing.T) *managementHarness {
@@ -149,6 +155,12 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 				return nil, r, nil
 			}
 			return h.sandbox(ctx, st, r, pin)
+		},
+		Container: func(ctx context.Context, st runtime.AttemptState, r extension.ResourceBroker, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
+			if h.container == nil {
+				return runtime.ContainerBinding{}, nil
+			}
+			return h.container(ctx, st, r, pin)
 		}})
 	if err != nil {
 		t.Fatal(err)
@@ -164,6 +176,18 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 				return management.AttachSpec{}, management.ErrAttachUnsupported
 			}
 			return h.attach(ctx, executor, w)
+		},
+		ContainerAttach: func(ctx context.Context, executor string, w domain.Work, x domain.ID) (management.ContainerAttachment, error) {
+			if h.containerAttach == nil {
+				return management.ContainerAttachment{}, management.ErrAttachUnsupported
+			}
+			return h.containerAttach(ctx, executor, w, x)
+		},
+		ContainerDetach: func(ctx context.Context, w domain.Work, ref string) error {
+			if h.containerDetach == nil {
+				return management.ErrAttachUnsupported
+			}
+			return h.containerDetach(ctx, w, ref)
 		},
 		ProviderTimeout: func(p string) <-chan time.Time {
 			if h.providerTimeout != nil {

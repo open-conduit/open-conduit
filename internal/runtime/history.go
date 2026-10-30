@@ -38,6 +38,8 @@ type Run struct {
 	Segments        []Segment
 	DroppedSegments int
 	ActiveTime      time.Duration
+	// Attaches are the operators' attach containers (AttemptState.Attaches).
+	Attaches []extension.ContainerPin
 	// Retry is the Work's retry eligibility when this attempt is the latest
 	// recorded failure.
 	Retry     *RetryState
@@ -81,6 +83,7 @@ func runInTx(tx storage.Tx, x domain.Execution, works map[domain.ID]domain.Work)
 		run.WaitID, run.WakeEventID = state.WaitID, state.WakeEventID
 		run.Segments, run.ActiveTime = segments(state.Segments, x)
 		run.DroppedSegments, run.ActiveTime = state.DroppedSegments, run.ActiveTime+state.DroppedActive
+		run.Attaches = state.Attaches
 		if state.CurrentTriggerID != "" && state.CurrentTriggerID != x.TriggerID {
 			run.CurrentTrigger = envelope(tx, state.CurrentTriggerID)
 		}

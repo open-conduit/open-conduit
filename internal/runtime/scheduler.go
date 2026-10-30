@@ -123,6 +123,8 @@ type ContainerBinding struct {
 	Broker    extension.ContainerBroker
 	Resources extension.ResourceBroker
 	Settle    func(extension.Result) extension.Result
+	// Home is the Work's container home (ExecutionContext.ContainerHome).
+	Home string
 }
 
 // WorkKindPolicy is the lifecycle an extension declares for the Work kind it
@@ -186,6 +188,10 @@ type AttemptState struct {
 	Segments        []Segment     `json:",omitempty"`
 	DroppedSegments int           `json:",omitempty"`
 	DroppedActive   time.Duration `json:",omitempty"`
+	// Attaches are the containers operators attached to the attempt's
+	// session in after it ended (open-conduit container attach), each
+	// pinned as a segment's container is. Only the last MaxAttaches are kept.
+	Attaches []extension.ContainerPin `json:",omitempty"`
 	// EarlierUsage sums the usage of the segments before the current one.
 	// Result holds only the latest segment's result, so a resume, or a
 	// timeout replacing a parked result, moves its usage here; Usage reports the two together as the attempt's usage.
@@ -1031,6 +1037,7 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		}
 		if c.Broker != nil {
 			attempt.Request.Context.Container, attempt.Request.Context.Resources, settle = c.Broker, c.Resources, c.Settle
+			attempt.Request.Context.ContainerHome = c.Home
 		}
 	}
 	if recovering {

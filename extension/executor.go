@@ -32,7 +32,12 @@ type ExecutionContext struct {
 	// Container is nil unless the binding declares a container. An
 	// executor that advertises Capabilities.Container launches through it
 	// and calls its Adopt in Recover; see container.go.
-	Container                       ContainerBroker
+	Container ContainerBroker
+	// ContainerHome is set with Container: the Work's own home directory,
+	// host-owned and kept across its segments (so a session resumes), and
+	// mounted read-write at the same path. The executor points the
+	// process's HOME and its own config there.
+	ContainerHome                   string
 	ToolbeltEndpoint, ToolbeltToken string
 	// ToolbeltTokenFile, when set, is the host-kept file holding the current
 	// ToolbeltToken, in a token directory the host rotates it in on recovery.
@@ -182,6 +187,31 @@ type AttachExecutor interface {
 type AttachSpec struct {
 	Argv []string
 	Dir  string
+}
+
+// ContainerAttachExecutor is optional, for an executor whose Work ran in a
+// container: its Attach returns `open-conduit container attach <work>`, and
+// ContainerAttach is what that command runs inside a new container of the
+// binding, with the Work's home and workspace, so nothing the agent wrote is
+// ever read or run on the host. ErrNothingToAttach applies as in Attach.
+type ContainerAttachExecutor interface {
+	ContainerAttach(ctx context.Context, r ContainerAttachRequest) (ContainerAttachSpec, error)
+}
+
+// ContainerAttachRequest is the Work to attach to, its binding's config and
+// secrets as a launch would get them, and the Work's container home.
+type ContainerAttachRequest struct {
+	Work    domain.Work
+	Config  domain.Payload
+	Secrets map[string]string
+	Home    string
+}
+
+// ContainerAttachSpec is an interactive launch for the attach container:
+// the needs and launch (Dir is the workspace) a ContainerBroker plans.
+type ContainerAttachSpec struct {
+	Needs  SandboxNeeds
+	Launch SandboxLaunch
 }
 
 // ErrNothingToAttach is the definitive "nothing to attach to yet" answer of
