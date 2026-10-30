@@ -65,6 +65,7 @@ type sandboxLab struct {
 	t                                      *testing.T
 	srt                                    string
 	root, home, state, config, ws, outside string
+	claude                                 string
 	run, other, sock, otherSock, loopback  string
 	execState                              string
 	pins                                   []extension.SandboxPlan
@@ -118,10 +119,15 @@ func newSandboxLab(t *testing.T, executor string) *sandboxLab {
 	git("-c", "user.name=t", "-c", "user.email=t@t", "commit", "-q", "--allow-empty", "-m", "init")
 	_ = os.MkdirAll(filepath.Join(l.ws, ".git", "hooks"), 0o700)
 	_ = os.MkdirAll(filepath.Join(l.ws, ".git", "info"), 0o700)
-	// What claude keeps in the home: srt on Linux can grant only a path
-	// that exists.
+	// The operator's own claude config, which a sandboxed claude must not
+	// reach, and the binding's own: srt on Linux can grant only a path that
+	// exists.
+	l.claude = filepath.Join(l.home, ".claude-sandboxed")
+	_ = os.MkdirAll(l.claude, 0o700)
 	_ = os.MkdirAll(filepath.Join(l.home, ".claude"), 0o700)
-	_ = os.WriteFile(filepath.Join(l.home, ".claude.json"), []byte("{}\n"), 0o600)
+	for path, body := range map[string]string{".claude/settings.json": "{}", ".claude.json": "{}", ".claude/.credentials.json": "claude-secret"} {
+		_ = os.WriteFile(filepath.Join(l.home, path), []byte(body+"\n"), 0o600)
+	}
 	_ = os.Symlink(l.home+"/.ssh", filepath.Join(l.ws, "link-ssh"))
 	_ = os.Symlink(l.state, filepath.Join(l.ws, "link-state"))
 	l.sock = filepath.Join(l.run, "toolbelt.sock")
@@ -147,7 +153,7 @@ func (l *sandboxLab) serve(network, addr, body string) string {
 	return ln.Addr().String()
 }
 
-const sandboxPolicy = `{"write":["{workspace}","~/.claude","~/.claude.json"],"read":{"deny":["~/.ssh"]},"network":{"allow":["allowed.invalid","api.anthropic.com"]},"sockets":["{toolbelt}"],"unix_sockets":"all"}`
+const sandboxPolicy = `{"write":["{workspace}","~/.claude-sandboxed"],"read":{"deny":["~/.ssh"]},"network":{"allow":["allowed.invalid","api.anthropic.com"]},"sockets":["{toolbelt}"],"unix_sockets":"all"}`
 
 // binding is the host's sandbox for one attempt, as bootstrap binds it.
 func (l *sandboxLab) binding(policy string, pinned string, o srt.Options) *extension.BoundSandbox {
@@ -202,6 +208,14 @@ func (w labWorkspace) Lookup(ctx context.Context, _ string) (extension.Resource,
 func (l *sandboxLab) env() map[string]string {
 	return map[string]string{"LAB_STATE": l.state, "LAB_CONFIG": l.config, "LAB_OUTSIDE": l.outside, "LAB_RUN": l.run,
 		"LAB_LOOPBACK": l.loopback, "LAB_OTHER_SOCK": l.otherSock, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+}
+
+// claudeEnv is a claude-code binding's env: the lab's, with a config
+// directory of its own.
+func (l *sandboxLab) claudeEnv() map[string]string {
+	env := l.env()
+	env["CLAUDE_CONFIG_DIR"] = l.claude
+	return env
 }
 
 // sandboxProbes print "name: ALLOWED|DENIED" for each attempt from inside,
@@ -392,12 +406,18 @@ func (l *sandboxLab) execOutput(t *testing.T) string {
 }
 
 // fakeSandboxClaude stands in for claude on its launch path: it takes its
-// first stream-json message, runs the probes, and ends the turn.
+// first stream-json message, runs the probes and the operator's claude
+// config probes, writes its own config, and ends the turn.
 const fakeSandboxClaude = `#!/bin/sh
 read -r line
 echo '{"type":"system","subtype":"init"}'
-{ ` + "PROBES" + `} > ./probe-out 2>&1
-mkdir -p "$HOME/.claude/projects" && echo ok > "$HOME/.claude/projects/written"
+{ ` + "PROBES" + `
+t write_operator_settings sh -c 'echo x >> "$HOME/.claude/settings.json"'
+t write_operator_claude_json sh -c 'echo x >> "$HOME/.claude.json"'
+t write_operator_plugin mkdir -p "$HOME/.claude/plugins/planted"
+t read_operator_credentials read "$HOME/.claude/.credentials.json" claude-secret
+} > ./probe-out 2>&1
+mkdir -p "$CLAUDE_CONFIG_DIR/projects" && echo ok > "$CLAUDE_CONFIG_DIR/projects/written"
 echo ok > "$TMPDIR/claude-tmp" && echo "tmp=$TMPDIR" >> ./probe-out
 echo '{"type":"result","subtype":"success","is_error":false,"result":"done","session_id":"s","num_turns":1,"total_cost_usd":0,"structured_output":{"state":"review","summary":"probed"}}'
 `
@@ -414,8 +434,7 @@ func TestSandboxClaudeCodeIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	env := l.env()
-	cfg, _ := json.Marshal(map[string]any{"binary": bin, "playbook": "-", "env": env})
+	cfg, _ := json.Marshal(map[string]any{"binary": bin, "playbook": "-", "env": l.claudeEnv()})
 	b := l.binding(sandboxPolicy, "", srt.Options{})
 	r := extension.RunRequest{Work: domain.Work{ID: "work", ScopeID: "scope"}, Execution: domain.Execution{ID: "exec", Attempt: 1, Lease: domain.Lease{Epoch: 1}},
 		Trigger: domain.Event{ID: "ev", Type: "note"},
@@ -433,11 +452,77 @@ func TestSandboxClaudeCodeIsolation(t *testing.T) {
 		t.Fatalf("outcome %s %q\n%s", res.Outcome.Kind, res.Outcome.Summary, out)
 	}
 	l.checkIsolation(t, string(out))
-	if _, err := os.Stat(filepath.Join(l.home, ".claude", "projects", "written")); err != nil {
-		t.Error("claude could not write its config dir")
+	if _, err := os.Stat(filepath.Join(l.claude, "projects", "written")); err != nil {
+		t.Error("claude could not write its own config dir")
+	}
+	got := probeResults(string(out))
+	for _, k := range []string{"write_operator_settings", "write_operator_claude_json", "write_operator_plugin", "read_operator_credentials"} {
+		if got[k] != "DENIED" {
+			t.Errorf("%s: %q from inside the sandbox, want DENIED\n%s", k, got[k], out)
+		}
+	}
+	for _, path := range []string{".claude/settings.json", ".claude.json"} {
+		if b, _ := os.ReadFile(filepath.Join(l.home, path)); string(b) != "{}\n" {
+			t.Errorf("the operator's ~/%s was written from inside the sandbox: %q", path, b)
+		}
+	}
+	if _, err := os.Lstat(filepath.Join(l.home, ".claude", "plugins")); err == nil {
+		t.Error("a plugin was planted in the operator's ~/.claude from inside the sandbox")
 	}
 	if !strings.Contains(string(out), "tmp="+l.execState) {
 		t.Errorf("claude's temporary directory is not its segment's own:\n%s", out)
+	}
+}
+
+// TestSandboxClaudeCodeOwnConfig: a sandboxed claude without a config
+// directory of its own, or under a policy that still grants the operator's
+// ~/.claude, is refused as sandbox_denied with nothing run.
+func TestSandboxClaudeCodeOwnConfig(t *testing.T) {
+	l := newSandboxLab(t, "claude-code")
+	bin := filepath.Join(l.root, "bin", "claude")
+	_ = os.MkdirAll(filepath.Dir(bin), 0o700)
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\ntouch \"$LAB_OUTSIDE/claude-ran\"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	e, err := claudecode.New(claudecode.Options{StateDir: l.execState, Store: reference.New(), Environ: func() []string { return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + l.home} },
+		Grace: 2 * time.Second, PollInterval: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	granting := strings.Replace(sandboxPolicy, `"~/.claude-sandboxed"`, `"~/.claude-sandboxed","~/.claude","~/.claude.json"`, 1)
+	for i, c := range []struct {
+		name, policy string
+		env          map[string]string
+	}{
+		{"no_config_dir", sandboxPolicy, l.env()},
+		{"policy_grants_operator_claude", granting, l.claudeEnv()},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			cfg, _ := json.Marshal(map[string]any{"binary": bin, "playbook": "-", "env": c.env})
+			b := l.binding(c.policy, "", srt.Options{})
+			id := domain.ID(fmt.Sprintf("own-%d", i))
+			r := extension.RunRequest{Work: domain.Work{ID: id, ScopeID: "scope"}, Execution: domain.Execution{ID: id, Attempt: 1, Lease: domain.Lease{Epoch: 1}},
+				Trigger: domain.Event{ID: "ev", Type: "note"},
+				Context: extension.ExecutionContext{Config: domain.Payload{Schema: "core.config.binding.v1", Data: cfg},
+					ToolbeltEndpoint: "unix://" + l.sock, ToolbeltToken: "own-token", ToolbeltTokenFile: l.run + "/token/token",
+					Sandbox: b, Resources: b.Resources(labWorkspace{l.ws, true})},
+				PersistRecovery: func(domain.Payload) error { return nil }}
+			h, err := e.Run(context.Background(), r)
+			if err != nil {
+				t.Fatal(err)
+			}
+			res := waitResult(t, h)
+			var f struct {
+				Reason string `json:"reason"`
+			}
+			_ = json.Unmarshal(res.Outcome.Data.Data, &f)
+			if res.Outcome.Kind != domain.OutcomeFailed || f.Reason != "sandbox_denied" {
+				t.Errorf("outcome %s reason %q (%s), want failed sandbox_denied", res.Outcome.Kind, f.Reason, res.Outcome.Summary)
+			}
+			if _, err := os.Stat(filepath.Join(l.outside, "claude-ran")); err == nil {
+				t.Fatal("claude ran")
+			}
+		})
 	}
 }
 
@@ -704,7 +789,7 @@ func TestSandboxClaudeCodeProcessControl(t *testing.T) {
 		}
 		return e
 	}
-	cfg, _ := json.Marshal(map[string]any{"binary": bin, "playbook": "-", "env": l.env()})
+	cfg, _ := json.Marshal(map[string]any{"binary": bin, "playbook": "-", "env": l.claudeEnv()})
 	var saved domain.Payload
 	request := func(epoch uint64, b *extension.BoundSandbox) extension.RunRequest {
 		return extension.RunRequest{Work: domain.Work{ID: "work", ScopeID: "scope"}, Execution: domain.Execution{ID: "exec", Attempt: 1, Lease: domain.Lease{Epoch: epoch}},

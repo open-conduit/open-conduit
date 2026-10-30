@@ -468,7 +468,8 @@ func (v *validator) registration(p string, b Binding) {
 }
 
 // sandboxed checks a binding that declares a sandbox: a registered provider
-// that accepts its config, and a resource that wouldn't give the sandboxed
+// that accepts its config, an executor config (alone and with each grant)
+// the executor can run in a sandbox, and a resource that wouldn't give the sandboxed
 // executor a workspace that writes through to the operator's own files (a
 // git worktree, whose commits go through the main checkout's .git) or runs
 // setup outside the sandbox.
@@ -480,6 +481,22 @@ func (v *validator) sandboxed(p string, b Binding) {
 		} else if check != nil {
 			if err := check(b.Sandbox.Config); err != nil {
 				v.fail(p+"/sandbox/config", "invalid_config", err.Error())
+			}
+		}
+	}
+	if owner, ok := v.reg.Executors[b.Executor].(SandboxChecker); ok {
+		err := owner.SandboxConfig(b.Config)
+		if err != nil {
+			v.fail(p+"/config", "sandbox_config", err.Error())
+		}
+		base := domain.Binding{Config: domain.Payload{Data: b.Config}, Grants: b.domainGrants()}
+		for k, g := range b.Grants {
+			if err != nil {
+				break
+			}
+			granted, _ := base.Granted([]string{g.Name})
+			if err := owner.SandboxConfig(granted.Config.Data); err != nil {
+				v.fail(fmt.Sprintf("%s/grants/%d/config", p, k), "sandbox_config", err.Error())
 			}
 		}
 	}
@@ -497,6 +514,13 @@ func (v *validator) sandboxed(p string, b Binding) {
 	if err := check(b.Resource.Config, mode); err != nil {
 		v.fail(p+"/resource/config", "sandbox_workspace", err.Error())
 	}
+}
+
+// SandboxChecker is optionally implemented by an executor registration to
+// refuse a binding config it can't run safely in a sandbox (B09). Its error
+// is a fixed, secret-free reason, shown in the diagnostic.
+type SandboxChecker interface {
+	SandboxConfig(config json.RawMessage) error
 }
 
 // ResourceModer is optionally implemented by an executor registration to say

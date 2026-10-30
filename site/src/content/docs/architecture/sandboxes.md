@@ -34,7 +34,7 @@ The wrapper, its pid stamp, exit file and `ps` marker stay on the host side: onl
 
 ### 1. The operator's policy is the grant
 
-The binding's sandbox config is exactly what a sandboxed process is granted. The executor's needs (claude-code's `~/.claude` and `api.anthropic.com`), the resource's and the host's are only checked against it. A need outside it fails the launch as `sandbox_denied` and nothing runs. The network is denied unless the policy lists a host. Placeholders name this attempt's paths without the operator knowing them: `{workspace}` is the launch's working directory, `{run}` the segment's run directory, `{toolbelt}` its toolbelt socket. The one grant the host makes itself is the segment's own run directory, which holds only this attempt's files.
+The binding's sandbox config is exactly what a sandboxed process is granted. The executor's needs (claude-code's config directory and `api.anthropic.com`), the resource's and the host's are only checked against it. A need outside it fails the launch as `sandbox_denied` and nothing runs. The network is denied unless the policy lists a host. Placeholders name this attempt's paths without the operator knowing them: `{workspace}` is the launch's working directory, `{run}` the segment's run directory, `{toolbelt}` its toolbelt socket. The one grant the host makes itself is the segment's own run directory, which holds only this attempt's files.
 
 ### 2. The host merges needs from three places
 
@@ -99,7 +99,7 @@ A root that has exited, or a wrapper that runs nothing yet, leaves nothing runni
 
 ```json
 {
-  "write": ["{workspace}", "~/.claude", "~/.claude.json"],
+  "write": ["{workspace}", "/srv/open-conduit/claude"],
   "read": {"deny": ["~/.ssh", "~/.aws"], "allow": []},
   "network": {"allow": ["api.anthropic.com", "github.com", "*.githubusercontent.com"]},
   "sockets": ["{toolbelt}"],
@@ -138,7 +138,8 @@ A version newer than the tested one is a `warn` (`untested_version`). The detail
 ## Executors
 
 - **Shell** needs its workspace, its outputs and inbox directories, its input file, its token directory and its toolbelt socket. The `os` toolbelt binary runs inside the sandbox.
-- **Claude Code** needs its workspace, its config directory (`CLAUDE_CONFIG_DIR`, or `~/.claude` and `~/.claude.json`), its MCP config, the playbooks, its token directory and toolbelt socket, and `api.anthropic.com`. Sandboxed, its temporary files go in the segment's own directory (`TMPDIR` and `CLAUDE_CODE_TMPDIR`) while srt keeps `/tmp` for its own sockets (`WrapperEnv`), whose paths would otherwise pass the platform's limit. Keychain sign-in works in place on macOS. The policy must grant the config paths and the hosts the work needs (GitHub, a package registry).
+- **Claude Code** needs its workspace, its own config directory, its MCP config, the playbooks, its token directory and toolbelt socket, and `api.anthropic.com`. Sandboxed, its temporary files go in the segment's own directory (`TMPDIR` and `CLAUDE_CODE_TMPDIR`) while srt keeps `/tmp` for its own sockets (`WrapperEnv`), whose paths would otherwise pass the platform's limit. The policy must grant the config directory and the hosts the work needs (GitHub, a package registry).
+- **Claude Code's config directory** is the binding's own. Host-side claude loads user-level hooks, MCP servers and plugins from `~/.claude` and `~/.claude.json` in every session the operator starts, so an agent that could write them would run code as the operator outside the sandbox, and making them read-only doesn't work: claude writes its sessions and state there. So a sandboxed claude-code binding must set `CLAUDE_CONFIG_DIR` in its `env` to an absolute path that is not, doesn't hold and isn't inside `~/.claude` or `~/.claude.json` (`SandboxConfig`, a `config.SandboxChecker`: refused at load as `sandbox_config`). The launch checks the resolved directory again, symbolic links followed, and refuses it as `sandbox_denied`. Its needs also deny `~/.claude` and `~/.claude.json`, so a policy that still grants them is refused (the provider won't let a grant reach into a deny) and their credentials aren't readable inside. Claude signs in separately there: on macOS its Keychain entry is `Claude Code-credentials-<hash of the directory>`, so the operator's own sign-in isn't shared. A one-off `CLAUDE_CONFIG_DIR=<dir> claude` with `/login`, or a `claude setup-token` token selected as a secret mapped to `CLAUDE_CODE_OAUTH_TOKEN`, signs it in.
 - **Claude Code's own sandbox** (`sandbox.*` in its settings) is executor config, not a provider. It wraps only Claude's Bash tool. Under the executor's default `bypassPermissions` its network allowlist doesn't hold, and Open Conduit can't see, pin or verify it. Inside an srt sandbox it can still be turned on with `extra_args: ["--settings", "<file>"]` as defence in depth.
 
 ## Workspaces
@@ -151,7 +152,7 @@ A sandboxed binding may only take a git workspace in `clone` mode, without `setu
 
 So the management server refuses attach, as `attach_sandboxed`, for Work any of whose segments was launched in a sandbox (a segment with a pinned plan), before the executor is asked for a command. It looks at every attempt, not just the latest, because the workspace outlives them: a binding that has since dropped its sandbox still has the files its sandboxed runs wrote. Unsandboxed Work attaches as before, since its agent already ran as the operator. Running the attach itself under the binding's policy is not built.
 
-Claude Code's own config directory is the same kind of path. The example policy grants `~/.claude` and `~/.claude.json` for writing, because claude writes its sessions and state there. A sandboxed agent can therefore add a user-level hook, MCP server or plugin there that runs in every claude session the operator starts on the host, not only on attach. Refusing attach doesn't close that. To close it, give a sandboxed binding a config directory of its own: set `CLAUDE_CONFIG_DIR` in the binding's `env` to a directory no host-side claude uses, and grant that in `write` in place of `~/.claude` and `~/.claude.json`. Claude then needs its own sign-in there, for example a token in a selected secret.
+Claude Code's own config directory is the same kind of path: a user-level hook, MCP server or plugin planted in `~/.claude` or `~/.claude.json` would run in every claude session the operator starts on the host, not only on attach, and refusing attach doesn't close that. So a sandboxed claude-code binding must have a config directory of its own (`CLAUDE_CONFIG_DIR` in its `env`), and its sandbox denies the operator's `~/.claude` and `~/.claude.json` whatever the policy grants ([Executors](#executors)).
 
 ## Evidence
 
@@ -167,12 +168,13 @@ Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from 
   - `Inject` reaching the inbox inside, `Interrupt` reporting `term` (macOS, handler run) or `kill` (Linux), `Stop` leaving nothing
   - `Recover` in a new executor instance adopting its own sandbox, and refusing a changed record, a root outside the sandbox and an unsandboxed segment under a sandboxed binding
   - on Claude Code's launch path, an injected message reaching the sandboxed claude's stdin, recovery under its own pin only, and `Interrupt` and `Stop` ending it
+  - on Claude Code's launch path, its own config directory writable while the operator's `~/.claude/settings.json` and `~/.claude.json` can't be written or read, and a binding without its own config directory, or with a policy that still grants `~/.claude`, refused with nothing run
 - [Sweep test](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/sandbox_test.go): the git provider's stray-process sweep finds and stops a sandboxed process tied to a workspace only by its working directory.
 - `TestManagementAttachRefusesSandboxedWork`: a sandboxed run plants a `SessionStart` hook in `.claude/settings.json` and a server in `.mcp.json`; attach is refused as `attach_sandboxed` without asking the executor and neither runs, while unsandboxed Work still attaches.
 - [Contract tests](https://github.com/open-conduit/open-conduit/blob/main/extension/sandbox_test.go), with a fake provider: needs merged with the resource's and the protected set, the plan pinned and recorded read-only, and refusals of a run directory outside the executor's or through a symlink, a workspace holding the state, a need inside the state or through `..`, a socket there, a hard link, a workspace without sandbox needs and an incomplete plan; adoption only under the pinned, unchanged record. [Mount aliases](https://github.com/open-conduit/open-conduit/blob/main/extension/sandboxmount_test.go) from a mountinfo fixture.
 - [srt provider tests](https://github.com/open-conduit/open-conduit/blob/main/extensions/srt/srt_test.go), with a stand-in `srt`: strict config, the settings for macOS and Linux, the wrapper's environment, every refusal, `Adopt` refusing another process, and [doctor's health](https://github.com/open-conduit/open-conduit/blob/main/extensions/srt/health_test.go) (also against the real srt in the sandbox jobs).
 - [Scheduler hook test](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_sandbox_test.go): the pin recorded with the segment and carried into recovery, and a binding failure failing the attempt before any executor call.
-- [Config tests](https://github.com/open-conduit/open-conduit/blob/main/internal/config/config_test.go) (`TestSandboxBinding`) and the [git provider's](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/clone_test.go) `TestSandboxedAcquire`: worktree modes and setup refused before anything is made or run.
+- [Config tests](https://github.com/open-conduit/open-conduit/blob/main/internal/config/config_test.go) (`TestSandboxBinding`, with an executor's `sandbox_config` refusal of a binding and a grant), claude-code's `TestSandboxConfig` (no `CLAUDE_CONFIG_DIR`, a relative one, `~/.claude`, inside it, the home that holds it and a link to it) and the [git provider's](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/clone_test.go) `TestSandboxedAcquire`: worktree modes and setup refused before anything is made or run.
 
 ## Limitations
 
@@ -181,7 +183,7 @@ Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from 
 - The hard-link check covers the workspace, not the policy's other write grants. A package manager that hard-links from a store outside the workspace (pnpm) is refused until it is set to copy (`package-import-method=copy`).
 - On Linux srt grants only paths that exist when the segment starts.
 - srt itself runs as the operator, outside its sandbox, and is trusted.
-- Attach to Work that ran sandboxed is refused, not sandboxed. Under the example policy the agent can write claude's own config directory; give the binding its own `CLAUDE_CONFIG_DIR` ([attach](#attach)).
+- Attach to Work that ran sandboxed is refused, not sandboxed ([attach](#attach)).
 
 ## History
 
@@ -193,3 +195,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - **#161** spiked it on real srt (macOS and Linux), Claude Code's built-in sandbox and `docker run`. It showed one provider serving shell and claude-code, Claude Code's sandbox as executor config, and Docker failing the process contract. It also found the needs-versus-policy, protected-set, worktree, Linux socket, token-file and signal findings this contract is built on.
 - **#162** gave each execution its own toolbelt socket and token directory, and **#163** the git `clone` mode and the refusal of worktree modes: the two prerequisites.
 - **#164** delivered B09: the contract, host-side merging and pinning, recovery's boundary proof, the srt provider, both executors, doctor and the isolation tests in CI.
+- **#173** gave a sandboxed claude-code binding a config directory of its own, refused one that would share the operator's `~/.claude`, and denied the operator's claude config to its sandbox, since a user-level hook planted there would run in every host-side claude session.

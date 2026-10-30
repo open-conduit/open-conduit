@@ -647,6 +647,7 @@ func TestSandboxBinding(t *testing.T) {
 		}
 		return nil
 	}}
+	reg.Executors["coding_agent"] = sandboxCheckingExecutor{reg.Executors["coding_agent"].(interruptExecutor)}
 	snap, err := Validate(example(t, "sandboxed"), reg)
 	if err != nil {
 		t.Fatal(err)
@@ -668,6 +669,10 @@ func TestSandboxBinding(t *testing.T) {
 			b["resource"].(map[string]any)["config"].(map[string]any)["mode"] = "work"
 		}},
 		{"missing provider and config", "scopes/0/bindings/0/sandbox", "schema", func(b map[string]any) { b["sandbox"] = map[string]any{} }},
+		{"executor refuses the sandboxed config", "scopes/0/bindings/0/config", "sandbox_config", func(b map[string]any) { b["config"] = map[string]any{"shared": true} }},
+		{"executor refuses a grant's sandboxed config", "scopes/0/bindings/0/grants/0/config", "sandbox_config", func(b map[string]any) {
+			b["grants"] = []any{map[string]any{"name": "shared", "config": map[string]any{"shared": true}}}
+		}},
 	} {
 		m := generic(t, example(t, "sandboxed"))
 		tc.mutate(entry(m, 0, "bindings", 0))
@@ -707,6 +712,17 @@ func TestBindingTimeout(t *testing.T) {
 			t.Fatalf("timeout_seconds %v accepted", bad)
 		}
 	}
+}
+
+// sandboxCheckingExecutor refuses, in a sandbox, a binding config that sets
+// "shared".
+type sandboxCheckingExecutor struct{ interruptExecutor }
+
+func (sandboxCheckingExecutor) SandboxConfig(c json.RawMessage) error {
+	if strings.Contains(string(c), `"shared"`) {
+		return errors.New("fixed reason")
+	}
+	return nil
 }
 
 // refusingExecutor rejects a binding config that sets "bad".

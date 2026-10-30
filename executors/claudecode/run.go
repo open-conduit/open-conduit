@@ -208,6 +208,14 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		cfg.PluginDir = e.o.PluginDir
 	}
 	configDir := claudeConfigDir(env)
+	// A sandboxed claude keeps its config in a directory of its own: one the
+	// operator's own claude reads would carry a hook, MCP server or plugin
+	// the agent planted out of the sandbox (B09).
+	if r.Context.Sandbox != nil {
+		if err = ownConfigDir(env, configDir); err != nil {
+			return e.preset(ctx, rn, cfg.StatusSchema, "sandbox_denied", err.Error(), nil)
+		}
+	}
 	sessionExists := func(session string) bool { return transcriptExists(configDir, workdir, session) }
 	attach := attachInfo{Dir: workdir, Binary: cfg.Binary, Model: cfg.model(r.Work), PermissionMode: cfg.PermissionMode, PluginDir: cfg.PluginDir, ExtraArgs: append(cfg.toolArgs(), cfg.ExtraArgs...)}
 
@@ -277,12 +285,10 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	}
 	defer out.Close()
 	// A sandboxed binding wraps claude (B09). It needs its workspace, its
-	// config and sign-in, the API and its toolbelt; with /tmp out of reach
-	// its temporary files go in the segment's own directory.
-	needs := extension.SandboxNeeds{Write: []string{workdir, configDir}, Read: []string{filepath.Join(dir, "mcp.json")}, Hosts: []string{"api.anthropic.com"}}
-	if !hasEnv(env, "CLAUDE_CONFIG_DIR") {
-		needs.Write = append(needs.Write, filepath.Join(filepath.Dir(configDir), ".claude.json"))
-	}
+	// own config and sign-in, the API and its toolbelt, and never reaches
+	// the operator's claude config; with /tmp out of reach its temporary
+	// files go in the segment's own directory.
+	needs := extension.SandboxNeeds{Write: []string{workdir, configDir}, Read: []string{filepath.Join(dir, "mcp.json")}, Deny: operatorClaude(envHome(env)), Hosts: []string{"api.anthropic.com"}}
 	if cfg.PluginDir != "" {
 		needs.Read = append(needs.Read, cfg.PluginDir)
 	}
@@ -479,22 +485,35 @@ func hasEnv(env []string, name string) bool {
 
 // claudeConfigDir is where claude keeps its state for this environment.
 func claudeConfigDir(env []string) string {
-	var home string
 	for _, kv := range env {
-		name, value, _ := strings.Cut(kv, "=")
-		switch name {
-		case "CLAUDE_CONFIG_DIR":
-			if value != "" {
-				return value
-			}
-		case "HOME":
-			home = value
+		if name, value, _ := strings.Cut(kv, "="); name == "CLAUDE_CONFIG_DIR" && value != "" {
+			return value
 		}
 	}
-	if home == "" {
-		home, _ = os.UserHomeDir()
+	return filepath.Join(envHome(env), ".claude")
+}
+
+// envHome is the home directory env names, else the process's.
+func envHome(env []string) string {
+	for _, kv := range env {
+		if name, value, _ := strings.Cut(kv, "="); name == "HOME" && value != "" {
+			return value
+		}
 	}
-	return filepath.Join(home, ".claude")
+	home, _ := os.UserHomeDir()
+	return home
+}
+
+// ownConfigDir refuses a sandboxed claude's config directory unless the
+// environment sets one apart from the operator's own claude config.
+func ownConfigDir(env []string, configDir string) error {
+	if !hasEnv(env, "CLAUDE_CONFIG_DIR") {
+		return errors.New(errOwnConfig)
+	}
+	if sharesConfig(configDir, envHome(env)) {
+		return errors.New(errSharedConfig)
+	}
+	return nil
 }
 
 // TranscriptPath: claude keeps a session's transcript under

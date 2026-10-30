@@ -44,7 +44,10 @@
           ],
           "secret_names": [],
           "config": {
-            "playbook": "work-issue"
+            "playbook": "work-issue",
+            "env": {
+              "CLAUDE_CONFIG_DIR": "/srv/open-conduit/claude"
+            }
           },
           "connection": "code",
           "resource": {
@@ -59,8 +62,7 @@
             "config": {
               "write": [
                 "{workspace}",
-                "~/.claude",
-                "~/.claude.json"
+                "/srv/open-conduit/claude"
               ],
               "read": {
                 "deny": [
