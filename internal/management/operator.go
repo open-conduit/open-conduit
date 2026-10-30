@@ -38,6 +38,9 @@ var (
 	// ErrNothingToAttach means the executor has nothing to attach to yet
 	// (extension.ErrNothingToAttach).
 	ErrNothingToAttach = extension.ErrNothingToAttach
+	// ErrAttachSandboxed means the Work ran in a sandbox (B09). An attach
+	// runs on the host, outside it, so it is refused.
+	ErrAttachSandboxed = errors.New("attach refused: the work ran in a sandbox")
 	// ErrLiveUnsupported means the run's executor offers no live output.
 	ErrLiveUnsupported = errors.New("executor does not support live output")
 	// ErrNotLive means the run is not running (extension.ErrNotLive).
@@ -164,18 +167,23 @@ func (s *Server) attachWork(c *call) (int, any, error) {
 			return e
 		}
 		var latest uint32
+		sandboxed := false
 		for _, x := range xs {
 			if x.State == domain.ExecutionPending || x.State == domain.ExecutionRunning {
 				return fail(409, "attempt_running", "an attempt is running; wait for it or cancel it first")
 			}
+			st, er := runtime.AttemptStateInTx(tx, x.ID)
+			if er != nil && !errors.Is(er, storage.ErrNotFound) {
+				return er
+			}
+			sandboxed = sandboxed || ranSandboxed(st)
 			if x.Attempt >= latest {
 				latest = x.Attempt
-				if st, er := runtime.AttemptStateInTx(tx, x.ID); er == nil {
-					executor = st.Executor
-				} else if !errors.Is(er, storage.ErrNotFound) {
-					return er
-				}
+				executor = st.Executor
 			}
+		}
+		if sandboxed {
+			return ErrAttachSandboxed
 		}
 		return nil
 	})
@@ -193,6 +201,19 @@ func (s *Server) attachWork(c *call) (int, any, error) {
 		return 0, nil, ErrNothingToAttach
 	}
 	return 200, map[string]any{"work_id": string(w.ID), "executor": executor, "argv": spec.Argv, "dir": spec.Dir}, nil
+}
+
+// ranSandboxed reports whether any segment of the attempt was launched in a
+// sandbox (B09). Its agent could then write the workspace's project config
+// (claude-code's .claude/settings.json hooks, .mcp.json servers), which an
+// attach would load on the host, outside the sandbox.
+func ranSandboxed(st runtime.AttemptState) bool {
+	for _, g := range st.Segments {
+		if g.Sandbox != nil {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) reconcileScope(c *call) (int, any, error) {

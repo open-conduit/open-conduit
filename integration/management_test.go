@@ -65,6 +65,10 @@ type managementHarness struct {
 	// calls in place of the real timers.
 	providerTimeout func(provider string) <-chan time.Time
 	viewDeadline    func() <-chan time.Time
+	// sandbox, when set, binds each attempt's sandbox as the daemon's
+	// bindSandbox does; attach, when set, is the executors' attach.
+	sandbox func(context.Context, runtime.AttemptState, extension.ResourceBroker, func(extension.SandboxPlan) error) (extension.SandboxBroker, extension.ResourceBroker, error)
+	attach  func(context.Context, string, domain.Work) (management.AttachSpec, error)
 }
 
 func newManagementHarness(t *testing.T) *managementHarness {
@@ -139,7 +143,13 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 	serve := func(ctx context.Context, id domain.ID, token string) (string, string, error) {
 		return h.endpoints.Serve(ctx, id, token)
 	}
-	h.scheduler, err = runtime.NewScheduler(db, h.clock.Now, router, runtime.SchedulerOptions{Owner: "daemon", Generation: "1", Executors: map[string]extension.Executor{"fixture": h.executor}, Toolbelt: h.belt, ToolbeltEndpoint: h.endpoint, ToolbeltEndpoints: serve, Secrets: h.configs.Secrets(&config.Resolver{})})
+	h.scheduler, err = runtime.NewScheduler(db, h.clock.Now, router, runtime.SchedulerOptions{Owner: "daemon", Generation: "1", Executors: map[string]extension.Executor{"fixture": h.executor}, Toolbelt: h.belt, ToolbeltEndpoint: h.endpoint, ToolbeltEndpoints: serve, Secrets: h.configs.Secrets(&config.Resolver{}),
+		Sandbox: func(ctx context.Context, st runtime.AttemptState, r extension.ResourceBroker, pin func(extension.SandboxPlan) error) (extension.SandboxBroker, extension.ResourceBroker, error) {
+			if h.sandbox == nil {
+				return nil, r, nil
+			}
+			return h.sandbox(ctx, st, r, pin)
+		}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -149,6 +159,12 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 	}
 	server, err := management.NewServer(management.Options{Store: db, Artifacts: h.artifacts, Now: h.clock.Now, Control: control, Toolbelt: h.belt, Config: h.configs, Version: "test", InstanceID: "instance-1",
 		Actions: func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions },
+		Attach: func(ctx context.Context, executor string, w domain.Work) (management.AttachSpec, error) {
+			if h.attach == nil {
+				return management.AttachSpec{}, management.ErrAttachUnsupported
+			}
+			return h.attach(ctx, executor, w)
+		},
 		ProviderTimeout: func(p string) <-chan time.Time {
 			if h.providerTimeout != nil {
 				return h.providerTimeout(p)

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ import (
 	"github.com/open-conduit/open-conduit/conformance/reference"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
@@ -20,7 +22,7 @@ import (
 // management server and CLI on SQLite: rebind repairs queued input onto
 // another binding of the same scope, a hold keeps attempts from starting
 // while input still queues and its release lets them start, attach needs a
-// hold and an executor that offers it, and a scope reconcile makes the
+// hold and an attempt to attach to, and a scope reconcile makes the
 // scope's ingress sources due. Every control is an accepted core.manual.*
 // Event addressed to its Work or scope.
 func TestManagementOperatorControls(t *testing.T) {
@@ -89,9 +91,9 @@ func TestManagementOperatorControls(t *testing.T) {
 	if _, err = h.scheduler.Start(ctx, domain.ID(id)); !errors.Is(err, runtime.ErrNotEligible) {
 		t.Fatalf("held Work started: %v", err)
 	}
-	// Attach needs an executor that offers it (this server has none).
-	if _, errOut, code := h.cli("work", "attach", id); code != 1 || !strings.Contains(errOut, "attach_unsupported") {
-		t.Fatalf("attach without support: %d %s", code, errOut)
+	// Attach needs an attempt whose executor it can ask (none has run).
+	if _, errOut, code := h.cli("work", "attach", id); code != 1 || !strings.Contains(errOut, "nothing_to_attach") {
+		t.Fatalf("attach before any attempt: %d %s", code, errOut)
 	}
 	h.mustCLI(&w, "work", "get", id)
 	if w.Hold == nil {
@@ -254,5 +256,89 @@ func TestScopeReconcileDuringScanRunsAgain(t *testing.T) {
 	}
 	if !due() {
 		t.Fatal("a request during an in-flight page was absorbed by the generation")
+	}
+}
+
+// TestManagementAttachRefusesSandboxedWork: attach runs the executor's
+// session on the host, outside any sandbox, so it is refused for Work any of
+// whose segments ran in one. Here the sandboxed agent plants a SessionStart
+// hook in .claude/settings.json and a server in .mcp.json, and the attach
+// command stands in for a host-side claude that runs them. The refusal
+// comes before the executor is asked, so neither runs. Unsandboxed Work
+// still attaches.
+func TestManagementAttachRefusesSandboxedWork(t *testing.T) {
+	h := newManagementHarness(t)
+	ctx := context.Background()
+	create := func(key string) string {
+		var created struct {
+			Work client.Work `json:"work"`
+		}
+		h.mustCLI(&created, "work", "create", "--scope-id", "ops", "--kind", "fixture.work", "--binding", "run", "--key", key)
+		return created.Work.ID
+	}
+	sandboxed, plain := create("create-sandboxed"), create("create-plain")
+	h.sandbox = func(_ context.Context, st runtime.AttemptState, r extension.ResourceBroker, pin func(extension.SandboxPlan) error) (extension.SandboxBroker, extension.ResourceBroker, error) {
+		if st.WorkID != domain.ID(sandboxed) {
+			return nil, r, nil
+		}
+		return pinningBroker{pin}, r, nil
+	}
+	workspace := filepath.Join(h.state, "workspace")
+	hook, server := filepath.Join(h.state, "hook-ran"), filepath.Join(h.state, "mcp-ran")
+	planted := map[string]string{
+		".claude/settings.json": `{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "touch ` + hook + `"}]}]}}`,
+		".mcp.json":             `{"mcpServers": {"x": {"command": "touch", "args": ["` + server + `"]}}}`,
+	}
+	h.executor.onRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+		if r.Context.Sandbox != nil {
+			if _, err := extension.WrapLaunch(ctx, r.Context.Sandbox, extension.SandboxNeeds{}, extension.SandboxLaunch{Argv: []string{"claude"}}); err != nil {
+				return nil, err
+			}
+			for name, body := range planted {
+				if err := os.MkdirAll(filepath.Dir(filepath.Join(workspace, name)), 0o700); err != nil {
+					return nil, err
+				}
+				if err := os.WriteFile(filepath.Join(workspace, name), []byte(body), 0o600); err != nil {
+					return nil, err
+				}
+			}
+		}
+		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+			return nil, err
+		}
+		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+	}
+	var asked []string
+	h.attach = func(_ context.Context, executor string, w domain.Work) (management.AttachSpec, error) {
+		asked = append(asked, string(w.ID))
+		if w.ID == domain.ID(sandboxed) {
+			return management.AttachSpec{Argv: []string{"sh", "-c", "touch " + hook + " " + server}, Dir: workspace}, nil
+		}
+		return management.AttachSpec{Argv: []string{"true"}, Dir: h.state}, nil
+	}
+	for _, id := range []string{sandboxed, plain} {
+		a, err := h.scheduler.Start(ctx, domain.ID(id))
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = h.scheduler.Complete(ctx, a.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff}}); err != nil {
+			t.Fatal(err)
+		}
+		var w client.Work
+		h.mustCLI(&w, "work", "get", id)
+		h.mustCLI(nil, "work", "hold", id, "--revision", w.Revision, "--key", "hold-"+id)
+	}
+	if _, errOut, code := h.cli("work", "attach", sandboxed); code != 1 || !strings.Contains(errOut, "attach_sandboxed") || !strings.Contains(errOut, "outside it") {
+		t.Fatalf("attach to sandboxed Work: %d %s", code, errOut)
+	}
+	for _, ran := range []string{hook, server} {
+		if _, err := os.Stat(ran); !errors.Is(err, os.ErrNotExist) {
+			t.Fatalf("attach ran what the sandboxed agent planted: %s (%v)", ran, err)
+		}
+	}
+	// The harness's CLI runs the argv it is given, here `true`.
+	h.mustCLI(nil, "work", "attach", plain)
+	if len(asked) != 1 || asked[0] != plain {
+		t.Fatalf("executor asked to attach %v, want only the unsandboxed Work", asked)
 	}
 }

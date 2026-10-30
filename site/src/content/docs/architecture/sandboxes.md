@@ -145,6 +145,14 @@ A version newer than the tested one is a `warn` (`untested_version`). The detail
 
 A sandboxed binding may only take a git workspace in `clone` mode, without `setup`. A worktree commits through the main checkout's `.git`, and setup runs on the host, outside the sandbox, in files the agent wrote ([sandboxed bindings](../workspaces/#sandboxed-bindings)). A clone's sandbox needs keep its `.git/config`, `.git/hooks` and `.git/info` read-only, so the agent can't give the host-side git a hook or fsmonitor to run. The provider's own git in a clone also runs distrusted and with `GIT_DIR` and `GIT_COMMON_DIR` pinned. It sets a new branch's upstream when it makes the clone, since `git push -u` can't record it there; such a push still pushes and exits 0, printing that it couldn't write the config.
 
+## Attach
+
+`open-conduit work attach` runs the executor's session on the host as the operator, outside any sandbox. For claude-code that is `claude --resume` in the workspace, and host-side claude loads the workspace's project config: hooks, `apiKeyHelper` and `statusLine` in `.claude/settings.json` and `.claude/settings.local.json`, and the servers in `.mcp.json`. A sandboxed agent can write all of these, so a hook it planted would run as the operator on attach.
+
+So the management server refuses attach, as `attach_sandboxed`, for Work any of whose segments was launched in a sandbox (a segment with a pinned plan), before the executor is asked for a command. It looks at every attempt, not just the latest, because the workspace outlives them: a binding that has since dropped its sandbox still has the files its sandboxed runs wrote. Unsandboxed Work attaches as before, since its agent already ran as the operator. Running the attach itself under the binding's policy is not built.
+
+Claude Code's own config directory is the same kind of path. The example policy grants `~/.claude` and `~/.claude.json` for writing, because claude writes its sessions and state there. A sandboxed agent can therefore add a user-level hook, MCP server or plugin there that runs in every claude session the operator starts on the host, not only on attach. Refusing attach doesn't close that. To close it, give a sandboxed binding a config directory of its own: set `CLAUDE_CONFIG_DIR` in the binding's `env` to a directory no host-side claude uses, and grant that in `write` in place of `~/.claude` and `~/.claude.json`. Claude then needs its own sign-in there, for example a token in a selected secret.
+
 ## Evidence
 
 Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from npm and, on Ubuntu 24.04, bubblewrap, socat and ripgrep, with the AppArmor userns restriction relaxed). They skip without srt, and fail without it under `OPEN_CONDUIT_SANDBOX_TESTS=1`. They call no real service.
@@ -160,6 +168,7 @@ Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from 
   - `Recover` in a new executor instance adopting its own sandbox, and refusing a changed record, a root outside the sandbox and an unsandboxed segment under a sandboxed binding
   - on Claude Code's launch path, an injected message reaching the sandboxed claude's stdin, recovery under its own pin only, and `Interrupt` and `Stop` ending it
 - [Sweep test](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/sandbox_test.go): the git provider's stray-process sweep finds and stops a sandboxed process tied to a workspace only by its working directory.
+- `TestManagementAttachRefusesSandboxedWork`: a sandboxed run plants a `SessionStart` hook in `.claude/settings.json` and a server in `.mcp.json`; attach is refused as `attach_sandboxed` without asking the executor and neither runs, while unsandboxed Work still attaches.
 - [Contract tests](https://github.com/open-conduit/open-conduit/blob/main/extension/sandbox_test.go), with a fake provider: needs merged with the resource's and the protected set, the plan pinned and recorded read-only, and refusals of a run directory outside the executor's or through a symlink, a workspace holding the state, a need inside the state or through `..`, a socket there, a hard link, a workspace without sandbox needs and an incomplete plan; adoption only under the pinned, unchanged record. [Mount aliases](https://github.com/open-conduit/open-conduit/blob/main/extension/sandboxmount_test.go) from a mountinfo fixture.
 - [srt provider tests](https://github.com/open-conduit/open-conduit/blob/main/extensions/srt/srt_test.go), with a stand-in `srt`: strict config, the settings for macOS and Linux, the wrapper's environment, every refusal, `Adopt` refusing another process, and [doctor's health](https://github.com/open-conduit/open-conduit/blob/main/extensions/srt/health_test.go) (also against the real srt in the sandbox jobs).
 - [Scheduler hook test](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_sandbox_test.go): the pin recorded with the segment and carried into recovery, and a binding failure failing the attempt before any executor call.
@@ -172,6 +181,7 @@ Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from 
 - The hard-link check covers the workspace, not the policy's other write grants. A package manager that hard-links from a store outside the workspace (pnpm) is refused until it is set to copy (`package-import-method=copy`).
 - On Linux srt grants only paths that exist when the segment starts.
 - srt itself runs as the operator, outside its sandbox, and is trusted.
+- Attach to Work that ran sandboxed is refused, not sandboxed. Under the example policy the agent can write claude's own config directory; give the binding its own `CLAUDE_CONFIG_DIR` ([attach](#attach)).
 
 ## History
 
