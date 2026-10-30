@@ -483,7 +483,8 @@ func (v *validator) registration(p string, b Binding) {
 
 // sandboxed checks a binding that declares a sandbox: a registered provider
 // that accepts its config, an executor config (alone and with each grant)
-// the executor can run in a sandbox, and a resource that wouldn't give the sandboxed
+// the executor can run in a sandbox (not for a container, whose executor
+// keeps its config in the Work's own home), and a resource that wouldn't give the sandboxed
 // executor a workspace that writes through to the operator's own files (a
 // git worktree, whose commits go through the main checkout's .git) or runs
 // setup outside the sandbox.
@@ -498,7 +499,7 @@ func (v *validator) sandboxed(p string, b Binding) {
 			}
 		}
 	}
-	if owner, ok := v.reg.Executors[b.Executor].(SandboxChecker); ok {
+	if owner, ok := v.reg.Executors[b.Executor].(SandboxChecker); ok && b.Container == nil {
 		err := owner.SandboxConfig(b.Config)
 		if err != nil {
 			v.fail(p+"/config", "sandbox_config", err.Error())

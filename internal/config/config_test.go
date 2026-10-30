@@ -713,6 +713,18 @@ func TestContainerBinding(t *testing.T) {
 	if b.Container == nil || b.Container.Provider != "docker" || !strings.Contains(string(b.Container.Config), image) || b.Sandbox != nil {
 		t.Fatalf("container %+v", b.Container)
 	}
+	// An executor's own sandbox config check (claude-code's config
+	// directory) is for a process sandbox: a container gives it the Work's
+	// home instead.
+	checking := reg.Executors["coding_agent"]
+	reg.Executors["coding_agent"] = sandboxCheckingExecutor{interruptExecutor{fakeExecutor{domain.Capabilities{Toolbelt: "mcp", Interrupt: true, Workspace: true, Sandbox: true, Container: true}}}}
+	m = generic(t, example(t, "sandboxed"))
+	contained(entry(m, 0, "bindings", 0))
+	entry(m, 0, "bindings", 0)["config"] = map[string]any{"shared": true}
+	if _, err := Validate(encode(t, m), reg); err != nil {
+		t.Errorf("a container binding got the sandbox config check: %+v", diagnostics(t, err))
+	}
+	reg.Executors["coding_agent"] = checking
 	for _, tc := range []struct {
 		name, path, code string
 		mutate           func(b map[string]any)
