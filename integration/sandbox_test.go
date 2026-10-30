@@ -455,11 +455,10 @@ func TestSandboxClaudeCodeIsolation(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(l.claude, "projects", "written")); err != nil {
 		t.Error("claude could not write its own config dir")
 	}
-	got := probeResults(string(out))
-	for _, k := range []string{"write_operator_settings", "write_operator_claude_json", "write_operator_plugin", "read_operator_credentials"} {
-		if got[k] != "DENIED" {
-			t.Errorf("%s: %q from inside the sandbox, want DENIED\n%s", k, got[k], out)
-		}
+	// A denied write on Linux lands in a throwaway tmpfs, so only the host
+	// files say whether the writes got out.
+	if got := probeResults(string(out)); got["read_operator_credentials"] != "DENIED" {
+		t.Errorf("read_operator_credentials: %q from inside the sandbox, want DENIED\n%s", got["read_operator_credentials"], out)
 	}
 	for _, path := range []string{".claude/settings.json", ".claude.json"} {
 		if b, _ := os.ReadFile(filepath.Join(l.home, path)); string(b) != "{}\n" {
