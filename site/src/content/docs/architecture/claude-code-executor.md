@@ -169,7 +169,7 @@ The config is strict and validated at load. Every field is optional:
 | `extra_args` | Extra arguments. These may not override `-p`, the session or the MCP flags, nor `--tools` when `builtin_tools` is set. |
 | `builtin_tools` | The only built-in tools Claude Code offers, passed as `--tools`. An empty list turns them all off, so the agent has only its MCP toolbelt: no shell, file access or web. Unset keeps Claude Code's default set. Attaching to the session keeps the same limit. |
 | `strict_mcp` | `true` passes `--strict-mcp-config`, so the toolbelt is the agent's only MCP server: none of the operator's own, a project's or claude.ai's servers and connectors load. Attaching keeps it. Default `false`. |
-| `home_seed` | For a binding with a container: an absolute directory (a `settings.json`, plugins) copied into the Work's home on its first use, its `.credentials.json` left out. A copy, never a mount. |
+| `home_seed` | For a binding with a container: an absolute directory (a `settings.json`, plugins) copied into the Work's home on its first use, its `.credentials.json` left out. A copy, never a mount. Use plain files: a symbolic link is copied as a link, and one to a host path dangles inside the container. |
 | `models` | Models a Work may pick for its turns through `model` in its context, for example one an operator chose when starting it. A Work that names none, or one not listed, uses `model`. |
 
 ## Setup probe
