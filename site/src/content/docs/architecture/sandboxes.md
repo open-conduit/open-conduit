@@ -52,7 +52,7 @@ The host refuses, as `sandbox_denied`, an executor need beneath the protected se
 A declared sandbox that can't be enforced runs nothing. Each of these ends the segment with a structured failure and no process:
 
 - no provider, or an executor without `Capabilities.Sandbox` (refused at config load as well)
-- a missing `srt`, an older one than the provider knows, or `bwrap` or `socat` missing on Linux
+- a missing `srt`, an older one than the provider knows, or `bwrap`, `socat` or `rg` missing on Linux
 - an unsupported platform
 - a failed preflight: `srt` runs `/usr/bin/true` under the real policy before every launch, so a kernel that won't make namespaces (Ubuntu 24.04's AppArmor restriction on unprivileged user namespaces) fails here
 - srt degrading: a preflight that warns (seccomp unavailable leaves unix sockets open) is refused
@@ -93,7 +93,7 @@ A root that has exited, or a wrapper that runs nothing yet, leaves nothing runni
 
 ## The srt provider
 
-`srt` (Anthropic's [sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime), version 0.0.81 or later) is Seatbelt on macOS and bubblewrap with a seccomp filter on Linux, with an allowlisting HTTP and SOCKS proxy on both. It needs Node, and on Linux `bwrap` and `socat`. The provider writes srt's settings into the plan's record directory and wraps the launch in `env PATH=… [WrapperEnv] srt --settings <file> -- env <the child's values for those keys> <argv>`. The child's environment stays the process environment, so a secret never enters an argv or a file.
+`srt` (Anthropic's [sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime), version 0.0.81 or later) is Seatbelt on macOS and bubblewrap with a seccomp filter on Linux, with an allowlisting HTTP and SOCKS proxy on both. It needs Node, and on Linux `bwrap`, `socat` and `rg` (ripgrep). The provider writes srt's settings into the plan's record directory and wraps the launch in `env PATH=… [WrapperEnv] srt --settings <file> -- env <the child's values for those keys> <argv>`. The child's environment stays the process environment, so a secret never enters an argv or a file.
 
 ### The policy
 
@@ -128,7 +128,7 @@ Paths are absolute, `~/…` or start with a placeholder; patterns are refused. T
 
 The `sandbox` check runs when a binding declares an srt sandbox. It reports `srt <version> at <path>` and, as `fail`:
 
-- `srt_unavailable`: srt, bwrap or socat missing, or srt too old
+- `srt_unavailable`: srt, bwrap, socat or rg missing, or srt too old
 - `userns_unavailable`: `kernel.apparmor_restrict_unprivileged_userns=1`, `unprivileged_userns_clone=0` or `user.max_user_namespaces=0`
 - `seccomp_unavailable`
 - `preflight_failed`: `/usr/bin/true` under an empty policy failed or warned
@@ -147,7 +147,7 @@ A sandboxed binding may only take a git workspace in `clone` mode, without `setu
 
 ## Evidence
 
-Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from npm and, on Ubuntu 24.04, bubblewrap and socat, with the AppArmor userns restriction relaxed). They skip without srt, and fail without it under `OPEN_CONDUIT_SANDBOX_TESTS=1`. They call no real service.
+Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from npm and, on Ubuntu 24.04, bubblewrap, socat and ripgrep, with the AppArmor userns restriction relaxed). They skip without srt, and fail without it under `OPEN_CONDUIT_SANDBOX_TESTS=1`. They call no real service.
 
 - [Isolation tests](https://github.com/open-conduit/open-conduit/blob/main/integration/sandbox_test.go), for the shell executor and for Claude Code's launch path (a stand-in `claude`), in a lab laid out as the daemon's state directory, from inside the sandbox:
   - denied reads of `~/.ssh`, another workspace, `private/operator.token`, another execution's token and the config file, also through a symlink in the workspace, `..`, `/proc/self/root` and an upper-case spelling (which reaches it unsandboxed on macOS's case-insensitive APFS); the attempt's own token readable

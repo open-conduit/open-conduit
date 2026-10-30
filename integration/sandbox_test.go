@@ -46,7 +46,7 @@ func srtBinary(t *testing.T) string {
 		t.Skip("srt is not installed; the sandbox CI jobs run these tests")
 	}
 	if runtime.GOOS == "linux" {
-		for _, dep := range []string{"bwrap", "socat"} {
+		for _, dep := range []string{"bwrap", "socat", "rg"} {
 			if _, err := exec.LookPath(dep); err != nil {
 				if os.Getenv("OPEN_CONDUIT_SANDBOX_TESTS") == "1" {
 					t.Fatalf("OPEN_CONDUIT_SANDBOX_TESTS=1, but %s is not installed", dep)

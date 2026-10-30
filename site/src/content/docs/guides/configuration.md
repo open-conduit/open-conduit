@@ -67,11 +67,11 @@ As with the main file, edits to a folder's config take effect on `config apply`.
 
 Without a sandbox, an agent runs as you: it can read anything your account can, including Open Conduit's own operator token, and reach any host. A binding's `sandbox` runs its executor inside Anthropic's [sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime) (`srt`), so a run can write only its workspace and the paths you grant, reach only the hosts you list, and never read Open Conduit's state directory or config, whatever you grant.
 
-Install srt (it needs Node) and, on Linux, bubblewrap and socat:
+Install srt (it needs Node) and, on Linux, bubblewrap, socat and ripgrep:
 
 ```sh
 npm install -g @anthropic-ai/sandbox-runtime
-sudo apt-get install bubblewrap socat     # Linux only
+sudo apt-get install bubblewrap socat ripgrep   # Linux only
 open-conduit doctor                       # the sandbox check runs srt once
 ```
 

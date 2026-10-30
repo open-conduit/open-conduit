@@ -363,7 +363,7 @@ func (p *Provider) binary(ctx context.Context) (string, string, error) {
 		return "", "", fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
 	}
 	if o.GOOS == "linux" {
-		for _, dep := range []string{"bwrap", "socat"} {
+		for _, dep := range []string{"bwrap", "socat", "rg"} {
 			if _, err := o.LookPath(dep); err != nil {
 				return "", "", fmt.Errorf("%w: %s not found (srt needs it on Linux)", extension.ErrSandboxUnavailable, dep)
 			}

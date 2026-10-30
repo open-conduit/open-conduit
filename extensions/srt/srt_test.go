@@ -130,11 +130,10 @@ func TestPlan(t *testing.T) {
 	for _, goos := range []string{"darwin", "linux"} {
 		t.Run(goos, func(t *testing.T) {
 			if goos == "linux" {
-				if _, err := exec.LookPath("socat"); err != nil {
-					t.Skip("the Linux plan looks for bwrap and socat")
-				}
-				if _, err := exec.LookPath("bwrap"); err != nil {
-					t.Skip("the Linux plan looks for bwrap and socat")
+				for _, dep := range []string{"bwrap", "socat", "rg"} {
+					if _, err := exec.LookPath(dep); err != nil {
+						t.Skip("the Linux plan looks for bwrap, socat and rg")
+					}
 				}
 			}
 			l := newLab(t, "")
