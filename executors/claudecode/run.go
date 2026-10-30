@@ -208,11 +208,14 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		cfg.PluginDir = e.o.PluginDir
 	}
 	configDir := claudeConfigDir(env)
+	// The operator's home is the daemon's, and a binding's env may name
+	// another: a sandboxed claude reaches the claude config under neither.
+	operator := homes(envHome(e.o.Environ()), envHome(env))
 	// A sandboxed claude keeps its config in a directory of its own: one the
 	// operator's own claude reads would carry a hook, MCP server or plugin
 	// the agent planted out of the sandbox (B09).
 	if r.Context.Sandbox != nil {
-		if err = ownConfigDir(env, configDir); err != nil {
+		if err = ownConfigDir(env, configDir, operator); err != nil {
 			return e.preset(ctx, rn, cfg.StatusSchema, "sandbox_denied", err.Error(), nil)
 		}
 	}
@@ -288,7 +291,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	// own config and sign-in, the API and its toolbelt, and never reaches
 	// the operator's claude config; with /tmp out of reach its temporary
 	// files go in the segment's own directory.
-	needs := extension.SandboxNeeds{Write: []string{workdir, configDir}, Read: []string{filepath.Join(dir, "mcp.json")}, Deny: operatorClaude(envHome(env)), Hosts: []string{"api.anthropic.com"}}
+	needs := extension.SandboxNeeds{Write: []string{workdir, configDir}, Read: []string{filepath.Join(dir, "mcp.json")}, Deny: operatorClaude(operator), Hosts: []string{"api.anthropic.com"}}
 	if cfg.PluginDir != "" {
 		needs.Read = append(needs.Read, cfg.PluginDir)
 	}
@@ -505,12 +508,13 @@ func envHome(env []string) string {
 }
 
 // ownConfigDir refuses a sandboxed claude's config directory unless the
-// environment sets one apart from the operator's own claude config.
-func ownConfigDir(env []string, configDir string) error {
+// environment sets one apart from the claude config under each of the
+// operator's homes.
+func ownConfigDir(env []string, configDir string, operator []string) error {
 	if !hasEnv(env, "CLAUDE_CONFIG_DIR") {
 		return errors.New(errOwnConfig)
 	}
-	if sharesConfig(configDir, envHome(env)) {
+	if sharesConfig(configDir, operator) {
 		return errors.New(errSharedConfig)
 	}
 	return nil

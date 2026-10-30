@@ -23,6 +23,7 @@ func TestSandboxConfig(t *testing.T) {
 	_ = os.MkdirAll(filepath.Join(home, ".claude"), 0o700)
 	_ = os.Symlink(filepath.Join(home, ".claude"), filepath.Join(home, "linked"))
 	own := filepath.Join(t.TempDir(), "claude")
+	other := t.TempDir()
 	e := &claudecode.Executor{}
 	with := func(env map[string]string) json.RawMessage {
 		b, _ := json.Marshal(map[string]any{"env": env})
@@ -35,13 +36,15 @@ func TestSandboxConfig(t *testing.T) {
 		t.Fatalf("a sibling of ~/.claude refused: %v", err)
 	}
 	for name, env := range map[string]map[string]string{
-		"unset":     nil,
-		"empty":     {"CLAUDE_CONFIG_DIR": ""},
-		"relative":  {"CLAUDE_CONFIG_DIR": "claude"},
-		"~/.claude": {"CLAUDE_CONFIG_DIR": filepath.Join(home, ".claude")},
-		"inside":    {"CLAUDE_CONFIG_DIR": filepath.Join(home, ".claude", "sandboxed")},
-		"the home":  {"CLAUDE_CONFIG_DIR": home},
-		"a link":    {"CLAUDE_CONFIG_DIR": filepath.Join(home, "linked")},
+		"unset":                        nil,
+		"empty":                        {"CLAUDE_CONFIG_DIR": ""},
+		"relative":                     {"CLAUDE_CONFIG_DIR": "claude"},
+		"~/.claude":                    {"CLAUDE_CONFIG_DIR": filepath.Join(home, ".claude")},
+		"inside":                       {"CLAUDE_CONFIG_DIR": filepath.Join(home, ".claude", "sandboxed")},
+		"the home":                     {"CLAUDE_CONFIG_DIR": home},
+		"a link":                       {"CLAUDE_CONFIG_DIR": filepath.Join(home, "linked")},
+		"real home under another HOME": {"CLAUDE_CONFIG_DIR": filepath.Join(home, ".claude"), "HOME": t.TempDir()},
+		"the other HOME's":             {"CLAUDE_CONFIG_DIR": filepath.Join(other, ".claude"), "HOME": other},
 	} {
 		if err := e.SandboxConfig(with(env)); err == nil {
 			t.Errorf("%s: accepted", name)
@@ -87,5 +90,23 @@ func TestSandboxedConfigDir(t *testing.T) {
 	}
 	if len(b.needs) != 1 || len(h.invocations()) != 1 {
 		t.Fatalf("a refused launch was planned or ran: %d plans, %v", len(b.needs), h.invocations())
+	}
+
+	// A binding env that sets HOME elsewhere still keeps the daemon's own
+	// home's claude config out of reach, and its own HOME's too.
+	other := filepath.Join(h.root, "other-home")
+	_ = os.MkdirAll(other, 0o700)
+	r, _ = h.request("work/e", "exec-e", 1, map[string]any{"env": map[string]string{"FAKE_DIR": h.fake, "HOME": other}})
+	r.Context.Sandbox = b
+	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("sandboxed run with HOME overridden failed: %+v", res.Outcome)
+	}
+	if want := []string{filepath.Join(h.root, ".claude"), filepath.Join(h.root, ".claude.json"), filepath.Join(other, ".claude"), filepath.Join(other, ".claude.json")}; len(b.needs) != 2 || !slices.Equal(b.needs[1].Deny, want) {
+		t.Fatalf("deny with HOME overridden %+v, want %v", b.needs, want)
+	}
+	r, _ = h.request("work/f", "exec-f", 1, map[string]any{"env": map[string]string{"FAKE_DIR": h.fake, "HOME": other, "CLAUDE_CONFIG_DIR": filepath.Join(h.root, ".claude")}})
+	r.Context.Sandbox = b
+	if res := h.run(e, r); res.Outcome.Kind != domain.OutcomeFailed || dataOf(t, res).Reason != "sandbox_denied" {
+		t.Errorf("the daemon's ~/.claude under another HOME: %+v", res.Outcome)
 	}
 }

@@ -319,22 +319,39 @@ func (e *Executor) SandboxConfig(raw json.RawMessage) error {
 		return errors.New(errOwnConfig)
 	}
 	home, _ := os.UserHomeDir()
-	if sharesConfig(dir, home) {
+	if sharesConfig(dir, homes(home, c.Env["HOME"])) {
 		return errors.New(errSharedConfig)
 	}
 	return nil
 }
 
-// operatorClaude is the operator's own claude config under home.
-func operatorClaude(home string) []string {
-	return []string{filepath.Join(home, ".claude"), filepath.Join(home, ".claude.json")}
+// homes are the distinct, non-empty home directories given: the operator's
+// own and any a binding's env sets in its place.
+func homes(dirs ...string) []string {
+	var out []string
+	for _, d := range dirs {
+		if d != "" && !slices.Contains(out, d) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// operatorClaude is the operator's own claude config under each home.
+func operatorClaude(homes []string) []string {
+	var out []string
+	for _, h := range homes {
+		out = append(out, filepath.Join(h, ".claude"), filepath.Join(h, ".claude.json"))
+	}
+	return out
 }
 
 // sharesConfig reports whether a config directory is, holds or is inside
-// the operator's own claude config under home, symbolic links resolved.
-func sharesConfig(dir, home string) bool {
+// the operator's own claude config under any of homes, symbolic links
+// resolved.
+func sharesConfig(dir string, homes []string) bool {
 	d := extension.CanonicalPath(dir)
-	for _, p := range operatorClaude(home) {
+	for _, p := range operatorClaude(homes) {
 		p = extension.CanonicalPath(p)
 		if extension.Within(d, []string{p}) || extension.Within(p, []string{d}) {
 			return true
