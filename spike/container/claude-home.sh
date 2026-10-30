@@ -11,6 +11,6 @@ fi
 crun() {
   docker run --rm -i --init --read-only --tmpfs /tmp --user "$(id -u):$(id -g)" --cap-drop ALL \
     --security-opt no-new-privileges -v $HOMEW:$HOMEW -v $WS:$WS -w $WS \
-    -e HOME=$HOMEW -e CLAUDE_CONFIG_DIR=$HOMEW ${TOKEN_FILE:+--env-file $TOKEN_FILE} \
+    ${NETARGS} -e HOME=$HOMEW -e CLAUDE_CONFIG_DIR=$HOMEW ${TOKEN_FILE:+--env-file $TOKEN_FILE} \
     oc-spike-claude:1 "$@"
 }
