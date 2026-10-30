@@ -161,6 +161,8 @@ func mapError(err error) *apiError {
 		return fail(409, "nothing_to_attach", "the Work's executor has nothing to attach to yet")
 	case errors.Is(err, ErrAttachUnsupported):
 		return fail(422, "attach_unsupported", "the Work's executor does not support attach")
+	case errors.Is(err, ErrAttachSandboxed):
+		return fail(422, "attach_sandboxed", "the Work ran in a sandbox; attach would run its session on the host, outside it, where hooks and MCP servers the agent wrote into the workspace would run as you")
 	case errors.Is(err, ErrNotLive):
 		return fail(409, "not_live", "the run is not running; its output is in its artifacts")
 	case errors.Is(err, ErrLiveUnsupported):
