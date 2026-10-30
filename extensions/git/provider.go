@@ -281,6 +281,13 @@ func (p *Provider) Acquire(ctx context.Context, a extension.ResourceAcquisition)
 	if err != nil {
 		return extension.Resource{}, err
 	}
+	// A sandboxed binding takes only a clone without setup: refused before
+	// anything is made or run.
+	if a.Request.Sandboxed {
+		if err := ValidateSandbox(a.Config.Data, mode); err != nil {
+			return extension.Resource{}, fmt.Errorf("%w: %v", extension.ErrUnsupported, err)
+		}
+	}
 	checkout, err := p.checkout(ctx, cfg)
 	if err != nil {
 		return extension.Resource{}, err
@@ -303,7 +310,33 @@ func newLease(ref, mode string, cfg Config, checkout string, o extension.Resourc
 func resource(l lease, w workspace) extension.Resource {
 	w.Mode, w.Dir, w.Remote, w.Base, w.Branch = l.Mode, l.Path, l.Remote, l.Base, l.Branch
 	data, _ := json.Marshal(w)
-	return extension.Resource{Kind: "workspace", Ref: l.Ref, Dir: l.Path, Env: environment(l.Checkout, l.DotEnv, l.Sign), Data: domain.Payload{Schema: WorkspaceSchema, Data: data}, Summary: summary(w)}
+	return extension.Resource{Kind: "workspace", Ref: l.Ref, Dir: l.Path, Env: environment(l.Checkout, l.DotEnv, l.Sign), Data: domain.Payload{Schema: WorkspaceSchema, Data: data}, Summary: summary(w), Sandbox: sandboxNeeds(l)}
+}
+
+// sandboxNeeds is what a sandbox must allow for a clone (B09): the clone
+// writable, but never the files that make git run a program (its config,
+// with any include it names, hooks and info), which the host-side git
+// reads. A worktree commits through the checkout's .git
+// and the shared mode is the checkout, so they can't be used in a sandbox.
+func sandboxNeeds(l lease) *extension.SandboxNeeds {
+	if l.Mode != ModeClone {
+		return nil
+	}
+	return CloneSandboxNeeds(l.Path)
+}
+
+// CloneSandboxNeeds is what a sandbox needs to use the clone at dir. The
+// hooks and info directories are made if missing, so a sandbox that can't
+// protect a path that doesn't exist (bubblewrap) still covers them. A
+// commondir file can't be protected that way (a placeholder breaks git), so
+// the provider's own git pins GIT_COMMON_DIR instead (cloneDirs).
+func CloneSandboxNeeds(dir string) *extension.SandboxNeeds {
+	git := filepath.Join(dir, ".git")
+	for _, d := range []string{"hooks", "info"} {
+		_ = os.MkdirAll(filepath.Join(git, d), 0o755)
+	}
+	return &extension.SandboxNeeds{Write: []string{dir}, ReadOnly: []string{
+		filepath.Join(git, "config"), filepath.Join(git, "hooks"), filepath.Join(git, "info")}}
 }
 
 // summary is the workspace in one line for run history (05-02).

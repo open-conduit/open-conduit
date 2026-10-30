@@ -90,6 +90,13 @@ type SchedulerOptions struct {
 	// before Run/Recover/Resume, outside coordination transactions. A nil
 	// broker means the binding declares no resource. Core never inspects it.
 	Resources func(context.Context, AttemptState) (extension.ResourceBroker, error)
+	// Sandbox binds the attempt's optional process sandbox (B09) after
+	// Resources, outside coordination transactions. It returns the broker
+	// (nil: the binding declares none) and the resource broker the executor
+	// gets in place of the one it was given. pin records a plan with the
+	// attempt's open segment, fenced by the lease, before the plan reaches
+	// the executor. Core never inspects either broker.
+	Sandbox func(ctx context.Context, state AttemptState, resources extension.ResourceBroker, pin func(extension.SandboxPlan) error) (extension.SandboxBroker, extension.ResourceBroker, error)
 	// KeptExecutions is the per-Work retention count shared by every executor
 	// (B05 kept_executions, default 20). Artifacts receives content deletion
 	// for expired attempts; nil keeps content and still records expiration.
@@ -236,6 +243,25 @@ type Segment struct {
 	WakeEventID domain.ID  `json:",omitempty"`
 	Parked      bool       `json:",omitempty"`
 	Recovered   bool       `json:",omitempty"`
+	// Sandbox is the plan the segment's process was launched under, when
+	// its binding declared a sandbox (B09). A recovered segment carries the
+	// plan of the process it adopted.
+	Sandbox *SegmentSandbox `json:",omitempty"`
+}
+
+// SegmentSandbox pins a segment's sandbox: the plan's digest, and its
+// summary for history.
+type SegmentSandbox struct {
+	Digest, Summary string
+}
+
+// SandboxPin is the sandbox plan the attempt's latest segment was launched
+// under, or nil.
+func (state AttemptState) SandboxPin() *SegmentSandbox {
+	if n := len(state.Segments); n > 0 {
+		return state.Segments[n-1].Sandbox
+	}
+	return nil
 }
 
 // endSegment ends the open segment, if any, at end (never before it began).
@@ -913,6 +939,34 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		}
 		attempt.Request.Context.Resources = broker
 	}
+	if s.options.Sandbox != nil {
+		pin := func(plan extension.SandboxPlan) error {
+			return s.transact(ctx, &attempt.Lease, func(tx storage.Tx) error {
+				current, e := attemptState(tx, state.ExecutionID)
+				if e != nil {
+					return e
+				}
+				n := len(current.Segments)
+				if n == 0 || current.Segments[n-1].EndedAt != nil {
+					return storage.ErrInvalid
+				}
+				current.Segments[n-1].Sandbox = &SegmentSandbox{Digest: plan.Digest, Summary: plan.Summary}
+				return putAttemptState(tx, current)
+			})
+		}
+		// The hook is told a recovery as the state now records it: the
+		// recovered segment adopts the process its pin was made for.
+		bound := state
+		if recovering {
+			bound.LaunchState = "recovering"
+		}
+		sandbox, resources, sandboxErr := s.options.Sandbox(ctx, bound, attempt.Request.Context.Resources, pin)
+		if sandboxErr != nil {
+			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "sandbox unavailable"}}
+			return attempt, errors.Join(extension.ErrSandboxUnavailable, sandboxErr, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
+		}
+		attempt.Request.Context.Sandbox, attempt.Request.Context.Resources = sandbox, resources
+	}
 	if recovering {
 		handle, err = executor.Recover(ctx, attempt.Request, state.Recovery)
 	} else if resume {
@@ -976,8 +1030,9 @@ func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt,
 		// new owner took over.
 		if n := len(current.Segments); n > 0 && current.Segments[n-1].EndedAt == nil {
 			now := s.now()
+			pin := current.Segments[n-1].Sandbox
 			current.endSegment(now, false)
-			current.beginSegment(Segment{StartedAt: now, Recovered: true})
+			current.beginSegment(Segment{StartedAt: now, Recovered: true, Sandbox: pin})
 		}
 		ref, e := tx.Claim(id, s.options.Owner, s.options.LeaseDuration)
 		if e != nil {

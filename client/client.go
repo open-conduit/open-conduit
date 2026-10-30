@@ -1064,6 +1064,15 @@ type RunSegment struct {
 	WakeEventID string `json:"wake_event_id,omitempty"`
 	Parked      bool   `json:"parked,omitempty"`
 	Recovered   bool   `json:"recovered,omitempty"`
+	// Sandbox is the sandbox plan the segment ran under, when its binding
+	// declared one (B09).
+	Sandbox *RunSandbox `json:"sandbox,omitempty"`
+}
+
+// RunSandbox pins a segment's sandbox: the plan's digest and its summary.
+type RunSandbox struct {
+	Digest  string `json:"digest"`
+	Summary string `json:"summary,omitempty"`
 }
 
 // RunWorkspace is the resource a run's executor reported it ran in.

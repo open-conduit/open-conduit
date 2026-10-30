@@ -134,7 +134,7 @@ func New(o Options) (*Executor, error) {
 }
 
 func (e *Executor) Capabilities() domain.Capabilities {
-	return domain.Capabilities{Interrupt: true, Inject: true, Resume: e.o.Resume, Toolbelt: extension.ToolbeltCLI, Workspace: true}
+	return domain.Capabilities{Interrupt: true, Inject: true, Resume: e.o.Resume, Toolbelt: extension.ToolbeltCLI, Workspace: true, Sandbox: true}
 }
 
 func executionKey(id domain.ID) string {
@@ -277,6 +277,20 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	if cfg.Command != "" {
 		argv = []string{"/bin/sh", "-c", cfg.Command}
 	}
+	// A sandboxed binding wraps the command (B09): it needs its workspace,
+	// its outputs and inbox, its token and its toolbelt socket.
+	needs := extension.SandboxNeeds{Write: []string{workdir, filepath.Join(dir, "outputs"), filepath.Join(dir, inboxDir)}, Read: []string{filepath.Join(dir, "input.json")}}
+	if r.Context.ToolbeltTokenFile != "" {
+		needs.Read = append(needs.Read, filepath.Dir(r.Context.ToolbeltTokenFile))
+	}
+	if sock, ok := strings.CutPrefix(r.Context.ToolbeltEndpoint, "unix://"); ok && r.Context.ToolbeltToken != "" {
+		needs.Sockets = []string{sock}
+	}
+	plan, err := extension.WrapLaunch(ctx, r.Context.Sandbox, needs, extension.SandboxLaunch{Argv: argv, Dir: workdir, Env: env, RunDir: dir})
+	if err != nil {
+		return e.preset(ctx, rn, extension.SandboxReason(err), err.Error())
+	}
+	argv, env = plan.Argv, plan.Env
 	cmd := exec.Command("/bin/sh", append([]string{"-c", wrapper, marker + nonce, dir}, argv...)...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workdir, env, log, log
 	detach(cmd)
@@ -284,7 +298,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 		return e.preset(ctx, rn, "start_failed", "could not start shell process")
 	}
 	rn.pid, rn.done = cmd.Process.Pid, make(chan struct{})
-	_ = writeJSON(filepath.Join(dir, "process.json"), processRecord{PID: rn.pid})
+	_ = writeJSON(filepath.Join(dir, "process.json"), processRecord{PID: rn.pid, Signals: plan.Signals})
 	go func() {
 		state, _ := cmd.Process.Wait()
 		rn.mu.Lock()
@@ -457,6 +471,11 @@ func (e *Executor) Recover(ctx context.Context, r extension.RunRequest, state do
 			return nil, extension.ErrNotAdoptable
 		}
 		return adopt()
+	}
+	// A live segment of a sandboxed binding is adopted only once the host
+	// proves it still runs inside its sandbox.
+	if err := extension.AdoptSandboxed(ctx, r.Context.Sandbox, rn.pid); err != nil {
+		return nil, err
 	}
 	// Replace the process credential before acknowledging adoption. Runtime has
 	// already revoked lower-epoch tokens.

@@ -172,6 +172,12 @@ var ErrSandboxMode = errors.New("a sandboxed binding can't use a git workspace i
 	"a worktree commits through the main checkout's .git (its config, hooks and branches) and shared mode is the main checkout itself; " +
 	"use mode clone, a separate clone that shares nothing writable with the checkout")
 
+// ErrSandboxSetup refuses setup for a sandboxed binding: setup runs on the
+// host, outside the sandbox, in a workspace the agent wrote.
+var ErrSandboxSetup = errors.New("a sandboxed binding can't run a git workspace's setup: " +
+	"setup runs outside the sandbox, in files the agent wrote in an earlier attempt (its hooks, its package scripts); " +
+	"remove setup and run it as the agent's first step instead, inside the sandbox")
+
 // ValidateSandbox checks a git resource config for a binding that runs its
 // executor in a sandbox (B09). mode is what the executor requests, empty for
 // the config's own default. Only clone is allowed: a work or fresh worktree
@@ -188,6 +194,9 @@ func ValidateSandbox(raw json.RawMessage, mode string) error {
 	}
 	if mode != ModeClone {
 		return ErrSandboxMode
+	}
+	if c.Setup != "" {
+		return ErrSandboxSetup
 	}
 	return nil
 }

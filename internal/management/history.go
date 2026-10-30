@@ -54,6 +54,12 @@ type wireSegment struct {
 	WakeEventID string `json:"wake_event_id,omitempty"`
 	Parked      bool   `json:"parked,omitempty"`
 	Recovered   bool   `json:"recovered,omitempty"`
+	// Sandbox is the sandbox plan the segment ran under (B09).
+	Sandbox *wireSandbox `json:"sandbox,omitempty"`
+}
+type wireSandbox struct {
+	Digest  string `json:"digest"`
+	Summary string `json:"summary,omitempty"`
 }
 type wireRetention struct {
 	State           string `json:"state"`
@@ -109,7 +115,11 @@ func toRun(r runtime.Run) wireRun {
 		out.DurationMS = x.FinishedAt.Sub(*x.StartedAt).Milliseconds()
 	}
 	for _, g := range r.Segments {
-		out.Segments = append(out.Segments, wireSegment{StartedAt: ts(g.StartedAt), EndedAt: tsPtr(g.EndedAt), WakeEventID: string(g.WakeEventID), Parked: g.Parked, Recovered: g.Recovered})
+		seg := wireSegment{StartedAt: ts(g.StartedAt), EndedAt: tsPtr(g.EndedAt), WakeEventID: string(g.WakeEventID), Parked: g.Parked, Recovered: g.Recovered}
+		if g.Sandbox != nil {
+			seg.Sandbox = &wireSandbox{Digest: g.Sandbox.Digest, Summary: g.Sandbox.Summary}
+		}
+		out.Segments = append(out.Segments, seg)
 	}
 	out.SegmentsDropped = r.DroppedSegments
 	out.ActiveMS = r.ActiveTime.Milliseconds()

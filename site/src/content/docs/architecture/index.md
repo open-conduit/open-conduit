@@ -10,7 +10,7 @@ These pages are for people working on Open Conduit itself, or anyone who wants t
 Each page separates three kinds of material:
 
 - **Current behaviour and guarantees.** The opening and the body of every page describe the code as it is now: what the part does, what it promises and its current limits. A limit stated here is a real limit today.
-- **Design decisions.** Eight pages record a decision, numbered B01 to B08, with its rules and the reasons for them. Code and other pages cite these numbers. The decisions still hold unless the page says otherwise.
+- **Design decisions.** Nine pages record a decision, numbered B01 to B09, with its rules and the reasons for them. Code and other pages cite these numbers. The decisions still hold unless the page says otherwise.
 - **History.** Where a page has a **History** section at the end, it records how that part was built: which delivery ticket (numbered like `02-04`) added what, what each stage left out at the time, and the evidence runs made then. Those notes describe the code at the time, not current limitations.
 
 [Performance](performance/) gathers the evidence on throughput, latency, contention and resource use, and names what has not been measured yet.
@@ -43,6 +43,7 @@ Each page separates three kinds of material:
 
 - [GitHub ingress, routing policy and projections](github-extension/)
 - [Optional workspaces and the Git provider](workspaces/) (decision B07)
+- [Process sandboxes and the srt provider](sandboxes/) (decision B09)
 - [Claude Code executor and private continuity](claude-code-executor/)
 - [Engineering tools, waits and playbooks](engineering-tools/)
 - [Slack ingress, conversations and marked replies](slack-extension/)

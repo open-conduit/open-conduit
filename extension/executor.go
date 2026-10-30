@@ -23,7 +23,12 @@ type ExecutionContext struct {
 	// Resources is nil unless the binding declares a resource provider. An
 	// executor acquires what it needs through it (see resource.go); absence is
 	// valid and every executor must operate without it.
-	Resources                       ResourceBroker
+	Resources ResourceBroker
+	// Sandbox is nil unless the binding declares a process sandbox (B09).
+	// An executor that advertises Capabilities.Sandbox wraps its launch
+	// through it (WrapLaunch) and proves a recovered segment still runs in
+	// it (AdoptSandboxed); see sandbox.go.
+	Sandbox                         SandboxBroker
 	ToolbeltEndpoint, ToolbeltToken string
 	// ToolbeltTokenFile, when set, is the host-kept file holding the current
 	// ToolbeltToken, in a token directory the host rotates it in on recovery.

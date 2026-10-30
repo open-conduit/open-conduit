@@ -24,6 +24,8 @@ Unknown fields, trailing data, NUL bytes, invalid names and any `OS_*` target ar
 
 A shell binding whose Scope binds a resource provider runs in the acquired workspace, as described in [workspaces](../workspaces/). Acquisition happens after the recovery intent is persisted and before the process deadline starts. A setup failure, unavailable workspace or full-disk refusal becomes a structured failed result with no process (`workspace_setup_failed`, `workspace_unavailable`, `workspace_no_space`). A result reports the acquired workspace generically as `extension.Result.Workspace` (kind, lease reference, directory, the provider's one-line summary and description), beside the `workspace` field of the result data, so run history shows it for every executor.
 
+A binding with a sandbox ([B09](../sandboxes/)) wraps the command: the executor passes the argv its wrapper runs as `"$@"` to `extension.WrapLaunch`, with its needs (the workspace, the `outputs` and inbox directories, the input file, the token directory and the toolbelt socket), and runs the plan instead. A refusal is a structured failed result with no process (`sandbox_denied` or `sandbox_unavailable`). `Recover` adopts a live sandboxed segment only once `extension.AdoptSandboxed` proves it is still in its sandbox. An interrupted sandboxed segment's result says what reached it: `interrupt: term`, or `kill` where the sandbox runs the command outside the process group (Linux).
+
 ## Environment and toolbelt protocol
 
 The environment follows the B05 order:
@@ -148,3 +150,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - Ticket 02-08 added `Forget` for the shared retention policy and history/TUI presentation with log tailing from published artifacts.
 - Ticket 03-02 added workspace support. Ticket 04-02 added the inject inbox; before it, binding an inject route to shell needed an unsupported-capability fallback. Ticket 05-02 added `extension.Result.Workspace`.
 - `extension.StopExecutor` became a public optional interface in 07-01.
+- Issue #164 added the sandbox wrap ([B09](../sandboxes/)).

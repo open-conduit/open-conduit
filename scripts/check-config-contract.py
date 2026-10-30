@@ -17,8 +17,9 @@ VALIDATOR = Draft202012Validator(SCHEMA)
 EXECUTORS = {
     'shell': {'toolbelt': 'cli'},
     'support_agent': {'toolbelt': 'mcp', 'inject': True},
-    'coding_agent': {'toolbelt': 'mcp', 'interrupt': True, 'workspace': True},
+    'coding_agent': {'toolbelt': 'mcp', 'interrupt': True, 'workspace': True, 'sandbox': True},
 }
+SANDBOXES = {'srt'}
 HANDLERS = {'manual', 'thread', 'issue'}
 EXTENSIONS = {'chat_ingress', 'code_ingress', 'schedule'}
 CONNECTIONS = {'chat', 'code'}
@@ -124,6 +125,14 @@ def check(config):
                 fail(bp + '/resource', 'resource_required')
             if 'resource' in binding and binding['resource']['provider'] != 'git':
                 fail(bp + '/resource/provider', 'unknown_registration')
+            if 'sandbox' in binding:
+                if not capabilities.get('sandbox'):
+                    fail(bp + '/sandbox', 'unsupported_capability')
+                if binding['sandbox']['provider'] not in SANDBOXES:
+                    fail(bp + '/sandbox/provider', 'unknown_registration')
+                resource = binding.get('resource', {}).get('config', {})
+                if 'resource' in binding and (resource.get('mode') != 'clone' or 'setup' in resource):
+                    fail(bp + '/resource/config', 'sandbox_workspace')
             if not set(binding['operations']) <= set(result['authorization']['operations']):
                 fail(bp + '/operations', 'operation_denied')
             for i, grant in enumerate(binding.get('grants', [])):
@@ -172,7 +181,7 @@ def check(config):
 def main():
     Draft202012Validator.check_schema(SCHEMA)
     examples = ROOT / 'docs/architecture/examples/config'
-    for name in ('workspace-free', 'git-scope', 'shell-job', 'inheritance'):
+    for name in ('workspace-free', 'git-scope', 'shell-job', 'inheritance', 'sandboxed'):
         errors, effective = check(load(examples / (name + '.json')))
         assert not errors, (name, errors)
         if name == 'inheritance':
@@ -183,6 +192,17 @@ def main():
             assert child['secret_refs']['temporary'] is False
     invalid = load(examples / 'invalid-capability.json')
     assert any(code == 'unsupported_capability' for _, code in check(invalid)[0])
+    sandboxed = load(examples / 'sandboxed.json')
+    for expected, mutate in [
+        ('sandbox_workspace', lambda c: c['scopes'][0]['bindings'][0]['resource']['config'].update(mode='work')),
+        ('sandbox_workspace', lambda c: c['scopes'][0]['bindings'][0]['resource']['config'].update(setup='npm ci')),
+        ('unknown_registration', lambda c: c['scopes'][0]['bindings'][0]['sandbox'].update(provider='docker')),
+        ('unsupported_capability', lambda c: c['scopes'][0]['bindings'][0].update(executor='support_agent', requires={})),
+        ('schema', lambda c: c['scopes'][0]['bindings'][0]['sandbox'].update(policy={})),
+    ]:
+        candidate = copy.deepcopy(sandboxed)
+        mutate(candidate)
+        assert any(code == expected for _, code in check(candidate)[0]), (expected, check(candidate)[0])
     base = load(examples / 'inheritance.json')
     command = copy.deepcopy(base)
     command['scopes'][0]['secret_refs']['temporary'] = 'cmd:printf token'
@@ -228,7 +248,7 @@ def main():
         raise AssertionError('duplicate keys accepted')
     except ValueError:
         pass
-    print('B05: schema valid; 4 valid examples, invalid capability, 17 negative mutations, inheritance/whole replacement/tombstone restoration and duplicate-key checks passed')
+    print('B05: schema valid; 5 valid examples, invalid capability, 5 sandbox and 17 other negative mutations, inheritance/whole replacement/tombstone restoration and duplicate-key checks passed')
 
 
 if __name__ == '__main__':

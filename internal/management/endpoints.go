@@ -79,6 +79,21 @@ func endpointKey(id domain.ID) string {
 // Dir is the execution's run directory.
 func (e *Endpoints) Dir(id domain.ID) string { return filepath.Join(e.root, endpointKey(id)) }
 
+// Socket is the path of the execution's served socket, "" while it is not
+// served.
+func (e *Endpoints) Socket(id domain.ID) string {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if ep := e.served[id]; ep != nil {
+		return ep.socket
+	}
+	return ""
+}
+
+// ShortRoot is the root of the fallback socket directories, which every
+// execution's socket may be in.
+func (e *Endpoints) ShortRoot() string { return e.short }
+
 // Serve writes the execution's current token into its token directory and
 // serves its socket, if it is not served already. It returns the endpoint
 // (unix:///…) and the token file. Every claim, recovery and resume calls it

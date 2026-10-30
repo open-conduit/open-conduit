@@ -149,6 +149,14 @@ func Detail(r client.Run, attempts []client.Run, now time.Time) string {
 		}
 		line("workspace", v)
 	}
+	// The sandbox each segment ran under, once per change of plan.
+	var last string
+	for _, g := range r.Segments {
+		if g.Sandbox != nil && g.Sandbox.Digest != last {
+			last = g.Sandbox.Digest
+			line("sandbox", g.Sandbox.Summary+" ("+short(last)+")")
+		}
+	}
 	line("inputs", strconv.Itoa(r.Inputs))
 	line("wait", r.WaitID)
 	if rt := r.Retry; rt != nil {
@@ -206,4 +214,13 @@ func WorkLabel(w client.Work) string {
 		return k.Source + " " + k.ExternalID
 	}
 	return w.ID
+}
+
+// short is a sandbox digest cut to its first twelve hex digits.
+func short(digest string) string {
+	d := strings.TrimPrefix(digest, "sha256:")
+	if len(d) > 12 {
+		d = d[:12]
+	}
+	return "sha256:" + d
 }

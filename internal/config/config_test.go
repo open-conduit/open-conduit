@@ -47,7 +47,7 @@ func registry() Registry {
 		Executors: map[string]extension.Executor{
 			"shell":         fakeExecutor{domain.Capabilities{Toolbelt: "cli"}},
 			"support_agent": injectExecutor{fakeExecutor{domain.Capabilities{Toolbelt: "mcp", Inject: true}}},
-			"coding_agent":  interruptExecutor{fakeExecutor{domain.Capabilities{Toolbelt: "mcp", Interrupt: true, Workspace: true}}},
+			"coding_agent":  interruptExecutor{fakeExecutor{domain.Capabilities{Toolbelt: "mcp", Interrupt: true, Workspace: true, Sandbox: true}}},
 		},
 		Handlers:    map[string]bool{"manual": true, "thread": true, "issue": true},
 		Extensions:  map[string]ExtensionType{"chat_ingress": {Ingress: true}, "code_ingress": {Ingress: true}, "schedule": {}},
@@ -627,6 +627,60 @@ func TestSandboxedResource(t *testing.T) {
 	v.sandboxed("p", Binding{Executor: "shell", Resource: &Resource{Provider: "other"}})
 	if len(v.diags) != 0 {
 		t.Errorf("diagnostics %+v", v.diags)
+	}
+}
+
+// TestSandboxBinding: a binding's sandbox (B09) is parsed, kept in the
+// effective config and checked: a registered provider that accepts its
+// config, an executor that can run in one and a workspace a sandbox can use.
+func TestSandboxBinding(t *testing.T) {
+	reg := registry()
+	reg.Sandboxes = map[string]func(json.RawMessage) error{"srt": func(c json.RawMessage) error {
+		if strings.Contains(string(c), "bad") {
+			return errors.New("invalid srt sandbox config: fixed reason")
+		}
+		return nil
+	}}
+	reg.ResourceSandbox = map[string]func(json.RawMessage, string) error{"git": func(c json.RawMessage, _ string) error {
+		if !strings.Contains(string(c), `"mode":"clone"`) {
+			return errors.New("use mode clone")
+		}
+		return nil
+	}}
+	snap, err := Validate(example(t, "sandboxed"), reg)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, _ := snap.Scopes["engineering"].Binding("run")
+	if b.Sandbox == nil || b.Sandbox.Provider != "srt" || !strings.Contains(string(b.Sandbox.Config), "{workspace}") {
+		t.Fatalf("sandbox %+v", b.Sandbox)
+	}
+	for _, tc := range []struct {
+		name, path, code string
+		mutate           func(b map[string]any)
+	}{
+		{"unknown provider", "scopes/0/bindings/0/sandbox/provider", "unknown_registration", func(b map[string]any) { b["sandbox"].(map[string]any)["provider"] = "docker" }},
+		{"invalid policy", "scopes/0/bindings/0/sandbox/config", "invalid_config", func(b map[string]any) { b["sandbox"].(map[string]any)["config"] = map[string]any{"bad": true} }},
+		{"executor without sandbox", "scopes/0/bindings/0/sandbox", "unsupported_capability", func(b map[string]any) {
+			b["executor"], b["requires"] = "support_agent", map[string]any{}
+		}},
+		{"worktree workspace", "scopes/0/bindings/0/resource/config", "sandbox_workspace", func(b map[string]any) {
+			b["resource"].(map[string]any)["config"].(map[string]any)["mode"] = "work"
+		}},
+		{"missing provider and config", "scopes/0/bindings/0/sandbox", "schema", func(b map[string]any) { b["sandbox"] = map[string]any{} }},
+	} {
+		m := generic(t, example(t, "sandboxed"))
+		tc.mutate(entry(m, 0, "bindings", 0))
+		_, err := Validate(encode(t, m), reg)
+		found := false
+		for _, d := range diagnostics(t, err) {
+			if strings.HasPrefix(d.Path, tc.path) && (tc.code == "schema" || d.Code == tc.code) {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: diagnostics %+v, want %s at %s", tc.name, diagnostics(t, err), tc.code, tc.path)
+		}
 	}
 }
 

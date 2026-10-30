@@ -1,0 +1,109 @@
+{
+  "version": 1,
+  "settings": {},
+  "connections": [
+    {
+      "id": "code",
+      "type": "code",
+      "config": {
+        "repository": "account/repo"
+      },
+      "secret_refs": {
+        "token": "file:code_token"
+      }
+    }
+  ],
+  "scopes": [
+    {
+      "id": "engineering",
+      "name": "engineering",
+      "authorization": {
+        "connections": [
+          "code"
+        ],
+        "operations": [
+          "emit",
+          "read_context",
+          "declare_outcome"
+        ],
+        "read_scopes": []
+      },
+      "bindings": [
+        {
+          "name": "run",
+          "executor": "coding_agent",
+          "requires": {
+            "workspace": true,
+            "toolbelt": "mcp",
+            "interrupt": true
+          },
+          "operations": [
+            "emit",
+            "read_context",
+            "declare_outcome"
+          ],
+          "secret_names": [],
+          "config": {
+            "playbook": "work-issue"
+          },
+          "connection": "code",
+          "resource": {
+            "provider": "git",
+            "config": {
+              "checkout": "./checkout",
+              "mode": "clone"
+            }
+          },
+          "sandbox": {
+            "provider": "srt",
+            "config": {
+              "write": [
+                "{workspace}",
+                "~/.claude",
+                "~/.claude.json"
+              ],
+              "read": {
+                "deny": [
+                  "~/.ssh",
+                  "~/.aws"
+                ]
+              },
+              "network": {
+                "allow": [
+                  "api.anthropic.com",
+                  "github.com",
+                  "*.githubusercontent.com"
+                ]
+              },
+              "sockets": [
+                "{toolbelt}"
+              ],
+              "unix_sockets": "all"
+            }
+          }
+        }
+      ],
+      "routes": [
+        {
+          "name": "incoming",
+          "handler": "issue",
+          "binding": "run",
+          "active_policy": "interrupt",
+          "config": {}
+        }
+      ],
+      "extensions": [
+        {
+          "name": "issues",
+          "type": "code_ingress",
+          "connection": "code",
+          "secret_names": [],
+          "config": {
+            "namespace": "code/account/repo",
+            "scope": "engineering"
+          }
+        }
+      ]
+    }
+  ]
+}

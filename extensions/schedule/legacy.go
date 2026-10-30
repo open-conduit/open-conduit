@@ -105,8 +105,13 @@ func NewLegacyExecutor(o LegacyOptions) (*LegacyExecutor, error) {
 	return &LegacyExecutor{o: o}, nil
 }
 
-// Capabilities are the wrapped executor's.
-func (x *LegacyExecutor) Capabilities() domain.Capabilities { return x.o.Inner.Capabilities() }
+// Capabilities are the inner executor's, without a sandbox (B09): a legacy
+// job's segments live in the inner executor's run directory.
+func (x *LegacyExecutor) Capabilities() domain.Capabilities {
+	c := x.o.Inner.Capabilities()
+	c.Sandbox = false
+	return c
+}
 
 // ValidateConfig checks the wrapper's fields and lets the wrapped executor
 // check its own.

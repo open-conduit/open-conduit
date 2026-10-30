@@ -209,6 +209,9 @@ type Capabilities struct {
 	Interrupt, Inject, Resume bool
 	Toolbelt                  string
 	Workspace                 bool
+	// Sandbox: the executor wraps its launch in a binding's process
+	// sandbox (B09). Only a binding with a sandbox requires it.
+	Sandbox bool `json:",omitempty"`
 }
 type Binding struct {
 	Name, Executor string

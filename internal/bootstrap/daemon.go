@@ -144,6 +144,7 @@ type daemon struct {
 	telemetry      telemetryFanout
 	telemetryFile  *os.File
 	resources      resourceState
+	sandboxes      sandboxState
 	claude         claudeState
 	hooks          webhookState
 	tools          *gh.Tools
@@ -372,6 +373,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = d.openResources(); err != nil {
 		return err
 	}
+	d.openSandboxes()
 	// Installed extension packages start before the configuration opens,
 	// so their validators check it (07-03).
 	d.openExtensions(ctx)
@@ -538,7 +540,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
 		Toolbelt: belt, ToolbeltEndpoint: d.endpoint, ToolbeltEndpoints: d.endpoints.Serve, Secrets: d.configs.Secrets(d.resolver),
-		Resources: d.bindResources, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
+		Resources: d.bindResources, Sandbox: d.bindSandbox, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
 		WorkKinds: kinds,
 	}); err != nil {
@@ -566,7 +568,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck}, d.inprocChecks(false)...), d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.capacityCheck, d.scheduleCheck, d.extensionCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck}, d.inprocChecks(false)...), d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.capacityCheck, d.scheduleCheck, d.extensionCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

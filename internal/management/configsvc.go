@@ -417,6 +417,21 @@ func (c *ConfigService) Secrets(resolver *config.Resolver) func(context.Context,
 // and opaque config), or nil when the binding declares none. A pinned attempt
 // keeps its generation's descriptor; the binding must still exist in an
 // enabled scope of the current generation.
+// Sandbox is the attempt's binding sandbox (B09) in the current config, so a
+// changed policy applies from the next segment; nil when it declares none.
+func (c *ConfigService) Sandbox(state runtime.AttemptState) (*config.Sandbox, error) {
+	current, _ := c.Current()
+	cs, ok := current.Scope(state.ScopeID)
+	if !ok || !cs.Enabled {
+		return nil, config.ErrDenied
+	}
+	b, ok := cs.Binding(state.Binding.Name)
+	if !ok {
+		return nil, config.ErrDenied
+	}
+	return b.Sandbox, nil
+}
+
 func (c *ConfigService) Resource(state runtime.AttemptState) (*config.Resource, error) {
 	pinned := c.snapshotFor(state.Generation)
 	current, _ := c.Current()
