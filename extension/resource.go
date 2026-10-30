@@ -50,10 +50,17 @@ type ResourceOwner struct {
 // and opaque to core (for example a requested branch name). Log, when set,
 // receives human-readable progress such as setup output or why a shared
 // resource is behind; it never receives secrets from the provider.
+//
+// Sandboxed is set by the host when the binding runs its executor in a
+// sandbox (B09). The provider then refuses, before it creates or runs
+// anything, a resource that shares writable state outside its directory or
+// runs code from it outside the sandbox (ErrUnsupported), and describes what
+// a sandbox needs to use the one it hands out (Resource.Sandbox).
 type ResourceRequest struct {
-	Mode   string
-	Params domain.Payload
-	Log    io.Writer
+	Mode      string
+	Params    domain.Payload
+	Log       io.Writer
+	Sandboxed bool
 }
 
 // Resource is an acquired, provider-defined resource. Ref is the opaque lease
@@ -62,7 +69,10 @@ type ResourceRequest struct {
 // applied after the sanitized process baseline and before binding variables
 // (B05); it is never persisted by the provider. Data describes the acquisition
 // (for example how far a shared checkout is behind) for history, and Summary
-// says the same in one human-readable line.
+// says the same in one human-readable line. Sandbox is what a process
+// sandbox must allow and deny for the resource to be used in it (its
+// directory writable, its own control files read-only); nil means it can't
+// be used in one.
 type Resource struct {
 	Kind    string
 	Ref     string
@@ -70,6 +80,7 @@ type Resource struct {
 	Env     map[string]string
 	Data    domain.Payload
 	Summary string
+	Sandbox *SandboxNeeds
 }
 
 // ResourceAcquisition is the trusted request a provider receives: the bound

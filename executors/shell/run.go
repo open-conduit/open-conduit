@@ -44,6 +44,9 @@ type intent struct {
 }
 type processRecord struct {
 	PID int `json:"pid"`
+	// Signals is what the segment's sandbox lets a stop deliver: term or
+	// kill (B09); empty without one.
+	Signals string `json:"signals,omitempty"`
 }
 type stopRecord struct {
 	Reason string    `json:"reason"`
@@ -279,9 +282,12 @@ func (e *Executor) enforce(rn *run) error {
 }
 
 type resultFields struct {
-	Reason         string            `json:"reason"`
-	ExitCode       *int              `json:"exit_code,omitempty"`
-	Signal         string            `json:"signal,omitempty"`
+	Reason   string `json:"reason"`
+	ExitCode *int   `json:"exit_code,omitempty"`
+	Signal   string `json:"signal,omitempty"`
+	// Interrupt says what an interrupted sandboxed segment received: term
+	// (its handler could run) or kill.
+	Interrupt      string            `json:"interrupt,omitempty"`
 	TimeoutSeconds int64             `json:"timeout_seconds,omitempty"`
 	Log            string            `json:"log,omitempty"`
 	Outputs        map[string]string `json:"outputs,omitempty"`
@@ -322,6 +328,11 @@ func (e *Executor) outcome(rn *run) (domain.Outcome, resultFields, error) {
 		return domain.Outcome{Kind: domain.OutcomeFailed, Summary: "shell command timed out"}, f, nil
 	case stopped:
 		f.Reason = "interrupted"
+		var proc processRecord
+		_ = readJSON(filepath.Join(rn.dir, "process.json"), &proc)
+		if f.Interrupt = proc.Signals; f.Interrupt == extension.SandboxKill {
+			return domain.Outcome{Kind: domain.OutcomeFailed, Summary: "shell command interrupted (killed: its sandbox delivers no TERM)"}, f, nil
+		}
 		return domain.Outcome{Kind: domain.OutcomeFailed, Summary: "shell command interrupted"}, f, nil
 	case f.Signal != "":
 		f.Reason = "signal"

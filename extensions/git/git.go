@@ -48,7 +48,7 @@ func (p *Provider) git(ctx context.Context, dir string, args ...string) (string,
 		if err != nil {
 			return "", fmt.Errorf("git %s: %w", args[0], err)
 		}
-		pre, env = append(pre, over...), append(env, "GIT_OPTIONAL_LOCKS=0", "GIT_PROTOCOL_FROM_USER=0")
+		pre, env = append(pre, over...), append(append(env, cloneDirs(dir)...), "GIT_OPTIONAL_LOCKS=0", "GIT_PROTOCOL_FROM_USER=0")
 		if args[0] == "status" {
 			args = append([]string{"status", "--ignore-submodules=all"}, args[1:]...)
 		}
@@ -75,6 +75,14 @@ func (p *Provider) git(ctx context.Context, dir string, args ...string) (string,
 var distrusted = []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
 	"-c", "protocol.allow=never", "-c", "protocol.file.allow=always"}
 
+// cloneDirs pin a clone's git directory to its own .git, so neither a .git
+// file nor a commondir file the agent wrote can point the provider's git at
+// another repository's config.
+func cloneDirs(dir string) []string {
+	gitDir := filepath.Join(dir, ".git")
+	return []string{"GIT_DIR=" + gitDir, "GIT_COMMON_DIR=" + gitDir, "GIT_WORK_TREE=" + dir}
+}
+
 // inClone reports whether dir is a clone workspace, whose config a sandboxed
 // agent can write.
 func (p *Provider) inClone(dir string) bool {
@@ -87,7 +95,7 @@ func (p *Provider) inClone(dir string) bool {
 // runs nothing. A driver name -c can't express makes the command fail.
 func (p *Provider) distrust(ctx context.Context, dir string) ([]string, error) {
 	cmd := exec.CommandContext(ctx, p.o.Git, "-C", dir, "config", "--show-scope", "--name-only", "--get-regexp", `^filter\.`)
-	cmd.Env = p.gitEnv()
+	cmd.Env = append(p.gitEnv(), cloneDirs(dir)...)
 	out, _ := cmd.Output() // exit 1: no filters
 	over := slices.Clone(distrusted)
 	seen := map[string]bool{}

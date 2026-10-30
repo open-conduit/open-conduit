@@ -67,6 +67,9 @@ type turnRecord struct {
 
 type processRecord struct {
 	PID int `json:"pid"`
+	// Signals is what the segment's sandbox lets a stop deliver: term or
+	// kill (B09); empty without one.
+	Signals string `json:"signals,omitempty"`
 }
 type stopRecord struct {
 	Reason string    `json:"reason"`
@@ -273,6 +276,37 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		return e.preset(ctx, rn, cfg.StatusSchema, "start_failed", "could not prepare claude process", nil)
 	}
 	defer out.Close()
+	// A sandboxed binding wraps claude (B09). It needs its workspace, its
+	// config and sign-in, the API and its toolbelt; with /tmp out of reach
+	// its temporary files go in the segment's own directory.
+	needs := extension.SandboxNeeds{Write: []string{workdir, configDir}, Read: []string{filepath.Join(dir, "mcp.json")}, Hosts: []string{"api.anthropic.com"}}
+	if !hasEnv(env, "CLAUDE_CONFIG_DIR") {
+		needs.Write = append(needs.Write, filepath.Join(filepath.Dir(configDir), ".claude.json"))
+	}
+	if cfg.PluginDir != "" {
+		needs.Read = append(needs.Read, cfg.PluginDir)
+	}
+	if r.Context.ToolbeltTokenFile != "" {
+		needs.Read = append(needs.Read, filepath.Dir(r.Context.ToolbeltTokenFile))
+	}
+	if sock, ok := strings.CutPrefix(r.Context.ToolbeltEndpoint, "unix://"); ok && r.Context.ToolbeltToken != "" {
+		needs.Sockets = []string{sock}
+	}
+	var wrapperEnv []string
+	if r.Context.Sandbox != nil {
+		tmp := filepath.Join(dir, "tmp")
+		if err = os.MkdirAll(tmp, 0o700); err != nil {
+			return e.preset(ctx, rn, cfg.StatusSchema, "start_failed", "could not prepare claude process", nil)
+		}
+		env = append(env, "TMPDIR="+tmp, "CLAUDE_CODE_TMPDIR="+tmp)
+		// srt's own sockets go in the host's short temporary directory.
+		wrapperEnv = []string{"TMPDIR=/tmp"}
+	}
+	plan, err := extension.WrapLaunch(ctx, r.Context.Sandbox, needs, extension.SandboxLaunch{Argv: argv, Dir: workdir, Env: env, WrapperEnv: wrapperEnv, RunDir: dir})
+	if err != nil {
+		return e.preset(ctx, rn, cfg.StatusSchema, extension.SandboxReason(err), err.Error(), nil)
+	}
+	argv, env = plan.Argv, plan.Env
 	cmd := exec.Command("/bin/sh", append([]string{"-c", wrapper, marker + nonce, dir}, argv...)...)
 	cmd.Dir, cmd.Env, cmd.Stdout, cmd.Stderr = workdir, env, out, errLog
 	detach(cmd)
@@ -284,7 +318,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		return e.preset(ctx, rn, cfg.StatusSchema, "start_failed", "could not start claude process", nil)
 	}
 	rn.pid, rn.done, rn.stdin, rn.open = cmd.Process.Pid, make(chan struct{}), stdin, true
-	_ = writeJSON(filepath.Join(dir, "process.json"), processRecord{PID: rn.pid})
+	_ = writeJSON(filepath.Join(dir, "process.json"), processRecord{PID: rn.pid, Signals: plan.Signals})
 	rn.mu.Lock()
 	rn.write(first)
 	rn.mu.Unlock()
@@ -432,6 +466,16 @@ func baseline(name string, pass []string) bool {
 }
 
 var nonAlnum = regexp.MustCompile(`[^A-Za-z0-9]`)
+
+// hasEnv reports whether env sets name to something.
+func hasEnv(env []string, name string) bool {
+	for _, kv := range env {
+		if k, v, _ := strings.Cut(kv, "="); k == name && v != "" {
+			return true
+		}
+	}
+	return false
+}
 
 // claudeConfigDir is where claude keeps its state for this environment.
 func claudeConfigDir(env []string) string {
@@ -867,7 +911,10 @@ type resultFields struct {
 	Limited    bool       `json:"limited,omitempty"`
 	ResetsAt   *time.Time `json:"resets_at,omitempty"`
 	ExitCode   *int       `json:"exit_code,omitempty"`
-	Injected   *struct {
+	// Interrupt says what an interrupted sandboxed turn received: term
+	// (claude could finish its output) or kill.
+	Interrupt string `json:"interrupt,omitempty"`
+	Injected  *struct {
 		Accepted int `json:"accepted"`
 		Consumed int `json:"consumed"`
 	} `json:"injected,omitempty"`
@@ -981,6 +1028,11 @@ func (e *Executor) settle(ctx context.Context, rn *run) (extension.Result, error
 	p := parse(stdout, stderr, f.ExitCode, turn.Structured, now)
 	if stopped {
 		p.OK, p.Status, p.Limited, p.Error = false, nil, false, "claude turn "+stop.Reason
+		var proc processRecord
+		_ = readJSON(filepath.Join(rn.dir, "process.json"), &proc)
+		if f.Interrupt = proc.Signals; f.Interrupt == extension.SandboxKill {
+			p.Error += " (killed: its sandbox delivers no TERM)"
+		}
 	}
 	// The process has ended, so its output is complete. Read the rest of it
 	// here rather than trusting the follower to have got there first: claude

@@ -100,6 +100,12 @@ func (p *Provider) createClone(ctx context.Context, cfg Config, checkout string,
 	}
 	if tracking != "" {
 		_, _ = p.git(ctx, l.Path, "branch", "-q", "--set-upstream-to", tracking)
+	} else if url != "" {
+		// A new branch's upstream is set now, as a first `git push -u`
+		// would: a sandbox keeps the clone's config read-only (B09), so the
+		// push can't record it later.
+		_, _ = p.git(ctx, l.Path, "config", "branch."+l.Branch+".remote", cfg.Remote)
+		_, _ = p.git(ctx, l.Path, "config", "branch."+l.Branch+".merge", "refs/heads/"+l.Branch)
 	}
 	if initial != "" && initial != l.Branch && initial != local {
 		_, _ = p.git(ctx, l.Path, "branch", "-q", "-D", initial)

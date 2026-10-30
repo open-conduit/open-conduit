@@ -174,7 +174,7 @@ func New(o Options) (*Executor, error) {
 // Capabilities advertises interrupt, inject, resume, a workspace and the MCP
 // toolbelt transport.
 func (e *Executor) Capabilities() domain.Capabilities {
-	return domain.Capabilities{Interrupt: true, Inject: true, Resume: true, Toolbelt: extension.ToolbeltMCP, Workspace: true}
+	return domain.Capabilities{Interrupt: true, Inject: true, Resume: true, Toolbelt: extension.ToolbeltMCP, Workspace: true, Sandbox: true}
 }
 
 func hashKey(id string) string {
@@ -265,6 +265,11 @@ func (e *Executor) Recover(ctx context.Context, r extension.RunRequest, state do
 			return nil, extension.ErrNotAdoptable
 		}
 		return adopt()
+	}
+	// A live segment of a sandboxed binding is adopted only once the host
+	// proves it still runs inside its sandbox.
+	if err := extension.AdoptSandboxed(ctx, r.Context.Sandbox, rn.pid); err != nil {
+		return nil, err
 	}
 	// Replace the MCP server's credential before acknowledging adoption.
 	// Runtime has already revoked lower-epoch tokens.

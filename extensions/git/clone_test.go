@@ -439,3 +439,59 @@ func TestCloneLeavesCredentialsOutOfTheRemote(t *testing.T) {
 		}
 	}
 }
+
+// TestSandboxedAcquire: for a sandboxed binding (B09) only a clone without
+// setup is handed out, refused before anything is made or run; the clone
+// describes what a sandbox needs, a new branch has its upstream already,
+// and the provider's own git ignores a commondir the agent wrote.
+func TestSandboxedAcquire(t *testing.T) {
+	f := newFixture(t)
+	sandboxed := func(o extension.ResourceOwner, c domain.Payload, mode string) (extension.Resource, error) {
+		return extension.BindResources(f.provider, o, c).Acquire(context.Background(), extension.ResourceRequest{Mode: mode, Sandboxed: true})
+	}
+	marker := filepath.Join(f.dir, "setup-ran")
+	for _, c := range []struct {
+		name   string
+		config domain.Payload
+		mode   string
+	}{
+		{"work", cfg(map[string]any{"mode": "work"}), ""},
+		{"fresh", cfg(map[string]any{"mode": "clone"}), "fresh"},
+		{"shared", cfg(map[string]any{"mode": "shared"}), ""},
+		{"clone_with_setup", cfg(map[string]any{"mode": "clone", "setup": "touch " + marker}), ""},
+	} {
+		if _, err := sandboxed(owner("S1", "x-"+c.name), c.config, c.mode); !errors.Is(err, extension.ErrUnsupported) {
+			t.Errorf("%s: %v, want ErrUnsupported", c.name, err)
+		}
+	}
+	if exists(marker) {
+		t.Fatal("setup ran for a sandboxed binding")
+	}
+	if entries, _ := os.ReadDir(filepath.Join(f.dir, "state", "workspaces")); len(entries) != 0 {
+		t.Fatalf("a refused acquisition made workspaces: %v", entries)
+	}
+	r, err := sandboxed(owner("S2", "x1"), cfg(map[string]any{"mode": "clone", "branch_template": "agent/issue-{work}"}), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if r.Sandbox == nil || r.Sandbox.Write[0] != r.Dir || !slices.Contains(r.Sandbox.ReadOnly, filepath.Join(r.Dir, ".git", "config")) || !slices.Contains(r.Sandbox.ReadOnly, filepath.Join(r.Dir, ".git", "hooks")) {
+		t.Fatalf("sandbox needs %+v", r.Sandbox)
+	}
+	if !exists(filepath.Join(r.Dir, ".git", "hooks")) || !exists(filepath.Join(r.Dir, ".git", "info")) {
+		t.Fatal("the clone's hooks and info directories are missing, so a sandbox can't protect them")
+	}
+	// The remote branch doesn't exist yet, but its upstream is configured.
+	if runGit(t, r.Dir, "config", "branch.agent/issue-S2.remote") != "origin" || runGit(t, r.Dir, "config", "branch.agent/issue-S2.merge") != "refs/heads/agent/issue-S2" {
+		t.Fatal("the new branch has no upstream configured")
+	}
+	// An agent-written commondir pointing at another repository is ignored.
+	write(t, r.Dir, ".git/commondir", f.root+"/.git\n")
+	if got, err := f.provider.git(context.Background(), r.Dir, "rev-parse", "--git-common-dir"); err != nil || got != filepath.Join(r.Dir, ".git") {
+		t.Fatalf("the provider's git used common dir %q (%v), want the clone's own", got, err)
+	}
+	// A worktree is never sandboxable.
+	w, err := f.acquire(owner("S3", "x1"), cfg(map[string]any{"mode": "work"}), "", nil)
+	if err != nil || w.Sandbox != nil {
+		t.Fatalf("worktree sandbox needs %+v %v, want none", w.Sandbox, err)
+	}
+}

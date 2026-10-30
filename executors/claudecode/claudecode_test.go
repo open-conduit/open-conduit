@@ -548,9 +548,9 @@ func TestFailedTurnsAndInterrupt(t *testing.T) {
 	if res.Outcome.Kind != domain.OutcomeFailed || !strings.Contains(res.Outcome.Summary, "interrupted") {
 		t.Fatalf("interrupt %+v", res.Outcome)
 	}
-	if syscall.Kill(pid, 0) == nil {
-		t.Fatal("the interrupted turn survived")
-	}
+	// The killed process is gone once init reaps it, which can trail the
+	// result by a moment.
+	waitFor(t, "the interrupted turn to be gone", func() bool { return syscall.Kill(pid, 0) != nil })
 	if err := e.Interrupt(context.Background(), "nope"); !errors.Is(err, claudecode.ErrUnknownExecution) {
 		t.Fatalf("unowned interrupt %v", err)
 	}

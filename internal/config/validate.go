@@ -35,6 +35,10 @@ type Registry struct {
 	// sandbox could only use by writing outside it. Its error is a fixed,
 	// secret-free reason, shown in the diagnostic.
 	ResourceSandbox map[string]func(config json.RawMessage, mode string) error
+	// Sandboxes are the registered process sandbox providers (B09), each
+	// with an optional strict check of a binding's sandbox config. Its
+	// error is a fixed, secret-free reason, shown in the diagnostic.
+	Sandboxes map[string]func(json.RawMessage) error
 	// HandlerConfig optionally validates a registered route handler's opaque
 	// route config at load/apply time (05-01). Its error text is never echoed.
 	HandlerConfig map[string]func(json.RawMessage) error
@@ -434,6 +438,12 @@ func (v *validator) registration(p string, b Binding) {
 			v.fail(p+"/requires/"+f.key, "unsupported_capability", fmt.Sprintf("executor %s has no %s; select %s %s executor or remove the requirement%s", b.Executor, f.key, f.article, f.key, f.tail))
 		}
 	}
+	if b.Sandbox != nil {
+		if !c.Sandbox {
+			v.fail(p+"/sandbox", "unsupported_capability", fmt.Sprintf("executor %s can't run in a sandbox; select an executor that can (shell, claude-code) or remove sandbox", b.Executor))
+		}
+		v.sandboxed(p, b)
+	}
 	if r.Toolbelt != "" && r.Toolbelt != c.Toolbelt {
 		v.fail(p+"/requires/toolbelt", "unsupported_capability", fmt.Sprintf("executor %s uses toolbelt %s; select a matching executor or change requires.toolbelt", b.Executor, c.Toolbelt))
 	}
@@ -457,12 +467,22 @@ func (v *validator) registration(p string, b Binding) {
 	}
 }
 
-// sandboxed refuses a binding that declares a sandbox when its resource would
-// give the sandboxed executor a workspace that writes through to the
-// operator's own files (a git worktree, whose commits go through the main
-// checkout's .git). B09's binding validation calls it for each binding that
-// declares a sandbox; until then nothing declares one.
+// sandboxed checks a binding that declares a sandbox: a registered provider
+// that accepts its config, and a resource that wouldn't give the sandboxed
+// executor a workspace that writes through to the operator's own files (a
+// git worktree, whose commits go through the main checkout's .git) or runs
+// setup outside the sandbox.
 func (v *validator) sandboxed(p string, b Binding) {
+	if b.Sandbox != nil {
+		check, ok := v.reg.Sandboxes[b.Sandbox.Provider]
+		if !ok {
+			v.fail(p+"/sandbox/provider", "unknown_registration", "sandbox provider is not registered; use a registered provider (srt)")
+		} else if check != nil {
+			if err := check(b.Sandbox.Config); err != nil {
+				v.fail(p+"/sandbox/config", "invalid_config", err.Error())
+			}
+		}
+	}
 	if b.Resource == nil {
 		return
 	}
@@ -600,6 +620,7 @@ type bindingMeta struct {
 	Operations  []string  `json:"operations"`
 	SecretNames []string  `json:"secret_names"`
 	Resource    *Resource `json:"resource,omitempty"`
+	Sandbox     *Sandbox  `json:"sandbox,omitempty"`
 }
 type routeMeta struct {
 	UnsupportedFallback string `json:"unsupported_fallback,omitempty"`
@@ -635,7 +656,7 @@ func (s *Snapshot) DomainScopes() []domain.Scope {
 		for _, b := range e.Bindings {
 			d.Bindings = append(d.Bindings, domain.Binding{Name: b.Name, Executor: b.Executor, Requires: b.Requires, TimeoutSeconds: b.TimeoutSeconds,
 				Config: domain.Payload{Schema: BindingSchema, Data: slices.Clone(b.Config)}, Grants: b.domainGrants()})
-			meta.Bindings[b.Name] = bindingMeta{b.Connection, b.Operations, b.SecretNames, b.Resource}
+			meta.Bindings[b.Name] = bindingMeta{b.Connection, b.Operations, b.SecretNames, b.Resource, b.Sandbox}
 		}
 		for _, r := range e.Routes {
 			d.Routes = append(d.Routes, domain.Route{Name: r.Name, Handler: r.Handler, Binding: r.Binding,

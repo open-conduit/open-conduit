@@ -99,11 +99,20 @@ type Resource struct {
 	Provider string          `json:"provider"`
 	Config   json.RawMessage `json:"config"`
 }
+
+// Sandbox is a binding's process sandbox (B09): the provider and its
+// opaque policy, checked by the provider.
+type Sandbox struct {
+	Provider string          `json:"provider"`
+	Config   json.RawMessage `json:"config"`
+}
 type Binding struct {
 	Name, Executor, Connection string
 	Requires                   domain.Capabilities
 	Operations, SecretNames    []string
 	Resource                   *Resource
+	// Sandbox runs the binding's executor in a process sandbox (B09).
+	Sandbox *Sandbox
 	// TimeoutSeconds overrides settings.timeout_seconds for attempts of this
 	// binding (05-02): one deadline model for every executor, with a
 	// per-binding value for long jobs or short turns. Zero inherits.
@@ -479,7 +488,7 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 		return BindingEntry{Binding: Binding{Name: name}, Disabled: true}
 	}
 	var b Binding
-	if !c.object(n, path, []string{"name", "executor", "requires", "operations", "secret_names", "config"}, "connection", "resource", "timeout_seconds", "grants") {
+	if !c.object(n, path, []string{"name", "executor", "requires", "operations", "secret_names", "config"}, "connection", "resource", "sandbox", "timeout_seconds", "grants") {
 		return BindingEntry{Binding: b}
 	}
 	b.Name, _ = c.str(n.field("name"), path+"/name", idPattern)
@@ -503,6 +512,11 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 		b.Resource = &Resource{}
 		b.Resource.Provider, _ = c.str(r.field("provider"), path+"/resource/provider", idPattern)
 		b.Resource.Config = c.opaque(r.field("config"), path+"/resource/config")
+	}
+	if r := n.field("sandbox"); r != nil && c.object(r, path+"/sandbox", []string{"provider", "config"}) {
+		b.Sandbox = &Sandbox{}
+		b.Sandbox.Provider, _ = c.str(r.field("provider"), path+"/sandbox/provider", idPattern)
+		b.Sandbox.Config = c.opaque(r.field("config"), path+"/sandbox/config")
 	}
 	if t := n.field("timeout_seconds"); t != nil {
 		b.TimeoutSeconds, _ = c.integer(t, path+"/timeout_seconds")
@@ -692,6 +706,9 @@ func (b BindingEntry) normalized() any {
 	}
 	if b.Resource != nil {
 		m["resource"] = b.Resource
+	}
+	if b.Sandbox != nil {
+		m["sandbox"] = b.Sandbox
 	}
 	if b.TimeoutSeconds > 0 {
 		m["timeout_seconds"] = b.TimeoutSeconds
