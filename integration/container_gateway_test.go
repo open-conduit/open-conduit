@@ -94,7 +94,7 @@ func (l *dockerLab) toolbeltBinding(config string, id domain.ID, socket string) 
 // gatewayProbes print "name: ALLOWED|DENIED" from inside the container.
 const gatewayProbes = `t() { n=$1; shift; if "$@" >/dev/null 2>&1; then echo "$n: ALLOWED"; else echo "$n: DENIED"; fi; }
 get() { i=0; while [ $i -lt 20 ]; do out=$(wget -q -T 3 -O - "$@" 2>&1) && [ "$out" = upstream ] && return 0; case "$out" in *403*) return 1;; esac; i=$((i+1)); sleep 0.5; done; return 1; }
-connect() { printf 'CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\nGET / HTTP/1.0\r\n\r\n' "$1" "$1" | nc -w 5 gateway 3128 > /tmp/connect 2>&1; grep -q " $2 " /tmp/connect && { [ "$2" != 200 ] || grep -q upstream /tmp/connect; }; }
+connect() { i=0; while [ $i -lt 10 ]; do printf 'CONNECT %s HTTP/1.1\r\nHost: %s\r\n\r\nGET / HTTP/1.0\r\n\r\n' "$1" "$1" | nc -w 5 gateway 3128 > /tmp/connect 2>&1; grep -q " $2 " /tmp/connect && { [ "$2" != 200 ] || grep -q upstream /tmp/connect; } && return 0; i=$((i+1)); sleep 0.5; done; return 1; }
 t allowed_http get http://allowed.test:8080/
 t denied_http sh -c 'out=$(wget -q -T 3 -O - http://denied.test:8080/ 2>&1); case "$out" in *403*) exit 0;; esac; exit 1'
 t allowed_connect connect allowed.test:8080 200
@@ -102,26 +102,28 @@ t denied_connect connect denied.test:8080 403
 t ignores_proxy_by_name wget -Y off -q -T 3 -O /dev/null http://allowed.test:8080/
 t ignores_proxy_by_ip wget -Y off -q -T 3 -O /dev/null "http://$LAB_UPSTREAM:8080/"
 t outside_dns nslookup allowed.test
+t allowed_name_resolving_inward sh -c 'out=$(wget -q -T 3 -O - http://inside.test:8080/ 2>&1); case "$out" in *403*) exit 0;; esac; exit 1'
 t toolbelt sh -c 'os context | grep -q "the forward"'
 t toolbelt_endpoint sh -c '[ "$OS_ENDPOINT" = unix:///run/open-conduit/toolbelt/toolbelt.sock ]'
 `
 
 var gatewayExpect = map[string]string{
 	"allowed_http": "ALLOWED", "denied_http": "ALLOWED", "allowed_connect": "ALLOWED", "denied_connect": "ALLOWED",
-	"ignores_proxy_by_name": "DENIED", "ignores_proxy_by_ip": "DENIED", "outside_dns": "DENIED",
+	"ignores_proxy_by_name": "DENIED", "ignores_proxy_by_ip": "DENIED", "outside_dns": "DENIED", "allowed_name_resolving_inward": "ALLOWED",
 	"toolbelt": "ALLOWED", "toolbelt_endpoint": "ALLOWED",
 }
 
 // TestDockerGateway: from inside a container, an allowed host is reached
 // through the gateway's proxy (plain HTTP and CONNECT), a denied host gets
-// 403, a tool that ignores the proxy has no route (by name or by address),
+// 403, so does an allowed name that resolves to a private address, a tool that ignores the proxy has no route (by name or by address),
 // and the os on PATH reaches the execution's toolbelt through the forward,
 // in the platform's forward mode or the one forced.
 func TestDockerGateway(t *testing.T) {
 	l := newDockerLab(t)
 	const id = "gw"
 	_, socket, tokenFile, token := l.labToolbelt(t, id)
-	b := l.toolbeltBinding(l.grant(`,"network":{"allow":["allowed.test"]}`), id, socket)
+	egress := l.egress(t, id, 179)
+	b := l.toolbeltBinding(l.grant(`,"network":{"allow":["allowed.test","inside.test"]}`), id, socket)
 	res, err := b.Resources(dockerWorkspace{l.ws}).Acquire(context.Background(), extension.ResourceRequest{Sandboxed: true})
 	if err != nil {
 		t.Fatal(err)
@@ -141,7 +143,10 @@ func TestDockerGateway(t *testing.T) {
 		t.Errorf("summary %q", plan.Summary)
 	}
 	l.networkOf(t, l.pinned().ID)
-	ip := l.upstream(t, "allowed.test", "denied.test")
+	ip := l.upstream(t, egress, "allowed.test", "denied.test")
+	// An allowed name that resolves to a private address: a stand-in on
+	// the execution's own network.
+	l.upstream(t, l.network, "inside.test")
 	if err := os.WriteFile(upstreamFile, []byte(ip), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -169,6 +174,7 @@ func TestDockerShell(t *testing.T) {
 	l := newDockerLab(t)
 	const id = "shell"
 	_, socket, tokenFile, token := l.labToolbelt(t, id)
+	egress := l.egress(t, id, 180)
 	b := l.toolbeltBinding(l.grant(`,"network":{"allow":["allowed.test"]}`), id, socket)
 	ex, err := shell.New(shell.Options{StateDir: filepath.Dir(l.runRoot), Environ: func() []string { return []string{"PATH=/usr/bin:/bin", "HOME=" + l.home} }})
 	if err != nil {
@@ -199,7 +205,7 @@ exit 0`
 	}
 	pin := l.pinned()
 	l.networkOf(t, pin.ID)
-	l.upstream(t, "allowed.test")
+	l.upstream(t, egress, "allowed.test")
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Minute)
 	defer cancel()
 	r, err := h.Wait(ctx)

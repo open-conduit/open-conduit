@@ -457,9 +457,16 @@ while :; do g=; wait "$c"; s=$?; if [ -z "$g" ]; then if [ "$s" = 127 ] && [ -n 
 // (a hash of the host and the execution, so two hosts never collide) and
 // the segment.
 func (p *Provider) names(labels map[string]string) (container, network string) {
-	sum := sha256.Sum256([]byte(labels[extension.ContainerLabelHost] + "/" + labels[extension.ContainerLabelExecution]))
-	key := hex.EncodeToString(sum[:8])
-	return "oc-" + key + "-" + labels[extension.ContainerLabelSegment], "oc-" + key
+	network = ExecutionNetwork(labels[extension.ContainerLabelHost], labels[extension.ContainerLabelExecution])
+	return network + "-" + labels[extension.ContainerLabelSegment], network
+}
+
+// ExecutionNetwork is the name of an execution's internal network on a
+// host; its egress network is the name with "-egress" after it. One that
+// exists already, made as the provider makes them, is used as it is.
+func ExecutionNetwork(host, execution string) string {
+	sum := sha256.Sum256([]byte(host + "/" + execution))
+	return "oc-" + hex.EncodeToString(sum[:8])
 }
 
 func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, labels map[string]string) (extension.ContainerCreated, error) {

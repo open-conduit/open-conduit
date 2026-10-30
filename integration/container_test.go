@@ -354,12 +354,25 @@ func (l *dockerLab) networkOf(t *testing.T, ref string) {
 	l.gateway, _ = l.docker("network", "inspect", "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}", network)
 }
 
-// upstream starts a stand-in for outside hosts on the execution's egress
-// network, the gateway's only one out, answering as each of names, and
-// returns its address there.
-func (l *dockerLab) upstream(t *testing.T, names ...string) string {
+// egress makes an execution's egress network before its launch, as the
+// provider would but on a subnet that isn't private (198.18.0.0/15, set
+// aside for testing), so stand-in hosts on it pass the gateway's check of
+// where an allowed name resolves. The provider uses it as it finds it.
+func (l *dockerLab) egress(t *testing.T, id domain.ID, subnet int) string {
 	t.Helper()
-	egress := l.network + "-egress"
+	name := docker.ExecutionNetwork(l.host, string(id)) + "-egress"
+	if out, err := l.docker("network", "create", "--driver", "bridge", "--ipv6=false", "--subnet", fmt.Sprintf("198.18.%d.0/24", subnet),
+		"--label", extension.ContainerLabelHost+"="+l.host, "--label", extension.ContainerLabelExecution+"="+string(id), name); err != nil {
+		t.Fatalf("egress network: %v %s", err, out)
+	}
+	return name
+}
+
+// upstream starts a stand-in for outside hosts on an egress network, the
+// gateway's only one out, answering as each of names, and returns its
+// address there.
+func (l *dockerLab) upstream(t *testing.T, egress string, names ...string) string {
+	t.Helper()
 	args := []string{"run", "-d", "--rm", "--label", extension.ContainerLabelHost + "=" + l.host, "--network", egress}
 	for _, n := range names {
 		args = append(args, "--network-alias", n)

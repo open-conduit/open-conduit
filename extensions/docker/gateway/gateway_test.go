@@ -35,9 +35,35 @@ func upstream(t *testing.T) (dial func(context.Context, string, string) (net.Con
 	}, &got
 }
 
+// resolver is a stand-in DNS: names in m resolve as listed, any other to
+// a public documentation address, 203.0.113.7.
+func resolver(m map[string][]string) func(context.Context, string) ([]net.IP, error) {
+	return func(ctx context.Context, host string) ([]net.IP, error) {
+		// A lookup, like a real one, takes a moment and fails once its
+		// context is cancelled.
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-time.After(20 * time.Millisecond):
+		}
+		list, ok := m[host]
+		if !ok {
+			list = []string{"203.0.113.7"}
+		}
+		var out []net.IP
+		for _, a := range list {
+			out = append(out, net.ParseIP(a))
+		}
+		return out, nil
+	}
+}
+
 func start(t *testing.T, o Options) *Gateway {
 	t.Helper()
 	o.Listen = "127.0.0.1:0"
+	if o.Resolve == nil {
+		o.Resolve = resolver(nil)
+	}
 	if o.Log == nil {
 		o.Log = io.Discard
 	}
@@ -106,9 +132,13 @@ func TestProxyAllowlist(t *testing.T) {
 			t.Errorf("CONNECT %s: %q, want 403", c.host, status)
 		}
 	}
+	// Only the three allowed CONNECTs dialled, each at its checked address.
+	if len(*dialed) != 3 {
+		t.Errorf("dialled %v, want the three allowed hosts only", *dialed)
+	}
 	for _, d := range *dialed {
-		if strings.Contains(d, "evil") || strings.HasPrefix(d, "127.") || d == "pinned.test:443" {
-			t.Errorf("a denied host was dialled: %s", d)
+		if d != "203.0.113.7:443" && d != "203.0.113.7:8443" {
+			t.Errorf("dialled %s, not a checked address", d)
 		}
 	}
 	if !strings.Contains(log.String(), "refused CONNECT evil.test:443") {
@@ -263,5 +293,75 @@ func TestProbe(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "fail no outside DNS") || !strings.Contains(out.String(), "fail can't reach "+ln.Addr().String()) {
 		t.Errorf("probe output:\n%s", out.String())
+	}
+}
+
+// TestProxyRefusesInwardNames: an allowed name that resolves to loopback,
+// link-local (a metadata service), private, CGNAT, "this network" or a
+// denied address gets 403 with nothing dialled, by CONNECT and by HTTP,
+// as does one with any such address among public ones. A listed literal
+// address is reached as it is.
+func TestProxyRefusesInwardNames(t *testing.T) {
+	dial, dialed := upstream(t)
+	var log bytes.Buffer
+	g := start(t, Options{Allow: []string{"*.allowed.test", "10.1.2.3"}, Dial: dial, Log: &log, Deny: []net.IP{net.ParseIP("198.51.100.1")},
+		Resolve: resolver(map[string][]string{
+			"loop.allowed.test":   {"127.0.0.1"},
+			"meta.allowed.test":   {"169.254.169.254"},
+			"lan.allowed.test":    {"192.168.1.20"},
+			"ula.allowed.test":    {"fd00::1"},
+			"v6loop.allowed.test": {"::1"},
+			"cgnat.allowed.test":  {"100.100.1.1"},
+			"orb.allowed.test":    {"0.250.250.254"},
+			"denied.allowed.test": {"198.51.100.1"},
+			"mixed.allowed.test":  {"203.0.113.9", "10.0.0.5"},
+			"public.allowed.test": {"203.0.113.9"},
+		})})
+	for _, name := range []string{"loop", "meta", "lan", "ula", "v6loop", "cgnat", "orb", "denied", "mixed"} {
+		host := name + ".allowed.test"
+		if status, _ := connect(t, g.ProxyAddr(), host+":443"); !strings.Contains(status, "403") {
+			t.Errorf("CONNECT %s: %q, want 403", host, status)
+		}
+	}
+	u, _ := http.NewRequest("GET", "http://"+g.ProxyAddr(), nil)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(u.URL)}, Timeout: 10 * time.Second}
+	resp, err := client.Get("http://meta.allowed.test/latest/meta-data/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusForbidden {
+		t.Errorf("an http request to a name resolving to the metadata address: %d, want 403", resp.StatusCode)
+	}
+	if len(*dialed) != 0 {
+		t.Errorf("dialled %v for names that resolve inward", *dialed)
+	}
+	if !strings.Contains(log.String(), "refused CONNECT meta.allowed.test:443") {
+		t.Errorf("no refusal logged: %q", log.String())
+	}
+	if status, body := connect(t, g.ProxyAddr(), "public.allowed.test:443"); !strings.Contains(status, "200") || !strings.Contains(body, "upstream") {
+		t.Errorf("a public allowed name: %q %q", status, body)
+	}
+	if status, _ := connect(t, g.ProxyAddr(), "10.1.2.3:443"); !strings.Contains(status, "200") {
+		t.Errorf("a listed literal private address: %q, want reached", status)
+	}
+	if got := (*dialed)[len(*dialed)-2:]; got[0] != "203.0.113.9:443" || got[1] != "10.1.2.3:443" {
+		t.Errorf("dialled %v, want the checked addresses", got)
+	}
+}
+
+func TestDefaultRoutes(t *testing.T) {
+	file := filepath.Join(t.TempDir(), "route")
+	table := "Iface\tDestination\tGateway \tFlags\n" +
+		"eth1\t00000000\t010012AC\t0003\n" +
+		"eth0\t000012AC\t00000000\t0001\n"
+	if err := os.WriteFile(file, []byte(table), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if got := defaultRoutes(file); len(got) != 1 || !got[0].Equal(net.ParseIP("172.18.0.1")) {
+		t.Errorf("default routes %v, want 172.18.0.1", got)
+	}
+	if defaultRoutes(file+".missing") != nil {
+		t.Error("a missing table gave routes")
 	}
 }

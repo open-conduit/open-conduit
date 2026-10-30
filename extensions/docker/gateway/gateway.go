@@ -5,7 +5,10 @@
 //
 //   - an allowlisting HTTP proxy: CONNECT and absolute-form HTTP requests
 //     reach only the hosts the grant's network.allow lists, and anything
-//     else gets 403;
+//     else gets 403. A name is resolved here, and refused if any address
+//     it resolves to is the host's, the gateway's own networks', or
+//     loopback, link-local or private, unless the entry is that literal
+//     address; the proxy dials the addresses it checked;
 //   - the toolbelt forward: it serves a unix socket in a volume the two
 //     containers share and copies each connection to the execution's
 //     toolbelt on the host, either its socket (mounted, on Linux) or a
@@ -26,6 +29,7 @@ import (
 	"net/http"
 	"net/http/httputil"
 	"os"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -47,8 +51,13 @@ type Options struct {
 	Forward string
 	// ForwardHost is the host a tcp forward dials (host.docker.internal).
 	ForwardHost string
-	// Dial reaches an allowed host (net.Dialer's when nil).
+	// Dial reaches a checked address (net.Dialer's when nil).
 	Dial func(ctx context.Context, network, addr string) (net.Conn, error)
+	// Resolve looks a name up (the system resolver's when nil).
+	Resolve func(ctx context.Context, host string) ([]net.IP, error)
+	// Deny are more addresses no name may resolve to. Start adds the
+	// addresses of host.docker.internal and of the gateway's default route.
+	Deny []net.IP
 	// Log gets one line for each refused request (stderr when nil).
 	Log io.Writer
 }
@@ -76,6 +85,22 @@ func Start(o Options) (*Gateway, error) {
 	}
 	if o.Log == nil {
 		o.Log = os.Stderr
+	}
+	if o.Resolve == nil {
+		o.Resolve = func(ctx context.Context, host string) ([]net.IP, error) {
+			addrs, err := net.DefaultResolver.LookupIPAddr(ctx, host)
+			ips := make([]net.IP, 0, len(addrs))
+			for _, a := range addrs {
+				ips = append(ips, a.IP)
+			}
+			return ips, err
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		if ips, err := o.Resolve(ctx, "host.docker.internal"); err == nil {
+			o.Deny = append(o.Deny, ips...)
+		}
+		cancel()
+		o.Deny = append(o.Deny, defaultRoutes("/proc/net/route")...)
 	}
 	g := &Gateway{o: o}
 	l, err := net.Listen("tcp", o.Listen)
@@ -142,19 +167,138 @@ func (g *Gateway) allowed(hostport string) bool {
 	return extension.HostAllowed(host+":"+port, g.o.Allow)
 }
 
+// errInward is a name that resolves where no allowed name may lead.
+var errInward = errors.New("resolves to an address the gateway won't reach")
+
+// inward ranges a name may never resolve to: beyond loopback, link-local,
+// private (RFC 1918, ULA), unspecified and multicast, "this network" (where
+// OrbStack puts host.docker.internal) and shared address space (CGNAT).
+var inward = func() []*net.IPNet {
+	var out []*net.IPNet
+	for _, c := range []string{"0.0.0.0/8", "100.64.0.0/10"} {
+		_, n, _ := net.ParseCIDR(c)
+		out = append(out, n)
+	}
+	return out
+}()
+
+func (g *Gateway) inward(ip net.IP) bool {
+	if ip.IsLoopback() || ip.IsLinkLocalUnicast() || ip.IsLinkLocalMulticast() || ip.IsInterfaceLocalMulticast() ||
+		ip.IsMulticast() || ip.IsPrivate() || ip.IsUnspecified() {
+		return true
+	}
+	for _, n := range inward {
+		if n.Contains(ip) {
+			return true
+		}
+	}
+	for _, d := range g.o.Deny {
+		if d.Equal(ip) {
+			return true
+		}
+	}
+	return false
+}
+
+// addrs are the checked addresses an allowed host:port is dialled at. A
+// literal address passed the allowlist only by being listed, so it is
+// dialled as it is. A name is resolved, and refused (errInward) if any of
+// its addresses is inward, so a wildcard entry or a rebinding DNS answer
+// can't lead to the host, the LAN or a metadata service.
+func (g *Gateway) addrs(ctx context.Context, hostport string) ([]string, error) {
+	host, port, _ := net.SplitHostPort(hostport)
+	if net.ParseIP(host) != nil {
+		return []string{hostport}, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
+	defer cancel()
+	ips, err := g.o.Resolve(ctx, host)
+	if err != nil {
+		return nil, err
+	}
+	if len(ips) == 0 {
+		return nil, fmt.Errorf("%s has no addresses", host)
+	}
+	out := make([]string, 0, len(ips))
+	for _, ip := range ips {
+		if g.inward(ip) {
+			return nil, fmt.Errorf("%s %w (%s)", host, errInward, ip)
+		}
+		out = append(out, net.JoinHostPort(ip.String(), port))
+	}
+	return out, nil
+}
+
+// dial reaches the first of the checked addresses that answers.
+func (g *Gateway) dial(ctx context.Context, network string, addrs []string) (net.Conn, error) {
+	var errs []error
+	for _, a := range addrs {
+		c, err := g.o.Dial(ctx, network, a)
+		if err == nil {
+			return c, nil
+		}
+		errs = append(errs, err)
+	}
+	return nil, errors.Join(errs...)
+}
+
+// check is the allowlist and the addresses: it writes the refusal and
+// returns false when host:port may not be reached.
+func (g *Gateway) check(ctx context.Context, w http.ResponseWriter, what, host string) ([]string, bool) {
+	if !g.allowed(host) {
+		g.refuse(w, http.StatusForbidden, what, host)
+		return nil, false
+	}
+	addrs, err := g.addrs(ctx, host)
+	switch {
+	case errors.Is(err, errInward):
+		fmt.Fprintf(g.o.Log, "gateway: refused %s %s: %v\n", what, host, err)
+		http.Error(w, "open-conduit gateway: "+err.Error(), http.StatusForbidden)
+		return nil, false
+	case err != nil:
+		http.Error(w, "open-conduit gateway: "+err.Error(), http.StatusBadGateway)
+		return nil, false
+	}
+	return addrs, true
+}
+
+// defaultRoutes are the gateways of the default routes in a
+// /proc/net/route table: the gateway's egress network's bridge.
+func defaultRoutes(file string) []net.IP {
+	raw, err := os.ReadFile(file)
+	if err != nil {
+		return nil
+	}
+	var out []net.IP
+	for _, line := range strings.Split(string(raw), "\n")[1:] {
+		f := strings.Fields(line)
+		if len(f) < 3 || f[1] != "00000000" {
+			continue
+		}
+		v, err := strconv.ParseUint(f[2], 16, 32)
+		if err != nil || v == 0 {
+			continue
+		}
+		out = append(out, net.IPv4(byte(v), byte(v>>8), byte(v>>16), byte(v>>24)))
+	}
+	return out
+}
+
 func (g *Gateway) serveProxy(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case r.Method == http.MethodConnect:
 		host := withPort(r.Host, "443")
-		if !g.allowed(host) {
-			g.refuse(w, http.StatusForbidden, "CONNECT", host)
+		// Not the request's context, as for the tunnel: a client that has
+		// sent all it will half-closes, and the server cancels it.
+		addrs, ok := g.check(context.WithoutCancel(r.Context()), w, "CONNECT", host)
+		if !ok {
 			return
 		}
-		g.tunnel(w, r, host)
+		g.tunnel(w, r, addrs)
 	case r.URL.IsAbs() && r.URL.Scheme == "http":
 		host := withPort(r.URL.Host, "80")
-		if !g.allowed(host) {
-			g.refuse(w, http.StatusForbidden, "GET", host)
+		addrs, ok := g.check(r.Context(), w, "GET", host)
+		if !ok {
 			return
 		}
 		rp := &httputil.ReverseProxy{
@@ -163,8 +307,8 @@ func (g *Gateway) serveProxy(w http.ResponseWriter, r *http.Request) {
 				pr.Out.Host = r.URL.Host
 			},
 			Transport: &http.Transport{DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
-				// Dial the host checked, whatever the transport resolved.
-				return g.o.Dial(ctx, network, host)
+				// Dial the addresses checked, never the name again.
+				return g.dial(ctx, network, addrs)
 			}, Proxy: nil, ResponseHeaderTimeout: 5 * time.Minute},
 			ErrorHandler: func(w http.ResponseWriter, _ *http.Request, err error) {
 				http.Error(w, "open-conduit gateway: "+err.Error(), http.StatusBadGateway)
@@ -176,12 +320,12 @@ func (g *Gateway) serveProxy(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (g *Gateway) tunnel(w http.ResponseWriter, r *http.Request, host string) {
+func (g *Gateway) tunnel(w http.ResponseWriter, r *http.Request, addrs []string) {
 	// Not the request's context: the server cancels it when a client that
 	// has sent all it will half-closes, which a tunnel must outlast.
 	ctx, cancel := context.WithTimeout(context.WithoutCancel(r.Context()), 30*time.Second)
 	defer cancel()
-	up, err := g.o.Dial(ctx, "tcp", host)
+	up, err := g.dial(ctx, "tcp", addrs)
 	if err != nil {
 		http.Error(w, "open-conduit gateway: "+err.Error(), http.StatusBadGateway)
 		return
