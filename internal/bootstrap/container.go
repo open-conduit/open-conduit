@@ -36,9 +36,17 @@ type containerState struct {
 	last      time.Time
 }
 
+// openContainers makes the providers. The gateway image is the one this
+// build pins (docker.GatewayImage) unless OPEN_CONDUIT_GATEWAY_IMAGE names
+// another, and OPEN_CONDUIT_CONTAINER_FORWARD=tcp forces the toolbelt
+// forward macOS uses, for its tests on Linux.
 func (d *daemon) openContainers() {
 	self, _ := os.Executable()
-	d.containers.docker = docker.New(docker.Options{Helper: self, Host: d.containerHost(), Contexts: func() []string {
+	gateway := docker.GatewayImage
+	if v := os.Getenv("OPEN_CONDUIT_GATEWAY_IMAGE"); v != "" {
+		gateway = v
+	}
+	d.containers.docker = docker.New(docker.Options{Helper: self, Host: d.containerHost(), Gateway: gateway, Forward: os.Getenv("OPEN_CONDUIT_CONTAINER_FORWARD"), Contexts: func() []string {
 		var out []string
 		for _, b := range d.dockerBindings() {
 			out = append(out, b.context)
@@ -79,8 +87,9 @@ func (d *daemon) dockerBindings() []dockerBinding {
 
 // containerCheck is doctor's view of the Docker provider for each context
 // and image the config uses: the daemon reachable, and its ID; Engine 28
-// or later; and a file written under --user into the workspace root owned
-// by the operator on the host. Any failure blocks the provider.
+// or later; a file written under --user into the workspace root owned by
+// the operator on the host; the gateway image there by digest; and the
+// internal-network preflight. Any failure blocks the provider.
 func (d *daemon) containerCheck(ctx context.Context) runtime.Check {
 	check := runtime.Check{Name: "container"}
 	bindings := d.dockerBindings()
@@ -129,7 +138,7 @@ func (d *daemon) containerRecords(id domain.ID) string {
 
 // bindContainer gives an attempt its binding's container, bound as
 // bindSandbox binds a sandbox. A binding without one gets none.
-func (d *daemon) bindContainer(_ context.Context, state runtime.AttemptState, resources extension.ResourceBroker, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
+func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, resources extension.ResourceBroker, pin func(extension.ContainerPin) error) (runtime.ContainerBinding, error) {
 	desc, err := d.configs.Container(state)
 	if err != nil {
 		return runtime.ContainerBinding{}, err
@@ -149,6 +158,22 @@ func (d *daemon) bindContainer(_ context.Context, state runtime.AttemptState, re
 	socket := d.endpoints.Socket(state.ExecutionID)
 	if socket != "" {
 		shared = append(shared, filepath.Dir(socket))
+	}
+	// A gateway that can't reach a host socket (macOS) reaches the
+	// toolbelt on a loopback port the host serves for the execution, on
+	// each launch and recovery (a restarted daemon serves a new one).
+	if socket != "" && desc.Provider == docker.Type && d.containers.docker.Forward() == docker.ForwardTCP {
+		_, s, err := docker.ParseConfig(desc.Config)
+		if err != nil {
+			return runtime.ContainerBinding{}, fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
+		}
+		host, err := d.containers.docker.ForwardListen(ctx, s.Context)
+		if err == nil {
+			_, err = d.endpoints.ServeTCP(state.ExecutionID, host)
+		}
+		if err != nil {
+			return runtime.ContainerBinding{}, fmt.Errorf("%w: the toolbelt forward: %v", extension.ErrSandboxUnavailable, err)
+		}
 	}
 	var pinned *extension.ContainerPin
 	if state.LaunchState == "recovering" {

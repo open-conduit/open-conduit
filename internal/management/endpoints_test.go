@@ -116,3 +116,43 @@ func TestEndpointsRotateAndClaim(t *testing.T) {
 		t.Fatal("served in a run directory that names another execution")
 	}
 }
+
+// ServeTCP serves the execution's handler on a loopback port named in
+// toolbelt.port beside its socket, keeps it on a second call, and stops
+// it with the socket on Close.
+func TestEndpointsServeTCP(t *testing.T) {
+	e := openEndpoints(t, shortTemp(t), "")
+	if _, err := e.ServeTCP("execution/tcp", "127.0.0.1"); err == nil {
+		t.Fatal("served a port for an execution whose socket isn't served")
+	}
+	endpoint, _, err := e.Serve(context.Background(), "execution/tcp", "token")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr, err := e.ServeTCP("execution/tcp", "127.0.0.1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if again, err := e.ServeTCP("execution/tcp", "127.0.0.1"); err != nil || again != addr {
+		t.Fatalf("a second call served %s %v, want %s kept", again, err, addr)
+	}
+	file := filepath.Join(filepath.Dir(strings.TrimPrefix(endpoint, "unix://")), "toolbelt.port")
+	raw, err := os.ReadFile(file)
+	if err != nil || !strings.HasSuffix(addr, ":"+strings.TrimSpace(string(raw))) {
+		t.Fatalf("port file %q %v for %s", raw, err, addr)
+	}
+	resp, err := http.Get("http://" + addr + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("the port did not serve the execution's handler: %d", resp.StatusCode)
+	}
+	if err := e.Close("execution/tcp"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := http.Get("http://" + addr + "/"); err == nil {
+		t.Fatal("the port still serves after Close")
+	}
+}

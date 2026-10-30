@@ -5,11 +5,16 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"syscall"
+
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // Health is what doctor reports for one Docker context: whether a
@@ -23,9 +28,10 @@ type Health struct {
 }
 
 // Health checks the context reaches a Docker daemon (and reports its ID),
-// that the daemon is Engine 28 or later, and that a file the image writes
+// that the daemon is Engine 28 or later, that a file the image writes
 // under --user into dir, a host directory shared as workspaces are, is
-// the operator's on the host. Any failure blocks the provider, whatever
+// the operator's on the host, that the gateway image is there by digest,
+// and the preflight (Preflight). Any failure blocks the provider, whatever
 // the Docker. With cached, a pass in the last ten minutes stands.
 func (p *Provider) Health(ctx context.Context, dctx, image, dir string, cached bool) Health {
 	key := dctx + "\x00" + image
@@ -73,8 +79,118 @@ func (p *Provider) check(ctx context.Context, dctx, image, dir string) Health {
 	}
 	if err := p.sharedPath(ctx, dctx, image, dir); err != nil {
 		h.Status, h.Code, h.Detail = "fail", "shared_path_failed", fmt.Sprintf("context %s: %v", dctx, err)
+		return h
+	}
+	if code, err := p.gatewayPresent(ctx, dctx); err != nil {
+		h.Status, h.Code, h.Detail = "fail", code, fmt.Sprintf("context %s: %v", dctx, err)
+		return h
+	}
+	if code, err := p.Preflight(ctx, dctx); err != nil {
+		h.Status, h.Code, h.Detail = "fail", code, fmt.Sprintf("context %s: %v", dctx, err)
 	}
 	return h
+}
+
+// gatewayPresent checks the build has a gateway image pinned by digest and
+// that the context's daemon has it.
+func (p *Provider) gatewayPresent(ctx context.Context, dctx string) (string, error) {
+	gw := p.o.Gateway
+	switch {
+	case gw == "":
+		return "gateway_unset", fmt.Errorf("this build has no gateway image: set OPEN_CONDUIT_GATEWAY_IMAGE to one pinned by digest (make gateway-image builds one)")
+	case !gatewayRef.MatchString(gw):
+		return "gateway_unpinned", fmt.Errorf("the gateway image %s is not pinned by digest", gw)
+	}
+	if _, err := p.docker(ctx, dctx, "image", "inspect", "--format", "{{.Id}}", gw); err != nil {
+		hint := ""
+		if strings.Contains(gw, "@") {
+			hint = fmt.Sprintf(": docker --context %s pull %s", dctx, gw)
+		}
+		return "gateway_missing", fmt.Errorf("the gateway image %s is not there%s", gw, hint)
+	}
+	return "", nil
+}
+
+// Preflight makes a network as an execution's internal one is made, and
+// checks from inside it, with the gateway image's probe, that the gateway
+// alias resolves, no outside name does, and neither the network's bridge
+// address, the default bridge's nor host.docker.internal reaches a port the
+// host is listening on. It fails if the daemon gives the network IPv6.
+func (p *Provider) Preflight(ctx context.Context, dctx string) (string, error) {
+	b := make([]byte, 6)
+	_, _ = rand.Read(b)
+	name := "oc-preflight-" + hex.EncodeToString(b)
+	labels := map[string]string{extension.ContainerLabelHost: p.o.Host}
+	if _, err := p.docker(ctx, dctx, append([]string{"network", "create"}, networkArgs(name, labels, true)...)...); err != nil {
+		return "preflight_failed", fmt.Errorf("could not make an internal network: %v", err)
+	}
+	cleanup := context.WithoutCancel(ctx)
+	defer func() { _, _ = p.docker(cleanup, dctx, "network", "rm", name) }()
+	out, err := p.docker(ctx, dctx, "network", "inspect", "--format", "{{.EnableIPv6}}|{{range .IPAM.Config}}{{.Subnet}} {{.Gateway}};{{end}}", name)
+	if err != nil {
+		return "preflight_failed", err
+	}
+	v6, ipam, _ := strings.Cut(strings.TrimSpace(string(out)), "|")
+	if v6 == "true" || strings.Contains(ipam, ":") {
+		return "ipv6_gateway", fmt.Errorf("the daemon gives an internal network IPv6 (%s), which the gateway can't hold: turn off its default IPv6 networks", strings.TrimSuffix(ipam, ";"))
+	}
+	// A host listener the probe must not reach: loopback on macOS (what
+	// Docker's VM forwards), every interface elsewhere (the bridges).
+	addr := "0.0.0.0:0"
+	if runtime.GOOS == "darwin" {
+		addr = "127.0.0.1:0"
+	}
+	ln, err := net.Listen("tcp", addr)
+	if err != nil {
+		return "preflight_failed", err
+	}
+	defer ln.Close()
+	var reached atomic.Bool
+	go func() {
+		for {
+			c, err := ln.Accept()
+			if err != nil {
+				return
+			}
+			reached.Store(true)
+			c.Close()
+		}
+	}()
+	_, port, _ := net.SplitHostPort(ln.Addr().String())
+	targets := []string{net.JoinHostPort("host.docker.internal", port)}
+	bridges := ipam
+	if out, err := p.docker(ctx, dctx, "network", "inspect", "--format", "{{range .IPAM.Config}}_ {{.Gateway}};{{end}}", "bridge"); err == nil {
+		bridges += string(out)
+	}
+	for _, entry := range strings.Split(bridges, ";") {
+		if f := strings.Fields(entry); len(f) == 2 && net.ParseIP(f[1]) != nil && !strings.Contains(f[1], ":") {
+			targets = append(targets, net.JoinHostPort(f[1], port))
+		}
+	}
+	user := fmt.Sprintf("%d:%d", p.o.UID, p.o.GID)
+	hard := []string{"--rm", "--network", name, "--read-only", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--user", user}
+	if _, err := p.docker(ctx, dctx, append(append([]string{"run", "-d", "--name", name + "-gw", "--network-alias", GatewayAlias}, hard...), p.o.Gateway, "serve", "--listen", ":"+GatewayPort)...); err != nil {
+		return "preflight_failed", fmt.Errorf("could not start the gateway image: %v", err)
+	}
+	defer func() { _, _ = p.docker(cleanup, dctx, "rm", "--force", name+"-gw") }()
+	out, err = p.docker(ctx, dctx, append(append([]string{"run"}, hard...), p.o.Gateway, "probe", "--alias", GatewayAlias,
+		"--outside", "example.com", "--unreachable", strings.Join(targets, ","))...)
+	if err != nil {
+		var fails []string
+		for _, line := range strings.Split(string(out), "\n") {
+			if f, ok := strings.CutPrefix(line, "fail "); ok {
+				fails = append(fails, f)
+			}
+		}
+		if len(fails) == 0 {
+			fails = append(fails, err.Error())
+		}
+		return "preflight_failed", fmt.Errorf("an internal network is not closed: %s", strings.Join(fails, "; "))
+	}
+	if reached.Load() {
+		return "preflight_failed", fmt.Errorf("an internal network is not closed: a container reached a host port")
+	}
+	return "", nil
 }
 
 // sharedPath writes a file into dir from a container running as the

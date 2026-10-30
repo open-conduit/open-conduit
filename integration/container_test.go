@@ -6,9 +6,11 @@ package integration_test
 // probed from inside. They run only with OPEN_CONDUIT_CONTAINER_TESTS=1
 // (make container-test and the container CI job), and need a Docker Engine
 // 28 or later on the context OPEN_CONDUIT_DOCKER_CONTEXT names (the CLI's
-// current one when unset): without it they fail. They call no real
-// service: the container has no route out, and the gateway
-// is a stand-in container on the execution's network.
+// current one when unset): without it they fail. They build the gateway
+// image from this tree. They call no real service: the container's only
+// way out is its gateway, and the hosts it allows are stand-in containers
+// on the gateway's egress network. OPEN_CONDUIT_CONTAINER_FORWARD=tcp
+// forces the toolbelt forward macOS uses.
 
 import (
 	"bytes"
@@ -41,9 +43,10 @@ import (
 const dockerTestImage = "alpine@sha256:d9e853e87e55526f6b2917df91a2115c36dd7c696a35be12163d44e6e2a4b6bc"
 
 var (
-	dockerOnce   sync.Once
-	dockerHelper string
-	dockerErr    error
+	dockerOnce    sync.Once
+	dockerHelper  string
+	dockerGateway string
+	dockerErr     error
 )
 
 // dockerContext is the context the tests run on, with the helper built
@@ -77,12 +80,42 @@ func dockerContext(t *testing.T) string {
 		}
 		if out, err := exec.Command("docker", "--context", dctx, "pull", "-q", dockerTestImage).CombinedOutput(); err != nil {
 			dockerErr = fmt.Errorf("pulling %s: %v\n%s", dockerTestImage, err, out)
+			return
 		}
+		dockerGateway, dockerErr = buildGateway(dctx, dir)
 	})
 	if dockerErr != nil {
 		t.Fatal(dockerErr)
 	}
 	return dctx
+}
+
+// buildGateway builds the gateway image from this tree for the context's
+// architecture, as make gateway-image does, and returns its ID.
+func buildGateway(dctx, dir string) (string, error) {
+	out, err := exec.Command("docker", "--context", dctx, "version", "--format", "{{.Server.Arch}}").Output()
+	if err != nil {
+		return "", fmt.Errorf("docker server architecture: %v", err)
+	}
+	arch := strings.TrimSpace(string(out))
+	build := filepath.Join(dir, "gateway")
+	for _, b := range []string{"open-conduit-gateway", "os"} {
+		cmd := exec.Command("go", "build", "-o", filepath.Join(build, "linux-"+arch, b), "github.com/open-conduit/open-conduit/cmd/"+b)
+		cmd.Env = append(os.Environ(), "CGO_ENABLED=0", "GOOS=linux", "GOARCH="+arch)
+		if out, err := cmd.CombinedOutput(); err != nil {
+			return "", fmt.Errorf("building %s for linux/%s: %v\n%s", b, arch, err, out)
+		}
+	}
+	dockerfile, _ := filepath.Abs("../extensions/docker/gateway/Dockerfile")
+	out, err = exec.Command("docker", "--context", dctx, "build", "-q", "--build-arg", "TARGETARCH="+arch, "-f", dockerfile, build).Output()
+	if err != nil {
+		var stderr []byte
+		if ee, ok := err.(*exec.ExitError); ok {
+			stderr = ee.Stderr
+		}
+		return "", fmt.Errorf("building the gateway image: %v\n%s", err, stderr)
+	}
+	return strings.TrimSpace(string(out)), nil
 }
 
 // dockerLab is a daemon's state directory, a home and a workspace laid
@@ -154,7 +187,7 @@ func newDockerLab(t *testing.T) *dockerLab {
 	}()
 	t.Cleanup(func() { ln.Close() })
 	_, l.port, _ = net.SplitHostPort(ln.Addr().String())
-	l.provider = docker.New(docker.Options{Helper: dockerHelper, Host: l.host, Home: l.home, Contexts: func() []string { return []string{dctx} }})
+	l.provider = l.newProvider(dockerGateway)
 	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 		defer cancel()
@@ -165,8 +198,19 @@ func newDockerLab(t *testing.T) *dockerLab {
 		if out, _ := exec.Command("docker", "--context", dctx, "network", "ls", "-q", "--filter", "label="+extension.ContainerLabelHost+"="+l.host).Output(); len(out) > 0 {
 			_ = exec.Command("docker", append([]string{"--context", dctx, "network", "rm"}, strings.Fields(string(out))...)...).Run()
 		}
+		if out, _ := exec.Command("docker", "--context", dctx, "volume", "ls", "-q", "--filter", "label="+extension.ContainerLabelHost+"="+l.host).Output(); len(out) > 0 {
+			_ = exec.Command("docker", append([]string{"--context", dctx, "volume", "rm", "-f"}, strings.Fields(string(out))...)...).Run()
+		}
 	})
 	return l
+}
+
+// newProvider is the lab's provider with a gateway image, forwarding the
+// toolbelt as OPEN_CONDUIT_CONTAINER_FORWARD says (the platform's way when
+// unset).
+func (l *dockerLab) newProvider(gateway string) *docker.Provider {
+	return docker.New(docker.Options{Helper: dockerHelper, Host: l.host, Home: l.home, Gateway: gateway, Forward: os.Getenv("OPEN_CONDUIT_CONTAINER_FORWARD"),
+		Contexts: func() []string { return []string{l.dctx} }})
 }
 
 func (l *dockerLab) grant(extra string) string {
@@ -298,10 +342,9 @@ func (l *dockerLab) docker(args ...string) (string, error) {
 
 func dockerID(ref string) string { _, id, _ := strings.Cut(ref, "/"); return id }
 
-// standIn starts a stand-in for the gateway on a created container's
-// network, reachable there as "gateway", and returns the network's
-// gateway address.
-func (l *dockerLab) standIn(t *testing.T, ref string) {
+// networkOf records a created container's network and that network's
+// bridge address.
+func (l *dockerLab) networkOf(t *testing.T, ref string) {
 	t.Helper()
 	network, err := l.docker("inspect", "--format", "{{range $k, $v := .NetworkSettings.Networks}}{{$k}}{{end}}", dockerID(ref))
 	if err != nil {
@@ -309,11 +352,39 @@ func (l *dockerLab) standIn(t *testing.T, ref string) {
 	}
 	l.network = network
 	l.gateway, _ = l.docker("network", "inspect", "--format", "{{range .IPAM.Config}}{{.Gateway}}{{end}}", network)
-	if out, err := l.docker("run", "-d", "--rm", "--label", extension.ContainerLabelHost+"="+l.host, "--network", network, "--network-alias", "gateway",
-		"--read-only", "--cap-drop", "ALL", "--user", "65534", "--entrypoint", "/bin/sh", dockerTestImage,
-		"-c", `while :; do printf 'HTTP/1.0 200 OK\r\nContent-Length: 2\r\n\r\nok' | nc -l -p 8080; done`); err != nil {
-		t.Fatalf("stand-in gateway: %v %s", err, out)
+}
+
+// egress makes an execution's egress network before its launch, as the
+// provider would but on a subnet that isn't private (198.18.0.0/15, set
+// aside for testing), so stand-in hosts on it pass the gateway's check of
+// where an allowed name resolves. The provider uses it as it finds it.
+func (l *dockerLab) egress(t *testing.T, id domain.ID, subnet int) string {
+	t.Helper()
+	name := docker.ExecutionNetwork(l.host, string(id)) + "-egress"
+	if out, err := l.docker("network", "create", "--driver", "bridge", "--ipv6=false", "--subnet", fmt.Sprintf("198.18.%d.0/24", subnet),
+		"--label", extension.ContainerLabelHost+"="+l.host, "--label", extension.ContainerLabelExecution+"="+string(id), name); err != nil {
+		t.Fatalf("egress network: %v %s", err, out)
 	}
+	return name
+}
+
+// upstream starts a stand-in for outside hosts on an egress network, the
+// gateway's only one out, answering as each of names, and returns its
+// address there.
+func (l *dockerLab) upstream(t *testing.T, egress string, names ...string) string {
+	t.Helper()
+	args := []string{"run", "-d", "--rm", "--label", extension.ContainerLabelHost + "=" + l.host, "--network", egress}
+	for _, n := range names {
+		args = append(args, "--network-alias", n)
+	}
+	args = append(args, "--read-only", "--cap-drop", "ALL", "--user", "65534", "--entrypoint", "/bin/sh", dockerTestImage,
+		"-c", `while :; do printf 'HTTP/1.0 200 OK\r\nContent-Length: 8\r\n\r\nupstream' | nc -l -p 8080; done`)
+	id, err := l.docker(args...)
+	if err != nil {
+		t.Fatalf("stand-in upstream: %v %s", err, id)
+	}
+	ip, _ := l.docker("inspect", "--format", `{{(index .NetworkSettings.Networks "`+egress+`").IPAddress}}`, id)
+	return ip
 }
 
 // containerProbes print "name: ALLOWED|DENIED" for each attempt from
@@ -346,7 +417,10 @@ t default_route sh -c 'awk "\$2 == \"00000000\"" /proc/net/route | grep -q .'
 t host_internal wget -q -T 3 -O /dev/null "http://host.docker.internal:$LAB_PORT/"
 t host_bridge wget -q -T 3 -O /dev/null "http://$LAB_GATEWAY:$LAB_PORT/"
 t host_docker0 wget -q -T 3 -O /dev/null "http://172.17.0.1:$LAB_PORT/"
-t gateway_standin up http://gateway:8080/
+t gateway_proxy sh -c 'i=0; while [ $i -lt 20 ]; do nc -z -w 2 gateway 3128 && exit 0; i=$((i+1)); sleep 0.25; done; exit 1'
+t toolbelt_bin sh -c '[ "$(command -v os)" = /run/open-conduit/bin/os ]'
+t write_bin sh -c 'echo x > /run/open-conduit/bin/probe'
+t write_toolbelt_dir sh -c 'echo x > /run/open-conduit/toolbelt/probe' 
 t no_capabilities grep -Eq 'CapEff:[[:space:]]+0+$' /proc/self/status
 t operator_uid sh -c '[ "$(id -u)" = "$LAB_UID" ]'
 `
@@ -357,7 +431,8 @@ var containerExpect = map[string]string{
 	"write_workspace": "ALLOWED", "write_run": "ALLOWED", "write_tmp": "ALLOWED", "write_root": "DENIED", "write_outside": "DENIED",
 	"write_records": "DENIED", "write_git_config": "DENIED", "write_git_hook": "DENIED", "write_git_info": "DENIED",
 	"move_git_config": "DENIED", "move_git_hooks": "DENIED", "docker_socket": "DENIED", "default_route": "DENIED",
-	"host_internal": "DENIED", "host_bridge": "DENIED", "host_docker0": "DENIED", "gateway_standin": "ALLOWED",
+	"host_internal": "DENIED", "host_bridge": "DENIED", "host_docker0": "DENIED", "gateway_proxy": "ALLOWED",
+	"toolbelt_bin": "ALLOWED", "write_bin": "DENIED", "write_toolbelt_dir": "DENIED",
 	"no_capabilities": "ALLOWED", "operator_uid": "ALLOWED",
 }
 
@@ -365,7 +440,9 @@ var containerExpect = map[string]string{
 // run directory and /tmp are writable, the clone's .git/config, hooks and
 // info are read-only over the workspace, it reads its own token and
 // nothing else of the host, runs as the operator with no capabilities,
-// and reaches nothing but the gateway: no route out and no host port.
+// and reaches nothing but the gateway: no route out and no host port. The
+// gateway image's os is first on PATH, and neither it nor the forward's
+// directory is writable.
 func TestDockerIsolation(t *testing.T) {
 	l := newDockerLab(t)
 	config, _ := os.ReadFile(l.ws + "/.git/config")
@@ -375,7 +452,7 @@ func TestDockerIsolation(t *testing.T) {
 		t.Fatal(err)
 	}
 	pin := l.pinned()
-	l.standIn(t, pin.ID)
+	l.networkOf(t, pin.ID)
 	_ = os.WriteFile(filepath.Join(l.runRoot, "iso", "gateway"), []byte(l.gateway), 0o600)
 	w := startWrapper(t, plan, nil)
 	if code := w.wait(t); code != 0 {
@@ -420,6 +497,16 @@ func TestDockerIsolation(t *testing.T) {
 	if net, _ := l.docker("network", "inspect", "--format", "{{.Internal}} {{.EnableIPv6}} {{index .Options \"com.docker.network.bridge.inhibit_ipv4\"}}", l.network); net != "true false true" {
 		t.Errorf("the execution's network %s is %q, want internal, no IPv6, no IPv4 on the bridge", l.network, net)
 	}
+	// The gateway is hardened too, and on the execution's network and its
+	// own egress one only.
+	name, _ := l.docker("inspect", "--format", "{{.Name}}", dockerID(pin.ID))
+	gw := strings.TrimPrefix(name, "/") + "-gw"
+	ginspect, _ := l.docker("inspect", "--format", "{{json .HostConfig}}|{{range $k, $v := .NetworkSettings.Networks}}{{$k}} {{end}}|{{.Config.User}}", gw)
+	for _, want := range []string{`"CapDrop":["ALL"]`, `"ReadonlyRootfs":true`, `no-new-privileges`, l.network + " ", l.network + "-egress ", "|" + strconv.Itoa(os.Getuid()) + ":"} {
+		if !strings.Contains(ginspect, want) {
+			t.Errorf("the gateway lacks %s: %s", want, ginspect)
+		}
+	}
 }
 
 // TestDockerFailClosed: each launch that can't be enforced is refused and
@@ -440,7 +527,7 @@ func TestDockerFailClosed(t *testing.T) {
 		{"write_outside_the_grant", l.grant(""), extension.SandboxNeeds{Write: []string{l.outside}}, extension.ErrSandboxDenied},
 		{"read_outside_the_grant", l.grant(""), extension.SandboxNeeds{Read: []string{l.home + "/.ssh"}}, extension.ErrSandboxDenied},
 		{"grant_reaching_the_state", l.grant(`,"read":["` + l.state + `/private"]`), extension.SandboxNeeds{}, extension.ErrSandboxDenied},
-		{"network_allow_without_a_gateway", l.grant(`,"network":{"allow":["example.com"]}`), extension.SandboxNeeds{}, extension.ErrSandboxUnavailable},
+		{"a_host_outside_network_allow", l.grant(`,"network":{"allow":["allowed.test"]}`), extension.SandboxNeeds{Hosts: []string{"other.test"}}, extension.ErrSandboxDenied},
 		{"a_socket", l.grant(`,"read":["` + l.outside + `"]`), extension.SandboxNeeds{Sockets: []string{l.outside + "/s.sock"}}, extension.ErrSandboxDenied},
 		{"unreachable_context", strings.Replace(l.grant(""), `"context":"`+l.dctx+`"`, `"context":"open-conduit-no-such-context"`, 1), extension.SandboxNeeds{}, extension.ErrSandboxUnavailable},
 		{"unpinned_image", strings.Replace(l.grant(""), dockerTestImage, "alpine:3.20", 1), extension.SandboxNeeds{}, extension.ErrSandboxUnavailable},
@@ -454,6 +541,13 @@ func TestDockerFailClosed(t *testing.T) {
 			none(t, id)
 		})
 	}
+	t.Run("no_gateway_image", func(t *testing.T) {
+		_, _, err := l.launch(l.binding(l.grant(""), "fc-nogw", nil, l.newProvider("")), "fc-nogw", "true", extension.SandboxNeeds{})
+		if !errors.Is(err, extension.ErrSandboxUnavailable) || !strings.Contains(err.Error(), "gateway") {
+			t.Fatalf("%v, want sandbox_unavailable for the gateway", err)
+		}
+		none(t, "fc-nogw")
+	})
 	t.Run("symlinked_git_config", func(t *testing.T) {
 		cfg := l.ws + "/.git/config"
 		real := l.ws + "/.git/config.real"
@@ -731,6 +825,19 @@ func TestDockerRemoveAndReconcile(t *testing.T) {
 	if out, _ := l.docker("network", "ls", "-q", "--filter", "label="+extension.ContainerLabelExecution+"=rm-done"); out != "" {
 		t.Error("reconcile left the finished execution's network")
 	}
+	if out, _ := l.docker("ps", "-aq", "--filter", "label="+extension.ContainerLabelExecution+"=rm-done"); out != "" {
+		t.Error("reconcile left the finished execution's gateway")
+	}
+	if out, _ := l.docker("volume", "ls", "-q", "--filter", "label="+extension.ContainerLabelExecution+"=rm-done"); out != "" {
+		t.Error("reconcile left the finished execution's toolbelt volume")
+	}
+	// A live execution's gateway runs, and is not one of its containers.
+	if out, _ := l.docker("ps", "-q", "--filter", "label="+extension.ContainerLabelExecution+"=rm-live", "--filter", "label=dev.open-conduit.role=gateway"); out == "" {
+		t.Error("reconcile removed a live execution's gateway")
+	}
+	if listed, err := l.provider.List(ctx, extension.ResourceOwner{ExecutionID: "rm-live"}); err != nil || len(listed) != 1 || listed[0].Ref.ID != live.ID {
+		t.Errorf("the live execution lists %+v %v, want its container only", listed, err)
+	}
 	if out, _ := l.docker("ps", "-q", "--filter", "id="+dockerID(live.ID)); out == "" {
 		t.Error("reconcile removed a live execution's container")
 	}
@@ -743,7 +850,10 @@ func TestDockerRemoveAndReconcile(t *testing.T) {
 		t.Fatal(err)
 	}
 	if out, _ := l.docker("network", "ls", "-q", "--filter", "label="+extension.ContainerLabelExecution+"=rm-live"); out != "" {
-		t.Error("removal left the execution's network")
+		t.Error("removal left the execution's networks")
+	}
+	if out, _ := l.docker("ps", "-aq", "--filter", "label="+extension.ContainerLabelExecution+"=rm-live"); out != "" {
+		t.Error("removal left the execution's gateway")
 	}
 }
 
@@ -756,14 +866,25 @@ func containsPath(list []string, p string) bool {
 	return false
 }
 
-// TestDockerHealth: doctor's checks pass on the context and fail on one
-// that reaches no daemon.
+// TestDockerHealth: doctor's checks, the gateway image's and the
+// internal-network preflight among them, pass on the context and fail on
+// one that reaches no daemon, without a gateway image and with one the
+// daemon doesn't have. The preflight leaves nothing behind.
 func TestDockerHealth(t *testing.T) {
 	l := newDockerLab(t)
 	if h := l.provider.Health(context.Background(), l.dctx, dockerTestImage, l.ws, false); h.Status != "ok" || h.Daemon == "" {
 		t.Fatalf("health on %s: %+v", l.dctx, h)
 	}
-	if h := l.provider.Health(context.Background(), "open-conduit-no-such-context", dockerTestImage, l.ws, false); h.Status != "fail" || h.Code != "docker_unreachable" {
-		t.Fatalf("health on a missing context: %+v", h)
+	if out, _ := l.docker("network", "ls", "-q", "--filter", "name=oc-preflight-", "--filter", "label="+extension.ContainerLabelHost+"="+l.host); out != "" {
+		t.Errorf("the preflight left networks: %s", out)
+	}
+	for _, c := range []struct{ dctx, gateway, code string }{
+		{"open-conduit-no-such-context", dockerGateway, "docker_unreachable"},
+		{l.dctx, "", "gateway_unset"},
+		{l.dctx, "sha256:" + strings.Repeat("0", 64), "gateway_missing"},
+	} {
+		if h := l.newProvider(c.gateway).Health(context.Background(), c.dctx, dockerTestImage, l.ws, false); h.Status != "fail" || h.Code != c.code {
+			t.Errorf("health with %s on %s: %+v, want %s", c.gateway, c.dctx, h, c.code)
+		}
 	}
 }

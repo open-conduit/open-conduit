@@ -6,7 +6,7 @@
     ["@semantic-release/release-notes-generator", { "preset": "conventionalcommits" }],
     ["@semantic-release/exec", {
       "prepareCmd": "mkdir -p .local && cat > .local/release-notes.md <<'SEMREL_NOTES'\n${nextRelease.notes}\nSEMREL_NOTES",
-      "publishCmd": "goreleaser release --clean --release-notes .local/release-notes.md"
+      "publishCmd": "GATEWAY_IMAGE=$(scripts/publish-gateway.sh ${nextRelease.version}) && GATEWAY_IMAGE=$GATEWAY_IMAGE goreleaser release --clean --release-notes .local/release-notes.md"
     }]
   ]
 }

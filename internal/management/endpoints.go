@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -40,6 +41,9 @@ type Endpoints struct {
 type endpoint struct {
 	dir, socket string
 	srv         *http.Server
+	// tcp serves the same handler on a loopback port, for a container's
+	// gateway that can't reach the socket (ServeTCP).
+	tcp *http.Server
 }
 
 const (
@@ -47,6 +51,8 @@ const (
 	endpointTokens = "token"
 	endpointToken  = "token"
 	endpointID     = "execution"
+	// endpointPort, beside the socket, names the port ServeTCP serves on.
+	endpointPort = "toolbelt.port"
 )
 
 // NewEndpoints prepares StateDir/runs. The caller must hold the daemon lock.
@@ -131,6 +137,37 @@ func (e *Endpoints) Serve(_ context.Context, id domain.ID, token string) (string
 	return "unix://" + socket, file, nil
 }
 
+// ServeTCP also serves the execution's served socket's handler on a port
+// of its own at host (loopback on macOS), for a container whose gateway
+// can't reach a host socket, and writes the port in toolbelt.port beside
+// the socket, where the gateway reads it for each connection. A port
+// already served is kept. Calls are still authorised by the execution's
+// token alone; Close and Shutdown stop it with the socket.
+func (e *Endpoints) ServeTCP(id domain.ID, host string) (string, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	ep := e.served[id]
+	if ep == nil {
+		return "", errors.New("the execution's toolbelt is not served")
+	}
+	file := filepath.Join(filepath.Dir(ep.socket), endpointPort)
+	if ep.tcp != nil {
+		return ep.tcp.Addr, nil
+	}
+	l, err := net.Listen("tcp", net.JoinHostPort(host, "0"))
+	if err != nil {
+		return "", fmt.Errorf("toolbelt port: %w", err)
+	}
+	_, port, _ := net.SplitHostPort(l.Addr().String())
+	if err := writePrivate(file, []byte(port+"\n")); err != nil {
+		l.Close()
+		return "", err
+	}
+	ep.tcp = &http.Server{Addr: l.Addr().String(), Handler: e.handler(id), ReadHeaderTimeout: 5 * time.Second}
+	go func(srv *http.Server) { _ = srv.Serve(l) }(ep.tcp)
+	return ep.tcp.Addr, nil
+}
+
 // claim makes the owner-only run directory and its token directory, and
 // refuses one that names another execution.
 func (e *Endpoints) claim(dir string, id domain.ID) error {
@@ -188,6 +225,9 @@ func (e *Endpoints) Close(id domain.ID) error {
 func (e *Endpoints) close(id domain.ID) error {
 	if ep := e.served[id]; ep != nil {
 		_ = ep.srv.Close()
+		if ep.tcp != nil {
+			_ = ep.tcp.Close()
+		}
 		delete(e.served, id)
 	}
 	short := filepath.Join(e.short, endpointKey(id))
@@ -242,6 +282,9 @@ func (e *Endpoints) Shutdown(ctx context.Context) {
 	defer e.mu.Unlock()
 	for id, ep := range e.served {
 		_ = ep.srv.Shutdown(ctx)
+		if ep.tcp != nil {
+			_ = ep.tcp.Shutdown(ctx)
+		}
 		delete(e.served, id)
 	}
 }

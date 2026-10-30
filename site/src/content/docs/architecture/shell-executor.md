@@ -26,6 +26,8 @@ A shell binding whose Scope binds a resource provider runs in the acquired works
 
 A binding with a sandbox ([B09](../sandboxes/)) wraps the command: the executor passes the argv its wrapper runs as `"$@"` to `extension.WrapLaunch`, with its needs (the workspace, the `outputs` and inbox directories, the input file, the token directory and the toolbelt socket), and runs the plan instead. A refusal is a structured failed result with no process (`sandbox_denied` or `sandbox_unavailable`). `Recover` adopts a live sandboxed segment only once `extension.AdoptSandboxed` proves it is still in its sandbox. An interrupted sandboxed segment's result says what reached it: `interrupt: term`, or `kill` where the sandbox runs the command outside the process group (Linux).
 
+A binding with a [container](../sandboxes/#containers) runs the command in one instead: the executor passes the same needs and launch to its `ContainerBroker`'s `Launch`, and its wrapper runs the argv that returns, which starts the container attached and exits with its code. A refusal is `sandbox_denied`, `sandbox_unavailable` or `container_running`, with no process. The workspace, run directory (so the `outputs` directory and the inject inbox) and token are at the same paths inside, `os` is the gateway image's, and `OS_ENDPOINT` is the gateway's forward. `Interrupt` reaches the container through the start helper. `Recover` adopts a live segment only once `Adopt` proves its container is the one pinned, and takes an exited container's code as the result of a segment whose wrapper died before recording one.
+
 ## Environment and toolbelt protocol
 
 The environment follows the B05 order:
@@ -151,3 +153,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - Ticket 03-02 added workspace support. Ticket 04-02 added the inject inbox; before it, binding an inject route to shell needed an unsupported-capability fallback. Ticket 05-02 added `extension.Result.Workspace`.
 - `extension.StopExecutor` became a public optional interface in 07-01.
 - Issue #164 added the sandbox wrap ([B09](../sandboxes/)).
+- Issue #179 ran it in containers.
