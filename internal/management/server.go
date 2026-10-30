@@ -193,6 +193,25 @@ func requestID() string {
 	return "req_" + hex.EncodeToString(b)
 }
 
+type executionKey struct{}
+
+// ExecutionHandler serves one execution's toolbelt socket: it answers only
+// toolbelt calls, and only for that execution. Operator endpoints are not
+// found on it, operator credentials are refused, and an execution token
+// issued to any other execution fails the call's execution assertion.
+func (s *Server) ExecutionHandler(id domain.ID) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		s.ServeHTTP(w, r.WithContext(context.WithValue(r.Context(), executionKey{}, id)))
+	})
+}
+
+// scopedExecution is the execution whose socket a request arrived on, or ""
+// on the management socket.
+func scopedExecution(ctx context.Context) domain.ID {
+	id, _ := ctx.Value(executionKey{}).(domain.ID)
+	return id
+}
+
 func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	rid := requestID()
 	w.Header().Set("X-Request-Id", rid)
@@ -342,13 +361,17 @@ func split(escaped string) ([]string, bool) {
 
 func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 	ctx := r.Context()
-	who, err := s.authenticate(ctx, r)
-	if err != nil {
-		return err
-	}
 	parts, ok := split(r.URL.EscapedPath())
 	if !ok {
 		return fail(404, "not_found", "unknown endpoint")
+	}
+	// An execution's own socket serves the toolbelt and nothing else.
+	if scopedExecution(ctx) != "" && (len(parts) != 2 || parts[0] != "toolbelt" || parts[1] != "call") {
+		return fail(404, "not_found", "this socket serves only toolbelt calls")
+	}
+	who, err := s.authenticate(ctx, r)
+	if err != nil {
+		return err
 	}
 	var matched *route
 	var params []string

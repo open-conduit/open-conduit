@@ -127,7 +127,8 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 		t.Errorf("a token reached the output: %s", probed)
 	}
 
-	// Only the operator applies: the agent's own token reaches none of it.
+	// Only the operator applies: the agent's own endpoint serves none of it,
+	// and its token is refused on the management socket too.
 	token, _ := os.ReadFile(filepath.Join(d.root, "token"))
 	endpoint, _ := os.ReadFile(filepath.Join(d.root, "endpoint"))
 	exec, err := client.New(string(endpoint), strings.TrimSpace(string(token)))
@@ -135,17 +136,24 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 		t.Fatal(err)
 	}
 	cfg, _ := d.c.Config(ctx)
-	if _, err = exec.ApplyConfigText(ctx, doc.Bytes(), cfg.Hash, cfg.Generation, "agent-apply"); !isStatus(err, 403) {
+	if _, err = exec.ApplyConfigText(ctx, doc.Bytes(), cfg.Hash, cfg.Generation, "agent-apply"); !isStatus(err, 404) {
 		t.Errorf("the agent applied config: %v", err)
 	}
-	if _, err = exec.WorkConfigCandidate(ctx, session.WorkID); !isStatus(err, 403) {
+	if _, err = exec.WorkConfigCandidate(ctx, session.WorkID); !isStatus(err, 404) {
 		t.Errorf("the agent read the candidate: %v", err)
 	}
-	if _, err = exec.ValidateConfig(ctx, doc.Bytes()); !isStatus(err, 403) {
+	if _, err = exec.ValidateConfig(ctx, doc.Bytes()); !isStatus(err, 404) {
 		t.Errorf("the agent validated as the operator: %v", err)
 	}
-	if _, err = exec.InvokeAction(ctx, session, "setup", "approve_c1", "", "agent-approve"); !isStatus(err, 403) {
+	if _, err = exec.InvokeAction(ctx, session, "setup", "approve_c1", "", "agent-approve"); !isStatus(err, 404) {
 		t.Errorf("the agent approved its own change: %v", err)
+	}
+	mgmt, err := client.New("unix://"+filepath.Join(d.state, "management.sock"), strings.TrimSpace(string(token)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = mgmt.ValidateConfig(ctx, doc.Bytes()); !isStatus(err, 403) {
+		t.Errorf("the agent's token reached an operator endpoint on the management socket: %v", err)
 	}
 	for name, call := range map[string]client.ToolCall{
 		"an apply op":         {Operation: "setup.propose", Input: json.RawMessage(`{"op":"apply","pointer":"/","value":{},"why":"apply it"}`)},

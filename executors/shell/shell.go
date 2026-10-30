@@ -262,7 +262,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	if err = writeInput(filepath.Join(dir, "input.json"), r); err != nil {
 		return e.preset(ctx, rn, "start_failed", "could not prepare shell process")
 	}
-	if r.Context.ToolbeltToken != "" {
+	if r.Context.ToolbeltToken != "" && r.Context.ToolbeltTokenFile == "" {
 		if err = writeFile(filepath.Join(dir, "token"), []byte(r.Context.ToolbeltToken+"\n")); err != nil {
 			return e.preset(ctx, rn, "start_failed", "could not prepare shell process")
 		}
@@ -352,6 +352,9 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, l
 		vars["OS_ENDPOINT"] = r.Context.ToolbeltEndpoint
 		vars["OS_TOKEN"] = r.Context.ToolbeltToken
 		vars["OS_TOKEN_FILE"] = filepath.Join(dir, "token")
+		if r.Context.ToolbeltTokenFile != "" {
+			vars["OS_TOKEN_FILE"] = r.Context.ToolbeltTokenFile
+		}
 	}
 	vars["OS_SCOPE_ID"] = string(r.Work.ScopeID)
 	vars["OS_WORK_ID"] = string(r.Work.ID)
@@ -457,9 +460,13 @@ func (e *Executor) Recover(ctx context.Context, r extension.RunRequest, state do
 	}
 	// Replace the process credential before acknowledging adoption. Runtime has
 	// already revoked lower-epoch tokens.
+	// With a host-kept token file the host has rotated it already; a segment
+	// launched with its own file (before the host kept one) keeps that current.
 	token := filepath.Join(dir, "token")
 	if r.Context.ToolbeltToken != "" {
-		err = writeFile(token, []byte(r.Context.ToolbeltToken+"\n"))
+		if r.Context.ToolbeltTokenFile == "" || exists(token) {
+			err = writeFile(token, []byte(r.Context.ToolbeltToken+"\n"))
+		}
 	} else {
 		err = os.Remove(token)
 		if errors.Is(err, os.ErrNotExist) {

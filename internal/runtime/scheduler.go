@@ -77,6 +77,11 @@ type SchedulerOptions struct {
 	// for executors advertising a toolbelt transport other than none.
 	Toolbelt         *Toolbelt
 	ToolbeltEndpoint string
+	// ToolbeltEndpoints, when set, serves the execution its own toolbelt
+	// endpoint and writes the attempt's fresh token into a token directory
+	// there, after every claim, recovery and resume. It returns the endpoint
+	// and token file the executor receives instead of ToolbeltEndpoint.
+	ToolbeltEndpoints func(ctx context.Context, execution domain.ID, token string) (endpoint, tokenFile string, err error)
 	// Secrets resolves only the attempt's binding-selected secrets immediately
 	// before Run/Recover/Resume, outside coordination transactions. Values are
 	// never persisted; failure blocks this attempt with a safe diagnostic.
@@ -882,7 +887,15 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "toolbelt authority unavailable"}}
 			return attempt, errors.Join(extension.ErrUnauthorized, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
 		}
-		attempt.Request.Context.ToolbeltEndpoint, attempt.Request.Context.ToolbeltToken = s.options.ToolbeltEndpoint, token
+		endpoint, tokenFile := s.options.ToolbeltEndpoint, ""
+		if s.options.ToolbeltEndpoints != nil {
+			var serveErr error
+			if endpoint, tokenFile, serveErr = s.options.ToolbeltEndpoints(ctx, state.ExecutionID, token); serveErr != nil {
+				failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "toolbelt endpoint unavailable"}}
+				return attempt, errors.Join(extension.ErrUnauthorized, serveErr, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
+			}
+		}
+		attempt.Request.Context.ToolbeltEndpoint, attempt.Request.Context.ToolbeltToken, attempt.Request.Context.ToolbeltTokenFile = endpoint, token, tokenFile
 	}
 	if s.options.Secrets != nil {
 		secrets, secretErr := s.options.Secrets(ctx, state)

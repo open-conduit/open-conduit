@@ -330,9 +330,12 @@ func (e *Executor) mcpConfig(r extension.RunRequest, dir string) (string, error)
 	if r.Context.ToolbeltToken == "" || r.Context.ToolbeltEndpoint == "" || e.o.ToolbeltDir == "" {
 		return "", nil
 	}
-	token := filepath.Join(dir, "token")
-	if err := writeFile(token, []byte(r.Context.ToolbeltToken+"\n")); err != nil {
-		return "", err
+	token := r.Context.ToolbeltTokenFile
+	if token == "" {
+		token = filepath.Join(dir, "token")
+		if err := writeFile(token, []byte(r.Context.ToolbeltToken+"\n")); err != nil {
+			return "", err
+		}
 	}
 	doc := map[string]any{"mcpServers": map[string]any{MCPServerName: map[string]any{
 		"type":    "stdio",

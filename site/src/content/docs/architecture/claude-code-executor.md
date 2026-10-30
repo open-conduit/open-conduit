@@ -101,7 +101,7 @@ Like core telemetry, it is at most once across a kill.
 
 ## Toolbelt over MCP
 
-When the attempt has a toolbelt token and the `os` binary is available, the segment's `mcp.json` defines the stdio server `open-conduit`: `<toolbelt dir>/os mcp`, with `OS_ENDPOINT` and `OS_TOKEN_FILE` (a private 0600 file). The token itself never appears in the file or in claude's environment. Adoption replaces the token file, and `os mcp` re-reads it on every call.
+When the attempt has a toolbelt token and the `os` binary is available, the segment's `mcp.json` defines the stdio server `open-conduit`: `<toolbelt dir>/os mcp`, with `OS_ENDPOINT` and `OS_TOKEN_FILE` (a private 0600 file: the host-kept `ToolbeltTokenFile` in the execution's run directory when the host gives one, see [execution endpoints](../toolbelt-management/#execution-endpoints), otherwise one in the segment directory). The token itself never appears in the file or in claude's environment. Adoption replaces the token file, and `os mcp` re-reads it on every call.
 
 `os mcp` speaks newline-delimited JSON-RPC 2.0 (`initialize` with version negotiation, `ping`, `tools/list` and `tools/call`) and offers these tools:
 

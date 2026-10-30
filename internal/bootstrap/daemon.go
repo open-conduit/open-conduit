@@ -152,6 +152,7 @@ type daemon struct {
 	bitbucketTools *bb.Tools
 	external       externalState
 	endpoint       string
+	endpoints      *management.Endpoints
 	cursorKey      []byte
 	current        atomic.Pointer[components]
 
@@ -287,6 +288,15 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer lock.Close()
+	// Each execution's toolbelt is served on a socket of its own in its run
+	// directory, answered by the current generation's server.
+	if d.endpoints, err = management.NewEndpoints(lock, o.StateDir, "", func(id domain.ID) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			d.current.Load().server.ExecutionHandler(id).ServeHTTP(w, r)
+		})
+	}); err != nil {
+		return err
+	}
 	store, err := sqlite.Open(ctx, filepath.Join(o.StateDir, "conduit.db"))
 	if err != nil {
 		return err
@@ -452,6 +462,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	shutdown, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	_ = srv.Shutdown(shutdown)
+	d.endpoints.Shutdown(shutdown)
 	stopLoop()
 	d.wg.Wait()
 	d.releaseAll(shutdown)
@@ -526,7 +537,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		GlobalLimit: set.Concurrency, ExecutorPools: jobExecutors(), PoolLimits: map[string]int{jobPool: set.JobConcurrency},
 		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
-		Toolbelt: belt, ToolbeltEndpoint: d.endpoint, Secrets: d.configs.Secrets(d.resolver),
+		Toolbelt: belt, ToolbeltEndpoint: d.endpoint, ToolbeltEndpoints: d.endpoints.Serve, Secrets: d.configs.Secrets(d.resolver),
 		Resources: d.bindResources, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
 		WorkKinds: kinds,

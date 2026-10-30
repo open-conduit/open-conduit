@@ -225,9 +225,19 @@ func checkPrivateDir(dir string) error {
 // Listen binds the owner-only Unix socket. The caller must hold the daemon
 // lock; a stale socket is removed only after ownership checks.
 func Listen(_ *Lock, socket string) (net.Listener, error) {
-	if !filepath.IsAbs(socket) || len(socket) > 100 {
+	if !filepath.IsAbs(socket) || len(socket) > maxSocketPath {
 		return nil, fmt.Errorf("socket path must be an absolute path shorter than the platform limit; use --socket")
 	}
+	return listenUnix(socket)
+}
+
+// maxSocketPath leaves room under the smallest platform limit for a Unix
+// socket path (104 bytes on macOS, including the terminating NUL).
+const maxSocketPath = 100
+
+// listenUnix binds an owner-only socket in an owner-only directory, removing
+// a stale socket left at the path only when this user owns it.
+func listenUnix(socket string) (net.Listener, error) {
 	if err := checkPrivateDir(filepath.Dir(socket)); err != nil {
 		return nil, err
 	}

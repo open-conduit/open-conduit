@@ -25,6 +25,11 @@ type ExecutionContext struct {
 	// valid and every executor must operate without it.
 	Resources                       ResourceBroker
 	ToolbeltEndpoint, ToolbeltToken string
+	// ToolbeltTokenFile, when set, is the host-kept file holding the current
+	// ToolbeltToken, in a token directory the host rotates it in on recovery.
+	// An executor points its process at it (OS_TOKEN_FILE) instead of
+	// writing a token file of its own.
+	ToolbeltTokenFile string
 }
 type RunRequest struct {
 	Work      domain.Work
