@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -79,31 +78,34 @@ func (s *BoundSandbox) Resources(r ResourceBroker) ResourceBroker {
 	if r == nil {
 		return nil
 	}
-	return sandboxedResources{r, s}
+	return sandboxedResources{r, s.keep}
 }
 
+// sandboxedResources marks every acquisition Sandboxed and hands what was
+// acquired to keep, for a broker's plan.
 type sandboxedResources struct {
-	r ResourceBroker
-	s *BoundSandbox
+	r    ResourceBroker
+	keep func(*Resource)
 }
 
 func (w sandboxedResources) Acquire(ctx context.Context, req ResourceRequest) (Resource, error) {
 	req.Sandboxed = true
 	res, err := w.r.Acquire(ctx, req)
-	w.s.keep(res, err)
+	if err == nil && res.Dir != "" {
+		w.keep(&res)
+	}
 	return res, err
 }
 func (w sandboxedResources) Lookup(ctx context.Context, ref string) (Resource, error) {
 	res, err := w.r.Lookup(ctx, ref)
-	w.s.keep(res, err)
+	if err == nil && res.Dir != "" {
+		w.keep(&res)
+	}
 	return res, err
 }
-func (s *BoundSandbox) keep(res Resource, err error) {
-	if err != nil || res.Dir == "" {
-		return
-	}
+func (s *BoundSandbox) keep(res *Resource) {
 	s.mu.Lock()
-	s.resource = &res
+	s.resource = res
 	s.mu.Unlock()
 }
 
@@ -139,67 +141,18 @@ func (s *BoundSandbox) Plan(ctx context.Context, needs SandboxNeeds, l SandboxLa
 	if len(l.Argv) == 0 || !filepath.IsAbs(l.Dir) || !filepath.IsAbs(l.RunDir) || b.Records == "" || b.Pin == nil {
 		return SandboxPlan{}, fmt.Errorf("%w: incomplete launch", ErrSandboxUnavailable)
 	}
-	protected := sandboxAliases(b.Protected)
-	inside := func(p string) bool { return Within(p, protected) }
-	workspace, run := CanonicalPath(l.Dir), CanonicalPath(l.RunDir)
-	var resource SandboxNeeds
 	s.mu.Lock()
 	res := s.resource
 	s.mu.Unlock()
-	if res != nil {
-		if CanonicalPath(res.Dir) != workspace {
-			return SandboxPlan{}, fmt.Errorf("%w: the launch is not in the acquired workspace", ErrSandboxUnavailable)
-		}
-		if res.Sandbox == nil {
-			return SandboxPlan{}, fmt.Errorf("%w: the %s workspace can't be used in a sandbox", ErrSandboxUnavailable, res.Kind)
-		}
-		resource = *res.Sandbox
-	}
-	// The run directory is the executor's own, reached without links, so
-	// it can't stand for a directory of other attempts' files.
-	root := filepath.Clean(b.RunRoot)
-	rel, err := filepath.Rel(root, filepath.Clean(l.RunDir))
-	if b.RunRoot == "" || err != nil || rel == "." || strings.HasPrefix(rel, "..") || run != filepath.Join(CanonicalPath(root), rel) {
-		return SandboxPlan{}, fmt.Errorf("%w: the run directory is not the executor's own", ErrSandboxDenied)
-	}
-	// The exceptions to the protected set never contain what it protects.
-	shared := canonical(b.Shared)
-	records := CanonicalPath(b.Records)
-	for _, own := range []string{workspace, run} {
-		for _, p := range append(append(append([]string{}, protected...), shared...), records) {
-			if p == own || Within(p, []string{own}) {
-				return SandboxPlan{}, fmt.Errorf("%w: %s would expose %s", ErrSandboxDenied, own, p)
-			}
-		}
-	}
-	// Beneath the protected set, an executor may only reach its own run
-	// directory and workspace, and read what the host shares.
-	var denied []string
-	check := func(kind string, paths []string, extra []string) {
-		for _, p := range paths {
-			c := CanonicalPath(p)
-			if inside(c) && !Within(c, append([]string{workspace, run}, extra...)) {
-				denied = append(denied, kind+" "+p)
-			}
-		}
-	}
-	check("write", needs.Write, nil)
-	check("read", needs.Read, shared)
-	check("read", needs.ReadOnly, shared)
-	for _, sock := range needs.Sockets {
-		if c := CanonicalPath(sock); inside(c) && (b.Toolbelt == "" || c != CanonicalPath(b.Toolbelt)) {
-			denied = append(denied, "socket "+sock)
-		}
-	}
-	if len(denied) > 0 {
-		return SandboxPlan{}, fmt.Errorf("%w: inside Open Conduit's state: %s", ErrSandboxDenied, strings.Join(denied, ", "))
-	}
-	if err := hardLinks(workspace, b.MaxScan); err != nil {
+	g, err := GuardLaunch(LaunchGuard{Protected: b.Protected, Shared: b.Shared, RunRoot: b.RunRoot, Toolbelt: b.Toolbelt, Records: b.Records,
+		MaxScan: b.MaxScan, Dir: l.Dir, RunDir: l.RunDir, Resource: res, Needs: needs})
+	if err != nil {
 		return SandboxPlan{}, err
 	}
-	merged := needs.Merge(resource)
-	merged.Read = append(merged.Read, shared...)
-	merged.Deny = append(merged.Deny, protected...)
+	workspace, run := g.Workspace, g.Run
+	merged := needs.Merge(g.Resource)
+	merged.Read = append(merged.Read, g.Shared...)
+	merged.Deny = append(merged.Deny, g.Protected...)
 	merged = canonicalNeeds(merged)
 	sum := sha256.Sum256([]byte(run))
 	dir := filepath.Join(b.Records, hex.EncodeToString(sum[:8]))
@@ -278,123 +231,3 @@ func writeOnce(path string, data []byte) error {
 	}
 	return os.Rename(tmp, path)
 }
-
-// CanonicalPath is p made absolute, cleaned and with every symbolic link in
-// its longest existing prefix resolved (on macOS /var is /private/var), so
-// paths compare as the kernel sees them.
-func CanonicalPath(p string) string {
-	if !filepath.IsAbs(p) {
-		if abs, err := filepath.Abs(p); err == nil {
-			p = abs
-		}
-	}
-	p = filepath.Clean(p)
-	rest := ""
-	for cur := p; ; {
-		if real, err := filepath.EvalSymlinks(cur); err == nil {
-			return filepath.Join(real, rest)
-		}
-		parent := filepath.Dir(cur)
-		if parent == cur {
-			return p
-		}
-		rest = filepath.Join(filepath.Base(cur), rest)
-		cur = parent
-	}
-}
-
-// Within reports whether p is one of roots or beneath one.
-func Within(p string, roots []string) bool {
-	for _, r := range roots {
-		if r == "" {
-			continue
-		}
-		if p == r || strings.HasPrefix(p, strings.TrimSuffix(r, string(filepath.Separator))+string(filepath.Separator)) {
-			return true
-		}
-	}
-	return false
-}
-
-func canonical(paths []string) []string {
-	var out []string
-	for _, p := range paths {
-		if p != "" {
-			out = append(out, CanonicalPath(p))
-		}
-	}
-	return out
-}
-
-func canonicalNeeds(n SandboxNeeds) SandboxNeeds {
-	n.Read, n.Write, n.ReadOnly, n.Deny = canonical(n.Read), canonical(n.Write), canonical(n.ReadOnly), sandboxAliases(n.Deny)
-	return n
-}
-
-// sandboxAliases are paths canonicalised, with every other path the same
-// directory is reachable by (a bind mount on Linux) added.
-func sandboxAliases(paths []string) []string {
-	var out []string
-	seen := map[string]bool{}
-	add := func(p string) {
-		if p != "" && !seen[p] {
-			seen[p] = true
-			out = append(out, p)
-		}
-	}
-	for _, p := range paths {
-		c := CanonicalPath(p)
-		add(c)
-		for _, a := range mountAliases(c) {
-			add(a)
-		}
-	}
-	return out
-}
-
-// hardLinks refuses a workspace holding a hard link to a file outside it.
-// A hard link is the same file under another path, and no path policy can
-// tell the two apart: one to a protected file would read it from inside.
-func hardLinks(root string, max int) error {
-	type inode struct{ dev, ino uint64 }
-	links := map[inode]uint64{}
-	found := map[inode]uint64{}
-	names := map[inode]string{}
-	n := 0
-	err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
-		}
-		if n++; n > max {
-			return errTooMany
-		}
-		if !d.Type().IsRegular() {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		dev, ino, nlink, ok := fileIdentity(info)
-		if !ok || nlink < 2 {
-			return nil
-		}
-		k := inode{dev, ino}
-		links[k], names[k] = nlink, path
-		found[k]++
-		return nil
-	})
-	if errors.Is(err, errTooMany) {
-		return fmt.Errorf("%w: the workspace has more than %d entries to check for hard links", ErrSandboxUnavailable, max)
-	} else if err != nil && !errors.Is(err, fs.ErrNotExist) {
-		return fmt.Errorf("%w: could not check the workspace for hard links: %v", ErrSandboxUnavailable, err)
-	}
-	for k, nlink := range links {
-		if found[k] < nlink {
-			return fmt.Errorf("%w: %s is a hard link to a file outside the workspace; remove it", ErrSandboxDenied, names[k])
-		}
-	}
-	return nil
-}
-
-var errTooMany = errors.New("too many entries")

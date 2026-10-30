@@ -144,6 +144,9 @@ func (s *Scheduler) DispatchControl(ctx context.Context, id string) error {
 	if intent.Policy == "inject" {
 		callErr = executor.(extension.InjectExecutor).Inject(ctx, intent.ExecutionID, event)
 	} else {
+		if s.options.Signalled != nil {
+			s.options.Signalled(ctx, intent.ExecutionID, "term")
+		}
 		callErr = executor.(extension.InterruptExecutor).Interrupt(ctx, intent.ExecutionID)
 	}
 	// Commit dispatch acknowledgement independently of caller cancellation. The

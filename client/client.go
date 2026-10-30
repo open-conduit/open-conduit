@@ -1067,6 +1067,19 @@ type RunSegment struct {
 	// Sandbox is the sandbox plan the segment ran under, when its binding
 	// declared one (B09).
 	Sandbox *RunSandbox `json:"sandbox,omitempty"`
+	// Container is the container the segment ran in, when its binding
+	// declared one.
+	Container *RunContainer `json:"container,omitempty"`
+}
+
+// RunContainer pins a segment's container: the plan's digest and summary,
+// the image digest, the container daemon's ID and the container's ID.
+type RunContainer struct {
+	Digest  string `json:"digest"`
+	Summary string `json:"summary,omitempty"`
+	Image   string `json:"image"`
+	Daemon  string `json:"daemon"`
+	ID      string `json:"id"`
 }
 
 // RunSandbox pins a segment's sandbox: the plan's digest and its summary.

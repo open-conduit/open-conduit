@@ -1,11 +1,11 @@
 ---
 title: "Process sandboxes and the srt provider"
-description: "Decision B09: how a binding runs its executor in a process sandbox, what the host protects whatever the policy says, how a plan is pinned and proved on recovery, and how the srt provider enforces it on macOS and Linux."
+description: "Decision B09: how a binding runs its executor in a process sandbox, what the host protects whatever the policy says, how a plan is pinned and proved on recovery, and how the srt provider enforces it on macOS and Linux. Also the container contract, with its host-owned lifecycle."
 ---
 
 This page records decision B09: a binding may run its executor's process in a local process sandbox. The resource says where the agent works (B07), the executor how it runs, and the sandbox what it may reach. The public contract is [`extension/sandbox.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/sandbox.go), and the host's half of it is [`extension/sandboxbind.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/sandboxbind.go). The [srt provider](https://github.com/open-conduit/open-conduit/tree/main/extensions/srt) implements it with Anthropic's sandbox-runtime. The [shell](../shell-executor/) and [Claude Code](../claude-code-executor/) executors consume it, and [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/sandbox.go) composes them.
 
-A sandbox here is local and process-scoped: the sandbox is the process tree the executor starts. Containers (Docker, `sbx`) and remote sandboxes are not providers of this contract. They fail it on stopping, adoption, the stray-process sweep, host sockets and credentials (#161), and would need a contract with a lifecycle of their own.
+A sandbox here is local and process-scoped: the sandbox is the process tree the executor starts. Containers (Docker, `sbx`) and remote sandboxes are not providers of this contract. They fail it on stopping, adoption, the stray-process sweep, host sockets and credentials (#161). Containers have a contract of their own, with a lifecycle the host owns ([Containers](#containers)), which shares this one's rules and path checks.
 
 ## What core knows
 
@@ -90,6 +90,8 @@ A root that has exited, or a wrapper that runs nothing yet, leaves nothing runni
 - **Aliases.** On Linux the host adds every bind mount of a protected path (from `/proc/self/mountinfo`) to the denies. Seatbelt and bubblewrap resolve symlinks, `..` and, on macOS, case variants on case-insensitive APFS to the real path, so a link in the workspace to `~/.ssh` or the state directory, `..` out of the workspace and `/proc/self/root/…` all land on the deny.
 - **Hard links.** A hard link is the same file under another path, and no path policy can tell them apart. The host refuses (`sandbox_denied`) a workspace that holds a hard link to a file outside it, found by walking the workspace for files whose link count it can't account for (up to 1,000,000 entries; a larger workspace is refused). A process inside can't make a new one to a denied file.
 - **The run directory.** It must be beneath the executor's runs directory and reached without symbolic links, so a linked run directory can't stand for the state directory.
+
+These checks, with the protected-set checks of invariant 2, are one host function, `extension.GuardLaunch` ([`launchguard.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/launchguard.go)), which both the sandbox broker and the [container broker](#containers) call.
 
 ## The srt provider
 
@@ -178,12 +180,91 @@ Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from 
 
 ## Limitations
 
-- Only macOS and Linux, through srt. Containers and remote sandboxes need a contract of their own.
+- Only macOS and Linux, through srt. Remote sandboxes need a contract of their own; containers have one, with no provider yet.
 - On Linux, `"unix_sockets": "all"` makes every unix socket the filesystem policy leaves visible reachable; only the known container sockets are hidden.
 - The hard-link check covers the workspace, not the policy's other write grants. A package manager that hard-links from a store outside the workspace (pnpm) is refused until it is set to copy (`package-import-method=copy`).
 - On Linux srt grants only paths that exist when the segment starts.
 - srt itself runs as the operator, outside its sandbox, and is trusted.
 - Attach to Work that ran sandboxed is refused, not sandboxed ([attach](#attach)).
+
+## Containers
+
+A binding may instead run its executor in a container. It declares `container: {provider, config}` in place of `sandbox`; a binding with both is refused at load (`sandbox_conflict`). The contract is [`extension/container.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/container.go) and the host's half [`extension/containerbind.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/containerbind.go). No provider ships yet: the Docker provider, the gateway that carries the network allowlist and the toolbelt, and the executors' use of it follow (#171).
+
+### The config is the grant
+
+```json
+"container": {
+  "provider": "docker",
+  "config": {
+    "image": "ghcr.io/acme/agent@sha256:…",
+    "write": ["{workspace}"],
+    "read": ["~/.gitconfig"],
+    "network": {"allow": ["api.anthropic.com", "github.com"]},
+    "limits": {"cpus": 4, "memory": "8g", "pids": 2048}
+  }
+}
+```
+
+The host checks its shape whatever the provider (`extension.ParseContainerConfig`), and refuses at load and at launch an image not pinned by digest. A container's filesystem is an allowlist: nothing from the host is visible unless granted. The rules are B09's:
+
+- **The policy is the grant.** An executor's `Write` needs must fall in `write` (or the run directory, always granted), its `Read` and `ReadOnly` needs in `read`, `write` or what the host shares, its hosts in `network.allow`, and its only socket is the execution's toolbelt. Anything else is `sandbox_denied` and nothing is created.
+- **The three-way merge.** The executor's needs, the acquired resource's and the host's protected set are merged as for a sandbox, and the host refuses a grant that reaches into the protected set other than at the attempt's own run directory, workspace and shared paths.
+- **The same path checks** (`GuardLaunch`): the run directory, exposure of a protected path, needs beneath the protected set and hard links.
+- **Fail closed.** No provider, an executor without `Capabilities.Container`, a config that doesn't parse, a listing that fails, a provider error or an incomplete plan or container each refuse the launch.
+
+### What executors see
+
+`ExecutionContext.Container` is a `ContainerBroker`, nil unless the binding declares a container. An executor makes two calls:
+
+- `Launch(needs, launch)` where it would build its wrapper's argv. The host checks the needs, lists the execution's containers, has the provider plan and create the container (not started), pins it and returns the argv the wrapper runs to start it, attached, and wait for its exit. `Signals` is `term`.
+- `Adopt(alive)` in `Recover` ([Recover](#recover)).
+
+There is no `Signal` call: `Interrupt` sends TERM to the executor's group as it does now, and the start helper passes it to the container. Stopping, reconciling and removing containers are the host's, and executors never see them.
+
+### The provider
+
+`ContainerProvider` has `Plan(owner, policy, needs, launch)`, `Create(plan, labels)`, `Signal`, `Stop(ref, grace)`, `Inspect(ref)`, `List(owner)` and `Remove(ref)`, all keyed on a `ContainerRef` (the container's ID and its labels). `Inspect` names the container daemon that answered, and says `Gone` when that daemon holds no such container; an error means it couldn't be asked. `List` fails as an error, never as an empty list. Every container carries four labels: the host (a hash of the daemon's state directory), the execution, the segment and the plan's digest.
+
+### Pinned per segment
+
+Before the argv reaches the executor, the host pins the container with the open segment (`Segment.Container`): the provider, the plan's digest and summary, the image digest, the container daemon's ID, the container's ID, the run directory and the time. The digest is `sha256` of the image and the plan's `Data`. A recovered segment carries its pin. History shows each segment's container: its plan, image and daemon.
+
+### No second container
+
+Before any launch, the host lists the execution's containers. One running refuses the launch as `container_running`, so a retry can never start beside a live one; stopped ones are removed first. A listing error refuses the launch: it never counts as "none running".
+
+### Host-side lifecycle
+
+- **Stop.** After the executor's `Stop`, the daemon's stop confirmation stops the pinned container (`StopContainer`) and confirms only once `Inspect` shows it isn't running. Until then the attempt isn't confirmed stopped (`container_stop_unverified`) and replacement stays blocked.
+- **Reconcile.** Each pass, the daemon removes its labelled containers (with the provider's gateways and networks) whose execution is terminal or gone (`ReconcileContainers`).
+- **Remove before release.** The resource owner status removes a finished execution's containers before its workspace may be released; a failure keeps the workspace. For a live execution it reports the containers' mounts (`ResourceOwnerStatus.Mounts`), and the git provider's spare sweep keeps a workspace a mount holds as `in_use`. The git provider knows nothing of containers.
+
+### Recover
+
+The broker's `Adopt` first proves the container is the pinned one: on the pinned daemon, the pinned ID, the host's, execution's and digest labels, the pinned image, and a `StartedAt` later than the pin.
+
+| Wrapper | Container | Adopt | The host's Stop |
+| --- | --- | --- | --- |
+| alive | the pinned one | adopted | |
+| dead | exited | its exit code returned as the result | confirmed |
+| dead | running | `ErrNotAdoptable` | stops it before a retry |
+| either | gone, on the same reachable daemon | `ErrNotAdoptable` | confirmed not running, so replacement may go ahead |
+| either | daemon unreachable, or another daemon's ID | `ErrNotAdoptable` | can't confirm, so replacement stays blocked |
+
+### A stop the host didn't cause
+
+The host records every TERM and stop it sends a container, in the execution's container records (`<state>/runs/<execution>/container`, outside every grant), before sending it. The container's entry stub writes `ContainerTermMarker` in the segment's run directory when it gets a TERM. A segment that exits after a TERM the host didn't send is reported as interrupted, whatever its code: the host's `Settle` turns its result into a failure, keeping the executor's data, and `Adopt` reports it on an exited container.
+
+### What core knows
+
+As for sandboxes, one hook: `SchedulerOptions.Container`, called after `Resources`. It returns the broker, the resource broker the executor gets and `Settle`, which core applies to the segment's result. Its `pin` records the pin with the open segment, fenced by the lease. `SchedulerOptions.Signalled` tells the host before core asks an executor to interrupt. A binding failure fails the attempt as `container unavailable`.
+
+Attach to Work that ran in a container is refused as for sandboxed Work.
+
+### Evidence
+
+[Contract tests](https://github.com/open-conduit/open-conduit/blob/main/extension/container_test.go) against a fake provider: the container created unstarted, labelled and pinned; refusals of an image not pinned by digest, a failed listing, a second container, needs outside the grant, a grant reaching the state and the shared path checks; each Recover path with the host's Stop; an unrequested TERM; reconcile, removal and mounts failing closed. `TestGuardLaunchIsShared` runs one refusal through both brokers. `TestContainerBinding` covers the config, `TestSweepKeepsMountedWorkspaces` the sweep and `TestProductionSchedulerContainerHook` the scheduler hook.
 
 ## History
 
@@ -196,3 +277,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - **#162** gave each execution its own toolbelt socket and token directory, and **#163** the git `clone` mode and the refusal of worktree modes: the two prerequisites.
 - **#164** delivered B09: the contract, host-side merging and pinning, recovery's boundary proof, the srt provider, both executors, doctor and the isolation tests in CI.
 - **#173** gave a sandboxed claude-code binding a config directory of its own, refused one that would share the operator's `~/.claude`, and denied the operator's claude config to its sandbox, since a user-level hook planted there would run in every host-side claude session.
+- **#171** proposed the container contract, and **#176** spiked it. **#177** added the contract, its host-side lifecycle and the shared path checks, tested against a fake provider.

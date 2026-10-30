@@ -28,7 +28,11 @@ type ExecutionContext struct {
 	// An executor that advertises Capabilities.Sandbox wraps its launch
 	// through it (WrapLaunch) and proves a recovered segment still runs in
 	// it (AdoptSandboxed); see sandbox.go.
-	Sandbox                         SandboxBroker
+	Sandbox SandboxBroker
+	// Container is nil unless the binding declares a container. An
+	// executor that advertises Capabilities.Container launches through it
+	// and calls its Adopt in Recover; see container.go.
+	Container                       ContainerBroker
 	ToolbeltEndpoint, ToolbeltToken string
 	// ToolbeltTokenFile, when set, is the host-kept file holding the current
 	// ToolbeltToken, in a token directory the host rotates it in on recovery.

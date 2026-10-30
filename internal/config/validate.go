@@ -39,6 +39,11 @@ type Registry struct {
 	// with an optional strict check of a binding's sandbox config. Its
 	// error is a fixed, secret-free reason, shown in the diagnostic.
 	Sandboxes map[string]func(json.RawMessage) error
+	// Containers are the registered container providers, each with a
+	// check of its own part of a binding's container config. The config's
+	// shared shape (an image pinned by digest, the grant) is checked by the
+	// host whatever the provider.
+	Containers map[string]func(json.RawMessage) error
 	// HandlerConfig optionally validates a registered route handler's opaque
 	// route config at load/apply time (05-01). Its error text is never echoed.
 	HandlerConfig map[string]func(json.RawMessage) error
@@ -444,6 +449,15 @@ func (v *validator) registration(p string, b Binding) {
 		}
 		v.sandboxed(p, b)
 	}
+	if b.Container != nil {
+		if b.Sandbox != nil {
+			v.fail(p+"/container", "sandbox_conflict", "a binding declares sandbox or container, not both; remove one")
+		}
+		if !c.Container {
+			v.fail(p+"/container", "unsupported_capability", fmt.Sprintf("executor %s can't run in a container; select an executor that can or remove container", b.Executor))
+		}
+		v.contained(p, b)
+	}
 	if r.Toolbelt != "" && r.Toolbelt != c.Toolbelt {
 		v.fail(p+"/requires/toolbelt", "unsupported_capability", fmt.Sprintf("executor %s uses toolbelt %s; select a matching executor or change requires.toolbelt", b.Executor, c.Toolbelt))
 	}
@@ -513,6 +527,26 @@ func (v *validator) sandboxed(p string, b Binding) {
 	}
 	if err := check(b.Resource.Config, mode); err != nil {
 		v.fail(p+"/resource/config", "sandbox_workspace", err.Error())
+	}
+}
+
+// contained checks a binding that declares a container: the shared config
+// (an image pinned by digest, the grant), a registered provider that
+// accepts its part, and the executor and workspace checks a sandbox gets.
+func (v *validator) contained(p string, b Binding) {
+	if _, err := extension.ParseContainerConfig(b.Container.Config); err != nil {
+		v.fail(p+"/container/config", "invalid_config", err.Error())
+	}
+	check, ok := v.reg.Containers[b.Container.Provider]
+	if !ok {
+		v.fail(p+"/container/provider", "unknown_registration", "container provider is not registered")
+	} else if check != nil {
+		if err := check(b.Container.Config); err != nil {
+			v.fail(p+"/container/config", "invalid_config", err.Error())
+		}
+	}
+	if b.Sandbox == nil {
+		v.sandboxed(p, b)
 	}
 }
 
@@ -640,11 +674,12 @@ const (
 )
 
 type bindingMeta struct {
-	Connection  string    `json:"connection,omitempty"`
-	Operations  []string  `json:"operations"`
-	SecretNames []string  `json:"secret_names"`
-	Resource    *Resource `json:"resource,omitempty"`
-	Sandbox     *Sandbox  `json:"sandbox,omitempty"`
+	Connection  string     `json:"connection,omitempty"`
+	Operations  []string   `json:"operations"`
+	SecretNames []string   `json:"secret_names"`
+	Resource    *Resource  `json:"resource,omitempty"`
+	Sandbox     *Sandbox   `json:"sandbox,omitempty"`
+	Container   *Container `json:"container,omitempty"`
 }
 type routeMeta struct {
 	UnsupportedFallback string `json:"unsupported_fallback,omitempty"`
@@ -680,7 +715,7 @@ func (s *Snapshot) DomainScopes() []domain.Scope {
 		for _, b := range e.Bindings {
 			d.Bindings = append(d.Bindings, domain.Binding{Name: b.Name, Executor: b.Executor, Requires: b.Requires, TimeoutSeconds: b.TimeoutSeconds,
 				Config: domain.Payload{Schema: BindingSchema, Data: slices.Clone(b.Config)}, Grants: b.domainGrants()})
-			meta.Bindings[b.Name] = bindingMeta{b.Connection, b.Operations, b.SecretNames, b.Resource, b.Sandbox}
+			meta.Bindings[b.Name] = bindingMeta{b.Connection, b.Operations, b.SecretNames, b.Resource, b.Sandbox, b.Container}
 		}
 		for _, r := range e.Routes {
 			d.Routes = append(d.Routes, domain.Route{Name: r.Name, Handler: r.Handler, Binding: r.Binding,

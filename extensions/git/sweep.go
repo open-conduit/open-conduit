@@ -101,7 +101,7 @@ func (p *Provider) sweepLease(ctx context.Context, ref string, status extension.
 		return nil
 	}
 	item := extension.ResourceSpare{Ref: l.Ref, Mode: l.Mode, Spare: spare}
-	if item.Kept = p.keep(ctx, l.Path, l.Copy); item.Kept != "" {
+	if item.Kept = p.keep(ctx, l.Path, l.Copy, st.Mounts); item.Kept != "" {
 		report.Kept = append(report.Kept, item)
 		return nil
 	}
@@ -136,7 +136,7 @@ func (p *Provider) sweepOrphan(ctx context.Context, ref string, report *extensio
 	if mode != ModeClone && checkout == "" {
 		item.Kept = keptUnreadable
 	} else {
-		item.Kept = p.keep(ctx, path, nil)
+		item.Kept = p.keep(ctx, path, nil, nil)
 	}
 	if item.Kept != "" {
 		report.Kept = append(report.Kept, item)
@@ -153,8 +153,9 @@ func (p *Provider) sweepOrphan(ctx context.Context, ref string, report *extensio
 
 // keep says why a spare workspace must stay, or "" when it can go: it has
 // uncommitted changes (files the provider copied in aside), commits no
-// remote has, git can't read it, or a process runs from it.
-func (p *Provider) keep(ctx context.Context, path string, copied []string) string {
+// remote has, git can't read it, or a process runs from it (one of the
+// host's own, or one the owner's status says mounts it, a container's).
+func (p *Provider) keep(ctx context.Context, path string, copied, mounts []string) string {
 	if _, err := p.toplevel(ctx, path); err != nil {
 		return keptUnreadable
 	}
@@ -177,10 +178,20 @@ func (p *Provider) keep(ctx context.Context, path string, copied []string) strin
 	} else if n > 0 {
 		return keptUnpushed
 	}
-	if inUse(path) {
+	if inUse(path) || mounted(path, mounts) {
 		return keptInUse
 	}
 	return ""
+}
+
+// mounted reports whether path is beneath one of mounts or holds one.
+func mounted(path string, mounts []string) bool {
+	for _, m := range mounts {
+		if extension.Within(path, []string{m}) || extension.Within(m, []string{path}) {
+			return true
+		}
+	}
+	return false
 }
 
 // idle is a workspace whose directory has not changed for spareIdle.

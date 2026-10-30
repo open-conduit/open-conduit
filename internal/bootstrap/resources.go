@@ -197,6 +197,9 @@ func (d *daemon) ownerStatus(ctx context.Context, c *components, o extension.Res
 		st.ExecutionDone = state.Excluded
 		st.ExecutionSucceeded = x.State != domain.ExecutionFailed && x.State != domain.ExecutionCancelled
 	}
+	if err := d.containerStatus(ctx, o, &st); err != nil {
+		return st, err
+	}
 	return st, nil
 }
 

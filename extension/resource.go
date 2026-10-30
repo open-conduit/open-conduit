@@ -100,6 +100,10 @@ type ResourceOwnerStatus struct {
 	ExecutionSucceeded bool
 	WorkDone           bool
 	WorkSucceeded      bool
+	// Mounts are host paths a live process the host runs outside its own
+	// process table (a container) holds. A resource beneath or holding one
+	// is in use.
+	Mounts []string
 }
 
 // ResourceStatusFunc reports owner status from trusted durable state.

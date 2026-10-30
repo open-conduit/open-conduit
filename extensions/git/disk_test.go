@@ -272,3 +272,25 @@ func TestSweepRemovesSpareWorkspacesOnly(t *testing.T) {
 		t.Fatalf("second sweep: %+v", again)
 	}
 }
+
+// TestSweepKeepsMountedWorkspaces: a workspace a live container mounts (the
+// owner's status reports it) is in use, though no host process runs in it.
+func TestSweepKeepsMountedWorkspaces(t *testing.T) {
+	f := newFixture(t)
+	r, err := f.acquire(owner("w", "x"), cfg(map[string]any{"mode": "work"}), "", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	if kept := f.provider.keep(ctx, r.Dir, nil, nil); kept != "" {
+		t.Fatalf("kept %q with no mounts", kept)
+	}
+	for _, m := range []string{r.Dir, filepath.Join(r.Dir, "src"), filepath.Dir(r.Dir)} {
+		if kept := f.provider.keep(ctx, r.Dir, nil, []string{m}); kept != keptInUse {
+			t.Errorf("mount %s: kept %q, want in_use", m, kept)
+		}
+	}
+	if kept := f.provider.keep(ctx, r.Dir, nil, []string{r.Dir + "-other"}); kept != "" {
+		t.Errorf("an unrelated mount kept it: %q", kept)
+	}
+}
