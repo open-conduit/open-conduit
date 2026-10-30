@@ -69,6 +69,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.reconfigureOnURLChange(ctx)
 		d.runInprocTasks(ctx)
 		d.reconcileResources(c)
+		d.reconcileEndpoints(ctx)
 		d.sweepResources(c)
 		d.maintainClaudeCode(ctx)
 		if d.now().Sub(lastSweep) >= d.o.RetentionInterval {
@@ -386,4 +387,33 @@ func (d *daemon) collectArtifacts(ctx context.Context) {
 		return
 	}
 	d.clear("artifacts", "")
+}
+
+// reconcileEndpoints stops serving the toolbelt socket of every execution
+// that is terminal (or gone) and removes its run directory, including those a
+// previous daemon left behind. A parked execution keeps its run directory:
+// its resume serves the socket again with a fresh token.
+func (d *daemon) reconcileEndpoints(ctx context.Context) {
+	err := d.endpoints.Reconcile(func(ids []domain.ID) (map[domain.ID]bool, error) {
+		live := map[domain.ID]bool{}
+		err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+			for _, id := range ids {
+				x, err := tx.Execution(id)
+				if errors.Is(err, storage.ErrNotFound) {
+					continue
+				}
+				if err != nil {
+					return err
+				}
+				live[id] = !x.State.Terminal()
+			}
+			return nil
+		})
+		return live, err
+	})
+	if err != nil && ctx.Err() == nil {
+		d.report("endpoints", "", errorCode(err))
+		return
+	}
+	d.clear("endpoints", "")
 }
