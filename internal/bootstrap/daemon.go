@@ -145,6 +145,7 @@ type daemon struct {
 	telemetryFile  *os.File
 	resources      resourceState
 	sandboxes      sandboxState
+	containers     containerState
 	claude         claudeState
 	hooks          webhookState
 	tools          *gh.Tools
@@ -374,6 +375,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	d.openSandboxes()
+	d.openContainers()
 	// Installed extension packages start before the configuration opens,
 	// so their validators check it (07-03).
 	d.openExtensions(ctx)
@@ -540,7 +542,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
 		Toolbelt: belt, ToolbeltEndpoint: d.endpoint, ToolbeltEndpoints: d.endpoints.Serve, Secrets: d.configs.Secrets(d.resolver),
-		Resources: d.bindResources, Sandbox: d.bindSandbox, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
+		Resources: d.bindResources, Sandbox: d.bindSandbox, Container: d.bindContainer, Signalled: d.containerSignalled, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
 		WorkKinds: kinds,
 	}); err != nil {

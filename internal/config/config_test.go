@@ -689,6 +689,70 @@ func TestSandboxBinding(t *testing.T) {
 	}
 }
 
+// TestContainerBinding: a binding's container is parsed and kept in the
+// effective config, and refused when combined with a sandbox, when its
+// image isn't pinned by digest, when its provider isn't registered or when
+// its executor can't run in a container.
+func TestContainerBinding(t *testing.T) {
+	const image = "ghcr.io/acme/agent@sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	reg := registry()
+	reg.Sandboxes = map[string]func(json.RawMessage) error{"srt": nil}
+	reg.Containers = map[string]func(json.RawMessage) error{"docker": nil}
+	reg.Executors["coding_agent"] = interruptExecutor{fakeExecutor{domain.Capabilities{Toolbelt: "mcp", Interrupt: true, Workspace: true, Sandbox: true, Container: true}}}
+	contained := func(b map[string]any) {
+		delete(b, "sandbox")
+		b["container"] = map[string]any{"provider": "docker", "config": map[string]any{"image": image, "write": []any{"{workspace}"}}}
+	}
+	m := generic(t, example(t, "sandboxed"))
+	contained(entry(m, 0, "bindings", 0))
+	snap, err := Validate(encode(t, m), reg)
+	if err != nil {
+		t.Fatalf("%+v", diagnostics(t, err))
+	}
+	b, _ := snap.Scopes["engineering"].Binding("run")
+	if b.Container == nil || b.Container.Provider != "docker" || !strings.Contains(string(b.Container.Config), image) || b.Sandbox != nil {
+		t.Fatalf("container %+v", b.Container)
+	}
+	for _, tc := range []struct {
+		name, path, code string
+		mutate           func(b map[string]any)
+	}{
+		{"with a sandbox", "scopes/0/bindings/0/container", "sandbox_conflict", func(b map[string]any) {
+			b["sandbox"] = map[string]any{"provider": "srt", "config": map[string]any{}}
+		}},
+		{"image by tag", "scopes/0/bindings/0/container/config", "invalid_config", func(b map[string]any) {
+			b["container"].(map[string]any)["config"].(map[string]any)["image"] = "ghcr.io/acme/agent:latest"
+		}},
+		{"unknown provider", "scopes/0/bindings/0/container/provider", "unknown_registration", func(b map[string]any) { b["container"].(map[string]any)["provider"] = "podman" }},
+		{"executor without container", "scopes/0/bindings/0/container", "unsupported_capability", func(b map[string]any) {
+			b["executor"], b["requires"] = "support_agent", map[string]any{}
+		}},
+		{"worktree workspace", "scopes/0/bindings/0/resource/config", "sandbox_workspace", func(b map[string]any) {
+			b["resource"].(map[string]any)["config"].(map[string]any)["mode"] = "work"
+		}},
+	} {
+		reg.ResourceSandbox = map[string]func(json.RawMessage, string) error{"git": func(c json.RawMessage, _ string) error {
+			if !strings.Contains(string(c), `"mode":"clone"`) {
+				return errors.New("use mode clone")
+			}
+			return nil
+		}}
+		m := generic(t, example(t, "sandboxed"))
+		contained(entry(m, 0, "bindings", 0))
+		tc.mutate(entry(m, 0, "bindings", 0))
+		_, err := Validate(encode(t, m), reg)
+		found := false
+		for _, d := range diagnostics(t, err) {
+			if strings.HasPrefix(d.Path, tc.path) && d.Code == tc.code {
+				found = true
+			}
+		}
+		if !found {
+			t.Errorf("%s: diagnostics %+v, want %s at %s", tc.name, diagnostics(t, err), tc.code, tc.path)
+		}
+	}
+}
+
 // TestBindingTimeout: a binding's timeout_seconds (05-02) reaches the domain
 // binding the scheduler pins, survives normalization, and is bounded like
 // settings.timeout_seconds.

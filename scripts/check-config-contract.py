@@ -20,6 +20,8 @@ EXECUTORS = {
     'coding_agent': {'toolbelt': 'mcp', 'interrupt': True, 'workspace': True, 'sandbox': True},
 }
 SANDBOXES = {'srt'}
+# No container provider ships yet, and no executor can run in one.
+CONTAINERS = set()
 HANDLERS = {'manual', 'thread', 'issue'}
 EXTENSIONS = {'chat_ingress', 'code_ingress', 'schedule'}
 CONNECTIONS = {'chat', 'code'}
@@ -133,6 +135,13 @@ def check(config):
                 resource = binding.get('resource', {}).get('config', {})
                 if 'resource' in binding and (resource.get('mode') != 'clone' or 'setup' in resource):
                     fail(bp + '/resource/config', 'sandbox_workspace')
+            if 'container' in binding:
+                if 'sandbox' in binding:
+                    fail(bp + '/container', 'sandbox_conflict')
+                if not capabilities.get('container'):
+                    fail(bp + '/container', 'unsupported_capability')
+                if binding['container']['provider'] not in CONTAINERS:
+                    fail(bp + '/container/provider', 'unknown_registration')
             if not set(binding['operations']) <= set(result['authorization']['operations']):
                 fail(bp + '/operations', 'operation_denied')
             for i, grant in enumerate(binding.get('grants', [])):
@@ -199,6 +208,8 @@ def main():
         ('unknown_registration', lambda c: c['scopes'][0]['bindings'][0]['sandbox'].update(provider='docker')),
         ('unsupported_capability', lambda c: c['scopes'][0]['bindings'][0].update(executor='support_agent', requires={})),
         ('schema', lambda c: c['scopes'][0]['bindings'][0]['sandbox'].update(policy={})),
+        ('sandbox_conflict', lambda c: c['scopes'][0]['bindings'][0].update(container={'provider': 'docker', 'config': {'image': 'ghcr.io/acme/agent@sha256:0000000000000000000000000000000000000000000000000000000000000000'}})),
+        ('schema', lambda c: c['scopes'][0]['bindings'][0].update(container={'provider': 'docker', 'config': {'image': 'ghcr.io/acme/agent:latest'}})),
     ]:
         candidate = copy.deepcopy(sandboxed)
         mutate(candidate)
@@ -248,7 +259,7 @@ def main():
         raise AssertionError('duplicate keys accepted')
     except ValueError:
         pass
-    print('B05: schema valid; 5 valid examples, invalid capability, 5 sandbox and 17 other negative mutations, inheritance/whole replacement/tombstone restoration and duplicate-key checks passed')
+    print('B05: schema valid; 5 valid examples, invalid capability, 7 sandbox or container and 17 other negative mutations, inheritance/whole replacement/tombstone restoration and duplicate-key checks passed')
 
 
 if __name__ == '__main__':

@@ -97,6 +97,14 @@ type SchedulerOptions struct {
 	// attempt's open segment, fenced by the lease, before the plan reaches
 	// the executor. Core never inspects either broker.
 	Sandbox func(ctx context.Context, state AttemptState, resources extension.ResourceBroker, pin func(extension.SandboxPlan) error) (extension.SandboxBroker, extension.ResourceBroker, error)
+	// Container binds the attempt's optional container after Resources,
+	// as Sandbox does (a binding declares one or the other). pin records a
+	// container with the open segment, fenced by the lease, before its
+	// argv reaches the executor. Core never inspects the binding.
+	Container func(ctx context.Context, state AttemptState, resources extension.ResourceBroker, pin func(extension.ContainerPin) error) (ContainerBinding, error)
+	// Signalled is told, before the host asks an executor to interrupt an
+	// execution, so a container's records hold every TERM the host sends.
+	Signalled func(ctx context.Context, execution domain.ID, kind string)
 	// KeptExecutions is the per-Work retention count shared by every executor
 	// (B05 kept_executions, default 20). Artifacts receives content deletion
 	// for expired attempts; nil keeps content and still records expiration.
@@ -105,6 +113,16 @@ type SchedulerOptions struct {
 	// WorkKinds are extension-registered lifecycle policies by Work kind
 	// (05-01). Kinds without an entry keep the default lifecycle.
 	WorkKinds map[string]WorkKindPolicy
+}
+
+// ContainerBinding is what the Container hook binds to an attempt: the
+// broker the executor gets, the resource broker in place of the one it was
+// given, and Settle, the host's last word on the segment's result (an
+// unrequested TERM makes it interrupted). A nil Broker: no container.
+type ContainerBinding struct {
+	Broker    extension.ContainerBroker
+	Resources extension.ResourceBroker
+	Settle    func(extension.Result) extension.Result
 }
 
 // WorkKindPolicy is the lifecycle an extension declares for the Work kind it
@@ -247,6 +265,10 @@ type Segment struct {
 	// its binding declared a sandbox (B09). A recovered segment carries the
 	// plan of the process it adopted.
 	Sandbox *SegmentSandbox `json:",omitempty"`
+	// Container is the container the segment's process ran in, when its
+	// binding declared one. A recovered segment carries the pin of the
+	// container it adopted.
+	Container *extension.ContainerPin `json:",omitempty"`
 }
 
 // SegmentSandbox pins a segment's sandbox: the plan's digest, and its
@@ -262,6 +284,21 @@ func (state AttemptState) SandboxPin() *SegmentSandbox {
 		return state.Segments[n-1].Sandbox
 	}
 	return nil
+}
+
+// ContainerPin is the container the attempt's latest segment was launched
+// in, or nil.
+func (state AttemptState) ContainerPin() *extension.ContainerPin {
+	if n := len(state.Segments); n > 0 {
+		return state.Segments[n-1].Container
+	}
+	return nil
+}
+
+// SegmentNumber is the open (or last) segment's number, counting those
+// dropped beyond MaxSegments, from 1.
+func (state AttemptState) SegmentNumber() int {
+	return state.DroppedSegments + len(state.Segments)
 }
 
 // endSegment ends the open segment, if any, at end (never before it began).
@@ -967,6 +1004,35 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		}
 		attempt.Request.Context.Sandbox, attempt.Request.Context.Resources = sandbox, resources
 	}
+	var settle func(extension.Result) extension.Result
+	if s.options.Container != nil {
+		pin := func(c extension.ContainerPin) error {
+			return s.transact(ctx, &attempt.Lease, func(tx storage.Tx) error {
+				current, e := attemptState(tx, state.ExecutionID)
+				if e != nil {
+					return e
+				}
+				n := len(current.Segments)
+				if n == 0 || current.Segments[n-1].EndedAt != nil {
+					return storage.ErrInvalid
+				}
+				current.Segments[n-1].Container = &c
+				return putAttemptState(tx, current)
+			})
+		}
+		bound := state
+		if recovering {
+			bound.LaunchState = "recovering"
+		}
+		c, containerErr := s.options.Container(ctx, bound, attempt.Request.Context.Resources, pin)
+		if containerErr != nil {
+			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "container unavailable"}}
+			return attempt, errors.Join(extension.ErrSandboxUnavailable, containerErr, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
+		}
+		if c.Broker != nil {
+			attempt.Request.Context.Container, attempt.Request.Context.Resources, settle = c.Broker, c.Resources, c.Settle
+		}
+	}
 	if recovering {
 		handle, err = executor.Recover(ctx, attempt.Request, state.Recovery)
 	} else if resume {
@@ -997,8 +1063,26 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 	if err != nil {
 		return attempt, err
 	}
+	if settle != nil {
+		handle = settledHandle{handle, settle}
+	}
 	attempt.Handle = handle
 	return attempt, nil
+}
+
+// settledHandle passes a container segment's result through the host's
+// Settle before it is completed.
+type settledHandle struct {
+	extension.RunHandle
+	settle func(extension.Result) extension.Result
+}
+
+func (h settledHandle) Wait(ctx context.Context) (extension.Result, error) {
+	r, err := h.RunHandle.Wait(ctx)
+	if err != nil {
+		return r, err
+	}
+	return h.settle(r), nil
 }
 func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt, err error) {
 	state, err := s.InspectAttempt(ctx, id)
@@ -1030,9 +1114,9 @@ func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt,
 		// new owner took over.
 		if n := len(current.Segments); n > 0 && current.Segments[n-1].EndedAt == nil {
 			now := s.now()
-			pin := current.Segments[n-1].Sandbox
+			pin, container := current.Segments[n-1].Sandbox, current.Segments[n-1].Container
 			current.endSegment(now, false)
-			current.beginSegment(Segment{StartedAt: now, Recovered: true, Sandbox: pin})
+			current.beginSegment(Segment{StartedAt: now, Recovered: true, Sandbox: pin, Container: container})
 		}
 		ref, e := tx.Claim(id, s.options.Owner, s.options.LeaseDuration)
 		if e != nil {

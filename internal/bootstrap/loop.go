@@ -68,6 +68,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.manageHooks(ctx)
 		d.reconfigureOnURLChange(ctx)
 		d.runInprocTasks(ctx)
+		d.reconcileContainers(ctx)
 		d.reconcileResources(c)
 		d.reconcileEndpoints(ctx)
 		d.sweepResources(c)
@@ -294,8 +295,15 @@ func (d *daemon) confirmStopped(ctx context.Context, c *components, id domain.ID
 		d.report("stop", id, "executor_cannot_prove_stop")
 		return
 	}
+	// The executor's stop reaches its container as a TERM the host sent.
+	d.containerSignalled(ctx, id, "stop")
 	if err = s.Stop(ctx, id, epoch); err != nil {
 		d.report("stop", id, "stop_unverified")
+		return
+	}
+	// The executor's wrapper is stopped; its container must be too.
+	if err = d.stopContainer(ctx, state); err != nil {
+		d.report("stop", id, "container_stop_unverified")
 		return
 	}
 	if err = c.scheduler.ConfirmStopped(ctx, id, epoch); err != nil && !errors.Is(err, storage.ErrConflict) {

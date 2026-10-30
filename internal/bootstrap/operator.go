@@ -46,6 +46,7 @@ func registry(executors map[string]extension.Executor) config.Registry {
 	inprocRegistry(&reg, firstParty())
 	resourceRegistry(&reg)
 	sandboxRegistry(&reg)
+	containerRegistry(&reg)
 	return reg
 }
 

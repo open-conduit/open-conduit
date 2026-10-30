@@ -204,12 +204,12 @@ func (s *Server) attachWork(c *call) (int, any, error) {
 }
 
 // ranSandboxed reports whether any segment of the attempt was launched in a
-// sandbox (B09). Its agent could then write the workspace's project config
+// sandbox (B09) or a container. Its agent could then write the workspace's project config
 // (claude-code's .claude/settings.json hooks, .mcp.json servers), which an
 // attach would load on the host, outside the sandbox.
 func ranSandboxed(st runtime.AttemptState) bool {
 	for _, g := range st.Segments {
-		if g.Sandbox != nil {
+		if g.Sandbox != nil || g.Container != nil {
 			return true
 		}
 	}

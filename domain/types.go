@@ -212,6 +212,9 @@ type Capabilities struct {
 	// Sandbox: the executor wraps its launch in a binding's process
 	// sandbox (B09). Only a binding with a sandbox requires it.
 	Sandbox bool `json:",omitempty"`
+	// Container: the executor launches in a binding's container, through
+	// its ContainerBroker. Only a binding with a container requires it.
+	Container bool `json:",omitempty"`
 }
 type Binding struct {
 	Name, Executor string

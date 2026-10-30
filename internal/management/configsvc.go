@@ -432,6 +432,21 @@ func (c *ConfigService) Sandbox(state runtime.AttemptState) (*config.Sandbox, er
 	return b.Sandbox, nil
 }
 
+// Container is the attempt's binding container in the current config, so a
+// changed grant applies from the next segment; nil when it declares none.
+func (c *ConfigService) Container(state runtime.AttemptState) (*config.Container, error) {
+	current, _ := c.Current()
+	cs, ok := current.Scope(state.ScopeID)
+	if !ok || !cs.Enabled {
+		return nil, config.ErrDenied
+	}
+	b, ok := cs.Binding(state.Binding.Name)
+	if !ok {
+		return nil, config.ErrDenied
+	}
+	return b.Container, nil
+}
+
 func (c *ConfigService) Resource(state runtime.AttemptState) (*config.Resource, error) {
 	pinned := c.snapshotFor(state.Generation)
 	current, _ := c.Current()

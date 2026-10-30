@@ -344,6 +344,32 @@
               ],
               "additionalProperties": false
             },
+            "container": {
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+                },
+                "config": {
+                  "type": "object",
+                  "properties": {
+                    "image": {
+                      "type": "string",
+                      "pattern": "^[^@\\s]+@sha256:[0-9a-f]{64}$"
+                    }
+                  },
+                  "required": [
+                    "image"
+                  ]
+                }
+              },
+              "required": [
+                "provider",
+                "config"
+              ],
+              "additionalProperties": false
+            },
             "timeout_seconds": {
               "type": "integer",
               "minimum": 1,

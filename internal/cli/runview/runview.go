@@ -156,6 +156,10 @@ func Detail(r client.Run, attempts []client.Run, now time.Time) string {
 			last = g.Sandbox.Digest
 			line("sandbox", g.Sandbox.Summary+" ("+short(last)+")")
 		}
+		if c := g.Container; c != nil && c.Digest+c.Daemon != last {
+			last = c.Digest + c.Daemon
+			line("container", fmt.Sprintf("%s (%s), image %s, daemon %s", c.Summary, short(c.Digest), c.Image, c.Daemon))
+		}
 	}
 	line("inputs", strconv.Itoa(r.Inputs))
 	line("wait", r.WaitID)

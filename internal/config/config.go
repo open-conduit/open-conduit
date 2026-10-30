@@ -106,6 +106,13 @@ type Sandbox struct {
 	Provider string          `json:"provider"`
 	Config   json.RawMessage `json:"config"`
 }
+
+// Container is a binding's container sandbox: the provider and its config,
+// the grant (extension.ContainerConfig).
+type Container struct {
+	Provider string          `json:"provider"`
+	Config   json.RawMessage `json:"config"`
+}
 type Binding struct {
 	Name, Executor, Connection string
 	Requires                   domain.Capabilities
@@ -113,6 +120,9 @@ type Binding struct {
 	Resource                   *Resource
 	// Sandbox runs the binding's executor in a process sandbox (B09).
 	Sandbox *Sandbox
+	// Container runs the binding's executor in a container. It can't be
+	// combined with Sandbox.
+	Container *Container
 	// TimeoutSeconds overrides settings.timeout_seconds for attempts of this
 	// binding (05-02): one deadline model for every executor, with a
 	// per-binding value for long jobs or short turns. Zero inherits.
@@ -488,7 +498,7 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 		return BindingEntry{Binding: Binding{Name: name}, Disabled: true}
 	}
 	var b Binding
-	if !c.object(n, path, []string{"name", "executor", "requires", "operations", "secret_names", "config"}, "connection", "resource", "sandbox", "timeout_seconds", "grants") {
+	if !c.object(n, path, []string{"name", "executor", "requires", "operations", "secret_names", "config"}, "connection", "resource", "sandbox", "container", "timeout_seconds", "grants") {
 		return BindingEntry{Binding: b}
 	}
 	b.Name, _ = c.str(n.field("name"), path+"/name", idPattern)
@@ -517,6 +527,11 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 		b.Sandbox = &Sandbox{}
 		b.Sandbox.Provider, _ = c.str(r.field("provider"), path+"/sandbox/provider", idPattern)
 		b.Sandbox.Config = c.opaque(r.field("config"), path+"/sandbox/config")
+	}
+	if r := n.field("container"); r != nil && c.object(r, path+"/container", []string{"provider", "config"}) {
+		b.Container = &Container{}
+		b.Container.Provider, _ = c.str(r.field("provider"), path+"/container/provider", idPattern)
+		b.Container.Config = c.opaque(r.field("config"), path+"/container/config")
 	}
 	if t := n.field("timeout_seconds"); t != nil {
 		b.TimeoutSeconds, _ = c.integer(t, path+"/timeout_seconds")
@@ -709,6 +724,9 @@ func (b BindingEntry) normalized() any {
 	}
 	if b.Sandbox != nil {
 		m["sandbox"] = b.Sandbox
+	}
+	if b.Container != nil {
+		m["container"] = b.Container
 	}
 	if b.TimeoutSeconds > 0 {
 		m["timeout_seconds"] = b.TimeoutSeconds

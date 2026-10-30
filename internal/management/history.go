@@ -56,6 +56,16 @@ type wireSegment struct {
 	Recovered   bool   `json:"recovered,omitempty"`
 	// Sandbox is the sandbox plan the segment ran under (B09).
 	Sandbox *wireSandbox `json:"sandbox,omitempty"`
+	// Container is the container the segment ran in: its plan, image and
+	// container daemon, pinned at launch.
+	Container *wireContainer `json:"container,omitempty"`
+}
+type wireContainer struct {
+	Digest  string `json:"digest"`
+	Summary string `json:"summary,omitempty"`
+	Image   string `json:"image"`
+	Daemon  string `json:"daemon"`
+	ID      string `json:"id"`
 }
 type wireSandbox struct {
 	Digest  string `json:"digest"`
@@ -118,6 +128,9 @@ func toRun(r runtime.Run) wireRun {
 		seg := wireSegment{StartedAt: ts(g.StartedAt), EndedAt: tsPtr(g.EndedAt), WakeEventID: string(g.WakeEventID), Parked: g.Parked, Recovered: g.Recovered}
 		if g.Sandbox != nil {
 			seg.Sandbox = &wireSandbox{Digest: g.Sandbox.Digest, Summary: g.Sandbox.Summary}
+		}
+		if c := g.Container; c != nil {
+			seg.Container = &wireContainer{Digest: c.Digest, Summary: c.Summary, Image: c.Image, Daemon: c.Daemon, ID: c.ID}
 		}
 		out.Segments = append(out.Segments, seg)
 	}
