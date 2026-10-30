@@ -292,9 +292,12 @@ func outermost(paths []string) []string {
 // entryStub is the container's entry point under docker's init: it runs
 // the launch's argv with the container's stdin, writes the TERM marker in
 // the run directory when the container is sent TERM, passes TERM, INT and
-// HUP on, and exits with the command's status.
-const entryStub = `m=$1; shift; c=; p=
-f() { if [ -n "$c" ]; then kill -"$1" "$c" 2>/dev/null; else p=$1; fi; }
+// HUP on, and exits with the command's status. A trap cuts a wait short
+// (its status is the signal's), so the stub waits again for the command's
+// own; a wait with nothing left to collect (127) after one a trap ran
+// during keeps that one's status.
+const entryStub = `m=$1; shift; c=; p=; g=; l=
+f() { g=1; if [ -n "$c" ]; then kill -"$1" "$c" 2>/dev/null; else p=$1; fi; }
 trap ': > "$m"; f TERM' TERM
 trap 'f INT' INT
 trap 'f HUP' HUP
@@ -303,7 +306,7 @@ exec 3<&0
 c=$!
 exec 3<&-
 if [ -n "$p" ]; then kill -"$p" "$c" 2>/dev/null; fi
-while :; do wait "$c"; s=$?; kill -0 "$c" 2>/dev/null || exit "$s"; done`
+while :; do g=; wait "$c"; s=$?; if [ -z "$g" ]; then if [ "$s" = 127 ] && [ -n "$l" ]; then s=$l; fi; exit "$s"; fi; l=$s; done`
 
 // names are the container's and its network's names: an execution key
 // (a hash of the host and the execution, so two hosts never collide) and
