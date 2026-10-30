@@ -157,6 +157,13 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 		return SandboxPlan{}, fmt.Errorf("%w: %v", ErrSandboxUnavailable, err)
 	}
 	paths := SandboxPaths{Workspace: g.Workspace, Run: g.Run, Toolbelt: b.Toolbelt, Records: b.Records, Home: g.Home}
+	// The container mounts canonical paths, so the launch names them too:
+	// a path through a symbolic link (macOS's /tmp) isn't there inside.
+	roots := append([]string{l.Dir, l.RunDir, b.WorkHome, b.Toolbelt}, b.Shared...)
+	for _, list := range [][]string{needs.Read, needs.Write, needs.ReadOnly} {
+		roots = append(roots, list...)
+	}
+	l = canonicalLaunch(l, roots)
 	l.Dir, l.RunDir = g.Workspace, g.Run
 	plan, err := b.Provider.Plan(ctx, b.Owner, ContainerPolicy{Config: b.Config, Paths: paths}, merged, l)
 	if err != nil {
@@ -195,6 +202,50 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	c.launched = &pin
 	c.mu.Unlock()
 	return SandboxPlan{Argv: created.Argv, Env: created.Env, Digest: plan.Digest, Signals: SandboxTerm, Summary: plan.Summary, Data: plan.Data}, nil
+}
+
+// canonicalLaunch rewrites each argv element and environment value that is
+// one of roots, or beneath one, to its canonical path.
+func canonicalLaunch(l SandboxLaunch, roots []string) SandboxLaunch {
+	type alias struct{ from, to string }
+	var aliases []alias
+	for _, r := range roots {
+		if r == "" || !filepath.IsAbs(r) {
+			continue
+		}
+		r = filepath.Clean(r)
+		if c := CanonicalPath(r); c != r {
+			aliases = append(aliases, alias{r, c})
+		}
+	}
+	if len(aliases) == 0 {
+		return l
+	}
+	// The longest first, so a path is rewritten by its nearest root.
+	sort.Slice(aliases, func(i, j int) bool { return len(aliases[i].from) > len(aliases[j].from) })
+	rewrite := func(s string) string {
+		prefix := ""
+		if rest, ok := strings.CutPrefix(s, "unix://"); ok {
+			prefix, s = "unix://", rest
+		}
+		for _, a := range aliases {
+			if s == a.from || strings.HasPrefix(s, a.from+string(filepath.Separator)) {
+				return prefix + a.to + s[len(a.from):]
+			}
+		}
+		return prefix + s
+	}
+	argv := make([]string, len(l.Argv))
+	for i, a := range l.Argv {
+		argv[i] = rewrite(a)
+	}
+	env := make([]string, len(l.Env))
+	for i, kv := range l.Env {
+		k, v, _ := strings.Cut(kv, "=")
+		env[i] = k + "=" + rewrite(v)
+	}
+	l.Argv, l.Env = argv, env
+	return l
 }
 
 // containerGrant checks the grant and the executor's needs against each

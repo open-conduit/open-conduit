@@ -563,3 +563,47 @@ func TestContainerAttachLabels(t *testing.T) {
 		t.Errorf("the attach container was not removed: %v", f.removed)
 	}
 }
+
+// TestContainerLaunchCanonicalPaths: a container mounts canonical paths, so
+// a launch's argv and environment naming its directories through a
+// symbolic link (macOS's /tmp) reach the provider canonical.
+func TestContainerLaunchCanonicalPaths(t *testing.T) {
+	h := newContainerHost(t)
+	link := filepath.Join(filepath.Dir(h.state), "linked-state")
+	if err := os.Symlink(h.state, link); err != nil {
+		t.Fatal(err)
+	}
+	via := func(p string) string { return link + strings.TrimPrefix(p, h.state) }
+	f := &argvRecorder{fakeContainers: newFakeContainers()}
+	run := h.run
+	h.runRoot = via(h.runRoot)
+	l := h.launch()
+	l.Dir, l.RunDir = via(h.ws), via(run)
+	l.Argv = []string{"claude", "--mcp-config", via(filepath.Join(run, "mcp.json")), "--other", "/elsewhere"}
+	l.Env = []string{"HOME=" + via(run), "OS_ENDPOINT=unix://" + via(run) + "/x.sock", "KEEP=x"}
+	needs := h.needs()
+	needs.Write = []string{via(h.ws)}
+	if _, err := h.bind(f, containerConfig(testImage, ""), nil).Launch(context.Background(), needs, l); err != nil {
+		t.Fatal(err)
+	}
+	if got := f.launch.Argv; got[2] != filepath.Join(run, "mcp.json") || got[4] != "/elsewhere" {
+		t.Errorf("argv %v", got)
+	}
+	if got := strings.Join(f.launch.Env, " "); got != "HOME="+run+" OS_ENDPOINT=unix://"+run+"/x.sock KEEP=x" {
+		t.Errorf("env %s", got)
+	}
+	if f.launch.Dir != h.ws || f.launch.RunDir != run {
+		t.Errorf("dirs %s %s", f.launch.Dir, f.launch.RunDir)
+	}
+}
+
+// argvRecorder keeps the launch the provider was asked to plan.
+type argvRecorder struct {
+	*fakeContainers
+	launch extension.SandboxLaunch
+}
+
+func (r *argvRecorder) Plan(ctx context.Context, o extension.ResourceOwner, p extension.ContainerPolicy, n extension.SandboxNeeds, l extension.SandboxLaunch) (extension.ContainerPlan, error) {
+	r.launch = l
+	return r.fakeContainers.Plan(ctx, o, p, n, l)
+}
