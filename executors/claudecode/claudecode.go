@@ -268,9 +268,13 @@ func (e *Executor) Recover(ctx context.Context, r extension.RunRequest, state do
 	}
 	// Replace the MCP server's credential before acknowledging adoption.
 	// Runtime has already revoked lower-epoch tokens.
+	// With a host-kept token file the host has rotated it already; a segment
+	// launched with its own file (before the host kept one) keeps that current.
 	token := filepath.Join(dir, "token")
 	if r.Context.ToolbeltToken != "" {
-		err = writeFile(token, []byte(r.Context.ToolbeltToken+"\n"))
+		if r.Context.ToolbeltTokenFile == "" || exists(token) {
+			err = writeFile(token, []byte(r.Context.ToolbeltToken+"\n"))
+		}
 	} else {
 		err = os.Remove(token)
 		if errors.Is(err, os.ErrNotExist) {

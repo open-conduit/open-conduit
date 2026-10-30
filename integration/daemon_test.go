@@ -83,6 +83,7 @@ drill.event|core.retry.due) os wait --type drill.reply --timeout 3600 --request-
 drill.timer) os wait --type drill.reply --timeout 2 --request-id wait >/dev/null; echo parked ;;
 drill.slow)
   printf '%s' "$OS_TOKEN" > "$DRILL_DIR/token"
+  printf '%s\n%s\n' "$OS_ENDPOINT" "$OS_TOKEN_FILE" > "$DRILL_DIR/toolbelt"
   echo $$ > "$DRILL_DIR/pid"
   while [ ! -e "$DRILL_DIR/release" ]; do sleep 0.05; done
   os wait --type drill.reply --timeout 2 --request-id wait >/dev/null; echo parked ;;
@@ -559,6 +560,20 @@ func TestDaemonKillWithDetachedProcess(t *testing.T) {
 			d.until("shell process running", 20*time.Second, func() bool { return fileHasLine(pidFile) })
 			pid, _ := strconv.Atoi(strings.TrimSpace(readFile(t, pidFile)))
 			oldToken := readFile(t, filepath.Join(d.root, "token"))
+			// The process got its own toolbelt socket and a token file in a
+			// token directory, both in its run directory.
+			toolbelt := strings.Fields(readFile(t, filepath.Join(d.root, "toolbelt")))
+			if len(toolbelt) != 2 {
+				t.Fatalf("toolbelt environment: %q", toolbelt)
+			}
+			endpoint, tokenFile := toolbelt[0], toolbelt[1]
+			runDir := filepath.Dir(filepath.Dir(tokenFile))
+			if endpoint != "unix://"+filepath.Join(runDir, "toolbelt.sock") || filepath.Dir(runDir) != filepath.Join(d.state, "runs") {
+				t.Fatalf("toolbelt endpoint %s and token file %s are not in one run directory", endpoint, tokenFile)
+			}
+			if got := strings.TrimSpace(readFile(t, tokenFile)); got != oldToken {
+				t.Fatalf("token file does not hold the process token")
+			}
 			w, _ := d.work()
 			first := d.executions(w.ID)[0]
 			if first.State != "running" {
@@ -595,6 +610,20 @@ func TestDaemonKillWithDetachedProcess(t *testing.T) {
 			if _, err = old.ToolbeltCall(context.Background(), client.ToolCall{Operation: "read_context"}); err == nil {
 				t.Fatal("pre-restart credential still authorized after adoption")
 			}
+			// The restarted daemon serves the adopted process's socket again
+			// and rotated the token in its token directory.
+			rotated := strings.TrimSpace(readFile(t, tokenFile))
+			if rotated == oldToken {
+				t.Fatal("adoption did not rotate the token file")
+			}
+			own, _ := client.New(endpoint, rotated)
+			if _, err = own.ToolbeltCall(context.Background(), client.ToolCall{Operation: "read_context"}); err != nil {
+				t.Fatalf("adopted process's socket after restart: %v", err)
+			}
+			stale, _ := client.New(endpoint, oldToken)
+			if _, err = stale.ToolbeltCall(context.Background(), client.ToolCall{Operation: "read_context"}); err == nil {
+				t.Fatal("pre-restart credential served on the adopted process's socket")
+			}
 			if syscall.Kill(pid, 0) != nil {
 				t.Fatal("adopted process is gone")
 			}
@@ -602,6 +631,7 @@ func TestDaemonKillWithDetachedProcess(t *testing.T) {
 				t.Fatal(err)
 			}
 			trace := d.verify(root, "woken by core.wait.timeout", false)
+			d.until("run directory removed", 20*time.Second, func() bool { _, err := os.Stat(runDir); return os.IsNotExist(err) })
 			launched := d.recordsNamed("execution.launched", first.ID)
 			modes := []string{}
 			for _, r := range launched {

@@ -53,10 +53,14 @@ type managementHarness struct {
 	configs    *management.ConfigService
 	artifacts  *artifacts.Store
 	endpoint   string
-	tokens     chan string
-	secrets    chan map[string]string
-	lock       *management.Lock
-	actions    map[string]extension.ActionProvider
+	// endpoints serves each execution its own toolbelt socket and token
+	// directory under state/runs, as the daemon does.
+	endpoints *management.Endpoints
+	server    *management.Server
+	tokens    chan string
+	secrets   chan map[string]string
+	lock      *management.Lock
+	actions   map[string]extension.ActionProvider
 	// providerTimeout and viewDeadline, when set, time action provider
 	// calls in place of the real timers.
 	providerTimeout func(provider string) <-chan time.Time
@@ -131,7 +135,11 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 	}
 	socket := filepath.Join(state, "management.sock")
 	h.endpoint = "unix://" + socket
-	h.scheduler, err = runtime.NewScheduler(db, h.clock.Now, router, runtime.SchedulerOptions{Owner: "daemon", Generation: "1", Executors: map[string]extension.Executor{"fixture": h.executor}, Toolbelt: h.belt, ToolbeltEndpoint: h.endpoint, Secrets: h.configs.Secrets(&config.Resolver{})})
+	h.openEndpoints(func(id domain.ID) http.Handler { return h.server.ExecutionHandler(id) })
+	serve := func(ctx context.Context, id domain.ID, token string) (string, string, error) {
+		return h.endpoints.Serve(ctx, id, token)
+	}
+	h.scheduler, err = runtime.NewScheduler(db, h.clock.Now, router, runtime.SchedulerOptions{Owner: "daemon", Generation: "1", Executors: map[string]extension.Executor{"fixture": h.executor}, Toolbelt: h.belt, ToolbeltEndpoint: h.endpoint, ToolbeltEndpoints: serve, Secrets: h.configs.Secrets(&config.Resolver{})})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -163,10 +171,22 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 	if err != nil {
 		t.Fatal(err)
 	}
+	h.server = server
 	srv := &http.Server{Handler: server, ReadHeaderTimeout: 5 * time.Second}
 	go srv.Serve(listener)
 	t.Cleanup(func() { srv.Close() })
 	return h
+}
+
+// openEndpoints (re)opens the per-execution endpoints, as a daemon start does.
+func (h *managementHarness) openEndpoints(handler func(domain.ID) http.Handler) {
+	h.t.Helper()
+	e, err := management.NewEndpoints(h.lock, h.state, "", handler)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	h.endpoints = e
+	h.t.Cleanup(func() { e.Shutdown(context.Background()) })
 }
 
 func (h *managementHarness) cli(args ...string) (string, string, int) {

@@ -96,6 +96,41 @@ func TestConfigValidation(t *testing.T) {
 	}
 }
 
+// TestHostTokenFile points the MCP server at the host-kept token file and
+// leaves that file to the host.
+func TestHostTokenFile(t *testing.T) {
+	h := newHarness(t)
+	h.mode("review")
+	e := h.executor()
+	r, _ := h.request("work/1", "exec-1", 1, nil)
+	file := filepath.Join(t.TempDir(), "token", "token")
+	if err := os.MkdirAll(filepath.Dir(file), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(file, []byte("tok-1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r.Context.ToolbeltEndpoint, r.Context.ToolbeltToken, r.Context.ToolbeltTokenFile = "unix:///tmp/x.sock", "tok-1", file
+	h.run(e, r)
+	inv := h.invocations()
+	b, err := os.ReadFile(strings.TrimPrefix(inv[0][strings.Index(inv[0], "mcp="):], "mcp="))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var mcp struct {
+		Servers map[string]struct{ Env map[string]string } `json:"mcpServers"`
+	}
+	if err = json.Unmarshal(b, &mcp); err != nil {
+		t.Fatal(err)
+	}
+	if got := mcp.Servers[claudecode.MCPServerName].Env["OS_TOKEN_FILE"]; got != file {
+		t.Fatalf("OS_TOKEN_FILE = %q, want the host's %q", got, file)
+	}
+	if _, err = os.Stat(file); err != nil {
+		t.Fatalf("the executor removed the host's token file: %v", err)
+	}
+}
+
 // TestTurnInvocationEnvironmentAndResult checks the first turn: a fresh
 // session on the work-issue playbook with the rendered input, the MCP
 // toolbelt configuration (credential in a replaceable file, never in

@@ -1037,6 +1037,14 @@ func (s *Server) toolbeltCall(c *call) (int, any, error) {
 		in.RequestID = c.key
 	}
 	call := extension.ToolCall{Operation: in.Operation, ScopeID: domain.ID(in.ScopeID), WorkID: domain.ID(in.WorkID), ExecutionID: domain.ID(in.ExecutionID)}
+	// On an execution's own socket the call asserts that execution, so a
+	// token issued to any other execution is refused by the toolbelt.
+	if id := scopedExecution(c.ctx); id != "" {
+		if call.ExecutionID != "" && call.ExecutionID != id {
+			return 0, nil, fail(403, "forbidden", "execution authority rejected")
+		}
+		call.ExecutionID = id
+	}
 	input := in.Input
 	if len(input) == 0 {
 		input = []byte("{}")

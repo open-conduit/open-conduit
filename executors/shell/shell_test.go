@@ -254,6 +254,29 @@ func TestEnvironmentLayers(t *testing.T) {
 	}
 }
 
+// With a host-kept token file the process reads its credential from there,
+// and the segment writes no token file of its own.
+func TestHostTokenFile(t *testing.T) {
+	art := &memoryArtifacts{data: map[string][]byte{}}
+	dir := stateDir(t)
+	e := newExecutor(t, dir, art)
+	tokens := filepath.Join(dir, "host-run", "token")
+	if err := os.MkdirAll(tokens, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	file := filepath.Join(tokens, "token")
+	if err := os.WriteFile(file, []byte("token-1\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	r, _ := request("exec-host-token", 1, `{"command":"printf '%s|' \"$OS_TOKEN_FILE\" > \"$OS_OUTPUT_DIR/t.txt\"; cat \"$OS_TOKEN_FILE\" >> \"$OS_OUTPUT_DIR/t.txt\"; ls \"$(dirname \"$OS_INPUT_FILE\")\" >> \"$OS_OUTPUT_DIR/t.txt\""}`)
+	r.Context.ToolbeltEndpoint, r.Context.ToolbeltToken, r.Context.ToolbeltTokenFile = "unix:///tmp/oc/runs/x/toolbelt.sock", "token-1", file
+	out := art.content(data(t, run(t, e, r)).Outputs["t.txt"])
+	got, listing, _ := strings.Cut(out, "\n")
+	if got != file+"|token-1" || strings.Contains("\n"+listing+"\n", "\ntoken\n") {
+		t.Fatalf("host token file: %q", out)
+	}
+}
+
 func TestConfigValidation(t *testing.T) {
 	e := newExecutor(t, stateDir(t), nil)
 	for _, bad := range []string{`{}`, `{"command":"a","argv":["b"]}`, `{"command":"a","extra":1}`, `{"argv":[""]}`, `{"command":"a","dir":"rel"}`, `{"command":"a","env":{"OS_TOKEN":"x"}}`, `{"command":"a","env":{"1BAD":"x"}}`, `{"command":"a","secret_env":{"api":"OS_X"}}`, `{"command":"a","timeout_seconds":-1}`, `{"command":"a"} {}`} {

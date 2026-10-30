@@ -34,7 +34,7 @@ The environment follows the B05 order:
 4. Binding-selected secrets, resolved by the scheduler immediately before launch.
 5. The trusted toolbelt and execution variables, which no earlier layer can override.
 
-`OS_ENDPOINT`, `OS_TOKEN` and the `os` binary are the toolbelt protocol names and keep their `OS_` form despite the product rename. The executor prepends `Options.ToolbeltDir` (by default the directory of the running executable when it contains `os`) to `PATH`. `OS_TOKEN_FILE` points at a private 0600 file holding the same credential. Adoption replaces that file, so the `os` CLI reads it first and falls back to `OS_TOKEN`. Without a toolbelt token none of the three transport variables is set. Identity variables are always present:
+`OS_ENDPOINT`, `OS_TOKEN` and the `os` binary are the toolbelt protocol names and keep their `OS_` form despite the product rename. The executor prepends `Options.ToolbeltDir` (by default the directory of the running executable when it contains `os`) to `PATH`. `OS_TOKEN_FILE` points at a private 0600 file holding the same credential: the host-kept `ToolbeltTokenFile` in the execution's run directory when the host gives one ([execution endpoints](../toolbelt-management/#execution-endpoints)), otherwise a file the segment writes itself. Adoption replaces that file, so the `os` CLI reads it first and falls back to `OS_TOKEN`. Without a toolbelt token none of the three transport variables is set. Identity variables are always present:
 
 - `OS_SCOPE_ID`, `OS_WORK_ID`, `OS_EXECUTION_ID`, `OS_ATTEMPT`
 - `OS_TRIGGER_ID`, `OS_TRIGGER_TYPE`
@@ -69,7 +69,7 @@ The wrapper's `$0` carries an unguessable per-segment nonce. Process identity is
 
 `Recover` never launches:
 
-- **Live verified process**: it writes the new epoch's lease marker, replaces the token file with the newly issued credential, re-acknowledges the identical metadata under the new lease and returns a polling handle.
+- **Live verified process**: it writes the new epoch's lease marker, replaces its own token file with the newly issued credential (the host has already rotated a host-kept one), re-acknowledges the identical metadata under the new lease and returns a polling handle.
 - **Already finished segment**: it returns the identical stored result.
 - **Dead process with no recorded exit or stop**, or unknown, tampered or other-execution metadata: it returns `ErrNotAdoptable`.
 - **Empty metadata**: it first cleans up any segment of that execution.
