@@ -48,7 +48,7 @@ func (p *Provider) git(ctx context.Context, dir string, args ...string) (string,
 		if err != nil {
 			return "", fmt.Errorf("git %s: %w", args[0], err)
 		}
-		pre, env = append(pre, over...), append(env, "GIT_OPTIONAL_LOCKS=0")
+		pre, env = append(pre, over...), append(env, "GIT_OPTIONAL_LOCKS=0", "GIT_PROTOCOL_FROM_USER=0")
 		if args[0] == "status" {
 			args = append([]string{"status", "--ignore-submodules=all"}, args[1:]...)
 		}
@@ -68,9 +68,12 @@ func (p *Provider) git(ctx context.Context, dir string, args ...string) (string,
 
 // distrusted pins off the config that makes the provider's own git commands
 // run a program: the fsmonitor, hooks (a reference-transaction or
-// post-index-change hook), automatic gc and maintenance. Filters are added
-// per driver by distrust.
-var distrusted = []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "gc.auto=0", "-c", "maintenance.auto=false"}
+// post-index-change hook), automatic gc and maintenance, and every transport
+// but a local path, so an insteadOf can't route a fetch to core.sshCommand,
+// core.gitProxy or a remote helper. Filters are added per driver by
+// distrust.
+var distrusted = []string{"-c", "core.fsmonitor=false", "-c", "core.hooksPath=/dev/null", "-c", "gc.auto=0", "-c", "maintenance.auto=false",
+	"-c", "protocol.allow=never", "-c", "protocol.file.allow=always"}
 
 // inClone reports whether dir is a clone workspace, whose config a sandboxed
 // agent can write.

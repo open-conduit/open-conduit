@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -336,6 +337,8 @@ func TestCloneConfigNeverRunsOnTheHost(t *testing.T) {
 		{"filter.evil.required", "true"},
 		{"include.path", filepath.Join(r.Dir, "evil.inc")},
 		{"gc.auto", "1"},
+		{"url.ssh://x/.insteadOf", f.root},
+		{"core.sshCommand", touch("ssh") + "; false"},
 	} {
 		runGit(t, f.dir, "config", "--file", conf, kv[0], kv[1])
 	}
@@ -359,6 +362,10 @@ func TestCloneConfigNeverRunsOnTheHost(t *testing.T) {
 	if len(ran()) == 0 {
 		t.Fatal("fixture: the hostile config ran nothing under plain git")
 	}
+	_ = exec.Command("git", "-C", r.Dir, "fetch", "-q", f.root).Run()
+	if !slices.Contains(ran(), "ssh") {
+		t.Fatalf("fixture: insteadOf didn't route a plain fetch to core.sshCommand: %v", ran())
+	}
 	if err := os.RemoveAll(markers); err != nil || os.MkdirAll(markers, 0o755) != nil {
 		t.Fatal(err)
 	}
@@ -370,6 +377,13 @@ func TestCloneConfigNeverRunsOnTheHost(t *testing.T) {
 	}
 	if err != nil || !syncOf(t, again).Reused || syncOf(t, again).Dirty == 0 {
 		t.Fatalf("re-acquire: %v %+v", err, syncOf(t, again))
+	}
+	// A provider fetch in the clone from the checkout stays a local fetch.
+	if _, err := f.provider.git(context.Background(), r.Dir, "fetch", "-q", f.root); err == nil {
+		t.Fatal("a fetch rewritten to ssh was allowed")
+	}
+	if got := ran(); len(got) > 0 {
+		t.Fatalf("a provider fetch ran the clone's config: %v", got)
 	}
 	f.set("x2", extension.ResourceOwnerStatus{Known: true, ExecutionDone: true, WorkDone: true})
 	f.reconcile()
