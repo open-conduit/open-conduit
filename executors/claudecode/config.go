@@ -296,6 +296,70 @@ func (e *Executor) ValidateConfig(raw json.RawMessage, secretNames []string) err
 	return nil
 }
 
+// The reasons a sandboxed binding's claude config is refused. They name no
+// configured value.
+const (
+	errOwnConfig    = "a sandboxed claude-code binding needs a config directory of its own: set env CLAUDE_CONFIG_DIR to an absolute path no host-side claude uses, and grant it in the sandbox's write list"
+	errSharedConfig = "a sandboxed claude-code binding's CLAUDE_CONFIG_DIR must not be, hold or sit inside the operator's own ~/.claude or ~/.claude.json"
+)
+
+// SandboxConfig refuses a binding config that would give a sandboxed claude
+// the operator's own claude config (config.SandboxChecker): anything it
+// wrote there (a hook, an MCP server, a plugin) would run as the operator in
+// every claude session on the host. The binding's env must set
+// CLAUDE_CONFIG_DIR to an absolute path apart from ~/.claude and
+// ~/.claude.json. The launch checks the resolved directory again.
+func (e *Executor) SandboxConfig(raw json.RawMessage) error {
+	c, err := ParseConfig(raw)
+	if err != nil {
+		return nil // ValidateConfig reports it
+	}
+	dir := c.Env["CLAUDE_CONFIG_DIR"]
+	if dir == "" || !filepath.IsAbs(dir) {
+		return errors.New(errOwnConfig)
+	}
+	home, _ := os.UserHomeDir()
+	if sharesConfig(dir, homes(home, c.Env["HOME"])) {
+		return errors.New(errSharedConfig)
+	}
+	return nil
+}
+
+// homes are the distinct, non-empty home directories given: the operator's
+// own and any a binding's env sets in its place.
+func homes(dirs ...string) []string {
+	var out []string
+	for _, d := range dirs {
+		if d != "" && !slices.Contains(out, d) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
+
+// operatorClaude is the operator's own claude config under each home.
+func operatorClaude(homes []string) []string {
+	var out []string
+	for _, h := range homes {
+		out = append(out, filepath.Join(h, ".claude"), filepath.Join(h, ".claude.json"))
+	}
+	return out
+}
+
+// sharesConfig reports whether a config directory is, holds or is inside
+// the operator's own claude config under any of homes, symbolic links
+// resolved.
+func sharesConfig(dir string, homes []string) bool {
+	d := extension.CanonicalPath(dir)
+	for _, p := range operatorClaude(homes) {
+		p = extension.CanonicalPath(p)
+		if extension.Within(d, []string{p}) || extension.Within(p, []string{d}) {
+			return true
+		}
+	}
+	return false
+}
+
 // ResourceMode is the resource mode a binding config requests (the
 // configuration's ResourceModer): workspace_mode, "work" by default.
 func (e *Executor) ResourceMode(raw json.RawMessage) string {

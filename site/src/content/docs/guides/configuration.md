@@ -113,10 +113,11 @@ A sandboxed binding takes its Git workspace in `clone` mode, a clone of its own 
           "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
                          "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
           "secret_names": [],
-          "config": {"branch": "agent/issue-{number}", "workspace_mode": "clone"},
+          "config": {"branch": "agent/issue-{number}", "workspace_mode": "clone",
+                     "env": {"CLAUDE_CONFIG_DIR": "/path/to/sandboxed-claude"}},
           "resource": {"provider": "git", "config": {"checkout": "/path/to/web", "mode": "clone"}},
           "sandbox": {"provider": "srt", "config": {
-            "write": ["{workspace}", "~/.claude", "~/.claude.json", "~/.npm"],
+            "write": ["{workspace}", "/path/to/sandboxed-claude", "~/.npm"],
             "read": {"deny": ["~/.ssh", "~/.aws", "~/.config/gh"]},
             "network": {"allow": ["api.anthropic.com", "github.com", "*.githubusercontent.com", "registry.npmjs.org"]},
             "sockets": ["{toolbelt}"],
@@ -133,13 +134,17 @@ The policy is exactly what runs get:
 
 | Field | What it grants |
 | --- | --- |
-| `write` | Paths a run may write. Its workspace is `{workspace}`; Claude Code also needs `~/.claude` and `~/.claude.json`. |
+| `write` | Paths a run may write. Its workspace is `{workspace}`; Claude Code also needs its config directory (below). |
 | `read.deny` | Paths a run may not read. Everything else is readable, so deny your credentials. `read.allow` makes exceptions beneath a deny. |
 | `network.allow` | Hosts a run may reach (`github.com`, `*.githubusercontent.com`). Everything else is refused. |
 | `sockets` | Unix sockets a run may use. `{toolbelt}` is the run's own toolbelt, which the agent needs. |
 | `unix_sockets` | `"all"` on Linux, which can't allow a socket by path: any socket a run can see is then usable, so the daemon gives each run a socket of its own. |
 
 `{run}` names the run's own directory. Paths start with `/`, `~/` or one of the placeholders.
+
+A sandboxed Claude Code binding needs a config directory of its own. Anything a run writes in claude's config (a hook, an MCP server, a plugin) runs as you in every claude session you start, so `~/.claude` and `~/.claude.json` stay out of a sandbox's reach. Set `CLAUDE_CONFIG_DIR` in the binding's `env` to an absolute path no claude of yours uses, create it, and grant it in `write`. `config check` refuses a sandboxed Claude Code binding without one, or with one that is, holds or sits inside `~/.claude`.
+
+Claude signs in separately there, since its credentials go with the config directory (on macOS, a Keychain entry of its own). Sign in once with `CLAUDE_CONFIG_DIR=/path/to/sandboxed-claude claude` and `/login`, or make a token with `claude setup-token` and select it as a secret mapped to `CLAUDE_CODE_OAUTH_TOKEN` in `secret_env`.
 
 If the sandbox can't be enforced, nothing runs: a missing srt, a run that needs a path or host you didn't grant (`sandbox_denied`, naming it), or a kernel that won't isolate (`sandbox_unavailable`). The run's history shows the policy each run had. A changed policy applies from the next run, never to one already running. `git push -u` in a sandbox prints that it couldn't write the clone's config; the push succeeds, because the clone already tracks the branch.
 
