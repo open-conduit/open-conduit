@@ -127,9 +127,12 @@ jobs:
         if: env.RUN == 'true'
   # Real isolation tests for the Docker container provider on the runner's
   # own Docker Engine: reads and writes, the network, every fail-closed
-  # case, Stop, Interrupt, Inject and each Recover path, with a stand-in for
-  # the gateway. macOS is checked by a local make container-test run, not
-  # here. OPEN_CONDUIT_CONTAINER_TESTS makes a missing Docker fail the tests
+  # case, Stop, Interrupt, Inject and each Recover path, the gateway built
+  # from this tree (its proxy, its toolbelt forward and doctor's preflight)
+  # and the shell executor in a container. The second pass forces the tcp
+  # toolbelt forward macOS uses, so CI covers its code too. macOS itself is
+  # checked by a local make container-test run, not here.
+  # OPEN_CONDUIT_CONTAINER_TESTS makes a missing Docker fail the tests
   # instead of skipping them.
   container:
     needs: changes
@@ -150,6 +153,10 @@ jobs:
         if: env.RUN == 'true'
       - run: make container-test
         if: env.RUN == 'true'
+      - run: make container-test CONTAINER_TEST_RUN='TestDockerGateway|TestDockerShell'
+        if: env.RUN == 'true'
+        env:
+          OPEN_CONDUIT_CONTAINER_FORWARD: tcp
   # A docs-only change still has its examples checked: the configs validate,
   # and the commands and make targets they show exist. A change with code
   # gets this from make check above.

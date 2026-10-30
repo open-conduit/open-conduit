@@ -129,6 +129,9 @@ func allowed(owner, dependency string, test bool) bool {
 		return public(dependency) || under(dependency, "client") || under(dependency, family)
 	case owner == "cmd/os":
 		return public(dependency) || under(dependency, "client") || under(dependency, "internal/cli")
+	case owner == "cmd/open-conduit-gateway":
+		// The gateway image's program: the gateway and public contracts only.
+		return public(dependency) || under(dependency, "extensions/docker/gateway")
 	case under(owner, "internal/bootstrap"), owner == "cmd/open-conduit", under(owner, "integration"):
 		// Composition and integration tests assemble implementations. Production
 		// code must still never acquire volatile reference doubles; it reaches

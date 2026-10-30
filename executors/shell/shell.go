@@ -134,7 +134,7 @@ func New(o Options) (*Executor, error) {
 }
 
 func (e *Executor) Capabilities() domain.Capabilities {
-	return domain.Capabilities{Interrupt: true, Inject: true, Resume: e.o.Resume, Toolbelt: extension.ToolbeltCLI, Workspace: true, Sandbox: true}
+	return domain.Capabilities{Interrupt: true, Inject: true, Resume: e.o.Resume, Toolbelt: extension.ToolbeltCLI, Workspace: true, Sandbox: true, Container: true}
 }
 
 func executionKey(id domain.ID) string {
@@ -277,8 +277,9 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	if cfg.Command != "" {
 		argv = []string{"/bin/sh", "-c", cfg.Command}
 	}
-	// A sandboxed binding wraps the command (B09): it needs its workspace,
-	// its outputs and inbox, its token and its toolbelt socket.
+	// A sandboxed binding wraps the command (B09), and a container binding
+	// runs it in a container: it needs its workspace, its outputs and inbox,
+	// its token and its toolbelt socket.
 	needs := extension.SandboxNeeds{Write: []string{workdir, filepath.Join(dir, "outputs"), filepath.Join(dir, inboxDir)}, Read: []string{filepath.Join(dir, "input.json")}}
 	if r.Context.ToolbeltTokenFile != "" {
 		needs.Read = append(needs.Read, filepath.Dir(r.Context.ToolbeltTokenFile))
@@ -286,8 +287,13 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	if sock, ok := strings.CutPrefix(r.Context.ToolbeltEndpoint, "unix://"); ok && r.Context.ToolbeltToken != "" {
 		needs.Sockets = []string{sock}
 	}
-	plan, err := extension.WrapLaunch(ctx, r.Context.Sandbox, needs, extension.SandboxLaunch{Argv: argv, Dir: workdir, Env: env, RunDir: dir})
-	if err != nil {
+	launch := extension.SandboxLaunch{Argv: argv, Dir: workdir, Env: env, RunDir: dir}
+	var plan extension.SandboxPlan
+	if r.Context.Container != nil {
+		if plan, err = r.Context.Container.Launch(ctx, needs, launch); err != nil {
+			return e.preset(ctx, rn, extension.ContainerReason(err), err.Error())
+		}
+	} else if plan, err = extension.WrapLaunch(ctx, r.Context.Sandbox, needs, launch); err != nil {
 		return e.preset(ctx, rn, extension.SandboxReason(err), err.Error())
 	}
 	argv, env = plan.Argv, plan.Env
@@ -468,13 +474,28 @@ func (e *Executor) Recover(ctx context.Context, r extension.RunRequest, state do
 	}
 	if !alive {
 		if !exists(filepath.Join(dir, "exit")) && !exists(filepath.Join(dir, "stop.json")) {
-			return nil, extension.ErrNotAdoptable
+			// A container's exit stands for the wrapper's lost one, once the
+			// host proves it is the container pinned.
+			if r.Context.Container == nil {
+				return nil, extension.ErrNotAdoptable
+			}
+			exit, err := r.Context.Container.Adopt(ctx, false)
+			if err != nil || !exit.Exited {
+				return nil, errors.Join(extension.ErrNotAdoptable, err)
+			}
+			if err := writeFile(filepath.Join(dir, "exit"), []byte(strconv.Itoa(exit.ExitCode)+"\n")); err != nil {
+				return nil, err
+			}
 		}
 		return adopt()
 	}
-	// A live segment of a sandboxed binding is adopted only once the host
-	// proves it still runs inside its sandbox.
-	if err := extension.AdoptSandboxed(ctx, r.Context.Sandbox, rn.pid); err != nil {
+	// A live segment of a sandboxed or container binding is adopted only
+	// once the host proves it still runs inside its sandbox or container.
+	if r.Context.Container != nil {
+		if _, err := r.Context.Container.Adopt(ctx, true); err != nil {
+			return nil, errors.Join(extension.ErrNotAdoptable, err)
+		}
+	} else if err := extension.AdoptSandboxed(ctx, r.Context.Sandbox, rn.pid); err != nil {
 		return nil, err
 	}
 	// Replace the process credential before acknowledging adoption. Runtime has

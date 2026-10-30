@@ -1,12 +1,14 @@
 package docker
 
 import (
+	"context"
 	"errors"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 )
 
@@ -114,5 +116,62 @@ func TestDockerNamesAreHostScoped(t *testing.T) {
 	c2, _ := p.names(map[string]string{extension.ContainerLabelHost: "b", extension.ContainerLabelExecution: "x", extension.ContainerLabelSegment: "2"})
 	if c1 == c2 || !strings.HasPrefix(c1, n1+"-") || !strings.HasSuffix(c1, "-2") {
 		t.Errorf("names %s %s %s", c1, c2, n1)
+	}
+}
+
+// TestDockerContainerEnv: a container's environment points at the
+// gateway's proxy (whatever proxy the launch had), finds the gateway
+// image's os first on PATH and, with a forward, reaches the toolbelt
+// through the forward's socket.
+func TestDockerContainerEnv(t *testing.T) {
+	env := containerEnv([]string{"PATH=/host/toolbelt:/usr/bin", "OS_ENDPOINT=unix:///state/runs/k/toolbelt.sock", "HTTPS_PROXY=http://elsewhere:1", "KEEP=unix:///other.sock"}, "/state/runs/k/toolbelt.sock", true)
+	got := map[string]string{}
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		if _, dup := got[k]; dup {
+			t.Errorf("%s set twice", k)
+		}
+		got[k] = v
+	}
+	for k, want := range map[string]string{
+		"PATH": BinDir + ":/host/toolbelt:/usr/bin", "OS_ENDPOINT": "unix://" + ToolbeltSocket, "KEEP": "unix:///other.sock",
+		"HTTPS_PROXY": "http://gateway:3128", "http_proxy": "http://gateway:3128", "NO_PROXY": "localhost,127.0.0.1",
+	} {
+		if got[k] != want {
+			t.Errorf("%s=%q, want %q", k, got[k], want)
+		}
+	}
+	if env := containerEnv([]string{"OS_ENDPOINT=unix:///state/runs/k/toolbelt.sock"}, "/state/runs/k/toolbelt.sock", false); !strings.Contains(strings.Join(env, "\n"), "OS_ENDPOINT=unix:///state/runs/k/toolbelt.sock\nPATH="+BinDir+":") {
+		t.Errorf("without a forward: %v", env)
+	}
+}
+
+// TestDockerPlanNeedsAGateway: a build with no gateway image, or one not
+// pinned by digest, refuses every launch; so does a socket other than the
+// toolbelt.
+func TestDockerPlanNeedsAGateway(t *testing.T) {
+	paths, _ := layout(t)
+	config := `{"image":"` + image + `","write":["{workspace}"],"provider":{"context":"orbstack"}}`
+	policy := extension.ContainerPolicy{Config: domain.Payload{Data: []byte(config)}, Paths: paths}
+	owner := extension.ResourceOwner{ExecutionID: "x"}
+	launch := extension.SandboxLaunch{Argv: []string{"true"}, Dir: paths.Workspace, RunDir: paths.Run}
+	for name, c := range map[string]struct {
+		gateway string
+		needs   extension.SandboxNeeds
+	}{
+		"no gateway":            {"", extension.SandboxNeeds{}},
+		"an unpinned gateway":   {"ghcr.io/open-conduit/open-conduit-gateway:1", extension.SandboxNeeds{}},
+		"a socket not the belt": {"sha256:" + strings.Repeat("a", 64), extension.SandboxNeeds{Sockets: []string{paths.Run + "/other.sock"}}},
+	} {
+		p := New(Options{Host: "h", Gateway: c.gateway})
+		if c.gateway == "" {
+			p.o.Gateway = ""
+		}
+		if _, err := p.Plan(context.Background(), owner, policy, c.needs, launch); !errors.Is(err, extension.ErrSandboxUnavailable) {
+			t.Errorf("%s: %v, want sandbox_unavailable", name, err)
+		}
+	}
+	if !gatewayRef.MatchString("ghcr.io/open-conduit/open-conduit-gateway@sha256:"+strings.Repeat("0", 64)) || !gatewayRef.MatchString("sha256:"+strings.Repeat("0", 64)) {
+		t.Error("a pinned gateway reference was refused")
 	}
 }

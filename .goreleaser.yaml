@@ -20,8 +20,10 @@ builds:
     goos: [darwin, linux]
     goarch: [amd64, arm64]
     flags: [-trimpath]
+    # A release pins the gateway image it published (scripts/publish-gateway.sh,
+    # run by the release before this) by digest; a snapshot has none.
     ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}}
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X github.com/open-conduit/open-conduit/extensions/docker.GatewayImage={{ index .Env "GATEWAY_IMAGE" }}
   # The toolbelt that runs call. It lives beside open-conduit, which finds it
   # there (through a symlink too); it is never put on PATH by the cask.
   - id: os

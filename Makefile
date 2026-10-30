@@ -8,7 +8,7 @@ LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 # about 8 minutes on hosted runners under -race, close to go test's 10m default.
 TEST_TIMEOUT ?= 20m
 
-.PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check container-test check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot
+.PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check container-test gateway-image check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot
 
 build:
 	$(GO) build ./...
@@ -49,8 +49,27 @@ docs-check:
 # context OPEN_CONDUIT_DOCKER_CONTEXT names (the CLI's current one when
 # unset): the container CI job on Linux, and by hand on OrbStack or Docker
 # Desktop. A PR that touches the provider posts this run's output.
+#
+# The tests build the gateway image themselves. CONTAINER_TEST_RUN narrows
+# them, and OPEN_CONDUIT_CONTAINER_FORWARD=tcp forces the toolbelt forward
+# macOS uses (the CI job's second pass).
+CONTAINER_TEST_RUN ?= TestDocker
 container-test:
-	OPEN_CONDUIT_CONTAINER_TESTS=1 $(GO) test -count=1 -v -run 'TestDocker' ./integration/ ./extensions/docker/
+	OPEN_CONDUIT_CONTAINER_TESTS=1 $(GO) test -count=1 -v -timeout $(TEST_TIMEOUT) -run '$(CONTAINER_TEST_RUN)' ./integration/ ./extensions/docker/...
+
+# The gateway image for this machine's Docker (the context
+# OPEN_CONDUIT_DOCKER_CONTEXT names, the CLI's current one when unset),
+# from the gateway and os built for its architecture. It prints the image's
+# ID, which OPEN_CONDUIT_GATEWAY_IMAGE takes in a build without a released
+# gateway. A release builds and pushes both architectures
+# (scripts/publish-gateway.sh) and pins the digest in the binary.
+DOCKER_CONTEXT_FLAG = $(if $(OPEN_CONDUIT_DOCKER_CONTEXT),--context $(OPEN_CONDUIT_DOCKER_CONTEXT))
+gateway-image:
+	@set -eu; arch=$$(docker $(DOCKER_CONTEXT_FLAG) version --format '{{.Server.Arch}}'); \
+		for binary in open-conduit-gateway os; do \
+			CGO_ENABLED=0 GOOS=linux GOARCH=$$arch $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/gateway/linux-$$arch/$$binary ./cmd/$$binary; \
+		done; \
+		docker $(DOCKER_CONTEXT_FLAG) build -q --build-arg TARGETARCH=$$arch -f extensions/docker/gateway/Dockerfile -t open-conduit-gateway:dev dist/gateway
 
 check: fmt-check vet test boundaries config-check docs-check build smoke
 

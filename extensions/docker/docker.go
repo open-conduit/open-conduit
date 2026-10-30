@@ -1,9 +1,12 @@
 // Package docker is the container provider for Docker (Engine 28 or later,
 // on Linux or through OrbStack or Docker Desktop on macOS). It creates each
 // launch's container on a per-execution internal network, hardened and
-// with the granted host paths mounted at the same paths, and returns the
-// argv of `open-conduit container run`, the host helper that starts it,
-// attached, relays signals to it and exits with its code.
+// with the granted host paths mounted at the same paths, beside a gateway
+// container that is its only way out: an allowlisting proxy for the
+// grant's network.allow and a forward to the execution's toolbelt. It
+// returns the argv of `open-conduit container run`, the host helper that
+// starts the container, attached, relays signals to it and exits with its
+// code.
 package docker
 
 import (
@@ -18,6 +21,8 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -42,7 +47,37 @@ const (
 	// healthTTL is how long a passing health check lets launches go ahead
 	// without running it again.
 	healthTTL = 10 * time.Minute
+	// labelRole marks a launch's gateway container ("gateway"), which an
+	// execution's listing leaves out: it is not the launch's container.
+	labelRole = "dev.open-conduit.role"
+	// GatewayAlias is the gateway's name on the execution's network, and
+	// GatewayPort its proxy's port.
+	GatewayAlias = "gateway"
+	GatewayPort  = "3128"
+	// ToolbeltDir is where the gateway's forward socket is, in a volume
+	// both containers mount, and ToolbeltSocket the socket: a container's
+	// OS_ENDPOINT. BinDir is the gateway image's toolbelt directory (the
+	// Linux os), mounted read-only into every container and first on PATH.
+	ToolbeltDir    = "/run/open-conduit/toolbelt"
+	ToolbeltSocket = ToolbeltDir + "/toolbelt.sock"
+	BinDir         = "/run/open-conduit/bin"
+	// PortFile, beside the execution's toolbelt socket, holds the loopback
+	// port the host serves that toolbelt on for a tcp forward.
+	PortFile = "toolbelt.port"
+	// ForwardUnix and ForwardTCP are how a gateway reaches the toolbelt:
+	// the host's socket, mounted (Linux), or a loopback port reached as
+	// host.docker.internal (macOS, where a socket can't cross the VM).
+	ForwardUnix = "unix"
+	ForwardTCP  = "tcp"
 )
+
+// GatewayImage is the gateway image this build runs, pinned by digest. A
+// release sets it (-ldflags -X); a build without one runs container
+// bindings only with OPEN_CONDUIT_GATEWAY_IMAGE set (make gateway-image).
+var GatewayImage = ""
+
+// gatewayRef is an image pinned by digest, or a local image's ID.
+var gatewayRef = regexp.MustCompile(`^([^@\s]+@)?sha256:[0-9a-f]{64}$`)
 
 // Options are host-trusted, never from binding config.
 type Options struct {
@@ -65,7 +100,13 @@ type Options struct {
 	Environ func() []string
 	// Home expands ~ in the grant (the user's home when empty).
 	Home string
-	Now  func() time.Time
+	// Gateway is the gateway image, pinned by digest (GatewayImage when
+	// empty). Without one, every launch is refused.
+	Gateway string
+	// Forward is ForwardUnix or ForwardTCP (tcp on macOS, unix elsewhere,
+	// when empty).
+	Forward string
+	Now     func() time.Time
 }
 
 // Provider implements extension.ContainerProvider.
@@ -95,7 +136,41 @@ func New(o Options) *Provider {
 	if o.Contexts == nil {
 		o.Contexts = func() []string { return nil }
 	}
+	if o.Gateway == "" {
+		o.Gateway = GatewayImage
+	}
+	if o.Forward == "" {
+		o.Forward = ForwardUnix
+		if runtime.GOOS == "darwin" {
+			o.Forward = ForwardTCP
+		}
+	}
 	return &Provider{o: o, health: map[string]time.Time{}}
+}
+
+// Forward is how gateways reach the toolbelt: ForwardUnix or ForwardTCP.
+// With tcp the host serves each container execution's toolbelt on a
+// loopback port (ForwardListen) and writes it in PortFile.
+func (p *Provider) Forward() string { return p.o.Forward }
+
+// ForwardListen is the address the host serves a tcp toolbelt forward on
+// for a context: loopback on macOS, which Docker's VM reaches as
+// host.docker.internal, and elsewhere the default bridge's address, which
+// a gateway reaches through host-gateway.
+func (p *Provider) ForwardListen(ctx context.Context, dctx string) (string, error) {
+	if runtime.GOOS == "darwin" {
+		return "127.0.0.1", nil
+	}
+	out, err := p.docker(ctx, dctx, "network", "inspect", "--format", "{{range .IPAM.Config}}{{.Gateway}} {{end}}", "bridge")
+	if err != nil {
+		return "", err
+	}
+	for _, ip := range strings.Fields(string(out)) {
+		if !strings.Contains(ip, ":") {
+			return ip, nil
+		}
+	}
+	return "", fmt.Errorf("the default bridge on context %s has no IPv4 gateway", dctx)
 }
 
 // Mount is one bind mount: a host path at the same path in the container,
@@ -122,6 +197,18 @@ type Plan struct {
 	Marker  string                    `json:"marker"`
 	Limits  extension.ContainerLimits `json:"limits"`
 	Network string                    `json:"network"`
+	Gateway Gateway                   `json:"gateway"`
+}
+
+// Gateway is the plan's gateway: its image, the hosts its proxy allows,
+// and, when the launch needs its toolbelt, the forward (unix:<socket> or
+// tcp:<port file>) and the host directory holding them, mounted read-only
+// into the gateway.
+type Gateway struct {
+	Image   string   `json:"image"`
+	Allow   []string `json:"allow"`
+	Forward string   `json:"forward,omitempty"`
+	Mount   string   `json:"mount,omitempty"`
 }
 
 func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, policy extension.ContainerPolicy, needs extension.SandboxNeeds, l extension.SandboxLaunch) (extension.ContainerPlan, error) {
@@ -129,17 +216,29 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 	if err != nil {
 		return extension.ContainerPlan{}, fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
 	}
-	// The gateway that carries the allowlist and the toolbelt comes next:
-	// until then a container reaches no host and no socket.
-	if len(cfg.Network.Allow) > 0 || len(needs.Hosts) > 0 {
-		return extension.ContainerPlan{}, fmt.Errorf("%w: the docker provider has no network gateway yet, so it can't allow hosts", extension.ErrSandboxUnavailable)
-	}
-	if len(needs.Sockets) > 0 {
-		return extension.ContainerPlan{}, fmt.Errorf("%w: the docker provider can't forward a socket into a container yet", extension.ErrSandboxUnavailable)
-	}
 	paths := policy.Paths
 	if !filepath.IsAbs(paths.Records) || !filepath.IsAbs(paths.Run) || owner.ExecutionID == "" {
 		return extension.ContainerPlan{}, fmt.Errorf("%w: incomplete launch", extension.ErrSandboxUnavailable)
+	}
+	if p.o.Gateway == "" {
+		return extension.ContainerPlan{}, fmt.Errorf("%w: this build has no gateway image: set OPEN_CONDUIT_GATEWAY_IMAGE to one pinned by digest (make gateway-image builds one)", extension.ErrSandboxUnavailable)
+	}
+	if !gatewayRef.MatchString(p.o.Gateway) {
+		return extension.ContainerPlan{}, fmt.Errorf("%w: the gateway image %s is not pinned by digest", extension.ErrSandboxUnavailable, p.o.Gateway)
+	}
+	// The only socket a container reaches is its toolbelt, through the
+	// gateway's forward.
+	gw := Gateway{Image: p.o.Gateway, Allow: append([]string{}, cfg.Network.Allow...)}
+	for _, s := range needs.Sockets {
+		if paths.Toolbelt == "" || extension.CanonicalPath(s) != extension.CanonicalPath(paths.Toolbelt) {
+			return extension.ContainerPlan{}, fmt.Errorf("%w: the docker provider forwards only the execution's toolbelt socket", extension.ErrSandboxUnavailable)
+		}
+		socket := extension.CanonicalPath(paths.Toolbelt)
+		gw.Mount = filepath.Dir(socket)
+		gw.Forward = "unix:" + socket
+		if p.o.Forward == ForwardTCP {
+			gw.Forward = "tcp:" + filepath.Join(gw.Mount, PortFile)
+		}
 	}
 	for _, kv := range l.Env {
 		if strings.ContainsAny(kv, "\n\r\x00") || !strings.Contains(kv, "=") || strings.HasPrefix(kv, "=") {
@@ -154,23 +253,69 @@ func (p *Provider) Plan(ctx context.Context, owner extension.ResourceOwner, poli
 		return extension.ContainerPlan{}, fmt.Errorf("%w: docker on context %s: %s", extension.ErrSandboxUnavailable, s.Context, h.Detail)
 	}
 	plan := Plan{Context: s.Context, User: fmt.Sprintf("%d:%d", p.o.UID, p.o.GID), Workdir: l.Dir, Mounts: mounts, Argv: l.Argv,
-		Records: paths.Records, Marker: filepath.Join(paths.Run, extension.ContainerTermMarker), Limits: cfg.Limits, Network: "internal"}
+		Records: paths.Records, Marker: filepath.Join(paths.Run, extension.ContainerTermMarker), Limits: cfg.Limits, Network: "internal", Gateway: gw}
 	if plan.Limits.PIDs == 0 {
 		plan.Limits.PIDs = DefaultPIDs
 	}
-	for _, kv := range l.Env {
+	env := containerEnv(l.Env, paths.Toolbelt, gw.Forward != "")
+	for _, kv := range env {
 		k, _, _ := strings.Cut(kv, "=")
 		plan.EnvKeys = append(plan.EnvKeys, k)
 	}
 	sort.Strings(plan.EnvKeys)
-	sum := sha256.Sum256([]byte(strings.Join(l.Env, "\n") + "\x00" + strings.Join(l.Argv, "\x00")))
+	sum := sha256.Sum256([]byte(strings.Join(env, "\n") + "\x00" + strings.Join(l.Argv, "\x00")))
 	plan.EnvFile = filepath.Join(paths.Records, "env-"+hex.EncodeToString(sum[:8]))
-	if err := os.WriteFile(plan.EnvFile, []byte(strings.Join(l.Env, "\n")+"\n"), 0o600); err != nil {
+	if err := os.WriteFile(plan.EnvFile, []byte(strings.Join(env, "\n")+"\n"), 0o600); err != nil {
 		return extension.ContainerPlan{}, fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
 	}
 	data, _ := json.Marshal(plan)
-	summary := fmt.Sprintf("docker %s: %s, %d mounts, no network", s.Context, shortImage(cfg.Image), len(mounts))
+	reach := "no hosts"
+	if len(gw.Allow) > 0 {
+		reach = strings.Join(gw.Allow, ", ")
+	}
+	summary := fmt.Sprintf("docker %s: %s, %d mounts, gateway allowing %s", s.Context, shortImage(cfg.Image), len(mounts), reach)
+	if gw.Forward != "" {
+		summary += ", toolbelt forwarded (" + p.o.Forward + ")"
+	}
 	return extension.ContainerPlan{Image: cfg.Image, Summary: summary, Data: domain.Payload{Schema: PlanSchema, Data: data}}, nil
+}
+
+// proxyVars are the variables that point a process at a proxy: a
+// container's are always the gateway's.
+var proxyVars = map[string]bool{"HTTP_PROXY": true, "HTTPS_PROXY": true, "ALL_PROXY": true, "NO_PROXY": true,
+	"http_proxy": true, "https_proxy": true, "all_proxy": true, "no_proxy": true}
+
+// containerEnv is a launch's environment as the container sees it: the
+// gateway's proxy, the gateway image's toolbelt first on PATH and, with a
+// forward, the toolbelt endpoint moved to the forward's socket.
+func containerEnv(env []string, toolbelt string, forward bool) []string {
+	hosts := map[string]bool{}
+	if toolbelt != "" {
+		hosts["unix://"+toolbelt] = true
+		hosts["unix://"+extension.CanonicalPath(toolbelt)] = true
+	}
+	out := make([]string, 0, len(env)+8)
+	path := false
+	for _, kv := range env {
+		k, v, _ := strings.Cut(kv, "=")
+		switch {
+		case proxyVars[k]:
+			continue
+		case k == "PATH":
+			path, v = true, BinDir+":"+v
+		case forward && hosts[v]:
+			v = "unix://" + ToolbeltSocket
+		}
+		out = append(out, k+"="+v)
+	}
+	if !path {
+		out = append(out, "PATH="+BinDir+":/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin")
+	}
+	proxy := "http://" + GatewayAlias + ":" + GatewayPort
+	for _, k := range []string{"HTTP_PROXY", "HTTPS_PROXY", "http_proxy", "https_proxy"} {
+		out = append(out, k+"="+proxy)
+	}
+	return append(out, "NO_PROXY=localhost,127.0.0.1", "no_proxy=localhost,127.0.0.1")
 }
 
 func shortImage(image string) string {
@@ -328,7 +473,15 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 		return extension.ContainerCreated{}, err
 	}
 	name, network := p.names(labels)
-	if err := p.network(ctx, d.Context, network, labels); err != nil {
+	if err := p.network(ctx, d.Context, network, labels, true); err != nil {
+		return extension.ContainerCreated{}, err
+	}
+	if err := p.network(ctx, d.Context, network+"-egress", labels, false); err != nil {
+		return extension.ContainerCreated{}, err
+	}
+	volume, err := p.gateway(ctx, d, name, network, labels)
+	if err != nil {
+		p.removeGateway(context.WithoutCancel(ctx), d.Context, name)
 		return extension.ContainerCreated{}, err
 	}
 	cidfile := filepath.Join(d.Records, name+".cid")
@@ -349,6 +502,10 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 	for _, m := range d.Mounts {
 		args = append(args, "--mount", mountArg(m))
 	}
+	// The gateway's forward socket, and the gateway image's toolbelt (the
+	// Linux os), both read-only.
+	args = append(args, "--mount", "type=volume,source="+volume+",target="+ToolbeltDir+",readonly",
+		"--mount", "type=image,source="+d.Gateway.Image+",target="+BinDir+",image-subpath=toolbelt")
 	args = append(args, "--entrypoint", "/bin/sh", plan.Image, "-c", entryStub, "open-conduit-entry", d.Marker)
 	args = append(args, d.Argv...)
 	out, err := p.docker(ctx, d.Context, args...)
@@ -359,6 +516,7 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 		if raw, rerr := os.ReadFile(cidfile); rerr == nil && len(bytes.TrimSpace(raw)) > 0 {
 			_, _ = p.docker(context.WithoutCancel(ctx), d.Context, "rm", "-f", strings.TrimSpace(string(raw)))
 		}
+		p.removeGateway(context.WithoutCancel(ctx), d.Context, name)
 		return extension.ContainerCreated{}, err
 	}
 	ref := extension.ContainerRef{ID: d.Context + "/" + id, Labels: labels}
@@ -391,26 +549,108 @@ func sortedKeys(m map[string]string) []string {
 	return keys
 }
 
-// network makes the execution's network: internal, with no IPv4 on the
-// bridge (so a Linux host's ports aren't reachable through it) and no
-// IPv6. One already there must be the same.
-func (p *Provider) network(ctx context.Context, dctx, name string, labels map[string]string) error {
+// network makes one of the execution's networks. The internal one, which
+// its containers join, has no route out, no IPv4 on the bridge (so a Linux
+// host's ports aren't reachable through it) and no IPv6. The egress one
+// only the gateway joins. One already there must be the same.
+func (p *Provider) network(ctx context.Context, dctx, name string, labels map[string]string, internal bool) error {
+	want := "true false true"
+	if !internal {
+		want = "false false "
+	}
 	out, err := p.docker(ctx, dctx, "network", "inspect", "--format", "{{.Internal}} {{.EnableIPv6}} {{index .Options \"com.docker.network.bridge.inhibit_ipv4\"}}", name)
 	if err == nil {
-		if strings.TrimSpace(string(out)) != "true false true" {
-			return fmt.Errorf("network %s exists but isn't internal with no IPv4 or IPv6 on its bridge", name)
+		if strings.TrimSpace(string(out)) != strings.TrimSpace(want) {
+			return fmt.Errorf("network %s exists but isn't what the provider makes", name)
 		}
 		return nil
 	}
 	if !notFound(err) {
 		return err
 	}
-	_, err = p.docker(ctx, dctx, "network", "create", "--driver", "bridge", "--internal", "--ipv6=false",
-		"-o", "com.docker.network.bridge.inhibit_ipv4=true",
-		"--label", extension.ContainerLabelHost+"="+labels[extension.ContainerLabelHost],
-		"--label", extension.ContainerLabelExecution+"="+labels[extension.ContainerLabelExecution],
-		"--label", labelNetwork+"=execution", name)
+	_, err = p.docker(ctx, dctx, append([]string{"network", "create"}, networkArgs(name, labels, internal)...)...)
 	return err
+}
+
+func networkArgs(name string, labels map[string]string, internal bool) []string {
+	args := []string{"--driver", "bridge", "--ipv6=false"}
+	role := "egress"
+	if internal {
+		args = append(args, "--internal", "-o", "com.docker.network.bridge.inhibit_ipv4=true")
+		role = "execution"
+	}
+	for _, k := range sortedKeys(labels) {
+		if k == extension.ContainerLabelHost || k == extension.ContainerLabelExecution {
+			args = append(args, "--label", k+"="+labels[k])
+		}
+	}
+	return append(args, "--label", labelNetwork+"="+role, name)
+}
+
+// gateway creates and starts the launch's gateway (name-gw) and the
+// volume its forward socket is in (name-tb), and returns the volume. The
+// gateway joins the egress network, then the execution's as "gateway". It
+// runs hardened as the operator, with the toolbelt's host directory
+// read-only when it forwards.
+func (p *Provider) gateway(ctx context.Context, d Plan, name, network string, labels map[string]string) (string, error) {
+	gw, volume := name+"-gw", name+"-tb"
+	// What a create that failed half way left goes first.
+	p.removeGateway(ctx, d.Context, name)
+	vargs := []string{"volume", "create", "--driver", "local", "--opt", "type=tmpfs", "--opt", "device=tmpfs",
+		"--opt", fmt.Sprintf("o=size=1m,uid=%d,gid=%d,mode=0700", p.o.UID, p.o.GID)}
+	for _, k := range sortedKeys(labels) {
+		vargs = append(vargs, "--label", k+"="+labels[k])
+	}
+	if _, err := p.docker(ctx, d.Context, append(vargs, volume)...); err != nil {
+		return "", err
+	}
+	args := []string{"create", "--name", gw, "--restart", "no", "--cap-drop", "ALL", "--security-opt", "no-new-privileges", "--read-only",
+		"--user", d.User, "--pids-limit", "256", "--memory", "256m", "--network", network + "-egress",
+		"--add-host", "host.docker.internal:host-gateway", "--label", labelRole + "=gateway",
+		"--mount", "type=volume,source=" + volume + ",target=" + ToolbeltDir}
+	for _, k := range sortedKeys(labels) {
+		args = append(args, "--label", k+"="+labels[k])
+	}
+	if d.Gateway.Mount != "" {
+		args = append(args, "--mount", mountArg(Mount{Target: d.Gateway.Mount, ReadOnly: true}))
+	}
+	args = append(args, d.Gateway.Image, "serve", "--listen", ":"+GatewayPort, "--allow", strings.Join(d.Gateway.Allow, ","))
+	if d.Gateway.Forward != "" {
+		args = append(args, "--socket", ToolbeltSocket, "--forward", d.Gateway.Forward)
+	}
+	if _, err := p.docker(ctx, d.Context, args...); err != nil {
+		return "", err
+	}
+	if _, err := p.docker(ctx, d.Context, "network", "connect", "--alias", GatewayAlias, network, gw); err != nil {
+		return "", err
+	}
+	if _, err := p.docker(ctx, d.Context, "start", gw); err != nil {
+		return "", err
+	}
+	// A gateway that exits at once (a bad flag, a socket it can't make)
+	// fails the launch with what it said.
+	time.Sleep(100 * time.Millisecond)
+	out, err := p.docker(ctx, d.Context, "inspect", "--type", "container", "--format", "{{.State.Running}}", gw)
+	if err != nil {
+		return "", err
+	}
+	if strings.TrimSpace(string(out)) != "true" {
+		logs, _ := exec.CommandContext(ctx, p.o.Docker, "--context", d.Context, "logs", "--tail", "5", gw).CombinedOutput()
+		return "", fmt.Errorf("the gateway did not start: %s", strings.TrimSpace(string(logs)))
+	}
+	return volume, nil
+}
+
+// removeGateway removes a launch's gateway and its volume; either being
+// gone is not an error.
+func (p *Provider) removeGateway(ctx context.Context, dctx, name string) error {
+	if _, err := p.docker(ctx, dctx, "rm", "--force", name+"-gw"); err != nil && !notFound(err) {
+		return err
+	}
+	if _, err := p.docker(ctx, dctx, "volume", "rm", "--force", name+"-tb"); err != nil && !notFound(err) {
+		return err
+	}
+	return nil
 }
 
 func (p *Provider) Signal(ctx context.Context, ref extension.ContainerRef, signal string) error {
@@ -516,6 +756,11 @@ func (p *Provider) List(ctx context.Context, owner extension.ResourceOwner) ([]e
 			if err != nil {
 				return nil, err
 			}
+			// An execution's gateways are not its containers; the host's
+			// whole listing has them, so reconcile removes them.
+			if owner.ExecutionID != "" && st.Ref.Labels[labelRole] == "gateway" {
+				continue
+			}
 			st.Daemon = daemon
 			out = append(out, st)
 		}
@@ -542,11 +787,16 @@ func (p *Provider) Remove(ctx context.Context, ref extension.ContainerRef) error
 	if labels[extension.ContainerLabelExecution] == "" {
 		return nil
 	}
-	// The execution's network goes with its container, unless a later
-	// segment's container is already on it.
-	_, network := p.names(labels)
-	if _, err := p.docker(ctx, dctx, "network", "rm", network); err != nil && !notFound(err) && !strings.Contains(err.Error(), "active endpoints") {
+	// The launch's gateway and its volume go with it, and the execution's
+	// networks, unless a later segment's containers are already on them.
+	name, network := p.names(labels)
+	if err := p.removeGateway(ctx, dctx, name); err != nil {
 		return err
+	}
+	for _, n := range []string{network, network + "-egress"} {
+		if _, err := p.docker(ctx, dctx, "network", "rm", n); err != nil && !notFound(err) && !strings.Contains(err.Error(), "active endpoints") {
+			return err
+		}
 	}
 	return nil
 }
