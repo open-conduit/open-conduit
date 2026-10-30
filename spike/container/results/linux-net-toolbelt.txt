@@ -1,0 +1,38 @@
+srw------- 1 alexyoung alexyoung 0 Oct 30 09:50 /home/alexyoung/oc/toolbelt.sock
+== docker 29.9.2
+== 3. image mount: os from the gateway image
+-rwxr-xr-x    1 root     root       9715508 Oct 30 09:48 /opt/oc/os
+os dev (unknown)
+== 1. toolbelt call through the gateway
+{
+  "schema": "github.tool.v1",
+  "data": {
+    "base": "main",
+    "branch": "agent/issue-176",
+    "issue": 176,
+    "issue_url": "https://github.com/open-conduit/open-conduit/issues/176",
+    "repo": "open-conduit/open-conduit",
+    "rules": "the repository's CLAUDE.md or AGENTS.md (and any rule 
+== 2a. direct internet
+000
+curl: (7) Failed to connect to 1.1.1.1 port 443 after 0 ms: Could not connect to server
+== 2b. host.docker.internal
+000
+curl: (28) Resolving timed out after 5001 milliseconds
+== 2c. host loopback other port (host-gateway)
+curl: (28) Resolving timed out after 5006 milliseconds
+curl: (7) Failed to connect to 172.17.0.1 port 22 after 0 ms: Could not connect to server
+== 2d. outside DNS
+
+** server can't find example.com: SERVFAIL
+
+no resolve
+== 2e. proxy, allowed
+200
+== 2f. proxy, not allowed
+000
+curl: (56) CONNECT tunnel failed, response 403
+== gateway log
+2026/10/30 09:51:04 allow api.github.com
+2026/10/30 09:51:05 deny CONNECT example.com
+2026/10/30 09:51:05 socat[9918] W exiting on signal 15

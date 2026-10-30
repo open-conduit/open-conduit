@@ -1,0 +1,24 @@
+proxy delay 0.05s (10 runs):
+   10x agent_trapped=False wrapper_rc=143/agent_never_signalled wrapper_returned=before_agent_exit state=exited:137
+relay delay 0.05s (10 runs):
+   10x agent_trapped=True wrapper_rc=42 wrapper_returned=after_agent_exit state=exited:42
+helper delay 0.05s (10 runs):
+   10x agent_trapped=True wrapper_rc=42 wrapper_returned=after_agent_exit state=exited:42
+signal delay 0.05s (10 runs):
+   10x agent_trapped=True wrapper_rc=42 wrapper_returned=after_agent_exit state=exited:42
+proxy delay 0.3s (10 runs):
+   10x agent_trapped=False wrapper_rc=0/agent_never_signalled wrapper_returned=before_agent_exit state=exited:137
+relay delay 0.3s (10 runs):
+   10x agent_trapped=True wrapper_rc=42 wrapper_returned=after_agent_exit state=exited:42
+helper delay 0.3s (10 runs):
+   10x agent_trapped=True wrapper_rc=42 wrapper_returned=after_agent_exit state=exited:42
+signal delay 0.3s (10 runs):
+   10x agent_trapped=True wrapper_rc=42 wrapper_returned=after_agent_exit state=exited:42
+proxy delay 1.5s (10 runs):
+   10x agent_trapped=False wrapper_rc=0/agent_never_signalled wrapper_returned=before_agent_exit state=exited:137
+relay delay 1.5s (10 runs):
+   10x agent_trapped=True wrapper_rc=42 wrapper_returned=after_agent_exit state=exited:42
+helper delay 1.5s (10 runs):
+   10x agent_trapped=True wrapper_rc=42 wrapper_returned=after_agent_exit state=exited:42
+signal delay 1.5s (10 runs):
+   10x agent_trapped=True wrapper_rc=42 wrapper_returned=after_agent_exit state=exited:42
