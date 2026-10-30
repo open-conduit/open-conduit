@@ -74,6 +74,9 @@ func TestConfigValidation(t *testing.T) {
 			t.Errorf("%s accepted: %v", bad, err)
 		}
 	}
+	if e.ResourceMode(json.RawMessage(`{}`)) != "work" || e.ResourceMode(json.RawMessage(`{"workspace_mode":"clone"}`)) != "clone" {
+		t.Error("the requested resource mode is not workspace_mode, work by default")
+	}
 	if err := e.ValidateConfig(json.RawMessage(`{"secret_env":{"key":"ANTHROPIC_API_KEY"}}`), nil); err == nil {
 		t.Error("secret_env naming an unselected secret accepted")
 	}

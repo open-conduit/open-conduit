@@ -762,7 +762,7 @@ func TestConfigValidation(t *testing.T) {
 		t.Fatalf("defaults: %+v %v", good, err)
 	}
 	for _, bad := range []string{
-		``, `{}`, `{"checkout":"r","extra":1}`, `{"checkout":"r"} {}`, `{"checkout":"r","mode":"clone"}`,
+		``, `{}`, `{"checkout":"r","extra":1}`, `{"checkout":"r"} {}`, `{"checkout":"r","mode":"mirror"}`,
 		`{"checkout":"r","remote":"../x"}`, `{"checkout":"r","base_branch":"-x"}`, `{"checkout":"r","base_branch":"a..b"}`,
 		`{"checkout":"r","branch_template":"agent/{key}"}`, `{"checkout":"r","copy":["/etc/passwd"]}`, `{"checkout":"r","copy":["../x"]}`,
 		`{"checkout":"r","copy":[".git/config"]}`, `{"checkout":"r","setup_when":["a/../../b"]}`, `{"checkout":"r","retain_failed_seconds":-1}`,
@@ -776,7 +776,7 @@ func TestConfigValidation(t *testing.T) {
 		t.Error("accepted an invalid branch param")
 	}
 	f := newFixture(t)
-	if _, err := f.acquire(owner("w", "x"), cfg(nil), "clone", nil); !errors.Is(err, extension.ErrUnsupported) {
+	if _, err := f.acquire(owner("w", "x"), cfg(nil), "mirror", nil); !errors.Is(err, extension.ErrUnsupported) {
 		t.Errorf("unknown mode: %v", err)
 	}
 	if _, err := f.acquire(owner("w", "x"), cfg(map[string]any{"checkout": "missing"}), "", nil); !errors.Is(err, extension.ErrInvalid) {

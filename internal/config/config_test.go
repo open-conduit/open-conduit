@@ -577,6 +577,59 @@ func TestResourceConfigValidation(t *testing.T) {
 	}
 }
 
+// modeExecutor requests the resource mode its binding config names.
+type modeExecutor struct{ fakeExecutor }
+
+func (modeExecutor) ResourceMode(c json.RawMessage) string {
+	var m struct {
+		Mode string `json:"workspace_mode"`
+	}
+	_ = json.Unmarshal(c, &m)
+	return m.Mode
+}
+
+// TestSandboxedResource: a binding that declares a sandbox (a stand-in until
+// B09 adds the field) is refused when its provider says the workspace the
+// executor would request writes outside the sandbox, with the provider's
+// reason, and accepted otherwise.
+func TestSandboxedResource(t *testing.T) {
+	reg := registry()
+	reg.Executors["agent"] = modeExecutor{}
+	var asked []string
+	reg.ResourceSandbox = map[string]func(json.RawMessage, string) error{"git": func(c json.RawMessage, mode string) error {
+		asked = append(asked, mode)
+		if mode == "clone" || mode == "" && strings.Contains(string(c), `"mode":"clone"`) {
+			return nil
+		}
+		return errors.New("use mode clone")
+	}}
+	for _, tc := range []struct {
+		config, resource string
+		refused          bool
+	}{
+		{`{"workspace_mode":"work"}`, `{"mode":"clone"}`, true},
+		{`{"workspace_mode":"clone"}`, `{"mode":"work"}`, false},
+		{`{}`, `{"mode":"clone"}`, false},
+		{`{}`, `{}`, true},
+	} {
+		v := &validator{reg: reg}
+		v.sandboxed("scopes/0/bindings/0", Binding{Executor: "agent", Config: json.RawMessage(tc.config), Resource: &Resource{Provider: "git", Config: json.RawMessage(tc.resource)}})
+		if tc.refused != (len(v.diags) == 1) || tc.refused && (v.diags[0].Path != "scopes/0/bindings/0/resource/config" || v.diags[0].Code != "sandbox_workspace" || v.diags[0].Message != "use mode clone") {
+			t.Errorf("%s with %s: %+v", tc.config, tc.resource, v.diags)
+		}
+	}
+	if strings.Join(asked, ",") != "work,clone,," {
+		t.Errorf("modes asked: %q", asked)
+	}
+	// No resource, or a provider with no sandbox check, is not refused.
+	v := &validator{reg: reg}
+	v.sandboxed("p", Binding{Executor: "agent"})
+	v.sandboxed("p", Binding{Executor: "shell", Resource: &Resource{Provider: "other"}})
+	if len(v.diags) != 0 {
+		t.Errorf("diagnostics %+v", v.diags)
+	}
+}
+
 // TestBindingTimeout: a binding's timeout_seconds (05-02) reaches the domain
 // binding the scheduler pins, survives normalization, and is bounded like
 // settings.timeout_seconds.

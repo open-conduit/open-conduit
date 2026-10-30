@@ -15,7 +15,7 @@ import (
 
 // DiskSpaceFunc reports the size of the filesystem path is on and what an
 // unprivileged process can still write to it, in bytes. The provider asks it
-// before making a work or fresh workspace; tests inject one so a full disk
+// before making a work, fresh or clone workspace; tests inject one so a full disk
 // needs no full disk.
 type DiskSpaceFunc func(path string) (total, free uint64, err error)
 
@@ -53,8 +53,9 @@ func (e *NoSpaceError) Unwrap() error { return extension.ErrResourceExhausted }
 // maxSpareNames bounds the refusal message.
 const maxSpareNames = 10
 
-// roomFor checks the workspace's disk has room for a checkout of start,
-// keeping the configured share free. A disk it can't read doesn't stop it, as
+// roomFor checks the workspace's disk has room for a checkout of start (and,
+// for a clone, the objects it can't hardlink), keeping the configured share
+// free. A disk it can't read doesn't stop it, as
 // in v1.
 func (p *Provider) roomFor(ctx context.Context, cfg Config, l *lease, start string) error {
 	if cfg.DiskFullPercent <= 0 || cfg.DiskFullPercent >= 100 {
@@ -65,6 +66,9 @@ func (p *Provider) roomFor(ctx context.Context, cfg Config, l *lease, start stri
 		return nil
 	}
 	need := p.checkoutSize(ctx, l.Checkout, start)
+	if l.Mode == ModeClone {
+		need += p.cloneObjects(ctx, l.Checkout, l.Path)
+	}
 	keep := min(uint64(float64(total)*(100-cfg.DiskFullPercent)/100), cfg.DiskReserveBytes)
 	if free >= need && free-need >= keep {
 		return nil

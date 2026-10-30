@@ -29,6 +29,12 @@ type Registry struct {
 	// ResourceConfig optionally validates a registered provider's binding
 	// resource config at load/apply time. Its error text is never echoed.
 	ResourceConfig map[string]func(json.RawMessage) error
+	// ResourceSandbox optionally refuses a provider's resource config for a
+	// binding whose executor runs in a sandbox (B09), given the mode the
+	// executor requests ("" for the config's default): a workspace the
+	// sandbox could only use by writing outside it. Its error is a fixed,
+	// secret-free reason, shown in the diagnostic.
+	ResourceSandbox map[string]func(config json.RawMessage, mode string) error
 	// HandlerConfig optionally validates a registered route handler's opaque
 	// route config at load/apply time (05-01). Its error text is never echoed.
 	HandlerConfig map[string]func(json.RawMessage) error
@@ -449,6 +455,35 @@ func (v *validator) registration(p string, b Binding) {
 			}
 		}
 	}
+}
+
+// sandboxed refuses a binding that declares a sandbox when its resource would
+// give the sandboxed executor a workspace that writes through to the
+// operator's own files (a git worktree, whose commits go through the main
+// checkout's .git). B09's binding validation calls it for each binding that
+// declares a sandbox; until then nothing declares one.
+func (v *validator) sandboxed(p string, b Binding) {
+	if b.Resource == nil {
+		return
+	}
+	check := v.reg.ResourceSandbox[b.Resource.Provider]
+	if check == nil {
+		return
+	}
+	var mode string
+	if m, ok := v.reg.Executors[b.Executor].(ResourceModer); ok {
+		mode = m.ResourceMode(b.Config)
+	}
+	if err := check(b.Resource.Config, mode); err != nil {
+		v.fail(p+"/resource/config", "sandbox_workspace", err.Error())
+	}
+}
+
+// ResourceModer is optionally implemented by an executor registration to say
+// which resource mode a binding config makes it request, "" for the
+// resource config's default.
+type ResourceModer interface {
+	ResourceMode(config json.RawMessage) string
 }
 
 // ConfigValidator is optionally implemented by an executor registration to

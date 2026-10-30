@@ -1,7 +1,9 @@
 // Package git is the optional Git workspace resource provider. It gives an
 // execution the scope's main checkout (shared), a branch worktree private to
-// one Work and reused by its attempts (work), or a detached worktree at the
-// base branch's remote head private to one execution (fresh). It copies
+// one Work and reused by its attempts (work), a separate clone on such a
+// branch that shares nothing writable with the checkout (clone), or a
+// detached worktree at the base branch's remote head private to one
+// execution (fresh). It copies
 // configured files (.env), runs setup when its inputs changed, supplies the
 // provider environment layer (opted-in .env, signing policy) and cleans up
 // from durable owner state. Core never imports it; executors reach it only
@@ -54,8 +56,8 @@ type Options struct {
 	Environ func() []string
 	// Git is the git binary (default "git").
 	Git string
-	// DiskSpace measures free space before a work or fresh workspace is made
-	// (default: the filesystem's own figures).
+	// DiskSpace measures free space before a work, fresh or clone workspace
+	// is made (default: the filesystem's own figures).
 	DiskSpace DiskSpaceFunc
 }
 
@@ -64,9 +66,12 @@ type Provider struct {
 	o     Options
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
+	// sameDisk reports whether two paths are on one filesystem, so a clone's
+	// objects can be hardlinked (tests replace it).
+	sameDisk func(a, b string) bool
 }
 
-var refName = regexp.MustCompile(`^(shared|work|fresh)-[0-9a-f]{32}$`)
+var refName = regexp.MustCompile(`^(shared|work|fresh|clone)-[0-9a-f]{32}$`)
 
 // New validates options and creates the private state directories.
 func New(o Options) (*Provider, error) {
@@ -93,7 +98,7 @@ func New(o Options) (*Provider, error) {
 	if o.DiskSpace == nil {
 		o.DiskSpace = diskSpace
 	}
-	return &Provider{o: o, locks: map[string]*sync.Mutex{}}, nil
+	return &Provider{o: o, locks: map[string]*sync.Mutex{}, sameDisk: sameDevice}, nil
 }
 
 // lock serializes work on one key (a lease or a repository).
@@ -146,9 +151,13 @@ type workspace struct {
 	Sync
 }
 
+// perWork reports whether a mode's lease belongs to its Work, reused by each
+// attempt, rather than to one execution.
+func perWork(mode string) bool { return mode == extension.ResourceWork || mode == ModeClone }
+
 func refFor(mode string, o extension.ResourceOwner) string {
 	key := string(o.ScopeID) + "\x00" + string(o.ExecutionID)
-	if mode == extension.ResourceWork {
+	if perWork(mode) {
 		key = string(o.ScopeID) + "\x00" + string(o.WorkID)
 	}
 	sum := sha256.Sum256([]byte(mode + "\x00" + key))
@@ -282,8 +291,8 @@ func (p *Provider) Acquire(ctx context.Context, a extension.ResourceAcquisition)
 	switch mode {
 	case extension.ResourceShared:
 		return p.shared(ctx, cfg, checkout, a)
-	case extension.ResourceWork:
-		return p.work(ctx, cfg, checkout, prm, a)
+	case extension.ResourceWork, ModeClone:
+		return p.work(ctx, cfg, checkout, mode, prm, a)
 	case extension.ResourceFresh:
 		return p.fresh(ctx, cfg, checkout, a)
 	}
@@ -324,6 +333,9 @@ func summary(w workspace) string {
 		return "fresh worktree at " + remote + " " + w.Head[:min(7, len(w.Head))]
 	}
 	s := "worktree on branch " + w.Branch
+	if w.Mode == ModeClone {
+		s = "clone on branch " + w.Branch
+	}
 	if w.Reused {
 		s += ", reused"
 	}
@@ -430,10 +442,11 @@ func (p *Provider) createFresh(ctx context.Context, cfg Config, checkout string,
 	return err
 }
 
-// work creates or reuses the Work's branch worktree. An existing worktree is
-// never reset: local edits and commits stay, and the run is told about them.
-func (p *Provider) work(ctx context.Context, cfg Config, checkout string, prm params, a extension.ResourceAcquisition) (extension.Resource, error) {
-	ref := refFor(extension.ResourceWork, a.Owner)
+// work creates or reuses the Work's branch worktree (work) or clone (clone).
+// An existing one is never reset: local edits and commits stay, and the run
+// is told about them.
+func (p *Provider) work(ctx context.Context, cfg Config, checkout, mode string, prm params, a extension.ResourceAcquisition) (extension.Resource, error) {
+	ref := refFor(mode, a.Owner)
 	defer p.lock(ref)()
 	log := a.Request.Log
 	l, ok, err := p.load(ref)
@@ -445,7 +458,7 @@ func (p *Provider) work(ctx context.Context, cfg Config, checkout string, prm pa
 		branch = strings.NewReplacer("{work}", sanitize(string(a.Owner.WorkID)), "{scope}", sanitize(string(a.Owner.ScopeID))).Replace(cfg.BranchTemplate)
 	}
 	var w workspace
-	if ok && l.Path != "" && p.validWorktree(ctx, checkout, l.Path) {
+	if ok && l.Path != "" && p.valid(ctx, mode, checkout, l.Path) {
 		w.Reused = true
 		if branch != l.Branch {
 			logf(log, "keeping the existing branch %s (requested %s)", l.Branch, branch)
@@ -454,7 +467,7 @@ func (p *Provider) work(ctx context.Context, cfg Config, checkout string, prm pa
 		l.Owner = a.Owner
 	} else {
 		if !ok {
-			l = newLease(ref, extension.ResourceWork, cfg, checkout, a.Owner)
+			l = newLease(ref, mode, cfg, checkout, a.Owner)
 		}
 		l.State, l.Owner, l.Branch = stateAcquiring, a.Owner, branch
 		l.Path = filepath.Join(p.o.StateDir, "workspaces", ref)
@@ -463,7 +476,11 @@ func (p *Provider) work(ctx context.Context, cfg Config, checkout string, prm pa
 		}
 		took, err := p.takeOver(ctx, cfg, checkout, &l, log)
 		if err == nil && !took {
-			err = p.createWork(ctx, cfg, checkout, &l, log)
+			if mode == ModeClone {
+				err = p.createClone(ctx, cfg, checkout, &l, log)
+			} else {
+				err = p.createWork(ctx, cfg, checkout, &l, log)
+			}
 		}
 		if err != nil {
 			p.abandon(ctx, &l, log, err)
@@ -485,8 +502,8 @@ func (p *Provider) work(ctx context.Context, cfg Config, checkout string, prm pa
 // takeOver hands this lease the workspace of another Work that still has the
 // branch checked out, when that Work ended without completing and its
 // workspace is retained (a Work cancelled, then started again for the same
-// issue). The worktree is moved to this lease's path with its edits and
-// commits, and the old lease is dropped. A holder that is not retained fails
+// issue). The worktree or clone is moved to this lease's path with its edits
+// and commits, and the old lease is dropped. A holder that is not retained fails
 // naming its Work. It reports false when no workspace of the provider holds
 // the branch.
 func (p *Provider) takeOver(ctx context.Context, cfg Config, checkout string, l *lease, log io.Writer) (bool, error) {
@@ -495,7 +512,7 @@ func (p *Provider) takeOver(ctx context.Context, cfg Config, checkout string, l 
 		return false, err
 	}
 	for _, x := range all {
-		if x.Ref == l.Ref || x.Mode != extension.ResourceWork || x.Checkout != checkout || x.Branch != l.Branch {
+		if x.Ref == l.Ref || x.Mode != l.Mode || x.Checkout != checkout || x.Branch != l.Branch {
 			continue
 		}
 		if took, err := p.takeOverFrom(ctx, cfg, checkout, x.Ref, l, log); took || err != nil {
@@ -508,7 +525,7 @@ func (p *Provider) takeOver(ctx context.Context, cfg Config, checkout string, l 
 func (p *Provider) takeOverFrom(ctx context.Context, cfg Config, checkout, ref string, l *lease, log io.Writer) (bool, error) {
 	defer p.lock(ref)()
 	x, ok, err := p.load(ref)
-	if err != nil || !ok || x.Path == "" || !p.owned(x.Path) || !p.validWorktree(ctx, checkout, x.Path) {
+	if err != nil || !ok || x.Path == "" || !p.owned(x.Path) || !p.valid(ctx, x.Mode, checkout, x.Path) {
 		return false, err
 	}
 	if head, err := p.git(ctx, x.Path, "symbolic-ref", "-q", "HEAD"); err != nil || head != "refs/heads/"+l.Branch {
@@ -521,7 +538,11 @@ func (p *Provider) takeOverFrom(ctx context.Context, cfg Config, checkout, ref s
 	defer p.lock("repo:" + checkout)()
 	p.clearStale(ctx, checkout, l.Path)
 	l.Base = p.base(ctx, cfg, checkout)
-	if _, err := p.git(ctx, checkout, "worktree", "move", x.Path, l.Path); err != nil {
+	if x.Mode == ModeClone {
+		if err := os.Rename(x.Path, l.Path); err != nil {
+			return false, err
+		}
+	} else if _, err := p.git(ctx, checkout, "worktree", "move", x.Path, l.Path); err != nil {
 		return false, err
 	}
 	logf(log, "took over the retained workspace of work %s on %s, moved to %s", x.Owner.WorkID, l.Branch, l.Path)
@@ -595,9 +616,17 @@ func (p *Provider) prepare(ctx context.Context, cfg Config, l *lease, w workspac
 	return resource(*l, w), nil
 }
 
+// valid reports whether path is still the workspace a lease of mode made.
+func (p *Provider) valid(ctx context.Context, mode, checkout, path string) bool {
+	if mode == ModeClone {
+		return p.validClone(ctx, path)
+	}
+	return p.validWorktree(ctx, checkout, path)
+}
+
 // clearStale removes a leftover directory at a workspace path that is not a
-// valid worktree (a crash between ledger write and creation), inside the
-// provider's own workspace root only.
+// valid worktree or clone (a crash between ledger write and creation), inside
+// the provider's own workspace root only.
 func (p *Provider) clearStale(ctx context.Context, checkout, path string) {
 	if !exists(path) || !p.owned(path) {
 		return
@@ -632,7 +661,9 @@ func (p *Provider) owned(path string) bool {
 }
 
 // removeWorkspace stops stray processes in the workspace, removes the
-// worktree and prunes it. The branch is kept, so nothing committed is lost.
+// worktree and prunes it. The branch is kept, so nothing committed is lost: a
+// clone's branch is first saved into the checkout when it has commits no
+// remote has.
 func (p *Provider) removeWorkspace(ctx context.Context, l lease) error {
 	if l.Path == "" || !p.owned(l.Path) {
 		return nil // Shared leases (the main checkout) are never removed.
@@ -641,6 +672,15 @@ func (p *Provider) removeWorkspace(ctx context.Context, l lease) error {
 		killWithin(l.Path)
 	}
 	defer p.lock("repo:" + l.Checkout)()
+	if isClone(l) {
+		if exists(l.Path) {
+			if err := p.saveBranch(ctx, l); err != nil {
+				return err
+			}
+			return os.RemoveAll(l.Path)
+		}
+		return nil
+	}
 	if exists(l.Path) {
 		_, _ = p.git(ctx, l.Checkout, "worktree", "remove", "--force", l.Path)
 		if err := os.RemoveAll(l.Path); err != nil {
@@ -665,12 +705,12 @@ func (p *Provider) Lookup(ctx context.Context, o extension.ResourceOwner, ref st
 	if err != nil {
 		return extension.Resource{}, err
 	}
-	owned := ok && l.Owner.ScopeID == o.ScopeID && l.Owner.WorkID == o.WorkID && (l.Mode == extension.ResourceWork || l.Owner.ExecutionID == o.ExecutionID)
+	owned := ok && l.Owner.ScopeID == o.ScopeID && l.Owner.WorkID == o.WorkID && (perWork(l.Mode) || l.Owner.ExecutionID == o.ExecutionID)
 	if !owned || (l.State != stateActive && l.State != stateSetupFailed) || !exists(l.Path) {
 		return extension.Resource{}, extension.ErrResourceNotFound
 	}
 	w := workspace{Reused: true, Head: p.head(ctx, l.Path)}
-	if l.Mode == extension.ResourceWork && !slices.Contains(l.Holders, o.ExecutionID) {
+	if perWork(l.Mode) && !slices.Contains(l.Holders, o.ExecutionID) {
 		l.Owner = o
 		l.Holders = append(l.Holders, o.ExecutionID)
 		if err = p.save(&l); err != nil {
@@ -681,7 +721,7 @@ func (p *Provider) Lookup(ctx context.Context, o extension.ResourceOwner, ref st
 }
 
 // Reconcile releases leases whose owners finished (fresh: removed after
-// success, retained after failure; work: when the Work is terminal; shared:
+// success, retained after failure; work and clone: when the Work is terminal; shared:
 // released), removes workspaces whose retention expired and retries failed
 // cleanup. It is safe to repeat and after restart.
 func (p *Provider) Reconcile(ctx context.Context, status extension.ResourceStatusFunc) (extension.ResourceReport, error) {
@@ -756,7 +796,7 @@ func (p *Provider) reconcileOne(ctx context.Context, ref string, status extensio
 		case st.ExecutionDone:
 			return retain("failed_run")
 		}
-	case extension.ResourceWork:
+	case extension.ResourceWork, ModeClone:
 		switch {
 		case !st.Known:
 			return retain("owner_unknown")
