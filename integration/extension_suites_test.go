@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"sync"
 	"testing"
 	"time"
@@ -285,4 +286,66 @@ func TestExternalPanelsSharedSuite(t *testing.T) {
 		}
 		conformance.RunPanels(t, func() conformance.PanelFixture { return notesPanelFixture(t, p) })
 	})
+}
+
+// TestExternalOperationActsAsBindingConnection: over the subprocess
+// protocol, an operation reads the calling binding's connection from its
+// authority and resolves that connection's secrets through secret.resolve;
+// the host's refusal of any other connection reaches it, and an authority
+// without a connection names none.
+func TestExternalOperationActsAsBindingConnection(t *testing.T) {
+	notesPath, _ := extensionBinaries(t)
+	e := newExtEnv(t)
+	deps := e.deps()
+	deps.Scopes = func() []domain.ID { return []domain.ID{"routing-scope"} }
+	var mu sync.Mutex
+	var asked []string
+	deps.Secrets = func(_ context.Context, scope domain.ID, connection string, names []string) (map[string]string, error) {
+		mu.Lock()
+		asked = append(asked, string(scope)+"/"+connection)
+		mu.Unlock()
+		if scope != "routing-scope" || connection != "acme-reviewer" {
+			return nil, extension.ErrUnauthorized
+		}
+		out := map[string]string{}
+		for _, n := range names {
+			if n != "token" {
+				return nil, extension.ErrUnauthorized
+			}
+			out[n] = "reviewer-token"
+		}
+		return out, nil
+	}
+	o := e.options("fixture")
+	o.Configure = nil
+	r := e.load(e.install(notes.Manifest(notes.Options{Fixture: true}), notesPath), deps, o)
+	var op extension.Operation
+	for _, x := range r.Registration().Operations {
+		if x.Name == "fixture.connection" {
+			op = x
+		}
+	}
+	if op.Handler == nil {
+		t.Fatal("fixture.connection is not registered")
+	}
+	call := func(connection string) (domain.Payload, error) {
+		a := extension.Authority{ScopeID: "routing-scope", WorkID: "work/item", ExecutionID: "execution-1", ExpiresAt: e.clock.Now().Add(time.Minute), Connection: connection}
+		return op.Handler(context.Background(), a, domain.Payload{Schema: "fixture.connection.input.v1", Data: []byte(`{"names":["token"]}`)})
+	}
+	out, err := call("acme-reviewer")
+	if err != nil || string(out.Data) != `{"connection":"acme-reviewer","resolved":["token"]}` {
+		t.Fatalf("acting as the binding's connection: %s %v", out.Data, err)
+	}
+	if _, err := call("acme-spare"); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("a connection the host refuses: %v", err)
+	}
+	out, err = call("")
+	if err != nil || string(out.Data) != `{"connection":"","resolved":[]}` {
+		t.Fatalf("a binding without a connection: %s %v", out.Data, err)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if want := []string{"routing-scope/acme-reviewer", "routing-scope/acme-spare"}; !slices.Equal(asked, want) {
+		t.Fatalf("secret.resolve calls %v, want %v", asked, want)
+	}
 }

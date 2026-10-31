@@ -526,13 +526,16 @@ type Authority struct {
 	Operations  []string  `json:"operations,omitempty"`
 	EventTypes  []string  `json:"event_types,omitempty"`
 	TriggerID   string    `json:"trigger_id,omitempty"`
+	// Connection is the connection ID the Execution's binding names, or
+	// empty.
+	Connection string `json:"connection,omitempty"`
 }
 
 func FromAuthority(a extension.Authority) Authority {
-	return Authority{ScopeID: string(a.ScopeID), WorkID: string(a.WorkID), ExecutionID: string(a.ExecutionID), Lease: FromLeaseRef(a.Lease), ExpiresAt: a.ExpiresAt, Operations: a.Operations, EventTypes: a.EventTypes, TriggerID: string(a.TriggerID)}
+	return Authority{ScopeID: string(a.ScopeID), WorkID: string(a.WorkID), ExecutionID: string(a.ExecutionID), Lease: FromLeaseRef(a.Lease), ExpiresAt: a.ExpiresAt, Operations: a.Operations, EventTypes: a.EventTypes, TriggerID: string(a.TriggerID), Connection: a.Connection}
 }
 func (a Authority) Extension() extension.Authority {
-	return extension.Authority{ScopeID: domain.ID(a.ScopeID), WorkID: domain.ID(a.WorkID), ExecutionID: domain.ID(a.ExecutionID), Lease: a.Lease.Domain(), ExpiresAt: a.ExpiresAt, Operations: a.Operations, EventTypes: a.EventTypes, TriggerID: domain.ID(a.TriggerID)}
+	return extension.Authority{ScopeID: domain.ID(a.ScopeID), WorkID: domain.ID(a.WorkID), ExecutionID: domain.ID(a.ExecutionID), Lease: a.Lease.Domain(), ExpiresAt: a.ExpiresAt, Operations: a.Operations, EventTypes: a.EventTypes, TriggerID: domain.ID(a.TriggerID), Connection: a.Connection}
 }
 
 type WaitRequest struct {

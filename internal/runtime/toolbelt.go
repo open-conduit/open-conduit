@@ -40,8 +40,13 @@ type AuthorityCheck struct {
 	Operation                    string
 }
 
-// ToolbeltGrant is the pinned operation/event allowlist for one new token.
-type ToolbeltGrant struct{ Operations, EventTypes []string }
+// ToolbeltGrant is the pinned operation/event allowlist for one new token,
+// and the connection the attempt's binding names ("" for none), which the
+// token's authority carries to operation handlers.
+type ToolbeltGrant struct {
+	Operations, EventTypes []string
+	Connection             string
+}
 
 type ToolbeltOptions struct {
 	CausalLimits CausalLimits
@@ -417,7 +422,7 @@ func (t *Toolbelt) issueForAttempt(ctx context.Context, ref domain.LeaseRef, sta
 			expires = candidate
 		}
 	}
-	return t.Issue(ctx, extension.Authority{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID, Lease: ref, ExpiresAt: expires, Operations: grant.Operations, EventTypes: grant.EventTypes})
+	return t.Issue(ctx, extension.Authority{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID, Lease: ref, ExpiresAt: expires, Operations: grant.Operations, EventTypes: grant.EventTypes, Connection: grant.Connection})
 }
 
 // Revoke is idempotent; unknown tokens are already unusable.

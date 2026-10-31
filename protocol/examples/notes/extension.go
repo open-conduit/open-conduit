@@ -300,6 +300,33 @@ func fixture(m protocol.Manifest, fault func(string) (Fault, bool)) *sdk.Extensi
 				return extension.EmitCommit{Records: []extension.Record{{Namespace: "fixture.reports", Key: string(em.Event.Event.ID), Value: in.Data}}, Output: domain.Payload{Schema: "fixture.report.v1", Data: out}}, nil
 			}}, nil
 		}},
+		// fixture.connection acts as the calling binding's connection: it
+		// resolves that connection's secret names named in the input, and
+		// answers with the connection and the names it resolved, never
+		// their values.
+		{Name: "fixture.connection", Handler: func(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
+			var req struct {
+				Names []string `json:"names"`
+			}
+			_ = json.Unmarshal(in.Data, &req)
+			out := struct {
+				Connection string   `json:"connection"`
+				Resolved   []string `json:"resolved"`
+			}{Connection: a.Connection, Resolved: []string{}}
+			if a.Connection != "" && len(req.Names) > 0 {
+				values, err := sdk.HostFrom(ctx).ConnectionSecrets(ctx, a.ScopeID, a.Connection, req.Names...)
+				if err != nil {
+					return domain.Payload{}, err
+				}
+				for _, n := range req.Names {
+					if values[n] != "" {
+						out.Resolved = append(out.Resolved, n)
+					}
+				}
+			}
+			raw, _ := json.Marshal(out)
+			return domain.Payload{Schema: "fixture.connection.v1", Data: raw}, nil
+		}},
 	}, Filter: func(filter domain.Payload, e domain.Event) bool { return string(filter.Data) == string(e.Data.Data) }}
 }
 

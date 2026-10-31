@@ -40,6 +40,11 @@ type ConfigEntry struct {
 	// Connection is the connection the entry names, when it names one of
 	// the extension's declared connection types (07-03).
 	Connection *ConnectionEntry `json:"connection,omitempty"`
+	// BindingConnections are the connections the bindings in the entry's
+	// scope name, when they are of one of the extension's declared
+	// connection types and the scope authorization grants them. An
+	// operation acts as one when its authority's connection names it.
+	BindingConnections []ConnectionEntry `json:"binding_connections,omitempty"`
 }
 
 // KVState tells the extension which KV layout the host has recorded for it
@@ -331,7 +336,8 @@ type ArtifactTarget struct {
 // SecretResolveParams resolves secret names bound to one of the
 // extension's entries in a configured scope: the entry's selected secret
 // names, or, with Connection set, the secret names of that connection when
-// an entry of the extension in the scope names it (07-03).
+// an entry of the extension in the scope names it (07-03), or a binding in
+// the scope names it and it is of one of the extension's connection types.
 type SecretResolveParams struct {
 	ScopeID    string   `json:"scope_id"`
 	Connection string   `json:"connection,omitempty"`

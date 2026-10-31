@@ -350,7 +350,9 @@ func (d *daemon) waitProgress(owner string) func(ctx context.Context, work domai
 // scopedSecrets resolves, for an extension whose entry and connection types
 // are extTypes and connTypes, only names bound to its own entries in the
 // scope: their selected secret names, or the secret names of a connection
-// of one of its types that one of them names (B05).
+// of one of its types that one of them or one of the scope's bindings names
+// (B05, config.Snapshot.ExtensionConnection). It is the one host resolver
+// for in-process extensions and installed packages alike.
 func (d *daemon) scopedSecrets(extTypes, connTypes map[string]bool) func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
 	return func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
 		s, _ := d.extensionSnapshot()
@@ -358,18 +360,15 @@ func (d *daemon) scopedSecrets(extTypes, connTypes map[string]bool) func(ctx con
 			return nil, extension.ErrUnauthorized
 		}
 		scope := s.Scopes[id]
-		allowed := map[string]bool{}
-		usesConn := false
-		for _, x := range scope.Extensions {
-			if !extTypes[x.Type] {
-				continue
-			}
-			for _, n := range x.SecretNames {
-				allowed[n] = true
-			}
-			usesConn = usesConn || connection != "" && x.Connection == connection
-		}
 		if connection == "" {
+			allowed := map[string]bool{}
+			for _, x := range scope.Extensions {
+				if extTypes[x.Type] {
+					for _, n := range x.SecretNames {
+						allowed[n] = true
+					}
+				}
+			}
 			for _, n := range names {
 				if !allowed[n] {
 					return nil, extension.ErrUnauthorized
@@ -377,28 +376,23 @@ func (d *daemon) scopedSecrets(extTypes, connTypes map[string]bool) func(ctx con
 			}
 			return d.resolver.ResolveNames(ctx, scope, names)
 		}
-		if !usesConn {
+		c, ok := s.ExtensionConnection(id, connection, extTypes, connTypes)
+		if !ok {
 			return nil, extension.ErrUnauthorized
 		}
-		for _, c := range s.Connections {
-			if c.ID != connection || !connTypes[c.Type] {
-				continue
+		out := map[string]string{}
+		for _, n := range names {
+			ref, ok := c.SecretRefs[n]
+			if !ok || ref == "" {
+				return nil, extension.ErrUnauthorized
 			}
-			out := map[string]string{}
-			for _, n := range names {
-				ref, ok := c.SecretRefs[n]
-				if !ok || ref == "" {
-					return nil, extension.ErrUnauthorized
-				}
-				v, err := d.resolver.Resolve(ctx, ref)
-				if err != nil {
-					return nil, err
-				}
-				out[n] = v
+			v, err := d.resolver.Resolve(ctx, ref)
+			if err != nil {
+				return nil, err
 			}
-			return out, nil
+			out[n] = v
 		}
-		return nil, extension.ErrUnauthorized
+		return out, nil
 	}
 }
 
@@ -441,8 +435,9 @@ func (d *daemon) extensionConfigure(m protocol.Manifest) protocol.ConfigureParam
 }
 
 // configureParams are an extension's configure params: every enabled
-// scope's entries of its entry types, with the connection each names when
-// that is of one of its connection types.
+// scope's entries of its entry types, with the connection each names and
+// the connections the scope's bindings name, when they are of one of its
+// connection types.
 func (d *daemon) configureParams(types, connTypes map[string]bool) protocol.ConfigureParams {
 	params := protocol.ConfigureParams{DryRun: d.o.DryRun}
 	d.hooks.mu.Lock()
@@ -458,25 +453,36 @@ func (d *daemon) configureParams(types, connTypes map[string]bool) protocol.Conf
 		if scope == nil || !scope.Enabled {
 			continue
 		}
+		var bound []protocol.ConnectionEntry
+		for _, c := range s.BindingConnections(id, connTypes) {
+			bound = append(bound, connectionEntry(c))
+		}
 		for _, x := range scope.Extensions {
 			if !types[x.Type] {
 				continue
 			}
-			entry := protocol.ConfigEntry{ScopeID: string(id), Type: x.Type, Name: x.Name, Config: x.Config, Secrets: x.SecretNames}
+			entry := protocol.ConfigEntry{ScopeID: string(id), Type: x.Type, Name: x.Name, Config: x.Config, Secrets: x.SecretNames, BindingConnections: bound}
 			for _, c := range s.Connections {
 				if c.ID == x.Connection && connTypes[c.Type] {
-					names := make([]string, 0, len(c.SecretRefs))
-					for n := range c.SecretRefs {
-						names = append(names, n)
-					}
-					sort.Strings(names)
-					entry.Connection = &protocol.ConnectionEntry{ID: c.ID, Type: c.Type, Config: c.Config, Secrets: names}
+					ce := connectionEntry(c)
+					entry.Connection = &ce
 				}
 			}
 			params.Entries = append(params.Entries, entry)
 		}
 	}
 	return params
+}
+
+// connectionEntry is a connection as configure sends it: its config and
+// secret names, never reference text.
+func connectionEntry(c config.Connection) protocol.ConnectionEntry {
+	names := make([]string, 0, len(c.SecretRefs))
+	for n := range c.SecretRefs {
+		names = append(names, n)
+	}
+	sort.Strings(names)
+	return protocol.ConnectionEntry{ID: c.ID, Type: c.Type, Config: c.Config, Secrets: names}
 }
 
 // extensionConfigured registers the ingress sources and webhook paths a

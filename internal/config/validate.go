@@ -638,6 +638,56 @@ func (e *EffectiveScope) Binding(name string) (Binding, bool) {
 	return Binding{}, false
 }
 
+// BindingConnections are the connections of connTypes that the scope's
+// bindings name and its authorization grants, in document order, each once.
+// They are what a binding's connection makes available to the extension
+// that owns its type.
+func (s *Snapshot) BindingConnections(scope domain.ID, connTypes map[string]bool) []Connection {
+	e, ok := s.Scopes[scope]
+	if !ok {
+		return nil
+	}
+	var out []Connection
+	for _, c := range s.Connections {
+		if !connTypes[c.Type] || !slices.Contains(e.Authorization.Connections, c.ID) {
+			continue
+		}
+		if slices.ContainsFunc(e.Bindings, func(b Binding) bool { return b.Connection == c.ID }) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
+
+// ExtensionConnection returns connection id when an extension whose entry
+// types are entryTypes and connection types are connTypes may act as it in
+// scope (B05): the scope has an entry of one of entryTypes, the connection
+// is of one of connTypes and granted by the scope authorization, and one of
+// those entries or one of the scope's bindings names it.
+func (s *Snapshot) ExtensionConnection(scope domain.ID, id string, entryTypes, connTypes map[string]bool) (Connection, bool) {
+	e, ok := s.Scopes[scope]
+	if !ok || id == "" || !slices.Contains(e.Authorization.Connections, id) {
+		return Connection{}, false
+	}
+	entry, named := false, false
+	for _, x := range e.Extensions {
+		if entryTypes[x.Type] {
+			entry = true
+			named = named || x.Connection == id
+		}
+	}
+	named = named || slices.ContainsFunc(e.Bindings, func(b Binding) bool { return b.Connection == id })
+	if !entry || !named {
+		return Connection{}, false
+	}
+	for _, c := range s.Connections {
+		if c.ID == id && connTypes[c.Type] {
+			return c, true
+		}
+	}
+	return Connection{}, false
+}
+
 // AuthorizeOperation is the current-ceiling check on every toolbelt call:
 // authority only narrows from the pinned grant.
 func (s *Snapshot) AuthorizeOperation(scope domain.ID, binding, operation string) error {
