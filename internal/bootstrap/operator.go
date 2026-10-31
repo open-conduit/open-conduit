@@ -8,7 +8,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -39,11 +38,10 @@ import (
 // operations, connection and extension types and resource providers.
 func registry(executors map[string]extension.Executor) config.Registry {
 	reg := config.Registry{Executors: executors, Handlers: handlerNames(), Operations: append(append(gh.Operations(), sl.Operations()...), trackerOperations()...)}
-	githubRegistry(&reg)
 	trackerRegistry(&reg)
 	slackRegistry(&reg)
 	scheduleRegistry(&reg)
-	inprocRegistry(&reg, firstParty())
+	inprocRegistry(&reg, firstParty(nil))
 	resourceRegistry(&reg)
 	sandboxRegistry(&reg)
 	containerRegistry(&reg)
@@ -245,71 +243,6 @@ func (d *daemon) live(ctx context.Context, executor string, execution domain.ID,
 	return l.Live(ctx, execution, tail)
 }
 
-// githubCheck reports registration, rate-limit, reconcile and projection
-// state per GitHub entry. It makes no service calls; credentials are
-// checked by githubAuthCheck under check_secrets.
-func (d *daemon) githubCheck(ctx context.Context) runtime.Check {
-	check := runtime.Check{Name: "github", Status: runtime.CheckOK, Code: "ok"}
-	raise := func(status, code string) {
-		if rank(status) > rank(check.Status) {
-			check.Status, check.Code = status, code
-		}
-	}
-	d.github.mu.Lock()
-	failed := map[string]string{}
-	for ns, code := range d.github.failed {
-		failed[ns] = code
-	}
-	sources := map[string]*githubSource{}
-	for ns, s := range d.github.sources {
-		sources[ns] = s
-	}
-	d.github.mu.Unlock()
-	if len(sources) == 0 && len(failed) == 0 {
-		check.Status, check.Code, check.Detail = runtime.CheckInfo, "not_configured", "no GitHub entries are configured"
-		return check
-	}
-	for ns, code := range failed {
-		raise(runtime.CheckFail, code)
-		check.Items = append(check.Items, ns+": not registered ("+code+")")
-	}
-	scans := map[string]runtime.IngressStatus{}
-	if statuses, err := d.ingress.Inspect(ctx); err == nil {
-		for _, s := range statuses {
-			scans[s.Name] = s
-		}
-	}
-	for ns, src := range sources {
-		item := ns + ": "
-		var notes []string
-		if until, paused := src.client.PausedUntil(); paused {
-			raise(runtime.CheckWarn, "rate_limited")
-			notes = append(notes, "rate limited until "+until.UTC().Format(time.RFC3339))
-		}
-		if s, ok := scans[src.name]; ok {
-			switch {
-			case s.LastError != "":
-				raise(runtime.CheckWarn, "reconcile_failing")
-				notes = append(notes, fmt.Sprintf("reconcile failing (%s, %d failures)", s.LastError, s.Failures))
-			case s.LastComplete.IsZero():
-				notes = append(notes, "first reconcile pending")
-			default:
-				notes = append(notes, "reconciled "+d.now().Sub(s.LastComplete).Truncate(time.Second).String()+" ago")
-			}
-		}
-		if code := d.reportedCode("github_projection", src.name); code != "" {
-			raise(runtime.CheckWarn, "projection_failing")
-			notes = append(notes, "projection "+code)
-		}
-		if d.o.DryRun || src.ingress.Settings().Projection.DryRun {
-			notes = append(notes, "dry run (no GitHub writes)")
-		}
-		check.Items = append(check.Items, item+strings.Join(notes, "; "))
-	}
-	sort.Strings(check.Items)
-	return check
-}
-
 func rank(status string) int {
 	switch status {
 	case runtime.CheckFail:
@@ -326,168 +259,6 @@ func (d *daemon) reportedCode(kind, subject string) string {
 	d.mu.Lock()
 	defer d.mu.Unlock()
 	return d.reported[kind+"\x00"+subject]
-}
-
-// githubAuthCheck (check_secrets only) resolves each entry's credentials
-// privately and reads its repository: the connection test. It reports codes
-// and permissions, never the reference or the token.
-func (d *daemon) githubAuthCheck(ctx context.Context) runtime.Check {
-	check := runtime.Check{Name: "github_auth", Status: runtime.CheckOK, Code: "verified"}
-	d.github.mu.Lock()
-	sources := make([]*githubSource, 0, len(d.github.sources))
-	for _, s := range d.github.sources {
-		sources = append(sources, s)
-	}
-	d.github.mu.Unlock()
-	if len(sources) == 0 {
-		check.Status, check.Code = runtime.CheckInfo, "not_configured"
-		return check
-	}
-	for _, src := range sources {
-		s := src.ingress.Settings()
-		cx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		a, err := src.client.Verify(cx, s.TrackerRepo)
-		cancel()
-		item := s.Namespace + ": "
-		if err != nil {
-			code := hookCode(err)
-			switch {
-			case code == "hook_permission_denied":
-				code = "repo_unreachable"
-			case code == "hook_update_failed":
-				code = "verify_failed"
-			}
-			if rank(runtime.CheckFail) > rank(check.Status) {
-				check.Status, check.Code = runtime.CheckFail, code
-			}
-			check.Items = append(check.Items, item+code)
-			continue
-		}
-		var notes []string
-		if a.Known {
-			notes = append(notes, fmt.Sprintf("pull=%t push=%t admin=%t", a.Pull, a.Push, a.Admin))
-			if !a.Push && !a.Writer && !d.o.DryRun && !s.Projection.DryRun {
-				if check.Status == runtime.CheckOK {
-					check.Status, check.Code = runtime.CheckWarn, "read_only"
-				}
-				notes = append(notes, "labels, comments and PRs need write access")
-			}
-			if s.ManageWebhook && !a.Admin {
-				if check.Status == runtime.CheckOK {
-					check.Status, check.Code = runtime.CheckWarn, "hook_admin_missing"
-				}
-				notes = append(notes, "manage_webhook needs admin (hooks) permission")
-			}
-		} else {
-			notes = append(notes, "authenticated (installation permissions are not reported)")
-		}
-		if a.Writer {
-			notes = append(notes, "bot writer authenticated")
-		}
-		switch a.Checks {
-		case "workflow_runs":
-			notes = append(notes, "check runs refused (a fine-grained token cannot hold Checks): CI is read from Actions workflow runs and commit statuses")
-		case "unreadable":
-			if check.Status == runtime.CheckOK {
-				check.Status, check.Code = runtime.CheckWarn, "checks_unreadable"
-			}
-			notes = append(notes, "neither check runs nor Actions workflow runs are readable: only commit statuses are seen and no-checks is never reported; grant Actions: read or use a GitHub App")
-		}
-		if note, warn := d.requiredChecksNote(ctx, src.client, s, a); note != "" {
-			if warn && check.Status == runtime.CheckOK {
-				check.Status, check.Code = runtime.CheckWarn, "required_checks_unreadable"
-			}
-			notes = append(notes, note)
-		}
-		check.Items = append(check.Items, item+strings.Join(notes, "; "))
-		for _, w := range d.githubWriterItems(ctx, src, s) {
-			if rank(w.status) > rank(check.Status) {
-				check.Status, check.Code = w.status, w.code
-			}
-			check.Items = append(check.Items, w.item)
-		}
-	}
-	sort.Strings(check.Items)
-	return check
-}
-
-type writerItem struct{ status, code, item string }
-
-// githubWriterItems verifies, for an entry, each other `github` connection
-// its scope's bindings name, which those bindings' comments and reviews go
-// out as, the way the entry's own bot writer is verified: signed in as that
-// connection, it reads the entry's repository.
-func (d *daemon) githubWriterItems(ctx context.Context, src *githubSource, s gh.Settings) []writerItem {
-	snapshot, _ := d.configs.Current()
-	if snapshot == nil {
-		return nil
-	}
-	var out []writerItem
-	for _, c := range snapshot.BindingConnections(src.scope, map[string]bool{gh.Type: true}) {
-		if c.ID == src.connection {
-			continue
-		}
-		item := s.Namespace + ": binding connection " + c.ID + ": "
-		client, err := d.githubWriters().Client(src.scope, c.ID, src.client)
-		if err != nil {
-			out = append(out, writerItem{runtime.CheckFail, "writer_unavailable", item + "writer_unavailable"})
-			continue
-		}
-		cx, cancel := context.WithTimeout(ctx, 20*time.Second)
-		a, err := client.Verify(cx, s.Repo)
-		cancel()
-		if err != nil {
-			code := hookCode(err)
-			if code == "hook_permission_denied" {
-				code = "repo_unreachable"
-			} else if code == "hook_update_failed" {
-				code = "verify_failed"
-			}
-			out = append(out, writerItem{runtime.CheckFail, code, item + code})
-			continue
-		}
-		note := "authenticated"
-		if a.Writer {
-			note = "bot writer authenticated"
-		}
-		if a.Known && !a.Push && !a.Writer {
-			out = append(out, writerItem{runtime.CheckWarn, "read_only", item + note + "; reviews and comments need write access"})
-			continue
-		}
-		out = append(out, writerItem{runtime.CheckOK, "verified", item + note})
-	}
-	return out
-}
-
-// requiredChecksNote reports where the checks the base branch requires
-// (08-01) are read from: the branch protection and rulesets of the entry's
-// base branch. A refused protection read warns, since a check it requires is
-// then not waited for; refused rulesets (a plan without them) are a note.
-func (d *daemon) requiredChecksNote(ctx context.Context, c *gh.Client, s gh.Settings, a gh.Access) (string, bool) {
-	cx, cancel := context.WithTimeout(ctx, 20*time.Second)
-	defer cancel()
-	base := s.BaseBranch
-	if base == "" && s.Repo == s.TrackerRepo {
-		base = a.DefaultBranch
-	}
-	if base == "" {
-		var err error
-		if base, err = c.DefaultBranch(cx, s.Repo); err != nil || base == "" {
-			return "", false
-		}
-	}
-	req, err := c.RequiredChecks(cx, s.Repo, base)
-	if err != nil {
-		return "required checks on " + base + " could not be read", false
-	}
-	var parts []string
-	if len(req.Names) > 0 {
-		parts = append(parts, fmt.Sprintf("%s requires %s (from %s)", base, strings.Join(req.Names, ", "), strings.Join(req.From, " and ")))
-	}
-	if note := gh.RequiredNote(req, a.Checks); note != "" {
-		parts = append(parts, note)
-	}
-	return strings.Join(parts, "; "), slices.Contains(req.Refused, gh.RequiredFromProtection)
 }
 
 // capabilityCheck reports engineering configuration gaps the validator

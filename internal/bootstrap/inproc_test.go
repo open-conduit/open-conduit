@@ -18,7 +18,7 @@ import (
 func TestFirstPartyCompose(t *testing.T) {
 	reg := registry(offlineExecutors())
 	seen := map[string]bool{}
-	for _, x := range firstParty() {
+	for _, x := range firstParty(nil) {
 		if seen[x.Name()] {
 			t.Fatalf("%s listed twice", x.Name())
 		}
@@ -83,7 +83,7 @@ func TestInstalledCompose(t *testing.T) {
 // (`playbook: setup`) starts on a skill Claude Code has, beside the
 // work-issue playbook and the extensions' own.
 func TestTurnPluginCarriesSetupPlaybook(t *testing.T) {
-	d := &daemon{o: Options{StateDir: t.TempDir()}, inproc: firstParty()}
+	d := &daemon{o: Options{StateDir: t.TempDir()}, inproc: firstParty(nil)}
 	if err := d.preparePlaybooks(); err != nil {
 		t.Fatal(err)
 	}

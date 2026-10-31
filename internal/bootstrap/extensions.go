@@ -105,10 +105,10 @@ func takenNames(reg config.Registry) extproc.Taken {
 	}
 	t.Add("operation", reg.Operations...)
 	t.Add("operation", extension.CreateWork, extension.DeclareOutcome, extension.Emit, extension.ReadContext, extension.Wait)
-	for kind := range workKinds(firstParty()) {
+	for kind := range workKinds(firstParty(nil)) {
 		t.Add("work_kind", kind)
 	}
-	for kind := range recurrences(firstParty()) {
+	for kind := range recurrences(firstParty(nil)) {
 		t.Add("recurrence", kind)
 	}
 	return t

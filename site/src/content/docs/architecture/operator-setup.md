@@ -55,7 +55,7 @@ open-conduit tui
 
 ## Doctor
 
-`GET /v1/doctor` (`open-conduit doctor [--check-secrets]`) runs the core checks ([doctor](../observability-history/#doctor)) and the extension checks contributed by bootstrap. Details carry codes, identifiers and counts, never references or values.
+`GET /v1/doctor` (`open-conduit doctor [--check-secrets]`) runs the core checks ([doctor](../observability-history/#doctor)) and the extensions' checks. The GitHub extension contributes `github` and `github_auth` through `inproc.Checker`, from a read-only view of the entries the daemon registered, and resolves the credentials it verifies through the host's scoped resolver (`inproc.Host.Secrets`). Details carry codes, identifiers and counts, never references or values.
 
 | Check | Status and codes |
 | --- | --- |
@@ -231,3 +231,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - **06-01** added `init linear`, `init jira`, `adapters`, `route`, `config edit` (the full-screen editor) and the tracker, Bitbucket and PostHog doctor checks and webhook routes. A rendered activity artifact for Claude Code turns, shown by the TUI and `runs log`, was added alongside them.
 - **06-02** added the offline recovery commands.
 - **07-01** renamed the attach refusal `no_session` to `nothing_to_attach`.
+- **Issue #235** moved the `github` and `github_auth` checks out of `internal/bootstrap` into the GitHub extension (`gh.Extension`, on the in-process list). Their results are unchanged; `github_auth` now reports `credential_unavailable` for an entry whose connection the current generation no longer names, where before it signed in with the registration's connection.

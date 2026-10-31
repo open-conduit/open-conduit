@@ -50,6 +50,9 @@ type ConfigType struct {
 	Ingress  bool
 	Validate func(config json.RawMessage, secretNames []string) error
 	Binding  func(extension.RouteBinding) error
+	// Settings, for an entry type only, optionally lists the entry's config
+	// fields that are safe to show the operator, with typed values.
+	Settings func(config json.RawMessage) []extension.Setting
 }
 
 // Typed extensions own config types.
