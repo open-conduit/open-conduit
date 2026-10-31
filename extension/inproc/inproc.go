@@ -74,8 +74,10 @@ type Host struct {
 	Log   *slog.Logger
 	// Secrets resolves names bound to the extension's own entries in scope:
 	// an entry's selected secret names, or with connection set the secret
-	// names of a connection one of its entries names (B05, as for an
-	// installed package).
+	// names of a connection one of its entries or one of the scope's
+	// bindings names, of one of its connection types (B05, as for an
+	// installed package). An operation's Authority.Connection is the one
+	// the calling Execution's binding names.
 	Secrets func(ctx context.Context, scope domain.ID, connection string, names []string) (map[string]string, error)
 	// Report records a safe diagnostic code for the extension (logged once
 	// per change; "" clears it).

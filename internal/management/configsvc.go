@@ -344,7 +344,8 @@ func (c *ConfigService) snapshotFor(generation string) *config.Snapshot {
 
 // Grant returns the attempt's pinned binding operations, with those of the
 // binding grants the attempt's Work opted into, intersected with the current
-// ceiling, plus the registered emitted families.
+// ceiling, plus the registered emitted families and the pinned binding's
+// connection.
 func (c *ConfigService) Grant(events func() []string) func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 	return func(ctx context.Context, state runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 		grant := runtime.ToolbeltGrant{}
@@ -360,6 +361,7 @@ func (c *ConfigService) Grant(events func() []string) func(context.Context, runt
 		if !ok {
 			return grant, nil
 		}
+		grant.Connection = binding.Connection
 		ops := slices.Clone(binding.Operations)
 		for _, g := range binding.Grants {
 			if slices.Contains(state.Grants, g.Name) {

@@ -949,4 +949,27 @@ func TestManagementGrantsBindingGrantsTheWorkTook(t *testing.T) {
 	if err := h.configs.Authorize(context.Background(), runtime.AuthorityCheck{ScopeID: "ops", Binding: "run", Operation: "emit"}); err != nil {
 		t.Fatalf("a grant's operation fails the ceiling: %v", err)
 	}
+	// A binding without a connection pins none.
+	if g, err := grant(context.Background(), runtime.AttemptState{ScopeID: "ops", Generation: "1", Binding: domain.Binding{Name: "run"}}); err != nil || g.Connection != "" {
+		t.Fatalf("a binding without a connection pinned %q: %v", g.Connection, err)
+	}
+}
+
+// TestManagementGrantPinsBindingConnection: an attempt's toolbelt grant
+// carries the connection its binding names, which the token's authority
+// then hands to every operation handler.
+func TestManagementGrantPinsBindingConnection(t *testing.T) {
+	cfg := strings.Replace(managementConfig, `"connections": [],`, `"connections": [{"id": "acme-reviewer", "type": "acme", "config": {}, "secret_refs": {}}],`, 1)
+	cfg = strings.Replace(cfg, `"authorization": {"connections": []`, `"authorization": {"connections": ["acme-reviewer"]`, 1)
+	cfg = strings.Replace(cfg, `{"name": "run", "executor": "fixture",`, `{"name": "run", "executor": "fixture", "connection": "acme-reviewer",`, 1)
+	h := newManagementHarnessWith(t, cfg, func(r *config.Registry) {
+		if r.Connections == nil {
+			r.Connections = map[string]func(json.RawMessage) error{}
+		}
+		r.Connections["acme"] = nil
+	})
+	g, err := h.configs.Grant(nil)(context.Background(), runtime.AttemptState{ScopeID: "ops", Generation: "1", Binding: domain.Binding{Name: "run"}})
+	if err != nil || g.Connection != "acme-reviewer" {
+		t.Fatalf("grant connection %q: %v", g.Connection, err)
+	}
 }

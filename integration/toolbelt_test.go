@@ -26,7 +26,9 @@ type toolbeltHarness struct {
 	token     string
 	echoes    *int
 	deny      *bool
-	mu        *sync.Mutex
+	// connection is the Authority.Connection the last fixture.echo saw.
+	connection *string
+	mu         *sync.Mutex
 	// plan translates the fixture.wait operation (see translated wait cases).
 	plan    func(extension.Authority, domain.Payload) (extension.WaitPlan, error)
 	aliasOK bool
@@ -50,10 +52,10 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 	o.Capabilities = domain.Capabilities{Toolbelt: extension.ToolbeltCLI}
 	f, executor := schedulerFixture(t, mode, o)
 	base := f.Driver.(*schedulerDriver)
-	h := &toolbeltHarness{f: f, executor: executor, echoes: new(int), deny: new(bool), mu: &sync.Mutex{}}
+	h := &toolbeltHarness{f: f, executor: executor, echoes: new(int), deny: new(bool), connection: new(string), mu: &sync.Mutex{}}
 	belt, err := runtime.NewToolbelt(f.Store, f.Clock.Now, base.router, runtime.ToolbeltOptions{
 		Grant: func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
-			return runtime.ToolbeltGrant{Operations: allToolbeltOperations(), EventTypes: []string{"fixture.changed.v1"}}, nil
+			return runtime.ToolbeltGrant{Operations: allToolbeltOperations(), EventTypes: []string{"fixture.changed.v1"}, Connection: "fixture-connection"}, nil
 		},
 		Authorize: func(_ context.Context, c runtime.AuthorityCheck) error {
 			h.mu.Lock()
@@ -78,6 +80,7 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 	if err = belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "fixture", EventTypes: []string{"fixture.changed.v1"}, Operations: []extension.Operation{{Name: "fixture.echo", Handler: func(_ context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
 		h.mu.Lock()
 		*h.echoes++
+		*h.connection = a.Connection
 		h.mu.Unlock()
 		return in, nil
 	}, Guidance: "Echo with fixture.echo."}, {Name: "fixture.wait", Wait: func(_ context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
@@ -139,7 +142,34 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 	return h
 }
 func (h *toolbeltHarness) authority() extension.Authority {
-	return extension.Authority{ScopeID: "routing-scope", WorkID: "work/item", ExecutionID: h.attempt.Lease.ExecutionID, Lease: h.attempt.Lease, ExpiresAt: h.f.Clock.Now().Add(time.Minute), Operations: allToolbeltOperations(), EventTypes: []string{"fixture.changed.v1"}, TriggerID: "trigger"}
+	return extension.Authority{ScopeID: "routing-scope", WorkID: "work/item", ExecutionID: h.attempt.Lease.ExecutionID, Lease: h.attempt.Lease, ExpiresAt: h.f.Clock.Now().Add(time.Minute), Operations: allToolbeltOperations(), EventTypes: []string{"fixture.changed.v1"}, TriggerID: "trigger", Connection: "fixture-connection"}
+}
+
+// TestProductionToolbeltAuthorityCarriesConnection: an operation handler's
+// authority names the connection the attempt's grant pinned (the binding's
+// connection), and a token issued without one carries none.
+func TestProductionToolbeltAuthorityCarriesConnection(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	ctx := context.Background()
+	echo := func(token string) string {
+		t.Helper()
+		if _, err := h.belt.Call(ctx, token, extension.ToolCall{Operation: "fixture.echo", Input: domain.Payload{Schema: "fixture.echo.v1", Data: []byte(`{}`)}}); err != nil {
+			t.Fatal(err)
+		}
+		h.mu.Lock()
+		defer h.mu.Unlock()
+		return *h.connection
+	}
+	if got := echo(h.token); got != "fixture-connection" {
+		t.Fatalf("the scheduled attempt's authority names %q", got)
+	}
+	_, bare, err := h.belt.IssueWithID(ctx, extension.Authority{ScopeID: "routing-scope", WorkID: "work/item", ExecutionID: h.attempt.Lease.ExecutionID, Lease: h.attempt.Lease, ExpiresAt: h.f.Clock.Now().Add(time.Minute), Operations: []string{"fixture.echo"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := echo(bare); got != "" {
+		t.Fatalf("a token without a connection carries %q", got)
+	}
 }
 
 func TestProductionToolbeltSharedCases(t *testing.T) {

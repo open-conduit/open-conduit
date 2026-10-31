@@ -40,7 +40,8 @@ type Deps struct {
 	Scopes func() []domain.ID
 	// Secrets resolves names bound to the extension's entries in scope: an
 	// entry's selected secret names, or with connection set the secret names
-	// of a connection one of its entries names. The host refuses any other
+	// of a connection one of its entries or one of the scope's bindings
+	// names, of one of its connection types. The host refuses any other
 	// name (B05 isolation).
 	Secrets func(ctx context.Context, scope domain.ID, connection string, names []string) (map[string]string, error)
 	// CurrentLimits, when set, supplies the causal limits of the current

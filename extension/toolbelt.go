@@ -33,6 +33,11 @@ type Authority struct {
 	ExpiresAt                    time.Time
 	Operations, EventTypes       []string
 	TriggerID                    domain.ID
+	// Connection is the connection ID the Execution's binding names, or ""
+	// when it names none. The host lets the extension that owns the
+	// connection's type resolve its config and secrets in the scope (see
+	// the extension protocol's configure and secret.resolve).
+	Connection string
 }
 type ToolCall struct {
 	Operation string
