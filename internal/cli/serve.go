@@ -20,6 +20,11 @@ type ServeRequest struct {
 	TunnelKind, TunnelBinary, TunnelDomain, TunnelName, PublicURL string
 	TunnelHostname                                                string
 	NoTunnel, DryRun, ClaudeUsage                                 bool
+	// Web serves the web view from the daemon's process on WebAddr, named
+	// WebHost (the web command's defaults when empty), signed in through
+	// WebSignIn.
+	Web                         bool
+	WebAddr, WebHost, WebSignIn string
 }
 
 func defaultConfigPath(env Env) string {
@@ -47,10 +52,11 @@ func (o *operator) serve(args []string) int {
 // parseServe resolves serve's flags (shared with service install); code is
 // the exit code when they are invalid, else -1.
 func (o *operator) parseServe(args []string) (ServeRequest, int) {
-	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "webhook-addr", "tunnel", "tunnel-binary", "tunnel-domain", "tunnel-name", "tunnel-hostname", "public-url")
+	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "webhook-addr", "tunnel", "tunnel-binary", "tunnel-domain", "tunnel-name", "tunnel-hostname", "public-url", "web-addr", "web-host")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
 	usage := fs.fs.Bool("claude-usage", false, "")
+	web := fs.fs.Bool("web", false, "")
 	poll := fs.fs.Duration("poll-interval", time.Second, "")
 	lease := fs.fs.Duration("lease-duration", time.Minute, "")
 	retention := fs.fs.Duration("retention-interval", 10*time.Minute, "")
@@ -66,6 +72,10 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	r := ServeRequest{StateDir: o.stateDir(), ConfigPath: o.abs(fs.get("config")), Socket: o.abs(o.socket), ToolbeltDir: o.abs(fs.get("toolbelt-dir")), LifecycleLog: o.abs(fs.get("lifecycle-log")), PollInterval: *poll, LeaseDuration: *lease, RetentionInterval: *retention, SweepInterval: *sweep,
 		WebhookAddr: fs.get("webhook-addr"), TunnelKind: fs.get("tunnel"), TunnelBinary: fs.get("tunnel-binary"), TunnelDomain: fs.get("tunnel-domain"),
 		TunnelName: fs.get("tunnel-name"), TunnelHostname: fs.get("tunnel-hostname"), PublicURL: fs.get("public-url"), NoTunnel: *noTunnel, DryRun: *dryRun, ClaudeUsage: *usage}
+	// --web-addr or --web-host alone also turn the view on.
+	r.WebAddr, r.WebHost = fs.get("web-addr"), fs.get("web-host")
+	r.Web = *web || r.WebAddr != "" || r.WebHost != ""
+	r.WebSignIn = WebSignInPath(r.StateDir)
 	if r.ConfigPath == "" {
 		r.ConfigPath = o.abs(o.env.Getenv("OPEN_CONDUIT_CONFIG"))
 	}

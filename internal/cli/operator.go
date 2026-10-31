@@ -116,6 +116,8 @@ Commands:
                              (override the config's settings.webhooks for this run)
         [--no-tunnel] [--dry-run] [--claude-usage]
         (--webhook-addr takes any free local port; 8787 is only an example)
+        [--web] [--web-addr 127.0.0.1:7420] [--web-host open-conduit.localhost]
+                             also serve the web view from the daemon (open-conduit web url prints its sign-in URL)
   service install [--no-start] [serve flags] | service uninstall|start|stop|status
                              run the daemon in the background (launchd on macOS, systemd --user on Linux)
   health
@@ -149,6 +151,7 @@ Commands:
   doctor [--check-secrets] [--json]
   tui
   web [--addr 127.0.0.1:7420] [--host open-conduit.localhost]   the same view in a browser on this machine (prints a sign-in URL)
+  web url [--addr ADDR] [--host NAME]   print the web view's sign-in URL (it lasts across restarts)
   config validate FILE | config apply FILE --generation N [--key K]
   config path | config show [--file F] | config check [--file F]
   config get POINTER | config set POINTER JSON | config unset POINTER   [--file F] (local file, validated before saving)

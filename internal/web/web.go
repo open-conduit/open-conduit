@@ -7,12 +7,14 @@
 // work-kind or domain branches. A transcript in the Messages API's shape
 // reads as a chat whichever executor wrote it (see conversation.go).
 //
-// It runs as its own process beside the daemon, so the daemon keeps serving
-// management only on its Unix socket. The process holds the operator token
+// It runs as its own process (open-conduit web) or inside the daemon's
+// (serve --web), and either way is a client of the management socket, so
+// the daemon never serves management over TCP. It holds the operator token
 // and never hands it to the browser. It listens only on loopback, answers
 // only to the names it was told it is served on (so a rebound DNS name
-// cannot reach it), lets a browser in only through the login URL it prints
-// at start, and requires a per-process CSRF token on every change.
+// cannot reach it), lets a browser in only through its sign-in URL (kept
+// across restarts when Options.SignIn is set), and requires a per-process
+// CSRF token on every change.
 package web
 
 import (
@@ -95,6 +97,9 @@ type Options struct {
 	NewKey func() string
 	// Now is the clock (time.Now when nil).
 	Now func() time.Time
+	// SignIn is the sign-in to accept (see LoadSignIn); nil makes one that
+	// lasts as long as the process.
+	SignIn *SignIn
 }
 
 const (
@@ -106,8 +111,9 @@ const (
 //go:embed templates/*.html static/*
 var assets embed.FS
 
-// Server serves the view. Its login token, session and CSRF secrets live
-// only as long as the process.
+// Server serves the view. Its CSRF secret lives only as long as the
+// process; its login token and session do too unless Options.SignIn keeps
+// them.
 type Server struct {
 	src    Source
 	opts   Options
@@ -149,7 +155,11 @@ func New(src Source, opts Options) (*Server, error) {
 	if strings.ContainsAny(opts.Host, ":/ ") {
 		return nil, fmt.Errorf("host %q must be a bare name, without a port or scheme", opts.Host)
 	}
-	s := &Server{src: src, opts: opts, login: secret(), sess: secret(), csrf: secret(), labels: map[string]string{}}
+	in := SignIn{Login: secret(), Session: secret()}
+	if opts.SignIn != nil {
+		in = *opts.SignIn
+	}
+	s := &Server{src: src, opts: opts, login: in.Login, sess: in.Session, csrf: secret(), labels: map[string]string{}}
 	if err := s.parse(); err != nil {
 		return nil, err
 	}
@@ -184,9 +194,7 @@ func checkLoopback(addr string) error {
 // LoginURLs are the URLs that sign a browser in: by name, then by address
 // for a browser that does not resolve *.localhost.
 func (s *Server) LoginURLs(addr string) []string {
-	_, port, _ := net.SplitHostPort(addr)
-	q := "/login?token=" + s.login
-	return []string{"http://" + net.JoinHostPort(s.opts.Host, port) + q, "http://" + addr + q}
+	return SignInURLs(SignIn{Login: s.login}, addr, s.opts.Host)
 }
 
 // Run listens on the configured address and serves until ctx ends. It
@@ -287,7 +295,7 @@ func same(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byt
 // loginPage trades the printed token for a session cookie on this name.
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 	if !same(r.URL.Query().Get("token"), s.login) {
-		http.Error(w, "sign in with the URL open-conduit web printed", http.StatusUnauthorized)
+		http.Error(w, "sign in with the URL open-conduit web url prints", http.StatusUnauthorized)
 		return
 	}
 	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: s.sess, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
@@ -298,7 +306,7 @@ func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
 		c, err := r.Cookie(sessionCookie)
 		if err != nil || !same(c.Value, s.sess) {
-			http.Error(w, "not signed in: open the login URL open-conduit web printed", http.StatusUnauthorized)
+			http.Error(w, "not signed in: open the sign-in URL open-conduit web url prints", http.StatusUnauthorized)
 			return
 		}
 		next(w, r)
