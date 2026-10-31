@@ -362,20 +362,7 @@ func (d *daemon) manageHooks(ctx context.Context) {
 	}()
 }
 
-func hookCode(err error) string {
-	var limit *gh.RateLimitError
-	switch {
-	case errors.Is(err, gh.ErrCredential):
-		return "credential_unavailable"
-	case errors.As(err, &limit):
-		return "rate_limited"
-	case gh.IsStatus(err, http.StatusNotFound), gh.IsStatus(err, http.StatusForbidden):
-		return "hook_permission_denied"
-	case gh.IsStatus(err, http.StatusUnauthorized):
-		return "credential_rejected"
-	}
-	return "hook_update_failed"
-}
+func hookCode(err error) string { return gh.CallCode(err) }
 
 // webhookCheck reports listener, tunnel and per-entry webhook exposure.
 func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {

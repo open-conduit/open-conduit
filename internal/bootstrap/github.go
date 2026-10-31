@@ -12,6 +12,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
 // githubSource is one registered GitHub extension entry: its ingress pair and
@@ -39,19 +40,6 @@ type githubSources struct {
 	failed      map[string]string // registration failure code by namespace
 	last        time.Time
 	running     bool
-}
-
-// githubRegistry is the in-process registration of the GitHub extension's
-// connection type, ingress extension type and `github` route handler.
-func githubRegistry(reg *config.Registry) {
-	if reg.Connections == nil {
-		reg.Connections = map[string]func(json.RawMessage) error{}
-	}
-	if reg.Extensions == nil {
-		reg.Extensions = map[string]config.ExtensionType{}
-	}
-	reg.Connections[gh.Type] = gh.ValidateConnection
-	reg.Extensions[gh.Type] = config.ExtensionType{Ingress: true, Validate: gh.ValidateExtension, Settings: gh.ExtensionSettings}
 }
 
 // connectionSecrets resolves a connection's secret references lazily from the
@@ -222,4 +210,39 @@ func (d *daemon) githubWriters() *gh.Writers {
 		}, d.now)
 	})
 	return d.github.writers
+}
+
+// githubView is the GitHub extension's read-only view of the entries
+// registered here, for its doctor checks: registration failures, rate-limit
+// pauses, reconcile state and the last projection code.
+func (d *daemon) githubView(ctx context.Context) gh.View {
+	d.github.mu.Lock()
+	v := gh.View{Failed: map[string]string{}}
+	for ns, code := range d.github.failed {
+		v.Failed[ns] = code
+	}
+	sources := make([]*githubSource, 0, len(d.github.sources))
+	for _, s := range d.github.sources {
+		sources = append(sources, s)
+	}
+	d.github.mu.Unlock()
+	scans := map[string]runtime.IngressStatus{}
+	if d.ingress != nil {
+		if statuses, err := d.ingress.Inspect(ctx); err == nil {
+			for _, s := range statuses {
+				scans[s.Name] = s
+			}
+		}
+	}
+	for _, src := range sources {
+		e := gh.ViewEntry{Name: src.name, Scope: src.scope, Connection: src.connection, Settings: src.ingress.Settings(), Projection: d.reportedCode("github_projection", src.name)}
+		if until, paused := src.client.PausedUntil(); paused {
+			e.PausedUntil = until
+		}
+		if s, ok := scans[src.name]; ok {
+			e.Scan = &gh.Scan{LastError: s.LastError, Failures: s.Failures, LastComplete: s.LastComplete}
+		}
+		v.Entries = append(v.Entries, e)
+	}
+	return v
 }
