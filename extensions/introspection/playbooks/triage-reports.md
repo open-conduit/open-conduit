@@ -19,7 +19,7 @@ Call an operation with the `call` tool (`mcp__open-conduit__call`), giving the `
 | `introspection.report.resolve` | `id`, `summary`, `link`? | record how you handled a report (the issue you filed, or why you dropped it); a resolved report is no longer open |
 | `introspection.notes.resolve` | `notes` (ids), `summary` | record the problems you handled, so the next triage leaves them out |
 
-File issues with whatever tracker access this triage has, when `file_issues` is true. The `github.*` operations work only when the triage runs as a GitHub issue's Work; a scheduled triage usually has none, and then every remaining cause goes in your final summary, which the operator reads in the run's history.
+File issues with whatever tracker operations your toolbelt lists, when `file_issues` is true. A scheduled triage usually has none, and then every remaining cause goes in your final summary, which the operator reads in the run's history.
 
 ## Steps
 
