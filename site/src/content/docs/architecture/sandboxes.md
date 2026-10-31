@@ -3,6 +3,10 @@ title: "Process sandboxes and the srt provider"
 description: "Decision B09: how a binding runs its executor in a process sandbox, what the host protects whatever the policy says, how a plan is pinned and proved on recovery, and how the srt provider enforces it on macOS and Linux. Also the container contract, with its host-owned lifecycle, and the Docker provider with its gateway."
 ---
 
+:::tip
+To set up a sandbox, see [Sandbox your agents](../../guides/sandboxes/). This page is the design record.
+:::
+
 This page records decision B09: a binding may run its executor's process in a local process sandbox. The resource says where the agent works (B07), the executor how it runs, and the sandbox what it may reach. The public contract is [`extension/sandbox.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/sandbox.go), and the host's half of it is [`extension/sandboxbind.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/sandboxbind.go). The [srt provider](https://github.com/open-conduit/open-conduit/tree/main/extensions/srt) implements it with Anthropic's sandbox-runtime. The [shell](../shell-executor/) and [Claude Code](../claude-code-executor/) executors consume it, and [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/sandbox.go) composes them.
 
 A sandbox here is local and process-scoped: the sandbox is the process tree the executor starts. Containers (Docker, `sbx`) and remote sandboxes are not providers of this contract. They fail it on stopping, adoption, the stray-process sweep, host sockets and credentials (#161). Containers have a contract of their own, with a lifecycle the host owns ([Containers](#containers)), which shares this one's rules and path checks.
@@ -189,7 +193,7 @@ Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from 
 
 ## Containers
 
-A binding may instead run its executor in a container. It declares `container: {provider, config}` in place of `sandbox`; a binding with both is refused at load (`sandbox_conflict`). The contract is [`extension/container.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/container.go) and the host's half [`extension/containerbind.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/containerbind.go). The [Docker provider](#the-docker-provider) ships with [its gateway](#the-gateway), which carries the network allowlist and the toolbelt. The [shell executor](../shell-executor/) runs in containers; Claude Code follows (#180).
+A binding may instead run its executor in a container. It declares `container: {provider, config}` in place of `sandbox`; a binding with both is refused at load (`sandbox_conflict`). The contract is [`extension/container.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/container.go) and the host's half [`extension/containerbind.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/containerbind.go). The [Docker provider](#the-docker-provider) ships with [its gateway](#the-gateway), which carries the network allowlist and the toolbelt. The [shell executor](../shell-executor/) and [Claude Code](#claude-code-in-a-container) run in containers.
 
 ### The config is the grant
 

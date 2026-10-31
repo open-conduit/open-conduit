@@ -17,7 +17,7 @@ Each workflow is a **scope**. A scope always names what it may use:
 - **`authorization`** is the ceiling of connections and operations the scope may use.
 - **`extensions`** are the integrations that turn what happens in a service into Events.
 - **`routes`** send those Events to a binding, and choose what happens when one arrives while an attempt is running: `queue`, `inject`, `interrupt` or `drop`.
-- **`bindings`** name an executor (`claude-code` or `shell`), the operations its runs may call, optionally a `resource` such as a Git checkout to work in, and optionally a `sandbox` that limits what its runs can reach.
+- **`bindings`** name an executor (`claude-code` or `shell`), the operations its runs may call, optionally a `resource` such as a Git checkout to work in, and optionally a `sandbox` or `container` that limits what its runs can reach.
 
 The [workflow pages](/open-conduit/workflows/github/) each show a complete, minimal example.
 
@@ -65,90 +65,7 @@ As with the main file, edits to a folder's config take effect on `config apply`.
 
 ## Sandboxes
 
-Without a sandbox, an agent runs as you: it can read anything your account can, including Open Conduit's own operator token, and reach any host. A binding's `sandbox` runs its executor inside Anthropic's [sandbox-runtime](https://github.com/anthropic-experimental/sandbox-runtime) (`srt`), so a run can write only its workspace and the paths you grant, reach only the hosts you list, and never read Open Conduit's state directory or config, whatever you grant.
-
-Install srt (it needs Node) and, on Linux, bubblewrap, socat and ripgrep:
-
-```sh
-npm install -g @anthropic-ai/sandbox-runtime
-sudo apt-get install bubblewrap socat ripgrep   # Linux only
-open-conduit doctor                       # the sandbox check runs srt once
-```
-
-On Ubuntu 24.04, AppArmor stops bubblewrap making user namespaces: `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0`, or give bwrap an AppArmor profile. Doctor's `sandbox` check says when that's the problem.
-
-A sandboxed binding takes its Git workspace in `clone` mode, a clone of its own rather than a worktree of your checkout, and can't use `setup`, which would run outside the sandbox. This is the GitHub workflow's binding, sandboxed:
-
-```json
-{
-  "version": 1,
-  "settings": {},
-  "connections": [
-    {"id": "github", "type": "github", "config": {}, "secret_refs": {"token": "cmd:gh auth token"}}
-  ],
-  "scopes": [
-    {
-      "id": "web",
-      "name": "acme/web",
-      "secret_refs": {},
-      "authorization": {
-        "connections": ["github"],
-        "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                       "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
-        "read_scopes": []
-      },
-      "extensions": [
-        {"name": "web", "type": "github", "connection": "github", "secret_names": [],
-         "config": {"namespace": "github/github.com/acme/web", "scope": "web", "repo": "acme/web"}}
-      ],
-      "routes": [
-        {"name": "issues", "handler": "github", "binding": "agent", "active_policy": "inject", "config": {}}
-      ],
-      "bindings": [
-        {
-          "name": "agent",
-          "executor": "claude-code",
-          "connection": "github",
-          "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": true},
-          "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                         "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
-          "secret_names": [],
-          "config": {"branch": "agent/issue-{number}", "workspace_mode": "clone",
-                     "env": {"CLAUDE_CONFIG_DIR": "/path/to/sandboxed-claude"}},
-          "resource": {"provider": "git", "config": {"checkout": "/path/to/web", "mode": "clone"}},
-          "sandbox": {"provider": "srt", "config": {
-            "write": ["{workspace}", "/path/to/sandboxed-claude", "~/.npm"],
-            "read": {"deny": ["~/.ssh", "~/.aws", "~/.config/gh"]},
-            "network": {"allow": ["api.anthropic.com", "github.com", "*.githubusercontent.com", "registry.npmjs.org"]},
-            "sockets": ["{toolbelt}"],
-            "unix_sockets": "all"
-          }}
-        }
-      ]
-    }
-  ]
-}
-```
-
-The policy is exactly what runs get:
-
-| Field | What it grants |
-| --- | --- |
-| `write` | Paths a run may write. Its workspace is `{workspace}`; Claude Code also needs its config directory (below). |
-| `read.deny` | Paths a run may not read. Everything else is readable, so deny your credentials. `read.allow` makes exceptions beneath a deny. |
-| `network.allow` | Hosts a run may reach (`github.com`, `*.githubusercontent.com`). Everything else is refused. |
-| `sockets` | Unix sockets a run may use. `{toolbelt}` is the run's own toolbelt, which the agent needs. |
-| `unix_sockets` | `"all"` on Linux, which can't allow a socket by path: any socket a run can see is then usable, so the daemon gives each run a socket of its own. |
-
-`{run}` names the run's own directory. Paths start with `/`, `~/` or one of the placeholders.
-
-A sandboxed Claude Code binding needs a config directory of its own. Anything a run writes in claude's config (a hook, an MCP server, a plugin) runs as you in every claude session you start, so `~/.claude` and `~/.claude.json` stay out of a sandbox's reach. Set `CLAUDE_CONFIG_DIR` in the binding's `env` to an absolute path no claude of yours uses, create it, and grant it in `write`. `config check` refuses a sandboxed Claude Code binding without one, or with one that is, holds or sits inside `~/.claude`.
-
-Claude signs in separately there, since its credentials go with the config directory (on macOS, a Keychain entry of its own). Sign in once with `CLAUDE_CONFIG_DIR=/path/to/sandboxed-claude claude` and `/login`, or make a token with `claude setup-token` and select it as a secret mapped to `CLAUDE_CODE_OAUTH_TOKEN` in `secret_env`.
-
-If the sandbox can't be enforced, nothing runs: a missing srt, a run that needs a path or host you didn't grant (`sandbox_denied`, naming it), or a kernel that won't isolate (`sandbox_unavailable`). The run's history shows the policy each run had. A changed policy applies from the next run, never to one already running. `git push -u` in a sandbox prints that it couldn't write the clone's config; the push succeeds, because the clone already tracks the branch.
-
-The [sandbox architecture page](../../architecture/sandboxes/) has the full contract.
+Without a sandbox, an agent runs as you: it can read anything your account can, including Open Conduit's own operator token, and reach any host. A binding's `sandbox` runs its executor in a process sandbox (srt), and its `container` runs it in a Docker container, so a run reaches only its workspace, the hosts you list and its own toolbelt. [Sandbox your agents](../sandboxes/) covers choosing one, setting it up and what each protects.
 
 ## Secrets
 

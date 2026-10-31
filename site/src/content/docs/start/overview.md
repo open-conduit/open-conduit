@@ -21,6 +21,8 @@ Integrations (GitHub, Slack, schedules, introspection, and any extension you ins
 
 Each run gets a scoped **toolbelt**: the operations its binding allows, such as commenting on an issue, opening a pull request, replying in a thread or waiting for a check to finish. Agents ask for outcomes through the toolbelt and never deal with the tracker's conventions directly.
 
+A binding can also run its agent in a [sandbox or a container](../../guides/sandboxes/), so a run reaches only its workspace, the hosts you allow and its own toolbelt, never your credentials or Open Conduit's own state.
+
 Because GitHub, Slack, scheduled jobs and introspection all go through the same core, they share one history, one retry and timeout model, and one view in the terminal UI.
 
 For the design in depth, see [the core in one page](../../architecture/core/).
