@@ -108,11 +108,12 @@ If `github.pr.list` already shows an open PR, you're taking over from an earlier
 ### 4. Open the PR and end the turn
 
 - Push the branch (`git push -u origin HEAD`, or the remote the project's rules name), then `github.pr.create` with a `title` and a `body` saying what changed and anything from the issue you didn't do. The operation adds the line that links the PR to the issue.
+- Post an update on the issue with `github.issue.comment` straight away, so the owner isn't left waiting on the checks to hear from you: the PR's link, that its checks are running, a short account of what you did, and anything they need to act on (a step only a person can take, such as a secret to add or a setting to change, a decision, anything you couldn't do), each with a bold lead.
 - Don't wait for the checks. End the turn with `building`, the PR number in `prs` and `touches` filled in. Open Conduit resumes you when every check on the PR's head has finished, with the result and a deploy preview's URL when the repository has one.
 
 ### 5. Report on the issue
 
-With a PR, this happens in the turn where the checks pass (a `Checks passed` event, with the preview URL when there is one); without one, it happens as soon as you have the answer. Post one comment on the issue with `github.issue.comment`: what now exists or what you found, links to the PR and the preview when there are any, and anything you couldn't do. End the turn with `review`, with `preview` filled in when there is one.
+With a PR, this happens in the turn where the checks pass (a `Checks passed` event, with the preview URL when there is one); without one, it happens as soon as you have the answer. Post one comment on the issue with `github.issue.comment`: what now exists or what you found, links to the PR and the preview when there are any, and anything you couldn't do. With a PR, say it is ready for review, and don't repeat what the update in step 4 already said: mention only what changed since (failing checks you fixed, say) and anything still waiting on the owner. End the turn with `review`, with `preview` filled in when there is one.
 
 ## Later turns: `work-issue <number> events`
 
