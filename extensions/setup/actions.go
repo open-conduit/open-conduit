@@ -235,10 +235,10 @@ func (a Actions) Actions(ctx context.Context, t extension.ActionTarget) ([]exten
 		}
 		prompt := "your answer"
 		if len(q.Choices) > 0 {
-			prompt = "a choice (" + strings.Join(q.Choices, ", ") + ")"
+			prompt = "a choice (" + strings.Join(q.Choices, ", ") + ") or your own answer"
 		}
 		if len(prompt) > 200 {
-			prompt = "a choice"
+			prompt = "a choice or your own answer"
 		}
 		out = append(out, extension.Action{ID: ActionAnswer, Label: "Answer the agent's question", Prompt: prompt, Choices: q.Choices})
 		return nil
@@ -325,12 +325,11 @@ func (a Actions) answer(ctx context.Context, c extension.ActionCall) (extension.
 	if !ok {
 		return refuseAction("not_outstanding", "the session has no open question to answer")
 	}
+	// Choices are suggestions: one picked by its text or number is given
+	// as written, and anything else is the operator's own answer.
 	answer := strings.TrimSpace(c.Input)
-	if len(q.Choices) > 0 {
-		var ok bool
-		if answer, ok = choose(q.Choices, c.Input); !ok {
-			return refuseAction("invalid_input", "choose one of: "+strings.Join(q.Choices, ", "))
-		}
+	if picked, ok := choose(q.Choices, answer); ok {
+		answer = picked
 	}
 	if answer == "" || len(answer) > maxText {
 		return refuseAction("invalid_input", "give an answer of at most 8192 bytes")

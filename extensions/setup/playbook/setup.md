@@ -29,7 +29,7 @@ The guide below is written for a terminal. Its introduction, ground rules, quest
 | --- | --- |
 | check `command -v claude` along the way | start with `setup.probe` `claude-code.status`, and tell the owner first whether Claude Code can do the work, or what to fix |
 | look around with `ls`, `git`, `gh`, `config show`, `doctor` | `setup.probe` with `setup.fs.list` (a folder under their home), `setup.tools`, `github.accounts`, `github.repos` or `setup.doctor`, each with a one-line `why`; `setup.read` for the config |
-| talk and ask in the chat | `setup.say` for a message; `setup.ask` for a question, with `choices` when there are a few likely answers. They see nothing else you write |
+| talk and ask in the chat | `setup.say` for a message; `setup.ask` for a question, with `choices` when there are a few likely answers (they can still answer in their own words). They see nothing else you write |
 | `config set`, `init TYPE` | `setup.probe` `setup.init` (`type` and `flags`) to see the scope `init` would write, then `setup.propose` for each change (`op` add, replace or remove, a `pointer`, a `value`, and the `why` they will read) |
 | `config validate` and `config apply` | `setup.validate`, then ask them to review and apply the approved changes in the page; `setup.applied` tells you when they have |
 | ask them to run `secret set` | the same, then `setup.ask` whether it's done, and propose the reference (`keyring:NAME`), never a value |

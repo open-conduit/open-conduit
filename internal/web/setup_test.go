@@ -67,7 +67,7 @@ func TestSetupDrawsTheSessionAsAConversation(t *testing.T) {
 	if signed < 0 || hello < signed || asked < hello {
 		t.Fatalf("conversation out of order or unescaped (%d %d %d):\n%s", signed, hello, asked, body)
 	}
-	for _, want := range []string{`name="work" value="setup/setup/abc"`, `name="action" value="answer"`, `<button class="choice" name="input" value="dotfiles">`, `name="action" value="message"`, "it reads this after you answer", "Setup · sonnet", "End session",
+	for _, want := range []string{`name="work" value="setup/setup/abc"`, `name="action" value="answer"`, `<button class="choice" name="input" value="dotfiles">`, "Pick a choice above or answer in your own words", "Setup · sonnet", "End session",
 		`<textarea name="input" rows="1"`, `data-grow`, `/static/setup.js`, `data-live="setup-convo"`, `data-live="setup-bench"`} {
 		if !strings.Contains(body, want) {
 			t.Fatalf("missing %q:\n%s", want, body)
@@ -85,6 +85,11 @@ func TestSetupDrawsTheSessionAsAConversation(t *testing.T) {
 	if confirm.Code != http.StatusOK || !strings.Contains(confirm.Body.String(), "for good") {
 		t.Fatalf("End session confirmation: %d\n%s", confirm.Code, confirm.Body.String())
 	}
+	// While a question is open there is one box, and it answers: a message
+	// would only wait for the answer.
+	if n := strings.Count(body, "<textarea"); n != 1 || strings.Contains(body, `name="action" value="message"`) || !strings.Contains(body, `data-live="setup-send"`) {
+		t.Fatalf("want one box that answers, got %d boxes:\n%s", n, body)
+	}
 	// The message box is outside every live region, so typing in it never
 	// holds back the conversation's redraw.
 	if strings.Contains(body, `data-live="setup"`) {
@@ -99,7 +104,7 @@ func TestSetupDrawsTheSessionAsAConversation(t *testing.T) {
 	f.work[id] = w
 	s.cachedWorld(t.Context(), true)
 	body = do(s.Handler(addr), "GET", "/setup", nil, s).Body.String()
-	if !strings.Contains(body, `class="choice is-on" disabled>dotfiles`) || strings.Contains(body, `value="answer"`) || !strings.Contains(body, "Waiting for an agent slot") && !strings.Contains(body, "The assistant is working") {
+	if !strings.Contains(body, `class="choice is-on" disabled>dotfiles`) || strings.Contains(body, `value="answer"`) || !strings.Contains(body, `name="action" value="message"`) || !strings.Contains(body, "Waiting for an agent slot") && !strings.Contains(body, "The assistant is working") {
 		t.Fatalf("answered question:\n%s", body)
 	}
 }
