@@ -76,6 +76,8 @@ The sweep and triage are standing Work: the extension declares `Standing` for th
 
 Reports are translated emissions. See [the report Event](#the-report-event) below.
 
+`introspection.report-issue`, `introspection.correction` and `introspection.problem` carry their own agent guidance (`extension.Operation.Guidance`, in [`extensions/introspection/guidance`](https://github.com/open-conduit/open-conduit/tree/main/extensions/introspection/guidance)): when to log, the `body` shape and what a refusal means. The toolbelt serves it in the MCP instructions of every execution whose binding grants the operation, so the GitHub, tracker and Slack playbooks no longer carry their own copies (issue #208).
+
 ## The sweep and triage schedules
 
 The runs are timed by the extension's own calendar, not by a `schedule` entry, because they are scheduled Work of their own kinds, defined by the introspection extension. Each configured block gets a durable core timer `introspection/<scope>/<run>` whose recurrence is the extension's `RecurrenceFunc` (`introspection.v1`), declared through the contract's `Recurrences` surface and armed through the host's timers. The calendar rules are those of [scheduled jobs](../schedule-extension/):

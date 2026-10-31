@@ -88,3 +88,10 @@ func mustTime(t *testing.T, s string) (out time.Time) {
 	}
 	return out
 }
+
+func TestAskGuidance(t *testing.T) {
+	ops := (&Tools{}).Registration().Operations
+	if len(ops) != 1 || ops[0].Guidance == "" || len(ops[0].Guidance) > extension.MaxGuidance {
+		t.Fatalf("human.ask guidance %q", ops[0].Guidance)
+	}
+}

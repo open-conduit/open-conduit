@@ -5,6 +5,7 @@ import (
 	"context"
 	"crypto/rand"
 	"crypto/sha256"
+	_ "embed"
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
@@ -58,9 +59,15 @@ func NewTools(o Options) (*Tools, error) {
 // through the toolbelt: answers come only through its action.
 func (t *Tools) Registration() extension.Registration {
 	return extension.Registration{Version: extension.ContractVersion, Name: Type,
-		Operations:       []extension.Operation{{Name: OpAsk, Wait: t.ask}},
+		Operations:       []extension.Operation{{Name: OpAsk, Wait: t.ask, Guidance: strings.TrimSpace(askGuidance)}},
 		DependencyFilter: DependencyFilter}
 }
+
+// askGuidance tells an agent when and how to ask; the toolbelt serves it
+// to executions granted human.ask.
+//
+//go:embed guidance/ask.md
+var askGuidance string
 
 func refuse(code, format string, args ...any) error {
 	return &extension.OperationError{Code: code, Message: fmt.Sprintf(format, args...)}

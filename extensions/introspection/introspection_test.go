@@ -181,3 +181,15 @@ func TestSamplesTraceAgainstTheScope(t *testing.T) {
 		t.Fatal("samples offered without an entry")
 	}
 }
+
+// The operations agents call while they work carry their own guidance; the
+// ones only sweep and triage use rely on those playbooks.
+func TestOperationGuidance(t *testing.T) {
+	tools := &Tools{}
+	for _, op := range tools.Registration().Operations {
+		want := op.Name == OpCorrection || op.Name == OpProblem || op.Name == OpReport
+		if got := op.Guidance != ""; got != want || len(op.Guidance) > extension.MaxGuidance || want && !strings.Contains(op.Guidance, "`"+op.Name+"`") {
+			t.Errorf("%s guidance %q", op.Name, op.Guidance)
+		}
+	}
+}
