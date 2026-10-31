@@ -246,6 +246,9 @@ func TurnEvent(r observability.Record) (map[string]any, bool) {
 	}
 	props := map[string]any{"work_id": string(r.Correlation.WorkID),
 		"execution_id": string(r.Correlation.ExecutionID), "outcome": strings.TrimPrefix(r.Name, "execution.")}
+	if b := r.Correlation.ExecutorBinding; b != "" {
+		props["executor_binding"] = b
+	}
 	for attr, prop := range map[string]string{"execution.attempt": "attempt", "execution.duration_ms": "duration_ms"} {
 		if n, err := strconv.ParseInt(r.Attributes[attr], 10, 64); err == nil {
 			props[prop] = n
@@ -253,7 +256,9 @@ func TurnEvent(r observability.Record) (map[string]any, bool) {
 	}
 	// status, trigger_type and trigger_at let a consumer measure time in
 	// each state: the gap from a turn that ended in "review" to the next
-	// turn's trigger_at is how long the Work waited on a person.
+	// turn's trigger_at is how long the Work waited on a person. A comment
+	// trigger's type says who wrote it (<source>.comment.human, .bot or
+	// .agent).
 	for attr, prop := range map[string]string{"executor": "executor", "work.kind": "work_kind", "turn.status": "status",
 		"trigger.type": "trigger_type", "trigger.occurred_at": "trigger_at", "execution.started_at": "started_at"} {
 		if v := r.Attributes[attr]; v != "" {
