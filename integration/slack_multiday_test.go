@@ -92,7 +92,7 @@ func newMDHost(t *testing.T, e *slEnv, x *mdExecutor) *mdHost {
 		t.Fatal(err)
 	}
 	if h.sched, err = runtime.NewScheduler(e.store, e.clock.Now, e.router, runtime.SchedulerOptions{Owner: "multiday", LeaseDuration: time.Hour, Generation: "1",
-		Executors: map[string]extension.Executor{"fixture": x}, Toolbelt: h.belt, ToolbeltEndpoint: "unix:///fixture/management.sock"}); err != nil {
+		Executors: map[string]extension.Executor{"fixture": x}, Toolbelt: h.belt, ToolbeltEndpoints: fixtureEndpoint("unix:///fixture/toolbelt.sock")}); err != nil {
 		t.Fatal(err)
 	}
 	if h.timers, err = runtime.NewTimers(e.store, e.clock.Now, runtime.TimerOptions{}); err != nil {

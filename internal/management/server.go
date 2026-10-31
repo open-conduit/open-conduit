@@ -417,9 +417,9 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 		}
 		return fail(404, "not_found", "unknown endpoint")
 	}
-	isToolbelt := matched.pattern[0] == "toolbelt"
-	// Credential classes never cross: execution tokens reach only the toolbelt.
-	if isToolbelt == who.operator {
+	// Credential classes never cross: the management socket is operator-only,
+	// and an execution's token reaches only the toolbelt on its own socket.
+	if who.operator == (scopedExecution(ctx) != "") {
 		return fail(403, "wrong_credential_class", "credential class not permitted for this endpoint")
 	}
 	c := &call{ctx: ctx, r: r, w: w, who: who, params: params}

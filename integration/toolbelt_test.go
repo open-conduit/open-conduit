@@ -91,7 +91,7 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 		t.Fatal(err)
 	}
 	options := base.options
-	options.Toolbelt, options.ToolbeltEndpoint = belt, "unix:///fixture/management.sock"
+	options.Toolbelt, options.ToolbeltEndpoints = belt, fixtureEndpoint("unix:///fixture/toolbelt.sock")
 	options.AliasFilter = belt.DependencyFilter
 	options.AuthorizeAlias = func(context.Context, runtime.AliasAuthorization) error {
 		h.mu.Lock()
@@ -101,10 +101,17 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 		}
 		return nil
 	}
+	// There is no shared endpoint to fall back to: a toolbelt needs
+	// per-execution endpoints.
+	shared := options
+	shared.ToolbeltEndpoints = nil
+	if _, err := runtime.NewScheduler(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).router, shared); !errors.Is(err, storage.ErrInvalid) {
+		t.Fatalf("scheduler accepted a toolbelt without per-execution endpoints: %v", err)
+	}
 	h.scheduler = newTestScheduler(t, f, options)
 	h.belt = belt
 	executor.onRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
-		if r.Context.ToolbeltEndpoint != "unix:///fixture/management.sock" || r.Context.ToolbeltToken == "" {
+		if r.Context.ToolbeltEndpoint != "unix:///fixture/toolbelt.sock" || r.Context.ToolbeltToken == "" {
 			return nil, errors.New("missing toolbelt credentials")
 		}
 		h.mu.Lock()
