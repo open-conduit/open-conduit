@@ -53,11 +53,14 @@ type wireHold struct {
 	At      string `json:"at"`
 }
 
-// workDetail is GET /work/{id}: the primitive plus its operator hold and
-// extension annotations.
+// workDetail is GET /work/{id}: the primitive plus its operator hold, the
+// count of routed input queued for its next turn and extension annotations.
+// Ready Work with no queued input is idle: it waits for its next event, not
+// for a slot.
 type workDetail struct {
 	wireWork
 	Hold        *wireHold    `json:"hold,omitempty"`
+	Inputs      int          `json:"inputs"`
 	Annotations []Annotation `json:"annotations,omitempty"`
 }
 
@@ -68,6 +71,11 @@ func (s *Server) detail(ctx context.Context, w domain.Work) (workDetail, error) 
 		if held {
 			out.Hold = &wireHold{EventID: string(h.EventID), Reason: h.Reason, At: ts(h.At)}
 		}
+		if e != nil {
+			return e
+		}
+		inputs, e := runtime.PendingInputsInTx(tx, w.ID)
+		out.Inputs = len(inputs)
 		return e
 	})
 	if err != nil {

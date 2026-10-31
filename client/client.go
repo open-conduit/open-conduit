@@ -42,8 +42,12 @@ type Work struct {
 	Revision  string   `json:"revision"`
 	CreatedAt string   `json:"created_at"`
 	UpdatedAt string   `json:"updated_at"`
-	// Hold and Annotations are present on GET /work/{id} only.
-	Hold        *Hold        `json:"hold,omitempty"`
+	// Hold, Inputs and Annotations are present on GET /work/{id} only.
+	Hold *Hold `json:"hold,omitempty"`
+	// Inputs counts the routed input queued for the Work's next turn; nil
+	// when the daemon did not say. Ready Work with none is idle, waiting for
+	// its next event rather than for a slot.
+	Inputs      *int         `json:"inputs,omitempty"`
 	Annotations []Annotation `json:"annotations,omitempty"`
 	// Actions and Panels are present on a list asked for them
 	// (WorksWithActions).

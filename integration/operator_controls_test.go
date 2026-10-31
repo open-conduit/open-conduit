@@ -85,6 +85,11 @@ func TestManagementOperatorControls(t *testing.T) {
 	if w.Hold == nil || w.Hold.EventID != held.EventID || w.Hold.Reason != "looking" {
 		t.Fatalf("hold not visible: %+v", w)
 	}
+	// The detail counts the input queued for the next turn, so a view can
+	// tell Work waiting for a slot from idle Work (#201).
+	if w.Inputs == nil || *w.Inputs != 1 {
+		t.Fatalf("queued input not counted: %v", w.Inputs)
+	}
 	if _, errOut, code := h.cli("work", "hold", id, "--revision", w.Revision, "--key", "hold-2"); code != 1 || !strings.Contains(errOut, "hold_conflict") {
 		t.Fatalf("double hold: %s", errOut)
 	}

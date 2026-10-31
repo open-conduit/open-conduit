@@ -258,12 +258,36 @@ func dispositionOf(v workView, now time.Time) disposition {
 		}
 		return d
 	}
+	retrying := last != nil && last.State == "failed" && last.Retry != nil && last.Retry.EligibleAt != ""
+	// Ready Work with no queued input handed its turn back and waits for its
+	// next event (checks, a reply); it is not waiting for a slot (#201).
+	if v.State == "ready" && v.Inputs != nil && *v.Inputs == 0 && !retrying {
+		detail := summary
+		if detail == "" {
+			detail = "Waiting for its next event"
+		}
+		return disposition{Group: "waiting", Kind: "waiting", Label: "Waiting", Detail: detail, Since: updated, Waiting: "events"}
+	}
 	d := disposition{Group: "queued", Kind: "queued", Label: "Queued", Detail: "Ready for the next turn", Since: updated}
-	if last != nil && last.State == "failed" && last.Retry != nil && last.Retry.EligibleAt != "" {
+	if a, ok := capacityWait(v.Annotations); ok {
+		d.Detail = "Waiting for a slot: " + strings.TrimPrefix(a, "limit reached: ")
+	}
+	if retrying {
 		d.Detail = "Retrying after turn " + itoa(last.Number) + " failed"
 		d.Since = parseTime(last.FinishedAt)
 	}
 	return d
+}
+
+// capacityWait is the runtime's note that a capacity limit held the Work's
+// last start back, if it made one.
+func capacityWait(as []client.Annotation) (string, bool) {
+	for _, a := range as {
+		if a.Source == "runtime" && a.Name == "waiting" {
+			return a.Value, true
+		}
+	}
+	return "", false
 }
 
 // waitingOn is what a Wait waits on for the sub-rail: the one family its
@@ -454,8 +478,8 @@ func cloneQuery(q url.Values) url.Values {
 }
 
 // world reads every Work with its runs, active Waits, scopes, and for open
-// Work the actions and panels on it, concurrently. Holds are on the single
-// Work record only, so ready Work is read once more for its hold.
+// Work the actions and panels on it, concurrently. Holds and queued input are
+// on the single Work record only, so ready Work is read once more for them.
 func (s *Server) world(ctx context.Context) world {
 	var (
 		wg             sync.WaitGroup
@@ -562,8 +586,8 @@ func (s *Server) works(ctx context.Context) (openW, closedW []client.Work, err e
 	return openW, closedW, err
 }
 
-// holds fills in the hold of each ready or waiting Work, eight at a time:
-// lists do not carry holds. A held Work is ready, or waiting when the causal
+// holds fills in the hold, queued input count and annotations of each ready
+// or waiting Work, eight at a time: lists do not carry them. A held Work is ready, or waiting when the causal
 // limits refused its wake and held it.
 func (s *Server) holds(ctx context.Context, works []client.Work) {
 	sem := make(chan struct{}, 8)
@@ -578,7 +602,7 @@ func (s *Server) holds(ctx context.Context, works []client.Work) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			if full, err := s.src.Work(ctx, w.ID); err == nil {
-				w.Hold = full.Hold
+				w.Hold, w.Inputs, w.Annotations = full.Hold, full.Inputs, full.Annotations
 			}
 		}(&works[i])
 	}

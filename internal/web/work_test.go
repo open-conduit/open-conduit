@@ -34,6 +34,9 @@ func TestDisposition(t *testing.T) {
 	exhausted.Retry = &client.RetryStatus{FailureCount: 3, Exhausted: true}
 	retrying := failed
 	retrying.Retry = &client.RetryStatus{FailureCount: 1, EligibleAt: at0(3 * time.Hour)}
+	handoff := turnRun(1, "handoff", time.Hour, 2*time.Hour)
+	handoff.Outcome = &client.Outcome{Kind: "handoff", Summary: "Opened PR #12; waiting on checks"}
+	zero, one := 0, 1
 	wait := &client.Wait{ID: "wait/1", State: "active", Match: client.Match{Types: []string{"github.check_suite.completed", "github.pull_request.merged"}}, Description: "checks on PR #137", CreatedAt: at0(4 * time.Hour)}
 	ask := []client.Action{{Provider: "acme", ID: "answer", Label: "Answer the question"}}
 	panel := []client.Panel{{Provider: "acme", ID: "ask", Title: "The agent asks", Sections: []client.PanelSection{{Text: "May I refund?"}, {Actions: ask}}}}
@@ -62,6 +65,11 @@ func TestDisposition(t *testing.T) {
 		{name: "a wait on a timer alone", work: client.Work{State: "waiting"}, wait: &client.Wait{State: "active", TimeoutTimerID: "timer/1", Description: "until Mon 09:00"}, group: "waiting", kind: "waiting", detail: "until Mon 09:00", waiting: "time"},
 		{name: "a wait across sources", work: client.Work{State: "waiting"}, wait: &client.Wait{State: "active", Match: client.Match{Types: []string{"github.x", "slack.y"}}}, group: "waiting", kind: "waiting", waiting: "events"},
 		{name: "queued", work: client.Work{State: "ready"}, group: "queued", kind: "queued", detail: "Ready for the next turn"},
+		{name: "ready with queued input is queued", work: client.Work{State: "ready", Inputs: &one}, runs: []client.Run{handoff}, group: "queued", kind: "queued", detail: "Ready for the next turn"},
+		{name: "ready with no queued input waits for its next event", work: client.Work{State: "ready", Inputs: &zero}, runs: []client.Run{handoff}, group: "waiting", kind: "waiting", detail: "Opened PR #12; waiting on checks", waiting: "events"},
+		{name: "idle with no summary", work: client.Work{State: "ready", Inputs: &zero}, group: "waiting", kind: "waiting", detail: "Waiting for its next event", waiting: "events"},
+		{name: "a retry is queued with no input", work: client.Work{State: "ready", Inputs: &zero}, runs: []client.Run{retrying}, group: "queued", kind: "queued", detail: "Retrying after turn 1 failed"},
+		{name: "held back by a limit says so", work: client.Work{State: "ready", Inputs: &one, Annotations: []client.Annotation{{Source: "runtime", Name: "waiting", Value: "limit reached: agent turns (settings.concurrency) 5/5 running"}}}, group: "queued", kind: "queued", detail: "Waiting for a slot: agent turns (settings.concurrency) 5/5 running"},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
