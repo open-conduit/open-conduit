@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
@@ -155,7 +156,7 @@ func (t *toolbelt) mcpHandle(req rpcRequest) (any, *rpcError) {
 			"protocolVersion": version,
 			"capabilities":    map[string]any{"tools": map[string]any{"listChanged": false}},
 			"serverInfo":      map[string]any{"name": "open-conduit", "version": "1"},
-			"instructions":    "The Open Conduit toolbelt for this execution: read this Work's context, emit events, create child Work, wait for events and declare the outcome.",
+			"instructions":    t.mcpInstructions(),
 		}, nil
 	case "ping":
 		return map[string]any{}, nil
@@ -172,6 +173,26 @@ func (t *toolbelt) mcpHandle(req rpcRequest) (any, *rpcError) {
 		return t.mcpCall(p.Name, p.Arguments), nil
 	}
 	return nil, &rpcError{Code: -32601, Message: "method not found"}
+}
+
+const mcpBaseInstructions = "The Open Conduit toolbelt for this execution: read this Work's context, emit events, create child Work, wait for events and declare the outcome."
+
+// mcpInstructions are the server's instructions: the base sentence, then the
+// guidance of each operation this execution is granted, which the extension
+// owning the operation supplies. Without the guidance (an older daemon, an
+// unreachable endpoint) the base sentence still serves.
+func (t *toolbelt) mcpInstructions() string {
+	c, err := t.client()
+	if err != nil {
+		return mcpBaseInstructions
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+	guidance, err := c.ToolbeltGuidance(ctx)
+	if err != nil || len(guidance) == 0 {
+		return mcpBaseInstructions
+	}
+	return mcpBaseInstructions + "\n\n" + strings.Join(guidance, "\n\n")
 }
 
 // mcpCall performs one tool call. Toolbelt refusals are tool results with

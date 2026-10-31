@@ -211,6 +211,7 @@ func TestManifestRejections(t *testing.T) {
 		"resource mode":        {`"setup":`, `"resources": [{"type": "chat-ws", "modes": ["pooled"]}], "setup":`},
 		"external store":       {`"setup":`, `"external_stores": [{"connection": "chat-index", "description": "search index"}], "setup":`},
 		"commit on handler":    {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "commit": true}`},
+		"guidance too long":    {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "guidance": "` + strings.Repeat("x", extension.MaxGuidance+1) + `"}`},
 		"filter without wait":  {`"webhooks": true,`, `"webhooks": true, "dependency_filter": true,`},
 		"kinds without routes": {`"routes": [{"handler": "chat", "config": true}],`, ``},
 	}

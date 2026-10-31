@@ -1006,6 +1006,16 @@ func (c *Client) ToolbeltCall(ctx context.Context, call ToolCall) (out ToolResul
 	return
 }
 
+// ToolbeltGuidance is the agent guidance of the operations the execution's
+// token is granted, one Markdown piece per operation that has some.
+func (c *Client) ToolbeltGuidance(ctx context.Context) ([]string, error) {
+	var out struct {
+		Guidance []string `json:"guidance"`
+	}
+	err := c.Do(ctx, "GET", "toolbelt/guidance", nil, nil, "", &out)
+	return out.Guidance, err
+}
+
 // ---- unified run history and doctor ----
 
 type Trigger struct {

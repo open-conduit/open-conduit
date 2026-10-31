@@ -88,7 +88,15 @@ type Operation struct {
 	// the registration's own coordination records in the same transaction
 	// (03-08). It grants no trusted control-plane authority.
 	Emit func(context.Context, Authority, domain.Payload) (EmitPlan, error)
+	// Guidance optionally tells an agent when and how to use the operation,
+	// in Markdown (at most MaxGuidance bytes). The toolbelt serves it to an
+	// execution only while the execution's grant includes the operation, so
+	// a playbook need not describe another extension's operations.
+	Guidance string
 }
+
+// MaxGuidance bounds one operation's Guidance.
+const MaxGuidance = 4096
 
 // EmitPlan is a translated emission. Event supplies only Type, DeliveryID,
 // optional OccurredAt, CorrelationKey and Data; the toolbelt assigns its

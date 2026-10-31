@@ -80,7 +80,7 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 		*h.echoes++
 		h.mu.Unlock()
 		return in, nil
-	}}, {Name: "fixture.wait", Wait: func(_ context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
+	}, Guidance: "Echo with fixture.echo."}, {Name: "fixture.wait", Wait: func(_ context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
 		if h.plan == nil {
 			return extension.WaitPlan{}, extension.ErrInvalid
 		}
@@ -147,6 +147,45 @@ func TestProductionToolbeltSharedCases(t *testing.T) {
 				}}
 			})
 		})
+	}
+}
+
+// TestProductionToolbeltGuidance serves an operation's guidance only to a
+// token whose grant includes it, while current config still enables it.
+func TestProductionToolbeltGuidance(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	ctx := context.Background()
+	got, err := h.belt.Guidance(ctx, h.token, "")
+	if err != nil || len(got) != 1 || got[0] != "Echo with fixture.echo." {
+		t.Fatalf("guidance = %q, %v", got, err)
+	}
+	if _, err = h.belt.Guidance(ctx, h.token, "execution/other"); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("another execution's assertion accepted: %v", err)
+	}
+	if _, err = h.belt.Guidance(ctx, "unknown", ""); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("unknown token accepted: %v", err)
+	}
+	h.mu.Lock()
+	*h.deny = true
+	h.mu.Unlock()
+	if got, err = h.belt.Guidance(ctx, h.token, ""); err != nil || len(got) != 0 {
+		t.Fatalf("guidance under a narrowed ceiling = %q, %v", got, err)
+	}
+	h.mu.Lock()
+	*h.deny = false
+	h.mu.Unlock()
+	_, narrow, err := h.belt.IssueWithID(ctx, extension.Authority{ScopeID: "routing-scope", WorkID: "work/item", ExecutionID: h.attempt.Lease.ExecutionID, Lease: h.attempt.Lease, ExpiresAt: h.f.Clock.Now().Add(time.Minute), Operations: []string{extension.ReadContext}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, err = h.belt.Guidance(ctx, narrow, ""); err != nil || len(got) != 0 {
+		t.Fatalf("guidance for an ungranted operation = %q, %v", got, err)
+	}
+	long := extension.Operation{Name: "fixture.long", Handler: func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+		return domain.Payload{}, nil
+	}, Guidance: strings.Repeat("x", extension.MaxGuidance+1)}
+	if err = h.belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "long", Operations: []extension.Operation{long}}); !errors.Is(err, extension.ErrInvalid) {
+		t.Fatalf("oversized guidance registered: %v", err)
 	}
 }
 
