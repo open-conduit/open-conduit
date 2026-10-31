@@ -170,7 +170,7 @@
   <span role="cell" class="c-turns">{{with len $w.Turns}}{{.}}{{else}}—{{end}}{{if eq $w.Disp.Group "running"}}<span class="live-tag">live</span>{{end}}</span>
   <span role="cell" class="c-time">
     <span class="t-active">{{if .Active}}{{durp .Active}}{{else}}—{{end}}</span>
-    <span class="t-of">of {{dur .Elapsed}}</span>
+    <span class="t-of">of {{durp .Elapsed}}</span>
     {{ratio .Ratio}}
   </span>
   <span role="cell" class="c-upd">{{since $w.Updated}}</span>

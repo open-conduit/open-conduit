@@ -73,7 +73,7 @@
 <section class="score" aria-label="Lifecycle">
   <div class="score-top">
     <span class="score-k">Lifetime</span>
-    <span class="score-v"><b>{{durp .Active}}</b> executing of <b>{{dur .Elapsed}}</b> since {{at $w.Created}}</span>
+    <span class="score-v"><b>{{durp .Active}}</b> executing of <b>{{durp .Elapsed}}</b> since {{at $w.Created}}</span>
     {{ratio .Ratio}}
     <span class="score-v score-right">{{plural (len .Turns) "turn"}} · {{plural .Events "event"}}</span>
   </div>
