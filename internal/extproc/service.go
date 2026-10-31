@@ -56,6 +56,16 @@ type Deps struct {
 	// WaitProgress sets the progress line of work's active Wait for owner,
 	// the extension whose operation declared it.
 	WaitProgress func(ctx context.Context, owner string, work domain.ID, progress string) error
+	// Nudge asks the host loop for an early pass after the extension made
+	// something the loop acts on (an accepted Event, an armed timer).
+	Nudge func()
+	// Capture writes a named telemetry event to the host's telemetry events
+	// log and hands it to every sink (telemetry.capture, permission
+	// telemetry.capture).
+	Capture func(ctx context.Context, scope, name string, at time.Time, props map[string]any) error
+	// Probes are the setup probes the host, its extensions and executors
+	// offer, by full name (probe.list and probe.run, permission probes).
+	Probes func() map[string]extension.SetupProbe
 }
 
 // run is the host side of one executor call: the trusted, lease-fenced
@@ -307,6 +317,20 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 		return protocol.FromOwnerStatus(st), nil
 	case "setup.print", "setup.prompt", "setup.choose", "setup.open_url", "setup.store_secret", "setup.look_path", "setup.run_command":
 		return s.setup(ctx, method, raw)
+	case "telemetry.capture":
+		var p protocol.TelemetryEvent
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		return struct{}{}, s.capture(ctx, p)
+	case "probe.list":
+		return s.probeList()
+	case "probe.run":
+		var p protocol.ProbeRunParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.probeRun(ctx, p)
 	}
 	return nil, protocol.Errorf(protocol.CodeUnsupported, "host method not offered in this release")
 }
@@ -623,6 +647,9 @@ func (s *Service) accept(ctx context.Context, p protocol.EventAcceptParams) (pro
 	if refusal != nil {
 		return protocol.EventAcceptResult{}, refusal
 	}
+	if out.Added {
+		s.nudge()
+	}
 	return out, nil
 }
 
@@ -644,7 +671,17 @@ func (s *Service) arm(ctx context.Context, p protocol.TimerArmParams) error {
 	if err := s.manifest.CheckWrite(t.Event.Data); err != nil {
 		return protocol.Errorf(protocol.CodeSchema, err.Error())
 	}
-	return s.deps.Timers.ArmRecurrence(ctx, scope, t, domain.Revision(p.Expected), p.Kind, p.Spec)
+	if err := s.deps.Timers.ArmRecurrence(ctx, scope, t, domain.Revision(p.Expected), p.Kind, p.Spec); err != nil {
+		return err
+	}
+	s.nudge()
+	return nil
+}
+
+func (s *Service) nudge() {
+	if s.deps.Nudge != nil {
+		s.deps.Nudge()
+	}
 }
 
 func (s *Service) cancelTimer(ctx context.Context, p protocol.TimerCancelParams) error {

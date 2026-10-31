@@ -66,6 +66,15 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 		}
 		return nil
 	}
+	scopes := func() []string {
+		mu.Lock()
+		defer mu.Unlock()
+		var out []string
+		for _, in := range sources {
+			out = append(out, in.Scope)
+		}
+		return out
+	}
 	ext.Configure = func(ctx context.Context, h *sdk.Host, p protocol.ConfigureParams) (protocol.ConfigureResult, error) {
 		var out protocol.ConfigureResult
 		next := map[string]*Ingress{}
@@ -80,7 +89,7 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 				return out, protocol.Errorf(protocol.CodeInvalid, "notes entry needs a service file")
 			}
 			name := Name + "/" + e.ScopeID
-			next[name] = &Ingress{Service: cfg.Service, Release: o.Release, StableIdentity: o.StableIdentity}
+			next[name] = &Ingress{Service: cfg.Service, Scope: e.ScopeID, Release: o.Release, StableIdentity: o.StableIdentity}
 			out.WebhookPaths = append(out.WebhookPaths, "/"+name)
 			out.Sources = append(out.Sources, protocol.SourceDecl{Name: name, Source: protocol.Source{Namespace: name, ScopeID: e.ScopeID}, IntervalSeconds: 60, Families: []protocol.EventFamily{{Type: Changed, ReDerivable: true}, {Type: Deleted, Loss: m.Provides.Families[1].Loss}}})
 		}
@@ -159,6 +168,10 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 	ext.Tasks = map[string]func(context.Context, *sdk.Host) error{
 		"notes-index":  func(ctx context.Context, h *sdk.Host) error { return index(ctx, h, o, ext) },
 		"notes-derive": func(ctx context.Context, h *sdk.Host) error { return derive(ctx, h) },
+		TelemetryTask:  func(ctx context.Context, h *sdk.Host) error { return telemetry(ctx, h, o, scopes()) },
+	}
+	ext.Sink = func(_ context.Context, _ *sdk.Host, e protocol.TelemetryEvent) error {
+		return appendLine(o.StateDir, "sink.log", e.ScopeID+" "+e.Name)
 	}
 	ext.Checks = map[string]func(context.Context, *sdk.Host, bool) (string, error){"notes": func(context.Context, *sdk.Host, bool) (string, error) { return "ok", nil }}
 	ext.Webhooks = func(path string) (http.Handler, bool) {

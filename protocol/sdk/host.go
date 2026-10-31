@@ -3,6 +3,7 @@ package sdk
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/protocol"
@@ -173,4 +174,28 @@ func (h *Host) Artifact(ctx context.Context, mediaType string, data []byte) (dom
 		return domain.ArtifactRef{}, err
 	}
 	return domain.ArtifactRef{ID: ref.ID, Size: ref.Size, MediaType: ref.MediaType}, nil
+}
+
+// Capture records a named telemetry event in the host's telemetry events
+// log, which every telemetry sink receives (permission telemetry.capture).
+// scope is one of the extension's configured scopes, or "" for one about
+// the machine; the zero time is the host's now.
+func (h *Host) Capture(ctx context.Context, scope domain.ID, name string, at time.Time, props map[string]any) error {
+	return h.conn.Call(ctx, "telemetry.capture", protocol.TelemetryEvent{ScopeID: string(scope), Name: name, At: at, Properties: props}, nil)
+}
+
+// Probes lists the setup probes the host, its extensions and its executors
+// offer, by full name (permission probes).
+func (h *Host) Probes(ctx context.Context) ([]protocol.ProbeInfo, error) {
+	var out protocol.ProbeListResult
+	err := h.conn.Call(ctx, "probe.list", struct{}{}, &out)
+	return out.Probes, err
+}
+
+// Probe runs one setup probe (permission probes). A probe that ran and
+// failed answers its reason in Error.
+func (h *Host) Probe(ctx context.Context, name string, args map[string]string) (protocol.ProbeRunResult, error) {
+	var out protocol.ProbeRunResult
+	err := h.conn.Call(ctx, "probe.run", protocol.ProbeRunParams{Name: name, Args: args}, &out)
+	return out, err
 }

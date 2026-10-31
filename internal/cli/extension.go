@@ -25,8 +25,17 @@ type ExtensionPackage struct {
 	Dir      string   `json:"dir"`
 	Digest   string   `json:"digest,omitempty"`
 	Provides []string `json:"provides,omitempty"`
+	// Permissions are the host services beyond its own surfaces the
+	// package may use, each with what it allows.
+	Permissions []ExtensionPermission `json:"permissions,omitempty"`
 	// Previous is the release kept for rollback.
 	Previous string `json:"previous,omitempty"`
+}
+
+// ExtensionPermission is one permission a package declares.
+type ExtensionPermission struct {
+	Name    string `json:"name"`
+	Summary string `json:"summary"`
 }
 
 // ExtensionList is `extension list`.
@@ -38,12 +47,14 @@ type ExtensionList struct {
 
 // ExtensionChange reports an install, update, rollback or removal.
 type ExtensionChange struct {
-	Action   string   `json:"action"`
-	Name     string   `json:"name"`
-	Version  string   `json:"version,omitempty"`
-	Previous string   `json:"previous,omitempty"`
-	Dir      string   `json:"dir"`
-	Notes    []string `json:"notes,omitempty"`
+	Action   string `json:"action"`
+	Name     string `json:"name"`
+	Version  string `json:"version,omitempty"`
+	Previous string `json:"previous,omitempty"`
+	Dir      string `json:"dir"`
+	// Permissions are those the installed release declares.
+	Permissions []ExtensionPermission `json:"permissions,omitempty"`
+	Notes       []string              `json:"notes,omitempty"`
 }
 
 // InstallRequest installs or updates a package from Source: a package
@@ -156,6 +167,9 @@ func (o *operator) extension(args []string) int {
 				prev = " (rollback to " + p.Previous + ")"
 			}
 			fmt.Fprintf(w, "  %s\t%s%s\tprotocol %v\t%s\n", p.Name, p.Version, prev, p.Protocol, strings.Join(p.Provides, ", "))
+			if len(p.Permissions) > 0 {
+				fmt.Fprintf(w, "  \t\t\tpermissions: %s\n", permissionNames(p.Permissions))
+			}
 		}
 		_ = w.Flush()
 		for _, p := range l.Problems {
@@ -172,6 +186,7 @@ func (o *operator) extension(args []string) int {
 			return o.emit(p, err)
 		}
 		fmt.Fprintf(o.out, "%s %s (protocol %v): valid package\n  %s\n  provides: %s\n  digest sha256:%s\n", p.Name, p.Version, p.Protocol, p.Summary, strings.Join(p.Provides, ", "), p.Digest)
+		o.permissions(p.Permissions)
 		return 0
 	case "install", "update":
 		if len(pos) != 1 {
@@ -246,10 +261,32 @@ func (o *operator) change(c ExtensionChange, err error, asJSON bool) int {
 			fmt.Fprintf(o.out, "Installed %s %s in %s\n", c.Name, c.Version, c.Dir)
 		}
 	}
+	if c.Action != "removed" {
+		o.permissions(c.Permissions)
+	}
 	for _, n := range c.Notes {
 		fmt.Fprintf(o.out, "  %s\n", n)
 	}
 	return 0
+}
+
+// permissions lists what a package may use beyond its own surfaces.
+func (o *operator) permissions(ps []ExtensionPermission) {
+	if len(ps) == 0 {
+		return
+	}
+	fmt.Fprintln(o.out, "  permissions:")
+	for _, p := range ps {
+		fmt.Fprintf(o.out, "    %s: %s\n", p.Name, p.Summary)
+	}
+}
+
+func permissionNames(ps []ExtensionPermission) string {
+	names := make([]string, len(ps))
+	for i, p := range ps {
+		names[i] = p.Name
+	}
+	return strings.Join(names, ", ")
 }
 
 func writeJSONFile(path string, v any) error {

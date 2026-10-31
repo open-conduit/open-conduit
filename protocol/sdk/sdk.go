@@ -83,6 +83,10 @@ type Extension struct {
 	// Exporter receives telemetry batches (manifest exporters) and is shut
 	// down with the extension.
 	Exporter observability.Exporter
+	// Sink receives every named telemetry event the host records, from
+	// every scope (permission telemetry.sink). Write them with
+	// Host.Capture (permission telemetry.capture).
+	Sink func(ctx context.Context, h *Host, e protocol.TelemetryEvent) error
 	// RunEnvironment contributes an environment layer to a run of a Work in
 	// a scope that uses the extension (manifest run_environment).
 	RunEnvironment func(ctx context.Context, h *Host, r extension.RunEnvironmentRequest) (map[string]string, error)
@@ -190,6 +194,15 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)
+	case "telemetry.sink":
+		var p protocol.TelemetryEvent
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.ext.Sink == nil {
+			return nil, notFound(method)
+		}
+		return struct{}{}, s.ext.Sink(ctx, s.host, p)
 	case "route.match":
 		var p protocol.RouteMatchParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

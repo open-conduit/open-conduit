@@ -198,6 +198,49 @@ type TelemetryExportParams struct {
 	Records []TelemetryRecord `json:"records"`
 }
 
+// TelemetryEvent is one named telemetry event of the host's telemetry
+// events log: telemetry.capture writes one (permission telemetry.capture),
+// and telemetry.sink hands one to an extension (permission telemetry.sink).
+// ScopeID is the scope it belongs to, "" for one about the machine;
+// Properties never carry it.
+type TelemetryEvent struct {
+	ScopeID    string         `json:"scope_id,omitempty"`
+	Name       string         `json:"name"`
+	At         time.Time      `json:"at"`
+	Properties map[string]any `json:"properties,omitempty"`
+}
+
+// Setup probes (permission probes): the read-only probes the host, its
+// extensions and its executors offer setup sessions, by full name
+// ("claude-code.status").
+
+type ProbeArg struct {
+	Name     string `json:"name"`
+	Summary  string `json:"summary,omitempty"`
+	Required bool   `json:"required,omitempty"`
+}
+type ProbeInfo struct {
+	Name    string     `json:"name"`
+	Summary string     `json:"summary"`
+	Args    []ProbeArg `json:"args,omitempty"`
+}
+type ProbeListResult struct {
+	Probes []ProbeInfo `json:"probes"`
+}
+type ProbeRunParams struct {
+	Name string            `json:"name"`
+	Args map[string]string `json:"args,omitempty"`
+}
+
+// ProbeRunResult is a probe's output and the command it stands for. A probe
+// that ran and failed answers Error, its fixed, secret-free reason, instead
+// of a protocol error.
+type ProbeRunResult struct {
+	Command string          `json:"command,omitempty"`
+	Output  json.RawMessage `json:"output,omitempty"`
+	Error   string          `json:"error,omitempty"`
+}
+
 // Run environment.
 
 // RunEnvironmentParams asks for the extension's environment layer for one

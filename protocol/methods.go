@@ -28,6 +28,9 @@ type Method struct {
 	// Provides names the manifest entry that enables the method ("" for
 	// lifecycle methods every extension serves or may call).
 	Provides string
+	// Permission names the manifest permission the method also needs (""
+	// for none): without it the host neither serves nor calls the method.
+	Permission string
 	// Contract names the public in-process surface the method carries:
 	// Go symbols of packages extension, storage and observability, or a
 	// host composition hook (prefixed "host:") the daemon drives for
@@ -116,6 +119,10 @@ var Methods = []Method{
 	// Background tasks, telemetry and operator surfaces.
 	{Name: "task.run", Direction: HostToExtension, Provides: "tasks", Contract: []string{"host:Projector.Converge", "host:Ensure", "host:Executor.Maintain", "host:manageHooks", "host:hostWatch", "host:publishJobRuns"}, UseCases: []string{"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"}},
 	{Name: "telemetry.export", Direction: HostToExtension, Provides: "exporters", Contract: []string{"observability.Exporter.Export"}, UseCases: []string{"posthog", "introspection"}},
+	{Name: "telemetry.sink", Direction: HostToExtension, Permission: PermissionTelemetrySink, Contract: []string{"inproc.Sink.Capture"}, UseCases: []string{"posthog"}},
+	{Name: "telemetry.capture", Direction: ExtensionToHost, Permission: PermissionTelemetryCapture, Contract: []string{"inproc.Host.Capture"}, UseCases: []string{"introspection", "posthog"}},
+	{Name: "probe.list", Direction: ExtensionToHost, Permission: PermissionProbes, Contract: []string{"inproc.Host.Probes", "extension.SetupProbe.Name", "extension.SetupProbe.Summary", "extension.SetupProbe.Args"}, UseCases: []string{"setup"}},
+	{Name: "probe.run", Direction: ExtensionToHost, Permission: PermissionProbes, Contract: []string{"extension.SetupProbe.Run", "extension.ProbeResult"}, UseCases: []string{"setup"}},
 	{Name: "check.run", Direction: HostToExtension, Provides: "checks", Contract: []string{"host:runtime.Check (Checks, DeepChecks)"}, UseCases: []string{"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "claude-code"}},
 	{Name: "run.environment", Direction: HostToExtension, Provides: "run_environment", Contract: []string{"extension.RunEnvironment.RunEnvironment", "extension.RunEnvironmentRequest", "extension.ExecutionContext.Env"}, UseCases: []string{"github"}},
 	{Name: "work.annotate", Direction: HostToExtension, Provides: "annotate", Contract: []string{"host:management Annotate"}, UseCases: []string{"github"}},
