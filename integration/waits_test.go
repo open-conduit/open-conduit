@@ -636,13 +636,16 @@ func TestProductionWaitWakeCrashHelper(t *testing.T) {
 	_, _ = io.Copy(io.Discard, os.Stdin)
 }
 
-func TestProductionExternalResumeCannotResetOriginalRoot(t *testing.T) {
+// A wake is charged to the Event that woke it, not to the attempt's previous
+// wake (#185): one attempt parks and wakes on independent external roots far
+// more often than causal_max_depth, and every wake goes through.
+func TestProductionIndependentWakesDoNotDeepenTheChain(t *testing.T) {
 	o := waitOptions(true)
 	o.MaxDepth = 2
 	o.PerMinute = 100
 	f := waitFixture(t, "reopen", o)
 	work, ref, key := waitForWork(t, f, "external-loop", true)
-	for n := 1; n <= 3; n++ {
+	for n := 1; n <= 3*o.MaxDepth+1; n++ {
 		var boundary uint64
 		routingRead(t, f, func(tx storage.Tx) error {
 			all, err := tx.Events(0, 0)
@@ -659,53 +662,37 @@ func TestProductionExternalResumeCannotResetOriginalRoot(t *testing.T) {
 			t.Fatal(err)
 		}
 		next, err := d.Start(work)
-		if n <= 2 {
-			if err != nil {
-				t.Fatal(err)
-			}
-			if next.ExecutionID != ref.ExecutionID || next.Epoch <= ref.Epoch {
-				t.Fatalf("resume authority changed attempt: %+v %+v", ref, next)
-			}
-			ref = next
-		} else if err == nil {
-			t.Fatal("independent external wake reset original causal depth")
+		if err != nil {
+			t.Fatalf("wake %d on an independent root refused: %v", n, err)
 		}
+		if next.ExecutionID != ref.ExecutionID || next.Epoch <= ref.Epoch {
+			t.Fatalf("resume authority changed attempt: %+v %+v", ref, next)
+		}
+		ref = next
 		f.Driver = f.Restart()
 	}
 	audits, err := f.Driver.(*waitDriver).causal.Rejections(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := false
-	for _, audit := range audits {
-		if audit.RootID == "trigger/external-loop" && audit.Reason == "depth_limit" {
-			found = true
-		}
-	}
-	if !found {
-		t.Fatalf("missing originalroot refusal: %+v", audits)
+	if len(audits) != 0 {
+		t.Fatalf("independent wakes were refused: %+v", audits)
 	}
 }
 
-// A wake of a parked attempt derives a core.wait.woken bridge the causal
-// limits may refuse, which blocks the wait. The trace reports that refusal
-// without writing: the third wake of a chain capped at depth 2 is kept as
-// context, whether the traced Event or an earlier accepted one would win.
-func TestProductionTraceReportsARefusedWake(t *testing.T) {
+// waitLoopFixture parks an attempt on its own key and wakes it with Events
+// derived from its own chain (an execution → event → wake loop with no
+// outside input), until the causal limits refuse a wake. trace, if given,
+// runs once each wake's winner is accepted and before it wakes. It returns
+// the fixture, the Work, the refused wait and its round.
+func waitLoopFixture(t *testing.T, name string, trace func(f conformance.RuntimeFixture, key domain.CorrelationKey, n int)) (conformance.RuntimeFixture, domain.ID, domain.ID, int) {
+	t.Helper()
 	o := waitOptions(true)
-	o.MaxDepth = 2
+	o.MaxDepth = 3
 	o.PerMinute = 100
 	f := waitFixture(t, "persistent", o)
-	work, ref, key := waitForWork(t, f, "traced-loop", true)
-	trace := func(id string) runtime.RouteTrace {
-		t.Helper()
-		tr, err := f.Driver.(*waitDriver).router.Trace(context.Background(), "routing-scope", routingEvent(f, id, &key), nil)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return tr
-	}
-	for n := 1; n <= 3; n++ {
+	work, ref, key := waitForWork(t, f, name, true)
+	for n := 1; ; n++ {
 		var boundary uint64
 		routingRead(t, f, func(tx storage.Tx) error {
 			all, err := tx.Events(0, 0)
@@ -714,33 +701,120 @@ func TestProductionTraceReportsARefusedWake(t *testing.T) {
 			}
 			return err
 		})
-		id := domain.ID(fmt.Sprintf("traced-wait-%d", n))
+		id := domain.ID(fmt.Sprintf("%s-wait-%d", name, n))
 		registerWait(t, f, ref, id, key, true, boundary)
-		tr := trace(fmt.Sprintf("probe-%d", n))
-		if n <= 2 {
-			if tr.Effect.Kind != runtime.EffectWake || tr.Effect.WorkID != work {
-				t.Fatalf("wake %d: %+v", n, tr.Effect)
-			}
-		} else if tr.Effect.Kind != runtime.EffectQueue || !strings.Contains(tr.Effect.Detail, "causal limits would refuse its wake (depth_limit)") {
-			t.Fatalf("refused wake: %+v", tr.Effect)
-		}
-		requireAccept(t, f, fmt.Sprintf("traced-wake-%d", n), &key)
-		if n == 3 {
-			// The accepted Event wins first; its bridge is refused too.
-			if tr = trace("probe-late"); tr.Effect.Kind != runtime.EffectQueue || len(tr.Also) != 0 || !strings.Contains(tr.Effect.Detail, "depth_limit") {
-				t.Fatalf("refused earlier winner: %+v", tr)
-			}
-			break
-		}
 		d := f.Driver.(*waitDriver)
-		if err := d.Wake(id); err != nil {
+		state, err := d.scheduler.InspectAttempt(context.Background(), ref.ExecutionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		parent := state.CausalTriggerID
+		if parent == "" {
+			parent = domain.ID("trigger/" + name)
+		}
+		wake := routingEvent(f, fmt.Sprintf("%s-wake-%d", name, n), &key)
+		wake.WorkID = work
+		if _, _, err = d.causal.Derive(context.Background(), "routing-scope", parent, wake); err != nil {
+			t.Fatal(err)
+		}
+		if trace != nil {
+			trace(f, key, n)
+		}
+		if err = d.Wake(id); err != nil {
 			t.Fatal(err)
 		}
 		next, err := d.Start(work)
 		if err != nil {
-			t.Fatal(err)
+			if n == 1 {
+				t.Fatalf("the first wake was refused: %v", err)
+			}
+			return f, work, id, n
 		}
 		ref = next
+		if n > o.MaxDepth {
+			t.Fatal("a wake loop on the attempt's own output was never refused")
+		}
+	}
+}
+
+// A wake the attempt's own output caused still deepens its chain, so a loop
+// with no outside input stops at the depth limit. The refused wake does not
+// leave the Work quietly waiting: it is held with the reason, and releasing
+// the hold wakes the wait on what had arrived.
+func TestProductionRefusedWakeHoldsTheWork(t *testing.T) {
+	f, work, wait, _ := waitLoopFixture(t, "self-loop", nil)
+	d := f.Driver.(*waitDriver)
+	audits, err := d.causal.Rejections(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, audit := range audits {
+		if audit.RootID == "trigger/self-loop" && audit.Reason == "depth_limit" {
+			found = true
+		}
+	}
+	if !found {
+		t.Fatalf("missing depth_limit refusal on the original root: %+v", audits)
+	}
+	var hold runtime.Hold
+	var w domain.Work
+	routingRead(t, f, func(tx storage.Tx) error {
+		var held bool
+		var err error
+		if hold, held, err = runtime.HoldInTx(tx, work); err == nil && !held {
+			return errors.New("refused wake left the Work unheld")
+		}
+		if err == nil {
+			w, err = tx.Work(work)
+		}
+		return err
+	})
+	if !strings.Contains(hold.Reason, "depth_limit") || !strings.Contains(hold.Reason, "release") {
+		t.Fatalf("hold reason does not say why or what to do: %q", hold.Reason)
+	}
+	if hold.EventID == "" {
+		t.Fatal("hold has no audit Event")
+	}
+	control, err := runtime.NewControl(f.Store, f.Clock.Now, d.router, d.scheduler, d.options.CausalLimits)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = control.ReleaseWork(context.Background(), work, w.Revision, "let it go on", "release-self-loop"); err != nil {
+		t.Fatal(err)
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		got, err := tx.Wait(wait)
+		if err == nil && got.State != domain.WaitWoken {
+			return fmt.Errorf("release did not wake the blocked wait: %+v", got)
+		}
+		return err
+	})
+	if _, err = d.Start(work); err != nil {
+		t.Fatalf("released Work did not resume: %v", err)
+	}
+}
+
+// The trace reports a refused wake without writing. An earlier accepted
+// winner from the attempt's own loop that the limits would refuse keeps the
+// traced Event as context; until then the earlier winner wakes the Work.
+func TestProductionTraceReportsARefusedWake(t *testing.T) {
+	predicted := 0
+	_, _, _, refused := waitLoopFixture(t, "traced-loop", func(f conformance.RuntimeFixture, key domain.CorrelationKey, n int) {
+		tr, err := f.Driver.(*waitDriver).router.Trace(context.Background(), "routing-scope", routingEvent(f, fmt.Sprintf("probe-%d", n), &key), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		switch {
+		case tr.Effect.Kind == runtime.EffectQueue && len(tr.Also) == 0 && strings.Contains(tr.Effect.Detail, "causal limits would refuse its wake (depth_limit)"):
+			predicted = n
+		case tr.Effect.Kind == runtime.EffectQueue && len(tr.Also) == 1:
+		default:
+			t.Fatalf("round %d: %+v", n, tr)
+		}
+	})
+	if predicted != refused {
+		t.Fatalf("trace predicted a refusal in round %d, the wake was refused in round %d", predicted, refused)
 	}
 }
 

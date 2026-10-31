@@ -15,7 +15,8 @@ import (
 // repair, scheduling holds (used while an operator attaches to a session)
 // and on-demand reconcile. Each commits one accepted core.manual.* control
 // Event in the same transaction as its state change, so history and causal
-// chains explain it; none launches an executor or forces a wake.
+// chains explain it; none launches an executor or forces a wake, except
+// that releasing a hold the causal limits placed rearms the blocked wait.
 
 const holdNamespace = "core.manual.hold"
 
@@ -248,7 +249,12 @@ func (c *Control) ReleaseWork(ctx context.Context, workID domain.ID, expected do
 		if w.State.Terminal() {
 			return nil
 		}
-		return tx.PutWork(w, w.Revision)
+		if e = tx.PutWork(w, w.Revision); e != nil {
+			return e
+		}
+		// A wait the causal limits blocked held the Work; releasing it lets
+		// that wait wake again (on what has already arrived, if anything).
+		return unblockWaitsInTx(tx, c.now(), c.limits, w.ID, event)
 	})
 	return
 }
