@@ -125,7 +125,7 @@ holds back what the assistant says. */}}
         </ul>
         {{- end}}
         {{- if ne .W.Disp.Group "closed"}}
-        <div class="row-gap"><a class="btn btn-quiet" href="{{confirmHref "cancel" .W $p.Back}}" data-action-dialog>End session</a></div>
+        <div class="row-gap"><a class="btn btn-quiet" href="{{confirmHref "cancel-work" .W $p.Back}}" data-action-dialog>End session</a></div>
         <p class="bench-note">Ending a session cancels its Work. Its conversation stays here and on the Work page.</p>
         {{- end}}
       </div>
