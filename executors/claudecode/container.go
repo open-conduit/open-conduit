@@ -70,6 +70,21 @@ func (e *Executor) containerHome(cfg Config, home string, env []string, selected
 	return out, secrets, nil
 }
 
+// toolbeltGitHelper makes the toolbelt git's credential helper in a
+// container launch that has one and no other: `os git-credential` asks the
+// host for a token for the Work's repository, which a GitHub App
+// connection mints for that repository alone and revokes when the segment
+// ends. A static GitHub token's helper (containerHome), or a binding's own
+// GIT_CONFIG_COUNT, is left as it is.
+func toolbeltGitHelper(env []string) []string {
+	if hasEnv(env, "GIT_CONFIG_COUNT") {
+		return env
+	}
+	out := append(env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=credential.helper", "GIT_CONFIG_VALUE_0=!os git-credential")
+	sort.Strings(out)
+	return out
+}
+
 // seedHome fills an empty home with a copy of the seed directory (its
 // .credentials.json left out) and the onboarding .claude.json, unless the
 // seed brought one. A home with anything in it is left as it is: it is the

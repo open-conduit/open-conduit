@@ -93,6 +93,35 @@ func NewClient(cfg ConnectionConfig, secrets SecretFunc, o ClientOptions) (*Clie
 // Host is the web host (github.com or an Enterprise host).
 func (c *Client) Host() string { return c.host }
 
+// ErrStaticToken is GitToken's refusal on a connection that signs in with
+// a token rather than a GitHub App: there is nothing to mint.
+var ErrStaticToken = errors.New("github: the connection signs in with a token, not an App")
+
+// GitToken mints a token git can push to repo with: a GitHub App
+// installation token limited to that one repository and contents: write,
+// which expires within the hour. It comes from the bot App when there is
+// one (writes are the bot's), else the sign-in App. The caller owns it and
+// revokes it with RevokeToken when it is done.
+func (c *Client) GitToken(ctx context.Context, repo string) (string, time.Time, error) {
+	app, ok := c.write.(*appToken)
+	if !ok {
+		if app, ok = c.read.(*appToken); !ok {
+			return "", time.Time{}, ErrStaticToken
+		}
+	}
+	return app.scoped(ctx, repo)
+}
+
+// RevokeToken revokes an installation token GitToken minted, signed in as
+// the token itself. A token GitHub no longer knows is already revoked.
+func (c *Client) RevokeToken(ctx context.Context, token string) error {
+	_, err := c.raw(ctx, "Bearer "+token, http.MethodDelete, "/installation/token", nil, nil)
+	if IsStatus(err, http.StatusUnauthorized) {
+		return nil
+	}
+	return err
+}
+
 // PausedUntil reports an active rate-limit pause.
 func (c *Client) PausedUntil() (time.Time, bool) { return c.tr.PausedUntil() }
 

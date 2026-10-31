@@ -69,6 +69,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.reconfigureOnURLChange(ctx)
 		d.runInprocTasks(ctx)
 		d.reconcileContainers(ctx)
+		d.sweepGitTokens(ctx)
 		d.reconcileResources(c)
 		d.reconcileEndpoints(ctx)
 		d.sweepResources(c)

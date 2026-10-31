@@ -153,7 +153,7 @@ jobs:
         if: env.RUN == 'true'
       - run: make container-test
         if: env.RUN == 'true'
-      - run: make container-test CONTAINER_TEST_RUN='TestDockerGateway|TestDockerShell'
+      - run: make container-test CONTAINER_TEST_RUN='TestDockerGateway|TestDockerShell|TestDockerGitCredential'
         if: env.RUN == 'true'
         env:
           OPEN_CONDUIT_CONTAINER_FORWARD: tcp

@@ -6,6 +6,7 @@
 package githubtest
 
 import (
+	"compress/gzip"
 	"crypto"
 	"crypto/hmac"
 	"crypto/rsa"
@@ -14,10 +15,15 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -133,6 +139,7 @@ type Server struct {
 	tokens                           map[string]bool
 	apps                             map[string]*rsa.PublicKey
 	installs                         map[string]string // installation token → app id
+	scopes                           map[string]TokenScope
 	writes                           []Write
 	requests                         []string
 	notMod                           int
@@ -184,7 +191,7 @@ type limit struct {
 func New(repo string, tokens ...string) *Server {
 	s := &Server{Repo: repo, now: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), nextID: 1000, issues: map[int]*Issue{}, pulls: map[int]*Pull{},
 		events: map[int][]IssueEvent{}, checks: map[string][]CheckRun{}, statuses: map[string][]Status{}, tokens: map[string]bool{},
-		apps: map[string]*rsa.PublicKey{}, installs: map[string]string{}, failNext: map[string]int{}, loseNext: map[string]int{}, tokenTTL: time.Hour,
+		apps: map[string]*rsa.PublicKey{}, installs: map[string]string{}, scopes: map[string]TokenScope{}, failNext: map[string]int{}, loseNext: map[string]int{}, tokenTTL: time.Hour,
 		commits: map[string]time.Time{}, contents: map[string][]byte{}, branches: map[string]bool{}, files: map[string]string{}, fileData: map[string][]byte{},
 		protection: map[string][]string{}, rulesets: map[string][]string{}}
 	for _, t := range tokens {
@@ -213,6 +220,116 @@ func (s *Server) RevokeToken(t string) { s.mu.Lock(); delete(s.tokens, t); s.mu.
 
 // AddApp registers a GitHub App public key; its installation covers Repo.
 func (s *Server) AddApp(id string, key *rsa.PublicKey) { s.mu.Lock(); s.apps[id] = key; s.mu.Unlock() }
+
+// TokenScope is what an installation token was minted for: the
+// repositories (names, without the owner) and permissions the request
+// asked for. A token minted without either covers the whole installation.
+type TokenScope struct {
+	Repositories []string          `json:"repositories,omitempty"`
+	Permissions  map[string]string `json:"permissions,omitempty"`
+}
+
+// Scope reports what an installation token was minted for, and whether it
+// is still valid (minted and not revoked).
+func (s *Server) Scope(token string) (TokenScope, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	_, ok := s.installs[token]
+	return s.scopes[token], ok
+}
+
+// gitAllowed reports whether token may read (or, with push, write) repo's
+// git data: an accepted token, or a valid installation token whose scope
+// covers repo, with contents: write for a push.
+func (s *Server) gitAllowed(token, repo string, push bool) bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokens[token] {
+		return true
+	}
+	if _, ok := s.installs[token]; !ok {
+		return false
+	}
+	scope, scoped := s.scopes[token]
+	if !scoped {
+		return strings.EqualFold(repo, s.Repo)
+	}
+	_, name, _ := strings.Cut(repo, "/")
+	owner, _, _ := strings.Cut(s.Repo, "/")
+	if !strings.HasPrefix(strings.ToLower(repo), strings.ToLower(owner)+"/") || !slices.ContainsFunc(scope.Repositories, func(r string) bool { return strings.EqualFold(r, name) }) {
+		return false
+	}
+	if scope.Permissions == nil {
+		return true
+	}
+	perm := scope.Permissions["contents"]
+	return perm == "write" || !push && perm == "read"
+}
+
+// Handler is the fake's API handler, for serving it somewhere other than
+// its own test server.
+func (s *Server) Handler() http.Handler { return http.HandlerFunc(s.serve) }
+
+// GitHandler serves git's smart HTTP for the bare repositories under root
+// (<owner>/<name>.git) with git's own upload-pack and receive-pack, as
+// github.com would: HTTP basic auth whose password is a token gitAllowed
+// accepts for the repository, a push needing contents: write. Anything
+// else is a 401.
+func (s *Server) GitHandler(root, git string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		m := reGitPath.FindStringSubmatch(r.URL.Path)
+		if m == nil {
+			http.NotFound(w, r)
+			return
+		}
+		service := m[2]
+		if service == "info/refs" {
+			service = r.URL.Query().Get("service")
+		}
+		if service != "git-upload-pack" && service != "git-receive-pack" {
+			http.Error(w, "unsupported service", http.StatusForbidden)
+			return
+		}
+		_, token, ok := r.BasicAuth()
+		if !ok || !s.gitAllowed(token, m[1], service == "git-receive-pack") {
+			w.Header().Set("WWW-Authenticate", `Basic realm="GitHub"`)
+			http.Error(w, "authentication failed", http.StatusUnauthorized)
+			return
+		}
+		dir := filepath.Join(root, filepath.FromSlash(m[1])+".git")
+		if fi, err := os.Stat(dir); err != nil || !fi.IsDir() {
+			http.NotFound(w, r)
+			return
+		}
+		args := []string{strings.TrimPrefix(service, "git-"), "--stateless-rpc"}
+		if m[2] == "info/refs" {
+			args = append(args, "--advertise-refs")
+		}
+		cmd := exec.CommandContext(r.Context(), git, append(args, dir)...)
+		if m[2] == "info/refs" {
+			w.Header().Set("Content-Type", "application/x-"+service+"-advertisement")
+			w.Header().Set("Cache-Control", "no-cache")
+			line := "# service=" + service + "\n"
+			fmt.Fprintf(w, "%04x%s0000", len(line)+4, line)
+		} else {
+			body := io.Reader(r.Body)
+			if r.Header.Get("Content-Encoding") == "gzip" {
+				z, err := gzip.NewReader(r.Body)
+				if err != nil {
+					http.Error(w, "bad body", http.StatusBadRequest)
+					return
+				}
+				body = z
+			}
+			cmd.Stdin = body
+			w.Header().Set("Content-Type", "application/x-"+service+"-result")
+		}
+		cmd.Stdout = w
+		_ = cmd.Run()
+	})
+}
+
+var reGitPath = regexp.MustCompile(`^/([^/]+/[^/]+?)\.git/(info/refs|git-upload-pack|git-receive-pack)$`)
 
 // SetTokenTTL sets installation token lifetime.
 func (s *Server) SetTokenTTL(d time.Duration) { s.mu.Lock(); s.tokenTTL = d; s.mu.Unlock() }
@@ -968,7 +1085,19 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		s.issued++
 		tok := fmt.Sprintf("ghs_%s_%d", strings.TrimPrefix(token, "app:"), s.issued)
 		s.installs[tok] = strings.TrimPrefix(token, "app:")
+		var scope TokenScope
+		if len(body) > 0 && json.Unmarshal(body, &scope) == nil && (scope.Repositories != nil || scope.Permissions != nil) {
+			s.scopes[tok] = scope
+		}
 		return http.StatusCreated, map[string]any{"token": tok, "expires_at": ts(s.now.Add(s.tokenTTL))}
+	}
+	if r.URL.Path == "/installation/token" && r.Method == http.MethodDelete {
+		if _, ok := s.installs[token]; !ok {
+			return 0, nil
+		}
+		delete(s.installs, token)
+		delete(s.scopes, token)
+		return http.StatusNoContent, nil
 	}
 	if m := reInstall.FindStringSubmatch(r.URL.Path); m != nil {
 		if !strings.EqualFold(m[1], s.Repo) {

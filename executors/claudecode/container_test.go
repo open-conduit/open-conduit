@@ -118,8 +118,25 @@ func TestContainerLaunch(t *testing.T) {
 		t.Errorf("the seed was copied again: %s", raw)
 	}
 
+	// Without a static GitHub token, git's helper is the toolbelt's os,
+	// which asks the host for a token minted for the Work's repository.
+	r, _ := h.request("work/c", "exec-4", 1, map[string]any{"home_seed": seed, "secret_env": map[string]string{"claude": "CLAUDE_CODE_OAUTH_TOKEN"}})
+	r.Context.Container, r.Context.ContainerHome = b, home
+	r.Context.Secrets = map[string]string{"claude": "oauth-token"}
+	r.Context.ToolbeltToken, r.Context.ToolbeltEndpoint = "belt", "unix:///run/belt.sock"
+	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("container turn failed: %+v", res.Outcome)
+	}
+	env = envMap(b.launches[len(b.launches)-1].Env)
+	if env["GIT_CONFIG_COUNT"] != "1" || env["GIT_CONFIG_KEY_0"] != "credential.helper" || env["GIT_CONFIG_VALUE_0"] != "!os git-credential" {
+		t.Errorf("git's helper without a static token: %q %q %q", env["GIT_CONFIG_COUNT"], env["GIT_CONFIG_KEY_0"], env["GIT_CONFIG_VALUE_0"])
+	}
+	if l := b.launches[len(b.launches)-1]; slices.ContainsFunc(l.Secrets, func(kv string) bool { return strings.HasPrefix(kv, "GH_TOKEN=") }) {
+		t.Errorf("a GitHub token crossed in: %v", l.Secrets)
+	}
+
 	// Without a home from the host, nothing launches.
-	r, _ := h.request("work/d", "exec-3", 1, nil)
+	r, _ = h.request("work/d", "exec-3", 1, nil)
 	r.Context.Container = b
 	if res := h.run(e, r); res.Outcome.Kind != domain.OutcomeFailed || dataOf(t, res).Reason != "sandbox_unavailable" {
 		t.Errorf("no home: %+v", res.Outcome)

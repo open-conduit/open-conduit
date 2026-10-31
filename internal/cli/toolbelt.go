@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"encoding/json"
@@ -33,6 +34,7 @@ Commands:
   inbox                                     print input injected into this running execution since the last
                                             read (JSON lines) and acknowledge it as taken in (OS_INBOX)
   mcp                                       serve these operations as an MCP server on stdio
+  git-credential get|store|erase            git's credential helper: a token for the Work's repository
   version
 
 Every command accepts --request-id ID to retry safely. Results print as JSON.
@@ -90,6 +92,8 @@ func RunToolbelt(version, commit string, args []string, env Env, stdin io.Reader
 		return t.mcp(args[1:])
 	case "inbox":
 		return t.inbox(args[1:])
+	case "git-credential":
+		return t.gitCredential(args[1:])
 	}
 	return t.usage("unknown command")
 }
@@ -380,6 +384,60 @@ func (t *toolbelt) call(args []string) int {
 		}
 		return shown
 	})
+}
+
+// gitCredential is git's credential helper protocol over
+// github.git.credential: for `get` it reads git's attributes from stdin and
+// prints the username and password the host minted for this execution, or
+// nothing when the host has none for that URL. `store` and `erase` do
+// nothing: the host owns the token and revokes it. It sends no request ID,
+// so the credential is never kept for replay.
+func (t *toolbelt) gitCredential(args []string) int {
+	if len(args) != 1 {
+		return t.usage("git-credential takes get, store or erase")
+	}
+	if args[0] != "get" {
+		_, _ = io.Copy(io.Discard, t.stdin)
+		return 0
+	}
+	in := map[string]string{}
+	sc := bufio.NewScanner(t.stdin)
+	for sc.Scan() {
+		line := sc.Text()
+		if line == "" {
+			break
+		}
+		if k, v, ok := strings.Cut(line, "="); ok && (k == "protocol" || k == "host" || k == "path") {
+			in[k] = v
+		}
+	}
+	c, err := t.client()
+	if err != nil {
+		fmt.Fprintf(t.errOut, "os: %s\n", err)
+		return 1
+	}
+	data, _ := json.Marshal(in)
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	result, err := c.ToolbeltCall(ctx, client.ToolCall{Operation: "github.git.credential", Input: data})
+	if err != nil {
+		var api *client.Error
+		if errors.As(err, &api) {
+			fmt.Fprintf(t.errOut, "os: no git credential: %s\n", api.Error())
+		} else {
+			fmt.Fprintln(t.errOut, "os: no git credential: management endpoint unreachable")
+		}
+		return 1
+	}
+	var cred struct{ Username, Password string }
+	if result.Output != nil {
+		_ = json.Unmarshal(result.Output.Data, &cred)
+	}
+	if cred.Username == "" || cred.Password == "" || strings.ContainsAny(cred.Username+cred.Password, "\n\x00") {
+		return 0
+	}
+	fmt.Fprintf(t.out, "username=%s\npassword=%s\n", cred.Username, cred.Password)
+	return 0
 }
 
 // inbox reads the executor's inject inbox (OS_INBOX; the shell executor's

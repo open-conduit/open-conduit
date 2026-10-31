@@ -1,0 +1,155 @@
+package github
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"strings"
+	"sync"
+	"time"
+
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
+)
+
+// OpGitCredential is git's credential for the Work's repository, minted
+// for the execution that asks: the operation behind `os git-credential`,
+// the git credential helper a container launch sets. It is not an agent's
+// tool; agents run git and never call it themselves.
+const OpGitCredential = "github.git.credential"
+
+// gitReuse is how long before it expires a minted token stops being handed
+// out again, as the connection's own installation tokens are.
+const gitReuse = 5 * time.Minute
+
+// gitGrant is one token minted for an execution.
+type gitGrant struct {
+	repo    string
+	client  *Client
+	token   string
+	expires time.Time
+}
+
+// gitGrants are the tokens minted for each execution, kept until the host
+// revokes them. They are in memory only: a daemon restart forgets them, and
+// they expire within the hour.
+type gitGrants struct {
+	mu   sync.Mutex
+	byID map[domain.ID][]gitGrant
+}
+
+type gitCredentialInput struct {
+	Protocol string `json:"protocol"`
+	Host     string `json:"host"`
+	Path     string `json:"path,omitempty"`
+}
+
+type gitCredentialOutput struct {
+	Username  string `json:"username,omitempty"`
+	Password  string `json:"password,omitempty"`
+	ExpiresAt string `json:"expires_at,omitempty"`
+}
+
+// gitCredential answers git's `get` for https on the code repository's web
+// host (and, when git sends one, the repository's path) with a token
+// limited to that repository and contents: write. Any other URL gets no
+// credential, so git goes on to its next helper. A token connection has
+// nothing to mint: its token crosses into the container as it is.
+func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
+	// A call with a request ID would keep its result, the token, for
+	// replay: `os git-credential` never sends one.
+	if extension.CallRequestID(ctx) != "" {
+		return nil, refuse("request_id_refused", "%s takes no request_id: its result is a credential and is never kept", OpGitCredential)
+	}
+	var in gitCredentialInput
+	if err := decode(data, &in); err != nil {
+		return nil, err
+	}
+	src, err := t.pullSource(b, "")
+	if err != nil {
+		return nil, err
+	}
+	repo := src.Settings.Repo
+	path := strings.TrimSuffix(strings.Trim(in.Path, "/"), ".git")
+	if in.Protocol != "https" || !strings.EqualFold(in.Host, src.Client.Host()) || path != "" && !strings.EqualFold(path, repo) {
+		return gitCredentialOutput{}, nil
+	}
+	now := t.o.Now()
+	exec := b.a.ExecutionID
+	t.git.mu.Lock()
+	for _, g := range t.git.byID[exec] {
+		if g.repo == repo && g.client == src.Client && g.expires.Sub(now) > gitReuse {
+			t.git.mu.Unlock()
+			return gitCredentialOutput{Username: "x-access-token", Password: g.token, ExpiresAt: g.expires.UTC().Format(time.RFC3339)}, nil
+		}
+	}
+	t.git.mu.Unlock()
+	tok, expires, err := src.Client.GitToken(ctx, repo)
+	if errors.Is(err, ErrStaticToken) {
+		return nil, refuse("github_static_token", "this GitHub connection signs in with a token, not an App, so there is no token to mint for git")
+	}
+	if err != nil {
+		return nil, err
+	}
+	t.git.mu.Lock()
+	if t.git.byID == nil {
+		t.git.byID = map[domain.ID][]gitGrant{}
+	}
+	t.git.byID[exec] = append(t.git.byID[exec], gitGrant{repo: repo, client: src.Client, token: tok, expires: expires})
+	t.git.mu.Unlock()
+	return gitCredentialOutput{Username: "x-access-token", Password: tok, ExpiresAt: expires.UTC().Format(time.RFC3339)}, nil
+}
+
+// RevokeGitTokens revokes every git token minted for the execution, once
+// its segment has ended. One that GitHub couldn't be told about is kept,
+// for the next call (or SweepGitTokens) to try again.
+func (t *Tools) RevokeGitTokens(ctx context.Context, execution domain.ID) error {
+	t.git.mu.Lock()
+	grants := t.git.byID[execution]
+	delete(t.git.byID, execution)
+	t.git.mu.Unlock()
+	var kept []gitGrant
+	var errs []error
+	for _, g := range grants {
+		if err := g.client.RevokeToken(ctx, g.token); err != nil {
+			if !g.expires.After(t.o.Now()) {
+				continue
+			}
+			kept, errs = append(kept, g), append(errs, err)
+		}
+	}
+	if len(kept) > 0 {
+		t.git.mu.Lock()
+		if t.git.byID == nil {
+			t.git.byID = map[domain.ID][]gitGrant{}
+		}
+		t.git.byID[execution] = append(t.git.byID[execution], kept...)
+		t.git.mu.Unlock()
+	}
+	return errors.Join(errs...)
+}
+
+// SweepGitTokens revokes the git tokens of every execution live doesn't
+// report running: those whose end RevokeGitTokens missed.
+func (t *Tools) SweepGitTokens(ctx context.Context, live func([]domain.ID) (map[domain.ID]bool, error)) error {
+	t.git.mu.Lock()
+	ids := make([]domain.ID, 0, len(t.git.byID))
+	for id := range t.git.byID {
+		ids = append(ids, id)
+	}
+	t.git.mu.Unlock()
+	if len(ids) == 0 {
+		return nil
+	}
+	running, err := live(ids)
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for _, id := range ids {
+		if !running[id] {
+			errs = append(errs, t.RevokeGitTokens(ctx, id))
+		}
+	}
+	return errors.Join(errs...)
+}
