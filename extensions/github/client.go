@@ -51,6 +51,7 @@ type Client struct {
 	tr             *transport
 	now            func() time.Time
 	read, write    tokenSource
+	gitBot         bool
 }
 
 // NewClient builds a client from validated connection config. No secret is
@@ -67,7 +68,7 @@ func NewClient(cfg ConnectionConfig, secrets SecretFunc, o ClientOptions) (*Clie
 	if base == nil {
 		base = &http.Client{Timeout: 30 * time.Second}
 	}
-	c := &Client{api: cfg.APIURL, now: o.Now}
+	c := &Client{api: cfg.APIURL, now: o.Now, gitBot: cfg.Git == GitBot}
 	c.tr = newTransport(base.Transport, u.Host, o.Now)
 	c.http = &http.Client{Transport: c.tr, Timeout: base.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	if u.Host == "api.github.com" {
@@ -111,6 +112,32 @@ func (c *Client) GitToken(ctx context.Context, repo string) (string, time.Time, 
 	}
 	return app.scoped(ctx, repo)
 }
+
+// GitIdentity is who git commits as for a GitHub App: its bot user's login
+// and the noreply address GitHub links to that user, so the commits show
+// the bot's name and avatar.
+type GitIdentity struct {
+	Name  string `json:"name"`
+	Email string `json:"email"`
+}
+
+// GitIdentity is the identity of the App GitToken mints from: the bot App
+// when there is one, else the sign-in App. The App's slug comes from GET
+// /app with its JWT and its bot user's id from GET /users/<slug>[bot]; both
+// are looked up once.
+func (c *Client) GitIdentity(ctx context.Context, repo string) (GitIdentity, error) {
+	app, ok := c.write.(*appToken)
+	if !ok {
+		if app, ok = c.read.(*appToken); !ok {
+			return GitIdentity{}, ErrStaticToken
+		}
+	}
+	return app.identity(ctx, repo)
+}
+
+// GitBot reports whether git works as the App's bot in the runs of this
+// connection's repositories (connection git "bot").
+func (c *Client) GitBot() bool { return c.gitBot }
 
 // RevokeToken revokes an installation token GitToken minted, signed in as
 // the token itself. A token GitHub no longer knows is already revoked.

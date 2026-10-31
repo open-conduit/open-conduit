@@ -224,6 +224,15 @@ func (s *Server) RevokeToken(t string) { s.mu.Lock(); delete(s.tokens, t); s.mu.
 // AddApp registers a GitHub App public key; its installation covers Repo.
 func (s *Server) AddApp(id string, key *rsa.PublicKey) { s.mu.Lock(); s.apps[id] = key; s.mu.Unlock() }
 
+// AppBot is the bot user of the App with id, as GET /app and GET
+// /users/<login> report it: the slug app-<id>, the login <slug>[bot] and a
+// user id of 9000000 plus the App's id.
+func AppBot(id string) (slug, login string, userID int64) {
+	n, _ := strconv.ParseInt(id, 10, 64)
+	slug = "app-" + id
+	return slug, slug + "[bot]", 9000000 + n
+}
+
 // TokenScope is what an installation token was minted for: the
 // repositories (names, without the owner) and permissions the request
 // asked for. A token minted without either covers the whole installation.
@@ -882,7 +891,7 @@ var (
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (string, bool) {
 	auth := strings.TrimPrefix(strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer "), "token ")
-	if reInstall.MatchString(r.URL.Path) || reAccessToken.MatchString(r.URL.Path) {
+	if reInstall.MatchString(r.URL.Path) || reAccessToken.MatchString(r.URL.Path) || r.URL.Path == "/app" {
 		app, ok := s.verifyJWT(auth)
 		if !ok {
 			http.Error(w, `{"message":"Bad credentials"}`, http.StatusUnauthorized)
@@ -1110,6 +1119,20 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		delete(s.installs, token)
 		delete(s.scopes, token)
 		return http.StatusNoContent, nil
+	}
+	if r.URL.Path == "/app" && r.Method == http.MethodGet {
+		id := strings.TrimPrefix(token, "app:")
+		slug, _, _ := AppBot(id)
+		n, _ := strconv.ParseInt(id, 10, 64)
+		return http.StatusOK, map[string]any{"id": n, "slug": slug, "name": slug}
+	}
+	if login, ok := strings.CutPrefix(r.URL.Path, "/users/"); ok && r.Method == http.MethodGet {
+		for id := range s.apps {
+			if _, bot, uid := AppBot(id); bot == login {
+				return http.StatusOK, map[string]any{"login": bot, "id": uid, "type": "Bot"}
+			}
+		}
+		return 0, nil
 	}
 	if m := reInstall.FindStringSubmatch(r.URL.Path); m != nil {
 		if !strings.EqualFold(m[1], s.Repo) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -98,6 +99,37 @@ func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessag
 	t.git.byID[exec] = append(t.git.byID[exec], gitGrant{repo: repo, client: src.Client, token: tok, expires: expires})
 	t.git.mu.Unlock()
 	return gitCredentialOutput{Username: "x-access-token", Password: tok, ExpiresAt: expires.UTC().Format(time.RFC3339)}, nil
+}
+
+// RunEnvironment is the run environment layer (extension.RunEnvironment)
+// for a Work whose repository's connection sets git "bot": the toolbelt's
+// `os git-credential` as git's only credential helper (the operator's
+// keychain or gh helper, which git would otherwise ask first, cleared),
+// signing off, and the App's bot user as author and committer. Every other
+// run gets nothing, and so does a Work whose scope has no single
+// repository this extension knows.
+func (t *Tools) RunEnvironment(ctx context.Context, r extension.RunEnvironmentRequest) (map[string]string, error) {
+	b, err := t.bindWork(ctx, extension.Authority{ScopeID: r.Owner.ScopeID, WorkID: r.Owner.WorkID, ExecutionID: r.Owner.ExecutionID})
+	if err != nil {
+		return nil, nil
+	}
+	src, err := t.pullSource(b, "")
+	if err != nil || src.Client == nil || !src.Client.GitBot() {
+		return nil, nil
+	}
+	id, err := src.Client.GitIdentity(ctx, src.Settings.Repo)
+	if err != nil {
+		return nil, fmt.Errorf("github git bot identity: %w", err)
+	}
+	return map[string]string{
+		"GIT_CONFIG_COUNT": "4",
+		"GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
+		"GIT_CONFIG_KEY_1": "credential.helper", "GIT_CONFIG_VALUE_1": "!os git-credential",
+		"GIT_CONFIG_KEY_2": "commit.gpgsign", "GIT_CONFIG_VALUE_2": "false",
+		"GIT_CONFIG_KEY_3": "tag.gpgsign", "GIT_CONFIG_VALUE_3": "false",
+		"GIT_AUTHOR_NAME": id.Name, "GIT_AUTHOR_EMAIL": id.Email,
+		"GIT_COMMITTER_NAME": id.Name, "GIT_COMMITTER_EMAIL": id.Email,
+	}, nil
 }
 
 // RevokeGitTokens revokes every git token minted for the execution, once
