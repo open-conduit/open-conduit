@@ -268,6 +268,41 @@
     }
   });
 
+  // ---- Redraws keep accordions open ----
+  // ocRedraw replaces a region's contents with fresh HTML and reopens every
+  // <details> the operator had open. A [data-key] names one; one without a
+  // key (a "Show all lines") is named by its place inside the nearest keyed
+  // one. A row that was open and now sits in a new, closed group (a run of
+  // tool calls that grew into one) opens that group so it stays in sight.
+  function detailsKeys(root) {
+    const keys = new Map();
+    const seen = new Map();
+    root.querySelectorAll("details").forEach((d) => {
+      if (d.dataset.key) { keys.set(d, d.dataset.key); return; }
+      const owner = d.parentElement && d.parentElement.closest("details[data-key]");
+      if (!owner || !root.contains(owner)) return;
+      const n = (seen.get(owner) || 0) + 1;
+      seen.set(owner, n);
+      keys.set(d, owner.dataset.key + "/" + n);
+    });
+    return keys;
+  }
+  window.ocRedraw = (root, html) => {
+    const before = detailsKeys(root);
+    const open = new Set();
+    const known = new Set(before.values());
+    before.forEach((k, d) => { if (d.open) open.add(k); });
+    root.innerHTML = html;
+    detailsKeys(root).forEach((k, d) => {
+      if (!open.has(k)) return;
+      d.open = true;
+      for (let p = d.parentElement && d.parentElement.closest("details"); p && root.contains(p); p = p.parentElement && p.parentElement.closest("details")) {
+        if (p.dataset.key && known.has(p.dataset.key)) break;
+        p.open = true;
+      }
+    });
+  };
+
   // ---- Live regions ----
   // A [data-live] region is redrawn from the same URL every few seconds while
   // the tab is visible, unless something in it has focus, a dialog or menu
@@ -294,9 +329,7 @@
         live.forEach((r) => {
           const next = doc.querySelector('[data-live="' + r.dataset.live + '"]');
           if (!next) return;
-          const open = new Set([...r.querySelectorAll("details[open][data-key]")].map((d) => d.dataset.key));
-          r.innerHTML = next.innerHTML;
-          r.querySelectorAll("details[data-key]").forEach((d) => { if (open.has(d.dataset.key)) d.open = true; });
+          window.ocRedraw(r, next.innerHTML);
           if (rowAt >= 0 && r.matches("[data-rows], :has([data-rows])")) focusRow(rowAt);
         });
         const title = doc.querySelector("title");

@@ -53,7 +53,10 @@ type chatBlock struct {
 	Kind   string
 	Filter string
 	At     time.Time
-	Text   string
+	// Key names a block that opens and closes (a group, a thinking block)
+	// the same way on every redraw, so a live transcript keeps it open.
+	Key  string
+	Text string
 	// Full is the whole of a clipped prompt.
 	Full string
 	// Title is a prompt's first line.
@@ -122,6 +125,7 @@ const toolbeltServer = "open-conduit"
 func buildChat(c conversation, run client.Run) chat {
 	ch := chat{Counts: map[string]int{}}
 	prompted := false
+	thoughts := map[string]int{}
 	for _, e := range c.Entries {
 		at := parseTime(e.At)
 		switch e.Kind {
@@ -139,7 +143,14 @@ func buildChat(c conversation, run client.Run) chat {
 		case "assistant":
 			ch.add(chatBlock{Kind: "agent", Filter: fMessages, At: at, Text: e.Text})
 		case "thinking":
-			ch.add(chatBlock{Kind: "thinking", Filter: fMessages, At: at, Text: e.Text})
+			// Keyed by time, not position, so trimming the transcript's start
+			// doesn't move a key onto another block.
+			k := "think-" + strconv.FormatInt(at.UnixNano(), 36)
+			thoughts[k]++
+			if n := thoughts[k]; n > 1 {
+				k += "-" + strconv.Itoa(n)
+			}
+			ch.add(chatBlock{Kind: "thinking", Filter: fMessages, At: at, Key: k, Text: e.Text})
 		case "note":
 			if m, ok := strings.CutPrefix(e.Text, "Session started on "); ok && ch.Model == "" {
 				ch.Model = m
@@ -297,7 +308,8 @@ func (ch *chat) group() {
 		case b.Kind == "tool" && n > 0 && out[n-1].Kind == "tools":
 			out[n-1].Group = append(out[n-1].Group, *b.Tool)
 		case b.Kind == "tool":
-			out = append(out, chatBlock{Kind: "tools", Filter: fTools, At: b.At, Group: []chatTool{*b.Tool}})
+			// A group grows at its end, so its first call names it.
+			out = append(out, chatBlock{Kind: "tools", Filter: fTools, At: b.At, Key: "group-" + b.Tool.Key, Group: []chatTool{*b.Tool}})
 		case b.Kind == "system" && n > 0 && out[n-1].Kind == "system":
 			out[n-1].Lines = append(out[n-1].Lines, b.Lines...)
 		default:

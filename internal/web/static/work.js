@@ -110,10 +110,8 @@
       try {
         const res = await fetch(conv.dataset.live, { credentials: "same-origin" });
         if (!res.ok) return;
-        const open = new Set([...conv.querySelectorAll("details[open][data-key]")].map((d) => d.dataset.key));
         const end = atEnd();
-        conv.innerHTML = await res.text();
-        conv.querySelectorAll("details[data-key]").forEach((d) => { if (open.has(d.dataset.key)) d.open = true; });
+        window.ocRedraw(conv, await res.text());
         wire();
         applyView();
         const n = conv.querySelectorAll("[data-f]").length;

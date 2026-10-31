@@ -172,6 +172,34 @@ func TestChatGroupsToolsAndHighlightsOnlyRealFailures(t *testing.T) {
 	}
 }
 
+// Every block that opens carries a key that stays put as a live turn grows,
+// so a redraw reopens what the operator opened (issue 225).
+func TestChatKeysBlocksThatOpen(t *testing.T) {
+	use := func(id string) string {
+		return `{"type":"assistant","message":{"content":[{"type":"tool_use","id":"` + id + `","name":"Bash","input":{"command":"ls"}}]}}`
+	}
+	think := `{"type":"assistant","message":{"content":[{"type":"thinking","thinking":"hmm"}]}}`
+	lines := []string{`{"type":"user","message":{"content":"go"}}`, think, use("a"), use("b"), use("c")}
+	before := chatOf(t, lines...)
+	after := chatOf(t, append(lines, use("d"), think)...)
+	keys := func(ch chat) []string {
+		var ks []string
+		for _, b := range ch.Blocks {
+			if b.Kind == "thinking" || b.Kind == "tools" {
+				if b.Key == "" {
+					t.Fatalf("%s block has no key", b.Kind)
+				}
+				ks = append(ks, b.Key)
+			}
+		}
+		return ks
+	}
+	b, a := keys(before), keys(after)
+	if len(b) != 2 || len(a) != 3 || b[0] != a[0] || b[1] != a[1] || b[1] != "group-a" || a[2] == a[0] {
+		t.Fatalf("keys moved: before %v, after %v", b, a)
+	}
+}
+
 func TestTurnTranscriptRendersAsAChat(t *testing.T) {
 	f, s, h := setup(t)
 	f.runs[1].Artifacts = []client.Artifact{{ID: "art_tx", MediaType: "application/x-ndjson", Size: 1}}
