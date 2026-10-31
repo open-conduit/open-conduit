@@ -49,9 +49,10 @@ snapshot:
   version_template: "{{ incpatch .Version }}-snapshot.{{ .ShortCommit }}"
 
 # semantic-release writes the notes from the Conventional Commits and passes
-# them in with --release-notes.
-changelog:
-  disable: true
+# them in with --release-notes, which the changelog pipe reads instead of
+# building its own list from git. Don't set `changelog.disable`: it skips that
+# pipe, the notes file is never read and the release goes out with an empty
+# body (every release up to 1.8.0 did).
 
 release:
   github:
