@@ -2,9 +2,9 @@ name: docs
 on:
   push:
     branches: [main]
-    paths: [site/**, .github/workflows/docs.yml]
+    paths: [site/**, extensions/setup/playbook/**, .github/workflows/docs.yml]
   pull_request:
-    paths: [site/**, .github/workflows/docs.yml]
+    paths: [site/**, extensions/setup/playbook/**, .github/workflows/docs.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -12,7 +12,8 @@ concurrency:
   group: pages-${{ github.ref }}
   cancel-in-progress: true
 jobs:
-  # Builds the Starlight site in site/ on every PR that changes it, and
+  # Builds the Starlight site in site/ on every PR that changes it (or the
+  # setup guide it publishes as setup-guide.md), and
   # publishes it to GitHub Pages from main. No branch protection requires
   # it, so filtering on paths can't hold a PR up.
   build:

@@ -19,6 +19,8 @@ It opens a Claude Code session with Open Conduit's setup guide, and the two of y
 - Secrets never pass through the chat. Credentials go in the config as references, such as `cmd:gh auth token` or a `keyring:` entry you store yourself with `open-conduit secret set`.
 - It ends with the commands to start the daemon, which you run yourself: `serve --dry-run` to watch safely first, then `service install` to run it in the background.
 
+Using another coding agent, or one you already have open? Give it [Point your agent here](/open-conduit/start/agents/), which installs Open Conduit and follows the same guide.
+
 Claude Code must be installed and signed in. The session can run only `open-conduit config`, `doctor`, `health`, `secret path` and `init github --dry-run` without asking you. `--config PATH` sets up a config other than the default.
 
 ## Set it up in the browser
