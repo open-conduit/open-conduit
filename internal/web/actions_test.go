@@ -103,7 +103,7 @@ func TestRebindOnlyForReadyWorkWhoseBindingIsGone(t *testing.T) {
 
 func TestControlsSendRevisionKeyReasonAndChoices(t *testing.T) {
 	f, s, h := setup(t)
-	f.work["wrk_1"] = client.Work{ID: "wrk_1", State: "waiting", Revision: "7", ScopeID: "scope_a"}
+	f.work["wrk_1"] = client.Work{ID: "wrk_1", State: "waiting", Revision: "7", ScopeID: "scope_a", CorrelationKeys: []client.Key{{Source: "github", ExternalID: "issue/12"}}}
 	post := func(path string, form url.Values) *http.Response {
 		form.Set("csrf", s.csrf)
 		form.Set("work", "wrk_1")
@@ -117,7 +117,7 @@ func TestControlsSendRevisionKeyReasonAndChoices(t *testing.T) {
 	post("/work/cancel", url.Values{"reason": {"  "}})
 	post("/work/wake", url.Values{"type": {"github.check_suite.completed"}})
 	post("/work/rebind", url.Values{"binding": {"agent-opus"}})
-	want := "hold wrk_1@7,cancel wrk_1@7,wake:github.check_suite.completed wrk_1@7,rebind:agent-opus wrk_1@7"
+	want := "hold wrk_1@7,cancel wrk_1@7,wake:github.check_suite.completed wrk_1@7 github/issue/12,rebind:agent-opus wrk_1@7"
 	if strings.Join(f.controls, ",") != want {
 		t.Fatalf("controls: %v", f.controls)
 	}
@@ -194,6 +194,34 @@ func TestWakeOffersTheWaitsTypes(t *testing.T) {
 	part := do(h, "GET", "/work/confirm?action=wake&id=wrk_1&part=1", nil, s).Body.String()
 	if !strings.Contains(part, "<option>slack.message.reply</option>") || !strings.Contains(part, "from the active Wait") {
 		t.Fatalf("wake:\n%s", part)
+	}
+}
+
+func TestWakeCarriesAKeyTheWaitMatches(t *testing.T) {
+	f, s, h := setup(t)
+	f.work["wrk_1"] = client.Work{ID: "wrk_1", State: "waiting", Revision: "7", CorrelationKeys: []client.Key{{Source: "slack", ExternalID: "T1/C1/1"}}}
+	f.waits = []client.Wait{{ID: "wait/1", WorkID: "wrk_1", State: "active", Match: client.Match{Keys: []client.Key{{Source: "slack", ExternalID: "T1/C1/1"}, {Source: "github", ExternalID: "pr/9"}}, Types: []string{"slack.reaction"}}}}
+	part := do(h, "GET", "/work/confirm?action=wake&id=wrk_1&part=1", nil, s).Body.String()
+	if !strings.Contains(part, `<option value="1">github · pr/9</option>`) {
+		t.Fatalf("wake keys:\n%s", part)
+	}
+	send := func(key string) int {
+		form := url.Values{"csrf": {s.csrf}, "work": {"wrk_1"}, "type": {"slack.reaction"}}
+		if key != "" {
+			form.Set("key", key)
+		}
+		return do(h, "POST", "/work/wake", form, s).Code
+	}
+	if c := send(""); c != http.StatusSeeOther {
+		t.Fatalf("default key: %d", c)
+	}
+	if c := send("1"); c != http.StatusSeeOther {
+		t.Fatalf("chosen key: %d", c)
+	}
+	send("5") // not one the Wait matches: refused before the daemon
+	want := "wake:slack.reaction wrk_1@7 slack/T1/C1/1,wake:slack.reaction wrk_1@7 github/pr/9"
+	if got := strings.Join(f.controls, ","); got != want {
+		t.Fatalf("controls: %s", got)
 	}
 }
 

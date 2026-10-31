@@ -101,7 +101,11 @@ func (f *fake) ReconcileScope(_ context.Context, id, rev, _ string) (client.Reco
 	return client.ReconcileResult{EventID: "evt_reconcile", ScopeID: id}, nil
 }
 func (f *fake) Wake(_ context.Context, id string, r client.WakeRequest, _ string) (client.WakeResult, error) {
-	f.controls = append(f.controls, "wake:"+r.Type+" "+id+"@"+r.ExpectedRevision)
+	// The daemon refuses a wake event without a correlation key.
+	if r.CorrelationKey == nil {
+		return client.WakeResult{}, &client.Error{Status: 400, Code: "invalid_request", Message: "invalid request"}
+	}
+	f.controls = append(f.controls, "wake:"+r.Type+" "+id+"@"+r.ExpectedRevision+" "+r.CorrelationKey.Source+"/"+r.CorrelationKey.ExternalID)
 	return client.WakeResult{Event: client.Event{ID: "evt_wake"}, Matched: true}, nil
 }
 func (f *fake) Doctor(context.Context, bool) (client.Doctor, error) {

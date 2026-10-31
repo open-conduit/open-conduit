@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -364,6 +365,51 @@ func formReason(r *http.Request, def string) string {
 	return def
 }
 
+// activeWait is waiting Work's active Wait, or nil.
+func (s *Server) activeWait(ctx context.Context, work client.Work) *client.Wait {
+	if work.State != "waiting" {
+		return nil
+	}
+	ws, err := s.src.Waits(ctx, url.Values{"work_id": {work.ID}, "state": {"active"}})
+	if err != nil {
+		return nil
+	}
+	for i := range ws.Items {
+		if ws.Items[i].State == "active" && ws.Items[i].WorkID == work.ID {
+			return &ws.Items[i]
+		}
+	}
+	return nil
+}
+
+// wakeKeys are the correlation keys a wake event can carry: the active
+// Wait's, which are what it matches on, else the Work's own. Whoever set
+// the Wait chose them, so the view names no source of its own.
+func wakeKeys(work client.Work, wait *client.Wait) []client.Key {
+	if wait != nil && len(wait.Match.Keys) > 0 {
+		return wait.Match.Keys
+	}
+	return work.CorrelationKeys
+}
+
+// wakeKey is the key a wake event carries: the one at the form's index, or
+// the first.
+func wakeKey(work client.Work, wait *client.Wait, index string) (client.Key, error) {
+	keys := wakeKeys(work, wait)
+	i := 0
+	if index != "" {
+		n, err := strconv.Atoi(index)
+		if err != nil || n < 0 || n >= len(keys) {
+			return client.Key{}, errors.New("that correlation key is not one the Wait matches")
+		}
+		i = n
+	}
+	if len(keys) == 0 {
+		return client.Key{}, errors.New("this Work has no correlation key for a wake event to carry")
+	}
+	return keys[i], nil
+}
+
 // workControl runs one control against the Work's current revision, read
 // now, with a fresh Idempotency-Key.
 func (s *Server) workControl(w http.ResponseWriter, r *http.Request) {
@@ -396,8 +442,13 @@ func (s *Server) workControl(w http.ResponseWriter, r *http.Request) {
 			s.done(w, r, "", errors.New("a wake event needs a type"))
 			return
 		}
+		corr, err := wakeKey(work, s.activeWait(ctx, work), r.PostFormValue("key"))
+		if err != nil {
+			s.done(w, r, "", err)
+			return
+		}
 		key := s.opts.NewKey()
-		res, err := s.src.Wake(ctx, work.ID, client.WakeRequest{ExpectedRevision: work.Revision, Type: typ, DeliveryID: "web/" + key}, key)
+		res, err := s.src.Wake(ctx, work.ID, client.WakeRequest{ExpectedRevision: work.Revision, Type: typ, DeliveryID: "web/" + key, CorrelationKey: &corr}, key)
 		rc.Summary, rc.Event = "Wake event "+typ, res.Event.ID
 		text = "Sent " + typ + " to " + label + "; it matched the active Wait, so the next turn is queued."
 		if !res.Matched {
@@ -499,6 +550,7 @@ type dialogView struct {
 	LastFail   *turnInfo
 	Latest     *turnInfo
 	WaitTypes  []string
+	WakeKeys   []client.Key
 	Bindings   []client.Binding
 	Pinned     string
 	Generation string
@@ -530,17 +582,7 @@ func (s *Server) confirmPage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	runs, _ := listAll(ctx, url.Values{"work_id": {work.ID}, "limit": {"200"}}, s.src.Runs)
-	var wait *client.Wait
-	if work.State == "waiting" {
-		if ws, err := s.src.Waits(ctx, url.Values{"work_id": {work.ID}, "state": {"active"}}); err == nil {
-			for i := range ws.Items {
-				if ws.Items[i].State == "active" && ws.Items[i].WorkID == work.ID {
-					wait = &ws.Items[i]
-					break
-				}
-			}
-		}
-	}
+	wait := s.activeWait(ctx, work)
 	if acts, err := s.src.Actions(ctx, client.ActionTarget{WorkID: work.ID}); err == nil {
 		work.Actions = acts
 	}
@@ -554,6 +596,7 @@ func (s *Server) confirmPage(w http.ResponseWriter, r *http.Request) {
 	if wait != nil {
 		d.WaitTypes = wait.Match.Types
 	}
+	d.WakeKeys = wakeKeys(work, wait)
 	bindings := s.scopeBindings(ctx, v.ScopeID)
 	d.Pinned = pinnedBinding(v, bindings)
 	for _, b := range bindings {
