@@ -26,7 +26,7 @@ func TestMCPInstructionsCarryGuidance(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	answer := `{"data":{"guidance":["Log corrections with introspection.correction.","Ask with human.ask."]}}`
+	answer := `{"data":{"guidance":["Note things with fixture.note.","Ask with fixture.ask."]}}`
 	status := http.StatusOK
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -66,7 +66,7 @@ func TestMCPInstructionsCarryGuidance(t *testing.T) {
 		}
 		return resp.Result.Instructions
 	}
-	want := mcpBaseInstructions + "\n\nLog corrections with introspection.correction.\n\nAsk with human.ask."
+	want := mcpBaseInstructions + "\n\nNote things with fixture.note.\n\nAsk with fixture.ask."
 	if got := instructions(); got != want {
 		t.Fatalf("instructions = %q", got)
 	}
