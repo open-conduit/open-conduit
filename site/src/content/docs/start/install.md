@@ -54,4 +54,17 @@ make build                 # writes bin/open-conduit and bin/os
 cp bin/open-conduit bin/os /usr/local/bin/   # or anywhere on your PATH, side by side
 ```
 
+## Upgrading
+
+```sh
+open-conduit upgrade --check   # say whether a newer release is out
+open-conduit upgrade           # install it
+```
+
+`upgrade` downloads the latest release for this machine, checks it against the release's `checksums.txt` and replaces `open-conduit` and the `os` beside it, wherever they are installed. If the [background service](/open-conduit/guides/background-service/) is running, it then restarts it on the new version; pass `--no-restart` to leave that to you. A daemon you started with `open-conduit serve` keeps the old version until you restart it. `--version 1.9.0` installs a particular release.
+
+A Homebrew install belongs to Homebrew: `upgrade` tells you to run `brew upgrade --cask open-conduit` instead.
+
+The web view says when a newer release is out, in the status line along the bottom, and its Update page installs it the same way (see [the web view](/open-conduit/guides/operating/#the-web-view)).
+
 Next: run `open-conduit init --with claude` and let Claude Code set it up with you, as the [quick start](/open-conduit/start/quick-start/) describes. To talk the setup through in the browser instead, start the daemon with no config (`open-conduit serve`) and open the Setup page of `open-conduit web`; a session there proposes the config and you approve and apply it ([set it up in the browser](/open-conduit/start/quick-start/#set-it-up-in-the-browser)).
