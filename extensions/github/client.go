@@ -48,6 +48,7 @@ type ClientOptions struct {
 type Client struct {
 	api, web, host string
 	http           *http.Client
+	base           *http.Client // ClientOptions.HTTP, which writer clients share
 	tr             *transport
 	now            func() time.Time
 	read, write    tokenSource
@@ -68,7 +69,7 @@ func NewClient(cfg ConnectionConfig, secrets SecretFunc, o ClientOptions) (*Clie
 	if base == nil {
 		base = &http.Client{Timeout: 30 * time.Second}
 	}
-	c := &Client{api: cfg.APIURL, now: o.Now, gitBot: cfg.Git == GitBot}
+	c := &Client{api: cfg.APIURL, base: o.HTTP, now: o.Now, gitBot: cfg.Git == GitBot}
 	c.tr = newTransport(base.Transport, u.Host, o.Now)
 	c.http = &http.Client{Transport: c.tr, Timeout: base.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	if u.Host == "api.github.com" {

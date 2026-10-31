@@ -318,17 +318,26 @@ func (t *Tools) pullSource(b *bound, repo string) (Source, error) {
 // for the entry's own when it names none, names the entry's, or names a
 // connection of another type.
 func (t *Tools) writer(b *bound, src Source) (string, error) {
+	id, _, err := t.bindingClient(b, src)
+	return id, err
+}
+
+// bindingClient is the connection the calling execution's binding acts as
+// on src's GitHub and its client: as writer, or src's own ("" and
+// src.Client) when the binding names no `github` connection of its own.
+func (t *Tools) bindingClient(b *bound, src Source) (string, *Client, error) {
 	id := b.a.Connection
 	if id == "" || id == src.Connection {
-		return "", nil
+		return "", src.Client, nil
 	}
-	switch _, err := t.o.Writers.Client(b.work.ScopeID, id, src.Client); {
+	switch c, err := t.o.Writers.Client(b.work.ScopeID, id, src.Client); {
 	case errors.Is(err, errNotWriter):
-		return "", nil
+		return "", src.Client, nil
 	case err != nil:
-		return "", err
+		return "", nil, err
+	default:
+		return id, c, nil
 	}
-	return id, nil
 }
 
 // ownRepo reports whether src is the code repository of the Work's issue.

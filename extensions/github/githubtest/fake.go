@@ -270,6 +270,15 @@ func (s *Server) Scope(token string) (TokenScope, bool) {
 	return s.scopes[token], ok
 }
 
+// TokenApp is the App (by ID) that minted an installation token still
+// valid, or false.
+func (s *Server) TokenApp(token string) (string, bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	app, ok := s.installs[token]
+	return app, ok
+}
+
 // gitAllowed reports whether token may read (or, with push, write) repo's
 // git data: an accepted token, or a valid installation token whose scope
 // covers repo, with contents: write for a push.

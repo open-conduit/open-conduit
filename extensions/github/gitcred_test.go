@@ -56,6 +56,13 @@ func (a apiOnly) RoundTrip(r *http.Request) (*http.Response, error) {
 // issue 3 of octo/widgets.
 func gitCredLab(t *testing.T, auth string) (*githubtest.Server, *gh.Tools, credCall) {
 	t.Helper()
+	return gitCredLabWith(t, auth, nil)
+}
+
+// gitCredLabWith is gitCredLab with the further connections (ID to
+// config) the scope's bindings may name, all signing in with the same key.
+func gitCredLabWith(t *testing.T, auth string, conns map[string]string) (*githubtest.Server, *gh.Tools, credCall) {
+	t.Helper()
 	fake := githubtest.New(repo, "pat")
 	t.Cleanup(fake.Close)
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
@@ -64,18 +71,20 @@ func gitCredLab(t *testing.T, auth string) (*githubtest.Server, *gh.Tools, credC
 	}
 	fake.AddApp("42", &key.PublicKey)
 	fake.AddApp("43", &key.PublicKey)
+	fake.AddApp("44", &key.PublicKey)
 	pemText := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
 	cfg, err := gh.ParseConnection([]byte(auth))
 	if err != nil {
 		t.Fatal(err)
 	}
 	to, _ := url.Parse(fake.URL)
-	client, err := gh.NewClient(cfg, func(_ context.Context, name string) (string, error) {
+	secrets := func(_ context.Context, name string) (string, error) {
 		if name == gh.SecretToken {
 			return "pat", nil
 		}
 		return pemText, nil
-	}, gh.ClientOptions{HTTP: &http.Client{Transport: apiOnly{to}}, Now: fake.Now})
+	}
+	client, err := gh.NewClient(cfg, secrets, gh.ClientOptions{HTTP: &http.Client{Transport: apiOnly{to}}, Now: fake.Now})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -84,7 +93,11 @@ func gitCredLab(t *testing.T, auth string) (*githubtest.Server, *gh.Tools, credC
 		t.Fatal(err)
 	}
 	work := domain.Work{ID: "work/3", ScopeID: "eng", CorrelationKeys: []domain.CorrelationKey{{Source: ns, ExternalID: gh.IssueKey(3, "")}}}
-	tools, err := gh.NewTools(gh.ToolsOptions{Store: workStore{work}, Sources: func() []gh.Source { return []gh.Source{{Settings: s, Client: client}} }, Now: fake.Now})
+	writers := gh.NewWriters(func(scope domain.ID, id string) (json.RawMessage, gh.SecretFunc, bool) {
+		c, ok := conns[id]
+		return json.RawMessage(c), secrets, ok && scope == "eng"
+	}, fake.Now)
+	tools, err := gh.NewTools(gh.ToolsOptions{Store: workStore{work}, Sources: func() []gh.Source { return []gh.Source{{Settings: s, Connection: "github", Client: client}} }, Now: fake.Now, Writers: writers})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -98,14 +111,21 @@ func gitCredLab(t *testing.T, auth string) (*githubtest.Server, *gh.Tools, credC
 	return fake, tools, call
 }
 
-// credCall calls github.git.credential as an execution of the Work.
+// credCall calls github.git.credential as an execution of the Work, whose
+// binding names connection.
 type credCall struct {
-	op   extension.Operation
-	work domain.ID
+	op         extension.Operation
+	work       domain.ID
+	connection string
+}
+
+func (c credCall) as(connection string) credCall {
+	c.connection = connection
+	return c
 }
 
 func (c credCall) run(ctx context.Context, exec domain.ID, in string) (domain.Payload, error) {
-	return c.op.Handler(ctx, extension.Authority{ScopeID: "eng", WorkID: c.work, ExecutionID: exec}, domain.Payload{Data: json.RawMessage(in)})
+	return c.op.Handler(ctx, extension.Authority{ScopeID: "eng", WorkID: c.work, ExecutionID: exec, Connection: c.connection}, domain.Payload{Data: json.RawMessage(in)})
 }
 
 func (c credCall) do(exec domain.ID, in string) (domain.Payload, error) {
@@ -309,5 +329,58 @@ func TestRunEnvironment(t *testing.T) {
 	}
 	if _, err := gh.ParseConnection([]byte(`{"git":"someone"}`)); err == nil {
 		t.Error("an unknown git was accepted")
+	}
+}
+
+// TestRunEnvironmentBinding: a binding naming another `github` connection
+// with git "bot" (a second App) commits as that App's bot user and pushes
+// with a token that App minted, while a binding in the same scope naming
+// none, the entry's, or one the extension can't act as stays on the entry's
+// connection. The binding's connection decides: one without git "bot"
+// leaves git the operator's even though the entry sets it, and one that
+// can't be used fails the run rather than falling back.
+func TestRunEnvironmentBinding(t *testing.T) {
+	fake, tools, call := gitCredLabWith(t, `{"auth":"app","app_id":"42","git":"bot"}`, map[string]string{
+		"github-reviewer": `{"auth":"app","app_id":"44","git":"bot"}`,
+		"github-plain":    `{"auth":"app","app_id":"44"}`,
+		"github-ghe":      `{"api_url":"https://ghe.example/api/v3","auth":"app","app_id":"44","git":"bot"}`,
+	})
+	env := func(conn string) (map[string]string, error) {
+		return tools.RunEnvironment(context.Background(), extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: "eng", WorkID: call.work, ExecutionID: domain.ID("x/" + conn)}, Connection: conn})
+	}
+	minted := func(conn string) string {
+		t.Helper()
+		out, err := call.as(conn).do(domain.ID("x/"+conn), `{"protocol":"https","host":"github.com","path":"octo/widgets.git"}`)
+		if err != nil {
+			t.Fatalf("%s: %v", conn, err)
+		}
+		app, ok := fake.TokenApp(credentialOf(t, out).Password)
+		if !ok {
+			t.Fatalf("%s: credential not an installation token", conn)
+		}
+		return app
+	}
+	for conn, app := range map[string]string{"github-reviewer": "44", "": "42", "github": "42", "slack": "42"} {
+		e, err := env(conn)
+		if err != nil {
+			t.Fatalf("%q: %v", conn, err)
+		}
+		_, login, _ := githubtest.AppBot(app)
+		if e["GIT_AUTHOR_NAME"] != login || e["GIT_COMMITTER_NAME"] != login || e["GIT_CONFIG_VALUE_1"] != "!os git-credential" {
+			t.Errorf("binding naming %q: env %v, want App %s's bot", conn, e, app)
+		}
+		if got := minted(conn); got != app {
+			t.Errorf("binding naming %q: git token minted by App %s, want %s", conn, got, app)
+		}
+	}
+	if e, err := env("github-plain"); err != nil || e != nil {
+		t.Errorf("binding connection without git bot: %v, %v; want nothing", e, err)
+	}
+	if _, err := env("github-ghe"); err == nil {
+		t.Error("a binding connection on another GitHub fell back to the entry's")
+	}
+	var op *extension.OperationError
+	if _, err := call.as("github-ghe").do("x/ghe", `{"protocol":"https","host":"github.com"}`); !errors.As(err, &op) || op.Code != "github_writer" {
+		t.Errorf("credential for a binding connection on another GitHub: %v", err)
 	}
 }

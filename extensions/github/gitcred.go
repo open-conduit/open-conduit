@@ -54,8 +54,11 @@ type gitCredentialOutput struct {
 // gitCredential answers git's `get` for https on the code repository's web
 // host (and, when git sends one, the repository's path) with a token
 // limited to that repository and contents: write. Any other URL gets no
-// credential, so git goes on to its next helper. A token connection has
-// nothing to mint: its token crosses into the container as it is.
+// credential, so git goes on to its next helper. The token is minted by
+// the connection the calling binding acts as (its own `github` connection,
+// else the entry's), the one RunEnvironment took the identity from. A
+// token connection has nothing to mint: its token crosses into the
+// container as it is.
 func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
 	// A call with a request ID would keep its result, the token, for
 	// replay: `os git-credential` never sends one.
@@ -70,22 +73,26 @@ func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessag
 	if err != nil {
 		return nil, err
 	}
+	_, client, err := t.bindingClient(b, src)
+	if err != nil {
+		return nil, err
+	}
 	repo := src.Settings.Repo
 	path := strings.TrimSuffix(strings.Trim(in.Path, "/"), ".git")
-	if in.Protocol != "https" || !strings.EqualFold(in.Host, src.Client.Host()) || path != "" && !strings.EqualFold(path, repo) {
+	if in.Protocol != "https" || !strings.EqualFold(in.Host, client.Host()) || path != "" && !strings.EqualFold(path, repo) {
 		return gitCredentialOutput{}, nil
 	}
 	now := t.o.Now()
 	exec := b.a.ExecutionID
 	t.git.mu.Lock()
 	for _, g := range t.git.byID[exec] {
-		if g.repo == repo && g.client == src.Client && g.expires.Sub(now) > gitReuse {
+		if g.repo == repo && g.client == client && g.expires.Sub(now) > gitReuse {
 			t.git.mu.Unlock()
 			return gitCredentialOutput{Username: "x-access-token", Password: g.token, ExpiresAt: g.expires.UTC().Format(time.RFC3339)}, nil
 		}
 	}
 	t.git.mu.Unlock()
-	tok, expires, err := src.Client.GitToken(ctx, repo)
+	tok, expires, err := client.GitToken(ctx, repo)
 	if errors.Is(err, ErrStaticToken) {
 		return nil, refuse("github_static_token", "this GitHub connection signs in with a token, not an App, so there is no token to mint for git")
 	}
@@ -96,28 +103,37 @@ func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessag
 	if t.git.byID == nil {
 		t.git.byID = map[domain.ID][]gitGrant{}
 	}
-	t.git.byID[exec] = append(t.git.byID[exec], gitGrant{repo: repo, client: src.Client, token: tok, expires: expires})
+	t.git.byID[exec] = append(t.git.byID[exec], gitGrant{repo: repo, client: client, token: tok, expires: expires})
 	t.git.mu.Unlock()
 	return gitCredentialOutput{Username: "x-access-token", Password: tok, ExpiresAt: expires.UTC().Format(time.RFC3339)}, nil
 }
 
 // RunEnvironment is the run environment layer (extension.RunEnvironment)
-// for a Work whose repository's connection sets git "bot": the toolbelt's
+// for a Work whose binding's connection sets git "bot": the toolbelt's
 // `os git-credential` as git's only credential helper (the operator's
 // keychain or gh helper, which git would otherwise ask first, cleared),
-// signing off, and the App's bot user as author and committer. Every other
-// run gets nothing, and so does a Work whose scope has no single
-// repository this extension knows.
+// signing off, and the App's bot user as author and committer. The
+// connection is the binding's own `github` connection (r.Connection) when
+// it names one, else the entry's, so its git setting and its App decide.
+// Every other run gets nothing, and so does a Work whose scope has no
+// single repository this extension knows.
 func (t *Tools) RunEnvironment(ctx context.Context, r extension.RunEnvironmentRequest) (map[string]string, error) {
-	b, err := t.bindWork(ctx, extension.Authority{ScopeID: r.Owner.ScopeID, WorkID: r.Owner.WorkID, ExecutionID: r.Owner.ExecutionID})
+	b, err := t.bindWork(ctx, extension.Authority{ScopeID: r.Owner.ScopeID, WorkID: r.Owner.WorkID, ExecutionID: r.Owner.ExecutionID, Connection: r.Connection})
 	if err != nil {
 		return nil, nil
 	}
 	src, err := t.pullSource(b, "")
-	if err != nil || src.Client == nil || !src.Client.GitBot() {
+	if err != nil || src.Client == nil {
 		return nil, nil
 	}
-	id, err := src.Client.GitIdentity(ctx, src.Settings.Repo)
+	_, client, err := t.bindingClient(b, src)
+	if err != nil {
+		return nil, fmt.Errorf("github git: binding connection %s: %w", r.Connection, err)
+	}
+	if !client.GitBot() {
+		return nil, nil
+	}
+	id, err := client.GitIdentity(ctx, src.Settings.Repo)
 	if err != nil {
 		return nil, fmt.Errorf("github git bot identity: %w", err)
 	}
