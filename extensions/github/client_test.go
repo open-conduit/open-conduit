@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"crypto/rsa"
 	"crypto/x509"
+	"encoding/hex"
 	"encoding/pem"
 	"errors"
 	"net/http"
@@ -395,6 +396,27 @@ func TestConfigValidation(t *testing.T) {
 	} {
 		if _, err := ParseExtension([]byte(bad), []string{"hook"}); err == nil {
 			t.Fatalf("extension %s accepted", bad)
+		}
+	}
+}
+
+// A multi-line PEM comes back from some secret stores in another form: hex
+// from macOS Keychain, `\n` escapes from an environment variable.
+func TestParseKeyForms(t *testing.T) {
+	key, pemText := rsaKey(t)
+	for name, text := range map[string]string{
+		"pem":     pemText,
+		"hex":     hex.EncodeToString([]byte(pemText)) + "\n",
+		"escaped": strings.ReplaceAll(strings.TrimSpace(pemText), "\n", `\n`),
+	} {
+		got, err := parseKey(text)
+		if err != nil || !got.Equal(key) {
+			t.Fatalf("%s: %v", name, err)
+		}
+	}
+	for _, bad := range []string{"", "deadbeef", "-----BEGIN RSA PRIVATE KEY-----"} {
+		if _, err := parseKey(bad); err != ErrCredential {
+			t.Fatalf("%q: %v", bad, err)
 		}
 	}
 }

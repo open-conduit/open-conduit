@@ -227,6 +227,16 @@ func TestInitSecretAndConfigEditing(t *testing.T) {
 	if info, _ := os.Stat(secrets); info.Mode().Perm() != 0o600 {
 		t.Fatal("secrets file not owner-only")
 	}
+	// Piped input is read whole: a PEM private key keeps every line.
+	pemValue := "-----BEGIN RSA PRIVATE KEY-----\nAAAA\nBBBB\n-----END RSA PRIVATE KEY-----"
+	s.stdin = pemValue + "\n"
+	if out, errOut, code = s.run("secret", "set", "bot-key", "--store", "file"); code != 0 || !strings.Contains(out, "file:bot-key") {
+		t.Fatalf("multi-line secret set: %d %s %s", code, out, errOut)
+	}
+	var stored map[string]string
+	if b, err := os.ReadFile(secrets); err != nil || json.Unmarshal(b, &stored) != nil || stored["bot-key"] != pemValue {
+		t.Fatalf("multi-line secret stored as %q", stored["bot-key"])
+	}
 	if _, _, code = s.run("secret", "set", "github-token", "extra"); code != 2 {
 		t.Fatal("secret value accepted as an argument")
 	}

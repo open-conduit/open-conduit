@@ -142,7 +142,7 @@ Errors use `{ "error": { "code": "...", "message": "safe summary", "request_id":
 
 ## Local setup and editing
 
-Setup (`init`, `config path|show|get|set|unset|check`, `config include add|remove`, `secret set`) edits the config file locally and validates it offline against the daemon registry ([operator setup, doctor and engineering controls](../operator-setup/)). The secret store follows this contract: keyring first, then a reported `0600` `secrets.json` fallback, persisting only the reference. The daemon resolves `file:` references from the config directory's `secrets.json`.
+Setup (`init`, `config path|show|get|set|unset|check`, `config include add|remove`, `secret set`) edits the config file locally and validates it offline against the daemon registry ([operator setup, doctor and engineering controls](../operator-setup/)). The secret store follows this contract: keyring first, then a reported `0600` `secrets.json` fallback, persisting only the reference. `secret set` reads a terminal line without echo, or all of piped input (up to 64 KiB, less one trailing newline), so a multi-line value such as a PEM key goes in with `secret set NAME < key.pem`. The daemon resolves `file:` references from the config directory's `secrets.json`.
 
 ## History
 

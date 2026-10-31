@@ -465,8 +465,8 @@ var keyringStore = func(name, value string) error {
 	return errors.New("no platform keyring")
 }
 
-// secret stores one secret value read from stdin (a terminal line or piped
-// input) and prints the reference to put in secret_refs. The keyring is
+// secret stores one secret value read from stdin (a terminal line, or all
+// of piped input) and prints the reference to put in secret_refs. The keyring is
 // preferred; the owner-only secrets.json beside the config is the reported
 // fallback (B05). The value is never echoed, logged or taken as an argument.
 func (o *operator) secret(args []string) int {
@@ -508,11 +508,14 @@ func (o *operator) secret(args []string) int {
 		}
 		line = string(b)
 	} else {
-		read, err := bufio.NewReader(io.LimitReader(stdin, 64<<10)).ReadString('\n')
-		if err != nil && !errors.Is(err, io.EOF) {
+		// Piped input is read whole, so a multi-line value such as a
+		// GitHub App's PEM private key (`secret set NAME < key.pem`)
+		// survives intact.
+		read, err := io.ReadAll(io.LimitReader(stdin, 64<<10))
+		if err != nil {
 			return o.emit(nil, errors.New("could not read the value"))
 		}
-		line = read
+		line = string(read)
 	}
 	value := strings.TrimRight(line, "\r\n")
 	if value == "" {
