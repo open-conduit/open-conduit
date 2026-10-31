@@ -2,7 +2,10 @@ package web
 
 import (
 	"encoding/json"
+	"html"
+	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"testing"
 
@@ -72,6 +75,15 @@ func TestSetupDrawsTheSessionAsAConversation(t *testing.T) {
 	}
 	if strings.Contains(body, `value="start"`) {
 		t.Fatal("start offered beside an open session")
+	}
+	// End session opens a confirmation the confirm page knows.
+	end := regexp.MustCompile(`href="([^"]+)"[^>]*>End session<`).FindStringSubmatch(body)
+	if end == nil {
+		t.Fatalf("no End session link:\n%s", body)
+	}
+	confirm := do(s.Handler(addr), "GET", html.UnescapeString(end[1])+"&part=1", nil, s)
+	if confirm.Code != http.StatusOK || !strings.Contains(confirm.Body.String(), "for good") {
+		t.Fatalf("End session confirmation: %d\n%s", confirm.Code, confirm.Body.String())
 	}
 	// The message box is outside every live region, so typing in it never
 	// holds back the conversation's redraw.
