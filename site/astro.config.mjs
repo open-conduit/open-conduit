@@ -24,6 +24,7 @@ export default defineConfig({
 						{ label: 'What Open Conduit does', slug: 'start/overview' },
 						{ label: 'Install', slug: 'start/install' },
 						{ label: 'Quick start', slug: 'start/quick-start' },
+						{ label: 'Point your agent here', slug: 'start/agents' },
 					],
 				},
 				{

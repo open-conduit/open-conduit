@@ -3,6 +3,8 @@ title: Install
 description: Install Open Conduit with Homebrew, a release binary, go install or from source.
 ---
 
+To have your own coding agent install and set it up for you, give it [Point your agent here](/open-conduit/start/agents/).
+
 Open Conduit ships two commands, kept side by side:
 
 - `open-conduit` is the daemon and operator client.
