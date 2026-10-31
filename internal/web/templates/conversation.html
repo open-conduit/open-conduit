@@ -40,7 +40,7 @@
   <span class="c-avatar" aria-hidden="true">{{.Initial}}</span>
 </div>
 {{- else if eq .Kind "thinking"}}
-<details class="c-act c-prompt" data-f="{{.Filter}}"{{if $x}} open{{end}}>
+<details class="c-act c-prompt" data-f="{{.Filter}}" data-key="{{.Key}}"{{if $x}} open{{end}}>
   <summary><span class="c-act-glyph" aria-hidden="true">·</span><span class="c-act-what">Thinking</span><span class="c-act-label">{{.Text}}</span><time>{{stamp .At}}</time></summary>
   <div class="t-pre prose">{{markdown .Text}}</div>
 </details>
@@ -70,7 +70,7 @@
 </details>
 {{end}}
 {{- else if eq .Kind "tools"}}
-<details class="c-act c-group{{if .Failed}} is-error{{end}}" data-f="tools"{{if .First}} id="first-error"{{end}}{{if or $x .Failed}} open{{end}}>
+<details class="c-act c-group{{if .Failed}} is-error{{end}}" data-f="tools" data-key="{{.Key}}"{{if .First}} id="first-error"{{end}}{{if or $x .Failed}} open{{end}}>
   <summary class="c-act-row"><span class="c-act-glyph" aria-hidden="true">▸</span><span class="c-act-what">{{len .Group}} tool calls</span><span class="c-act-label">{{.Summary}}</span>{{with .Failed}}<span class="t-fail-n">{{.}} failed</span>{{end}}<time>{{with index .Group 0}}{{stamp .At}}{{end}}</time></summary>
   <div class="c-group-body">{{range .Group}}{{template "tool-row" (toolCtx . $x)}}{{end}}</div>
 </details>
