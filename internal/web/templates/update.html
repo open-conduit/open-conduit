@@ -1,0 +1,41 @@
+{{define "scripts"}}{{with .Data.Restarting}}<meta http-equiv="refresh" content="4">{{end}}{{end}}
+
+{{define "content"}}{{$d := .Data}}
+<div class="page">
+  <div class="state-page update-page">
+    {{- if $d.Restarting}}
+    <h1>Restarting on {{$d.Restarting}}</h1>
+    <p>{{$d.Restarting}} is installed and the background service is restarting on it. This page reloads until the daemon answers with the new version.</p>
+    {{- else if $d.Newer}}
+    <h1>{{$d.Latest.Version}} is out</h1>
+    {{- else if $d.Latest.Version}}
+    <h1>Up to date</h1>
+    {{- else}}
+    <h1>Update</h1>
+    {{- end}}
+
+    <dl class="kv update-kv">
+      <dt>Daemon runs</dt>
+      <dd>{{with $d.Running}}{{.}}{{else}}<span class="quiet">unknown</span>{{end}}</dd>
+      <dt>Latest release</dt>
+      <dd>{{with $d.Latest.Version}}{{.}}{{with $d.Latest.URL}} · <a href="{{.}}" rel="noreferrer" target="_blank">release notes</a>{{end}}{{else}}<span class="quiet">unknown</span>{{end}}</dd>
+    </dl>
+    {{- with $d.CheckErr}}<pre class="code-block is-error" role="alert">{{.}}</pre>{{end}}
+
+    {{- if and $d.Newer (not $d.Restarting)}}
+    {{- if $d.Homebrew}}
+    <p>This install belongs to Homebrew, so brew upgrades it. Run this, and Homebrew restarts the background service on the new version:</p>
+    <pre class="code-block">{{$d.Brew}}</pre>
+    {{- else}}
+    <p>Updating downloads the release, checks it against the release's checksums and replaces <code>open-conduit</code> and <code>os</code>.{{if $d.Manual}} No background service runs the daemon, so restart <code>open-conduit serve</code> afterwards to run the new version.{{else}} The background service then restarts on the new version.{{end}}</p>
+    <form method="post" action="/update" class="row-gap">
+      <input type="hidden" name="csrf" value="{{$.Page.CSRF}}">
+      <input type="hidden" name="version" value="{{$d.Latest.Version}}">
+      <button type="submit" class="btn btn-primary">Update to {{$d.Latest.Version}}</button>
+    </form>
+    <p class="quiet small">Or from a terminal: <code>open-conduit upgrade</code></p>
+    {{- end}}
+    {{- end}}
+  </div>
+</div>
+{{end}}

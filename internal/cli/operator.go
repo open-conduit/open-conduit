@@ -21,6 +21,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/client"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/cli/upgrade"
 )
 
 // Env carries process inputs so operator commands are testable.
@@ -84,6 +85,9 @@ type Env struct {
 	// Service runs the background service commands and doctor's service
 	// check; only the open-conduit entrypoint supplies it.
 	Service *ServiceHost
+	// Updater checks for and installs releases (`upgrade`); only the
+	// open-conduit entrypoint supplies it.
+	Updater *upgrade.Updater
 	// OpenURL, LookPath and RunCommand replace the setup host's browser
 	// opener, PATH lookup and attached command runner (tests).
 	OpenURL    func(string) error
@@ -99,6 +103,7 @@ type operator struct {
 	socket      string
 	dataDir     string
 	build       string
+	version     string
 }
 
 func usageError(errOut io.Writer, msg string) int {
@@ -166,6 +171,7 @@ Commands:
   state check [--json]       (daemon stopped) diagnose the state directory: permissions, schema, integrity, artifacts, drain status
   extension list|inspect DIR|install DIR|update DIR|rollback NAME|remove NAME [--force]   manage extension packages (next serve)
   extension certify DIR [--json] [--report FILE]   run the conformance runner on a package
+  upgrade [--check] [--version V] [--no-restart] [--json]   install the latest release and restart the background service
   version
 
 Lists accept --limit and --cursor. Mutations accept --key to retry safely with the same Idempotency-Key.
@@ -186,7 +192,7 @@ func (o *operator) abs(p string) string {
 
 // RunOperator dispatches operator commands through the public client only.
 func RunOperator(version, commit string, args []string, env Env, out, errOut io.Writer) int {
-	o := &operator{out: out, errOut: errOut, env: env, build: version + " (" + commit + ")"}
+	o := &operator{out: out, errOut: errOut, env: env, build: version + " (" + commit + ")", version: version}
 	global := flag.NewFlagSet("open-conduit", flag.ContinueOnError)
 	global.SetOutput(io.Discard)
 	global.StringVar(&o.endpoint, "endpoint", "", "")
@@ -212,7 +218,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "migrate": o.migrate, "backup": o.backup, "state": o.state, "extension": o.extension, "service": o.service, "container": o.container}
+	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "migrate": o.migrate, "backup": o.backup, "state": o.state, "extension": o.extension, "service": o.service, "container": o.container, "upgrade": o.selfUpgrade}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.

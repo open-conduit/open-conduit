@@ -10,6 +10,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/client"
 	"github.com/open-conduit/open-conduit/internal/cli/runview"
+	"github.com/open-conduit/open-conduit/internal/cli/upgrade"
 )
 
 // LogTail bounds how much of an output the view fetches.
@@ -31,10 +32,12 @@ type page struct {
 	Health   *client.Health
 	Pools    []client.CapacityPool
 	NeedsYou int
+	// Update is a newer release than the daemon runs, when one is out.
+	Update *upgrade.Release
 }
 
 // pageNames are the page templates; each is parsed with the shared ones.
-var pageNames = []string{"runs", "work", "attention", "config", "setup", "output", "confirm"}
+var pageNames = []string{"runs", "work", "attention", "config", "setup", "output", "confirm", "update"}
 
 // shared are the templates every page can use.
 var shared = []string{"templates/layout.html", "templates/panels.html", "templates/conversation.html", "templates/actions.html"}
@@ -113,6 +116,7 @@ func (s *Server) shell(ctx context.Context, p *page) {
 		return
 	}
 	p.Health = &h
+	p.Update = s.available(h.Version)
 	if c, err := s.src.Capacity(ctx); err == nil {
 		p.Pools = c.Pools
 	}

@@ -356,6 +356,20 @@ func (o *operator) serviceStop(h *ServiceHost) error {
 	return nil
 }
 
+// serviceRestart restarts the running service on the binary now installed.
+// It returns once the restart is asked for, without waiting on it, so the
+// daemon itself can call it: launchd and systemd stop the old process with
+// SIGTERM and start the new one.
+func (o *operator) serviceRestart(h *ServiceHost) error {
+	if h.GOOS == "darwin" {
+		if out, err := h.Run("launchctl", "kickstart", "-k", o.launchdDomain(h)+"/"+launchdLabel); err != nil {
+			return fmt.Errorf("launchctl kickstart: %s", strings.TrimSpace(out))
+		}
+		return nil
+	}
+	return systemctl(h, "--no-block", "restart", systemdUnit)
+}
+
 func (o *operator) serviceStatus(h *ServiceHost) int {
 	s, err := o.serviceQuery(h)
 	if err != nil {

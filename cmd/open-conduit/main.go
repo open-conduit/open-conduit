@@ -13,6 +13,7 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/docker"
 	"github.com/open-conduit/open-conduit/internal/bootstrap"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/cli/upgrade"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/tui"
 	"github.com/open-conduit/open-conduit/internal/web"
@@ -20,6 +21,17 @@ import (
 
 var version = "dev"
 var commit = "unknown"
+
+// updater checks for releases for upgrade and the web view's update page,
+// which share its last check.
+var updater = upgrade.New()
+
+// webUpdates are the web view's release check and the service it restarts
+// after an update.
+func webUpdates(o web.Options) web.Options {
+	o.Updates, o.Service = updater, cli.NewServiceControl(cli.SystemServiceHost(), os.Getenv)
+	return o
+}
 
 func main() {
 	// The hidden helper an executor's wrapper runs to start a container.
@@ -39,6 +51,7 @@ func main() {
 	}
 	env.OfflineChecks = offlineChecks
 	env.Service = cli.SystemServiceHost()
+	env.Updater = updater
 	os.Exit(cli.RunOperator(version, commit, os.Args[1:], env, os.Stdout, os.Stderr))
 }
 
@@ -124,7 +137,7 @@ func serveWeb(r cli.WebRequest) error {
 		_, err = fmt.Fprintf(r.Out, "%s\nor, if your browser does not resolve *.localhost:\n%s\n", urls[0], urls[1])
 		return err
 	}
-	srv, err := web.New(r.Client, web.Options{Addr: r.Addr, Host: r.Host, NewKey: cli.NewKey, SignIn: &in})
+	srv, err := web.New(r.Client, webUpdates(web.Options{Addr: r.Addr, Host: r.Host, NewKey: cli.NewKey, SignIn: &in}))
 	if err != nil {
 		return err
 	}
@@ -167,7 +180,7 @@ func runDaemonWeb(ctx context.Context, r cli.ServeRequest) error {
 	if err != nil {
 		return err
 	}
-	srv, err := web.New(c, web.Options{Addr: r.WebAddr, Host: r.WebHost, NewKey: cli.NewKey, SignIn: &in})
+	srv, err := web.New(c, webUpdates(web.Options{Addr: r.WebAddr, Host: r.WebHost, NewKey: cli.NewKey, SignIn: &in}))
 	if err != nil {
 		return err
 	}

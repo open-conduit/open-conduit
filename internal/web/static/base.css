@@ -993,3 +993,12 @@ details.menu-wrap > summary::-webkit-details-marker {
   color: var(--ink-3);
   cursor: default;
 }
+
+/* update */
+.status a.st-update {
+  color: #fff;
+}
+.update-kv {
+  grid-template-columns: 120px minmax(0, 1fr);
+  font-size: var(--t-read);
+}

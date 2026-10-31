@@ -100,6 +100,12 @@ type Options struct {
 	// SignIn is the sign-in to accept (see LoadSignIn); nil makes one that
 	// lasts as long as the process.
 	SignIn *SignIn
+	// Updates checks for releases, for the status line's notice and the
+	// update page; nil leaves both out.
+	Updates Updates
+	// Service restarts the background service after an update; nil (or
+	// one that isn't running) leaves the restart to the operator.
+	Service Service
 }
 
 const (
@@ -125,6 +131,8 @@ type Server struct {
 
 	mu     sync.Mutex
 	labels map[string]string
+	// restartErr is a failed post-update restart, for the next update page.
+	restartErr string
 
 	// wmu guards the short-lived read of every Work (cachedWorld).
 	wmu    sync.Mutex
@@ -265,6 +273,8 @@ func (s *Server) Handler(addr string) http.Handler {
 		http.Redirect(w, r, "/config", http.StatusMovedPermanently)
 	}))
 	mux.HandleFunc("GET /setup", s.authed(s.setupPage))
+	mux.HandleFunc("GET /update", s.authed(s.updatePage))
+	mux.HandleFunc("POST /update", s.authed(s.changed(s.update)))
 	mux.HandleFunc("GET /palette.json", s.authed(s.palette))
 	mux.HandleFunc("GET /work/confirm", s.authed(s.confirmPage))
 	mux.HandleFunc("POST /work/bulk/{control}", s.authed(s.changed(s.bulkControl)))

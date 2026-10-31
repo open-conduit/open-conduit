@@ -3051,7 +3051,7 @@ a.token {
   }
 }
 @media (max-width: 560px) {
-  .status .st-item:nth-child(n + 3):not(.st-help) {
+  .status .st-item:nth-child(n + 3):not(.st-help):not(.st-update) {
     display: none;
   }
   .st-proto .sim-tag + * {
@@ -3067,6 +3067,10 @@ a.token {
 @media (max-width: 560px) {
   .status > a.st-item {
     display: none;
+  }
+  /* A newer release stays in view on a phone. */
+  .status > a.st-item.st-update {
+    display: flex;
   }
   .status .st-item {
     padding: 0 8px;
