@@ -121,7 +121,7 @@ func TestSlackSetupCreatesVerifiesAndPicksAChannel(t *testing.T) {
 		t.Fatal(err)
 	}
 	b := s.Bindings[0]
-	if s.ID != "support" || b.Executor != "claude-code" || b.Resource != nil || b.Requires["workspace"] != false || b.Requires["inject"] != true || b.Config["playbook"] != slack.SupportPlaybook {
+	if s.ID != "slack" || b.Executor != "claude-code" || b.Resource != nil || b.Requires["workspace"] != false || b.Requires["inject"] != true || b.Config["playbook"] != slack.ThreadPlaybook {
 		t.Fatalf("binding: %s", r.Scope)
 	}
 	if len(s.Routes) != 1 || s.Routes[0].Handler != "slack" || s.Routes[0].Policy != "inject" {
@@ -133,7 +133,7 @@ func TestSlackSetupCreatesVerifiesAndPicksAChannel(t *testing.T) {
 		t.Fatalf("entry: %+v", x)
 	}
 	if strings.Contains(string(r.Scope), "git") {
-		t.Fatalf("a Git concept leaked into the support scope: %s", r.Scope)
+		t.Fatalf("a Git concept leaked into the scope: %s", r.Scope)
 	}
 }
 

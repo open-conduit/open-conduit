@@ -1,11 +1,11 @@
 ---
-name: support-conversation
-description: Answer a Slack support thread under Open Conduit. Investigate with your own tools, reply in the thread, then wait on the thread until a person writes again; resume when they do. Started by Open Conduit as /open-conduit:support-conversation <thread key>.
+name: slack-thread
+description: Take part in one Slack thread under Open Conduit in turns. Read the thread, do what it asks, reply in the thread, then wait on it until a person writes again; resume when they do. Started by Open Conduit as /open-conduit:slack-thread <thread key>.
 ---
 
-# Answer a support conversation
+# Take part in a Slack thread
 
-You answer one Slack thread: someone asked for help in a channel Open Conduit watches. Open Conduit starts your session on `support-conversation <thread key>` and gives you the thread's messages so far. You have no checkout and no repository: investigate with your own tools (reading, searching, fetching documentation, running read-only commands) and answer in the thread.
+You own one Slack thread in a channel Open Conduit watches. Open Conduit starts your session with the thread's key and gives you its messages so far. What the thread is for, and what you may do about it, comes from your instructions: the folder you run in, its `CLAUDE.md` or the project's rules. This playbook covers how to work the thread.
 
 Arguments: `<thread key>` identifies the thread. `<thread key> events` is a later turn: the messages since your last one follow. `<thread key> handoff` is a fresh session (see Fresh session).
 
@@ -27,13 +27,13 @@ Post every reply with `slack.reply`: it marks the reply as yours, so it is never
 ## A turn
 
 1. Read what you were given. On a first turn, read the whole thread with `slack.thread` if the messages you were handed are not the full story.
-2. Investigate until you can answer, or until you know what you need from the person. Keep it proportionate: a quick question gets a quick answer.
-3. Reply once with `slack.reply`: the answer, or the one question you need answered. Write for Slack: short paragraphs, no headings, code in backticks.
+2. Do what the thread needs from you, following your instructions.
+3. Reply once with `slack.reply`. Write for Slack: short paragraphs, no headings, code in backticks.
 4. Unless the conversation is over, wait on the thread: call `wait` with the `wait` object `slack.context` returns (`{"match": {"types": ["slack.message.human"]}, "timeout_seconds": 604800}`), then end the turn. Waiting keeps your session: when a person writes in the thread, Open Conduit resumes you with what they wrote, even days later and across restarts.
 
-   When you need a decision from a person who isn't in the thread (whether to go ahead with something the thread asks for, say), call `human.ask` instead of `wait`, then end the turn. Say in your reply that you're checking with someone first: once you have asked, every other call is refused until the answer comes, so nothing more reaches the thread this turn. A message in the thread doesn't resume you while you wait for the answer; you get it alongside the answer.
+   When you need a decision from a person who isn't in the thread, call `human.ask` instead of `wait`, then end the turn. Say in your reply that you're checking with someone first: once you have asked, every other call is refused until the answer comes, so nothing more reaches the thread this turn. A message in the thread doesn't resume you while you wait for the answer; you get it alongside the answer.
 
-A message that arrives while you are working is handed to you straight away, headed `## Arrived during this turn`. Take it into account now, in this turn (it may change the question), and answer it in the same reply where you can. It is not handed to you again.
+A message that arrives while you are working is handed to you straight away, headed `## Arrived during this turn`. Take it into account now, in this turn (it may change what is asked), and answer it in the same reply where you can. It is not handed to you again.
 
 ## Notes
 
@@ -44,12 +44,12 @@ When someone corrects you, log the lesson with `introspection.correction`: `area
 Every turn ends with a status:
 
 - `state`:
-  - `help`: you asked the person something and are waiting for the answer.
-  - `done`: you answered and nothing is pending on your side.
+  - `help`: you asked a person something and are waiting for the answer.
+  - `done`: you replied and nothing is pending on your side.
   - `finished`: the person confirmed the matter is resolved (or said they need nothing more). Only then: later messages in a finished thread are not answered, so when in doubt, wait.
   - `review` and `building` are not used here.
 - `summary`: what the turn did, in one line.
-- `handoff`: a short note to whoever picks the conversation up next: what was asked, what you found, what is pending.
+- `handoff`: a short note to whoever picks the conversation up next: what was asked, what you did, what is pending.
 
 If you waited, the turn's status is recorded with the wait. When the wait times out (an event `core.wait.timeout` arrives instead of a message), do not reply again unless something is genuinely outstanding: end with `done`. The conversation stays open; a later message in the thread starts a new turn.
 
@@ -60,5 +60,4 @@ When your last turn ended long ago, Open Conduit may start a new session with th
 ## Don't
 
 - Don't reply more than once per turn unless a message arrived during the turn that needs its own answer.
-- Don't claim to have done anything outside this conversation: you only read and answer.
 - Don't paste secrets, tokens or personal data into the thread.

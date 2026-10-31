@@ -782,7 +782,7 @@ func TestSlackRoutesSelectBindingByChannel(t *testing.T) {
 	const reviews = "C0REVIEWS"
 	bindings := []domain.Binding{
 		{Name: "review", Executor: "fixture", Config: domain.Payload{Schema: "core.config.binding.v1", Data: json.RawMessage(`{"playbook":"review-pr","args":"{key}"}`)}},
-		{Name: "support", Executor: "fixture", Config: domain.Payload{Schema: "core.config.binding.v1", Data: json.RawMessage(`{"playbook":"support-conversation","args":"{key}"}`)}},
+		{Name: "support", Executor: "fixture", Config: domain.Payload{Schema: "core.config.binding.v1", Data: json.RawMessage(`{"playbook":"slack-thread","args":"{key}"}`)}},
 	}
 	routes := []domain.Route{
 		{Name: "reviews", Handler: "slack", Binding: "review", ActivePolicy: "queue", Config: domain.Payload{Data: json.RawMessage(`{"channels":["` + reviews + `"]}`)}},

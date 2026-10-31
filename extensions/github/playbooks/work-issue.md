@@ -1,6 +1,6 @@
 ---
 name: work-issue
-description: Work a GitHub issue in turns under Open Conduit. The first turn reads the issue, builds the change on the issue's branch in its own workspace, opens a PR and ends; later turns, started by Open Conduit, act on new comments, check results, previews and merges. Investigation issues get findings on the issue instead of a PR. Started by Open Conduit as /open-conduit:work-issue <number>.
+description: Work a GitHub issue in turns under Open Conduit. The first turn reads the issue and does what it asks in the issue's own workspace, opening a PR when it changes the repository or answering on the issue when it doesn't; later turns, started by Open Conduit, act on new comments, check results and merges. Started by Open Conduit as /open-conduit:work-issue <number>.
 ---
 
 # Work an issue
@@ -36,7 +36,9 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 
 `file_path` and `save_to` are paths in your own directory: Open Conduit's client reads or writes the file for you. Post every comment this way: it marks the comment as yours, so it is never handed back to you as news, and a retried call never posts twice (give the same `request_id` when you retry). Use `git` itself for commits and pushes.
 
-Every turn runs in the issue's own workspace: a worktree of the project on the issue's branch, kept for the issue across turns (a new branch starts from the base branch). The project's own rules (`CLAUDE.md`, `AGENTS.md` or wherever `github.context` says) hold what is particular to it: what must pass before a PR, how to run its dev server and database, the checks its PRs get, whether and how to show a change in screenshots. Where they differ from this playbook, they win. A project can also keep additions to this playbook in `.open-conduit/playbooks/work-issue.md`. Open Conduit hands them to you with each turn, under "This project's additions to the playbook". Follow them as well as this playbook, never in place of it.
+GitHub turns `#` followed by a number into a link to that issue or PR, anywhere it renders Markdown: comments, PR titles and bodies, reviews, commit messages. Write `#12` only when you mean issue or PR 12. To number items, use a Markdown list, write "item 1", or put the text in backticks.
+
+Every turn runs in the issue's own workspace: a worktree of the project on the issue's branch, kept for the issue across turns (a new branch starts from the base branch). The project's own rules (`CLAUDE.md`, `AGENTS.md` or wherever `github.context` says) hold what is particular to it: what must pass before a PR, how to report, anything else it expects of you. Where they differ from this playbook, they win. A project can also keep additions to this playbook in `.open-conduit/playbooks/work-issue.md`. Open Conduit hands them to you with each turn, under "This project's additions to the playbook". Follow them as well as this playbook, never in place of it.
 
 ## Waiting
 
@@ -79,16 +81,9 @@ Open Conduit sets the issue's status labels from `state`; never change those you
 
 ## Other agents
 
-When another issue overlaps yours (the same page, component, dataset or pipeline step), read that issue (`github.issue.view` with its `number`) and its PR before you build. Build on its branch or wait for its PR to merge (`github.wait` with `pr:<n>:merged`) rather than making the same change twice.
+Other issues may be worked by other agents at the same time. Read one with `github.issue.view` and its `number`, and its PRs with `github.pr.view`. To build on another issue's work, wait for its PR (`github.wait` with `pr:<n>:merged`).
 
-Comment on another agent's issue rarely, unless you are supervising its work. Do it when:
-
-- your work turns up something that helps its work in progress, or
-- your work needs it to take an unusual step it wouldn't otherwise see.
-
-Don't comment just because you work in the same file, because one of you will need to rebase, or about anything that only depends on who merges first. When you do comment, use `github.issue.comment` with its `number`, which reaches the agent working it; each agent hears only about its own issue and PRs, so reply to another agent on its issue, not yours. Your comment wakes that agent if it has parked with `github.wait`, but it doesn't start an issue that is still held before its first turn; only what it was opened to wait for does. When you tell the owner what another agent is doing, report only what you've seen happen (its reply, its issue's state), not what you asked it to do.
-
-Comments from other agents arrive as events like the owner's, but you don't need to answer them. Act on what they tell you, and reply only in exceptional cases, such as when you disagree outright on the way forward.
+Each agent hears only about its own issue and PRs. To reach the agent working another issue, comment on that issue with `github.issue.comment` and its `number`, and reply to another agent on its issue, not yours. Your comment wakes that agent if it has parked with `github.wait`, but it doesn't start an issue that is still held before its first turn; only what it was opened to wait for does. Comments from other agents arrive as events like the owner's.
 
 ## Log corrections
 
@@ -130,19 +125,15 @@ When the fix belongs to Open Conduit itself (a toolbelt operation that fails or 
 
 If the message says the issue was scheduled to start now, or that what it was held for has happened, it was held by whoever opened it: carry on as below.
 
-Decide which kind of issue it is:
+If the issue asks you to run a named skill or routine, run it and follow it instead of the steps below: it says where the work happens, how it lands and whether you close the issue. End with `finished` once the issue is closed, or `help` when it stops for a decision.
 
-- **Change:** something is to be built or fixed. Follow steps 2–5.
-- **Investigation:** the issue asks for research, options or an answer ("research X", "which provider…", "check whether…"). You don't need a PR. Do the research, post the findings on the issue (step 5 without the PR and preview links) and end with `review`. If the findings lead to an obvious change the issue asked for, you may make it as a change as well.
-- **Scheduled task:** the issue carries the `scheduled` label with no time on it and names a skill or routine to run (a timer issue opened by a workflow or one of the project's jobs). Run that and follow it instead of the steps below: it says where the work happens, how it lands and when to close the issue. End with `finished` once it has closed the issue, or `help` when it stops for a decision.
+Otherwise follow steps 2–5. When what the issue asks for doesn't change the repository, there is no PR: post your answer on the issue (step 5) and end with `review`.
 
 ### 2. Workspace
 
 You are already in the issue's workspace, on its branch. Open Conduit made it before the turn: it copies the files the project lists (such as `.env`) and runs the project's setup when needed. Work there; don't make other worktrees or switch branches.
 
 If `github.pr.list` already shows an open PR, you're taking over from an earlier agent. Read it with `github.pr.view`, then carry on from wherever it got to.
-
-Post a short start comment on the issue with `github.issue.comment`, e.g. "Working on this on branch `agent/issue-12`. A PR and a preview link will follow here." (for an investigation, say findings will follow).
 
 ### 3. Do the work
 
@@ -153,23 +144,12 @@ Post a short start comment on the issue with `github.issue.comment`, e.g. "Worki
 
 ### 4. Open the PR and end the turn
 
-- Push the branch (`git push -u origin HEAD`, or the remote the project's rules name), then `github.pr.create` with a `title` and a `body`. The body says:
-  - what changed, as short sections
-  - anything from the issue you didn't do, and why
-  - anything else the project's rules ask a PR body to carry
-  The operation adds the line that links the PR to the issue.
-- Don't wait for the checks. End the turn with `building`, the PR number in `prs` and `touches` filled in. Open Conduit resumes you when every check on the PR's head has finished, with the result and the deploy preview's URL if the project has one.
+- Push the branch (`git push -u origin HEAD`, or the remote the project's rules name), then `github.pr.create` with a `title` and a `body` saying what changed and anything from the issue you didn't do. The operation adds the line that links the PR to the issue.
+- Don't wait for the checks. End the turn with `building`, the PR number in `prs` and `touches` filled in. Open Conduit resumes you when every check on the PR's head has finished, with the result and a deploy preview's URL when the repository has one.
 
 ### 5. Report on the issue
 
-This happens in the turn where the checks pass (a `Checks passed` event, with the preview URL when there is one). Open the preview once to check the changed page loads, then post one comment on the issue and end the turn with `review` and `preview` filled in:
-
-- A mention of the issue's author and the headline of what now exists, in one line.
-- `- PR: <url>` and `- Preview: <preview url>`, deep-linked to the changed page when there is one.
-- A short paragraph on what was done.
-- Anything worth flagging: what you couldn't do, data that doesn't exist, or a judgement call they might want to reverse, each with a bold lead.
-
-Keep it brief; the PR has the detail.
+With a PR, this happens in the turn where the checks pass (a `Checks passed` event, with the preview URL when there is one); without one, it happens as soon as you have the answer. Post one comment on the issue with `github.issue.comment`: what now exists or what you found, links to the PR and the preview when there are any, and anything you couldn't do. End the turn with `review`, with `preview` filled in when there is one.
 
 ## Later turns: `work-issue <number> events`
 
@@ -203,7 +183,7 @@ When your last turn ended long enough ago that resuming would cost more than sta
 ## Don't
 
 - Don't wait or poll for checks, previews or replies: end the turn and let Open Conduit resume you.
-- Don't push to the base branch, merge the PR or close the issue. The one exception is a scheduled task whose routine says when it may.
+- Don't push to the base branch, merge the PR or close the issue, unless a routine the issue asked you to run says to.
 - Don't change Open Conduit's labels on the issue; it sets them from your status.
 - Don't edit other agents' workspaces.
 - Don't post comments any way other than the toolbelt.
