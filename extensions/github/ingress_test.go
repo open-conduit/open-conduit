@@ -351,6 +351,61 @@ func TestPullRequestCorrelation(t *testing.T) {
 	sameIdentity(t, "merged", merged, f.scan(t)["pr/"+strconv.Itoa(byBody)])
 }
 
+// GitHub sends no webhook when a PR picks up conflicts (#209), so reconcile
+// reads each open issue PR's mergeability. One conflicting head is observed
+// once however often main moves after it; a new head is new news.
+func TestConflictingPullIsObservedOncePerHead(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	fk.OpenIssue("Header", "", alice)
+	pr := fk.OpenPull("Blue header", "Closes #1", "agent/issue-1", "sha1", alice)
+	orphan := fk.OpenPull("Chore", "Bump deps", "chore", "sha2", alice)
+	item := "pr/" + strconv.Itoa(pr) + "/conflicts"
+	no, yes := false, true
+
+	for _, m := range []*bool{nil, &yes} {
+		fk.SetMergeable(pr, m)
+		if _, ok := f.scan(t)[item]; ok {
+			t.Fatalf("mergeable=%v observed as conflicts", m)
+		}
+	}
+	fk.SetMergeable(pr, &no)
+	fk.SetMergeable(orphan, &no)
+	scanned := f.scan(t)
+	o, ok := scanned[item]
+	if !ok || o.Event.Type != gh.TypePullConflicts || key(o) != "issue/1" {
+		t.Fatalf("conflicts not observed for the issue: %+v", o)
+	}
+	if p := payload[gh.ConflictsPayload](t, o); p.HeadSHA != "sha1" || p.BaseRef != "main" || p.Number != pr {
+		t.Fatalf("payload: %+v", p)
+	}
+	if _, ok := scanned["pr/"+strconv.Itoa(orphan)+"/conflicts"]; ok {
+		t.Fatal("a PR with no issue observed as conflicts")
+	}
+	// The pull_request delivery carries mergeable too, with the same identity.
+	res := f.push(t, "pull_request", "d-sync", fk.PullHook("edited", pr))
+	var pushed *extension.Observation
+	for i := range res.Observations {
+		if res.Observations[i].ID == item {
+			pushed = &res.Observations[i]
+		}
+	}
+	if pushed == nil {
+		t.Fatalf("push did not observe the conflicts: %+v", res.Observations)
+	}
+	sameIdentity(t, "conflicts", *pushed, o)
+	// main moving again changes nothing about this head.
+	f.now = f.now.Add(time.Hour)
+	if again := f.scan(t)[item]; again.Version != o.Version {
+		t.Fatal("a later scan of the same conflicting head is a new version")
+	}
+	// The agent pushes, and the new head conflicts again: new news.
+	fk.PushPull(pr, "sha3")
+	if again := f.scan(t)[item]; again.Version == o.Version {
+		t.Fatal("a new conflicting head kept the old version")
+	}
+}
+
 func TestSharedTrackerReferences(t *testing.T) {
 	f := newFixture(t, `,"track_issues":false,"tracker":{"repo":"octo/tracker","namespace":"github/github.com/octo/tracker"}`)
 	fk := f.fake

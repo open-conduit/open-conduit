@@ -194,7 +194,7 @@ func (Route) match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		return extension.RouteDecision{Match: true, Kind: WorkKind, Reason: "an open issue the labels admit"}, nil
 	}
 	switch e.Type {
-	case TypeIssueClosed, TypePullMerged, TypePullClosed, TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing:
+	case TypeIssueClosed, TypePullMerged, TypePullClosed, TypePullConflicts, TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing:
 		return extension.RouteDecision{Match: true, Reason: "news for the issue's agent"}, nil
 	case TypeHoldReleased:
 		if in.Event.Event.WorkID != in.Work.ID {

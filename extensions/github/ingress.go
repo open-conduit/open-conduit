@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"net/url"
 	"sort"
 	"strconv"
@@ -191,7 +192,20 @@ func (g *Ingress) pushObservations(ctx context.Context, n *normalizer, event str
 			return nil, nil
 		}
 		n.remember(*p.PullRequest)
-		return one(n.pullObservation(ctx, *p.PullRequest))
+		obs, err := one(n.pullObservation(ctx, *p.PullRequest))
+		if err != nil {
+			return nil, err
+		}
+		// The delivery carries mergeable when GitHub had already worked it
+		// out; reconcile reads it otherwise.
+		c, ok, err := n.conflictsObservation(ctx, *p.PullRequest)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			obs = append(obs, c)
+		}
+		return obs, nil
 	case "pull_request_review":
 		if p.PullRequest == nil || p.Review == nil || p.Review.State == "PENDING" || strings.EqualFold(p.Review.State, "pending") || strings.TrimSpace(p.Review.Body) == "" {
 			return nil, nil
@@ -531,7 +545,7 @@ func (g *Ingress) pullsPage(ctx context.Context, n *normalizer, c cursor, horizo
 		if !recent(p.State, p.UpdatedAt, horizon) {
 			continue
 		}
-		b.units += 3
+		b.units += 4
 		n.remember(p)
 		o, err := n.pullObservation(ctx, p)
 		if err != nil {
@@ -550,8 +564,38 @@ func (g *Ingress) pullsPage(ctx context.Context, n *normalizer, c cursor, horizo
 		if ok {
 			out = append(out, checks)
 		}
+		conflicts, err := g.conflicts(ctx, n, p)
+		if err != nil {
+			return nil, 0, false, 0, err
+		}
+		out = append(out, conflicts...)
 	}
 	return out, len(items), more, i, nil
+}
+
+// conflicts reads an open PR that belongs to an issue on its own, since only
+// that read carries mergeable, and observes it if it has conflicts. GitHub
+// sends no webhook when a PR's mergeability changes (the base branch moving
+// under it), so each generation asks.
+func (g *Ingress) conflicts(ctx context.Context, n *normalizer, p rawPull) ([]extension.Observation, error) {
+	if p.State != "open" {
+		return nil, nil
+	}
+	if _, ref, err := n.pullKey(ctx, p); err != nil || ref == nil {
+		return nil, err
+	}
+	full, err := g.c.Pull(ctx, g.s.Repo, p.Number)
+	if IsStatus(err, http.StatusNotFound) || IsStatus(err, http.StatusGone) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	o, ok, err := n.conflictsObservation(ctx, full)
+	if err != nil || !ok {
+		return nil, err
+	}
+	return []extension.Observation{o}, nil
 }
 
 func (g *Ingress) commentsPage(ctx context.Context, n *normalizer, c cursor, horizon time.Time, b *budget) ([]extension.Observation, int, bool, int, error) {

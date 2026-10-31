@@ -343,6 +343,9 @@ type rawPull struct {
 	Base struct {
 		Ref string `json:"ref"`
 	} `json:"base"`
+	// Mergeable is only on a single PR's read (and webhook bodies), never
+	// on the list; nil while GitHub is still working it out.
+	Mergeable *bool `json:"mergeable"`
 }
 
 type rawCheckRun struct {

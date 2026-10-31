@@ -165,6 +165,7 @@ The message lists what happened since your last turn, each under its own heading
 - **Checks passed**, with the preview: if the report (step 5) isn't posted yet, post it now. Otherwise, if you pushed changes for feedback, reply to that feedback with the preview and end with `review`.
 - **Required checks never reported**: checks the base branch requires (a deploy preview, say) never started on the head. Find out why (a `[skip …]` in the PR title or a commit message stops some deploys), start them, often with a new push, and end with `building`. If they rightly don't run on this PR, report as in step 5 and say so.
 - **No checks ran**: the repo has no CI. Treat the PR as checked once what the rules say must pass has passed locally, and report as in step 5.
+- **PR has conflicts**: the base branch moved and the PR no longer merges. Rebase the branch onto the base branch, resolve the conflicts, run what the rules say must pass, force-push, and end with `building`.
 - **PR merged or closed**, or **the issue closed** with no PR: end with `finished`. Open Conduit removes the workspace when the issue's work completes; the branch stays.
 - **A note from Open Conduit**: do what it says.
 - **What you were waiting for**: the wait is over (see Waiting). Pick the work up, or wait again if what's left still isn't ready.

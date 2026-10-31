@@ -116,7 +116,7 @@ func TestRouteInputSelection(t *testing.T) {
 		t.Fatal("review with body not delivered")
 	}
 	for typ, want := range map[string]bool{
-		gh.TypeIssueClosed: true, gh.TypePullMerged: true, gh.TypePullClosed: true, gh.TypeChecksPassed: true, gh.TypeChecksFailed: true,
+		gh.TypeIssueClosed: true, gh.TypePullMerged: true, gh.TypePullClosed: true, gh.TypePullConflicts: true, gh.TypeChecksPassed: true, gh.TypeChecksFailed: true,
 		gh.TypeIssueOpen: false, gh.TypePullOpen: false, gh.TypeChecksPending: false, gh.TypeDelivery: false,
 	} {
 		if got := match(t, scope, event(typ, "issue/5", "", struct{}{}), work).Match; got != want {
