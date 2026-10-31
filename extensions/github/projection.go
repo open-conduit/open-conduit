@@ -24,6 +24,11 @@ type ProjectorOptions struct {
 	Client   *Client
 	Settings Settings
 	Now      func() time.Time
+	// Writers supplies the client of the binding's own `github` connection
+	// an intent names as its writer (a reviewer's App), in Scope. Nil
+	// refuses every intent that names one.
+	Writers *Writers
+	Scope   domain.ID
 	// SearchDelay is how long after an ambiguous post the marker search waits,
 	// so GitHub's listing reflects a comment that was created (default 30s).
 	SearchDelay time.Duration
@@ -88,6 +93,9 @@ type intentRecord struct {
 	Body    string  `json:"body,omitempty"`
 	ReplyTo int64   `json:"reply_to,omitempty"`
 	Review  *Review `json:"review,omitempty"`
+	// Writer is the connection the write goes out as, when it isn't the
+	// entry's own.
+	Writer string `json:"writer,omitempty"`
 }
 
 const (
@@ -114,6 +122,10 @@ type Intent struct {
 	// delivery whose caller is gone (tool calls); outcome intents are
 	// re-derived from durable outcomes instead.
 	Durable bool
+	// Writer names the binding's own `github` connection to post as
+	// (ProjectorOptions.Writers resolves it); empty posts as the entry's
+	// connection.
+	Writer string
 }
 
 func (p *Projector) get(tx storage.Tx, key string, v any) (bool, error) {
@@ -190,13 +202,13 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 			return err
 		}
 		if !found {
-			rec = intentRecord{ID: in.ID, Work: in.Work, Repo: repo, Number: in.Number, BodyDigest: bodyDigest, State: intentPending, CreatedAt: p.o.Now().UTC(), ReplyTo: in.ReplyTo}
+			rec = intentRecord{ID: in.ID, Work: in.Work, Repo: repo, Number: in.Number, BodyDigest: bodyDigest, State: intentPending, CreatedAt: p.o.Now().UTC(), ReplyTo: in.ReplyTo, Writer: in.Writer}
 			if in.Durable {
 				rec.Body, rec.Review = in.Body, in.Review
 			}
 			return p.put(tx, key, rec)
 		}
-		if rec.BodyDigest != bodyDigest || rec.Number != in.Number || rec.Repo != repo || rec.ReplyTo != in.ReplyTo {
+		if rec.BodyDigest != bodyDigest || rec.Number != in.Number || rec.Repo != repo || rec.ReplyTo != in.ReplyTo || rec.Writer != in.Writer {
 			return ErrIntentConflict
 		}
 		return nil
@@ -230,6 +242,12 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	if p.o.Settings.Projection.DryRun {
 		return rec.State, nil
 	}
+	writer := p.o.Client
+	if in.Writer != "" {
+		if writer, err = p.o.Writers.Client(p.o.Scope, in.Writer, p.o.Client); err != nil {
+			return rec.State, ErrWriter
+		}
+	}
 	err = p.transact(ctx, func(tx storage.Tx) error {
 		var cur intentRecord
 		if _, err := p.get(tx, key, &cur); err != nil {
@@ -247,7 +265,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	var posted PostedComment
 	switch {
 	case in.Review != nil:
-		posted, err = p.o.Client.CreateReview(ctx, repo, in.Number, markReview(in, marker))
+		posted, err = writer.CreateReview(ctx, repo, in.Number, markReview(in, marker))
 		if refused(err) {
 			// GitHub refused the review (a line outside the diff, the
 			// connection's own PR): nothing was posted, so forget the intent
@@ -258,9 +276,9 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 			return "", err
 		}
 	case in.ReplyTo != 0:
-		posted, err = p.o.Client.ReplyReview(ctx, repo, in.Number, in.ReplyTo, WithMarker(in.Body, string(in.Work), marker))
+		posted, err = writer.ReplyReview(ctx, repo, in.Number, in.ReplyTo, WithMarker(in.Body, string(in.Work), marker))
 	default:
-		posted, err = p.o.Client.Comment(ctx, repo, in.Number, WithMarker(in.Body, string(in.Work), marker))
+		posted, err = writer.Comment(ctx, repo, in.Number, WithMarker(in.Body, string(in.Work), marker))
 	}
 	if err != nil {
 		// Ambiguous: the marker search decides after SearchDelay.
@@ -614,7 +632,7 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			break
 		}
 		intents++
-		state, err := p.Deliver(ctx, Intent{ID: rec.ID, Work: rec.Work, Number: rec.Number, Body: rec.Body, ReplyTo: rec.ReplyTo, Review: rec.Review, Durable: true})
+		state, err := p.Deliver(ctx, Intent{ID: rec.ID, Work: rec.Work, Number: rec.Number, Body: rec.Body, ReplyTo: rec.ReplyTo, Review: rec.Review, Durable: true, Writer: rec.Writer})
 		switch {
 		case err != nil:
 			if stop := fail("comment", err); stop != nil {
@@ -716,6 +734,8 @@ func errorCode(err error) string {
 		return fmt.Sprintf("http_%d", s.Status)
 	case errors.Is(err, ErrIntentConflict):
 		return "intent_conflict"
+	case errors.Is(err, ErrWriter):
+		return "writer_unavailable"
 	case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 		return "timeout"
 	}

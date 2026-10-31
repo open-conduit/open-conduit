@@ -400,9 +400,63 @@ func (d *daemon) githubAuthCheck(ctx context.Context) runtime.Check {
 			notes = append(notes, note)
 		}
 		check.Items = append(check.Items, item+strings.Join(notes, "; "))
+		for _, w := range d.githubWriterItems(ctx, src, s) {
+			if rank(w.status) > rank(check.Status) {
+				check.Status, check.Code = w.status, w.code
+			}
+			check.Items = append(check.Items, w.item)
+		}
 	}
 	sort.Strings(check.Items)
 	return check
+}
+
+type writerItem struct{ status, code, item string }
+
+// githubWriterItems verifies, for an entry, each other `github` connection
+// its scope's bindings name, which those bindings' comments and reviews go
+// out as, the way the entry's own bot writer is verified: signed in as that
+// connection, it reads the entry's repository.
+func (d *daemon) githubWriterItems(ctx context.Context, src *githubSource, s gh.Settings) []writerItem {
+	snapshot, _ := d.configs.Current()
+	if snapshot == nil {
+		return nil
+	}
+	var out []writerItem
+	for _, c := range snapshot.BindingConnections(src.scope, map[string]bool{gh.Type: true}) {
+		if c.ID == src.connection {
+			continue
+		}
+		item := s.Namespace + ": binding connection " + c.ID + ": "
+		client, err := d.githubWriters().Client(src.scope, c.ID, src.client)
+		if err != nil {
+			out = append(out, writerItem{runtime.CheckFail, "writer_unavailable", item + "writer_unavailable"})
+			continue
+		}
+		cx, cancel := context.WithTimeout(ctx, 20*time.Second)
+		a, err := client.Verify(cx, s.Repo)
+		cancel()
+		if err != nil {
+			code := hookCode(err)
+			if code == "hook_permission_denied" {
+				code = "repo_unreachable"
+			} else if code == "hook_update_failed" {
+				code = "verify_failed"
+			}
+			out = append(out, writerItem{runtime.CheckFail, code, item + code})
+			continue
+		}
+		note := "authenticated"
+		if a.Writer {
+			note = "bot writer authenticated"
+		}
+		if a.Known && !a.Push && !a.Writer {
+			out = append(out, writerItem{runtime.CheckWarn, "read_only", item + note + "; reviews and comments need write access"})
+			continue
+		}
+		out = append(out, writerItem{runtime.CheckOK, "verified", item + note})
+	}
+	return out
 }
 
 // requiredChecksNote reports where the checks the base branch requires

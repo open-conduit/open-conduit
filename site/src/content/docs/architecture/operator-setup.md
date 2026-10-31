@@ -60,7 +60,7 @@ open-conduit tui
 | Check | Status and codes |
 | --- | --- |
 | `github` | Per entry: registration failures (`fail`, for example `github_connection_required`), rate-limit pauses, reconcile state (`reconcile_failing` with the scan error code and failure count, first scan pending, or the age of the last complete scan), projection failures (`projection_failing`) and dry run. No service calls. |
-| `github_auth` | Only with `check_secrets=true`. Resolves each entry's credentials privately, authenticates the reader and any bot writer, and reads the repository (`Client.Verify`). Codes: `verified`; `credential_unavailable`, `credential_rejected`, `repo_unreachable` or `rate_limited` (`fail`); `read_only` when the identity cannot push and projections are live; `hook_admin_missing` when `manage_webhook` lacks hook admin. Reports `pull/push/admin` when GitHub returns them. |
+| `github_auth` | Only with `check_secrets=true`. Resolves each entry's credentials privately, authenticates the reader and any bot writer, and reads the repository (`Client.Verify`); each other `github` connection a binding in the entry's scope names is verified the same way, as its own item. Codes: `verified`; `credential_unavailable`, `credential_rejected`, `repo_unreachable` or `rate_limited` (`fail`); `read_only` when the identity cannot push and projections are live; `hook_admin_missing` when `manage_webhook` lacks hook admin. Reports `pull/push/admin` when GitHub returns them. |
 | `github_capability` | Config gaps the validator accepts but that stop GitHub work: no `github` route, a route whose binding has no toolbelt, a claude-code binding without `github.context`/`declare_outcome`, a hold route that does not bind `github-hold` or comes after `github`, and (info) scheduled issues not claimed without a hold route. |
 | `git_bot` | For each git workspace binding in a scope whose GitHub connection has `git` `bot`: whether its push remote goes through the toolbelt's credential helper. `ssh_remote` (`warn`) when it is SSH (`ssh://` or `git@host:path`), whose pushes use the operator's own key; `not_configured` (info) without one. Runs offline too. |
 | `webhooks` | `reconcile_only` (info) with no listener; otherwise the bound address, the tunnel and public URL (`tunnel_down`, `tunnel_failed`), where the address and the tunnel came from (`serve flags` or `settings.webhooks`), `restart_required` when an applied generation changed `settings.webhooks` since `serve` started, and per entry its route, a missing `webhook_secret` (not mounted) and the managed hook state (`ok`, `dry_run`, `hook_permission_denied`, …). |
@@ -150,6 +150,7 @@ That maps to these grants:
 - **GitHub App.** The same, plus Checks read.
 - **Classic token.** `repo`, plus `admin:repo_hook` for `manage_webhook`.
 - **Bot App (`bot_app_id`).** It performs the writes and needs only the write permissions.
+- **Reviewer App (a binding's own `github` connection).** It posts that binding's comments, replies and reviews: Issues and Pull requests read/write on each repository it reviews.
 
 ## Dry run
 

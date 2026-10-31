@@ -17,12 +17,13 @@ import (
 // githubSource is one registered GitHub extension entry: its ingress pair and
 // the projector converging its tracker labels and marked comments.
 type githubSource struct {
-	name      string
-	scope     domain.ID
-	config    json.RawMessage
-	client    *gh.Client
-	ingress   *gh.Ingress
-	projector *gh.Projector
+	name       string
+	scope      domain.ID
+	config     json.RawMessage
+	connection string
+	client     *gh.Client
+	ingress    *gh.Ingress
+	projector  *gh.Projector
 }
 
 // githubCode is a safe diagnostic code for a registration failure.
@@ -31,11 +32,13 @@ type githubCode string
 func (c githubCode) Error() string { return string(c) }
 
 type githubSources struct {
-	mu      sync.Mutex
-	sources map[string]*githubSource // by source namespace
-	failed  map[string]string        // registration failure code by namespace
-	last    time.Time
-	running bool
+	mu          sync.Mutex
+	sources     map[string]*githubSource // by source namespace
+	writers     *gh.Writers              // clients of the connections bindings name (writersOnce)
+	writersOnce sync.Once
+	failed      map[string]string // registration failure code by namespace
+	last        time.Time
+	running     bool
 }
 
 // githubRegistry is the in-process registration of the GitHub extension's
@@ -145,11 +148,11 @@ func (d *daemon) addGitHub(ctx context.Context, s *config.Snapshot, scope domain
 	if err := d.ingress.Register(ctx, name, extension.Source{Namespace: settings.Namespace, ScopeID: scope}, in, interval); err != nil {
 		return err
 	}
-	projector, err := gh.NewProjector(gh.ProjectorOptions{Store: d.coord, Client: client, Settings: settings, Now: d.now})
+	projector, err := gh.NewProjector(gh.ProjectorOptions{Store: d.coord, Client: client, Settings: settings, Now: d.now, Writers: d.githubWriters(), Scope: scope})
 	if err != nil {
 		return err
 	}
-	d.github.sources[settings.Namespace] = &githubSource{name: name, scope: scope, config: append(json.RawMessage(nil), x.Config...), client: client, ingress: in, projector: projector}
+	d.github.sources[settings.Namespace] = &githubSource{name: name, scope: scope, config: append(json.RawMessage(nil), x.Config...), connection: x.Connection, client: client, ingress: in, projector: projector}
 	d.log.Info("github ingress registered", "name", name, "namespace", settings.Namespace)
 	return nil
 }
@@ -190,4 +193,33 @@ func (d *daemon) projectGitHub(ctx context.Context) {
 			d.report("github_projection", domain.ID(src.name), code)
 		}
 	}()
+}
+
+// githubWriters are the GitHub extension's clients of connections the
+// scope's bindings name, resolved through the host's one rule for which
+// connections an extension may act as (config.Snapshot.ExtensionConnection)
+// and its secrets through the same resolver packages use (scopedSecrets).
+func (d *daemon) githubWriters() *gh.Writers {
+	d.github.writersOnce.Do(func() {
+		types := map[string]bool{gh.Type: true}
+		resolve := d.scopedSecrets(types, types)
+		d.github.writers = gh.NewWriters(func(scope domain.ID, id string) (json.RawMessage, gh.SecretFunc, bool) {
+			s, _ := d.extensionSnapshot()
+			if s == nil {
+				return nil, nil, false
+			}
+			c, ok := s.ExtensionConnection(scope, id, types, types)
+			if !ok {
+				return nil, nil, false
+			}
+			return c.Config, func(ctx context.Context, name string) (string, error) {
+				v, err := resolve(ctx, scope, id, []string{name})
+				if err != nil {
+					return "", gh.ErrCredential
+				}
+				return v[name], nil
+			}, true
+		}, d.now)
+	})
+	return d.github.writers
 }

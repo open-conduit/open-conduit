@@ -77,9 +77,12 @@ func Operations() []string {
 
 // Source is one registered GitHub extension entry the tools can act on.
 type Source struct {
-	Settings  Settings
-	Client    *Client
-	Projector *Projector
+	Settings Settings
+	// Connection is the ID of the connection the entry reads and writes
+	// with (Client's).
+	Connection string
+	Client     *Client
+	Projector  *Projector
 }
 
 // ToolsOptions configure Tools.
@@ -96,6 +99,10 @@ type ToolsOptions struct {
 	// GitHub operation declared it (the host's wait.progress). Nil shows
 	// no progress.
 	WaitProgress func(ctx context.Context, work domain.ID, progress string) error
+	// Writers supplies the client of the calling binding's own `github`
+	// connection (Authority.Connection), which its comments, replies and
+	// reviews go out as. Nil leaves every binding on the entry's connection.
+	Writers *Writers
 }
 
 // Tools implements the operations.
@@ -187,6 +194,8 @@ func refusal(err error) error {
 		return err
 	case errors.As(err, &limit):
 		return refuse("github_rate_limited", "GitHub's rate limit is in force until %s; try again after that", limit.Until.UTC().Format(time.RFC3339))
+	case errors.Is(err, ErrWriter):
+		return refuse("github_writer", "this binding's own GitHub connection can't be written as (removed, invalid, or another GitHub than the repository's); report it as a problem")
 	case errors.Is(err, ErrCredential):
 		return refuse("github_credential", "the GitHub connection's credential could not be used; report it as a problem")
 	case IsStatus(err, http.StatusNotFound), IsStatus(err, http.StatusGone):
@@ -302,6 +311,24 @@ func (t *Tools) pullSource(b *bound, repo string) (Source, error) {
 		names[i] = s.Settings.Repo
 	}
 	return Source{}, refuse("repo_required", "this Work's scope registers several repositories (%s): name one with repo", strings.Join(names, ", "))
+}
+
+// writer is the connection the calling execution's binding writes to GitHub
+// as: the `github` connection the binding names (Authority.Connection), or ""
+// for the entry's own when it names none, names the entry's, or names a
+// connection of another type.
+func (t *Tools) writer(b *bound, src Source) (string, error) {
+	id := b.a.Connection
+	if id == "" || id == src.Connection {
+		return "", nil
+	}
+	switch _, err := t.o.Writers.Client(b.work.ScopeID, id, src.Client); {
+	case errors.Is(err, errNotWriter):
+		return "", nil
+	case err != nil:
+		return "", err
+	}
+	return id, nil
 }
 
 // ownRepo reports whether src is the code repository of the Work's issue.
@@ -466,6 +493,11 @@ func (t *Tools) issueView(ctx context.Context, b *bound, data json.RawMessage) (
 }
 
 func (t *Tools) post(ctx context.Context, b *bound, src Source, intent Intent) (any, error) {
+	writer, err := t.writer(b, src)
+	if err != nil {
+		return nil, err
+	}
+	intent.Writer = writer
 	state, err := src.Projector.Deliver(ctx, intent)
 	if err != nil && state != intentAttempted {
 		return nil, err
@@ -843,7 +875,7 @@ func (t *Tools) prReview(ctx context.Context, b *bound, data json.RawMessage) (a
 	switch {
 	case err == nil:
 	case errors.As(err, &status) && status.Status == http.StatusUnprocessableEntity && strings.Contains(strings.ToLower(status.Message), "own pull request"):
-		return nil, refuse("own_pull_request", "GitHub doesn't let the account that opened PR #%d approve it or request changes on it, and this connection opened it; submit a comment review instead, or ask a person to review it", in.Number)
+		return nil, refuse("own_pull_request", "GitHub doesn't let the account that opened PR #%d approve it or request changes on it, and this binding writes as that account; submit a comment review instead, or ask a person to review it", in.Number)
 	case IsStatus(err, http.StatusUnprocessableEntity):
 		return nil, refuse("github_unprocessable", "GitHub rejected the review: each inline comment must be on a line of the PR's diff (side RIGHT for the new file, LEFT for the old), and the PR must be open; nothing was posted")
 	case IsStatus(err, http.StatusForbidden):
