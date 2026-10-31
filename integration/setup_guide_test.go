@@ -94,7 +94,7 @@ func TestOfflineValidationMatchesTheDaemonRegistry(t *testing.T) {
 	}
 }
 
-// init slack's workspace-free support scope (here from token references,
+// init slack's workspace-free scope (here from token references,
 // so nothing is called) merges beside a GitHub scope and validates against
 // the daemon registry, with no git resource or provider in it.
 func TestSlackSetupScopeValidatesOffline(t *testing.T) {
@@ -117,7 +117,7 @@ func TestSlackSetupScopeValidatesOffline(t *testing.T) {
 		t.Fatalf("init slack output: %v %v\n%s", diags, err, doc)
 	}
 	if strings.Contains(string(r.Scope), `"resource"`) || strings.Contains(string(r.Scope), "git") {
-		t.Fatalf("support scope reaches a Git concept: %s", r.Scope)
+		t.Fatalf("init slack scope reaches a Git concept: %s", r.Scope)
 	}
 	names := []string{}
 	for _, s := range bootstrap.Setups() {

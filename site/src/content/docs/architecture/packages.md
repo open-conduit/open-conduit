@@ -86,7 +86,7 @@ Composition may depend on the public `conformance` checks, because the certifica
 
 **Webhook exposure.** `extensions/tunnel` provides ngrok, cloudflared and static webhook exposure, using the standard library only.
 
-**Slack.** `extensions/slack` ([Slack extension](../slack-extension/)) uses public contracts plus the standard library, including its own minimal WebSocket client for Socket Mode, so it adds no module. Its `extensions/slack/slacktest` fake is test support only. `extensions/slack/playbooks` holds the support playbook, which bootstrap writes into the Claude Code plugin beside the GitHub playbooks. `internal/bootstrap` registers it; no Git or workspace code is involved.
+**Slack.** `extensions/slack` ([Slack extension](../slack-extension/)) uses public contracts plus the standard library, including its own minimal WebSocket client for Socket Mode, so it adds no module. Its `extensions/slack/slacktest` fake is test support only. `extensions/slack/playbooks` holds the `slack-thread` playbook, which bootstrap writes into the Claude Code plugin beside the GitHub playbooks. `internal/bootstrap` registers it; no Git or workspace code is involved.
 
 **Scheduled jobs.** `extensions/schedule` ([scheduled jobs](../schedule-extension/)) uses public contracts plus `github.com/robfig/cron/v3`. It does not import `extensions/github`. `internal/bootstrap` maps the raw `github.delivery` payload into the extension's `Delivery`, and registers the route handler, the timer recurrence, the job Work kind policy and the webhook mount. GitHub job waits resolve through a bootstrap-injected function, so neither extension imports the other.
 

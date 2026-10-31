@@ -21,21 +21,21 @@ import (
 // create-app page, or the slack CLI when it is on PATH and asked for), take
 // the bot and app-level tokens, verify them (auth.test, granted scopes,
 // apps.connections.open), pick a channel the bot is in and return a
-// workspace-free support scope: a claude-code binding on the
-// support-conversation playbook with the slack.* tools, the slack route with
+// workspace-free scope: a claude-code binding on the slack-thread playbook
+// with the slack.* tools, the slack route with
 // active policy inject, and the Socket Mode ingress entry.
 type Setup struct{}
 
-// SupportOperations are the toolbelt operations of the support binding.
-var SupportOperations = []string{"read_context", "wait", "declare_outcome", OpContext, OpThread, OpReply}
+// ThreadOperations are the toolbelt operations of the binding init writes.
+var ThreadOperations = []string{"read_context", "wait", "declare_outcome", OpContext, OpThread, OpReply}
 
-// SupportWaitSeconds is the support playbook's default wait on the thread
+// ThreadWaitSeconds is the thread playbook's default wait on the thread
 // (seven days): long enough that a conversation stays parked over a weekend,
 // bounded so an abandoned one is handed back.
-const SupportWaitSeconds = 7 * 24 * 60 * 60
+const ThreadWaitSeconds = 7 * 24 * 60 * 60
 
-// SupportPlaybook is the skill the support binding starts its turns on.
-const SupportPlaybook = "support-conversation"
+// ThreadPlaybook is the skill the binding init writes starts its turns on.
+const ThreadPlaybook = "slack-thread"
 
 var (
 	refPattern     = regexp.MustCompile(`^(keyring:[a-z][a-z0-9_-]{0,62}|file:[a-z][a-z0-9_-]{0,62}|env:[A-Za-z_][A-Za-z0-9_]*|cmd:[^\r\n]+)$`)
@@ -43,7 +43,7 @@ var (
 )
 
 func (Setup) SetupInfo() extension.SetupInfo {
-	return extension.SetupInfo{Type: Type, Summary: "add a workspace-free support scope that answers Slack threads",
+	return extension.SetupInfo{Type: Type, Summary: "add a workspace-free scope whose agent works Slack threads",
 		Usage: "[--scope ID] [--name APP] [--channel C…] [--start all|mention] [--bot-token REF --app-token REF --team T…] [--via slack-cli] [--no-open] [--connection ID] [--dir FOLDER]"}
 }
 
@@ -58,7 +58,7 @@ func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string)
 	var f setupFlags
 	fs := flag.NewFlagSet("init slack", flag.ContinueOnError)
 	fs.SetOutput(io.Discard)
-	fs.StringVar(&f.scope, "scope", "support", "")
+	fs.StringVar(&f.scope, "scope", "slack", "")
 	fs.StringVar(&f.name, "name", "Open Conduit", "")
 	fs.StringVar(&f.connection, "connection", Type, "")
 	fs.StringVar(&f.channel, "channel", "", "")
@@ -93,7 +93,7 @@ func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string)
 		return extension.SetupResult{}, setupUsage("--name is the app's name (1-35 characters)")
 	}
 	if f.dir != "" {
-		dir, err := supportDir(host, f.dir)
+		dir, err := folderDir(host, f.dir)
 		if err != nil {
 			return extension.SetupResult{}, setupUsage("--dir " + err.Error())
 		}
@@ -143,7 +143,7 @@ func (Setup) Setup(ctx context.Context, host extension.SetupHost, args []string)
 	}
 	r.Summary = append([]string{"scope      " + f.scope + " (workspace-free: no checkout, no Git provider)",
 		"channel    " + f.channel + " in team " + f.team + " (receiver socket, start " + f.start + ")",
-		"agent      claude-code on the " + SupportPlaybook + " playbook, active policy inject",
+		"agent      claude-code on the " + ThreadPlaybook + " playbook, active policy inject",
 		"folder     " + folder,
 		"tokens     " + f.connection + " connection: bot " + refScheme(f.botRef) + ", app " + refScheme(f.appRef)}, summary...)
 	r.Next = []string{"open-conduit serve                   start the daemon (Socket Mode needs no public endpoint)",
@@ -162,7 +162,7 @@ func askDir(host extension.SetupHost) (string, error) {
 		} else if err != nil {
 			return "", err
 		}
-		dir, err := supportDir(host, strings.TrimSpace(answer))
+		dir, err := folderDir(host, strings.TrimSpace(answer))
 		if err == nil {
 			return dir, nil
 		}
@@ -170,9 +170,9 @@ func askDir(host extension.SetupHost) (string, error) {
 	}
 }
 
-// supportDir resolves a folder against the operator's working directory and
+// folderDir resolves a folder against the operator's working directory and
 // checks it is an existing directory.
-func supportDir(host extension.SetupHost, dir string) (string, error) {
+func folderDir(host extension.SetupHost, dir string) (string, error) {
 	if !filepath.IsAbs(dir) {
 		dir = filepath.Join(host.Cwd(), dir)
 	}
@@ -225,7 +225,7 @@ func createApp(ctx context.Context, host extension.SetupHost, f setupFlags) erro
 		"  - Bot token: OAuth & Permissions -> Bot User OAuth Token (xoxb-...).\n" +
 		"  - App-level token: Basic Information -> App-Level Tokens -> Generate Token and Scopes,\n" +
 		"    add the scope connections:write, generate, and copy it (xapp-...). Slack has no API for this step.\n" +
-		"Then invite the app to the support channel: /invite @" + f.name + "\n\n")
+		"Then invite the app to the channel it should watch: /invite @" + f.name + "\n\n")
 	return nil
 }
 
@@ -330,14 +330,14 @@ func pickChannel(ctx context.Context, host extension.SetupHost, client *Client, 
 			for i, c := range channels {
 				names[i] = "#" + c.Name + " (" + c.ID + ")"
 			}
-			i, err := host.Choose("Which channel should the support agent answer in?", names)
+			i, err := host.Choose("Which channel should the agent watch?", names)
 			if err != nil {
 				return "", err
 			}
 			return channels[i].ID, nil
 		}
 		if round == 0 {
-			host.Printf("The bot is in no channel yet. Invite it (/invite @%s) in the support channel.\n", f.name)
+			host.Printf("The bot is in no channel yet. Invite it (/invite @%s) in the channel it should watch.\n", f.name)
 			answer, err := host.Prompt("Press Enter once it is invited, or paste the channel ID", extension.Prompt{})
 			if err != nil {
 				return "", err
@@ -352,22 +352,22 @@ func pickChannel(ctx context.Context, host extension.SetupHost, client *Client, 
 
 func mustJSON(v any) []byte { b, _ := json.Marshal(v); return b }
 
-// result builds the connection and the workspace-free support scope.
+// result builds the connection and the workspace-free scope.
 func result(f setupFlags, conn ConnectionConfig) (extension.SetupResult, error) {
 	connection := map[string]any{"id": f.connection, "type": Type, "config": conn,
 		"secret_refs": map[string]any{SecretBotToken: f.botRef, SecretAppToken: f.appRef}}
 	requires := map[string]any{"toolbelt": "mcp", "inject": true, "resume": true, "workspace": false}
-	config := map[string]any{"playbook": SupportPlaybook, "args": "{key}"}
+	config := map[string]any{"playbook": ThreadPlaybook, "args": "{key}"}
 	if f.dir != "" {
 		config["dir"] = f.dir
 	}
-	support := map[string]any{"name": "support", "executor": "claude-code", "connection": f.connection, "requires": requires,
-		"operations": SupportOperations, "secret_names": []string{}, "config": config}
+	agent := map[string]any{"name": "agent", "executor": "claude-code", "connection": f.connection, "requires": requires,
+		"operations": ThreadOperations, "secret_names": []string{}, "config": config}
 	entry := ExtensionConfig{Namespace: "slack/" + f.team, Scope: f.scope, Team: f.team, Channels: []string{f.channel}, Start: f.start, BotUserID: f.botUser, Receiver: ReceiverSocket}
-	scope := map[string]any{"id": f.scope, "name": "Slack support",
-		"authorization": map[string]any{"connections": []string{f.connection}, "read_scopes": []string{}, "operations": SupportOperations},
-		"bindings":      []any{support},
-		"routes":        []any{map[string]any{"name": "conversations", "handler": Type, "binding": "support", "active_policy": "inject", "config": map[string]any{}}},
+	scope := map[string]any{"id": f.scope, "name": "Slack",
+		"authorization": map[string]any{"connections": []string{f.connection}, "read_scopes": []string{}, "operations": ThreadOperations},
+		"bindings":      []any{agent},
+		"routes":        []any{map[string]any{"name": "conversations", "handler": Type, "binding": "agent", "active_policy": "inject", "config": map[string]any{}}},
 		"extensions":    []any{map[string]any{"name": f.scope, "type": Type, "connection": f.connection, "secret_names": []string{}, "config": entry}},
 		"secret_refs":   map[string]any{}}
 	c, err := json.Marshal(connection)

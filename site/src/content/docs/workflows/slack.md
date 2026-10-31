@@ -21,7 +21,7 @@ To answer only when the app is mentioned, set `"start": "mention"` with the app'
 By default each thread's agent runs in an empty private directory. To give it instructions and reference files, point the binding's `dir` at a folder:
 
 ```json
-"config": {"playbook": "support-conversation", "args": "{key}", "dir": "/Users/me/support"}
+"config": {"playbook": "slack-thread", "args": "{key}", "dir": "/Users/me/support"}
 ```
 
 Every thread's agent then runs in that folder as it is: no git, no copy. Claude Code reads the folder's `CLAUDE.md` as its instructions, the agent starts next to the knowledge files, and an edit takes effect on the next turn. `init slack` asks for the folder, or takes it as `--dir FOLDER`.
@@ -66,7 +66,7 @@ Each workflow is a scope in the config. The example below is a complete, minimal
           "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": false},
           "operations": ["read_context", "wait", "declare_outcome", "slack.context", "slack.thread", "slack.reply"],
           "secret_names": [],
-          "config": {"playbook": "support-conversation", "args": "{key}"}
+          "config": {"playbook": "slack-thread", "args": "{key}"}
         }
       ]
     }
@@ -80,7 +80,7 @@ One Slack entry can watch several channels and start each channel's threads on i
 
 Keep both channels on one entry rather than adding a second entry or scope for the same app: Slack spreads an app's Socket Mode events across its connections, so a second entry would receive some of the other channel's messages and drop them until the next reconcile.
 
-Open Conduit ships `support-conversation`; `review-pr` below stands for a playbook of your own. The binding chooses the playbook; the agent never does.
+Open Conduit ships `slack-thread`, which covers working a thread and leaves its purpose to your instructions; `review-pr` below stands for a playbook of your own. The binding chooses the playbook; the agent never does.
 
 ```json
 {
@@ -127,7 +127,7 @@ Open Conduit ships `support-conversation`; `review-pr` below stands for a playbo
           "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": false},
           "operations": ["read_context", "wait", "declare_outcome", "slack.context", "slack.thread", "slack.reply"],
           "secret_names": [],
-          "config": {"playbook": "support-conversation", "args": "{key}"}
+          "config": {"playbook": "slack-thread", "args": "{key}"}
         }
       ]
     }
