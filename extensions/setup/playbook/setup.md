@@ -76,7 +76,7 @@ Introduce Open Conduit's terms only when a question needs them, each with a one-
 
   List the accounts `gh` knows with `gh auth status --json hosts --jq '.hosts[][] | [.host, .login, .active, .tokenSource, .state] | @tsv'`, and check that one account's token works with `GH_TOKEN="$(gh auth token --user <login>)" gh api user --jq .login`. Never run plain `gh auth status` or `--show-token`: in some environments it prints most of a token into the conversation. If they're signed out, they run `gh auth login` themselves.
 
-  A GitHub App (`"auth": "app"` with `app_id` and an `app_private_key` reference) and a bot App for writes (`bot_app_id`, `bot_private_key`) are also supported.
+  A GitHub App (`"auth": "app"` with `app_id` and an `app_private_key` reference) and a bot App for writes (`bot_app_id`, `bot_private_key`) are also supported. A bot App makes agents' comments, labels and PRs show as `name[bot]` instead of as the owner; offer it when the owner minds that. The owner stores its key with `{{bin}} secret set NAME < key.pem` (piped, since the key has several lines); the steps are in the guide at https://open-conduit.github.io/open-conduit/guides/github-bot/.
 - **Ask, don't assume.** This includes which repositories are in scope, how issues map to scopes, and anything that labels, moves or comments on issues. Read what you can find yourself (git remotes, `gh repo list`) and present it for them to confirm.
 - **Explain as you go,** in a sentence or two, what each step means for them ("claimed issues get the `agent-in-progress` label").
 - **Keep questions few and concrete.** Group them, and offer the likely answer: "Your checkouts under ~/Code with GitHub remotes are web, api and ios. All three?"

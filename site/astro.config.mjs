@@ -41,6 +41,7 @@ export default defineConfig({
 					label: 'Guides',
 					items: [
 						{ label: 'Configuration and secrets', slug: 'guides/configuration' },
+						{ label: 'Give agents their own GitHub account', slug: 'guides/github-bot' },
 						{ label: 'Sandbox your agents', slug: 'guides/sandboxes' },
 						{ label: 'Run it in the background', slug: 'guides/background-service' },
 						{ label: 'Watch and steer runs', slug: 'guides/operating' },

@@ -85,6 +85,8 @@ open-conduit secret set github-token
 open-conduit config set /connections/github/secret_refs/token '"keyring:github-token"'
 ```
 
+`secret set` reads a whole file piped into it, which is how a multi-line secret such as a GitHub App's private key goes in. To have agents write to GitHub as a bot rather than as you, see [give agents their own GitHub account](../github-bot/).
+
 Secrets go to the macOS Keychain or, on Linux, the Secret Service through `secret-tool`. Without either, `secret set` falls back to an owner-only `secrets.json` beside the config and says so.
 
 ## Webhooks
