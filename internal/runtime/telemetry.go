@@ -646,8 +646,25 @@ func (r *recorder) executionRecords(add func(observability.Record), before *doma
 			attrs["outcome.kind"] = string(after.Outcome.Kind)
 			attrs["outcome.summary"] = truncate(after.Outcome.Summary, 256)
 		}
+		if d, ok := domain.TurnOf(after.Outcome); ok && d.Status != "" {
+			attrs["turn.status"] = d.Status
+		}
+		if after.StartedAt != nil {
+			attrs["execution.started_at"] = timeAttr(*after.StartedAt)
+		}
 		if after.StartedAt != nil && after.FinishedAt != nil {
 			attrs["execution.duration_ms"] = strconv.FormatInt(after.FinishedAt.Sub(*after.StartedAt).Milliseconds(), 10)
+		}
+		// What started the attempt and when: the gap from the Work's
+		// previous turn to this trigger is the time it spent waiting.
+		if a, err := r.Tx.Event(after.TriggerID); err == nil {
+			attrs["trigger.type"] = a.Event.Type
+			if !a.Event.OccurredAt.IsZero() {
+				attrs["trigger.occurred_at"] = timeAttr(a.Event.OccurredAt)
+			}
+		}
+		if w, err := r.Tx.Work(after.WorkID); err == nil {
+			attrs["work.kind"] = w.Kind
 		}
 		attrs["execution.artifacts"] = strconv.Itoa(len(after.Artifacts))
 		if state, err := attemptState(r.Tx, after.ID); err == nil {

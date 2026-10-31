@@ -197,7 +197,8 @@ func TestLifecycleTelemetryExplainsRuns(t *testing.T) {
 		return r.Attributes["timer.id"] == registered.Attributes["wait.timeout_timer_id"]
 	})
 	stop2 := rs.one(t, "execution.completed", forExecution(second.Lease.ExecutionID))
-	if stop2.Attributes["outcome.summary"] != "reply handled" || stop2.From != "running" || stop2.Attributes["execution.duration_ms"] == "" {
+	if stop2.Attributes["outcome.summary"] != "reply handled" || stop2.From != "running" || stop2.Attributes["execution.duration_ms"] == "" ||
+		stop2.Attributes["trigger.type"] != "operator.reply" || stop2.Attributes["trigger.occurred_at"] == "" || stop2.Attributes["execution.started_at"] == "" || stop2.Attributes["work.kind"] == "" {
 		t.Fatalf("final stop: %+v", stop2)
 	}
 	// Work lifecycle transitions are each reported once with their states.
