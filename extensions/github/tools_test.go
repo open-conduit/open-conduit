@@ -149,6 +149,22 @@ func TestDependencyFilterSelectsTheNamedItem(t *testing.T) {
 			t.Fatalf("comment filter accepted %+v", c)
 		}
 	}
+	// The open issue seen without its scheduled label releases a hold; with
+	// it, closed, or another issue does not.
+	unscheduled := filter(map[string]any{"kind": "unscheduled", "repo": repo, "number": 3, "label": "scheduled"})
+	issue := func(p gh.IssuePayload) domain.Event {
+		e := ev(gh.SchemaIssue, p)
+		e.Type = gh.TypeIssueOpen
+		return e
+	}
+	if !gh.DependencyFilter(unscheduled, issue(gh.IssuePayload{Repo: repo, Number: 3, State: "open", Labels: []string{"bug"}})) {
+		t.Fatal("unscheduled filter rejected the issue without its label")
+	}
+	for _, p := range []gh.IssuePayload{{Repo: repo, Number: 3, State: "open", Labels: []string{"Scheduled"}}, {Repo: repo, Number: 4, State: "open"}, {Repo: repo, Number: 3, State: "closed"}} {
+		if gh.DependencyFilter(unscheduled, issue(p)) {
+			t.Fatalf("unscheduled filter accepted %+v", p)
+		}
+	}
 	if gh.DependencyFilter(domain.Payload{Schema: "other"}, ev(gh.SchemaPull, gh.PullPayload{Repo: repo, Number: 8})) {
 		t.Fatal("foreign filter schema accepted")
 	}

@@ -100,8 +100,9 @@ A scope enables holds with a `github-hold` route ahead of its `github` route, bo
 3. **Already met.** A condition that already happened is aliased from history at registration and wakes the hold at once. This is the same core path as every wait.
 4. **Release.** When the hold ends, the executor emits `github.hold.released {why}` and hands off. The reason is a dependency met, the time come, a cancel marker, or "no marker", which is a scheduled task that starts now. The `github` route queues the release for the agent binding, so the first agent turn starts with text such as "This issue was held, waiting for PR #61 to merge. That has happened: …".
 5. **Moved time.** A time-out re-reads the marker first, so an owner who moved the time is honoured.
+6. **Unscheduled.** The owner taking the `scheduled` label off releases the hold at once, whatever the marker says. The hold carries one more dependency, on the issue's own key: the next `github.issue.open` seen without the label (filter `unscheduled`). The hold status also reports `unscheduled` when the label is already gone, so a hold read after the owner took it off (the first attempt, a time-out) starts too. The first turn reads "The scheduled label was taken off this issue, so it starts now."
 
-Projections: held Work carries only `scheduled` (not claimed) until its first agent turn starts. Work parked on an agent's wait carries `claimed` and `scheduled` and no status. `scheduled` is a managed label.
+Projections: held Work carries only `scheduled` (not claimed) until its first agent turn starts. The projection never adds `scheduled` back to held Work: taking it off is how the owner starts the issue. Work parked on an agent's wait carries `claimed` and `scheduled` and no status. `scheduled` is a managed label.
 
 ## Checks timing
 

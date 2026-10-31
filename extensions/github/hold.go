@@ -217,6 +217,10 @@ func (h *HoldExecutorImpl) decide(ctx context.Context, tb ToolbeltClient, r exte
 	return extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Summary: "released: " + why}}, nil
 }
 
+// unscheduledWhy is why a hold ends when the owner takes the scheduled
+// label off.
+const unscheduledWhy = "The scheduled label was taken off this issue, so it starts now."
+
 // heldWake is v1's wording for a held issue whose condition happened.
 func heldWake(alias domain.Event) string {
 	var p struct {
@@ -224,6 +228,9 @@ func heldWake(alias domain.Event) string {
 		Label      string `json:"label"`
 	}
 	_ = json.Unmarshal(alias.Data.Data, &p)
+	if p.Label == unscheduledLabel {
+		return unscheduledWhy
+	}
 	if c, err := ParseCond(p.Label); err == nil {
 		return fmt.Sprintf("This issue was held, waiting for %s. That has happened: %s.", c.Describe(), c.Happened(p.SourceType))
 	}
@@ -238,6 +245,8 @@ func releasedWhy(s HoldStatus, timedOut bool) string {
 	switch {
 	case s.Reason == "cancelled":
 		return "The wait was cancelled."
+	case s.Reason == "unscheduled":
+		return unscheduledWhy
 	case s.Reason == "scheduled_now":
 		return "This issue was scheduled to start now."
 	case len(s.Waits) > 0:

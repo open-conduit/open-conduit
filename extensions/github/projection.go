@@ -484,6 +484,11 @@ func (p *Projector) converge(ctx context.Context, item projected) ([]string, boo
 	var add, remove []string
 	for _, m := range managed {
 		want, present := has(desired, m), has(current, m)
+		if item.held && m == l.Scheduled && want && !present {
+			// The owner took the scheduled label off a held issue: that
+			// releases the hold (github.hold), so it is never put back.
+			continue
+		}
 		switch {
 		case want && !present:
 			add = append(add, m)
