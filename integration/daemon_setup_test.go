@@ -170,7 +170,8 @@ func TestDaemonSetupSession(t *testing.T) {
 	if w := work(); w.State != "waiting" {
 		t.Fatalf("a message woke the question: %s", w.State)
 	}
-	if _, err = d.c.InvokeAction(ctx, session, "setup", "answer", "octo/nothing", "bad"); err == nil || !strings.Contains(err.Error(), "invalid_input") {
+	// Choices are suggestions, so only a blank answer is refused.
+	if _, err = d.c.InvokeAction(ctx, session, "setup", "answer", "   ", "bad"); err == nil || !strings.Contains(err.Error(), "invalid_input") {
 		t.Fatalf("invalid answer: %v", err)
 	}
 	if _, err = d.c.InvokeAction(ctx, session, "setup", "answer", "2", "answer"); err != nil {

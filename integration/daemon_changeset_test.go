@@ -262,12 +262,14 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 		t.Fatal("validate is still offered with nothing approved left to apply")
 	}
 
-	if _, err = d.c.InvokeAction(ctx, session, "setup", "answer", "yes", "answer"); err != nil {
+	// The question offered yes or no; an answer in the operator's own words
+	// still answers it.
+	if _, err = d.c.InvokeAction(ctx, session, "setup", "answer", "Yes, and raise the slots to 3", "answer"); err != nil {
 		t.Fatalf("answer: %v", err)
 	}
 	d.until("the session finished", 30*time.Second, func() bool { return work().State == "completed" })
 	resumed, _ := os.ReadFile(filepath.Join(d.root, "resumed"))
-	for _, want := range []string{"rejected c4", "not until the secret is stored", "approved c1, c2", "applied your changes", "Generation 2"} {
+	for _, want := range []string{"rejected c4", "not until the secret is stored", "approved c1, c2", "applied your changes", "Generation 2", "Yes, and raise the slots to 3"} {
 		if !strings.Contains(string(resumed), want) {
 			t.Errorf("resumed without %q: %s", want, resumed)
 		}
