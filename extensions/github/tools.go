@@ -72,7 +72,7 @@ const (
 // Operations lists every tool operation (for binding operation lists).
 func Operations() []string {
 	return []string{OpContext, OpIssueView, OpIssueComment, OpIssueList, OpIssueCreate, OpPRList, OpPRView, OpPRCreate,
-		OpPRComment, OpPRReply, OpPRReview, OpChecks, OpUpload, OpFetch, OpWait, OpHoldStatus, OpHold}
+		OpPRComment, OpPRReply, OpPRReview, OpChecks, OpUpload, OpFetch, OpWait, OpHoldStatus, OpHold, OpGitCredential}
 }
 
 // Source is one registered GitHub extension entry the tools can act on.
@@ -99,7 +99,10 @@ type ToolsOptions struct {
 }
 
 // Tools implements the operations.
-type Tools struct{ o ToolsOptions }
+type Tools struct {
+	o   ToolsOptions
+	git gitGrants
+}
 
 // NewTools validates options.
 func NewTools(o ToolsOptions) (*Tools, error) {
@@ -161,6 +164,7 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpUpload, Handler: h(t.upload)},
 			{Name: OpFetch, Handler: h(t.fetch)},
 			{Name: OpHoldStatus, Handler: h(t.holdStatus)},
+			{Name: OpGitCredential, Handler: pr(t.gitCredential)},
 			{Name: OpWait, Wait: t.waitPlan(false)},
 			{Name: OpHold, Wait: t.waitPlan(true)},
 		}}

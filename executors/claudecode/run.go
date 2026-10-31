@@ -327,6 +327,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 			// The MCP server inherits the endpoint, which the provider
 			// moves to its forward, and the token file's path.
 			env = append(env, "OS_ENDPOINT="+r.Context.ToolbeltEndpoint, "OS_TOKEN_FILE="+tokenFile(r, dir))
+			env = toolbeltGitHelper(env)
 		}
 		if plan, err = r.Context.Container.Launch(ctx, needs, extension.SandboxLaunch{Argv: argv, Dir: workdir, Env: env, RunDir: dir, Secrets: secrets}); err != nil {
 			return e.preset(ctx, rn, cfg.StatusSchema, extension.ContainerReason(err), err.Error(), nil)

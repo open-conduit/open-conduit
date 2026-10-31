@@ -144,25 +144,34 @@ func (a *appToken) jwt(ctx context.Context) (string, error) {
 	return unsigned + "." + enc.EncodeToString(sig), nil
 }
 
+// installation is the App's installation on repo, looked up once.
+func (a *appToken) installation(ctx context.Context, jwt, repo string) (int64, error) {
+	a.mu.Lock()
+	id, ok := a.inst[repo]
+	a.mu.Unlock()
+	if ok {
+		return id, nil
+	}
+	var inst struct {
+		ID int64 `json:"id"`
+	}
+	if _, err := a.c.raw(ctx, "Bearer "+jwt, http.MethodGet, "/repos/"+repo+"/installation", nil, &inst); err != nil {
+		return 0, fmt.Errorf("github app installation for %s: %w", repo, err)
+	}
+	a.mu.Lock()
+	a.inst[repo] = inst.ID
+	a.mu.Unlock()
+	return inst.ID, nil
+}
+
 func (a *appToken) token(ctx context.Context, repo string) (string, error) {
 	jwt, err := a.jwt(ctx)
 	if err != nil || repo == "" {
 		return jwt, err
 	}
-	a.mu.Lock()
-	id, ok := a.inst[repo]
-	a.mu.Unlock()
-	if !ok {
-		var inst struct {
-			ID int64 `json:"id"`
-		}
-		if _, err := a.c.raw(ctx, "Bearer "+jwt, http.MethodGet, "/repos/"+repo+"/installation", nil, &inst); err != nil {
-			return "", fmt.Errorf("github app installation for %s: %w", repo, err)
-		}
-		id = inst.ID
-		a.mu.Lock()
-		a.inst[repo] = id
-		a.mu.Unlock()
+	id, err := a.installation(ctx, jwt, repo)
+	if err != nil {
+		return "", err
 	}
 	a.mu.Lock()
 	cached, ok := a.cache[id]
@@ -194,4 +203,31 @@ func (a *appToken) invalidate(repo string) {
 	}
 	delete(a.inst, repo)
 	a.key = nil
+}
+
+// scoped mints an installation token for one repository with only
+// contents: write, for git: it is never cached here, so the caller owns
+// it and revokes it (revokeInstallationToken).
+func (a *appToken) scoped(ctx context.Context, repo string) (string, time.Time, error) {
+	jwt, err := a.jwt(ctx)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	id, err := a.installation(ctx, jwt, repo)
+	if err != nil {
+		return "", time.Time{}, err
+	}
+	_, name, _ := strings.Cut(repo, "/")
+	body := map[string]any{"repositories": []string{name}, "permissions": map[string]string{"contents": "write"}}
+	var t struct {
+		Token     string    `json:"token"`
+		ExpiresAt time.Time `json:"expires_at"`
+	}
+	if _, err := a.c.raw(ctx, "Bearer "+jwt, http.MethodPost, fmt.Sprintf("/app/installations/%d/access_tokens", id), body, &t); err != nil {
+		return "", time.Time{}, fmt.Errorf("github git token for %s: %w", repo, err)
+	}
+	if t.Token == "" {
+		return "", time.Time{}, ErrCredential
+	}
+	return t.Token, t.ExpiresAt, nil
 }

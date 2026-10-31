@@ -45,6 +45,7 @@ The client enforces these rules:
 - Lists follow `Link: rel="next"`. An unfinished listing is an error, never a short success.
 - App auth signs an RS256 JWT, looks up the installation and caches installation tokens until five minutes before they expire. A 401 invalidates the cached token and retries once.
 - Writes (labels, comments, reactions) use the bot App when one is configured. Reads use the sign-in identity.
+- `GitToken` mints a token for git that is never cached: an installation token limited to one repository with `contents: write`, from the bot App or else the sign-in App. Its caller revokes it with `RevokeToken` (`DELETE /installation/token`). On a token connection it is `ErrStaticToken` ([`github.git.credential`](../engineering-tools/#tool-operations)).
 
 ## Ingress and canonical identity
 
@@ -140,6 +141,7 @@ The unit fixtures cover:
 - Horizon ageing, stable pagination with conditional revalidation, and rate-limited pages that fail and then resume.
 - Restart of rejected or stale generations.
 - Webhook signatures and HTTP mapping, primary and secondary rate limits, ordinary 403s, token re-resolution after a 401, App token caching and refresh, bot-App writes, reactions, markers, and config validation.
+- Git tokens minted for one repository with `contents: write`, reused, refused for other URLs, revoked, and refused on a token connection. The fake holds an installation token to what it was minted for, in its API and in its git smart-HTTP handler (`GitHandler`).
 - Admission and input-selection rules.
 
 The [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob/main/integration/github_test.go) run the real runtime ingress and router, and cover:
