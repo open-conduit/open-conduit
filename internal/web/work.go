@@ -304,13 +304,15 @@ func (t turnInfo) outcomeText() string {
 	return "Turn " + itoa(t.Number) + " " + t.State
 }
 
-// Active is the sum of the Work's turns' active time.
+// Active is the sum of the Work's turns' active time, never more than the
+// Work's lifetime: a turn's segments are timed by its runtime, and clock skew
+// between the two must not show a Work executing for longer than it existed.
 func (v workView) Active(now time.Time) time.Duration {
 	var d time.Duration
 	for _, t := range v.Turns {
 		d += t.Active(now)
 	}
-	return d
+	return min(d, max(v.Elapsed(now), 0))
 }
 
 // End is when the Work's lifetime ends for its figures: when it closed, or

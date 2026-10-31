@@ -104,6 +104,13 @@ func TestTimesAndSegments(t *testing.T) {
 	if got := closed.Elapsed(now); got != 3*time.Hour {
 		t.Fatalf("closed elapsed runs to its close: %s", got)
 	}
+	// A run timed from before the Work was created (clock skew) never shows
+	// the Work executing for longer than it has existed.
+	early := turnRun(1, "running", -10*time.Second, 0)
+	young := newWork(client.Work{ID: "w", State: "running", CreatedAt: at0(0), UpdatedAt: at0(0)}, []client.Run{early}, nil, t0.Add(3*time.Minute))
+	if got := young.Active(t0.Add(3 * time.Minute)); got != 3*time.Minute {
+		t.Fatalf("active %s, want capped at the 3m lifetime", got)
+	}
 }
 
 func TestLifeline(t *testing.T) {
