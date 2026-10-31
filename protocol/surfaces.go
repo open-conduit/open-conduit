@@ -204,6 +204,8 @@ type TelemetryExportParams struct {
 // run of a Work in a scope that uses it.
 type RunEnvironmentParams struct {
 	Owner ResourceOwner `json:"owner"`
+	// Connection is the connection the run's binding names, or empty.
+	Connection string `json:"connection,omitempty"`
 }
 type RunEnvironmentResult struct {
 	Env map[string]string `json:"env,omitempty"`

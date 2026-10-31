@@ -449,6 +449,21 @@ func (c *ConfigService) Container(state runtime.AttemptState) (*config.Container
 	return b.Container, nil
 }
 
+// Connection is the connection the attempt's pinned binding names ("" for
+// none), as Grant pins it into the toolbelt's authority.
+func (c *ConfigService) Connection(state runtime.AttemptState) string {
+	pinned := c.snapshotFor(state.Generation)
+	if pinned == nil {
+		pinned, _ = c.Current()
+	}
+	if s, ok := pinned.Scope(state.ScopeID); ok {
+		if b, ok := s.Binding(state.Binding.Name); ok {
+			return b.Connection
+		}
+	}
+	return ""
+}
+
 func (c *ConfigService) Resource(state runtime.AttemptState) (*config.Resource, error) {
 	pinned := c.snapshotFor(state.Generation)
 	current, _ := c.Current()

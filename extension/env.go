@@ -10,9 +10,12 @@ import (
 
 // RunEnvironmentRequest asks an extension for its environment layer for one
 // run: the Work being run and the execution, in a scope that uses the
-// extension.
+// extension, and the connection the run's binding names ("" for none), as
+// an operation's Authority.Connection carries it. The extension owning that
+// connection's type can resolve its config and secrets in the scope.
 type RunEnvironmentRequest struct {
-	Owner ResourceOwner
+	Owner      ResourceOwner
+	Connection string
 }
 
 // RunEnvironment contributes an environment layer to the runs of Work in

@@ -185,7 +185,7 @@ func (r *Remote) RunEnvironment(ctx context.Context, req extension.RunEnvironmen
 	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
 	defer cancel()
 	var out protocol.RunEnvironmentResult
-	if err := r.p.Call(ctx, "run.environment", protocol.RunEnvironmentParams{Owner: protocol.FromOwner(req.Owner)}, &out); err != nil {
+	if err := r.p.Call(ctx, "run.environment", protocol.RunEnvironmentParams{Owner: protocol.FromOwner(req.Owner), Connection: req.Connection}, &out); err != nil {
 		return nil, err
 	}
 	return out.Env, nil

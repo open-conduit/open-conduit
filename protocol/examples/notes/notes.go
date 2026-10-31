@@ -113,7 +113,8 @@ func Manifest(o Options) protocol.Manifest {
 		Resources: []protocol.ResourceDecl{{Type: Scratch, Modes: []string{extension.ResourceWork}}},
 		Exporters: true,
 		Annotate:  true,
-		// A run of Work in a notes scope gets NOTES_WORK, the Work it runs.
+		// A run of Work in a notes scope gets NOTES_WORK, the Work it runs,
+		// and NOTES_CONNECTION, the connection its binding names.
 		RunEnvironment: true,
 		Actions:        true,
 		Panels:         true,

@@ -114,7 +114,7 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 		if s.ext.RunEnvironment == nil {
 			return nil, notFound(method)
 		}
-		env, err := s.ext.RunEnvironment(ctx, s.host, extension.RunEnvironmentRequest{Owner: p.Owner.Extension()})
+		env, err := s.ext.RunEnvironment(ctx, s.host, extension.RunEnvironmentRequest{Owner: p.Owner.Extension(), Connection: p.Connection})
 		if err != nil {
 			return nil, err
 		}

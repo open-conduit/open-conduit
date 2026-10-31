@@ -428,8 +428,8 @@ func TestExternalSurfacesRoundTrip(t *testing.T) {
 		}
 	})
 	t.Run("run_environment", func(t *testing.T) {
-		env, err := r.RunEnvironment(ctx, extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: extensionScope, WorkID: "work-e", ExecutionID: "work-e/1"}})
-		if err != nil || env["NOTES_WORK"] != "work-e" {
+		env, err := r.RunEnvironment(ctx, extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: extensionScope, WorkID: "work-e", ExecutionID: "work-e/1"}, Connection: "notes-service"})
+		if err != nil || env["NOTES_WORK"] != "work-e" || env["NOTES_CONNECTION"] != "notes-service" {
 			t.Fatalf("run environment: %v %v", env, err)
 		}
 	})

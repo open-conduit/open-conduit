@@ -18,7 +18,7 @@ import (
 // in-process extension is asked only in a scope with an entry of one of its
 // types; an installed one decides for itself (its manifest and the scope).
 func (d *daemon) runEnvironment(ctx context.Context, state runtime.AttemptState) (map[string]string, error) {
-	req := extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID}}
+	req := extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID}, Connection: d.configs.Connection(state)}
 	type source struct {
 		name string
 		env  extension.RunEnvironment
