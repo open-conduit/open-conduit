@@ -562,13 +562,14 @@ func (s *Server) works(ctx context.Context) (openW, closedW []client.Work, err e
 	return openW, closedW, err
 }
 
-// holds fills in the hold of each ready Work, eight at a time: a held Work
-// is ready, and lists do not carry holds.
+// holds fills in the hold of each ready or waiting Work, eight at a time:
+// lists do not carry holds. A held Work is ready, or waiting when the causal
+// limits refused its wake and held it.
 func (s *Server) holds(ctx context.Context, works []client.Work) {
 	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
 	for i := range works {
-		if works[i].State != "ready" {
+		if works[i].State != "ready" && works[i].State != "waiting" {
 			continue
 		}
 		wg.Add(1)

@@ -50,6 +50,7 @@ func TestDisposition(t *testing.T) {
 	}{
 		{name: "completed", work: client.Work{State: "completed"}, runs: []client.Run{turnRun(1, "completed", time.Hour, 2*time.Hour)}, group: "closed", kind: "completed", label: "Completed"},
 		{name: "held beats a wait", work: client.Work{State: "ready", Hold: &client.Hold{Reason: "busy", At: at0(5 * time.Hour)}}, wait: wait, group: "held", kind: "held", detail: "busy"},
+		{name: "a waiting Work held for a refused wake", work: client.Work{State: "waiting", Hold: &client.Hold{Reason: "Its wait is blocked: depth_limit", At: at0(5 * time.Hour)}}, runs: []client.Run{turnRun(1, "parked", time.Hour, 2*time.Hour)}, wait: wait, group: "held", kind: "held", detail: "Its wait is blocked: depth_limit"},
 		{name: "an offered action is a decision", work: client.Work{State: "waiting", Actions: ask, Panels: panel}, wait: wait, group: "attention", kind: "decision", label: "The agent asks", detail: "May I refund?"},
 		{name: "an action with no panel", work: client.Work{State: "waiting", Actions: ask}, group: "attention", kind: "decision", label: "Answer the question"},
 		{name: "running", work: client.Work{State: "running"}, runs: []client.Run{turnRun(1, "running", time.Hour, 0)}, group: "running", kind: "running", detail: "Turn 1"},
@@ -167,20 +168,24 @@ func TestWorldReadsListsAndOffersOnlyForOpenWork(t *testing.T) {
 	f.work["wrk_1"] = client.Work{ID: "wrk_1", State: "waiting", Revision: "7"}
 	f.work["wrk_2"] = client.Work{ID: "wrk_2", State: "ready", Revision: "2", Hold: &client.Hold{Reason: "busy"}}
 	f.work["wrk_3"] = client.Work{ID: "wrk_3", State: "completed", Revision: "9"}
+	f.work["wrk_4"] = client.Work{ID: "wrk_4", State: "waiting", Revision: "4", Hold: &client.Hold{Reason: "Its wait is blocked"}}
 	w := s.world(context.Background())
-	if len(w.Works) != 3 || len(w.Errs) != 0 {
+	if len(w.Works) != 4 || len(w.Errs) != 0 {
 		t.Fatalf("works %d errs %v", len(w.Works), w.Errs)
 	}
 	slices.Sort(f.calls)
 	if !slices.Equal(f.calls, []string{"works completed,failed,cancelled", "works+actions ready,running,waiting"}) {
 		t.Fatalf("calls %v", f.calls)
 	}
-	if f.withCalls != 2 {
-		t.Fatalf("offers asked for %d Work, want the 2 open ones", f.withCalls)
+	if f.withCalls != 3 {
+		t.Fatalf("offers asked for %d Work, want the 3 open ones", f.withCalls)
 	}
 	for _, v := range w.Works {
 		if v.ID == "wrk_2" && v.Disp.Group != "held" {
 			t.Fatalf("ready Work's hold not read: %+v", v.Disp)
+		}
+		if v.ID == "wrk_4" && v.Disp.Group != "held" {
+			t.Fatalf("waiting Work's hold not read: %+v", v.Disp)
 		}
 		if v.ID == "wrk_1" && v.Disp.Kind != "decision" {
 			t.Fatalf("an offered answer should make a decision: %+v", v.Disp)

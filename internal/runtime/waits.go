@@ -32,7 +32,13 @@ type pendingSubscriptions struct {
 type waitMetadata struct {
 	Timer   domain.Timer
 	Binding string
-	Blocked bool
+	// Blocked is set when the causal limits refused the wake bridge; the
+	// Work is then held with Reason until an operator releases it, which
+	// clears Blocked and records the release as Released, the parent of the
+	// next wake.
+	Blocked  bool
+	Reason   string    `json:",omitempty"`
+	Released domain.ID `json:",omitempty"`
 }
 type wakeReady struct {
 	WaitID, ExecutionID, EventID domain.ID
@@ -376,30 +382,13 @@ func WakeWaitInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.I
 		return "", err
 	}
 	if x.State == domain.ExecutionParked {
-		parent, bridge, er := wakeBridgeInTx(tx, now, limits, wait, x, winner.Event.ID, true)
+		parent, bridge, er := wakeBridgeInTx(tx, now, wait, x, winner.Event.ID, true)
 		if er != nil {
 			return "", er
 		}
 		accepted, _, er := AcceptDerivedInTx(tx, now, limits, work.ScopeID, parent, bridge)
 		if errors.Is(er, ErrCausalRejected) {
-			meta.Blocked = true
-			if er = disableWaitSubscriptionsInTx(tx, wait.ID); er != nil {
-				return "", er
-			}
-			if er = putJSON(tx, waitNamespace, identity(string(wait.ID)), meta); er != nil {
-				return "", er
-			}
-			if timer, er := tx.Timer(wait.TimeoutTimerID); er == nil {
-				if er = tx.DeleteTimer(timer.ID, timer.Revision); er != nil {
-					return "", er
-				}
-				if er = tx.Delete(timerNamespace, timerKey(timer.ID)); er != nil {
-					return "", er
-				}
-			} else if !errors.Is(er, storage.ErrNotFound) {
-				return "", er
-			}
-			return "", nil
+			return "", blockWaitInTx(tx, now, work, wait, meta, winner.Event.ID, er)
 		}
 		if er != nil {
 			return "", er
@@ -483,26 +472,160 @@ func WakeWaitInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.I
 	return winner.Event.ID, nil
 }
 
+// blockWaitInTx stops a wait whose wake bridge the causal limits refused
+// (refusal): the wait stops resolving, its timeout is disarmed and the Work
+// is held with the reason, so it shows as stuck rather than waiting on a
+// wait that can never fire. A root core.wait.blocked Event records it.
+// Releasing the hold unblocks the wait (unblockWaitsInTx).
+func blockWaitInTx(tx storage.Tx, now time.Time, work domain.Work, wait domain.Wait, meta waitMetadata, winner domain.ID, refusal error) error {
+	meta.Blocked, meta.Released = true, ""
+	meta.Reason = "the causal limits refused its wake"
+	var refused *causalError
+	if errors.As(refusal, &refused) {
+		d := refused.diagnostic
+		switch d.Reason {
+		case "depth_limit":
+			meta.Reason = fmt.Sprintf("the causal limits refused its wake: its chain would reach depth %d, over the limit of %d (depth_limit)", d.Depth, d.Limits.MaxDepth)
+		case "rate_limit":
+			meta.Reason = fmt.Sprintf("the causal limits refused its wake: its chain already has %d derived events this minute, the limit (rate_limit)", d.Count)
+		default:
+			meta.Reason = "the causal limits refused its wake (" + d.Reason + ")"
+		}
+	}
+	meta.Reason += "; release the hold to wake it on what has arrived"
+	if err := disableWaitSubscriptionsInTx(tx, wait.ID); err != nil {
+		return err
+	}
+	if err := putJSON(tx, waitNamespace, identity(string(wait.ID)), meta); err != nil {
+		return err
+	}
+	if timer, err := tx.Timer(wait.TimeoutTimerID); err == nil {
+		if err = tx.DeleteTimer(timer.ID, timer.Revision); err != nil {
+			return err
+		}
+		if err = tx.Delete(timerNamespace, timerKey(timer.ID)); err != nil {
+			return err
+		}
+	} else if !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+	if _, held, err := HoldInTx(tx, work.ID); err != nil || held {
+		return err
+	}
+	data, _ := json.Marshal(struct {
+		WaitID, WinnerID domain.ID
+		Reason           string
+	}{wait.ID, winner, meta.Reason})
+	event := domain.Event{ID: domain.ID("wait-blocked/" + identity(string(wait.ID))), Type: "core.wait.blocked", Source: "core.wait", DeliveryID: "blocked/" + string(wait.ID), WorkID: work.ID, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: "core.wait.blocked.v1", Data: data}}
+	accepted, _, err := AcceptInTx(tx, work.ScopeID, event)
+	if err != nil {
+		return err
+	}
+	if err = tx.MarkRouted(accepted.Event.ID, "", "control"); err != nil {
+		return err
+	}
+	return putJSON(tx, holdNamespace, identity(string(work.ID)), Hold{EventID: accepted.Event.ID, Reason: "Its wait is blocked: " + meta.Reason, At: now.UTC()})
+}
+
+// unblockWaitsInTx reopens the Work's active wait that the causal limits
+// blocked, once an operator released the hold (release is that control
+// Event): its subscriptions and timeout are rearmed and it is arbitrated
+// again, with the release as the parent of its wake, since the operator's
+// decision is the outside input that lets it go on.
+func unblockWaitsInTx(tx storage.Tx, now time.Time, limits CausalLimits, work, release domain.ID) error {
+	waits, err := tx.ListWaits(work)
+	if err != nil {
+		return err
+	}
+	for _, wait := range waits {
+		if wait.State != domain.WaitActive {
+			continue
+		}
+		var meta waitMetadata
+		if err = getJSON(tx, waitNamespace, identity(string(wait.ID)), &meta); err != nil {
+			return err
+		}
+		if !meta.Blocked {
+			continue
+		}
+		meta.Blocked, meta.Reason, meta.Released = false, "", release
+		rows, err := tx.List(subscriptionNamespace, "")
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			var sub subscription
+			if err = json.Unmarshal(row.Value, &sub); err != nil {
+				return err
+			}
+			if sub.Request.WaitID == wait.ID && !sub.Active {
+				sub.Active = true
+				if err = putJSON(tx, subscriptionNamespace, row.Key, sub); err != nil {
+					return err
+				}
+			}
+		}
+		if meta.Timer.ID != "" {
+			if _, err = tx.Timer(meta.Timer.ID); errors.Is(err, storage.ErrNotFound) {
+				if _, dup, er := deliveryDuplicate(tx, meta.Timer.Event); er != nil {
+					return er
+				} else if !dup {
+					w, er := tx.Work(work)
+					if er != nil {
+						return er
+					}
+					timer := meta.Timer
+					timer.Revision = 0
+					if er = armDeclaredTimerInTx(tx, now, w.ScopeID, timer); er != nil {
+						return er
+					}
+					if meta.Timer, er = tx.Timer(timer.ID); er != nil {
+						return er
+					}
+				}
+			} else if err != nil {
+				return err
+			}
+		}
+		if err = putJSON(tx, waitNamespace, identity(string(wait.ID)), meta); err != nil {
+			return err
+		}
+		if _, err = WakeWaitInTx(tx, now, limits, wait.ID); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // wakeBridgeInTx is the core.wait.woken bridge that wakes the parked attempt
-// x with winner, and the parent it derives from: the attempt's trigger, or
-// the winner when it continues the trigger's chain at least as deep. A winner
-// that is not accepted (accepted false: a route trace's hypothetical Event)
-// is a new root, so the bridge derives from the trigger.
-func wakeBridgeInTx(tx storage.Tx, now time.Time, limits CausalLimits, wait domain.Wait, x domain.Execution, winner domain.ID, accepted bool) (domain.ID, domain.Event, error) {
+// x with winner, and the parent it derives from. A wake is charged to the
+// Event that woke it, not to the attempt's previous wake: a fresh root (a
+// check finishing, a person's comment) starts a shallow chain, while a winner
+// the attempt's own output caused descends from its trigger and so still
+// deepens it, which keeps loop protection. Two exceptions derive from
+// elsewhere: the wait's own timeout, which the attempt scheduled, derives
+// from the attempt's trigger, and a wait an operator released after the
+// causal limits refused its wake derives from the release. A winner that is
+// not accepted (accepted false: a route trace's hypothetical Event) also
+// derives from the trigger; wakeRefusalInTx treats it as the new root it is.
+func wakeBridgeInTx(tx storage.Tx, now time.Time, wait domain.Wait, x domain.Execution, winner domain.ID, accepted bool) (domain.ID, domain.Event, error) {
 	parent, err := executionTriggerInTx(tx, x)
 	if err != nil {
 		return "", domain.Event{}, err
 	}
-	if accepted {
-		previousInfo, err := ancestry(tx, parent, limits)
+	var meta waitMetadata
+	if err = getJSON(tx, waitNamespace, identity(string(wait.ID)), &meta); err != nil && !errors.Is(err, storage.ErrNotFound) {
+		return "", domain.Event{}, err
+	}
+	switch {
+	case meta.Released != "":
+		parent = meta.Released
+	case accepted:
+		a, err := tx.Event(winner)
 		if err != nil {
 			return "", domain.Event{}, err
 		}
-		winnerInfo, err := ancestry(tx, winner, limits)
-		if err != nil {
-			return "", domain.Event{}, err
-		}
-		if winnerInfo.Root == previousInfo.Root && winnerInfo.Depth >= previousInfo.Depth {
+		if !timeoutMatches(meta, a) {
 			parent = winner
 		}
 	}
@@ -514,15 +637,26 @@ func wakeBridgeInTx(tx storage.Tx, now time.Time, limits CausalLimits, wait doma
 // wakeRefusalInTx is, without writing, the causal-limit reason
 // WakeWaitInTx would refuse the bridge that wakes wait's attempt with winner
 // ("depth_limit", "rate_limit"), or "" when the wake would go through or the
-// attempt is not parked (only a parked attempt needs a bridge).
+// attempt is not parked (only a parked attempt needs a bridge). A winner that
+// is not accepted is a new root, whose chain and budget are both empty, so
+// its wake is never refused.
 func wakeRefusalInTx(tx storage.Tx, now time.Time, limits CausalLimits, wait domain.Wait, winner domain.ID, accepted bool) (string, error) {
 	x, err := tx.Execution(wait.ExecutionID)
 	if err != nil || x.State != domain.ExecutionParked {
 		return "", err
 	}
-	parent, bridge, err := wakeBridgeInTx(tx, now, limits, wait, x, winner, accepted)
+	parent, bridge, err := wakeBridgeInTx(tx, now, wait, x, winner, accepted)
 	if err != nil {
 		return "", err
+	}
+	if !accepted {
+		var meta waitMetadata
+		if err = getJSON(tx, waitNamespace, identity(string(wait.ID)), &meta); err != nil {
+			return "", err
+		}
+		if meta.Released == "" {
+			return "", nil
+		}
 	}
 	_, _, _, err = checkCausal(tx, now, limits, parent, "", bridge)
 	var refused *causalError
