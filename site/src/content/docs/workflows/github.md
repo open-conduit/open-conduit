@@ -28,6 +28,8 @@ open-conduit config check
 3. When the checks finish, a comment or review arrives, or the PR merges, Open Conduit resumes the agent with what happened. It never polls.
 4. An agent can park an issue until another PR merges, another issue closes or a time comes, and Open Conduit wakes it when that happens.
 
+With holds on, an issue carrying the `scheduled` label waits for whatever its marker names (a time, a PR merging) before its agent starts. To start a held issue early, take the `scheduled` label off it: the agent starts at once, and Open Conduit doesn't put the label back.
+
 The issue's status labels follow the state the agent reports at the end of each turn.
 
 ## Example config

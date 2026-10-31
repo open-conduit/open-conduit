@@ -30,7 +30,7 @@ var waitInputTypes = []string{TypeDependencyMet, TypeCommentHuman, TypeIssueClos
 
 // dependencyFilter is the opaque filter of a translated dependency.
 type dependencyFilter struct {
-	Kind   string `json:"kind"` // pr, pr_comment, pr_push, pr_checks, issue, turn or peer
+	Kind   string `json:"kind"` // pr, pr_comment, pr_push, pr_checks, issue, turn, peer or unscheduled
 	Repo   string `json:"repo"`
 	Number int    `json:"number"`
 	State  string `json:"state,omitempty"`
@@ -38,7 +38,13 @@ type dependencyFilter struct {
 	// own comments. Head is the PR's head commit when a pr_push wait began.
 	Work string `json:"work,omitempty"`
 	Head string `json:"head,omitempty"`
+	// Label is the scheduled label an unscheduled filter waits to see gone.
+	Label string `json:"label,omitempty"`
 }
+
+// unscheduledLabel labels the dependency that releases a held issue when
+// the owner takes its scheduled label off.
+const unscheduledLabel = "label:unscheduled"
 
 // peerLabel labels the dependency that wakes a parked agent when another
 // agent comments on its issue or PR.
@@ -111,6 +117,11 @@ func DependencyFilter(filter domain.Payload, e domain.Event) bool {
 	case "peer":
 		var p CommentPayload
 		return e.Data.Schema == SchemaComment && json.Unmarshal(e.Data.Data, &p) == nil && f.peer(p)
+	case "unscheduled":
+		// The open issue seen without its scheduled label.
+		var p IssuePayload
+		return e.Type == TypeIssueOpen && e.Data.Schema == SchemaIssue && json.Unmarshal(e.Data.Data, &p) == nil && p.Number == f.Number &&
+			strings.EqualFold(p.Repo, f.Repo) && p.State == "open" && f.Label != "" && !has(p.Labels, f.Label)
 	}
 	return false
 }
@@ -444,7 +455,7 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 // sooner. The earlier time is not kept; the new wait's replaces it. A
 // condition that has happened or can no longer be met here is let go.
 func (t *Tools) keepHeld(ctx context.Context, b *bound, h *Hold, resolved []resolvedCond) ([]resolvedCond, []string, error) {
-	prev, _, err := t.latestHold(ctx, b)
+	prev, _, _, err := t.latestHold(ctx, b)
 	if err != nil || prev == nil {
 		return resolved, nil, err
 	}
@@ -478,11 +489,18 @@ func (t *Tools) keepHeld(ctx context.Context, b *bound, h *Hold, resolved []reso
 
 // latestHold is the latest hold marker on an issue: its body, then its
 // comments in order (v1 latestHold). A cancel marker drops the hold.
-func (t *Tools) latestHold(ctx context.Context, b *bound) (*Hold, bool, error) {
+// unscheduled reports that the issue no longer carries the scheduled label.
+func (t *Tools) latestHold(ctx context.Context, b *bound) (h *Hold, cancelled, unscheduled bool, err error) {
 	repo := b.issue.Settings.TrackerRepo
 	i, err := b.issue.Client.Issue(ctx, repo, b.number)
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
+	}
+	if l := b.issue.Settings.Labels.Scheduled; l != "" {
+		unscheduled = true
+		for _, x := range i.Labels {
+			unscheduled = unscheduled && !strings.EqualFold(x.Name, l)
+		}
 	}
 	var found *Hold
 	if h, ok := HoldIn(i.Body); ok {
@@ -490,7 +508,7 @@ func (t *Tools) latestHold(ctx context.Context, b *bound) (*Hold, bool, error) {
 	}
 	comments, err := b.issue.Client.IssueComments(ctx, repo, b.number, time.Time{})
 	if err != nil {
-		return nil, false, err
+		return nil, false, false, err
 	}
 	for _, c := range comments {
 		if h, ok := HoldIn(c.Body); ok {
@@ -498,9 +516,9 @@ func (t *Tools) latestHold(ctx context.Context, b *bound) (*Hold, bool, error) {
 		}
 	}
 	if found != nil && found.Cancel {
-		return nil, true, nil
+		return nil, true, unscheduled, nil
 	}
-	return found, false, nil
+	return found, false, unscheduled, nil
 }
 
 // HoldStatus reports whether a held issue still has something to wait for.
@@ -508,18 +526,22 @@ type HoldStatus struct {
 	Held      bool       `json:"held"`
 	Spec      string     `json:"spec,omitempty"`
 	Describe  string     `json:"describe,omitempty"`
-	Reason    string     `json:"reason,omitempty"` // when not held: scheduled_now, cancelled or time_came
+	Reason    string     `json:"reason,omitempty"` // when not held: scheduled_now, cancelled, unscheduled or time_came
 	Until     *time.Time `json:"until,omitempty"`
 	Waits     []string   `json:"waits,omitempty"`
 	Unmatched []string   `json:"unmatched,omitempty"` // conditions nothing here can meet (unknown jobs or projects)
 }
 
 func (t *Tools) status(ctx context.Context, b *bound) (HoldStatus, *Hold, error) {
-	h, cancelled, err := t.latestHold(ctx, b)
+	h, cancelled, unscheduled, err := t.latestHold(ctx, b)
 	if err != nil {
 		return HoldStatus{}, nil, err
 	}
 	switch {
+	case unscheduled && h != nil:
+		// The owner took the scheduled label off: the issue starts now,
+		// whatever its marker still says.
+		return HoldStatus{Reason: "unscheduled"}, nil, nil
 	case cancelled:
 		return HoldStatus{Reason: "cancelled"}, nil, nil
 	case h == nil:
@@ -579,6 +601,12 @@ func (t *Tools) holdPlan(ctx context.Context, b *bound, data json.RawMessage) (e
 	}
 	if len(plan.Dependencies) == 0 && plan.Wait.Timeout == nil {
 		return extension.WaitPlan{}, refuse("not_held", "none of the hold's conditions can be met here and it has no time: %s", strings.Join(s.Unmatched, ", "))
+	}
+	if l := b.issue.Settings.Labels.Scheduled; l != "" {
+		// The owner taking the scheduled label off starts the issue now.
+		plan.Dependencies = append(plan.Dependencies, extension.Dependency{ID: unscheduledLabel, Label: unscheduledLabel, SourceKey: b.key,
+			Types: []string{TypeIssueOpen}, AliasType: TypeDependencyMet, FromNow: true,
+			Filter: filterPayload(dependencyFilter{Kind: "unscheduled", Repo: b.issue.Settings.TrackerRepo, Number: b.number, Label: l})})
 	}
 	raw, _ := json.Marshal(s)
 	plan.Output = domain.Payload{Schema: SchemaHold, Data: raw}

@@ -609,6 +609,45 @@ func TestGitHubHeldIssueStartsAtItsTime(t *testing.T) {
 	e.finish(a, nil)
 }
 
+// The owner taking the scheduled label off a held issue starts it now,
+// whatever time its marker names; the projection never puts it back.
+func TestGitHubHeldIssueStartsWhenUnscheduled(t *testing.T) {
+	e := newToolsEnv(t)
+	at := e.clock.Now().Add(30 * 24 * time.Hour).UTC().Format("2006-01-02T15:04Z")
+	n, w := e.heldClaim("Next month", "Check the release first.\n\n<!-- runAt: "+at+" -->")
+	if why := e.runHold(w.ID); why != "" {
+		t.Fatalf("released before its time: %q", why)
+	}
+	e.fake.SetLabels(n)
+	e.converge()
+	if labels := e.fake.Labels(n); len(labels) != 0 {
+		t.Fatalf("the projection put the scheduled label back: %v", labels)
+	}
+	e.sync()
+	if got := e.work(w.ID); got.State != domain.WorkReady {
+		t.Fatalf("taking the label off did not wake the hold: %v", got.State)
+	}
+	if why := e.runHold(w.ID); why != "The scheduled label was taken off this issue, so it starts now." {
+		t.Fatalf("release: %q", why)
+	}
+	if q := e.queued(w.ID); len(q) != 1 || q[0] != gh.TypeHoldReleased {
+		t.Fatalf("agent input after release: %v", q)
+	}
+	a := e.start(w.ID)
+	e.converge()
+	if labels := e.fake.Labels(n); !equal(labels, "agent-in-progress") {
+		t.Fatalf("labels once the first agent turn runs: %v", labels)
+	}
+	e.finish(a, nil)
+
+	// Taken off before the hold first parks, it starts at once.
+	m, v := e.heldClaim("Also later", "<!-- runAt: "+at+" -->")
+	e.fake.SetLabels(m)
+	if why := e.runHold(v.ID); why != "The scheduled label was taken off this issue, so it starts now." {
+		t.Fatalf("unscheduled before the hold parked: %q", why)
+	}
+}
+
 // v1 TestHeldIssueStartsWhenAnotherAgentReports: issue:21:review waits on
 // the turn-ended Event the host publishes with the other agent's outcome.
 func TestGitHubHeldIssueStartsWhenAnotherAgentReports(t *testing.T) {
