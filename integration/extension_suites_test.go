@@ -148,7 +148,7 @@ func newExternalToolbeltHarness(t *testing.T, mode string, reg extension.Registr
 		t.Fatal(err)
 	}
 	options := base.options
-	options.Toolbelt, options.ToolbeltEndpoint = belt, "unix:///fixture/management.sock"
+	options.Toolbelt, options.ToolbeltEndpoints = belt, fixtureEndpoint("unix:///fixture/toolbelt.sock")
 	options.AliasFilter = belt.DependencyFilter
 	h.scheduler = newTestScheduler(t, f, options)
 	h.belt = belt

@@ -217,6 +217,14 @@ func TestProductionSchedulerSharedCases(t *testing.T) {
 		})
 	}
 }
+
+// fixtureEndpoint stands in for the daemon's per-execution endpoints in
+// harnesses that call the toolbelt in process: every execution is told the
+// same fixed endpoint, which nothing dials.
+func fixtureEndpoint(endpoint string) func(context.Context, domain.ID, string) (string, string, error) {
+	return func(context.Context, domain.ID, string) (string, string, error) { return endpoint, "", nil }
+}
+
 func newTestScheduler(t *testing.T, f conformance.RuntimeFixture, o runtime.SchedulerOptions) *runtime.Scheduler {
 	t.Helper()
 	s, err := runtime.NewScheduler(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).router, o)

@@ -137,7 +137,7 @@ func (e *toolsEnv) compose() {
 		return beltClient{belt: belt, token: token}, nil
 	}
 	if e.scheduler, err = runtime.NewScheduler(e.store, e.clock.Now, e.router, runtime.SchedulerOptions{Owner: "test", LeaseDuration: time.Hour, Generation: "1",
-		Executors: executors, Toolbelt: belt, ToolbeltEndpoint: "unix:///fixture.sock", AuthorizeAlias: authorize, AliasFilter: belt.DependencyFilter}); err != nil {
+		Executors: executors, Toolbelt: belt, ToolbeltEndpoints: fixtureEndpoint("unix:///fixture.sock"), AuthorizeAlias: authorize, AliasFilter: belt.DependencyFilter}); err != nil {
 		t.Fatal(err)
 	}
 	if e.timers, err = runtime.NewTimers(e.store, e.clock.Now, runtime.TimerOptions{}); err != nil {

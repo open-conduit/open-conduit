@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -59,6 +60,10 @@ type managementHarness struct {
 	server    *management.Server
 	tokens    chan string
 	secrets   chan map[string]string
+	// sockets is the toolbelt endpoint each issued execution token was
+	// handed with: the execution's own socket.
+	socketsMu sync.Mutex
+	sockets   map[string]string
 	lock      *management.Lock
 	actions   map[string]extension.ActionProvider
 	// providerTimeout and viewDeadline, when set, time action provider
@@ -92,7 +97,7 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { os.RemoveAll(state) })
-	h := &managementHarness{t: t, state: state, clock: conformance.NewClock(), tokens: make(chan string, 8), secrets: make(chan map[string]string, 8)}
+	h := &managementHarness{t: t, state: state, clock: conformance.NewClock(), tokens: make(chan string, 8), sockets: map[string]string{}, secrets: make(chan map[string]string, 8)}
 	h.lock, err = management.AcquireLock(state)
 	if err != nil {
 		t.Fatal(err)
@@ -115,6 +120,9 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
+		h.socketsMu.Lock()
+		h.sockets[r.Context.ToolbeltToken] = r.Context.ToolbeltEndpoint
+		h.socketsMu.Unlock()
 		h.tokens <- r.Context.ToolbeltToken
 		h.secrets <- r.Context.Secrets
 		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
@@ -149,7 +157,7 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 	serve := func(ctx context.Context, id domain.ID, token string) (string, string, error) {
 		return h.endpoints.Serve(ctx, id, token)
 	}
-	h.scheduler, err = runtime.NewScheduler(db, h.clock.Now, router, runtime.SchedulerOptions{Owner: "daemon", Generation: "1", Executors: map[string]extension.Executor{"fixture": h.executor}, Toolbelt: h.belt, ToolbeltEndpoint: h.endpoint, ToolbeltEndpoints: serve, Secrets: h.configs.Secrets(&config.Resolver{}),
+	h.scheduler, err = runtime.NewScheduler(db, h.clock.Now, router, runtime.SchedulerOptions{Owner: "daemon", Generation: "1", Executors: map[string]extension.Executor{"fixture": h.executor}, Toolbelt: h.belt, ToolbeltEndpoints: serve, Secrets: h.configs.Secrets(&config.Resolver{}),
 		Sandbox: func(ctx context.Context, st runtime.AttemptState, r extension.ResourceBroker, pin func(extension.SandboxPlan) error) (extension.SandboxBroker, extension.ResourceBroker, error) {
 			if h.sandbox == nil {
 				return nil, r, nil
@@ -247,6 +255,23 @@ func (h *managementHarness) mustCLI(v any, args ...string) {
 		}
 	}
 }
+
+// execClient dials the toolbelt socket the execution holding issued was
+// given, with token (issued itself, or another token for that execution).
+func (h *managementHarness) execClient(issued, token string) *client.Client {
+	h.socketsMu.Lock()
+	endpoint := h.sockets[issued]
+	h.socketsMu.Unlock()
+	if endpoint == "" || endpoint == h.endpoint {
+		h.t.Fatalf("execution token was not handed its own toolbelt socket: %q", endpoint)
+	}
+	c, err := client.New(endpoint, token)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	return c
+}
+
 func (h *managementHarness) operatorClient() *client.Client {
 	f, err := client.ReadTokenFile(filepath.Join(h.state, "private", "operator.token"))
 	if err != nil {
@@ -322,14 +347,25 @@ func TestManagementOperatorWorkflow(t *testing.T) {
 	if len(secrets) != 1 || secrets["api"] != "super-secret-value" {
 		t.Fatalf("executor did not receive exactly its binding secrets: %d", len(secrets))
 	}
-	exec, err := client.New(h.endpoint, token)
+	// The management socket is operator-only: an execution token reaches
+	// neither its reads nor the toolbelt there.
+	onManagement, err := client.New(h.endpoint, token)
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Credential classes are separated in both directions.
-	if _, err = exec.Health(ctx); !isStatus(err, 403) {
+	if _, err = onManagement.Health(ctx); !isStatus(err, 403) {
 		t.Fatalf("execution token read management: %v", err)
 	}
+	var refused *client.Error
+	if _, err = onManagement.ToolbeltCall(ctx, client.ToolCall{Operation: "read_context"}); !errors.As(err, &refused) || refused.Status != 403 || refused.Code != "wrong_credential_class" {
+		t.Fatalf("execution token reached the toolbelt on management.sock: %v", err)
+	}
+	// It is served on its execution's own toolbelt socket.
+	exec := h.execClient(token, token)
+	if _, err = exec.ToolbeltCall(ctx, client.ToolCall{Operation: "read_context"}); err != nil {
+		t.Fatalf("execution token on its own toolbelt socket: %v", err)
+	}
+	// Credential classes are separated in both directions.
 	if _, err = h.operatorClient().ToolbeltCall(ctx, client.ToolCall{Operation: "read_context"}); !isStatus(err, 403) {
 		t.Fatalf("operator masqueraded as execution: %v", err)
 	}
@@ -493,7 +529,7 @@ func TestManagementAuthRotationRevocationAndLease(t *testing.T) {
 	}
 	token := <-h.tokens
 	<-h.secrets
-	exec, _ := client.New(h.endpoint, token)
+	exec := h.execClient(token, token)
 	if _, err = exec.ToolbeltCall(ctx, client.ToolCall{Operation: "read_context"}); err != nil {
 		t.Fatal(err)
 	}
@@ -517,13 +553,13 @@ func TestManagementAuthRotationRevocationAndLease(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	<-h.tokens
+	a2Token := <-h.tokens
 	<-h.secrets
 	id, live, err := h.belt.IssueWithID(ctx, extension.Authority{ScopeID: "ops", WorkID: domain.ID(second.RoutedWorkID), ExecutionID: a2.Lease.ExecutionID, Lease: a2.Lease, ExpiresAt: h.clock.Now().Add(time.Minute), Operations: []string{"read_context"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	liveClient, _ := client.New(h.endpoint, live)
+	liveClient := h.execClient(a2Token, live)
 	if _, err = liveClient.ToolbeltCall(ctx, client.ToolCall{Operation: "read_context"}); err != nil {
 		t.Fatal(err)
 	}
@@ -574,7 +610,8 @@ func TestManagementConfigReloadAndRedaction(t *testing.T) {
 	if _, err := h.scheduler.Start(ctx, domain.ID(root.RoutedWorkID)); err != nil {
 		t.Fatal(err)
 	}
-	exec, _ := client.New(h.endpoint, <-h.tokens)
+	reloadToken := <-h.tokens
+	exec := h.execClient(reloadToken, reloadToken)
 	<-h.secrets
 	if _, err := exec.ToolbeltCall(ctx, client.ToolCall{Operation: "read_context"}); err != nil {
 		t.Fatal(err)
@@ -774,7 +811,8 @@ func TestManagementDeclaredWaitAndOperatorWake(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	exec, _ := client.New(h.endpoint, <-h.tokens)
+	waitToken := <-h.tokens
+	exec := h.execClient(waitToken, waitToken)
 	<-h.secrets
 	declared, err := exec.ToolbeltCall(ctx, client.ToolCall{Operation: "wait", Input: json.RawMessage(`{"match":{"keys":[{"source":"ops","external_id":"thread-1"}],"types":["operator.reply"]},"timeout_seconds":3600}`)})
 	if err != nil || declared.Wait == nil || declared.Wait.TimeoutTimerID == "" {

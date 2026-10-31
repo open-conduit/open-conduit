@@ -89,6 +89,7 @@ type shellHost struct {
 	scheduler *runtime.Scheduler
 	executor  *shell.Executor
 	endpoint  string
+	endpoints *management.Endpoints
 	srv       *http.Server
 	lock      *management.Lock
 	closed    bool
@@ -219,7 +220,11 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 	}
 	socket := filepath.Join(state, "management.sock")
 	h.endpoint = "unix://" + socket
-	if h.scheduler, err = runtime.NewScheduler(h.coord, clock.Now, h.router, runtime.SchedulerOptions{Owner: owner, Generation: "1", Executors: executors, Toolbelt: belt, ToolbeltEndpoint: h.endpoint, Secrets: configs.Secrets(&config.Resolver{}), KeptExecutions: o.kept, Artifacts: h.artifacts}); err != nil {
+	var server *management.Server
+	if h.endpoints, err = management.NewEndpoints(h.lock, state, "", func(id domain.ID) http.Handler { return server.ExecutionHandler(id) }); err != nil {
+		t.Fatal(err)
+	}
+	if h.scheduler, err = runtime.NewScheduler(h.coord, clock.Now, h.router, runtime.SchedulerOptions{Owner: owner, Generation: "1", Executors: executors, Toolbelt: belt, ToolbeltEndpoints: h.endpoints.Serve, Secrets: configs.Secrets(&config.Resolver{}), KeptExecutions: o.kept, Artifacts: h.artifacts}); err != nil {
 		t.Fatal(err)
 	}
 	h.toolbelt = belt
@@ -235,7 +240,7 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := management.NewServer(management.Options{Store: h.coord, Artifacts: h.artifacts, Now: clock.Now, Control: control, Toolbelt: belt, Config: configs, Version: "test", InstanceID: owner, Scheduler: h.scheduler, Resolver: &config.Resolver{}, Checks: o.checks, Ingress: h.ingress,
+	server, err = management.NewServer(management.Options{Store: h.coord, Artifacts: h.artifacts, Now: clock.Now, Control: control, Toolbelt: belt, Config: configs, Version: "test", InstanceID: owner, Scheduler: h.scheduler, Resolver: &config.Resolver{}, Checks: o.checks, Ingress: h.ingress,
 		Live: func(ctx context.Context, executor string, id domain.ID, tail int64) ([]extension.LiveOutput, error) {
 			l, ok := executors[executor].(extension.LiveExecutor)
 			if !ok {
@@ -270,6 +275,9 @@ func (h *shellHost) close() {
 		cancel()
 	}
 	h.srv.Close()
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	h.endpoints.Shutdown(ctx)
+	cancel()
 	h.store.Close()
 	h.artifacts.Close()
 	h.lock.Close()
