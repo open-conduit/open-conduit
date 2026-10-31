@@ -53,7 +53,7 @@ In practice the `human` entry sits in the same scope as your GitHub or Slack age
 
 ## What the agent sends
 
-`human.ask` takes a `question`, and optionally `options` (two to twenty choices), `context` (what the person needs to know) and a `deadline` (an ISO time such as `2026-10-28T09:00Z`). If nobody answers by the deadline, the agent is resumed without an answer and the question closes. The agent never learns where the question went or who answered it.
+`human.ask` takes a `question`, and optionally `options` (two to twenty choices), `context` (what the person needs to know) and a `deadline` (an ISO time such as `2026-10-28T09:00Z`). If nobody answers by the deadline, the agent is resumed without an answer and the question closes. The agent never learns where the question went or who answered it. The agent learns how to use `human.ask` from the extension itself: its guidance arrives in the toolbelt's MCP instructions whenever the binding grants the operation, whichever playbook the agent runs.
 
 ## What counts as an answer
 

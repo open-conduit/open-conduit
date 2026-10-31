@@ -248,6 +248,7 @@ Validation rules:
 - an ingress type declares families, and webhooks need an ingress type;
 - work kinds need a route handler;
 - operation kinds are `handler`, `wait` or `emit`, and only emit may `commit`;
+- an operation's `guidance` (its agent guidance, `extension.Operation.Guidance`) is at most 4096 bytes;
 - `dependency_filter` needs a wait operation;
 - toolbelt labels are `none`, `cli`, `mcp` or `sdk`;
 - resource modes are distinct `shared`, `work` or `fresh`;

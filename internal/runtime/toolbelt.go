@@ -148,7 +148,7 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 				set++
 			}
 		}
-		if set != 1 || !operationName.MatchString(op.Name) {
+		if set != 1 || !operationName.MatchString(op.Name) || len(op.Guidance) > extension.MaxGuidance {
 			return extension.ErrInvalid
 		}
 		if builtinOperation(op.Name) || t.declaredLocked(op.Name) || names[op.Name] {
@@ -189,6 +189,38 @@ func (t *Toolbelt) Operations() []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// Guidance is the agent guidance of the operations the token's pinned grant
+// includes and current config still enables, in grant order, without
+// repeats. It reveals nothing beyond what the grant already names. A token
+// that is revoked, expired or issued to another execution than the asserted
+// one is unauthorized.
+func (t *Toolbelt) Guidance(ctx context.Context, token string, execution domain.ID) ([]string, error) {
+	record, err := t.load(ctx, token)
+	if err != nil {
+		return nil, err
+	}
+	a := record.Authority
+	if record.Revoked || !t.now().Before(a.ExpiresAt) || execution != "" && execution != a.ExecutionID {
+		return nil, extension.ErrUnauthorized
+	}
+	var out []string
+	seen := map[string]bool{}
+	for _, name := range a.Operations {
+		t.mu.RLock()
+		text := t.operations[name].Guidance
+		t.mu.RUnlock()
+		if text == "" || seen[text] {
+			continue
+		}
+		if t.options.Authorize != nil && t.options.Authorize(ctx, AuthorityCheck{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, Binding: record.Binding, Generation: record.Generation, Operation: name}) != nil {
+			continue
+		}
+		seen[text] = true
+		out = append(out, text)
+	}
+	return out, nil
 }
 
 // EventTypes lists registered emitted event families.

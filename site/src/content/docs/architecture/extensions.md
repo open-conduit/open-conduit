@@ -82,6 +82,7 @@ Extensions extend the toolbelt through extension-neutral contract pieces; none a
 - `Operation.Wait`: an operation whose handler returns a `WaitPlan`, declared like the builtin wait. `Dependency` is a B04 dependency subscription with an opaque filter and `FromNow`, and `Registration.DependencyFilter` is a pure filter core evaluates inside the reconcile transaction.
 - `CallRequestID(ctx)`: the caller's request identity for stable intent IDs.
 - `OperationError`: a handler-authored safe refusal (code plus message) returned verbatim instead of a generic failure.
+- `Operation.Guidance`: optional Markdown (at most `MaxGuidance`, 4 KiB) telling an agent when and how to use the operation. `GET /v1/toolbelt/guidance` answers the guidance of the operations the caller's token is granted and current config still enables, and `os mcp` appends it to its MCP `instructions`. An extension describes its own operations this way, so a playbook never has to describe another extension's (`introspection.correction`, `introspection.problem`, `introspection.report-issue` and `human.ask` do; issue #208).
 
 The reference toolbelt double supports pure handlers only.
 

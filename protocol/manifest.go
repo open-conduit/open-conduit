@@ -151,11 +151,14 @@ const (
 )
 
 // OperationDecl declares one toolbelt operation. Commit marks an emit whose
-// plan writes records through emit.commit.
+// plan writes records through emit.commit. Guidance is the operation's
+// agent guidance (extension.Operation.Guidance), served to executions whose
+// grant includes it.
 type OperationDecl struct {
-	Name   string `json:"name"`
-	Kind   string `json:"kind"`
-	Commit bool   `json:"commit,omitempty"`
+	Name     string `json:"name"`
+	Kind     string `json:"kind"`
+	Commit   bool   `json:"commit,omitempty"`
+	Guidance string `json:"guidance,omitempty"`
 }
 
 // ExecutorDecl declares an executor. Capabilities are exactly the bind-time
@@ -353,6 +356,9 @@ func (m Manifest) Validate() error {
 	}
 	for _, o := range p.Operations {
 		dotted("operation", o.Name)
+		if len(o.Guidance) > extension.MaxGuidance {
+			fail("operation %q: guidance is longer than %d bytes", o.Name, extension.MaxGuidance)
+		}
 		switch o.Kind {
 		case OperationHandler, OperationWait:
 			if o.Commit {

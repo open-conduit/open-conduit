@@ -38,7 +38,7 @@ The declared watermark defaults to the attempt's acknowledged input, so registra
 
 With `SchedulerOptions.ToolbeltEndpoints` set (the daemon sets it), each execution gets its own toolbelt endpoint in a host-owned run directory, `<state>/runs/<key>/`, where the key is 16 hex characters of the execution ID's SHA-256 ([`management.Endpoints`](https://github.com/open-conduit/open-conduit/blob/main/internal/management/endpoints.go)):
 
-- `toolbelt.sock`, owner-only `0600`, served by `Server.ExecutionHandler`. It answers only `POST /v1/toolbelt/call`; every other path is `404 not_found` before authentication, so operator endpoints are not served there to either credential class. An operator credential on the toolbelt call is `403 wrong_credential_class`, as on the management socket. Each call asserts the socket's execution (as `execution_id` would), so a token issued to any other execution fails the toolbelt's narrowing check (`403`), as does a call that asserts another execution.
+- `toolbelt.sock`, owner-only `0600`, served by `Server.ExecutionHandler`. It answers only `POST /v1/toolbelt/call` and `GET /v1/toolbelt/guidance` (the agent guidance of the token's granted operations, which `os mcp` serves as its instructions); every other path is `404 not_found` before authentication, so operator endpoints are not served there to either credential class. An operator credential on the toolbelt call is `403 wrong_credential_class`, as on the management socket. Each request asserts the socket's execution (as `execution_id` would), so a token issued to any other execution fails the toolbelt's narrowing check (`403`), as does a call that asserts another execution.
 - `token/token`, the execution's current token. After every claim, recovery and resume the scheduler issues the fresh token and calls `ToolbeltEndpoints` before the executor's `Run`, `Recover` or `Resume`. It writes the token through a temporary file in `token/` and a rename, so a process that sees `token/` through a directory mount sees the rotated file (a single-file bind mount pins the old inode). The executor receives the endpoint as `ExecutionContext.ToolbeltEndpoint` and the file as `ToolbeltTokenFile`, and points its process at both (`OS_ENDPOINT`, `OS_TOKEN_FILE`) instead of writing a token file of its own.
 - `execution`, the execution ID, so a restarted daemon can tell whose run directory it is. A run directory that names another execution is refused.
 
@@ -84,7 +84,7 @@ The server implements B05 API version 1 over HTTP/1.1 JSON on an owner-only Unix
 Authentication:
 
 - Every endpoint requires a bearer token.
-- Operator credentials (digest-only records, bootstrapped under the lock into `private/operator.token`) never reach `/v1/toolbelt/call`. Execution tokens reach only that endpoint.
+- Operator credentials (digest-only records, bootstrapped under the lock into `private/operator.token`) never reach `/v1/toolbelt/call` or `/v1/toolbelt/guidance`. Execution tokens reach only those endpoints.
 - Rotation atomically revokes the caller and returns a replacement once; it is never stored in idempotency history. `RecoverOperator` is the locked local path after a lost response.
 - Revocation by token ID covers execution tokens and the caller's own operator token.
 

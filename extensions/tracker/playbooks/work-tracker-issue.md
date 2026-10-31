@@ -27,16 +27,12 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | `<host>.pr.comment` | `number`, `body` | comment on a PR's conversation |
 | `<host>.pr.reply` | `number`, `comment_id`, `body` | reply in an inline thread |
 | `<host>.checks` | `number`? | every check on the PR's head, with links and the preview |
-| `introspection.correction` | `area`, `body` | if your toolbelt has it: log a correction you were given (see Notes) |
-| `introspection.problem` | `kind`, `body` | if your toolbelt has it: log a problem you worked around (see Notes) |
 
 Post every comment this way: it marks the comment as yours, so it is never handed back to you as news, and a retried call never posts twice (give the same `request_id` when you retry; a `pending` answer means call again later with the same input). Use `git` itself for commits and pushes. When your toolbelt lists no code host, the scope has none: do the work the issue asks and report on the issue.
 
+Your toolbelt may also offer operations other extensions add, such as `introspection.correction`, `introspection.problem` or `human.ask`. When it does, the toolbelt's own instructions say when and how to use each; follow them.
+
 Every turn runs in the issue's own workspace: a worktree of the project on the issue's branch (`agent/issue/<KEY>`), kept for the issue across turns. The project's own rules (`CLAUDE.md`, `AGENTS.md`) hold what is particular to it, such as what must pass before a PR and how to report; where they differ from this playbook, they win. A project can keep additions to this playbook in `.open-conduit/playbooks/work-tracker-issue.md`; Open Conduit hands them to you with each turn. Follow them as well as this playbook.
-
-## Notes
-
-When someone corrects you, log the lesson with `introspection.correction`: `area` one of `writing`, `design`, `data`, `code` or `workflow`, and a `body` giving the broad theme in one sentence, then the rule a future agent should follow. When you work around something rather than doing the task the way your instructions say (a missing variable, a command that doesn't exist, a tool call that failed), log it with `introspection.problem`: `kind` one of `env`, `docs`, `tooling`, `service` or `other`, and a `body` saying what you tried, the exact error, your workaround and where the fix belongs. Log each distinct problem once per session. The daily sweep and triage act on them. If your toolbelt doesn't have these operations, or they refuse, the project doesn't collect notes: carry on.
 
 ## Ending a turn
 

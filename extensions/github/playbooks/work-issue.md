@@ -30,11 +30,10 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | `github.attachment.upload` | `file_path` | upload a file (an image, a zip, a document) and get a link to put in a comment |
 | `github.attachment.get` | `url`, `save_to` | download a file a comment links to into `save_to`, signed in (a private repo's attachments need it) |
 | `github.wait` | `conditions`?, `until`?, `reason` | park the issue until something happens or a time comes (see Waiting) |
-| `introspection.correction` | `area`, `body` | if your toolbelt has it: log a correction (see Log corrections) |
-| `introspection.problem` | `kind`, `body` | if your toolbelt has it: log a problem you worked around (see Report problems) |
-| `human.ask` | `question`, `options`?, `context`?, `deadline`? | if your toolbelt has it: ask a person for a private decision and park until they answer (see Asking a person) |
 
 `file_path` and `save_to` are paths in your own directory: Open Conduit's client reads or writes the file for you. Post every comment this way: it marks the comment as yours, so it is never handed back to you as news, and a retried call never posts twice (give the same `request_id` when you retry). Use `git` itself for commits and pushes.
+
+Your toolbelt may also offer operations other extensions add, such as `introspection.correction`, `introspection.problem` or `human.ask`. When it does, the toolbelt's own instructions say when and how to use each; follow them.
 
 GitHub turns `#` followed by a number into a link to that issue or PR, anywhere it renders Markdown: comments, PR titles and bodies, reviews, commit messages. Write `#12` only when you mean issue or PR 12. To number items, use a Markdown list, write "item 1", or put the text in backticks.
 
@@ -56,10 +55,6 @@ Write `<project>/` before the number for another project under the same Open Con
 `github.wait` is the last thing you do in a turn, because every call after it is refused until you are resumed: after it, end the turn with the state the work is in (`review` if the owner has something to look at, else `done`). Open Conduit wakes you with what happened (or that the time came first). A comment, a check result or a merge on your own issue also wakes you; that ends the wait, so once you've dealt with it, wait again if what you were waiting for still hasn't happened. Don't use this to wait for your own PR's checks, its preview, its merge or a reply: Open Conduit already resumes you for those.
 
 When follow-up work shouldn't start yet (wave 2 once wave 1 merges, a check once a date comes), open it now with the same conditions: `github.issue.create` with `{"title": …, "body": …, "wait": ["pr:1257:merged"]}`. Open Conduit holds it and starts it when the condition is met, so nobody has to remember to open it later.
-
-## Asking a person
-
-When you need a decision that doesn't belong on the issue (a credential, a cost, anything private), ask with `human.ask` if your toolbelt has it: `{"question": "…", "options": ["…", "…"]}`, with `context` for what they need to know and `deadline` (an ISO time) if the answer stops mattering after a point. The question goes to whoever the project has set up to answer, never to the issue, so don't repeat it in a comment. Like `github.wait`, it is the last thing you do in a turn, because every call after it is refused until you are resumed, so post anything the issue should hear first. End the turn with `help`, and Open Conduit resumes you with the answer, or at the deadline without one. If your toolbelt doesn't have it, or the call is refused as `not_configured`, ask on the issue instead or say what you need in your status.
 
 ## Ending a turn
 
@@ -84,38 +79,6 @@ Open Conduit sets the issue's status labels from `state`; never change those you
 Other issues may be worked by other agents at the same time. Read one with `github.issue.view` and its `number`, and its PRs with `github.pr.view`. To build on another issue's work, wait for its PR (`github.wait` with `pr:<n>:merged`).
 
 Each agent hears only about its own issue and PRs. To reach the agent working another issue, comment on that issue with `github.issue.comment` and its `number`, and reply to another agent on its issue, not yours. Your comment wakes that agent if it has parked with `github.wait`, but it doesn't start an issue that is still held before its first turn; only what it was opened to wait for does. Comments from other agents arrive as events like the owner's.
-
-## Log corrections
-
-Whenever someone corrects you, write the lesson down as you go: a comment saying you got something wrong, a change request that undoes a choice you made, or the owner typing a correction into your session. Record the broad theme, not the exact exchange. "Wrote a lede that summarised the page" is a theme; "Removed the sentence starting 'Below you'll find'" is not. Skip plain new requests that don't say you did something wrong.
-
-`introspection.correction` with `area` one of `writing`, `design`, `data`, `code` or `workflow`, and a `body`:
-
-```
-<The theme in one sentence.>
-
-<The rule a future agent should follow, in one or two sentences.>
-```
-
-The daily sweep folds these into the project's rules. If your toolbelt doesn't have the operation, or it refuses, the project doesn't collect corrections: carry on.
-
-## Report problems
-
-Whenever you work around something rather than doing the task the way your instructions say, log it as you go, then carry on. That covers a variable that isn't set, a command or script that doesn't exist, a path that has moved, a tool call that failed, a permission you had to route round, or a service call that only worked on a retry. Nobody else hears about a workaround, so without a note the next session hits the same thing.
-
-`introspection.problem` with `kind` one of `env` (a missing variable, tool or credential), `docs` (a skill or rule that's wrong or stale), `tooling` (a toolbelt operation that failed or is missing), `service` (the tracker, code host or deploy service misbehaving) or `other`, and a `body`:
-
-```
-<What you tried to do, in one line.>
-
-Error: <the exact error text>
-Workaround: <what you did instead, or "none">
-Fix: <where you think the fix belongs: a file in this project, the machine's setup, or Open Conduit itself>
-```
-
-Log each distinct problem once per session. A problem you fixed properly in your own PR needs no note. The daily triage fixes or files what you report. If your toolbelt doesn't have the operation, or it refuses, the project doesn't collect problems: carry on.
-
-When the fix belongs to Open Conduit itself (a toolbelt operation that fails or misbehaves, a playbook that is wrong, a run that went astray), also report it with `introspection.report-issue` (`kind`, a one-line `title` and the same `body`) if your toolbelt has it. A refusal means reporting isn't enabled here: the problem note is enough.
 
 ## First turn: `work-issue <number>`
 
@@ -158,7 +121,7 @@ The message lists what happened since your last turn, each under its own heading
 - **A comment** (on the issue, the PR, an inline review thread, or a review). A comment that is only an image is often pointing at something: fetch it (`github.attachment.get` with the `url` and a `save_to` path where the project keeps scratch files, or `curl` for a link elsewhere) and look. Then:
   - A change request: make it, commit, push.
   - A question: answer it. A request you think is wrong, or one you can't act on: say why, briefly, and ask.
-  - If the comment corrects something you did, log it (see Log corrections).
+  - If the comment corrects something you did, log it as the toolbelt's instructions say, if it collects corrections.
   - From another agent: act on it if it bears on your work, but don't reply unless you disagree outright (see Other agents).
   - Reply where the comment was made, with the operation its heading names. Say what changed, with the short commit SHA, and add a preview link when it helps. One comment can answer several points from the same person in the same place.
 - **Checks failed**: `github.checks` links each failing check. Read its log, reproduce it locally, fix it, push, and end with `building`.

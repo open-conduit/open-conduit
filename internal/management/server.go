@@ -350,6 +350,7 @@ var routes = []route{
 	{"POST", []string{"auth", "rotate"}, true, false, (*Server).rotate},
 	{"POST", []string{"auth", "revoke"}, true, true, (*Server).revoke},
 	{"POST", []string{"toolbelt", "call"}, true, false, (*Server).toolbeltCall},
+	{"GET", []string{"toolbelt", "guidance"}, false, false, (*Server).toolbeltGuidance},
 }
 
 // split matches routes on escaped segments so opaque IDs may contain "/".
@@ -376,7 +377,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 		return fail(404, "not_found", "unknown endpoint")
 	}
 	// An execution's own socket serves the toolbelt and nothing else.
-	if scopedExecution(ctx) != "" && (len(parts) != 2 || parts[0] != "toolbelt" || parts[1] != "call") {
+	if scopedExecution(ctx) != "" && (len(parts) != 2 || parts[0] != "toolbelt" || parts[1] != "call" && parts[1] != "guidance") {
 		return fail(404, "not_found", "this socket serves only toolbelt calls")
 	}
 	who, err := s.authenticate(ctx, r)

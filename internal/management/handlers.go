@@ -1021,6 +1021,20 @@ func (s *Server) revoke(c *call) (int, any, error) {
 
 // ---- toolbelt ----
 
+// toolbeltGuidance answers the agent guidance of the operations the
+// caller's token is granted (an MCP server's instructions). On an
+// execution's own socket the token must belong to that execution.
+func (s *Server) toolbeltGuidance(c *call) (int, any, error) {
+	guidance, err := s.o.Toolbelt.Guidance(c.ctx, c.who.token, scopedExecution(c.ctx))
+	if err != nil {
+		return 0, nil, err
+	}
+	if guidance == nil {
+		guidance = []string{}
+	}
+	return 200, map[string]any{"guidance": guidance}, nil
+}
+
 func (s *Server) toolbeltCall(c *call) (int, any, error) {
 	var in struct {
 		Operation   string          `json:"operation"`

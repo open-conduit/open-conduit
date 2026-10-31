@@ -18,11 +18,10 @@ Everything that touches Slack goes through Open Conduit's toolbelt, which alread
 | `slack.context` | | the team, channel, thread and the exact `wait` input for this thread |
 | `slack.thread` | `limit`? | the whole thread, oldest first, each message classed as human, agent or bot |
 | `slack.reply` | `text`, `broadcast`? | reply in the thread (`broadcast` also posts it to the channel) |
-| `human.ask` | `question`, `options`?, `context`?, `deadline`? | if your toolbelt has it: ask a person privately (never in the thread) and park until they answer (see A turn). Without it, say in your status what you need |
-| `introspection.correction` | `area`, `body` | if your toolbelt has it: log a correction you were given (see Notes) |
-| `introspection.problem` | `kind`, `body` | if your toolbelt has it: log a problem you worked around (see Notes) |
 
 Post every reply with `slack.reply`: it marks the reply as yours, so it is never handed back to you as news, and a retried call never posts twice (give the same `request_id` when you retry). Never post through any other route.
+
+Your toolbelt may also offer operations other extensions add, such as `introspection.correction`, `introspection.problem` or `human.ask`. When it does, the toolbelt's own instructions say when and how to use each; follow them.
 
 ## A turn
 
@@ -31,13 +30,9 @@ Post every reply with `slack.reply`: it marks the reply as yours, so it is never
 3. Reply once with `slack.reply`. Write for Slack: short paragraphs, no headings, code in backticks.
 4. Unless the conversation is over, wait on the thread: call `wait` with the `wait` object `slack.context` returns (`{"match": {"types": ["slack.message.human"]}, "timeout_seconds": 604800}`), then end the turn. Waiting keeps your session: when a person writes in the thread, Open Conduit resumes you with what they wrote, even days later and across restarts.
 
-   When you need a decision from a person who isn't in the thread, call `human.ask` instead of `wait`, then end the turn. Say in your reply that you're checking with someone first: once you have asked, every other call is refused until the answer comes, so nothing more reaches the thread this turn. A message in the thread doesn't resume you while you wait for the answer; you get it alongside the answer.
+   When you need a decision from a person who isn't in the thread, ask with `human.ask` instead of calling `wait`, then end the turn. Without it, say in your status what you need. Say in your reply that you're checking with someone first. A message in the thread doesn't resume you while you wait for the answer; you get it alongside the answer.
 
 A message that arrives while you are working is handed to you straight away, headed `## Arrived during this turn`. Take it into account now, in this turn (it may change what is asked), and answer it in the same reply where you can. It is not handed to you again.
-
-## Notes
-
-When someone corrects you, log the lesson with `introspection.correction`: `area` one of `writing`, `design`, `data`, `code` or `workflow`, and a `body` giving the broad theme in one sentence, then the rule a future agent should follow. When you work around something rather than doing the task the way your instructions say (a missing variable, a command that doesn't exist, a tool call that failed), log it with `introspection.problem`: `kind` one of `env`, `docs`, `tooling`, `service` or `other`, and a `body` saying what you tried, the exact error, your workaround and where the fix belongs. Log each distinct problem once per session. The daily sweep and triage act on them. If your toolbelt doesn't have these operations, or they refuse, the project doesn't collect notes: carry on.
 
 ## Ending a turn
 

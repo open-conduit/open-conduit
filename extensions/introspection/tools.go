@@ -2,6 +2,7 @@ package introspection
 
 import (
 	"context"
+	"embed"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -118,15 +119,29 @@ func NewTools(o ToolsOptions) (*Tools, error) {
 func (t *Tools) Registration() extension.Registration {
 	return extension.Registration{Version: extension.ContractVersion, Name: Type, EventTypes: []string{TypeReported, TypeFixRequested},
 		Operations: []extension.Operation{
-			{Name: OpReport, Emit: t.report},
+			{Name: OpReport, Emit: t.report, Guidance: guidance("report-issue")},
 			{Name: OpList, Handler: t.list},
 			{Name: OpResolve, Handler: t.resolve},
 			{Name: OpEvidence, Handler: t.evidence},
 			{Name: OpNotesResolve, Handler: t.notesResolve},
 			{Name: OpFix, Emit: t.fix},
-			{Name: OpCorrection, Handler: t.correction},
-			{Name: OpProblem, Handler: t.problem},
+			{Name: OpCorrection, Handler: t.correction, Guidance: guidance("correction")},
+			{Name: OpProblem, Handler: t.problem, Guidance: guidance("problem")},
 		}}
+}
+
+// guidanceFS holds the agent guidance of the operations agents call while
+// they work, served by the toolbelt to executions granted them.
+//
+//go:embed guidance/*.md
+var guidanceFS embed.FS
+
+func guidance(name string) string {
+	b, err := guidanceFS.ReadFile("guidance/" + name + ".md")
+	if err != nil {
+		panic(err)
+	}
+	return strings.TrimSpace(string(b))
 }
 
 func refuse(code, format string, args ...any) error {
