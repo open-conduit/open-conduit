@@ -107,6 +107,11 @@ else the content of the confirmation page. */}}
   <label class="field"><span>Event type{{if .WaitTypes}} · from the active Wait{{end}}</span>
     {{- if .WaitTypes}}<select name="type">{{range .WaitTypes}}<option>{{.}}</option>{{end}}</select>
     {{- else}}<input name="type" required placeholder="a type the Wait matches" autocomplete="off">{{end}}</label>
+  {{- if gt (len .WakeKeys) 1}}
+  <label class="field"><span>Correlation key · from the active Wait</span><select name="key">{{range $i, $k := .WakeKeys}}<option value="{{$i}}">{{$k.Source}} · {{$k.ExternalID}}</option>{{end}}</select></label>
+  {{- else if .WakeKeys}}{{with index .WakeKeys 0}}
+  <div class="field"><span>Correlation key</span><code>{{.Source}} · {{.ExternalID}}</code></div>
+  {{- end}}{{end}}
   {{template "endpoint" .}}
   <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Cancel")}}<button class="btn btn-primary">Send event</button></footer>
 </form>
