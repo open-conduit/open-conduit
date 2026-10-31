@@ -49,8 +49,9 @@ func NewWriters(conn ConnectionFunc, now func() time.Time) *Writers {
 }
 
 // Client is the client of connection id in scope, which must reach the same
-// GitHub as the entry's client. It returns errNotWriter when the extension
-// may not act as id, and ErrWriter when id can't be used.
+// GitHub as the entry's client, and goes out over the entry's HTTP client.
+// It returns errNotWriter when the extension may not act as id, and
+// ErrWriter when id can't be used.
 func (w *Writers) Client(scope domain.ID, id string, entry *Client) (*Client, error) {
 	if w == nil || w.conn == nil {
 		return nil, errNotWriter
@@ -72,7 +73,11 @@ func (w *Writers) Client(scope domain.ID, id string, entry *Client) (*Client, er
 	if entry != nil && !strings.EqualFold(cfg.APIURL, entry.api) {
 		return nil, ErrWriter
 	}
-	client, err := NewClient(cfg, secrets, ClientOptions{Now: w.now})
+	opts := ClientOptions{Now: w.now}
+	if entry != nil {
+		opts.HTTP = entry.base
+	}
+	client, err := NewClient(cfg, secrets, opts)
 	if err != nil {
 		return nil, ErrWriter
 	}

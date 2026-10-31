@@ -24,6 +24,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -60,15 +61,19 @@ echo '{"type":"result","subtype":"success","is_error":false,"result":"done","ses
 // serving github.git.credential, and an operator whose git config would
 // push with a token GitHub refuses and commit as themselves.
 type gitBotLab struct {
-	t                    *testing.T
-	root, bare, bin      string
-	gitconfig, remote    string
-	fake                 *githubtest.Server
-	tools, ownerTools    *gh.Tools
-	endpoints            *management.Endpoints
-	work                 domain.Work
-	botLogin, botEmail   string
-	ownerName, ownerMail string
+	t                  *testing.T
+	root, bare, bin    string
+	gitconfig, remote  string
+	fake               *githubtest.Server
+	tools, ownerTools  *gh.Tools
+	endpoints          *management.Endpoints
+	work               domain.Work
+	botLogin, botEmail string
+	// reviewerLogin and reviewerEmail are the bot user of App 44, the
+	// github-reviewer connection a binding may name, with git "bot".
+	reviewerLogin, reviewerEmail string
+	connections                  sync.Map // execution → the connection its binding names
+	ownerName, ownerMail         string
 }
 
 func newGitBotLab(t *testing.T, root string) *gitBotLab {
@@ -106,6 +111,7 @@ func newGitBotLab(t *testing.T, root string) *gitBotLab {
 	l.fake = githubtest.New("octo/widgets", "pat")
 	t.Cleanup(l.fake.Close)
 	l.fake.AddApp("43", &key.PublicKey)
+	l.fake.AddApp("44", &key.PublicKey)
 	_, login, id := githubtest.AppBot("43")
 	api, gitHTTP := l.fake.Handler(), l.fake.GitHandler(l.bare, gitPath)
 	srv := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -121,6 +127,8 @@ func newGitBotLab(t *testing.T, root string) *gitBotLab {
 	host := strings.TrimPrefix(srv.URL, "https://")
 	l.remote = srv.URL + "/octo/widgets.git"
 	l.botLogin, l.botEmail = login, fmt.Sprintf("%d+%s@users.noreply.%s", id, login, host)
+	_, rlogin, rid := githubtest.AppBot("44")
+	l.reviewerLogin, l.reviewerEmail = rlogin, fmt.Sprintf("%d+%s@users.noreply.%s", rid, rlogin, host)
 
 	keyPEM := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
 	const ns = "github/github.com/octo/widgets"
@@ -129,21 +137,29 @@ func newGitBotLab(t *testing.T, root string) *gitBotLab {
 		t.Fatal(err)
 	}
 	l.work = domain.Work{ID: "work", ScopeID: "scope", CorrelationKeys: []domain.CorrelationKey{{Source: ns, ExternalID: gh.IssueKey(3, "")}}}
+	secrets := func(_ context.Context, name string) (string, error) {
+		if name == gh.SecretToken {
+			return "pat", nil
+		}
+		return keyPEM, nil
+	}
+	// A binding may name github-reviewer, App 44 with git "bot".
+	writers := gh.NewWriters(func(scope domain.ID, id string) (json.RawMessage, gh.SecretFunc, bool) {
+		if scope != "scope" || id != "github-reviewer" {
+			return nil, nil, false
+		}
+		return json.RawMessage(`{"api_url":"` + srv.URL + `/api/v3","auth":"app","app_id":"44","git":"bot"}`), secrets, true
+	}, l.fake.Now)
 	tools := func(git string) *gh.Tools {
 		conn, err := gh.ParseConnection([]byte(`{"api_url":"` + srv.URL + `/api/v3","auth":"token","bot_app_id":"43","git":"` + git + `"}`))
 		if err != nil {
 			t.Fatal(err)
 		}
-		client, err := gh.NewClient(conn, func(_ context.Context, name string) (string, error) {
-			if name == gh.SecretToken {
-				return "pat", nil
-			}
-			return keyPEM, nil
-		}, gh.ClientOptions{HTTP: srv.Client(), Now: l.fake.Now})
+		client, err := gh.NewClient(conn, secrets, gh.ClientOptions{HTTP: srv.Client(), Now: l.fake.Now})
 		if err != nil {
 			t.Fatal(err)
 		}
-		out, err := gh.NewTools(gh.ToolsOptions{Store: gitStore{l.work}, Sources: func() []gh.Source { return []gh.Source{{Settings: settings, Client: client}} }, Now: l.fake.Now})
+		out, err := gh.NewTools(gh.ToolsOptions{Store: gitStore{l.work}, Sources: func() []gh.Source { return []gh.Source{{Settings: settings, Connection: "github", Client: client}} }, Now: l.fake.Now, Writers: writers})
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -172,7 +188,9 @@ func newGitBotLab(t *testing.T, root string) *gitBotLab {
 				fmt.Fprint(w, `{"error":{"code":"unauthorized","message":"execution authority rejected"}}`)
 				return
 			}
-			out, err := op.Handler(r.Context(), extension.Authority{ScopeID: "scope", WorkID: "work", ExecutionID: exec}, domain.Payload{Data: call.Input})
+			conn, _ := l.connections.Load(exec)
+			connection, _ := conn.(string)
+			out, err := op.Handler(r.Context(), extension.Authority{ScopeID: "scope", WorkID: "work", ExecutionID: exec, Connection: connection}, domain.Payload{Data: call.Input})
 			var refused *extension.OperationError
 			if errors.As(err, &refused) {
 				w.WriteHeader(http.StatusConflict)
@@ -231,6 +249,14 @@ func committed(ws string) string {
 // it: as the bot when bot is set, else on the owner's connection.
 func (l *gitBotLab) run(t *testing.T, e *claudecode.Executor, exec domain.ID, bot bool, ws, branch string, env map[string]string, sandbox *extension.BoundSandbox) extension.Result {
 	t.Helper()
+	return l.runAs(t, e, exec, bot, "", ws, branch, env, sandbox)
+}
+
+// runAs is run for a binding naming connection (none when ""), which the
+// lab's connections all set git "bot".
+func (l *gitBotLab) runAs(t *testing.T, e *claudecode.Executor, exec domain.ID, bot bool, connection, ws, branch string, env map[string]string, sandbox *extension.BoundSandbox) extension.Result {
+	t.Helper()
+	l.connections.Store(exec, connection)
 	token := "belt-" + string(exec)
 	endpoint, tokenFile, err := l.endpoints.Serve(context.Background(), exec, token)
 	if err != nil {
@@ -246,12 +272,12 @@ func (l *gitBotLab) run(t *testing.T, e *claudecode.Executor, exec domain.ID, bo
 	if bot {
 		tools = l.tools
 	}
-	layer, err := tools.RunEnvironment(context.Background(), extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: l.work.ScopeID, WorkID: l.work.ID, ExecutionID: exec}})
+	layer, err := tools.RunEnvironment(context.Background(), extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: l.work.ScopeID, WorkID: l.work.ID, ExecutionID: exec}, Connection: connection})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if bot != (layer != nil) {
-		t.Fatalf("bot %v, run environment %v", bot, layer)
+	if want := bot || connection != ""; want != (layer != nil) {
+		t.Fatalf("bot %v, connection %q, run environment %v", bot, connection, layer)
 	}
 	ctx := extension.ExecutionContext{Config: domain.Payload{Data: cfg}, ToolbeltEndpoint: endpoint, ToolbeltToken: token, ToolbeltTokenFile: tokenFile,
 		Resources: plainWorkspace{ws}, Env: layer}
@@ -343,6 +369,24 @@ func TestGitBotUnsandboxed(t *testing.T) {
 	}
 	if got := l.pushed("as-owner"); got != "" || !strings.Contains(string(out), "push=1") {
 		t.Errorf("without git bot, the push went out (%q) rather than with the operator's refused token:\n%s", got, out)
+	}
+
+	// In the same scope, a binding naming github-reviewer (App 44, git
+	// "bot") commits and pushes as that App, though the entry's connection
+	// leaves git the operator's.
+	reviewer := fmt.Sprintf("%s <%s> / %s <%s>", l.reviewerLogin, l.reviewerEmail, l.reviewerLogin, l.reviewerEmail)
+	ws = filepath.Join(root, "ws-reviewer")
+	l.workspace(ws)
+	res = l.runAs(t, e, "reviewer-1", false, "github-reviewer", ws, "as-reviewer", nil, nil)
+	out, _ = os.ReadFile(filepath.Join(ws, "git-out"))
+	if res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("outcome %q\n%s", res.Outcome.Summary, out)
+	}
+	if got := committed(ws); got != reviewer {
+		t.Errorf("binding naming github-reviewer committed as %q, want %q\n%s", got, reviewer, out)
+	}
+	if got := l.pushed("as-reviewer"); got != reviewer {
+		t.Errorf("GitHub has %q on as-reviewer, want %q\n%s", got, reviewer, out)
 	}
 }
 
