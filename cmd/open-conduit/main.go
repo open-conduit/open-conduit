@@ -47,7 +47,7 @@ func serve(r cli.ServeRequest) int {
 	defer stop()
 	err := bootstrap.Serve(ctx, bootstrap.Options{Version: version, Commit: commit, StateDir: r.StateDir, ConfigPath: r.ConfigPath, Socket: r.Socket, ToolbeltDir: r.ToolbeltDir, LifecycleLog: r.LifecycleLog, PollInterval: r.PollInterval, LeaseDuration: r.LeaseDuration, RetentionInterval: r.RetentionInterval, SweepInterval: r.SweepInterval,
 		WebhookAddr: r.WebhookAddr, Tunnel: bootstrap.TunnelOptions{Kind: r.TunnelKind, Binary: r.TunnelBinary, Domain: r.TunnelDomain, Name: r.TunnelName, Hostname: r.TunnelHostname, PublicURL: r.PublicURL},
-		NoTunnel: r.NoTunnel, DryRun: r.DryRun, ClaudeUsage: r.ClaudeUsage})
+		NoTunnel: r.NoTunnel, DryRun: r.DryRun, ClaudeUsage: r.ClaudeUsage, Ready: webReady(ctx, r)})
 	if err != nil {
 		// Composition errors carry safe summaries (paths, codes); never config values.
 		fmt.Fprintf(os.Stderr, "open-conduit: serve: %s\n", err)
@@ -112,13 +112,64 @@ func selfCommand() string {
 	return self
 }
 
-// serveWeb serves the browser view until interrupted.
+// serveWeb serves the browser view until interrupted, or with URLOnly
+// prints its sign-in URLs.
 func serveWeb(r cli.WebRequest) error {
-	srv, err := web.New(r.Client, web.Options{Addr: r.Addr, Host: r.Host, NewKey: cli.NewKey})
+	in, err := web.LoadSignIn(r.SignIn)
+	if err != nil {
+		return err
+	}
+	if r.URLOnly {
+		urls := web.SignInURLs(in, r.Addr, r.Host)
+		_, err = fmt.Fprintf(r.Out, "%s\nor, if your browser does not resolve *.localhost:\n%s\n", urls[0], urls[1])
+		return err
+	}
+	srv, err := web.New(r.Client, web.Options{Addr: r.Addr, Host: r.Host, NewKey: cli.NewKey, SignIn: &in})
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return srv.Run(ctx, r.Out)
+}
+
+// webReady starts serve --web's view once the daemon's socket is listening:
+// a client of that socket with the operator token the daemon wrote, served
+// until ctx ends. A view that cannot start says why and leaves the daemon
+// running.
+func webReady(ctx context.Context, r cli.ServeRequest) func() {
+	if !r.Web {
+		return nil
+	}
+	return func() {
+		go func() {
+			if err := runDaemonWeb(ctx, r); err != nil {
+				fmt.Fprintf(os.Stderr, "open-conduit: web: %s (the daemon keeps running without it)\n", err)
+			}
+		}()
+	}
+}
+
+func runDaemonWeb(ctx context.Context, r cli.ServeRequest) error {
+	token, err := client.ReadTokenFile(filepath.Join(r.StateDir, "private", "operator.token"))
+	if err != nil {
+		return err
+	}
+	socket := r.Socket
+	if socket == "" {
+		socket = filepath.Join(r.StateDir, "management.sock")
+	}
+	c, err := client.New("unix://"+socket, token.Token)
+	if err != nil {
+		return err
+	}
+	in, err := web.LoadSignIn(r.WebSignIn)
+	if err != nil {
+		return err
+	}
+	srv, err := web.New(c, web.Options{Addr: r.WebAddr, Host: r.WebHost, NewKey: cli.NewKey, SignIn: &in})
+	if err != nil {
+		return err
+	}
+	return srv.Run(ctx, os.Stderr)
 }
