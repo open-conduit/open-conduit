@@ -1,7 +1,6 @@
 // The Setup page: the conversation stays at its newest message while the
 // operator is reading there, whoever wrote it, and leaves them where they
-// are once they scroll up. The message and answer boxes grow with what is
-// typed; Enter sends and Shift+Enter starts a new line. Without this the
+// are once they scroll up. The message box grows with what is typed; Enter sends and Shift+Enter starts a new line. Without this the
 // forms still post, one line at a time.
 "use strict";
 
@@ -27,6 +26,18 @@
     if (e.target.value.trim() !== "") e.target.form.requestSubmit();
   });
   document.querySelectorAll("textarea[data-grow]").forEach(grow);
+  // The message box answers the open question, or messages when there is
+  // none: only what it sends is redrawn, so the box takes its placeholder
+  // from the redrawn button, and hides when there is nothing to send.
+  document.addEventListener("live:redrawn", () => {
+    const t = document.querySelector("textarea[data-composer]");
+    if (!t) return;
+    const b = t.form.querySelector("[data-live=setup-send] button");
+    t.form.hidden = !b;
+    if (!b) return;
+    t.placeholder = b.dataset.placeholder;
+    t.setAttribute("aria-label", b.dataset.label);
+  });
   // Sending from the bottom keeps the reply in view.
   document.addEventListener("submit", () => { pinned = true; });
 })();

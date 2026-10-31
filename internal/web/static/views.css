@@ -2482,6 +2482,9 @@ a.token {
 .composer textarea {
   flex: 1;
 }
+.composer-send {
+  display: contents;
+}
 .composer textarea {
   height: 34px;
   min-height: 34px;

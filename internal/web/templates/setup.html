@@ -24,13 +24,12 @@ holds back what the assistant says. */}}
           <span class="who">Assistant asks</span>
           <div class="msg-text">{{markdown .Text}}{{with .Context}}<p class="quiet small">{{.}}</p>{{end}}</div>
         </div>
-        {{- if and .Open $ss.Answer}}{{with $ss.Answer}}
-        <form method="post" action="/actions" class="{{if $ss.Answer.Choices}}choices{{else}}composer composer-inline{{end}}" aria-label="Answer the question">
+        {{- if and .Open $ss.Answer}}{{with $ss.Answer}}{{if .Choices}}
+        <form method="post" action="/actions" class="choices" aria-label="Answer the question">
           {{template "setup-hidden" .}}
-          {{- if .Choices}}{{range .Choices}}<button class="choice" name="input" value="{{.}}">{{.}}</button>{{end}}
-          {{- else}}<textarea name="input" rows="1" required autocomplete="off" placeholder="Your answer" aria-label="Your answer" data-grow></textarea><button class="btn btn-primary">Answer</button>{{end}}
+          {{- range .Choices}}<button class="choice" name="input" value="{{.}}">{{.}}</button>{{end}}
         </form>
-        {{- end}}{{else if .Choices}}
+        {{- end}}{{end}}{{else if .Choices}}
         <div class="choices" role="group" aria-label="Choices">{{$a := .Answer}}{{range .Choices}}<button type="button" class="choice{{if eq . $a}} is-on{{end}}" disabled>{{.}}</button>{{end}}</div>
         {{- end}}
         {{- else if .Note}}
@@ -53,11 +52,15 @@ holds back what the assistant says. */}}
         <p class="quiet">This session ended {{since .W.Updated}}{{with .W.Summary}}: {{.}}{{end}}. <a href="/setup">Back to Setup</a></p>
         {{- end}}
       </div>
-      {{- with .Message}}
+      {{- /* One message box: while the assistant waits on a question it
+      answers it, since a message would only wait for the answer. The box
+      stays out of every live region so what is typed survives a redraw;
+      only what it sends (the action and the button) is redrawn, and
+      setup.js carries the button's placeholder over to the box. */}}
+      {{- if or .Answer .Message}}
       <form method="post" action="/actions" class="composer">
-        {{template "setup-hidden" .}}
-        <textarea name="input" rows="1" required autocomplete="off" placeholder="{{if $ss.Answer}}Message the assistant — it reads this after you answer{{else}}Message the assistant{{end}} (Shift+Enter for a new line)" aria-label="Message the assistant" data-grow></textarea>
-        <button class="btn">Send</button>
+        <textarea name="input" rows="1" required autocomplete="off" placeholder="{{template "setup-placeholder" .}}" aria-label="{{if .Answer}}Your answer{{else}}Message the assistant{{end}}" data-grow data-composer></textarea>
+        <span class="composer-send" data-live="setup-send">{{template "setup-send" .}}</span>
       </form>
       {{- end}}
     </section>
@@ -199,6 +202,11 @@ holds back what the assistant says. */}}
 {{- end}}
 </div>
 {{end}}
+
+{{define "setup-placeholder"}}{{with .Answer}}{{if .Choices}}Pick a choice above or answer in your own words{{else}}Answer the assistant{{end}}{{else}}Message the assistant{{end}} (Shift+Enter for a new line){{end}}
+
+{{define "setup-send"}}{{$ss := .}}{{with .Answer}}{{template "setup-hidden" .}}<button class="btn btn-primary" data-placeholder="{{template "setup-placeholder" $ss}}" data-label="Your answer">Answer</button>
+{{- else}}{{with .Message}}{{template "setup-hidden" .}}<button class="btn" data-placeholder="{{template "setup-placeholder" $ss}}" data-label="Message the assistant">Send</button>{{end}}{{end}}{{end}}
 
 {{define "setup-hidden"}}<input type="hidden" name="csrf" value="{{.Page.CSRF}}"><input type="hidden" name="back" value="{{.Return}}">
 {{- if .WorkID}}<input type="hidden" name="work" value="{{.WorkID}}">{{else}}<input type="hidden" name="scope" value="{{.ScopeID}}">{{end}}
