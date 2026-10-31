@@ -44,6 +44,9 @@
     {{- with .Page.Health}}
     <span class="st-item"><span class="st-dot {{if eq .State "ready"}}is-up{{else}}is-wait{{end}}" aria-hidden="true"></span>daemon {{.State}} · v{{.Version}}</span>
     <a class="st-item" href="/config">generation {{or .ConfigGeneration "—"}}</a>
+    {{- with $.Page.Update}}
+    <a class="st-item st-update" href="/update">v{{.Version}} available</a>
+    {{- end}}
     {{- else}}
     <span class="st-item"><span class="st-dot is-down" aria-hidden="true"></span>daemon unreachable</span>
     {{- end}}
