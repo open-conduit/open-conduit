@@ -53,6 +53,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Providers` | `resources` | `provider.*` |
 | `Tasks`, `Checks` | `tasks`, `checks` | `task.run`, `check.run` |
 | `Exporter` | `exporters` | `telemetry.export` |
+| `RunEnvironment` | `run_environment` | `run.environment` |
 | `Annotate` | `annotate` | `work.annotate` |
 | `Actions`, `Act` | `actions` | `work.actions`, `work.act` |
 | `Render` | `render` | `event.render` |
@@ -253,7 +254,7 @@ A report states:
 - `TestCertificationNegativeControls` and `TestCertificationInvalidPackage`.
 - `TestExternalSlackRoundTrip`: the Slack package round trip. Socket envelope through `ingress.deliver`, acknowledged after acceptance; remote route; `slack.reply` via `sdk.Store` and the projector against the fake; projection task; check; render.
 - `TestExternalShellAdoptionAndArtifacts`: the shell package's process group survives an extension crash and is re-adopted with the same recovery metadata; its log reaches the host artifact store.
-- `TestExternalSurfacesRoundTrip`: `validate`, `webhook.handle`, `provider.*` with `provider.owner_status`, `telemetry.export`, `work.annotate`, and `setup.run` with callbacks.
+- `TestExternalSurfacesRoundTrip`: `validate`, `webhook.handle`, `provider.*` with `provider.owner_status`, `telemetry.export`, `run.environment`, `work.annotate`, and `setup.run` with callbacks.
 - `TestSDKStoreOverProtocol`.
 - `TestDaemonExtensionPackages` (in `make drill`): CLI install, conflict refusal, offline config check, a workflow end to end in the real daemon, the `validate` hook, configure on apply, no orphans after a daemon kill, restart, and removal refused while in use.
 - Unit tests in `internal/extproc` (install, update, rollback, removal, diagnostics).

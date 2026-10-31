@@ -51,6 +51,7 @@ The table groups what the first-party code actually does across the host boundar
 | Background passes | `Projector.Converge` (GH SL TR), `Ensure` (SC IS), `Executor.Maintain` (CC), `manageHooks`/`EnsureWebhook` (GH TR BB), `hostWatch` (IS), `publishJobRuns` (SC) | GH SL TR BB SC IS CC | manifest `tasks`, `task.run` |
 | Telemetry export | `observability.Exporter.Export/Shutdown` on the pipeline goroutine | PH IS | `telemetry.export`, `shutdown` |
 | Doctor | `runtime.Check` functions (`Checks`, `DeepChecks` with secrets) | all but SH | `check.run` |
+| Run environment | `extension.RunEnvironment`: an environment layer for each run of Work in a scope that uses the extension, merged into `ExecutionContext.Env` before the executor starts (`extension.ApplyEnv`: later layers win, git's `GIT_CONFIG_*` entries are appended). An error fails the run before launch. Executors apply it after the resource's layer and give the process the toolbelt client, so a layer can name `os` (the GitHub extension's git as the bot uses `!os git-credential`) | GH | `run.environment` |
 | Annotations | management `Annotate` | GH | `work.annotate` |
 | Actions | `extension.ActionProvider` (list, authorise, plan one Event the host accepts under `core.action`) | GH | `work.actions`, `work.act` |
 | Panels | `extension.PanelProvider` (a constrained document on a scope or Work page, its buttons naming the provider's actions) | HU | `view.render` |

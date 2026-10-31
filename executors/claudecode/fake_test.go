@@ -45,7 +45,7 @@ mode=$(cat "$f/mode" 2>/dev/null || echo review)
 printf 'session=%s resume=%s tools=%s strict=%s mcp=%s\n' "$session" "$resume" "$tools" "$strict" "$mcp" >> "$f/invocations"
 printf '%s\n' "$model" >> "$f/models"
 pwd -P > "$f/cwd"
-env | grep -E '^(ANTHROPIC_API_KEY|CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|OS_[A-Z_]+|UNRELATED)=' | sort > "$f/env"
+env | grep -E '^(ANTHROPIC_API_KEY|CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|OS_[A-Z_]+|GIT_[A-Z_0-9]+|PATH|UNRELATED)=' | sort > "$f/env"
 t="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$t"
 echo '{"type":"system","subtype":"init"}'

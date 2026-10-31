@@ -174,6 +174,9 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 	ext.Providers = map[string]extension.ResourceProvider{Scratch: scratch{stateDir: o.StateDir}}
 	ext.Exporter = exporter{stateDir: o.StateDir}
 	ext.Annotate = annotate
+	ext.RunEnvironment = func(_ context.Context, _ *sdk.Host, r extension.RunEnvironmentRequest) (map[string]string, error) {
+		return map[string]string{"NOTES_WORK": string(r.Owner.WorkID)}, nil
+	}
 	ext.Actions = func(ctx context.Context, _ *sdk.Host, t extension.ActionTarget) ([]extension.Action, error) {
 		return Actions{}.Actions(ctx, t)
 	}

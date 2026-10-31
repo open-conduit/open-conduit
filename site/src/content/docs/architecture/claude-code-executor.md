@@ -143,9 +143,10 @@ The environment follows B05:
 
 1. **Sanitized baseline.** The shell baseline plus `CLAUDE_CONFIG_DIR` and the binding's `pass_env` names. `ANTHROPIC_API_KEY`, `CLAUDECODE`, `CLAUDE_CODE_*` and other credentials are dropped.
 2. **Provider layer.** Any `OS_*` names are dropped from it.
-3. **Binding `env`.**
-4. **Selected secrets.** An API key comes only from a secret mapped with `secret_env`.
-5. **Execution identity.**
+3. **Run layer.** The extensions' run environment (`ExecutionContext.Env`, [extension protocol](../extension-protocol/)), applied with `extension.ApplyEnv`: its `GIT_CONFIG_*` entries go after the provider layer's, and `OS_*` names are dropped. A host run with a run layer and a toolbelt also gets the toolbelt client (`OS_ENDPOINT`, `OS_TOKEN_FILE` and the toolbelt directory first on `PATH`, never `OS_TOKEN`), so a layer can call `os`; a container run always has it. Other host runs keep the toolbelt out of claude's environment, and only the MCP server has it.
+4. **Binding `env`.**
+5. **Selected secrets.** An API key comes only from a secret mapped with `secret_env`.
+6. **Execution identity.**
 
 ## Binding config
 

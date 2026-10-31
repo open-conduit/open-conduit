@@ -83,6 +83,9 @@ type Extension struct {
 	// Exporter receives telemetry batches (manifest exporters) and is shut
 	// down with the extension.
 	Exporter observability.Exporter
+	// RunEnvironment contributes an environment layer to a run of a Work in
+	// a scope that uses the extension (manifest run_environment).
+	RunEnvironment func(ctx context.Context, h *Host, r extension.RunEnvironmentRequest) (map[string]string, error)
 	// Annotate contributes Work annotations (manifest annotate).
 	Annotate func(ctx context.Context, h *Host, w domain.Work) ([]protocol.Annotation, error)
 	// Actions lists the actions available on a target now and Act
@@ -183,7 +186,7 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			_ = s.ext.Exporter.Shutdown(ctx)
 		}
 		return struct{}{}, nil
-	case "validate", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "telemetry.export", "work.annotate", "work.actions", "work.act", "view.render", "setup.run":
+	case "validate", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.act", "view.render", "setup.run":
 		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)

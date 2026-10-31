@@ -198,6 +198,17 @@ type TelemetryExportParams struct {
 	Records []TelemetryRecord `json:"records"`
 }
 
+// Run environment.
+
+// RunEnvironmentParams asks for the extension's environment layer for one
+// run of a Work in a scope that uses it.
+type RunEnvironmentParams struct {
+	Owner ResourceOwner `json:"owner"`
+}
+type RunEnvironmentResult struct {
+	Env map[string]string `json:"env,omitempty"`
+}
+
 // Annotations.
 
 type WorkAnnotateParams struct {

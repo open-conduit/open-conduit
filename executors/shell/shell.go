@@ -335,7 +335,7 @@ func (e *Executor) register(rn *run) {
 }
 
 // environment applies the B05 order: sanitized baseline → resource-provider
-// layer → binding config.env → selected secrets → trusted toolbelt and
+// layer → the extensions' run layer → binding config.env → selected secrets → trusted toolbelt and
 // execution variables, which no earlier layer can override.
 func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, layer map[string]string) ([]string, error) {
 	vars := map[string]string{}
@@ -348,13 +348,11 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, l
 	if vars["PATH"] == "" {
 		vars["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
 	}
-	for name, value := range layer {
-		// A provider layer (such as a checkout .env) can never supply toolbelt
-		// variables, even where the transport is none.
-		if envName.MatchString(name) && !reserved(name) && !strings.ContainsRune(value, 0) {
-			vars[name] = value
-		}
-	}
+	// Neither a provider layer (such as a checkout .env) nor the
+	// extensions' run layer can supply toolbelt variables, even where the
+	// transport is none.
+	extension.ApplyEnv(vars, layer)
+	extension.ApplyEnv(vars, r.Context.Env)
 	for name, value := range cfg.Env {
 		vars[name] = value
 	}
