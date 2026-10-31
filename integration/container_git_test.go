@@ -35,7 +35,6 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/executors/claudecode"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extensions/docker"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/storage"
@@ -195,6 +194,11 @@ func TestDockerGitCredential(t *testing.T) {
 	if err != nil {
 		t.Fatalf("the stand-in GitHub: %v %s", err, id)
 	}
+	// And on the second's, before the host talks to it: connecting a
+	// container to a network can drop connections already open to it.
+	if out, err := l.docker("network", "connect", "--alias", "github.com", l.egress(t, "git-2", 182), id); err != nil {
+		t.Fatalf("connecting the stand-in GitHub: %v %s", err, out)
+	}
 	published, err := l.docker("port", id, "443/tcp")
 	if err != nil {
 		t.Fatalf("its port: %v %s", err, published)
@@ -202,7 +206,7 @@ func TestDockerGitCredential(t *testing.T) {
 	published = strings.Fields(published)[0]
 	pool := x509.NewCertPool()
 	pool.AppendCertsFromPEM(ca)
-	httpClient := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool},
+	httpClient := &http.Client{Timeout: 30 * time.Second, Transport: &http.Transport{TLSClientConfig: &tls.Config{RootCAs: pool}, DisableKeepAlives: true,
 		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
 			var d net.Dialer
 			return d.DialContext(ctx, network, published)
@@ -349,10 +353,6 @@ func TestDockerGitCredential(t *testing.T) {
 	}
 	if res := turn("git-1"); res.Outcome.Kind == domain.OutcomeFailed {
 		t.Fatalf("the first execution failed: %q\n%s", res.Outcome.Summary, report())
-	}
-	l.egress(t, "git-2", 182)
-	if out, err := l.docker("network", "connect", "--alias", "github.com", docker.ExecutionNetwork(l.host, "git-2")+"-egress", id); err != nil {
-		t.Fatalf("connecting the stand-in GitHub: %v %s", err, out)
 	}
 	if res := turn("git-2"); res.Outcome.Kind == domain.OutcomeFailed {
 		t.Fatalf("the second execution failed: %q\n%s", res.Outcome.Summary, report())
