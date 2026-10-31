@@ -124,7 +124,10 @@ type attemptKey struct {
 }
 
 type daemon struct {
-	o              Options
+	o Options
+	// configHandles holds the config texts extensions refer to by handle
+	// (configHost).
+	configHandles  configHandles
 	log            *slog.Logger
 	now            func() time.Time
 	owner          string

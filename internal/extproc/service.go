@@ -13,6 +13,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
@@ -66,6 +67,10 @@ type Deps struct {
 	// Probes are the setup probes the host, its extensions and executors
 	// offer, by full name (probe.list and probe.run, permission probes).
 	Probes func() map[string]extension.SetupProbe
+	// Config is the host's config service, which keeps config text behind
+	// handles and answers only redacted copies (config.base, config.edit,
+	// config.validate, config.trace; permission config.read).
+	Config inproc.ConfigHost
 }
 
 // run is the host side of one executor call: the trusted, lease-fenced
@@ -331,6 +336,8 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return s.probeRun(ctx, p)
+	case "config.base", "config.edit", "config.validate", "config.trace":
+		return s.config(ctx, method, raw)
 	}
 	return nil, protocol.Errorf(protocol.CodeUnsupported, "host method not offered in this release")
 }

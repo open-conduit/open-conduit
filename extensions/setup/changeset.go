@@ -87,12 +87,15 @@ type Applied struct {
 	Changes    []string `json:"changes"`
 }
 
-// changeSet is a session's stored change set. BaseText may hold reference
-// text: it never leaves the extension except as the operator's candidate.
+// changeSet is a session's stored change set. It names its base by the
+// host's handle (inproc.ConfigHost) and keeps only the base's redacted
+// text: the extension never holds reference text, except a reference a
+// change proposes.
 type changeSet struct {
 	BaseGeneration string   `json:"base_generation"`
 	BaseHash       string   `json:"base_hash"`
-	BaseText       string   `json:"base_text"`
+	BaseHandle     string   `json:"base_handle"`
+	BaseRedacted   string   `json:"base_redacted"`
 	Folders        []string `json:"folders,omitempty"`
 	Changes        []change `json:"changes"`
 	// Pending is a generation applied since the change set was last looked
@@ -212,25 +215,36 @@ func revision(openChanges []change) string {
 	return hex.EncodeToString(h.Sum(nil))[:8]
 }
 
-// candidate is the base text plus the approved changes, in proposal order.
-// An approved change that no longer applies is a diagnostic.
-func candidate(host inproc.ConfigHost, cs changeSet, st map[string]string) ([]byte, []string, []inproc.ConfigDiagnostic) {
-	text := []byte(cs.BaseText)
+// newChangeSet is an empty change set on base.
+func newChangeSet(base inproc.ConfigBase) changeSet {
+	return changeSet{BaseGeneration: base.Generation, BaseHash: base.Hash, BaseHandle: base.Handle, BaseRedacted: string(base.Text), Folders: base.Folders}
+}
+
+// built is a candidate the host holds: its handle and its redacted text.
+type built struct {
+	Handle string
+	Text   []byte
+}
+
+// candidate is the base plus the approved changes, in proposal order, built
+// by the host. An approved change that no longer applies is a diagnostic.
+func candidate(ctx context.Context, host inproc.ConfigHost, cs changeSet, st map[string]string) (built, []string, []inproc.ConfigDiagnostic) {
+	out := built{Handle: cs.BaseHandle, Text: []byte(cs.BaseRedacted)}
 	var ids []string
 	var diags []inproc.ConfigDiagnostic
 	for _, c := range cs.Changes {
 		if st[c.ID] != StateApproved {
 			continue
 		}
-		out, _, err := host.Edit(text, c.Op, c.Pointer, c.Value)
+		e, err := host.Edit(ctx, out.Handle, c.Op, c.Pointer, c.Value)
 		if err != nil {
 			diags = append(diags, inproc.ConfigDiagnostic{Path: c.Pointer, Code: "edit_failed", Message: c.ID + ": " + err.Error()})
 			continue
 		}
-		text = out
+		out = built{Handle: e.Handle, Text: e.Text}
 		ids = append(ids, c.ID)
 	}
-	return text, ids, diags
+	return out, ids, diags
 }
 
 // refsPattern is a secret reference, as `config set` accepts one.
@@ -335,11 +349,11 @@ func inFolder(cs changeSet, pointer string) bool {
 // recomputed, and a decided change whose before changed returns to
 // proposed. latest is the acceptance watermark the returned changes count
 // decisions after.
-func refresh(cs changeSet, base inproc.ConfigBase, host inproc.ConfigHost, latest uint64) changeSet {
-	if cs.BaseGeneration == base.Generation && cs.BaseText == string(base.Text) {
+func refresh(ctx context.Context, cs changeSet, base inproc.ConfigBase, host inproc.ConfigHost, latest uint64) changeSet {
+	if cs.BaseGeneration == base.Generation && cs.BaseHandle == base.Handle {
 		return cs
 	}
-	cs.BaseGeneration, cs.BaseHash, cs.BaseText, cs.Folders = base.Generation, base.Hash, string(base.Text), base.Folders
+	cs.BaseGeneration, cs.BaseHash, cs.BaseHandle, cs.BaseRedacted, cs.Folders = base.Generation, base.Hash, base.Handle, string(base.Text), base.Folders
 	for i, c := range cs.Changes {
 		if c.Applied != "" || c.Withdrawn {
 			continue
@@ -348,7 +362,8 @@ func refresh(cs changeSet, base inproc.ConfigBase, host inproc.ConfigHost, lates
 		if c.Op == OpRemove {
 			op = OpRemove
 		}
-		_, before, err := host.Edit(base.Text, op, c.Pointer, c.Value)
+		e, err := host.Edit(ctx, base.Handle, op, c.Pointer, c.Value)
+		before := e.Before
 		if err != nil || !bytes.Equal(compact(before), compact(c.Before)) {
 			cs.Changes[i].Before, cs.Changes[i].Since = before, latest
 		}
@@ -376,7 +391,7 @@ func nextChangeID(cs changeSet) string {
 // configuration now if it has none, and refreshes it. It reads the
 // configuration outside the transaction, since the host's config service
 // has its own lock.
-func (t *Tools) changeSetFor(tx storage.Tx, w domain.Work, base inproc.ConfigBase) (changeSet, error) {
+func (t *Tools) changeSetFor(ctx context.Context, tx storage.Tx, w domain.Work, base inproc.ConfigBase) (changeSet, error) {
 	cs, ok, err := loadChangeSet(tx, w.ID)
 	if err != nil {
 		return cs, err
@@ -386,9 +401,9 @@ func (t *Tools) changeSetFor(tx storage.Tx, w domain.Work, base inproc.ConfigBas
 		return cs, err
 	}
 	if !ok {
-		cs = changeSet{BaseGeneration: base.Generation, BaseHash: base.Hash, BaseText: string(base.Text), Folders: base.Folders}
+		cs = newChangeSet(base)
 	}
-	return refresh(cs, base, t.o.Config, latest), nil
+	return refresh(ctx, cs, base, t.o.Config, latest), nil
 }
 
 // MarkApplied is the applied hook. When the active generation is an open
@@ -403,7 +418,7 @@ func MarkApplied(ctx context.Context, store storage.Store, host inproc.ConfigHos
 	type session struct {
 		w    domain.Work
 		cs   changeSet
-		text []byte
+		cand built
 		ids  []string
 	}
 	var sessions []session
@@ -427,8 +442,8 @@ func MarkApplied(ctx context.Context, store storage.Store, host inproc.ConfigHos
 			if err != nil {
 				return err
 			}
-			if text, ids, diags := candidate(host, cs, st); len(ids) > 0 && len(diags) == 0 {
-				sessions = append(sessions, session{w, cs, text, ids})
+			if cand, ids, diags := candidate(ctx, host, cs, st); len(ids) > 0 && len(diags) == 0 {
+				sessions = append(sessions, session{w, cs, cand, ids})
 			}
 		}
 		return nil
@@ -436,7 +451,7 @@ func MarkApplied(ctx context.Context, store storage.Store, host inproc.ConfigHos
 		return err
 	}
 	for _, s := range sessions {
-		hash, diags, err := host.Validate(ctx, s.text)
+		hash, diags, err := host.Validate(ctx, s.cand.Handle)
 		if err != nil || len(diags) > 0 || hash != base.Hash {
 			continue
 		}
@@ -458,7 +473,7 @@ func MarkApplied(ctx context.Context, store storage.Store, host inproc.ConfigHos
 			if err != nil {
 				return err
 			}
-			if err = saveChangeSet(tx, s.w.ID, refresh(cs, base, host, latest)); err != nil {
+			if err = saveChangeSet(tx, s.w.ID, refresh(ctx, cs, base, host, latest)); err != nil {
 				return err
 			}
 			at := now()

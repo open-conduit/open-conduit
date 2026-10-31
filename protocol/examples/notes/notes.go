@@ -62,6 +62,13 @@ const (
 	TelemetryTask = "notes-telemetry"
 	ProbeName     = "host.echo"
 	PassEvent     = "notes_pass"
+	// ConfigTask reads the configuration, proposes two edits to its first
+	// scope (renaming it and adding a reference), validates the candidate
+	// and traces the scope against it, writing everything the host answered
+	// to config.json in the state directory. It applies nothing.
+	ConfigTask = "notes-config"
+	// ConfigRef is the reference ConfigTask proposes.
+	ConfigRef = "env:NOTES_PROPOSED_TOKEN"
 )
 
 // Options select the release and test behaviour of one process.
@@ -101,8 +108,9 @@ func Manifest(o Options) protocol.Manifest {
 	}
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: fmt.Sprintf("0.%d.0", o.Release), Summary: "Example external extension: a note service.", Command: cmd, KVVersion: kvVersion(o.Release),
 		// It mirrors the host's telemetry events to sink.log, records one
-		// per indexing pass, and runs the host's probes (TelemetryTask).
-		Permissions: []string{protocol.PermissionTelemetrySink, protocol.PermissionTelemetryCapture, protocol.PermissionProbes},
+		// per indexing pass, runs the host's probes (TelemetryTask) and
+		// proposes config (ConfigTask).
+		Permissions: []string{protocol.PermissionTelemetrySink, protocol.PermissionTelemetryCapture, protocol.PermissionProbes, protocol.PermissionConfigRead},
 		Provides: protocol.Provides{
 			// An entry's service file and labels are safe to show the operator.
 			Extensions: []protocol.ExtensionDecl{{Type: "notes", Ingress: true,
@@ -119,7 +127,7 @@ func Manifest(o Options) protocol.Manifest {
 			WorkKinds:   []protocol.WorkKindDecl{{Kind: Kind, Trigger: true}},
 			Recurrences: []string{Recurrence},
 			Operations:  []protocol.OperationDecl{{Name: "notes.lookup", Kind: protocol.OperationHandler}, {Name: "notes.annotate", Kind: protocol.OperationEmit, Commit: true}},
-			Tasks:       []protocol.TaskDecl{{Name: "notes-index", IntervalSeconds: 60}, {Name: "notes-derive", IntervalSeconds: 60}, {Name: TelemetryTask, IntervalSeconds: 60}},
+			Tasks:       []protocol.TaskDecl{{Name: "notes-index", IntervalSeconds: 60}, {Name: "notes-derive", IntervalSeconds: 60}, {Name: TelemetryTask, IntervalSeconds: 60}, {Name: ConfigTask, IntervalSeconds: 60}},
 			Checks:      []protocol.CheckDecl{{Name: "notes"}},
 			Render:      true,
 			// 07-03 surfaces.

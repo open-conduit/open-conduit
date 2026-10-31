@@ -42,6 +42,7 @@ var parity = map[string][]string{
 	"Playbooker": {"manifest:provides.playbooks"},
 	"Exporting":  {"manifest:provides.exporters", "method:telemetry.export"},
 	"Sink":       {"manifest:permissions", "method:telemetry.sink"},
+	"ConfigHost": {"manifest:permissions", "method:config.base", "method:config.edit", "method:config.validate", "method:config.trace"},
 	"Timers":     {"method:timer.arm", "method:timer.cancel"},
 
 	// Host services, inproc.Host's fields.
@@ -59,6 +60,7 @@ var parity = map[string][]string{
 	"Host.WaitProgress": {"method:wait.progress"},
 	"Host.Capture":      {"manifest:permissions", "method:telemetry.capture"},
 	"Host.Probes":       {"manifest:permissions", "method:probe.list", "method:probe.run"},
+	"Host.Config":       {"manifest:permissions", "method:config.base"},
 
 	// A config type's fields, inproc.ConfigType.
 	"ConfigType.Kind":     {"method:validate"},
@@ -72,9 +74,6 @@ var parity = map[string][]string{
 // parityGaps are the surfaces no wire method or manifest field carries yet,
 // each with the open issue that closes it. Only those issues own entries.
 var parityGaps = map[string]int{
-	// The config host on the protocol, with host-side redaction.
-	"ConfigHost":  241,
-	"Host.Config": 241,
 	// The setup extension, which gates its operations on an entry and
 	// checks its route's binding, becomes an installed package.
 	"EntryGated":         243,

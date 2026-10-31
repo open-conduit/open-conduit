@@ -66,6 +66,11 @@ const (
 	// extensions and its executors offer (probe.list, probe.run): read-only
 	// checks of the machine, such as whether Claude Code is signed in.
 	PermissionProbes = "probes"
+	// PermissionConfigRead reads the configuration with every reference
+	// redacted, and builds, validates and traces candidates of it that the
+	// host holds (config.base, config.edit, config.validate, config.trace).
+	// Nothing on the wire applies a configuration: only the operator does.
+	PermissionConfigRead = "config.read"
 )
 
 // PermissionInfo says what a permission lets an extension do, in words the
@@ -80,6 +85,7 @@ var KnownPermissions = []PermissionInfo{
 	{PermissionTelemetrySink, "receives every telemetry event the host records, from every scope"},
 	{PermissionTelemetryCapture, "records telemetry events, which every telemetry sink receives"},
 	{PermissionProbes, "runs the read-only setup probes of the host, its extensions and executors"},
+	{PermissionConfigRead, "reads the whole configuration, references redacted, and proposes edits it never applies"},
 }
 
 // PermissionSummary is the summary of a known permission ("" otherwise).

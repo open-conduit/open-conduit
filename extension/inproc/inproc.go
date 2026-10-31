@@ -130,14 +130,27 @@ type Host struct {
 }
 
 // ConfigBase is the configuration a proposal starts from: the committed
-// generation and its hash, and the config file's text (the default
-// document when the daemon runs on it with no file). Folders are the IDs of
-// the scopes that come from included folders, whose text is not in the file.
+// generation and its hash, and a handle on the config file's text (the
+// default document when the daemon runs on it with no file). The host keeps
+// the text; Text is a copy with every secret_refs value replaced by
+// "[redacted]", so an extension never holds reference text. Folders are the
+// IDs of the scopes that come from included folders, whose text is not in
+// the file.
 type ConfigBase struct {
 	Generation string
 	Hash       string
+	Handle     string
 	Text       []byte
 	Folders    []string
+}
+
+// ConfigEdited is a candidate the host built from an edit: a handle on its
+// text, the text redacted as ConfigBase's is, and the value that was at the
+// pointer (nil when none), redacted too.
+type ConfigEdited struct {
+	Handle string
+	Text   []byte
+	Before json.RawMessage
 }
 
 // ConfigDiagnostic is one validation problem: a JSON pointer, a code and a
@@ -148,26 +161,33 @@ type ConfigDiagnostic struct {
 	Message string `json:"message"`
 }
 
-// ConfigHost is the host's configuration service for extensions. Nothing
-// in it applies a configuration: only the operator does that.
+// ErrConfigHandle refuses a config handle the host doesn't hold (one from
+// before a restart, or long unused): read the base again.
+var ErrConfigHandle = errors.New("the host no longer holds that configuration; read the base again")
+
+// ConfigHost is the host's configuration service for extensions. The host
+// keeps the config text behind handles and hands out only redacted copies;
+// an extension builds candidates by proposing edits against a handle.
+// Nothing in it applies a configuration: only the operator does that,
+// through POST /config/apply.
 type ConfigHost interface {
 	// Base is the configuration now.
 	Base(ctx context.Context) (ConfigBase, error)
+	// Edit makes one `config set`/`config unset` edit to the text behind
+	// handle, keeping its layout and key order, and holds the result as a
+	// new candidate: op "add" sets (appending with "-"), "replace" sets a
+	// value that exists and "remove" removes one. value may set a new
+	// reference. Pointers address array elements by id or name. Its errors
+	// are fixed, secret-free reasons.
+	Edit(ctx context.Context, handle, op, pointer string, value json.RawMessage) (ConfigEdited, error)
 	// Validate runs the side-effect-free validation POST /config/validate
-	// runs on config file text: the candidate's hash when it is valid, its
-	// diagnostics when not.
-	Validate(ctx context.Context, text []byte) (hash string, diagnostics []ConfigDiagnostic, err error)
-	// Edit makes one `config set`/`config unset` edit to config file text,
-	// keeping its layout and key order: op "add" sets (appending with "-"),
-	// "replace" sets a value that exists and "remove" removes one. It
-	// returns the new text and the value that was at pointer (nil when
-	// none). Pointers address array elements by id or name. Its errors are
-	// fixed, secret-free reasons.
-	Edit(text []byte, op, pointer string, value json.RawMessage) (out []byte, before json.RawMessage, err error)
+	// runs on the text behind handle: the candidate's hash when it is
+	// valid, its diagnostics when not.
+	Validate(ctx context.Context, handle string) (hash string, diagnostics []ConfigDiagnostic, err error)
 	// Trace runs the route trace for one of a scope's named samples against
-	// config text instead of the active generation, writing nothing. With
-	// no sample it lists the scope's samples.
-	Trace(ctx context.Context, text []byte, scope, sample string) (CandidateTrace, error)
+	// the text behind handle instead of the active generation, writing
+	// nothing. With no sample it lists the scope's samples.
+	Trace(ctx context.Context, handle, scope, sample string) (CandidateTrace, error)
 }
 
 // CandidateTrace is a route trace against a candidate configuration: what

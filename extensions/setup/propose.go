@@ -3,6 +3,7 @@ package setup
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"time"
 
@@ -81,7 +82,7 @@ func (t *Tools) propose(ctx context.Context, a extension.Authority, in domain.Pa
 	}
 	req := requestID(ctx, a)
 	var c change
-	var text []byte
+	var handle string
 	var count int
 	var done bool
 	if err = t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
@@ -89,7 +90,7 @@ func (t *Tools) propose(ctx context.Context, a extension.Authority, in domain.Pa
 		if err != nil {
 			return err
 		}
-		cs, err := t.changeSetFor(tx, w, base)
+		cs, err := t.changeSetFor(ctx, tx, w, base)
 		if err != nil {
 			return err
 		}
@@ -106,23 +107,27 @@ func (t *Tools) propose(ctx context.Context, a extension.Authority, in domain.Pa
 		if err != nil {
 			return err
 		}
-		cand, _, _ := candidate(t.o.Config, cs, st)
-		out, before, err := t.o.Config.Edit(cand, input.Op, input.Pointer, input.Value)
+		cand, _, _ := candidate(ctx, t.o.Config, cs, st)
+		e, err := t.o.Config.Edit(ctx, cand.Handle, input.Op, input.Pointer, input.Value)
+		if errors.Is(err, inproc.ErrConfigHandle) {
+			return refuse("unavailable", "the configuration moved meanwhile; propose again")
+		}
 		if err != nil {
 			return refuse("invalid_pointer", "%s", err.Error())
 		}
+		before := e.Before
 		latest, err := tx.LatestSequence()
 		if err != nil {
 			return err
 		}
 		c = change{ID: nextChangeID(cs), Request: req, Op: input.Op, Pointer: input.Pointer, Value: input.Value, Before: compact(before), Why: input.Why, Since: latest}
-		text, count = out, len(cs.Changes)
+		handle, count = e.Handle, len(cs.Changes)
 		return nil
 	}); err != nil {
 		return domain.Payload{}, err
 	}
 	if !done {
-		_, diags, err := t.o.Config.Validate(ctx, text)
+		_, diags, err := t.o.Config.Validate(ctx, handle)
 		if err != nil {
 			return domain.Payload{}, refuse("unavailable", "the configuration can't be validated now")
 		}
@@ -132,7 +137,7 @@ func (t *Tools) propose(ctx context.Context, a extension.Authority, in domain.Pa
 			if err != nil {
 				return err
 			}
-			cs, err := t.changeSetFor(tx, w, base)
+			cs, err := t.changeSetFor(ctx, tx, w, base)
 			if err != nil {
 				return err
 			}
@@ -221,7 +226,7 @@ func check(ctx context.Context, store storage.Store, host inproc.ConfigHost, now
 	if err != nil {
 		return Checks{}, refuse("unavailable", "the configuration can't be read now")
 	}
-	var text []byte
+	var cand built
 	var ids []string
 	var diags []inproc.ConfigDiagnostic
 	if err = store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
@@ -234,19 +239,19 @@ func check(ctx context.Context, store storage.Store, host inproc.ConfigHost, now
 			return err
 		}
 		if cs.BaseGeneration == "" {
-			cs = changeSet{BaseGeneration: base.Generation, BaseHash: base.Hash, BaseText: string(base.Text), Folders: base.Folders}
+			cs = newChangeSet(base)
 		}
-		cs = refresh(cs, base, host, latest)
+		cs = refresh(ctx, cs, base, host, latest)
 		st, err := states(tx, w, cs)
 		if err != nil {
 			return err
 		}
-		text, ids, diags = candidate(host, cs, st)
+		cand, ids, diags = candidate(ctx, host, cs, st)
 		return nil
 	}); err != nil {
 		return Checks{}, err
 	}
-	hash, more, err := host.Validate(ctx, text)
+	hash, more, err := host.Validate(ctx, cand.Handle)
 	if err != nil {
 		return Checks{}, refuse("unavailable", "the configuration can't be validated now")
 	}

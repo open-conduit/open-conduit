@@ -243,7 +243,7 @@ func (x *Extension) ConfigCandidate(ctx context.Context, w domain.Work) (extensi
 	if err != nil {
 		return extension.Candidate{}, refuse("unavailable", "the configuration can't be read now")
 	}
-	var text []byte
+	var cand built
 	var ids []string
 	err = x.host.Store.Transact(ctx, storage.Guard{Now: x.host.Now()}, func(tx storage.Tx) error {
 		cs, ok, err := loadChangeSet(tx, w.ID)
@@ -254,7 +254,7 @@ func (x *Extension) ConfigCandidate(ctx context.Context, w domain.Work) (extensi
 		if err != nil {
 			return err
 		}
-		if moved := refresh(cs, base, x.host.Config, latest); moved.BaseGeneration != cs.BaseGeneration || moved.BaseText != cs.BaseText {
+		if moved := refresh(ctx, cs, base, x.host.Config, latest); moved.BaseGeneration != cs.BaseGeneration || moved.BaseHandle != cs.BaseHandle {
 			if err = saveChangeSet(tx, w.ID, moved); err != nil {
 				return err
 			}
@@ -264,7 +264,7 @@ func (x *Extension) ConfigCandidate(ctx context.Context, w domain.Work) (extensi
 		if err != nil {
 			return err
 		}
-		text, ids, _ = candidate(x.host.Config, cs, st)
+		cand, ids, _ = candidate(ctx, x.host.Config, cs, st)
 		return nil
 	})
 	if errors.Is(err, storage.ErrNotFound) {
@@ -276,14 +276,14 @@ func (x *Extension) ConfigCandidate(ctx context.Context, w domain.Work) (extensi
 	if len(ids) == 0 {
 		return extension.Candidate{}, refuse("nothing_approved", "approve a change before applying")
 	}
-	hash, diags, err := x.host.Config.Validate(ctx, text)
+	hash, diags, err := x.host.Config.Validate(ctx, cand.Handle)
 	if err != nil {
 		return extension.Candidate{}, refuse("unavailable", "the configuration can't be validated now")
 	}
 	if len(diags) > 0 {
 		return extension.Candidate{}, refuse("invalid_candidate", "the approved changes don't validate: validate them in the session to see why")
 	}
-	return extension.Candidate{Text: text, BaseGeneration: base.Generation, Hash: hash}, nil
+	return extension.Candidate{Handle: cand.Handle, BaseGeneration: base.Generation, Hash: hash}, nil
 }
 
 // decisionRender renders the operator's decision for the agent.

@@ -119,13 +119,14 @@ func (t *Tools) read(ctx context.Context, a extension.Authority, in domain.Paylo
 		if err != nil {
 			return err
 		}
-		if cs, err = t.changeSetFor(tx, w, base); err != nil {
+		if cs, err = t.changeSetFor(ctx, tx, w, base); err != nil {
 			return err
 		}
 		if st, err = states(tx, w, cs); err != nil {
 			return err
 		}
-		text, _, _ = candidate(t.o.Config, cs, st)
+		cand, _, _ := candidate(ctx, t.o.Config, cs, st)
+		text = cand.Text
 		return nil
 	}); err != nil {
 		return domain.Payload{}, err

@@ -337,6 +337,7 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		Nudge:   d.poke,
 		Capture: d.telemetry.Capture,
 		Probes:  d.setupProbes,
+		Config:  d.configHost(),
 	}
 }
 
