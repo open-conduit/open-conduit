@@ -53,16 +53,18 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Providers` | `resources` | `provider.*` |
 | `Tasks`, `Checks` | `tasks`, `checks` | `task.run`, `check.run` |
 | `Exporter` | `exporters` | `telemetry.export` |
+| `Sink` | permission `telemetry.sink` | `telemetry.sink` |
 | `RunEnvironment` | `run_environment` | `run.environment` |
 | `Annotate` | `annotate` | `work.annotate` |
 | `Actions`, `Act` | `actions` | `work.actions`, `work.act` |
 | `Render` | `render` | `event.render` |
 | `Setups` | `setup` | `setup.run` with the `setup.*` callbacks |
 | `Upcasters` | `schemas` | applied before extension code sees an older payload |
+| — | `extensions[].settings`, `extensions[].describe` | none: the host reads an entry's [safe settings and describe lines](../extension-protocol/#manifest) from its config |
 
 Reaching the host:
 
-- **`sdk.Host`** is passed to `Configure`, `Migrate` and tasks, and is available inside any handler through `sdk.HostFrom(ctx)`. It has KV (`Get`, `List`, `Commit`, `Update`), `Accept` (derived Events with records), `Deliver` (your own receiver's deliveries), state reads (`Works`, `Events`), `Secrets` and `ConnectionSecrets`, and `Artifact`.
+- **`sdk.Host`** is passed to `Configure`, `Migrate` and tasks, and is available inside any handler through `sdk.HostFrom(ctx)`. It has KV (`Get`, `List`, `Commit`, `Update`), `Accept` (derived Events with records), `Deliver` (your own receiver's deliveries), state reads (`Works`, `Events`), `Secrets` and `ConnectionSecrets`, and `Artifact`. With the matching [permission](../extension-protocol/#permissions) it also has `Capture` (`telemetry.capture`), and `Probes` and `Probe` (`probes`).
 - **`sdk.Store`** is `storage.Store` over the host. It lets code written against a coordination transaction run unchanged. KV reads carry version tokens, and one `Transact`'s writes commit as a single `kv.commit` batch whose preconditions are every key it read. A concurrent change to one of those keys is `storage.ErrConflict`. State reads are the scoped `state.*` methods. Every core write returns `sdk.ErrReadOnly`. Conflict detection covers keys read, not prefix ranges, so it is weaker than the host's serializable transactions. The Slack projector and tools run on it.
 - **`sdk.Artifacts`** is `storage.Artifacts` over `artifact.*`. It writes in acknowledged chunks; Open and Delete are host-only. The shell executor writes its logs through it.
 
@@ -77,7 +79,7 @@ Any language works: the protocol is newline-delimited JSON-RPC 2.0, and the cert
 
 ### Examples
 
-- [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/notes): every extension surface. It has ingress with a webhook receiver, a route with a trigger, operations including a committed emission, a recurrence, tasks, a resource provider, a telemetry exporter, annotations, a setup flow, validation, three releases with schema evolution, and a KV migration.
+- [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/notes): every extension surface. It has ingress with a webhook receiver, a route with a trigger, operations including a committed emission, a recurrence, tasks, a resource provider, a telemetry exporter, annotations, a setup flow, validation, three releases with schema evolution, and a KV migration. It declares every permission: a task records telemetry events and runs the host's probes, it receives the host's telemetry events as a sink, and its entry type declares settings and describe lines.
 - [`protocol/examples/runner`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/runner): an executor with detached jobs, inject, interrupt, stop and forget.
 - [`packages/slack`](https://github.com/open-conduit/open-conduit/tree/main/packages/slack) and [`packages/shell`](https://github.com/open-conduit/open-conduit/tree/main/packages/shell): real first-party workloads packaged.
 
@@ -119,7 +121,8 @@ Installed packages live in `<config dir>/extensions/<name>/`, beside `config.jso
 - **`open-conduit extension update DIR`** (or `ARCHIVE [--sha256 HEX]`) does the same for an installed name. A lower `kv_version` is refused. The replaced release is kept as `.previous/<name>`.
 - **`open-conduit extension rollback NAME`** swaps the kept release back. If the newer release already migrated the extension's KV layout, the daemon refuses the older one at start with `kv_downgrade`, because there is no automatic downgrade. The remedy is to restore a backup taken before the update ([backup bundles](../backup-bundles/)).
 - **`open-conduit extension remove NAME`** is refused while the config at `--config` still uses the package's types (it validates the config without the package). `--force` overrides. Removal deletes the package and its kept release, never its durable state. Its KV namespaces and recorded layout stay in the coordination store, and `<state>/extensions/<name>` and its log stay on disk, so reinstalling the same or a newer release resumes from them. To purge, delete those directories after removal.
-- **`open-conduit extension list`** shows installed packages, their protocol versions, what they provide, the release kept for rollback, and any discovery or conflict problems.
+- Install, update and rollback print the [permissions](../extension-protocol/#permissions) the installed release declares, each with what it allows, so the operator sees what the package may use beyond its own surfaces.
+- **`open-conduit extension list`** shows installed packages, their protocol versions, what they provide, their permissions, the release kept for rollback, and any discovery or conflict problems. `inspect` shows a directory's permissions before install.
 
 ### Upgrade procedure
 

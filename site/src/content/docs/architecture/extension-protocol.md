@@ -50,6 +50,9 @@ The table groups what the first-party code actually does across the host boundar
 | Secrets | `connectionSecrets`, `inproc.Host.Secrets` and `resolver.ResolveNames` (lazy, current generation) | GH SL TR BB SC PH | `secret.resolve` (E→H) |
 | Background passes | `Projector.Converge` (GH SL TR), `Ensure` (SC IS), `Executor.Maintain` (CC), `manageHooks`/`EnsureWebhook` (GH TR BB), `hostWatch` (IS), `publishJobRuns` (SC) | GH SL TR BB SC IS CC | manifest `tasks`, `task.run` |
 | Telemetry export | `observability.Exporter.Export/Shutdown` on the pipeline goroutine | PH IS | `telemetry.export`, `shutdown` |
+| Telemetry events | `inproc.Host.Capture` writes a named event to the host's telemetry events log; `inproc.Sink` receives every one, from every scope | IS PH | `telemetry.capture` (E→H, permission `telemetry.capture`), `telemetry.sink` (permission `telemetry.sink`) |
+| Setup probes | `inproc.Host.Probes`: the read-only probes the host, extensions and executors offer setup sessions (`claude-code.status`) | setup | `probe.list`, `probe.run` (E→H, permission `probes`) |
+| Operator's view of an entry | `inproc.ConfigType.Settings` (fields safe to show, typed) and `Describe` (what an entry sets up) | GH SC | manifest `extensions[].settings`, `extensions[].describe` |
 | Doctor | `runtime.Check` functions (`Checks`, `DeepChecks` with secrets) | all but SH | `check.run` |
 | Run environment | `extension.RunEnvironment`: an environment layer for each run of Work in a scope that uses the extension, told the connection the run's binding names (`connection`, as an operation's authority carries it), merged into `ExecutionContext.Env` before the executor starts (`extension.ApplyEnv`: later layers win, git's `GIT_CONFIG_*` entries are appended). An error fails the run before launch. Executors apply it after the resource's layer and give the process the toolbelt client, so a layer can name `os` (the GitHub extension's git as the bot uses `!os git-credential`) | GH | `run.environment` |
 | Annotations | management `Annotate` | GH | `work.annotate` |
@@ -58,7 +61,7 @@ The table groups what the first-party code actually does across the host boundar
 | Setup | `extension.Setup` with `SetupHost` prompts, browser, secret store, `LookPath`, `Run` | GH SL TR | `setup.run` plus `setup.*` callbacks |
 | Playbooks | embedded playbooks written into the agent executor's plugin directory | GH SL TR IS | manifest `playbooks` (first-party convention) |
 
-`TestCatalogueCoversThePublicContract` checks mechanically that every method of every public interface an extension implements or consumes is carried by a wire method. `TestCatalogueMapsEveryMethodToAShippedUse` checks that every wire method names at least one shipped user. Core-record writes (`AcceptEvent`, `PutWork`, leases, timers, waits) never cross the boundary. They are reached only through `event.accept`, `timer.arm`, `work.cancel` and `wait.progress`, which apply the same causal limits and fencing as in-process callers.
+`TestCatalogueCoversThePublicContract` checks mechanically that every method of every public interface an extension implements or consumes is carried by a wire method. `TestInprocSurfacesAreCarried` checks the in-process contract the same way: it reads every interface of `extension/inproc`, every field of `inproc.Host` and every field of `inproc.ConfigType` from the source, and fails unless each maps to a wire method, a manifest field, or something a process has of its own (its clock, its stderr). A surface nothing carries yet is listed with the open issue that will carry it: the config host (`inproc.Host.Config`, `ConfigHost`, #241), and entry-gated operations and route binding checks (`EntryGated`, `ConfigType.Binding`), which the setup extension needs to become a package (#243). `TestCatalogueMapsEveryMethodToAShippedUse` checks that every wire method names at least one shipped user. Core-record writes (`AcceptEvent`, `PutWork`, leases, timers, waits) never cross the boundary. They are reached only through `event.accept`, `timer.arm`, `work.cancel` and `wait.progress`, which apply the same causal limits and fencing as in-process callers.
 
 ### What does not cross the boundary
 
@@ -66,12 +69,13 @@ Some couplings exist only as bootstrap glue between first-party packages. They h
 
 - GitHub `job:` waits resolve schedule job keys (`scheduleJob`), and the schedule translator decodes GitHub delivery payloads;
 - Bitbucket reads the tracker's reopen generations;
-- PostHog receives the host's telemetry events through the `inproc.Sink` surface, with the scope as an explicit argument;
 - bootstrap parses Slack thread keys for the socket's active-thread filter. That one can move into the extension as a `state.works` read.
 
 These stay in-process, which the design allows: first-party extensions run in-process behind the public interfaces. They also decide which first-party integrations can run as a subprocess package without change.
 
 In-process extensions also hold the whole `storage.Store` and the daemon's clock and dry-run flag. A subprocess gets only its KV namespaces, scoped reads, its own clock, and `dry_run` in `configure`.
+
+The host's telemetry events and setup probes used to be in-process only too. They now cross the boundary behind [permissions](#permissions).
 
 ## Transport comparison
 
@@ -232,6 +236,18 @@ The trust model is defined [below](#trust-model). Process separation is not sand
 - **`operation.call`.** Receives the validated `Authority`, never the bearer token, exactly as in-process handlers do. The authority's `connection` is the connection the calling Execution's binding names (empty when it names none), so an operation can act as it: its config arrives in `configure` and its secrets through `secret.resolve`. Executors receive the per-execution endpoint and token in `RunRequest`, as in-process executors do.
 - **`event.accept` and `work.cancel`.** Apply the same declared-family, causal-limit and own-kind checks as their in-process callers.
 
+## Permissions
+
+Some host services reach beyond an extension's own surfaces: they show it other scopes' activity or let it run things on the machine. A manifest asks for each in `permissions`, the operator sees them at install and in `open-conduit extension list` and `inspect`, and the host neither serves nor calls a method a permission gates unless the manifest declares it (`Method.Permission`, `Manifest.Enabled`); an undeclared call is `undeclared`. An unknown permission is refused as needing a newer Open Conduit, as an unknown field is.
+
+| Permission | Methods | What it allows |
+| --- | --- | --- |
+| `telemetry.sink` | `telemetry.sink` (H→E) | Receives every named telemetry event the host records, from every scope, with the scope as `scope_id`. It sees the whole machine's activity. |
+| `telemetry.capture` | `telemetry.capture` (E→H) | Records a named telemetry event for one of its configured scopes, or for the machine (`scope_id` empty). The name is at most 128 bytes, the properties at most 64 KiB and never carry `scope`. Every sink receives it. |
+| `probes` | `probe.list`, `probe.run` (E→H) | Lists and runs the read-only setup probes the host, its extensions and its executors offer, by full name. The host checks the arguments against the probe's declaration and bounds the run to 30 seconds. A probe that fails answers its reason in `error`, cut to 300 bytes. |
+
+Packages are not sandboxed (see the [trust model](#trust-model)), so a permission is the operator's consent and a guard against accidental leaks, not a security boundary. It is enforced as though it were one, because it becomes one if packages are ever sandboxed. The config host (#241) adds `config.read`.
+
 ## Manifest
 
 `protocol.Manifest` is the specification. Its example manifests are in `protocol/testdata`:
@@ -256,12 +272,22 @@ Validation rules:
 - task intervals are at least one second;
 - the command and playbooks stay inside the extension directory;
 - external stores name a declared connection type;
+- an extension type's `settings` are distinct top-level field names, each a `string`, `boolean`, `number` or `strings` with a default of that type, and its `describe` names its `list`, `name` and `detail` fields;
+- permissions are known and distinct;
 - payload schema bases are dotted names under the extension's name without a version suffix, with positive, strictly increasing readable versions; `kv_version` is not negative;
 - unknown fields are rejected. Additive manifest fields ship without a protocol version bump, so an unknown field is refused as `ErrNewerManifest` (the package needs a newer Open Conduit), not as an invalid manifest.
 
 `TestManifestRejections` covers each rule, including a `storage` capability and a semantic executor label.
 
 The same format and the same catalogue cover both workload shapes. Nothing in core distinguishes an "ingress extension" from an "executor extension". A manifest enables the methods of the surfaces it declares, and the host registers those surfaces through the same runtime interfaces it uses for in-process extensions (`TestExampleManifests`, `TestEveryMethodIsReachable`).
+
+An extension type may declare what the operator's view of an entry shows (`GET /v1/config`), the way an in-process type's `Settings` and `Describe` do. `settings` lists the top-level config fields that are safe to show, with their value types and optional defaults: the host reads each from the entry's config and leaves out a value of another type; every other field is shown by name alone. `describe` lists what an entry sets up, one line per element of the array field `list`, named by its `name` field and detailed by its `detail` field. The host reads both from the config itself, so they need no process and work offline. Neither may name a field that can carry a credential.
+
+```json
+"extensions": [{"type": "chat", "ingress": true,
+  "settings": [{"field": "team", "type": "string"}, {"field": "manage_webhook", "type": "boolean", "default": true}],
+  "describe": {"list": "jobs", "name": "name", "detail": "schedule"}}]
+```
 
 First-party extensions registered in-process have no manifest. The Slack extension and the shell executor are also built as subprocess packages with manifests ([packaging](../extension-packaging/)), but they stay registered in-process. A third-party extension's config entries are validated through `validate`.
 
@@ -344,7 +370,8 @@ What the host does enforce is the protocol surface. Every extension-to-host call
 - **`ingress.deliver`.** Only sources the last `configure` registered. The answer comes after durable acceptance.
 - **`secret.resolve`.** Only configured scopes, through a host resolver that admits only the names bound to the extension's entries, or the secret names of a connection one of those entries or one of the scope's bindings names. A connection must be granted by the scope authorization and be of one of the extension's declared connection types (B05). A connection that is not granted, that no entry or binding in the scope names, or of another type is refused. In-process extensions get the same resolver (`inproc.Host.Secrets`).
 - **`execution.persist_recovery` and `resource.*`.** Only through a run the host opened for this process (described above).
-- **Methods.** Only methods the manifest enables (`Manifest.Enabled`). A host-to-extension method sent to the host is `method_not_found`.
+- **`telemetry.capture` and `probe.*`.** Only with the [permission](#permissions) that gates them. A captured event is for a configured scope or the machine; a probe runs only with the arguments it declares.
+- **Methods.** Only methods the manifest enables (`Manifest.Enabled`), which leaves out those whose permission it does not declare. A host-to-extension method sent to the host is `method_not_found`.
 
 Restarts cannot widen authority. A restarted process gets the same identity. Causal chains, leases, KV layout records and canonical ingress identities all live in host storage, so a restart neither resets a chain nor revives a superseded lease.
 
@@ -471,3 +498,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - **Issue #123.** Added the Work display on route decisions and the Wait description on wait requests, both stored by core and shown through the API, supplied by GitHub, the tracker kit, Slack, schedule and `human.ask`. Certification criteria version 2 checks display limits and link schemes.
 - **Issue #134.** A waiting Work's display follows the routes' answer for input its Wait takes, and the daemon backfills a display for open Work from before #123 from its accepted history, once per store.
 - **Issue #233.** An operation's `Authority` carries the connection the calling Execution's binding names (`connection` on the wire), and the host hands a connection a binding names to the extension that owns its type: its config in `configure` (`binding_connections`) and its secrets through `secret.resolve`, through the one host resolver in-process extensions and packages share. Before this an extension could act only as its own entries' connections, so making a binding write as a second account needed extension-specific config and bootstrap code.
+- **Issue #239.** Carried the in-process-only host surfaces over the protocol behind manifest `permissions`: `telemetry.capture` and `telemetry.sink` (introspection's and PostHog's telemetry events) and `probe.list` and `probe.run` (setup probes). Extension types declare `settings` and `describe`, which the host reads from an entry's config, so a package's entries show typed values as bundled ones do. The host nudges its loop after a package's `event.accept` and `timer.arm`, as it does for in-process extensions. `TestInprocSurfacesAreCarried` maps every `inproc` surface to what carries it, with the remaining gaps owned by #241 and #243.

@@ -41,8 +41,65 @@ type Manifest struct {
 	// KVVersion is the layout version of the extension's own KV namespaces
 	// (07-02). The host records the version an extension last migrated to
 	// and refuses to start a manifest declaring an older one (kv_downgrade).
-	KVVersion int      `json:"kv_version,omitempty"`
-	Provides  Provides `json:"provides"`
+	KVVersion int `json:"kv_version,omitempty"`
+	// Permissions are the host services beyond the extension's own surfaces
+	// it asks to use: the operator sees them at install and in `extension
+	// list`, and the host refuses a call one of them gates unless it is
+	// declared here. Packages are not sandboxed, so a permission is consent
+	// and a guard against accidental leaks, but it is enforced as though it
+	// were the boundary.
+	Permissions []string `json:"permissions,omitempty"`
+	Provides    Provides `json:"provides"`
+}
+
+// Permissions an extension may declare.
+const (
+	// PermissionTelemetrySink receives every named telemetry event the host
+	// writes to its telemetry events log (telemetry.sink), from every
+	// scope: it sees the whole machine's activity.
+	PermissionTelemetrySink = "telemetry.sink"
+	// PermissionTelemetryCapture writes named telemetry events to the
+	// host's telemetry events log, which every sink receives
+	// (telemetry.capture).
+	PermissionTelemetryCapture = "telemetry.capture"
+	// PermissionProbes lists and runs the setup probes the host, its
+	// extensions and its executors offer (probe.list, probe.run): read-only
+	// checks of the machine, such as whether Claude Code is signed in.
+	PermissionProbes = "probes"
+)
+
+// PermissionInfo says what a permission lets an extension do, in words the
+// operator reads at install.
+type PermissionInfo struct {
+	Name, Summary string
+}
+
+// KnownPermissions are the permissions this host understands, in the order
+// they are shown.
+var KnownPermissions = []PermissionInfo{
+	{PermissionTelemetrySink, "receives every telemetry event the host records, from every scope"},
+	{PermissionTelemetryCapture, "records telemetry events, which every telemetry sink receives"},
+	{PermissionProbes, "runs the read-only setup probes of the host, its extensions and executors"},
+}
+
+// PermissionSummary is the summary of a known permission ("" otherwise).
+func PermissionSummary(name string) string {
+	for _, p := range KnownPermissions {
+		if p.Name == name {
+			return p.Summary
+		}
+	}
+	return ""
+}
+
+// Allows reports whether the manifest declares permission.
+func (m Manifest) Allows(permission string) bool {
+	for _, p := range m.Permissions {
+		if p == permission {
+			return true
+		}
+	}
+	return false
 }
 
 // Provides lists the surfaces an extension implements. Each enables the
@@ -120,6 +177,119 @@ type TypeDecl struct {
 type ExtensionDecl struct {
 	Type    string `json:"type"`
 	Ingress bool   `json:"ingress,omitempty"`
+	// Settings are the entry config fields that are safe to show the
+	// operator, with their value types. The host reads them from an entry's
+	// config itself, so the operator's view of the config (and `config
+	// check`) needs no process; every other field is shown by name alone.
+	Settings []SettingDecl `json:"settings,omitempty"`
+	// Describe lists what an entry sets up (a schedule's jobs), read by the
+	// host from the entry's config.
+	Describe *DescribeDecl `json:"describe,omitempty"`
+}
+
+// Setting value types.
+const (
+	SettingString  = "string"
+	SettingBoolean = "boolean"
+	SettingNumber  = "number"
+	SettingStrings = "strings"
+)
+
+// SettingDecl is one top-level entry config field safe to show the operator
+// (extension.Setting). A field missing from the config shows Default when
+// one is declared, and is left out otherwise; a value of another type is
+// left out. It must never name a field that can carry a credential.
+type SettingDecl struct {
+	Field   string          `json:"field"`
+	Type    string          `json:"type"`
+	Default json.RawMessage `json:"default,omitempty"`
+}
+
+// DescribeDecl says what an entry sets up: one line per element of the
+// top-level array field List, named by the element's Name field and
+// detailed by its Detail field (a string, number or boolean; "" when
+// absent). Elements without a string Name are skipped.
+type DescribeDecl struct {
+	List   string `json:"list"`
+	Name   string `json:"name"`
+	Detail string `json:"detail,omitempty"`
+}
+
+var fieldPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]{0,62}$`)
+
+// Value is the setting's value in an entry config object: the field's
+// value when it has the declared type, else Default when the field is
+// absent; false when there is none.
+func (d SettingDecl) Value(config map[string]json.RawMessage) (any, bool) {
+	raw, ok := config[d.Field]
+	if !ok || string(raw) == "null" {
+		if len(d.Default) == 0 {
+			return nil, false
+		}
+		raw = d.Default
+	}
+	return settingValue(d.Type, raw)
+}
+
+func settingValue(typ string, raw json.RawMessage) (any, bool) {
+	var ok bool
+	switch typ {
+	case SettingString:
+		var v string
+		ok = json.Unmarshal(raw, &v) == nil
+		return v, ok
+	case SettingBoolean:
+		var v bool
+		ok = json.Unmarshal(raw, &v) == nil
+		return v, ok
+	case SettingNumber:
+		var v float64
+		ok = json.Unmarshal(raw, &v) == nil
+		if ok && v == float64(int64(v)) {
+			return int64(v), true
+		}
+		return v, ok
+	case SettingStrings:
+		var v []string
+		ok = json.Unmarshal(raw, &v) == nil
+		if v == nil {
+			v = []string{}
+		}
+		return v, ok
+	}
+	return nil, false
+}
+
+// DescribeEntry is one line DescribeDecl yields.
+type DescribeEntry struct{ Name, Detail string }
+
+// Entries are the lines an entry config yields.
+func (d DescribeDecl) Entries(config map[string]json.RawMessage) []DescribeEntry {
+	var items []map[string]json.RawMessage
+	if json.Unmarshal(config[d.List], &items) != nil {
+		return nil
+	}
+	var out []DescribeEntry
+	for _, item := range items {
+		var name string
+		if json.Unmarshal(item[d.Name], &name) != nil || name == "" {
+			continue
+		}
+		e := DescribeEntry{Name: name}
+		if raw, ok := item[d.Detail]; ok && d.Detail != "" {
+			var v any
+			if json.Unmarshal(raw, &v) == nil {
+				switch x := v.(type) {
+				case string:
+					e.Detail = x
+				case float64, bool:
+					e.Detail = strings.TrimSpace(string(raw))
+				}
+			}
+		}
+		out = append(out, e)
+	}
+	return out
 }
 
 // Family mirrors extension.EventFamily: a family is re-derivable through
@@ -270,6 +440,18 @@ func (m Manifest) Validate() error {
 	} else if !filepath.IsAbs(m.Command[0]) && strings.HasPrefix(filepath.Clean(m.Command[0]), "..") {
 		fail("command %q leaves the extension directory", m.Command[0])
 	}
+	granted := map[string]bool{}
+	for _, perm := range m.Permissions {
+		if PermissionSummary(perm) == "" {
+			// A permission this host does not know is from a newer release,
+			// as an unknown field is.
+			return fmt.Errorf("%w: permission %q", ErrNewerManifest, perm)
+		}
+		if granted[perm] {
+			fail("duplicate permission %q", perm)
+		}
+		granted[perm] = true
+	}
 	p := m.Provides
 	seen := map[string]bool{}
 	unique := func(kind, name string) {
@@ -309,6 +491,28 @@ func (m Manifest) Validate() error {
 	for _, x := range p.Extensions {
 		ident("extension type", x.Type)
 		ingress = ingress || x.Ingress
+		fields := map[string]bool{}
+		for _, st := range x.Settings {
+			if !fieldPattern.MatchString(st.Field) || fields[st.Field] {
+				fail("extension type %q setting %q must be a distinct field name", x.Type, st.Field)
+			}
+			fields[st.Field] = true
+			switch st.Type {
+			case SettingString, SettingBoolean, SettingNumber, SettingStrings:
+				if len(st.Default) > 0 {
+					if _, ok := settingValue(st.Type, st.Default); !ok {
+						fail("extension type %q setting %q default is not a %s", x.Type, st.Field, st.Type)
+					}
+				}
+			default:
+				fail("extension type %q setting %q type %q must be string, boolean, number or strings", x.Type, st.Field, st.Type)
+			}
+		}
+		if d := x.Describe; d != nil {
+			if !fieldPattern.MatchString(d.List) || !fieldPattern.MatchString(d.Name) || d.Detail != "" && !fieldPattern.MatchString(d.Detail) {
+				fail("extension type %q describe must name its list, name and detail fields", x.Type)
+			}
+		}
 	}
 	families := map[string]bool{}
 	for _, f := range p.Families {
@@ -458,7 +662,8 @@ func SourceNamespace(name, ns string) bool {
 
 // Enabled reports the catalogue methods a manifest enables, sorted: the
 // lifecycle and always-available methods plus those of each declared
-// surface. The host serves and calls nothing else for this extension.
+// surface, less those whose permission it does not declare. The host serves
+// and calls nothing else for this extension.
 func (m Manifest) Enabled() []string {
 	p := m.Provides
 	on := map[string]bool{"": true}
@@ -509,7 +714,7 @@ func (m Manifest) Enabled() []string {
 	set("render", p.Render)
 	var out []string
 	for _, method := range Methods {
-		if on[method.Provides] {
+		if on[method.Provides] && (method.Permission == "" || m.Allows(method.Permission)) {
 			out = append(out, method.Name)
 		}
 	}

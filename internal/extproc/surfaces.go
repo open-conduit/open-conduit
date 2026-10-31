@@ -155,6 +155,22 @@ func (e remoteExporter) Export(ctx context.Context, records []observability.Reco
 }
 func (e remoteExporter) Shutdown(context.Context) error { return nil }
 
+// Sinks reports whether the package receives the host's telemetry events
+// (permission telemetry.sink).
+func (r *Remote) Sinks() bool { return r.m.Allows(protocol.PermissionTelemetrySink) }
+
+// Capture hands the package one of the host's telemetry events
+// (telemetry.sink), bounded; a package without the permission gets
+// nothing.
+func (r *Remote) Capture(ctx context.Context, scope, name string, at time.Time, props map[string]any) error {
+	if !r.Sinks() {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	return r.p.Call(ctx, "telemetry.sink", protocol.TelemetryEvent{ScopeID: scope, Name: name, At: at, Properties: props}, nil)
+}
+
 // Annotate returns the extension's annotations for a Work (manifest
 // annotate), bounded; a failure contributes nothing.
 func (r *Remote) Annotate(ctx context.Context, w domain.Work) []protocol.Annotation {

@@ -108,6 +108,8 @@ type InstallResult struct {
 	Name, Version, Dir string
 	// Previous is the replaced release's version ("" for a new install).
 	Previous string
+	// Permissions are those the installed release's manifest declares.
+	Permissions []string
 }
 
 // ErrInstalled refuses installing over an installed package without Update.
@@ -241,7 +243,7 @@ func Rollback(root, name string) (InstallResult, error) {
 		return InstallResult{}, err
 	}
 	_ = os.Remove(filepath.Join(root, stagingDir))
-	return InstallResult{Name: name, Version: old.Manifest.Version, Dir: dest, Previous: cur.Manifest.Version}, nil
+	return InstallResult{Name: name, Version: old.Manifest.Version, Dir: dest, Previous: cur.Manifest.Version, Permissions: old.Manifest.Permissions}, nil
 }
 
 // Remove deletes an installed package and the release kept for rollback.
@@ -261,7 +263,7 @@ func Remove(root, name string) (InstallResult, error) {
 		return InstallResult{}, err
 	}
 	_ = os.RemoveAll(filepath.Join(root, previousDir, name))
-	return InstallResult{Name: name, Version: pkg.Manifest.Version, Dir: dest}, nil
+	return InstallResult{Name: name, Version: pkg.Manifest.Version, Dir: dest, Permissions: pkg.Manifest.Permissions}, nil
 }
 
 // Paths are an extension's host-side directories under the state directory.

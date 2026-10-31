@@ -84,7 +84,17 @@ func inprocRegistry(reg *config.Registry, xs []inproc.Extension) {
 				case protocol.ValidateConnection:
 					reg.Connections[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
 				case protocol.ValidateExtension:
-					reg.Extensions[c.Type] = config.ExtensionType{Ingress: c.Ingress, Validate: v, Settings: c.Settings}
+					t := config.ExtensionType{Ingress: c.Ingress, Validate: v, Settings: c.Settings}
+					if describe := c.Describe; describe != nil {
+						t.Describe = func(raw json.RawMessage) []config.Entry {
+							var out []config.Entry
+							for _, e := range describe(raw) {
+								out = append(out, config.Entry{Name: e.Name, Detail: e.Detail})
+							}
+							return out
+						}
+					}
+					reg.Extensions[c.Type] = t
 				case protocol.ValidateRoute:
 					reg.HandlerConfig[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
 					if c.Binding != nil {
@@ -432,18 +442,23 @@ type telemetryFanout struct {
 	primary interface {
 		Capture(ctx context.Context, scope, name string, at time.Time, props map[string]any) error
 	}
-	sinks []inproc.Sink
+	// sinks are the extensions that take the events (installed packages
+	// with the telemetry.sink permission among them), read per event since
+	// packages join the list after the log opens.
+	sinks func() []inproc.Sink
 }
 
 func (f telemetryFanout) Capture(ctx context.Context, scope, name string, at time.Time, props map[string]any) error {
 	err := f.primary.Capture(ctx, scope, name, at, props)
-	for _, s := range f.sinks {
-		_ = s.Capture(ctx, scope, name, at, props)
+	if f.sinks != nil {
+		for _, s := range f.sinks() {
+			_ = s.Capture(ctx, scope, name, at, props)
+		}
 	}
 	return err
 }
 
-func (d *daemon) inprocSinks() []inproc.Sink {
+func (d *daemon) sinks() []inproc.Sink {
 	var out []inproc.Sink
 	for _, x := range d.inproc {
 		if s, ok := x.(inproc.Sink); ok {

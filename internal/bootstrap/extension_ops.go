@@ -63,7 +63,7 @@ func ExtensionOps(version, commit string) *cli.ExtensionOps {
 			if r.Update {
 				action = "updated"
 			}
-			return cli.ExtensionChange{Action: action, Name: res.Name, Version: res.Version, Previous: res.Previous, Dir: res.Dir,
+			return cli.ExtensionChange{Action: action, Name: res.Name, Version: res.Version, Previous: res.Previous, Dir: res.Dir, Permissions: permissions(res.Permissions),
 				Notes: []string{"Takes effect at the next open-conduit serve.", "Certify it with: open-conduit extension certify " + res.Dir}}, nil
 		},
 		Rollback: func(configPath, name string) (cli.ExtensionChange, error) {
@@ -71,7 +71,7 @@ func ExtensionOps(version, commit string) *cli.ExtensionOps {
 			if err != nil {
 				return cli.ExtensionChange{}, diagnosed(name, err)
 			}
-			return cli.ExtensionChange{Action: "rolled back", Name: res.Name, Version: res.Version, Previous: res.Previous, Dir: res.Dir,
+			return cli.ExtensionChange{Action: "rolled back", Name: res.Name, Version: res.Version, Previous: res.Previous, Dir: res.Dir, Permissions: permissions(res.Permissions),
 				Notes: []string{"Takes effect at the next open-conduit serve.", "If the newer release migrated its KV layout, the daemon refuses this one (kv_downgrade): restore a backup taken before the update instead."}}, nil
 		},
 		Remove: func(configPath, stateDir, name string, force bool) (cli.ExtensionChange, error) {
@@ -136,7 +136,16 @@ func describe(p extproc.Package) cli.ExtensionPackage {
 	if m.Provides.Setup != nil {
 		provides = append(provides, "setup "+m.Provides.Setup.Type)
 	}
-	return cli.ExtensionPackage{Name: m.Name, Version: m.Version, Summary: m.Summary, Protocol: m.Protocol, Dir: p.Dir, Digest: p.Digest, Provides: provides}
+	return cli.ExtensionPackage{Name: m.Name, Version: m.Version, Summary: m.Summary, Protocol: m.Protocol, Dir: p.Dir, Digest: p.Digest, Provides: provides, Permissions: permissions(m.Permissions)}
+}
+
+// permissions describes a manifest's permissions for the operator.
+func permissions(names []string) []cli.ExtensionPermission {
+	var out []cli.ExtensionPermission
+	for _, n := range names {
+		out = append(out, cli.ExtensionPermission{Name: n, Summary: protocol.PermissionSummary(n)})
+	}
+	return out
 }
 
 // firstPartyTaken lists the in-process registrations' names, offline.

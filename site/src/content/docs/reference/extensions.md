@@ -18,6 +18,8 @@ open-conduit extension rollback my-extension
 open-conduit extension remove my-extension           # refused while the config uses it
 ```
 
+A package that needs a host service beyond its own surfaces, such as receiving every scope's telemetry events or running setup probes, declares a [permission](../../architecture/extension-protocol/#permissions) for it. `inspect`, `install` and `list` show each permission and what it allows, and the daemon refuses a call the manifest did not declare.
+
 :::caution
 The protocol and packaging are provisional and may still change.
 :::

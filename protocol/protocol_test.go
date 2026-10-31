@@ -19,7 +19,7 @@ import (
 // read; every wire method must name at least one of them.
 var firstParty = map[string]bool{
 	"github": true, "slack": true, "linear": true, "jira": true, "bitbucket": true, "schedule": true,
-	"introspection": true, "human": true, "posthog": true, "git": true, "shell": true, "claude-code": true, "legacy-job": true,
+	"introspection": true, "human": true, "posthog": true, "git": true, "shell": true, "claude-code": true, "legacy-job": true, "setup": true,
 }
 
 func TestCatalogueMapsEveryMethodToAShippedUse(t *testing.T) {
@@ -177,6 +177,9 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Operations = append(m.Provides.Operations, protocol.OperationDecl{Name: "chat.wait", Kind: protocol.OperationWait}, protocol.OperationDecl{Name: "chat.note", Kind: protocol.OperationEmit, Commit: true})
 	m.Provides.DependencyFilter, m.Provides.RunEnvironment = true, true
 	m.Provides.Routes[0].Samples = true
+	for _, p := range protocol.KnownPermissions {
+		m.Permissions = append(m.Permissions, p.Name)
+	}
 	m.Provides.WorkKinds = append(m.Provides.WorkKinds, protocol.WorkKindDecl{Kind: "chat.job", Standing: true, Trigger: true})
 	m.Provides.Executors[0].Name, m.Provides.Resources[0].Type = "chat-runner", "chat-ws"
 	if err := m.Validate(); err != nil {
@@ -214,6 +217,11 @@ func TestManifestRejections(t *testing.T) {
 		"guidance too long":    {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "guidance": "` + strings.Repeat("x", extension.MaxGuidance+1) + `"}`},
 		"filter without wait":  {`"webhooks": true,`, `"webhooks": true, "dependency_filter": true,`},
 		"kinds without routes": {`"routes": [{"handler": "chat", "config": true}],`, ``},
+		"duplicate permission": {`"name": "chat"`, `"name": "chat", "permissions": ["probes", "probes"]`},
+		"setting type":         {`"ingress": true}`, `"ingress": true, "settings": [{"field": "team", "type": "object"}]}`},
+		"setting default":      {`"ingress": true}`, `"ingress": true, "settings": [{"field": "team", "type": "boolean", "default": "yes"}]}`},
+		"duplicate setting":    {`"ingress": true}`, `"ingress": true, "settings": [{"field": "team", "type": "string"}, {"field": "team", "type": "string"}]}`},
+		"describe fields":      {`"ingress": true}`, `"ingress": true, "describe": {"list": "", "name": "name"}}`},
 	}
 	for name, c := range cases {
 		mutated := strings.Replace(string(base), c[0], c[1], 1)
@@ -241,6 +249,7 @@ func TestManifestUnknownFieldNeedsNewerHost(t *testing.T) {
 		"top-level field":    {`"name": "chat"`, `"name": "chat", "requires": "2.0"`},
 		"storage capability": {`"webhooks": true,`, `"webhooks": true, "storage": {"kv": true},`},
 		"semantic label":     {`"setup":`, `"executors": [{"name": "chat-agent", "capabilities": {"toolbelt": "mcp", "coding": true}}], "setup":`},
+		"unknown permission": {`"name": "chat"`, `"name": "chat", "permissions": ["config.write"]`},
 	} {
 		mutated := strings.Replace(string(base), c[0], c[1], 1)
 		if mutated == string(base) {

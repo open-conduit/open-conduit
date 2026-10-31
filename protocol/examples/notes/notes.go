@@ -55,6 +55,13 @@ const (
 	Schema     = "notes.note"
 	IndexNS    = "notes.index"
 	Recurrence = "notes.daily"
+	// TelemetryTask records a notes_pass telemetry event for each scope
+	// and the machine, and writes the host's probes, and the output of
+	// ProbeName run with its "say" argument, to probes.json in the state
+	// directory.
+	TelemetryTask = "notes-telemetry"
+	ProbeName     = "host.echo"
+	PassEvent     = "notes_pass"
 )
 
 // Options select the release and test behaviour of one process.
@@ -92,34 +99,41 @@ func Manifest(o Options) protocol.Manifest {
 	if o.StableIdentity {
 		cmd = append(cmd, "--stable-identity")
 	}
-	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: fmt.Sprintf("0.%d.0", o.Release), Summary: "Example external extension: a note service.", Command: cmd, KVVersion: kvVersion(o.Release), Provides: protocol.Provides{
-		Extensions: []protocol.ExtensionDecl{{Type: "notes", Ingress: true}},
-		Families: []protocol.Family{
-			{Type: Changed, ReDerivable: true},
-			{Type: Deleted, Loss: "Deletions arrive only by push; one missed while push is down is never observed."},
-			{Type: Indexed, ReDerivable: true},
-			{Type: Annotated, ReDerivable: true},
-		},
-		Schemas:     []protocol.SchemaDecl{{Name: Schema, Versions: schemaVersions(o.Release)}},
-		Routes:      []protocol.RouteDecl{{Handler: "notes"}},
-		WorkKinds:   []protocol.WorkKindDecl{{Kind: Kind, Trigger: true}},
-		Recurrences: []string{Recurrence},
-		Operations:  []protocol.OperationDecl{{Name: "notes.lookup", Kind: protocol.OperationHandler}, {Name: "notes.annotate", Kind: protocol.OperationEmit, Commit: true}},
-		Tasks:       []protocol.TaskDecl{{Name: "notes-index", IntervalSeconds: 60}, {Name: "notes-derive", IntervalSeconds: 60}},
-		Checks:      []protocol.CheckDecl{{Name: "notes"}},
-		Render:      true,
-		// 07-03 surfaces.
-		Webhooks:  true,
-		Resources: []protocol.ResourceDecl{{Type: Scratch, Modes: []string{extension.ResourceWork}}},
-		Exporters: true,
-		Annotate:  true,
-		// A run of Work in a notes scope gets NOTES_WORK, the Work it runs,
-		// and NOTES_CONNECTION, the connection its binding names.
-		RunEnvironment: true,
-		Actions:        true,
-		Panels:         true,
-		Setup:          &protocol.SetupDecl{Type: Name, Summary: "add a scope watching a note service file", Usage: "[--service FILE]"},
-	}}
+	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: fmt.Sprintf("0.%d.0", o.Release), Summary: "Example external extension: a note service.", Command: cmd, KVVersion: kvVersion(o.Release),
+		// It mirrors the host's telemetry events to sink.log, records one
+		// per indexing pass, and runs the host's probes (TelemetryTask).
+		Permissions: []string{protocol.PermissionTelemetrySink, protocol.PermissionTelemetryCapture, protocol.PermissionProbes},
+		Provides: protocol.Provides{
+			// An entry's service file and labels are safe to show the operator.
+			Extensions: []protocol.ExtensionDecl{{Type: "notes", Ingress: true,
+				Settings: []protocol.SettingDecl{{Field: "service", Type: protocol.SettingString}, {Field: "watch", Type: protocol.SettingBoolean, Default: json.RawMessage(`true`)}},
+				Describe: &protocol.DescribeDecl{List: "labels", Name: "name", Detail: "note"}}},
+			Families: []protocol.Family{
+				{Type: Changed, ReDerivable: true},
+				{Type: Deleted, Loss: "Deletions arrive only by push; one missed while push is down is never observed."},
+				{Type: Indexed, ReDerivable: true},
+				{Type: Annotated, ReDerivable: true},
+			},
+			Schemas:     []protocol.SchemaDecl{{Name: Schema, Versions: schemaVersions(o.Release)}},
+			Routes:      []protocol.RouteDecl{{Handler: "notes"}},
+			WorkKinds:   []protocol.WorkKindDecl{{Kind: Kind, Trigger: true}},
+			Recurrences: []string{Recurrence},
+			Operations:  []protocol.OperationDecl{{Name: "notes.lookup", Kind: protocol.OperationHandler}, {Name: "notes.annotate", Kind: protocol.OperationEmit, Commit: true}},
+			Tasks:       []protocol.TaskDecl{{Name: "notes-index", IntervalSeconds: 60}, {Name: "notes-derive", IntervalSeconds: 60}, {Name: TelemetryTask, IntervalSeconds: 60}},
+			Checks:      []protocol.CheckDecl{{Name: "notes"}},
+			Render:      true,
+			// 07-03 surfaces.
+			Webhooks:  true,
+			Resources: []protocol.ResourceDecl{{Type: Scratch, Modes: []string{extension.ResourceWork}}},
+			Exporters: true,
+			Annotate:  true,
+			// A run of Work in a notes scope gets NOTES_WORK, the Work it runs,
+			// and NOTES_CONNECTION, the connection its binding names.
+			RunEnvironment: true,
+			Actions:        true,
+			Panels:         true,
+			Setup:          &protocol.SetupDecl{Type: Name, Summary: "add a scope watching a note service file", Usage: "[--service FILE]"},
+		}}
 }
 
 // Note is one item of the note service.
@@ -138,6 +152,7 @@ type ServiceFile struct {
 // Ingress is the note service adapter.
 type Ingress struct {
 	Service        string
+	Scope          string
 	Release        int
 	StableIdentity bool
 }

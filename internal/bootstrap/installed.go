@@ -46,6 +46,7 @@ var (
 	_ inproc.Tasker     = (*installed)(nil)
 	_ inproc.Checker    = (*installed)(nil)
 	_ inproc.Exporting  = (*installed)(nil)
+	_ inproc.Sink       = (*installed)(nil)
 )
 
 func (x *installed) Name() string { return x.m.Name }
@@ -66,7 +67,8 @@ func (x *installed) Types() []inproc.ConfigType {
 		out = append(out, inproc.ConfigType{Kind: protocol.ValidateConnection, Type: c.Type, Validate: x.validator(protocol.ValidateConnection, c.Type)})
 	}
 	for _, e := range p.Extensions {
-		out = append(out, inproc.ConfigType{Kind: protocol.ValidateExtension, Type: e.Type, Ingress: e.Ingress, Validate: x.validator(protocol.ValidateExtension, e.Type)})
+		out = append(out, inproc.ConfigType{Kind: protocol.ValidateExtension, Type: e.Type, Ingress: e.Ingress, Validate: x.validator(protocol.ValidateExtension, e.Type),
+			Settings: declaredSettings(e.Settings), Describe: declaredDescribe(e.Describe)})
 	}
 	for _, r := range p.Routes {
 		if r.Config {
@@ -213,7 +215,57 @@ func (x *installed) Exporter() observability.Exporter {
 	return discardExporter{}
 }
 
+// Capture hands the package one of the host's telemetry events when its
+// manifest declares the telemetry.sink permission, and drops it otherwise.
+func (x *installed) Capture(ctx context.Context, scope, name string, at time.Time, props map[string]any) error {
+	if x.r == nil {
+		return nil
+	}
+	return x.r.Capture(ctx, scope, name, at, props)
+}
+
 type discardExporter struct{}
 
 func (discardExporter) Export(context.Context, []observability.Record) error { return nil }
 func (discardExporter) Shutdown(context.Context) error                       { return nil }
+
+// declaredSettings reads the settings an entry type declares from an
+// entry's config, so the host shows a package's safe fields without asking
+// the package (and offline).
+func declaredSettings(decls []protocol.SettingDecl) func(json.RawMessage) []extension.Setting {
+	if len(decls) == 0 {
+		return nil
+	}
+	return func(raw json.RawMessage) []extension.Setting {
+		var config map[string]json.RawMessage
+		if json.Unmarshal(raw, &config) != nil {
+			return nil
+		}
+		var out []extension.Setting
+		for _, d := range decls {
+			if v, ok := d.Value(config); ok {
+				out = append(out, extension.Setting{Name: d.Field, Value: v})
+			}
+		}
+		return out
+	}
+}
+
+// declaredDescribe reads the lines an entry type's describe declaration
+// yields from an entry's config.
+func declaredDescribe(d *protocol.DescribeDecl) func(json.RawMessage) []inproc.Entry {
+	if d == nil {
+		return nil
+	}
+	return func(raw json.RawMessage) []inproc.Entry {
+		var config map[string]json.RawMessage
+		if json.Unmarshal(raw, &config) != nil {
+			return nil
+		}
+		var out []inproc.Entry
+		for _, e := range d.Entries(config) {
+			out = append(out, inproc.Entry{Name: e.Name, Detail: e.Detail})
+		}
+		return out
+	}
+}

@@ -334,6 +334,9 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		WaitProgress: func(ctx context.Context, owner string, work domain.ID, progress string) error {
 			return d.waitProgress(owner)(ctx, work, progress)
 		},
+		Nudge:   d.poke,
+		Capture: d.telemetry.Capture,
+		Probes:  d.setupProbes,
 	}
 }
 

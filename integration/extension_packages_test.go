@@ -580,3 +580,123 @@ func TestWaitProgressOverProtocol(t *testing.T) {
 		t.Fatalf("calls %+v, want %+v", calls, want)
 	}
 }
+
+// TestPermissionsOverProtocol runs the example package, which declares
+// every permission, through the methods they gate: it records telemetry
+// events and runs the host's probes from a task, and receives the host's
+// telemetry events as a sink. A manifest without the permissions is refused
+// each call, and the host checks what a permitted call asks.
+func TestPermissionsOverProtocol(t *testing.T) {
+	notesPath, _ := extensionBinaries(t)
+	e := newExtEnv(t)
+	type captured struct{ scope, name string }
+	var mu sync.Mutex
+	var captures []captured
+	deps := e.deps()
+	deps.Capture = func(_ context.Context, scope, name string, at time.Time, props map[string]any) error {
+		mu.Lock()
+		defer mu.Unlock()
+		if at.IsZero() || props["release"] != 2.0 {
+			return errors.New("an event without its time or properties")
+		}
+		captures = append(captures, captured{scope, name})
+		return nil
+	}
+	deps.Probes = func() map[string]extension.SetupProbe {
+		return map[string]extension.SetupProbe{
+			notes.ProbeName: {Name: "echo", Summary: "says its argument back", Args: []extension.ProbeArg{{Name: "say", Required: true}},
+				Run: func(_ context.Context, args map[string]string) (extension.ProbeResult, error) {
+					return extension.ProbeResult{Command: "echo " + args["say"], Output: map[string]string{"said": args["say"]}}, nil
+				}},
+			"host.broken": {Name: "broken", Summary: "fails", Run: func(context.Context, map[string]string) (extension.ProbeResult, error) {
+				return extension.ProbeResult{Command: "false"}, errors.New("gh is not signed in")
+			}},
+		}
+	}
+	o := e.options(notes.Name)
+	r := e.load(e.install(notes.Manifest(notes.Options{Release: 2}), notesPath), deps, o)
+	ctx := context.Background()
+
+	t.Run("capture_and_probes", func(t *testing.T) {
+		if err := r.Task(ctx, notes.TelemetryTask); err != nil {
+			t.Fatal(err)
+		}
+		mu.Lock()
+		got := append([]captured(nil), captures...)
+		mu.Unlock()
+		if want := []captured{{string(extensionScope), notes.PassEvent}, {"", notes.PassEvent}}; !reflect.DeepEqual(got, want) {
+			t.Fatalf("captured %+v, want %+v", got, want)
+		}
+		raw, err := os.ReadFile(filepath.Join(o.StateDir, "probes.json"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var out struct {
+			Probes []protocol.ProbeInfo    `json:"probes"`
+			Result protocol.ProbeRunResult `json:"result"`
+		}
+		if err := json.Unmarshal(raw, &out); err != nil {
+			t.Fatal(err)
+		}
+		if len(out.Probes) != 2 || out.Probes[1].Name != notes.ProbeName || !out.Probes[1].Args[0].Required {
+			t.Fatalf("probes %+v", out.Probes)
+		}
+		if out.Result.Command != "echo hello" || string(out.Result.Output) != `{"said":"hello"}` || out.Result.Error != "" {
+			t.Fatalf("probe result %+v", out.Result)
+		}
+	})
+	t.Run("sink", func(t *testing.T) {
+		if !r.Sinks() {
+			t.Fatal("the package declares telemetry.sink")
+		}
+		if err := r.Capture(ctx, "any-scope", "agent_turn", time.Now(), map[string]any{"outcome": "completed"}); err != nil {
+			t.Fatal(err)
+		}
+		raw, err := os.ReadFile(filepath.Join(o.StateDir, "sink.log"))
+		if err != nil || string(raw) != "any-scope agent_turn\n" {
+			t.Fatalf("sink log %q %v", raw, err)
+		}
+	})
+	t.Run("checked", func(t *testing.T) {
+		host := pipeHost(t, r.Service())
+		if err := host.Capture(ctx, "other-scope", notes.PassEvent, time.Time{}, nil); !errors.Is(err, extension.ErrUnauthorized) {
+			t.Fatalf("capture for a scope that does not use the package: %v", err)
+		}
+		if err := host.Capture(ctx, "", notes.PassEvent, time.Time{}, map[string]any{"scope": "x"}); !errors.Is(err, extension.ErrInvalid) {
+			t.Fatalf("a scope among the properties: %v", err)
+		}
+		if _, err := host.Probe(ctx, notes.ProbeName, nil); !errors.Is(err, extension.ErrInvalid) {
+			t.Fatalf("a probe without its required argument: %v", err)
+		}
+		if _, err := host.Probe(ctx, notes.ProbeName, map[string]string{"say": "x", "cmd": "rm"}); !errors.Is(err, extension.ErrInvalid) {
+			t.Fatalf("a probe with an undeclared argument: %v", err)
+		}
+		if _, err := host.Probe(ctx, "host.missing", nil); !errors.Is(err, storage.ErrNotFound) {
+			t.Fatalf("an unknown probe: %v", err)
+		}
+		res, err := host.Probe(ctx, "host.broken", nil)
+		if err != nil || res.Error != "gh is not signed in" || res.Command != "false" {
+			t.Fatalf("a failing probe answers its reason: %+v %v", res, err)
+		}
+	})
+	t.Run("undeclared", func(t *testing.T) {
+		m := notes.Manifest(notes.Options{Fixture: true})
+		if len(m.Permissions) != 0 {
+			t.Fatal("the fixture profile declares no permissions")
+		}
+		svc, err := extproc.NewService(m, deps)
+		if err != nil {
+			t.Fatal(err)
+		}
+		host := pipeHost(t, svc)
+		if err := host.Capture(ctx, "", "fixture_event", time.Time{}, nil); !errors.Is(err, extension.ErrUndeclared) {
+			t.Fatalf("capture without telemetry.capture: %v", err)
+		}
+		if _, err := host.Probes(ctx); !errors.Is(err, extension.ErrUndeclared) {
+			t.Fatalf("probe.list without probes: %v", err)
+		}
+		if _, err := host.Probe(ctx, notes.ProbeName, map[string]string{"say": "x"}); !errors.Is(err, extension.ErrUndeclared) {
+			t.Fatalf("probe.run without probes: %v", err)
+		}
+	})
+}

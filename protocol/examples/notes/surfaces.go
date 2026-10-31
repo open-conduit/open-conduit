@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -281,4 +282,46 @@ func (Actions) Invoke(_ context.Context, c extension.ActionCall) (extension.Acti
 		return extension.ActionPlan{}, &extension.OperationError{Code: "invalid_input", Message: "a remark needs some text"}
 	}
 	return extension.ActionPlan{Event: domain.Event{Type: Annotated, CorrelationKey: &k}, Message: "remark recorded on note " + k.ExternalID}, nil
+}
+
+// telemetry records a pass event for each configured scope and the machine
+// (telemetry.capture), then lists the host's probes and runs ProbeName
+// (probe.list, probe.run), writing both to probes.json.
+func telemetry(ctx context.Context, h *sdk.Host, o Options, scopes []string) error {
+	sort.Strings(scopes)
+	for _, scope := range append(scopes, "") {
+		if err := h.Capture(ctx, domain.ID(scope), PassEvent, time.Time{}, map[string]any{"release": o.Release}); err != nil {
+			return err
+		}
+	}
+	probes, err := h.Probes(ctx)
+	if err != nil {
+		return err
+	}
+	res, err := h.Probe(ctx, ProbeName, map[string]string{"say": "hello"})
+	if err != nil {
+		return err
+	}
+	if o.StateDir == nil || o.StateDir() == "" {
+		return nil
+	}
+	out, err := json.Marshal(map[string]any{"probes": probes, "result": res})
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(o.StateDir(), "probes.json"), out, 0o600)
+}
+
+// appendLine appends one line to a file in the state directory.
+func appendLine(stateDir func() string, file, line string) error {
+	if stateDir == nil || stateDir() == "" {
+		return nil
+	}
+	f, err := os.OpenFile(filepath.Join(stateDir(), file), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer f.Close()
+	_, err = fmt.Fprintln(f, line)
+	return err
 }

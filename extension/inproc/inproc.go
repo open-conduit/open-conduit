@@ -53,7 +53,14 @@ type ConfigType struct {
 	// Settings, for an entry type only, optionally lists the entry's config
 	// fields that are safe to show the operator, with typed values.
 	Settings func(config json.RawMessage) []extension.Setting
+	// Describe, for an entry type only, optionally lists what an entry's
+	// config sets up (a schedule's jobs and when they run), for the
+	// operator's view of the config. It must not reveal secrets.
+	Describe func(config json.RawMessage) []Entry
 }
+
+// Entry is one thing an extension entry sets up, named and described.
+type Entry struct{ Name, Detail string }
 
 // Typed extensions own config types.
 type Typed interface {

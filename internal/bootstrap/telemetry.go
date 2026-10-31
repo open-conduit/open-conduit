@@ -47,7 +47,7 @@ func (d *daemon) openTelemetry() error {
 		return err
 	}
 	d.telemetryFile = f
-	d.telemetry = telemetryFanout{primary: &telemetryLog{file: f}, sinks: d.inprocSinks()}
+	d.telemetry = telemetryFanout{primary: &telemetryLog{file: f}, sinks: d.sinks}
 	return nil
 }
 
