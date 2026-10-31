@@ -15,7 +15,7 @@ A `github` connection holds non-secret config: `api_url` (default `https://api.g
 - `app_private_key` for app auth.
 - `bot_private_key` for the bot App.
 
-A private key is the App's PEM. `parseKey` also accepts it hex-encoded, which is how macOS Keychain's `security find-generic-password -w` returns a multi-line value (so a `keyring:` reference reads it that way there), and with its line breaks written as `\n`, as an environment variable often holds it. Setting up a bot App is a [guide](../../guides/github-bot/).
+A private key is the App's PEM. `parseKey` also accepts it hex-encoded, which is how macOS Keychain's `security find-generic-password -w` returns a multi-line value (so a `keyring:` reference reads it that way there), and with its line breaks written as `\n`, as an environment variable often holds it. Setting up a bot App is a [guide](../../guides/github-bot/). A binding whose `connection` is a second `github` connection writes as it, so a reviewing agent writes as its own App ([a reviewer's own writer](../engineering-tools/#tool-operations)).
 
 Secrets are resolved lazily before a call, cached for the credential's lifetime and resolved again after a 401. A rotated reference therefore takes effect without a restart. Credential failures return `ErrCredential` and never include the reference or its value.
 

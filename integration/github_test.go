@@ -61,6 +61,12 @@ type ghEnv struct {
 	// observed sees the adapter's observations, as bootstrap's wait
 	// progress does; nil sees nothing.
 	observed func(context.Context, []extension.Observation)
+	// connections are the other `github` connections the host lets the
+	// extension act as in ghScope (ones a binding names), by ID, each with
+	// the token it signs in with on the fake.
+	connMu      sync.Mutex
+	connections map[string]string
+	writers     *gh.Writers
 }
 
 func ghExtensionConfig() string {
@@ -117,7 +123,16 @@ func (e *ghEnv) open() {
 			e.observed(ctx, obs)
 		}
 	}})
-	if e.projector, err = gh.NewProjector(gh.ProjectorOptions{Store: store, Client: e.client, Settings: e.settings, Now: e.clock.Now, SearchDelay: 30 * time.Second}); err != nil {
+	e.writers = gh.NewWriters(func(scope domain.ID, id string) (json.RawMessage, gh.SecretFunc, bool) {
+		e.connMu.Lock()
+		defer e.connMu.Unlock()
+		token, ok := e.connections[id]
+		if !ok || scope != ghScope {
+			return nil, nil, false
+		}
+		return json.RawMessage(`{"api_url":"` + e.fake.URL + `"}`), func(context.Context, string) (string, error) { return token, nil }, true
+	}, e.clock.Now)
+	if e.projector, err = gh.NewProjector(gh.ProjectorOptions{Store: store, Client: e.client, Settings: e.settings, Now: e.clock.Now, SearchDelay: 30 * time.Second, Writers: e.writers, Scope: ghScope}); err != nil {
 		t.Fatal(err)
 	}
 	e.webhook = gh.WebhookHandler(func(context.Context) (string, error) { return ghSecret, nil }, func(ctx context.Context, d extension.Delivery) error {

@@ -141,6 +141,7 @@ type Server struct {
 	statuses                         map[string][]Status
 	tokens                           map[string]bool
 	apps                             map[string]*rsa.PublicKey
+	identities                       map[string]User   // writer by token or App ID
 	installs                         map[string]string // installation token → app id
 	scopes                           map[string]TokenScope
 	writes                           []Write
@@ -194,7 +195,7 @@ type limit struct {
 func New(repo string, tokens ...string) *Server {
 	s := &Server{Repo: repo, now: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), nextID: 1000, issues: map[int]*Issue{}, pulls: map[int]*Pull{},
 		events: map[int][]IssueEvent{}, checks: map[string][]CheckRun{}, statuses: map[string][]Status{}, tokens: map[string]bool{},
-		apps: map[string]*rsa.PublicKey{}, installs: map[string]string{}, scopes: map[string]TokenScope{}, failNext: map[string]int{}, loseNext: map[string]int{}, tokenTTL: time.Hour,
+		apps: map[string]*rsa.PublicKey{}, identities: map[string]User{}, installs: map[string]string{}, scopes: map[string]TokenScope{}, failNext: map[string]int{}, loseNext: map[string]int{}, tokenTTL: time.Hour,
 		commits: map[string]time.Time{}, contents: map[string][]byte{}, branches: map[string]bool{}, files: map[string]string{}, fileData: map[string][]byte{},
 		protection: map[string][]string{}, rulesets: map[string][]string{}}
 	for _, t := range tokens {
@@ -231,6 +232,25 @@ func AppBot(id string) (slug, login string, userID int64) {
 	n, _ := strconv.ParseInt(id, 10, 64)
 	slug = "app-" + id
 	return slug, slug + "[bot]", 9000000 + n
+}
+
+// SetIdentity sets who a token, or an App's installation tokens (by App
+// ID), write as. Unset writers are open-conduit[bot].
+func (s *Server) SetIdentity(tokenOrApp string, u User) {
+	s.mu.Lock()
+	s.identities[tokenOrApp] = u
+	s.mu.Unlock()
+}
+
+// writer is the account a write signed in with token is recorded as.
+func (s *Server) writer(token string) User {
+	if app, ok := s.installs[token]; ok {
+		token = app
+	}
+	if u, ok := s.identities[token]; ok {
+		return u
+	}
+	return User{Login: "open-conduit[bot]", Type: "Bot"}
 }
 
 // TokenScope is what an installation token was minted for: the
@@ -1203,7 +1223,7 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		_ = json.Unmarshal(body, &req)
 		n := len(s.issues) + 1
 		t := s.tick()
-		s.issues[n] = &Issue{Number: n, Title: req.Title, Body: req.Body, User: User{Login: "open-conduit[bot]", Type: "Bot"}, Labels: req.Labels, State: "open", Created: t, Updated: t}
+		s.issues[n] = &Issue{Number: n, Title: req.Title, Body: req.Body, User: s.writer(token), Labels: req.Labels, State: "open", Created: t, Updated: t}
 		return http.StatusCreated, s.issueJSON(s.issues[n])
 	case get && rest == "/pulls":
 		owner, _, _ := strings.Cut(s.Repo, "/")
@@ -1235,7 +1255,7 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		n := len(s.issues) + 1
 		t := s.tick()
 		sha := fmt.Sprintf("sha-%s-%d", strings.ReplaceAll(req.Head, "/", "-"), n)
-		s.issues[n] = &Issue{Number: n, Title: req.Title, Body: req.Body, User: User{Login: "open-conduit[bot]", Type: "Bot"}, State: "open", Created: t, Updated: t, Pull: true}
+		s.issues[n] = &Issue{Number: n, Title: req.Title, Body: req.Body, User: s.writer(token), State: "open", Created: t, Updated: t, Pull: true}
 		s.pulls[n] = &Pull{Number: n, HeadRef: req.Head, HeadSHA: sha, BaseRef: req.Base, Draft: req.Draft, CreatedAt: t}
 		s.commits[sha] = t
 		return http.StatusCreated, s.pullJSON(n)
@@ -1331,8 +1351,7 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 				Body string `json:"body"`
 			}
 			_ = json.Unmarshal(body, &req)
-			login := "open-conduit[bot]"
-			id := s.addComment(n, User{Login: login, Type: "Bot"}, req.Body, false, "", 0)
+			id := s.addComment(n, s.writer(token), req.Body, false, "", 0)
 			return http.StatusCreated, s.commentJSON(s.comment(id))
 		}
 		from := since(r)
@@ -1417,7 +1436,7 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 			} `json:"comments"`
 		}
 		_ = json.Unmarshal(body, &req)
-		writer := User{Login: "open-conduit[bot]", Type: "Bot"}
+		writer := s.writer(token)
 		states := map[string]string{"APPROVE": "APPROVED", "REQUEST_CHANGES": "CHANGES_REQUESTED", "COMMENT": "COMMENTED"}
 		state, known := states[req.Event]
 		if !known {
@@ -1525,7 +1544,7 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 			Body string `json:"body"`
 		}
 		_ = json.Unmarshal(body, &req)
-		id := s.addComment(n, User{Login: "open-conduit[bot]", Type: "Bot"}, req.Body, true, p.Path, p.Line)
+		id := s.addComment(n, s.writer(token), req.Body, true, p.Path, p.Line)
 		s.comment(id).ReplyTo = parent
 		return http.StatusCreated, s.commentJSON(s.comment(id))
 	}

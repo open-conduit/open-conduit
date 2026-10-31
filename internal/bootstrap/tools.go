@@ -30,14 +30,14 @@ func (d *daemon) githubSourcesList() []gh.Source {
 	defer d.github.mu.Unlock()
 	out := make([]gh.Source, 0, len(d.github.sources))
 	for _, s := range d.github.sources {
-		out = append(out, gh.Source{Settings: s.ingress.Settings(), Client: s.client, Projector: s.projector})
+		out = append(out, gh.Source{Settings: s.ingress.Settings(), Connection: s.connection, Client: s.client, Projector: s.projector})
 	}
 	return out
 }
 
 // openTools prepares the shared tools instance.
 func (d *daemon) openTools() error {
-	tools, err := gh.NewTools(gh.ToolsOptions{Store: d.coord, Sources: d.githubSourcesList, Now: d.now, Jobs: d.scheduleJob, WaitProgress: d.waitProgress(gh.Type)})
+	tools, err := gh.NewTools(gh.ToolsOptions{Store: d.coord, Sources: d.githubSourcesList, Now: d.now, Jobs: d.scheduleJob, WaitProgress: d.waitProgress(gh.Type), Writers: d.githubWriters()})
 	if err != nil {
 		return err
 	}

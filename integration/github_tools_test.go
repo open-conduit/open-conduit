@@ -42,9 +42,12 @@ type toolsEnv struct {
 	extra     []gh.Source
 	aliasOK   bool
 	// jobs resolves job: conditions (05-02); nil refuses them.
-	jobs   func(context.Context, domain.ID, string) (domain.CorrelationKey, []string, bool)
-	mu     sync.Mutex
-	tokens map[domain.ID]string
+	jobs func(context.Context, domain.ID, string) (domain.CorrelationKey, []string, bool)
+	// connection is the connection the agent binding names, pinned on each
+	// new attempt's authority as the runtime pins it from the config.
+	connection string
+	mu         sync.Mutex
+	tokens     map[domain.ID]string
 }
 
 var agentOps = append([]string{extension.ReadContext, extension.Emit, extension.Wait, extension.DeclareOutcome}, gh.Operations()...)
@@ -111,7 +114,9 @@ func (e *toolsEnv) compose() {
 			if s.Binding.Name == "hold" {
 				return runtime.ToolbeltGrant{Operations: []string{extension.Emit, gh.OpHoldStatus, gh.OpHold}, EventTypes: belt.EventTypes()}, nil
 			}
-			return runtime.ToolbeltGrant{Operations: agentOps, EventTypes: belt.EventTypes()}, nil
+			e.mu.Lock()
+			defer e.mu.Unlock()
+			return runtime.ToolbeltGrant{Operations: agentOps, EventTypes: belt.EventTypes(), Connection: e.connection}, nil
 		},
 		AuthorizeAlias: authorize,
 	})
@@ -123,8 +128,8 @@ func (e *toolsEnv) compose() {
 			return runtime.SetWaitProgressInTx(tx, gh.Type, work, text)
 		})
 	}
-	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, WaitProgress: progress, Sources: func() []gh.Source {
-		return append([]gh.Source{{Settings: e.settings, Client: e.client, Projector: e.projector}}, e.extra...)
+	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, WaitProgress: progress, Writers: e.writers, Sources: func() []gh.Source {
+		return append([]gh.Source{{Settings: e.settings, Connection: "github", Client: e.client, Projector: e.projector}}, e.extra...)
 	}}); err != nil {
 		t.Fatal(err)
 	}
@@ -1054,6 +1059,97 @@ func TestGitHubPRReviewIsSubmittedOnce(t *testing.T) {
 	e.sync()
 	if q := e.queued(w.ID); len(q) != 0 {
 		t.Fatalf("requester heard: %v", q)
+	}
+	if q := strings.Join(e.queued(owner.ID), " "); strings.Contains(q, gh.TypeCommentHuman) || !strings.Contains(q, gh.TypeCommentAgent) {
+		t.Fatalf("owner queued: %v", q)
+	}
+}
+
+// A binding whose connection is a second `github` connection writes as that
+// connection's account: it can approve and request changes on a PR the
+// builder bot opened, a lost review is still recovered once, and labels and
+// the builder's own writes stay on the entry's connection. A binding that
+// names no connection, the entry's, or one of another type writes as the
+// entry's connection, as before.
+func TestGitHubReviewerBindingWritesAsItsOwnConnection(t *testing.T) {
+	e := newToolsEnv(t)
+	reviewer := githubtest.User{Login: "open-conduit-reviewer[bot]", Type: "Bot"}
+	e.fake.AddToken("tok-reviewer")
+	e.fake.SetIdentity("tok-reviewer", reviewer)
+	e.connMu.Lock()
+	e.connections = map[string]string{"github-reviewer": "tok-reviewer"}
+	e.connMu.Unlock()
+
+	n, owner := e.claim("Header wobbles", "", "bug")
+	builder := githubtest.User{Login: "open-conduit[bot]", Type: "Bot"}
+	pr := e.fake.OpenPull("Fix the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "h1", builder)
+	e.sync()
+
+	// The default is unchanged: these bindings write as the builder.
+	for _, conn := range []string{"", "github", "slack"} {
+		e.mu.Lock()
+		e.connection = conn
+		e.mu.Unlock()
+		d := e.request("thread-default-" + conn)
+		da := e.start(d.ID)
+		_, err := e.call(da, gh.OpPRReview, "before", map[string]any{"number": pr, "event": "approve"})
+		refused(t, err, "own_pull_request")
+		e.finish(da, nil)
+	}
+
+	e.mu.Lock()
+	e.connection = "github-reviewer"
+	e.mu.Unlock()
+	w := e.request("thread-review")
+	a := e.start(w.ID)
+	before := len(e.fake.Writes())
+	if out := e.must(a, gh.OpPRReview, "approve", map[string]any{"number": pr, "event": "approve", "body": "Looks right."}); out["state"] != "posted" {
+		t.Fatalf("approve: %v", out)
+	}
+	if out := e.must(a, gh.OpPRComment, "note", map[string]any{"number": pr, "body": "One more thing."}); out["state"] != "posted" {
+		t.Fatalf("comment: %v", out)
+	}
+	e.fake.LoseNextResponse("/repos/"+ghRepo+"/pulls/"+itoa(pr)+"/reviews", 1)
+	changes := map[string]any{"number": pr, "event": "request_changes", "body": "Name the offset.", "comments": []map[string]any{{"path": "header.go", "line": 12, "body": "Here."}}}
+	if out := e.must(a, gh.OpPRReview, "changes", changes); out["state"] != "pending" {
+		t.Fatalf("lost review: %v", out)
+	}
+	e.finish(a, nil)
+	e.clock.Add(31 * time.Second)
+	if res := e.converge(); res.Recovered != 1 {
+		t.Fatalf("recovery: %+v", res)
+	}
+
+	reviews := e.fake.Reviews(pr)
+	if len(reviews) != 2 || reviews[0].State != "APPROVED" || reviews[1].State != "CHANGES_REQUESTED" {
+		t.Fatalf("reviews: %+v", reviews)
+	}
+	for _, r := range reviews {
+		if r.User != reviewer || gh.ParseAgent(r.Body).Work != string(w.ID) {
+			t.Fatalf("review not the reviewer's: %+v", r)
+		}
+	}
+	for _, x := range e.fake.Writes()[before:] {
+		review := strings.HasSuffix(x.Path, "/reviews") || strings.HasSuffix(x.Path, "/issues/"+itoa(pr)+"/comments")
+		if x.Method == "POST" && review && x.Token != "tok-reviewer" {
+			t.Fatalf("reviewer write as %s: %s", x.Token, x.Path)
+		}
+	}
+	labels := 0
+	for _, x := range e.fake.Writes() {
+		if strings.Contains(x.Path, "/labels") {
+			labels++
+			if x.Token != "tok" {
+				t.Fatalf("label write as %s", x.Token)
+			}
+		}
+	}
+	if labels == 0 {
+		t.Fatal("no label writes")
+	}
+	e.sync()
+	if q := e.queued(w.ID); len(q) != 0 {
+		t.Fatalf("reviewer heard its own posts: %v", q)
 	}
 	if q := strings.Join(e.queued(owner.ID), " "); strings.Contains(q, gh.TypeCommentHuman) || !strings.Contains(q, gh.TypeCommentAgent) {
 		t.Fatalf("owner queued: %v", q)

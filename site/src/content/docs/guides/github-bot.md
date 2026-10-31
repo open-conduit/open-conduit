@@ -106,9 +106,38 @@ A few things to know:
 - **A run that can't get the bot's identity doesn't start.** It fails as `run environment unavailable`, for example when GitHub can't be reached or the bot App's key is wrong.
 - **Without a sandbox, your credentials are still there.** An unsandboxed run uses the bot's credentials by default, but it runs as you. An agent that goes looking can still find your SSH key, your keychain or `gh`'s token. To keep it to the bot's access, run the binding in a [sandbox](../sandboxes/).
 
+## A second App for a reviewing agent
+
+An agent that reviews another agent's PR writes as the same bot, so GitHub sees the PR's author reviewing it and accepts only comments. To let it approve or request changes, give the reviewing binding its own App.
+
+1. Create and install a second App as in steps 1 to 3, for example `acme-reviewer`. It needs **Issues** and **Pull requests** read and write. Store its key, for example as `github-reviewer-key`.
+2. Add it as its own connection, beside `github`, with the same `api_url` and sign-in, and the reviewer App as its bot:
+
+   ```json
+   {
+     "id": "github-reviewer",
+     "type": "github",
+     "config": {"bot_app_id": "654321"},
+     "secret_refs": {"token": "cmd:gh auth token", "bot_private_key": "keyring:github-reviewer-key"}
+   }
+   ```
+
+3. Add `github-reviewer` to the scope's `authorization.connections`, and make it the reviewing binding's connection:
+
+   ```json
+   "connection": "github-reviewer"
+   ```
+
+Use `open-conduit config edit` for all three, then `config check`, and apply the file as in step 4. `config check` refuses a connection that isn't granted to the scope. Keep the same `api_url` as the `github` connection: a reviewer connection on another GitHub is refused when the binding first writes, and `doctor --check-secrets` reports it.
+
+That binding's comments, replies and reviews now show as `acme-reviewer[bot]`. Everything else stays on the `github` connection: Open Conduit still reads and claims each issue and PR once, sets the labels as the first bot, and the builder's PRs are still opened by it. Other bindings are unchanged. `doctor --check-secrets` lists it under each repository's entry, as `binding connection github-reviewer: bot writer authenticated`.
+
+Which binding reviews which PR is up to your routes and playbooks; the writer only changes whose name is on the review.
+
 ## What changes for you
 
 - **You can approve agents' PRs.** The bot opened them, so a review from you counts towards branch protection.
-- **The bot can't approve its own PRs.** GitHub never lets an author approve their own PR. An agent asked to review a PR another agent opened can only comment on it; approving it is for you.
+- **The bot can't approve its own PRs.** GitHub never lets an author approve their own PR. An agent whose binding has no GitHub connection of its own, asked to review a PR another agent opened, can only comment on it. Give the reviewing binding [a second App](#a-second-app-for-a-reviewing-agent) and it can approve and request changes too.
+- **A reviewer App's approval may not be enough.** It counts towards a required number of approvals when the App can write to the repository. An App can't be a code owner, though, so where branch protection requires a code owner's review, or a particular person's, you still have to approve.
 - **Agents still recognise each other.** Open Conduit marks each agent comment, so a comment from another agent wakes the agent it was meant for, whoever posted it.
 - **Comments from before stay yours.** Only writes made after the change come from the bot.
