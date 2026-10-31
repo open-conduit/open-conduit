@@ -23,6 +23,14 @@ open-conduit service uninstall
 - The unit lives at `~/Library/LaunchAgents/com.open-conduit.daemon.plist` or `~/.config/systemd/user/open-conduit.service`.
 - Stop the service before `backup create` or `state check`, which need the daemon stopped.
 
+## macOS: several open-conduit rows in Privacy & Security
+
+System Settings → Privacy & Security → App Management (and other lists such as Files and Folders) can show several `open-conduit` entries. They are permission records, not running daemons: `open-conduit service status` shows the one daemon there is.
+
+- **Why there are several.** The daemon starts your agents, so when an agent or a command it runs changes another app (removing a workspace with an Electron or browser app in `node_modules`, say), macOS asks on open-conduit's behalf. Release binaries built before Developer ID signing are signed ad hoc, and macOS ties an ad hoc binary's permission to that exact build. Each upgrade (and each local `make build`) that asks again adds another row. Releases signed with a Developer ID keep one row across upgrades.
+- **Clearing them.** Select each `open-conduit` row and press the minus button. macOS asks again the next time it's needed and adds a single row. `tccutil reset SystemPolicyAppBundles` clears the whole App Management list, other apps included.
+- **Allow or not.** Turning App Management off for open-conduit only stops agents from changing other apps; the daemon itself doesn't need it. If an agent's step fails with `Operation not permitted` on a path inside an `.app`, that's the cause.
+
 :::note[Linux]
 A systemd user unit runs only while you're logged in unless you run `loginctl enable-linger`. Without a desktop session the keyring may be locked, so prefer `file:` or `cmd:` secret references there.
 :::

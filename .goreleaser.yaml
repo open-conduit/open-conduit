@@ -36,6 +36,27 @@ builds:
     ldflags:
       - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}}
 
+# macOS signing. Unsigned, the Go linker signs each binary ad hoc, and macOS
+# keys an ad hoc binary's privacy permissions (App Management, say) to the hash
+# of that exact build, so every release asks again and leaves another
+# open-conduit row in Privacy & Security (#216). A Developer ID signature keys
+# them to the team and identifier instead, which survive upgrades. Runs only
+# when the MACOS_SIGN_* and MACOS_NOTARY_* secrets are set; without them the
+# binaries stay ad hoc and the release goes ahead.
+notarize:
+  macos:
+    - enabled: '{{ ne (index .Env "MACOS_SIGN_P12") "" }}'
+      ids: [open-conduit, os]
+      sign:
+        certificate: '{{ index .Env "MACOS_SIGN_P12" }}'
+        password: '{{ index .Env "MACOS_SIGN_PASSWORD" }}'
+      notarize:
+        issuer_id: '{{ index .Env "MACOS_NOTARY_ISSUER_ID" }}'
+        key_id: '{{ index .Env "MACOS_NOTARY_KEY_ID" }}'
+        key: '{{ index .Env "MACOS_NOTARY_KEY" }}'
+        wait: true
+        timeout: 20m
+
 archives:
   - ids: [open-conduit, os]
     formats: [tar.gz]
