@@ -93,6 +93,9 @@ type Provides struct {
 	Setup *SetupDecl `json:"setup,omitempty"`
 	// Annotate marks an extension that contributes Work annotations.
 	Annotate bool `json:"annotate,omitempty"`
+	// RunEnvironment marks an extension that contributes an environment
+	// layer to the runs of Work in the scopes that use it (run.environment).
+	RunEnvironment bool `json:"run_environment,omitempty"`
 	// Actions marks an extension that offers actions on scopes and Work
 	// (work.actions, work.act).
 	Actions bool `json:"actions,omitempty"`
@@ -500,6 +503,7 @@ func (m Manifest) Enabled() []string {
 	set("checks", len(p.Checks) > 0)
 	set("setup", p.Setup != nil)
 	set("annotate", p.Annotate)
+	set("run_environment", p.RunEnvironment)
 	set("actions", p.Actions)
 	set("panels", p.Panels)
 	set("render", p.Render)

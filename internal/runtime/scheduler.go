@@ -45,6 +45,10 @@ func (e *CapacityError) Is(target error) bool { return target == ErrCapacity }
 var ErrResourceHeld = errors.New("previous attempt resource exclusion unresolved")
 var ErrExecutorCall = errors.New("executor operation failed")
 var ErrSecretUnavailable = errors.New("execution secrets unavailable")
+
+// ErrEnvironmentUnavailable is an extension's run environment layer that
+// could not be had (Options.Environment).
+var ErrEnvironmentUnavailable = errors.New("run environment unavailable")
 var ErrResourceUnavailable = errors.New("execution resource provider unavailable")
 
 type SchedulerOptions struct {
@@ -87,6 +91,12 @@ type SchedulerOptions struct {
 	// before Run/Recover/Resume, outside coordination transactions. Values are
 	// never persisted; failure blocks this attempt with a safe diagnostic.
 	Secrets func(context.Context, AttemptState) (map[string]string, error)
+	// Environment gathers the run environment layer the extensions of the
+	// attempt's scope contribute (extension.RunEnvironment) before Run and
+	// Resume, outside coordination transactions; a recovery adopts a
+	// process that already has its environment. Values are never persisted;
+	// a failure fails the attempt before the executor is called.
+	Environment func(context.Context, AttemptState) (map[string]string, error)
 	// Resources binds the attempt's optional resource provider immediately
 	// before Run/Recover/Resume, outside coordination transactions. A nil
 	// broker means the binding declares no resource. Core never inspects it.
@@ -974,6 +984,14 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 			return attempt, errors.Join(ErrSecretUnavailable, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
 		}
 		attempt.Request.Context.Secrets = secrets
+	}
+	if s.options.Environment != nil && !recovering {
+		env, envErr := s.options.Environment(ctx, state)
+		if envErr != nil {
+			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "run environment unavailable"}}
+			return attempt, errors.Join(ErrEnvironmentUnavailable, envErr, s.fail(ctx, attempt.Lease, failure, true, nil))
+		}
+		attempt.Request.Context.Env = env
 	}
 	if s.options.Resources != nil {
 		broker, resourceErr := s.options.Resources(ctx, state)

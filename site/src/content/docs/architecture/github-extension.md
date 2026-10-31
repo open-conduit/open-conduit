@@ -48,6 +48,19 @@ The client enforces these rules:
 - App auth signs an RS256 JWT, looks up the installation and caches installation tokens until five minutes before they expire. A 401 invalidates the cached token and retries once.
 - Writes (labels, comments, reactions) use the bot App when one is configured. Reads use the sign-in identity.
 - `GitToken` mints a token for git that is never cached: an installation token limited to one repository with `contents: write`, from the bot App or else the sign-in App. Its caller revokes it with `RevokeToken` (`DELETE /installation/token`). On a token connection it is `ErrStaticToken` ([`github.git.credential`](../engineering-tools/#tool-operations)).
+- `GitIdentity` is that same App's bot user as git's author and committer (`GET /app` with the App's JWT for its slug, then `GET /users/<slug>[bot]` for the user id), looked up once; `ErrStaticToken` on a token connection.
+
+## Git as the bot
+
+A connection's `git` is who git works as in the runs of its repositories' Work: `owner` (the default) leaves the operator's own credentials and identity, and `bot` works as the App. `bot` needs an App (`auth` `app` or a `bot_app_id`); the connection validator refuses it on a token connection without one.
+
+The extension does this through the generic run environment hook (`extension.RunEnvironment`, protocol `run.environment`; see [extension protocol](../extension-protocol/)), with nothing in an executor or the core that knows about GitHub. `Tools.RunEnvironment` binds the run's Work as a toolbelt call would (its issue's repository, else the scope's only one). When that repository's connection has `git` `bot`, it returns this layer:
+
+- `credential.helper` set empty, then to `!os git-credential`, through `GIT_CONFIG_*`. The empty entry clears the helpers git would otherwise ask first (the operator's keychain or `gh`), so pushes go only through [`github.git.credential`](../engineering-tools/#tool-operations), which the binding must be granted.
+- `commit.gpgsign` and `tag.gpgsign` off, because the operator's key isn't the bot's.
+- `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` set to `GitIdentity`.
+
+Every other run gets nothing. A failed identity lookup fails the run before it starts (`run environment unavailable`). Doctor's `git_bot` check warns when a git workspace in such a scope pushes over SSH, which skips the helper.
 
 ## Ingress and canonical identity
 

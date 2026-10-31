@@ -41,12 +41,23 @@ var (
 // ConnectionConfig is the nonsecret config of a `github` connection. Token
 // auth reads secret `token` (use `cmd:gh auth token` for the gh CLI login);
 // app auth reads `app_private_key`. An optional bot App performs writes.
+// Git is who git works as in the runs of the connection's repositories:
+// GitOwner (the default) leaves the operator's own credentials and
+// identity; GitBot pushes with tokens the App mints and commits as its bot
+// user, and needs an App (auth app, or a bot App).
 type ConnectionConfig struct {
 	APIURL   string `json:"api_url,omitempty"`
 	Auth     string `json:"auth,omitempty"`
 	AppID    string `json:"app_id,omitempty"`
 	BotAppID string `json:"bot_app_id,omitempty"`
+	Git      string `json:"git,omitempty"`
 }
+
+// Who git works as (ConnectionConfig.Git).
+const (
+	GitOwner = "owner"
+	GitBot   = "bot"
+)
 
 func strict(data []byte, out any) error {
 	if len(bytes.TrimSpace(data)) == 0 {
@@ -94,6 +105,17 @@ func ParseConnection(data []byte) (ConnectionConfig, error) {
 	}
 	if c.BotAppID != "" && !digitPattern.MatchString(c.BotAppID) {
 		return c, errors.New("github connection: bot_app_id must be numeric")
+	}
+	switch c.Git {
+	case "":
+		c.Git = GitOwner
+	case GitOwner:
+	case GitBot:
+		if c.Auth != "app" && c.BotAppID == "" {
+			return c, errors.New(`github connection: git "bot" pushes and commits as a GitHub App: set bot_app_id (or auth "app")`)
+		}
+	default:
+		return c, errors.New("github connection: git must be owner or bot")
 	}
 	return c, nil
 }

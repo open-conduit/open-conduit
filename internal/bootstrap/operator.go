@@ -641,6 +641,7 @@ func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtim
 		{Name: "config", Status: runtime.CheckOK, Code: "valid", Detail: configPath},
 		capabilityCheckFor(snapshot, executors),
 		claudeVersionCheck(ctx, snapshot),
+		gitBotCheck(ctx, snapshot, filepath.Dir(configPath)),
 		skipped,
 	}
 }

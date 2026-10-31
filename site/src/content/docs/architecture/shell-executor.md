@@ -34,9 +34,10 @@ The environment follows the B05 order:
 
 1. A sanitized baseline: only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR` and `TERM` survive. Unrelated credentials, `OPEN_CONDUIT_*` and inherited `OS_*` variables are dropped.
 2. The workspace provider's layer, when a workspace is bound. Reserved and invalid names are dropped from it. With no workspace there is no provider layer.
-3. Binding `env`.
-4. Binding-selected secrets, resolved by the scheduler immediately before launch.
-5. The trusted toolbelt and execution variables, which no earlier layer can override.
+3. The extensions' run layer (`ExecutionContext.Env`), applied the same way, its `GIT_CONFIG_*` entries after the provider layer's.
+4. Binding `env`.
+5. Binding-selected secrets, resolved by the scheduler immediately before launch.
+6. The trusted toolbelt and execution variables, which no earlier layer can override.
 
 `OS_ENDPOINT`, `OS_TOKEN` and the `os` binary are the toolbelt protocol names and keep their `OS_` form despite the product rename. The executor prepends `Options.ToolbeltDir` (by default the directory of the running executable when it contains `os`) to `PATH`. `OS_TOKEN_FILE` points at a private 0600 file holding the same credential: the host-kept `ToolbeltTokenFile` in the execution's run directory when the host gives one ([execution endpoints](../toolbelt-management/#execution-endpoints)), otherwise a file the segment writes itself. Adoption replaces that file, so the `os` CLI reads it first and falls back to `OS_TOKEN`. Without a toolbelt token none of the three transport variables is set. Identity variables are always present:
 

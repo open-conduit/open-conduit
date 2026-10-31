@@ -321,9 +321,16 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		// srt's own sockets go in the host's short temporary directory.
 		wrapperEnv = []string{"TMPDIR=/tmp"}
 	}
+	belt := r.Context.ToolbeltToken != "" && r.Context.ToolbeltEndpoint != "" && e.o.ToolbeltDir != ""
+	// A run environment layer (the extensions') may call the toolbelt
+	// through `os`, as git's `!os git-credential` does: a host process
+	// that has one gets the toolbelt client too. A container's comes below.
+	if len(r.Context.Env) > 0 && belt && !contained {
+		env = withToolbelt(env, e.o.ToolbeltDir, r.Context.ToolbeltEndpoint, tokenFile(r, dir))
+	}
 	var plan extension.SandboxPlan
 	if contained {
-		if r.Context.ToolbeltToken != "" && r.Context.ToolbeltEndpoint != "" && e.o.ToolbeltDir != "" {
+		if belt {
 			// The MCP server inherits the endpoint, which the provider
 			// moves to its forward, and the token file's path.
 			env = append(env, "OS_ENDPOINT="+r.Context.ToolbeltEndpoint, "OS_TOKEN_FILE="+tokenFile(r, dir))
@@ -450,9 +457,11 @@ func (e *Executor) preset(ctx context.Context, rn *run, schema, reason, summary 
 }
 
 // environment applies the B05 order: sanitized baseline → resource-provider
-// layer → binding env → selected secrets → trusted execution identity, which
-// no earlier layer can override. Toolbelt credentials never enter claude's
-// own environment; only the MCP server receives them.
+// layer → the extensions' run layer (ExecutionContext.Env) → binding env →
+// selected secrets → trusted execution identity, which no earlier layer can
+// override. Toolbelt credentials enter claude's own environment only for a
+// run with a run layer (withToolbelt) or in a container; otherwise only the
+// MCP server receives them.
 func (e *Executor) environment(cfg Config, r extension.RunRequest, layer map[string]string) ([]string, error) {
 	vars := map[string]string{}
 	for _, kv := range e.o.Environ() {
@@ -464,11 +473,8 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, layer map[str
 	if vars["PATH"] == "" {
 		vars["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
 	}
-	for name, value := range layer {
-		if envName.MatchString(name) && !reserved(name) && !strings.ContainsRune(value, 0) {
-			vars[name] = value
-		}
-	}
+	extension.ApplyEnv(vars, layer)
+	extension.ApplyEnv(vars, r.Context.Env)
 	for name, value := range cfg.Env {
 		vars[name] = value
 	}

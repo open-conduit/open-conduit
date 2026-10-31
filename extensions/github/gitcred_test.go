@@ -8,6 +8,8 @@ import (
 	"encoding/json"
 	"encoding/pem"
 	"errors"
+	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"slices"
@@ -61,6 +63,7 @@ func gitCredLab(t *testing.T, auth string) (*githubtest.Server, *gh.Tools, credC
 		t.Fatal(err)
 	}
 	fake.AddApp("42", &key.PublicKey)
+	fake.AddApp("43", &key.PublicKey)
 	pemText := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
 	cfg, err := gh.ParseConnection([]byte(auth))
 	if err != nil {
@@ -252,3 +255,59 @@ type recorder struct {
 func (r *recorder) Header() http.Header         { return r.h }
 func (r *recorder) Write(b []byte) (int, error) { return len(b), nil }
 func (r *recorder) WriteHeader(c int)           { r.code = c }
+
+// TestRunEnvironment: a connection with git "bot" gives each run of its
+// repository's Work the toolbelt as git's only credential helper, signing
+// off and the bot user of the App that mints git's tokens (the bot App,
+// else the sign-in App) as author and committer, with the noreply address
+// GitHub links to that user. The identity is looked up once. A connection
+// without git "bot" gives nothing, and git "bot" needs an App.
+func TestRunEnvironment(t *testing.T) {
+	for _, c := range []struct{ name, auth, app string }{
+		{"sign-in App", `{"auth":"app","app_id":"42","git":"bot"}`, "42"},
+		{"bot App", `{"auth":"token","bot_app_id":"43","git":"bot"}`, "43"},
+		{"bot App over a sign-in App", `{"auth":"app","app_id":"42","bot_app_id":"43","git":"bot"}`, "43"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			fake, tools, call := gitCredLab(t, c.auth)
+			_, login, id := githubtest.AppBot(c.app)
+			email := fmt.Sprintf("%d+%s@users.noreply.github.com", id, login)
+			for i := 0; i < 2; i++ {
+				env, err := tools.RunEnvironment(context.Background(), extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: "eng", WorkID: call.work, ExecutionID: "x/1"}})
+				if err != nil {
+					t.Fatal(err)
+				}
+				want := map[string]string{
+					"GIT_CONFIG_COUNT": "4",
+					"GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
+					"GIT_CONFIG_KEY_1": "credential.helper", "GIT_CONFIG_VALUE_1": "!os git-credential",
+					"GIT_CONFIG_KEY_2": "commit.gpgsign", "GIT_CONFIG_VALUE_2": "false",
+					"GIT_CONFIG_KEY_3": "tag.gpgsign", "GIT_CONFIG_VALUE_3": "false",
+					"GIT_AUTHOR_NAME": login, "GIT_AUTHOR_EMAIL": email, "GIT_COMMITTER_NAME": login, "GIT_COMMITTER_EMAIL": email,
+				}
+				if !maps.Equal(env, want) {
+					t.Fatalf("env %v, want %v", env, want)
+				}
+			}
+			n := 0
+			for _, r := range fake.Requests() {
+				if r == "GET /app" {
+					n++
+				}
+			}
+			if n != 1 {
+				t.Errorf("GET /app %d times, want once", n)
+			}
+		})
+	}
+	_, tools, call := gitCredLab(t, `{"auth":"app","app_id":"42"}`)
+	if env, err := tools.RunEnvironment(context.Background(), extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: "eng", WorkID: call.work, ExecutionID: "x/1"}}); err != nil || env != nil {
+		t.Errorf("without git bot: %v, %v; want nothing", env, err)
+	}
+	if _, err := gh.ParseConnection([]byte(`{"auth":"token","git":"bot"}`)); err == nil {
+		t.Error(`git "bot" on a token connection without a bot App was accepted`)
+	}
+	if _, err := gh.ParseConnection([]byte(`{"git":"someone"}`)); err == nil {
+		t.Error("an unknown git was accepted")
+	}
+}

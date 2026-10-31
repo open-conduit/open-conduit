@@ -541,7 +541,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		GlobalLimit: set.Concurrency, ExecutorPools: jobExecutors(), PoolLimits: map[string]int{jobPool: set.JobConcurrency},
 		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
-		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, Secrets: d.configs.Secrets(d.resolver),
+		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, Secrets: d.configs.Secrets(d.resolver), Environment: d.runEnvironment,
 		Resources: d.bindResources, Sandbox: d.bindSandbox, Container: d.bindContainer, Signalled: d.containerSignalled, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
 		WorkKinds: kinds,
@@ -570,7 +570,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck}, d.inprocChecks(false)...), d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.scheduleCheck, d.extensionCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck, d.githubCheck, d.trackerCheck}, d.inprocChecks(false)...), d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.gitBotCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.scheduleCheck, d.extensionCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

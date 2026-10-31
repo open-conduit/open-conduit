@@ -175,6 +175,22 @@ func (r *Remote) Annotate(ctx context.Context, w domain.Work) []protocol.Annotat
 	return out.Annotations
 }
 
+// RunEnvironment asks for the extension's environment layer for a run
+// (manifest run_environment); an extension that doesn't declare one has
+// none. A failed call fails the run, as the contract says.
+func (r *Remote) RunEnvironment(ctx context.Context, req extension.RunEnvironmentRequest) (map[string]string, error) {
+	if !r.m.Provides.RunEnvironment {
+		return nil, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+	var out protocol.RunEnvironmentResult
+	if err := r.p.Call(ctx, "run.environment", protocol.RunEnvironmentParams{Owner: protocol.FromOwner(req.Owner), Connection: req.Connection}, &out); err != nil {
+		return nil, err
+	}
+	return out.Env, nil
+}
+
 // Actions returns the extension's action provider (manifest actions), which
 // is also its panel provider (manifest panels). A listing failure offers
 // nothing; an invocation's plan is checked before the host accepts it: a

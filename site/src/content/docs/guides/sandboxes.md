@@ -16,7 +16,7 @@ You pick the sandbox per binding, so one scope can say "Claude Code, in a contai
 | Filesystem | everything you can reach | what you can reach, minus `read.deny`; writes only to `write` | nothing from the host unless granted: the workspace, the Work's own home and what you list in `read` and `write` |
 | Network | any host | only `network.allow`, through srt's proxy | only `network.allow`, through a gateway container; no route out without it |
 | Open Conduit's state, config and other runs | readable | denied | not mounted |
-| GitHub credential for git | yours | yours, if you grant it | none with a GitHub App connection: a token minted for the one repository and revoked when the run ends ([below](#git-credentials)) |
+| GitHub credential for git | yours, or the bot's with the connection's `git` `bot` | yours, if you grant it, or the bot's with the connection's `git` `bot` | none with a GitHub App connection: a token minted for the one repository and revoked when the run ends ([below](#git-credentials)) |
 | Your own claude config (`~/.claude`) | shared | a config directory of its own | a home of its own for each Work |
 | `work attach` | on your machine | refused | in a container of its own |
 | Runs on | macOS, Linux | macOS, Linux | Linux Docker Engine, OrbStack on macOS |
@@ -181,6 +181,8 @@ The agent runs `git fetch` and `git push` as usual. How git signs in depends on 
 
 Open Conduit keeps the tokens it has minted in memory. If the daemon restarts during a run, it can't revoke tokens minted before the restart, but they expire on their own within the hour.
 
+To have the container's commits carry the bot's name too, set `git` to `bot` on the GitHub connection ([push and commit as the bot](../github-bot/#push-and-commit-as-the-bot)).
+
 **With a personal access token** (`GH_TOKEN` or `GITHUB_TOKEN` in the binding's secrets), the token itself goes into the container. Anything in the container can read it, and it is valid for as long and for as many repositories as you made it. If you use one, make a fine-grained token for the one repository with only the permissions the work needs.
 
 ### Attach
@@ -258,6 +260,8 @@ Unlike a container, a process sandbox reads broadly by default. **List your cred
 **A sandboxed Claude Code binding needs a config directory of its own.** Anything a run writes in claude's config, such as a hook, an MCP server or a plugin, would run as you in every claude session you start. So `~/.claude` and `~/.claude.json` stay out of a sandbox's reach. Set `CLAUDE_CONFIG_DIR` in the binding's `env` to an absolute path that no claude of yours uses, create it, and grant it in `write`. `config check` refuses a sandboxed Claude Code binding without one, or with one that is `~/.claude`, contains it or is inside it.
 
 Claude signs in separately there, since its credentials belong to the config directory (on macOS, in a Keychain entry of its own). Sign in once with `CLAUDE_CONFIG_DIR=/path/to/sandboxed-claude claude` and `/login`. Or make a token with `claude setup-token` and select it as a secret mapped to `CLAUDE_CODE_OAUTH_TOKEN` in `secret_env`.
+
+**To push as the bot rather than as you**, set `git` to `bot` on the GitHub connection ([push and commit as the bot](../github-bot/#push-and-commit-as-the-bot)). git then signs in through the run's own toolbelt with a token minted for the one repository, so you can keep `~/.config/gh` and your other GitHub credentials in `read.deny`. Add `github.com` to `network.allow` and use an HTTPS remote.
 
 `work attach` is refused for Work that ran in a process sandbox. On your machine, claude would load hooks and MCP servers the agent wrote into the workspace. If you want to attach to sandboxed Work, run it in a container instead.
 

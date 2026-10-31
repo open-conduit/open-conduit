@@ -106,6 +106,19 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, notFound(method)
 		}
 		return struct{}{}, s.ext.Exporter.Export(ctx, protocol.ToRecords(p.Records))
+	case "run.environment":
+		var p protocol.RunEnvironmentParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.ext.RunEnvironment == nil {
+			return nil, notFound(method)
+		}
+		env, err := s.ext.RunEnvironment(ctx, s.host, extension.RunEnvironmentRequest{Owner: p.Owner.Extension(), Connection: p.Connection})
+		if err != nil {
+			return nil, err
+		}
+		return protocol.RunEnvironmentResult{Env: env}, nil
 	case "work.annotate":
 		var p protocol.WorkAnnotateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

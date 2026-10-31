@@ -14,6 +14,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
 	"time"
@@ -77,6 +78,7 @@ type appToken struct {
 	key   *rsa.PrivateKey
 	inst  map[string]int64
 	cache map[int64]cachedToken
+	ident GitIdentity
 }
 
 type cachedToken struct {
@@ -244,4 +246,48 @@ func (a *appToken) scoped(ctx context.Context, repo string) (string, time.Time, 
 		return "", time.Time{}, ErrCredential
 	}
 	return t.Token, t.ExpiresAt, nil
+}
+
+// identity is the App's bot user as git's author and committer, looked up
+// once: the slug from GET /app (as the App), then the bot user's id from
+// GET /users/<slug>[bot] (with an installation token for repo).
+func (a *appToken) identity(ctx context.Context, repo string) (GitIdentity, error) {
+	a.mu.Lock()
+	ident := a.ident
+	a.mu.Unlock()
+	if ident.Name != "" {
+		return ident, nil
+	}
+	jwt, err := a.jwt(ctx)
+	if err != nil {
+		return GitIdentity{}, err
+	}
+	var app struct {
+		Slug string `json:"slug"`
+	}
+	if _, err := a.c.raw(ctx, "Bearer "+jwt, http.MethodGet, "/app", nil, &app); err != nil {
+		return GitIdentity{}, fmt.Errorf("github app: %w", err)
+	}
+	if app.Slug == "" || strings.ContainsAny(app.Slug, "/?#%\n\x00<>") {
+		return GitIdentity{}, errors.New("github app: no slug")
+	}
+	tok, err := a.token(ctx, repo)
+	if err != nil {
+		return GitIdentity{}, err
+	}
+	login := app.Slug + "[bot]"
+	var user struct {
+		ID int64 `json:"id"`
+	}
+	if _, err := a.c.raw(ctx, "Bearer "+tok, http.MethodGet, "/users/"+url.PathEscape(login), nil, &user); err != nil {
+		return GitIdentity{}, fmt.Errorf("github app bot user: %w", err)
+	}
+	if user.ID == 0 {
+		return GitIdentity{}, errors.New("github app bot user: no id")
+	}
+	ident = GitIdentity{Name: login, Email: fmt.Sprintf("%d+%s@users.noreply.%s", user.ID, login, a.c.host)}
+	a.mu.Lock()
+	a.ident = ident
+	a.mu.Unlock()
+	return ident, nil
 }

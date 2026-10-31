@@ -1141,3 +1141,37 @@ func TestProductionSchedulerAppliesWorkGrants(t *testing.T) {
 		return nil
 	})
 }
+
+// TestProductionSchedulerRunEnvironment: the extensions' run environment
+// layer reaches the executor in its ExecutionContext, asked for the
+// attempt's Work and execution. When it can't be had the attempt fails
+// before the executor is called.
+func TestProductionSchedulerRunEnvironment(t *testing.T) {
+	f, executor := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	var asked []runtime.AttemptState
+	o := schedulerDefaultOptions(f, executor)
+	o.Environment = func(_ context.Context, state runtime.AttemptState) (map[string]string, error) {
+		asked = append(asked, state)
+		if state.WorkID == "work/refused" {
+			return nil, errors.New("no identity")
+		}
+		return map[string]string{"GIT_AUTHOR_NAME": "bot"}, nil
+	}
+	s := newTestScheduler(t, f, o)
+	work := seedSchedulerWork(t, f, "env")
+	a, err := s.Start(context.Background(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a.Request.Context.Env["GIT_AUTHOR_NAME"] != "bot" || len(asked) != 1 || asked[0].WorkID != work || asked[0].ExecutionID != a.Lease.ExecutionID {
+		t.Fatalf("env %v, asked %+v", a.Request.Context.Env, asked)
+	}
+	runs := len(executor.runs)
+	refused := seedSchedulerWork(t, f, "refused")
+	if _, err := s.Start(context.Background(), refused); !errors.Is(err, runtime.ErrEnvironmentUnavailable) {
+		t.Fatalf("an unavailable run environment: %v", err)
+	}
+	if len(executor.runs) != runs {
+		t.Fatal("the executor ran without its run environment")
+	}
+}

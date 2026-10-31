@@ -44,6 +44,12 @@ type ExecutionContext struct {
 	// An executor points its process at it (OS_TOKEN_FILE) instead of
 	// writing a token file of its own.
 	ToolbeltTokenFile string
+	// Env is the run's environment layer from the extensions of the Work's
+	// scope (RunEnvironment), merged. An executor applies it with ApplyEnv
+	// after its resource's layer and before the binding's own env, and
+	// gives the process the toolbelt client (OS_ENDPOINT, OS_TOKEN_FILE and
+	// `os` on PATH) so the layer can call it.
+	Env map[string]string
 }
 type RunRequest struct {
 	Work      domain.Work

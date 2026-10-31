@@ -7,6 +7,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -184,5 +185,119 @@ func TestContainerAttach(t *testing.T) {
 	}
 	if _, err := e.ContainerAttach(context.Background(), extension.ContainerAttachRequest{Work: r.Work, Config: r.Context.Config, Home: home}); !errors.Is(err, extension.ErrNothingToAttach) {
 		t.Errorf("a host session attached in a container: %v", err)
+	}
+}
+
+// gitEntries are env's GIT_CONFIG entries in order, as key=value.
+func gitEntries(env map[string]string) []string {
+	var out []string
+	n := 0
+	for k := range env {
+		if strings.HasPrefix(k, "GIT_CONFIG_KEY_") {
+			n++
+		}
+	}
+	for i := 0; i < n; i++ {
+		out = append(out, env["GIT_CONFIG_KEY_"+strconv.Itoa(i)]+"="+env["GIT_CONFIG_VALUE_"+strconv.Itoa(i)])
+	}
+	if env["GIT_CONFIG_COUNT"] != strconv.Itoa(n) {
+		out = append(out, "COUNT="+env["GIT_CONFIG_COUNT"])
+	}
+	return out
+}
+
+// signingWorkspace is a resource whose env carries the git provider's
+// signing policy, as a workspace without `sign` does.
+type signingWorkspace struct{ dir string }
+
+func (w signingWorkspace) Acquire(context.Context, extension.ResourceRequest) (extension.Resource, error) {
+	return extension.Resource{Kind: "workspace", Ref: "lease", Dir: w.dir, Env: map[string]string{"GIT_CONFIG_COUNT": "2",
+		"GIT_CONFIG_KEY_0": "commit.gpgsign", "GIT_CONFIG_VALUE_0": "false", "GIT_CONFIG_KEY_1": "tag.gpgsign", "GIT_CONFIG_VALUE_1": "false"}}, nil
+}
+func (w signingWorkspace) Lookup(ctx context.Context, _ string) (extension.Resource, error) {
+	return w.Acquire(ctx, extension.ResourceRequest{})
+}
+
+// TestContainerGitHelperAfterSigning: the toolbelt's helper goes after the
+// workspace's signing policy rather than giving way to it.
+func TestContainerGitHelperAfterSigning(t *testing.T) {
+	h := newHarness(t)
+	e := h.executor()
+	home, ws := filepath.Join(h.root, "homes", "w"), filepath.Join(h.root, "ws")
+	_ = os.MkdirAll(home, 0o700)
+	_ = os.MkdirAll(ws, 0o700)
+	b := &fakeContainer{}
+	r, _ := h.request("work/s", "exec-s", 1, nil)
+	r.Context.Container, r.Context.ContainerHome, r.Context.Resources = b, home, signingWorkspace{ws}
+	r.Context.ToolbeltToken, r.Context.ToolbeltEndpoint = "belt", "unix:///run/belt.sock"
+	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("container turn failed: %+v", res.Outcome)
+	}
+	want := []string{"commit.gpgsign=false", "tag.gpgsign=false", "credential.helper=!os git-credential"}
+	if got := gitEntries(envMap(b.launches[0].Env)); !slices.Equal(got, want) {
+		t.Errorf("git config %q, want %q", got, want)
+	}
+}
+
+// botLayer is a run environment layer like the GitHub extension's for git
+// "bot": the toolbelt as git's only helper and a bot identity.
+var botLayer = map[string]string{"GIT_CONFIG_COUNT": "2",
+	"GIT_CONFIG_KEY_0": "credential.helper", "GIT_CONFIG_VALUE_0": "",
+	"GIT_CONFIG_KEY_1": "credential.helper", "GIT_CONFIG_VALUE_1": "!os git-credential",
+	"GIT_AUTHOR_NAME": "acme[bot]", "OS_ENDPOINT": "planted"}
+
+// TestRunEnvironmentLayer: the extensions' run layer (ExecutionContext.Env)
+// goes after the workspace's, its git config after the signing policy, and
+// a toolbelt variable in it is dropped. A container's credential helper
+// then gives way to the layer's. On the host, a run with a layer gets the
+// toolbelt client (os on PATH, the endpoint and token file) so the layer's
+// `!os git-credential` works; a run without one still gets neither.
+func TestRunEnvironmentLayer(t *testing.T) {
+	h := newHarness(t)
+	e := h.executor()
+	home, ws := filepath.Join(h.root, "homes", "w"), filepath.Join(h.root, "ws")
+	_ = os.MkdirAll(home, 0o700)
+	_ = os.MkdirAll(ws, 0o700)
+	b := &fakeContainer{}
+	r, _ := h.request("work/b", "exec-b", 1, nil)
+	r.Context.Container, r.Context.ContainerHome, r.Context.Resources = b, home, signingWorkspace{ws}
+	r.Context.ToolbeltToken, r.Context.ToolbeltEndpoint = "belt", "unix:///run/belt.sock"
+	r.Context.Env = botLayer
+	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("container turn failed: %+v", res.Outcome)
+	}
+	env := envMap(b.launches[0].Env)
+	want := []string{"commit.gpgsign=false", "tag.gpgsign=false", "credential.helper=", "credential.helper=!os git-credential"}
+	if got := gitEntries(env); !slices.Equal(got, want) {
+		t.Errorf("git config %q, want %q", got, want)
+	}
+	if env["GIT_AUTHOR_NAME"] != "acme[bot]" || env["OS_ENDPOINT"] != "unix:///run/belt.sock" {
+		t.Errorf("author %q, endpoint %q", env["GIT_AUTHOR_NAME"], env["OS_ENDPOINT"])
+	}
+
+	for _, layer := range []map[string]string{botLayer, nil} {
+		r, _ := h.request("work/h", "exec-h"+strconv.Itoa(len(layer)), 1, nil)
+		r.Context.ToolbeltToken, r.Context.ToolbeltEndpoint = "belt", "unix:///run/belt.sock"
+		r.Context.Env = layer
+		if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+			t.Fatalf("host turn failed: %+v", res.Outcome)
+		}
+		raw, _ := os.ReadFile(filepath.Join(h.fake, "env"))
+		got := envMap(strings.Split(strings.TrimSpace(string(raw)), "\n"))
+		if layer == nil {
+			if _, ok := got["OS_ENDPOINT"]; ok || got["GIT_AUTHOR_NAME"] != "" {
+				t.Errorf("a run without a layer: endpoint %q, author %q", got["OS_ENDPOINT"], got["GIT_AUTHOR_NAME"])
+			}
+			continue
+		}
+		if got["GIT_AUTHOR_NAME"] != "acme[bot]" || got["OS_ENDPOINT"] != "unix:///run/belt.sock" || got["OS_TOKEN_FILE"] == "" || !strings.HasPrefix(got["PATH"], filepath.Join(h.root, "bin")+string(os.PathListSeparator)) {
+			t.Errorf("host env: author %q, endpoint %q, token file %q, PATH %q", got["GIT_AUTHOR_NAME"], got["OS_ENDPOINT"], got["OS_TOKEN_FILE"], got["PATH"])
+		}
+		if gitEntries(got)[1] != "credential.helper=!os git-credential" {
+			t.Errorf("host git config %q", gitEntries(got))
+		}
+		if _, ok := got["OS_TOKEN"]; ok {
+			t.Error("the token itself reached claude's environment")
+		}
 	}
 }

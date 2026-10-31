@@ -61,9 +61,9 @@ func (e *Executor) containerHome(cfg Config, home string, env []string, selected
 	if cfg.Env["PATH"] == "" {
 		out = append(out, "PATH="+containerPath)
 	}
-	if github && !hasEnv(out, "GIT_CONFIG_COUNT") {
-		out = append(out, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=credential.https://github.com.helper",
-			`GIT_CONFIG_VALUE_0=!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GH_TOKEN:-$GITHUB_TOKEN}"; }; f`)
+	if github && !gitCredentialHelper(out) {
+		out = gitConfig(out, [2]string{"credential.https://github.com.helper",
+			`!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GH_TOKEN:-$GITHUB_TOKEN}"; }; f`})
 	}
 	sort.Strings(out)
 	sort.Strings(secrets)
@@ -74,13 +74,15 @@ func (e *Executor) containerHome(cfg Config, home string, env []string, selected
 // container launch that has one and no other: `os git-credential` asks the
 // host for a token for the Work's repository, which a GitHub App
 // connection mints for that repository alone and revokes when the segment
-// ends. A static GitHub token's helper (containerHome), or a binding's own
-// GIT_CONFIG_COUNT, is left as it is.
+// ends. It goes after the GIT_CONFIG entries env already sets (the
+// workspace's signing policy); a credential helper already set there (a
+// static GitHub token's, from containerHome, a binding's own or a git "bot"
+// binding's) is left as it is.
 func toolbeltGitHelper(env []string) []string {
-	if hasEnv(env, "GIT_CONFIG_COUNT") {
+	if gitCredentialHelper(env) {
 		return env
 	}
-	out := append(env, "GIT_CONFIG_COUNT=1", "GIT_CONFIG_KEY_0=credential.helper", "GIT_CONFIG_VALUE_0=!os git-credential")
+	out := gitConfig(env, [2]string{"credential.helper", "!os git-credential"})
 	sort.Strings(out)
 	return out
 }
