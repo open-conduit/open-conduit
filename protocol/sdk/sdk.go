@@ -62,7 +62,11 @@ type Extension struct {
 	Triggers    map[string]func([]domain.Event) int
 	Tasks       map[string]func(ctx context.Context, h *Host) error
 	Checks      map[string]func(ctx context.Context, h *Host, deep bool) (string, error)
-	Render      func(domain.Event) (string, bool)
+	// CheckRuns are checks that read the host's view of the configuration
+	// (p.Config) or report a status, code and items of their own. A name in
+	// both maps runs from CheckRuns.
+	CheckRuns map[string]func(ctx context.Context, h *Host, p protocol.CheckRunParams) (protocol.CheckRunResult, error)
+	Render    func(domain.Event) (string, bool)
 	// Upcasters by schema base name.
 	Upcasters map[string]Upcaster
 
@@ -337,6 +341,9 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 		var p protocol.CheckRunParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
+		}
+		if run, ok := s.ext.CheckRuns[p.Check]; ok {
+			return run(ctx, s.host, p)
 		}
 		f, ok := s.ext.Checks[p.Check]
 		if !ok {

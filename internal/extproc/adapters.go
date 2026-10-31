@@ -339,10 +339,11 @@ func (r *Remote) Task(ctx context.Context, task string) error {
 	return r.p.Call(ctx, "task.run", protocol.TaskRunParams{Task: task}, nil)
 }
 
-// Check runs one declared doctor check.
-func (r *Remote) Check(ctx context.Context, check string, deep bool) (protocol.CheckRunResult, error) {
+// Check runs one declared doctor check on the host's view of the
+// configuration.
+func (r *Remote) Check(ctx context.Context, check string, deep bool, cfg protocol.CheckConfig) (protocol.CheckRunResult, error) {
 	var out protocol.CheckRunResult
-	err := r.p.Call(ctx, "check.run", protocol.CheckRunParams{Check: check, Deep: deep}, &out)
+	err := r.p.Call(ctx, "check.run", protocol.CheckRunParams{Check: check, Deep: deep, Config: cfg}, &out)
 	return out, err
 }
 

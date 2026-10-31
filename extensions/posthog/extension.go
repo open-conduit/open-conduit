@@ -168,7 +168,7 @@ func (x *Extension) Checks() []inproc.Check {
 }
 
 // check reports the configured entries without service calls.
-func (x *Extension) check(context.Context) inproc.CheckResult {
+func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckResult {
 	check := inproc.CheckResult{Name: "posthog", Status: inproc.CheckOK, Code: "ok"}
 	entries, dry := x.snapshot()
 	if len(entries) == 0 {
@@ -218,7 +218,7 @@ func (x *Extension) check(context.Context) inproc.CheckResult {
 // authCheck (check_secrets only) resolves each entry's key privately and
 // checks its form (PostHog cannot be asked about a key without sending an
 // event, as in Open Supervisor).
-func (x *Extension) authCheck(ctx context.Context) inproc.CheckResult {
+func (x *Extension) authCheck(ctx context.Context, _ protocol.CheckConfig) inproc.CheckResult {
 	check := inproc.CheckResult{Name: "posthog_auth", Status: inproc.CheckOK, Code: "verified"}
 	entries, _ := x.snapshot()
 	if len(entries) == 0 {

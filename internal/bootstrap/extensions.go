@@ -2,9 +2,11 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -142,13 +144,17 @@ func (e manifestExecutor) Attach(context.Context, domain.ID) (extension.AttachSp
 	return extension.AttachSpec{}, extension.ErrUnsupported
 }
 
-// offlineExternal adds the packages installed beside configPath to an
-// offline registry: declared types are known, but their opaque config is
-// checked by the package only when a daemon validates or applies it (an
-// offline check never starts a process).
-func offlineExternal(reg *config.Registry, configPath, exclude string) {
+// offlineExternal adds the packages installed beside configPath (but
+// exclude) to an offline registry: their declared types and executors, with
+// each package's config validated by the package itself. A package starts,
+// only once a config object of its types needs checking, for validate alone:
+// no coordination store, a throwaway state directory, and stopped by the
+// returned validation's close. A package that cannot start refuses its
+// objects, and the validation says why (offlinePackages.diagnostics).
+func offlineExternal(reg *config.Registry, configPath, exclude string) *offlinePackages {
+	o := &offlinePackages{}
 	if configPath == "" {
-		return
+		return o
 	}
 	all, _ := extproc.Discover(extensionsRoot(configPath))
 	var found []extproc.Found
@@ -158,11 +164,13 @@ func offlineExternal(reg *config.Registry, configPath, exclude string) {
 		}
 	}
 	if len(found) == 0 || extproc.CheckConflicts(found, takenNames(*reg)) != nil {
-		return
+		return o
 	}
 	var xs []inproc.Extension
 	for _, f := range found {
-		x := &installed{m: f.Manifest}
+		v := &offlinePackage{f: f}
+		o.packages = append(o.packages, v)
+		x := &installed{m: f.Manifest, offline: v}
 		xs = append(xs, x)
 		x.resourceTypes(reg)
 		for _, e := range f.Manifest.Provides.Executors {
@@ -170,6 +178,79 @@ func offlineExternal(reg *config.Registry, configPath, exclude string) {
 		}
 	}
 	inprocRegistry(reg, xs)
+	return o
+}
+
+// offlineStartTimeout bounds starting a package to validate offline.
+const offlineStartTimeout = 15 * time.Second
+
+// offlinePackages are the packages one offline validation may start.
+type offlinePackages struct{ packages []*offlinePackage }
+
+// close stops every package the validation started and removes its state.
+func (o *offlinePackages) close() {
+	for _, p := range o.packages {
+		p.close()
+	}
+}
+
+// diagnostics are the packages that could not start to validate their
+// config, so their objects were refused unchecked.
+func (o *offlinePackages) diagnostics() []config.Diagnostic {
+	var out []config.Diagnostic
+	for _, p := range o.packages {
+		if p.err != nil {
+			d := extproc.Diagnose(p.f.Manifest.Name, p.err, extproc.Paths{})
+			out = append(out, config.Diagnostic{Path: p.f.Dir, Code: "extension_unavailable",
+				Message: fmt.Sprintf("package %s could not start to validate its config: %s (%s)", p.f.Manifest.Name, d.Summary, d.Code)})
+		}
+	}
+	return out
+}
+
+// offlinePackage is one installed package started on first use to
+// validate config offline.
+type offlinePackage struct {
+	f       extproc.Found
+	started bool
+	r       *extproc.Remote
+	dir     string
+	err     error
+}
+
+func (p *offlinePackage) validator(kind, typ string) func(json.RawMessage, []string) error {
+	return func(raw json.RawMessage, secretNames []string) error {
+		if !p.started {
+			p.started = true
+			p.start()
+		}
+		if p.err != nil {
+			return p.err
+		}
+		return p.r.Validator(kind, typ)(raw, secretNames)
+	}
+}
+
+func (p *offlinePackage) start() {
+	if p.dir, p.err = os.MkdirTemp("", "open-conduit-validate-"); p.err != nil {
+		return
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), offlineStartTimeout)
+	defer cancel()
+	// An empty generation, with the KV layout reported current so the
+	// package never migrates: there is no store to migrate.
+	kv := p.f.Manifest.KVVersion
+	p.r, p.err = extproc.Load(ctx, p.f, extproc.Deps{Now: time.Now}, extproc.Options{StateDir: filepath.Join(p.dir, "state"), Host: protocol.HostInfo{Name: "open-conduit"},
+		Configure: func() protocol.ConfigureParams { return protocol.ConfigureParams{KV: protocol.KVState{Stored: kv}} }})
+}
+
+func (p *offlinePackage) close() {
+	if p.r != nil {
+		_ = p.r.Process().Close()
+	}
+	if p.dir != "" {
+		_ = os.RemoveAll(p.dir)
+	}
 }
 
 // openExtensions discovers, admits and starts the installed packages,
@@ -628,28 +709,12 @@ func (d *daemon) runTask(ctx context.Context, key string, pace time.Duration, ru
 	}()
 }
 
-// extensionCheck reports each installed package for doctor: refused or
-// failed packages, process state and restarts, and its declared checks.
-//
-// The declared checks come through the contract (installed.Checks) but are
-// folded into this one check rather than listed beside the first-party
-// extensions' own checks, so doctor's output is what it was before installed
-// packages joined the in-process list (inprocChecks leaves them out).
-func (d *daemon) extensionCheck(ctx context.Context) runtime.Check {
-	return d.runExtensionChecks(ctx, false)
-}
-
-// extensionDeepCheck runs the packages' deep checks (check_secrets).
-func (d *daemon) extensionDeepCheck(ctx context.Context) runtime.Check {
-	return d.runExtensionChecks(ctx, true)
-}
-
-func (d *daemon) runExtensionChecks(ctx context.Context, deep bool) runtime.Check {
-	name := "extensions"
-	if deep {
-		name = "extensions_deep"
-	}
-	check := runtime.Check{Name: name, Status: runtime.CheckOK, Code: "ok"}
+// extensionCheck reports each installed package's own health for doctor:
+// refused or failed packages, process state, version and restarts. Its
+// declared checks are listed beside the first-party extensions' under their
+// own names (inprocChecks).
+func (d *daemon) extensionCheck(context.Context) runtime.Check {
+	check := runtime.Check{Name: "extensions", Status: runtime.CheckOK, Code: "ok"}
 	raise := func(status, code string) {
 		if rank(status) > rank(check.Status) {
 			check.Status, check.Code = status, code
@@ -663,43 +728,26 @@ func (d *daemon) runExtensionChecks(ctx context.Context, deep bool) runtime.Chec
 		check.Status, check.Code, check.Detail = runtime.CheckInfo, "not_installed", "no extension packages are installed"
 		return check
 	}
-	if !deep {
-		for _, f := range failed {
-			raise(runtime.CheckFail, f.Code)
-			check.Items = append(check.Items, f.String())
-		}
+	for _, f := range failed {
+		raise(runtime.CheckFail, f.Code)
+		check.Items = append(check.Items, f.String())
 	}
 	for _, x := range packages {
 		p, m := x.r.Process(), x.m
-		if !deep {
-			state := "running"
-			if err := p.Err(); err != nil {
-				diag := extproc.Diagnose(m.Name, err, extproc.StatePaths(d.o.StateDir, m.Name))
-				raise(runtime.CheckFail, diag.Code)
-				state = "stopped: " + diag.Summary + " (" + diag.Code + ")"
-			}
-			item := fmt.Sprintf("%s %s: %s, protocol %d, %d restart(s)", m.Name, m.Version, state, protocol.Version, p.Restarts())
-			if n := x.r.SchemaSkips(); n > 0 {
-				item += fmt.Sprintf(", %d unreadable payload(s) skipped", n)
-			}
-			if p.Restarts() > 0 {
-				raise(runtime.CheckWarn, "extension_restarted")
-			}
-			check.Items = append(check.Items, item)
+		state := "running"
+		if err := p.Err(); err != nil {
+			diag := extproc.Diagnose(m.Name, err, extproc.StatePaths(d.o.StateDir, m.Name))
+			raise(runtime.CheckFail, diag.Code)
+			state = "stopped: " + diag.Summary + " (" + diag.Code + ")"
 		}
-		for _, c := range x.Checks() {
-			if c.Deep != deep {
-				continue
-			}
-			res := c.Run(ctx)
-			if res.Status != inproc.CheckOK {
-				raise(res.Status, res.Code)
-			}
-			check.Items = append(check.Items, res.Name+": "+res.Detail)
+		item := fmt.Sprintf("%s %s: %s, protocol %d, %d restart(s)", m.Name, m.Version, state, protocol.Version, p.Restarts())
+		if n := x.r.SchemaSkips(); n > 0 {
+			item += fmt.Sprintf(", %d unreadable payload(s) skipped", n)
 		}
-	}
-	if deep && len(check.Items) == 0 {
-		check.Status, check.Code = runtime.CheckInfo, "no_deep_checks"
+		if p.Restarts() > 0 {
+			raise(runtime.CheckWarn, "extension_restarted")
+		}
+		check.Items = append(check.Items, item)
 	}
 	sort.Strings(check.Items)
 	return check

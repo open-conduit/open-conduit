@@ -51,7 +51,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Operations`, `Filter` | `operations`, `dependency_filter` | `operation.*`, `emit.commit`, `dependency.filter` |
 | `Executors` | `executors` | `executor.*` |
 | `Providers` | `resources` | `provider.*` |
-| `Tasks`, `Checks` | `tasks`, `checks` | `task.run`, `check.run` |
+| `Tasks`, `Checks`, `CheckRuns` (a check that reads the configuration view or reports its own status, code and items) | `tasks`, `checks` | `task.run`, `check.run` |
 | `Exporter` | `exporters` | `telemetry.export` |
 | `Sink` | permission `telemetry.sink` | `telemetry.sink` |
 | `RunEnvironment` | `run_environment` | `run.environment` |
@@ -153,12 +153,12 @@ At start, `serve`:
    - the ingress sources each `configure` returns;
    - webhook paths on the webhook listener;
    - declared tasks at their intervals;
-   - doctor checks: the `extensions` check, with deep checks under `--check-secrets`;
+   - doctor checks, each under its own name beside the first-party ones (deep checks under `--check-secrets`), with the `extensions` check reporting the package's own health;
    - Work annotations, prompt rendering for the package's own families, and telemetry export.
 
 It then sends `configure` again on every config apply and every tunnel URL change. Ingress registrations are immutable for one daemon instance, as for first-party ingress, so a renamed source needs a restart. Nothing in core branches on a package: every decision reads the manifest.
 
-Secrets reach a package only through `secret.resolve`. It returns the secret names selected by the package's own entries in a configured scope, or, with `connection` set, the secret names of a connection one of those entries names (B05). `config check` offline knows the installed packages' types. Their opaque config is checked by the package only when a daemon validates or applies it; an offline check never starts a process. `open-conduit init TYPE` offers installed packages' setups by starting the package for the duration of the flow, without a coordination store.
+Secrets reach a package only through `secret.resolve`. It returns the secret names selected by the package's own entries in a configured scope, or, with `connection` set, the secret names of a connection one of those entries names (B05). `config check` offline knows the installed packages' types, and each package checks its own opaque config there too: it is started for `validate` alone, without a coordination store, on a throwaway state directory, and stopped afterwards ([doctor checks](../extension-protocol/#doctor-checks)). `open-conduit init TYPE` offers installed packages' setups by starting the package for the duration of the flow, without a coordination store.
 
 An installed package's `work_kind.trigger`, `recurrence.next` and `dependency.filter` run through the [bounded in-transaction calls](../extension-protocol/#transactions-and-in-transaction-calls), with the same fallbacks.
 

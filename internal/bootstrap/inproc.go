@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -391,14 +393,15 @@ func (d *daemon) runInprocTasks(ctx context.Context) {
 	}
 }
 
-// inprocChecks are the extensions' doctor checks, ordinary or deep. An
-// installed package's checks are reported inside the extensions check
-// instead (extensionCheck), so they are left out here.
+// inprocChecks are the extensions' doctor checks, ordinary or deep,
+// installed packages' included: each is listed under its own name, and runs
+// on the extension's view of the current configuration (checkConfig). The
+// extensions check keeps only the packages' own health.
 func (d *daemon) inprocChecks(deep bool) []func(context.Context) runtime.Check {
 	var out []func(context.Context) runtime.Check
 	for _, x := range d.inproc {
 		c, ok := x.(inproc.Checker)
-		if _, pkg := x.(*installed); !ok || pkg {
+		if !ok {
 			continue
 		}
 		for _, check := range c.Checks() {
@@ -407,12 +410,124 @@ func (d *daemon) inprocChecks(deep bool) []func(context.Context) runtime.Check {
 			}
 			run := check.Run
 			out = append(out, func(ctx context.Context) runtime.Check {
-				r := run(ctx)
-				return runtime.Check{Name: r.Name, Status: r.Status, Code: r.Code, Detail: r.Detail, Items: r.Items}
+				s, _ := d.configs.Current()
+				return runtimeCheck(run(ctx, checkConfig(s, x, d.executors, filepath.Dir(d.o.ConfigPath))))
 			})
 		}
 	}
 	return out
+}
+
+// offlineChecks are the first-party extensions' Offline checks on a config
+// validated without a daemon; dir is the config file's directory.
+func offlineChecks(ctx context.Context, s *config.Snapshot, executors map[string]extension.Executor, dir string) []runtime.Check {
+	var out []runtime.Check
+	for _, x := range firstParty(nil) {
+		c, ok := x.(inproc.Checker)
+		if !ok {
+			continue
+		}
+		for _, check := range c.Checks() {
+			if check.Offline && !check.Deep {
+				out = append(out, runtimeCheck(check.Run(ctx, checkConfig(s, x, executors, dir))))
+			}
+		}
+	}
+	return out
+}
+
+func runtimeCheck(r inproc.CheckResult) runtime.Check {
+	return runtime.Check{Name: r.Name, Status: r.Status, Code: r.Code, Detail: r.Detail, Items: r.Items}
+}
+
+// checkConfig is an extension's read-only view of a configuration for its
+// checks (protocol.CheckConfig): each enabled scope that uses it, with the
+// scope's routes and bindings, its own entries, and the connections of its
+// own types they name. Secret reference text never enters it.
+func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]extension.Executor, dir string) protocol.CheckConfig {
+	cfg := protocol.CheckConfig{Dir: dir}
+	if s == nil {
+		return cfg
+	}
+	entries, connections := typeSets(x)
+	handlers, operations := map[string]bool{}, map[string]bool{}
+	if r, ok := x.(inproc.Router); ok {
+		for name := range r.Routes() {
+			handlers[name] = true
+		}
+	}
+	if o, ok := x.(inproc.Operator); ok {
+		for _, op := range o.Operations() {
+			operations[op] = true
+		}
+	}
+	uses := func(scope *config.EffectiveScope) bool {
+		if pkg, ok := x.(*installed); ok && usesExtension(scope, pkg.m) {
+			return true
+		}
+		for _, e := range scope.Extensions {
+			if entries[e.Type] {
+				return true
+			}
+		}
+		for _, r := range scope.Routes {
+			if handlers[r.Handler] {
+				return true
+			}
+		}
+		for _, b := range scope.Bindings {
+			if slices.ContainsFunc(b.Operations, func(op string) bool { return operations[op] }) {
+				return true
+			}
+		}
+		return false
+	}
+	connType := map[string]string{}
+	for _, c := range s.Connections {
+		connType[c.ID] = c.Type
+	}
+	named := map[string]bool{}
+	for _, id := range s.Order {
+		scope := s.Scopes[id]
+		if scope == nil || !scope.Enabled {
+			continue
+		}
+		ownConn := false
+		for _, b := range scope.Bindings {
+			ownConn = ownConn || connections[connType[b.Connection]]
+		}
+		if !ownConn && !uses(scope) {
+			continue
+		}
+		v := protocol.CheckScope{ID: string(id)}
+		for _, e := range scope.Extensions {
+			if entries[e.Type] {
+				v.Entries = append(v.Entries, protocol.CheckEntry{Name: e.Name, Type: e.Type, Connection: e.Connection, Config: e.Config, SecretNames: e.SecretNames})
+				named[e.Connection] = true
+			}
+		}
+		for _, r := range scope.Routes {
+			v.Routes = append(v.Routes, protocol.CheckRoute{Name: r.Name, Handler: r.Handler, Binding: r.Binding})
+		}
+		for _, b := range scope.Bindings {
+			cb := protocol.CheckBinding{Name: b.Name, Executor: b.Executor, Operations: b.Operations, Connection: b.Connection}
+			if e, ok := executors[b.Executor]; ok {
+				cb.Toolbelt = e.Capabilities().Toolbelt
+			}
+			if b.Resource != nil {
+				cb.Resource = &protocol.CheckResource{Provider: b.Resource.Provider, Config: b.Resource.Config}
+			}
+			v.Bindings = append(v.Bindings, cb)
+			named[b.Connection] = true
+		}
+		cfg.Scopes = append(cfg.Scopes, v)
+	}
+	for _, c := range s.Connections {
+		if connections[c.Type] && named[c.ID] {
+			cfg.Connections = append(cfg.Connections, protocol.CheckConnection{ID: c.ID, Type: c.Type, Config: c.Config})
+		}
+	}
+	return cfg
 }
 
 func (d *daemon) inprocPlaybooks(into map[string]string) {

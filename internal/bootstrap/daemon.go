@@ -558,7 +558,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	}
 	c.control = control
 	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: d.checks(),
-		DeepChecks: append(append([]func(context.Context) runtime.Check{}, d.inprocChecks(true)...), d.trackerAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck, d.extensionDeepCheck), Capacity: d.capacityPools, Annotate: d.annotate, Actions: d.actions, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
+		DeepChecks: append(append([]func(context.Context) runtime.Check{}, d.inprocChecks(true)...), d.trackerAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck), Capacity: d.capacityPools, Annotate: d.annotate, Actions: d.actions, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -571,7 +571,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.trackerCheck, d.slackCheck, d.capabilityCheck, d.webhookCheck, d.claudeCheck, d.gitBotCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.scheduleCheck, d.extensionCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.trackerCheck, d.slackCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.scheduleCheck, d.extensionCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

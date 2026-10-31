@@ -190,7 +190,7 @@ func TestExternalSlackRoundTrip(t *testing.T) {
 	if err := r.Task(context.Background(), slackext.ProjectTask); err != nil {
 		t.Fatalf("projection task: %v", err)
 	}
-	if res, err := r.Check(context.Background(), "slack", false); err != nil || !res.OK || !strings.Contains(res.Detail, "receiver socket") {
+	if res, err := r.Check(context.Background(), "slack", false, protocol.CheckConfig{}); err != nil || !res.OK || !strings.Contains(res.Detail, "receiver socket") {
 		t.Fatalf("check: %+v %v", res, err)
 	}
 	if text, ok := r.Render(context.Background(), accepted.Event); !ok || !strings.Contains(text, "the export is broken") {

@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
+	"strconv"
 	"strings"
 	"time"
 
@@ -25,12 +26,16 @@ import (
 // has them, so they join it with the extensions that need them, and stay on
 // the package's own path in extensions.go until then.
 //
-// Offline (config validation) r is nil: the declared types accept any
-// config and nothing runs.
+// Offline (config validation) r is nil: offline starts the package to
+// validate its declared types when a config object of one needs checking;
+// with neither, they accept any config and nothing runs.
 type installed struct {
 	m protocol.Manifest
 	r *extproc.Remote
 	d *daemon
+	// offline starts the package to validate config when there is no
+	// daemon (offlineExternal).
+	offline *offlinePackage
 }
 
 var (
@@ -52,10 +57,13 @@ var (
 func (x *installed) Name() string { return x.m.Name }
 
 func (x *installed) validator(kind, typ string) func(json.RawMessage, []string) error {
-	if x.r == nil {
-		return nil
+	switch {
+	case x.r != nil:
+		return x.r.Validator(kind, typ)
+	case x.offline != nil:
+		return x.offline.validator(kind, typ)
 	}
-	return x.r.Validator(kind, typ)
+	return nil
 }
 
 // Types are the manifest's connection, extension and configurable route
@@ -181,29 +189,51 @@ func (x *installed) Tasks() []inproc.Task {
 	return out
 }
 
-// Checks are the declared checks. Each result is named "<package> check
-// <name>", its detail the line the extensions doctor check lists for it.
+// Checks are the declared checks, each listed in doctor under its own
+// name (checkName). check.run carries the package's view of the
+// configuration; a result without a status is ok or, when not OK, a warning.
 func (x *installed) Checks() []inproc.Check {
 	var out []inproc.Check
 	for _, c := range x.m.Provides.Checks {
 		name, deep := c.Name, c.Deep
-		out = append(out, inproc.Check{Deep: deep, Run: func(ctx context.Context) inproc.CheckResult {
-			res := inproc.CheckResult{Name: x.m.Name + " check " + name, Status: inproc.CheckOK, Code: "ok"}
+		out = append(out, inproc.Check{Deep: deep, Run: func(ctx context.Context, cfg protocol.CheckConfig) inproc.CheckResult {
+			res := inproc.CheckResult{Name: checkName(x.m.Name, name), Status: inproc.CheckOK, Code: "ok"}
 			cx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			r, err := x.r.Check(cx, name, deep)
+			r, err := x.r.Check(cx, name, deep, cfg)
 			cancel()
 			switch {
 			case err != nil:
 				res.Status, res.Code, res.Detail = inproc.CheckWarn, "extension_check_failed", "unavailable ("+errorCode(err)+")"
+			case r.Status != "":
+				res.Status, res.Code, res.Detail, res.Items = r.Status, r.Code, r.Detail, r.Items
+				switch r.Status {
+				case inproc.CheckOK, inproc.CheckInfo, inproc.CheckWarn, inproc.CheckFail:
+				default:
+					res.Status, res.Code, res.Detail, res.Items = inproc.CheckWarn, "extension_check_invalid", "unknown status "+strconv.Quote(r.Status), nil
+				}
+				if res.Code == "" {
+					res.Code = res.Status
+				}
 			case !r.OK:
 				res.Status, res.Code, res.Detail = inproc.CheckWarn, "extension_check_failed", r.Detail
 			default:
-				res.Detail = "ok " + r.Detail
+				res.Detail = r.Detail
 			}
 			return res
 		}})
 	}
 	return out
+}
+
+// checkName is the doctor name of a package's declared check: the check's
+// own name when it is the package's name or starts with "<package>_" or
+// "<package>-", else "<package>_<check>", so no package's check takes
+// another's or the host's.
+func checkName(pkg, check string) string {
+	if check == pkg || strings.HasPrefix(check, pkg+"_") || strings.HasPrefix(check, pkg+"-") {
+		return check
+	}
+	return pkg + "_" + check
 }
 
 // Exporter forwards telemetry when the package exports it, and drops it

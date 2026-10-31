@@ -426,7 +426,7 @@ func (x *Extension) Checks() []inproc.Check {
 // check reports each entry's features: the sweep/triage schedules with
 // their next slot, the host watch's readings over threshold, telemetry and
 // the notes it reads. It makes no service calls.
-func (x *Extension) check(ctx context.Context) inproc.CheckResult {
+func (x *Extension) check(ctx context.Context, _ protocol.CheckConfig) inproc.CheckResult {
 	check := inproc.CheckResult{Name: "introspection", Status: inproc.CheckOK, Code: "ok"}
 	var entries []Entry
 	timers := map[domain.ID]domain.Timer{}
