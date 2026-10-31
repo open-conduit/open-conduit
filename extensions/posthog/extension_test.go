@@ -28,10 +28,10 @@ func TestExtensionConfigureAndChecks(t *testing.T) {
 		{ScopeID: "ops", Type: Type, Name: "telemetry"},
 	}}
 	x.Configure(context.Background(), params)
-	if r := x.check(context.Background()); r.Status != inproc.CheckFail || r.Code != "posthog_connection_type" || len(r.Items) != 2 {
+	if r := x.check(context.Background(), protocol.CheckConfig{}); r.Status != inproc.CheckFail || r.Code != "posthog_connection_type" || len(r.Items) != 2 {
 		t.Fatalf("check %+v", r)
 	}
-	if r := x.authCheck(context.Background()); r.Code != "posthog_connection_type" || len(asked) != 1 || asked[0] != "eng/ph" {
+	if r := x.authCheck(context.Background(), protocol.CheckConfig{}); r.Code != "posthog_connection_type" || len(asked) != 1 || asked[0] != "eng/ph" {
 		t.Fatalf("auth check %+v, secrets asked %v", r, asked)
 	}
 	if err := x.Capture(context.Background(), "eng", "host_metrics", time.Now(), map[string]any{}); err != nil || len(c.events) != 1 {
@@ -41,7 +41,7 @@ func TestExtensionConfigureAndChecks(t *testing.T) {
 	_ = x.Capture(context.Background(), "eng", "host_metrics", time.Now(), map[string]any{})
 	params.Entries, params.DryRun = params.Entries[:1], false
 	x.Configure(context.Background(), params)
-	if r := x.check(context.Background()); r.Status != inproc.CheckWarn || r.Code != "capture_failing" {
+	if r := x.check(context.Background(), protocol.CheckConfig{}); r.Status != inproc.CheckWarn || r.Code != "capture_failing" {
 		t.Fatalf("a failed capture warns: %+v", r)
 	}
 	x.mu.Lock()
@@ -49,7 +49,7 @@ func TestExtensionConfigureAndChecks(t *testing.T) {
 	x.mu.Unlock()
 	params.Entries[0].Config = json.RawMessage(`{"introspection":false}`)
 	x.Configure(context.Background(), params)
-	if r := x.check(context.Background()); r.Status != inproc.CheckWarn || r.Code != "renamed_setting" || len(r.Items) != 2 {
+	if r := x.check(context.Background(), protocol.CheckConfig{}); r.Status != inproc.CheckWarn || r.Code != "renamed_setting" || len(r.Items) != 2 {
 		t.Fatalf("the old setting name warns: %+v", r)
 	}
 	params.DryRun = true

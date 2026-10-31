@@ -319,10 +319,14 @@ type CheckResult struct {
 }
 
 // Check is a doctor check. A deep check runs only when secrets are checked
-// and may call services; an ordinary one must not.
+// and may call services; an ordinary one must not. Run reads the host's
+// read-only view of the configuration, cfg (protocol.CheckConfig, the view
+// an installed package's check.run receives). An Offline check reads
+// nothing but cfg and the machine, so doctor also runs it without a daemon.
 type Check struct {
-	Deep bool
-	Run  func(ctx context.Context) CheckResult
+	Deep    bool
+	Offline bool
+	Run     func(ctx context.Context, cfg protocol.CheckConfig) CheckResult
 }
 
 // Checker extensions contribute doctor checks.

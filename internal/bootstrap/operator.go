@@ -32,7 +32,7 @@ import (
 // Operator setup, doctor and controls (03-05) composed from public
 // extension surfaces: offline validation against the daemon's own
 // registrations, the agent setup session, Work annotations, attach, and the
-// GitHub, capability and Claude Code doctor checks.
+// Claude Code doctor check.
 
 // registry is the daemon's registration of executors, route handlers,
 // operations, connection and extension types and resource providers.
@@ -56,9 +56,9 @@ func ValidateConfig(data []byte) ([]config.Diagnostic, error) {
 }
 
 // ValidateConfigAt is ValidateConfig for a config file at configPath: the
-// extension packages installed beside it contribute their declared types
-// (their opaque config is checked by the package once a daemon validates or
-// applies it; an offline check never starts a process).
+// extension packages installed beside it contribute their declared types,
+// and each validates its own opaque config, started for validate alone
+// (offlineExternal).
 func ValidateConfigAt(configPath string, data []byte) ([]config.Diagnostic, error) {
 	return validateWith(configPath, "", data)
 }
@@ -67,11 +67,12 @@ func ValidateConfigAt(configPath string, data []byte) ([]config.Diagnostic, erro
 // exclude (the removal check).
 func validateWith(configPath, exclude string, data []byte) ([]config.Diagnostic, error) {
 	reg := registry(offlineExecutors())
-	offlineExternal(&reg, configPath, exclude)
+	pkgs := offlineExternal(&reg, configPath, exclude)
+	defer pkgs.close()
 	_, err := config.ValidateFile(data, reg, fileIncludes(configPath))
 	var invalid *config.ValidationError
 	if errors.As(err, &invalid) {
-		return invalid.Diagnostics, nil
+		return append(invalid.Diagnostics, pkgs.diagnostics()...), nil
 	}
 	return nil, err
 }
@@ -261,103 +262,6 @@ func (d *daemon) reportedCode(kind, subject string) string {
 	return d.reported[kind+"\x00"+subject]
 }
 
-// capabilityCheck reports engineering configuration gaps the validator
-// accepts but that leave GitHub work unable to proceed: no `github` route, an
-// agent binding without the GitHub tools, scheduled issues with no hold
-// route, and a hold route after the github route.
-func (d *daemon) capabilityCheck(context.Context) runtime.Check {
-	snapshot, _ := d.configs.Current()
-	return capabilityCheckFor(snapshot, d.executors)
-}
-
-// capabilityCheckFor is capabilityCheck for a config snapshot and the
-// executors it is checked against (offline doctor uses the registrations).
-func capabilityCheckFor(snapshot *config.Snapshot, executors map[string]extension.Executor) runtime.Check {
-	check := runtime.Check{Name: "github_capability", Status: runtime.CheckOK, Code: "ok"}
-	if snapshot == nil {
-		return check
-	}
-	warn := func(code, item string) {
-		if check.Status == runtime.CheckOK {
-			check.Status, check.Code = runtime.CheckWarn, code
-		}
-		check.Items = append(check.Items, item)
-	}
-	info := func(item string) {
-		check.Items = append(check.Items, item)
-	}
-	any := false
-	for _, id := range snapshot.Order {
-		scope := snapshot.Scopes[id]
-		if scope == nil || !scope.Enabled {
-			continue
-		}
-		owns := false
-		for _, x := range scope.Extensions {
-			if s, err := gh.ParseExtension(x.Config, x.SecretNames); x.Type == gh.Type && err == nil && s.Scope == string(id) {
-				owns = true
-			}
-		}
-		if !owns {
-			continue
-		}
-		any = true
-		bindings := map[string]config.Binding{}
-		for _, b := range scope.Bindings {
-			bindings[b.Name] = b
-		}
-		githubAt, holdAt := -1, -1
-		for i, r := range scope.Routes {
-			switch r.Handler {
-			case gh.Type:
-				if githubAt < 0 {
-					githubAt = i
-				}
-				b := bindings[r.Binding]
-				if c, ok := executors[b.Executor]; ok && c.Capabilities().Toolbelt == extension.ToolbeltNone {
-					warn("no_toolbelt", fmt.Sprintf("%s: route %s binds %s, whose executor has no toolbelt to report status", id, r.Name, r.Binding))
-				}
-				missing := []string{}
-				for _, op := range []string{gh.OpContext, "declare_outcome"} {
-					found := false
-					for _, have := range b.Operations {
-						found = found || have == op
-					}
-					if !found {
-						missing = append(missing, op)
-					}
-				}
-				if len(missing) > 0 && b.Executor == ClaudeCodeExecutor {
-					warn("agent_operations_missing", fmt.Sprintf("%s: binding %s lacks %s (the work-issue playbook needs them)", id, r.Binding, strings.Join(missing, ", ")))
-				}
-			case gh.HoldHandler:
-				if holdAt < 0 {
-					holdAt = i
-				}
-				b := bindings[r.Binding]
-				if b.Executor != gh.HoldExecutor {
-					warn("hold_binding", fmt.Sprintf("%s: route %s must bind a github-hold executor", id, r.Name))
-				}
-			}
-		}
-		switch {
-		case githubAt < 0:
-			warn("no_github_route", fmt.Sprintf("%s: no route uses handler github, so issues are never claimed", id))
-		case holdAt < 0:
-			info(fmt.Sprintf("%s: no github-hold route; issues labelled scheduled are not claimed", id))
-		case holdAt > githubAt:
-			warn("hold_route_order", fmt.Sprintf("%s: the github-hold route must come before the github route", id))
-		default:
-			info(fmt.Sprintf("%s: claims issues; scheduled issues are held", id))
-		}
-	}
-	if !any {
-		check.Status, check.Code = runtime.CheckInfo, "not_configured"
-	}
-	sort.Strings(check.Items)
-	return check
-}
-
 // claudeCheck runs `claude --version` for every claude-code binding's
 // binary and, when enabled, reads the subscription usage windows.
 func (d *daemon) claudeCheck(ctx context.Context) runtime.Check {
@@ -441,32 +345,30 @@ func claudeVersionCheck(ctx context.Context, snapshot *config.Snapshot) runtime.
 var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource_holds", "retention", "reconcile_lag", "bindings", "connections", "secrets", "pinned_executors", "telemetry", "github", "trackers", "slack", "posthog", "webhooks", "schedule", "resources", "introspection", "extensions"}
 
 // OfflineChecks are the doctor checks that need no daemon: the config file
-// validated against the same registrations `serve` uses, the GitHub
-// capability gaps in it, and `claude --version` for its claude-code
-// bindings, then a skipped check naming the daemon's own. The CLI runs them
+// validated against the same registrations `serve` uses, the first-party
+// extensions' Offline checks on it (github_capability, git_bot), and
+// `claude --version` for its claude-code bindings, then a skipped check naming the daemon's own. The CLI runs them
 // when no daemon is reachable.
 func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtime.Check {
 	skipped := runtime.Check{Name: "skipped", Status: runtime.CheckInfo, Code: "daemon_not_running", Detail: "need a running daemon: " + strings.Join(daemonChecks, ", ")}
 	executors := offlineExecutors()
 	reg := registry(executors)
-	offlineExternal(&reg, configPath, "")
+	pkgs := offlineExternal(&reg, configPath, "")
 	snapshot, err := config.ValidateFile(data, reg, fileIncludes(configPath))
+	pkgs.close()
 	var invalid *config.ValidationError
 	switch {
 	case errors.As(err, &invalid):
-		check := runtime.Check{Name: "config", Status: runtime.CheckFail, Code: "invalid", Detail: fmt.Sprintf("%s has %d problem(s); see open-conduit config check", configPath, len(invalid.Diagnostics))}
-		for _, d := range invalid.Diagnostics {
+		diags := append(invalid.Diagnostics, pkgs.diagnostics()...)
+		check := runtime.Check{Name: "config", Status: runtime.CheckFail, Code: "invalid", Detail: fmt.Sprintf("%s has %d problem(s); see open-conduit config check", configPath, len(diags))}
+		for _, d := range diags {
 			check.Items = append(check.Items, fmt.Sprintf("%s: %s: %s", d.Path, d.Code, d.Message))
 		}
 		return []runtime.Check{check, skipped}
 	case err != nil:
 		return []runtime.Check{{Name: "config", Status: runtime.CheckFail, Code: "unvalidated", Detail: "config could not be validated: " + err.Error()}, skipped}
 	}
-	return []runtime.Check{
-		{Name: "config", Status: runtime.CheckOK, Code: "valid", Detail: configPath},
-		capabilityCheckFor(snapshot, executors),
-		claudeVersionCheck(ctx, snapshot),
-		gitBotCheck(ctx, snapshot, filepath.Dir(configPath)),
-		skipped,
-	}
+	out := []runtime.Check{{Name: "config", Status: runtime.CheckOK, Code: "valid", Detail: configPath}}
+	out = append(out, offlineChecks(ctx, snapshot, executors, filepath.Dir(configPath))...)
+	return append(out, claudeVersionCheck(ctx, snapshot), skipped)
 }

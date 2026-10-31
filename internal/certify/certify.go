@@ -997,7 +997,7 @@ func (r *runner) surfaces(ctx context.Context, remote *extproc.Remote) {
 			continue
 		}
 		cx, cancel := context.WithTimeout(ctx, 30*time.Second)
-		res, err := remote.Check(cx, c.Name, false)
+		res, err := remote.Check(cx, c.Name, false, protocol.CheckConfig{})
 		cancel()
 		if err != nil {
 			r.fail(id, "check %s: %v", c.Name, err)

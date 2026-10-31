@@ -184,11 +184,12 @@ func (x *Extension) registrations(ctx context.Context) View {
 }
 
 // Checks are `github` (registration, rate-limit, reconcile and projection
-// state per entry, with no service calls) and, under check_secrets,
-// `github_auth` (each entry's credentials and those of the connections its
-// scope's bindings name, by reading its repository).
+// state per entry, with no service calls), the configuration checks
+// `github_capability` and `git_bot` (doctor.go, offline too) and, under
+// check_secrets, `github_auth` (each entry's credentials and those of the
+// connections its scope's bindings name, by reading its repository).
 func (x *Extension) Checks() []inproc.Check {
-	return []inproc.Check{{Run: x.check}, {Deep: true, Run: x.authCheck}}
+	return []inproc.Check{{Run: x.check}, {Offline: true, Run: capabilityCheck}, {Offline: true, Run: gitBotCheck}, {Deep: true, Run: x.authCheck}}
 }
 
 func rank(status string) int {
@@ -203,7 +204,7 @@ func rank(status string) int {
 	return 0
 }
 
-func (x *Extension) check(ctx context.Context) inproc.CheckResult {
+func (x *Extension) check(ctx context.Context, _ protocol.CheckConfig) inproc.CheckResult {
 	check := inproc.CheckResult{Name: "github", Status: inproc.CheckOK, Code: "ok"}
 	raise := func(status, code string) {
 		if rank(status) > rank(check.Status) {
@@ -281,7 +282,7 @@ func verifyCode(err error) string {
 // authCheck resolves each entry's credentials privately and reads its
 // repository: the connection test. It reports codes and permissions, never
 // a reference or a token.
-func (x *Extension) authCheck(ctx context.Context) inproc.CheckResult {
+func (x *Extension) authCheck(ctx context.Context, _ protocol.CheckConfig) inproc.CheckResult {
 	check := inproc.CheckResult{Name: "github_auth", Status: inproc.CheckOK, Code: "verified"}
 	raise := func(status, code string) {
 		if rank(status) > rank(check.Status) {

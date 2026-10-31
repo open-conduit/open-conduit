@@ -17,10 +17,13 @@ import (
 func doctorChecks(t *testing.T, x *gh.Extension) (ordinary, deep func(context.Context) inproc.CheckResult) {
 	t.Helper()
 	for _, c := range x.Checks() {
-		if c.Deep {
-			deep = c.Run
-		} else {
-			ordinary = c.Run
+		run := c.Run
+		f := func(ctx context.Context) inproc.CheckResult { return run(ctx, protocol.CheckConfig{}) }
+		switch {
+		case c.Deep:
+			deep = f
+		case !c.Offline:
+			ordinary = f
 		}
 	}
 	if ordinary == nil || deep == nil {

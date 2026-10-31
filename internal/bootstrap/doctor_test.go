@@ -26,7 +26,7 @@ func TestOfflineChecks(t *testing.T) {
 	for _, c := range checks {
 		got[c.Name] = c
 	}
-	if got["config"].Status != runtime.CheckOK || got["github_capability"].Name == "" || !strings.Contains(checks[len(checks)-1].Detail, "storage") {
+	if got["config"].Status != runtime.CheckOK || got["github_capability"].Name == "" || got["git_bot"].Name == "" || !strings.Contains(checks[len(checks)-1].Detail, "storage") {
 		t.Fatalf("offline checks: %+v", checks)
 	}
 	if c := got["claude_code"]; c.Status != runtime.CheckFail || c.Code != "claude_missing" || len(c.Items) != 1 || !strings.Contains(c.Items[0], "ops/agent") {

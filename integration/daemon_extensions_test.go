@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -81,6 +82,15 @@ func TestDaemonExtensionPackages(t *testing.T) {
 	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", d.config).CombinedOutput(); err != nil || !strings.Contains(string(out), "valid") {
 		t.Fatalf("offline config check: %v\n%s", err, out)
 	}
+	// Offline, the package validates its own entries too: started for
+	// validate alone, it refuses an entry without a service file.
+	bad := filepath.Join(filepath.Dir(d.config), "bad.json")
+	if err := os.WriteFile(bad, config(map[string]any{"scope": "notes-scope"}), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err == nil || !strings.Contains(string(out), "rejected by its registered owner") {
+		t.Fatalf("offline check of an invalid entry: %v\n%s", err, out)
+	}
 
 	d.start("")
 	completed := func(n int) func() bool {
@@ -118,6 +128,10 @@ func TestDaemonExtensionPackages(t *testing.T) {
 	}
 	if c := extensions(); c.Status != "ok" || !strings.Contains(strings.Join(c.Items, "\n"), "notes 0.2.0: running") || !strings.Contains(strings.Join(c.Items, "\n"), "runner 0.1.0: running") {
 		t.Fatalf("doctor: %+v", c)
+	}
+	// The package's declared check is listed under its own name.
+	if doc, err := d.c.Doctor(ctx, false); err != nil || !slices.ContainsFunc(doc.Checks, func(c client.Check) bool { return c.Name == "notes" && c.Status == "ok" && c.Detail == "ok" }) {
+		t.Fatalf("doctor lists no notes check: %+v %v", doc, err)
 	}
 
 	// The package validates its own entries when the daemon checks a config.

@@ -37,7 +37,7 @@ open-conduit tui
   - Edits keep the owner's key order and untouched text, including handwritten routes.
   - `show` and `get` redact `secret_refs`.
   - `set` refuses a value that is not a reference under `secret_refs`.
-  - Every edit is validated offline by `bootstrap.ValidateConfig` before saving: the same registrations as `serve`, without a daemon, storage or secret resolution. An invalid edit leaves the file unchanged. A running daemon changes only through `config apply`, so a disk edit never alters it.
+  - Every edit is validated offline by `bootstrap.ValidateConfig` before saving: the same registrations as `serve`, without a daemon, storage or secret resolution. An installed package checks its own entries' config: it is started for `validate` alone, without a coordination store and on a throwaway state directory ([packaging](../extension-protocol/#doctor-checks)). An invalid edit leaves the file unchanged. A running daemon changes only through `config apply`, so a disk edit never alters it.
 - **`config include add [FOLDER] --parent SCOPE`** and **`config include remove [FOLDER]`** add or remove an [included folder](../config-management/#included-folders) in the config file's `includes`. FOLDER defaults to the current directory and is written as an absolute path. Both validate before saving, like `set`.
 - **`secret set NAME`**:
   - It reads the value from stdin, with no echo on a terminal, and never takes it as an argument.
@@ -55,7 +55,9 @@ open-conduit tui
 
 ## Doctor
 
-`GET /v1/doctor` (`open-conduit doctor [--check-secrets]`) runs the core checks ([doctor](../observability-history/#doctor)) and the extensions' checks. The GitHub extension contributes `github` and `github_auth` through `inproc.Checker`, from a read-only view of the entries the daemon registered, and resolves the credentials it verifies through the host's scoped resolver (`inproc.Host.Secrets`). Details carry codes, identifiers and counts, never references or values.
+`GET /v1/doctor` (`open-conduit doctor [--check-secrets]`) runs the core checks ([doctor](../observability-history/#doctor)) and the extensions' checks, each listed under its own name: first-party ones and an installed package's declared checks alike ([`check.run`](../extension-protocol/#doctor-checks)). The `extensions` check reports only the packages' own health. Every extension check runs on the host's read-only view of the configuration (`protocol.CheckConfig`): the scopes that use the extension, their routes and bindings, its own entries and the connections of its types they name, never secret text.
+
+The GitHub extension contributes `github`, `github_capability`, `git_bot` and `github_auth` through `inproc.Checker`. `github` also reads a view of the entries the daemon registered, and `github_auth` resolves the credentials it verifies through the host's scoped resolver (`inproc.Host.Secrets`). `github_capability` and `git_bot` read nothing but the configuration view and the machine, so they are `Offline` checks: `open-conduit doctor` runs them without a daemon too. Details carry codes, identifiers and counts, never references or values.
 
 | Check | Status and codes |
 | --- | --- |
@@ -232,3 +234,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - **06-02** added the offline recovery commands.
 - **07-01** renamed the attach refusal `no_session` to `nothing_to_attach`.
 - **Issue #235** moved the `github` and `github_auth` checks out of `internal/bootstrap` into the GitHub extension (`gh.Extension`, on the in-process list). Their results are unchanged; `github_auth` now reports `credential_unavailable` for an entry whose connection the current generation no longer names, where before it signed in with the registration's connection.
+- **Issue #240** moved `github_capability` and `git_bot` into the GitHub extension too, as `Offline` checks on the host's configuration view, so `internal/bootstrap` has no GitHub doctor code left. Their results are unchanged. An installed package's checks, until then folded into the `extensions` check, are listed under their own names and receive the same view, and `config check` has its packages validate their own entries without a daemon.

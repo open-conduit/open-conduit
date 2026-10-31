@@ -1,12 +1,14 @@
 package bootstrap
 
 import (
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/protocol"
@@ -94,6 +96,64 @@ func TestTurnPluginCarriesSetupPlaybook(t *testing.T) {
 		}
 		if strings.Contains(string(data), "{{bin}}") {
 			t.Errorf("%s skill is not filled in", name)
+		}
+	}
+}
+
+// An extension's checks see each enabled scope that uses it, with every
+// route and binding there, its own entries and the connections of its own
+// types they name, without secret references; other scopes, other
+// extensions' entries and other types' connections stay out.
+func TestCheckConfig(t *testing.T) {
+	m := protocol.Manifest{Name: "acme", Provides: protocol.Provides{
+		Connections: []protocol.TypeDecl{{Type: "acme_conn"}},
+		Extensions:  []protocol.ExtensionDecl{{Type: "acme"}},
+		Routes:      []protocol.RouteDecl{{Handler: "acme_route"}},
+		Operations:  []protocol.OperationDecl{{Name: "acme.ping", Kind: protocol.OperationHandler}},
+	}}
+	x := &installed{m: m}
+	s := &config.Snapshot{Order: []domain.ID{"entry", "route", "op", "conn", "other", "off"},
+		Connections: []config.Connection{{ID: "a1", Type: "acme_conn", Config: json.RawMessage(`{"k":1}`), SecretRefs: map[string]string{"token": "env:ACME"}}, {ID: "o1", Type: "other"}},
+		Scopes: map[domain.ID]*config.EffectiveScope{
+			"entry": {ID: "entry", Enabled: true, Extensions: []config.Extension{{Name: "e", Type: "acme", Connection: "a1", SecretNames: []string{"token"}}, {Name: "g", Type: "github"}},
+				Bindings: []config.Binding{{Name: "agent", Executor: "shell", Connection: "o1", Resource: &config.Resource{Provider: "git", Config: json.RawMessage(`{"checkout":"."}`)}}},
+				Routes:   []config.Route{{Name: "r", Handler: "manual", Binding: "agent"}}},
+			"route": {ID: "route", Enabled: true, Routes: []config.Route{{Name: "r", Handler: "acme_route", Binding: "b"}}},
+			"op":    {ID: "op", Enabled: true, Bindings: []config.Binding{{Name: "b", Executor: "shell", Operations: []string{"acme.ping"}}}},
+			"conn":  {ID: "conn", Enabled: true, Bindings: []config.Binding{{Name: "b", Executor: "shell", Connection: "a1"}}},
+			"other": {ID: "other", Enabled: true, Bindings: []config.Binding{{Name: "b", Executor: "shell", Operations: []string{"read_context"}}}},
+			"off":   {ID: "off", Extensions: []config.Extension{{Name: "e", Type: "acme"}}},
+		}}
+	cfg := checkConfig(s, x, offlineExecutors(), "/cfg")
+	var ids []string
+	for _, sc := range cfg.Scopes {
+		ids = append(ids, sc.ID)
+	}
+	if strings.Join(ids, ",") != "entry,route,op,conn" || cfg.Dir != "/cfg" {
+		t.Fatalf("scopes %v dir %q", ids, cfg.Dir)
+	}
+	e := cfg.Scopes[0]
+	if len(e.Entries) != 1 || e.Entries[0].Name != "e" || e.Entries[0].Connection != "a1" || len(e.Entries[0].SecretNames) != 1 {
+		t.Fatalf("entries %+v", e.Entries)
+	}
+	if len(e.Routes) != 1 || len(e.Bindings) != 1 || e.Bindings[0].Toolbelt != "cli" || e.Bindings[0].Resource == nil || e.Bindings[0].Resource.Provider != "git" {
+		t.Fatalf("routes %+v bindings %+v", e.Routes, e.Bindings)
+	}
+	raw, _ := json.Marshal(cfg)
+	if len(cfg.Connections) != 1 || cfg.Connections[0].ID != "a1" || strings.Contains(string(raw), "env:ACME") {
+		t.Fatalf("connections %s", raw)
+	}
+	if got := checkConfig(nil, x, nil, "/cfg"); len(got.Scopes) != 0 {
+		t.Fatalf("no snapshot: %+v", got)
+	}
+}
+
+// A package's check is listed under its own name, kept apart from other
+// packages' and the host's.
+func TestCheckName(t *testing.T) {
+	for _, tc := range [][3]string{{"notes", "notes", "notes"}, {"notes", "notes_store", "notes_store"}, {"slack", "slack-auth", "slack-auth"}, {"notes", "store", "notes_store"}, {"notes", "github", "notes_github"}} {
+		if got := checkName(tc[0], tc[1]); got != tc[2] {
+			t.Errorf("checkName(%q, %q) = %q, want %q", tc[0], tc[1], got, tc[2])
 		}
 	}
 }

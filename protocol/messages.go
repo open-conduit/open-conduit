@@ -355,8 +355,78 @@ type TaskRunParams struct {
 type CheckRunParams struct {
 	Check string `json:"check"`
 	Deep  bool   `json:"deep,omitempty"`
+	// Config is the read-only view of the configuration the check reads.
+	Config CheckConfig `json:"config"`
 }
+
+// CheckRunResult is one check's outcome. Status, when set, is ok, info,
+// warn or fail, with a stable Code and Items listed under the check; unset,
+// OK alone decides (ok, or warn with code extension_check_failed).
 type CheckRunResult struct {
-	OK     bool   `json:"ok"`
-	Detail string `json:"detail,omitempty"`
+	OK     bool     `json:"ok"`
+	Detail string   `json:"detail,omitempty"`
+	Status string   `json:"status,omitempty"`
+	Code   string   `json:"code,omitempty"`
+	Items  []string `json:"items,omitempty"`
+}
+
+// CheckConfig is the read-only view of the current configuration a check
+// reads: each enabled scope that uses the extension (an entry of its types,
+// a route on its handlers, a binding granted its operations, naming its
+// connections, or on its executors or resource providers), with that
+// scope's routes and bindings, and the connections of the extension's own
+// types they name. It carries names and non-secret config, never secret
+// values or reference text. Dir is the config file's directory, against
+// which relative paths in it resolve.
+type CheckConfig struct {
+	Dir         string            `json:"dir,omitempty"`
+	Scopes      []CheckScope      `json:"scopes,omitempty"`
+	Connections []CheckConnection `json:"connections,omitempty"`
+}
+
+// CheckScope is one scope in a CheckConfig. Entries are the scope's entries
+// of the extension's own types.
+type CheckScope struct {
+	ID       string         `json:"id"`
+	Entries  []CheckEntry   `json:"entries,omitempty"`
+	Routes   []CheckRoute   `json:"routes,omitempty"`
+	Bindings []CheckBinding `json:"bindings,omitempty"`
+}
+type CheckEntry struct {
+	Name       string          `json:"name"`
+	Type       string          `json:"type"`
+	Connection string          `json:"connection,omitempty"`
+	Config     json.RawMessage `json:"config,omitempty"`
+	// SecretNames are the names the entry selects, never their values.
+	SecretNames []string `json:"secret_names,omitempty"`
+}
+type CheckRoute struct {
+	Name    string `json:"name"`
+	Handler string `json:"handler"`
+	Binding string `json:"binding"`
+}
+
+// CheckBinding is one binding. Toolbelt is its executor's toolbelt
+// capability (none, cli, mcp or sdk; empty when the executor is not
+// registered). Resource is its workspace provider and that provider's
+// config.
+type CheckBinding struct {
+	Name       string         `json:"name"`
+	Executor   string         `json:"executor"`
+	Toolbelt   string         `json:"toolbelt,omitempty"`
+	Operations []string       `json:"operations,omitempty"`
+	Connection string         `json:"connection,omitempty"`
+	Resource   *CheckResource `json:"resource,omitempty"`
+}
+type CheckResource struct {
+	Provider string          `json:"provider"`
+	Config   json.RawMessage `json:"config,omitempty"`
+}
+
+// CheckConnection is a connection of one of the extension's own types:
+// its config, without secret references.
+type CheckConnection struct {
+	ID     string          `json:"id"`
+	Type   string          `json:"type"`
+	Config json.RawMessage `json:"config,omitempty"`
 }
