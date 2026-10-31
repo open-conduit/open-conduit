@@ -334,6 +334,23 @@ func (c *Control) RequestReconcile(ctx context.Context, scopeID domain.ID, expec
 	return
 }
 
+// MaxAttaches bounds the attach containers an attempt's history keeps.
+const MaxAttaches = 20
+
+// RecordAttachInTx records an operator's attach container with the
+// attempt it attached to, for history, before the container starts.
+func RecordAttachInTx(tx storage.Tx, execution domain.ID, pin extension.ContainerPin) error {
+	state, err := attemptState(tx, execution)
+	if err != nil {
+		return err
+	}
+	state.Attaches = append(state.Attaches, pin)
+	if n := len(state.Attaches); n > MaxAttaches {
+		state.Attaches = state.Attaches[n-MaxAttaches:]
+	}
+	return putAttemptState(tx, state)
+}
+
 // AttemptStateInTx exposes an attempt's trusted scheduling record (executor
 // registration, binding and generation) to composition and management.
 func AttemptStateInTx(tx storage.Tx, execution domain.ID) (AttemptState, error) {

@@ -39,6 +39,9 @@ type attachInfo struct {
 	PermissionMode string   `json:"permission_mode"`
 	PluginDir      string   `json:"plugin_dir,omitempty"`
 	ExtraArgs      []string `json:"extra_args,omitempty"`
+	// Container says the session ran in a container: attach runs in one
+	// too (`open-conduit container attach`), never on the host.
+	Container bool `json:"container,omitempty"`
 }
 
 // record is a Work's private continuity.
@@ -282,6 +285,12 @@ func (e *Executor) Attach(ctx context.Context, work domain.ID) (extension.Attach
 			return ErrNoSession
 		}
 		a := rec.Attach
+		if a.Container {
+			// Nothing of the session is read on the host: the command
+			// starts a container to resume it in (ContainerAttach).
+			spec.Argv = []string{e.o.Command, "container", "attach", string(work)}
+			return nil
+		}
 		spec.Argv = append([]string{a.Binary, "--resume", rec.Session, "--model", a.Model, "--permission-mode", a.PermissionMode}, a.ExtraArgs...)
 		if a.PluginDir != "" {
 			spec.Argv = append(spec.Argv, "--plugin-dir", a.PluginDir)

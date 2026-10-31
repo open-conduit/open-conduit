@@ -69,6 +69,12 @@ type Options struct {
 	// Attach returns the attach command of the Work's latest attempt's
 	// executor registration (ErrAttachUnsupported, ErrNothingToAttach).
 	Attach func(ctx context.Context, executor string, work domain.Work) (AttachSpec, error)
+	// ContainerAttach makes an attach container for Work whose session ran
+	// in a container: under the binding's current policy, with the Work's
+	// home and workspace, pinned and recorded in the execution's history.
+	// ContainerDetach removes one of the Work's attach containers.
+	ContainerAttach func(ctx context.Context, executor string, work domain.Work, execution domain.ID) (ContainerAttachment, error)
+	ContainerDetach func(ctx context.Context, work domain.Work, ref string) error
 	// Live returns a running attempt's output so far from its executor
 	// registration (ErrLiveUnsupported, ErrNotLive).
 	Live func(ctx context.Context, executor string, execution domain.ID, tail int64) ([]extension.LiveOutput, error)
@@ -332,6 +338,8 @@ var routes = []route{
 	{"POST", []string{"work", "*", "hold"}, true, true, (*Server).holdWork},
 	{"POST", []string{"work", "*", "release"}, true, true, (*Server).releaseWork},
 	{"POST", []string{"work", "*", "attach"}, true, true, (*Server).attachWork},
+	{"POST", []string{"work", "*", "container-attach"}, true, true, (*Server).containerAttach},
+	{"POST", []string{"work", "*", "container-detach"}, true, true, (*Server).containerDetach},
 	{"POST", []string{"work", "*", "actions", "*", "*"}, true, true, (*Server).invokeWorkAction},
 	{"POST", []string{"scopes", "*", "reconcile"}, true, true, (*Server).reconcileScope},
 	{"POST", []string{"scopes", "*", "route", "trace"}, true, false, (*Server).traceRoute},

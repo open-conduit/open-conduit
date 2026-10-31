@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -173,5 +174,66 @@ func TestDockerPlanNeedsAGateway(t *testing.T) {
 	}
 	if !gatewayRef.MatchString("ghcr.io/open-conduit/open-conduit-gateway@sha256:"+strings.Repeat("0", 64)) || !gatewayRef.MatchString("sha256:"+strings.Repeat("0", 64)) {
 		t.Error("a pinned gateway reference was refused")
+	}
+}
+
+// TestDockerSecrets: a launch's credentials are written as shell exports,
+// readable only by the operator, and the entry stub reads and removes them
+// before running the command, which sees them though the container's own
+// environment never held them. A secret whose name could be one of the
+// stub's own variables, or that holds a NUL, refuses the plan.
+func TestDockerSecrets(t *testing.T) {
+	paths, _ := layout(t)
+	file := filepath.Join(paths.Run, SecretsFile)
+	if err := writeSecrets(file, []string{"CLAUDE_CODE_OAUTH_TOKEN=tok'en $x", "GH_TOKEN=gh"}); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Stat(file); err != nil || fi.Mode().Perm() != 0o600 {
+		t.Fatalf("secrets file: %v %v", fi, err)
+	}
+	marker := filepath.Join(paths.Run, extension.ContainerTermMarker)
+	out, err := exec.Command("/bin/sh", "-c", entryStub, "open-conduit-entry", marker, file, "/bin/sh", "-c", `printf '%s|%s' "$CLAUDE_CODE_OAUTH_TOKEN" "$GH_TOKEN"`).Output()
+	if err != nil || string(out) != "tok'en $x|gh" {
+		t.Fatalf("the command saw %q (%v)", out, err)
+	}
+	if _, err := os.Stat(file); !errors.Is(err, os.ErrNotExist) {
+		t.Errorf("the entry stub left the secrets file: %v", err)
+	}
+	// Without a secrets file, the stub runs the command as before.
+	if out, err := exec.Command("/bin/sh", "-c", entryStub, "open-conduit-entry", marker, "", "/bin/echo", "hi").Output(); err != nil || string(out) != "hi\n" {
+		t.Errorf("without secrets: %q %v", out, err)
+	}
+	_ = writeSecrets(file, []string{"A=1"})
+	if out, err := exec.Command("/bin/sh", "-c", attachStub, "open-conduit-attach", file, "/bin/sh", "-c", `echo "$A"`).Output(); err != nil || string(out) != "1\n" {
+		t.Errorf("the attach stub: %q %v", out, err)
+	}
+
+	config := `{"image":"` + image + `","write":["{workspace}"],"provider":{"context":"orbstack"}}`
+	p := New(Options{Host: "h", Gateway: "sha256:" + strings.Repeat("a", 64)})
+	for _, bad := range []string{"m=1", "lower_case=1", "TOKEN=a\x00b"} {
+		launch := extension.SandboxLaunch{Argv: []string{"true"}, Dir: paths.Workspace, RunDir: paths.Run, Secrets: []string{bad}}
+		if _, err := p.Plan(context.Background(), extension.ResourceOwner{ExecutionID: "x"}, extension.ContainerPolicy{Config: domain.Payload{Data: []byte(config)}, Paths: paths}, extension.SandboxNeeds{}, launch); !errors.Is(err, extension.ErrSandboxUnavailable) || !strings.Contains(err.Error(), "secret") {
+			t.Errorf("secret %q: %v, want refused", bad, err)
+		}
+	}
+}
+
+// TestDockerMountsTheWorkHome: the Work's home is mounted read-write.
+func TestDockerMountsTheWorkHome(t *testing.T) {
+	paths, p := layout(t)
+	paths.Home = filepath.Join(filepath.Dir(paths.Run), "homes", "w")
+	if err := os.MkdirAll(paths.Home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	mounts, err := p.mounts(extension.ContainerConfig{Write: []string{"{workspace}"}}, paths, extension.SandboxNeeds{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, m := range mounts {
+		found = found || m == Mount{Target: paths.Home}
+	}
+	if !found {
+		t.Errorf("mounts %+v have no read-write home", mounts)
 	}
 }

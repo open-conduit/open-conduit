@@ -21,6 +21,7 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -114,6 +115,9 @@ type Options struct {
 	// outcomes behave as usual.
 	DryRun      bool
 	DryRunModel string
+	// Command is the open-conduit binary a container session's attach
+	// runs (`container attach`); the running executable when empty.
+	Command string
 }
 
 // Executor implements extension.Executor with interrupt, inject and resume.
@@ -156,6 +160,13 @@ func New(o Options) (*Executor, error) {
 	if o.Environ == nil {
 		o.Environ = os.Environ
 	}
+	if o.Command == "" {
+		if self, err := os.Executable(); err == nil {
+			o.Command = self
+		} else {
+			o.Command = "open-conduit"
+		}
+	}
 	if o.Render == nil {
 		o.Render = RenderEvents
 	}
@@ -171,10 +182,10 @@ func New(o Options) (*Executor, error) {
 	return &Executor{o: o, runs: map[domain.ID]*run{}}, nil
 }
 
-// Capabilities advertises interrupt, inject, resume, a workspace and the MCP
-// toolbelt transport.
+// Capabilities advertises interrupt, inject, resume, a workspace, the MCP
+// toolbelt transport, a process sandbox and a container.
 func (e *Executor) Capabilities() domain.Capabilities {
-	return domain.Capabilities{Interrupt: true, Inject: true, Resume: true, Toolbelt: extension.ToolbeltMCP, Workspace: true, Sandbox: true}
+	return domain.Capabilities{Interrupt: true, Inject: true, Resume: true, Toolbelt: extension.ToolbeltMCP, Workspace: true, Sandbox: true, Container: true}
 }
 
 func hashKey(id string) string {
@@ -262,13 +273,30 @@ func (e *Executor) Recover(ctx context.Context, r extension.RunRequest, state do
 	}
 	if !alive {
 		if !exists(filepath.Join(dir, "exit")) && !exists(filepath.Join(dir, "stop.json")) {
-			return nil, extension.ErrNotAdoptable
+			// A container's exit stands for the wrapper's lost one, once the
+			// host proves it is the container pinned.
+			if r.Context.Container == nil {
+				return nil, extension.ErrNotAdoptable
+			}
+			exit, err := r.Context.Container.Adopt(ctx, false)
+			if err != nil || !exit.Exited {
+				return nil, errors.Join(extension.ErrNotAdoptable, err)
+			}
+			if err := writeFile(filepath.Join(dir, "exit"), []byte(strconv.Itoa(exit.ExitCode)+"\n")); err != nil {
+				return nil, err
+			}
 		}
 		return adopt()
 	}
-	// A live segment of a sandboxed binding is adopted only once the host
-	// proves it still runs inside its sandbox.
-	if err := extension.AdoptSandboxed(ctx, r.Context.Sandbox, rn.pid); err != nil {
+	// A live segment of a sandboxed or container binding is adopted only
+	// once the host proves it still runs inside its sandbox or container.
+	// Its stdin went with the daemon that started it, so it takes no input
+	// (ErrNotAccepting).
+	if r.Context.Container != nil {
+		if _, err := r.Context.Container.Adopt(ctx, true); err != nil {
+			return nil, errors.Join(extension.ErrNotAdoptable, err)
+		}
+	} else if err := extension.AdoptSandboxed(ctx, r.Context.Sandbox, rn.pid); err != nil {
 		return nil, err
 	}
 	// Replace the MCP server's credential before acknowledging adoption.

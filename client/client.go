@@ -772,6 +772,28 @@ func (c *Client) AttachWork(ctx context.Context, id, key string) (out AttachSpec
 	return
 }
 
+// ContainerAttachment is an attach container the daemon made: its
+// reference, and the argv and environment that start it attached.
+type ContainerAttachment struct {
+	Ref  string   `json:"ref"`
+	Argv []string `json:"argv"`
+	Env  []string `json:"env,omitempty"`
+}
+
+// ContainerAttach makes an attach container for held Work whose session
+// ran in a container.
+func (c *Client) ContainerAttach(ctx context.Context, id, key string) (out ContainerAttachment, err error) {
+	err = c.Do(ctx, "POST", "work/"+esc(id)+"/container-attach", nil, struct{}{}, key, &out)
+	return
+}
+
+// ContainerDetach removes one of the Work's attach containers.
+func (c *Client) ContainerDetach(ctx context.Context, id, ref, key string) error {
+	return c.Do(ctx, "POST", "work/"+esc(id)+"/container-detach", nil, struct {
+		Ref string `json:"ref"`
+	}{ref}, key, nil)
+}
+
 // ReconcileResult names the ingress sources made due.
 type ReconcileResult struct {
 	EventID string   `json:"event_id"`
@@ -1027,6 +1049,9 @@ type Run struct {
 	// the last 50 and SegmentsDropped counts the older ones.
 	Segments        []RunSegment `json:"segments,omitempty"`
 	SegmentsDropped int          `json:"segments_dropped,omitempty"`
+	// Attaches are the containers operators attached to the run's session
+	// in (open-conduit container attach), each pinned as a segment's is.
+	Attaches []RunAttach `json:"attaches,omitempty"`
 	// ActiveMS is the time the run held its lease, as its timeout budget
 	// counts it: its ended segments, dropped ones included. It leaves out
 	// the segment running now; Active adds it. Runs started before segments
@@ -1080,6 +1105,12 @@ type RunContainer struct {
 	Image   string `json:"image"`
 	Daemon  string `json:"daemon"`
 	ID      string `json:"id"`
+}
+
+// RunAttach is an operator's attach container and when it was pinned.
+type RunAttach struct {
+	At string `json:"at"`
+	RunContainer
 }
 
 // RunSandbox pins a segment's sandbox: the plan's digest and its summary.

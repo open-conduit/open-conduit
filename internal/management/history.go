@@ -67,6 +67,13 @@ type wireContainer struct {
 	Daemon  string `json:"daemon"`
 	ID      string `json:"id"`
 }
+
+// wireAttach is an operator's attach container: when it was pinned, and
+// its plan, image and container daemon.
+type wireAttach struct {
+	At string `json:"at"`
+	wireContainer
+}
 type wireSandbox struct {
 	Digest  string `json:"digest"`
 	Summary string `json:"summary,omitempty"`
@@ -94,6 +101,7 @@ type wireRun struct {
 	RemainingTimeoutSeconds int64          `json:"remaining_timeout_seconds,omitempty"`
 	DurationMS              int64          `json:"duration_ms,omitempty"`
 	Segments                []wireSegment  `json:"segments,omitempty"`
+	Attaches                []wireAttach   `json:"attaches,omitempty"`
 	SegmentsDropped         int            `json:"segments_dropped,omitempty"`
 	ActiveMS                int64          `json:"active_ms,omitempty"`
 	Usage                   *wireUsage     `json:"usage,omitempty"`
@@ -133,6 +141,9 @@ func toRun(r runtime.Run) wireRun {
 			seg.Container = &wireContainer{Digest: c.Digest, Summary: c.Summary, Image: c.Image, Daemon: c.Daemon, ID: c.ID}
 		}
 		out.Segments = append(out.Segments, seg)
+	}
+	for _, c := range r.Attaches {
+		out.Attaches = append(out.Attaches, wireAttach{At: ts(c.At), wireContainer: wireContainer{Digest: c.Digest, Summary: c.Summary, Image: c.Image, Daemon: c.Daemon, ID: c.ID}})
 	}
 	out.SegmentsDropped = r.DroppedSegments
 	out.ActiveMS = r.ActiveTime.Milliseconds()

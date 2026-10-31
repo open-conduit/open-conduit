@@ -129,6 +129,7 @@ Commands:
   work cancel|retry|hold|release ID --revision N [--reason TEXT] [--key K]
   work rebind ID --revision N --binding B [--reason TEXT] [--key K]
   work attach ID [--keep-held]   hold, attach to the executor's session, release on exit
+  container attach ID        attach to held Work's session in a container, as work attach does for Work that ran in one
   claim [SCOPE#]N [--scope S] [--entry NAME]   claim an issue by hand (the scope's claim action)
   actions list (--scope S | --work W)   the actions extensions offer there now
   actions run PROVIDER ID (--scope S | --work W) [--input TEXT] [--key K]   invoke one as the local operator
@@ -208,7 +209,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "migrate": o.migrate, "backup": o.backup, "state": o.state, "extension": o.extension, "service": o.service}
+	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "migrate": o.migrate, "backup": o.backup, "state": o.state, "extension": o.extension, "service": o.service, "container": o.container}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.

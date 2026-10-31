@@ -61,12 +61,21 @@ func (n SandboxNeeds) Merge(o SandboxNeeds) SandboxNeeds {
 // overrides the sandbox tool's own environment and never reaches the child
 // (a short TMPDIR for its sockets); a key there has its child value restored
 // in the clear inside the sandbox, so it must never hold a secret.
+//
+// Secrets and TTY are for container launches only. Secrets (KEY=VALUE) are
+// the child's credentials: a container provider keeps them out of the
+// container's own environment (and so out of its inspect output and the
+// plan) and has the container's entry read them from a 0600 file in RunDir.
+// TTY asks for an interactive container on a terminal (an operator's
+// attach), started attached by the argv returned.
 type SandboxLaunch struct {
 	Argv       []string
 	Dir        string
 	Env        []string
 	WrapperEnv []string
 	RunDir     string
+	Secrets    []string
+	TTY        bool
 }
 
 // SandboxPaths name this attempt's paths, for the policy's placeholders and
@@ -74,9 +83,11 @@ type SandboxLaunch struct {
 // Workspace ({workspace}) is the launch's working directory, Run ({run}) the
 // segment's run directory, Toolbelt ({toolbelt}) the toolbelt socket.
 // Records is a host-owned directory, readable but never writable inside the
-// sandbox, where the provider keeps the files its plan refers to.
+// sandbox, where the provider keeps the files its plan refers to. Home, for a
+// container only, is the Work's own home (ExecutionContext.ContainerHome),
+// mounted read-write at the same path.
 type SandboxPaths struct {
-	Workspace, Run, Toolbelt, Records string
+	Workspace, Run, Toolbelt, Records, Home string
 }
 
 // SandboxPolicy is the operator's policy for one launch: the binding's

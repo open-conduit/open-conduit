@@ -17,6 +17,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extensions/docker"
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -179,6 +180,10 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 	if state.LaunchState == "recovering" {
 		pinned = state.ContainerPin()
 	}
+	workHome, err := d.workHome(state.WorkID)
+	if err != nil {
+		return runtime.ContainerBinding{}, fmt.Errorf("%w: the Work's home: %v", extension.ErrSandboxUnavailable, err)
+	}
 	home, _ := os.UserHomeDir()
 	b := extension.BindContainer(extension.ContainerBinding{
 		Provider:  p,
@@ -192,6 +197,7 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 		Toolbelt:  socket,
 		Records:   d.containerRecords(state.ExecutionID),
 		Home:      home,
+		WorkHome:  workHome,
 		Pin: func(c extension.ContainerPin) error {
 			c.Provider = desc.Provider
 			return pin(c)
@@ -199,7 +205,74 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 		Pinned: pinned,
 		Now:    d.now,
 	})
-	return runtime.ContainerBinding{Broker: b, Resources: b.Resources(resources), Settle: b.Settle}, nil
+	return runtime.ContainerBinding{Broker: b, Resources: b.Resources(resources), Settle: b.Settle, Home: workHome}, nil
+}
+
+// homesDir holds each Work's container home, <key>/, beside <key>.work,
+// which names the Work and is never mounted.
+func (d *daemon) homesDir() string { return filepath.Join(d.o.StateDir, "homes") }
+
+// workHome is the Work's container home, made (empty, owner-only) on first
+// use. It is per Work, not per execution, so a session resumes across
+// segments, and removed once the Work is finished (sweepHomes).
+func (d *daemon) workHome(work domain.ID) (string, error) {
+	sum := sha256.Sum256([]byte(work))
+	key := hex.EncodeToString(sum[:16])
+	dir := filepath.Join(d.homesDir(), key)
+	if err := os.MkdirAll(d.homesDir(), 0o700); err != nil {
+		return "", err
+	}
+	if err := os.WriteFile(dir+".work", []byte(string(work)+"\n"), 0o600); err != nil {
+		return "", err
+	}
+	if err := os.Mkdir(dir, 0o700); err != nil && !errors.Is(err, os.ErrExist) {
+		return "", err
+	}
+	if fi, err := os.Lstat(dir); err != nil || !fi.IsDir() {
+		return "", fmt.Errorf("%s is not a directory", dir)
+	}
+	return dir, nil
+}
+
+// sweepHomes removes the container home of each Work that is finished or
+// gone, as the claude-code executor forgets its continuity.
+func (d *daemon) sweepHomes(ctx context.Context) error {
+	names, err := filepath.Glob(filepath.Join(d.homesDir(), "*.work"))
+	if err != nil || len(names) == 0 {
+		return err
+	}
+	works := map[string]domain.ID{}
+	for _, name := range names {
+		raw, err := os.ReadFile(name)
+		if err == nil {
+			works[name] = domain.ID(strings.TrimSpace(string(raw)))
+		}
+	}
+	done := map[domain.ID]bool{}
+	err = d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		for _, id := range works {
+			w, err := tx.Work(id)
+			switch {
+			case errors.Is(err, storage.ErrNotFound):
+				done[id] = true
+			case err != nil:
+				return err
+			default:
+				done[id] = w.State.Terminal()
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	var errs []error
+	for name, id := range works {
+		if done[id] {
+			errs = append(errs, os.RemoveAll(strings.TrimSuffix(name, ".work")), os.Remove(name))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 // containerSignalled records a signal the host is about to send an
@@ -230,8 +303,8 @@ func (d *daemon) stopContainer(ctx context.Context, state runtime.AttemptState) 
 }
 
 // reconcileContainers removes this host's containers whose execution is
-// terminal or gone, with what each provider made for them, at most once
-// per resource interval.
+// terminal or gone, with what each provider made for them, and the homes
+// of finished Work, at most once per resource interval.
 func (d *daemon) reconcileContainers(ctx context.Context) {
 	if len(d.containers.providers) == 0 || d.now().Sub(d.containers.last) < d.o.ResourceInterval {
 		return
@@ -262,6 +335,7 @@ func (d *daemon) reconcileContainers(ctx context.Context) {
 			return live, err
 		}))
 	}
+	errs = append(errs, d.sweepHomes(ctx))
 	if err := errors.Join(errs...); err != nil && ctx.Err() == nil {
 		d.report("containers", "", "reconcile_failed")
 		return
@@ -289,4 +363,111 @@ func (d *daemon) containerStatus(ctx context.Context, o extension.ResourceOwner,
 		st.Mounts = append(st.Mounts, mounts...)
 	}
 	return nil
+}
+
+// containerAttach makes the attach container for an operator's `open-conduit
+// container attach`: under the binding's current container policy, with
+// the Work's home and workspace, a gateway and an internal network, and no
+// toolbelt. Its plan is pinned and recorded with the attempt it attaches
+// to before it is returned. The executor says what runs in it.
+func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.Work, execution domain.ID) (management.ContainerAttachment, error) {
+	a, ok := d.executors[executor].(extension.ContainerAttachExecutor)
+	if !ok {
+		return management.ContainerAttachment{}, management.ErrAttachUnsupported
+	}
+	var state runtime.AttemptState
+	if err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		var err error
+		state, err = runtime.AttemptStateInTx(tx, execution)
+		return err
+	}); err != nil {
+		return management.ContainerAttachment{}, err
+	}
+	desc, err := d.configs.Container(state)
+	if err != nil {
+		return management.ContainerAttachment{}, err
+	}
+	if desc == nil {
+		return management.ContainerAttachment{}, fmt.Errorf("%w: the binding no longer declares a container", extension.ErrSandboxUnavailable)
+	}
+	p := d.containers.providers[desc.Provider]
+	if p == nil {
+		return management.ContainerAttachment{}, fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, desc.Provider)
+	}
+	secrets, err := d.configs.Secrets(d.resolver)(ctx, state)
+	if err != nil {
+		return management.ContainerAttachment{}, err
+	}
+	workHome, err := d.workHome(w.ID)
+	if err != nil {
+		return management.ContainerAttachment{}, fmt.Errorf("%w: the Work's home: %v", extension.ErrSandboxUnavailable, err)
+	}
+	spec, err := a.ContainerAttach(ctx, extension.ContainerAttachRequest{Work: w, Config: state.Binding.Config, Secrets: secrets, Home: workHome})
+	if err != nil {
+		return management.ContainerAttachment{}, err
+	}
+	home, _ := os.UserHomeDir()
+	var pinned extension.ContainerPin
+	b := extension.BindContainer(extension.ContainerBinding{
+		Provider:  p,
+		Owner:     extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: execution},
+		Config:    domain.Payload{Schema: extension.ContainerConfigSchema, Data: append([]byte(nil), desc.Config...)},
+		Host:      d.containerHost(),
+		Attach:    true,
+		Protected: d.protectedPaths(),
+		Shared:    []string{d.pluginDir()},
+		RunRoot:   filepath.Join(d.o.StateDir, "executors", executor, "runs"),
+		Records:   d.containerRecords(execution),
+		Home:      home,
+		WorkHome:  workHome,
+		Pin: func(c extension.ContainerPin) error {
+			c.Provider = desc.Provider
+			pinned = c
+			return d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+				return runtime.RecordAttachInTx(tx, execution, c)
+			})
+		},
+		Now: d.now,
+	})
+	plan, err := b.Launch(ctx, spec.Needs, spec.Launch)
+	if err != nil {
+		return management.ContainerAttachment{}, err
+	}
+	return management.ContainerAttachment{Ref: pinned.ID, Argv: plan.Argv, Env: plan.Env}, nil
+}
+
+// containerDetach removes an attach container of the Work, with its
+// gateway and network: one recorded with one of the Work's attempts.
+func (d *daemon) containerDetach(ctx context.Context, w domain.Work, ref string) error {
+	var pin *extension.ContainerPin
+	if err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
+		xs, err := tx.ListExecutions(w.ID)
+		if err != nil {
+			return err
+		}
+		for _, x := range xs {
+			st, err := runtime.AttemptStateInTx(tx, x.ID)
+			if errors.Is(err, storage.ErrNotFound) {
+				continue
+			} else if err != nil {
+				return err
+			}
+			for _, a := range st.Attaches {
+				if a.ID == ref {
+					pin = &a
+				}
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if pin == nil {
+		return storage.ErrNotFound
+	}
+	p := d.containers.providers[pin.Provider]
+	if p == nil {
+		return fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, pin.Provider)
+	}
+	return p.Remove(ctx, extension.ContainerRef{ID: pin.ID})
 }

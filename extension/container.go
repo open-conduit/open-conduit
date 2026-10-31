@@ -40,6 +40,11 @@ const (
 	ContainerLabelDigest = "dev.open-conduit.digest"
 )
 
+// ContainerSegmentAttach is the ContainerLabelSegment of an operator's
+// attach container. Reconcile leaves a running one alone; a segment's
+// launch removes it.
+const ContainerSegmentAttach = "attach"
+
 // ContainerTermMarker is the file the container's entry stub writes in the
 // launch's run directory when the container is sent TERM. A TERM the host
 // didn't send makes the segment's result interrupted, whatever its code.

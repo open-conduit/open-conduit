@@ -207,10 +207,19 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	if cfg.PluginDir == "" && cfg.Playbook != "-" {
 		cfg.PluginDir = e.o.PluginDir
 	}
-	configDir := claudeConfigDir(env)
 	// The operator's home is the daemon's, and a binding's env may name
 	// another: a sandboxed claude reaches the claude config under neither.
 	operator := homes(envHome(e.o.Environ()), envHome(env))
+	// A container binding keeps claude's config in the Work's own home,
+	// seeded on first use, and its credentials out of the environment.
+	var secrets []string
+	contained := r.Context.Container != nil
+	if contained {
+		if env, secrets, err = e.containerHome(cfg, r.Context.ContainerHome, env, r.Context.Secrets); err != nil {
+			return e.preset(ctx, rn, cfg.StatusSchema, extension.ContainerReason(err), err.Error(), nil)
+		}
+	}
+	configDir := claudeConfigDir(env)
 	// A sandboxed claude keeps its config in a directory of its own: one the
 	// operator's own claude reads would carry a hook, MCP server or plugin
 	// the agent planted out of the sandbox (B09).
@@ -220,7 +229,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		}
 	}
 	sessionExists := func(session string) bool { return transcriptExists(configDir, workdir, session) }
-	attach := attachInfo{Dir: workdir, Binary: cfg.Binary, Model: cfg.model(r.Work), PermissionMode: cfg.PermissionMode, PluginDir: cfg.PluginDir, ExtraArgs: append(cfg.toolArgs(), cfg.ExtraArgs...)}
+	attach := attachInfo{Dir: workdir, Binary: cfg.Binary, Model: cfg.model(r.Work), PermissionMode: cfg.PermissionMode, PluginDir: cfg.PluginDir, ExtraArgs: append(cfg.toolArgs(), cfg.ExtraArgs...), Container: contained}
 
 	// Decide resume or fresh and record the decision before launch, fenced by
 	// this attempt's lease, so a restart reuses the same decision.
@@ -275,7 +284,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	} else {
 		argv = append(argv, "--session-id", d.Session)
 	}
-	if mcp, err := e.mcpConfig(r, dir); err != nil {
+	if mcp, err := e.mcpConfig(r, dir, contained); err != nil {
 		return e.preset(ctx, rn, cfg.StatusSchema, "start_failed", "could not prepare claude process", nil)
 	} else if mcp != "" {
 		argv = append(argv, "--mcp-config", mcp)
@@ -291,6 +300,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	// own config and sign-in, the API and its toolbelt, and never reaches
 	// the operator's claude config; with /tmp out of reach its temporary
 	// files go in the segment's own directory.
+	// A container binding needs the same, its config being the Work's home.
 	needs := extension.SandboxNeeds{Write: []string{workdir, configDir}, Read: []string{filepath.Join(dir, "mcp.json")}, Deny: operatorClaude(operator), Hosts: []string{"api.anthropic.com"}}
 	if cfg.PluginDir != "" {
 		needs.Read = append(needs.Read, cfg.PluginDir)
@@ -311,8 +321,17 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		// srt's own sockets go in the host's short temporary directory.
 		wrapperEnv = []string{"TMPDIR=/tmp"}
 	}
-	plan, err := extension.WrapLaunch(ctx, r.Context.Sandbox, needs, extension.SandboxLaunch{Argv: argv, Dir: workdir, Env: env, WrapperEnv: wrapperEnv, RunDir: dir})
-	if err != nil {
+	var plan extension.SandboxPlan
+	if contained {
+		if r.Context.ToolbeltToken != "" && r.Context.ToolbeltEndpoint != "" && e.o.ToolbeltDir != "" {
+			// The MCP server inherits the endpoint, which the provider
+			// moves to its forward, and the token file's path.
+			env = append(env, "OS_ENDPOINT="+r.Context.ToolbeltEndpoint, "OS_TOKEN_FILE="+tokenFile(r, dir))
+		}
+		if plan, err = r.Context.Container.Launch(ctx, needs, extension.SandboxLaunch{Argv: argv, Dir: workdir, Env: env, RunDir: dir, Secrets: secrets}); err != nil {
+			return e.preset(ctx, rn, cfg.StatusSchema, extension.ContainerReason(err), err.Error(), nil)
+		}
+	} else if plan, err = extension.WrapLaunch(ctx, r.Context.Sandbox, needs, extension.SandboxLaunch{Argv: argv, Dir: workdir, Env: env, WrapperEnv: wrapperEnv, RunDir: dir}); err != nil {
 		return e.preset(ctx, rn, cfg.StatusSchema, extension.SandboxReason(err), err.Error(), nil)
 	}
 	argv, env = plan.Argv, plan.Env
@@ -368,30 +387,45 @@ func (e *Executor) workspace(ctx context.Context, r extension.RunRequest, cfg Co
 
 // mcpConfig writes the toolbelt's MCP server definition for this segment:
 // `os mcp` with the endpoint and the replaceable credential file. Without a
-// toolbelt token or `os` binary the segment gets no toolbelt.
-func (e *Executor) mcpConfig(r extension.RunRequest, dir string) (string, error) {
+// toolbelt token or `os` binary the segment gets no toolbelt. In a
+// container, `os` is the container's own (first on its PATH) and the
+// server inherits its endpoint and token file from claude's environment.
+func (e *Executor) mcpConfig(r extension.RunRequest, dir string, contained bool) (string, error) {
 	if r.Context.ToolbeltToken == "" || r.Context.ToolbeltEndpoint == "" || e.o.ToolbeltDir == "" {
 		return "", nil
 	}
-	token := r.Context.ToolbeltTokenFile
-	if token == "" {
-		token = filepath.Join(dir, "token")
+	token := tokenFile(r, dir)
+	if token != r.Context.ToolbeltTokenFile {
 		if err := writeFile(token, []byte(r.Context.ToolbeltToken+"\n")); err != nil {
 			return "", err
 		}
 	}
-	doc := map[string]any{"mcpServers": map[string]any{MCPServerName: map[string]any{
+	server := map[string]any{
 		"type":    "stdio",
 		"command": filepath.Join(e.o.ToolbeltDir, "os"),
 		"args":    []string{"mcp"},
 		"env":     map[string]string{"OS_ENDPOINT": r.Context.ToolbeltEndpoint, "OS_TOKEN_FILE": token},
-	}}}
+	}
+	if contained {
+		server["command"] = "os"
+		delete(server, "env")
+	}
+	doc := map[string]any{"mcpServers": map[string]any{MCPServerName: server}}
 	b, err := json.MarshalIndent(doc, "", "  ")
 	if err != nil {
 		return "", err
 	}
 	path := filepath.Join(dir, "mcp.json")
 	return path, writeFile(path, append(b, '\n'))
+}
+
+// tokenFile is the toolbelt credential file the MCP server reads: the
+// host-kept one, else the segment's own.
+func tokenFile(r extension.RunRequest, dir string) string {
+	if r.Context.ToolbeltTokenFile != "" {
+		return r.Context.ToolbeltTokenFile
+	}
+	return filepath.Join(dir, "token")
 }
 
 // preset finishes a segment that never started a process with a structured

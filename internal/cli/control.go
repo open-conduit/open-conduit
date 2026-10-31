@@ -7,9 +7,11 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"os/signal"
 	"regexp"
 	"strconv"
 	"strings"
+	"syscall"
 
 	"github.com/open-conduit/open-conduit/client"
 )
@@ -107,8 +109,49 @@ func Attach(c *client.Client, id string, keep bool, run func(argv []string, dir 
 		return errors.Join(err, release())
 	}
 	fmt.Fprintf(notice, "open-conduit: attaching to %s (%s); new events queue until you exit\n", id, spec.Executor)
+	// Work that ran in a container attaches in one: this client makes it
+	// rather than another process finding the daemon again.
+	if containerAttachCommand(spec.Argv) {
+		runErr := ContainerAttach(c, id, func(argv []string) error { return run(argv, "") }, notice)
+		return errors.Join(runErr, release())
+	}
 	runErr := run(spec.Argv, spec.Dir)
 	return errors.Join(runErr, release())
+}
+
+// containerAttachCommand reports whether an attach command is `<binary>
+// container attach <work>`.
+func containerAttachCommand(argv []string) bool {
+	return len(argv) == 4 && argv[1] == "container" && argv[2] == "attach"
+}
+
+// ContainerAttach is `open-conduit container attach ID`, for held Work
+// whose session ran in a container: the daemon makes an attach container
+// (under the binding's current policy, with the Work's home and
+// workspace), run starts it attached on the terminal (the docker CLI, in
+// the operator's own environment), and the container,
+// its gateway and network are removed when it exits. Nothing runs on the
+// host but the docker CLI.
+func ContainerAttach(c *client.Client, id string, run func(argv []string) error, notice io.Writer) error {
+	cx, cancel := ctx()
+	a, err := c.ContainerAttach(cx, id, randomKey())
+	cancel()
+	if err != nil {
+		return err
+	}
+	// An interrupt reaches the container through the terminal; this
+	// process stays to remove it.
+	sigs := make(chan os.Signal, 1)
+	signal.Notify(sigs, os.Interrupt, syscall.SIGTERM, syscall.SIGHUP)
+	defer signal.Stop(sigs)
+	runErr := run(a.Argv)
+	cx, cancel = ctx()
+	defer cancel()
+	if err := c.ContainerDetach(cx, id, a.Ref, randomKey()); err != nil {
+		fmt.Fprintf(notice, "open-conduit: the attach container %s was not removed: %v\n", a.Ref, err)
+		return errors.Join(runErr, err)
+	}
+	return runErr
 }
 
 func (o *operator) workControl(sub string, args []string) int {
@@ -160,6 +203,35 @@ func (o *operator) workControl(sub string, args []string) int {
 		return 0
 	}
 	return -1
+}
+
+// container is `container attach ID` (the hidden `container run` is the
+// binary's own, never reached here).
+func (o *operator) container(args []string) int {
+	if len(args) == 0 || args[0] != "attach" {
+		return usageError(o.errOut, "expected container attach ID")
+	}
+	f := newFlags("container attach")
+	pos, err := f.parse(args[1:])
+	if err != nil || len(pos) != 1 {
+		return usageError(o.errOut, "expected container attach ID")
+	}
+	c, _, err := o.client()
+	if err != nil {
+		return o.emit(nil, err)
+	}
+	run := o.env.Attach
+	if run == nil {
+		stdin := o.env.Stdin
+		if stdin == nil {
+			stdin = os.Stdin
+		}
+		run = func(argv []string, dir string) error { return RunAttached(argv, dir, stdin, o.out, o.errOut) }
+	}
+	if err := ContainerAttach(c, pos[0], func(argv []string) error { return run(argv, "") }, o.errOut); err != nil {
+		return o.emit(nil, err)
+	}
+	return 0
 }
 
 // reconcileScope requests an immediate reconcile; without --revision the
