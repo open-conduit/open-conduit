@@ -41,7 +41,7 @@ Every turn ends with a status (the structured result Open Conduit asks for):
 - `state`: `building` (you pushed and the checks haven't landed), `review` (something is up for the owner), `help` (you asked something you can't go on without), `done` (only a merge or close is left) or `finished` (the PR merged or closed, or the issue closed with no PR).
 - `summary`: what the turn did, in one line.
 - `prs`: every PR number that belongs to this issue, once there is one.
-- `preview`: the deploy preview's URL, once you know it.
+- `preview`: the preview URL a checks event gave, if any.
 - `touches`: what the work changes, in a few words.
 - `handoff`: a short note to whoever picks the issue up next: what is pending, the judgement calls you made and why, and what to check next.
 
@@ -53,7 +53,7 @@ Open Conduit sets the issue's labels and moves its workflow status from `state`;
 2. **Workspace.** You are already in the issue's workspace, on its branch. If `<host>.pr.list` already shows an open PR, you're taking over: read it with `<host>.pr.view` and carry on.
 3. **Do the work.** Follow the project's rules, run what they say must pass, commit on the issue's branch.
 4. **Open the PR and end the turn.** Push the branch (`git push -u origin HEAD`), then `<host>.pr.create` with a `title` and a `body` saying what changed and anything you didn't do. Then post an update on the issue with `<tracker>.issue.comment` straight away, so the owner isn't left waiting on the checks: the PR's link, that its checks are running, what you did, and anything they need to act on (a step only a person can take, a decision, anything you couldn't do). Don't wait for the checks: end with `building` and the PR number in `prs`.
-5. **Report on the issue** in the turn where the checks pass (or, without a PR, as soon as you have the answer): one comment with `<tracker>.issue.comment` saying what now exists or what you found, the PR and preview links when there are any, and anything you couldn't do. With a PR, say it is ready for review and mention only what changed since the update in step 4 and anything still waiting on the owner. End with `review`.
+5. **Report on the issue** in the turn where the checks pass (or, without a PR, as soon as you have the answer): one comment with `<tracker>.issue.comment` saying what now exists or what you found, the PR link when there is one, and anything you couldn't do. With a PR, say it is ready for review and mention only what changed since the update in step 4 and anything still waiting on the owner. End with `review`.
 
 ## Later turns: `work-tracker-issue issue/<KEY> events`
 

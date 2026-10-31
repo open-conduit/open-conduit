@@ -5,7 +5,7 @@ description: Work a GitHub issue in turns under Open Conduit. The first turn rea
 
 # Work an issue
 
-You run in turns. Open Conduit starts your session on `work-issue <number>` and resumes it with `work-issue <number> events` whenever there is news: comments, a PR's checks finishing, a preview going up, a merge, a close. Between turns nothing runs, so never wait or poll for anything (checks, a preview, a reply): do what you can, then end the turn with your status, and Open Conduit wakes you when the rest arrives.
+You run in turns. Open Conduit starts your session on `work-issue <number>` and resumes it with `work-issue <number> events` whenever there is news: comments, a PR's checks finishing, a merge, a close. Between turns nothing runs, so never wait or poll for anything (checks, a reply): do what you can, then end the turn with your status, and Open Conduit wakes you when the rest arrives.
 
 Arguments: `<number>` is the issue. `<number> events` is a later turn: the events since your last one follow in the message. `<number> handoff` is a fresh session (see Fresh session). Anything else is a note from Open Conduit; follow it before step 3.
 
@@ -52,7 +52,7 @@ When the work can't go on until something happens, park the issue and let Open C
 
 Write `<project>/` before the number for another project under the same Open Conduit (`pr:club/88:merged`); that project must allow yours to read it. Give several conditions and any one of them wakes you. Add `until` to any wait as the latest it should last; use it whenever what you're waiting for might never happen. The `reason` says what you're waiting for and why; it goes on the issue. If it has already happened, the call says so: carry on instead. Waits on a job's next run (`job:<name>`) arrive with scheduled jobs; until then wait until a time.
 
-`github.wait` is the last thing you do in a turn, because every call after it is refused until you are resumed: after it, end the turn with the state the work is in (`review` if the owner has something to look at, else `done`). Open Conduit wakes you with what happened (or that the time came first). A comment, a check result or a merge on your own issue also wakes you; that ends the wait, so once you've dealt with it, wait again if what you were waiting for still hasn't happened. Don't use this to wait for your own PR's checks, its preview, its merge or a reply: Open Conduit already resumes you for those.
+`github.wait` is the last thing you do in a turn, because every call after it is refused until you are resumed: after it, end the turn with the state the work is in (`review` if the owner has something to look at, else `done`). Open Conduit wakes you with what happened (or that the time came first). A comment, a check result or a merge on your own issue also wakes you; that ends the wait, so once you've dealt with it, wait again if what you were waiting for still hasn't happened. Don't use this to wait for your own PR's checks, its merge or a reply: Open Conduit already resumes you for those.
 
 When follow-up work shouldn't start yet (wave 2 once wave 1 merges, a check once a date comes), open it now with the same conditions: `github.issue.create` with `{"title": …, "body": …, "wait": ["pr:1257:merged"]}`. Open Conduit holds it and starts it when the condition is met, so nobody has to remember to open it later.
 
@@ -61,14 +61,14 @@ When follow-up work shouldn't start yet (wave 2 once wave 1 merges, a check once
 Every turn ends with a status (the structured result Open Conduit asks for):
 
 - `state`: one of
-  - `building`: you pushed and the checks or the preview haven't landed. Open Conduit resumes you when they do.
-  - `review`: something is up for the owner: the PR with its preview, findings, or changes pushed and reported after feedback.
+  - `building`: you pushed and the checks haven't finished. Open Conduit resumes you when they do.
+  - `review`: something is up for the owner: the PR, findings, or changes pushed and reported after feedback.
   - `help`: you asked the owner something you can't go on without (a decision, access, money, an ask you can't read). Carry on with anything the question doesn't block before ending the turn.
   - `done`: everything the thread asked for is handled and only a merge or close is left.
   - `finished`: the PR merged or closed, or the issue closed with no PR.
 - `summary`: what the turn did, in one line.
 - `prs`: every PR number that belongs to this issue, once there is one.
-- `preview`: the deploy preview's URL, once you know it.
+- `preview`: the preview URL a checks event gave, if any.
 - `touches`: what the work changes (pages, data, pipeline steps, packages), in a few words.
 - `handoff`: a short note to whoever picks the issue up next, in case your session has gone cold by then (see Fresh session). Write it every turn. Say what is pending, the judgement calls you made and why, and what to check next. Leave out what the issue, the PR and git already show.
 
@@ -108,12 +108,12 @@ If `github.pr.list` already shows an open PR, you're taking over from an earlier
 ### 4. Open the PR and end the turn
 
 - Push the branch (`git push -u origin HEAD`, or the remote the project's rules name), then `github.pr.create` with a `title` and a `body` saying what changed and anything from the issue you didn't do. The operation adds the line that links the PR to the issue.
-- Post an update on the issue with `github.issue.comment` straight away, so the owner isn't left waiting on the checks to hear from you: the PR's link, that its checks are running, a short account of what you did, and anything they need to act on (a step only a person can take, such as a secret to add or a setting to change, a decision, anything you couldn't do), each with a bold lead.
-- Don't wait for the checks. End the turn with `building`, the PR number in `prs` and `touches` filled in. Open Conduit resumes you when every check on the PR's head has finished, with the result and a deploy preview's URL when the repository has one.
+- Post an update on the issue with `github.issue.comment` straight away, so the owner isn't left waiting on the checks to hear from you: the PR's link, that its checks are running, a short account of what you did, and anything they need to act on (a step only a person can take, such as a secret to add or a setting to change, a decision, anything you couldn't do).
+- Don't wait for the checks. End the turn with `building`, the PR number in `prs` and `touches` filled in. Open Conduit resumes you when every check on the PR's head has finished, with the result, and with a preview URL when the project has set one up.
 
 ### 5. Report on the issue
 
-With a PR, this happens in the turn where the checks pass (a `Checks passed` event, with the preview URL when there is one); without one, it happens as soon as you have the answer. Post one comment on the issue with `github.issue.comment`: what now exists or what you found, links to the PR and the preview when there are any, and anything you couldn't do. With a PR, say it is ready for review, and don't repeat what the update in step 4 already said: mention only what changed since (failing checks you fixed, say) and anything still waiting on the owner. End the turn with `review`, with `preview` filled in when there is one.
+With a PR, this happens in the turn where the checks pass (a `Checks passed` event); without one, it happens as soon as you have the answer. Post one comment on the issue with `github.issue.comment`: what now exists or what you found, a link to the PR when there is one, and anything you couldn't do. With a PR, say it is ready for review, and don't repeat what the update in step 4 already said: mention only what changed since (failing checks you fixed, say) and anything still waiting on the owner. End the turn with `review`.
 
 ## Later turns: `work-issue <number> events`
 
@@ -124,10 +124,10 @@ The message lists what happened since your last turn, each under its own heading
   - A question: answer it. A request you think is wrong, or one you can't act on: say why, briefly, and ask.
   - If the comment corrects something you did, log it as the toolbelt's instructions say, if it collects corrections.
   - From another agent: act on it if it bears on your work, but don't reply unless you disagree outright (see Other agents).
-  - Reply where the comment was made, with the operation its heading names. Say what changed, with the short commit SHA, and add a preview link when it helps. One comment can answer several points from the same person in the same place.
+  - Reply where the comment was made, with the operation its heading names. Say what changed, with the short commit SHA. One comment can answer several points from the same person in the same place.
 - **Checks failed**: `github.checks` links each failing check. Read its log, reproduce it locally, fix it, push, and end with `building`.
-- **Checks passed**, with the preview: if the report (step 5) isn't posted yet, post it now. Otherwise, if you pushed changes for feedback, reply to that feedback with the preview and end with `review`.
-- **Required checks never reported**: checks the base branch requires (a deploy preview, say) never started on the head. Find out why (a `[skip …]` in the PR title or a commit message stops some deploys), start them, often with a new push, and end with `building`. If they rightly don't run on this PR, report as in step 5 and say so.
+- **Checks passed**: if the report (step 5) isn't posted yet, post it now. Otherwise, if you pushed changes for feedback, reply to that feedback and end with `review`.
+- **Required checks never reported**: checks the base branch requires (a deploy, say) never started on the head. Find out why (a `[skip …]` in the PR title or a commit message stops some deploys), start them, often with a new push, and end with `building`. If they rightly don't run on this PR, report as in step 5 and say so.
 - **No checks ran**: the repo has no CI. Treat the PR as checked once what the rules say must pass has passed locally, and report as in step 5.
 - **PR has conflicts**: the base branch moved and the PR no longer merges. Rebase the branch onto the base branch, resolve the conflicts, run what the rules say must pass, force-push, and end with `building`.
 - **PR merged or closed**, or **the issue closed** with no PR: end with `finished`. Open Conduit removes the workspace when the issue's work completes; the branch stays.
@@ -147,7 +147,7 @@ When your last turn ended long enough ago that resuming would cost more than sta
 
 ## Don't
 
-- Don't wait or poll for checks, previews or replies: end the turn and let Open Conduit resume you.
+- Don't wait or poll for checks or replies: end the turn and let Open Conduit resume you.
 - Don't push to the base branch, merge the PR or close the issue, unless a routine the issue asked you to run says to.
 - Don't change Open Conduit's labels on the issue; it sets them from your status.
 - Don't edit other agents' workspaces.

@@ -13,6 +13,8 @@ Once you have read the issue, post a short start comment with `github.issue.comm
 
 The update you post once the PR is open takes the same shape as the report below, without the preview: the author's mention, `- PR: <url>`, a short paragraph on what was done, and each thing they need to act on with a bold lead. The report, once the checks pass, then says the PR is ready, gives the preview, and mentions only what changed since the update.
 
+When a checks event carries a preview URL, put it in the turn's `preview`, and add a preview link to a reply to feedback when it helps.
+
 Keep the report on the issue brief; the PR has the detail. If there is a preview, open it once to check the changed page loads. Then post:
 
 - a mention of the issue's author and the headline of what now exists, in one line
