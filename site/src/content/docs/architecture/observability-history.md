@@ -41,7 +41,7 @@ The toolbelt adds `toolbelt.called` and `toolbelt.rejected` records through `Too
 | `execution.queued` | New attempt | trigger ID, type and trace |
 | `execution.started`, `.resumed`, `.recovered` | Claim from pending, parked or running at a higher epoch | trigger, executor registration, generation, deadline, lease owner/epoch; previous epoch and owner on recovery |
 | `execution.launched` | Launch acknowledgement (`launch.mode` run, recover/adopt or resume) | epoch, executor |
-| `execution.parked`, `execution.{completed,failed,waiting,handoff,cancelled}` | Execution state | outcome kind and summary, duration, artifact count, stop state, resource exclusion, executor usage as `Usage` |
+| `execution.parked`, `execution.{completed,failed,waiting,handoff,cancelled}` | Execution state | outcome kind and summary, the turn's declared state (`turn.status`), start time, duration, the trigger's type and time (`trigger.type`, `trigger.occurred_at`), Work kind, artifact count, stop state, resource exclusion, executor usage as `Usage` |
 | `execution.stop_confirmed` | Trusted `ConfirmStopped` | epoch |
 | `execution.retention_expired` | Retention ledger | artifact count, kept count |
 | `lease.renewed`, `lease.released` | Lease | epoch, owner, expiry |
@@ -202,3 +202,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - Ticket 03-08 made issue reports ordinary derived Events traceable with `events chain`.
 - Ticket 05-02 added the workspace to `runtime.Run` and `runview.Detail` for job run parity.
 - Ticket 05-03 added the introspection telemetry exporter, host watch and `introspection` doctor check. It also fixed a regression in which a fired timer's Event was reported as two `event.accepted` records, once by the acceptance and once by `FireTimer`, and added the assertion to `TestLifecycleTelemetryRetriesAndRecovery`.
+- Issue 227 added the turn's declared state, start time, trigger type and time, and Work kind to terminal execution records, so an exporter can measure how long a Work spent in each state between turns.

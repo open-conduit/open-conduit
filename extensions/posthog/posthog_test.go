@@ -78,8 +78,9 @@ func TestExporterAndFanout(t *testing.T) {
 	cost := 0.25
 	rec := func(name, scope string) observability.Record {
 		return observability.Record{Name: name, At: time.Unix(100, 0), Correlation: observability.Correlation{ScopeID: "eng", WorkID: "w", ExecutionID: "x"},
-			Attributes: map[string]string{"execution.duration_ms": "1500", "executor": "claude-code", "execution.attempt": "2"},
-			Usage:      &observability.Measurement{InputTokens: &in, OutputTokens: &out, CachedTokens: &cached, Cost: &cost, Currency: "USD"}}
+			Attributes: map[string]string{"execution.duration_ms": "1500", "executor": "claude-code", "execution.attempt": "2", "work.kind": "github.issue",
+				"turn.status": "review", "trigger.type": "github.issue.comment", "trigger.occurred_at": "1970-01-01T00:01:00Z", "execution.started_at": "1970-01-01T00:01:05Z"},
+			Usage: &observability.Measurement{InputTokens: &in, OutputTokens: &out, CachedTokens: &cached, Cost: &cost, Currency: "USD"}}
 	}
 	other := rec("execution.completed", "eng")
 	other.Correlation.ScopeID = "ops"
@@ -94,7 +95,9 @@ func TestExporterAndFanout(t *testing.T) {
 	e := c.events[0]
 	props := e["properties"].(map[string]any)
 	if e["event"] != EventTurn || e["api_key"] != "phc_x" || e["distinct_id"] != "me" || props["outcome"] != "completed" || props["duration_ms"] != 1500.0 ||
-		props["input_tokens"] != 10.0 || props["cost"] != 0.25 || props["executor"] != "claude-code" || props["$lib"] != "open-conduit" || props["scope"] != "eng" {
+		props["input_tokens"] != 10.0 || props["cost"] != 0.25 || props["executor"] != "claude-code" || props["$lib"] != "open-conduit" || props["scope"] != "eng" ||
+		props["attempt"] != 2.0 || props["work_kind"] != "github.issue" || props["status"] != "review" || props["trigger_type"] != "github.issue.comment" ||
+		props["trigger_at"] != "1970-01-01T00:01:00Z" || props["started_at"] != "1970-01-01T00:01:05Z" {
 		t.Fatalf("event %v", e)
 	}
 	c.status = http.StatusBadRequest
