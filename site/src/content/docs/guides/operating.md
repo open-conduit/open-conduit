@@ -28,6 +28,15 @@ open-conduit web
 
 This serves the same view in a browser on this machine, at `http://open-conduit.localhost:7420`. It prints a sign-in URL; open it to start a session in that browser. Browsers resolve every `*.localhost` name to this machine without any setup. If yours doesn't, use the second URL it prints, which names `127.0.0.1`.
 
+To have the daemon serve the view itself, start it with `--web`, or install the service that way:
+
+```sh
+open-conduit serve --web
+open-conduit service install --web
+```
+
+The sign-in lasts across restarts: the URL stays the same and a signed-in browser stays signed in, so you can bookmark it. `open-conduit web url` prints it at any time. To sign every browser out, delete `private/web.signin` in the state directory and restart the view.
+
 The web view has five pages, with the daemon's state, the active generation and the agent and job slots in use along the bottom.
 
 - **Runs** lists one row per Work, grouped by what it needs from you: first what needs a person (a decision an extension offers, such as answering an agent's question, or a repair such as a turn that ran out of retries), then running, queued, waiting, held and closed. Queued is Work with input waiting for a turn, and says so when a concurrency limit is holding it back. Work that handed its turn back and has nothing new to act on is waiting, for its next event, not queued, so raising `settings.concurrency` never leaves it behind. Each row shows what the Work is doing now in its source's words (what a Wait is for, such as "checks on PR #137"), its lifetime as a line with a bar for each stretch of active time, and its turns. The state strip, search, filters, grouping and sort are all in the URL. Select rows to hold or release several at once; running Work is skipped and the result says how many.
@@ -40,8 +49,9 @@ Every change (run again, rebind, send a wake event, hold, release, cancel a turn
 
 - `--addr HOST:PORT` (or `OPEN_CONDUIT_WEB_ADDR`) changes where it listens. Only a loopback address is accepted, so the view is never reachable from another machine.
 - `--host NAME` (or `OPEN_CONDUIT_WEB_HOST`) changes the name it answers to.
+- With `serve`, the same choices are `--web-addr` and `--web-host`. Either one also turns the view on. Pass the same values to `web url`.
 
-The web view runs as its own process, a client of the daemon like the TUI. It holds the operator token itself and never gives it to the browser. Stop it with Ctrl-C.
+`open-conduit web` runs the view as its own process, a client of the daemon like the TUI; stop it with Ctrl-C. With `serve --web` it runs inside the daemon and stops with it, but it is still a client of the management socket. Either way it holds the operator token itself and never gives it to the browser. If the view can't start (its port is taken, say), the daemon logs why and keeps running without it.
 
 ## The same controls on the command line
 
