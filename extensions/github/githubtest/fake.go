@@ -59,6 +59,9 @@ type Pull struct {
 	MergedAt  *time.Time
 	Reviews   []Review
 	CreatedAt time.Time
+	// Mergeable is what a single PR's read and its webhook bodies say
+	// (nil: GitHub has not worked it out). The list never carries it.
+	Mergeable *bool
 }
 
 type Review struct {
@@ -444,6 +447,14 @@ func (s *Server) PushPull(n int, sha string) {
 	}
 }
 
+// SetMergeable sets what GitHub says about whether a PR merges cleanly
+// (false: it has conflicts; nil: not worked out yet).
+func (s *Server) SetMergeable(n int, m *bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pulls[n].Mergeable = m
+}
+
 // MergePull merges a PR.
 func (s *Server) MergePull(n int) {
 	s.mu.Lock()
@@ -719,6 +730,7 @@ func (s *Server) PullHook(action string, n int) []byte {
 	defer s.mu.Unlock()
 	pr := s.pullJSON(n)
 	pr["merged"] = s.pulls[n].MergedAt != nil
+	pr["mergeable"] = s.pulls[n].Mergeable
 	return mustJSON(map[string]any{"action": action, "repository": s.repository(), "pull_request": pr, "number": n})
 }
 
@@ -1362,6 +1374,7 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		if _, ok := s.pulls[atoi(x[1])]; ok {
 			pr := s.pullJSON(atoi(x[1]))
 			pr["merged"] = s.pulls[atoi(x[1])].MergedAt != nil
+			pr["mergeable"] = s.pulls[atoi(x[1])].Mergeable
 			return http.StatusOK, pr
 		}
 		return 0, nil

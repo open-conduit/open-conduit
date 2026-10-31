@@ -35,6 +35,7 @@ const (
 	TypePullOpen      = "github.pull_request.open"
 	TypePullClosed    = "github.pull_request.closed"
 	TypePullMerged    = "github.pull_request.merged"
+	TypePullConflicts = "github.pull_request.conflicts"
 	TypeCommentHuman  = "github.comment.human"
 	TypeCommentBot    = "github.comment.bot"
 	TypeCommentAgent  = "github.comment.agent"
@@ -52,6 +53,7 @@ const (
 	SchemaPull     = "github.pull_request.v1"
 	SchemaComment  = "github.comment.v1"
 	SchemaChecks   = "github.checks.v1"
+	SchemaConflict = "github.conflicts.v1"
 	SchemaDelivery = "github.delivery.v1"
 )
 
@@ -61,7 +63,7 @@ const DeliveryLoss = "Raw webhook deliveries (github.delivery, the trigger input
 // Families declares every emitted event family.
 func Families() []extension.EventFamily {
 	var out []extension.EventFamily
-	for _, t := range []string{TypeIssueOpen, TypeIssueClosed, TypePullOpen, TypePullClosed, TypePullMerged,
+	for _, t := range []string{TypeIssueOpen, TypeIssueClosed, TypePullOpen, TypePullClosed, TypePullMerged, TypePullConflicts,
 		TypeCommentHuman, TypeCommentBot, TypeCommentAgent, TypeChecksPending, TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing} {
 		out = append(out, extension.EventFamily{Type: t, ReDerivable: true})
 	}
@@ -169,6 +171,17 @@ type ChecksPayload struct {
 	// or failed when something also failed. Omitted when empty, so a head
 	// with nothing missing keeps its observation identity.
 	Missing []string `json:"missing,omitempty"`
+}
+
+// ConflictsPayload is an open PR whose head no longer merges cleanly into
+// its base. It names the head but not the base's commit, so one conflicting
+// head is observed once however often the base branch moves after it.
+type ConflictsPayload struct {
+	Repo    string `json:"repo"`
+	Number  int    `json:"number"`
+	HeadSHA string `json:"head_sha"`
+	BaseRef string `json:"base_ref"`
+	URL     string `json:"url"`
 }
 
 // DeliveryPayload is a raw webhook delivery (non-re-derivable).
@@ -519,6 +532,30 @@ func (n *normalizer) pullObservation(ctx context.Context, p rawPull) (extension.
 		}
 	}
 	return n.observation("pr/"+strconv.Itoa(p.Number), typ, key, occurred, SchemaPull, payload)
+}
+
+// conflictsObservation reports an open PR GitHub says cannot merge
+// (mergeable false: its head conflicts with its base). p must come from a
+// single PR's read or a webhook body, which carry mergeable. A PR that is
+// mergeable, or whose mergeability GitHub has not worked out yet, observes
+// nothing; the next read catches it. The occurrence is the head's commit
+// time, so push and reconcile agree; a failed commit read is "not yet".
+func (n *normalizer) conflictsObservation(ctx context.Context, p rawPull) (extension.Observation, bool, error) {
+	if p.State != "open" || p.Head.SHA == "" || p.Mergeable == nil || *p.Mergeable {
+		return extension.Observation{}, false, nil
+	}
+	key, ref, err := n.pullKey(ctx, p)
+	if err != nil || ref == nil {
+		// Only a PR that belongs to an issue has an agent to tell.
+		return extension.Observation{}, false, err
+	}
+	at, err := n.c.CommitTime(ctx, n.s.Repo, p.Head.SHA)
+	if err != nil || at.IsZero() {
+		return extension.Observation{}, false, nil
+	}
+	out := ConflictsPayload{Repo: n.s.Repo, Number: p.Number, HeadSHA: p.Head.SHA, BaseRef: p.Base.Ref, URL: p.HTMLURL}
+	o, err := n.observation("pr/"+strconv.Itoa(p.Number)+"/conflicts", TypePullConflicts, key, at, SchemaConflict, out)
+	return o, err == nil, err
 }
 
 func commentType(body string, user rawUser) (string, *Agent) {

@@ -43,6 +43,12 @@ func RenderEvent(e domain.Event) (string, bool) {
 			s += fmt.Sprintf("\nThese required checks never reported either: %s. %s", strings.Join(c.Missing, ", "), missingAdvice)
 		}
 		return s, true
+	case TypePullConflicts:
+		var c ConflictsPayload
+		if e.Data.Schema != SchemaConflict || json.Unmarshal(e.Data.Data, &c) != nil {
+			return "", false
+		}
+		return fmt.Sprintf("### PR #%d has conflicts with %s at %s\nIt can't merge until they're resolved: rebase the branch onto `%s`, resolve them, run what must pass and push.", c.Number, c.BaseRef, short(c.HeadSHA), c.BaseRef), true
 	case TypePullMerged, TypePullClosed:
 		var p PullPayload
 		if e.Data.Schema != SchemaPull || json.Unmarshal(e.Data.Data, &p) != nil {

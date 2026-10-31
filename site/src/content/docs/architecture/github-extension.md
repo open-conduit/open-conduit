@@ -57,6 +57,7 @@ The client enforces these rules:
 | `github.pull_request.open`, `.closed`, `.merged` | `pr/N` | The tracker issue the PR belongs to, else `pr/N` |
 | `github.comment.human`, `.bot`, `.agent` (conversation, inline and review; `kind` in the payload) | `issue/N/comment/ID`, `pr/N/comment/ID`, `pr/N/review_comment/ID`, `pr/N/review/ID` | Their issue or PR's key |
 | `github.checks.pending`, `.passed`, `.failed`, `.none`, `.missing` | `pr/N/checks` | The PR's key |
+| `github.pull_request.conflicts` | `pr/N/conflicts` | The tracker issue the PR belongs to (a PR with no issue is never observed) |
 
 Push and reconcile share one normalizer. The observation version hashes the whole normalized envelope (type, key, occurrence time, payload). Equal external state from either transport therefore has the same version and delivery ID (`item@version`), and B02 deduplication keeps the first accepted envelope. Any difference is a new version, so the runtime's canonical-identity check can never wedge a source. Types name observed state, not webhook actions, because reconcile sees state. Author class is in the type, so a Wait can filter out agent and bot notes without a payload predicate.
 
@@ -70,7 +71,7 @@ The issue payload deliberately omits `updated_at`, comment counts and the projec
 
 Push makes read-only service calls for generation history, PR details and aggregate checks, and no coordination writes. When check runs are refused (a fine-grained token cannot hold Checks), the aggregate uses the head's Actions workflow runs, else statuses only (see [engineering tools](../engineering-tools/#checks-timing)). A review without a body is never observed. GitHub wraps every inline comment and reply in one, the agent's own included, so observing it as a human comment would wake waiting agents in a loop. Check events re-read the aggregate state of each open PR whose head is the delivery's commit, exactly as reconcile evaluates it. A status event finds its PRs through `commits/{sha}/pulls`.
 
-**Reconcile.** GitHub has no snapshot token. A generation lists every issue and every PR in stable creation order, so pagination cannot repeat an item; a deletion can only skip one. It observes open items and items closed within the horizon, then the repository's conversation and inline comments updated within the horizon. Reviews and checks are read for each listed PR.
+**Reconcile.** GitHub has no snapshot token. A generation lists every issue and every PR in stable creation order, so pagination cannot repeat an item; a deletion can only skip one. It observes open items and items closed within the horizon, then the repository's conversation and inline comments updated within the horizon. Reviews and checks are read for each listed PR. Each open PR that belongs to an issue is also read on its own, because only that read carries `mergeable` and GitHub sends no webhook when a PR picks up conflicts (the base branch moving under it). When GitHub says it cannot merge, the PR is `github.pull_request.conflicts`. The payload names the head commit and the base branch but not the base's commit, and the occurrence is the head's commit time, so one conflicting head is one observation however often the base moves after it; a new head that still conflicts is a new one. A `pull_request` delivery that already carries `mergeable: false` observes the same. A PR that is only behind its base is not observed.
 
 Each `Reconcile` call is one bounded page. The cursor is `phase:page:offset`, and a call stops after 25 detail reads or 10 seconds. `Complete` certifies that every listing was read to its end in this generation. Rate limits and failed reads return errors, so no absence is inferred.
 
@@ -90,7 +91,7 @@ Handler `github` reads only the detached Event, Scope and Work. It finds its ext
   - It has a required label, if any are configured.
   - It does not carry the claimed label, unless it is a reopened generation. A claimed issue with no Work belongs to another owner, which preserves a single owner.
   - Scheduled issues are claimed by the [`github-hold` route](../engineering-tools/#scheduled-holds), never by `github`.
-- **Existing Work** receives these as input: new human comments, reviews with a body, other Works' agent comments, closes, merges and completed checks (passed, failed, none and missing required checks).
+- **Existing Work** receives these as input: new human comments, reviews with a body, other Works' agent comments, closes, merges, completed checks (passed, failed, none and missing required checks) and merge conflicts.
 - **Never delivered:** edits, unmarked bot comments, this Work's own notes, open-state updates, pending checks and absence.
 
 Labels influence only this claim decision. Work lifecycle never reads them.

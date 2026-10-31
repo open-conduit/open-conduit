@@ -26,7 +26,7 @@ import (
 // it waits (v1: comments, check results and merges arrive meanwhile). Agent
 // comments are excluded: the wait's own reason comment is one. Another
 // agent's comment wakes it through peerComments instead.
-var waitInputTypes = []string{TypeDependencyMet, TypeCommentHuman, TypeIssueClosed, TypePullMerged, TypePullClosed, TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing}
+var waitInputTypes = []string{TypeDependencyMet, TypeCommentHuman, TypeIssueClosed, TypePullMerged, TypePullClosed, TypePullConflicts, TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing}
 
 // dependencyFilter is the opaque filter of a translated dependency.
 type dependencyFilter struct {
