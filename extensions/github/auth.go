@@ -8,6 +8,7 @@ import (
 	"crypto/sha256"
 	"crypto/x509"
 	"encoding/base64"
+	"encoding/hex"
 	"encoding/json"
 	"encoding/pem"
 	"errors"
@@ -87,8 +88,21 @@ func newAppToken(id string, secrets SecretFunc, keyName string, c *Client) *appT
 	return &appToken{id: id, secrets: secrets, keyName: keyName, c: c, inst: map[string]int64{}, cache: map[int64]cachedToken{}}
 }
 
+// parseKey reads an App's PEM private key. It also takes the key as two
+// stores hand back a multi-line value: hex (macOS Keychain's `security
+// find-generic-password -w`, which is how a `keyring:` reference reads it
+// there) and with its line breaks written as `\n` (an environment variable).
 func parseKey(text string) (*rsa.PrivateKey, error) {
-	block, _ := pem.Decode([]byte(strings.TrimSpace(text)))
+	text = strings.TrimSpace(text)
+	if !strings.Contains(text, "-----BEGIN") {
+		if raw, err := hex.DecodeString(text); err == nil {
+			text = strings.TrimSpace(string(raw))
+		}
+	}
+	if !strings.Contains(text, "\n") {
+		text = strings.ReplaceAll(text, `\n`, "\n")
+	}
+	block, _ := pem.Decode([]byte(text))
 	if block == nil {
 		return nil, ErrCredential
 	}
