@@ -1,0 +1,26 @@
+# {{NAME}}
+
+An [Open Conduit](https://github.com/open-conduit/open-conduit) extension package. It serves one toolbelt operation, `{{NAME}}.hello`, that agents call through Open Conduit.
+
+## What to change first
+
+1. **The module path.** `go.mod` says `{{MODULE}}`; make it your repository's path (`go mod edit -module github.com/you/{{NAME}}`).
+2. **The operation.** In `main.go`, rename `{{NAME}}.hello`, change `HelloInput` and `HelloOutput` to what an agent sends and gets back, and say in `sdk.Guidance` when an agent should call it. Add operations, routes, tasks and checks the same way: each registration on `build()` also declares it in the manifest.
+3. **The tests.** `main_test.go` calls the operation on an in-memory host (`sdktest`); `e2e_test.go` installs the package in a real daemon and has a scripted agent call it (`extensiontest`). Change both to match.
+4. **The certification fixture.** `certification()` in `main.go` holds the cases `make certify` checks; give each operation a case.
+5. **The playbook.** `playbooks/{{NAME}}.md` tells agents what the package does for them.
+
+The guide to the SDK, the harnesses and certification is [Extension packaging, SDK and certification](https://github.com/open-conduit/open-conduit/blob/main/site/src/content/docs/architecture/extension-packaging.md).
+
+## Commands
+
+| Command | Does |
+| --- | --- |
+| `make check` | what CI runs: formatting, vet, the tests, a build and `make lint` |
+| `make package` | the package directory in `dist/{{NAME}}`, as Open Conduit installs it |
+| `make lint` | `open-conduit extension check` on the package |
+| `make certify` | certifies the package with the Open Conduit release `go.mod` requires; `OPEN_CONDUIT_REF=main` builds Open Conduit at that ref instead |
+
+CI (`.github/workflows/ci.yml`) runs `make check`, and certifies the package against Open Conduit's `main` and its latest release.
+
+Install the built package with `open-conduit extension install dist/{{NAME}}`; it takes effect at the next `open-conduit serve`. Upgrade Open Conduit with `go get github.com/open-conduit/open-conduit@VERSION && go mod tidy`.

@@ -108,6 +108,27 @@ type CheckFinding struct {
 	Warning bool   `json:"warning,omitempty"`
 }
 
+// NewRequest is `extension new`: a package repository named Name in Dir,
+// with Go module path Module (default example.com/<name>). Replace, when
+// set, is an Open Conduit checkout go.mod builds against.
+type NewRequest struct {
+	Name    string
+	Dir     string
+	Module  string
+	Replace string
+}
+
+// NewResult is the repository `extension new` wrote.
+type NewResult struct {
+	Name   string `json:"name"`
+	Dir    string `json:"dir"`
+	Module string `json:"module"`
+	// Requires is the Open Conduit version go.mod requires.
+	Requires string   `json:"requires"`
+	Files    []string `json:"files"`
+	Notes    []string `json:"notes,omitempty"`
+}
+
 // ExtensionOps are supplied by the open-conduit entrypoint.
 type ExtensionOps struct {
 	List    func(configPath string) (ExtensionList, error)
@@ -119,11 +140,17 @@ type ExtensionOps struct {
 	Rollback func(configPath, name string) (ExtensionChange, error)
 	Remove   func(configPath, stateDir, name string, force bool) (ExtensionChange, error)
 	Certify  func(ctx context.Context, r CertifyRequest) (CertifyResult, error)
+	// New writes a package repository (extension new).
+	New func(r NewRequest) (NewResult, error)
 	// Setups returns the installed packages' setup flows (init TYPE).
 	Setups func(configPath, stateDir string) []extension.Setup
 }
 
 const extensionHelp = `Usage: open-conduit extension COMMAND [--config PATH]
+  new NAME [--dir DIR] [--module PATH] [--replace DIR] [--json]
+                                start a package repository in DIR (default ./NAME) whose make check passes first time:
+                                one operation, NAME.hello, its tests, a Makefile, CI, a playbook and a README;
+                                go.mod requires this release of open-conduit (--replace builds against a checkout instead)
   list [--json]                 installed packages (in <config dir>/extensions)
   inspect DIR [--json]          check a package directory offline
   check DIR [--json] [--allow NAME,…]
@@ -168,7 +195,7 @@ func (o *operator) extension(args []string) int {
 	}
 	sub := args[0]
 	rest, bools := boolFlags(args[1:], "json", "force")
-	f := newFlags(sub, "config", "report", "sha256", "allow")
+	f := newFlags(sub, "config", "report", "sha256", "allow", "dir", "module", "replace")
 	pos, err := f.parse(rest)
 	if err != nil {
 		return usageError(o.errOut, "invalid extension flags")
@@ -184,6 +211,32 @@ func (o *operator) extension(args []string) int {
 		return pos[0], true
 	}
 	switch sub {
+	case "new":
+		name, ok := one("NAME")
+		if !ok {
+			return usageError(o.errOut, "expected extension new NAME [--dir DIR] [--module PATH] [--replace DIR]")
+		}
+		r := NewRequest{Name: name, Dir: o.abs(name), Module: f.get("module")}
+		if d := f.get("dir"); d != "" {
+			r.Dir = o.abs(d)
+		}
+		if d := f.get("replace"); d != "" {
+			r.Replace = o.abs(d)
+		}
+		if ops.New == nil {
+			fmt.Fprintln(o.errOut, "open-conduit: extension new is not available in this binary")
+			return 1
+		}
+		res, err := ops.New(r)
+		if err != nil || bools["json"] {
+			return o.emit(res, err)
+		}
+		fmt.Fprintf(o.out, "Created the %s package in %s (module %s, open-conduit %s)\n", res.Name, res.Dir, res.Module, res.Requires)
+		for _, n := range res.Notes {
+			fmt.Fprintf(o.out, "  %s\n", n)
+		}
+		fmt.Fprintf(o.out, "Next: cd %s && make check, then see its README for what to change first.\n", res.Dir)
+		return 0
 	case "list":
 		l, err := ops.List(path)
 		if err != nil || bools["json"] {
