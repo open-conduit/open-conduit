@@ -359,6 +359,20 @@ Start it in a terminal of its own and leave it running:
 go run ./fakeweather
 ```
 
+### Watch it run
+
+Before you install anything, `open-conduit dev` runs the package against a throwaway daemon, with a scope and an agent made from your manifest, the same way `extensiontest` does. From the package's root, in another terminal, give the weather entry the stand-in's address:
+
+```sh
+open-conduit dev --entry 'weather={"service":"http://127.0.0.1:8090"}'
+```
+
+It builds the package, starts the daemon and prints the web view's URL and a `work create` command. Open the URL, run the command to start a Work, and watch the agent call `weather.forecast` and get back sunny spells. The agent is Claude Code, with your own sign-in.
+
+Leave `dev` running and change the forecast handler, for example the message for an empty city. When you save, `dev` rebuilds the package and restarts the daemon; earlier Work stays. A build that fails is reported, and the running daemon carries on as it was. Press Ctrl-C to stop it: it stops the daemon and removes its state, so nothing is left behind.
+
+[Running a package while you build it](/open-conduit/architecture/extension-packaging/#running-a-package-while-you-build-it-open-conduit-dev) covers its flags and what it prints.
+
 ### Install the package
 
 Install the package and restart the daemon, which reads packages only when it starts:
