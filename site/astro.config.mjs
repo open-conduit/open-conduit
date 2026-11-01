@@ -65,6 +65,7 @@ export default defineConfig({
 					collapsed: true,
 					items: [
 						{ label: 'About these pages', slug: 'architecture' },
+						{ label: 'Core principles', slug: 'architecture/principles' },
 						{ label: 'The core in one page', slug: 'architecture/core' },
 						{ label: 'Performance', slug: 'architecture/performance' },
 						{

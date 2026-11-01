@@ -1,5 +1,28 @@
 @AGENTS.md
 
+# Principles
+
+Work is the fundamental abstraction. Everything else (an LLM, GitHub, Slack, a human, a shell command, even an execution) is a participant in the lifecycle of Work. [Core principles](site/src/content/docs/architecture/principles.md) is the full statement; read it before designing anything that touches the core. In five sentences:
+
+1. Work is durable; executions are attempts.
+2. Events describe reality; the runtime manages consequences.
+3. The core owns orchestration semantics; extensions own domain semantics.
+4. Any suitably capable participant can execute, observe, initiate or influence Work, subject to explicit authority.
+5. Complex behaviour emerges through composition, not through special cases in the core.
+
+The litmus test: if a new capability needs the core to understand a particular domain, integration or executor, first ask whether the abstraction is wrong. Either a reusable primitive is missing, or an extension should translate the behaviour into the existing primitives (Work, Event, Execution, Timer/Wait, Scope). A feature doesn't enter the core merely because it is widely useful.
+
+# Working on Open Conduit
+
+- **Know which side of the boundary you're on.** `domain`, `extension`, `storage`, `observability` and `protocol` are the public contracts; `internal/runtime` uses only those; `extensions/<name>` and `executors/<name>` use the contracts and `client`, never the runtime, SQLite or each other; `internal/bootstrap` and `cmd/open-conduit` wire it all together. `make boundaries` enforces this, and CONTRIBUTING.md's "Package boundaries" has the detail.
+- **No privileged extensions.** Anything a bundled extension does must be possible for an independently installed one (`protocol/sdk`, `sdk/typescript`) without changing the core. If a first-party extension needs a new hook, add it to the public contracts, not a side door.
+- **Don't assume the executor is an LLM.** Executors declare capabilities (run, resume, inject, interrupt) and the runtime binds them. A shell script or a human must fit the same model.
+- **Put authority at the host.** Operations are checked where the host serves them; never rely on instructions in a prompt or playbook to keep an executor in bounds, and fail closed.
+- **Let the platform wait.** Waiting, timers, retries and recovery belong to the runtime. Don't keep a process alive or poll to wait for something; express it as a Wait or Timer.
+- **Leave a trail.** New behaviour should show up in run history and telemetry, linked from the triggering Event through Work and Execution to its outcome, so it can be inspected and corrected.
+- **Prove contracts with the shared suites.** A new implementation runs the `conformance` suites; a new suite case comes with a negative control that it catches.
+- **Docs move with the code.** The architecture pages in `site/src/content/docs/architecture/` describe current behaviour; update the relevant one in the same commit as the change.
+
 # Process
 
 [CONTRIBUTING.md](CONTRIBUTING.md) is the full guide. In short:
