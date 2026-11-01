@@ -6,6 +6,7 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/human"
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
+	"github.com/open-conduit/open-conduit/extensions/observe"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/extensions/tracker"
 	"github.com/open-conduit/open-conduit/internal/cli"
@@ -89,6 +90,11 @@ func Adapters() []cli.Adapter {
 			Kinds:      []string{"extension"},
 			Entry:      []cli.Field{def("responders", `["operator:local"]`, "who may answer, each kind:id or a bare kind"), def("surfaces", `["tui"]`, "where the question is shown")},
 			Operations: []string{human.OpAsk}},
+		{Type: observe.Type, Title: "Observed sources", Description: "Lets a binding's executor report what it observed in an outside source with observe.record; the observe route gives each thread of a source Work. Add observe.record to the reporting binding's operations.",
+			Kinds:      []string{"extension", "route"},
+			Entry:      []cli.Field{req("sources", `[{"name": "slack-help", "reporters": ["watcher"]}]: each source and the bindings that may report for it`)},
+			Route:      []cli.Field{req("source", "the source whose threads the route takes")},
+			Operations: observe.Operations()},
 		{Type: "claude-code", Title: "Claude Code", Description: "Runs Claude Code turns with sessions, handoff, attach and the MCP toolbelt.", Setup: "--with claude",
 			Kinds: []string{"executor"},
 			Binding: []cli.Field{def("binary", "claude", ""), f("model", ""), def("permission_mode", "bypassPermissions", ""), def("playbook", "work-issue", "work-tracker-issue for Linear/Jira"),

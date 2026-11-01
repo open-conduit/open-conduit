@@ -44,6 +44,8 @@ type repEnv struct {
 	disabled bool // compose without registering the extension (entry removed)
 	extra    *extension.Registration
 	handlers map[string]extension.RouteHandler // route handlers besides introspection's
+	// register, when set, adds a registration built over the open store.
+	register func(storage.Store) extension.Registration
 
 	store     *sqlite.Store
 	ingress   *runtime.Ingress
@@ -129,6 +131,11 @@ func (e *repEnv) open() {
 	}
 	if e.extra != nil {
 		if err = belt.Register(*e.extra); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if e.register != nil {
+		if err = belt.Register(e.register(store)); err != nil {
 			t.Fatal(err)
 		}
 	}

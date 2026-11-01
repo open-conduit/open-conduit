@@ -12,6 +12,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/extensions/introspection"
+	"github.com/open-conduit/open-conduit/extensions/observe"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
@@ -139,6 +140,8 @@ func samplesConfig() []byte {
 					entry("app", "bitbucket", "bitbucket", map[string]any{"namespace": "bitbucket/acme/app", "scope": "proj", "repo": "acme/app", "tracker": map[string]any{"namespace": "jira/acme/proj", "keys": []string{"PROJ"}}})}),
 			scope("self", []string{}, shell(introspection.OpReport), []any{route("reports", introspection.Type, map[string]any{"work": introspection.WorkReport})},
 				[]any{entry("introspection", introspection.Type, "", map[string]any{})}),
+			scope("help", []string{}, shell(observe.OpRecord), []any{route("slack-help", observe.Type, map[string]any{"source": "slack-help"})},
+				[]any{entry("help", observe.Type, "", map[string]any{"sources": []any{map[string]any{"name": "slack-help", "reporters": []string{"run"}}}})}),
 		},
 	}
 	b, _ := json.Marshal(cfg)
