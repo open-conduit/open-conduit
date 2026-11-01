@@ -16,10 +16,10 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | Operation | Input | Does |
 | --- | --- | --- |
 | `github.context` | | the repository, issue, branch, base branch and where the rules are |
-| `github.issue.view` | `number`? | the issue and every comment on it (another issue with `number`) |
-| `github.issue.comment` | `body`, `number`? | comment on the issue (`number` for another agent's issue) |
-| `github.issue.list` | | the repository's open issues, to check for one before opening another |
-| `github.issue.create` | `title`, `body`, `wait`?, `until`? | open a new issue; with `wait` or `until`, it isn't worked until then (see Waiting) |
+| `github.issue.view` | `number`?, `project`? | the issue and every comment on it (another issue with `number`; one in another project with `project` and `number`) |
+| `github.issue.comment` | `body`, `number`?, `project`? | comment on the issue (`number` for another agent's issue; `project` and `number` for one in another project) |
+| `github.issue.list` | `project`? | the repository's open issues (another project's with `project`), to check for one before opening another |
+| `github.issue.create` | `title`, `body`, `wait`?, `until`?, `project`? | open a new issue; with `wait` or `until`, it isn't worked until then (see Waiting); with `project`, in that project instead |
 | `github.pr.list` | | the issue's PRs, open or not |
 | `github.pr.create` | `title`, `body`, `base`?, `draft`?, `closes_issue`? | open a PR from the issue's branch; its merge closes the issue unless `closes_issue` is `false` |
 | `github.pr.view` | `number` | a PR and every comment, inline comment and review on it |
@@ -79,6 +79,8 @@ Open Conduit sets the issue's status labels from `state`; never change those you
 Other issues may be worked by other agents at the same time. Read one with `github.issue.view` and its `number`, and its PRs with `github.pr.view`. To build on another issue's work, wait for its PR (`github.wait` with `pr:<n>:merged`).
 
 Each agent hears only about its own issue and PRs. To reach the agent working another issue, comment on that issue with `github.issue.comment` and its `number`, and reply to another agent on its issue, not yours. Your comment wakes that agent if it has parked with `github.wait`, but it doesn't start an issue that is still held before its first turn; only what it was opened to wait for does. Comments from other agents arrive as events like the owner's.
+
+When work belongs to another project under the same Open Conduit, file it there: give `github.issue.list` that `project` (its ID or name, as in a wait's `<project>/`) to check for an existing issue, then `github.issue.create` with the same `project`, or `github.issue.comment` with `project` and `number` to add to one. That project's own routes pick the new issue up; it can't be held with `wait` or `until`. Your project must be allowed to file there; if the call refuses, it says what the owner needs to add: tell them on your issue.
 
 ## First turn: `work-issue <number>`
 

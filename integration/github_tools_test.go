@@ -41,6 +41,8 @@ type toolsEnv struct {
 	tools     *gh.Tools
 	extra     []gh.Source
 	aliasOK   bool
+	// fileOK grants another scope in file_scopes.
+	fileOK bool
 	// jobs resolves job: conditions (05-02); nil refuses them.
 	jobs func(context.Context, domain.ID, string) (domain.CorrelationKey, []string, bool)
 	// connection is the connection the agent binding names, pinned on each
@@ -131,7 +133,15 @@ func (e *toolsEnv) compose() {
 	mayRead := func(reader, target domain.ID) error {
 		return authorize(context.Background(), runtime.AliasAuthorization{SourceScopeID: target, TargetScopeID: reader})
 	}
-	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, WaitProgress: progress, Writers: e.writers, MayRead: mayRead, Sources: func() []gh.Source {
+	mayFile := func(filer, target domain.ID) error {
+		e.mu.Lock()
+		defer e.mu.Unlock()
+		if filer != target && !e.fileOK {
+			return errors.New("file_scopes does not grant it")
+		}
+		return nil
+	}
+	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, WaitProgress: progress, Writers: e.writers, MayRead: mayRead, MayFile: mayFile, Sources: func() []gh.Source {
 		return append([]gh.Source{{Settings: e.settings, Connection: "github", Client: e.client, Projector: e.projector}}, e.extra...)
 	}}); err != nil {
 		t.Fatal(err)
@@ -798,6 +808,82 @@ func TestGitHubCrossScopeWaitNeedsAuthorization(t *testing.T) {
 	if got := e.work(w.ID); got.State != domain.WorkReady {
 		t.Fatalf("cross-scope merge did not wake: %v", got.State)
 	}
+}
+
+// An agent finds and files issues in another project by naming it. Filing
+// and commenting need that project in file_scopes, and looking needs it in
+// file_scopes or read_scopes; each refusal names the grant to add.
+func TestGitHubIssuesInAnotherProject(t *testing.T) {
+	e := newToolsEnv(t)
+	ops := e.opsScope()
+	existing := ops.OpenIssue("Deploys are slow", "Ten minutes.", ghAlice)
+	_, w := e.claim("Needs faster deploys", "", "bug")
+	a := e.start(w.ID)
+
+	_, err := e.call(a, gh.OpIssueList, "", map[string]any{"project": "ops"})
+	refused(t, err, "not_allowed")
+	if !strings.Contains(err.Error(), `add "ops" to `+string(ghScope)+"'s authorization.file_scopes (or read_scopes)") {
+		t.Fatalf("list refusal does not say how to allow it: %v", err)
+	}
+	e.mu.Lock()
+	e.aliasOK = true
+	e.mu.Unlock()
+	list := e.must(a, gh.OpIssueList, "", map[string]any{"project": "ops"})
+	if !strings.Contains(string(mustJSON(list)), "Deploys are slow") || strings.Contains(string(mustJSON(list)), "Needs faster deploys") {
+		t.Fatalf("list in ops: %v", list)
+	}
+	ops.AddComment(existing, ghAlice, "Mostly the image build.")
+	view := e.must(a, gh.OpIssueView, "", map[string]any{"project": "ops", "number": existing})
+	if view["title"] != "Deploys are slow" || !strings.Contains(string(mustJSON(view["comments"])), `\"project\": \"ops\", \"number\": `+itoa(existing)) {
+		t.Fatalf("view in ops: %v", view)
+	}
+	if _, err = e.call(a, gh.OpIssueView, "", map[string]any{"project": "ops"}); err == nil {
+		t.Fatal("a view in another project needs a number")
+	}
+	// read_scopes alone doesn't let it write there.
+	_, err = e.call(a, gh.OpIssueCreate, "", map[string]any{"project": "ops", "title": "Cache the image build", "body": "From the widgets work."})
+	refused(t, err, "not_allowed")
+	if !strings.Contains(err.Error(), `may not file issues in ops; to allow it, add "ops" to `+string(ghScope)+"'s authorization.file_scopes") {
+		t.Fatalf("create refusal does not say how to allow it: %v", err)
+	}
+	_, err = e.call(a, gh.OpIssueComment, "", map[string]any{"project": "ops", "number": existing, "body": "Same here."})
+	refused(t, err, "not_allowed")
+	_, err = e.call(a, gh.OpIssueCreate, "", map[string]any{"project": "nowhere", "title": "x", "body": "y"})
+	refused(t, err, "no_project")
+
+	e.mu.Lock()
+	e.aliasOK, e.fileOK = false, true
+	e.mu.Unlock()
+	_, err = e.call(a, gh.OpIssueCreate, "", map[string]any{"project": "ops", "title": "Held", "body": "y", "until": "2030-01-01T00:00Z"})
+	refused(t, err, "hold_unsupported")
+	out := e.must(a, gh.OpIssueCreate, "create-ops", map[string]any{"project": "ops", "title": "Cache the image build", "body": "From the widgets work."})
+	if out["state"] != "posted" {
+		t.Fatalf("create in ops: %v", out)
+	}
+	n := int(out["number"].(float64))
+	if got := ops.Issue(n); got.Title != "Cache the image build" || gh.ParseAgent(got.Body) == nil {
+		t.Fatalf("ops issue: %+v", got)
+	}
+	if again := e.must(a, gh.OpIssueCreate, "create-ops", map[string]any{"project": "ops", "title": "Cache the image build", "body": "From the widgets work."}); again["number"] != out["number"] {
+		t.Fatalf("retried create opened another: %v", again)
+	}
+	if strings.Contains(string(mustJSON(e.must(a, gh.OpIssueList, "", map[string]any{}))), "Cache the image build") {
+		t.Fatal("the issue was opened in the Work's own repository")
+	}
+	if c := e.must(a, gh.OpIssueComment, "", map[string]any{"project": "ops", "number": existing, "body": "Filed the cache work."}); c["state"] != "posted" {
+		t.Fatalf("comment in ops: %v", c)
+	}
+	var mine int
+	for _, c := range ops.Comments(existing) {
+		if gh.ParseAgent(c.Body) != nil && strings.Contains(c.Body, "Filed the cache work.") {
+			mine++
+		}
+	}
+	if mine != 1 {
+		t.Fatalf("agent comments in ops: %+v", ops.Comments(existing))
+	}
+	_, err = e.call(a, gh.OpIssueComment, "", map[string]any{"project": "ops", "body": "no number"})
+	refused(t, err, "number_required")
 }
 
 // A PR head with no checks at all reports "No checks ran" after

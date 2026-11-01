@@ -145,18 +145,8 @@ func (t *Tools) target(ctx context.Context, b *bound, c Cond) (issue, code Sourc
 	if c.Project == "" || c.Project == string(b.work.ScopeID) {
 		return b.issue, b.code, b.work.ScopeID, nil
 	}
-	var scopes []domain.Scope
-	if err = t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
-		var er error
-		scopes, er = tx.ListScopes()
-		return er
-	}); err != nil {
+	if scope, err = t.scopeNamed(ctx, c.Project); err != nil {
 		return
-	}
-	for _, s := range scopes {
-		if string(s.ID) == c.Project || strings.EqualFold(s.Name, c.Project) {
-			scope = s.ID
-		}
 	}
 	if scope == "" {
 		err = refuse("no_project", "%s: no project here is called %s", c, c.Project)
@@ -166,16 +156,43 @@ func (t *Tools) target(ctx context.Context, b *bound, c Cond) (issue, code Sourc
 		return
 	}
 	var found bool
-	for _, s := range t.o.Sources() {
-		if s.Settings.Scope != string(scope) {
-			continue
+	if issue, code, found = t.trackerIn(scope); !found {
+		err = refuse("no_project", "%s: project %s has no GitHub repository registered", c, c.Project)
+		return
+	}
+	return issue, code, scope, nil
+}
+
+// scopeNamed is the scope a project names by ID or name, or "" when none
+// is called that.
+func (t *Tools) scopeNamed(ctx context.Context, project string) (domain.ID, error) {
+	var scopes []domain.Scope
+	if err := t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
+		var er error
+		scopes, er = tx.ListScopes()
+		return er
+	}); err != nil {
+		return "", err
+	}
+	var scope domain.ID
+	for _, s := range scopes {
+		if string(s.ID) == project || strings.EqualFold(s.Name, project) {
+			scope = s.ID
 		}
-		if s.Settings.TrackIssues && !found {
+	}
+	return scope, nil
+}
+
+// trackerIn is a scope's first registered issue tracker and the code
+// repository that names it as its shared tracker (the tracker itself
+// without one).
+func (t *Tools) trackerIn(scope domain.ID) (issue, code Source, found bool) {
+	for _, s := range t.o.Sources() {
+		if s.Settings.Scope == string(scope) && s.Settings.TrackIssues && !found {
 			issue, code, found = s, s, true
 		}
 	}
 	if !found {
-		err = refuse("no_project", "%s: project %s has no GitHub repository registered", c, c.Project)
 		return
 	}
 	for _, s := range t.o.Sources() {
@@ -183,7 +200,7 @@ func (t *Tools) target(ctx context.Context, b *bound, c Cond) (issue, code Sourc
 			code = s
 		}
 	}
-	return issue, code, scope, nil
+	return issue, code, true
 }
 
 // trackerOf is the registered source holding a code repository's issues:

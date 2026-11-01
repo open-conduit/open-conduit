@@ -94,6 +94,9 @@ type Authorization struct {
 	Connections []string `json:"connections"`
 	Operations  []string `json:"operations"`
 	ReadScopes  []string `json:"read_scopes"`
+	// FileScopes are the other scopes whose trackers this scope's agents
+	// may file issues in and comment on (optional; empty grants none).
+	FileScopes []string `json:"file_scopes,omitempty"`
 }
 type Resource struct {
 	Provider string          `json:"provider"`
@@ -445,12 +448,13 @@ func (c *checker) scope(n *node, path string) ScopeConfig {
 	}
 	if a := n.field("authorization"); a != nil {
 		p := path + "/authorization"
-		out.Authorization = &Authorization{[]string{}, []string{}, []string{}}
-		if c.object(a, p, []string{"connections", "operations", "read_scopes"}) {
+		out.Authorization = &Authorization{[]string{}, []string{}, []string{}, []string{}}
+		if c.object(a, p, []string{"connections", "operations", "read_scopes"}, "file_scopes") {
 			out.Authorization = &Authorization{
 				Connections: c.list(a.field("connections"), p+"/connections", idPattern),
 				Operations:  c.list(a.field("operations"), p+"/operations", opPattern),
 				ReadScopes:  c.list(a.field("read_scopes"), p+"/read_scopes", idPattern),
+				FileScopes:  c.list(a.field("file_scopes"), p+"/file_scopes", idPattern),
 			}
 		}
 	}
