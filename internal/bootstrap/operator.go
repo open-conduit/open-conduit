@@ -66,29 +66,31 @@ func ValidateConfigAt(configPath string, data []byte) ([]config.Diagnostic, erro
 // validateWith validates offline, leaving out the installed package named
 // exclude (the removal check).
 func validateWith(configPath, exclude string, data []byte) ([]config.Diagnostic, error) {
+	diags, _, err := checkWith(configPath, exclude, data)
+	return diags, err
+}
+
+// CheckConfigAt is ValidateConfigAt plus config.ModeWarnings from the same
+// validation, so a config check starts each installed package once. A config
+// that doesn't validate has no mode warnings (its diagnostics say what is
+// wrong).
+func CheckConfigAt(configPath string, data []byte) ([]config.Diagnostic, []string, error) {
+	return checkWith(configPath, "", data)
+}
+
+func checkWith(configPath, exclude string, data []byte) ([]config.Diagnostic, []string, error) {
 	reg := registry(offlineExecutors())
 	pkgs := offlineExternal(&reg, configPath, exclude)
 	defer pkgs.close()
-	_, err := config.ValidateFile(data, reg, fileIncludes(configPath))
+	s, err := config.ValidateFile(data, reg, fileIncludes(configPath))
+	if err == nil {
+		return nil, config.ModeWarnings(s, reg), nil
+	}
 	var invalid *config.ValidationError
 	if errors.As(err, &invalid) {
-		return append(invalid.Diagnostics, pkgs.diagnostics()...), nil
+		return append(invalid.Diagnostics, pkgs.diagnostics()...), nil, nil
 	}
-	return nil, err
-}
-
-// ModeWarnings are config.ModeWarnings for a config file, offline: one per
-// binding whose resource mode its executor overrides. A config that doesn't
-// validate has none (its diagnostics say what is wrong).
-func ModeWarnings(configPath string, data []byte) []string {
-	reg := registry(offlineExecutors())
-	pkgs := offlineExternal(&reg, configPath, "")
-	defer pkgs.close()
-	s, err := config.ValidateFile(data, reg, fileIncludes(configPath))
-	if err != nil {
-		return nil
-	}
-	return config.ModeWarnings(s, reg)
+	return nil, nil, err
 }
 
 // fileIncludes resolves a config file's includes beside it. Offline there is

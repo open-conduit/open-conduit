@@ -44,11 +44,15 @@ func main() {
 	env.Web = serveWeb
 	env.EditConfig = func(r cli.EditRequest) (bool, error) { return tui.EditConfig(r, os.Stdin, os.Stdout) }
 	env.Migrate, env.Upgrade, env.State = bootstrap.Migrate, bootstrap.Upgrade, bootstrap.StateOps()
-	env.ValidateConfigAt, env.Extensions = validateAt, bootstrap.ExtensionOps(version, commit)
+	// One offline validation serves a config check's warnings and its
+	// diagnostics.
+	check := bootstrap.NewConfigCheck()
+	env.ValidateConfigAt = func(path string, data []byte) ([]client.Detail, error) { return details(check.Validate(path, data)) }
+	env.Extensions = bootstrap.ExtensionOps(version, commit)
 	env.ConfigWarnings = func(path string, data []byte) []string {
 		warnings := append(config.Warnings(data), bootstrap.RenamedWarnings(data)...)
 		warnings = append(warnings, config.IncludeWarnings(data, filepath.Dir(path))...)
-		return append(warnings, bootstrap.ModeWarnings(path, data)...)
+		return append(warnings, check.ModeWarnings(path, data)...)
 	}
 	env.OfflineChecks = offlineChecks
 	env.Service = cli.SystemServiceHost()
@@ -75,7 +79,11 @@ func validate(data []byte) ([]client.Detail, error) { return validateAt("", data
 
 // validateAt also knows the extension packages installed beside path.
 func validateAt(path string, data []byte) ([]client.Detail, error) {
-	diags, err := bootstrap.ValidateConfigAt(path, data)
+	return details(bootstrap.ValidateConfigAt(path, data))
+}
+
+// details are an offline validation's diagnostics as client details.
+func details(diags []config.Diagnostic, err error) ([]client.Detail, error) {
 	if err != nil {
 		return nil, err
 	}
