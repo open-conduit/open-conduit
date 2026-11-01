@@ -12,70 +12,8 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/extensiontest"
 )
-
-// changeSetClaude is a fake Claude Code CLI for a setup session that
-// proposes changes. On its first turn it proposes through the toolbelt's
-// MCP server, validates, leaves its execution token and endpoint for the
-// test, waits for the test to release it, then asks whether to go on and
-// ends the turn; on the next it keeps what it was resumed with and
-// finishes.
-const changeSetClaude = `#!/bin/sh
-f=${FAKE_DIR:?}
-session=""; mcp=""
-while [ $# -gt 0 ]; do
-  case "$1" in
-    --session-id|--resume) session=$2; shift ;;
-    --mcp-config) mcp=$2; shift ;;
-  esac
-  shift
-done
-t="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
-mkdir -p "$t"
-echo '{"type":"system","subtype":"init"}'
-IFS= read -r line
-content=$(printf '%s' "$line" | sed -E 's/^\{"message":\{"content":"(.*)","role":"user"\},"type":"user"\}$/\1/')
-printf '{"type":"user","isReplay":true,"message":{"role":"user","content":"%s"}}\n' "$content"
-cmd=$(sed -n 's/.*"command": "\(.*\)",*$/\1/p' "$mcp")
-ep=$(sed -n 's/.*"OS_ENDPOINT": "\(.*\)",*$/\1/p' "$mcp")
-tf=$(sed -n 's/.*"OS_TOKEN_FILE": "\(.*\)",*$/\1/p' "$mcp")
-call() {
-  printf '%s\n' \
-    '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-06-18","capabilities":{},"clientInfo":{"name":"fake","version":"0"}}}' \
-    '{"jsonrpc":"2.0","method":"notifications/initialized"}' \
-    "$@" | env OS_ENDPOINT="$ep" OS_TOKEN_FILE="$tf" "$cmd" mcp
-}
-if [ -f "$f/proposed" ]; then
-  printf '%s\n' "$line" > "$f/resumed"
-  state=finished
-else
-  : > "$f/proposed"
-  call \
-    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.propose","input":{"op":"replace","pointer":"/scopes/setup/name","value":"Set up","why":"a clearer name"},"request_id":"c1"}}}' \
-    '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.propose","input":{"op":"add","pointer":"/settings/reconcile_seconds","value":600,"why":"reconcile every ten minutes"},"request_id":"c2"}}}' \
-    '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.propose","input":{"op":"add","pointer":"/scopes/setup/secret_refs/token","value":"ghp_notareference","why":"the token"},"request_id":"literal"}}}' \
-    '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.propose","input":{"op":"add","pointer":"/scopes/setup/secret_refs/token","value":"keyring:github-token","why":"the token, by reference"},"request_id":"c3"}}}' \
-    '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.withdraw","input":{"change":"c3","reason":"not needed yet"},"request_id":"w3"}}}' \
-    '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.propose","input":{"op":"add","pointer":"/scopes/setup/secret_refs/token","value":"keyring:github-token","why":"the token, by reference"},"request_id":"c4"}}}' \
-    '{"jsonrpc":"2.0","id":8,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.validate","input":{},"request_id":"v1"}}}' \
-    > "$f/mcp-out"
-  call \
-    '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.probe","input":{"probe":"setup.tools","why":"which tools are here"},"request_id":"p1"}}}' \
-    '{"jsonrpc":"2.0","id":3,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.probe","input":{"probe":"setup.cat","args":{"path":"/etc/passwd"},"why":"peek"},"request_id":"p2"}}}' \
-    '{"jsonrpc":"2.0","id":4,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.read","input":{},"request_id":"r1"}}}' \
-    '{"jsonrpc":"2.0","id":5,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.say","input":{"text":"your token is ghp_abcdefghijklmnopqrstuvwxyz0123456789"},"request_id":"leak"}}}' \
-    '{"jsonrpc":"2.0","id":6,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.trace","input":{"scope":"setup","sample":"setup/session-started","why":"would a session start"},"request_id":"t1"}}}' \
-    '{"jsonrpc":"2.0","id":7,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.trace","input":{"scope":"nowhere","why":"no such scope"},"request_id":"t2"}}}' \
-    > "$f/probe-out"
-  cp "$tf" "$f/token"
-  printf '%s' "$ep" > "$f/endpoint"
-  while [ ! -f "$f/release" ]; do sleep 0.1; done
-  call '{"jsonrpc":"2.0","id":2,"method":"tools/call","params":{"name":"call","arguments":{"operation":"setup.ask","input":{"question":"Shall I go on?","choices":["yes","no"]},"request_id":"go-on"}}}' >> "$f/mcp-out"
-  state=help
-fi
-echo '{"type":"user"}' >> "$t/$session.jsonl"
-printf '{"type":"result","subtype":"success","is_error":false,"result":"ok","session_id":"%s","num_turns":1,"total_cost_usd":0,"structured_output":{"state":"%s","summary":"set","handoff":"none"}}\n' "$session" "$state"
-`
 
 // TestDaemonSetupChangeSet drives a change set through the composed daemon.
 // The agent proposes and withdraws, and a literal secret is refused. The
@@ -86,56 +24,85 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"ok","ses
 // can't apply, read the candidate, invoke an action or validate as the
 // operator: only the operator applies.
 func TestDaemonSetupChangeSet(t *testing.T) {
-	d := newDrill(t)
-	binary := filepath.Join(d.root, "claude")
-	if err := os.WriteFile(binary, []byte(changeSetClaude), 0o755); err != nil {
+	fake := t.TempDir()
+	release := filepath.Join(fake, "release")
+	propose := func(id, op, pointer string, value any, why string) extensiontest.Call {
+		return extensiontest.Call{Operation: "setup.propose", RequestID: id, Input: map[string]any{"op": op, "pointer": pointer, "value": value, "why": why}}
+	}
+	// The first turn proposes, validates and probes, asks whether to go
+	// on, then holds until the test releases it (so its token is live);
+	// the next keeps what it was resumed with and finishes.
+	claude, err := extensiontest.FakeClaude(fake,
+		extensiontest.Turn{State: "help", Barrier: release, Calls: []extensiontest.Call{
+			propose("c1", "replace", "/scopes/setup/name", "Set up", "a clearer name"),
+			propose("c2", "add", "/settings/reconcile_seconds", 600, "reconcile every ten minutes"),
+			propose("literal", "add", "/scopes/setup/secret_refs/token", "ghp_notareference", "the token"),
+			propose("c3", "add", "/scopes/setup/secret_refs/token", "keyring:github-token", "the token, by reference"),
+			{Operation: "setup.withdraw", RequestID: "w3", Input: map[string]any{"change": "c3", "reason": "not needed yet"}},
+			propose("c4", "add", "/scopes/setup/secret_refs/token", "keyring:github-token", "the token, by reference"),
+			{Operation: "setup.validate", RequestID: "v1", Input: map[string]any{}},
+			{Operation: "setup.probe", RequestID: "p1", Input: map[string]any{"probe": "setup.tools", "why": "which tools are here"}},
+			{Operation: "setup.probe", RequestID: "p2", Input: map[string]any{"probe": "setup.cat", "args": map[string]any{"path": "/etc/passwd"}, "why": "peek"}},
+			{Operation: "setup.read", RequestID: "r1", Input: map[string]any{}},
+			{Operation: "setup.say", RequestID: "leak", Input: map[string]any{"text": "your token is ghp_abcdefghijklmnopqrstuvwxyz0123456789"}},
+			{Operation: "setup.trace", RequestID: "t1", Input: map[string]any{"scope": "setup", "sample": "setup/session-started", "why": "would a session start"}},
+			{Operation: "setup.trace", RequestID: "t2", Input: map[string]any{"scope": "nowhere", "why": "no such scope"}},
+			{Operation: "setup.ask", RequestID: "go-on", Input: map[string]any{"question": "Shall I go on?", "choices": []string{"yes", "no"}}},
+		}},
+		extensiontest.Turn{State: "finished"},
+	)
+	if err != nil {
 		t.Fatal(err)
 	}
-	binding := setupBinding(d.root, binary)
+	binding := setupBinding(fake, claude.Path)
 	binding["operations"] = []string{"read_context", "wait", "declare_outcome", "setup.say", "setup.ask", "setup.probe", "setup.read", "setup.propose", "setup.withdraw", "setup.validate", "setup.trace"}
 	var doc bytes.Buffer
 	if err := json.Indent(&doc, setupDaemonConfig(binding), "", "    "); err != nil {
 		t.Fatal(err)
 	}
-	if err := os.WriteFile(d.config, doc.Bytes(), 0o600); err != nil {
-		t.Fatal(err)
-	}
-	d.start("")
+	d := extensiontest.Daemon(t, extensiontest.Options{Config: doc.Bytes(), Packages: []string{setupPackage(t)}})
+	c := d.Client()
 	ctx := context.Background()
-	res, err := d.c.InvokeAction(ctx, client.ActionTarget{ScopeID: "setup"}, "setup", "start", "opus", "start")
+	res, err := c.InvokeAction(ctx, client.ActionTarget{ScopeID: "setup"}, "setup", "start", "opus", "start")
 	if err != nil {
 		t.Fatalf("start: %v", err)
 	}
 	session := client.ActionTarget{WorkID: res.Event.RoutedWorkID}
-	d.until("the agent proposed and handed over its token", 30*time.Second, func() bool {
-		_, err := os.Stat(filepath.Join(d.root, "endpoint"))
-		return err == nil
+	var first extensiontest.TurnRecord
+	d.Until("the agent proposed and handed over its token", 30*time.Second, func() bool {
+		var ok bool
+		first, ok = claude.Turn(1)
+		return ok
 	})
-	out, _ := os.ReadFile(filepath.Join(d.root, "mcp-out"))
-	if !strings.Contains(string(out), "not_a_reference") {
-		t.Fatalf("a literal secret was not refused: %s", out)
+	result := map[string]extensiontest.Result{}
+	for _, r := range first.Results {
+		result[r.RequestID] = r
+	}
+	if r := result["literal"]; !r.IsError || !strings.Contains(r.Text, "not_a_reference") {
+		t.Fatalf("a literal secret was not refused: %+v", r)
 	}
 	// Probes, the read and the trace, each through the toolbelt: an unknown
 	// probe and text with a token's shape are refused.
-	probed, _ := os.ReadFile(filepath.Join(d.root, "probe-out"))
-	for _, want := range []string{`\"name\": \"git\"`, "unknown_probe", `\"outline\"`, `\"name\": \"Setup\"`, "looks_like_secret", `\"kind\": \"start\"`, `\"verdict\": \"match\"`, "has no scope nowhere"} {
-		if !strings.Contains(string(probed), want) {
-			t.Errorf("probes without %s: %s", want, probed)
+	var probed strings.Builder
+	for _, id := range []string{"p1", "p2", "r1", "leak", "t1", "t2"} {
+		probed.WriteString(result[id].Text + "\n")
+	}
+	for _, want := range []string{`"name": "git"`, "unknown_probe", `"outline"`, `"name": "Setup"`, "looks_like_secret", `"kind": "start"`, `"verdict": "match"`, "has no scope nowhere"} {
+		if !strings.Contains(probed.String(), want) {
+			t.Errorf("probes without %s: %s", want, probed.String())
 		}
 	}
-	if strings.Contains(string(probed), "ghp_abcdef") {
-		t.Errorf("a token reached the output: %s", probed)
+	if strings.Contains(probed.String(), "ghp_abcdef") {
+		t.Errorf("a token reached the output: %s", probed.String())
 	}
 
 	// Only the operator applies: the agent's own endpoint serves none of it,
 	// and its token is refused on the management socket too.
-	token, _ := os.ReadFile(filepath.Join(d.root, "token"))
-	endpoint, _ := os.ReadFile(filepath.Join(d.root, "endpoint"))
-	exec, err := client.New(string(endpoint), strings.TrimSpace(string(token)))
+	exec, err := client.New(first.Endpoint, first.Token)
 	if err != nil {
 		t.Fatal(err)
 	}
-	cfg, _ := d.c.Config(ctx)
+	cfg, _ := c.Config(ctx)
 	if _, err = exec.ApplyConfigText(ctx, doc.Bytes(), cfg.Hash, cfg.Generation, "agent-apply"); !isStatus(err, 404) {
 		t.Errorf("the agent applied config: %v", err)
 	}
@@ -148,7 +115,7 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 	if _, err = exec.InvokeAction(ctx, session, "setup", "approve_c1", "", "agent-approve"); !isStatus(err, 404) {
 		t.Errorf("the agent approved its own change: %v", err)
 	}
-	mgmt, err := client.New("unix://"+filepath.Join(d.state, "management.sock"), strings.TrimSpace(string(token)))
+	mgmt, err := client.New(d.Socket(), first.Token)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -166,20 +133,20 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 			t.Errorf("%s: accepted", name)
 		}
 	}
-	if now, _ := d.c.Config(ctx); now.Generation != "1" {
+	if now, _ := c.Config(ctx); now.Generation != "1" {
 		t.Fatalf("the generation moved under the agent: %s", now.Generation)
 	}
-	if err = os.WriteFile(filepath.Join(d.root, "release"), nil, 0o600); err != nil {
+	if err = os.WriteFile(release, nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	work := func() client.Work {
-		w, _ := d.c.Work(ctx, session.WorkID)
+		w, _ := c.Work(ctx, session.WorkID)
 		return w
 	}
-	d.until("the agent parked on its question", 30*time.Second, func() bool { return work().State == "waiting" })
+	d.Until("the agent parked on its question", 30*time.Second, func() bool { return work().State == "waiting" })
 
 	events := func(typ string) []client.Event {
-		page, _ := d.c.Events(ctx, url.Values{"work_id": {session.WorkID}, "type": {typ}})
+		page, _ := c.Events(ctx, url.Values{"work_id": {session.WorkID}, "type": {typ}})
 		return page.Items
 	}
 	if probes := events("setup.probe"); len(probes) != 3 || !strings.Contains(string(probes[0].Data.Data), `"probe":"setup.tools"`) || !strings.Contains(string(probes[1].Data.Data), `"verdict":"match"`) || !strings.Contains(string(probes[2].Data.Data), `"error":"the candidate has no scope nowhere"`) {
@@ -204,18 +171,18 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 	// each proposal; core reviews the change set, reference text included,
 	// from the candidate, which has nothing to apply until a change is
 	// approved.
-	panels, err := d.c.Panels(ctx, session)
+	panels, err := c.Panels(ctx, session)
 	if err != nil || len(panels) != 2 || panels[0].ID != "conversation" || !strings.Contains(mustJSONString(panels), "Proposed c1: replace /scopes/setup/name") || strings.Contains(mustJSONString(panels), "keyring:") {
 		t.Fatalf("panels: %s %v", mustJSONString(panels), err)
 	}
-	review, err := d.c.WorkConfigCandidate(ctx, session.WorkID)
+	review, err := c.WorkConfigCandidate(ctx, session.WorkID)
 	if err != nil || review.CandidateHash != "" || review.ConfigText != "" || len(review.Changes) != 4 || string(review.Changes[0].Before) != `"Setup"` ||
 		review.Changes[0].Approve != "approve_c1" || review.Changes[2].State != "withdrawn" || review.Changes[2].Approve != "" || !strings.Contains(mustJSONString(review.Changes), "keyring:github-token") || !strings.HasPrefix(review.ApproveAll, "approve_all_") {
 		t.Fatalf("review: %s %v", mustJSONString(review), err)
 	}
 
 	actions := func() map[string]client.Action {
-		acts, _ := d.c.Actions(ctx, session)
+		acts, _ := c.Actions(ctx, session)
 		out := map[string]client.Action{}
 		for _, a := range acts {
 			if a.Provider == "setup" {
@@ -227,7 +194,7 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 	if _, ok := actions()["approve_c3"]; ok {
 		t.Fatal("a withdrawn change can be approved")
 	}
-	if _, err = d.c.InvokeAction(ctx, session, "setup", "reject_c4", "not until the secret is stored", "reject-c4"); err != nil {
+	if _, err = c.InvokeAction(ctx, session, "setup", "reject_c4", "not until the secret is stored", "reject-c4"); err != nil {
 		t.Fatalf("reject: %v", err)
 	}
 	all := ""
@@ -239,13 +206,13 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 			}
 		}
 	}
-	if _, err = d.c.InvokeAction(ctx, session, "setup", "approve_all_00000000", "", "stale"); err == nil {
+	if _, err = c.InvokeAction(ctx, session, "setup", "approve_all_00000000", "", "stale"); err == nil {
 		t.Fatal("an Approve all for proposals the operator didn't see was accepted")
 	}
-	if _, err = d.c.InvokeAction(ctx, session, "setup", all, "", "all"); err != nil {
+	if _, err = c.InvokeAction(ctx, session, "setup", all, "", "all"); err != nil {
 		t.Fatalf("approve all: %v", err)
 	}
-	if _, err = d.c.InvokeAction(ctx, session, "setup", "validate", "", "validate"); err != nil {
+	if _, err = c.InvokeAction(ctx, session, "setup", "validate", "", "validate"); err != nil {
 		t.Fatalf("validate: %v", err)
 	}
 	checks := events("setup.checks")
@@ -253,17 +220,17 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 		t.Fatalf("checks: %+v", checks)
 	}
 
-	cand, err := d.c.WorkConfigCandidate(ctx, session.WorkID)
+	cand, err := c.WorkConfigCandidate(ctx, session.WorkID)
 	if err != nil || cand.BaseGeneration != "1" || !strings.Contains(cand.ConfigText, `"name": "Set up"`) || !strings.Contains(cand.ConfigText, `"reconcile_seconds": 600`) || strings.Contains(cand.ConfigText, "github-token") {
 		t.Fatalf("candidate: %+v %v", cand, err)
 	}
-	if _, err = d.c.ApplyConfigText(ctx, []byte(cand.ConfigText), cand.CandidateHash, cand.BaseGeneration, "apply"); err != nil {
+	if _, err = c.ApplyConfigText(ctx, []byte(cand.ConfigText), cand.CandidateHash, cand.BaseGeneration, "apply"); err != nil {
 		t.Fatalf("apply: %v", err)
 	}
-	if saved, _ := os.ReadFile(d.config); string(saved) != cand.ConfigText {
+	if saved, _ := os.ReadFile(d.ConfigPath()); string(saved) != cand.ConfigText {
 		t.Fatalf("apply did not save the text as given:\n%s", saved)
 	}
-	d.until("the session heard its changes were applied", 30*time.Second, func() bool { return len(events("setup.applied")) == 1 })
+	d.Until("the session heard its changes were applied", 30*time.Second, func() bool { return len(events("setup.applied")) == 1 })
 	if a := events("setup.applied")[0]; !strings.Contains(string(a.Data.Data), `"generation":"2"`) || !strings.Contains(string(a.Data.Data), `"changes":["c1","c2"]`) {
 		t.Fatalf("applied: %s", a.Data.Data)
 	}
@@ -273,14 +240,14 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 
 	// The question offered yes or no; an answer in the operator's own words
 	// still answers it.
-	if _, err = d.c.InvokeAction(ctx, session, "setup", "answer", "Yes, and raise the slots to 3", "answer"); err != nil {
+	if _, err = c.InvokeAction(ctx, session, "setup", "answer", "Yes, and raise the slots to 3", "answer"); err != nil {
 		t.Fatalf("answer: %v", err)
 	}
-	d.until("the session finished", 30*time.Second, func() bool { return work().State == "completed" })
-	resumed, _ := os.ReadFile(filepath.Join(d.root, "resumed"))
+	d.Until("the session finished", 30*time.Second, func() bool { return work().State == "completed" })
+	resumed, _ := claude.Turn(2)
 	for _, want := range []string{"rejected c4", "not until the secret is stored", "approved c1, c2", "applied your changes", "Generation 2", "Yes, and raise the slots to 3"} {
-		if !strings.Contains(string(resumed), want) {
-			t.Errorf("resumed without %q: %s", want, resumed)
+		if !strings.Contains(resumed.Input, want) {
+			t.Errorf("resumed without %q: %s", want, resumed.Input)
 		}
 	}
 }
