@@ -67,6 +67,9 @@ type ghEnv struct {
 	connMu      sync.Mutex
 	connections map[string]string
 	writers     *gh.Writers
+	// extConfig replaces ghExtensionConfig() as the entry the ingress,
+	// projector and tools read, when set before open.
+	extConfig string
 }
 
 func ghExtensionConfig() string {
@@ -115,7 +118,11 @@ func (e *ghEnv) open() {
 	if e.client, err = gh.NewClient(cfg, func(context.Context, string) (string, error) { return "tok", nil }, gh.ClientOptions{Now: e.clock.Now}); err != nil {
 		t.Fatal(err)
 	}
-	if e.settings, err = gh.ParseExtension([]byte(ghExtensionConfig()), []string{"hook"}); err != nil {
+	ext := e.extConfig
+	if ext == "" {
+		ext = ghExtensionConfig()
+	}
+	if e.settings, err = gh.ParseExtension([]byte(ext), []string{"hook"}); err != nil {
 		t.Fatal(err)
 	}
 	e.adapter = gh.NewIngress(e.settings, e.client, e.clock.Now, gh.IngressOptions{Observed: func(ctx context.Context, obs []extension.Observation) {

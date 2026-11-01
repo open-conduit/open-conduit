@@ -3,6 +3,8 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"errors"
+	"fmt"
 	"strconv"
 	"strings"
 
@@ -12,6 +14,52 @@ import (
 
 // WorkKind is the kind of Work claimed for an issue generation.
 const WorkKind = "github.issue"
+
+// WorkKindReview is the kind of Work claimed for a pull request's review: it
+// owns the PR's review key (ReviewKey), never its issue's key, so it runs
+// alongside any Work that owns the issue the PR belongs to.
+const WorkKindReview = "github.pull_request"
+
+// What a `github` route claims (RouteConfig.Claim).
+const (
+	ClaimIssues       = "issues"
+	ClaimPullRequests = "pull_requests"
+)
+
+// RouteConfig is the opaque config of a `github` route. Claim is what it
+// claims as Work: issues (the default) or pull_requests, each open PR's
+// review, from the review copies an entry with review_pull_requests
+// observes. Drafts lets a pull_requests route claim draft PRs too; by
+// default a draft is claimed once it is marked ready.
+type RouteConfig struct {
+	Claim  string `json:"claim,omitempty"`
+	Drafts bool   `json:"drafts,omitempty"`
+}
+
+// ParseRoute decodes and defaults a `github` route's config.
+func ParseRoute(data []byte) (RouteConfig, error) {
+	var c RouteConfig
+	if err := strict(data, &c); err != nil {
+		return c, fmt.Errorf("github route: %w", err)
+	}
+	switch c.Claim {
+	case "":
+		c.Claim = ClaimIssues
+	case ClaimIssues, ClaimPullRequests:
+	default:
+		return c, errors.New("github route: claim must be issues or pull_requests")
+	}
+	if c.Drafts && c.Claim != ClaimPullRequests {
+		return c, errors.New("github route: drafts applies only to claim pull_requests")
+	}
+	return c, nil
+}
+
+// ValidateRoute is the config.Registry validator of a `github` route.
+func ValidateRoute(data json.RawMessage) error {
+	_, err := ParseRoute(data)
+	return err
+}
 
 // TypeClaimRequested is an operator's claim by hand: the Event of the
 // entry's "claim" action (Actions), accepted under extension.ActionSource,
@@ -150,6 +198,16 @@ func (Route) match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	if !strings.HasPrefix(e.Type, "github.") || e.Type == TypeDelivery {
 		return extension.Skip("not a GitHub event"), nil
 	}
+	rc, err := ParseRoute(in.Route.Config.Data)
+	if err != nil {
+		return extension.Skip("the route's config is invalid"), nil
+	}
+	if rc.Claim == ClaimPullRequests {
+		return matchReview(in, rc), nil
+	}
+	if in.Work != nil && in.Work.Kind == WorkKindReview {
+		return extension.Skip("a PR's review Work takes input from a pull_requests route"), nil
+	}
 	source := e.Source
 	if e.Type == TypeHoldReleased && e.CorrelationKey != nil {
 		// Emitted by the hold executor: its source is the execution.
@@ -218,4 +276,64 @@ func (Route) match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		return extension.RouteDecision{Match: true, Reason: "a comment for the issue's agent"}, nil
 	}
 	return extension.Skip(e.Type + " is not passed to the agent"), nil
+}
+
+// matchReview is a pull_requests route: it creates review Work for an open
+// PR's review copy and selects the review Work's input. It never touches
+// an issue's Work, so a builder and a reviewer each hear their own copy of
+// the PR's news.
+func matchReview(in extension.RouteInput, rc RouteConfig) extension.RouteDecision {
+	e := in.Event.Event
+	if e.CorrelationKey == nil {
+		return extension.Skip("the event names no pull request")
+	}
+	number, ok := ParseReviewKey(e.CorrelationKey.ExternalID)
+	if !ok {
+		return extension.Skip("not a pull request's review copy")
+	}
+	s, ok := settingsFor(in.Scope, e.Source)
+	if !ok || !s.ReviewPulls {
+		return extension.Skip("no github entry in this scope observes " + e.Source + " for review (review_pull_requests)")
+	}
+	if in.Work == nil {
+		if e.Type != TypePullOpen || e.Data.Schema != SchemaPull {
+			return extension.Skip("only an open PR starts review Work")
+		}
+		var p PullPayload
+		if json.Unmarshal(e.Data.Data, &p) != nil || p.Number != number {
+			return extension.Skip("the PR data is unreadable")
+		}
+		if p.State != "open" {
+			return extension.Skip("the PR is " + p.State)
+		}
+		if p.Draft && !rc.Drafts {
+			return extension.Skip("the PR is a draft; it is claimed once it is ready for review")
+		}
+		return extension.RouteDecision{Match: true, Kind: WorkKindReview, Reason: "an open PR to review"}
+	}
+	if in.Work.Kind != WorkKindReview {
+		return extension.Skip("not a PR's review Work")
+	}
+	switch e.Type {
+	case TypePullOpen:
+		return extension.RouteDecision{Match: true, Reason: "the PR changed (a push, or its title, body or draft state)"}
+	case TypePullMerged, TypePullClosed:
+		return extension.RouteDecision{Match: true, Reason: "the PR is over; the review ends"}
+	case TypeCommentHuman, TypeCommentAgent:
+		var p CommentPayload
+		if json.Unmarshal(e.Data.Data, &p) != nil {
+			return extension.Skip("the comment data is unreadable")
+		}
+		if p.Edited {
+			return extension.Skip("an edited comment is not news")
+		}
+		if p.Kind == KindReview && strings.TrimSpace(p.Body) == "" {
+			return extension.Skip("a review with no text")
+		}
+		if e.Type == TypeCommentAgent && selfAuthored(p.Agent, in.Work) {
+			return extension.Skip("the reviewer's own comment")
+		}
+		return extension.RouteDecision{Match: true, Reason: "a comment for the PR's reviewer"}
+	}
+	return extension.Skip(e.Type + " is not passed to the reviewer")
 }

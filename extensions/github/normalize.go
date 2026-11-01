@@ -218,6 +218,66 @@ func IssueKey(number int, generation string) string {
 // PullKey is the correlation external ID of a PR no tracker issue claims.
 func PullKey(number int) string { return "pr/" + strconv.Itoa(number) }
 
+// ReviewKey is the correlation external ID of a PR's review: the key the
+// review copies of its observations carry (Settings.ReviewPulls), owned by
+// review Work, apart from the issue key a builder's Work owns.
+func ReviewKey(number int) string { return "pr/" + strconv.Itoa(number) + "/review" }
+
+var reviewKeyPattern = regexp.MustCompile(`^pr/([0-9]+)/review$`)
+
+// ParseReviewKey extracts the PR number from a review key.
+func ParseReviewKey(id string) (int, bool) {
+	m := reviewKeyPattern.FindStringSubmatch(id)
+	if m == nil {
+		return 0, false
+	}
+	return parseNumber(m[1])
+}
+
+// reviewItemPrefix prefixes the item IDs of review copies. Copies sort
+// after every original, and a PR's copy before the copies of its comments,
+// so a newly observed PR (which may create review Work) precedes them.
+const reviewItemPrefix = "review/"
+
+// withReviews appends, when the entry reviews pull requests, a review copy
+// of each PR state and of each PR comment, inline comment and review: the
+// same type and payload under the PR's review key. Checks and conflicts are
+// the builder's news and are not copied. A copy's identity derives from the
+// original's, so push and reconcile agree on it as they do on the original.
+func (n *normalizer) withReviews(obs []extension.Observation) ([]extension.Observation, error) {
+	if !n.s.ReviewPulls {
+		return obs, nil
+	}
+	out := obs
+	for _, o := range obs {
+		number, ok := reviewedNumber(o.Event)
+		if !ok {
+			continue
+		}
+		c, err := n.observation(reviewItemPrefix+o.ID, o.Event.Type, domain.CorrelationKey{Source: n.s.Namespace, ExternalID: ReviewKey(number)},
+			o.Event.OccurredAt, o.Event.Data.Schema, json.RawMessage(o.Event.Data.Data))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// reviewedNumber is the PR an observation is about when a review hears it:
+// a PR's state, or a comment, inline comment or review on a PR.
+func reviewedNumber(e domain.Event) (int, bool) {
+	switch e.Data.Schema {
+	case SchemaPull:
+		var p PullPayload
+		return p.Number, json.Unmarshal(e.Data.Data, &p) == nil && p.Number > 0
+	case SchemaComment:
+		var p CommentPayload
+		return p.Number, json.Unmarshal(e.Data.Data, &p) == nil && p.Number > 0 && p.Kind != KindIssue
+	}
+	return 0, false
+}
+
 var issueKeyPattern = regexp.MustCompile(`^issue/([0-9]+)(?:/generation/(reopen-[0-9]+))?$`)
 
 // ParseIssueKey extracts the issue number and generation from an external ID.

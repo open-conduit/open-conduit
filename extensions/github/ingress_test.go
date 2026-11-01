@@ -548,3 +548,57 @@ func TestEditedCommentIsANewVersion(t *testing.T) {
 	}
 	_ = domain.ID("")
 }
+
+// With review_pull_requests, each PR state and each comment, inline comment
+// and review on a PR is also observed under the PR's review key, the same
+// way by push and reconcile; checks, conflicts and issue comments are not,
+// and an entry without the option observes no copies.
+func TestReviewCopiesOfPullRequests(t *testing.T) {
+	f := newFixture(t, `,"review_pull_requests":true`)
+	fk := f.fake
+	issue := fk.OpenIssue("Header", "wobbles", alice, "bug")
+	issueComment := fk.AddComment(issue, alice, "please make it blue")
+	pr := fk.OpenPull("Blue header", "Closes #1", "agent/issue-1", "sha1", alice)
+	review := fk.AddReview(pr, alice, "CHANGES_REQUESTED", "rename it")
+	inline := fk.AddReviewComment(pr, alice, "nit", "header.go", 12)
+	prComment := fk.AddComment(pr, alice, "looks close")
+	fk.SetCheck("sha1", "build", "completed", "success")
+	p := strconv.Itoa(pr)
+	scanned := f.scan(t)
+	cases := []struct {
+		label, event, item string
+		body               []byte
+	}{
+		{"pr", "pull_request", "pr/" + p, fk.PullHook("opened", pr)},
+		{"review", "pull_request_review", "pr/" + p + "/review/" + strconv.FormatInt(review, 10), fk.ReviewHook("submitted", pr, review)},
+		{"inline", "pull_request_review_comment", "pr/" + p + "/review_comment/" + strconv.FormatInt(inline, 10), fk.ReviewCommentHook("created", inline)},
+		{"pr conversation", "issue_comment", "pr/" + p + "/comment/" + strconv.FormatInt(prComment, 10), fk.CommentHook("created", prComment)},
+	}
+	for i, tc := range cases {
+		orig, copied := scanned[tc.item], scanned["review/"+tc.item]
+		if key(orig) != "issue/1" || key(copied) != gh.ReviewKey(pr) {
+			t.Fatalf("%s: original keyed %s, copy keyed %s", tc.label, key(orig), key(copied))
+		}
+		if copied.Event.Type != orig.Event.Type || string(copied.Event.Data.Data) != string(orig.Event.Data.Data) || copied.Event.ID == orig.Event.ID {
+			t.Fatalf("%s: the copy is not the original under its own identity: %+v", tc.label, copied.Event)
+		}
+		res := f.push(t, tc.event, "d-"+strconv.Itoa(i), tc.body)
+		if len(res.Observations) != 2 {
+			t.Fatalf("%s: push observed %d, want the original and its copy", tc.label, len(res.Observations))
+		}
+		sameIdentity(t, tc.label, res.Observations[0], orig)
+		sameIdentity(t, tc.label+" copy", res.Observations[1], copied)
+	}
+	for _, item := range []string{"review/pr/" + p + "/checks", "review/issue/1", "review/issue/1/comment/" + strconv.FormatInt(issueComment, 10)} {
+		if _, ok := scanned[item]; ok {
+			t.Fatalf("%s copied for review", item)
+		}
+	}
+	plain := newFixture(t, "")
+	plain.fake.OpenPull("Chore", "", "chore", "sha2", alice)
+	for item := range plain.scan(t) {
+		if strings.HasPrefix(item, "review/") {
+			t.Fatalf("%s observed without review_pull_requests", item)
+		}
+	}
+}

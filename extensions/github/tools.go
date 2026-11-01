@@ -166,7 +166,7 @@ func (t *Tools) Registration() extension.Registration {
 	return extension.Registration{Version: extension.ContractVersion, Name: Type, EventTypes: []string{TypeHoldReleased},
 		DependencyFilter: DependencyFilter,
 		Operations: []extension.Operation{
-			{Name: OpContext, Handler: h(t.context)},
+			{Name: OpContext, Handler: pr(t.context)},
 			{Name: OpIssueView, Handler: h(t.issueView)},
 			{Name: OpIssueComment, Handler: h(t.issueComment)},
 			{Name: OpIssueList, Handler: h(t.issueList)},
@@ -228,6 +228,9 @@ type bound struct {
 	issue  Source // owns the issue (its tracker)
 	code   Source // owns the code (PRs); equal to issue without a shared tracker
 	number int    // the issue; 0 when the Work owns none (bindWork only)
+	// review is the PR a review Work reviews (it owns the PR's review key,
+	// key, and no issue); 0 otherwise.
+	review int
 }
 
 // bind resolves the Work a call serves and the GitHub issue it owns.
@@ -281,17 +284,29 @@ func (t *Tools) bindWork(ctx context.Context, a extension.Authority) (*bound, er
 		}
 		return b, nil
 	}
+	for _, k := range w.CorrelationKeys {
+		n, ok := ParseReviewKey(k.ExternalID)
+		if !ok {
+			continue
+		}
+		for _, s := range sources {
+			if s.Settings.Scope == string(w.ScopeID) && s.Settings.Namespace == k.Source {
+				return &bound{a: a, work: w, key: k, code: s, issue: t.trackerOf(s), review: n}, nil
+			}
+		}
+	}
 	return &bound{a: a, work: w}, nil
 }
 
 // pullSource is the registered repository a PR operation acts on: the one
-// the call names, else the Work's own code repository, else the scope's
+// the call names, else the Work's own code repository (its issue's, or the
+// PR's it reviews), else the scope's
 // only one. The PR need not belong to this Work, and its key is never
 // attached to it: PRs are keyed to their tracker issue and may be another
 // Work's (B04).
 func (t *Tools) pullSource(b *bound, repo string) (Source, error) {
 	repo = strings.TrimSpace(repo)
-	if b.number > 0 && (repo == "" || strings.EqualFold(repo, b.code.Settings.Repo)) {
+	if (b.number > 0 || b.review > 0) && (repo == "" || strings.EqualFold(repo, b.code.Settings.Repo)) {
 		return b.code, nil
 	}
 	var registered []Source
@@ -434,6 +449,16 @@ func (t *Tools) context(ctx context.Context, b *bound, data json.RawMessage) (an
 	var in struct{}
 	if err := decode(data, &in); err != nil {
 		return nil, err
+	}
+	if b.number == 0 {
+		if b.review == 0 {
+			return nil, refuse("no_issue", "this Work is not a GitHub issue of a registered repository")
+		}
+		// A PR's review Work: the PR is what it is about.
+		return map[string]any{"repo": b.code.Settings.Repo, "pr": b.review,
+			"pr_url": b.code.Client.web + "/" + b.code.Settings.Repo + "/pull/" + strconv.Itoa(b.review),
+			"work":   string(b.work.ID), "scope": string(b.work.ScopeID),
+			"rules": "the repository's CLAUDE.md or AGENTS.md (and any rule skills they list)"}, nil
 	}
 	base, err := t.base(ctx, b)
 	if err != nil {

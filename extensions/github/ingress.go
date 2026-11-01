@@ -152,6 +152,9 @@ func (g *Ingress) Push(ctx context.Context, src extension.Source, d extension.De
 	}
 	n := &normalizer{s: g.s, c: g.c, m: newMemo(), received: received}
 	obs, err := g.pushObservations(ctx, n, env.Event, p)
+	if err == nil {
+		obs, err = n.withReviews(obs)
+	}
 	if err != nil {
 		return extension.PushResult{}, err
 	}
@@ -466,6 +469,9 @@ func (g *Ingress) scanPage(ctx context.Context, n *normalizer, c cursor, horizon
 		obs, count, more, next, err = g.commentsPage(ctx, n, c, horizon, b)
 	default:
 		return extension.Snapshot{}, extension.ErrInvalid
+	}
+	if err == nil {
+		obs, err = n.withReviews(obs)
 	}
 	if err != nil {
 		return extension.Snapshot{}, err

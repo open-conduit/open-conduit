@@ -142,7 +142,55 @@ Use `open-conduit config edit` for all three, then `config check`, and apply the
 
 That binding's comments, replies and reviews now show as `acme-reviewer[bot]`, and its git follows `github-reviewer`'s `git` ([choose per binding](#choose-per-binding)). Everything else stays on the `github` connection: Open Conduit still reads and claims each issue and PR once, sets the labels as the first bot, and the builder's PRs are still opened by it. Other bindings are unchanged. `doctor --check-secrets` lists it under each repository's entry, as `binding connection github-reviewer: bot writer authenticated`.
 
-Which binding reviews which PR is up to your routes and playbooks; the writer only changes whose name is on the review.
+Which binding reviews which PR is up to your routes and playbooks; the writer only changes whose name is on the review. To review every PR, see the next section.
+
+## A review bot for every PR
+
+Open Conduit can give each newly opened PR its own reviewer, alongside the agent working the issue the PR belongs to. Each review is its own Work: the reviewer reviews, waits for changes, reviews again, and stops when the PR merges or closes.
+
+1. On the repository's `github` entry, turn on review copies, so Open Conduit hears each PR's news for a reviewer as well as for the issue's agent:
+
+   ```json
+   "config": {"namespace": "github/github.com/acme/web", "scope": "web", "repo": "acme/web", "review_pull_requests": true}
+   ```
+
+2. Add a route that claims PRs for review, beside the `issues` route. Add `"drafts": true` to its config to review drafts too; otherwise a draft is reviewed once it is marked ready.
+
+   ```json
+   {"name": "reviews", "handler": "github", "binding": "reviewer", "active_policy": "queue", "config": {"claim": "pull_requests"}}
+   ```
+
+3. Add the `reviewer` binding. Give it [its own App](#a-second-app-for-a-reviewing-agent) so it can approve and request changes, a `review-pr` playbook, and only the operations a reviewer needs. It needs no checkout: `github.pr.view` shows the diff's files and every comment.
+
+   ```json
+   {
+     "name": "reviewer",
+     "executor": "claude-code",
+     "connection": "github-reviewer",
+     "requires": {"toolbelt": "mcp"},
+     "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.pr.view",
+                    "github.pr.review", "github.pr.reply", "github.pr.comment", "github.checks", "github.wait"],
+     "secret_names": [],
+     "config": {"playbook": "review-pr", "plugin_dir": "/path/to/review-bot/plugin"}
+   }
+   ```
+
+   Add the same operations to the scope's `authorization.operations`.
+
+4. Write the playbook as `skills/review-pr/SKILL.md` in that plugin directory. A turn starts as `/open-conduit:review-pr <number>`, with the PR's number. The playbook needs to say only what a reviewer does:
+
+   - Read the PR with `github.context` and `github.pr.view`, and review it against your guidelines with `github.pr.review`: approve, request changes or comment, with inline comments on lines of the diff.
+   - Then end the turn with `github.wait` and a `reason`. No condition is needed: a push, a comment or review, or the PR merging or closing wakes the reviewer. Its own reviews and comments never do.
+   - On a push, review what changed. On a reply, answer it with `github.pr.reply` or `github.pr.comment`.
+   - When the PR merges or closes, end with `finished`.
+
+   Each repository can add to it in `.open-conduit/playbooks/review-pr.md`.
+
+Run `open-conduit config check` and apply as in step 4. PRs opened while the daemon was down are claimed at the next reconcile.
+
+A PR on an issue's branch, or one that says `Closes #12`, belongs to that issue's Work and also gets its own review Work. The builder hears the reviewer's reviews as another agent's comments, and the reviewer hears the builder's replies and pushes, so the two can go back and forth until the PR is ready.
+
+The reviewer route must live in the scope whose entry reads the repository. A scope from an [included folder](../../architecture/config-management/#included-folders) can't see a repository the main scope reads; give it its own entry for the repository instead, with its own `namespace`, `"track_issues": false` and `"review_pull_requests": true` ([which scope routes an entry's events](../../architecture/github-extension/#which-scope-routes-an-entrys-events)).
 
 ## What changes for you
 

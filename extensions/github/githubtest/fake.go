@@ -485,6 +485,14 @@ func (s *Server) PushPull(n int, sha string) {
 	}
 }
 
+// SetDraft marks a PR a draft, or ready for review.
+func (s *Server) SetDraft(n int, draft bool) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pulls[n].Draft = draft
+	s.issue(n).Updated = s.tick()
+}
+
 // SetMergeable sets what GitHub says about whether a PR merges cleanly
 // (false: it has conflicts; nil: not worked out yet).
 func (s *Server) SetMergeable(n int, m *bool) {
