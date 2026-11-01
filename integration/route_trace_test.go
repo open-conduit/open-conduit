@@ -161,21 +161,37 @@ func TestRouteTraceHeldBeforeIssues(t *testing.T) {
 		t.Fatalf("new issue effect: %+v", tr.Effect)
 	}
 
-	// Input for the waiting Work itself: no route is consulted; its wait
-	// decides. A comment is kept as context; what it waits for wakes it.
+	// Input for the waiting Work itself that doesn't wake it: the routes
+	// say whether it reaches the Work. A comment the issue route passes on
+	// is kept as context; an event it skips is recorded as unmatched.
 	key := held.CorrelationKeys[0]
-	tr = e.trace(domain.Event{Type: gh.TypeCommentHuman, Source: ghNS, CorrelationKey: &key})
-	for _, r := range tr.Routes {
-		if r.Verdict != runtime.VerdictBypassed || !strings.Contains(r.Reason, "its wait decides") {
-			t.Fatalf("waiting Work's routes: %+v", tr.Routes)
-		}
+	comment, err := json.Marshal(gh.CommentPayload{Repo: ghRepo, ID: 7, Kind: "issue_comment", Number: 1, Author: "owner", Body: "any news?"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	tr = e.trace(domain.Event{Type: gh.TypeCommentHuman, Source: ghNS, CorrelationKey: &key, Data: domain.Payload{Schema: gh.SchemaComment, Data: comment}})
+	if got := verdicts(tr); got["issues"] != runtime.VerdictMatch {
+		t.Fatalf("waiting Work's routes: %+v", tr.Routes)
 	}
 	if tr.Work == nil || tr.Work.ID != held.ID || tr.Effect.Kind != runtime.EffectQueue || !strings.Contains(tr.Effect.Detail, "does not match its wait") {
 		t.Fatalf("comment while held: %+v", tr.Effect)
 	}
+	tr = e.trace(domain.Event{Type: gh.TypeChecksPending, Source: ghNS, CorrelationKey: &key})
+	if got := reasons(tr); got["issues"] != gh.TypeChecksPending+" is not passed to the agent" {
+		t.Fatalf("pending checks while held: %+v", tr.Routes)
+	}
+	if tr.Effect.Kind != runtime.EffectUnmatched || !strings.Contains(tr.Effect.Detail, string(held.ID)+" keeps waiting") {
+		t.Fatalf("pending checks while held: %+v", tr.Effect)
+	}
+	// What it waits for wakes it; no route is consulted.
 	met := domain.Event{Type: gh.TypeDependencyMet, Source: ghNS, CorrelationKey: &key}
 	if tr = e.trace(met); tr.Effect.Kind != runtime.EffectWake || tr.Effect.WorkID != held.ID {
 		t.Fatalf("own wake: %+v", tr.Effect)
+	}
+	for _, r := range tr.Routes {
+		if r.Verdict != runtime.VerdictBypassed || !strings.Contains(r.Reason, "its wait decides") {
+			t.Fatalf("waking routes: %+v", tr.Routes)
+		}
 	}
 
 	if after := sqliteDump(t, e.path); !reflect.DeepEqual(before, after) {

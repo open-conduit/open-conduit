@@ -176,16 +176,27 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 			out.Also = append(out.Also, wakeEffect(w, "through its dependency on this event"))
 		}
 	}
-	if waiting != nil && waiting.first == "" {
-		// Routes are not consulted for waiting Work: its wait decides.
+	if waiting != nil && waiting.wakes {
+		// Routes are not consulted for input that wakes waiting Work.
 		for i := range out.Routes {
 			out.Routes[i].Verdict, out.Routes[i].Reason = VerdictBypassed, string(waiting.work.ID)+" is waiting; its wait decides, routes are not consulted"
 		}
-		if waiting.wakes {
-			out.Effect = wakeEffect(*waiting, "")
-		} else {
-			out.Effect = RouteEffect{Kind: EffectQueue, WorkID: waiting.work.ID, Binding: waiting.meta.Binding, Detail: "kept as context; " + string(waiting.work.ID) + " keeps waiting" + waitingFor(waiting.wait) + contextWhy(*waiting)}
+		out.Effect = wakeEffect(*waiting, "")
+		return out, nil
+	}
+	if waiting != nil && waiting.first == "" {
+		// Input that doesn't wake it reaches it as context only when a
+		// route passes it to the Work or it matches the wait.
+		p, err := r.evaluate(ctx, s, traceVerdicts(out.Routes))
+		if err != nil {
+			return out, err
 		}
+		keeps := string(waiting.work.ID) + " keeps waiting" + waitingFor(waiting.wait)
+		if p.selected == nil && !waitMatches(waiting.wait, s.event) && !timeoutMatches(waiting.meta, s.event) {
+			out.Effect = RouteEffect{Kind: EffectUnmatched, Detail: "no route matched; the event is recorded as unmatched; " + keeps}
+			return out, nil
+		}
+		out.Effect = RouteEffect{Kind: EffectQueue, WorkID: waiting.work.ID, Binding: waiting.meta.Binding, Detail: "kept as context; " + keeps + contextWhy(*waiting)}
 		return out, nil
 	}
 	if waiting != nil {
@@ -203,19 +214,7 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		out.Effect = RouteEffect{Kind: EffectDrop, WorkID: s.work.ID, Detail: string(s.work.ID) + " is " + string(s.work.State) + "; the event is recorded as terminal"}
 		return out, nil
 	}
-	i := 0
-	p, err := r.evaluate(ctx, s, func(route domain.Route, d extension.RouteDecision) {
-		for out.Routes[i].Route != route.Name {
-			i++
-		}
-		out.Routes[i].Verdict, out.Routes[i].Reason = VerdictSkip, d.Reason
-		if d.Match {
-			out.Routes[i].Verdict = VerdictMatch
-		}
-		if out.Routes[i].Reason == "" {
-			out.Routes[i].Reason = map[bool]string{true: "matched", false: "no match"}[d.Match]
-		}
-	})
+	p, err := r.evaluate(ctx, s, traceVerdicts(out.Routes))
 	if err != nil {
 		return out, err
 	}
@@ -270,6 +269,24 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		out.Effect.Detail += "; " + why + ", so the route's " + policy + " fallback applies"
 	}
 	return out, nil
+}
+
+// traceVerdicts records each consulted route's verdict into steps, which
+// list the effective routes in evaluation order.
+func traceVerdicts(steps []RouteStep) func(domain.Route, extension.RouteDecision) {
+	i := 0
+	return func(route domain.Route, d extension.RouteDecision) {
+		for steps[i].Route != route.Name {
+			i++
+		}
+		steps[i].Verdict, steps[i].Reason = VerdictSkip, d.Reason
+		if d.Match {
+			steps[i].Verdict = VerdictMatch
+		}
+		if steps[i].Reason == "" {
+			steps[i].Reason = map[bool]string{true: "matched", false: "no match"}[d.Match]
+		}
+	}
 }
 
 var fallbackWhy = map[string]string{

@@ -1410,3 +1410,56 @@ func TestProductionPreUpgradeParkedRunStaysSegmentless(t *testing.T) {
 		t.Fatalf("pre-upgrade run gained partial segments: %+v active %s", r.Segments, r.ActiveTime)
 	}
 }
+
+// Input no route passes to a waiting Work is recorded as unmatched, as it
+// would be were the Work not waiting, and never reaches it as context on
+// wake. What the wait asks for still wakes it though the route skips it.
+func TestProductionWaitContextFollowsTheRoutes(t *testing.T) {
+	ctx := context.Background()
+	o := waitOptions(true)
+	o.Routes[0].Handler = routingHandlerFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
+		if in.Work != nil && (in.Event.Event.Type == "fixture.noise" || in.Event.Event.Type == "fixture.ready") {
+			return extension.Skip(in.Event.Event.Type + " is not passed to the agent"), nil
+		}
+		return routingDecision(in)
+	})
+	f := waitFixture(t, "reopen", o)
+	work, ref, key := waitForWork(t, f, "route-context", true)
+	d := f.Driver.(*waitDriver)
+	if err := d.Wait(ref, domain.Wait{ID: "route-context-wait", AfterSequence: 1, Match: domain.EventMatch{Keys: []domain.CorrelationKey{key}, Types: []string{"fixture.ready"}}}, true); err != nil {
+		t.Fatal(err)
+	}
+	var ids []domain.ID
+	for _, typ := range []string{"fixture.noise", "fixture.context", "fixture.noise", "fixture.ready"} {
+		e := routingEvent(f, fmt.Sprintf("route-context-%d", len(ids)), &key)
+		e.Type = typ
+		if err := d.Accept(e); err != nil {
+			t.Fatal(err)
+		}
+		requireRoute(t, d, e.ID)
+		ids = append(ids, e.ID)
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		for i, want := range []string{"unmatched", "wait_context", "unmatched", "wake"} {
+			a, err := tx.Event(ids[i])
+			if err != nil {
+				return err
+			}
+			if !a.Routed || a.Disposition != want {
+				t.Errorf("%s (%s): routed %v as %q, want %q", ids[i], a.Event.Type, a.Routed, a.Disposition, want)
+			}
+		}
+		return nil
+	})
+	resumed, err := d.scheduler.Start(ctx, work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []domain.ID
+	for _, event := range resumed.Request.Inputs {
+		got = append(got, event.ID)
+	}
+	if want := []domain.ID{ids[1], ids[3]}; !reflect.DeepEqual(got, want) || resumed.Request.Trigger.ID != ids[3] {
+		t.Fatalf("woken with %v (trigger %s), want %v", got, resumed.Request.Trigger.ID, want)
+	}
+}

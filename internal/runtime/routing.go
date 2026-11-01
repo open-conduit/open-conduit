@@ -433,13 +433,16 @@ func (r *Router) Route(ctx context.Context, id domain.ID) error {
 			return nil
 		}
 		if s.work != nil && s.work.State == domain.WorkWaiting {
-			// The Wait decides what the input does; the routes still say
-			// what the Work is, so its display follows the source.
-			display := r.displayOnly(ctx, s)
+			// The Wait decides whether the input wakes the Work. The routes
+			// still say what the Work is, so its display follows the source,
+			// and whether input that doesn't wake it reaches it at all: one
+			// no route passes to the Work is recorded as unmatched, as it
+			// would be were the Work not waiting, not kept as context.
+			display, skip := r.waitingDecision(ctx, s)
 			var handled bool
 			err := r.transact(ctx, nil, func(tx storage.Tx) error {
 				var e error
-				handled, e = routeWaitingInTx(tx, r.now(), r.options.CausalLimits, id)
+				handled, e = routeWaitingInTx(tx, r.now(), r.options.CausalLimits, id, skip)
 				if e == nil && handled {
 					e = putDisplayInTx(tx, *s.work, display)
 				}

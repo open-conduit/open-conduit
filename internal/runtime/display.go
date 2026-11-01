@@ -35,6 +35,24 @@ func (r *Router) displayOnly(ctx context.Context, s routeSnapshot) *domain.WorkD
 	return p.decision.Display
 }
 
+// waitingDecision is what the routes say about s.event for its waiting
+// Work: the display they give it, or nil, and the record of their skipping
+// it when no route matched, or nil. A handler error is never surfaced and
+// skips nothing, so the input is kept as the wait's context as before.
+func (r *Router) waitingDecision(ctx context.Context, s routeSnapshot) (*domain.WorkDisplay, *RouteRecord) {
+	if s.work == nil || s.work.State.Terminal() {
+		return nil, nil
+	}
+	p, err := r.evaluate(ctx, s, nil)
+	if err != nil {
+		return nil, nil
+	}
+	if p.selected == nil {
+		return nil, &RouteRecord{EventID: s.event.Event.ID, Generation: r.options.Generation, Policy: "unmatched", Reason: "no_match"}
+	}
+	return p.decision.Display, nil
+}
+
 // putDisplayInTx stores d on the Work seen as was, unless something changed
 // its display since (a later route will say again) or it has ended.
 func putDisplayInTx(tx storage.Tx, was domain.Work, d *domain.WorkDisplay) error {
