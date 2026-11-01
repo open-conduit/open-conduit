@@ -136,15 +136,66 @@ func TestLatestAndInstall(t *testing.T) {
 	}
 }
 
+// The bundled extensions/ directory is replaced as a whole with the
+// release's, and removed when the release bundles none.
+func TestInstallReplacesTheBundledExtensions(t *testing.T) {
+	for name, files := range map[string]map[string]string{
+		"bundled": {"open-conduit": "new open-conduit", "os": "new os", "extensions/setup/setup-extension": "new setup", "extensions/setup/playbooks/setup.md": "guide"},
+		"none":    {"open-conduit": "new open-conduit", "os": "new os"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			r := &release{tag: "v1.9.0", archive: archive(t, files)}
+			u, dir := updater(t, r)
+			for _, f := range []string{"extensions/setup/setup-extension", "extensions/setup/old.md", "extensions/stale/x"} {
+				path := filepath.Join(dir, filepath.FromSlash(f))
+				if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+					t.Fatal(err)
+				}
+				if err := os.WriteFile(path, []byte("old"), 0o755); err != nil {
+					t.Fatal(err)
+				}
+			}
+			if err := u.Install(context.Background(), "1.9.0"); err != nil {
+				t.Fatal(err)
+			}
+			entries, _ := os.ReadDir(dir)
+			if name == "none" {
+				if _, err := os.Stat(filepath.Join(dir, "extensions")); !os.IsNotExist(err) || len(entries) != 2 {
+					t.Fatalf("the old bundled extensions were kept: %v %v", err, entries)
+				}
+				return
+			}
+			if read(t, filepath.Join(dir, "extensions", "setup", "setup-extension")) != "new setup" || read(t, filepath.Join(dir, "extensions", "setup", "playbooks", "setup.md")) != "guide" {
+				t.Fatal("bundled extensions not replaced")
+			}
+			if info, err := os.Stat(filepath.Join(dir, "extensions", "setup", "setup-extension")); err != nil || info.Mode().Perm() != 0o755 {
+				t.Fatalf("setup-extension mode: %v", err)
+			}
+			for _, gone := range []string{"extensions/setup/old.md", "extensions/stale"} {
+				if _, err := os.Stat(filepath.Join(dir, filepath.FromSlash(gone))); !os.IsNotExist(err) {
+					t.Fatalf("%s was kept", gone)
+				}
+			}
+			if len(entries) != 3 {
+				t.Fatalf("left behind: %v", entries)
+			}
+		})
+	}
+}
+
 func TestInstallRefusesABadArchive(t *testing.T) {
 	for name, r := range map[string]*release{
-		"checksum mismatch": {tag: "v1.9.0", sum: strings.Repeat("ab", 32)},
-		"missing os":        {tag: "v1.9.0"},
+		"checksum mismatch":  {tag: "v1.9.0", sum: strings.Repeat("ab", 32)},
+		"missing os":         {tag: "v1.9.0"},
+		"escaping extension": {tag: "v1.9.0"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			r.archive = archive(t, map[string]string{"open-conduit": "new open-conduit"})
 			if name == "checksum mismatch" {
 				r.archive = archive(t, map[string]string{"open-conduit": "new", "os": "new"})
+			}
+			if name == "escaping extension" {
+				r.archive = archive(t, map[string]string{"open-conduit": "new", "os": "new", "extensions/../evil": "x"})
 			}
 			u, dir := updater(t, r)
 			if err := u.Install(context.Background(), "1.9.0"); err == nil {

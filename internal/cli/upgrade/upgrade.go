@@ -3,8 +3,10 @@
 // update page share it. It reads the release from GitHub, verifies the
 // archive against the release's checksums.txt, as install.sh does, and
 // swaps open-conduit and os beside the running executable with a rename
-// each, so a failure part way leaves the old binaries working. A Homebrew
-// install is left to brew, which owns its files.
+// each, so a failure part way leaves the old binaries working. The bundled
+// extension packages (the archive's extensions/ directory, such as setup)
+// are replaced as a whole with the same release's, so they stay in step
+// with the binary. A Homebrew install is left to brew, which owns its files.
 package upgrade
 
 import (
@@ -220,9 +222,15 @@ func parse(v string) (semver, bool) {
 // binaries are what an archive must hold, installed side by side.
 var binaries = []string{"open-conduit", "os"}
 
+// bundled is the archive's directory of bundled extension packages, which
+// replaces the one beside the executable.
+const bundled = "extensions"
+
 // Install downloads version's archive for this platform, verifies it
 // against the release's checksums and puts its open-conduit and os in
-// place of the running ones. It never touches a Homebrew install.
+// place of the running ones, then replaces the bundled extensions/
+// directory beside them with the archive's (removing it when the archive
+// has none). It never touches a Homebrew install.
 func (u *Updater) Install(ctx context.Context, version string) error {
 	if u.Homebrew() {
 		return ErrHomebrew
@@ -266,7 +274,7 @@ func (u *Updater) Install(ctx context.Context, version string) error {
 	staged, err := extract(data, dir)
 	defer func() {
 		for _, p := range staged {
-			_ = os.Remove(p)
+			_ = os.RemoveAll(p)
 		}
 	}()
 	if err != nil {
@@ -277,6 +285,40 @@ func (u *Updater) Install(ctx context.Context, version string) error {
 			return fmt.Errorf("installing %s: %w", name, err)
 		}
 		delete(staged, name)
+	}
+	if err := swapBundled(dir, staged[bundled]); err != nil {
+		return err
+	}
+	delete(staged, bundled)
+	return nil
+}
+
+// swapBundled puts the staged extensions directory (none when "") in place
+// of the one in dir: the old one is moved aside, the new one renamed in and
+// only then the old one removed, so a failed rename leaves the old one.
+func swapBundled(dir, staged string) error {
+	target := filepath.Join(dir, bundled)
+	var old string
+	if _, err := os.Lstat(target); err == nil {
+		aside, err := os.MkdirTemp(dir, "."+bundled+".old-*")
+		if err != nil {
+			return fmt.Errorf("replacing the bundled extensions: %w", err)
+		}
+		old = filepath.Join(aside, bundled)
+		if err := os.Rename(target, old); err != nil {
+			_ = os.Remove(aside)
+			return fmt.Errorf("replacing the bundled extensions: %w", err)
+		}
+		defer os.RemoveAll(aside)
+	}
+	if staged == "" {
+		return nil
+	}
+	if err := os.Rename(staged, target); err != nil {
+		if old != "" {
+			_ = os.Rename(old, target)
+		}
+		return fmt.Errorf("installing the bundled extensions: %w", err)
 	}
 	return nil
 }
@@ -317,8 +359,9 @@ func checksum(sums []byte, archive string) string {
 }
 
 // extract writes the archive's binaries into dir under temporary names and
-// returns them by name. It returns what it wrote even on error, for the
-// caller to remove.
+// returns them by name, and the files under its extensions/ directory into
+// a temporary directory, returned under bundled. It returns what it wrote
+// even on error, for the caller to remove.
 func extract(data []byte, dir string) (map[string]string, error) {
 	staged := map[string]string{}
 	gz, err := gzip.NewReader(bytes.NewReader(data))
@@ -335,6 +378,12 @@ func extract(data []byte, dir string) (map[string]string, error) {
 			return staged, fmt.Errorf("reading the archive: %w", err)
 		}
 		name := h.Name
+		if h.Typeflag == tar.TypeReg && strings.HasPrefix(name, bundled+"/") {
+			if err := extractBundled(tr, h, dir, staged); err != nil {
+				return staged, err
+			}
+			continue
+		}
 		if h.Typeflag != tar.TypeReg || strings.Contains(name, "/") || !wanted(name) {
 			continue
 		}
@@ -360,6 +409,47 @@ func extract(data []byte, dir string) (map[string]string, error) {
 		}
 	}
 	return staged, nil
+}
+
+// extractBundled writes one file of the archive's extensions/ directory
+// under the staged bundled directory, made on first use. A path that would
+// leave the directory is refused. The file keeps its executable bit.
+func extractBundled(r io.Reader, h *tar.Header, dir string, staged map[string]string) error {
+	rel := strings.TrimPrefix(h.Name, bundled+"/")
+	if rel == "" || strings.HasSuffix(rel, "/") {
+		return nil
+	}
+	if !filepath.IsLocal(rel) {
+		return fmt.Errorf("the archive's %s leaves the extensions directory", h.Name)
+	}
+	root := staged[bundled]
+	if root == "" {
+		tmp, err := os.MkdirTemp(dir, "."+bundled+".upgrade-*")
+		if err != nil {
+			return fmt.Errorf("staging the bundled extensions: %w", err)
+		}
+		root, staged[bundled] = tmp, tmp
+	}
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return fmt.Errorf("staging %s: %w", h.Name, err)
+	}
+	mode := os.FileMode(0o644)
+	if h.FileInfo().Mode().Perm()&0o111 != 0 {
+		mode = 0o755
+	}
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, mode)
+	if err != nil {
+		return fmt.Errorf("staging %s: %w", h.Name, err)
+	}
+	_, err = io.Copy(f, io.LimitReader(r, 512<<20))
+	if cerr := f.Close(); err == nil {
+		err = cerr
+	}
+	if err != nil {
+		return fmt.Errorf("staging %s: %w", h.Name, err)
+	}
+	return nil
 }
 
 func wanted(name string) bool {

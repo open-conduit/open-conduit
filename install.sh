@@ -8,7 +8,10 @@
 # open-conduit and its `os` toolbelt go together into INSTALL_DIR
 # (~/.local/lib/open-conduit), and only open-conduit is linked into BIN_DIR
 # (~/.local/bin): `os` is a generic name, so it is kept off PATH, and the
-# daemon finds it beside the real binary. Open Supervisor's open-supervisor
+# daemon finds it beside the real binary. The bundled extension packages
+# (the archive's extensions/ directory, such as setup) replace the ones in
+# INSTALL_DIR/extensions; packages installed in the config directory are not
+# touched. Open Supervisor's open-supervisor
 # binary and its config and state directories are not touched.
 set -eu
 
@@ -44,6 +47,8 @@ tar -xzf "$tmp/$archive" -C "$tmp"
 mkdir -p "$install_dir" "$bin_dir"
 install -m 0755 "$tmp/open-conduit" "$install_dir/open-conduit"
 install -m 0755 "$tmp/os" "$install_dir/os"
+rm -rf "$install_dir/extensions"
+if [ -d "$tmp/extensions" ]; then cp -R "$tmp/extensions" "$install_dir/extensions"; fi
 ln -sf "$install_dir/open-conduit" "$bin_dir/open-conduit"
 echo "installed $install_dir/open-conduit and $install_dir/os, linked $bin_dir/open-conduit"
 case ":$PATH:" in *":$bin_dir:"*) ;; *) echo "add $bin_dir to your PATH" ;; esac
