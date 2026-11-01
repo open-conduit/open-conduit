@@ -23,9 +23,6 @@ const (
 	approveAllPrefix = "approve_all_"
 )
 
-// PanelChanges is the change set's panel on a session's Work.
-const PanelChanges = "changes"
-
 // sessionChanges is the session's change set and each change's state, as
 // it stands (not refreshed: actions read, they never write).
 func sessionChanges(tx storage.Tx, w domain.Work) (changeSet, map[string]string, error) {
@@ -143,80 +140,6 @@ func (a Actions) validate(ctx context.Context, w domain.Work) (extension.ActionP
 	return extension.ActionPlan{Event: domain.Event{Type: TypeChecks, CorrelationKey: &key, Data: payload(SchemaChecks, checks)}, Message: message}, nil
 }
 
-// Panels shows a session's change set: every change with its state, and
-// each open one with its before and after, its reason and its diagnostics,
-// reference text included. Panels are an operator-class read, so this is
-// the one view where the operator sees the references they approve.
-func (a Actions) Panels(ctx context.Context, t extension.ActionTarget) ([]extension.Panel, error) {
-	if t.Work == nil || t.Work.Kind != WorkKind {
-		return nil, nil
-	}
-	var cs changeSet
-	var st map[string]string
-	if err := a.transact(ctx, func(tx storage.Tx) error {
-		var e error
-		cs, st, e = sessionChanges(tx, *t.Work)
-		return e
-	}); err != nil {
-		return nil, err
-	}
-	if len(cs.Changes) == 0 {
-		return nil, nil
-	}
-	p := extension.Panel{ID: PanelChanges, Title: "Proposed changes"}
-	summary := extension.PanelSection{Text: fmt.Sprintf("Based on generation %s. Nothing changes until you apply the approved changes.", cs.BaseGeneration)}
-	pending := open(cs, st)
-	approved := 0
-	table := &extension.PanelTable{Columns: []string{"Change", "Op", "Pointer", "State"}}
-	for _, c := range cs.Changes {
-		if st[c.ID] == StateApproved {
-			approved++
-		}
-		if len(table.Rows) < extension.MaxPanelRows {
-			table.Rows = append(table.Rows, []string{c.ID, c.Op, cut(c.Pointer), st[c.ID]})
-		}
-	}
-	if len(pending) > 1 {
-		summary.Actions = append(summary.Actions, approveAllPrefix+revision(pending))
-	}
-	if approved > 0 {
-		summary.Actions = append(summary.Actions, ActionValidate)
-	}
-	p.Sections = append(p.Sections, summary, extension.PanelSection{Title: "All changes", Table: table})
-	room := extension.MaxPanelSections - len(p.Sections)
-	for _, c := range cs.Changes {
-		if s := st[c.ID]; s != StateProposed && s != StateApproved {
-			continue
-		}
-		if room == 0 {
-			p.Sections[0].Text += " More changes are open than fit here: decide these first."
-			break
-		}
-		room--
-		sec := extension.PanelSection{Title: c.ID + ": " + c.Op + " " + cut(c.Pointer), Fields: []extension.PanelField{
-			{Name: "State", Value: st[c.ID]}, {Name: "Why", Value: cut(c.Why)}}}
-		if len(c.Before) > 0 {
-			sec.Fields = append(sec.Fields, extension.PanelField{Name: "Before", Value: cut(string(c.Before))})
-		}
-		if c.Op != OpRemove {
-			sec.Fields = append(sec.Fields, extension.PanelField{Name: "After", Value: cut(string(c.Value))})
-		}
-		for i, d := range c.Diagnostics {
-			if i == 4 {
-				sec.Fields = append(sec.Fields, extension.PanelField{Name: "Problem", Value: fmt.Sprintf("and %d more", len(c.Diagnostics)-i)})
-				break
-			}
-			sec.Fields = append(sec.Fields, extension.PanelField{Name: "Problem", Value: cut(d.Path + ": " + d.Code + ": " + d.Message)})
-		}
-		if st[c.ID] == StateProposed {
-			sec.Actions = append(sec.Actions, approvePrefix+c.ID)
-		}
-		sec.Actions = append(sec.Actions, rejectPrefix+c.ID)
-		p.Sections = append(p.Sections, sec)
-	}
-	return []extension.Panel{p}, nil
-}
-
 // cut keeps a panel value within its limit, saying how much it left out.
 func cut(s string) string {
 	if len(s) <= extension.MaxPanelValue {
@@ -231,10 +154,13 @@ func cut(s string) string {
 
 func utf8Start(b byte) bool { return b&0xC0 != 0x80 }
 
-// ConfigCandidate is the session's candidate for the operator to apply:
-// the base text plus the approved changes, its base generation and hash.
-// A session with nothing approved, or whose candidate doesn't validate,
-// has none to apply.
+// ConfigCandidate is the session's change set for core's review: every
+// change with its state, its before and after (reference text included:
+// the candidate is an operator-class read, the one view where the operator
+// sees the references they approve) and the actions that decide it. Once a
+// change is approved and the approved changes validate, it is also the
+// candidate to apply: the base text plus the approved changes, its base
+// generation and hash. A session that has proposed nothing has none.
 func (x *Extension) ConfigCandidate(ctx context.Context, w domain.Work) (extension.Candidate, error) {
 	if w.Kind != WorkKind || x.host.Config == nil {
 		return extension.Candidate{}, storage.ErrNotFound
@@ -245,9 +171,13 @@ func (x *Extension) ConfigCandidate(ctx context.Context, w domain.Work) (extensi
 	}
 	var cand built
 	var ids []string
+	var cs changeSet
+	var st map[string]string
 	err = x.host.Store.Transact(ctx, storage.Guard{Now: x.host.Now()}, func(tx storage.Tx) error {
-		cs, ok, err := loadChangeSet(tx, w.ID)
-		if err != nil || !ok {
+		var ok bool
+		var err error
+		cs, ok, err = loadChangeSet(tx, w.ID)
+		if err != nil || !ok || len(cs.Changes) == 0 {
 			return errors.Join(err, storage.ErrNotFound)
 		}
 		latest, err := tx.LatestSequence()
@@ -260,30 +190,63 @@ func (x *Extension) ConfigCandidate(ctx context.Context, w domain.Work) (extensi
 			}
 			cs = moved
 		}
-		st, err := states(tx, w, cs)
-		if err != nil {
+		if st, err = states(tx, w, cs); err != nil {
 			return err
 		}
 		cand, ids, _ = candidate(ctx, x.host.Config, cs, st)
 		return nil
 	})
-	if errors.Is(err, storage.ErrNotFound) {
-		return extension.Candidate{}, storage.ErrNotFound
-	}
 	if err != nil {
 		return extension.Candidate{}, err
 	}
+	out := review(cs, st, !w.State.Terminal())
 	if len(ids) == 0 {
-		return extension.Candidate{}, refuse("nothing_approved", "approve a change before applying")
+		return out, nil
 	}
 	hash, diags, err := x.host.Config.Validate(ctx, cand.Handle)
-	if err != nil {
-		return extension.Candidate{}, refuse("unavailable", "the configuration can't be validated now")
+	if err != nil || len(diags) > 0 {
+		// Nothing to apply until the approved changes validate; validating
+		// them in the session says why.
+		return out, nil
 	}
-	if len(diags) > 0 {
-		return extension.Candidate{}, refuse("invalid_candidate", "the approved changes don't validate: validate them in the session to see why")
+	out.Handle, out.Hash = cand.Handle, hash
+	return out, nil
+}
+
+// review is the change set as core reviews it: every change in proposal
+// order, and while the session is open the actions that decide them.
+func review(cs changeSet, st map[string]string, live bool) extension.Candidate {
+	out := extension.Candidate{BaseGeneration: cs.BaseGeneration}
+	pending, approved := 0, 0
+	for _, c := range cs.Changes {
+		x := extension.CandidateChange{ID: c.ID, Op: c.Op, Pointer: c.Pointer, State: st[c.ID], Why: c.Why, Before: c.Before}
+		if c.Op != OpRemove {
+			x.After = c.Value
+		}
+		for _, d := range c.Diagnostics {
+			x.Problems = append(x.Problems, d.Path+": "+d.Code+": "+d.Message)
+		}
+		switch x.State {
+		case StateProposed:
+			pending++
+			if live {
+				x.Approve, x.Reject = approvePrefix+c.ID, rejectPrefix+c.ID
+			}
+		case StateApproved:
+			approved++
+			if live {
+				x.Reject = rejectPrefix + c.ID
+			}
+		}
+		out.Changes = append(out.Changes, x)
 	}
-	return extension.Candidate{Handle: cand.Handle, BaseGeneration: base.Generation, Hash: hash}, nil
+	if live && pending > 1 {
+		out.ApproveAll = approveAllPrefix + revision(open(cs, st))
+	}
+	if live && approved > 0 {
+		out.Validate = ActionValidate
+	}
+	return out
 }
 
 // decisionRender renders the operator's decision for the agent.

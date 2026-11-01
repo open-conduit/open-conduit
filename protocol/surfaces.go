@@ -430,12 +430,21 @@ type Panel struct {
 	Sections []PanelSection `json:"sections"`
 }
 type PanelSection struct {
-	Title   string       `json:"title,omitempty"`
-	Text    string       `json:"text,omitempty"`
-	Fields  []PanelField `json:"fields,omitempty"`
-	Table   *PanelTable  `json:"table,omitempty"`
-	Links   []PanelLink  `json:"links,omitempty"`
-	Actions []string     `json:"actions,omitempty"`
+	Title    string         `json:"title,omitempty"`
+	Text     string         `json:"text,omitempty"`
+	Fields   []PanelField   `json:"fields,omitempty"`
+	Table    *PanelTable    `json:"table,omitempty"`
+	Messages []PanelMessage `json:"messages,omitempty"`
+	Links    []PanelLink    `json:"links,omitempty"`
+	Actions  []string       `json:"actions,omitempty"`
+}
+type PanelMessage struct {
+	From    string    `json:"from"`
+	Label   string    `json:"label,omitempty"`
+	Text    string    `json:"text"`
+	At      time.Time `json:"at,omitzero"`
+	Choices []string  `json:"choices,omitempty"`
+	Chosen  string    `json:"chosen,omitempty"`
 }
 type PanelField struct {
 	Name  string `json:"name"`
@@ -462,6 +471,9 @@ func FromPanels(ps []extension.Panel) []Panel {
 			if s.Table != nil {
 				ws.Table = &PanelTable{Columns: s.Table.Columns, Rows: s.Table.Rows}
 			}
+			for _, m := range s.Messages {
+				ws.Messages = append(ws.Messages, PanelMessage(m))
+			}
 			for _, l := range s.Links {
 				ws.Links = append(ws.Links, PanelLink{Label: l.Label, URL: l.URL})
 			}
@@ -484,12 +496,65 @@ func ToPanels(ps []Panel) []extension.Panel {
 			if s.Table != nil {
 				xs.Table = &extension.PanelTable{Columns: s.Table.Columns, Rows: s.Table.Rows}
 			}
+			for _, m := range s.Messages {
+				xs.Messages = append(xs.Messages, extension.PanelMessage(m))
+			}
 			for _, l := range s.Links {
 				xs.Links = append(xs.Links, extension.PanelLink{Label: l.Label, URL: l.URL})
 			}
 			x.Sections = append(x.Sections, xs)
 		}
 		out = append(out, x)
+	}
+	return out
+}
+
+// Config candidates (config.candidate): an extension whose Work proposes
+// configuration says what it proposes, for core's review and the
+// operator's apply (extension.ConfigCandidate). Handle is one the host
+// gave it (config.base, config.edit); the host serves the text behind it
+// to the operator alone.
+
+type ConfigCandidateParams struct {
+	Work Work `json:"work"`
+}
+type ConfigCandidateResult struct {
+	// Found is false for a Work with nothing proposed.
+	Found          bool              `json:"found"`
+	Handle         string            `json:"handle,omitempty"`
+	BaseGeneration string            `json:"base_generation,omitempty"`
+	Hash           string            `json:"hash,omitempty"`
+	Changes        []CandidateChange `json:"changes,omitempty"`
+	ApproveAll     string            `json:"approve_all,omitempty"`
+	Validate       string            `json:"validate,omitempty"`
+}
+type CandidateChange struct {
+	ID       string          `json:"id"`
+	Op       string          `json:"op"`
+	Pointer  string          `json:"pointer"`
+	State    string          `json:"state"`
+	Why      string          `json:"why,omitempty"`
+	Before   json.RawMessage `json:"before,omitempty"`
+	After    json.RawMessage `json:"after,omitempty"`
+	Problems []string        `json:"problems,omitempty"`
+	Approve  string          `json:"approve,omitempty"`
+	Reject   string          `json:"reject,omitempty"`
+}
+
+// FromCandidate is c on the wire.
+func FromCandidate(c extension.Candidate) ConfigCandidateResult {
+	out := ConfigCandidateResult{Found: true, Handle: c.Handle, BaseGeneration: c.BaseGeneration, Hash: c.Hash, ApproveAll: c.ApproveAll, Validate: c.Validate}
+	for _, x := range c.Changes {
+		out.Changes = append(out.Changes, CandidateChange(x))
+	}
+	return out
+}
+
+// Candidate is the candidate the result carries.
+func (r ConfigCandidateResult) Candidate() extension.Candidate {
+	out := extension.Candidate{Handle: r.Handle, BaseGeneration: r.BaseGeneration, Hash: r.Hash, ApproveAll: r.ApproveAll, Validate: r.Validate}
+	for _, x := range r.Changes {
+		out.Changes = append(out.Changes, extension.CandidateChange(x))
 	}
 	return out
 }

@@ -146,6 +146,24 @@ func TestDaemonExtensionPackages(t *testing.T) {
 	if s, err := d.c.Scope(ctx, "notes-scope"); err != nil || s.Name != "Notes" {
 		t.Fatalf("the package's candidate was applied: %+v %v", s, err)
 	}
+	// The package declares a page core draws, and its Work offers the
+	// candidate for core's review (config.candidate): the text behind its
+	// handle reaches the operator alone, with the reference the package
+	// never saw.
+	pages, err := d.c.Pages(ctx)
+	if err != nil || len(pages) != 2 || pages[1].Extension != "notes" || pages[1].ID != "notes" || pages[1].WorkKind != notes.Kind || pages[1].Compose[0] != "remark" {
+		t.Fatalf("pages: %+v %v", pages, err)
+	}
+	works, _ := d.c.Works(ctx, url.Values{"scope_id": {"notes-scope"}})
+	var cand client.ConfigCandidate
+	d.until("the package's candidate is offered for review", 30*time.Second, func() bool {
+		cand, err = d.c.WorkConfigCandidate(ctx, works.Items[0].ID)
+		return err == nil && cand.CandidateHash == proposed.Validate.Hash
+	})
+	if len(cand.Changes) != 2 || cand.Changes[0].Pointer != "/scopes/notes-scope/name" || string(cand.Changes[0].Before) != `"Notes"` ||
+		!strings.Contains(cand.ConfigText, `"Notes, proposed"`) || !strings.Contains(cand.ConfigText, notes.ConfigRef) || cand.BaseGeneration != "1" {
+		t.Fatalf("the package's candidate: %+v", cand)
+	}
 	runs, err := d.c.Runs(ctx, url.Values{"scope_id": {"notes-scope"}})
 	if err != nil || len(runs.Items) != 2 || runs.Items[0].Executor != "runner" {
 		t.Fatalf("runs: %+v %v", runs.Items, err)

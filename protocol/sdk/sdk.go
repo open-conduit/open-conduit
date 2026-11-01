@@ -105,6 +105,12 @@ type Extension struct {
 	// Panels returns the panels to show on a target now (manifest panels;
 	// extension.PanelProvider). Their buttons name Actions' IDs.
 	Panels func(ctx context.Context, h *Host, t extension.ActionTarget) ([]extension.Panel, error)
+	// ConfigCandidate says what a Work proposes for the operator to review
+	// and apply (manifest config_candidate, permission config.read;
+	// extension.ConfigCandidate): storage.ErrNotFound for a Work with
+	// nothing proposed. Its handles are ones Host.ConfigBase and
+	// Host.ConfigEdit returned.
+	ConfigCandidate func(ctx context.Context, h *Host, w domain.Work) (extension.Candidate, error)
 	// Setups are `open-conduit init <type>` flows by declared setup type.
 	Setups map[string]extension.Setup
 }
@@ -194,7 +200,7 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			_ = s.ext.Exporter.Shutdown(ctx)
 		}
 		return struct{}{}, nil
-	case "validate", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.act", "view.render", "setup.run":
+	case "validate", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.act", "view.render", "config.candidate", "setup.run":
 		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)

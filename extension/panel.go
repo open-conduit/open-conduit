@@ -6,6 +6,7 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
 	"unicode/utf8"
 )
 
@@ -30,6 +31,8 @@ const (
 	MaxPanelTitle    = 200
 	MaxPanelValue    = 2048
 	MaxPanelText     = 8192
+	MaxPanelMessages = 200
+	MaxPanelChoices  = 16
 )
 
 // Panel is one panel on a target. ID is stable ([a-z][a-z0-9_]*) and
@@ -41,15 +44,37 @@ type Panel struct {
 }
 
 // PanelSection is one block of a panel, shown in this order: its title,
-// text, fields, table, links and action buttons. Any may be empty, but not
-// all of them.
+// text, fields, table, messages, links and action buttons. Any may be
+// empty, but not all of them.
 type PanelSection struct {
-	Title   string
+	Title    string
+	Text     string
+	Fields   []PanelField
+	Table    *PanelTable
+	Messages []PanelMessage
+	Links    []PanelLink
+	Actions  []string
+}
+
+// Who wrote a panel message.
+const (
+	MessageOperator = "operator"
+	MessageAgent    = "agent"
+	MessageNote     = "note"
+)
+
+// PanelMessage is one line of a conversation (issue #242): what the
+// operator or the agent said, or a note of something that happened. An
+// agent's text is Markdown; the others are plain. Label, when set, reads
+// in place of who wrote it ("Assistant asks"). Choices are the answers a
+// question offered, and Chosen the one the operator gave.
+type PanelMessage struct {
+	From    string
+	Label   string
 	Text    string
-	Fields  []PanelField
-	Table   *PanelTable
-	Links   []PanelLink
-	Actions []string
+	At      time.Time
+	Choices []string
+	Chosen  string
 }
 
 // PanelField is a key/value pair.
@@ -98,7 +123,7 @@ func (p Panel) Validate() error {
 }
 
 func (s PanelSection) validate() error {
-	if s.Title == "" && s.Text == "" && len(s.Fields) == 0 && s.Table == nil && len(s.Links) == 0 && len(s.Actions) == 0 {
+	if s.Title == "" && s.Text == "" && len(s.Fields) == 0 && s.Table == nil && len(s.Messages) == 0 && len(s.Links) == 0 && len(s.Actions) == 0 {
 		return fmt.Errorf("empty section")
 	}
 	if err := text("title", s.Title, MaxPanelTitle, false); err != nil {
@@ -138,6 +163,14 @@ func (s PanelSection) validate() error {
 			}
 		}
 	}
+	if len(s.Messages) > MaxPanelMessages {
+		return fmt.Errorf("more than %d messages", MaxPanelMessages)
+	}
+	for _, m := range s.Messages {
+		if err := m.validate(); err != nil {
+			return err
+		}
+	}
 	if len(s.Links) > MaxPanelLinks {
 		return fmt.Errorf("more than %d links", MaxPanelLinks)
 	}
@@ -157,6 +190,27 @@ func (s PanelSection) validate() error {
 		seen[a] = true
 	}
 	return nil
+}
+
+func (m PanelMessage) validate() error {
+	if m.From != MessageOperator && m.From != MessageAgent && m.From != MessageNote {
+		return fmt.Errorf("message from %q is not operator, agent or note", m.From)
+	}
+	if err := line("message label", m.Label, MaxPanelTitle, false); err != nil {
+		return err
+	}
+	if err := text("message", m.Text, MaxPanelText, true); err != nil {
+		return err
+	}
+	if len(m.Choices) > MaxPanelChoices {
+		return fmt.Errorf("message has more than %d choices", MaxPanelChoices)
+	}
+	for _, c := range m.Choices {
+		if err := line("choice", c, MaxPanelTitle, true); err != nil {
+			return err
+		}
+	}
+	return line("chosen", m.Chosen, MaxPanelTitle, false)
 }
 
 // httpURL reports whether s is an absolute http or https URL of at most

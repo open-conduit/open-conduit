@@ -360,6 +360,20 @@ func proposeConfig(ctx context.Context, h *sdk.Host, o Options, scopes []string)
 		}
 		run.Trace = &t
 	}
+	cand := extension.Candidate{Handle: handle, BaseGeneration: run.Base.Generation, Hash: run.Validate.Hash, Changes: []extension.CandidateChange{
+		{ID: "n1", Op: "add", Pointer: "/scopes/" + scope + "/name", State: extension.ChangeApproved, Why: "a name for what it holds", Before: run.Edits[0].Before, After: json.RawMessage(`"Notes, proposed"`)},
+		{ID: "n2", Op: "add", Pointer: "/scopes/" + scope + "/secret_refs/notes_token", State: extension.ChangeApproved, Why: "the token, by reference", After: json.RawMessage(`"[redacted]"`)},
+	}}
+	if len(run.Validate.Diagnostics) > 0 {
+		cand.Handle, cand.Hash = "", ""
+	}
+	b, err := json.Marshal(cand)
+	if err != nil {
+		return err
+	}
+	if err = h.Update(ctx, CandidateNS, "latest", func([]byte, bool) ([]byte, error) { return b, nil }); err != nil {
+		return err
+	}
 	if o.StateDir == nil || o.StateDir() == "" {
 		return nil
 	}
@@ -368,6 +382,20 @@ func proposeConfig(ctx context.Context, h *sdk.Host, o Options, scopes []string)
 		return err
 	}
 	return os.WriteFile(filepath.Join(o.StateDir(), "config.json"), out, 0o600)
+}
+
+// candidateFor is what a note's Work proposes: the candidate ConfigTask
+// built last, approved as it stands.
+func candidateFor(ctx context.Context, h *sdk.Host, w domain.Work) (extension.Candidate, error) {
+	var c extension.Candidate
+	if w.Kind != Kind {
+		return c, storage.ErrNotFound
+	}
+	b, _, err := h.Get(ctx, CandidateNS, "latest")
+	if err != nil {
+		return c, err
+	}
+	return c, json.Unmarshal(b, &c)
 }
 
 // appendLine appends one line to a file in the state directory.

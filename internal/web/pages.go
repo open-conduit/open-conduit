@@ -34,10 +34,12 @@ type page struct {
 	NeedsYou int
 	// Update is a newer release than the daemon runs, when one is out.
 	Update *upgrade.Release
+	// Pages are the pages extensions contribute, for the navigation.
+	Pages []navPage
 }
 
 // pageNames are the page templates; each is parsed with the shared ones.
-var pageNames = []string{"runs", "work", "attention", "config", "setup", "output", "confirm", "update"}
+var pageNames = []string{"runs", "work", "attention", "config", "page", "output", "confirm", "update"}
 
 // shared are the templates every page can use.
 var shared = []string{"templates/layout.html", "templates/panels.html", "templates/conversation.html", "templates/actions.html"}
@@ -45,30 +47,31 @@ var shared = []string{"templates/layout.html", "templates/panels.html", "templat
 func (s *Server) parse() error {
 	now := func() time.Time { return s.opts.Now() }
 	funcs := template.FuncMap{
-		"trigger":   runview.TriggerText,
-		"outcome":   runview.Outcome,
-		"time":      runview.ShortTime,
-		"duration":  func(r client.Run) string { return runview.Duration(r, now()) },
-		"live":      runview.Running,
-		"ago":       func(ts string) string { return ago(ts, now()) },
-		"plural":    plural,
-		"summary":   summary,
-		"inc":       func(i int) int { return i + 1 },
-		"markdown":  markdown,
-		"clock":     clock,
-		"size":      size,
-		"mark":      markSVG,
-		"lifeline":  lifelineSVG,
-		"ratio":     ratioSVG,
-		"dur":       func(d time.Duration) string { return dur(d, false) },
-		"durp":      func(d time.Duration) string { return dur(d, true) },
-		"since":     func(t time.Time) string { return since(t, now()) },
-		"until":     func(t time.Time) string { return until(t, now()) },
-		"at":        func(t time.Time) string { return clockTime(t, now()) },
-		"poolName":  poolName,
-		"source":    sourceLabel,
-		"now":       now,
-		"setupBack": setupBack,
+		"trigger":     runview.TriggerText,
+		"outcome":     runview.Outcome,
+		"time":        runview.ShortTime,
+		"duration":    func(r client.Run) string { return runview.Duration(r, now()) },
+		"live":        runview.Running,
+		"ago":         func(ts string) string { return ago(ts, now()) },
+		"plural":      plural,
+		"summary":     summary,
+		"inc":         func(i int) int { return i + 1 },
+		"markdown":    markdown,
+		"clock":       clock,
+		"size":        size,
+		"mark":        markSVG,
+		"lifeline":    lifelineSVG,
+		"ratio":       ratioSVG,
+		"dur":         func(d time.Duration) string { return dur(d, false) },
+		"durp":        func(d time.Duration) string { return dur(d, true) },
+		"since":       func(t time.Time) string { return since(t, now()) },
+		"until":       func(t time.Time) string { return until(t, now()) },
+		"at":          func(t time.Time) string { return clockTime(t, now()) },
+		"poolName":    poolName,
+		"source":      sourceLabel,
+		"now":         now,
+		"pageHref":    pageHref,
+		"sessionHref": sessionHref,
 	}
 	for k, v := range s.actionFuncs() {
 		funcs[k] = v
@@ -123,6 +126,7 @@ func (s *Server) shell(ctx context.Context, p *page) {
 	if p.NeedsYou == 0 {
 		p.NeedsYou = s.needsYou(ctx)
 	}
+	p.Pages = s.navPages(ctx)
 }
 
 // poolName is a capacity pool's name on the status line.

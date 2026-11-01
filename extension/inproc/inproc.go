@@ -295,6 +295,12 @@ type Actor interface {
 	Actions(scope domain.ID) map[string]extension.ActionProvider
 }
 
+// Paged extensions contribute pages to the operator's web view
+// (extension.Page). Pages is read after Start and must not change.
+type Paged interface {
+	Pages() []extension.Page
+}
+
 // Annotation is one line an extension contributes to a Work's view.
 type Annotation struct {
 	Source, Name, Value string

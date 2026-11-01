@@ -44,6 +44,7 @@ var (
 	_ inproc.Renderer   = (*Extension)(nil)
 	_ inproc.Playbooker = (*Extension)(nil)
 	_ inproc.Tasker     = (*Extension)(nil)
+	_ inproc.Paged      = (*Extension)(nil)
 
 	_ extension.ConfigCandidate = (*Extension)(nil)
 )

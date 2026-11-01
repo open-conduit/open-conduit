@@ -13,6 +13,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // surface serves the host-to-extension methods 07-03 adapted.
@@ -162,6 +163,22 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.ViewRenderResult{Panels: protocol.FromPanels(panels)}, nil
+	case "config.candidate":
+		var p protocol.ConfigCandidateParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.ext.ConfigCandidate == nil {
+			return nil, notFound(method)
+		}
+		c, err := s.ext.ConfigCandidate(ctx, s.host, p.Work.Domain())
+		if errors.Is(err, storage.ErrNotFound) {
+			return protocol.ConfigCandidateResult{}, nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return protocol.FromCandidate(c), nil
 	case "work.act":
 		var p protocol.WorkActParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

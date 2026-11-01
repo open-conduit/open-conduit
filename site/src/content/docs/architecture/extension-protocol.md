@@ -58,7 +58,9 @@ The table groups what the first-party code actually does across the host boundar
 | Run environment | `extension.RunEnvironment`: an environment layer for each run of Work in a scope that uses the extension, told the connection the run's binding names (`connection`, as an operation's authority carries it), merged into `ExecutionContext.Env` before the executor starts (`extension.ApplyEnv`: later layers win, git's `GIT_CONFIG_*` entries are appended). An error fails the run before launch. Executors apply it after the resource's layer and give the process the toolbelt client, so a layer can name `os` (the GitHub extension's git as the bot uses `!os git-credential`) | GH | `run.environment` |
 | Annotations | management `Annotate` | GH | `work.annotate` |
 | Actions | `extension.ActionProvider` (list, authorise, plan one Event the host accepts under `core.action`) | GH | `work.actions`, `work.act` |
-| Panels | `extension.PanelProvider` (a constrained document on a scope or Work page, its buttons naming the provider's actions) | HU | `view.render` |
+| Panels | `extension.PanelProvider` (a constrained document on a scope or Work page, its buttons naming the provider's actions; a section of `messages` is a conversation) | HU setup | `view.render` |
+| Pages | `inproc.Paged` (`extension.Page`): a page of the extension's own in the web view, which core draws from its panels and actions ([pages](#pages)) | setup | manifest `pages` |
+| Config candidates | `extension.ConfigCandidate`: what a Work proposes, its changes with the actions that decide each and the candidate's handle, for core's review and the operator's apply | setup | `config.candidate` (permission `config.read`) |
 | Setup | `extension.Setup` with `SetupHost` prompts, browser, secret store, `LookPath`, `Run` | GH SL TR | `setup.run` plus `setup.*` callbacks |
 | Playbooks | embedded playbooks written into the agent executor's plugin directory | GH SL TR IS | manifest `playbooks` (first-party convention) |
 
@@ -255,7 +257,7 @@ Some host services reach beyond an extension's own surfaces: they show it other 
 | `telemetry.capture` | `telemetry.capture` (E→H) | Records a named telemetry event for one of its configured scopes, or for the machine (`scope_id` empty). The name is at most 128 bytes, the properties at most 64 KiB and never carry `scope`. Every sink receives it. |
 | `probes` | `probe.list`, `probe.run` (E→H) | Lists and runs the read-only setup probes the host, its extensions and its executors offer, by full name. The host checks the arguments against the probe's declaration and bounds the run to 30 seconds. A probe that fails answers its reason in `error`, cut to 300 bytes. |
 
-| `config.read` | `config.base`, `config.edit`, `config.validate`, `config.trace` (E→H) | Reads the whole configuration and builds candidates of it, which it validates and traces routes against. It never applies one, and never receives reference text: see [the config host](#the-config-host). |
+| `config.read` | `config.base`, `config.edit`, `config.validate`, `config.trace` (E→H), and `config.candidate` (H→E, with manifest `config_candidate`) | Reads the whole configuration and builds candidates of it, which it validates and traces routes against, and offers them for the operator's review. It never applies one, and never receives reference text: see [the config host](#the-config-host). |
 
 Packages are not sandboxed (see the [trust model](#trust-model)), so a permission is the operator's consent and a guard against accidental leaks, not a security boundary. It is enforced as though it were one, because it becomes one if packages are ever sandboxed.
 
@@ -267,7 +269,17 @@ The config host lets an extension propose configuration for the operator to appl
 - **Edits go against a handle.** `config.edit {handle, op, pointer, value?}` makes one `config set`/`config unset` edit (`add`, `replace`, `remove`; `-` appends, array elements by `id` or `name`) to the text behind the handle. The host holds the result as a new candidate and answers its handle, its redacted text, and the value that was at the pointer, also redacted. A value may set a new reference; it is redacted in everything the host answers back. The pointer is at most 512 bytes and the value at most 64 KiB.
 - **Validate and trace a handle.** `config.validate {handle}` runs the validation of `POST /config/validate` and answers the candidate hash or the diagnostics. `config.trace {handle, scope, sample?}` runs a route trace against the candidate and writes nothing; without a sample it lists the scope's samples, and a trace that can't run answers its fixed reason in `error`.
 - **Handles are the host's.** They are random, the same text keeps its handle while it is held, and the host holds the 256 most recently used. A handle it no longer holds (after a restart, or long unused) is `not_found`: read the base again.
-- **Never apply.** Nothing on the wire applies a configuration. An extension whose Work proposes one names its candidate's handle in `extension.Candidate`; `GET /work/{id}/config-candidate`, an operator-class read, serves the text behind it, and only the operator applies it with `POST /config/apply`. An operator's approval stays a `core.action` Event that the host records.
+- **Never apply.** Nothing on the wire applies a configuration. An extension whose Work proposes one says so in `extension.Candidate` (`config.candidate {work}`, manifest `config_candidate`): every change with its pointer, state, reason, redacted before and after, problems and the IDs of its own actions that approve and reject it, and, once the approved changes make a candidate, its handle and hash. `GET /work/{id}/config-candidate`, an operator-class read, serves the changes and the text behind the handle, core draws the review, and only the operator applies it with `POST /config/apply`. An operator's approval stays the extension's action, a `core.action` Event that the host records.
+
+### Pages
+
+An extension may contribute a page to the web view (issue #242): manifest `pages` (`extension.Page`, `inproc.Paged` in process), at most four, each `{id, title, summary?, entry, work_kind, start, compose?, route?}`. The ID is the page's path (`/pages/<id>`) and follows the identifier rule; `entry`, `work_kind` and `route` name the package's own extension type, Work kind and route handler, and the page needs `actions`. Core draws the page with no extension code and no markup from the package:
+
+- With no session open, the `start` action on a scope with the entry, and the grants the binding of the scope's first `route` offers as checkboxes, each one turned on added to the start input as `+name`.
+- With a session open (Work of `work_kind` in such a scope), the Work's panels: the first section with `messages` is the conversation (`{from: operator|agent|note, label?, text, at?, choices?, chosen?}`, an agent's text read as Markdown), and the rest stand beside it. One message box sends the first of `compose` the entry offers on the Work, its choices as buttons.
+- The session's change set, from `config.candidate`, when the package proposes configuration: the review and Apply are core's.
+
+`GET /pages` lists every extension's pages. The bundled setup extension declares its page this way, so the setup assistant in the browser is an ordinary extension page.
 
 ## Manifest
 

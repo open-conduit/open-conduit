@@ -26,7 +26,9 @@
       <a href="/" class="nav-item{{if eq .Page.Nav "runs"}} is-on{{end}}"{{if eq .Page.Nav "runs"}} aria-current="page"{{end}} title="g then r">Runs</a>
       <a href="/attention" class="nav-item{{if eq .Page.Nav "attention"}} is-on{{end}}"{{if eq .Page.Nav "attention"}} aria-current="page"{{end}} title="g then a">Needs you{{with .Page.NeedsYou}}<span class="nav-count" aria-label="{{.}} items">{{.}}</span>{{end}}</a>
       <a href="/config" class="nav-item{{if eq .Page.Nav "config"}} is-on{{end}}"{{if eq .Page.Nav "config"}} aria-current="page"{{end}} title="g then c">Configuration</a>
-      <a href="/setup" class="nav-item{{if eq .Page.Nav "setup"}} is-on{{end}}"{{if eq .Page.Nav "setup"}} aria-current="page"{{end}} title="g then s">Setup</a>
+      {{- range .Page.Pages}}{{$on := eq $.Page.Nav (print "page:" .ID)}}
+      <a href="{{.Href}}" class="nav-item{{if $on}} is-on{{end}}"{{if $on}} aria-current="page"{{end}}>{{.Title}}</a>
+      {{- end}}
     </nav>
     <div class="bar-tools">
       <button type="button" class="jump" data-palette hidden><span>Jump to work…</span><kbd class="kbd">⌘K</kbd></button>
@@ -97,7 +99,7 @@
     <header class="dialog-head"><h2 id="keys-title">Keyboard</h2><button type="button" class="btn btn-quiet btn-icon" data-close aria-label="Close">✕</button></header>
     <dl class="keys">
       <dt><kbd class="kbd">⌘K</kbd></dt><dd>Jump to any work, scope or page</dd>
-      <dt><kbd class="kbd">g</kbd> <kbd class="kbd">r</kbd> / <kbd class="kbd">a</kbd> / <kbd class="kbd">c</kbd> / <kbd class="kbd">s</kbd></dt><dd>Runs, Needs you, Configuration, Setup</dd>
+      <dt><kbd class="kbd">g</kbd> <kbd class="kbd">r</kbd> / <kbd class="kbd">a</kbd> / <kbd class="kbd">c</kbd></dt><dd>Runs, Needs you, Configuration</dd>
       <dt><kbd class="kbd">/</kbd></dt><dd>Search runs</dd>
       <dt><kbd class="kbd">j</kbd> <kbd class="kbd">k</kbd></dt><dd>Move through runs, or through turns on a run</dd>
       <dt><kbd class="kbd">Enter</kbd></dt><dd>Open the focused run</dd>

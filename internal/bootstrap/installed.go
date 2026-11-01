@@ -14,6 +14,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/observability"
 	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // installed adapts an installed package (extproc.Remote) onto the
@@ -52,6 +53,9 @@ var (
 	_ inproc.Checker    = (*installed)(nil)
 	_ inproc.Exporting  = (*installed)(nil)
 	_ inproc.Sink       = (*installed)(nil)
+	_ inproc.Paged      = (*installed)(nil)
+
+	_ extension.ConfigCandidate = (*installed)(nil)
 )
 
 func (x *installed) Name() string { return x.m.Name }
@@ -161,6 +165,33 @@ func (x *installed) Actions(scope domain.ID) map[string]extension.ActionProvider
 		return nil
 	}
 	return map[string]extension.ActionProvider{x.m.Name: p}
+}
+
+// Pages are the manifest's pages.
+func (x *installed) Pages() []extension.Page {
+	var out []extension.Page
+	for _, p := range x.m.Provides.Pages {
+		out = append(out, p.Page())
+	}
+	return out
+}
+
+// ownsKind reports whether the manifest declares the Work kind.
+func (x *installed) ownsKind(kind string) bool {
+	for _, k := range x.m.Provides.WorkKinds {
+		if k.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
+// ConfigCandidate is what one of the package's Work proposes.
+func (x *installed) ConfigCandidate(ctx context.Context, w domain.Work) (extension.Candidate, error) {
+	if x.r == nil || !x.ownsKind(w.Kind) {
+		return extension.Candidate{}, storage.ErrNotFound
+	}
+	return x.r.ConfigCandidate(ctx, w)
 }
 
 func (x *installed) Annotate(ctx context.Context, w domain.Work) []inproc.Annotation {
