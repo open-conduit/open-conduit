@@ -25,6 +25,7 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | `github.pr.view` | `number` | a PR and every comment, inline comment and review on it |
 | `github.pr.comment` | `number`, `body` | comment on a PR's conversation |
 | `github.pr.reply` | `number`, `comment_id`, `body` | reply in an inline review thread |
+| `github.pr.resolve` | `number`, `comment_id` | resolve the inline review thread that comment is in, once its point is addressed |
 | `github.pr.review` | `number`, `event`, `body`, `comments`? | submit one review: `event` is `approve`, `request_changes` or `comment`, with inline `comments` as `{path, line, side?, body}` on lines of the diff. It is posted as this connection's GitHub account, not the owner's |
 | `github.checks` | `number`? | every check on the PR's head, with links |
 | `github.attachment.upload` | `file_path` | upload a file (an image, a zip, a document) and get a link to put in a comment |
@@ -124,6 +125,7 @@ The message lists what happened since your last turn, each under its own heading
   - If the comment corrects something you did, log it as the toolbelt's instructions say, if it collects corrections.
   - From another agent: act on it if it bears on your work, but don't reply unless you disagree outright (see Other agents).
   - Reply where the comment was made, with the operation its heading names. Say what changed, with the short commit SHA. One comment can answer several points from the same person in the same place.
+  - Once an inline point is addressed, resolve its thread with `github.pr.resolve` and the comment's `comment_id` if you opened the thread or another agent did. Leave a person's thread for them to resolve.
 - **Checks failed**: `github.checks` links each failing check. Read its log, reproduce it locally, fix it, push, and end with `building`.
 - **Checks passed**: if the report (step 5) isn't posted yet, post it now. Otherwise, if you pushed changes for feedback, reply to that feedback and end with `review`.
 - **Required checks never reported**: checks the base branch requires (a deploy, say) never started on the head. Find out why (a `[skip …]` in the PR title or a commit message stops some deploys), start them, often with a new push, and end with `building`. If they rightly don't run on this PR, report as in step 5 and say so.

@@ -1291,6 +1291,83 @@ func TestGitHubReviewerBindingWritesAsItsOwnConnection(t *testing.T) {
 	}
 }
 
+// An agent resolves a review thread by naming any inline comment in it,
+// never its GraphQL node: as the binding's own connection, once (a resolved
+// thread is left alone), across pages of threads. A conversation comment, a
+// connection without Pull requests write and a missing field are refused.
+func TestGitHubPRResolveResolvesTheCommentsThread(t *testing.T) {
+	e := newToolsEnv(t)
+	reviewer := githubtest.User{Login: "open-conduit-reviewer[bot]", Type: "Bot"}
+	e.fake.AddToken("tok-reviewer")
+	e.fake.SetIdentity("tok-reviewer", reviewer)
+	e.connMu.Lock()
+	e.connections = map[string]string{"github-reviewer": "tok-reviewer"}
+	e.connMu.Unlock()
+	e.mu.Lock()
+	e.connection = "github-reviewer"
+	e.mu.Unlock()
+
+	n, _ := e.claim("Header wobbles", "", "bug")
+	pr := e.fake.OpenPull("Fix the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "h1", githubtest.User{Login: "open-conduit[bot]", Type: "Bot"})
+	first := e.fake.AddReviewComment(pr, reviewer, "Name the offset.", "header.go", 12)
+	point := e.fake.AddReviewComment(pr, reviewer, "Why removed?", "header.go", 30)
+	other := e.fake.AddReviewComment(pr, ghAlice, "Is this tested?", "header.go", 40)
+	talk := e.fake.AddComment(pr, ghAlice, "A conversation comment.")
+	e.fake.SetThreadPage(1)
+	e.sync()
+	w := e.request("thread-resolve")
+	a := e.start(w.ID)
+
+	_, err := e.call(a, gh.OpPRResolve, "", map[string]any{"number": pr})
+	refused(t, err, "missing_field")
+	_, err = e.call(a, gh.OpPRResolve, "", map[string]any{"number": pr, "comment_id": talk})
+	refused(t, err, "no_thread")
+
+	// A reply in the second thread names it as well as its first comment.
+	reply := e.must(a, gh.OpPRReply, "reply", map[string]any{"number": pr, "comment_id": point, "body": "Restored in abc1234."})
+	if reply["state"] != "posted" {
+		t.Fatalf("reply: %v", reply)
+	}
+	var replyID int64
+	for _, c := range e.fake.InlineComments(pr) {
+		if c.ReplyTo == point {
+			replyID = c.ID
+		}
+	}
+	before := len(e.fake.Writes())
+	if out := e.must(a, gh.OpPRResolve, "resolve", map[string]any{"number": pr, "comment_id": strconv.FormatInt(replyID, 10)}); out["state"] != "resolved" || out["note"] != nil {
+		t.Fatalf("resolve: %v", out)
+	}
+	if by := e.fake.ThreadResolvedBy(point); by != reviewer.Login {
+		t.Fatalf("resolved by %q", by)
+	}
+	if e.fake.ThreadResolvedBy(first) != "" || e.fake.ThreadResolvedBy(other) != "" {
+		t.Fatal("another thread was resolved")
+	}
+	if out := e.must(a, gh.OpPRResolve, "again", map[string]any{"number": pr, "comment_id": point}); out["state"] != "resolved" || out["note"] == nil {
+		t.Fatalf("again: %v", out)
+	}
+	mutations := 0
+	for _, x := range e.fake.Writes()[before:] {
+		if x.Token != "tok-reviewer" {
+			t.Fatalf("resolve call as %s: %s", x.Token, x.Path)
+		}
+		if strings.Contains(string(x.Body), "resolveReviewThread") {
+			mutations++
+		}
+	}
+	if mutations != 1 {
+		t.Fatalf("%d resolve mutations", mutations)
+	}
+
+	e.fake.RefuseThreadResolution()
+	_, err = e.call(a, gh.OpPRResolve, "refused", map[string]any{"number": pr, "comment_id": other})
+	refused(t, err, "github_forbidden")
+	if e.fake.ThreadResolvedBy(other) != "" {
+		t.Fatal("a refused thread was resolved")
+	}
+}
+
 // A reviewing agent waits for the next reply on a PR and, separately, the
 // next push to it: each wakes it once, its own posts on the PR don't, and
 // the wait survives a restart.

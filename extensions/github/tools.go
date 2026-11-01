@@ -60,6 +60,7 @@ const (
 	OpPRCreate     = "github.pr.create"
 	OpPRComment    = "github.pr.comment"
 	OpPRReply      = "github.pr.reply"
+	OpPRResolve    = "github.pr.resolve"
 	OpPRReview     = "github.pr.review"
 	OpChecks       = "github.checks"
 	OpUpload       = "github.attachment.upload"
@@ -72,7 +73,7 @@ const (
 // Operations lists every tool operation (for binding operation lists).
 func Operations() []string {
 	return []string{OpContext, OpIssueView, OpIssueComment, OpIssueList, OpIssueCreate, OpPRList, OpPRView, OpPRCreate,
-		OpPRComment, OpPRReply, OpPRReview, OpChecks, OpUpload, OpFetch, OpWait, OpHoldStatus, OpHold, OpGitCredential}
+		OpPRComment, OpPRReply, OpPRResolve, OpPRReview, OpChecks, OpUpload, OpFetch, OpWait, OpHoldStatus, OpHold, OpGitCredential}
 }
 
 // Source is one registered GitHub extension entry the tools can act on.
@@ -180,6 +181,7 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpPRCreate, Handler: h(t.prCreate)},
 			{Name: OpPRComment, Handler: pr(t.prComment)},
 			{Name: OpPRReply, Handler: pr(t.prReply)},
+			{Name: OpPRResolve, Handler: pr(t.prResolve)},
 			{Name: OpPRReview, Handler: pr(t.prReview)},
 			{Name: OpChecks, Handler: pr(t.checks)},
 			{Name: OpUpload, Handler: h(t.upload)},
@@ -968,6 +970,58 @@ func (t *Tools) prReply(ctx context.Context, b *bound, data json.RawMessage) (an
 		return nil, err
 	}
 	return t.post(ctx, b, src, Intent{ID: intentID(ctx, b, OpPRReply, data), Work: b.work.ID, Number: in.Number, ReplyTo: id, Body: in.Body, Durable: true})
+}
+
+// prResolve resolves the review thread an inline comment is in, once its
+// point is addressed. The agent names the comment by the ID it sees in
+// github.pr.view or a reply hint; the thread and GitHub's GraphQL are the
+// extension's business. It is written as the binding's GitHub connection,
+// like a reply, and resolving a resolved thread changes nothing, so a retry
+// is safe. Any thread on a PR the Work can reach may be resolved: GitHub's
+// own rule is Pull requests write, which the host's connection carries.
+func (t *Tools) prResolve(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
+	var in struct {
+		Number    int             `json:"number"`
+		CommentID json.RawMessage `json:"comment_id"`
+		Repo      string          `json:"repo"`
+	}
+	if err := decode(data, &in); err != nil {
+		return nil, err
+	}
+	id, err := strconv.ParseInt(strings.Trim(string(in.CommentID), `"`), 10, 64)
+	if in.Number <= 0 || err != nil || id <= 0 {
+		return nil, refuse("missing_field", "number (the PR) and comment_id (an inline comment in the thread) are required")
+	}
+	src, err := t.pullSource(b, in.Repo)
+	if err != nil {
+		return nil, err
+	}
+	_, c, err := t.bindingClient(b, src)
+	if err != nil {
+		return nil, err
+	}
+	repo := src.Settings.Repo
+	thread, ok, err := c.FindReviewThread(ctx, repo, in.Number, id)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, refuse("no_thread", "PR #%d has no review thread holding inline comment %d: comment_id must be an inline comment's id (kind review_comment in github.pr.view), not a review's or a conversation comment's", in.Number, id)
+	}
+	if thread.Resolved {
+		return map[string]any{"state": "resolved", "note": "the thread was already resolved"}, nil
+	}
+	if src.Settings.Projection.DryRun {
+		return map[string]any{"state": "dry_run", "note": fmt.Sprintf("dry run: would resolve the thread holding comment %d on PR #%d", id, in.Number)}, nil
+	}
+	switch err := c.ResolveReviewThread(ctx, repo, thread.ID); {
+	case err == nil:
+	case IsStatus(err, http.StatusForbidden):
+		return nil, refuse("github_forbidden", "this connection can't resolve review threads on %s: it needs Pull requests write access", repo)
+	default:
+		return nil, err
+	}
+	return map[string]any{"state": "resolved"}, nil
 }
 
 // reviewEvents maps the operation's review events onto GitHub's.

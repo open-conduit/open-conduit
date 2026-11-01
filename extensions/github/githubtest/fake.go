@@ -159,6 +159,13 @@ type Server struct {
 	fileData                         map[string][]byte
 	hooks                            []*Hook
 	perms                            map[string]bool
+	// resolved holds the review threads resolved through GraphQL, by the
+	// ID of the inline comment that opened them; threadPage is how many
+	// threads a reviewThreads page holds; refuseResolve makes resolving
+	// a thread FORBIDDEN.
+	resolved      map[int64]string
+	threadPage    int
+	refuseResolve bool
 }
 
 // Hook is a repository webhook.
@@ -197,7 +204,7 @@ func New(repo string, tokens ...string) *Server {
 		events: map[int][]IssueEvent{}, checks: map[string][]CheckRun{}, statuses: map[string][]Status{}, tokens: map[string]bool{},
 		apps: map[string]*rsa.PublicKey{}, identities: map[string]User{}, installs: map[string]string{}, scopes: map[string]TokenScope{}, failNext: map[string]int{}, loseNext: map[string]int{}, tokenTTL: time.Hour,
 		commits: map[string]time.Time{}, contents: map[string][]byte{}, branches: map[string]bool{}, files: map[string]string{}, fileData: map[string][]byte{},
-		protection: map[string][]string{}, rulesets: map[string][]string{}}
+		protection: map[string][]string{}, rulesets: map[string][]string{}, resolved: map[int64]string{}, threadPage: 100}
 	for _, t := range tokens {
 		s.tokens[t] = true
 	}
@@ -717,6 +724,28 @@ func (s *Server) RefuseRequiredChecks(protection, rulesets bool) {
 	s.mu.Unlock()
 }
 
+// ThreadResolvedBy is who resolved the review thread an inline comment
+// opened or replied in ("" while it is unresolved).
+func (s *Server) ThreadResolvedBy(commentID int64) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resolved[s.threadRoot(commentID)]
+}
+
+// ResolveThread resolves the thread an inline comment is in, as login.
+func (s *Server) ResolveThread(commentID int64, login string) {
+	s.mu.Lock()
+	s.resolved[s.threadRoot(commentID)] = login
+	s.mu.Unlock()
+}
+
+// SetThreadPage sets how many review threads a GraphQL page holds.
+func (s *Server) SetThreadPage(n int) { s.mu.Lock(); s.threadPage = n; s.mu.Unlock() }
+
+// RefuseThreadResolution makes resolving a review thread FORBIDDEN, as for
+// a connection without Pull requests write.
+func (s *Server) RefuseThreadResolution() { s.mu.Lock(); s.refuseResolve = true; s.mu.Unlock() }
+
 // Forbid makes the next request an ordinary 403 (no access).
 func (s *Server) Forbid() {
 	s.mu.Lock()
@@ -881,6 +910,16 @@ func (s *Server) pullJSON(n int) map[string]any {
 	return map[string]any{"number": n, "title": i.Title, "body": i.Body, "html_url": s.web(n), "state": i.State, "draft": p.Draft,
 		"merged_at": tp(p.MergedAt), "closed_at": tp(i.Closed), "created_at": ts(i.Created), "updated_at": ts(i.Updated), "user": i.User,
 		"labels": labels, "head": map[string]string{"ref": p.HeadRef, "sha": p.HeadSHA}, "base": map[string]string{"ref": p.BaseRef}}
+}
+
+// findComment is the comment with id, or nil.
+func (s *Server) findComment(id int64) *Comment {
+	for _, c := range s.comments {
+		if c.ID == id {
+			return c
+		}
+	}
+	return nil
 }
 
 func (s *Server) comment(id int64) *Comment {
@@ -1139,6 +1178,9 @@ var (
 func atoi(s string) int { n, _ := strconv.Atoi(s); return n }
 
 func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int, any) {
+	if r.URL.Path == "/graphql" && r.Method == http.MethodPost {
+		return s.graphql(token, body)
+	}
 	if m := reAccessToken.FindStringSubmatch(r.URL.Path); m != nil && r.Method == http.MethodPost {
 		s.issued++
 		tok := fmt.Sprintf("ghs_%s_%d", strings.TrimPrefix(token, "app:"), s.issued)
@@ -1593,4 +1635,77 @@ func contains(xs []string, x string) bool {
 		}
 	}
 	return false
+}
+
+// threadRoot is the inline comment that opened the thread id is in.
+func (s *Server) threadRoot(id int64) int64 {
+	for range len(s.comments) {
+		c := s.findComment(id)
+		if c == nil || c.ReplyTo == 0 {
+			return id
+		}
+		id = c.ReplyTo
+	}
+	return id
+}
+
+// graphql answers the two GraphQL calls the extension makes: a PR's review
+// threads, a page at a time, and resolveReviewThread. Errors come back as
+// GitHub sends them, in a 200's errors.
+func (s *Server) graphql(token string, body json.RawMessage) (int, any) {
+	var req struct {
+		Query     string         `json:"query"`
+		Variables map[string]any `json:"variables"`
+	}
+	if json.Unmarshal(body, &req) != nil {
+		return http.StatusBadRequest, map[string]any{"message": "Problems parsing JSON"}
+	}
+	fail := func(kind, msg string) (int, any) {
+		return http.StatusOK, map[string]any{"data": nil, "errors": []map[string]any{{"type": kind, "message": msg}}}
+	}
+	str := func(k string) string { v, _ := req.Variables[k].(string); return v }
+	switch {
+	case strings.Contains(req.Query, "resolveReviewThread"):
+		root, err := strconv.ParseInt(strings.TrimPrefix(str("thread"), "PRRT_"), 10, 64)
+		if c := s.findComment(root); err != nil || c == nil || !c.Inline || c.ReplyTo != 0 {
+			return fail("NOT_FOUND", "Could not resolve to a node with the global id of '"+str("thread")+"'")
+		}
+		if s.refuseResolve {
+			return fail("FORBIDDEN", "Resource not accessible by integration")
+		}
+		s.resolved[root] = s.writer(token).Login
+		return http.StatusOK, map[string]any{"data": map[string]any{"resolveReviewThread": map[string]any{"thread": map[string]any{"id": str("thread"), "isResolved": true}}}}
+	case strings.Contains(req.Query, "reviewThreads"):
+		if !strings.EqualFold(str("owner")+"/"+str("name"), s.Repo) {
+			return fail("NOT_FOUND", "Could not resolve to a Repository")
+		}
+		n, _ := req.Variables["number"].(float64)
+		if _, ok := s.pulls[int(n)]; !ok {
+			return fail("NOT_FOUND", "Could not resolve to a PullRequest")
+		}
+		var threads []map[string]any
+		for _, c := range s.comments {
+			if c.Number != int(n) || !c.Inline || c.ReplyTo != 0 {
+				continue
+			}
+			ids := []map[string]any{}
+			for _, x := range s.comments {
+				if x.Inline && s.threadRoot(x.ID) == c.ID {
+					ids = append(ids, map[string]any{"databaseId": x.ID})
+				}
+			}
+			_, done := s.resolved[c.ID]
+			threads = append(threads, map[string]any{"id": "PRRT_" + strconv.FormatInt(c.ID, 10), "isResolved": done, "comments": map[string]any{"nodes": ids}})
+		}
+		from, _ := strconv.Atoi(str("after"))
+		to := min(from+s.threadPage, len(threads))
+		page := []map[string]any{}
+		if from < len(threads) {
+			page = threads[from:to]
+		}
+		info := map[string]any{"hasNextPage": to < len(threads), "endCursor": strconv.Itoa(to)}
+		return http.StatusOK, map[string]any{"data": map[string]any{"repository": map[string]any{"pullRequest": map[string]any{
+			"reviewThreads": map[string]any{"nodes": page, "pageInfo": info}}}}}
+	}
+	return fail("INVALID", "the fake does not model this query")
 }

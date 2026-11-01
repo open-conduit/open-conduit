@@ -143,7 +143,7 @@ Webhooks are an accelerator: reconcile always runs, so with no listener the daem
 **Minimum GitHub permissions.** These apply to the connection identity on each repository:
 
 - **Reads.** Issues, pull requests, checks, commit statuses, contents and metadata, for reconcile, push enrichment and the agent's reads.
-- **Writes.** Issues and pull requests (labels, comments, reactions, opening PRs, submitting reviews with `github.pr.review`), and contents (attachment uploads). A review is submitted as the writer (the bot App, or else the token's account), which must not be the account that opened the PR to approve it or request changes ([whose review it is](../engineering-tools/#tool-operations)).
+- **Writes.** Issues and pull requests (labels, comments, reactions, opening PRs, submitting reviews with `github.pr.review`, resolving review threads with `github.pr.resolve`), and contents (attachment uploads). A review is submitted as the writer (the bot App, or else the token's account), which must not be the account that opened the PR to approve it or request changes ([whose review it is](../engineering-tools/#tool-operations)).
 - **Hooks.** Administration only for `manage_webhook`.
 
 That maps to these grants:
