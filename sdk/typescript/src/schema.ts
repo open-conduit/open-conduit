@@ -10,7 +10,9 @@ declare const phantom: unique symbol;
 const optionalMark = Symbol("optional");
 
 /** A JSON Schema that accepts values of type T. */
-export type Type<T> = Readonly<Record<string, unknown>> & { readonly [phantom]?: T };
+export type Type<T> = Readonly<Record<string, unknown>> & {
+  readonly [phantom]?: T;
+};
 
 /** The type of the values a schema accepts. */
 export type Infer<S> = S extends Type<infer T> ? T : never;
@@ -18,9 +20,15 @@ export type Infer<S> = S extends Type<infer T> ? T : never;
 type Optional<T> = Type<T> & { readonly [optionalMark]: true };
 
 type Shape = Record<string, Type<unknown>>;
-type RequiredKeys<S extends Shape> = { [K in keyof S]: S[K] extends { readonly [optionalMark]: true } ? never : K }[keyof S];
+type RequiredKeys<S extends Shape> = {
+  [K in keyof S]: S[K] extends { readonly [optionalMark]: true } ? never : K;
+}[keyof S];
 type Flatten<T> = { [K in keyof T]: T[K] } & {};
-type ObjectOf<S extends Shape> = Flatten<{ [K in RequiredKeys<S>]: Infer<S[K]> } & { [K in Exclude<keyof S, RequiredKeys<S>>]?: Infer<S[K]> }>;
+type ObjectOf<S extends Shape> = Flatten<
+  { [K in RequiredKeys<S>]: Infer<S[K]> } & {
+    [K in Exclude<keyof S, RequiredKeys<S>>]?: Infer<S[K]>;
+  }
+>;
 
 interface Doc {
   /** Becomes the schema's description, which an agent reads in its toolbelt. */
@@ -32,8 +40,13 @@ interface ObjectOptions extends Doc {
   open?: boolean;
 }
 
-function withDoc(schema: Record<string, unknown>, o: Doc | undefined): Record<string, unknown> {
-  return o?.description === undefined ? schema : { ...schema, description: o.description };
+function withDoc(
+  schema: Record<string, unknown>,
+  o: Doc | undefined,
+): Record<string, unknown> {
+  return o?.description === undefined
+    ? schema
+    : { ...schema, description: o.description };
 }
 
 function isOptional(s: Type<unknown>): boolean {
@@ -42,10 +55,18 @@ function isOptional(s: Type<unknown>): boolean {
 
 export const t = {
   string(o?: Doc & { format?: string }): Type<string> {
-    return withDoc(o?.format === undefined ? { type: "string" } : { type: "string", format: o.format }, o);
+    return withDoc(
+      o?.format === undefined
+        ? { type: "string" }
+        : { type: "string", format: o.format },
+      o,
+    );
   },
   /** One of the given strings. */
-  enum<const V extends readonly [string, ...string[]]>(values: V, o?: Doc): Type<V[number]> {
+  enum<const V extends readonly [string, ...string[]]>(
+    values: V,
+    o?: Doc,
+  ): Type<V[number]> {
     return withDoc({ type: "string", enum: [...values] }, o);
   },
   integer(o?: Doc): Type<number> {
@@ -58,7 +79,10 @@ export const t = {
     return withDoc({ type: "boolean" }, o);
   },
   /** Exactly this value: tells apart the members of a union. */
-  literal<const V extends string | number | boolean>(value: V, o?: Doc): Type<V> {
+  literal<const V extends string | number | boolean>(
+    value: V,
+    o?: Doc,
+  ): Type<V> {
     return withDoc({ const: value }, o);
   },
   array<T>(items: Type<T>, o?: Doc): Type<T[]> {
@@ -99,28 +123,41 @@ export function isRecord(v: unknown): v is Record<string, unknown> {
 }
 
 /** Reports whether value matches schema, narrowing it to the schema's type. */
-export function matches<S extends Type<unknown>>(schema: S, value: unknown): value is Infer<S> {
+export function matches<S extends Type<unknown>>(
+  schema: S,
+  value: unknown,
+): value is Infer<S> {
   return check(schema, value) === undefined;
 }
 
 /** Why value does not match schema, or undefined when it does. */
-export function check(schema: Readonly<Record<string, unknown>>, value: unknown, path = ""): string | undefined {
+export function check(
+  schema: Readonly<Record<string, unknown>>,
+  value: unknown,
+  path = "",
+): string | undefined {
   const field = path === "" ? "the input" : `field "${path}"`;
   const wrongType = `${field} has the wrong type (got a JSON ${jsonKind(value)})`;
   if (Array.isArray(schema.anyOf)) {
     const options = schema.anyOf.filter(isRecord);
-    return options.some((s) => check(s, value, path) === undefined) ? undefined : wrongType;
+    return options.some((s) => check(s, value, path) === undefined)
+      ? undefined
+      : wrongType;
   }
-  if ("const" in schema && value !== schema.const) return `${field} must be ${JSON.stringify(schema.const)}`;
+  if ("const" in schema && value !== schema.const)
+    return `${field} must be ${JSON.stringify(schema.const)}`;
   switch (schema.type) {
     case "null":
       return value === null ? undefined : wrongType;
     case "string":
       if (typeof value !== "string") return wrongType;
-      if (Array.isArray(schema.enum) && !schema.enum.includes(value)) return `${field} must be one of ${schema.enum.map((v) => JSON.stringify(v)).join(", ")}`;
+      if (Array.isArray(schema.enum) && !schema.enum.includes(value))
+        return `${field} must be one of ${schema.enum.map((v) => JSON.stringify(v)).join(", ")}`;
       return undefined;
     case "integer":
-      return typeof value === "number" && Number.isInteger(value) ? undefined : wrongType;
+      return typeof value === "number" && Number.isInteger(value)
+        ? undefined
+        : wrongType;
     case "number":
       return typeof value === "number" ? undefined : wrongType;
     case "boolean":
@@ -141,12 +178,19 @@ export function check(schema: Readonly<Record<string, unknown>>, value: unknown,
   }
 }
 
-function checkObject(schema: Readonly<Record<string, unknown>>, value: unknown, path: string, wrongType: string): string | undefined {
-  if (!isRecord(value)) return path === "" ? "the input must be a JSON object" : wrongType;
+function checkObject(
+  schema: Readonly<Record<string, unknown>>,
+  value: unknown,
+  path: string,
+  wrongType: string,
+): string | undefined {
+  if (!isRecord(value))
+    return path === "" ? "the input must be a JSON object" : wrongType;
   const props = isRecord(schema.properties) ? schema.properties : {};
   const required = Array.isArray(schema.required) ? schema.required : [];
   for (const k of required) {
-    if (typeof k === "string" && !(k in value)) return `missing field "${join(path, k)}"`;
+    if (typeof k === "string" && !(k in value))
+      return `missing field "${join(path, k)}"`;
   }
   for (const [k, v] of Object.entries(value)) {
     const p = props[k];

@@ -28,6 +28,12 @@ await build({
   logLevel: "warning",
 });
 chmodSync(bin, 0o755);
-writeFileSync(join(out, "open-conduit-extension.json"), execFileSync(bin, ["package-manifest"]));
-writeFileSync(join(out, "certification.json"), execFileSync(bin, ["package-certification"]));
+writeFileSync(
+  join(out, "open-conduit-extension.json"),
+  execFileSync(bin, ["package-manifest"]),
+);
+writeFileSync(
+  join(out, "certification.json"),
+  execFileSync(bin, ["package-certification"]),
+);
 console.log(`packaged ${out}`);

@@ -141,8 +141,9 @@ packages:
 
 # The TypeScript SDK (sdk/typescript) and its example package
 # (protocol/examples/weather). Installing their npm dependencies uses the
-# network, so it is explicit, as config-deps is; ts-check typechecks and
-# unit-tests both, and ts-packages bundles the example into the package
+# network, so it is explicit, as config-deps is; ts-check checks both are
+# formatted with Prettier's defaults (npm run format fixes it), typechecks
+# and unit-tests them, and ts-packages bundles the example into the package
 # layout certify runs (installing its dependencies first if ts-deps hasn't).
 # ts-check needs Node 22.18 or later.
 TS_DIRS = sdk/typescript protocol/examples/weather
@@ -151,7 +152,7 @@ ts-deps:
 	@set -eu; for d in $(TS_DIRS); do (cd $$d && npm ci --no-audit --no-fund); done
 
 ts-check:
-	@set -eu; for d in $(TS_DIRS); do (cd $$d && npm run --silent typecheck && npm test --silent); done
+	@set -eu; for d in $(TS_DIRS); do (cd $$d && npm run --silent format:check && npm run --silent typecheck && npm test --silent); done
 
 ts-packages:
 	cd protocol/examples/weather && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && node scripts/package.mjs $(abspath $(PACKAGES_DIR))/weather

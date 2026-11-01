@@ -37,7 +37,7 @@ Other targets:
 make cross-build          # darwin and linux, amd64 and arm64, into dist/ (build evidence only)
 make drill                # the daemon kill and restart drills on their own
 make ts-deps              # once: installs the TypeScript SDK's and example's npm dependencies (needs Node 22.18+)
-make ts-check             # typechecks and unit-tests the TypeScript SDK and its example
+make ts-check             # Prettier, typecheck and unit tests for the TypeScript SDK and its example (npm run format fixes formatting)
 make certify              # builds the extension packages and certifies them, plus the negative controls (needs Node and npm)
 make protocol-prototype   # the extension transport comparison; downloads its own modules on first run
 make docs-check           # only the docs example checks

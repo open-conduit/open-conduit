@@ -14,7 +14,14 @@
 //     at once with CancelledError and a late response is discarded.
 
 import type { Readable, Writable } from "node:stream";
-import { CancelledError, Code, ProtocolError, TransportError, decode, encode } from "./errors.ts";
+import {
+  CancelledError,
+  Code,
+  ProtocolError,
+  TransportError,
+  decode,
+  encode,
+} from "./errors.ts";
 import { type Infer, isRecord, matches, t } from "./schema.ts";
 
 /** Bounds of protocol version 1 (protocol/protocol.go). */
@@ -32,7 +39,11 @@ const codeCancelled = -32800;
 const codeApplication = -32000;
 
 /** Serves one inbound request. Its signal aborts when the peer cancels. */
-export type Handler = (method: string, params: unknown, signal: AbortSignal) => Promise<unknown>;
+export type Handler = (
+  method: string,
+  params: unknown,
+  signal: AbortSignal,
+) => Promise<unknown>;
 
 export interface ConnOptions {
   maxMessage?: number;
@@ -41,23 +52,34 @@ export interface ConnOptions {
   onProtocolError?: (reason: string) => void;
 }
 
-const WireError = t.object({
-  code: t.integer(),
-  message: t.string(),
-  data: t.optional(t.object({ code: t.string(), reset_at: t.optional(t.string()) }, { open: true })),
-}, { open: true });
+const WireError = t.object(
+  {
+    code: t.integer(),
+    message: t.string(),
+    data: t.optional(
+      t.object(
+        { code: t.string(), reset_at: t.optional(t.string()) },
+        { open: true },
+      ),
+    ),
+  },
+  { open: true },
+);
 type WireError = Infer<typeof WireError>;
 
 // Only the envelope is decoded here; params and results are decoded by
 // whoever knows their schema.
-const Message = t.object({
-  jsonrpc: t.literal("2.0"),
-  id: t.optional(t.nullable(t.any())),
-  method: t.optional(t.string()),
-  params: t.optional(t.any()),
-  result: t.optional(t.any()),
-  error: t.optional(t.nullable(WireError)),
-}, { open: true });
+const Message = t.object(
+  {
+    jsonrpc: t.literal("2.0"),
+    id: t.optional(t.nullable(t.any())),
+    method: t.optional(t.string()),
+    params: t.optional(t.any()),
+    result: t.optional(t.any()),
+    error: t.optional(t.nullable(WireError)),
+  },
+  { open: true },
+);
 type Message = Infer<typeof Message>;
 
 type ID = number | string;
@@ -88,7 +110,12 @@ export class Conn {
   readonly done: Promise<void>;
   #finish!: () => void;
 
-  constructor(input: Readable, output: Writable, handler: Handler, o: ConnOptions = {}) {
+  constructor(
+    input: Readable,
+    output: Writable,
+    handler: Handler,
+    o: ConnOptions = {},
+  ) {
     this.#handler = handler;
     this.#out = output;
     this.#maxMessage = o.maxMessage ?? MaxMessageBytes;
@@ -97,7 +124,9 @@ export class Conn {
     this.done = new Promise((resolve) => {
       this.#finish = resolve;
     });
-    input.on("data", (chunk: Buffer | string) => this.#read(typeof chunk === "string" ? Buffer.from(chunk) : chunk));
+    input.on("data", (chunk: Buffer | string) =>
+      this.#read(typeof chunk === "string" ? Buffer.from(chunk) : chunk),
+    );
     input.on("end", () => {
       // A partial final line (a response cut off by a crash) is a protocol
       // error, never a result.
@@ -134,8 +163,12 @@ export class Conn {
       const nl = chunk.indexOf(0x0a, start);
       if (nl < 0) break;
       const part = chunk.subarray(start, nl);
-      if (this.#bufferedBytes + part.length >= this.#maxMessage) return this.#protocolError("message exceeds the protocol bound");
-      const line = this.#bufferedBytes === 0 ? part : Buffer.concat([...this.#buffered, part]);
+      if (this.#bufferedBytes + part.length >= this.#maxMessage)
+        return this.#protocolError("message exceeds the protocol bound");
+      const line =
+        this.#bufferedBytes === 0
+          ? part
+          : Buffer.concat([...this.#buffered, part]);
       this.#buffered = [];
       this.#bufferedBytes = 0;
       start = nl + 1;
@@ -144,7 +177,8 @@ export class Conn {
     }
     const rest = chunk.subarray(start);
     if (rest.length === 0) return;
-    if (this.#bufferedBytes + rest.length >= this.#maxMessage) return this.#protocolError("message exceeds the protocol bound");
+    if (this.#bufferedBytes + rest.length >= this.#maxMessage)
+      return this.#protocolError("message exceeds the protocol bound");
     this.#buffered.push(Buffer.from(rest));
     this.#bufferedBytes += rest.length;
   }
@@ -159,24 +193,36 @@ export class Conn {
     if (!matches(Message, m)) return this.#protocolError("malformed message");
     const { id, method } = m;
     if (method === CancelMethod) {
-      if (isRecord(m.params)) this.#cancels.get(JSON.stringify(m.params.id))?.abort();
+      if (isRecord(m.params))
+        this.#cancels.get(JSON.stringify(m.params.id))?.abort();
     } else if (method !== undefined && method !== "" && isID(id)) {
       // Refuse rather than queue: the reader also carries the responses
       // in-flight handlers wait for, so blocking it would deadlock them.
       if (this.#inflight >= this.#maxInflight) {
-        this.#write({ jsonrpc: "2.0", id, error: { code: codeApplication, message: "too many requests in flight", data: { code: Code.Overloaded } } });
+        this.#write({
+          jsonrpc: "2.0",
+          id,
+          error: {
+            code: codeApplication,
+            message: "too many requests in flight",
+            data: { code: Code.Overloaded },
+          },
+        });
         return;
       }
       void this.#serve(id, method, m.params);
     } else if (method !== undefined && method !== "") {
       // Other notifications are served without a reply.
-      void this.#handler(method, m.params, new AbortController().signal).catch(() => {});
+      void this.#handler(method, m.params, new AbortController().signal).catch(
+        () => {},
+      );
     } else if (isID(id)) {
       const key = JSON.stringify(id);
       const p = this.#pending.get(key);
       this.#pending.delete(key);
       if (p === undefined) return;
-      if (m.error !== undefined && m.error !== null) p.reject(decodeError(m.error));
+      if (m.error !== undefined && m.error !== null)
+        p.reject(decodeError(m.error));
       else p.resolve(m.result);
     } else {
       this.#protocolError("message is neither request nor response");
@@ -191,9 +237,15 @@ export class Conn {
     let reply: Message;
     try {
       const result = await this.#handler(method, params, abort.signal);
-      reply = abort.signal.aborted ? { jsonrpc: "2.0", id, error: encodeError(new CancelledError(), true) } : { jsonrpc: "2.0", id, result: result === undefined ? {} : result };
+      reply = abort.signal.aborted
+        ? { jsonrpc: "2.0", id, error: encodeError(new CancelledError(), true) }
+        : { jsonrpc: "2.0", id, result: result === undefined ? {} : result };
     } catch (err) {
-      reply = { jsonrpc: "2.0", id, error: encodeError(err, abort.signal.aborted) };
+      reply = {
+        jsonrpc: "2.0",
+        id,
+        error: encodeError(err, abort.signal.aborted),
+      };
     } finally {
       this.#inflight--;
       this.#cancels.delete(key);
@@ -201,7 +253,14 @@ export class Conn {
     if (this.#closed) return;
     if (!this.#write(reply) && reply.error === undefined) {
       // An oversized result is refused rather than closing the stream.
-      this.#write({ jsonrpc: "2.0", id, error: encodeError(new ProtocolError(Code.Invalid, "message exceeds the protocol bound"), false) });
+      this.#write({
+        jsonrpc: "2.0",
+        id,
+        error: encodeError(
+          new ProtocolError(Code.Invalid, "message exceeds the protocol bound"),
+          false,
+        ),
+      });
     }
   }
 
@@ -223,7 +282,11 @@ export class Conn {
    * Sends a request and resolves with its result, undecoded. Aborting
    * signal sends $/cancel and rejects at once with CancelledError.
    */
-  call(method: string, params: unknown = {}, signal?: AbortSignal): Promise<unknown> {
+  call(
+    method: string,
+    params: unknown = {},
+    signal?: AbortSignal,
+  ): Promise<unknown> {
     if (this.#closed) return Promise.reject(new TransportError());
     if (signal?.aborted) return Promise.reject(new CancelledError());
     const id = ++this.#next;
@@ -248,7 +311,9 @@ export class Conn {
       if (!this.#write({ jsonrpc: "2.0", id, method, params })) {
         this.#pending.delete(key);
         signal?.removeEventListener("abort", onAbort);
-        reject(new ProtocolError(Code.Invalid, "message exceeds the protocol bound"));
+        reject(
+          new ProtocolError(Code.Invalid, "message exceeds the protocol bound"),
+        );
       }
     });
   }
@@ -260,10 +325,21 @@ export class Conn {
 }
 
 function encodeError(err: unknown, cancelled: boolean): WireError {
-  if (cancelled) return { code: codeCancelled, message: "request cancelled", data: { code: Code.Cancelled } };
+  if (cancelled)
+    return {
+      code: codeCancelled,
+      message: "request cancelled",
+      data: { code: Code.Cancelled },
+    };
   const e = encode(err);
-  if (e.code === Code.Cancelled) return { code: codeCancelled, message: e.message, data: { code: e.code } };
-  const code = e.code === Code.MethodNotFound ? codeMethodNotFound : e.code === Code.Internal ? codeInternal : codeApplication;
+  if (e.code === Code.Cancelled)
+    return { code: codeCancelled, message: e.message, data: { code: e.code } };
+  const code =
+    e.code === Code.MethodNotFound
+      ? codeMethodNotFound
+      : e.code === Code.Internal
+        ? codeInternal
+        : codeApplication;
   const data: { code: string; reset_at?: string } = { code: e.code };
   if (e.resetAt !== undefined) data.reset_at = e.resetAt;
   return { code, message: e.message, data };
@@ -272,7 +348,13 @@ function encodeError(err: unknown, cancelled: boolean): WireError {
 function decodeError(e: WireError): Error {
   if (e.code === codeCancelled) return new CancelledError();
   if (e.data?.code) return decode(e.data.code, e.message, e.data.reset_at);
-  if (e.code === codeMethodNotFound) return new ProtocolError(Code.MethodNotFound, e.message);
-  if (e.code === codeInvalidParams || e.code === codeInvalidRequest || e.code === codeParse) return new ProtocolError(Code.Invalid, e.message);
+  if (e.code === codeMethodNotFound)
+    return new ProtocolError(Code.MethodNotFound, e.message);
+  if (
+    e.code === codeInvalidParams ||
+    e.code === codeInvalidRequest ||
+    e.code === codeParse
+  )
+    return new ProtocolError(Code.Invalid, e.message);
   return new ProtocolError(Code.Internal, "internal error");
 }

@@ -83,8 +83,9 @@ var typescriptInbound = map[string]bool{
 }
 
 var (
-	tsMessage = regexp.MustCompile(`(?m)^export const (\w+) = t\.object\(\{\n((?:.*\n)*?)\}, open\);`)
-	tsField   = regexp.MustCompile(`(?m)^  (\w+): (.*)$`)
+	// As Prettier lays a message out: the shape, then the open option.
+	tsMessage = regexp.MustCompile(`(?m)^export const (\w+) = t\.object\(\n  \{\n((?:.*\n)*?)  \},\n  open,\n\);`)
+	tsField   = regexp.MustCompile(`(?m)^    (\w+): (.*)$`)
 )
 
 func TestTypeScriptWireMatchesGo(t *testing.T) {

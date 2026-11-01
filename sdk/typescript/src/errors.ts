@@ -88,17 +88,29 @@ export class TransportError extends Error {
 
 /** Decode returns the error for an authored error received from the host. */
 export function decode(code: string, message: string, resetAt?: string): Error {
-  return isProtocolCode(code) ? new ProtocolError(code, message, resetAt) : new OperationError(code, message);
+  return isProtocolCode(code)
+    ? new ProtocolError(code, message, resetAt)
+    : new OperationError(code, message);
 }
 
 /** The code and message an error crosses the wire with. */
-export function encode(err: unknown): { code: string; message: string; resetAt?: string } {
+export function encode(err: unknown): {
+  code: string;
+  message: string;
+  resetAt?: string;
+} {
   if (err instanceof ProtocolError) {
     const message = err.detail === "" ? err.code : err.detail;
-    return err.resetAt === undefined ? { code: err.code, message } : { code: err.code, message, resetAt: err.resetAt };
+    return err.resetAt === undefined
+      ? { code: err.code, message }
+      : { code: err.code, message, resetAt: err.resetAt };
   }
-  if (err instanceof OperationError) return { code: err.code, message: err.message };
-  if (err instanceof CancelledError || (err instanceof Error && err.name === "AbortError")) {
+  if (err instanceof OperationError)
+    return { code: err.code, message: err.message };
+  if (
+    err instanceof CancelledError ||
+    (err instanceof Error && err.name === "AbortError")
+  ) {
     return { code: Code.Cancelled, message: "request cancelled" };
   }
   return { code: Code.Internal, message: "internal error" };

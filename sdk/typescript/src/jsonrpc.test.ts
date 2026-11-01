@@ -8,10 +8,19 @@ function peer(maxMessage?: number) {
   const input = new PassThrough();
   const output = new PassThrough();
   const reasons: string[] = [];
-  const o = maxMessage === undefined ? { onProtocolError: (r: string) => void reasons.push(r) } : { maxMessage, onProtocolError: (r: string) => void reasons.push(r) };
+  const o =
+    maxMessage === undefined
+      ? { onProtocolError: (r: string) => void reasons.push(r) }
+      : { maxMessage, onProtocolError: (r: string) => void reasons.push(r) };
   const conn = new Conn(input, output, async (method) => ({ method }), o);
   const lines: unknown[] = [];
-  output.on("data", (b: Buffer) => b.toString().split("\n").filter(Boolean).forEach((l) => lines.push(JSON.parse(l))));
+  output.on("data", (b: Buffer) =>
+    b
+      .toString()
+      .split("\n")
+      .filter(Boolean)
+      .forEach((l) => lines.push(JSON.parse(l))),
+  );
   return { conn, input, lines, reasons };
 }
 
@@ -20,7 +29,9 @@ test("a request split across chunks is served once it is whole", async () => {
   input.write('{"jsonrpc":"2.0","id":1,"me');
   input.write('thod":"ping"}\n');
   await new Promise((r) => setImmediate(r));
-  assert.deepEqual(lines, [{ jsonrpc: "2.0", id: 1, result: { method: "ping" } }]);
+  assert.deepEqual(lines, [
+    { jsonrpc: "2.0", id: 1, result: { method: "ping" } },
+  ]);
   conn.close();
 });
 
@@ -50,8 +61,16 @@ test("over the inflight bound a request is refused as overloaded", async () => {
   const held = new Promise<void>((r) => (release = r));
   const conn = new Conn(input, output, async () => held, { maxInflight: 1 });
   const lines: { id: number; error?: { data: { code: string } } }[] = [];
-  output.on("data", (b: Buffer) => b.toString().split("\n").filter(Boolean).forEach((l) => lines.push(JSON.parse(l))));
-  input.write('{"jsonrpc":"2.0","id":1,"method":"a"}\n{"jsonrpc":"2.0","id":2,"method":"b"}\n');
+  output.on("data", (b: Buffer) =>
+    b
+      .toString()
+      .split("\n")
+      .filter(Boolean)
+      .forEach((l) => lines.push(JSON.parse(l))),
+  );
+  input.write(
+    '{"jsonrpc":"2.0","id":1,"method":"a"}\n{"jsonrpc":"2.0","id":2,"method":"b"}\n',
+  );
   await new Promise((r) => setImmediate(r));
   assert.equal(lines[0]?.id, 2);
   assert.equal(lines[0]?.error?.data.code, Code.Overloaded);
@@ -62,11 +81,29 @@ test("over the inflight bound a request is refused as overloaded", async () => {
 test("an authored error crosses with its code", async () => {
   const input = new PassThrough();
   const output = new PassThrough();
-  const conn = new Conn(input, output, async () => { throw new ProtocolError(Code.Conflict, "version moved"); });
+  const conn = new Conn(input, output, async () => {
+    throw new ProtocolError(Code.Conflict, "version moved");
+  });
   const lines: unknown[] = [];
-  output.on("data", (b: Buffer) => b.toString().split("\n").filter(Boolean).forEach((l) => lines.push(JSON.parse(l))));
+  output.on("data", (b: Buffer) =>
+    b
+      .toString()
+      .split("\n")
+      .filter(Boolean)
+      .forEach((l) => lines.push(JSON.parse(l))),
+  );
   input.write('{"jsonrpc":"2.0","id":"x","method":"kv.commit"}\n');
   await new Promise((r) => setImmediate(r));
-  assert.deepEqual(lines, [{ jsonrpc: "2.0", id: "x", error: { code: -32000, message: "version moved", data: { code: "conflict" } } }]);
+  assert.deepEqual(lines, [
+    {
+      jsonrpc: "2.0",
+      id: "x",
+      error: {
+        code: -32000,
+        message: "version moved",
+        data: { code: "conflict" },
+      },
+    },
+  ]);
   conn.close();
 });
