@@ -26,7 +26,10 @@ targets="$*"
 
 rm -rf "$out"
 mkdir -p "$out"
+# go list -m reports no Dir until the module is in the cache.
+$go mod download "$module"
 src=$($go list -m -f '{{.Dir}}' "$module")
+[ -n "$src" ] || { echo "bundle-packages: $module is not in the module cache" >&2; exit 1; }
 host="$out/.host-setup-extension"
 $go build -trimpath -o "$host" "$pkg"
 
