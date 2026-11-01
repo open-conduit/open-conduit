@@ -129,12 +129,16 @@ packages:
 		echo "packaged $$dir"; \
 	done
 	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(PACKAGES_DIR)/shell/os ./cmd/os
+	@# setup lives in github.com/open-conduit/extension-setup (go.mod tool)
+	@# and is laid out as the release archive bundles it.
+	GO='$(GO)' LDFLAGS='$(LDFLAGS)' scripts/bundle-packages.sh $(PACKAGES_DIR)/.bundled
+	rm -rf $(PACKAGES_DIR)/setup && mv $(PACKAGES_DIR)/.bundled/*/extensions/setup $(PACKAGES_DIR)/setup && rm -rf $(PACKAGES_DIR)/.bundled
 
 # 07-03 certification: the public runner over the two first-party workloads
 # and the examples (reports beside the packages), then the negative
 # controls, which must each fail their criterion.
 certify: build packages
-	@set -eu; for name in slack shell notes runner; do \
+	@set -eu; for name in slack shell notes runner setup; do \
 		bin/open-conduit extension certify $(PACKAGES_DIR)/$$name --report $(PACKAGES_DIR)/$$name.certification.json; \
 	done
 	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -v -run 'TestCertification' ./integration
@@ -158,9 +162,10 @@ release-snapshot:
 		rm -rf $(RELEASE_DIR)/smoke; mkdir -p $(RELEASE_DIR)/smoke; tar -xzf $$archive -C $(RELEASE_DIR)/smoke; \
 		$(RELEASE_DIR)/smoke/open-conduit --version | grep -q "^open-conduit $$version "; \
 		$(RELEASE_DIR)/smoke/os --version | grep -q "^os $$version "; \
+		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  setup .*(bundled with open-conduit)'; \
 		cask=$(RELEASE_DIR)/homebrew/Casks/open-conduit.rb; \
 		grep -q '^  binary "open-conduit"$$' $$cask; \
 		test $$(grep -c '^  binary ' $$cask) -eq 1; \
 		! grep -qi 'license' $$cask; \
-		echo "snapshot $$version: 4 archives, checksums verified, cask links open-conduit only"
+		echo "snapshot $$version: 4 archives, checksums verified, setup bundled, cask links open-conduit only"
 	$(MAKE) --no-print-directory smoke-run SMOKE_BIN=$(RELEASE_DIR)/smoke

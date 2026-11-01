@@ -100,6 +100,15 @@ acme/
 
 Packaged Go binaries also answer `package-manifest` and `package-certification` (`sdk.PackageCommand`), so the manifest has one source of truth in code. `make packages` builds the first-party packages and the examples into `dist/packages/<name>/` this way.
 
+### Bundled with the release
+
+The release archive carries packages as well as binaries, under `extensions/<name>/` beside `open-conduit` and `os`. The daemon discovers them there as [bundled packages](../extension-protocol/#loading), and a package of the same name installed in `<config dir>/extensions` replaces the bundled one. Today the archive bundles one: `setup`, the [setup assistant](../setup-sessions/#where-it-lives-and-how-it-ships), which a fresh install needs for its first-run configuration.
+
+- **Source.** A bundled package lives in its own repository and module, built on `protocol/sdk` like any third party's, and is pinned in this repository's `go.mod` with a `tool` directive. Nothing imports it.
+- **Build.** `scripts/bundle-packages.sh OUT [GOOS_GOARCH…]` builds it from the module cache for each platform and writes its manifest, certification and playbooks beside the binary. GoReleaser runs it before building and adds each platform's directory to that platform's archive. `make packages` runs it for this host into `dist/packages/setup`, and `make certify` certifies it with the others. `make release-snapshot` checks that `extension list` shows it as bundled.
+- **Install and upgrade.** install.sh and `open-conduit upgrade` replace `extensions/` beside the binary with the release's as a whole (upgrade stages it, then swaps it in after the binaries, so a failed swap leaves the old one). Packages installed in the config directory are never touched. The Homebrew cask keeps the whole archive in its directory, so the daemon finds `extensions/` beside the linked binary.
+- **Updating the pin.** Bump the version in `go.mod` (`go get github.com/open-conduit/extension-setup@VERSION`). The package's own CI certifies it against the latest release and `main` before it is tagged.
+
 ## Compatibility ranges
 
 | What | Range | Checked |

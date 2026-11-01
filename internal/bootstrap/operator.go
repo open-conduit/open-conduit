@@ -21,7 +21,6 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
-	"github.com/open-conduit/open-conduit/extensions/setup"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
@@ -103,7 +102,7 @@ func offlineExecutors() map[string]extension.Executor {
 // init <type>`). Core CLI hosts them through cli.Env.Setups and imports no
 // extension.
 func Setups() []extension.Setup {
-	return []extension.Setup{gh.Setup{}, sl.Setup{}, linear.Setup{}, jira.Setup{}, setup.Setup{}}
+	return []extension.Setup{gh.Setup{}, sl.Setup{}, linear.Setup{}, jira.Setup{}}
 }
 
 // DefaultConfig is the configuration the daemon runs on when it starts with
@@ -213,15 +212,9 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 
 // firstRunPlaybook is the setup playbook `init --with claude` starts on:
 // the first-run setup's playbook, named after its type, with `{{bin}}` as
-// the agent runs open-conduit. It comes from the registered setup
-// extension, or else from the first-run package installed beside
-// configPath or bundled with the binary.
+// the agent runs open-conduit. It comes from the first-run package
+// installed beside configPath or bundled with the binary (#243).
 func firstRunPlaybook(configPath, bin string) (string, string, error) {
-	for _, s := range Setups() {
-		if s.SetupInfo().FirstRun && s.SetupInfo().Type == setup.Type {
-			return setup.PlaybookName, setup.Playbook(bin), nil
-		}
-	}
 	found, _ := discoverPackages(configPath, "")
 	for _, f := range found {
 		d := f.Manifest.Provides.Setup

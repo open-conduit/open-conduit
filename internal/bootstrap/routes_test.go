@@ -115,9 +115,6 @@ func samplesConfig() []byte {
 		return map[string]any{"id": id, "name": id, "authorization": map[string]any{"connections": connections, "operations": ops, "read_scopes": []any{}},
 			"bindings": bindings, "routes": routes, "extensions": entries, "secret_refs": map[string]any{}}
 	}
-	setupAgent := []any{map[string]any{"name": "run", "executor": "claude-code", "requires": map[string]any{"toolbelt": "mcp", "inject": true, "resume": true},
-		"operations": []string{"read_context", "wait", "declare_outcome", "setup.say", "setup.ask"}, "secret_names": []any{},
-		"config": map[string]any{"binary": "claude", "playbook": "-", "builtin_tools": []string{}, "cold_turns": "resume"}}}
 	cfg := map[string]any{
 		"version": 1, "settings": map[string]any{},
 		"connections": []any{
@@ -142,9 +139,6 @@ func samplesConfig() []byte {
 					entry("app", "bitbucket", "bitbucket", map[string]any{"namespace": "bitbucket/acme/app", "scope": "proj", "repo": "acme/app", "tracker": map[string]any{"namespace": "jira/acme/proj", "keys": []string{"PROJ"}}})}),
 			scope("self", []string{}, shell(introspection.OpReport), []any{route("reports", introspection.Type, map[string]any{"work": introspection.WorkReport})},
 				[]any{entry("introspection", introspection.Type, "", map[string]any{})}),
-			scope("setup", []string{}, setupAgent, []any{map[string]any{"name": "setup", "handler": "setup", "binding": "run", "active_policy": "inject",
-				"unsupported_fallback": "queue", "error_fallback": "queue", "config": map[string]any{}}},
-				[]any{entry("setup", "setup", "", map[string]any{})}),
 		},
 	}
 	b, _ := json.Marshal(cfg)
