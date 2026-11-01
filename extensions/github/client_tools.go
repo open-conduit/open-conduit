@@ -152,7 +152,7 @@ func (c *Client) Attach(ctx context.Context, repo, file, message string, data []
 		return "", fmt.Errorf("github: attachment exceeds %d MB", MaxAttachment>>20)
 	}
 	err := c.attach(ctx, true, repo, file, message, data)
-	if c.write != c.read && (IsStatus(err, http.StatusForbidden) || IsStatus(err, http.StatusNotFound)) {
+	if c.hasBot() && (IsStatus(err, http.StatusForbidden) || IsStatus(err, http.StatusNotFound)) {
 		err = c.attach(ctx, false, repo, file, message, data)
 	}
 	if err != nil {
@@ -234,7 +234,7 @@ func (c *Client) Fetch(ctx context.Context, repo, link string) ([]byte, string, 
 	default:
 		return nil, "", ErrForeignLink
 	}
-	tok, err := c.read.token(ctx, repo)
+	tok, err := c.who.Load().read.token(ctx, repo)
 	if err != nil {
 		return nil, "", err
 	}

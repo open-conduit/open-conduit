@@ -22,6 +22,7 @@ type githubSource struct {
 	scope      domain.ID
 	config     json.RawMessage
 	connection string
+	conn       string // the connection's config and secret refs the client was last set up from
 	client     *gh.Client
 	ingress    *gh.Ingress
 	projector  *gh.Projector
@@ -62,7 +63,9 @@ func (d *daemon) connectionSecrets(id string) gh.SecretFunc {
 
 // registerGitHub registers every enabled scope's GitHub ingress entry that is
 // not yet registered. Registrations are immutable for one runtime instance:
-// a changed or removed entry keeps its registration until restart.
+// a changed or removed entry keeps its registration until restart. A change
+// to the connection a registered entry uses (its sign-in, bot App, git or
+// secret refs) is applied to the entry's client in place.
 func (d *daemon) registerGitHub(ctx context.Context, s *config.Snapshot) {
 	d.github.mu.Lock()
 	defer d.github.mu.Unlock()
@@ -84,8 +87,10 @@ func (d *daemon) registerGitHub(ctx context.Context, s *config.Snapshot) {
 				continue // inherited entries for another scope are validated elsewhere
 			}
 			if prev, ok := d.github.sources[settings.Namespace]; ok {
-				if string(prev.config) != string(x.Config) {
+				if string(prev.config) != string(x.Config) || prev.connection != x.Connection {
 					d.report("github", domain.ID(settings.Namespace), "restart_required")
+				} else {
+					d.followGitHubConnection(s, settings.Namespace, prev)
 				}
 				continue
 			}
@@ -140,9 +145,47 @@ func (d *daemon) addGitHub(ctx context.Context, s *config.Snapshot, scope domain
 	if err != nil {
 		return err
 	}
-	d.github.sources[settings.Namespace] = &githubSource{name: name, scope: scope, config: append(json.RawMessage(nil), x.Config...), connection: x.Connection, client: client, ingress: in, projector: projector}
+	d.github.sources[settings.Namespace] = &githubSource{name: name, scope: scope, config: append(json.RawMessage(nil), x.Config...), connection: x.Connection, conn: connectionKey(conn), client: client, ingress: in, projector: projector}
 	d.log.Info("github ingress registered", "name", name, "namespace", settings.Namespace)
 	return nil
+}
+
+// followGitHubConnection points a registered entry's client at its
+// connection's current config and secret refs when they changed since the
+// client was set up, so an applied bot App or credential change takes effect
+// without a restart. A move to another api_url can't be applied in place and
+// reports restart_required. The caller holds d.github.mu.
+func (d *daemon) followGitHubConnection(s *config.Snapshot, namespace string, src *githubSource) {
+	var conn *config.Connection
+	for i := range s.Connections {
+		if s.Connections[i].ID == src.connection {
+			conn = &s.Connections[i]
+		}
+	}
+	if conn == nil || conn.Type != gh.Type {
+		return // config validation refuses an entry without its connection
+	}
+	key := connectionKey(conn)
+	if key == src.conn {
+		return
+	}
+	cfg, err := gh.ParseConnection(conn.Config)
+	if err == nil {
+		err = src.client.Reconfigure(cfg, d.connectionSecrets(conn.ID))
+	}
+	if err != nil {
+		d.report("github", domain.ID(namespace), "restart_required")
+		return
+	}
+	src.conn = key
+	d.log.Info("github connection change applied", "name", src.name, "connection", conn.ID)
+}
+
+// connectionKey identifies what a connection's client is built from: its
+// config and secret references (names and references only, never values).
+func connectionKey(c *config.Connection) string {
+	refs, _ := json.Marshal(c.SecretRefs) // map keys marshal sorted
+	return string(c.Config) + "\x00" + string(refs)
 }
 
 // projectGitHub starts one bounded projection pass per source, at most every
