@@ -103,6 +103,12 @@ type ToolsOptions struct {
 	// connection (Authority.Connection), which its comments, replies and
 	// reviews go out as. Nil leaves every binding on the entry's connection.
 	Writers *Writers
+	// MayRead answers whether a scope may depend on another scope's events
+	// (its authorization.read_scopes). A condition on a project the scope
+	// may not read is refused when it is resolved, saying how to allow it,
+	// rather than when the wait registers. Nil leaves the check to the
+	// runtime.
+	MayRead func(reader, target domain.ID) error
 }
 
 // Tools implements the operations.

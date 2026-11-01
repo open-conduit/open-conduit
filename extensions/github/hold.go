@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"sync"
 	"time"
 
@@ -179,7 +180,7 @@ func (h *HoldExecutorImpl) decide(ctx context.Context, tb ToolbeltClient, r exte
 	} else {
 		res, err := call(ctx, tb, OpHoldStatus, map[string]any{})
 		if err != nil {
-			return extension.Result{}, err
+			return extension.Result{}, refusalOf(err)
 		}
 		var s HoldStatus
 		if res.Output != nil {
@@ -189,16 +190,31 @@ func (h *HoldExecutorImpl) decide(ctx context.Context, tb ToolbeltClient, r exte
 		if s.Held && !expired {
 			// Still held (first attempt, or the owner moved the time while
 			// it waited): declare the translated wait and park.
-			_, err := call(ctx, tb, OpHold, map[string]any{})
+			held, err := call(ctx, tb, OpHold, map[string]any{})
 			if err == nil {
-				return extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Summary: "held: waiting for " + s.Describe}}, nil
+				summary := "held: waiting for " + s.Describe
+				var plan HoldStatus
+				if held.Output != nil {
+					_ = json.Unmarshal(held.Output.Data, &plan)
+				}
+				if len(plan.Refused) > 0 {
+					// Part of the hold can't be met (a project this one may
+					// not wait on): it waits for the rest, and says why.
+					summary += "; it can't wait on " + strings.Join(plan.Refused, "; ")
+				}
+				return extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Summary: summary}}, nil
 			}
 			if !notHeld(err) {
-				return extension.Result{}, err
+				return extension.Result{}, refusalOf(err)
 			}
-			// Nothing here can meet the hold (a job before stage 05, an
-			// unknown project) and it has no time: start now, saying so.
+			// Nothing here can meet the hold (an unknown job or project, a
+			// project this one may not wait on) and it has no time: start
+			// now, saying why, so neither the Work nor the agent retries a
+			// hold that can't register until the config changes.
 			why = fmt.Sprintf("This issue was held, waiting for %s, which nothing here can tell has happened; it starts now.", s.Describe)
+			if msg := refusalMessage(err); msg != "" {
+				why += " " + msg
+			}
 		} else {
 			why = releasedWhy(s, woken)
 		}
@@ -212,7 +228,7 @@ func (h *HoldExecutorImpl) decide(ctx context.Context, tb ToolbeltClient, r exte
 		"data": map[string]any{"schema": SchemaHoldReleased, "data": json.RawMessage(data)}, "correlation_key": map[string]string{"source": key[0].Source, "external_id": key[0].ExternalID}}
 	raw, _ := json.Marshal(emit)
 	if _, err := tb.ToolbeltCall(ctx, client.ToolCall{Operation: extension.Emit, Input: raw}); err != nil {
-		return extension.Result{}, err
+		return extension.Result{}, refusalOf(err)
 	}
 	return extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Summary: "released: " + why}}, nil
 }
@@ -271,4 +287,37 @@ func notHeld(err error) bool {
 	var api *client.Error
 	var op *extension.OperationError
 	return errors.As(err, &api) && api.Code == "not_held" || errors.As(err, &op) && op.Code == "not_held"
+}
+
+// refusalOf presents a toolbelt refusal as an extension.OperationError, so
+// the failed attempt's outcome says what was refused and why instead of a
+// generic failure. Any other error is returned as it is.
+func refusalOf(err error) error {
+	var api *client.Error
+	if errors.As(err, &api) && api.Code != "" {
+		return &extension.OperationError{Code: api.Code, Message: api.Message}
+	}
+	return err
+}
+
+// refusalMessage is the reason a not_held refusal gives, as a sentence.
+func refusalMessage(err error) string {
+	var api *client.Error
+	var op *extension.OperationError
+	msg := ""
+	switch {
+	case errors.As(err, &api):
+		msg = api.Message
+	case errors.As(err, &op):
+		msg = op.Message
+	}
+	msg = strings.TrimSpace(msg)
+	if msg == "" {
+		return ""
+	}
+	msg = strings.ToUpper(msg[:1]) + msg[1:]
+	if !strings.HasSuffix(msg, ".") {
+		msg += "."
+	}
+	return msg
 }

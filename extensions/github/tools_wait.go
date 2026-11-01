@@ -162,6 +162,9 @@ func (t *Tools) target(ctx context.Context, b *bound, c Cond) (issue, code Sourc
 		err = refuse("no_project", "%s: no project here is called %s", c, c.Project)
 		return
 	}
+	if err = t.mayRead(b, c, scope); err != nil {
+		return
+	}
 	var found bool
 	for _, s := range t.o.Sources() {
 		if s.Settings.Scope != string(scope) {
@@ -213,10 +216,20 @@ func (t *Tools) jobScope(ctx context.Context, b *bound, c Cond) (domain.ID, erro
 	}
 	for _, s := range scopes {
 		if string(s.ID) == c.Project || strings.EqualFold(s.Name, c.Project) {
-			return s.ID, nil
+			return s.ID, t.mayRead(b, c, s.ID)
 		}
 	}
 	return "", refuse("no_project", "%s: no project here is called %s", c, c.Project)
+}
+
+// mayRead refuses a condition on another scope this Work's scope is not
+// authorized to read: such a wait can never register until the config
+// changes, so the refusal says what to change.
+func (t *Tools) mayRead(b *bound, c Cond, target domain.ID) error {
+	if t.o.MayRead == nil || t.o.MayRead(b.work.ScopeID, target) == nil {
+		return nil
+	}
+	return refuse("not_allowed", "%s: project %s may not wait on %s; to allow it, add %q to %s's authorization.read_scopes", c, b.work.ScopeID, target, string(target), b.work.ScopeID)
 }
 
 // resolveJob translates `job:<name>`: the next run of the job ending, in any
@@ -530,6 +543,10 @@ type HoldStatus struct {
 	Until     *time.Time `json:"until,omitempty"`
 	Waits     []string   `json:"waits,omitempty"`
 	Unmatched []string   `json:"unmatched,omitempty"` // conditions nothing here can meet (unknown jobs or projects)
+	// Refused says why each unmatched condition can't be met, as its
+	// refusal reads (say, a project this one may not wait on, and how to
+	// allow it).
+	Refused []string `json:"refused,omitempty"`
 }
 
 func (t *Tools) status(ctx context.Context, b *bound) (HoldStatus, *Hold, error) {
@@ -595,12 +612,20 @@ func (t *Tools) holdPlan(ctx context.Context, b *bound, data json.RawMessage) (e
 			// Conditions nothing here can meet (an unknown job or project)
 			// leave only the time, as in v1.
 			s.Unmatched = append(s.Unmatched, c.String())
+			var op *extension.OperationError
+			if errors.As(err, &op) {
+				s.Refused = append(s.Refused, op.Message)
+			}
 			continue
 		}
 		plan.Dependencies = append(plan.Dependencies, r.dep)
 	}
 	if len(plan.Dependencies) == 0 && plan.Wait.Timeout == nil {
-		return extension.WaitPlan{}, refuse("not_held", "none of the hold's conditions can be met here and it has no time: %s", strings.Join(s.Unmatched, ", "))
+		why := strings.Join(s.Unmatched, ", ")
+		if len(s.Refused) > 0 {
+			why = strings.Join(s.Refused, "; ")
+		}
+		return extension.WaitPlan{}, refuse("not_held", "none of the hold's conditions can be met here and it has no time: %s", why)
 	}
 	if l := b.issue.Settings.Labels.Scheduled; l != "" {
 		// The owner taking the scheduled label off starts the issue now.
