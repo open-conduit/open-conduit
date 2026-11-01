@@ -441,6 +441,22 @@ func (d *drill) verify(root client.Event, want string, lossy bool) string {
 	return strings.Join(steps, " > ") + "\n    lifecycle: " + strings.Join(trace, " > ")
 }
 
+// adopted waits until the restarted daemon has finished adopting the
+// execution: the recover launch record follows the token rotation, the socket
+// being served and the executor's Recover, whereas execution.recovered only
+// marks the lease takeover, before any of them.
+func (d *drill) adopted(execution string, timeout time.Duration) {
+	d.t.Helper()
+	d.until("adoption launched", timeout, func() bool {
+		for _, r := range d.recordsNamed("execution.launched", execution) {
+			if r.Attributes["launch.mode"] == "recover" {
+				return true
+			}
+		}
+		return false
+	})
+}
+
 func (d *drill) recordsNamed(name, execution string) []lifecycle {
 	var out []lifecycle
 	for _, r := range d.records() {
@@ -609,6 +625,7 @@ func TestDaemonKillWithDetachedProcess(t *testing.T) {
 			if adopted[0].At.Before(leaseExpiry) {
 				t.Fatalf("live lease taken over at %s before expiry %s", adopted[0].At, leaseExpiry)
 			}
+			d.adopted(first.ID, 30*time.Second)
 			recovered, err := d.c.Execution(context.Background(), first.ID)
 			if err != nil || recovered.Lease.Epoch == first.Lease.Epoch {
 				t.Fatalf("adoption did not advance the epoch: %+v %v", recovered.Lease, err)
@@ -691,6 +708,9 @@ func TestDaemonGracefulRestart(t *testing.T) {
 	if at := d.recordsNamed("execution.recovered", first.ID)[0].At; at.Sub(stopped) >= drillLease {
 		t.Fatalf("released lease was not recovered before it would have expired: %s", at.Sub(stopped))
 	}
+	// The adopted process reads its rotated token file for its next call, so
+	// it is released only once the adoption has rotated it.
+	d.adopted(first.ID, 10*time.Second)
 	if err = os.WriteFile(filepath.Join(d.root, "release"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
