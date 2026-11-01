@@ -6,7 +6,6 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"regexp"
 	"strings"
 	"testing"
 
@@ -232,33 +231,21 @@ func TestSetupCommand(t *testing.T) {
 	}
 }
 
-// Every GitHub and setup operation the setup playbook names is one the
-// extensions register, or a probe a session can run.
+// Every operation the setup playbook names is one the setup package
+// declares or core registers, or a probe a session can run: what
+// `open-conduit extension check` checks for every package. The setup
+// package's own probes run inside its process, so the check cannot see
+// them offline and they are allowed by name.
 func TestSetupPlaybookNamesRegisteredOperations(t *testing.T) {
-	ops := map[string]bool{}
-	for _, op := range gh.Operations() {
-		ops[op] = true
+	if g := setupPlaybook(t, "open-conduit"); !strings.HasPrefix(g, "---\nname: setup\n") {
+		t.Fatal("the setup playbook has no frontmatter")
 	}
-	for _, op := range setupManifest(t).Provides.Operations {
-		ops[op.Name] = true
+	r := bootstrap.ExtensionOps("test", "").Check(setupPackage(t), []string{"setup.fs.list", "setup.tools"})
+	if !r.OK || len(r.Findings) != 0 {
+		t.Fatalf("extension check on the setup package: %+v", r.Findings)
 	}
-	for _, p := range (gh.Probes{}).SetupProbes() {
-		ops[gh.Type+"."+p.Name] = true
-	}
-	ops["open-conduit.init"], ops["open-conduit.doctor"], ops["setup.applied"] = true, true, true
-	// The setup package runs its own probes inside its process.
-	ops["setup.fs.list"], ops["setup.tools"] = true, true
-	for _, p := range (claudecode.Probes{}).SetupProbes() {
-		ops["claude-code."+p.Name] = true
-	}
-	g := setupPlaybook(t, "open-conduit")
-	names := regexp.MustCompile("[`\"]((?:github|setup|claude-code|open-conduit)\\.[a-z.]+)[`\"]").FindAllStringSubmatch(g, -1)
-	if len(names) == 0 || !strings.HasPrefix(g, "---\nname: setup\n") {
-		t.Fatal("the setup playbook names no operation or has no frontmatter")
-	}
-	for _, m := range names {
-		if !ops[m[1]] {
-			t.Errorf("the setup playbook names %s, which is not registered", m[1])
-		}
+	// The check does flag a name the package neither declares nor allows.
+	if r := bootstrap.ExtensionOps("test", "").Check(setupPackage(t), nil); r.OK || len(r.Findings) != 2 || r.Findings[0].Code != "unknown_operation" {
+		t.Fatalf("extension check without the package's probes: %+v", r.Findings)
 	}
 }

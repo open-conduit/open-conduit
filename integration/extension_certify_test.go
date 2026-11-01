@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 
@@ -193,5 +194,35 @@ func TestCertificationInvalidPackage(t *testing.T) {
 	}
 	if rep := runCertify(t, misnamed); rep.Certified || rep.Result("manifest.valid").Status != certify.Fail {
 		t.Fatalf("package without its command: %+v", rep.Result("manifest.valid"))
+	}
+}
+
+// TestExtensionCheckCommand: `extension check` passes a good package and,
+// for a broken one, exits 1 naming each problem with what to change and
+// where the docs explain it.
+func TestExtensionCheckCommand(t *testing.T) {
+	bins := packageBinaries(t)
+	dir, _ := assemble(t, t.TempDir(), bins["runner-extension"])
+	check := func(args ...string) (string, error) {
+		out, err := exec.Command(daemonBinary(t), append([]string{"extension", "check", dir}, args...)...).CombinedOutput()
+		return string(out), err
+	}
+	if out, err := check(); err != nil || !strings.Contains(out, "no problems found") {
+		t.Fatalf("a good package: %v\n%s", err, out)
+	}
+	if err := os.Chmod(filepath.Join(dir, "runner-extension"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	out, err := check()
+	if err == nil || !strings.Contains(out, "error manifest: command \"runner-extension\" is not executable (invalid_package)") || !strings.Contains(out, "Fix: chmod +x runner-extension") || !strings.Contains(out, "Docs: https://") {
+		t.Fatalf("a package whose command is not executable: %v\n%s", err, out)
+	}
+	out, _ = check("--json")
+	var r struct {
+		OK       bool
+		Findings []struct{ Code, Fix, Docs string }
+	}
+	if err := json.Unmarshal([]byte(out), &r); err != nil || r.OK || len(r.Findings) != 1 || r.Findings[0].Code != "invalid_package" || r.Findings[0].Fix == "" {
+		t.Fatalf("--json: %v\n%s", err, out)
 	}
 }

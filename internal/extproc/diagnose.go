@@ -19,16 +19,18 @@ type Diagnostic struct {
 	Summary   string `json:"summary"`
 	Hint      string `json:"hint"`
 	Detail    string `json:"detail,omitempty"`
+	// Docs links the troubleshooting section that explains the code.
+	Docs string `json:"docs,omitempty"`
 }
 
 func (d Diagnostic) String() string {
-	return fmt.Sprintf("%s: %s (%s). %s", d.Extension, d.Summary, d.Code, d.Hint)
+	return fmt.Sprintf("%s: %s (%s). %s. See %s", d.Extension, d.Summary, d.Code, d.Hint, d.Docs)
 }
 
 // Diagnose classifies a discovery, conflict, install or start failure.
 // paths, when set, names the extension's log for handshake failures.
 func Diagnose(name string, err error, paths Paths) Diagnostic {
-	d := Diagnostic{Extension: name, Detail: err.Error()}
+	d := Diagnostic{Extension: name, Detail: err.Error(), Docs: Troubleshooting}
 	log := "the extension's log"
 	if paths.Log != "" {
 		log = paths.Log
@@ -57,7 +59,7 @@ func Diagnose(name string, err error, paths Paths) Diagnostic {
 		d.Hint = "upgrade Open Conduit to the release the package was built against or later, or install a release of the package built for this one"
 	case errors.Is(err, protocol.ErrManifest), errors.Is(err, ErrPackage):
 		d.Code, d.Summary = "invalid_package", "the package layout or manifest is invalid"
-		d.Hint = "fix the manifest (open-conduit extension inspect DIR shows each rule it breaks) and reinstall"
+		d.Hint = "run open-conduit extension check DIR: it lists every rule the package breaks and what to change"
 	case errors.Is(err, ErrStart):
 		d.Code, d.Summary = "start_failed", "the manifest's command could not be started"
 		d.Hint = "check that the command exists in the package and is executable for this platform"

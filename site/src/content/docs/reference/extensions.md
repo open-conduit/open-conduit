@@ -8,6 +8,7 @@ Integrations outside the built-in set run as separate processes that speak a JSO
 A package can contribute integrations, executors, toolbelt operations, setups and doctor checks. Once installed, its types are known to `config check`.
 
 ```sh
+open-conduit extension check ./my-extension          # lint it without starting it; says what to change for each problem
 open-conduit extension inspect ./my-extension        # check a package offline
 open-conduit extension certify ./my-extension        # run the conformance suite against it
 open-conduit extension install ./my-extension        # takes effect at the next serve
@@ -24,4 +25,4 @@ A package that needs a host service beyond its own surfaces, such as receiving e
 The protocol and packaging are provisional and may still change.
 :::
 
-See [extension packaging](../../architecture/extension-packaging/) for writing one with the Go SDK, and [the extension protocol](../../architecture/extension-protocol/) for the wire format.
+When install, start or `check` refuses a package, the message carries a code; [troubleshooting](../../architecture/extension-packaging/#troubleshooting) says what to change for each. See [extension packaging](../../architecture/extension-packaging/) for writing one with the Go SDK, and [the extension protocol](../../architecture/extension-protocol/) for the wire format.

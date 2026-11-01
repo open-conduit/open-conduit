@@ -59,6 +59,14 @@ func ExtensionOps(version, commit string) *cli.ExtensionOps {
 			}
 			return describe(pkg), nil
 		},
+		Check: func(dir string, allow []string) cli.ExtensionCheck {
+			r := extproc.Check(dir, extproc.Known{Taken: firstPartyTaken(), Probes: hostProbeNames(), Allow: allow})
+			out := cli.ExtensionCheck{Dir: r.Dir, Name: r.Name, Version: r.Version, Protocol: r.Protocol, OK: r.OK, Findings: []cli.CheckFinding{}, Notes: r.Notes}
+			for _, f := range r.Findings {
+				out.Findings = append(out.Findings, cli.CheckFinding(f))
+			}
+			return out
+		},
 		Install: func(configPath string, r cli.InstallRequest) (cli.ExtensionChange, error) {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
@@ -123,7 +131,7 @@ func ExtensionOps(version, commit string) *cli.ExtensionOps {
 
 func diagnosed(name string, err error) error {
 	d := extproc.Diagnose(name, err, extproc.Paths{})
-	return fmt.Errorf("%s (%s): %w. %s", d.Summary, d.Code, err, d.Hint)
+	return fmt.Errorf("%s (%s): %w. %s. See %s", d.Summary, d.Code, err, d.Hint, d.Docs)
 }
 
 func describe(p extproc.Package) cli.ExtensionPackage {

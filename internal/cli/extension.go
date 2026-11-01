@@ -84,10 +84,37 @@ type CertifyResult struct {
 	Report    any
 }
 
+// ExtensionCheck is `extension check`: every problem found in a package
+// directory, each with what to change.
+type ExtensionCheck struct {
+	Dir      string         `json:"dir"`
+	Name     string         `json:"name,omitempty"`
+	Version  string         `json:"version,omitempty"`
+	Protocol []int          `json:"protocol,omitempty"`
+	OK       bool           `json:"ok"`
+	Findings []CheckFinding `json:"findings"`
+	Notes    []string       `json:"notes,omitempty"`
+}
+
+// CheckFinding is one problem: the check it came from, a stable code, what
+// is wrong, the change that fixes it and the docs section on it. A warning
+// does not stop install or start.
+type CheckFinding struct {
+	Check   string `json:"check"`
+	Code    string `json:"code"`
+	Problem string `json:"problem"`
+	Fix     string `json:"fix"`
+	Docs    string `json:"docs"`
+	Warning bool   `json:"warning,omitempty"`
+}
+
 // ExtensionOps are supplied by the open-conduit entrypoint.
 type ExtensionOps struct {
-	List     func(configPath string) (ExtensionList, error)
-	Inspect  func(dir string) (ExtensionPackage, error)
+	List    func(configPath string) (ExtensionList, error)
+	Inspect func(dir string) (ExtensionPackage, error)
+	// Check lints a package directory offline; allow are names its
+	// playbooks may mention that are not visible offline.
+	Check    func(dir string, allow []string) ExtensionCheck
 	Install  func(configPath string, r InstallRequest) (ExtensionChange, error)
 	Rollback func(configPath, name string) (ExtensionChange, error)
 	Remove   func(configPath, stateDir, name string, force bool) (ExtensionChange, error)
@@ -99,6 +126,9 @@ type ExtensionOps struct {
 const extensionHelp = `Usage: open-conduit extension COMMAND [--config PATH]
   list [--json]                 installed packages (in <config dir>/extensions)
   inspect DIR [--json]          check a package directory offline
+  check DIR [--json] [--allow NAME,…]
+                                lint a package without starting it: manifest, compatibility with this binary,
+                                the operations its playbooks name, certification.json; says what to change for each problem
   install SOURCE | update SOURCE [--sha256 HEX]
                                 install a package, or replace an installed one (the old release is kept for rollback);
                                 SOURCE is a package directory, or a release .tar.gz as a path or URL (plain http needs --sha256)
@@ -138,7 +168,7 @@ func (o *operator) extension(args []string) int {
 	}
 	sub := args[0]
 	rest, bools := boolFlags(args[1:], "json", "force")
-	f := newFlags(sub, "config", "report", "sha256")
+	f := newFlags(sub, "config", "report", "sha256", "allow")
 	pos, err := f.parse(rest)
 	if err != nil {
 		return usageError(o.errOut, "invalid extension flags")
@@ -193,6 +223,27 @@ func (o *operator) extension(args []string) int {
 		}
 		fmt.Fprintf(o.out, "%s %s (protocol %v): valid package\n  %s\n  provides: %s\n  digest sha256:%s\n", p.Name, p.Version, p.Protocol, p.Summary, strings.Join(p.Provides, ", "), p.Digest)
 		o.permissions(p.Permissions)
+		return 0
+	case "check":
+		dir, ok := one("DIR")
+		if !ok {
+			return usageError(o.errOut, "expected extension check DIR [--json] [--allow NAME,…]")
+		}
+		var allow []string
+		for _, a := range strings.Split(f.get("allow"), ",") {
+			if a = strings.TrimSpace(a); a != "" {
+				allow = append(allow, a)
+			}
+		}
+		c := ops.Check(dir, allow)
+		if bools["json"] {
+			o.emit(c, nil)
+		} else {
+			o.printCheck(c)
+		}
+		if !c.OK {
+			return 1
+		}
 		return 0
 	case "install", "update":
 		if len(pos) != 1 {
@@ -249,6 +300,34 @@ func (o *operator) extension(args []string) int {
 		return 0
 	}
 	return usageError(o.errOut, "unknown extension subcommand")
+}
+
+func (o *operator) printCheck(c ExtensionCheck) {
+	what := c.Dir
+	if c.Name != "" {
+		what = c.Name + " " + c.Version + " (" + c.Dir + ")"
+	}
+	errs, warns := 0, 0
+	for _, f := range c.Findings {
+		level := "error"
+		if f.Warning {
+			level, warns = "warning", warns+1
+		} else {
+			errs++
+		}
+		fmt.Fprintf(o.out, "%s %s: %s (%s)\n  Fix: %s\n  Docs: %s\n", level, f.Check, f.Problem, f.Code, f.Fix, f.Docs)
+	}
+	for _, n := range c.Notes {
+		fmt.Fprintf(o.out, "note: %s\n", n)
+	}
+	switch {
+	case errs == 0 && warns == 0:
+		fmt.Fprintf(o.out, "%s: no problems found\n", what)
+	case errs == 0:
+		fmt.Fprintf(o.out, "%s: %d warning(s), nothing that stops install\n", what, warns)
+	default:
+		fmt.Fprintf(o.out, "%s: %d error(s), %d warning(s)\n", what, errs, warns)
+	}
 }
 
 func (o *operator) change(c ExtensionChange, err error, asJSON bool) int {
