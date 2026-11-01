@@ -32,7 +32,7 @@ import (
 // turn it off, and a dev build (no release version) never sends.
 
 // usageKey is the PostHog project API key the reports go to, set at release
-// (.goreleaser.yaml, from the POSTHOG_TELEMETRY_KEY repository variable). It
+// (.goreleaser.yaml, from the POSTHOG_TELEMETRY_KEY repository secret). It
 // is PostHog's public "phc_" key, which can send events but never read them.
 // Empty sends nothing.
 var usageKey = ""
