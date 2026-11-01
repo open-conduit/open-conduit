@@ -278,7 +278,7 @@ func (d *daemon) githubView(ctx context.Context) gh.View {
 		}
 	}
 	for _, src := range sources {
-		e := gh.ViewEntry{Name: src.name, Scope: src.scope, Connection: src.connection, Settings: src.ingress.Settings(), Projection: d.reportedCode("github_projection", src.name)}
+		e := gh.ViewEntry{Name: src.name, Scope: src.scope, Connection: src.connection, Client: src.client, Settings: src.ingress.Settings(), Projection: d.reportedCode("github_projection", src.name)}
 		if until, paused := src.client.PausedUntil(); paused {
 			e.PausedUntil = until
 		}

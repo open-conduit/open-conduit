@@ -104,3 +104,54 @@ func TestExtensionDoctor(t *testing.T) {
 		t.Fatalf("no configured connection: %+v", c)
 	}
 }
+
+// TestExtensionDoctorLiveWriter: the connection test verifies through the
+// client the registered entry runs with, and warns restart_required when the
+// connection config has since moved writes to a bot App and git to the bot,
+// rather than reporting the configured bot writer as authenticated (#276).
+func TestExtensionDoctorLiveWriter(t *testing.T) {
+	fake := githubtest.New("octo/widgets", "tok", "rev")
+	t.Cleanup(fake.Close)
+	fake.SetPermissions(map[string]bool{"pull": true, "push": true})
+	settings, err := gh.ParseExtension([]byte(`{"namespace":"github/w","scope":"eng","repo":"octo/widgets"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	secrets := func(_ context.Context, name string) (string, error) {
+		if name != gh.SecretToken {
+			return "", gh.ErrCredential
+		}
+		return "tok", nil
+	}
+	live, err := gh.NewClient(gh.ConnectionConfig{APIURL: fake.URL, Auth: "token"}, secrets, gh.ClientOptions{Now: fake.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := gh.View{Entries: []gh.ViewEntry{{Name: "github/eng/main", Scope: "eng", Connection: "owner", Settings: settings, Client: live}}}
+	x := gh.NewExtension(func(context.Context) gh.View { return view })
+	if err := x.Start(context.Background(), inproc.Host{Now: fake.Now, Secrets: func(_ context.Context, _ domain.ID, _ string, names []string) (map[string]string, error) {
+		return nil, errors.New("the configured client must not be called")
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	configure := func(cfg string) {
+		owner := protocol.ConnectionEntry{ID: "owner", Type: gh.Type, Config: json.RawMessage(cfg), Secrets: []string{gh.SecretToken, gh.SecretBotPrivateKey}}
+		x.Configure(context.Background(), protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: "eng", Type: gh.Type, Name: "main", Connection: &owner}}})
+	}
+	_, deep := doctorChecks(t, x)
+
+	configure(`{"api_url":"` + fake.URL + `","bot_app_id":"42","git":"bot"}`)
+	c := deep(context.Background())
+	items := strings.Join(c.Items, "\n")
+	want := "github/w: restart_required: writes still go out as the connection's token, the config names bot App 42; git still works as the owner, the config says the bot"
+	if c.Status != inproc.CheckWarn || c.Code != "restart_required" || !strings.Contains(items, want) ||
+		!strings.Contains(items, "github/w: pull=true push=true admin=false") || strings.Contains(items, "bot writer authenticated") {
+		t.Fatalf("drifted: %+v", c)
+	}
+
+	// Once the config matches the running client again, nothing is raised.
+	configure(`{"api_url":"` + fake.URL + `"}`)
+	if c := deep(context.Background()); c.Status != inproc.CheckOK || c.Code != "verified" || strings.Contains(strings.Join(c.Items, "\n"), "restart_required") {
+		t.Fatalf("in step: %+v", c)
+	}
+}

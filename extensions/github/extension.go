@@ -51,6 +51,11 @@ type ViewEntry struct {
 	Scope      domain.ID
 	Connection string
 	Settings   Settings
+	// Client is the client the entry reads and writes with, built when it
+	// was registered. Doctor verifies through it, so it reports what the
+	// daemon does rather than what the config says; nil verifies a client
+	// built from the current config.
+	Client *Client
 	// PausedUntil is set while the entry's client is rate limited.
 	PausedUntil time.Time
 	// Scan is the entry's last reconcile, when the ingress reports one.
@@ -303,11 +308,21 @@ func (x *Extension) authCheck(ctx context.Context, _ protocol.CheckConfig) inpro
 	for _, e := range v.Entries {
 		s := e.Settings
 		item := s.Namespace + ": "
-		client, err := x.clients.Client(e.Scope, e.Connection, nil)
-		if err != nil {
-			raise(inproc.CheckFail, "credential_unavailable")
-			check.Items = append(check.Items, item+"credential_unavailable")
-			continue
+		configured, cerr := x.clients.Client(e.Scope, e.Connection, nil)
+		client := e.Client
+		if client == nil {
+			if cerr != nil {
+				raise(inproc.CheckFail, "credential_unavailable")
+				check.Items = append(check.Items, item+"credential_unavailable")
+				continue
+			}
+			client = configured
+		}
+		if cerr == nil {
+			if drift := driftNotes(client, configured); len(drift) > 0 {
+				raise(inproc.CheckWarn, "restart_required")
+				check.Items = append(check.Items, item+"restart_required: "+strings.Join(drift, "; ")+"; restart the daemon to apply the config")
+			}
 		}
 		cx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		a, err := client.Verify(cx, s.TrackerRepo)
@@ -356,6 +371,26 @@ func (x *Extension) authCheck(ctx context.Context, _ protocol.CheckConfig) inpro
 	}
 	sort.Strings(check.Items)
 	return check
+}
+
+// driftNotes says where the client an entry runs with differs from one
+// built from the current connection config: who writes go out as, and
+// whether git works as the bot.
+func driftNotes(live, configured *Client) []string {
+	var out []string
+	if live.Writer() != configured.Writer() {
+		out = append(out, "writes still go out as "+live.Writer()+", the config names "+configured.Writer())
+	}
+	if live.GitBot() != configured.GitBot() {
+		who := func(bot bool) string {
+			if bot {
+				return "the bot"
+			}
+			return "the owner"
+		}
+		out = append(out, "git still works as "+who(live.GitBot())+", the config says "+who(configured.GitBot()))
+	}
+	return out
 }
 
 type writerItem struct{ status, code, item string }
