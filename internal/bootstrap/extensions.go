@@ -265,7 +265,7 @@ func (o *offlinePackages) diagnostics() []config.Diagnostic {
 		if p.err != nil {
 			d := extproc.Diagnose(p.f.Manifest.Name, p.err, extproc.Paths{})
 			out = append(out, config.Diagnostic{Path: p.f.Dir, Code: "extension_unavailable",
-				Message: fmt.Sprintf("package %s could not start to validate its config: %s (%s)", p.f.Manifest.Name, d.Summary, d.Code)})
+				Message: fmt.Sprintf("package %s could not start to validate its config: %s (%s). %s. See %s", p.f.Manifest.Name, d.Summary, d.Code, d.Hint, d.Docs)})
 		}
 	}
 	return out
@@ -361,7 +361,7 @@ func (d *daemon) openExtensions(ctx context.Context) {
 		if err != nil {
 			diag := extproc.Diagnose(name, err, paths)
 			x.failed = append(x.failed, diag)
-			d.log.Error("extension not started", "extension", name, "code", diag.Code, "hint", diag.Hint)
+			d.log.Error("extension not started", "extension", name, "code", diag.Code, "hint", diag.Hint, "docs", diag.Docs)
 			continue
 		}
 		pkg := &installed{m: f.Manifest, r: r, d: d, dir: f.Dir}

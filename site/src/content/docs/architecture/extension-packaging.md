@@ -98,6 +98,17 @@ acme/
 
 `open-conduit extension inspect DIR` checks a directory offline. It checks the [strict manifest rules](../extension-protocol/#manifest), a relative command inside the package that exists and is executable, and the declared playbooks directory. A package is self-contained: install copies it, resolving symlinks.
 
+### Checking a package
+
+`open-conduit extension check DIR [--json] [--allow NAME,…]` lints a package without starting it or a daemon. It reports every problem it finds rather than the first, and each comes with what to change and a link to [Troubleshooting](#troubleshooting). The exit status is 1 when any finding is an error; warnings don't stop install or start. It checks:
+
+- **the manifest:** the strict rules, each broken rule on its own line, and a command inside the package that exists and is executable;
+- **compatibility with this binary:** a protocol version in common, no field from a newer Open Conduit, a command built for this OS and architecture, and no name Open Conduit registers itself;
+- **the playbooks:** the declared directory exists and holds playbooks, and every `` `ns.op` `` or `"ns.op"` a playbook names, in a namespace the package or core owns, is an operation the package declares or core registers, an event family the package declares, or a setup probe the host runs. Names in other namespaces, such as config paths and file names, are left alone. A package's own setup probes run inside its process, so the check can't see them; name them with `--allow`;
+- **`certification.json`:** it parses, and an inline fixture has an ingress case when an extension type takes ingress, an executor case naming a declared executor when there is one, and route and operation cases only for declared handlers and operations. A fixture printed by a command is left to `certify`.
+
+Run it in the package's CI before `certify`. It is what `TestSetupPlaybookNamesRegisteredOperations` runs on the setup package.
+
 Packaged Go binaries also answer `package-manifest` and `package-certification` (`sdk.PackageCommand`), so the manifest has one source of truth in code. `make packages` builds the first-party packages and the examples into `dist/packages/<name>/` this way.
 
 ### Bundled with the release
@@ -175,23 +186,36 @@ A package's playbooks join the Claude Code plugin the daemon writes at start, be
 
 ## Diagnostics
 
-Every refusal and failure gets a stable code, a summary and a remedy (`extproc.Diagnose`). They appear in the daemon log, the `extensions` doctor check and the CLI. They never include config values or secrets.
-
-| Code | Meaning | Remedy |
-| --- | --- | --- |
-| `invalid_package` | Layout or manifest rule broken | `extension inspect DIR` names each rule |
-| `incompatible_protocol` | No common protocol version | Install a release built for this host's protocol, or upgrade Open Conduit |
-| `needs_newer_host` | The manifest uses a field this host does not know: the package was built for a newer Open Conduit | Upgrade Open Conduit to the release the package was built against or later, or install a release of the package built for this one |
-| `manifest_mismatch` | The process announced a different manifest | Binary and manifest are from different releases; reinstall |
-| `kv_downgrade` | Older KV layout than recorded | Roll forward, or restore a backup |
-| `registration_conflict` | A name owned by a first-party or another package | Remove the conflicting package |
-| `start_failed` | The command could not start | Check that it exists and is executable for this platform |
-| `handshake_failed` | Exited or silent during `initialize`/`configure` | Read `<state>/logs/extensions/<name>.log`; only protocol on stdout |
-| `configure_refused` | Refused the config, or registered names outside its namespace | `config check` and the log |
-| `extension_restarted` (warn) | The process crashed and was restarted | The log |
-| `extension_check_failed` (warn) | A declared check failed | The check's detail |
+Every refusal and failure gets a stable code, a summary, a remedy and a link to [Troubleshooting](#troubleshooting) (`extproc.Diagnose`). They appear in the daemon log, the `extensions` doctor check and the CLI. They never include config values or secrets.
 
 Unsupported capabilities are refused at config validation, exactly as for in-process executors: a binding requiring `inject` against an executor that does not declare it is `unsupported_capability` at the binding's `requires` path. An undeclared surface is never called, and callbacks from one are refused with `undeclared`.
+
+## Troubleshooting
+
+What each code means and what to change. `extension check` gives the codes marked *check* before install; the others come from install, start, `config check` or doctor.
+
+| Code | What is wrong | What to change |
+| --- | --- | --- |
+| `invalid_package` (check) | A manifest rule is broken, the command is missing or not executable, or the playbooks directory is missing | Run `extension check DIR`: it names each rule and the change for it |
+| `incompatible_protocol` (check) | The package and this host share no protocol version | List a version this host speaks in `protocol` and build against an SDK release for it, or upgrade Open Conduit |
+| `needs_newer_host` (check) | The manifest has a field this Open Conduit doesn't know | Correct it if it's a typo; otherwise upgrade Open Conduit to the release that added it, or install a release of the package built for this one |
+| `wrong_platform` (check) | The command is built for another OS or architecture | Build it for this platform, or install the release archive built for it |
+| `registration_conflict` (check) | The package claims a name Open Conduit or another package registers | Rename what the package declares; first-party names (`slack`, `shell`, `github`, …) can't be installed alongside |
+| `unknown_operation` (check) | A playbook names an operation nobody declares | Declare it under `provides.operations`, correct the name, or `--allow` it if it is one of the package's own setup probes |
+| `no_playbooks` (check, warning) | The playbooks directory has no `<name>.md` | Add one, or drop `playbooks` from the manifest |
+| `no_certification` (check, warning) | No `certification.json` | Add one so `certify` can check each surface ([fixtures](#fixtures)) |
+| `invalid_certification` (check) | `certification.json` doesn't parse or has neither a fixture nor a command | Fix it against `protocol.CertificationFile` |
+| `fixture_missing_case` (check) | The fixture lacks a case `certify` requires, or a case names something undeclared | Add an ingress or executor case, or name a declared handler or operation |
+| `invalid_archive` | The release archive was refused | Check the URL or path and its `--sha256`; an archive is a `.tar.gz` holding one package directory of regular files |
+| `install_state` | Installing over an installed package, or changing one that isn't installed | `extension list` shows what is installed; use `update` to replace |
+| `manifest_mismatch` | The process announced a different manifest | Binary and manifest are from different releases; reinstall |
+| `kv_downgrade` | Older KV layout than recorded | Roll forward, or restore a backup |
+| `start_failed` | The command could not start | Check that it exists and is executable for this platform |
+| `handshake_failed` | Exited or silent during `initialize`/`configure` | Read `<state>/logs/extensions/<name>.log`; only protocol on stdout, logs on stderr |
+| `configure_refused` | Refused the config, or registered names outside its namespace | `config check` and the log |
+| `binding_refused` | A route handler refuses the binding its route binds | Change the binding's executor, operations, grants or config to what the message asks, or route to another handler |
+| `extension_restarted` (warn) | The process crashed and was restarted | The log |
+| `extension_check_failed` (warn) | A declared doctor check failed | The check's detail |
 
 ## Testing a package
 
@@ -318,7 +342,8 @@ A report states:
 - `TestExternalSurfacesRoundTrip`: `validate`, `webhook.handle`, `provider.*` with `provider.owner_status`, `telemetry.export`, `run.environment`, `work.annotate`, and `setup.run` with callbacks.
 - `TestSDKStoreOverProtocol`.
 - `TestDaemonExtensionPackages` (in `make drill`): CLI install, conflict refusal, offline config check, a workflow end to end in the real daemon, the `validate` hook, configure on apply, no orphans after a daemon kill, restart, and removal refused while in use.
-- Unit tests in `internal/extproc` (install, update, rollback, removal, diagnostics).
+- Unit tests in `internal/extproc` (install, update, rollback, removal, diagnostics, and `extension check` in `check_test.go`).
+- `TestExtensionCheckCommand`: `extension check` through the binary, text and `--json`; `TestSetupPlaybookNamesRegisteredOperations` runs the check on the setup package.
 - The first-party in-process suites still run unchanged: Slack and shell keep their in-process registration, and workflows A–D pass (`TestDaemonAllWorkflows`).
 
 ## Provisional decisions for user review

@@ -366,7 +366,7 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		}
 		if check := v.reg.HandlerBinding[r.Handler]; check != nil {
 			if err := check(extension.RouteBinding{Executor: b.value.Executor, Operations: b.value.Operations, Config: b.value.Config, Grants: b.value.domainGrants()}); err != nil {
-				v.fail(p+"/binding", "binding_refused", fmt.Sprintf("route handler %s refuses this binding: %s", r.Handler, err))
+				v.fail(p+"/binding", "binding_refused", fmt.Sprintf("route handler %s refuses this binding: %s. Change the binding (its executor, operations, grants or config) to meet that, or route to a handler that accepts it", r.Handler, err))
 			}
 		}
 		exec, ok := v.reg.Executors[b.value.Executor]

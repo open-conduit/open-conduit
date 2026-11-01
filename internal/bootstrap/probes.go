@@ -20,13 +20,30 @@ import (
 // under HostProbeOwner.
 func (d *daemon) setupProbes() map[string]extension.SetupProbe {
 	out := map[string]extension.SetupProbe{}
-	for owner, p := range map[string]extension.SetupProbes{ClaudeCodeExecutor: claudecode.Probes{}, gh.Type: gh.Probes{}} {
+	for owner, p := range probeOwners() {
 		for _, x := range p.SetupProbes() {
 			out[owner+"."+x.Name] = x
 		}
 	}
 	out[HostProbeOwner+".init"] = d.initProbe()
 	out[HostProbeOwner+".doctor"] = d.doctorProbe()
+	return out
+}
+
+// probeOwners are the extensions and executors whose probes a setup
+// session may run, by the name that prefixes them.
+func probeOwners() map[string]extension.SetupProbes {
+	return map[string]extension.SetupProbes{ClaudeCodeExecutor: claudecode.Probes{}, gh.Type: gh.Probes{}}
+}
+
+// hostProbeNames are the full names of setupProbes, offline.
+func hostProbeNames() []string {
+	out := []string{HostProbeOwner + ".init", HostProbeOwner + ".doctor"}
+	for owner, p := range probeOwners() {
+		for _, x := range p.SetupProbes() {
+			out = append(out, owner+"."+x.Name)
+		}
+	}
 	return out
 }
 
