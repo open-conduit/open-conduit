@@ -38,19 +38,29 @@ func newObsEnv(t *testing.T) *repEnv {
 		grants: map[string][]string{"watcher": {observe.OpRecord}, "poller": {observe.OpRecord}, "stranger": {observe.OpRecord},
 			"responder": {extension.Wait}, "plain": {}}}
 	e.open()
+	e.putObsScope(map[string]any{"name": "slack-help", "reporters": []string{"watcher", "poller"}})
+	return e
+}
+
+// putObsScope stores the scope with an `observe` entry declaring sources and
+// the slack-help route, as an applied config generation would.
+func (e *repEnv) putObsScope(sources ...any) {
 	var bindings []domain.Binding
 	for _, n := range []string{"watcher", "poller", "stranger", "responder", "plain"} {
 		bindings = append(bindings, domain.Binding{Name: n, Executor: "fixture", Requires: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}})
 	}
 	meta, _ := json.Marshal(map[string]any{"enabled": true, "extensions": []any{map[string]any{"name": "help", "type": observe.Type, "secret_names": []string{},
-		"config": map[string]any{"sources": []any{map[string]any{"name": "slack-help", "reporters": []string{"watcher", "poller"}}}}}}})
+		"config": map[string]any{"sources": sources}}}})
 	e.read(func(tx storage.Tx) error {
+		var revision domain.Revision
+		if old, err := tx.Scope(obsScope); err == nil {
+			revision = old.Revision
+		}
 		return tx.PutScope(domain.Scope{ID: obsScope, Name: "help", Bindings: bindings,
 			Routes: []domain.Route{{Name: "slack-help", Handler: observe.Type, Binding: "responder", ActivePolicy: "queue",
 				Config: domain.Payload{Schema: "core.config.route.v1", Data: []byte(`{"source":"slack-help"}`)}}},
-			Config: domain.Payload{Schema: "core.config.scope.v1", Data: meta}}, 0)
+			Config: domain.Payload{Schema: "core.config.scope.v1", Data: meta}}, revision)
 	})
-	return e
 }
 
 func (e *repEnv) threads() map[string]domain.Work {
@@ -223,5 +233,22 @@ func TestObservedThreadParksAndWakes(t *testing.T) {
 	}
 	if len(e.threads()) != 1 {
 		t.Fatalf("threads: %v", e.threads())
+	}
+}
+
+// TestObservedSourceRemovedBeforeRouting: an item accepted while its source
+// was declared, but routed after the source was removed from the entry
+// (the route kept), starts no Work.
+func TestObservedSourceRemovedBeforeRouting(t *testing.T) {
+	e := newObsEnv(t)
+	run := e.manual(obsScope, "schedule.job", "watcher")
+	e.must(run, observe.OpRecord, "", obsItem("1.001", "1.001", "how do I reset my VPN?"))
+	e.putObsScope(map[string]any{"name": "forms", "reporters": []string{"watcher"}})
+	e.finish(run)
+	if n := e.countType(observe.TypeRecorded); n != 1 {
+		t.Fatalf("accepted %d, want the 1 recorded before removal", n)
+	}
+	if th := e.threads(); len(th) != 0 {
+		t.Fatalf("a removed source started Work: %v", th)
 	}
 }

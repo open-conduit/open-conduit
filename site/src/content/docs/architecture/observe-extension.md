@@ -39,7 +39,7 @@ The boundary is the entry. A binding can only record for a source the entry list
 
 ## Routing and Work
 
-The `observe` route's config names one source (`{"source": "slack-help"}`). For an item of that source:
+The `observe` route's config names one source (`{"source": "slack-help"}`). It takes items only while one of the scope's `observe` entries still declares that source, so removing a source stops it even for items accepted before the removal and not yet routed. For an item of that source:
 
 - with no owner of the thread key, it creates `observe.thread` Work, titled with the first line of the item's text;
 - with an `observe.thread` owner, it is that Work's input;
@@ -62,6 +62,7 @@ Several entries in a scope may declare the same source; their reporters are comb
 
 - [`TestObservedSourceSurvivesReplacingTheObserver`](https://github.com/open-conduit/open-conduit/blob/main/integration/observe_test.go): an agent watcher and the script that replaces it record one source. Repeats are duplicates, there are two thread Works throughout, and a binding not listed as a reporter, or not granted the operation, is refused.
 - `TestObservedRevisions`: A, B, A as three revisions are three Events. Changed text, or another thread, under an existing revision is refused.
+- `TestObservedSourceRemovedBeforeRouting`: an item accepted while its source was declared, then routed after the source was removed (with the route kept), starts no Work.
 - `TestObservedThreadParksAndWakes`: the responder parks on its thread. A later run by another reporter records the opener again and a follow-up. Only the follow-up is new, it wakes the Work, and it is the next turn's only input.
 - [`TestTranslatedEmitOnce`](https://github.com/open-conduit/open-conduit/blob/main/integration/reporting_test.go): the core contract of `EmitPlan.Once` (repeat, conflict, size bound, per scope).
 

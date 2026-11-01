@@ -10,7 +10,8 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 )
 
-// Route is the `observe` route handler. Its config names one source; a
+// Route is the `observe` route handler. Its config names one source, which
+// must still be declared by one of the scope's `observe` entries; a
 // recorded item of a thread no Work owns starts observe.thread Work, and
 // every later item of the thread is that Work's input. Which binding
 // reported an item never matters here.
@@ -32,6 +33,11 @@ func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	}
 	if e.CorrelationKey == nil || e.CorrelationKey.Source != SourceNamespace(in.Scope.ID, rc.Source) {
 		return extension.Skip("not an item from " + rc.Source), nil
+	}
+	// A source removed from the scope's entries takes nothing more, even
+	// items accepted before it was removed.
+	if _, ok := Sources(in.Scope)[rc.Source]; !ok {
+		return extension.Skip("no observe entry in this scope declares " + rc.Source), nil
 	}
 	var item Item
 	if e.Data.Schema != SchemaItem || json.Unmarshal(e.Data.Data, &item) != nil {

@@ -84,6 +84,11 @@ func TestRoute(t *testing.T) {
 			t.Errorf("%s matched: %+v", name, d)
 		}
 	}
+	removed := scope()
+	removed.Config.Data = []byte(`{"extensions":[{"type":"observe","config":{"sources":[{"name":"forms","reporters":["poller"]}]}}]}`)
+	if d, _ := (Route{}).Match(ctx, extension.RouteInput{Event: itemEvent("help", "slack-help", "1.003", "1.001", "late"), Scope: removed, Work: thread, Route: route}); d.Match {
+		t.Errorf("a removed source's item matched: %+v", d)
+	}
 	samples := Route{}.Samples(ctx, extension.SampleInput{Scope: scope(), Route: route, Now: time.Now()})
 	if len(samples) != 1 {
 		t.Fatalf("samples: %v", samples)
