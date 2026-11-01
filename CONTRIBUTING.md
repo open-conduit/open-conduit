@@ -36,7 +36,9 @@ Other targets:
 ```sh
 make cross-build          # darwin and linux, amd64 and arm64, into dist/ (build evidence only)
 make drill                # the daemon kill and restart drills on their own
-make certify              # builds the extension packages and certifies them, plus the negative controls
+make ts-deps              # once: installs the TypeScript SDK's and example's npm dependencies (needs Node 22.18+)
+make ts-check             # Prettier, typecheck and unit tests for the TypeScript SDK and its example (npm run format fixes formatting)
+make certify              # builds the extension packages and certifies them, plus the negative controls (needs Node and npm)
 make protocol-prototype   # the extension transport comparison; downloads its own modules on first run
 make docs-check           # only the docs example checks
 make release-snapshot     # a local release build with GoReleaser (below); publishes nothing
@@ -86,7 +88,7 @@ There are two ways to add an extension. Both implement the same public contracts
 
 **In-process (first-party).** Add a package under `extensions/<name>` (or `executors/<name>`) that imports only the public contracts. Implement the surfaces it has from `extension/inproc` (config types, operations, routes, start, configure, toolbelt registration, actions, annotations, rendering, tasks, doctor checks, playbooks, telemetry), and add it to `firstParty()` in `internal/bootstrap/inproc.go`. Nothing else in bootstrap changes. `extensions/human/extension.go` and `extensions/posthog/extension.go` are good models. Run the shared suites against it in its own tests, and add an end-to-end case in `integration/` when it changes daemon behavior. Domain types stay in the extension: core gets no new primitive, and the runtime never learns the service's vocabulary.
 
-**Subprocess (installed package).** Write a program on `protocol/sdk` that speaks the extension protocol over stdin and stdout, then package, install and certify it with `open-conduit extension`. [Extension packaging](https://open-conduit.github.io/open-conduit/architecture/extension-packaging/) is the guide, and `protocol/examples/notes` and `protocol/examples/runner` are complete examples. `packages/slack` and `packages/shell` wrap first-party code the same way. `make certify` runs the conformance runner over all four. The protocol and packaging are provisional.
+**Subprocess (installed package).** Write a program on `protocol/sdk` that speaks the extension protocol over stdin and stdout, then package, install and certify it with `open-conduit extension`. [Extension packaging](https://open-conduit.github.io/open-conduit/architecture/extension-packaging/) is the guide, and `protocol/examples/notes` and `protocol/examples/runner` are complete examples. `sdk/typescript` is the SDK for TypeScript, and `protocol/examples/weather` is an example written with it. `packages/slack` and `packages/shell` wrap first-party code the same way. `make certify` runs the conformance runner over all of them. The protocol and packaging are provisional.
 
 An extension runs with the operator's privileges either way. The host enforces the protocol surface, but it is not a sandbox (see [SECURITY.md](SECURITY.md#trust-model)).
 

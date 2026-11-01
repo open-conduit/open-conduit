@@ -12,7 +12,7 @@ TEST_TIMEOUT ?= 20m
 # shards overlap well even on a 4-vCPU hosted runner.
 INTEGRATION_SHARDS ?= 4
 
-.PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check container-test gateway-image check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot
+.PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check container-test gateway-image check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages
 
 build:
 	$(GO) build ./...
@@ -139,11 +139,30 @@ packages:
 	GO='$(GO)' LDFLAGS='$(LDFLAGS)' scripts/bundle-packages.sh $(PACKAGES_DIR)/.bundled
 	rm -rf $(PACKAGES_DIR)/setup && mv $(PACKAGES_DIR)/.bundled/*/extensions/setup $(PACKAGES_DIR)/setup && rm -rf $(PACKAGES_DIR)/.bundled
 
+# The TypeScript SDK (sdk/typescript) and its example package
+# (protocol/examples/weather). Installing their npm dependencies uses the
+# network, so it is explicit, as config-deps is; ts-check checks both are
+# formatted with Prettier's defaults (npm run format fixes it), typechecks
+# and unit-tests them, and ts-packages bundles the example into the package
+# layout certify runs (installing its dependencies first if ts-deps hasn't).
+# ts-check needs Node 22.18 or later.
+TS_DIRS = sdk/typescript protocol/examples/weather
+
+ts-deps:
+	@set -eu; for d in $(TS_DIRS); do (cd $$d && npm ci --no-audit --no-fund); done
+
+ts-check:
+	@set -eu; for d in $(TS_DIRS); do (cd $$d && npm run --silent format:check && npm run --silent typecheck && npm test --silent); done
+
+ts-packages:
+	cd protocol/examples/weather && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && node scripts/package.mjs $(abspath $(PACKAGES_DIR))/weather
+
 # 07-03 certification: the public runner over the two first-party workloads
-# and the examples (reports beside the packages), then the negative
-# controls, which must each fail their criterion.
-certify: build packages
-	@set -eu; for name in slack shell notes runner setup; do \
+# and the examples, the TypeScript one included (reports beside the
+# packages), then the negative controls, which must each fail their
+# criterion.
+certify: build packages ts-packages
+	@set -eu; for name in slack shell notes runner setup weather; do \
 		bin/open-conduit extension certify $(PACKAGES_DIR)/$$name --report $(PACKAGES_DIR)/$$name.certification.json; \
 	done
 	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -v -run 'TestCertification' ./integration

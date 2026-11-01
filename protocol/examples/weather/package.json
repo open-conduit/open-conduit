@@ -1,0 +1,26 @@
+{
+  "name": "open-conduit-example-weather",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Example Open Conduit extension in TypeScript: one operation, weather.forecast, from forecasts in its scope's config.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json",
+    "test": "node --conditions=development --test 'src/**/*.test.ts'",
+    "package": "node scripts/package.mjs",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "dependencies": {
+    "@open-conduit/sdk": "file:../../../sdk/typescript"
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "esbuild": "^0.28.2",
+    "prettier": "^3.9.10",
+    "typescript": "^7.0.2"
+  }
+}

@@ -1,0 +1,34 @@
+{
+  "name": "@open-conduit/sdk",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Build Open Conduit extensions in TypeScript: serve protocol version 1, call the host, declare each operation once.",
+  "license": "MIT",
+  "type": "module",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "exports": {
+    ".": {
+      "types": "./src/index.ts",
+      "development": "./src/index.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": [
+    "dist",
+    "src"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.check.json",
+    "test": "node --test 'src/**/*.test.ts'",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "@types/node": "^24.19.2",
+    "prettier": "^3.9.10",
+    "typescript": "^7.0.2"
+  }
+}
