@@ -129,7 +129,8 @@ type EmitPlan struct {
 	// Commit runs inside the accepting transaction once the Event is
 	// accepted. It must be pure and deterministic. Its Records are written
 	// only when the Event was newly added (a replayed delivery writes none);
-	// its Output is returned to the caller either way.
+	// its Output is returned to the caller either way. A nil Commit accepts
+	// the Event, writes nothing and returns no Output.
 	Commit func(Emitted) (EmitCommit, error)
 }
 

@@ -323,6 +323,11 @@ func fixture(m protocol.Manifest, fault func(string) (Fault, bool)) *sdk.Extensi
 				return extension.EmitCommit{Records: []extension.Record{{Namespace: "fixture.reports", Key: string(em.Event.Event.ID), Value: in.Data}}, Output: domain.Payload{Schema: "fixture.report.v1", Data: out}}, nil
 			}}, nil
 		}},
+		// fixture.notify emits without a commit: the Event is accepted and
+		// nothing is written or returned.
+		{Name: "fixture.notify", Emit: func(ctx context.Context, _ extension.Authority, _ domain.Payload) (extension.EmitPlan, error) {
+			return extension.EmitPlan{Event: domain.Event{Type: "fixture.changed.v1", DeliveryID: "notify/" + extension.CallRequestID(ctx)}}, nil
+		}},
 		// fixture.connection acts as the calling binding's connection: it
 		// resolves that connection's secret names named in the input, and
 		// answers with the connection and the names it resolved, never

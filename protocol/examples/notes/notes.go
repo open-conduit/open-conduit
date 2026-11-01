@@ -101,7 +101,7 @@ func Manifest(o Options) protocol.Manifest {
 	if o.Fixture {
 		return protocol.Manifest{Protocol: []int{protocol.Version}, Name: "fixture", Version: "1.0.0", Command: []string{"notes-extension", "--fixture"}, Provides: protocol.Provides{
 			Families:         []protocol.Family{{Type: "fixture.changed.v1", ReDerivable: true}},
-			Operations:       []protocol.OperationDecl{{Name: "fixture.echo", Kind: protocol.OperationHandler}, {Name: "fixture.wait", Kind: protocol.OperationWait}, {Name: "fixture.report", Kind: protocol.OperationEmit, Commit: true}, {Name: "fixture.connection", Kind: protocol.OperationHandler}},
+			Operations:       []protocol.OperationDecl{{Name: "fixture.echo", Kind: protocol.OperationHandler}, {Name: "fixture.wait", Kind: protocol.OperationWait}, {Name: "fixture.report", Kind: protocol.OperationEmit, Commit: true}, {Name: "fixture.notify", Kind: protocol.OperationEmit}, {Name: "fixture.connection", Kind: protocol.OperationHandler}},
 			DependencyFilter: true,
 		}}
 	}
