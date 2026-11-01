@@ -147,6 +147,11 @@ type WorkKindPolicy struct {
 	// arms no automatic retry, because the next routed input is its next
 	// attempt. Only cancellation makes standing Work terminal.
 	Standing bool
+	// RunOnce Work does all its work in one attempt: nothing arrives to
+	// continue a turn it hands back, so a handoff outcome settles as
+	// completed (with standing, the attempt completes and the Work waits for
+	// its next input; otherwise, with no pending input, the Work completes).
+	RunOnce bool
 	// Trigger optionally selects which pending input triggers an attempt
 	// from the acceptance-ordered batch the attempt takes (the attempt still
 	// receives the whole batch as RunRequest.Inputs). It must be pure and
@@ -1285,6 +1290,9 @@ func (s *Scheduler) Complete(ctx context.Context, ref domain.LeaseRef, result ex
 		w, err := tx.Work(x.WorkID)
 		if err != nil {
 			return err
+		}
+		if result.Outcome.Kind == domain.OutcomeHandoff && s.options.WorkKinds[w.Kind].RunOnce {
+			result.Outcome.Kind = domain.OutcomeCompleted
 		}
 		if result.Outcome.Kind == domain.OutcomeCompleted {
 			events, err := tx.UnroutedEvents(0, 0)

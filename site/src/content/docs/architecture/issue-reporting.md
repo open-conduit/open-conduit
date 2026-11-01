@@ -59,7 +59,7 @@ The `introspection` route's `work` is `report` (the default), `sweep`, `triage` 
 | `introspection.triage` (standing) | an `introspection.triage.due` slot | `triage/<epoch>` | `introspection/<scope>/triage/<epoch>` |
 | `introspection.fix` | an `introspection.fix.requested` Event | `fix/<id>` | `introspection/<scope>/fix/<id>` |
 
-The sweep and triage are standing Work: the extension declares `Standing` for their kinds through the contract's `WorkKinds` surface, the same policy scheduled jobs use. A completed run leaves the Work ready and idle for its next slot. A slot that arrives while a run is going waits as one pending run. A failed run arms no automatic retry, because the next slot is its next attempt. A by-hand run is ordinary manual Work of any other kind on the same binding, for example `open-conduit work create --scope-id eng --kind manual.triage --binding triage`.
+The sweep and triage are standing Work: the extension declares `Standing` for their kinds through the contract's `WorkKinds` surface, the same policy scheduled jobs use. A completed run leaves the Work ready and idle for its next slot. A slot that arrives while a run is going waits as one pending run. A failed run arms no automatic retry, because the next slot is its next attempt. The sweep, triage and fix kinds are also `RunOnce`: each run is the whole of its work, so a run whose agent hands back (a `done` status, say) has finished, and fix Work completes rather than waiting for input that never comes. A by-hand run is ordinary manual Work of any other kind on the same binding, for example `open-conduit work create --scope-id eng --kind manual.triage --binding triage`.
 
 ## Operations
 

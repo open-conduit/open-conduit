@@ -15,7 +15,7 @@ The attempt snapshot retains its configuration generation, full binding, executo
 
 A binding may set `timeout_seconds`, which replaces `SchedulerOptions.Timeout` for its attempts (pinned with the binding in the attempt state; a resumed segment keeps its remaining budget). When a Work opted into [binding grants](../config-management/#binding-grants), the binding the attempt pins already has their config applied, and the attempt state's `Grants` names the ones it took, so recovery and resume keep them.
 
-`SchedulerOptions.WorkKinds` registers an extension's lifecycle policy for the Work kind it creates. `Standing` Work returns to ready (idle) after a completed attempt and arms no automatic retry after a failed one; `Trigger` selects which input of the pending batch triggers the attempt. Scheduled jobs use both for the one-pending-run rule ([runtime semantics](../runtime-semantics/#pending-job-coalescing-and-standing-work)).
+`SchedulerOptions.WorkKinds` registers an extension's lifecycle policy for the Work kind it creates. `Standing` Work returns to ready (idle) after a completed attempt and arms no automatic retry after a failed one; `RunOnce` Work does all its work in one attempt, so an attempt that hands back settles as completed; `Trigger` selects which input of the pending batch triggers the attempt. Scheduled jobs use both for the one-pending-run rule ([runtime semantics](../runtime-semantics/#pending-job-coalescing-and-standing-work)).
 
 ## Attempt segments
 

@@ -263,7 +263,7 @@ func workKinds(xs []inproc.Extension) map[string]runtime.WorkKindPolicy {
 	for _, x := range xs {
 		if k, ok := x.(inproc.WorkKinder); ok {
 			for _, w := range k.WorkKinds() {
-				kinds[w.Kind] = runtime.WorkKindPolicy{Standing: w.Standing, Trigger: w.Trigger}
+				kinds[w.Kind] = runtime.WorkKindPolicy{Standing: w.Standing, RunOnce: w.RunOnce, Trigger: w.Trigger}
 			}
 		}
 	}

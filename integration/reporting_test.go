@@ -135,7 +135,7 @@ func (e *repEnv) open() {
 	// calendar recurrence are generic host options.
 	if e.scheduler, err = runtime.NewScheduler(store, e.clock.Now, e.router, runtime.SchedulerOptions{Owner: "test", LeaseDuration: time.Hour, Generation: "1",
 		CausalLimits: e.limits, Executors: map[string]extension.Executor{"fixture": e.exec}, Toolbelt: belt, ToolbeltEndpoints: fixtureEndpoint("unix:///fixture.sock"),
-		WorkKinds: map[string]runtime.WorkKindPolicy{is.WorkKindSweep: {Standing: true}, is.WorkKindTriage: {Standing: true}}}); err != nil {
+		WorkKinds: map[string]runtime.WorkKindPolicy{is.WorkKindSweep: {Standing: true, RunOnce: true}, is.WorkKindTriage: {Standing: true, RunOnce: true}, is.WorkKindFix: {RunOnce: true}}}); err != nil {
 		t.Fatal(err)
 	}
 	if e.timers, err = runtime.NewTimers(store, e.clock.Now, runtime.TimerOptions{CausalLimits: e.limits, Recurrences: map[string]runtime.RecurrenceFunc{is.RecurrenceKind: is.Recurrence}}); err != nil {

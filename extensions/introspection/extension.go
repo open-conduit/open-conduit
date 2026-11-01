@@ -104,9 +104,10 @@ func (*Extension) Routes() map[string]extension.RouteHandler {
 }
 
 // WorkKinds declares the extension's Work kinds: the daily runs are
-// standing, a report or fix is ordinary Work.
+// standing, a report or fix is ordinary Work, and each daily run and fix
+// is done in one attempt (RunOnce): a run that hands back has finished.
 func (*Extension) WorkKinds() []inproc.WorkKind {
-	return []inproc.WorkKind{{Kind: WorkKind}, {Kind: WorkKindSweep, Standing: true}, {Kind: WorkKindTriage, Standing: true}, {Kind: WorkKindFix}}
+	return []inproc.WorkKind{{Kind: WorkKind}, {Kind: WorkKindSweep, Standing: true, RunOnce: true}, {Kind: WorkKindTriage, Standing: true, RunOnce: true}, {Kind: WorkKindFix, RunOnce: true}}
 }
 
 func (*Extension) Recurrences() map[string]inproc.RecurrenceFunc {

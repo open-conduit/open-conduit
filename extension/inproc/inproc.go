@@ -244,12 +244,15 @@ type Stopper interface {
 }
 
 // WorkKind is the lifecycle of a Work kind the extension's routes create.
-// Standing Work outlives its attempts (only cancellation ends it); Trigger,
+// Standing Work outlives its attempts (only cancellation ends it); RunOnce
+// Work does all its work in one attempt, so an attempt that hands back
+// counts as completed; Trigger,
 // when set, picks the input that triggers an attempt from the pending batch
 // and must be pure and deterministic.
 type WorkKind struct {
 	Kind     string
 	Standing bool
+	RunOnce  bool
 	Trigger  func(inputs []domain.Event) int
 }
 

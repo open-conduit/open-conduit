@@ -830,3 +830,47 @@ func TestWorkKindPolicyContract(t *testing.T) {
 		t.Fatalf("late %+v", rec)
 	}
 }
+
+// TestWorkKindRunOnce: a run-once kind's attempt that hands back settles as
+// completed, so Work nothing will continue does not wait forever; standing
+// run-once Work still waits, ready, for its next input. Without the policy a
+// handoff leaves the Work ready.
+func TestWorkKindRunOnce(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		policy runtime.WorkKindPolicy
+		work   domain.WorkState
+		turn   domain.ExecutionState
+	}{
+		{"run once", runtime.WorkKindPolicy{RunOnce: true}, domain.WorkCompleted, domain.ExecutionCompleted},
+		{"standing run once", runtime.WorkKindPolicy{Standing: true, RunOnce: true}, domain.WorkReady, domain.ExecutionCompleted},
+		{"default", runtime.WorkKindPolicy{}, domain.WorkReady, domain.ExecutionHandoff},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			policy := c.policy
+			e := &scEnv{t: t, clock: &ghClock{t: utc(2026, 10, 21, 8, 0)}, path: filepath.Join(t.TempDir(), "conduit.db"), enabled: true,
+				x: &jobExecutor{outcome: domain.OutcomeHandoff}, attempts: map[domain.ID]runtime.Attempt{}, entry: scEntry(`[{"name":"post"}]`), policy: &policy}
+			e.open()
+			e.putScope()
+			e.register()
+			e.manual("post", "first")
+			e.pass()
+			e.finish("post")
+			w, _ := e.work("post")
+			if w.State != c.work {
+				t.Fatalf("work %s, want %s", w.State, c.work)
+			}
+			runs := e.runsOf("post")
+			if len(runs) != 1 {
+				t.Fatalf("runs %+v", runs)
+			}
+			e.read(func(tx storage.Tx) error {
+				x, err := tx.Execution(runs[0].Execution)
+				if err == nil && x.State != c.turn {
+					t.Errorf("turn %s, want %s", x.State, c.turn)
+				}
+				return err
+			})
+		})
+	}
+}
