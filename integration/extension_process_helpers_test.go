@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -82,6 +83,16 @@ func newExtEnv(t *testing.T) *extEnv {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = db.Close() })
+	// Runs after every extension the test loaded has been closed: a race
+	// the detector found inside an extension process fails the test too.
+	t.Cleanup(func() {
+		logs, _ := filepath.Glob(filepath.Join(dir, "state", "logs", "extensions", "*.log"))
+		for _, path := range logs {
+			if b, _ := os.ReadFile(path); bytes.Contains(b, []byte("WARNING: DATA RACE")) {
+				t.Errorf("the race detector reported a data race in %s:\n%s", filepath.Base(path), b)
+			}
+		}
+	})
 	e := &extEnv{t: t, root: filepath.Join(dir, "config", extproc.Dir), state: filepath.Join(dir, "state"), store: db, clock: conformance.NewClock(), service: filepath.Join(dir, "service.json")}
 	if err := db.Transact(context.Background(), storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
 		if err := tx.PutScope(domain.Scope{ID: extensionScope, Name: "notes"}, 0); err != nil {
