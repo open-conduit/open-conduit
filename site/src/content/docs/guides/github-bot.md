@@ -169,7 +169,7 @@ Open Conduit can give each newly opened PR its own reviewer, alongside the agent
      "connection": "github-reviewer",
      "requires": {"toolbelt": "mcp"},
      "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.pr.view",
-                    "github.pr.review", "github.pr.reply", "github.pr.comment", "github.checks", "github.wait"],
+                    "github.pr.review", "github.pr.reply", "github.pr.resolve", "github.pr.comment", "github.checks", "github.wait"],
      "secret_names": [],
      "config": {"playbook": "review-pr", "plugin_dir": "/path/to/review-bot/plugin"}
    }
@@ -182,6 +182,7 @@ Open Conduit can give each newly opened PR its own reviewer, alongside the agent
    - Read the PR with `github.context` and `github.pr.view`, and review it against your guidelines with `github.pr.review`: approve, request changes or comment, with inline comments on lines of the diff.
    - Then end the turn with `github.wait` and a `reason`. No condition is needed: a push, a comment or review, a check result or the PR merging or closing wakes the reviewer. Its own reviews and comments never do.
    - On a push, review what changed. On a reply, answer it with `github.pr.reply` or `github.pr.comment`.
+   - When a push addresses one of your inline comments, say so in its thread with `github.pr.reply`, then resolve the thread with `github.pr.resolve` and the same `comment_id`.
    - When the PR merges or closes, end with `finished`.
 
    Each repository can add to it in `.open-conduit/playbooks/review-pr.md`.

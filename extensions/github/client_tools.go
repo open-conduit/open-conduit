@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -95,6 +96,131 @@ func (c *Client) ReplyReview(ctx context.Context, repo string, n int, commentID 
 	var out PostedComment
 	_, err := c.call(ctx, true, repo, http.MethodPost, repoPath(repo, "/pulls/%d/comments/%d/replies", n, commentID), map[string]string{"body": body}, &out)
 	return out, err
+}
+
+// graphqlURL is the GraphQL endpoint of the client's GitHub:
+// api.github.com/graphql, or <host>/api/graphql on Enterprise, whose REST
+// API is <host>/api/v3.
+func (c *Client) graphqlURL() string {
+	api := strings.TrimRight(c.api, "/")
+	if base, ok := strings.CutSuffix(api, "/api/v3"); ok {
+		return base + "/api/graphql"
+	}
+	return api + "/graphql"
+}
+
+// graphql runs one GraphQL query or mutation as the reader (or writer) of
+// repo and decodes its data into out. GitHub answers GraphQL errors with a
+// 200; the first is returned as a StatusError (FORBIDDEN as 403, NOT_FOUND
+// as 404, anything else as 422) so callers map it like a REST refusal.
+func (c *Client) graphql(ctx context.Context, write bool, repo, query string, vars map[string]any, out any) error {
+	var res struct {
+		Data   json.RawMessage `json:"data"`
+		Errors []struct {
+			Type    string `json:"type"`
+			Message string `json:"message"`
+		} `json:"errors"`
+	}
+	if _, err := c.call(ctx, write, repo, http.MethodPost, c.graphqlURL(), map[string]any{"query": query, "variables": vars}, &res); err != nil {
+		return err
+	}
+	if len(res.Errors) > 0 {
+		e := res.Errors[0]
+		status := http.StatusUnprocessableEntity
+		switch e.Type {
+		case "FORBIDDEN":
+			status = http.StatusForbidden
+		case "NOT_FOUND":
+			status = http.StatusNotFound
+		}
+		msg := strings.Join(strings.Fields(e.Message), " ")
+		if len(msg) > 200 {
+			msg = msg[:200]
+		}
+		return &StatusError{Status: status, Message: msg}
+	}
+	if out != nil && len(res.Data) > 0 {
+		if err := json.Unmarshal(res.Data, out); err != nil {
+			return fmt.Errorf("github: decoding GraphQL data: %w", err)
+		}
+	}
+	return nil
+}
+
+// ReviewThread is the review thread an inline comment opened or replied in.
+type ReviewThread struct {
+	// ID is the thread's GraphQL node ID, which only resolving needs.
+	ID       string
+	Resolved bool
+}
+
+const reviewThreadsQuery = `query($owner: String!, $name: String!, $number: Int!, $after: String) {
+  repository(owner: $owner, name: $name) {
+    pullRequest(number: $number) {
+      reviewThreads(first: 100, after: $after) {
+        nodes { id isResolved comments(first: 100) { nodes { databaseId } } }
+        pageInfo { hasNextPage endCursor }
+      }
+    }
+  }
+}`
+
+// FindReviewThread finds the review thread on PR n that holds the inline
+// comment commentID (the one that opened it or any reply), reading the PR's
+// threads a page at a time. ok is false when no thread holds it: the ID is
+// not an inline comment on that PR, or sits past a thread's first hundred
+// comments.
+func (c *Client) FindReviewThread(ctx context.Context, repo string, n int, commentID int64) (thread ReviewThread, ok bool, err error) {
+	owner, name, _ := strings.Cut(repo, "/")
+	vars := map[string]any{"owner": owner, "name": name, "number": n}
+	for {
+		var out struct {
+			Repository *struct {
+				PullRequest *struct {
+					ReviewThreads struct {
+						Nodes []struct {
+							ID         string `json:"id"`
+							IsResolved bool   `json:"isResolved"`
+							Comments   struct {
+								Nodes []struct {
+									DatabaseID int64 `json:"databaseId"`
+								} `json:"nodes"`
+							} `json:"comments"`
+						} `json:"nodes"`
+						PageInfo struct {
+							HasNextPage bool   `json:"hasNextPage"`
+							EndCursor   string `json:"endCursor"`
+						} `json:"pageInfo"`
+					} `json:"reviewThreads"`
+				} `json:"pullRequest"`
+			} `json:"repository"`
+		}
+		if err := c.graphql(ctx, false, repo, reviewThreadsQuery, vars, &out); err != nil {
+			return ReviewThread{}, false, err
+		}
+		if out.Repository == nil || out.Repository.PullRequest == nil {
+			return ReviewThread{}, false, &StatusError{Status: http.StatusNotFound}
+		}
+		threads := out.Repository.PullRequest.ReviewThreads
+		for _, t := range threads.Nodes {
+			for _, x := range t.Comments.Nodes {
+				if x.DatabaseID == commentID {
+					return ReviewThread{ID: t.ID, Resolved: t.IsResolved}, true, nil
+				}
+			}
+		}
+		if !threads.PageInfo.HasNextPage || threads.PageInfo.EndCursor == "" {
+			return ReviewThread{}, false, nil
+		}
+		vars["after"] = threads.PageInfo.EndCursor
+	}
+}
+
+// ResolveReviewThread resolves a review thread as the writer. Resolving a
+// resolved thread changes nothing, so a retry is safe.
+func (c *Client) ResolveReviewThread(ctx context.Context, repo, threadID string) error {
+	return c.graphql(ctx, true, repo, `mutation($thread: ID!) { resolveReviewThread(input: {threadId: $thread}) { thread { id isResolved } } }`,
+		map[string]any{"thread": threadID}, nil)
 }
 
 // ReviewRequest is a pull request review to submit.

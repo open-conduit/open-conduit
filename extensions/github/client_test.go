@@ -420,3 +420,21 @@ func TestParseKeyForms(t *testing.T) {
 		}
 	}
 }
+
+// GraphQL lives beside REST: api.github.com/graphql, and on Enterprise
+// <host>/api/graphql beside <host>/api/v3.
+func TestGraphQLURL(t *testing.T) {
+	for api, want := range map[string]string{
+		"https://api.github.com":          "https://api.github.com/graphql",
+		"https://ghe.example.com/api/v3":  "https://ghe.example.com/api/graphql",
+		"https://ghe.example.com/api/v3/": "https://ghe.example.com/api/graphql",
+	} {
+		c, err := NewClient(ConnectionConfig{APIURL: api, Auth: "token"}, secrets(map[string]string{}), ClientOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := c.graphqlURL(); got != want {
+			t.Errorf("%s: %s, want %s", api, got, want)
+		}
+	}
+}
