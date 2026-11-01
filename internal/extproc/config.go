@@ -126,6 +126,10 @@ func configError(err error) error {
 	return protocol.Errorf(protocol.CodeInternal, err.Error())
 }
 
+// candidateAttempts bounds how often ConfigCandidate asks again after a
+// conflict.
+const candidateAttempts = 5
+
 // ConfigCandidate asks the package what a Work proposes (manifest
 // config_candidate, permission config.read), bounded. A package that
 // declares neither, or proposes nothing, has none: storage.ErrNotFound.
@@ -135,9 +139,22 @@ func (r *Remote) ConfigCandidate(ctx context.Context, w domain.Work) (extension.
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
+	// Reading the candidate may write the package's own state (a change
+	// set moved onto a new generation), and a package's KV transaction
+	// fails with a conflict rather than retrying when its other work wrote
+	// the same keys at the same moment (the applied task straight after an
+	// apply, say). The read changes nothing the operator decided, so ask
+	// again rather than refuse it.
 	var out protocol.ConfigCandidateResult
-	if err := r.p.Call(ctx, "config.candidate", protocol.ConfigCandidateParams{Work: protocol.FromWork(w)}, &out); err != nil {
-		return extension.Candidate{}, err
+	for attempt := 0; ; attempt++ {
+		out = protocol.ConfigCandidateResult{}
+		err := r.p.Call(ctx, "config.candidate", protocol.ConfigCandidateParams{Work: protocol.FromWork(w)}, &out)
+		if err == nil {
+			break
+		}
+		if !errors.Is(err, storage.ErrConflict) || attempt == candidateAttempts-1 || ctx.Err() != nil {
+			return extension.Candidate{}, err
+		}
 	}
 	if !out.Found {
 		return extension.Candidate{}, storage.ErrNotFound
