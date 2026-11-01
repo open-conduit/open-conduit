@@ -45,6 +45,9 @@ func TestGitHubScopeConfig(t *testing.T) {
 	if len(s.Bindings) != 2 || s.Bindings[0]["resource"] == nil || len(s.Routes) != 2 || s.Routes[0]["handler"] != "github-hold" {
 		t.Fatalf("scope: %+v", s)
 	}
+	if !strings.Contains(string(r.Scope), `"github.git.credential"`) {
+		t.Fatalf("a workspace binding is not granted github.git.credential: %s", r.Scope)
+	}
 	if len(r.Connections) != 1 || !strings.Contains(string(r.Connections[0]), `"cmd:gh auth token"`) {
 		t.Fatalf("connection: %s", r.Connections)
 	}
@@ -58,6 +61,9 @@ func TestGitHubScopeConfig(t *testing.T) {
 	}
 	if b := s.Bindings[0]; b["resource"] != nil || b["requires"].(map[string]any)["workspace"] != false {
 		t.Fatalf("workspace-free binding: %+v", b)
+	}
+	if strings.Contains(string(r.Scope), `"github.git.credential"`) {
+		t.Fatalf("a workspace-free binding is granted github.git.credential: %s", r.Scope)
 	}
 	if !strings.Contains(strings.Join(r.Summary, "\n"), "workspace-free") {
 		t.Fatalf("summary: %v", r.Summary)

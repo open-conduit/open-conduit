@@ -360,7 +360,7 @@ func (c *converter) githubScope(b *scopeBuilder, p *v1Project, repoB *v1Binding,
 		secrets = append(secrets, "github-webhook")
 		c.note(Action, where, "", "manage_webhook re-points the repository hook at Open Conduit when the scope starts; v1 must not run this project at the same time")
 	}
-	ops := slices.Clone(gh.AgentOperations)
+	ops := append(slices.Clone(gh.AgentOperations), gh.WorkspaceOperations...)
 	if intro {
 		ops = append(ops, is.OpReport, is.OpCorrection, is.OpProblem)
 	}

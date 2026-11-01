@@ -23,12 +23,16 @@ import (
 // AgentOperations are the toolbelt operations an agent binding gets for a
 // GitHub scope (the builtins it uses plus the github.* tools); HoldOperations
 // those of the github-hold binding. They mirror the setup guide.
+// WorkspaceOperations are added for a binding with a git workspace: git
+// itself calls them, through the credential helper a connection with git
+// "bot" installs, so the owner never has to know to grant them.
 var (
 	AgentOperations = []string{"read_context", "wait", "declare_outcome",
 		"github.context", "github.issue.view", "github.issue.comment", "github.issue.list", "github.issue.create",
 		"github.pr.list", "github.pr.view", "github.pr.create", "github.pr.comment", "github.pr.reply", "github.pr.review", "github.checks",
 		"github.attachment.upload", "github.attachment.get", "github.wait"}
-	HoldOperations = []string{"emit", "github.hold.status", "github.hold"}
+	HoldOperations      = []string{"emit", "github.hold.status", "github.hold"}
+	WorkspaceOperations = []string{OpGitCredential}
 )
 
 var (
@@ -93,7 +97,10 @@ func obj(kv ...any) map[string]any {
 // optionally the hold route and binding.
 func (g GitHubScope) ScopeConfig() map[string]any {
 	ops := append([]string{}, AgentOperations...)
-	authOps := append([]string{"emit"}, AgentOperations...)
+	if g.Checkout != "" {
+		ops = append(ops, WorkspaceOperations...)
+	}
+	authOps := append([]string{"emit"}, ops...)
 	requires := obj("toolbelt", "mcp", "inject", true, "resume", true, "workspace", g.Checkout != "")
 	agent := obj("name", "agent", "executor", "claude-code", "connection", g.Connection, "requires", requires,
 		"operations", ops, "secret_names", []string{},
