@@ -3,6 +3,8 @@ title: "Extension packaging, SDK and certification"
 description: "How to write, package, install, upgrade, roll back, remove and certify a third-party extension package."
 ---
 
+New to extensions? [Build your first extension](../../guides/first-extension/) is a 30-minute tutorial that writes, tests and installs one; this page is the reference behind it.
+
 This guide covers writing, packaging, installing, upgrading, rolling back, removing and certifying a third-party extension. Installed packages run as separate processes that speak the [subprocess protocol](../extension-protocol/) (decision B08) and are supervised under its [runtime, trust model and schema evolution](../extension-protocol/#runtime-trust-model-and-schema-evolution). **Packaging, the SDK and certification are provisional**, like the protocol: they may still change, and decisions 21–32 at the end are listed for review.
 
 Code:
@@ -27,7 +29,7 @@ Code:
 - `.github/workflows/ci.yml`, which runs `make check` and certifies against Open Conduit's `main` and its latest release.
 - `playbooks/NAME.md`, a stub playbook naming the operation, and a README saying what to change first.
 
-It refuses a name the [manifest rules](../extension-protocol/#manifest) or Open Conduit's own registrations rule out, and a directory that isn't empty. `TestExtensionNew` runs the command against this checkout and runs the new repository's `make check`.
+It refuses a name the [manifest rules](../extension-protocol/#manifest) or Open Conduit's own registrations rule out, and a directory that isn't empty. `TestExtensionNew` runs the command against this checkout and runs the new repository's `make check`. `TestTutorialFirstExtension` does the same with every file [the tutorial](../../guides/first-extension/) shows saved over the scaffold's, then runs its install and `config set` steps on a GitHub scope's config, so the tutorial fails CI when it stops working.
 
 ## Writing an extension with the SDK
 

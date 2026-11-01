@@ -1,6 +1,6 @@
 # Open Conduit documentation
 
-These documents are for people working on Open Conduit itself. To install and run it, start at [the user docs](https://open-conduit.github.io/open-conduit/) (built from `site/`) or [the top-level README](../README.md). [CONTRIBUTING.md](../CONTRIBUTING.md) covers setup, commits, boundaries and tests, and [SECURITY.md](../SECURITY.md) covers reporting vulnerabilities and the trust model.
+These documents are for people working on Open Conduit itself. To install and run it, start at [the user docs](https://open-conduit.github.io/open-conduit/) (built from `site/`) or [the top-level README](../README.md). To write an extension package, start with [Build your first extension](https://open-conduit.github.io/open-conduit/guides/first-extension/). [CONTRIBUTING.md](../CONTRIBUTING.md) covers setup, commits, boundaries and tests, and [SECURITY.md](../SECURITY.md) covers reporting vulnerabilities and the trust model.
 
 ## Building and checking
 

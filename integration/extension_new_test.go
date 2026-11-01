@@ -21,14 +21,7 @@ func TestExtensionNew(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	// Offline, and free of the make that may be running this test.
-	var env []string
-	for _, kv := range os.Environ() {
-		if k, _, _ := strings.Cut(kv, "="); k != "MAKEFLAGS" && k != "MFLAGS" && k != "MAKELEVEL" {
-			env = append(env, kv)
-		}
-	}
-	env = append(env, "GOFLAGS=-mod=mod", "GOPROXY=off", "GOSUMDB=off", "GOWORK=off")
+	env := offlineEnv()
 	dir := filepath.Join(t.TempDir(), "acme")
 	run := func(cwd, name string, args ...string) string {
 		t.Helper()
@@ -71,4 +64,17 @@ func TestExtensionNew(t *testing.T) {
 	if out, err := cmd.CombinedOutput(); err == nil || !strings.Contains(string(out), "already exists and is not empty") {
 		t.Fatalf("a non-empty directory: %v\n%s", err, out)
 	}
+}
+
+// offlineEnv is the environment a package repository's commands run in:
+// offline, building from the module cache this checkout builds from, and
+// free of the make that may be running the test.
+func offlineEnv() []string {
+	var env []string
+	for _, kv := range os.Environ() {
+		if k, _, _ := strings.Cut(kv, "="); k != "MAKEFLAGS" && k != "MFLAGS" && k != "MAKELEVEL" {
+			env = append(env, kv)
+		}
+	}
+	return append(env, "GOFLAGS=-mod=mod", "GOPROXY=off", "GOSUMDB=off", "GOWORK=off")
 }
