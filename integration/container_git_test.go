@@ -255,9 +255,13 @@ func TestDockerGitCredential(t *testing.T) {
 	valid := map[string]domain.ID{}
 	endpoints, err := management.NewEndpoints(nil, l.state, l.root+"/s", func(exec domain.ID) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The input is a payload, as the management handler decodes it.
 			var call struct {
 				Operation string
-				Input     json.RawMessage
+				Input     struct {
+					Schema string          `json:"schema"`
+					Data   json.RawMessage `json:"data"`
+				}
 			}
 			_ = json.NewDecoder(r.Body).Decode(&call)
 			mu.Lock()
@@ -269,7 +273,7 @@ func TestDockerGitCredential(t *testing.T) {
 				fmt.Fprint(w, `{"error":{"code":"unauthorized","message":"execution authority rejected"}}`)
 				return
 			}
-			out, err := credOp.Handler(r.Context(), extension.Authority{ScopeID: "scope", WorkID: "work", ExecutionID: exec}, domain.Payload{Data: call.Input})
+			out, err := credOp.Handler(r.Context(), extension.Authority{ScopeID: "scope", WorkID: "work", ExecutionID: exec}, domain.Payload{Schema: call.Input.Schema, Data: call.Input.Data})
 			var refused *extension.OperationError
 			if errors.As(err, &refused) {
 				w.WriteHeader(http.StatusConflict)
