@@ -77,4 +77,10 @@ Report vulnerabilities privately, as [SECURITY.md](SECURITY.md) describes. Pleas
 
 ## License
 
-Open Conduit is released under the [MIT License](LICENSE).
+Open Conduit's core (the daemon, the orchestration engine, the first-party extensions and the web UI) is released under the [Functional Source License, Version 1.1, ALv2 Future License](LICENSE) (FSL-1.1-ALv2). Each release becomes available under the Apache License 2.0 two years after it is published.
+
+What you build on Open Conduit is yours. The extension SDKs, the public contracts they build on and the example extensions are under the MIT License: each of these directories holds its own `LICENSE` file, and that file applies to it instead of the FSL.
+
+You are welcome to use Open Conduit for your own work, including commercial work: run it inside your company, build and sell extensions and applications on it, or offer professional services around it. The one thing the FSL doesn't allow is offering Open Conduit, or something substantially like it, to others as a competing commercial product or hosted service. A commercial licence for that is available separately; ask in a [GitHub issue](https://github.com/open-conduit/open-conduit/issues).
+
+[Licensing](https://open-conduit.github.io/open-conduit/reference/licensing/) on the docs site lists which directories are under which licence.

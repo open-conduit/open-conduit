@@ -3,6 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "description": "Example Open Conduit extension in TypeScript: one operation, weather.forecast, from forecasts in its scope's config.",
+  "license": "MIT",
   "type": "module",
   "engines": {
     "node": ">=22.18"
