@@ -125,11 +125,51 @@ Other rules:
 
 Any language works: the protocol is newline-delimited JSON-RPC 2.0, and the certification runner checks a non-Go extension the same way.
 
+### Writing an extension in TypeScript
+
+[`sdk/typescript`](https://github.com/open-conduit/open-conduit/tree/main/sdk/typescript) is the same SDK for TypeScript on Node 22.18 or later, with no runtime dependencies. It covers serving, the host client and declare-once. `extension(name, options)` starts one, each registration declares itself in the manifest, and `main()` answers `package-manifest` and `package-certification` or serves on stdin and stdout:
+
+```ts
+import { extension, OperationError, t } from "@open-conduit/sdk";
+
+const ext = extension("weather", { version: "0.1.0" })
+  .operation("weather.forecast", {
+    input: t.object({
+      city: t.string({ description: "The city to forecast, by name." }),
+      days: t.optional(t.integer()),
+    }),
+    guidance: "Call `weather.forecast` before planning anything outdoors.",
+    handler: async ({ city, days }, { host, authority }) => {
+      if (city === "atlantis") throw new OperationError("unknown_city", `no forecast for ${city}`);
+      return { city, days: days ?? 1, summary: "rain" };
+    },
+  });
+
+void ext.main();
+```
+
+An operation's input is built with `t` (`string`, `enum`, `integer`, `number`, `boolean`, `array`, `object`, `optional`, `any`). That one value is both the JSON Schema the manifest declares and the type the handler receives. Decoding is as strict as the Go SDK's: a missing required field, a field the schema doesn't have, or a value of the wrong type is refused with `bad_request` before the handler runs. The output is sent as `<operation>.v1` unless `output` names another schema. Throw `OperationError` to refuse with your own code; anything else thrown crosses as `internal`, with its message kept in the extension's log.
+
+| Registration | Declares |
+| --- | --- |
+| `operation(name, { input, guidance, output, handler })` | `operations[]`, kind `handler`, with `guidance` and `input` |
+| `check(name, fn, { deep })` | `checks[]`; `fn` returns the detail line and throws to fail |
+| `task(name, intervalSeconds, fn)` | `tasks[]` |
+| `entryType(type)` | `extensions[]`: a scope entry type; `onValidate` checks its config, `onConfigure` receives its entries |
+| `family(...families)` | `families[]`, for Events derived with `host.accept` |
+
+The `Host` client (`ctx.host`) offers `get`, `list`, `commit`, `update`, `accept`, `events`, `works`, `secrets`, `connectionSecrets`, `artifact` and `waitProgress`. KV values are bytes (`Uint8Array`), or strings stored as UTF-8. `onMigrate` upgrades the extension's KV namespaces to `kvVersion`.
+
+`main()` moves stdout to stderr while it serves, so `console.log` can't corrupt the protocol stream, and it exits when stdin closes. The manifest's command must be an executable file inside the package, so bundle the extension to one file with a `#!/usr/bin/env node` line and make it executable. [`protocol/examples/weather`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/weather) does this with esbuild in `scripts/package.mjs`. Its unit tests serve the extension over a pair of in-memory streams, with the SDK's `Conn` standing in for the host, and `make certify` certifies its package.
+
+This first step doesn't include `wait` and `emit` operations, routes, ingress or executors, an in-process test host like `sdktest`, a TypeScript `extension new` scaffold, or an npm release. The wire types in `src/wire.ts` are written by hand; `TestTypeScriptWireMatchesGo` fails when a field there is no longer a JSON field of the Go type it names.
+
 ### Examples
 
 - [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/notes): every extension surface. It has ingress with a webhook receiver, a route with a trigger, operations including a committed emission, a recurrence, tasks, a resource provider, a telemetry exporter, annotations, a setup flow, validation, three releases with schema evolution, and a KV migration. It declares every permission: a task records telemetry events and runs the host's probes, another builds, validates and traces a config candidate, it receives the host's telemetry events as a sink, and its entry type declares settings and describe lines.
 - [`protocol/examples/notes` fixture profile](https://github.com/open-conduit/open-conduit/blob/main/protocol/examples/notes/extension.go): the declare-once form. `TestFixtureManifestIsDerived` checks that its derived manifest equals the hand-written one.
 - [`protocol/examples/runner`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/runner): an executor with detached jobs, inject, interrupt, stop and forget.
+- [`protocol/examples/weather`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/weather): an extension in TypeScript, with one operation answered from its scope's config and a lookup count in host KV.
 - [`packages/slack`](https://github.com/open-conduit/open-conduit/tree/main/packages/slack) and [`packages/shell`](https://github.com/open-conduit/open-conduit/tree/main/packages/shell): real first-party workloads packaged.
 
 ## Package layout
@@ -434,6 +474,8 @@ A report states:
 
 - `TestCertificationFirstPartyPackages`: Slack, shell, notes and runner are certified, and their reports state versions and limits.
 - `TestCertificationNegativeControls` and `TestCertificationInvalidPackage`.
+- `make certify` certifies the TypeScript example `weather`; `make ts-check` typechecks and unit-tests the TypeScript SDK and the example.
+- `TestTypeScriptWireMatchesGo`: every field of the TypeScript SDK's wire types is a JSON field of the Go type it encodes.
 - `TestExternalSlackRoundTrip`: the Slack package round trip. Socket envelope through `ingress.deliver`, acknowledged after acceptance; remote route; `slack.reply` via `sdk.Store` and the projector against the fake; projection task; check; render.
 - `TestExternalShellAdoptionAndArtifacts`: the shell package's process group survives an extension crash and is re-adopted with the same recovery metadata; its log reaches the host artifact store.
 - `TestExternalSurfacesRoundTrip`: `validate`, `webhook.handle`, `provider.*` with `provider.owner_status`, `telemetry.export`, `run.environment`, `work.annotate`, and `setup.run` with callbacks.
