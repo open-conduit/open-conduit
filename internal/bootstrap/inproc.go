@@ -19,6 +19,7 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/posthog"
 	"github.com/open-conduit/open-conduit/extensions/setup"
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/observability"
@@ -310,7 +311,7 @@ func (d *daemon) configureInproc(ctx context.Context) {
 func (d *daemon) registerInprocTools(belt *runtime.Toolbelt, s *config.Snapshot) error {
 	for _, x := range d.inproc {
 		if t, ok := x.(inproc.Tooled); ok {
-			if _, gated := x.(inproc.EntryGated); gated && !hasEntry(s, x) {
+			if entryGated(x) && !hasEntry(s, x) {
 				continue
 			}
 			reg := t.Registration()
@@ -323,6 +324,17 @@ func (d *daemon) registerInprocTools(belt *runtime.Toolbelt, s *config.Snapshot)
 		}
 	}
 	return nil
+}
+
+// entryGated says whether an extension's operations join only a generation
+// with one of its entries: an in-process inproc.EntryGated, or an installed
+// package that declares provides.entry_gated.
+func entryGated(x inproc.Extension) bool {
+	if _, ok := x.(inproc.EntryGated); ok {
+		return true
+	}
+	p, ok := x.(*installed)
+	return ok && p.entryGated()
 }
 
 // hasEntry reports whether an enabled scope of the generation has an entry
@@ -530,12 +542,26 @@ func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]ex
 	return cfg
 }
 
+// inprocPlaybooks adds the extensions' playbooks, first-party then
+// installed. An installed package's playbook never replaces one already
+// there, and its `{{bin}}` is how a turn runs Open Conduit.
 func (d *daemon) inprocPlaybooks(into map[string]string) {
 	for _, x := range d.inproc {
-		if p, ok := x.(inproc.Playbooker); ok {
-			for name, text := range p.Playbooks() {
+		p, ok := x.(inproc.Playbooker)
+		if !ok {
+			continue
+		}
+		_, pkg := x.(*installed)
+		for name, text := range p.Playbooks() {
+			if !pkg {
 				into[name] = text
+				continue
 			}
+			if _, taken := into[name]; taken {
+				d.log.Warn("extension playbook not written: the name is taken", "extension", x.Name(), "playbook", name)
+				continue
+			}
+			into[name] = extproc.RenderPlaybook(text, "open-conduit")
 		}
 	}
 }

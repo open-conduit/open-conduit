@@ -33,12 +33,20 @@ func ExtensionOps(version, commit string) *cli.ExtensionOps {
 			for _, err := range errs {
 				out.Problems = append(out.Problems, err.Error())
 			}
-			if len(installed) > 0 {
-				var found []extproc.Found
-				for _, in := range installed {
-					found = append(found, in.Found())
+			// The bundled packages no installed one replaces.
+			all, _ := discoverPackages(configPath, "")
+			for _, f := range all {
+				if !f.Bundled {
+					continue
 				}
-				if err := extproc.CheckConflicts(found, firstPartyTaken()); err != nil {
+				if pkg, err := extproc.ReadPackage(f.Dir); err == nil {
+					p := describe(pkg)
+					p.Bundled = true
+					out.Packages = append(out.Packages, p)
+				}
+			}
+			if len(all) > 0 {
+				if err := extproc.CheckConflicts(all, firstPartyTaken()); err != nil {
 					out.Problems = append(out.Problems, extproc.Diagnose("", err, extproc.Paths{}).Summary+": "+err.Error())
 				}
 			}
@@ -158,14 +166,14 @@ func firstPartyTaken() extproc.Taken {
 // package for the duration of the flow, without a coordination store (a
 // setup needs only the operator, the config document and the secret store).
 func extensionSetups(configPath, stateDir, version string) []extension.Setup {
-	found, _ := extproc.Discover(extensionsRoot(configPath))
+	found, _ := discoverPackages(configPath, "")
 	if extproc.CheckConflicts(found, firstPartyTaken()) != nil {
 		return nil
 	}
 	var out []extension.Setup
 	for _, f := range found {
 		if d := f.Manifest.Provides.Setup; d != nil {
-			out = append(out, packageSetup{f: f, stateDir: stateDir, version: version, info: extension.SetupInfo{Type: d.Type, Summary: d.Summary + " (package " + f.Manifest.Name + " " + f.Manifest.Version + ")", Usage: d.Usage}})
+			out = append(out, packageSetup{f: f, stateDir: stateDir, version: version, info: extension.SetupInfo{Type: d.Type, Summary: d.Summary + " (package " + f.Manifest.Name + " " + f.Manifest.Version + ")", Usage: d.Usage, FirstRun: d.FirstRun}})
 		}
 	}
 	return out

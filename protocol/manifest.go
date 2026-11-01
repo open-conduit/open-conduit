@@ -134,6 +134,11 @@ type Provides struct {
 	Recurrences []string `json:"recurrences,omitempty"`
 	// Operations are toolbelt operations the extension serves.
 	Operations []OperationDecl `json:"operations,omitempty"`
+	// EntryGated marks an extension whose operations join a generation's
+	// toolbelt only when an enabled scope has one of its entries: removing
+	// the last entry removes them, and a binding still granting them keeps
+	// running with its calls undeclared (inproc.EntryGated).
+	EntryGated bool `json:"entry_gated,omitempty"`
 	// DependencyFilter marks an extension whose wait dependencies carry an
 	// opaque filter the host evaluates through dependency.filter.
 	DependencyFilter bool `json:"dependency_filter,omitempty"`
@@ -335,6 +340,9 @@ type Family struct {
 type RouteDecl struct {
 	Handler string `json:"handler"`
 	Config  bool   `json:"config,omitempty"`
+	// Binding marks a handler that checks the binding each of its routes
+	// binds, through validate with kind binding (inproc.ConfigType.Binding).
+	Binding bool `json:"binding,omitempty"`
 	// Samples marks a handler that offers sample Events for a route trace
 	// through route.samples (extension.RouteSampler).
 	Samples bool `json:"samples,omitempty"`
@@ -409,6 +417,10 @@ type SetupDecl struct {
 	Type    string `json:"type"`
 	Summary string `json:"summary"`
 	Usage   string `json:"usage,omitempty"`
+	// FirstRun marks the setup whose result, with no flags, is the
+	// configuration a daemon runs on when it has no config file and no
+	// stored generation (extension.SetupInfo.FirstRun).
+	FirstRun bool `json:"first_run,omitempty"`
 }
 type ExternalStore struct {
 	Connection  string `json:"connection"`
@@ -611,6 +623,9 @@ func (m Manifest) Validate() error {
 		default:
 			fail("operation %q kind %q must be handler, wait or emit", o.Name, o.Kind)
 		}
+	}
+	if p.EntryGated && (len(p.Operations) == 0 || len(p.Extensions) == 0) {
+		fail("entry_gated needs operations and an extension type")
 	}
 	if p.DependencyFilter && !hasKind(p.Operations, OperationWait) {
 		fail("dependency_filter needs a wait operation")

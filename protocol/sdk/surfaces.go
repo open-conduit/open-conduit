@@ -29,6 +29,10 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 				if protocol.ErrorCode(err) != "" {
 					return nil, err
 				}
+				if p.Kind == protocol.ValidateBinding {
+					// The reason is what the operator reads.
+					return nil, protocol.Errorf(protocol.CodeInvalid, err.Error())
+				}
 				return nil, protocol.Errorf(protocol.CodeInvalid, "invalid "+p.Kind+" config")
 			}
 		}

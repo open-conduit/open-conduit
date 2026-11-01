@@ -43,12 +43,12 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `sdk.Extension` field | Manifest declaration | Wire methods |
 | --- | --- | --- |
 | `Configure`, `Migrate` | always | `configure` (KV migration first when `kv.stored < kv.declared`) |
-| `Validate` | connection, extension, route (`config`), executor or resource types | `validate` |
+| `Validate` | connection, extension, route (`config`), executor or resource types, and route bindings (`routes[].binding`, kind `binding`) | `validate` |
 | `Ingress` | `extensions[].ingress` | `ingress.push`, `ingress.reconcile` |
 | `Webhooks` | `webhooks` | `webhook.handle` |
 | `Routes`, `Triggers` | `routes` (`samples` for a handler that is an `extension.RouteSampler`), `work_kinds` | `route.match`, `route.samples`, `work_kind.trigger` |
 | `Recurrences` | `recurrences` | `recurrence.next` |
-| `Operations`, `Filter` | `operations`, `dependency_filter` | `operation.*`, `emit.commit`, `dependency.filter` |
+| `Operations`, `Filter` | `operations` (`entry_gated` to offer them only with an entry), `dependency_filter` | `operation.*`, `emit.commit`, `dependency.filter` |
 | `Executors` | `executors` | `executor.*` |
 | `Providers` | `resources` | `provider.*` |
 | `Tasks`, `Checks`, `CheckRuns` (a check that reads the configuration view or reports its own status, code and items) | `tasks`, `checks` | `task.run`, `check.run` |
@@ -58,7 +58,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Annotate` | `annotate` | `work.annotate` |
 | `Actions`, `Act` | `actions` | `work.actions`, `work.act` |
 | `Render` | `render` | `event.render` |
-| `Setups` | `setup` | `setup.run` with the `setup.*` callbacks |
+| `Setups` | `setup` (`first_run` for the setup that builds the default configuration) | `setup.run` with the `setup.*` callbacks |
 | `Upcasters` | `schemas` | applied before extension code sees an older payload |
 | — | `extensions[].settings`, `extensions[].describe` | none: the host reads an entry's [safe settings and describe lines](../extension-protocol/#manifest) from its config |
 
@@ -162,7 +162,7 @@ Secrets reach a package only through `secret.resolve`. It returns the secret nam
 
 An installed package's `work_kind.trigger`, `recurrence.next` and `dependency.filter` run through the [bounded in-transaction calls](../extension-protocol/#transactions-and-in-transaction-calls), with the same fallbacks.
 
-Playbooks of installed packages are not copied into the Claude Code plugin directory; playbooks remain a first-party convention.
+A package's playbooks join the Claude Code plugin the daemon writes at start, beside the first-party ones. Each `<name>.md` file in the manifest's `playbooks` directory is the playbook (a skill) of that name; other files are ignored. `{{bin}}` in the text becomes how the agent runs Open Conduit (`open-conduit` in a turn). A package playbook never replaces a first-party one of the same name: it is logged and left out. `init --with claude` starts on the first-run setup's playbook, the one named after its setup type, from the package.
 
 ## Diagnostics
 

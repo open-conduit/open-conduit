@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -55,6 +56,10 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 		return nil
 	}
 	ext.Validate = func(_ context.Context, p protocol.ValidateParams) error {
+		// The route's binding check: a note's Work runs alone.
+		if p.Kind == protocol.ValidateBinding && p.Binding != nil && slices.Contains(p.Binding.Operations, extension.CreateWork) {
+			return errors.New("a notes route's binding may not grant create_work")
+		}
 		if p.Kind != protocol.ValidateExtension || p.Type != "notes" {
 			return nil
 		}

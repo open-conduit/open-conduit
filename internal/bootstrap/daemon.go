@@ -127,7 +127,10 @@ type daemon struct {
 	o Options
 	// configHandles holds the config texts extensions refer to by handle
 	// (configHost).
-	configHandles  configHandles
+	configHandles configHandles
+	// defaultDoc is the first-run setup's configuration (DefaultConfig),
+	// built once the packages have started.
+	defaultDoc     []byte
 	log            *slog.Logger
 	now            func() time.Time
 	owner          string
@@ -383,9 +386,14 @@ func Serve(ctx context.Context, o Options) (err error) {
 	// Installed extension packages start before the configuration opens,
 	// so their validators check it (07-03).
 	d.openExtensions(ctx)
+	// The packages' playbooks join the plugin the executor already reads.
+	if err = d.preparePlaybooks(); err != nil {
+		return err
+	}
 	reg := registry(d.executors)
 	d.installedRegistry(&reg)
-	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath, DefaultConfig()); err != nil {
+	d.defaultDoc = d.defaultConfig()
+	if d.configs, err = management.OpenConfig(ctx, d.coord, d.now, reg, o.ConfigPath, d.defaultDoc); err != nil {
 		return fmt.Errorf("configuration: %w", err)
 	}
 	if a := d.configs.Adopted; a != nil {

@@ -42,6 +42,9 @@ type Found struct {
 	Dir      string
 	Manifest protocol.Manifest
 	Raw      []byte
+	// Bundled marks a package that ships with the binary rather than one
+	// installed beside the config.
+	Bundled bool
 }
 
 // Discover reads every <root>/<dir>/open-conduit-extension.json, in

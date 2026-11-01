@@ -40,7 +40,7 @@ type configHost struct {
 var _ inproc.ConfigHost = configHost{}
 
 func (d *daemon) configHost() configHost {
-	return configHost{configs: func() *management.ConfigService { return d.configs }, path: d.o.ConfigPath, def: DefaultConfig, handles: &d.configHandles,
+	return configHost{configs: func() *management.ConfigService { return d.configs }, path: d.o.ConfigPath, def: func() []byte { return d.defaultDoc }, handles: &d.configHandles,
 		control: func() *runtime.Control {
 			if c := d.current.Load(); c != nil {
 				return c.control

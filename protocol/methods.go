@@ -46,7 +46,7 @@ var Methods = []Method{
 	// Lifecycle.
 	{Name: "initialize", Direction: HostToExtension, Contract: []string{"extension.Registration.Version", "extension.Executor.Capabilities (manifest executors[].capabilities)", "extension.Registration.Name", "extension.Registration.EventTypes"}, UseCases: []string{"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code"}},
 	{Name: "configure", Direction: HostToExtension, Contract: []string{"host:config apply (register<Extension> on OnApply)", "extension.Source", "host:webhook routes"}, UseCases: []string{"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog"}},
-	{Name: "validate", Direction: HostToExtension, Contract: []string{"host:config.Registry validators (connection, extension, route, resource, executor config)"}, UseCases: []string{"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code", "legacy-job"}},
+	{Name: "validate", Direction: HostToExtension, Contract: []string{"host:config.Registry validators (connection, extension, route, resource, executor config)", "inproc.ConfigType.Binding", "extension.RouteBinding"}, UseCases: []string{"setup", "github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code", "legacy-job"}},
 	{Name: "shutdown", Direction: HostToExtension, Contract: []string{"observability.Exporter.Shutdown", "host:daemon stop"}, UseCases: []string{"posthog", "introspection", "slack"}},
 	{Name: "$/cancel", Direction: Both, Notification: true, Contract: []string{"context.Context cancellation"}, UseCases: []string{"github", "slack", "claude-code", "shell"}},
 

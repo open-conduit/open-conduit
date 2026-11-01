@@ -27,6 +27,7 @@ var parity = map[string][]string{
 	"Extension":  {"manifest:name", "method:initialize"},
 	"Typed":      {"manifest:provides.connections", "manifest:provides.extensions", "manifest:provides.routes.config", "method:validate"},
 	"Operator":   {"manifest:provides.operations"},
+	"EntryGated": {"manifest:provides.entry_gated"},
 	"Router":     {"manifest:provides.routes", "method:route.match"},
 	"Starter":    {"method:initialize"},
 	"Stopper":    {"method:shutdown"},
@@ -68,18 +69,14 @@ var parity = map[string][]string{
 	"ConfigType.Type":     {"manifest:provides.connections.type", "manifest:provides.extensions.type", "manifest:provides.routes.handler"},
 	"ConfigType.Ingress":  {"manifest:provides.extensions.ingress"},
 	"ConfigType.Validate": {"method:validate"},
+	"ConfigType.Binding":  {"manifest:provides.routes.binding", "method:validate"},
 	"ConfigType.Settings": {"manifest:provides.extensions.settings"},
 	"ConfigType.Describe": {"manifest:provides.extensions.describe"},
 }
 
 // parityGaps are the surfaces no wire method or manifest field carries yet,
 // each with the open issue that closes it. Only those issues own entries.
-var parityGaps = map[string]int{
-	// The setup extension, which gates its operations on an entry and
-	// checks its route's binding, becomes an installed package.
-	"EntryGated":         243,
-	"ConfigType.Binding": 243,
-}
+var parityGaps = map[string]int{}
 
 // inprocSurfaces lists the contract's interfaces, inproc.Host's fields and
 // inproc.ConfigType's fields from its source, so a new surface fails here
