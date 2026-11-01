@@ -100,7 +100,7 @@ func TestUsageReporterReports(t *testing.T) {
 	}
 	id, _ := os.ReadFile(filepath.Join(dir, "telemetry-id"))
 	for _, e := range got {
-		if e.Key != "phc_test" || e.DistinctID+"\n" != string(id) || e.Properties["version"] != "1.2.3" || e.Properties["$process_person_profile"] != false {
+		if e.Key != "phc_test" || e.DistinctID+"\n" != string(id) || e.Properties["version"] != "1.2.3" || e.Properties["$process_person_profile"] != false || e.Properties["$geoip_disable"] != true {
 			t.Fatalf("event: %+v", e)
 		}
 	}

@@ -193,8 +193,10 @@ func (u *usageReporter) shape(s *config.Snapshot) map[string]any {
 // send captures one event; failures are dropped (telemetry never affects the
 // daemon).
 func (u *usageReporter) send(ctx context.Context, event string, props map[string]any) error {
+	// $geoip_disable stops PostHog adding a location looked up from the
+	// sender's IP address.
 	all := map[string]any{"version": u.version, "commit": u.commit, "os": goruntime.GOOS, "arch": goruntime.GOARCH,
-		"$process_person_profile": false, "$lib": "open-conduit"}
+		"$process_person_profile": false, "$geoip_disable": true, "$lib": "open-conduit"}
 	for k, v := range props {
 		all[k] = v
 	}
