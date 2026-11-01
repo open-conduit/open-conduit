@@ -193,6 +193,36 @@ Every refusal and failure gets a stable code, a summary and a remedy (`extproc.D
 
 Unsupported capabilities are refused at config validation, exactly as for in-process executors: a binding requiring `inject` against an executor that does not declare it is `unsupported_capability` at the binding's `requires` path. An undeclared surface is never called, and callbacks from one are refused with `undeclared`.
 
+## Testing a package
+
+A package's unit tests can drive its handlers through `protocol/sdk` with a fake host over a pipe. To see the package working in the real daemon, its repository's tests use [`extensiontest`](https://github.com/open-conduit/open-conduit/blob/main/extensiontest/daemon.go), which needs only this module as a dependency. Pin the two commands it builds with `tool` directives, so `go mod tidy` keeps what they need and the build works from the module cache:
+
+```
+tool (
+	github.com/open-conduit/open-conduit/cmd/open-conduit
+	github.com/open-conduit/open-conduit/cmd/os
+)
+```
+
+- **`extensiontest.Daemon(t, opts)`** builds `open-conduit` and `os` once per test binary, at the version `go.mod` pins (with `-race` when the test runs under it). It installs each directory in `opts.Packages` under `extensions/<name>` beside the config, writes `opts.Config`, and starts `serve` with its state in a temporary directory and a short poll interval. It returns once the management API answers. `Client()` is the operator's `*client.Client`; `Until(what, timeout, fn)` polls a condition; `Restart()` kills the daemon and starts it again on the same state. `Close`, which the test's cleanup runs, kills it and fails the test on a race report in its log or on a process it started that is still running; the log is printed when the test failed.
+- **`extensiontest.FakeClaude(dir, turns...)`** writes a fake Claude Code CLI to name as a `claude-code` binding's `binary`. Each launch plays the next `Turn`: its toolbelt `Calls` (`Operation`, `Input`, `RequestID`) through the real `os mcp` server, then a wait for its `Barrier` file if it has one, then the end of the turn with its `State`. `Turn(n)` returns what turn `n` saw once its calls are made: its arguments, the message it was started or resumed with, each call's result, and its toolbelt endpoint and token while the turn holds at its barrier. Each Work needs a fake of its own. The fake is the test binary itself, run again with an environment variable set, so it costs no extra build.
+
+Assert what the package shows through `client`: `Pages`, `Actions` and `Panels` for what an operator sees, `Events` and `Work` for what it recorded. The setup assistant's daemon tests (`TestDaemonSetupSession` and `TestDaemonSetupChangeSet`) are written this way.
+
+```go
+claude, err := extensiontest.FakeClaude(t.TempDir(),
+	extensiontest.Turn{State: "help", Calls: []extensiontest.Call{
+		{Operation: "acme.ask", RequestID: "q1", Input: map[string]any{"question": "Which repository?"}},
+	}},
+	extensiontest.Turn{State: "finished"},
+)
+if err != nil {
+	t.Fatal(err)
+}
+d := extensiontest.Daemon(t, extensiontest.Options{Config: config(claude.Path), Packages: []string{"dist/acme"}})
+panels, err := d.Client().Panels(ctx, client.ActionTarget{WorkID: work})
+```
+
 ## Certification
 
 `open-conduit extension certify DIR [--json] [--report FILE]` is the distributable conformance runner. It ships in the `open-conduit` binary. It starts the package exactly as the daemon does: `internal/extproc`, with a real SQLite coordination store and artifact store in a temporary directory, and the package's own fixture. It then runs the criteria and prints or writes a report. The exit status is 0 only when the package is certified. `make certify` certifies the first-party packages and the examples, and runs the negative controls.
