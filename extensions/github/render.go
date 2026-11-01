@@ -109,8 +109,8 @@ func short(sha string) string {
 }
 
 // renderPullOpen renders an open PR's state. The same Event type carries
-// the PR's opening and every later version of it (a push, or a new title,
-// body or draft state), so it leads with the head and says the PR may have
+// the PR's opening and every later version of its payload (a push, or a
+// new title, body, labels, base branch or draft state), so it leads with the head and says the PR may have
 // changed rather than reading as a repeat of the opening.
 func renderPullOpen(p PullPayload) string {
 	head := fmt.Sprintf("### PR #%d is open", p.Number)
@@ -137,7 +137,7 @@ func renderPullOpen(p PullPayload) string {
 	if p.URL != "" {
 		lines = append(lines, p.URL)
 	}
-	lines = append(lines, "This comes when the PR opens and again whenever it changes: a push, or a new title, body or draft state. If its head isn't the one you last saw, it has new commits.")
+	lines = append(lines, "This comes when the PR opens and again whenever anything about it changes: a push, or its title, body, labels, base branch or draft state. If its head isn't the one you last saw, it has new commits.")
 	out := strings.Join(lines, "\n")
 	if body := strings.TrimSpace(p.Body); body != "" {
 		out += "\n\n" + body
