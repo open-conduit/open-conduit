@@ -416,7 +416,10 @@ func (t *toolbelt) gitCredential(args []string) int {
 		fmt.Fprintf(t.errOut, "os: %s\n", err)
 		return 1
 	}
-	data, _ := json.Marshal(in)
+	// An extension operation's input is a payload envelope; git's
+	// attributes are its data.
+	attrs, _ := json.Marshal(in)
+	data, _ := json.Marshal(client.Payload{Data: attrs})
 	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
 	defer cancel()
 	result, err := c.ToolbeltCall(ctx, client.ToolCall{Operation: "github.git.credential", Input: data})

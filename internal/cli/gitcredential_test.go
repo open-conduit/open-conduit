@@ -32,7 +32,21 @@ func TestToolbeltGitCredential(t *testing.T) {
 		var call map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&call)
 		calls = append(calls, call)
-		in, _ := call["input"].(map[string]any)
+		// The management handler decodes an extension operation's input
+		// strictly as a payload, {"schema", "data"}; refuse anything else
+		// as it does.
+		in := map[string]any{}
+		if raw, ok := call["input"].(map[string]any); ok {
+			for k := range raw {
+				if k != "schema" && k != "data" {
+					w.Header().Set("Content-Type", "application/json")
+					w.WriteHeader(http.StatusBadRequest)
+					fmt.Fprint(w, `{"error":{"code":"malformed","message":"operation input is malformed or has unknown fields"}}`)
+					return
+				}
+			}
+			in, _ = raw["data"].(map[string]any)
+		}
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Header.Get("Authorization") != "Bearer tok":
@@ -68,7 +82,10 @@ func TestToolbeltGitCredential(t *testing.T) {
 	if calls[0]["operation"] != "github.git.credential" || calls[0]["request_id"] != nil {
 		t.Fatalf("call %v", calls[0])
 	}
-	if in := calls[0]["input"].(map[string]any); len(in) != 3 || in["protocol"] != "https" || in["path"] != "octo/widgets.git" {
+	if env := calls[0]["input"].(map[string]any); len(env) != 1 {
+		t.Fatalf("input envelope %v", env)
+	}
+	if in := calls[0]["input"].(map[string]any)["data"].(map[string]any); len(in) != 3 || in["protocol"] != "https" || in["path"] != "octo/widgets.git" {
 		t.Fatalf("input %v", in)
 	}
 	if code, out, _ := run("protocol=https\nhost=example.com\n\n", "get"); code != 0 || out != "" {
