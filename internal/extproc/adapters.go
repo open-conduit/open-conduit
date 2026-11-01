@@ -282,7 +282,7 @@ func (r *Remote) Registration() extension.Registration {
 				if err := r.p.Call(ctx, "operation.emit", params(ctx, a, in), &out); err != nil {
 					return extension.EmitPlan{}, err
 				}
-				plan := extension.EmitPlan{Event: out.Event.Domain(), Cause: domain.ID(out.Cause)}
+				plan := extension.EmitPlan{Event: out.Event.Domain(), Cause: domain.ID(out.Cause), Once: out.Once}
 				if err := r.m.CheckWrite(plan.Event.Data); err != nil {
 					return extension.EmitPlan{}, schemaError(err)
 				}

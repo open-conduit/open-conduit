@@ -497,7 +497,7 @@ func (s *Server) operation(ctx context.Context, method string, raw json.RawMessa
 		if err != nil {
 			return nil, err
 		}
-		out := protocol.EmitPlan{Event: protocol.FromEvent(plan.Event), Cause: string(plan.Cause)}
+		out := protocol.EmitPlan{Event: protocol.FromEvent(plan.Event), Cause: string(plan.Cause), Once: plan.Once}
 		if plan.Commit != nil {
 			out.CommitID = newID()
 			s.mu.Lock()

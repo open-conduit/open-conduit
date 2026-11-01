@@ -35,6 +35,7 @@ export default defineConfig({
 						{ label: 'Scheduled jobs', slug: 'workflows/scheduled-jobs' },
 						{ label: 'Introspection', slug: 'workflows/introspection' },
 						{ label: 'Human decisions', slug: 'workflows/human-decisions' },
+						{ label: 'Observed sources', slug: 'workflows/observed-sources' },
 					],
 				},
 				{
@@ -106,6 +107,7 @@ export default defineConfig({
 								{ label: 'Slack', slug: 'architecture/slack-extension' },
 								{ label: 'Scheduled jobs', slug: 'architecture/schedule-extension' },
 								{ label: 'Introspection', slug: 'architecture/issue-reporting' },
+								{ label: 'Observed sources', slug: 'architecture/observe-extension' },
 								{ label: 'Operator setup', slug: 'architecture/operator-setup' },
 								{ label: 'Installed integrations', slug: 'architecture/installed-integrations' },
 								{ label: 'Backup and recovery', slug: 'architecture/recovery' },

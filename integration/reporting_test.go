@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -42,6 +43,9 @@ type repEnv struct {
 	limits   runtime.CausalLimits
 	disabled bool // compose without registering the extension (entry removed)
 	extra    *extension.Registration
+	handlers map[string]extension.RouteHandler // route handlers besides introspection's
+	// register, when set, adds a registration built over the open store.
+	register func(storage.Store) extension.Registration
 
 	store     *sqlite.Store
 	ingress   *runtime.Ingress
@@ -95,7 +99,7 @@ func (e *repEnv) open() {
 		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
 	}
 	if e.router, err = runtime.NewRouter(store, e.clock.Now, runtime.RouterOptions{Generation: "1", CausalLimits: e.limits,
-		Handlers: map[string]extension.RouteHandler{is.Type: is.Route{}},
+		Handlers: e.routeHandlers(),
 		Bindings: map[string]runtime.RouteBinding{"fixture": {Executor: e.exec}}}); err != nil {
 		t.Fatal(err)
 	}
@@ -127,6 +131,11 @@ func (e *repEnv) open() {
 	}
 	if e.extra != nil {
 		if err = belt.Register(*e.extra); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if e.register != nil {
+		if err = belt.Register(e.register(store)); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -637,6 +646,72 @@ func TestTranslatedEmitContract(t *testing.T) {
 
 // TestDisabledReportingIsUndeclared composes the toolbelt the way bootstrap
 // does for a generation without an `introspection` entry.
+// TestTranslatedEmitOnce: EmitPlan.Once is an emission's identity across
+// executions. A repeat with the same Event is the first again and spends no
+// budget; a different Event under it is refused; it is per scope and bounded.
+func TestTranslatedEmitOnce(t *testing.T) {
+	var plan extension.EmitPlan
+	rogue := extension.Registration{Version: extension.ContractVersion, Name: "rogue", EventTypes: []string{"rogue.noted"},
+		Operations: []extension.Operation{{Name: "rogue.note", Emit: func(context.Context, extension.Authority, domain.Payload) (extension.EmitPlan, error) {
+			return plan, nil
+		}}}}
+	e := &repEnv{t: t, clock: &ghClock{t: time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)}, path: filepath.Join(t.TempDir(), "conduit.db"), extra: &rogue,
+		tokens: map[domain.ID]string{}, grants: map[string][]string{"agent": {"rogue.note"}}}
+	e.open()
+	e.putScope(repScope, true)
+	e.putScope(repSecond, true)
+	key := domain.CorrelationKey{Source: "rogue/notes", ExternalID: "n1"}
+	note := func(delivery, once, text string) extension.EmitPlan {
+		return extension.EmitPlan{Once: once, Event: domain.Event{Type: "rogue.noted", DeliveryID: delivery, CorrelationKey: &key,
+			Data: domain.Payload{Schema: "rogue.v1", Data: []byte(`{"text":"` + text + `"}`)}},
+			Commit: func(m extension.Emitted) (extension.EmitCommit, error) {
+				return extension.EmitCommit{Output: domain.Payload{Schema: "rogue.out.v1", Data: []byte(fmt.Sprintf(`{"added":%t}`, m.Added))}}, nil
+			}}
+	}
+	run1 := e.manual(repScope, "engineering.issue", "agent")
+	plan = note("d1", "item-1", "a")
+	first, err := e.call(run1, "rogue.note", "", map[string]any{})
+	if err != nil || string(first.Output.Data) != `{"added":true}` {
+		t.Fatalf("first: %s %v", first.Output.Data, err)
+	}
+	e.finish(run1)
+
+	// A later execution, another delivery ID: the same Event again.
+	run2 := e.manual(repScope, "engineering.issue", "agent")
+	plan = note("d2", "item-1", "a")
+	again, err := e.call(run2, "rogue.note", "", map[string]any{})
+	if err != nil || string(again.Output.Data) != `{"added":false}` || again.Event.Event.ID != first.Event.Event.ID {
+		t.Fatalf("repeat: %s %v %v", again.Output.Data, again.Event, err)
+	}
+	// The same Once with other content is refused.
+	plan = note("d3", "item-1", "b")
+	var oe *extension.OperationError
+	if _, err := e.call(run2, "rogue.note", "", map[string]any{}); !errors.As(err, &oe) || oe.Code != "once_conflict" {
+		t.Fatalf("conflict: %v", err)
+	}
+	// Another Once with that content is a new Event.
+	plan = note("d4", "item-1/r2", "b")
+	if out, err := e.call(run2, "rogue.note", "", map[string]any{}); err != nil || string(out.Output.Data) != `{"added":true}` {
+		t.Fatalf("new revision: %s %v", out.Output.Data, err)
+	}
+	plan = note("d5", strings.Repeat("x", extension.MaxOnce+1), "a")
+	if _, err := e.call(run2, "rogue.note", "", map[string]any{}); !errors.Is(err, extension.ErrInvalid) {
+		t.Fatalf("oversized Once: %v", err)
+	}
+	e.finish(run2)
+	if n := e.countType("rogue.noted"); n != 2 {
+		t.Fatalf("accepted %d, want 2", n)
+	}
+
+	// Once is per scope.
+	other := e.manual(repSecond, "engineering.issue", "agent")
+	plan = note("d1", "item-1", "a")
+	if out, err := e.call(other, "rogue.note", "", map[string]any{}); err != nil || string(out.Output.Data) != `{"added":true}` {
+		t.Fatalf("other scope: %s %v", out.Output.Data, err)
+	}
+	e.finish(other)
+}
+
 func TestDisabledReportingIsUndeclared(t *testing.T) {
 	e := &repEnv{t: t, clock: &ghClock{t: time.Date(2026, 10, 26, 9, 0, 0, 0, time.UTC)}, path: filepath.Join(t.TempDir(), "conduit.db"), disabled: true,
 		tokens: map[domain.ID]string{}, grants: map[string][]string{"agent": {is.OpReport}}}
@@ -652,4 +727,12 @@ func TestDisabledReportingIsUndeclared(t *testing.T) {
 		}
 	}
 	e.finish(a)
+}
+
+func (e *repEnv) routeHandlers() map[string]extension.RouteHandler {
+	h := map[string]extension.RouteHandler{is.Type: is.Route{}}
+	for k, v := range e.handlers {
+		h[k] = v
+	}
+	return h
 }

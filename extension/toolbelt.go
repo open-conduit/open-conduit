@@ -100,6 +100,9 @@ type Operation struct {
 	Guidance string
 }
 
+// MaxOnce bounds EmitPlan.Once.
+const MaxOnce = 1024
+
 // MaxGuidance bounds one operation's Guidance.
 const MaxGuidance = 4096
 
@@ -126,6 +129,16 @@ type EmitPlan struct {
 	// charged to both chains' per-minute budgets, so citing never shortens
 	// a chain or escapes the trigger's limits.
 	Cause domain.ID
+	// Once, when set, is the emission's identity across executions: at most
+	// one Event is accepted per registration, scope and Once. The toolbelt
+	// records Once with the accepted Event in the accepting transaction. A
+	// later plan with the same Once and the same Event (type, correlation
+	// key and payload) accepts nothing, spends no causal budget and commits
+	// as a duplicate (Added false) of the first; one with a different Event
+	// is refused with OperationError code "once_conflict". So Once names a
+	// revision, not a thing that changes: an extension recording edits puts
+	// the revision in Once. At most MaxOnce bytes.
+	Once string
 	// Commit runs inside the accepting transaction once the Event is
 	// accepted. It must be pure and deterministic. Its Records are written
 	// only when the Event was newly added (a replayed delivery writes none);
