@@ -44,6 +44,6 @@ The stop event also says whether the daemon stopped on an error, and only its ki
 
 ## What is never sent
 
-No names of scopes, bindings, connections or extension entries, no repositories, issues, paths, hostnames, prompts, outcomes, logs, error text or secrets. The events are anonymous: PostHog stores no person profile for them, and the install ID isn't tied to a person or a machine.
+No names of scopes, bindings, connections or extension entries, no repositories, issues, paths, hostnames, prompts, outcomes, logs, error text or secrets. The events are anonymous: PostHog stores no person profile for them and adds no location from the sender's IP address, and the install ID isn't tied to a person or a machine.
 
 Telemetry never affects the daemon: a report that fails is dropped and not retried.
