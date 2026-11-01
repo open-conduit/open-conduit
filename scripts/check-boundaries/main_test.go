@@ -85,6 +85,11 @@ func TestDependencyClosures(t *testing.T) {
 		{"cli_cannot_import_migrate", []pkg{project("internal/cli", "internal/migrate")}, "internal/migrate"},
 		{"backup_runtime_leak", []pkg{project("internal/backup", "internal/runtime")}, "internal/runtime"},
 		{"unknown_package_leak", []pkg{project("newpackage", "domain")}, "domain"},
+		// Setup is an installed package (#243): no package imports it, from
+		// its own module or a copy back under extensions/setup.
+		{"setup_package_never_imported", []pkg{{ImportPath: module + "internal/bootstrap", Imports: []string{setupPackage}}}, "setup extension"},
+		{"setup_package_never_imported_transitively", []pkg{project("integration", "internal/bootstrap"), {ImportPath: module + "internal/bootstrap", Imports: []string{setupPackage + "/cmd/setup-extension"}}}, "setup extension"},
+		{"setup_never_compiled_back_in", []pkg{project("internal/bootstrap", "extensions/setup")}, "setup extension"},
 		{"external_bridge", []pkg{project("internal/runtime"), {ImportPath: "external.test/helper", Imports: []string{module + "extensions/git"}}}, ""},
 	} {
 		t.Run(test.name, func(t *testing.T) {
