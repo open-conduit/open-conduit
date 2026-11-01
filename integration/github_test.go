@@ -491,15 +491,18 @@ func TestGitHubProjectionConvergesAndRepairsDrift(t *testing.T) {
 	}
 	e.finishAttempt(second, domain.WorkCompleted, nil)
 	e.converge()
-	if !equal(e.fake.Labels(n), "agent-in-progress", "bug", "might-be-done") {
+	// Completed on an open issue: the claim comes off, so it no longer
+	// reads as if an agent were listening.
+	if !equal(e.fake.Labels(n), "bug", "might-be-done") {
 		t.Fatalf("completion projection: %v", e.fake.Labels(n))
 	}
 }
 
-// TestGitHubCompletedClosedIssueDropsTheClaim covers the label set a
-// Work's end projects: a completed Work's closed issue no longer reads as
-// claimed, and is still never claimed again.
-func TestGitHubCompletedClosedIssueDropsTheClaim(t *testing.T) {
+// TestGitHubCompletedIssueDropsTheClaim covers the label set a Work's end
+// projects: a completed Work's issue no longer reads as claimed, open or
+// closed, an open one is told once that nothing listens there any more,
+// and neither is claimed again.
+func TestGitHubCompletedIssueDropsTheClaim(t *testing.T) {
 	e := newGitHubEnv(t)
 	fk := e.fake
 	done, finished, failed := fk.OpenIssue("Done", "", ghAlice), fk.OpenIssue("Finished", "", ghAlice), fk.OpenIssue("Failed", "", ghAlice)
@@ -516,10 +519,32 @@ func TestGitHubCompletedClosedIssueDropsTheClaim(t *testing.T) {
 	if !equal(fk.Labels(done), "agent-in-progress", "might-be-done") {
 		t.Fatalf("done projection: %v", fk.Labels(done))
 	}
-	// Finished while the issue is open (its PR merged, the close not yet
-	// landed): still claimed, so nobody else picks it up.
-	if !equal(fk.Labels(finished), "agent-in-progress") {
-		t.Fatalf("finished open projection: %v", fk.Labels(finished))
+	// Finished while the issue is open (its PR didn't close it): the claim
+	// comes off and the issue says once that the agent has gone.
+	if labels := fk.Labels(finished); len(labels) != 0 {
+		t.Fatalf("finished open projection: %v", labels)
+	}
+	if cs := fk.Comments(finished); len(cs) != 1 || !strings.Contains(cs[0].Body, gh.FinishedNotice) {
+		t.Fatalf("finished open issue not told: %+v", cs)
+	}
+	if cs := fk.Comments(failed); len(cs) != 0 {
+		t.Fatalf("failed issue told it finished: %+v", cs)
+	}
+	e.clock.Add(time.Hour)
+	if e.converge(); len(fk.Comments(finished)) != 1 {
+		t.Fatalf("finished notice posted again: %+v", fk.Comments(finished))
+	}
+	countWorks := func() int {
+		var works int
+		e.read(func(tx storage.Tx) error { ws, err := tx.ListWorks(); works = len(ws); return err })
+		return works
+	}
+	// Open and unlabelled, it is still not claimed again: its completed
+	// Work owns the issue until a reopening starts a new generation.
+	e.reconcile()
+	e.route()
+	if n := countWorks(); n != 3 {
+		t.Fatalf("finished open issue claimed again: %d Works", n)
 	}
 	if !equal(fk.Labels(failed), "agent-in-progress", "agent-needs-help") {
 		t.Fatalf("failed projection: %v", fk.Labels(failed))
@@ -532,7 +557,10 @@ func TestGitHubCompletedClosedIssueDropsTheClaim(t *testing.T) {
 	e.clock.Add(61 * time.Second)
 	e.converge()
 	if labels := fk.Labels(finished); len(labels) != 0 {
-		t.Fatalf("closed finished issue still labelled: %v", labels)
+		t.Fatalf("closed finished issue labelled: %v", labels)
+	}
+	if len(fk.Comments(finished)) != 1 {
+		t.Fatalf("closing a finished issue posted again: %+v", fk.Comments(finished))
 	}
 	// Failed work still asks for help, closed or not.
 	if !equal(fk.Labels(failed), "agent-in-progress", "agent-needs-help") {
@@ -547,10 +575,8 @@ func TestGitHubCompletedClosedIssueDropsTheClaim(t *testing.T) {
 	// Without the claimed label the closed issue is still not claimed again.
 	e.reconcile()
 	e.route()
-	var works int
-	e.read(func(tx storage.Tx) error { ws, err := tx.ListWorks(); works = len(ws); return err })
-	if works != 3 {
-		t.Fatalf("completed issue claimed again: %d Works", works)
+	if n := countWorks(); n != 3 {
+		t.Fatalf("completed issue claimed again: %d Works", n)
 	}
 }
 

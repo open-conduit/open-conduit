@@ -426,12 +426,12 @@ func TestDaemonAllWorkflows(t *testing.T) {
 	}
 	d.until("A's outcome comment projected once", 30*time.Second, func() bool {
 		n := 0
-		for _, c := range gh.Comments(issue) {
+		for _, c := range withoutFinishedNotice(gh.Comments(issue)) {
 			if strings.Contains(c.Body, "open-conduit:agent") {
 				n++
 			}
 		}
-		return n == 1 && equal(gh.Labels(issue), "agent-in-progress", "bug", "might-be-done")
+		return n == 1 && equal(gh.Labels(issue), "bug", "might-be-done")
 	})
 
 	// 5. Workflow D: editing triage to an hour ago catches that slot up once;
