@@ -5,8 +5,12 @@ VERSION ?= dev
 COMMIT ?= $(shell git rev-parse --short HEAD)
 LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 # Per-package test timeout. The integration package (real daemon drills) takes
-# about 8 minutes on hosted runners under -race, close to go test's 10m default.
+# about 8 minutes on hosted runners under -race when run in one process.
 TEST_TIMEOUT ?= 20m
+# test runs the integration package in this many processes at once
+# (scripts/test-integration.sh). Its tests mostly wait on daemons, so the
+# shards overlap well even on a 4-vCPU hosted runner.
+INTEGRATION_SHARDS ?= 4
 
 .PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check container-test gateway-image check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot
 
@@ -26,7 +30,8 @@ vet:
 	$(GO) vet -tags faultinject ./internal/bootstrap ./cmd/open-conduit
 
 test:
-	$(GO) test -race -timeout $(TEST_TIMEOUT) ./...
+	$(GO) test -race -timeout $(TEST_TIMEOUT) $$($(GO) list ./... | grep -v '/integration$$')
+	GO='$(GO)' TEST_TIMEOUT='$(TEST_TIMEOUT)' scripts/test-integration.sh $(INTEGRATION_SHARDS)
 
 boundaries:
 	$(GO) run ./scripts/check-boundaries

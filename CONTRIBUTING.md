@@ -19,7 +19,7 @@ make check         # what CI runs
 
 - `fmt-check`: `gofmt` on every Go file. Run `make fmt` to fix it.
 - `vet`: `go vet`, including the fault-injection build tag.
-- `test`: `go test -race ./...`, including the daemon integration tests in `integration/`. This is the slow part.
+- `test`: `go test -race ./...`, including the daemon integration tests in `integration/`. This is the slow part. The integration tests run in `INTEGRATION_SHARDS` processes at once (4 by default, `scripts/test-integration.sh`). Each shard is a separate process, so a test there can't rely on state another test left behind.
 - `boundaries`: the package boundary checker (below).
 - `config-check`: the configuration schema and its example fixtures.
 - `docs-check`: the README and docs examples (below).
