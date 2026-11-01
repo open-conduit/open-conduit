@@ -237,6 +237,7 @@
     <dt>Operation ceiling</dt>
     <dd class="ops">{{range $f.Scope.Authorization.Operations}}<code>{{.}}</code>{{else}}{{if $d.Detailed}}—{{else}}<span class="quiet">not exposed by this daemon</span>{{end}}{{end}}</dd>
     {{- with $f.Scope.Authorization.ReadScopes}}<dt>May read scopes</dt><dd class="ops">{{range .}}<code>{{.}}</code>{{end}}</dd>{{end}}
+    {{- with $f.Scope.Authorization.FileScopes}}<dt>May file in scopes</dt><dd class="ops">{{range .}}<code>{{.}}</code>{{end}}</dd>{{end}}
     {{- with $f.Others}}<dt>Other extensions</dt><dd>{{range $i, $x := .}}{{if $i}}, {{end}}<b>{{$x.Name}}</b> <span class="quiet">{{source $x.Type}}</span>{{end}}</dd>{{end}}
   </dl>
 </section>

@@ -252,6 +252,7 @@ type wireAuthorization struct {
 	Connections []string `json:"connections"`
 	Operations  []string `json:"operations"`
 	ReadScopes  []string `json:"read_scopes"`
+	FileScopes  []string `json:"file_scopes,omitempty"`
 }
 type wireConfigBinding struct {
 	Name             string        `json:"name"`

@@ -181,6 +181,14 @@
             "pattern": "^[a-z][a-z0-9_-]{0,62}$"
           },
           "uniqueItems": true
+        },
+        "file_scopes": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+          },
+          "uniqueItems": true
         }
       },
       "required": [

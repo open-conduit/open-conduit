@@ -232,7 +232,7 @@ func (v *validator) resolve(id string) *effective {
 		}
 	}
 	e := &effective{enabled: true, concurrency: v.doc.Settings.Concurrency, admission: v.doc.Settings.AdmissionLimit,
-		auth: Authorization{[]string{}, []string{}, []string{}}, refs: map[string]string{}}
+		auth: Authorization{[]string{}, []string{}, []string{}, []string{}}, refs: map[string]string{}}
 	if parent != nil {
 		e = &effective{parent.enabled, parent.concurrency, parent.admission, parent.auth, maps.Clone(parent.refs),
 			parent.bindings.clone(), parent.routes.clone(), parent.extensions.clone()}
@@ -247,6 +247,7 @@ func (v *validator) resolve(id string) *effective {
 			{"connections", a.Connections, e.auth.Connections, func(s string) bool { return v.connections[s] }},
 			{"operations", a.Operations, e.auth.Operations, v.operation},
 			{"read_scopes", a.ReadScopes, e.auth.ReadScopes, func(s string) bool { _, ok := v.index[s]; return ok }},
+			{"file_scopes", a.FileScopes, e.auth.FileScopes, func(s string) bool { _, ok := v.index[s]; return ok }},
 		}
 		for _, c := range categories {
 			p := path + "/authorization/" + c.key
@@ -713,6 +714,23 @@ func (s *Snapshot) AuthorizeRead(source, target domain.ID) error {
 	}
 	dst, ok := s.Scopes[target]
 	if !ok || !dst.Enabled || !slices.Contains(src.Authorization.ReadScopes, string(target)) {
+		return ErrDenied
+	}
+	return nil
+}
+
+// AuthorizeFile allows the source scope itself or an enabled file_scopes
+// grant: filing an issue in, or commenting on, another scope's tracker.
+func (s *Snapshot) AuthorizeFile(source, target domain.ID) error {
+	src, ok := s.Scopes[source]
+	if !ok || !src.Enabled {
+		return ErrDenied
+	}
+	if source == target {
+		return nil
+	}
+	dst, ok := s.Scopes[target]
+	if !ok || !dst.Enabled || !slices.Contains(src.Authorization.FileScopes, string(target)) {
 		return ErrDenied
 	}
 	return nil

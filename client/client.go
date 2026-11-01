@@ -913,6 +913,7 @@ type ConfigAuthorization struct {
 	Connections []string `json:"connections"`
 	Operations  []string `json:"operations"`
 	ReadScopes  []string `json:"read_scopes"`
+	FileScopes  []string `json:"file_scopes,omitempty"`
 }
 
 // ConfigEntry is one thing an extension entry sets up, such as a scheduled

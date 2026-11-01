@@ -37,7 +37,7 @@ func (d *daemon) githubSourcesList() []gh.Source {
 
 // openTools prepares the shared tools instance.
 func (d *daemon) openTools() error {
-	tools, err := gh.NewTools(gh.ToolsOptions{Store: d.coord, Sources: d.githubSourcesList, Now: d.now, Jobs: d.scheduleJob, WaitProgress: d.waitProgress(gh.Type), Writers: d.githubWriters(), MayRead: d.mayRead})
+	tools, err := gh.NewTools(gh.ToolsOptions{Store: d.coord, Sources: d.githubSourcesList, Now: d.now, Jobs: d.scheduleJob, WaitProgress: d.waitProgress(gh.Type), Writers: d.githubWriters(), MayRead: d.mayRead, MayFile: d.mayFile})
 	if err != nil {
 		return err
 	}
@@ -73,6 +73,16 @@ func (d *daemon) authorizeAlias(_ context.Context, a runtime.AliasAuthorization)
 // the runtime authorizes a cross-scope wait when it registers.
 func (d *daemon) mayRead(reader, target domain.ID) error {
 	return d.authorizeAlias(context.Background(), runtime.AliasAuthorization{SourceScopeID: target, TargetScopeID: reader})
+}
+
+// mayFile answers whether filer's scope may file issues in, and comment on,
+// target's tracker (authorization.file_scopes).
+func (d *daemon) mayFile(filer, target domain.ID) error {
+	s, _ := d.configs.Current()
+	if s == nil {
+		return errors.New("no configuration")
+	}
+	return s.AuthorizeFile(filer, target)
 }
 
 // pluginDir is where the playbook plugin is written for claude-code.

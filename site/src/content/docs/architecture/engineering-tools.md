@@ -37,6 +37,8 @@ An agent reaches an operation as MCP `call {operation, input}` or `os call <oper
 - `github.wait` also binds Work without an issue: see below.
 - Every other operation still needs the Work's own issue and refuses `no_issue` without one.
 
+`github.issue.list`, `.view`, `.comment` and `.create` take an optional `project` naming another scope by ID or name, as a wait condition's `<project>/` does, so an agent can find and file issues where the work belongs without knowing its repository or connection. The call acts on that scope's first registered issue tracker, reading and writing on its entry's connection (a binding's own `connection` is granted in the calling scope, so it isn't used there). Creating or commenting needs the scope in the caller's `authorization.file_scopes` (`ToolsOptions.MayFile`, answered by `config.Snapshot.AuthorizeFile`); listing or viewing needs it in `file_scopes` or `read_scopes`. A refusal is `not_allowed` and names the grant to add; an unknown scope or one with no tracker is `no_project`. `view` and `comment` need `number` there (`number_required`), and `create` refuses `wait`/`until` (`hold_unsupported`): the new issue is routed by that scope's own routes. Writes are the same marked intents, held by the target entry's projector, so a retry opens or posts once.
+
 | Operation | Notes |
 | --- | --- |
 | `github.context` | repo, tracker, issue and URL, branch (`agent/issue-N` when the branch pattern allows it), base branch (`base_branch` or the repository default). |

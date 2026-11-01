@@ -522,6 +522,7 @@ func TestDomainScopes(t *testing.T) {
 func TestAuthorize(t *testing.T) {
 	m := generic(t, example(t, "inheritance"))
 	scope(m, 0)["authorization"].(map[string]any)["read_scopes"] = []any{"child"}
+	scope(m, 0)["authorization"].(map[string]any)["file_scopes"] = []any{"narrow"}
 	m["scopes"] = append(scopes(m),
 		map[string]any{"id": "narrow", "name": "narrow", "parent": "parent", "authorization": map[string]any{"connections": []any{}, "operations": []any{"emit"}, "read_scopes": []any{}},
 			"bindings": []any{map[string]any{"name": "run", "executor": "shell", "requires": map[string]any{}, "operations": []any{"emit"}, "secret_names": []any{}, "config": map[string]any{}}},
@@ -552,6 +553,34 @@ func TestAuthorize(t *testing.T) {
 	}
 	if !errors.Is(snap.AuthorizeRead("child", "parent"), ErrDenied) || !errors.Is(snap.AuthorizeRead("off", "off"), ErrDenied) || !errors.Is(snap.AuthorizeRead("parent", "absent"), ErrDenied) {
 		t.Fatal("read widened")
+	}
+	// Filing is its own grant: read_scopes doesn't imply it, nor it reading.
+	if snap.AuthorizeFile("parent", "narrow") != nil || snap.AuthorizeFile("child", "child") != nil {
+		t.Fatal("file denied")
+	}
+	if !errors.Is(snap.AuthorizeFile("parent", "child"), ErrDenied) || !errors.Is(snap.AuthorizeRead("parent", "narrow"), ErrDenied) || !errors.Is(snap.AuthorizeFile("narrow", "parent"), ErrDenied) {
+		t.Fatal("file widened")
+	}
+}
+
+// file_scopes is optional, must name defined scopes, and a child's may only
+// narrow its parent's.
+func TestFileScopesValidation(t *testing.T) {
+	m := generic(t, example(t, "inheritance"))
+	scope(m, 0)["authorization"].(map[string]any)["file_scopes"] = []any{"absent"}
+	_, err := Validate(encode(t, m), registry())
+	if got := diagnostics(t, err); len(got) != 1 || got[0].Path+": "+got[0].Code != "scopes/0/authorization/file_scopes: unknown_reference" {
+		t.Fatalf("diagnostics %v", got)
+	}
+	m = generic(t, example(t, "inheritance"))
+	m["scopes"] = append(scopes(m), map[string]any{"id": "wide", "name": "wide", "parent": "parent",
+		"authorization": map[string]any{"connections": []any{}, "operations": []any{}, "read_scopes": []any{}, "file_scopes": []any{"parent"}}})
+	_, err = Validate(encode(t, m), registry())
+	got := diagnostics(t, err)
+	if !slices.ContainsFunc(got, func(d Diagnostic) bool {
+		return d.Path == "scopes/2/authorization/file_scopes" && d.Code == "authority_widening"
+	}) {
+		t.Fatalf("diagnostics %v", got)
 	}
 }
 

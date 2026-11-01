@@ -109,6 +109,10 @@ type ToolsOptions struct {
 	// rather than when the wait registers. Nil leaves the check to the
 	// runtime.
 	MayRead func(reader, target domain.ID) error
+	// MayFile answers whether a scope may file issues in, and comment on,
+	// another scope's tracker (its authorization.file_scopes). Nil allows
+	// no other scope.
+	MayFile func(filer, target domain.ID) error
 }
 
 // Tools implements the operations.
@@ -333,7 +337,9 @@ func (t *Tools) writer(b *bound, src Source) (string, error) {
 // src.Client) when the binding names no `github` connection of its own.
 func (t *Tools) bindingClient(b *bound, src Source) (string, *Client, error) {
 	id := b.a.Connection
-	if id == "" || id == src.Connection {
+	// Another project's tracker is written on its own connection: the
+	// binding's is granted in this Work's scope, not that one.
+	if id == "" || id == src.Connection || src.Settings.Scope != string(b.work.ScopeID) {
 		return "", src.Client, nil
 	}
 	switch c, err := t.o.Writers.Client(b.work.ScopeID, id, src.Client); {
@@ -484,17 +490,29 @@ func (t *Tools) issueNumber(b *bound, n int) int {
 
 func (t *Tools) issueView(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
 	var in struct {
-		Number int `json:"number"`
+		Number  int    `json:"number"`
+		Project string `json:"project"`
 	}
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
-	n, repo := t.issueNumber(b, in.Number), b.issue.Settings.Repo
-	i, err := b.issue.Client.Issue(ctx, repo, n)
+	src, other, err := t.issueProject(ctx, b, in.Project, false)
 	if err != nil {
 		return nil, err
 	}
-	comments, err := b.issue.Client.IssueComments(ctx, repo, n, time.Time{})
+	n, reply := t.issueNumber(b, in.Number), ""
+	if other {
+		if in.Number <= 0 {
+			return nil, refuse("number_required", "name the issue in project %s with number", in.Project)
+		}
+		reply = fmt.Sprintf("\"project\": %q, \"number\": %d, ", in.Project, n)
+	}
+	repo := src.Settings.Repo
+	i, err := src.Client.Issue(ctx, repo, n)
+	if err != nil {
+		return nil, err
+	}
+	comments, err := src.Client.IssueComments(ctx, repo, n, time.Time{})
 	if err != nil {
 		return nil, err
 	}
@@ -505,7 +523,7 @@ func (t *Tools) issueView(ctx context.Context, b *bound, data json.RawMessage) (
 	out := map[string]any{"number": n, "title": i.Title, "url": i.HTMLURL, "state": i.State, "author": i.User.Login, "labels": labels, "body": strings.TrimSpace(i.Body)}
 	views := []commentView{}
 	for _, c := range comments {
-		views = append(views, view(KindIssue, c, fmt.Sprintf("call %s {\"body\": …}", OpIssueComment)))
+		views = append(views, view(KindIssue, c, fmt.Sprintf("call %s {%s\"body\": …}", OpIssueComment, reply)))
 	}
 	out["comments"] = views
 	return out, nil
@@ -540,8 +558,9 @@ func (t *Tools) post(ctx context.Context, b *bound, src Source, intent Intent) (
 
 func (t *Tools) issueComment(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
 	var in struct {
-		Body   string `json:"body"`
-		Number int    `json:"number"`
+		Body    string `json:"body"`
+		Number  int    `json:"number"`
+		Project string `json:"project"`
 	}
 	if err := decode(data, &in); err != nil {
 		return nil, err
@@ -549,15 +568,28 @@ func (t *Tools) issueComment(ctx context.Context, b *bound, data json.RawMessage
 	if strings.TrimSpace(in.Body) == "" {
 		return nil, refuse("empty_body", "the body is empty")
 	}
-	return t.post(ctx, b, b.issue, Intent{ID: intentID(ctx, b, OpIssueComment, data), Work: b.work.ID, Number: t.issueNumber(b, in.Number), Body: in.Body, Durable: true})
+	src, other, err := t.issueProject(ctx, b, in.Project, true)
+	if err != nil {
+		return nil, err
+	}
+	if other && in.Number <= 0 {
+		return nil, refuse("number_required", "name the issue in project %s with number", in.Project)
+	}
+	return t.post(ctx, b, src, Intent{ID: intentID(ctx, b, OpIssueComment, data), Work: b.work.ID, Number: t.issueNumber(b, in.Number), Body: in.Body, Durable: true})
 }
 
 func (t *Tools) issueList(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct{}
+	var in struct {
+		Project string `json:"project"`
+	}
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
-	issues, err := b.issue.Client.OpenIssues(ctx, b.issue.Settings.Repo)
+	src, _, err := t.issueProject(ctx, b, in.Project, false)
+	if err != nil {
+		return nil, err
+	}
+	issues, err := src.Client.OpenIssues(ctx, src.Settings.Repo)
 	if err != nil {
 		return nil, err
 	}
@@ -570,6 +602,42 @@ func (t *Tools) issueList(ctx context.Context, b *bound, data json.RawMessage) (
 		out = append(out, map[string]any{"number": i.Number, "title": i.Title, "labels": labels, "url": i.HTMLURL})
 	}
 	return map[string]any{"issues": out}, nil
+}
+
+// issueProject is the tracker an issue operation acts on: the Work's own
+// when project is empty or names its own scope, else that project's
+// registered tracker (other is then true). Filing (create, comment) needs
+// the project in this scope's authorization.file_scopes; looking (list,
+// view) is allowed by file_scopes or read_scopes. A refusal names the grant
+// to add, so the agent can tell the owner.
+func (t *Tools) issueProject(ctx context.Context, b *bound, project string, filing bool) (src Source, other bool, err error) {
+	project = strings.TrimSpace(project)
+	if project == "" || project == string(b.work.ScopeID) {
+		return b.issue, false, nil
+	}
+	scope, err := t.scopeNamed(ctx, project)
+	if err != nil {
+		return Source{}, false, err
+	}
+	if scope == "" {
+		return Source{}, false, refuse("no_project", "no project here is called %s", project)
+	}
+	if scope == b.work.ScopeID {
+		return b.issue, false, nil
+	}
+	mayFile := t.o.MayFile != nil && t.o.MayFile(b.work.ScopeID, scope) == nil
+	mayRead := t.o.MayRead != nil && t.o.MayRead(b.work.ScopeID, scope) == nil
+	switch {
+	case filing && !mayFile:
+		return Source{}, false, refuse("not_allowed", "project %s may not file issues in %s; to allow it, add %q to %s's authorization.file_scopes", b.work.ScopeID, scope, string(scope), b.work.ScopeID)
+	case !filing && !mayFile && !mayRead:
+		return Source{}, false, refuse("not_allowed", "project %s may not read %s's issues; to allow it, add %q to %s's authorization.file_scopes (or read_scopes)", b.work.ScopeID, scope, string(scope), b.work.ScopeID)
+	}
+	issue, _, found := t.trackerIn(scope)
+	if !found {
+		return Source{}, false, refuse("no_project", "project %s has no GitHub repository registered", project)
+	}
+	return issue, true, nil
 }
 
 // holdFor reads conditions and a time into a hold, checking each names
@@ -610,10 +678,11 @@ func (t *Tools) holdFor(ctx context.Context, b *bound, conds []string, until str
 
 func (t *Tools) issueCreate(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
 	var in struct {
-		Title string   `json:"title"`
-		Body  string   `json:"body"`
-		Wait  []string `json:"wait"`
-		Until string   `json:"until"`
+		Title   string   `json:"title"`
+		Body    string   `json:"body"`
+		Wait    []string `json:"wait"`
+		Until   string   `json:"until"`
+		Project string   `json:"project"`
 	}
 	if err := decode(data, &in); err != nil {
 		return nil, err
@@ -623,6 +692,13 @@ func (t *Tools) issueCreate(ctx context.Context, b *bound, data json.RawMessage)
 	}
 	body, labels := in.Body, []string(nil)
 	held := len(in.Wait) > 0 || in.Until != ""
+	src, other, err := t.issueProject(ctx, b, in.Project, true)
+	if err != nil {
+		return nil, err
+	}
+	if other && held {
+		return nil, refuse("hold_unsupported", "an issue in project %s can't be held: open it without wait or until, and that project's routes pick it up", in.Project)
+	}
 	var h Hold
 	if held {
 		var err error
@@ -632,14 +708,14 @@ func (t *Tools) issueCreate(ctx context.Context, b *bound, data json.RawMessage)
 		body += "\n\n" + h.Marker()
 		labels = []string{b.issue.Settings.Labels.Scheduled}
 	}
-	issue, state, err := b.issue.Projector.CreateIssue(ctx, IssueIntent{ID: intentID(ctx, b, OpIssueCreate, data), Work: b.work.ID, Title: in.Title, Body: body, Labels: labels})
+	issue, state, err := src.Projector.CreateIssue(ctx, IssueIntent{ID: intentID(ctx, b, OpIssueCreate, data), Work: b.work.ID, Title: in.Title, Body: body, Labels: labels})
 	if err != nil && state != intentAttempted {
 		return nil, err
 	}
 	out := map[string]any{"state": state}
 	if issue.Number > 0 {
 		out["state"], out["number"], out["url"] = intentPosted, issue.Number, issue.URL
-	} else if b.issue.Settings.Projection.DryRun {
+	} else if src.Settings.Projection.DryRun {
 		out["state"], out["note"] = "dry_run", "dry run: nothing was opened"
 	} else {
 		out["state"], out["note"] = "pending", "the issue is being confirmed and will be opened once; do not open it again"

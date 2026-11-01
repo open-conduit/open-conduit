@@ -270,7 +270,7 @@ type configData struct {
 func (d configData) Detailed() bool {
 	for _, sc := range d.Config.Scopes {
 		a := sc.Authorization
-		if len(a.Connections)+len(a.Operations)+len(a.ReadScopes) > 0 {
+		if len(a.Connections)+len(a.Operations)+len(a.ReadScopes)+len(a.FileScopes) > 0 {
 			return true
 		}
 		for _, b := range sc.Bindings {
