@@ -156,9 +156,13 @@ func (t *Tools) Registration() extension.Registration {
 			return domain.Payload{Schema: "github.tool.v1", Data: data}, nil
 		}
 	}
-	// h binds the Work's issue; pr binds the Work with or without one.
+	// h binds the Work's issue; pr binds the Work with or without one;
+	// repo binds a Work that has a repository, its issue's or its PR's.
 	h := func(f handler) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
 		return wrap(t.bind, f)
+	}
+	repo := func(f handler) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+		return wrap(t.bindRepo, f)
 	}
 	pr := func(f handler) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
 		return wrap(t.bindWork, f)
@@ -167,9 +171,9 @@ func (t *Tools) Registration() extension.Registration {
 		DependencyFilter: DependencyFilter,
 		Operations: []extension.Operation{
 			{Name: OpContext, Handler: pr(t.context)},
-			{Name: OpIssueView, Handler: h(t.issueView)},
+			{Name: OpIssueView, Handler: repo(t.issueView)},
 			{Name: OpIssueComment, Handler: h(t.issueComment)},
-			{Name: OpIssueList, Handler: h(t.issueList)},
+			{Name: OpIssueList, Handler: repo(t.issueList)},
 			{Name: OpIssueCreate, Handler: h(t.issueCreate)},
 			{Name: OpPRList, Handler: h(t.prList)},
 			{Name: OpPRView, Handler: pr(t.prView)},
@@ -179,7 +183,7 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpPRReview, Handler: pr(t.prReview)},
 			{Name: OpChecks, Handler: pr(t.checks)},
 			{Name: OpUpload, Handler: h(t.upload)},
-			{Name: OpFetch, Handler: h(t.fetch)},
+			{Name: OpFetch, Handler: repo(t.fetch)},
 			{Name: OpHoldStatus, Handler: h(t.holdStatus)},
 			{Name: OpGitCredential, Handler: pr(t.gitCredential)},
 			{Name: OpWait, Wait: t.waitPlan(false)},
@@ -240,6 +244,19 @@ func (t *Tools) bind(ctx context.Context, a extension.Authority) (*bound, error)
 		return nil, err
 	}
 	if b.number == 0 {
+		return nil, refuse("no_issue", "this Work is not a GitHub issue of a registered repository")
+	}
+	return b, nil
+}
+
+// bindRepo resolves a Work that has a repository: an issue's Work, or a
+// PR's own Work, which reads issues and links in its PR's repository.
+func (t *Tools) bindRepo(ctx context.Context, a extension.Authority) (*bound, error) {
+	b, err := t.bindWork(ctx, a)
+	if err != nil {
+		return nil, err
+	}
+	if b.number == 0 && b.pull == 0 {
 		return nil, refuse("no_issue", "this Work is not a GitHub issue of a registered repository")
 	}
 	return b, nil
@@ -526,6 +543,9 @@ func (t *Tools) issueView(ctx context.Context, b *bound, data json.RawMessage) (
 		return nil, err
 	}
 	n, reply := t.issueNumber(b, in.Number), ""
+	if n <= 0 {
+		return nil, refuse("number_required", "this Work is PR #%d, not an issue: name the issue with number", b.pull)
+	}
 	if other {
 		if in.Number <= 0 {
 			return nil, refuse("number_required", "name the issue in project %s with number", in.Project)

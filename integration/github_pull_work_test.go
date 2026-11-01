@@ -90,6 +90,12 @@ func TestGitHubPullRequestWorkRunsAlongsideTheBuilder(t *testing.T) {
 	if ctx["pr"] != float64(pr) || ctx["repo"] != ghRepo {
 		t.Fatalf("PR context: %v", ctx)
 	}
+	// It reads the issue the PR closes by number; with none it is told to name one.
+	if got := e.must(r, gh.OpIssueView, "issue", map[string]any{"number": n}); got["title"] != "Header wobbles" {
+		t.Fatalf("issue from the PR's Work: %v", got)
+	}
+	_, err := e.call(r, gh.OpIssueView, "issue-unnamed", map[string]any{})
+	refused(t, err, "number_required")
 	e.must(r, gh.OpPRReview, "review-1", map[string]any{"number": pr, "event": "request_changes", "body": "Please name the constant.",
 		"comments": []map[string]any{{"path": "header.go", "line": 3, "body": "This magic number."}}})
 	e.must(r, gh.OpWait, "park-1", map[string]any{"reason": "Waiting for changes."})
