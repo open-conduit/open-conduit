@@ -607,3 +607,28 @@ func TestExternalExecutorLeaseFencingAcrossRestart(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// An emit operation declared without commit accepts its Event through a
+// subprocess package, writes nothing and returns no output; a retry with the
+// same request ID replays it rather than accepting a second Event.
+func TestExternalEmissionWithoutCommit(t *testing.T) {
+	r := fixtureRemote(t)
+	ops := append(allToolbeltOperations(), "fixture.notify")
+	h := newExternalToolbeltHarness(t, "persistent", r.Registration(), ops)
+	ctx := extension.WithCallRequestID(context.Background(), "notify-1")
+	call := extension.ToolCall{Operation: "fixture.notify", Input: domain.Payload{Schema: "fixture.input.v1", Data: []byte(`{}`)}}
+	before := eventCount(t, h.f.Store, h.f.Clock.Now())
+	out, err := h.belt.Call(ctx, h.token, call)
+	if err != nil {
+		t.Fatalf("emit without commit: %v", err)
+	}
+	if out.Event == nil || out.Event.Event.Type != "fixture.changed.v1" || len(out.Output.Data) != 0 {
+		t.Fatalf("emission result %+v", out)
+	}
+	if _, err := h.belt.Call(ctx, h.token, call); err != nil {
+		t.Fatalf("retry: %v", err)
+	}
+	if n := eventCount(t, h.f.Store, h.f.Clock.Now()); n != before+1 {
+		t.Fatalf("emission accepted %d events", n-before)
+	}
+}

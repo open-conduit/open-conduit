@@ -34,7 +34,7 @@ func (t *Toolbelt) translatedEmit(ctx context.Context, digest, owner string, op 
 	if ev.ID != "" || ev.Source != "" || ev.CausationID != "" || ev.WorkID != "" || ev.ExecutionID != "" || !ev.ReceivedAt.IsZero() {
 		return out, extension.ErrUnauthorized
 	}
-	if ev.DeliveryID == "" || len(ev.DeliveryID) > 256 || strings.HasPrefix(ev.Type, "core.") || plan.Commit == nil {
+	if ev.DeliveryID == "" || len(ev.DeliveryID) > 256 || strings.HasPrefix(ev.Type, "core.") {
 		return out, extension.ErrInvalid
 	}
 	if k := ev.CorrelationKey; k != nil && (k.Source == "" || k.ExternalID == "") {
@@ -107,9 +107,12 @@ func (t *Toolbelt) translatedEmit(ctx context.Context, digest, owner string, op 
 		if er = getJSON(tx, causalNamespace, causalKey(accepted.Event.ID), &info); er != nil && !errors.Is(er, storage.ErrNotFound) {
 			return er
 		}
-		commit, er := plan.Commit(extension.Emitted{Event: accepted, Added: added, Root: info.Root, Depth: info.Depth})
-		if er != nil {
-			return er
+		// A plan without Commit accepts its Event and writes nothing.
+		var commit extension.EmitCommit
+		if plan.Commit != nil {
+			if commit, er = plan.Commit(extension.Emitted{Event: accepted, Added: added, Root: info.Root, Depth: info.Depth}); er != nil {
+				return er
+			}
 		}
 		for _, r := range commit.Records {
 			if !ownedNamespace(r.Namespace, owner, ".") || r.Key == "" || len(r.Key) > 512 {
