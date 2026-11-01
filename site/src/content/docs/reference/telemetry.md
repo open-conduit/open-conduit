@@ -3,7 +3,7 @@ title: Usage telemetry
 description: What anonymous usage data the daemon sends, and how to turn it off.
 ---
 
-A release build of the daemon sends a few anonymous events to the project's PostHog, so we can see how many installs there are, how much they run and which extensions they use. It's on by default and easy to turn off.
+A release build of the daemon sends a few anonymous events to the project's PostHog (EU cloud), so we can see how many installs there are, how much they run and which extensions they use. It's on by default and easy to turn off.
 
 ## Turn it off
 

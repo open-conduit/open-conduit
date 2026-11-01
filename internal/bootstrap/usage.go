@@ -31,13 +31,14 @@ import (
 // by default; serve --no-telemetry, OPEN_CONDUIT_NO_TELEMETRY or DO_NOT_TRACK
 // turn it off, and a dev build (no release version) never sends.
 
-// usageKey is the PostHog project key the reports go to. It is write-only
-// (PostHog's public "phc_" key): it can send events, never read them. Empty
-// sends nothing.
-const usageKey = ""
+// usageKey is the PostHog project API key the reports go to, set at release
+// (.goreleaser.yaml, from the POSTHOG_TELEMETRY_KEY repository variable). It
+// is PostHog's public "phc_" key, which can send events but never read them.
+// Empty sends nothing.
+var usageKey = ""
 
-// usageURL is PostHog's capture endpoint for usageKey's project.
-const usageURL = "https://us.i.posthog.com/i/v0/e/"
+// usageURL is PostHog's EU capture endpoint, where usageKey's project lives.
+const usageURL = "https://eu.i.posthog.com/i/v0/e/"
 
 // usageInterval paces the heartbeat a running daemon sends.
 const usageInterval = 24 * time.Hour

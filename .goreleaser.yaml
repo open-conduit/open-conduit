@@ -26,9 +26,11 @@ builds:
     goarch: [amd64, arm64]
     flags: [-trimpath]
     # A release pins the gateway image it published (scripts/publish-gateway.sh,
-    # run by the release before this) by digest; a snapshot has none.
+    # run by the release before this) by digest; a snapshot has none. It also
+    # embeds the usage telemetry key (the POSTHOG_TELEMETRY_KEY repository
+    # variable); without one the binary sends no telemetry.
     ldflags:
-      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X github.com/open-conduit/open-conduit/extensions/docker.GatewayImage={{ index .Env "GATEWAY_IMAGE" }}
+      - -s -w -X main.version={{.Version}} -X main.commit={{.ShortCommit}} -X github.com/open-conduit/open-conduit/extensions/docker.GatewayImage={{ index .Env "GATEWAY_IMAGE" }} -X github.com/open-conduit/open-conduit/internal/bootstrap.usageKey={{ index .Env "POSTHOG_TELEMETRY_KEY" }}
   # The toolbelt that runs call. It lives beside open-conduit, which finds it
   # there (through a symlink too); it is never put on PATH by the cask.
   - id: os
