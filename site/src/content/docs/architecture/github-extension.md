@@ -119,11 +119,13 @@ Labels influence only this claim decision. Work lifecycle never reads them.
 
 **Labels** are level-triggered:
 
-- `claimed` is present while Work owns the issue. It comes off once completed Work's issue is closed: admission never claims a closed issue, and a reopening starts a new generation, which is claimed again. Failed and cancelled Work keep it.
+- `claimed` is present while Work owns the issue. It comes off once the Work completes, whether or not the issue is closed: nothing hears the issue any more, so the label would promise an agent who isn't there. The completed Work still owns the issue's generation, so admission never claims it again; a reopening starts a new generation, which is claimed again. Failed and cancelled Work keep it.
 - No status label is set while an attempt runs.
 - After an attempt, the status comes from an outcome declaring `core.turn.v1` `{status}` (or, for one release, the `github.status.v1` stored outcomes keep). Otherwise completed Work projects `done`, failed Work projects `help` and cancelled Work projects none.
 
-The projector re-reads the issue and changes only managed labels. It reapplies them when desired state changes, and at `verify_seconds` for nonterminal Work, which repairs drift. Completed Work whose issue is still open is also re-read at `verify_seconds` until the issue closes.
+The projector re-reads the issue and changes only managed labels. It reapplies them when desired state changes, and at `verify_seconds` for nonterminal Work, which repairs drift.
+
+When Work completes and its issue is still open (its PR didn't close it), the projector posts one notice on the issue, as the durable intent `finished/<work id>`: the agent has finished, a comment there won't reach one, and closing and reopening the issue brings one back. A human comment on that issue is otherwise routed `terminal` and dropped, like any input for terminal Work.
 
 **Comments** are not re-derivable. An outcome's `core.turn.v1` `{comment}` becomes an intent with the stable ID `outcome/<execution id>` and a durable KV record. The record moves through these states:
 

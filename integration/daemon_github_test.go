@@ -9,8 +9,21 @@ import (
 	"testing"
 	"time"
 
+	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
 )
+
+// withoutFinishedNotice drops the notice an issue that is still open gets
+// when its Work completes, leaving the comments the agent asked for.
+func withoutFinishedNotice(cs []githubtest.Comment) []githubtest.Comment {
+	var out []githubtest.Comment
+	for _, c := range cs {
+		if !strings.Contains(c.Body, gh.FinishedNotice) {
+			out = append(out, c)
+		}
+	}
+	return out
+}
 
 // githubDaemonConfig binds a GitHub scope whose shell binding completes with a
 // declared tracker status and comment.
@@ -67,9 +80,9 @@ func TestDaemonGitHubReconcileToProjection(t *testing.T) {
 		return len(s) == 1 && s[0] == "github.issue:completed"
 	})
 	d.until("labels and comment projected", 30*time.Second, func() bool {
-		return equal(fake.Labels(n), "agent-in-progress", "bug", "might-be-done") && len(fake.Comments(n)) == 1
+		return equal(fake.Labels(n), "bug", "might-be-done") && len(fake.Comments(n)) == 2 && len(withoutFinishedNotice(fake.Comments(n))) == 1
 	})
-	body := fake.Comments(n)[0].Body
+	body := withoutFinishedNotice(fake.Comments(n))[0].Body
 	if !strings.Contains(body, "Fixed by the daemon.") || !strings.Contains(body, "open-conduit:agent") {
 		t.Fatalf("projected comment: %q", body)
 	}
@@ -93,7 +106,7 @@ func TestDaemonGitHubReconcileToProjection(t *testing.T) {
 	d.kill()
 	d.start("")
 	time.Sleep(2 * time.Second)
-	if s := works(); len(s) != 1 || len(fake.Comments(n)) != 1 {
+	if s := works(); len(s) != 1 || len(fake.Comments(n)) != 2 {
 		t.Fatalf("after restart: works %v comments %d", s, len(fake.Comments(n)))
 	}
 }
@@ -161,9 +174,9 @@ func TestDaemonGitHubHeldIssueAndTools(t *testing.T) {
 	}
 	d.until("released and worked", 60*time.Second, func() bool { return state() == "github.issue.held:completed" })
 	d.until("comment and labels", 30*time.Second, func() bool {
-		return len(fake.Comments(n)) == 1 && equal(fake.Labels(n), "agent-in-progress", "might-be-done")
+		return len(fake.Comments(n)) == 2 && len(withoutFinishedNotice(fake.Comments(n))) == 1 && equal(fake.Labels(n), "might-be-done")
 	})
-	body := fake.Comments(n)[0].Body
+	body := withoutFinishedNotice(fake.Comments(n))[0].Body
 	if !strings.Contains(body, "Picked up by the daemon.") || !strings.Contains(body, "open-conduit:agent") {
 		t.Fatalf("tool comment: %q", body)
 	}

@@ -71,8 +71,7 @@ type labelState struct {
 	Work       domain.ID `json:"work"`
 	Applied    string    `json:"applied"`
 	VerifiedAt time.Time `json:"verified_at"`
-	// Closed is the issue's state when the labels were last applied: a
-	// completed Work's issue is verified until it closes.
+	// Closed is the issue's state when the labels were last applied.
 	Closed bool `json:"closed,omitempty"`
 }
 
@@ -356,22 +355,24 @@ func declaration(x *domain.Execution) (domain.TurnDeclaration, bool) {
 // absent while an attempt runs (v1: the status comes off while a turn runs).
 // It assumes the issue is open.
 func (p *Projector) Desired(w domain.Work, latest *domain.Execution) []string {
-	return p.desired(w, latest, false, false)
+	return p.desired(w, latest, false)
 }
 
 // desired adds the hold projections (v1): a held issue carries only the
 // scheduled label until its first agent turn starts (then it is claimed),
-// and Work parked on an agent's wait carries scheduled with no status. A
-// completed Work's closed issue drops the claimed label: admission never
-// claims a closed issue, and a reopening starts a new generation, which is
-// admitted with or without it.
-func (p *Projector) desired(w domain.Work, latest *domain.Execution, held, closed bool) []string {
+// and Work parked on an agent's wait carries scheduled with no status.
+// Completed Work drops the claimed label, open issue or not: nothing hears
+// the issue any more, so the label would promise an agent who isn't there.
+// Its Work still owns the issue's generation, so admission never claims it
+// again; a reopening starts a new generation, which is admitted with or
+// without the label.
+func (p *Projector) desired(w domain.Work, latest *domain.Execution, held bool) []string {
 	l := p.o.Settings.Labels
 	if held && !w.State.Terminal() {
 		return []string{l.Scheduled}
 	}
 	var out []string
-	if !closed || w.State != domain.WorkCompleted {
+	if w.State != domain.WorkCompleted {
 		out = append(out, l.Claimed)
 	}
 	if w.State == domain.WorkRunning || w.State == domain.WorkCancelled {
@@ -486,13 +487,13 @@ func labelDigest(labels []string) string {
 func (p *Projector) converge(ctx context.Context, item projected) ([]string, bool, error) {
 	issue, err := p.o.Client.Issue(ctx, p.o.Settings.Repo, item.number)
 	if IsStatus(err, http.StatusNotFound) || IsStatus(err, http.StatusGone) {
-		return p.desired(item.work, item.latest, item.held, true), true, nil
+		return p.desired(item.work, item.latest, item.held), true, nil
 	}
 	if err != nil {
 		return nil, false, err
 	}
 	closed := issue.State == "closed"
-	desired := p.desired(item.work, item.latest, item.held, closed)
+	desired := p.desired(item.work, item.latest, item.held)
 	l := p.o.Settings.Labels
 	managed := append([]string{l.Claimed, l.Scheduled}, l.Statuses()...)
 	var current []string
@@ -559,11 +560,9 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			if err := p.transact(ctx, func(tx storage.Tx) error { _, e := p.get(tx, key, &st); return e }); err != nil {
 				return res, err
 			}
-			want := labelDigest(p.desired(item.work, item.latest, item.held, st.Work == item.work.ID && st.Closed))
-			// Terminal Work is settled, except a completed Work whose issue
-			// is still open: it drops the claimed label once the issue closes.
-			watch := !item.work.State.Terminal() || item.work.State == domain.WorkCompleted && !st.Closed
-			verifyDue := watch && p.o.Now().Sub(st.VerifiedAt) >= p.o.Settings.VerifyInterval
+			want := labelDigest(p.desired(item.work, item.latest, item.held))
+			// Terminal Work is settled: its labels are applied once.
+			verifyDue := !item.work.State.Terminal() && p.o.Now().Sub(st.VerifiedAt) >= p.o.Settings.VerifyInterval
 			if st.Applied == want && st.Work == item.work.ID && !verifyDue {
 				continue
 			}
@@ -577,6 +576,16 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 			}
 			if p.o.Settings.Projection.DryRun {
 				continue
+			}
+			if item.work.State == domain.WorkCompleted && !closed {
+				// Completed Work on an issue that is still open (its PR
+				// didn't close it): say so once, or a comment there goes
+				// unheard. Delivery finishes as a durable intent.
+				if _, err := p.Deliver(ctx, finishedIntent(item)); err != nil {
+					if stop := fail("comment", err); stop != nil {
+						return res, stop
+					}
+				}
 			}
 			res.Labeled++
 			if err := p.transact(ctx, func(tx storage.Tx) error {
@@ -657,6 +666,15 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 		}
 	}
 	return res, nil
+}
+
+// FinishedNotice is posted once on an issue that is still open when its
+// Work completes.
+const FinishedNotice = "The agent's work on this issue has finished, so nothing is listening here any more: " +
+	"a comment won't reach an agent. To have an agent pick the issue up again, close and reopen it."
+
+func finishedIntent(item projected) Intent {
+	return Intent{ID: "finished/" + string(item.work.ID), Work: item.work.ID, Number: item.number, Body: FinishedNotice, Durable: true}
 }
 
 func (p *Projector) state(ctx context.Context, intent string) (string, error) {
