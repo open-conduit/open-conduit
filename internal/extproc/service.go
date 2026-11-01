@@ -521,15 +521,28 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			if limit <= 0 || limit > 1000 {
 				limit = 1000
 			}
-			events, err := tx.Events(p.After, limit)
-			if err != nil {
-				return err
-			}
+			// Filter by scope before the limit: read the log a batch at a
+			// time until the page is full or the log ends, so a page comes
+			// back short only at the end of the log however many other
+			// scopes' events sit between the extension's own.
 			list := []protocol.AcceptedEvent{}
-			for _, a := range events {
-				if scope, err := runtime.EventScopeInTx(tx, a); err == nil && allowed[scope] {
-					list = append(list, protocol.FromAccepted(a))
+			for after := p.After; len(list) < limit; {
+				events, err := tx.Events(after, limit)
+				if err != nil {
+					return err
 				}
+				for _, a := range events {
+					if len(list) == limit {
+						break
+					}
+					if scope, err := runtime.EventScopeInTx(tx, a); err == nil && allowed[scope] {
+						list = append(list, protocol.FromAccepted(a))
+					}
+				}
+				if len(events) < limit {
+					break
+				}
+				after = events[len(events)-1].Sequence
 			}
 			out = list
 		case "state.scopes":

@@ -11,6 +11,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -521,6 +522,68 @@ func TestSDKStoreOverProtocol(t *testing.T) {
 	// A foreign namespace is refused at commit.
 	if err := store.Transact(ctx, g, func(tx storage.Tx) error { return tx.Put("slack.projection.x", "k", []byte("x")) }); !errors.Is(err, extension.ErrUnauthorized) {
 		t.Fatalf("foreign namespace: %v", err)
+	}
+}
+
+// TestSDKStoreEventsSkipOtherScopes: a package reads every event of its
+// scopes through sdk.Store however many other scopes' events sit between
+// them, because state.events filters by scope before it applies the limit
+// and so returns a short page only at the end of the log (#251).
+func TestSDKStoreEventsSkipOtherScopes(t *testing.T) {
+	e := newExtEnv(t)
+	ctx := context.Background()
+	accept := func(scope domain.ID, id string) {
+		t.Helper()
+		if err := e.store.Transact(ctx, storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
+			_, _, err := runtime.AcceptInTx(tx, scope, domain.Event{ID: domain.ID(id), Type: "other.thing", Source: "other", DeliveryID: id, OccurredAt: e.clock.Now(), ReceivedAt: e.clock.Now()})
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	accept(extensionScope, "own-1")
+	if err := e.store.Transact(ctx, storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
+		for i := range 2500 { // more than two of the host's pages
+			id := "foreign-" + strconv.Itoa(i)
+			if _, _, err := runtime.AcceptInTx(tx, "other-scope", domain.Event{ID: domain.ID(id), Type: "other.thing", Source: "other", DeliveryID: id, OccurredAt: e.clock.Now(), ReceivedAt: e.clock.Now()}); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	accept(extensionScope, "own-2")
+
+	svc, err := extproc.NewService(notes.Manifest(notes.Options{Release: 2}), e.deps())
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := pipeHost(t, svc)
+	// One host page holds only the extension's events.
+	page, err := host.Events(ctx, 0, 1)
+	if err != nil || len(page) != 1 || page[0].Event.ID != "own-1" {
+		t.Fatalf("first page: %+v %v", page, err)
+	}
+	page, err = host.Events(ctx, page[0].Sequence, 1)
+	if err != nil || len(page) != 1 || page[0].Event.ID != "own-2" {
+		t.Fatalf("page after the other scope's events: %+v %v", page, err)
+	}
+	if err := sdk.NewStore(host).Transact(ctx, storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
+		all, err := tx.Events(0, 0)
+		if err != nil {
+			return err
+		}
+		var ids []string
+		for _, a := range all {
+			ids = append(ids, string(a.Event.ID))
+		}
+		if !reflect.DeepEqual(ids, []string{"own-1", "own-2"}) {
+			t.Errorf("events through sdk.Store: %v", ids)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
 	}
 }
 
