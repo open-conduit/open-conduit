@@ -65,7 +65,7 @@ Every turn ends with a status (the structured result Open Conduit asks for):
   - `review`: something is up for the owner: the PR, findings, or changes pushed and reported after feedback.
   - `help`: you asked the owner something you can't go on without (a decision, access, money, an ask you can't read). Carry on with anything the question doesn't block before ending the turn.
   - `done`: everything the thread asked for is handled and only a merge or close is left.
-  - `finished`: the PR merged or closed, or the issue closed with no PR.
+  - `finished`: the issue closed, on its own or with its PR. An issue still open after its PR merged or closed isn't finished (see Later turns).
 - `summary`: what the turn did, in one line.
 - `prs`: every PR number that belongs to this issue, once there is one.
 - `preview`: the preview URL a checks event gave, if any.
@@ -132,7 +132,8 @@ The message lists what happened since your last turn, each under its own heading
 - **Required checks never reported**: checks the base branch requires (a deploy, say) never started on the head. Find out why (a `[skip …]` in the PR title or a commit message stops some deploys), start them, often with a new push, and end with `building`. If they rightly don't run on this PR, report as in step 5 and say so.
 - **No checks ran**: the repo has no CI. Treat the PR as checked once what the rules say must pass has passed locally, and report as in step 5.
 - **PR has conflicts**: the base branch moved and the PR no longer merges. Rebase the branch onto the base branch, resolve the conflicts, run what the rules say must pass, force-push, and end with `building`.
-- **PR merged or closed**, or **the issue closed** with no PR: end with `finished`. Open Conduit removes the workspace when the issue's work completes; the branch stays.
+- **The issue closed**, on its own or with a merged PR: end with `finished`. Open Conduit removes the workspace when the issue's work completes; the branch stays.
+- **PR merged or closed** with the issue still open (`github.issue.view`; the PR didn't close it, or closed unmerged): the issue isn't finished, so don't end with `finished`, or a comment on it would reach nobody. Carry on with anything left that is yours. Otherwise say on the issue what is still to do, unless it already says, and end with `done` (`help` if you asked something you can't go on without). You hear the issue's comments and its close as before.
 - **A note from Open Conduit**: do what it says.
 - **What you were waiting for**: the wait is over (see Waiting). Pick the work up, or wait again if what's left still isn't ready.
 - **A message from the owner**, typed into Open Conduit: treat it like a comment, but answer in your session (your summary or final reply), not on the issue, unless it asks for a comment.

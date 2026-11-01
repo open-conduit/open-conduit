@@ -40,7 +40,7 @@ var StatusSchema = map[string]any{
 			"enum": []string{StateBuilding, StateReview, StateHelp, StateDone, StateFinished},
 			"description": "building: you pushed and are waiting for checks or a preview. review: something is up for the owner. " +
 				"help: you asked the owner something you cannot go on without. done: everything asked is handled and only a merge or close is left. " +
-				"finished: the PR merged or closed (or the issue closed) and you have cleaned up.",
+				"finished: the issue's work is over (the issue closed, or the PR merged or closed where the playbook says that ends it) and you have cleaned up.",
 		},
 		"summary": map[string]any{"type": "string", "description": "What this turn did, in one line."},
 		"prs":     map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Every PR number that belongs to this issue."},
