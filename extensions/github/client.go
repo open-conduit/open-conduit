@@ -60,6 +60,7 @@ type Client struct {
 type signIn struct {
 	read, write tokenSource
 	gitBot      bool
+	writer      string // Writer
 }
 
 // NewClient builds a client from validated connection config. No secret is
@@ -102,12 +103,21 @@ func (c *Client) signIn(cfg ConnectionConfig, secrets SecretFunc) (*signIn, erro
 	default:
 		return nil, errors.New("github: unknown auth")
 	}
-	who.write = who.read
+	who.write, who.writer = who.read, "the connection's token"
+	if cfg.Auth == "app" {
+		who.writer = "App " + cfg.AppID
+	}
 	if cfg.BotAppID != "" {
-		who.write = newAppToken(cfg.BotAppID, secrets, SecretBotPrivateKey, c)
+		who.write, who.writer = newAppToken(cfg.BotAppID, secrets, SecretBotPrivateKey, c), "bot App "+cfg.BotAppID
 	}
 	return who, nil
 }
+
+// Writer names, from the connection config the client was last built or
+// reconfigured from, who its writes go out as: "bot App <id>", "App <id>" or
+// "the connection's token". Doctor compares a running entry's client with
+// one built from the current config, to catch the two drifting apart.
+func (c *Client) Writer() string { return c.who.Load().writer }
 
 // ErrReconfigure is Reconfigure's refusal of a connection on another GitHub
 // (api_url) than the client's: the client's host can't change in place.
