@@ -367,12 +367,15 @@ const (
 // OperationDecl declares one toolbelt operation. Commit marks an emit whose
 // plan writes records through emit.commit. Guidance is the operation's
 // agent guidance (extension.Operation.Guidance), served to executions whose
-// grant includes it.
+// grant includes it. Input is the JSON Schema of the input's data, an
+// object; sdk.Handler, sdk.Wait and sdk.Emit derive it from the handler's
+// input struct. The host carries it and does not yet check calls against it.
 type OperationDecl struct {
-	Name     string `json:"name"`
-	Kind     string `json:"kind"`
-	Commit   bool   `json:"commit,omitempty"`
-	Guidance string `json:"guidance,omitempty"`
+	Name     string          `json:"name"`
+	Kind     string          `json:"kind"`
+	Commit   bool            `json:"commit,omitempty"`
+	Guidance string          `json:"guidance,omitempty"`
+	Input    json.RawMessage `json:"input,omitempty"`
 }
 
 // ExecutorDecl declares an executor. Capabilities are exactly the bind-time
@@ -610,6 +613,12 @@ func (m Manifest) Validate() error {
 		dotted("operation", o.Name)
 		if len(o.Guidance) > extension.MaxGuidance {
 			fail("operation %q: guidance is longer than %d bytes", o.Name, extension.MaxGuidance)
+		}
+		if len(o.Input) > 0 {
+			var schema map[string]any
+			if json.Unmarshal(o.Input, &schema) != nil {
+				fail("operation %q: input must be a JSON Schema object", o.Name)
+			}
 		}
 		switch o.Kind {
 		case OperationHandler, OperationWait:

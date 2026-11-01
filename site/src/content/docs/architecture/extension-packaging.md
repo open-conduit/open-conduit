@@ -18,12 +18,45 @@ Code:
 
 ## Writing an extension with the SDK
 
-An extension is a program that speaks protocol version 1 on stdin and stdout. In Go, `protocol/sdk` does that for you: fill an `sdk.Extension` and call `sdk.Serve`.
+An extension is a program that speaks protocol version 1 on stdin and stdout. In Go, `protocol/sdk` does that for you. Start one with `sdk.New`, register each handler, and call `sdk.Serve`. Registering a handler also declares it, so the manifest is derived from the registrations and can't disagree with them:
+
+```go
+type ForecastRequest struct {
+	City string `json:"city" doc:"The city to forecast, by name."`
+	Days int    `json:"days,omitempty"`
+}
+
+func forecast(ctx context.Context, a extension.Authority, in ForecastRequest) (Forecast, error) { … }
+
+func main() {
+	ext := sdk.New("weather", sdk.Version("0.1.0")).
+		Operation("weather.forecast", sdk.Handler(forecast), sdk.Guidance("Call `weather.forecast` before planning anything outdoors."))
+	if sdk.PackageCommand(os.Args[1:], ext.Manifest, nil, os.Stdout) {
+		return // package-manifest / package-certification
+	}
+	_ = sdk.Serve(ext)
+}
+```
+
+`sdk.New(name, opts...)` speaks protocol version 1 and runs the command `<name>-extension` unless `sdk.Command` says otherwise. Set what can't be inferred with `sdk.Version`, `sdk.Summary`, `sdk.Permissions` and `sdk.KVVersion`, or on `ext.Manifest` directly. Each registration returns the extension, so they chain:
+
+| Registration | Declares |
+| --- | --- |
+| `Operation(name, sdk.Handler(fn), opts…)`, or `sdk.Wait(fn)`, `sdk.Emit(fn)` | `operations[]` with its kind, `guidance` (`sdk.Guidance`), `commit` (`sdk.Commit`, emit only) and `input` |
+| `Route(handler, h, opts…)` | `routes[]`, with `samples` when `h` is an `extension.RouteSampler`, `binding` (`sdk.RouteBinding`) and `config` (`sdk.RouteConfig`) |
+| `WorkKind(kind, opts…)` | `work_kinds[]`, `standing` (`sdk.Standing`), `trigger` (`sdk.Trigger(fn)`) |
+| `Task(name, every, fn)`, `Check(name, fn, opts…)` | `tasks[]` with its interval, `checks[]` (`sdk.Deep`) |
+| `IngressType(type, lookup, families…)`, `Family(families…)` | `extensions[]` with `ingress`, and `families[]` |
+| `Recurrence(kind, fn)`, `DependencyFilter(fn)` | `recurrences[]`, `dependency_filter` |
+
+An operation's `fn` takes a typed input: `func(ctx, extension.Authority, In) (Out, error)` for `sdk.Handler`, returning an `extension.WaitPlan` or `extension.EmitPlan` for the other two. The SDK decodes the input's data into `In` strictly. A missing required field, a field `In` doesn't have, or a value of the wrong type is refused with `bad_request` and a message naming the field, before `fn` runs. `Out` is sent as the output's data, under the schema `<operation>.v1` unless `sdk.OutputSchema` names another. The JSON Schema of `In` (`sdk.SchemaOf`) becomes the operation's `input` in the manifest: its fields by their `json` names, required unless tagged `omitempty` or `omitzero` or a pointer, with a `doc` tag as the description. The host carries `input` but doesn't check calls against it yet. Use `domain.Payload` for `In` or `Out` to handle the raw payload yourself.
+
+A registration that can't be served panics when the extension is built: `sdk.Commit` on an operation that isn't an emit, or an input that isn't a struct or a payload. The surfaces with no registration method (`Configure`, `Validate`, `Webhooks`, `Executors`, `Providers`, `Sink`, `Actions`, `Render` and the rest in the table below) are set as fields, with their declaration on `ext.Manifest.Provides`. A literal `sdk.Extension` with a hand-written `Manifest` works too, and is what older packages use:
 
 ```go
 func main() {
 	if sdk.PackageCommand(os.Args[1:], manifest(), certification(), os.Stdout) {
-		return // package-manifest / package-certification
+		return
 	}
 	_ = sdk.Serve(&sdk.Extension{
 		Manifest:  manifest(),
@@ -80,6 +113,7 @@ Any language works: the protocol is newline-delimited JSON-RPC 2.0, and the cert
 ### Examples
 
 - [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/notes): every extension surface. It has ingress with a webhook receiver, a route with a trigger, operations including a committed emission, a recurrence, tasks, a resource provider, a telemetry exporter, annotations, a setup flow, validation, three releases with schema evolution, and a KV migration. It declares every permission: a task records telemetry events and runs the host's probes, another builds, validates and traces a config candidate, it receives the host's telemetry events as a sink, and its entry type declares settings and describe lines.
+- [`protocol/examples/notes` fixture profile](https://github.com/open-conduit/open-conduit/blob/main/protocol/examples/notes/extension.go): the declare-once form. `TestFixtureManifestIsDerived` checks that its derived manifest equals the hand-written one.
 - [`protocol/examples/runner`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/runner): an executor with detached jobs, inject, interrupt, stop and forget.
 - [`packages/slack`](https://github.com/open-conduit/open-conduit/tree/main/packages/slack) and [`packages/shell`](https://github.com/open-conduit/open-conduit/tree/main/packages/shell): real first-party workloads packaged.
 
@@ -226,14 +260,14 @@ There are two harnesses. Use `sdktest` for a handler's logic: it runs in millise
 [`protocol/sdk/sdktest`](https://github.com/open-conduit/open-conduit/blob/main/protocol/sdk/sdktest/sdktest.go) serves your `sdk.Extension` on an in-memory host behind a real `jsonrpc` pipe, so every call crosses the wire as it would in the daemon. `sdktest.New(t, ext, opts...)` initializes it with a temporary state directory.
 
 - **Seeding (options):** `WithScopes`, `WithWorks`, `WithExecutions`, `WithEvents(scope, events...)` (accepted as causal roots), `WithKV`, `WithKVVersion` (the stored layout, so `Configure` runs `Migrate`), `WithSecrets` and `WithConnectionSecrets`, `WithAuthority` (what `Operation` calls carry) and `WithClock`. Pass `conformance.NewClock()` and advance it; the default clock is fixed at `sdktest.Start`.
-- **Calling in:** `Operation(ctx, name, input)` calls a declared operation by its kind and returns an `OperationResult`: a handler's output, a wait's plan, or an emission's accepted Event with its commit's output (the records are written to KV). `Configure`, `Route`, `RunTask`, `Check` and `CheckRun` cover the other common surfaces, and `Call` reaches any other method (`webhook.handle`, `event.render` …).
+- **Calling in:** `sdktest.Call[Out](ctx, h, name, in)` calls a declared operation with `in` encoded as its input and decodes the output into `Out`, so a test never builds a payload by hand. `Operation(ctx, name, input)` calls a declared operation by its kind and returns an `OperationResult`: a handler's output, a wait's plan, or an emission's accepted Event with its commit's output (the records are written to KV). `Configure`, `Route`, `RunTask`, `Check` and `CheckRun` cover the other common surfaces, and `Call` reaches any other method (`webhook.handle`, `event.render` …).
 - **Inspecting:** `KV(namespace)`, `Events()` (seeded, derived, delivered and emitted), `Commits()` (each applied `kv.commit` batch), `Artifacts()`, `Captured()` and `KVVersion()`.
 
 The host answers the scoped methods the way the daemon does. KV values carry the same version tokens, a stale check is `storage.ErrConflict`, and another extension's namespace is unauthorized. `event.accept` needs a parent Event in the same configured scope, deduplicates by source and delivery ID, and writes its records only when the Event is new. `ingress.deliver` runs the delivery through the source's adapter (`ingress.push`) from the last `Configure`. State reads and secrets see only configured scopes. A method the manifest does not enable is refused as undeclared. It does not enforce causal depth and rate limits, and it does not serve timers, Work control, probes or `config.*` (they answer unsupported). [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/blob/main/protocol/examples/notes/notes_test.go) is tested this way.
 
 ```go
 h := sdktest.New(t, acme.Build(), sdktest.WithKV("acme.index", "a", []byte(`{"text":"hi"}`)))
-got, err := h.Operation(ctx, "acme.lookup", domain.Payload{Data: []byte(`{"id":"a"}`)})
+got, err := sdktest.Call[acme.Note](ctx, h, "acme.lookup", acme.LookupRequest{ID: "a"})
 ```
 
 ### Daemon tests: `extensiontest`
@@ -375,7 +409,7 @@ A report states:
 22. Install stages and renames atomically, keeps exactly one previous release for rollback, refuses a lower `kv_version`, and refuses first-party names. A first-party package (Slack, shell) therefore cannot replace its in-process registration; the packages exist to prove and certify the boundary.
 23. Removal keeps durable state (KV, recorded layout, state directory, log) and is refused while the config uses the package, unless forced.
 24. Compatibility is the protocol version (no host-version range), which changes only for a breaking change, with a policy of keeping the previous protocol version for at least one release after one. Additive surfaces (new methods and manifest fields) ship without a bump; a package that uses one is refused by an older host with `needs_newer_host`.
-25. The SDK's final shape: `sdk.Extension` fields per surface, `sdk.Host`, `sdk.Store` (precondition-on-read optimistic commits; prefix ranges not protected) and `sdk.Artifacts`, plus `sdk.PackageCommand` for packaging.
+25. The SDK's final shape: `sdk.Extension` fields per surface, `sdk.Host`, `sdk.Store` (precondition-on-read optimistic commits; prefix ranges not protected) and `sdk.Artifacts`, plus `sdk.PackageCommand` for packaging. `sdk.New` and its registrations (`Operation` with typed `sdk.Handler`, `sdk.Wait` and `sdk.Emit`, `Route`, `WorkKind`, `Task`, `Check`, `IngressType` …) fill the same fields and derive the manifest from them; an operation's input struct gives its manifest `input` schema.
 26. `secret.resolve` takes a `connection` field and `configure` entries carry `name` and `connection`, so a package reaches its connections' secrets without bootstrap glue (B05 scoping kept).
 27. Packages start before the configuration opens. A package that fails to start leaves its types unregistered, so a config using them fails validation and the daemon refuses to start with the diagnostic.
 28. Certification criteria version 2 (above; version 2 added the Work display limits to `routes.decisions`), run against the package's own fixture by `open-conduit extension certify`. The fixture format lives in `protocol`. A declared ingress type or executor requires a fixture case.
