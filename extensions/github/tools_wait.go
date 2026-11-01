@@ -143,7 +143,8 @@ type resolvedCond struct {
 // Project is empty, else a scope by ID or name.
 func (t *Tools) target(ctx context.Context, b *bound, c Cond) (issue, code Source, scope domain.ID, err error) {
 	if c.Project == "" || c.Project == string(b.work.ScopeID) {
-		return b.issue, b.code, b.work.ScopeID, nil
+		issue, code, err = t.ownTracker(b)
+		return issue, code, b.work.ScopeID, err
 	}
 	if scope, err = t.scopeNamed(ctx, c.Project); err != nil {
 		return

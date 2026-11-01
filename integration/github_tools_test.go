@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1036,7 +1037,7 @@ func TestGitHubPROperationsWithoutAnIssue(t *testing.T) {
 	a := e.start(w.ID)
 
 	// Issue-bound operations keep refusing Work without an issue.
-	for _, op := range []string{gh.OpContext, gh.OpIssueComment, gh.OpPRCreate, gh.OpPRList} {
+	for _, op := range []string{gh.OpContext, gh.OpPRCreate, gh.OpPRList} {
 		_, err := e.call(a, op, "", map[string]any{"title": "t", "body": "b"})
 		var refusal *extension.OperationError
 		if !errors.As(err, &refusal) || (refusal.Code != "no_issue" && refusal.Code != "invalid_input") {
@@ -1096,6 +1097,91 @@ func TestGitHubPROperationsWithoutAnIssue(t *testing.T) {
 	if q := strings.Join(e.queued(owner.ID), " "); !strings.Contains(q, gh.TypeCommentAgent) {
 		t.Fatalf("owner queued: %v", q)
 	}
+}
+
+// Work that owns no issue (a triage, a scheduled job, a Slack thread) files
+// and reads issues: in its own project's tracker, naming the issue to view
+// or comment on, and in another project through file_scopes, as an issue's
+// Work does (#336).
+func TestGitHubIssueOperationsWithoutAnIssue(t *testing.T) {
+	e := newToolsEnv(t)
+	ops := e.opsScope()
+	existing := ops.OpenIssue("Deploys are slow", "Ten minutes.", ghAlice)
+	own, _ := e.claim("Header wobbles", "", "bug")
+	w := e.request("triage-1")
+	a := e.start(w.ID)
+
+	// Its own project: list, view by number, comment by number, create.
+	if list := e.must(a, gh.OpIssueList, "", map[string]any{}); !strings.Contains(string(mustJSON(list)), "Header wobbles") {
+		t.Fatalf("own list: %v", list)
+	}
+	_, err := e.call(a, gh.OpIssueView, "", map[string]any{})
+	refused(t, err, "number_required")
+	e.fake.AddComment(own, ghAlice, "Only on mobile.")
+	view := e.must(a, gh.OpIssueView, "", map[string]any{"number": own})
+	if view["title"] != "Header wobbles" || !strings.Contains(string(mustJSON(view["comments"])), `\"number\": `+itoa(own)) {
+		t.Fatalf("own view: %v", view)
+	}
+	_, err = e.call(a, gh.OpIssueComment, "", map[string]any{"body": "no number"})
+	refused(t, err, "number_required")
+	if c := e.must(a, gh.OpIssueComment, "", map[string]any{"number": own, "body": "Seen in triage."}); c["state"] != "posted" {
+		t.Fatalf("own comment: %v", c)
+	}
+	if mine := e.agentComments(own); len(mine) != 1 || gh.ParseAgent(mine[0].Body).Work != string(w.ID) {
+		t.Fatalf("own comments: %+v", mine)
+	}
+	out := e.must(a, gh.OpIssueCreate, "create-own", map[string]any{"title": "Wobble on resize", "body": "From triage."})
+	if out["state"] != "posted" {
+		t.Fatalf("own create: %v", out)
+	}
+	if got := e.fake.Issue(int(out["number"].(float64))); got.Title != "Wobble on resize" || gh.ParseAgent(got.Body) == nil {
+		t.Fatalf("own issue: %+v", got)
+	}
+	// Held in its own project: a condition with no project resolves against
+	// the scope's tracker, and the issue carries the hold and its label.
+	held := e.must(a, gh.OpIssueCreate, "create-held", map[string]any{"title": "After the wobble", "body": "Once it's fixed.", "wait": []string{"issue:" + itoa(own) + ":closed"}})
+	if got := e.fake.Issue(int(held["number"].(float64))); held["state"] != "posted" || !strings.Contains(got.Body, "waitFor: issue:"+itoa(own)+":closed") || !slices.Contains(got.Labels, "scheduled") {
+		t.Fatalf("held create: %v %+v", held, got)
+	}
+	timed := e.must(a, gh.OpIssueCreate, "create-timed", map[string]any{"title": "Check the wobble", "body": "Next year.", "until": "2030-01-01T00:00Z"})
+	if got := e.fake.Issue(int(timed["number"].(float64))); timed["state"] != "posted" || !strings.Contains(got.Body, "runAt: 2030-01-01T00:00Z") || !slices.Contains(got.Labels, "scheduled") {
+		t.Fatalf("timed create: %v %+v", timed, got)
+	}
+
+	// Another project: refused until file_scopes grants it, then filed there.
+	_, err = e.call(a, gh.OpIssueCreate, "", map[string]any{"project": "ops", "title": "Cache the image build", "body": "From triage."})
+	refused(t, err, "not_allowed")
+	e.mu.Lock()
+	e.fileOK = true
+	e.mu.Unlock()
+	if list := e.must(a, gh.OpIssueList, "", map[string]any{"project": "ops"}); !strings.Contains(string(mustJSON(list)), "Deploys are slow") {
+		t.Fatalf("ops list: %v", list)
+	}
+	out = e.must(a, gh.OpIssueCreate, "create-ops", map[string]any{"project": "ops", "title": "Cache the image build", "body": "From triage."})
+	if got := ops.Issue(int(out["number"].(float64))); out["state"] != "posted" || got.Title != "Cache the image build" {
+		t.Fatalf("ops create: %v %+v", out, got)
+	}
+	if c := e.must(a, gh.OpIssueComment, "", map[string]any{"project": "ops", "number": existing, "body": "Filed the cache work."}); c["state"] != "posted" {
+		t.Fatalf("ops comment: %v", c)
+	}
+	e.finish(a, nil)
+
+	// A scope that registers no tracker has nowhere of its own to file: the
+	// refusal says to name a project.
+	e.putScope("bare", `{"namespace":"github/github.com/octo/bare","scope":"bare","repo":"octo/bare"}`)
+	key := domain.CorrelationKey{Source: "slack/T1", ExternalID: "bare-1"}
+	at := e.clock.Now()
+	if _, _, err := e.ingress.Accept(context.Background(), "bare", domain.Event{ID: "request-bare-1", Type: "fixture.request", Source: "slack/T1",
+		DeliveryID: "bare-1", OccurredAt: at, ReceivedAt: at, CorrelationKey: &key}); err != nil {
+		t.Fatal(err)
+	}
+	e.route()
+	b := e.start(e.work("work/bare-1").ID)
+	_, err = e.call(b, gh.OpIssueList, "", map[string]any{})
+	refused(t, err, "no_repository")
+	_, err = e.call(b, gh.OpIssueCreate, "", map[string]any{"title": "x", "body": "y"})
+	refused(t, err, "no_repository")
+	e.finish(b, nil)
 }
 
 // The repository must be one the scope registers, and named when it
