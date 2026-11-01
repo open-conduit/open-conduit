@@ -17,6 +17,7 @@ Each page separates three kinds of material:
 
 ## Core
 
+- [Core principles](principles/): what belongs in the core and what belongs in an extension
 - [The core in one page](core/)
 - [Package boundaries and dependency rules](packages/) (decision B01)
 - [Primitive and transactional storage contracts](domain-storage/) (decision B02)
