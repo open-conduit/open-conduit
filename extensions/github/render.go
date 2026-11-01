@@ -49,6 +49,12 @@ func RenderEvent(e domain.Event) (string, bool) {
 			return "", false
 		}
 		return fmt.Sprintf("### PR #%d has conflicts with %s at %s\nIt can't merge until they're resolved: rebase the branch onto `%s`, resolve them, run what must pass and push.", c.Number, c.BaseRef, short(c.HeadSHA), c.BaseRef), true
+	case TypePullOpen:
+		var p PullPayload
+		if e.Data.Schema != SchemaPull || json.Unmarshal(e.Data.Data, &p) != nil {
+			return "", false
+		}
+		return renderPullOpen(p), true
 	case TypePullMerged, TypePullClosed:
 		var p PullPayload
 		if e.Data.Schema != SchemaPull || json.Unmarshal(e.Data.Data, &p) != nil {
@@ -100,6 +106,43 @@ func short(sha string) string {
 		return sha[:7]
 	}
 	return sha
+}
+
+// renderPullOpen renders an open PR's state. The same Event type carries
+// the PR's opening and every later version of its payload (a push, or a
+// new title, body, labels, base branch or draft state), so it leads with the head and says the PR may have
+// changed rather than reading as a repeat of the opening.
+func renderPullOpen(p PullPayload) string {
+	head := fmt.Sprintf("### PR #%d is open", p.Number)
+	if p.Draft {
+		head = fmt.Sprintf("### PR #%d is open as a draft", p.Number)
+	}
+	if p.HeadSHA != "" {
+		head += " at " + short(p.HeadSHA)
+	}
+	lines := []string{head}
+	opened := "Opened"
+	if p.Author != "" {
+		opened += " by " + p.Author
+	}
+	if !p.CreatedAt.IsZero() {
+		opened += " at " + p.CreatedAt.UTC().Format(time.RFC3339)
+	}
+	if opened != "Opened" {
+		lines = append(lines, opened)
+	}
+	if p.Title != "" {
+		lines = append(lines, "Title: "+p.Title)
+	}
+	if p.URL != "" {
+		lines = append(lines, p.URL)
+	}
+	lines = append(lines, "This comes when the PR opens and again whenever anything about it changes: a push, or its title, body, labels, base branch or draft state. If its head isn't the one you last saw, it has new commits.")
+	out := strings.Join(lines, "\n")
+	if body := strings.TrimSpace(p.Body); body != "" {
+		out += "\n\n" + body
+	}
+	return out
 }
 
 func renderComment(c CommentPayload) string {
