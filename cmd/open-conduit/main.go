@@ -60,7 +60,7 @@ func serve(r cli.ServeRequest) int {
 	defer stop()
 	err := bootstrap.Serve(ctx, bootstrap.Options{Version: version, Commit: commit, StateDir: r.StateDir, ConfigPath: r.ConfigPath, Socket: r.Socket, ToolbeltDir: r.ToolbeltDir, LifecycleLog: r.LifecycleLog, PollInterval: r.PollInterval, LeaseDuration: r.LeaseDuration, RetentionInterval: r.RetentionInterval, SweepInterval: r.SweepInterval,
 		WebhookAddr: r.WebhookAddr, Tunnel: bootstrap.TunnelOptions{Kind: r.TunnelKind, Binary: r.TunnelBinary, Domain: r.TunnelDomain, Name: r.TunnelName, Hostname: r.TunnelHostname, PublicURL: r.PublicURL},
-		NoTunnel: r.NoTunnel, DryRun: r.DryRun, ClaudeUsage: r.ClaudeUsage, Ready: webReady(ctx, r)})
+		NoTunnel: r.NoTunnel, DryRun: r.DryRun, ClaudeUsage: r.ClaudeUsage, NoTelemetry: r.NoTelemetry, Ready: webReady(ctx, r)})
 	if err != nil {
 		// Composition errors carry safe summaries (paths, codes); never config values.
 		fmt.Fprintf(os.Stderr, "open-conduit: serve: %s\n", err)

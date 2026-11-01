@@ -12,6 +12,8 @@ Open Conduit ships two commands, kept side by side:
 
 Homebrew, the release archives and the install script also carry the setup assistant, an extension package in `extensions/setup/` beside the binaries. It runs `init --with claude` and the browser setup, and gives a fresh install its first configuration. `go install` doesn't bring it; see [below](#go-install).
 
+A release build sends anonymous usage telemetry: a daily count of runs and the scopes and first-party extensions in use. [Usage telemetry](/open-conduit/reference/telemetry/) lists exactly what is sent; `open-conduit serve --no-telemetry` or `DO_NOT_TRACK=1` turns it off.
+
 You also need the CLIs of the services you use: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in, for agent bindings, and optionally the GitHub CLI (`gh`), whose login is the default GitHub credential.
 
 ## Homebrew

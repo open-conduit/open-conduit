@@ -15,6 +15,7 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
+	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -104,6 +105,11 @@ type Options struct {
 	// token source (tests).
 	ClaudeUsageURL   string
 	ClaudeUsageToken func(context.Context) (string, error)
+	// NoTelemetry turns off the anonymous usage reports (usage.go).
+	NoTelemetry bool
+	// TelemetryURL and TelemetryKey override where usage reports go
+	// (tests). A dev build reports only when TelemetryURL is set.
+	TelemetryURL, TelemetryKey string
 }
 
 // components are rebuilt for every committed configuration generation; the
@@ -326,7 +332,15 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.closeTelemetry()
-	d.pipeline, err = telemetry.New(telemetry.Options{Exporters: append(append([]observability.Exporter{telemetry.NewLogExporter(logFile), otel}, d.inprocExporters()...), extensionExporter{d}), FlushInterval: 200 * time.Millisecond, Diagnostic: func(x telemetry.Diagnostic) {
+	exporters := append(append([]observability.Exporter{telemetry.NewLogExporter(logFile), otel}, d.inprocExporters()...), extensionExporter{d})
+	usage, err := newUsageReporter(o)
+	if err != nil {
+		return err
+	}
+	if usage != nil {
+		exporters = append(exporters, usage)
+	}
+	d.pipeline, err = telemetry.New(telemetry.Options{Exporters: exporters, FlushInterval: 200 * time.Millisecond, Diagnostic: func(x telemetry.Diagnostic) {
 		d.log.Warn("telemetry export degraded", "exporter", x.Exporter, "code", x.Code, "records", x.Records)
 	}})
 	if err != nil {
@@ -371,6 +385,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor, gh.HoldExecutor: gh.NewHoldExecutor(), sc.LegacyExecutorName: legacy}
+	if usage != nil {
+		usage.known = knownTypes(registry(maps.Clone(d.executors)))
+	}
 	if err = d.startInproc(ctx); err != nil {
 		return err
 	}
@@ -470,6 +487,14 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if o.Ready != nil {
 		o.Ready()
 	}
+	current := func() *config.Snapshot { s, _ := d.configs.Current(); return s }
+	if usage != nil {
+		d.wg.Add(1)
+		go func() {
+			defer d.wg.Done()
+			usage.run(loopCtx, usageInterval, current)
+		}()
+	}
 
 	loopErr := d.loop(loopCtx)
 
@@ -484,6 +509,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 	d.releaseAll(shutdown)
 	if err := <-served; err != nil && !errors.Is(err, http.ErrServerClosed) && loopErr == nil {
 		loopErr = err
+	}
+	if usage != nil {
+		usage.stop(current(), loopErr)
 	}
 	d.log.Info("open-conduit stopped")
 	return loopErr

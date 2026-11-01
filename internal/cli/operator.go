@@ -119,8 +119,9 @@ Commands:
   serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h]
         [--webhook-addr 127.0.0.1:8787] [--tunnel ngrok|cloudflared|static] [--tunnel-domain D] [--tunnel-name N] [--tunnel-hostname H] [--public-url URL]
                              (override the config's settings.webhooks for this run)
-        [--no-tunnel] [--dry-run] [--claude-usage]
+        [--no-tunnel] [--dry-run] [--claude-usage] [--no-telemetry]
         (--webhook-addr takes any free local port; 8787 is only an example)
+        (--no-telemetry, OPEN_CONDUIT_NO_TELEMETRY=1 or DO_NOT_TRACK=1 turn off the anonymous usage reports)
         [--web] [--web-addr 127.0.0.1:7420] [--web-host open-conduit.localhost]
                              also serve the web view from the daemon (open-conduit web url prints its sign-in URL)
   service install [--no-start] [serve flags] | service uninstall|start|stop|status

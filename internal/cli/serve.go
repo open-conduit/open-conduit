@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -20,6 +21,9 @@ type ServeRequest struct {
 	TunnelKind, TunnelBinary, TunnelDomain, TunnelName, PublicURL string
 	TunnelHostname                                                string
 	NoTunnel, DryRun, ClaudeUsage                                 bool
+	// NoTelemetry turns off the anonymous usage reports: --no-telemetry,
+	// or OPEN_CONDUIT_NO_TELEMETRY or DO_NOT_TRACK set in the environment.
+	NoTelemetry bool
 	// Web serves the web view from the daemon's process on WebAddr, named
 	// WebHost (the web command's defaults when empty), signed in through
 	// WebSignIn.
@@ -56,6 +60,7 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
 	usage := fs.fs.Bool("claude-usage", false, "")
+	noTelemetry := fs.fs.Bool("no-telemetry", false, "")
 	web := fs.fs.Bool("web", false, "")
 	poll := fs.fs.Duration("poll-interval", time.Second, "")
 	lease := fs.fs.Duration("lease-duration", time.Minute, "")
@@ -76,6 +81,7 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	r.WebAddr, r.WebHost = fs.get("web-addr"), fs.get("web-host")
 	r.Web = *web || r.WebAddr != "" || r.WebHost != ""
 	r.WebSignIn = WebSignInPath(r.StateDir)
+	r.NoTelemetry = *noTelemetry || optedOut(o.env.Getenv("OPEN_CONDUIT_NO_TELEMETRY")) || optedOut(o.env.Getenv("DO_NOT_TRACK"))
 	if r.ConfigPath == "" {
 		r.ConfigPath = o.abs(o.env.Getenv("OPEN_CONDUIT_CONFIG"))
 	}
@@ -86,4 +92,11 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 		r.Socket = o.abs(o.env.Getenv("OPEN_CONDUIT_SOCKET"))
 	}
 	return r, -1
+}
+
+// optedOut reads an opt-out variable: set to anything but "", "0" or
+// "false" (the DO_NOT_TRACK convention).
+func optedOut(v string) bool {
+	v = strings.TrimSpace(v)
+	return v != "" && v != "0" && !strings.EqualFold(v, "false")
 }

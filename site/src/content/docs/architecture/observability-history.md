@@ -96,6 +96,8 @@ Delivery is at most once, from memory: records still queued at a crash are lost 
 
 `telemetry.LogExporter` writes the same records as local JSON lines, for operation without a collector. Executors report cost and tokens through `extension.Result.Usage` on their structured outcome. The usage appears as `Usage` on the terminal record and in run history. Each result reports its own segment's usage; an attempt that parks and resumes reports the sum of its segments, kept in attempt state as `EarlierUsage` beside the latest result.
 
+The host's usage reporter (`internal/bootstrap/usage.go`) is one more exporter in the pipeline. It only counts `work.created` and terminal `execution.*` records, and a release build sends those counts with the active configuration's shape (scope counts, first-party types) to the project's PostHog at start, daily and at stop. `serve --no-telemetry`, `OPEN_CONDUIT_NO_TELEMETRY` or `DO_NOT_TRACK` leave it out of the pipeline; [usage telemetry](/open-conduit/reference/telemetry/) lists what it sends.
+
 Host watch and telemetry events are extension adapters on the public observability contract, with no runtime branch ([introspection](../issue-reporting/)):
 
 - **Telemetry exporter.** `introspection.Exporter` is an `observability.Exporter` in the lifecycle pipeline. It turns the committed `event.accepted` records of the extension's families into named telemetry events, each once, written to `logs/introspection-telemetry.jsonl` only while an entry sets `telemetry`.
