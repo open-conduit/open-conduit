@@ -200,9 +200,18 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 	if !strings.Contains(string(proposals[3].Data.Data), `"after":"[redacted]"`) {
 		t.Fatalf("the reference's proposal: %s", proposals[3].Data.Data)
 	}
+	// The session draws itself as panels, its conversation with a note of
+	// each proposal; core reviews the change set, reference text included,
+	// from the candidate, which has nothing to apply until a change is
+	// approved.
 	panels, err := d.c.Panels(ctx, session)
-	if err != nil || len(panels) != 1 || !strings.Contains(mustJSONString(panels), "keyring:github-token") || !strings.Contains(mustJSONString(panels), `"Before","value":"\"Setup\""`) {
-		t.Fatalf("panel: %s %v", mustJSONString(panels), err)
+	if err != nil || len(panels) != 2 || panels[0].ID != "conversation" || !strings.Contains(mustJSONString(panels), "Proposed c1: replace /scopes/setup/name") || strings.Contains(mustJSONString(panels), "keyring:") {
+		t.Fatalf("panels: %s %v", mustJSONString(panels), err)
+	}
+	review, err := d.c.WorkConfigCandidate(ctx, session.WorkID)
+	if err != nil || review.CandidateHash != "" || review.ConfigText != "" || len(review.Changes) != 4 || string(review.Changes[0].Before) != `"Setup"` ||
+		review.Changes[0].Approve != "approve_c1" || review.Changes[2].State != "withdrawn" || review.Changes[2].Approve != "" || !strings.Contains(mustJSONString(review.Changes), "keyring:github-token") || !strings.HasPrefix(review.ApproveAll, "approve_all_") {
+		t.Fatalf("review: %s %v", mustJSONString(review), err)
 	}
 
 	actions := func() map[string]client.Action {

@@ -1,7 +1,8 @@
-// The Setup page: the conversation stays at its newest message while the
-// operator is reading there, whoever wrote it, and leaves them where they
-// are once they scroll up. The message box grows with what is typed; Enter sends and Shift+Enter starts a new line. Without this the
-// forms still post, one line at a time.
+// An extension's page (page.html): the conversation stays at its newest
+// message while the operator is reading there, whoever wrote it, and
+// leaves them where they are once they scroll up. The message box grows
+// with what is typed; Enter sends and Shift+Enter starts a new line.
+// Without this the forms still post, one line at a time.
 "use strict";
 
 (() => {
@@ -32,7 +33,7 @@
   document.addEventListener("live:redrawn", () => {
     const t = document.querySelector("textarea[data-composer]");
     if (!t) return;
-    const b = t.form.querySelector("[data-live=setup-send] button");
+    const b = t.form.querySelector("[data-live=page-send] button");
     t.form.hidden = !b;
     if (!b) return;
     t.placeholder = b.dataset.placeholder;

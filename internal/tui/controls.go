@@ -339,6 +339,19 @@ func PanelText(panels []client.Panel, actions []targeted) string {
 			if t := sec.Table; t != nil {
 				b.WriteString(tableText(*t))
 			}
+			for _, m := range sec.Messages {
+				who := m.Label
+				if who == "" {
+					who = map[string]string{"operator": "You", "agent": "Agent", "note": "Note"}[m.From]
+				}
+				b.WriteString("  " + boldS.Render(who) + "\n")
+				for _, l := range strings.Split(m.Text, "\n") {
+					b.WriteString("    " + l + "\n")
+				}
+				if m.Chosen != "" {
+					b.WriteString("    " + dimS.Render("answered: "+m.Chosen) + "\n")
+				}
+			}
 			for _, l := range sec.Links {
 				b.WriteString("  " + l.Label + "  " + dimS.Render(l.URL) + "\n")
 			}

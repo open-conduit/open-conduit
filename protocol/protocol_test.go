@@ -175,7 +175,8 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Executors, m.Provides.Resources = e.Executors, e.Resources
 	m.Provides.Recurrences, m.Provides.Exporters, m.Provides.Annotate, m.Provides.Actions, m.Provides.Panels = []string{"chat.calendar"}, true, true, true, true
 	m.Provides.Operations = append(m.Provides.Operations, protocol.OperationDecl{Name: "chat.wait", Kind: protocol.OperationWait}, protocol.OperationDecl{Name: "chat.note", Kind: protocol.OperationEmit, Commit: true})
-	m.Provides.DependencyFilter, m.Provides.RunEnvironment = true, true
+	m.Provides.DependencyFilter, m.Provides.RunEnvironment, m.Provides.ConfigCandidate = true, true, true
+	m.Provides.Pages = []protocol.PageDecl{{ID: "chat", Title: "Chat", Entry: "chat", WorkKind: "chat.conversation", Start: "start", Compose: []string{"message"}, Route: "chat"}}
 	m.Provides.Routes[0].Samples = true
 	for _, p := range protocol.KnownPermissions {
 		m.Permissions = append(m.Permissions, p.Name)
@@ -222,6 +223,10 @@ func TestManifestRejections(t *testing.T) {
 		"setting default":      {`"ingress": true}`, `"ingress": true, "settings": [{"field": "team", "type": "boolean", "default": "yes"}]}`},
 		"duplicate setting":    {`"ingress": true}`, `"ingress": true, "settings": [{"field": "team", "type": "string"}, {"field": "team", "type": "string"}]}`},
 		"describe fields":      {`"ingress": true}`, `"ingress": true, "describe": {"list": "", "name": "name"}}`},
+		"page without actions": {`"setup":`, `"pages": [{"id": "chat", "title": "Chat", "entry": "chat", "work_kind": "chat.conversation", "start": "start"}], "setup":`},
+		"foreign page":         {`"setup":`, `"actions": true, "pages": [{"id": "talk", "title": "Chat", "entry": "chat", "work_kind": "chat.conversation", "start": "start"}], "setup":`},
+		"page undeclared kind": {`"setup":`, `"actions": true, "pages": [{"id": "chat", "title": "Chat", "entry": "chat", "work_kind": "chat.other", "start": "start"}], "setup":`},
+		"page without start":   {`"setup":`, `"actions": true, "pages": [{"id": "chat", "title": "Chat", "entry": "chat", "work_kind": "chat.conversation", "start": ""}], "setup":`},
 	}
 	for name, c := range cases {
 		mutated := strings.Replace(string(base), c[0], c[1], 1)

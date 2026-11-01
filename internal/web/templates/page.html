@@ -1,0 +1,185 @@
+{{define "scripts"}}<script src="/static/page.js" defer></script>{{end}}
+{{define "content"}}{{$d := .Data}}{{$p := .Page}}
+{{- /* An extension's page (extpage.go). With a session open, the
+conversation and the session's bench redraw on their own and the message
+box stays out of them, so typing never holds back what the agent says. */}}
+<div class="page xpage"{{if not $d.Session}} data-live="page"{{end}}>
+{{- with $d.Session}}{{$ss := .}}
+  <header class="xpage-head">
+    <div>
+      <h1>{{$d.P.Title}}</h1>
+      {{- with .Lead}}<p class="page-sub">{{.}}</p>{{end}}
+    </div>
+  </header>
+  <div class="xpage-grid">
+    <section class="convo" aria-label="Conversation">
+      <div class="convo-meta">
+        <span>{{.Scope}} · started {{at .W.Created}}</span>
+        <a class="link-btn" href="{{workHref .W.ID 0}}">Turns and transcript</a>
+      </div>
+      <div class="convo-scroll" aria-live="polite" data-live="page-convo">
+        {{- range .Msgs}}
+        {{- if eq .From "operator"}}
+        <div class="msg msg-user"><span class="who">{{or .Label "You"}} · {{at .At}}</span><div class="msg-text">{{.Text}}</div></div>
+        {{- else if eq .From "note"}}
+        <div class="msg msg-note"><span class="who">{{or .Label "Note"}} · {{at .At}}</span><div class="msg-text">{{.Text}}</div></div>
+        {{- else}}
+        <div class="msg msg-agent"><span class="who">{{or .Label "Agent"}} · {{at .At}}</span><div class="msg-text">{{markdown .Text}}</div></div>
+        {{- if .Chosen}}{{$c := .Chosen}}
+        <div class="choices" role="group" aria-label="Choices">{{range .Choices}}<button type="button" class="choice{{if eq . $c}} is-on{{end}}" disabled>{{.}}</button>{{end}}</div>
+        {{- end}}
+        {{- end}}
+        {{- else}}
+        <p class="quiet">Nothing has been said yet.</p>
+        {{- end}}
+        {{- with .Compose}}{{if .Choices}}
+        <form method="post" action="/actions" class="choices" aria-label="{{.Label}}">
+          {{template "page-hidden" .}}
+          {{- range .Choices}}<button class="choice" name="input" value="{{.}}">{{.}}</button>{{end}}
+        </form>
+        {{- end}}{{end}}
+        {{- with .Busy}}
+        <div class="msg msg-agent is-typing"><span class="who">Agent</span><span class="typing" role="status" aria-label="{{.}}"><i></i><i></i><i></i></span><span class="quiet small">{{.}}</span></div>
+        {{- end}}
+        {{- if eq .W.Disp.Group "attention"}}{{if eq .W.Disp.Kind "repair"}}
+        <div class="callout tone-fail"><strong>{{or .W.Disp.Label "The session's last turn failed"}}</strong>{{with .W.Disp.Detail}}<code>{{.}}</code>{{end}} <a href="{{workHref .W.ID 0}}">Open the Work to run it again</a></div>
+        {{- end}}{{end}}
+        {{- if eq .W.Disp.Group "closed"}}
+        <p class="quiet">This session ended {{since .W.Updated}}{{with .W.Summary}}: {{.}}{{end}}. <a href="{{pageHref $d.P.ID}}">Back to {{$d.P.Title}}</a></p>
+        {{- end}}
+      </div>
+      {{- /* One message box, sending the first of the page's compose
+      actions offered (an answer while a question waits, else a message).
+      The box stays out of every live region so what is typed survives a
+      redraw; only what it sends (the action and the button) is redrawn,
+      and page.js carries the button's placeholder over to the box. */}}
+      {{- if .Compose}}
+      <form method="post" action="/actions" class="composer">
+        <textarea name="input" rows="1" required autocomplete="off" placeholder="{{template "page-placeholder" .Compose}}" aria-label="{{.Compose.Label}}" data-grow data-composer></textarea>
+        <span class="composer-send" data-live="page-send">{{template "page-send" .}}</span>
+      </form>
+      {{- end}}
+    </section>
+    <aside class="bench" aria-label="Session">
+      <div class="bench-body" data-live="page-bench">
+        <h2 class="section-rule">Session</h2>
+        <ul class="kv-list">
+          <li>{{mark .W.Disp.Kind 12 ""}}<b>{{or .W.Disp.Label .W.State}}</b><span>{{if ne .W.Disp.Detail .W.Disp.Label}}{{.W.Disp.Detail}}{{end}}</span></li>
+          <li><span></span><b>Scope</b><span><a href="/config?scope={{.W.ScopeID}}">{{.Scope}}</a></span></li>
+          <li><span></span><b>Turns</b><span>{{len .W.Turns}}</span></li>
+        </ul>
+        {{- range .Panels}}{{template "panel" .}}{{end}}
+        {{- with .Changes}}
+        <h2 class="section-rule">Changes</h2>
+        <p class="quiet small">Based on generation {{.BaseGeneration}}. Nothing changes until you apply the approved changes.</p>
+        <div class="ledger-states"><span><b>{{len .Open}}</b> open</span><span><b>{{.Approved}}</b> approved</span><span><b>{{len .All}}</b> in all</span></div>
+        {{- if or .ApproveAll .Validate .Apply}}
+        <div class="change-bar">
+          {{- with .ApproveAll}}<form method="post" action="/actions">{{template "page-hidden" .}}<button class="btn">{{.Label}}</button></form>{{end}}
+          {{- with .Validate}}<form method="post" action="/actions">{{template "page-hidden" .}}<button class="btn">Validate</button></form>{{end}}
+          {{- if .Apply}}
+          <form method="post" action="/pages/apply">
+            <input type="hidden" name="csrf" value="{{$p.CSRF}}"><input type="hidden" name="back" value="{{sessionHref $d.P.ID $ss.W.ID}}"><input type="hidden" name="work" value="{{$ss.W.ID}}">
+            <button class="btn btn-primary">Apply {{plural .Approved "approved change"}}</button>
+          </form>
+          {{- end}}
+        </div>
+        {{- if .Apply}}<p class="bench-note">Apply validates the approved changes again and makes them the next generation, but only if the configuration hasn't changed since they were based on it.</p>{{end}}
+        {{- end}}
+        {{- if .Invalid}}<p class="bench-note">The approved changes don't validate, so there is nothing to apply yet. Validate them to see why.</p>{{end}}
+        <ul class="changes">
+          {{- range .Open}}
+          <li class="change cs-{{.State}}" id="change-{{.ID}}">
+            <div class="change-head"><span class="change-id">{{.ID}}</span><b class="change-title">{{.Op}} <code>{{.Pointer}}</code></b><span class="change-state">{{.State}}</span></div>
+            {{- with .Why}}<p class="change-why">{{.}}</p>{{end}}
+            <div class="change-diff">
+              <div><span class="diff-label">Before</span><pre>{{if .HasBefore}}{{.Before}}{{else}}(nothing){{end}}</pre></div>
+              <div><span class="diff-label">After</span><pre>{{if .HasAfter}}{{.After}}{{else}}(removed){{end}}</pre></div>
+            </div>
+            {{- with .Problems}}
+            <ul class="checks">{{range .}}<li class="ck-fail">{{mark "failed" 12 "problem"}}<span class="ck-ptr">{{.}}</span></li>{{end}}</ul>
+            {{- end}}
+            <div class="change-acts">
+              {{- with .Approve}}<form method="post" action="/actions">{{template "page-hidden" .}}<button class="btn btn-primary">Approve</button></form>{{end}}
+              {{- with .Reject}}<form method="post" action="/actions" class="change-reject">{{template "page-hidden" .}}<input name="input" autocomplete="off" placeholder="Why (optional)" aria-label="Why you reject it"><button class="btn">Reject</button></form>{{end}}
+            </div>
+          </li>
+          {{- end}}
+        </ul>
+        <table class="change-table">
+          <thead><tr><th>Change</th><th>Op</th><th>Pointer</th><th>State</th></tr></thead>
+          <tbody>{{range .All}}<tr class="cs-{{.State}}"><td>{{.ID}}</td><td>{{.Op}}</td><td><code>{{.Pointer}}</code></td><td>{{.State}}</td></tr>{{end}}</tbody>
+        </table>
+        {{- end}}
+        {{- with .Doctor}}
+        <h2 class="section-rule">Checks on generation {{with $p.Health}}{{.ConfigGeneration}}{{end}}</h2>
+        <ul class="kv-list">
+          {{- range .Checks}}<li>{{mark ($ss.CheckMark .Status) 12 .Status}}<b>{{.Name}}</b><span>{{.Detail}}</span></li>{{end}}
+        </ul>
+        {{- end}}
+        {{- if ne .W.Disp.Group "closed"}}
+        <div class="row-gap"><a class="btn btn-quiet" href="{{confirmHref "cancel-work" .W $p.Back}}" data-action-dialog>End session</a></div>
+        <p class="bench-note">Ending a session cancels its Work. Its conversation stays here and on the Work page.</p>
+        {{- end}}
+      </div>
+    </aside>
+  </div>
+{{- else}}
+  <header class="page-head">
+    <div>
+      <h1>{{$d.P.Title}}</h1>
+      {{- with $d.P.Summary}}<p class="page-sub">{{.}}</p>{{end}}
+    </div>
+  </header>
+  <div class="returning">
+    <section>
+      <h2 class="section-rule">Start</h2>
+      {{- if $d.Starting}}
+      <div class="msg msg-agent is-typing"><span class="typing" role="status" aria-label="Starting the session"><i></i><i></i><i></i></span><span class="quiet small">Starting the session. It appears here once the daemon has routed it; if it doesn't, check <a href="/">Runs</a>.</span></div>
+      {{- else if $d.Start}}{{with $d.Start}}
+      <form method="post" action="/actions" class="xpage-start">
+        {{template "page-hidden" .}}
+        <p>Start a session in <b>{{$d.StartScope}}</b>.</p>
+        {{- if .Choices}}
+        <fieldset class="xchoices" role="radiogroup">
+          <legend>{{or .Prompt "Choose"}}</legend>
+          {{- range $i, $c := .Choices}}<label class="xchoice"><input type="radio" name="input" value="{{$c}}" required{{if eq $i 0}} checked{{end}}><span>{{$c}}</span></label>{{end}}
+        </fieldset>
+        {{- end}}
+        {{- with $d.StartGrants}}
+        <fieldset class="xchoices">
+          <legend>Also give the agent, for this session only</legend>
+          {{- range .}}<label class="xchoice xtoggle"><input type="checkbox" name="input" value="+{{.Name}}"><span>{{or .Label .Name}}</span></label>{{end}}
+        </fieldset>
+        <p class="quiet small">Without these it has only what its binding gives every session. What you turn on lasts until the session ends; your config file decides what can be offered.</p>
+        {{- end}}
+        <div class="row-gap"><button class="btn btn-primary">{{.Label}}</button></div>
+      </form>
+      {{- end}}{{else if $d.Scopes}}
+      <p class="quiet">{{range $i, $s := $d.Scopes}}{{if $i}}, {{end}}<b>{{$s.Name}}</b>{{end}} {{if eq (len $d.Scopes) 1}}has{{else}}have{{end}} a <code>{{$d.P.Entry}}</code> entry, but no new session is offered now{{if $d.Past}}; the last one is below{{end}}.</p>
+      {{- else}}
+      <p>This page starts sessions in a scope with a <code>{{$d.P.Entry}}</code> entry, and this configuration has none. Add one to a scope's extensions and apply the configuration.</p>
+      {{- end}}
+    </section>
+    {{- with $d.Past}}
+    <section>
+      <h2 class="section-rule">Earlier sessions</h2>
+      <ul class="kv-list">
+        {{- range .}}
+        <li>{{mark .Disp.Kind 12 ""}}<b><a href="{{sessionHref $d.P.ID .ID}}">{{at .Created}}</a></b><span>{{.Disp.Label}}{{with .Summary}} · {{.}}{{end}}</span></li>
+        {{- end}}
+      </ul>
+    </section>
+    {{- end}}
+  </div>
+{{- end}}
+</div>
+{{end}}
+
+{{define "page-placeholder"}}{{if .Choices}}Pick a choice above or write your own{{else}}{{.Label}}{{end}} (Shift+Enter for a new line){{end}}
+
+{{define "page-send"}}{{with .Compose}}{{template "page-hidden" .}}<button class="btn btn-primary" data-placeholder="{{template "page-placeholder" .}}" data-label="{{.Label}}">Send</button>{{end}}{{end}}
+
+{{define "page-hidden"}}<input type="hidden" name="csrf" value="{{.Page.CSRF}}"><input type="hidden" name="back" value="{{.Return}}">
+{{- if .WorkID}}<input type="hidden" name="work" value="{{.WorkID}}">{{else}}<input type="hidden" name="scope" value="{{.ScopeID}}">{{end}}
+<input type="hidden" name="provider" value="{{.Provider}}"><input type="hidden" name="action" value="{{.ID}}"><input type="hidden" name="label" value="{{.Label}}">{{end}}

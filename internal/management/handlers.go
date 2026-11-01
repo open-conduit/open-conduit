@@ -910,19 +910,38 @@ func (s *Server) applyConfig(c *call) (int, any, error) {
 	return 200, map[string]any{"generation": u64(generation), "hash": hash}, nil
 }
 
-// ConfigCandidate is a configuration a Work proposes, ready for POST
-// /config/apply: its file text (which may carry reference text), the
+// ConfigCandidate is a configuration a Work proposes: the changes it is
+// made of, for the operator to review, and once one is approved, ready for
+// POST /config/apply: its file text (which may carry reference text), the
 // generation it is based on and its hash.
 type ConfigCandidate struct {
 	Text           []byte
 	BaseGeneration string
 	Hash           string
+	Changes        []extension.CandidateChange
+	// ApproveAll and Validate are the owning extension's action IDs.
+	ApproveAll, Validate string
 }
 
-// configCandidate is the configuration a Work proposes for the operator to
-// apply (a setup session's approved changes): the file text, the
-// generation it is based on and its hash, ready for POST /config/apply.
-// It is an operator-class read: the text may carry reference text.
+type wireChange struct {
+	ID       string          `json:"id"`
+	Op       string          `json:"op"`
+	Pointer  string          `json:"pointer"`
+	State    string          `json:"state"`
+	Why      string          `json:"why,omitempty"`
+	Before   json.RawMessage `json:"before,omitempty"`
+	After    json.RawMessage `json:"after,omitempty"`
+	Problems []string        `json:"problems,omitempty"`
+	Approve  string          `json:"approve,omitempty"`
+	Reject   string          `json:"reject,omitempty"`
+}
+
+// configCandidate is what a Work proposes for the operator (a setup
+// session's change set): every change with its state, before, after and
+// the action IDs that decide it, and, once a change is approved, the file
+// text, the generation it is based on and its hash, ready for POST
+// /config/apply. It is an operator-class read: the text may carry
+// reference text.
 func (s *Server) configCandidate(c *call) (int, any, error) {
 	if err := noQuery(c); err != nil {
 		return 0, nil, err
@@ -942,8 +961,54 @@ func (s *Server) configCandidate(c *call) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
+	changes := make([]wireChange, 0, len(cand.Changes))
+	for _, x := range cand.Changes {
+		changes = append(changes, wireChange(x))
+	}
 	c.w.Header().Set("Cache-Control", "no-store")
-	return 200, map[string]any{"config_text": string(cand.Text), "base_generation": cand.BaseGeneration, "candidate_hash": cand.Hash}, nil
+	out := map[string]any{"base_generation": cand.BaseGeneration, "changes": changes}
+	if cand.Hash != "" {
+		out["config_text"], out["candidate_hash"] = string(cand.Text), cand.Hash
+	}
+	if cand.ApproveAll != "" {
+		out["approve_all"] = cand.ApproveAll
+	}
+	if cand.Validate != "" {
+		out["validate"] = cand.Validate
+	}
+	return 200, out, nil
+}
+
+// Page is a page an extension contributes to the web view.
+type Page struct {
+	Extension string
+	extension.Page
+}
+
+// listPages lists the pages extensions contribute (extension.Page), for
+// the web view's navigation and its generic page.
+func (s *Server) listPages(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	type wirePage struct {
+		Extension string   `json:"extension"`
+		ID        string   `json:"id"`
+		Title     string   `json:"title"`
+		Summary   string   `json:"summary,omitempty"`
+		Entry     string   `json:"entry"`
+		WorkKind  string   `json:"work_kind"`
+		Start     string   `json:"start"`
+		Compose   []string `json:"compose,omitempty"`
+		Route     string   `json:"route,omitempty"`
+	}
+	out := []wirePage{}
+	if s.o.Pages != nil {
+		for _, p := range s.o.Pages() {
+			out = append(out, wirePage{Extension: p.Extension, ID: p.ID, Title: p.Title, Summary: p.Summary, Entry: p.Entry, WorkKind: p.WorkKind, Start: p.Start, Compose: p.Compose, Route: p.Route})
+		}
+	}
+	return 200, map[string]any{"pages": out}, nil
 }
 
 // rotate never stores the replacement in idempotency history; a lost response

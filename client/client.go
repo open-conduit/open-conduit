@@ -730,12 +730,24 @@ type Panel struct {
 }
 
 type PanelSection struct {
-	Title   string       `json:"title,omitempty"`
-	Text    string       `json:"text,omitempty"`
-	Fields  []PanelField `json:"fields,omitempty"`
-	Table   *PanelTable  `json:"table,omitempty"`
-	Links   []PanelLink  `json:"links,omitempty"`
-	Actions []Action     `json:"actions,omitempty"`
+	Title    string         `json:"title,omitempty"`
+	Text     string         `json:"text,omitempty"`
+	Fields   []PanelField   `json:"fields,omitempty"`
+	Table    *PanelTable    `json:"table,omitempty"`
+	Messages []PanelMessage `json:"messages,omitempty"`
+	Links    []PanelLink    `json:"links,omitempty"`
+	Actions  []Action       `json:"actions,omitempty"`
+}
+
+// PanelMessage is one line of a conversation a panel shows. From is
+// operator, agent (whose text is Markdown) or note.
+type PanelMessage struct {
+	From    string    `json:"from"`
+	Label   string    `json:"label,omitempty"`
+	Text    string    `json:"text"`
+	At      time.Time `json:"at,omitzero"`
+	Choices []string  `json:"choices,omitempty"`
+	Chosen  string    `json:"chosen,omitempty"`
 }
 
 type PanelField struct {
@@ -954,18 +966,66 @@ func (c *Client) ApplyConfigText(ctx context.Context, text []byte, hash, generat
 	return
 }
 
-// ConfigCandidate is the configuration a Work proposes for the operator to
-// apply (a setup session's approved changes).
+// ConfigCandidate is what a Work proposes for the operator (a setup
+// session's change set): its changes for review and, once one is approved,
+// the config text to apply with its base generation and hash.
 type ConfigCandidate struct {
-	ConfigText     string `json:"config_text"`
-	BaseGeneration string `json:"base_generation"`
-	CandidateHash  string `json:"candidate_hash"`
+	ConfigText     string            `json:"config_text"`
+	BaseGeneration string            `json:"base_generation"`
+	CandidateHash  string            `json:"candidate_hash"`
+	Changes        []CandidateChange `json:"changes"`
+	// ApproveAll and Validate are the IDs of the owning extension's
+	// actions on the Work that approve every open change and validate the
+	// approved ones, when offered.
+	ApproveAll string `json:"approve_all"`
+	Validate   string `json:"validate"`
 }
 
-// WorkConfigCandidate reads the configuration a Work proposes.
+// CandidateChange is one proposed change: Before and After are redacted
+// JSON values, absent when there is none. Approve and Reject are the IDs of
+// the actions that decide it.
+type CandidateChange struct {
+	ID       string          `json:"id"`
+	Op       string          `json:"op"`
+	Pointer  string          `json:"pointer"`
+	State    string          `json:"state"`
+	Why      string          `json:"why"`
+	Before   json.RawMessage `json:"before"`
+	After    json.RawMessage `json:"after"`
+	Problems []string        `json:"problems"`
+	Approve  string          `json:"approve"`
+	Reject   string          `json:"reject"`
+}
+
+// WorkConfigCandidate reads what a Work proposes.
 func (c *Client) WorkConfigCandidate(ctx context.Context, work string) (out ConfigCandidate, err error) {
 	err = c.Do(ctx, "GET", "work/"+esc(work)+"/config-candidate", nil, nil, "", &out)
 	return
+}
+
+// ExtensionPage is a page an extension contributes to the web view: a
+// session of WorkKind started by Start on a scope with an Entry, its message
+// box sending the first of Compose offered, and the grants of Route's
+// binding to turn on at the start.
+type ExtensionPage struct {
+	Extension string   `json:"extension"`
+	ID        string   `json:"id"`
+	Title     string   `json:"title"`
+	Summary   string   `json:"summary"`
+	Entry     string   `json:"entry"`
+	WorkKind  string   `json:"work_kind"`
+	Start     string   `json:"start"`
+	Compose   []string `json:"compose"`
+	Route     string   `json:"route"`
+}
+
+// Pages lists the pages extensions contribute.
+func (c *Client) Pages(ctx context.Context) ([]ExtensionPage, error) {
+	var out struct {
+		Pages []ExtensionPage `json:"pages"`
+	}
+	err := c.Do(ctx, "GET", "pages", nil, nil, "", &out)
+	return out.Pages, err
 }
 
 // Rotate returns the one-time replacement credential.

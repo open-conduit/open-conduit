@@ -48,7 +48,8 @@ type fake struct {
 	traced    []string
 	withCalls int
 
-	// A setup session's candidate and what applying it does.
+	// Extension pages, a session's candidate and what applying it does.
+	pages        []client.ExtensionPage
 	candidate    *client.ConfigCandidate
 	applyErr     error
 	applied      []string

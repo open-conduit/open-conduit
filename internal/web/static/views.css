@@ -2138,9 +2138,9 @@ a.token {
   margin-bottom: 12px;
 }
 
-/* ── Setup ─────────────────────────────────────────────── */
+/* ── Extension pages ─────────────────────────────────────────────── */
 
-.setup-head {
+.xpage-head {
   display: flex;
   justify-content: space-between;
   gap: 24px;
@@ -2148,7 +2148,7 @@ a.token {
   margin-bottom: 16px;
   flex-wrap: wrap;
 }
-.setup-head h1 {
+.xpage-head h1 {
   font-size: var(--t-title);
 }
 .stages {
@@ -2181,7 +2181,7 @@ a.token {
   color: var(--ink);
   font-weight: 600;
 }
-.setup-grid {
+.xpage-grid {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(360px, 440px);
   gap: 28px;
@@ -2811,7 +2811,7 @@ a.token {
     position: static;
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
-  .setup-grid {
+  .xpage-grid {
     grid-template-columns: 1fr;
   }
   .bench {
@@ -3983,17 +3983,17 @@ a.chip,
 a.btn {
   text-decoration: none;
 }
-.setup-start fieldset {
+.xpage-start fieldset {
   border: 0;
   padding: 0;
   margin: 12px 0;
 }
-.setup-start legend {
+.xpage-start legend {
   font-size: var(--t-small);
   color: var(--ink-2);
   margin-bottom: 6px;
 }
-.setup-start legend::first-letter {
+.xpage-start legend::first-letter {
   text-transform: uppercase;
 }
 .bench-body .section-rule:not(:first-child) {

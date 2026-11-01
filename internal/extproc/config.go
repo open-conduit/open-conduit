@@ -5,10 +5,14 @@ import (
 	"encoding/json"
 	"errors"
 	"strings"
+	"time"
 
+	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // The host's config service (permission config.read; the catalogue refuses
@@ -120,4 +124,23 @@ func configError(err error) error {
 		return protocol.Errorf(protocol.CodeNotFound, err.Error())
 	}
 	return protocol.Errorf(protocol.CodeInternal, err.Error())
+}
+
+// ConfigCandidate asks the package what a Work proposes (manifest
+// config_candidate, permission config.read), bounded. A package that
+// declares neither, or proposes nothing, has none: storage.ErrNotFound.
+func (r *Remote) ConfigCandidate(ctx context.Context, w domain.Work) (extension.Candidate, error) {
+	if !r.m.Provides.ConfigCandidate || !r.m.Allows(protocol.PermissionConfigRead) {
+		return extension.Candidate{}, storage.ErrNotFound
+	}
+	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
+	defer cancel()
+	var out protocol.ConfigCandidateResult
+	if err := r.p.Call(ctx, "config.candidate", protocol.ConfigCandidateParams{Work: protocol.FromWork(w)}, &out); err != nil {
+		return extension.Candidate{}, err
+	}
+	if !out.Found {
+		return extension.Candidate{}, storage.ErrNotFound
+	}
+	return out.Candidate(), nil
 }

@@ -88,6 +88,9 @@ type Options struct {
 	// text the host holds behind its handle (optional: without it, no Work
 	// has one).
 	ConfigCandidate func(ctx context.Context, w domain.Work) (ConfigCandidate, error)
+	// Pages are the pages extensions contribute to the web view (GET
+	// /pages; optional: without it there are none).
+	Pages func() []Page
 	// Nudge asks the host loop for an immediate pass (optional).
 	Nudge func()
 	// ProviderTimeout and ViewDeadline time the action providers' calls for
@@ -314,6 +317,7 @@ var routes = []route{
 	{"GET", []string{"scopes", "*", "actions"}, false, false, (*Server).listScopeActions},
 	{"GET", []string{"work", "*", "panels"}, false, false, (*Server).listWorkPanels},
 	{"GET", []string{"work", "*", "config-candidate"}, false, false, (*Server).configCandidate},
+	{"GET", []string{"pages"}, false, false, (*Server).listPages},
 	{"GET", []string{"scopes", "*", "panels"}, false, false, (*Server).listScopePanels},
 	{"GET", []string{"scopes", "*", "route", "samples"}, false, false, (*Server).routeSamples},
 	{"GET", []string{"events"}, false, false, (*Server).listEvents},

@@ -46,15 +46,18 @@ import (
 )
 
 const (
-	Name       = "notes"
-	Changed    = "notes.note.changed"
-	Deleted    = "notes.note.deleted"
-	Indexed    = "notes.note.indexed"
-	Annotated  = "notes.note.annotated"
-	Kind       = "notes.note"
-	Schema     = "notes.note"
-	IndexNS    = "notes.index"
-	Recurrence = "notes.daily"
+	Name      = "notes"
+	Changed   = "notes.note.changed"
+	Deleted   = "notes.note.deleted"
+	Indexed   = "notes.note.indexed"
+	Annotated = "notes.note.annotated"
+	Kind      = "notes.note"
+	Schema    = "notes.note"
+	IndexNS   = "notes.index"
+	// CandidateNS holds the candidate ConfigTask proposed last, which
+	// every note's Work offers for review (config.candidate).
+	CandidateNS = "notes.candidate"
+	Recurrence  = "notes.daily"
 	// TelemetryTask records a notes_pass telemetry event for each scope
 	// and the machine, and writes the host's probes, and the output of
 	// ProbeName run with its "say" argument, to probes.json in the state
@@ -140,7 +143,10 @@ func Manifest(o Options) protocol.Manifest {
 			RunEnvironment: true,
 			Actions:        true,
 			Panels:         true,
-			Setup:          &protocol.SetupDecl{Type: Name, Summary: "add a scope watching a note service file", Usage: "[--service FILE]"},
+			// A page of note sessions in the web view, drawn by core.
+			Pages:           []protocol.PageDecl{{ID: Name, Title: "Notes", Summary: "Notes the agent follows.", Entry: "notes", WorkKind: Kind, Start: "start", Compose: []string{"remark"}, Route: "notes"}},
+			ConfigCandidate: true,
+			Setup:           &protocol.SetupDecl{Type: Name, Summary: "add a scope watching a note service file", Usage: "[--service FILE]"},
 		}}
 }
 

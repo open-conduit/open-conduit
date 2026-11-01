@@ -204,7 +204,7 @@
     if (document.querySelector("dialog[open]") || document.querySelector("details.menu-wrap[open]")) return;
     if (chord) {
       chord = false;
-      const dest = { r: "/", a: "/attention", c: "/config", s: "/setup" }[e.key];
+      const dest = { r: "/", a: "/attention", c: "/config" }[e.key];
       if (dest) { e.preventDefault(); location.href = dest; }
       return;
     }
@@ -334,7 +334,7 @@
         });
         const title = doc.querySelector("title");
         if (title) document.title = title.textContent;
-        // A page script that follows its regions (setup.js) hears of it.
+        // A page script that follows its regions (page.js) hears of it.
         document.dispatchEvent(new CustomEvent("live:redrawn"));
       } catch (_) { /* the next tick tries again */ }
     }, 5000);

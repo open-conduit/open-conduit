@@ -3,6 +3,8 @@ package integration_test
 import (
 	"context"
 	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -11,7 +13,27 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/internal/web"
 )
+
+// webPage is a page of the web view served from the daemon's management
+// API, as a signed-in browser reads it.
+func webPage(t *testing.T, c *client.Client, path string) string {
+	t.Helper()
+	s, err := web.New(c, web.Options{SignIn: &web.SignIn{Login: "login", Session: "session"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := httptest.NewRequest("GET", path, nil)
+	req.Host = web.DefaultHost + ":7420"
+	req.AddCookie(&http.Cookie{Name: "oc_session", Value: "session"})
+	w := httptest.NewRecorder()
+	s.Handler(web.DefaultAddr).ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET %s: %d\n%s", path, w.Code, w.Body.String())
+	}
+	return w.Body.String()
+}
 
 // setupClaude is a fake Claude Code CLI for a setup session. On its first
 // turn it says hello and asks a question through the toolbelt's MCP server
@@ -132,6 +154,14 @@ func TestDaemonSetupSession(t *testing.T) {
 	if got := ids(scope); got != "start" {
 		t.Fatalf("scope actions: %q", got)
 	}
+	// The web view draws the setup extension's page from its declaration:
+	// in the navigation, with the start action and the binding's grant.
+	page := webPage(t, d.c, "/pages/setup")
+	for _, want := range []string{`<a href="/pages/setup" class="nav-item is-on" aria-current="page">Setup</a>`, `name="action" value="start"`, `value="+shell"><span>A shell</span>`} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("the setup page without %q:\n%s", want, page)
+		}
+	}
 	if _, err := d.c.InvokeAction(ctx, scope, "setup", "start", "sonnet +web", "bad-start"); err == nil || !strings.Contains(err.Error(), "+shell") {
 		t.Fatalf("a grant the binding doesn't offer: %v", err)
 	}
@@ -162,6 +192,13 @@ func TestDaemonSetupSession(t *testing.T) {
 	}
 	if len(asked) != 1 || !strings.Contains(string(asked[0].Data.Data), `"choices":["octo/widgets","octo/gadgets"]`) {
 		t.Fatalf("asked: %+v", asked)
+	}
+	// On the page the session is a conversation with one box that answers.
+	page = webPage(t, d.c, "/pages/setup")
+	for _, want := range []string{"signed in", "Assistant asks", `<button class="choice" name="input" value="octo/gadgets">`, `name="action" value="answer"`, "<dt>Access</dt><dd>A shell</dd>", "End session"} {
+		if !strings.Contains(page, want) {
+			t.Fatalf("the session's page without %q:\n%s", want, page)
+		}
 	}
 
 	if _, err = d.c.InvokeAction(ctx, session, "setup", "message", "I use the work account.", "msg"); err != nil {

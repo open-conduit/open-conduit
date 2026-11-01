@@ -187,7 +187,8 @@ func TestReconcileSendsTheScopeRevision(t *testing.T) {
 func TestConfigWithoutAGeneration(t *testing.T) {
 	f, s, h := configFake(t)
 	f.config.Generation = ""
-	if body := do(h, "GET", "/config", nil, s).Body.String(); !strings.Contains(body, "No configuration yet") || !strings.Contains(body, `href="/setup"`) {
+	f.pages = []client.ExtensionPage{{ID: "setup", Title: "Setup"}}
+	if body := do(h, "GET", "/config", nil, s).Body.String(); !strings.Contains(body, "No configuration yet") || !strings.Contains(body, `<a class="btn btn-primary" href="/pages/setup">Setup</a>`) {
 		t.Fatal("no fresh state")
 	}
 }

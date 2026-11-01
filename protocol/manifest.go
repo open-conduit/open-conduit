@@ -165,6 +165,15 @@ type Provides struct {
 	// Panels marks an extension that shows panels on scope and Work pages
 	// (view.render). Their buttons invoke its actions.
 	Panels bool `json:"panels,omitempty"`
+	// Pages are pages the extension contributes to the operator's web view
+	// (extension.Page). Each names one of its extension types, work kinds
+	// and, optionally, route handlers, and its actions: it needs actions.
+	Pages []PageDecl `json:"pages,omitempty"`
+	// ConfigCandidate marks an extension whose Work proposes configuration
+	// for the operator to review and apply (config.candidate). Without
+	// permission config.read it has no handles to propose, and the host
+	// never calls it.
+	ConfigCandidate bool `json:"config_candidate,omitempty"`
 	// Render marks an extension that renders its own families for agent
 	// prompts (event.render).
 	Render bool `json:"render,omitempty"`
@@ -180,6 +189,24 @@ type Provides struct {
 type TypeDecl struct {
 	Type string `json:"type"`
 }
+
+// PageDecl is a page the extension contributes (extension.Page).
+type PageDecl struct {
+	ID       string   `json:"id"`
+	Title    string   `json:"title"`
+	Summary  string   `json:"summary,omitempty"`
+	Entry    string   `json:"entry"`
+	WorkKind string   `json:"work_kind"`
+	Start    string   `json:"start"`
+	Compose  []string `json:"compose,omitempty"`
+	Route    string   `json:"route,omitempty"`
+}
+
+// Page is the declared page.
+func (d PageDecl) Page() extension.Page {
+	return extension.Page{ID: d.ID, Title: d.Title, Summary: d.Summary, Entry: d.Entry, WorkKind: d.WorkKind, Start: d.Start, Compose: d.Compose, Route: d.Route}
+}
+
 type ExtensionDecl struct {
 	Type    string `json:"type"`
 	Ingress bool   `json:"ingress,omitempty"`
@@ -624,6 +651,25 @@ func (m Manifest) Validate() error {
 			fail("setup %q needs a summary", p.Setup.Type)
 		}
 	}
+	if len(p.Pages) > extension.MaxPages {
+		fail("more than %d pages", extension.MaxPages)
+	}
+	declared := func(kind, v string) bool { return seen[kind+"\x00"+v] }
+	for _, pg := range p.Pages {
+		ident("page", pg.ID)
+		if err := pg.Page().Validate(); err != nil {
+			fail("page %q: %v", pg.ID, err)
+		}
+		if !declared("extension type", pg.Entry) || !declared("work kind", pg.WorkKind) || pg.Route != "" && !declared("route handler", pg.Route) {
+			fail("page %q must name a declared extension type, work kind and route handler", pg.ID)
+		}
+		if !p.Actions {
+			fail("page %q needs actions", pg.ID)
+		}
+	}
+	if p.ConfigCandidate && len(p.WorkKinds) == 0 {
+		fail("config_candidate needs a work kind")
+	}
 	if p.Playbooks != "" && (filepath.IsAbs(p.Playbooks) || strings.HasPrefix(filepath.Clean(p.Playbooks), "..")) {
 		fail("playbooks %q must stay inside the extension directory", p.Playbooks)
 	}
@@ -717,6 +763,7 @@ func (m Manifest) Enabled() []string {
 	set("run_environment", p.RunEnvironment)
 	set("actions", p.Actions)
 	set("panels", p.Panels)
+	set("config_candidate", p.ConfigCandidate)
 	set("render", p.Render)
 	var out []string
 	for _, method := range Methods {

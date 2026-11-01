@@ -80,6 +80,7 @@ type Source interface {
 	Wake(ctx context.Context, id string, r client.WakeRequest, key string) (client.WakeResult, error)
 	Doctor(ctx context.Context, checkSecrets bool) (client.Doctor, error)
 	WorkConfigCandidate(ctx context.Context, work string) (client.ConfigCandidate, error)
+	Pages(ctx context.Context) ([]client.ExtensionPage, error)
 	ApplyConfigText(ctx context.Context, text []byte, hash, generation, key string) (client.ConfigApplied, error)
 }
 
@@ -138,6 +139,10 @@ type Server struct {
 	wmu    sync.Mutex
 	wcache world
 	wat    time.Time
+	// pmu guards the short-lived list of extension pages (navPages).
+	pmu    sync.Mutex
+	pcache []navPage
+	pat    time.Time
 
 	// receipts are this process's interventions, newest first (actions.go).
 	receipts receiptLog
@@ -272,7 +277,7 @@ func (s *Server) Handler(addr string) http.Handler {
 	mux.HandleFunc("GET /scopes", s.authed(func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/config", http.StatusMovedPermanently)
 	}))
-	mux.HandleFunc("GET /setup", s.authed(s.setupPage))
+	mux.HandleFunc("GET /pages/{id}", s.authed(s.extPage))
 	mux.HandleFunc("GET /update", s.authed(s.updatePage))
 	mux.HandleFunc("POST /update", s.authed(s.changed(s.update)))
 	mux.HandleFunc("GET /palette.json", s.authed(s.palette))
@@ -281,7 +286,7 @@ func (s *Server) Handler(addr string) http.Handler {
 	mux.HandleFunc("POST /work/{control}", s.authed(s.changed(s.workControl)))
 	mux.HandleFunc("POST /run/cancel", s.authed(s.changed(s.cancelRun)))
 	mux.HandleFunc("POST /actions", s.authed(s.changed(s.invokeAction)))
-	mux.HandleFunc("POST /setup/apply", s.authed(s.changed(s.setupApply)))
+	mux.HandleFunc("POST /pages/apply", s.authed(s.changed(s.applyChanges)))
 	mux.HandleFunc("POST /scopes/reconcile", s.authed(s.changed(s.reconcileScope)))
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		h := w.Header()

@@ -146,24 +146,62 @@ func edit(text []byte, op, pointer string, value json.RawMessage) ([]byte, json.
 	return doc.Bytes(), before, nil
 }
 
-// configCandidate is the configuration a Work proposes, from the in-process
-// extension that owns its kind (GET /work/{id}/config-candidate): the text
-// behind the candidate's handle, for the operator alone.
+// configCandidate is the configuration a Work proposes, from the extension
+// that owns its kind, in-process or installed (GET
+// /work/{id}/config-candidate): its changes for review and, once one is
+// approved, the text behind the candidate's handle, for the operator alone.
 func (d *daemon) configCandidate(ctx context.Context, w domain.Work) (management.ConfigCandidate, error) {
 	for _, x := range d.inproc {
-		if c, ok := x.(extension.ConfigCandidate); ok && (ownership{x: x}).workKind(w.Kind) {
-			cand, err := c.ConfigCandidate(ctx, w)
-			if err != nil {
-				return management.ConfigCandidate{}, err
-			}
+		c, ok := x.(extension.ConfigCandidate)
+		if !ok || !ownsKind(x, w.Kind) {
+			continue
+		}
+		cand, err := c.ConfigCandidate(ctx, w)
+		if err != nil {
+			return management.ConfigCandidate{}, err
+		}
+		out := management.ConfigCandidate{BaseGeneration: cand.BaseGeneration, Changes: cand.Changes, ApproveAll: cand.ApproveAll, Validate: cand.Validate}
+		if cand.Handle != "" {
 			text, ok := d.configHandles.get(cand.Handle)
 			if !ok {
 				return management.ConfigCandidate{}, storage.ErrNotFound
 			}
-			return management.ConfigCandidate{Text: text, BaseGeneration: cand.BaseGeneration, Hash: cand.Hash}, nil
+			out.Text, out.Hash = text, cand.Hash
 		}
+		return out, nil
 	}
 	return management.ConfigCandidate{}, storage.ErrNotFound
+}
+
+// ownsKind reports whether x owns the Work kind: one it declares, in
+// process or in its manifest.
+func ownsKind(x inproc.Extension, kind string) bool {
+	if p, ok := x.(*installed); ok {
+		return p.ownsKind(kind)
+	}
+	return ownership{x: x}.workKind(kind)
+}
+
+// pages are every extension's pages, in-process and installed, by the
+// extension that declares them. A page that doesn't validate, or whose ID
+// an earlier extension took, is left out.
+func (d *daemon) pages() []management.Page {
+	var out []management.Page
+	taken := map[string]bool{}
+	for _, x := range d.inproc {
+		p, ok := x.(inproc.Paged)
+		if !ok {
+			continue
+		}
+		for i, pg := range p.Pages() {
+			if i == extension.MaxPages || pg.Validate() != nil || taken[pg.ID] {
+				continue
+			}
+			taken[pg.ID] = true
+			out = append(out, management.Page{Extension: x.Name(), Page: pg})
+		}
+	}
+	return out
 }
 
 func (h configHost) Trace(ctx context.Context, handle, scope, sample string) (inproc.CandidateTrace, error) {

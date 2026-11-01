@@ -35,8 +35,10 @@ func (s *Server) palette(w http.ResponseWriter, r *http.Request) {
 		paletteItem{Label: "Runs", Hint: "page", Href: "/"},
 		paletteItem{Label: "Needs you", Hint: "page", Href: "/attention"},
 		paletteItem{Label: "Configuration", Hint: "page", Href: "/config"},
-		paletteItem{Label: "Setup", Hint: "page", Href: "/setup"},
 	)
+	for _, p := range s.navPages(r.Context()) {
+		items = append(items, paletteItem{Label: p.Title, Hint: "page", Href: p.Href})
+	}
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(items)
 }

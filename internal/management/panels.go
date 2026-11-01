@@ -1,6 +1,10 @@
 package management
 
-import "github.com/open-conduit/open-conduit/extension"
+import (
+	"time"
+
+	"github.com/open-conduit/open-conduit/extension"
+)
 
 // Extension panels (issue #90): GET /scopes/{id}/panels and
 // GET /work/{id}/panels return what each action provider that is also an
@@ -19,12 +23,22 @@ type wirePanel struct {
 }
 
 type wireSection struct {
-	Title   string       `json:"title,omitempty"`
-	Text    string       `json:"text,omitempty"`
-	Fields  []wireField  `json:"fields,omitempty"`
-	Table   *wireTable   `json:"table,omitempty"`
-	Links   []wireLink   `json:"links,omitempty"`
-	Actions []wireAction `json:"actions,omitempty"`
+	Title    string        `json:"title,omitempty"`
+	Text     string        `json:"text,omitempty"`
+	Fields   []wireField   `json:"fields,omitempty"`
+	Table    *wireTable    `json:"table,omitempty"`
+	Messages []wireMessage `json:"messages,omitempty"`
+	Links    []wireLink    `json:"links,omitempty"`
+	Actions  []wireAction  `json:"actions,omitempty"`
+}
+
+type wireMessage struct {
+	From    string    `json:"from"`
+	Label   string    `json:"label,omitempty"`
+	Text    string    `json:"text"`
+	At      time.Time `json:"at,omitzero"`
+	Choices []string  `json:"choices,omitempty"`
+	Chosen  string    `json:"chosen,omitempty"`
 }
 
 type wireField struct {
@@ -79,6 +93,9 @@ func toPanel(provider string, p extension.Panel, actions map[string]wireAction) 
 			if w.Table.Rows == nil {
 				w.Table.Rows = [][]string{}
 			}
+		}
+		for _, m := range sec.Messages {
+			w.Messages = append(w.Messages, wireMessage(m))
 		}
 		for _, l := range sec.Links {
 			w.Links = append(w.Links, wireLink{Label: l.Label, URL: l.URL})
