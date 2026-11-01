@@ -128,7 +128,10 @@ func (e *toolsEnv) compose() {
 			return runtime.SetWaitProgressInTx(tx, gh.Type, work, text)
 		})
 	}
-	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, WaitProgress: progress, Writers: e.writers, Sources: func() []gh.Source {
+	mayRead := func(reader, target domain.ID) error {
+		return authorize(context.Background(), runtime.AliasAuthorization{SourceScopeID: target, TargetScopeID: reader})
+	}
+	if e.tools, err = gh.NewTools(gh.ToolsOptions{Store: e.store, Now: e.clock.Now, Jobs: e.jobs, WaitProgress: progress, Writers: e.writers, MayRead: mayRead, Sources: func() []gh.Source {
 		return append([]gh.Source{{Settings: e.settings, Connection: "github", Client: e.client, Projector: e.projector}}, e.extra...)
 	}}); err != nil {
 		t.Fatal(err)
@@ -551,6 +554,43 @@ func TestGitHubAlreadyMetWaits(t *testing.T) {
 	}
 }
 
+// A hold on another project's issue that this project may not read can
+// never register until the config changes (issue 300). The hold attempt
+// does not fail and retry: it starts the issue now and says why and how to
+// allow the wait. With a time as well, it waits for the time and says
+// which condition it can't wait on.
+func TestGitHubHeldOnAnUnreadableProject(t *testing.T) {
+	e := newToolsEnv(t)
+	ops := e.opsScope()
+	n := ops.OpenIssue("Set up", "", ghAlice)
+	cond := "issue:ops/" + itoa(n) + ":closed"
+	_, w := e.heldClaim("After the setup", "<!-- waitFor: "+cond+" -->")
+	why := e.runHold(w.ID)
+	if !strings.Contains(why, "which nothing here can tell has happened; it starts now.") || !strings.Contains(why, `add "ops" to `+string(ghScope)+"'s authorization.read_scopes") {
+		t.Fatalf("release: %q", why)
+	}
+	if q := e.queued(w.ID); len(q) != 1 || q[0] != gh.TypeHoldReleased {
+		t.Fatalf("agent input after release: %v", q)
+	}
+
+	at := e.clock.Now().Add(2 * time.Hour).UTC().Format("2006-01-02T15:04Z")
+	_, tw := e.heldClaim("After the setup or a time", "<!-- waitFor: "+cond+"; until "+at+" -->")
+	a := e.start(tw.ID)
+	res, err := a.Handle.Wait(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(res.Outcome.Summary, "it can't wait on "+cond+": project ") || !strings.Contains(res.Outcome.Summary, "authorization.read_scopes") {
+		t.Fatalf("held summary: %q", res.Outcome.Summary)
+	}
+	if err = e.scheduler.Complete(context.Background(), a.Lease, res); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.work(tw.ID); got.State != domain.WorkWaiting {
+		t.Fatalf("held Work: %v", got.State)
+	}
+}
+
 // heldClaim opens a scheduled issue and lets the hold route claim it.
 func (e *toolsEnv) heldClaim(title, body string) (int, domain.Work) {
 	e.t.Helper()
@@ -701,12 +741,11 @@ func (e *toolsEnv) publishTurns() {
 	e.route()
 }
 
-// A wait on another scope's PR needs that scope in read_scopes (B04).
-func TestGitHubCrossScopeWaitNeedsAuthorization(t *testing.T) {
-	e := newToolsEnv(t)
+// opsScope registers a second scope, ops, with its own GitHub repository.
+func (e *toolsEnv) opsScope() *githubtest.Server {
+	t := e.t
 	ops := githubtest.New("octo/ops", "tok")
-	defer ops.Close()
-	opsPR := ops.OpenPull("Deploy", "", "deploy", "d1", ghAlice)
+	t.Cleanup(ops.Close)
 	opsExt := `{"namespace":"github/github.com/octo/ops","scope":"ops","repo":"octo/ops"}`
 	e.putScope("ops", opsExt)
 	cfg, _ := gh.ParseConnection([]byte(`{"api_url":"` + ops.URL + `"}`))
@@ -718,12 +757,22 @@ func TestGitHubCrossScopeWaitNeedsAuthorization(t *testing.T) {
 	if err := e.ingress.Register(context.Background(), "github/ops", extension.Source{Namespace: s.Namespace, ScopeID: "ops"}, in, 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
+	return ops
+}
+
+// A wait on another scope's PR needs that scope in read_scopes (B04). The
+// refusal comes when the condition is resolved and says how to allow it.
+func TestGitHubCrossScopeWaitNeedsAuthorization(t *testing.T) {
+	e := newToolsEnv(t)
+	ops := e.opsScope()
+	opsPR := ops.OpenPull("Deploy", "", "deploy", "d1", ghAlice)
 	_, w := e.claim("Needs the deploy", "", "bug")
 	a := e.start(w.ID)
 	cond := "pr:ops/" + itoa(opsPR) + ":merged"
 	_, err := e.call(a, gh.OpWait, "", map[string]any{"conditions": []string{cond}, "reason": "after the deploy"})
-	if !errors.Is(err, extension.ErrUnauthorized) {
-		t.Fatalf("unauthorized cross-scope wait: %v", err)
+	refused(t, err, "not_allowed")
+	if !strings.Contains(err.Error(), `add "ops" to `+string(ghScope)+"'s authorization.read_scopes") {
+		t.Fatalf("refusal does not say how to allow it: %v", err)
 	}
 	e.mu.Lock()
 	e.aliasOK = true

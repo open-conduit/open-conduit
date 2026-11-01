@@ -37,7 +37,7 @@ func (d *daemon) githubSourcesList() []gh.Source {
 
 // openTools prepares the shared tools instance.
 func (d *daemon) openTools() error {
-	tools, err := gh.NewTools(gh.ToolsOptions{Store: d.coord, Sources: d.githubSourcesList, Now: d.now, Jobs: d.scheduleJob, WaitProgress: d.waitProgress(gh.Type), Writers: d.githubWriters()})
+	tools, err := gh.NewTools(gh.ToolsOptions{Store: d.coord, Sources: d.githubSourcesList, Now: d.now, Jobs: d.scheduleJob, WaitProgress: d.waitProgress(gh.Type), Writers: d.githubWriters(), MayRead: d.mayRead})
 	if err != nil {
 		return err
 	}
@@ -67,6 +67,12 @@ func (d *daemon) authorizeAlias(_ context.Context, a runtime.AliasAuthorization)
 		return errors.New("no configuration")
 	}
 	return s.AuthorizeRead(a.TargetScopeID, a.SourceScopeID)
+}
+
+// mayRead answers whether reader's scope may depend on target's events, as
+// the runtime authorizes a cross-scope wait when it registers.
+func (d *daemon) mayRead(reader, target domain.ID) error {
+	return d.authorizeAlias(context.Background(), runtime.AliasAuthorization{SourceScopeID: target, TargetScopeID: reader})
 }
 
 // pluginDir is where the playbook plugin is written for claude-code.

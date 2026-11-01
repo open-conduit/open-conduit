@@ -610,15 +610,21 @@ func (d *daemon) poke() {
 }
 
 // report logs a diagnostic once per subject until its code changes, so a
-// persistently ineligible item does not flood the log on every pass.
-func (d *daemon) report(kind string, subject domain.ID, code string) {
+// persistently ineligible item does not flood the log on every pass. A
+// cause (runtime.FailureCause: a refusal's code and message) is logged with
+// it, so the log says what went wrong, not only that something did.
+func (d *daemon) report(kind string, subject domain.ID, code string, cause ...string) {
 	key := kind + "\x00" + string(subject)
 	d.mu.Lock()
 	same := d.reported[key] == code
 	d.reported[key] = code
 	d.mu.Unlock()
 	if !same && code != "" {
-		d.log.Info("runtime diagnostic", "kind", kind, "id", string(subject), "code", code)
+		attrs := []any{"kind", kind, "id", string(subject), "code", code}
+		if len(cause) > 0 && cause[0] != "" {
+			attrs = append(attrs, "cause", cause[0])
+		}
+		d.log.Info("runtime diagnostic", attrs...)
 	}
 }
 
