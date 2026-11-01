@@ -91,7 +91,7 @@ func fileIncludes(configPath string) config.Includes {
 // executors' capabilities and config validators do not touch runtime state.
 func offlineExecutors() map[string]extension.Executor {
 	inner := &shell.Executor{}
-	out := map[string]extension.Executor{"shell": inner, ClaudeCodeExecutor: &claudecode.Executor{}, gh.HoldExecutor: gh.NewHoldExecutor()}
+	out := map[string]extension.Executor{"shell": inner, ClaudeCodeExecutor: claudecode.Offline(gh.Playbook), gh.HoldExecutor: gh.NewHoldExecutor()}
 	if legacy, err := sc.NewLegacyExecutor(sc.LegacyOptions{Inner: inner}); err == nil {
 		out[sc.LegacyExecutorName] = legacy
 	}

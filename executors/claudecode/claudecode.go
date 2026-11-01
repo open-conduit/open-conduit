@@ -132,6 +132,13 @@ type Executor struct {
 	runs map[domain.ID]*run
 }
 
+// Offline is an executor for validating and describing configs alone: it
+// treats a binding that names no playbook with the host's default
+// playbook, and runs nothing.
+func Offline(defaultPlaybook string) *Executor {
+	return &Executor{o: Options{DefaultPlaybook: defaultPlaybook}}
+}
+
 // New validates options and creates the private state directory.
 func New(o Options) (*Executor, error) {
 	if !processSupported {
