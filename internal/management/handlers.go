@@ -910,6 +910,15 @@ func (s *Server) applyConfig(c *call) (int, any, error) {
 	return 200, map[string]any{"generation": u64(generation), "hash": hash}, nil
 }
 
+// ConfigCandidate is a configuration a Work proposes, ready for POST
+// /config/apply: its file text (which may carry reference text), the
+// generation it is based on and its hash.
+type ConfigCandidate struct {
+	Text           []byte
+	BaseGeneration string
+	Hash           string
+}
+
 // configCandidate is the configuration a Work proposes for the operator to
 // apply (a setup session's approved changes): the file text, the
 // generation it is based on and its hash, ready for POST /config/apply.

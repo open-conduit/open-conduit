@@ -63,6 +63,7 @@ func TestDaemonExtensionPackages(t *testing.T) {
 	}
 	service := filepath.Join(d.root, "service.json")
 	writeNotes(service, "a", "b")
+	const existingRef = "env:NOTES_EXISTING_REF"
 	config := func(entry map[string]any) []byte {
 		cfg := map[string]any{"version": 1, "settings": map[string]any{"retry_delays_seconds": []int{1}}, "connections": []any{},
 			"scopes": []any{map[string]any{"id": "notes-scope", "name": "Notes",
@@ -70,7 +71,7 @@ func TestDaemonExtensionPackages(t *testing.T) {
 				"bindings":      []any{map[string]any{"name": "run", "executor": "runner", "requires": map[string]any{"toolbelt": "none"}, "operations": []any{}, "secret_names": []any{}, "config": map[string]any{"auto": true}}},
 				"routes":        []any{map[string]any{"name": "notes", "handler": "notes", "binding": "run", "active_policy": "queue", "config": map[string]any{}}},
 				"extensions":    []any{map[string]any{"name": "notes", "type": "notes", "config": entry, "secret_names": []any{}}},
-				"secret_refs":   map[string]any{},
+				"secret_refs":   map[string]any{"existing": existingRef},
 			}}}
 		b, _ := json.Marshal(cfg)
 		return b
@@ -109,6 +110,42 @@ func TestDaemonExtensionPackages(t *testing.T) {
 		}
 	}
 	d.until("both notes worked by the external executor", 60*time.Second, completed(2))
+	// The package proposes config through the host's handles (permission
+	// config.read): it reads the base, edits, validates and traces a
+	// candidate, and never receives reference text, the base's or its own.
+	var proposed notes.ConfigRun
+	var proposedRaw []byte
+	d.until("the package's config task ran", 90*time.Second, func() bool {
+		matches, _ := filepath.Glob(filepath.Join(d.state, "*", "notes", "config.json"))
+		if len(matches) == 0 {
+			matches, _ = filepath.Glob(filepath.Join(d.state, "*", "*", "notes", "config.json"))
+		}
+		if len(matches) == 0 {
+			return false
+		}
+		raw, err := os.ReadFile(matches[0])
+		proposedRaw = raw
+		return err == nil && json.Unmarshal(raw, &proposed) == nil
+	})
+	if strings.Contains(string(proposedRaw), existingRef) || strings.Contains(string(proposedRaw), notes.ConfigRef) {
+		t.Fatalf("the package received reference text: %s", proposedRaw)
+	}
+	if !strings.Contains(proposed.Base.Text, `"existing": "[redacted]"`) || proposed.Base.Handle == "" || proposed.Base.Generation != "1" {
+		t.Fatalf("base %+v", proposed.Base)
+	}
+	if len(proposed.Edits) != 2 || string(proposed.Edits[0].Before) != `"Notes"` || len(proposed.Edits[1].Before) != 0 ||
+		!strings.Contains(proposed.Edits[1].Text, `"notes_token": "[redacted]"`) || !strings.Contains(proposed.Edits[1].Text, `"Notes, proposed"`) {
+		t.Fatalf("edits %+v", proposed.Edits)
+	}
+	if proposed.Validate.Hash == "" || len(proposed.Validate.Diagnostics) != 0 {
+		t.Fatalf("the candidate did not validate: %+v", proposed.Validate)
+	}
+	if proposed.Samples.Error != "" {
+		t.Fatalf("trace against the candidate: %+v", proposed.Samples)
+	}
+	if s, err := d.c.Scope(ctx, "notes-scope"); err != nil || s.Name != "Notes" {
+		t.Fatalf("the package's candidate was applied: %+v %v", s, err)
+	}
 	runs, err := d.c.Runs(ctx, url.Values{"scope_id": {"notes-scope"}})
 	if err != nil || len(runs.Items) != 2 || runs.Items[0].Executor != "runner" {
 		t.Fatalf("runs: %+v %v", runs.Items, err)

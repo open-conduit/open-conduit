@@ -1,13 +1,19 @@
 package bootstrap
 
 import (
+	"bytes"
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io/fs"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -21,18 +27,20 @@ import (
 )
 
 // configHost is inproc.ConfigHost over the daemon's config service: it
-// reads, validates and edits config text, and never applies it.
+// reads, validates and edits config text it keeps behind handles, hands
+// extensions only redacted copies, and never applies it.
 type configHost struct {
 	configs func() *management.ConfigService
 	control func() *runtime.Control
 	path    string
 	def     func() []byte
+	handles *configHandles
 }
 
 var _ inproc.ConfigHost = configHost{}
 
 func (d *daemon) configHost() configHost {
-	return configHost{configs: func() *management.ConfigService { return d.configs }, path: d.o.ConfigPath, def: DefaultConfig,
+	return configHost{configs: func() *management.ConfigService { return d.configs }, path: d.o.ConfigPath, def: DefaultConfig, handles: &d.configHandles,
 		control: func() *runtime.Control {
 			if c := d.current.Load(); c != nil {
 				return c.control
@@ -57,7 +65,7 @@ func (h configHost) Base(context.Context) (inproc.ConfigBase, error) {
 	if err != nil {
 		return inproc.ConfigBase{}, errors.New("the config file could not be read")
 	}
-	b := inproc.ConfigBase{Generation: strconv.FormatUint(generation, 10), Hash: s.Hash, Text: text}
+	b := inproc.ConfigBase{Generation: strconv.FormatUint(generation, 10), Hash: s.Hash, Handle: h.handles.put(text), Text: redactText(text)}
 	for id, scope := range s.Scopes {
 		if scope.Source != "" {
 			b.Folders = append(b.Folders, string(id))
@@ -67,7 +75,11 @@ func (h configHost) Base(context.Context) (inproc.ConfigBase, error) {
 	return b, nil
 }
 
-func (h configHost) Validate(_ context.Context, text []byte) (string, []inproc.ConfigDiagnostic, error) {
+func (h configHost) Validate(_ context.Context, handle string) (string, []inproc.ConfigDiagnostic, error) {
+	text, ok := h.handles.get(handle)
+	if !ok {
+		return "", nil, inproc.ErrConfigHandle
+	}
 	c := h.configs()
 	if c == nil {
 		return "", nil, errors.New("no configuration yet")
@@ -87,7 +99,21 @@ func (h configHost) Validate(_ context.Context, text []byte) (string, []inproc.C
 	return s.Hash, nil, nil
 }
 
-func (configHost) Edit(text []byte, op, pointer string, value json.RawMessage) ([]byte, json.RawMessage, error) {
+func (h configHost) Edit(_ context.Context, handle, op, pointer string, value json.RawMessage) (inproc.ConfigEdited, error) {
+	text, ok := h.handles.get(handle)
+	if !ok {
+		return inproc.ConfigEdited{}, inproc.ErrConfigHandle
+	}
+	out, before, err := edit(text, op, pointer, value)
+	if err != nil {
+		return inproc.ConfigEdited{}, err
+	}
+	return inproc.ConfigEdited{Handle: h.handles.put(out), Text: redactText(out), Before: redactAt(pointer, before)}, nil
+}
+
+// edit makes one edit to config text: the new text and the value that was
+// at pointer.
+func edit(text []byte, op, pointer string, value json.RawMessage) ([]byte, json.RawMessage, error) {
 	doc, err := cli.ParseConfigDoc(text)
 	if err != nil {
 		return nil, nil, errors.New("the config is not a JSON object")
@@ -121,17 +147,30 @@ func (configHost) Edit(text []byte, op, pointer string, value json.RawMessage) (
 }
 
 // configCandidate is the configuration a Work proposes, from the in-process
-// extension that owns its kind (GET /work/{id}/config-candidate).
-func (d *daemon) configCandidate(ctx context.Context, w domain.Work) (extension.Candidate, error) {
+// extension that owns its kind (GET /work/{id}/config-candidate): the text
+// behind the candidate's handle, for the operator alone.
+func (d *daemon) configCandidate(ctx context.Context, w domain.Work) (management.ConfigCandidate, error) {
 	for _, x := range d.inproc {
 		if c, ok := x.(extension.ConfigCandidate); ok && (ownership{x: x}).workKind(w.Kind) {
-			return c.ConfigCandidate(ctx, w)
+			cand, err := c.ConfigCandidate(ctx, w)
+			if err != nil {
+				return management.ConfigCandidate{}, err
+			}
+			text, ok := d.configHandles.get(cand.Handle)
+			if !ok {
+				return management.ConfigCandidate{}, storage.ErrNotFound
+			}
+			return management.ConfigCandidate{Text: text, BaseGeneration: cand.BaseGeneration, Hash: cand.Hash}, nil
 		}
 	}
-	return extension.Candidate{}, storage.ErrNotFound
+	return management.ConfigCandidate{}, storage.ErrNotFound
 }
 
-func (h configHost) Trace(ctx context.Context, text []byte, scope, sample string) (inproc.CandidateTrace, error) {
+func (h configHost) Trace(ctx context.Context, handle, scope, sample string) (inproc.CandidateTrace, error) {
+	text, ok := h.handles.get(handle)
+	if !ok {
+		return inproc.CandidateTrace{}, inproc.ErrConfigHandle
+	}
 	c, control := h.configs(), h.control()
 	if c == nil || control == nil {
 		return inproc.CandidateTrace{}, errors.New("no configuration yet")
@@ -179,4 +218,120 @@ func (h configHost) Trace(ctx context.Context, text []byte, scope, sample string
 	}
 	out.Effect = inproc.CandidateEffect{Kind: t.Effect.Kind, WorkID: string(t.Effect.WorkID), Binding: t.Effect.Binding, Detail: t.Effect.Detail}
 	return out, nil
+}
+
+// maxConfigHandles bounds the config texts the host holds for extensions;
+// the least recently used goes first.
+const maxConfigHandles = 256
+
+// configHandles holds config texts (bases and candidates) behind random
+// handles, so an extension refers to text it never receives. The same text
+// keeps its handle while it is held.
+type configHandles struct {
+	mu     sync.Mutex
+	byID   map[string][]byte
+	byText map[[sha256.Size]byte]string
+	order  []string // least recently used first
+}
+
+func (h *configHandles) put(text []byte) string {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.byID == nil {
+		h.byID, h.byText = map[string][]byte{}, map[[sha256.Size]byte]string{}
+	}
+	sum := sha256.Sum256(text)
+	id, ok := h.byText[sum]
+	if !ok {
+		var b [16]byte
+		_, _ = rand.Read(b[:])
+		id = "cfg_" + hex.EncodeToString(b[:])
+		h.byID[id], h.byText[sum] = bytes.Clone(text), id
+	}
+	h.touch(id)
+	for len(h.order) > maxConfigHandles {
+		old := h.order[0]
+		h.order = h.order[1:]
+		delete(h.byText, sha256.Sum256(h.byID[old]))
+		delete(h.byID, old)
+	}
+	return id
+}
+
+func (h *configHandles) get(id string) ([]byte, bool) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	text, ok := h.byID[id]
+	if ok {
+		h.touch(id)
+	}
+	return bytes.Clone(text), ok
+}
+
+func (h *configHandles) touch(id string) {
+	if i := slices.Index(h.order, id); i >= 0 {
+		h.order = slices.Delete(h.order, i, i+1)
+	}
+	h.order = append(h.order, id)
+}
+
+// redacted stands in for reference text.
+const redacted = "[redacted]"
+
+// redactText is config text with every secret_refs value replaced by
+// "[redacted]" (false, which unsets an inherited name, is kept). Text that
+// isn't JSON gives nothing.
+func redactText(text []byte) []byte {
+	var v any
+	if json.Unmarshal(text, &v) != nil {
+		return nil
+	}
+	out, _ := json.MarshalIndent(redactValue(v, false), "", "  ")
+	return out
+}
+
+// redactAt redacts a value found at pointer: the reference itself when
+// pointer is inside a secret_refs object, its values when pointer is one.
+func redactAt(pointer string, value json.RawMessage) json.RawMessage {
+	if len(value) == 0 {
+		return nil
+	}
+	var v any
+	if json.Unmarshal(value, &v) != nil {
+		return nil
+	}
+	parts := strings.Split(pointer, "/")
+	switch {
+	case len(parts) >= 3 && parts[len(parts)-2] == "secret_refs":
+		v = redactRef(v)
+	default:
+		v = redactValue(v, parts[len(parts)-1] == "secret_refs")
+	}
+	out, _ := json.Marshal(v)
+	return out
+}
+
+func redactValue(v any, refs bool) any {
+	switch x := v.(type) {
+	case map[string]any:
+		for k, m := range x {
+			if refs {
+				x[k] = redactRef(m)
+				continue
+			}
+			x[k] = redactValue(m, k == "secret_refs")
+		}
+	case []any:
+		for i, m := range x {
+			x[i] = redactValue(m, false)
+		}
+	}
+	return v
+}
+
+func redactRef(v any) any {
+	if b, ok := v.(bool); ok && !b {
+		return false
+	}
+	return redacted
 }

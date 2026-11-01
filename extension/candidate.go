@@ -6,12 +6,13 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 )
 
-// Candidate is a configuration an extension's Work proposes: config file
-// text, the generation it is based on and its hash. The operator applies it
-// with POST /config/apply (config_text, expected_generation,
+// Candidate is a configuration an extension's Work proposes: the host's
+// handle on its config file text (inproc.ConfigHost), the generation it is
+// based on and its hash. The host serves the text to the operator, who
+// applies it with POST /config/apply (config_text, expected_generation,
 // candidate_hash); nothing else can.
 type Candidate struct {
-	Text           []byte
+	Handle         string
 	BaseGeneration string
 	Hash           string
 }

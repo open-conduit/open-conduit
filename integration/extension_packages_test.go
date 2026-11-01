@@ -698,5 +698,17 @@ func TestPermissionsOverProtocol(t *testing.T) {
 		if _, err := host.Probe(ctx, notes.ProbeName, map[string]string{"say": "x"}); !errors.Is(err, extension.ErrUndeclared) {
 			t.Fatalf("probe.run without probes: %v", err)
 		}
+		if _, err := host.ConfigBase(ctx); !errors.Is(err, extension.ErrUndeclared) {
+			t.Fatalf("config.base without config.read: %v", err)
+		}
+		if _, err := host.ConfigEdit(ctx, "cfg_x", "add", "/scopes/-", json.RawMessage(`{}`)); !errors.Is(err, extension.ErrUndeclared) {
+			t.Fatalf("config.edit without config.read: %v", err)
+		}
+		if _, err := host.ConfigValidate(ctx, "cfg_x"); !errors.Is(err, extension.ErrUndeclared) {
+			t.Fatalf("config.validate without config.read: %v", err)
+		}
+		if _, err := host.ConfigTrace(ctx, "cfg_x", "notes-scope", ""); !errors.Is(err, extension.ErrUndeclared) {
+			t.Fatalf("config.trace without config.read: %v", err)
+		}
 	})
 }

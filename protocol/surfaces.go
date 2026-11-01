@@ -241,6 +241,97 @@ type ProbeRunResult struct {
 	Error   string          `json:"error,omitempty"`
 }
 
+// The host's config service (permission config.read). The host keeps
+// config text behind handles and answers only copies with every
+// secret_refs value "[redacted]"; an extension builds candidates by editing
+// a handle. Nothing here applies a configuration.
+
+// ConfigBaseResult is the configuration now: its generation and hash, a
+// handle on its file text, the text redacted, and the scopes from included
+// folders, whose text is in other files.
+type ConfigBaseResult struct {
+	Generation string   `json:"generation"`
+	Hash       string   `json:"hash"`
+	Handle     string   `json:"handle"`
+	Text       string   `json:"text"`
+	Folders    []string `json:"folders,omitempty"`
+}
+
+// ConfigEditParams is one `config set`/`config unset` edit to the text
+// behind Handle: op add, replace or remove at a JSON pointer.
+type ConfigEditParams struct {
+	Handle  string          `json:"handle"`
+	Op      string          `json:"op"`
+	Pointer string          `json:"pointer"`
+	Value   json.RawMessage `json:"value,omitempty"`
+}
+
+// ConfigEditResult is the candidate the edit built: its handle, its text
+// redacted and the value that was at the pointer, redacted.
+type ConfigEditResult struct {
+	Handle string          `json:"handle"`
+	Text   string          `json:"text"`
+	Before json.RawMessage `json:"before,omitempty"`
+}
+
+type ConfigHandleParams struct {
+	Handle string `json:"handle"`
+}
+
+// ConfigDiagnostic is one validation problem, as `config validate` prints
+// it.
+type ConfigDiagnostic struct {
+	Path    string `json:"path"`
+	Code    string `json:"code"`
+	Message string `json:"message"`
+}
+
+// ConfigValidateResult is the candidate's hash when it is valid, its
+// diagnostics when not.
+type ConfigValidateResult struct {
+	Hash        string             `json:"hash,omitempty"`
+	Diagnostics []ConfigDiagnostic `json:"diagnostics,omitempty"`
+}
+
+// ConfigTraceParams traces one of a scope's named samples against the
+// candidate behind Handle; with no sample it lists the scope's samples.
+type ConfigTraceParams struct {
+	Handle string `json:"handle"`
+	Scope  string `json:"scope"`
+	Sample string `json:"sample,omitempty"`
+}
+
+// ConfigTraceResult is what routing would do with the sample, route by
+// route. A trace that can't run answers Error, a fixed reason, with the
+// scope's samples when it has them.
+type ConfigTraceResult struct {
+	Samples []ConfigTraceSample `json:"samples,omitempty"`
+	Sample  string              `json:"sample,omitempty"`
+	Routes  []ConfigTraceRoute  `json:"routes,omitempty"`
+	Effect  ConfigTraceEffect   `json:"effect,omitzero"`
+	Error   string              `json:"error,omitempty"`
+}
+
+type ConfigTraceSample struct {
+	ID    string `json:"id"`
+	Title string `json:"title"`
+}
+
+type ConfigTraceRoute struct {
+	Route   string `json:"route"`
+	Handler string `json:"handler"`
+	Binding string `json:"binding,omitempty"`
+	Verdict string `json:"verdict"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+type ConfigTraceEffect struct {
+	Kind    string `json:"kind,omitempty"`
+	WorkID  string `json:"work_id,omitempty"`
+	Binding string `json:"binding,omitempty"`
+	Detail  string `json:"detail,omitempty"`
+}
+
 // Run environment.
 
 // RunEnvironmentParams asks for the extension's environment layer for one

@@ -2,6 +2,7 @@ package sdk
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"time"
 
@@ -182,6 +183,41 @@ func (h *Host) Artifact(ctx context.Context, mediaType string, data []byte) (dom
 // the machine; the zero time is the host's now.
 func (h *Host) Capture(ctx context.Context, scope domain.ID, name string, at time.Time, props map[string]any) error {
 	return h.conn.Call(ctx, "telemetry.capture", protocol.TelemetryEvent{ScopeID: string(scope), Name: name, At: at, Properties: props}, nil)
+}
+
+// ConfigBase reads the configuration now (permission config.read): its
+// generation and hash, and a handle on its text with the text itself
+// redacted. The host keeps the reference text.
+func (h *Host) ConfigBase(ctx context.Context) (protocol.ConfigBaseResult, error) {
+	var out protocol.ConfigBaseResult
+	err := h.conn.Call(ctx, "config.base", struct{}{}, &out)
+	return out, err
+}
+
+// ConfigEdit makes one edit (op add, replace or remove at a JSON pointer)
+// to the text behind handle; the host holds the result as a new candidate
+// (permission config.read). value may set a new reference.
+func (h *Host) ConfigEdit(ctx context.Context, handle, op, pointer string, value json.RawMessage) (protocol.ConfigEditResult, error) {
+	var out protocol.ConfigEditResult
+	err := h.conn.Call(ctx, "config.edit", protocol.ConfigEditParams{Handle: handle, Op: op, Pointer: pointer, Value: value}, &out)
+	return out, err
+}
+
+// ConfigValidate validates the candidate behind handle as POST
+// /config/validate would (permission config.read).
+func (h *Host) ConfigValidate(ctx context.Context, handle string) (protocol.ConfigValidateResult, error) {
+	var out protocol.ConfigValidateResult
+	err := h.conn.Call(ctx, "config.validate", protocol.ConfigHandleParams{Handle: handle}, &out)
+	return out, err
+}
+
+// ConfigTrace traces one of a scope's named samples against the candidate
+// behind handle, writing nothing; with no sample it lists the scope's
+// samples (permission config.read).
+func (h *Host) ConfigTrace(ctx context.Context, handle, scope, sample string) (protocol.ConfigTraceResult, error) {
+	var out protocol.ConfigTraceResult
+	err := h.conn.Call(ctx, "config.trace", protocol.ConfigTraceParams{Handle: handle, Scope: scope, Sample: sample}, &out)
+	return out, err
 }
 
 // Probes lists the setup probes the host, its extensions and its executors

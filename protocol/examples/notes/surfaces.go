@@ -312,6 +312,64 @@ func telemetry(ctx context.Context, h *sdk.Host, o Options, scopes []string) err
 	return os.WriteFile(filepath.Join(o.StateDir(), "probes.json"), out, 0o600)
 }
 
+// ConfigRun is what ConfigTask writes to config.json: every answer the
+// host gave it.
+type ConfigRun struct {
+	Base     protocol.ConfigBaseResult     `json:"base"`
+	Edits    []protocol.ConfigEditResult   `json:"edits"`
+	Validate protocol.ConfigValidateResult `json:"validate"`
+	Samples  protocol.ConfigTraceResult    `json:"samples"`
+	Trace    *protocol.ConfigTraceResult   `json:"trace,omitempty"`
+}
+
+// proposeConfig builds a candidate from the configuration now: the first
+// scope renamed, with a new reference. The host holds the text; the
+// package sees it only redacted, and nothing it does applies it.
+func proposeConfig(ctx context.Context, h *sdk.Host, o Options, scopes []string) error {
+	if len(scopes) == 0 {
+		return nil
+	}
+	sort.Strings(scopes)
+	scope := scopes[0]
+	var run ConfigRun
+	var err error
+	if run.Base, err = h.ConfigBase(ctx); err != nil {
+		return err
+	}
+	handle := run.Base.Handle
+	for _, e := range []struct{ pointer, value string }{
+		{"/scopes/" + scope + "/name", `"Notes, proposed"`},
+		{"/scopes/" + scope + "/secret_refs/notes_token", `"` + ConfigRef + `"`},
+	} {
+		res, err := h.ConfigEdit(ctx, handle, "add", e.pointer, json.RawMessage(e.value))
+		if err != nil {
+			return err
+		}
+		run.Edits, handle = append(run.Edits, res), res.Handle
+	}
+	if run.Validate, err = h.ConfigValidate(ctx, handle); err != nil {
+		return err
+	}
+	if run.Samples, err = h.ConfigTrace(ctx, handle, scope, ""); err != nil {
+		return err
+	}
+	if len(run.Samples.Samples) > 0 {
+		t, err := h.ConfigTrace(ctx, handle, scope, run.Samples.Samples[0].ID)
+		if err != nil {
+			return err
+		}
+		run.Trace = &t
+	}
+	if o.StateDir == nil || o.StateDir() == "" {
+		return nil
+	}
+	out, err := json.Marshal(run)
+	if err != nil {
+		return err
+	}
+	return os.WriteFile(filepath.Join(o.StateDir(), "config.json"), out, 0o600)
+}
+
 // appendLine appends one line to a file in the state directory.
 func appendLine(stateDir func() string, file, line string) error {
 	if stateDir == nil || stateDir() == "" {

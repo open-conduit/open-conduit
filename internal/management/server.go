@@ -84,9 +84,10 @@ type Options struct {
 	// checked, by runtime.CheckTraceEvent).
 	AdmitTrace func(scope domain.ID, e domain.Event) error
 	// ConfigCandidate is the configuration a Work proposes, from the
-	// extension that owns its kind (extension.ConfigCandidate; optional:
-	// without it, no Work has one).
-	ConfigCandidate func(ctx context.Context, w domain.Work) (extension.Candidate, error)
+	// extension that owns its kind (extension.ConfigCandidate), with the
+	// text the host holds behind its handle (optional: without it, no Work
+	// has one).
+	ConfigCandidate func(ctx context.Context, w domain.Work) (ConfigCandidate, error)
 	// Nudge asks the host loop for an immediate pass (optional).
 	Nudge func()
 	// ProviderTimeout and ViewDeadline time the action providers' calls for

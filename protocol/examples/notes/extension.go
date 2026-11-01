@@ -169,6 +169,7 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 		"notes-index":  func(ctx context.Context, h *sdk.Host) error { return index(ctx, h, o, ext) },
 		"notes-derive": func(ctx context.Context, h *sdk.Host) error { return derive(ctx, h) },
 		TelemetryTask:  func(ctx context.Context, h *sdk.Host) error { return telemetry(ctx, h, o, scopes()) },
+		ConfigTask:     func(ctx context.Context, h *sdk.Host) error { return proposeConfig(ctx, h, o, scopes()) },
 	}
 	ext.Sink = func(_ context.Context, _ *sdk.Host, e protocol.TelemetryEvent) error {
 		return appendLine(o.StateDir, "sink.log", e.ScopeID+" "+e.Name)

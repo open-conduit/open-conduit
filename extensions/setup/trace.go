@@ -40,13 +40,13 @@ func (t *Tools) trace(ctx context.Context, a extension.Authority, in domain.Payl
 	if err != nil {
 		return domain.Payload{}, refuse("unavailable", "the configuration can't be read now")
 	}
-	var text []byte
+	var handle string
 	if err = t.o.Store.Transact(ctx, storage.Guard{Now: t.o.Now()}, func(tx storage.Tx) error {
 		w, err := t.session(tx, a)
 		if err != nil {
 			return err
 		}
-		cs, err := t.changeSetFor(tx, w, base)
+		cs, err := t.changeSetFor(ctx, tx, w, base)
 		if err != nil {
 			return err
 		}
@@ -54,12 +54,13 @@ func (t *Tools) trace(ctx context.Context, a extension.Authority, in domain.Payl
 		if err != nil {
 			return err
 		}
-		text, _, _ = candidate(t.o.Config, cs, st)
+		cand, _, _ := candidate(ctx, t.o.Config, cs, st)
+		handle = cand.Handle
 		return nil
 	}); err != nil {
 		return domain.Payload{}, err
 	}
-	res, traceErr := t.o.Config.Trace(ctx, text, input.Scope, input.Sample)
+	res, traceErr := t.o.Config.Trace(ctx, handle, input.Scope, input.Sample)
 	ev := ProbeEvent{Probe: OpTrace, Args: map[string]string{"scope": input.Scope}, Command: "open-conduit route trace " + input.Scope, Why: why}
 	if input.Sample != "" {
 		ev.Args["sample"] = input.Sample
