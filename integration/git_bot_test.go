@@ -176,9 +176,13 @@ func newGitBotLab(t *testing.T, root string) *gitBotLab {
 	// operation a binding in a git "bot" scope is granted.
 	l.endpoints, err = management.NewEndpoints(nil, filepath.Join(root, "state"), filepath.Join(root, "s"), func(exec domain.ID) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// The input is a payload, as the management handler decodes it.
 			var call struct {
 				Operation string
-				Input     json.RawMessage
+				Input     struct {
+					Schema string          `json:"schema"`
+					Data   json.RawMessage `json:"data"`
+				}
 			}
 			_ = json.NewDecoder(r.Body).Decode(&call)
 			w.Header().Set("Content-Type", "application/json")
@@ -190,7 +194,7 @@ func newGitBotLab(t *testing.T, root string) *gitBotLab {
 			}
 			conn, _ := l.connections.Load(exec)
 			connection, _ := conn.(string)
-			out, err := op.Handler(r.Context(), extension.Authority{ScopeID: "scope", WorkID: "work", ExecutionID: exec, Connection: connection}, domain.Payload{Data: call.Input})
+			out, err := op.Handler(r.Context(), extension.Authority{ScopeID: "scope", WorkID: "work", ExecutionID: exec, Connection: connection}, domain.Payload{Schema: call.Input.Schema, Data: call.Input.Data})
 			var refused *extension.OperationError
 			if errors.As(err, &refused) {
 				w.WriteHeader(http.StatusConflict)

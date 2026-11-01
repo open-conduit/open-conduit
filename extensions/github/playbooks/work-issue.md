@@ -149,6 +149,7 @@ When your last turn ended long enough ago that resuming would cost more than sta
 
 - Don't wait or poll for checks or replies: end the turn and let Open Conduit resume you.
 - Don't push to the base branch, merge the PR or close the issue, unless a routine the issue asked you to run says to.
+- Don't push with other credentials (a `gh` login, a token you find, another remote) when `git push` is refused: the push would go out under someone else's name. Report the error (and file it as a defect if the toolbelt offers that), then end with `help`.
 - Don't change Open Conduit's labels on the issue; it sets them from your status.
 - Don't edit other agents' workspaces.
 - Don't post comments any way other than the toolbelt.
