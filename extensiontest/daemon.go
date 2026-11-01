@@ -1,10 +1,22 @@
 // Package extensiontest runs the real Open Conduit daemon for an extension
 // package's own tests: Daemon builds `open-conduit` and `os` at the version
-// of this module the caller's go.mod pins, installs the package under test
-// beside a config, starts `serve` and hands back a management client.
-// FakeClaude writes a scripted stand-in for the Claude Code CLI that makes
-// toolbelt calls through the real `os mcp` server and ends each turn with a
-// chosen state.
+// of this module the caller's go.mod pins, installs the package under test,
+// starts `serve` and hands back a management client.
+//
+// Given Package and no config, it generates a scope from the package's
+// manifest and a scripted agent (Agent) that calls the package's
+// operations through the toolbelt, so a test reads:
+//
+//	d := extensiontest.Daemon(t, extensiontest.Package("."), extensiontest.Secret("api_key", "test-key"))
+//	agent := d.Agent().Call("weather.forecast", map[string]any{"city": "Leeds"}).Ends("finished")
+//	work := d.Start("weather.check", nil)
+//	d.WaitWork(work.ID, "completed")
+//	forecast := agent.Result(1, "weather.forecast")
+//
+// With a config of its own (Options.Config), a test writes its agent with
+// FakeClaude: a scripted stand-in for the Claude Code CLI that makes
+// toolbelt calls through the real `os mcp` server and ends each turn with
+// a chosen state.
 //
 // A package repository pins the commands it builds with `tool` directives
 // so the build works from the module cache:
@@ -75,6 +87,10 @@ type Instance struct {
 	// started are the processes each daemon started, seen as it was
 	// killed; Close checks none outlives it.
 	started []process
+	// scope is the scope Daemon generated from the packages' manifests,
+	// nil when the test gave its own config.
+	scope *scope
+	seq   int
 }
 
 var (
@@ -110,12 +126,19 @@ func binaries() (string, error) {
 }
 
 // Daemon builds the daemon if this test binary hasn't yet, lays out its
-// directory, starts it and waits until the management API answers.
-func Daemon(t testing.TB, opts Options) *Instance {
+// directory, starts it and waits until the management API answers. With
+// Package and no Options.Config it writes a config of one scope for the
+// packages (see Package).
+func Daemon(t testing.TB, options ...Option) *Instance {
 	t.Helper()
 	if _, err := binaries(); err != nil {
 		t.Fatal(err)
 	}
+	var set settings
+	for _, o := range options {
+		o.apply(&set)
+	}
+	opts := set.opts
 	// Unix socket paths are short (104 bytes on macOS), and the state
 	// directory holds the management socket and each run's toolbelt
 	// socket, so the directory is under /tmp rather than t.TempDir().
@@ -129,6 +152,21 @@ func Daemon(t testing.TB, opts Options) *Instance {
 	}
 	t.Cleanup(func() { os.RemoveAll(root) })
 	d := &Instance{t: t, opts: opts, root: root, state: filepath.Join(root, "state"), config: filepath.Join(root, "config.json")}
+	var manifests []protocol.Manifest
+	for _, src := range set.packages {
+		dir, m, err := buildPackage(src)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err := install(dir, filepath.Join(root, "extensions")); err != nil {
+			t.Fatal(err)
+		}
+		manifests = append(manifests, m)
+	}
+	if len(set.packages) > 0 && opts.Config == nil {
+		d.generate(&set, manifests)
+		opts = d.opts
+	}
 	if opts.Config != nil {
 		if err := os.WriteFile(d.config, opts.Config, 0o600); err != nil {
 			t.Fatal(err)
@@ -143,6 +181,9 @@ func Daemon(t testing.TB, opts Options) *Instance {
 		t.Fatal(err)
 	}
 	t.Cleanup(d.Close)
+	if d.scope != nil {
+		d.check()
+	}
 	d.start()
 	return d
 }

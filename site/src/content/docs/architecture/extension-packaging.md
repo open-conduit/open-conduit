@@ -204,24 +204,47 @@ tool (
 )
 ```
 
-- **`extensiontest.Daemon(t, opts)`** builds `open-conduit` and `os` once per test binary, at the version `go.mod` pins (with `-race` when the test runs under it). It installs each directory in `opts.Packages` under `extensions/<name>` beside the config, writes `opts.Config`, and starts `serve` with its state in a temporary directory and a short poll interval. It returns once the management API answers. `Client()` is the operator's `*client.Client`; `Until(what, timeout, fn)` polls a condition; `Restart()` kills the daemon and starts it again on the same state. `Close`, which the test's cleanup runs, kills it and fails the test on a race report in its log or on a process it started that is still running; the log is printed when the test failed.
-- **`extensiontest.FakeClaude(dir, turns...)`** writes a fake Claude Code CLI to name as a `claude-code` binding's `binary`. Each launch plays the next `Turn`: its toolbelt `Calls` (`Operation`, `Input`, `RequestID`) through the real `os mcp` server, then a wait for its `Barrier` file if it has one, then the end of the turn with its `State`. `Turn(n)` returns what turn `n` saw once its calls are made: its arguments, the message it was started or resumed with, each call's result, and its toolbelt endpoint and token while the turn holds at its barrier. Each Work needs a fake of its own. The fake is the test binary itself, run again with an environment variable set, so it costs no extra build.
-
-Assert what the package shows through `client`: `Pages`, `Actions` and `Panels` for what an operator sees, `Events` and `Work` for what it recorded. The setup assistant's daemon tests (`TestDaemonSetupSession` and `TestDaemonSetupChangeSet`) are written this way.
+A test asks the question a package's author has: when an agent calls my operation, does it work? It names the package, scripts the agent, starts a Work and checks what came back:
 
 ```go
-claude, err := extensiontest.FakeClaude(t.TempDir(),
-	extensiontest.Turn{State: "help", Calls: []extensiontest.Call{
-		{Operation: "acme.ask", RequestID: "q1", Input: map[string]any{"question": "Which repository?"}},
-	}},
-	extensiontest.Turn{State: "finished"},
-)
-if err != nil {
-	t.Fatal(err)
+func TestForecast(t *testing.T) {
+	service := httptest.NewServer(fakeWeatherService)
+	defer service.Close()
+	d := extensiontest.Daemon(t, extensiontest.Package("."),
+		extensiontest.Secret("api_key", "test-key"),
+		extensiontest.Entry("weather", map[string]any{"service": service.URL}))
+	agent := d.Agent().
+		Call("weather.forecast", map[string]any{"city": "Leeds"}).
+		Call("weather.report", map[string]any{"summary": "rain"}).
+		Ends("finished")
+
+	work := d.Start("weather.check", nil)
+	if r := agent.Result(1, "weather.forecast"); r.IsError || !strings.Contains(r.Text, "rain in Leeds") {
+		t.Fatalf("forecast: %+v", r)
+	}
+	d.WaitWork(work.ID, "completed")
+	reported := d.Events("weather.reported")
+	// ...
 }
-d := extensiontest.Daemon(t, extensiontest.Options{Config: config(claude.Path), Packages: []string{"dist/acme"}})
-panels, err := d.Client().Panels(ctx, client.ActionTarget{WorkID: work})
 ```
+
+- **`extensiontest.Package(src)`** is the package under test: a built package directory (one with an `open-conduit-extension.json`), or its Go main package, which the harness builds as `make packages` would, asking the binary for its manifest and certification and copying the manifest's `playbooks` from `src` or the module's root. A directory with exactly one main package under `cmd/` builds that one, so `Package(".")` works from a package repository's root.
+- **The generated scope.** With a package and no `Options.Config`, the daemon runs one scope, `test` (`extensiontest.ScopeID`), made from the manifests:
+  - an entry for each extension type, named after the type, with config `{}` unless **`extensiontest.Entry(type, config)`** gives one;
+  - a binding running the scripted agent, granted every operation the manifests declare plus `read_context`, `wait` and `declare_outcome`;
+  - a route for each route handler they declare, and a `manual` route last.
+
+  Before the daemon starts, the generated config goes through `config check` with the packages installed. When it is refused, the test fails with each refusal, what to change (an `Entry`, or the whole config) and the generated config. A package directory that can't be built or whose manifest is refused fails the same way.
+- **`extensiontest.Secret(name, value)`** adds a secret to the scope's `secret_refs` and selects it in every generated entry, so the package's `secret.resolve` returns `value` as it would the operator's. Use it to point the package at an `httptest` fake of its service.
+- **`d.Agent()`** is the scope's scripted agent. `Call(operation, input)` adds a toolbelt call to the turn being scripted, `Ends(state)` ends it with that structured status (`finished`, `review`, `help`, ...), and `Turn()` starts the next. The agent plays one turn each time the daemon starts or resumes it, for any Work, so script it before starting the Work. `Played(n)` waits for turn `n` and returns the message it was started or resumed with and each call's result; `Result(n, operation)` is one call's result, its `Text` and whether it was a refusal (`IsError`).
+- **Work and Events.** `d.Start(kind, input)` creates Work of a kind in the scope, run by the agent, with `input` as its context. `d.Submit(event)` submits an operator Event, as `open-conduit events emit` does. `d.WaitWork(id, state)` and `d.Events(type)` wait, up to `extensiontest.Deadline`, for the Work to reach a state and for at least one Event of a type. None of them sleeps for a fixed time.
+- **The daemon.** `extensiontest.Daemon(t, options...)` builds `open-conduit` and `os` once per test binary, at the version `go.mod` pins (with `-race` when the test runs under it). It starts `serve` with its state in a temporary directory and a short poll interval, and returns once the management API answers. `Client()` is the operator's `*client.Client`: assert what an operator sees with `Pages`, `Actions` and `Panels`, and what was recorded with `Events` and `Work`. `Until(what, timeout, fn)` polls a condition; `Restart()` kills the daemon and starts it again on the same state. `Close`, which the test's cleanup runs, kills it and fails the test on a race report in its log or on a process it started that is still running; the log is printed when the test failed.
+
+`TestExtensiontestPackage` tests a small package in `integration/testdata/weather` this way.
+
+### A config of your own
+
+When a test needs more than the generated scope (connections, several scopes, a binding with grants, the execution token itself), pass the whole config as `extensiontest.Options{Config: ..., Packages: []string{dir}}`. `Options.Packages` are installed under `extensions/<name>` beside it. With your own config there is no generated agent: write one with **`extensiontest.FakeClaude(dir, turns...)`** and name its `Path` as a `claude-code` binding's `binary`. Each launch plays the next `Turn`: its toolbelt `Calls` (`Operation`, `Input`, `RequestID`) through the real `os mcp` server, then a wait for its `Barrier` file if it has one, then the end of the turn with its `State`. `Turn(n)` returns what turn `n` saw once its calls are made, including its toolbelt endpoint and token while the turn holds at its barrier. Each Work needs a fake of its own. The fake is the test binary itself, run again with an environment variable set, so it costs no extra build. The setup assistant's daemon tests (`TestDaemonSetupSession` and `TestDaemonSetupChangeSet`) are written this way, because they test the binding and the agent's token as well as the package.
 
 ## Certification
 
