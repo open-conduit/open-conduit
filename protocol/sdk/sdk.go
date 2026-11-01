@@ -147,8 +147,16 @@ func Serve(ext *Extension) error {
 // NewServer serves ext on r/w (used by Serve and by in-process pipe tests).
 func NewServer(ext *Extension, r io.Reader, w io.Writer) *Server {
 	s := &Server{ext: ext, handles: map[string]extension.RunHandle{}, commits: map[string]func(extension.Emitted) (extension.EmitCommit, error){}}
-	s.conn = jsonrpc.NewConn(r, w, s.handle, jsonrpc.Options{})
+	// The connection starts reading at once, so a request can arrive
+	// before s.conn and s.host are set. Each request waits for them: a
+	// handler that ran first would see a nil Host and crash the process.
+	built := make(chan struct{})
+	s.conn = jsonrpc.NewConn(r, w, func(ctx context.Context, method string, raw json.RawMessage) (any, error) {
+		<-built
+		return s.handle(ctx, method, raw)
+	}, jsonrpc.Options{})
 	s.host = &Host{conn: s.conn}
+	close(built)
 	return s
 }
 

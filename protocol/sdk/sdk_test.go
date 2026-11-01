@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
 	"github.com/open-conduit/open-conduit/protocol/sdk"
@@ -113,5 +114,50 @@ func TestKVMigrationRunsBeforeConfigure(t *testing.T) {
 	}
 	if len(order) != 2 || order[0] != "migrate" {
 		t.Fatalf("order %v", order)
+	}
+}
+
+// TestRequestBeforeServerIsBuilt: a host that writes as soon as the process
+// starts (stdin, with nothing ordering it after NewServer) is served by a
+// complete server. An operation handler reaches the host from its first
+// request, rather than meeting a nil Host and taking the process down; under
+// -race, a handler that ran before NewServer had set the server up is
+// reported as a race.
+func TestRequestBeforeServerIsBuilt(t *testing.T) {
+	ext := &sdk.Extension{Manifest: manifest(), Operations: []extension.Operation{{Name: "chat.secret", Handler: func(ctx context.Context, a extension.Authority, _ domain.Payload) (domain.Payload, error) {
+		h := sdk.HostFrom(ctx)
+		if h == nil {
+			return domain.Payload{}, errors.New("no host while serving")
+		}
+		if _, err := h.ConnectionSecrets(ctx, a.ScopeID, a.Connection, "token"); err != nil {
+			return domain.Payload{}, err
+		}
+		return domain.Payload{Schema: "chat.secret.v1", Data: []byte(`{}`)}, nil
+	}}}}
+	sr, hw := io.Pipe()
+	hr, sw := io.Pipe()
+	host := jsonrpc.NewConn(hr, hw, func(context.Context, string, json.RawMessage) (any, error) {
+		return protocol.SecretResolveResult{Values: map[string]string{"token": "t"}}, nil
+	}, jsonrpc.Options{})
+	t.Cleanup(func() { _ = host.Close() })
+	// The calls start before NewServer: nothing orders the server's setup
+	// before the requests reach it, as with a real process's stdin.
+	called := make(chan error, 1)
+	go func() {
+		ctx := context.Background()
+		if err := host.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: []int{1}}, nil); err != nil {
+			called <- err
+			return
+		}
+		called <- host.Call(ctx, "operation.call", protocol.OperationParams{Operation: "chat.secret", Authority: protocol.FromAuthority(extension.Authority{ScopeID: "scope", Connection: "bot"}), Input: protocol.FromPayload(domain.Payload{Schema: "chat.secret.input.v1", Data: []byte(`{}`)})}, nil)
+	}()
+	sdk.NewServer(ext, sr, sw)
+	select {
+	case err := <-called:
+		if err != nil {
+			t.Fatalf("first requests: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("the server never answered")
 	}
 }
