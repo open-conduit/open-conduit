@@ -44,10 +44,11 @@ func envMap(env []string) map[string]string {
 // TestContainerLaunch: a container launch keeps claude's config in the
 // Work's home (HOME and CLAUDE_CONFIG_DIR), seeded on first use from the
 // binding's home_seed without its credentials, turns off nonessential
-// traffic, passes the sign-in and a GitHub token as secrets (never in the
-// environment, git reaching github.com through a helper), points the MCP
-// server at the container's own os, and resumes the session in the home
-// on the next turn.
+// traffic, passes the sign-in, selected secrets and anything named as a
+// credential as secrets (never in the environment), keeps a run layer's
+// git helper for one host ahead of the toolbelt's, points the MCP server at
+// the container's own os, and resumes the session in the home on the next
+// turn.
 func TestContainerLaunch(t *testing.T) {
 	h := newHarness(t)
 	e := h.executor()
@@ -64,9 +65,11 @@ func TestContainerLaunch(t *testing.T) {
 		}
 	}
 	b := &fakeContainer{}
-	extra := map[string]any{"home_seed": seed, "secret_env": map[string]string{"claude": "CLAUDE_CODE_OAUTH_TOKEN", "github": "GH_TOKEN"}}
+	extra := map[string]any{"home_seed": seed, "secret_env": map[string]string{"claude": "CLAUDE_CODE_OAUTH_TOKEN", "github": "GH_TOKEN"},
+		"env": map[string]string{"FAKE_DIR": h.fake, "DEPLOY_TOKEN": "deploy-tok", "DEPLOY_REGION": "eu"}}
 	turn := func(execution string) extension.Result {
 		r, _ := h.request("work/c", execution, 1, extra)
+		r.Context.Env = map[string]string{"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.https://git.example.helper", "GIT_CONFIG_VALUE_0": "!layer-helper"}
 		r.Context.Container, r.Context.ContainerHome = b, home
 		r.Context.Secrets = map[string]string{"claude": "oauth-token", "github": "gh-token", "other": "x"}
 		r.Context.ToolbeltToken, r.Context.ToolbeltEndpoint = "belt", "unix:///run/belt.sock"
@@ -77,17 +80,19 @@ func TestContainerLaunch(t *testing.T) {
 	}
 	l := b.launches[0]
 	env := envMap(l.Env)
-	for k, want := range map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": home, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "GIT_CONFIG_KEY_0": "credential.https://github.com.helper", "OS_ENDPOINT": "unix:///run/belt.sock"} {
+	for k, want := range map[string]string{"HOME": home, "CLAUDE_CONFIG_DIR": home, "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1", "DEPLOY_REGION": "eu",
+		"GIT_CONFIG_COUNT": "2", "GIT_CONFIG_KEY_0": "credential.https://git.example.helper", "GIT_CONFIG_VALUE_0": "!layer-helper",
+		"GIT_CONFIG_KEY_1": "credential.helper", "GIT_CONFIG_VALUE_1": "!os git-credential", "OS_ENDPOINT": "unix:///run/belt.sock"} {
 		if env[k] != want {
 			t.Errorf("%s=%q, want %q", k, env[k], want)
 		}
 	}
-	for _, k := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN", "OTHER", "ANTHROPIC_API_KEY", "OS_TOKEN", "TMPDIR"} {
+	for _, k := range []string{"CLAUDE_CODE_OAUTH_TOKEN", "GH_TOKEN", "DEPLOY_TOKEN", "OTHER", "ANTHROPIC_API_KEY", "OS_TOKEN", "TMPDIR"} {
 		if _, ok := env[k]; ok {
 			t.Errorf("%s is in the container's environment", k)
 		}
 	}
-	if !slices.Equal(l.Secrets, []string{"CLAUDE_CODE_OAUTH_TOKEN=oauth-token", "GH_TOKEN=gh-token", "OTHER=x"}) {
+	if !slices.Equal(l.Secrets, []string{"CLAUDE_CODE_OAUTH_TOKEN=oauth-token", "DEPLOY_TOKEN=deploy-tok", "GH_TOKEN=gh-token", "OTHER=x"}) {
 		t.Errorf("secrets %v", l.Secrets)
 	}
 	if !slices.Contains(b.needs[0].Write, home) || !slices.Contains(b.needs[0].Hosts, "api.anthropic.com") {
@@ -119,8 +124,8 @@ func TestContainerLaunch(t *testing.T) {
 		t.Errorf("the seed was copied again: %s", raw)
 	}
 
-	// Without a static GitHub token, git's helper is the toolbelt's os,
-	// which asks the host for a token minted for the Work's repository.
+	// Without a run layer's helper, git's only helper is the toolbelt's os,
+	// which asks the host for a credential for the Work's repository.
 	r, _ := h.request("work/c", "exec-4", 1, map[string]any{"home_seed": seed, "secret_env": map[string]string{"claude": "CLAUDE_CODE_OAUTH_TOKEN"}})
 	r.Context.Container, r.Context.ContainerHome = b, home
 	r.Context.Secrets = map[string]string{"claude": "oauth-token"}
@@ -130,7 +135,7 @@ func TestContainerLaunch(t *testing.T) {
 	}
 	env = envMap(b.launches[len(b.launches)-1].Env)
 	if env["GIT_CONFIG_COUNT"] != "1" || env["GIT_CONFIG_KEY_0"] != "credential.helper" || env["GIT_CONFIG_VALUE_0"] != "!os git-credential" {
-		t.Errorf("git's helper without a static token: %q %q %q", env["GIT_CONFIG_COUNT"], env["GIT_CONFIG_KEY_0"], env["GIT_CONFIG_VALUE_0"])
+		t.Errorf("git's helper without a run layer's: %q %q %q", env["GIT_CONFIG_COUNT"], env["GIT_CONFIG_KEY_0"], env["GIT_CONFIG_VALUE_0"])
 	}
 	if l := b.launches[len(b.launches)-1]; slices.ContainsFunc(l.Secrets, func(kv string) bool { return strings.HasPrefix(kv, "GH_TOKEN=") }) {
 		t.Errorf("a GitHub token crossed in: %v", l.Secrets)

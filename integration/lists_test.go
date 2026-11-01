@@ -17,6 +17,7 @@ import (
 	"github.com/open-conduit/open-conduit/executors/claudecode"
 	"github.com/open-conduit/open-conduit/extension"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/internal/config"
 )
 
@@ -333,7 +334,7 @@ func fixtureEntrySettings(raw json.RawMessage) []extension.Setting {
 // fields with typed values and defaults, every other field by name alone.
 func TestManagementConfigDetailWithoutSecrets(t *testing.T) {
 	h := newManagementHarnessWith(t, detailConfig, func(r *config.Registry) {
-		r.Executors["claude"] = &claudecode.Executor{}
+		r.Executors["claude"] = claudecode.Offline(gh.Playbook)
 		r.Connections = map[string]func(json.RawMessage) error{"code": nil}
 		r.Extensions = map[string]config.ExtensionType{"fixture_entry": {Settings: fixtureEntrySettings}}
 		r.Resources = map[string]bool{gitws.Type: true}

@@ -146,6 +146,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	if err != nil {
 		return e.preset(ctx, rn, ResultSchema, "invalid_config", "invalid claude code binding config", nil)
 	}
+	cfg.Playbook = e.playbook(cfg)
 	now := e.o.Now().UTC()
 	// A usage limit hit by any turn holds every turn on this executor until it
 	// lifts; a held turn fails without a process and retries after the reset.
@@ -733,7 +734,7 @@ func (rn *run) load() error {
 	return nil
 }
 
-// matches checks identity beyond PID: a session/group leader whose argument
+// matches confirms identity beyond PID: a session/group leader whose argument
 // vector carries this segment's nonce.
 func (rn *run) matches(p procInfo) bool {
 	return p.PID > 1 && p.PGID == p.PID && strings.Contains(p.Args, marker+rn.nonce)
@@ -962,11 +963,8 @@ func (e *Executor) escalate(rn *run) error {
 type resultFields struct {
 	// Status is the turn's reported state (building, review, help, done,
 	// finished) for projections; empty without a status.
-	Status  string `json:"status,omitempty"`
-	Reason  string `json:"reason"`
-	PRs     []int  `json:"prs,omitempty"`
-	Preview string `json:"preview,omitempty"`
-	Touches string `json:"touches,omitempty"`
+	Status string `json:"status,omitempty"`
+	Reason string `json:"reason"`
 	// Report is the status's write-up for the operator, shown with the turn.
 	Report     string     `json:"report,omitempty"`
 	Kind       string     `json:"kind,omitempty"`
@@ -1017,7 +1015,7 @@ func mapOutcome(p parsed, f *resultFields) (domain.Outcome, *extension.RetryHint
 		return domain.Outcome{Kind: domain.OutcomeCompleted, Summary: truncate(strings.TrimSpace(p.Text), 300)}, nil
 	}
 	s := p.Status
-	f.Reason, f.Status, f.PRs, f.Preview, f.Touches, f.Report = "status", s.State, s.PRs, s.Preview, s.Touches, truncate(s.Report, maxReport)
+	f.Reason, f.Status, f.Report = "status", s.State, truncate(s.Report, maxReport)
 	kind := domain.OutcomeHandoff
 	if s.State == StateFinished {
 		kind = domain.OutcomeCompleted

@@ -364,6 +364,7 @@ func (c *converter) githubScope(b *scopeBuilder, p *v1Project, repoB *v1Binding,
 	if intro {
 		ops = append(ops, is.OpReport, is.OpCorrection, is.OpProblem)
 	}
+	agent["playbook"] = gh.Playbook
 	agent["branch"] = c.branch(p, "github")
 	b.conn(conn)
 	b.binding(obj{"name": "agent", "executor": "claude-code", "connection": conn,

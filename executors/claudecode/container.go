@@ -16,8 +16,24 @@ import (
 )
 
 // credentialEnv are the variables a container launch passes as secrets
-// whatever layer set them: claude's sign-in and a GitHub token.
-var credentialEnv = map[string]bool{"CLAUDE_CODE_OAUTH_TOKEN": true, "ANTHROPIC_API_KEY": true, "ANTHROPIC_AUTH_TOKEN": true, "GH_TOKEN": true, "GITHUB_TOKEN": true}
+// whatever layer set them: claude's sign-in, and anything named as a
+// credential usually is (a token, key, secret or password).
+var credentialEnv = map[string]bool{"CLAUDE_CODE_OAUTH_TOKEN": true, "ANTHROPIC_API_KEY": true, "ANTHROPIC_AUTH_TOKEN": true}
+
+// credentialSuffixes mark a variable as a credential by its name.
+var credentialSuffixes = []string{"_TOKEN", "_API_KEY", "_SECRET", "_PASSWORD"}
+
+func credentialVar(name string) bool {
+	if credentialEnv[name] {
+		return true
+	}
+	for _, s := range credentialSuffixes {
+		if strings.HasSuffix(strings.ToUpper(name), s) {
+			return true
+		}
+	}
+	return false
+}
 
 // onboarded is the minimal .claude.json a new home gets, so claude starts
 // without its first-run onboarding. It holds no credentials.
@@ -31,8 +47,9 @@ const containerPath = "/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/
 // (HOME and CLAUDE_CONFIG_DIR) and a Linux PATH, seeds the home on first use, turns off
 // claude's nonessential traffic (the gateway would refuse its telemetry)
 // and moves every credential out of env into the secrets the provider
-// keeps in a file: claude's sign-in, a GitHub token (which git uses for
-// github.com through a credential helper) and each selected secret.
+// keeps in a file: claude's sign-in, each selected secret and any variable
+// named as a credential (credentialVar). How git uses a token is the run
+// environment layer's business (an extension's credential helper).
 func (e *Executor) containerHome(cfg Config, home string, env []string, selected map[string]string) ([]string, []string, error) {
 	if home == "" || !filepath.IsAbs(home) {
 		return nil, nil, fmt.Errorf("%w: the host gave the container no home for the Work", extension.ErrSandboxUnavailable)
@@ -45,14 +62,12 @@ func (e *Executor) containerHome(cfg Config, home string, env []string, selected
 		secret[cfg.secretVariable(name)] = true
 	}
 	var out, secrets []string
-	github := false
 	for _, kv := range env {
 		k, _, _ := strings.Cut(kv, "=")
 		switch {
 		case k == "HOME" || k == "CLAUDE_CONFIG_DIR" || k == "TMPDIR" || k == "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC" || k == "PATH" && cfg.Env["PATH"] == "":
-		case secret[k] || credentialEnv[k]:
+		case secret[k] || credentialVar(k):
 			secrets = append(secrets, kv)
-			github = github || k == "GH_TOKEN" || k == "GITHUB_TOKEN"
 		default:
 			out = append(out, kv)
 		}
@@ -61,10 +76,6 @@ func (e *Executor) containerHome(cfg Config, home string, env []string, selected
 	if cfg.Env["PATH"] == "" {
 		out = append(out, "PATH="+containerPath)
 	}
-	if github && !gitCredentialHelper(out) {
-		out = gitConfig(out, [2]string{"credential.https://github.com.helper",
-			`!f() { test "$1" = get || exit 0; echo username=x-access-token; echo "password=${GH_TOKEN:-$GITHUB_TOKEN}"; }; f`})
-	}
 	sort.Strings(out)
 	sort.Strings(secrets)
 	return out, secrets, nil
@@ -72,14 +83,14 @@ func (e *Executor) containerHome(cfg Config, home string, env []string, selected
 
 // toolbeltGitHelper makes the toolbelt git's credential helper in a
 // container launch that has one and no other: `os git-credential` asks the
-// host for a token for the Work's repository, which a GitHub App
-// connection mints for that repository alone and revokes when the segment
-// ends. It goes after the GIT_CONFIG entries env already sets (the
-// workspace's signing policy); a credential helper already set there (a
-// static GitHub token's, from containerHome, a binding's own or a git "bot"
-// binding's) is left as it is.
+// host for a credential for the Work's repository, which the extension
+// that owns the repository's host answers. It goes after the GIT_CONFIG
+// entries env already sets (the workspace's signing policy, a run layer's
+// helper for one host), so those are asked first; a run that already sets
+// git's general credential.helper (a binding's own, or a layer that set
+// the toolbelt itself) is left as it is.
 func toolbeltGitHelper(env []string) []string {
-	if gitCredentialHelper(env) {
+	if generalCredentialHelper(env) {
 		return env
 	}
 	out := gitConfig(env, [2]string{"credential.helper", "!os git-credential"})

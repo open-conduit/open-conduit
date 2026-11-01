@@ -254,3 +254,20 @@ func TestRemovedWarnings(t *testing.T) {
 		t.Fatalf("%q", got)
 	}
 }
+
+// TestNoPlaybookWarning: config check warns about a claude-code binding that
+// names no playbook (it relies on the work-issue default a later release
+// drops), and not about one that names one, "-", another executor's or a
+// tombstone.
+func TestNoPlaybookWarning(t *testing.T) {
+	cfg := `{"scopes": [{"id": "eng", "bindings": [
+		{"name": "agent", "executor": "claude-code", "config": {"branch": "agent/{number}"}},
+		{"name": "named", "executor": "claude-code", "config": {"playbook": "work-issue"}},
+		{"name": "none", "executor": "claude-code", "config": {"playbook": "-"}},
+		{"name": "run", "executor": "shell", "config": {"command": "true"}},
+		{"name": "gone", "disabled": true}]}]}`
+	got := Warnings([]byte(cfg))
+	if len(got) != 1 || !strings.HasPrefix(got[0], "scope eng binding agent names no playbook") {
+		t.Fatalf("%q", got)
+	}
+}

@@ -35,6 +35,10 @@ var (
 	WorkspaceOperations = []string{OpGitCredential}
 )
 
+// Playbook is the skill the agent binding `init github` writes starts its
+// turns on: working a GitHub issue.
+const Playbook = "work-issue"
+
 var (
 	remotePattern = regexp.MustCompile(`github\.com[:/]([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+?)(?:\.git)?/?$`)
 	// RefPattern is a secret reference (never a secret value).
@@ -104,7 +108,7 @@ func (g GitHubScope) ScopeConfig() map[string]any {
 	requires := obj("toolbelt", "mcp", "inject", true, "resume", true, "workspace", g.Checkout != "")
 	agent := obj("name", "agent", "executor", "claude-code", "connection", g.Connection, "requires", requires,
 		"operations", ops, "secret_names", []string{},
-		"config", obj("branch", "agent/issue-{number}"))
+		"config", obj("playbook", Playbook, "branch", "agent/issue-{number}"))
 	if g.Checkout != "" {
 		agent["resource"] = obj("provider", "git", "config", obj("checkout", g.Checkout, "mode", "work"))
 	}

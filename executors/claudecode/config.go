@@ -27,8 +27,10 @@ type Config struct {
 	// PermissionMode grants permissions up front, because turns run
 	// unattended (default "bypassPermissions").
 	PermissionMode string `json:"permission_mode,omitempty"`
-	// Playbook is the skill a turn starts on, as /open-conduit:<playbook>
-	// (default "work-issue"; "-" starts turns with the rendered body alone).
+	// Playbook is the skill a turn starts on, as /open-conduit:<playbook>.
+	// "-", or leaving it out, starts turns with the rendered body alone
+	// (unless the host sets Options.DefaultPlaybook for bindings that name
+	// none).
 	Playbook string `json:"playbook,omitempty"`
 	// PluginDir is a directory of playbook skills passed with --plugin-dir.
 	PluginDir string `json:"plugin_dir,omitempty"`
@@ -36,7 +38,7 @@ type Config struct {
 	// correlation key, {number} the first number in it (the key when it has
 	// none) and {work} the Work ID (default "{number}").
 	Args string `json:"args,omitempty"`
-	// Structured asks for the work-issue status with --json-schema and maps it
+	// Structured asks for the turn status (StatusSchema) with --json-schema and maps it
 	// to the outcome (default true). Otherwise a turn that ends cleanly is
 	// completed with its final text as the summary.
 	Structured *bool `json:"structured,omitempty"`
@@ -64,7 +66,7 @@ type Config struct {
 	// (default "handoff").
 	ColdTurns string `json:"cold_turns,omitempty"`
 	// HandoffShare is the removed handoff experiment's setting. It is
-	// accepted and ignored for one release (config check warns about it),
+	// accepted and ignored for one release (validating the config warns about it),
 	// then rejected.
 	HandoffShare *float64 `json:"handoff_share,omitempty"`
 	// Env adds explicit non-secret variables after the sanitized baseline.
@@ -151,9 +153,7 @@ func ParseConfig(data []byte) (Config, error) {
 		return Config{}, configError("permission_mode is not a Claude Code permission mode")
 	}
 	switch c.Playbook {
-	case "":
-		c.Playbook = "work-issue"
-	case "-":
+	case "", "-":
 	default:
 		if !skillName.MatchString(c.Playbook) {
 			return Config{}, configError("playbook must be a skill name")
@@ -231,6 +231,18 @@ func ParseConfig(data []byte) (Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// playbook is the skill c's turns start on: its own, else the host's
+// default, else "-" (none).
+func (e *Executor) playbook(c Config) string {
+	switch {
+	case c.Playbook != "":
+		return c.Playbook
+	case e.o.DefaultPlaybook != "":
+		return e.o.DefaultPlaybook
+	}
+	return "-"
 }
 
 func (c Config) structured() bool { return c.Structured == nil || *c.Structured }
@@ -315,7 +327,7 @@ const (
 // wrote there (a hook, an MCP server, a plugin) would run as the operator in
 // every claude session on the host. The binding's env must set
 // CLAUDE_CONFIG_DIR to an absolute path apart from ~/.claude and
-// ~/.claude.json. The launch checks the resolved directory again.
+// ~/.claude.json. The launch verifies the resolved directory again.
 func (e *Executor) SandboxConfig(raw json.RawMessage) error {
 	c, err := ParseConfig(raw)
 	if err != nil {
@@ -417,7 +429,7 @@ func (e *Executor) Settings(raw json.RawMessage) []extension.Setting {
 	return []extension.Setting{
 		{Name: "model", Value: c.Model},
 		{Name: "permission_mode", Value: c.PermissionMode},
-		{Name: "playbook", Value: c.Playbook},
+		{Name: "playbook", Value: e.playbook(c)},
 		{Name: "structured", Value: c.structured()},
 		{Name: "workspace_mode", Value: c.WorkspaceMode},
 		{Name: "cold_turns", Value: c.ColdTurns},

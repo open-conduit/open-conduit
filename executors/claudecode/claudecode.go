@@ -99,6 +99,11 @@ type Options struct {
 	Environ func() []string
 	// Render turns input Events into prompt markdown (default RenderEvents).
 	Render Renderer
+	// DefaultPlaybook is the playbook a binding that names none starts its
+	// turns on. Empty (the default) starts them on the rendered body alone.
+	// The host sets it only to keep configs written before bindings had to
+	// name their playbook working for one release.
+	DefaultPlaybook string
 	// PluginDir is the default --plugin-dir (the host-prepared playbook
 	// plugin) for bindings that set no plugin_dir and use a playbook.
 	PluginDir string
@@ -125,6 +130,13 @@ type Executor struct {
 	o    Options
 	mu   sync.Mutex
 	runs map[domain.ID]*run
+}
+
+// Offline is an executor for validating and describing configs alone: it
+// treats a binding that names no playbook with the host's default
+// playbook, and runs nothing.
+func Offline(defaultPlaybook string) *Executor {
+	return &Executor{o: Options{DefaultPlaybook: defaultPlaybook}}
 }
 
 // New validates options and creates the private state directory.

@@ -12,6 +12,8 @@ import (
 	"maps"
 	"net/http"
 	"net/url"
+	"os"
+	"os/exec"
 	"slices"
 	"strings"
 	"testing"
@@ -281,7 +283,8 @@ func (r *recorder) WriteHeader(c int)           { r.code = c }
 // off and the bot user of the App that mints git's tokens (the bot App,
 // else the sign-in App) as author and committer, with the noreply address
 // GitHub links to that user. The identity is looked up once. A connection
-// without git "bot" gives nothing, and git "bot" needs an App.
+// without git "bot" gives only the static token helper, and git "bot"
+// needs an App.
 func TestRunEnvironment(t *testing.T) {
 	for _, c := range []struct{ name, auth, app string }{
 		{"sign-in App", `{"auth":"app","app_id":"42","git":"bot"}`, "42"},
@@ -321,8 +324,9 @@ func TestRunEnvironment(t *testing.T) {
 		})
 	}
 	_, tools, call := gitCredLab(t, `{"auth":"app","app_id":"42"}`)
-	if env, err := tools.RunEnvironment(context.Background(), extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: "eng", WorkID: call.work, ExecutionID: "x/1"}}); err != nil || env != nil {
-		t.Errorf("without git bot: %v, %v; want nothing", env, err)
+	tokenOnly := map[string]string{"GIT_CONFIG_COUNT": "1", "GIT_CONFIG_KEY_0": "credential.https://github.com.helper", "GIT_CONFIG_VALUE_0": gh.TokenHelper}
+	if env, err := tools.RunEnvironment(context.Background(), extension.RunEnvironmentRequest{Owner: extension.ResourceOwner{ScopeID: "eng", WorkID: call.work, ExecutionID: "x/1"}}); err != nil || !maps.Equal(env, tokenOnly) {
+		t.Errorf("without git bot: %v, %v; want only the static token helper", env, err)
 	}
 	if _, err := gh.ParseConnection([]byte(`{"auth":"token","git":"bot"}`)); err == nil {
 		t.Error(`git "bot" on a token connection without a bot App was accepted`)
@@ -332,12 +336,43 @@ func TestRunEnvironment(t *testing.T) {
 	}
 }
 
+// TestTokenHelper runs the static token helper as git would: `get` answers
+// with GH_TOKEN, else GITHUB_TOKEN; without either, and for any other
+// action, it says nothing, so git asks its next helper.
+func TestTokenHelper(t *testing.T) {
+	run := func(action string, env ...string) string {
+		t.Helper()
+		cmd := exec.Command("sh", "-c", strings.TrimPrefix(gh.TokenHelper, "!")+` "$@"`, "helper", action)
+		cmd.Env = append([]string{"PATH=" + os.Getenv("PATH")}, env...)
+		out, err := cmd.Output()
+		if err != nil {
+			t.Fatalf("%s: %v", action, err)
+		}
+		return string(out)
+	}
+	for _, c := range []struct {
+		action string
+		env    []string
+		want   string
+	}{
+		{"get", []string{"GH_TOKEN=gh-tok", "GITHUB_TOKEN=other"}, "username=x-access-token\npassword=gh-tok\n"},
+		{"get", []string{"GITHUB_TOKEN=github-tok"}, "username=x-access-token\npassword=github-tok\n"},
+		{"get", nil, ""},
+		{"store", []string{"GH_TOKEN=gh-tok"}, ""},
+	} {
+		if got := run(c.action, c.env...); got != c.want {
+			t.Errorf("%s with %v: %q, want %q", c.action, c.env, got, c.want)
+		}
+	}
+}
+
 // TestRunEnvironmentBinding: a binding naming another `github` connection
 // with git "bot" (a second App) commits as that App's bot user and pushes
 // with a token that App minted, while a binding in the same scope naming
 // none, the entry's, or one the extension can't act as stays on the entry's
 // connection. The binding's connection decides: one without git "bot"
-// leaves git the operator's even though the entry sets it, and one that
+// leaves git the operator's (with only the static token helper) even though
+// the entry sets it, and one that
 // can't be used fails the run rather than falling back.
 func TestRunEnvironmentBinding(t *testing.T) {
 	fake, tools, call := gitCredLabWith(t, `{"auth":"app","app_id":"42","git":"bot"}`, map[string]string{
@@ -373,8 +408,8 @@ func TestRunEnvironmentBinding(t *testing.T) {
 			t.Errorf("binding naming %q: git token minted by App %s, want %s", conn, got, app)
 		}
 	}
-	if e, err := env("github-plain"); err != nil || e != nil {
-		t.Errorf("binding connection without git bot: %v, %v; want nothing", e, err)
+	if e, err := env("github-plain"); err != nil || e["GIT_CONFIG_COUNT"] != "1" || e["GIT_CONFIG_VALUE_0"] != gh.TokenHelper || e["GIT_AUTHOR_NAME"] != "" {
+		t.Errorf("binding connection without git bot: %v, %v; want only the static token helper", e, err)
 	}
 	if _, err := env("github-ghe"); err == nil {
 		t.Error("a binding connection on another GitHub fell back to the entry's")

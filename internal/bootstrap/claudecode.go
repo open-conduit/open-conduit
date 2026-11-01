@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/executors/claudecode"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
 )
 
 // ClaudeCodeExecutor is the registration name bindings use for the Claude
@@ -44,6 +45,9 @@ func (d *daemon) openClaudeCode() error {
 		StateDir: filepath.Join(d.o.StateDir, "executors", ClaudeCodeExecutor), Store: d.coord, Artifacts: d.artifacts,
 		ToolbeltDir: d.o.ToolbeltDir, Report: d.claudeReport, Now: d.now,
 		Render: d.renderEvents, PluginDir: d.pluginDir(), DryRun: d.o.DryRun,
+		// Bindings written before they had to name their playbook ran the
+		// GitHub one; they keep it for one release (config check warns).
+		DefaultPlaybook: gh.Playbook,
 	})
 	if err != nil {
 		f.Close()
