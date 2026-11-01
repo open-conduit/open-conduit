@@ -24,6 +24,10 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
+		switch p.Kind {
+		case protocol.ValidateResourceMode, protocol.ValidateResourceSandbox, protocol.ValidateExecutorMode:
+			return s.workspaceCheck(p)
+		}
 		if s.ext.Validate != nil {
 			if err := s.ext.Validate(ctx, p); err != nil {
 				if protocol.ErrorCode(err) != "" {
@@ -309,3 +313,31 @@ func (h *setupHost) StateDir() string { return h.p.StateDir }
 func (h *setupHost) DryRun() bool     { return h.p.DryRun }
 
 var _ extension.SetupHost = (*setupHost)(nil)
+
+// workspaceCheck answers the validate kinds a resource provider or executor
+// answers through its optional interfaces: the mode a resource config names
+// (extension.ResourceModeDefaulter), whether a sandboxed binding may use it
+// (extension.ResourceSandboxChecker) and the mode a binding config makes an
+// executor request (extension.ResourceModer). A type that doesn't implement
+// the interface names no mode and passes the sandbox check, as a first-party
+// registration without the hook does.
+func (s *Server) workspaceCheck(p protocol.ValidateParams) (any, error) {
+	switch p.Kind {
+	case protocol.ValidateResourceMode:
+		if d, ok := s.ext.Providers[p.Type].(extension.ResourceModeDefaulter); ok {
+			return protocol.ValidateResult{Mode: d.ModeDefault(p.Config)}, nil
+		}
+	case protocol.ValidateResourceSandbox:
+		if c, ok := s.ext.Providers[p.Type].(extension.ResourceSandboxChecker); ok {
+			if err := c.SandboxWorkspace(p.Config, p.Mode); err != nil {
+				// The reason is what the operator reads.
+				return nil, protocol.Errorf(protocol.CodeInvalid, err.Error())
+			}
+		}
+	case protocol.ValidateExecutorMode:
+		if m, ok := s.ext.Executors[p.Type].(extension.ResourceModer); ok {
+			return protocol.ValidateResult{Mode: m.ResourceMode(p.Config)}, nil
+		}
+	}
+	return protocol.ValidateResult{}, nil
+}

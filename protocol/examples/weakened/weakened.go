@@ -47,6 +47,9 @@ var Modes = []Mode{
 	{"early-ack", runner.Name, "executor.conformance", "acknowledges a run before persisting recovery metadata"},
 	{"replacement-recover", runner.Name, "executor.conformance", "launches a replacement attempt from recover"},
 	{"inject-unknown", runner.Name, "executor.inject", "accepts input for executions it does not hold"},
+	{"mode-deaf", runner.Name, "executor.resource_mode", "says it requests no resource mode whatever its config asks for"},
+	{"mode-blind", notes.Name, "resources.workspace", "names no default mode whatever its resource config says"},
+	{"sandbox-open", notes.Name, "resources.workspace", "passes every resource config for a sandboxed binding"},
 }
 
 // Lookup returns a mode by name.
@@ -193,6 +196,9 @@ func rewriteInitialize(r io.Reader) io.Reader {
 
 func weakenNotes(mode string, ext *sdk.Extension) {
 	switch mode {
+	case "mode-blind", "sandbox-open":
+		p := ext.Providers[notes.Scratch]
+		ext.Providers[notes.Scratch] = weakProvider{ResourceProvider: p, base: p.(workspaceChecks), mode: mode}
 	case "unstable-push":
 		base := ext.Ingress
 		ext.Ingress = func(name string) (extension.Ingress, bool) {
@@ -269,10 +275,45 @@ func (u unstable) Push(ctx context.Context, s extension.Source, d extension.Deli
 	return res, err
 }
 
+// workspaceChecks are the config check answers a resource provider gives.
+type workspaceChecks interface {
+	extension.ResourceModeDefaulter
+	extension.ResourceSandboxChecker
+}
+
+// weakProvider is the scratch provider with one defect in its config check
+// answers.
+type weakProvider struct {
+	extension.ResourceProvider
+	base workspaceChecks
+	mode string
+}
+
+func (w weakProvider) ModeDefault(raw json.RawMessage) string {
+	if w.mode == "mode-blind" {
+		return ""
+	}
+	return w.base.ModeDefault(raw)
+}
+
+func (w weakProvider) SandboxWorkspace(raw json.RawMessage, mode string) error {
+	if w.mode == "sandbox-open" {
+		return nil
+	}
+	return w.base.SandboxWorkspace(raw, mode)
+}
+
 // weakExecutor is the runner with one defect.
 type weakExecutor struct {
 	*runner.Executor
 	mode string
+}
+
+func (w *weakExecutor) ResourceMode(raw json.RawMessage) string {
+	if w.mode == "mode-deaf" {
+		return ""
+	}
+	return w.Executor.ResourceMode(raw)
 }
 
 func (w *weakExecutor) Run(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {

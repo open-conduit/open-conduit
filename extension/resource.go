@@ -2,6 +2,7 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"io"
 	"time"
@@ -158,6 +159,33 @@ type ResourceProvider interface {
 	Acquire(context.Context, ResourceAcquisition) (Resource, error)
 	Lookup(ctx context.Context, owner ResourceOwner, ref string) (Resource, error)
 	Reconcile(context.Context, ResourceStatusFunc) (ResourceReport, error)
+}
+
+// ResourceModeDefaulter is optionally implemented by a ResourceProvider to
+// say which mode a binding's resource config names as its default, "" for
+// none. It answers from what the config itself writes, not from a default
+// the provider fills in, so config check warns only about a mode the
+// operator set that never applies (an executor's own request wins).
+type ResourceModeDefaulter interface {
+	ModeDefault(config json.RawMessage) string
+}
+
+// ResourceSandboxChecker is optionally implemented by a ResourceProvider to
+// refuse, at config check, a resource config whose workspace an executor
+// running in a sandbox could only use by writing outside it, or that runs
+// setup outside it. Mode is the mode the binding's executor requests ("" for
+// the config's default). Its error is a fixed, secret-free reason shown in
+// the sandbox_workspace diagnostic; it never echoes config values.
+type ResourceSandboxChecker interface {
+	SandboxWorkspace(config json.RawMessage, mode string) error
+}
+
+// ResourceModer is optionally implemented by an executor to say which
+// resource mode a binding config makes it request, "" for the resource
+// config's default, so config check can pass it to the provider's sandbox
+// check and warn when a resource config's own mode never applies.
+type ResourceModer interface {
+	ResourceMode(config json.RawMessage) string
 }
 
 // ResourceBroker is what an executor sees in its ExecutionContext: a provider

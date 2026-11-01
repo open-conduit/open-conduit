@@ -60,6 +60,10 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 		if p.Kind == protocol.ValidateBinding && p.Binding != nil && slices.Contains(p.Binding.Operations, extension.CreateWork) {
 			return errors.New("a notes route's binding may not grant create_work")
 		}
+		if p.Kind == protocol.ValidateResource && p.Type == Scratch {
+			_, err := parseScratch(p.Config)
+			return err
+		}
 		if p.Kind != protocol.ValidateExtension || p.Type != "notes" {
 			return nil
 		}

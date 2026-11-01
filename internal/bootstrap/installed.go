@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strconv"
 	"strings"
 	"time"
@@ -126,8 +127,24 @@ func (x *installed) Playbooks() map[string]string {
 // with one of its entries (provides.entry_gated, inproc.EntryGated).
 func (x *installed) entryGated() bool { return x.m.Provides.EntryGated }
 
-// resourceTypes adds the manifest's resource types to a registry (resource
-// providers are not on the contract yet).
+// remote is the running package, started on first use offline.
+func (x *installed) remote() (*extproc.Remote, error) {
+	switch {
+	case x.r != nil:
+		return x.r, nil
+	case x.offline != nil:
+		return x.offline.remote()
+	}
+	return nil, errNoPackage
+}
+
+// errNoPackage is a package with neither a process nor an offline start.
+var errNoPackage = errors.New("extension package is not running")
+
+// resourceTypes adds the manifest's resource types to a registry, with the
+// workspace checks a type declares (mode_default, sandbox) answered through
+// the package as git answers them in process (resource providers are not
+// on the in-process contract yet).
 func (x *installed) resourceTypes(reg *config.Registry) {
 	if reg.Resources == nil {
 		reg.Resources = map[string]bool{}
@@ -142,6 +159,33 @@ func (x *installed) resourceTypes(reg *config.Registry) {
 			v = func(json.RawMessage, []string) error { return nil }
 		}
 		reg.ResourceConfig[r.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
+		typ := r.Type
+		if r.ModeDefault {
+			if reg.ResourceModeDefault == nil {
+				reg.ResourceModeDefault = map[string]func(json.RawMessage) string{}
+			}
+			reg.ResourceModeDefault[typ] = func(raw json.RawMessage) string {
+				p, err := x.remote()
+				if err != nil {
+					return ""
+				}
+				return p.ResourceModeDefault(typ)(raw)
+			}
+		}
+		if r.Sandbox {
+			if reg.ResourceSandbox == nil {
+				reg.ResourceSandbox = map[string]func(json.RawMessage, string) error{}
+			}
+			reg.ResourceSandbox[typ] = func(raw json.RawMessage, mode string) error {
+				p, err := x.remote()
+				if err != nil {
+					// The diagnostics say why it didn't start
+					// (extension_unavailable); the refusal stays fixed.
+					return errors.New("the resource provider could not start to check this workspace for a sandbox")
+				}
+				return p.ResourceSandbox(typ)(raw, mode)
+			}
+		}
 	}
 }
 

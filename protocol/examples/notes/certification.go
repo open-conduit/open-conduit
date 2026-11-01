@@ -57,6 +57,11 @@ func NewFixture(dir string) (protocol.Fixture, error) {
 			{Operation: "notes.lookup", Input: protocol.Payload{Schema: "notes.lookup.request.v1", Data: json.RawMessage(`{"id":"missing"}`)}, Error: "unknown_note"},
 			{Operation: "notes.lookup", Input: protocol.Payload{Schema: "notes.lookup.request.v1", Data: json.RawMessage(`{}`)}, Error: "bad_request"},
 		},
+		Resources: []protocol.ResourceCase{
+			{Type: Scratch, Config: json.RawMessage(`{"mode":"fresh"}`), ModeDefault: extension.ResourceFresh},
+			{Type: Scratch, Config: json.RawMessage(`{}`), Mode: extension.ResourceWork},
+			{Type: Scratch, Config: json.RawMessage(`{"cache":true}`), SandboxRefused: true},
+		},
 	}, nil
 }
 

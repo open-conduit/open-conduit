@@ -10,6 +10,10 @@
 // physical-stop evidence) and forget. A job finishes when its run directory
 // gets a "finish" file (or at once with config {"auto":true}); it then
 // takes in its inbox and proves consumption in the result.
+//
+// A binding with a resource provider gets the resource acquired before the
+// job starts, in the mode config workspace_mode names ("" for the resource
+// config's default), and the job runs in its directory.
 package runner
 
 import (
@@ -40,7 +44,7 @@ const (
 // Manifest is the runner extension's manifest.
 func Manifest() protocol.Manifest {
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: "0.1.0", Summary: "Example external executor: detached jobs with inject, interrupt, stop and forget.", Command: []string{"runner-extension"}, Provides: protocol.Provides{
-		Executors: []protocol.ExecutorDecl{{Name: Name, Capabilities: protocol.Capabilities{Interrupt: true, Inject: true, Toolbelt: extension.ToolbeltNone}, Controls: protocol.Controls{Stop: true, Forget: true}}},
+		Executors: []protocol.ExecutorDecl{{Name: Name, Capabilities: protocol.Capabilities{Interrupt: true, Inject: true, Toolbelt: extension.ToolbeltNone}, Controls: protocol.Controls{Stop: true, Forget: true}, ResourceMode: true}},
 		Checks:    []protocol.CheckDecl{{Name: Name}},
 	}}
 }
@@ -69,6 +73,20 @@ type meta struct {
 
 type jobConfig struct {
 	Auto bool `json:"auto"`
+	// WorkspaceMode is the resource mode the job asks for, "" for the
+	// resource config's default.
+	WorkspaceMode string `json:"workspace_mode,omitempty"`
+	// Workspace is the acquired resource's directory, set by Run.
+	Workspace string `json:"workspace,omitempty"`
+}
+
+var _ extension.ResourceModer = (*Executor)(nil)
+
+// ResourceMode is the resource mode a binding config requests.
+func (e *Executor) ResourceMode(raw json.RawMessage) string {
+	var cfg jobConfig
+	_ = json.Unmarshal(raw, &cfg)
+	return cfg.WorkspaceMode
 }
 
 func (e *Executor) dir(id domain.ID) string { return RunDir(e.StateDir(), id) }
@@ -122,11 +140,20 @@ func (e *Executor) Run(ctx context.Context, r extension.RunRequest) (extension.R
 	}
 	var cfg jobConfig
 	_ = json.Unmarshal(r.Context.Config.Data, &cfg)
+	cfg.Workspace = ""
+	if r.Context.Resources != nil {
+		res, err := r.Context.Resources.Acquire(ctx, extension.ResourceRequest{Mode: cfg.WorkspaceMode})
+		if err != nil {
+			return nil, err
+		}
+		cfg.Workspace = res.Dir
+	}
 	if err := writeJSON(filepath.Join(dir, "job.json"), cfg); err != nil {
 		return nil, err
 	}
 	argv := append(append([]string(nil), e.Job...), dir)
 	cmd := exec.Command(argv[0], argv[1:]...)
+	cmd.Dir = cfg.Workspace
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setsid: true}
 	if err := cmd.Start(); err != nil {
 		return nil, err
@@ -308,5 +335,9 @@ func Certification() protocol.CertificationFile {
 		Executor: &protocol.ExecutorCase{Executor: Name, Config: protocol.Payload{Schema: "runner.config.v1", Data: []byte(`{"auto":true}`)}},
 		Inject: &protocol.InjectCase{Executor: Name, Config: protocol.Payload{Schema: "runner.config.v1", Data: []byte(`{}`)},
 			ReadyFile: "{state}/runs/certify-inject/ready", FinishFile: "{state}/runs/certify-inject/finish"},
+		ExecutorModes: []protocol.ExecutorModeCase{
+			{Executor: Name, Config: json.RawMessage(`{"workspace_mode":"fresh"}`), Mode: extension.ResourceFresh},
+			{Executor: Name, Config: json.RawMessage(`{"auto":true}`)},
+		},
 	}}
 }

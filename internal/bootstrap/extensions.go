@@ -172,8 +172,26 @@ func takenNames(reg config.Registry) extproc.Taken {
 }
 
 // manifestExecutor stands in for a package's executor in offline config
-// validation: it carries the declared capabilities and runs nothing.
-type manifestExecutor struct{ decl protocol.ExecutorDecl }
+// validation: it carries the declared capabilities, answers the resource
+// mode it requests through the package (x) and runs nothing.
+type manifestExecutor struct {
+	decl protocol.ExecutorDecl
+	x    *installed
+}
+
+// ResourceMode asks the package which resource mode a binding config makes
+// its executor request, when the manifest declares resource_mode
+// (config.ResourceModer); "" (the resource config's default) otherwise.
+func (e manifestExecutor) ResourceMode(raw json.RawMessage) string {
+	if !e.decl.ResourceMode || e.x == nil {
+		return ""
+	}
+	r, err := e.x.remote()
+	if err != nil {
+		return ""
+	}
+	return r.ExecutorResourceMode(e.decl.Name)(raw)
+}
 
 func (e manifestExecutor) Capabilities() domain.Capabilities { return e.decl.Capabilities.Domain() }
 func (e manifestExecutor) Run(context.Context, extension.RunRequest) (extension.RunHandle, error) {
@@ -223,7 +241,7 @@ func offlineExternal(reg *config.Registry, configPath, exclude string) *offlineP
 		xs = append(xs, x)
 		x.resourceTypes(reg)
 		for _, e := range f.Manifest.Provides.Executors {
-			reg.Executors[e.Name] = manifestExecutor{e}
+			reg.Executors[e.Name] = manifestExecutor{decl: e, x: x}
 		}
 	}
 	inprocRegistry(reg, xs)
@@ -283,28 +301,31 @@ type offlinePackage struct {
 
 func (p *offlinePackage) validator(kind, typ string) func(json.RawMessage, []string) error {
 	return func(raw json.RawMessage, secretNames []string) error {
-		if !p.started {
-			p.started = true
-			p.start()
+		r, err := p.remote()
+		if err != nil {
+			return err
 		}
-		if p.err != nil {
-			return p.err
-		}
-		return p.r.Validator(kind, typ)(raw, secretNames)
+		return r.Validator(kind, typ)(raw, secretNames)
 	}
 }
 
 func (p *offlinePackage) bindingCheck(handler string) func(extension.RouteBinding) error {
 	return func(b extension.RouteBinding) error {
-		if !p.started {
-			p.started = true
-			p.start()
+		r, err := p.remote()
+		if err != nil {
+			return err
 		}
-		if p.err != nil {
-			return p.err
-		}
-		return p.r.BindingCheck(handler)(b)
+		return r.BindingCheck(handler)(b)
 	}
+}
+
+// remote starts the package on first use.
+func (p *offlinePackage) remote() (*extproc.Remote, error) {
+	if !p.started {
+		p.started = true
+		p.start()
+	}
+	return p.r, p.err
 }
 
 func (p *offlinePackage) start() {

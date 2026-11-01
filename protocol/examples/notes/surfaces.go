@@ -27,7 +27,11 @@ import (
 
 const (
 	// Scratch is the example resource provider: a scratch directory per
-	// Work, released once the Work is done.
+	// Work (mode work, released once the Work is done) or per execution
+	// (mode fresh, released once the execution is done). Its config may
+	// name the default mode ({"mode": "fresh"}) and link the scope's shared
+	// cache directory into each scratch directory ({"cache": true}), which a
+	// sandboxed executor could only use by writing outside its sandbox.
 	Scratch   = "notes-scratch"
 	ScratchNS = "notes.scratch"
 	// WebhookToken is the toy shared secret a webhook request carries in
@@ -63,13 +67,60 @@ func webhook(name string) http.Handler {
 // scratch is the example resource provider.
 type scratch struct{ stateDir func() string }
 
+var (
+	_ extension.ResourceModeDefaulter  = scratch{}
+	_ extension.ResourceSandboxChecker = scratch{}
+)
+
 type lease struct {
 	Owner protocol.ResourceOwner `json:"owner"`
 	Dir   string                 `json:"dir"`
+	Mode  string                 `json:"mode,omitempty"`
 }
 
-func scratchRef(o extension.ResourceOwner) string {
-	return strings.NewReplacer("/", "_", "..", "_").Replace(string(o.WorkID))
+// scratchConfig is a binding's scratch resource config.
+type scratchConfig struct {
+	Mode  string `json:"mode,omitempty"`
+	Cache bool   `json:"cache,omitempty"`
+}
+
+// parseScratch reads a scratch config strictly: only the modes it supports.
+func parseScratch(raw json.RawMessage) (scratchConfig, error) {
+	var c scratchConfig
+	if len(raw) > 0 {
+		d := json.NewDecoder(strings.NewReader(string(raw)))
+		d.DisallowUnknownFields()
+		if err := d.Decode(&c); err != nil {
+			return c, err
+		}
+	}
+	if c.Mode != "" && c.Mode != extension.ResourceWork && c.Mode != extension.ResourceFresh {
+		return c, errors.New("scratch mode is work or fresh")
+	}
+	return c, nil
+}
+
+// ModeDefault is the mode the config itself names, "" for none.
+func (scratch) ModeDefault(raw json.RawMessage) string {
+	c, _ := parseScratch(raw)
+	return c.Mode
+}
+
+// SandboxWorkspace refuses the shared cache: every Work's process writes it
+// through the link, outside its own sandbox.
+func (scratch) SandboxWorkspace(raw json.RawMessage, _ string) error {
+	if c, _ := parseScratch(raw); c.Cache {
+		return errors.New("a scratch cache is shared by every Work outside the sandbox; remove cache")
+	}
+	return nil
+}
+
+func scratchRef(o extension.ResourceOwner, mode string) string {
+	ref := string(o.WorkID)
+	if mode == extension.ResourceFresh {
+		ref += "." + string(o.ExecutionID)
+	}
+	return strings.NewReplacer("/", "_", "..", "_").Replace(ref)
 }
 
 func (s scratch) Acquire(ctx context.Context, a extension.ResourceAcquisition) (extension.Resource, error) {
@@ -77,11 +128,28 @@ func (s scratch) Acquire(ctx context.Context, a extension.ResourceAcquisition) (
 	if h == nil || s.stateDir == nil || s.stateDir() == "" {
 		return extension.Resource{}, extension.ErrUnsupported
 	}
-	ref := scratchRef(a.Owner)
+	cfg, err := parseScratch(a.Config.Data)
+	if err != nil {
+		return extension.Resource{}, extension.ErrUnsupported
+	}
+	mode := a.Request.Mode
+	if mode == "" {
+		mode = cfg.Mode
+	}
+	switch {
+	case mode == "":
+		mode = extension.ResourceWork
+	case mode != extension.ResourceWork && mode != extension.ResourceFresh:
+		return extension.Resource{}, extension.ErrUnsupported
+	}
+	if cfg.Cache && a.Request.Sandboxed {
+		return extension.Resource{}, extension.ErrUnsupported
+	}
+	ref := scratchRef(a.Owner, mode)
 	dir := filepath.Join(s.stateDir(), "scratch", ref)
 	// The lease is recorded before anything is created, so reconcile finds
 	// it after a crash at any point.
-	raw, _ := json.Marshal(lease{Owner: protocol.FromOwner(a.Owner), Dir: dir})
+	raw, _ := json.Marshal(lease{Owner: protocol.FromOwner(a.Owner), Dir: dir, Mode: mode})
 	if err := h.Update(ctx, ScratchNS, ref, func(old []byte, found bool) ([]byte, error) {
 		if found {
 			return old, nil
@@ -92,6 +160,15 @@ func (s scratch) Acquire(ctx context.Context, a extension.ResourceAcquisition) (
 	}
 	if err := os.MkdirAll(dir, 0o700); err != nil {
 		return extension.Resource{Kind: Scratch, Ref: ref, Dir: dir}, extension.ErrResourceSetup
+	}
+	if cfg.Cache {
+		cache := filepath.Join(s.stateDir(), "cache", strings.NewReplacer("/", "_", "..", "_").Replace(string(a.Owner.ScopeID)))
+		if err := os.MkdirAll(cache, 0o700); err != nil {
+			return extension.Resource{Kind: Scratch, Ref: ref, Dir: dir}, extension.ErrResourceSetup
+		}
+		if err := os.Symlink(cache, filepath.Join(dir, "cache")); err != nil && !os.IsExist(err) {
+			return extension.Resource{Kind: Scratch, Ref: ref, Dir: dir}, extension.ErrResourceSetup
+		}
 	}
 	if a.Request.Log != nil {
 		fmt.Fprintf(a.Request.Log, "scratch directory %s\n", ref)
@@ -131,12 +208,20 @@ func (s scratch) Reconcile(ctx context.Context, status extension.ResourceStatusF
 		if err != nil {
 			return rep, err
 		}
-		if st.Known && !st.WorkDone {
+		done := st.WorkDone
+		if l.Mode == extension.ResourceFresh {
+			done = st.ExecutionDone
+		}
+		if st.Known && !done {
 			rep.Active++
 			continue
 		}
+		mode := l.Mode
+		if mode == "" {
+			mode = extension.ResourceWork
+		}
 		if err := os.RemoveAll(l.Dir); err != nil {
-			rep.Attention = append(rep.Attention, extension.ResourceLeaseReport{Ref: e.Key, Mode: extension.ResourceWork, State: "releasing", Code: "cleanup_failed"})
+			rep.Attention = append(rep.Attention, extension.ResourceLeaseReport{Ref: e.Key, Mode: mode, State: "releasing", Code: "cleanup_failed"})
 			continue
 		}
 		if err := h.Commit(ctx, protocol.KVCommitParams{Checks: []protocol.KVCheck{{Namespace: ScratchNS, Key: e.Key, Version: e.Version}}, Deletes: []protocol.KVDelete{{Namespace: ScratchNS, Key: e.Key}}}); err != nil {

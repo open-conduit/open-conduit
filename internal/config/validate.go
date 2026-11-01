@@ -566,10 +566,8 @@ type SandboxChecker interface {
 
 // ResourceModer is optionally implemented by an executor registration to say
 // which resource mode a binding config makes it request, "" for the
-// resource config's default.
-type ResourceModer interface {
-	ResourceMode(config json.RawMessage) string
-}
+// resource config's default (extension.ResourceModer).
+type ResourceModer = extension.ResourceModer
 
 // ConfigValidator is optionally implemented by an executor registration to
 // reject its binding config at load/apply time instead of at launch.

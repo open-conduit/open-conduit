@@ -103,6 +103,40 @@ func TestDaemonExtensionPackages(t *testing.T) {
 		t.Fatalf("offline check of a refused binding: %v\n%s", err, out)
 	}
 
+	// The installed provider and executor answer config check's workspace
+	// checks as git and Claude Code do: a sandboxed binding may not use a
+	// scratch cache (sandbox_workspace, with the package's reason), and a
+	// scratch mode the runner's own workspace_mode overrides is warned about.
+	withBinding := func(binding string) []byte {
+		raw := config(map[string]any{"service": service, "scope": "notes-scope"})
+		return bytes.Replace(raw, []byte(`"bindings":[`), []byte(`"bindings":[`+binding+`,`), 1)
+	}
+	if err := os.WriteFile(bad, withBinding(`{"name":"boxed","executor":"shell","requires":{"toolbelt":"cli"},"operations":[],"secret_names":[],"config":{"command":"true"},"resource":{"provider":"notes-scratch","config":{"cache":true}},"sandbox":{"provider":"srt","config":{}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err == nil || !strings.Contains(string(out), "sandbox_workspace") || !strings.Contains(string(out), "a scratch cache is shared by every Work outside the sandbox") {
+		t.Fatalf("offline check of a sandboxed scratch cache: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(bad, withBinding(`{"name":"boxed","executor":"shell","requires":{"toolbelt":"cli"},"operations":[],"secret_names":[],"config":{"command":"true"},"resource":{"provider":"notes-scratch","config":{}},"sandbox":{"provider":"srt","config":{}}}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err != nil || strings.Contains(string(out), "sandbox_workspace") {
+		t.Fatalf("offline check of a sandboxed scratch without a cache: %v\n%s", err, out)
+	}
+	overridden := `{"name":"scratch","executor":"runner","requires":{"toolbelt":"none"},"operations":[],"secret_names":[],"config":{"auto":true,"workspace_mode":"work"},"resource":{"provider":"notes-scratch","config":{"mode":"fresh"}}}`
+	if err := os.WriteFile(bad, withBinding(overridden), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err != nil || !strings.Contains(string(out), `the notes-scratch resource's mode "fresh" never applies, because executor runner requests mode "work"`) {
+		t.Fatalf("offline check of an overridden scratch mode: %v\n%s", err, out)
+	}
+	if err := os.WriteFile(bad, withBinding(strings.Replace(overridden, `"workspace_mode":"work"`, `"workspace_mode":"fresh"`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err != nil || strings.Contains(string(out), "never applies") {
+		t.Fatalf("offline check of an agreeing scratch mode: %v\n%s", err, out)
+	}
+
 	d.start("")
 	completed := func(n int) func() bool {
 		return func() bool {

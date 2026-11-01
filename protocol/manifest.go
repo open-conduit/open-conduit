@@ -384,6 +384,12 @@ type ExecutorDecl struct {
 	Name         string       `json:"name"`
 	Capabilities Capabilities `json:"capabilities"`
 	Controls     Controls     `json:"controls,omitempty"`
+	// ResourceMode marks an executor that says which resource mode a
+	// binding config makes it request, through validate with kind
+	// executor_mode, so config check can tell when a resource config's own
+	// mode never applies and pass the requested mode to a provider's sandbox
+	// check (config.ResourceModer).
+	ResourceMode bool `json:"resource_mode,omitempty"`
 }
 
 // Capabilities are the PRD's mechanical labels, checked at bind time. No
@@ -404,9 +410,20 @@ type Controls struct {
 	Forget bool `json:"forget,omitempty"`
 	Attach bool `json:"attach,omitempty"`
 }
+
+// ResourceDecl declares a resource provider and the modes it supports.
 type ResourceDecl struct {
 	Type  string   `json:"type"`
 	Modes []string `json:"modes"`
+	// ModeDefault marks a provider that names the mode a resource config
+	// sets as its default, through validate with kind resource_mode
+	// (config.Registry.ResourceModeDefault).
+	ModeDefault bool `json:"mode_default,omitempty"`
+	// Sandbox marks a provider that refuses a resource config whose
+	// workspace a sandboxed executor could only use by writing outside it,
+	// through validate with kind resource_sandbox
+	// (config.Registry.ResourceSandbox).
+	Sandbox bool `json:"sandbox,omitempty"`
 }
 type TaskDecl struct {
 	Name            string `json:"name"`

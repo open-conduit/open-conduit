@@ -11,13 +11,13 @@ package conformance
 // CriteriaVersion versions the certification criteria. A report states it;
 // a package certified under one version is not implied certified under a
 // later one.
-const CriteriaVersion = 2
+const CriteriaVersion = 3
 
 // Criterion is one certification check.
 type Criterion struct {
 	ID string
 	// Surface is the manifest surface the criterion certifies: lifecycle,
-	// storage, ingress, routes, operations or executors.
+	// storage, ingress, routes, operations, executors or resources.
 	Surface string
 	// Applies says when the criterion is required ("always" or the manifest
 	// declaration that makes it apply).
@@ -46,5 +46,7 @@ var Criteria = []Criterion{
 	{"executor.conformance", "executors", "an executor", "The shared executor suite (conformance.CheckExecutor) passes: recovery metadata before acknowledgement, adoption without replacement, an unknown state not adoptable and persistence failures propagated."},
 	{"executor.inject", "executors", "an executor with inject", "The shared inject suite (conformance.CheckInjectExecutor) passes on the fixture's inject case."},
 	{"executor.controls", "executors", "an executor with stop or forget", "Declared stop and forget controls are served for an execution the package does not hold."},
+	{"executor.resource_mode", "executors", "an executor with resource_mode", "Each executor mode fixture case answers validate executor_mode with the mode the case expects, twice identically, and every executor declaring resource_mode has a case."},
+	{"resources.workspace", "resources", "a resource type with mode_default or sandbox", "Each resource fixture case is answered as it expects, twice identically: validate resource_mode names the mode the config writes (mode_default), and validate resource_sandbox refuses exactly the configs a sandboxed binding can't use, with a reason (sandbox). Every such type has a case."},
 	{"surfaces.served", "lifecycle", "checks or tasks", "Every declared check answers check.run and every declared task is served by task.run."},
 }
