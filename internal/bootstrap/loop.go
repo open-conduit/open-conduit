@@ -272,7 +272,7 @@ func (d *daemon) observe(c *components, a runtime.Attempt) {
 		if d.ctx.Err() != nil {
 			return // shutdown: keep the process for adoption
 		}
-		d.report("observe", a.Lease.ExecutionID, errorCode(err))
+		d.report("observe", a.Lease.ExecutionID, errorCode(err), runtime.FailureCause(err))
 		d.confirmStopped(d.ctx, c, a.Lease.ExecutionID, a.Lease.Epoch)
 	}()
 }

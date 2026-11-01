@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -676,6 +677,52 @@ func TestProductionSchedulerRetryHintValidation(t *testing.T) {
 	}
 	if delay, err := runtime.RetryDelay(f.Clock.Now(), runtime.RetryHint{}); err != nil || delay != 30*time.Minute {
 		t.Fatalf("unknown reset delay: %v %v", delay, err)
+	}
+}
+
+// TestProductionSchedulerObserveKeepsTheCause: an executor that fails with
+// a refusal (extension.OperationError) leaves its code and message on the
+// failed attempt and on Observe's error, for the web view and the log to
+// say what went wrong; any other error's text stays out (it may carry
+// provider output), and neither error joins Observe's, so the host never
+// classifies the executor's own error as its own.
+func TestProductionSchedulerObserveKeepsTheCause(t *testing.T) {
+	for _, c := range []struct {
+		name, want string
+		err        error
+	}{
+		{"refusal", "executor observation failed: not_allowed: gh may not wait on ops", &extension.OperationError{Code: "not_allowed", Message: "gh may not wait on ops"}},
+		{"other", "executor observation failed", fmt.Errorf("provider said token=secret: %w", storage.ErrConflict)},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			f, e := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+			work := seedSchedulerWork(t, f, "cause-"+c.name)
+			s := f.Driver.(*schedulerDriver).scheduler
+			e.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+				if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+					return nil, err
+				}
+				return &schedulerHandle{err: c.err}, nil
+			}
+			a, err := s.Start(context.Background(), work)
+			if err != nil {
+				t.Fatal(err)
+			}
+			err = s.Observe(context.Background(), a)
+			if !errors.Is(err, runtime.ErrExecutorCall) || errors.Is(err, storage.ErrConflict) {
+				t.Fatalf("observe: %v", err)
+			}
+			if got, want := runtime.FailureCause(err), strings.TrimPrefix(strings.TrimPrefix(c.want, "executor observation failed"), ": "); got != want {
+				t.Fatalf("cause: %q, want %q", got, want)
+			}
+			attempt, err := s.InspectAttempt(context.Background(), a.Lease.ExecutionID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if attempt.Result == nil || attempt.Result.Outcome.Summary != c.want {
+				t.Fatalf("failed attempt: %+v", attempt.Result)
+			}
+		})
 	}
 }
 

@@ -1180,9 +1180,44 @@ func (s *Scheduler) Observe(ctx context.Context, attempt Attempt) error {
 		if ctx.Err() != nil {
 			return ctx.Err()
 		}
-		return errors.Join(ErrExecutorCall, s.fail(ctx, attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "executor observation failed"}}, false, err))
+		summary, failed := "executor observation failed", ErrExecutorCall
+		if cause := FailureCause(err); cause != "" {
+			summary += ": " + cause
+			failed = errors.Join(ErrExecutorCall, failureCause(cause))
+		}
+		return errors.Join(failed, s.fail(ctx, attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: summary}}, false, err))
 	}
 	return s.Complete(ctx, attempt.Lease, result)
+}
+
+// failureCause carries a failed observation's safe cause on the error
+// Observe returns, so the host's diagnostic can say it too; it wraps no
+// executor error, which callers must not classify.
+type failureCause string
+
+func (c failureCause) Error() string { return string(c) }
+
+// maxFailureCause bounds the cause a failed attempt's summary carries.
+const maxFailureCause = 500
+
+// FailureCause is what an executor's error says went wrong, when it says so
+// in a form safe to show: an extension.OperationError's code and message
+// (a refusal, written for the reader). Any other error yields "", since its
+// text may carry provider output or credentials.
+func FailureCause(err error) string {
+	var known failureCause
+	if errors.As(err, &known) {
+		return string(known)
+	}
+	var op *extension.OperationError
+	if !errors.As(err, &op) || op.Code == "" {
+		return ""
+	}
+	cause := strings.ToValidUTF8(op.Code+": "+op.Message, "")
+	if len(cause) > maxFailureCause {
+		cause = strings.ToValidUTF8(cause[:maxFailureCause], "")
+	}
+	return cause
 }
 func (s *Scheduler) fail(ctx context.Context, ref domain.LeaseRef, result extension.Result, excluded bool, cause error) error {
 	var hint *RetryHint
