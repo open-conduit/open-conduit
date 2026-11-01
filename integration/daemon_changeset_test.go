@@ -230,6 +230,12 @@ func TestDaemonSetupChangeSet(t *testing.T) {
 	if saved, _ := os.ReadFile(d.ConfigPath()); string(saved) != cand.ConfigText {
 		t.Fatalf("apply did not save the text as given:\n%s", saved)
 	}
+	// The Setup page reloads its review straight after Apply, which moves
+	// the change set onto the new generation, usually before the package's
+	// applied task has looked. The session must still hear (#261).
+	if after, err := c.WorkConfigCandidate(ctx, session.WorkID); err != nil || after.BaseGeneration != "2" || after.CandidateHash != "" {
+		t.Fatalf("the review straight after apply: %s %v", mustJSONString(after), err)
+	}
 	d.Until("the session heard its changes were applied", 30*time.Second, func() bool { return len(events("setup.applied")) == 1 })
 	if a := events("setup.applied")[0]; !strings.Contains(string(a.Data.Data), `"generation":"2"`) || !strings.Contains(string(a.Data.Data), `"changes":["c1","c2"]`) {
 		t.Fatalf("applied: %s", a.Data.Data)
