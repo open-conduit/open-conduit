@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"bytes"
 	"embed"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io/fs"
@@ -121,14 +122,71 @@ func newPackage(version, commit string, r cli.NewRequest) (cli.NewResult, error)
 		out.Notes = append(out.Notes, "go is not on PATH: run `go mod tidy` in "+out.Dir+" before `make check`")
 		return out, nil
 	}
+	if r.Replace != "" {
+		// Against a checkout, start from its requirements and go.sum, so
+		// the package builds from the module cache the checkout builds
+		// from even when tidy cannot run: tidy also wants the modules a
+		// dependency's tests import, which that cache may not hold.
+		if err := seedFromCheckout(gocmd, r.Replace, out.Dir); err != nil {
+			return out, err
+		}
+	}
 	cmd := exec.Command(gocmd, "mod", "tidy")
 	cmd.Dir = out.Dir
 	var log bytes.Buffer
 	cmd.Stdout, cmd.Stderr = &log, &log
 	if err := cmd.Run(); err != nil {
+		if r.Replace != "" {
+			out.Notes = append(out.Notes, "`go mod tidy` failed, so go.mod and go.sum carry "+r.Replace+"'s requirements; run it once the module cache or network allows: "+strings.TrimSpace(lastLine(log.String())))
+			return out, nil
+		}
 		return out, fmt.Errorf("wrote %s, but `go mod tidy` failed there (%v): %s; run it again once that is fixed", out.Dir, err, strings.TrimSpace(log.String()))
 	}
 	return out, nil
+}
+
+// seedFromCheckout copies an Open Conduit checkout's requirements (as
+// indirect) and go.sum into the new repository.
+func seedFromCheckout(gocmd, checkout, dir string) error {
+	cmd := exec.Command(gocmd, "mod", "edit", "-json")
+	cmd.Dir = checkout
+	raw, err := cmd.Output()
+	if err != nil {
+		return fmt.Errorf("--replace %s: read its go.mod: %w", checkout, err)
+	}
+	var mod struct {
+		Require []struct{ Path, Version string }
+	}
+	if err := json.Unmarshal(raw, &mod); err != nil {
+		return fmt.Errorf("--replace %s: read its go.mod: %w", checkout, err)
+	}
+	var b strings.Builder
+	b.WriteString("\nrequire (\n")
+	for _, req := range mod.Require {
+		fmt.Fprintf(&b, "\t%s %s // indirect\n", req.Path, req.Version)
+	}
+	b.WriteString(")\n")
+	f, err := os.OpenFile(filepath.Join(dir, "go.mod"), os.O_APPEND|os.O_WRONLY, 0)
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(b.String()); err != nil {
+		f.Close()
+		return err
+	}
+	if err := f.Close(); err != nil {
+		return err
+	}
+	sum, err := os.ReadFile(filepath.Join(checkout, "go.sum"))
+	if err != nil {
+		return fmt.Errorf("--replace %s: %w", checkout, err)
+	}
+	return os.WriteFile(filepath.Join(dir, "go.sum"), sum, 0o644)
+}
+
+func lastLine(s string) string {
+	s = strings.TrimSpace(s)
+	return s[strings.LastIndex(s, "\n")+1:]
 }
 
 // checkPackageName refuses a name the manifest rules or Open Conduit's own
