@@ -17,7 +17,6 @@ import (
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
-	setupext "github.com/open-conduit/open-conduit/extensions/setup"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/extensions/tracker"
 	"github.com/open-conduit/open-conduit/internal/bootstrap"
@@ -31,7 +30,7 @@ import (
 // registers (bootstrap's registry), so an agent following it writes one
 // that `config validate` accepts.
 func TestSetupGuideExampleConfigValidates(t *testing.T) {
-	g := setupext.Playbook("open-conduit")
+	g := setupPlaybook(t, "open-conduit")
 	start, end := strings.Index(g, "```json\n"), strings.Index(g, "\n```\n\nOther `github`")
 	if start < 0 || end < 0 {
 		t.Fatal("no example config in the guide")
@@ -67,7 +66,7 @@ func TestSetupGuideExampleConfigValidates(t *testing.T) {
 // `config set` use) accepts the setup guide's example and every scope shape
 // `init` writes: with a checkout, workspace-free, and with holds.
 func TestOfflineValidationMatchesTheDaemonRegistry(t *testing.T) {
-	g := setupext.Playbook("open-conduit")
+	g := setupPlaybook(t, "open-conduit")
 	start, end := strings.Index(g, "```json\n"), strings.Index(g, "\n```\n\nOther `github`")
 	if diags, err := bootstrap.ValidateConfig([]byte(g[start+8 : end])); err != nil || len(diags) != 0 {
 		t.Fatalf("setup guide example: %v %v", diags, err)
@@ -123,17 +122,23 @@ func TestSlackSetupScopeValidatesOffline(t *testing.T) {
 	for _, s := range bootstrap.Setups() {
 		names = append(names, s.SetupInfo().Type)
 	}
-	if strings.Join(names, ",") != "github,slack,linear,jira,setup" {
+	if strings.Join(names, ",") != "github,slack,linear,jira" {
 		t.Fatalf("registered setups: %v", names)
 	}
 }
 
 // The default configuration (init setup into an empty file) validates
-// against the daemon registry, so a daemon with no config file can start.
+// against the daemon registry with the setup package installed, so a daemon
+// with no config file can start. Without the package there is none.
 func TestDefaultConfigValidatesOffline(t *testing.T) {
 	dir := t.TempDir()
-	doc := bootstrap.DefaultConfig(filepath.Join(dir, "config.json"), filepath.Join(dir, "state"))
-	if diags, err := bootstrap.ValidateConfig(doc); doc == nil || err != nil || len(diags) != 0 {
+	path := filepath.Join(dir, "config.json")
+	if doc := bootstrap.DefaultConfig(path, filepath.Join(dir, "state")); doc != nil {
+		t.Fatalf("a default config with no setup package: %s", doc)
+	}
+	placeSetup(t, dir)
+	doc := bootstrap.DefaultConfig(path, filepath.Join(dir, "state"))
+	if diags, err := bootstrap.ValidateConfigAt(path, doc); doc == nil || err != nil || len(diags) != 0 {
 		t.Fatalf("default config: %v %v\n%s", diags, err, doc)
 	}
 }
@@ -200,6 +205,7 @@ func TestSetupCommand(t *testing.T) {
 		t.Fatal(err)
 	}
 	state := filepath.Join(dir, "state")
+	placeSetup(t, dir) // installed beside config.json
 	cmd, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "claude", ConfigPath: filepath.Join(dir, "config.json"), StateDir: state, Cwd: dir, Bin: "/opt/bin/open-conduit", Binary: fake,
 		Environ: []string{"PATH=/usr/bin", "OS_TOKEN=leak", "OPEN_CONDUIT_CONFIG=/elsewhere"}})
 	if err != nil {
@@ -230,20 +236,22 @@ func TestSetupCommand(t *testing.T) {
 // extensions register, or a probe a session can run.
 func TestSetupPlaybookNamesRegisteredOperations(t *testing.T) {
 	ops := map[string]bool{}
-	for _, op := range append(gh.Operations(), setupext.Operations()...) {
+	for _, op := range gh.Operations() {
 		ops[op] = true
+	}
+	for _, op := range setupManifest(t).Provides.Operations {
+		ops[op.Name] = true
 	}
 	for _, p := range (gh.Probes{}).SetupProbes() {
 		ops[gh.Type+"."+p.Name] = true
 	}
-	for _, p := range (setupext.Probes{}).SetupProbes() {
-		ops[setupext.Type+"."+p.Name] = true
-	}
 	ops["open-conduit.init"], ops["open-conduit.doctor"], ops["setup.applied"] = true, true, true
+	// The setup package runs its own probes inside its process.
+	ops["setup.fs.list"], ops["setup.tools"] = true, true
 	for _, p := range (claudecode.Probes{}).SetupProbes() {
 		ops["claude-code."+p.Name] = true
 	}
-	g := setupext.Playbook("open-conduit")
+	g := setupPlaybook(t, "open-conduit")
 	names := regexp.MustCompile("[`\"]((?:github|setup|claude-code|open-conduit)\\.[a-z.]+)[`\"]").FindAllStringSubmatch(g, -1)
 	if len(names) == 0 || !strings.HasPrefix(g, "---\nname: setup\n") {
 		t.Fatal("the setup playbook names no operation or has no frontmatter")

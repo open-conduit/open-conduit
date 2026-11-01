@@ -14,6 +14,11 @@ import (
 
 const module = "github.com/open-conduit/open-conduit/"
 
+// setupPackage is the setup extension's module (#243). It ships as an
+// installed package, bundled in the release archive, so nothing in this
+// module may import it; nor may anything bring back extensions/setup.
+const setupPackage = "github.com/open-conduit/extension-setup"
+
 type pkg struct {
 	ImportPath string
 	ForTest    string
@@ -175,6 +180,10 @@ func violations(packages []pkg) []string {
 				seen[imported] = true
 				next := append(append([]string{}, chain...), imported)
 				dependency := clean(imported)
+				if under(dependency, setupPackage) || under(dependency, module+"extensions/setup") {
+					errors = append(errors, fmt.Sprintf("%s: the setup extension is an installed package and is never imported, via %s", root.ImportPath, strings.Join(next, " -> ")))
+					continue
+				}
 				if strings.HasPrefix(dependency, module) && !allowed(owner, strings.TrimPrefix(dependency, module), root.ForTest != "") {
 					errors = append(errors, fmt.Sprintf("%s: forbidden dependency via %s", root.ImportPath, strings.Join(next, " -> ")))
 					continue

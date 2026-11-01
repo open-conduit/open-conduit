@@ -62,6 +62,13 @@ func daemonBinary(t *testing.T) string {
 				return
 			}
 		}
+		// The setup package is bundled beside the binary, as the release
+		// archive has it (#243), so a drill with no config starts on its
+		// first-run configuration.
+		if err := copySetup(dir); err != nil {
+			daemonErr = err
+			return
+		}
 		daemonBin = filepath.Join(dir, "open-conduit")
 	})
 	if daemonErr != nil {

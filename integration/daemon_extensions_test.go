@@ -160,8 +160,14 @@ func TestDaemonExtensionPackages(t *testing.T) {
 	// candidate for core's review (config.candidate): the text behind its
 	// handle reaches the operator alone, with the reference the package
 	// never saw.
+	// The bundled setup package's page is listed beside it.
 	pages, err := d.c.Pages(ctx)
-	if err != nil || len(pages) != 2 || pages[1].Extension != "notes" || pages[1].ID != "notes" || pages[1].WorkKind != notes.Kind || pages[1].Compose[0] != "remark" {
+	byID := map[string]int{}
+	for i, p := range pages {
+		byID[p.ID] = i
+	}
+	n, ok := byID["notes"]
+	if _, setup := byID["setup"]; err != nil || len(pages) != 2 || !ok || !setup || pages[n].Extension != "notes" || pages[n].WorkKind != notes.Kind || pages[n].Compose[0] != "remark" {
 		t.Fatalf("pages: %+v %v", pages, err)
 	}
 	works, _ := d.c.Works(ctx, url.Values{"scope_id": {"notes-scope"}})

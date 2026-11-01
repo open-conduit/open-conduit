@@ -323,3 +323,37 @@ func TestEntryGatedAndBindingCheck(t *testing.T) {
 		t.Fatalf("wire form: %s", raw)
 	}
 }
+
+// A route decision's Work context and grants, and a binding's grants,
+// survive the wire, so a package's route sets them as an in-process one
+// does (the setup package's session model and grants, #243).
+func TestRouteDecisionAndBindingGrantsRoundTrip(t *testing.T) {
+	d := extension.RouteDecision{Match: true, Kind: "acme.session", Context: domain.Payload{Schema: "acme.context.v1", Data: json.RawMessage(`{"model":"opus"}`)}, Grants: []string{"shell"}}
+	raw, err := json.Marshal(protocol.FromRouteDecision(d))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wire protocol.RouteDecision
+	if err := json.Unmarshal(raw, &wire); err != nil {
+		t.Fatal(err)
+	}
+	got := wire.Extension()
+	if got.Context.Schema != d.Context.Schema || string(got.Context.Data) != string(d.Context.Data) || !slices.Equal(got.Grants, d.Grants) {
+		t.Fatalf("decision: %+v", got)
+	}
+	if bare := protocol.FromRouteDecision(extension.RouteDecision{Match: true}); bare.Context != nil || bare.Grants != nil {
+		t.Fatalf("an empty context or grants went on the wire: %+v", bare)
+	}
+	s := domain.Scope{ID: "s", Bindings: []domain.Binding{{Name: "agent", Executor: "claude-code", Grants: []domain.BindingGrant{{Name: "shell", Label: "Shell", Operations: []string{"x.y"}, Config: json.RawMessage(`{"builtin_tools":["Bash"]}`)}}}}}
+	raw, err = json.Marshal(protocol.FromScope(s))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var ws protocol.Scope
+	if err := json.Unmarshal(raw, &ws); err != nil {
+		t.Fatal(err)
+	}
+	if !reflect.DeepEqual(ws.Domain().Bindings[0].Grants, s.Bindings[0].Grants) {
+		t.Fatalf("grants: %+v", ws.Domain().Bindings[0].Grants)
+	}
+}

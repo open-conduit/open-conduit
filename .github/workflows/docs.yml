@@ -2,9 +2,9 @@ name: docs
 on:
   push:
     branches: [main]
-    paths: [site/**, extensions/setup/playbook/**, .github/workflows/docs.yml]
+    paths: [site/**, go.mod, .github/workflows/docs.yml]
   pull_request:
-    paths: [site/**, extensions/setup/playbook/**, .github/workflows/docs.yml]
+    paths: [site/**, go.mod, .github/workflows/docs.yml]
   workflow_dispatch:
 permissions:
   contents: read
@@ -13,7 +13,8 @@ concurrency:
   cancel-in-progress: true
 jobs:
   # Builds the Starlight site in site/ on every PR that changes it (or the
-  # setup guide it publishes as setup-guide.md), and
+  # go.mod pin of the setup package, whose guide it publishes as
+  # setup-guide.md, read from the module cache), and
   # publishes it to GitHub Pages from main. No branch protection requires
   # it, so filtering on paths can't hold a PR up.
   build:
@@ -23,6 +24,12 @@ jobs:
         working-directory: site
     steps:
       - uses: actions/checkout@v7
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: go.mod
+          cache: false
+      - run: go mod download github.com/open-conduit/extension-setup
+        working-directory: .
       - uses: actions/setup-node@v7
         with:
           node-version: 24

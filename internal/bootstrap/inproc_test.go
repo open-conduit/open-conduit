@@ -81,15 +81,19 @@ func TestInstalledCompose(t *testing.T) {
 	}
 }
 
-// The turn plugin carries the setup playbook, so a session's binding
-// (`playbook: setup`) starts on a skill Claude Code has, beside the
-// work-issue playbook and the extensions' own.
-func TestTurnPluginCarriesSetupPlaybook(t *testing.T) {
+// The turn plugin carries the work-issue playbook and the in-process
+// extensions' own, filled in. The setup playbook is the setup package's
+// (#243): it joins the plugin as every package's does, and nothing compiled
+// in supplies it.
+func TestTurnPluginCarriesFirstPartyPlaybooks(t *testing.T) {
 	d := &daemon{o: Options{StateDir: t.TempDir()}, inproc: firstParty(nil)}
 	if err := d.preparePlaybooks(); err != nil {
 		t.Fatal(err)
 	}
-	for _, name := range []string{"setup", "work-issue", "sweep"} {
+	if _, err := os.Stat(filepath.Join(d.pluginDir(), "skills", "setup")); !os.IsNotExist(err) {
+		t.Fatalf("a compiled-in setup playbook: %v", err)
+	}
+	for _, name := range []string{"work-issue", "sweep"} {
 		data, err := os.ReadFile(filepath.Join(d.pluginDir(), "skills", name, "SKILL.md"))
 		if err != nil || len(data) == 0 {
 			t.Fatalf("%s skill: %v", name, err)

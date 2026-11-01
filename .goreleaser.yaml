@@ -11,6 +11,11 @@ dist: dist/release
 before:
   hooks:
     - go mod tidy -diff
+    # The bundled extension packages (extensions/<name>/ in each archive),
+    # such as setup from github.com/open-conduit/extension-setup, pinned in
+    # go.mod. The daemon finds them beside the real binary; one installed in
+    # the config directory replaces the bundled copy.
+    - scripts/bundle-packages.sh dist/bundled darwin_amd64 darwin_arm64 linux_amd64 linux_arm64
 
 builds:
   - id: open-conduit
@@ -40,7 +45,13 @@ archives:
   - ids: [open-conduit, os]
     formats: [tar.gz]
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
-    files: [README.md, SECURITY.md, docs/**/*]
+    files:
+      - README.md
+      - SECURITY.md
+      - docs/**/*
+      - src: dist/bundled/{{ .Os }}_{{ .Arch }}/extensions
+        dst: extensions
+        strip_parent: false
 
 checksum:
   name_template: checksums.txt
@@ -101,8 +112,8 @@ homebrew_casks:
       postflight_steps do
         on_macos do
           run "/usr/bin/xattr",
-              args:           ["-dr", "com.apple.quarantine", "open-conduit", "os"],
+              args:           ["-dr", "com.apple.quarantine", "open-conduit", "os", "extensions"],
               chdir:          ".",
-              writable_paths: ["open-conduit", "os"]
+              writable_paths: ["open-conduit", "os", "extensions"]
         end
       end

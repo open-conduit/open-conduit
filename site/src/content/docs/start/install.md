@@ -10,6 +10,8 @@ Open Conduit ships two commands, kept side by side:
 - `open-conduit` is the daemon and operator client.
 - `os` is the small toolbelt that shell commands call from inside a run. The daemon looks for it beside its own executable.
 
+Homebrew, the release archives and the install script also carry the setup assistant, an extension package in `extensions/setup/` beside the binaries. It runs `init --with claude` and the browser setup, and gives a fresh install its first configuration. `go install` doesn't bring it; see [below](#go-install).
+
 You also need the CLIs of the services you use: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in, for agent bindings, and optionally the GitHub CLI (`gh`), whose login is the default GitHub credential.
 
 ## Homebrew
@@ -22,9 +24,9 @@ The cask puts only `open-conduit` on your PATH. `os` stays beside it in the cask
 
 ## Release binaries
 
-Archives for macOS and Linux, on amd64 and arm64, are on the [releases page](https://github.com/open-conduit/open-conduit/releases) as `open-conduit_<version>_<os>_<arch>.tar.gz`, with a `checksums.txt`. Each holds `open-conduit` and `os`; keep them in the same directory.
+Archives for macOS and Linux, on amd64 and arm64, are on the [releases page](https://github.com/open-conduit/open-conduit/releases) as `open-conduit_<version>_<os>_<arch>.tar.gz`, with a `checksums.txt`. Each holds `open-conduit`, `os` and the bundled `extensions/` directory; keep them together.
 
-The install script downloads the latest release, verifies its checksum, puts both binaries in `~/.local/lib/open-conduit` and links `open-conduit` into `~/.local/bin`:
+The install script downloads the latest release, verifies its checksum, puts both binaries and `extensions/` in `~/.local/lib/open-conduit` and links `open-conduit` into `~/.local/bin`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/open-conduit/open-conduit/main/install.sh | sh
@@ -43,6 +45,8 @@ go install github.com/open-conduit/open-conduit/cmd/os@latest
 
 `os` lands on your PATH there under that generic name. Install both into the same directory, or point the daemon elsewhere with `serve --toolbelt-dir DIR`.
 
+`go install` doesn't bring the setup assistant, which lives in its own repository, [open-conduit/extension-setup](https://github.com/open-conduit/extension-setup). Build it from source as below and install it with `open-conduit extension install dist/packages/setup`. Without it, configure with `open-conduit init github` (or `slack`, `linear`, `jira`) and `config set`, and `serve` needs a config file to start.
+
 ## From source
 
 You need Go 1.24.2 or later, Git and Make:
@@ -51,7 +55,9 @@ You need Go 1.24.2 or later, Git and Make:
 git clone https://github.com/open-conduit/open-conduit.git
 cd open-conduit
 make build                 # writes bin/open-conduit and bin/os
+make packages              # builds the packages, the setup assistant into dist/packages/setup
 cp bin/open-conduit bin/os /usr/local/bin/   # or anywhere on your PATH, side by side
+open-conduit extension install dist/packages/setup
 ```
 
 ## Upgrading
@@ -61,7 +67,7 @@ open-conduit upgrade --check   # say whether a newer release is out
 open-conduit upgrade           # install it
 ```
 
-`upgrade` downloads the latest release for this machine, checks it against the release's `checksums.txt` and replaces `open-conduit` and the `os` beside it, wherever they are installed. If the [background service](/open-conduit/guides/background-service/) is running, it then restarts it on the new version; pass `--no-restart` to leave that to you. A daemon you started with `open-conduit serve` keeps the old version until you restart it. `--version 1.9.0` installs a particular release.
+`upgrade` downloads the latest release for this machine, checks it against the release's `checksums.txt` and replaces `open-conduit`, the `os` beside it and the bundled `extensions/` directory, wherever they are installed. Packages you installed yourself, in the config directory, are left alone. If the [background service](/open-conduit/guides/background-service/) is running, it then restarts it on the new version; pass `--no-restart` to leave that to you. A daemon you started with `open-conduit serve` keeps the old version until you restart it. `--version 1.9.0` installs a particular release.
 
 A Homebrew install belongs to Homebrew: `upgrade` tells you to run `brew upgrade --cask open-conduit` instead.
 

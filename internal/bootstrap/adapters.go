@@ -6,7 +6,6 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/human"
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
-	"github.com/open-conduit/open-conduit/extensions/setup"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/extensions/tracker"
 	"github.com/open-conduit/open-conduit/internal/cli"
@@ -90,14 +89,6 @@ func Adapters() []cli.Adapter {
 			Kinds:      []string{"extension"},
 			Entry:      []cli.Field{def("responders", `["operator:local"]`, "who may answer, each kind:id or a bare kind"), def("surfaces", `["tui"]`, "where the question is shown")},
 			Operations: []string{human.OpAsk}},
-		{Type: setup.Type, Title: "Setup sessions", Description: "Setting Open Conduit up from the web view's Setup page (or actions run setup start --scope ID --input MODEL). " +
-			"The entry and the route take an empty config {}; the route gives each session its own " + setup.WorkKind + " Work and takes only the operator's start, message and answer. " +
-			"The route's binding runs on " + setup.Executor + " with only read_context, wait, declare_outcome and setup.* operations, so the agent has no shell and talks only through setup.say and setup.ask. " +
-			"A session can't change the config yet. With no config file, the daemon starts on this scope.", Setup: "setup",
-			Kinds: []string{"extension", "route"},
-			Binding: []cli.Field{req("builtin_tools", "[]: the agent gets no shell or file access"), def("playbook", "setup", ""), def("args", "session", ""),
-				f("models", "the models the operator may pick when starting a session")},
-			Operations: setup.Operations()},
 		{Type: "claude-code", Title: "Claude Code", Description: "Runs Claude Code turns with sessions, handoff, attach and the MCP toolbelt.", Setup: "--with claude",
 			Kinds: []string{"executor"},
 			Binding: []cli.Field{def("binary", "claude", ""), f("model", ""), def("permission_mode", "bypassPermissions", ""), def("playbook", "work-issue", "work-tracker-issue for Linear/Jira"),
