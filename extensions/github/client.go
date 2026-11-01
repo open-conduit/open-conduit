@@ -12,6 +12,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 )
 
@@ -51,8 +52,14 @@ type Client struct {
 	base           *http.Client // ClientOptions.HTTP, which writer clients share
 	tr             *transport
 	now            func() time.Time
-	read, write    tokenSource
-	gitBot         bool
+	who            atomic.Pointer[signIn] // swapped whole by Reconfigure
+}
+
+// signIn is who a client acts as: the reader, the writer (the bot App, or
+// the reader again) and whether git works as the bot.
+type signIn struct {
+	read, write tokenSource
+	gitBot      bool
 }
 
 // NewClient builds a client from validated connection config. No secret is
@@ -69,7 +76,7 @@ func NewClient(cfg ConnectionConfig, secrets SecretFunc, o ClientOptions) (*Clie
 	if base == nil {
 		base = &http.Client{Timeout: 30 * time.Second}
 	}
-	c := &Client{api: cfg.APIURL, base: o.HTTP, now: o.Now, gitBot: cfg.Git == GitBot}
+	c := &Client{api: cfg.APIURL, base: o.HTTP, now: o.Now}
 	c.tr = newTransport(base.Transport, u.Host, o.Now)
 	c.http = &http.Client{Transport: c.tr, Timeout: base.Timeout, CheckRedirect: func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }}
 	if u.Host == "api.github.com" {
@@ -77,19 +84,49 @@ func NewClient(cfg ConnectionConfig, secrets SecretFunc, o ClientOptions) (*Clie
 	} else {
 		c.web, c.host = u.Scheme+"://"+u.Host, u.Host
 	}
+	who, err := c.signIn(cfg, secrets)
+	if err != nil {
+		return nil, err
+	}
+	c.who.Store(who)
+	return c, nil
+}
+
+func (c *Client) signIn(cfg ConnectionConfig, secrets SecretFunc) (*signIn, error) {
+	who := &signIn{gitBot: cfg.Git == GitBot}
 	switch cfg.Auth {
 	case "token", "":
-		c.read = &staticToken{secrets: secrets, name: SecretToken}
+		who.read = &staticToken{secrets: secrets, name: SecretToken}
 	case "app":
-		c.read = newAppToken(cfg.AppID, secrets, SecretAppPrivateKey, c)
+		who.read = newAppToken(cfg.AppID, secrets, SecretAppPrivateKey, c)
 	default:
 		return nil, errors.New("github: unknown auth")
 	}
-	c.write = c.read
+	who.write = who.read
 	if cfg.BotAppID != "" {
-		c.write = newAppToken(cfg.BotAppID, secrets, SecretBotPrivateKey, c)
+		who.write = newAppToken(cfg.BotAppID, secrets, SecretBotPrivateKey, c)
 	}
-	return c, nil
+	return who, nil
+}
+
+// ErrReconfigure is Reconfigure's refusal of a connection on another GitHub
+// (api_url) than the client's: the client's host can't change in place.
+var ErrReconfigure = errors.New("github: api_url changed; restart required")
+
+// Reconfigure makes the client act as the connection's current sign-in, bot
+// App and git setting, dropping every token it cached, so a changed
+// connection takes effect on the next call. Calls already in flight finish as
+// before. A connection on another api_url is refused with ErrReconfigure.
+func (c *Client) Reconfigure(cfg ConnectionConfig, secrets SecretFunc) error {
+	if !strings.EqualFold(strings.TrimRight(cfg.APIURL, "/"), strings.TrimRight(c.api, "/")) {
+		return ErrReconfigure
+	}
+	who, err := c.signIn(cfg, secrets)
+	if err != nil {
+		return err
+	}
+	c.who.Store(who)
+	return nil
 }
 
 // Host is the web host (github.com or an Enterprise host).
@@ -105,9 +142,10 @@ var ErrStaticToken = errors.New("github: the connection signs in with a token, n
 // one (writes are the bot's), else the sign-in App. The caller owns it and
 // revokes it with RevokeToken when it is done.
 func (c *Client) GitToken(ctx context.Context, repo string) (string, time.Time, error) {
-	app, ok := c.write.(*appToken)
+	who := c.who.Load()
+	app, ok := who.write.(*appToken)
 	if !ok {
-		if app, ok = c.read.(*appToken); !ok {
+		if app, ok = who.read.(*appToken); !ok {
 			return "", time.Time{}, ErrStaticToken
 		}
 	}
@@ -127,9 +165,10 @@ type GitIdentity struct {
 // /app with its JWT and its bot user's id from GET /users/<slug>[bot]; both
 // are looked up once.
 func (c *Client) GitIdentity(ctx context.Context, repo string) (GitIdentity, error) {
-	app, ok := c.write.(*appToken)
+	who := c.who.Load()
+	app, ok := who.write.(*appToken)
 	if !ok {
-		if app, ok = c.read.(*appToken); !ok {
+		if app, ok = who.read.(*appToken); !ok {
 			return GitIdentity{}, ErrStaticToken
 		}
 	}
@@ -138,7 +177,7 @@ func (c *Client) GitIdentity(ctx context.Context, repo string) (GitIdentity, err
 
 // GitBot reports whether git works as the App's bot in the runs of this
 // connection's repositories (connection git "bot").
-func (c *Client) GitBot() bool { return c.gitBot }
+func (c *Client) GitBot() bool { return c.who.Load().gitBot }
 
 // RevokeToken revokes an installation token GitToken minted, signed in as
 // the token itself. A token GitHub no longer knows is already revoked.
@@ -150,15 +189,22 @@ func (c *Client) RevokeToken(ctx context.Context, token string) error {
 	return err
 }
 
+// hasBot reports whether writes go out as a bot App rather than the reader.
+func (c *Client) hasBot() bool {
+	who := c.who.Load()
+	return who.write != who.read
+}
+
 // PausedUntil reports an active rate-limit pause.
 func (c *Client) PausedUntil() (time.Time, bool) { return c.tr.PausedUntil() }
 
 // call makes one API call as the reader (or writer) of repo, signing in again
 // once after a 401.
 func (c *Client) call(ctx context.Context, write bool, repo, method, path string, body, out any) (*http.Response, error) {
-	src := c.read
+	who := c.who.Load()
+	src := who.read
 	if write {
-		src = c.write
+		src = who.write
 	}
 	var res *http.Response
 	var err error

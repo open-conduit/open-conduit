@@ -19,6 +19,8 @@ A private key is the App's PEM. `parseKey` also accepts it hex-encoded, which is
 
 Secrets are resolved lazily before a call, cached for the credential's lifetime and resolved again after a 401. A rotated reference therefore takes effect without a restart. Credential failures return `ErrCredential` and never include the reference or its value.
 
+An applied change to the connection a registered entry uses (`auth`, `app_id`, `bot_app_id`, `git` or its `secret_refs`) also takes effect without a restart: `registerGitHub` calls `Client.Reconfigure`, which swaps the client's reader, writer and git setting and drops its cached tokens, so the next write goes out as the new identity. A change of `api_url` can't be applied in place and reports `restart_required` for the entry.
+
 A `github` extension entry (an ingress entry: `config.scope` must be the containing scope) has these fields:
 
 | Field | Meaning |
@@ -178,7 +180,7 @@ The [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob
 
 - **Projection volume.** The projector reads every Work in the store on each pass and keeps those in its scope and namespace. That has no high-volume claim.
 - **Unenforced setting.** `settings.admission_limit` (the claimed-per-project cap) is validated but not enforced, and `config check` warns where a config sets it. A scope's `limits.concurrency` does cap how many of its issues have a turn running at once.
-- **Registration lifetime.** Ingress registrations are startup-only (B05). A changed or removed entry reports `restart_required` until the daemon restarts.
+- **Registration lifetime.** Ingress registrations are startup-only (B05). A changed or removed entry, an entry moved to another connection, or its connection moved to another `api_url` reports `restart_required` until the daemon restarts. Other connection changes apply in place (see Configuration).
 - **Raw deliveries.** `github.delivery` events are non-re-derivable by declaration (`DeliveryLoss`): a raw delivery missed while push is unavailable is lost, though the state it carried is recovered by reconcile. Webhook jobs rely on it; the trade-off is set out under recoverability of trigger families in [scheduled jobs](../schedule-extension/).
 
 ## Related parts

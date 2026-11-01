@@ -64,7 +64,7 @@ func (c *Client) Verify(ctx context.Context, repo string) (Access, error) {
 			}
 		}
 	}
-	if c.write != c.read {
+	if c.hasBot() {
 		if _, err := c.call(ctx, true, repo, http.MethodGet, "/repos/"+repo, nil, nil); err != nil {
 			return a, err
 		}
