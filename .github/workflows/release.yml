@@ -62,4 +62,4 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
-          POSTHOG_TELEMETRY_KEY: ${{ vars.POSTHOG_TELEMETRY_KEY }}
+          POSTHOG_TELEMETRY_KEY: ${{ secrets.POSTHOG_TELEMETRY_KEY }}
