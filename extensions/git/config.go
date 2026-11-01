@@ -201,6 +201,19 @@ func ValidateSandbox(raw json.RawMessage, mode string) error {
 	return nil
 }
 
+// ModeDefault is the mode a git resource config names as its default when
+// the executor requests none, "" when it names none (shared applies then) or
+// doesn't parse.
+func ModeDefault(raw json.RawMessage) string {
+	var named struct {
+		Mode string `json:"mode"`
+	}
+	if _, err := ParseConfig(raw); err != nil || json.Unmarshal(raw, &named) != nil {
+		return ""
+	}
+	return named.Mode
+}
+
 // params are the optional executor request params (ParamsSchema).
 type params struct {
 	// Branch requests a work-mode branch instead of the template.
