@@ -31,13 +31,11 @@
 package extensiontest
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -45,6 +43,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/extensiontest/devscope"
 	"github.com/open-conduit/open-conduit/protocol"
 )
 
@@ -86,7 +85,7 @@ type Instance struct {
 	closed bool
 	// started are the processes each daemon started, seen as it was
 	// killed; Close checks none outlives it.
-	started []process
+	started []devscope.Process
 	// scope is the scope Daemon generated from the packages' manifests,
 	// nil when the test gave its own config.
 	scope *scope
@@ -190,19 +189,10 @@ func Daemon(t testing.TB, options ...Option) *Instance {
 
 // install copies a package directory to extensions/<manifest name>.
 func install(dir, extensions string) error {
-	raw, err := os.ReadFile(filepath.Join(dir, protocol.ManifestFile))
-	if err != nil {
-		return fmt.Errorf("extensiontest: package %s: %w", dir, err)
+	if err := devscope.Install(dir, extensions); err != nil {
+		return fmt.Errorf("extensiontest: %w", err)
 	}
-	m, err := protocol.ParseManifest(raw)
-	if err != nil {
-		return fmt.Errorf("extensiontest: package %s: %w", dir, err)
-	}
-	dst := filepath.Join(extensions, m.Name)
-	if err := os.RemoveAll(dst); err != nil {
-		return err
-	}
-	return os.CopyFS(dst, os.DirFS(dir))
+	return nil
 }
 
 // Client is the operator's management client. It stays valid across
@@ -320,17 +310,9 @@ func (d *Instance) Close() {
 	d.closed = true
 	d.kill()
 	deadline := time.Now().Add(5 * time.Second)
-	var left []process
+	var left []devscope.Process
 	for {
-		left = left[:0]
-		_, running := processTable()
-		for _, p := range d.started {
-			// The same command at the same PID: a PID reused since is
-			// someone else's.
-			if running[p.pid] == p.command {
-				left = append(left, p)
-			}
-		}
+		left = devscope.Alive(d.started)
 		if len(left) == 0 || time.Now().After(deadline) {
 			break
 		}
@@ -339,10 +321,9 @@ func (d *Instance) Close() {
 	for _, p := range left {
 		// An agent's wrapper leads its own process group (so it outlives
 		// the daemon); the group goes with it.
-		_ = syscall.Kill(-p.pid, syscall.SIGKILL)
-		_ = syscall.Kill(p.pid, syscall.SIGKILL)
+		devscope.Kill(p)
 		if !d.t.Failed() {
-			d.t.Errorf("the daemon left process %d running: %s", p.pid, p.command)
+			d.t.Errorf("the daemon left process %d running: %s", p.PID, p.Command)
 		}
 	}
 	d.log.Close()
@@ -355,13 +336,8 @@ func (d *Instance) Close() {
 	}
 }
 
-type process struct {
-	pid     int
-	command string
-}
-
 // descendants lists the running daemon's process tree below it.
-func (d *Instance) descendants() []process {
+func (d *Instance) descendants() []devscope.Process {
 	if d.cmd == nil || d.cmd.Process == nil {
 		return nil
 	}
@@ -370,38 +346,5 @@ func (d *Instance) descendants() []process {
 		return nil
 	default:
 	}
-	parent, command := processTable()
-	root := d.cmd.Process.Pid
-	var found []process
-	for pid := range parent {
-		for p, n := parent[pid], 0; p > 1 && n < 64; p, n = parent[p], n+1 {
-			if p == root {
-				found = append(found, process{pid, command[pid]})
-				break
-			}
-		}
-	}
-	return found
-}
-
-// processTable is each running process's parent and command line.
-func processTable() (parent map[int]int, command map[int]string) {
-	parent, command = map[int]int{}, map[int]string{}
-	out, err := exec.Command("ps", "-A", "-o", "pid=,ppid=,command=").Output()
-	if err != nil {
-		return parent, command
-	}
-	for _, line := range bytes.Split(out, []byte("\n")) {
-		f := strings.Fields(string(line))
-		if len(f) < 3 {
-			continue
-		}
-		pid, err1 := strconv.Atoi(f[0])
-		ppid, err2 := strconv.Atoi(f[1])
-		if err1 != nil || err2 != nil {
-			continue
-		}
-		parent[pid], command[pid] = ppid, strings.Join(f[2:], " ")
-	}
-	return parent, command
+	return devscope.Descendants(d.cmd.Process.Pid)
 }
