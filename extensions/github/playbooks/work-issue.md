@@ -21,7 +21,7 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | `github.issue.list` | | the repository's open issues, to check for one before opening another |
 | `github.issue.create` | `title`, `body`, `wait`?, `until`? | open a new issue; with `wait` or `until`, it isn't worked until then (see Waiting) |
 | `github.pr.list` | | the issue's PRs, open or not |
-| `github.pr.create` | `title`, `body`, `base`?, `draft`? | open a PR from the issue's branch |
+| `github.pr.create` | `title`, `body`, `base`?, `draft`?, `closes_issue`? | open a PR from the issue's branch; its merge closes the issue unless `closes_issue` is `false` |
 | `github.pr.view` | `number` | a PR and every comment, inline comment and review on it |
 | `github.pr.comment` | `number`, `body` | comment on a PR's conversation |
 | `github.pr.reply` | `number`, `comment_id`, `body` | reply in an inline review thread |
@@ -107,7 +107,7 @@ If `github.pr.list` already shows an open PR, you're taking over from an earlier
 
 ### 4. Open the PR and end the turn
 
-- Push the branch (`git push -u origin HEAD`, or the remote the project's rules name), then `github.pr.create` with a `title` and a `body` saying what changed and anything from the issue you didn't do. The operation adds the line that links the PR to the issue.
+- Push the branch (`git push -u origin HEAD`, or the remote the project's rules name), then `github.pr.create` with a `title` and a `body` saying what changed and anything from the issue you didn't do. The operation adds the line that links the PR to the issue. When the issue takes several PRs, pass `"closes_issue": false` on every one but the last, so merging it leaves the issue open.
 - Post an update on the issue with `github.issue.comment` straight away, so the owner isn't left waiting on the checks to hear from you: the PR's link, that its checks are running, a short account of what you did, and anything they need to act on (a step only a person can take, such as a secret to add or a setting to change, a decision, anything you couldn't do).
 - Don't wait for the checks. End the turn with `building`, the PR number in `prs` and `touches` filled in. Open Conduit resumes you when every check on the PR's head has finished, with the result, and with a preview URL when the project has set one up.
 

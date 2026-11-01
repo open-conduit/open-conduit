@@ -379,22 +379,26 @@ func intentID(ctx context.Context, b *bound, op string, data json.RawMessage) st
 	return "call/" + string(b.a.ExecutionID) + "/" + op + "/" + digest(string(data))[:24]
 }
 
-func issueRef(s Settings, number int) string {
+func issueRef(s Settings, keyword string, number int) string {
 	if s.SharedTracker {
-		return "Closes " + s.TrackerRepo + "#" + strconv.Itoa(number)
+		return keyword + " " + s.TrackerRepo + "#" + strconv.Itoa(number)
 	}
-	return "Closes #" + strconv.Itoa(number)
+	return keyword + " #" + strconv.Itoa(number)
 }
 
-// linkBody links a PR body to its issue with `Closes #N`, unless the body
-// already names the issue: a `Refs #N` on one PR of several keeps its own
-// keyword, so merging that PR doesn't close the issue. Ingress links the PR
-// by its branch either way.
-func linkBody(s Settings, number int, body string) string {
+// linkBody links a PR body to its issue with `Closes #N`, or `Refs #N` when
+// closes is false (one PR of several, whose merge mustn't close the issue),
+// unless the body already names the issue with a keyword of its own.
+// Ingress links the PR by its `Refs` and by its branch either way.
+func linkBody(s Settings, number int, body string, closes bool) string {
 	if slices.Contains(bodyRefs(s, body), number) {
 		return body
 	}
-	return issueRef(s, number) + "\n\n" + body
+	keyword := "Closes"
+	if !closes {
+		keyword = "Refs"
+	}
+	return issueRef(s, keyword, number) + "\n\n" + body
 }
 
 func (b *bound) branch() string {
@@ -754,6 +758,9 @@ func (t *Tools) prCreate(ctx context.Context, b *bound, data json.RawMessage) (a
 		Base  string `json:"base"`
 		Head  string `json:"head"`
 		Draft bool   `json:"draft"`
+		// ClosesIssue false links the PR without closing the issue on
+		// merge: every PR but the last of a multi-PR issue.
+		ClosesIssue *bool `json:"closes_issue"`
 	}
 	if err := decode(data, &in); err != nil {
 		return nil, err
@@ -766,7 +773,7 @@ func (t *Tools) prCreate(ctx context.Context, b *bound, data json.RawMessage) (a
 		if head = b.branch(); head == "" {
 			return nil, refuse("no_branch", "the issue has no branch under this repository's branch_pattern; pass head")
 		}
-		body = linkBody(b.code.Settings, b.number, body)
+		body = linkBody(b.code.Settings, b.number, body, in.ClosesIssue == nil || *in.ClosesIssue)
 	}
 	base := in.Base
 	if base == "" {
