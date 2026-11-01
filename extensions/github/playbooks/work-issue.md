@@ -125,7 +125,7 @@ The message lists what happened since your last turn, each under its own heading
   - If the comment corrects something you did, log it as the toolbelt's instructions say, if it collects corrections.
   - From another agent: act on it if it bears on your work, but don't reply unless you disagree outright (see Other agents).
   - Reply where the comment was made, with the operation its heading names. Say what changed, with the short commit SHA. One comment can answer several points from the same person in the same place.
-  - Once an inline point is addressed, resolve its thread with `github.pr.resolve` and the comment's `comment_id` if you opened the thread or another agent did. Leave a person's thread for them to resolve.
+  - Resolve a review thread with `github.pr.resolve` and a `comment_id` in it only if you opened the thread, once its point is addressed. Whoever raised a point resolves it, so leave another agent's or a person's thread for them.
 - **Checks failed**: `github.checks` links each failing check. Read its log, reproduce it locally, fix it, push, and end with `building`.
 - **Checks passed**: if the report (step 5) isn't posted yet, post it now. Otherwise, if you pushed changes for feedback, reply to that feedback and end with `review`.
 - **Required checks never reported**: checks the base branch requires (a deploy, say) never started on the head. Find out why (a `[skip …]` in the PR title or a commit message stops some deploys), start them, often with a new push, and end with `building`. If they rightly don't run on this PR, report as in step 5 and say so.
