@@ -210,7 +210,18 @@ func TestExtensionCheckCommand(t *testing.T) {
 	if out, err := check(); err != nil || !strings.Contains(out, "no problems found") {
 		t.Fatalf("a good package: %v\n%s", err, out)
 	}
-	if err := os.Chmod(filepath.Join(dir, "runner-extension"), 0o644); err != nil {
+	// The package links the runner binary every test in this process
+	// shares; chmod through the link would leave it unexecutable for the
+	// tests after this one, so the package gets its own copy first.
+	cmdPath := filepath.Join(dir, "runner-extension")
+	raw, err := os.ReadFile(cmdPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = os.Remove(cmdPath); err != nil {
+		t.Fatal(err)
+	}
+	if err = os.WriteFile(cmdPath, raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
 	out, err := check()
