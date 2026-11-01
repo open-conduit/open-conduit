@@ -99,7 +99,7 @@ Behaviour:
 
 `issue:N:<state>` waits on the host's turn-ended Event (`core.execution.turn`, [execution scheduling](../execution-scheduling/)), which every turn declaring `core.turn.v1` publishes on its Work's keys, whatever source the Work came from. The issue's key selects the issue and the filter the state. The `github` route never delivers it. A wait registered on the `github.agent.turn` Event of earlier releases is not met by the new Event: give it an `until`, or wait again after upgrading.
 
-The renderer (`RenderEvent`, wired as the Claude Code `Options.Render`) uses this wording: `You were waiting for PR #50 to merge. That has happened: PR #50 was merged.` A timeout reads that the latest time has come. Comments carry their reply call (for example `call github.pr.reply {"number": 4, "comment_id": 77, …}`).
+The renderer (`RenderEvent`, wired as the Claude Code `Options.Render`) uses this wording: `You were waiting for PR #50 to merge. That has happened: PR #50 was merged.` A timeout reads that the latest time has come. Comments carry their reply call (for example `call github.pr.reply {"number": 4, "comment_id": 77, …}`). A `github.pull_request.open` copy names the PR's head (`### PR #4 is open at abcdef1`), its author and creation time on their own line, and says the same notice comes again whenever the PR changes (a push, or a new title, body or draft state), so a push doesn't read as a repeat of the PR's opening (issue #331).
 
 ## Scheduled holds
 
