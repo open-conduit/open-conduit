@@ -1,0 +1,12 @@
+module {{MODULE}}
+
+go 1.24.2
+
+require github.com/open-conduit/open-conduit {{CORE_VERSION}}
+{{REPLACE}}
+// The daemon and toolbelt extensiontest builds, at the version required
+// above, so the tests and `make certify` need nothing installed.
+tool (
+	github.com/open-conduit/open-conduit/cmd/open-conduit
+	github.com/open-conduit/open-conduit/cmd/os
+)

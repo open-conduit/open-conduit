@@ -1,0 +1,73 @@
+# make check is what CI runs on every push. make certify certifies the
+# package with the Open Conduit release go.mod requires or, given
+# OPEN_CONDUIT_REF (a branch or tag), with Open Conduit built from source
+# at that ref.
+
+GO ?= go
+NAME := {{NAME}}
+# VERSION, when set, is the release written into the manifest
+# (make package VERSION=1.2.0); otherwise main.go's version is used.
+VERSION ?=
+TESTFLAGS ?= -race
+PACKAGE_DIR ?= dist/$(NAME)
+BUILD_DIR ?= .build
+OPEN_CONDUIT_REPO ?= https://github.com/open-conduit/open-conduit.git
+OPEN_CONDUIT_REF ?=
+LDFLAGS ?= -s -w $(if $(VERSION),-X main.version=$(VERSION))
+GO_FILES = $$(find . -name '*.go' -not -path './$(BUILD_DIR)/*' -not -path './dist/*')
+
+.PHONY: check fmt fmt-check vet test build package lint certify clean
+
+check: fmt-check vet test build lint
+
+fmt:
+	gofmt -w $(GO_FILES)
+
+fmt-check:
+	@test -z "$$(gofmt -l $(GO_FILES))" || { gofmt -l $(GO_FILES); echo 'run make fmt'; exit 1; }
+
+vet:
+	$(GO) vet ./...
+
+test:
+	$(GO) test $(TESTFLAGS) ./...
+
+build:
+	$(GO) build ./...
+
+# The package directory, laid out as Open Conduit installs it: the
+# executable, its manifest and certification files, and the playbooks.
+package:
+	rm -rf $(PACKAGE_DIR)
+	mkdir -p $(PACKAGE_DIR)
+	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(PACKAGE_DIR)/$(NAME)-extension .
+	$(PACKAGE_DIR)/$(NAME)-extension package-manifest > $(PACKAGE_DIR)/open-conduit-extension.json
+	$(PACKAGE_DIR)/$(NAME)-extension package-certification > $(PACKAGE_DIR)/certification.json
+	cp -R playbooks $(PACKAGE_DIR)/playbooks
+
+# Lints the package without starting it: the manifest, compatibility with
+# Open Conduit, the operations the playbooks name, certification.json.
+lint: package
+	$(GO) tool open-conduit extension check $(PACKAGE_DIR)
+
+# Certification against an Open Conduit build. A ref that doesn't contain
+# the Open Conduit version go.mod requires can't host the package (it may
+# lack surfaces the manifest declares), so it is skipped, not failed.
+certify: package
+	@set -eu; \
+	if [ -z "$(OPEN_CONDUIT_REF)" ]; then \
+		$(GO) tool open-conduit extension certify $(PACKAGE_DIR) --report $(PACKAGE_DIR).certification.json; exit 0; \
+	fi; \
+	src=$(BUILD_DIR)/open-conduit; rm -rf $$src; \
+	git clone --quiet --filter=blob:none $(OPEN_CONDUIT_REPO) $$src; \
+	git -C $$src checkout --quiet $(OPEN_CONDUIT_REF); \
+	required=$$($(GO) list -m -f '{{.Version}}' github.com/open-conduit/open-conduit); \
+	commit=$${required##*-}; \
+	if ! git -C $$src merge-base --is-ancestor $$commit HEAD 2>/dev/null; then \
+		echo "skip: open-conduit $(OPEN_CONDUIT_REF) predates $$required, which this package requires"; exit 0; \
+	fi; \
+	(cd $$src && $(GO) build -o bin/open-conduit ./cmd/open-conduit); \
+	$$src/bin/open-conduit extension certify $(PACKAGE_DIR) --report $(PACKAGE_DIR).certification.json
+
+clean:
+	rm -rf $(BUILD_DIR) dist

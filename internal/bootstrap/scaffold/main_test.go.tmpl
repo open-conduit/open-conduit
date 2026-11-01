@@ -1,0 +1,32 @@
+package main
+
+import (
+	"context"
+	"errors"
+	"testing"
+
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/protocol/sdk/sdktest"
+)
+
+// TestHello calls the operation on an in-memory host, over the same wire
+// the daemon uses. Add a test like it for each operation.
+func TestHello(t *testing.T) {
+	h := sdktest.New(t, build())
+	got, err := sdktest.Call[HelloOutput](context.Background(), h, "{{NAME}}.hello", HelloInput{Name: "Ada"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Greeting != "Hello, Ada!" {
+		t.Fatalf("greeting %q", got.Greeting)
+	}
+}
+
+func TestHelloNeedsAName(t *testing.T) {
+	h := sdktest.New(t, build())
+	_, err := sdktest.Call[HelloOutput](context.Background(), h, "{{NAME}}.hello", HelloInput{})
+	var refused *extension.OperationError
+	if !errors.As(err, &refused) || refused.Code != "bad_request" {
+		t.Fatalf("got %v, want a bad_request refusal", err)
+	}
+}

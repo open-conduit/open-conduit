@@ -1,0 +1,50 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - run: make check
+
+  # Certify against Open Conduit's main branch and its latest release. A
+  # release older than the Open Conduit version go.mod requires is skipped.
+  certify:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        open-conduit: [main, latest-release]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: Resolve the Open Conduit ref
+        id: ref
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if [ "${{ matrix.open-conduit }}" = latest-release ]; then
+            echo "ref=$(gh release view -R open-conduit/open-conduit --json tagName -q .tagName)" >> "$GITHUB_OUTPUT"
+          else
+            echo "ref=main" >> "$GITHUB_OUTPUT"
+          fi
+      - run: make certify OPEN_CONDUIT_REF=${{ steps.ref.outputs.ref }}
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: certification-${{ matrix.open-conduit }}
+          path: dist/{{NAME}}.certification.json
+          if-no-files-found: ignore

@@ -1,0 +1,68 @@
+// Command {{NAME}}-extension is an Open Conduit extension package. It
+// serves one toolbelt operation, {{NAME}}.hello, that agents call through
+// Open Conduit. Start here: rename the operation, change its input and
+// output, and say in its guidance when an agent should call it.
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"os"
+	"strings"
+
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol/sdk"
+)
+
+// version is the package's release, set by `make package VERSION=...`.
+var version = "0.1.0"
+
+// HelloInput is what an agent sends. Its fields become the operation's
+// input schema: required unless tagged omitempty, with the doc tag as the
+// description an agent reads.
+type HelloInput struct {
+	Name string `json:"name" doc:"Who to greet."`
+}
+
+// HelloOutput is what the agent gets back.
+type HelloOutput struct {
+	Greeting string `json:"greeting"`
+}
+
+func hello(_ context.Context, _ extension.Authority, in HelloInput) (HelloOutput, error) {
+	name := strings.TrimSpace(in.Name)
+	if name == "" {
+		return HelloOutput{}, &extension.OperationError{Code: "bad_request", Message: "{{NAME}}.hello needs a name"}
+	}
+	return HelloOutput{Greeting: "Hello, " + name + "!"}, nil
+}
+
+// build is the extension. Each registration also declares itself, so the
+// manifest (`package-manifest`) is derived from what is registered here.
+func build() *sdk.Extension {
+	ext := sdk.New("{{NAME}}", sdk.Version(version), sdk.Summary("{{NAME}}: an Open Conduit extension package."))
+	ext.Manifest.Provides.Playbooks = "playbooks"
+	return ext.Operation("{{NAME}}.hello", sdk.Handler(hello),
+		sdk.Guidance("Call `{{NAME}}.hello` with a `name` to get a greeting for them."))
+}
+
+// certification is the fixture `open-conduit extension certify` runs the
+// package against: one case per operation, with the output it must give.
+func certification() protocol.CertificationFile {
+	return protocol.CertificationFile{Fixture: &protocol.Fixture{Operations: []protocol.OperationCase{
+		{Operation: "{{NAME}}.hello", Input: protocol.Payload{Data: json.RawMessage(`{"name":"Ada"}`)},
+			Output: &protocol.Payload{Schema: "{{NAME}}.hello.v1", Data: json.RawMessage(`{"greeting":"Hello, Ada!"}`)}},
+		{Operation: "{{NAME}}.hello", Input: protocol.Payload{Data: json.RawMessage(`{"name":" "}`)}, Error: "bad_request"},
+	}}}
+}
+
+func main() {
+	ext := build()
+	if sdk.PackageCommand(os.Args[1:], ext.Manifest, certification(), os.Stdout) {
+		return
+	}
+	if err := sdk.Serve(ext); err != nil {
+		os.Exit(1)
+	}
+}

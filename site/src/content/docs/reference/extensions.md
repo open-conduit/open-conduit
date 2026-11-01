@@ -8,6 +8,7 @@ Integrations outside the built-in set run as separate processes that speak a JSO
 A package can contribute integrations, executors, toolbelt operations, setups and doctor checks. Once installed, its types are known to `config check`.
 
 ```sh
+open-conduit extension new my-extension              # start a package repository whose make check passes first time
 open-conduit extension check ./my-extension          # lint it without starting it; says what to change for each problem
 open-conduit extension inspect ./my-extension        # check a package offline
 open-conduit extension certify ./my-extension        # run the conformance suite against it

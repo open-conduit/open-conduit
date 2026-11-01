@@ -16,6 +16,19 @@ Code:
 - [`internal/extproc/diagnose.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/extproc/diagnose.go): diagnostics;
 - [`internal/bootstrap/extensions.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/extensions.go): daemon wiring.
 
+## Starting a package
+
+`open-conduit extension new NAME [--dir DIR] [--module PATH] [--replace DIR]` writes a package repository in `DIR` (default `./NAME`) whose `make check` passes on its first run. It holds:
+
+- `go.mod`, with module `PATH` (default `example.com/NAME`), requiring the release of Open Conduit that ran the command, and `tool` directives for `cmd/open-conduit` and `cmd/os` so the tests and `make certify` need nothing installed. A development build requires the commit it was built from instead. `--replace DIR` builds against an Open Conduit checkout with a `replace` directive. The command runs `go mod tidy` there, so `go.sum` is complete.
+- `main.go`, with one operation an agent can call, `NAME.hello`, in the declare-once form, a certification fixture with a case for it, and a playbooks directory in the manifest.
+- `main_test.go`, a unit test on [`sdktest`](#unit-tests-sdktest), and `e2e_test.go`, which installs the package in a real daemon with [`extensiontest`](#daemon-tests-extensiontest) and has a scripted agent call the operation.
+- A `Makefile`: `check` (formatting, vet, `test -race`, build and `lint`), `package` (the [package layout](#package-layout) in `dist/NAME`), `lint` (`extension check` on it) and `certify`. `certify` uses the Open Conduit `go.mod` requires; `OPEN_CONDUIT_REF=<branch or tag>` builds Open Conduit from source at that ref instead, and skips a ref older than the version `go.mod` requires.
+- `.github/workflows/ci.yml`, which runs `make check` and certifies against Open Conduit's `main` and its latest release.
+- `playbooks/NAME.md`, a stub playbook naming the operation, and a README saying what to change first.
+
+It refuses a name the [manifest rules](../extension-protocol/#manifest) or Open Conduit's own registrations rule out, and a directory that isn't empty. `TestExtensionNew` runs the command against this checkout and runs the new repository's `make check`.
+
 ## Writing an extension with the SDK
 
 An extension is a program that speaks protocol version 1 on stdin and stdout. In Go, `protocol/sdk` does that for you. Start one with `sdk.New`, register each handler, and call `sdk.Serve`. Registering a handler also declares it, so the manifest is derived from the registrations and can't disagree with them:
@@ -400,6 +413,7 @@ A report states:
 - `TestSDKStoreOverProtocol`.
 - `TestDaemonExtensionPackages` (in `make drill`): CLI install, conflict refusal, offline config check, a workflow end to end in the real daemon, the `validate` hook, configure on apply, no orphans after a daemon kill, restart, and removal refused while in use.
 - Unit tests in `internal/extproc` (install, update, rollback, removal, diagnostics, and `extension check` in `check_test.go`).
+- `TestExtensionNew`: `extension new` writes a repository whose own `make check` passes against this checkout, and refuses a directory that isn't empty.
 - `TestExtensionCheckCommand`: `extension check` through the binary, text and `--json`; `TestSetupPlaybookNamesRegisteredOperations` runs the check on the setup package.
 - The first-party in-process suites still run unchanged: Slack and shell keep their in-process registration, and workflows A–D pass (`TestDaemonAllWorkflows`).
 

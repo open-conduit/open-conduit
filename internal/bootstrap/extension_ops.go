@@ -123,6 +123,7 @@ func ExtensionOps(version, commit string) *cli.ExtensionOps {
 			}
 			return cli.CertifyResult{Certified: rep.Certified, Text: rep.Text(), Report: rep}, nil
 		},
+		New: func(r cli.NewRequest) (cli.NewResult, error) { return newPackage(version, commit, r) },
 		Setups: func(configPath, stateDir string) []extension.Setup {
 			return extensionSetups(configPath, stateDir, version)
 		},
