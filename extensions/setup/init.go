@@ -59,7 +59,7 @@ type Setup struct{}
 var _ extension.Setup = Setup{}
 
 func (Setup) SetupInfo() extension.SetupInfo {
-	return extension.SetupInfo{Type: Type, Summary: "a scope for setting Open Conduit up from the web view", Usage: "[--scope ID]"}
+	return extension.SetupInfo{Type: Type, Summary: "a scope for setting Open Conduit up from the web view", Usage: "[--scope ID]", FirstRun: true}
 }
 
 func (Setup) Setup(_ context.Context, _ extension.SetupHost, args []string) (extension.SetupResult, error) {

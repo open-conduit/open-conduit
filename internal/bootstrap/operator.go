@@ -25,6 +25,7 @@ import (
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
@@ -106,19 +107,42 @@ func Setups() []extension.Setup {
 }
 
 // DefaultConfig is the configuration the daemon runs on when it starts with
-// no config file and no stored generation: what `init setup` would write
-// into an empty file, so the web view can start a setup session.
-func DefaultConfig() []byte {
-	r, err := setup.Setup{}.Setup(context.Background(), nil, nil)
-	if err != nil {
-		return nil
-	}
-	doc, err := cli.MergeSetup(nil, r, false)
-	if err != nil {
-		return nil
-	}
-	return doc
+// no config file and no stored generation: what `init` of the first-run
+// setup would write into an empty file, so the web view can start a setup
+// session. The first-run setup is a registered one, or one of the packages
+// installed beside configPath or bundled with the binary.
+func DefaultConfig(configPath, stateDir string) []byte {
+	return firstRunConfig(append(Setups(), extensionSetups(configPath, stateDir, "")...))
 }
+
+// firstRunConfig is the first first-run setup's result with no flags,
+// merged into an empty config; nil when there is none or it fails. The
+// setup's host prompts for nothing, stores nothing and runs nothing.
+func firstRunConfig(setups []extension.Setup) []byte {
+	for _, s := range setups {
+		if !s.SetupInfo().FirstRun {
+			continue
+		}
+		ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+		r, err := s.Setup(ctx, firstRunHost{}, nil)
+		cancel()
+		if err != nil {
+			return nil
+		}
+		doc, err := cli.MergeSetup(nil, r, false)
+		if err != nil {
+			return nil
+		}
+		return doc
+	}
+	return nil
+}
+
+// firstRunHost is the host a first-run setup builds the default
+// configuration with: no operator, no config, no secrets and nothing run.
+type firstRunHost struct{ probeSetupHost }
+
+func (firstRunHost) LookPath(string) (string, bool) { return "", false }
 
 // SetupOptions start a coding agent with the setup guide.
 type SetupOptions struct {
@@ -154,7 +178,11 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	if err := os.MkdirAll(o.StateDir, 0o700); err != nil {
 		return nil, err
 	}
-	if err := playbooks.WritePlugin(dir, "Sets Open Conduit up", map[string]string{setup.PlaybookName: setup.Playbook(o.Bin)}); err != nil {
+	name, text, err := firstRunPlaybook(o.ConfigPath, o.Bin)
+	if err != nil {
+		return nil, err
+	}
+	if err := playbooks.WritePlugin(dir, "Sets Open Conduit up", map[string]string{name: text}); err != nil {
 		return nil, err
 	}
 	if _, err := exec.LookPath(o.Binary); err != nil {
@@ -162,7 +190,7 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	}
 	// The prompt first and the tools last: --allowedTools takes every
 	// argument after it.
-	args := []string{"/" + playbooks.PluginName + ":" + setup.PlaybookName, "--plugin-dir", dir, "--allowedTools"}
+	args := []string{"/" + playbooks.PluginName + ":" + name, "--plugin-dir", dir, "--allowedTools"}
 	for _, sub := range []string{"config", "doctor", "health", "secret path", "init github --dry-run"} {
 		args = append(args, "Bash("+o.Bin+" "+sub+":*)")
 	}
@@ -181,6 +209,35 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	}
 	cmd.Env = append(cmd.Env, "OPEN_CONDUIT_CONFIG="+o.ConfigPath)
 	return cmd, nil
+}
+
+// firstRunPlaybook is the setup playbook `init --with claude` starts on:
+// the first-run setup's playbook, named after its type, with `{{bin}}` as
+// the agent runs open-conduit. It comes from the registered setup
+// extension, or else from the first-run package installed beside
+// configPath or bundled with the binary.
+func firstRunPlaybook(configPath, bin string) (string, string, error) {
+	for _, s := range Setups() {
+		if s.SetupInfo().FirstRun && s.SetupInfo().Type == setup.Type {
+			return setup.PlaybookName, setup.Playbook(bin), nil
+		}
+	}
+	found, _ := discoverPackages(configPath, "")
+	for _, f := range found {
+		d := f.Manifest.Provides.Setup
+		if d == nil || !d.FirstRun {
+			continue
+		}
+		books, err := extproc.Playbooks(f.Dir, f.Manifest)
+		if text, ok := books[d.Type]; ok {
+			return d.Type, extproc.RenderPlaybook(text, bin), nil
+		}
+		if err != nil {
+			return "", "", fmt.Errorf("the %s package's playbooks: %w", f.Manifest.Name, err)
+		}
+		return "", "", fmt.Errorf("the %s package has no %s playbook", f.Manifest.Name, d.Type)
+	}
+	return "", "", errors.New("no setup package is installed: install it with open-conduit extension install")
 }
 
 // annotate contributes the GitHub entries' context for Work they own.

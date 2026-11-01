@@ -125,7 +125,7 @@ type Host struct {
 	Config ConfigHost
 	// Probes are the setup probes other extensions and executors offer
 	// (extension.SetupProbes), by full name ("claude-code.status"), and the
-	// host's own (setup.init, setup.doctor).
+	// host's own (open-conduit.init, open-conduit.doctor).
 	Probes func() map[string]extension.SetupProbe
 }
 

@@ -34,6 +34,12 @@ const (
 	ValidateRoute      = "route"
 	ValidateExecutor   = "executor"
 	ValidateResource   = "resource"
+	// ValidateBinding checks the binding a route binds, for a route
+	// handler declared with binding (extension.RouteBinding). Type is the
+	// handler, Binding the binding; Config is empty. Its refusal's message
+	// is the reason the operator reads in the binding_refused diagnostic,
+	// so it names the rule and never echoes config values.
+	ValidateBinding = "binding"
 )
 
 // ValidateParams asks the extension to check one opaque config object of
@@ -44,6 +50,44 @@ type ValidateParams struct {
 	Type        string          `json:"type"`
 	Config      json.RawMessage `json:"config,omitempty"`
 	SecretNames []string        `json:"secret_names,omitempty"`
+	// Binding is the binding a route binds, for kind binding only.
+	Binding *RouteBinding `json:"binding,omitempty"`
+}
+
+// RouteBinding is the binding a route binds, as its handler's binding
+// check sees it (extension.RouteBinding): its executor, the toolbelt
+// operations it grants, its executor config and its grants.
+type RouteBinding struct {
+	Executor   string          `json:"executor"`
+	Operations []string        `json:"operations,omitempty"`
+	Config     json.RawMessage `json:"config,omitempty"`
+	Grants     []BindingGrant  `json:"grants,omitempty"`
+}
+
+// BindingGrant is one grant the binding offers (domain.BindingGrant).
+type BindingGrant struct {
+	Name       string          `json:"name"`
+	Label      string          `json:"label,omitempty"`
+	Operations []string        `json:"operations,omitempty"`
+	Config     json.RawMessage `json:"config,omitempty"`
+}
+
+// Contract is the binding as extension code sees it.
+func (b RouteBinding) Contract() extension.RouteBinding {
+	out := extension.RouteBinding{Executor: b.Executor, Operations: b.Operations, Config: b.Config}
+	for _, g := range b.Grants {
+		out.Grants = append(out.Grants, domain.BindingGrant{Name: g.Name, Label: g.Label, Operations: g.Operations, Config: g.Config})
+	}
+	return out
+}
+
+// WireBinding is a binding as the validate call carries it.
+func WireBinding(b extension.RouteBinding) *RouteBinding {
+	out := &RouteBinding{Executor: b.Executor, Operations: b.Operations, Config: b.Config}
+	for _, g := range b.Grants {
+		out.Grants = append(out.Grants, BindingGrant{Name: g.Name, Label: g.Label, Operations: g.Operations, Config: g.Config})
+	}
+	return out
 }
 
 // Webhooks.

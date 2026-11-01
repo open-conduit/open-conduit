@@ -1,6 +1,7 @@
 package protocol_test
 
 import (
+	"encoding/json"
 	"errors"
 	"os"
 	"path/filepath"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/observability"
 	"github.com/open-conduit/open-conduit/protocol"
@@ -285,5 +287,39 @@ func TestNamespacesAndNegotiation(t *testing.T) {
 	}
 	if _, err := protocol.Negotiate([]int{2}, protocol.Versions); !errors.Is(err, protocol.ErrIncompatible) {
 		t.Fatalf("mismatch %v", err)
+	}
+}
+
+// entry_gated needs operations to gate and an extension type whose entries
+// gate them; a handler's binding check crosses as validate with its binding.
+func TestEntryGatedAndBindingCheck(t *testing.T) {
+	base, err := os.ReadFile(filepath.Join("testdata", "ingress-support.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := protocol.ParseManifest(base)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.Provides.EntryGated = true
+	if err := m.Validate(); err != nil {
+		t.Fatalf("gated with operations and entries: %v", err)
+	}
+	m.Provides.Operations = nil
+	if err := m.Validate(); !errors.Is(err, protocol.ErrManifest) {
+		t.Fatalf("gated with no operations accepted: %v", err)
+	}
+	b := extension.RouteBinding{Executor: "claude-code", Operations: []string{"wait"}, Config: json.RawMessage(`{"builtin_tools":[]}`),
+		Grants: []domain.BindingGrant{{Name: "shell", Label: "Shell", Operations: []string{"x.y"}, Config: json.RawMessage(`{"a":1}`)}}}
+	raw, _ := json.Marshal(protocol.ValidateParams{Kind: protocol.ValidateBinding, Type: "h", Binding: protocol.WireBinding(b)})
+	var p protocol.ValidateParams
+	if err := json.Unmarshal(raw, &p); err != nil || p.Binding == nil {
+		t.Fatalf("%s %v", raw, err)
+	}
+	if got := p.Binding.Contract(); !reflect.DeepEqual(got, b) {
+		t.Fatalf("binding round trip: %+v want %+v", got, b)
+	}
+	if !strings.Contains(string(raw), `"grants":[{"name":"shell","label":"Shell"`) {
+		t.Fatalf("wire form: %s", raw)
 	}
 }

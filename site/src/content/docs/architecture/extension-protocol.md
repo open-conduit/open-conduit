@@ -64,7 +64,7 @@ The table groups what the first-party code actually does across the host boundar
 | Setup | `extension.Setup` with `SetupHost` prompts, browser, secret store, `LookPath`, `Run` | GH SL TR | `setup.run` plus `setup.*` callbacks |
 | Playbooks | embedded playbooks written into the agent executor's plugin directory | GH SL TR IS | manifest `playbooks` (first-party convention) |
 
-`TestCatalogueCoversThePublicContract` checks mechanically that every method of every public interface an extension implements or consumes is carried by a wire method. `TestInprocSurfacesAreCarried` checks the in-process contract the same way: it reads every interface of `extension/inproc`, every field of `inproc.Host` and every field of `inproc.ConfigType` from the source, and fails unless each maps to a wire method, a manifest field, or something a process has of its own (its clock, its stderr). A surface nothing carries yet is listed with the open issue that will carry it: entry-gated operations and route binding checks (`EntryGated`, `ConfigType.Binding`), which the setup extension needs to become a package (#243). `TestCatalogueMapsEveryMethodToAShippedUse` checks that every wire method names at least one shipped user. Core-record writes (`AcceptEvent`, `PutWork`, leases, timers, waits) never cross the boundary. They are reached only through `event.accept`, `timer.arm`, `work.cancel` and `wait.progress`, which apply the same causal limits and fencing as in-process callers.
+`TestCatalogueCoversThePublicContract` checks mechanically that every method of every public interface an extension implements or consumes is carried by a wire method. `TestInprocSurfacesAreCarried` checks the in-process contract the same way: it reads every interface of `extension/inproc`, every field of `inproc.Host` and every field of `inproc.ConfigType` from the source, and fails unless each maps to a wire method, a manifest field, or something a process has of its own (its clock, its stderr). A surface nothing carries yet would be listed with the open issue that will carry it; none is listed now. The last two, entry-gated operations and route binding checks (`EntryGated`, `ConfigType.Binding`), became the manifest's `entry_gated` and `routes[].binding` for the setup extension to become a package (#243). `TestCatalogueMapsEveryMethodToAShippedUse` checks that every wire method names at least one shipped user. Core-record writes (`AcceptEvent`, `PutWork`, leases, timers, waits) never cross the boundary. They are reached only through `event.accept`, `timer.arm`, `work.cancel` and `wait.progress`, which apply the same causal limits and fencing as in-process callers.
 
 ### What does not cross the boundary
 
@@ -300,6 +300,7 @@ Validation rules:
 - operation kinds are `handler`, `wait` or `emit`, and only emit may `commit`;
 - an operation's `guidance` (its agent guidance, `extension.Operation.Guidance`) is at most 4096 bytes;
 - `dependency_filter` needs a wait operation;
+- `entry_gated` needs operations and an extension type;
 - toolbelt labels are `none`, `cli`, `mcp` or `sdk`;
 - resource modes are distinct `shared`, `work` or `fresh`;
 - task intervals are at least one second;
@@ -321,6 +322,12 @@ An extension type may declare what the operator's view of an entry shows (`GET /
   "settings": [{"field": "team", "type": "string"}, {"field": "manage_webhook", "type": "boolean", "default": true}],
   "describe": {"list": "jobs", "name": "name", "detail": "schedule"}}]
 ```
+
+Three manifest fields carry what the in-process contract gives a first-party extension:
+
+- **`entry_gated`** (`inproc.EntryGated`): the package's operations join a generation's toolbelt only when an enabled scope has one of its entries. Removing the last entry removes them, and a binding that still grants them keeps running, with its calls undeclared.
+- **`routes[].binding`** (`inproc.ConfigType.Binding`): the handler checks the binding each of its routes binds. Config validation calls `validate` with kind `binding`, the handler as `type` and the binding as `binding`: its `executor`, `operations`, executor `config` and `grants`. Unlike every other kind, a refusal's message is shown: it is the reason in the `binding_refused` diagnostic at the route's `binding`, capped at 300 bytes, so it names the rule and never echoes a config value. A call that fails refuses the binding too.
+- **`setup.first_run`** (`extension.SetupInfo.FirstRun`): this setup, run with no flags on a host that prompts for nothing, stores nothing and runs nothing, builds the configuration a daemon runs on when it has no config file and no stored generation ([setup sessions](../setup-sessions/#a-fresh-install)).
 
 First-party extensions registered in-process have no manifest. The Slack extension and the shell executor are also built as subprocess packages with manifests ([packaging](../extension-packaging/)), but they stay registered in-process. A third-party extension's config entries are validated through `validate`.
 
@@ -345,6 +352,7 @@ Provisional, like the rest of the protocol. Code:
 ### Loading
 
 - **Install location.** `<config dir>/extensions/<name>/open-conduit-extension.json`, beside `config.json` (`extproc.Dir`). The directory must be named after the manifest's name. Install, update, rollback and removal are `open-conduit extension` commands ([packaging](../extension-packaging/#install-update-rollback-and-removal)).
+- **Bundled packages.** Packages can also ship with the binary, in `extensions/` beside the real executable (links resolved, as the `os` toolbelt is found). They are discovered after the installed ones. An installed package of the same name replaces the bundled one, even when the installed one is refused, so a release that needs a newer Open Conduit is reported rather than silently swapped for the bundled one. Removing the installed copy brings the bundled one back. `extension list` shows bundled packages, marked as such.
 - **Discovery.** `extproc.Discover` parses every manifest strictly and offline. Invalid or misnamed manifests are reported and skipped. A missing root means no extensions.
 - **Conflicts.** `extproc.CheckConflicts` checks a whole set atomically against names already taken in-process, and against each other. The checked kinds are the name, config types, handlers, executors, resource types, operations, families, work kinds, recurrences and schemas. Either every extension is admitted or none is.
 - **Start.**
@@ -370,7 +378,8 @@ Provisional, like the rest of the protocol. Code:
   - `Executor(name)` implements every optional executor interface;
   - `Recurrence(kind)` is a `runtime.RecurrenceFunc`;
   - `WorkKind(kind)` is a `runtime.WorkKindPolicy`;
-  - `Render`, `Task` and `Check`.
+  - `Render`, `Task` and `Check`;
+  - `BindingCheck(handler)`, a handler's binding check.
 
   Core registers these exactly as it registers in-process extensions.
 - **In-transaction calls.** `Process.CallInTx` enforces the 250 ms deadline, does not wait for a restart, and refuses every extension-to-host callback with `reentrant_call` while one is outstanding. Two outcomes cannot fail a transaction:

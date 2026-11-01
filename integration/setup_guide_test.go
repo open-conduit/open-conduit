@@ -131,7 +131,8 @@ func TestSlackSetupScopeValidatesOffline(t *testing.T) {
 // The default configuration (init setup into an empty file) validates
 // against the daemon registry, so a daemon with no config file can start.
 func TestDefaultConfigValidatesOffline(t *testing.T) {
-	doc := bootstrap.DefaultConfig()
+	dir := t.TempDir()
+	doc := bootstrap.DefaultConfig(filepath.Join(dir, "config.json"), filepath.Join(dir, "state"))
 	if diags, err := bootstrap.ValidateConfig(doc); doc == nil || err != nil || len(diags) != 0 {
 		t.Fatalf("default config: %v %v\n%s", diags, err, doc)
 	}
@@ -238,12 +239,12 @@ func TestSetupPlaybookNamesRegisteredOperations(t *testing.T) {
 	for _, p := range (setupext.Probes{}).SetupProbes() {
 		ops[setupext.Type+"."+p.Name] = true
 	}
-	ops["setup.init"], ops["setup.doctor"], ops["setup.applied"] = true, true, true
+	ops["open-conduit.init"], ops["open-conduit.doctor"], ops["setup.applied"] = true, true, true
 	for _, p := range (claudecode.Probes{}).SetupProbes() {
 		ops["claude-code."+p.Name] = true
 	}
 	g := setupext.Playbook("open-conduit")
-	names := regexp.MustCompile("[`\"]((?:github|setup|claude-code)\\.[a-z.]+)[`\"]").FindAllStringSubmatch(g, -1)
+	names := regexp.MustCompile("[`\"]((?:github|setup|claude-code|open-conduit)\\.[a-z.]+)[`\"]").FindAllStringSubmatch(g, -1)
 	if len(names) == 0 || !strings.HasPrefix(g, "---\nname: setup\n") {
 		t.Fatal("the setup playbook names no operation or has no frontmatter")
 	}

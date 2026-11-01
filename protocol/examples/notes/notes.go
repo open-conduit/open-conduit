@@ -126,7 +126,7 @@ func Manifest(o Options) protocol.Manifest {
 				{Type: Annotated, ReDerivable: true},
 			},
 			Schemas:     []protocol.SchemaDecl{{Name: Schema, Versions: schemaVersions(o.Release)}},
-			Routes:      []protocol.RouteDecl{{Handler: "notes"}},
+			Routes:      []protocol.RouteDecl{{Handler: "notes", Binding: true}},
 			WorkKinds:   []protocol.WorkKindDecl{{Kind: Kind, Trigger: true}},
 			Recurrences: []string{Recurrence},
 			Operations:  []protocol.OperationDecl{{Name: "notes.lookup", Kind: protocol.OperationHandler}, {Name: "notes.annotate", Kind: protocol.OperationEmit, Commit: true}},

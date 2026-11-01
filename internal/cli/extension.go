@@ -30,6 +30,9 @@ type ExtensionPackage struct {
 	Permissions []ExtensionPermission `json:"permissions,omitempty"`
 	// Previous is the release kept for rollback.
 	Previous string `json:"previous,omitempty"`
+	// Bundled marks a package that ships with the binary; one installed
+	// under the same name replaces it.
+	Bundled bool `json:"bundled,omitempty"`
 }
 
 // ExtensionPermission is one permission a package declares.
@@ -165,6 +168,9 @@ func (o *operator) extension(args []string) int {
 			prev := ""
 			if p.Previous != "" {
 				prev = " (rollback to " + p.Previous + ")"
+			}
+			if p.Bundled {
+				prev = " (bundled with open-conduit)"
 			}
 			fmt.Fprintf(w, "  %s\t%s%s\tprotocol %v\t%s\n", p.Name, p.Version, prev, p.Protocol, strings.Join(p.Provides, ", "))
 			if len(p.Permissions) > 0 {

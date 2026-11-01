@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"net/url"
@@ -91,6 +92,15 @@ func TestDaemonExtensionPackages(t *testing.T) {
 	}
 	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err == nil || !strings.Contains(string(out), "rejected by its registered owner") {
 		t.Fatalf("offline check of an invalid entry: %v\n%s", err, out)
+	}
+	// The route handler checks its binding (provides.routes[].binding): a
+	// binding granting create_work is refused with the package's reason.
+	granting := bytes.Replace(config(map[string]any{"service": service, "scope": "notes-scope"}), []byte(`"name":"run","operations":[]`), []byte(`"name":"run","operations":["create_work"]`), 1)
+	if err := os.WriteFile(bad, granting, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err == nil || !strings.Contains(string(out), "binding_refused") || !strings.Contains(string(out), "may not grant create_work") {
+		t.Fatalf("offline check of a refused binding: %v\n%s", err, out)
 	}
 
 	d.start("")

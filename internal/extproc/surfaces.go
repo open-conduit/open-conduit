@@ -43,6 +43,34 @@ func (r *Remote) Validator(kind, typ string) func(json.RawMessage, []string) err
 	}
 }
 
+// BindingCheck returns the binding check of a route handler declared with
+// binding: validate with kind binding. A refusal's message is the
+// package's reason, capped, which the binding_refused diagnostic shows; a
+// failed call is a refusal too, so an unreachable package never passes a
+// binding it was asked to check.
+func (r *Remote) BindingCheck(handler string) func(extension.RouteBinding) error {
+	return func(b extension.RouteBinding) error {
+		ctx, cancel := context.WithTimeout(context.Background(), ValidateTimeout)
+		defer cancel()
+		err := r.p.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateBinding, Type: handler, Binding: protocol.WireBinding(b)}, nil)
+		if err == nil {
+			return nil
+		}
+		var pe *protocol.Error
+		if errors.As(err, &pe) && pe.Code == protocol.CodeInvalid && pe.Message != "" {
+			msg := pe.Message
+			if len(msg) > maxBindingReason {
+				msg = msg[:maxBindingReason]
+			}
+			return errors.New(msg)
+		}
+		return errors.New("the extension could not check the binding")
+	}
+}
+
+// maxBindingReason caps a binding refusal's reason.
+const maxBindingReason = 300
+
 // Webhook returns the http.Handler of a webhook path the extension
 // registered at configure. The request crosses as webhook.handle; the
 // extension verifies it and pushes through ingress.deliver before it
@@ -285,7 +313,7 @@ func (r *Remote) Setup() (extension.Setup, bool) {
 	if d == nil {
 		return nil, false
 	}
-	return remoteSetup{r: r, info: extension.SetupInfo{Type: d.Type, Summary: d.Summary, Usage: d.Usage}}, true
+	return remoteSetup{r: r, info: extension.SetupInfo{Type: d.Type, Summary: d.Summary, Usage: d.Usage, FirstRun: d.FirstRun}}, true
 }
 
 type remoteSetup struct {

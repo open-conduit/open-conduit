@@ -29,6 +29,10 @@ type SetupInfo struct {
 	Summary string
 	// Usage is a one-line flag synopsis for help output.
 	Usage string
+	// FirstRun marks the setup whose result, with no flags, is the
+	// configuration a daemon runs on when it has no config file and no
+	// stored generation, so a fresh install can start a setup session.
+	FirstRun bool
 }
 
 // SetupHost is what core supplies to a Setup. Implementations are the CLI

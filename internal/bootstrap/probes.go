@@ -12,12 +12,12 @@ import (
 	"github.com/open-conduit/open-conduit/executors/claudecode"
 	"github.com/open-conduit/open-conduit/extension"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
-	"github.com/open-conduit/open-conduit/extensions/setup"
 )
 
 // setupProbes are the probes a setup session may run besides the setup
 // extension's own, by full name: each extension's and executor's
-// (extension.SetupProbes), and the host's init and doctor probes.
+// (extension.SetupProbes), and the host's own init and doctor probes,
+// under HostProbeOwner.
 func (d *daemon) setupProbes() map[string]extension.SetupProbe {
 	out := map[string]extension.SetupProbe{}
 	for owner, p := range map[string]extension.SetupProbes{ClaudeCodeExecutor: claudecode.Probes{}, gh.Type: gh.Probes{}} {
@@ -25,10 +25,14 @@ func (d *daemon) setupProbes() map[string]extension.SetupProbe {
 			out[owner+"."+x.Name] = x
 		}
 	}
-	out[setup.Type+".init"] = d.initProbe()
-	out[setup.Type+".doctor"] = d.doctorProbe()
+	out[HostProbeOwner+".init"] = d.initProbe()
+	out[HostProbeOwner+".doctor"] = d.doctorProbe()
 	return out
 }
+
+// HostProbeOwner names the host's own probes (open-conduit.init and
+// open-conduit.doctor), so none is named after the extension that runs it.
+const HostProbeOwner = "open-conduit"
 
 // initProbe is `init TYPE --dry-run` for a registered setup, with a host
 // that never prompts, stores nothing and runs nothing: what the scope would
@@ -36,10 +40,19 @@ func (d *daemon) setupProbes() map[string]extension.SetupProbe {
 func (d *daemon) initProbe() extension.SetupProbe {
 	var types []string
 	setups := map[string]extension.Setup{}
-	for _, s := range Setups() {
-		if t := s.SetupInfo().Type; t != setup.Type {
-			types = append(types, t)
-			setups[t] = s
+	all := Setups()
+	d.external.mu.Lock()
+	for _, p := range d.external.packages {
+		if s, ok := p.r.Setup(); ok {
+			all = append(all, s)
+		}
+	}
+	d.external.mu.Unlock()
+	for _, s := range all {
+		info := s.SetupInfo()
+		if _, dup := setups[info.Type]; !info.FirstRun && !dup {
+			types = append(types, info.Type)
+			setups[info.Type] = s
 		}
 	}
 	return extension.SetupProbe{Name: "init", Summary: "the connections and scope `init TYPE --dry-run` would add (" + strings.Join(types, ", ") + "), from flags with references, never values; it prompts for nothing and stores nothing",

@@ -80,6 +80,61 @@ func extensionsRoot(configPath string) string {
 	return filepath.Join(filepath.Dir(configPath), extproc.Dir)
 }
 
+// bundledRoot is the directory of the packages that ship with this binary:
+// `extensions` beside the real executable, links resolved, as the `os`
+// toolbelt is found. A release archive carries the setup package there, so
+// a fresh install has it before anything is installed. Tests replace it.
+var bundledRoot = func() string {
+	self, err := os.Executable()
+	if err != nil {
+		return ""
+	}
+	if real, err := filepath.EvalSymlinks(self); err == nil {
+		self = real
+	}
+	return filepath.Join(filepath.Dir(self), extproc.Dir)
+}
+
+// discoverPackages finds the packages installed beside configPath, then
+// the bundled ones no installed package of the same name replaces. An
+// installed copy replaces the bundled one even when it is refused, so a
+// newer package an older host cannot run is reported, never swapped
+// silently for the bundled release. exclude leaves out the installed copy
+// of one name (removal's check), which brings the bundled one back.
+func discoverPackages(configPath, exclude string) ([]extproc.Found, []error) {
+	var found []extproc.Found
+	var errs []error
+	shadow := map[string]bool{}
+	if configPath != "" {
+		root := extensionsRoot(configPath)
+		all, e := extproc.Discover(root)
+		errs = append(errs, e...)
+		for _, f := range all {
+			if f.Manifest.Name != exclude {
+				found = append(found, f)
+			}
+		}
+		if entries, err := os.ReadDir(root); err == nil {
+			for _, e := range entries {
+				if e.IsDir() && !strings.HasPrefix(e.Name(), ".") && e.Name() != exclude {
+					shadow[e.Name()] = true
+				}
+			}
+		}
+	}
+	if root := bundledRoot(); root != "" {
+		all, e := extproc.Discover(root)
+		errs = append(errs, e...)
+		for _, f := range all {
+			if !shadow[f.Manifest.Name] {
+				f.Bundled = true
+				found = append(found, f)
+			}
+		}
+	}
+	return found, errs
+}
+
 // takenNames lists the names the first-party registrations own, so a
 // package cannot claim one.
 func takenNames(reg config.Registry) extproc.Taken {
@@ -156,13 +211,7 @@ func offlineExternal(reg *config.Registry, configPath, exclude string) *offlineP
 	if configPath == "" {
 		return o
 	}
-	all, _ := extproc.Discover(extensionsRoot(configPath))
-	var found []extproc.Found
-	for _, f := range all {
-		if f.Manifest.Name != exclude {
-			found = append(found, f)
-		}
-	}
+	found, _ := discoverPackages(configPath, exclude)
 	if len(found) == 0 || extproc.CheckConflicts(found, takenNames(*reg)) != nil {
 		return o
 	}
@@ -179,6 +228,20 @@ func offlineExternal(reg *config.Registry, configPath, exclude string) *offlineP
 	}
 	inprocRegistry(reg, xs)
 	return o
+}
+
+// defaultConfig is DefaultConfig for the running daemon: a running
+// package's first-run setup is asked through its own process.
+func (d *daemon) defaultConfig() []byte {
+	setups := Setups()
+	d.external.mu.Lock()
+	for _, p := range d.external.packages {
+		if s, ok := p.r.Setup(); ok {
+			setups = append(setups, s)
+		}
+	}
+	d.external.mu.Unlock()
+	return firstRunConfig(setups)
 }
 
 // offlineStartTimeout bounds starting a package to validate offline.
@@ -231,6 +294,19 @@ func (p *offlinePackage) validator(kind, typ string) func(json.RawMessage, []str
 	}
 }
 
+func (p *offlinePackage) bindingCheck(handler string) func(extension.RouteBinding) error {
+	return func(b extension.RouteBinding) error {
+		if !p.started {
+			p.started = true
+			p.start()
+		}
+		if p.err != nil {
+			return p.err
+		}
+		return p.r.BindingCheck(handler)(b)
+	}
+}
+
 func (p *offlinePackage) start() {
 	if p.dir, p.err = os.MkdirTemp("", "open-conduit-validate-"); p.err != nil {
 		return
@@ -263,7 +339,7 @@ func (d *daemon) openExtensions(ctx context.Context) {
 	x := &d.external
 	x.root = extensionsRoot(d.o.ConfigPath)
 	x.byName, x.sources, x.webhooks, x.tasks, x.running = map[string]*installed{}, map[string]bool{}, map[string]*installed{}, map[string]time.Time{}, map[string]bool{}
-	found, errs := extproc.Discover(x.root)
+	found, errs := discoverPackages(d.o.ConfigPath, "")
 	for _, err := range errs {
 		name, _, _ := strings.Cut(err.Error(), ":")
 		x.failed = append(x.failed, extproc.Diagnose(name, err, extproc.Paths{}))
@@ -288,7 +364,7 @@ func (d *daemon) openExtensions(ctx context.Context) {
 			d.log.Error("extension not started", "extension", name, "code", diag.Code, "hint", diag.Hint)
 			continue
 		}
-		pkg := &installed{m: f.Manifest, r: r, d: d}
+		pkg := &installed{m: f.Manifest, r: r, d: d, dir: f.Dir}
 		x.mu.Lock()
 		x.packages = append(x.packages, pkg)
 		x.byName[name] = pkg

@@ -34,6 +34,8 @@ type installed struct {
 	m protocol.Manifest
 	r *extproc.Remote
 	d *daemon
+	// dir is the installed package directory (its playbooks).
+	dir string
 	// offline starts the package to validate config when there is no
 	// daemon (offlineExternal).
 	offline *offlinePackage
@@ -54,6 +56,7 @@ var (
 	_ inproc.Exporting  = (*installed)(nil)
 	_ inproc.Sink       = (*installed)(nil)
 	_ inproc.Paged      = (*installed)(nil)
+	_ inproc.Playbooker = (*installed)(nil)
 
 	_ extension.ConfigCandidate = (*installed)(nil)
 )
@@ -83,12 +86,45 @@ func (x *installed) Types() []inproc.ConfigType {
 			Settings: declaredSettings(e.Settings), Describe: declaredDescribe(e.Describe)})
 	}
 	for _, r := range p.Routes {
-		if r.Config {
-			out = append(out, inproc.ConfigType{Kind: protocol.ValidateRoute, Type: r.Handler, Validate: x.validator(protocol.ValidateRoute, r.Handler)})
+		if r.Config || r.Binding {
+			t := inproc.ConfigType{Kind: protocol.ValidateRoute, Type: r.Handler}
+			if r.Config {
+				t.Validate = x.validator(protocol.ValidateRoute, r.Handler)
+			}
+			if r.Binding {
+				t.Binding = x.bindingCheck(r.Handler)
+			}
+			out = append(out, t)
 		}
 	}
 	return out
 }
+
+// bindingCheck is a handler's binding check, through the package.
+func (x *installed) bindingCheck(handler string) func(extension.RouteBinding) error {
+	switch {
+	case x.r != nil:
+		return x.r.BindingCheck(handler)
+	case x.offline != nil:
+		return x.offline.bindingCheck(handler)
+	}
+	return nil
+}
+
+// Playbooks are the package's declared playbooks (extproc.Playbooks), for
+// the agent executors' plugin. One that cannot be read is logged and left
+// out.
+func (x *installed) Playbooks() map[string]string {
+	books, err := extproc.Playbooks(x.dir, x.m)
+	if err != nil && x.d != nil {
+		x.d.log.Warn("extension playbooks not read", "extension", x.m.Name, "error", err)
+	}
+	return books
+}
+
+// entryGated says whether the package's operations join only a generation
+// with one of its entries (provides.entry_gated, inproc.EntryGated).
+func (x *installed) entryGated() bool { return x.m.Provides.EntryGated }
 
 // resourceTypes adds the manifest's resource types to a registry (resource
 // providers are not on the contract yet).
