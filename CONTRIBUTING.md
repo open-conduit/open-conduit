@@ -2,7 +2,7 @@
 
 This guide covers setting up a checkout, the checks a change must pass, and the rules the code follows. [The architecture section of the docs site](https://open-conduit.github.io/open-conduit/architecture/) describes how each part is built and what it guarantees, and [the docs index](docs/README.md) lists the build and check commands. AI coding agents should also follow [AGENTS.md](AGENTS.md).
 
-Open Conduit is released under the [MIT License](LICENSE), and contributions are accepted under it. Ask before you start a large change.
+Open Conduit's core is released under the [FSL-1.1-ALv2](LICENSE), and the extension SDKs, public contracts and examples under the MIT License (each of those directories holds its own `LICENSE`). A contribution is accepted under the licence of the directory it changes; [Licensing](https://open-conduit.github.io/open-conduit/reference/licensing/) lists them. Ask before you start a large change.
 
 To report a vulnerability, follow [SECURITY.md](SECURITY.md). Don't open a public issue for it.
 

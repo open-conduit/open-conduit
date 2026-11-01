@@ -55,6 +55,7 @@ export default defineConfig({
 						{ label: 'Extensions', slug: 'reference/extensions' },
 						{ label: 'Platforms and files', slug: 'reference/platforms' },
 						{ label: 'Usage telemetry', slug: 'reference/telemetry' },
+						{ label: 'Licensing', slug: 'reference/licensing' },
 						{ label: 'Getting help', slug: 'reference/help' },
 					],
 				},
