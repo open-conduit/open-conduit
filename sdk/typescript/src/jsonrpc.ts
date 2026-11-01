@@ -15,6 +15,7 @@
 
 import type { Readable, Writable } from "node:stream";
 import { CancelledError, Code, ProtocolError, TransportError, decode, encode } from "./errors.ts";
+import { type Infer, isRecord, matches, t } from "./schema.ts";
 
 /** Bounds of protocol version 1 (protocol/protocol.go). */
 export const MaxMessageBytes = 16 << 20;
@@ -40,19 +41,29 @@ export interface ConnOptions {
   onProtocolError?: (reason: string) => void;
 }
 
-interface WireError {
-  code: number;
-  message: string;
-  data?: { code: string; reset_at?: string };
-}
+const WireError = t.object({
+  code: t.integer(),
+  message: t.string(),
+  data: t.optional(t.object({ code: t.string(), reset_at: t.optional(t.string()) }, { open: true })),
+}, { open: true });
+type WireError = Infer<typeof WireError>;
 
-interface Message {
-  jsonrpc: string;
-  id?: number | string;
-  method?: string;
-  params?: unknown;
-  result?: unknown;
-  error?: WireError;
+// Only the envelope is decoded here; params and results are decoded by
+// whoever knows their schema.
+const Message = t.object({
+  jsonrpc: t.literal("2.0"),
+  id: t.optional(t.nullable(t.any())),
+  method: t.optional(t.string()),
+  params: t.optional(t.any()),
+  result: t.optional(t.any()),
+  error: t.optional(t.nullable(WireError)),
+}, { open: true });
+type Message = Infer<typeof Message>;
+
+type ID = number | string;
+
+function isID(v: unknown): v is ID {
+  return typeof v === "number" || typeof v === "string";
 }
 
 interface Pending {
@@ -139,28 +150,29 @@ export class Conn {
   }
 
   #message(line: Buffer): void {
-    let m: Message;
+    let m: unknown;
     try {
-      m = JSON.parse(line.toString("utf8")) as Message;
+      m = JSON.parse(line.toString("utf8"));
     } catch {
       return this.#protocolError("malformed message");
     }
-    if (m === null || typeof m !== "object" || m.jsonrpc !== "2.0") return this.#protocolError("malformed message");
-    const hasID = m.id !== undefined && m.id !== null;
-    if (m.method === CancelMethod) {
-      const id = (m.params as { id?: unknown } | undefined)?.id;
-      this.#cancels.get(JSON.stringify(id))?.abort();
-    } else if (typeof m.method === "string" && m.method !== "" && hasID) {
+    if (!matches(Message, m)) return this.#protocolError("malformed message");
+    const { id, method } = m;
+    if (method === CancelMethod) {
+      if (isRecord(m.params)) this.#cancels.get(JSON.stringify(m.params.id))?.abort();
+    } else if (method !== undefined && method !== "" && isID(id)) {
+      // Refuse rather than queue: the reader also carries the responses
+      // in-flight handlers wait for, so blocking it would deadlock them.
       if (this.#inflight >= this.#maxInflight) {
-        this.#write({ jsonrpc: "2.0", id: m.id!, error: { code: codeApplication, message: "too many requests in flight", data: { code: Code.Overloaded } } });
+        this.#write({ jsonrpc: "2.0", id, error: { code: codeApplication, message: "too many requests in flight", data: { code: Code.Overloaded } } });
         return;
       }
-      void this.#serve(m.id!, m.method, m.params);
-    } else if (typeof m.method === "string" && m.method !== "") {
+      void this.#serve(id, method, m.params);
+    } else if (method !== undefined && method !== "") {
       // Other notifications are served without a reply.
-      void this.#handler(m.method, m.params, new AbortController().signal).catch(() => {});
-    } else if (hasID) {
-      const key = JSON.stringify(m.id);
+      void this.#handler(method, m.params, new AbortController().signal).catch(() => {});
+    } else if (isID(id)) {
+      const key = JSON.stringify(id);
       const p = this.#pending.get(key);
       this.#pending.delete(key);
       if (p === undefined) return;
@@ -171,7 +183,7 @@ export class Conn {
     }
   }
 
-  async #serve(id: number | string, method: string, params: unknown): Promise<void> {
+  async #serve(id: ID, method: string, params: unknown): Promise<void> {
     const key = JSON.stringify(id);
     const abort = new AbortController();
     this.#cancels.set(key, abort);
@@ -208,15 +220,15 @@ export class Conn {
   }
 
   /**
-   * Sends a request and resolves with its result. Aborting signal sends
-   * $/cancel and rejects at once with CancelledError.
+   * Sends a request and resolves with its result, undecoded. Aborting
+   * signal sends $/cancel and rejects at once with CancelledError.
    */
-  call<T = unknown>(method: string, params: unknown = {}, signal?: AbortSignal): Promise<T> {
+  call(method: string, params: unknown = {}, signal?: AbortSignal): Promise<unknown> {
     if (this.#closed) return Promise.reject(new TransportError());
     if (signal?.aborted) return Promise.reject(new CancelledError());
     const id = ++this.#next;
     const key = JSON.stringify(id);
-    return new Promise<T>((resolve, reject) => {
+    return new Promise<unknown>((resolve, reject) => {
       const onAbort = () => {
         if (!this.#pending.delete(key)) return;
         this.#write({ jsonrpc: "2.0", method: CancelMethod, params: { id } });
@@ -225,7 +237,7 @@ export class Conn {
       this.#pending.set(key, {
         resolve: (v) => {
           signal?.removeEventListener("abort", onAbort);
-          resolve(v as T);
+          resolve(v);
         },
         reject: (e) => {
           signal?.removeEventListener("abort", onAbort);

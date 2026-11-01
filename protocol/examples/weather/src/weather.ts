@@ -1,55 +1,59 @@
-// The weather extension: one operation an agent can call, weather.forecast,
-// answered from the forecasts in its scope's `weather` entry. It is the
-// TypeScript twin of the Go example in the extension packaging guide, and
-// what `make certify` certifies for the TypeScript SDK.
+// An extension with one operation an agent can call, weather.forecast.
+// Forecasts come from the scope's config rather than a weather service, so
+// the package runs and certifies with no network or credentials.
 
-import { extension, OperationError, t } from "@open-conduit/sdk";
+import { extension, type Infer, OperationError, t, text } from "@open-conduit/sdk";
 
-export interface Forecast {
-  summary: string;
-  high_c: number;
-}
+const Forecast = t.object({
+  summary: t.string(),
+  high_c: t.number(),
+});
 
-/** Forecasts by scope, from the last configure. */
-type Table = Map<string, Record<string, Forecast>>;
+// The config of a scope's `weather` entry. A config that doesn't match is
+// refused before the daemon applies it, and configure receives it typed.
+const WeatherConfig = t.object({
+  forecasts: t.record(Forecast, { description: "Forecasts by city, in lower case." }),
+});
+
+type Forecasts = Infer<typeof WeatherConfig>["forecasts"];
 
 export function build() {
-  let table: Table = new Map();
+  // Rebuilt on every configuration generation, so a removed entry stops answering.
+  let byScope = new Map<string, Forecasts>();
+
   return extension("weather", {
     version: "0.1.0",
     summary: "Example TypeScript extension: weather forecasts from the scope's config.",
   })
-    .entryType("weather")
-    .onValidate((p) => {
-      if (p.type !== "weather") return;
-      const c = p.config as { forecasts?: unknown } | undefined;
-      if (c === undefined || c === null || typeof c.forecasts !== "object" || c.forecasts === null) throw new Error("a weather entry needs forecasts");
-    })
-    .onConfigure((p) => {
-      const next: Table = new Map();
-      for (const e of p.entries ?? []) {
-        if (e.type !== "weather") continue;
-        next.set(e.scope_id, ((e.config ?? {}) as { forecasts?: Record<string, Forecast> }).forecasts ?? {});
-      }
-      table = next;
+    .entryType("weather", {
+      config: WeatherConfig,
+      configure: (entries) => {
+        byScope = new Map(entries.map((e) => [e.scopeId, e.config.forecasts]));
+      },
     })
     .operation("weather.forecast", {
       input: t.object({
         city: t.string({ description: "The city to forecast, by name, in lower case." }),
         days: t.optional(t.integer({ description: "How many days ahead (default 1)." })),
       }),
+      // Agents read this in their toolbelt, so it says when to call, not how it works.
       guidance: "Call `weather.forecast` with a city before planning anything outdoors.",
-      handler: async ({ city, days }, { host, authority }) => {
-        const forecasts = table.get(authority.scope_id);
-        if (forecasts === undefined) throw new OperationError("not_configured", "this scope has no weather entry");
-        const f = forecasts[city];
-        if (f === undefined) throw new OperationError("unknown_city", `no forecast for ${city}`);
-        // Count lookups per city in the extension's own KV namespace.
-        await host.update("weather.lookups", `${authority.scope_id}/${city}`, (old) => String(Number(old === undefined ? 0 : new TextDecoder().decode(old)) + 1));
-        return { city, days: days ?? 1, summary: f.summary, high_c: f.high_c };
+      handler: async ({ city, days = 1 }, { host, authority }) => {
+        // A call runs under its Work's scope, so each scope sees only its own forecasts.
+        const forecasts = byScope.get(authority.scope_id);
+        // The agent gets the code and message as they are, so both say what to do next.
+        if (forecasts === undefined) throw new OperationError("not_configured", "this scope has no weather entry; ask the operator to add one");
+        const forecast = forecasts[city];
+        if (forecast === undefined) throw new OperationError("unknown_city", `no forecast for ${city}; known cities: ${Object.keys(forecasts).join(", ")}`);
+
+        // KV is namespaced to the extension and kept by the host, so the count survives restarts.
+        await host.update("weather.lookups", `${authority.scope_id}/${city}`, (old) => String(Number(old === undefined ? "0" : text(old)) + 1));
+        return { city, days, ...forecast };
       },
     })
-    .check("weather", () => `${table.size} scope(s) configured`)
+    // doctor runs checks; the detail line is what the operator sees.
+    .check("weather", () => `${byScope.size} scope(s) configured`)
+    // `extension certify` runs these cases against the packaged binary with this config.
     .certification({
       fixture: {
         entries: [{ scope_id: "weather-scope", type: "weather", name: "weather", config: { forecasts: { london: { summary: "rain", high_c: 14 } } } }],

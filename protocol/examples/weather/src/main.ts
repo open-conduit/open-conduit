@@ -1,5 +1,5 @@
-// The package's command: answers package-manifest and
-// package-certification, and otherwise serves the host on stdin and stdout.
+// The package's command. Kept apart from weather.ts so tests can build the
+// extension without it taking over stdin and stdout.
 import { build } from "./weather.ts";
 
 void build().main();

@@ -28,7 +28,7 @@ export const Code = {
   Internal: "internal",
   Schema: "unreadable_schema",
   KVDowngrade: "kv_downgrade",
-} as const;
+};
 
 const known = new Set<string>(Object.values(Code));
 

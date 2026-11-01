@@ -139,30 +139,30 @@ const ext = extension("weather", { version: "0.1.0" })
       days: t.optional(t.integer()),
     }),
     guidance: "Call `weather.forecast` before planning anything outdoors.",
-    handler: async ({ city, days }, { host, authority }) => {
+    handler: async ({ city, days = 1 }, { host, authority }) => {
       if (city === "atlantis") throw new OperationError("unknown_city", `no forecast for ${city}`);
-      return { city, days: days ?? 1, summary: "rain" };
+      return { city, days, summary: "rain" };
     },
   });
 
 void ext.main();
 ```
 
-An operation's input is built with `t` (`string`, `enum`, `integer`, `number`, `boolean`, `array`, `object`, `optional`, `any`). That one value is both the JSON Schema the manifest declares and the type the handler receives. Decoding is as strict as the Go SDK's: a missing required field, a field the schema doesn't have, or a value of the wrong type is refused with `bad_request` before the handler runs. The output is sent as `<operation>.v1` unless `output` names another schema. Throw `OperationError` to refuse with your own code; anything else thrown crosses as `internal`, with its message kept in the extension's log.
+Schemas are built with `t` (`string`, `enum`, `literal`, `integer`, `number`, `boolean`, `array`, `object`, `record`, `optional`, `nullable`, `any`). One value is both the JSON Schema the manifest declares and the type the code receives, so neither needs a type assertion. An operation's input is decoded as strictly as the Go SDK decodes it: a missing required field, a field the schema doesn't have, or a value of the wrong type is refused with `bad_request` before the handler runs. Use `t.object({})` for an operation with no input. The output is sent as `<operation>.v1` unless `output` names another schema. Throw `OperationError` to refuse with your own code; anything else thrown crosses as `internal`, with the message kept in the extension's log.
 
 | Registration | Declares |
 | --- | --- |
 | `operation(name, { input, guidance, output, handler })` | `operations[]`, kind `handler`, with `guidance` and `input` |
+| `entryType(type, { config, validate, configure })` | `extensions[]`: a scope entry type. A config that `config` refuses, or that `validate` throws on, is invalid before the daemon applies it, and `configure` receives each generation's entries with their config typed |
 | `check(name, fn, { deep })` | `checks[]`; `fn` returns the detail line and throws to fail |
 | `task(name, intervalSeconds, fn)` | `tasks[]` |
-| `entryType(type)` | `extensions[]`: a scope entry type; `onValidate` checks its config, `onConfigure` receives its entries |
 | `family(...families)` | `families[]`, for Events derived with `host.accept` |
 
-The `Host` client (`ctx.host`) offers `get`, `list`, `commit`, `update`, `accept`, `events`, `works`, `secrets`, `connectionSecrets`, `artifact` and `waitProgress`. KV values are bytes (`Uint8Array`), or strings stored as UTF-8. `onMigrate` upgrades the extension's KV namespaces to `kvVersion`.
+The `Host` client (`ctx.host`) offers `get`, `list`, `commit`, `update`, `accept`, `events`, `works`, `secrets`, `connectionSecrets`, `artifact` and `waitProgress`, plus `call(method, params, resultSchema)` for any other method. KV values are bytes (`Uint8Array`), or strings stored as UTF-8. `onMigrate` upgrades the extension's KV namespaces to `kvVersion`. Everything the host sends is decoded through the schemas in `src/wire.ts`, which ignore fields a newer host adds, and a malformed message is refused rather than passed on.
 
 `main()` moves stdout to stderr while it serves, so `console.log` can't corrupt the protocol stream, and it exits when stdin closes. The manifest's command must be an executable file inside the package, so bundle the extension to one file with a `#!/usr/bin/env node` line and make it executable. [`protocol/examples/weather`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/weather) does this with esbuild in `scripts/package.mjs`. Its unit tests serve the extension over a pair of in-memory streams, with the SDK's `Conn` standing in for the host, and `make certify` certifies its package.
 
-This first step doesn't include `wait` and `emit` operations, routes, ingress or executors, an in-process test host like `sdktest`, a TypeScript `extension new` scaffold, or an npm release. The wire types in `src/wire.ts` are written by hand; `TestTypeScriptWireMatchesGo` fails when a field there is no longer a JSON field of the Go type it names.
+This first step doesn't include `wait` and `emit` operations, routes, ingress or executors, an in-process test host like `sdktest`, a TypeScript `extension new` scaffold, or an npm release. `src/wire.ts` is written by hand. `TestTypeScriptWireMatchesGo` fails when a field there is no longer a JSON field of the Go type it names, or when Go can send null for a field the SDK doesn't accept null for.
 
 ### Examples
 
@@ -475,7 +475,7 @@ A report states:
 - `TestCertificationFirstPartyPackages`: Slack, shell, notes and runner are certified, and their reports state versions and limits.
 - `TestCertificationNegativeControls` and `TestCertificationInvalidPackage`.
 - `make certify` certifies the TypeScript example `weather`; `make ts-check` typechecks and unit-tests the TypeScript SDK and the example.
-- `TestTypeScriptWireMatchesGo`: every field of the TypeScript SDK's wire types is a JSON field of the Go type it encodes.
+- `TestTypeScriptWireMatchesGo`: every field of the TypeScript SDK's wire messages is a JSON field of the Go type it encodes, and every field Go can send as null is nullable there.
 - `TestExternalSlackRoundTrip`: the Slack package round trip. Socket envelope through `ingress.deliver`, acknowledged after acceptance; remote route; `slack.reply` via `sdk.Store` and the projector against the fake; projection task; check; render.
 - `TestExternalShellAdoptionAndArtifacts`: the shell package's process group survives an extension crash and is re-adopted with the same recovery metadata; its log reaches the host artifact store.
 - `TestExternalSurfacesRoundTrip`: `validate`, `webhook.handle`, `provider.*` with `provider.owner_status`, `telemetry.export`, `run.environment`, `work.annotate`, and `setup.run` with callbacks.

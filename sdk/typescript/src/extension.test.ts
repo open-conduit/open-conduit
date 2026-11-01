@@ -8,7 +8,14 @@ import { CancelledError, Code, OperationError, ProtocolError } from "./errors.ts
 import { extension, type Extension } from "./extension.ts";
 import { text } from "./host.ts";
 import { Conn, type Handler } from "./jsonrpc.ts";
-import { type Infer, t } from "./schema.ts";
+import { type Infer, type Type, matches, t } from "./schema.ts";
+import { InitializeResult, KVCommitParams, KVGetParams } from "./wire.ts";
+
+/** Decodes what the fake host receives, failing the test when it is malformed. */
+function decode<S extends Type<unknown>>(schema: S, value: unknown): Infer<S> {
+  assert.ok(matches(schema, value), `malformed: ${JSON.stringify(value)}`);
+  return value;
+}
 
 const authority = { scope_id: "s1", work_id: "w1", execution_id: "e1", lease: { execution_id: "e1", owner: "o", epoch: 1 }, expires_at: "2026-11-01T13:00:00Z" };
 
@@ -89,7 +96,7 @@ test("the handler's input type comes from the schema", () => {
 test("initialize negotiates a version and returns the manifest", async () => {
   const ext = weather();
   const { host, end } = connect(ext);
-  const out = await host.call<{ protocol_version: number; manifest: unknown }>("initialize", { protocol_versions: [1, 2], host: { name: "t", version: "0" }, state_dir: "/s" });
+  const out = decode(InitializeResult, await host.call("initialize", { protocol_versions: [1, 2], host: { name: "t", version: "0" }, state_dir: "/s" }));
   assert.equal(out.protocol_version, 1);
   assert.deepEqual(out.manifest, ext.manifest);
   end();
@@ -151,7 +158,7 @@ test("a malformed input is refused with bad_request before the handler runs", as
 });
 
 test("an OperationError reaches the caller verbatim and anything else is internal", async () => {
-  const ext = weather().operation("weather.broken", { handler: () => { throw new Error("secret detail"); } });
+  const ext = weather().operation("weather.broken", { input: t.object({}), handler: () => { throw new Error("secret detail"); } });
   const { host, end } = await ready(ext);
   await assert.rejects(host.call("operation.call", { operation: "weather.forecast", authority, input: { data: { city: "atlantis" } } }), (e: unknown) => e instanceof OperationError && e.code === "unknown_city" && e.message === "no forecast for atlantis");
   await assert.rejects(host.call("operation.call", { operation: "weather.broken", authority, input: {} }), (e: unknown) => e instanceof ProtocolError && e.code === Code.Internal && !e.message.includes("secret"));
@@ -170,18 +177,19 @@ test("a handler calls the host while it serves", async () => {
   const calls: string[] = [];
   const hostHandler: Handler = async (method, params) => {
     calls.push(method);
-    const p = params as Record<string, unknown>;
     switch (method) {
       case "kv.get": {
+        const p = decode(KVGetParams, params);
         const e = kv.get(`${p.namespace}/${p.key}`);
         return e === undefined ? { found: false, entry: { key: "", value: null, version: "" } } : { found: true, entry: { key: p.key, ...e } };
       }
       case "kv.commit": {
-        for (const c of (p.checks ?? []) as { namespace: string; key: string; version?: string; absent?: boolean }[]) {
+        const p = decode(KVCommitParams, params);
+        for (const c of p.checks ?? []) {
           const e = kv.get(`${c.namespace}/${c.key}`);
           if (c.absent ? e !== undefined : e?.version !== c.version) throw new ProtocolError(Code.Conflict, "conflict");
         }
-        for (const put of (p.puts ?? []) as { namespace: string; key: string; value: string }[]) kv.set(`${put.namespace}/${put.key}`, { value: put.value, version: `v${kv.size + 1}` });
+        for (const put of p.puts ?? []) kv.set(`${put.namespace}/${put.key}`, { value: put.value, version: `v${kv.size + 1}` });
         return {};
       }
       case "secret.resolve":
@@ -195,28 +203,52 @@ test("a handler calls the host while it serves", async () => {
       await host.update("counter.counts", name, (old) => String(Number(old === undefined ? "0" : text(old)) + 1));
       const entry = await host.get("counter.counts", name);
       const secrets = await host.secrets(authority.scope_id, ["token"]);
-      return { count: Number(text(entry!.value)), token: secrets.token };
+      return { count: entry === undefined ? 0 : Number(text(entry.value)), token: secrets.token };
     },
   });
   const { host, end } = await ready(ext, hostHandler);
   await host.call("operation.call", { operation: "counter.bump", authority, input: { data: { name: "a" } } });
   const out = await host.call("operation.call", { operation: "counter.bump", authority, input: { data: { name: "a" } } });
   assert.deepEqual(out, { output: { schema: "counter.bump.v1", data: { count: 2, token: "t0ken" } } });
-  assert.equal(Buffer.from(kv.get("counter.counts/a")!.value, "base64").toString(), "2");
+  assert.equal(Buffer.from(kv.get("counter.counts/a")?.value ?? "", "base64").toString(), "2");
   assert.deepEqual(calls.slice(0, 2), ["kv.get", "kv.commit"]);
   end();
 });
 
-test("configure runs the hook and reports the KV layout", async () => {
+test("configure migrates the KV layout, then hands each entry type its decoded entries", async () => {
   const seen: string[] = [];
   const ext = extension("weather", { version: "0.1.0", kvVersion: 2 })
-    .entryType("weather")
     .onMigrate((from, to) => void seen.push(`migrate ${from}->${to}`))
-    .onConfigure((p) => void seen.push(`configure ${p.entries?.length}`));
+    .entryType("weather", {
+      config: t.object({ city: t.string() }),
+      configure: (entries) => void seen.push(...entries.map((e) => `configure ${e.scopeId} ${e.config.city}`)),
+    });
   const { host, end } = await ready(ext);
-  const out = await host.call("configure", { generation: "g1", entries: [{ scope_id: "s1", type: "weather", config: {} }], kv: { stored: 0, declared: 2 } });
+  const out = await host.call("configure", { generation: "g1", entries: [{ scope_id: "s1", type: "weather", config: { city: "london" } }, { scope_id: "s1", type: "other" }], kv: { stored: 0, declared: 2 } });
   assert.deepEqual(out, { kv_version: 2 });
-  assert.deepEqual(seen, ["migrate 0->2", "configure 1"]);
+  assert.deepEqual(seen, ["migrate 0->2", "configure s1 london"]);
+  end();
+});
+
+test("an entry's config is validated against its schema, then by its validate hook", async () => {
+  const ext = extension("weather", { version: "0.1.0" }).entryType("weather", {
+    config: t.object({ city: t.string() }),
+    validate: ({ city }) => {
+      if (city === "") throw new Error("empty city");
+    },
+  });
+  const { host, end } = await ready(ext);
+  assert.deepEqual(await host.call("validate", { kind: "extension", type: "weather", config: { city: "london" } }), {});
+  for (const config of [{}, { city: 1 }, { city: "" }]) {
+    await assert.rejects(host.call("validate", { kind: "extension", type: "weather", config }), (e: unknown) => e instanceof ProtocolError && e.code === Code.Invalid, JSON.stringify(config));
+  }
+  await assert.rejects(host.call("configure", { generation: "g1", entries: [{ scope_id: "s1", type: "weather", config: { town: "x" } }], kv: { stored: 0, declared: 0 } }), (e: unknown) => e instanceof ProtocolError && e.code === Code.Invalid);
+  end();
+});
+
+test("malformed params are refused as invalid", async () => {
+  const { host, end } = await ready(weather());
+  await assert.rejects(host.call("operation.call", { operation: 7 }), (e: unknown) => e instanceof ProtocolError && e.code === Code.Invalid);
   end();
 });
 
@@ -231,6 +263,7 @@ test("the host cancelling a call aborts the handler's signal", async () => {
   let aborted!: () => void;
   const wasAborted = new Promise<void>((r) => (aborted = r));
   const ext = extension("slow", { version: "1.0.0" }).operation("slow.wait", {
+    input: t.object({}),
     handler: (_in, { signal }) => new Promise((_resolve, reject) => signal.addEventListener("abort", () => { aborted(); reject(new CancelledError()); })),
   });
   const { host, end } = await ready(ext);
