@@ -376,6 +376,16 @@ func (e *remoteExecutor) ValidateConfig(raw json.RawMessage, secretNames []strin
 	return e.r.Validator(protocol.ValidateExecutor, e.decl.Name)(raw, secretNames)
 }
 
+// ResourceMode is the resource mode a binding config makes the executor
+// request (config.ResourceModer), asked through validate when the manifest
+// declares resource_mode; "" (the resource config's default) otherwise.
+func (e *remoteExecutor) ResourceMode(raw json.RawMessage) string {
+	if !e.decl.ResourceMode {
+		return ""
+	}
+	return e.r.ExecutorResourceMode(e.decl.Name)(raw)
+}
+
 // open binds the RunRequest's trusted callbacks to a fresh run ID. The run
 // remembers the last metadata persisted through it, so the host can
 // re-adopt the execution after the extension crashes.

@@ -150,7 +150,7 @@ var limits = []string{
 	"Certification checks protocol conformance, not safety: an extension runs with the operator's privileges (process separation is fault isolation, not a sandbox).",
 	"Only the package's own fixture is exercised, against its fakes; no live service is contacted and no real credential is used.",
 	"One host build, one platform and one protocol version are tested: the ones stated above.",
-	"Not certified by criteria version 2: webhook.handle, setup.run and setup.* callbacks, provider.* resource providers, telemetry.export, run.environment, work.annotate, work.actions and work.act, view.render, event.render, emit and wait operations (the host cuts a wait plan's description to fit as it is declared), the in-transaction callbacks (recurrence.next, work_kind.trigger, emit.commit, dependency.filter) and the message-size and overload limits. The host's own suites cover those adapters.",
+	"Not certified by criteria version 3: webhook.handle, setup.run and setup.* callbacks, provider.* resource providers, telemetry.export, run.environment, work.annotate, work.actions and work.act, view.render, event.render, emit and wait operations (the host cuts a wait plan's description to fit as it is declared), the in-transaction callbacks (recurrence.next, work_kind.trigger, emit.commit, dependency.filter) and the message-size and overload limits. The host's own suites cover those adapters.",
 	"Executor checks run one attempt each without a toolbelt endpoint or workspace; resume, interrupt and attach are not exercised.",
 }
 
@@ -271,6 +271,8 @@ func Run(ctx context.Context, o Options) (rep Report, err error) {
 	r.routes(ctx, remote)
 	r.operations(ctx, remote)
 	r.executors(ctx, remote)
+	r.executorModes(remote)
+	r.resources(remote)
 	r.surfaces(ctx, remote)
 	r.restart(ctx, remote)
 	if n := remote.Service().Refused(); n > 0 {
@@ -960,6 +962,102 @@ func (r *runner) executors(ctx context.Context, remote *extproc.Remote) {
 	} else {
 		r.skip("executor.controls", "no stop or forget control")
 	}
+}
+
+// executorModes runs executor.resource_mode: each case's mode, asked
+// twice, for every executor declaring resource_mode.
+func (r *runner) executorModes(remote *extproc.Remote) {
+	declared := map[string]bool{}
+	for _, e := range r.m.Provides.Executors {
+		if e.ResourceMode {
+			declared[e.Name] = true
+		}
+	}
+	if len(declared) == 0 {
+		r.skip("executor.resource_mode", "no executor declares resource_mode")
+		return
+	}
+	covered := map[string]bool{}
+	for i, c := range r.fixture.ExecutorModes {
+		if !declared[c.Executor] {
+			r.fail("executor.resource_mode", "case %d: executor %q does not declare resource_mode", i, c.Executor)
+			return
+		}
+		ask := remote.ExecutorResourceMode(c.Executor)
+		first, second := ask(c.Config), ask(c.Config)
+		if first != second {
+			r.fail("executor.resource_mode", "case %d: %s answered %q, then %q", i, c.Executor, first, second)
+			return
+		}
+		if first != c.Mode {
+			r.fail("executor.resource_mode", "case %d: %s requests mode %q, want %q", i, c.Executor, first, c.Mode)
+			return
+		}
+		covered[c.Executor] = true
+	}
+	for name := range declared {
+		if !covered[name] {
+			r.fail("executor.resource_mode", "the fixture has no executor mode case for %s (required for resource_mode)", name)
+			return
+		}
+	}
+	r.pass("executor.resource_mode", fmt.Sprintf("%d case(s)", len(r.fixture.ExecutorModes)))
+}
+
+// resources runs resources.workspace: each case's default mode and sandbox
+// verdict, asked twice, for every resource type declaring mode_default or
+// sandbox.
+func (r *runner) resources(remote *extproc.Remote) {
+	declared := map[string]protocol.ResourceDecl{}
+	for _, d := range r.m.Provides.Resources {
+		if d.ModeDefault || d.Sandbox {
+			declared[d.Type] = d
+		}
+	}
+	if len(declared) == 0 {
+		r.skip("resources.workspace", "no resource type declares mode_default or sandbox")
+		return
+	}
+	covered := map[string]bool{}
+	for i, c := range r.fixture.Resources {
+		d, ok := declared[c.Type]
+		if !ok {
+			r.fail("resources.workspace", "case %d: resource type %q declares neither mode_default nor sandbox", i, c.Type)
+			return
+		}
+		if d.ModeDefault {
+			ask := remote.ResourceModeDefault(c.Type)
+			first, second := ask(c.Config), ask(c.Config)
+			if first != second {
+				r.fail("resources.workspace", "case %d: %s named mode %q, then %q", i, c.Type, first, second)
+				return
+			}
+			if first != c.ModeDefault {
+				r.fail("resources.workspace", "case %d: %s names mode %q, want %q", i, c.Type, first, c.ModeDefault)
+				return
+			}
+		}
+		if d.Sandbox {
+			check := remote.ResourceSandbox(c.Type)
+			first, second := check(c.Config, c.Mode), check(c.Config, c.Mode)
+			if (first == nil) != (second == nil) {
+				r.fail("resources.workspace", "case %d: %s answered the sandbox check differently twice", i, c.Type)
+				return
+			}
+			if refused := first != nil; refused != c.SandboxRefused {
+				r.fail("resources.workspace", "case %d: %s sandbox check refused=%t, want %t", i, c.Type, refused, c.SandboxRefused)
+				return
+			}
+		}
+		covered[c.Type] = true
+	}
+	for typ := range declared {
+		if !covered[typ] {
+			r.fail("resources.workspace", "the fixture has no resource case for %s (required for mode_default or sandbox)", typ)
+			return
+		}
+	}
+	r.pass("resources.workspace", fmt.Sprintf("%d case(s)", len(r.fixture.Resources)))
 }
 
 // unserved reports an answer that means the method was not served at all.

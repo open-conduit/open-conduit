@@ -121,8 +121,8 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 	}{
 		{"slack", "slack-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
 		{"shell", "shell-extension", []string{"executor.conformance", "executor.inject", "executor.controls"}},
-		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
-		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls"}},
+		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace"}},
+		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()

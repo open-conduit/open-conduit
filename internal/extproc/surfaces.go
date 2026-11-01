@@ -56,19 +56,75 @@ func (r *Remote) BindingCheck(handler string) func(extension.RouteBinding) error
 		if err == nil {
 			return nil
 		}
-		var pe *protocol.Error
-		if errors.As(err, &pe) && pe.Code == protocol.CodeInvalid && pe.Message != "" {
-			msg := pe.Message
-			if len(msg) > maxBindingReason {
-				msg = msg[:maxBindingReason]
-			}
+		if msg, ok := refusal(err); ok {
 			return errors.New(msg)
 		}
 		return errors.New("the extension could not check the binding")
 	}
 }
 
-// maxBindingReason caps a binding refusal's reason.
+// ResourceModeDefault returns the mode a declared resource type's config
+// names as its default: validate with kind resource_mode. A failed call
+// names none, so the mode warning it feeds is left out rather than wrong.
+func (r *Remote) ResourceModeDefault(typ string) func(json.RawMessage) string {
+	return func(config json.RawMessage) string {
+		return r.mode(protocol.ValidateParams{Kind: protocol.ValidateResourceMode, Type: typ, Config: config})
+	}
+}
+
+// ExecutorResourceMode returns the resource mode a declared executor
+// requests with a binding config: validate with kind executor_mode, "" for
+// the resource config's default or a failed call.
+func (r *Remote) ExecutorResourceMode(name string) func(json.RawMessage) string {
+	return func(config json.RawMessage) string {
+		return r.mode(protocol.ValidateParams{Kind: protocol.ValidateExecutorMode, Type: name, Config: config})
+	}
+}
+
+func (r *Remote) mode(p protocol.ValidateParams) string {
+	ctx, cancel := context.WithTimeout(context.Background(), ValidateTimeout)
+	defer cancel()
+	var out protocol.ValidateResult
+	if err := r.p.Call(ctx, "validate", p, &out); err != nil {
+		return ""
+	}
+	return out.Mode
+}
+
+// ResourceSandbox returns the sandbox check of a resource type declared
+// with sandbox: validate with kind resource_sandbox. A refusal's message is
+// the package's reason, capped, which the sandbox_workspace diagnostic
+// shows; a failed call is a refusal too, so an unreachable package never
+// passes a sandboxed workspace it was asked to check.
+func (r *Remote) ResourceSandbox(typ string) func(json.RawMessage, string) error {
+	return func(config json.RawMessage, mode string) error {
+		ctx, cancel := context.WithTimeout(context.Background(), ValidateTimeout)
+		defer cancel()
+		err := r.p.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateResourceSandbox, Type: typ, Config: config, Mode: mode}, nil)
+		if err == nil {
+			return nil
+		}
+		if msg, ok := refusal(err); ok {
+			return errors.New(msg)
+		}
+		return errors.New("the resource provider could not check this workspace for a sandbox")
+	}
+}
+
+// refusal is a validate refusal's reason, capped, when the package gave one.
+func refusal(err error) (string, bool) {
+	var pe *protocol.Error
+	if !errors.As(err, &pe) || pe.Code != protocol.CodeInvalid || pe.Message == "" {
+		return "", false
+	}
+	msg := pe.Message
+	if len(msg) > maxBindingReason {
+		msg = msg[:maxBindingReason]
+	}
+	return msg, true
+}
+
+// maxBindingReason caps a binding or sandbox refusal's reason.
 const maxBindingReason = 300
 
 // Webhook returns the http.Handler of a webhook path the extension

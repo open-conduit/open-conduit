@@ -1,5 +1,7 @@
 package protocol
 
+import "encoding/json"
+
 // Package certification fixture (07-03): the contract between an extension
 // package and the conformance runner (`open-conduit extension certify DIR`,
 // criteria in package conformance). It lives here, beside the manifest,
@@ -35,6 +37,33 @@ type Fixture struct {
 	Operations []OperationCase `json:"operations,omitempty"`
 	Executor   *ExecutorCase   `json:"executor,omitempty"`
 	Inject     *InjectCase     `json:"inject,omitempty"`
+	// Resources are the config check answers of resource types declared
+	// with mode_default or sandbox: each such type needs at least one.
+	Resources []ResourceCase `json:"resources,omitempty"`
+	// ExecutorModes are the resource modes executors declared with
+	// resource_mode request: each such executor needs at least one.
+	ExecutorModes []ExecutorModeCase `json:"executor_modes,omitempty"`
+}
+
+// ResourceCase is one resource config and the answers config check must
+// get for it: ModeDefault, the mode validate resource_mode names (checked
+// when the type declares mode_default), and SandboxRefused, whether
+// validate resource_sandbox refuses it for a binding whose executor
+// requests Mode (checked when the type declares sandbox).
+type ResourceCase struct {
+	Type           string          `json:"type"`
+	Config         json.RawMessage `json:"config,omitempty"`
+	ModeDefault    string          `json:"mode_default,omitempty"`
+	Mode           string          `json:"mode,omitempty"`
+	SandboxRefused bool            `json:"sandbox_refused,omitempty"`
+}
+
+// ExecutorModeCase is one binding config and the resource mode validate
+// executor_mode must name for it ("" for the resource config's default).
+type ExecutorModeCase struct {
+	Executor string          `json:"executor"`
+	Config   json.RawMessage `json:"config,omitempty"`
+	Mode     string          `json:"mode,omitempty"`
 }
 
 // IngressCase drives CheckIngress: Source names a source the fixture's

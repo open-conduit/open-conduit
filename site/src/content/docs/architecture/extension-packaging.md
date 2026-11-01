@@ -407,7 +407,7 @@ Flags:
 
 `open-conduit extension certify DIR [--json] [--report FILE]` is the distributable conformance runner. It ships in the `open-conduit` binary. It starts the package exactly as the daemon does: `internal/extproc`, with a real SQLite coordination store and artifact store in a temporary directory, and the package's own fixture. It then runs the criteria and prints or writes a report. The exit status is 0 only when the package is certified. `make certify` certifies the first-party packages and the examples, and runs the negative controls.
 
-### Criteria (version 2)
+### Criteria (version 3)
 
 | ID | Applies | Requirement |
 | --- | --- | --- |
@@ -428,9 +428,11 @@ Flags:
 | `executor.conformance` | executor | `conformance.CheckExecutor` |
 | `executor.inject` | inject capability | `conformance.CheckInjectExecutor` |
 | `executor.controls` | stop or forget | Served for an execution the package does not hold |
+| `executor.resource_mode` | executor with `resource_mode` | Each executor mode case's `validate executor_mode` answer is the expected mode, twice identically |
+| `resources.workspace` | resource type with `mode_default` or `sandbox` | Each resource case's `validate resource_mode` names the expected mode and `validate resource_sandbox` refuses exactly as expected, twice identically |
 | `surfaces.served` | checks or tasks | Every check answers; every task is served |
 
-A package is certified when every applicable criterion passes. A declared ingress type or executor without a fixture case fails. Missing route and operation cases are noted.
+A package is certified when every applicable criterion passes. A declared ingress type or executor, an executor declaring `resource_mode` or a resource type declaring `mode_default` or `sandbox` without a fixture case fails. Missing route and operation cases are noted.
 
 ### Fixtures
 
@@ -438,7 +440,9 @@ A package is certified when every applicable criterion passes. A declared ingres
 
 - `entries`, sent in `configure`, with their scopes, and `secrets` for the names bound to them;
 - one `ingress` case: source, delivery, canonical observation, one-shot family and delivery. A source whose families are all re-derivable (reconcile recovers everything) leaves the one-shot family empty;
-- `routes`, `operations` (handler operations), one `executor` case and one `inject` case with its ready and finish files.
+- `routes`, `operations` (handler operations), one `executor` case and one `inject` case with its ready and finish files;
+- `resources`: a resource `type` and `config`, the `mode_default` it names, and whether `resource_sandbox` refuses it (`sandbox_refused`) for an executor requesting `mode`;
+- `executor_modes`: an `executor`, a binding `config` and the `mode` it requests.
 
 `receive_time_varies` declares a package that stamps reconcile observations with its own clock (Slack does). The runner then compares observations without `received_at` and says so in the result.
 
@@ -495,7 +499,7 @@ A report states:
 25. The SDK's final shape: `sdk.Extension` fields per surface, `sdk.Host`, `sdk.Store` (precondition-on-read optimistic commits; prefix ranges not protected) and `sdk.Artifacts`, plus `sdk.PackageCommand` for packaging. `sdk.New` and its registrations (`Operation` with typed `sdk.Handler`, `sdk.Wait` and `sdk.Emit`, `Route`, `WorkKind`, `Task`, `Check`, `IngressType` …) fill the same fields and derive the manifest from them; an operation's input struct gives its manifest `input` schema.
 26. `secret.resolve` takes a `connection` field and `configure` entries carry `name` and `connection`, so a package reaches its connections' secrets without bootstrap glue (B05 scoping kept).
 27. Packages start before the configuration opens. A package that fails to start leaves its types unregistered, so a config using them fails validation and the daemon refuses to start with the diagnostic.
-28. Certification criteria version 2 (above; version 2 added the Work display limits to `routes.decisions`), run against the package's own fixture by `open-conduit extension certify`. The fixture format lives in `protocol`. A declared ingress type or executor requires a fixture case.
+28. Certification criteria version 3 (above; version 2 added the Work display limits to `routes.decisions`, version 3 `executor.resource_mode` and `resources.workspace`), run against the package's own fixture by `open-conduit extension certify`. The fixture format lives in `protocol`. A declared ingress type or executor requires a fixture case.
 29. `receive_time_varies` relaxes only `received_at` equality for packages that stamp reconcile observations with their own clock.
 30. The certification runner is production code in the `open-conduit` binary, so composition may depend on the public `conformance` checks (never `conformance/reference`); the boundary rule says so.
 31. The Slack package requires source namespaces `slack` or `slack/…` (the subprocess namespacing rule), which the in-process extension does not.

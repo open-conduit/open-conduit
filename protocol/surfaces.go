@@ -40,6 +40,25 @@ const (
 	// is the reason the operator reads in the binding_refused diagnostic,
 	// so it names the rule and never echoes config values.
 	ValidateBinding = "binding"
+	// ValidateResourceMode asks a provider declared with mode_default which
+	// mode a resource config names as its default. Type is the resource
+	// type, Config the resource config; the answer is a ValidateResult whose
+	// Mode is the mode the config itself writes, "" for none.
+	ValidateResourceMode = "resource_mode"
+	// ValidateResourceSandbox asks a provider declared with sandbox whether
+	// a binding that runs its executor in a sandbox may use a resource
+	// config. Type is the resource type, Config the resource config and
+	// Mode the mode the executor requests ("" for the config's default).
+	// Its refusal's message is the reason the operator reads in the
+	// sandbox_workspace diagnostic, so it names the rule and never echoes
+	// config values.
+	ValidateResourceSandbox = "resource_sandbox"
+	// ValidateExecutorMode asks an executor declared with resource_mode
+	// which resource mode a binding config makes it request. Type is the
+	// executor, Config the binding's executor config; the answer is a
+	// ValidateResult whose Mode is the requested mode, "" for the resource
+	// config's default.
+	ValidateExecutorMode = "executor_mode"
 )
 
 // ValidateParams asks the extension to check one opaque config object of
@@ -52,6 +71,15 @@ type ValidateParams struct {
 	SecretNames []string        `json:"secret_names,omitempty"`
 	// Binding is the binding a route binds, for kind binding only.
 	Binding *RouteBinding `json:"binding,omitempty"`
+	// Mode is the resource mode the binding's executor requests, for kind
+	// resource_sandbox only ("" for the resource config's default).
+	Mode string `json:"mode,omitempty"`
+}
+
+// ValidateResult is the answer to validate: empty for a check, and the mode
+// for kinds resource_mode and executor_mode.
+type ValidateResult struct {
+	Mode string `json:"mode,omitempty"`
 }
 
 // RouteBinding is the binding a route binds, as its handler's binding
