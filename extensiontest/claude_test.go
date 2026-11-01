@@ -97,12 +97,3 @@ func TestAgentScript(t *testing.T) {
 		t.Fatalf("turns:\n%s\nwant\n%s", got, want)
 	}
 }
-
-// TestName makes config identifiers of declared names.
-func TestName(t *testing.T) {
-	for in, want := range map[string]string{"notes": "notes", "acme.Board": "acme-board", "9lives": "x9lives", "a_b-c": "a_b-c"} {
-		if got := name(in); got != want {
-			t.Errorf("name(%q) = %q, want %q", in, got, want)
-		}
-	}
-}

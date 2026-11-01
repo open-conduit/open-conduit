@@ -10,6 +10,7 @@ A package can contribute integrations, executors, toolbelt operations, setups an
 ```sh
 open-conduit extension new my-extension              # start a package repository whose make check passes first time
 open-conduit extension check ./my-extension          # lint it without starting it; says what to change for each problem
+open-conduit dev ./my-extension                      # run it against a throwaway daemon and web view, restarting it on each change
 open-conduit extension inspect ./my-extension        # check a package offline
 open-conduit extension certify ./my-extension        # run the conformance suite against it
 open-conduit extension install ./my-extension        # takes effect at the next serve
