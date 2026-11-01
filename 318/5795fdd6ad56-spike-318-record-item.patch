@@ -1,0 +1,303 @@
+diff --git a/extension/toolbelt.go b/extension/toolbelt.go
+index 001a11b..7cd3230 100644
+--- a/extension/toolbelt.go
++++ b/extension/toolbelt.go
+@@ -126,6 +126,12 @@ type EmitPlan struct {
+ 	// charged to both chains' per-minute budgets, so citing never shortens
+ 	// a chain or escapes the trigger's limits.
+ 	Cause domain.ID
++	// Once, when set, makes the emission at most once per scope for the
++	// registration, across executions: the toolbelt records Once with the
++	// accepted Event in the accepting transaction, and a later plan with the
++	// same Once accepts nothing and commits as a duplicate (Added false) of
++	// the first. SPIKE (#318).
++	Once string
+ 	// Commit runs inside the accepting transaction once the Event is
+ 	// accepted. It must be pure and deterministic. Its Records are written
+ 	// only when the Event was newly added (a replayed delivery writes none);
+diff --git a/integration/observe_spike_test.go b/integration/observe_spike_test.go
+new file mode 100644
+index 0000000..8541e94
+--- /dev/null
++++ b/integration/observe_spike_test.go
+@@ -0,0 +1,202 @@
++package integration_test
++
++// THROWAWAY spike for #318: not to be committed.
++
++import (
++	"context"
++	"crypto/sha256"
++	"encoding/hex"
++	"encoding/json"
++	"errors"
++	"path/filepath"
++	"testing"
++	"time"
++
++	"github.com/open-conduit/open-conduit/domain"
++	"github.com/open-conduit/open-conduit/extension"
++	"github.com/open-conduit/open-conduit/internal/runtime"
++	"github.com/open-conduit/open-conduit/storage"
++)
++
++const (
++	obsName   = "observe"
++	obsOp     = "observe.record"
++	obsType   = "observe.item.recorded"
++	obsThread = "observe.thread"
++)
++
++func obsDigest(parts ...string) string {
++	h := sha256.New()
++	for _, p := range parts {
++		h.Write([]byte(p))
++		h.Write([]byte{0})
++	}
++	return hex.EncodeToString(h.Sum(nil))
++}
++
++func obsSource(scope domain.ID, binding string) string {
++	return obsName + "/" + string(scope) + "/" + binding
++}
++
++// obsRegistration is the whole agent-facing side: one operation. The source
++// is the calling execution's binding, so an agent can only record as itself.
++func obsRegistration(e *repEnv) extension.Registration {
++	record := func(ctx context.Context, a extension.Authority, in domain.Payload) (extension.EmitPlan, error) {
++		var r struct{ Item, Thread, Text string }
++		if err := json.Unmarshal(in.Data, &r); err != nil || r.Item == "" || r.Thread == "" || len(r.Item) > 256 || len(r.Thread) > 256 || len(r.Text) > 16<<10 {
++			return extension.EmitPlan{}, &extension.OperationError{Code: "invalid_input", Message: "item, thread (1-256 bytes) and text (at most 16 KiB)"}
++		}
++		var binding string
++		if err := e.store.Transact(ctx, storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
++			x, err := tx.Execution(a.ExecutionID)
++			binding = x.ExecutorBinding
++			return err
++		}); err != nil {
++			return extension.EmitPlan{}, err
++		}
++		key := domain.CorrelationKey{Source: obsSource(a.ScopeID, binding), ExternalID: r.Thread}
++		data, _ := json.Marshal(map[string]string{"source": binding, "item": r.Item, "thread": r.Thread, "text": r.Text})
++		once := binding + "/" + obsDigest(r.Item, r.Text)
++		return extension.EmitPlan{
++			Event: domain.Event{Type: obsType, DeliveryID: "item/" + obsDigest(once)[:32], CorrelationKey: &key, Data: domain.Payload{Schema: "observe.item.v1", Data: data}},
++			Once:  once,
++			Commit: func(m extension.Emitted) (extension.EmitCommit, error) {
++				out, _ := json.Marshal(map[string]any{"recorded": r.Item, "duplicate": !m.Added, "event": m.Event.Event.ID, "root": m.Root, "depth": m.Depth})
++				return extension.EmitCommit{Output: domain.Payload{Schema: "observe.tool.v1", Data: out}}, nil
++			},
++		}, nil
++	}
++	return extension.Registration{Version: extension.ContractVersion, Name: obsName, EventTypes: []string{obsType},
++		Operations: []extension.Operation{{Name: obsOp, Emit: record}}}
++}
++
++// obsRoute is the generic route: config names the binding (source) it takes;
++// a new thread key starts that thread's Work, later items feed it.
++type obsRoute struct{}
++
++func (obsRoute) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
++	ev := in.Event.Event
++	var cfg struct{ Source string }
++	_ = json.Unmarshal(in.Route.Config.Data, &cfg)
++	if ev.Type != obsType || ev.CorrelationKey == nil || ev.CorrelationKey.Source != obsSource(in.Scope.ID, cfg.Source) {
++		return extension.Skip("not an item from " + cfg.Source), nil
++	}
++	if in.Work == nil {
++		return extension.RouteDecision{Match: true, Kind: obsThread, CreateID: domain.ID(ev.CorrelationKey.Source + "/" + obsDigest(ev.CorrelationKey.ExternalID)[:20]), Reason: "a new thread"}, nil
++	}
++	if in.Work.Kind != obsThread {
++		return extension.Skip("the key is owned by other Work"), nil
++	}
++	return extension.RouteDecision{Match: true, Reason: "more of the thread"}, nil
++}
++
++const obsScope domain.ID = "help"
++
++func newObsEnv(t *testing.T) *repEnv {
++	e := &repEnv{t: t, clock: &ghClock{t: time.Date(2026, 11, 1, 9, 0, 0, 0, time.UTC)}, path: filepath.Join(t.TempDir(), "conduit.db"),
++		tokens: map[domain.ID]string{}, handlers: map[string]extension.RouteHandler{obsName: obsRoute{}},
++		grants: map[string][]string{"watcher": {obsOp}, "other": {obsOp}, "responder": {}, "plain": {}}}
++	reg := obsRegistration(e)
++	e.extra = &reg
++	e.open()
++	var bindings []domain.Binding
++	for _, n := range []string{"watcher", "other", "responder", "plain"} {
++		bindings = append(bindings, domain.Binding{Name: n, Executor: "fixture", Requires: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}})
++	}
++	meta, _ := json.Marshal(map[string]any{"enabled": true, "extensions": []any{}})
++	e.read(func(tx storage.Tx) error {
++		return tx.PutScope(domain.Scope{ID: obsScope, Name: "help", Bindings: bindings,
++			Routes: []domain.Route{{Name: "slack-help", Handler: obsName, Binding: "responder", ActivePolicy: "queue",
++				Config: domain.Payload{Schema: "core.config.route.v1", Data: []byte(`{"source":"watcher"}`)}}},
++			Config: domain.Payload{Schema: "core.config.scope.v1", Data: meta}}, 0)
++	})
++	return e
++}
++
++func (e *repEnv) threads() map[string]domain.Work {
++	out := map[string]domain.Work{}
++	e.read(func(tx storage.Tx) error {
++		ws, err := tx.ListWorks()
++		for _, w := range ws {
++			if w.Kind == obsThread {
++				out[w.CorrelationKeys[0].ExternalID] = w
++			}
++		}
++		return err
++	})
++	return out
++}
++
++func TestSpikeObserveRecordsItemsAsThreadWork(t *testing.T) {
++	e := newObsEnv(t)
++	item := func(id, thread, text string) map[string]any { return map[string]any{"item": id, "thread": thread, "text": text} }
++
++	// Run 1 of the 15-minute job: two threads seen.
++	run1 := e.manual(obsScope, "schedule.job", "watcher")
++	a := e.must(run1, obsOp, "", item("1.001", "1.001", "how do I reset my VPN?"))
++	if a["duplicate"] != false || a["depth"] != float64(1) {
++		t.Fatalf("first record: %v", a)
++	}
++	e.must(run1, obsOp, "", item("2.001", "2.001", "printer on fire"))
++	e.finish(run1)
++	if th := e.threads(); len(th) != 2 {
++		t.Fatalf("threads after run 1: %v", th)
++	}
++
++	// Run 2, a new execution: sees the same two messages again plus a reply
++	// in thread 1 and an edit of thread 2's opener.
++	run2 := e.manual(obsScope, "schedule.job", "watcher")
++	dup := e.must(run2, obsOp, "", item("1.001", "1.001", "how do I reset my VPN?"))
++	if dup["duplicate"] != true || dup["event"] != a["event"] {
++		t.Fatalf("re-record across runs: %v vs %v", dup, a)
++	}
++	e.must(run2, obsOp, "", item("1.002", "1.001", "also, which app?"))
++	edit := e.must(run2, obsOp, "", item("2.001", "2.001", "printer on fire (fixed typo)"))
++	if edit["duplicate"] != false {
++		t.Fatalf("edit should be new input: %v", edit)
++	}
++	e.finish(run2)
++	if th := e.threads(); len(th) != 2 {
++		t.Fatalf("threads after run 2: %v", th)
++	}
++	if n := e.countType(obsType); n != 4 {
++		t.Fatalf("accepted items: %d, want 4 (2 + reply + edit)", n)
++	}
++
++	// Thread 1's Work runs with both of its items as input, in order.
++	var inputs []domain.Event
++	e.exec.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
++		inputs = r.Inputs
++		e.mu.Lock()
++		e.tokens[r.Execution.ID] = r.Context.ToolbeltToken
++		e.mu.Unlock()
++		_ = r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)})
++		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
++	}
++	w1 := e.threads()["1.001"]
++	e.finish(e.start(w1.ID))
++	got := inputs
++	if len(got) != 2 {
++		t.Fatalf("thread 1 inputs: %d", len(inputs))
++	}
++	// Causation: each item derives from its run's trigger, not a root.
++	if c := e.chain(got[1].ID); len(c) != 2 {
++		t.Fatalf("chain: %+v", c)
++	}
++
++	// Boundaries: another binding records under its own source, which no
++	// route here takes; a binding without the grant is refused.
++	other := e.manual(obsScope, "manual.work", "other")
++	e.must(other, obsOp, "", item("1.001", "1.001", "how do I reset my VPN?"))
++	e.finish(other)
++	if th := e.threads(); len(th) != 2 {
++		t.Fatalf("other binding made thread Work: %v", th)
++	}
++	plain := e.manual(obsScope, "manual.work", "plain")
++	if _, err := e.call(plain, obsOp, "", item("9", "9", "x")); err == nil {
++		t.Fatal("ungranted binding recorded an item")
++	} else if !errors.Is(err, extension.ErrUnauthorized) {
++		t.Logf("ungranted: %v", err)
++	}
++	_ = runtime.CausalLimits{}
++}
+diff --git a/integration/reporting_test.go b/integration/reporting_test.go
+index fb74a9c..7085ac8 100644
+--- a/integration/reporting_test.go
++++ b/integration/reporting_test.go
+@@ -42,6 +42,7 @@ type repEnv struct {
+ 	limits   runtime.CausalLimits
+ 	disabled bool // compose without registering the extension (entry removed)
+ 	extra    *extension.Registration
++	handlers map[string]extension.RouteHandler // SPIKE #318
+ 
+ 	store     *sqlite.Store
+ 	ingress   *runtime.Ingress
+@@ -95,7 +96,7 @@ func (e *repEnv) open() {
+ 		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+ 	}
+ 	if e.router, err = runtime.NewRouter(store, e.clock.Now, runtime.RouterOptions{Generation: "1", CausalLimits: e.limits,
+-		Handlers: map[string]extension.RouteHandler{is.Type: is.Route{}},
++		Handlers: e.routeHandlers(),
+ 		Bindings: map[string]runtime.RouteBinding{"fixture": {Executor: e.exec}}}); err != nil {
+ 		t.Fatal(err)
+ 	}
+@@ -653,3 +654,11 @@ func TestDisabledReportingIsUndeclared(t *testing.T) {
+ 	}
+ 	e.finish(a)
+ }
++
++func (e *repEnv) routeHandlers() map[string]extension.RouteHandler {
++	h := map[string]extension.RouteHandler{is.Type: is.Route{}}
++	for k, v := range e.handlers {
++		h[k] = v
++	}
++	return h
++}
+diff --git a/internal/runtime/toolbelt_emit.go b/internal/runtime/toolbelt_emit.go
+index 90326bc..f401c1a 100644
+--- a/internal/runtime/toolbelt_emit.go
++++ b/internal/runtime/toolbelt_emit.go
+@@ -95,13 +95,34 @@ func (t *Toolbelt) translatedEmit(ctx context.Context, digest, owner string, op
+ 			}
+ 			parent, floor = plan.Cause, trigger
+ 		}
+-		accepted, added, er := acceptCausalInTx(tx, now, t.options.CausalLimits, w.ScopeID, parent, floor, e2)
+-		if errors.Is(er, ErrCausalRejected) {
+-			refusal = er
+-			return nil
+-		}
+-		if er != nil {
++		// Once (#318 spike): a registration's at-most-once emission per
++		// scope, across executions, checked before any budget is spent.
++		onceNS, onceKey := owner+".once", string(w.ScopeID)+"/"+plan.Once
++		var accepted domain.AcceptedEvent
++		var added bool
++		var er error
++		first, er := tx.Get(onceNS, onceKey)
++		switch {
++		case plan.Once != "" && er == nil:
++			if accepted, er = tx.Event(domain.ID(first)); er != nil {
++				return er
++			}
++		case plan.Once != "" && !errors.Is(er, storage.ErrNotFound):
+ 			return er
++		default:
++			accepted, added, er = acceptCausalInTx(tx, now, t.options.CausalLimits, w.ScopeID, parent, floor, e2)
++			if errors.Is(er, ErrCausalRejected) {
++				refusal = er
++				return nil
++			}
++			if er != nil {
++				return er
++			}
++			if plan.Once != "" && added {
++				if er = tx.Put(onceNS, onceKey, []byte(accepted.Event.ID)); er != nil {
++					return er
++				}
++			}
+ 		}
+ 		var info CausalInfo
+ 		if er = getJSON(tx, causalNamespace, causalKey(accepted.Event.ID), &info); er != nil && !errors.Is(er, storage.ErrNotFound) {
