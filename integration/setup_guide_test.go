@@ -213,7 +213,7 @@ func TestSetupCommand(t *testing.T) {
 	}
 	args := strings.Join(cmd.Args, " ")
 	plugin := filepath.Join(state, "playbooks", "setup")
-	if !strings.HasPrefix(args, fake+" /open-conduit:setup --plugin-dir "+plugin+" --allowedTools") || !strings.Contains(args, "Bash(/opt/bin/open-conduit config:*)") || !strings.Contains(args, "Bash(/opt/bin/open-conduit doctor:*)") || strings.Contains(args, "serve") {
+	if !strings.HasPrefix(args, fake+" /open-conduit:setup --plugin-dir "+plugin+" --allowedTools") || !strings.Contains(args, "Bash(/opt/bin/open-conduit config:*)") || !strings.Contains(args, "Bash(/opt/bin/open-conduit doctor:*)") || !strings.Contains(args, "Bash(/opt/bin/open-conduit init github --dry-run:*)") || strings.Contains(args, "init setup") || strings.Contains(args, "serve") {
 		t.Fatalf("args: %s", args)
 	}
 	env := strings.Join(cmd.Env, "\n")
