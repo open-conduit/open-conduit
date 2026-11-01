@@ -336,6 +336,31 @@ func TestForecast(t *testing.T) {
 
 When a test needs more than the generated scope (connections, several scopes, a binding with grants, the execution token itself), pass the whole config as `extensiontest.Options{Config: ..., Packages: []string{dir}}`. `Options.Packages` are installed under `extensions/<name>` beside it. With your own config there is no generated agent: write one with **`extensiontest.FakeClaude(dir, turns...)`** and name its `Path` as a `claude-code` binding's `binary`. Each launch plays the next `Turn`: its toolbelt `Calls` (`Operation`, `Input`, `RequestID`) through the real `os mcp` server, then a wait for its `Barrier` file if it has one, then the end of the turn with its `State`. `Turn(n)` returns what turn `n` saw once its calls are made, including its toolbelt endpoint and token while the turn holds at its barrier. Each Work needs a fake of its own. The fake is the test binary itself, run again with an environment variable set, so it costs no extra build. The setup assistant's daemon tests (`TestDaemonSetupSession` and `TestDaemonSetupChangeSet`) are written this way, because they test the binding and the agent's token as well as the package.
 
+### Running a package while you build it: `open-conduit dev`
+
+Tests show a package works. To watch it work, with a Work you start, the agent calling the operation and the page the package declares, run it against a throwaway daemon:
+
+```sh
+open-conduit dev ./weather --secret api_key=env:WEATHER_KEY --entry 'weather={"service":"http://127.0.0.1:8080"}'
+```
+
+`open-conduit dev [DIR]` (default `.`):
+
+- builds the package in `DIR` as [`extensiontest.Package`](#daemon-tests-extensiontest) does and installs it;
+- writes a config of the [generated scope](#daemon-tests-extensiontest) (one entry per extension type, a `claude-code` binding granted the package's operations plus `read_context`, `wait` and `declare_outcome`, its routes and a `manual` route), and refuses to start, with each refusal and the generated config, when `config check` would;
+- starts `serve` on that config with its state in a new directory under `/tmp`, never the operator's config or state, with the web view on a free local port (`--web-addr` picks one);
+- prints the web view's sign-in URL, a link to each page the package declares, the `work create` command that starts a Work in the scope, and where the state, config and daemon log are;
+- checks `DIR` for changes every half second, leaving out hidden directories, `dist`, `bin` and `node_modules`. On a change it rebuilds the package and restarts the daemon on the same state, so earlier Work and Events stay. A build or config that fails is reported and the running daemon is left as it was;
+- on Ctrl-C (or SIGTERM), stops the daemon, kills anything it started that is still running a few seconds later (an agent's wrapper outlives its daemon by design), and removes the directory.
+
+Flags:
+
+- **`--secret NAME=VALUE`** adds a secret to the scope and selects it in every generated entry, as `extensiontest.Secret` does. `NAME=env:VAR` resolves it from `VAR` in `dev`'s environment instead, so the value stays off the command line. Repeat it for each secret.
+- **`--entry TYPE=JSON`** is the config of the generated entry for `TYPE`, as `extensiontest.Entry` gives it; `{}` when not given.
+- **`--agent PATH`** is the Claude Code CLI the binding runs; by default, `claude` on `PATH`. The agent runs with your own Claude Code sign-in (`CLAUDE_CONFIG_DIR` when set). It has no built-in tools, only the toolbelt.
+
+`dev` and `extensiontest` share the build and the scope's generation ([`extensiontest/devscope`](https://github.com/open-conduit/open-conduit/blob/main/extensiontest/devscope/devscope.go)), so a package runs under `dev` exactly as its tests run it. `TestDev` drives `dev` against `protocol/examples/notes` with a scripted agent: a Work calls `notes.lookup`, the notes page loads, a change to the source restarts the daemon, and an interrupt leaves no process or directory behind.
+
 ## Certification
 
 `open-conduit extension certify DIR [--json] [--report FILE]` is the distributable conformance runner. It ships in the `open-conduit` binary. It starts the package exactly as the daemon does: `internal/extproc`, with a real SQLite coordination store and artifact store in a temporary directory, and the package's own fixture. It then runs the criteria and prints or writes a report. The exit status is 0 only when the package is certified. `make certify` certifies the first-party packages and the examples, and runs the negative controls.

@@ -142,6 +142,8 @@ type ExtensionOps struct {
 	Certify  func(ctx context.Context, r CertifyRequest) (CertifyResult, error)
 	// New writes a package repository (extension new).
 	New func(r NewRequest) (NewResult, error)
+	// Dev runs a package against a throwaway daemon until ctx ends (dev).
+	Dev func(ctx context.Context, r DevRequest) error
 	// Setups returns the installed packages' setup flows (init TYPE).
 	Setups func(configPath, stateDir string) []extension.Setup
 }
