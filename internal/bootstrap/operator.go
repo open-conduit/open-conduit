@@ -162,7 +162,8 @@ type SetupOptions struct {
 // SetupCommand prepares the setup playbook as its own one-skill plugin and
 // returns the interactive claude command
 // started on it (v1 `init --with`). Reading and changing Open Conduit's own
-// config, and running doctor, go without asking; nothing else is pre-allowed.
+// config, running doctor and dry runs of each setup go without asking;
+// nothing else is pre-allowed.
 func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	if o.Agent != "claude" && o.Agent != ClaudeCodeExecutor {
 		return nil, fmt.Errorf("no setup agent %q: use --with claude", o.Agent)
@@ -190,7 +191,11 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	// The prompt first and the tools last: --allowedTools takes every
 	// argument after it.
 	args := []string{"/" + playbooks.PluginName + ":" + name, "--plugin-dir", dir, "--allowedTools"}
-	for _, sub := range []string{"config", "doctor", "health", "secret path", "init github --dry-run"} {
+	allowed := []string{"config", "doctor", "health", "secret path"}
+	for _, t := range dryRunSetups(o.ConfigPath, o.StateDir) {
+		allowed = append(allowed, "init "+t+" --dry-run")
+	}
+	for _, sub := range allowed {
 		args = append(args, "Bash("+o.Bin+" "+sub+":*)")
 	}
 	cmd := exec.Command(o.Binary, args...)
@@ -208,6 +213,22 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	}
 	cmd.Env = append(cmd.Env, "OPEN_CONDUIT_CONFIG="+o.ConfigPath)
 	return cmd, nil
+}
+
+// dryRunSetups are the setup types whose `init TYPE --dry-run` the setup
+// agent may run without asking: every registered or installed setup but the
+// first-run one, so no playbook's choice of setup is wired into core.
+func dryRunSetups(configPath, stateDir string) []string {
+	var out []string
+	seen := map[string]bool{}
+	for _, s := range append(Setups(), extensionSetups(configPath, stateDir, "")...) {
+		info := s.SetupInfo()
+		if !info.FirstRun && !seen[info.Type] {
+			seen[info.Type] = true
+			out = append(out, info.Type)
+		}
+	}
+	return out
 }
 
 // firstRunPlaybook is the setup playbook `init --with claude` starts on:
