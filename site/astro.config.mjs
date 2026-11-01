@@ -46,6 +46,7 @@ export default defineConfig({
 						{ label: 'Run it in the background', slug: 'guides/background-service' },
 						{ label: 'Watch and steer runs', slug: 'guides/operating' },
 						{ label: 'Backups and recovery', slug: 'guides/backups' },
+						{ label: 'Build your first extension', slug: 'guides/first-extension' },
 					],
 				},
 				{
