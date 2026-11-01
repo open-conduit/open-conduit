@@ -1,6 +1,7 @@
 package runtime
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"strings"
@@ -38,6 +39,9 @@ func (t *Toolbelt) translatedEmit(ctx context.Context, digest, owner string, op 
 		return out, extension.ErrInvalid
 	}
 	if k := ev.CorrelationKey; k != nil && (k.Source == "" || k.ExternalID == "") {
+		return out, extension.ErrInvalid
+	}
+	if len(plan.Once) > extension.MaxOnce {
 		return out, extension.ErrInvalid
 	}
 	ref := a.Lease
@@ -95,13 +99,43 @@ func (t *Toolbelt) translatedEmit(ctx context.Context, digest, owner string, op 
 			}
 			parent, floor = plan.Cause, trigger
 		}
-		accepted, added, er := acceptCausalInTx(tx, now, t.options.CausalLimits, w.ScopeID, parent, floor, e2)
-		if errors.Is(er, ErrCausalRejected) {
-			refusal = er
-			return nil
+		// Once: the registration's at-most-once emission per scope, across
+		// executions, checked before any budget is spent. A repeat with the
+		// same Event is the first one again; a different Event is refused.
+		var accepted domain.AcceptedEvent
+		var added bool
+		var er error
+		onceKey := ""
+		if plan.Once != "" {
+			onceKey = identity(owner, string(w.ScopeID), plan.Once)
+			first, ge := tx.Get(onceNamespace, onceKey)
+			switch {
+			case ge == nil:
+				if accepted, er = tx.Event(domain.ID(first)); er != nil {
+					return er
+				}
+				if !sameEmission(accepted.Event, e2) {
+					refusal = ErrOnceConflict
+					return nil
+				}
+			case !errors.Is(ge, storage.ErrNotFound):
+				return ge
+			}
 		}
-		if er != nil {
-			return er
+		if accepted.Event.ID == "" {
+			accepted, added, er = acceptCausalInTx(tx, now, t.options.CausalLimits, w.ScopeID, parent, floor, e2)
+			if errors.Is(er, ErrCausalRejected) {
+				refusal = er
+				return nil
+			}
+			if er != nil {
+				return er
+			}
+			if onceKey != "" && added {
+				if er = tx.Put(onceNamespace, onceKey, []byte(accepted.Event.ID)); er != nil {
+					return er
+				}
+			}
 		}
 		var info CausalInfo
 		if er = getJSON(tx, causalNamespace, causalKey(accepted.Event.ID), &info); er != nil && !errors.Is(er, storage.ErrNotFound) {
@@ -140,6 +174,24 @@ func (t *Toolbelt) translatedEmit(ctx context.Context, digest, owner string, op 
 		return extension.ToolResult{}, err
 	}
 	return out, nil
+}
+
+// onceNamespace records, per registration, scope and EmitPlan.Once, the
+// Event first accepted under it.
+const onceNamespace = "core.toolbelt.once"
+
+// ErrOnceConflict refuses an emission whose Once was already used for a
+// different Event (type, correlation key or payload).
+var ErrOnceConflict = &extension.OperationError{Code: "once_conflict", Message: "this identity was already recorded with different content"}
+
+// sameEmission reports whether a repeat under the same Once carries the
+// Event first accepted under it.
+func sameEmission(first, next domain.Event) bool {
+	a, b := first.CorrelationKey, next.CorrelationKey
+	if first.Type != next.Type || (a == nil) != (b == nil) || a != nil && *a != *b {
+		return false
+	}
+	return first.Data.Schema == next.Data.Schema && bytes.Equal(first.Data.Data, next.Data.Data)
 }
 
 // ownedNamespace reports whether name is the registration's own name or lies

@@ -610,6 +610,7 @@ func (p WaitPlan) Extension() extension.WaitPlan {
 type EmitPlan struct {
 	Event    Event  `json:"event"`
 	Cause    string `json:"cause,omitempty"`
+	Once     string `json:"once,omitempty"`
 	CommitID string `json:"commit_id,omitempty"`
 }
 type Emitted struct {
