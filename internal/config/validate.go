@@ -35,6 +35,11 @@ type Registry struct {
 	// sandbox could only use by writing outside it. Its error is a fixed,
 	// secret-free reason, shown in the diagnostic.
 	ResourceSandbox map[string]func(config json.RawMessage, mode string) error
+	// ResourceModeDefault optionally names the mode a provider's resource
+	// config sets as its default, "" for none. An executor that requests a
+	// mode of its own (ResourceModer) overrides it, and config check warns
+	// when the two differ (ModeWarnings).
+	ResourceModeDefault map[string]func(config json.RawMessage) string
 	// Sandboxes are the registered process sandbox providers (B09), each
 	// with an optional strict check of a binding's sandbox config. Its
 	// error is a fixed, secret-free reason, shown in the diagnostic.

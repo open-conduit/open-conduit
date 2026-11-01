@@ -40,6 +40,8 @@ These are the guarantees a provider must meet:
 
 Claude Code issue work uses `work` (or `clone` with `workspace_mode: "clone"`): a new segment acquires and a resumed segment uses `Lookup` ([Claude Code executor](../claude-code-executor/#workspace-and-environment)). Fresh-checkout and in-checkout jobs use `fresh` and `shared` through ordinary bindings ([job runs](../schedule-extension/#job-runs)). Slack and research work have no resource.
 
+The executor's request wins: a resource config's `mode` applies only when the executor requests none. Claude Code always requests one, so a `mode` on its binding's git resource never applies. `config check` warns about such a binding, naming the scope, the binding, both modes and the fix (remove the resource's `mode`, or set the mode in the executor's config). The provider says which mode its config names through the optional `config.Registry.ResourceModeDefault` (`git.ModeDefault`, which reads `mode` and is empty when the config names none), the executor says which it requests through `config.ResourceModer`, and `config.ModeWarnings` warns when both are set and differ. A binding a scope inherits unchanged is reported once, at the scope that declares it. The warning never fails the check and changes nothing at run time.
+
 ## Clone workspaces
 
 A worktree commits through the main checkout's common `.git`: its index lock under `.git/worktrees/<name>`, plus the shared `objects/`, `refs/` and `config`. A sandbox (B09) that can write there could set a hostile `core.hooksPath` or `core.fsmonitor`, which then runs unsandboxed the next time the operator uses git, or move `main`. A sandbox that can't write there can't commit. A `clone` workspace is a repository of its own, so a sandbox can be given the whole of it.
@@ -98,7 +100,7 @@ The daemon reconciles every `ResourceInterval` (default 5s) in the background. D
 | Field | Meaning |
 | --- | --- |
 | `checkout` | Required main checkout (work-tree root). A relative path resolves against the config file's directory. |
-| `mode` | Default mode when the executor requests none: `shared` (default), `work`, `fresh` or `clone`. |
+| `mode` | Default mode when the executor requests none: `shared` (default), `work`, `fresh` or `clone`. An executor's own request overrides it, and `config check` warns when it does ([modes](#modes-from-the-real-github-needs)). |
 | `remote`, `base_branch` | Remote name (default `origin`) and base branch (default as above). |
 | `branch_template` | `work` and `clone` branch name with `{work}`/`{scope}` (sanitized IDs). Default `agent/work-{work}`. |
 | `sign` | Keep signing (default false). |
@@ -149,6 +151,7 @@ Workspaces are made by executor acquisition and removed by host reconcile, so ag
   - `ValidateSandbox` allowing only `clone` without setup, and remote URLs losing embedded credentials
   - `TestSandboxedAcquire`: a sandboxed request for `work`, `fresh`, `shared` or a clone with setup refused with nothing made and setup not run; a clone's sandbox needs, its `hooks` and `info` made, a new branch's upstream set, and an agent-written `commondir` ignored by the provider's git
   - the [sandboxed sweep test](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/sandbox_test.go): a process in an srt sandbox, tied to the workspace only by its working directory, found and stopped
+- [Mode warning tests](https://github.com/open-conduit/open-conduit/blob/main/internal/config/modes_test.go) (`TestModeWarnings`, with the offline Claude Code and git check in `internal/bootstrap/modes_test.go`): a resource mode the executor overrides warned once at its declaring scope, and agreeing, unset or unhooked modes quiet.
 - [Sandboxed binding tests](https://github.com/open-conduit/open-conduit/blob/main/internal/config/config_test.go) (`TestSandboxedResource`, `TestSandboxBinding`): the executor's requested mode (or the resource default) reaching the provider's check and a refusal reported at `resource/config`.
   - the ported [stray-process test](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/kill_unix_test.go)
 - [Shell broker test](https://github.com/open-conduit/open-conduit/blob/main/executors/shell/shell_test.go): workspace cwd, layer order and reserved-name drop, the result/log explanation and structured failures.

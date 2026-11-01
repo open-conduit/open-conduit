@@ -47,7 +47,8 @@ func main() {
 	env.ValidateConfigAt, env.Extensions = validateAt, bootstrap.ExtensionOps(version, commit)
 	env.ConfigWarnings = func(path string, data []byte) []string {
 		warnings := append(config.Warnings(data), bootstrap.RenamedWarnings(data)...)
-		return append(warnings, config.IncludeWarnings(data, filepath.Dir(path))...)
+		warnings = append(warnings, config.IncludeWarnings(data, filepath.Dir(path))...)
+		return append(warnings, bootstrap.ModeWarnings(path, data)...)
 	}
 	env.OfflineChecks = offlineChecks
 	env.Service = cli.SystemServiceHost()

@@ -428,6 +428,20 @@ func TestValidateSandbox(t *testing.T) {
 	}
 }
 
+// TestModeDefault: the default mode a git resource config sets, "" for none
+// and for a config that doesn't parse.
+func TestModeDefault(t *testing.T) {
+	for config, want := range map[string]string{
+		`{"checkout":"r","mode":"fresh"}`: "fresh",
+		`{"checkout":"r"}`:                "",
+		`{"mode":"fresh"}`:                "",
+	} {
+		if got := ModeDefault(json.RawMessage(config)); got != want {
+			t.Errorf("%s: %q, want %q", config, got, want)
+		}
+	}
+}
+
 func TestCloneLeavesCredentialsOutOfTheRemote(t *testing.T) {
 	for in, want := range map[string]string{
 		"https://x-access-token:ghs_secret@github.com/o/r.git": "https://github.com/o/r.git",

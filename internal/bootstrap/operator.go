@@ -77,6 +77,20 @@ func validateWith(configPath, exclude string, data []byte) ([]config.Diagnostic,
 	return nil, err
 }
 
+// ModeWarnings are config.ModeWarnings for a config file, offline: one per
+// binding whose resource mode its executor overrides. A config that doesn't
+// validate has none (its diagnostics say what is wrong).
+func ModeWarnings(configPath string, data []byte) []string {
+	reg := registry(offlineExecutors())
+	pkgs := offlineExternal(&reg, configPath, "")
+	defer pkgs.close()
+	s, err := config.ValidateFile(data, reg, fileIncludes(configPath))
+	if err != nil {
+		return nil
+	}
+	return config.ModeWarnings(s, reg)
+}
+
 // fileIncludes resolves a config file's includes beside it. Offline there is
 // no committed generation, so a folder that has gone contributes nothing.
 func fileIncludes(configPath string) config.Includes {
