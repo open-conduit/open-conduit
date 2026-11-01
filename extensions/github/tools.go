@@ -171,10 +171,13 @@ func (t *Tools) Registration() extension.Registration {
 		DependencyFilter: DependencyFilter,
 		Operations: []extension.Operation{
 			{Name: OpContext, Handler: pr(t.context)},
-			{Name: OpIssueView, Handler: repo(t.issueView)},
-			{Name: OpIssueComment, Handler: h(t.issueComment)},
-			{Name: OpIssueList, Handler: repo(t.issueList)},
-			{Name: OpIssueCreate, Handler: h(t.issueCreate)},
+			// Issue operations bind any Work: one without an issue of its
+			// own (a triage, a job, a Slack thread) names the issue, and
+			// files in its scope's tracker or, with project, another's.
+			{Name: OpIssueView, Handler: pr(t.issueView)},
+			{Name: OpIssueComment, Handler: pr(t.issueComment)},
+			{Name: OpIssueList, Handler: pr(t.issueList)},
+			{Name: OpIssueCreate, Handler: pr(t.issueCreate)},
 			{Name: OpPRList, Handler: h(t.prList)},
 			{Name: OpPRView, Handler: pr(t.prView)},
 			{Name: OpPRCreate, Handler: h(t.prCreate)},
@@ -543,14 +546,17 @@ func (t *Tools) issueView(ctx context.Context, b *bound, data json.RawMessage) (
 		return nil, err
 	}
 	n, reply := t.issueNumber(b, in.Number), ""
-	if n <= 0 {
-		return nil, refuse("number_required", "this Work is PR #%d, not an issue: name the issue with number", b.pull)
+	if other && in.Number <= 0 {
+		return nil, refuse("number_required", "name the issue in project %s with number", in.Project)
 	}
-	if other {
-		if in.Number <= 0 {
-			return nil, refuse("number_required", "name the issue in project %s with number", in.Project)
-		}
+	if n <= 0 {
+		return nil, refuse("number_required", "%s: name the issue with number", notIssue(b))
+	}
+	switch {
+	case other:
 		reply = fmt.Sprintf("\"project\": %q, \"number\": %d, ", in.Project, n)
+	case b.number == 0:
+		reply = fmt.Sprintf("\"number\": %d, ", n)
 	}
 	repo := src.Settings.Repo
 	i, err := src.Client.Issue(ctx, repo, n)
@@ -620,6 +626,9 @@ func (t *Tools) issueComment(ctx context.Context, b *bound, data json.RawMessage
 	if other && in.Number <= 0 {
 		return nil, refuse("number_required", "name the issue in project %s with number", in.Project)
 	}
+	if t.issueNumber(b, in.Number) <= 0 {
+		return nil, refuse("number_required", "%s: name the issue with number", notIssue(b))
+	}
 	return t.post(ctx, b, src, Intent{ID: intentID(ctx, b, OpIssueComment, data), Work: b.work.ID, Number: t.issueNumber(b, in.Number), Body: in.Body, Durable: true})
 }
 
@@ -649,16 +658,40 @@ func (t *Tools) issueList(ctx context.Context, b *bound, data json.RawMessage) (
 	return map[string]any{"issues": out}, nil
 }
 
+// notIssue says what a Work that owns no issue is, for a refusal.
+func notIssue(b *bound) string {
+	if b.pull > 0 {
+		return fmt.Sprintf("this Work is PR #%d, not an issue", b.pull)
+	}
+	return "this Work is not a GitHub issue"
+}
+
+// ownTracker is the tracker and code repository of the Work's own scope:
+// its issue's (or its PR's) when it has one, else the scope's first
+// registered tracker, so a Work without an issue (a triage, a scheduled
+// job, a Slack thread) still files and reads in its own project.
+func (t *Tools) ownTracker(b *bound) (issue, code Source, err error) {
+	if b.number > 0 || b.pull > 0 {
+		return b.issue, b.code, nil
+	}
+	issue, code, found := t.trackerIn(b.work.ScopeID)
+	if !found {
+		return Source{}, Source{}, refuse("no_repository", "project %s has no GitHub issue tracker registered; name another project with project", b.work.ScopeID)
+	}
+	return issue, code, nil
+}
+
 // issueProject is the tracker an issue operation acts on: the Work's own
-// when project is empty or names its own scope, else that project's
-// registered tracker (other is then true). Filing (create, comment) needs
+// scope's (ownTracker) when project is empty or names its own scope, else
+// that project's registered tracker (other is then true). Filing (create, comment) needs
 // the project in this scope's authorization.file_scopes; looking (list,
 // view) is allowed by file_scopes or read_scopes. A refusal names the grant
 // to add, so the agent can tell the owner.
 func (t *Tools) issueProject(ctx context.Context, b *bound, project string, filing bool) (src Source, other bool, err error) {
 	project = strings.TrimSpace(project)
 	if project == "" || project == string(b.work.ScopeID) {
-		return b.issue, false, nil
+		src, _, err = t.ownTracker(b)
+		return src, false, err
 	}
 	scope, err := t.scopeNamed(ctx, project)
 	if err != nil {
@@ -668,7 +701,8 @@ func (t *Tools) issueProject(ctx context.Context, b *bound, project string, fili
 		return Source{}, false, refuse("no_project", "no project here is called %s", project)
 	}
 	if scope == b.work.ScopeID {
-		return b.issue, false, nil
+		src, _, err = t.ownTracker(b)
+		return src, false, err
 	}
 	mayFile := t.o.MayFile != nil && t.o.MayFile(b.work.ScopeID, scope) == nil
 	mayRead := t.o.MayRead != nil && t.o.MayRead(b.work.ScopeID, scope) == nil
@@ -751,7 +785,7 @@ func (t *Tools) issueCreate(ctx context.Context, b *bound, data json.RawMessage)
 			return nil, err
 		}
 		body += "\n\n" + h.Marker()
-		labels = []string{b.issue.Settings.Labels.Scheduled}
+		labels = []string{src.Settings.Labels.Scheduled}
 	}
 	issue, state, err := src.Projector.CreateIssue(ctx, IssueIntent{ID: intentID(ctx, b, OpIssueCreate, data), Work: b.work.ID, Title: in.Title, Body: body, Labels: labels})
 	if err != nil && state != intentAttempted {
