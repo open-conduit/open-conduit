@@ -407,18 +407,17 @@ func (t *Tools) waitPlan(hold bool) func(context.Context, extension.Authority, d
 	}
 }
 
-// reviewWaitTypes are the review key's families that wake a PR's review
-// Work while it waits: a push or other change to the PR, a person's comment
-// or review, and the PR merging or closing. Another agent's comment (the
-// builder answering the review) wakes it through peerComments; its own
-// never does.
-var reviewWaitTypes = []string{TypeDependencyMet, TypeCommentHuman, TypePullOpen, TypePullMerged, TypePullClosed}
+// pullWaitTypes are the PR key's families that wake a PR's own Work while
+// it waits: what wakes an issue's agent (waitInputTypes), and new versions
+// of the open PR (a push) too. Another agent's comment wakes it through
+// peerComments; its own never does.
+var pullWaitTypes = append([]string{TypePullOpen}, waitInputTypes...)
 
-// reviewWaitPlan parks a PR's review Work. The PR's own news wakes it with
-// no condition named, so a reviewer can simply wait for changes; conditions
-// and until add to that. It posts nothing: the reason goes in the Wait's
-// description, not on the PR under review.
-func (t *Tools) reviewWaitPlan(ctx context.Context, b *bound, conds []string, until, reason string) (extension.WaitPlan, error) {
+// pullWaitPlan parks a PR's own Work. The PR's news wakes it with no
+// condition named, so its agent can simply wait for changes; conditions and
+// until add to that. It posts nothing: the reason goes in the Wait's
+// description, not on the PR.
+func (t *Tools) pullWaitPlan(ctx context.Context, b *bound, conds []string, until, reason string) (extension.WaitPlan, error) {
 	var h Hold
 	var resolved []resolvedCond
 	if len(conds) > 0 || until != "" {
@@ -427,11 +426,11 @@ func (t *Tools) reviewWaitPlan(ctx context.Context, b *bound, conds []string, un
 			return extension.WaitPlan{}, err
 		}
 	}
-	waiting := fmt.Sprintf("a push, a comment or review, or the merge or close of PR #%d", b.review)
+	waiting := fmt.Sprintf("news of PR #%d: a push, a comment or review, its checks, or its merge or close", b.pull)
 	if d := h.Describe(); d != "" {
 		waiting += ", or " + d
 	}
-	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: append([]string(nil), reviewWaitTypes...)}, Timeout: h.Until,
+	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: append([]string(nil), pullWaitTypes...)}, Timeout: h.Until,
 		Description: extension.Clip(waiting, extension.MaxWaitDescription)}}
 	for _, r := range resolved {
 		plan.Dependencies = append(plan.Dependencies, r.dep)
@@ -468,8 +467,8 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 		c.code, c.issue = src, t.trackerOf(src)
 		rb = &c
 	}
-	if b.review > 0 {
-		return t.reviewWaitPlan(ctx, rb, in.Conditions, in.Until, in.Reason)
+	if b.pull > 0 {
+		return t.pullWaitPlan(ctx, rb, in.Conditions, in.Until, in.Reason)
 	}
 	h, resolved, err := t.holdFor(ctx, rb, in.Conditions, in.Until)
 	if err != nil {

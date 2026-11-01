@@ -148,13 +148,13 @@ Which binding reviews which PR is up to your routes and playbooks; the writer on
 
 Open Conduit can give each newly opened PR its own reviewer, alongside the agent working the issue the PR belongs to. Each review is its own Work: the reviewer reviews, waits for changes, reviews again, and stops when the PR merges or closes.
 
-1. On the repository's `github` entry, turn on review copies, so Open Conduit hears each PR's news for a reviewer as well as for the issue's agent:
+1. On the repository's `github` entry, track pull requests, so Open Conduit hears each PR's news under the PR's own key as well as for the issue's agent:
 
    ```json
-   "config": {"namespace": "github/github.com/acme/web", "scope": "web", "repo": "acme/web", "review_pull_requests": true}
+   "config": {"namespace": "github/github.com/acme/web", "scope": "web", "repo": "acme/web", "track_pull_requests": true}
    ```
 
-2. Add a route that claims PRs for review, beside the `issues` route. Add `"drafts": true` to its config to review drafts too; otherwise a draft is reviewed once it is marked ready.
+2. Add a route that claims PRs, beside the `issues` route, and bind it to the reviewer. Add `"drafts": true` to its config to review drafts too; otherwise a draft is reviewed once it is marked ready.
 
    ```json
    {"name": "reviews", "handler": "github", "binding": "reviewer", "active_policy": "queue", "config": {"claim": "pull_requests"}}
@@ -180,7 +180,7 @@ Open Conduit can give each newly opened PR its own reviewer, alongside the agent
 4. Write the playbook as `skills/review-pr/SKILL.md` in that plugin directory. A turn starts as `/open-conduit:review-pr <number>`, with the PR's number. The playbook needs to say only what a reviewer does:
 
    - Read the PR with `github.context` and `github.pr.view`, and review it against your guidelines with `github.pr.review`: approve, request changes or comment, with inline comments on lines of the diff.
-   - Then end the turn with `github.wait` and a `reason`. No condition is needed: a push, a comment or review, or the PR merging or closing wakes the reviewer. Its own reviews and comments never do.
+   - Then end the turn with `github.wait` and a `reason`. No condition is needed: a push, a comment or review, a check result or the PR merging or closing wakes the reviewer. Its own reviews and comments never do.
    - On a push, review what changed. On a reply, answer it with `github.pr.reply` or `github.pr.comment`.
    - When the PR merges or closes, end with `finished`.
 
@@ -188,9 +188,9 @@ Open Conduit can give each newly opened PR its own reviewer, alongside the agent
 
 Run `open-conduit config check` and apply as in step 4. PRs opened while the daemon was down are claimed at the next reconcile.
 
-A PR on an issue's branch, or one that says `Closes #12`, belongs to that issue's Work and also gets its own review Work. The builder hears the reviewer's reviews as another agent's comments, and the reviewer hears the builder's replies and pushes, so the two can go back and forth until the PR is ready.
+A PR on an issue's branch, or one that says `Closes #12`, belongs to that issue's Work and is also claimed as its own Work, which the reviewer works. The builder hears the reviewer's reviews as another agent's comments, and the reviewer hears the builder's replies and pushes, so the two can go back and forth until the PR is ready.
 
-The reviewer route must live in the scope whose entry reads the repository. A scope from an [included folder](../../architecture/config-management/#included-folders) can't see a repository the main scope reads; give it its own entry for the repository instead, with its own `namespace`, `"track_issues": false` and `"review_pull_requests": true` ([which scope routes an entry's events](../../architecture/github-extension/#which-scope-routes-an-entrys-events)).
+The reviewer route must live in the scope whose entry reads the repository. A scope from an [included folder](../../architecture/config-management/#included-folders) can't see a repository the main scope reads; give it its own entry for the repository instead, with its own `namespace`, `"track_issues": false` and `"track_pull_requests": true` ([which scope routes an entry's events](../../architecture/github-extension/#which-scope-routes-an-entrys-events)).
 
 ## What changes for you
 

@@ -10,7 +10,7 @@ import (
 )
 
 // Work display (issue #123): what an issue's Work is, for operator views.
-// A PR's review Work shows the PR the same way.
+// A PR's own Work shows the PR the same way.
 // An issue Event gives its title, number, author and link; input about one
 // of its PRs adds the PR's link. Input that says nothing new keeps the
 // display as it is.
@@ -43,8 +43,8 @@ func display(w *domain.Work, e domain.Event) *domain.WorkDisplay {
 		if json.Unmarshal(e.Data.Data, &p) != nil || p.Number <= 0 {
 			return nil
 		}
-		if w == nil || w.Kind == WorkKindReview {
-			// A PR's review Work is the PR: its title, number and author.
+		if w == nil || w.Kind == WorkKindPull {
+			// A PR's own Work is the PR: its title, number and author.
 			next := cur
 			next.Title = extension.Clip(p.Title, extension.MaxDisplayTitle)
 			next.Ref = fmt.Sprintf("#%d", p.Number)

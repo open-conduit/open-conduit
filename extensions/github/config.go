@@ -214,11 +214,12 @@ type ExtensionConfig struct {
 	// NoChecksMinutes is how long a PR head with no checks at all waits
 	// before the agent hears none ran (default 10; -1 disables).
 	NoChecksMinutes int `json:"no_checks_minutes,omitempty"`
-	// ReviewPullRequests also observes each PR, and its comments and
-	// reviews, under the PR's own review key (`pr/N/review`), which a route
-	// with `claim: pull_requests` claims as review Work alongside any Work
-	// that owns the PR's issue.
-	ReviewPullRequests bool `json:"review_pull_requests,omitempty"`
+	// TrackPullRequests also observes everything about each PR (its state,
+	// comments, reviews, checks and conflicts) under the PR's own key
+	// (`pull_request/N`), which a route
+	// with `claim: pull_requests` claims as Work of its own, alongside any
+	// Work that owns the PR's issue.
+	TrackPullRequests bool `json:"track_pull_requests,omitempty"`
 }
 
 // Settings is a parsed, defaulted extension entry.
@@ -235,7 +236,7 @@ type Settings struct {
 	ManageWebhook              bool
 	BaseBranch                 string
 	NoChecks                   time.Duration
-	ReviewPulls                bool
+	TrackPulls                 bool
 }
 
 func validNamespace(ns string) bool {
@@ -264,7 +265,7 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 	}
 	s = Settings{Namespace: c.Namespace, Scope: c.Scope, Repo: c.Repo, TrackerRepo: c.Repo, TrackerNS: c.Namespace, TrackIssues: true,
 		Labels: DefaultLabels(), ClosedHorizon: 168 * time.Hour, Projection: c.Projection, WebhookSecret: c.WebhookSecret, ManageWebhook: c.ManageWebhook,
-		ReviewPulls: c.ReviewPullRequests}
+		TrackPulls: c.TrackPullRequests}
 	if c.Tracker != nil {
 		if !repoPattern.MatchString(c.Tracker.Repo) || !validNamespace(c.Tracker.Namespace) {
 			return s, errors.New("github extension: tracker needs repo owner/name and a namespace")
@@ -368,6 +369,6 @@ func ExtensionSettings(data json.RawMessage) []extension.Setting {
 	return append(out,
 		extension.Setting{Name: "base_branch", Value: s.BaseBranch},
 		extension.Setting{Name: "manage_webhook", Value: s.ManageWebhook},
-		extension.Setting{Name: "review_pull_requests", Value: s.ReviewPulls},
+		extension.Setting{Name: "track_pull_requests", Value: s.TrackPulls},
 		extension.Setting{Name: "closed_horizon_hours", Value: int(s.ClosedHorizon.Hours())})
 }

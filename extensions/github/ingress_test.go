@@ -549,15 +549,15 @@ func TestEditedCommentIsANewVersion(t *testing.T) {
 	_ = domain.ID("")
 }
 
-// With review_pull_requests, each PR state and each comment, inline comment
-// and review on a PR is also observed under the PR's review key, the same
-// way by push and reconcile; checks, conflicts and issue comments are not,
-// and an entry without the option observes no copies.
-func TestReviewCopiesOfPullRequests(t *testing.T) {
-	f := newFixture(t, `,"review_pull_requests":true`)
+// With track_pull_requests, each PR state and each comment, inline comment,
+// review and check on a PR is also observed under the PR's own key, the
+// same way by push and reconcile. Nothing of an issue's is, and an entry
+// without the option observes no copies.
+func TestCopiesOfPullRequestsForClaiming(t *testing.T) {
+	f := newFixture(t, `,"track_pull_requests":true`)
 	fk := f.fake
 	issue := fk.OpenIssue("Header", "wobbles", alice, "bug")
-	issueComment := fk.AddComment(issue, alice, "please make it blue")
+	fk.AddComment(issue, alice, "please make it blue")
 	pr := fk.OpenPull("Blue header", "Closes #1", "agent/issue-1", "sha1", alice)
 	review := fk.AddReview(pr, alice, "CHANGES_REQUESTED", "rename it")
 	inline := fk.AddReviewComment(pr, alice, "nit", "header.go", 12)
@@ -575,8 +575,8 @@ func TestReviewCopiesOfPullRequests(t *testing.T) {
 		{"pr conversation", "issue_comment", "pr/" + p + "/comment/" + strconv.FormatInt(prComment, 10), fk.CommentHook("created", prComment)},
 	}
 	for i, tc := range cases {
-		orig, copied := scanned[tc.item], scanned["review/"+tc.item]
-		if key(orig) != "issue/1" || key(copied) != gh.ReviewKey(pr) {
+		orig, copied := scanned[tc.item], scanned["pull_request/"+strings.TrimPrefix(tc.item, "pr/")]
+		if key(orig) != "issue/1" || key(copied) != gh.PullRequestKey(pr) {
 			t.Fatalf("%s: original keyed %s, copy keyed %s", tc.label, key(orig), key(copied))
 		}
 		if copied.Event.Type != orig.Event.Type || string(copied.Event.Data.Data) != string(orig.Event.Data.Data) || copied.Event.ID == orig.Event.ID {
@@ -589,16 +589,43 @@ func TestReviewCopiesOfPullRequests(t *testing.T) {
 		sameIdentity(t, tc.label, res.Observations[0], orig)
 		sameIdentity(t, tc.label+" copy", res.Observations[1], copied)
 	}
-	for _, item := range []string{"review/pr/" + p + "/checks", "review/issue/1", "review/issue/1/comment/" + strconv.FormatInt(issueComment, 10)} {
-		if _, ok := scanned[item]; ok {
-			t.Fatalf("%s copied for review", item)
+	// Every PR family is copied alike, checks included; nothing of an issue's.
+	if c := scanned["pull_request/"+p+"/checks"]; key(c) != gh.PullRequestKey(pr) || c.Event.Type != gh.TypeChecksPassed {
+		t.Fatalf("checks copy: %+v", c.Event)
+	}
+	for item := range scanned {
+		if strings.HasPrefix(item, "pull_request/issue") {
+			t.Fatalf("%s copied", item)
 		}
 	}
 	plain := newFixture(t, "")
 	plain.fake.OpenPull("Chore", "", "chore", "sha2", alice)
 	for item := range plain.scan(t) {
-		if strings.HasPrefix(item, "review/") {
-			t.Fatalf("%s observed without review_pull_requests", item)
+		if strings.HasPrefix(item, "pull_request/") {
+			t.Fatalf("%s observed without track_pull_requests", item)
 		}
+	}
+}
+
+// A tracking entry observes conflicts on any open PR, not only one that
+// belongs to an issue, and copies them under the PR's own key.
+func TestTrackedPullConflictsWithoutAnIssue(t *testing.T) {
+	f := newFixture(t, `,"track_pull_requests":true`)
+	pr := f.fake.OpenPull("Bump deps", "", "chore/deps", "sha9", alice)
+	no := false
+	f.fake.SetMergeable(pr, &no)
+	scanned := f.scan(t)
+	p := strconv.Itoa(pr)
+	if o := scanned["pr/"+p+"/conflicts"]; key(o) != "pr/"+p || o.Event.Type != gh.TypePullConflicts {
+		t.Fatalf("conflicts: %+v", o.Event)
+	}
+	if o := scanned["pull_request/"+p+"/conflicts"]; key(o) != gh.PullRequestKey(pr) {
+		t.Fatalf("conflicts copy: %+v", o.Event)
+	}
+	plain := newFixture(t, "")
+	pr = plain.fake.OpenPull("Bump deps", "", "chore/deps", "sha9", alice)
+	plain.fake.SetMergeable(pr, &no)
+	if _, ok := plain.scan(t)["pr/"+strconv.Itoa(pr)+"/conflicts"]; ok {
+		t.Fatal("conflicts observed on a PR with no issue and no tracking")
 	}
 }
