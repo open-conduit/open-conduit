@@ -108,6 +108,11 @@ func allowed(owner, dependency string, test bool) bool {
 		return dependency == "domain" || dependency == "extension" || under(dependency, "internal/config")
 	case under(owner, "client"):
 		return public(dependency) || under(dependency, "client")
+	case under(owner, "extensiontest"):
+		// The harness a package's own repository tests with (#259) runs the
+		// daemon as a built binary and drives it as any operator would:
+		// public packages and client only, never internal/.
+		return public(dependency) || under(dependency, "client") || under(dependency, "extensiontest")
 	case under(owner, "internal/migrate"):
 		// Explicit Open Supervisor conversion (06-02) writes extension and
 		// executor config: it may read their exported names and setup shapes,

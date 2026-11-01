@@ -25,6 +25,8 @@ func TestDependencyClosures(t *testing.T) {
 	}{
 		{"public_contracts", []pkg{project("domain"), project("storage", "domain"), project("extension", "domain")}, ""},
 		{"os_uses_client", []pkg{project("cmd/os", "internal/cli", "client"), project("client", "domain")}, ""},
+		{"extensiontest_uses_client", []pkg{project("extensiontest", "client", "protocol"), project("client", "domain")}, ""},
+		{"extensiontest_cannot_reach_internal", []pkg{project("extensiontest", "internal/cli")}, "internal/cli"},
 		{"os_cannot_compose_runtime", []pkg{project("cmd/os", "internal/runtime")}, "internal/runtime"},
 		{"gateway_uses_gateway", []pkg{project("cmd/open-conduit-gateway", "extensions/docker/gateway"), project("extensions/docker/gateway", "extension")}, ""},
 		{"gateway_cannot_compose_runtime", []pkg{project("cmd/open-conduit-gateway", "internal/runtime")}, "internal/runtime"},
