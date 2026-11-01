@@ -75,5 +75,6 @@ The message carries the last turn's handoff note and the events. Rebuild the pic
 
 - Don't wait or poll for checks or replies: end the turn and let Open Conduit resume you.
 - Don't push to the base branch, merge the PR or close the issue.
+- Don't push with other credentials (a `gh` login, a token you find, another remote) when `git push` is refused: the push would go out under someone else's name. Report the error (and file it as a defect if the toolbelt offers that), then end with `help`.
 - Don't change the issue's labels or workflow status; Open Conduit sets them from your status.
 - Don't post comments any way other than the toolbelt.
