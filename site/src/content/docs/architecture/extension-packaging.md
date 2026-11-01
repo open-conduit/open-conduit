@@ -195,7 +195,26 @@ Unsupported capabilities are refused at config validation, exactly as for in-pro
 
 ## Testing a package
 
-A package's unit tests can drive its handlers through `protocol/sdk` with a fake host over a pipe. To see the package working in the real daemon, its repository's tests use [`extensiontest`](https://github.com/open-conduit/open-conduit/blob/main/extensiontest/daemon.go), which needs only this module as a dependency. Pin the two commands it builds with `tool` directives, so `go mod tidy` keeps what they need and the build works from the module cache:
+There are two harnesses. Use `sdktest` for a handler's logic: it runs in milliseconds and needs nothing built. Use `extensiontest` to see the package working in the daemon: configured from a real config, routed, run by an agent and shown to the operator.
+
+### Unit tests: `sdktest`
+
+[`protocol/sdk/sdktest`](https://github.com/open-conduit/open-conduit/blob/main/protocol/sdk/sdktest/sdktest.go) serves your `sdk.Extension` on an in-memory host behind a real `jsonrpc` pipe, so every call crosses the wire as it would in the daemon. `sdktest.New(t, ext, opts...)` initializes it with a temporary state directory.
+
+- **Seeding (options):** `WithScopes`, `WithWorks`, `WithExecutions`, `WithEvents(scope, events...)` (accepted as causal roots), `WithKV`, `WithKVVersion` (the stored layout, so `Configure` runs `Migrate`), `WithSecrets` and `WithConnectionSecrets`, `WithAuthority` (what `Operation` calls carry) and `WithClock`. Pass `conformance.NewClock()` and advance it; the default clock is fixed at `sdktest.Start`.
+- **Calling in:** `Operation(ctx, name, input)` calls a declared operation by its kind and returns an `OperationResult`: a handler's output, a wait's plan, or an emission's accepted Event with its commit's output (the records are written to KV). `Configure`, `Route`, `RunTask`, `Check` and `CheckRun` cover the other common surfaces, and `Call` reaches any other method (`webhook.handle`, `event.render` …).
+- **Inspecting:** `KV(namespace)`, `Events()` (seeded, derived, delivered and emitted), `Commits()` (each applied `kv.commit` batch), `Artifacts()`, `Captured()` and `KVVersion()`.
+
+The host answers the scoped methods the way the daemon does. KV values carry the same version tokens, a stale check is `storage.ErrConflict`, and another extension's namespace is unauthorized. `event.accept` needs a parent Event in the same configured scope, deduplicates by source and delivery ID, and writes its records only when the Event is new. `ingress.deliver` runs the delivery through the source's adapter (`ingress.push`) from the last `Configure`. State reads and secrets see only configured scopes. A method the manifest does not enable is refused as undeclared. It does not enforce causal depth and rate limits, and it does not serve timers, Work control, probes or `config.*` (they answer unsupported). [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/blob/main/protocol/examples/notes/notes_test.go) is tested this way.
+
+```go
+h := sdktest.New(t, acme.Build(), sdktest.WithKV("acme.index", "a", []byte(`{"text":"hi"}`)))
+got, err := h.Operation(ctx, "acme.lookup", domain.Payload{Data: []byte(`{"id":"a"}`)})
+```
+
+### Daemon tests: `extensiontest`
+
+To see the package working in the real daemon, its repository's tests use [`extensiontest`](https://github.com/open-conduit/open-conduit/blob/main/extensiontest/daemon.go), which needs only this module as a dependency. Pin the two commands it builds with `tool` directives, so `go mod tidy` keeps what they need and the build works from the module cache:
 
 ```
 tool (
