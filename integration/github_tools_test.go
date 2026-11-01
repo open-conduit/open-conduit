@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -1136,6 +1137,16 @@ func TestGitHubIssueOperationsWithoutAnIssue(t *testing.T) {
 	if got := e.fake.Issue(int(out["number"].(float64))); got.Title != "Wobble on resize" || gh.ParseAgent(got.Body) == nil {
 		t.Fatalf("own issue: %+v", got)
 	}
+	// Held in its own project: a condition with no project resolves against
+	// the scope's tracker, and the issue carries the hold and its label.
+	held := e.must(a, gh.OpIssueCreate, "create-held", map[string]any{"title": "After the wobble", "body": "Once it's fixed.", "wait": []string{"issue:" + itoa(own) + ":closed"}})
+	if got := e.fake.Issue(int(held["number"].(float64))); held["state"] != "posted" || !strings.Contains(got.Body, "waitFor: issue:"+itoa(own)+":closed") || !slices.Contains(got.Labels, "scheduled") {
+		t.Fatalf("held create: %v %+v", held, got)
+	}
+	timed := e.must(a, gh.OpIssueCreate, "create-timed", map[string]any{"title": "Check the wobble", "body": "Next year.", "until": "2030-01-01T00:00Z"})
+	if got := e.fake.Issue(int(timed["number"].(float64))); timed["state"] != "posted" || !strings.Contains(got.Body, "runAt: 2030-01-01T00:00Z") || !slices.Contains(got.Labels, "scheduled") {
+		t.Fatalf("timed create: %v %+v", timed, got)
+	}
 
 	// Another project: refused until file_scopes grants it, then filed there.
 	_, err = e.call(a, gh.OpIssueCreate, "", map[string]any{"project": "ops", "title": "Cache the image build", "body": "From triage."})
@@ -1154,6 +1165,23 @@ func TestGitHubIssueOperationsWithoutAnIssue(t *testing.T) {
 		t.Fatalf("ops comment: %v", c)
 	}
 	e.finish(a, nil)
+
+	// A scope that registers no tracker has nowhere of its own to file: the
+	// refusal says to name a project.
+	e.putScope("bare", `{"namespace":"github/github.com/octo/bare","scope":"bare","repo":"octo/bare"}`)
+	key := domain.CorrelationKey{Source: "slack/T1", ExternalID: "bare-1"}
+	at := e.clock.Now()
+	if _, _, err := e.ingress.Accept(context.Background(), "bare", domain.Event{ID: "request-bare-1", Type: "fixture.request", Source: "slack/T1",
+		DeliveryID: "bare-1", OccurredAt: at, ReceivedAt: at, CorrelationKey: &key}); err != nil {
+		t.Fatal(err)
+	}
+	e.route()
+	b := e.start(e.work("work/bare-1").ID)
+	_, err = e.call(b, gh.OpIssueList, "", map[string]any{})
+	refused(t, err, "no_repository")
+	_, err = e.call(b, gh.OpIssueCreate, "", map[string]any{"title": "x", "body": "y"})
+	refused(t, err, "no_repository")
+	e.finish(b, nil)
 }
 
 // The repository must be one the scope registers, and named when it
