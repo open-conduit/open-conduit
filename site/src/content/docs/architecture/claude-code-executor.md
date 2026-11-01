@@ -35,7 +35,7 @@ An adopted segment keeps running and finishes its turn. Its stdin went with the 
 
 ## Prompt, inputs and injection
 
-A turn starts on the playbook skill `/open-conduit:<playbook> <args>` (the default playbook is `work-issue`). The body is:
+A turn starts on the playbook skill `/open-conduit:<playbook> <args>`, or on the arguments and body alone when the binding names no playbook (`-`). The body is:
 
 | Turn | Arguments | Body |
 | --- | --- | --- |
@@ -49,7 +49,7 @@ A turn starts on the playbook skill `/open-conduit:<playbook> <args>` (the defau
 
 ## Outcomes
 
-The executor adds no core state. The structured status uses `--json-schema` (state, summary, prs, preview, touches, handoff, report). It maps as follows:
+The executor adds no core state. The structured status uses `--json-schema` (state, summary, handoff, report). Its descriptions say only what each state means to Open Conduit: `finished` completes the Work; `building`, `review`, `help` and `done` keep it open for the next input, with `review`, `help` and `done` putting something to the owner. They name no code host, issue, PR, check or preview: what a state means for a kind of Work (that `building` follows a push, say) is its playbook's to say, as `work-issue`'s "Ending a turn" does. A test (`TestNoDomainTerms`, with a negative control) keeps such terms out of the executor's sources. It maps as follows:
 
 | Turn ended | Outcome | Work afterwards |
 | --- | --- | --- |
@@ -61,7 +61,7 @@ The executor adds no core state. The structured status uses `--json-schema` (sta
 
 The outcome data schema is the binding's optional `status_schema`. The default is `core.turn.v1`, which every projector reads and from which the host publishes the turn-ended Event; a source-named `<source>.status.v1` that earlier setups wrote is read as `core.turn.v1`. A config that cannot be read fails under `open-conduit.claudecode.result.v1`. The projector maps `help`, `review` and `done` to labels. `building` and `finished` project no status label. The other data fields are:
 
-- `reason`, `prs`, `preview`, `touches` and `kind`
+- `reason` and `kind`
 - `report`, the status's optional write-up for the operator (at most 20,000 bytes), which the web view shows under the turn's summary
 - `models`, `model_calls`, `tool_calls` and `tokens` (input, output, cache read, cache creation)
 - `limited` and `resets_at`
@@ -138,7 +138,7 @@ With a binding resource, a new segment calls `Acquire({Mode: workspace_mode (def
 
 A binding with a sandbox ([B09](../sandboxes/)) wraps claude through `extension.WrapLaunch`, needing its workspace, its own config directory (`CLAUDE_CONFIG_DIR` in the binding's `env`, apart from the operator's `~/.claude` and `~/.claude.json`, which its needs deny; [B09](../sandboxes/#executors)), its MCP config, the playbooks, its token directory and toolbelt socket, and `api.anthropic.com`. Sandboxed, `TMPDIR` and `CLAUDE_CODE_TMPDIR` are the segment's own `tmp` directory, while srt itself keeps `/tmp` for its sockets. A refusal is a structured `sandbox_denied` or `sandbox_unavailable` failure with no process, `Recover` adopts a live segment only once `extension.AdoptSandboxed` proves it is in its sandbox, and an interrupted turn's result says whether it got `term` or `kill`. Claude Code's own `sandbox.*` settings are executor config, not a provider; they can be added inside an srt sandbox with `extra_args` as defence in depth.
 
-A binding with a container ([containers](../sandboxes/#claude-code-in-a-container)) launches through `ExecutionContext.Container` and advertises `Capabilities.Container`. Its claude keeps `HOME` and `CLAUDE_CONFIG_DIR` in the Work's own home (`ExecutionContext.ContainerHome`), seeded from `home_seed` on first use, so a session resumes across segments. Its sign-in, a GitHub token and the binding's selected secrets go in the launch's `Secrets`, which the provider keeps out of the container's environment; segments set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. `Recover` adopts through the broker as shell does. Attach for such a session returns `open-conduit container attach <work>`, and `ContainerAttach` gives the interactive `claude --resume` the daemon launches in an attach container ([attach in a container](../sandboxes/#attach-in-a-container)).
+A binding with a container ([containers](../sandboxes/#claude-code-in-a-container)) launches through `ExecutionContext.Container` and advertises `Capabilities.Container`. Its claude keeps `HOME` and `CLAUDE_CONFIG_DIR` in the Work's own home (`ExecutionContext.ContainerHome`), seeded from `home_seed` on first use, so a session resumes across segments. Its sign-in, the binding's selected secrets and any variable named as a credential (ending `_TOKEN`, `_API_KEY`, `_SECRET` or `_PASSWORD`) go in the launch's `Secrets`, which the provider keeps out of the container's environment; segments set `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC=1`. The executor sets no credential helper for any one host: a run layer's helpers (the GitHub extension's, say) come first, then the toolbelt's `!os git-credential` as git's general `credential.helper` unless the run already sets one. `Recover` adopts through the broker as shell does. Attach for such a session returns `open-conduit container attach <work>`, and `ContainerAttach` gives the interactive `claude --resume` the daemon launches in an attach container ([attach in a container](../sandboxes/#attach-in-a-container)).
 
 The environment follows B05:
 
@@ -158,7 +158,7 @@ The config is strict and validated at load. Every field is optional:
 | `binary` | The Claude Code CLI (default `claude`). |
 | `model` | The model (default `opus`). |
 | `permission_mode` | Default `bypassPermissions`. |
-| `playbook` | Default `work-issue`; `-` means none. |
+| `playbook` | The skill turns start on. `-` means none. Left out, it is none too, except that for one release the host keeps it `work-issue`, what it used to default to, and `config check` warns; `init github` and `migrate` write it. |
 | `plugin_dir` | The playbook skills directory. |
 | `args` | Default `{number}`. |
 | `structured` | Default true. |
@@ -192,7 +192,8 @@ The config is strict and validated at load. Every field is optional:
   - failures, interrupt and missing binary
   - detached adoption with credential replacement and lower-epoch and superseded refusals
   - work-workspace acquisition and resume by lookup
-  - config validation
+  - config validation, and the playbook a binding that names none starts on
+  - no code-host or issue terms in the executor's sources
   - the ported parser tests (parse, limits, reset text, call counts, `perTurn`)
 - [`TestProductionSchedulerResultRetryHint`](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_test.go) checks that a result hint delays the retry and leaves no uncertain hold.
 - [`TestDaemonClaudeCodeExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) runs against the composed daemon:

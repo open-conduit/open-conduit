@@ -77,7 +77,7 @@ case "$mode" in
   *) state=review ;;
 esac
 echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"},{"type":"tool_use","name":"Read"}]}}'
-printf '{"type":"result","subtype":"success","is_error":false,"result":"all done","session_id":"%s","num_turns":2,"total_cost_usd":%s.%02d,"structured_output":{"state":"%s","summary":"turn %s","prs":[7],"handoff":"note %s"},"modelUsage":{"claude-x":{"inputTokens":%s,"outputTokens":%s,"cacheReadInputTokens":%s,"cacheCreationInputTokens":%s}}}\n' "$session" $((cost/100)) $((cost%100)) "$state" "$turns" "$turns" $((turns*10)) $((turns*5)) $((turns*100)) $((turns*3))
+printf '{"type":"result","subtype":"success","is_error":false,"result":"all done","session_id":"%s","num_turns":2,"total_cost_usd":%s.%02d,"structured_output":{"state":"%s","summary":"turn %s","handoff":"note %s"},"modelUsage":{"claude-x":{"inputTokens":%s,"outputTokens":%s,"cacheReadInputTokens":%s,"cacheCreationInputTokens":%s}}}\n' "$session" $((cost/100)) $((cost%100)) "$state" "$turns" "$turns" $((turns*10)) $((turns*5)) $((turns*100)) $((turns*3))
 `
 
 // memStore is a small serializable public-contract store: namespaced KV plus
@@ -291,16 +291,24 @@ func newHarness(t *testing.T) *harness {
 
 func (h *harness) executor() *claudecode.Executor {
 	h.t.Helper()
+	return h.executorWith(func(*claudecode.Options) {})
+}
+
+// executorWith is executor with the options changed by set.
+func (h *harness) executorWith(set func(*claudecode.Options)) *claudecode.Executor {
+	h.t.Helper()
 	bin := filepath.Join(h.root, "bin")
 	_ = os.MkdirAll(bin, 0o700)
-	e, err := claudecode.New(claudecode.Options{
+	o := claudecode.Options{
 		StateDir: h.state, Store: h.store, Artifacts: h.art, ToolbeltDir: bin,
 		Environ: func() []string {
 			return []string{"PATH=" + os.Getenv("PATH"), "HOME=" + h.root, "CLAUDE_CONFIG_DIR=" + h.config, "CLAUDECODE=1", "CLAUDE_CODE_ENTRYPOINT=cli", "ANTHROPIC_API_KEY=ambient", "UNRELATED=x"}
 		},
 		Report: h.reports.add, Now: h.clock.Now,
 		Grace: 300 * time.Millisecond, PollInterval: 20 * time.Millisecond,
-	})
+	}
+	set(&o)
+	e, err := claudecode.New(o)
 	if err != nil {
 		h.t.Fatal(err)
 	}
@@ -315,7 +323,7 @@ func (h *harness) mode(m string) {
 }
 
 func (h *harness) bindingConfig(extra map[string]any) json.RawMessage {
-	cfg := map[string]any{"binary": h.binary, "env": map[string]string{"FAKE_DIR": h.fake}}
+	cfg := map[string]any{"binary": h.binary, "playbook": "work-issue", "env": map[string]string{"FAKE_DIR": h.fake}}
 	for k, v := range extra {
 		cfg[k] = v
 	}
@@ -401,7 +409,6 @@ func waitFor(t *testing.T, what string, fn func() bool) {
 type outcomeData struct {
 	Status     string             `json:"status"`
 	Reason     string             `json:"reason"`
-	PRs        []int              `json:"prs"`
 	Kind       string             `json:"kind"`
 	Models     []string           `json:"models"`
 	ModelCalls int                `json:"model_calls"`

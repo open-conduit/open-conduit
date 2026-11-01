@@ -67,9 +67,6 @@ Every turn ends with a status (the structured result Open Conduit asks for):
   - `done`: everything the thread asked for is handled and only a merge or close is left.
   - `finished`: the issue closed, on its own or with its PR. An issue still open after its PR merged or closed isn't finished (see Later turns).
 - `summary`: what the turn did, in one line.
-- `prs`: every PR number that belongs to this issue, once there is one.
-- `preview`: the preview URL a checks event gave, if any.
-- `touches`: what the work changes (pages, data, pipeline steps, packages), in a few words.
 - `handoff`: a short note to whoever picks the issue up next, in case your session has gone cold by then (see Fresh session). Write it every turn. Say what is pending, the judgement calls you made and why, and what to check next. Leave out what the issue, the PR and git already show.
 
 Open Conduit sets the issue's status labels from `state`; never change those yourself.
@@ -111,7 +108,7 @@ If `github.pr.list` already shows an open PR, you're taking over from an earlier
 
 - Push the branch (`git push -u origin HEAD`, or the remote the project's rules name), then `github.pr.create` with a `title` and a `body` saying what changed and anything from the issue you didn't do. The operation adds the line that links the PR to the issue. When the issue takes several PRs, pass `"closes_issue": false` on every one but the last, so merging it leaves the issue open.
 - Post an update on the issue with `github.issue.comment` straight away, so the owner isn't left waiting on the checks to hear from you: the PR's link, that its checks are running, a short account of what you did, and anything they need to act on (a step only a person can take, such as a secret to add or a setting to change, a decision, anything you couldn't do).
-- Don't wait for the checks. End the turn with `building`, the PR number in `prs` and `touches` filled in. Open Conduit resumes you when every check on the PR's head has finished, with the result, and with a preview URL when the project has set one up.
+- Don't wait for the checks. End the turn with `building`. Open Conduit resumes you when every check on the PR's head has finished, with the result, and with a preview URL when the project has set one up.
 
 ### 5. Report on the issue
 

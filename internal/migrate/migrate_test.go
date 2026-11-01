@@ -304,6 +304,9 @@ projects:
 	if find(w["bindings"], "name", "agent")["config"].(map[string]any)["branch"] != "agent/issue-{number}" {
 		t.Fatal("default GitHub branch")
 	}
+	if find(w["bindings"], "name", "agent")["config"].(map[string]any)["playbook"] != "work-issue" {
+		t.Fatal("the GitHub agent binding names no work-issue playbook")
+	}
 	if !hasItem(res, Unsupported, "projects.lin", "tracker connection type") || !hasItem(res, Info, "settings.tunnel", "reconcile-only") {
 		t.Fatalf("report: %+v", res.Items)
 	}

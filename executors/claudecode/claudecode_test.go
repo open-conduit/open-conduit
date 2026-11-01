@@ -134,6 +134,44 @@ func TestHostTokenFile(t *testing.T) {
 	}
 }
 
+// TestPlaybookDefault checks that a binding naming no playbook starts its
+// turns on the rendered input alone, with no skill, unless the host gives
+// the executor a default playbook. The control: a binding that names one
+// starts on it whatever the default.
+func TestPlaybookDefault(t *testing.T) {
+	for _, c := range []struct {
+		name, playbook, def, want, setting string
+	}{
+		{"none", "", "", "12\n\n## Already waiting", "-"},
+		{"dash", "-", "work-issue", "12\n\n## Already waiting", "-"},
+		{"host default", "", "work-issue", "/open-conduit:work-issue 12\n\n## Already waiting", "work-issue"},
+		{"named", "review-pr", "work-issue", "/open-conduit:review-pr 12\n\n## Already waiting", "review-pr"},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			h := newHarness(t)
+			h.mode("review")
+			e := h.executorWith(func(o *claudecode.Options) { o.DefaultPlaybook = c.def })
+			r, _ := h.request("work/1", "exec-1", 1, map[string]any{"playbook": c.playbook})
+			h.run(e, r)
+			if p := h.prompts(); len(p) != 1 || !strings.HasPrefix(p[0], c.want) {
+				t.Fatalf("prompt %q, want prefix %q", p, c.want)
+			}
+			if got := settingOf(e.Settings(r.Context.Config.Data), "playbook"); got != c.setting {
+				t.Fatalf("playbook setting %v", got)
+			}
+		})
+	}
+}
+
+func settingOf(s []extension.Setting, name string) any {
+	for _, x := range s {
+		if x.Name == name {
+			return x.Value
+		}
+	}
+	return nil
+}
+
 // TestTurnInvocationEnvironmentAndResult checks the first turn: a fresh
 // session on the work-issue playbook with the rendered input, the MCP
 // toolbelt configuration (credential in a replaceable file, never in
@@ -154,7 +192,7 @@ func TestTurnInvocationEnvironmentAndResult(t *testing.T) {
 		t.Fatalf("outcome %+v", res.Outcome)
 	}
 	d := dataOf(t, res)
-	if d.Status != "review" || d.Reason != "status" || d.PRs[0] != 7 || d.Kind != "start" || d.ToolCalls != 2 || d.ModelCalls != 2 || d.Models[0] != "claude-x" {
+	if d.Status != "review" || d.Reason != "status" || d.Kind != "start" || d.ToolCalls != 2 || d.ModelCalls != 2 || d.Models[0] != "claude-x" {
 		t.Fatalf("data %+v", d)
 	}
 	if strings.Contains(string(res.Outcome.Data.Data), "note 1") || strings.Contains(string(res.Outcome.Data.Data), "session") {

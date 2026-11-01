@@ -13,7 +13,7 @@ import (
 )
 
 // PluginName is the plugin the playbooks are loaded as, and so the prefix of
-// their skills: a turn starts with /open-conduit:work-issue 12.
+// their skills: a turn starts with /open-conduit:<playbook> <args>.
 const PluginName = "open-conduit"
 
 // Renderer turns accepted Events into the markdown a turn reads. The default

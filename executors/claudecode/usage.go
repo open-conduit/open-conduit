@@ -125,7 +125,7 @@ func Usage(ctx context.Context, o UsageOptions) ([]UsageWindow, error) {
 	return out, nil
 }
 
-// Version runs `<binary> --version` (the doctor check that Claude Code is
+// Version runs `<binary> --version` (the doctor probe that Claude Code is
 // installed). It starts no session.
 func Version(ctx context.Context, binary string) (string, error) {
 	if binary == "" {

@@ -37,15 +37,15 @@ func gitConfig(env []string, pairs ...[2]string) []string {
 	return setEnv(env, "GIT_CONFIG_COUNT="+strconv.Itoa(n+len(pairs)))
 }
 
-// gitCredentialHelper reports whether env's GIT_CONFIG entries already
-// set a credential helper (credential.helper or credential.<url>.helper).
-func gitCredentialHelper(env []string) bool {
+// generalCredentialHelper reports whether env's GIT_CONFIG entries already
+// set git's general credential.helper (one for a single URL,
+// credential.<url>.helper, doesn't count).
+func generalCredentialHelper(env []string) bool {
 	v, _ := lookupEnv(env, "GIT_CONFIG_COUNT")
 	n, _ := strconv.Atoi(v)
 	for i := 0; i < n; i++ {
 		k, _ := lookupEnv(env, fmt.Sprintf("GIT_CONFIG_KEY_%d", i))
-		k = strings.ToLower(k)
-		if strings.HasPrefix(k, "credential.") && strings.HasSuffix(k, ".helper") || k == "credential.helper" {
+		if strings.EqualFold(k, "credential.helper") {
 			return true
 		}
 	}

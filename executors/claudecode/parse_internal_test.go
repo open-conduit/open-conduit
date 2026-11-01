@@ -35,8 +35,8 @@ func TestParse(t *testing.T) {
 	if !p.OK || p.Text != "Swept 3" {
 		t.Fatalf("%+v", p)
 	}
-	p = parse(`{"type":"result","subtype":"success","result":"x","structured_output":{"state":"review","summary":"did it","prs":[7],"handoff":"pending: the colour"}}`, "", &ok, true, now)
-	if !p.OK || p.Status.State != StateReview || p.Status.PRs[0] != 7 || p.Status.Handoff != "pending: the colour" {
+	p = parse(`{"type":"result","subtype":"success","result":"x","structured_output":{"state":"review","summary":"did it","handoff":"pending: the colour"}}`, "", &ok, true, now)
+	if !p.OK || p.Status.State != StateReview || p.Status.Handoff != "pending: the colour" {
 		t.Fatalf("%+v", p)
 	}
 }

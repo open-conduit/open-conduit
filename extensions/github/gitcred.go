@@ -109,12 +109,22 @@ func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessag
 }
 
 // RunEnvironment is the run environment layer (extension.RunEnvironment)
-// for a Work whose binding's connection sets git "bot": the toolbelt's
-// `os git-credential` as git's only credential helper (the operator's
-// keychain or gh helper, which git would otherwise ask first, cleared),
-// signing off, and the App's bot user as author and committer. The
+// for a Work in a scope with a repository this extension knows. The
 // connection is the binding's own `github` connection (r.Connection) when
 // it names one, else the entry's, so its git setting and its App decide.
+//
+// With git "bot": the toolbelt's `os git-credential` as git's only
+// credential helper (the operator's keychain or gh helper, which git would
+// otherwise ask first, cleared), signing off, and the App's bot user as
+// author and committer.
+//
+// Otherwise: a credential helper for the GitHub web host that hands git a
+// static token the run has in GH_TOKEN or GITHUB_TOKEN (a binding's
+// personal access token), and says nothing when it has neither, so git goes
+// on to its next helper. Git asks the operator's own helpers first, so on
+// the host it is a fallback; in a container, which has none of them, it is
+// how git reaches the repository with that token.
+//
 // Every other run gets nothing, and so does a Work whose scope has no
 // single repository this extension knows.
 func (t *Tools) RunEnvironment(ctx context.Context, r extension.RunEnvironmentRequest) (map[string]string, error) {
@@ -131,7 +141,10 @@ func (t *Tools) RunEnvironment(ctx context.Context, r extension.RunEnvironmentRe
 		return nil, fmt.Errorf("github git: binding connection %s: %w", r.Connection, err)
 	}
 	if !client.GitBot() {
-		return nil, nil
+		return map[string]string{
+			"GIT_CONFIG_COUNT": "1",
+			"GIT_CONFIG_KEY_0": "credential.https://" + client.Host() + ".helper", "GIT_CONFIG_VALUE_0": TokenHelper,
+		}, nil
 	}
 	id, err := client.GitIdentity(ctx, src.Settings.Repo)
 	if err != nil {
@@ -147,6 +160,11 @@ func (t *Tools) RunEnvironment(ctx context.Context, r extension.RunEnvironmentRe
 		"GIT_COMMITTER_NAME": id.Name, "GIT_COMMITTER_EMAIL": id.Email,
 	}, nil
 }
+
+// TokenHelper is the git credential helper RunEnvironment sets for the
+// GitHub web host on a run without git "bot": it answers `get` with the
+// run's GH_TOKEN (else GITHUB_TOKEN), and with nothing when it has neither.
+const TokenHelper = `!f() { test "$1" = get || exit 0; t="${GH_TOKEN:-$GITHUB_TOKEN}"; test -n "$t" || exit 0; echo username=x-access-token; echo "password=$t"; }; f`
 
 // RevokeGitTokens revokes every git token minted for the execution, once
 // its segment has ended. One that GitHub couldn't be told about is kept,

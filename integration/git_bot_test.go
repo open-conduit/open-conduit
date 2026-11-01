@@ -280,7 +280,9 @@ func (l *gitBotLab) runAs(t *testing.T, e *claudecode.Executor, exec domain.ID, 
 	if err != nil {
 		t.Fatal(err)
 	}
-	if want := bot || connection != ""; want != (layer != nil) {
+	// A bot run gets the bot's identity; any other only the static token
+	// helper for the web host, which says nothing without a token.
+	if want := bot || connection != ""; want != (layer["GIT_AUTHOR_NAME"] != "") || !want && (layer["GIT_CONFIG_COUNT"] != "1" || layer["GIT_CONFIG_VALUE_0"] != gh.TokenHelper) {
 		t.Fatalf("bot %v, connection %q, run environment %v", bot, connection, layer)
 	}
 	ctx := extension.ExecutionContext{Config: domain.Payload{Data: cfg}, ToolbeltEndpoint: endpoint, ToolbeltToken: token, ToolbeltTokenFile: tokenFile,

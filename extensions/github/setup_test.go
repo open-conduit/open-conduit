@@ -48,6 +48,9 @@ func TestGitHubScopeConfig(t *testing.T) {
 	if !strings.Contains(string(r.Scope), `"github.git.credential"`) {
 		t.Fatalf("a workspace binding is not granted github.git.credential: %s", r.Scope)
 	}
+	if s.Bindings[0]["config"].(map[string]any)["playbook"] != gh.Playbook {
+		t.Fatalf("the agent binding names no playbook: %+v", s.Bindings[0])
+	}
 	if len(r.Connections) != 1 || !strings.Contains(string(r.Connections[0]), `"cmd:gh auth token"`) {
 		t.Fatalf("connection: %s", r.Connections)
 	}

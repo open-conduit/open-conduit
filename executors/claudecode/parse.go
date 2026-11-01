@@ -10,19 +10,18 @@ import (
 	"time"
 )
 
-// Status is the structured result every work-issue turn ends with (Open
-// Supervisor's status schema, unchanged so the playbook keeps working).
+// Status is the structured result a structured turn ends with: the state
+// the turn leaves the Work in, a one-line summary and, optionally, a note
+// for a fresh session and a write-up for the operator. What each state means
+// for a particular kind of Work is the playbook's to say.
 type Status struct {
 	State   string `json:"state"`
 	Summary string `json:"summary"`
-	PRs     []int  `json:"prs,omitempty"`
-	Preview string `json:"preview,omitempty"`
-	Touches string `json:"touches,omitempty"`
 	Handoff string `json:"handoff,omitempty"`
 	Report  string `json:"report,omitempty"`
 }
 
-// Turn states a status may report.
+// Turn states a status may report (domain.TurnStates).
 const (
 	StateBuilding = "building"
 	StateReview   = "review"
@@ -32,24 +31,27 @@ const (
 )
 
 // StatusSchema is the JSON schema a structured turn is asked to end with.
+// Its descriptions say what each state means to Open Conduit and nothing
+// about any one kind of Work: the playbook says what they mean for its own.
 var StatusSchema = map[string]any{
 	"type": "object",
 	"properties": map[string]any{
 		"state": map[string]any{
 			"type": "string",
 			"enum": []string{StateBuilding, StateReview, StateHelp, StateDone, StateFinished},
-			"description": "building: you pushed and are waiting for checks or a preview. review: something is up for the owner. " +
-				"help: you asked the owner something you cannot go on without. done: everything asked is handled and only a merge or close is left. " +
-				"finished: the issue's work is over (the issue closed, or the PR merged or closed where the playbook says that ends it) and you have cleaned up.",
+			"description": "The state this turn leaves the work in; your playbook says which fits. " +
+				"building: you started something that will report back, and you are resumed when it does. " +
+				"review: something is ready for the owner to look at. " +
+				"help: you asked the owner something you cannot go on without. " +
+				"done: everything asked is handled and only the owner's last step is left. " +
+				"Each of these keeps the work open, and you are resumed with whatever arrives next. " +
+				"finished: the work is over and you have cleaned up; it completes, and nothing resumes it.",
 		},
 		"summary": map[string]any{"type": "string", "description": "What this turn did, in one line."},
-		"prs":     map[string]any{"type": "array", "items": map[string]any{"type": "integer"}, "description": "Every PR number that belongs to this issue."},
-		"preview": map[string]any{"type": "string", "description": "The deploy preview URL, once known."},
-		"touches": map[string]any{"type": "string", "description": "What the work changes (pages, data, pipeline steps), in a few words, for other agents."},
-		"handoff": map[string]any{"type": "string", "description": "A note to the session that picks this issue up next if this one has gone cold: " +
-			"what is pending, the judgement calls you made and why, and what to check next. Intent only; the issue, the PR and git hold the facts."},
+		"handoff": map[string]any{"type": "string", "description": "A note to the session that picks this work up next if this one has gone cold: " +
+			"what is pending, the judgement calls you made and why, and what to look at next. Intent only; leave out what the work's own record already shows."},
 		"report": map[string]any{"type": "string", "description": "Optional: a write-up for the operator, in Markdown, shown with this turn in the run's history. " +
-			"Use it for findings too long for the one-line summary that no issue or comment holds; leave it out otherwise."},
+			"Use it for findings too long for the one-line summary that aren't written down anywhere else; leave it out otherwise."},
 	},
 	"required":             []string{"state", "summary"},
 	"additionalProperties": false,
