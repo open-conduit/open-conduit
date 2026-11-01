@@ -230,22 +230,3 @@ func TestSetupCommand(t *testing.T) {
 		t.Fatal("unknown agent accepted")
 	}
 }
-
-// Every operation the setup playbook names is one the setup package
-// declares or core registers, or a probe a session can run: what
-// `open-conduit extension check` checks for every package. The setup
-// package's own probes run inside its process, so the check cannot see
-// them offline and they are allowed by name.
-func TestSetupPlaybookNamesRegisteredOperations(t *testing.T) {
-	if g := setupPlaybook(t, "open-conduit"); !strings.HasPrefix(g, "---\nname: setup\n") {
-		t.Fatal("the setup playbook has no frontmatter")
-	}
-	r := bootstrap.ExtensionOps("test", "").Check(setupPackage(t), []string{"setup.fs.list", "setup.tools"})
-	if !r.OK || len(r.Findings) != 0 {
-		t.Fatalf("extension check on the setup package: %+v", r.Findings)
-	}
-	// The check does flag a name the package neither declares nor allows.
-	if r := bootstrap.ExtensionOps("test", "").Check(setupPackage(t), nil); r.OK || len(r.Findings) != 2 || r.Findings[0].Code != "unknown_operation" {
-		t.Fatalf("extension check without the package's probes: %+v", r.Findings)
-	}
-}

@@ -156,7 +156,7 @@ acme/
 - **the playbooks:** the declared directory exists and holds playbooks, and every `` `ns.op` `` or `"ns.op"` a playbook names, in a namespace the package or core owns, is an operation the package declares or core registers, an event family the package declares, or a setup probe the host runs. Names in other namespaces, such as config paths and file names, are left alone. A package's own setup probes run inside its process, so the check can't see them; name them with `--allow`;
 - **`certification.json`:** it parses, and an inline fixture has an ingress case when an extension type takes ingress, an executor case naming a declared executor when there is one, and route and operation cases only for declared handlers and operations. A fixture printed by a command is left to `certify`.
 
-Run it in the package's CI before `certify`. It is what `TestSetupPlaybookNamesRegisteredOperations` runs on the setup package.
+Run it in the package's CI before `certify`. The setup package's own `make check` runs it, with `--allow setup.fs.list,setup.tools` for its probes.
 
 Packaged Go binaries also answer `package-manifest` and `package-certification` (`sdk.PackageCommand`), so the manifest has one source of truth in code. `make packages` builds the first-party packages and the examples into `dist/packages/<name>/` this way.
 
@@ -336,7 +336,7 @@ func TestForecast(t *testing.T) {
 
 ### A config of your own
 
-When a test needs more than the generated scope (connections, several scopes, a binding with grants, the execution token itself), pass the whole config as `extensiontest.Options{Config: ..., Packages: []string{dir}}`. `Options.Packages` are installed under `extensions/<name>` beside it. With your own config there is no generated agent: write one with **`extensiontest.FakeClaude(dir, turns...)`** and name its `Path` as a `claude-code` binding's `binary`. Each launch plays the next `Turn`: its toolbelt `Calls` (`Operation`, `Input`, `RequestID`) through the real `os mcp` server, then a wait for its `Barrier` file if it has one, then the end of the turn with its `State`. `Turn(n)` returns what turn `n` saw once its calls are made, including its toolbelt endpoint and token while the turn holds at its barrier. Each Work needs a fake of its own. The fake is the test binary itself, run again with an environment variable set, so it costs no extra build. The setup assistant's daemon tests (`TestDaemonSetupSession` and `TestDaemonSetupChangeSet`) are written this way, because they test the binding and the agent's token as well as the package.
+When a test needs more than the generated scope (connections, several scopes, a binding with grants, the execution token itself), pass the whole config as `extensiontest.Options{Config: ..., Packages: []string{dir}}`. `Options.Packages` are installed under `extensions/<name>` beside it. With your own config there is no generated agent: write one with **`extensiontest.FakeClaude(dir, turns...)`** and name its `Path` as a `claude-code` binding's `binary`. Each launch plays the next `Turn`: its toolbelt `Calls` (`Operation`, `Input`, `RequestID`) through the real `os mcp` server, then a wait for its `Barrier` file if it has one, then the end of the turn with its `State`. `Turn(n)` returns what turn `n` saw once its calls are made, including its toolbelt endpoint and token while the turn holds at its barrier. Each Work needs a fake of its own. The fake is the test binary itself, run again with an environment variable set, so it costs no extra build. The setup assistant's daemon tests (`TestDaemonSetupSession` and `TestDaemonSetupChangeSet`, in [extension-setup](https://github.com/open-conduit/extension-setup)) are written this way, because they test the binding and the agent's token as well as the package.
 
 ### Running a package while you build it: `open-conduit dev`
 
@@ -441,7 +441,7 @@ A report states:
 - `TestDaemonExtensionPackages` (in `make drill`): CLI install, conflict refusal, offline config check, a workflow end to end in the real daemon, the `validate` hook, configure on apply, no orphans after a daemon kill, restart, and removal refused while in use.
 - Unit tests in `internal/extproc` (install, update, rollback, removal, diagnostics, and `extension check` in `check_test.go`).
 - `TestExtensionNew`: `extension new` writes a repository whose own `make check` passes against this checkout, and refuses a directory that isn't empty.
-- `TestExtensionCheckCommand`: `extension check` through the binary, text and `--json`; `TestSetupPlaybookNamesRegisteredOperations` runs the check on the setup package.
+- `TestExtensionCheckCommand`: `extension check` through the binary, text and `--json`.
 - The first-party in-process suites still run unchanged: Slack and shell keep their in-process registration, and workflows A–D pass (`TestDaemonAllWorkflows`).
 
 ## Provisional decisions for user review
