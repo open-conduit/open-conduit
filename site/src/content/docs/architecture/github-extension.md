@@ -113,7 +113,7 @@ Handler `github` reads only the detached Event, Scope and Work. It finds its ext
   - It does not carry the claimed label, unless it is a reopened generation. A claimed issue with no Work belongs to another owner, which preserves a single owner.
   - Scheduled issues are claimed by the [`github-hold` route](../engineering-tools/#scheduled-holds), never by `github`.
 - **Existing Work** receives these as input: new human comments, reviews with a body, other Works' agent comments, closes, merges, completed checks (passed, failed, none and missing required checks) and merge conflicts.
-- **Never delivered:** edits, unmarked bot comments, this Work's own notes, open-state updates, pending checks and absence.
+- **Never delivered:** edits, unmarked bot comments, this Work's own notes, open-state updates, pending checks and absence. That holds while the Work waits: what doesn't wake a waiting Work reaches it as context at its next turn only when it is input this list would deliver.
 
 Labels influence only this claim decision. Work lifecycle never reads them.
 
@@ -206,7 +206,7 @@ The [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob
 - **Projection volume.** The projector reads every Work in the store on each pass and keeps those in its scope and namespace. That has no high-volume claim.
 - **Unenforced setting.** `settings.admission_limit` (the claimed-per-project cap) is validated but not enforced, and `config check` warns where a config sets it. A scope's `limits.concurrency` does cap how many of its issues have a turn running at once.
 - **Registration lifetime.** Ingress registrations are startup-only (B05). A changed or removed entry, an entry moved to another connection, or its connection moved to another `api_url` reports `restart_required` until the daemon restarts. Other connection changes apply in place (see Configuration).
-- **Pull request Work.** A PR reopened after its Work completed isn't claimed again: the completed Work keeps the PR's key. While a PR's Work waits, its own comments are kept as wait context, as an issue's agent's are, so the next pass sees them, though they never wake it.
+- **Pull request Work.** A PR reopened after its Work completed isn't claimed again: the completed Work keeps the PR's key. While a PR's Work waits, input its route passes on but that doesn't wake it is kept as wait context, as an issue's agent's is, so the next pass sees it; what the route skips, such as pending checks, is not.
 - **Raw deliveries.** `github.delivery` events are non-re-derivable by declaration (`DeliveryLoss`): a raw delivery missed while push is unavailable is lost, though the state it carried is recovered by reconcile. Webhook jobs rely on it; the trade-off is set out under recoverability of trigger families in [scheduled jobs](../schedule-extension/).
 
 ## Related parts

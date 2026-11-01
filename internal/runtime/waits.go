@@ -1133,8 +1133,10 @@ func (s *Scheduler) reconcileSubscriptionInTx(tx storage.Tx, key string, sub *su
 }
 
 // routeWaitingInTx handles predicates before ordinary route policy. It queues
-// unmatched context without making a waiting Work ready.
-func routeWaitingInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.ID) (bool, error) {
+// input that doesn't wake the Work as context without making it ready, unless
+// skip says no route passes it to the Work: then, unless it matches the wait,
+// it is recorded as skip, as routing a Work that isn't waiting would.
+func routeWaitingInTx(tx storage.Tx, now time.Time, limits CausalLimits, id domain.ID, skip *RouteRecord) (bool, error) {
 	a, err := tx.Event(id)
 	if err != nil {
 		return false, err
@@ -1187,6 +1189,9 @@ func routeWaitingInTx(tx storage.Tx, now time.Time, limits CausalLimits, id doma
 	if err = getJSON(tx, waitNamespace, identity(string(active.ID)), &meta); err != nil {
 		return false, err
 	}
+	// A matching input that didn't wake the Work (its wake is blocked) stays
+	// context: it is what the wait is for.
+	skipped := skip != nil && skip.EventID == a.Event.ID && !waitMatches(*active, a) && !timeoutMatches(meta, a)
 	all, err := tx.UnroutedEvents(0, 0)
 	if err != nil {
 		return false, err
@@ -1196,6 +1201,15 @@ func routeWaitingInTx(tx storage.Tx, now time.Time, limits CausalLimits, id doma
 			break
 		}
 		if prior.Routed {
+			continue
+		}
+		if skipped && prior.Event.ID == a.Event.ID {
+			if er := putJSON(tx, routeNamespace, identity(string(skip.EventID)), *skip); er != nil {
+				return false, er
+			}
+			if er := tx.MarkRouted(skip.EventID, "", skip.Policy); er != nil {
+				return false, er
+			}
 			continue
 		}
 		target, er := potentiallyTargets(tx, prior.Event, work)
