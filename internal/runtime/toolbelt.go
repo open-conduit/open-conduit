@@ -519,11 +519,28 @@ func (t *Toolbelt) authorizedInTx(tx storage.Tx, digest string) (tokenRecord, do
 	return record, x, w, state, nil
 }
 
+// notGranted refuses an operation the token does not carry, naming it and
+// where to grant it, so the caller can tell the owner what to add. It is
+// still ErrUnauthorized; only the refusal's words differ from a revoked or
+// mismatched token's. The caller can't use the operation either way, so
+// naming it leaks nothing.
+func notGranted(operation, binding string, scope domain.ID) error {
+	where := "this execution's binding"
+	if binding != "" {
+		where = "binding " + binding
+	}
+	return errors.Join(extension.ErrUnauthorized, &extension.OperationError{Code: "not_granted",
+		Message: fmt.Sprintf("%s isn't granted to %s in scope %s; to allow it, add it to that binding's operations and to the scope's authorization.operations", operation, where, scope)})
+}
+
 // callCode classifies a call result without provider or request text.
 func callCode(err error) string {
+	var op *extension.OperationError
 	switch {
 	case err == nil:
 		return "ok"
+	case errors.As(err, &op) && op.Code == "not_granted":
+		return "not_granted"
 	case errors.Is(err, extension.ErrUnauthorized), errors.Is(err, storage.ErrLeaseLost), errors.Is(err, storage.ErrNotFound):
 		return "unauthorized"
 	case errors.Is(err, extension.ErrUndeclared):
@@ -610,7 +627,7 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 		return out, extension.ErrUndeclared
 	}
 	if !contains(a.Operations, c.Operation) {
-		return out, extension.ErrUnauthorized
+		return out, notGranted(c.Operation, record.Binding, a.ScopeID)
 	}
 	if t.options.Authorize != nil {
 		if e := t.options.Authorize(ctx, AuthorityCheck{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, Binding: record.Binding, Generation: record.Generation, Operation: c.Operation}); e != nil {

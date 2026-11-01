@@ -218,6 +218,15 @@ func TestProductionToolbeltGuidance(t *testing.T) {
 	if got, err = h.belt.Guidance(ctx, narrow, ""); err != nil || len(got) != 0 {
 		t.Fatalf("guidance for an ungranted operation = %q, %v", got, err)
 	}
+	// Calling an operation the token doesn't carry is refused in words that
+	// name it and where to grant it, unlike a revoked or mismatched token,
+	// and is still unauthorized.
+	_, err = h.belt.Call(ctx, narrow, extension.ToolCall{Operation: "fixture.echo"})
+	var refusal *extension.OperationError
+	if !errors.Is(err, extension.ErrUnauthorized) || !errors.As(err, &refusal) || refusal.Code != "not_granted" ||
+		!strings.Contains(refusal.Message, "fixture.echo isn't granted to") || !strings.Contains(refusal.Message, "in scope routing-scope") {
+		t.Fatalf("ungranted operation: %v", err)
+	}
 	long := extension.Operation{Name: "fixture.long", Handler: func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
 		return domain.Payload{}, nil
 	}, Guidance: strings.Repeat("x", extension.MaxGuidance+1)}
