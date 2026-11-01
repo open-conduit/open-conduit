@@ -10,6 +10,7 @@ import (
 )
 
 // Work display (issue #123): what an issue's Work is, for operator views.
+// A PR's own Work shows the PR the same way.
 // An issue Event gives its title, number, author and link; input about one
 // of its PRs adds the PR's link. Input that says nothing new keeps the
 // display as it is.
@@ -41,6 +42,14 @@ func display(w *domain.Work, e domain.Event) *domain.WorkDisplay {
 		var p PullPayload
 		if json.Unmarshal(e.Data.Data, &p) != nil || p.Number <= 0 {
 			return nil
+		}
+		if w == nil || w.Kind == WorkKindPull {
+			// A PR's own Work is the PR: its title, number and author.
+			next := cur
+			next.Title = extension.Clip(p.Title, extension.MaxDisplayTitle)
+			next.Ref = fmt.Sprintf("#%d", p.Number)
+			next.Requester = extension.Clip(p.Author, extension.MaxDisplayRequester)
+			return changed(w, withLink(next, fmt.Sprintf("PR #%d", p.Number), p.URL))
 		}
 		return changed(w, withLink(cur, fmt.Sprintf("PR #%d", p.Number), p.URL))
 	case SchemaChecks:

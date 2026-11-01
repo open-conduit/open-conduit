@@ -218,6 +218,66 @@ func IssueKey(number int, generation string) string {
 // PullKey is the correlation external ID of a PR no tracker issue claims.
 func PullKey(number int) string { return "pr/" + strconv.Itoa(number) }
 
+// PullRequestKey is the correlation external ID of a PR's own Work: the key
+// the copies of its observations carry (Settings.TrackPulls), apart from the
+// issue key (or `pr/N`) its originals carry, which an issue's Work may own.
+func PullRequestKey(number int) string { return "pull_request/" + strconv.Itoa(number) }
+
+var pullRequestKeyPattern = regexp.MustCompile(`^pull_request/([0-9]+)$`)
+
+// ParsePullRequestKey extracts the PR number from a PullRequestKey.
+func ParsePullRequestKey(id string) (int, bool) {
+	m := pullRequestKeyPattern.FindStringSubmatch(id)
+	if m == nil {
+		return 0, false
+	}
+	return parseNumber(m[1])
+}
+
+// pullItemPrefix replaces the `pr/` of a copied item's ID. Copies sort
+// after every original, and a PR's copy before the copies of its comments,
+// so a newly observed PR (which may create Work) precedes them.
+const pullItemPrefix = "pull_request/"
+
+// withPullCopies appends, when the entry tracks pull requests, a copy of
+// every observation of a PR (its state, comments, inline comments, reviews,
+// checks and conflicts): the same type and payload under the PR's own key.
+// Every PR family is copied alike; what to make of them is the consumer's
+// choice. A copy's identity derives from the original's, so push and
+// reconcile agree on it as they do on the original.
+func (n *normalizer) withPullCopies(obs []extension.Observation) ([]extension.Observation, error) {
+	if !n.s.TrackPulls {
+		return obs, nil
+	}
+	out := obs
+	for _, o := range obs {
+		number, rest, ok := pullItem(o.ID)
+		if !ok {
+			continue
+		}
+		c, err := n.observation(pullItemPrefix+strconv.Itoa(number)+rest, o.Event.Type, domain.CorrelationKey{Source: n.s.Namespace, ExternalID: PullRequestKey(number)},
+			o.Event.OccurredAt, o.Event.Data.Schema, json.RawMessage(o.Event.Data.Data))
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+var pullItemPattern = regexp.MustCompile(`^pr/([0-9]+)(/.*)?$`)
+
+// pullItem splits a PR-scoped item ID (`pr/N`, `pr/N/...`) into the PR's
+// number and the rest.
+func pullItem(item string) (int, string, bool) {
+	m := pullItemPattern.FindStringSubmatch(item)
+	if m == nil {
+		return 0, "", false
+	}
+	n, ok := parseNumber(m[1])
+	return n, m[2], ok
+}
+
 var issueKeyPattern = regexp.MustCompile(`^issue/([0-9]+)(?:/generation/(reopen-[0-9]+))?$`)
 
 // ParseIssueKey extracts the issue number and generation from an external ID.
@@ -545,8 +605,9 @@ func (n *normalizer) conflictsObservation(ctx context.Context, p rawPull) (exten
 		return extension.Observation{}, false, nil
 	}
 	key, ref, err := n.pullKey(ctx, p)
-	if err != nil || ref == nil {
-		// Only a PR that belongs to an issue has an agent to tell.
+	if err != nil || ref == nil && !n.s.TrackPulls {
+		// Only a PR that belongs to an issue has an agent to tell, unless
+		// the entry tracks every PR.
 		return extension.Observation{}, false, err
 	}
 	at, err := n.c.CommitTime(ctx, n.s.Repo, p.Head.SHA)

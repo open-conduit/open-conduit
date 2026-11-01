@@ -548,3 +548,84 @@ func TestEditedCommentIsANewVersion(t *testing.T) {
 	}
 	_ = domain.ID("")
 }
+
+// With track_pull_requests, each PR state and each comment, inline comment,
+// review and check on a PR is also observed under the PR's own key, the
+// same way by push and reconcile. Nothing of an issue's is, and an entry
+// without the option observes no copies.
+func TestCopiesOfPullRequestsForClaiming(t *testing.T) {
+	f := newFixture(t, `,"track_pull_requests":true`)
+	fk := f.fake
+	issue := fk.OpenIssue("Header", "wobbles", alice, "bug")
+	fk.AddComment(issue, alice, "please make it blue")
+	pr := fk.OpenPull("Blue header", "Closes #1", "agent/issue-1", "sha1", alice)
+	review := fk.AddReview(pr, alice, "CHANGES_REQUESTED", "rename it")
+	inline := fk.AddReviewComment(pr, alice, "nit", "header.go", 12)
+	prComment := fk.AddComment(pr, alice, "looks close")
+	fk.SetCheck("sha1", "build", "completed", "success")
+	p := strconv.Itoa(pr)
+	scanned := f.scan(t)
+	cases := []struct {
+		label, event, item string
+		body               []byte
+	}{
+		{"pr", "pull_request", "pr/" + p, fk.PullHook("opened", pr)},
+		{"review", "pull_request_review", "pr/" + p + "/review/" + strconv.FormatInt(review, 10), fk.ReviewHook("submitted", pr, review)},
+		{"inline", "pull_request_review_comment", "pr/" + p + "/review_comment/" + strconv.FormatInt(inline, 10), fk.ReviewCommentHook("created", inline)},
+		{"pr conversation", "issue_comment", "pr/" + p + "/comment/" + strconv.FormatInt(prComment, 10), fk.CommentHook("created", prComment)},
+	}
+	for i, tc := range cases {
+		orig, copied := scanned[tc.item], scanned["pull_request/"+strings.TrimPrefix(tc.item, "pr/")]
+		if key(orig) != "issue/1" || key(copied) != gh.PullRequestKey(pr) {
+			t.Fatalf("%s: original keyed %s, copy keyed %s", tc.label, key(orig), key(copied))
+		}
+		if copied.Event.Type != orig.Event.Type || string(copied.Event.Data.Data) != string(orig.Event.Data.Data) || copied.Event.ID == orig.Event.ID {
+			t.Fatalf("%s: the copy is not the original under its own identity: %+v", tc.label, copied.Event)
+		}
+		res := f.push(t, tc.event, "d-"+strconv.Itoa(i), tc.body)
+		if len(res.Observations) != 2 {
+			t.Fatalf("%s: push observed %d, want the original and its copy", tc.label, len(res.Observations))
+		}
+		sameIdentity(t, tc.label, res.Observations[0], orig)
+		sameIdentity(t, tc.label+" copy", res.Observations[1], copied)
+	}
+	// Every PR family is copied alike, checks included; nothing of an issue's.
+	if c := scanned["pull_request/"+p+"/checks"]; key(c) != gh.PullRequestKey(pr) || c.Event.Type != gh.TypeChecksPassed {
+		t.Fatalf("checks copy: %+v", c.Event)
+	}
+	for item := range scanned {
+		if strings.HasPrefix(item, "pull_request/issue") {
+			t.Fatalf("%s copied", item)
+		}
+	}
+	plain := newFixture(t, "")
+	plain.fake.OpenPull("Chore", "", "chore", "sha2", alice)
+	for item := range plain.scan(t) {
+		if strings.HasPrefix(item, "pull_request/") {
+			t.Fatalf("%s observed without track_pull_requests", item)
+		}
+	}
+}
+
+// A tracking entry observes conflicts on any open PR, not only one that
+// belongs to an issue, and copies them under the PR's own key.
+func TestTrackedPullConflictsWithoutAnIssue(t *testing.T) {
+	f := newFixture(t, `,"track_pull_requests":true`)
+	pr := f.fake.OpenPull("Bump deps", "", "chore/deps", "sha9", alice)
+	no := false
+	f.fake.SetMergeable(pr, &no)
+	scanned := f.scan(t)
+	p := strconv.Itoa(pr)
+	if o := scanned["pr/"+p+"/conflicts"]; key(o) != "pr/"+p || o.Event.Type != gh.TypePullConflicts {
+		t.Fatalf("conflicts: %+v", o.Event)
+	}
+	if o := scanned["pull_request/"+p+"/conflicts"]; key(o) != gh.PullRequestKey(pr) {
+		t.Fatalf("conflicts copy: %+v", o.Event)
+	}
+	plain := newFixture(t, "")
+	pr = plain.fake.OpenPull("Bump deps", "", "chore/deps", "sha9", alice)
+	plain.fake.SetMergeable(pr, &no)
+	if _, ok := plain.scan(t)["pr/"+strconv.Itoa(pr)+"/conflicts"]; ok {
+		t.Fatal("conflicts observed on a PR with no issue and no tracking")
+	}
+}

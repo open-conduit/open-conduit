@@ -1,9 +1,9 @@
 ---
 title: "GitHub ingress, routing policy and projections"
-description: "How the GitHub extension observes issues, pull requests, comments and checks, claims issues as Work and projects status back to GitHub."
+description: "How the GitHub extension observes issues, pull requests, comments and checks, claims issues and pull requests as Work and projects status back to GitHub."
 ---
 
-The first-party GitHub extension observes a repository's issues, pull requests, comments, reviews and checks, claims admitted issues as Work, and projects each Work's status back to GitHub as labels, marked comments and reactions. It lives in [`extensions/github`](https://github.com/open-conduit/open-conduit/tree/main/extensions/github) and is built against the public contracts: [B03 ingress](../extensions/), [B04 routing](../runtime-semantics/) and [B02 storage/KV](../domain-storage/). It imports only public packages, and the runtime does not import it. [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/github.go) registers it with the daemon.
+The first-party GitHub extension observes a repository's issues, pull requests, comments, reviews and checks, claims admitted issues (and, when asked, each open PR) as Work, and projects each Work's status back to GitHub as labels, marked comments and reactions. It lives in [`extensions/github`](https://github.com/open-conduit/open-conduit/tree/main/extensions/github) and is built against the public contracts: [B03 ingress](../extensions/), [B04 routing](../runtime-semantics/) and [B02 storage/KV](../domain-storage/). It imports only public packages, and the runtime does not import it. [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/github.go) registers it with the daemon.
 
 The agent-facing tools, waits and scheduled holds built on this extension are described in [engineering tools, waits and playbooks](../engineering-tools/); the webhook listener, tunnels, doctor checks and operator controls in [operator setup](../operator-setup/).
 
@@ -37,8 +37,9 @@ A `github` extension entry (an ingress entry: `config.scope` must be the contain
 | `webhook_secret` | Names a selected scope secret. |
 | `base_branch` | The branch PRs target (default: the repository's). |
 | `no_checks_minutes` | Default 10; `-1` disables. How long a PR head with no checks waits before `github.checks.none`, and how long a head without a check the base branch requires is held before `github.checks.missing`. With `-1` such a head stays pending. |
+| `track_pull_requests` | Default false. Also observes everything about each PR (its state, comments, reviews, checks and conflicts) under the PR's own key, for a route that [claims pull requests](#pull-request-work). |
 
-The entry also needs a `connection`. A route uses handler `github`.
+The entry also needs a `connection`. A route uses handler `github`, with optional config `{"claim": "issues"}` (the default) or `{"claim": "pull_requests"}`, which claims [pull request Work](#pull-request-work); `"drafts": true` lets a `pull_requests` route claim draft PRs as well.
 
 ## Client and transport
 
@@ -74,7 +75,8 @@ Every other run gets nothing, including one whose binding's own connection leave
 | `github.pull_request.open`, `.closed`, `.merged` | `pr/N` | The tracker issue the PR belongs to, else `pr/N` |
 | `github.comment.human`, `.bot`, `.agent` (conversation, inline and review; `kind` in the payload) | `issue/N/comment/ID`, `pr/N/comment/ID`, `pr/N/review_comment/ID`, `pr/N/review/ID` | Their issue or PR's key |
 | `github.checks.pending`, `.passed`, `.failed`, `.none`, `.missing` | `pr/N/checks` | The PR's key |
-| `github.pull_request.conflicts` | `pr/N/conflicts` | The tracker issue the PR belongs to (a PR with no issue is never observed) |
+| `github.pull_request.conflicts` | `pr/N/conflicts` | The tracker issue the PR belongs to, else `pr/N` (a PR with no issue is observed only with `track_pull_requests`) |
+| PR copies (`track_pull_requests`): every PR family above | `pull_request/N`, `pull_request/N/comment/ID`, `pull_request/N/review/ID`, `pull_request/N/review_comment/ID`, `pull_request/N/checks`, `pull_request/N/conflicts` | `pull_request/N` |
 
 Push and reconcile share one normalizer. The observation version hashes the whole normalized envelope (type, key, occurrence time, payload). Equal external state from either transport therefore has the same version and delivery ID (`item@version`), and B02 deduplication keeps the first accepted envelope. Any difference is a new version, so the runtime's canonical-identity check can never wedge a source. Types name observed state, not webhook actions, because reconcile sees state. Author class is in the type, so a Wait can filter out agent and bot notes without a payload predicate.
 
@@ -84,11 +86,13 @@ The issue payload deliberately omits `updated_at`, comment counts and the projec
 
 **PR attachment.** A PR, and every comment, review and check on it, is keyed to its tracker issue. The issue is found from the branch pattern first, then from a closing or reference keyword in the PR body. A shared tracker accepts only `owner/repo#N` naming it. Deriving the key deterministically means no route has to attach keys, and PR state changes reach the issue's Work directly. A reference to a missing issue falls back to `pr/N`.
 
+**PR copies.** With `track_pull_requests`, every observation of a PR (its state, comments, inline comments, reviews, checks and conflicts: every item under `pr/N`) is emitted twice: once under the key above, and once more, with the same type and payload, under the PR's own key `pull_request/N`, with the item's `pr/` replaced by `pull_request/`. The copy is built from the original, so push and reconcile agree on it in the same way. An issue's Work owns the issue key and the PR's Work owns the PR's key, so each hears the PR's news without either taking a key from the other. Every PR family is copied alike, so the extension never decides which of a PR's events matter to whoever consumes them; nothing of an issue's is copied. Copies sort after every original, and a PR's copy before its comments' copies.
+
 **Push.** `VerifyDelivery` checks `X-Hub-Signature-256` (HMAC-SHA256, constant time; an empty secret never verifies) before parsing. It wraps GitHub's event name and delivery GUID, which travel in headers, into the Delivery body (`application/vnd.open-conduit.github-delivery+json`). `WebhookHandler` maps outcomes to HTTP statuses: 202 only after the runtime durably accepted the delivery, 401 for a bad signature and 503 when the delivery was not accepted. The listener and tunnel that expose it are described in [operator setup](../operator-setup/#webhooks-tunnels-and-reconcile-only-operation). Without them the daemon runs reconcile-only, which loses only latency.
 
 Push makes read-only service calls for generation history, PR details and aggregate checks, and no coordination writes. When check runs are refused (a fine-grained token cannot hold Checks), the aggregate uses the head's Actions workflow runs, else statuses only (see [engineering tools](../engineering-tools/#checks-timing)). A review without a body is never observed. GitHub wraps every inline comment and reply in one, the agent's own included, so observing it as a human comment would wake waiting agents in a loop. Check events re-read the aggregate state of each open PR whose head is the delivery's commit, exactly as reconcile evaluates it. A status event finds its PRs through `commits/{sha}/pulls`.
 
-**Reconcile.** GitHub has no snapshot token. A generation lists every issue and every PR in stable creation order, so pagination cannot repeat an item; a deletion can only skip one. It observes open items and items closed within the horizon, then the repository's conversation and inline comments updated within the horizon. Reviews and checks are read for each listed PR. Each open PR that belongs to an issue is also read on its own, because only that read carries `mergeable` and GitHub sends no webhook when a PR picks up conflicts (the base branch moving under it). When GitHub says it cannot merge, the PR is `github.pull_request.conflicts`. The payload names the head commit and the base branch but not the base's commit, and the occurrence is the head's commit time, so one conflicting head is one observation however often the base moves after it; a new head that still conflicts is a new one. A `pull_request` delivery that already carries `mergeable: false` observes the same. A PR that is only behind its base is not observed.
+**Reconcile.** GitHub has no snapshot token. A generation lists every issue and every PR in stable creation order, so pagination cannot repeat an item; a deletion can only skip one. It observes open items and items closed within the horizon, then the repository's conversation and inline comments updated within the horizon. Reviews and checks are read for each listed PR. Each open PR that belongs to an issue (every open PR, with `track_pull_requests`) is also read on its own, because only that read carries `mergeable` and GitHub sends no webhook when a PR picks up conflicts (the base branch moving under it). When GitHub says it cannot merge, the PR is `github.pull_request.conflicts`. The payload names the head commit and the base branch but not the base's commit, and the occurrence is the head's commit time, so one conflicting head is one observation however often the base moves after it; a new head that still conflicts is a new one. A `pull_request` delivery that already carries `mergeable: false` observes the same. A PR that is only behind its base is not observed.
 
 Each `Reconcile` call is one bounded page. The cursor is `phase:page:offset`, and a call stops after 25 detail reads or 10 seconds. `Complete` certifies that every listing was read to its end in this generation. Rate limits and failed reads return errors, so no absence is inferred.
 
@@ -112,6 +116,22 @@ Handler `github` reads only the detached Event, Scope and Work. It finds its ext
 - **Never delivered:** edits, unmarked bot comments, this Work's own notes, open-state updates, pending checks and absence.
 
 Labels influence only this claim decision. Work lifecycle never reads them.
+
+A route with `claim` `issues` never takes input for a PR's Work, so the two can share a scope in either order.
+
+### Pull request Work
+
+A route with `{"claim": "pull_requests"}` claims each open PR as its own `github.pull_request` Work, owning the PR's key `pull_request/N`. What that Work does is up to the route's binding and its playbook; a review bot is one use ([recipe](../../guides/github-bot/#a-review-bot-for-every-pr)). The route reads only PR copies, so it needs an entry with `track_pull_requests`; otherwise its trace reason says so.
+
+- **Unowned PR copies** create Work for a `github.pull_request.open` copy of an open PR that isn't a draft (with `drafts`, a draft too). A draft is claimed when it is marked ready, because that is a new observation of the open PR. A PR that belongs to an issue another Work owns is claimed all the same: the keys differ.
+- **A PR's Work** receives what an issue's Work hears of its PRs (the merge or close, completed checks, merge conflicts, new human comments and reviews with a body, and comments from other Works' agents), and new versions of the open PR (a push, or a change of title, body or draft state) as well. Its own comments, reviews and replies carry its Work in the marker and are never delivered, nor are edits, unmarked bot comments and pending checks.
+- **Lifecycle.** Each pass is an Execution. Between passes the agent parks with `github.wait`, and needs no condition: what wakes an issue's agent (comments, check results, conflicts, the merge or close) and a push to its PR wake it, and another agent's comment wakes it through the same peer dependency an issue's agent has ([waits](../engineering-tools/#waits)). Nothing is posted for the wait. The agent ends the Work when the PR merges or closes.
+
+The agent reads which PR its Work is for from `github.context` (`pr`, `pr_url`, `repo`), and the PR operations default to its repository; it never sees the key. The projector leaves a PR's Work alone: it has no issue to label.
+
+### Which scope routes an entry's events
+
+The runtime routes an Event in the scope of the entry that observed it, using that scope's routes and the routes it inherits from its ancestors. The handler also requires the entry to belong to that scope. So a route in another scope, including a child scope from an [included folder](../config-management/#included-folders), never sees a repository whose entry lives in the operator's main scope; inheritance runs only from parent to child. To claim such a repository's PRs from its own scope, give that scope its own `github` entry for the repository: its own `namespace`, `track_issues: false` and `track_pull_requests: true`, beside its `pull_requests` route. It polls the repository a second time, which costs little because every GET is conditional, and it needs its own webhook or runs reconcile-only. The simpler choice, when the binding may live in the repository's scope, is a second route and binding there.
 
 ## Projections and marked comments
 
@@ -162,7 +182,8 @@ The unit fixtures cover:
 - Restart of rejected or stale generations.
 - Webhook signatures and HTTP mapping, primary and secondary rate limits, ordinary 403s, token re-resolution after a 401, App token caching and refresh, bot-App writes, reactions, markers, and config validation.
 - Git tokens minted for one repository with `contents: write`, reused, refused for other URLs, revoked, and refused on a token connection. The fake holds an installation token to what it was minted for, in its API and in its git smart-HTTP handler (`GitHandler`).
-- Admission and input-selection rules.
+- Admission and input-selection rules, including `pull_requests` routes: claiming PR copies (drafts held until ready), leaving issues and their Work alone, and never delivering the Work's own comments.
+- PR copies of every PR family, identical from push and reconcile, none of an issue's, and none without `track_pull_requests`; conflicts on a PR with no issue only when tracking.
 
 The [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob/main/integration/github_test.go) run the real runtime ingress and router, and cover:
 
@@ -176,6 +197,8 @@ The [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob
 - Acknowledgements of routed comments only.
 - Restart in the middle of a generation.
 
+[`TestGitHubPullRequestWorkRunsAlongsideTheBuilder`](https://github.com/open-conduit/open-conduit/blob/main/integration/github_pull_work_test.go) runs a builder and a reviewer through the toolbelt and scheduler. The builder's issue Work opens a PR, and the PR's own Work is claimed for it on the reviewer's binding without touching the builder's key or input. The reviewer's review reaches the builder but doesn't wake the parked reviewer, a push wakes it, and the merge reaches both, which then complete. `TestGitHubReconcileClaimsMissedPullRequests` claims a PR opened while nothing was listening, and a draft only once it is ready.
+
 [`TestDaemonGitHubReconcileToProjection`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_github_test.go) drives the composed `serve` daemon. The registered ingress reconciles the fake, the `github` route claims the issue and a shell attempt declares a status and comment. Labels and the marked comment converge, and doctor's `github` check is `ok`. A restart posts nothing again.
 
 ## Limitations
@@ -183,6 +206,7 @@ The [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob
 - **Projection volume.** The projector reads every Work in the store on each pass and keeps those in its scope and namespace. That has no high-volume claim.
 - **Unenforced setting.** `settings.admission_limit` (the claimed-per-project cap) is validated but not enforced, and `config check` warns where a config sets it. A scope's `limits.concurrency` does cap how many of its issues have a turn running at once.
 - **Registration lifetime.** Ingress registrations are startup-only (B05). A changed or removed entry, an entry moved to another connection, or its connection moved to another `api_url` reports `restart_required` until the daemon restarts. Other connection changes apply in place (see Configuration).
+- **Pull request Work.** A PR reopened after its Work completed isn't claimed again: the completed Work keeps the PR's key. While a PR's Work waits, its own comments are kept as wait context, as an issue's agent's are, so the next pass sees them, though they never wake it.
 - **Raw deliveries.** `github.delivery` events are non-re-derivable by declaration (`DeliveryLoss`): a raw delivery missed while push is unavailable is lost, though the state it carried is recovered by reconcile. Webhook jobs rely on it; the trade-off is set out under recoverability of trigger families in [scheduled jobs](../schedule-extension/).
 
 ## Related parts

@@ -93,6 +93,7 @@ func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{
 		{Kind: protocol.ValidateConnection, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateConnection(raw) }},
 		{Kind: protocol.ValidateExtension, Type: Type, Ingress: true, Validate: ValidateExtension, Settings: ExtensionSettings},
+		{Kind: protocol.ValidateRoute, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateRoute(raw) }},
 	}
 }
 

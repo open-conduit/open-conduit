@@ -152,6 +152,9 @@ func (g *Ingress) Push(ctx context.Context, src extension.Source, d extension.De
 	}
 	n := &normalizer{s: g.s, c: g.c, m: newMemo(), received: received}
 	obs, err := g.pushObservations(ctx, n, env.Event, p)
+	if err == nil {
+		obs, err = n.withPullCopies(obs)
+	}
 	if err != nil {
 		return extension.PushResult{}, err
 	}
@@ -467,6 +470,9 @@ func (g *Ingress) scanPage(ctx context.Context, n *normalizer, c cursor, horizon
 	default:
 		return extension.Snapshot{}, extension.ErrInvalid
 	}
+	if err == nil {
+		obs, err = n.withPullCopies(obs)
+	}
 	if err != nil {
 		return extension.Snapshot{}, err
 	}
@@ -573,7 +579,8 @@ func (g *Ingress) pullsPage(ctx context.Context, n *normalizer, c cursor, horizo
 	return out, len(items), more, i, nil
 }
 
-// conflicts reads an open PR that belongs to an issue on its own, since only
+// conflicts reads an open PR that belongs to an issue (any open PR when the
+// entry tracks pull requests) on its own, since only
 // that read carries mergeable, and observes it if it has conflicts. GitHub
 // sends no webhook when a PR's mergeability changes (the base branch moving
 // under it), so each generation asks.
@@ -581,7 +588,7 @@ func (g *Ingress) conflicts(ctx context.Context, n *normalizer, p rawPull) ([]ex
 	if p.State != "open" {
 		return nil, nil
 	}
-	if _, ref, err := n.pullKey(ctx, p); err != nil || ref == nil {
+	if _, ref, err := n.pullKey(ctx, p); err != nil || ref == nil && !g.s.TrackPulls {
 		return nil, err
 	}
 	full, err := g.c.Pull(ctx, g.s.Repo, p.Number)

@@ -407,6 +407,41 @@ func (t *Tools) waitPlan(hold bool) func(context.Context, extension.Authority, d
 	}
 }
 
+// pullWaitTypes are the PR key's families that wake a PR's own Work while
+// it waits: what wakes an issue's agent (waitInputTypes), and new versions
+// of the open PR (a push) too. Another agent's comment wakes it through
+// peerComments; its own never does.
+var pullWaitTypes = append([]string{TypePullOpen}, waitInputTypes...)
+
+// pullWaitPlan parks a PR's own Work. The PR's news wakes it with no
+// condition named, so its agent can simply wait for changes; conditions and
+// until add to that. It posts nothing: the reason goes in the Wait's
+// description, not on the PR.
+func (t *Tools) pullWaitPlan(ctx context.Context, b *bound, conds []string, until, reason string) (extension.WaitPlan, error) {
+	var h Hold
+	var resolved []resolvedCond
+	if len(conds) > 0 || until != "" {
+		var err error
+		if h, resolved, err = t.holdFor(ctx, b, conds, until); err != nil {
+			return extension.WaitPlan{}, err
+		}
+	}
+	waiting := fmt.Sprintf("news of PR #%d: a push, a comment or review, its checks, or its merge or close", b.pull)
+	if d := h.Describe(); d != "" {
+		waiting += ", or " + d
+	}
+	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: append([]string(nil), pullWaitTypes...)}, Timeout: h.Until,
+		Description: extension.Clip(waiting, extension.MaxWaitDescription)}}
+	for _, r := range resolved {
+		plan.Dependencies = append(plan.Dependencies, r.dep)
+	}
+	plan.Dependencies = append(plan.Dependencies, peerComments(b))
+	out, _ := json.Marshal(map[string]any{"waiting_for": waiting, "reason": strings.TrimSpace(reason),
+		"next": "end your turn now; any other call is refused until you are resumed with what happened"})
+	plan.Output = domain.Payload{Schema: "github.tool.v1", Data: out}
+	return plan, nil
+}
+
 func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessage) (extension.WaitPlan, error) {
 	var in struct {
 		Conditions []string `json:"conditions"`
@@ -431,6 +466,9 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 		c := *b
 		c.code, c.issue = src, t.trackerOf(src)
 		rb = &c
+	}
+	if b.pull > 0 {
+		return t.pullWaitPlan(ctx, rb, in.Conditions, in.Until, in.Reason)
 	}
 	h, resolved, err := t.holdFor(ctx, rb, in.Conditions, in.Until)
 	if err != nil {
