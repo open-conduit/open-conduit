@@ -128,3 +128,19 @@ func TestRunRedirectsToItsWorkAndTurn(t *testing.T) {
 		t.Fatalf("%d %s", w.Code, w.Header().Get("Location"))
 	}
 }
+
+// TestTurnShowsItsReport: a turn whose outcome carries a report shows it
+// under the summary; one without shows none.
+func TestTurnShowsItsReport(t *testing.T) {
+	f, s, h := setup(t)
+	f.runs[0].Outcome = &client.Outcome{Kind: "completed", Summary: "Triaged 4 reports into 2 causes",
+		Data: &client.Payload{Schema: "fixture.v1", Data: []byte(`{"status":"done","report":"## Skills still call reply.sh\n\nThree sessions hit it."}`)}}
+	body := do(h, "GET", "/work?id=wrk_1&turn=1", nil, s).Body.String()
+	if !strings.Contains(body, `class="turn-report"`) || !strings.Contains(body, "Three sessions hit it.") || !strings.Contains(body, "Skills still call reply.sh") {
+		t.Fatalf("report missing:\n%s", body)
+	}
+	f.runs[0].Outcome.Data = &client.Payload{Schema: "fixture.v1", Data: []byte(`{"status":"done"}`)}
+	if body = do(h, "GET", "/work?id=wrk_1&turn=1", nil, s).Body.String(); strings.Contains(body, `class="turn-report"`) {
+		t.Fatal("a turn without a report shows one")
+	}
+}

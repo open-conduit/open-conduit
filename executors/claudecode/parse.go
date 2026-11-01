@@ -19,6 +19,7 @@ type Status struct {
 	Preview string `json:"preview,omitempty"`
 	Touches string `json:"touches,omitempty"`
 	Handoff string `json:"handoff,omitempty"`
+	Report  string `json:"report,omitempty"`
 }
 
 // Turn states a status may report.
@@ -47,6 +48,8 @@ var StatusSchema = map[string]any{
 		"touches": map[string]any{"type": "string", "description": "What the work changes (pages, data, pipeline steps), in a few words, for other agents."},
 		"handoff": map[string]any{"type": "string", "description": "A note to the session that picks this issue up next if this one has gone cold: " +
 			"what is pending, the judgement calls you made and why, and what to check next. Intent only; the issue, the PR and git hold the facts."},
+		"report": map[string]any{"type": "string", "description": "Optional: a write-up for the operator, in Markdown, shown with this turn in the run's history. " +
+			"Use it for findings too long for the one-line summary that no issue or comment holds; leave it out otherwise."},
 	},
 	"required":             []string{"state", "summary"},
 	"additionalProperties": false,

@@ -1012,6 +1012,16 @@ a.token {
   font-size: 15px;
   margin-top: 4px;
 }
+.turn-report {
+  margin-top: 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+}
+.turn-report h3 {
+  margin: 0 0 4px;
+  font-size: 15px;
+}
 .turn-stats {
   display: flex;
   flex-wrap: wrap;

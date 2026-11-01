@@ -19,7 +19,7 @@ Call an operation with the `call` tool (`mcp__open-conduit__call`), giving the `
 | `introspection.report.resolve` | `id`, `summary`, `link`? | record how you handled a report (the issue you filed, or why you dropped it); a resolved report is no longer open |
 | `introspection.notes.resolve` | `notes` (ids), `summary` | record the problems you handled, so the next triage leaves them out |
 
-File issues with whatever tracker operations your toolbelt lists, when `file_issues` is true. A scheduled triage usually has none, and then every remaining cause goes in your final summary, which the operator reads in the run's history.
+File issues with whatever tracker operations your toolbelt lists, when `file_issues` is true. A scheduled triage usually has none, and then every remaining cause goes in your report: the `report` field of the status you end the turn with, which the operator reads with the run in its history. The one-line summary is too short for it, and the `handoff` note is never shown to the operator.
 
 ## Steps
 
@@ -32,9 +32,9 @@ File issues with whatever tracker operations your toolbelt lists, when `file_iss
    - **Open Conduit itself** (`runtime`, or a toolbelt operation that fails or is missing): file it, saying which reports it came from.
    - **A passing outage**: a service that failed once and worked on a retry. Drop it unless several sessions hit it.
 4. For each cause in the project's own files, call `introspection.fix` once: the `reports` and `notes` it covers, a `title` for the cause and a `body` saying exactly what is wrong, where, the smallest edit that removes it, every other place with the same mistake, and how to land it (the settings' `land` and `remote`). The fix Work resolves those reports when its fix lands; don't resolve them yourself.
-5. For each remaining cause, when `file_issues` is true and you can file issues, look for an open issue first: comment on it with today's count and an exact error if one covers the cause, otherwise open one titled for the cause, not the symptom ("Skills still call `reply.sh`", not "reply.sh not found"). Otherwise write the cause in your final summary instead. Either way, each cause says what the agents were trying to do, how many reports and which Work, the exact error, the workaround they used, where the fix belongs and what you think the fix is.
-6. Resolve what you handled, and only that: each report of a filed, written-up or dropped cause with `introspection.report.resolve` (the issue's link, "in the triage summary", or why you dropped it), and every problem you handled, including those a fix covers, with `introspection.notes.resolve`. If a step failed partway, leave the reports and problems for the causes it didn't handle open, so the next triage picks them up.
-7. Finish in one line: how many reports and problems were read, how many causes they came to, which fixes you requested, how many issues you opened or updated.
+5. For each remaining cause, when `file_issues` is true and you can file issues, look for an open issue first: comment on it with today's count and an exact error if one covers the cause, otherwise open one titled for the cause, not the symptom ("Skills still call `reply.sh`", not "reply.sh not found"). Otherwise write the cause in your report instead. Either way, each cause says what the agents were trying to do, how many reports and which Work, the exact error, the workaround they used, where the fix belongs and what you think the fix is.
+6. Resolve what you handled, and only that: each report of a filed, written-up or dropped cause with `introspection.report.resolve` (the issue's link, "in the triage report", or why you dropped it), and every problem you handled, including those a fix covers, with `introspection.notes.resolve`. If a step failed partway, leave the reports and problems for the causes it didn't handle open, so the next triage picks them up.
+7. End the turn with state `done`, the report if any cause went in it, and a one-line summary: how many reports and problems were read, how many causes they came to, which fixes you requested, how many issues you opened or updated.
 
 ## Don't
 
