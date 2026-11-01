@@ -282,11 +282,12 @@ func (c Capabilities) Domain() domain.Capabilities {
 }
 
 type Binding struct {
-	Name           string       `json:"name"`
-	Executor       string       `json:"executor"`
-	Requires       Capabilities `json:"requires"`
-	TimeoutSeconds int          `json:"timeout_seconds,omitempty"`
-	Config         Payload      `json:"config"`
+	Name           string         `json:"name"`
+	Executor       string         `json:"executor"`
+	Requires       Capabilities   `json:"requires"`
+	TimeoutSeconds int            `json:"timeout_seconds,omitempty"`
+	Config         Payload        `json:"config"`
+	Grants         []BindingGrant `json:"grants,omitempty"`
 }
 type Route struct {
 	Name         string  `json:"name"`
@@ -321,7 +322,7 @@ type Scope struct {
 func FromScope(s domain.Scope) Scope {
 	out := Scope{ID: string(s.ID), Name: s.Name, ParentID: string(s.ParentID), Config: FromPayload(s.Config), Revision: uint64(s.Revision), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt}
 	for _, b := range s.Bindings {
-		out.Bindings = append(out.Bindings, Binding{Name: b.Name, Executor: b.Executor, Requires: Capabilities{Interrupt: b.Requires.Interrupt, Inject: b.Requires.Inject, Resume: b.Requires.Resume, Workspace: b.Requires.Workspace, Toolbelt: b.Requires.Toolbelt}, TimeoutSeconds: b.TimeoutSeconds, Config: FromPayload(b.Config)})
+		out.Bindings = append(out.Bindings, Binding{Name: b.Name, Executor: b.Executor, Requires: Capabilities{Interrupt: b.Requires.Interrupt, Inject: b.Requires.Inject, Resume: b.Requires.Resume, Workspace: b.Requires.Workspace, Toolbelt: b.Requires.Toolbelt}, TimeoutSeconds: b.TimeoutSeconds, Config: FromPayload(b.Config), Grants: fromGrants(b.Grants)})
 	}
 	for _, r := range s.Routes {
 		out.Routes = append(out.Routes, FromRoute(r))
@@ -331,7 +332,7 @@ func FromScope(s domain.Scope) Scope {
 func (s Scope) Domain() domain.Scope {
 	out := domain.Scope{ID: domain.ID(s.ID), Name: s.Name, ParentID: domain.ID(s.ParentID), Config: s.Config.Domain(), Revision: domain.Revision(s.Revision), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt}
 	for _, b := range s.Bindings {
-		out.Bindings = append(out.Bindings, domain.Binding{Name: b.Name, Executor: b.Executor, Requires: b.Requires.Domain(), TimeoutSeconds: b.TimeoutSeconds, Config: b.Config.Domain()})
+		out.Bindings = append(out.Bindings, domain.Binding{Name: b.Name, Executor: b.Executor, Requires: b.Requires.Domain(), TimeoutSeconds: b.TimeoutSeconds, Config: b.Config.Domain(), Grants: toGrants(b.Grants)})
 	}
 	for _, r := range s.Routes {
 		out.Routes = append(out.Routes, r.Domain())
@@ -490,13 +491,40 @@ type RouteDecision struct {
 	Reason     string `json:"reason,omitempty"`
 	// Display, on a match, replaces the Work's display; absent keeps it.
 	Display *Display `json:"display,omitempty"`
+	Context *Payload `json:"context,omitempty"`
+	Grants  []string `json:"grants,omitempty"`
+}
+
+func fromGrants(gs []domain.BindingGrant) []BindingGrant {
+	var out []BindingGrant
+	for _, g := range gs {
+		out = append(out, BindingGrant{Name: g.Name, Label: g.Label, Operations: g.Operations, Config: g.Config})
+	}
+	return out
+}
+
+func toGrants(gs []BindingGrant) []domain.BindingGrant {
+	var out []domain.BindingGrant
+	for _, g := range gs {
+		out = append(out, domain.BindingGrant{Name: g.Name, Label: g.Label, Operations: g.Operations, Config: g.Config})
+	}
+	return out
 }
 
 func FromRouteDecision(d extension.RouteDecision) RouteDecision {
-	return RouteDecision{Match: d.Match, CreateID: string(d.CreateID), Kind: d.Kind, AttachKeys: fromKeys(d.AttachKeys), Reason: d.Reason, Display: FromDisplay(d.Display)}
+	out := RouteDecision{Match: d.Match, CreateID: string(d.CreateID), Kind: d.Kind, AttachKeys: fromKeys(d.AttachKeys), Reason: d.Reason, Display: FromDisplay(d.Display), Grants: d.Grants}
+	if d.Context.Schema != "" || len(d.Context.Data) > 0 {
+		c := FromPayload(d.Context)
+		out.Context = &c
+	}
+	return out
 }
 func (d RouteDecision) Extension() extension.RouteDecision {
-	return extension.RouteDecision{Match: d.Match, CreateID: domain.ID(d.CreateID), Kind: d.Kind, AttachKeys: toKeys(d.AttachKeys), Reason: d.Reason, Display: d.Display.Domain()}
+	out := extension.RouteDecision{Match: d.Match, CreateID: domain.ID(d.CreateID), Kind: d.Kind, AttachKeys: toKeys(d.AttachKeys), Reason: d.Reason, Display: d.Display.Domain(), Grants: d.Grants}
+	if d.Context != nil {
+		out.Context = d.Context.Domain()
+	}
+	return out
 }
 
 // RouteSample mirrors extension.RouteSample.
