@@ -82,6 +82,13 @@ func TestPageOffersTheStartActionWithChoicesAndGrants(t *testing.T) {
 	if len(f.invoked) != 1 || f.invoked[0].in != "sonnet +shell" {
 		t.Fatalf("invoked %+v", f.invoked)
 	}
+	// A textarea sends its line breaks as CRLF; the action gets LF, since a
+	// panel refuses a carriage return (#261).
+	form = url.Values{"csrf": {s.csrf}, "work": {"wrk_1"}, "provider": {"desk/jot"}, "action": {"message"}, "input": {"one\r\ntwo\rthree"}}
+	do(s.Handler(addr), "POST", "/actions", form, s)
+	if len(f.invoked) != 2 || f.invoked[1].in != "one\ntwo\nthree" {
+		t.Fatalf("invoked %+v", f.invoked)
+	}
 	if body := get(t, s, notesHref+"?starting=1"); !strings.Contains(body, "Starting the session") || strings.Contains(body, `value="start"`) {
 		t.Fatalf("a session just started is offered again:\n%s", body)
 	}

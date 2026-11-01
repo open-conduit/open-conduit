@@ -497,6 +497,9 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
 	s.record(w, r, "Cancelled turn "+itoa(int(run.Attempt))+". It is not retried automatically; run it again when you are ready.", rc, err)
 }
 
+// lineBreaks turns a form's CRLF and lone CR line breaks into LF.
+var lineBreaks = strings.NewReplacer("\r\n", "\n", "\r", "\n")
+
 // invokeAction invokes an action an extension offers on a scope or Work,
 // as the local operator.
 func (s *Server) invokeAction(w http.ResponseWriter, r *http.Request) {
@@ -509,9 +512,12 @@ func (s *Server) invokeAction(w http.ResponseWriter, r *http.Request) {
 	}
 	label, provider, id := r.PostFormValue("label"), r.PostFormValue("provider"), r.PostFormValue("action")
 	// A form may send several input fields (a radio and checkboxes); the
-	// action gets them in order, separated by spaces.
+	// action gets them in order, separated by spaces. A textarea sends its
+	// line breaks as CRLF, and a carriage return is a control character a
+	// panel refuses, so a message with a line break would drop the panel
+	// that shows it (#261): line breaks reach the action as LF.
 	_ = r.ParseForm()
-	input := strings.TrimSpace(strings.Join(r.PostForm["input"], " "))
+	input := strings.TrimSpace(lineBreaks.Replace(strings.Join(r.PostForm["input"], " ")))
 	res, err := s.src.InvokeAction(ctx, t, provider, id, input, s.opts.NewKey())
 	path := "/v1/scopes/" + shortPath(t.ScopeID)
 	if t.WorkID != "" {
