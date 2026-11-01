@@ -143,9 +143,11 @@ type gitWorkspace struct {
 }
 
 // gitBotCheck warns about every git workspace binding in a scope whose
-// GitHub connection sets git "bot" when the workspace's push remote is SSH:
-// only HTTPS goes through the toolbelt's credential helper, so its pushes
-// would still use the operator's own SSH key. Relative checkouts resolve
+// GitHub connection sets git "bot" when the binding isn't granted
+// github.git.credential, the only credential helper git is left with, so
+// every push is refused; or when the workspace's push remote is SSH: only
+// HTTPS goes through the toolbelt's credential helper, so its pushes would
+// still use the operator's own SSH key. Relative checkouts resolve
 // against cfg.Dir, the config file's directory.
 func gitBotCheck(ctx context.Context, cfg protocol.CheckConfig) inproc.CheckResult {
 	check := inproc.CheckResult{Name: "git_bot", Status: inproc.CheckOK, Code: "ok"}
@@ -167,6 +169,12 @@ func gitBotCheck(ctx context.Context, cfg protocol.CheckConfig) inproc.CheckResu
 			}
 			n++
 			name := scope.ID + "/" + b.Name
+			if !slices.Contains(b.Operations, OpGitCredential) {
+				// Every push fails: git's only helper is refused.
+				check.Status, check.Code = inproc.CheckWarn, "git_credential_not_granted"
+				check.Items = append(check.Items, fmt.Sprintf("%s: not granted %s, so every push is refused; add it to the binding's operations and the scope's authorization.operations", name, OpGitCredential))
+				continue
+			}
 			dir := res.Checkout
 			if !filepath.IsAbs(dir) && cfg.Dir != "" {
 				dir = filepath.Join(cfg.Dir, dir)
@@ -178,7 +186,10 @@ func gitBotCheck(ctx context.Context, cfg protocol.CheckConfig) inproc.CheckResu
 			case err != nil:
 				check.Items = append(check.Items, fmt.Sprintf("%s: remote %s not readable", name, res.Remote))
 			case sshRemote(string(out)):
-				check.Status, check.Code = inproc.CheckWarn, "ssh_remote"
+				if check.Code != "git_credential_not_granted" {
+					check.Code = "ssh_remote"
+				}
+				check.Status = inproc.CheckWarn
 				check.Items = append(check.Items, fmt.Sprintf("%s: remote %s is SSH, so pushes use your own SSH key, not the bot; use its https:// URL", name, res.Remote))
 			default:
 				check.Items = append(check.Items, fmt.Sprintf("%s: pushes and commits as the GitHub App", name))

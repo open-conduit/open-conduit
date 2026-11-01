@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -130,6 +131,13 @@ func TestConvertFixture(t *testing.T) {
 	// settings.host.disk: 80 is also v1 1.3.0's worktree disk check (#63).
 	if git["checkout"] != "/home/op/Code/web" || git["mode"] != "work" || git["dotenv"] != true || git["setup"] != "pnpm install" || git["base_branch"] != "main" || git["disk_full_percent"] != 80.0 {
 		t.Fatalf("agent resource: %v", git)
+	}
+	// git calls github.git.credential itself when the connection sets git
+	// "bot", so the workspace binding and the scope are granted it.
+	for _, ops := range [][]any{agent["operations"].([]any), web["authorization"].(map[string]any)["operations"].([]any)} {
+		if !slices.Contains(ops, any("github.git.credential")) {
+			t.Fatalf("not granted github.git.credential: %v", ops)
+		}
 	}
 	entry := find(web["extensions"], "type", "github")["config"].(map[string]any)
 	labels := entry["labels"].(map[string]any)

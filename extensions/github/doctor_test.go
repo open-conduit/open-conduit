@@ -68,7 +68,8 @@ func TestCapabilityCheck(t *testing.T) {
 // TestGitBotCheck: doctor warns about a git workspace binding in a scope
 // whose GitHub connection sets git "bot" when its checkout pushes over
 // SSH, where the operator's own key would push, and says nothing of scopes
-// that leave git as the owner's.
+// that leave git as the owner's. A binding not granted github.git.credential
+// is warned about too: git has no other helper, so every push is refused.
 func TestGitBotCheck(t *testing.T) {
 	root := t.TempDir()
 	repo := func(name, url string) {
@@ -86,7 +87,7 @@ func TestGitBotCheck(t *testing.T) {
 	repo("https", "https://github.com/octo/widgets.git")
 	binding := func(name, checkout string) protocol.CheckBinding {
 		res, _ := json.Marshal(map[string]any{"checkout": checkout})
-		return protocol.CheckBinding{Name: name, Executor: agentExecutor, Resource: &protocol.CheckResource{Provider: "git", Config: res}}
+		return protocol.CheckBinding{Name: name, Executor: agentExecutor, Operations: []string{OpGitCredential}, Resource: &protocol.CheckResource{Provider: "git", Config: res}}
 	}
 	view := func(dir, git string, bs ...protocol.CheckBinding) protocol.CheckConfig {
 		conn, _ := json.Marshal(map[string]any{"auth": "app", "app_id": "42", "git": git})
@@ -106,5 +107,11 @@ func TestGitBotCheck(t *testing.T) {
 	c = gitBotCheck(context.Background(), view("", "bot", binding("ok", "https"), binding("ssh", filepath.Join(root, "ssh"))))
 	if c.Status != inproc.CheckWarn || c.Code != "ssh_remote" || !strings.Contains(strings.Join(c.Items, "\n"), "eng/ssh: remote origin is SSH") {
 		t.Errorf("an SSH remote: %+v", c)
+	}
+	ungranted := binding("push", "https")
+	ungranted.Operations = nil
+	c = gitBotCheck(context.Background(), view(root, "bot", binding("ssh", "ssh"), ungranted))
+	if c.Status != inproc.CheckWarn || c.Code != "git_credential_not_granted" || !strings.Contains(strings.Join(c.Items, "\n"), "eng/push: not granted github.git.credential") {
+		t.Errorf("not granted github.git.credential: %+v", c)
 	}
 }

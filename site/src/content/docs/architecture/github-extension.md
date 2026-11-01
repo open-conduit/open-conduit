@@ -62,7 +62,7 @@ The extension does this through the generic run environment hook (`extension.Run
 - `commit.gpgsign` and `tag.gpgsign` off, because the operator's key isn't the bot's.
 - `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` set to `GitIdentity`.
 
-Every other run gets nothing, including one whose binding's own connection leaves `git` unset while the entry's sets `bot`. [`github.git.credential`](../engineering-tools/#tool-operations) mints from the same connection, taken from the call's `Authority.Connection`, so the token and the identity come from the same App. A failed identity lookup, or a binding connection `Writers` can't build (another `api_url`), fails the run before it starts (`run environment unavailable`). Doctor's `git_bot` check warns when a git workspace in such a scope pushes over SSH, which skips the helper.
+Every other run gets nothing, including one whose binding's own connection leaves `git` unset while the entry's sets `bot`. [`github.git.credential`](../engineering-tools/#tool-operations) mints from the same connection, taken from the call's `Authority.Connection`, so the token and the identity come from the same App. A failed identity lookup, or a binding connection `Writers` can't build (another `api_url`), fails the run before it starts (`run environment unavailable`). Doctor's `git_bot` check warns when a git workspace binding in such a scope isn't granted `github.git.credential`, so every push is refused, or pushes over SSH, which skips the helper. `init github` and `migrate` grant the operation to every binding they write with a git workspace (`WorkspaceOperations`).
 
 ## Ingress and canonical identity
 

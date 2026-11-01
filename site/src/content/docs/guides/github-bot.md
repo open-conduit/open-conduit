@@ -83,7 +83,7 @@ Doctor proves that the App is installed and can read the repository. It doesn't 
 
 ## Push and commit as the bot
 
-You can also have git work as the bot. Set `git` to `bot` on the GitHub connection that has the bot App (here `github`), and add `github.git.credential` to the bindings' `operations` and to the scope's `authorization.operations`:
+You can also have git work as the bot. Set `git` to `bot` on the GitHub connection that has the bot App (here `github`). Each binding with a git workspace also needs `github.git.credential` in its `operations` and in the scope's `authorization.operations`. `open-conduit init github` and `open-conduit migrate` grant it to the bindings they write with a workspace; add it yourself to a binding you wrote by hand:
 
 ```sh
 open-conduit config set /connections/github/config/git '"bot"'
@@ -112,7 +112,7 @@ and give that binding `"connection": "github-builder"`. The App needs **Contents
 A few things to know:
 
 - **Use an HTTPS remote.** Only `https://` remotes go through Open Conduit's credential helper. An `ssh://` or `git@github.com:` remote still pushes with your own SSH key. `open-conduit doctor` warns about this in its `git_bot` check. Change the remote with `git remote set-url origin https://github.com/acme/web.git` in the checkout.
-- **Grant `github.git.credential`.** Without it, the push is refused and git has no other helper to fall back on.
+- **Grant `github.git.credential`.** Without it, the push is refused and git has no other helper to fall back on. `open-conduit doctor` warns about a git workspace binding that isn't granted it, in its `git_bot` check.
 - **A run that can't get the bot's identity doesn't start.** It fails as `run environment unavailable`, for example when GitHub can't be reached or the bot App's key is wrong.
 - **Without a sandbox, your credentials are still there.** An unsandboxed run uses the bot's credentials by default, but it runs as you. An agent that goes looking can still find your SSH key, your keychain or `gh`'s token. To keep it to the bot's access, run the binding in a [sandbox](../sandboxes/).
 
