@@ -142,3 +142,29 @@ func TestCheckPasses(t *testing.T) {
 		t.Fatalf("check: %+v %v", r, err)
 	}
 }
+
+// The fixture profile is declared once (sdk.New and its registrations);
+// the manifest derived from them is the hand-written one.
+func TestFixtureManifestIsDerived(t *testing.T) {
+	want, _ := json.Marshal(notes.Manifest(notes.Options{Fixture: true}))
+	got, _ := json.Marshal(notes.Build(notes.Options{Fixture: true}, nil).Manifest)
+	if string(got) != string(want) {
+		t.Fatalf("derived manifest\n%s\nhand-written\n%s", got, want)
+	}
+}
+
+func TestFixtureConnectionTakesTypedInput(t *testing.T) {
+	ctx := context.Background()
+	h := sdktest.New(t, notes.Build(notes.Options{Fixture: true}, nil), sdktest.WithScopes(domain.Scope{ID: "s1"}),
+		sdktest.WithAuthority(extension.Authority{ScopeID: "s1", Connection: "conn"}),
+		sdktest.WithConnectionSecrets("s1", "conn", map[string]string{"token": "t0ken"}))
+	got, err := sdktest.Call[notes.ConnectionResult](ctx, h, "fixture.connection", notes.ConnectionRequest{Names: []string{"token", "other"}})
+	if err != nil || got.Connection != "conn" || len(got.Resolved) != 1 || got.Resolved[0] != "token" {
+		t.Fatalf("connection: %+v %v", got, err)
+	}
+	_, err = sdktest.Call[notes.ConnectionResult](ctx, h, "fixture.connection", map[string]any{"name": "token"})
+	var oe *extension.OperationError
+	if !errors.As(err, &oe) || oe.Code != "bad_request" || oe.Message != `fixture.connection: unknown field "name"` {
+		t.Fatalf("unknown field: %v", err)
+	}
+}

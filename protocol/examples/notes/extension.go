@@ -28,10 +28,10 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 		}
 		return f, ok
 	}
-	m := Manifest(o)
 	if o.Fixture {
-		return fixture(m, fault)
+		return fixture(fault)
 	}
+	m := Manifest(o)
 	var mu sync.Mutex
 	sources := map[string]*Ingress{}
 	ext := &sdk.Extension{Manifest: m, Upcasters: Upcasters()}
@@ -305,16 +305,20 @@ func derive(ctx context.Context, h *sdk.Host) error {
 	}})
 }
 
-func fixture(m protocol.Manifest, fault func(string) (Fault, bool)) *sdk.Extension {
-	return &sdk.Extension{Manifest: m, Operations: []extension.Operation{
-		{Name: "fixture.echo", Handler: func(_ context.Context, _ extension.Authority, in domain.Payload) (domain.Payload, error) {
+// fixture serves the fixture profile, declared once: each registration
+// sets its handler and its manifest declaration, and TestFixtureManifestIsDerived
+// checks the result equals the hand-written Manifest(Options{Fixture: true}).
+func fixture(fault func(string) (Fault, bool)) *sdk.Extension {
+	return sdk.New("fixture", sdk.Version("1.0.0"), sdk.Command("notes-extension", "--fixture")).
+		Family(protocol.Family{Type: "fixture.changed.v1", ReDerivable: true}).
+		Operation("fixture.echo", sdk.Handler(func(_ context.Context, _ extension.Authority, in domain.Payload) (domain.Payload, error) {
 			fault("operation.call")
 			return in, nil
-		}},
-		{Name: "fixture.wait", Wait: func(context.Context, extension.Authority, domain.Payload) (extension.WaitPlan, error) {
+		})).
+		Operation("fixture.wait", sdk.Wait(func(context.Context, extension.Authority, domain.Payload) (extension.WaitPlan, error) {
 			return extension.WaitPlan{}, extension.ErrInvalid
-		}},
-		{Name: "fixture.report", Emit: func(ctx context.Context, _ extension.Authority, in domain.Payload) (extension.EmitPlan, error) {
+		})).
+		Operation("fixture.report", sdk.Emit(func(ctx context.Context, _ extension.Authority, in domain.Payload) (extension.EmitPlan, error) {
 			return extension.EmitPlan{Event: domain.Event{Type: "fixture.changed.v1", DeliveryID: "report/" + extension.CallRequestID(ctx)}, Commit: func(em extension.Emitted) (extension.EmitCommit, error) {
 				if _, ok := fault("emit.commit"); ok {
 					return extension.EmitCommit{}, errors.New("unreachable after a fault")
@@ -322,40 +326,46 @@ func fixture(m protocol.Manifest, fault func(string) (Fault, bool)) *sdk.Extensi
 				out, _ := json.Marshal(map[string]any{"event": em.Event.Event.ID, "added": em.Added})
 				return extension.EmitCommit{Records: []extension.Record{{Namespace: "fixture.reports", Key: string(em.Event.Event.ID), Value: in.Data}}, Output: domain.Payload{Schema: "fixture.report.v1", Data: out}}, nil
 			}}, nil
-		}},
+		}), sdk.Commit()).
 		// fixture.notify emits without a commit: the Event is accepted and
 		// nothing is written or returned.
-		{Name: "fixture.notify", Emit: func(ctx context.Context, _ extension.Authority, _ domain.Payload) (extension.EmitPlan, error) {
+		Operation("fixture.notify", sdk.Emit(func(ctx context.Context, _ extension.Authority, _ domain.Payload) (extension.EmitPlan, error) {
 			return extension.EmitPlan{Event: domain.Event{Type: "fixture.changed.v1", DeliveryID: "notify/" + extension.CallRequestID(ctx)}}, nil
-		}},
+		})).
 		// fixture.connection acts as the calling binding's connection: it
 		// resolves that connection's secret names named in the input, and
 		// answers with the connection and the names it resolved, never
 		// their values.
-		{Name: "fixture.connection", Handler: func(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
-			var req struct {
-				Names []string `json:"names"`
-			}
-			_ = json.Unmarshal(in.Data, &req)
-			out := struct {
-				Connection string   `json:"connection"`
-				Resolved   []string `json:"resolved"`
-			}{Connection: a.Connection, Resolved: []string{}}
-			if a.Connection != "" && len(req.Names) > 0 {
-				values, err := sdk.HostFrom(ctx).ConnectionSecrets(ctx, a.ScopeID, a.Connection, req.Names...)
-				if err != nil {
-					return domain.Payload{}, err
-				}
-				for _, n := range req.Names {
-					if values[n] != "" {
-						out.Resolved = append(out.Resolved, n)
-					}
-				}
-			}
-			raw, _ := json.Marshal(out)
-			return domain.Payload{Schema: "fixture.connection.v1", Data: raw}, nil
-		}},
-	}, Filter: func(filter domain.Payload, e domain.Event) bool { return string(filter.Data) == string(e.Data.Data) }}
+		Operation("fixture.connection", sdk.Handler(fixtureConnection)).
+		DependencyFilter(func(filter domain.Payload, e domain.Event) bool { return string(filter.Data) == string(e.Data.Data) })
+}
+
+// ConnectionRequest is fixture.connection's input.
+type ConnectionRequest struct {
+	Names []string `json:"names,omitempty"`
+}
+
+// ConnectionResult is fixture.connection's output.
+type ConnectionResult struct {
+	Connection string   `json:"connection"`
+	Resolved   []string `json:"resolved"`
+}
+
+func fixtureConnection(ctx context.Context, a extension.Authority, req ConnectionRequest) (ConnectionResult, error) {
+	out := ConnectionResult{Connection: a.Connection, Resolved: []string{}}
+	if a.Connection == "" || len(req.Names) == 0 {
+		return out, nil
+	}
+	values, err := sdk.HostFrom(ctx).ConnectionSecrets(ctx, a.ScopeID, a.Connection, req.Names...)
+	if err != nil {
+		return out, err
+	}
+	for _, n := range req.Names {
+		if values[n] != "" {
+			out.Resolved = append(out.Resolved, n)
+		}
+	}
+	return out, nil
 }
 
 type routeFunc func(context.Context, extension.RouteInput) (extension.RouteDecision, error)

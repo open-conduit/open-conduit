@@ -10,6 +10,8 @@
 // surface, Host for the scoped extension-to-host methods, Store
 // (storage.Store over the host) and Artifacts (storage.Artifacts over the
 // host) so in-process code runs unchanged, and PackageCommand for packaging.
+// New and its registrations (declare.go) fill those fields and derive the
+// manifest from them, so each surface is declared once.
 // The guide is site/src/content/docs/architecture/extension-packaging.md.
 package sdk
 

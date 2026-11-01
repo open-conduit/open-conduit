@@ -4,8 +4,9 @@
 // memory: KV with versions and conflicts, event.accept and ingress.deliver,
 // the state.* reads of seeded scopes, Works and Events, secrets from
 // options, artifacts and telemetry.capture. A test then calls into the
-// extension (Operation, Configure, Route, RunTask, Check, Call) and
-// inspects what it wrote (KV, Events, Commits, Artifacts, Captured).
+// extension (Operation, or the typed Call, and Configure, Route, RunTask,
+// Check and Host.Call for any other method) and inspects what it wrote
+// (KV, Events, Commits, Artifacts, Captured).
 //
 // It is not the host: causal depth and rate limits, timers, Work control,
 // probes and config.* are not served (they answer CodeUnsupported), and a
@@ -272,6 +273,44 @@ type OperationResult struct {
 	Output domain.Payload
 	Wait   *extension.WaitPlan
 	Event  *extension.Emitted
+}
+
+// Call calls a declared operation with in as its input's data, encoded as
+// JSON (a domain.Payload passes as it is), and decodes the output's data
+// into Out (a domain.Payload, or an OperationResult for the whole result,
+// is returned as it is). It is Operation with the default authority, for a
+// test that never builds a payload by hand:
+//
+//	got, err := sdktest.Call[weather.Forecast](ctx, h, "weather.forecast", weather.Request{City: "Leeds"})
+func Call[Out any](ctx context.Context, h *Host, name string, in any) (Out, error) {
+	var out Out
+	input, ok := in.(domain.Payload)
+	if !ok {
+		data, err := json.Marshal(in)
+		if err != nil {
+			return out, err
+		}
+		input = domain.Payload{Data: data}
+	}
+	res, err := h.Operation(ctx, name, input)
+	if err != nil {
+		return out, err
+	}
+	switch v := any(&out).(type) {
+	case *OperationResult:
+		*v = res
+		return out, nil
+	case *domain.Payload:
+		*v = res.Output
+		return out, nil
+	}
+	if len(res.Output.Data) == 0 {
+		return out, nil
+	}
+	if err := json.Unmarshal(res.Output.Data, &out); err != nil {
+		return out, fmt.Errorf("sdktest: decode %s output: %w", name, err)
+	}
+	return out, nil
 }
 
 // Operation calls a declared toolbelt operation with the default authority
