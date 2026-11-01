@@ -118,6 +118,11 @@ type shellHostOptions struct {
 	// executors and handlers add fake registrations beside the shell.
 	executors map[string]extension.Executor
 	handlers  map[string]extension.RouteHandler
+	// extensions, operations and register add an in-process extension's
+	// entry types, toolbelt operations and registration (over the store).
+	extensions map[string]config.ExtensionType
+	operations []string
+	register   func(storage.Store) extension.Registration
 }
 
 func shellState(t *testing.T, cfg string) (string, string) {
@@ -202,7 +207,7 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 		handlers[name] = handler
 		handlerNames[name] = true
 	}
-	registry := config.Registry{Executors: executors, Handlers: handlerNames}
+	registry := config.Registry{Executors: executors, Handlers: handlerNames, Extensions: o.extensions, Operations: o.operations}
 	configs, err := management.OpenConfig(ctx, h.coord, clock.Now, registry, filepath.Join(state, "config", "config.json"), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -217,6 +222,11 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 	}
 	if err = belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "fixture", EventTypes: []string{"fixture.reported.v1"}}); err != nil {
 		t.Fatal(err)
+	}
+	if o.register != nil {
+		if err = belt.Register(o.register(h.coord)); err != nil {
+			t.Fatal(err)
+		}
 	}
 	socket := filepath.Join(state, "management.sock")
 	h.endpoint = "unix://" + socket

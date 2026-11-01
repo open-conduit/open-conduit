@@ -92,7 +92,7 @@ You handle one thread in the #help Slack channel. Your input is the thread's new
 A script can report for the same source. Give it a `shell` binding with `observe.record`, add it to the source's `reporters`, and point the schedule route at it. A shell binding gets the `os` CLI on its `PATH`:
 
 ```sh
-os call observe.record '{"item": "1730451600.000100", "thread": "1730451600.000100", "text": "How do I reset my VPN password?"}'
+os call observe.record --data '{"item": "1730451600.000100", "thread": "1730451600.000100", "text": "How do I reset my VPN password?"}'
 ```
 
 Items the agent already recorded come back as `"duplicate": true`, and new items in an existing thread reach the Work the agent's items started. You can list both bindings as reporters while you switch over.
