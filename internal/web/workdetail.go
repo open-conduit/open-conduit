@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"html/template"
 	"net/http"
@@ -81,6 +82,9 @@ type turnPanel struct {
 	// Outcome is the ended turn's outcome and what it means.
 	Outcome     *client.Outcome
 	OutcomeNote string
+	// Report is the write-up the turn left for the operator: a string
+	// `report` in the outcome's data, when there is one.
+	Report      string
 	Active      time.Duration
 	Segments    int
 	Model       string
@@ -528,6 +532,20 @@ func effectWord(e client.Event) string {
 	return strings.ReplaceAll(d, "_", " ")
 }
 
+// outcomeReport is the `report` an outcome's data carries, if any.
+func outcomeReport(o *client.Outcome) string {
+	if o.Data == nil {
+		return ""
+	}
+	var d struct {
+		Report string `json:"report"`
+	}
+	if json.Unmarshal(o.Data.Data, &d) != nil {
+		return ""
+	}
+	return strings.TrimSpace(d.Report)
+}
+
 // turnPanelOf is the head of the turn shown.
 func turnPanelOf(v workView, t turnInfo, c chat, now time.Time) turnPanel {
 	p := turnPanel{Active: t.Active(now), Segments: len(t.Run.Segments), Model: c.Model, Usage: t.Usage, Calls: c.Calls, Tool: c.Tools}
@@ -548,7 +566,7 @@ func turnPanelOf(v workView, t turnInfo, c chat, now time.Time) turnPanel {
 		p.Verb = "Woken by"
 	}
 	if t.Outcome != nil && !t.Live() {
-		p.Outcome = t.Outcome
+		p.Outcome, p.Report = t.Outcome, outcomeReport(t.Outcome)
 		switch t.Outcome.Kind {
 		case "handoff":
 			p.OutcomeNote = "Turn ended; the next event continues the work"

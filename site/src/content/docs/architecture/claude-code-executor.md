@@ -49,12 +49,12 @@ A turn starts on the playbook skill `/open-conduit:<playbook> <args>` (the defau
 
 ## Outcomes
 
-The executor adds no core state. The structured status uses `--json-schema` (state, summary, prs, preview, touches, handoff). It maps as follows:
+The executor adds no core state. The structured status uses `--json-schema` (state, summary, prs, preview, touches, handoff, report). It maps as follows:
 
 | Turn ended | Outcome | Work afterwards |
 | --- | --- | --- |
 | `finished` | completed | completed |
-| `building`, `review`, `help`, `done` | handoff | ready: the next accepted input starts attempt N+1 |
+| `building`, `review`, `help`, `done` | handoff (completed for a `RunOnce` Work kind) | ready: the next accepted input starts attempt N+1 |
 | The agent called `wait` through MCP | waiting (core converts the result and keeps its data) | parked; the wake resumes the same attempt as a new `--resume` segment |
 | Error, no result, no status, interrupt | failed | retry policy |
 | Usage limit | failed with `Result.RetryHint{ResetAt}` | retried at the reset plus two minutes (or after 30 minutes if unknown) |
@@ -62,6 +62,7 @@ The executor adds no core state. The structured status uses `--json-schema` (sta
 The outcome data schema is the binding's optional `status_schema`. The default is `core.turn.v1`, which every projector reads and from which the host publishes the turn-ended Event; a source-named `<source>.status.v1` that earlier setups wrote is read as `core.turn.v1`. A config that cannot be read fails under `open-conduit.claudecode.result.v1`. The projector maps `help`, `review` and `done` to labels. `building` and `finished` project no status label. The other data fields are:
 
 - `reason`, `prs`, `preview`, `touches` and `kind`
+- `report`, the status's optional write-up for the operator (at most 20,000 bytes), which the web view shows under the turn's summary
 - `models`, `model_calls`, `tool_calls` and `tokens` (input, output, cache read, cache creation)
 - `limited` and `resets_at`
 - `exit_code` and `injected`

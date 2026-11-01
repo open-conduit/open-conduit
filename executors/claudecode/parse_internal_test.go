@@ -159,3 +159,23 @@ func TestBodyAndPrompt(t *testing.T) {
 		t.Fatalf("no playbook %q", p)
 	}
 }
+
+// TestStatusReport: a status's report reaches the outcome's data, bounded,
+// for the operator's view of the turn.
+func TestStatusReport(t *testing.T) {
+	ok := 0
+	p := parse(`{"type":"result","subtype":"success","result":"x","structured_output":{"state":"done","summary":"triaged 4","report":"## Cause\n\nreply.sh is gone"}}`, "", &ok, true, now)
+	if !p.OK || p.Status.Report != "## Cause\n\nreply.sh is gone" {
+		t.Fatalf("%+v", p)
+	}
+	var f resultFields
+	mapOutcome(p, &f)
+	if f.Report != "## Cause\n\nreply.sh is gone" {
+		t.Fatalf("report %q", f.Report)
+	}
+	p.Status.Report = strings.Repeat("x", maxReport+10)
+	mapOutcome(p, &f)
+	if len(f.Report) > maxReport {
+		t.Fatalf("report not bounded: %d", len(f.Report))
+	}
+}

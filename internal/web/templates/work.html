@@ -109,6 +109,12 @@
       <p class="t-meta">{{$.TurnPanel.OutcomeNote}}</p>
     </div>
     {{end}}
+    {{with .Report}}
+    <section class="turn-report" aria-label="Report">
+      <h3>Report</h3>
+      {{prose .}}
+    </section>
+    {{end}}
     <dl class="turn-stats">
       <div><dt>Active</dt><dd>{{durp .Active}}{{if $t.Live}} so far{{end}}{{if gt .Segments 1}}<small> in {{.Segments}} segments</small>{{end}}</dd></div>
       <div><dt>Executor</dt><dd>{{$t.ExecutorBinding}}{{with $t.Executor}} → {{.}}{{end}}</dd></div>

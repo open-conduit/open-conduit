@@ -962,11 +962,13 @@ func (e *Executor) escalate(rn *run) error {
 type resultFields struct {
 	// Status is the turn's reported state (building, review, help, done,
 	// finished) for projections; empty without a status.
-	Status     string     `json:"status,omitempty"`
-	Reason     string     `json:"reason"`
-	PRs        []int      `json:"prs,omitempty"`
-	Preview    string     `json:"preview,omitempty"`
-	Touches    string     `json:"touches,omitempty"`
+	Status  string `json:"status,omitempty"`
+	Reason  string `json:"reason"`
+	PRs     []int  `json:"prs,omitempty"`
+	Preview string `json:"preview,omitempty"`
+	Touches string `json:"touches,omitempty"`
+	// Report is the status's write-up for the operator, shown with the turn.
+	Report     string     `json:"report,omitempty"`
 	Kind       string     `json:"kind,omitempty"`
 	Models     []string   `json:"models,omitempty"`
 	ModelCalls int        `json:"model_calls,omitempty"`
@@ -1015,13 +1017,16 @@ func mapOutcome(p parsed, f *resultFields) (domain.Outcome, *extension.RetryHint
 		return domain.Outcome{Kind: domain.OutcomeCompleted, Summary: truncate(strings.TrimSpace(p.Text), 300)}, nil
 	}
 	s := p.Status
-	f.Reason, f.Status, f.PRs, f.Preview, f.Touches = "status", s.State, s.PRs, s.Preview, s.Touches
+	f.Reason, f.Status, f.PRs, f.Preview, f.Touches, f.Report = "status", s.State, s.PRs, s.Preview, s.Touches, truncate(s.Report, maxReport)
 	kind := domain.OutcomeHandoff
 	if s.State == StateFinished {
 		kind = domain.OutcomeCompleted
 	}
 	return domain.Outcome{Kind: kind, Summary: truncate(s.Summary, 300)}, nil
 }
+
+// maxReport bounds a status report kept with the turn's outcome.
+const maxReport = 20000
 
 func usageOf(p parsed) extension.Usage {
 	var u extension.Usage
