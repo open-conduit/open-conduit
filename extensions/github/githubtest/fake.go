@@ -48,6 +48,8 @@ type Issue struct {
 	Closed      *time.Time
 	// Pull marks the issue face of a pull request.
 	Pull bool
+	// Association is the author's author_association (default OWNER).
+	Association string
 }
 
 type Pull struct {
@@ -59,6 +61,9 @@ type Pull struct {
 	MergedAt  *time.Time
 	Reviews   []Review
 	CreatedAt time.Time
+	// HeadRepo is the head's repository (default the fake's own; "-" for
+	// a deleted fork, whose head repo is null).
+	HeadRepo string
 	// Mergeable is what a single PR's read and its webhook bodies say
 	// (nil: GitHub has not worked it out). The list never carries it.
 	Mergeable *bool
@@ -136,7 +141,9 @@ type Server struct {
 	refuseRuns, refuseActions bool
 	// protection and rulesets are the checks each branch requires;
 	// refuseProtection and refuseRulesets make those reads an ordinary 403.
-	protection, rulesets             map[string][]string
+	protection, rulesets map[string][]string
+	// public makes the repository read as public.
+	public                           bool
 	refuseProtection, refuseRulesets bool
 	statuses                         map[string][]Status
 	tokens                           map[string]bool
@@ -433,6 +440,20 @@ func (s *Server) SetLabels(n int, labels ...string) {
 	i.Labels, i.Updated = append([]string(nil), labels...), s.tick()
 }
 
+// SetAssociation sets an issue's or PR's author_association.
+func (s *Server) SetAssociation(n int, association string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.issue(n).Association = association
+}
+
+// SetHeadRepo sets a PR's head repository ("-" for a deleted fork).
+func (s *Server) SetHeadRepo(n int, repo string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.pulls[n].HeadRepo = repo
+}
+
 // Labels reports an issue's labels.
 func (s *Server) Labels(n int) []string {
 	s.mu.Lock()
@@ -707,6 +728,9 @@ func (s *Server) RequireChecks(branch string, contexts ...string) {
 	s.mu.Unlock()
 }
 
+// SetPublic makes the repository read as public (default private).
+func (s *Server) SetPublic(public bool) { s.mu.Lock(); s.public = public; s.mu.Unlock() }
+
 // RequireRulesetChecks makes a ruleset on branch require contexts (a
 // required_status_checks rule from the branch rules read).
 func (s *Server) RequireRulesetChecks(branch string, contexts ...string) {
@@ -883,7 +907,8 @@ func (s *Server) issueJSON(i *Issue) map[string]any {
 		reason = i.StateReason
 	}
 	m := map[string]any{"number": i.Number, "title": i.Title, "body": i.Body, "html_url": s.web(i.Number), "user": i.User, "labels": labels,
-		"state": i.State, "state_reason": reason, "created_at": ts(i.Created), "updated_at": ts(i.Updated), "closed_at": tp(i.Closed),
+		"author_association": association(i.Association),
+		"state":              i.State, "state_reason": reason, "created_at": ts(i.Created), "updated_at": ts(i.Updated), "closed_at": tp(i.Closed),
 		"assignees": []User{}, "comments": s.countComments(i.Number), "milestone": nil}
 	if i.Pull {
 		m["pull_request"] = map[string]any{"url": s.URL + "/repos/" + s.Repo + "/pulls/" + strconv.Itoa(i.Number), "merged_at": tp(s.pulls[i.Number].MergedAt)}
@@ -907,9 +932,26 @@ func (s *Server) pullJSON(n int) map[string]any {
 	for _, l := range i.Labels {
 		labels = append(labels, map[string]string{"name": l})
 	}
+	var headRepo any = map[string]any{"full_name": s.Repo}
+	switch p.HeadRepo {
+	case "":
+	case "-":
+		headRepo = nil
+	default:
+		headRepo = map[string]any{"full_name": p.HeadRepo}
+	}
 	return map[string]any{"number": n, "title": i.Title, "body": i.Body, "html_url": s.web(n), "state": i.State, "draft": p.Draft,
 		"merged_at": tp(p.MergedAt), "closed_at": tp(i.Closed), "created_at": ts(i.Created), "updated_at": ts(i.Updated), "user": i.User,
-		"labels": labels, "head": map[string]string{"ref": p.HeadRef, "sha": p.HeadSHA}, "base": map[string]string{"ref": p.BaseRef}}
+		"author_association": association(i.Association), "labels": labels,
+		"head": map[string]any{"ref": p.HeadRef, "sha": p.HeadSHA, "repo": headRepo}, "base": map[string]any{"ref": p.BaseRef, "repo": map[string]any{"full_name": s.Repo}}}
+}
+
+// association defaults an author_association to OWNER.
+func association(a string) string {
+	if a == "" {
+		return "OWNER"
+	}
+	return a
 }
 
 // findComment is the comment with id, or nil.
@@ -1228,7 +1270,7 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 	q := r.URL.Query()
 	switch {
 	case get && rest == "":
-		out := map[string]any{"full_name": s.Repo, "default_branch": "main"}
+		out := map[string]any{"full_name": s.Repo, "default_branch": "main", "private": !s.public}
 		if s.perms != nil {
 			out["permissions"] = s.perms
 		}

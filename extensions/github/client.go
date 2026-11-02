@@ -185,6 +185,19 @@ func (c *Client) GitIdentity(ctx context.Context, repo string) (GitIdentity, err
 	return app.identity(ctx, repo)
 }
 
+// WriterBot is the bot login (`<slug>[bot]`) this connection's writes go
+// out as when they go out as a GitHub App: the bot App, else the sign-in
+// App. A token connection has none (ErrStaticToken): it writes as the
+// token's user. The login is looked up once.
+func (c *Client) WriterBot(ctx context.Context, repo string) (string, error) {
+	app, ok := c.who.Load().write.(*appToken)
+	if !ok {
+		return "", ErrStaticToken
+	}
+	ident, err := app.identity(ctx, repo)
+	return ident.Name, err
+}
+
 // GitBot reports whether git works as the App's bot in the runs of this
 // connection's repositories (connection git "bot").
 func (c *Client) GitBot() bool { return c.who.Load().gitBot }
@@ -372,6 +385,7 @@ type rawIssue struct {
 	Body        string           `json:"body"`
 	HTMLURL     string           `json:"html_url"`
 	User        rawUser          `json:"user"`
+	Association string           `json:"author_association"`
 	Labels      []rawLabel       `json:"labels"`
 	State       string           `json:"state"`
 	StateReason string           `json:"state_reason"`
@@ -407,22 +421,27 @@ type rawComment struct {
 }
 
 type rawPull struct {
-	Number    int        `json:"number"`
-	Title     string     `json:"title"`
-	Body      string     `json:"body"`
-	HTMLURL   string     `json:"html_url"`
-	State     string     `json:"state"`
-	Draft     bool       `json:"draft"`
-	Merged    bool       `json:"merged"`
-	MergedAt  *time.Time `json:"merged_at"`
-	ClosedAt  *time.Time `json:"closed_at"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	User      rawUser    `json:"user"`
-	Labels    []rawLabel `json:"labels"`
-	Head      struct {
+	Number      int        `json:"number"`
+	Title       string     `json:"title"`
+	Body        string     `json:"body"`
+	HTMLURL     string     `json:"html_url"`
+	State       string     `json:"state"`
+	Draft       bool       `json:"draft"`
+	Merged      bool       `json:"merged"`
+	MergedAt    *time.Time `json:"merged_at"`
+	ClosedAt    *time.Time `json:"closed_at"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	User        rawUser    `json:"user"`
+	Association string     `json:"author_association"`
+	Labels      []rawLabel `json:"labels"`
+	Head        struct {
 		Ref string `json:"ref"`
 		SHA string `json:"sha"`
+		// Repo is the head's repository: null once a fork is deleted.
+		Repo *struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
 	} `json:"head"`
 	Base struct {
 		Ref string `json:"ref"`

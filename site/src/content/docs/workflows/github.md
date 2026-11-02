@@ -16,10 +16,27 @@ open-conduit init github --repo acme/web --checkout ~/Code/web
 open-conduit config check
 ```
 
-- Issues with a skip label are left alone, and you can require a label before an issue is claimed.
+- `init github --require agent` picks up only the issues you label `agent` (see below).
 - `init github --holds` adds a hold route that parks issues until you claim them by hand.
 - `init github --no-workspace` writes a scope whose turns need no checkout.
 - `open-conduit init --help` lists every flag.
+
+## What gets picked up
+
+Once the daemon runs, it starts an agent on each open issue that passes all of these:
+
+- **Its author is trusted.** By default that is the repository's owner, its organisation's members and its collaborators (GitHub's `OWNER`, `MEMBER` and `COLLABORATOR`). An issue anyone else opens is left alone, so a stranger on a public repository can't put instructions in front of an agent that runs with your access. Issues your own agents file for follow-up work are picked up too.
+- **It has no skip label.** `backlog`, `human` and `milestone` keep an issue back, and so does `scheduled` while it waits for its hold. The entry's `labels.skip` changes the list.
+- **It has a required label, if you set one.** With `labels.require` (for example `["agent"]`), only issues carrying one of those labels are picked up. On a repository with a backlog, set it before the first run, or the daemon picks up every open issue at once.
+- **No one else has claimed it.** An issue already labelled `agent-in-progress` with no Work here belongs to another owner.
+
+A route that claims pull requests applies the same author rule, and never picks up a PR from a fork.
+
+To trust more people, widen the entry's `admit`, for example `"admit": {"authors": ["OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR"]}` (`["*"]` for anyone), and `"admit": {"forks": true}` for PRs from forks. Claiming an issue by hand starts it whatever its author or labels.
+
+To see what would be picked up before anything happens, run `open-conduit serve --dry-run`: it makes no GitHub writes and runs agents as stubs. Each event's route trace says why an issue was or wasn't picked up, such as "the issue's author mallory is NONE on the repository".
+
+`open-conduit doctor --check-secrets` warns when the repository is public, sets no `labels.require` and runs its agent without a sandbox, and when the branch PRs target has no branch protection or ruleset, since nothing on GitHub would then stop a push straight to it.
 
 ## How a turn goes
 

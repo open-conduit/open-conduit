@@ -62,7 +62,7 @@ func (HoldRoute) Match(_ context.Context, in extension.RouteInput) (extension.Ro
 	}
 	l := s.Labels
 	l.Scheduled = "\x00" // admit as if unscheduled: skip/require/claimed rules still apply
-	if reason := l.refusal(p); reason != "" {
+	if reason := s.issueRefusal(l, p); reason != "" {
 		return extension.Skip(reason), nil
 	}
 	return extension.RouteDecision{Match: true, Kind: WorkKindHeld, Reason: "a new issue labelled " + s.Labels.Scheduled, Display: display(nil, e)}, nil

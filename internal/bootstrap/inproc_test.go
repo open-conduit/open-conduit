@@ -123,7 +123,8 @@ func TestCheckConfig(t *testing.T) {
 				Bindings: []config.Binding{{Name: "agent", Executor: "shell", Connection: "o1", Resource: &config.Resource{Provider: "git", Config: json.RawMessage(`{"checkout":"."}`)}}},
 				Routes:   []config.Route{{Name: "r", Handler: "manual", Binding: "agent"}}},
 			"route": {ID: "route", Enabled: true, Routes: []config.Route{{Name: "r", Handler: "acme_route", Binding: "b"}}},
-			"op":    {ID: "op", Enabled: true, Bindings: []config.Binding{{Name: "b", Executor: "shell", Operations: []string{"acme.ping"}}}},
+			"op": {ID: "op", Enabled: true, Bindings: []config.Binding{{Name: "b", Executor: "shell", Operations: []string{"acme.ping"}},
+				{Name: "boxed", Executor: "shell", Sandbox: &config.Sandbox{Provider: "seatbelt"}}, {Name: "contained", Executor: "shell", Container: &config.Container{Provider: "docker"}}}},
 			"conn":  {ID: "conn", Enabled: true, Bindings: []config.Binding{{Name: "b", Executor: "shell", Connection: "a1"}}},
 			"other": {ID: "other", Enabled: true, Bindings: []config.Binding{{Name: "b", Executor: "shell", Operations: []string{"read_context"}}}},
 			"off":   {ID: "off", Extensions: []config.Extension{{Name: "e", Type: "acme"}}},
@@ -142,6 +143,14 @@ func TestCheckConfig(t *testing.T) {
 	}
 	if len(e.Routes) != 1 || len(e.Bindings) != 1 || e.Bindings[0].Toolbelt != "cli" || e.Bindings[0].Resource == nil || e.Bindings[0].Resource.Provider != "git" {
 		t.Fatalf("routes %+v bindings %+v", e.Routes, e.Bindings)
+	}
+	// Each binding says how its executor is confined.
+	var isolation []string
+	for _, b := range cfg.Scopes[2].Bindings {
+		isolation = append(isolation, b.Name+"="+b.Isolation)
+	}
+	if strings.Join(isolation, ",") != "b=,boxed=sandbox,contained=container" || e.Bindings[0].Isolation != "" {
+		t.Fatalf("isolation %v", isolation)
 	}
 	raw, _ := json.Marshal(cfg)
 	if len(cfg.Connections) != 1 || cfg.Connections[0].ID != "a1" || strings.Contains(string(raw), "env:ACME") {

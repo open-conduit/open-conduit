@@ -2,7 +2,11 @@ package github_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"reflect"
 	"strconv"
@@ -351,6 +355,37 @@ func TestPullRequestCorrelation(t *testing.T) {
 	sameIdentity(t, "merged", merged, f.scan(t)["pr/"+strconv.Itoa(byBody)])
 }
 
+// Issues and PRs carry their author's association, and a PR whether its
+// head is a fork, the same from push and reconcile, for admission.
+func TestAuthorAssociationAndForkAreObserved(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	issue := fk.OpenIssue("Stranger", "", alice)
+	fk.SetAssociation(issue, "NONE")
+	own := fk.OpenPull("Own", "", "own", "s1", alice)
+	fork := fk.OpenPull("Fork", "", "patch-1", "s2", alice)
+	fk.SetHeadRepo(fork, "mallory/repo")
+	gone := fk.OpenPull("Gone", "", "patch-2", "s3", alice)
+	fk.SetHeadRepo(gone, "-")
+	fk.SetAssociation(gone, "FIRST_TIME_CONTRIBUTOR")
+	scanned := f.scan(t)
+	var ip gh.IssuePayload
+	if err := json.Unmarshal(scanned["issue/"+strconv.Itoa(issue)].Event.Data.Data, &ip); err != nil || ip.AuthorAssociation != "NONE" {
+		t.Fatalf("issue association %q (%v)", ip.AuthorAssociation, err)
+	}
+	for n, want := range map[int]struct {
+		fork  bool
+		assoc string
+	}{own: {false, "OWNER"}, fork: {true, "OWNER"}, gone: {true, "FIRST_TIME_CONTRIBUTOR"}} {
+		var p gh.PullPayload
+		if err := json.Unmarshal(scanned["pr/"+strconv.Itoa(n)].Event.Data.Data, &p); err != nil || p.Fork != want.fork || p.AuthorAssociation != want.assoc {
+			t.Fatalf("PR %d: fork=%v association=%q, want %+v (%v)", n, p.Fork, p.AuthorAssociation, want, err)
+		}
+	}
+	pushed := onlyObservation(t, f.push(t, "pull_request", "d-fork", fk.PullHook("opened", fork)))
+	sameIdentity(t, "fork", pushed, scanned["pr/"+strconv.Itoa(fork)])
+}
+
 // GitHub sends no webhook when a PR picks up conflicts (#209), so reconcile
 // reads each open issue PR's mergeability. One conflicting head is observed
 // once however often main moves after it; a new head is new news.
@@ -627,5 +662,62 @@ func TestTrackedPullConflictsWithoutAnIssue(t *testing.T) {
 	plain.fake.SetMergeable(pr, &no)
 	if _, ok := plain.scan(t)["pr/"+strconv.Itoa(pr)+"/conflicts"]; ok {
 		t.Fatal("conflicts observed on a PR with no issue and no tracking")
+	}
+}
+
+// Only this connection's own App bot is marked by_connection, which admits
+// what its agents file: another App's bot isn't, nor is anyone on a token
+// connection, which has no App bot of its own (#346).
+func TestOwnBotIsMarkedByConnection(t *testing.T) {
+	fake := githubtest.New(repo, "tok")
+	t.Cleanup(fake.Close)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.AddApp("42", &key.PublicKey)
+	pemText := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	_, own, _ := githubtest.AppBot("42")
+	marker := "Follow-up\n\n<!-- open-conduit:agent work=work/1 -->"
+	mine := fake.OpenIssue("Mine", marker, githubtest.User{Login: own, Type: "Bot"})
+	other := fake.OpenIssue("Other", marker, githubtest.User{Login: "dependabot[bot]", Type: "Bot"})
+	person := fake.OpenIssue("Person", marker, alice)
+	for _, n := range []int{mine, other, person} {
+		fake.SetAssociation(n, "NONE")
+	}
+	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	scan := func(conn string) map[string]bool {
+		cfg, err := gh.ParseConnection([]byte(`{"api_url":"` + fake.URL + `"` + conn + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := gh.NewClient(cfg, func(_ context.Context, name string) (string, error) {
+			if name == gh.SecretToken {
+				return "tok", nil
+			}
+			return pemText, nil
+		}, gh.ClientOptions{Now: func() time.Time { return now }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := gh.ParseExtension([]byte(`{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`"}`), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := &fixture{fake: fake, now: now, in: gh.NewIngress(s, client, func() time.Time { return now }, gh.IngressOptions{BatchUnits: 1000, PageBudget: time.Minute})}
+		out := map[string]bool{}
+		for item, o := range f.scan(t) {
+			var p gh.IssuePayload
+			if strings.Count(item, "/") == 1 && json.Unmarshal(o.Event.Data.Data, &p) == nil {
+				out[p.Author] = p.ByConnection
+			}
+		}
+		return out
+	}
+	if got := scan(`,"bot_app_id":"42"`); !got[own] || got["dependabot[bot]"] || got["alice"] {
+		t.Fatalf("bot App connection: %v", got)
+	}
+	if got := scan(""); got[own] || got["dependabot[bot]"] || got["alice"] {
+		t.Fatalf("token connection: %v", got)
 	}
 }

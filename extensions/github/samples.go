@@ -40,7 +40,7 @@ func sampleIssue(s Settings, labels []string) domain.Event {
 		labels = []string{}
 	}
 	return sampleEvent(s.Namespace, TypeIssueOpen, domain.CorrelationKey{Source: s.Namespace, ExternalID: IssueKey(1, "")}, SchemaIssue,
-		IssuePayload{Repo: s.Repo, Number: 1, Title: "Example issue", State: "open", Labels: labels, Assignees: []string{}, Author: "octocat"})
+		IssuePayload{Repo: s.Repo, Number: 1, Title: "Example issue", State: "open", Labels: labels, Assignees: []string{}, Author: "octocat", AuthorAssociation: "OWNER"})
 }
 
 // sampleID keeps samples of several entries in one scope apart.
@@ -70,7 +70,7 @@ func (Route) Samples(_ context.Context, in extension.SampleInput) []extension.Ro
 			extension.RouteSample{ID: sampleID(all, s, "checks-passed"), Title: "Checks pass on a waiting pull request", Event: sampleEvent(s.Namespace, TypeChecksPassed, issue, SchemaChecks,
 				ChecksPayload{Repo: s.Repo, Number: 2, SHA: "0000000", Complete: true, Failed: []string{}, Runs: []CheckRun{}})},
 			extension.RouteSample{ID: sampleID(all, s, "pull-merged"), Title: "A pull request is merged", Event: sampleEvent(s.Namespace, TypePullMerged, domain.CorrelationKey{Source: s.Namespace, ExternalID: PullKey(2)}, SchemaPull,
-				PullPayload{Repo: s.Repo, Number: 2, Title: "Example change", State: "closed", Merged: true, Author: "octocat"})},
+				PullPayload{Repo: s.Repo, Number: 2, Title: "Example change", State: "closed", Merged: true, Author: "octocat", AuthorAssociation: "OWNER"})},
 		)
 	}
 	return out
