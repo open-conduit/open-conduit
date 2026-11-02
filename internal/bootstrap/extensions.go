@@ -390,10 +390,26 @@ func (d *daemon) openExtensions(ctx context.Context) {
 		d.log.Error("installed extensions refused: registration conflict", "error", err)
 		return
 	}
-	for _, f := range found {
+	// Each package is its own process: start them all at once, so the
+	// daemon's start (and with it the adoption of attempts a graceful
+	// restart released) takes the slowest handshake, not their sum. They
+	// join in discovery order.
+	loaded := make([]*extproc.Remote, len(found))
+	failures := make([]error, len(found))
+	var wg sync.WaitGroup
+	for i, f := range found {
+		deps, opts := d.extensionDeps(f.Manifest), d.extensionOptions(f, extproc.StatePaths(d.o.StateDir, f.Manifest.Name))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			loaded[i], failures[i] = extproc.Load(ctx, f, deps, opts)
+		}()
+	}
+	wg.Wait()
+	for i, f := range found {
 		name := f.Manifest.Name
 		paths := extproc.StatePaths(d.o.StateDir, name)
-		r, err := extproc.Load(ctx, f, d.extensionDeps(f.Manifest), d.extensionOptions(f, paths))
+		r, err := loaded[i], failures[i]
 		if err != nil {
 			diag := extproc.Diagnose(name, err, paths)
 			x.failed = append(x.failed, diag)

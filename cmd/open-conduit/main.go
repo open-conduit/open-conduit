@@ -16,6 +16,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/cli/upgrade"
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/tui"
 	"github.com/open-conduit/open-conduit/internal/web"
 	"github.com/open-conduit/open-conduit/protocol"
@@ -49,6 +50,9 @@ func main() {
 	if len(os.Args) > 2 && os.Args[1] == "remote" && os.Args[2] == "run" {
 		os.Exit(ssh.RunHelper(os.Args[3:], ssh.HelperOptions{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}))
 	}
+	// This binary serves the host-run packages, so discovery reads their
+	// manifests in process.
+	extproc.HostManifest = hostManifest
 	cwd, _ := os.Getwd()
 	env := cli.Env{Getenv: os.Getenv, Cwd: cwd, Serve: serve, ValidateConfig: validate, Setup: setup, Setups: bootstrap.Setups(), Adapters: bootstrap.Adapters}
 	env.TUI = func(c *client.Client) error { return tui.Run(tui.Operator(c), os.Stdin, os.Stdout) }
