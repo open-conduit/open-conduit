@@ -158,7 +158,7 @@ The config is strict and validated at load. Every field is optional:
 | `binary` | The Claude Code CLI (default `claude`). |
 | `model` | The model (default `opus`). |
 | `permission_mode` | Default `bypassPermissions`. |
-| `playbook` | The skill turns start on. `-` means none. Left out, it is none too, except that for one release the host keeps it `work-issue`, what it used to default to, and `config check` warns; `init github` and `migrate` write it. |
+| `playbook` | The skill turns start on. `-` means none. Left out, it is none too, except that for one release the host keeps it `work-issue`, what it used to default to (`Options.DefaultPlaybook`), and `config check` shows the executor's warning (`ConfigWarnings`); `init github` and `migrate` write it. |
 | `plugin_dir` | The playbook skills directory. |
 | `args` | Default `{number}`. |
 | `structured` | Default true. |
@@ -166,7 +166,7 @@ The config is strict and validated at load. Every field is optional:
 | `branch`, `workspace_mode` | The workspace request. |
 | `dir` | An absolute folder a workspace-free binding's sessions run in, used as-is. A folder that has gone fails only that binding's turns, as `workspace_unavailable`, never the config. In an [included folder](../config-management/#included-folders), `dir` defaults to the folder (unless the binding has a resource), and a relative `dir` or `plugin_dir` resolves against it. |
 | `handoff_minutes` | How long after a turn the session counts as cold (default 55). |
-| `cold_turns` | What a cold turn does: `handoff` (default) or `resume`. `handoff_share`, the removed experiment's setting, is ignored with a `config check` warning for one release, then rejected. |
+| `cold_turns` | What a cold turn does: `handoff` (default) or `resume`. `handoff_share`, the removed experiment's setting, is ignored with a `config check` warning from the executor (`ConfigWarnings`) for one release, then rejected. |
 | `env`, `pass_env`, `secret_env` | The environment. |
 | `extra_args` | Extra arguments. These may not override `-p`, the session or the MCP flags, nor `--tools` when `builtin_tools` is set. |
 | `builtin_tools` | The only built-in tools Claude Code offers, passed as `--tools`. An empty list turns them all off, so the agent has only its MCP toolbelt: no shell, file access or web. Unset keeps Claude Code's default set. Attaching to the session keeps the same limit. |

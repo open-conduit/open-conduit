@@ -200,44 +200,12 @@ func CommandFound(name string) bool {
 	return false
 }
 
-// Warnings returns everything config check warns about without failing:
-// CommandWarnings, then UnenforcedWarnings, then RemovedWarnings.
+// Warnings returns what config check warns about from the config's text
+// alone, without failing: CommandWarnings, then UnenforcedWarnings. The
+// executors' own warnings about their bindings need the validated config
+// (BindingWarnings).
 func Warnings(data []byte) []string {
-	return append(append(CommandWarnings(data), UnenforcedWarnings(data)...), RemovedWarnings(data)...)
-}
-
-// RemovedWarnings returns one warning per binding whose config still sets
-// handoff_share (the Claude Code handoff experiment is gone, and the setting
-// is ignored for one release and then rejected), and one per claude-code
-// binding that names no playbook: it runs work-issue for one release, then
-// starts its turns on the rendered Work alone.
-func RemovedWarnings(data []byte) []string {
-	var doc struct {
-		Scopes []struct {
-			ID       string `json:"id"`
-			Bindings []struct {
-				Name     string                     `json:"name"`
-				Executor string                     `json:"executor"`
-				Disabled bool                       `json:"disabled"`
-				Config   map[string]json.RawMessage `json:"config"`
-			} `json:"bindings"`
-		} `json:"scopes"`
-	}
-	if json.Unmarshal(data, &doc) != nil {
-		return nil
-	}
-	var out []string
-	for _, sc := range doc.Scopes {
-		for _, b := range sc.Bindings {
-			if _, ok := b.Config["handoff_share"]; ok {
-				out = append(out, "scope "+sc.ID+" binding "+b.Name+" config.handoff_share is ignored: the handoff experiment was removed and a later release rejects it; remove it, and set cold_turns (handoff or resume) to choose what a cold turn does")
-			}
-			if _, ok := b.Config["playbook"]; b.Executor == "claude-code" && !b.Disabled && !ok {
-				out = append(out, "scope "+sc.ID+" binding "+b.Name+" names no playbook: it runs work-issue for now, but a later release starts its turns on the rendered Work alone; set config.playbook (work-issue for GitHub issues, or \"-\" for none)")
-			}
-		}
-	}
-	return out
+	return append(CommandWarnings(data), UnenforcedWarnings(data)...)
 }
 
 // UnenforcedWarnings returns one warning per admission_limit the config sets,

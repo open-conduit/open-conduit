@@ -376,6 +376,13 @@ func (e *remoteExecutor) ValidateConfig(raw json.RawMessage, secretNames []strin
 	return e.r.Validator(protocol.ValidateExecutor, e.decl.Name)(raw, secretNames)
 }
 
+// ConfigWarnings are the package's warnings about a valid binding config
+// (config.ConfigWarner), asked through validate with kind executor; none
+// when the call fails or an older package answers without any.
+func (e *remoteExecutor) ConfigWarnings(raw json.RawMessage) []string {
+	return e.r.ExecutorWarnings(e.decl.Name)(raw)
+}
+
 // ResourceMode is the resource mode a binding config makes the executor
 // request (config.ResourceModer), asked through validate when the manifest
 // declares resource_mode; "" (the resource config's default) otherwise.

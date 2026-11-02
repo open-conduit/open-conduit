@@ -133,8 +133,16 @@ func TestDaemonExtensionPackages(t *testing.T) {
 	if err := os.WriteFile(bad, withBinding(strings.Replace(overridden, `"workspace_mode":"work"`, `"workspace_mode":"fresh"`, 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err != nil || strings.Contains(string(out), "never applies") {
+	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err != nil || strings.Contains(string(out), "never applies") || strings.Contains(string(out), "config.retries") {
 		t.Fatalf("offline check of an agreeing scratch mode: %v\n%s", err, out)
+	}
+	// The installed executor's own warnings about a binding config come
+	// through validate, as Claude Code's do in process.
+	if err := os.WriteFile(bad, withBinding(strings.Replace(overridden, `"auto":true`, `"auto":true,"retries":2`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err != nil || !strings.Contains(string(out), "scope notes-scope binding scratch: config.retries is ignored: the runner never retries a job") {
+		t.Fatalf("offline check of an executor's config warning: %v\n%s", err, out)
 	}
 
 	d.start("")
