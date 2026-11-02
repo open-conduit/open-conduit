@@ -470,6 +470,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			w := msg.work
 			m.work, m.waits, m.actions, m.panels = &w, msg.waits, msg.actions, msg.panels
 		}
+	case holdMsg:
+		return m.hold(msg)
 	case menuMsg:
 		switch {
 		case msg.err != nil:
@@ -558,9 +560,12 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 	if m.confirm != nil || m.ask != nil || m.menu != nil {
 		return m.prompted(k)
 	}
-	switch k {
-	case "ctrl+c", "q":
+	// q quits from the list; in a detail or log it goes back like esc.
+	if k == "ctrl+c" || (k == "q" && m.mode == listMode) {
 		return m, tea.Quit
+	}
+	if k == "q" {
+		k = "esc"
 	}
 	m.notice = ""
 	switch m.mode {
@@ -691,13 +696,11 @@ func (m Model) View() string {
 			filter = "all"
 		}
 		items := m.items()
-		view, keys := "by work", "enter detail · g every turn · l log · t transcript · f filter · r refresh · q quit"
+		view := "by work"
 		if m.perTurn {
-			view, keys = "every turn", "enter detail · g by work · l log · t transcript · f filter · r refresh · q quit"
+			view = "every turn"
 		}
-		if m.ctl != nil {
-			keys += " · c scope actions · R run/retry · H hold · a attach · x/X cancel"
-		}
+		keys := footer(inList, m.ctl != nil, false, m.perTurn)
 		works := map[string]bool{}
 		for _, r := range m.runs {
 			works[r.WorkID] = true
@@ -728,17 +731,14 @@ func (m Model) View() string {
 		if m.work != nil && m.detail != nil && m.work.ID == m.detail.WorkID {
 			b.WriteString(PanelText(m.panels, m.workActions()))
 		}
-		keys := "l log · t transcript · r refresh · esc back · q quit"
-		if m.ctl != nil {
-			keys += " · R run/retry · H hold/release · a attach · x cancel run · X cancel work"
-			if items := m.workActions(); len(items) > 0 {
-				b.WriteString("\n" + boldS.Render("Actions") + "  " + actionLine(items, false) + "\n")
-				keys += " · 1-9 action"
-			}
+		items := m.workActions()
+		if m.ctl != nil && len(items) > 0 {
+			b.WriteString("\n" + boldS.Render("Actions") + "  " + actionLine(items, false) + "\n")
 		}
+		keys := footer(inDetail, m.ctl != nil, len(items) > 0, false)
 		b.WriteString("\n" + dimS.Render(keys) + "\n")
 	case logMode:
-		b.WriteString(boldS.Render("Log "+m.logTitle) + dimS.Render("  ↑/↓ pgup/pgdn scroll · t next output · esc back · q quit") + "\n")
+		b.WriteString(boldS.Render("Log "+m.logTitle) + dimS.Render("  ↑/↓ pgup/pgdn scroll · t next output · esc/q back") + "\n")
 		end := min(m.offset+m.page(), len(m.log))
 		for _, l := range m.log[m.offset:end] {
 			b.WriteString(l + "\n")

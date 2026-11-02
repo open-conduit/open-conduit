@@ -42,8 +42,8 @@ func (c *controlSource) CancelWork(_ context.Context, id, rev, _, _ string) (cli
 func (c *controlSource) RetryWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
 	return c.rec("retry", id, rev)
 }
-func (c *controlSource) HoldWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
-	c.work.Hold = &client.Hold{EventID: "h"}
+func (c *controlSource) HoldWork(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
+	c.work.Hold = &client.Hold{EventID: "h", Reason: reason}
 	return c.rec("hold", id, rev)
 }
 func (c *controlSource) ReleaseWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
@@ -116,6 +116,20 @@ func drain(t *testing.T, m tea.Model, cmd tea.Cmd) tea.Model {
 	return m
 }
 
+// settle is drain that also runs the commands the messages lead to, for a
+// control that first reads the Work and then acts.
+func settle(t *testing.T, m tea.Model, cmd tea.Cmd) tea.Model {
+	t.Helper()
+	for depth := 0; cmd != nil && depth < 5; depth++ {
+		msg := cmd()
+		if _, ok := msg.(tea.BatchMsg); ok {
+			return drain(t, m, cmd)
+		}
+		m, cmd = m.Update(msg)
+	}
+	return m
+}
+
 func TestOperatorControls(t *testing.T) {
 	live := run("r1", "running", "github.issue", 1, "1")
 	live.Revision = "4"
@@ -150,14 +164,41 @@ func TestOperatorControls(t *testing.T) {
 	if len(src.calls) != 1 || src.calls[0] != "cancel-execution r1 4" || !strings.Contains(m.View(), "accepted (event manual/cancel-execution)") {
 		t.Fatalf("cancel: %v\n%s", src.calls, m.View())
 	}
-	// R retries and H holds then releases, each at the Work's revision.
+	// R asks before retrying, since a retry starts a new turn.
 	m, cmd = press(m, "R")
+	if cmd != nil || len(src.calls) != 1 || !strings.Contains(m.View(), "run or retry work w-github.issue (starts a new turn)? y/n") {
+		t.Fatalf("R did not ask: %v\n%s", src.calls, m.View())
+	}
+	m, _ = press(m, "n")
+	if len(src.calls) != 1 {
+		t.Fatal("declined retry ran")
+	}
+	m, _ = press(m, "R")
+	m, cmd = press(m, "y")
 	m = drain(t, m, cmd)
+	// H asks for a reason and records it; enter alone records the default.
+	// Held Work is released without asking. Each is at the Work's revision.
 	m, cmd = press(m, "H")
-	m = drain(t, m, cmd)
+	m = settle(t, m, cmd)
+	if !strings.Contains(m.View(), "hold work w-github.issue, reason (optional): ") {
+		t.Fatalf("H did not ask for a reason:\n%s", m.View())
+	}
+	m, _ = press(m, "needs a decision")
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = settle(t, m, cmd)
+	if src.work.Hold == nil || src.work.Hold.Reason != "needs a decision" {
+		t.Fatalf("hold reason: %+v", src.work.Hold)
+	}
 	m, cmd = press(m, "H")
-	m = drain(t, m, cmd)
-	if strings.Join(src.calls[1:], ",") != "retry w-github.issue 9,hold w-github.issue 9,release w-github.issue 9" {
+	m = settle(t, m, cmd)
+	m, cmd = press(m, "H")
+	m = settle(t, m, cmd)
+	m, cmd = m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = settle(t, m, cmd)
+	if src.work.Hold == nil || src.work.Hold.Reason != "operator (tui)" {
+		t.Fatalf("default hold reason: %+v", src.work.Hold)
+	}
+	if strings.Join(src.calls[1:], ",") != "retry w-github.issue 9,hold w-github.issue 9,release w-github.issue 9,hold w-github.issue 9" {
 		t.Fatalf("calls: %v", src.calls)
 	}
 	// c lists the scopes' actions; a number picks one, its prompt takes
@@ -208,6 +249,16 @@ func TestOperatorControls(t *testing.T) {
 	}
 	if _, cmd = press(m, "a"); cmd == nil {
 		t.Fatal("a must attach")
+	}
+	// q in a detail goes back to the list rather than quitting.
+	m, cmd = press(m, "q")
+	if cmd != nil {
+		if _, quit := cmd().(tea.QuitMsg); quit {
+			t.Fatal("q quit from the detail")
+		}
+	}
+	if !strings.Contains(m.View(), "Open Conduit runs") {
+		t.Fatalf("q did not go back:\n%s", m.View())
 	}
 }
 
