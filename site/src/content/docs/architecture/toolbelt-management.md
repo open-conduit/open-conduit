@@ -24,7 +24,7 @@ Idempotency semantics:
 - **emit**: idempotent by delivery identity.
 - **Request IDs** (`request_id`, or the HTTP `Idempotency-Key` when absent): replay the committed result for the same execution and operation, and reject a changed body with `ErrRequestConflict`.
 - **Children**: allocate stable IDs from the request ID before commit.
-- **Extension handlers**: run at most once per request ID.
+- **Extension handlers**: run once per request ID, unless the host crashes in the window between the handler's effect and the commit of its result: the retry then runs the handler again. Handlers must be idempotent on the request ID ([extension protocol](../extension-protocol/#operation-handlers-and-request-ids)). `TestProductionToolbeltReplayWindow` drills that window.
 - **wait and declare_outcome**: release authority, so a duplicate after a lost response fails authorization. Resolve it by inspection, as B05 requires.
 
 `wait` and `declare_outcome` are recorded under the fence as a per-epoch declaration. Toolbelt authority is released at once. A request alone does not register a predicate or establish physical exclusion; this resolves the B03 "atomic release" wording against the scheduler's handshake rule ([execution scheduling](../execution-scheduling/), [timers and waits](../timers-waits/)). When the trusted host observes the segment finish or suspend, `Scheduler.Complete` applies the declaration:
