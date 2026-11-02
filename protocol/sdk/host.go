@@ -50,7 +50,36 @@ func (h *Host) List(ctx context.Context, namespace, prefix string) ([]protocol.K
 // Commit applies a precondition batch atomically; a failed check is
 // storage.ErrConflict and changes nothing.
 func (h *Host) Commit(ctx context.Context, b protocol.KVCommitParams) error {
-	return h.conn.Call(ctx, "kv.commit", b, nil)
+	_, err := h.CommitBatch(ctx, b)
+	return err
+}
+
+// CommitBatch is Commit answering each of the batch's Emissions' outcomes:
+// the Events the host accepted in the same transaction as its writes.
+func (h *Host) CommitBatch(ctx context.Context, b protocol.KVCommitParams) (protocol.KVCommitResult, error) {
+	var out protocol.KVCommitResult
+	err := h.conn.Call(ctx, "kv.commit", b, &out)
+	return out, err
+}
+
+// ArmTimer arms (or re-arms, guarded by expected) a recurring timer of one
+// of the extension's recurrence kinds, whose Event is of its own families.
+func (h *Host) ArmTimer(ctx context.Context, scope domain.ID, t domain.Timer, expected domain.Revision, kind string, spec []byte) error {
+	return h.conn.Call(ctx, "timer.arm", protocol.TimerArmParams{ScopeID: string(scope), Timer: protocol.FromTimer(t), Expected: uint64(expected), Kind: kind, Spec: spec}, nil)
+}
+
+// CancelTimer cancels one of the extension's timers (an absent one is a
+// no-op), guarded by expected.
+func (h *Host) CancelTimer(ctx context.Context, id domain.ID, expected domain.Revision) error {
+	return h.conn.Call(ctx, "timer.cancel", protocol.TimerCancelParams{ID: string(id), Expected: uint64(expected)}, nil)
+}
+
+// CancelWork cancels Work of the extension's own kinds, idempotent per key
+// and guarded by expected; it answers the cancellation's Event.
+func (h *Host) CancelWork(ctx context.Context, work domain.ID, expected domain.Revision, reason, key string) (domain.ID, error) {
+	var out protocol.WorkCancelResult
+	err := h.conn.Call(ctx, "work.cancel", protocol.WorkCancelParams{WorkID: string(work), Expected: uint64(expected), Reason: reason, Key: key}, &out)
+	return domain.ID(out.EventID), err
 }
 
 // Update reads a key, applies fn and commits with a version check, retrying

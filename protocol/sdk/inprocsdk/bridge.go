@@ -18,9 +18,12 @@
 // extension's own KV and scoped state reads), secrets go through
 // secret.resolve, deliveries through ingress.deliver, and Authorize,
 // WaitTarget, WaitProgress, Render, Act, Actions, SettleHold and Capture
-// through their methods. A service with no method here (in-transaction
-// acceptance, timers, Work cancellation, the config host, probes) is nil,
-// which in-process extensions already handle.
+// through their methods. In-transaction acceptance returns the Event from
+// the transaction as a kv.commit Emission, which the host accepts with the
+// transaction's writes (services.go); timers go through timer.arm and
+// timer.cancel, Work cancellation through work.cancel, and, with their
+// permissions declared, the config host through config.* and the probes
+// through probe.list and probe.run.
 //
 // Webhook paths are the registered sources the extension has a webhook
 // handler for. Action providers, which an in-process extension offers per
@@ -523,7 +526,7 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 		state = b.srv.StateDir()
 	}
 	b.mu.Unlock()
-	return inproc.Host{
+	host := inproc.Host{
 		Store: sdk.NewStore(h),
 		Now:   time.Now,
 		Log:   slog.New(slog.NewJSONHandler(os.Stderr, nil)).With("extension", b.x.Name()),
@@ -574,6 +577,8 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 			return h.Capture(ctx, domain.ID(scope), name, at, props)
 		},
 	}
+	b.services(&host, h)
+	return host
 }
 
 func (b *Bridge) isDryRun() bool {

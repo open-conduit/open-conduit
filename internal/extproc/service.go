@@ -236,7 +236,7 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
 		}
-		return struct{}{}, s.kvCommit(ctx, p)
+		return s.kvCommit(ctx, p)
 	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.scopes", "state.timers":
 		var p protocol.StateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
@@ -535,16 +535,68 @@ func (s *Service) checkBatch(checks []protocol.KVCheck, puts []protocol.KVPut, d
 	return nil
 }
 
-func (s *Service) kvCommit(ctx context.Context, p protocol.KVCommitParams) error {
+// kvCommit applies one batch in one transaction: the checks, then each
+// Emission's acceptance, then the writes. An Emission over its chain's
+// causal bounds is refused alone and the rest commits; any other refusal or
+// failure applies nothing.
+func (s *Service) kvCommit(ctx context.Context, p protocol.KVCommitParams) (protocol.KVCommitResult, error) {
+	var out protocol.KVCommitResult
 	if err := s.checkBatch(p.Checks, p.Puts, p.Deletes); err != nil {
-		return err
+		return out, err
 	}
-	if len(p.Puts)+len(p.Deletes) == 0 {
-		return invalid("empty batch")
+	if len(p.Puts)+len(p.Deletes)+len(p.Emissions) == 0 {
+		return out, invalid("empty batch")
 	}
-	return s.deps.Store.Transact(ctx, storage.Guard{Now: s.deps.Now()}, func(tx storage.Tx) error {
-		return s.applyKV(tx, p.Checks, p.Puts, p.Deletes)
+	now := s.deps.Now()
+	events := make([]domain.Event, len(p.Emissions))
+	for i, em := range p.Emissions {
+		e, err := s.emitted(em.ScopeID, em.Event, now)
+		if err != nil {
+			return out, err
+		}
+		events[i] = e
+	}
+	err := s.deps.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		out = protocol.KVCommitResult{}
+		if err := s.applyKV(tx, p.Checks, nil, nil); err != nil {
+			return err
+		}
+		for i, em := range p.Emissions {
+			scope := domain.ID(em.ScopeID)
+			var accepted domain.AcceptedEvent
+			var added bool
+			var err error
+			if em.Parent == "" {
+				accepted, added, err = runtime.AcceptInTx(tx, scope, events[i])
+			} else {
+				var parent domain.AcceptedEvent
+				if parent, err = s.parentInTx(tx, scope, em.Parent); err != nil {
+					return err
+				}
+				accepted, added, err = runtime.AcceptDerivedInTx(tx, now, s.limits(), scope, parent.Event.ID, events[i])
+				if errors.Is(err, runtime.ErrCausalRejected) {
+					// The host has recorded the refusal; the batch commits.
+					out.Emissions = append(out.Emissions, protocol.EmissionResult{Refused: protocol.CodeCausalLimit})
+					continue
+				}
+			}
+			if err != nil {
+				return err
+			}
+			out.Emissions = append(out.Emissions, protocol.EmissionResult{Event: protocol.FromAccepted(accepted), Added: added})
+		}
+		return s.applyKV(tx, nil, p.Puts, p.Deletes)
 	})
+	if err != nil {
+		return protocol.KVCommitResult{}, err
+	}
+	for _, r := range out.Emissions {
+		if r.Added {
+			s.nudge()
+			break
+		}
+	}
+	return out, nil
 }
 
 // State reads, limited to configured scopes. A record outside them is
@@ -695,54 +747,27 @@ func (s *Service) ownFamily(t string) bool {
 func (s *Service) accept(ctx context.Context, p protocol.EventAcceptParams) (protocol.EventAcceptResult, error) {
 	var out protocol.EventAcceptResult
 	scope := domain.ID(p.ScopeID)
-	if !s.allowedScopes()[scope] {
-		return out, unauthorized("scope is not configured for this extension")
-	}
 	if p.Parent == "" {
-		return out, unauthorized("a subprocess never mints a causal root outside ingress")
+		return out, unauthorized("event.accept derives an Event; a root Event is an Emission of kv.commit")
 	}
-	e := p.Event.Domain()
-	if !s.ownFamily(e.Type) {
-		return out, protocol.Errorf(protocol.CodeUndeclared, "family not declared")
-	}
-	if !protocol.SourceNamespace(s.name, e.Source) || e.DeliveryID == "" {
-		return out, unauthorized("source is outside the extension's namespace")
-	}
-	if e.CausationID != "" || e.ExecutionID != "" {
-		return out, unauthorized("causation and execution are assigned by the host")
-	}
-	if err := s.manifest.CheckWrite(e.Data); err != nil {
-		return out, protocol.Errorf(protocol.CodeSchema, err.Error())
+	now := s.deps.Now()
+	e, err := s.emitted(p.ScopeID, p.Event, now)
+	if err != nil {
+		return out, err
 	}
 	if err := s.checkBatch(p.Checks, p.Records, p.Deletes); err != nil {
 		return out, err
 	}
-	now := s.deps.Now()
-	if e.ReceivedAt.IsZero() {
-		e.ReceivedAt = now
-	}
-	if e.OccurredAt.IsZero() {
-		e.OccurredAt = e.ReceivedAt
-	}
-	sum := sha256.Sum256([]byte(e.Source + "\x00" + e.DeliveryID))
-	e.ID = domain.ID("ext/" + hex.EncodeToString(sum[:16]))
 	var refusal error
-	err := s.deps.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
-		parent, err := tx.Event(domain.ID(p.Parent))
+	err = s.deps.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		parent, err := s.parentInTx(tx, scope, p.Parent)
 		if err != nil {
-			return unauthorized("parent is not an accepted event")
-		}
-		if ps, err := runtime.EventScopeInTx(tx, parent); err != nil || ps != scope {
-			return unauthorized("parent is outside the scope")
+			return err
 		}
 		if err := s.applyKV(tx, p.Checks, nil, nil); err != nil {
 			return err
 		}
-		limits := s.deps.Limits
-		if s.deps.CurrentLimits != nil {
-			limits = s.deps.CurrentLimits()
-		}
-		accepted, added, err := runtime.AcceptDerivedInTx(tx, now, limits, scope, parent.Event.ID, e)
+		accepted, added, err := runtime.AcceptDerivedInTx(tx, now, s.limits(), scope, parent.Event.ID, e)
 		if errors.Is(err, runtime.ErrCausalRejected) {
 			refusal = protocol.Errorf(protocol.CodeCausalLimit, "causal depth or rate bound")
 			return nil // commit only the redacted diagnostic
@@ -766,6 +791,56 @@ func (s *Service) accept(ctx context.Context, p protocol.EventAcceptParams) (pro
 		s.nudge()
 	}
 	return out, nil
+}
+
+// emitted checks an Event the extension emits into scope (event.accept or
+// an Emission) and completes it: its own family, source namespace and
+// payload schema, no causation or execution of its own, and the host's ID
+// and receipt time.
+func (s *Service) emitted(scopeID string, ev protocol.Event, now time.Time) (domain.Event, error) {
+	if !s.allowedScopes()[domain.ID(scopeID)] {
+		return domain.Event{}, unauthorized("scope is not configured for this extension")
+	}
+	e := ev.Domain()
+	if !s.ownFamily(e.Type) {
+		return domain.Event{}, protocol.Errorf(protocol.CodeUndeclared, "family not declared")
+	}
+	if !protocol.SourceNamespace(s.name, e.Source) || e.DeliveryID == "" {
+		return domain.Event{}, unauthorized("source is outside the extension's namespace")
+	}
+	if e.CausationID != "" || e.ExecutionID != "" {
+		return domain.Event{}, unauthorized("causation and execution are assigned by the host")
+	}
+	if err := s.manifest.CheckWrite(e.Data); err != nil {
+		return domain.Event{}, protocol.Errorf(protocol.CodeSchema, err.Error())
+	}
+	if e.ReceivedAt.IsZero() {
+		e.ReceivedAt = now
+	}
+	if e.OccurredAt.IsZero() {
+		e.OccurredAt = e.ReceivedAt
+	}
+	e.ID = domain.ID(protocol.EmittedEventID(e.Source, e.DeliveryID))
+	return e, nil
+}
+
+// parentInTx is an emitted Event's parent: an accepted Event in scope.
+func (s *Service) parentInTx(tx storage.Tx, scope domain.ID, id string) (domain.AcceptedEvent, error) {
+	parent, err := tx.Event(domain.ID(id))
+	if err != nil {
+		return parent, unauthorized("parent is not an accepted event")
+	}
+	if ps, err := runtime.EventScopeInTx(tx, parent); err != nil || ps != scope {
+		return parent, unauthorized("parent is outside the scope")
+	}
+	return parent, nil
+}
+
+func (s *Service) limits() runtime.CausalLimits {
+	if s.deps.CurrentLimits != nil {
+		return s.deps.CurrentLimits()
+	}
+	return s.deps.Limits
 }
 
 func (s *Service) arm(ctx context.Context, p protocol.TimerArmParams) error {
@@ -972,5 +1047,11 @@ func (k LocalKV) List(ctx context.Context, namespace, prefix string) ([]protocol
 	return out.Entries, err
 }
 func (k LocalKV) Commit(ctx context.Context, b protocol.KVCommitParams) error {
+	_, err := k.S.kvCommit(ctx, b)
+	return err
+}
+
+// CommitBatch is Commit answering each Emission's outcome.
+func (k LocalKV) CommitBatch(ctx context.Context, b protocol.KVCommitParams) (protocol.KVCommitResult, error) {
 	return k.S.kvCommit(ctx, b)
 }

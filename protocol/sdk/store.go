@@ -54,6 +54,47 @@ type storeTx struct {
 	reads  map[kvKey]kvRead
 	writes map[kvKey][]byte // nil value: delete
 	order  []kvKey
+	emits  []protocol.Emission
+}
+
+// ErrNotBuffered refuses EmitInTx on a transaction Store.Transact did not
+// open.
+var ErrNotBuffered = errors.New("sdk: not a transaction of sdk.Store")
+
+// EmitInTx returns an Event of one of the extension's own families from tx,
+// a transaction of Store.Transact, for the host to accept in the same
+// transaction as tx's writes when it commits (a kv.commit Emission): a
+// root Event of scope when parent is empty, else one derived from parent.
+// It answers the Event as it will be accepted (its ID is the host's,
+// EmittedEventID; its sequence is unknown until commit), so the
+// transaction's own records can name it. The host's refusal of the Event
+// refuses the commit, except a causal bound, which the host records and
+// the rest commits through.
+func EmitInTx(tx storage.Tx, scope, parent domain.ID, e domain.Event) (domain.AcceptedEvent, error) {
+	t, ok := tx.(*storeTx)
+	if !ok {
+		return domain.AcceptedEvent{}, ErrNotBuffered
+	}
+	if e.Source == "" || e.DeliveryID == "" {
+		return domain.AcceptedEvent{}, storage.ErrInvalid
+	}
+	t.emits = append(t.emits, protocol.Emission{ScopeID: string(scope), Parent: string(parent), Event: protocol.FromEvent(e)})
+	e.ID = domain.ID(protocol.EmittedEventID(e.Source, e.DeliveryID))
+	return domain.AcceptedEvent{Event: e}, nil
+}
+
+// EventScopeInTx is the scope an accepted Event was accepted into, read
+// through state.event (only the extension's configured scopes are visible).
+func EventScopeInTx(tx storage.Tx, a domain.AcceptedEvent) (domain.ID, error) {
+	t, ok := tx.(*storeTx)
+	if !ok {
+		return "", ErrNotBuffered
+	}
+	var out protocol.AcceptedEvent
+	if err := t.h.Call(t.ctx, "state.event", protocol.StateParams{ID: string(a.Event.ID)}, &out); err != nil {
+		return "", err
+	}
+	return domain.ID(out.ScopeID), nil
 }
 
 // Transact runs fn once over a buffered transaction and commits its KV
@@ -66,10 +107,10 @@ func (s *Store) Transact(ctx context.Context, _ storage.Guard, fn func(storage.T
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if len(tx.writes) == 0 {
+	if len(tx.writes) == 0 && len(tx.emits) == 0 {
 		return nil
 	}
-	var b protocol.KVCommitParams
+	b := protocol.KVCommitParams{Emissions: tx.emits}
 	for k, r := range tx.reads {
 		b.Checks = append(b.Checks, protocol.KVCheck{Namespace: k.ns, Key: k.key, Version: r.version, Absent: !r.found})
 	}

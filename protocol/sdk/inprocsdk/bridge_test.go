@@ -17,6 +17,7 @@ import (
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/sdk/inprocsdk"
 	"github.com/open-conduit/open-conduit/protocol/sdk/sdktest"
+	"github.com/open-conduit/open-conduit/storage"
 )
 
 // acme is an in-process extension with a source per entry (a webhook for
@@ -275,5 +276,69 @@ func TestFailedStartIsRetried(t *testing.T) {
 	}
 	if _, err := h.Operation(ctx, "acme.ping", domain.Payload{Data: json.RawMessage(`{}`)}); err != nil {
 		t.Fatalf("operation after the retried start: %v", err)
+	}
+}
+
+// In-transaction acceptance crosses the wire as kv.commit Emissions (#428):
+// the root and derived Events an extension accepts in its transaction land
+// with that transaction's writes, a foreign family is refused at once, and
+// the services the extension declares nothing for stay nil.
+func TestAcceptInTxIsCarried(t *testing.T) {
+	x := &acme{}
+	b, err := inprocsdk.New(x, base())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	parent := domain.Event{ID: "parent", Type: "acme.thing", Source: "acme/eng/plain", DeliveryID: "p1"}
+	h := sdktest.New(t, b.Extension(), sdktest.WithEvents("eng", parent))
+	if _, err := h.Configure(ctx, protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: "eng", Type: "acme", Name: "plain", Config: json.RawMessage(`{}`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	x.mu.Lock()
+	host := *x.host
+	x.mu.Unlock()
+	if host.AcceptInTx == nil || host.AcceptDerivedInTx == nil || host.EventScope == nil {
+		t.Fatal("in-transaction acceptance is not carried")
+	}
+	if host.Timers != nil || host.CancelWork != nil || host.Config != nil || host.Probes != nil {
+		t.Fatal("a service the manifest declares nothing for is set")
+	}
+	var root, derived domain.AcceptedEvent
+	err = host.Store.Transact(ctx, storage.Guard{}, func(tx storage.Tx) error {
+		if _, _, err := host.AcceptInTx(tx, "eng", domain.Event{Type: "other.thing", Source: "acme", DeliveryID: "x"}); !errors.Is(err, inproc.ErrNotOwn) {
+			t.Errorf("a foreign family: %v, want ErrNotOwn", err)
+		}
+		var err error
+		if root, _, err = host.AcceptInTx(tx, "eng", domain.Event{Type: "acme.thing", Source: "acme", DeliveryID: "r1"}); err != nil {
+			return err
+		}
+		a, err := tx.Event("parent")
+		if err != nil {
+			return err
+		}
+		if scope, err := host.EventScope(tx, a); err != nil || scope != "eng" {
+			t.Errorf("EventScope %q %v", scope, err)
+		}
+		if derived, _, err = host.AcceptDerivedInTx(tx, "eng", "parent", domain.Event{Type: "acme.thing", Source: "acme", DeliveryID: "d1"}); err != nil {
+			return err
+		}
+		return tx.Put("acme", "origin/"+string(root.Event.ID), []byte("r1"))
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	byID := map[domain.ID]domain.AcceptedEvent{}
+	for _, a := range h.Events() {
+		byID[a.Event.ID] = a
+	}
+	if _, ok := byID[root.Event.ID]; !ok || root.Event.ID != domain.ID(protocol.EmittedEventID("acme", "r1")) {
+		t.Fatalf("the root Event %q was not accepted under the host's ID", root.Event.ID)
+	}
+	if d, ok := byID[derived.Event.ID]; !ok || d.Event.CausationID != "parent" {
+		t.Fatalf("the derived Event: %+v", d)
+	}
+	if string(h.KV("acme")["origin/"+string(root.Event.ID)]) != "r1" {
+		t.Fatal("the transaction's write, naming the Event, did not land with it")
 	}
 }

@@ -99,7 +99,7 @@ var Methods = []Method{
 	// Namespaced KV (mandatory, never negotiated) and read-only state.
 	{Name: "kv.get", Direction: ExtensionToHost, Contract: []string{"storage.Tx.Get"}},
 	{Name: "kv.list", Direction: ExtensionToHost, Contract: []string{"storage.Tx.List"}},
-	{Name: "kv.commit", Direction: ExtensionToHost, Contract: []string{"storage.Tx.Put", "storage.Tx.Delete", "storage.Store.Transact"}},
+	{Name: "kv.commit", Direction: ExtensionToHost, Contract: []string{"storage.Tx.Put", "storage.Tx.Delete", "storage.Store.Transact", "inproc.Host.AcceptInTx", "inproc.Host.AcceptDerivedInTx"}},
 	{Name: "state.work", Direction: ExtensionToHost, Contract: []string{"storage.Tx.Work"}},
 	{Name: "state.works", Direction: ExtensionToHost, Contract: []string{"storage.Tx.ListWorks"}},
 	{Name: "state.executions", Direction: ExtensionToHost, Contract: []string{"storage.Tx.ListExecutions"}},

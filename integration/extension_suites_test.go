@@ -230,6 +230,59 @@ func TestExternalExtensionKVSharedSuite(t *testing.T) {
 	})
 }
 
+// TestExternalExtensionEmissionsSharedSuite runs the emission cases (#428)
+// against the host's scoped service, called in process and over the
+// protocol: a kv.commit batch's Events are accepted in the transaction that
+// applies its checks and writes, or not at all.
+func TestExternalExtensionEmissionsSharedSuite(t *testing.T) {
+	fixture := func(t *testing.T, wire bool) conformance.ExtensionEmissionsFixture {
+		e := newExtEnv(t)
+		svc, err := extproc.NewService(notes.Manifest(notes.Options{Release: 2}), e.deps())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var kv conformance.ExtensionEmitter = extproc.LocalKV{S: svc}
+		if wire {
+			kv = pipeHost(t, svc)
+		}
+		read := func(fn func(tx storage.Tx) error) error {
+			return e.store.Transact(context.Background(), storage.Guard{Now: e.clock.Now()}, fn)
+		}
+		parent := domain.Event{ID: "parent-event", Type: notes.Changed, Source: "notes/" + string(extensionScope), DeliveryID: "parent", ReceivedAt: e.clock.Now(), OccurredAt: e.clock.Now()}
+		if err := e.store.Transact(context.Background(), storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
+			_, _, err := runtime.AcceptInTx(tx, extensionScope, parent)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return conformance.ExtensionEmissionsFixture{KV: kv, Name: notes.Name, Scope: string(extensionScope), Parent: string(parent.ID),
+			Event: func(delivery string) protocol.Event {
+				return protocol.Event{Type: notes.Changed, Source: notes.Name, DeliveryID: delivery}
+			},
+			Accepted: func(id string) bool {
+				return read(func(tx storage.Tx) error {
+					_, err := tx.Event(domain.ID(id))
+					return err
+				}) == nil
+			},
+			Peek: func(ns, key string) ([]byte, error) {
+				var v []byte
+				err := read(func(tx storage.Tx) error {
+					var err error
+					v, err = tx.Get(ns, key)
+					return err
+				})
+				return v, err
+			}}
+	}
+	t.Run("in_process", func(t *testing.T) {
+		conformance.RunExtensionEmissions(t, func() conformance.ExtensionEmissionsFixture { return fixture(t, false) })
+	})
+	t.Run("protocol", func(t *testing.T) {
+		conformance.RunExtensionEmissions(t, func() conformance.ExtensionEmissionsFixture { return fixture(t, true) })
+	})
+}
+
 func notesActionFixture(p extension.ActionProvider) conformance.ActionFixture {
 	scope := domain.Scope{ID: extensionScope}
 	open := domain.Work{ID: "work-note", ScopeID: extensionScope, State: domain.WorkWaiting, CorrelationKeys: []domain.CorrelationKey{{Source: notes.Name, ExternalID: "a"}}}
