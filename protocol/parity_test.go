@@ -47,24 +47,29 @@ var parity = map[string][]string{
 	"Sink":       {"manifest:permissions", "method:telemetry.sink"},
 	"ConfigHost": {"manifest:permissions", "method:config.base", "method:config.edit", "method:config.validate", "method:config.trace"},
 	"Timers":     {"method:timer.arm", "method:timer.cancel"},
+	"Ingester":   {"manifest:provides.extensions.ingress", "method:configure", "method:ingress.push", "method:ingress.reconcile"},
+	"Webhooker":  {"manifest:provides.webhooks", "method:webhook.handle"},
 
 	// Host services, inproc.Host's fields.
-	"Host.Store":        {"method:kv.get", "method:kv.list", "method:kv.commit", "method:state.work", "method:state.works", "method:state.events"},
-	"Host.Now":          {"process:its own clock; time-dependent calls carry the host's now"},
-	"Host.Log":          {"process:its stderr, which the host keeps as the extension's log"},
-	"Host.Secrets":      {"method:secret.resolve"},
-	"Host.Report":       {"method:check.run"},
-	"Host.Nudge":        {"method:event.accept", "method:timer.arm"},
-	"Host.StateDir":     {"method:initialize"},
-	"Host.DryRun":       {"method:configure"},
-	"Host.AcceptInTx":   {"method:event.accept"},
-	"Host.Timers":       {"method:timer.arm", "method:timer.cancel"},
-	"Host.CancelWork":   {"method:work.cancel"},
-	"Host.WaitProgress": {"method:wait.progress"},
-	"Host.Capture":      {"manifest:permissions", "method:telemetry.capture"},
-	"Host.Act":          {"manifest:permissions", "method:action.submit"},
-	"Host.Probes":       {"manifest:permissions", "method:probe.list", "method:probe.run"},
-	"Host.Config":       {"manifest:permissions", "method:config.base"},
+	"Host.Store":             {"method:kv.get", "method:kv.list", "method:kv.commit", "method:state.work", "method:state.works", "method:state.events"},
+	"Host.Now":               {"process:its own clock; time-dependent calls carry the host's now"},
+	"Host.Log":               {"process:its stderr, which the host keeps as the extension's log"},
+	"Host.Secrets":           {"method:secret.resolve"},
+	"Host.Report":            {"method:check.run"},
+	"Host.Nudge":             {"method:event.accept", "method:timer.arm"},
+	"Host.StateDir":          {"method:initialize"},
+	"Host.DryRun":            {"method:configure"},
+	"Host.AcceptInTx":        {"method:event.accept"},
+	"Host.AcceptDerivedInTx": {"method:event.accept"},
+	"Host.EventScope":        {"method:state.event", "method:state.events"},
+	"Host.Deliver":           {"method:ingress.deliver"},
+	"Host.Timers":            {"method:timer.arm", "method:timer.cancel"},
+	"Host.CancelWork":        {"method:work.cancel"},
+	"Host.WaitProgress":      {"method:wait.progress"},
+	"Host.Capture":           {"manifest:permissions", "method:telemetry.capture"},
+	"Host.Act":               {"manifest:permissions", "method:action.submit"},
+	"Host.Probes":            {"manifest:permissions", "method:probe.list", "method:probe.run"},
+	"Host.Config":            {"manifest:permissions", "method:config.base"},
 
 	// A config type's fields, inproc.ConfigType.
 	"ConfigType.Kind":     {"method:validate"},
@@ -78,7 +83,11 @@ var parity = map[string][]string{
 
 // parityGaps are the surfaces no wire method or manifest field carries yet,
 // each with the open issue that closes it. Only those issues own entries.
-var parityGaps = map[string]int{}
+var parityGaps = map[string]int{
+	// Wait targets (`job:<name>`) resolve only for in-process extensions
+	// until a wire method carries them.
+	"Targeter": 357,
+}
 
 // inprocSurfaces lists the contract's interfaces, inproc.Host's fields and
 // inproc.ConfigType's fields from its source, so a new surface fails here
@@ -141,8 +150,9 @@ func TestInprocSurfacesAreCarried(t *testing.T) {
 			t.Errorf("parity lists %s, which the inproc contract no longer has", s)
 		}
 	}
-	// Gaps belong to the open follow-ups of #235 that close them.
-	owners := map[int]bool{240: true, 241: true, 242: true, 243: true}
+	// Gaps belong to the open follow-ups of #235 that close them, and to
+	// #357, which moves the first-party integrations onto the contract.
+	owners := map[int]bool{240: true, 241: true, 242: true, 243: true, 357: true}
 	for s, issue := range parityGaps {
 		if !known[s] {
 			t.Errorf("parityGaps lists %s, which the inproc contract no longer has", s)

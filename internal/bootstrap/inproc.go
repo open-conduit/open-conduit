@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -18,6 +19,7 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/introspection"
 	"github.com/open-conduit/open-conduit/extensions/observe"
 	"github.com/open-conduit/open-conduit/extensions/posthog"
+	"github.com/open-conduit/open-conduit/extensions/schedule"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -37,7 +39,7 @@ import (
 // touches its own package and this list. github is the host's view of the
 // GitHub entries it registers (nil offline).
 func firstParty(github gh.ViewFunc) []inproc.Extension {
-	return []inproc.Extension{gh.NewExtension(github), posthog.New(), human.New(), introspection.New(), observe.New()}
+	return []inproc.Extension{gh.NewExtension(github), posthog.New(), human.New(), introspection.New(), observe.New(), schedule.New()}
 }
 
 // typeSets are an extension's own entry and connection types: what its
@@ -103,6 +105,18 @@ func inprocRegistry(reg *config.Registry, xs []inproc.Extension) {
 					if c.Binding != nil {
 						reg.HandlerBinding[c.Type] = c.Binding
 					}
+					if describe := c.Describe; describe != nil {
+						if reg.HandlerDescribe == nil {
+							reg.HandlerDescribe = map[string]func(json.RawMessage) string{}
+						}
+						reg.HandlerDescribe[c.Type] = func(raw json.RawMessage) string {
+							var parts []string
+							for _, e := range describe(raw) {
+								parts = append(parts, e.Detail)
+							}
+							return strings.Join(parts, "; ")
+						}
+					}
 				}
 			}
 		}
@@ -151,6 +165,34 @@ func (d *daemon) startInproc(ctx context.Context) error {
 					return domain.AcceptedEvent{}, false, inproc.ErrNotOwn
 				}
 				return runtime.AcceptInTx(tx, scope, e)
+			},
+			AcceptDerivedInTx: func(tx storage.Tx, scope, parent domain.ID, e domain.Event) (domain.AcceptedEvent, bool, error) {
+				if !own.family(e.Type) {
+					return domain.AcceptedEvent{}, false, inproc.ErrNotOwn
+				}
+				p, err := tx.Event(parent)
+				if err != nil {
+					return domain.AcceptedEvent{}, false, err
+				}
+				if ps, err := runtime.EventScopeInTx(tx, p); err != nil || ps != scope {
+					return domain.AcceptedEvent{}, false, extension.ErrUnauthorized
+				}
+				a, added, err := runtime.AcceptDerivedInTx(tx, d.now(), d.causalLimits(), scope, parent, e)
+				if errors.Is(err, runtime.ErrCausalRejected) {
+					err = fmt.Errorf("%w: %w", inproc.ErrCausalLimit, err)
+				}
+				return a, added, err
+			},
+			EventScope: runtime.EventScopeInTx,
+			Deliver: func(ctx context.Context, source string, delivery extension.Delivery) error {
+				if source != name && !strings.HasPrefix(source, name+"/") {
+					return inproc.ErrNotOwn
+				}
+				if _, err := d.ingress.Push(ctx, source, delivery); err != nil {
+					return err
+				}
+				d.poke()
+				return nil
 			},
 			Timers: inprocTimers{d: d, own: own},
 			CancelWork: func(ctx context.Context, work domain.ID, expected domain.Revision, reason, key string) (domain.ID, error) {
@@ -258,10 +300,18 @@ func (t inprocTimers) Cancel(ctx context.Context, id domain.ID, expected domain.
 	return c.timers.Cancel(ctx, id, expected)
 }
 
-// workKinds are the scheduler's Work kind policies: scheduled jobs and the
-// in-process extensions' own kinds.
+// causalLimits are the current generation's causal bounds.
+func (d *daemon) causalLimits() runtime.CausalLimits {
+	if s, _ := d.extensionSnapshot(); s != nil {
+		return runtime.CausalLimits{MaxDepth: s.Settings.CausalMaxDepth, PerMinute: s.Settings.CausalPerMinute}
+	}
+	return runtime.CausalLimits{}
+}
+
+// workKinds are the scheduler's Work kind policies: the in-process
+// extensions' own kinds.
 func workKinds(xs []inproc.Extension) map[string]runtime.WorkKindPolicy {
-	kinds := scheduleWorkKinds()
+	kinds := map[string]runtime.WorkKindPolicy{}
 	for _, x := range xs {
 		if k, ok := x.(inproc.WorkKinder); ok {
 			for _, w := range k.WorkKinds() {
@@ -272,10 +322,34 @@ func workKinds(xs []inproc.Extension) map[string]runtime.WorkKindPolicy {
 	return kinds
 }
 
-// recurrences are the timer recurrences: scheduled jobs and the in-process
-// extensions' own kinds.
+// timedKinds are the Work kinds that run on a clock, which a dry run never
+// starts: the in-process extensions' and the installed packages'.
+func (d *daemon) timedKinds() map[string]bool {
+	out := map[string]bool{}
+	for _, x := range d.inproc {
+		if p, ok := x.(*installed); ok {
+			for _, k := range p.m.Provides.WorkKinds {
+				if k.Timed {
+					out[k.Kind] = true
+				}
+			}
+			continue
+		}
+		if k, ok := x.(inproc.WorkKinder); ok {
+			for _, w := range k.WorkKinds() {
+				if w.Timed {
+					out[w.Kind] = true
+				}
+			}
+		}
+	}
+	return out
+}
+
+// recurrences are the timer recurrences: the in-process extensions' own
+// kinds.
 func recurrences(xs []inproc.Extension) map[string]runtime.RecurrenceFunc {
-	r := scheduleRecurrences()
+	r := map[string]runtime.RecurrenceFunc{}
 	for _, x := range xs {
 		if rc, ok := x.(inproc.Recurring); ok {
 			for kind, f := range rc.Recurrences() {
@@ -295,13 +369,90 @@ func (d *daemon) stopInproc() {
 }
 
 // configureInproc hands each extension the current generation's entries of
-// its own types.
+// its own types, then registers the ingress sources it declares.
 func (d *daemon) configureInproc(ctx context.Context) {
 	for _, x := range d.inproc {
 		if c, ok := x.(inproc.Configurer); ok {
 			entries, connections := typeSets(x)
 			c.Configure(ctx, d.configureParams(entries, connections))
 		}
+		if i, ok := x.(inproc.Ingester); ok {
+			d.registerInprocSources(x.Name(), i.Sources())
+		}
+	}
+}
+
+// registerInprocSources registers an extension's ingress sources. A
+// registration is immutable for one runtime instance: a source registered
+// earlier keeps its registration until restart.
+func (d *daemon) registerInprocSources(name string, sources []inproc.Source) {
+	if d.ingress == nil {
+		return
+	}
+	for _, s := range sources {
+		if s.Name != name && !strings.HasPrefix(s.Name, name+"/") {
+			d.report("extension_ingress", domain.ID(s.Name), "not_own")
+			continue
+		}
+		d.external.mu.Lock()
+		if d.external.sources == nil {
+			d.external.sources = map[string]bool{}
+		}
+		done := d.external.sources[s.Name]
+		d.external.sources[s.Name] = true
+		d.external.mu.Unlock()
+		if done {
+			continue
+		}
+		interval := s.Interval
+		if interval < time.Second {
+			interval = time.Minute
+			if snapshot, _ := d.extensionSnapshot(); snapshot != nil && snapshot.Settings.ReconcileSeconds > 0 {
+				interval = time.Duration(snapshot.Settings.ReconcileSeconds) * time.Second
+			}
+		}
+		if err := d.ingress.Register(d.lifetime(), s.Name, s.Source, s.Ingress, interval); err != nil {
+			d.external.mu.Lock()
+			delete(d.external.sources, s.Name)
+			d.external.mu.Unlock()
+			d.report("extension_ingress", domain.ID(s.Name), errorCode(err))
+			continue
+		}
+		d.log.Info("extension ingress registered", "extension", name, "name", s.Name, "namespace", s.Source.Namespace)
+	}
+}
+
+// inprocWebhook returns the handler an in-process extension gives a webhook
+// path under /<name>/, or nil.
+func (d *daemon) inprocWebhook(path string) http.Handler {
+	for _, x := range d.inproc {
+		w, ok := x.(inproc.Webhooker)
+		if !ok {
+			continue
+		}
+		if rest, ok := strings.CutPrefix(path, x.Name()+"/"); ok {
+			return w.Webhook(rest)
+		}
+	}
+	return nil
+}
+
+// waitTarget resolves a named wait target of kind ("job:<name>") through
+// the extensions that resolve that kind.
+func (d *daemon) waitTarget(kind string) func(context.Context, domain.ID, string) (domain.CorrelationKey, []string, bool) {
+	return func(ctx context.Context, scope domain.ID, name string) (domain.CorrelationKey, []string, bool) {
+		for _, x := range d.inproc {
+			t, ok := x.(inproc.Targeter)
+			if !ok {
+				continue
+			}
+			if f := t.Targets()[kind]; f != nil {
+				if key, types, ok := f(ctx, scope, name); ok {
+					return key, types, true
+				}
+			}
+		}
+		return domain.CorrelationKey{}, nil, false
 	}
 }
 

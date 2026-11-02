@@ -13,7 +13,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/extension"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
-	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/extensions/tunnel"
 	"github.com/open-conduit/open-conduit/internal/config"
@@ -220,15 +219,8 @@ func (d *daemon) webhookHandler() http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
-		if strings.HasPrefix(name, sc.Type+"/") {
-			h, rest := d.scheduleWebhook(name)
-			if h == nil {
-				http.NotFound(w, r)
-				return
-			}
-			r2 := r.Clone(r.Context())
-			r2.URL.Path, r2.URL.RawPath = rest, ""
-			h.ServeHTTP(w, r2)
+		if h := d.inprocWebhook(name); h != nil {
+			h.ServeHTTP(w, r)
 			return
 		}
 		if isTrackerRoute(name) {
@@ -429,7 +421,6 @@ func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 		}
 		check.Items = append(check.Items, item)
 	}
-	check.Items = append(check.Items, d.scheduleWebhookItems()...)
 	sort.Strings(check.Items)
 	return check
 }

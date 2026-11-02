@@ -8,7 +8,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -58,11 +57,6 @@ func (d *daemon) loop(ctx context.Context) error {
 		}
 		if _, err = d.ingress.ReconcileDue(ctx, passLimit); err != nil && ctx.Err() == nil {
 			d.report("ingress", "", errorCode(err))
-		}
-		d.translateSchedule(ctx)
-		d.publishJobRuns(ctx)
-		if snapshot, _ := d.configs.Current(); snapshot != nil {
-			d.ensureSchedules(ctx, c, snapshot, false)
 		}
 		d.projectGitHub(ctx)
 		d.projectTrackers(ctx)
@@ -161,6 +155,10 @@ func (d *daemon) routePending(ctx context.Context, c *components) {
 
 func (d *daemon) startReady(ctx context.Context) {
 	var ready, idle []domain.ID
+	timed := map[string]bool{}
+	if d.o.DryRun {
+		timed = d.timedKinds()
+	}
 	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 		works, err := tx.LiveWorks()
 		for _, w := range works {
@@ -168,7 +166,7 @@ func (d *daemon) startReady(ctx context.Context) {
 				continue
 			}
 			// A dry run starts no scheduled job (v1); its triggers wait.
-			if d.o.DryRun && w.Kind == sc.WorkKind {
+			if d.o.DryRun && timed[w.Kind] {
 				continue
 			}
 			// Idle Work (handed back with no input yet) waits quietly for

@@ -167,7 +167,6 @@ type daemon struct {
 	github         githubSources
 	slack          slackSources
 	trackers       trackerSources
-	schedule       scheduleState
 	telemetry      telemetryFanout
 	telemetryFile  *rotatingLog
 	resources      resourceState
@@ -459,7 +458,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 	d.registerGitHub(ctx, snapshot)
 	d.registerTrackers(ctx, snapshot)
 	d.registerSlack(ctx, snapshot)
-	d.registerSchedule(ctx, snapshot)
 	d.publishGeneration(snapshot, generation)
 	c, err := d.build(snapshot, generation)
 	if err != nil {
@@ -469,7 +467,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 	// Extensions are configured once the generation is active, so a
 	// configure can arm timers through it, as every later apply can.
 	d.configureExtensions(ctx)
-	d.ensureSchedules(ctx, c, snapshot, true)
 	// A committed reload swaps generation-pinned components; attempts already
 	// running keep their pinned generation through HistoricalExecutors.
 	d.configs.OnApply = func(_ context.Context, s *config.Snapshot, g uint64) {
@@ -482,10 +479,8 @@ func Serve(ctx context.Context, o Options) (err error) {
 		d.registerGitHub(d.ctx, s)
 		d.registerTrackers(d.ctx, s)
 		d.registerSlack(d.ctx, s)
-		d.registerSchedule(d.ctx, s)
 		d.publishGeneration(s, g)
 		d.configureExtensions(d.ctx)
-		d.ensureSchedules(d.ctx, next, s, true)
 		d.log.Info("configuration generation activated", "generation", g)
 		d.poke()
 	}
@@ -626,7 +621,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	}
 	c.control = control
 	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Titles: d.titles, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: d.checks(),
-		DeepChecks: append(append([]func(context.Context) runtime.Check{}, d.inprocChecks(true)...), d.trackerAuthCheck, d.slackAuthCheck, d.scheduleWebhookCheck), Capacity: d.capacityPools, Annotate: d.annotate, Actions: d.actions, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
+		DeepChecks: append(append([]func(context.Context) runtime.Check{}, d.inprocChecks(true)...), d.trackerAuthCheck, d.slackAuthCheck), Capacity: d.capacityPools, Annotate: d.annotate, Actions: d.actions, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -639,7 +634,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.trackerCheck, d.slackCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.scheduleCheck, d.extensionCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.trackerCheck, d.slackCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.extensionCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

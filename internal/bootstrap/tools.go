@@ -37,7 +37,7 @@ func (d *daemon) githubSourcesList() []gh.Source {
 
 // openTools prepares the shared tools instance.
 func (d *daemon) openTools() error {
-	tools, err := gh.NewTools(gh.ToolsOptions{Store: d.coord, Sources: d.githubSourcesList, Now: d.now, Jobs: d.scheduleJob, WaitProgress: d.waitProgress(gh.Type), Writers: d.githubWriters(), MayRead: d.mayRead, MayFile: d.mayFile})
+	tools, err := gh.NewTools(gh.ToolsOptions{Store: d.coord, Sources: d.githubSourcesList, Now: d.now, Jobs: d.waitTarget("job"), WaitProgress: d.waitProgress(gh.Type), Writers: d.githubWriters(), MayRead: d.mayRead, MayFile: d.mayFile})
 	if err != nil {
 		return err
 	}

@@ -270,6 +270,12 @@ func Standing() WorkKindOption {
 	return func(_ *Extension, d *protocol.WorkKindDecl) { d.Standing = true }
 }
 
+// Timed marks a kind that runs on a clock (a scheduled job): a dry run
+// starts none of its Work.
+func Timed() WorkKindOption {
+	return func(_ *Extension, d *protocol.WorkKindDecl) { d.Timed = true }
+}
+
 // Trigger selects, from a Work's pending inputs, the index of the one that
 // triggers its next execution.
 func Trigger(fn func([]domain.Event) int) WorkKindOption {

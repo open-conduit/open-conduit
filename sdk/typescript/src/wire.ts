@@ -59,6 +59,7 @@ export const AcceptedEvent = t.object(
     routed: t.boolean(),
     routed_work_id: t.optional(t.string()),
     disposition: t.optional(t.string()),
+    scope_id: t.optional(t.string()),
   },
   open,
 );
@@ -199,6 +200,7 @@ export const ConfigureParams = t.object(
   {
     generation: t.string(),
     entries: t.optional(t.array(ConfigEntry)),
+    disabled: t.optional(t.array(ConfigEntry)),
     public_url: t.optional(t.string()),
     dry_run: t.optional(t.boolean()),
     kv: KVState,

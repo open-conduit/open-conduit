@@ -2,7 +2,7 @@
 title: "Scheduled jobs: definitions, catch-up, the one-pending-run rule and job runs"
 ---
 
-Scheduled jobs run on the five primitives. A timed job is a configured independent root on a durable core timer; every trigger is an accepted Event; the `schedule` route makes it input of the job's one standing Work; the scheduler runs it as an ordinary Execution through the job's binding. Nothing schedules work outside event → route → Work → Execution. The extension is [`extensions/schedule`](https://github.com/open-conduit/open-conduit/tree/main/extensions/schedule); [`internal/bootstrap/schedule.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/schedule.go) composes it. How a job runs (fresh checkout, detached runs, env and secret precedence, payload artifacts, timeouts, kept runs, the job history view) is covered under [Job runs](#job-runs).
+Scheduled jobs run on the five primitives. A timed job is a configured independent root on a durable core timer; every trigger is an accepted Event; the `schedule` route makes it input of the job's one standing Work; the scheduler runs it as an ordinary Execution through the job's binding. Nothing schedules work outside event → route → Work → Execution. The extension is [`extensions/schedule`](https://github.com/open-conduit/open-conduit/tree/main/extensions/schedule). It runs in process on the public [`extension/inproc`](https://github.com/open-conduit/open-conduit/blob/main/extension/inproc/inproc.go) contract like any other first-party extension (`extension.go`): its config types, route, standing and timed Work kind, recurrence, ingress sources, webhook paths, timer, delivery and job-run tasks, doctor checks and `job:` wait targets all reach the host through that contract, and bootstrap names it only in `firstParty()`. Its `legacy-job` executor is still registered by hand. How a job runs (fresh checkout, detached runs, env and secret precedence, payload artifacts, timeouts, kept runs, the job history view) is covered under [Job runs](#job-runs).
 
 ## Configuration
 
@@ -114,8 +114,7 @@ Turning off webhooks (`--no-tunnel`, no listener) affects only these explicitly 
 
 ## Operation
 
-- Doctor `schedule` lists each job's next slot, event and webhook triggers, and warns on timer or delivery failures.
-- Doctor `webhooks` lists the webhook paths.
+- Doctor `schedule` lists each job's next slot, event and webhook triggers and each webhook job's path, and warns on timer or delivery failures.
 - Deep doctor `schedule_webhooks` prints the signed URLs.
 - Webhook ingress registrations are immutable per runtime instance; moving a namespace reports `restart_required`.
 - Jobs and timings reload on apply without a restart.
@@ -204,4 +203,5 @@ These notes record how this part was built and the evidence gathered at each sta
 - Ticket 05-01 put job triggers on the five primitives: job definitions, the timed, webhook, code-host and manual triggers, the `schedule.Recurrence` catch-up policy, the one-pending-run rule and the dry-run behaviour. It added the generic contract pieces `extension.RouteInput.Route` and `config.Registry.HandlerConfig`, and the runtime recurrence contract. Job runs were left to 05-02.
 - Ticket 05-02 delivered job runs: route selection by trigger kind, per-binding `timeout_seconds`, `Result.RetryHint` honoured for standing Work, run-ended Events and `job:` waits, and the generic `extension.Result.Workspace` metadata shown by `GET /v1/runs` and the run view. It kept 05-01's standing-Work rule (no B04 failure budget for jobs), kept 05-01's dry-run behaviour, and kept the declared loss for code-host triggers rather than adding a branch-head poll. Its tests are listed under [Job run verification](#job-run-verification).
 - Ticket 05-03 added the introspection extension's `introspection.v1` recurrence kind beside the schedule kind.
+- Issue #357 moved the extension off its bespoke bootstrap wiring (`internal/bootstrap/schedule.go`) onto `extension/inproc`, adding the surfaces it needed to the contract: ingress sources, webhooks, derived acceptance, event scope, deliveries, wait targets, timed Work kinds and disabled scopes' entries in configure. Its webhook paths moved from doctor `webhooks` to doctor `schedule`.
 - The binding reload drill (`TestDaemonConfigReload`) dates from ticket 02-09.

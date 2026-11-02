@@ -27,6 +27,8 @@ type Entry struct {
 	// re-enable (B05).
 	Enabled  bool
 	Settings Settings
+	// name is the entry's name in its scope, which names its ingress.
+	name string
 }
 
 // EnsureResult counts one reconciliation pass.

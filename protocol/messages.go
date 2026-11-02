@@ -57,9 +57,13 @@ type KVState struct {
 type ConfigureParams struct {
 	Generation string        `json:"generation"`
 	Entries    []ConfigEntry `json:"entries,omitempty"`
-	PublicURL  string        `json:"public_url,omitempty"`
-	DryRun     bool          `json:"dry_run,omitempty"`
-	KV         KVState       `json:"kv"`
+	// Disabled are the extension's entries in scopes that are configured
+	// but disabled: it starts nothing for them, but keeps what it holds for
+	// them (timers, cursors) until the scope is enabled or the entry goes.
+	Disabled  []ConfigEntry `json:"disabled,omitempty"`
+	PublicURL string        `json:"public_url,omitempty"`
+	DryRun    bool          `json:"dry_run,omitempty"`
+	KV        KVState       `json:"kv"`
 }
 
 // SourceDecl is an ingress source the extension registers for an entry.

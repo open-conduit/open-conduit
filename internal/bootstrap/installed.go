@@ -24,9 +24,9 @@ import (
 // and goes through the existing Remote methods.
 //
 // Executors, resource providers, work kinds, recurrences, ingress sources
-// and webhook paths are not on the contract yet: no first-party extension
-// has them, so they join it with the extensions that need them, and stay on
-// the package's own path in extensions.go until then.
+// and webhook paths stay on the package's own path in extensions.go: the
+// contract has the last four now (inproc.WorkKinder, Recurring, Ingester,
+// Webhooker), and the adapter moves onto them with the rest of #357.
 //
 // Offline (config validation) r is nil: offline starts the package to
 // validate its declared types when a config object of one needs checking;
