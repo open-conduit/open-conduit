@@ -34,7 +34,7 @@ var (
 func packageBinaries(t *testing.T) map[string]string {
 	t.Helper()
 	pkgOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "oc-package-bin-")
+		dir, err := keptDir("oc-package-bin-")
 		if err != nil {
 			pkgErr = err
 			return

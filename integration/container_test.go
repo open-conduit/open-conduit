@@ -68,7 +68,7 @@ func dockerContext(t *testing.T) string {
 		t.Fatalf("docker on context %s is unreachable: %s", dctx, bytes.TrimSpace(out))
 	}
 	dockerOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "oc-helper")
+		dir, err := keptDir("oc-helper")
 		if err != nil {
 			dockerErr = err
 			return

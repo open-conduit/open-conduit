@@ -45,6 +45,14 @@ const Docs = "see \"Testing a package\" in https://github.com/open-conduit/open-
 // cmd/ builds that one, so Build(".") works from a package repository's
 // root.
 func Build(src string) (string, protocol.Manifest, error) {
+	return BuildIn(src, "")
+}
+
+// BuildIn is Build, making the new directory for a built package in parent
+// (the temporary directory when parent is empty). The package directory it
+// returns is a child of that new directory, which the caller removes once
+// it is done with the package; on an error BuildIn removes it itself.
+func BuildIn(src, parent string) (string, protocol.Manifest, error) {
 	src, err := filepath.Abs(src)
 	if err != nil {
 		return "", protocol.Manifest{}, err
@@ -60,10 +68,20 @@ func Build(src string) (string, protocol.Manifest, error) {
 	if err != nil {
 		return "", protocol.Manifest{}, err
 	}
-	out, err := os.MkdirTemp("", "oc-devscope-pkg-")
+	out, err := os.MkdirTemp(parent, "oc-devscope-pkg-")
 	if err != nil {
 		return "", protocol.Manifest{}, err
 	}
+	dir, m, err := buildInto(src, main, out)
+	if err != nil {
+		os.RemoveAll(out)
+		return "", m, err
+	}
+	return dir, m, nil
+}
+
+// buildInto compiles the main package main into out, as Build describes.
+func buildInto(src, main, out string) (string, protocol.Manifest, error) {
 	bin := filepath.Join(out, ".build")
 	cmd := exec.Command("go", "build", "-o", bin, ".")
 	cmd.Dir = main

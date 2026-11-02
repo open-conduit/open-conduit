@@ -77,7 +77,7 @@ func seedHistory(b *testing.B, n int) *history {
 		return h
 	}
 	ctx := context.Background()
-	dir, err := os.MkdirTemp("", "oc-history-")
+	dir, err := keptDir("oc-history-")
 	if err != nil {
 		b.Fatal(err)
 	}
@@ -170,8 +170,9 @@ func seedHistory(b *testing.B, n int) *history {
 	return h
 }
 
-// cleanupHistory removes the seeded stores the history benchmarks kept;
-// TestMain calls it after the run.
+// cleanupHistory closes the seeded stores the history benchmarks kept, and
+// removes their directories; TestMain calls it after the run, before
+// removeKeptDirs.
 func cleanupHistory() {
 	seededMu.Lock()
 	defer seededMu.Unlock()

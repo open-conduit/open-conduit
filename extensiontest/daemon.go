@@ -101,28 +101,49 @@ var (
 
 // binaries builds open-conduit and os once per test binary, from the
 // caller's module (so at the version its go.mod pins), with the race
-// detector when the test runs under it.
+// detector when the test runs under it. They are kept in the cache, so a
+// later run with the same source and flags reuses them.
 func binaries() (string, error) {
-	buildOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "oc-extensiontest-bin-")
-		if err != nil {
-			buildErr = err
-			return
-		}
-		for _, name := range []string{"open-conduit", "os"} {
-			args := []string{"build", "-o", filepath.Join(dir, name)}
-			if name == "open-conduit" && raceEnabled {
-				args = append(args, "-race")
-			}
-			out, err := exec.Command("go", append(args, module+"/cmd/"+name)...).CombinedOutput()
-			if err != nil {
-				buildErr = fmt.Errorf("extensiontest: build %s: %v\n%s", name, err, out)
-				return
-			}
-		}
-		buildDir = dir
-	})
+	buildOnce.Do(func() { buildDir, buildErr = cachedBinaries() })
 	return buildDir, buildErr
+}
+
+// cachedBinaries is the cache entry holding open-conduit and os, built on a
+// miss.
+func cachedBinaries() (string, error) {
+	root, err := openCache()
+	if err != nil {
+		return "", err
+	}
+	var race []string
+	if raceEnabled {
+		race = []string{"-race"}
+	}
+	daemonKey, err := buildKey(race, module+"/cmd/open-conduit")
+	if err != nil {
+		return "", fmt.Errorf("extensiontest: %w", err)
+	}
+	osKey, err := buildKey(nil, module+"/cmd/os")
+	if err != nil {
+		return "", fmt.Errorf("extensiontest: %w", err)
+	}
+	return cacheEntry(root, "bin-"+daemonKey[:16]+osKey[:16], buildBinaries)
+}
+
+// buildBinaries builds open-conduit (with the race detector when the test
+// runs under it) and os into dir.
+func buildBinaries(dir string) error {
+	for _, name := range []string{"open-conduit", "os"} {
+		args := []string{"build", "-o", filepath.Join(dir, name)}
+		if name == "open-conduit" && raceEnabled {
+			args = append(args, "-race")
+		}
+		out, err := exec.Command("go", append(args, module+"/cmd/"+name)...).CombinedOutput()
+		if err != nil {
+			return fmt.Errorf("extensiontest: build %s: %v\n%s", name, err, out)
+		}
+	}
+	return nil
 }
 
 // Daemon builds the daemon if this test binary hasn't yet, lays out its

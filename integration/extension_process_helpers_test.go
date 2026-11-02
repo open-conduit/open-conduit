@@ -39,7 +39,7 @@ var (
 func extensionBinaries(t *testing.T) (string, string) {
 	t.Helper()
 	extOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "oc-extension-bin-")
+		dir, err := keptDir("oc-extension-bin-")
 		if err != nil {
 			extBuildErr = err
 			return
