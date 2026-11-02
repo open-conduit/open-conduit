@@ -1,4 +1,4 @@
-package integration_test
+package runtime_test
 
 import (
 	"context"
@@ -41,12 +41,12 @@ func TestProductionSchedulerBudgets(t *testing.T) {
 	f, e := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	work := seedSchedulerWork(t, f, "budget")
 	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "budget"}
-	e.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	e.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
 		cost := 0.6
-		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: extension.Usage{Cost: &cost, Currency: "USD"}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: extension.Usage{Cost: &cost, Currency: "USD"}}}, nil
 	}
 	o := schedulerDefaultOptions(f, e)
 	o.Budgets = []runtime.Budget{
@@ -54,7 +54,7 @@ func TestProductionSchedulerBudgets(t *testing.T) {
 		{Unit: "attempts", Per: runtime.BudgetPerWork, Max: 10},
 	}
 	s := newTestScheduler(t, f, o)
-	control, err := runtime.NewControl(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).router, s, runtime.CausalLimits{})
+	control, err := runtime.NewControl(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).Router, s, runtime.CausalLimits{})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,11 +127,11 @@ func TestProductionSchedulerBudgetsOffByDefault(t *testing.T) {
 	f, e := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	work := seedSchedulerWork(t, f, "unbudgeted")
 	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "unbudgeted"}
-	e.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	e.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
-		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: extension.Usage{Units: map[string]float64{"minutes": 100}}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: extension.Usage{Units: map[string]float64{"minutes": 100}}}}, nil
 	}
 	s := newTestScheduler(t, f, schedulerDefaultOptions(f, e))
 	for i, next := range []string{"unbudgeted-2", "unbudgeted-3", ""} {
@@ -206,23 +206,23 @@ func budgetFixture(t *testing.T, cost float64, budgets []runtime.Budget) (f conf
 	})
 	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "scope-b"}
 	event := routingEvent(fx, "scope-b-trigger", &key)
-	if _, _, err := fx.Driver.(*schedulerDriver).ingress.Accept(context.Background(), "other-scope", event); err != nil {
+	if _, _, err := fx.Driver.(*schedulerDriver).Ingress.Accept(context.Background(), "other-scope", event); err != nil {
 		t.Fatal(err)
 	}
 	requireRoute(t, fx.Driver, event.ID)
 	b = "work/scope-b"
-	e.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	e.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
 		c := cost
-		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: extension.Usage{Cost: &c, Currency: "USD"}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: extension.Usage{Cost: &c, Currency: "USD"}}}, nil
 	}
 	o := schedulerDefaultOptions(fx, e)
 	o.Budgets = budgets
 	s = newTestScheduler(t, fx, o)
 	var err error
-	if control, err = runtime.NewControl(fx.Store, fx.Clock.Now, fx.Driver.(*schedulerDriver).router, s, runtime.CausalLimits{}); err != nil {
+	if control, err = runtime.NewControl(fx.Store, fx.Clock.Now, fx.Driver.(*schedulerDriver).Router, s, runtime.CausalLimits{}); err != nil {
 		t.Fatal(err)
 	}
 	return fx, s, control, a, b
@@ -239,7 +239,7 @@ func requeue(t *testing.T, f conformanceFixture, external, id string) {
 	if external == "scope-b" {
 		scope = "other-scope"
 	}
-	if _, _, err := f.Driver.(*schedulerDriver).ingress.Accept(context.Background(), scope, event); err != nil {
+	if _, _, err := f.Driver.(*schedulerDriver).Ingress.Accept(context.Background(), scope, event); err != nil {
 		t.Fatal(err)
 	}
 	requireRoute(t, f.Driver, event.ID)
@@ -311,7 +311,7 @@ func TestProductionSchedulerBudgetPassIsSpentOnce(t *testing.T) {
 	// The operator also raises the limit: the next turn is within it, and
 	// still spends the pass.
 	raised := newTestScheduler(t, f, func() runtime.SchedulerOptions {
-		o := schedulerDefaultOptions(f, f.Driver.(*schedulerDriver).executor)
+		o := schedulerDefaultOptions(f, f.Driver.(*schedulerDriver).Executor)
 		o.Budgets = []runtime.Budget{{Unit: "usd", Per: runtime.BudgetPerWork, Max: 1}}
 		return o
 	}())
