@@ -98,6 +98,8 @@ Each workflow is a scope in the config. The example below is a complete, minimal
 
 Leave out `resource` (and set `workspace` to `false`) for a scope whose turns need no checkout.
 
+The operations appear twice on purpose. The scope's `authorization.operations` is the most any binding in the scope, or in a scope beneath it, may ever be given; it grants nothing by itself. Each binding's `operations` is exactly what its runs get, and must sit within that ceiling. With one binding the two lists match, but a scope with a second binding, such as a reviewer that may review and never open PRs, gives each binding only what it needs.
+
 ## Pull request review
 
 To have an agent review every pull request as well, see [pull request review](../review-bot/).
