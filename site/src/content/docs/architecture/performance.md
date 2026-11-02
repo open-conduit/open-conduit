@@ -3,7 +3,7 @@ title: "Performance"
 description: "What is known about Open Conduit's throughput, latency, contention, recovery and resource use, what has not been measured, and how each gap would be measured."
 ---
 
-This page gathers the performance evidence for Open Conduit as it stands. Most of it is design bounds: defaults and limits set in code, and properties that follow from how the daemon is built. Little is measured: the extension transport, and how the daemon's hot paths cost as history grows. Each section keeps the two apart, says plainly where nothing has been measured, and sets out the benchmark or load test that would produce the number.
+This page gathers the performance evidence for Open Conduit as it stands. Most of it is design bounds: defaults and limits set in code, and properties that follow from how the daemon is built. Little is measured: the extension transport, the calls the host makes to extensions inside its transaction, and how the daemon's hot paths cost as history grows. Each section keeps the two apart, says plainly where nothing has been measured, and sets out the benchmark or load test that would produce the number.
 
 Open Conduit is a single local daemon ([overview](../../start/overview/)). Its management API is served only on an owner-only Unix socket ([local transport](../config-management/#local-transport-discovery-and-authority)), and the [extension protocol](../extension-protocol/) has no consumers outside this project. The load it is built for is one operator's repositories, Slack threads and schedules, running at most four agent turns and four jobs at once by default ([capacity pools](../execution-scheduling/#capacity-pools)). It is not a multi-tenant service, and several pages state outright that they make no throughput claim: [storage contracts](../domain-storage/), [event ingress](../event-ingress/#bounded-scheduling-and-inspection) and [routing limits](../routing-lifecycle/#limits).
 
@@ -15,7 +15,13 @@ Open Conduit is a single local daemon ([overview](../../start/overview/)). Its m
   make bench-history
   ```
 
-- **Extension transport.** The only timed figures in the repository come from the [transport prototype](https://github.com/open-conduit/open-conduit/tree/main/prototypes/transport), which ran one workload over JSON-RPC on stdio and over go-plugin/gRPC ([transport comparison](../extension-protocol/#transport-comparison)). For the chosen JSON-RPC transport: cold start 105 ms, warm restart 10 ms, version-mismatch refusal 6 ms, echo p50 32 µs and p99 61 µs, host callback 29 µs, a 16 MiB artifact in 64 KiB chunks at 143 MiB/s, cancellation seen by the extension in 173 µs, crash detected in 1.0 ms, and a 3.8 MiB binary. That is one representative run on darwin/arm64 with Go 1.27.3, without `-race`. Cold start varied between 100 and 350 ms across runs, and `-race` slowed everything by about 3×. It measures the transport alone, not the daemon. Rerun it with:
+- **The in-transaction extension calls, against a budget.** [`extension_budget_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/extension_budget_test.go) times `work_kind.trigger`, `recurrence.next`, `dependency.filter` and `emit.commit`, the four calls the host makes to an extension process while it holds its coordination transaction, round trip through `extproc.Remote` to the notes example ([results](#in-transaction-extension-calls)). It is a gate, not just a number: `make check` runs it on its own after the integration shards, prints each round's numbers, and fails when a call's median or 95th percentile is over budget in three rounds running. Print the numbers without `-race` with:
+
+  ```sh
+  make bench-extension
+  ```
+
+- **Extension transport.** The transport's own figures come from the [transport prototype](https://github.com/open-conduit/open-conduit/tree/main/prototypes/transport), which ran one workload over JSON-RPC on stdio and over go-plugin/gRPC ([transport comparison](../extension-protocol/#transport-comparison)). For the chosen JSON-RPC transport: cold start 105 ms, warm restart 10 ms, version-mismatch refusal 6 ms, echo p50 32 µs and p99 61 µs, host callback 29 µs, a 16 MiB artifact in 64 KiB chunks at 143 MiB/s, cancellation seen by the extension in 173 µs, crash detected in 1.0 ms, and a 3.8 MiB binary. That is one representative run on darwin/arm64 with Go 1.27.3, without `-race`. Cold start varied between 100 and 350 ms across runs, and `-race` slowed everything by about 3×. It measures the transport alone, not the daemon. Rerun it with:
 
   ```sh
   make protocol-prototype
@@ -29,7 +35,7 @@ Open Conduit is a single local daemon ([overview](../../start/overview/)). Its m
 - **Volume in correctness tests, untimed.** [`TestSlackPushReconcileOverlapOneWork`](https://github.com/open-conduit/open-conduit/blob/main/integration/slack_test.go) pushes and reconciles 300 replies in one thread (150 under `-race`) and checks they become 301 distinct Events on one Work, each queued once. It shows correctness at that volume, not speed.
 - **Informal observations.** Two code comments record timings that nobody measured systematically: the [Makefile](https://github.com/open-conduit/open-conduit/blob/main/Makefile) says the integration package takes about 8 minutes on hosted runners under `-race`, and [`slack_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/slack_test.go) says the race-instrumented SQLite driver is about 30× slower per transaction.
 
-The history benchmarks are the only Go benchmark functions in the repository. There is no load test, and no CI job that records a performance number. CI runs `make check`, `make certify` and `make cross-build` ([`ci.yml`](https://github.com/open-conduit/open-conduit/blob/main/.github/workflows/ci.yml)), and all of them check correctness.
+The history benchmarks are the only Go benchmark functions in the repository. There is no load test. CI runs `make check`, `make certify` and `make cross-build` ([`ci.yml`](https://github.com/open-conduit/open-conduit/blob/main/.github/workflows/ci.yml)). Apart from the in-transaction call budget, which `make check` enforces, all of them check correctness, and no CI job records a performance number.
 
 ## Event-ingress throughput
 
@@ -216,9 +222,33 @@ Before, an idle pass at a million Events spent about 0.4 s of every second in `P
 
 What still grows is the retention sweep, which reads every Work record (109 ms at a million Events, 40,000 Work) and its markers, once every 10 minutes. The full Work list is still what management and the projections read.
 
+## In-transaction extension calls
+
+Once every extension runs as a package ([#428](https://github.com/open-conduit/open-conduit/issues/428)), four of the host's calls into an extension happen while it holds its coordination transaction: `work_kind.trigger` on each routing pass with pending input for a kind with a trigger, `recurrence.next` on each timer firing, `dependency.filter` on each Wait match against a filtered dependency, and `emit.commit` on each committed emission (an operation's Event and the records written with it). The in-transaction deadline is 250 ms ([extension protocol](../extension-protocol/)), and the connection is the daemon's only one, so these calls are the hot path the transport adds.
+
+The budget, per call, round trip from the host's adapter to the extension process and back, after 20 warm-up calls:
+
+| | Median | 95th percentile |
+| --- | ---: | ---: |
+| Budget | 2 ms | 10 ms |
+| Budget under `-race` (how `make check` runs) | 10 ms | 50 ms |
+
+A round is 300 calls. A call over budget in three rounds running fails the test; one that answers wrongly (the trigger's fallback after an error, say) fails at once. The 99th percentile and the slowest call are logged, not gated: on a shared runner they belong to the scheduler and the garbage collector. `TestInTransactionRPCBudgetCatchesASlowCall` is the negative control. Each call's payload is realistic: the trigger is given four inputs of about 1 KiB of text, and each commit an annotation of about 240 bytes. A commit ID is used once, so each `emit.commit` call plans a fresh emission first (`operation.emit`, outside the transaction and the timing). `scripts/test-integration.sh` runs these tests alone once the four integration shards finish, so the daemon tests running beside a shard don't take the measurement.
+
+One run, darwin/arm64 (Apple M1 Pro), Go 1.27.3, 300 calls, on a quiet machine. A reviewer's run on a busy machine under `-race` put the trigger's 95th percentile at 29 ms, more than half its 50 ms budget, which is why the tests run alone in CI:
+
+| Call | Median | 95th percentile | Median, `-race` | 95th percentile, `-race` |
+| --- | ---: | ---: | ---: | ---: |
+| `work_kind.trigger` (4 inputs of 1 KiB) | 0.11 ms | 0.71 ms | 1.1 ms | 1.5 ms |
+| `recurrence.next` | 0.10 ms | 1.4 ms | 0.43 ms | 0.55 ms |
+| `dependency.filter` | 0.04 ms | 3.4 ms | 0.26 ms | 0.37 ms |
+| `emit.commit` (one record) | 0.07 ms | 0.10 ms | 0.50 ms | 0.83 ms |
+
+The trigger costs most because it carries the whole pending batch each way. Its first draft carried 1 KiB of NUL bytes per input, which JSON escapes to 6 KiB: that put its median at 0.8 ms and its 99th percentile at 28 ms. So a trigger's cost follows the size of its inputs' payloads, and a kind whose inputs are large pays for it on every pass.
+
 ## Gaps
 
-- No load or soak test exists. The timed figures are the extension transport prototype's and the history benchmarks.
+- No load or soak test exists. The timed figures are the extension transport prototype's, the history benchmarks and the in-transaction call budget.
 - Event-ingress throughput, end-to-end scheduler latency, SQLite transaction hold and wait times, recovery time with a large backlog, and daemon RSS, CPU and disk growth under load are all unmeasured.
 - The retention sweep reads every Work record, about 190 ms every 10 minutes at a million Events ([history growth](#history-growth)). Draining an unrouted backlog grows with the backlog's square.
 - The host loop is serial, so one slow reconcile page delays starting Work. No test measures by how much.
