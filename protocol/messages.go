@@ -1,6 +1,8 @@
 package protocol
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"time"
 )
@@ -369,10 +371,56 @@ type KVDelete struct {
 	Namespace string `json:"namespace"`
 	Key       string `json:"key"`
 }
+
+// KVCommitParams is one atomic batch: the preconditions, the KV writes and
+// the Events to accept (Emissions). A failed check applies nothing; a
+// refused Emission (undeclared family, foreign namespace, bad schema or
+// parent) refuses the whole batch. An Emission over its chain's causal
+// bounds is refused alone (Refused, recorded by the host for the operator)
+// and the rest of the batch commits, as an in-process extension's
+// transaction may commit after inproc.ErrCausalLimit.
 type KVCommitParams struct {
-	Checks  []KVCheck  `json:"checks,omitempty"`
-	Puts    []KVPut    `json:"puts,omitempty"`
-	Deletes []KVDelete `json:"deletes,omitempty"`
+	Checks    []KVCheck  `json:"checks,omitempty"`
+	Puts      []KVPut    `json:"puts,omitempty"`
+	Deletes   []KVDelete `json:"deletes,omitempty"`
+	Emissions []Emission `json:"emissions,omitempty"`
+}
+
+// Emission is an Event of one of the extension's own families that a
+// transaction returns for the host to accept in its own transaction, with
+// the batch's KV writes: a root Event of the scope when Parent is empty,
+// else one derived from Parent, an accepted Event in the scope, bounded by
+// its chain's causal limits. The host assigns the Event's ID
+// (EmittedEventID), causation and execution; the source must be in the
+// extension's namespace and the delivery ID set, which makes it
+// idempotent.
+type Emission struct {
+	ScopeID string `json:"scope_id"`
+	Parent  string `json:"parent,omitempty"`
+	Event   Event  `json:"event"`
+}
+
+// KVCommitResult answers kv.commit: each Emission's outcome, in order.
+type KVCommitResult struct {
+	Emissions []EmissionResult `json:"emissions,omitempty"`
+}
+
+// EmissionResult is one Emission's outcome: the accepted Event and whether
+// this batch added it (false for one already accepted), or Refused, the
+// error code of a refusal that left the rest of the batch to commit
+// (causal_limit).
+type EmissionResult struct {
+	Event   AcceptedEvent `json:"event"`
+	Added   bool          `json:"added"`
+	Refused string        `json:"refused,omitempty"`
+}
+
+// EmittedEventID is the ID the host gives an Event an extension emits
+// (event.accept or an Emission): a digest of its source and delivery ID,
+// so emitting it again is the same Event.
+func EmittedEventID(source, deliveryID string) string {
+	sum := sha256.Sum256([]byte(source + "\x00" + deliveryID))
+	return "ext/" + hex.EncodeToString(sum[:16])
 }
 
 // State reads.

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"slices"
@@ -14,11 +15,13 @@ import (
 	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/examples/notes"
 	"github.com/open-conduit/open-conduit/protocol/examples/runner"
+	"github.com/open-conduit/open-conduit/protocol/sdk"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -228,6 +231,113 @@ func TestExternalExtensionKVSharedSuite(t *testing.T) {
 	t.Run("protocol", func(t *testing.T) {
 		conformance.RunExtensionKV(t, func() conformance.ExtensionKVFixture { return fixture(t, true) })
 	})
+}
+
+// TestExternalExtensionEmissionsSharedSuite runs the emission cases (#428)
+// against the host's scoped service, called in process and over the
+// protocol: a kv.commit batch's Events are accepted in the transaction that
+// applies its checks and writes, or not at all.
+func TestExternalExtensionEmissionsSharedSuite(t *testing.T) {
+	fixture := func(t *testing.T, wire bool) conformance.ExtensionEmissionsFixture {
+		e := newExtEnv(t)
+		svc, err := extproc.NewService(notes.Manifest(notes.Options{Release: 2}), e.deps())
+		if err != nil {
+			t.Fatal(err)
+		}
+		var kv conformance.ExtensionEmitter = extproc.LocalKV{S: svc}
+		if wire {
+			kv = pipeHost(t, svc)
+		}
+		read := func(fn func(tx storage.Tx) error) error {
+			return e.store.Transact(context.Background(), storage.Guard{Now: e.clock.Now()}, fn)
+		}
+		parent := domain.Event{ID: "parent-event", Type: notes.Changed, Source: "notes/" + string(extensionScope), DeliveryID: "parent", ReceivedAt: e.clock.Now(), OccurredAt: e.clock.Now()}
+		if err := e.store.Transact(context.Background(), storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
+			_, _, err := runtime.AcceptInTx(tx, extensionScope, parent)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return conformance.ExtensionEmissionsFixture{KV: kv, Name: notes.Name, Scope: string(extensionScope), Parent: string(parent.ID),
+			Event: func(delivery string) protocol.Event {
+				return protocol.Event{Type: notes.Changed, Source: notes.Name, DeliveryID: delivery}
+			},
+			Accepted: func(id string) bool {
+				return read(func(tx storage.Tx) error {
+					_, err := tx.Event(domain.ID(id))
+					return err
+				}) == nil
+			},
+			Peek: func(ns, key string) ([]byte, error) {
+				var v []byte
+				err := read(func(tx storage.Tx) error {
+					var err error
+					v, err = tx.Get(ns, key)
+					return err
+				})
+				return v, err
+			}}
+	}
+	t.Run("in_process", func(t *testing.T) {
+		conformance.RunExtensionEmissions(t, func() conformance.ExtensionEmissionsFixture { return fixture(t, false) })
+	})
+	t.Run("protocol", func(t *testing.T) {
+		conformance.RunExtensionEmissions(t, func() conformance.ExtensionEmissionsFixture { return fixture(t, true) })
+	})
+}
+
+// TestEmissionCausalRefusalSurfaces: over the protocol an emission over its
+// chain's causal bound is refused alone at commit (#428), so sdk.Store's
+// Transact commits the rest of the batch and returns an error wrapping
+// inproc.ErrCausalLimit, which an in-process caller would have seen from
+// AcceptDerivedInTx itself.
+func TestEmissionCausalRefusalSurfaces(t *testing.T) {
+	e := newExtEnv(t)
+	deps := e.deps()
+	deps.Limits = runtime.CausalLimits{MaxDepth: 1, PerMinute: 1000}
+	svc, err := extproc.NewService(notes.Manifest(notes.Options{Release: 2}), deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h := pipeHost(t, svc)
+	store := sdk.NewStore(h)
+	ctx := context.Background()
+	parent := domain.Event{ID: "root-event", Type: notes.Changed, Source: "notes/" + string(extensionScope), DeliveryID: "root", ReceivedAt: e.clock.Now(), OccurredAt: e.clock.Now()}
+	if err := e.store.Transact(ctx, storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
+		_, _, err := runtime.AcceptInTx(tx, extensionScope, parent)
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	emit := func(from domain.ID, delivery, key string) (domain.AcceptedEvent, error) {
+		var a domain.AcceptedEvent
+		err := store.Transact(ctx, storage.Guard{}, func(tx storage.Tx) error {
+			var err error
+			if a, _, err = sdk.EmitInTx(tx, extensionScope, from, domain.Event{Type: notes.Changed, Source: notes.Name, DeliveryID: delivery}); err != nil {
+				return err
+			}
+			return tx.Put(notes.Name, key, []byte("1"))
+		})
+		return a, err
+	}
+	first, err := emit(parent.ID, "depth-1", "first")
+	if err != nil {
+		t.Fatalf("an emission within the bound: %v", err)
+	}
+	if _, err := emit(first.Event.ID, "depth-2", "second"); !errors.Is(err, inproc.ErrCausalLimit) {
+		t.Fatalf("an emission over the bound: %v, want ErrCausalLimit", err)
+	}
+	if err := e.store.Transact(ctx, storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
+		if _, err := tx.Get(notes.Name, "second"); err != nil {
+			return fmt.Errorf("the rest of the batch did not commit: %w", err)
+		}
+		if _, err := tx.Event(domain.ID(protocol.EmittedEventID(notes.Name, "depth-2"))); !errors.Is(err, storage.ErrNotFound) {
+			return fmt.Errorf("the refused Event was accepted: %v", err)
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func notesActionFixture(p extension.ActionProvider) conformance.ActionFixture {

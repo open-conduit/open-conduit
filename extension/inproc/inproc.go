@@ -155,12 +155,21 @@ type Host struct {
 	// AcceptInTx accepts a root Event of one of the extension's own
 	// families (Event types named <Name>.*) into scope, inside the
 	// extension's own transaction, so its own records commit with it.
+	// Served over the protocol (protocol/sdk/inprocsdk) the Event is
+	// returned from the transaction and accepted when it commits, so a new
+	// Event's answer has Sequence 0: key records by its ID, not its
+	// sequence. An Event already accepted is answered as it stands, with
+	// added false.
 	AcceptInTx func(tx storage.Tx, scope domain.ID, e domain.Event) (domain.AcceptedEvent, bool, error)
 	// AcceptDerivedInTx accepts an Event of one of the extension's own
 	// families as derived from parent, an accepted Event in scope, inside
 	// the extension's own transaction: it lands in parent's causal chain,
 	// bounded by the generation's causal limits. A bound it would exceed is
-	// ErrCausalLimit, recorded by the host for the operator.
+	// ErrCausalLimit, recorded by the host for the operator. Served over the
+	// protocol, the bound is known only at commit: the call succeeds, the
+	// rest of the transaction commits, and Transact returns an error
+	// wrapping ErrCausalLimit. Sequence is 0 for a new Event, as for
+	// AcceptInTx.
 	AcceptDerivedInTx func(tx storage.Tx, scope, parent domain.ID, e domain.Event) (domain.AcceptedEvent, bool, error)
 	// EventScope is the scope an accepted Event was accepted into, read in
 	// the extension's own transaction.

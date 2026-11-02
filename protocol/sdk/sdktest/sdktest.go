@@ -580,17 +580,35 @@ func (h *Host) handle(ctx context.Context, method string, raw json.RawMessage) (
 		if err := h.checkBatch(p.Checks, p.Puts, p.Deletes); err != nil {
 			return nil, err
 		}
-		if len(p.Puts)+len(p.Deletes) == 0 {
+		if len(p.Puts)+len(p.Deletes)+len(p.Emissions) == 0 {
 			return nil, invalid("empty batch")
+		}
+		events := make([]domain.Event, len(p.Emissions))
+		for i, em := range p.Emissions {
+			e, err := h.emitted(em.Event)
+			if err != nil {
+				return nil, err
+			}
+			events[i] = e
 		}
 		h.mu.Lock()
 		defer h.mu.Unlock()
+		for _, em := range p.Emissions {
+			if err := h.emissionLocked(em); err != nil {
+				return nil, err
+			}
+		}
 		if err := h.checksLocked(p.Checks); err != nil {
 			return nil, err
 		}
+		var out protocol.KVCommitResult
+		for i, em := range p.Emissions {
+			accepted, added := h.acceptLocked(domain.ID(em.ScopeID), events[i], domain.ID(em.Parent))
+			out.Emissions = append(out.Emissions, protocol.EmissionResult{Event: protocol.FromAccepted(accepted), Added: added})
+		}
 		h.applyLocked(p.Puts, p.Deletes)
 		h.commits = append(h.commits, p)
-		return struct{}{}, nil
+		return out, nil
 	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.scopes", "state.timers":
 		var p protocol.StateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
@@ -771,6 +789,46 @@ func (h *Host) acceptLocked(scope domain.ID, e domain.Event, parent domain.ID) (
 	return a, true
 }
 
+// emitted checks an Event the extension emits, as the host does: its own
+// family, source namespace and payload schema, no causation or execution
+// of its own; it gets the host's ID.
+func (h *Host) emitted(ev protocol.Event) (domain.Event, error) {
+	e := ev.Domain()
+	if !h.ownFamily(e.Type) {
+		return e, protocol.Errorf(protocol.CodeUndeclared, "family not declared")
+	}
+	if !protocol.SourceNamespace(h.ext.Manifest.Name, e.Source) || e.DeliveryID == "" {
+		return e, unauthorized("source is outside the extension's namespace")
+	}
+	if e.CausationID != "" || e.ExecutionID != "" {
+		return e, unauthorized("causation and execution are assigned by the host")
+	}
+	if err := h.ext.Manifest.CheckWrite(e.Data); err != nil {
+		return e, protocol.Errorf(protocol.CodeSchema, err.Error())
+	}
+	e.ID = domain.ID(protocol.EmittedEventID(e.Source, e.DeliveryID))
+	return e, nil
+}
+
+// emissionLocked checks an Emission's scope and parent.
+func (h *Host) emissionLocked(em protocol.Emission) error {
+	scope := domain.ID(em.ScopeID)
+	if !h.allowedLocked(scope) {
+		return unauthorized("scope is not configured for this extension")
+	}
+	if em.Parent == "" {
+		return nil
+	}
+	parent, ok := h.causal[domain.ID(em.Parent)]
+	if !ok {
+		return unauthorized("parent is not an accepted event")
+	}
+	if parent.scope != scope {
+		return unauthorized("parent is outside the scope")
+	}
+	return nil
+}
+
 func (h *Host) accept(p protocol.EventAcceptParams) (protocol.EventAcceptResult, error) {
 	var out protocol.EventAcceptResult
 	scope := domain.ID(p.ScopeID)
@@ -889,8 +947,10 @@ func (h *Host) stateLocked(method string, p protocol.StateParams) (any, error) {
 		return list, nil
 	case "state.event":
 		for _, a := range h.events {
-			if a.Event.ID == domain.ID(p.ID) && h.allowedLocked(h.causal[a.Event.ID].scope) {
-				return protocol.FromAccepted(a), nil
+			if scope := h.causal[a.Event.ID].scope; a.Event.ID == domain.ID(p.ID) && h.allowedLocked(scope) {
+				out := protocol.FromAccepted(a)
+				out.ScopeID = string(scope)
+				return out, nil
 			}
 		}
 		return nil, notFound
@@ -904,8 +964,10 @@ func (h *Host) stateLocked(method string, p protocol.StateParams) (any, error) {
 			if len(list) == limit {
 				break
 			}
-			if a.Sequence > p.After && h.allowedLocked(h.causal[a.Event.ID].scope) {
-				list = append(list, protocol.FromAccepted(a))
+			if scope := h.causal[a.Event.ID].scope; a.Sequence > p.After && h.allowedLocked(scope) {
+				out := protocol.FromAccepted(a)
+				out.ScopeID = string(scope)
+				list = append(list, out)
 			}
 		}
 		return list, nil
