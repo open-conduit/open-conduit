@@ -15,7 +15,7 @@ import (
 // Certification is the package's certification.json: a fixture command
 // that serves the PagerDuty fake for the run.
 func Certification() protocol.CertificationFile {
-	return protocol.CertificationFile{Command: []string{"pagerduty-extension", "certify-fixture"}}
+	return protocol.CertificationFile{Command: append(protocol.HostRunCommand(Name), "certify-fixture")}
 }
 
 // Fixture identities.

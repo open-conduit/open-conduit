@@ -45,7 +45,7 @@ const Version = "0.1.0"
 func Manifest() protocol.Manifest {
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version,
 		Summary: "The first-party shell executor as a subprocess package.",
-		Command: []string{"shell-extension"},
+		Command: protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: Name,
 			Capabilities: protocol.Capabilities{Interrupt: true, Inject: true, Workspace: true, Toolbelt: extension.ToolbeltCLI},
 			Controls:     protocol.Controls{Stop: true, Forget: true}, Pool: "jobs"}}}}

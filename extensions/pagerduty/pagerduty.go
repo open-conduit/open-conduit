@@ -199,7 +199,7 @@ func Build(o Options) *sdk.Extension {
 		o.Now = time.Now
 	}
 	st := &state{o: o, entries: map[string]*entry{}}
-	ext := sdk.New(Name, sdk.Version(Version),
+	ext := sdk.New(Name, sdk.Version(Version), sdk.Command(protocol.HostRunCommand(Name)...),
 		sdk.Summary("PagerDuty incidents as Work, with operations to read the incident, add a note and (when allowed) acknowledge it."))
 	ext.Manifest.Provides.Connections = []protocol.TypeDecl{{Type: Name}}
 	ext.Manifest.Provides.Webhooks = true

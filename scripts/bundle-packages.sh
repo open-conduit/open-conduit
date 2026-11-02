@@ -3,13 +3,16 @@
 # extensions/<name>/ beside open-conduit and os (#243). The setup extension
 # lives in github.com/open-conduit/extension-setup, pinned in go.mod with a
 # `tool` directive, and is built from the module cache like any dependency.
-# The Codex executor (extensions/codex) is built from this module, so a
-# binding can name executor codex on a fresh install (#360).
+# The Codex executor (extensions/codex, #360) is served by open-conduit
+# itself (`open-conduit extension-run codex`, #428): its package is a
+# manifest and certification fixture, with no executable of its own, so a
+# binding can name executor codex on a fresh install. `bundled` below names the
+# first-party packages served that way.
 #
 #   scripts/bundle-packages.sh OUT [GOOS_GOARCH...]
 #
 # writes OUT/<goos>_<goarch>/extensions/{setup,codex} for each platform (this host's
-# when none is given): the package binary, its manifest and certification
+# when none is given): setup's binary, each package's manifest and certification
 # (printed by a build for this host, since they don't depend on the
 # platform) and its playbooks. GoReleaser runs it before building and puts
 # each platform's directory in that platform's archive; `make packages` runs
@@ -34,9 +37,9 @@ src=$($go list -m -f '{{.Dir}}' "$module")
 [ -n "$src" ] || { echo "bundle-packages: $module is not in the module cache" >&2; exit 1; }
 host="$out/.host-setup-extension"
 $go build -trimpath -o "$host" "$pkg"
-codexpkg=./extensions/codex/cmd/codex-extension
-codexhost="$out/.host-codex-extension"
-$go build -trimpath -o "$codexhost" "$codexpkg"
+bundled="codex"
+hostbin="$out/.host-open-conduit"
+$go build -trimpath -o "$hostbin" ./cmd/open-conduit
 
 for target in $targets; do
 	dir="$out/$target/extensions/setup"
@@ -47,11 +50,12 @@ for target in $targets; do
 	cp -R "$src/playbooks" "$dir/playbooks"
 	chmod -R u+w "$dir/playbooks"
 	echo "bundled $dir"
-	dir="$out/$target/extensions/codex"
-	mkdir -p "$dir"
-	CGO_ENABLED=0 GOOS=${target%_*} GOARCH=${target#*_} $go build -trimpath -ldflags "$ldflags" -o "$dir/codex-extension" "$codexpkg"
-	"$codexhost" package-manifest >"$dir/open-conduit-extension.json"
-	"$codexhost" package-certification >"$dir/certification.json"
-	echo "bundled $dir"
+	for name in $bundled; do
+		dir="$out/$target/extensions/$name"
+		mkdir -p "$dir"
+		"$hostbin" extension-run "$name" package-manifest >"$dir/open-conduit-extension.json"
+		"$hostbin" extension-run "$name" package-certification >"$dir/certification.json"
+		echo "bundled $dir"
+	done
 done
-rm -f "$host" "$codexhost"
+rm -f "$host" "$hostbin"

@@ -71,7 +71,7 @@ func Manifest() protocol.Manifest {
 	}
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version,
 		Summary: "The first-party Slack extension (workspace-free support threads) as a subprocess package.",
-		Command: []string{"slack-extension"}, Provides: p}
+		Command: protocol.HostRunCommand(Name), Provides: p}
 }
 
 // Options configure Build.

@@ -16,7 +16,7 @@ import (
 // Certification is the package's certification.json: a fixture command
 // that serves the Slack fake for the run.
 func Certification() protocol.CertificationFile {
-	return protocol.CertificationFile{Command: []string{"slack-extension", "certify-fixture"}}
+	return protocol.CertificationFile{Command: append(protocol.HostRunCommand(Name), "certify-fixture")}
 }
 
 // Fixture identities: a support scope watching one channel of the fake

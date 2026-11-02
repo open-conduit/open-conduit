@@ -141,3 +141,42 @@ func TestDiagnoseStartFailures(t *testing.T) {
 		}
 	}
 }
+
+// A package whose command is the host's own multicall (`open-conduit
+// extension-run <name>`, #428) is a manifest with no executable: it reads
+// as a package, and its command resolves to the host's executable, unless
+// the package ships a file of that name itself.
+func TestHostRunPackage(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "hosted")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	m := protocol.Manifest{Protocol: []int{protocol.Version}, Name: "hosted", Version: "1.0.0", Command: protocol.HostRunCommand("hosted")}
+	raw, err := json.Marshal(m)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, protocol.ManifestFile), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	pkg, err := ReadPackage(dir)
+	if err != nil {
+		t.Fatalf("a host-run package with no executable: %v", err)
+	}
+	if !pkg.Manifest.RunsOnHost() || pkg.Digest == "" {
+		t.Fatalf("package %+v", pkg)
+	}
+	prev := HostExecutable
+	HostExecutable = func() (string, error) { return "/opt/oc/open-conduit", nil }
+	t.Cleanup(func() { HostExecutable = prev })
+	if argv := pkg.Found().Argv(); len(argv) != 3 || argv[0] != "/opt/oc/open-conduit" || argv[1] != protocol.HostRun || argv[2] != "hosted" {
+		t.Fatalf("argv %v, want the host's executable running extension-run hosted", argv)
+	}
+	local := filepath.Join(dir, protocol.HostCommand)
+	if err := os.WriteFile(local, []byte("#!/bin/sh\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if argv := pkg.Found().Argv(); argv[0] != local {
+		t.Fatalf("argv %v, want the package's own %s", argv, protocol.HostCommand)
+	}
+}

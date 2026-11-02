@@ -17,6 +17,25 @@ import (
 // ManifestFile is the manifest's file name inside an extension's directory.
 const ManifestFile = "open-conduit-extension.json"
 
+// HostCommand and HostRun name the host's own multicall entry point: a
+// manifest whose command is exactly [HostCommand, HostRun, <its name>]
+// runs as `open-conduit extension-run <name>` from the host's own
+// executable rather than a file in the package (#428). The release bundles
+// first-party extensions this way, so it stays one binary while each
+// extension is still its own supervised process.
+const (
+	HostCommand = "open-conduit"
+	HostRun     = "extension-run"
+)
+
+// HostRunCommand is the command of a package served by the host's own
+// executable: `open-conduit extension-run <name>`.
+func HostRunCommand(name string) []string { return []string{HostCommand, HostRun, name} }
+
+// RunsOnHost reports whether the manifest's command is the host's own
+// executable (HostRunCommand) rather than a file in its package.
+func (m Manifest) RunsOnHost() bool { return len(m.Command) > 0 && m.Command[0] == HostCommand }
+
 // MaxTitle is the longest display name a manifest may give (Title).
 const MaxTitle = 64
 
@@ -568,6 +587,10 @@ func (m Manifest) Validate() error {
 	}
 	if len(m.Command) == 0 || m.Command[0] == "" {
 		fail("command is required")
+	} else if m.RunsOnHost() {
+		if !slices.Equal(m.Command, HostRunCommand(m.Name)) {
+			fail("a command run by the host must be exactly %q", strings.Join(HostRunCommand(m.Name), " "))
+		}
 	} else if !filepath.IsAbs(m.Command[0]) && strings.HasPrefix(filepath.Clean(m.Command[0]), "..") {
 		fail("command %q leaves the extension directory", m.Command[0])
 	}

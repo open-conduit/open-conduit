@@ -24,7 +24,7 @@ A segment is a detached process group like the shell executor's:
 
 - **Recovery intent first.** It persists `open-conduit.codex.recovery.v1` (naming the segment directory) through `PersistRecovery` before it touches anything else.
 - **Process group.** A `/bin/sh` wrapper runs as a new session and process-group leader. Its `$0` carries an unguessable nonce, so identity is checked beyond the PID. The wrapper records its PID and exit status, and signals the remaining group members (including the MCP server) when the driver exits.
-- **The driver.** The wrapper runs the package's own binary as `codex-extension segment <run dir>` (`codex.RunSegment`). The driver reads the turn's prompt and options from the run directory and runs one `codex exec` turn:
+- **The driver.** The wrapper runs the extension again as `open-conduit extension-run codex segment <run dir>` (`codex.RunSegment`; the command comes from `sdk.Self`, so a build of the package as its own binary runs `<binary> segment <run dir>`). The driver reads the turn's prompt and options from the run directory and runs one `codex exec` turn:
 
 ```
 codex exec [resume] --skip-git-repo-check -c sandbox_mode="S" -c approval_policy="never"

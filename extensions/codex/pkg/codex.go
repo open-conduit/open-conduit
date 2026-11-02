@@ -43,7 +43,7 @@ func Manifest() protocol.Manifest {
 	c := codex.Capabilities()
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version,
 		Summary: "Runs agent turns on the Codex CLI, with the toolbelt over MCP.",
-		Command: []string{"codex-extension"},
+		Command: protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: Name,
 			Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt},
 			Controls:     protocol.Controls{Stop: true, Forget: true},
@@ -67,7 +67,14 @@ func (x *executor) get() (*codex.Executor, error) {
 			x.err = errors.New("codex extension: not initialized")
 			return
 		}
-		x.e, x.err = codex.New(codex.Options{StateDir: filepath.Join(dir, "codex"), Artifacts: hostArtifacts{x.host}})
+		self, err := sdk.Self()
+		if err != nil {
+			x.err = err
+			return
+		}
+		// Segments run this extension again, under the host's multicall
+		// or from its own binary alike.
+		x.e, x.err = codex.New(codex.Options{StateDir: filepath.Join(dir, "codex"), Artifacts: hostArtifacts{x.host}, Driver: append(self, codex.SegmentCommand)})
 	})
 	return x.e, x.err
 }
