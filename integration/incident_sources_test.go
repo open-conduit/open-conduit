@@ -12,12 +12,12 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/pagerduty"
+	"github.com/open-conduit/open-conduit/extensions/pagerduty/pagerdutytest"
+	"github.com/open-conduit/open-conduit/extensions/sentry"
+	"github.com/open-conduit/open-conduit/extensions/sentry/sentrytest"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
-	"github.com/open-conduit/open-conduit/packages/pagerduty"
-	"github.com/open-conduit/open-conduit/packages/pagerduty/pagerdutytest"
-	"github.com/open-conduit/open-conduit/packages/sentry"
-	"github.com/open-conduit/open-conduit/packages/sentry/sentrytest"
 	"github.com/open-conduit/open-conduit/storage"
 )
 

@@ -34,7 +34,7 @@ func TestDependencyClosures(t *testing.T) {
 		{"transitive_adapter", []pkg{project("internal/runtime", "extension"), project("extension", "extensions/github")}, "extensions/github"},
 		{"reference_runtime_leak", []pkg{project("conformance/reference", "internal/runtime")}, "internal/runtime"},
 		{"domain_payload_leak", []pkg{project("domain", "extensions/slack")}, "extensions/slack"},
-		{"executor_sqlite_leak", []pkg{project("executors/shell", "internal/storage/sqlite")}, "internal/storage/sqlite"},
+		{"executor_sqlite_leak", []pkg{project("extensions/shell", "internal/storage/sqlite")}, "internal/storage/sqlite"},
 		{"telemetry_uses_contracts", []pkg{project("internal/telemetry", "observability"), project("observability", "domain")}, ""},
 		{"telemetry_runtime_leak", []pkg{project("internal/telemetry", "internal/runtime")}, "internal/runtime"},
 		// Setup is extension-owned (04-02): core CLI hosts extension.Setup
@@ -70,17 +70,18 @@ func TestDependencyClosures(t *testing.T) {
 		{"extension_cannot_import_protocol", []pkg{project("extension", "protocol")}, "protocol"},
 		{"protocol_sdk_reads_protocol", []pkg{project("protocol/sdk", "protocol/jsonrpc", "protocol", "extension")}, ""},
 		{"protocol_example_cannot_reach_runtime", []pkg{project("protocol/examples/notes", "internal/runtime")}, "internal/runtime"},
-		{"protocol_example_cannot_reach_extensions", []pkg{project("protocol/examples/runner", "executors/shell")}, "executors/shell"},
+		{"protocol_example_cannot_reach_extensions", []pkg{project("protocol/examples/runner", "extensions/shell")}, "extensions/shell"},
 		{"extproc_adapts_runtime", []pkg{project("internal/extproc", "internal/runtime", "protocol/jsonrpc", "storage")}, ""},
 		{"extproc_cannot_reach_sqlite", []pkg{project("internal/extproc", "internal/storage/sqlite")}, "internal/storage/sqlite"},
 		{"extproc_cannot_reach_bootstrap", []pkg{project("internal/extproc", "internal/bootstrap")}, "internal/bootstrap"},
 		{"certify_runs_host_and_checks", []pkg{project("internal/certify", "internal/extproc", "internal/storage/sqlite", "internal/artifacts", "conformance")}, ""},
 		{"certify_cannot_use_reference", []pkg{project("internal/certify", "conformance/reference")}, "conformance/reference"},
 		{"certify_cannot_reach_bootstrap", []pkg{project("internal/certify", "internal/bootstrap")}, "internal/bootstrap"},
-		{"package_wraps_its_implementation", []pkg{project("packages/slack", "extensions/slack", "protocol/sdk")}, ""},
-		{"package_implementation_uses_client", []pkg{project("packages/github", "extensions/github", "protocol/sdk"), project("extensions/github", "client"), project("client", "domain")}, ""},
-		{"package_cannot_reach_another", []pkg{project("packages/slack", "executors/shell")}, "executors/shell"},
-		{"package_cannot_reach_host", []pkg{project("packages/shell", "internal/extproc")}, "internal/extproc"},
+		{"package_wraps_its_implementation", []pkg{project("extensions/slack/pkg", "extensions/slack", "protocol/sdk")}, ""},
+		{"package_implementation_uses_client", []pkg{project("extensions/github/pkg", "extensions/github", "protocol/sdk/inprocsdk"), project("extensions/github", "client"), project("client", "domain")}, ""},
+		{"package_cannot_reach_another", []pkg{project("extensions/slack/pkg", "extensions/shell")}, "extensions/shell"},
+		{"package_cannot_reach_host", []pkg{project("extensions/shell/cmd/shell-extension", "internal/extproc")}, "internal/extproc"},
+		{"package_cannot_reach_examples", []pkg{project("extensions/shell/pkg", "protocol/examples/runner")}, "protocol/examples/runner"},
 		{"bootstrap_cannot_use_reference", []pkg{project("internal/bootstrap", "conformance/reference")}, "conformance/reference"},
 		{"backup_runtime_leak", []pkg{project("internal/backup", "internal/runtime")}, "internal/runtime"},
 		{"unknown_package_leak", []pkg{project("newpackage", "domain")}, "domain"},
@@ -405,11 +406,11 @@ func TestCompositionImports(t *testing.T) {
 		t.Fatal(err)
 	}
 	for name, body := range map[string]string{
-		"adapters.go":     `import ( "` + module + `extensions/slack"; "` + module + `executors/shell" )`,
+		"adapters.go":     `import ( "` + module + `extensions/slack"; "` + module + `extensions/shell" )`,
 		"inproc.go":       `import "` + module + `extensions/human"`,
 		"slack.go":        `import ( "` + module + `extensions/slack"; "` + module + `extensions/github"; "` + module + `internal/runtime" )`,
 		"daemon.go":       `import "` + module + `domain"`,
-		"new.go":          `import x "` + module + `executors/claudecode"`,
+		"new.go":          `import x "` + module + `extensions/claudecode"`,
 		"github_test.go":  `import "` + module + `extensions/github"`,
 		"external.go":     `import "github.com/slack-go/slack"`,
 		"no_imports.go":   ``,
@@ -423,7 +424,7 @@ func TestCompositionImports(t *testing.T) {
 	}
 	failures, err := compositionViolations(root, map[string][]string{
 		"slack.go":       {"extensions/slack"},
-		"daemon.go":      {"executors/shell"},
+		"daemon.go":      {"extensions/shell"},
 		"playbook_fs.go": {"extensions/slack/playbooks"},
 	})
 	if err != nil {
@@ -432,8 +433,8 @@ func TestCompositionImports(t *testing.T) {
 	joined := strings.Join(failures, "\n")
 	for _, want := range []string{
 		"internal/bootstrap/slack.go: imports extensions/github outside the wiring files",
-		"internal/bootstrap/new.go: imports executors/claudecode outside the wiring files",
-		"internal/bootstrap/daemon.go: no longer imports executors/shell",
+		"internal/bootstrap/new.go: imports extensions/claudecode outside the wiring files",
+		"internal/bootstrap/daemon.go: no longer imports extensions/shell",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q in\n%s", want, joined)

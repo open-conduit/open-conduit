@@ -30,8 +30,8 @@ import (
 
 	"github.com/open-conduit/open-conduit/conformance/reference"
 	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/executors/claudecode"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/claudecode"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
 	"github.com/open-conduit/open-conduit/extensions/srt"

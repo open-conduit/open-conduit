@@ -9,9 +9,9 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-conduit/open-conduit/executors/claudecode"
 	"github.com/open-conduit/open-conduit/extension"
 	bb "github.com/open-conduit/open-conduit/extensions/bitbucket"
+	"github.com/open-conduit/open-conduit/extensions/claudecode"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/jira"

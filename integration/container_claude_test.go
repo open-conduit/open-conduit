@@ -18,8 +18,8 @@ import (
 
 	"github.com/open-conduit/open-conduit/conformance/reference"
 	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/executors/claudecode"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/claudecode"
 )
 
 // fakeContainerClaude stands in for claude in the test image. A turn (-p)

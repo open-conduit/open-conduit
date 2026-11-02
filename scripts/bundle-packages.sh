@@ -3,7 +3,7 @@
 # extensions/<name>/ beside open-conduit and os (#243). The setup extension
 # lives in github.com/open-conduit/extension-setup, pinned in go.mod with a
 # `tool` directive, and is built from the module cache like any dependency.
-# The Codex executor (packages/codex) is built from this module, so a
+# The Codex executor (extensions/codex) is built from this module, so a
 # binding can name executor codex on a fresh install (#360).
 #
 #   scripts/bundle-packages.sh OUT [GOOS_GOARCH...]
@@ -34,7 +34,7 @@ src=$($go list -m -f '{{.Dir}}' "$module")
 [ -n "$src" ] || { echo "bundle-packages: $module is not in the module cache" >&2; exit 1; }
 host="$out/.host-setup-extension"
 $go build -trimpath -o "$host" "$pkg"
-codexpkg=./packages/codex/cmd/codex-extension
+codexpkg=./extensions/codex/cmd/codex-extension
 codexhost="$out/.host-codex-extension"
 $go build -trimpath -o "$codexhost" "$codexpkg"
 

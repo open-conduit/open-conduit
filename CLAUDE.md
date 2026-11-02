@@ -14,7 +14,7 @@ The litmus test: if a new capability needs the core to understand a particular d
 
 # Working on Open Conduit
 
-- **Know which side of the boundary you're on.** `domain`, `extension`, `storage`, `observability` and `protocol` are the public contracts; `internal/runtime` uses only those; `extensions/<name>` and `executors/<name>` use the contracts and `client`, never the runtime, SQLite or each other; `internal/bootstrap` and `cmd/open-conduit` wire it all together. `make boundaries` enforces this, and CONTRIBUTING.md's "Package boundaries" has the detail.
+- **Know which side of the boundary you're on.** `domain`, `extension`, `storage`, `observability` and `protocol` are the public contracts; `internal/runtime` uses only those; `extensions/<name>` (an executor is an extension that declares one) uses the contracts, `client` and the protocol SDK, never the runtime, SQLite or another extension; `internal/bootstrap` and `cmd/open-conduit` wire it all together. `make boundaries` enforces this, and CONTRIBUTING.md's "Package boundaries" has the detail.
 - **No privileged extensions.** Anything a bundled extension does must be possible for an independently installed one (`protocol/sdk`, `sdk/typescript`) without changing the core. If a first-party extension needs a new hook, add it to the public contracts, not a side door.
 - **Don't assume the executor is an LLM.** Executors declare capabilities (run, resume, inject, interrupt) and the runtime binds them. A shell script or a human must fit the same model.
 - **Put authority at the host.** Operations are checked where the host serves them; never rely on instructions in a prompt or playbook to keep an executor in bounds, and fail closed.

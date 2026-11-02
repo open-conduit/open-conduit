@@ -14,8 +14,8 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
-	"github.com/open-conduit/open-conduit/executors/claudecode"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/claudecode"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
 	"github.com/open-conduit/open-conduit/internal/config"
 )
