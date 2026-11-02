@@ -73,12 +73,8 @@ func runnerRequest(id domain.ID, auto bool) extension.RunRequest {
 }
 
 func waitForFile(path string) error {
-	deadline := time.Now().Add(20 * time.Second)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
-			return nil
-		}
-		time.Sleep(10 * time.Millisecond)
+	if eventually(20*time.Second, func() bool { _, err := os.Stat(path); return err == nil }) {
+		return nil
 	}
 	return errors.New("timed out waiting for " + path)
 }

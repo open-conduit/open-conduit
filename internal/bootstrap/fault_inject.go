@@ -6,6 +6,7 @@ import (
 	"context"
 	"log/slog"
 	"os"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"syscall"
@@ -158,6 +159,27 @@ func (t *faultyTx) FireTimer(id domain.ID, expected domain.Revision, replacement
 		t.trigger("timer", typ)
 	}
 	return err
+}
+
+// passes counts the host loop's completed passes in this process.
+var passes atomic.Uint64
+
+// passed is the integration tests' loop barrier, also only in faultinject
+// builds. With OPEN_CONDUIT_PASS_FILE set, each completed pass of the host
+// loop (routing, starts, projections, reconciles) atomically rewrites that
+// file with the number of passes this process has completed. A test that
+// must show something did not happen waits for passes that began after its
+// point of interest to complete, instead of sleeping.
+func (d *daemon) passed() {
+	path := os.Getenv("OPEN_CONDUIT_PASS_FILE")
+	if path == "" {
+		return
+	}
+	n := passes.Add(1)
+	tmp := path + ".tmp"
+	if err := os.WriteFile(tmp, []byte(strconv.FormatUint(n, 10)), 0o600); err == nil {
+		_ = os.Rename(tmp, path)
+	}
 }
 
 func (t *faultyTx) Put(namespace, key string, value []byte) error {

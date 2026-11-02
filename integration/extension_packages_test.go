@@ -587,17 +587,6 @@ func TestSDKStoreEventsSkipOtherScopes(t *testing.T) {
 	}
 }
 
-func waitFor(t *testing.T, what string, fn func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for !fn() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(10 * time.Millisecond)
-	}
-}
-
 // TestWaitProgressOverProtocol: wait.progress is enabled by a wait
 // operation, reaches the host as the extension's own manifest name, and the
 // host's refusal of another's Wait crosses as unauthorized.

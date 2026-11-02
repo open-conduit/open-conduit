@@ -79,6 +79,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.maintainClaudeCode(ctx)
 		d.retentionPass(ctx, c, &lastSweep)
 		d.scheduleBackup(ctx)
+		d.passed()
 		select {
 		case <-ctx.Done():
 			return nil
