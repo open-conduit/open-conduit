@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"sort"
 	"strings"
 	"time"
 
@@ -177,9 +178,10 @@ func (t *toolbelt) mcpHandle(req rpcRequest) (any, *rpcError) {
 
 const mcpBaseInstructions = "The Open Conduit toolbelt for this execution: read this Work's context, emit events, create child Work, wait for events and declare the outcome."
 
-// mcpInstructions are the server's instructions: the base sentence, then the
-// guidance of each operation this execution is granted, which the extension
-// owning the operation supplies. Without the guidance (an older daemon, an
+// mcpInstructions are the server's instructions: the base sentence, the
+// operations this execution may call through `call` with each one's
+// summary and input fields, then the guidance of each, which the extension
+// owning the operation supplies. Without them (an older daemon, an
 // unreachable endpoint) the base sentence still serves.
 func (t *toolbelt) mcpInstructions() string {
 	c, err := t.client()
@@ -188,11 +190,71 @@ func (t *toolbelt) mcpInstructions() string {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
-	guidance, err := c.ToolbeltGuidance(ctx)
-	if err != nil || len(guidance) == 0 {
+	guide, err := c.ToolbeltGuide(ctx)
+	if err != nil {
 		return mcpBaseInstructions
 	}
-	return mcpBaseInstructions + "\n\n" + strings.Join(guidance, "\n\n")
+	parts := []string{mcpBaseInstructions}
+	if ops := mcpOperations(guide.Operations); ops != "" {
+		parts = append(parts, ops)
+	}
+	parts = append(parts, guide.Guidance...)
+	return strings.Join(parts, "\n\n")
+}
+
+// mcpOperations lists the granted operations for the instructions, one line
+// each: its name, summary and input fields, an optional one marked with ?
+// (`body`, `number`?). The reference page has each field's meaning.
+func mcpOperations(ops []client.OperationDoc) string {
+	if len(ops) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("## Operations\n\nCall these with the `call` tool, giving the `operation` and its `input` object:\n")
+	for _, op := range ops {
+		fmt.Fprintf(&b, "\n- `%s`", op.Name)
+		if op.Summary != "" {
+			b.WriteString(": " + op.Summary)
+		}
+		if fields := inputFields(op.Input); fields != "" {
+			b.WriteString(" Input: " + fields + ".")
+		}
+	}
+	return b.String()
+}
+
+// inputFields are a JSON Schema object's properties in order, required ones
+// first, each optional one marked with ?; "" for none or a schema that
+// isn't an object.
+func inputFields(schema json.RawMessage) string {
+	var s struct {
+		Properties map[string]json.RawMessage `json:"properties"`
+		Required   []string                   `json:"required"`
+	}
+	if json.Unmarshal(schema, &s) != nil || len(s.Properties) == 0 {
+		return ""
+	}
+	required := map[string]bool{}
+	for _, r := range s.Required {
+		required[r] = true
+	}
+	names := make([]string, 0, len(s.Properties))
+	for name := range s.Properties {
+		names = append(names, name)
+	}
+	sort.Slice(names, func(i, j int) bool {
+		if required[names[i]] != required[names[j]] {
+			return required[names[i]]
+		}
+		return names[i] < names[j]
+	})
+	for i, name := range names {
+		names[i] = "`" + name + "`"
+		if !required[name] {
+			names[i] += "?"
+		}
+	}
+	return strings.Join(names, ", ")
 }
 
 // mcpCall performs one tool call. Toolbelt refusals are tool results with

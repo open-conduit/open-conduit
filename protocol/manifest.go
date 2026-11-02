@@ -419,15 +419,17 @@ var targetKind = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 var capabilityName = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
 
 // OperationDecl declares one toolbelt operation. Commit marks an emit whose
-// plan writes records through emit.commit. Guidance is the operation's
-// agent guidance (extension.Operation.Guidance), served to executions whose
-// grant includes it. Input is the JSON Schema of the input's data, an
-// object; sdk.Handler, sdk.Wait and sdk.Emit derive it from the handler's
-// input struct. The host carries it and does not yet check calls against it.
+// plan writes records through emit.commit. Summary says in one line what it
+// does (extension.Operation.Summary). Guidance is the operation's agent
+// guidance (extension.Operation.Guidance), served to executions whose grant
+// includes it. Input is the JSON Schema of the input's data, an object;
+// sdk.Handler, sdk.Wait and sdk.Emit derive it from the handler's input
+// struct. The host carries it and does not yet check calls against it.
 type OperationDecl struct {
 	Name     string          `json:"name"`
 	Kind     string          `json:"kind"`
 	Commit   bool            `json:"commit,omitempty"`
+	Summary  string          `json:"summary,omitempty"`
 	Guidance string          `json:"guidance,omitempty"`
 	Input    json.RawMessage `json:"input,omitempty"`
 	// Serves, on a handler, names a capability the operation answers
@@ -699,6 +701,9 @@ func (m Manifest) Validate() error {
 		dotted("operation", o.Name)
 		if len(o.Guidance) > extension.MaxGuidance {
 			fail("operation %q: guidance is longer than %d bytes", o.Name, extension.MaxGuidance)
+		}
+		if err := extension.ValidateOperationDoc(o.Summary, o.Input); err != nil {
+			fail("operation %q: %s", o.Name, strings.TrimPrefix(err.Error(), extension.ErrInvalid.Error()+": "))
 		}
 		if o.Serves != "" {
 			if !capabilityName.MatchString(o.Serves) {

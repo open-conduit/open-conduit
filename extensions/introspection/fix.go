@@ -72,7 +72,18 @@ func Fixes(tx storage.Tx, scope domain.ID) ([]Fix, error) {
 	return out, nil
 }
 
+// fixInput is introspection.fix's input. It names at least one report or
+// note.
 type fixInput struct {
+	Reports []string `json:"reports,omitempty" doc:"the ids of up to 100 open reports the fix addresses; name at least one report or note"`
+	Notes   []string `json:"notes,omitempty" doc:"the ids of up to 100 notes the fix addresses; name at least one report or note"`
+	Title   string   `json:"title" doc:"the fix in one line of at most 200 bytes"`
+	Body    string   `json:"body" doc:"what to change and why, for the Work that makes the fix, at most 16384 bytes"`
+}
+
+// fixSeed is fixInput as a call's identity encodes it, empty fields
+// included, as it always has been.
+type fixSeed struct {
 	Reports []string `json:"reports"`
 	Notes   []string `json:"notes"`
 	Title   string   `json:"title"`
@@ -148,7 +159,7 @@ func (t *Tools) fix(ctx context.Context, a extension.Authority, in domain.Payloa
 	}
 	seed := extension.CallRequestID(ctx)
 	if seed == "" {
-		canonical, _ := json.Marshal(r)
+		canonical, _ := json.Marshal(fixSeed(r))
 		seed = "input:" + string(canonical)
 	}
 	delivery := "fix/" + digest(seed)[:32]

@@ -443,13 +443,15 @@ func (t *Tools) pullWaitPlan(ctx context.Context, b *bound, conds []string, unti
 	return plan, nil
 }
 
+type waitInput struct {
+	Conditions []string `json:"conditions,omitempty" doc:"what to wait for, any one of which wakes you: pr:<n>[:merged|closed|commented|pushed|checks], issue:<n>[:closed|<state>] or job:<name>, with <project>/<n> or <project>/<name> for another project's; give conditions, until or both (a PR's own Work may give neither)"`
+	Until      string   `json:"until,omitempty" doc:"a future ISO time (e.g. 2026-10-25T09:00Z) to wake at if nothing else has"`
+	Reason     string   `json:"reason" doc:"what you're waiting for and why; posted on this Work's issue when it has one"`
+	Repo       string   `json:"repo,omitempty" doc:"the repository (owner/name) conditions in this project refer to; defaults to this Work's own, else this project's only one"`
+}
+
 func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessage) (extension.WaitPlan, error) {
-	var in struct {
-		Conditions []string `json:"conditions"`
-		Until      string   `json:"until"`
-		Reason     string   `json:"reason"`
-		Repo       string   `json:"repo"`
-	}
+	var in waitInput
 	if err := decode(data, &in); err != nil {
 		return extension.WaitPlan{}, err
 	}
@@ -640,7 +642,7 @@ func (t *Tools) status(ctx context.Context, b *bound) (HoldStatus, *Hold, error)
 }
 
 func (t *Tools) holdStatus(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct{}
+	var in noInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -653,7 +655,7 @@ func (t *Tools) holdStatus(ctx context.Context, b *bound, data json.RawMessage) 
 }
 
 func (t *Tools) holdPlan(ctx context.Context, b *bound, data json.RawMessage) (extension.WaitPlan, error) {
-	var in struct{}
+	var in noInput
 	if err := decode(data, &in); err != nil {
 		return extension.WaitPlan{}, err
 	}

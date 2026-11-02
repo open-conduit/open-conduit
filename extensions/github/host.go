@@ -74,6 +74,7 @@ func New() *Extension {
 
 var (
 	_ inproc.Operator     = (*Extension)(nil)
+	_ inproc.Declarer     = (*Extension)(nil)
 	_ inproc.Router       = (*Extension)(nil)
 	_ inproc.Ingester     = (*Extension)(nil)
 	_ inproc.Webhooker    = (*Extension)(nil)
@@ -99,6 +100,8 @@ func (*Extension) Executors() map[string]inproc.Executor {
 func (*Extension) SetupProbes() []extension.SetupProbe { return Probes{}.SetupProbes() }
 
 func (*Extension) Operations() []string { return Operations() }
+
+func (*Extension) Declarations() []extension.Operation { return Declared() }
 
 func (*Extension) Routes() map[string]extension.RouteHandler {
 	return map[string]extension.RouteHandler{Type: Route{}, HoldHandler: HoldRoute{}}

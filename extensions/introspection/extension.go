@@ -73,6 +73,7 @@ func New() *Extension {
 var (
 	_ inproc.Typed      = (*Extension)(nil)
 	_ inproc.Operator   = (*Extension)(nil)
+	_ inproc.Declarer   = (*Extension)(nil)
 	_ inproc.Router     = (*Extension)(nil)
 	_ inproc.WorkKinder = (*Extension)(nil)
 	_ inproc.Recurring  = (*Extension)(nil)
@@ -98,6 +99,8 @@ func (*Extension) Types() []inproc.ConfigType {
 }
 
 func (*Extension) Operations() []string { return Operations() }
+
+func (*Extension) Declarations() []extension.Operation { return Declared() }
 
 func (*Extension) Routes() map[string]extension.RouteHandler {
 	return map[string]extension.RouteHandler{Type: Route{}}

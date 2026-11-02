@@ -12,9 +12,10 @@ import (
 	"testing"
 )
 
-// os mcp's initialize answers instructions made of the base sentence and the
-// guidance the toolbelt serves for the execution's granted operations; when
-// the toolbelt answers none, or not at all, the base sentence alone.
+// os mcp's initialize answers instructions made of the base sentence, the
+// granted operations' summaries and inputs and the guidance the toolbelt
+// serves for them; when the toolbelt answers none, or not at all, the base
+// sentence alone.
 func TestMCPInstructionsCarryGuidance(t *testing.T) {
 	dir, err := os.MkdirTemp("", "ocmcp")
 	if err != nil {
@@ -69,6 +70,16 @@ func TestMCPInstructionsCarryGuidance(t *testing.T) {
 	want := mcpBaseInstructions + "\n\nNote things with fixture.note.\n\nAsk with fixture.ask."
 	if got := instructions(); got != want {
 		t.Fatalf("instructions = %q", got)
+	}
+	// The granted operations come first, each with its summary and input
+	// fields, required ones first and optional ones marked with ?.
+	answer = `{"data":{"guidance":["Ask with fixture.ask."],"operations":[` +
+		`{"name":"fixture.note","summary":"Note a thing.","input":{"type":"object","properties":{"text":{"type":"string"},"tag":{"type":"string"},"body":{"type":"string"}},"required":["text"]}},` +
+		`{"name":"fixture.ping","summary":"Answer pong.","input":{"type":"object","properties":{}}}]}}`
+	want = mcpBaseInstructions + "\n\n## Operations\n\nCall these with the `call` tool, giving the `operation` and its `input` object:\n" +
+		"\n- `fixture.note`: Note a thing. Input: `text`, `body`?, `tag`?.\n- `fixture.ping`: Answer pong.\n\nAsk with fixture.ask."
+	if got := instructions(); got != want {
+		t.Fatalf("instructions with operations = %q", got)
 	}
 	answer = `{"data":{"guidance":[]}}`
 	if got := instructions(); got != mcpBaseInstructions {

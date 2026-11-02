@@ -32,6 +32,7 @@ import (
 	"slices"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 const (
@@ -56,7 +57,16 @@ const (
 )
 
 // Operations lists every tool operation (for binding operation lists).
-func Operations() []string { return []string{OpRecord} }
+func Operations() []string { return extension.OperationNames(Declared()) }
+
+// Declared declares each operation: its name, one-line summary and input
+// (inproc.Declarer); the host gives the registered operations both.
+func Declared() []extension.Operation {
+	return []extension.Operation{
+		{Name: OpRecord, Summary: "Record an item you saw in an outside source so it becomes Work or joins its thread's Work.",
+			Input: extension.InputSchema[recordInput]()},
+	}
+}
 
 var namePattern = regexp.MustCompile(`^[a-z0-9][a-z0-9._-]{0,63}$`)
 

@@ -2,7 +2,9 @@ package extension
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"time"
 
@@ -88,6 +90,14 @@ type TokenIssuer interface {
 }
 type Operation struct {
 	Name string
+	// Summary says in one line what the operation does (at most
+	// MaxSummary bytes, no line breaks), for the operations reference and
+	// the agents granted it.
+	Summary string
+	// Input is the JSON Schema of the input's data, an object
+	// (InputSchema derives it from the struct a handler decodes). The
+	// toolbelt serves it with Summary; it does not check calls against it.
+	Input json.RawMessage
 	// Handler receives validated authority, not a bearer token or secrets.
 	// It must be idempotent on the call's request ID (CallRequestID): the
 	// toolbelt records a result for replay only after Handler returns, so a
@@ -121,6 +131,15 @@ type Operation struct {
 	Serves string
 }
 
+// OperationNames are ops' names, in order.
+func OperationNames(ops []Operation) []string {
+	out := make([]string, 0, len(ops))
+	for _, op := range ops {
+		out = append(out, op.Name)
+	}
+	return out
+}
+
 // CapabilityGitCredential is git's credential helper as a capability: input
 // {protocol, host, path?}, git's credential request; output {username,
 // password, expires_at?} for a remote the operation's extension owns, or {}
@@ -132,6 +151,26 @@ const MaxOnce = 1024
 
 // MaxGuidance bounds one operation's Guidance.
 const MaxGuidance = 4096
+
+// MaxSummary bounds one operation's Summary.
+const MaxSummary = 200
+
+// ValidateOperationDoc checks an operation's Summary and Input: a summary
+// of one line within MaxSummary, and an input that is empty or a JSON
+// Schema object.
+func ValidateOperationDoc(summary string, input json.RawMessage) error {
+	if len(summary) > MaxSummary || strings.ContainsAny(summary, "\r\n") {
+		return fmt.Errorf("%w: summary must be one line of at most %d bytes", ErrInvalid, MaxSummary)
+	}
+	if len(input) == 0 {
+		return nil
+	}
+	var schema map[string]any
+	if err := json.Unmarshal(input, &schema); err != nil || schema == nil {
+		return fmt.Errorf("%w: input must be a JSON Schema object", ErrInvalid)
+	}
+	return nil
+}
 
 // EmitPlan is a translated emission. Event supplies only Type, DeliveryID,
 // optional OccurredAt, CorrelationKey and Data; the toolbelt assigns its

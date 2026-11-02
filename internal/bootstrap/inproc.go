@@ -541,6 +541,9 @@ func (d *daemon) registerInprocTools(belt *runtime.Toolbelt, s *config.Snapshot)
 				continue
 			}
 			reg := t.Registration()
+			if d, ok := x.(inproc.Declarer); ok {
+				reg = inproc.Describe(reg, d.Declarations())
+			}
 			if len(reg.Operations) == 0 && len(reg.EventTypes) == 0 && reg.Gate == nil && reg.StartGate == nil {
 				continue
 			}

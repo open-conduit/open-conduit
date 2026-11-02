@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"strings"
 	"sync"
@@ -90,7 +91,7 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 			onEcho(extension.CallRequestID(ctx))
 		}
 		return in, nil
-	}, Guidance: "Echo with fixture.echo.", Serves: "fixture.capability"}, {Name: "fixture.wait", Wait: func(_ context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
+	}, Guidance: "Echo with fixture.echo.", Serves: "fixture.capability", Summary: "Echo the input.", Input: json.RawMessage(`{"type":"object"}`)}, {Name: "fixture.wait", Wait: func(_ context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
 		if h.plan == nil {
 			return extension.WaitPlan{}, extension.ErrInvalid
 		}
@@ -300,11 +301,33 @@ func TestProductionToolbeltGuidance(t *testing.T) {
 	if got, err = h.belt.Guidance(ctx, narrow, ""); err != nil || len(got) != 0 {
 		t.Fatalf("guidance for an ungranted operation = %q, %v", got, err)
 	}
+	// Summaries and inputs follow the grant the same way.
+	if d, err := h.belt.Described(ctx, h.token, ""); err != nil || len(d) != 1 || d[0].Name != "fixture.echo" || d[0].Summary != "Echo the input." || string(d[0].Input) != `{"type":"object"}` || d[0].Handler != nil {
+		t.Fatalf("described = %+v, %v", d, err)
+	}
+	if d, err := h.belt.Described(ctx, narrow, ""); err != nil || len(d) != 0 {
+		t.Fatalf("described for an ungranted operation = %+v, %v", d, err)
+	}
+	if _, err = h.belt.Described(ctx, h.token, "execution/other"); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("another execution's assertion accepted: %v", err)
+	}
 	long := extension.Operation{Name: "long.op", Handler: func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
 		return domain.Payload{}, nil
 	}, Guidance: strings.Repeat("x", extension.MaxGuidance+1)}
 	if err = h.belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "long", Operations: []extension.Operation{long}}); !errors.Is(err, extension.ErrInvalid) {
 		t.Fatalf("oversized guidance registered: %v", err)
+	}
+	for name, op := range map[string]extension.Operation{
+		"summary_lines": {Summary: "One.\nTwo."},
+		"summary_long":  {Summary: strings.Repeat("x", extension.MaxSummary+1)},
+		"input_array":   {Input: json.RawMessage(`[]`)},
+		"input_text":    {Input: json.RawMessage(`not json`)},
+	} {
+		op.Name = name + ".op"
+		op.Handler = long.Handler
+		if err = h.belt.Register(extension.Registration{Version: extension.ContractVersion, Name: name, Operations: []extension.Operation{op}}); !errors.Is(err, extension.ErrInvalid) {
+			t.Errorf("%s registered: %v", name, err)
+		}
 	}
 }
 

@@ -72,9 +72,53 @@ const (
 )
 
 // Operations lists every tool operation (for binding operation lists).
-func Operations() []string {
-	return []string{OpContext, OpIssueView, OpIssueComment, OpIssueList, OpIssueCreate, OpPRList, OpPRView, OpPRCreate,
-		OpPRComment, OpPRReply, OpPRResolve, OpPREdit, OpPRReview, OpChecks, OpUpload, OpFetch, OpWait, OpHoldStatus, OpHold, OpGitCredential}
+func Operations() []string { return extension.OperationNames(Declared()) }
+
+// Declared declares each operation: its name, one-line summary and input
+// (inproc.Declarer); the host gives the registered operations both.
+func Declared() []extension.Operation {
+	return []extension.Operation{
+		{Name: OpContext, Summary: "Show this Work's repository, issue or PR, branch, base branch and where the project's rules are.",
+			Input: extension.InputSchema[noInput]()},
+		{Name: OpIssueView, Summary: "Read this Work's issue, or another by number, with every comment on it.",
+			Input: extension.InputSchema[issueViewInput]()},
+		{Name: OpIssueComment, Summary: "Comment on this Work's issue, or another issue by number.",
+			Input: extension.InputSchema[issueCommentInput]()},
+		{Name: OpIssueList, Summary: "List the open issues of this project's repository, or of another project's.",
+			Input: extension.InputSchema[issueListInput]()},
+		{Name: OpIssueCreate, Summary: "Open a new issue, optionally held until conditions are met or a time comes, or put on the backlog.",
+			Input: extension.InputSchema[issueCreateInput]()},
+		{Name: OpPRList, Summary: "List the PRs of this Work's issue, open or not.",
+			Input: extension.InputSchema[noInput]()},
+		{Name: OpPRView, Summary: "Read a PR with every comment, inline review comment and review on it.",
+			Input: extension.InputSchema[prViewInput]()},
+		{Name: OpPRCreate, Summary: "Open a PR from this issue's branch, linked to the issue so its merge closes it unless told otherwise.",
+			Input: extension.InputSchema[prCreateInput]()},
+		{Name: OpPRComment, Summary: "Comment on a PR's conversation.",
+			Input: extension.InputSchema[prCommentInput]()},
+		{Name: OpPRReply, Summary: "Reply in the inline review thread a PR comment is in.",
+			Input: extension.InputSchema[prReplyInput]()},
+		{Name: OpPRResolve, Summary: "Resolve the inline review thread a PR comment is in, once its point is addressed.",
+			Input: extension.InputSchema[prResolveInput]()},
+		{Name: OpPREdit, Summary: "Change the title, description or draft state of an open PR this Work opened.",
+			Input: extension.InputSchema[prEditInput]()},
+		{Name: OpPRReview, Summary: "Submit one review of a PR: approve, request changes or comment, with optional inline comments.",
+			Input: extension.InputSchema[prReviewInput]()},
+		{Name: OpChecks, Summary: "Show the state of every check on a PR's head commit, with links to failing ones.",
+			Input: extension.InputSchema[checksInput]()},
+		{Name: OpUpload, Summary: "Upload a file to this Work's issue tracker and get a link to put in a comment.",
+			Input: extension.InputSchema[uploadInput]()},
+		{Name: OpFetch, Summary: "Download a file a comment or link points to on GitHub, signed in, to a path you choose.",
+			Input: extension.InputSchema[fetchInput]()},
+		{Name: OpWait, Summary: "Park this Work until a PR, issue or job condition is met or a time comes; end the turn after calling it.",
+			Input: extension.InputSchema[waitInput]()},
+		{Name: OpHoldStatus, Summary: "Report whether this held issue still has something to wait for before it is worked.",
+			Input: extension.InputSchema[noInput]()},
+		{Name: OpHold, Summary: "Keep this held issue waiting until what it was opened to wait for happens.",
+			Input: extension.InputSchema[noInput]()},
+		{Name: OpGitCredential, Summary: "Answer git's credential request with a short-lived token for this Work's code repository.",
+			Input: extension.InputSchema[gitCredentialInput]()},
+	}
 }
 
 // Source is one registered GitHub extension entry the tools can act on.
@@ -471,8 +515,11 @@ func (t *Tools) base(ctx context.Context, b *bound) (string, error) {
 
 // ---- context and issues ------------------------------------------------------
 
+// noInput is the input of an operation that takes none.
+type noInput struct{}
+
 func (t *Tools) context(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct{}
+	var in noInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -539,11 +586,13 @@ func (t *Tools) issueNumber(b *bound, n int) int {
 	return b.number
 }
 
+type issueViewInput struct {
+	Number  int    `json:"number,omitempty" doc:"the issue to read; defaults to this Work's issue, and is required with project"`
+	Project string `json:"project,omitempty" doc:"another project (its ID or name) whose issue to read; this Work's project if omitted"`
+}
+
 func (t *Tools) issueView(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Number  int    `json:"number"`
-		Project string `json:"project"`
-	}
+	var in issueViewInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -613,12 +662,14 @@ func (t *Tools) post(ctx context.Context, b *bound, src Source, intent Intent) (
 	return out, nil
 }
 
+type issueCommentInput struct {
+	Body    string `json:"body" doc:"the comment, in Markdown; must not be empty"`
+	Number  int    `json:"number,omitempty" doc:"the issue to comment on; defaults to this Work's issue, and is required with project"`
+	Project string `json:"project,omitempty" doc:"another project (its ID or name) whose issue to comment on; this project must be allowed to file there"`
+}
+
 func (t *Tools) issueComment(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Body    string `json:"body"`
-		Number  int    `json:"number"`
-		Project string `json:"project"`
-	}
+	var in issueCommentInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -638,10 +689,12 @@ func (t *Tools) issueComment(ctx context.Context, b *bound, data json.RawMessage
 	return t.post(ctx, b, src, Intent{ID: intentID(ctx, b, OpIssueComment, data), Work: b.work.ID, Number: t.issueNumber(b, in.Number), Body: in.Body, Durable: true})
 }
 
+type issueListInput struct {
+	Project string `json:"project,omitempty" doc:"another project (its ID or name) whose open issues to list; this Work's project if omitted"`
+}
+
 func (t *Tools) issueList(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Project string `json:"project"`
-	}
+	var in issueListInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -761,15 +814,17 @@ func (t *Tools) holdFor(ctx context.Context, b *bound, conds []string, until str
 	return h, resolved, nil
 }
 
+type issueCreateInput struct {
+	Title   string   `json:"title" doc:"the issue's title; must not be empty"`
+	Body    string   `json:"body" doc:"the issue's description, in Markdown; must not be empty"`
+	Wait    []string `json:"wait,omitempty" doc:"conditions to hold the issue for before it is worked, any one of which starts it: pr:<n>[:merged|closed|commented|pushed|checks], issue:<n>[:closed|<state>] or job:<name>, with <project>/<n> or <project>/<name> for another project's"`
+	Until   string   `json:"until,omitempty" doc:"a future ISO time (e.g. 2026-10-25T09:00Z) to hold the issue until; with wait, whichever comes first"`
+	Project string   `json:"project,omitempty" doc:"another project (its ID or name) to open the issue in; this project must be allowed to file there, and the issue can't then be held"`
+	Backlog bool     `json:"backlog,omitempty" doc:"put the issue on the backlog, so it isn't worked until a person takes it off; not with wait or until"`
+}
+
 func (t *Tools) issueCreate(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Title   string   `json:"title"`
-		Body    string   `json:"body"`
-		Wait    []string `json:"wait"`
-		Until   string   `json:"until"`
-		Project string   `json:"project"`
-		Backlog bool     `json:"backlog"`
-	}
+	var in issueCreateInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -867,7 +922,7 @@ func pullState(p rawPull) string {
 }
 
 func (t *Tools) prList(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct{}
+	var in noInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -882,11 +937,13 @@ func (t *Tools) prList(ctx context.Context, b *bound, data json.RawMessage) (any
 	return map[string]any{"prs": out}, nil
 }
 
+type prViewInput struct {
+	Number int    `json:"number" doc:"the PR to read"`
+	Repo   string `json:"repo,omitempty" doc:"the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one"`
+}
+
 func (t *Tools) prView(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Number int    `json:"number"`
-		Repo   string `json:"repo"`
-	}
+	var in prViewInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -932,17 +989,19 @@ func (t *Tools) prView(ctx context.Context, b *bound, data json.RawMessage) (any
 		"head": p.Head.SHA, "body": strings.TrimSpace(p.Body), "comments": views}, nil
 }
 
+type prCreateInput struct {
+	Title string `json:"title" doc:"the PR's title; must not be empty"`
+	Body  string `json:"body" doc:"what the PR changes, in Markdown; must not be empty, and a link to the issue is added"`
+	Base  string `json:"base,omitempty" doc:"the branch to merge into; defaults to the repository's base branch"`
+	Head  string `json:"head,omitempty" doc:"the branch to open the PR from; defaults to the issue's branch, and a PR from another branch isn't linked to the issue"`
+	Draft bool   `json:"draft,omitempty" doc:"open the PR as a draft"`
+	// ClosesIssue false links the PR without closing the issue on
+	// merge: every PR but the last of a multi-PR issue.
+	ClosesIssue *bool `json:"closes_issue,omitempty" doc:"whether merging the PR closes the issue (default true); false on every PR but the last of an issue that takes several"`
+}
+
 func (t *Tools) prCreate(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Title string `json:"title"`
-		Body  string `json:"body"`
-		Base  string `json:"base"`
-		Head  string `json:"head"`
-		Draft bool   `json:"draft"`
-		// ClosesIssue false links the PR without closing the issue on
-		// merge: every PR but the last of a multi-PR issue.
-		ClosesIssue *bool `json:"closes_issue"`
-	}
+	var in prCreateInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -995,14 +1054,16 @@ func (t *Tools) prCreate(ctx context.Context, b *bound, data json.RawMessage) (a
 // through REST, draft state through GraphQL (REST can't change it), both
 // as the connection that opened the PR. The issue's Work never hears its
 // own edit: its routes pass on no PR edits.
+type prEditInput struct {
+	Number int     `json:"number" doc:"the PR to edit: an open one this Work opened"`
+	Title  *string `json:"title,omitempty" doc:"the new title; not empty"`
+	Body   *string `json:"body,omitempty" doc:"the new description, in Markdown; not empty, and the link to this Work's issue is kept"`
+	Draft  *bool   `json:"draft,omitempty" doc:"true to mark the PR as a draft, false to mark it ready for review"`
+	Repo   string  `json:"repo,omitempty" doc:"the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one"`
+}
+
 func (t *Tools) prEdit(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Number int     `json:"number"`
-		Title  *string `json:"title"`
-		Body   *string `json:"body"`
-		Draft  *bool   `json:"draft"`
-		Repo   string  `json:"repo"`
-	}
+	var in prEditInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -1111,12 +1172,14 @@ func sameBody(a, b string) bool {
 	return norm(a) == norm(b)
 }
 
+type prCommentInput struct {
+	Number int    `json:"number" doc:"the PR to comment on"`
+	Body   string `json:"body" doc:"the comment, in Markdown; must not be empty"`
+	Repo   string `json:"repo,omitempty" doc:"the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one"`
+}
+
 func (t *Tools) prComment(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Number int    `json:"number"`
-		Body   string `json:"body"`
-		Repo   string `json:"repo"`
-	}
+	var in prCommentInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -1130,13 +1193,15 @@ func (t *Tools) prComment(ctx context.Context, b *bound, data json.RawMessage) (
 	return t.post(ctx, b, src, Intent{ID: intentID(ctx, b, OpPRComment, data), Work: b.work.ID, Number: in.Number, Body: in.Body, Durable: true})
 }
 
+type prReplyInput struct {
+	Number    int             `json:"number" doc:"the PR the review thread is on"`
+	CommentID json.RawMessage `json:"comment_id" doc:"the ID (a number, or a string of digits) of an inline review comment in the thread, as github.pr.view shows it"`
+	Body      string          `json:"body" doc:"the reply, in Markdown; must not be empty"`
+	Repo      string          `json:"repo,omitempty" doc:"the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one"`
+}
+
 func (t *Tools) prReply(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Number    int             `json:"number"`
-		CommentID json.RawMessage `json:"comment_id"`
-		Body      string          `json:"body"`
-		Repo      string          `json:"repo"`
-	}
+	var in prReplyInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -1158,12 +1223,14 @@ func (t *Tools) prReply(ctx context.Context, b *bound, data json.RawMessage) (an
 // like a reply, and resolving a resolved thread changes nothing, so a retry
 // is safe. Any thread on a PR the Work can reach may be resolved: GitHub's
 // own rule is Pull requests write, which the host's connection carries.
+type prResolveInput struct {
+	Number    int             `json:"number" doc:"the PR the review thread is on"`
+	CommentID json.RawMessage `json:"comment_id" doc:"the ID (a number, or a string of digits) of an inline review comment in the thread to resolve, not a review's or a conversation comment's"`
+	Repo      string          `json:"repo,omitempty" doc:"the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one"`
+}
+
 func (t *Tools) prResolve(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Number    int             `json:"number"`
-		CommentID json.RawMessage `json:"comment_id"`
-		Repo      string          `json:"repo"`
-	}
+	var in prResolveInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -1211,19 +1278,23 @@ var reviewEvents = map[string]string{"approve": "APPROVE", "request_changes": "R
 // a retry or a lost response never submits a second review. GitHub posts it
 // as the connection's writer (the bot App, or the token's account), never as
 // the person who asked for it.
+type prReviewInput struct {
+	Number   int                    `json:"number" doc:"the PR to review"`
+	Event    string                 `json:"event" doc:"the verdict: approve, request_changes or comment"`
+	Body     string                 `json:"body,omitempty" doc:"the review's summary, in Markdown; required unless event is approve"`
+	Repo     string                 `json:"repo,omitempty" doc:"the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one"`
+	Comments []prReviewCommentInput `json:"comments,omitempty" doc:"inline comments on lines of the PR's diff, submitted with the review"`
+}
+
+type prReviewCommentInput struct {
+	Path string `json:"path" doc:"the file's path in the repository"`
+	Line int    `json:"line" doc:"the line the comment is on, which must be a line of the PR's diff"`
+	Side string `json:"side,omitempty" doc:"RIGHT for the new file (the default) or LEFT for the old"`
+	Body string `json:"body" doc:"the comment, in Markdown; must not be empty"`
+}
+
 func (t *Tools) prReview(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Number   int    `json:"number"`
-		Event    string `json:"event"`
-		Body     string `json:"body"`
-		Repo     string `json:"repo"`
-		Comments []struct {
-			Path string `json:"path"`
-			Line int    `json:"line"`
-			Side string `json:"side"`
-			Body string `json:"body"`
-		} `json:"comments"`
-	}
+	var in prReviewInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -1271,11 +1342,13 @@ func (t *Tools) prReview(ctx context.Context, b *bound, data json.RawMessage) (a
 	return out, nil
 }
 
+type checksInput struct {
+	Number int    `json:"number,omitempty" doc:"the PR whose checks to read; defaults to the open PR of this Work's issue, and is required for any other"`
+	Repo   string `json:"repo,omitempty" doc:"the repository (owner/name) the PR is in; defaults to this Work's own, else this project's only one"`
+}
+
 func (t *Tools) checks(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Number int    `json:"number"`
-		Repo   string `json:"repo"`
-	}
+	var in checksInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -1381,11 +1454,13 @@ func nonNil(s []string) []string {
 
 // ---- attachments ---------------------------------------------------------------
 
+type uploadInput struct {
+	Name          string `json:"name,omitempty" doc:"the file's name, shown in the link; file_path's base name when the os client fills content_base64"`
+	ContentBase64 string `json:"content_base64" doc:"the file's content, base64, up to 50 MB; pass file_path instead and the os client reads the file into it"`
+}
+
 func (t *Tools) upload(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Name          string `json:"name"`
-		ContentBase64 string `json:"content_base64"`
-	}
+	var in uploadInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -1437,12 +1512,14 @@ func (t *Tools) fetchSource(b *bound, host, repo string) (Source, error) {
 	return Source{}, refuse("not_allowed", "%s isn't a repository project %s may read: only this Work's repositories and those of projects in its authorization.read_scopes can be fetched from", repo, b.work.ScopeID)
 }
 
+type fetchInput struct {
+	URL     string `json:"url" doc:"the link to download: a comment attachment, or a file in a repository this project may read"`
+	SaveTo  string `json:"save_to,omitempty" doc:"the path the os client saves the file to; without it the file isn't saved"`
+	Project string `json:"project,omitempty" doc:"the project (its ID or name) whose issue or PR the attachment was posted on, when it isn't this Work's"`
+}
+
 func (t *Tools) fetch(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		URL     string `json:"url"`
-		SaveTo  string `json:"save_to"`
-		Project string `json:"project"`
-	}
+	var in fetchInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}

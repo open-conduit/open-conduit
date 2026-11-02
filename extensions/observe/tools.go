@@ -50,11 +50,11 @@ func refuse(code, format string, args ...any) error {
 
 // recordInput is observe.record's input.
 type recordInput struct {
-	Source   string `json:"source,omitempty"`
-	Item     string `json:"item"`
-	Revision string `json:"revision,omitempty"`
-	Thread   string `json:"thread"`
-	Text     string `json:"text"`
+	Source   string `json:"source,omitempty" doc:"the outside source the item is from; needed only when you report for more than one"`
+	Item     string `json:"item" doc:"the source's own stable ID for the item, such as a message timestamp or row ID; at most 256 bytes"`
+	Revision string `json:"revision,omitempty" doc:"only for an edited item, the source's own mark of the edit, such as an edit timestamp; at most 128 bytes"`
+	Thread   string `json:"thread" doc:"the ID of the thread the item belongs to, its own ID if it starts one; at most 256 bytes"`
+	Text     string `json:"text,omitempty" doc:"the item's content as you saw it, at most 16384 bytes"`
 }
 
 func (in recordInput) check() error {

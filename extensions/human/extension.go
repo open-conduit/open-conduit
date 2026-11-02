@@ -36,6 +36,7 @@ func New() *Extension { return &Extension{} }
 var (
 	_ inproc.Typed      = (*Extension)(nil)
 	_ inproc.Operator   = (*Extension)(nil)
+	_ inproc.Declarer   = (*Extension)(nil)
 	_ inproc.Starter    = (*Extension)(nil)
 	_ inproc.Configurer = (*Extension)(nil)
 	_ inproc.Tooled     = (*Extension)(nil)
@@ -52,6 +53,8 @@ func (*Extension) Types() []inproc.ConfigType {
 }
 
 func (*Extension) Operations() []string { return Operations() }
+
+func (*Extension) Declarations() []extension.Operation { return Declared() }
 
 func (x *Extension) Start(_ context.Context, h inproc.Host) error {
 	tools, err := NewTools(Options{Store: h.Store, Entry: x.entry, Now: h.Now})

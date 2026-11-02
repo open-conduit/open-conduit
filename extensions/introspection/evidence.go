@@ -311,14 +311,17 @@ func Aggregate(tx storage.Tx, cfg Config, scope domain.ID, run string) (Evidence
 	return ev, err
 }
 
+// evidenceInput is introspection.evidence's input.
+type evidenceInput struct {
+	For string `json:"for" doc:"the run the evidence is for: sweep (corrections) or triage (reports and problems)"`
+}
+
 func (t *Tools) evidence(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
 	cfg, err := t.entry(ctx, a)
 	if err != nil {
 		return domain.Payload{}, err
 	}
-	var q struct {
-		For string `json:"for"`
-	}
+	var q evidenceInput
 	if err := strict(in.Data, &q); err != nil || q.For != WorkSweep && q.For != WorkTriage {
 		return domain.Payload{}, refuse("invalid_input", "for must be sweep or triage")
 	}
@@ -343,15 +346,18 @@ type handledNote struct {
 
 var errNoNote = errors.New("no such note")
 
+// notesResolveInput is introspection.notes.resolve's input.
+type notesResolveInput struct {
+	Notes   []string `json:"notes" doc:"the ids of 1 to 500 notes handled, as introspection.evidence gives them"`
+	Summary string   `json:"summary" doc:"how the notes were handled, at most 2000 bytes"`
+}
+
 func (t *Tools) notesResolve(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
 	cfg, err := t.entry(ctx, a)
 	if err != nil {
 		return domain.Payload{}, err
 	}
-	var r struct {
-		Notes   []string `json:"notes"`
-		Summary string   `json:"summary"`
-	}
+	var r notesResolveInput
 	if err := strict(in.Data, &r); err != nil {
 		return domain.Payload{}, refuse("invalid_input", "the input is malformed or has unknown fields (notes, summary)")
 	}

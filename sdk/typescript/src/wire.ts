@@ -491,6 +491,7 @@ export const OperationDecl = t.object(
     name: t.string(),
     kind: t.enum(["handler", "wait", "emit"]),
     commit: t.optional(t.boolean()),
+    summary: t.optional(t.string()),
     guidance: t.optional(t.string()),
     input: t.optional(t.record(t.any())),
     serves: t.optional(t.string()),

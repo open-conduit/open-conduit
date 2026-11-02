@@ -32,8 +32,27 @@ const (
 )
 
 // Operations lists every tool operation.
-func Operations() []string {
-	return []string{OpContext, OpPRList, OpPRView, OpPRCreate, OpPRComment, OpPRReply, OpChecks}
+func Operations() []string { return extension.OperationNames(Declared()) }
+
+// Declared declares each operation: its name, one-line summary and input
+// (inproc.Declarer); the host gives the registered operations both.
+func Declared() []extension.Operation {
+	return []extension.Operation{
+		{Name: OpContext, Summary: "Show the Bitbucket repository, this Work's issue and branch, how a PR refers to the issue and the base branch.",
+			Input: extension.InputSchema[struct{}]()},
+		{Name: OpPRList, Summary: "List this Work's pull requests in any state: those from its branch or that mention its issue.",
+			Input: extension.InputSchema[struct{}]()},
+		{Name: OpPRView, Summary: "Read a pull request with its description and every comment, inline comments included.",
+			Input: extension.InputSchema[prViewInput]()},
+		{Name: OpPRCreate, Summary: "Open a pull request from this Work's branch that refers to its issue, or return the one already open.",
+			Input: extension.InputSchema[prCreateInput]()},
+		{Name: OpPRComment, Summary: "Comment on one of this Work's pull requests; a retried call never posts twice.",
+			Input: extension.InputSchema[prCommentInput]()},
+		{Name: OpPRReply, Summary: "Reply to a comment on one of this Work's pull requests; a retried call never posts twice.",
+			Input: extension.InputSchema[prReplyInput]()},
+		{Name: OpChecks, Summary: "Show every check on a pull request's head commit, with its state and link.",
+			Input: extension.InputSchema[checksInput]()},
+	}
 }
 
 // Source is one registered entry the tools can act on.
@@ -264,10 +283,12 @@ func (t *Tools) owned(ctx context.Context, b *bound, number int) (rawPR, error) 
 	return p, nil
 }
 
+type prViewInput struct {
+	Number int `json:"number" doc:"the pull request's number"`
+}
+
 func (t *Tools) prView(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Number int `json:"number"`
-	}
+	var in prViewInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -313,13 +334,15 @@ func (t *Tools) prView(ctx context.Context, b *bound, data json.RawMessage) (any
 	return out, nil
 }
 
+type prCreateInput struct {
+	Title string `json:"title" doc:"the pull request's title; must not be empty"`
+	Body  string `json:"body,omitempty" doc:"the pull request's description, in Markdown; a line referring to the issue is added when it does not name the issue"`
+	Base  string `json:"base,omitempty" doc:"the branch to merge into; defaults to the configured base branch, else the repository's default branch"`
+	Draft bool   `json:"draft,omitempty" doc:"open the pull request as a draft; defaults to false"`
+}
+
 func (t *Tools) prCreate(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Title string `json:"title"`
-		Body  string `json:"body"`
-		Base  string `json:"base"`
-		Draft bool   `json:"draft"`
-	}
+	var in prCreateInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -416,23 +439,27 @@ func (t *Tools) post(ctx context.Context, b *bound, op string, data json.RawMess
 	return out, nil
 }
 
+type prCommentInput struct {
+	Number int    `json:"number" doc:"the number of one of this Work's pull requests"`
+	Body   string `json:"body" doc:"the comment, in Markdown; must not be empty"`
+}
+
 func (t *Tools) prComment(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Number int    `json:"number"`
-		Body   string `json:"body"`
-	}
+	var in prCommentInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
 	return t.post(ctx, b, OpPRComment, data, in.Number, 0, in.Body)
 }
 
+type prReplyInput struct {
+	Number    int    `json:"number" doc:"the number of one of this Work's pull requests"`
+	CommentID int    `json:"comment_id" doc:"the id of the comment to reply to, as pr.view shows it"`
+	Body      string `json:"body" doc:"the reply, in Markdown; must not be empty"`
+}
+
 func (t *Tools) prReply(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Number    int    `json:"number"`
-		CommentID int    `json:"comment_id"`
-		Body      string `json:"body"`
-	}
+	var in prReplyInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -442,10 +469,12 @@ func (t *Tools) prReply(ctx context.Context, b *bound, data json.RawMessage) (an
 	return t.post(ctx, b, OpPRReply, data, in.Number, in.CommentID, in.Body)
 }
 
+type checksInput struct {
+	Number int `json:"number,omitempty" doc:"the number of one of this Work's pull requests; defaults to its open pull request"`
+}
+
 func (t *Tools) checks(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Number int `json:"number"`
-	}
+	var in checksInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}

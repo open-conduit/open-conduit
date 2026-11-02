@@ -22,7 +22,16 @@ import (
 const OpAsk = "human.ask"
 
 // Operations lists every tool operation (for binding operation lists).
-func Operations() []string { return []string{OpAsk} }
+func Operations() []string { return extension.OperationNames(Declared()) }
+
+// Declared declares each operation: its name, one-line summary and input
+// (inproc.Declarer); the host gives the registered operations both.
+func Declared() []extension.Operation {
+	return []extension.Operation{
+		{Name: OpAsk, Summary: "Ask the person the project has set up to answer for a decision, then end your turn until they answer.",
+			Input: extension.InputSchema[askInput]()},
+	}
+}
 
 // Input limits.
 const (
@@ -75,12 +84,12 @@ func refuse(code, format string, args ...any) error {
 
 // askInput is human.ask's input.
 type askInput struct {
-	Question string   `json:"question"`
-	Options  []string `json:"options,omitempty"`
-	Context  string   `json:"context,omitempty"`
+	Question string   `json:"question" doc:"the question, at most 2000 bytes"`
+	Options  []string `json:"options,omitempty" doc:"2 to 20 distinct answers to choose from, each one line of at most 200 bytes; omit for a free answer"`
+	Context  string   `json:"context,omitempty" doc:"what the person needs to know to answer, at most 4000 bytes"`
 	// Deadline is an ISO time (with Z or an offset): with no answer by
 	// then, the asker is resumed without one.
-	Deadline string `json:"deadline,omitempty"`
+	Deadline string `json:"deadline,omitempty" doc:"a future ISO time with Z or an offset, such as 2026-10-25T09:00Z; with no answer by then you are resumed without one"`
 }
 
 func parseInput(data []byte, now time.Time) (askInput, time.Time, error) {
