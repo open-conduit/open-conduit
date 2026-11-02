@@ -23,8 +23,8 @@ type Policy struct {
 		// default denies (credentials, and on Linux the escape sockets).
 		// Everything else is readable, as srt reads broadly by default.
 		Deny []string `json:"deny,omitempty"`
-		// Allow are exceptions beneath Deny; one naming a default deny,
-		// or a directory holding it, lifts it.
+		// Allow are exceptions beneath Deny; one naming a default deny
+		// exactly lifts it.
 		Allow []string `json:"allow,omitempty"`
 	} `json:"read"`
 	Network struct {

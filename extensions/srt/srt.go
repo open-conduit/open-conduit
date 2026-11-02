@@ -16,6 +16,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -115,8 +116,8 @@ type record struct {
 
 // credentialPaths are denied by default on both platforms: a sandboxed
 // process reads everything else, and each of these hands it a credential.
-// A policy lifts one by listing it, or a directory holding it, in
-// read.allow. The state directory (the operator token and the rest of
+// A policy lifts one only by naming that path in read.allow: a broader
+// allow never lifts a credential nobody named. The state directory (the operator token and the rest of
 // private/) is the host's to deny, whatever the policy says.
 var credentialPaths = []string{"~/.ssh", "~/.gnupg", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.kube", "~/.config/gh",
 	"~/.docker/config.json", "~/.netrc", "~/.git-credentials"}
@@ -150,8 +151,7 @@ func (p *Provider) escapeSockets() []string {
 
 // defaultDenies are the credential paths and, on Linux once every unix
 // socket is allowed, the escape sockets that exist, less what the policy
-// lifts: a path it lists, or a directory holding it, in read.allow or
-// sockets.
+// lifts: the exact paths it names in read.allow or sockets.
 func (p *Provider) defaultDenies(expand func([]string) []string, allSockets bool, lifted []string) []string {
 	list := expand(credentialPaths)
 	if p.o.GOOS == "darwin" {
@@ -166,7 +166,7 @@ func (p *Provider) defaultDenies(expand func([]string) []string, allSockets bool
 	}
 	var out []string
 	for _, d := range unique(list) {
-		if !extension.Within(d, lifted) {
+		if !slices.Contains(lifted, d) {
 			out = append(out, d)
 		}
 	}
@@ -291,6 +291,9 @@ func (p *Provider) Plan(ctx context.Context, _ extension.ResourceOwner, policy e
 		if extension.Within(a, deny) {
 			for _, d := range deny {
 				if d != a && extension.Within(d, []string{a}) && !extension.Within(a, []string{d}) {
+					if slices.Contains(defaults, d) {
+						return extension.SandboxPlan{}, fmt.Errorf("%w: %s is readable but holds %s, which is denied by default; name %s in read.allow to lift it", extension.ErrSandboxUnavailable, a, d, d)
+					}
 					return extension.SandboxPlan{}, fmt.Errorf("%w: %s is readable but holds the denied %s", extension.ErrSandboxUnavailable, a, d)
 				}
 			}

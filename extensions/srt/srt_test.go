@@ -348,13 +348,14 @@ func TestPlanDefaultDenies(t *testing.T) {
 			t.Errorf("%s: denyRead %q, want the runtime dir and agent hidden on Linux only", goos, deny)
 		}
 	}
-	// A policy lifts a default by listing it, or a directory holding it.
+	// A policy lifts a default only by naming it: ~/.config doesn't lift
+	// ~/.config/gh.
 	lifted := strings.Replace(policy, `"read":{"deny":["~/.ssh"]}`, `"read":{"allow":["~/.aws","~/.config"]}`, 1)
 	lifted = strings.Replace(lifted, `"sockets":["{toolbelt}"]`, `"sockets":["{toolbelt}","`+agent+`"]`, 1)
 	s := plan("linux", lifted)
 	deny, allow := paths(s.Filesystem.DenyRead), paths(s.Filesystem.AllowRead)
-	if has(deny, home+"/.aws") || has(deny, home+"/.config/gh") || has(deny, agent) || !has(deny, home+"/.ssh") || !has(deny, xdg) {
-		t.Errorf("denyRead %q, want ~/.aws, ~/.config/gh and the listed agent lifted, the rest kept", deny)
+	if has(deny, home+"/.aws") || has(deny, agent) || !has(deny, home+"/.config/gh") || !has(deny, home+"/.ssh") || !has(deny, xdg) {
+		t.Errorf("denyRead %q, want ~/.aws and the listed agent lifted, the rest kept", deny)
 	}
 	if has(allow, home+"/.aws") {
 		t.Errorf("allowRead %q lists a lifted path that nothing denies", allow)
@@ -370,10 +371,16 @@ func TestPlanDefaultDenies(t *testing.T) {
 	if !has(paths(s.Filesystem.DenyRead), home+"/.config/gh") || !has(paths(s.Filesystem.DenyWrite), home+"/.config/gh") {
 		t.Errorf("~/.config/gh inside the ~/.config grant: deny %q denyWrite %q", paths(s.Filesystem.DenyRead), paths(s.Filesystem.DenyWrite))
 	}
-	// A need beneath a default is refused, as one beneath the policy's own denies.
+	// An exception that holds a default the policy didn't name is refused,
+	// naming how to lift it.
 	n := l.needs()
-	n.Read = append(n.Read, home+"/.aws/config")
 	p := srt.New(srt.Options{Binary: l.bin, GOOS: "darwin"})
+	_, err := p.Plan(context.Background(), extension.ResourceOwner{}, l.policy(strings.Replace(policy, `"read":{"deny":["~/.ssh"]}`, `"read":{"deny":["~"],"allow":["~/.config"]}`, 1)), n, l.launch())
+	if !errors.Is(err, extension.ErrSandboxUnavailable) || !strings.Contains(err.Error(), "denied by default") {
+		t.Errorf("an allow holding ~/.config/gh beneath a deny: %v, want ErrSandboxUnavailable naming the default", err)
+	}
+	// A need beneath a default is refused, as one beneath the policy's own denies.
+	n.Read = append(n.Read, home+"/.aws/config")
 	if _, err := p.Plan(context.Background(), extension.ResourceOwner{}, l.policy(policy), n, l.launch()); !errors.Is(err, extension.ErrSandboxDenied) {
 		t.Errorf("a need beneath ~/.aws: %v, want ErrSandboxDenied", err)
 	}
