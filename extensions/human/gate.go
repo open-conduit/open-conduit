@@ -34,7 +34,8 @@ const (
 // options are approve and refuse) and parks the caller on its answer, so
 // the operation does not run. Once resumed, the caller makes the same call
 // again (the same operation and input, in the same Work): an approval lets
-// exactly that call through once; a refusal, or no answer by the gate's
+// exactly that call through once, if it is made within the gate's timeout
+// of the answer (later, it asks again); a refusal, or no answer by the gate's
 // timeout, refuses it with an operation error, once. A later identical call
 // asks again. Calls the scope's gates don't name pass, and so does every
 // call in a scope without a `human` entry.
@@ -69,6 +70,10 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 				return err
 			}
 			switch {
+			case err == nil && prior.State == StateAnswered && prior.Answer != nil && now.Sub(prior.Answer.At) > rule.timeout:
+				// Answered longer ago than the gate's timeout: a person
+				// decided on the call then, not whenever it is made. It
+				// is asked anew below.
 			case err == nil && prior.State == StateAnswered && prior.Answer != nil:
 				if prior.Answer.Answer == OptionApprove {
 					allowed = true
