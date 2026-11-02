@@ -127,13 +127,7 @@ func NewToolbelt(store storage.Store, now func() time.Time, router *Router, opti
 
 var operationName = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
 
-func builtinOperation(name string) bool {
-	switch name {
-	case extension.Emit, extension.CreateWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext:
-		return true
-	}
-	return false
-}
+func builtinOperation(name string) bool { return extension.BuiltinOperation(name) }
 
 // Register atomically declares an extension's operations and emitted families.
 // Registration grants nothing; tokens must still list each operation.
