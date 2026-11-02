@@ -143,16 +143,21 @@ func serveWeb(r cli.WebRequest) error {
 	}
 	if r.URLOnly {
 		urls := web.SignInURLs(in, r.Addr, r.Host)
-		_, err = fmt.Fprintf(r.Out, "%s\nor, if your browser does not resolve *.localhost:\n%s\n", urls[0], urls[1])
+		_, err = fmt.Fprintf(r.Out, "%s\nor, if your browser does not resolve *.localhost (%s):\n%s\n", urls[0], web.AddressWarning, urls[1])
 		return err
 	}
-	srv, err := web.New(r.Client, webUpdates(web.Options{Addr: r.Addr, Host: r.Host, NewKey: cli.NewKey, SignIn: &in}))
+	srv, err := web.New(r.Client, webUpdates(web.Options{Addr: r.Addr, Host: r.Host, NewKey: cli.NewKey, SignIn: &in, SaveSignIn: saveSignIn(r.SignIn)}))
 	if err != nil {
 		return err
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
 	return srv.Run(ctx, r.Out)
+}
+
+// saveSignIn keeps a view's changed sign-in in the file it was loaded from.
+func saveSignIn(path string) func(web.SignIn) error {
+	return func(in web.SignIn) error { return web.SaveSignIn(path, in) }
 }
 
 // webReady starts serve --web's view once the daemon's socket is listening:
@@ -189,7 +194,7 @@ func runDaemonWeb(ctx context.Context, r cli.ServeRequest) error {
 	if err != nil {
 		return err
 	}
-	srv, err := web.New(c, webUpdates(web.Options{Addr: r.WebAddr, Host: r.WebHost, NewKey: cli.NewKey, SignIn: &in}))
+	srv, err := web.New(c, webUpdates(web.Options{Addr: r.WebAddr, Host: r.WebHost, NewKey: cli.NewKey, SignIn: &in, SaveSignIn: saveSignIn(r.WebSignIn)}))
 	if err != nil {
 		return err
 	}

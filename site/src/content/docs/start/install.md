@@ -26,9 +26,9 @@ The cask puts only `open-conduit` on your PATH. `os` stays beside it in the cask
 
 ## Release binaries
 
-Archives for macOS and Linux, on amd64 and arm64, are on the [releases page](https://github.com/open-conduit/open-conduit/releases) as `open-conduit_<version>_<os>_<arch>.tar.gz`, with a `checksums.txt`. Each holds `open-conduit`, `os` and the bundled `extensions/` directory; keep them together.
+Archives for macOS and Linux, on amd64 and arm64, are on the [releases page](https://github.com/open-conduit/open-conduit/releases) as `open-conduit_<version>_<os>_<arch>.tar.gz`, with a `checksums.txt` and its cosign signature, `checksums.txt.sigstore.json`. [SECURITY.md](https://github.com/open-conduit/open-conduit/blob/main/SECURITY.md#trust-model) shows how to verify both by hand. Each holds `open-conduit`, `os` and the bundled `extensions/` directory; keep them together.
 
-The install script downloads the latest release, verifies its checksum, puts both binaries and `extensions/` in `~/.local/lib/open-conduit` and links `open-conduit` into `~/.local/bin`:
+The install script downloads the latest release, verifies its checksum (and, if `cosign` is installed, the signature on the checksums), puts both binaries and `extensions/` in `~/.local/lib/open-conduit` and links `open-conduit` into `~/.local/bin`:
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/open-conduit/open-conduit/main/install.sh | sh

@@ -176,7 +176,7 @@ certify: build packages ts-packages
 GORELEASER ?= goreleaser
 RELEASE_DIR = dist/release
 release-snapshot:
-	$(GORELEASER) release --snapshot --clean
+	$(GORELEASER) release --snapshot --clean --skip=sign
 	@set -eu; host=$$($(GO) env GOOS)_$$($(GO) env GOARCH); \
 		test $$(ls $(RELEASE_DIR)/open-conduit_*.tar.gz | wc -l) -eq 4; \
 		test $$(wc -l < $(RELEASE_DIR)/checksums.txt) -eq 4; \

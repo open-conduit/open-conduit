@@ -240,6 +240,17 @@ a.st-item:hover {
   cursor: pointer;
   border-right: 0;
 }
+.st-form {
+  display: contents;
+}
+.st-signout {
+  cursor: pointer;
+  color: inherit;
+  font: inherit;
+}
+.st-signout:hover {
+  color: #fff;
+}
 .st-help .kbd {
   background: #2a2c32;
   color: #ddd;

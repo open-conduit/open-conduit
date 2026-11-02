@@ -278,7 +278,7 @@ func (s *devSession) announce() {
 	fmt.Fprintf(out, "Running %s %s from %s against a throwaway daemon\n", s.m.Name, s.m.Version, s.r.Dir)
 	if in, err := web.LoadSignIn(cli.WebSignInPath(s.state)); err == nil {
 		urls := web.SignInURLs(in, s.webAddr, "")
-		fmt.Fprintf(out, "  Web view:   %s\n          or: %s\n", urls[0], urls[1])
+		fmt.Fprintf(out, "  Web view:   %s\n          or: %s\n              (%s)\n", urls[0], urls[1], web.AddressWarning)
 	}
 	for _, p := range s.m.Provides.Pages {
 		fmt.Fprintf(out, "  Page:       http://%s/pages/%s (%s)\n", s.webAddr, p.ID, p.Title)

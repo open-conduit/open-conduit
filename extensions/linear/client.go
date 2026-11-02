@@ -837,7 +837,8 @@ type delivery struct {
 var deliveryID = regexp.MustCompile(`^[A-Za-z0-9-]{1,128}$`)
 
 // ParseHook checks Linear's signature (hex HMAC-SHA256 of the body, header
-// Linear-Signature) and the delivery's age, and says what it is about. Push
+// Linear-Signature) and the delivery's signed webhookTimestamp, which must
+// be within MaxAge of now, and says what it is about. Push
 // reads the issue or comment back so it is normalized as reconcile would.
 func (c *Client) ParseHook(h http.Header, body []byte, secret string, now time.Time) (tracker.Hook, error) {
 	if !tracker.VerifyHMAC(secret, body, h.Get("Linear-Signature")) {
@@ -847,7 +848,9 @@ func (c *Client) ParseHook(h http.Header, body []byte, secret string, now time.T
 	if err := json.Unmarshal(body, &p); err != nil {
 		return tracker.Hook{}, errors.New("linear: a delivery that isn't JSON")
 	}
-	if p.WebhookTimestamp > 0 && now.Sub(time.UnixMilli(p.WebhookTimestamp)) > MaxAge {
+	// The timestamp is inside the signed body, so it bounds a replay; one
+	// missing, stale or from the future is refused.
+	if age := now.Sub(time.UnixMilli(p.WebhookTimestamp)); p.WebhookTimestamp <= 0 || age > MaxAge || age < -MaxAge {
 		return tracker.Hook{}, tracker.ErrSignature
 	}
 	hook := tracker.Hook{Event: p.Type + ":" + p.Action}
