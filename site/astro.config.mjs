@@ -38,6 +38,7 @@ export default defineConfig({
 						{ label: 'Introspection', slug: 'workflows/introspection' },
 						{ label: 'Human decisions', slug: 'workflows/human-decisions' },
 						{ label: 'Observed sources', slug: 'workflows/observed-sources' },
+						{ label: 'Incidents and errors', slug: 'workflows/incidents' },
 					],
 				},
 				{
