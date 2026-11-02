@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"testing"
+	"time"
 
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/internal/config"
@@ -26,7 +27,7 @@ func TestFollowGitHubConnection(t *testing.T) {
 	}
 	first := conn(`{"api_url":"https://api.github.com"}`)
 	src := &githubSource{name: "github/work/gh", connection: "gh", conn: connectionKey(&first.Connections[0]), client: client}
-	d := &daemon{log: slog.New(slog.NewTextHandler(io.Discard, nil)), reported: map[string]string{}}
+	d := &daemon{log: slog.New(slog.NewTextHandler(io.Discard, nil)), now: func() time.Time { return time.Unix(0, 0) }, reported: map[string]string{}, reportedAt: map[string]time.Time{}}
 	const ns = "github/github.com/o/r"
 
 	d.followGitHubConnection(first, ns, src)

@@ -40,7 +40,7 @@ func (p *hungProvider) List(ctx context.Context, _ extension.ResourceOwner) ([]e
 func TestContainerReconcileRunsOffTheLoop(t *testing.T) {
 	clock := conformance.NewClock()
 	p := &hungProvider{release: make(chan struct{})}
-	d := &daemon{o: Options{StateDir: t.TempDir(), ResourceInterval: time.Second}, now: clock.Now, log: slog.New(slog.NewTextHandler(io.Discard, nil)), reported: map[string]string{}}
+	d := &daemon{o: Options{StateDir: t.TempDir(), ResourceInterval: time.Second}, now: clock.Now, log: slog.New(slog.NewTextHandler(io.Discard, nil)), reported: map[string]string{}, reportedAt: map[string]time.Time{}}
 	d.containers.providers = map[string]extension.ContainerProvider{"hung": p}
 	returned := make(chan struct{})
 	go func() {
@@ -72,7 +72,7 @@ func TestContainerReconcileRunsOffTheLoop(t *testing.T) {
 // really panicked (it never got past the nil map).
 func TestGoSafeRecoversAPanic(t *testing.T) {
 	var logs bytes.Buffer
-	d := &daemon{log: slog.New(slog.NewTextHandler(&logs, nil)), reported: map[string]string{}}
+	d := &daemon{log: slog.New(slog.NewTextHandler(&logs, nil)), now: func() time.Time { return time.Unix(0, 0) }, reported: map[string]string{}, reportedAt: map[string]time.Time{}}
 	reached := false
 	d.goSafe("github_projection", func() {
 		var m map[string]int

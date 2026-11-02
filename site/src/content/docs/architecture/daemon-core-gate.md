@@ -27,6 +27,7 @@ The router, toolbelt, scheduler, timers, control and management server are rebui
 | `job_concurrency` | `PoolLimits["jobs"]`, with `ExecutorPools` placing `shell` and `github-hold` in the `jobs` pool |
 | `timeout_seconds` | `Timeout` |
 | `kept_executions` | `KeptExecutions`, with `Artifacts` for content deletion |
+| `kept_finished_days` | `KeptFinished`, in days |
 | `retry_delays_seconds` | `RetryPolicy.Delays` |
 | causal depth and rate | router, scheduler, timers and control `CausalLimits` |
 
@@ -51,8 +52,8 @@ One loop runs every `--poll-interval`. It also runs immediately after an observe
 
 1. Route every accepted, unrouted Event in acceptance order (`Ingress.Pending` → `Router.Route`). This includes Events accepted by timer fires and execution emissions.
 2. Run `Scheduler.Poll`, which covers due timers, retry and timeout Events, active Waits and expired leases. Recovered attempts are observed. An `executor_recovery_failed` diagnostic leads to a trusted stop (see below). Events from fired timers are routed in the same pass.
-3. `Start` every ready Work. Ineligible Work (capacity, backoff, no input) reports a safe code once per subject, not on every pass.
-4. Dispatch committed inject and interrupt intents for running Work, run `ReconcileSubscriptions` and `Ingress.ReconcileDue`, run the extension passes (schedules, GitHub, tracker and Slack projection, webhooks, resources and others), and run `SweepRetention` every `--retention-interval`.
+3. `Start` every ready Work. Ineligible Work (capacity, backoff, no input) reports a safe code once per subject, not on every pass. The daemon remembers the last code per subject to do that; a code for one Event, Work, execution or intent that has gone unreported for an hour is forgotten on the next retention pass, so the memory follows live problems.
+4. Dispatch committed inject and interrupt intents for running Work, run `ReconcileSubscriptions` and `Ingress.ReconcileDue`, run the extension passes (schedules, GitHub, tracker and Slack projection, webhooks, resources and others), and run `SweepRetention` (by count and by age) every `--retention-interval`.
 
 Every attempt from `Start` or `Recover` is observed by a goroutine that renews its lease every third of the lease duration. On `ErrConflict` it routes pending input and re-observes. A lost lease covers operator cancel, the scheduler deadline, supersession by a newer epoch and a lease that lapsed while the host slept or stalled. When the attempt is still running and its Work open (`Scheduler.Adoptable`), the goroutine only stops observing and logs it: a lapsed lease is recovered and the same process adopted by the next `Poll`, and a newer epoch already holds it. Otherwise a lost lease or an observation failure leads to `executor.Stop(execution, epoch)` and then `ConfirmStopped`. A superseded epoch is refused by the shell executor and confirms nothing. A wall clock stepped back never loses the lease: `Renew` keeps the later expiry.
 

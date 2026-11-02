@@ -13,8 +13,26 @@ import (
 
 const retentionNamespace = "core.retention"
 
+// retentionDoneNamespace marks a finished Work all of whose attempts have
+// expired. A finished Work can't run again, so later sweeps skip it without
+// reading it or its ledger entries, and the sweep's cost stays with the Work
+// that still have content to release.
+const retentionDoneNamespace = "core.retention.done"
+
 // DefaultKeptExecutions is the B05 kept_executions default (per Work).
 const DefaultKeptExecutions = 20
+
+// DefaultKeptFinished is the kept_finished_days default: a finished Work's
+// attempts keep their content for 14 days after the Work last changed.
+const DefaultKeptFinished = 14 * 24 * time.Hour
+
+// Retention reasons say which rule expired an attempt.
+const (
+	// RetentionCount: newer attempts of the same Work pushed it past kept_executions.
+	RetentionCount = "kept_executions"
+	// RetentionFinished: its Work finished longer ago than kept_finished_days.
+	RetentionFinished = "kept_finished_days"
+)
 
 // retentionRecord is the durable expiration ledger entry. It is committed
 // before any content is deleted, so a crash between phases is resumed rather
@@ -24,6 +42,7 @@ type retentionRecord struct {
 	Generation, Executor          string
 	Artifacts                     []domain.ArtifactRef
 	Kept                          int
+	Reason                        string `json:",omitempty"`
 	ExpiredAt                     time.Time
 	ArtifactsReleased, Forgotten  bool
 	ArtifactFailures, ForgetError int
@@ -31,8 +50,11 @@ type retentionRecord struct {
 
 // RetentionStatus reports whether an execution's retained content expired.
 type RetentionStatus struct {
-	Expired           bool
-	ExpiredAt         time.Time
+	Expired   bool
+	ExpiredAt time.Time
+	// Reason is RetentionCount or RetentionFinished; records written before
+	// age-based expiry have none and were expired by count.
+	Reason            string `json:",omitempty"`
 	ArtifactsReleased bool
 	Forgotten         bool
 }
@@ -56,14 +78,15 @@ func RetentionInTx(tx storage.Tx, id domain.ID) (RetentionStatus, error) {
 	if err != nil {
 		return RetentionStatus{}, err
 	}
-	return RetentionStatus{Expired: true, ExpiredAt: r.ExpiredAt, ArtifactsReleased: r.ArtifactsReleased, Forgotten: r.Forgotten}, nil
+	return RetentionStatus{Expired: true, ExpiredAt: r.ExpiredAt, Reason: r.Reason, ArtifactsReleased: r.ArtifactsReleased, Forgotten: r.Forgotten}, nil
 }
 
-// SweepRetention applies the single kept-executions policy shared by every
+// SweepRetention applies the single retention policy shared by every
 // executor: per Work, the newest KeptExecutions attempts keep their artifact
 // content and executor-private state; older terminal attempts whose resource
-// exclusion is confirmed expire. Coordination history (records, outcomes,
-// usage and artifact metadata) is never deleted. Expiration is committed
+// exclusion is confirmed expire. Once a Work has finished and not changed for
+// KeptFinished, all its attempts expire the same way. Coordination history
+// (records, outcomes, usage and artifact metadata) is never deleted. Expiration is committed
 // first; content deletion and executor Forget follow outside the transaction
 // and are retried by later sweeps until both are released.
 func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result RetentionResult, err error) {
@@ -72,6 +95,7 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 	}
 	kept := s.options.KeptExecutions
 	now := s.now()
+	finishedBefore := now.Add(-s.options.KeptFinished)
 	err = s.transact(ctx, nil, func(tx storage.Tx) error {
 		xs, e := tx.ListExecutions("")
 		if e != nil {
@@ -86,12 +110,42 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 			works = append(works, id)
 		}
 		sort.Slice(works, func(i, j int) bool { return works[i] < works[j] })
+		doneRows, e := tx.List(retentionDoneNamespace, "")
+		if e != nil {
+			return e
+		}
+		done := make(map[string]bool, len(doneRows))
+		for _, row := range doneRows {
+			done[row.Key] = true
+		}
 		for _, work := range works {
+			if done[retentionKey(work)] {
+				continue
+			}
 			attempts := byWork[work]
 			sort.Slice(attempts, func(i, j int) bool { return attempts[i].Attempt > attempts[j].Attempt })
+			if len(result.Expired) >= limit {
+				break
+			}
+			// A Work whose newest attempt is still live has not finished.
+			finished := false
+			if attempts[0].State.Terminal() {
+				w, e := tx.Work(work)
+				if e != nil && !errors.Is(e, storage.ErrNotFound) {
+					return e
+				}
+				finished = e == nil && w.State.Terminal() && !w.UpdatedAt.After(finishedBefore)
+			}
+			// allExpired stays true while every attempt has a ledger entry.
+			allExpired := finished
 			for i, x := range attempts {
-				if i < kept || !x.State.Terminal() || len(result.Expired) >= limit {
+				if (i < kept && !finished) || !x.State.Terminal() || len(result.Expired) >= limit {
+					allExpired = false
 					continue
+				}
+				reason := RetentionCount
+				if i < kept {
+					reason = RetentionFinished
 				}
 				if _, e := tx.Get(retentionNamespace, retentionKey(x.ID)); e == nil {
 					continue
@@ -103,13 +157,19 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 					return e
 				}
 				if e == nil && !state.Excluded {
+					allExpired = false
 					continue // Uncertain resource hold: never release private state.
 				}
-				record := retentionRecord{ExecutionID: x.ID, WorkID: x.WorkID, Generation: state.Generation, Executor: state.Executor, Artifacts: append([]domain.ArtifactRef(nil), x.Artifacts...), Kept: kept, ExpiredAt: now}
+				record := retentionRecord{ExecutionID: x.ID, WorkID: x.WorkID, Generation: state.Generation, Executor: state.Executor, Artifacts: append([]domain.ArtifactRef(nil), x.Artifacts...), Kept: kept, Reason: reason, ExpiredAt: now}
 				if e = putJSON(tx, retentionNamespace, retentionKey(x.ID), record); e != nil {
 					return e
 				}
 				result.Expired = append(result.Expired, x.ID)
+			}
+			if allExpired {
+				if e := tx.Put(retentionDoneNamespace, retentionKey(work), []byte("{}")); e != nil {
+					return e
+				}
 			}
 		}
 		return nil

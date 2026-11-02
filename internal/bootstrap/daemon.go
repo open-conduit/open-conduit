@@ -22,6 +22,7 @@ import (
 	"runtime/debug"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -70,7 +71,8 @@ type Options struct {
 	// LeaseDuration is the execution lease (default 1m). After a crash a new
 	// daemon recovers a running attempt only once its lease has expired.
 	LeaseDuration time.Duration
-	// RetentionInterval paces the kept_executions sweep (default 10m).
+	// RetentionInterval paces the retention sweep (kept_executions and
+	// kept_finished_days, default 10m).
 	RetentionInterval time.Duration
 	// BackupInterval paces the scheduled online backups (default 24h;
 	// negative turns them off). BackupDir receives them (default
@@ -189,8 +191,11 @@ type daemon struct {
 	// from are the executable and toolbelt the daemon started from.
 	from     []string
 	reported map[string]string
-	wg       sync.WaitGroup
-	nudge    chan struct{}
+	// reportedAt is when each reported key was last reported, so
+	// pruneReported can drop per-record keys nobody reports any more.
+	reportedAt map[string]time.Time
+	wg         sync.WaitGroup
+	nudge      chan struct{}
 }
 
 // toolbeltBeside finds the directory holding the `os` toolbelt next to the
@@ -310,7 +315,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = o.defaults(); err != nil {
 		return err
 	}
-	d := &daemon{o: o, log: slog.New(slog.NewTextHandler(o.Log, nil)), now: time.Now, inflight: map[attemptKey]domain.LeaseRef{}, reported: map[string]string{}, nudge: make(chan struct{}, 1), resolver: &config.Resolver{SecretsFile: filepath.Join(filepath.Dir(o.ConfigPath), "secrets.json")}}
+	d := &daemon{o: o, log: slog.New(slog.NewTextHandler(o.Log, nil)), now: time.Now, inflight: map[attemptKey]domain.LeaseRef{}, reported: map[string]string{}, reportedAt: map[string]time.Time{}, nudge: make(chan struct{}, 1), resolver: &config.Resolver{SecretsFile: filepath.Join(filepath.Dir(o.ConfigPath), "secrets.json")}}
 	d.inproc = firstParty(d.githubView)
 	suffix := make([]byte, 4)
 	if _, err = rand.Read(suffix); err != nil {
@@ -606,7 +611,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
 		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, Secrets: d.configs.Secrets(d.resolver), Environment: d.runEnvironment,
-		Resources: d.bindResources, Sandbox: d.bindSandbox, Container: d.bindContainer, Signalled: d.containerSignalled, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
+		Resources: d.bindResources, Sandbox: d.bindSandbox, Container: d.bindContainer, Signalled: d.containerSignalled, KeptExecutions: set.KeptExecutions, KeptFinished: keptFinished(set.KeptFinishedDays), Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
 		WorkKinds: kinds, Budgets: budgets(set.Budgets),
 	}); err != nil {
@@ -678,7 +683,13 @@ func (d *daemon) report(kind string, subject domain.ID, code string, cause ...st
 	key := kind + "\x00" + string(subject)
 	d.mu.Lock()
 	same := d.reported[key] == code
-	d.reported[key] = code
+	if code == "" {
+		delete(d.reported, key)
+		delete(d.reportedAt, key)
+	} else {
+		d.reported[key] = code
+		d.reportedAt[key] = d.now()
+	}
 	d.mu.Unlock()
 	if !same && code != "" {
 		attrs := []any{"kind", kind, "id", string(subject), "code", code}
@@ -709,5 +720,39 @@ func (d *daemon) goSafe(kind string, fn func()) {
 func (d *daemon) clear(kind string, subject domain.ID) {
 	d.mu.Lock()
 	delete(d.reported, kind+"\x00"+string(subject))
+	delete(d.reportedAt, kind+"\x00"+string(subject))
 	d.mu.Unlock()
+}
+
+// reportedPerRecord are the diagnostic kinds whose subject is one Event,
+// Work, execution or intent. There is no end to those, so their keys are
+// pruned once they go unreported; every other kind's subject is a
+// connection, extension or the daemon itself, a set the config bounds.
+var reportedPerRecord = map[string]bool{"route": true, "start": true, "stop": true, "renew": true, "observe": true, "poll": true, "control": true}
+
+// reportedTTL is how long a per-record diagnostic is remembered after it was
+// last reported. A condition that persists is reported again on every pass
+// and stays; one that stopped (the Work finished, the Event routed) goes.
+const reportedTTL = time.Hour
+
+// pruneReported drops per-record diagnostics not reported within
+// reportedTTL, so the map follows the live problems, not every Event and
+// Work the daemon has ever had trouble with.
+func (d *daemon) pruneReported() {
+	cutoff := d.now().Add(-reportedTTL)
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	for key, at := range d.reportedAt {
+		kind, subject, _ := strings.Cut(key, "\x00")
+		if subject != "" && reportedPerRecord[kind] && at.Before(cutoff) {
+			delete(d.reported, key)
+			delete(d.reportedAt, key)
+		}
+	}
+}
+
+// keptFinished converts settings.kept_finished_days to a duration, capped at
+// a century so the largest setting the config allows doesn't overflow.
+func keptFinished(days int) time.Duration {
+	return time.Duration(min(days, 36500)) * 24 * time.Hour
 }

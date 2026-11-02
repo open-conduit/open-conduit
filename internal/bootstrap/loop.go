@@ -109,6 +109,7 @@ func (d *daemon) retentionPass(ctx context.Context, c *components, lastSweep *ti
 		*lastSweep = d.now()
 	}
 	d.collectArtifacts(ctx)
+	d.pruneReported()
 	return true
 }
 

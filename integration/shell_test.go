@@ -113,8 +113,10 @@ type shellHostOptions struct {
 	exporters []observability.Exporter
 	buffer    int
 	kept      int
-	checks    []func(context.Context) runtime.Check
-	ingress   bool
+	// keptFinished is SchedulerOptions.KeptFinished (zero: the default).
+	keptFinished time.Duration
+	checks       []func(context.Context) runtime.Check
+	ingress      bool
 	// executors and handlers add fake registrations beside the shell.
 	executors map[string]extension.Executor
 	handlers  map[string]extension.RouteHandler
@@ -234,7 +236,7 @@ func newShellHostWith(t *testing.T, state, bin string, clock *conformance.Clock,
 	if h.endpoints, err = management.NewEndpoints(h.lock, state, "", func(id domain.ID) http.Handler { return server.ExecutionHandler(id) }); err != nil {
 		t.Fatal(err)
 	}
-	if h.scheduler, err = runtime.NewScheduler(h.coord, clock.Now, h.router, runtime.SchedulerOptions{Owner: owner, Generation: "1", Executors: executors, Toolbelt: belt, ToolbeltEndpoints: h.endpoints.Serve, Secrets: configs.Secrets(&config.Resolver{}), KeptExecutions: o.kept, Artifacts: h.artifacts}); err != nil {
+	if h.scheduler, err = runtime.NewScheduler(h.coord, clock.Now, h.router, runtime.SchedulerOptions{Owner: owner, Generation: "1", Executors: executors, Toolbelt: belt, ToolbeltEndpoints: h.endpoints.Serve, Secrets: configs.Secrets(&config.Resolver{}), KeptExecutions: o.kept, KeptFinished: o.keptFinished, Artifacts: h.artifacts}); err != nil {
 		t.Fatal(err)
 	}
 	h.toolbelt = belt

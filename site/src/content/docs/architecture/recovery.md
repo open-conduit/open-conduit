@@ -92,7 +92,7 @@ Run `open-conduit state check [--json]` with the daemon stopped. It examines a p
 | --- | --- |
 | `lock` | Fails when a daemon owns the directory (`in_use_or_unsafe`), or when its permissions are not owner-only. |
 | `socket` | A leftover socket from an unclean stop (info: the next start removes it after its ownership checks). |
-| `database` | `schema_1` (integrity and foreign keys pass), or `corrupt` / `schema_newer` / `records_newer` / `schema_unrecognized` / `open_failed`, with the remedy. |
+| `database` | `schema_1` (the full `integrity_check` and foreign keys pass; the daemon's own open runs only `quick_check`), or `corrupt` / `schema_newer` / `records_newer` / `schema_unrecognized` / `open_failed`, with the remedy. |
 | `artifacts` | Referenced artifacts missing, not counting content retention released on purpose. A backup refuses missing content, so restore the directory or the latest bundle. |
 | `timers` | The number of durable timers that resume on start. |
 
