@@ -214,3 +214,41 @@ func slicesContains(xs []string, s string) bool {
 	}
 	return false
 }
+
+// A start gate answers work.admit over the wire: no hold lets the start
+// through, a hold carries its reason, and an error crosses as an error.
+func TestStartGateOverTheWire(t *testing.T) {
+	m := manifest()
+	m.Permissions = []string{protocol.PermissionStartGate}
+	ext := (&sdk.Extension{Manifest: m}).StartGate(func(_ context.Context, c extension.StartCall) (*extension.StartHold, error) {
+		switch c.Work.Kind {
+		case "acme.free":
+			return nil, nil
+		case "acme.deploy":
+			return &extension.StartHold{Reason: "approval for " + string(c.Work.ID) + " on " + c.Binding}, nil
+		}
+		return nil, errors.New("can't tell")
+	})
+	if !ext.Manifest.Provides.StartGate || !slicesContains(ext.Manifest.Enabled(), "work.admit") || !slicesContains(ext.Manifest.Enabled(), "work.settle_hold") {
+		t.Fatal("StartGate does not declare the gate")
+	}
+	host, _, _ := serve(t, ext)
+	ctx := context.Background()
+	if err := host.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: []int{1}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	admit := func(kind string) (protocol.WorkAdmitResult, error) {
+		var out protocol.WorkAdmitResult
+		err := host.Call(ctx, "work.admit", protocol.WorkAdmitParams{Work: protocol.Work{ID: "work/1", Kind: kind, ScopeID: "eng"}, Binding: "agent", Event: protocol.Event{ID: "e1", Type: "acme.opened"}}, &out)
+		return out, err
+	}
+	if out, err := admit("acme.free"); err != nil || out.Hold != nil {
+		t.Fatalf("admit: %+v %v", out, err)
+	}
+	if out, err := admit("acme.deploy"); err != nil || out.Hold == nil || out.Hold.Reason != "approval for work/1 on agent" {
+		t.Fatalf("hold: %+v %v", out, err)
+	}
+	if _, err := admit("acme.other"); err == nil {
+		t.Fatal("an undecided gate answered")
+	}
+}

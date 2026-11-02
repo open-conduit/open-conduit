@@ -83,7 +83,8 @@ type Toolbelt struct {
 	owners        map[string]string // operation → registration name
 	filters       map[string]func(domain.Payload, domain.Event) bool
 	gates         map[string]extension.Gate // registration name → gate
-	events        map[string]string         // emitted family → registration name
+	startGates    map[string]extension.StartGate
+	events        map[string]string // emitted family → registration name
 }
 
 type tokenRecord struct {
@@ -126,7 +127,7 @@ func NewToolbelt(store storage.Store, now func() time.Time, router *Router, opti
 		return nil, err
 	}
 	options.CausalLimits = limits
-	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) bool{}, gates: map[string]extension.Gate{}, events: map[string]string{}}, nil
+	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) bool{}, gates: map[string]extension.Gate{}, startGates: map[string]extension.StartGate{}, events: map[string]string{}}, nil
 }
 
 var operationName = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
@@ -185,6 +186,9 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 	}
 	if r.Gate != nil {
 		t.gates[r.Name] = r.Gate
+	}
+	if r.StartGate != nil {
+		t.startGates[r.Name] = r.StartGate
 	}
 	for name := range events {
 		t.events[name] = r.Name

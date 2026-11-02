@@ -39,3 +39,33 @@ func TestInstalledGateNeedsPermissionAndScope(t *testing.T) {
 		t.Fatalf("a call outside the package's scopes was gated: %+v %v", plan, err)
 	}
 }
+
+// An installed package's start gate needs the work.start_gate permission,
+// which also enables settling its holds, and is asked only about Work in
+// scopes the package is configured for.
+func TestInstalledStartGateNeedsPermissionAndScope(t *testing.T) {
+	m := protocol.Manifest{Protocol: []int{1}, Name: "approvals", Version: "1", Command: []string{"./approvals"}, Provides: protocol.Provides{StartGate: true}}
+	deps := Deps{Now: time.Now, Scopes: func() []domain.ID { return []domain.ID{"mine"} }}
+	s, err := NewService(m, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if g := (&Remote{m: m, s: s}).Registration().StartGate; g != nil {
+		t.Fatal("a package without the work.start_gate permission got a start gate")
+	}
+	if s.enabled["work.admit"] || s.enabled["work.settle_hold"] {
+		t.Fatal("the start gate's methods are enabled without its permission")
+	}
+	m.Permissions = []string{protocol.PermissionStartGate}
+	if s, err = NewService(m, deps); err != nil {
+		t.Fatal(err)
+	}
+	g := (&Remote{m: m, s: s}).Registration().StartGate
+	if g == nil || !s.enabled["work.admit"] || !s.enabled["work.settle_hold"] {
+		t.Fatal("a package with the permission got no start gate")
+	}
+	hold, err := g(context.Background(), extension.StartCall{Work: domain.Work{ID: "w", ScopeID: "theirs"}})
+	if hold != nil || err != nil {
+		t.Fatalf("Work outside the package's scopes was gated: %+v %v", hold, err)
+	}
+}

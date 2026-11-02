@@ -74,6 +74,9 @@ type Deps struct {
 	// Probes are the setup probes the host, its extensions and executors
 	// offer, by full name (probe.list and probe.run, permission probes).
 	Probes func() map[string]extension.SetupProbe
+	// SettleHold settles the hold owner's start gate placed on work
+	// (work.settle_hold, permission work.start_gate).
+	SettleHold func(ctx context.Context, owner string, work domain.ID, admit bool, reason, key string) (domain.ID, error)
 	// Config is the host's config service, which keeps config text behind
 	// handles and answers only redacted copies (config.base, config.edit,
 	// config.validate, config.trace; permission config.read).
@@ -263,6 +266,20 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, protocol.Errorf(protocol.CodeUnsupported, "wait.progress")
 		}
 		return struct{}{}, s.deps.WaitProgress(ctx, s.name, domain.ID(p.WorkID), p.Progress)
+	case "work.settle_hold":
+		var p protocol.WorkSettleHoldParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.deps.SettleHold == nil {
+			return nil, protocol.Errorf(protocol.CodeUnsupported, "work.settle_hold")
+		}
+		// Only a hold this extension's start gate placed settles.
+		id, err := s.deps.SettleHold(ctx, s.name, domain.ID(p.WorkID), p.Admit, p.Reason, p.Key)
+		if err != nil {
+			return nil, err
+		}
+		return protocol.WorkSettleHoldResult{EventID: string(id)}, nil
 	case "artifact.create", "artifact.write", "artifact.commit", "artifact.abort":
 		return s.artifact(ctx, method, raw)
 	case "secret.resolve":

@@ -536,6 +536,9 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		},
 		Probes: d.setupProbes,
 		Config: d.configHost(),
+		SettleHold: func(ctx context.Context, owner string, work domain.ID, admit bool, reason, key string) (domain.ID, error) {
+			return d.current.Load().control.SettleGateHold(ctx, owner, work, admit, reason, key)
+		},
 	}
 }
 

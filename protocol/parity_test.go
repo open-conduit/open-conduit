@@ -66,6 +66,7 @@ var parity = map[string][]string{
 	"Host.Timers":            {"method:timer.arm", "method:timer.cancel"},
 	"Host.CancelWork":        {"method:work.cancel"},
 	"Host.WaitProgress":      {"method:wait.progress"},
+	"Host.SettleHold":        {"manifest:permissions", "method:work.settle_hold"},
 	"Host.Capture":           {"manifest:permissions", "method:telemetry.capture"},
 	"Host.Act":               {"manifest:permissions", "method:action.submit"},
 	"Host.Actions":           {"manifest:permissions", "method:action.list"},

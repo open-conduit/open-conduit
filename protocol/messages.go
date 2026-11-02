@@ -176,6 +176,44 @@ type OperationGateParams struct {
 type OperationGateResult struct {
 	Wait *WaitPlan `json:"wait,omitempty"`
 }
+
+// WorkAdmitParams is work.admit's request: the Work whose first attempt is
+// about to start, the binding it would run on and the Event that would be
+// its first input (extension.StartCall).
+type WorkAdmitParams struct {
+	Work    Work   `json:"work"`
+	Binding string `json:"binding"`
+	Event   Event  `json:"event"`
+}
+
+// WorkAdmitResult is work.admit's answer: no Hold lets the start through, a
+// Hold holds the Work until the extension settles it (work.settle_hold). An
+// error means the extension could not decide, and the start is refused for
+// now.
+type WorkAdmitResult struct {
+	Hold *StartHold `json:"hold,omitempty"`
+}
+
+// StartHold is why a start gate holds Work (extension.StartHold).
+type StartHold struct {
+	Reason string `json:"reason,omitempty"`
+}
+
+// WorkSettleHoldParams settle the hold the extension's start gate placed on
+// a Work: admit lets its next start through once, otherwise it is
+// cancelled (inproc.Host.SettleHold). Key makes it idempotent.
+type WorkSettleHoldParams struct {
+	WorkID string `json:"work_id"`
+	Admit  bool   `json:"admit"`
+	Reason string `json:"reason,omitempty"`
+	Key    string `json:"key"`
+}
+
+// WorkSettleHoldResult is the accepted Event that records the settlement.
+type WorkSettleHoldResult struct {
+	EventID string `json:"event_id"`
+}
+
 type EmitCommitParams struct {
 	CommitID string  `json:"commit_id"`
 	Emitted  Emitted `json:"emitted"`

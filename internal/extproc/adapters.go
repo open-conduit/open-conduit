@@ -340,6 +340,23 @@ func (r *Remote) Registration() extension.Registration {
 			return &plan, nil
 		}
 	}
+	if r.m.Provides.StartGate && r.m.Allows(protocol.PermissionStartGate) {
+		// Like the operation gate: consented to at install, asked only
+		// about Work in the package's scopes, and failing closed.
+		reg.StartGate = func(ctx context.Context, c extension.StartCall) (*extension.StartHold, error) {
+			if r.s == nil || r.s.deps.Scopes == nil || !r.s.allowedScopes()[c.Work.ScopeID] {
+				return nil, nil
+			}
+			var out protocol.WorkAdmitResult
+			if err := r.p.Call(ctx, "work.admit", protocol.WorkAdmitParams{Work: protocol.FromWork(c.Work), Binding: c.Binding, Event: protocol.FromEvent(c.Event)}, &out); err != nil {
+				return nil, err
+			}
+			if out.Hold == nil {
+				return nil, nil
+			}
+			return &extension.StartHold{Reason: out.Hold.Reason}, nil
+		}
+	}
 	return reg
 }
 
