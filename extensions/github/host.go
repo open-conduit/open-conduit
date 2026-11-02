@@ -59,6 +59,9 @@ type registry struct {
 	hooks   map[string]*hook  // by namespace
 	public  string
 	codes   map[string]string
+	next    int // the entry the next projection pass starts at
+	// converge stands in for an entry's projector in tests.
+	converge func(ctx context.Context, e *entry, limit int) (ProjectionResult, error)
 }
 
 // New returns the GitHub extension the daemon composes: it registers its
@@ -375,24 +378,44 @@ func (x *Extension) Tasks() []inproc.Task {
 	}
 }
 
+// project converges the entries in turn, starting after the one the last
+// pass reached, so a pass its deadline cuts short never starves the later
+// entries; one the deadline interrupted keeps its last code.
 func (x *Extension) project(ctx context.Context) error {
-	var codes []string
-	for _, e := range x.list() {
+	entries := x.list()
+	x.own.mu.Lock()
+	start := x.own.next
+	x.own.mu.Unlock()
+	for i := range entries {
+		k := (start + i) % len(entries)
+		e := entries[k]
 		if ctx.Err() != nil {
-			return nil
+			break
 		}
-		res, err := e.projector.Converge(ctx, passLimit)
+		converge := e.projector.Converge
+		if x.own.converge != nil {
+			converge = func(ctx context.Context, limit int) (ProjectionResult, error) { return x.own.converge(ctx, e, limit) }
+		}
+		res, err := converge(ctx, passLimit)
 		code := strings.Join(res.Codes, ",")
 		if err != nil && code == "" {
 			code = CallCode(err)
 		}
 		x.own.mu.Lock()
-		e.projection = code
+		if ctx.Err() == nil {
+			e.projection = code
+		}
+		x.own.next = k + 1
 		x.own.mu.Unlock()
-		if code != "" {
-			codes = append(codes, code)
+	}
+	var codes []string
+	x.own.mu.Lock()
+	for _, e := range entries {
+		if e.projection != "" {
+			codes = append(codes, e.projection)
 		}
 	}
+	x.own.mu.Unlock()
 	x.report("projection", strings.Join(codes, ","))
 	return nil
 }

@@ -106,6 +106,7 @@ type Extension struct {
 	public  string
 	hooks   Hooks
 	codes   map[string]string
+	next    int // the entry the next projection pass starts at
 }
 
 // NewExtension returns the extension of one tracker kind.
@@ -354,20 +355,36 @@ func (x *Extension) Tasks() []inproc.Task {
 
 const passLimit = 100
 
+// project converges the entries in turn, starting after the one the last
+// pass reached, so a pass its deadline cuts short never starves the later
+// entries; one the deadline interrupted keeps its last code.
 func (x *Extension) project(ctx context.Context) error {
-	var codes []string
-	for _, s := range x.list() {
+	sources := x.list()
+	x.mu.Lock()
+	start := x.next
+	x.mu.Unlock()
+	for i := range sources {
+		k := (start + i) % len(sources)
+		s := sources[k]
 		if ctx.Err() != nil {
-			return nil
+			break
 		}
 		res, err := s.projector.Converge(ctx, passLimit)
 		code := strings.Join(res.Codes, ",")
 		if err != nil && code == "" {
 			code = ErrorCode(err)
 		}
-		x.hooks.SetProjection(s.settings.Namespace, code)
-		if code != "" {
-			codes = append(codes, code)
+		if ctx.Err() == nil {
+			x.hooks.SetProjection(s.settings.Namespace, code)
+		}
+		x.mu.Lock()
+		x.next = k + 1
+		x.mu.Unlock()
+	}
+	var codes []string
+	for _, s := range sources {
+		if c := x.hooks.Projection(s.settings.Namespace); c != "" {
+			codes = append(codes, c)
 		}
 	}
 	x.report("projection", strings.Join(codes, ","))

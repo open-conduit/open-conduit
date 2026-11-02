@@ -3,6 +3,7 @@ package github
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/protocol"
@@ -36,5 +37,38 @@ func TestFollowConnection(t *testing.T) {
 	}
 	if !client.GitBot() {
 		t.Fatal("a refused change altered the client")
+	}
+}
+
+// A projection pass its deadline cuts short starts the next pass after the
+// entry it reached, so later entries are never starved, and an entry the
+// deadline interrupted keeps its last code.
+func TestProjectionPassRotates(t *testing.T) {
+	x := New()
+	for _, name := range []string{"a", "b", "c"} {
+		x.own.entries[name] = &entry{name: "github/eng/" + name, projection: "old"}
+	}
+	var calls []string
+	var cancel context.CancelFunc
+	x.own.converge = func(ctx context.Context, e *entry, _ int) (ProjectionResult, error) {
+		calls = append(calls, e.name)
+		cancel() // the pass's deadline passes during this entry
+		return ProjectionResult{}, ctx.Err()
+	}
+	pass := func() {
+		var ctx context.Context
+		ctx, cancel = context.WithCancel(context.Background())
+		_ = x.project(ctx)
+	}
+	pass()
+	pass()
+	pass()
+	if got := strings.Join(calls, ","); got != "github/eng/a,github/eng/b,github/eng/c" {
+		t.Fatalf("passes converged %s, want each entry in turn", got)
+	}
+	for _, e := range x.own.entries {
+		if e.projection != "old" {
+			t.Fatalf("%s: an interrupted pass replaced the code with %q", e.name, e.projection)
+		}
 	}
 }
