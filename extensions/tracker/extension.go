@@ -125,6 +125,7 @@ var (
 	_ inproc.Tasker     = (*Extension)(nil)
 	_ inproc.Checker    = (*Extension)(nil)
 	_ inproc.Playbooker = (*Extension)(nil)
+	_ inproc.Stopper    = (*Extension)(nil)
 )
 
 func (x *Extension) Name() string { return x.k.Type }
@@ -270,6 +271,21 @@ func (x *Extension) add(e protocol.ConfigEntry, ns string) error {
 	reopens.m[ns] = service
 	reopens.Unlock()
 	return nil
+}
+
+// Stop withdraws the extension's entries from the reopen registry, each
+// only while the registry still holds its own service, so a code host
+// stops finding a stopped daemon's tracker.
+func (x *Extension) Stop() {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	reopens.Lock()
+	defer reopens.Unlock()
+	for ns, s := range x.sources {
+		if reopens.m[ns] == s.service {
+			delete(reopens.m, ns)
+		}
+	}
 }
 
 func (x *Extension) list() []*source {
