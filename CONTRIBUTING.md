@@ -8,24 +8,25 @@ To report a vulnerability, follow [SECURITY.md](SECURITY.md). Don't open a publi
 
 ## Setup
 
-You need Go 1.24.2 or later (the minimum in `go.mod`), Python 3.10 or later, Make and Git, on macOS or Linux.
+You need Go, Python, Make and Git, on macOS or Linux; [Toolchain](#toolchain) lists the versions and what else some targets need.
 
 ```sh
 make config-deps   # once: installs the config schema checker into .venv-contracts
 make check         # what CI runs
 ```
 
-`make config-deps` is the only step that installs anything. `make check` runs offline. It runs, in order:
+`make config-deps` is the only step that installs anything. Apart from Go fetching the modules `go.mod` and `tools/go.mod` pin into its module cache the first time, `make check` runs offline. It runs, in order:
 
 - `fmt-check`: `gofmt` on every Go file. Run `make fmt` to fix it.
 - `vet`: `go vet`, including the fault-injection build tag.
+- `lint`: [staticcheck](https://staticcheck.dev/) with the checks `staticcheck.conf` selects, including the fault-injection build tag. Fix a finding rather than disabling its check; when a check is wrong for this code base, turn it off in `staticcheck.conf` with a comment saying why.
 - `test`: `go test -race ./...`, including the daemon integration tests in `integration/`. This is the slow part. The integration tests run in `INTEGRATION_SHARDS` processes at once (4 by default, `scripts/test-integration.sh`). Each shard is a separate process, so a test there can't rely on state another test left behind.
 - `boundaries`: the package boundary checker (below).
 - `config-check`: the configuration schema and its example fixtures.
 - `docs-check`: the README and docs examples (below).
 - `build` and `smoke`: builds `bin/open-conduit` and `bin/os`, and runs their help and version commands.
 
-CI runs `make check` and `make certify` on one Linux runner with the current stable Go, and `make cross-build` alongside. It doesn't test macOS or the Go 1.24.2 minimum, so check those locally when a change could affect them. A pull request that only changes docs (`site/`, `docs/**/*.md` and the Markdown at the repository root) skips it and runs `make docs-check` instead; the docs site only builds when `site/` changes. To check the minimum toolchain locally:
+CI runs `make check` and `make certify` on one Linux runner with the current stable Go, and `make cross-build` alongside. It doesn't test macOS or the Go 1.24.2 minimum, so check those locally when a change could affect them. A pull request that only changes docs (`site/`, `docs/**/*.md` and the Markdown at the repository root) skips it and runs `make docs-check` instead; the docs site only builds when `site/` changes. To check the minimum toolchain locally (`lint` says it is skipped there, since staticcheck needs Go 1.26 to build and its findings don't depend on the toolchain):
 
 ```sh
 GOTOOLCHAIN=go1.24.2 make check
@@ -45,6 +46,22 @@ make release-snapshot     # a local release build with GoReleaser (below); publi
 ```
 
 `make protocol-prototype` lives in its own Go module under `prototypes/transport`, so its dependencies never enter `go.mod`. It needs the network the first time, which is why it isn't part of `make check`.
+
+### Toolchain
+
+| Tool | Version | Needed by |
+| --- | --- | --- |
+| Go | 1.24.2 or later (the `go` line in `go.mod`); `lint` needs 1.26 or later and is skipped, saying so, under an older one | everything |
+| Make, Git | any recent | everything |
+| Python | 3.10 or later, as `python3` (or set `PYTHON`) | `config-deps`, which creates the `.venv-contracts` virtualenv `config-check` runs in |
+| staticcheck | pinned in `tools/go.mod`; nothing to install | `lint` |
+| Node, with npm | 22.18 or later | `ts-deps`, `ts-check`, `ts-packages`, `certify` |
+| GoReleaser | v2, on your PATH (or set `GORELEASER`) | `release-snapshot` |
+| Docker | a running daemon (OrbStack or Docker Desktop on macOS) | `container-test`, `gateway-image` |
+
+staticcheck is a `tool` in a module of its own, `tools/go.mod`, which `make lint` runs with `go tool -modfile=tools/go.mod staticcheck`. That keeps staticcheck's dependencies and its Go 1.26 minimum out of `go.mod`, and its version and checksums in the repository. To upgrade it, run `go get -tool honnef.co/go/tools/cmd/staticcheck@<version>` in `tools/`.
+
+`make check` needs only Go, Make, Git and the `config-deps` virtualenv; it never needs Node. The targets above check for their tools first and stop with what to install (`scripts/require-tool.sh`): `config-check` without the virtualenv says to run `make config-deps`, and the Node targets say when `node` is missing or older than 22.18.
 
 ## Commits and pull requests
 
