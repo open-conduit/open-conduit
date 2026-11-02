@@ -28,11 +28,12 @@ open-conduit auth recover                                 # a lost or ambiguous 
 
 ## SQLite migration recovery
 
-Schema migrations run inside one immediate transaction at open (`internal/storage/sqlite`). A failure rolls back and leaves the database unchanged ("migration rolled back"). Open refuses three cases:
+Schema migrations run inside one immediate transaction at open (`internal/storage/sqlite`). A failure rolls back and leaves the database unchanged ("migration rolled back"). Open refuses these cases, each before it changes the database:
 
 | Symptom | Cause | Recovery |
 | --- | --- | --- |
 | `schema N is newer than supported` (`state check`: `schema_newer`) | A newer binary migrated the database, and an older binary was started on it | Run the newer binary again. To go back to the older binary, restore the bundle taken before the upgrade into a new directory. Never edit `user_version`. |
+| `records are newer than this binary writes` (`state check`: `records_newer`) | A newer binary, whose records have fields this one doesn't know, wrote the database, and an older binary was started on it. Opening it would drop those fields from every record the older binary rewrote | Run the newer binary again. To go back, restore the bundle taken before the upgrade (`backup restore BUNDLE --to DIR`) and start the older binary there. Never edit `record_format`. |
 | `unversioned nonempty database; explicit migration required` or `schema metadata mismatch` (`schema_unrecognized`) | The file is not an Open Conduit database, or was altered by hand | Point `--data-dir` at the right directory, or restore the latest bundle. |
 | `migration rolled back: …` | The upgrade failed part way (disk full, I/O) | Fix the cause and start again: the old schema is intact. If it keeps failing, restore the pre-upgrade bundle and report the defect. |
 
@@ -46,7 +47,7 @@ Run `open-conduit state check [--json]` with the daemon stopped. It examines a p
 | --- | --- |
 | `lock` | Fails when a daemon owns the directory (`in_use_or_unsafe`), or when its permissions are not owner-only. |
 | `socket` | A leftover socket from an unclean stop (info: the next start removes it after its ownership checks). |
-| `database` | `schema_1` (integrity and foreign keys pass), or `corrupt` / `schema_newer` / `schema_unrecognized` / `open_failed`, with the remedy. |
+| `database` | `schema_1` (integrity and foreign keys pass), or `corrupt` / `schema_newer` / `records_newer` / `schema_unrecognized` / `open_failed`, with the remedy. |
 | `artifacts` | Referenced artifacts missing, not counting content retention released on purpose. A backup refuses missing content, so restore the directory or the latest bundle. |
 | `timers` | The number of durable timers that resume on start. |
 
