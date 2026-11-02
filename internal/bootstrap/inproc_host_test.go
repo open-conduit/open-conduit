@@ -35,6 +35,23 @@ func (*hostProbe) Webhook(path string) http.Handler {
 	return http.NotFoundHandler()
 }
 
+// ownFamilyIngress produces the families it is given.
+type ownFamilyIngress struct{ families []string }
+
+func (f ownFamilyIngress) Spec() extension.IngressSpec {
+	var spec extension.IngressSpec
+	for _, t := range f.families {
+		spec.Families = append(spec.Families, extension.EventFamily{Type: t, Loss: "one-shot"})
+	}
+	return spec
+}
+func (ownFamilyIngress) Push(context.Context, extension.Source, extension.Delivery) (extension.PushResult, error) {
+	return extension.PushResult{}, nil
+}
+func (ownFamilyIngress) Reconcile(context.Context, extension.Scan) (extension.Snapshot, error) {
+	return extension.Snapshot{Complete: true}, nil
+}
+
 // The host services #357 added stay within the extension's own: a derived
 // Event only of its own families and only from a parent in the same scope,
 // with the causal bound reported as inproc.ErrCausalLimit; deliveries only
@@ -53,7 +70,8 @@ func TestInprocHostServicesStayOwn(t *testing.T) {
 		t.Fatal(err)
 	}
 	probe := &hostProbe{}
-	d := &daemon{coord: store, now: now, log: slog.New(slog.DiscardHandler), ingress: ingress, inproc: []inproc.Extension{probe}, nudge: make(chan struct{}, 1)}
+	d := &daemon{coord: store, now: now, log: slog.New(slog.DiscardHandler), ingress: ingress, inproc: []inproc.Extension{probe}, nudge: make(chan struct{}, 1),
+		reported: map[string]string{}, reportedAt: map[string]time.Time{}}
 	if err := d.startInproc(ctx); err != nil {
 		t.Fatal(err)
 	}
@@ -107,6 +125,26 @@ func TestInprocHostServicesStayOwn(t *testing.T) {
 	}
 	if d.inprocWebhook("acme/hook") == nil || d.inprocWebhook("acme/other") != nil || d.inprocWebhook("acmehook") != nil || d.inprocWebhook("other/hook") != nil {
 		t.Fatal("webhooks are not routed by the extension's own prefix")
+	}
+	// Ingress sources register only under the extension's own names and
+	// only producing its own families; a foreign family is refused even
+	// under its own name.
+	src := func(name, ns string, families ...string) inproc.Source {
+		return inproc.Source{Name: name, Source: extension.Source{Namespace: ns, ScopeID: "eng"}, Ingress: ownFamilyIngress{families: families}}
+	}
+	d.registerInprocSources(probe, []inproc.Source{
+		src("acme/own", "acme-ns", "acme.hook"),
+		src("acme/foreign", "acme-gh", "acme.hook", "github.delivery"),
+		src("other/x", "other-ns", "acme.hook"),
+		src("acme/none", "acme-none"),
+	})
+	for name, want := range map[string]bool{"acme/own": true, "acme/foreign": false, "other/x": false, "acme/none": false} {
+		if got := d.external.sources[name]; got != want {
+			t.Errorf("source %s registered %v, want %v", name, got, want)
+		}
+		if !want && d.reportedCode("extension_ingress", name) != "not_own" {
+			t.Errorf("source %s refused without not_own", name)
+		}
 	}
 	if timed := d.timedKinds(); !timed["acme.tick"] || timed["acme.item"] {
 		t.Fatalf("timed kinds %v", timed)

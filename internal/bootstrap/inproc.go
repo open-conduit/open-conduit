@@ -377,20 +377,26 @@ func (d *daemon) configureInproc(ctx context.Context) {
 			c.Configure(ctx, d.configureParams(entries, connections))
 		}
 		if i, ok := x.(inproc.Ingester); ok {
-			d.registerInprocSources(x.Name(), i.Sources())
+			d.registerInprocSources(x, i.Sources())
 		}
 	}
 }
 
-// registerInprocSources registers an extension's ingress sources. A
+// registerInprocSources registers an extension's ingress sources: only
+// under its own registration names, and only producing its own Event
+// families, as the wire contract requires of an installed package. A
+// source's namespace is the operator's to choose (a schedule entry's
+// `namespace`); the ingress refuses one another source holds. A
 // registration is immutable for one runtime instance: a source registered
 // earlier keeps its registration until restart.
-func (d *daemon) registerInprocSources(name string, sources []inproc.Source) {
+func (d *daemon) registerInprocSources(x inproc.Extension, sources []inproc.Source) {
 	if d.ingress == nil {
 		return
 	}
+	name := x.Name()
+	own := ownership{x: x}
 	for _, s := range sources {
-		if s.Name != name && !strings.HasPrefix(s.Name, name+"/") {
+		if !protocol.SourceNamespace(name, s.Name) || s.Ingress == nil || !ownFamilies(own, s.Ingress.Spec()) {
 			d.report("extension_ingress", domain.ID(s.Name), "not_own")
 			continue
 		}
@@ -420,6 +426,20 @@ func (d *daemon) registerInprocSources(name string, sources []inproc.Source) {
 		}
 		d.log.Info("extension ingress registered", "extension", name, "name", s.Name, "namespace", s.Source.Namespace)
 	}
+}
+
+// ownFamilies reports whether an ingress produces only the extension's own
+// Event families.
+func ownFamilies(own ownership, spec extension.IngressSpec) bool {
+	if len(spec.Families) == 0 {
+		return false
+	}
+	for _, f := range spec.Families {
+		if !own.family(f.Type) {
+			return false
+		}
+	}
+	return true
 }
 
 // inprocWebhook returns the handler an in-process extension gives a webhook
