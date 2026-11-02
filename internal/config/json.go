@@ -242,6 +242,19 @@ func (c *checker) integer(n *node, path string) (int, bool) {
 	}
 	return int(v), true
 }
+
+// number is a finite JSON number.
+func (c *checker) number(n *node, path string) (float64, bool) {
+	if n == nil || !c.typed(n, path, kNumber, "number") {
+		return 0, false
+	}
+	v, err := n.num.Float64()
+	if err != nil || math.IsNaN(v) || math.IsInf(v, 0) {
+		c.fail(path, "invalid_type", "expected a finite number")
+		return 0, false
+	}
+	return v, true
+}
 func (c *checker) boolean(n *node, path string) (bool, bool) {
 	if n == nil || !c.typed(n, path, kBool, "boolean") {
 		return false, false

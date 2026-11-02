@@ -46,6 +46,7 @@ export default defineConfig({
 						{ label: 'Sandbox your agents', slug: 'guides/sandboxes' },
 						{ label: 'Run it in the background', slug: 'guides/background-service' },
 						{ label: 'Watch and steer runs', slug: 'guides/operating' },
+						{ label: 'Cap spend and attempts', slug: 'guides/budgets' },
 						{ label: 'Backups and recovery', slug: 'guides/backups' },
 						{ label: 'Build your first extension', slug: 'guides/first-extension' },
 					],
