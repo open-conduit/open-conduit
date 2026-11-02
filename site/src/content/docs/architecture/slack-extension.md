@@ -13,6 +13,7 @@ This page records two decisions: the manifest requests `metadata.message:read` f
 | Setting | Value |
 | --- | --- |
 | Socket Mode | On (the default receiver needs no public endpoint) |
+| Interactivity | On, over Socket Mode, so it needs no request URL. It carries the button presses of [prompts](#prompts-and-button-answers) |
 | Bot user | Yes, always online |
 | Bot token scopes | `channels:history`, `groups:history`, `channels:read`, `groups:read`, `chat:write`, `metadata.message:read`, `reactions:write`, `users:read`, `app_mentions:read` |
 | Bot events | `message.channels`, `message.groups`, `app_mention` |
@@ -21,7 +22,7 @@ This page records two decisions: the manifest requests `metadata.message:read` f
 The extension's own calls need only part of this:
 
 - `conversations.history` and `conversations.replies` need `channels:history` (public channels) or `groups:history` (private channels).
-- `chat.postMessage` needs `chat:write`.
+- `chat.postMessage` and `chat.postEphemeral` need `chat:write`.
 - `auth.test` needs no scope.
 - `users.conversations` (the setup channel picker) needs `channels:read`/`groups:read`.
 - `apps.connections.open` uses the app-level token.
@@ -240,6 +241,14 @@ make drill
 - Reconcile starts the conversation and the shell stand-in replies through `os call slack.reply`. A human reply over Socket Mode is acknowledged and resumes the same Work. The agent's own replies pushed back start nothing, and doctor is `slack: ok` with `github: not_configured`. A restart reconnects and posts nothing.
 - The HTTP receiver echoes URL verification, refuses forgeries and accepts a signed callback.
 
+## Prompts and button answers
+
+While a conversation's Work waits, the projector lists the actions offered on it (`Host.Actions`) and posts each one that has choices, such as an approval request's **approve** and **refuse** or a question's options, once in the thread as a message with a button per choice. Each prompt is a marked reply with the intent `prompt/<wait>/<provider>/<action>`, so a new Wait prompts again and a lost post is recovered like any reply. An action that takes free text has no buttons and isn't prompted. The extension doesn't know what any action means.
+
+A press arrives over Socket Mode as an `interactive` envelope, which is acknowledged at once. A `block_actions` press of one of the prompt's buttons, from the entry's team and a watched channel, goes to `Host.Act` as the presser, `slack:<user id>`, keyed by the user and the press's `action_ts`. The action's provider decides whether that user may act; for a `human` entry, its responders. The presser then gets a message only they see, in the thread: the provider's message when the answer was taken, or its refusal ("you are not one of the people this question is for", "this question has already been answered"). A press the host couldn't take for any other reason asks them to press again; it isn't retried.
+
+Presses arrive only over Socket Mode. The HTTP Events API receiver doesn't take interactivity, and an app created before this needs **Interactivity** turned on in its settings.
+
 ## Limitations
 
 - **Real Slack.** Real Slack has been exercised by one short run (see [History](#history)). Not covered on real Slack: a rate limit, `app_mention` duplication, the HTTP Events API, the `slack-cli` setup path, a reply missed by push and recovered by reconcile, a SIGKILL during an active turn, and a multi-day wait. The drills cover the missed reply and the SIGKILL, and the fake-clock scenario covers the multi-day wait in CI.
@@ -255,6 +264,7 @@ These notes record how this part was built and the evidence gathered at each sta
 - Ticket 04-01 delivered the Slack extension (ingress, Socket Mode and the Events API, reconcile, the route and marked replies) as the second workload. It added the separate one-shot deletion delivery to the shared ingress conformance.
 - Ticket 04-02 delivered extension-owned setup (`init slack`), the manifest decision for `metadata.message:read`, the support binding and conversation lifecycle, and the generic inject acknowledgement. 04-01 and 04-02 used only fixtures and the `slacktest` fake.
 - Ticket 04-03 added the fake-clock multi-day scenario (`slack_multiday_test.go`) and a short real-Slack run, below. A real multi-day wait was deferred to real-world operation by user decision.
+- Issue #364 added prompts and button answers: a waiting Work's actions with choices are posted as buttons, and a press answers through `Host.Act` as `slack:<user>`. The manifest turned Interactivity on. This has been exercised only against the `slacktest` fake.
 
 ### Real Slack run (04-03)
 

@@ -54,6 +54,11 @@ type ProjectorOptions struct {
 	// AfterPost runs after a reply was created and before local completion
 	// is recorded. Tests use it to crash at exactly that boundary.
 	AfterPost func(intent string)
+	// Actions lists the actions offered on a waiting conversation's Work,
+	// to prompt them in its thread; nil prompts nothing.
+	Actions ActionsFunc
+	// Act takes a prompt's button press for the person who pressed it.
+	Act ActFunc
 }
 
 // Projector publishes conversation replies. A reply is not re-derivable: each
@@ -100,6 +105,9 @@ type Intent struct {
 	// delivery whose caller is gone (tool calls); outcome intents are
 	// re-derived from durable outcomes instead.
 	Durable bool
+	// Blocks lay the message out (a prompt's buttons); they are derived
+	// again on every pass, never stored.
+	Blocks []map[string]any
 }
 
 type intentRecord struct {
@@ -214,7 +222,7 @@ func (p *Projector) Deliver(ctx context.Context, in Intent) (string, error) {
 	if err != nil {
 		return rec.State, err
 	}
-	ts, err := p.o.Client.PostMessage(ctx, Post{Channel: in.Channel, ThreadTS: in.Thread, Text: in.Text, Broadcast: in.Broadcast, Metadata: Marker(in.Work, in.Execution, in.ID)})
+	ts, err := p.o.Client.PostMessage(ctx, Post{Channel: in.Channel, ThreadTS: in.Thread, Text: in.Text, Broadcast: in.Broadcast, Blocks: in.Blocks, Metadata: Marker(in.Work, in.Execution, in.ID)})
 	var limit *RateLimitError
 	var refused *APIError
 	switch {
@@ -356,6 +364,11 @@ func (p *Projector) Converge(ctx context.Context, limit int) (ProjectionResult, 
 	if err != nil {
 		return res, err
 	}
+	prompts, err := p.promptIntents(ctx)
+	if err != nil {
+		return res, err
+	}
+	intents = append(intents, prompts...)
 	var durable []Intent
 	if err := p.transact(ctx, func(tx storage.Tx) error {
 		rows, err := tx.List(p.ns, "intent/")

@@ -40,6 +40,7 @@ var MethodScopes = map[string][]string{
 	"conversations.history": {"channels:history", "groups:history"},
 	"conversations.replies": {"channels:history", "groups:history"},
 	"chat.postMessage":      {"chat:write"},
+	"chat.postEphemeral":    {"chat:write"},
 	"users.conversations":   {"channels:read", "groups:read"},
 	"auth.test":             {},
 }
@@ -59,8 +60,10 @@ func Manifest(name string) map[string]any {
 		"features":     map[string]any{"bot_user": map[string]any{"display_name": name, "always_online": true}},
 		"oauth_config": map[string]any{"scopes": map[string]any{"bot": BotScopes}},
 		"settings": map[string]any{
-			"event_subscriptions":    map[string]any{"bot_events": BotEvents},
-			"interactivity":          map[string]any{"is_enabled": false},
+			"event_subscriptions": map[string]any{"bot_events": BotEvents},
+			// Interactivity carries a prompt's button presses, over Socket
+			// Mode, so it needs no request URL.
+			"interactivity":          map[string]any{"is_enabled": true},
 			"org_deploy_enabled":     false,
 			"socket_mode_enabled":    true,
 			"token_rotation_enabled": false,

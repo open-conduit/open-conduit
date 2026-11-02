@@ -48,7 +48,7 @@ In practice the `human` entry sits in the same scope as your GitHub or Slack age
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `responders` | `["operator:local"]` | Who may answer, each `kind:id`: `operator:local` is you at the TUI or CLI, and `github:<login>` is a GitHub user answering in a comment (see [Answering from GitHub](#answering-from-github)). A bare kind, such as `github`, is anyone of that kind. An answer from anyone else is refused. |
+| `responders` | `["operator:local"]` | Who may answer, each `kind:id`: `operator:local` is you at the TUI or CLI, `github:<login>` is a GitHub user answering in a comment (see [Answering from GitHub](#answering-from-github)), and `slack:<user id>` is a Slack user pressing a button (see [Answering from Slack](#answering-from-slack)). A bare kind, such as `github`, is anyone of that kind. An answer from anyone else is refused. |
 | `surfaces` | `["tui"]` | Where the question is shown. The TUI is the only surface so far. |
 | `gates` | none | Operations that need a person's approval before they run (see [Approval gates](#approval-gates)). |
 
@@ -104,4 +104,14 @@ The GitHub extension hands the comment to Open Conduit as its author, `github:<l
 
 A taken answer gets a 👍 reaction on the comment, and a refused one (a login that isn't a responder, an answer that isn't an option, a question already answered) gets 😕. The extension can only vouch for GitHub logins: a comment can never answer as `operator:local` or as anyone on another surface. Editing a comment answers nothing.
 
-Answering from Slack, a timeout that escalates to someone else rather than refusing, and gates on route or kind transitions rather than operations are not built yet.
+## Answering from Slack
+
+When the Work is a Slack conversation, the question or approval request is posted in its thread with a button per option, such as **approve** and **refuse**. Pressing one answers as `slack:<your user id>`, which the `human` entry checks against the responders, and Slack shows you, and only you, whether it was taken. List the Slack user IDs you trust (a member ID such as `U0123ABCD`, from a profile's **Copy member ID**):
+
+```json
+{"operations": ["deploy.*"], "responders": ["slack:U0123ABCD", "operator:local"]}
+```
+
+A question that takes free text, with no options, has no buttons; answer it from the TUI, the web view or the CLI. The buttons work only with Socket Mode, the default receiver, and the Slack app needs **Interactivity** turned on (apps created by `init slack` from now on have it).
+
+A timeout that escalates to someone else rather than refusing, and gates on route or kind transitions rather than operations, are not built yet.
