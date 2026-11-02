@@ -83,15 +83,15 @@ func (e *toolsEnv) putScope(id domain.ID, ext string) {
 
 func (e *toolsEnv) compose() {
 	t := e.t
-	e.agent = &schedulerExecutor{caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}
-	e.agent.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	e.agent = &schedulerExecutor{Caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}
+	e.agent.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		e.mu.Lock()
 		e.tokens[r.Execution.ID] = r.Context.ToolbeltToken
 		e.mu.Unlock()
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
-		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff}}}, nil
 	}
 	e.hold = gh.NewHoldExecutor()
 	e.hold.Now = e.clock.Now

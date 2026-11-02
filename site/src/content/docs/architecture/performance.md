@@ -99,7 +99,7 @@ The parts of an idle pass that read history are measured against retained histor
 
 ### Measurements
 
-Not measured. [`TestConcurrentFirstOpen`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store_test.go) (4 concurrent opens) and [`TestProductionSchedulerCapacityAcrossInstances`](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_test.go) prove correctness under competing handles, not timing.
+Not measured. [`TestConcurrentFirstOpen`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store_test.go) (4 concurrent opens) and [`TestProductionSchedulerCapacityAcrossInstances`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/scheduler_test.go) prove correctness under competing handles, not timing.
 
 ### To measure
 

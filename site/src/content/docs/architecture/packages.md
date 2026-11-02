@@ -14,6 +14,7 @@ This page records decision B01: the ownership and import rules for every Go pack
 | `extension/inproc` | The in-process extension contract: the optional surfaces an extension inside the daemon offers and the host services it gets | Public packages only |
 | `conformance` | Reusable public contract suites, fixtures, fake clock, synchronization barriers and reference doubles | Public packages above; no production implementations |
 | `internal/runtime` | Durable event acceptance, observation diffing, routing serialization, scheduling, leases, retry, wait/wake, causation limits | Public packages above except `conformance` |
+| `internal/runtime/runtimetest` | Test fixtures driving the production runtime over SQLite in a temp dir as `conformance.RuntimeDriver`s, used by the runtime's own tests and `integration/` | Public packages, `conformance` (never `conformance/reference`), `internal/runtime` and SQLite; imported by tests only |
 | `internal/storage/sqlite` | SQLite transactions, migrations and durability | `storage`, `domain` |
 | `internal/artifacts` | Streaming local logs/outputs and retention implementation | `storage`, `domain` |
 | `internal/backup` | Local SQLite/artifact snapshot composition, manifest verification and isolated restore | `storage`, `domain`, `internal/storage/sqlite`, `internal/artifacts`; never runtime or adapters |

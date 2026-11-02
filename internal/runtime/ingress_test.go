@@ -1,4 +1,4 @@
-package integration_test
+package runtime_test
 
 import (
 	"bufio"

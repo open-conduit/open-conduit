@@ -195,7 +195,7 @@ The config is strict and validated at load. Every field is optional:
   - config validation, and the playbook a binding that names none starts on
   - no code-host or issue terms in the executor's sources
   - the ported parser tests (parse, limits, reset text, call counts, `perTurn`)
-- [`TestProductionSchedulerResultRetryHint`](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_test.go) checks that a result hint delays the retry and leaves no uncertain hold.
+- [`TestProductionSchedulerResultRetryHint`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/scheduler_test.go) checks that a result hint delays the retry and leaves no uncertain hold.
 - [`TestDaemonClaudeCodeExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) runs against the composed daemon:
   - a fake claude drives the real `os mcp` (initialize, tools/list, read_context, wait) and parks
   - the wake resumes the same session

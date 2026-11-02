@@ -63,7 +63,7 @@ Releases are cut by hand from the release workflow (Actions, release, Run workfl
 The core knows nothing about GitHub, Slack, Git or Claude. Decision B01 in [package boundaries](https://open-conduit.github.io/open-conduit/architecture/packages/) sets out who may import what:
 
 - `domain`, `extension`, `storage`, `observability` and `protocol` are the public contracts.
-- `internal/runtime` uses only the public contracts. It never imports an extension, executor, SQLite, config or management code.
+- `internal/runtime` uses only the public contracts. It never imports an extension, executor, SQLite, config or management code. Its tests may run it over SQLite through `internal/runtime/runtimetest`, which production code can't import.
 - Extensions (`extensions/<name>`) and executors (`executors/<name>`) use the public contracts and `client`, never the runtime, SQLite or each other. The one exception is the shared tracker kit, which Linear, Jira and Bitbucket may use.
 - `internal/bootstrap` and `cmd/open-conduit` are the composition root that wires implementations together.
 
@@ -98,6 +98,7 @@ An extension runs with the operator's privileges either way. The host enforces t
 - **No real time.** Use the explicitly advanced `conformance.Clock` (`conformance.NewClock()`), or inject a `Now func() time.Time` where a component takes one. Don't wait for timers with sleeps. Wait on a barrier or a condition with a deadline instead.
 - **No shared state.** Use `t.TempDir()` for config, state and workspaces. Never read or write the operator's `~/.config/open-conduit` or `~/.local/state/open-conduit`, or Open Supervisor's files. Stop every process a test starts, and check that none is left behind.
 - **Race detector.** `make check` runs everything with `-race`. A flaky test is a bug, so fix it rather than retrying.
+- **Runtime tests.** `go test ./internal/runtime/...` runs the shared runtime suite (`conformance.RunRuntime`) and the router, scheduler, wait, timer, causal and ingress cases against the production runtime on SQLite in a temp dir with `conformance.Clock`, in seconds. `internal/runtime/runtimetest` has the fixtures. Put a case there when it only exercises runtime semantics.
 - **Real daemon tests.** `integration/` starts the real daemon on SQLite, drives it through the CLI and client, and kills and restarts it (`make drill`). Add a case there when a change crosses the daemon boundary.
 
 ## Secrets in fixtures

@@ -155,7 +155,7 @@ Workspaces are made by executor acquisition and removed by host reconcile, so ag
 - [Sandboxed binding tests](https://github.com/open-conduit/open-conduit/blob/main/internal/config/config_test.go) (`TestSandboxedResource`, `TestSandboxBinding`): the executor's requested mode (or the resource default) reaching the provider's check and a refusal reported at `resource/config`.
   - the ported [stray-process test](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/kill_unix_test.go)
 - [Shell broker test](https://github.com/open-conduit/open-conduit/blob/main/executors/shell/shell_test.go): workspace cwd, layer order and reserved-name drop, the result/log explanation and structured failures.
-- [Scheduler hook test](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_resources_test.go): the broker is passed opaquely, a nil broker without a resource, and a binding failure fails the attempt before any executor call.
+- [Scheduler hook test](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/scheduler_resources_test.go): the broker is passed opaquely, a nil broker without a resource, and a binding failure fails the attempt before any executor call.
 - [Composed daemon test](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_workspace_test.go), using local bare repositories only:
   - a fresh run at the remote head with the copied `.env` layer and setup survives a daemon SIGKILL by adoption (one attempt), and its worktree is removed and deregistered after success
   - a failed fresh run is retained and reported by doctor

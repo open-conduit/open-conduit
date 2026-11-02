@@ -1,4 +1,4 @@
-package integration_test
+package runtime_test
 
 import (
 	"bufio"
@@ -25,102 +25,6 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// Wait fixtures use the same real claim/Run/recovery implementation as the
-// scheduler cases. Resume is a controllable executor operation, not a storage
-// shortcut or a reference coordinator.
-type waitExecutor struct {
-	*schedulerExecutor
-	resumeRequests []extension.RunRequest
-}
-
-func (e *waitExecutor) Resume(_ context.Context, r extension.RunRequest, p domain.Payload) (extension.RunHandle, error) {
-	if err := r.PersistRecovery(p); err != nil {
-		return nil, err
-	}
-	e.mu.Lock()
-	defer e.mu.Unlock()
-	e.resumes = append(e.resumes, r.Execution.ID)
-	e.resumeRequests = append(e.resumeRequests, r)
-	h := e.handles[r.Execution.ID]
-	if h == nil {
-		h = &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}
-	}
-	return h, nil
-}
-
-type waitDriver struct {
-	*schedulerDriver
-	timers             *runtime.Timers
-	causal             *runtime.Causal
-	executorWithResume *waitExecutor
-}
-
-func (d *waitDriver) Wait(ref domain.LeaseRef, w domain.Wait, resume bool) error {
-	return d.scheduler.Wait(context.Background(), ref, w, resume)
-}
-func (d *waitDriver) Wake(id domain.ID) error { return d.scheduler.Wake(context.Background(), id) }
-func (d *waitDriver) Derive(e domain.Event) error {
-	_, _, err := d.causal.Derive(context.Background(), "routing-scope", e.CausationID, e)
-	return err
-}
-func (d *waitDriver) Retry(work, event domain.ID, manual bool) error {
-	if event == "" && !manual {
-		var found domain.Timer
-		err := d.store.Transact(context.Background(), storage.Guard{Now: d.clock.Now()}, func(tx storage.Tx) error {
-			timers, err := tx.ListTimers()
-			if err != nil {
-				return err
-			}
-			for _, timer := range timers {
-				if timer.Event.WorkID == work && timer.Event.Type == "core.retry.due" {
-					found = timer
-					return nil
-				}
-			}
-			return storage.ErrNotFound
-		})
-		if err != nil {
-			return err
-		}
-		if _, err = d.timers.Fire(context.Background(), found.ID, found.Revision, nil); err != nil {
-			return err
-		}
-		event = found.Event.ID
-	}
-	return d.scheduler.ProcessRetry(context.Background(), event)
-}
-func waitFixture(t *testing.T, mode string, o conformance.RuntimeOptions) conformance.RuntimeFixture {
-	t.Helper()
-	f, baseExecutor := schedulerFixture(t, mode, o)
-	base := f.Driver.(*schedulerDriver)
-	executor := &waitExecutor{schedulerExecutor: baseExecutor}
-	options := base.options
-	options.Executors = map[string]extension.Executor{"fixture": executor}
-	options.CausalLimits = runtime.CausalLimits{MaxDepth: o.MaxDepth, PerMinute: o.PerMinute}
-	makeDriver := func() *waitDriver {
-		s, err := runtime.NewScheduler(f.Store, f.Clock.Now, base.router, options)
-		if err != nil {
-			t.Fatal(err)
-		}
-		timers, err := runtime.NewTimers(f.Store, f.Clock.Now, runtime.TimerOptions{CausalLimits: options.CausalLimits})
-		if err != nil {
-			t.Fatal(err)
-		}
-		causal, err := runtime.NewCausal(f.Store, f.Clock.Now, options.CausalLimits)
-		if err != nil {
-			t.Fatal(err)
-		}
-		return &waitDriver{schedulerDriver: &schedulerDriver{routingDriver: base.routingDriver, scheduler: s, executor: baseExecutor, options: options}, timers: timers, causal: causal, executorWithResume: executor}
-	}
-	f.Driver = makeDriver()
-	f.Restart = func() conformance.RuntimeDriver { return makeDriver() }
-	return f
-}
-func waitOptions(resume bool) conformance.RuntimeOptions {
-	o := routingOptions(routingHandlerFunc(routingDecision), "queue")
-	o.Capabilities = domain.Capabilities{Resume: resume}
-	return o
-}
 func TestProductionRuntimeAllSharedCases(t *testing.T) {
 	for _, mode := range []string{"persistent", "reopen"} {
 		t.Run(mode, func(t *testing.T) {
@@ -249,9 +153,9 @@ func TestProductionWaitConcurrentWakeExactlyOnce(t *testing.T) {
 		t.Fatal(err)
 	}
 	d := f.Driver.(*waitDriver)
-	d.executorWithResume.mu.Lock()
-	requests := append([]extension.RunRequest(nil), d.executorWithResume.resumeRequests...)
-	d.executorWithResume.mu.Unlock()
+	d.ExecutorWithResume.Mu.Lock()
+	requests := append([]extension.RunRequest(nil), d.ExecutorWithResume.ResumeRequests...)
+	d.ExecutorWithResume.Mu.Unlock()
 	if len(requests) != 1 || requests[0].Trigger.ID != "first" || requests[0].Execution.TriggerID != "trigger/race" || next.ExecutionID != ref.ExecutionID {
 		t.Fatalf("lost immutable trigger or duplicate resume: %+v", requests)
 	}
@@ -287,7 +191,7 @@ func TestProductionResumeRetainsCausalDepth(t *testing.T) {
 		d := f.Driver.(*waitDriver)
 		wake := routingEvent(f, fmt.Sprintf("wake-%d", n), &key)
 		wake.WorkID = work
-		accepted, _, err := d.causal.Derive(context.Background(), "routing-scope", parent, wake)
+		accepted, _, err := d.Causal.Derive(context.Background(), "routing-scope", parent, wake)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -298,7 +202,7 @@ func TestProductionResumeRetainsCausalDepth(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		state, err := d.scheduler.InspectAttempt(context.Background(), ref.ExecutionID)
+		state, err := d.Scheduler.InspectAttempt(context.Background(), ref.ExecutionID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -311,7 +215,7 @@ func TestProductionResumeRetainsCausalDepth(t *testing.T) {
 		}
 		if n == 1 {
 			emitted := routingEvent(f, "after-first-resume", nil)
-			a, _, err := d.causal.Emit(context.Background(), ref, emitted)
+			a, _, err := d.Causal.Emit(context.Background(), ref, emitted)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -323,7 +227,7 @@ func TestProductionResumeRetainsCausalDepth(t *testing.T) {
 		f.Driver = f.Restart()
 	}
 	d := f.Driver.(*waitDriver)
-	if _, _, err := d.causal.Emit(context.Background(), ref, routingEvent(f, "too-deep-after-resume", nil)); !errors.Is(err, runtime.ErrCausalRejected) {
+	if _, _, err := d.Causal.Emit(context.Background(), ref, routingEvent(f, "too-deep-after-resume", nil)); !errors.Is(err, runtime.ErrCausalRejected) {
 		t.Fatalf("resuming reset depth bound: %v", err)
 	}
 }
@@ -347,13 +251,13 @@ func TestProductionDependencySubscriptionBackscanAndReplay(t *testing.T) {
 	}
 	d := f.Driver.(*waitDriver)
 	request := runtime.SubscriptionRequest{ID: "dependency-subscription", WaitID: wait.ID, SourceScopeID: "routing-scope", SourceKey: source, Types: []string{"fixture.ready"}, TargetKey: target, AliasType: "fixture.alias"}
-	if err := d.scheduler.Subscribe(ctx, request); err != nil {
+	if err := d.Scheduler.Subscribe(ctx, request); err != nil {
 		t.Fatal(err)
 	}
 	f.Driver = f.Restart()
 	d = f.Driver.(*waitDriver)
 	for range 2 {
-		if err := d.scheduler.ReconcileSubscriptions(ctx, 10); err != nil {
+		if err := d.Scheduler.ReconcileSubscriptions(ctx, 10); err != nil {
 			t.Fatal(err)
 		}
 	}
@@ -410,7 +314,7 @@ func TestProductionDependencySubscriptionCancelledWaitEmitsNothing(t *testing.T)
 		t.Fatal(err)
 	}
 	d := f.Driver.(*waitDriver)
-	if err := d.scheduler.Subscribe(ctx, runtime.SubscriptionRequest{ID: "cancel-sub", WaitID: w.ID, SourceScopeID: "routing-scope", SourceKey: source, Types: []string{"fixture.ready"}, TargetKey: target, AliasType: "fixture.alias"}); err != nil {
+	if err := d.Scheduler.Subscribe(ctx, runtime.SubscriptionRequest{ID: "cancel-sub", WaitID: w.ID, SourceScopeID: "routing-scope", SourceKey: source, Types: []string{"fixture.ready"}, TargetKey: target, AliasType: "fixture.alias"}); err != nil {
 		t.Fatal(err)
 	}
 	if err := d.Cancel(work); err != nil {
@@ -423,7 +327,7 @@ func TestProductionDependencySubscriptionCancelledWaitEmitsNothing(t *testing.T)
 	}
 	f.Driver = f.Restart()
 	d = f.Driver.(*waitDriver)
-	if err := d.scheduler.ReconcileSubscriptions(ctx, 10); err != nil {
+	if err := d.Scheduler.ReconcileSubscriptions(ctx, 10); err != nil {
 		t.Fatal(err)
 	}
 	routingRead(t, f, func(tx storage.Tx) error {
@@ -457,7 +361,7 @@ func TestProductionDependencySubscriptionRequiresCrossScopeAuthorization(t *test
 	observed := routingEvent(f, "cross-scope-ready", &source)
 	observed.Type = "fixture.ready"
 	d := f.Driver.(*waitDriver)
-	if _, _, err := d.ingress.Accept(ctx, "source-scope", observed); err != nil {
+	if _, _, err := d.Ingress.Accept(ctx, "source-scope", observed); err != nil {
 		t.Fatal(err)
 	}
 	w := domain.Wait{ID: "cross-scope-wait", AfterSequence: 1, Match: domain.EventMatch{Keys: []domain.CorrelationKey{target}, Types: []string{"fixture.alias"}}}
@@ -465,10 +369,10 @@ func TestProductionDependencySubscriptionRequiresCrossScopeAuthorization(t *test
 		t.Fatal(err)
 	}
 	request := runtime.SubscriptionRequest{ID: "cross-scope-sub", WaitID: w.ID, SourceScopeID: "source-scope", SourceKey: source, Types: []string{"fixture.ready"}, TargetKey: target, AliasType: "fixture.alias"}
-	if err := d.scheduler.Subscribe(ctx, request); !errors.Is(err, extension.ErrUnauthorized) {
+	if err := d.Scheduler.Subscribe(ctx, request); !errors.Is(err, extension.ErrUnauthorized) {
 		t.Fatalf("cross-scope alias without policy: %v", err)
 	}
-	options := d.options
+	options := d.Options
 	var calls int
 	mutateAncestor := true
 	options.AuthorizeAlias = func(ctx context.Context, a runtime.AliasAuthorization) error {
@@ -491,7 +395,7 @@ func TestProductionDependencySubscriptionRequiresCrossScopeAuthorization(t *test
 			return nil
 		})
 	}
-	authorized, err := runtime.NewScheduler(f.Store, f.Clock.Now, d.router, options)
+	authorized, err := runtime.NewScheduler(f.Store, f.Clock.Now, d.Router, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -542,7 +446,7 @@ func TestProductionWaitWakeCommitSurvivesProcessKill(t *testing.T) {
 	work, ref, key := waitForWork(t, f, "wake-crash", false)
 	registerWait(t, f, ref, "wake-crash-wait", key, false, 1)
 	requireAccept(t, f, "wake-before-crash", &key)
-	path := f.Store.(*routingReopening).path
+	path := f.Store.(*routingReopening).Path
 	cmd := exec.Command(os.Args[0], "-test.run=^TestProductionWaitWakeCrashHelper$")
 	cmd.Env = append(os.Environ(), "CONDUIT_WAIT_CRASH_DB="+path)
 	input, err := cmd.StdinPipe()
@@ -588,7 +492,7 @@ func TestProductionWaitWakeCommitSurvivesProcessKill(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	inputs, err := d.router.PendingInputs(context.Background(), work)
+	inputs, err := d.Router.PendingInputs(context.Background(), work)
 	if err != nil || len(inputs) != 1 || inputs[0].EventID != "wake-before-crash" {
 		t.Fatalf("restart duplicated/lost wake input: %+v %v", inputs, err)
 	}
@@ -671,7 +575,7 @@ func TestProductionIndependentWakesDoNotDeepenTheChain(t *testing.T) {
 		ref = next
 		f.Driver = f.Restart()
 	}
-	audits, err := f.Driver.(*waitDriver).causal.Rejections(context.Background())
+	audits, err := f.Driver.(*waitDriver).Causal.Rejections(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -704,7 +608,7 @@ func waitLoopFixture(t *testing.T, name string, trace func(f conformance.Runtime
 		id := domain.ID(fmt.Sprintf("%s-wait-%d", name, n))
 		registerWait(t, f, ref, id, key, true, boundary)
 		d := f.Driver.(*waitDriver)
-		state, err := d.scheduler.InspectAttempt(context.Background(), ref.ExecutionID)
+		state, err := d.Scheduler.InspectAttempt(context.Background(), ref.ExecutionID)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -714,7 +618,7 @@ func waitLoopFixture(t *testing.T, name string, trace func(f conformance.Runtime
 		}
 		wake := routingEvent(f, fmt.Sprintf("%s-wake-%d", name, n), &key)
 		wake.WorkID = work
-		if _, _, err = d.causal.Derive(context.Background(), "routing-scope", parent, wake); err != nil {
+		if _, _, err = d.Causal.Derive(context.Background(), "routing-scope", parent, wake); err != nil {
 			t.Fatal(err)
 		}
 		if trace != nil {
@@ -744,7 +648,7 @@ func waitLoopFixture(t *testing.T, name string, trace func(f conformance.Runtime
 func TestProductionRefusedWakeHoldsTheWork(t *testing.T) {
 	f, work, wait, _ := waitLoopFixture(t, "self-loop", nil)
 	d := f.Driver.(*waitDriver)
-	audits, err := d.causal.Rejections(context.Background())
+	audits, err := d.Causal.Rejections(context.Background())
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -776,7 +680,7 @@ func TestProductionRefusedWakeHoldsTheWork(t *testing.T) {
 	if hold.EventID == "" {
 		t.Fatal("hold has no audit Event")
 	}
-	control, err := runtime.NewControl(f.Store, f.Clock.Now, d.router, d.scheduler, d.options.CausalLimits)
+	control, err := runtime.NewControl(f.Store, f.Clock.Now, d.Router, d.Scheduler, d.Options.CausalLimits)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -801,7 +705,7 @@ func TestProductionRefusedWakeHoldsTheWork(t *testing.T) {
 func TestProductionTraceReportsARefusedWake(t *testing.T) {
 	predicted := 0
 	_, _, _, refused := waitLoopFixture(t, "traced-loop", func(f conformance.RuntimeFixture, key domain.CorrelationKey, n int) {
-		tr, err := f.Driver.(*waitDriver).router.Trace(context.Background(), "routing-scope", routingEvent(f, fmt.Sprintf("probe-%d", n), &key), nil)
+		tr, err := f.Driver.(*waitDriver).Router.Trace(context.Background(), "routing-scope", routingEvent(f, fmt.Sprintf("probe-%d", n), &key), nil)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -851,14 +755,14 @@ func TestProductionSubscriptionPollFairnessSurvivesRestart(t *testing.T) {
 		sources[string(scope)] = source
 	}
 	d := f.Driver.(*waitDriver)
-	options := d.options
+	options := d.Options
 	var polled []domain.ID
 	options.AuthorizeAlias = func(_ context.Context, a runtime.AliasAuthorization) error {
 		polled = append(polled, a.SourceScopeID)
 		return nil
 	}
 	makeScheduler := func() *runtime.Scheduler {
-		s, err := runtime.NewScheduler(f.Store, f.Clock.Now, d.router, options)
+		s, err := runtime.NewScheduler(f.Store, f.Clock.Now, d.Router, options)
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -886,7 +790,7 @@ func TestProductionSubscriptionPollFairnessSurvivesRestart(t *testing.T) {
 	source := sources[readyScope]
 	observed := routingEvent(f, "fair-ready", &source)
 	observed.Type = "fixture.ready"
-	if _, _, err := d.ingress.Accept(ctx, domain.ID(readyScope), observed); err != nil {
+	if _, _, err := d.Ingress.Accept(ctx, domain.ID(readyScope), observed); err != nil {
 		t.Fatal(err)
 	}
 	// Recreate the host between every bounded poll: process-local cursors cannot
@@ -917,7 +821,7 @@ func TestProductionResumeCarriesOrderedContextAndRecoveryTrigger(t *testing.T) {
 	if err := d.Wait(ref, domain.Wait{ID: "resume-context-wait", AfterSequence: 1, Match: domain.EventMatch{Keys: []domain.CorrelationKey{key}, Types: []string{"fixture.ready"}}}, true); err != nil {
 		t.Fatal(err)
 	}
-	if _, err := d.scheduler.Recover(ctx, ref.ExecutionID); err == nil {
+	if _, err := d.Scheduler.Recover(ctx, ref.ExecutionID); err == nil {
 		t.Fatal("Recover bypassed an active Wait instead of accepted-event Resume")
 	}
 	ordinary := routingEvent(f, "context-before-wake", &key)
@@ -934,7 +838,7 @@ func TestProductionResumeCarriesOrderedContextAndRecoveryTrigger(t *testing.T) {
 	if err := d.Wake("resume-context-wait"); err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := d.scheduler.Start(ctx, work)
+	resumed, err := d.Scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -950,7 +854,7 @@ func TestProductionResumeCarriesOrderedContextAndRecoveryTrigger(t *testing.T) {
 	}
 	check(resumed.Request)
 	f.Clock.Advance(time.Minute)
-	recovered, err := d.scheduler.Recover(ctx, ref.ExecutionID)
+	recovered, err := d.Scheduler.Recover(ctx, ref.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -958,7 +862,7 @@ func TestProductionResumeCarriesOrderedContextAndRecoveryTrigger(t *testing.T) {
 	if recovered.Lease.ExecutionID != ref.ExecutionID || recovered.Lease.Epoch <= resumed.Lease.Epoch {
 		t.Fatalf("recovery changed resumed attempt: %+v %+v", resumed.Lease, recovered.Lease)
 	}
-	if err = d.scheduler.Observe(ctx, recovered); err != nil {
+	if err = d.Scheduler.Observe(ctx, recovered); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -967,13 +871,13 @@ func TestProductionResumePreservesRemainingExecutionTimeout(t *testing.T) {
 	ctx := context.Background()
 	f := waitFixture(t, "reopen", waitOptions(true))
 	d := f.Driver.(*waitDriver)
-	options := d.options
+	options := d.Options
 	options.Timeout = 30 * time.Second
-	scheduler, err := runtime.NewScheduler(f.Store, f.Clock.Now, d.router, options)
+	scheduler, err := runtime.NewScheduler(f.Store, f.Clock.Now, d.Router, options)
 	if err != nil {
 		t.Fatal(err)
 	}
-	d.scheduler = scheduler
+	d.Scheduler = scheduler
 	work := seedSchedulerWork(t, f, "paused-deadline")
 	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "paused-deadline"}
 	attempt, err := scheduler.Start(ctx, work)
@@ -1009,11 +913,11 @@ func TestProductionResumePreservesRemainingExecutionTimeout(t *testing.T) {
 	if err = d.Wake("deadline-wait-2"); err != nil {
 		t.Fatal(err)
 	}
-	resumed, err = d.scheduler.Start(ctx, work)
+	resumed, err = d.Scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
-	state, err = d.scheduler.InspectAttempt(ctx, resumed.Lease.ExecutionID)
+	state, err = d.Scheduler.InspectAttempt(ctx, resumed.Lease.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1021,11 +925,11 @@ func TestProductionResumePreservesRemainingExecutionTimeout(t *testing.T) {
 		t.Fatalf("restart/repeatedpark restored full timeout: now%s deadline%s", f.Clock.Now(), state.Deadline)
 	}
 	f.Clock.Advance(14 * time.Second)
-	if err = d.scheduler.Timeout(ctx, resumed.Lease); !errors.Is(err, storage.ErrInvalid) {
+	if err = d.Scheduler.Timeout(ctx, resumed.Lease); !errors.Is(err, storage.ErrInvalid) {
 		t.Fatalf("timeout before remaining budget: %v", err)
 	}
 	f.Clock.Advance(time.Second)
-	if err = d.scheduler.Timeout(ctx, resumed.Lease); err != nil {
+	if err = d.Scheduler.Timeout(ctx, resumed.Lease); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -1036,24 +940,24 @@ func TestProductionRegisteredWaitOutcomeAcknowledgementRetainsHistory(t *testing
 	d := f.Driver.(*waitDriver)
 	work := seedSchedulerWork(t, f, "wait-outcome")
 	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "wait-outcome"}
-	attempt, err := d.scheduler.Start(ctx, work)
+	attempt, err := d.Scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
 	tokens := uint64(17)
 	cost := 0.25
 	result := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeWaiting, Summary: "registered suspension", Data: domain.Payload{Schema: "fixture.wait-result.v1", Data: []byte(`{"suspended":true}`)}}, Usage: extension.Usage{OutputTokens: &tokens, Cost: &cost, Currency: "USD"}, Artifacts: []domain.ArtifactRef{{ID: "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa", Size: 10, MediaType: "text/plain"}}}
-	if err = d.scheduler.Complete(ctx, attempt.Lease, result); !errors.Is(err, extension.ErrUnsupported) {
+	if err = d.Scheduler.Complete(ctx, attempt.Lease, result); !errors.Is(err, extension.ErrUnsupported) {
 		t.Fatalf("bare waiting outcome bypassed predicate registration: %v", err)
 	}
 	registerWait(t, f, attempt.Lease, "outcome-wait", key, true, 1)
 	// The old authority stays revoked; only the trusted host's observation of the
 	// already registered suspension may append result metadata for this epoch.
-	attempt.Handle = &schedulerHandle{result: result}
-	if err = d.scheduler.Observe(ctx, attempt); err != nil {
+	attempt.Handle = &schedulerHandle{Result: result}
+	if err = d.Scheduler.Observe(ctx, attempt); err != nil {
 		t.Fatal(err)
 	}
-	state, err := d.scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
+	state, err := d.Scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1081,26 +985,26 @@ func TestProductionRegisteredWaitOutcomeAcknowledgementRetainsHistory(t *testing
 		}
 		return nil
 	})
-	if _, _, err = d.causal.Emit(ctx, attempt.Lease, routingEvent(f, "stale-emission", nil)); !errors.Is(err, storage.ErrLeaseLost) {
+	if _, _, err = d.Causal.Emit(ctx, attempt.Lease, routingEvent(f, "stale-emission", nil)); !errors.Is(err, storage.ErrLeaseLost) {
 		t.Fatalf("waiting metadata acknowledgement revived lease: %v", err)
 	}
 	requireAccept(t, f, "outcome-wake", &key)
 	if err = d.Wake("outcome-wait"); err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := d.scheduler.Start(ctx, work)
+	resumed, err := d.Scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
-	before, err := d.scheduler.InspectAttempt(ctx, resumed.Lease.ExecutionID)
+	before, err := d.Scheduler.InspectAttempt(ctx, resumed.Lease.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	result.Outcome.Summary = "late old epoch"
-	if err = d.scheduler.Complete(ctx, attempt.Lease, result); !errors.Is(err, storage.ErrLeaseLost) {
+	if err = d.Scheduler.Complete(ctx, attempt.Lease, result); !errors.Is(err, storage.ErrLeaseLost) {
 		t.Fatalf("old wait result overwrote resumed epoch: %v", err)
 	}
-	after, err := d.scheduler.InspectAttempt(ctx, resumed.Lease.ExecutionID)
+	after, err := d.Scheduler.InspectAttempt(ctx, resumed.Lease.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1117,7 +1021,7 @@ func TestProductionTerminalWaitResultKeepsBackupVisibleArtifacts(t *testing.T) {
 	tokens := uint64(3)
 	result := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeWaiting, Summary: "terminal suspension", Data: domain.Payload{Schema: "fixture.wait-result.v1", Data: []byte(`{"suspended":true}`)}}, Usage: extension.Usage{InputTokens: &tokens}, Artifacts: []domain.ArtifactRef{{ID: "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb", Size: 11, MediaType: "text/plain"}}}
 	wait := domain.Wait{ID: "terminal-result-wait", AfterSequence: 1, Match: domain.EventMatch{Keys: []domain.CorrelationKey{key}, Types: []string{"fixture.changed"}}}
-	if err := d.scheduler.WaitWithResult(ctx, ref, wait, false, result); err != nil {
+	if err := d.Scheduler.WaitWithResult(ctx, ref, wait, false, result); err != nil {
 		t.Fatal(err)
 	}
 	inspect := func() {
@@ -1146,25 +1050,25 @@ func TestProductionTerminalWaitResultKeepsBackupVisibleArtifacts(t *testing.T) {
 	more := result
 	output := uint64(9)
 	more.Usage.OutputTokens = &output
-	if err := d.scheduler.Complete(ctx, ref, more); err != nil {
+	if err := d.Scheduler.Complete(ctx, ref, more); err != nil {
 		t.Fatal(err)
 	}
-	state, err := d.scheduler.InspectAttempt(ctx, ref.ExecutionID)
+	state, err := d.Scheduler.InspectAttempt(ctx, ref.ExecutionID)
 	if err != nil || !reflect.DeepEqual(state.Result, &more) {
 		t.Fatalf("same terminal result measurement acknowledgement: %+v %v", state.Result, err)
 	}
 	changed := result
 	changed.Artifacts = []domain.ArtifactRef{{ID: "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc", Size: 12, MediaType: "text/plain"}}
-	if err = d.scheduler.Complete(ctx, ref, changed); !errors.Is(err, storage.ErrConflict) {
+	if err = d.Scheduler.Complete(ctx, ref, changed); !errors.Is(err, storage.ErrConflict) {
 		t.Fatalf("terminal wait references changed after release: %v", err)
 	}
 	changed = result
 	changed.Outcome.Summary = "changed terminal outcome"
-	if err = d.scheduler.Complete(ctx, ref, changed); !errors.Is(err, storage.ErrConflict) {
+	if err = d.Scheduler.Complete(ctx, ref, changed); !errors.Is(err, storage.ErrConflict) {
 		t.Fatalf("terminal waiting outcome rewritten: %v", err)
 	}
 	inspect()
-	state, err = d.scheduler.InspectAttempt(ctx, ref.ExecutionID)
+	state, err = d.Scheduler.InspectAttempt(ctx, ref.ExecutionID)
 	if err != nil || !reflect.DeepEqual(state.Result, &more) {
 		t.Fatalf("rejected terminal change altered measurements: %+v %v", state.Result, err)
 	}
@@ -1179,12 +1083,12 @@ func TestProductionResumedRunReportsActiveSegments(t *testing.T) {
 	d := f.Driver.(*waitDriver)
 	work := seedSchedulerWork(t, f, "segments")
 	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "segments"}
-	attempt, err := d.scheduler.Start(ctx, work)
+	attempt, err := d.Scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
 	started := f.Clock.Now()
-	initial, err := d.scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
+	initial, err := d.Scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1208,7 +1112,7 @@ func TestProductionResumedRunReportsActiveSegments(t *testing.T) {
 	if err = d.Wake("segments-wait"); err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := d.scheduler.Start(ctx, work)
+	resumed, err := d.Scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1220,7 +1124,7 @@ func TestProductionResumedRunReportsActiveSegments(t *testing.T) {
 		t.Fatalf("running resumed run: %+v active %s", r.Segments, r.ActiveTime)
 	}
 	f.Clock.Advance(5 * time.Second)
-	if err = d.scheduler.Complete(ctx, resumed.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+	if err = d.Scheduler.Complete(ctx, resumed.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
 		t.Fatal(err)
 	}
 	r := run()
@@ -1247,7 +1151,7 @@ func TestProductionResumedRunSumsSegmentUsage(t *testing.T) {
 	d := f.Driver.(*waitDriver)
 	work := seedSchedulerWork(t, f, "segment-usage")
 	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "segment-usage"}
-	attempt, err := d.scheduler.Start(ctx, work)
+	attempt, err := d.Scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1256,7 +1160,7 @@ func TestProductionResumedRunSumsSegmentUsage(t *testing.T) {
 	}
 	wait := domain.Wait{ID: "segment-usage-wait", AfterSequence: 1, Match: domain.EventMatch{Keys: []domain.CorrelationKey{key}, Types: []string{"fixture.changed"}}}
 	parked := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeWaiting, Summary: "parked"}, Usage: usage(100, 865, 0.25)}
-	if err = d.scheduler.WaitWithResult(ctx, attempt.Lease, wait, true, parked); err != nil {
+	if err = d.Scheduler.WaitWithResult(ctx, attempt.Lease, wait, true, parked); err != nil {
 		t.Fatal(err)
 	}
 	run := func() runtime.Run {
@@ -1280,7 +1184,7 @@ func TestProductionResumedRunSumsSegmentUsage(t *testing.T) {
 	if err = d.Wake("segment-usage-wait"); err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := d.scheduler.Start(ctx, work)
+	resumed, err := d.Scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1288,7 +1192,7 @@ func TestProductionResumedRunSumsSegmentUsage(t *testing.T) {
 		t.Fatalf("resume started a new attempt: %s", resumed.Lease.ExecutionID)
 	}
 	check("resumed", 100, 865, 0.25)
-	if err = d.scheduler.Complete(ctx, resumed.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: usage(20, 499, 0.125)}); err != nil {
+	if err = d.Scheduler.Complete(ctx, resumed.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: usage(20, 499, 0.125)}); err != nil {
 		t.Fatal(err)
 	}
 	check("finished", 120, 1364, 0.375)
@@ -1302,22 +1206,22 @@ func TestProductionRecoveredRunSegmentsMatchTheDeadlineBudget(t *testing.T) {
 	f := waitFixture(t, "reopen", waitOptions(true))
 	d := f.Driver.(*waitDriver)
 	work := seedSchedulerWork(t, f, "segments-recover")
-	attempt, err := d.scheduler.Start(ctx, work)
+	attempt, err := d.Scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
 	started := f.Clock.Now()
-	before, err := d.scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
+	before, err := d.Scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Clock.Advance(d.options.LeaseDuration + 20*time.Second)
-	recovered, err := d.scheduler.Recover(ctx, attempt.Lease.ExecutionID)
+	f.Clock.Advance(d.Options.LeaseDuration + 20*time.Second)
+	recovered, err := d.Scheduler.Recover(ctx, attempt.Lease.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
 	recoveredAt := f.Clock.Now()
-	after, err := d.scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
+	after, err := d.Scheduler.InspectAttempt(ctx, attempt.Lease.ExecutionID)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1325,7 +1229,7 @@ func TestProductionRecoveredRunSegmentsMatchTheDeadlineBudget(t *testing.T) {
 		t.Fatalf("recovery moved the deadline: %s -> %s", before.Deadline, after.Deadline)
 	}
 	f.Clock.Advance(5 * time.Second)
-	if err = d.scheduler.Complete(ctx, recovered.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+	if err = d.Scheduler.Complete(ctx, recovered.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
 		t.Fatal(err)
 	}
 	var r runtime.Run
@@ -1359,7 +1263,7 @@ func TestProductionPreUpgradeParkedRunStaysSegmentless(t *testing.T) {
 	d := f.Driver.(*waitDriver)
 	work := seedSchedulerWork(t, f, "segments-upgrade")
 	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "segments-upgrade"}
-	attempt, err := d.scheduler.Start(ctx, work)
+	attempt, err := d.Scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -1392,12 +1296,12 @@ func TestProductionPreUpgradeParkedRunStaysSegmentless(t *testing.T) {
 	if err = d.Wake("segments-upgrade-wait"); err != nil {
 		t.Fatal(err)
 	}
-	resumed, err := d.scheduler.Start(ctx, work)
+	resumed, err := d.Scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.Clock.Advance(5 * time.Second)
-	if err = d.scheduler.Complete(ctx, resumed.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+	if err = d.Scheduler.Complete(ctx, resumed.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
 		t.Fatal(err)
 	}
 	var r runtime.Run
@@ -1451,7 +1355,7 @@ func TestProductionWaitContextFollowsTheRoutes(t *testing.T) {
 		}
 		return nil
 	})
-	resumed, err := d.scheduler.Start(ctx, work)
+	resumed, err := d.Scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
