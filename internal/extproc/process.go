@@ -264,12 +264,13 @@ func Environment(environ []string) []string { return sanitized(environ) }
 var HostExecutable = os.Executable
 
 // Argv resolves the manifest's command: the host's own executable for one
-// run on the host (protocol.Manifest.RunsOnHost); otherwise a relative
+// run on the host (protocol.Manifest.RunsOnHost), never a file the package
+// ships under that name; otherwise a relative
 // argv[0] that names a path, or a file inside the extension directory, is
 // resolved against it.
 func (f Found) Argv() []string {
 	argv := append([]string(nil), f.Manifest.Command...)
-	if len(argv) > 0 && argv[0] == protocol.HostCommand && !fileExists(filepath.Join(f.Dir, argv[0])) {
+	if f.Manifest.RunsOnHost() {
 		if self, err := HostExecutable(); err == nil {
 			argv[0] = self
 		}

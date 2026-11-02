@@ -144,8 +144,8 @@ func TestDiagnoseStartFailures(t *testing.T) {
 
 // A package whose command is the host's own multicall (`open-conduit
 // extension-run <name>`, #428) is a manifest with no executable: it reads
-// as a package, and its command resolves to the host's executable, unless
-// the package ships a file of that name itself.
+// as a package, and its command resolves to the host's executable, even
+// when the package ships a file of that name (which nothing would check).
 func TestHostRunPackage(t *testing.T) {
 	dir := filepath.Join(t.TempDir(), "hosted")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -176,7 +176,44 @@ func TestHostRunPackage(t *testing.T) {
 	if err := os.WriteFile(local, []byte("#!/bin/sh\n"), 0o755); err != nil {
 		t.Fatal(err)
 	}
-	if argv := pkg.Found().Argv(); argv[0] != local {
-		t.Fatalf("argv %v, want the package's own %s", argv, protocol.HostCommand)
+	if argv := pkg.Found().Argv(); argv[0] != "/opt/oc/open-conduit" {
+		t.Fatalf("argv %v: a file the package ships ran in place of the host's executable", argv)
+	}
+}
+
+// Discovery takes a host-run package's manifest from the host that serves
+// it, not the copy written at install, so an upgrade that changes the
+// extension needs no reinstall; a host that doesn't serve it refuses the
+// package.
+func TestDiscoverHostRunManifest(t *testing.T) {
+	root := t.TempDir()
+	write := func(name, version string) {
+		dir := filepath.Join(root, name)
+		if err := os.MkdirAll(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		raw, _ := json.Marshal(protocol.Manifest{Protocol: []int{protocol.Version}, Name: name, Version: version, Command: protocol.HostRunCommand(name)})
+		if err := os.WriteFile(filepath.Join(dir, protocol.ManifestFile), raw, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("served", "1.0.0")
+	write("gone", "1.0.0")
+	prev := HostManifest
+	HostManifest = func(name string) ([]byte, protocol.Manifest, error) {
+		if name != "served" {
+			return nil, protocol.Manifest{}, ErrNotServed
+		}
+		m := protocol.Manifest{Protocol: []int{protocol.Version}, Name: name, Version: "2.0.0", Command: protocol.HostRunCommand(name)}
+		raw, _ := json.Marshal(m)
+		return raw, m, nil
+	}
+	t.Cleanup(func() { HostManifest = prev })
+	found, errs := Discover(root)
+	if len(found) != 1 || found[0].Manifest.Name != "served" || found[0].Manifest.Version != "2.0.0" {
+		t.Fatalf("found %+v, want served at the host's 2.0.0", found)
+	}
+	if len(errs) != 1 || !errors.Is(errs[0], ErrNotServed) {
+		t.Fatalf("errors %v, want gone refused as not served", errs)
 	}
 }

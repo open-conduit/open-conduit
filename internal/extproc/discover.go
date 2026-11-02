@@ -20,10 +20,12 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/protocol"
@@ -84,9 +86,59 @@ func Discover(root string) ([]Found, []error) {
 			errs = append(errs, fmt.Errorf("%s: %w: directory must be named %q", e.Name(), protocol.ErrManifest, m.Name))
 			continue
 		}
+		if m.RunsOnHost() {
+			// The host's own executable serves it, so its manifest is the
+			// host's, not the copy written at install: an upgraded
+			// open-conduit that changes the extension needs no reinstall.
+			if raw, m, err = HostManifest(m.Name); err != nil {
+				errs = append(errs, fmt.Errorf("%s: %w", e.Name(), err))
+				continue
+			}
+		}
 		found = append(found, Found{Dir: dir, Manifest: m, Raw: raw})
 	}
 	return found, errs
+}
+
+// ErrNotServed refuses a package whose command is the host's own
+// (protocol.HostRunCommand) when this host doesn't serve that extension.
+var ErrNotServed = errors.New("extproc: this open-conduit does not serve the extension")
+
+var hostManifests sync.Map // name -> hostManifest
+
+type hostManifest struct {
+	raw []byte
+	m   protocol.Manifest
+	err error
+}
+
+// HostManifest is the manifest the host's own executable gives the
+// extension it serves as name (`open-conduit extension-run NAME
+// package-manifest`), read once per process. Discovery uses it in place of
+// a host-run package's installed copy.
+var HostManifest = func(name string) ([]byte, protocol.Manifest, error) {
+	if v, ok := hostManifests.Load(name); ok {
+		h := v.(hostManifest)
+		return h.raw, h.m, h.err
+	}
+	var h hostManifest
+	exe, err := HostExecutable()
+	if err == nil {
+		var out []byte
+		out, err = exec.Command(exe, append(protocol.HostRunCommand(name)[1:], "package-manifest")...).Output()
+		if err == nil {
+			h.raw = out
+			h.m, err = protocol.ParseManifest(out)
+		}
+	}
+	if err == nil && (h.m.Name != name || !h.m.RunsOnHost()) {
+		err = fmt.Errorf("%w: it answered for %q", ErrNotServed, h.m.Name)
+	}
+	if err != nil {
+		h = hostManifest{err: fmt.Errorf("%w: %s (%v)", ErrNotServed, name, err)}
+	}
+	hostManifests.Store(name, h)
+	return h.raw, h.m, h.err
 }
 
 // Taken lists names already registered in-process (first-party extensions,
