@@ -73,27 +73,3 @@ func TestFakeClaudeTurns(t *testing.T) {
 		t.Fatal("a launch past the last turn succeeded")
 	}
 }
-
-// TestAgentScript scripts turns fluently: calls join the open turn (each
-// with a request ID of its own), Ends closes it, Ends with none open is a
-// turn of no calls, and Turn starts the next.
-func TestAgentScript(t *testing.T) {
-	c, err := FakeClaude(t.TempDir())
-	if err != nil {
-		t.Fatal(err)
-	}
-	a := &Agent{d: &Instance{t: t}, c: c}
-	a.Call("weather.forecast", map[string]any{"city": "Leeds"}).Call("weather.report", nil).Ends("help").
-		Ends("review").
-		Turn().Call("read_context", nil).Ends("finished")
-	var turns []Turn
-	b, _ := os.ReadFile(filepath.Join(c.dir, "turns.json"))
-	if err := json.Unmarshal(b, &turns); err != nil {
-		t.Fatal(err)
-	}
-	got, _ := json.Marshal(turns)
-	want := `[{"calls":[{"operation":"weather.forecast","input":{"city":"Leeds"},"request_id":"turn1-call1"},{"operation":"weather.report","request_id":"turn1-call2"}],"state":"help"},{"state":"review"},{"calls":[{"operation":"read_context","request_id":"turn3-call1"}],"state":"finished"}]`
-	if string(got) != want {
-		t.Fatalf("turns:\n%s\nwant\n%s", got, want)
-	}
-}

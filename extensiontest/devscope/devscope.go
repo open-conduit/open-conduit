@@ -1,7 +1,8 @@
 // Package devscope builds an extension package from its source and
 // generates the config of one scope for it: an entry for each extension
-// type it declares, a claude-code binding granted its operations, a route
-// for each route handler and a manual route. extensiontest's Daemon and
+// type it declares, a binding granted its operations (a shell command on
+// the CLI toolbelt, or a claude-code agent), a route for each route handler
+// and a manual route. extensiontest's Daemon and
 // `open-conduit dev` both run a package this way, so a package behaves the
 // same under its tests as it does while its author watches it.
 //
@@ -180,7 +181,11 @@ type Secret struct {
 
 // Options are what Generate puts in the scope beyond the manifests.
 type Options struct {
-	// Agent is the claude-code binding's binary.
+	// Shell, when set, is the argument vector the binding runs on the shell
+	// executor, reaching the toolbelt through the `os` CLI. Otherwise the
+	// binding runs Agent on the claude-code executor.
+	Shell []string
+	// Agent is the claude-code binding's binary, when Shell is not set.
 	Agent string
 	// AgentEnv is the binding's env (CLAUDE_CONFIG_DIR, say).
 	AgentEnv map[string]string
@@ -193,7 +198,7 @@ type Options struct {
 // Generate is the config of one scope, ScopeID, for the manifests: an
 // entry for each extension type they declare (named after its type, with
 // its config from Entries, and every secret selected), a binding
-// AgentBinding running Agent granted every operation they declare plus
+// AgentBinding running Shell or Agent granted every operation they declare plus
 // read_context, wait and declare_outcome, a route for each route handler
 // they declare, and a manual route last. env is what the daemon's
 // environment needs for the secrets given by value.
@@ -248,19 +253,27 @@ func Generate(manifests []protocol.Manifest, o Options) (config []byte, env []st
 	if agentEnv == nil {
 		agentEnv = map[string]string{}
 	}
+	binding := map[string]any{
+		"name": AgentBinding, "executor": "claude-code", "requires": map[string]any{"toolbelt": "mcp", "inject": true, "resume": true},
+		"operations": ops, "secret_names": []any{},
+		"config": map[string]any{"binary": o.Agent, "playbook": "-", "builtin_tools": []string{}, "cold_turns": "resume", "env": agentEnv},
+	}
+	if len(o.Shell) > 0 {
+		binding = map[string]any{
+			"name": AgentBinding, "executor": "shell", "requires": map[string]any{"toolbelt": "cli"},
+			"operations": ops, "secret_names": []any{},
+			"config": map[string]any{"argv": o.Shell, "env": agentEnv},
+		}
+	}
 	cfg := map[string]any{
 		"version": 1, "settings": map[string]any{}, "connections": []any{},
 		"scopes": []any{map[string]any{
 			"id": ScopeID, "name": "Test",
 			"authorization": map[string]any{"connections": []string{}, "operations": ops, "read_scopes": []any{}},
-			"bindings": []any{map[string]any{
-				"name": AgentBinding, "executor": "claude-code", "requires": map[string]any{"toolbelt": "mcp", "inject": true, "resume": true},
-				"operations": ops, "secret_names": []any{},
-				"config": map[string]any{"binary": o.Agent, "playbook": "-", "builtin_tools": []string{}, "cold_turns": "resume", "env": agentEnv},
-			}},
-			"routes":      routes,
-			"extensions":  nonNil(entries),
-			"secret_refs": refs,
+			"bindings":      []any{binding},
+			"routes":        routes,
+			"extensions":    nonNil(entries),
+			"secret_refs":   refs,
 		}},
 	}
 	config, err = json.MarshalIndent(cfg, "", "    ")
