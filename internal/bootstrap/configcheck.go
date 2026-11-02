@@ -65,7 +65,6 @@ func ConfigWarnings(path string, data []byte, modes []string, machine bool) []st
 	} else {
 		w = config.UnenforcedWarnings(data)
 	}
-	w = append(w, RenamedWarnings(data)...)
 	if machine {
 		w = append(w, config.IncludeWarnings(data, filepath.Dir(path))...)
 	}

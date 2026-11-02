@@ -158,7 +158,7 @@ The config is strict and validated at load. Every field is optional:
 | `binary` | The Claude Code CLI (default `claude`). |
 | `model` | The model (default `opus`). |
 | `permission_mode` | Default `bypassPermissions`. |
-| `playbook` | The skill turns start on. `-` means none. Left out, it is none too, except that for one release the host keeps it `work-issue`, what it used to default to (`Options.DefaultPlaybook`), and `config check` shows the executor's warning (`ConfigWarnings`); `init github` and `migrate` write it. |
+| `playbook` | The skill turns start on. `-`, or leaving it out, means none: turns start on the rendered Work alone. `init github` writes it. |
 | `plugin_dir` | The playbook skills directory. |
 | `args` | Default `{number}`. |
 | `structured` | Default true. |

@@ -49,7 +49,7 @@ func main() {
 	env.TUI = func(c *client.Client) error { return tui.Run(tui.Operator(c), os.Stdin, os.Stdout) }
 	env.Web = serveWeb
 	env.EditConfig = func(r cli.EditRequest) (bool, error) { return tui.EditConfig(r, os.Stdin, os.Stdout) }
-	env.Migrate, env.Upgrade, env.State = bootstrap.Migrate, bootstrap.Upgrade, bootstrap.StateOps()
+	env.State = bootstrap.StateOps()
 	// One offline validation serves a config check's warnings and its
 	// diagnostics.
 	check := bootstrap.NewConfigCheck()

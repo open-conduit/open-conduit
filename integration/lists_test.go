@@ -17,7 +17,6 @@ import (
 	"github.com/open-conduit/open-conduit/executors/claudecode"
 	"github.com/open-conduit/open-conduit/extension"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
-	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/internal/config"
 )
 
@@ -334,7 +333,7 @@ func fixtureEntrySettings(raw json.RawMessage) []extension.Setting {
 // fields with typed values and defaults, every other field by name alone.
 func TestManagementConfigDetailWithoutSecrets(t *testing.T) {
 	h := newManagementHarnessWith(t, detailConfig, func(r *config.Registry) {
-		r.Executors["claude"] = claudecode.Offline(gh.Playbook)
+		r.Executors["claude"] = claudecode.Offline()
 		r.Connections = map[string]func(json.RawMessage) error{"code": nil}
 		r.Extensions = map[string]config.ExtensionType{"fixture_entry": {Settings: fixtureEntrySettings}}
 		r.Resources = map[string]bool{gitws.Type: true}
@@ -381,7 +380,7 @@ func TestManagementConfigDetailWithoutSecrets(t *testing.T) {
 		t.Fatalf("undeclared executor settings: %s", s)
 	}
 	// Claude Code declares its model, which shows its default when unset.
-	if s := settings(agent.Settings); s != `model="opus" permission_mode="acceptEdits" playbook="work-issue" structured=true workspace_mode="work" cold_turns="handoff" handoff_minutes=55 env set extra_args set` {
+	if s := settings(agent.Settings); s != `model="opus" permission_mode="acceptEdits" playbook="-" structured=true workspace_mode="work" cold_turns="handoff" handoff_minutes=55 env set extra_args set` {
 		t.Fatalf("claude settings: %s", s)
 	}
 	if agent.Resource != gitws.Type || !agent.Requires.Workspace {

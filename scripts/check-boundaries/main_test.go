@@ -64,9 +64,6 @@ func TestDependencyClosures(t *testing.T) {
 		{"runtime_cannot_import_kit", []pkg{project("internal/runtime", "extensions/tracker")}, "extensions/tracker"},
 		// 06-02: the v1 converter reads extension config names, never the
 		// runtime, storage or composition; the CLI reaches it by injection.
-		{"migrate_reads_extensions", []pkg{project("internal/migrate", "extensions/github", "extensions/tracker"), project("extensions/github", "client", "domain"), project("extensions/tracker", "domain")}, ""},
-		{"migrate_cannot_reach_runtime", []pkg{project("internal/migrate", "internal/runtime")}, "internal/runtime"},
-		{"migrate_cannot_reach_sqlite", []pkg{project("internal/migrate", "internal/storage/sqlite")}, "internal/storage/sqlite"},
 		{"protocol_reads_public_contracts", []pkg{project("protocol", "extension", "domain")}, ""},
 		{"protocol_cannot_reach_runtime", []pkg{project("protocol", "internal/runtime")}, "internal/runtime"},
 		{"protocol_cannot_reach_extensions", []pkg{project("protocol", "extensions/slack")}, "extensions/slack"},
@@ -84,7 +81,6 @@ func TestDependencyClosures(t *testing.T) {
 		{"package_cannot_reach_another", []pkg{project("packages/slack", "executors/shell")}, "executors/shell"},
 		{"package_cannot_reach_host", []pkg{project("packages/shell", "internal/extproc")}, "internal/extproc"},
 		{"bootstrap_cannot_use_reference", []pkg{project("internal/bootstrap", "conformance/reference")}, "conformance/reference"},
-		{"cli_cannot_import_migrate", []pkg{project("internal/cli", "internal/migrate")}, "internal/migrate"},
 		{"backup_runtime_leak", []pkg{project("internal/backup", "internal/runtime")}, "internal/runtime"},
 		{"unknown_package_leak", []pkg{project("newpackage", "domain")}, "domain"},
 		// Setup is an installed package (#243): no package imports it, from

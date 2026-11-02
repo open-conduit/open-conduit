@@ -82,7 +82,7 @@ Doctor proves that the App is installed and can read the repository. It doesn't 
 
 ## Push and commit as the bot
 
-You can also have git work as the bot. Set `git` to `bot` on the GitHub connection that has the bot App (here `github`). Each binding with a git workspace also needs `github.git.credential` in its `operations` and in the scope's `authorization.operations`. `open-conduit init github` and `open-conduit migrate` grant it to the bindings they write with a workspace; add it yourself to a binding you wrote by hand:
+You can also have git work as the bot. Set `git` to `bot` on the GitHub connection that has the bot App (here `github`). Each binding with a git workspace also needs `github.git.credential` in its `operations` and in the scope's `authorization.operations`. `open-conduit init github` grants it to the bindings it writes with a workspace; add it yourself to a binding you wrote by hand:
 
 ```sh
 open-conduit config set /connections/github/config/git '"bot"'

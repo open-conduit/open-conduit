@@ -88,9 +88,6 @@ var helpGroups = []helpGroup{
 	{"Maintain", []helpEntry{
 		{"auth", `  auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
   auth recover               (daemon stopped) revoke every operator credential and write a fresh token file`},
-		{"migrate", `  migrate config --from V1_CONFIG [--out FILE | --write] [--force] [--no-repo-files] [--time-zone ZONE] [--shell-jobs] [--detached-timeout S] [--json]
-  migrate upgrade [--config FILE] [--write] [--json]
-                             convert an Open Supervisor config (preview unless --out/--write; v1 files are never modified)`},
 		{"backup", `  backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR   (daemon stopped; restore writes a new state directory)`},
 		{"state", `  state check [--json]       (daemon stopped) diagnose the state directory: permissions, schema, integrity, artifacts, drain status`},
 		{"extension", `  extension list|inspect DIR|install DIR|update DIR|rollback NAME|remove NAME [--force]   manage extension packages (next serve)
@@ -146,7 +143,7 @@ func commandHelp(cmd string) string {
 
 // needsSubcommand are the commands that do nothing alone, so a bare one
 // prints its help.
-var needsSubcommand = map[string]bool{"scopes": true, "work": true, "events": true, "executions": true, "waits": true, "artifacts": true, "config": true, "auth": true, "runs": true, "secret": true, "actions": true, "backup": true, "state": true, "container": true, "migrate": true}
+var needsSubcommand = map[string]bool{"scopes": true, "work": true, "events": true, "executions": true, "waits": true, "artifacts": true, "config": true, "auth": true, "runs": true, "secret": true, "actions": true, "backup": true, "state": true, "container": true}
 
 // helpRequested reports whether args ask for help: --help, -h or -help
 // anywhere before a "--", or a leading "help".

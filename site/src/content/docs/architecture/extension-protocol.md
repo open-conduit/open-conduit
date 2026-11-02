@@ -23,7 +23,7 @@ The protocol was extracted from the shipped first-party code: the GitHub, Slack,
 
 ## Inventory of shipped interactions
 
-The table groups what the first-party code actually does across the host boundary today, as found in `internal/bootstrap` and the extension packages. Users: GH GitHub, SL Slack, TR tracker kit (Linear and Jira), BB Bitbucket, SC schedule, IS introspection, PH PostHog, GIT Git provider, SH shell, CC claude-code, LJ the schedule extension's `legacy-job` executor, HU human.
+The table groups what the first-party code actually does across the host boundary today, as found in `internal/bootstrap` and the extension packages. Users: GH GitHub, SL Slack, TR tracker kit (Linear and Jira), BB Bitbucket, SC schedule, IS introspection, PH PostHog, GIT Git provider, SH shell, CC claude-code, HU human.
 
 | Interaction | In-process surface today | Users | Wire method(s) |
 | --- | --- | --- | --- |
@@ -38,15 +38,15 @@ The table groups what the first-party code actually does across the host boundar
 | Toolbelt operations | `Registration{Name, EventTypes, Operations, DependencyFilter, Gate}`. `Operation.Handler` (all), `.Wait` (GH), `.Emit` with in-transaction `Commit` (IS), `Gate` (HU) | GH SL TR BB IS HU | `operation.call`, `operation.wait`, `operation.emit`, `emit.commit`, `dependency.filter`, `operation.gate` |
 | Wait progress | `runtime.SetWaitProgressInTx` (GitHub's `ToolsOptions.WaitProgress`), `inproc.Host.WaitProgress` | GH | `wait.progress` (E→H) |
 | Prompt rendering | bootstrap `renderEvents` chain over `<extension>.RenderEvent` | GH SL IS | `event.render` |
-| Executor lifecycle | `Executor.Run/Recover`, `RunHandle.Wait`, `Resume`, `Interrupt`, `Inject`, `Forget`, `PersistRecovery` | SH CC LJ (GH hold) | `executor.*`, `execution.persist_recovery` (E→H) |
-| Physical-stop evidence | `extension.StopExecutor` (`Stop(execution, epoch)`), so the host can `ConfirmStopped` | SH CC LJ | `executor.stop` |
+| Executor lifecycle | `Executor.Run/Recover`, `RunHandle.Wait`, `Resume`, `Interrupt`, `Inject`, `Forget`, `PersistRecovery` | SH CC (GH hold) | `executor.*`, `execution.persist_recovery` (E→H) |
+| Physical-stop evidence | `extension.StopExecutor` (`Stop(execution, epoch)`), so the host can `ConfirmStopped` | SH CC | `executor.stop` |
 | Operator attach | `extension.AttachExecutor` (`Attach`, `ErrNothingToAttach`, wire `nothing_to_attach`) | CC | `executor.attach` |
-| Workspaces | `ResourceBroker.Acquire/Lookup` (executor side). `ResourceProvider.Acquire/Lookup/Reconcile` with the host's `ResourceStatusFunc` | CC LJ, GIT | `resource.*` (E→H), `provider.*`, `provider.owner_status` (E→H) |
+| Workspaces | `ResourceBroker.Acquire/Lookup` (executor side). `ResourceProvider.Acquire/Lookup/Reconcile` with the host's `ResourceStatusFunc` | CC, GIT | `resource.*` (E→H), `provider.*`, `provider.owner_status` (E→H) |
 | Namespaced KV | `Store.Transact` with `Get/Put/Delete/List` in the extension's namespaces (`introspection.notes`, `github.projection.*`, `executor.claudecode`, `schedule.runs`, `introspection.*`, `<type>.tools.*` …) | GH SL TR BB SC IS CC | `kv.get`, `kv.list`, `kv.commit` |
 | Read-only state | `Work`, `ListWorks`, `ListExecutions`, `Event`, `Events` (cursor), `ListScopes`/`Scope`, `ListTimers` | GH SL TR BB SC IS CC | `state.*` |
 | Derived and root events with records | `runtime.Causal.Derive` (GitHub turns), `AcceptDerivedInTx` (schedule translation, job runs), `AcceptInTx` + `PutOriginInTx` (host-watch reports) | GH SC IS | `event.accept` (E→H, KV records join the transaction) |
 | Control | `Control.CancelWork` for retired introspection Work | IS | `work.cancel` (E→H) |
-| Artifacts | `Artifacts.Create`, write, `Commit` (transcripts, logs, output files) | SH CC LJ | `artifact.*` (E→H) |
+| Artifacts | `Artifacts.Create`, write, `Commit` (transcripts, logs, output files) | SH CC | `artifact.*` (E→H) |
 | Secrets | `connectionSecrets`, `inproc.Host.Secrets` and `resolver.ResolveNames` (lazy, current generation) | GH SL TR BB SC PH | `secret.resolve` (E→H) |
 | Background passes | `Projector.Converge` (GH SL TR), `Ensure` (SC IS), `Executor.Maintain` (CC), `manageHooks`/`EnsureWebhook` (GH TR BB), `hostWatch` (IS), `publishJobRuns` (SC) | GH SL TR BB SC IS CC | manifest `tasks`, `task.run` |
 | Telemetry export | `observability.Exporter.Export/Shutdown` on the pipeline goroutine | PH IS | `telemetry.export`, `shutdown` |
@@ -344,7 +344,7 @@ First-party extensions registered in-process have no manifest. The Slack extensi
 
 ## Public executor controls
 
-- `extension.StopExecutor` is public because an external executor must be able to supply physical-stop evidence. The shell, claude-code and `legacy-job` executors implement it.
+- `extension.StopExecutor` is public because an external executor must be able to supply physical-stop evidence. The shell and claude-code executors implement it.
 - `extension.AttachExecutor`, `extension.AttachSpec` and `extension.ErrNothingToAttach` make attach a public optional executor method. Bootstrap does not branch on claude-code. The management wire code is `nothing_to_attach`, and `claudecode.ErrNoSession` wraps `ErrNothingToAttach`. The operator's shell supplies the attach environment.
 - `extension.ContractVersion` versions the in-process API. `protocol.Version` versions the wire.
 

@@ -20,36 +20,29 @@ import (
 )
 
 // Workflow C (05-02) on the composed daemon: scheduled jobs run as ordinary
-// Executions of standing job Work through the shell executor (directly, or
-// through the legacy-job compatibility wrapper) beside an agent turn on the
-// same core, with one run history.
+// Executions of standing job Work through the shell executor beside an agent
+// turn on the same core, with one run history.
 
 const workflowCNS = "schedule/ops"
 
 // workflowCConfig is one scope with four jobs and an agent:
 //
 //   - tick: every 60 minutes; reads its context through the toolbelt (os).
-//   - report: at a UTC time of day; records v1's trigger label.
-//   - fresh: manual; runs in a fresh worktree at the remote head and reads
-//     v1's workspace variables.
-//   - refresh: manual; a long, detached v1 status job. Its timer slots queue
+//   - report: at a UTC time of day; records its trigger type.
+//   - fresh: manual; runs in a fresh worktree at the remote head.
+//   - refresh: manual; a long, detached job. Its timer slots queue
 //     behind a run going; deliveries and manual runs while it runs drop.
 //   - agent: a fake Claude Code turn on the manual route.
 func workflowCConfig(root, checkout, claude, reportAt string) []byte {
-	status := filepath.Join(root, "status")
-	legacy := func(name, command string, extra map[string]any) map[string]any {
-		cfg := map[string]any{"shell": map[string]any{"command": command, "env": map[string]string{"DIR": root}}}
-		for k, v := range extra {
-			cfg[k] = v
-		}
-		return map[string]any{"name": name, "executor": sc.LegacyExecutorName, "requires": map[string]any{"toolbelt": "cli"}, "operations": []string{"read_context"}, "secret_names": []any{}, "config": cfg}
+	job := func(name, command string) map[string]any {
+		return map[string]any{"name": name, "executor": "shell", "requires": map[string]any{"toolbelt": "cli"}, "operations": []string{"read_context"}, "secret_names": []any{},
+			"config": map[string]any{"command": command, "env": map[string]string{"DIR": root}}}
 	}
-	fresh := legacy("fresh-cmd", `pwd > "$DIR/fresh.pwd"; cat a.txt > "$DIR/fresh.a"; echo "$OPEN_SUPERVISOR_BASE_BRANCH $OPEN_SUPERVISOR_WORKTREE" > "$DIR/fresh.env"`, nil)
+	fresh := job("fresh-cmd", `pwd > "$DIR/fresh.pwd"; cat a.txt > "$DIR/fresh.a"`)
 	fresh["requires"] = map[string]any{"toolbelt": "cli", "workspace": true}
 	fresh["resource"] = map[string]any{"provider": "git", "config": map[string]any{"checkout": checkout, "mode": "fresh"}}
-	refresh := legacy("refresh-cmd", `echo "$OPEN_SUPERVISOR_JOB_TRIGGER" >> "$DIR/refresh"; echo $$ > "$DIR/pid"
-while [ ! -e "$DIR/release" ]; do sleep 0.05; done
-printf '{"slot":"x","outcome":"done","finishedAt":"2026-10-21T05:30:00Z","sha":"abc1234"}' > "$DIR/status/last.json"`, map[string]any{"status": status})
+	refresh := job("refresh-cmd", `echo "$OS_TRIGGER_TYPE" >> "$DIR/refresh"; echo $$ > "$DIR/pid"
+while [ ! -e "$DIR/release" ]; do sleep 0.05; done`)
 	refresh["timeout_seconds"] = 600
 	ops := []string{"read_context", "declare_outcome", "wait"}
 	cfg := map[string]any{
@@ -60,7 +53,7 @@ printf '{"slot":"x","outcome":"done","finishedAt":"2026-10-21T05:30:00Z","sha":"
 			"bindings": []any{
 				map[string]any{"name": "tick-cmd", "executor": "shell", "requires": map[string]any{"toolbelt": "cli"}, "operations": []string{"read_context"}, "secret_names": []any{},
 					"config": map[string]any{"command": `echo "$OS_EXECUTION_ID $OS_TRIGGER_TYPE" >> "$DIR/tick"; os context --request-id ctx > "$DIR/tick.context"`, "env": map[string]string{"DIR": root}}},
-				legacy("report-cmd", `echo "$OPEN_SUPERVISOR_JOB_TRIGGER" >> "$DIR/report"`, nil),
+				job("report-cmd", `echo "$OS_TRIGGER_TYPE" >> "$DIR/report"`),
 				fresh, refresh,
 				map[string]any{"name": "agent", "executor": "claude-code", "requires": map[string]any{"toolbelt": "mcp"}, "operations": ops, "secret_names": []any{},
 					"config": map[string]any{"binary": claude, "cold_turns": "resume",
@@ -119,11 +112,9 @@ func lines(path string) []string {
 //     exactly once;
 //   - six-hour catch-up: an edited daily time one hour past runs its slot
 //     once at apply; seven hours past is skipped;
-//   - a fresh checkout at the remote head with v1's workspace variables,
-//     removed after success;
-//   - detached adoption: a long status job survives a daemon SIGKILL and is
-//     adopted without relaunch, a manual run while it runs drops, and its
-//     last.json becomes the outcome;
+//   - a fresh checkout at the remote head, removed after success;
+//   - detached adoption: a long job survives a daemon SIGKILL and is adopted
+//     without relaunch, and a manual run while it runs drops;
 //   - a non-agent toolbelt call (`os context` from the shell job);
 //   - an agent turn and the jobs in one run history and one run view.
 func TestDaemonWorkflowC(t *testing.T) {
@@ -134,9 +125,6 @@ func TestDaemonWorkflowC(t *testing.T) {
 	checkout := workspaceRepo(t, d.root)
 	claude := filepath.Join(d.root, "claude")
 	if err := os.WriteFile(claude, []byte(daemonClaude), 0o755); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.MkdirAll(filepath.Join(d.root, "status"), 0o700); err != nil {
 		t.Fatal(err)
 	}
 	hm := func(offset time.Duration) string { return time.Now().UTC().Add(offset).Format("15:04") }
@@ -216,10 +204,10 @@ func TestDaemonWorkflowC(t *testing.T) {
 		t.Fatalf("toolbelt.called records for the shell job: %+v", calls)
 	}
 
-	// Six-hour catch-up through config edits (v1's edited-timing rule).
+	// Six-hour catch-up through config edits.
 	apply(hm(-61 * time.Minute))
 	d.until("the slot an hour past runs once", 30*time.Second, idle("report", 1))
-	if got := lines(filepath.Join(d.root, "report")); len(got) != 1 || !strings.HasPrefix(got[0], "at ") || !strings.HasSuffix(got[0], " UTC") {
+	if got := lines(filepath.Join(d.root, "report")); len(got) != 1 || got[0] != sc.TypeSlot {
 		t.Fatalf("report runs: %v", got)
 	}
 	apply(hm(-7 * time.Hour))
@@ -228,7 +216,7 @@ func TestDaemonWorkflowC(t *testing.T) {
 		t.Fatalf("a slot seven hours past ran: %v", got)
 	}
 
-	// A fresh checkout at the remote head, with v1's workspace names.
+	// A fresh checkout at the remote head.
 	manual("fresh", "fresh-1")
 	d.until("the fresh job ran", 60*time.Second, idle("fresh", 1))
 	workspaces := filepath.Join(d.state, "resources", "git", "workspaces")
@@ -236,17 +224,14 @@ func TestDaemonWorkflowC(t *testing.T) {
 	if !strings.HasPrefix(ran, mustReal(t, workspaces)) || strings.TrimSpace(readFile(t, filepath.Join(d.root, "fresh.a"))) != "v2" {
 		t.Fatalf("fresh run in %s read %q", ran, readFile(t, filepath.Join(d.root, "fresh.a")))
 	}
-	if env := strings.Fields(readFile(t, filepath.Join(d.root, "fresh.env"))); len(env) != 2 || env[0] != "main" || mustReal(t, env[1]) != ran {
-		t.Fatalf("legacy workspace env %v", env)
-	}
 	d.until("fresh worktree removed after success", 30*time.Second, func() bool { return !exists(ran) })
 
-	// Detached adoption: a long status job survives the daemon.
+	// Detached adoption: a long job survives the daemon.
 	manual("refresh", "refresh-1")
 	pidFile := filepath.Join(d.root, "pid")
 	d.until("refresh started", 30*time.Second, func() bool { return fileHasLine(pidFile) })
 	pid, _ := strconv.Atoi(strings.TrimSpace(readFile(t, pidFile)))
-	manual("refresh", "refresh-2") // while it runs: dropped (v1 started nothing)
+	manual("refresh", "refresh-2") // while it runs: dropped
 	d.until("the second manual run is routed", 30*time.Second, func() bool {
 		page, err := d.c.Events(ctx, url.Values{"scope_id": {"ops"}, "type": {"schedule.run"}})
 		if err != nil {
@@ -272,10 +257,10 @@ func TestDaemonWorkflowC(t *testing.T) {
 	}
 	d.until("the adopted run ends", 60*time.Second, idle("refresh", 1))
 	refresh := d.executions(jobWork("refresh").ID)
-	if len(refresh) != 1 || refresh[0].State != "completed" || refresh[0].Outcome == nil || !strings.Contains(refresh[0].Outcome.Summary, "status done abc1234") {
+	if len(refresh) != 1 || refresh[0].State != "completed" || refresh[0].Outcome == nil {
 		t.Fatalf("refresh executions %+v", refresh)
 	}
-	if got := lines(filepath.Join(d.root, "refresh")); len(got) != 1 || got[0] != "by hand" {
+	if got := lines(filepath.Join(d.root, "refresh")); len(got) != 1 || got[0] != "schedule.run" {
 		t.Fatalf("refresh launches %v", got)
 	}
 	if rec := d.recordsNamed("execution.recovered", refresh[0].ID); len(rec) == 0 {
@@ -313,7 +298,7 @@ func TestDaemonWorkflowC(t *testing.T) {
 			t.Fatalf("row %q", row)
 		}
 	}
-	if executors["shell"] != 1 || executors[sc.LegacyExecutorName] != 3 || executors["claude-code"] != 1 || kinds[sc.WorkKind] != 4 || kinds["manual.work"] != 1 {
+	if executors["shell"] != 4 || executors["claude-code"] != 1 || kinds[sc.WorkKind] != 4 || kinds["manual.work"] != 1 {
 		t.Fatalf("mixed history: executors %v kinds %v", executors, kinds)
 	}
 	if freshRun.Workspace == nil || !strings.Contains(freshRun.Workspace.Summary, "fresh worktree at origin/main") {

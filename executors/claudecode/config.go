@@ -28,9 +28,7 @@ type Config struct {
 	// unattended (default "bypassPermissions").
 	PermissionMode string `json:"permission_mode,omitempty"`
 	// Playbook is the skill a turn starts on, as /open-conduit:<playbook>.
-	// "-", or leaving it out, starts turns with the rendered body alone
-	// (unless the host sets Options.DefaultPlaybook for bindings that name
-	// none).
+	// "-", or leaving it out, starts turns with the rendered body alone.
 	Playbook string `json:"playbook,omitempty"`
 	// PluginDir is a directory of playbook skills passed with --plugin-dir.
 	PluginDir string `json:"plugin_dir,omitempty"`
@@ -233,14 +231,10 @@ func ParseConfig(data []byte) (Config, error) {
 	return c, nil
 }
 
-// playbook is the skill c's turns start on: its own, else the host's
-// default, else "-" (none).
+// playbook is the skill c's turns start on: its own, else "-" (none).
 func (e *Executor) playbook(c Config) string {
-	switch {
-	case c.Playbook != "":
+	if c.Playbook != "" {
 		return c.Playbook
-	case e.o.DefaultPlaybook != "":
-		return e.o.DefaultPlaybook
 	}
 	return "-"
 }
@@ -391,9 +385,6 @@ func (e *Executor) ConfigWarnings(raw json.RawMessage) []string {
 	var out []string
 	if c.HandoffShare != nil {
 		out = append(out, "config.handoff_share is ignored: the handoff experiment was removed and a later release rejects it; remove it, and set cold_turns (handoff or resume) to choose what a cold turn does")
-	}
-	if c.Playbook == "" && e.o.DefaultPlaybook != "" {
-		out = append(out, fmt.Sprintf("names no playbook: it runs %s for now, but a later release starts its turns on the rendered Work alone; set config.playbook (%s, another playbook, or \"-\" for none)", e.o.DefaultPlaybook, e.o.DefaultPlaybook))
 	}
 	return out
 }

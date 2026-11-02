@@ -201,12 +201,6 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 			what = strings.Join(parts, ", ")
 		}
 		check.Items = append(check.Items, item+what)
-		for _, old := range e.settings.OldNames {
-			if check.Status == inproc.CheckOK {
-				check.Status, check.Code = inproc.CheckWarn, "renamed_setting"
-			}
-			check.Items = append(check.Items, item+"`"+old+"` is now `"+Renamed[old]+"`; the old name is accepted for one release (open-conduit migrate upgrade renames it)")
-		}
 	}
 	x.mu.Lock()
 	failing := x.failing

@@ -33,5 +33,5 @@ description: The terms the rest of the docs use, each in a sentence or two.
 
 ## Other names
 
-- **Open Supervisor:** Open Conduit's predecessor. `open-conduit migrate config --from FILE` converts an Open Supervisor config (a "v1" config) to Open Conduit's, and never changes the original. Installing Open Conduit leaves Open Supervisor's binary, config and state alone.
+- **Open Supervisor:** Open Conduit's predecessor. Installing Open Conduit leaves Open Supervisor's binary, config and state alone.
 - **`os`:** the toolbelt's command-line client, installed beside `open-conduit` and kept off your `PATH`. Agents and shell commands reach the toolbelt through it.

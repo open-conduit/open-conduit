@@ -23,8 +23,7 @@ import (
 
 // The stage 05 gate (05-04): workflows A–D together on one composed
 // `open-conduit serve` daemon, with fakes only (GitHub and Slack fakes, a
-// fake Claude Code CLI, shell and legacy-job executors calling the real `os`
-// toolbelt). Three scopes share one core:
+// fake Claude Code CLI, shell executors calling the real `os` toolbelt). Three scopes share one core:
 //
 //   - eng (A + D): the GitHub route claims an issue for a shell agent, which
 //     reports a defect through the introspection extension and parks on the
@@ -34,7 +33,7 @@ import (
 //   - support (B): the Slack route starts a workspace-free conversation on
 //     claude-code (fake), which replies and parks on the thread.
 //   - ops (C): an interval job (shell) reads its context and parks on a
-//     timeout; a manual legacy job runs beside it.
+//     timeout; a manual job runs beside it.
 //
 // It checks a SIGKILL at a timer-fire boundary at startup and an external
 // SIGKILL mid-wait, webhook-off (reconcile-only) wakes, the one wake path,
@@ -175,8 +174,8 @@ func gateConfig(dir, slackDir, githubURL, slackURL, claude string, triage map[st
 				"authorization": map[string]any{"connections": []any{}, "operations": opsOps, "read_scopes": []any{}},
 				"bindings": []any{
 					shell("tick-cmd", gateTickScript, opsOps),
-					map[string]any{"name": "nightly-cmd", "executor": sc.LegacyExecutorName, "requires": map[string]any{"toolbelt": "cli"}, "operations": []string{"read_context"}, "secret_names": []any{},
-						"config": map[string]any{"shell": map[string]any{"command": `echo "$OPEN_SUPERVISOR_JOB_TRIGGER" >> "$DIR/nightly"`, "env": map[string]string{"DIR": dir}}}},
+					map[string]any{"name": "nightly-cmd", "executor": "shell", "requires": map[string]any{"toolbelt": "cli"}, "operations": []string{"read_context"}, "secret_names": []any{},
+						"config": map[string]any{"command": `echo "$OS_TRIGGER_TYPE" >> "$DIR/nightly"`, "env": map[string]string{"DIR": dir}}},
 				},
 				"routes": []any{
 					map[string]any{"name": "jobs-tick", "handler": "schedule", "binding": "tick-cmd", "active_policy": "queue", "config": map[string]any{"jobs": []string{"tick"}}},
@@ -379,7 +378,7 @@ func TestDaemonAllWorkflows(t *testing.T) {
 	if _, err := d.c.SubmitEvent(ctx, client.EventRequest{ScopeID: "ops", Type: "schedule.run", DeliveryID: "nightly-1", CorrelationKey: &client.Key{Source: gateNS, ExternalID: sc.JobKey("nightly")}}, "submit-nightly-1"); err != nil {
 		t.Fatal(err)
 	}
-	d.until("the manual legacy job ran", 30*time.Second, func() bool {
+	d.until("the manual job ran", 30*time.Second, func() bool {
 		w, err := d.c.Work(ctx, sc.WorkID(gateNS, "nightly"))
 		return err == nil && settled(w, "ready", 1)
 	})
@@ -549,7 +548,7 @@ func TestDaemonAllWorkflows(t *testing.T) {
 			expired[r.WorkKind] = true
 		}
 	}
-	for _, e := range []string{"shell", "claude-code", sc.LegacyExecutorName} {
+	for _, e := range []string{"shell", "claude-code"} {
 		if executors[e] == 0 {
 			t.Fatalf("history lacks %s: %v", e, executors)
 		}

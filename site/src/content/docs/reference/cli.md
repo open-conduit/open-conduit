@@ -213,14 +213,6 @@ auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
 auth recover               (daemon stopped) revoke every operator credential and write a fresh token file
 ```
 
-### `open-conduit migrate`
-
-```text
-migrate config --from V1_CONFIG [--out FILE | --write] [--force] [--no-repo-files] [--time-zone ZONE] [--shell-jobs] [--detached-timeout S] [--json]
-migrate upgrade [--config FILE] [--write] [--json]
-                           convert an Open Supervisor config (preview unless --out/--write; v1 files are never modified)
-```
-
 ### `open-conduit backup`
 
 ```text

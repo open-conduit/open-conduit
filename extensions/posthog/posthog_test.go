@@ -26,15 +26,12 @@ func TestConfig(t *testing.T) {
 		t.Fatal(c, err)
 	}
 	s, err := ParseExtension([]byte(`{"turns":false}`))
-	if err != nil || s.Turns || !s.TelemetryEvents || len(s.OldNames) != 0 {
+	if err != nil || s.Turns || !s.TelemetryEvents {
 		t.Fatal(s, err)
 	}
-	// The old name is accepted for one release and reported; both is a mistake.
-	if s, err = ParseExtension([]byte(`{"introspection":false}`)); err != nil || s.TelemetryEvents || len(s.OldNames) != 1 || Renamed[s.OldNames[0]] != "telemetry_events" {
-		t.Fatal(s, err)
-	}
-	if ValidateExtension(json.RawMessage(`{"introspection":true,"telemetry_events":true}`), nil) == nil {
-		t.Fatal("old and new name together")
+	// The setting's old name is no longer a setting.
+	if ValidateExtension(json.RawMessage(`{"introspection":false}`), nil) == nil {
+		t.Fatal("the old introspection name")
 	}
 	if ValidateExtension(json.RawMessage(`{"other":1}`), nil) == nil {
 		t.Fatal("unknown field")

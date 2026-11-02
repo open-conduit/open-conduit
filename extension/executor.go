@@ -246,8 +246,8 @@ type ForgetExecutor interface {
 // that lease epoch and returns nil only once nothing of it can still run, so
 // the host may confirm physical exclusion. A newer adopting epoch must make
 // it fail. Without it the host cannot prove a stop and replacement stays
-// blocked. Promoted from the daemon's private interface in 07-01; shell,
-// claude-code and legacy-job implement it.
+// blocked. Promoted from the daemon's private interface in 07-01; shell and
+// claude-code implement it.
 type StopExecutor interface {
 	Stop(ctx context.Context, execution domain.ID, epoch uint64) error
 }

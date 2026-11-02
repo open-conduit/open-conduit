@@ -37,7 +37,6 @@ import (
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
-	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -452,11 +451,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.closeClaudeCode()
-	legacy, err := sc.NewLegacyExecutor(sc.LegacyOptions{Inner: d.shell, StateDir: filepath.Join(o.StateDir, "executors", sc.LegacyExecutorName), Artifacts: d.artifacts})
-	if err != nil {
-		return err
-	}
-	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor, gh.HoldExecutor: gh.NewHoldExecutor(), sc.LegacyExecutorName: legacy}
+	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor, gh.HoldExecutor: gh.NewHoldExecutor()}
 	if usage != nil {
 		usage.known = knownTypes(registry(maps.Clone(d.executors)))
 	}

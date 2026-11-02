@@ -59,7 +59,7 @@ func TestDocsReferenceDetectsDrift(t *testing.T) {
 	if a != b {
 		t.Fatal("the CLI reference is not deterministic")
 	}
-	for _, cmd := range []string{"migrate config", "work rebind", "work wake", "scopes reconcile", "container attach", "auth revoke", "executions cancel"} {
+	for _, cmd := range []string{"work rebind", "work wake", "scopes reconcile", "container attach", "auth revoke", "executions cancel"} {
 		if !strings.Contains(a, cmd) {
 			t.Errorf("the CLI reference does not cover %s", cmd)
 		}
