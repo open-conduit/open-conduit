@@ -28,11 +28,12 @@ open-conduit auth recover                                 # a lost or ambiguous 
 
 ## Scheduled backups
 
-While it runs, the daemon publishes a bundle of its own state every `--backup-interval` (default `24h`) into `--backup-dir` (default `<data-dir>/backups`) and keeps the newest `--backups-kept` (default 7). `--backup-interval 0` turns them off. Each is the bundle `backup create` makes, named `conduit-<UTC time>` (`conduit-20261102T090000Z`), so `backup verify` and `backup restore` take it as they are. The database is copied with SQLite's online backup API, which holds the store's connection only while it copies pages; the artifacts are copied after, so the daemon keeps working throughout.
+While it runs, the daemon publishes a bundle of its own state every `--backup-interval` (default `24h`) into `--backup-dir` (default `<data-dir>/backups`) and keeps the newest `--backups-kept` (default 7). `--backup-interval 0` turns them off. Each is the bundle `backup create` makes, named `conduit-<UTC time>` (`conduit-20261102T090000Z`), so `backup verify` and `backup restore` take it as they are. The database is copied with SQLite's online backup API, which holds the store's connection only while it copies pages. The artifacts are copied after, with the artifact store pinned against deletion: runs keep reading and writing artifacts, and the retention sweep and artifact collection, which delete, wait for the first loop pass after the backup ends.
 
 - The first runs at start when the directory has no scheduled bundle, then one interval after the newest; a restart doesn't add one.
 - Only `conduit-<time>` directories are counted and pruned. Anything else in the directory, such as a bundle you took before an upgrade, is left alone.
 - A failed backup is logged as a `backup` runtime diagnostic and tried again 15 minutes later. A staging directory a crash left (`.conduit-snapshot-*`) is removed at the next start.
+- **Disk use.** Each bundle is a full copy of the database and every artifact a kept run references, so the default seven take about seven times `conduit.db` plus `artifacts/`. The daemon logs each bundle's size when it publishes it (`backup published … bytes=`). Lower `--backups-kept`, or move `--backup-dir`, when that is too much for the disk.
 - The default directory is on the same disk as the state. To survive losing the disk, point `--backup-dir` elsewhere (a flag of `serve` and of `service install`).
 
 ## Restoring after a bad release or lost state

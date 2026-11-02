@@ -113,3 +113,38 @@ func TestScheduledBackupsOff(t *testing.T) {
 		t.Fatalf("backups off but directory made: %v", err)
 	}
 }
+
+// While a backup copies artifacts (the store pinned), a due retention pass
+// is skipped rather than queued on the artifact gate, which would stall the
+// loop and every artifact read and write behind it. Artifacts are still
+// written meanwhile, and the sweep stays due for the first pass after.
+func TestRetentionWaitsForARunningBackup(t *testing.T) {
+	ctx := context.Background()
+	start := time.Date(2026, 11, 2, 9, 0, 0, 0, time.UTC)
+	d := backupDaemon(t, start)
+	d.o.RetentionInterval = 10 * time.Minute
+	pin, err := d.artifacts.Pin() // the backup's artifact copy
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer pin.Close()
+	d.backups.running = true
+	var lastSweep time.Time
+	// c is nil: a pass that went ahead would panic rather than pass.
+	if d.retentionPass(ctx, nil, &lastSweep) {
+		t.Fatal("retention ran during a backup")
+	}
+	if !lastSweep.IsZero() {
+		t.Fatal("skipped sweep counted as done")
+	}
+	w, err := d.artifacts.Create(ctx, "text/plain")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.Write([]byte("run output")); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = w.Commit(ctx); err != nil {
+		t.Fatalf("artifact write blocked during a backup: %v", err)
+	}
+}

@@ -87,9 +87,18 @@ func (d *daemon) startBackups(db *sqlite.Store) error {
 	return nil
 }
 
+// backupRunning reports whether a scheduled backup is in progress.
+func (d *daemon) backupRunning() bool {
+	d.backups.mu.Lock()
+	defer d.backups.mu.Unlock()
+	return d.backups.running
+}
+
 // scheduleBackup starts a scheduled backup in the background when one is due
 // and none is running. The loop goes on meanwhile: the database snapshot
-// briefly holds the store's connection, and the artifact copy holds nothing.
+// briefly holds the store's connection, and the artifact copy pins the
+// artifact store against deletion, so the retention pass waits for it
+// (retentionPass) while artifact reads and writes go on.
 func (d *daemon) scheduleBackup(ctx context.Context) {
 	b := &d.backups
 	if d.o.BackupInterval < 0 || b.db == nil {
@@ -133,7 +142,7 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 	if err := backup.Create(ctx, destination, d.backups.db, d.artifacts, d.o.Version+" ("+d.o.Commit+")", retentionExpired); err != nil {
 		return err
 	}
-	d.log.Info("backup published", "path", destination)
+	d.log.Info("backup published", "path", destination, "bytes", treeSize(destination))
 	names, _, err := scheduledBundles(d.o.BackupDir)
 	if err != nil {
 		return err
@@ -146,4 +155,18 @@ func (d *daemon) backupNow(ctx context.Context, now time.Time) error {
 		names = names[1:]
 	}
 	return nil
+}
+
+// treeSize is the total size of the regular files under root, for the log.
+func treeSize(root string) int64 {
+	var total int64
+	_ = filepath.WalkDir(root, func(_ string, e os.DirEntry, err error) error {
+		if err == nil && e.Type().IsRegular() {
+			if info, err := e.Info(); err == nil {
+				total += info.Size()
+			}
+		}
+		return nil
+	})
+	return total
 }
