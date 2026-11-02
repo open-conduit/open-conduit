@@ -291,8 +291,9 @@ func waitMatches(wait domain.Wait, a domain.AcceptedEvent) bool {
 	if a.Sequence <= wait.AfterSequence || a.Event.CorrelationKey == nil {
 		return false
 	}
-	// A Work's own turn ending never wakes it.
-	if a.Event.Type == domain.TypeTurnEnded && a.Event.WorkID == wait.WorkID {
+	// What a Work's own executions published (its turn ending, an Event it
+	// emitted) never wakes it: a Work isn't news to itself.
+	if a.Event.ExecutionID != "" && a.Event.WorkID == wait.WorkID {
 		return false
 	}
 	matched := false

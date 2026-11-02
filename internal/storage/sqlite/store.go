@@ -112,6 +112,11 @@ func Open(ctx context.Context, path string) (*Store, error) {
 			return nil, fmt.Errorf("sqlite: index: %w", err)
 		}
 	}
+	for _, statement := range rewrites {
+		if _, err = db.ExecContext(ctx, statement); err != nil {
+			return nil, fmt.Errorf("sqlite: rewrite: %w", err)
+		}
+	}
 	if err = s.IntegrityCheck(ctx); err != nil {
 		return nil, err
 	}
@@ -237,6 +242,15 @@ const unrouted = "json_extract(CAST(record AS TEXT),'$.Routed')=0"
 // binary that opens a database with them keeps them current.
 var indexes = []string{
 	`CREATE INDEX IF NOT EXISTS events_unrouted ON events(sequence) WHERE ` + unrouted,
+}
+
+// rewrites bring records written by earlier binaries up to date. Each is
+// idempotent, so they run on every open, like the indexes.
+var rewrites = []string{
+	// Turns were once declared under a source-named "<source>.status.v1"
+	// schema; the core now reads only domain.TurnSchema.
+	`UPDATE executions SET record=CAST(json_set(CAST(record AS TEXT),'$.Outcome.Data.Schema','` + domain.TurnSchema + `') AS BLOB) ` +
+		`WHERE json_extract(CAST(record AS TEXT),'$.Outcome.Data.Schema') LIKE '_%.status.v1'`,
 }
 
 // Transact runs fn in one write transaction. SQLite never sees the caller's

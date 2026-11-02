@@ -26,10 +26,6 @@ const (
 	CondJob   CondKind = "job"   // the next run of one of a scope's jobs ending (05-02)
 )
 
-// TurnStates are the states an agent ends a turn in (domain.TurnSchema),
-// which an issue condition can wait for.
-var TurnStates = domain.TurnStates
-
 // Cond is one thing a Work can wait on: `pr:1257:merged`, `issue:12:review`,
 // `job:backup`, each optionally in another scope (`pr:club/88:merged`).
 type Cond struct {
@@ -38,13 +34,10 @@ type Cond struct {
 	// name); empty is the waiting Work's own.
 	Project string `json:"project,omitempty"`
 	Ref     string `json:"ref"`
-	// On is merged, closed, commented or pushed for a PR; closed or a turn
-	// state for an issue;
-	// empty for a job.
+	// On is merged, closed, commented or pushed for a PR; closed or any turn
+	// status (domain.ValidTurnStatus) for an issue; empty for a job.
 	On string `json:"on,omitempty"`
 }
-
-var issueOns = append([]string{"closed"}, TurnStates...)
 
 // prOns are what a PR can be waited on for: commented (the next human
 // comment, review or review-thread reply) and pushed (the next new head
@@ -94,12 +87,11 @@ func ParseCond(s string) (Cond, error) {
 		if c.On == "" {
 			c.On = "closed"
 		}
-		ok := false
-		for _, o := range issueOns {
-			ok = ok || c.On == o
-		}
-		if !ok {
-			return Cond{}, fmt.Errorf("%q: an issue can be waited on to be %s", s, strings.Join(issueOns, ", "))
+		// Any turn status the agent on the issue may declare
+		// (domain.ValidTurnStatus): building, review and the rest are the
+		// playbook's words, and a job or a person may end a turn in its own.
+		if c.On != "closed" && !domain.ValidTurnStatus(c.On) {
+			return Cond{}, fmt.Errorf("%q: an issue can be waited on to be closed, or for its turn to end in a state (a word such as review)", s)
 		}
 	case CondJob:
 		if c.On != "" {

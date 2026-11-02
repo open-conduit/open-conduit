@@ -175,7 +175,7 @@ func ParseConfig(data []byte) (Config, error) {
 		yes := true
 		c.Structured = &yes
 	}
-	if c.StatusSchema == "" || c.StatusSchema != domain.TurnSchema && domain.IsTurnSchema(c.StatusSchema) {
+	if c.StatusSchema == "" || legacyStatusSchema(c.StatusSchema) {
 		c.StatusSchema = domain.TurnSchema
 	}
 	if c.WorkspaceMode == "" {
@@ -435,4 +435,10 @@ func (e *Executor) Settings(raw json.RawMessage) []extension.Setting {
 		{Name: "cold_turns", Value: c.ColdTurns},
 		{Name: "handoff_minutes", Value: *c.HandoffMinutes},
 	}
+}
+
+// legacyStatusSchema reports a source-named "<source>.status.v1" status
+// schema, which earlier setups wrote before domain.TurnSchema.
+func legacyStatusSchema(s string) bool {
+	return strings.HasSuffix(s, ".status.v1") && len(s) > len(".status.v1")
 }

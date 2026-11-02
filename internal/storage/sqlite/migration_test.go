@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 )
@@ -104,5 +105,52 @@ func TestUnversionedAndUnsafeFilesRejected(t *testing.T) {
 	}
 	if _, err = Open(ctx, link); err == nil {
 		t.Fatal("symlinked database opened")
+	}
+}
+
+// Outcomes stored under the old source-named turn schema are read as
+// domain.TurnSchema once the store opens; any other schema is left alone.
+func TestOpenRewritesLegacyTurnSchemas(t *testing.T) {
+	ctx := context.Background()
+	path := filepath.Join(t.TempDir(), "conduit.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	rows := map[string]string{"x1": "github.status.v1", "x2": "acme.result.v1", "x3": ".status.v1", "x4": "core.turn.v1"}
+	stmts := []string{`INSERT INTO scopes VALUES ('s',NULL,'{}')`, `INSERT INTO works VALUES ('w','s',NULL,'{}')`}
+	attempt := 0
+	for id, schema := range rows {
+		attempt++
+		stmts = append(stmts, `INSERT INTO executions VALUES ('`+id+`','w',`+strconv.Itoa(attempt)+`,0,CAST('{"ID":"`+id+`","Outcome":{"Kind":"handoff","Data":{"Schema":"`+schema+`","Data":{"status":"review","n":12345678901234567890}}}}' AS BLOB))`)
+	}
+	for _, q := range stmts {
+		if _, err = db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+	if s, err = Open(ctx, path); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	if db, err = sql.Open("sqlite", path); err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	want := map[string]string{"x1": "core.turn.v1", "x2": "acme.result.v1", "x3": ".status.v1", "x4": "core.turn.v1"}
+	for id, w := range want {
+		var schema, data string
+		if err = db.QueryRow(`SELECT json_extract(CAST(record AS TEXT),'$.Outcome.Data.Schema'), json_extract(CAST(record AS TEXT),'$.Outcome.Data.Data') FROM executions WHERE id=?`, id).Scan(&schema, &data); err != nil {
+			t.Fatal(err)
+		}
+		if schema != w || !strings.Contains(data, `"status":"review"`) || !strings.Contains(data, "12345678901234567890") {
+			t.Errorf("%s: schema %q data %s, want %q", id, schema, data, w)
+		}
 	}
 }

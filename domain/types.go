@@ -64,7 +64,7 @@ type Work struct {
 }
 
 // WorkDisplay is a source's short description of a Work: a title, a short
-// ref ("#136"), who asked for it and links out (an issue, a PR, a thread).
+// ref ("#136"), who asked for it and links out (a ticket, a change, a thread).
 type WorkDisplay struct {
 	Title, Ref, Requester string `json:",omitempty"`
 	Links                 []Link `json:",omitempty"`
@@ -192,7 +192,7 @@ type Wait struct {
 	AfterSequence           uint64
 	WakeEventID             ID
 	// Description is what the Wait is for, in the waiting operation's words
-	// ("checks on PR #137"). Core stores it and never reads it.
+	// ("the checks on change 137"). Core stores it and never reads it.
 	Description string `json:",omitempty"`
 	// Owner is the extension whose operation declared the Wait (a
 	// translated wait); "" for a builtin wait. Only the owner may set

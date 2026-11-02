@@ -184,3 +184,43 @@ func TestNoPrivilegedReportingPath(t *testing.T) {
 		}
 	}
 }
+
+// workflowVocabulary names one playbook's words: the work-issue states and
+// the trackers' issues and pull requests. They are domain semantics, so
+// they live with the extensions, executors and playbooks that use them.
+var workflowVocabulary = regexp.MustCompile(`(?i:\b(building|review|pull requests?)\b|\b(an|the|a tracker's|GitHub) issues?\b|\bissues? #)|\bPRs?\b`)
+
+// TestNoWorkflowVocabularyInTheCore checks the core owns orchestration
+// semantics only: domain and the runtime name no playbook's turn states and
+// no tracker's issues or pull requests (#343). A turn ends in any status the
+// executor declares, and what it means is for the extensions to say.
+func TestNoWorkflowVocabularyInTheCore(t *testing.T) {
+	for _, bad := range []string{`"building"`, "// ready for review", "the issue closed", "issue #12", "a PR's head", "open pull requests"} {
+		if !workflowVocabulary.MatchString(bad) {
+			t.Fatalf("negative control %q passed the scan", bad)
+		}
+	}
+	for _, fine := range []string{"Toolbelt issues a token", "after issue", "Preview", "PRAGMA user_version"} {
+		if workflowVocabulary.MatchString(fine) {
+			t.Fatalf("%q is not workflow vocabulary", fine)
+		}
+	}
+	for _, dir := range []string{"domain", "internal/runtime"} {
+		err := filepath.WalkDir(filepath.Join("..", "..", dir), func(path string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
+				return err
+			}
+			data, err := os.ReadFile(path)
+			if err != nil {
+				return err
+			}
+			if loc := workflowVocabulary.FindIndex(data); loc != nil {
+				t.Errorf("%s names %q: the core knows no workflow vocabulary", path, data[loc[0]:loc[1]])
+			}
+			return nil
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+}

@@ -17,7 +17,7 @@ import (
 // TestHoldForChecksBeforeAnyCall: the agent-facing syntax only.
 func TestParseCondAndHoldMarkers(t *testing.T) {
 	for in, want := range map[string]string{
-		"pr:12": "pr:12:merged", "pr:#12:closed": "pr:12:closed", "issue:7": "issue:7:closed", "issue:7:review": "issue:7:review",
+		"pr:12": "pr:12:merged", "pr:#12:closed": "pr:12:closed", "issue:7": "issue:7:closed", "issue:7:review": "issue:7:review", "issue:7:Approved": "issue:7:approved",
 		"job:backup": "job:backup", "pr:club/88:merged": "pr:club/88:merged", "pr:5:commented": "pr:5:commented", "pr:5:Pushed": "pr:5:pushed",
 	} {
 		c, err := gh.ParseCond(in)
@@ -26,7 +26,7 @@ func TestParseCondAndHoldMarkers(t *testing.T) {
 		}
 	}
 	for in, want := range map[string]string{
-		"pr:abc": "isn't a PR number", "job:backup:ok": "next run to end", "issue:3:sleeping": "can be waited on", "bug:1": "waits are on",
+		"pr:abc": "isn't a PR number", "job:backup:ok": "next run to end", "issue:3:2nd": "can be waited on", "issue:3:in_review!": "can be waited on", "bug:1": "waits are on",
 		"pr:/3": "<project>/<ref>", "pr": "isn't a condition",
 	} {
 		if _, err := gh.ParseCond(in); err == nil || !strings.Contains(err.Error(), want) {

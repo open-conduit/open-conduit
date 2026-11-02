@@ -141,7 +141,7 @@ The runtime routes an Event in the scope of the entry that observed it, using th
 
 - `claimed` is present while Work owns the issue. It comes off once the Work completes, whether or not the issue is closed: nothing hears the issue any more, so the label would promise an agent who isn't there. The completed Work still owns the issue's generation, so admission never claims it again; a reopening starts a new generation, which is claimed again. Failed and cancelled Work keep it.
 - No status label is set while an attempt runs.
-- After an attempt, the status comes from an outcome declaring `core.turn.v1` `{status}` (or, for one release, the `github.status.v1` stored outcomes keep). Otherwise completed Work projects `done`, failed Work projects `help` and cancelled Work projects none.
+- After an attempt, the status comes from an outcome declaring `core.turn.v1` `{status}`. Otherwise completed Work projects `done`, failed Work projects `help` and cancelled Work projects none.
 
 The projector re-reads the issue and changes only managed labels. It reapplies them when desired state changes, and at `verify_seconds` for nonterminal Work, which repairs drift.
 
