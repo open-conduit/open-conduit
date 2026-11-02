@@ -629,14 +629,15 @@ func (s *Server) openRuns(ctx context.Context, works []client.Work, byWork map[s
 	return first
 }
 
-// liveRuns adds Work id's pending and running runs to runs, where they are
-// not already in it.
+// liveRuns adds Work id's pending, running and parked runs to runs, where
+// they are not already in it: the row's status and its Cancel this turn
+// control read them.
 func (s *Server) liveRuns(ctx context.Context, id string, runs []client.Run) ([]client.Run, error) {
 	seen := map[string]bool{}
 	for _, r := range runs {
 		seen[r.ID] = true
 	}
-	for _, state := range []string{"pending", "running"} {
+	for _, state := range []string{"pending", "running", "parked"} {
 		live, err := listAll(ctx, url.Values{"work_id": {id}, "state": {state}, "limit": {"200"}}, s.src.Runs)
 		if err != nil {
 			return runs, err
