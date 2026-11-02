@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/observability"
 )
 
@@ -135,4 +136,101 @@ type sinkFunc func(string)
 func (s sinkFunc) Capture(_ context.Context, _, name string, _ time.Time, _ map[string]any) error {
 	s(name)
 	return nil
+}
+
+func TestRecordsSetting(t *testing.T) {
+	s, err := ParseExtension([]byte(`{}`))
+	if err != nil || len(s.Records) != 0 || s.Sends("work.created") {
+		t.Fatal("no records by default", s, err)
+	}
+	if s, err = ParseExtension([]byte(`{"records":["work.transitioned","execution.*"]}`)); err != nil {
+		t.Fatal(err)
+	}
+	for name, want := range map[string]bool{"work.transitioned": true, "work.created": false, "execution.queued": true, "executionx": false, "lease.renewed": false} {
+		if s.Sends(name) != want {
+			t.Errorf("Sends(%q) = %v", name, !want)
+		}
+	}
+	if s, _ = ParseExtension([]byte(`{"records":["*"]}`)); !s.Sends("lease.renewed") {
+		t.Fatal(`"*" sends every record`)
+	}
+	for _, bad := range []string{`{"records":[""]}`, `{"records":["exec*.started"]}`, `{"records":["work created"]}`, `{"records":"*"}`} {
+		if ValidateExtension(json.RawMessage(bad), nil) == nil {
+			t.Errorf("%s accepted", bad)
+		}
+	}
+}
+
+func TestExporterRecords(t *testing.T) {
+	type request struct {
+		path string
+		body map[string]any
+	}
+	var mu sync.Mutex
+	var got []request
+	status := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		b, _ := io.ReadAll(r.Body)
+		var body map[string]any
+		_ = json.Unmarshal(b, &body)
+		mu.Lock()
+		got = append(got, request{r.URL.Path, body})
+		s := status
+		mu.Unlock()
+		if s != 0 {
+			w.WriteHeader(s)
+		}
+	}))
+	defer srv.Close()
+	sink := NewSink(ConnectionConfig{Host: srv.URL, DistinctID: "me"}, func(context.Context) (string, error) { return "phc_x", nil }, nil)
+	in := uint64(7)
+	cost := 0.5
+	rec := func(name, scope, id string) observability.Record {
+		return observability.Record{Name: name, At: time.Unix(100, 0), From: "open", To: "running",
+			Correlation: observability.Correlation{ScopeID: domain.ID(scope), EventID: "e1", WorkID: "w1", TraceID: "t1"},
+			Attributes:  map[string]string{"record_id": id, "work.revision": "3", "work.kind": "github.issue", "padded": "007"}}
+	}
+	done := rec("execution.completed", "eng", "r3")
+	done.Correlation.ExecutionID, done.Correlation.ExecutorBinding = "x1", "opus-agent"
+	done.Attributes["execution.duration_ms"] = "1500"
+	done.Usage = &observability.Measurement{InputTokens: &in, Cost: &cost, Currency: "USD"}
+	batch := []observability.Record{rec("work.transitioned", "eng", "r1"), rec("lease.renewed", "eng", "r2"), done, rec("work.transitioned", "ops", "r4")}
+	var codes []string
+	x := &Exporter{Targets: func() []Target {
+		return []Target{{Scope: "eng", Settings: Settings{Records: []string{"work.*", "execution.*"}}, Sink: sink}, {Scope: "web", Settings: Settings{Records: []string{"*"}}, Sink: sink}}
+	}, Diagnostic: func(c string) { codes = append(codes, c) }}
+	if err := x.Export(context.Background(), batch); err != nil {
+		t.Fatal(err)
+	}
+	if len(got) != 1 || got[0].path != "/batch/" || got[0].body["api_key"] != "phc_x" {
+		t.Fatalf("one batch request for the entry with records in its scope, none for an empty one, no agent_turn without turns: %+v", got)
+	}
+	events := got[0].body["batch"].([]any)
+	if len(events) != 2 {
+		t.Fatalf("the selected records of the entry's scope only: %v", events)
+	}
+	first, second := events[0].(map[string]any), events[1].(map[string]any)
+	p := first["properties"].(map[string]any)
+	if first["event"] != "work.transitioned" || first["distinct_id"] != "me" || first["uuid"] == nil || p["scope"] != "eng" || p["$lib"] != "open-conduit" ||
+		p["from"] != "open" || p["to"] != "running" || p["work_id"] != "w1" || p["event_id"] != "e1" || p["trace_id"] != "t1" ||
+		p["work.revision"] != 3.0 || p["padded"] != "007" || p["work.kind"] != "github.issue" || p["execution_id"] != nil {
+		t.Fatalf("record event %v", first)
+	}
+	p = second["properties"].(map[string]any)
+	if second["event"] != "execution.completed" || p["execution_id"] != "x1" || p["executor_binding"] != "opus-agent" || p["execution.duration_ms"] != 1500.0 ||
+		p["input_tokens"] != 7.0 || p["cost"] != 0.5 || p["currency"] != "USD" || p["output_tokens"] != nil {
+		t.Fatalf("execution event %v", second)
+	}
+	// A redelivered record keeps its UUID; another record, or the same one in another scope, does not share it.
+	again, other, elsewhere := RecordEvent(batch[0]), RecordEvent(batch[2]), RecordEvent(batch[3])
+	if again.UUID != first["uuid"] || other.UUID == again.UUID || elsewhere.UUID == again.UUID || len(again.UUID) != 36 {
+		t.Fatalf("uuids %q %q %q", again.UUID, other.UUID, elsewhere.UUID)
+	}
+	if noID := RecordEvent(observability.Record{Name: "work.created"}); noID.UUID != "" {
+		t.Fatal("no record_id, no uuid")
+	}
+	status = http.StatusServiceUnavailable
+	if err := x.Export(context.Background(), batch); err != nil || len(codes) != 1 || codes[0] != "http_503" {
+		t.Fatalf("a failed batch is reported, not retried: %v %v", err, codes)
+	}
 }

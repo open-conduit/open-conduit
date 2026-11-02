@@ -3,8 +3,9 @@
 // PostHog's capture endpoint directly (nothing else is installed): an
 // `agent_turn` event for every finished execution (outcome, duration,
 // tokens and cost, from the lifecycle records the observability pipeline
-// delivers once each) and the host's telemetry events (reports, fixes, host
-// readings) too. It is an exporter on
+// delivers once each), the lifecycle records an entry selects, each as an
+// event named after the record, and the host's telemetry events (reports,
+// fixes, host readings) too. It is an exporter on
 // the public observability contract: a failing or slow PostHog loses
 // telemetry (counted by the pipeline) and never delays the runtime.
 package posthog
@@ -12,6 +13,7 @@ package posthog
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -106,6 +108,11 @@ type ExtensionConfig struct {
 	// Introspection is TelemetryEvents' old name, accepted for one release
 	// with a doctor warning; `migrate upgrade` renames it.
 	Introspection *bool `json:"introspection,omitempty"`
+	// Records names the lifecycle records of the entry's scope to send, each
+	// as a PostHog event named after the record: an exact name
+	// ("work.transitioned"), a family ("execution.*") or every record ("*").
+	// Default none.
+	Records []string `json:"records,omitempty"`
 }
 
 // Renamed maps each entry setting renamed in this release to its new name,
@@ -116,7 +123,18 @@ var Renamed = map[string]string{"introspection": "telemetry_events"}
 // uses.
 type Settings struct {
 	Turns, TelemetryEvents bool
+	Records                []string
 	OldNames               []string
+}
+
+// Sends reports whether the entry selects the lifecycle record name.
+func (s Settings) Sends(name string) bool {
+	for _, p := range s.Records {
+		if p == name || strings.HasSuffix(p, "*") && strings.HasPrefix(name, strings.TrimSuffix(p, "*")) {
+			return true
+		}
+	}
+	return false
 }
 
 // ParseExtension decodes and defaults an entry.
@@ -139,6 +157,12 @@ func ParseExtension(data []byte) (Settings, error) {
 	if c.TelemetryEvents != nil {
 		s.TelemetryEvents = *c.TelemetryEvents
 	}
+	for _, p := range c.Records {
+		if p == "" || strings.Contains(strings.TrimSuffix(p, "*"), "*") || strings.ContainsAny(p, " \t\r\n") {
+			return Settings{}, fmt.Errorf("posthog extension: records: %q is not a record name, a family such as \"execution.*\" or \"*\"", p)
+		}
+	}
+	s.Records = c.Records
 	return s, nil
 }
 
@@ -202,7 +226,52 @@ func (s *Sink) Capture(ctx context.Context, scope, name string, at time.Time, pr
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.conn.Host+"/i/v0/e/", bytes.NewReader(body))
+	return s.post(ctx, "/i/v0/e/", body)
+}
+
+// Event is one event of a batch.
+type Event struct {
+	Name       string
+	At         time.Time
+	Properties map[string]any
+	// UUID, when set, lets PostHog drop a redelivered copy.
+	UUID string
+}
+
+// Batch sends events in one request to the batch endpoint, each with its
+// scope (when it has one) as the `scope` property.
+func (s *Sink) Batch(ctx context.Context, scope string, events []Event) error {
+	if len(events) == 0 {
+		return nil
+	}
+	key, err := s.token(ctx)
+	if err != nil {
+		return err
+	}
+	batch := make([]map[string]any, 0, len(events))
+	for _, e := range events {
+		all := map[string]any{"$lib": "open-conduit"}
+		for k, v := range e.Properties {
+			all[k] = v
+		}
+		if scope != "" {
+			all["scope"] = scope
+		}
+		one := map[string]any{"event": e.Name, "distinct_id": s.conn.DistinctID, "timestamp": e.At.UTC(), "properties": all}
+		if e.UUID != "" {
+			one["uuid"] = e.UUID
+		}
+		batch = append(batch, one)
+	}
+	body, err := json.Marshal(map[string]any{"api_key": key, "batch": batch})
+	if err != nil {
+		return err
+	}
+	return s.post(ctx, "/batch/", body)
+}
+
+func (s *Sink) post(ctx context.Context, path string, body []byte) error {
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, s.conn.Host+path, bytes.NewReader(body))
 	if err != nil {
 		return errors.New("posthog: invalid request")
 	}
@@ -283,6 +352,57 @@ func TurnEvent(r observability.Record) (map[string]any, bool) {
 	return props, true
 }
 
+// RecordEvent maps a lifecycle record onto an event named after it. Its
+// properties are the record's correlation, transition and attributes
+// (integers as numbers) and usage; the pipeline has already redacted them.
+// The UUID derives from the scope, record and record_id, so a redelivered
+// record is one event in PostHog.
+func RecordEvent(r observability.Record) Event {
+	c := r.Correlation
+	props := map[string]any{"record": r.Name, "trace_id": c.TraceID}
+	add := func(k, v string) {
+		if v != "" {
+			props[k] = v
+		}
+	}
+	add("event_id", string(c.EventID))
+	add("work_id", string(c.WorkID))
+	add("execution_id", string(c.ExecutionID))
+	add("executor_binding", c.ExecutorBinding)
+	add("from", r.From)
+	add("to", r.To)
+	for k, v := range r.Attributes {
+		if n, err := strconv.ParseInt(v, 10, 64); err == nil && strconv.FormatInt(n, 10) == v {
+			props[k] = n
+		} else {
+			props[k] = v
+		}
+	}
+	if u := r.Usage; u != nil {
+		if u.InputTokens != nil {
+			props["input_tokens"] = *u.InputTokens
+		}
+		if u.OutputTokens != nil {
+			props["output_tokens"] = *u.OutputTokens
+		}
+		if u.CachedTokens != nil {
+			props["cached_tokens"] = *u.CachedTokens
+		}
+		if u.Cost != nil {
+			props["cost"] = *u.Cost
+			props["currency"] = u.Currency
+		}
+	}
+	e := Event{Name: r.Name, At: r.At, Properties: props}
+	if id := r.Attributes["record_id"]; id != "" {
+		h := sha256.Sum256([]byte(string(c.ScopeID) + "\x00" + r.Name + "\x00" + id))
+		h[6] = h[6]&0x0f | 0x80 // version 8 (custom)
+		h[8] = h[8]&0x3f | 0x80 // RFC 9562 variant
+		e.UUID = fmt.Sprintf("%x-%x-%x-%x-%x", h[0:4], h[4:6], h[6:8], h[8:10], h[10:16])
+	}
+	return e
+}
+
 // Export sends one batch. A failed capture is reported and the batch moves
 // on: the pipeline already isolates a failing exporter, and a retry would
 // send the events that succeeded twice.
@@ -295,6 +415,26 @@ func (x *Exporter) Export(ctx context.Context, records []observability.Record) e
 		return nil
 	}
 	var failed error
+	report := func(err error) {
+		failed = err
+		if x.Diagnostic != nil {
+			x.Diagnostic(code(err))
+		}
+	}
+	for _, t := range targets {
+		if len(t.Settings.Records) == 0 {
+			continue
+		}
+		var events []Event
+		for _, r := range records {
+			if t.Scope == string(r.Correlation.ScopeID) && t.Settings.Sends(r.Name) {
+				events = append(events, RecordEvent(r))
+			}
+		}
+		if err := t.Sink.Batch(ctx, t.Scope, events); err != nil {
+			report(err)
+		}
+	}
 	for _, r := range records {
 		props, ok := TurnEvent(r)
 		if !ok {
@@ -305,10 +445,7 @@ func (x *Exporter) Export(ctx context.Context, records []observability.Record) e
 				continue
 			}
 			if err := t.Sink.Capture(ctx, t.Scope, EventTurn, r.At, props); err != nil {
-				failed = err
-				if x.Diagnostic != nil {
-					x.Diagnostic(code(err))
-				}
+				report(err)
 			}
 		}
 	}
