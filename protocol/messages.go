@@ -352,6 +352,28 @@ type ActionSubmitParams struct {
 	Key      string `json:"key"`
 }
 
+// ActionListParams list the actions every provider offers now on a scope,
+// or on Work in it (extension.ActionOffer), for the extension to show on its
+// own surface.
+type ActionListParams struct {
+	ScopeID string `json:"scope_id"`
+	WorkID  string `json:"work_id,omitempty"`
+}
+
+// ActionOffer is one listed action and the provider offering it.
+type ActionOffer struct {
+	Provider string   `json:"provider"`
+	ID       string   `json:"id"`
+	Label    string   `json:"label"`
+	Prompt   string   `json:"prompt,omitempty"`
+	Choices  []string `json:"choices,omitempty"`
+}
+
+// ActionListResult is what action.list answers.
+type ActionListResult struct {
+	Actions []ActionOffer `json:"actions"`
+}
+
 // ActionSubmitResult is the accepted action's Event and the provider's
 // message for the person (extension.ActResult).
 type ActionSubmitResult struct {

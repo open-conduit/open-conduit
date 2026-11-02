@@ -673,6 +673,12 @@ func TestPermissionsOverProtocol(t *testing.T) {
 		acts, actors = append(acts, r), append(actors, owner)
 		return extension.ActResult{Added: true, Message: "answered"}, nil
 	}
+	deps.Actions = func(_ context.Context, owner string, scope, work domain.ID) ([]extension.ActionOffer, error) {
+		if owner != notes.Name || work != "work/1" {
+			return nil, errors.New("wrong request")
+		}
+		return []extension.ActionOffer{{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve", Prompt: "choose", Choices: []string{"approve", "refuse"}}}}, nil
+	}
 	o := e.options(notes.Name)
 	r := e.load(e.install(notes.Manifest(notes.Options{Release: 2}), notesPath), deps, o)
 	ctx := context.Background()
@@ -725,12 +731,19 @@ func TestPermissionsOverProtocol(t *testing.T) {
 		}
 		mu.Lock()
 		defer mu.Unlock()
+		offers, err := host.Actions(ctx, extensionScope, "work/1")
+		if err != nil || len(offers) != 1 || offers[0].Provider != "decisions" || offers[0].ID != "answer" || len(offers[0].Choices) != 2 {
+			t.Fatalf("offers: %+v %v", offers, err)
+		}
 		if len(acts) != 1 || actors[0] != notes.Name || acts[0].Caller != "U1" || acts[0].Work != "work/1" || acts[0].Input != "approve" || acts[0].Key != "press/1" {
 			t.Fatalf("acts %+v by %v", acts, actors)
 		}
 	})
 	t.Run("checked", func(t *testing.T) {
 		host := pipeHost(t, r.Service())
+		if _, err := host.Actions(ctx, "other-scope", ""); !errors.Is(err, extension.ErrUnauthorized) {
+			t.Fatalf("actions in a scope that does not use the package: %v", err)
+		}
 		if _, err := host.Act(ctx, extension.ActRequest{Scope: "other-scope", Action: "answer", Caller: "U1", Key: "k"}); !errors.Is(err, extension.ErrUnauthorized) {
 			t.Fatalf("act in a scope that does not use the package: %v", err)
 		}
@@ -772,6 +785,9 @@ func TestPermissionsOverProtocol(t *testing.T) {
 		}
 		if _, err := host.Act(ctx, extension.ActRequest{Scope: extensionScope, Action: "answer", Caller: "U1", Key: "k"}); !errors.Is(err, extension.ErrUndeclared) {
 			t.Fatalf("action.submit without its permission: %v", err)
+		}
+		if _, err := host.Actions(ctx, extensionScope, ""); !errors.Is(err, extension.ErrUndeclared) {
+			t.Fatalf("action.list without its permission: %v", err)
 		}
 		if _, err := host.Probe(ctx, notes.ProbeName, map[string]string{"say": "x"}); !errors.Is(err, extension.ErrUndeclared) {
 			t.Fatalf("probe.run without probes: %v", err)

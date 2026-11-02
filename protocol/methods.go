@@ -119,6 +119,7 @@ var Methods = []Method{
 	{Name: "telemetry.export", Direction: HostToExtension, Provides: "exporters", Contract: []string{"observability.Exporter.Export"}},
 	{Name: "telemetry.sink", Direction: HostToExtension, Permission: PermissionTelemetrySink, Contract: []string{"inproc.Sink.Capture"}},
 	{Name: "telemetry.capture", Direction: ExtensionToHost, Permission: PermissionTelemetryCapture, Contract: []string{"inproc.Host.Capture"}},
+	{Name: "action.list", Direction: ExtensionToHost, Permission: PermissionActionSubmit, Contract: []string{"inproc.Host.Actions", "extension.ActionOffer"}},
 	{Name: "action.submit", Direction: ExtensionToHost, Permission: PermissionActionSubmit, Contract: []string{"inproc.Host.Act", "extension.ActRequest", "extension.ActResult"}},
 	{Name: "probe.list", Direction: ExtensionToHost, Permission: PermissionProbes, Contract: []string{"inproc.Host.Probes", "extension.SetupProbe.Name", "extension.SetupProbe.Summary", "extension.SetupProbe.Args"}},
 	{Name: "probe.run", Direction: ExtensionToHost, Permission: PermissionProbes, Contract: []string{"extension.SetupProbe.Run", "extension.ProbeResult"}},

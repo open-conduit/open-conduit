@@ -101,6 +101,14 @@ type ActionProvider interface {
 // here to do, which a surface may treat as an ordinary message.
 const CodeNoAction = "no_action"
 
+// ActionOffer is one action a provider offers on a target now, as an
+// extension acting for people lists them (Host.Actions) to show them on its
+// own surface: a button per choice, say.
+type ActionOffer struct {
+	Provider string
+	Action
+}
+
 // ActRequest is an action an extension invokes for a person its own surface
 // identified. Work is the target Work (empty for a scope action). Provider
 // is the action provider's name; empty means the one provider offering

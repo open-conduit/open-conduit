@@ -129,4 +129,13 @@ func TestActPinsTheCallerToTheExtension(t *testing.T) {
 	if len(calls) != 4 {
 		t.Fatalf("a refused request reached a provider: %d calls", len(calls))
 	}
+
+	// Host.Actions lists every provider's offers on the target, by name.
+	offers, err := h.list(ctx, "eng", "")
+	if err != nil || len(offers) != 3 || offers[0].Provider != "decisions" || offers[0].ID != "answer" || offers[1].Provider != "other" || offers[2].Provider != "tracker" {
+		t.Fatalf("offers: %+v %v", offers, err)
+	}
+	if _, err = h.list(ctx, "eng", "work/elsewhere"); !errors.Is(err, storage.ErrNotFound) {
+		t.Fatalf("offers on unknown Work: %v", err)
+	}
 }

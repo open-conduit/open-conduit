@@ -88,6 +88,7 @@ var useCases = map[string][]string{
 	"telemetry.export":           {"posthog", "introspection"},
 	"telemetry.sink":             {"posthog"},
 	"telemetry.capture":          {"introspection", "posthog"},
+	"action.list":                {"slack"},
 	"action.submit":              {"github"},
 	"probe.list":                 {"setup"},
 	"probe.run":                  {"setup"},

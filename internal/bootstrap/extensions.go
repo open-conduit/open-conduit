@@ -531,6 +531,9 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		Act: func(ctx context.Context, owner string, r extension.ActRequest) (extension.ActResult, error) {
 			return d.act(owner)(ctx, r)
 		},
+		Actions: func(ctx context.Context, owner string, scope, work domain.ID) ([]extension.ActionOffer, error) {
+			return d.listActions(owner)(ctx, scope, work)
+		},
 		Probes: d.setupProbes,
 		Config: d.configHost(),
 	}

@@ -200,6 +200,21 @@ func (h *Host) Act(ctx context.Context, r extension.ActRequest) (extension.ActRe
 	return extension.ActResult{Event: out.Event.Domain(), Added: out.Added, Message: out.Message}, nil
 }
 
+// Actions lists what every provider offers now on scope, or on work in it
+// (permission action.submit), so the package can show them on its own
+// surface for Act to take.
+func (h *Host) Actions(ctx context.Context, scope, work domain.ID) ([]extension.ActionOffer, error) {
+	var out protocol.ActionListResult
+	if err := h.conn.Call(ctx, "action.list", protocol.ActionListParams{ScopeID: string(scope), WorkID: string(work)}, &out); err != nil {
+		return nil, err
+	}
+	offers := make([]extension.ActionOffer, 0, len(out.Actions))
+	for _, a := range out.Actions {
+		offers = append(offers, extension.ActionOffer{Provider: a.Provider, Action: extension.Action{ID: a.ID, Label: a.Label, Prompt: a.Prompt, Choices: a.Choices}})
+	}
+	return offers, nil
+}
+
 // ConfigBase reads the configuration now (permission config.read): its
 // generation and hash, and a handle on its text with the text itself
 // redacted. The host keeps the reference text.

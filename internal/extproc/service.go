@@ -68,6 +68,9 @@ type Deps struct {
 	// surface (action.submit, permission action.submit): the caller's kind
 	// is owner.
 	Act func(ctx context.Context, owner string, r extension.ActRequest) (extension.ActResult, error)
+	// Actions lists what every provider offers on a scope or Work in it,
+	// for owner (action.list, permission action.submit).
+	Actions func(ctx context.Context, owner string, scope, work domain.ID) ([]extension.ActionOffer, error)
 	// Probes are the setup probes the host, its extensions and executors
 	// offer, by full name (probe.list and probe.run, permission probes).
 	Probes func() map[string]extension.SetupProbe
@@ -332,6 +335,12 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return struct{}{}, s.capture(ctx, p)
+	case "action.list":
+		var p protocol.ActionListParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.actionList(ctx, p)
 	case "action.submit":
 		var p protocol.ActionSubmitParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
