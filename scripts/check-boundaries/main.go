@@ -174,6 +174,11 @@ func allowed(owner, dependency string, test bool) bool {
 	case under(owner, "internal/web"):
 		// The browser view (like the TUI) is a management client only.
 		return public(dependency) || under(dependency, "client") || under(dependency, "internal/cli") || under(dependency, "internal/web")
+	case under(owner, "extensions/tracker/pkg"):
+		// The kit's package entry point serves a tracker over the protocol
+		// (#428), as an extension's own does: the kit, public contracts and
+		// the protocol and SDK, never its examples.
+		return public(dependency) || under(dependency, "extensions/tracker") || (under(dependency, "protocol") && !under(dependency, "protocol/examples"))
 	case under(owner, "extensions/tracker"):
 		// The shared tracker kit (06-01) is public contracts only.
 		return public(dependency) || under(dependency, "extensions/tracker")

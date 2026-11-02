@@ -16,12 +16,9 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
-	bb "github.com/open-conduit/open-conduit/extensions/bitbucket"
 	"github.com/open-conduit/open-conduit/extensions/claudecode"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/introspection"
-	"github.com/open-conduit/open-conduit/extensions/jira"
-	"github.com/open-conduit/open-conduit/extensions/linear"
 	"github.com/open-conduit/open-conduit/extensions/schedule"
 	"github.com/open-conduit/open-conduit/extensions/shell"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
@@ -43,7 +40,7 @@ import (
 // firstParty is the list of first-party in-process extensions. Adding one
 // touches its own package and this list.
 func firstParty() []inproc.Extension {
-	return []inproc.Extension{shell.NewExtension(), claudecode.NewExtension(), gh.New(), introspection.New(), schedule.New(), linear.New(), jira.New(), bb.New(), sl.New()}
+	return []inproc.Extension{shell.NewExtension(), claudecode.NewExtension(), gh.New(), introspection.New(), schedule.New(), sl.New()}
 }
 
 // typeSets are an extension's own entry and connection types: what its
@@ -776,7 +773,9 @@ func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]ex
 
 // inprocPlaybooks adds the extensions' playbooks, first-party then
 // installed. An installed package's playbook never replaces one already
-// there, and its `{{bin}}` is how a turn runs Open Conduit.
+// there, and its `{{bin}}` is how a turn runs Open Conduit. Packages that
+// share a playbook (the trackers' work-tracker-issue) give the same text,
+// which is no conflict.
 func (d *daemon) inprocPlaybooks(into map[string]string) {
 	for _, x := range d.inproc {
 		p, ok := x.(inproc.Playbooker)
@@ -789,11 +788,15 @@ func (d *daemon) inprocPlaybooks(into map[string]string) {
 				into[name] = text
 				continue
 			}
-			if _, taken := into[name]; taken {
+			text = extproc.RenderPlaybook(text, "open-conduit")
+			if have, taken := into[name]; taken {
+				if have == text {
+					continue
+				}
 				d.log.Warn("extension playbook not written: the name is taken", "extension", x.Name(), "playbook", name)
 				continue
 			}
-			into[name] = extproc.RenderPlaybook(text, "open-conduit")
+			into[name] = text
 		}
 	}
 }

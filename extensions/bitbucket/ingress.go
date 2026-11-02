@@ -127,10 +127,15 @@ func ParsePullKey(id string) (int, bool) {
 	return n, err == nil
 }
 
-// Generations resolves the tracker issue generation current at a time (the
-// tracker's reopen history), so a PR correlates with the issue's live Work.
-// Nil, or an error, keys the base generation.
-type Generations func(ctx context.Context, key string, at time.Time) (string, error)
+// Generations reads what resolves tracker issue generations (the tracker's
+// reopen history), once for each push or reconcile page, so a PR
+// correlates with the issue's live Work. Nil, or an error, keys the base
+// generation.
+type Generations func(ctx context.Context) (GenerationAt, error)
+
+// GenerationAt is the generation of issue key current at a time; "" is the
+// base generation.
+type GenerationAt func(key string, at time.Time) string
 
 // envelope is the verified delivery handed to Push.
 type envelope struct {
@@ -253,8 +258,12 @@ func (g *Ingress) checkSource(src extension.Source) error {
 }
 
 type normalizer struct {
-	s        Settings
-	gens     Generations
+	s    Settings
+	gens Generations
+	// at is gens' resolver, read on the first PR that needs it.
+	at       GenerationAt
+	atErr    error
+	read     bool
 	received time.Time
 }
 
@@ -284,11 +293,16 @@ func (n *normalizer) pullKey(ctx context.Context, p rawPR) (domain.CorrelationKe
 	}
 	gen := ""
 	if n.gens != nil {
-		g, err := n.gens(ctx, issue, parseTime(p.CreatedOn))
-		if err != nil && !errors.Is(err, tracker.ErrNotFound) {
-			return domain.CorrelationKey{}, "", err
+		if !n.read {
+			n.at, n.atErr = n.gens(ctx)
+			n.read = true
 		}
-		gen = g
+		if n.atErr != nil && !errors.Is(n.atErr, tracker.ErrNotFound) {
+			return domain.CorrelationKey{}, "", n.atErr
+		}
+		if n.at != nil {
+			gen = n.at(issue, parseTime(p.CreatedOn))
+		}
 	}
 	return domain.CorrelationKey{Source: n.s.TrackerNS, ExternalID: tracker.IssueKey(issue, gen)}, issue, nil
 }

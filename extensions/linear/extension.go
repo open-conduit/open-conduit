@@ -9,8 +9,11 @@ import (
 
 // New returns the Linear extension: the tracker kit's in-process extension
 // for Linear entries.
-func New() *tracker.Extension {
-	return tracker.NewExtension(tracker.Kind{Type: Type, ValidateConnection: ValidateConnection, ValidateExtension: ValidateExtension, Open: open, HookPermission: nil})
+func New() *tracker.Extension { return tracker.NewExtension(Kind()) }
+
+// Kind is the tracker kit's description of Linear: its type, validators and client.
+func Kind() tracker.Kind {
+	return tracker.Kind{Type: Type, ValidateConnection: ValidateConnection, ValidateExtension: ValidateExtension, Open: open, HookPermission: nil}
 }
 
 // open builds an entry's settings and Linear client.

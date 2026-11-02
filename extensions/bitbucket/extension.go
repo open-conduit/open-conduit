@@ -23,8 +23,8 @@ import (
 // reconcile), its route handler selects input, its tools join every
 // generation's toolbelt, and a manage_webhook entry has its repository
 // webhook pointed at the public URL. Pull requests of a reopened issue key
-// the issue's generation through the tracker entry the entry names
-// (tracker.Generation), when that tracker runs in this process.
+// the issue's generation from the Work the tracker entry the entry names
+// keeps in the scope (StoreGenerations).
 
 type source struct {
 	name    string
@@ -195,10 +195,7 @@ func (x *Extension) add(e protocol.ConfigEntry, st Settings) error {
 	client := NewClient(cfg, secrets, ClientOptions{Now: x.now})
 	var gens Generations
 	if ns := st.TrackerNS; ns != "" {
-		gens = func(ctx context.Context, key string, at time.Time) (string, error) {
-			gen, _, err := tracker.Generation(ctx, ns, key, at)
-			return gen, err
-		}
+		gens = StoreGenerations(x.h.Store, scope, ns, x.now)
 	}
 	s := &source{name: Type + "/" + e.ScopeID + "/" + e.Name, scope: scope, config: append(json.RawMessage(nil), e.Config...),
 		src:     Source{Settings: st, Client: client, Outbox: NewOutbox(x.h.Store, st, x.now)},
@@ -335,10 +332,6 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 		if until, on := s.src.Client.PausedUntil(); on {
 			tracker.Raise(&check, inproc.CheckWarn, "rate_limited")
 			notes = append(notes, "rate limited until "+until.UTC().Format(time.RFC3339))
-		}
-		if st.TrackerNS != "" && !tracker.Registered(st.TrackerNS) {
-			tracker.Raise(&check, inproc.CheckWarn, "tracker_missing")
-			notes = append(notes, "tracker "+st.TrackerNS+" is not registered (PRs of reopened issues key the first generation)")
 		}
 		notes = append(notes, x.hooks.Item(&check, st.Namespace, s.name, st.WebhookSecret != "", st.ManageWebhook))
 		if x.h.DryRun || st.DryRun {

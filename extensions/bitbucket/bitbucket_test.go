@@ -96,21 +96,27 @@ func TestReconcilePaginationCommentsAndChecks(t *testing.T) {
 	f.SetStatus("aaa1111abc", "build", "SUCCESSFUL", "https://ci/1")
 	f.SetStatus("aaa1111abc", "deploy-preview", "SUCCESSFUL", "https://preview/1")
 	f.SetStatus("bbb2222abc", "build", "INPROGRESS", "")
+	reads := 0
 	in := bitbucket.NewIngress(s, c, f.Now, bitbucket.IngressOptions{BatchUnits: 2,
-		Generations: func(_ context.Context, key string, _ time.Time) (string, error) {
-			if key == "PROJ-7" {
-				return "reopen-5", nil
-			}
-			return "", nil
+		Generations: func(context.Context) (bitbucket.GenerationAt, error) {
+			reads++
+			return func(key string, _ time.Time) string {
+				if key == "PROJ-7" {
+					return "reopen-5"
+				}
+				return ""
+			}, nil
 		}})
 	src := extension.Source{Namespace: "bitbucket/acme/app", ScopeID: "proj"}
 	var all []extension.Observation
 	scan := extension.Scan{Source: src}
+	pages := 0
 	for n := 0; n < 10; n++ {
 		snap, err := in.Reconcile(context.Background(), scan)
 		if err != nil {
 			t.Fatal(err)
 		}
+		pages++
 		all = append(all, snap.Observations...)
 		if snap.NextCursor == "" {
 			if !snap.Complete {
@@ -119,6 +125,10 @@ func TestReconcilePaginationCommentsAndChecks(t *testing.T) {
 			break
 		}
 		scan.ScanID, scan.Cursor = snap.ScanID, snap.NextCursor
+	}
+	// Generations are read at most once a page, not once a pull request.
+	if reads == 0 || reads > pages {
+		t.Errorf("generations read %d times over %d pages", reads, pages)
 	}
 	types := map[string]string{}
 	for _, o := range all {
@@ -316,6 +326,32 @@ func TestSamplesTraceAgainstTheScope(t *testing.T) {
 		d, err := bitbucket.Route{}.Match(context.Background(), extension.RouteInput{Event: domain.AcceptedEvent{Event: s.Event}, Scope: scope, Work: work})
 		if err != nil || !d.Match {
 			t.Fatalf("%s must be input for the issue's Work: %+v, %v", s.ID, d, err)
+		}
+	}
+}
+
+// A pull request keys the latest generation the tracker opened Work for,
+// at or before the pull request, in the entry's scope and the tracker's
+// namespace; with none it keys the first generation.
+func TestGenerationFromWorks(t *testing.T) {
+	ns := "jira/acme/proj"
+	key := func(source, id string) domain.CorrelationKey {
+		return domain.CorrelationKey{Source: source, ExternalID: id}
+	}
+	works := []domain.Work{
+		{ScopeID: "proj", CorrelationKeys: []domain.CorrelationKey{key(ns, "issue/PROJ-7")}},
+		{ScopeID: "proj", CorrelationKeys: []domain.CorrelationKey{key(ns, "issue/PROJ-7/generation/reopen-100")}},
+		{ScopeID: "proj", CorrelationKeys: []domain.CorrelationKey{key(ns, "issue/PROJ-7/generation/reopen-300")}},
+		{ScopeID: "proj", CorrelationKeys: []domain.CorrelationKey{key(ns, "issue/PROJ-8/generation/reopen-150")}},
+		{ScopeID: "other", CorrelationKeys: []domain.CorrelationKey{key(ns, "issue/PROJ-7/generation/reopen-200")}},
+		{ScopeID: "proj", CorrelationKeys: []domain.CorrelationKey{key("linear/eng", "issue/PROJ-7/generation/reopen-250")}},
+	}
+	for _, c := range []struct {
+		at   int64
+		want string
+	}{{50, ""}, {100, "reopen-100"}, {299, "reopen-100"}, {300, "reopen-300"}, {900, "reopen-300"}} {
+		if got := bitbucket.GenerationFromWorks(works, "proj", ns, "PROJ-7", time.Unix(c.at, 0)); got != c.want {
+			t.Errorf("at %d: %q, want %q", c.at, got, c.want)
 		}
 	}
 }

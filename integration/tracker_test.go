@@ -193,10 +193,7 @@ func (e *trEnv) open() {
 	if e.bb != nil {
 		e.bbSource.Outbox = bb.NewOutbox(store, e.bbSource.Settings, e.clock.Now)
 		e.bbIngress = bb.NewIngress(e.bbSource.Settings, e.bbSource.Client, e.clock.Now, bb.IngressOptions{
-			Generations: func(ctx context.Context, key string, at time.Time) (string, error) {
-				r, err := e.service.Reopens(ctx, key)
-				return tracker.GenerationAt(r, at), err
-			}})
+			Generations: bb.StoreGenerations(store, domain.ID(e.f.scope), e.f.ns, e.clock.Now)})
 	}
 }
 

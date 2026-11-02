@@ -105,8 +105,8 @@ func assemble(t *testing.T, root, bin string, args ...string) (string, protocol.
 }
 
 // hostPackage lays out the first-party package name under root as `make
-// packages` does: the manifest and certification the built open-conduit
-// prints (`open-conduit extension-run NAME package-manifest`), with no
+// packages` does: the manifest, certification and playbooks the built
+// open-conduit writes (`open-conduit extension-run NAME package-manifest`), with no
 // executable, since that open-conduit runs it (#428). It points the host's
 // own executable, which an in-process certification or host resolves the
 // command to, at that binary.
@@ -156,6 +156,9 @@ func hostPackageDir(t *testing.T, root, name string) (string, protocol.Manifest)
 	if err := os.WriteFile(filepath.Join(dir, "certification.json"), cert, 0o644); err != nil {
 		t.Fatal(err)
 	}
+	if out, err := exec.Command(bin, protocol.HostRun, name, "package-playbooks", filepath.Join(dir, "playbooks")).CombinedOutput(); err != nil {
+		t.Fatalf("%s package-playbooks: %v: %s", name, err, out)
+	}
 	return dir, m
 }
 
@@ -187,6 +190,11 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		{"posthog", "", nil},
 		{"human", "", nil},
 		{"observe", "", nil},
+		// The trackers through inprocsdk, each with a fixture of its own
+		// fake service.
+		{"linear", "", []string{"ingress.conformance"}},
+		{"jira", "", []string{"ingress.conformance"}},
+		{"bitbucket", "", []string{"ingress.conformance"}},
 		{"codex", "", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace"}},
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},

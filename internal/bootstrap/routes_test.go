@@ -11,8 +11,10 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
+	"github.com/open-conduit/open-conduit/extensions/bitbucket"
 	"github.com/open-conduit/open-conduit/extensions/introspection"
 	"github.com/open-conduit/open-conduit/extensions/observe"
+	"github.com/open-conduit/open-conduit/extensions/tracker"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
@@ -121,9 +123,6 @@ func samplesConfig() []byte {
 		"connections": []any{
 			map[string]any{"id": "github", "type": "github", "config": map[string]any{}, "secret_refs": map[string]any{"token": "env:OC_TEST_GITHUB_TOKEN"}},
 			map[string]any{"id": "slack", "type": "slack", "config": map[string]any{}, "secret_refs": map[string]any{"bot_token": "env:OC_TEST_SLACK_BOT_TOKEN", "app_token": "env:OC_TEST_SLACK_APP_TOKEN"}},
-			map[string]any{"id": "linear", "type": "linear", "config": map[string]any{}, "secret_refs": map[string]any{"token": "env:OC_TEST_LINEAR_TOKEN"}},
-			map[string]any{"id": "jira", "type": "jira", "config": map[string]any{"base_url": "https://acme.atlassian.net", "email": "me@example.com"}, "secret_refs": map[string]any{"token": "env:OC_TEST_JIRA_TOKEN"}},
-			map[string]any{"id": "bitbucket", "type": "bitbucket", "config": map[string]any{"username": "me@example.com"}, "secret_refs": map[string]any{"token": "env:OC_TEST_BB_TOKEN"}},
 		},
 		"scopes": []any{
 			scope("manual", []string{}, shell(), []any{route("manual", "manual", map[string]any{})}, []any{}),
@@ -133,11 +132,6 @@ func samplesConfig() []byte {
 				[]any{entry("support", "slack", "slack", map[string]any{"namespace": "slack/T0TEAM", "scope": "chat", "team": "T0TEAM", "channels": []string{"C0SUPPORT"}, "bot_user_id": "UBOT", "receiver": "socket"})}),
 			scope("ops", []string{}, shell(), []any{route("jobs", "schedule", map[string]any{})},
 				[]any{entry("jobs", "schedule", "", map[string]any{"namespace": "schedule/ops", "scope": "ops", "jobs": []any{map[string]any{"name": "tick", "every_minutes": 60}, map[string]any{"name": "nightly"}}})}),
-			scope("eng", []string{"linear"}, shell(), []any{route("issues", "linear", map[string]any{})},
-				[]any{entry("eng", "linear", "linear", map[string]any{"namespace": "linear/eng", "scope": "eng", "teams": []string{"ENG"}, "transitions": map[string]any{"claimed": "In Progress"}})}),
-			scope("proj", []string{"jira", "bitbucket"}, shell(), []any{route("issues", "jira", map[string]any{}), route("prs", "bitbucket", map[string]any{})},
-				[]any{entry("proj", "jira", "jira", map[string]any{"namespace": "jira/acme/proj", "scope": "proj", "projects": []string{"PROJ"}, "transitions": map[string]any{"done": "Done"}}),
-					entry("app", "bitbucket", "bitbucket", map[string]any{"namespace": "bitbucket/acme/app", "scope": "proj", "repo": "acme/app", "tracker": map[string]any{"namespace": "jira/acme/proj", "keys": []string{"PROJ"}}})}),
 			scope("self", []string{}, shell(introspection.OpReport), []any{route("reports", introspection.Type, map[string]any{"work": introspection.WorkReport})},
 				[]any{entry("introspection", introspection.Type, "", map[string]any{})}),
 		},
@@ -221,7 +215,17 @@ func packagedSamplers() map[string]struct {
 		scope domain.Scope
 		route domain.Route
 	}
+	scopeOf := func(id, entries string) domain.Scope {
+		return domain.Scope{ID: domain.ID(id), Config: domain.Payload{Data: []byte(`{"extensions":[` + entries + `]}`)}}
+	}
+	proj := scopeOf("proj", `{"type":"jira","config":{"namespace":"jira/acme/proj","scope":"proj","projects":["PROJ"],"transitions":{"done":"Done"}}},`+
+		`{"type":"bitbucket","config":{"namespace":"bitbucket/acme/app","scope":"proj","repo":"acme/app","tracker":{"namespace":"jira/acme/proj","keys":["PROJ"]}}}`)
 	return map[string]c{
+		"linear": {tracker.Route{Type: "linear"},
+			scopeOf("eng", `{"type":"linear","config":{"namespace":"linear/eng","scope":"eng","teams":["ENG"],"transitions":{"claimed":"In Progress"}}}`),
+			domain.Route{Name: "issues", Handler: "linear"}},
+		"jira":      {tracker.Route{Type: "jira"}, proj, domain.Route{Name: "issues", Handler: "jira"}},
+		"bitbucket": {bitbucket.Route{}, proj, domain.Route{Name: "prs", Handler: "bitbucket"}},
 		observe.Type: {observe.Route{},
 			domain.Scope{ID: "help", Config: domain.Payload{Data: []byte(`{"extensions":[{"type":"observe","config":{"sources":[{"name":"slack-help","reporters":["run"]}]}}]}`)}},
 			domain.Route{Name: "slack-help", Handler: observe.Type, Config: domain.Payload{Data: []byte(`{"source":"slack-help"}`)}}},
