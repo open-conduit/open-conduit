@@ -103,12 +103,14 @@ A `human` entry offers `answer` on Work parked on one of its asks, only while th
 **TUI.** The shared view keeps one run model for every executor. With a controlling source (`tui.Operator`) it adds these keys:
 
 - `c` lists the scopes' actions (claim among them); a number picks one, then its prompt or a y/n;
-- `R` runs or retries;
-- `H` holds or releases;
+- `R` runs or retries after a y/n prompt, since a retry starts a new turn;
+- `H` reads the Work's current hold: held Work is released, otherwise it asks for a reason (`enter` alone records `operator (tui)`) and holds with it, so history says why;
 - `a` attaches, through `tea.Exec` with the same hold/release flow;
 - `x` cancels the attempt and `X` the Work, each after a y/n prompt;
 - `l` opens a run's log; on a running run it shows the output so far and follows it;
 - `t` opens a run's transcript (live or final) from the list or detail, and in the log view steps to the next output (log, stream-json transcript, stderr).
+
+In a detail or log, `q` goes back like `esc`; it quits only from the list (`ctrl+c` quits anywhere). The footers and the key table in the [operating guide](/open-conduit/guides/operating/) both render from `tui.Keys`, and `TestDocsTUIKeys` (part of `make docs-check`) fails when the guide's table differs.
 
 Detail shows the Work's correlation keys, hold, annotations and active or woken Waits as data, and its actions numbered `1`–`9`, with no executor or domain branch. A refused action shows the provider's code and message. A read-only source shows none of this.
 

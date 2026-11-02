@@ -249,6 +249,55 @@ func (m Model) action(label string, fn func(ctx context.Context, ctl Controls, w
 
 func key() string { return cli.NewKey() }
 
+// operatorReason is the reason a control records when the operator gives
+// none.
+const operatorReason = "operator (tui)"
+
+// holdMsg is the Work H acts on: a held Work is released, otherwise the
+// view asks why it is being held.
+type holdMsg struct {
+	work client.Work
+	err  error
+}
+
+// holdOrRelease reads the Work's current hold, so H acts on what the Work
+// is now rather than on what the view last showed.
+func (m Model) holdOrRelease(workID string) tea.Cmd {
+	ctl := m.ctl
+	return func() tea.Msg {
+		ctx, cancel := call()
+		defer cancel()
+		w, err := ctl.Work(ctx, workID)
+		return holdMsg{work: w, err: err}
+	}
+}
+
+// hold releases held Work, or asks for a hold reason (enter skips it).
+func (m Model) hold(msg holdMsg) (Model, tea.Cmd) {
+	if msg.err != nil {
+		m.err, m.notice = errText(msg.err), ""
+		return m, nil
+	}
+	id := msg.work.ID
+	if msg.work.Hold != nil {
+		return m, m.action("release", func(ctx context.Context, ctl Controls, w client.Work) (client.ControlResult, error) {
+			return ctl.ReleaseWork(ctx, w.ID, w.Revision, operatorReason, key())
+		}, id)
+	}
+	m.ask = &asking{label: "hold work " + id + ", reason (optional)", submit: func(reason string) tea.Cmd {
+		if reason == "" {
+			reason = operatorReason
+		}
+		return m.action("hold", func(ctx context.Context, ctl Controls, w client.Work) (client.ControlResult, error) {
+			if w.Hold != nil {
+				return client.ControlResult{}, fmt.Errorf("work %s is already held", w.ID)
+			}
+			return ctl.HoldWork(ctx, w.ID, w.Revision, reason, key())
+		}, id)
+	}}
+	return m, nil
+}
+
 // controlKey handles an action key in list or detail mode.
 func (m Model) controlKey(k string, r client.Run) (Model, tea.Cmd, bool) {
 	if m.ctl == nil {
@@ -263,7 +312,7 @@ func (m Model) controlKey(k string, r client.Run) (Model, tea.Cmd, bool) {
 		m.confirm = &pending{prompt: "cancel execution " + r.ID + "?", cmd: func() tea.Msg {
 			ctx, cancel := call()
 			defer cancel()
-			res, err := m.ctl.CancelExecution(ctx, r.ID, r.Revision, "operator (tui)", key())
+			res, err := m.ctl.CancelExecution(ctx, r.ID, r.Revision, operatorReason, key())
 			if err != nil {
 				return actionMsg{err: err}
 			}
@@ -272,20 +321,17 @@ func (m Model) controlKey(k string, r client.Run) (Model, tea.Cmd, bool) {
 		return m, nil, true
 	case "X":
 		m.confirm = &pending{prompt: "cancel work " + r.WorkID + " (terminal)?", cmd: m.action("work cancel", func(ctx context.Context, ctl Controls, w client.Work) (client.ControlResult, error) {
-			return ctl.CancelWork(ctx, w.ID, w.Revision, "operator (tui)", key())
+			return ctl.CancelWork(ctx, w.ID, w.Revision, operatorReason, key())
 		}, r.WorkID)}
 		return m, nil, true
 	case "R":
-		return m, m.action("retry", func(ctx context.Context, ctl Controls, w client.Work) (client.ControlResult, error) {
-			return ctl.RetryWork(ctx, w.ID, w.Revision, "operator (tui)", key())
-		}, r.WorkID), true
+		// A retry starts a new turn (often a paid agent's), so it asks.
+		m.confirm = &pending{prompt: "run or retry work " + r.WorkID + " (starts a new turn)?", cmd: m.action("retry", func(ctx context.Context, ctl Controls, w client.Work) (client.ControlResult, error) {
+			return ctl.RetryWork(ctx, w.ID, w.Revision, operatorReason, key())
+		}, r.WorkID)}
+		return m, nil, true
 	case "H":
-		return m, m.action("hold/release", func(ctx context.Context, ctl Controls, w client.Work) (client.ControlResult, error) {
-			if w.Hold != nil {
-				return ctl.ReleaseWork(ctx, w.ID, w.Revision, "operator (tui)", key())
-			}
-			return ctl.HoldWork(ctx, w.ID, w.Revision, "operator (tui)", key())
-		}, r.WorkID), true
+		return m, m.holdOrRelease(r.WorkID), true
 	case "S", "E":
 		return m.stuckKey(k, r.WorkID)
 	case "a":
@@ -356,7 +402,7 @@ func (m Model) stuckKey(k, workID string) (Model, tea.Cmd, bool) {
 		m.confirm = &pending{prompt: "skip event " + id + "? routing won't try it again", cmd: func() tea.Msg {
 			ctx, cancel := call()
 			defer cancel()
-			res, err := ctl.SkipEvent(ctx, id, "operator (tui)", key())
+			res, err := ctl.SkipEvent(ctx, id, operatorReason, key())
 			if err != nil {
 				return actionMsg{err: err}
 			}
@@ -367,7 +413,7 @@ func (m Model) stuckKey(k, workID string) (Model, tea.Cmd, bool) {
 	return m, func() tea.Msg {
 		ctx, cancel := call()
 		defer cancel()
-		res, err := ctl.RerouteEvent(ctx, id, "operator (tui)", key())
+		res, err := ctl.RerouteEvent(ctx, id, operatorReason, key())
 		if err != nil {
 			return actionMsg{err: err}
 		}
