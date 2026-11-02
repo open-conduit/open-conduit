@@ -151,7 +151,7 @@ func read(t *testing.T, path string) string {
 func TestRunOnRemote(t *testing.T) {
 	f := newFakeRemote(t)
 	ctx := context.Background()
-	script := `cat a.txt > copy.txt; rm b.txt; echo planted >> .git/config; mkdir -p sub; echo "$FOO/$SECRET_TOKEN" > sub/env.txt; ln -s a.txt link; exit 3`
+	script := `cat a.txt > copy.txt; cp -p a.txt preserved.txt; rm b.txt; mkdir moved; mv a.txt moved/renamed.txt; echo planted >> .git/config; mkdir -p sub; echo "$FOO/$SECRET_TOKEN" > sub/env.txt; ln -s a.txt link; exit 3`
 	plan, err := f.bind(nil).Launch(ctx, f.needs(), f.launch(script))
 	if err != nil {
 		t.Fatal(err)
@@ -187,6 +187,15 @@ func TestRunOnRemote(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(f.ws, "b.txt")); !os.IsNotExist(err) {
 		t.Errorf("b.txt, removed on the remote, is still here: %v", err)
+	}
+	// A rename and a copy keep their mtime; both still come back.
+	for _, name := range []string{"moved/renamed.txt", "preserved.txt"} {
+		if got := read(t, filepath.Join(f.ws, name)); got != "alpha\n" {
+			t.Errorf("%s is %q", name, got)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(f.ws, "a.txt")); !os.IsNotExist(err) {
+		t.Errorf("a.txt, renamed on the remote, is still here: %v", err)
 	}
 	if got := read(t, filepath.Join(f.ws, ".git", "config")); got != "[core]\n" {
 		t.Errorf(".git/config came back as %q; a read-only need never does", got)
@@ -356,6 +365,85 @@ func TestParseConfig(t *testing.T) {
 	err := ValidateConfig(json.RawMessage(`{"image":"runner.test@sha256:` + strings.Repeat("0", 64) + `","provider":{"host":"runner.test","host_key":"` + f.settings.HostKey + `","network":"host"}}`))
 	if err == nil || !strings.Contains(err.Error(), digest) {
 		t.Errorf("the error %v doesn't give the image to set", err)
+	}
+}
+
+func TestRunCantReplaceGit(t *testing.T) {
+	f := newFakeRemote(t)
+	ctx := context.Background()
+	write(t, filepath.Join(f.ws, ".git", "HEAD"), "ref: refs/heads/main\n", 0o644)
+	script := `rm -rf .git; mkdir evil; printf '[core]\n\tfsmonitor = /tmp/pwn\n' > evil/config; ln -s evil .git`
+	plan, err := f.bind(nil).Launch(ctx, f.needs(), f.launch(script))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code, out := f.helper(plan.Argv, nil); code != 0 {
+		t.Fatalf("the helper exited %d: %s", code, out)
+	}
+	fi, err := os.Lstat(filepath.Join(f.ws, ".git"))
+	if err != nil || !fi.IsDir() {
+		t.Fatalf(".git is %v, %v: it must stay the host's directory", fi, err)
+	}
+	if got := read(t, filepath.Join(f.ws, ".git", "config")); got != "[core]\n" {
+		t.Errorf(".git/config is %q", got)
+	}
+}
+
+// replaceGit is an archive in which a run has replaced <ws>/.git with a
+// link to a config of its own, and written a .git file beside it.
+func replaceGit(ws string) *bytes.Buffer {
+	var buf bytes.Buffer
+	tw := tar.NewWriter(&buf)
+	entry := func(name string, typ byte, link, data string) {
+		_ = tw.WriteHeader(&tar.Header{Name: "." + name, Typeflag: typ, Linkname: link, Size: int64(len(data)), Mode: 0o644, ModTime: time.Now()})
+		_, _ = tw.Write([]byte(data))
+	}
+	entry(ws+"/evil", tar.TypeDir, "", "")
+	entry(ws+"/evil/config", tar.TypeReg, "", "[core]\n\tfsmonitor = /tmp/pwn\n")
+	entry(ws+"/.git", tar.TypeSymlink, ws+"/evil", "")
+	entry(ws+"/sub/.git", tar.TypeReg, "", "gitdir: /tmp/elsewhere\n")
+	_ = tw.Close()
+	return &buf
+}
+
+func TestApplyKeepsProtectedParents(t *testing.T) {
+	setup := func(t *testing.T) (string, []string) {
+		tmp, _ := filepath.EvalSymlinks(t.TempDir())
+		ws := filepath.Join(tmp, "ws")
+		for _, d := range []string{filepath.Join(ws, ".git", "hooks"), filepath.Join(ws, "sub", ".git")} {
+			if err := os.MkdirAll(d, 0o700); err != nil {
+				t.Fatal(err)
+			}
+		}
+		write(t, filepath.Join(ws, ".git", "config"), "[core]\n", 0o644)
+		write(t, filepath.Join(ws, ".git", "HEAD"), "ref: refs/heads/main\n", 0o644)
+		write(t, filepath.Join(ws, "sub", ".git", "config"), "[core]\n", 0o644)
+		return ws, []string{filepath.Join(ws, ".git", "config"), filepath.Join(ws, ".git", "hooks"), filepath.Join(ws, "sub", ".git", "config")}
+	}
+	ws, keep := setup(t)
+	listed := map[string]bool{ws + "/.git": true, ws + "/evil": true, ws + "/evil/config": true, ws + "/sub/.git": true}
+	if err := Apply(replaceGit(ws), listed, map[string]Entry{}, []string{ws}, keep); err != nil {
+		t.Fatal(err)
+	}
+	for _, dir := range []string{".git", "sub/.git"} {
+		if fi, err := os.Lstat(filepath.Join(ws, dir)); err != nil || !fi.IsDir() {
+			t.Errorf("%s was replaced: %v %v", dir, fi, err)
+		}
+	}
+	if got := read(t, filepath.Join(ws, ".git", "HEAD")); got != "ref: refs/heads/main\n" {
+		t.Errorf(".git/HEAD is %q", got)
+	}
+	if got := read(t, filepath.Join(ws, ".git", "config")); got != "[core]\n" {
+		t.Errorf(".git/config is %q", got)
+	}
+	// Negative control: with nothing kept, the same archive does replace
+	// .git, so the case above is the one the pinning stops.
+	ws, _ = setup(t)
+	if err := Apply(replaceGit(ws), listed, map[string]Entry{}, []string{ws}, nil); err != nil {
+		t.Fatal(err)
+	}
+	if fi, err := os.Lstat(filepath.Join(ws, ".git")); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Errorf("without keep, .git is %v, %v: the archive doesn't exercise the replacement", fi, err)
 	}
 }
 

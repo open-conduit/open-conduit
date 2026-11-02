@@ -10,6 +10,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -225,7 +226,21 @@ func (h *helper) copyBack(ctx context.Context) error {
 	}
 	argv := append(append([]string{}, h.run.SSH...), "-T", h.run.Host, command(h.run.Root, scriptDownload, append([]string{h.run.ID}, h.run.Write...)...))
 	cmd := exec.CommandContext(ctx, argv[0], argv[1:]...)
-	cmd.Stdin = bytes.NewReader(nil)
+	// What the remote has and the host didn't copy comes back whatever its
+	// times: a renamed file keeps its old mtime.
+	listed := ParseList(listing)
+	var fresh []string
+	for path := range listed {
+		if _, ok := h.run.Manifest[path]; !ok {
+			fresh = append(fresh, path)
+		}
+	}
+	sort.Strings(fresh)
+	var extra bytes.Buffer
+	for _, path := range fresh {
+		extra.WriteString("." + path + "\x00")
+	}
+	cmd.Stdin = &extra
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	out, err := cmd.StdoutPipe()
@@ -235,7 +250,7 @@ func (h *helper) copyBack(ctx context.Context) error {
 	if err := cmd.Start(); err != nil {
 		return err
 	}
-	applyErr := Apply(out, ParseList(listing), h.run.Manifest, h.run.Write, h.run.Keep)
+	applyErr := Apply(out, listed, h.run.Manifest, h.run.Write, h.run.Keep)
 	if applyErr != nil {
 		_ = cmd.Process.Kill()
 	}

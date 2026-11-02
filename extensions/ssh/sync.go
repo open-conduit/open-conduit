@@ -120,6 +120,9 @@ func Apply(archive io.Reader, listed map[string]bool, manifest map[string]Entry,
 	allowed := func(path string) bool {
 		return filepath.IsAbs(path) && filepath.Clean(path) == path && extension.Within(path, write) && !extension.Within(path, keep)
 	}
+	// Every directory holding a kept path is pinned: it may only stay a
+	// directory, so a run can't replace .git to get round .git/config.
+	pinned := pinnedDirs(keep)
 	tr := tar.NewReader(archive)
 	for {
 		h, err := tr.Next()
@@ -137,16 +140,19 @@ func Apply(archive io.Reader, listed map[string]bool, manifest map[string]Entry,
 			continue
 		}
 		mode := fs.FileMode(h.Mode).Perm()
+		if pinned[name] && h.Typeflag != tar.TypeDir {
+			continue
+		}
 		switch h.Typeflag {
 		case tar.TypeDir:
-			if err := ensureDir(name, write, mode|0o700); err != nil {
+			if err := ensureDir(name, write, mode|0o700, pinned); err != nil {
 				return err
 			}
 		case tar.TypeReg:
 			if m, ok := manifest[name]; ok && m.Type == tar.TypeReg && m.Size == h.Size && m.Mtime == h.ModTime.Unix() && m.Mode == int64(mode) {
 				continue
 			}
-			if err := safeParent(name, write); err != nil {
+			if err := safeParent(name, write, pinned); err != nil {
 				return err
 			}
 			if err := writeFile(name, tr, mode, h.ModTime); err != nil {
@@ -158,7 +164,7 @@ func Apply(archive io.Reader, listed map[string]bool, manifest map[string]Entry,
 					continue
 				}
 			}
-			if err := safeParent(name, write); err != nil {
+			if err := safeParent(name, write, pinned); err != nil {
 				return err
 			}
 			if err := removeAny(name); err != nil {
@@ -173,7 +179,7 @@ func Apply(archive io.Reader, listed map[string]bool, manifest map[string]Entry,
 	// changed it since.
 	var gone []string
 	for path := range manifest {
-		if !listed[path] && allowed(path) {
+		if !listed[path] && allowed(path) && !pinned[path] {
 			gone = append(gone, path)
 		}
 	}
@@ -184,7 +190,7 @@ func Apply(archive io.Reader, listed map[string]bool, manifest map[string]Entry,
 		if err != nil {
 			continue
 		}
-		if err := safeParent(path, write); err != nil {
+		if err := safeParent(path, write, pinned); err != nil {
 			return err
 		}
 		switch {
@@ -205,16 +211,29 @@ func Apply(archive io.Reader, listed map[string]bool, manifest map[string]Entry,
 
 // safeParent checks every directory from path's write root down to its
 // parent is a directory, not a link to one, making any that's missing.
-func safeParent(path string, write []string) error {
+func safeParent(path string, write []string, pinned map[string]bool) error {
 	for _, w := range write {
 		if path == w {
 			return nil
 		}
 	}
-	return ensureDir(filepath.Dir(path), write, 0o700)
+	return ensureDir(filepath.Dir(path), write, 0o700, pinned)
 }
 
-func ensureDir(dir string, write []string, mode fs.FileMode) error {
+// pinnedDirs are the directories above each kept path.
+func pinnedDirs(keep []string) map[string]bool {
+	out := map[string]bool{}
+	for _, k := range keep {
+		for d := filepath.Dir(k); d != "/" && d != "."; d = filepath.Dir(d) {
+			out[d] = true
+		}
+	}
+	return out
+}
+
+// ensureDir makes dir a directory beneath its write root, replacing a
+// link or file the run made in its way, but never a pinned path.
+func ensureDir(dir string, write []string, mode fs.FileMode, pinned map[string]bool) error {
 	var root string
 	for _, w := range write {
 		if extension.Within(dir, []string{w}) && len(w) > len(root) {
@@ -245,6 +264,8 @@ func ensureDir(dir string, write []string, mode fs.FileMode) error {
 			}
 		case err != nil:
 			return err
+		case !fi.IsDir() && pinned[cur]:
+			return fmt.Errorf("%s holds a protected path but is not a directory", cur)
 		case fi.Mode()&fs.ModeSymlink != 0 && i >= 0:
 			// A link the run made where a directory now is: the
 			// directory replaces it.

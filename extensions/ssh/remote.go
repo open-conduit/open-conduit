@@ -102,11 +102,14 @@ rm -rf -- "$d"`
 	scriptList0 = `cd "$R/" || exit 3
 for r in "$@"; do [ ! -e "$R$r" ] && [ ! -L "$R$r" ] || find ".$r" -print0 || exit 3; done`
 	// scriptDownload <id> <root>...: a tar of every directory under the
-	// roots and every other path newer than the stamp.
+	// roots, every other path whose content or inode changed after the
+	// stamp (a rename or `cp -p` keeps the mtime, not the ctime), and the
+	// paths on stdin (NUL-separated, ./-relative): those the host didn't
+	// copy.
 	scriptDownload = `d="$D/$1"; shift
 [ -f "$d/stamp" ] || { echo "no upload stamp" >&2; exit 3; }
 cd "$R/" || exit 3
-for r in "$@"; do [ ! -e "$R$r" ] && [ ! -L "$R$r" ] || find ".$r" \( -type d -o -newer "$d/stamp" \) -print0 || exit 3; done | tar --null --no-recursion -T - -cf -`
+{ for r in "$@"; do [ ! -e "$R$r" ] && [ ! -L "$R$r" ] || find ".$r" \( -type d -o -newer "$d/stamp" -o -cnewer "$d/stamp" \) -print0 || exit 3; done; cat; } | tar --null --no-recursion -T - -cf -`
 	// scriptHealth: what a run needs of the remote, one line each.
 	scriptHealth = `for c in sh setsid ps tar find env; do command -v "$c" >/dev/null 2>&1 || echo "missing $c"; done
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin; command -v os >/dev/null 2>&1 || echo "no-os"
