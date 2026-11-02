@@ -92,13 +92,21 @@ func (a Actions) Actions(ctx context.Context, t extension.ActionTarget) ([]exten
 	if rec.Gate != "" {
 		label = "Approve or refuse " + rec.Gate
 	}
-	return []extension.Action{{ID: ActionAnswer, Label: label, Prompt: prompt, Choices: rec.Options, Detail: detail(rec)}}, nil
+	now := a.now()
+	if rec.escalated(now) {
+		label += " (escalated)"
+	}
+	return []extension.Action{{ID: ActionAnswer, Label: label, Prompt: prompt, Choices: rec.Options, Detail: detail(rec, now)}}, nil
 }
 
 // detail is what a person needs to decide an ask away from its panel: the
-// question, then its context (for an approval, the call's input).
-func detail(rec Ask) string {
+// question, then its context (for an approval, the call's input), and once
+// it has escalated, that nobody answered in time and who it now goes to.
+func detail(rec Ask, now time.Time) string {
 	d := rec.Question
+	if rec.escalated(now) {
+		d += "\n\nNobody answered by " + rec.EscalateAt.UTC().Format(time.RFC3339) + ", so this now also goes to " + strings.Join(rec.EscalateTo, ", ") + ". Answer by " + rec.Deadline.UTC().Format(time.RFC3339) + " or the call is refused."
+	}
 	if rec.Context != "" {
 		d += "\n\n" + rec.Context
 	}
@@ -123,7 +131,7 @@ func (a Actions) Invoke(ctx context.Context, c extension.ActionCall) (extension.
 	if !ok {
 		return refuseAction("not_outstanding", "this Work has no open question to answer")
 	}
-	if !answerable(rec, c.Caller) {
+	if !answerable(rec, c.Caller, a.now()) {
 		return refuseAction("not_allowed", "you are not one of the people this question is for")
 	}
 	// An answer accepted but not yet woken counts: refuse a second one.
@@ -153,7 +161,7 @@ func (a Actions) Invoke(ctx context.Context, c extension.ActionCall) (extension.
 	}, nil
 }
 
-// answerable reports whether the caller is one of the ask's responders.
-func answerable(rec Ask, caller extension.Caller) bool {
-	return Config{Responders: rec.Responders}.Allows(caller)
+// answerable reports whether the caller is one of the ask's responders now.
+func answerable(rec Ask, caller extension.Caller, now time.Time) bool {
+	return Config{Responders: rec.responders(now)}.Allows(caller)
 }

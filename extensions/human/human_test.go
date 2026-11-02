@@ -19,6 +19,19 @@ func TestParseConfig(t *testing.T) {
 			t.Errorf("accepted %s", bad)
 		}
 	}
+	for _, bad := range []string{
+		`{"gates":[{"operations":["x.y"],"escalate":{}}]}`,
+		`{"gates":[{"operations":["x.y"],"escalate":{"responders":["a:b:c"]}}]}`,
+		`{"gates":[{"operations":["x.y"],"escalate":{"responders":["github:o"],"timeout":"5s"}}]}`,
+		`{"gates":[{"operations":["x.y"],"timeout":"8000h","escalate":{"responders":["github:o"],"timeout":"1000h"}}]}`,
+	} {
+		if _, err := ParseConfig(json.RawMessage(bad)); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+	if c, err := ParseConfig(json.RawMessage(`{"gates":[{"operations":["x.y"],"escalate":{"responders":["github:o"]}}]}`)); err != nil || c.Gates[0].Escalate.timeout != DefaultGateTimeout {
+		t.Errorf("escalate defaults: %+v %v", c, err)
+	}
 	if ValidateExtension(nil, []string{"token"}) == nil {
 		t.Error("accepted secrets")
 	}

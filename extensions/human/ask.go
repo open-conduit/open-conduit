@@ -58,9 +58,15 @@ type Ask struct {
 	Context  string    `json:"context,omitempty"`
 	Deadline time.Time `json:"deadline,omitzero"`
 	// Responders and Surfaces are the entry's at the time of asking.
-	Responders []string  `json:"responders"`
-	Surfaces   []string  `json:"surfaces"`
-	AskedAt    time.Time `json:"asked_at"`
+	Responders []string `json:"responders"`
+	// EscalateAt is when an unanswered approval request escalates to
+	// EscalateTo as well as Responders (zero: it never escalates), and
+	// EscalatedAt when settling recorded that it had.
+	EscalateAt  time.Time `json:"escalate_at,omitzero"`
+	EscalateTo  []string  `json:"escalate_to,omitempty"`
+	EscalatedAt time.Time `json:"escalated_at,omitzero"`
+	Surfaces    []string  `json:"surfaces"`
+	AskedAt     time.Time `json:"asked_at"`
 	// Sequence is the acceptance watermark when the ask was made: its
 	// answers all come after it.
 	Sequence uint64 `json:"sequence"`
@@ -172,6 +178,26 @@ func askWait(tx storage.Tx, a Ask) (domain.Wait, bool, error) {
 		}
 	}
 	return found, ok, nil
+}
+
+// escalated reports whether the ask has escalated by now.
+func (a Ask) escalated(now time.Time) bool {
+	return !a.EscalateAt.IsZero() && !now.Before(a.EscalateAt)
+}
+
+// responders are who may answer the ask now: its own, and once it has
+// escalated, those it escalated to.
+func (a Ask) responders(now time.Time) []string {
+	if !a.escalated(now) {
+		return a.Responders
+	}
+	out := slices.Clone(a.Responders)
+	for _, r := range a.EscalateTo {
+		if !slices.Contains(out, r) {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // expired reports whether the ask's deadline has passed.

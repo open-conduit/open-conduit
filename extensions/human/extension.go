@@ -2,6 +2,7 @@ package human
 
 import (
 	"context"
+	"strings"
 	"sync"
 	"time"
 
@@ -131,6 +132,26 @@ func (x *Extension) Tasks() []inproc.Task {
 		if res.Late > 0 && x.host.Log != nil {
 			x.host.Log.Info("late answers recorded", "late", res.Late)
 		}
+		for _, a := range res.Escalated {
+			x.escalated(ctx, a)
+		}
 		return err
 	}}}
+}
+
+// EventGateEscalated is the telemetry event an approval request records
+// when nobody answered by its gate's timeout and it escalated.
+const EventGateEscalated = "human_gate_escalated"
+
+// escalated leaves a trail of an approval request's escalation: telemetry
+// linked to its Work, and a log line.
+func (x *Extension) escalated(ctx context.Context, a Ask) {
+	if x.host.Log != nil {
+		x.host.Log.Info("approval request escalated", "work", a.Work, "operation", a.Gate, "to", strings.Join(a.EscalateTo, ","))
+	}
+	if x.host.Capture != nil {
+		_ = x.host.Capture(ctx, string(a.Scope), EventGateEscalated, a.EscalatedAt, map[string]any{
+			"work_id": string(a.Work), "execution_id": string(a.Execution), "ask_id": a.ID, "operation": a.Gate,
+			"escalated_to": a.EscalateTo, "deadline": a.Deadline.UTC().Format(time.RFC3339)})
+	}
 }

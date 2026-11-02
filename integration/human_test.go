@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"strings"
 	"sync"
 	"testing"
@@ -721,5 +722,77 @@ func TestActReplayReturnsTheFirstAnswer(t *testing.T) {
 	refusedWith(t, err, "not_outstanding")
 	if old, ok, err := h.control.PriorAction(ctx, h.target(t).Scope.ID, "decisions", hu.ActionAnswer, "github:issue_comment/7"); err != nil || !ok || old.Event.ID != first.Event.ID {
 		t.Fatalf("prior: %+v %v %v", old, ok, err)
+	}
+}
+
+// escalating is a `human` entry whose gate escalates to github:octocat
+// after an hour unanswered, and refuses an hour after that.
+const escalating = `{"name":"decisions","type":"human","config":{"gates":[{"operations":["fixture.deploy"],"timeout":"1h","escalate":{"responders":["github:octocat"],"timeout":"1h"}}]}}`
+
+// A gate that escalates doesn't refuse at its timeout: the caller stays
+// parked, and the request widens to the escalation's responders, who can
+// then approve it. Surfaces see the change in what is offered. Only when
+// the escalation's timeout passes as well is the call refused.
+func TestHumanGateEscalatesBeforeRefusing(t *testing.T) {
+	h := newHumanHarness(t, "persistent", escalating)
+	ctx := context.Background()
+	out, err := h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	w, _ := waitState(t, h.toolbeltHarness, out.Wait.ID)
+	before, err := h.actions.Actions(ctx, h.target(t))
+	if err != nil || len(before) != 1 || strings.Contains(before[0].Label, "escalated") {
+		t.Fatalf("offered before escalating: %+v %v", before, err)
+	}
+	// Not yet escalated: the escalation's responder can't answer.
+	_, err = h.answer(t, extension.Caller{Kind: "github", ID: "octocat"}, "approve", "early")
+	refusedWith(t, err, "not_allowed")
+
+	h.f.Clock.Advance(90 * time.Minute)
+	res, err := hu.Sync(ctx, h.f.Store, h.f.Clock.Now())
+	if err != nil || len(res.Escalated) != 1 || res.Expired != 0 {
+		t.Fatalf("sync: %+v %v", res, err)
+	}
+	if again, _ := hu.Sync(ctx, h.f.Store, h.f.Clock.Now()); len(again.Escalated) != 0 {
+		t.Fatalf("escalated twice: %+v", again)
+	}
+	// The caller is still parked: its wait lasts through both timeouts.
+	if w2, work := waitState(t, h.toolbeltHarness, out.Wait.ID); w2.State != domain.WaitActive || work.State != domain.WorkWaiting || w2.TimeoutTimerID != w.TimeoutTimerID {
+		t.Fatalf("not still parked: %+v %v", w2, work.State)
+	}
+	acts, err := h.actions.Actions(ctx, h.target(t))
+	if err != nil || len(acts) != 1 || !strings.Contains(acts[0].Label, "(escalated)") || !strings.Contains(acts[0].Detail, "now also goes to github:octocat") {
+		t.Fatalf("escalation not offered: %+v %v", acts, err)
+	}
+	panels, _ := h.actions.Panels(ctx, h.target(t))
+	if len(panels) != 1 || !strings.Contains(fmt.Sprint(panels[0].Sections), "github:octocat") {
+		t.Fatalf("panel does not show who it escalated to: %+v", panels)
+	}
+	if _, err = h.answer(t, extension.Caller{Kind: "github", ID: "octocat"}, "approve", "octocat"); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(t)
+	h.reconcile(t)
+	h.resume(t)
+	if out, err = h.deploy(t, `{"env":"prod"}`); err != nil || out.Wait != nil || *h.deploys != 1 {
+		t.Fatalf("the escalated approval did not let the call through: %+v %v", out, err)
+	}
+
+	// Asked again and left unanswered through both timeouts: refused.
+	if out, err = h.deploy(t, `{"env":"prod"}`); err != nil || out.Wait == nil {
+		t.Fatalf("not parked: %+v %v", out, err)
+	}
+	h.park(t, out)
+	h.f.Clock.Advance(150 * time.Minute)
+	if err = h.scheduler.Wake(ctx, out.Wait.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.resume(t)
+	_, err = h.deploy(t, `{"env":"prod"}`)
+	refusedWith(t, err, hu.CodeApprovalTimedOut)
+	if *h.deploys != 1 {
+		t.Fatalf("a timed-out call ran: %d", *h.deploys)
 	}
 }
