@@ -23,7 +23,7 @@ The protocol was extracted from the shipped first-party code: the GitHub, Slack,
 
 ## Inventory of shipped interactions
 
-The table groups what the first-party code actually does across the host boundary today, as found in `internal/bootstrap` and the extension packages. Users: GH GitHub, SL Slack, TR tracker kit (Linear and Jira), BB Bitbucket, SC schedule, IS introspection, PH PostHog, GIT Git provider, SH shell, CC claude-code, LJ the schedule extension's `legacy-job` executor.
+The table groups what the first-party code actually does across the host boundary today, as found in `internal/bootstrap` and the extension packages. Users: GH GitHub, SL Slack, TR tracker kit (Linear and Jira), BB Bitbucket, SC schedule, IS introspection, PH PostHog, GIT Git provider, SH shell, CC claude-code, LJ the schedule extension's `legacy-job` executor, HU human.
 
 | Interaction | In-process surface today | Users | Wire method(s) |
 | --- | --- | --- | --- |
@@ -35,7 +35,7 @@ The table groups what the first-party code actually does across the host boundar
 | Routing | `RouteHandler.Match` on a detached snapshot, outside any transaction and free of side effects, with an optional Work display. `RouteSampler.Samples` offers named sample Events for a route trace | GH SL TR BB SC IS | `route.match`, `route.samples` |
 | Work kind policy | `WorkKindPolicy{Standing, Trigger}`. `Trigger` is pure and runs in the start transaction | SC (IS standing only) | manifest `work_kinds`, `work_kind.trigger` |
 | Calendar recurrence | `RecurrenceFunc` in the timer fire-and-rearm transaction. `Armer.ArmRecurrence/Cancel` from `Ensure` | SC IS | `recurrence.next`, `timer.arm`, `timer.cancel` |
-| Toolbelt operations | `Registration{Name, EventTypes, Operations, DependencyFilter}`. `Operation.Handler` (all), `.Wait` (GH), `.Emit` with in-transaction `Commit` (IS) | GH SL TR BB IS | `operation.call`, `operation.wait`, `operation.emit`, `emit.commit`, `dependency.filter` |
+| Toolbelt operations | `Registration{Name, EventTypes, Operations, DependencyFilter, Gate}`. `Operation.Handler` (all), `.Wait` (GH), `.Emit` with in-transaction `Commit` (IS), `Gate` (HU) | GH SL TR BB IS HU | `operation.call`, `operation.wait`, `operation.emit`, `emit.commit`, `dependency.filter`, `operation.gate` |
 | Wait progress | `runtime.SetWaitProgressInTx` (GitHub's `ToolsOptions.WaitProgress`), `inproc.Host.WaitProgress` | GH | `wait.progress` (E→H) |
 | Prompt rendering | bootstrap `renderEvents` chain over `<extension>.RenderEvent` | GH SL IS | `event.render` |
 | Executor lifecycle | `Executor.Run/Recover`, `RunHandle.Wait`, `Resume`, `Interrupt`, `Inject`, `Forget`, `PersistRecovery` | SH CC LJ (GH hold) | `executor.*`, `execution.persist_recovery` (E→H) |
@@ -258,6 +258,7 @@ Some host services reach beyond an extension's own surfaces: they show it other 
 | `probes` | `probe.list`, `probe.run` (E→H) | Lists and runs the read-only setup probes the host, its extensions and its executors offer, by full name. The host checks the arguments against the probe's declaration and bounds the run to 30 seconds. A probe that fails answers its reason in `error`, cut to 300 bytes. |
 
 | `config.read` | `config.base`, `config.edit`, `config.validate`, `config.trace` (E→H), and `config.candidate` (H→E, with manifest `config_candidate`) | Reads the whole configuration and builds candidates of it, which it validates and traces routes against, and offers them for the operator's review. It never applies one, and never receives reference text: see [the config host](#the-config-host). |
+| `operation.gate` | `operation.gate` (H→E, with manifest `operation_gate`) | Is asked about every call of another extension's toolbelt operation in a scope the package is configured for, with the call's input and authority, and may park or refuse it ([toolbelt gates](../toolbelt-management/#gates)). Calls in other scopes never reach it. |
 
 Packages are not sandboxed (see the [trust model](#trust-model)), so a permission is the operator's consent and a guard against accidental leaks, not a security boundary. It is enforced as though it were one, because it becomes one if packages are ever sandboxed.
 
@@ -376,7 +377,7 @@ Provisional, like the rest of the protocol. Code:
 - **Adapters.** `extproc.Remote` presents a process through the same interfaces in-process extensions implement:
   - `Ingress(SourceDecl)` is an `extension.Ingress`;
   - `RouteHandler`;
-  - `Registration()` is an `extension.Registration` for the toolbelt, with handler, wait and emit operations, `emit.commit` and `dependency.filter`;
+  - `Registration()` is an `extension.Registration` for the toolbelt, with handler, wait and emit operations, `emit.commit`, `dependency.filter` and, for `provides.operation_gate` with the `operation.gate` permission, a gate over `operation.gate`, asked only about calls in the package's configured scopes (`{operation, owner, authority, input}`, answered with `{wait?}`: no wait lets the call through, and an error refuses it). A gate that times out, crashes or fails with anything but an operation error refuses with `gate_failed`, so the host fails closed. The SDK's `Extension.OperationGate` declares and serves one; the TypeScript SDK has no gates yet, as it has no wait plans;
   - `Executor(name)` implements every optional executor interface;
   - `Recurrence(kind)` is a `runtime.RecurrenceFunc`;
   - `WorkKind(kind)` is a `runtime.WorkKindPolicy`;

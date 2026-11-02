@@ -95,3 +95,58 @@ func TestAskGuidance(t *testing.T) {
 		t.Fatalf("human.ask guidance %q", ops[0].Guidance)
 	}
 }
+
+func TestParseGates(t *testing.T) {
+	c, err := ParseConfig(json.RawMessage(`{"responders":["github:alice"],"gates":[{"operations":["github.pr.create","deploy.*"]},{"operations":["shell.run"],"responders":["slack_user:U1"],"timeout":"30m"}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	g, ok := c.gate("deploy.prod")
+	if !ok || g.timeout != DefaultGateTimeout || len(g.Responders) != 1 || g.Responders[0] != "github:alice" {
+		t.Fatalf("prefix gate: %+v %v", g, ok)
+	}
+	if g, ok = c.gate("shell.run"); !ok || g.timeout != 30*time.Minute || g.Responders[0] != "slack_user:U1" {
+		t.Fatalf("second gate: %+v %v", g, ok)
+	}
+	for _, op := range []string{"deploy", "deployer.x", "github.pr.merge", "shell.runs"} {
+		if _, ok := c.gate(op); ok {
+			t.Errorf("%s gated", op)
+		}
+	}
+	for _, bad := range []string{
+		`{"gates":[{}]}`,
+		`{"gates":[{"operations":["Deploy"]}]}`,
+		`{"gates":[{"operations":["deploy.*.*"]}]}`,
+		`{"gates":[{"operations":["*"]}]}`,
+		`{"gates":[{"operations":["human.ask"]}]}`,
+		`{"gates":[{"operations":["emit"]}]}`,
+		`{"gates":[{"operations":["create_work"]}]}`,
+		`{"gates":[{"operations":["read_context"]}]}`,
+		`{"gates":[{"operations":["human.*"]}]}`,
+		`{"gates":[{"operations":["a.b"],"timeout":"30s"}]}`,
+		`{"gates":[{"operations":["a.b"],"timeout":"soon"}]}`,
+		`{"gates":[{"operations":["a.b"],"responders":["a:b:c"]}]}`,
+		`{"gates":[{"operations":["a.b"],"on_timeout":"escalate"}]}`,
+	} {
+		if _, err := ParseConfig(json.RawMessage(bad)); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+}
+
+func TestRequestHashIsCanonical(t *testing.T) {
+	a := requestHash("deploy.run", domain.Payload{Schema: "s", Data: json.RawMessage(`{"b":2,"a":[1, 2.50]}`)})
+	b := requestHash("deploy.run", domain.Payload{Schema: "s", Data: json.RawMessage(` { "a" : [1,2.50], "b":2 }`)})
+	if a != b {
+		t.Fatal("the same call hashed differently")
+	}
+	for _, other := range []string{
+		requestHash("deploy.stop", domain.Payload{Schema: "s", Data: json.RawMessage(`{"b":2,"a":[1,2.50]}`)}),
+		requestHash("deploy.run", domain.Payload{Schema: "s", Data: json.RawMessage(`{"b":3,"a":[1,2.50]}`)}),
+		requestHash("deploy.run", domain.Payload{Schema: "t", Data: json.RawMessage(`{"b":2,"a":[1,2.50]}`)}),
+	} {
+		if other == a {
+			t.Fatal("different calls hashed the same")
+		}
+	}
+}

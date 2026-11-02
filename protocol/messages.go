@@ -155,6 +155,23 @@ type OperationParams struct {
 type OperationResult struct {
 	Output Payload `json:"output"`
 }
+
+// OperationGateParams is operation.gate's request: the call another
+// extension's operation is about to serve (Operation, Owner and Input),
+// with the caller's authority.
+type OperationGateParams struct {
+	Operation string    `json:"operation"`
+	Owner     string    `json:"owner"`
+	Authority Authority `json:"authority"`
+	Input     Payload   `json:"input"`
+}
+
+// OperationGateResult is operation.gate's answer: no Wait lets the call
+// through, a Wait parks the caller instead. A refusal is an error (an
+// operation error reaches the caller verbatim).
+type OperationGateResult struct {
+	Wait *WaitPlan `json:"wait,omitempty"`
+}
 type EmitCommitParams struct {
 	CommitID string  `json:"commit_id"`
 	Emitted  Emitted `json:"emitted"`

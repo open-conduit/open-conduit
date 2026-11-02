@@ -16,6 +16,7 @@ Every call, reads included, passes these checks in order:
 3. The operation is declared and in the token allowlist.
 4. The current B05 ceiling, checked through `ToolbeltOptions.Authorize` outside storage. A config reload or disabled scope therefore revokes immediately.
 5. Under the lease guard in the call's transaction: the execution is running at the token's epoch, the owner matches, the lease is not expired, the Work is running in the token scope and the segment has no pending declaration.
+6. For an extension operation, after the replay lookup: every registered gate but the operation owner's (see [Gates](#gates)).
 
 Emit uses only declared and allowed families. It assigns trusted execution source, Work, Execution and continuation causation, rejects forged sources/parents/targets and unowned correlations, and accepts through `AcceptDerivedInTx`, which applies causal bounds. The daemon passes the configured `causal_max_depth`/`causal_per_minute` to the toolbelt, so an execution's first emission off a new root pins the configured limits. `create_work` joins child creation and its causal `core.work.created` in one transaction. Extension handlers run outside storage after a fenced authority check. They receive validated authority and never the token. Handler refusals (`extension.OperationError`) return `422` with the handler's code and message.
 
@@ -33,6 +34,16 @@ Idempotency semantics:
 - **Declared outcome**: replaces the executor's structured outcome.
 
 The declared watermark defaults to the attempt's acknowledged input, so registration backscans every Event accepted in between. A type-only `wait` subscribes on the Work's keys, and an unapplied declaration survives recovery ([daemon composition](../daemon-core-gate/)). Transport/observation errors still follow failure policy.
+
+### Gates
+
+A registration may carry a gate (`extension.Registration.Gate`). An installed package declares `provides.operation_gate`, serves `operation.gate` and needs the `operation.gate` permission, which the operator sees at install; without it the host installs no gate, and with it the package is asked only about calls in the scopes it is configured for. The toolbelt asks every gate, in registration-name order, before it runs another registration's operation; a gate never sees its own registration's operations, and builtins (`emit`, `create_work`, `wait`, `declare_outcome`, `read_context`) pass no gate. A gate answers in one of three ways:
+
+- **Let the call through**: the next gate is asked, and once all have, the operation runs.
+- **Park the caller**: it returns a `WaitPlan`, which the toolbelt declares exactly like a translated wait, owned by the gating registration (so its dependencies use that registration's dependency filter). The operation does not run, authority is released, and the call returns the plan's output and the Wait. The caller is resumed by whatever the plan waits on, or its timeout, and makes the call again.
+- **Refuse**: its error reaches the caller verbatim (an `extension.OperationError` is `422` with its code and message), wrapped in `extension.GateRefusal`, which names the gate. Authority is kept for other calls.
+
+A gate that panics, or an installed one that times out, crashes or answers with anything but an operation error, refuses with `gate_failed`: the host fails closed. A parked call records `toolbelt.called` with `toolbelt.gate` naming the gate; a refused one records `toolbelt.rejected` with `toolbelt.result` `gate_refused` and the same attribute. The core knows nothing of why a gate decides as it does. The `human` extension's approval gates are the first ([human decisions](../../workflows/human-decisions/#approval-gates)).
 
 ### Execution endpoints
 
@@ -145,4 +156,5 @@ These notes record how this part was built and the evidence gathered at each sta
 - Ticket 03-04 registered the GitHub tool operations, added translated wait operations and made handler refusals return `422`.
 - Ticket 04-01 registered the Slack operations.
 - Issue #162 gave each execution its own toolbelt socket and token directory in a host-owned run directory, a prerequisite for process sandboxes (#160). Before it, every execution's toolbelt was the shared `management.sock`, and executors wrote the token to a single file in their own segment directory.
+- Issue #364 added gates, so an extension can put an operator's policy (a person's approval) in the host's path for any operation.
 - Ticket 03-08 added translated emissions, passed the configured causal limits to the toolbelt and narrowed binding grants to registered operations. Before it, an execution's first emission off a new root pinned the default causal limits.

@@ -55,10 +55,13 @@ type Extension struct {
 	// sources and webhook paths the extension registers.
 	Configure func(ctx context.Context, h *Host, p protocol.ConfigureParams) (protocol.ConfigureResult, error)
 	// Ingress returns the adapter of a registered source by name.
-	Ingress     func(name string) (extension.Ingress, bool)
-	Routes      map[string]extension.RouteHandler
-	Operations  []extension.Operation
-	Filter      func(filter domain.Payload, event domain.Event) bool
+	Ingress    func(name string) (extension.Ingress, bool)
+	Routes     map[string]extension.RouteHandler
+	Operations []extension.Operation
+	Filter     func(filter domain.Payload, event domain.Event) bool
+	// Gate decides on calls of other extensions' operations
+	// (extension.Gate; Manifest.Provides.OperationGate).
+	Gate        extension.Gate
 	Executors   map[string]extension.Executor
 	Recurrences map[string]RecurrenceFunc
 	Triggers    map[string]func([]domain.Event) int
@@ -311,6 +314,24 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 		return protocol.DependencyFilterResult{Match: s.ext.Filter(p.Filter.Domain(), e)}, nil
 	case "operation.call", "operation.wait", "operation.emit":
 		return s.operation(ctx, method, raw)
+	case "operation.gate":
+		var p protocol.OperationGateParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.ext.Gate == nil {
+			return nil, notFound(method)
+		}
+		plan, err := s.ext.Gate(ctx, p.Authority.Extension(), extension.GateCall{Operation: p.Operation, Owner: p.Owner, Input: p.Input.Domain()})
+		if err != nil {
+			return nil, err
+		}
+		var out protocol.OperationGateResult
+		if plan != nil {
+			w := protocol.FromWaitPlan(*plan)
+			out.Wait = &w
+		}
+		return out, nil
 	case "emit.commit":
 		var p protocol.EmitCommitParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

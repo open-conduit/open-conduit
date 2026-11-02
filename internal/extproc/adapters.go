@@ -316,6 +316,30 @@ func (r *Remote) Registration() extension.Registration {
 			return out.Match
 		}
 	}
+	if r.m.Provides.OperationGate && r.m.Allows(protocol.PermissionOperationGate) {
+		// The gate needs the operator's consent at install (the
+		// operation.gate permission), and sees only calls in scopes the
+		// package is configured for. A gate that cannot answer (a timeout,
+		// a crash, an unreadable plan) refuses: the host fails closed.
+		reg.Gate = func(ctx context.Context, a extension.Authority, c extension.GateCall) (*extension.WaitPlan, error) {
+			if r.s == nil || r.s.deps.Scopes == nil || !r.s.allowedScopes()[a.ScopeID] {
+				return nil, nil
+			}
+			var out protocol.OperationGateResult
+			if err := r.p.Call(ctx, "operation.gate", protocol.OperationGateParams{Operation: c.Operation, Owner: c.Owner, Authority: protocol.FromAuthority(a), Input: protocol.FromPayload(c.Input)}, &out); err != nil {
+				var oe *extension.OperationError
+				if errors.As(err, &oe) {
+					return nil, oe
+				}
+				return nil, &extension.OperationError{Code: "gate_failed", Message: r.m.Name + " could not decide whether this call may proceed, so it was refused"}
+			}
+			if out.Wait == nil {
+				return nil, nil
+			}
+			plan := out.Wait.Extension()
+			return &plan, nil
+		}
+	}
 	return reg
 }
 
