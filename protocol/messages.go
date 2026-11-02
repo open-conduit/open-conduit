@@ -334,6 +334,28 @@ type WaitProgressParams struct {
 	Progress string `json:"progress"`
 }
 
+// ActionSubmitParams invoke an action for a person the extension
+// identified on its own surface (extension.ActRequest). The caller is
+// {kind: the extension's name, id: caller}. An empty provider is the one
+// provider offering the action on the target; key makes it idempotent.
+type ActionSubmitParams struct {
+	ScopeID  string `json:"scope_id"`
+	WorkID   string `json:"work_id,omitempty"`
+	Provider string `json:"provider,omitempty"`
+	Action   string `json:"action"`
+	Input    string `json:"input,omitempty"`
+	Caller   string `json:"caller"`
+	Key      string `json:"key"`
+}
+
+// ActionSubmitResult is the accepted action's Event and the provider's
+// message for the person (extension.ActResult).
+type ActionSubmitResult struct {
+	Event   AcceptedEvent `json:"event"`
+	Added   bool          `json:"added"`
+	Message string        `json:"message,omitempty"`
+}
+
 // Artifacts and secrets.
 
 type ArtifactCreateParams struct {

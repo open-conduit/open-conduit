@@ -7,7 +7,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -120,27 +119,13 @@ func (s *Server) invokeAction(c *call, work bool) (int, any, error) {
 	if !ok {
 		return 0, nil, fail(404, "not_found", "no such action provider on this target")
 	}
-	plan, err := p.Invoke(c.ctx, extension.ActionCall{Target: t, Action: id, Input: in.Input, Caller: extension.LocalOperator})
-	if err != nil {
-		return 0, nil, err
-	}
-	a := runtime.ActionEvent{ScopeID: t.Scope.ID, Provider: name, Action: id, Key: c.key, Event: plan.Event}
-	// An Event that names a correlation key is addressed by it (an answer
-	// on a key no Work owns, say); one without is the target Work's.
-	if t.Work != nil && plan.Event.CorrelationKey == nil {
-		a.WorkID = t.Work.ID
-	}
-	accepted, added, err := s.o.Control.SubmitAction(c.ctx, a)
+	accepted, added, msg, err := s.o.Control.Act(c.ctx, name, p, extension.ActionCall{Target: t, Action: id, Input: in.Input, Caller: extension.LocalOperator}, c.key)
 	if err != nil {
 		return 0, nil, err
 	}
 	status := 200
 	if added {
 		status = 201
-	}
-	msg := strings.ToValidUTF8(plan.Message, "")
-	if len(msg) > 500 {
-		msg = strings.ToValidUTF8(msg[:500], "")
 	}
 	return status, map[string]any{"event": toEvent(accepted, t.Scope.ID), "message": msg}, nil
 }

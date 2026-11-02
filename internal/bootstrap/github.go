@@ -141,7 +141,7 @@ func (d *daemon) addGitHub(ctx context.Context, s *config.Snapshot, scope domain
 	if err := d.ingress.Register(ctx, name, extension.Source{Namespace: settings.Namespace, ScopeID: scope}, in, interval); err != nil {
 		return err
 	}
-	projector, err := gh.NewProjector(gh.ProjectorOptions{Store: d.coord, Client: client, Settings: settings, Now: d.now, Writers: d.githubWriters(), Scope: scope})
+	projector, err := gh.NewProjector(gh.ProjectorOptions{Store: d.coord, Client: client, Settings: settings, Now: d.now, Writers: d.githubWriters(), Scope: scope, Act: d.act(gh.Type)})
 	if err != nil {
 		return err
 	}

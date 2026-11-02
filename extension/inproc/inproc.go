@@ -117,6 +117,11 @@ type Host struct {
 	// extension.ErrUnauthorized, and Work with no active Wait
 	// storage.ErrNotFound.
 	WaitProgress func(ctx context.Context, work domain.ID, progress string) error
+	// Act invokes an action for a person the extension's own surface
+	// identified (extension.ActRequest): the caller is {Kind: the
+	// extension's name, ID: r.Caller}, and the provider authorises it as it
+	// would any caller. A refusal is the provider's *OperationError.
+	Act func(ctx context.Context, r extension.ActRequest) (extension.ActResult, error)
 	// Capture writes a named telemetry event to the host's telemetry events
 	// log and hands it to every Sink. scope is "" for one about the machine.
 	Capture func(ctx context.Context, scope, name string, at time.Time, props map[string]any) error

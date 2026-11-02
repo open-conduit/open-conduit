@@ -67,6 +67,9 @@ type ghEnv struct {
 	connMu      sync.Mutex
 	connections map[string]string
 	writers     *gh.Writers
+	// act is the host's Act for the projector (inproc.Host.Act); nil
+	// leaves comments that ask for an action as ordinary comments.
+	act func(context.Context, extension.ActRequest) (extension.ActResult, error)
 	// extConfig replaces ghExtensionConfig() as the entry the ingress,
 	// projector and tools read, when set before open.
 	extConfig string
@@ -139,7 +142,13 @@ func (e *ghEnv) open() {
 		}
 		return json.RawMessage(`{"api_url":"` + e.fake.URL + `"}`), func(context.Context, string) (string, error) { return token, nil }, true
 	}, e.clock.Now)
-	if e.projector, err = gh.NewProjector(gh.ProjectorOptions{Store: store, Client: e.client, Settings: e.settings, Now: e.clock.Now, SearchDelay: 30 * time.Second, Writers: e.writers, Scope: ghScope}); err != nil {
+	if e.projector, err = gh.NewProjector(gh.ProjectorOptions{Store: store, Client: e.client, Settings: e.settings, Now: e.clock.Now, SearchDelay: 30 * time.Second, Writers: e.writers, Scope: ghScope,
+		Act: func(ctx context.Context, r extension.ActRequest) (extension.ActResult, error) {
+			if e.act == nil {
+				return extension.ActResult{}, &extension.OperationError{Code: extension.CodeNoAction, Message: "nothing here"}
+			}
+			return e.act(ctx, r)
+		}}); err != nil {
 		t.Fatal(err)
 	}
 	e.webhook = gh.WebhookHandler(func(context.Context) (string, error) { return ghSecret, nil }, func(ctx context.Context, d extension.Delivery) error {
@@ -745,6 +754,97 @@ func TestGitHubReopenedIssueCreatesASuccessorGeneration(t *testing.T) {
 	e.converge()
 	if !equal(fk.Labels(n), "agent-in-progress") {
 		t.Fatalf("successor projection: %v", fk.Labels(n))
+	}
+}
+
+// A comment whose first line asks for an action ("/answer approve") is
+// handed to the host's Act for that Work, as its author: the host and the
+// action's provider decide whether they may. The reaction says what came of
+// it: +1 taken, confused refused. A "/word" nothing offers is an ordinary
+// comment, and a replay of the same comment reuses its key.
+func TestGitHubCommentAnswersAnAction(t *testing.T) {
+	e := newGitHubEnv(t)
+	fk := e.fake
+	var got []extension.ActRequest
+	e.act = func(_ context.Context, r extension.ActRequest) (extension.ActResult, error) {
+		got = append(got, r)
+		switch {
+		case r.Action != "answer":
+			return extension.ActResult{}, &extension.OperationError{Code: extension.CodeNoAction, Message: "nothing offers " + r.Action}
+		case r.Caller != "alice":
+			return extension.ActResult{}, &extension.OperationError{Code: "not_allowed", Message: "not for you"}
+		}
+		return extension.ActResult{Added: true, Message: "answered: " + r.Input}, nil
+	}
+	n := fk.OpenIssue("Deploy", "", ghAlice)
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor("issue/" + strconv.Itoa(n))
+	approve := fk.AddComment(n, ghAlice, "/answer approve\nlooks fine to me")
+	stranger := fk.AddComment(n, githubtest.User{Login: "mallory", Type: "User"}, "/answer approve")
+	path := fk.AddComment(n, ghAlice, "/usr/bin is where it lives")
+	other := fk.AddComment(n, ghAlice, "/deploy now")
+	e.deliver("issue_comment", "d-1", fk.CommentHook("created", approve))
+	e.deliver("issue_comment", "d-2", fk.CommentHook("created", stranger))
+	e.deliver("issue_comment", "d-3", fk.CommentHook("created", path))
+	e.deliver("issue_comment", "d-5", fk.CommentHook("created", other))
+	e.route()
+	e.converge()
+	if len(got) != 3 || got[0].Scope != ghScope || got[0].Work != w.ID || got[0].Action != "answer" || got[0].Input != "approve" || got[0].Caller != "alice" || got[0].Provider != "" || got[0].Key == "" {
+		t.Fatalf("act requests: %+v", got)
+	}
+	if got[1].Caller != "mallory" || got[1].Key == got[0].Key || got[2].Action != "deploy" || got[2].Input != "now" {
+		t.Fatalf("act requests: %+v", got)
+	}
+	if fk.Reactions(approve)["+1"] != 1 || fk.Reactions(stranger)["confused"] != 1 || fk.Reactions(stranger)["+1"] != 0 || fk.Reactions(path)["+1"] != 1 || fk.Reactions(other)["+1"] != 1 {
+		t.Fatalf("reactions: approve %v stranger %v path %v other %v", fk.Reactions(approve), fk.Reactions(stranger), fk.Reactions(path), fk.Reactions(other))
+	}
+	// A transient failure leaves the comment for the next pass, which
+	// reuses its key.
+	again := fk.AddComment(n, ghAlice, "/answer refuse")
+	e.deliver("issue_comment", "d-4", fk.CommentHook("created", again))
+	e.route()
+	act := e.act
+	e.act = func(context.Context, extension.ActRequest) (extension.ActResult, error) {
+		return extension.ActResult{}, errors.New("database is busy")
+	}
+	e.converge()
+	if len(fk.Reactions(again)) != 0 {
+		t.Fatalf("acknowledged an answer the host never took: %v", fk.Reactions(again))
+	}
+	e.act = act
+	e.converge()
+	if last := got[len(got)-1]; last.Input != "refuse" || fk.Reactions(again)["+1"] != 1 {
+		t.Fatalf("retry: %+v %v", last, fk.Reactions(again))
+	}
+
+	// An answer taken whose reaction failed is asked again next pass under
+	// the same key; the host returns the first answer (added false), which
+	// is still acknowledged +1, never confused.
+	taken := map[string]bool{}
+	e.act = func(_ context.Context, r extension.ActRequest) (extension.ActResult, error) {
+		got = append(got, r)
+		if taken[r.Key] {
+			return extension.ActResult{}, nil
+		}
+		taken[r.Key] = true
+		return extension.ActResult{Added: true}, nil
+	}
+	late := fk.AddComment(n, ghAlice, "/answer approve")
+	e.deliver("issue_comment", "d-6", fk.CommentHook("created", late))
+	e.route()
+	before := len(got)
+	fk.RateLimitSecondary(60)
+	if _, err := e.projector.Converge(context.Background(), 50); err == nil {
+		t.Fatal("the reaction's rate limit was not reported")
+	}
+	if len(got) != before+1 || len(fk.Reactions(late)) != 0 {
+		t.Fatalf("first pass: %d acts, reactions %v", len(got)-before, fk.Reactions(late))
+	}
+	e.clock.Add(2 * time.Minute)
+	e.converge()
+	if len(got) != before+2 || got[len(got)-1].Key != got[len(got)-2].Key || fk.Reactions(late)["+1"] != 1 || fk.Reactions(late)["confused"] != 0 {
+		t.Fatalf("replay pass: %+v reactions %v", got[before:], fk.Reactions(late))
 	}
 }
 

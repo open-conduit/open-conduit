@@ -48,7 +48,7 @@ In practice the `human` entry sits in the same scope as your GitHub or Slack age
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `responders` | `["operator:local"]` | Who may answer: `operator:local` is you at the TUI or CLI. An answer from anyone else is refused. |
+| `responders` | `["operator:local"]` | Who may answer, each `kind:id`: `operator:local` is you at the TUI or CLI, and `github:<login>` is a GitHub user answering in a comment (see [Answering from GitHub](#answering-from-github)). A bare kind, such as `github`, is anyone of that kind. An answer from anyone else is refused. |
 | `surfaces` | `["tui"]` | Where the question is shown. The TUI is the only surface so far. |
 | `gates` | none | Operations that need a person's approval before they run (see [Approval gates](#approval-gates)). |
 
@@ -92,4 +92,16 @@ When a gated call comes in:
 
 Each request and its answer are in the Work's run history: the answer Event and the alias that woke the Work, linked to the Work, and the toolbelt telemetry records the call as gated (`toolbelt.gate`) or refused by a gate (`toolbelt.result` `gate_refused`). Work that has no conversation to resume (no correlation key) can't wait for an answer, so a gated call there is refused with `approval_unavailable`.
 
-Approvals can be answered only where questions can be so far: the TUI, the web view and the CLI, by the entry's responders. Answering from Slack or GitHub, a timeout that escalates to someone else rather than refusing, and gates on route or kind transitions rather than operations are not built yet.
+## Answering from GitHub
+
+When the Work belongs to a GitHub issue or PR, a person can answer a question or an approval request in a comment or review on it. The comment's first line is `/answer` followed by the answer: `/answer approve`, `/answer refuse`, or one of the question's options or its number. Anything after the first line is ignored, so you can give your reasons below it.
+
+The GitHub extension hands the comment to Open Conduit as its author, `github:<login>`, and the `human` entry checks that login against the responders as it would anyone else's. List the logins you trust:
+
+```json
+{"operations": ["deploy.*"], "responders": ["github:octocat", "operator:local"]}
+```
+
+A taken answer gets a 👍 reaction on the comment, and a refused one (a login that isn't a responder, an answer that isn't an option, a question already answered) gets 😕. The extension can only vouch for GitHub logins: a comment can never answer as `operator:local` or as anyone on another surface. Editing a comment answers nothing.
+
+Answering from Slack, a timeout that escalates to someone else rather than refusing, and gates on route or kind transitions rather than operations are not built yet.

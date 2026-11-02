@@ -139,7 +139,7 @@ func discoverPackages(configPath, exclude string) ([]extproc.Found, []error) {
 // package cannot claim one.
 func takenNames(reg config.Registry) extproc.Taken {
 	t := extproc.Taken{}
-	t.Add("name", "core", "execution", "manual", "os", "open-conduit")
+	t.Add("name", "core", "execution", "manual", "os", "open-conduit", extension.CallerOperator)
 	for name := range reg.Connections {
 		t.Add("type", name)
 		t.Add("name", name)
@@ -514,8 +514,11 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		},
 		Nudge:   d.poke,
 		Capture: d.telemetry.Capture,
-		Probes:  d.setupProbes,
-		Config:  d.configHost(),
+		Act: func(ctx context.Context, owner string, r extension.ActRequest) (extension.ActResult, error) {
+			return d.act(owner)(ctx, r)
+		},
+		Probes: d.setupProbes,
+		Config: d.configHost(),
 	}
 }
 

@@ -658,3 +658,64 @@ func TestHumanGateApprovalExpires(t *testing.T) {
 		t.Fatalf("a stale approval let the call through: %+v %v (runs %d)", out, err, *h.deploys)
 	}
 }
+
+// A gate's responders can be people on another surface ("github:<login>"),
+// which that surface's extension vouches for through Host.Act: only the
+// listed login may answer, and the local operator no longer can.
+func TestHumanGateAnsweredFromAnotherSurface(t *testing.T) {
+	h := newHumanHarness(t, "persistent", `{"name":"decisions","type":"human","config":{"gates":[{"operations":["fixture.deploy"],"responders":["github:octocat"]}]}}`)
+	out, err := h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	_, err = h.answer(t, extension.LocalOperator, "approve", "local")
+	refusedWith(t, err, "not_allowed")
+	_, err = h.answer(t, extension.Caller{Kind: "github", ID: "mallory"}, "approve", "mallory")
+	refusedWith(t, err, "not_allowed")
+	_, err = h.answer(t, extension.Caller{Kind: "slack", ID: "octocat"}, "approve", "slack")
+	refusedWith(t, err, "not_allowed")
+	if _, err = h.answer(t, extension.Caller{Kind: "github", ID: "octocat"}, "approve", "octocat"); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(t)
+	h.reconcile(t)
+	h.resume(t)
+	if out, err = h.deploy(t, `{"env":"prod"}`); err != nil || out.Wait != nil || *h.deploys != 1 {
+		t.Fatalf("the approved call did not run: %+v %v", out, err)
+	}
+	answers := h.eventsOfType(t, hu.TypeAnswer)
+	var p hu.AnswerPayload
+	if len(answers) != 1 || json.Unmarshal(answers[0].Event.Data.Data, &p) != nil || p.Responder != "github:octocat" {
+		t.Fatalf("answer trail: %+v", answers)
+	}
+}
+
+// The action path returns a replay's first Event without asking the
+// provider again: once the question is answered, the provider would refuse
+// a second answer, but the same request (a retried GitHub comment) is the
+// same answer, not a second one.
+func TestActReplayReturnsTheFirstAnswer(t *testing.T) {
+	h := newHumanHarness(t, "persistent", gated)
+	out, err := h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	ctx := context.Background()
+	call := extension.ActionCall{Target: h.target(t), Action: hu.ActionAnswer, Input: "approve", Caller: extension.LocalOperator}
+	first, added, msg, err := h.control.Act(ctx, "decisions", h.actions, call, "github:issue_comment/7")
+	if err != nil || !added || msg == "" {
+		t.Fatalf("act: %v %v %q", err, added, msg)
+	}
+	again, added, _, err := h.control.Act(ctx, "decisions", h.actions, call, "github:issue_comment/7")
+	if err != nil || added || again.Event.ID != first.Event.ID {
+		t.Fatalf("replay: %+v %v %v", again, added, err)
+	}
+	// A new request is a second answer, which the provider refuses.
+	_, _, _, err = h.control.Act(ctx, "decisions", h.actions, call, "github:issue_comment/8")
+	refusedWith(t, err, "not_outstanding")
+	if old, ok, err := h.control.PriorAction(ctx, h.target(t).Scope.ID, "decisions", hu.ActionAnswer, "github:issue_comment/7"); err != nil || !ok || old.Event.ID != first.Event.ID {
+		t.Fatalf("prior: %+v %v %v", old, ok, err)
+	}
+}
