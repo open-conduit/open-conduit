@@ -47,7 +47,8 @@ type Config struct {
 	PassEnv   []string          `json:"pass_env,omitempty"`
 	SecretEnv map[string]string `json:"secret_env,omitempty"`
 	// ExtraArgs are added to every `codex exec`; they may not set the
-	// session, the output files or the toolbelt's MCP server.
+	// session, the output files, the sandbox, the approval policy, the
+	// model or the toolbelt's MCP server, by flag or -c override.
 	ExtraArgs []string `json:"extra_args,omitempty"`
 	// TimeoutSeconds bounds a segment; the deadline survives restart.
 	TimeoutSeconds int64 `json:"timeout_seconds,omitempty"`
@@ -63,7 +64,11 @@ var (
 	sandboxes = []string{"read-only", "workspace-write", "danger-full-access"}
 	// forbidden are the flags extra_args may not carry: the session, the
 	// output the executor reads and the approval and sandbox it sets.
-	forbidden = []string{"--json", "--output-schema", "-o", "--output-last-message", "--last", "-s", "--sandbox", "-a", "--ask-for-approval", "-C", "--cd", "--ephemeral", "-m", "--model"}
+	forbidden = []string{"--json", "--output-schema", "-o", "--output-last-message", "--last", "-s", "--sandbox", "-a", "--ask-for-approval", "-C", "--cd", "--ephemeral", "-m", "--model", "--full-auto", "--dangerously-bypass-approvals-and-sandbox", "--yolo"}
+	// forbiddenKeys are the config keys a -c/--config override in
+	// extra_args may not set; a later -c wins in Codex, so these would
+	// replace the executor's own.
+	forbiddenKeys = []string{"sandbox_mode", "approval_policy", "model"}
 )
 
 func configError(msg string) error { return fmt.Errorf("%w: %s", ErrConfig, msg) }
@@ -115,11 +120,8 @@ func ParseConfig(data []byte) (Config, error) {
 			return Config{}, configError("dir and plugin_dir must be clean absolute paths")
 		}
 	}
-	for _, a := range c.ExtraArgs {
-		flag, _, _ := strings.Cut(a, "=")
-		if slices.Contains(forbidden, flag) || strings.Contains(a, "mcp_servers.open-conduit") || a == "resume" {
-			return Config{}, configError("extra_args may not set the session, output, sandbox, model or toolbelt")
-		}
+	if !extraArgsAllowed(c.ExtraArgs) {
+		return Config{}, configError("extra_args may not set the session, output, sandbox, approvals, model or toolbelt")
 	}
 	for name, value := range c.Env {
 		if !envName.MatchString(name) || reserved(name) || strings.ContainsRune(value, 0) {
@@ -140,6 +142,40 @@ func ParseConfig(data []byte) (Config, error) {
 		return Config{}, configError("timeout_seconds must be between 0 and 31536000")
 	}
 	return c, nil
+}
+
+// extraArgsAllowed reports whether extra_args leave the session, output,
+// sandbox, approval policy, model and toolbelt server as the executor
+// sets them, as flags or as -c/--config overrides.
+func extraArgsAllowed(args []string) bool {
+	for i := 0; i < len(args); i++ {
+		a := args[i]
+		flag, _, _ := strings.Cut(a, "=")
+		if slices.Contains(forbidden, flag) || a == "resume" {
+			return false
+		}
+		var override string
+		switch {
+		case a == "-c" || a == "--config":
+			if i+1 == len(args) {
+				return false
+			}
+			i++
+			override = args[i]
+		case strings.HasPrefix(a, "--config="):
+			override = strings.TrimPrefix(a, "--config=")
+		case strings.HasPrefix(a, "-c"):
+			override = strings.TrimPrefix(strings.TrimPrefix(a, "-c"), "=")
+		default:
+			continue
+		}
+		key, _, _ := strings.Cut(override, "=")
+		key = strings.NewReplacer(" ", "", "\t", "", `"`, "", "'", "").Replace(key)
+		if slices.Contains(forbiddenKeys, key) || key == "mcp_servers" || key == "mcp_servers."+mcpServer || strings.HasPrefix(key, "mcp_servers."+mcpServer+".") {
+			return false
+		}
+	}
+	return true
 }
 
 // secretVariable is the environment name for one selected secret.

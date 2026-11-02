@@ -121,7 +121,7 @@ The config is strict and validated at load. Every field is optional:
 | `branch`, `workspace_mode` | The workspace request. |
 | `dir` | An absolute folder a workspace-free binding's turns run in. |
 | `env`, `pass_env`, `secret_env` | The environment. |
-| `extra_args` | Added to every `codex exec`. They may not set the session, the output, the sandbox, the model or the toolbelt server. |
+| `extra_args` | Added to every `codex exec`. They may not set the session, the output, the sandbox, the approval policy, the model or the toolbelt server, whether as flags (`--full-auto` and `--dangerously-bypass-approvals-and-sandbox` included) or as `-c`/`--config` overrides of `sandbox_mode`, `approval_policy`, `model` or `mcp_servers.open-conduit`. |
 | `timeout_seconds` | A segment's deadline, persisted across restart. |
 
 ## Setup
