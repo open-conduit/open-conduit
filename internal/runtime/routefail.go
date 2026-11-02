@@ -27,6 +27,12 @@ const (
 	// DefaultMaxRouteFailures is how many retryable failures an Event is
 	// given before it is routed as failed.
 	DefaultMaxRouteFailures = 5
+	// DefaultRouteFailureWindow is the least time between an Event's first
+	// retryable failure and routing giving up on it, so an extension
+	// restarting or a dependency down for a while doesn't lose good input.
+	DefaultRouteFailureWindow = 15 * time.Minute
+	// routeBackoffCap bounds the wait between tries.
+	routeBackoffCap = 5 * time.Minute
 	// routeBackoffBase is the wait after the first failure; it doubles
 	// with each one after.
 	routeBackoffBase = 2 * time.Second
@@ -102,6 +108,13 @@ func (r *Router) routeTimeout() time.Duration {
 		return r.options.RouteTimeout
 	}
 	return DefaultRouteTimeout
+}
+
+func (r *Router) routeFailureWindow() time.Duration {
+	if r.options.RouteFailureWindow > 0 {
+		return r.options.RouteFailureWindow
+	}
+	return DefaultRouteFailureWindow
 }
 
 func (r *Router) maxRouteFailures() int {
@@ -214,9 +227,9 @@ func (r *Router) fail(ctx context.Context, re *RouteError) error {
 		if re.Err != nil {
 			f.Error = truncateRouteError(re.Err.Error())
 		}
-		f.Next = now.Add(routeBackoffBase << min(f.Attempts-1, 10))
+		f.Next = now.Add(min(routeBackoffBase<<min(f.Attempts-1, 10), routeBackoffCap))
 		re.Attempts = f.Attempts
-		if re.Retryable && f.Attempts < r.maxRouteFailures() {
+		if re.Retryable && (f.Attempts < r.maxRouteFailures() || now.Sub(f.First) < r.routeFailureWindow()) {
 			return putJSON(tx, routeFailureNamespace, key, f)
 		}
 		re.DeadLettered = true

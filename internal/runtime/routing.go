@@ -39,6 +39,10 @@ type RouterOptions struct {
 	// MaxRouteFailures is how many retryable failures an Event gets before
 	// it is routed as failed (DefaultMaxRouteFailures when zero).
 	MaxRouteFailures int
+	// RouteFailureWindow is the least time from an Event's first
+	// retryable failure to giving up on it (DefaultRouteFailureWindow when
+	// zero).
+	RouteFailureWindow time.Duration
 }
 type Router struct {
 	store   storage.Store
@@ -722,13 +726,10 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 		var target *domain.Execution
 		var err error
 		if rec.Policy, rec.Reason, target, err = r.policyInTx(tx, *p.selected, *w, scope); err != nil {
-			if errors.Is(err, extension.ErrInvalid) || errors.Is(err, extension.ErrUnsupported) {
-				// The route's binding cannot take this input (it is gone,
-				// or the running attempt cannot be given it): it may once
-				// that attempt ends, so it is retried, a bounded number
-				// of times.
-				return &RouteError{EventID: rec.EventID, Route: rec.Route, Code: RouteBindingInvalid, Retryable: true, Err: err}
-			}
+			// The running attempt can't be given this input (another
+			// binding, or its pinned capabilities lack the control). It
+			// isn't a route failure: the input waits, uncounted, until
+			// the attempt ends and it queues.
 			return err
 		}
 		if rec.Policy != "drop" {

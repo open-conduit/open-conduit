@@ -77,5 +77,5 @@ open-conduit events reroute ID                       # route a failed or skipped
 - `work retry|hold|release|cancel` take the Work's current `--revision`, which `work get ID` shows.
 - `runs log ID` shows a run's output; `--transcript` shows the agent's transcript.
 - `events chain ID` shows the chain of Events that led to something.
-- An Event whose route keeps failing is retried with a growing backoff and, after five failures (or at once when retrying can't help, such as a route whose extension is gone), routed as `failed`. Doctor's `routing` check lists Events still unrouted after ten minutes. `events skip` lets the Work behind one move on; `events reroute` tries an unrouted one now, or accepts a failed or skipped one again as a copy.
+- An Event whose route keeps failing is retried with a growing backoff and, after five failures over at least 15 minutes (or at once when retrying can't help, such as a route whose extension is gone), routed as `failed`. Doctor's `routing` check lists Events still unrouted after ten minutes. `events skip` lets the Work behind one move on; `events reroute` tries an unrouted one now, or accepts a failed or skipped one again as a copy.
 - `doctor --check-secrets` checks connections, credentials, webhooks, bindings and the executors' CLIs.

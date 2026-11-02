@@ -124,6 +124,23 @@ func TestSchedulerControlUsesPinnedCapabilitiesAfterReload(t *testing.T) {
 	if err = router.Route(ctx, "control-after-reload"); !errors.Is(err, extension.ErrUnsupported) {
 		t.Fatalf("new registration granted old attempt capability: %v", err)
 	}
+	// The input waits for the attempt, however long it runs: it isn't a
+	// route failure, so it is never counted or given up on (issue #342).
+	for range 10 {
+		f.Clock.Advance(time.Hour)
+		err = router.Route(ctx, "control-after-reload")
+		var re *runtime.RouteError
+		if errors.As(err, &re) || !errors.Is(err, extension.ErrUnsupported) {
+			t.Fatalf("input for the running attempt counted as a route failure: %v", err)
+		}
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		a, err := tx.Event("control-after-reload")
+		if err == nil && a.Routed {
+			t.Fatalf("input for the running attempt was routed as %s", a.Disposition)
+		}
+		return err
+	})
 	options.Bindings["fixture"] = runtime.RouteBinding{Executor: replacement, Fallback: "queue"}
 	// The failure is retried once its backoff has passed.
 	f.Clock.Advance(time.Minute)

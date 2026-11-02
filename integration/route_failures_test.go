@@ -333,3 +333,29 @@ func TestManagementEventSkipAndReroute(t *testing.T) {
 		t.Fatal("an event routed as usual was rerouted")
 	}
 }
+
+// TestRouteFailureWindow: a route failing past MaxRouteFailures within the
+// failure window (an extension restarting) is not given up on; once the
+// window has passed since its first failure, the next failure gives up.
+// The control: past the window the same failure routes the Event as failed.
+func TestRouteFailureWindow(t *testing.T) {
+	ctx := context.Background()
+	f := routingFixture(t, "persistent", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	r := failureRouter(t, f, poisonHandler(func(context.Context) (extension.RouteDecision, error) {
+		return extension.RouteDecision{}, errors.New("extension restarting")
+	}), time.Second, 2)
+	stuckWork(t, f, r)
+	for attempt := 1; attempt <= 4; attempt++ {
+		if re := routeErr(t, r.Route(ctx, "poison")); re.DeadLettered || re.Attempts != attempt {
+			t.Fatalf("attempt %d inside the window: %+v", attempt, re)
+		}
+		f.Clock.Advance(3 * time.Minute)
+	}
+	if a := eventState(t, f, "poison"); a.Routed {
+		t.Fatalf("given up on inside the window: %+v", a)
+	}
+	f.Clock.Advance(runtime.DefaultRouteFailureWindow)
+	if re := routeErr(t, r.Route(ctx, "poison")); !re.DeadLettered {
+		t.Fatalf("control: not given up on past the window: %+v", re)
+	}
+}
