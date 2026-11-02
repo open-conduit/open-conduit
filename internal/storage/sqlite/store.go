@@ -112,6 +112,11 @@ func Open(ctx context.Context, path string) (*Store, error) {
 			return nil, fmt.Errorf("sqlite: index: %w", err)
 		}
 	}
+	for _, r := range rewrites {
+		if err = s.rewrite(ctx, r); err != nil {
+			return nil, fmt.Errorf("sqlite: rewrite %s: %w", r.key, err)
+		}
+	}
 	if err = s.IntegrityCheck(ctx); err != nil {
 		return nil, err
 	}
@@ -237,6 +242,45 @@ const unrouted = "json_extract(CAST(record AS TEXT),'$.Routed')=0"
 // binary that opens a database with them keeps them current.
 var indexes = []string{
 	`CREATE INDEX IF NOT EXISTS events_unrouted ON events(sequence) WHERE ` + unrouted,
+}
+
+// rewrites bring records written by earlier binaries up to date. Each runs
+// once per store: it and its metadata key commit in one transaction, so a
+// crash leaves it to run again and a later open skips it without a scan.
+var rewrites = []struct{ key, statement string }{
+	// Turns were once declared under a source-named "<source>.status.v1"
+	// schema; the core now reads only domain.TurnSchema.
+	{"rewrite_turn_schema", `UPDATE executions SET record=CAST(json_set(CAST(record AS TEXT),'$.Outcome.Data.Schema','` + domain.TurnSchema + `') AS BLOB) ` +
+		`WHERE json_extract(CAST(record AS TEXT),'$.Outcome.Data.Schema') LIKE '_%.status.v1'`},
+}
+
+// rewrite runs one rewrite unless the store's metadata records it as done.
+func (s *Store) rewrite(ctx context.Context, r struct{ key, statement string }) error {
+	var done int
+	if err := s.db.QueryRowContext(ctx, "SELECT count(*) FROM metadata WHERE key=?", r.key).Scan(&done); err != nil || done > 0 {
+		return err
+	}
+	conn, err := s.db.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	if _, err = conn.ExecContext(ctx, "BEGIN IMMEDIATE"); err != nil {
+		return err
+	}
+	defer conn.ExecContext(context.Background(), "ROLLBACK")
+	// Recheck under the write lock: two processes can open the store together.
+	if err = conn.QueryRowContext(ctx, "SELECT count(*) FROM metadata WHERE key=?", r.key).Scan(&done); err != nil || done > 0 {
+		return err
+	}
+	if _, err = conn.ExecContext(ctx, r.statement); err != nil {
+		return err
+	}
+	if _, err = conn.ExecContext(ctx, "INSERT INTO metadata VALUES (?, '1')", r.key); err != nil {
+		return err
+	}
+	_, err = conn.ExecContext(ctx, "COMMIT")
+	return err
 }
 
 // Transact runs fn in one write transaction. SQLite never sees the caller's

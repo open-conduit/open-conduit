@@ -11,7 +11,9 @@ import (
 )
 
 // turnEndedInTx publishes the turn-ended Event of an execution whose outcome
-// declares a turn (domain.TurnSchema), in the transition that stores the
+// declares a turn (domain.TurnSchema) in any status of the right shape
+// (domain.ValidTurnStatus; the core reads no meaning into it), in the
+// transition that stores the
 // outcome: one per correlation key of the Work, derived from the attempt's
 // trigger, so another Work can wait on the key for a state. The delivery
 // identity is the execution's lease epoch, so a repeated transition (a
@@ -20,7 +22,7 @@ import (
 // unmatched and reaches waiters only through their dependency subscriptions.
 func (s *Scheduler) turnEndedInTx(tx storage.Tx, x domain.Execution, now time.Time) error {
 	d, ok := domain.TurnOf(x.Outcome)
-	if !ok || !domain.ValidTurnState(d.Status) {
+	if !ok || !domain.ValidTurnStatus(d.Status) {
 		return nil
 	}
 	w, err := tx.Work(x.WorkID)

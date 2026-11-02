@@ -742,6 +742,27 @@ func TestGitHubHeldIssueStartsWhenAnotherAgentReports(t *testing.T) {
 	}
 }
 
+// A turn may end in any status, not only the work-issue playbook's: a job
+// or a person approving ends in "approved", and issue:<n>:approved waits on
+// it like any other.
+func TestGitHubHeldIssueWaitsOnAnyTurnStatus(t *testing.T) {
+	e := newToolsEnv(t)
+	n21, w21 := e.claim("Needs sign-off", "", "bug")
+	_, w20 := e.heldClaim("Ship it", "after sign-off\n\n<!-- waitFor: issue:"+itoa(n21)+":approved -->")
+	if why := e.runHold(w20.ID); why != "" {
+		t.Fatalf("released early: %q", why)
+	}
+	a := e.start(w21.ID)
+	e.finish(a, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("approved")}})
+	e.publishTurns()
+	if got := e.work(w20.ID); got.State != domain.WorkReady {
+		t.Fatalf("the approved turn did not wake the held issue: %v", got.State)
+	}
+	if got := e.countType(domain.TypeTurnEnded); got != 1 {
+		t.Fatalf("turn events: %d", got)
+	}
+}
+
 // publishTurns lets the host's turn-ended Events reach their waiters.
 func (e *toolsEnv) publishTurns() {
 	e.t.Helper()
