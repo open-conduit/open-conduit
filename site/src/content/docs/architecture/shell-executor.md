@@ -3,7 +3,7 @@ title: "Shell executor and CLI toolbelt"
 description: "How the shell executor runs, adopts, interrupts and stops detached processes, and how the os CLI reaches the toolbelt."
 ---
 
-The shell executor, [`executors/shell`](https://github.com/open-conduit/open-conduit/tree/main/executors/shell), runs a binding's command as a detached process tree, and the [`os` CLI](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/toolbelt.go) gives that process the toolbelt. The daemon uses it for scheduled jobs and any other shell binding ([daemon composition](../daemon-core-gate/)). The executor imports only public contracts. It implements `extension.Executor`, `InterruptExecutor`, `InjectExecutor`, `ResumeExecutor` and the optional `StopExecutor` and `ForgetExecutor`, and advertises `toolbelt: cli`, `interrupt`, `inject` and `workspace`. `resume` is advertised only when `Options.Resume` is set.
+The shell executor, [`extensions/shell`](https://github.com/open-conduit/open-conduit/tree/main/extensions/shell), runs a binding's command as a detached process tree, and the [`os` CLI](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/toolbelt.go) gives that process the toolbelt. The daemon uses it for scheduled jobs and any other shell binding ([daemon composition](../daemon-core-gate/)). The executor imports only public contracts. It implements `extension.Executor`, `InterruptExecutor`, `InjectExecutor`, `ResumeExecutor` and the optional `StopExecutor` and `ForgetExecutor`, and advertises `toolbelt: cli`, `interrupt`, `inject` and `workspace`. `resume` is advertised only when `Options.Resume` is set.
 
 ## Binding config
 

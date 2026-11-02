@@ -25,7 +25,7 @@ import (
 // Events API on the webhook listener; and reconcile), the `slack` route
 // starts `slack.conversation` Work per thread, the projector posts marked
 // replies from outcomes and tool intents, and the slack.* operations join
-// every generation's toolbelt. packages/slack serves the same pieces out of
+// every generation's toolbelt. extensions/slack/pkg serves the same pieces out of
 // process.
 
 type source struct {

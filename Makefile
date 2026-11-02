@@ -147,7 +147,7 @@ protocol-prototype:
 # 07-03 extension packages: each first-party subprocess package and example
 # as an installable directory (manifest, binary, certification fixture).
 PACKAGES_DIR ?= dist/packages
-EXTENSION_PACKAGES = slack:./packages/slack/cmd/slack-extension github:./packages/github/cmd/github-extension shell:./packages/shell/cmd/shell-extension sentry:./packages/sentry/cmd/sentry-extension pagerduty:./packages/pagerduty/cmd/pagerduty-extension codex:./packages/codex/cmd/codex-extension notes:./protocol/examples/notes/cmd/notes-extension runner:./protocol/examples/runner/cmd/runner-extension
+EXTENSION_PACKAGES = slack:./extensions/slack/cmd/slack-extension github:./extensions/github/cmd/github-extension shell:./extensions/shell/cmd/shell-extension sentry:./extensions/sentry/cmd/sentry-extension pagerduty:./extensions/pagerduty/cmd/pagerduty-extension codex:./extensions/codex/cmd/codex-extension notes:./protocol/examples/notes/cmd/notes-extension runner:./protocol/examples/runner/cmd/runner-extension
 
 packages:
 	@set -eu; for spec in $(EXTENSION_PACKAGES); do \

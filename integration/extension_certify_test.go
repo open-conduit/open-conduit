@@ -39,12 +39,12 @@ func packageBinaries(t *testing.T) map[string]string {
 		}
 		out := map[string]string{}
 		for _, b := range []struct{ out, pkg string }{
-			{"slack-extension", "./packages/slack/cmd/slack-extension"},
-			{"github-extension", "./packages/github/cmd/github-extension"},
-			{"shell-extension", "./packages/shell/cmd/shell-extension"},
-			{"sentry-extension", "./packages/sentry/cmd/sentry-extension"},
-			{"pagerduty-extension", "./packages/pagerduty/cmd/pagerduty-extension"},
-			{"codex-extension", "./packages/codex/cmd/codex-extension"},
+			{"slack-extension", "./extensions/slack/cmd/slack-extension"},
+			{"github-extension", "./extensions/github/cmd/github-extension"},
+			{"shell-extension", "./extensions/shell/cmd/shell-extension"},
+			{"sentry-extension", "./extensions/sentry/cmd/sentry-extension"},
+			{"pagerduty-extension", "./extensions/pagerduty/cmd/pagerduty-extension"},
+			{"codex-extension", "./extensions/codex/cmd/codex-extension"},
 			{"weakened-extension", "./protocol/examples/weakened/cmd/weakened-extension"},
 			{"os", "./cmd/os"},
 		} {

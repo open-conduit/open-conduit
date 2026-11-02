@@ -12,13 +12,13 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/open-conduit/open-conduit/extensions/pagerduty"
+	"github.com/open-conduit/open-conduit/extensions/sentry"
+	shellext "github.com/open-conduit/open-conduit/extensions/shell/pkg"
+	pkgslack "github.com/open-conduit/open-conduit/extensions/slack/pkg"
 	"github.com/open-conduit/open-conduit/internal/bootstrap"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
-	"github.com/open-conduit/open-conduit/packages/pagerduty"
-	"github.com/open-conduit/open-conduit/packages/sentry"
-	shellext "github.com/open-conduit/open-conduit/packages/shell"
-	pkgslack "github.com/open-conduit/open-conduit/packages/slack"
 	"github.com/open-conduit/open-conduit/protocol"
 )
 

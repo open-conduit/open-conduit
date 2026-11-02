@@ -26,10 +26,10 @@ import (
 
 	"github.com/open-conduit/open-conduit/conformance/reference"
 	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/executors/claudecode"
-	"github.com/open-conduit/open-conduit/executors/shell"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extensions/claudecode"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
+	"github.com/open-conduit/open-conduit/extensions/shell"
 	"github.com/open-conduit/open-conduit/extensions/srt"
 )
 

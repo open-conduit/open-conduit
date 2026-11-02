@@ -2,7 +2,7 @@
 // dependency graph, and against the source of the core and of composition
 // (#354): the public contracts and the runtime import no third-party module
 // and name no service, executor or workflow, and composition reaches an
-// extension or executor only from the files that wire them. It uses no
+// extension (an executor is one) only from the files that wire them. It uses no
 // runtime implementations or third-party packages.
 package main
 
@@ -138,17 +138,6 @@ func allowed(owner, dependency string, test bool) bool {
 		// artifact stores, judged by the public conformance checks (never
 		// the reference doubles, bootstrap or an extension).
 		return public(dependency) || under(dependency, "protocol") || under(dependency, "internal/extproc") || under(dependency, "internal/runtime") || under(dependency, "internal/storage/sqlite") || under(dependency, "internal/artifacts") || under(dependency, "internal/certify") || dependency == "conformance"
-	case under(owner, "packages"):
-		// A first-party subprocess package (07-03) serves exactly one
-		// in-process implementation over the protocol, as a third party
-		// would: packages/<name> wraps extensions/<name> or
-		// executors/<name>, never another implementation or the host. The
-		// public management client is open to it, as it is to the
-		// implementation it wraps (GitHub's hold executor reaches the
-		// toolbelt through it).
-		parts := strings.Split(owner, "/")
-		name := parts[min(len(parts)-1, 1)]
-		return public(dependency) || under(dependency, "protocol") || under(dependency, "client") || under(dependency, "packages/"+name) || under(dependency, "extensions/"+name) || under(dependency, "executors/"+name)
 	case under(owner, "conformance"):
 		return public(dependency) || under(dependency, "conformance")
 	case under(owner, runtimeFixtures):
@@ -188,15 +177,20 @@ func allowed(owner, dependency string, test bool) bool {
 	case under(owner, "extensions/tracker"):
 		// The shared tracker kit (06-01) is public contracts only.
 		return public(dependency) || under(dependency, "extensions/tracker")
-	case under(owner, "extensions"), under(owner, "executors"):
-		// An extension/executor cannot reach another implementation indirectly.
-		// The tracker extensions share the public-only tracker kit.
+	case under(owner, "extensions"):
+		// An extension (an executor is one that declares an executor) lives
+		// in extensions/<name>: its library, its package entry point and
+		// certification fixture. It uses the public contracts, the public
+		// management client and the protocol and SDK a third party would
+		// serve it with, never the protocol's examples, another
+		// implementation or the host. The tracker extensions share the
+		// public-only tracker kit.
 		parts := strings.Split(owner, "/")
 		family := strings.Join(parts[:min(len(parts), 2)], "/")
 		if trackerKitUser(family) && under(dependency, "extensions/tracker") {
 			return true
 		}
-		return public(dependency) || under(dependency, "client") || under(dependency, family)
+		return public(dependency) || under(dependency, "client") || under(dependency, family) || (under(dependency, "protocol") && !under(dependency, "protocol/examples"))
 	case owner == "cmd/os":
 		return public(dependency) || under(dependency, "client") || under(dependency, "internal/cli")
 	case owner == "cmd/open-conduit-gateway":
