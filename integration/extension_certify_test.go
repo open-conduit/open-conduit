@@ -42,6 +42,7 @@ func packageBinaries(t *testing.T) map[string]string {
 			{"slack-extension", "./packages/slack/cmd/slack-extension"},
 			{"shell-extension", "./packages/shell/cmd/shell-extension"},
 			{"sentry-extension", "./packages/sentry/cmd/sentry-extension"},
+			{"pagerduty-extension", "./packages/pagerduty/cmd/pagerduty-extension"},
 			{"weakened-extension", "./protocol/examples/weakened/cmd/weakened-extension"},
 			{"os", "./cmd/os"},
 		} {
@@ -123,6 +124,7 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		{"slack", "slack-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
 		{"shell", "shell-extension", []string{"executor.conformance", "executor.inject", "executor.controls"}},
 		{"sentry", "sentry-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
+		{"pagerduty", "pagerduty-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
 		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace"}},
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 	} {
