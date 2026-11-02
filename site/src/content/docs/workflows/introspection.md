@@ -54,4 +54,8 @@ Each workflow is a scope in the config. The example below is a complete, minimal
 }
 ```
 
+## How changes land
+
+The sweep and each fix land through a pull request by default. The sweep's PR lists every correction it folded in with where it came from: the Work that logged it, who asked for that Work and the event that triggered the turn. Read that list before merging: a correction is only as trustworthy as whoever led the agent to it, and text in an issue from a stranger can talk an agent into logging one. Set `"land": "push"` on the `sweep` or `triage` block only if you want changes on the main branch without review.
+
 In practice the introspection entry sits in the same scope as your GitHub agent. See [introspection](../../architecture/issue-reporting/) for the sweep, the host watch and by-hand runs.

@@ -13,7 +13,7 @@ Call an operation with the `call` tool (`mcp__open-conduit__call`), giving the `
 
 | Operation | Input | Does |
 | --- | --- | --- |
-| `introspection.evidence` | `for`: `triage` | this scope's open reports and unhandled problems, each grouped by kind and leading line (count, ids, the Work they came from, sample bodies), the reports a requested fix already covers (`fixing`), and the settings: `land`, `remote` and `file_issues` |
+| `introspection.evidence` | `for`: `triage` | this scope's open reports and unhandled problems, each grouped by kind and leading line (count, ids, the Work they came from, sample bodies, and for problems each note's `provenance`), the reports a requested fix already covers (`fixing`), and the settings: `land` (`pr`, the default, or `push`), `remote` and `file_issues` |
 | `introspection.reports` | `state`? (`open`, `fixing`, `resolved` or `all`; default `open`) | this scope's reports, oldest first, in full |
 | `introspection.fix` | `reports`? (ids), `notes`? (problem ids), `title`, `body` | request fix Work for one cause: a fix Event caused by the earliest report, which gives the fix its own Work on this scope's fix binding; returns the fix and its Work |
 | `introspection.report.resolve` | `id`, `summary`, `link`? | record how you handled a report (the issue you filed, or why you dropped it); a resolved report is no longer open |

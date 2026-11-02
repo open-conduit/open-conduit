@@ -46,7 +46,9 @@ type Schedule struct {
 	// and Guide the file saying which rule goes where.
 	Rules []string `json:"rules,omitempty"`
 	Guide string   `json:"guide,omitempty"`
-	// Land is push (default) or pr; Remote defaults to origin.
+	// Land is pr (default) or push; Remote defaults to origin. A push lands
+	// the agents' corrections on the main branch unreviewed, so it is an
+	// explicit opt-in.
 	Land   string `json:"land,omitempty"`
 	Remote string `json:"remote,omitempty"`
 	// FileIssues tells the triage to open or update an issue for each cause
