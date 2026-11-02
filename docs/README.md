@@ -4,11 +4,11 @@ These documents are for people working on Open Conduit itself. To install and ru
 
 ## Building and checking
 
-Use Go 1.24.2 or later, Python 3.10+ and Make.
+Use Go 1.24.2 or later, Python 3.10+ and Make. [Toolchain](../CONTRIBUTING.md#toolchain) in CONTRIBUTING.md lists what each target needs, Node, GoReleaser and Docker included.
 
 - `make build` writes `bin/open-conduit` (the daemon and operator client) and `bin/os` (the toolbelt CLI that shell executions call).
 - `make config-deps` installs the isolated configuration schema checker into `.venv-contracts`. Run it once before `make check`.
-- `make check` runs formatting, vet, race tests (including the daemon integration tests), dependency boundaries, the configuration contract, the build and binary smoke checks. The tests also validate every example config in the README and in this directory against the daemon's own registrations, and check that the commands and make targets the README, this index, CONTRIBUTING.md and SECURITY.md show exist (`make docs-check` runs only these).
+- `make check` runs formatting, vet, staticcheck (`make lint`), race tests (including the daemon integration tests), dependency boundaries, the configuration contract, the build and binary smoke checks. The tests also validate every example config in the README and in this directory against the daemon's own registrations, and check that the commands and make targets the README, this index, CONTRIBUTING.md and SECURITY.md show exist (`make docs-check` runs only these).
 - `make cross-build` compiles Darwin and Linux binaries for amd64 and arm64 into `dist/`. It is build evidence only, not platform verification.
 - `make drill` reruns the daemon kill and restart drills on their own.
 - `make packages` builds the first-party and example extension packages into `dist/packages`, and `make certify` runs the conformance runner over them.

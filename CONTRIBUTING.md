@@ -8,24 +8,25 @@ To report a vulnerability, follow [SECURITY.md](SECURITY.md). Don't open a publi
 
 ## Setup
 
-You need Go 1.24.2 or later (the minimum in `go.mod`), Python 3.10 or later, Make and Git, on macOS or Linux.
+You need Go, Python, Make and Git, on macOS or Linux; [Toolchain](#toolchain) lists the versions and what else some targets need.
 
 ```sh
 make config-deps   # once: installs the config schema checker into .venv-contracts
 make check         # what CI runs
 ```
 
-`make config-deps` is the only step that installs anything. `make check` runs offline. It runs, in order:
+`make config-deps` is the only step that installs anything. Apart from Go fetching the modules `go.mod` and `tools/go.mod` pin into its module cache the first time, `make check` runs offline. It runs, in order:
 
 - `fmt-check`: `gofmt` on every Go file. Run `make fmt` to fix it.
 - `vet`: `go vet`, including the fault-injection build tag.
+- `lint`: [staticcheck](https://staticcheck.dev/) with the checks `staticcheck.conf` selects, including the fault-injection build tag. Fix a finding rather than disabling its check; when a check is wrong for this code base, turn it off in `staticcheck.conf` with a comment saying why.
 - `test`: `go test -race ./...`, including the daemon integration tests in `integration/`. This is the slow part. The integration tests run in `INTEGRATION_SHARDS` processes at once (4 by default, `scripts/test-integration.sh`). Each shard is a separate process, so a test there can't rely on state another test left behind.
 - `boundaries`: the package boundary checker (below).
 - `config-check`: the configuration schema and its example fixtures.
 - `docs-check`: the README and docs examples (below).
 - `build` and `smoke`: builds `bin/open-conduit` and `bin/os`, and runs their help and version commands.
 
-CI runs `make check` and `make certify` on one Linux runner with the current stable Go, and `make cross-build` alongside. It doesn't test macOS or the Go 1.24.2 minimum, so check those locally when a change could affect them. A pull request that only changes docs (`site/`, `docs/**/*.md` and the Markdown at the repository root) skips it and runs `make docs-check` instead; the docs site only builds when `site/` changes. To check the minimum toolchain locally:
+CI runs `make check` and `make certify` on one Linux runner with the current stable Go, and `make cross-build` alongside. It doesn't test macOS or the Go 1.24.2 minimum, so check those locally when a change could affect them. A pull request that only changes docs (`site/`, `docs/**/*.md` and the Markdown at the repository root) skips it and runs `make docs-check` instead; the docs site only builds when `site/` changes. To check the minimum toolchain locally (`lint` says it is skipped there, since staticcheck needs Go 1.26 to build and its findings don't depend on the toolchain):
 
 ```sh
 GOTOOLCHAIN=go1.24.2 make check
@@ -46,6 +47,22 @@ make release-snapshot     # a local release build with GoReleaser (below); publi
 
 `make protocol-prototype` lives in its own Go module under `prototypes/transport`, so its dependencies never enter `go.mod`. It needs the network the first time, which is why it isn't part of `make check`.
 
+### Toolchain
+
+| Tool | Version | Needed by |
+| --- | --- | --- |
+| Go | 1.24.2 or later (the `go` line in `go.mod`); `lint` needs 1.26 or later and is skipped, saying so, under an older one | everything |
+| Make, Git | any recent | everything |
+| Python | 3.10 or later, as `python3` (or set `PYTHON`) | `config-deps`, which creates the `.venv-contracts` virtualenv `config-check` runs in |
+| staticcheck | pinned in `tools/go.mod`; nothing to install | `lint` |
+| Node, with npm | 22.18 or later | `ts-deps`, `ts-check`, `ts-packages`, `certify` |
+| GoReleaser | v2, on your PATH (or set `GORELEASER`) | `release-snapshot` |
+| Docker | a running daemon (OrbStack or Docker Desktop on macOS) | `container-test`, `gateway-image` |
+
+staticcheck is a `tool` in a module of its own, `tools/go.mod`, which `make lint` runs with `go tool -modfile=tools/go.mod staticcheck`. That keeps staticcheck's dependencies and its Go 1.26 minimum out of `go.mod`, and its version and checksums in the repository. To upgrade it, run `go get -tool honnef.co/go/tools/cmd/staticcheck@<version>` in `tools/`.
+
+`make check` needs only Go, Make, Git and the `config-deps` virtualenv; it never needs Node. The targets above check for their tools first and stop with what to install (`scripts/require-tool.sh`): `config-check` without the virtualenv says to run `make config-deps`, and the Node targets say when `node` is missing or older than 22.18.
+
 ## Commits and pull requests
 
 Use [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`, for example `feat(slack): …` or `fix(runtime): …`. The history uses `feat`, `fix`, `docs`, `test` and `build`; `refactor` and `chore` are fine too. The scope is usually the package or area, such as `runtime`, `github`, `workspaces` or `readme`. The commitlint workflow checks every pull request's title and commits, because the release workflow reads them to pick the next version.
@@ -63,7 +80,7 @@ Releases are cut by hand from the release workflow (Actions, release, Run workfl
 The core knows nothing about GitHub, Slack, Git or Claude. Decision B01 in [package boundaries](https://open-conduit.github.io/open-conduit/architecture/packages/) sets out who may import what:
 
 - `domain`, `extension`, `storage`, `observability` and `protocol` are the public contracts.
-- `internal/runtime` uses only the public contracts. It never imports an extension, executor, SQLite, config or management code.
+- `internal/runtime` uses only the public contracts. It never imports an extension, executor, SQLite, config or management code. Its tests may run it over SQLite through `internal/runtime/runtimetest`, which production code can't import.
 - Extensions (`extensions/<name>`) and executors (`executors/<name>`) use the public contracts and `client`, never the runtime, SQLite or each other. The one exception is the shared tracker kit, which Linear, Jira and Bitbucket may use.
 - `internal/bootstrap` and `cmd/open-conduit` are the composition root that wires implementations together.
 
@@ -86,7 +103,9 @@ A passing suite only means something if it can fail. Each suite has negative con
 
 There are two ways to add an extension. Both implement the same public contracts from `extension` (ingress, route handlers, toolbelt operations, executors, resource providers) and run the same shared suites.
 
-**In-process (first-party).** Add a package under `extensions/<name>` (or `executors/<name>`) that imports only the public contracts. Implement the surfaces it has from `extension/inproc` (config types, operations, routes, start, configure, toolbelt registration, actions, annotations, rendering, tasks, doctor checks, playbooks, telemetry), and add it to `firstParty()` in `internal/bootstrap/inproc.go`. Nothing else in bootstrap changes. `extensions/human/extension.go` and `extensions/posthog/extension.go` are good models. Run the shared suites against it in its own tests, and add an end-to-end case in `integration/` when it changes daemon behavior. Domain types stay in the extension: core gets no new primitive, and the runtime never learns the service's vocabulary.
+**In-process (first-party).** Add a package under `extensions/<name>` (or `executors/<name>`) that imports only the public contracts. Implement the surfaces it has from `extension/inproc` (config types, operations, routes, start, configure, toolbelt registration, actions, annotations, rendering, tasks, doctor checks, playbooks, telemetry), and add it to `firstParty()` in `internal/bootstrap/inproc.go`; bootstrap composes every contract surface from that list. Two lists are still kept by hand: describe its config in `Adapters()` (`internal/bootstrap/adapters.go`), which `open-conduit adapters` and the config editor show, and if it has an `open-conduit init` setup, add that to `Setups()` (`internal/bootstrap/operator.go`). `extensions/human/extension.go` and `extensions/posthog/extension.go` are good models. Run the shared suites against it in its own tests, and add an end-to-end case in `integration/` when it changes daemon behavior. Domain types stay in the extension: core gets no new primitive, and the runtime never learns the service's vocabulary.
+
+The older first-party integrations (GitHub in part, Slack, Linear, Jira, Bitbucket, schedule, git, Docker, srt, tunnel, and the shell and Claude Code executors) predate that contract and are wired by hand in bootstrap files of their own (`daemon.go`, `slack.go`, `trackers.go`, `schedule.go`, `webhooks.go`, `routes.go`, `tools.go` and others). That wiring is being moved onto `extension/inproc`, so don't copy it for a new extension. If the contract lacks a surface you need, add it to `extension/inproc`, and to the protocol so an installed package can use it too, rather than wiring the extension into bootstrap.
 
 **Subprocess (installed package).** Write a program on `protocol/sdk` that speaks the extension protocol over stdin and stdout, then package, install and certify it with `open-conduit extension`. [Extension packaging](https://open-conduit.github.io/open-conduit/architecture/extension-packaging/) is the guide, and `protocol/examples/notes` and `protocol/examples/runner` are complete examples. `sdk/typescript` is the SDK for TypeScript, and `protocol/examples/weather` is an example written with it. `packages/slack` and `packages/shell` wrap first-party code the same way. `make certify` runs the conformance runner over all of them. The protocol and packaging are provisional.
 
@@ -95,9 +114,10 @@ An extension runs with the operator's privileges either way. The host enforces t
 ## Tests
 
 - **No real services.** Tests never call GitHub, Slack, Linear, Jira, Bitbucket, PostHog or Claude. Use the in-repo fakes, such as `extensions/github/githubtest` and `extensions/slack/slacktest`, which serve each service's API over `httptest`, and fake processes for CLIs.
-- **No real time.** Use the explicitly advanced `conformance.Clock` (`conformance.NewClock()`), or inject a `Now func() time.Time` where a component takes one. Don't wait for timers with sleeps. Wait on a barrier or a condition with a deadline instead.
+- **No real time.** Use the explicitly advanced `conformance.Clock` (`conformance.NewClock()`), or inject a `Now func() time.Time` where a component takes one. Don't wait for timers with sleeps. Wait on a barrier or a condition with a deadline instead. In `integration/`, `eventually` (and `waitFor`, `waitWithin`, `drill.until` built on it) is the one place that polls a condition, and `drill.settle` waits for the daemon's loop barrier: full host loop passes that began after the call, published by the `faultinject` build. To show that something did not happen, settle and then check. `TestNoSleep` parses `integration/`, `conformance/` and `internal/runtime/` and fails on any `time.Sleep` beyond its allowlist, which may only shrink.
 - **No shared state.** Use `t.TempDir()` for config, state and workspaces. Never read or write the operator's `~/.config/open-conduit` or `~/.local/state/open-conduit`, or Open Supervisor's files. Stop every process a test starts, and check that none is left behind.
 - **Race detector.** `make check` runs everything with `-race`. A flaky test is a bug, so fix it rather than retrying.
+- **Runtime tests.** `go test ./internal/runtime/...` runs the shared runtime suite (`conformance.RunRuntime`) and the router, scheduler, wait, timer, causal and ingress cases against the production runtime on SQLite in a temp dir with `conformance.Clock`, in seconds. `internal/runtime/runtimetest` has the fixtures. Put a case there when it only exercises runtime semantics.
 - **Real daemon tests.** `integration/` starts the real daemon on SQLite, drives it through the CLI and client, and kills and restarts it (`make drill`). Add a case there when a change crosses the daemon boundary.
 
 ## Secrets in fixtures

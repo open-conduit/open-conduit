@@ -40,7 +40,7 @@ func RunStorage(t *testing.T, factory func() storage.Store) {
 	}
 }
 
-var rollback = errors.New("injected rollback")
+var errRollback = errors.New("injected rollback")
 
 func event(id domain.ID, now time.Time) domain.Event {
 	return domain.Event{ID: id, Type: "test.changed.v1", Source: "test", DeliveryID: string(id), OccurredAt: now, ReceivedAt: now}
@@ -184,9 +184,9 @@ func routeReplay(s storage.Store) error {
 		if err := tx.MarkRouted("trigger", "work", "queue"); err != nil {
 			return err
 		}
-		return rollback
+		return errRollback
 	})
-	if err := wantError(err, rollback); err != nil {
+	if err := wantError(err, errRollback); err != nil {
 		return err
 	}
 	return transact(s, c, func(tx storage.Tx) error {
@@ -251,9 +251,9 @@ func atomicRoute(s storage.Store) error {
 		if err := mutate(tx); err != nil {
 			return err
 		}
-		return rollback
+		return errRollback
 	})
-	if err := wantError(err, rollback); err != nil {
+	if err := wantError(err, errRollback); err != nil {
 		return err
 	}
 	if err := transact(s, c, func(tx storage.Tx) error {
@@ -495,9 +495,9 @@ func timerRollback(s storage.Store) error {
 		if err := tx.Put("schedule", "cursor", []byte("2")); err != nil {
 			return err
 		}
-		return rollback
+		return errRollback
 	})
-	if err := wantError(err, rollback); err != nil {
+	if err := wantError(err, errRollback); err != nil {
 		return err
 	}
 	if err := transact(s, c, func(tx storage.Tx) error {
@@ -595,9 +595,9 @@ func waitRegistration(s storage.Store) error {
 		if err := park(tx); err != nil {
 			return err
 		}
-		return rollback
+		return errRollback
 	})
-	if err := wantError(err, rollback); err != nil {
+	if err := wantError(err, errRollback); err != nil {
 		return err
 	}
 	if err := s.Transact(context.Background(), storage.Guard{Now: c.Now(), Lease: &ref}, park); err != nil {
@@ -647,9 +647,9 @@ func kvCheckpoint(s storage.Store) error {
 		if _, _, err := tx.AcceptEvent(event("diff", c.Now())); err != nil {
 			return err
 		}
-		return rollback
+		return errRollback
 	})
-	if err := wantError(err, rollback); err != nil {
+	if err := wantError(err, errRollback); err != nil {
 		return err
 	}
 	return transact(s, c, func(tx storage.Tx) error {

@@ -88,15 +88,15 @@ func (e *repEnv) open() {
 	if e.ingress, err = runtime.NewIngress(store, e.clock.Now, runtime.IngressOptions{}); err != nil {
 		t.Fatal(err)
 	}
-	e.exec = &schedulerExecutor{caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}
-	e.exec.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	e.exec = &schedulerExecutor{Caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}
+	e.exec.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		e.mu.Lock()
 		e.tokens[r.Execution.ID] = r.Context.ToolbeltToken
 		e.mu.Unlock()
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
-		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
 	}
 	if e.router, err = runtime.NewRouter(store, e.clock.Now, runtime.RouterOptions{Generation: "1", CausalLimits: e.limits,
 		Handlers: e.routeHandlers(),

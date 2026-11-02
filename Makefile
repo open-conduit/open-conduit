@@ -12,7 +12,7 @@ TEST_TIMEOUT ?= 20m
 # shards overlap well even on a 4-vCPU hosted runner.
 INTEGRATION_SHARDS ?= 4
 
-.PHONY: build fmt fmt-check vet test boundaries config-check config-deps docs-check container-test gateway-image check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages
+.PHONY: build fmt fmt-check vet lint test boundaries config-check config-deps docs-check container-test gateway-image check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
 
 build:
 	$(GO) build ./...
@@ -29,6 +29,22 @@ vet:
 	$(GO) vet ./...
 	$(GO) vet -tags faultinject ./internal/bootstrap ./cmd/open-conduit
 
+# staticcheck with the checks staticcheck.conf selects. It is pinned with a
+# go tool directive in tools/go.mod, a module of its own so staticcheck's
+# dependencies and its Go 1.26 minimum stay out of go.mod; Go fetches it
+# into the module cache like any other module, so nothing is installed.
+# Under an older Go (GOTOOLCHAIN=go1.24.2 make check, the minimum-toolchain
+# run) it says so and skips: its findings don't depend on the toolchain, and
+# CI lints with the current stable Go.
+STATICCHECK = $(GO) tool -modfile=tools/go.mod staticcheck
+STATICCHECK_GO = 1.26
+lint:
+	@scripts/require-tool.sh $(GO) 'staticcheck needs it to build' $(STATICCHECK_GO) 2>/dev/null || \
+		{ echo "lint skipped: staticcheck needs Go $(STATICCHECK_GO) or later, this is $$($(GO) env GOVERSION)"; exit 0; }; \
+		set -ex; \
+		$(STATICCHECK) ./...; \
+		$(STATICCHECK) -tags faultinject ./internal/bootstrap ./cmd/open-conduit
+
 test:
 	$(GO) test -race -timeout $(TEST_TIMEOUT) $$($(GO) list ./... | grep -v '/integration$$')
 	GO='$(GO)' TEST_TIMEOUT='$(TEST_TIMEOUT)' scripts/test-integration.sh $(INTEGRATION_SHARDS)
@@ -38,10 +54,12 @@ boundaries:
 
 # Explicit bootstrap; ordinary check never installs packages or uses the network.
 config-deps:
+	@scripts/require-tool.sh $(PYTHON) 'install Python 3.10 or later, or set PYTHON' 3.10
 	$(PYTHON) -m venv .venv-contracts
 	.venv-contracts/bin/python -m pip install -r scripts/requirements-config-contract.txt
 
 config-check:
+	@scripts/require-tool.sh $(CONFIG_PYTHON) 'run make config-deps (needs python3)'
 	$(CONFIG_PYTHON) scripts/check-config-contract.py
 
 # The README, docs index, CONTRIBUTING and SECURITY: example configs pass
@@ -60,6 +78,7 @@ docs-check:
 # macOS uses (the CI job's second pass).
 CONTAINER_TEST_RUN ?= TestDocker
 container-test:
+	@scripts/require-tool.sh docker 'container-test needs Docker (OrbStack or Docker Desktop on macOS)'
 	OPEN_CONDUIT_CONTAINER_TESTS=1 $(GO) test -count=1 -v -timeout $(TEST_TIMEOUT) -run '$(CONTAINER_TEST_RUN)' ./integration/ ./extensions/docker/...
 
 # The gateway image for this machine's Docker (the context
@@ -70,13 +89,14 @@ container-test:
 # (scripts/publish-gateway.sh) and pins the digest in the binary.
 DOCKER_CONTEXT_FLAG = $(if $(OPEN_CONDUIT_DOCKER_CONTEXT),--context $(OPEN_CONDUIT_DOCKER_CONTEXT))
 gateway-image:
+	@scripts/require-tool.sh docker 'gateway-image needs Docker (OrbStack or Docker Desktop on macOS)'
 	@set -eu; arch=$$(docker $(DOCKER_CONTEXT_FLAG) version --format '{{.Server.Arch}}'); \
 		for binary in open-conduit-gateway os; do \
 			CGO_ENABLED=0 GOOS=linux GOARCH=$$arch $(GO) build -trimpath -ldflags '$(LDFLAGS)' -o dist/gateway/linux-$$arch/$$binary ./cmd/$$binary; \
 		done; \
 		docker $(DOCKER_CONTEXT_FLAG) build -q --build-arg TARGETARCH=$$arch -f extensions/docker/gateway/Dockerfile -t open-conduit-gateway:dev dist/gateway
 
-check: fmt-check vet test boundaries config-check docs-check build smoke
+check: fmt-check vet lint test boundaries config-check docs-check build smoke
 
 smoke: build smoke-run
 
@@ -145,23 +165,28 @@ packages:
 # formatted with Prettier's defaults (npm run format fixes it), typechecks
 # and unit-tests them, and ts-packages bundles the example into the package
 # layout certify runs (installing its dependencies first if ts-deps hasn't).
-# ts-check needs Node 22.18 or later.
+# These three and certify need Node 22.18 or later (require-node).
 TS_DIRS = sdk/typescript protocol/examples/weather
+NODE_MIN = 22.18
 
-ts-deps:
+require-node:
+	@scripts/require-tool.sh node 'install Node $(NODE_MIN) or later (with npm)' $(NODE_MIN)
+	@scripts/require-tool.sh npm 'install Node $(NODE_MIN) or later (with npm)'
+
+ts-deps: require-node
 	@set -eu; for d in $(TS_DIRS); do (cd $$d && npm ci --no-audit --no-fund); done
 
-ts-check:
+ts-check: require-node
 	@set -eu; for d in $(TS_DIRS); do (cd $$d && npm run --silent format:check && npm run --silent typecheck && npm test --silent); done
 
-ts-packages:
+ts-packages: require-node
 	cd protocol/examples/weather && { [ -d node_modules ] || npm ci --no-audit --no-fund; } && node scripts/package.mjs $(abspath $(PACKAGES_DIR))/weather
 
 # 07-03 certification: the public runner over the two first-party workloads
 # and the examples, the TypeScript one included (reports beside the
 # packages), then the negative controls, which must each fail their
 # criterion.
-certify: build packages ts-packages
+certify: require-node build packages ts-packages
 	@set -eu; for name in slack shell notes runner setup weather; do \
 		bin/open-conduit extension certify $(PACKAGES_DIR)/$$name --report $(PACKAGES_DIR)/$$name.certification.json; \
 	done
@@ -176,6 +201,7 @@ certify: build packages ts-packages
 GORELEASER ?= goreleaser
 RELEASE_DIR = dist/release
 release-snapshot:
+	@scripts/require-tool.sh $(GORELEASER) 'install GoReleaser v2 (https://goreleaser.com/install/), or set GORELEASER'
 	$(GORELEASER) release --snapshot --clean
 	@set -eu; host=$$($(GO) env GOOS)_$$($(GO) env GOARCH); \
 		test $$(ls $(RELEASE_DIR)/open-conduit_*.tar.gz | wc -l) -eq 4; \

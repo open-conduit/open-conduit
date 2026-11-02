@@ -606,15 +606,11 @@ done`
 		if err != nil {
 			t.Fatal(err)
 		}
-		deadline := time.Now().Add(30 * time.Second)
-		for {
-			if procs, _ := exec.Command("pgrep", "-f", "sleep 0.1").Output(); len(procs) > 0 {
-				break
-			}
-			if time.Now().After(deadline) {
-				t.Fatal("the sandboxed command never started")
-			}
-			time.Sleep(100 * time.Millisecond)
+		if !eventually(30*time.Second, func() bool {
+			procs, _ := exec.Command("pgrep", "-f", "sleep 0.1").Output()
+			return len(procs) > 0
+		}) {
+			t.Fatal("the sandboxed command never started")
 		}
 		time.Sleep(500 * time.Millisecond)
 		return r, saved, h
@@ -732,31 +728,20 @@ done`
 
 func waitFile(t *testing.T, path string) {
 	t.Helper()
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("%s never appeared", path)
-		}
-		time.Sleep(50 * time.Millisecond)
+	if !eventually(30*time.Second, func() bool { _, err := os.Stat(path); return err == nil }) {
+		t.Fatalf("%s never appeared", path)
 	}
 }
 
 // noneLeft: nothing of the sandboxed command still runs.
 func noneLeft(t *testing.T) {
 	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for {
-		out, _ := exec.Command("pgrep", "-f", "sleep 0.1").Output()
-		if len(strings.TrimSpace(string(out))) == 0 {
-			return
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("processes left running: %s", out)
-		}
-		time.Sleep(100 * time.Millisecond)
+	var out []byte
+	if !eventually(10*time.Second, func() bool {
+		out, _ = exec.Command("pgrep", "-f", "sleep 0.1").Output()
+		return len(strings.TrimSpace(string(out))) == 0
+	}) {
+		t.Fatalf("processes left running: %s", out)
 	}
 }
 
@@ -807,16 +792,12 @@ func TestSandboxClaudeCodeProcessControl(t *testing.T) {
 	if err := e.Inject(context.Background(), "exec", domain.Event{ID: "inj-1", Type: "note", Data: domain.Payload{Schema: "x.v1", Data: json.RawMessage(`{"text":"injected-into-sandbox"}`)}}); err != nil {
 		t.Fatal(err)
 	}
-	deadline := time.Now().Add(30 * time.Second)
-	for {
-		b, _ := os.ReadFile(filepath.Join(l.ws, "stdin-seen"))
-		if strings.Count(string(b), "\n") >= 2 {
-			break
-		}
-		if time.Now().After(deadline) {
-			t.Fatalf("the injected message never reached claude inside the sandbox:\n%s", b)
-		}
-		time.Sleep(50 * time.Millisecond)
+	var seen []byte
+	if !eventually(30*time.Second, func() bool {
+		seen, _ = os.ReadFile(filepath.Join(l.ws, "stdin-seen"))
+		return strings.Count(string(seen), "\n") >= 2
+	}) {
+		t.Fatalf("the injected message never reached claude inside the sandbox:\n%s", seen)
 	}
 	// A restarted daemon recovers it under the pinned plan, and refuses it
 	// when the binding's sandbox is a new one it wasn't launched in.

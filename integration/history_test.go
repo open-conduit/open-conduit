@@ -407,6 +407,32 @@ esac`
 	}
 }
 
+// doctorIngress declares one family that can't be re-derived, for doctor to
+// list, and answers each reconcile with one complete, empty page until it is
+// told to fail.
+type doctorIngress struct {
+	mu      sync.Mutex
+	failure error
+}
+
+const doctorOneShotFamily = "fixture.receipt.v1"
+
+func (*doctorIngress) Spec() extension.IngressSpec {
+	return extension.IngressSpec{Families: []extension.EventFamily{{Type: "fixture.changed.v1", ReDerivable: true}, {Type: doctorOneShotFamily, Loss: "An arbitrary POST receipt has no backing history; unaccepted receipts are lost when push is unavailable."}}}
+}
+func (*doctorIngress) Push(context.Context, extension.Source, extension.Delivery) (extension.PushResult, error) {
+	return extension.PushResult{}, nil
+}
+func (a *doctorIngress) Reconcile(context.Context, extension.Scan) (extension.Snapshot, error) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if a.failure != nil {
+		return extension.Snapshot{}, a.failure
+	}
+	return extension.Snapshot{ScanID: "scan-1", Complete: true, Checkpoint: "c1"}, nil
+}
+func (a *doctorIngress) fail(err error) { a.mu.Lock(); defer a.mu.Unlock(); a.failure = err }
+
 // TestDoctorChecks covers storage, config, bindings, connections, secrets,
 // reconcile lag/failure, declared non-re-derivable families, lease recovery,
 // pinned executors and the CLI.
@@ -415,8 +441,7 @@ func TestDoctorChecks(t *testing.T) {
 	h, _, job, clock := mixedHost(t, 20)
 	c := h.operator()
 	source := extension.Source{Namespace: "fixture/doctor", ScopeID: "ops"}
-	adapter := newFixtureIngress()
-	adapter.pages[""] = extension.Snapshot{ScanID: "scan-1", Complete: true, Checkpoint: "c1"}
+	adapter := &doctorIngress{}
 	if err := h.ingress.Register(ctx, "doctor_source", source, adapter, time.Minute); err != nil {
 		t.Fatal(err)
 	}
@@ -441,7 +466,7 @@ func TestDoctorChecks(t *testing.T) {
 			t.Fatalf("check %s = %+v, want %s (all %+v)", name, m[name], status, d.Checks)
 		}
 	}
-	if d.State != "ok" || len(m["non_rederivable"].Items) != 1 || !strings.Contains(m["non_rederivable"].Items[0], oneShotFamily) {
+	if d.State != "ok" || len(m["non_rederivable"].Items) != 1 || !strings.Contains(m["non_rederivable"].Items[0], doctorOneShotFamily) {
 		t.Fatalf("doctor baseline: %+v", d)
 	}
 	if _, m = checks(true); m["secrets"].Status != "ok" || m["secrets"].Code != "resolved" {
@@ -457,7 +482,7 @@ func TestDoctorChecks(t *testing.T) {
 
 	// Degradations: a failing scan, an unrecovered expired lease and an
 	// unapplied config edit.
-	adapter.failure = errors.New("fixture scan unavailable: token=abc")
+	adapter.fail(errors.New("fixture scan unavailable: token=abc"))
 	clock.Advance(2 * time.Minute)
 	if _, err := h.ingress.Reconcile(ctx, "doctor_source"); err == nil {
 		t.Fatal("expected scan failure")

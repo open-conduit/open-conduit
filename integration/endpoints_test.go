@@ -36,14 +36,14 @@ func TestManagementExecutionEndpoints(t *testing.T) {
 		defer mu.Unlock()
 		seen[r.Execution.ID] = r.Context
 		if handles[r.Execution.ID] == nil {
-			handles[r.Execution.ID] = &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}
+			handles[r.Execution.ID] = &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}
 		}
 		return handles[r.Execution.ID], nil
 	}
-	h.executor.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	h.executor.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		return record(r, domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)})
 	}
-	h.executor.onRecover = func(_ context.Context, r extension.RunRequest, p domain.Payload) (extension.RunHandle, error) {
+	h.executor.OnRecover = func(_ context.Context, r extension.RunRequest, p domain.Payload) (extension.RunHandle, error) {
 		return record(r, p)
 	}
 	contextOf := func(id domain.ID) extension.ExecutionContext {

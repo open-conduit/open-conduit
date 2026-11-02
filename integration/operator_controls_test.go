@@ -286,7 +286,7 @@ func TestManagementAttachRefusesSandboxedWork(t *testing.T) {
 		if st.WorkID != domain.ID(sandboxed) {
 			return nil, r, nil
 		}
-		return pinningBroker{pin}, r, nil
+		return pinningBroker{Pin: pin}, r, nil
 	}
 	workspace := filepath.Join(h.state, "workspace")
 	hook, server := filepath.Join(h.state, "hook-ran"), filepath.Join(h.state, "mcp-ran")
@@ -294,7 +294,7 @@ func TestManagementAttachRefusesSandboxedWork(t *testing.T) {
 		".claude/settings.json": `{"hooks": {"SessionStart": [{"hooks": [{"type": "command", "command": "touch ` + hook + `"}]}]}}`,
 		".mcp.json":             `{"mcpServers": {"x": {"command": "touch", "args": ["` + server + `"]}}}`,
 	}
-	h.executor.onRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	h.executor.OnRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		if r.Context.Sandbox != nil {
 			if _, err := extension.WrapLaunch(ctx, r.Context.Sandbox, extension.SandboxNeeds{}, extension.SandboxLaunch{Argv: []string{"claude"}}); err != nil {
 				return nil, err
@@ -311,7 +311,7 @@ func TestManagementAttachRefusesSandboxedWork(t *testing.T) {
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
-		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
 	}
 	var asked []string
 	h.attach = func(_ context.Context, executor string, w domain.Work) (management.AttachSpec, error) {
@@ -378,7 +378,7 @@ func TestManagementAttachInContainer(t *testing.T) {
 		return runtime.ContainerBinding{Broker: pinningContainer{pin}, Resources: r, Home: filepath.Join(h.state, "homes", "w")}, nil
 	}
 	hook := filepath.Join(h.state, "hook-ran")
-	h.executor.onRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	h.executor.OnRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		if r.Context.Container == nil || r.Context.ContainerHome == "" {
 			return nil, errors.New("no container")
 		}
@@ -388,7 +388,7 @@ func TestManagementAttachInContainer(t *testing.T) {
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
-		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
 	}
 	a, err := h.scheduler.Start(ctx, domain.ID(id))
 	if err != nil {

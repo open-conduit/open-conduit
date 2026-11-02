@@ -51,9 +51,8 @@ func (e *toolsEnv) endJobRun(job string, attempt uint32, state domain.ExecutionS
 		if err := tx.MarkRouted(trigger.ID, "", "unmatched"); err != nil {
 			return err
 		}
-		w, err := tx.Work(work)
-		if err != nil {
-			w = domain.Work{ID: work, Kind: sc.WorkKind, ScopeID: ghScope, State: domain.WorkReady, CorrelationKeys: []domain.CorrelationKey{key}}
+		if _, err := tx.Work(work); err != nil {
+			w := domain.Work{ID: work, Kind: sc.WorkKind, ScopeID: ghScope, State: domain.WorkReady, CorrelationKeys: []domain.CorrelationKey{key}}
 			if err = tx.PutWork(w, 0); err != nil {
 				return err
 			}

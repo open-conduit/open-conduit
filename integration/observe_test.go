@@ -165,7 +165,7 @@ func TestObservedRevisions(t *testing.T) {
 func TestObservedThreadParksAndWakes(t *testing.T) {
 	e := newObsEnv(t)
 	var inputs []domain.Event
-	e.exec.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	e.exec.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		e.mu.Lock()
 		e.tokens[r.Execution.ID] = r.Context.ToolbeltToken
 		inputs = r.Inputs
@@ -173,7 +173,7 @@ func TestObservedThreadParksAndWakes(t *testing.T) {
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
-		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
 	}
 
 	run1 := e.manual(obsScope, "schedule.job", "watcher")

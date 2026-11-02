@@ -539,7 +539,7 @@ func TestExternalExecutorLeaseFencingAcrossRestart(t *testing.T) {
 	exec, _ := r.Executor(runner.Name)
 	f := routingFixture(t, "persistent", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	base := f.Driver.(*routingDriver)
-	scheduler, err := runtime.NewScheduler(f.Store, f.Clock.Now, base.router, runtime.SchedulerOptions{Owner: "fixture-owner", LeaseDuration: conformance.RuntimeLease, Generation: "fixture-generation", Executors: map[string]extension.Executor{"fixture": exec}})
+	scheduler, err := runtime.NewScheduler(f.Store, f.Clock.Now, base.Router, runtime.SchedulerOptions{Owner: "fixture-owner", LeaseDuration: conformance.RuntimeLease, Generation: "fixture-generation", Executors: map[string]extension.Executor{"fixture": exec}})
 	if err != nil {
 		t.Fatal(err)
 	}

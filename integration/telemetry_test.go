@@ -289,9 +289,7 @@ esac`
 		t.Fatal(err)
 	}
 	pidFile := filepath.Join(state, "pid")
-	for deadline := time.Now().Add(10 * time.Second); !fileHasLine(pidFile) && time.Now().Before(deadline); {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitUntil(t, "the adopted process's pid", func() bool { return fileHasLine(pidFile) })
 	clock.Advance(2 * time.Minute)
 	poll, err := h.scheduler.Poll(ctx, h.timers, 20)
 	if err != nil || len(poll.Recovered) != 1 {
@@ -393,22 +391,18 @@ func TestTelemetryExportFailureDoesNotBlockProgress(t *testing.T) {
 		t.Fatalf("work did not complete: %+v %v", w, err)
 	}
 	// The healthy exporter still has the full history despite its siblings.
-	rs := recordSet(h.memory.Records())
-	deadline := time.Now().Add(5 * time.Second)
-	for len(rs.where("execution.completed", nil)) == 0 && time.Now().Before(deadline) {
-		time.Sleep(20 * time.Millisecond)
+	var rs recordSet
+	eventually(5*time.Second, func() bool {
 		rs = recordSet(h.memory.Records())
-	}
+		return len(rs.where("execution.completed", nil)) > 0
+	})
 	if len(rs.where("execution.completed", nil)) != 1 || len(rs.where("execution.started", nil)) != 2 {
 		t.Fatalf("healthy exporter lost records: %d", len(rs))
 	}
-	deadline = time.Now().Add(5 * time.Second)
-	for time.Now().Before(deadline) {
-		if st := pipeline.Stats(); st.Dropped > 0 && st.ExportFailures > 0 {
-			break
-		}
-		time.Sleep(20 * time.Millisecond)
-	}
+	eventually(5*time.Second, func() bool {
+		st := pipeline.Stats()
+		return st.Dropped > 0 && st.ExportFailures > 0
+	})
 	st := pipeline.Stats()
 	if st.Dropped == 0 || st.ExportFailures == 0 || st.Observed == 0 {
 		t.Fatalf("losses not accounted: %+v", st)

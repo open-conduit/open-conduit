@@ -137,14 +137,3 @@ func (w lockedWriter) Write(p []byte) (int, error) {
 	defer w.mu.Unlock()
 	return w.b.Write(p)
 }
-
-func waitUntil(t *testing.T, what string, ok func() bool) {
-	t.Helper()
-	deadline := time.Now().Add(10 * time.Second)
-	for !ok() {
-		if time.Now().After(deadline) {
-			t.Fatalf("timed out waiting until %s", what)
-		}
-		time.Sleep(5 * time.Millisecond)
-	}
-}

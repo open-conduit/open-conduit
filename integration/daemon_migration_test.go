@@ -190,7 +190,7 @@ func TestDaemonMigrationRehearsal(t *testing.T) {
 	d.until("the transferred issue's labels converge", 30*time.Second, func() bool {
 		return equal(fake.Labels(released), "agent-in-progress", "ready-for-review")
 	})
-	time.Sleep(time.Second) // a settled projection: nothing further is pending
+	d.settle() // a settled projection: nothing further is pending
 	writes := len(fake.Writes())
 
 	// 4. Drain and stop; diagnose; back up and verify.
@@ -239,7 +239,7 @@ func TestDaemonMigrationRehearsal(t *testing.T) {
 		r, err := d.c.Doctor(ctx, false)
 		return err == nil && strings.Contains(strings.Join(check(r, "github").Items, " "), "reconciled")
 	})
-	time.Sleep(time.Second) // let any projection pass run
+	d.settle() // let any projection pass run
 	for _, issue := range []int{fresh, released} {
 		w, ok := workFor(issue)
 		if !ok || len(d.executions(w.ID)) != 1 {

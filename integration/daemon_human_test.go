@@ -111,7 +111,7 @@ func TestDaemonHumanAskFromGitHubWork(t *testing.T) {
 	if err != nil || len(page.Items) != 1 || page.Items[0].CausationID != res.Event.ID {
 		t.Fatalf("aliases: %+v %v", page, err)
 	}
-	time.Sleep(time.Second)
+	d.settle()
 	for _, c := range fake.Comments(n) {
 		if strings.Contains(c.Body, "migration tonight") || strings.Contains(c.Body, "yes") {
 			t.Fatalf("the ask reached the issue: %q", c.Body)

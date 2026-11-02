@@ -101,7 +101,7 @@ func TestDaemonSlackSocketModeConversation(t *testing.T) {
 		e := fake.SocketSend(fake.MessageEvent("C0SUPPORT", m.TS))
 		d.until("own reply acknowledged", 30*time.Second, func() bool { return fake.Acked(e) })
 	}
-	time.Sleep(3 * time.Second)
+	d.settle()
 	if again, _ := work(); again != id || attempts(id) != 2 || len(fake.AgentReplies("C0SUPPORT", root)) != 2 {
 		t.Fatalf("after own replies: work %s attempts %d replies %d", again, attempts(id), len(fake.AgentReplies("C0SUPPORT", root)))
 	}
@@ -119,7 +119,7 @@ func TestDaemonSlackSocketModeConversation(t *testing.T) {
 	d.kill()
 	d.start("")
 	d.until("socket reconnected", 30*time.Second, func() bool { return fake.SocketConnects() >= 2 && fake.SocketsOpen() == 1 })
-	time.Sleep(3 * time.Second)
+	d.settle()
 	if again, _ := work(); again != id || attempts(id) != 2 || len(fake.AgentReplies("C0SUPPORT", root)) != 2 {
 		t.Fatalf("after restart: work %s attempts %d replies %d", again, attempts(id), len(fake.AgentReplies("C0SUPPORT", root)))
 	}

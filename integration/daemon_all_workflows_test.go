@@ -628,11 +628,10 @@ func TestDaemonAllWorkflows(t *testing.T) {
 	}
 	// Export is asynchronous: allow the last records to arrive.
 	var problem string
-	for deadline := time.Now().Add(15 * time.Second); ; time.Sleep(100 * time.Millisecond) {
-		if problem = explain(d.records()); problem == "" || time.Now().After(deadline) {
-			break
-		}
-	}
+	eventually(15*time.Second, func() bool {
+		problem = explain(d.records())
+		return problem == ""
+	})
 	if problem != "" {
 		t.Fatal(problem)
 	}

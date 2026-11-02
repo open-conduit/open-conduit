@@ -45,7 +45,7 @@ Translated waits ([engineering tools, waits and playbooks](../engineering-tools/
 
 ## Evidence
 
-The [wait integration cases](https://github.com/open-conduit/open-conduit/blob/main/integration/waits_test.go) adapt all nineteen shared runtime scenarios to production components over persistent/reopened SQLite, with deterministic clocks and synchronization. [Timer integration cases](https://github.com/open-conduit/open-conduit/blob/main/integration/timers_test.go) exercise recurrence, causal refusal, revision replay, restart and atomic fire/rearm process boundaries. [The recurrence contract test](https://github.com/open-conduit/open-conduit/blob/main/integration/recurrence_test.go) covers the core side of calendar recurrence. These are local correctness/durability proofs and make no production throughput claim.
+The [wait runtime tests](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/waits_test.go) adapt all nineteen shared runtime scenarios to production components over persistent/reopened SQLite, with deterministic clocks and synchronization. [Timer runtime tests](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/timers_test.go) exercise recurrence, causal refusal, revision replay, restart and atomic fire/rearm process boundaries. [The recurrence contract test](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/recurrence_test.go) covers the core side of calendar recurrence. These are local correctness/durability proofs and make no production throughput claim.
 
 ## History
 

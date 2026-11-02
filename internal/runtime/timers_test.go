@@ -1,4 +1,4 @@
-package integration_test
+package runtime_test
 
 import (
 	"bufio"
@@ -345,7 +345,7 @@ func TestDurableTimerRetryAcceptanceSurvivesCoordinatorRestart(t *testing.T) {
 	ctx := context.Background()
 	f, _ := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	work := seedSchedulerWork(t, f, "retry-poll")
-	scheduler := f.Driver.(*schedulerDriver).scheduler
+	scheduler := f.Driver.(*schedulerDriver).Scheduler
 	attempt, err := scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
@@ -361,7 +361,7 @@ func TestDurableTimerRetryAcceptanceSurvivesCoordinatorRestart(t *testing.T) {
 		t.Fatalf("retry fire: %+v %v", fired, err)
 	}
 	// Simulate a lost coordinator after durable acceptance and before eligibility.
-	scheduler = f.Restart().(*schedulerDriver).scheduler
+	scheduler = f.Restart().(*schedulerDriver).Scheduler
 	if _, err = scheduler.Poll(ctx, timers, 1); err != nil {
 		t.Fatal(err)
 	}
@@ -377,13 +377,13 @@ func TestDurableTimerPollRecoversExpiredLeaseWithoutReplacement(t *testing.T) {
 	ctx := context.Background()
 	f, _ := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	work := seedSchedulerWork(t, f, "lease-poll")
-	scheduler := f.Driver.(*schedulerDriver).scheduler
+	scheduler := f.Driver.(*schedulerDriver).Scheduler
 	original, err := scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
 	}
 	f.Clock.Advance(time.Minute)
-	scheduler = f.Restart().(*schedulerDriver).scheduler
+	scheduler = f.Restart().(*schedulerDriver).Scheduler
 	polled, err := scheduler.Poll(ctx, newTimerDriver(t, f.Store, f.Clock.Now, runtime.CausalLimits{}), 1)
 	if err != nil {
 		t.Fatal(err)
@@ -471,7 +471,7 @@ func TestDurableTimerDerivedRecurrenceKeepsArmingParent(t *testing.T) {
 	ctx := context.Background()
 	f, _ := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	work := seedSchedulerWork(t, f, "derived-timer")
-	scheduler := f.Driver.(*schedulerDriver).scheduler
+	scheduler := f.Driver.(*schedulerDriver).Scheduler
 	attempt, err := scheduler.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
