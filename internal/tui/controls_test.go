@@ -290,7 +290,7 @@ func TestStuckEventControls(t *testing.T) {
 	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	m = drain(t, m, cmd)
 	view := m.View()
-	for _, want := range []string{"Events routing is stuck on", "evt-failed failed: handler_panic after 1 attempt(s)", "evt-stuck unrouted: handler_timeout after 2 attempt(s)"} {
+	for _, want := range []string{"S skip event", "E route again", "Events routing is stuck on", "evt-failed failed: handler_panic after 1 attempt(s)", "evt-stuck unrouted: handler_timeout after 2 attempt(s)"} {
 		if !strings.Contains(view, want) {
 			t.Fatalf("detail lacks %q:\n%s", want, view)
 		}
@@ -377,5 +377,16 @@ func TestListGroupsTurnsByWork(t *testing.T) {
 	m = drain(t, m, cmd)
 	if !strings.Contains(m.View(), "Run r2") {
 		t.Fatalf("selection moved:\n%s", m.View())
+	}
+}
+
+// TestFooterStuckKeys: S and E are offered in a detail's footer only when the
+// Work has Events routing is stuck on.
+func TestFooterStuckKeys(t *testing.T) {
+	if got := footer(inDetail, true, false, false, false); strings.Contains(got, "S skip event") || strings.Contains(got, "E route again") {
+		t.Fatalf("footer offers S/E with nothing stuck: %s", got)
+	}
+	if got := footer(inDetail, true, false, true, false); !strings.Contains(got, "S skip event") || !strings.Contains(got, "E route again") {
+		t.Fatalf("footer lacks S/E with stuck events: %s", got)
 	}
 }

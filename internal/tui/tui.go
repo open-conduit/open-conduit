@@ -702,7 +702,7 @@ func (m Model) View() string {
 		if m.perTurn {
 			view = "every turn"
 		}
-		keys := footer(inList, m.ctl != nil, false, m.perTurn)
+		keys := footer(inList, m.ctl != nil, false, false, m.perTurn)
 		works := map[string]bool{}
 		for _, r := range m.runs {
 			works[r.WorkID] = true
@@ -738,7 +738,7 @@ func (m Model) View() string {
 		if m.ctl != nil && len(items) > 0 {
 			b.WriteString("\n" + boldS.Render("Actions") + "  " + actionLine(items, false) + "\n")
 		}
-		keys := footer(inDetail, m.ctl != nil, len(items) > 0, false)
+		keys := footer(inDetail, m.ctl != nil, len(items) > 0, len(m.stuck) > 0, false)
 		b.WriteString("\n" + dimS.Render(keys) + "\n")
 	case logMode:
 		b.WriteString(boldS.Render("Log "+m.logTitle) + dimS.Render("  ↑/↓ pgup/pgdn scroll · t next output · esc/q back") + "\n")

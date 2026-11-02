@@ -27,6 +27,8 @@ The TUI lists one row per issue or thread, with its latest turn and how many tur
 | `1`–`9` | in a Work's detail, the actions its extensions offer now |
 | `R` | run or retry, after asking, since it starts a new turn |
 | `H` | hold, asking for a reason (`enter` to skip), or release |
+| `S` | in a Work's detail, skip the first Event routing is stuck on, after asking |
+| `E` | in a Work's detail, route the first stuck or failed Event again |
 | `a` | attach to the agent's session |
 | `x` | cancel a live run, after asking |
 | `X` | cancel the whole Work, after asking |
