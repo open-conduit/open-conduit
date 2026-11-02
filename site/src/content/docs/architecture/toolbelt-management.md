@@ -37,7 +37,7 @@ The declared watermark defaults to the attempt's acknowledged input, so registra
 
 ### Gates
 
-A registration may carry a gate (`extension.Registration.Gate`; an installed package declares `provides.operation_gate` and serves `operation.gate`). The toolbelt asks every gate, in registration-name order, before it runs another registration's operation; a gate never sees its own registration's operations, and builtins (`emit`, `create_work`, `wait`, `declare_outcome`, `read_context`) pass no gate. A gate answers in one of three ways:
+A registration may carry a gate (`extension.Registration.Gate`). An installed package declares `provides.operation_gate`, serves `operation.gate` and needs the `operation.gate` permission, which the operator sees at install; without it the host installs no gate, and with it the package is asked only about calls in the scopes it is configured for. The toolbelt asks every gate, in registration-name order, before it runs another registration's operation; a gate never sees its own registration's operations, and builtins (`emit`, `create_work`, `wait`, `declare_outcome`, `read_context`) pass no gate. A gate answers in one of three ways:
 
 - **Let the call through**: the next gate is asked, and once all have, the operation runs.
 - **Park the caller**: it returns a `WaitPlan`, which the toolbelt declares exactly like a translated wait, owned by the gating registration (so its dependencies use that registration's dependency filter). The operation does not run, authority is released, and the call returns the plan's output and the Wait. The caller is resumed by whatever the plan waits on, or its timeout, and makes the call again.

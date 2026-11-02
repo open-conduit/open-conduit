@@ -71,6 +71,11 @@ const (
 	// host holds (config.base, config.edit, config.validate, config.trace).
 	// Nothing on the wire applies a configuration: only the operator does.
 	PermissionConfigRead = "config.read"
+	// PermissionOperationGate is asked, through operation.gate, about every
+	// call of another extension's toolbelt operation in a scope the
+	// extension is configured in: it sees each call's input and may hold
+	// or refuse the call (extension.Gate).
+	PermissionOperationGate = "operation.gate"
 )
 
 // PermissionInfo says what a permission lets an extension do, in words the
@@ -86,6 +91,7 @@ var KnownPermissions = []PermissionInfo{
 	{PermissionTelemetryCapture, "records telemetry events, which every telemetry sink receives"},
 	{PermissionProbes, "runs the read-only setup probes of the host, its extensions and executors"},
 	{PermissionConfigRead, "reads the whole configuration, references redacted, and proposes edits it never applies"},
+	{PermissionOperationGate, "sees every toolbelt call to other extensions in its scopes, with its input, and may hold or refuse it"},
 }
 
 // PermissionSummary is the summary of a known permission ("" otherwise).

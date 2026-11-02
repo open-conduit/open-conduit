@@ -361,7 +361,10 @@ func (e *Extension) Family(families ...protocol.Family) *Extension {
 }
 
 // OperationGate registers the extension's gate on other extensions'
-// operations and declares it (see extension.Gate).
+// operations and declares it (see extension.Gate). The host asks it only
+// when the manifest also declares the operation.gate permission
+// (sdk.Permissions(protocol.PermissionOperationGate)), which the operator
+// sees at install.
 func (e *Extension) OperationGate(fn extension.Gate) *Extension {
 	e.Gate = fn
 	e.Manifest.Provides.OperationGate = true

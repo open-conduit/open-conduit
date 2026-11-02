@@ -258,6 +258,7 @@ Some host services reach beyond an extension's own surfaces: they show it other 
 | `probes` | `probe.list`, `probe.run` (E→H) | Lists and runs the read-only setup probes the host, its extensions and its executors offer, by full name. The host checks the arguments against the probe's declaration and bounds the run to 30 seconds. A probe that fails answers its reason in `error`, cut to 300 bytes. |
 
 | `config.read` | `config.base`, `config.edit`, `config.validate`, `config.trace` (E→H), and `config.candidate` (H→E, with manifest `config_candidate`) | Reads the whole configuration and builds candidates of it, which it validates and traces routes against, and offers them for the operator's review. It never applies one, and never receives reference text: see [the config host](#the-config-host). |
+| `operation.gate` | `operation.gate` (H→E, with manifest `operation_gate`) | Is asked about every call of another extension's toolbelt operation in a scope the package is configured for, with the call's input and authority, and may park or refuse it ([toolbelt gates](../toolbelt-management/#gates)). Calls in other scopes never reach it. |
 
 Packages are not sandboxed (see the [trust model](#trust-model)), so a permission is the operator's consent and a guard against accidental leaks, not a security boundary. It is enforced as though it were one, because it becomes one if packages are ever sandboxed.
 
@@ -376,7 +377,7 @@ Provisional, like the rest of the protocol. Code:
 - **Adapters.** `extproc.Remote` presents a process through the same interfaces in-process extensions implement:
   - `Ingress(SourceDecl)` is an `extension.Ingress`;
   - `RouteHandler`;
-  - `Registration()` is an `extension.Registration` for the toolbelt, with handler, wait and emit operations, `emit.commit`, `dependency.filter` and, for `provides.operation_gate`, a gate over `operation.gate` (`{operation, owner, authority, input}`, answered with `{wait?}`: no wait lets the call through, and an error refuses it). A gate that times out, crashes or fails with anything but an operation error refuses with `gate_failed`, so the host fails closed. The SDK's `Extension.OperationGate` declares and serves one; the TypeScript SDK has no gates yet, as it has no wait plans;
+  - `Registration()` is an `extension.Registration` for the toolbelt, with handler, wait and emit operations, `emit.commit`, `dependency.filter` and, for `provides.operation_gate` with the `operation.gate` permission, a gate over `operation.gate`, asked only about calls in the package's configured scopes (`{operation, owner, authority, input}`, answered with `{wait?}`: no wait lets the call through, and an error refuses it). A gate that times out, crashes or fails with anything but an operation error refuses with `gate_failed`, so the host fails closed. The SDK's `Extension.OperationGate` declares and serves one; the TypeScript SDK has no gates yet, as it has no wait plans;
   - `Executor(name)` implements every optional executor interface;
   - `Recurrence(kind)` is a `runtime.RecurrenceFunc`;
   - `WorkKind(kind)` is a `runtime.WorkKindPolicy`;
