@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -79,6 +80,44 @@ func (r *Remote) ExecutorResourceMode(name string) func(json.RawMessage) string 
 	return func(config json.RawMessage) string {
 		return r.mode(protocol.ValidateParams{Kind: protocol.ValidateExecutorMode, Type: name, Config: config})
 	}
+}
+
+// ExecutorWarnings returns the config warnings of a declared executor:
+// validate with kind executor, whose answer may carry warnings. A failed
+// call or a refusal gives none (the config check reports a refusal), and
+// each warning is capped to one line.
+func (r *Remote) ExecutorWarnings(name string) func(json.RawMessage) []string {
+	return func(config json.RawMessage) []string {
+		ctx, cancel := context.WithTimeout(context.Background(), ValidateTimeout)
+		defer cancel()
+		var out protocol.ValidateResult
+		if err := r.p.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateExecutor, Type: name, Config: config}, &out); err != nil {
+			return nil
+		}
+		var warnings []string
+		for i, w := range out.Warnings {
+			if i == maxWarnings {
+				break
+			}
+			if w = oneLine(w); w != "" {
+				warnings = append(warnings, w)
+			}
+		}
+		return warnings
+	}
+}
+
+// maxWarnings and maxWarning cap what a package's warnings put in front of
+// the operator.
+const maxWarnings, maxWarning = 8, 300
+
+// oneLine is w on one line, capped at maxWarning characters.
+func oneLine(w string) string {
+	w = strings.Join(strings.Fields(w), " ")
+	if r := []rune(w); len(r) > maxWarning {
+		w = string(r[:maxWarning-1]) + "…"
+	}
+	return w
 }
 
 func (r *Remote) mode(p protocol.ValidateParams) string {

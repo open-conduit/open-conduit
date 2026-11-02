@@ -78,9 +78,25 @@ type jobConfig struct {
 	WorkspaceMode string `json:"workspace_mode,omitempty"`
 	// Workspace is the acquired resource's directory, set by Run.
 	Workspace string `json:"workspace,omitempty"`
+	// Retries is an old setting the runner ignores; config check warns
+	// about it (ConfigWarnings).
+	Retries *int `json:"retries,omitempty"`
 }
 
-var _ extension.ResourceModer = (*Executor)(nil)
+var (
+	_ extension.ResourceModer = (*Executor)(nil)
+	_ extension.ConfigWarner  = (*Executor)(nil)
+)
+
+// ConfigWarnings are config check's warnings about a binding config: the
+// ignored retries setting.
+func (e *Executor) ConfigWarnings(raw json.RawMessage) []string {
+	var cfg jobConfig
+	if json.Unmarshal(raw, &cfg) != nil || cfg.Retries == nil {
+		return nil
+	}
+	return []string{"config.retries is ignored: the runner never retries a job; remove it"}
+}
 
 // ResourceMode is the resource mode a binding config requests.
 func (e *Executor) ResourceMode(raw json.RawMessage) string {

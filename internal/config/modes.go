@@ -3,6 +3,8 @@ package config
 import (
 	"bytes"
 	"fmt"
+
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // ModeWarnings returns one warning per binding whose resource config names a
@@ -51,6 +53,52 @@ func inherited(s *Snapshot, sc *EffectiveScope, b Binding) bool {
 		if pb.Name == b.Name {
 			return pb.Executor == b.Executor && pb.Resource != nil && pb.Resource.Provider == b.Resource.Provider &&
 				bytes.Equal(pb.Resource.Config, b.Resource.Config) && bytes.Equal(pb.Config, b.Config)
+		}
+	}
+	return false
+}
+
+// BindingWarnings returns the warnings each binding's executor gives about
+// its config (ConfigWarner), each prefixed with the scope and binding. A
+// binding a scope inherits unchanged is reported once, at the scope that
+// declares it.
+func BindingWarnings(s *Snapshot, reg Registry) []string {
+	if s == nil {
+		return nil
+	}
+	var out []string
+	for _, id := range s.Order {
+		sc := s.Scopes[id]
+		if sc == nil {
+			continue
+		}
+		for _, b := range sc.Bindings {
+			w, ok := reg.Executors[b.Executor].(ConfigWarner)
+			if !ok || inheritedBinding(s, sc, b) {
+				continue
+			}
+			for _, warning := range w.ConfigWarnings(b.Config) {
+				out = append(out, fmt.Sprintf("scope %s binding %s: %s", sc.ID, b.Name, warning))
+			}
+		}
+	}
+	return out
+}
+
+// ConfigWarner is optionally implemented by an executor registration to
+// warn about a binding config (extension.ConfigWarner).
+type ConfigWarner = extension.ConfigWarner
+
+// inheritedBinding reports whether b is the same binding, executor and
+// config, as sc's parent has.
+func inheritedBinding(s *Snapshot, sc *EffectiveScope, b Binding) bool {
+	parent := s.Scopes[sc.ParentID]
+	if sc.ParentID == "" || parent == nil {
+		return false
+	}
+	for _, pb := range parent.Bindings {
+		if pb.Name == b.Name {
+			return pb.Executor == b.Executor && bytes.Equal(pb.Config, b.Config)
 		}
 	}
 	return false

@@ -188,6 +188,15 @@ type ResourceModer interface {
 	ResourceMode(config json.RawMessage) string
 }
 
+// ConfigWarner is optionally implemented by an executor to warn about a
+// binding config that is valid but should change: a setting that is
+// deprecated or ignored, or a default a later release drops. Config check
+// shows each warning, prefixed with the scope and binding, without failing.
+// A warning is a fixed sentence that never echoes config values.
+type ConfigWarner interface {
+	ConfigWarnings(config json.RawMessage) []string
+}
+
 // ResourceBroker is what an executor sees in its ExecutionContext: a provider
 // bound to the attempt's trusted owner and binding config.
 type ResourceBroker interface {
