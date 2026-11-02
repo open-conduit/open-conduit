@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -252,6 +253,28 @@ func TestWorldReadsOpenWorksRunsPastTheCap(t *testing.T) {
 		return
 	}
 	t.Fatal("no row for the running Work")
+}
+
+// A Work with fetchCap runs of its own still shows its live turn: its
+// running runs are read by state too.
+func TestWorldReadsAWorksLiveRunPastItsOwnCap(t *testing.T) {
+	f, s, _ := setup(t)
+	f.work["wrk_live"] = client.Work{ID: "wrk_live", State: "running", Revision: "2"}
+	for i := range fetchCap {
+		r := turnRun(uint32(i+1), "completed", 0, time.Minute)
+		r.ID, r.WorkID = fmt.Sprintf("work/wrk_live/attempt/%d", i+1), "wrk_live"
+		f.runs = append(f.runs, r)
+	}
+	live := turnRun(fetchCap+1, "running", 0, 0)
+	live.ID, live.WorkID = "work/wrk_live/attempt/live", "wrk_live"
+	f.runs = append(f.runs, live)
+	w := s.world(context.Background())
+	if len(w.Errs) != 0 || len(w.Works) != 1 {
+		t.Fatalf("works %d errs %v", len(w.Works), w.Errs)
+	}
+	if v := w.Works[0]; len(v.Turns) != fetchCap+1 || v.Disp.Group != "running" {
+		t.Fatalf("live turn past the Work's own cap missing: turns %d disp %+v", len(v.Turns), v.Disp)
+	}
 }
 
 // Without a display, Work is named by its key's ID: the row shows the
