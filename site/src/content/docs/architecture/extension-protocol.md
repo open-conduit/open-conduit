@@ -293,6 +293,7 @@ Validation rules:
 
 - the protocol list includes a supported version;
 - the name is an identifier and not reserved (`core`, `execution`, `manual`, `os`, `open-conduit`);
+- the optional `title`, the display name operators read where the extension's Work and sources are listed (`inproc.Titled` in process), is one line of at most 64 characters. The daemon lists every extension's title at `GET /v1/extensions`, and the web view labels sources with it. A first-party integration not yet on the contract takes its catalogue title. Without a title, the extension shows as its name;
 - identifier-shaped names are `name` or `name-…`, and dotted names are `name.…`, with no duplicates;
 - a non-re-derivable family states its loss, and a re-derivable one cannot;
 - an ingress type declares families, and webhooks need an ingress type;

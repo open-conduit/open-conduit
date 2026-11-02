@@ -42,6 +42,7 @@ var parity = map[string][]string{
 	"Checker":    {"manifest:provides.checks", "method:check.run"},
 	"Playbooker": {"manifest:provides.playbooks"},
 	"Paged":      {"manifest:provides.pages"},
+	"Titled":     {"manifest:title"},
 	"Exporting":  {"manifest:provides.exporters", "method:telemetry.export"},
 	"Sink":       {"manifest:permissions", "method:telemetry.sink"},
 	"ConfigHost": {"manifest:permissions", "method:config.base", "method:config.edit", "method:config.validate", "method:config.trace"},

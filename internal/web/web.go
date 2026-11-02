@@ -81,6 +81,7 @@ type Source interface {
 	Doctor(ctx context.Context, checkSecrets bool) (client.Doctor, error)
 	WorkConfigCandidate(ctx context.Context, work string) (client.ConfigCandidate, error)
 	Pages(ctx context.Context) ([]client.ExtensionPage, error)
+	Extensions(ctx context.Context) ([]client.ExtensionTitle, error)
 	ApplyConfigText(ctx context.Context, text []byte, hash, generation, key string) (client.ConfigApplied, error)
 }
 
@@ -143,6 +144,10 @@ type Server struct {
 	pmu    sync.Mutex
 	pcache []navPage
 	pat    time.Time
+	// tmu guards the short-lived extension titles (sourceLabel).
+	tmu    sync.Mutex
+	tcache map[string]string
+	tat    time.Time
 
 	// receipts are this process's interventions, newest first (actions.go).
 	receipts receiptLog

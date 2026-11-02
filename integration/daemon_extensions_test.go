@@ -204,6 +204,16 @@ func TestDaemonExtensionPackages(t *testing.T) {
 	if _, setup := byID["setup"]; err != nil || len(pages) != 2 || !ok || !setup || pages[n].Extension != "notes" || pages[n].WorkKind != notes.Kind || pages[n].Compose[0] != "remark" {
 		t.Fatalf("pages: %+v %v", pages, err)
 	}
+	// The package's manifest title is its display name; a first-party
+	// integration's is the catalogue's.
+	titles, err := d.c.Extensions(ctx)
+	byName := map[string]string{}
+	for _, x := range titles {
+		byName[x.Name] = x.Title
+	}
+	if err != nil || byName["notes"] != "Notes" || byName["github"] != "GitHub" {
+		t.Fatalf("extension titles: %+v %v", titles, err)
+	}
 	works, _ := d.c.Works(ctx, url.Values{"scope_id": {"notes-scope"}})
 	var cand client.ConfigCandidate
 	d.until("the package's candidate is offered for review", 30*time.Second, func() bool {

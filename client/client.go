@@ -1029,6 +1029,21 @@ func (c *Client) Pages(ctx context.Context) ([]ExtensionPage, error) {
 	return out.Pages, err
 }
 
+// ExtensionTitle is an extension's display name.
+type ExtensionTitle struct {
+	Name  string `json:"name"`
+	Title string `json:"title"`
+}
+
+// Extensions lists the extensions' display names.
+func (c *Client) Extensions(ctx context.Context) ([]ExtensionTitle, error) {
+	var out struct {
+		Extensions []ExtensionTitle `json:"extensions"`
+	}
+	err := c.Do(ctx, "GET", "extensions", nil, nil, "", &out)
+	return out.Extensions, err
+}
+
 // Rotate returns the one-time replacement credential.
 func (c *Client) Rotate(ctx context.Context, expectedTokenID string) (out TokenFile, err error) {
 	err = c.Do(ctx, "POST", "auth/rotate", nil, map[string]string{"expected_token_id": expectedTokenID}, "", &out)
