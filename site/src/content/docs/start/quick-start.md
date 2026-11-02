@@ -23,6 +23,8 @@ Using another coding agent, or one you already have open? Give it [Point your ag
 
 Claude Code must be installed and signed in. The session can run only `open-conduit config`, `doctor`, `health`, `secret path` and `init github --dry-run` without asking you. `--config PATH` sets up a config other than the default.
 
+**On Codex.** `open-conduit init --with codex` opens a Codex session on the same guide instead. Codex has no list of commands to allow ahead of time, so it asks you before each command that changes anything outside the checkout, the config included. To have the agents themselves run on Codex, see [run agents on Codex](/open-conduit/guides/codex/).
+
 ## Set it up in the browser
 
 The web view has a **Setup** page where you start a session with a setup assistant and talk to it in the browser. It needs a scope with a `setup` entry:

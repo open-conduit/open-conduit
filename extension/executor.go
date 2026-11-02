@@ -44,6 +44,16 @@ type ExecutionContext struct {
 	// An executor points its process at it (OS_TOKEN_FILE) instead of
 	// writing a token file of its own.
 	ToolbeltTokenFile string
+	// ToolbeltDir, when set with a toolbelt token, is the host's directory
+	// holding the `os` binary (the toolbelt CLI and its MCP server, `os
+	// mcp`). An executor running outside the host's own directory (an
+	// installed package) points its process or MCP config at it rather than
+	// guessing where `os` lives.
+	ToolbeltDir string
+	// PlaybookDir is the directory the host writes its playbooks to, one
+	// per skill as <dir>/skills/<name>/SKILL.md, so an executor outside the
+	// host (an installed package) can start a turn on one a binding names.
+	PlaybookDir string
 	// Env is the run's environment layer from the extensions of the Work's
 	// scope (RunEnvironment), merged. An executor applies it with ApplyEnv
 	// after its resource's layer and before the binding's own env, and

@@ -43,6 +43,7 @@ export default defineConfig({
 					items: [
 						{ label: 'Configuration and secrets', slug: 'guides/configuration' },
 						{ label: 'Give agents their own GitHub account', slug: 'guides/github-bot' },
+						{ label: 'Run agents on Codex', slug: 'guides/codex' },
 						{ label: 'Sandbox your agents', slug: 'guides/sandboxes' },
 						{ label: 'Run it in the background', slug: 'guides/background-service' },
 						{ label: 'Watch and steer runs', slug: 'guides/operating' },
@@ -104,6 +105,7 @@ export default defineConfig({
 							items: [
 								{ label: 'GitHub', slug: 'architecture/github-extension' },
 								{ label: 'Claude Code executor', slug: 'architecture/claude-code-executor' },
+								{ label: 'Codex executor', slug: 'architecture/codex-executor' },
 								{ label: 'Engineering tools', slug: 'architecture/engineering-tools' },
 								{ label: 'Slack', slug: 'architecture/slack-extension' },
 								{ label: 'Scheduled jobs', slug: 'architecture/schedule-extension' },

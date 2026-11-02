@@ -10,7 +10,7 @@ Work turns up in many places: an issue on GitHub, a ticket in Linear or Jira, a 
 - **Built for agents.** Each run gets a toolbelt of outcomes it can ask for, like "comment on this issue", "open a pull request" or "wait until that PR merges". Agents never deal with labels, markers or a tracker's conventions.
 - **Durable by design.** Every event is recorded before anything acts on it. Work can park for hours or days and wake on the event it is waiting for, even after a restart.
 - **It improves itself.** Agents report what trips them up and log the corrections they are given. A daily triage turns the reports into fixes, and a sweep folds the corrections into your project's rules.
-- **Any executor you can imagine.** An Execution is just one attempt to move Work forward. Claude Code is one executor, a shell command is another, and an extension can add any other agent, model or tool. Swap them per workflow without touching the rest.
+- **Any executor you can imagine.** An Execution is just one attempt to move Work forward. Claude Code is one executor, the Codex CLI another (an installed package, like any you could write), a shell command a third, and an extension can add any other agent, model or tool. Swap them per workflow without touching the rest.
 - **Runs on your machine.** It is a single local daemon that uses your own CLI and keyring logins. Nothing is hosted for you and no credential ever sits in the config.
 
 ## Why it exists
@@ -25,7 +25,7 @@ Open Conduit is the heart of that orchestrator, re-architected around the right 
 
 - **Work** is a durable objective, such as an issue to fix or a thread to answer.
 - **Event** is an immutable record of something that happened.
-- **Execution** is one attempt to advance Work, through whichever executor fits: Claude Code, a shell command, or one you plug in.
+- **Execution** is one attempt to advance Work, through whichever executor fits: Claude Code, Codex, a shell command, or one you plug in.
 - **Timer** and **Wait** make time and suspension durable.
 - **Scope** holds the configuration, routes and bindings for one area of work.
 

@@ -581,7 +581,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		GlobalLimit: set.Concurrency, ExecutorPools: jobExecutors(), PoolLimits: map[string]int{jobPool: set.JobConcurrency},
 		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
-		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, Secrets: d.configs.Secrets(d.resolver), Environment: d.runEnvironment,
+		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, ToolbeltDir: d.o.ToolbeltDir, PlaybookDir: d.pluginDir(), Secrets: d.configs.Secrets(d.resolver), Environment: d.runEnvironment,
 		Resources: d.bindResources, Sandbox: d.bindSandbox, Container: d.bindContainer, Signalled: d.containerSignalled, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
 		WorkKinds: kinds,

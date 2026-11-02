@@ -5,7 +5,7 @@ description: "Setup in the browser: a setup extension whose agent talks in typed
 
 This page describes setup in the browser as built for [#127](https://github.com/open-conduit/open-conduit/issues/127) and [#153](https://github.com/open-conduit/open-conduit/issues/153), from the design approved in #132. Where the build differs from that design, the page says so.
 
-`open-conduit init --with claude` runs the [setup playbook](https://github.com/open-conduit/extension-setup/blob/main/playbooks/setup.md) as an interactive Claude Code session in a terminal ([operator setup](../operator-setup/)). There the agent edits the config file itself with `open-conduit config set`. A setup session runs the same playbook from the web view:
+`open-conduit init --with claude` (or `--with codex`) runs the [setup playbook](https://github.com/open-conduit/extension-setup/blob/main/playbooks/setup.md) as an interactive Claude Code session in a terminal ([operator setup](../operator-setup/)). There the agent edits the config file itself with `open-conduit config set`. A setup session runs the same playbook from the web view:
 
 - The agent's output arrives as typed events the page renders: a message, a probe and its result, a question with choices, a proposed change, checks, and an applied generation. There is no terminal text to parse.
 - The agent never writes the config. It proposes changes, the operator approves or rejects each one, and only the operator applies the approved set.

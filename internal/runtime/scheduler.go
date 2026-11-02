@@ -87,6 +87,12 @@ type SchedulerOptions struct {
 	// the management socket refuses execution tokens, so there is no shared
 	// endpoint to fall back to.
 	ToolbeltEndpoints func(ctx context.Context, execution domain.ID, token string) (endpoint, tokenFile string, err error)
+	// ToolbeltDir is the directory holding the `os` binary, passed to
+	// every attempt with a toolbelt token (ExecutionContext.ToolbeltDir).
+	ToolbeltDir string
+	// PlaybookDir is the host's playbook directory, passed to every attempt
+	// (ExecutionContext.PlaybookDir).
+	PlaybookDir string
 	// Secrets resolves only the attempt's binding-selected secrets immediately
 	// before Run/Recover/Resume, outside coordination transactions. Values are
 	// never persisted; failure blocks this attempt with a safe diagnostic.
@@ -981,7 +987,9 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 			return attempt, errors.Join(extension.ErrUnauthorized, serveErr, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
 		}
 		attempt.Request.Context.ToolbeltEndpoint, attempt.Request.Context.ToolbeltToken, attempt.Request.Context.ToolbeltTokenFile = endpoint, token, tokenFile
+		attempt.Request.Context.ToolbeltDir = s.options.ToolbeltDir
 	}
+	attempt.Request.Context.PlaybookDir = s.options.PlaybookDir
 	if s.options.Secrets != nil {
 		secrets, secretErr := s.options.Secrets(ctx, state)
 		if secretErr != nil {
