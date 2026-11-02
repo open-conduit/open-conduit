@@ -80,6 +80,11 @@ type ReleasedPayload struct {
 type HoldExecutorImpl struct {
 	mu      sync.Mutex
 	running map[domain.ID]bool
+	// handles are this instance's recent attempts, which Recover adopts
+	// (a lease lost while it decided, or once it had decided); order is
+	// their start order, so the oldest go first past maxHandles.
+	handles map[domain.ID]*holdHandle
+	order   []domain.ID
 	// Dial opens a toolbelt client (default client.New over the endpoint).
 	Dial func(endpoint, token string) (ToolbeltClient, error)
 	Now  func() time.Time
@@ -93,7 +98,7 @@ type ToolbeltClient interface {
 
 // NewHoldExecutor returns the executor.
 func NewHoldExecutor() *HoldExecutorImpl {
-	return &HoldExecutorImpl{running: map[domain.ID]bool{}, Now: time.Now}
+	return &HoldExecutorImpl{running: map[domain.ID]bool{}, handles: map[domain.ID]*holdHandle{}, Now: time.Now}
 }
 
 func (h *HoldExecutorImpl) Capabilities() domain.Capabilities {
@@ -121,6 +126,16 @@ func (h *HoldExecutorImpl) Run(ctx context.Context, r extension.RunRequest) (ext
 	if err := r.PersistRecovery(domain.Payload{Schema: "github.hold.recovery.v1", Data: json.RawMessage(`{}`)}); err != nil {
 		return nil, err
 	}
+	if r.Context.ToolbeltEndpoint == "" {
+		// Without the toolbelt it can't read or declare the hold: the
+		// attempt fails, saying so, rather than refusing to launch.
+		done := make(chan struct{})
+		close(done)
+		handle := &holdHandle{done: done, result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed,
+			Summary: "github-hold needs the toolbelt: this attempt has no toolbelt endpoint"}}}
+		h.keep(r.Execution.ID, handle)
+		return handle, nil
+	}
 	dial := h.Dial
 	if dial == nil {
 		dial = func(endpoint, token string) (ToolbeltClient, error) { return client.New(endpoint, token) }
@@ -133,6 +148,7 @@ func (h *HoldExecutorImpl) Run(ctx context.Context, r extension.RunRequest) (ext
 	h.running[r.Execution.ID] = true
 	h.mu.Unlock()
 	handle := &holdHandle{done: make(chan struct{})}
+	h.keep(r.Execution.ID, handle)
 	go func() {
 		defer close(handle.done)
 		defer func() {
@@ -147,9 +163,39 @@ func (h *HoldExecutorImpl) Run(ctx context.Context, r extension.RunRequest) (ext
 	return handle, nil
 }
 
-// Recover never adopts: an attempt interrupted by a restart is retried.
-func (h *HoldExecutorImpl) Recover(context.Context, extension.RunRequest, domain.Payload) (extension.RunHandle, error) {
+// Recover adopts an attempt this instance started (its handle, deciding or
+// decided); one interrupted by a restart, or past maxHandles, is retried.
+func (h *HoldExecutorImpl) Recover(_ context.Context, r extension.RunRequest, state domain.Payload) (extension.RunHandle, error) {
+	if state.Schema != "github.hold.recovery.v1" {
+		return nil, extension.ErrNotAdoptable
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if handle := h.handles[r.Execution.ID]; handle != nil {
+		return handle, nil
+	}
 	return nil, extension.ErrNotAdoptable
+}
+
+// maxHandles bounds the attempts Recover can adopt; an older one is
+// retried instead, as one interrupted by a restart is.
+const maxHandles = 256
+
+// keep remembers an attempt's handle for Recover.
+func (h *HoldExecutorImpl) keep(id domain.ID, handle *holdHandle) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if h.handles == nil {
+		h.handles = map[domain.ID]*holdHandle{}
+	}
+	if _, ok := h.handles[id]; !ok {
+		h.order = append(h.order, id)
+	}
+	h.handles[id] = handle
+	for len(h.order) > maxHandles {
+		delete(h.handles, h.order[0])
+		h.order = h.order[1:]
+	}
 }
 
 // Stop proves the attempt is not running: nothing outlives Run in another
