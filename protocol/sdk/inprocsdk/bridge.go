@@ -154,10 +154,12 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 		}
 	}
 	if r, ok := b.x.(inproc.Router); ok {
-		for _, h := range sortedKeys(r.Routes()) {
+		routes := r.Routes()
+		for _, h := range sortedKeys(routes) {
 			if !hasRoute(p.Routes, h) {
 				ct, configured := b.types[protocol.ValidateRoute+"/"+h]
-				p.Routes = append(p.Routes, protocol.RouteDecl{Handler: h, Config: configured && ct.Validate != nil, Binding: configured && ct.Binding != nil})
+				_, samples := routes[h].(extension.RouteSampler)
+				p.Routes = append(p.Routes, protocol.RouteDecl{Handler: h, Config: configured && ct.Validate != nil, Binding: configured && ct.Binding != nil, Samples: samples})
 			}
 		}
 	}

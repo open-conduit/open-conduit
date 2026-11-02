@@ -151,3 +151,40 @@ func TestActOnAnUnlistedActionReachesTheOnlyProvider(t *testing.T) {
 		t.Fatalf("work.act: %+v %v, want the provider's not_outstanding", out, err)
 	}
 }
+
+// sampled routes with one handler that offers samples and one that doesn't.
+type sampled struct{}
+
+func (sampled) Name() string                             { return "sampled" }
+func (sampled) Start(context.Context, inproc.Host) error { return nil }
+func (sampled) Routes() map[string]extension.RouteHandler {
+	return map[string]extension.RouteHandler{"sampled-plain": plainRoute{}, "sampled": samplerRoute{}}
+}
+
+type plainRoute struct{}
+
+func (plainRoute) Match(context.Context, extension.RouteInput) (extension.RouteDecision, error) {
+	return extension.Skip("never"), nil
+}
+
+type samplerRoute struct{ plainRoute }
+
+func (samplerRoute) Samples(context.Context, extension.SampleInput) []extension.RouteSample {
+	return []extension.RouteSample{{ID: "one", Title: "One"}}
+}
+
+// TestBridgeDeclaresRouteSamples: a handler that offers samples is
+// declared so, so the host asks it through route.samples for a route trace.
+func TestBridgeDeclaresRouteSamples(t *testing.T) {
+	b, err := inprocsdk.New(sampled{}, protocol.Manifest{Protocol: []int{protocol.Version}, Name: "sampled", Version: "0.1.0", Command: []string{"sampled"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, r := range b.Extension().Manifest.Provides.Routes {
+		got[r.Handler] = r.Samples
+	}
+	if !got["sampled"] || got["sampled-plain"] || len(got) != 2 {
+		t.Fatalf("routes declared %v, want sampler with samples and plain without", got)
+	}
+}
