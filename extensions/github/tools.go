@@ -972,8 +972,9 @@ func (t *Tools) prCreate(ctx context.Context, b *bound, data json.RawMessage) (a
 	return map[string]any{"state": "open", "number": p.Number, "url": p.HTMLURL}, nil
 }
 
-// prEdit changes the title, body or draft state of a PR this Work opened,
-// recognised by the marker github.pr.create put in its body; any other PR,
+// prEdit changes the title, body or draft state of a PR this Work opened:
+// one from the Work's branch in the repository itself (not a fork) whose
+// body carries the marker github.pr.create put there; any other PR,
 // and a closed or merged one, is refused. A new body gets the marker back,
 // and keeps the link to the Work's issue when it drops it. Only what differs
 // from the PR is sent, so a retry changes nothing. Title and body go
@@ -1009,7 +1010,11 @@ func (t *Tools) prEdit(ctx context.Context, b *bound, data json.RawMessage) (any
 	if err != nil {
 		return nil, err
 	}
-	if a := ParseAgent(p.Body); a == nil || a.Work != string(b.work.ID) {
+	// The marker says which Work opened the PR, but anyone who opens a PR
+	// writes its body and can copy it; the head can't be forged: only
+	// someone who can push to the repository makes the Work's branch there.
+	own := p.Head.Ref != "" && p.Head.Ref == b.branch() && p.Head.Repo != nil && strings.EqualFold(p.Head.Repo.FullName, repo)
+	if a := ParseAgent(p.Body); !own || a == nil || a.Work != string(b.work.ID) {
 		return nil, refuse("not_own_pull_request", "PR #%d wasn't opened by this Work, so it can't be edited from here; comment on it with %s instead", in.Number, OpPRComment)
 	}
 	if state := pullState(p); state != "open" {
@@ -1026,7 +1031,7 @@ func (t *Tools) prEdit(ctx context.Context, b *bound, data json.RawMessage) (any
 		if b.number > 0 {
 			for _, l := range bodyLinks(src.Settings, p.Body) {
 				if l.number == b.number {
-					body = linkBody(src.Settings, b.number, body, l.closes)
+					body = keepLink(src.Settings, b.number, body, l.closes)
 					break
 				}
 			}
@@ -1067,6 +1072,22 @@ func (t *Tools) prEdit(ctx context.Context, b *bound, data json.RawMessage) (any
 	}
 	out["state"], out["changed"] = "edited", changed
 	return out, nil
+}
+
+// keepLink keeps a PR's link to its issue through a new body: the body
+// gets the link back when it drops it, and a closing link stays closing
+// when the new body only refers to the issue (`Refs #N`), so a rewrite
+// can't stop the merge from closing the issue.
+func keepLink(s Settings, number int, body string, closes bool) string {
+	if !closes {
+		return linkBody(s, number, body, false)
+	}
+	for _, l := range bodyLinks(s, body) {
+		if l.number == number && l.closes {
+			return body
+		}
+	}
+	return issueRef(s, "Closes", number) + "\n\n" + body
 }
 
 // sameBody reports whether two PR bodies read the same; GitHub may hand a

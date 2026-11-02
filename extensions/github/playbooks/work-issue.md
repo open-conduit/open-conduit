@@ -22,7 +22,7 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | `github.issue.create` | `title`, `body`, `wait`?, `until`?, `project`? | open a new issue; with `wait` or `until`, it isn't worked until then (see Waiting); with `project`, in that project instead |
 | `github.pr.list` | | the issue's PRs, open or not |
 | `github.pr.create` | `title`, `body`, `base`?, `draft`?, `closes_issue`? | open a PR from the issue's branch; its merge closes the issue unless `closes_issue` is `false` |
-| `github.pr.edit` | `number`, `title`?, `body`?, `draft`? | change the title or description of a PR you opened, or its draft state (`draft: false` marks it ready for review) |
+| `github.pr.edit` | `number`, `title`?, `body`?, `draft`? | change the title or description of a PR you opened from the issue's branch, or its draft state (`draft: false` marks it ready for review) |
 | `github.pr.view` | `number` | a PR and every comment, inline comment and review on it |
 | `github.pr.comment` | `number`, `body` | comment on a PR's conversation |
 | `github.pr.reply` | `number`, `comment_id`, `body` | reply in an inline review thread |

@@ -1584,6 +1584,12 @@ func TestGitHubPREditChangesOnlyTheWorksOwnPR(t *testing.T) {
 		t.Fatalf("edited PR: %q %q", got.Title, got.Body)
 	}
 
+	// A rewrite that only refers to the issue keeps it closing on merge.
+	e.must(a, gh.OpPREdit, "refs", map[string]any{"number": number, "body": "Refs #" + itoa(n) + "\n\nSteadies the header on desktop and mobile."})
+	if body := e.fake.Issue(number).Body; !strings.HasPrefix(body, "Closes #"+itoa(n)+"\n\nRefs #"+itoa(n)) {
+		t.Fatalf("a rewrite dropped the closing link: %q", body)
+	}
+
 	// Ready for review, through GraphQL; applying it again changes nothing.
 	before := len(e.fake.Writes())
 	if out := e.must(a, gh.OpPREdit, "ready", map[string]any{"number": number, "draft": false}); out["state"] != "edited" || e.fake.Pull(number).Draft {
@@ -1599,7 +1605,7 @@ func TestGitHubPREditChangesOnlyTheWorksOwnPR(t *testing.T) {
 		t.Fatalf("%d ready mutations", mutations)
 	}
 	before = len(e.fake.Writes())
-	again := e.must(a, gh.OpPREdit, "ready-again", map[string]any{"number": number, "draft": false, "title": "Steady the header", "body": "Steadies the header on desktop and mobile."})
+	again := e.must(a, gh.OpPREdit, "ready-again", map[string]any{"number": number, "draft": false, "title": "Steady the header", "body": "Refs #" + itoa(n) + "\n\nSteadies the header on desktop and mobile."})
 	if again["state"] != "unchanged" || len(e.fake.Writes()) != before {
 		t.Fatalf("repeated edit: %v, %d writes", again, len(e.fake.Writes())-before)
 	}
@@ -1619,8 +1625,14 @@ func TestGitHubPREditChangesOnlyTheWorksOwnPR(t *testing.T) {
 	// marker or another Work's, is refused without a write.
 	other := e.fake.OpenPull("Someone else's", "Refs #"+itoa(n)+"\n\nTheirs.", "feature/other", "o1", ghAlice)
 	stolen := e.fake.OpenPull("Another Work's", "Theirs.\n\n<!-- open-conduit:agent work=other-work -->", "feature/stolen", "s1", ghAlice)
+	// The marker is copyable: a PR that carries this Work's own marker but
+	// isn't from its branch in this repository (a fork's, or another
+	// branch's) is still refused.
+	forked := e.fake.OpenPull("A fork's", "Copied.\n\n"+marker, "agent/issue-"+itoa(n), "f1", ghAlice)
+	e.fake.SetHeadRepo(forked, "mallory/widgets")
+	elsewhere := e.fake.OpenPull("Another branch's", "Copied.\n\n"+marker, "feature/copied", "c1", ghAlice)
 	before = len(e.fake.Writes())
-	for _, p := range []int{other, stolen} {
+	for _, p := range []int{other, stolen, forked, elsewhere} {
 		_, err = e.call(a, gh.OpPREdit, "", map[string]any{"number": p, "title": "Mine now"})
 		refused(t, err, "not_own_pull_request")
 	}
