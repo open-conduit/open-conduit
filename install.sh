@@ -52,4 +52,4 @@ if [ -d "$tmp/extensions" ]; then cp -R "$tmp/extensions" "$install_dir/extensio
 ln -sf "$install_dir/open-conduit" "$bin_dir/open-conduit"
 echo "installed $install_dir/open-conduit and $install_dir/os, linked $bin_dir/open-conduit"
 case ":$PATH:" in *":$bin_dir:"*) ;; *) echo "add $bin_dir to your PATH" ;; esac
-echo "next: open-conduit init"
+echo "next: open-conduit init --with claude   (Claude Code sets it up with you; open-conduit init lists the other setups)"

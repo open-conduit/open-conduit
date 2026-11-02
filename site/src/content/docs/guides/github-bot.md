@@ -61,11 +61,10 @@ open-conduit config set /connections/github/config/bot_app_id '"123456"'
 open-conduit config set /connections/github/secret_refs/bot_private_key '"keyring:github-bot-key"'
 ```
 
-Use your App ID and the reference `secret set` printed. If the daemon has run before, apply the file as the next generation. `config validate` prints the current generation:
+Use your App ID and the reference `secret set` printed. If the daemon has run before, apply the file as the next generation:
 
 ```sh
-open-conduit config validate "$(open-conduit config path)"
-open-conduit config apply "$(open-conduit config path)" --generation N
+open-conduit config apply "$(open-conduit config path)"
 ```
 
 ## 5. Check it

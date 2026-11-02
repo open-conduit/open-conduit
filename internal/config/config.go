@@ -502,7 +502,7 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 		return BindingEntry{Binding: Binding{Name: name}, Disabled: true}
 	}
 	var b Binding
-	if !c.object(n, path, []string{"name", "executor", "requires", "operations", "secret_names", "config"}, "connection", "resource", "sandbox", "container", "timeout_seconds", "grants") {
+	if !c.object(n, path, []string{"name", "executor"}, "requires", "operations", "secret_names", "config", "connection", "resource", "sandbox", "container", "timeout_seconds", "grants") {
 		return BindingEntry{Binding: b}
 	}
 	b.Name, _ = c.str(n.field("name"), path+"/name", idPattern)
@@ -572,7 +572,7 @@ func (c *checker) route(n *node, path string) RouteEntry {
 		return RouteEntry{Route: Route{Name: name}, Disabled: true}
 	}
 	var r Route
-	if !c.object(n, path, []string{"name", "handler", "binding", "active_policy", "config"}, "unsupported_fallback", "error_fallback") {
+	if !c.object(n, path, []string{"name", "handler", "binding", "active_policy"}, "config", "unsupported_fallback", "error_fallback") {
 		return RouteEntry{Route: r}
 	}
 	r.Name, _ = c.str(n.field("name"), path+"/name", idPattern)
@@ -596,7 +596,7 @@ func (c *checker) extension(n *node, path string) ExtensionEntry {
 		return ExtensionEntry{Extension: Extension{Name: name}, Disabled: true}
 	}
 	var e Extension
-	if !c.object(n, path, []string{"name", "type", "config", "secret_names"}, "connection") {
+	if !c.object(n, path, []string{"name", "type"}, "config", "secret_names", "connection") {
 		return ExtensionEntry{Extension: e}
 	}
 	e.Name, _ = c.str(n.field("name"), path+"/name", idPattern)

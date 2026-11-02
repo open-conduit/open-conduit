@@ -91,7 +91,7 @@ func Attach(c *client.Client, id string, keep bool, run func(argv []string, dir 
 			return nil
 		}
 		if keep {
-			fmt.Fprintf(notice, "open-conduit: %s stays held; release it with `open-conduit work release %s --revision N`\n", id, id)
+			fmt.Fprintf(notice, "open-conduit: %s stays held; release it with `open-conduit work release %s`\n", id, id)
 			return nil
 		}
 		return revised(c, id, func(cx context.Context, w client.Work) error {
@@ -157,7 +157,7 @@ func ContainerAttach(c *client.Client, id string, run func(argv []string) error,
 func (o *operator) workControl(sub string, args []string) int {
 	switch sub {
 	case "hold", "release":
-		return o.control(args, func(c *client.Client, id, rev, reason, key string) (any, error) {
+		return o.control(args, workRevision, func(c *client.Client, id, rev, reason, key string) (any, error) {
 			cx, cancel := ctx()
 			defer cancel()
 			if sub == "hold" {
@@ -168,16 +168,19 @@ func (o *operator) workControl(sub string, args []string) int {
 	case "rebind":
 		f := newFlags("rebind", "revision", "binding", "reason", "key")
 		pos, err := f.parse(args)
-		if err != nil || len(pos) != 1 || f.get("revision") == "" || f.get("binding") == "" {
-			return usageError(o.errOut, "expected work rebind ID --revision N --binding B")
+		if err != nil || len(pos) != 1 || f.get("binding") == "" {
+			return usageError(o.errOut, "expected work rebind ID --binding B [--revision N]")
 		}
 		c, _, err := o.client()
 		if err != nil {
 			return o.emit(nil, err)
 		}
-		cx, cancel := ctx()
-		defer cancel()
-		return o.emit(c.RebindWork(cx, pos[0], f.get("revision"), f.get("binding"), f.get("reason"), f.key()))
+		key := f.key()
+		return o.emit(withRevision(c, pos[0], f.get("revision"), workRevision, func(rev string) (any, error) {
+			cx, cancel := ctx()
+			defer cancel()
+			return c.RebindWork(cx, pos[0], rev, f.get("binding"), f.get("reason"), key)
+		}))
 	case "attach":
 		f := newFlags("attach")
 		keep := f.fs.Bool("keep-held", false, "")
@@ -342,6 +345,7 @@ func (o *operator) actions(args []string) int {
 		return usageError(o.errOut, usage)
 	}
 	f := newFlags("actions", "scope", "work", "input", "key")
+	asJSON := f.fs.Bool("json", false, "")
 	pos, err := f.parse(args[1:])
 	t := client.ActionTarget{ScopeID: f.get("scope"), WorkID: f.get("work")}
 	if err != nil || (t.ScopeID == "") == (t.WorkID == "") || args[0] == "list" && len(pos) != 0 || args[0] == "run" && len(pos) != 2 {
@@ -354,7 +358,11 @@ func (o *operator) actions(args []string) int {
 	cx, cancel := ctx()
 	defer cancel()
 	if args[0] == "list" {
-		return o.emit(c.Actions(cx, t))
+		actions, err := c.Actions(cx, t)
+		if err != nil || *asJSON {
+			return o.emit(actions, err)
+		}
+		return o.table(actions, actionColumns)
 	}
 	return o.emit(c.InvokeAction(cx, t, pos[0], pos[1], f.get("input"), f.key()))
 }

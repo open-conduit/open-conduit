@@ -189,7 +189,7 @@ func ValidateDocument(doc *Document, reg Registry) (*Snapshot, error) {
 		v.connections[c.ID] = true
 		check, ok := reg.Connections[c.Type]
 		if !ok {
-			v.fail(p+"/type", "unknown_registration", "connection type is not registered; use a registered type")
+			v.fail(p+"/type", "unknown_registration", "connection type is not registered; use a registered type"+registeredNames(reg.Connections, c.Type))
 		} else if check != nil && check(c.Config) != nil {
 			v.fail(p+"/config", "invalid_config", "connection config rejected by its registered owner; fix it against the owner schema")
 		}
@@ -361,7 +361,7 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		r := s.value
 		p, own := at("routes", name, s.scope, s.index)
 		if own && !v.reg.Handlers[r.Handler] {
-			v.fail(p+"/handler", "unknown_registration", "route handler is not registered; use a registered handler")
+			v.fail(p+"/handler", "unknown_registration", "route handler is not registered; use a registered handler"+registeredNames(v.reg.Handlers, r.Handler))
 		} else if check := v.reg.HandlerConfig[r.Handler]; own && check != nil && check(r.Config) != nil {
 			v.fail(p+"/config", "invalid_config", "route config rejected by its registered handler; fix it against the handler's documented config")
 		}
@@ -396,7 +396,7 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		p, own := at("extensions", name, s.scope, s.index)
 		t, registered := v.reg.Extensions[x.Type]
 		if own && !registered {
-			v.fail(p+"/type", "unknown_registration", "extension type is not registered; use a registered type")
+			v.fail(p+"/type", "unknown_registration", "extension type is not registered; use a registered type"+registeredNames(v.reg.Extensions, x.Type))
 		} else if own && t.Validate != nil && t.Validate(x.Config, x.SecretNames) != nil {
 			v.fail(p+"/config", "invalid_config", "extension config rejected by its registered owner; fix it against the owner schema")
 		}
@@ -423,7 +423,7 @@ func (v *validator) registration(p string, b Binding) {
 		v.fail(p+"/resource", "resource_required", "workspace requires a bound resource provider; add resource or remove requires.workspace")
 	}
 	if b.Resource != nil && !v.reg.Resources[b.Resource.Provider] {
-		v.fail(p+"/resource/provider", "unknown_registration", "resource provider is not registered; use a registered provider")
+		v.fail(p+"/resource/provider", "unknown_registration", "resource provider is not registered; use a registered provider"+registeredNames(v.reg.Resources, b.Resource.Provider))
 	} else if b.Resource != nil {
 		if check := v.reg.ResourceConfig[b.Resource.Provider]; check != nil && check(b.Resource.Config) != nil {
 			v.fail(p+"/resource/config", "invalid_config", fmt.Sprintf("resource provider %s rejected this config; correct it against the provider's documented config", b.Resource.Provider))
@@ -431,7 +431,7 @@ func (v *validator) registration(p string, b Binding) {
 	}
 	exec, ok := v.reg.Executors[b.Executor]
 	if !ok {
-		v.fail(p+"/executor", "unknown_registration", "executor is not registered; use a registered executor")
+		v.fail(p+"/executor", "unknown_registration", "executor is not registered; use a registered executor"+registeredNames(v.reg.Executors, b.Executor))
 		return
 	}
 	c, r := exec.Capabilities(), b.Requires
@@ -498,7 +498,7 @@ func (v *validator) sandboxed(p string, b Binding) {
 	if b.Sandbox != nil {
 		check, ok := v.reg.Sandboxes[b.Sandbox.Provider]
 		if !ok {
-			v.fail(p+"/sandbox/provider", "unknown_registration", "sandbox provider is not registered; use a registered provider (srt)")
+			v.fail(p+"/sandbox/provider", "unknown_registration", "sandbox provider is not registered; use a registered provider"+registeredNames(v.reg.Sandboxes, b.Sandbox.Provider))
 		} else if check != nil {
 			if err := check(b.Sandbox.Config); err != nil {
 				v.fail(p+"/sandbox/config", "invalid_config", err.Error())
@@ -546,7 +546,7 @@ func (v *validator) contained(p string, b Binding) {
 	}
 	check, ok := v.reg.Containers[b.Container.Provider]
 	if !ok {
-		v.fail(p+"/container/provider", "unknown_registration", "container provider is not registered")
+		v.fail(p+"/container/provider", "unknown_registration", "container provider is not registered; use a registered provider"+registeredNames(v.reg.Containers, b.Container.Provider))
 	} else if check != nil {
 		if err := check(b.Container.Config); err != nil {
 			v.fail(p+"/container/config", "invalid_config", err.Error())

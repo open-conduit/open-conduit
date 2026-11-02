@@ -61,8 +61,8 @@ Every change (run again, rebind, send a wake event, hold, release, cancel a turn
 open-conduit claim 12                                # claim issue #12 by hand
 open-conduit actions list --work ID                  # what extensions offer on a Work now
 open-conduit work list --state waiting
-open-conduit work retry ID --revision N
-open-conduit work hold ID --revision N --reason "needs a decision"
+open-conduit work retry ID
+open-conduit work hold ID --reason "needs a decision"
 open-conduit work attach ID                          # hold, attach to the agent's session, release on exit
 open-conduit runs list
 open-conduit runs log ID --follow                    # follow a running turn
@@ -74,7 +74,8 @@ open-conduit events skip ID --reason "bad payload"   # route an Event routing is
 open-conduit events reroute ID                       # route a failed or skipped Event again
 ```
 
-- `work retry|hold|release|cancel` take the Work's current `--revision`, which `work get ID` shows.
+- `work retry|hold|release|cancel` act on the Work's current revision. Pass `--revision N` (from `work get ID`) to act only if nothing has changed it since.
+- Lists print a table; `--json` prints the records. `--scope` filters by scope everywhere.
 - `runs log ID` shows a run's output; `--transcript` shows the agent's transcript.
 - `events chain ID` shows the chain of Events that led to something.
 - An Event whose route keeps failing is retried with a growing backoff and, after five failures over at least 15 minutes (or at once when retrying can't help, such as a route whose extension is gone), routed as `failed`. Doctor's `routing` check lists Events still unrouted after ten minutes. `events skip` lets the Work behind one move on; `events reroute` tries an unrouted one now, or accepts a failed or skipped one again as a copy.

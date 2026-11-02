@@ -419,11 +419,7 @@
           },
           "required": [
             "name",
-            "executor",
-            "requires",
-            "operations",
-            "secret_names",
-            "config"
+            "executor"
           ],
           "additionalProperties": false
         }
@@ -491,8 +487,7 @@
             "name",
             "handler",
             "binding",
-            "active_policy",
-            "config"
+            "active_policy"
           ],
           "additionalProperties": false
         }
@@ -546,9 +541,7 @@
           },
           "required": [
             "name",
-            "type",
-            "config",
-            "secret_names"
+            "type"
           ],
           "additionalProperties": false
         }
