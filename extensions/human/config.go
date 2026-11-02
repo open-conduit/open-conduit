@@ -16,7 +16,9 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
+	"time"
 
 	"github.com/open-conduit/open-conduit/extension"
 )
@@ -42,7 +44,35 @@ type Config struct {
 	// Surfaces are where each ask is shown. Default ["tui"], the only
 	// surface so far.
 	Surfaces []string `json:"surfaces,omitempty"`
+	// Gates are operations that need a person's approval before they run,
+	// whoever calls them (see Gate).
+	Gates []GateConfig `json:"gates,omitempty"`
 }
+
+// GateConfig is one approval gate of a scope's `human` entry.
+type GateConfig struct {
+	// Operations are toolbelt operation names ("github.pr.create"), or a
+	// prefix ending in ".*" for every operation under it ("deploy.*").
+	Operations []string `json:"operations"`
+	// Responders are who may approve, as in Config.Responders. Default the
+	// entry's responders.
+	Responders []string `json:"responders,omitempty"`
+	// Timeout is how long an approval request waits for an answer, a Go
+	// duration ("24h", at most a year). With no answer by then, the call
+	// is refused. Default "24h".
+	Timeout string `json:"timeout,omitempty"`
+	// timeout is Timeout parsed.
+	timeout time.Duration
+}
+
+// DefaultGateTimeout is how long an approval request waits by default.
+const DefaultGateTimeout = 24 * time.Hour
+
+// maxGateTimeout is the longest an approval request may wait: the
+// longest a wait's timeout may be.
+const maxGateTimeout = 365 * 24 * time.Hour
+
+var gateOperation = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
 
 // ParseConfig parses and checks an entry's config, filling defaults.
 func ParseConfig(data json.RawMessage) (Config, error) {
@@ -61,10 +91,37 @@ func ParseConfig(data json.RawMessage) (Config, error) {
 	if len(c.Responders) == 0 {
 		c.Responders = []string{DefaultResponder}
 	}
-	for _, r := range c.Responders {
-		kind, id, _ := strings.Cut(r, ":")
-		if !validPart(kind) || (strings.Contains(r, ":") && !validPart(id)) {
-			return c, fmt.Errorf("responders: %q is not kind:id (for example %s)", r, DefaultResponder)
+	if err := checkResponders("responders", c.Responders); err != nil {
+		return c, err
+	}
+	for i := range c.Gates {
+		g := &c.Gates[i]
+		where := fmt.Sprintf("gates[%d]", i)
+		if len(g.Operations) == 0 {
+			return c, fmt.Errorf("%s: operations: name at least one operation", where)
+		}
+		for _, op := range g.Operations {
+			name := strings.TrimSuffix(op, ".*")
+			if !gateOperation.MatchString(name) || strings.HasSuffix(name, ".") {
+				return c, fmt.Errorf("%s: operations: %q is not an operation name or a prefix ending in .* (for example github.pr.create or deploy.*)", where, op)
+			}
+			if name == Type || strings.HasPrefix(name, Type+".") {
+				return c, fmt.Errorf("%s: operations: %q is human's own; its operations can't need approval", where, op)
+			}
+		}
+		if len(g.Responders) == 0 {
+			g.Responders = c.Responders
+		}
+		if err := checkResponders(where+": responders", g.Responders); err != nil {
+			return c, err
+		}
+		g.timeout = DefaultGateTimeout
+		if g.Timeout != "" {
+			d, err := time.ParseDuration(g.Timeout)
+			if err != nil || d < time.Minute || d > maxGateTimeout {
+				return c, fmt.Errorf("%s: timeout: %q must be a duration from 1m to 8760h, such as 24h", where, g.Timeout)
+			}
+			g.timeout = d
 		}
 	}
 	if len(c.Surfaces) == 0 {
@@ -76,6 +133,28 @@ func ParseConfig(data json.RawMessage) (Config, error) {
 		}
 	}
 	return c, nil
+}
+
+func checkResponders(field string, responders []string) error {
+	for _, r := range responders {
+		kind, id, _ := strings.Cut(r, ":")
+		if !validPart(kind) || (strings.Contains(r, ":") && !validPart(id)) {
+			return fmt.Errorf("%s: %q is not kind:id (for example %s)", field, r, DefaultResponder)
+		}
+	}
+	return nil
+}
+
+// gate is the first gate that names op, if any.
+func (c Config) gate(op string) (GateConfig, bool) {
+	for _, g := range c.Gates {
+		for _, pattern := range g.Operations {
+			if pattern == op || strings.HasSuffix(pattern, ".*") && strings.HasPrefix(op, strings.TrimSuffix(pattern, "*")) {
+				return g, true
+			}
+		}
+	}
+	return GateConfig{}, false
 }
 
 func validPart(s string) bool {

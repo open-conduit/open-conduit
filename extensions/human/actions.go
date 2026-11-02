@@ -87,7 +87,11 @@ func (a Actions) Actions(ctx context.Context, t extension.ActionTarget) ([]exten
 	if len(prompt) > 200 {
 		prompt = "an option's number or text"
 	}
-	return []extension.Action{{ID: ActionAnswer, Label: "Answer the agent's question", Prompt: prompt, Choices: rec.Options}}, nil
+	label := "Answer the agent's question"
+	if rec.Gate != "" {
+		label = "Approve or refuse " + rec.Gate
+	}
+	return []extension.Action{{ID: ActionAnswer, Label: label, Prompt: prompt, Choices: rec.Options}}, nil
 }
 
 func refuseAction(code, message string) (extension.ActionPlan, error) {
@@ -128,7 +132,7 @@ func (a Actions) Invoke(ctx context.Context, c extension.ActionCall) (extension.
 		return refuseAction("invalid_input", "give an answer")
 	}
 	key := rec.Key()
-	data, _ := json.Marshal(AnswerPayload{Ask: rec.ID, Question: rec.Question, Answer: answer, Option: option, Responder: c.Caller.Kind + ":" + c.Caller.ID})
+	data, _ := json.Marshal(AnswerPayload{Ask: rec.ID, Question: rec.Question, Answer: answer, Option: option, Responder: c.Caller.Kind + ":" + c.Caller.ID, Operation: rec.Gate})
 	return extension.ActionPlan{
 		Event:   domain.Event{Type: TypeAnswer, CorrelationKey: &key, Data: domain.Payload{Schema: SchemaAnswer, Data: data}},
 		Message: "answered: " + answer,
