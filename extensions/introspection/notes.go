@@ -30,33 +30,57 @@ var (
 	ProblemKinds    = []string{"env", "docs", "tooling", "service", "other"}
 )
 
+// correctionInput is introspection.correction's input. Its fields are in
+// key order, so its encoding, a call's identity, is the sorted object the
+// input was.
+type correctionInput struct {
+	Area string `json:"area,omitempty" doc:"what the correction is about: writing, design, data, code or workflow; default workflow"`
+	Body string `json:"body" doc:"the theme in one sentence, a blank line, then the rule a future agent should follow; at most 8192 bytes"`
+}
+
+// problemInput is introspection.problem's input, its fields in key order
+// as correctionInput's are.
+type problemInput struct {
+	Body string `json:"body" doc:"what you tried in one line, then the exact error, your workaround and where the fix belongs; at most 8192 bytes"`
+	Kind string `json:"kind" doc:"what went wrong: env (a missing variable, tool or credential), docs (a wrong or stale skill or rule), tooling (a toolbelt operation failed or is missing), service (the tracker, code host or deploy service misbehaving) or other"`
+}
+
 func (t *Tools) correction(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
-	return t.note(ctx, a, in, NoteCorrection, CorrectionAreas, "area")
+	var r correctionInput
+	if err := t.decodeNote(ctx, a, in, &r, "area"); err != nil {
+		return domain.Payload{}, err
+	}
+	canonical, _ := json.Marshal(r)
+	if r.Area == "" {
+		r.Area = "workflow"
+	}
+	return t.note(ctx, a, NoteCorrection, r.Area, r.Body, canonical, CorrectionAreas, "area")
 }
 
 func (t *Tools) problem(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
-	return t.note(ctx, a, in, NoteProblem, ProblemKinds, "kind")
+	var r problemInput
+	if err := t.decodeNote(ctx, a, in, &r, "kind"); err != nil {
+		return domain.Payload{}, err
+	}
+	canonical, _ := json.Marshal(r)
+	return t.note(ctx, a, NoteProblem, r.Kind, r.Body, canonical, ProblemKinds, "kind")
+}
+
+// decodeNote checks the scope logs notes and decodes a note's input.
+func (t *Tools) decodeNote(ctx context.Context, a extension.Authority, in domain.Payload, out any, field string) error {
+	if err := t.enabled(ctx, a); err != nil {
+		return err
+	}
+	if err := strict(in.Data, out); err != nil {
+		return refuse("invalid_input", "the input is malformed or has unknown fields (%s, body)", field)
+	}
+	return nil
 }
 
 // note logs one note. One note per request: the request ID when the caller
 // supplied one, else the input, so a retried call finds the note it wrote.
-func (t *Tools) note(ctx context.Context, a extension.Authority, in domain.Payload, kind string, allowed []string, field string) (domain.Payload, error) {
-	if err := t.enabled(ctx, a); err != nil {
-		return domain.Payload{}, err
-	}
-	var raw map[string]string
-	if err := strict(in.Data, &raw); err != nil {
-		return domain.Payload{}, refuse("invalid_input", "the input is malformed or has unknown fields (%s, body)", field)
-	}
-	for k := range raw {
-		if k != field && k != "body" {
-			return domain.Payload{}, refuse("invalid_input", "unknown field %q", k)
-		}
-	}
-	area, body := raw[field], strings.TrimSpace(raw["body"])
-	if area == "" && kind == NoteCorrection {
-		area = "workflow"
-	}
+func (t *Tools) note(ctx context.Context, a extension.Authority, kind, area, body string, canonical []byte, allowed []string, field string) (domain.Payload, error) {
+	body = strings.TrimSpace(body)
 	if !slices.Contains(allowed, area) {
 		return domain.Payload{}, refuse("invalid_"+field, "%s must be one of %s", field, strings.Join(allowed, ", "))
 	}
@@ -65,7 +89,6 @@ func (t *Tools) note(ctx context.Context, a extension.Authority, in domain.Paylo
 	}
 	seed := extension.CallRequestID(ctx)
 	if seed == "" {
-		canonical, _ := json.Marshal(raw)
 		seed = "input:" + string(canonical)
 	}
 	suffix := "/" + digest(string(a.ExecutionID), kind, seed)[:12]

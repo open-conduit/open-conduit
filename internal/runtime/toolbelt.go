@@ -156,6 +156,9 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 		if set != 1 || !operationName.MatchString(op.Name) || len(op.Guidance) > extension.MaxGuidance {
 			return extension.ErrInvalid
 		}
+		if err := extension.ValidateOperationDoc(op.Summary, op.Input); err != nil {
+			return fmt.Errorf("operation %q: %w", op.Name, err)
+		}
 		if op.Serves != "" && (op.Handler == nil || !operationName.MatchString(op.Serves)) {
 			return fmt.Errorf("%w: operation %q: only a handler serves a capability, named like an operation", extension.ErrInvalid, op.Name)
 		}
@@ -235,6 +238,20 @@ func (t *Toolbelt) Guidance(ctx context.Context, token string, execution domain.
 		if op.Guidance != "" && !seen[op.Guidance] {
 			seen[op.Guidance] = true
 			out = append(out, op.Guidance)
+		}
+	})
+	return out, err
+}
+
+// Described is each operation the token's pinned grant includes and current
+// config still enables that declares a Summary or Input, in grant order,
+// with only its Name, Summary and Input. Like Guidance, it reveals nothing
+// beyond what the grant already names.
+func (t *Toolbelt) Described(ctx context.Context, token string, execution domain.ID) ([]extension.Operation, error) {
+	var out []extension.Operation
+	err := t.granted(ctx, token, execution, func(op extension.Operation) {
+		if op.Summary != "" || len(op.Input) > 0 {
+			out = append(out, extension.Operation{Name: op.Name, Summary: op.Summary, Input: op.Input})
 		}
 	})
 	return out, err

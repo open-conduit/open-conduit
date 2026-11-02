@@ -40,9 +40,9 @@ type gitGrants struct {
 }
 
 type gitCredentialInput struct {
-	Protocol string `json:"protocol"`
-	Host     string `json:"host"`
-	Path     string `json:"path,omitempty"`
+	Protocol string `json:"protocol" doc:"the protocol git asks for; only https gets a credential"`
+	Host     string `json:"host" doc:"the host git asks for; only the code repository's GitHub host gets a credential"`
+	Path     string `json:"path,omitempty" doc:"the repository path git asks for, when it sends one; only the code repository's gets a credential"`
 }
 
 type gitCredentialOutput struct {

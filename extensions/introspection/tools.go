@@ -44,8 +44,29 @@ const (
 )
 
 // Operations lists every operation (for binding operation lists).
-func Operations() []string {
-	return []string{OpReport, OpList, OpResolve, OpEvidence, OpNotesResolve, OpFix, OpCorrection, OpProblem}
+func Operations() []string { return extension.OperationNames(Declared()) }
+
+// Declared declares each operation: its name, one-line summary and input
+// (inproc.Operator); the host gives the registered operations both.
+func Declared() []extension.Operation {
+	return []extension.Operation{
+		{Name: OpReport, Summary: "Report a defect in Open Conduit itself, such as a toolbelt operation or playbook that misbehaved.",
+			Input: extension.InputSchema[reportInput]()},
+		{Name: OpList, Summary: "List this scope's defect reports in a given state, oldest first.",
+			Input: extension.InputSchema[listInput]()},
+		{Name: OpResolve, Summary: "Mark one of this scope's defect reports resolved, saying how it was handled.",
+			Input: extension.InputSchema[resolveInput]()},
+		{Name: OpEvidence, Summary: "Gather the open reports and unhandled notes a sweep or triage run acts on, grouped, with its settings.",
+			Input: extension.InputSchema[evidenceInput]()},
+		{Name: OpNotesResolve, Summary: "Mark corrections or problem notes handled so later sweeps and triages leave them out.",
+			Input: extension.InputSchema[notesResolveInput]()},
+		{Name: OpFix, Summary: "Request Work that fixes the cause of the named reports and notes.",
+			Input: extension.InputSchema[fixInput]()},
+		{Name: OpCorrection, Summary: "Log the lesson of a correction you were given, so the daily sweep folds it into the project's rules.",
+			Input: extension.InputSchema[correctionInput]()},
+		{Name: OpProblem, Summary: "Log a problem you worked around, so the daily triage fixes or files it.",
+			Input: extension.InputSchema[problemInput]()},
+	}
 }
 
 // Report states. Fixing is derived: an open report a requested fix names.
@@ -172,10 +193,11 @@ func (t *Tools) entry(ctx context.Context, a extension.Authority) (Config, error
 	return c, nil
 }
 
+// reportInput is introspection.report-issue's input.
 type reportInput struct {
-	Kind  string `json:"kind"`
-	Title string `json:"title"`
-	Body  string `json:"body"`
+	Kind  string `json:"kind" doc:"the kind of defect: env, docs, tooling, service, runtime or other"`
+	Title string `json:"title" doc:"the defect in one line of at most 200 bytes"`
+	Body  string `json:"body" doc:"what you tried, the exact error, your workaround and where the fix belongs, at most 8192 bytes"`
 }
 
 func (t *Tools) report(ctx context.Context, a extension.Authority, in domain.Payload) (extension.EmitPlan, error) {
@@ -279,13 +301,16 @@ func output(v any) (domain.Payload, error) {
 	return domain.Payload{Schema: "introspection.tool.v1", Data: data}, nil
 }
 
+// listInput is introspection.reports' input.
+type listInput struct {
+	State string `json:"state,omitempty" doc:"which reports to list: open, fixing (a fix has been requested), resolved or all; default open"`
+}
+
 func (t *Tools) list(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
 	if err := t.enabled(ctx, a); err != nil {
 		return domain.Payload{}, err
 	}
-	var q struct {
-		State string `json:"state"`
-	}
+	var q listInput
 	if err := strict(in.Data, &q); err != nil {
 		return domain.Payload{}, refuse("invalid_input", "the input is malformed or has unknown fields (state)")
 	}
@@ -312,15 +337,18 @@ func (t *Tools) list(ctx context.Context, a extension.Authority, in domain.Paylo
 	return output(map[string]any{"reports": reports})
 }
 
+// resolveInput is introspection.report.resolve's input.
+type resolveInput struct {
+	ID      string `json:"id" doc:"the report's id, as introspection.reports or introspection.evidence gives it"`
+	Summary string `json:"summary" doc:"how the report was handled, at most 2000 bytes"`
+	Link    string `json:"link,omitempty" doc:"a link to the fix, issue or write-up, at most 500 bytes"`
+}
+
 func (t *Tools) resolve(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
 	if err := t.enabled(ctx, a); err != nil {
 		return domain.Payload{}, err
 	}
-	var r struct {
-		ID      string `json:"id"`
-		Summary string `json:"summary"`
-		Link    string `json:"link"`
-	}
+	var r resolveInput
 	if err := strict(in.Data, &r); err != nil {
 		return domain.Payload{}, refuse("invalid_input", "the input is malformed or has unknown fields (id, summary, link)")
 	}

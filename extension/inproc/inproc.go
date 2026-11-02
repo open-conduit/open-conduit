@@ -69,9 +69,41 @@ type Typed interface {
 	Types() []ConfigType
 }
 
-// Operator extensions name the toolbelt operations config may grant.
+// Operator extensions declare the toolbelt operations config may grant:
+// each one's Name, and its Summary and Input (see extension.Operation),
+// with no handler. Operations is read before Start, offline (config
+// validation and the operations reference), so it must not depend on host
+// services. The host gives each operation of the extension's Registration
+// the declared Summary and Input it leaves unset (Describe), so they are
+// declared once.
 type Operator interface {
-	Operations() []string
+	Operations() []extension.Operation
+}
+
+// Describe returns r with each operation's unset Summary and Input taken
+// from the declaration of the same name in decls.
+func Describe(r extension.Registration, decls []extension.Operation) extension.Registration {
+	if len(decls) == 0 {
+		return r
+	}
+	byName := make(map[string]extension.Operation, len(decls))
+	for _, d := range decls {
+		byName[d.Name] = d
+	}
+	ops := make([]extension.Operation, len(r.Operations))
+	for i, op := range r.Operations {
+		if d, ok := byName[op.Name]; ok {
+			if op.Summary == "" {
+				op.Summary = d.Summary
+			}
+			if len(op.Input) == 0 {
+				op.Input = d.Input
+			}
+		}
+		ops[i] = op
+	}
+	r.Operations = ops
+	return r
 }
 
 // Router extensions provide route handlers by name.

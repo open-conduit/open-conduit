@@ -38,6 +38,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -158,8 +159,17 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 	}
 	if o, ok := b.x.(inproc.Operator); ok {
 		for _, op := range o.Operations() {
-			if !hasOperation(p.Operations, op) {
-				return m, fmt.Errorf("inprocsdk: the base manifest declares no kind for operation %q", op)
+			i := slices.IndexFunc(p.Operations, func(d protocol.OperationDecl) bool { return d.Name == op.Name })
+			if i < 0 {
+				return m, fmt.Errorf("inprocsdk: the base manifest declares no kind for operation %q", op.Name)
+			}
+			// The extension's own declaration gives what the base leaves
+			// unset, as the host does for an in-process registration.
+			if p.Operations[i].Summary == "" {
+				p.Operations[i].Summary = op.Summary
+			}
+			if len(p.Operations[i].Input) == 0 {
+				p.Operations[i].Input = op.Input
 			}
 		}
 	}
@@ -384,7 +394,7 @@ func (b *Bridge) operation(d protocol.OperationDecl) extension.Operation {
 		}
 		return extension.Operation{}, extension.ErrUndeclared
 	}
-	out := extension.Operation{Name: d.Name, Guidance: d.Guidance, Serves: d.Serves}
+	out := extension.Operation{Name: d.Name, Summary: d.Summary, Input: d.Input, Guidance: d.Guidance, Serves: d.Serves}
 	switch d.Kind {
 	case protocol.OperationWait:
 		out.Wait = func(ctx context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
@@ -595,15 +605,6 @@ func hasExtension(xs []protocol.ExtensionDecl, t string) bool {
 func hasRoute(rs []protocol.RouteDecl, h string) bool {
 	for _, r := range rs {
 		if r.Handler == h {
-			return true
-		}
-	}
-	return false
-}
-
-func hasOperation(ops []protocol.OperationDecl, name string) bool {
-	for _, o := range ops {
-		if o.Name == name {
 			return true
 		}
 	}

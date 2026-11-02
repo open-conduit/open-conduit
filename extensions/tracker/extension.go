@@ -139,7 +139,7 @@ func (x *Extension) Types() []inproc.ConfigType {
 	}
 }
 
-func (x *Extension) Operations() []string { return Operations(x.k.Type) }
+func (x *Extension) Operations() []extension.Operation { return Declared(x.k.Type) }
 
 func (x *Extension) Routes() map[string]extension.RouteHandler {
 	return map[string]extension.RouteHandler{x.k.Type: Route{Type: x.k.Type}}

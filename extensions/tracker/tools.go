@@ -30,8 +30,24 @@ const (
 )
 
 // Operations lists a tracker's tool operations.
-func Operations(typ string) []string {
-	return []string{typ + OpContext, typ + OpIssueView, typ + OpIssueComment, typ + OpIssueList, typ + OpIssueCreate}
+func Operations(typ string) []string { return extension.OperationNames(Declared(typ)) }
+
+// Declared declares a tracker's operations: each one's name, one-line
+// summary and input (inproc.Operator); the host gives the registered
+// operations both.
+func Declared(typ string) []extension.Operation {
+	return []extension.Operation{
+		{Name: typ + OpContext, Summary: "Show the tracker, this Work's issue and its URL, the branch to push, how a PR refers to the issue and where the rules are.",
+			Input: extension.InputSchema[struct{}]()},
+		{Name: typ + OpIssueView, Summary: "Read an issue with its status, labels and every comment; this Work's issue unless another is named.",
+			Input: extension.InputSchema[issueViewInput]()},
+		{Name: typ + OpIssueComment, Summary: "Comment on this Work's issue, or another issue of the same tracker; a retried call never posts twice.",
+			Input: extension.InputSchema[issueCommentInput]()},
+		{Name: typ + OpIssueList, Summary: "List the open issues of this tracker entry (up to 200), to check for one before opening another.",
+			Input: extension.InputSchema[struct{}]()},
+		{Name: typ + OpIssueCreate, Summary: "Open a follow-up issue in the tracker; a retried call never opens it twice.",
+			Input: extension.InputSchema[issueCreateInput]()},
+	}
 }
 
 // AgentOperations are the operations an agent binding gets for a tracker
@@ -217,10 +233,12 @@ type commentView struct {
 	Body   string `json:"body"`
 }
 
+type issueViewInput struct {
+	Key string `json:"key,omitempty" doc:"another issue of the same tracker entry to read, such as ABC-123; defaults to this Work's issue"`
+}
+
 func (t *Tools) issueView(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Key string `json:"key"`
-	}
+	var in issueViewInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -261,11 +279,13 @@ func (t *Tools) issueView(ctx context.Context, b *bound, data json.RawMessage) (
 		"reply": fmt.Sprintf("call %s {\"body\": …}", t.o.Type+OpIssueComment)}, nil
 }
 
+type issueCommentInput struct {
+	Body string `json:"body" doc:"the comment, in Markdown; must not be empty"`
+	Key  string `json:"key,omitempty" doc:"another issue of the same tracker entry to comment on, such as ABC-123; defaults to this Work's issue"`
+}
+
 func (t *Tools) issueComment(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Body string `json:"body"`
-		Key  string `json:"key"`
-	}
+	var in issueCommentInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -336,12 +356,14 @@ type createRecord struct {
 // issueCreate opens a follow-up issue once per call identity. An ambiguous
 // creation (the answer was lost) is never repeated: the agent is told to
 // look for it instead.
+type issueCreateInput struct {
+	Title  string   `json:"title" doc:"the new issue's title; must not be empty"`
+	Body   string   `json:"body,omitempty" doc:"the new issue's description, in Markdown"`
+	Labels []string `json:"labels,omitempty" doc:"label names to put on the new issue; Linear skips names it does not have and Jira refuses names with spaces"`
+}
+
 func (t *Tools) issueCreate(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Title  string   `json:"title"`
-		Body   string   `json:"body"`
-		Labels []string `json:"labels"`
-	}
+	var in issueCreateInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}

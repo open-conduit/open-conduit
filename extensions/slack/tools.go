@@ -28,7 +28,20 @@ const (
 )
 
 // Operations lists every tool operation (for binding operation lists).
-func Operations() []string { return []string{OpContext, OpThread, OpReply} }
+func Operations() []string { return extension.OperationNames(Declared()) }
+
+// Declared declares each operation: its name, one-line summary and input
+// (inproc.Operator); the host gives the registered operations both.
+func Declared() []extension.Operation {
+	return []extension.Operation{
+		{Name: OpContext, Summary: "Show the Slack thread this Work serves and how to read it, reply in it and wait for the next message.",
+			Input: extension.InputSchema[contextInput]()},
+		{Name: OpThread, Summary: "Read the messages of this Work's Slack thread, oldest first.",
+			Input: extension.InputSchema[threadInput]()},
+		{Name: OpReply, Summary: "Post a reply in this Work's Slack thread; a retried call posts it once.",
+			Input: extension.InputSchema[replyInput]()},
+	}
+}
 
 // Source is one registered Slack extension entry the tools can act on.
 type Source struct {
@@ -171,8 +184,11 @@ func intentID(ctx context.Context, b *bound, op string, data json.RawMessage) st
 	return "call/" + string(b.a.ExecutionID) + "/" + op + "/" + digest(string(data))[:24]
 }
 
+// contextInput is slack.context's input: it takes none.
+type contextInput struct{}
+
 func (t *Tools) context(_ context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct{}
+	var in contextInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -195,10 +211,13 @@ type MessageView struct {
 	Text    string `json:"text,omitempty"`
 }
 
+// threadInput is slack.thread's input.
+type threadInput struct {
+	Limit int `json:"limit,omitempty" doc:"how many of the latest messages to return, 1 to 1000; default (and any value outside that range) 200"`
+}
+
 func (t *Tools) thread(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Limit int `json:"limit"`
-	}
+	var in threadInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
@@ -251,11 +270,14 @@ func author(p MessagePayload) string {
 	return "unknown"
 }
 
+// replyInput is slack.reply's input.
+type replyInput struct {
+	Text      string `json:"text" doc:"the reply as Slack mrkdwn text, not blank and at most 40000 bytes"`
+	Broadcast bool   `json:"broadcast,omitempty" doc:"also post the reply to the channel, not only the thread; default false"`
+}
+
 func (t *Tools) reply(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
-	var in struct {
-		Text      string `json:"text"`
-		Broadcast bool   `json:"broadcast"`
-	}
+	var in replyInput
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}

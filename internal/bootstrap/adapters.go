@@ -4,6 +4,8 @@ import (
 	"slices"
 	"sort"
 
+	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	bb "github.com/open-conduit/open-conduit/extensions/bitbucket"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/human"
@@ -119,6 +121,21 @@ func Adapters() []cli.Adapter {
 			Binding: []cli.Field{req("addr", "the listener, for example 127.0.0.1:8787"), opt("tunnel", "", []string{"ngrok", "cloudflared", "static"}, ""), f("tunnel_domain", "ngrok reserved domain"),
 				f("tunnel_name", "cloudflared named tunnel"), f("tunnel_hostname", "its hostname"), f("public_url", "static")}},
 	}
+}
+
+// OperationDeclarations are the first-party extensions' operation
+// declarations (inproc.Operator) by name: each one's summary and input, as
+// the generated operations reference renders them.
+func OperationDeclarations() map[string]extension.Operation {
+	out := map[string]extension.Operation{}
+	for _, x := range firstParty() {
+		if o, ok := x.(inproc.Operator); ok {
+			for _, op := range o.Operations() {
+				out[op.Name] = op
+			}
+		}
+	}
+	return out
 }
 
 // OperationNames are the toolbelt operations a config may grant offline

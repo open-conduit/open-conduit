@@ -38,10 +38,10 @@ func TestFirstPartyCompose(t *testing.T) {
 			for _, op := range o.Operations() {
 				found := false
 				for _, r := range reg.Operations {
-					found = found || r == op
+					found = found || r == op.Name
 				}
 				if !found {
-					t.Errorf("%s operation %s not registered", x.Name(), op)
+					t.Errorf("%s operation %s not registered", x.Name(), op.Name)
 				}
 			}
 		}

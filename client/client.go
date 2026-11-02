@@ -1140,11 +1140,33 @@ func (c *Client) ToolbeltCall(ctx context.Context, call ToolCall) (out ToolResul
 // ToolbeltGuidance is the agent guidance of the operations the execution's
 // token is granted, one Markdown piece per operation that has some.
 func (c *Client) ToolbeltGuidance(ctx context.Context) ([]string, error) {
-	var out struct {
-		Guidance []string `json:"guidance"`
-	}
+	g, err := c.ToolbeltGuide(ctx)
+	return g.Guidance, err
+}
+
+// ToolbeltGuide is what the execution's token is granted, told to an
+// agent: the operations' guidance, and each operation's summary and input.
+type ToolbeltGuide struct {
+	Guidance []string `json:"guidance"`
+	// Operations are the granted operations that declare a summary or an
+	// input, in grant order (an older daemon sends none).
+	Operations []OperationDoc `json:"operations"`
+}
+
+// OperationDoc is one granted operation's one-line summary and the JSON
+// Schema of its input's data.
+type OperationDoc struct {
+	Name    string          `json:"name"`
+	Summary string          `json:"summary,omitempty"`
+	Input   json.RawMessage `json:"input,omitempty"`
+}
+
+// ToolbeltGuide is the agent guidance, summaries and inputs of the
+// operations the execution's token is granted.
+func (c *Client) ToolbeltGuide(ctx context.Context) (ToolbeltGuide, error) {
+	var out ToolbeltGuide
 	err := c.Do(ctx, "GET", "toolbelt/guidance", nil, nil, "", &out)
-	return out.Guidance, err
+	return out, err
 }
 
 // ToolbeltServing names the operations the execution's token is granted

@@ -46,7 +46,7 @@ func forecast(_ context.Context, _ extension.Authority, in ForecastRequest) (For
 // calls.
 func weather() *sdk.Extension {
 	return sdk.New("weather", sdk.Version("0.1.0"), sdk.Summary("Forecasts for a city.")).
-		Operation("weather.forecast", sdk.Handler(forecast), sdk.Guidance("Call `weather.forecast` with a city before planning anything outdoors."))
+		Operation("weather.forecast", sdk.Handler(forecast), sdk.Describe("Forecast a city's weather."), sdk.Guidance("Call `weather.forecast` with a city before planning anything outdoors."))
 }
 
 func Example() {
@@ -73,6 +73,7 @@ func Example() {
 	//       {
 	//         "name": "weather.forecast",
 	//         "kind": "handler",
+	//         "summary": "Forecast a city's weather.",
 	//         "guidance": "Call `weather.forecast` with a city before planning anything outdoors.",
 	//         "input": {
 	//           "additionalProperties": false,

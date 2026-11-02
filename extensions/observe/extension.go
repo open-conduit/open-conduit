@@ -40,7 +40,7 @@ func (*Extension) Types() []inproc.ConfigType {
 	}
 }
 
-func (*Extension) Operations() []string { return Operations() }
+func (*Extension) Operations() []extension.Operation { return Declared() }
 
 func (*Extension) Routes() map[string]extension.RouteHandler {
 	return map[string]extension.RouteHandler{Type: Route{}}

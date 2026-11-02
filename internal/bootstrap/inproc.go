@@ -128,7 +128,7 @@ func inprocRegistry(reg *config.Registry, xs []inproc.Extension) {
 			}
 		}
 		if o, ok := x.(inproc.Operator); ok {
-			reg.Operations = append(reg.Operations, o.Operations()...)
+			reg.Operations = append(reg.Operations, extension.OperationNames(o.Operations())...)
 		}
 		if r, ok := x.(inproc.Router); ok {
 			for name := range r.Routes() {
@@ -541,6 +541,9 @@ func (d *daemon) registerInprocTools(belt *runtime.Toolbelt, s *config.Snapshot)
 				continue
 			}
 			reg := t.Registration()
+			if o, ok := x.(inproc.Operator); ok {
+				reg = inproc.Describe(reg, o.Operations())
+			}
 			if len(reg.Operations) == 0 && len(reg.EventTypes) == 0 && reg.Gate == nil && reg.StartGate == nil {
 				continue
 			}
@@ -696,7 +699,7 @@ func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]ex
 	}
 	if o, ok := x.(inproc.Operator); ok {
 		for _, op := range o.Operations() {
-			operations[op] = true
+			operations[op.Name] = true
 		}
 	}
 	uses := func(scope *config.EffectiveScope) bool {

@@ -64,6 +64,7 @@ function weather(): Extension {
   return extension("weather", { version: "0.1.0", summary: "Forecasts." })
     .operation("weather.forecast", {
       input: forecastInput,
+      summary: "Forecast a city's weather.",
       guidance: "Call it before planning anything outdoors.",
       handler: ({ city, days }) => {
         if (city === "atlantis")
@@ -98,6 +99,7 @@ test("the manifest is derived from the registrations", () => {
         {
           name: "weather.forecast",
           kind: "handler",
+          summary: "Forecast a city's weather.",
           guidance: "Call it before planning anything outdoors.",
           input: {
             type: "object",

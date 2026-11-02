@@ -49,6 +49,8 @@ export interface CallContext extends Context {
 export interface OperationSpec<S extends Type<unknown>, Out> {
   /** The input's schema (t.object({}) for none); the handler receives what it accepts. */
   input: S;
+  /** What the operation does, in one line (at most 200 bytes). */
+  summary?: string;
   /** When an agent should call the operation, in Markdown. */
   guidance?: string;
   /** A capability the operation answers, routed by name (e.g. "git.credential"). */
@@ -172,6 +174,7 @@ export class Extension {
     const decl: OperationDecl = {
       name,
       kind: "handler",
+      ...(spec.summary === undefined ? {} : { summary: spec.summary }),
       ...(spec.guidance === undefined ? {} : { guidance: spec.guidance }),
       input: json(input),
       ...(spec.serves === undefined ? {} : { serves: spec.serves }),

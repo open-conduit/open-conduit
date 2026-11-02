@@ -98,7 +98,7 @@ func (*Extension) Executors() map[string]inproc.Executor {
 // SetupProbes are the GitHub probes a setup session may run.
 func (*Extension) SetupProbes() []extension.SetupProbe { return Probes{}.SetupProbes() }
 
-func (*Extension) Operations() []string { return Operations() }
+func (*Extension) Operations() []extension.Operation { return Declared() }
 
 func (*Extension) Routes() map[string]extension.RouteHandler {
 	return map[string]extension.RouteHandler{Type: Route{}, HoldHandler: HoldRoute{}}

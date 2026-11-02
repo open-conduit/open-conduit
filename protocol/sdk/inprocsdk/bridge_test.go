@@ -103,7 +103,9 @@ func (x *acme) Webhook(path string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
 }
 
-func (*acme) Operations() []string { return []string{"acme.ping"} }
+func (*acme) Operations() []extension.Operation {
+	return []extension.Operation{{Name: "acme.ping", Summary: "Answer pong.", Input: json.RawMessage(`{"type":"object"}`)}}
+}
 
 func (x *acme) Registration() extension.Registration {
 	x.mu.Lock()

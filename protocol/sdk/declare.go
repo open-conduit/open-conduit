@@ -76,6 +76,13 @@ func Guidance(text string) OperationOption {
 	return func(d *operationDecl) { d.Guidance = text }
 }
 
+// Describe gives the operation's one-line summary (at most
+// extension.MaxSummary bytes), for the operations reference and the agents
+// granted it.
+func Describe(summary string) OperationOption {
+	return func(d *operationDecl) { d.Summary = summary }
+}
+
 // Serves declares that a Handler answers a capability the host routes by
 // name, such as extension.CapabilityGitCredential.
 func Serves(capability string) OperationOption {
@@ -236,6 +243,8 @@ func (e *Extension) Operation(name string, op Op, opts ...OperationOption) *Exte
 	if d.Serves != "" && op.kind != protocol.OperationHandler {
 		panic("sdk: operation " + name + ": only sdk.Handler operations serve a capability")
 	}
+	x.Summary = d.Summary
+	x.Input = d.Input
 	x.Guidance = d.Guidance
 	x.Serves = d.Serves
 	e.Operations = append(e.Operations, x)

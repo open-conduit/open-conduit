@@ -51,7 +51,7 @@ func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension}}
 }
 
-func (*Extension) Operations() []string { return Operations() }
+func (*Extension) Operations() []extension.Operation { return Declared() }
 
 func (x *Extension) Start(_ context.Context, h inproc.Host) error {
 	tools, err := NewTools(Options{Store: h.Store, Entry: x.entry, Now: h.Now})

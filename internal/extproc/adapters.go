@@ -255,7 +255,7 @@ func (r *Remote) Registration() extension.Registration {
 	}
 	for _, decl := range r.m.Provides.Operations {
 		name := decl.Name
-		op := extension.Operation{Name: name, Guidance: decl.Guidance, Serves: decl.Serves}
+		op := extension.Operation{Name: name, Summary: decl.Summary, Input: decl.Input, Guidance: decl.Guidance, Serves: decl.Serves}
 		params := func(ctx context.Context, a extension.Authority, in domain.Payload) protocol.OperationParams {
 			return protocol.OperationParams{Operation: name, Authority: protocol.FromAuthority(a), Input: protocol.FromPayload(in), RequestID: extension.CallRequestID(ctx)}
 		}

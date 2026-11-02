@@ -419,8 +419,9 @@ See [configuration](../config/#authorization) for the fields and [toolbelt autho
 		inputTable(&b, op.InputSchema)
 	}
 
-	b.WriteString("\n## Bundled extensions\n\nThe extensions built into the daemon register these operations; `open-conduit adapters TYPE` lists them too. Their registrations name each operation but do not declare its input yet, so this section lists names only.\n")
+	b.WriteString("\n## Bundled extensions\n\nThe extensions built into the daemon register these operations, each with the input it takes; `open-conduit adapters TYPE` lists them too.\n")
 	owner := map[string]string{}
+	declared := bootstrap.OperationDeclarations()
 	catalog := bootstrap.Adapters()
 	sort.Slice(catalog, func(i, j int) bool { return catalog[i].Type < catalog[j].Type })
 	for _, a := range catalog {
@@ -429,13 +430,17 @@ See [configuration](../config/#authorization) for the fields and [toolbelt autho
 		}
 		ops := append([]string(nil), a.Operations...)
 		sort.Strings(ops)
-		fmt.Fprintf(&b, "\n### %s (`%s`)\n\n%s\n\n", a.Title, a.Type, a.Description)
+		fmt.Fprintf(&b, "\n### %s (`%s`)\n\n%s\n", a.Title, a.Type, a.Description)
 		for _, op := range ops {
 			if prev, ok := owner[op]; ok {
 				t.Errorf("operation %s is listed by both %s and %s", op, prev, a.Type)
 			}
 			owner[op] = a.Type
-			fmt.Fprintf(&b, "- `%s`\n", op)
+			d, ok := declared[op]
+			if !ok || d.Summary == "" || len(d.Input) == 0 {
+				t.Errorf("operation %s is not declared with a summary and an input", op)
+			}
+			operationSection(t, &b, op, d.Summary, d.Input)
 		}
 	}
 	for _, op := range bootstrap.OperationNames() {
@@ -453,22 +458,32 @@ See [configuration](../config/#authorization) for the fields and [toolbelt autho
 		ops := append([]protocol.OperationDecl(nil), m.Provides.Operations...)
 		sort.Slice(ops, func(i, j int) bool { return ops[i].Name < ops[j].Name })
 		for _, op := range ops {
-			fmt.Fprintf(&b, "\n#### `%s`\n", op.Name)
-			if op.Kind == protocol.OperationWait {
-				b.WriteString("\nParks the Work until what it names happens; end the turn after calling it.\n")
+			summary := op.Summary
+			if op.Kind == protocol.OperationWait && summary == "" {
+				summary = "Parks the Work until what it names happens; end the turn after calling it."
 			}
-			if len(op.Input) == 0 {
-				b.WriteString("\nIts manifest declares no input schema.\n")
-			} else {
-				var in map[string]any
-				if err := json.Unmarshal(op.Input, &in); err != nil {
-					t.Errorf("%s: input schema: %v", op.Name, err)
-				}
-				inputTable(&b, in)
-			}
+			operationSection(t, &b, op.Name, summary, op.Input)
 		}
 	}
 	return b.String()
+}
+
+// operationSection is one operation's heading, summary and input table.
+func operationSection(t *testing.T, b *strings.Builder, name, summary string, input json.RawMessage) {
+	t.Helper()
+	fmt.Fprintf(b, "\n#### `%s`\n", name)
+	if summary != "" {
+		fmt.Fprintf(b, "\n%s\n", summary)
+	}
+	if len(input) == 0 {
+		b.WriteString("\nIt declares no input schema.\n")
+		return
+	}
+	var in map[string]any
+	if err := json.Unmarshal(input, &in); err != nil {
+		t.Errorf("%s: input schema: %v", name, err)
+	}
+	inputTable(b, in)
 }
 
 // inputTable is an operation's input fields, or a line saying it takes none.
