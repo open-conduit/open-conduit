@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,8 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/executors/claudecode"
+	"github.com/open-conduit/open-conduit/executors/shell"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	bb "github.com/open-conduit/open-conduit/extensions/bitbucket"
@@ -43,7 +46,7 @@ import (
 // firstParty is the list of first-party in-process extensions. Adding one
 // touches its own package and this list.
 func firstParty() []inproc.Extension {
-	return []inproc.Extension{gh.New(), posthog.New(), human.New(), introspection.New(), observe.New(), schedule.New(), linear.New(), jira.New(), bb.New(), sl.New()}
+	return []inproc.Extension{shell.NewExtension(), claudecode.NewExtension(), gh.New(), posthog.New(), human.New(), introspection.New(), observe.New(), schedule.New(), linear.New(), jira.New(), bb.New(), sl.New()}
 }
 
 // typeSets are an extension's own entry and connection types: what its
@@ -164,6 +167,11 @@ func (d *daemon) startInproc(ctx context.Context) error {
 			Report:   func(code string) { d.report(name, "", code) },
 			Nudge:    d.poke,
 			StateDir: d.o.StateDir, DryRun: d.o.DryRun,
+			Artifacts: d.artifacts, ToolbeltDir: d.o.ToolbeltDir, PlaybookDir: d.pluginDir(),
+			Render: func(ctx context.Context, e domain.Event) (string, bool) { return d.inprocRender(e) },
+			OpenLog: func(name string) (io.WriteCloser, error) {
+				return openLog(filepath.Join(d.o.StateDir, "logs", name+".jsonl"))
+			},
 			AcceptInTx: func(tx storage.Tx, scope domain.ID, e domain.Event) (domain.AcceptedEvent, bool, error) {
 				if !own.family(e.Type) {
 					return domain.AcceptedEvent{}, false, inproc.ErrNotOwn

@@ -96,7 +96,7 @@ The resume and handoff rules are:
 
 **Release.** `Maintain` releases terminal Work's continuity. Records written while the handoff experiment ran may still carry a trial and feedback questions; they are ignored.
 
-Telemetry goes to `Options.Report`. The daemon writes it to `logs/claude-code.jsonl`, outside core, as one `agent_turn` record per turn.
+Telemetry goes to `Options.Report`. The executor's in-process extension (`claudecode.NewExtension`, registered through `inproc.Executing`) writes it to its own log, `logs/claude-code.jsonl` (`inproc.Host.OpenLog`, rotated like the host's logs), outside core, as one `agent_turn` record per turn. Its housekeeping (`Maintain`) is the extension's `maintain` task, every 30 seconds.
 
 Like core telemetry, it is at most once across a kill.
 

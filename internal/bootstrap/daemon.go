@@ -32,7 +32,6 @@ import (
 	sdktrace "go.opentelemetry.io/otel/sdk/trace"
 
 	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/executors/shell"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
@@ -89,9 +88,6 @@ type Options struct {
 	SweepInterval time.Duration
 	// ResourceDiskSpace overrides the git provider's free-space probe (tests).
 	ResourceDiskSpace gitws.DiskSpaceFunc
-	// ExecutorInterval paces executor housekeeping such as the Claude Code
-	// handoff feedback questions and reactions (default 30s).
-	ExecutorInterval time.Duration
 	// Ready, when set, is called once the management socket is listening.
 	Ready func()
 	// WebhookAddr enables the webhook listener on this TCP address (for
@@ -152,7 +148,6 @@ type daemon struct {
 	coord      storage.Store
 	artifacts  *artifacts.Store
 	backups    backupState
-	shell      *shell.Executor
 	executors  map[string]extension.Executor
 	// pools are the capacity pools of the executors that name one.
 	pools         map[string]string
@@ -166,7 +161,6 @@ type daemon struct {
 	resources     resourceState
 	sandboxes     sandboxState
 	containers    containerState
-	claude        claudeState
 	hooks         webhookState
 	external      externalState
 	endpoint      string
@@ -325,13 +319,10 @@ func (o *Options) defaults() error {
 	if o.CallTimeout == 0 {
 		o.CallTimeout = runtime.DefaultRouteTimeout
 	}
-	if o.ExecutorInterval == 0 {
-		o.ExecutorInterval = 30 * time.Second
-	}
 	if o.SweepInterval == 0 {
 		o.SweepInterval = 6 * time.Hour
 	}
-	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ArtifactGrace <= 0 || o.ResourceInterval <= 0 || o.CallTimeout <= 0 || o.ExecutorInterval <= 0 || o.SweepInterval <= 0 {
+	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ArtifactGrace <= 0 || o.ResourceInterval <= 0 || o.CallTimeout <= 0 || o.SweepInterval <= 0 {
 		return errors.New("intervals must be positive")
 	}
 	return nil
@@ -445,15 +436,11 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = os.MkdirAll(filepath.Join(o.StateDir, "executors"), 0o700); err != nil {
 		return err
 	}
-	if d.shell, err = shell.New(shell.Options{StateDir: filepath.Join(o.StateDir, "executors", "shell"), Artifacts: d.artifacts, ToolbeltDir: o.ToolbeltDir}); err != nil {
+	// The playbook plugin exists before the executors that read it start.
+	if err = d.preparePlaybooks(); err != nil {
 		return err
 	}
-	if err = d.openClaudeCode(); err != nil {
-		return err
-	}
-	defer d.closeClaudeCode()
-	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor}
-	d.pools = map[string]string{"shell": jobPool}
+	d.executors, d.pools = map[string]extension.Executor{}, map[string]string{}
 	for _, name := range inprocExecutors(d.inproc, d.executors, d.pools) {
 		d.log.Warn("executor not registered: its capacity pool is not one a setting bounds", "executor", name)
 		d.report("executor_pool", domain.ID(name), "unknown_pool")
