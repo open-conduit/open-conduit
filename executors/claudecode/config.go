@@ -379,6 +379,25 @@ func sharesConfig(dir string, homes []string) bool {
 	return false
 }
 
+// ConfigWarnings are what the executor warns an operator about in a valid
+// binding config (extension.ConfigWarner): the removed handoff experiment's
+// handoff_share, and, when the host gives bindings that name no playbook a
+// default, a binding that relies on it, since a later release drops it.
+func (e *Executor) ConfigWarnings(raw json.RawMessage) []string {
+	c, err := ParseConfig(raw)
+	if err != nil {
+		return nil
+	}
+	var out []string
+	if c.HandoffShare != nil {
+		out = append(out, "config.handoff_share is ignored: the handoff experiment was removed and a later release rejects it; remove it, and set cold_turns (handoff or resume) to choose what a cold turn does")
+	}
+	if c.Playbook == "" && e.o.DefaultPlaybook != "" {
+		out = append(out, fmt.Sprintf("names no playbook: it runs %s for now, but a later release starts its turns on the rendered Work alone; set config.playbook (%s, another playbook, or \"-\" for none)", e.o.DefaultPlaybook, e.o.DefaultPlaybook))
+	}
+	return out
+}
+
 // ResourceMode is the resource mode a binding config requests (the
 // configuration's ResourceModer): workspace_mode, "work" by default.
 func (e *Executor) ResourceMode(raw json.RawMessage) string {

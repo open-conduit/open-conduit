@@ -219,9 +219,9 @@ Binding `config`:
 | `binary` | `claude` |  |
 | `model` |  |  |
 | `permission_mode` | `bypassPermissions` |  |
-| `playbook` |  | the skill turns start on: work-issue for GitHub, work-tracker-issue for Linear/Jira; none (or -) starts them on the rendered Work alone |
+| `playbook` |  | the playbook skill turns start on, as the extension's setup writes it; none (or -) starts them on the rendered Work alone |
 | `plugin_dir` |  |  |
-| `args` | `{number}` | {key} for Linear/Jira |
+| `args` | `{number}` | a template of {key}, {number} and {work} |
 | `status_schema` | `core.turn.v1` |  |
 | `branch` |  | agent/issue-{number}; agent/{key} for trackers |
 | `workspace_mode` |  |  |

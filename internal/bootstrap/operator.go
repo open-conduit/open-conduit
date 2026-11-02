@@ -70,10 +70,10 @@ func validateWith(configPath, exclude string, data []byte) ([]config.Diagnostic,
 	return diags, err
 }
 
-// CheckConfigAt is ValidateConfigAt plus config.ModeWarnings from the same
-// validation, so a config check starts each installed package once. A config
-// that doesn't validate has no mode warnings (its diagnostics say what is
-// wrong).
+// CheckConfigAt is ValidateConfigAt plus config.ModeWarnings and the
+// executors' config.BindingWarnings from the same validation, so a config
+// check starts each installed package once. A config that doesn't validate
+// has no such warnings (its diagnostics say what is wrong).
 func CheckConfigAt(configPath string, data []byte) ([]config.Diagnostic, []string, error) {
 	return checkWith(configPath, "", data)
 }
@@ -84,7 +84,7 @@ func checkWith(configPath, exclude string, data []byte) ([]config.Diagnostic, []
 	defer pkgs.close()
 	s, err := config.ValidateFile(data, reg, fileIncludes(configPath))
 	if err == nil {
-		return nil, config.ModeWarnings(s, reg), nil
+		return nil, append(config.ModeWarnings(s, reg), config.BindingWarnings(s, reg)...), nil
 	}
 	var invalid *config.ValidationError
 	if errors.As(err, &invalid) {

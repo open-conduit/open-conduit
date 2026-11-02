@@ -216,6 +216,8 @@ type configScope struct {
 	Open     int
 	Revision string
 	Offers   scopeOffers
+	// label is a source type's display name (Server.sourceLabel).
+	label func(string) string
 }
 
 // Kinds are the types of the scope's sources, for the scope nav.
@@ -225,7 +227,7 @@ func (c configScope) Kinds() string {
 	for _, s := range c.Flow.Sources {
 		if !s.Hand && !seen[s.Type] {
 			seen[s.Type] = true
-			out = append(out, sourceLabel(s.Type))
+			out = append(out, c.label(s.Type))
 		}
 	}
 	if len(out) == 0 {
@@ -332,7 +334,7 @@ func (s *Server) configPage(w http.ResponseWriter, r *http.Request) {
 		if sc.ID == want {
 			t = trace
 		}
-		d.Scopes = append(d.Scopes, configScope{Flow: flow(sc, t), Open: open[sc.ID], Revision: revisions[sc.ID]})
+		d.Scopes = append(d.Scopes, configScope{Flow: flow(sc, t), Open: open[sc.ID], Revision: revisions[sc.ID], label: s.sourceLabel})
 	}
 	s.offers(ctx, p, d.Scopes)
 	for i := range d.Scopes {

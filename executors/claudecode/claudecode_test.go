@@ -883,3 +883,26 @@ func TestLiveOutput(t *testing.T) {
 		t.Fatalf("live after the turn: %v", err)
 	}
 }
+
+// TestConfigWarnings: the executor warns about the removed handoff_share
+// and, when the host gives bindings a default playbook, about a binding
+// that relies on it; one that names a playbook or "-", or a host with no
+// default, is quiet.
+func TestConfigWarnings(t *testing.T) {
+	e := claudecode.Offline("triage")
+	for config, want := range map[string]string{
+		`{}`: "names no playbook: it runs triage for now",
+		`{"playbook":"triage","handoff_share":0}`: "config.handoff_share is ignored",
+		`{"playbook":"-"}`:                        "",
+		`{"playbook":"other"}`:                    "",
+	} {
+		got := strings.Join(e.ConfigWarnings(json.RawMessage(config)), "\n")
+		if want == "" && got != "" || !strings.HasPrefix(got, want) || want != "" && strings.Count(got, "\n") != 0 {
+			t.Errorf("%s: warnings %q, want %q", config, got, want)
+		}
+	}
+	if got := claudecode.Offline("").ConfigWarnings(json.RawMessage(`{}`)); len(got) != 0 {
+		t.Errorf("no host default, yet warned %q", got)
+	}
+	var _ extension.ConfigWarner = e
+}

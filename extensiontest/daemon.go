@@ -4,19 +4,20 @@
 // starts `serve` and hands back a management client.
 //
 // Given Package and no config, it generates a scope from the package's
-// manifest and a scripted agent (Agent) that calls the package's
-// operations through the toolbelt, so a test reads:
+// manifest and a scripted participant (Agent) on the shell executor that
+// calls the package's operations with the `os` CLI, so a test reads:
 //
 //	d := extensiontest.Daemon(t, extensiontest.Package("."), extensiontest.Secret("api_key", "test-key"))
-//	agent := d.Agent().Call("weather.forecast", map[string]any{"city": "Leeds"}).Ends("finished")
+//	agent := d.Agent().Call("weather.forecast", map[string]any{"city": "Leeds"}).Ends("completed")
 //	work := d.Start("weather.check", nil)
 //	d.WaitWork(work.ID, "completed")
 //	forecast := agent.Result(1, "weather.forecast")
 //
-// With a config of its own (Options.Config), a test writes its agent with
-// FakeClaude: a scripted stand-in for the Claude Code CLI that makes
-// toolbelt calls through the real `os mcp` server and ends each turn with
-// a chosen state.
+// UseFakeClaude runs that participant as FakeClaude on a claude-code
+// binding instead. With a config of its own (Options.Config), a test writes
+// its participant with ScriptedShell, for a shell binding, or FakeClaude: a
+// scripted stand-in for the Claude Code CLI that makes toolbelt calls
+// through the real `os mcp` server and ends each turn with a chosen state.
 //
 // A package repository pins the commands it builds with `tool` directives
 // so the build works from the module cache:

@@ -54,7 +54,7 @@ func (c *ConfigCheck) Validate(path string, data []byte) ([]config.Diagnostic, e
 
 // ConfigWarnings is everything `config check` warns about for the config at
 // path: config.Warnings, renamed settings, include folders with no config,
-// then the mode warnings the caller's validation found. With machine false
+// then the mode and executor binding warnings the caller's validation found. With machine false
 // it leaves out the two that depend on the machine rather than the document
 // (a cmd: secret's program not being installed, an included folder being
 // missing), so a docs example is judged on what it says alone.
@@ -63,7 +63,7 @@ func ConfigWarnings(path string, data []byte, modes []string, machine bool) []st
 	if machine {
 		w = config.Warnings(data)
 	} else {
-		w = append(config.UnenforcedWarnings(data), config.RemovedWarnings(data)...)
+		w = config.UnenforcedWarnings(data)
 	}
 	w = append(w, RenamedWarnings(data)...)
 	if machine {

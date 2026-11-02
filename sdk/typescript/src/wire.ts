@@ -529,6 +529,7 @@ export const Manifest = t.object(
     protocol: t.array(t.integer()),
     name: t.string(),
     version: t.string(),
+    title: t.optional(t.string()),
     summary: t.optional(t.string()),
     command: t.array(t.string()),
     kv_version: t.optional(t.integer()),

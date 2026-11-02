@@ -95,3 +95,44 @@ func TestWorkspaceChecks(t *testing.T) {
 		t.Fatal("a workspace check reached Validate")
 	}
 }
+
+// warningExecutor warns about every config; only that is called.
+type warningExecutor struct{ extension.Executor }
+
+func (warningExecutor) ConfigWarnings(json.RawMessage) []string {
+	return []string{"config.old is deprecated"}
+}
+
+// TestExecutorConfigWarnings: validate with kind executor answers an
+// executor's ConfigWarner warnings once Validate passes; a refused config
+// and an executor without the interface give none (the negative control).
+func TestExecutorConfigWarnings(t *testing.T) {
+	ext := &sdk.Extension{Manifest: manifest(),
+		Executors: map[string]extension.Executor{"warned": warningExecutor{}, "plain": struct{ extension.Executor }{}},
+		Validate: func(_ context.Context, p protocol.ValidateParams) error {
+			if string(p.Config) == `{"bad":true}` {
+				return errors.New("bad")
+			}
+			return nil
+		},
+	}
+	host, _, _ := serve(t, ext)
+	ctx := context.Background()
+	if err := host.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: []int{1}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	warnings := func(typ, config string) ([]string, error) {
+		var out protocol.ValidateResult
+		err := host.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateExecutor, Type: typ, Config: json.RawMessage(config)}, &out)
+		return out.Warnings, err
+	}
+	if got, err := warnings("warned", `{}`); err != nil || len(got) != 1 || got[0] != "config.old is deprecated" {
+		t.Fatalf("warnings %q %v", got, err)
+	}
+	if got, err := warnings("warned", `{"bad":true}`); err == nil || len(got) != 0 {
+		t.Fatalf("a refused config answered %q %v", got, err)
+	}
+	if got, err := warnings("plain", `{}`); err != nil || len(got) != 0 {
+		t.Fatalf("an executor without ConfigWarner warned %q %v", got, err)
+	}
+}

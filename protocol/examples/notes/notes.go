@@ -109,7 +109,7 @@ func Manifest(o Options) protocol.Manifest {
 	if o.StableIdentity {
 		cmd = append(cmd, "--stable-identity")
 	}
-	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: fmt.Sprintf("0.%d.0", o.Release), Summary: "Example external extension: a note service.", Command: cmd, KVVersion: kvVersion(o.Release),
+	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: fmt.Sprintf("0.%d.0", o.Release), Title: "Notes", Summary: "Example external extension: a note service.", Command: cmd, KVVersion: kvVersion(o.Release),
 		// It mirrors the host's telemetry events to sink.log, records one
 		// per indexing pass, runs the host's probes (TelemetryTask) and
 		// proposes config (ConfigTask).

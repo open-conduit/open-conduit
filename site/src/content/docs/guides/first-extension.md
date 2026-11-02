@@ -299,7 +299,7 @@ func TestAgentAsksForAForecast(t *testing.T) {
 		extensiontest.Entry("weather", EntryConfig{Service: service.URL}))
 	agent := d.Agent().
 		Call("weather.forecast", map[string]any{"city": "Leeds"}).
-		Ends("finished")
+		Ends("completed")
 
 	work := d.Start("weather.try", nil)
 	if r := agent.Result(1, "weather.forecast"); r.IsError || !strings.Contains(r.Text, "rain") {
@@ -309,7 +309,7 @@ func TestAgentAsksForAForecast(t *testing.T) {
 }
 ```
 
-The scripted agent plays one turn: it calls `weather.forecast` for Leeds and ends. The test starts Work for it, checks what the call returned, and waits for the Work to complete. Run everything, as CI will:
+The scripted agent plays one turn: it calls `weather.forecast` for Leeds with the `os` CLI and ends with the outcome `completed`. It runs on the shell executor, so the test needs no coding agent; `extensiontest.UseFakeClaude()` runs it as a fake Claude Code turn instead. The test starts Work for it, checks what the call returned, and waits for the Work to complete. Run everything, as CI will:
 
 ```sh
 make check
