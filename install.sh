@@ -3,7 +3,10 @@
 #   curl -fsSL https://raw.githubusercontent.com/open-conduit/open-conduit/main/install.sh | sh
 # Set OPEN_CONDUIT_VERSION=v0.1.0 for a particular one. The archive's
 # checksum is verified against the release's checksums.txt before anything is
-# installed.
+# installed. With cosign on PATH, checksums.txt is first verified against its
+# signature (checksums.txt.sigstore.json), which only the release workflow on
+# main can make; a release from before signing began is installed with a
+# warning.
 #
 # open-conduit and its `os` toolbelt go together into INSTALL_DIR
 # (~/.local/lib/open-conduit), and only open-conduit is linked into BIN_DIR
@@ -38,6 +41,19 @@ trap 'rm -rf "$tmp"' EXIT
 echo "downloading open-conduit $version for $os/$arch"
 curl -fsSL -o "$tmp/$archive" "$base/$archive"
 curl -fsSL -o "$tmp/checksums.txt" "$base/checksums.txt"
+if command -v cosign >/dev/null 2>&1; then
+  if curl -fsSL -o "$tmp/checksums.txt.sigstore.json" "$base/checksums.txt.sigstore.json" 2>/dev/null; then
+    cosign verify-blob --bundle "$tmp/checksums.txt.sigstore.json" \
+      --certificate-identity "https://github.com/$repo/.github/workflows/release.yml@refs/heads/main" \
+      --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+      "$tmp/checksums.txt" >/dev/null 2>&1 || { echo "checksums.txt for $version is not signed by the $repo release workflow" >&2; exit 1; }
+    echo "verified the signature on checksums.txt"
+  else
+    echo "warning: $version has no signature to check (releases before signing began have none)" >&2
+  fi
+else
+  echo "cosign isn't installed, so the release's signature isn't checked (see SECURITY.md)"
+fi
 expected=$(grep " $archive\$" "$tmp/checksums.txt" | cut -d' ' -f1)
 [ -n "$expected" ] || { echo "no checksum listed for $archive" >&2; exit 1; }
 if command -v sha256sum >/dev/null 2>&1; then actual=$(sha256sum "$tmp/$archive" | cut -d' ' -f1); else actual=$(shasum -a 256 "$tmp/$archive" | cut -d' ' -f1); fi
