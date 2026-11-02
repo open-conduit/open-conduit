@@ -1294,19 +1294,33 @@ func (t *Tools) fetchSource(b *bound, host, repo string) (Source, error) {
 
 func (t *Tools) fetch(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
 	var in struct {
-		URL    string `json:"url"`
-		SaveTo string `json:"save_to"`
+		URL     string `json:"url"`
+		SaveTo  string `json:"save_to"`
+		Project string `json:"project"`
 	}
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
-	// The link is read on the Work's own host (its tracker's, then its
-	// code repository's), else on the host of another registered
-	// repository; fetchSource then checks the Work may read it.
+	// A comment attachment's link doesn't say which repository it was
+	// posted in: the Work's own, or with project another project's it may
+	// read (its tracker and code repository either way).
+	issue, code := b.issue, b.code
+	if strings.TrimSpace(in.Project) != "" {
+		src, other, err := t.issueProject(ctx, b, in.Project, false)
+		if err != nil {
+			return nil, err
+		}
+		if other {
+			issue, code, _ = t.trackerIn(domain.ID(src.Settings.Scope))
+		}
+	}
+	// The link is read on that host (the tracker's, then the code
+	// repository's), else on the host of another registered repository;
+	// fetchSource then checks the Work may read it.
 	var src Source
 	var link FetchLink
 	err := ErrForeignLink
-	for _, s := range append([]Source{b.issue, b.code}, t.o.Sources()...) {
+	for _, s := range append([]Source{issue, code}, t.o.Sources()...) {
 		if s.Client == nil {
 			continue
 		}
@@ -1323,16 +1337,34 @@ func (t *Tools) fetch(ctx context.Context, b *bound, data json.RawMessage) (any,
 	case err != nil:
 		return nil, err
 	}
-	// A user attachment is signed in for the repository whose host it is on.
-	repo := link.Repo
-	if repo == "" {
-		repo = src.Settings.Repo
+	var repos []string
+	if link.Repo != "" {
+		if src, err = t.fetchSource(b, src.Client.Host(), link.Repo); err != nil {
+			return nil, err
+		}
+		repos = []string{src.Settings.Repo}
+	} else {
+		// A comment attachment, signed in for the tracker and, on the same
+		// connection and owner, the code repository: it may sit on either.
+		switch host := src.Client.Host(); {
+		case issue.Client != nil && issue.Client.Host() == host:
+			src = issue
+		case code.Client != nil && code.Client.Host() == host:
+			src = code
+		default:
+			return nil, refuse("not_allowed", "%s is an attachment on another GitHub host: pass the project whose issue or PR it was posted on as project", in.URL)
+		}
+		repos = []string{src.Settings.Repo}
+		trackerOwner, _, _ := strings.Cut(issue.Settings.Repo, "/")
+		codeOwner, _, _ := strings.Cut(code.Settings.Repo, "/")
+		if src.Client == issue.Client && code.Client == issue.Client && !strings.EqualFold(code.Settings.Repo, issue.Settings.Repo) && strings.EqualFold(trackerOwner, codeOwner) {
+			repos = []string{issue.Settings.Repo, code.Settings.Repo}
+		}
 	}
-	if src, err = t.fetchSource(b, src.Client.Host(), repo); err != nil {
-		return nil, err
+	content, ctype, err := src.Client.Fetch(ctx, repos, link)
+	if IsStatus(err, http.StatusNotFound) && link.Repo == "" && in.Project == "" {
+		return nil, refuse("not_found", "%s wasn't found in this Work's repositories: if it was posted on another project's issue or PR, pass that project as project", in.URL)
 	}
-	repo = src.Settings.Repo
-	content, ctype, err := src.Client.Fetch(ctx, repo, link)
 	if err != nil {
 		return nil, err
 	}

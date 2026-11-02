@@ -29,7 +29,7 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | `github.pr.review` | `number`, `event`, `body`, `comments`? | submit one review: `event` is `approve`, `request_changes` or `comment`, with inline `comments` as `{path, line, side?, body}` on lines of the diff. It is posted as this connection's GitHub account, not the owner's |
 | `github.checks` | `number`? | every check on the PR's head, with links |
 | `github.attachment.upload` | `file_path` | upload a file (an image, a zip, a document) and get a link to put in a comment |
-| `github.attachment.get` | `url`, `save_to` | download a file a comment links to into `save_to`, signed in (a private repo's attachments need it) |
+| `github.attachment.get` | `url`, `save_to`, `project`? | download a file a comment links to into `save_to`, signed in (a private repo's attachments need it); `project` for one posted in another project |
 | `github.wait` | `conditions`?, `until`?, `reason` | park the issue until something happens or a time comes (see Waiting) |
 
 `file_path` and `save_to` are paths in your own directory: Open Conduit's client reads or writes the file for you. Post every comment this way: it marks the comment as yours, so it is never handed back to you as news, and a retried call never posts twice (give the same `request_id` when you retry). Use `git` itself for commits and pushes.

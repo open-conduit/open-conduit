@@ -447,20 +447,20 @@ func (c *Client) ParseFetchLink(link string) (FetchLink, error) {
 	return FetchLink{}, ErrForeignLink
 }
 
-// fetchToken is the token a signed fetch under repo is sent with, and
-// what to call once the fetch is done. A sign-in App mints one read-only
-// for that one repository (readPermissions), revoked afterwards, so a link
-// can never reach another repository the installation covers. A token
+// fetchToken is the token a signed fetch is sent with, and what to call
+// once the fetch is done. A sign-in App mints one read-only for just the
+// repositories given (readPermissions), revoked afterwards, so a link can
+// never reach another repository the installation covers. A token
 // connection has nothing to mint: its own token goes, and the repository
 // check before the fetch is what bounds it.
-func (c *Client) fetchToken(ctx context.Context, repo string) (string, func(), error) {
+func (c *Client) fetchToken(ctx context.Context, repos []string) (string, func(), error) {
 	read := c.who.Load().read
 	app, ok := read.(*appToken)
 	if !ok {
-		tok, err := read.token(ctx, repo)
+		tok, err := read.token(ctx, repos[0])
 		return tok, func() {}, err
 	}
-	tok, _, err := app.scoped(ctx, repo, readPermissions)
+	tok, _, err := app.scopedTo(ctx, repos, readPermissions)
 	if err != nil {
 		return "", nil, err
 	}
@@ -472,12 +472,13 @@ func (c *Client) fetchToken(ctx context.Context, repo string) (string, func(), e
 
 // Fetch downloads a file a comment links to (an attachment, an image, a
 // file in a repository) parsed by ParseFetchLink. A signed link is sent
-// signed in for repo, which the caller has checked the Work may read: the
-// link's own repository, or the Work's for a user attachment. Redirects are
-// followed without the Authorization header once they leave the host (the
-// signed storage link an attachment ends at).
-func (c *Client) Fetch(ctx context.Context, repo string, link FetchLink) ([]byte, string, error) {
-	if link.URL == nil {
+// signed in for repos (one owner's), which the caller has checked the Work
+// may read: the link's own repository, or for a user attachment the
+// repositories of the issue or PR it was posted on. Redirects are followed
+// without the Authorization header once they leave the host (the signed
+// storage link an attachment ends at).
+func (c *Client) Fetch(ctx context.Context, repos []string, link FetchLink) ([]byte, string, error) {
+	if link.URL == nil || len(repos) == 0 {
 		return nil, "", ErrForeignLink
 	}
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link.URL.String(), nil)
@@ -485,7 +486,7 @@ func (c *Client) Fetch(ctx context.Context, repo string, link FetchLink) ([]byte
 		return nil, "", ErrForeignLink
 	}
 	if link.Signed {
-		tok, done, err := c.fetchToken(ctx, repo)
+		tok, done, err := c.fetchToken(ctx, repos)
 		if err != nil {
 			return nil, "", err
 		}

@@ -234,6 +234,23 @@ var readPermissions = map[string]string{"contents": "read", "issues": "read", "p
 // cached here, so the caller owns it and revokes it
 // (revokeInstallationToken).
 func (a *appToken) scoped(ctx context.Context, repo string, perms map[string]string) (string, time.Time, error) {
+	return a.scopedTo(ctx, []string{repo}, perms)
+}
+
+// scopedTo is scoped for several repositories of one owner (a comment
+// attachment's tracker and code repository) in one token. The
+// installation is the first repository's.
+func (a *appToken) scopedTo(ctx context.Context, repos []string, perms map[string]string) (string, time.Time, error) {
+	repo := repos[0]
+	owner, _, _ := strings.Cut(repo, "/")
+	var names []string
+	for _, r := range repos {
+		o, name, _ := strings.Cut(r, "/")
+		if !strings.EqualFold(o, owner) {
+			return "", time.Time{}, fmt.Errorf("github scoped token: %s and %s have different owners", repo, r)
+		}
+		names = append(names, name)
+	}
 	jwt, err := a.jwt(ctx)
 	if err != nil {
 		return "", time.Time{}, err
@@ -242,8 +259,7 @@ func (a *appToken) scoped(ctx context.Context, repo string, perms map[string]str
 	if err != nil {
 		return "", time.Time{}, err
 	}
-	_, name, _ := strings.Cut(repo, "/")
-	body := map[string]any{"repositories": []string{name}, "permissions": perms}
+	body := map[string]any{"repositories": names, "permissions": perms}
 	var t struct {
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`

@@ -92,7 +92,7 @@ func TestFetchMintsAReadOnlyTokenForOneRepository(t *testing.T) {
 	}
 	ctx := context.Background()
 	link, _ := c.ParseFetchLink(fake.URL + "/octo/widgets/files/shot.png")
-	if data, _, err := c.Fetch(ctx, "octo/widgets", link); err != nil || string(data) != "png" {
+	if data, _, err := c.Fetch(ctx, []string{"octo/widgets"}, link); err != nil || string(data) != "png" {
 		t.Fatalf("fetch: %q %v", data, err)
 	}
 	reads := fake.FileReads()
@@ -119,7 +119,7 @@ func TestFetchMintsAReadOnlyTokenForOneRepository(t *testing.T) {
 	// Negative control: the same kind of token can't read another
 	// repository, which a whole-installation token (the old behaviour) can.
 	other, _ := c.ParseFetchLink(fake.URL + "/octo/secret/files/shot.png")
-	if _, _, err := c.Fetch(ctx, "octo/widgets", other); !IsStatus(err, http.StatusNotFound) {
+	if _, _, err := c.Fetch(ctx, []string{"octo/widgets"}, other); !IsStatus(err, http.StatusNotFound) {
 		t.Fatalf("a token for widgets read octo/secret: %v", err)
 	}
 	whole, err := c.who.Load().read.token(ctx, "octo/widgets")
@@ -135,6 +135,32 @@ func TestFetchMintsAReadOnlyTokenForOneRepository(t *testing.T) {
 	res.Body.Close()
 	if res.StatusCode != http.StatusOK {
 		t.Fatalf("control: the installation token was refused too (%d), so the check above proves nothing", res.StatusCode)
+	}
+}
+
+// A comment attachment may sit on the tracker or the code repository,
+// so its token covers both, still read-only and nothing else.
+func TestAttachmentTokenCoversTrackerAndCodeRepository(t *testing.T) {
+	fake := githubtest.New("octo/widgets")
+	defer fake.Close()
+	key, pemText := rsaKey(t)
+	fake.AddApp("42", &key.PublicKey)
+	cfg, _ := ParseConnection([]byte(`{"api_url":"` + fake.URL + `","auth":"app","app_id":"42"}`))
+	c, _ := NewClient(cfg, secrets(map[string]string{SecretAppPrivateKey: pemText}), ClientOptions{})
+	tok, done, err := c.fetchToken(context.Background(), []string{"octo/widgets", "octo/docs"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	scope, valid := fake.Scope(tok)
+	if !valid || !slices.Equal(scope.Repositories, []string{"widgets", "docs"}) || !maps.Equal(scope.Permissions, readPermissions) {
+		t.Fatalf("attachment token scope: %+v %v", scope, valid)
+	}
+	done()
+	if _, valid := fake.Scope(tok); valid {
+		t.Fatal("the attachment token was not revoked")
+	}
+	if _, _, err := c.fetchToken(context.Background(), []string{"octo/widgets", "other/docs"}); err == nil {
+		t.Fatal("a token was minted across owners")
 	}
 }
 
@@ -170,7 +196,7 @@ func TestFetchDoesNotSignImageProxyLinks(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if _, _, err := c.Fetch(context.Background(), "octo/widgets", l); err != nil {
+		if _, _, err := c.Fetch(context.Background(), []string{"octo/widgets"}, l); err != nil {
 			t.Fatal(err)
 		}
 	}

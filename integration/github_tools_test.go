@@ -852,6 +852,41 @@ func TestGitHubFetchFromAnotherProjectNeedsReadScope(t *testing.T) {
 	}
 }
 
+// A comment attachment's link doesn't name its repository, so one posted
+// on another project's issue is fetched by naming that project, which
+// needs the same grant as reading its issues; without project, the
+// refusal says to pass it.
+func TestGitHubFetchAttachmentFromAnotherProject(t *testing.T) {
+	e := newToolsEnv(t)
+	ops := e.opsScope()
+	ops.ServeFile("shot.png", []byte("png"), "")
+	_, w := e.claim("Look at the ops screenshot", "", "bug")
+	a := e.start(w.ID)
+	url := ops.URL + "/user-attachments/files/shot.png"
+	_, err := e.call(a, gh.OpFetch, "", map[string]any{"url": url})
+	refused(t, err, "not_allowed")
+	if !strings.Contains(err.Error(), "as project") {
+		t.Fatalf("refusal doesn't say to pass project: %v", err)
+	}
+	_, err = e.call(a, gh.OpFetch, "", map[string]any{"url": url, "project": "ops"})
+	refused(t, err, "not_allowed")
+	if len(ops.FileReads()) != 0 {
+		t.Fatalf("fetched without the grant: %+v", ops.FileReads())
+	}
+	e.mu.Lock()
+	e.aliasOK = true
+	e.mu.Unlock()
+	if out, err := e.call(a, gh.OpFetch, "", map[string]any{"url": url, "project": "ops"}); err != nil || out.Output.Schema != gh.FileSchema {
+		t.Fatalf("attachment with project: %v %+v", err, out)
+	}
+	// One missing from the Work's own repositories says how to look elsewhere.
+	_, err = e.call(a, gh.OpFetch, "", map[string]any{"url": e.fake.URL + "/user-attachments/files/missing.png"})
+	refused(t, err, "not_found")
+	if !strings.Contains(err.Error(), "pass that project as project") {
+		t.Fatalf("not-found refusal: %v", err)
+	}
+}
+
 // An agent finds and files issues in another project by naming it. Filing
 // and commenting need that project in file_scopes, and looking needs it in
 // file_scopes or read_scopes; each refusal names the grant to add.
