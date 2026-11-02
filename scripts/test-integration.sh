@@ -4,7 +4,10 @@
 # start a real daemon and use t.Setenv, so they can't take t.Parallel), which
 # made it about 8 minutes of make check on its own. The test binary is built
 # once; each shard runs every SHARDS-th top-level test of the sorted list, so
-# the shards share the slow daemon tests between them.
+# the shards share the slow daemon tests between them. The performance
+# budget tests (TestInTransactionRPCBudget*, #428) time calls, so they run on
+# their own once the shards are done, never beside them, and their numbers
+# are printed.
 #
 # Usage: scripts/test-integration.sh [shards]
 # GO and TEST_TIMEOUT come from the environment (the Makefile sets them).
@@ -21,7 +24,8 @@ trap 'rm -rf "$work"' EXIT
 cd "$root/integration"
 "$go" test -race -c -o "$work/integration.test" .
 
-tests=$("$work/integration.test" -test.list '.*' | grep '^Test' | sort)
+budget='^TestInTransactionRPCBudget'
+tests=$("$work/integration.test" -test.list '.*' | grep '^Test' | grep -v "$budget" | sort)
 if [ -z "$tests" ]; then
 	echo "no integration tests to run" >&2
 	exit 1
@@ -50,4 +54,14 @@ for entry in $pids; do
 		cat "$work/shard-$i.log"
 	fi
 done
+
+if "$work/integration.test" -test.run "$budget" -test.timeout "$timeout" -test.count 1 -test.v >"$work/budget.log" 2>&1; then
+	echo "--- integration performance budget"
+	grep ' round [0-9]*:' "$work/budget.log" | sed 's/^ *//' || true
+	tail -n 1 "$work/budget.log"
+else
+	status=1
+	echo "--- integration performance budget FAILED"
+	cat "$work/budget.log"
+fi
 exit $status

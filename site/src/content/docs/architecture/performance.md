@@ -15,7 +15,7 @@ Open Conduit is a single local daemon ([overview](../../start/overview/)). Its m
   make bench-history
   ```
 
-- **The in-transaction extension calls, against a budget.** [`extension_budget_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/extension_budget_test.go) times `work_kind.trigger`, `recurrence.next` and `dependency.filter`, the calls the host makes to an extension process while it holds its coordination transaction, round trip through `extproc.Remote` to the notes example ([results](#in-transaction-extension-calls)). It is a gate, not just a number: `make check` runs it, and it fails when a call's median or 95th percentile is over budget in three rounds running. Print the numbers without `-race` with:
+- **The in-transaction extension calls, against a budget.** [`extension_budget_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/extension_budget_test.go) times `work_kind.trigger`, `recurrence.next`, `dependency.filter` and `emit.commit`, the four calls the host makes to an extension process while it holds its coordination transaction, round trip through `extproc.Remote` to the notes example ([results](#in-transaction-extension-calls)). It is a gate, not just a number: `make check` runs it on its own after the integration shards, prints each round's numbers, and fails when a call's median or 95th percentile is over budget in three rounds running. Print the numbers without `-race` with:
 
   ```sh
   make bench-extension
@@ -224,7 +224,7 @@ What still grows is the retention sweep, which reads every Work record (109 ms a
 
 ## In-transaction extension calls
 
-Once every extension runs as a package ([#428](https://github.com/open-conduit/open-conduit/issues/428)), three of the host's calls into an extension happen while it holds its coordination transaction: `work_kind.trigger` on each routing pass with pending input for a kind with a trigger, `recurrence.next` on each timer firing, and `dependency.filter` on each Wait match against a filtered dependency. The in-transaction deadline is 250 ms ([extension protocol](../extension-protocol/)), and the connection is the daemon's only one, so these calls are the hot path the transport adds.
+Once every extension runs as a package ([#428](https://github.com/open-conduit/open-conduit/issues/428)), four of the host's calls into an extension happen while it holds its coordination transaction: `work_kind.trigger` on each routing pass with pending input for a kind with a trigger, `recurrence.next` on each timer firing, `dependency.filter` on each Wait match against a filtered dependency, and `emit.commit` on each committed emission (an operation's Event and the records written with it). The in-transaction deadline is 250 ms ([extension protocol](../extension-protocol/)), and the connection is the daemon's only one, so these calls are the hot path the transport adds.
 
 The budget, per call, round trip from the host's adapter to the extension process and back, after 20 warm-up calls:
 
@@ -233,15 +233,16 @@ The budget, per call, round trip from the host's adapter to the extension proces
 | Budget | 2 ms | 10 ms |
 | Budget under `-race` (how `make check` runs) | 10 ms | 50 ms |
 
-A round is 300 calls. A call over budget in three rounds running fails the test; one that answers wrongly (the trigger's fallback after an error, say) fails at once. The 99th percentile and the slowest call are logged, not gated: on a shared runner they belong to the scheduler and the garbage collector. `TestInTransactionRPCBudgetCatchesASlowCall` is the negative control. Each call's payload is realistic: the trigger is given four inputs of about 1 KiB of text.
+A round is 300 calls. A call over budget in three rounds running fails the test; one that answers wrongly (the trigger's fallback after an error, say) fails at once. The 99th percentile and the slowest call are logged, not gated: on a shared runner they belong to the scheduler and the garbage collector. `TestInTransactionRPCBudgetCatchesASlowCall` is the negative control. Each call's payload is realistic: the trigger is given four inputs of about 1 KiB of text, and each commit an annotation of about 240 bytes. A commit ID is used once, so each `emit.commit` call plans a fresh emission first (`operation.emit`, outside the transaction and the timing). `scripts/test-integration.sh` runs these tests alone once the four integration shards finish, so the daemon tests running beside a shard don't take the measurement.
 
-One run, darwin/arm64 (Apple M1 Pro), Go 1.27.3, 300 calls:
+One run, darwin/arm64 (Apple M1 Pro), Go 1.27.3, 300 calls, on a quiet machine. A reviewer's run on a busy machine under `-race` put the trigger's 95th percentile at 29 ms, more than half its 50 ms budget, which is why the tests run alone in CI:
 
 | Call | Median | 95th percentile | Median, `-race` | 95th percentile, `-race` |
 | --- | ---: | ---: | ---: | ---: |
 | `work_kind.trigger` (4 inputs of 1 KiB) | 0.11 ms | 0.71 ms | 1.1 ms | 1.5 ms |
 | `recurrence.next` | 0.10 ms | 1.4 ms | 0.43 ms | 0.55 ms |
 | `dependency.filter` | 0.04 ms | 3.4 ms | 0.26 ms | 0.37 ms |
+| `emit.commit` (one record) | 0.07 ms | 0.10 ms | 0.50 ms | 0.83 ms |
 
 The trigger costs most because it carries the whole pending batch each way. Its first draft carried 1 KiB of NUL bytes per input, which JSON escapes to 6 KiB: that put its median at 0.8 ms and its 99th percentile at 28 ms. So a trigger's cost follows the size of its inputs' payloads, and a kind whose inputs are large pays for it on every pass.
 

@@ -1,6 +1,7 @@
 package integration_test
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"slices"
@@ -9,14 +10,16 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/protocol/examples/notes"
 )
 
 // The performance budget for the in-transaction RPCs (#428). Once every
-// extension runs as a package, work_kind.trigger, recurrence.next and
-// dependency.filter are calls to another process made while the host holds
-// its coordination transaction, on every routing pass, timer firing and
-// Wait match that reaches an extension. Each must stay a small fraction of
+// extension runs as a package, the four in-transaction methods
+// (work_kind.trigger, recurrence.next, dependency.filter and emit.commit)
+// are calls to another process made while the host holds its coordination
+// transaction, on every routing pass, timer firing, Wait match and
+// committed emission that reaches an extension. Each must stay a small fraction of
 // the 250 ms in-transaction deadline, so a regression (a process started
 // per call, a lock held across the wire, a per-call allocation storm) fails
 // CI here rather than as a slow daemon.
@@ -30,6 +33,8 @@ import (
 // budgetRaceFactor under -race, which is how `make check` runs it. A
 // regression is slow every time and noise isn't, so a measurement over
 // budget is taken again, up to budgetRounds times, before it fails.
+// scripts/test-integration.sh runs these tests on their own, after the
+// shards, so a busy shard's neighbours don't take the measurement.
 const (
 	budgetCalls      = 300
 	budgetWarmup     = 20
@@ -66,8 +71,19 @@ func (m measurement) String() string {
 // measure times calls calls of call; wrong is the index of the first wrong
 // answer, or -1.
 func measure(calls int, call func() bool) (m measurement, wrong int) {
+	return measurePrepared(calls, func() func() bool { return call })
+}
+
+// measurePrepared is measure for a call that needs fresh setup each time
+// (an emission to commit): prepare runs untimed and returns the call to
+// time, or nil for a wrong answer.
+func measurePrepared(calls int, prepare func() func() bool) (m measurement, wrong int) {
 	m = make(measurement, calls)
 	for i := range m {
+		call := prepare()
+		if call == nil {
+			return nil, i
+		}
 		start := time.Now()
 		ok := call()
 		m[i] = time.Since(start)
@@ -85,12 +101,18 @@ func measure(calls int, call func() bool) (m measurement, wrong int) {
 // fails at once.
 func budget(t *testing.T, name string, call func() bool) {
 	t.Helper()
-	if _, wrong := measure(budgetWarmup, call); wrong >= 0 {
+	budgetPrepared(t, name, func() func() bool { return call })
+}
+
+// budgetPrepared is budget for a call with untimed setup (measurePrepared).
+func budgetPrepared(t *testing.T, name string, prepare func() func() bool) {
+	t.Helper()
+	if _, wrong := measurePrepared(budgetWarmup, prepare); wrong >= 0 {
 		t.Fatalf("%s: wrong answer during warm-up", name)
 	}
 	var last measurement
 	for round := 1; round <= budgetRounds; round++ {
-		m, wrong := measure(budgetCalls, call)
+		m, wrong := measurePrepared(budgetCalls, prepare)
 		if wrong >= 0 {
 			t.Fatalf("%s: wrong answer on call %d", name, wrong)
 		}
@@ -167,5 +189,35 @@ func TestInTransactionRPCBudget(t *testing.T) {
 		ev := domain.Event{ID: "dep", Type: "fixture.changed.v1", Source: "fixture", Data: domain.Payload{Data: data}}
 		// The fixture's filter matches a payload equal to the filter.
 		budget(t, "dependency.filter", func() bool { return filter(domain.Payload{Data: data}, ev) })
+	})
+
+	t.Run("emit.commit", func(t *testing.T) {
+		var annotate extension.Operation
+		for _, op := range r.Registration().Operations {
+			if op.Name == "notes.annotate" {
+				annotate = op
+			}
+		}
+		if annotate.Emit == nil {
+			t.Fatal("notes declares no committed emission")
+		}
+		authority := extension.Authority{ScopeID: extensionScope}
+		input := domain.Payload{Data: json.RawMessage(`{"note":"` + strings.Repeat("an annotation. ", 16) + `"}`)}
+		n := 0
+		// Each commit ID is used once, so every call plans a fresh emission
+		// (operation.emit, outside the transaction, untimed) and times only
+		// its commit, which carries the accepted Event back.
+		budgetPrepared(t, "emit.commit", func() func() bool {
+			n++
+			plan, err := annotate.Emit(extension.WithCallRequestID(context.Background(), fmt.Sprintf("budget-%d", n)), authority, input)
+			if err != nil || plan.Commit == nil {
+				return nil
+			}
+			em := extension.Emitted{Event: domain.AcceptedEvent{Event: domain.Event{ID: domain.ID(fmt.Sprintf("emitted-%d", n)), Type: notes.Annotated, Source: notes.Name, DeliveryID: plan.Event.DeliveryID}, Sequence: uint64(n)}, Added: true, Depth: 1}
+			return func() bool {
+				c, err := plan.Commit(em)
+				return err == nil && len(c.Records) == 1
+			}
+		})
 	})
 }
