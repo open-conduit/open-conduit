@@ -91,7 +91,7 @@ func NewFixture(fake *sentrytest.Server) (protocol.Fixture, error) {
 		Secrets: map[string]string{SecretToken: FixtureToken, FixtureSecret: fixtureClient},
 		Ingress: &protocol.IngressCase{Source: Name + "/" + FixtureScope + "/errors", Delivery: protocol.FromDelivery(d),
 			Canonical:   protocol.FromPushResult(res).Observations[0],
-			OneShotType: TypeAlert, OneShot: &oneShot},
+			OneShotType: TypeAlert, OneShot: &oneShot, ReceiveTimeVaries: true},
 		Routes: []protocol.RouteCase{
 			// A new issue opens Work for the issue, named for it.
 			{Handler: Name, Input: protocol.FromRouteInput(in), Want: protocol.RouteDecision{Match: true, CreateID: "sentry/acme/1001", Kind: WorkKind,

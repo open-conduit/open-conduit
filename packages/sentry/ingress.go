@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -171,8 +172,13 @@ func (in *Ingress) watches(project string) bool {
 	return len(in.Settings.Projects) == 0 || slices.Contains(in.Settings.Projects, project)
 }
 
-// Observe is an issue's canonical observation in a namespace.
-func Observe(org, namespace string, i Issue) (extension.Observation, bool) {
+// Observe is an issue's canonical observation in a namespace, received at
+// received. Its version digests the whole observed Event (type, time and
+// payload), so any change Sentry makes to a field it carries (a new
+// culprit or level, a move to another project) is a new version rather
+// than a conflicting one. Its time is when the issue was first seen, which
+// push and reconcile both know.
+func Observe(org, namespace string, i Issue, received time.Time) (extension.Observation, bool) {
 	var typ string
 	switch {
 	case i.Status == "unresolved" && i.Substatus == "regressed":
@@ -189,23 +195,45 @@ func Observe(org, namespace string, i Issue) (extension.Observation, bool) {
 	if i.ID == "" {
 		return extension.Observation{}, false
 	}
-	version := i.Status
-	if i.Substatus != "" {
-		version += "/" + i.Substatus
-	}
+	occurred := timeOr(i.FirstSeen, time.Unix(0, 0))
 	data, _ := json.Marshal(IssuePayload{Org: org, Issue: i.ID, ShortID: i.ShortID, Title: i.Title, Culprit: i.Culprit, Level: i.Level,
 		Status: i.Status, Substatus: i.Substatus, Project: i.Project.Slug, URL: i.Permalink, FirstSeen: i.FirstSeen})
+	version := digest(typ, occurred.Format(time.RFC3339Nano), SchemaIssue, string(data))[:32]
+	delivery := "issue/" + i.ID + "@" + version
 	return extension.Observation{ID: i.ID, Version: version, Event: domain.Event{
-		Type: typ, Source: namespace, DeliveryID: "issue/" + i.ID + "/" + version,
+		ID: eventID(namespace, delivery), Type: typ, Source: namespace, DeliveryID: delivery,
+		OccurredAt: occurred, ReceivedAt: received.UTC(),
 		CorrelationKey: &domain.CorrelationKey{Source: namespace, ExternalID: i.ID},
 		Data:           domain.Payload{Schema: SchemaIssue, Data: data},
 	}}, true
 }
 
+// digest is a hex SHA-256 of the parts, each length-prefixed.
+func digest(parts ...string) string {
+	h := sha256.New()
+	for _, p := range parts {
+		_, _ = fmt.Fprintf(h, "%d:%s", len(p), p)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// eventID is an Event's ID, the same for the same delivery in a namespace.
+func eventID(namespace, delivery string) domain.ID {
+	return domain.ID("sentry-" + digest(namespace, delivery)[:40])
+}
+
+// timeOr parses an RFC 3339 time Sentry sent, or returns fallback.
+func timeOr(s string, fallback time.Time) time.Time {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t.UTC()
+	}
+	return fallback.UTC()
+}
+
 // Push normalizes one verified delivery: an issue webhook is the issue's
 // observation, an issue alert firing a one-shot alert Event; anything else
 // (metric alerts, installation, comments) yields nothing.
-func (in *Ingress) Push(_ context.Context, src extension.Source, d extension.Delivery) (extension.PushResult, error) {
+func (in *Ingress) Push(ctx context.Context, src extension.Source, d extension.Delivery) (extension.PushResult, error) {
 	var env envelope
 	if err := json.Unmarshal(d.Body, &env); err != nil {
 		return extension.PushResult{}, extension.ErrInvalid
@@ -223,7 +251,7 @@ func (in *Ingress) Push(_ context.Context, src extension.Source, d extension.Del
 		if !in.watches(body.Data.Issue.Project.Slug) {
 			return extension.PushResult{}, nil
 		}
-		o, ok := Observe(in.Settings.Org, src.Namespace, body.Data.Issue)
+		o, ok := Observe(in.Settings.Org, src.Namespace, body.Data.Issue, d.ReceivedAt)
 		if !ok {
 			return extension.PushResult{}, nil
 		}
@@ -233,12 +261,13 @@ func (in *Ingress) Push(_ context.Context, src extension.Source, d extension.Del
 			Action string `json:"action"`
 			Data   struct {
 				Event struct {
-					EventID string          `json:"event_id"`
-					IssueID json.RawMessage `json:"issue_id"`
-					Title   string          `json:"title"`
-					Culprit string          `json:"culprit"`
-					Level   string          `json:"level"`
-					WebURL  string          `json:"web_url"`
+					EventID  string          `json:"event_id"`
+					IssueID  json.RawMessage `json:"issue_id"`
+					Title    string          `json:"title"`
+					Culprit  string          `json:"culprit"`
+					Level    string          `json:"level"`
+					WebURL   string          `json:"web_url"`
+					Datetime string          `json:"datetime"`
 				} `json:"event"`
 				Rule string `json:"triggered_rule"`
 			} `json:"data"`
@@ -251,9 +280,24 @@ func (in *Ingress) Push(_ context.Context, src extension.Source, d extension.Del
 		if body.Action != "triggered" || issue == "" || e.EventID == "" {
 			return extension.PushResult{}, nil
 		}
+		if len(in.Settings.Projects) > 0 {
+			// The alert names its project only by ID: read the issue for
+			// its slug, and drop an alert outside the entry's projects.
+			// A failed read fails the push, so Sentry's delivery isn't
+			// acknowledged as if it were judged.
+			i, err := in.Client.Issue(ctx, issue)
+			if err != nil {
+				return extension.PushResult{}, err
+			}
+			if !in.watches(i.Project.Slug) {
+				return extension.PushResult{}, nil
+			}
+		}
 		data, _ := json.Marshal(AlertPayload{Org: in.Settings.Org, Issue: issue, Rule: body.Data.Rule, Event: e.EventID, Title: e.Title, Culprit: e.Culprit, Level: e.Level, URL: e.WebURL})
+		delivery := "alert/" + e.EventID + "/" + body.Data.Rule
 		return extension.PushResult{Events: []domain.Event{{
-			Type: TypeAlert, Source: src.Namespace, DeliveryID: "alert/" + e.EventID + "/" + body.Data.Rule, ReceivedAt: d.ReceivedAt,
+			ID: eventID(src.Namespace, delivery), Type: TypeAlert, Source: src.Namespace, DeliveryID: delivery,
+			OccurredAt: timeOr(e.Datetime, d.ReceivedAt), ReceivedAt: d.ReceivedAt.UTC(),
 			CorrelationKey: &domain.CorrelationKey{Source: src.Namespace, ExternalID: issue},
 			Data:           domain.Payload{Schema: SchemaAlert, Data: data},
 		}}}, nil
@@ -290,7 +334,7 @@ func (in *Ingress) Reconcile(ctx context.Context, s extension.Scan) (extension.S
 		if !in.watches(i.Project.Slug) {
 			continue
 		}
-		if o, ok := Observe(in.Settings.Org, s.Source.Namespace, i); ok {
+		if o, ok := Observe(in.Settings.Org, s.Source.Namespace, i, in.Now()); ok {
 			snap.Observations = append(snap.Observations, o)
 		}
 	}

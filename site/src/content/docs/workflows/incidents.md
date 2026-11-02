@@ -129,7 +129,7 @@ You triage one PagerDuty incident.
 2. Look for an open issue about this with `github.issue.list` (`project`: "web"). If there isn't one, open one with `github.issue.create` (`project`: "web"): what fails, where in the code, the suspect commit with its link, and a link to the incident.
 3. Add a note to the incident with `pagerduty.incident.note`: what you found, the suspect commit and the issue's link. Keep it short; responders read it on their phones.
 4. Call `wait` with `{"match": {"types": ["pagerduty.incident.resolved", "core.ingress.absent"]}, "timeout_seconds": 604800}` and end your turn.
-5. When you're woken because the incident resolved, call `declare_outcome` with `completed`. If you're woken by anything else, deal with it and wait again.
+5. When you're woken by `pagerduty.incident.resolved`, call `declare_outcome` with `completed`. When you're woken by `core.ingress.absent`, check with `pagerduty.incident.view` first: complete only if its status is `resolved`, and otherwise wait again. If you're woken by anything else, deal with it and wait again.
 ```
 
 Each operation's own guidance reaches the agent through the toolbelt, so the instructions only have to say what to do with what it finds.
@@ -150,9 +150,10 @@ The writes only reach the incident or issue the Work was opened for. Another Wor
 ## What to expect
 
 - **Acknowledging is your call.** An acknowledged incident stops escalating, so an agent that acknowledges and then gets stuck leaves nobody paged. Set `allow_acknowledge` only if that's what you want.
-- **A resolved incident completes its Work.** The agent waits for the resolution. If the webhook is missed, the next reconcile finds the incident gone and sends `core.ingress.absent`, which wakes the agent too.
-- **One Work per issue or incident.** Alerts and status changes on the same issue or incident go to the same Work. Once that Work has completed, a later regression of the same Sentry issue starts nothing. A new PagerDuty incident always starts new Work.
+- **A resolved incident completes its Work.** The agent waits for the resolution. If the webhook is missed, the next reconcile finds the incident gone and sends `core.ingress.absent`, which wakes the agent too. An absence is a hint, not proof: an incident list that changes while it is paged through can leave out an incident that is still open. That is why the instructions above have the agent check the incident before completing.
+- **One Work per issue or incident.** Alerts and status changes on the same issue or incident go to the same Work. Once that Work has completed, a later regression of the same Sentry issue starts nothing. Sentry doesn't say how often an issue has regressed, so a second regression that looks exactly like the first (regressed, resolved, regressed again) isn't a new Event. An alert rule for regressions catches every one. A new PagerDuty incident always starts new Work.
 - **Missed alerts aren't recovered.** Reconcile recovers issue and incident states, but not an alert rule firing. An issue that opened while the webhook was down still opens Work through `opened`.
+- **The entry's projects are a limit.** With `projects` set, alerts from other projects are dropped, and `sentry.issue.view` refuses an issue outside them, even though the token can read the whole organization.
 - **Sentry lists recent issues.** Reconcile reads what Sentry's issue list returns, which by default leaves out issues not seen for a while. An open issue that drops off is reported as absent, and a route doesn't open Work for that.
 - **Metric alerts and other resources are ignored.** Only issue webhooks and issue alert rules come in.
 

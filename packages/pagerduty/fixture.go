@@ -86,7 +86,7 @@ func NewFixture(fake *pagerdutytest.Server) (protocol.Fixture, error) {
 			Connection: &protocol.ConnectionEntry{ID: "pagerduty", Type: Name, Config: conn, Secrets: []string{SecretToken}}}},
 		Secrets: map[string]string{SecretToken: FixtureToken, FixtureSecret: fixtureSigning},
 		Ingress: &protocol.IngressCase{Source: Name + "/" + FixtureScope + "/oncall", Delivery: protocol.FromDelivery(d),
-			Canonical: protocol.FromPushResult(res).Observations[0]},
+			Canonical: protocol.FromPushResult(res).Observations[0], ReceiveTimeVaries: true},
 		Routes: []protocol.RouteCase{
 			// A triggered incident opens Work for the incident, named for it.
 			{Handler: Name, Input: protocol.FromRouteInput(in), Want: protocol.RouteDecision{Match: true, CreateID: "pagerduty/Q1", Kind: WorkKind,

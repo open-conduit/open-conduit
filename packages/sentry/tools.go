@@ -46,7 +46,7 @@ func refusal(err error) error {
 	case errors.Is(err, ErrCredential):
 		return refuse("sentry_credential", "the Sentry connection's token could not be used; report it as a problem")
 	case errors.As(err, &api) && api.Status == 404:
-		return refuse("not_found", "Sentry has no such issue in this organization")
+		return refuse("unknown_issue", "Sentry has no such issue in this organization")
 	case errors.As(err, &api):
 		return refuse("sentry_refused", "Sentry refused the request (HTTP %d)", api.Status)
 	}
@@ -199,6 +199,11 @@ func (t tools) view(ctx context.Context, a extension.Authority, in ViewInput) (V
 	i, err := c.Issue(ctx, id)
 	if err != nil {
 		return ViewOutput{}, refusal(err)
+	}
+	if ps := b.entry.settings.Projects; len(ps) > 0 && !contains(ps, i.Project.Slug) {
+		// The token reads the whole organization; the entry's projects are
+		// the limit, and an issue outside them reads as absent.
+		return ViewOutput{}, refuse("unknown_issue", "Sentry has no such issue in this entry's projects")
 	}
 	out := ViewOutput{IssuePayload: IssuePayload{Org: b.entry.settings.Org, Issue: i.ID, ShortID: i.ShortID, Title: i.Title, Culprit: i.Culprit, Level: i.Level,
 		Status: i.Status, Substatus: i.Substatus, Project: i.Project.Slug, URL: i.Permalink, FirstSeen: i.FirstSeen},

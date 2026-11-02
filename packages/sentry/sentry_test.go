@@ -261,3 +261,19 @@ func TestConfigValidation(t *testing.T) {
 		t.Error("an unknown trigger was accepted")
 	}
 }
+
+func TestEntryProjectsLimitAlertsAndReads(t *testing.T) {
+	h, fake := harness(t, "client-secret")
+	// An alert on an issue in a project the entry doesn't watch opens
+	// nothing.
+	alert := fake.AlertWebhook("Page on API errors", "1004", "ev-9")
+	if got := webhook(t, h, sentrytest.Headers("client-secret", "event_alert", "r9", alert), alert); got != http.StatusOK || len(h.Events()) != 0 {
+		t.Fatalf("alert outside the entry's projects: status %d, %d events", got, len(h.Events()))
+	}
+	// Nor can any Work read that issue, though the token could.
+	_, err := h.OperationAs(context.Background(), extension.Authority{ScopeID: scope, WorkID: "incident"}, sentry.OpView, domain.Payload{Data: json.RawMessage(`{"issue":"1004"}`)})
+	var refused *extension.OperationError
+	if !errors.As(err, &refused) || refused.Code != "unknown_issue" {
+		t.Fatalf("read outside the entry's projects: %v", err)
+	}
+}

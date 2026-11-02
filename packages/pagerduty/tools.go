@@ -43,7 +43,7 @@ func refusal(err error) error {
 	case errors.Is(err, ErrCredential):
 		return refuse("pagerduty_credential", "the PagerDuty connection's token could not be used; report it as a problem")
 	case errors.As(err, &api) && api.Status == 404:
-		return refuse("not_found", "PagerDuty has no such incident")
+		return refuse("unknown_incident", "PagerDuty has no such incident")
 	case errors.As(err, &api):
 		return refuse("pagerduty_refused", "PagerDuty refused the request (HTTP %d)", api.Status)
 	}

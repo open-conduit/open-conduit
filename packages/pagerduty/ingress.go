@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"slices"
@@ -147,10 +148,13 @@ func (in *Ingress) watches(service string) bool {
 	return len(in.Settings.Services) == 0 || slices.Contains(in.Settings.Services, service)
 }
 
-// Observe is an incident's canonical observation in a namespace. Its
-// version is the status and when it last changed, so an incident that is
-// acknowledged and then triggered again is a new Event.
-func Observe(namespace string, i Incident) (extension.Observation, bool) {
+// Observe is an incident's canonical observation in a namespace, received
+// at received. Its version digests the whole observed Event (type, time and
+// payload): a status change moves its time (last_status_change_at), so
+// acknowledged and then triggered again is a new Event, and a responder
+// changing the title or urgency is a new version rather than a conflicting
+// one. Its time is when the status last changed.
+func Observe(namespace string, i Incident, received time.Time) (extension.Observation, bool) {
 	var typ string
 	switch i.Status {
 	case "triggered":
@@ -165,14 +169,34 @@ func Observe(namespace string, i Incident) (extension.Observation, bool) {
 	if i.ID == "" {
 		return extension.Observation{}, false
 	}
-	version := i.Status + "@" + i.LastStatusChangeAt
+	occurred := timeOr(i.LastStatusChangeAt, timeOr(i.CreatedAt, time.Unix(0, 0)))
 	data, _ := json.Marshal(IncidentPayload{Incident: i.ID, Number: i.Number, Title: i.Title, Status: i.Status, Urgency: i.Urgency,
 		Service: i.Service.ID, ServiceName: i.Service.Summary, URL: i.HTMLURL, CreatedAt: i.CreatedAt, StatusChanged: i.LastStatusChangeAt})
+	version := digest(typ, occurred.Format(time.RFC3339Nano), SchemaIncident, string(data))[:32]
+	delivery := "incident/" + i.ID + "@" + version
 	return extension.Observation{ID: i.ID, Version: version, Event: domain.Event{
-		Type: typ, Source: namespace, DeliveryID: "incident/" + i.ID + "/" + version,
+		ID: domain.ID("pagerduty-" + digest(namespace, delivery)[:40]), Type: typ, Source: namespace, DeliveryID: delivery,
+		OccurredAt: occurred, ReceivedAt: received.UTC(),
 		CorrelationKey: &domain.CorrelationKey{Source: namespace, ExternalID: i.ID},
 		Data:           domain.Payload{Schema: SchemaIncident, Data: data},
 	}}, true
+}
+
+// digest is a hex SHA-256 of the parts, each length-prefixed.
+func digest(parts ...string) string {
+	h := sha256.New()
+	for _, p := range parts {
+		_, _ = fmt.Fprintf(h, "%d:%s", len(p), p)
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// timeOr parses an RFC 3339 time PagerDuty sent, or returns fallback.
+func timeOr(s string, fallback time.Time) time.Time {
+	if t, err := time.Parse(time.RFC3339Nano, s); err == nil {
+		return t.UTC()
+	}
+	return fallback.UTC()
 }
 
 // Push reads the incident an incident.* delivery names; anything else
@@ -202,7 +226,7 @@ func (in *Ingress) Push(ctx context.Context, src extension.Source, d extension.D
 	if !in.watches(i.Service.ID) {
 		return extension.PushResult{}, nil
 	}
-	o, ok := Observe(src.Namespace, i)
+	o, ok := Observe(src.Namespace, i, d.ReceivedAt)
 	if !ok {
 		return extension.PushResult{}, nil
 	}
@@ -236,7 +260,7 @@ func (in *Ingress) Reconcile(ctx context.Context, s extension.Scan) (extension.S
 		if !in.watches(i.Service.ID) {
 			continue
 		}
-		if o, ok := Observe(s.Source.Namespace, i); ok {
+		if o, ok := Observe(s.Source.Namespace, i, in.Now()); ok {
 			snap.Observations = append(snap.Observations, o)
 		}
 	}
