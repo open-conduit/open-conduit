@@ -46,6 +46,10 @@ type Tx interface {
 	// MarkRouted commits alongside route effects; replay with identical args is safe.
 	MarkRouted(eventID, workID domain.ID, disposition string) error
 	ListWorks() ([]domain.Work, error)
+	// LiveWorks is ListWorks restricted to Work that has not finished
+	// (State not Terminal), in ID order. Like UnroutedEvents, its cost
+	// follows the live set, not the history retained.
+	LiveWorks() ([]domain.Work, error)
 	Work(domain.ID) (domain.Work, error)
 	WorkByCorrelation(domain.CorrelationKey) (domain.Work, error)
 	// Put methods require expected=0 for create, otherwise the exact current revision.
@@ -53,6 +57,10 @@ type Tx interface {
 	PutWork(domain.Work, domain.Revision) error
 	// Empty work ID lists all attempts for recovery.
 	ListExecutions(domain.ID) ([]domain.Execution, error)
+	// LiveExecutions lists every attempt that has not finished (State not
+	// Terminal: pending, running or parked), in ID order, at a cost that
+	// follows the live set.
+	LiveExecutions() ([]domain.Execution, error)
 	Execution(domain.ID) (domain.Execution, error)
 	PutExecution(domain.Execution, domain.Revision) error
 	// Claim enters running on both Work and Execution and advances the lease epoch.
@@ -69,6 +77,9 @@ type Tx interface {
 	// Replacement keeps the timer ID with a later FireAt and a new event identity.
 	FireTimer(domain.ID, domain.Revision, *domain.Timer) error
 	ListWaits(domain.ID) ([]domain.Wait, error)
+	// ActiveWaits lists every Wait still active, in ID order, at a cost
+	// that follows the active set.
+	ActiveWaits() ([]domain.Wait, error)
 	Wait(domain.ID) (domain.Wait, error)
 	// Timeout Timer must exist at registration; history remains valid after firing/deletion.
 	PutWait(domain.Wait, domain.Revision) error

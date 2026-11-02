@@ -358,6 +358,9 @@ func (s *Scheduler) Poll(ctx context.Context, timers *Timers, limit int) (result
 	if err != nil {
 		return result, err
 	}
+	if err = s.transact(ctx, nil, indexUnexcluded); err != nil {
+		return result, err
+	}
 	phases := []string{"events", "waits", "executions"}
 	for _, phase := range phases {
 		var ids []domain.ID
@@ -379,17 +382,15 @@ func (s *Scheduler) Poll(ctx context.Context, timers *Timers, limit int) (result
 					}
 				}
 			case "waits":
-				waits, e := tx.ListWaits("")
+				waits, e := tx.ActiveWaits()
 				if e != nil {
 					return e
 				}
 				for _, w := range waits {
-					if w.State == domain.WaitActive {
-						ids = append(ids, w.ID)
-					}
+					ids = append(ids, w.ID)
 				}
 			case "executions":
-				xs, e := tx.ListExecutions("")
+				xs, e := tx.LiveExecutions()
 				if e != nil {
 					return e
 				}

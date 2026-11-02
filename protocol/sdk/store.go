@@ -187,6 +187,37 @@ func (t *storeTx) Work(id domain.ID) (domain.Work, error) {
 
 func (t *storeTx) ListWorks() ([]domain.Work, error) { return t.h.Works(t.ctx, "") }
 
+// LiveWorks filters ListWorks: the host serves no narrower read.
+func (t *storeTx) LiveWorks() ([]domain.Work, error) {
+	works, err := t.ListWorks()
+	if err != nil {
+		return nil, err
+	}
+	out := []domain.Work{}
+	for _, w := range works {
+		if !w.State.Terminal() {
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
+
+// LiveExecutions filters ListExecutions: the host serves no narrower read.
+func (t *storeTx) LiveExecutions() ([]domain.Execution, error) {
+	xs, err := t.ListExecutions("")
+	if err != nil {
+		return nil, err
+	}
+	out := []domain.Execution{}
+	for _, x := range xs {
+		if !x.State.Terminal() {
+			out = append(out, x)
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].ID < out[j].ID })
+	return out, nil
+}
+
 func (t *storeTx) WorkByCorrelation(k domain.CorrelationKey) (domain.Work, error) {
 	works, err := t.ListWorks()
 	if err != nil {
@@ -368,6 +399,7 @@ func (t *storeTx) DeleteTimer(domain.ID, domain.Revision) error              { r
 func (t *storeTx) PutTimer(domain.Timer, domain.Revision) error              { return ErrReadOnly }
 func (t *storeTx) FireTimer(domain.ID, domain.Revision, *domain.Timer) error { return ErrReadOnly }
 func (t *storeTx) ListWaits(domain.ID) ([]domain.Wait, error)                { return nil, ErrReadOnly }
+func (t *storeTx) ActiveWaits() ([]domain.Wait, error)                       { return nil, ErrReadOnly }
 func (t *storeTx) Wait(domain.ID) (domain.Wait, error)                       { return domain.Wait{}, ErrReadOnly }
 func (t *storeTx) PutWait(domain.Wait, domain.Revision) error                { return ErrReadOnly }
 func (t *storeTx) PutScope(domain.Scope, domain.Revision) error              { return ErrReadOnly }

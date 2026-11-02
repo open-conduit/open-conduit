@@ -393,7 +393,50 @@ func putAttemptState(tx storage.Tx, state AttemptState) error {
 	if err := stageUsageInTx(tx, &state); err != nil {
 		return err
 	}
-	return putJSON(tx, attemptNamespace, identity(string(state.ExecutionID)), state)
+	key := identity(string(state.ExecutionID))
+	if err := putJSON(tx, attemptNamespace, key, state); err != nil {
+		return err
+	}
+	// Keep the index of attempts whose resource exclusion is unconfirmed,
+	// which held reads instead of every attempt ever made.
+	if state.Excluded {
+		return tx.Delete(unexcludedNamespace, key)
+	}
+	return putJSON(tx, unexcludedNamespace, key, state.ExecutionID)
+}
+
+// unexcludedNamespace indexes the attempts whose resource exclusion is not
+// confirmed (AttemptState.Excluded false), keyed like attemptNamespace with
+// the execution ID as value. indexNamespace's unexcludedReady key records
+// that the index is complete: a store written before it existed is indexed
+// once by indexUnexcluded, and until then held reads every attempt.
+const (
+	unexcludedNamespace = "core.scheduler.unexcluded"
+	indexNamespace      = "core.scheduler.index"
+	unexcludedReady     = "unexcluded"
+)
+
+// indexUnexcluded builds the unexcluded index from every attempt state, once.
+func indexUnexcluded(tx storage.Tx) error {
+	if _, err := tx.Get(indexNamespace, unexcludedReady); err == nil || !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+	rows, err := tx.List(attemptNamespace, "")
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		var state AttemptState
+		if err = json.Unmarshal(row.Value, &state); err != nil {
+			return err
+		}
+		if !state.Excluded && state.ExecutionID != "" {
+			if err = putJSON(tx, unexcludedNamespace, row.Key, state.ExecutionID); err != nil {
+				return err
+			}
+		}
+	}
+	return putJSON(tx, indexNamespace, unexcludedReady, true)
 }
 func NewScheduler(store storage.Store, now func() time.Time, router *Router, o SchedulerOptions) (*Scheduler, error) {
 	if store == nil || now == nil || router == nil || o.Owner == "" || o.Generation == "" || o.GlobalLimit < 0 {
@@ -593,7 +636,7 @@ func (s *Scheduler) poolLimit(pool string) int {
 // held lists the attempts holding capacity: every nonterminal, unparked
 // attempt and every finished one without confirmed exclusion.
 func held(tx storage.Tx, fn func(x domain.Execution, executor string) error) error {
-	xs, err := tx.ListExecutions("")
+	xs, err := heldCandidates(tx)
 	if err != nil {
 		return err
 	}
@@ -614,6 +657,49 @@ func held(tx storage.Tx, fn func(x domain.Execution, executor string) error) err
 		}
 	}
 	return nil
+}
+
+// heldCandidates lists, in ID order, the attempts that can hold capacity:
+// the unfinished ones and those in the unexcluded index. Before the index is
+// complete it lists every attempt.
+func heldCandidates(tx storage.Tx) ([]domain.Execution, error) {
+	if _, err := tx.Get(indexNamespace, unexcludedReady); errors.Is(err, storage.ErrNotFound) {
+		return tx.ListExecutions("")
+	} else if err != nil {
+		return nil, err
+	}
+	xs, err := tx.LiveExecutions()
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[domain.ID]bool, len(xs))
+	for _, x := range xs {
+		seen[x.ID] = true
+	}
+	rows, err := tx.List(unexcludedNamespace, "")
+	if err != nil {
+		return nil, err
+	}
+	for _, row := range rows {
+		var id domain.ID
+		if err = json.Unmarshal(row.Value, &id); err != nil {
+			return nil, err
+		}
+		if seen[id] {
+			continue
+		}
+		x, err := tx.Execution(id)
+		if errors.Is(err, storage.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		seen[id] = true
+		xs = append(xs, x)
+	}
+	sort.Slice(xs, func(i, j int) bool { return xs[i].ID < xs[j].ID })
+	return xs, nil
 }
 
 func (s *Scheduler) checkCapacity(tx storage.Tx, work domain.Work, executor string, recovering domain.ID) error {

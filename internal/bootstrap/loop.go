@@ -153,7 +153,7 @@ func (d *daemon) routePending(ctx context.Context, c *components) {
 func (d *daemon) startReady(ctx context.Context) {
 	var ready, idle []domain.ID
 	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
-		works, err := tx.ListWorks()
+		works, err := tx.LiveWorks()
 		for _, w := range works {
 			if w.State != domain.WorkReady {
 				continue
@@ -212,7 +212,7 @@ func (d *daemon) startReady(ctx context.Context) {
 func (d *daemon) dispatchControls(ctx context.Context, c *components) {
 	var running []domain.ID
 	_ = d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
-		works, err := tx.ListWorks()
+		works, err := tx.LiveWorks()
 		for _, w := range works {
 			if w.State == domain.WorkRunning {
 				running = append(running, w.ID)

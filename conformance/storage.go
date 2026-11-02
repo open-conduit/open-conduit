@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -93,6 +94,7 @@ func StorageCases() []StorageCase {
 		{"scope_parent_cycle_and_revision", scopeCycle},
 		{"attempt_sequence_and_retry_exhaustion", attempts},
 		{"per_work_routing_order", routingOrder},
+		{"live_reads_follow_state", liveReads},
 	}
 }
 func eventIdentity(s storage.Store) error {
@@ -1204,4 +1206,112 @@ func displayAndDescription(s storage.Store) error {
 		owned.Progress = "2 of 2 example steps"
 		return wantError(tx.PutWait(owned, owned.Revision), storage.ErrInvalid)
 	})
+}
+
+// liveReads: LiveWorks, LiveExecutions and ActiveWaits return exactly the
+// unfinished Work, unfinished attempts and active Waits as states change,
+// so the host's hot paths can read them instead of every record.
+func liveReads(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	ids := func(tx storage.Tx) (string, error) {
+		works, err := tx.LiveWorks()
+		if err != nil {
+			return "", err
+		}
+		xs, err := tx.LiveExecutions()
+		if err != nil {
+			return "", err
+		}
+		waits, err := tx.ActiveWaits()
+		if err != nil {
+			return "", err
+		}
+		var parts []string
+		for _, w := range works {
+			parts = append(parts, "work:"+string(w.ID))
+		}
+		for _, x := range xs {
+			parts = append(parts, "execution:"+string(x.ID)+":"+string(x.State))
+		}
+		for _, w := range waits {
+			parts = append(parts, "wait:"+string(w.ID))
+		}
+		return strings.Join(parts, " "), nil
+	}
+	want := func(expected string) error {
+		return transact(s, c, func(tx storage.Tx) error {
+			got, err := ids(tx)
+			if err == nil && got != expected {
+				err = fmt.Errorf("live reads %q, want %q", got, expected)
+			}
+			return err
+		})
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if err := tx.PutWork(domain.Work{ID: "done", Kind: "test.objective", ScopeID: "scope", State: domain.WorkReady}, 0); err != nil {
+			return err
+		}
+		w, err := tx.Work("done")
+		if err != nil {
+			return err
+		}
+		w.State = domain.WorkCancelled
+		return tx.PutWork(w, w.Revision)
+	}); err != nil {
+		return err
+	}
+	if err := want("work:work execution:execution:pending"); err != nil {
+		return err
+	}
+	if _, err := claim(s, c); err != nil {
+		return err
+	}
+	if err := transact(s, c, park); err != nil {
+		return err
+	}
+	if err := want("work:work execution:execution:parked wait:wait"); err != nil {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		wait, err := tx.Wait("wait")
+		if err != nil {
+			return err
+		}
+		e := event("wake", c.Now())
+		e.CorrelationKey = &wait.Match.Keys[0]
+		if _, _, err := tx.AcceptEvent(e); err != nil {
+			return err
+		}
+		wait.State = domain.WaitWoken
+		wait.WakeEventID = e.ID
+		return tx.PutWait(wait, wait.Revision)
+	}); err != nil {
+		return err
+	}
+	if err := want("work:work execution:execution:parked"); err != nil {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		x, err := tx.Execution("execution")
+		if err != nil {
+			return err
+		}
+		x.State = domain.ExecutionCancelled
+		x.Outcome = nil
+		if err := tx.PutExecution(x, x.Revision); err != nil {
+			return err
+		}
+		w, err := tx.Work("work")
+		if err != nil {
+			return err
+		}
+		w.State = domain.WorkCancelled
+		return tx.PutWork(w, w.Revision)
+	}); err != nil {
+		return err
+	}
+	return want("")
 }

@@ -702,12 +702,32 @@ func TestProductionSchedulerInjectConsumptionProof(t *testing.T) {
 	}
 }
 
+// TestProductionSchedulerInterruptNeedsStopProof runs twice: once on a store
+// whose unexcluded-attempts index has not been built, where capacity reads
+// every attempt, and once after a Poll has built it, where capacity reads
+// only the live attempts and the index. A finished attempt still under an
+// uncertain hold must keep its Work from starting either way.
 func TestProductionSchedulerInterruptNeedsStopProof(t *testing.T) {
+	for _, indexed := range []bool{false, true} {
+		t.Run(fmt.Sprintf("indexed=%v", indexed), func(t *testing.T) { interruptNeedsStopProof(t, indexed) })
+	}
+}
+
+func interruptNeedsStopProof(t *testing.T, indexed bool) {
 	o := routingOptions(routingHandlerFunc(routingDecision), "interrupt")
 	o.Capabilities = domain.Capabilities{Interrupt: true}
 	f, e := schedulerFixture(t, "reopen", o)
 	work := seedSchedulerWork(t, f, "interrupt")
 	s := f.Driver.(*schedulerDriver).Scheduler
+	if indexed {
+		timers, err := runtime.NewTimers(f.Store, f.Clock.Now, runtime.TimerOptions{})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if _, err = s.Poll(context.Background(), timers, 10); err != nil {
+			t.Fatal(err)
+		}
+	}
 	a, err := s.Start(context.Background(), work)
 	if err != nil {
 		t.Fatal(err)
