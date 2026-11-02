@@ -267,6 +267,50 @@ func TestRawDeliveryIsDeclaredOneShot(t *testing.T) {
 	}
 }
 
+// A finished check suite or run names its branch, commit and conclusion in
+// the raw delivery, so a job can run when the default branch goes red.
+func TestCheckDeliveryNamesBranchAndConclusion(t *testing.T) {
+	f := newFixture(t, "")
+	raw := func(event, id string, body []byte) gh.DeliveryPayload {
+		t.Helper()
+		res := f.push(t, event, id, body)
+		if len(res.Events) != 1 {
+			t.Fatalf("%s: %+v", event, res)
+		}
+		var p gh.DeliveryPayload
+		if err := json.Unmarshal(res.Events[0].Data.Data, &p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	f.fake.CommitOnBranch("main", "abc123")
+	f.fake.CommitOnBranch("main", "def456")
+	suite := raw("check_suite", "d-suite", f.fake.CheckSuiteHook("main", "abc123", "failure"))
+	if suite.Ref != "refs/heads/main" || suite.After != "abc123" || suite.Conclusion != "failure" || suite.Action != "completed" {
+		t.Fatalf("check_suite delivery: %+v", suite)
+	}
+	run := raw("check_run", "d-run", []byte(`{"action":"completed","repository":{"full_name":"`+repo+`"},`+
+		`"check_run":{"head_sha":"def456","status":"completed","conclusion":"timed_out","check_suite":{"head_branch":"main"},"pull_requests":[]}}`))
+	if run.Ref != "refs/heads/main" || run.After != "def456" || run.Conclusion != "timed_out" {
+		t.Fatalf("check_run delivery: %+v", run)
+	}
+	// A fork PR from the fork's own main: GitHub names head_branch main for
+	// a commit this repository's main doesn't have, so no branch is named.
+	fork := raw("check_suite", "d-fork", f.fake.CheckSuiteHook("main", "f0rk", "failure"))
+	if fork.Ref != "" || fork.After != "f0rk" || fork.Conclusion != "failure" {
+		t.Fatalf("fork check_suite delivery: %+v", fork)
+	}
+	// Nor for a branch this repository doesn't have.
+	if gone := raw("check_suite", "d-gone", f.fake.CheckSuiteHook("feature", "abc123", "failure")); gone.Ref != "" {
+		t.Fatalf("unknown branch check_suite delivery: %+v", gone)
+	}
+	// A push keeps its own fields and names no conclusion.
+	push := raw("push", "d-push", f.fake.PushHook("refs/heads/main", "a", "b"))
+	if push.Ref != "refs/heads/main" || push.After != "b" || push.Conclusion != "" {
+		t.Fatalf("push delivery: %+v", push)
+	}
+}
+
 func TestReopenedIssueIsANewGeneration(t *testing.T) {
 	f := newFixture(t, "")
 	fk := f.fake
@@ -720,6 +764,43 @@ func TestOwnBotIsMarkedByConnection(t *testing.T) {
 	if got := scan(""); got[own] || got["dependabot[bot]"] || got["alice"] {
 		t.Fatalf("token connection: %v", got)
 	}
+}
+
+// An inline comment and a review stay one observation when a push moves
+// the comment's anchor and when someone replies in its thread: only the
+// reply is news (#402).
+func TestReviewCommentsKeepTheirVersionAcrossPushesAndReplies(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	fk.OpenIssue("Header", "wobbles", alice)
+	pr := fk.OpenPull("Blue header", "Closes #1", "feature/blue", "sha1", alice)
+	review := fk.AddReview(pr, alice, "APPROVED", "ship it")
+	inline := fk.AddReviewComment(pr, alice, "nit", "header.go", 12)
+	reviewItem := "pr/" + strconv.Itoa(pr) + "/review/" + strconv.FormatInt(review, 10)
+	inlineItem := "pr/" + strconv.Itoa(pr) + "/review_comment/" + strconv.FormatInt(inline, 10)
+	before := f.scan(t)
+
+	fk.PushPull(pr, "sha2")
+	reply := fk.AddReviewReply(pr, alice, inline, "thanks, fixed")
+	after := f.scan(t)
+	for _, item := range []string{reviewItem, inlineItem} {
+		if before[item].Version != after[item].Version {
+			t.Fatalf("%s changed version after a push and a reply:\n%s\n%s", item, before[item].Event.Data.Data, after[item].Event.Data.Data)
+		}
+	}
+	c := payload[gh.CommentPayload](t, after[inlineItem])
+	if c.CommitID != "sha1" || c.Line != 12 {
+		t.Fatalf("inline comment observed at %s:%d, want where it was made (sha1:12)", c.CommitID, c.Line)
+	}
+	if _, ok := before["pr/"+strconv.Itoa(pr)+"/review_comment/"+strconv.FormatInt(reply, 10)]; ok {
+		t.Fatal("reply observed before it was made")
+	}
+	if _, ok := after["pr/"+strconv.Itoa(pr)+"/review_comment/"+strconv.FormatInt(reply, 10)]; !ok {
+		t.Fatal("reply not observed")
+	}
+	// Push and reconcile still agree on the moved comment and the review.
+	sameIdentity(t, "inline after push", onlyObservation(t, f.push(t, "pull_request_review_comment", "d-inline", fk.ReviewCommentHook("edited", inline))), after[inlineItem])
+	sameIdentity(t, "review", onlyObservation(t, f.push(t, "pull_request_review", "d-review", fk.ReviewHook("submitted", pr, review))), after[reviewItem])
 }
 
 // A review stays one observation when a force-push makes GitHub move its

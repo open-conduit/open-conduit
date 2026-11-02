@@ -139,4 +139,6 @@ Threads in `C0REVIEWS01` start on `review`; threads in `C0123456789` fall throug
 
 Other handlers narrow a route the same way. Linear and Jira routes already take `{"match": {"labels": ["review"]}}` (or status, team, project and the other issue attributes) in their config, so one tracker entry can start different playbooks by label. The GitHub route takes no config yet; it would gain the same `match` when there is a need.
 
+To turn a request in a thread into an issue and a PR, and tell the thread when it merges, see [Slack to PR](../slack-to-pr/).
+
 See [Slack ingress, conversations and marked replies](../../architecture/slack-extension/) for the details.

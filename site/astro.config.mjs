@@ -42,6 +42,10 @@ export default defineConfig({
 						{ label: 'Human decisions', slug: 'workflows/human-decisions' },
 						{ label: 'Observed sources', slug: 'workflows/observed-sources' },
 						{ label: 'Incidents and errors', slug: 'workflows/incidents' },
+						{ label: 'Fix red CI on main', slug: 'workflows/red-ci' },
+						{ label: 'Slack to PR', slug: 'workflows/slack-to-pr' },
+						{ label: 'Dependency upgrades', slug: 'workflows/dependency-upgrades' },
+						{ label: 'Multi-repo changes', slug: 'workflows/multi-repo' },
 					],
 				},
 				{

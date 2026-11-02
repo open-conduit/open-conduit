@@ -60,7 +60,8 @@ while IFS= read -r line; do
   [ "$n" -ge "$want" ] && break
 done
 if [ "$mode" = wait ]; then
-  echo $$ > "$f/pid"
+  # Written whole by rename: a reader never sees an empty pid file.
+  echo $$ > "$f/pid.tmp" && mv -f "$f/pid.tmp" "$f/pid"
   while [ ! -e "$f/release" ]; do sleep 0.05; done
   mode=review
 fi

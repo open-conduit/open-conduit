@@ -578,7 +578,12 @@ func TestFailedTurnsAndInterrupt(t *testing.T) {
 	}
 	waitFor(t, "running", func() bool { _, err := os.Stat(filepath.Join(h.fake, "pid")); return err == nil })
 	b, _ := os.ReadFile(filepath.Join(h.fake, "pid"))
-	pid, _ := strconv.Atoi(strings.TrimSpace(string(b)))
+	// Kill(0, 0) signals the test's own group and always succeeds, so a
+	// pid that didn't parse would wait out the deadline below.
+	pid, err := strconv.Atoi(strings.TrimSpace(string(b)))
+	if err != nil || pid <= 1 {
+		t.Fatalf("fake claude pid %q: %v", b, err)
+	}
 	if err := e.Interrupt(context.Background(), "exec-f-4"); err != nil {
 		t.Fatal(err)
 	}

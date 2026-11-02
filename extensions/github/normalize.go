@@ -198,14 +198,20 @@ type ConflictsPayload struct {
 
 // DeliveryPayload is a raw webhook delivery (non-re-derivable).
 type DeliveryPayload struct {
-	Event    string   `json:"event"`
-	Action   string   `json:"action,omitempty"`
-	Delivery string   `json:"delivery"`
-	Repo     string   `json:"repo"`
-	Ref      string   `json:"ref,omitempty"`
-	Before   string   `json:"before,omitempty"`
-	After    string   `json:"after,omitempty"`
-	Files    []string `json:"files,omitempty"`
+	Event    string `json:"event"`
+	Action   string `json:"action,omitempty"`
+	Delivery string `json:"delivery"`
+	Repo     string `json:"repo"`
+	Ref      string `json:"ref,omitempty"`
+	Before   string `json:"before,omitempty"`
+	// After is the commit a push moved the branch to, or the commit a check
+	// suite or run is for.
+	After string `json:"after,omitempty"`
+	// Conclusion is a finished check suite's or run's conclusion (success,
+	// failure, timed_out, cancelled, action_required, neutral, skipped,
+	// stale, startup_failure); empty for other events.
+	Conclusion string   `json:"conclusion,omitempty"`
+	Files      []string `json:"files,omitempty"`
 	// Commits is how many commits the push listed. Files covers only those,
 	// capped at MaxDeliveryFiles, so a consumer can tell a possibly
 	// truncated list from a complete one.
@@ -725,11 +731,18 @@ func (n *normalizer) commentObservation(kind string, number int, c rawComment, k
 		updated = created
 	case KindReviewComment:
 		item = parent + "/review_comment/" + strconv.FormatInt(c.ID, 10)
+		// An inline comment is observed where it was made: commit_id and
+		// line follow the PR's head, so a push that moves the anchor would
+		// otherwise be a new version of an unchanged comment and hand it to
+		// the agent again (#402).
 		p.Path, p.InReplyTo, p.CommitID = c.Path, c.InReplyTo, c.CommitID
-		if c.Line != nil {
-			p.Line = *c.Line
-		} else if c.OriginalLine != nil {
+		if c.OriginalCommitID != "" {
+			p.CommitID = c.OriginalCommitID
+		}
+		if c.OriginalLine != nil {
 			p.Line = *c.OriginalLine
+		} else if c.Line != nil {
+			p.Line = *c.Line
 		}
 	}
 	if updated.IsZero() {

@@ -162,7 +162,8 @@ type Server struct {
 	commits                          map[string]time.Time
 	contents                         map[string][]byte // attachments branch path → content
 	branches                         map[string]bool
-	files                            map[string]string // /files/<name> → redirect target
+	onBranch                         map[string]map[string]bool // branch → commits in its history
+	files                            map[string]string          // /files/<name> → redirect target
 	fileReads                        []Write
 	fileData                         map[string][]byte
 	hooks                            []*Hook
@@ -214,7 +215,7 @@ func New(repo string, tokens ...string) *Server {
 	s := &Server{Repo: repo, now: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), nextID: 1000, issues: map[int]*Issue{}, pulls: map[int]*Pull{},
 		events: map[int][]IssueEvent{}, checks: map[string][]CheckRun{}, statuses: map[string][]Status{}, tokens: map[string]bool{},
 		apps: map[string]*rsa.PublicKey{}, identities: map[string]User{}, installs: map[string]string{}, scopes: map[string]TokenScope{}, failNext: map[string]int{}, loseNext: map[string]int{}, tokenTTL: time.Hour,
-		commits: map[string]time.Time{}, contents: map[string][]byte{}, branches: map[string]bool{}, files: map[string]string{}, fileData: map[string][]byte{},
+		commits: map[string]time.Time{}, contents: map[string][]byte{}, branches: map[string]bool{}, onBranch: map[string]map[string]bool{}, files: map[string]string{}, fileData: map[string][]byte{},
 		protection: map[string][]string{}, rulesets: map[string][]string{}, resolved: map[int64]string{}, threadPage: 100}
 	for _, t := range tokens {
 		s.tokens[t] = true
@@ -591,6 +592,9 @@ func (s *Server) AddComment(n int, user User, body string) int64 {
 func (s *Server) addComment(n int, user User, body string, inline bool, path string, line int) int64 {
 	t := s.tick()
 	c := &Comment{ID: s.id(), Number: n, User: user, Body: body, Created: t, Updated: t, Inline: inline, Path: path, Line: line, Reacts: map[string]int{}}
+	if p := s.pulls[n]; inline && p != nil {
+		c.CommitID = p.HeadSHA
+	}
 	s.comments = append(s.comments, c)
 	s.issue(n).Updated = t
 	return c.ID
@@ -612,6 +616,16 @@ func (s *Server) AddReviewComment(n int, user User, body, path string, line int)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.addComment(n, user, body, true, path, line)
+}
+
+// AddReviewReply replies in the inline review thread holding parent.
+func (s *Server) AddReviewReply(n int, user User, parent int64, body string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.comment(parent)
+	id := s.addComment(n, user, body, true, p.Path, p.Line)
+	s.comment(id).ReplyTo = parent
+	return id
 }
 
 // AddReview submits a review.
@@ -912,6 +926,24 @@ func (s *Server) CheckRunHook(sha string, prs ...int) []byte {
 	return mustJSON(map[string]any{"action": "completed", "repository": s.repository(), "check_run": map[string]any{"head_sha": sha, "status": "completed", "pull_requests": list}})
 }
 
+// CommitOnBranch puts sha in branch's history, as the compare endpoint
+// reads it.
+func (s *Server) CommitOnBranch(branch, sha string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.onBranch[branch] == nil {
+		s.onBranch[branch] = map[string]bool{}
+	}
+	s.onBranch[branch][sha] = true
+}
+
+// CheckSuiteHook is a completed `check_suite` delivery body for a commit on
+// a branch, ending in conclusion.
+func (s *Server) CheckSuiteHook(branch, sha, conclusion string) []byte {
+	return mustJSON(map[string]any{"action": "completed", "repository": s.repository(),
+		"check_suite": map[string]any{"head_sha": sha, "head_branch": branch, "status": "completed", "conclusion": conclusion, "pull_requests": []any{}}})
+}
+
 // StatusHook is a `status` delivery body.
 func (s *Server) StatusHook(sha, state string) []byte {
 	return mustJSON(map[string]any{"repository": s.repository(), "sha": sha, "state": state})
@@ -1024,7 +1056,16 @@ func (s *Server) commentJSON(c *Comment) map[string]any {
 		"created_at": ts(c.Created), "updated_at": ts(c.Updated), "author_association": "OWNER"}
 	if c.Inline {
 		m["pull_request_url"] = s.URL + "/repos/" + s.Repo + "/pulls/" + strconv.Itoa(c.Number)
-		m["path"], m["line"], m["commit_id"] = c.Path, c.Line, s.pulls[c.Number].HeadSHA
+		// Like GitHub, commit_id and line follow the PR's head: once a push
+		// moves past the comment's commit, it is outdated and line is null.
+		// original_commit_id and original_line never change.
+		head := s.pulls[c.Number].HeadSHA
+		m["path"], m["commit_id"], m["original_commit_id"], m["original_line"] = c.Path, head, c.CommitID, c.Line
+		if c.CommitID == "" || c.CommitID == head {
+			m["line"] = c.Line
+		} else {
+			m["line"] = nil
+		}
 		if c.ReplyTo != 0 {
 			m["in_reply_to_id"] = c.ReplyTo
 		}
@@ -1417,6 +1458,16 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		s.pulls[n] = &Pull{Number: n, HeadRef: req.Head, HeadSHA: sha, BaseRef: req.Base, Draft: req.Draft, CreatedAt: t}
 		s.commits[sha] = t
 		return http.StatusCreated, s.pullJSON(n)
+	case get && strings.HasPrefix(rest, "/compare/"):
+		branch, sha, ok := strings.Cut(strings.TrimPrefix(rest, "/compare/"), "...")
+		commits, known := s.onBranch[branch]
+		if !ok || !known {
+			return 0, nil
+		}
+		if commits[sha] {
+			return http.StatusOK, map[string]any{"status": "behind"}
+		}
+		return http.StatusOK, map[string]any{"status": "diverged"}
 	case get && strings.HasPrefix(rest, "/branches/"):
 		name := strings.TrimPrefix(rest, "/branches/")
 		if s.branches[name] {

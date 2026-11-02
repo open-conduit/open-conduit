@@ -37,8 +37,7 @@ import (
 // registry is the daemon's registration of executors, route handlers,
 // operations, connection and extension types and resource providers.
 func registry(executors map[string]extension.Executor) config.Registry {
-	reg := config.Registry{Executors: executors, Handlers: handlerNames(), Operations: append(append(gh.Operations(), sl.Operations()...), trackerOperations()...)}
-	trackerRegistry(&reg)
+	reg := config.Registry{Executors: executors, Handlers: handlerNames(), Operations: append(gh.Operations(), sl.Operations()...)}
 	slackRegistry(&reg)
 	inprocRegistry(&reg, firstParty(nil))
 	resourceRegistry(&reg)
@@ -466,7 +465,7 @@ func claudeVersionCheck(ctx context.Context, snapshot *config.Snapshot) runtime.
 }
 
 // daemonChecks are the doctor checks only a running daemon makes.
-var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource_holds", "retention", "routing", "reconcile_lag", "bindings", "connections", "secrets", "pinned_executors", "telemetry", "github", "trackers", "slack", "posthog", "webhooks", "schedule", "resources", "introspection", "extensions"}
+var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource_holds", "retention", "routing", "reconcile_lag", "bindings", "connections", "secrets", "pinned_executors", "telemetry", "github", "linear", "jira", "bitbucket", "slack", "posthog", "webhooks", "schedule", "resources", "introspection", "extensions"}
 
 // OfflineChecks are the doctor checks that need no daemon: the config file
 // validated against the same registrations `serve` uses, the first-party

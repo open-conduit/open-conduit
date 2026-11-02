@@ -458,15 +458,22 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 	}
 	// Conditions in this project name the repository the call names, else
 	// the Work's own, else the scope's only one (as the PR operations do).
+	// A Work in a scope with no repository of its own (a Slack thread) can
+	// still wait on other projects' PRs and issues: its own-project
+	// conditions are refused as they resolve.
 	rb := b
 	if b.number == 0 || strings.TrimSpace(in.Repo) != "" {
 		src, err := t.pullSource(b, in.Repo)
-		if err != nil {
+		var op *extension.OperationError
+		switch {
+		case err == nil:
+			c := *b
+			c.code, c.issue = src, t.trackerOf(src)
+			rb = &c
+		case strings.TrimSpace(in.Repo) == "" && errors.As(err, &op) && op.Code == "no_repository":
+		default:
 			return extension.WaitPlan{}, err
 		}
-		c := *b
-		c.code, c.issue = src, t.trackerOf(src)
-		rb = &c
 	}
 	if b.pull > 0 {
 		return t.pullWaitPlan(ctx, rb, in.Conditions, in.Until, in.Reason)
