@@ -52,8 +52,12 @@ type slEnv struct {
 	adapter   *sl.Ingress
 	client    *sl.Client
 	projector *sl.Projector
-	settings  sl.Settings
-	webhook   http.Handler
+	// actions and act stand in for the host's Actions and Act (prompts
+	// and button presses); nil offers and takes nothing.
+	actions  sl.ActionsFunc
+	act      sl.ActFunc
+	settings sl.Settings
+	webhook  http.Handler
 	// channels the entry watches (default: slChannel).
 	channels []string
 	// binding is the router's view of the "fixture" executor (zero: none).
@@ -141,7 +145,19 @@ func (e *slEnv) open() {
 		return out, err
 	}
 	e.adapter = sl.NewIngress(e.settings, e.client, e.clock.Now, o)
-	if e.projector, err = sl.NewProjector(sl.ProjectorOptions{Store: store, Client: e.client, Settings: e.settings, Now: e.clock.Now, SearchDelay: 30 * time.Second}); err != nil {
+	if e.projector, err = sl.NewProjector(sl.ProjectorOptions{Store: store, Client: e.client, Settings: e.settings, Now: e.clock.Now, SearchDelay: 30 * time.Second,
+		Actions: func(ctx context.Context, scope, work domain.ID) ([]extension.ActionOffer, error) {
+			if e.actions == nil {
+				return nil, nil
+			}
+			return e.actions(ctx, scope, work)
+		},
+		Act: func(ctx context.Context, r extension.ActRequest) (extension.ActResult, error) {
+			if e.act == nil {
+				return extension.ActResult{}, &extension.OperationError{Code: extension.CodeNoAction, Message: "nothing here"}
+			}
+			return e.act(ctx, r)
+		}}); err != nil {
 		t.Fatal(err)
 	}
 	e.webhook = sl.WebhookHandler(func(context.Context) (string, error) { return slSecret, nil }, func(ctx context.Context, d extension.Delivery) error {
@@ -853,5 +869,191 @@ func TestSlackRouteChannelsValidateAtLoad(t *testing.T) {
 	diags, err := bootstrap.ValidateConfig([]byte(bad))
 	if err != nil || len(diags) != 1 || diags[0].Path != "scopes/0/routes/0/config" || diags[0].Code != "invalid_config" {
 		t.Fatalf("diagnostics %+v %v", diags, err)
+	}
+}
+
+// park puts work into a waiting state on an active Wait, as a gated call
+// or a question does.
+func (e *slEnv) park(work domain.ID, wait domain.ID) {
+	e.t.Helper()
+	attempt := e.startAttempt(work)
+	e.read(func(tx storage.Tx) error {
+		x, err := tx.Execution(attempt)
+		if err != nil {
+			return err
+		}
+		if x.State == domain.ExecutionPending {
+			x.State = domain.ExecutionRunning
+			if err := tx.PutExecution(x, x.Revision); err != nil {
+				return err
+			}
+			if x, err = tx.Execution(attempt); err != nil {
+				return err
+			}
+		}
+		x.State = domain.ExecutionParked
+		x.Outcome = &domain.Outcome{Kind: domain.OutcomeWaiting, Summary: "gated"}
+		if err := tx.PutExecution(x, x.Revision); err != nil {
+			return err
+		}
+		if _, err := runtime.ConsumeInputsInTx(tx, work, attempt); err != nil {
+			return err
+		}
+		w, err := tx.Work(work)
+		if err != nil {
+			return err
+		}
+		if w.State == domain.WorkReady || w.State == domain.WorkWaiting {
+			w.State = domain.WorkRunning
+			if err := tx.PutWork(w, w.Revision); err != nil {
+				return err
+			}
+			if w, err = tx.Work(work); err != nil {
+				return err
+			}
+		}
+		w.State = domain.WorkWaiting
+		if err := tx.PutWork(w, w.Revision); err != nil {
+			return err
+		}
+		return tx.PutWait(domain.Wait{ID: wait, WorkID: work, ExecutionID: attempt, State: domain.WaitActive,
+			Match: domain.EventMatch{Keys: w.CorrelationKeys, Types: []string{"human.answered"}}, CreatedAt: e.clock.Now(), UpdatedAt: e.clock.Now()}, 0)
+	})
+}
+
+// While a conversation's Work waits, each action with choices offered on it
+// is posted once in its thread with a button per choice, and a press is
+// handed to Act as the person who pressed it, who is told the outcome. An
+// action without choices, or Work that isn't waiting, is never prompted,
+// and a press from elsewhere or of another app's button is ignored.
+func TestSlackPromptsAndTakesButtonAnswers(t *testing.T) {
+	e := newSlackEnv(t, "", sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "Please deploy 1.2")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(root)
+	e.actions = func(_ context.Context, scope, work domain.ID) ([]extension.ActionOffer, error) {
+		if scope != slScope || work != w.ID {
+			return nil, errors.New("wrong target")
+		}
+		return []extension.ActionOffer{
+			{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve or refuse fixture.deploy", Prompt: "an option", Choices: []string{"approve", "refuse"}}},
+			{Provider: "notes", Action: extension.Action{ID: "note", Label: "Add a note", Prompt: "your note"}},
+		}, nil
+	}
+	if res := e.converge(); res.Posted != 0 {
+		t.Fatalf("prompted Work that isn't waiting: %+v", res)
+	}
+	e.park(w.ID, "wait/1")
+	if res := e.converge(); res.Posted != 1 {
+		t.Fatalf("prompt: %+v", res)
+	}
+	if res := e.converge(); res.Posted != 0 {
+		t.Fatalf("prompted twice: %+v", res)
+	}
+	var prompt sl.Message
+	for _, m := range e.fake.Thread(slChannel, root) {
+		if len(m.Blocks) > 0 {
+			prompt = m
+		}
+	}
+	if prompt.Text != "Approve or refuse fixture.deploy" || len(prompt.Blocks) != 2 {
+		t.Fatalf("prompt message: %+v", prompt)
+	}
+	buttons, _ := prompt.Blocks[1]["elements"].([]any)
+	if len(buttons) != 2 {
+		t.Fatalf("buttons: %+v", prompt.Blocks[1])
+	}
+	approve := buttons[0].(map[string]any)
+	if approve["text"].(map[string]any)["text"] != "approve" {
+		t.Fatalf("first button: %+v", approve)
+	}
+
+	var got []extension.ActRequest
+	e.act = func(_ context.Context, r extension.ActRequest) (extension.ActResult, error) {
+		got = append(got, r)
+		if r.Caller != "U0ALICE" {
+			return extension.ActResult{}, &extension.OperationError{Code: "not_allowed", Message: "you are not one of the people this question is for"}
+		}
+		return extension.ActResult{Added: true, Message: "answered: " + r.Input}, nil
+	}
+	ctx := context.Background()
+	press := func(user string) {
+		t.Helper()
+		if err := e.projector.Interact(ctx, e.fake.Press(slChannel, root, prompt.TS, user, approve["action_id"].(string), approve["value"].(string))); err != nil {
+			t.Fatal(err)
+		}
+	}
+	press("U0MALLORY")
+	press("U0ALICE")
+	if len(got) != 2 || got[1].Work != w.ID || got[1].Provider != "decisions" || got[1].Action != "answer" || got[1].Input != "approve" || got[1].Scope != slScope || got[0].Key == got[1].Key {
+		t.Fatalf("act requests: %+v", got)
+	}
+	eph := e.fake.Ephemerals()
+	if len(eph) != 2 || eph[0].User != "U0MALLORY" || !strings.Contains(eph[0].Text, "not one of the people") || eph[1].User != "U0ALICE" || eph[1].Text != "answered: approve" || eph[1].ThreadTS != root {
+		t.Fatalf("ephemerals: %+v", eph)
+	}
+	// A press from another workspace, another channel or of another button
+	// is ignored.
+	other := e.fake.Press("C0ELSEWHERE", root, prompt.TS, "U0ALICE", approve["action_id"].(string), approve["value"].(string))
+	if err := e.projector.Interact(ctx, other); err != nil || len(got) != 2 {
+		t.Fatalf("a press in an unwatched channel was taken: %v %d", err, len(got))
+	}
+	if err := e.projector.Interact(ctx, e.fake.Press(slChannel, root, prompt.TS, "U0ALICE", "someone_else", approve["value"].(string))); err != nil || len(got) != 2 {
+		t.Fatalf("another app's button was taken: %v %d", err, len(got))
+	}
+}
+
+// What a person in the Slack thread sees comes from the real `human`
+// provider: the question it was asked (not only "Answer the agent's
+// question") and its options as buttons. A new question on the same Work is
+// prompted afresh, and the same one isn't reposted.
+func TestSlackPromptShowsTheHumanQuestion(t *testing.T) {
+	h := newHumanHarness(t, "persistent", decisions)
+	h.ask(t, `{"question":"Ship the migration tonight?","options":["yes","no"],"context":"The backup finished at 21:00."}`)
+	acts, err := h.actions.Actions(context.Background(), h.target(t))
+	if err != nil || len(acts) != 1 {
+		t.Fatalf("human offers: %+v %v", acts, err)
+	}
+
+	e := newSlackEnv(t, "", sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "Can we migrate?")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(root)
+	offer := extension.ActionOffer{Provider: "decisions", Action: acts[0]}
+	e.actions = func(context.Context, domain.ID, domain.ID) ([]extension.ActionOffer, error) {
+		return []extension.ActionOffer{offer}, nil
+	}
+	e.park(w.ID, "wait/1")
+	if res := e.converge(); res.Posted != 1 {
+		t.Fatalf("prompt: %+v", res)
+	}
+	prompts := func() []sl.Message {
+		var out []sl.Message
+		for _, m := range e.fake.Thread(slChannel, root) {
+			if len(m.Blocks) > 0 {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	shown := prompts()[0]
+	text, _ := shown.Blocks[0]["text"].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "Ship the migration tonight?") || !strings.Contains(text, "The backup finished at 21:00.") {
+		t.Fatalf("the prompt doesn't show the question: %q", text)
+	}
+	buttons, _ := shown.Blocks[1]["elements"].([]any)
+	if len(buttons) != 2 || buttons[0].(map[string]any)["text"].(map[string]any)["text"] != "yes" {
+		t.Fatalf("buttons: %+v", shown.Blocks[1])
+	}
+	if res := e.converge(); res.Posted != 0 || len(prompts()) != 1 {
+		t.Fatalf("the same question was posted again: %+v", res)
+	}
+	offer.Detail = "Ship the migration tomorrow instead?"
+	if res := e.converge(); res.Posted != 1 || len(prompts()) != 2 {
+		t.Fatalf("a new question wasn't prompted: %+v", res)
 	}
 }

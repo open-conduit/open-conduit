@@ -26,6 +26,9 @@ type SocketOptions struct {
 	// MinBackoff and MaxBackoff bound reconnect delays after a failure.
 	MinBackoff, MaxBackoff time.Duration
 	Now                    func() time.Time
+	// Interact takes an interactive envelope's payload (a prompt's button
+	// press) after it is acknowledged; nil acknowledges and ignores them.
+	Interact func(ctx context.Context, payload []byte)
 }
 
 // SocketStatus is the receiver's state for doctor.
@@ -186,6 +189,22 @@ func (s *Socket) session(ctx context.Context, push func(context.Context, extensi
 			if err := conn.WriteText(ack); err != nil {
 				return connected, err
 			}
+			s.update(func(st *SocketStatus) { st.Acked++; st.LastEvent = s.o.Now() })
+		case "interactive":
+			if env.EnvelopeID == "" {
+				continue
+			}
+			// Slack wants an answer within three seconds, and a press is
+			// not redelivered usefully, so acknowledge first.
+			ack, _ := json.Marshal(map[string]string{"envelope_id": env.EnvelopeID})
+			if err := conn.WriteText(ack); err != nil {
+				return connected, err
+			}
+			if s.o.Interact == nil {
+				s.update(func(st *SocketStatus) { st.Unhandled++ })
+				continue
+			}
+			s.o.Interact(ctx, append([]byte(nil), env.Payload...))
 			s.update(func(st *SocketStatus) { st.Acked++; st.LastEvent = s.o.Now() })
 		default:
 			if env.EnvelopeID != "" {

@@ -464,6 +464,7 @@ type Action struct {
 	Label   string   `json:"label"`
 	Prompt  string   `json:"prompt,omitempty"`
 	Choices []string `json:"choices,omitempty"`
+	Detail  string   `json:"detail,omitempty"`
 }
 type WorkActionsParams struct {
 	Target ActionTarget `json:"target"`

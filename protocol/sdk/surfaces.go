@@ -158,7 +158,7 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 		}
 		out := protocol.WorkActionsResult{}
 		for _, a := range actions {
-			out.Actions = append(out.Actions, protocol.Action{ID: a.ID, Label: a.Label, Prompt: a.Prompt, Choices: a.Choices})
+			out.Actions = append(out.Actions, protocol.Action{ID: a.ID, Label: a.Label, Prompt: a.Prompt, Choices: a.Choices, Detail: a.Detail})
 		}
 		return out, nil
 	case "view.render":

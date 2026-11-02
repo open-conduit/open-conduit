@@ -58,6 +58,11 @@ type Action struct {
 	Label   string
 	Prompt  string
 	Choices []string
+	// Detail, when set, is what a person needs to decide (the question
+	// asked, or the call an approval is for), for a surface that shows the
+	// action away from the Work's own panels (a Slack prompt). Plain text,
+	// at most 3000 bytes.
+	Detail string
 }
 
 // ActionCall is one invocation.
@@ -100,6 +105,14 @@ type ActionProvider interface {
 // none offers it on the target now: the person asked for nothing that is
 // here to do, which a surface may treat as an ordinary message.
 const CodeNoAction = "no_action"
+
+// ActionOffer is one action a provider offers on a target now, as an
+// extension acting for people lists them (Host.Actions) to show them on its
+// own surface: a button per choice, say.
+type ActionOffer struct {
+	Provider string
+	Action
+}
 
 // ActRequest is an action an extension invokes for a person its own surface
 // identified. Work is the target Work (empty for a scope action). Provider

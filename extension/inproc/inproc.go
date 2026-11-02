@@ -136,6 +136,10 @@ type Host struct {
 	// extension's name, ID: r.Caller}, and the provider authorises it as it
 	// would any caller. A refusal is the provider's *OperationError.
 	Act func(ctx context.Context, r extension.ActRequest) (extension.ActResult, error)
+	// Actions lists the actions every provider offers now on a scope, or
+	// on work in it (work non-empty), so the extension can show them on
+	// its own surface for Act to take.
+	Actions func(ctx context.Context, scope, work domain.ID) ([]extension.ActionOffer, error)
 	// Capture writes a named telemetry event to the host's telemetry events
 	// log and hands it to every Sink. scope is "" for one about the machine.
 	Capture func(ctx context.Context, scope, name string, at time.Time, props map[string]any) error

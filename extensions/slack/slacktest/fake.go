@@ -46,6 +46,27 @@ type Server struct {
 	connects  int
 	envelopes int
 	acks      map[string]bool
+	ephemeral []slack.Ephemeral
+}
+
+// Ephemerals are the messages shown to one person (chat.postEphemeral).
+func (s *Server) Ephemerals() []slack.Ephemeral {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return append([]slack.Ephemeral(nil), s.ephemeral...)
+}
+
+// Press is the block_actions payload of user pressing the button
+// actionID (carrying value) on the message ts in channel's thread, as
+// Slack sends it over Socket Mode.
+func (s *Server) Press(channel, thread, ts, user, actionID, value string) []byte {
+	s.mu.Lock()
+	at := s.tick()
+	s.mu.Unlock()
+	body, _ := json.Marshal(map[string]any{"type": "block_actions", "team": map[string]any{"id": s.Team}, "user": map[string]any{"id": user},
+		"container": map[string]any{"type": "message", "channel_id": channel, "message_ts": ts, "thread_ts": thread},
+		"actions":   []map[string]any{{"type": "button", "action_id": actionID, "value": value, "action_ts": at}}})
+	return body
 }
 
 // New starts a fake workspace accepting the given bot tokens.
@@ -360,6 +381,14 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 		answer = s.repliesAnswer(r)
 	case "chat.postMessage":
 		answer, status = s.post(r)
+	case "chat.postEphemeral":
+		var e slack.Ephemeral
+		if err := json.NewDecoder(r.Body).Decode(&e); err != nil || e.Text == "" || e.User == "" {
+			answer = apiAnswer{"ok": false, "error": "invalid_arguments"}
+		} else {
+			s.ephemeral = append(s.ephemeral, e)
+			answer = apiAnswer{"ok": true, "message_ts": s.tick()}
+		}
 	default:
 		answer = apiAnswer{"ok": false, "error": "unknown_method"}
 	}
@@ -457,7 +486,7 @@ func (s *Server) post(r *http.Request) (apiAnswer, int) {
 		return apiAnswer{"ok": false, "error": code}, http.StatusOK
 	}
 	ts := s.tick()
-	m := &slack.Message{Type: "message", User: s.botUser, BotID: s.botID, Text: p.Text, TS: ts, ThreadTS: p.ThreadTS, Metadata: p.Metadata}
+	m := &slack.Message{Type: "message", User: s.botUser, BotID: s.botID, Text: p.Text, TS: ts, ThreadTS: p.ThreadTS, Metadata: p.Metadata, Blocks: p.Blocks}
 	if p.Broadcast {
 		m.Subtype = "thread_broadcast"
 	}

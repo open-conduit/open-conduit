@@ -276,6 +276,8 @@ type Message struct {
 	} `json:"edited,omitempty"`
 	Files    []File    `json:"files,omitempty"`
 	Metadata *Metadata `json:"metadata,omitempty"`
+	// Blocks are the message's layout (a prompt's buttons), as posted.
+	Blocks []map[string]any `json:"blocks,omitempty"`
 }
 
 type listing struct {
@@ -366,6 +368,9 @@ type Post struct {
 	Text      string    `json:"text"`
 	Broadcast bool      `json:"reply_broadcast,omitempty"`
 	Metadata  *Metadata `json:"metadata,omitempty"`
+	// Blocks, when set, lay the message out (a prompt's buttons); Text is
+	// then its notification and accessibility text.
+	Blocks []map[string]any `json:"blocks,omitempty"`
 	// Links are not unfurled: a reply never creates follow-up previews.
 	UnfurlLinks bool `json:"unfurl_links"`
 	UnfurlMedia bool `json:"unfurl_media"`
@@ -383,6 +388,19 @@ func (c *Client) PostMessage(ctx context.Context, p Post) (string, error) {
 		return "", &APIError{Method: "chat.postMessage", Code: "no_ts"}
 	}
 	return out.TS, nil
+}
+
+// Ephemeral is a message only User sees, in a channel's thread.
+type Ephemeral struct {
+	Channel  string `json:"channel"`
+	User     string `json:"user"`
+	ThreadTS string `json:"thread_ts,omitempty"`
+	Text     string `json:"text"`
+}
+
+// PostEphemeral shows one person a message in a channel (chat.postEphemeral).
+func (c *Client) PostEphemeral(ctx context.Context, e Ephemeral) error {
+	return c.call(ctx, "chat.postEphemeral", nil, e, nil)
 }
 
 // Identity is what auth.test reports for the bot token. Scopes are the

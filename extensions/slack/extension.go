@@ -231,14 +231,20 @@ func (x *Extension) add(e protocol.ConfigEntry, settings Settings) error {
 	if x.h.DryRun {
 		settings.Projection.DryRun = true
 	}
-	projector, err := NewProjector(ProjectorOptions{Store: x.h.Store, Client: client, Settings: settings, Now: x.now})
+	projector, err := NewProjector(ProjectorOptions{Store: x.h.Store, Client: client, Settings: settings, Now: x.now,
+		Actions: x.h.Actions, Act: x.h.Act})
 	if err != nil {
 		return err
 	}
 	s := &source{name: Type + "/" + e.ScopeID + "/" + e.Name, scope: scope, config: append(json.RawMessage(nil), e.Config...), settings: settings, client: client, projector: projector}
 	s.ingress = NewIngress(settings, client, x.now, IngressOptions{ActiveThreads: x.activeThreads(settings)})
 	if settings.Receiver == ReceiverSocket {
-		s.socket = NewSocket(client, SocketOptions{Now: x.now})
+		name := s.name
+		s.socket = NewSocket(client, SocketOptions{Now: x.now, Interact: func(ctx context.Context, payload []byte) {
+			if err := projector.Interact(ctx, payload); err != nil && x.h.Log != nil {
+				x.h.Log.Warn("slack button press not taken", "name", name, "code", ErrorCode(err))
+			}
+		}})
 	}
 	x.mu.Lock()
 	x.sources[settings.Namespace] = s

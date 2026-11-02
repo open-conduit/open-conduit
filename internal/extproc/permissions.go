@@ -52,6 +52,26 @@ func (s *Service) capture(ctx context.Context, p protocol.TelemetryEvent) error 
 	return s.deps.Capture(ctx, p.ScopeID, p.Name, at, p.Properties)
 }
 
+// actionList lists what every provider offers on a target in a scope the
+// extension is configured for.
+func (s *Service) actionList(ctx context.Context, p protocol.ActionListParams) (protocol.ActionListResult, error) {
+	if s.deps.Actions == nil {
+		return protocol.ActionListResult{}, protocol.Errorf(protocol.CodeUnsupported, "action.list")
+	}
+	if !s.allowedScopes()[domain.ID(p.ScopeID)] {
+		return protocol.ActionListResult{}, unauthorized("scope is not configured for this extension")
+	}
+	offers, err := s.deps.Actions(ctx, s.name, domain.ID(p.ScopeID), domain.ID(p.WorkID))
+	if err != nil {
+		return protocol.ActionListResult{}, err
+	}
+	out := protocol.ActionListResult{Actions: []protocol.ActionOffer{}}
+	for _, o := range offers {
+		out.Actions = append(out.Actions, protocol.ActionOffer{Provider: o.Provider, ID: o.ID, Label: o.Label, Prompt: o.Prompt, Choices: o.Choices, Detail: o.Detail})
+	}
+	return out, nil
+}
+
 // actionSubmit invokes an action for a person the extension identified on
 // its own surface, in a scope it is configured for, as a caller of its own
 // kind.
