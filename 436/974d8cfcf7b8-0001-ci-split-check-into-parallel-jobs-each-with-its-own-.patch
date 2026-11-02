@@ -1,0 +1,297 @@
+From f517674782be00b8c5a8794709486027be812513 Mon Sep 17 00:00:00 2001
+From: "openconduit-bot[bot]"
+ <350813702+openconduit-bot[bot]@users.noreply.github.com>
+Date: Mon, 2 Nov 2026 19:17:32 +0000
+Subject: [PATCH] ci: split check into parallel jobs, each with its own Go
+ build cache from main
+
+The check job ran make check and make certify end to end on one runner,
+10 to 12 minutes. It is now static (make check-static), unit
+(make test-unit), integration (four runners of three shards each) and
+certify (ts-check and certify) in parallel, with check as the required job
+that passes when they all have. Every Go job uses .github/actions/go for a
+cache of its own, saved on pushes to main only; the unit tests run with
+-count=1, so no cached test result is reused.
+
+Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>
+---
+ .github/workflows/ci.yml | 182 ++++++++++++++++++++++++++++++---------
+ 1 file changed, 141 insertions(+), 41 deletions(-)
+
+diff --git a/.github/workflows/ci.yml b/.github/workflows/ci.yml
+index a1e4ef4..044586c 100644
+--- a/.github/workflows/ci.yml
++++ b/.github/workflows/ci.yml
+@@ -47,43 +47,122 @@ jobs:
+             esac
+           done < <(git diff --name-only "$BASE...$HEAD")
+           printf 'code=%s\ndocs=%s\nworkflows=%s\n' "$code" "$docs" "$workflows" | tee -a "$GITHUB_OUTPUT"
+-  # One runner: make check includes docs-check and the daemon drills (they
+-  # are part of test), so drill isn't run again. certify adds the CLI's
+-  # certification of the built packages. cross-build runs in its own job
+-  # alongside, not after.
+-  check:
++  # make check, spread over parallel jobs so the check takes as long as its
++  # slowest part rather than the sum: the static checks and build (with the
++  # config contract and docs-check), the unit tests, the integration package
++  # in four runners of three shards each (scripts/test-integration.sh shares
++  # its tests out by expected duration), and the TypeScript checks with
++  # certify. check below is the one required check and fails if any of them
++  # did. Every Go job restores its own build cache from main (see
++  # .github/actions/go), so a pull request only compiles what it changed.
++  static:
+     needs: changes
++    if: needs.changes.outputs.code == 'true'
+     runs-on: ubuntu-latest
+-    env:
+-      RUN: ${{ needs.changes.outputs.code }}
+     steps:
+-      - if: env.RUN != 'true'
+-        run: echo "No code changed; nothing to check."
+       - uses: actions/checkout@v7
+-        if: env.RUN == 'true'
+-      - uses: actions/setup-go@v7
+-        if: env.RUN == 'true'
++      - uses: ./.github/actions/go
++        id: go
+         with:
+-          go-version: stable
+-          cache: true
++          cache: static
+       - uses: actions/setup-python@v7
+-        if: env.RUN == 'true'
+         with:
+           python-version: '3.12'
++      - run: make config-deps
++      - run: make check-static
++      - uses: actions/cache/save@v6
++        if: github.event_name == 'push' && !cancelled()
++        with:
++          path: ${{ steps.go.outputs.paths }}
++          key: ${{ steps.go.outputs.key }}
++  # -count=1: the restored cache holds main's test results too, and every
++  # test runs on every change, as it did before the cache.
++  unit:
++    needs: changes
++    if: needs.changes.outputs.code == 'true'
++    runs-on: ubuntu-latest
++    env:
++      GOFLAGS: -count=1
++    steps:
++      - uses: actions/checkout@v7
++      - uses: ./.github/actions/go
++        id: go
++        with:
++          cache: unit
++      - run: make test-unit
++      - uses: actions/cache/save@v6
++        if: github.event_name == 'push' && !cancelled()
++        with:
++          path: ${{ steps.go.outputs.paths }}
++          key: ${{ steps.go.outputs.key }}
++  integration:
++    needs: changes
++    if: needs.changes.outputs.code == 'true'
++    name: integration (${{ matrix.group }}/4)
++    strategy:
++      fail-fast: false
++      matrix:
++        include:
++          - group: 1
++            shards: 1 2 3
++          - group: 2
++            shards: 4 5 6
++          - group: 3
++            shards: 7 8 9
++          - group: 4
++            shards: 10 11 12
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v7
++      - uses: ./.github/actions/go
++        id: go
++        with:
++          cache: integration
++      - run: make test-integration INTEGRATION_SHARDS=12 INTEGRATION_RUN='${{ matrix.shards }}'
++      # The groups build the same things, so one saves for all four.
++      - uses: actions/cache/save@v6
++        if: github.event_name == 'push' && !cancelled() && matrix.group == 1
++        with:
++          path: ${{ steps.go.outputs.paths }}
++          key: ${{ steps.go.outputs.key }}
++  # The TypeScript SDK's checks on current Node, and the CLI's
++  # certification of the built packages.
++  certify:
++    needs: changes
++    if: needs.changes.outputs.code == 'true'
++    runs-on: ubuntu-latest
++    steps:
++      - uses: actions/checkout@v7
++      - uses: ./.github/actions/go
++        id: go
++        with:
++          cache: certify
+       - uses: actions/setup-node@v7
+-        if: env.RUN == 'true'
+         with:
+           node-version: 24
+-      - run: make config-deps
+-        if: env.RUN == 'true'
+       - run: make ts-deps
+-        if: env.RUN == 'true'
+-      - run: make check
+-        if: env.RUN == 'true'
+       - run: make ts-check
+-        if: env.RUN == 'true'
+       - run: make certify
+-        if: env.RUN == 'true'
++      - uses: actions/cache/save@v6
++        if: github.event_name == 'push' && !cancelled()
++        with:
++          path: ${{ steps.go.outputs.paths }}
++          key: ${{ steps.go.outputs.key }}
++  # The required check: passes when every part above passed, or was skipped
++  # because no code changed.
++  check:
++    needs: [changes, static, unit, integration, certify]
++    if: ${{ !cancelled() }}
++    runs-on: ubuntu-latest
++    steps:
++      - env:
++          RESULTS: ${{ toJSON(needs.*.result) }}
++        run: |
++          echo "$RESULTS"
++          if printf '%s' "$RESULTS" | grep -Eq '"(failure|cancelled)"'; then
++            echo "A part of check failed; see its job."
++            exit 1
++          fi
+   # The TypeScript SDK's typecheck and tests on the oldest Node its
+   # package.json supports (engines: >=22.18).
+   ts-node22:
+@@ -110,11 +189,16 @@ jobs:
+     runs-on: ubuntu-latest
+     steps:
+       - uses: actions/checkout@v7
+-      - uses: actions/setup-go@v7
++      - uses: ./.github/actions/go
++        id: go
+         with:
+-          go-version: stable
+-          cache: true
++          cache: cross-build
+       - run: make cross-build
++      - uses: actions/cache/save@v6
++        if: github.event_name == 'push' && !cancelled()
++        with:
++          path: ${{ steps.go.outputs.paths }}
++          key: ${{ steps.go.outputs.key }}
+   # Real isolation tests for process sandboxes (B09) on both platforms srt
+   # supports: srt from npm and, on Linux, bubblewrap, socat and ripgrep, with Ubuntu
+   # 24.04's AppArmor restriction on unprivileged user namespaces relaxed for
+@@ -135,11 +219,11 @@ jobs:
+         run: echo "No code changed; nothing to check."
+       - uses: actions/checkout@v7
+         if: env.RUN == 'true'
+-      - uses: actions/setup-go@v7
++      - uses: ./.github/actions/go
++        id: go
+         if: env.RUN == 'true'
+         with:
+-          go-version: stable
+-          cache: true
++          cache: sandbox-${{ matrix.os }}
+       - uses: actions/setup-node@v7
+         if: env.RUN == 'true'
+         with:
+@@ -153,6 +237,11 @@ jobs:
+           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+       - run: go test -count=1 -v -run 'TestSandbox|TestSweepFindsSandboxedChildren|TestHealth' ./integration/ ./extensions/git/ ./extensions/srt/ ./extension/
+         if: env.RUN == 'true'
++      - uses: actions/cache/save@v6
++        if: github.event_name == 'push' && !cancelled() && env.RUN == 'true'
++        with:
++          path: ${{ steps.go.outputs.paths }}
++          key: ${{ steps.go.outputs.key }}
+   # Real isolation tests for the Docker container provider on the runner's
+   # own Docker Engine: reads and writes, the network, every fail-closed
+   # case, Stop, Interrupt, Inject and each Recover path, the gateway built
+@@ -172,11 +261,11 @@ jobs:
+         run: echo "No code changed; nothing to check."
+       - uses: actions/checkout@v7
+         if: env.RUN == 'true'
+-      - uses: actions/setup-go@v7
++      - uses: ./.github/actions/go
++        id: go
+         if: env.RUN == 'true'
+         with:
+-          go-version: stable
+-          cache: true
++          cache: container
+       - run: docker version
+         if: env.RUN == 'true'
+       - run: make container-test
+@@ -185,19 +274,24 @@ jobs:
+         if: env.RUN == 'true'
+         env:
+           OPEN_CONDUIT_CONTAINER_FORWARD: tcp
++      - uses: actions/cache/save@v6
++        if: github.event_name == 'push' && !cancelled() && env.RUN == 'true'
++        with:
++          path: ${{ steps.go.outputs.paths }}
++          key: ${{ steps.go.outputs.key }}
+   # A docs-only change still has its examples checked: the configs validate,
+   # and the commands and make targets they show exist. A change with code
+-  # gets this from make check above.
++  # gets this from the static job above.
+   docs-check:
+     needs: changes
+     if: needs.changes.outputs.docs == 'true' && needs.changes.outputs.code != 'true'
+     runs-on: ubuntu-latest
+     steps:
+       - uses: actions/checkout@v7
+-      - uses: actions/setup-go@v7
++      - uses: ./.github/actions/go
++        id: go
+         with:
+-          go-version: stable
+-          cache: true
++          cache: static
+       - run: make docs-check
+   # Packaging breaks show up here, before anyone tags: every platform's
+   # archive, the checksums and the Homebrew cask, built and smoke-tested
+@@ -214,11 +308,11 @@ jobs:
+         if: env.RUN == 'true'
+         with:
+           fetch-depth: 0
+-      - uses: actions/setup-go@v7
++      - uses: ./.github/actions/go
++        id: go
+         if: env.RUN == 'true'
+         with:
+-          go-version: stable
+-          cache: true
++          cache: cross-build
+       - uses: goreleaser/goreleaser-action@v7
+         if: env.RUN == 'true'
+         with:
+@@ -236,9 +330,15 @@ jobs:
+         run: echo "No workflow changed; nothing to lint."
+       - uses: actions/checkout@v7
+         if: env.RUN == 'true'
+-      - uses: actions/setup-go@v7
++      - uses: ./.github/actions/go
++        id: go
+         if: env.RUN == 'true'
+         with:
+-          go-version: stable
++          cache: workflows
+       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
+         if: env.RUN == 'true'
++      - uses: actions/cache/save@v6
++        if: github.event_name == 'push' && !cancelled() && env.RUN == 'true'
++        with:
++          path: ${{ steps.go.outputs.paths }}
++          key: ${{ steps.go.outputs.key }}
+-- 
+2.53.0
+
