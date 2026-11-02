@@ -199,17 +199,18 @@ jobs:
         with:
           path: ${{ steps.go.outputs.paths }}
           key: ${{ steps.go.outputs.key }}
-  # Real isolation tests for process sandboxes (B09) on both platforms srt
-  # supports: srt from npm and, on Linux, bubblewrap, socat and ripgrep, with Ubuntu
-  # 24.04's AppArmor restriction on unprivileged user namespaces relaxed for
-  # the job. OPEN_CONDUIT_SANDBOX_TESTS makes a missing srt fail the tests
-  # instead of skipping them.
+  # Real isolation tests for process sandboxes (B09): srt from npm and, on
+  # Linux, bubblewrap, socat and ripgrep, with Ubuntu 24.04's AppArmor
+  # restriction on unprivileged user namespaces relaxed for the job.
+  # macos-latest is off while GitHub is short of macOS runners; add it back
+  # to the matrix to restore the macOS run. OPEN_CONDUIT_SANDBOX_TESTS makes
+  # a missing srt fail the tests instead of skipping them.
   sandbox:
     needs: changes
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-latest]
+        os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     env:
       RUN: ${{ needs.changes.outputs.code }}
