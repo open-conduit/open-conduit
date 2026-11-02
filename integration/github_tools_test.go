@@ -434,7 +434,7 @@ func TestGitHubToolsWorkAnIssue(t *testing.T) {
 	// Follow-up child work, held until a PR merges; opened once.
 	for i := 0; i < 2; i++ {
 		out := e.must(a, gh.OpIssueCreate, "wave2", map[string]any{"title": "Wave 2", "body": "After wave 1.", "wait": []string{"pr:2:merged"}})
-		if out["number"] != float64(3) || !strings.Contains(out["held"].(string), "PR #2 to merge") {
+		if out["number"] != float64(3) || out["held"] != "it waits for PR #2 to merge" {
 			t.Fatalf("issue create: %v", out)
 		}
 	}
@@ -1294,6 +1294,14 @@ func TestGitHubIssueOperationsWithoutAnIssue(t *testing.T) {
 	if got := e.fake.Issue(int(timed["number"].(float64))); timed["state"] != "posted" || !strings.Contains(got.Body, "runAt: 2030-01-01T00:00Z") || !slices.Contains(got.Labels, "scheduled") {
 		t.Fatalf("timed create: %v %+v", timed, got)
 	}
+	// Backlogged: opened with the skip label, so no route claims it, and
+	// never held as well.
+	backlog := e.must(a, gh.OpIssueCreate, "create-backlog", map[string]any{"title": "Wobble on rotate", "body": "Someday.", "backlog": true})
+	if got := e.fake.Issue(int(backlog["number"].(float64))); backlog["state"] != "posted" || backlog["backlog"] == nil || !equal(got.Labels, "backlog") {
+		t.Fatalf("backlog create: %v %+v", backlog, got)
+	}
+	_, err = e.call(a, gh.OpIssueCreate, "", map[string]any{"title": "x", "body": "y", "backlog": true, "until": "2030-01-01T00:00Z"})
+	refused(t, err, "backlog_held")
 
 	// Another project: refused until file_scopes grants it, then filed there.
 	_, err = e.call(a, gh.OpIssueCreate, "", map[string]any{"project": "ops", "title": "Cache the image build", "body": "From triage."})
