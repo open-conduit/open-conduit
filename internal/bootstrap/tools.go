@@ -85,7 +85,8 @@ func (d *daemon) mayFile(filer, target domain.ID) error {
 	return s.AuthorizeFile(filer, target)
 }
 
-// pluginDir is where the playbook plugin is written for claude-code.
+// pluginDir is where the playbook plugin is written: claude-code loads it
+// as a plugin, and every execution is told it (ExecutionContext.PlaybookDir).
 func (d *daemon) pluginDir() string { return filepath.Join(d.o.StateDir, "playbooks", "plugin") }
 
 // preparePlaybooks writes the plugin (rewritten at every start, so an
