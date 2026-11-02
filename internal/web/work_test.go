@@ -224,6 +224,36 @@ func TestWorldOnADaemonWithoutListForms(t *testing.T) {
 	}
 }
 
+// Past fetchCap runs the run list stops short of the newest, so an open
+// Work's runs are read by its ID: its live turn still shows (#450).
+func TestWorldReadsOpenWorksRunsPastTheCap(t *testing.T) {
+	f, s, _ := setup(t)
+	f.work["wrk_old"] = client.Work{ID: "wrk_old", State: "completed", Revision: "1"}
+	f.work["wrk_live"] = client.Work{ID: "wrk_live", State: "running", Revision: "2"}
+	for i := range fetchCap {
+		r := turnRun(uint32(i+1), "completed", 0, time.Minute)
+		r.WorkID = "wrk_old"
+		f.runs = append(f.runs, r)
+	}
+	live := turnRun(1, "running", 0, 0)
+	live.ID, live.WorkID = "work/wrk_live/attempt/1", "wrk_live"
+	f.runs = append(f.runs, live)
+	w := s.world(context.Background())
+	if len(w.Errs) != 0 {
+		t.Fatalf("errs %v", w.Errs)
+	}
+	for _, v := range w.Works {
+		if v.ID != "wrk_live" {
+			continue
+		}
+		if len(v.Turns) != 1 || v.Disp.Group == "queued" {
+			t.Fatalf("live turn past the cap missing: turns %d disp %+v", len(v.Turns), v.Disp)
+		}
+		return
+	}
+	t.Fatal("no row for the running Work")
+}
+
 // Without a display, Work is named by its key's ID: the row shows the
 // source beside it.
 func TestTitleWithoutDisplay(t *testing.T) {

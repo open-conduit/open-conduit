@@ -530,6 +530,9 @@ func (s *Server) world(ctx context.Context) world {
 	for _, r := range runs {
 		byWork[r.WorkID] = append(byWork[r.WorkID], r)
 	}
+	if len(runs) >= fetchCap {
+		keep(s.openRuns(ctx, openW, byWork))
+	}
 	waitOf := map[string]*client.Wait{}
 	for i := range waits {
 		waitOf[waits[i].WorkID] = &waits[i]
@@ -586,6 +589,39 @@ func (s *Server) works(ctx context.Context) (openW, closedW []client.Work, err e
 	}
 	wg.Wait()
 	return openW, closedW, err
+}
+
+// openRuns reads the runs of each open Work by its ID, eight at a time, into
+// byWork. The run list is read oldest first and stops at fetchCap, so once a
+// daemon holds more runs than that the newest, an open Work's live turn among
+// them, are missing from it (#450).
+func (s *Server) openRuns(ctx context.Context, works []client.Work, byWork map[string][]client.Run) error {
+	sem := make(chan struct{}, 8)
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		first error
+	)
+	for _, w := range works {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(id string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			runs, err := listAll(ctx, url.Values{"work_id": {id}, "limit": {"200"}}, s.src.Runs)
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if first == nil {
+					first = err
+				}
+				return
+			}
+			byWork[id] = runs
+		}(w.ID)
+	}
+	wg.Wait()
+	return first
 }
 
 // holds fills in the hold, queued input count and annotations of each ready
