@@ -30,7 +30,7 @@ The litmus test: if a new capability needs the core to understand a particular d
 1. Branch from `main`. `main` only takes changes through pull requests.
 2. Make one change per commit. If it alters behaviour an architecture document describes, update that document in the same commit.
 3. `make check` is what CI runs (`fmt-check`, `vet`, `test -race`, `boundaries`, `config-check`, `docs-check`, `build`, `smoke`). Run `make fmt` to fix formatting. A docs-only change needs only `make docs-check`.
-4. Push and open a pull request. CI runs `make check`, `make certify`, `make cross-build` and commitlint.
+4. Push and open a pull request. CI runs `make check` (as parallel jobs behind the required `check`), `make certify`, `make cross-build` and commitlint.
 
 Tests never call real services, never wait on real time and never touch the operator's config or state; see "Tests" in CONTRIBUTING.md.
 

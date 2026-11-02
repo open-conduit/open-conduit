@@ -1,0 +1,80 @@
+name: Go with a build cache
+description: >-
+  Sets up stable Go and restores the build, module and staticcheck caches
+  this job saved on its last run on main. Each job keeps a cache of its own
+  (the name input), because the jobs build different things (-race, cross
+  targets, tags) and setup-go's one shared key went to whichever job saved
+  first, often one that built almost nothing. Jobs save with
+  actions/cache/save and the key and paths this action outputs, on pushes
+  to main only, so pull requests restore main's caches and never evict them.
+
+  After restoring, it prunes the build and staticcheck caches to what the
+  run that saved them used. Each save starts from the last one and adds its
+  own output, and Go only drops an entry after five days unused, so without
+  this every job's cache would carry days of old builds and crowd the
+  repository's cache allowance (GitHub then evicts caches pull requests
+  still restore). The action leaves a marker in GOCACHE when the job starts,
+  saved with the cache; Go refreshes an entry's mtime when it uses one more
+  than an hour old, so an entry older than an hour before the marker wasn't
+  used by that run and is deleted. A saved cache then holds about two runs'
+  output at most. The module cache is kept whole: its files carry no use
+  times, and go.sum bounds it.
+inputs:
+  cache:
+    description: The cache's name, usually the job's.
+    required: true
+outputs:
+  key:
+    description: The key to save the cache under.
+    value: ${{ steps.paths.outputs.key }}
+  paths:
+    description: The directories to save.
+    value: ${{ steps.paths.outputs.paths }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v7
+      id: go
+      with:
+        go-version: stable
+        cache: false
+    - id: paths
+      shell: bash
+      env:
+        NAME: ${{ inputs.cache }}
+        GO_VERSION: ${{ steps.go.outputs.go-version }}
+        SHA: ${{ github.sha }}
+      run: |
+        gocache=$(go env GOCACHE)
+        prefix="go-$RUNNER_OS-$RUNNER_ARCH-$GO_VERSION-$NAME-"
+        {
+          echo "prefix=$prefix"
+          echo "key=$prefix$SHA"
+          echo "paths<<EOF"
+          echo "$gocache"
+          go env GOMODCACHE
+          echo "$(dirname "$gocache")/staticcheck"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.paths.outputs.paths }}
+        key: ${{ steps.paths.outputs.key }}
+        restore-keys: ${{ steps.paths.outputs.prefix }}
+    - shell: bash
+      run: |
+        gocache=$(go env GOCACHE)
+        marker="$gocache/open-conduit-ci-started"
+        if [ -f "$marker" ]; then
+          then=$(stat -c %Y "$marker" 2>/dev/null || stat -f %m "$marker")
+          # Minutes since the saving run started, plus Go's hour and a margin.
+          age=$(( ($(date +%s) - then) / 60 + 70 ))
+          for dir in "$gocache" "$(dirname "$gocache")/staticcheck"; do
+            [ -d "$dir" ] || continue
+            before=$(du -sm "$dir" | cut -f1)
+            find "$dir" -type f -mmin +"$age" ! -name README ! -name trim.txt ! -path "$marker" -delete
+            echo "pruned $dir: ${before} MB -> $(du -sm "$dir" | cut -f1) MB"
+          done
+        fi
+        mkdir -p "$gocache"
+        touch "$marker"

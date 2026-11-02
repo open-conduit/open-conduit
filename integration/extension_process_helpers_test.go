@@ -44,17 +44,16 @@ func extensionBinaries(t *testing.T) (string, string) {
 			extBuildErr = err
 			return
 		}
-		for _, b := range []struct{ out, pkg string }{{"notes-extension", "./protocol/examples/notes/cmd/notes-extension"}, {"runner-extension", "./protocol/examples/runner/cmd/runner-extension"}} {
-			args := []string{"build", "-o", filepath.Join(dir, b.out)}
-			if raceEnabled {
-				args = append(args, "-race")
-			}
-			cmd := exec.Command("go", append(args, b.pkg)...)
-			cmd.Dir = ".."
-			if out, err := cmd.CombinedOutput(); err != nil {
-				extBuildErr = fmt.Errorf("build %s: %v\n%s", b.out, err, out)
-				return
-			}
+		// One go build for both, so they build and link in parallel.
+		args := []string{"build", "-o", dir + string(filepath.Separator)}
+		if raceEnabled {
+			args = append(args, "-race")
+		}
+		cmd := exec.Command("go", append(args, "./protocol/examples/notes/cmd/notes-extension", "./protocol/examples/runner/cmd/runner-extension")...)
+		cmd.Dir = ".."
+		if out, err := cmd.CombinedOutput(); err != nil {
+			extBuildErr = fmt.Errorf("build example extensions: %v\n%s", err, out)
+			return
 		}
 		notesBin, runnerBin = filepath.Join(dir, "notes-extension"), filepath.Join(dir, "runner-extension")
 	})

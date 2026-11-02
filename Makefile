@@ -7,12 +7,16 @@ LDFLAGS = -X main.version=$(VERSION) -X main.commit=$(COMMIT)
 # Per-package test timeout. The integration package (real daemon drills) takes
 # about 8 minutes on hosted runners under -race when run in one process.
 TEST_TIMEOUT ?= 20m
-# test runs the integration package in this many processes at once
+# test runs the integration package in this many shards, one process each
 # (scripts/test-integration.sh). Its tests mostly wait on daemons, so the
-# shards overlap well even on a 4-vCPU hosted runner.
+# shards overlap well even on a 4-vCPU hosted runner. INTEGRATION_RUN picks
+# which shards this run takes (all of them when empty), so CI can spread
+# them over runners: make test-integration INTEGRATION_SHARDS=12
+# INTEGRATION_RUN='1 2 3'.
 INTEGRATION_SHARDS ?= 4
+INTEGRATION_RUN ?=
 
-.PHONY: build fmt fmt-check vet lint test boundaries config-check config-deps docs-check docs-gen container-test gateway-image check cross-build smoke smoke-run drill bench-history bench-extension protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
+.PHONY: build fmt fmt-check vet lint test test-unit test-integration boundaries config-check config-deps docs-check docs-gen container-test gateway-image check check-static cross-build smoke smoke-run drill bench-history bench-extension protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
 
 build:
 	$(GO) build ./...
@@ -45,9 +49,13 @@ lint:
 		$(STATICCHECK) ./...; \
 		$(STATICCHECK) -tags faultinject ./internal/bootstrap ./cmd/open-conduit
 
-test:
+test: test-unit test-integration
+
+test-unit:
 	$(GO) test -race -timeout $(TEST_TIMEOUT) $$($(GO) list ./... | grep -v '/integration$$')
-	GO='$(GO)' TEST_TIMEOUT='$(TEST_TIMEOUT)' scripts/test-integration.sh $(INTEGRATION_SHARDS)
+
+test-integration:
+	GO='$(GO)' TEST_TIMEOUT='$(TEST_TIMEOUT)' scripts/test-integration.sh $(INTEGRATION_SHARDS) $(INTEGRATION_RUN)
 
 boundaries:
 	$(GO) run ./scripts/check-boundaries
@@ -101,7 +109,10 @@ gateway-image:
 		done; \
 		docker $(DOCKER_CONTEXT_FLAG) build -q --build-arg TARGETARCH=$$arch -f extensions/docker/gateway/Dockerfile -t open-conduit-gateway:dev dist/gateway
 
-check: fmt-check vet lint test boundaries config-check docs-check build smoke
+check: check-static test
+
+# Everything in check but the tests; CI runs it beside them.
+check-static: fmt-check vet lint boundaries config-check docs-check build smoke
 
 smoke: build smoke-run
 

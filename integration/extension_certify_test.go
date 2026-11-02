@@ -112,10 +112,25 @@ func assemble(t *testing.T, root, bin string, args ...string) (string, protocol.
 // command to, at that binary.
 func hostPackage(t *testing.T, root, name string) (string, protocol.Manifest) {
 	t.Helper()
+	useHostBinary(t)
+	return hostPackageDir(t, root, name)
+}
+
+// useHostBinary points extproc.HostExecutable at the built daemon until t
+// ends. Parallel subtests call it once in their parent, not each, so none
+// changes the global while another reads it.
+func useHostBinary(t *testing.T) {
+	t.Helper()
 	bin := daemonBinary(t)
 	prev := extproc.HostExecutable
 	extproc.HostExecutable = func() (string, error) { return bin, nil }
 	t.Cleanup(func() { extproc.HostExecutable = prev })
+}
+
+// hostPackageDir is hostPackage without touching extproc.HostExecutable.
+func hostPackageDir(t *testing.T, root, name string) (string, protocol.Manifest) {
+	t.Helper()
+	bin := daemonBinary(t)
 	raw, err := exec.Command(bin, protocol.HostRun, name, "package-manifest").Output()
 	if err != nil {
 		t.Fatalf("%s package-manifest: %v", name, err)
@@ -155,6 +170,7 @@ func runCertify(t *testing.T, dir string) certify.Report {
 
 func TestCertificationFirstPartyPackages(t *testing.T) {
 	bins := packageBinaries(t)
+	useHostBinary(t)
 	for _, c := range []struct {
 		name, bin string
 		must      []string // criteria that must pass (not skip)
@@ -171,13 +187,16 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
+			// Each package is certified in its own directory and processes;
+			// most of a run is the runner waiting on them, so they overlap.
+			t.Parallel()
 			root := t.TempDir()
 			// A first-party package (no bin of its own) is served by
 			// open-conduit itself.
 			var dir string
 			var m protocol.Manifest
 			if c.bin == "" {
-				dir, m = hostPackage(t, root, c.name)
+				dir, m = hostPackageDir(t, root, c.name)
 			} else {
 				dir, m = assemble(t, root, bins[c.bin])
 			}
