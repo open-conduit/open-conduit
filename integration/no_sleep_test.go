@@ -20,14 +20,14 @@ type sleepAllowance struct {
 	reason string
 }
 
-// sleepAllowlist is every time.Sleep the integration and conformance suites
+// sleepAllowlist is every time.Sleep the integration, conformance and runtime suites
 // still hold. It may only shrink: a new sleep fails TestNoSleep, and so does
 // an entry that allows more than its file has. Wait on a condition with
 // eventually, or on the daemon's loop barrier with drill.settle, instead.
 var sleepAllowlist = map[string]sleepAllowance{
-	"integration/daemon_test.go":  {1, "the expired-lease kill drill restarts only after the dead daemon's lease has really expired; daemon leases run on the wall clock, which a drill cannot advance"},
-	"integration/sandbox_test.go": {1, "the sandboxed command runs inside srt with no signal that it has settled before a control is sent"},
-	"integration/timers_test.go":  {1, "the crash helper parks after SIGKILLing itself, so the Go runtime cannot report a deadlock first; no test waits on it"},
+	"integration/daemon_test.go":      {1, "the expired-lease kill drill restarts only after the dead daemon's lease has really expired; daemon leases run on the wall clock, which a drill cannot advance"},
+	"integration/sandbox_test.go":     {1, "the sandboxed command runs inside srt with no signal that it has settled before a control is sent"},
+	"internal/runtime/timers_test.go": {1, "the crash helper parks after SIGKILLing itself, so the Go runtime cannot report a deadlock first; no test waits on it"},
 }
 
 // sleepRefs counts the references to the standard library's time.Sleep in
@@ -84,11 +84,11 @@ func sleepProblems(counts map[string]int, allow map[string]sleepAllowance) []str
 	return out
 }
 
-// TestNoSleep: tests never wait on real time, so no Go file in integration/
-// or conformance/ calls time.Sleep beyond the shrinking allowlist.
+// TestNoSleep: tests never wait on real time, so no Go file in integration/,
+// conformance/ or internal/runtime/ calls time.Sleep beyond the shrinking allowlist.
 func TestNoSleep(t *testing.T) {
 	counts := map[string]int{}
-	for _, dir := range []string{"../integration", "../conformance"} {
+	for _, dir := range []string{"../integration", "../conformance", "../internal/runtime"} {
 		err := filepath.WalkDir(dir, func(path string, e fs.DirEntry, err error) error {
 			if err != nil || e.IsDir() || !strings.HasSuffix(path, ".go") {
 				return err
