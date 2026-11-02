@@ -24,6 +24,8 @@ You pick the sandbox per binding, so one scope can say "Claude Code, in a contai
 
 **For untrusted work, use a container.** Its filesystem is an allowlist rather than a denylist, it has its own home, attach stays inside it, and with a GitHub App connection no long-lived GitHub credential enters it. A process sandbox is lighter. It suits a machine without Docker, and work you trust but want fenced in.
 
+To run a binding on another machine over SSH instead, see [Run agents on another machine](../remote-runners/).
+
 Both kinds fail closed. If a policy can't be enforced, nothing runs (see [When a run is refused](#when-a-run-is-refused)).
 
 Both kinds also need the binding's Git workspace in `clone` mode, without `setup`. A worktree commits through your checkout's own `.git`, and an agent that could write there could leave a hook that runs the next time you use git. Setup would run on the host, in files the agent wrote. A clone is a repository of its own. Its `.git/config`, `.git/hooks` and `.git/info` stay read-only to the agent, and commits on its branch are saved back to your checkout when the workspace is removed.
