@@ -12,11 +12,17 @@ func TestPanelValidate(t *testing.T) {
 		return extension.Panel{ID: "question", Title: "The agent asks", Sections: []extension.PanelSection{
 			{Text: "Ship it?\n\tTonight.", Fields: []extension.PanelField{{Name: "for", Value: ""}}},
 			{Table: &extension.PanelTable{Columns: []string{"#", "Option"}, Rows: [][]string{{"1", "yes"}}}, Links: []extension.PanelLink{{Label: "PR", URL: "https://example.com/1"}}, Actions: []string{"answer"}},
-			{Messages: []extension.PanelMessage{{From: extension.MessageAgent, Label: "Agent asks", Text: "Ship it?\n\n**Tonight**", Choices: []string{"yes", "no"}, Chosen: "yes"}, {From: extension.MessageOperator, Text: "yes"}}},
+			{Messages: []extension.PanelMessage{{From: extension.MessageParticipant, Label: "Agent asks", Text: "Ship it?\n\n**Tonight**", Choices: []string{"yes", "no"}, Chosen: "yes"}, {From: extension.MessageOperator, Text: "yes"}}},
 		}}
 	}
 	if err := ok().Validate(); err != nil {
 		t.Fatal(err)
+	}
+	// "agent" was MessageParticipant's value; a package may still send it.
+	legacy := ok()
+	legacy.Sections[2].Messages[0].From = "agent"
+	if err := legacy.Validate(); err != nil {
+		t.Fatalf("the old participant name: %v", err)
 	}
 	for name, spoil := range map[string]func(*extension.Panel){
 		"bad id":          func(p *extension.Panel) { p.ID = "Question" },
