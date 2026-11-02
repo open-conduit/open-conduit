@@ -145,7 +145,7 @@
 </form>
 {{end}}
 
-{{define "events-tab"}}
+{{define "events-tab"}}{{$d := .}}
 <div class="events">
   <p class="events-intro">Every event recorded for this Work, in acceptance order, with how routing handled it. Use this to answer “why did that happen?”</p>
   {{if .Events}}
@@ -163,7 +163,14 @@
       <dl class="ev-detail"{{if not .Open}} hidden{{end}}>
         <dt>Routing</dt>
         <dd>{{with .Route}}{{if .Route}}route <code>{{.Route}}</code>{{with .Binding}} → binding <code>{{.}}</code>{{end}}{{with .Policy}} · active policy <code>{{.}}</code>{{end}}{{with .Generation}} · generation {{.}}{{end}}{{else}}not routed as input{{with .Disposition}} ({{.}}){{end}}{{end}}{{else}}this daemon does not explain routing in lists; <code>open-conduit route {{$.W.ID}}</code>{{end}}</dd>
-        {{with .Route}}{{with .Reason}}<dt>Why</dt><dd>{{.}}</dd>{{end}}{{with .DisplayRefused}}<dt>Display</dt><dd>dropped: {{.}}</dd>{{end}}{{end}}
+        {{with .Route}}{{with .Reason}}<dt>Why</dt><dd>{{.}}</dd>{{end}}{{with .DisplayRefused}}<dt>Display</dt><dd>dropped: {{.}}</dd>{{end}}{{with .Error}}<dt>Route error</dt><dd><pre class="block-code">{{.}}</pre></dd>{{end}}{{with .Attempts}}<dt>Attempts</dt><dd>{{.}}</dd>{{end}}{{end}}
+        {{if or (not .Routed) (eq .Disposition "failed") (eq .Disposition "skipped")}}
+        <dt>Routing control</dt>
+        <dd class="ev-controls">
+          {{if not .Routed}}<form method="post" action="/events/skip"><input type="hidden" name="csrf" value="{{$d.CSRF}}"><input type="hidden" name="back" value="{{$d.Back}}"><input type="hidden" name="work" value="{{$d.W.ID}}"><input type="hidden" name="event" value="{{.ID}}"><button type="submit" class="btn btn-xs">Skip</button></form>{{end}}
+          <form method="post" action="/events/reroute"><input type="hidden" name="csrf" value="{{$d.CSRF}}"><input type="hidden" name="back" value="{{$d.Back}}"><input type="hidden" name="work" value="{{$d.W.ID}}"><input type="hidden" name="event" value="{{.ID}}"><button type="submit" class="btn btn-xs">{{if .Routed}}Route again{{else}}Route now{{end}}</button></form>
+        </dd>
+        {{end}}
         <dt>Source</dt><dd><code>{{.Source}}</code> · accepted {{stamp (parseTime .ReceivedAt)}}</dd>
         <dt>Event ID</dt><dd><code>{{.ID}}</code> <button type="button" class="btn btn-quiet btn-xs" data-copy="{{.ID}}" hidden>Copy</button></dd>
         <dt>CLI</dt><dd><code>open-conduit events chain {{.ID}}</code></dd>

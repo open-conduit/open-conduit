@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -35,6 +36,8 @@ type containerState struct {
 	providers map[string]extension.ContainerProvider
 	docker    *docker.Provider
 	last      time.Time
+	// reconciling is set while a reconcile pass runs off the loop.
+	reconciling atomic.Bool
 	// tokens is when the git tokens of ended executions were last swept.
 	tokens time.Time
 }
@@ -49,7 +52,7 @@ func (d *daemon) openContainers() {
 	if v := os.Getenv("OPEN_CONDUIT_GATEWAY_IMAGE"); v != "" {
 		gateway = v
 	}
-	d.containers.docker = docker.New(docker.Options{Helper: self, Host: d.containerHost(), Gateway: gateway, Forward: os.Getenv("OPEN_CONDUIT_CONTAINER_FORWARD"), Contexts: func() []string {
+	d.containers.docker = docker.New(docker.Options{QueryTimeout: d.o.CallTimeout, Helper: self, Host: d.containerHost(), Gateway: gateway, Forward: os.Getenv("OPEN_CONDUIT_CONTAINER_FORWARD"), Contexts: func() []string {
 		var out []string
 		for _, b := range d.dockerBindings() {
 			out = append(out, b.context)
@@ -316,7 +319,19 @@ func (d *daemon) reconcileContainers(ctx context.Context) {
 	if len(d.containers.providers) == 0 || d.now().Sub(d.containers.last) < d.o.ResourceInterval {
 		return
 	}
+	if !d.containers.reconciling.CompareAndSwap(false, true) {
+		return
+	}
 	d.containers.last = d.now()
+	// It runs off the loop, like the projections: a wedged container
+	// runtime must not hold routing, timers and starts.
+	d.goSafe("containers", func() {
+		defer d.containers.reconciling.Store(false)
+		d.reconcileContainersPass(ctx)
+	})
+}
+
+func (d *daemon) reconcileContainersPass(ctx context.Context) {
 	names := make([]string, 0, len(d.containers.providers))
 	for name := range d.containers.providers {
 		names = append(names, name)

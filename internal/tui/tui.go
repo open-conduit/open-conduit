@@ -94,7 +94,9 @@ type Model struct {
 	menu    *actionMenu
 	actions []client.Action
 	panels  []client.Panel
-	notice  string
+	// stuck are the shown Work's Events routing is stuck on or gave up on.
+	stuck  []client.Event
+	notice string
 	// artifact is what the log view asked for (pickLog, pickTranscript or
 	// an index); shown is the index it shows. live means it follows a
 	// running run, refetched on every tick.
@@ -468,7 +470,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		if msg.work.ID != "" {
 			w := msg.work
-			m.work, m.waits, m.actions, m.panels = &w, msg.waits, msg.actions, msg.panels
+			m.work, m.waits, m.actions, m.panels, m.stuck = &w, msg.waits, msg.actions, msg.panels, msg.stuck
 		}
 	case menuMsg:
 		switch {
@@ -594,7 +596,7 @@ func (m Model) key(k string) (tea.Model, tea.Cmd) {
 			return m, m.fetch()
 		case "enter":
 			if r, ok := m.selected(); ok {
-				m.work, m.waits, m.actions, m.panels = nil, nil, nil, nil
+				m.work, m.waits, m.actions, m.panels, m.stuck = nil, nil, nil, nil, nil
 				return m, tea.Batch(m.fetchDetail(r.ID, r.WorkID), m.fetchWork(r.WorkID))
 			}
 		case "l", "t":
@@ -726,6 +728,7 @@ func (m Model) View() string {
 		}
 		b.WriteString(WorkContext(m.work, m.waits))
 		if m.work != nil && m.detail != nil && m.work.ID == m.detail.WorkID {
+			b.WriteString(StuckText(m.stuck))
 			b.WriteString(PanelText(m.panels, m.workActions()))
 		}
 		keys := "l log · t transcript · r refresh · esc back · q quit"

@@ -31,6 +31,12 @@ type Controls interface {
 	RetryWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	HoldWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	ReleaseWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
+	// EventsWithRoutes lists Events with how each was routed, for the
+	// Events routing is stuck on or gave up on; SkipEvent and
+	// RerouteEvent act on one.
+	EventsWithRoutes(ctx context.Context, q url.Values) (client.Page[client.Event], error)
+	SkipEvent(ctx context.Context, id, reason, key string) (client.ControlResult, error)
+	RerouteEvent(ctx context.Context, id, reason, key string) (client.ControlResult, error)
 	Scopes(ctx context.Context, q url.Values) (client.Page[client.Scope], error)
 	// Actions lists what extensions offer on a scope or Work now, and
 	// InvokeAction invokes one as the local operator.
@@ -73,6 +79,7 @@ func (a *attachCmd) Run() error {
 type workMsg struct {
 	work    client.Work
 	waits   []client.Wait
+	stuck   []client.Event
 	actions []client.Action
 	panels  []client.Panel
 	err     error
@@ -122,14 +129,19 @@ func (m Model) fetchWork(id string) tea.Cmd {
 		if err != nil {
 			return workMsg{work: w, err: err}
 		}
+		events, err := ctl.EventsWithRoutes(ctx, url.Values{"work_id": {id}, "limit": {"200"}})
+		if err != nil {
+			return workMsg{work: w, waits: page.Items, err: err}
+		}
+		stuck := stuckEvents(events.Items)
 		t := client.ActionTarget{WorkID: id}
 		panels, err := ctl.Panels(ctx, t)
 		var e *client.Error
 		if err != nil && !(errors.As(err, &e) && e.Status == 404 && e.Code == "not_found") {
-			return workMsg{work: w, waits: page.Items, err: err}
+			return workMsg{work: w, waits: page.Items, stuck: stuck, err: err}
 		}
 		actions, err := ctl.Actions(ctx, t)
-		return workMsg{work: w, waits: page.Items, actions: actions, panels: panels, err: err}
+		return workMsg{work: w, waits: page.Items, stuck: stuck, actions: actions, panels: panels, err: err}
 	}
 }
 
@@ -274,6 +286,8 @@ func (m Model) controlKey(k string, r client.Run) (Model, tea.Cmd, bool) {
 			}
 			return ctl.HoldWork(ctx, w.ID, w.Revision, "operator (tui)", key())
 		}, r.WorkID), true
+	case "S", "E":
+		return m.stuckKey(k, r.WorkID)
 	case "a":
 		return m, tea.Exec(m.ctl.AttachCommand(r.WorkID), func(err error) tea.Msg {
 			if err != nil {
@@ -283,6 +297,82 @@ func (m Model) controlKey(k string, r client.Run) (Model, tea.Cmd, bool) {
 		}), true
 	}
 	return m, nil, false
+}
+
+// stuckEvents are the Events routing has not routed or gave up on, oldest
+// first.
+func stuckEvents(events []client.Event) []client.Event {
+	var out []client.Event
+	for _, e := range events {
+		if !e.Routed || e.Disposition == "failed" {
+			out = append(out, e)
+		}
+	}
+	return out
+}
+
+// StuckText renders the Events routing is stuck on or gave up on, with
+// the keys that act on the first.
+func StuckText(stuck []client.Event) string {
+	if len(stuck) == 0 {
+		return ""
+	}
+	var b strings.Builder
+	b.WriteString("\n" + boldS.Render("Events routing is stuck on") + dimS.Render("  S skips the first unrouted · E routes the first again") + "\n")
+	for _, e := range stuck {
+		state := "unrouted"
+		if e.Routed {
+			state = e.Disposition
+		}
+		if r := e.Route; r != nil && r.Reason != "" {
+			state += ": " + r.Reason
+			if r.Attempts > 0 {
+				state += fmt.Sprintf(" after %d attempt(s)", r.Attempts)
+			}
+		}
+		fmt.Fprintf(&b, "  %-18s %s %s\n", e.Type, e.ID, state)
+	}
+	return b.String()
+}
+
+// stuckKey handles S and E on the Work's stuck Events.
+func (m Model) stuckKey(k, workID string) (Model, tea.Cmd, bool) {
+	if m.work == nil || m.work.ID != workID {
+		return m, nil, false
+	}
+	var target *client.Event
+	for i := range m.stuck {
+		if k == "E" || !m.stuck[i].Routed {
+			target = &m.stuck[i]
+			break
+		}
+	}
+	if target == nil {
+		m.notice = "no event to " + map[string]string{"S": "skip", "E": "route again"}[k]
+		return m, nil, true
+	}
+	id, ctl := target.ID, m.ctl
+	if k == "S" {
+		m.confirm = &pending{prompt: "skip event " + id + "? routing won't try it again", cmd: func() tea.Msg {
+			ctx, cancel := call()
+			defer cancel()
+			res, err := ctl.SkipEvent(ctx, id, "operator (tui)", key())
+			if err != nil {
+				return actionMsg{err: err}
+			}
+			return actionMsg{text: "event skip accepted (event " + res.EventID + ")"}
+		}}
+		return m, nil, true
+	}
+	return m, func() tea.Msg {
+		ctx, cancel := call()
+		defer cancel()
+		res, err := ctl.RerouteEvent(ctx, id, "operator (tui)", key())
+		if err != nil {
+			return actionMsg{err: err}
+		}
+		return actionMsg{text: "event reroute accepted (routes " + res.RoutedEventID + ")"}
+	}, true
 }
 
 // WorkContext renders the Work's hold, extension annotations and waits.

@@ -19,6 +19,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime/debug"
 	"slices"
 	"strconv"
 	"sync"
@@ -75,6 +76,10 @@ type Options struct {
 	ArtifactGrace time.Duration
 	// ResourceInterval paces resource lease reconciliation (default 5s).
 	ResourceInterval time.Duration
+	// CallTimeout bounds each call the host loop makes into an extension
+	// or tool it can't vouch for: a route's decision (route.match) and a
+	// container runtime's list and inspect (default 5s).
+	CallTimeout time.Duration
 	// SweepInterval paces the spare-workspace sweep (default 6h, as in v1).
 	// The first sweep runs one interval after start.
 	SweepInterval time.Duration
@@ -264,13 +269,16 @@ func (o *Options) defaults() error {
 	if o.ResourceInterval == 0 {
 		o.ResourceInterval = 5 * time.Second
 	}
+	if o.CallTimeout == 0 {
+		o.CallTimeout = runtime.DefaultRouteTimeout
+	}
 	if o.ExecutorInterval == 0 {
 		o.ExecutorInterval = 30 * time.Second
 	}
 	if o.SweepInterval == 0 {
 		o.SweepInterval = 6 * time.Hour
 	}
-	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ArtifactGrace <= 0 || o.ResourceInterval <= 0 || o.ExecutorInterval <= 0 || o.SweepInterval <= 0 {
+	if o.PollInterval <= 0 || o.LeaseDuration <= 0 || o.LeaseDuration > 24*time.Hour || o.RetentionInterval <= 0 || o.ArtifactGrace <= 0 || o.ResourceInterval <= 0 || o.CallTimeout <= 0 || o.ExecutorInterval <= 0 || o.SweepInterval <= 0 {
 		return errors.New("intervals must be positive")
 	}
 	return nil
@@ -538,7 +546,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	var err error
 	routeHandlers := handlers()
 	inprocHandlers(routeHandlers, d.inproc)
-	if c.router, err = runtime.NewRouter(d.coord, d.now, runtime.RouterOptions{Generation: c.generation, Handlers: routeHandlers, Bindings: bindings, CausalLimits: limits}); err != nil {
+	if c.router, err = runtime.NewRouter(d.coord, d.now, runtime.RouterOptions{Generation: c.generation, Handlers: routeHandlers, Bindings: bindings, CausalLimits: limits, RouteTimeout: d.o.CallTimeout}); err != nil {
 		return nil, err
 	}
 	var belt *runtime.Toolbelt
@@ -654,6 +662,23 @@ func (d *daemon) report(kind string, subject domain.ID, code string, cause ...st
 		}
 		d.log.Info("runtime diagnostic", attrs...)
 	}
+}
+
+// goSafe runs fn on its own goroutine, counted in d.wg. A panic in it (in
+// an extension's projection or task, say) is recovered and logged with its
+// stack instead of taking the daemon down; the next pass runs it again.
+func (d *daemon) goSafe(kind string, fn func()) {
+	d.wg.Add(1)
+	go func() {
+		defer d.wg.Done()
+		defer func() {
+			if v := recover(); v != nil {
+				d.log.Error("recovered from a panic", "kind", kind, "panic", fmt.Sprint(v), "stack", string(debug.Stack()))
+				d.report(kind, "", "panic")
+			}
+		}()
+		fn()
+	}()
 }
 
 func (d *daemon) clear(kind string, subject domain.ID) {

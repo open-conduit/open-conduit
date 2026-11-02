@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -235,5 +236,44 @@ func TestDockerMountsTheWorkHome(t *testing.T) {
 	}
 	if !found {
 		t.Errorf("mounts %+v have no read-write home", mounts)
+	}
+}
+
+// stubDocker writes a docker CLI stand-in that runs script, and a Provider
+// that uses it on one context.
+func stubDocker(t *testing.T, script string, timeout time.Duration) *Provider {
+	t.Helper()
+	bin := filepath.Join(t.TempDir(), "docker")
+	if err := os.WriteFile(bin, []byte("#!/bin/sh\n"+script+"\n"), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	return New(Options{Docker: bin, Host: "host-1", QueryTimeout: timeout, Contexts: func() []string { return []string{"default"} }, Environ: func() []string { return []string{"PATH=" + os.Getenv("PATH")} }})
+}
+
+// TestDockerQueriesHaveADeadline: a docker that never answers (a wedged
+// Docker Desktop) fails List and Inspect at the query deadline instead of
+// holding the caller (issue #342). The control: the same stub answering
+// at once lists.
+func TestDockerQueriesHaveADeadline(t *testing.T) {
+	answering := stubDocker(t, `case "$3" in info) echo 'daemon-1|28.0.0|linux';; ps) ;; esac`, time.Second)
+	if _, err := answering.List(context.Background(), extension.ResourceOwner{}); err != nil {
+		t.Fatalf("control: the answering stub fails: %v", err)
+	}
+	hung := stubDocker(t, `exec sleep 600`, 50*time.Millisecond)
+	done := make(chan error, 2)
+	go func() { _, err := hung.List(context.Background(), extension.ResourceOwner{}); done <- err }()
+	go func() {
+		_, err := hung.Inspect(context.Background(), extension.ContainerRef{ID: "default/abc"})
+		done <- err
+	}()
+	for range 2 {
+		select {
+		case err := <-done:
+			if err == nil {
+				t.Fatal("a docker that never answered succeeded")
+			}
+		case <-time.After(10 * time.Second):
+			t.Fatal("a query to a docker that never answers is not bounded")
+		}
 	}
 }

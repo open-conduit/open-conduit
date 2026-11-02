@@ -497,6 +497,34 @@ func (s *Server) cancelRun(w http.ResponseWriter, r *http.Request) {
 	s.record(w, r, "Cancelled turn "+itoa(int(run.Attempt))+". It is not retried automatically; run it again when you are ready.", rc, err)
 }
 
+// eventControl skips an Event routing is stuck on, or routes one again
+// (issue #342).
+func (s *Server) eventControl(w http.ResponseWriter, r *http.Request) {
+	ctx, cancel := call(r)
+	defer cancel()
+	id := r.PostFormValue("event")
+	rc := receipt{WorkID: r.PostFormValue("work"), Work: "event " + shortID(id), Call: "POST /v1/events/" + shortPath(id) + "/" + r.PathValue("control")}
+	var res client.ControlResult
+	var err error
+	var text string
+	switch r.PathValue("control") {
+	case "skip":
+		res, err = s.src.SkipEvent(ctx, id, formReason(r, reason), s.opts.NewKey())
+		rc.Summary, text = "Skip event", "Skipped the event. Routing won't try it again, and the Work takes its later input."
+	case "reroute":
+		res, err = s.src.RerouteEvent(ctx, id, formReason(r, reason), s.opts.NewKey())
+		rc.Summary, text = "Route event again", "The event is routed again on the next pass."
+		if res.RoutedEventID != "" && res.RoutedEventID != id {
+			text = "Accepted the event again as " + shortID(res.RoutedEventID) + "; it is routed on the next pass."
+		}
+	default:
+		http.NotFound(w, r)
+		return
+	}
+	rc.Event = res.EventID
+	s.record(w, r, text, rc, err)
+}
+
 // lineBreaks turns a form's CRLF and lone CR line breaks into LF.
 var lineBreaks = strings.NewReplacer("\r\n", "\n", "\r", "\n")
 

@@ -204,9 +204,7 @@ func (d *daemon) projectGitHub(ctx context.Context) {
 		sources = append(sources, src)
 	}
 	d.github.mu.Unlock()
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.goSafe("github_projection", func() {
 		defer func() {
 			d.github.mu.Lock()
 			d.github.running = false
@@ -223,7 +221,7 @@ func (d *daemon) projectGitHub(ctx context.Context) {
 			}
 			d.report("github_projection", domain.ID(src.name), code)
 		}
-	}()
+	})
 }
 
 // githubWriters are the GitHub extension's clients of connections the

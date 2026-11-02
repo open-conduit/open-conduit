@@ -309,9 +309,7 @@ func (d *daemon) projectTrackers(ctx context.Context) {
 	d.trackers.running, d.trackers.last = true, d.now()
 	d.trackers.mu.Unlock()
 	sources := d.trackerList()
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.goSafe("tracker_projection", func() {
 		defer func() {
 			d.trackers.mu.Lock()
 			d.trackers.running = false
@@ -331,7 +329,7 @@ func (d *daemon) projectTrackers(ctx context.Context) {
 			}
 			d.report(src.typ+"_projection", domain.ID(src.name), code)
 		}
-	}()
+	})
 }
 
 // trackerToolSources is a tracker type's tools' view of the registered entries.

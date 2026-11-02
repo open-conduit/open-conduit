@@ -33,6 +33,16 @@ type RouterOptions struct {
 	// Bindings is keyed by effective Binding.Executor registration, not name.
 	Bindings     map[string]RouteBinding
 	CausalLimits CausalLimits
+	// RouteTimeout bounds one handler's decision (DefaultRouteTimeout
+	// when zero).
+	RouteTimeout time.Duration
+	// MaxRouteFailures is how many retryable failures an Event gets before
+	// it is routed as failed (DefaultMaxRouteFailures when zero).
+	MaxRouteFailures int
+	// RouteFailureWindow is the least time from an Event's first
+	// retryable failure to giving up on it (DefaultRouteFailureWindow when
+	// zero).
+	RouteFailureWindow time.Duration
 }
 type Router struct {
 	store   storage.Store
@@ -47,6 +57,10 @@ type RouteRecord struct {
 	// limit, a link that is not http or https). The Work kept its display
 	// and the Event was routed as usual.
 	DisplayRefused string `json:",omitempty"`
+	// Error and Attempts say why routing gave up on the Event (Policy
+	// "failed") and after how many tries.
+	Error    string `json:",omitempty"`
+	Attempts int    `json:",omitempty"`
 }
 type QueuedInput struct {
 	EventID  domain.ID
@@ -328,28 +342,29 @@ func (r *Router) binding(scope domain.Scope, name string) (RouteBinding, error) 
 func (r *Router) evaluate(ctx context.Context, s routeSnapshot, record func(domain.Route, extension.RouteDecision)) (p routePlan, err error) {
 	p.event = s.event
 	for _, route := range s.routes {
+		id := s.event.Event.ID
 		h := r.options.Handlers[route.Handler]
 		if h == nil {
-			return p, extension.ErrInvalid
+			return p, routeConfigError(id, route, RouteHandlerMissing, extension.ErrInvalid)
 		}
 		impl, bindingErr := r.binding(s.scope, route.Binding)
 		if bindingErr != nil {
-			return p, bindingErr
+			return p, routeConfigError(id, route, RouteBindingInvalid, bindingErr)
 		}
 		policy := route.ActivePolicy
 		if policy != "" && policy != "queue" && policy != "drop" && policy != "inject" && policy != "interrupt" {
-			return p, extension.ErrInvalid
+			return p, routeConfigError(id, route, RoutePolicyInvalid, extension.ErrInvalid)
 		}
 		b := impl
 		if policy == "inject" && !b.Capabilities.Inject || policy == "interrupt" && !b.Capabilities.Interrupt {
 			if b.Fallback == "" {
-				return p, extension.ErrUnsupported
+				return p, routeConfigError(id, route, RoutePolicyInvalid, extension.ErrUnsupported)
 			}
 		}
 		in := detachedInput(s)
 		in.Route = route
 		in.Route.Config.Data = append([]byte(nil), route.Config.Data...)
-		d, e := h.Match(ctx, in)
+		d, e := r.match(ctx, id, route, h, in)
 		if e != nil {
 			return p, e
 		}
@@ -420,7 +435,32 @@ func potentiallyTargets(tx storage.Tx, e domain.Event, w domain.Work) (bool, err
 // Route evaluates detached handlers outside storage transactions. Optimistic
 // revision validation serializes each Work without holding unrelated keys while
 // a handler is blocked. An earlier accepted input is processed first.
+//
+// A route that fails returns a *RouteError. The failure is counted on the
+// Event it was deciding, and once that Event may not be retried it is routed
+// as failed (DeadLettered); an earlier input given up on this way no longer
+// holds this one, which is routed in the same call.
 func (r *Router) Route(ctx context.Context, id domain.ID) error {
+	for {
+		if err := r.backoff(ctx, id); err != nil {
+			return err
+		}
+		err := r.route(ctx, id)
+		var re *RouteError
+		if !errors.As(err, &re) || ctx.Err() != nil {
+			return err
+		}
+		if e := r.fail(ctx, re); e != nil {
+			return e
+		}
+		if re.DeadLettered && re.EventID != id {
+			continue
+		}
+		return re
+	}
+}
+
+func (r *Router) route(ctx context.Context, id domain.ID) error {
 	for {
 		if err := ctx.Err(); err != nil {
 			return err
@@ -686,6 +726,10 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 		var target *domain.Execution
 		var err error
 		if rec.Policy, rec.Reason, target, err = r.policyInTx(tx, *p.selected, *w, scope); err != nil {
+			// The running attempt can't be given this input (another
+			// binding, or its pinned capabilities lack the control). It
+			// isn't a route failure: the input waits, uncounted, until
+			// the attempt ends and it queues.
 			return err
 		}
 		if rec.Policy != "drop" {
@@ -705,6 +749,9 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 		rec.WorkID = ""
 	}
 	if err := putJSON(tx, routeNamespace, identity(string(rec.EventID)), rec); err != nil {
+		return err
+	}
+	if err := tx.Delete(routeFailureNamespace, routeFailureKey(rec.EventID)); err != nil {
 		return err
 	}
 	return tx.MarkRouted(rec.EventID, rec.WorkID, rec.Policy)

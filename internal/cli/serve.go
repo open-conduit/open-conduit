@@ -15,6 +15,9 @@ type ServeRequest struct {
 	PollInterval, LeaseDuration, RetentionInterval          time.Duration
 	// SweepInterval paces the spare-workspace sweep (default 6h).
 	SweepInterval time.Duration
+	// CallTimeout bounds a route's decision and a container runtime's
+	// list and inspect (default 5s).
+	CallTimeout time.Duration
 	// WebhookAddr enables the webhook listener; Tunnel* expose it. Empty
 	// values fall back to the config's settings.webhooks.
 	WebhookAddr                                                   string
@@ -66,7 +69,8 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	lease := fs.fs.Duration("lease-duration", time.Minute, "")
 	retention := fs.fs.Duration("retention-interval", 10*time.Minute, "")
 	sweep := fs.fs.Duration("sweep-interval", 6*time.Hour, "")
-	if pos, err := fs.parse(args); err != nil || len(pos) != 0 || *poll <= 0 || *lease <= 0 || *retention <= 0 || *sweep <= 0 {
+	call := fs.fs.Duration("call-timeout", 5*time.Second, "")
+	if pos, err := fs.parse(args); err != nil || len(pos) != 0 || *poll <= 0 || *lease <= 0 || *retention <= 0 || *sweep <= 0 || *call <= 0 {
 		return ServeRequest{}, usageError(o.errOut, "invalid serve flags")
 	}
 	switch fs.get("tunnel") {
@@ -74,7 +78,7 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	default:
 		return ServeRequest{}, usageError(o.errOut, "--tunnel is ngrok, cloudflared or static")
 	}
-	r := ServeRequest{StateDir: o.stateDir(), ConfigPath: o.abs(fs.get("config")), Socket: o.abs(o.socket), ToolbeltDir: o.abs(fs.get("toolbelt-dir")), LifecycleLog: o.abs(fs.get("lifecycle-log")), PollInterval: *poll, LeaseDuration: *lease, RetentionInterval: *retention, SweepInterval: *sweep,
+	r := ServeRequest{StateDir: o.stateDir(), ConfigPath: o.abs(fs.get("config")), Socket: o.abs(o.socket), ToolbeltDir: o.abs(fs.get("toolbelt-dir")), LifecycleLog: o.abs(fs.get("lifecycle-log")), PollInterval: *poll, LeaseDuration: *lease, RetentionInterval: *retention, SweepInterval: *sweep, CallTimeout: *call,
 		WebhookAddr: fs.get("webhook-addr"), TunnelKind: fs.get("tunnel"), TunnelBinary: fs.get("tunnel-binary"), TunnelDomain: fs.get("tunnel-domain"),
 		TunnelName: fs.get("tunnel-name"), TunnelHostname: fs.get("tunnel-hostname"), PublicURL: fs.get("public-url"), NoTunnel: *noTunnel, DryRun: *dryRun, ClaudeUsage: *usage}
 	// --web-addr or --web-host alone also turn the view on.
