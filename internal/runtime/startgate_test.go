@@ -6,15 +6,20 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
+// lastFixture is the fixture the last startGateHarness made, for a test
+// that seeds more Work into it.
+var lastFixture conformance.RuntimeFixture
+
 // startGateHarness is a scheduler whose toolbelt has one start gate, the
 // registration "approvals", which decide answers.
-func startGateHarness(t *testing.T, name string, decide extension.StartGate) (context.Context, *runtime.Scheduler, *runtime.Control, domain.ID, *int, func(func(storage.Tx) error)) {
+func startGateHarness(t *testing.T, name string, decide extension.StartGate, tweak ...func(*runtime.SchedulerOptions)) (context.Context, *runtime.Scheduler, *runtime.Control, domain.ID, *int, func(func(storage.Tx) error)) {
 	t.Helper()
 	f, e := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	work := seedSchedulerWork(t, f, name)
@@ -39,7 +44,11 @@ func startGateHarness(t *testing.T, name string, decide extension.StartGate) (co
 	o := schedulerDefaultOptions(f, e)
 	o.Toolbelt = belt
 	o.ToolbeltEndpoints = func(context.Context, domain.ID, string) (string, string, error) { return "", "", nil }
+	for _, fn := range tweak {
+		fn(&o)
+	}
 	s := newTestScheduler(t, f, o)
+	lastFixture = f
 	control, err := runtime.NewControl(f.Store, f.Clock.Now, router, s, runtime.CausalLimits{})
 	if err != nil {
 		t.Fatal(err)
@@ -191,5 +200,69 @@ func TestProductionSchedulerStartGateFailsClosed(t *testing.T) {
 	}
 	if err = s.Observe(ctx, a); err != nil || *runs != 1 {
 		t.Fatalf("observe: %v (runs %d)", err, *runs)
+	}
+}
+
+// A budget that holds the settled start keeps the gate's pass: once the
+// budget hold is released, the Work starts without asking the gates again,
+// so a person never approves the same start twice.
+func TestProductionSchedulerStartGatePassSurvivesABudgetHold(t *testing.T) {
+	asked := 0
+	ctx, s, control, work, runs, read := startGateHarness(t, "budgeted", func(context.Context, extension.StartCall) (*extension.StartHold, error) {
+		asked++
+		return &extension.StartHold{Reason: "approve it"}, nil
+	}, func(o *runtime.SchedulerOptions) {
+		o.Budgets = []runtime.Budget{{Unit: "attempts", Per: runtime.BudgetPerWork, Max: 0}}
+	})
+	if _, err := s.Start(ctx, work); !errors.Is(err, runtime.ErrGateHeld) {
+		t.Fatal(err)
+	}
+	if _, err := control.SettleGateHold(ctx, "approvals", work, true, "approved", "ok"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Start(ctx, work); !errors.Is(err, runtime.ErrBudgetHeld) {
+		t.Fatalf("the budget did not hold the settled start: %v", err)
+	}
+	var w domain.Work
+	read(func(tx storage.Tx) error {
+		var err error
+		w, err = tx.Work(work)
+		return err
+	})
+	if _, err := control.ReleaseWork(ctx, work, w.Revision, "one more", "budget"); err != nil {
+		t.Fatal(err)
+	}
+	a, err := s.Start(ctx, work)
+	if err != nil {
+		t.Fatalf("the released start did not run: %v", err)
+	}
+	if asked != 1 {
+		t.Fatalf("the gate was asked %d times", asked)
+	}
+	if err = s.Observe(ctx, a); err != nil || *runs != 1 {
+		t.Fatalf("observe: %v (runs %d)", err, *runs)
+	}
+}
+
+// The gates are asked only about a start capacity allows: asking can have
+// effects (a request a person sees), so Work held back by a limit isn't
+// asked until it could start.
+func TestProductionSchedulerStartGateWaitsForCapacity(t *testing.T) {
+	var asked []domain.ID
+	ctx, s, _, first, _, _ := startGateHarness(t, "first", func(_ context.Context, c extension.StartCall) (*extension.StartHold, error) {
+		asked = append(asked, c.Work.ID)
+		return nil, nil
+	}, func(o *runtime.SchedulerOptions) { o.GlobalLimit = 1 })
+	f := lastFixture
+	second := seedSchedulerWork(t, f, "second")
+	// The first start runs and, unobserved, keeps the one slot.
+	if _, err := s.Start(ctx, first); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.Start(ctx, second); !errors.Is(err, runtime.ErrCapacity) {
+		t.Fatalf("a start over capacity was not refused: %v", err)
+	}
+	if len(asked) != 1 || asked[0] != first {
+		t.Fatalf("gates asked about %v; want only %s", asked, first)
 	}
 }
