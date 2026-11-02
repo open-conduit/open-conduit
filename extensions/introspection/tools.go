@@ -47,7 +47,7 @@ const (
 func Operations() []string { return extension.OperationNames(Declared()) }
 
 // Declared declares each operation: its name, one-line summary and input
-// (inproc.Operator); the host gives the registered operations both.
+// (inproc.Declarer); the host gives the registered operations both.
 func Declared() []extension.Operation {
 	return []extension.Operation{
 		{Name: OpReport, Summary: "Report a defect in Open Conduit itself, such as a toolbelt operation or playbook that misbehaved.",

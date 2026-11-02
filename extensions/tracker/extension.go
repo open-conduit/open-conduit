@@ -117,6 +117,7 @@ func NewExtension(k Kind) *Extension {
 var (
 	_ inproc.Typed      = (*Extension)(nil)
 	_ inproc.Operator   = (*Extension)(nil)
+	_ inproc.Declarer   = (*Extension)(nil)
 	_ inproc.Router     = (*Extension)(nil)
 	_ inproc.Starter    = (*Extension)(nil)
 	_ inproc.Configurer = (*Extension)(nil)
@@ -139,7 +140,9 @@ func (x *Extension) Types() []inproc.ConfigType {
 	}
 }
 
-func (x *Extension) Operations() []extension.Operation { return Declared(x.k.Type) }
+func (x *Extension) Operations() []string { return Operations(x.k.Type) }
+
+func (x *Extension) Declarations() []extension.Operation { return Declared(x.k.Type) }
 
 func (x *Extension) Routes() map[string]extension.RouteHandler {
 	return map[string]extension.RouteHandler{x.k.Type: Route{Type: x.k.Type}}

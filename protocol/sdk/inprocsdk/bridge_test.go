@@ -38,6 +38,7 @@ var (
 	_ inproc.Ingester   = (*acme)(nil)
 	_ inproc.Webhooker  = (*acme)(nil)
 	_ inproc.Operator   = (*acme)(nil)
+	_ inproc.Declarer   = (*acme)(nil)
 	_ inproc.Tooled     = (*acme)(nil)
 	_ inproc.Tasker     = (*acme)(nil)
 	_ inproc.Checker    = (*acme)(nil)
@@ -103,7 +104,9 @@ func (x *acme) Webhook(path string) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) { w.WriteHeader(http.StatusAccepted) })
 }
 
-func (*acme) Operations() []extension.Operation {
+func (*acme) Operations() []string { return []string{"acme.ping"} }
+
+func (*acme) Declarations() []extension.Operation {
 	return []extension.Operation{{Name: "acme.ping", Summary: "Answer pong.", Input: json.RawMessage(`{"type":"object"}`)}}
 }
 

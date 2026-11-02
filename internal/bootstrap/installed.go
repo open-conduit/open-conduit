@@ -208,10 +208,10 @@ func (x *installed) resourceTypes(reg *config.Registry) {
 	}
 }
 
-func (x *installed) Operations() []extension.Operation {
-	var out []extension.Operation
+func (x *installed) Operations() []string {
+	var out []string
 	for _, o := range x.m.Provides.Operations {
-		out = append(out, extension.Operation{Name: o.Name, Summary: o.Summary, Input: o.Input})
+		out = append(out, o.Name)
 	}
 	return out
 }

@@ -31,7 +31,7 @@ const (
 func Operations() []string { return extension.OperationNames(Declared()) }
 
 // Declared declares each operation: its name, one-line summary and input
-// (inproc.Operator); the host gives the registered operations both.
+// (inproc.Declarer); the host gives the registered operations both.
 func Declared() []extension.Operation {
 	return []extension.Operation{
 		{Name: OpContext, Summary: "Show the Slack thread this Work serves and how to read it, reply in it and wait for the next message.",

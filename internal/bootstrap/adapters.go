@@ -124,13 +124,13 @@ func Adapters() []cli.Adapter {
 }
 
 // OperationDeclarations are the first-party extensions' operation
-// declarations (inproc.Operator) by name: each one's summary and input, as
+// declarations (inproc.Declarer) by name: each one's summary and input, as
 // the generated operations reference renders them.
 func OperationDeclarations() map[string]extension.Operation {
 	out := map[string]extension.Operation{}
 	for _, x := range firstParty() {
-		if o, ok := x.(inproc.Operator); ok {
-			for _, op := range o.Operations() {
+		if d, ok := x.(inproc.Declarer); ok {
+			for _, op := range d.Declarations() {
 				out[op.Name] = op
 			}
 		}

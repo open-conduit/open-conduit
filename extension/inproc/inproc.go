@@ -69,15 +69,19 @@ type Typed interface {
 	Types() []ConfigType
 }
 
-// Operator extensions declare the toolbelt operations config may grant:
-// each one's Name, and its Summary and Input (see extension.Operation),
-// with no handler. Operations is read before Start, offline (config
-// validation and the operations reference), so it must not depend on host
-// services. The host gives each operation of the extension's Registration
-// the declared Summary and Input it leaves unset (Describe), so they are
-// declared once.
+// Operator extensions name the toolbelt operations config may grant.
 type Operator interface {
-	Operations() []extension.Operation
+	Operations() []string
+}
+
+// Declarer extensions declare their toolbelt operations: each one's Name,
+// and its Summary and Input (see extension.Operation), with no handler.
+// Declarations is read before Start, offline (config validation and the
+// operations reference), so it must not depend on host services. The host
+// gives each operation of the extension's Registration the declared
+// Summary and Input it leaves unset (Describe), so they are declared once.
+type Declarer interface {
+	Declarations() []extension.Operation
 }
 
 // Describe returns r with each operation's unset Summary and Input taken

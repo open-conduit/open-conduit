@@ -19,9 +19,21 @@ func TestFirstPartyOperationsDescribed(t *testing.T) {
 		if !ok {
 			continue
 		}
-		for _, op := range o.Operations() {
+		d, ok := x.(inproc.Declarer)
+		if !ok {
+			t.Errorf("%s names operations but declares none", x.Name())
+			continue
+		}
+		declared := map[string]bool{}
+		for _, op := range d.Declarations() {
+			declared[op.Name] = true
 			for _, problem := range describedProblems(op) {
 				t.Errorf("%s: %s", op.Name, problem)
+			}
+		}
+		for _, name := range o.Operations() {
+			if !declared[name] {
+				t.Errorf("%s: named but not declared", name)
 			}
 		}
 	}

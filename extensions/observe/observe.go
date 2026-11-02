@@ -60,7 +60,7 @@ const (
 func Operations() []string { return extension.OperationNames(Declared()) }
 
 // Declared declares each operation: its name, one-line summary and input
-// (inproc.Operator); the host gives the registered operations both.
+// (inproc.Declarer); the host gives the registered operations both.
 func Declared() []extension.Operation {
 	return []extension.Operation{
 		{Name: OpRecord, Summary: "Record an item you saw in an outside source so it becomes Work or joins its thread's Work.",

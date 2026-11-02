@@ -27,6 +27,7 @@ var parity = map[string][]string{
 	"Extension":    {"manifest:name", "method:initialize"},
 	"Typed":        {"manifest:provides.connections", "manifest:provides.extensions", "manifest:provides.routes.config", "method:validate"},
 	"Operator":     {"manifest:provides.operations"},
+	"Declarer":     {"manifest:provides.operations.summary", "manifest:provides.operations.input"},
 	"EntryGated":   {"manifest:provides.entry_gated"},
 	"Router":       {"manifest:provides.routes", "method:route.match"},
 	"Starter":      {"method:initialize"},

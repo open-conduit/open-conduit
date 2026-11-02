@@ -159,9 +159,16 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 	}
 	if o, ok := b.x.(inproc.Operator); ok {
 		for _, op := range o.Operations() {
+			if !slices.ContainsFunc(p.Operations, func(d protocol.OperationDecl) bool { return d.Name == op }) {
+				return m, fmt.Errorf("inprocsdk: the base manifest declares no kind for operation %q", op)
+			}
+		}
+	}
+	if d, ok := b.x.(inproc.Declarer); ok {
+		for _, op := range d.Declarations() {
 			i := slices.IndexFunc(p.Operations, func(d protocol.OperationDecl) bool { return d.Name == op.Name })
 			if i < 0 {
-				return m, fmt.Errorf("inprocsdk: the base manifest declares no kind for operation %q", op.Name)
+				continue
 			}
 			// The extension's own declaration gives what the base leaves
 			// unset, as the host does for an in-process registration.

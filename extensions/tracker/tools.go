@@ -33,7 +33,7 @@ const (
 func Operations(typ string) []string { return extension.OperationNames(Declared(typ)) }
 
 // Declared declares a tracker's operations: each one's name, one-line
-// summary and input (inproc.Operator); the host gives the registered
+// summary and input (inproc.Declarer); the host gives the registered
 // operations both.
 func Declared(typ string) []extension.Operation {
 	return []extension.Operation{

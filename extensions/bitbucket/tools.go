@@ -35,7 +35,7 @@ const (
 func Operations() []string { return extension.OperationNames(Declared()) }
 
 // Declared declares each operation: its name, one-line summary and input
-// (inproc.Operator); the host gives the registered operations both.
+// (inproc.Declarer); the host gives the registered operations both.
 func Declared() []extension.Operation {
 	return []extension.Operation{
 		{Name: OpContext, Summary: "Show the Bitbucket repository, this Work's issue and branch, how a PR refers to the issue and the base branch.",
