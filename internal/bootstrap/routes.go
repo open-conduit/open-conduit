@@ -83,7 +83,6 @@ func (d *daemon) admitTrace(scope domain.ID, e domain.Event) error {
 
 func handlers() map[string]extension.RouteHandler {
 	h := map[string]extension.RouteHandler{"manual": manualRoute{}, gh.Type: gh.Route{}, gh.HoldHandler: gh.HoldRoute{}, sl.Type: sl.Route{}}
-	trackerHandlers(h)
 	return h
 }
 

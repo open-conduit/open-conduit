@@ -59,7 +59,6 @@ func (d *daemon) loop(ctx context.Context) error {
 			d.report("ingress", "", errorCode(err))
 		}
 		d.projectGitHub(ctx)
-		d.projectTrackers(ctx)
 		d.runSlackSockets(ctx)
 		d.projectSlack(ctx)
 		d.manageHooks(ctx)

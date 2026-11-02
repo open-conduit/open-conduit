@@ -26,10 +26,10 @@ import (
 // adapter before anything is accepted:
 //   - POST /github/<scope>/<entry> for a GitHub entry with a webhook_secret;
 //   - POST /slack/<scope>/<entry> for a Slack entry with receiver http (04-01);
-//   - POST /linear|jira|bitbucket/<scope>/<entry> for tracker and code-host
-//     entries (06-01);
-//   - POST /schedule/<scope>/<entry>/<job>/<token>, a schedule job's signed
-//     URL (05-01);
+//   - POST /<extension>/..., served by an in-process extension's Webhook:
+//     a schedule job's signed URL /schedule/<scope>/<entry>/<job>/<token>
+//     (05-01), and /linear|jira|bitbucket/<scope>/<entry> for tracker and
+//     code-host entries (06-01);
 //   - the paths an installed extension package registers at configure (07-02, 07-03).
 // Anything else is 404. It never mounts /v1, never sees management
 // credentials and never forwards to the management socket. An optional
@@ -223,14 +223,6 @@ func (d *daemon) webhookHandler() http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
-		if isTrackerRoute(name) {
-			if h := d.trackerWebhook(name); h != nil {
-				h.ServeHTTP(w, r)
-				return
-			}
-			http.NotFound(w, r)
-			return
-		}
 		if strings.HasPrefix(name, sl.Type+"/") {
 			if h := d.slackWebhook(name); h != nil {
 				h.ServeHTTP(w, r)
@@ -290,8 +282,7 @@ func (d *daemon) manageHooks(ctx context.Context) {
 		jobs = append(jobs, job{src, target})
 	}
 	d.github.mu.Unlock()
-	trackerJobs := d.trackerHookJobs(public)
-	if len(jobs) == 0 && len(trackerJobs) == 0 {
+	if len(jobs) == 0 {
 		d.hooks.mu.Unlock()
 		return
 	}
@@ -332,24 +323,6 @@ func (d *daemon) manageHooks(ctx context.Context) {
 			d.hooks.hooks[s.Namespace] = st
 			d.hooks.mu.Unlock()
 			d.report("github_webhook", "", st.code)
-		}
-		for _, j := range trackerJobs {
-			st := &hookState{url: j.url}
-			d.hooks.mu.Lock()
-			if prev := d.hooks.hooks[j.src.namespace]; prev != nil {
-				st.id = prev.id
-			}
-			d.hooks.mu.Unlock()
-			cx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			st.id, st.code = d.ensureTrackerHook(cx, j, st.id)
-			cancel()
-			if st.code != "ok" && st.code != "dry_run" {
-				st.next = d.now().Add(time.Minute)
-			}
-			d.hooks.mu.Lock()
-			d.hooks.hooks[j.src.namespace] = st
-			d.hooks.mu.Unlock()
-			d.report(j.src.typ+"_webhook", "", st.code)
 		}
 	}()
 }
@@ -415,12 +388,6 @@ func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 	}
 	d.github.mu.Unlock()
 	check.Items = append(check.Items, d.slackWebhookItems()...)
-	for _, item := range d.trackerWebhookItems(hooks) {
-		if strings.Contains(item, "; hook ") && !strings.HasSuffix(item, "hook ok") && !strings.HasSuffix(item, "hook dry_run") && !strings.HasSuffix(item, "hook pending") && check.Status == runtime.CheckOK {
-			check.Status, check.Code = runtime.CheckWarn, "hook_update_failed"
-		}
-		check.Items = append(check.Items, item)
-	}
 	sort.Strings(check.Items)
 	return check
 }
