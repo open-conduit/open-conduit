@@ -68,15 +68,9 @@ func (m measurement) String() string {
 	return fmt.Sprintf("p50 %v (budget %v), p95 %v (budget %v), p99 %v, max %v over %d calls", m.at(50), limit50, m.at(95), limit95, m.at(99), m[len(m)-1], len(m))
 }
 
-// measure times calls calls of call; wrong is the index of the first wrong
-// answer, or -1.
-func measure(calls int, call func() bool) (m measurement, wrong int) {
-	return measurePrepared(calls, func() func() bool { return call })
-}
-
-// measurePrepared is measure for a call that needs fresh setup each time
-// (an emission to commit): prepare runs untimed and returns the call to
-// time, or nil for a wrong answer.
+// measurePrepared times calls calls, each prepared afresh (an emission to
+// commit): prepare runs untimed and returns the call to time, or nil for a
+// wrong answer; wrong is the index of the first wrong answer, or -1.
 func measurePrepared(calls int, prepare func() func() bool) (m measurement, wrong int) {
 	m = make(measurement, calls)
 	for i := range m {
