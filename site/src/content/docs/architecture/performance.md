@@ -114,7 +114,7 @@ Not measured. [`TestConcurrentFirstOpen`](https://github.com/open-conduit/open-c
 - `Poll` recovers at most 100 expired attempts, fires at most 100 timers and handles at most 100 retry/timeout Events and Waits per pass, with a fair cursor. Pending Events are routed in full, in pages of 200, at the start of every pass ([`loop.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/loop.go)).
 - Ready Work starts only as capacity allows: 4 agent turns and 4 jobs by default.
 - Reconcile resumes from durable checkpoints, one page per source per poll, within the page limits above ([transactional snapshot generations](../event-ingress/#transactional-snapshot-generations)).
-- A retention sweep runs every 10 minutes (`--retention-interval`) and expires at most 100 attempts per sweep, keeping 20 per Work (`settings.kept_executions`; [`retention.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/retention.go)).
+- A retention sweep runs every 10 minutes (`--retention-interval`) and expires at most 100 attempts per sweep. It keeps 20 per Work (`settings.kept_executions`), and none for Work finished more than 14 days ago (`settings.kept_finished_days`; [`retention.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/retention.go)). Without the age rule almost nothing expired: on one install after under a week, 203 Work had 787 runs, none had more than 20, and run directories and artifacts held about 400 MB.
 
 ### What the design implies
 

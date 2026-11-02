@@ -70,7 +70,8 @@ type Options struct {
 	// LeaseDuration is the execution lease (default 1m). After a crash a new
 	// daemon recovers a running attempt only once its lease has expired.
 	LeaseDuration time.Duration
-	// RetentionInterval paces the kept_executions sweep (default 10m).
+	// RetentionInterval paces the retention sweep (kept_executions and
+	// kept_finished_days, default 10m).
 	RetentionInterval time.Duration
 	// BackupInterval paces the scheduled online backups (default 24h;
 	// negative turns them off). BackupDir receives them (default
@@ -606,7 +607,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
 		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, Secrets: d.configs.Secrets(d.resolver), Environment: d.runEnvironment,
-		Resources: d.bindResources, Sandbox: d.bindSandbox, Container: d.bindContainer, Signalled: d.containerSignalled, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
+		Resources: d.bindResources, Sandbox: d.bindSandbox, Container: d.bindContainer, Signalled: d.containerSignalled, KeptExecutions: set.KeptExecutions, KeptFinished: keptFinished(set.KeptFinishedDays), Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
 		WorkKinds: kinds, Budgets: budgets(set.Budgets),
 	}); err != nil {
@@ -710,4 +711,10 @@ func (d *daemon) clear(kind string, subject domain.ID) {
 	d.mu.Lock()
 	delete(d.reported, kind+"\x00"+string(subject))
 	d.mu.Unlock()
+}
+
+// keptFinished converts settings.kept_finished_days to a duration, capped at
+// a century so the largest setting the config allows doesn't overflow.
+func keptFinished(days int) time.Duration {
+	return time.Duration(min(days, 36500)) * 24 * time.Hour
 }

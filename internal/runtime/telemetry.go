@@ -582,7 +582,11 @@ func (r *recorder) resolve(diagnostic func(string)) []observability.Record {
 			continue
 		}
 		if x, err := r.Tx.Execution(e.ExecutionID); err == nil {
-			add(observability.Record{Name: "execution.retention_expired", Correlation: r.executionCorrelation(x), Attributes: map[string]string{"retention.artifacts": strconv.Itoa(len(e.Artifacts)), "retention.kept": strconv.Itoa(e.Kept), "record_id": identity("execution.retention_expired", string(x.ID))}})
+			attrs := map[string]string{"retention.artifacts": strconv.Itoa(len(e.Artifacts)), "retention.kept": strconv.Itoa(e.Kept), "record_id": identity("execution.retention_expired", string(x.ID))}
+			if e.Reason != "" {
+				attrs["retention.reason"] = e.Reason
+			}
+			add(observability.Record{Name: "execution.retention_expired", Correlation: r.executionCorrelation(x), Attributes: attrs})
 		}
 	}
 	return out

@@ -140,15 +140,20 @@ Issue reports are ordinary derived Events, so `events chain <report event>` trac
 
 ## Retention
 
-One kept-executions policy (B05 `kept_executions`, default 20 per Work, `SchedulerOptions.KeptExecutions`) applies to every executor. `Scheduler.SweepRetention(ctx, limit)` keeps the newest N attempts of each Work. An older attempt is expired only if it is terminal and its resource exclusion is confirmed; an uncertain hold is never released. The sweep runs in phases:
+One retention policy applies to every executor, with two rules:
 
-1. Commit an expiration ledger entry with the attempt's artifact references, which emits `execution.retention_expired`.
+- **By count.** `kept_executions` (B05, default 20 per Work, `SchedulerOptions.KeptExecutions`): the newest N attempts of each Work keep their content and older ones expire.
+- **By age.** `kept_finished_days` (default 14, `SchedulerOptions.KeptFinished`): once a Work is finished (completed, failed or cancelled) and has not changed for that long, all its attempts expire, including the newest N. A Work still in progress never expires this way, however old.
+
+`Scheduler.SweepRetention(ctx, limit)` applies both. An attempt is expired only if it is terminal and its resource exclusion is confirmed; an uncertain hold is never released. The sweep runs in phases:
+
+1. Commit an expiration ledger entry with the attempt's artifact references and the rule that expired it (`kept_executions` or `kept_finished_days`). This emits `execution.retention_expired` with `retention.reason`.
 2. Outside the transaction, delete the content through `storage.Artifacts`, then call the optional `extension.ForgetExecutor.Forget` to release executor-private state.
 3. Record the release.
 
 A crash between phases is completed by a later sweep.
 
-Coordination history (records, outcomes, usage and artifact metadata) is never deleted. The history shows `retention.state=expired`. Artifact content then returns 404 `artifact_expired`, and the TUI reports expiry instead of fetching the content.
+Coordination history (records, outcomes with their summaries, usage and artifact metadata) is never deleted, so a finished Work's runs still show what happened after their content is gone. The history shows `retention.state=expired`. Artifact content then returns 404 `artifact_expired`, and the TUI reports expiry instead of fetching the content.
 
 The shell executor's `Forget` removes the execution's run directories. It refuses (`ErrLiveSegment`) and never signals while a verified process still runs. The host decides when to sweep: the daemon loop runs `SweepRetention` every `--retention-interval` (default 10 minutes), then collects artifact content that no execution references and that is more than 24 hours old ([artifact recovery and retention](../sqlite-artifacts/#recovery-and-retention)).
 

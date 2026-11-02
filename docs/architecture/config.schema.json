@@ -93,6 +93,12 @@
           "maximum": 2147483647,
           "default": 20
         },
+        "kept_finished_days": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 2147483647,
+          "default": 14
+        },
         "retry_delays_seconds": {
           "type": "array",
           "maxItems": 100,

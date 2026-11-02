@@ -407,6 +407,52 @@ esac`
 	}
 }
 
+// TestShellRetentionExpiresFinishedWorkByAge: a finished Work's attempts keep
+// their content within kept_finished_days even under kept_executions, and
+// all of them expire once it has been finished for longer. The record and
+// its outcome stay in history, and the expiration says why.
+func TestShellRetentionExpiresFinishedWorkByAge(t *testing.T) {
+	ctx := context.Background()
+	state, bin := shellState(t, shellConfig(t, map[string]any{"command": "echo done"}))
+	clock := conformance.NewClock()
+	h := newShellHostWith(t, state, bin, clock, "daemon", false, shellHostOptions{telemetry: true, keptFinished: 48 * time.Hour})
+	work := h.submit("operator.finished", "finished", "finished").RoutedWorkID
+	run := h.runOnce(work)
+	w, err := h.operator().Work(ctx, work)
+	if err != nil || !domain.WorkState(w.State).Terminal() {
+		t.Fatalf("work did not finish: %+v %v", w, err)
+	}
+	clock.Advance(47 * time.Hour)
+	if result, err := h.scheduler.SweepRetention(ctx, 10); err != nil || len(result.Expired) != 0 {
+		t.Fatalf("sweep within kept_finished_days: %+v %v", result, err)
+	}
+	clock.Advance(2 * time.Hour)
+	result, err := h.scheduler.SweepRetention(ctx, 10)
+	if err != nil || len(result.Expired) != 1 || result.Expired[0] != run || len(result.Released) != 1 {
+		t.Fatalf("sweep after kept_finished_days: %+v %v", result, err)
+	}
+	if _, err = os.Stat(shellRunDir(state, run)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("expired run directory kept: %v", err)
+	}
+	x, err := h.operator().Run(ctx, string(run))
+	if err != nil || x.Retention.State != "expired" || x.Outcome == nil {
+		t.Fatalf("expired run keeps its record and outcome: %+v %v", x, err)
+	}
+	if err = h.store.Transact(ctx, storage.Guard{Now: clock.Now()}, func(tx storage.Tx) error {
+		r, err := runtime.RetentionInTx(tx, run)
+		if err == nil && r.Reason != runtime.RetentionFinished {
+			t.Errorf("retention reason %q, want %q", r.Reason, runtime.RetentionFinished)
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	expired := recordSet(h.records()).one(t, "execution.retention_expired", forExecution(run))
+	if expired.Attributes["retention.reason"] != runtime.RetentionFinished {
+		t.Fatalf("retention telemetry: %+v", expired.Attributes)
+	}
+}
+
 // TestDoctorChecks covers storage, config, bindings, connections, secrets,
 // reconcile lag/failure, declared non-re-derivable families, lease recovery,
 // pinned executors and the CLI.

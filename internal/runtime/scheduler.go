@@ -120,7 +120,11 @@ type SchedulerOptions struct {
 	// (B05 kept_executions, default 20). Artifacts receives content deletion
 	// for expired attempts; nil keeps content and still records expiration.
 	KeptExecutions int
-	Artifacts      storage.Artifacts
+	// KeptFinished is how long a finished (terminal) Work's attempts keep
+	// their content after the Work last changed, whatever KeptExecutions
+	// says (kept_finished_days, default 14 days). The records stay.
+	KeptFinished time.Duration
+	Artifacts    storage.Artifacts
 	// WorkKinds are extension-registered lifecycle policies by Work kind
 	// (05-01). Kinds without an entry keep the default lifecycle.
 	WorkKinds map[string]WorkKindPolicy
@@ -411,6 +415,12 @@ func NewScheduler(store storage.Store, now func() time.Time, router *Router, o S
 		o.KeptExecutions = DefaultKeptExecutions
 	}
 	if o.KeptExecutions < 1 || o.KeptExecutions > 2147483647 {
+		return nil, storage.ErrInvalid
+	}
+	if o.KeptFinished == 0 {
+		o.KeptFinished = DefaultKeptFinished
+	}
+	if o.KeptFinished < 0 {
 		return nil, storage.ErrInvalid
 	}
 	if o.LeaseDuration == 0 {

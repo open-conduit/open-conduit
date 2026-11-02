@@ -74,6 +74,9 @@ func ValidSecretRef(ref string) bool {
 	return false
 }
 
+// DefaultKeptFinishedDays is settings.kept_finished_days when unset.
+const DefaultKeptFinishedDays = 14
+
 type Settings struct {
 	Concurrency, AdmissionLimit, ReconcileSeconds, TimeoutSeconds, KeptExecutions int
 	RetryDelaysSeconds                                                            []int
@@ -81,6 +84,9 @@ type Settings struct {
 	// JobConcurrency bounds running job attempts (shell and other non-agent
 	// executors) apart from Concurrency, which then bounds agent turns (#13).
 	JobConcurrency int
+	// KeptFinishedDays is how long a finished Work's runs keep their
+	// content (logs, artifacts, executor state) after it last changed.
+	KeptFinishedDays int
 	// Webhooks is the stored webhook listener and tunnel (settings.webhooks);
 	// serve flags override it for one run. Zero means reconcile-only.
 	Webhooks Webhooks
@@ -311,14 +317,14 @@ func (c *checker) document(n *node) *Document {
 	return doc
 }
 func (c *checker) settings(n *node) Settings {
-	s := Settings{4, 10, 900, 3600, 20, []int{300, 600}, 32, 128, 4, Webhooks{}, nil}
+	s := Settings{4, 10, 900, 3600, 20, []int{300, 600}, 32, 128, 4, DefaultKeptFinishedDays, Webhooks{}, nil}
 	fields := []struct {
 		key string
 		dst *int
 	}{{"concurrency", &s.Concurrency}, {"admission_limit", &s.AdmissionLimit}, {"reconcile_seconds", &s.ReconcileSeconds},
 		{"timeout_seconds", &s.TimeoutSeconds}, {"kept_executions", &s.KeptExecutions},
 		{"causal_max_depth", &s.CausalMaxDepth}, {"causal_per_minute", &s.CausalPerMinute},
-		{"job_concurrency", &s.JobConcurrency}}
+		{"job_concurrency", &s.JobConcurrency}, {"kept_finished_days", &s.KeptFinishedDays}}
 	names := []string{"retry_delays_seconds", "webhooks", "budgets"}
 	for _, f := range fields {
 		names = append(names, f.key)
@@ -779,6 +785,11 @@ func (d *Document) normalized(redact bool) any {
 			list = append(list, m)
 		}
 		settings["budgets"] = list
+	}
+	// Only a changed kept_finished_days joins the hash, so configurations
+	// written before it keep their generation hash.
+	if s.KeptFinishedDays != DefaultKeptFinishedDays {
+		settings["kept_finished_days"] = s.KeptFinishedDays
 	}
 	// Only a stored listener joins the hash, so configurations without one
 	// keep their generation hash.

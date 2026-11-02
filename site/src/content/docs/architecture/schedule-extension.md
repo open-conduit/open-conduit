@@ -158,7 +158,7 @@ Every attempt has one runtime deadline, `settings.timeout_seconds` (default 3600
 
 ### Kept runs: one retention policy
 
-A job's history is its standing Work's Executions, kept by the one per-Work `kept_executions` (default 20) like every Work. Coordination history (trigger, timing, outcome, usage, artifact metadata) is never deleted, so only the content (log, outputs, payload) of runs older than the newest 20 is released; an operator who wants more raises `settings.kept_executions`.
+A job's history is its standing Work's Executions, kept by the one per-Work `kept_executions` (default 20) like every Work. A standing job's Work doesn't finish, so `kept_finished_days` doesn't apply to it. Coordination history (trigger, timing, outcome, usage, artifact metadata) is never deleted, so only the content (log, outputs, payload) of runs older than the newest 20 is released; an operator who wants more raises `settings.kept_executions`.
 
 ### Retry
 
