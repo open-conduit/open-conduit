@@ -26,7 +26,7 @@ open-conduit config check
 
 Once the daemon runs, it starts an agent on each open issue that passes all of these:
 
-- **Its author is trusted.** By default that is the repository's owner, its organisation's members and its collaborators (GitHub's `OWNER`, `MEMBER` and `COLLABORATOR`). An issue anyone else opens is left alone, so a stranger on a public repository can't put instructions in front of an agent that runs with your access. Issues your own agents file for follow-up work are picked up too.
+- **Its author is trusted.** By default that is the repository's owner, its organisation's members and its collaborators (GitHub's `OWNER`, `MEMBER` and `COLLABORATOR`). Anyone who can push to the repository counts as a collaborator, so a member who keeps their org membership private is trusted too. An issue anyone else opens is left alone, so a stranger on a public repository can't put instructions in front of an agent that runs with your access. Issues your own agents file for follow-up work are picked up too.
 - **It has no skip label.** `backlog`, `human` and `milestone` keep an issue back, and so does `scheduled` while it waits for its hold. The entry's `labels.skip` changes the list.
 - **It has a required label, if you set one.** With `labels.require` (for example `["agent"]`), only issues carrying one of those labels are picked up. On a repository with a backlog, set it before the first run, or the daemon picks up every open issue at once.
 - **No one else has claimed it.** An issue already labelled `agent-in-progress` with no Work here belongs to another owner.

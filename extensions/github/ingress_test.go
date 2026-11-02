@@ -709,6 +709,64 @@ func TestTrackedPullConflictsWithoutAnIssue(t *testing.T) {
 	}
 }
 
+// An author whose association wouldn't be admitted carries their
+// permission on the repository, read once per login per scan: GitHub
+// reports a member whose org membership is private as CONTRIBUTOR (#432).
+// An admitted association, a bot and a failed read carry none.
+func TestUnadmittedAuthorCarriesRepositoryPermission(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	member := githubtest.User{Login: "Priya", Type: "User"}
+	outsider := githubtest.User{Login: "mallory", Type: "User"}
+	first := fk.OpenIssue("Private member", "", member)
+	second := fk.OpenIssue("Private member again", "", member)
+	stranger := fk.OpenIssue("Outside contributor", "", outsider)
+	owner := fk.OpenIssue("Owner", "", alice)
+	bot := fk.OpenIssue("Bot", "", githubtest.User{Login: "dependabot[bot]", Type: "Bot"})
+	pr := fk.OpenPull("Private member's PR", "", "fix", "s1", member)
+	for _, n := range []int{first, second, stranger, bot, pr} {
+		fk.SetAssociation(n, "CONTRIBUTOR")
+	}
+	fk.SetCollaborator("priya", "write")
+	fk.SetCollaborator("mallory", "read")
+	permission := func(o extension.Observation) string {
+		var p struct {
+			Permission string `json:"author_permission"`
+		}
+		if err := json.Unmarshal(o.Event.Data.Data, &p); err != nil {
+			t.Fatal(err)
+		}
+		return p.Permission
+	}
+	scanned := f.scan(t)
+	for item, want := range map[string]string{
+		"issue/" + strconv.Itoa(first): "write", "issue/" + strconv.Itoa(second): "write", "issue/" + strconv.Itoa(stranger): "read",
+		"issue/" + strconv.Itoa(owner): "", "issue/" + strconv.Itoa(bot): "", "pr/" + strconv.Itoa(pr): "write",
+	} {
+		if got := permission(scanned[item]); got != want {
+			t.Fatalf("%s: author_permission %q, want %q", item, got, want)
+		}
+	}
+	reads := map[string]int{}
+	for _, r := range fk.Requests() {
+		if strings.Contains(r, "/collaborators/") {
+			reads[r]++
+		}
+	}
+	if len(reads) != 2 || reads["GET /repos/"+repo+"/collaborators/Priya/permission"] != 1 {
+		t.Fatalf("permission reads %v, want one per unadmitted person", reads)
+	}
+	// A webhook delivery reads it too; a failed read leaves it out, so
+	// admission fails closed.
+	if got := permission(onlyObservation(t, f.push(t, "issues", "d-member", fk.IssuesHook("opened", first)))); got != "write" {
+		t.Fatalf("pushed author_permission %q", got)
+	}
+	fk.FailNext("/repos/"+repo+"/collaborators/", 100)
+	if got := permission(onlyObservation(t, f.push(t, "issues", "d-fail", fk.IssuesHook("opened", first)))); got != "" {
+		t.Fatalf("a failed read carried author_permission %q", got)
+	}
+}
+
 // Only this connection's own App bot is marked by_connection, which admits
 // what its agents file: another App's bot isn't, nor is anyone on a token
 // connection, which has no App bot of its own (#346).

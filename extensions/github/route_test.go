@@ -46,6 +46,15 @@ func TestRouteClaimAdmission(t *testing.T) {
 	unknown.AuthorAssociation = ""
 	contributor := issue()
 	contributor.AuthorAssociation = "CONTRIBUTOR"
+	// A member whose org membership is private reads as CONTRIBUTOR; their
+	// write permission on the repository admits them, while a contributor
+	// who can only read is still refused (#432).
+	privateMember := contributor
+	privateMember.AuthorPermission = "write"
+	privateAdmin := contributor
+	privateAdmin.AuthorPermission = "admin"
+	readContributor := contributor
+	readContributor.AuthorPermission = "read"
 	agentFiled := issue()
 	agentFiled.Author, agentFiled.AuthorType, agentFiled.AuthorAssociation, agentFiled.ByConnection = "openconduit-bot[bot]", "Bot", "NONE", true
 	agentFiled.Body = "Follow-up.\n\n<!-- open-conduit:agent work=work/1 -->"
@@ -69,6 +78,9 @@ func TestRouteClaimAdmission(t *testing.T) {
 		"collaborator":             {func() gh.IssuePayload { p := issue(); p.AuthorAssociation = "COLLABORATOR"; return p }(), true},
 		"stranger":                 {stranger, false},
 		"contributor":              {contributor, false},
+		"private member, write":    {privateMember, true},
+		"private member, admin":    {privateAdmin, true},
+		"contributor, read":        {readContributor, false},
 		"unknown association":      {unknown, false},
 		"an agent's follow-up":     {agentFiled, true},
 		"another App's marked bot": {otherBot, false},
@@ -98,6 +110,10 @@ func TestRouteClaimAdmission(t *testing.T) {
 	widened := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","admit":{"authors":["owner","member","collaborator","contributor"]}}`)
 	if !match(t, widened, event(gh.TypeIssueOpen, "issue/1", gh.SchemaIssue, contributor), nil).Match || match(t, widened, event(gh.TypeIssueOpen, "issue/1", gh.SchemaIssue, stranger), nil).Match {
 		t.Fatal("admit.authors did not widen to exactly the associations named")
+	}
+	ownersOnly := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","admit":{"authors":["owner","member"]}}`)
+	if match(t, ownersOnly, event(gh.TypeIssueOpen, "issue/1", gh.SchemaIssue, privateMember), nil).Match {
+		t.Fatal("write permission admitted an author when admit.authors leaves out COLLABORATOR")
 	}
 	anyone := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","admit":{"authors":["*"]}}`)
 	if !match(t, anyone, event(gh.TypeIssueOpen, "issue/1", gh.SchemaIssue, stranger), nil).Match {
@@ -237,6 +253,11 @@ func TestRouteClaimsPullRequests(t *testing.T) {
 	fork.Fork = true
 	stranger := pull
 	stranger.Author, stranger.AuthorAssociation = "mallory", "FIRST_TIME_CONTRIBUTOR"
+	writer := stranger
+	writer.AuthorAssociation, writer.AuthorPermission = "CONTRIBUTOR", "write"
+	if !matchRoute(t, scope, pulls, event(gh.TypePullOpen, gh.PullRequestKey(7), gh.SchemaPull, writer), nil).Match {
+		t.Fatal("a PR by an author with write permission was refused")
+	}
 	for name, p := range map[string]gh.PullPayload{"fork": fork, "stranger": stranger} {
 		if d := matchRoute(t, scope, pulls, event(gh.TypePullOpen, gh.PullRequestKey(7), gh.SchemaPull, p), nil); d.Match || d.Reason == "" {
 			t.Fatalf("%s's PR claimed: %+v", name, d)
