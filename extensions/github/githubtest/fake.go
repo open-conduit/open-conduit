@@ -842,6 +842,13 @@ func (s *Server) CheckRunHook(sha string, prs ...int) []byte {
 	return mustJSON(map[string]any{"action": "completed", "repository": s.repository(), "check_run": map[string]any{"head_sha": sha, "status": "completed", "pull_requests": list}})
 }
 
+// CheckSuiteHook is a completed `check_suite` delivery body for a commit on
+// a branch, ending in conclusion.
+func (s *Server) CheckSuiteHook(branch, sha, conclusion string) []byte {
+	return mustJSON(map[string]any{"action": "completed", "repository": s.repository(),
+		"check_suite": map[string]any{"head_sha": sha, "head_branch": branch, "status": "completed", "conclusion": conclusion, "pull_requests": []any{}}})
+}
+
 // StatusHook is a `status` delivery body.
 func (s *Server) StatusHook(sha, state string) []byte {
 	return mustJSON(map[string]any{"repository": s.repository(), "sha": sha, "state": state})

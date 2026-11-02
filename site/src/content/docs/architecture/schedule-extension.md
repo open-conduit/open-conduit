@@ -16,6 +16,7 @@ A scope's `schedule` extension entry declares its jobs. Run settings are not her
     {"name": "refresh", "at": ["05:17"]},
     {"name": "tick", "every_minutes": 60},
     {"name": "post", "on": {"events": ["push"], "branches": ["main"], "paths": ["data/reels/*.json", "!data/reels/posted.json"]}},
+    {"name": "red-main", "on": {"events": ["check_suite.completed"], "branches": ["main"], "conclusions": ["failure", "timed_out"]}},
     {"name": "poke", "on": {"webhook": true}},
     {"name": "by-hand"}
   ]}}
@@ -31,8 +32,9 @@ A scope's `schedule` extension entry declares its jobs. Run settings are not her
 | `at` | UTC times of day, `HH:MM`. Not with `cron`. |
 | `cron`, `time_zone` | A standard five-field cron (`robfig/cron/v3`) read in an IANA zone, UTC when empty. The zone goes in `time_zone`, never a `TZ=` prefix; `time_zone` is only for `cron`. |
 | `on.events` | Code-host event names, optionally with an action (`push`, `release.published`). |
-| `on.branches` | Branch globs for ref-carrying events. |
+| `on.branches` | Branch globs for ref-carrying events. A check suite or run carries its head branch. |
 | `on.paths` | GitHub Actions path rules for pushes (`*` within a folder, `**` across, `!` takes back). |
+| `on.conclusions` | Conclusions a finished check suite or run must end in (`failure`, `timed_out`, `cancelled`, `action_required`, …), case-insensitive. Other events carry none, so they never match a job that lists any. |
 | `on.webhook` | Custom POSTs to the job's signed URL. |
 
 A job with no timing and no `on` is manual only. Validation never echoes values.
@@ -56,11 +58,11 @@ Two generic contract pieces make this possible. `extension.RouteInput.Route` car
 | Code-host delivery | `schedule.event` | Derived from the accepted raw delivery (`github.delivery`), which is its causal parent. Delivery `event/<job>/<parent Event>`. |
 | Manual | any non-`core.*` type, source `core.manual` | The operator: `open-conduit events emit --scope-id S --type schedule.run --delivery-id D --key-source <namespace> --key-external-id job/<name>`. |
 
-Every trigger carries the `schedule.trigger.v1` payload: job, kind, run label (`cron 2026-10-25 01:30 Europe/London`, `at 2026-10-21 05:17 UTC`, `every 60m`, `webhook`, `push abc1234`), the slot, and the delivery fields or the webhook body.
+Every trigger carries the `schedule.trigger.v1` payload: job, kind, run label (`cron 2026-10-25 01:30 Europe/London`, `at 2026-10-21 05:17 UTC`, `every 60m`, `webhook`, `push abc1234`, `check_suite.completed abc1234 failure`), the slot, and the delivery fields (event, action, ref, commit, conclusion, changed files) or the webhook body. An agent job's turn reads the trigger rendered by `schedule.RenderEvent`: the job and label as its heading, then the event, branch, commit, conclusion and up to 20 changed files, and a webhook body clipped to 2000 bytes.
 
 **Webhooks.** The webhook listener serves `POST /schedule/<scope>/<entry>/<job>/<token>`. The token is an HMAC of the entry's webhook secret over namespace and job, so it is stable across restarts and is revoked by rotating the secret. A wrong token, an unknown job or a job without webhooks gets 404. The body is limited to 1 MiB, and the response is 202 only after durable acceptance. `doctor --check-secrets` prints each signed URL (`schedule_webhooks`); plain doctor lists the paths with `<token>`.
 
-**Code-host events.** The host reads accepted `github.delivery` Events after a durable cursor. For each job in the delivery's scope whose `on` matches (branches and paths), it accepts a derived `schedule.event` in one transaction with the cursor. A push whose changed files are unknown runs anyway; a deleted branch changes nothing. Path matching uses the delivery's commit file lists. The extension reads no repository, and only the Git provider touches a checkout. A list that may be truncated (the GitHub ingress cap of 1000 files, or GitHub's own cap of 2048 commits, recorded as `DeliveryPayload.Commits`) counts as unknown, so the job runs rather than skip on a partial list.
+**Code-host events.** The GitHub ingress records every verified delivery as a `github.delivery` Event (`github.delivery.v1`: event, action, ref, before, after, conclusion, changed files). A push names its ref and the commit it moved to; a finished `check_suite` or `check_run` names its head branch as the ref, its head commit as `after` and its conclusion, so a job can run when a branch's checks fail ([fix red CI on the default branch](../../workflows/red-ci/)). The managed repository webhook subscribes to check suites and runs, but not to pushes, releases or workflow runs: a job on those needs them added to the webhook. The host reads accepted `github.delivery` Events after a durable cursor. For each job in the delivery's scope whose `on` matches (branches and paths), it accepts a derived `schedule.event` in one transaction with the cursor. A push whose changed files are unknown runs anyway; a deleted branch changes nothing. Path matching uses the delivery's commit file lists. The extension reads no repository, and only the Git provider touches a checkout. A list that may be truncated (the GitHub ingress cap of 1000 files, or GitHub's own cap of 2048 commits, recorded as `DeliveryPayload.Commits`) counts as unknown, so the job runs rather than skip on a partial list.
 
 ## Timers, catch-up and clock changes
 

@@ -53,8 +53,14 @@ type webhookPayload struct {
 }
 
 type checkHook struct {
-	HeadSHA      string `json:"head_sha"`
-	Status       string `json:"status"`
+	HeadSHA    string `json:"head_sha"`
+	HeadBranch string `json:"head_branch"`
+	Status     string `json:"status"`
+	Conclusion string `json:"conclusion"`
+	// CheckSuite is a check run's suite, which names the run's branch.
+	CheckSuite *struct {
+		HeadBranch string `json:"head_branch"`
+	} `json:"check_suite"`
 	PullRequests []struct {
 		Number int `json:"number"`
 	} `json:"pull_requests"`
@@ -314,7 +320,24 @@ func (g *Ingress) deliveryEvent(env envelope, p webhookPayload, received time.Ti
 			}
 		}
 	}
-	data, _ := json.Marshal(DeliveryPayload{Event: env.Event, Action: p.Action, Delivery: env.Delivery, Repo: g.s.Repo, Ref: ref, Before: p.Before, After: p.After, Files: files, Commits: len(p.Commits)})
+	after, conclusion := p.After, ""
+	// A finished check suite or run names its commit, branch and
+	// conclusion, so a job can run when a branch's checks fail.
+	hook := p.CheckRun
+	if env.Event == "check_suite" {
+		hook = p.CheckSuite
+	}
+	if (env.Event == "check_suite" || env.Event == "check_run") && hook != nil {
+		branch := hook.HeadBranch
+		if branch == "" && hook.CheckSuite != nil {
+			branch = hook.CheckSuite.HeadBranch
+		}
+		if branch != "" {
+			ref = "refs/heads/" + branch
+		}
+		after, conclusion = hook.HeadSHA, hook.Conclusion
+	}
+	data, _ := json.Marshal(DeliveryPayload{Event: env.Event, Action: p.Action, Delivery: env.Delivery, Repo: g.s.Repo, Ref: ref, Before: p.Before, After: after, Conclusion: conclusion, Files: files, Commits: len(p.Commits)})
 	delivery := "delivery/" + env.Delivery
 	return domain.Event{ID: domain.ID("github-" + digest(g.s.Namespace, delivery)[:40]), Type: TypeDelivery, Source: g.s.Namespace,
 		DeliveryID: delivery, OccurredAt: received, ReceivedAt: received, Data: domain.Payload{Schema: SchemaDelivery, Data: data}}

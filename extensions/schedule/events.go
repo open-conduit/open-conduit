@@ -21,7 +21,10 @@ type Delivery struct {
 	ID               string
 	Event, Action    string
 	Ref, Before, SHA string
-	Files            []string
+	// Conclusion is how a finished check suite or run ended ("failure");
+	// empty for other events.
+	Conclusion string
+	Files      []string
 	// Truncated marks a changed-file list that may be incomplete (the
 	// delivery hit its commit or file cap): path filters then treat the
 	// changed files as unknown and run, rather than skip on a partial list.
@@ -34,7 +37,8 @@ func zeroSHA(sha string) bool { return sha != "" && strings.Trim(sha, "0") == ""
 // Matches reports whether a job runs on the delivery: one of its events
 // names it ("push") or it and its action ("release.published"), its ref is on
 // one of the job's branches when it has any, and a push changes a file its
-// paths take (v1 engine/jobs.go matches and OnEvent). A push whose changed
+// paths take (v1 engine/jobs.go matches and OnEvent), and a check suite or
+// run ended one of its conclusions when it lists any. A push whose changed
 // files are unknown, or possibly truncated, runs anyway, as in v1 (05-02
 // decided against v1's `git diff` in the checkout: the extension reads no
 // repository); a deleted branch changes nothing.
@@ -69,6 +73,18 @@ func (j Job) Matches(d Delivery) bool {
 			return false
 		}
 	}
+	if len(j.On.Conclusions) > 0 {
+		in := false
+		for _, c := range j.On.Conclusions {
+			if strings.EqualFold(c, d.Conclusion) {
+				in = true
+				break
+			}
+		}
+		if !in {
+			return false
+		}
+	}
 	if len(j.On.Paths) > 0 && d.Event == "push" {
 		if zeroSHA(d.SHA) {
 			return false
@@ -93,7 +109,10 @@ func EventTrigger(namespace string, j Job, d Delivery, received domain.Event) do
 	if d.SHA != "" {
 		label += " " + short(d.SHA)
 	}
-	p := TriggerPayload{Job: j.Name, Kind: KindEvent, Trigger: label, Event: d.Event, Action: d.Action, Ref: d.Ref, Before: d.Before, SHA: d.SHA, Files: d.Files, Delivery: d.ID}
+	if d.Conclusion != "" {
+		label += " " + d.Conclusion
+	}
+	p := TriggerPayload{Job: j.Name, Kind: KindEvent, Trigger: label, Event: d.Event, Action: d.Action, Ref: d.Ref, Before: d.Before, SHA: d.SHA, Conclusion: d.Conclusion, Files: d.Files, Delivery: d.ID}
 	data, _ := json.Marshal(p)
 	return domain.Event{ID: domain.ID("schedule-" + digest(namespace, "event", j.Name, string(d.EventID))[:40]), Type: TypeEvent, Source: namespace,
 		DeliveryID: "event/" + j.Name + "/" + string(d.EventID), OccurredAt: received.OccurredAt, CausationID: d.EventID,

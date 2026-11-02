@@ -272,7 +272,7 @@ func translateDeliveries(ctx context.Context, store storage.Store, now time.Time
 			if a.Event.Data.Schema != gh.SchemaDelivery || json.Unmarshal(a.Event.Data.Data, &p) != nil {
 				continue
 			}
-			delivery := sc.Delivery{EventID: a.Event.ID, ID: p.Delivery, Event: p.Event, Action: p.Action, Ref: p.Ref, Before: p.Before, SHA: p.After, Files: p.Files,
+			delivery := sc.Delivery{EventID: a.Event.ID, ID: p.Delivery, Event: p.Event, Action: p.Action, Ref: p.Ref, Before: p.Before, SHA: p.After, Conclusion: p.Conclusion, Files: p.Files,
 				Truncated: len(p.Files) >= gh.MaxDeliveryFiles || p.Commits >= gh.MaxPushCommits}
 			for _, s := range entries[scope] {
 				for _, j := range s.Jobs {

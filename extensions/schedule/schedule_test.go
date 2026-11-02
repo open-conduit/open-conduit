@@ -89,6 +89,15 @@ func TestJobMatches(t *testing.T) {
 		{job(sc.Trigger{Events: []string{"push"}, Branches: []string{"release/*"}}), sc.Delivery{Event: "push", Ref: "refs/heads/release/1.2"}, true},
 		{job(sc.Trigger{Events: []string{"push"}, Branches: []string{"main"}}), sc.Delivery{Event: "push", Ref: "refs/tags/v1"}, false},
 		{job(sc.Trigger{Webhook: true}), push, false},
+		// A red default branch: a failed check suite on main, not a green one
+		// or another branch's.
+		{job(sc.Trigger{Events: []string{"check_suite.completed"}, Branches: []string{"main"}, Conclusions: []string{"failure", "timed_out"}}),
+			sc.Delivery{Event: "check_suite", Action: "completed", Ref: "refs/heads/main", Conclusion: "failure"}, true},
+		{job(sc.Trigger{Events: []string{"check_suite.completed"}, Branches: []string{"main"}, Conclusions: []string{"failure", "timed_out"}}),
+			sc.Delivery{Event: "check_suite", Action: "completed", Ref: "refs/heads/main", Conclusion: "success"}, false},
+		{job(sc.Trigger{Events: []string{"check_suite.completed"}, Branches: []string{"main"}, Conclusions: []string{"failure"}}),
+			sc.Delivery{Event: "check_suite", Action: "completed", Ref: "refs/heads/feature", Conclusion: "failure"}, false},
+		{job(sc.Trigger{Events: []string{"push"}, Conclusions: []string{"failure"}}), push, false},
 		{sc.Job{Name: "j"}, push, false},
 	} {
 		if got := c.job.Matches(c.d); got != c.want {
@@ -295,6 +304,7 @@ func TestJobDescribe(t *testing.T) {
 		{sc.Job{At: []string{"06:00", "18:00"}}, "daily at 06:00, 18:00 UTC"},
 		{sc.Job{Cron: "0 9 * * 1-5", TimeZone: "Europe/London"}, "cron 0 9 * * 1-5 (Europe/London)"},
 		{sc.Job{EveryMinutes: 60, On: &sc.Trigger{Events: []string{"push"}, Branches: []string{"main"}, Paths: []string{"docs/**"}, Webhook: true}}, "every hour; on push to main changing docs/**; on its webhook"},
+		{sc.Job{On: &sc.Trigger{Events: []string{"check_suite.completed"}, Branches: []string{"main"}, Conclusions: []string{"failure", "timed_out"}}}, "on check_suite.completed to main ending failure or timed_out"},
 		{sc.Job{}, "by hand only"},
 	} {
 		if got := c.job.Describe(); got != c.want {

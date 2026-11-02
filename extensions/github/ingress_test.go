@@ -263,6 +263,38 @@ func TestRawDeliveryIsDeclaredOneShot(t *testing.T) {
 	}
 }
 
+// A finished check suite or run names its branch, commit and conclusion in
+// the raw delivery, so a job can run when the default branch goes red.
+func TestCheckDeliveryNamesBranchAndConclusion(t *testing.T) {
+	f := newFixture(t, "")
+	raw := func(event, id string, body []byte) gh.DeliveryPayload {
+		t.Helper()
+		res := f.push(t, event, id, body)
+		if len(res.Events) != 1 {
+			t.Fatalf("%s: %+v", event, res)
+		}
+		var p gh.DeliveryPayload
+		if err := json.Unmarshal(res.Events[0].Data.Data, &p); err != nil {
+			t.Fatal(err)
+		}
+		return p
+	}
+	suite := raw("check_suite", "d-suite", f.fake.CheckSuiteHook("main", "abc123", "failure"))
+	if suite.Ref != "refs/heads/main" || suite.After != "abc123" || suite.Conclusion != "failure" || suite.Action != "completed" {
+		t.Fatalf("check_suite delivery: %+v", suite)
+	}
+	run := raw("check_run", "d-run", []byte(`{"action":"completed","repository":{"full_name":"`+repo+`"},`+
+		`"check_run":{"head_sha":"def456","status":"completed","conclusion":"timed_out","check_suite":{"head_branch":"main"},"pull_requests":[]}}`))
+	if run.Ref != "refs/heads/main" || run.After != "def456" || run.Conclusion != "timed_out" {
+		t.Fatalf("check_run delivery: %+v", run)
+	}
+	// A push keeps its own fields and names no conclusion.
+	push := raw("push", "d-push", f.fake.PushHook("refs/heads/main", "a", "b"))
+	if push.Ref != "refs/heads/main" || push.After != "b" || push.Conclusion != "" {
+		t.Fatalf("push delivery: %+v", push)
+	}
+}
+
 func TestReopenedIssueIsANewGeneration(t *testing.T) {
 	f := newFixture(t, "")
 	fk := f.fake

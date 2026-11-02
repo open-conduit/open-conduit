@@ -186,14 +186,20 @@ type ConflictsPayload struct {
 
 // DeliveryPayload is a raw webhook delivery (non-re-derivable).
 type DeliveryPayload struct {
-	Event    string   `json:"event"`
-	Action   string   `json:"action,omitempty"`
-	Delivery string   `json:"delivery"`
-	Repo     string   `json:"repo"`
-	Ref      string   `json:"ref,omitempty"`
-	Before   string   `json:"before,omitempty"`
-	After    string   `json:"after,omitempty"`
-	Files    []string `json:"files,omitempty"`
+	Event    string `json:"event"`
+	Action   string `json:"action,omitempty"`
+	Delivery string `json:"delivery"`
+	Repo     string `json:"repo"`
+	Ref      string `json:"ref,omitempty"`
+	Before   string `json:"before,omitempty"`
+	// After is the commit a push moved the branch to, or the commit a check
+	// suite or run is for.
+	After string `json:"after,omitempty"`
+	// Conclusion is a finished check suite's or run's conclusion (success,
+	// failure, timed_out, cancelled, action_required, neutral, skipped,
+	// stale); empty for other events.
+	Conclusion string   `json:"conclusion,omitempty"`
+	Files      []string `json:"files,omitempty"`
 	// Commits is how many commits the push listed. Files covers only those,
 	// capped at MaxDeliveryFiles, so a consumer can tell a possibly
 	// truncated list from a complete one.
