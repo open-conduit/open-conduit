@@ -720,7 +720,12 @@ func (n *normalizer) commentObservation(kind string, number int, c rawComment, k
 	switch kind {
 	case KindReview:
 		item = parent + "/review/" + strconv.FormatInt(c.ID, 10)
-		p.State, p.CommitID = c.State, c.CommitID
+		// A review carries no commit: GitHub moves a review's commit_id to
+		// the PR's new head when a force-push drops the commit it was
+		// submitted on, and reviews have no original_commit_id to fall back
+		// on, so it would make a new version of an unchanged review and hand
+		// it to the agent again (#408).
+		p.State = c.State
 		created = firstTime(c.SubmittedAt, c.CreatedAt)
 		p.CreatedAt, p.UpdatedAt, p.Edited = created, created, false
 		updated = created

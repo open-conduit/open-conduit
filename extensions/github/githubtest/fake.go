@@ -530,6 +530,18 @@ func (s *Server) readAllowed(token, repo string) bool {
 	return strings.EqualFold(owner, fakeOwner) && slices.ContainsFunc(scope.Repositories, func(r string) bool { return strings.EqualFold(r, name) })
 }
 
+// ForcePushPull rewrites a PR's history to end at sha. Like GitHub, it
+// moves every review's commit_id to the new head, because the commit the
+// review was submitted on is no longer in the PR.
+func (s *Server) ForcePushPull(n int, sha string) {
+	s.PushPull(n, sha)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	for i := range s.pulls[n].Reviews {
+		s.pulls[n].Reviews[i].CommitID = sha
+	}
+}
+
 // Pull returns a copy of a pull request's state.
 func (s *Server) Pull(n int) Pull { s.mu.Lock(); defer s.mu.Unlock(); return *s.pulls[n] }
 

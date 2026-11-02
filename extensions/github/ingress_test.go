@@ -802,3 +802,25 @@ func TestReviewCommentsKeepTheirVersionAcrossPushesAndReplies(t *testing.T) {
 	sameIdentity(t, "inline after push", onlyObservation(t, f.push(t, "pull_request_review_comment", "d-inline", fk.ReviewCommentHook("edited", inline))), after[inlineItem])
 	sameIdentity(t, "review", onlyObservation(t, f.push(t, "pull_request_review", "d-review", fk.ReviewHook("submitted", pr, review))), after[reviewItem])
 }
+
+// A review stays one observation when a force-push makes GitHub move its
+// commit_id to the new head: only a new review is news (#408).
+func TestReviewKeepsItsVersionAcrossForcePush(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	fk.OpenIssue("Header", "wobbles", alice)
+	pr := fk.OpenPull("Blue header", "Closes #1", "feature/blue", "sha1", alice)
+	review := fk.AddReview(pr, alice, "APPROVED", "ship it")
+	item := "pr/" + strconv.Itoa(pr) + "/review/" + strconv.FormatInt(review, 10)
+	hook := fk.ReviewHook("submitted", pr, review)
+	before := f.scan(t)
+
+	fk.ForcePushPull(pr, "sha2")
+	after := f.scan(t)
+	if before[item].Version != after[item].Version {
+		t.Fatalf("review changed version after a force-push:\n%s\n%s", before[item].Event.Data.Data, after[item].Event.Data.Data)
+	}
+	// The webhook delivered before the force-push and the scan after it
+	// still agree.
+	sameIdentity(t, "review", onlyObservation(t, f.push(t, "pull_request_review", "d-review", hook)), after[item])
+}
