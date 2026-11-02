@@ -76,6 +76,12 @@ func EndedRunsInTx(tx storage.Tx, now time.Time, limit int) ([]Ended, error) {
 	if err != nil {
 		return nil, err
 	}
+	return endedRunsInTx(tx, works, now, limit)
+}
+
+// endedRunsInTx is EndedRunsInTx over the given Works, of which it reads
+// only job Work.
+func endedRunsInTx(tx storage.Tx, works []domain.Work, now time.Time, limit int) ([]Ended, error) {
 	var out []Ended
 	for _, w := range works {
 		if w.Kind != WorkKind {

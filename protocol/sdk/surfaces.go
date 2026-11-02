@@ -43,6 +43,11 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 		if w, ok := s.ext.Executors[p.Type].(extension.ConfigWarner); ok && p.Kind == protocol.ValidateExecutor {
 			return protocol.ValidateResult{Warnings: w.ConfigWarnings(p.Config)}, nil
 		}
+		if s.ext.Describe != nil && (p.Kind == protocol.ValidateExtension || p.Kind == protocol.ValidateRoute) {
+			if lines := s.ext.Describe(p); len(lines) > 0 {
+				return protocol.ValidateResult{Describe: lines}, nil
+			}
+		}
 		return struct{}{}, nil
 	case "webhook.handle":
 		var p protocol.WebhookHandleParams

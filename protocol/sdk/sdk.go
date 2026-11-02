@@ -93,6 +93,10 @@ type Extension struct {
 	// Return an error to refuse; the host reports only that the object is
 	// invalid, never the message.
 	Validate func(ctx context.Context, p protocol.ValidateParams) error
+	// Describe says what a valid extension entry or route config sets up,
+	// for the operator's view of the config (protocol.ValidateResult): it
+	// is asked after Validate accepts an object of kind extension or route.
+	Describe func(p protocol.ValidateParams) []protocol.DescribeLine
 	// Webhooks returns the handler of a webhook path the last configure
 	// registered. The handler verifies the request and pushes through
 	// Host.Deliver before writing a 2xx status.

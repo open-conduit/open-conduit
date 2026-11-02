@@ -23,6 +23,9 @@ type Remote struct {
 	// skipped counts decisions answered by the host without a call because
 	// the payload's schema is unreadable by the running manifest.
 	skipped atomic.Int64
+	// described are the describe lines of the config objects validate
+	// accepted lately (Described).
+	described describedCache
 }
 
 // NewRemote adapts a started process and its service.

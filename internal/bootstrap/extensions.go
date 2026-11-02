@@ -632,14 +632,25 @@ func (d *daemon) scopedSecrets(extTypes, connTypes map[string]bool) func(ctx con
 	}
 }
 
-// currentTimers arms through the current generation's timers.
+// currentTimers arms through the current generation's timers. A package's
+// first configure comes at its handshake, before a generation is active;
+// a timer call then fails (errNoGeneration) and the package arms at the
+// configure that follows activation (configureExtensions).
 type currentTimers struct{ d *daemon }
 
 func (t currentTimers) ArmRecurrence(ctx context.Context, scope domain.ID, timer domain.Timer, expected domain.Revision, kind string, spec []byte) error {
-	return t.d.current.Load().timers.ArmRecurrence(ctx, scope, timer, expected, kind, spec)
+	c := t.d.current.Load()
+	if c == nil {
+		return errNoGeneration
+	}
+	return c.timers.ArmRecurrence(ctx, scope, timer, expected, kind, spec)
 }
 func (t currentTimers) Cancel(ctx context.Context, id domain.ID, expected domain.Revision) error {
-	return t.d.current.Load().timers.Cancel(ctx, id, expected)
+	c := t.d.current.Load()
+	if c == nil {
+		return errNoGeneration
+	}
+	return c.timers.Cancel(ctx, id, expected)
 }
 
 func (d *daemon) extensionOptions(f extproc.Found, paths extproc.Paths) extproc.Options {

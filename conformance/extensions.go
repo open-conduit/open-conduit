@@ -57,6 +57,13 @@ func CheckIngress(f IngressFixture) error {
 			return fmt.Errorf("one-shot delivery without a one-shot family")
 		}
 	}
+	pushOnly := len(families) > 0
+	for _, family := range families {
+		pushOnly = pushOnly && !family.ReDerivable
+	}
+	if pushOnly {
+		return checkPushOnly(ctx, f)
+	}
 	push, err := f.Ingress.Push(ctx, f.Source, f.Delivery)
 	if err != nil {
 		return err
@@ -134,6 +141,61 @@ func CheckIngress(f IngressFixture) error {
 	}
 	return fmt.Errorf("scan did not finish")
 }
+
+// checkPushOnly is CheckIngress for a push-only source, one whose every
+// family is one-shot (a job webhook: an arbitrary POST with no readable
+// history). Its delivery yields exactly the one-shot event, stably and with
+// no observation, so the fixture has no canonical observation; and reconcile,
+// having nothing to read, completes with none.
+func checkPushOnly(ctx context.Context, f IngressFixture) error {
+	if f.Canonical.ID != "" || f.OneShot != nil {
+		return fmt.Errorf("push-only source with a canonical observation or a separate one-shot delivery")
+	}
+	push, err := f.Ingress.Push(ctx, f.Source, f.Delivery)
+	if err != nil {
+		return err
+	}
+	retry, err := f.Ingress.Push(ctx, f.Source, f.Delivery)
+	if err != nil {
+		return err
+	}
+	if !reflect.DeepEqual(push, retry) {
+		return fmt.Errorf("push normalization is unstable")
+	}
+	if len(push.Observations) != 0 {
+		return fmt.Errorf("push-only source yields observations")
+	}
+	if len(push.Events) != 1 || push.Events[0].Type != f.OneShotType {
+		return fmt.Errorf("one-shot fixture missing")
+	}
+	scan := extension.Scan{Source: f.Source}
+	seen := map[string]bool{}
+	for n := 0; n < 10; n++ {
+		page, err := f.Ingress.Reconcile(ctx, scan)
+		if err != nil {
+			return err
+		}
+		if page.ScanID == "" || scan.ScanID != "" && scan.ScanID != page.ScanID || page.Complete && page.NextCursor != "" {
+			return fmt.Errorf("invalid completeness/generation")
+		}
+		if len(page.Observations) != 0 {
+			return fmt.Errorf("push-only source reconciles observations")
+		}
+		if page.NextCursor == "" {
+			if !page.Complete {
+				return fmt.Errorf("fixture scan incomplete")
+			}
+			return nil
+		}
+		if page.Complete || seen[page.NextCursor] {
+			return fmt.Errorf("pagination repeats or completes early")
+		}
+		seen[page.NextCursor] = true
+		scan.ScanID, scan.Cursor, scan.Checkpoint = page.ScanID, page.NextCursor, page.Checkpoint
+	}
+	return fmt.Errorf("scan did not finish")
+}
+
 func RunIngress(t *testing.T, factory func() IngressFixture) {
 	t.Helper()
 	if err := CheckIngress(factory()); err != nil {

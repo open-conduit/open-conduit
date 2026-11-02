@@ -14,6 +14,7 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/bitbucket"
 	"github.com/open-conduit/open-conduit/extensions/introspection"
 	"github.com/open-conduit/open-conduit/extensions/observe"
+	"github.com/open-conduit/open-conduit/extensions/schedule"
 	"github.com/open-conduit/open-conduit/extensions/tracker"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -130,8 +131,6 @@ func samplesConfig() []byte {
 				[]any{entry("widgets", "github", "github", map[string]any{"namespace": "github/github.com/octo/widgets", "scope": "gh", "repo": "octo/widgets"})}),
 			scope("chat", []string{"slack"}, shell(), []any{route("conversations", "slack", map[string]any{})},
 				[]any{entry("support", "slack", "slack", map[string]any{"namespace": "slack/T0TEAM", "scope": "chat", "team": "T0TEAM", "channels": []string{"C0SUPPORT"}, "bot_user_id": "UBOT", "receiver": "socket"})}),
-			scope("ops", []string{}, shell(), []any{route("jobs", "schedule", map[string]any{})},
-				[]any{entry("jobs", "schedule", "", map[string]any{"namespace": "schedule/ops", "scope": "ops", "jobs": []any{map[string]any{"name": "tick", "every_minutes": 60}, map[string]any{"name": "nightly"}}})}),
 			scope("self", []string{}, shell(introspection.OpReport), []any{route("reports", introspection.Type, map[string]any{"work": introspection.WorkReport})},
 				[]any{entry("introspection", introspection.Type, "", map[string]any{})}),
 		},
@@ -226,6 +225,9 @@ func packagedSamplers() map[string]struct {
 			domain.Route{Name: "issues", Handler: "linear"}},
 		"jira":      {tracker.Route{Type: "jira"}, proj, domain.Route{Name: "issues", Handler: "jira"}},
 		"bitbucket": {bitbucket.Route{}, proj, domain.Route{Name: "prs", Handler: "bitbucket"}},
+		schedule.Type: {schedule.Route{},
+			scopeOf("ops", `{"type":"schedule","config":{"namespace":"schedule/ops","scope":"ops","jobs":[{"name":"tick","every_minutes":60},{"name":"nightly"}]}}`),
+			domain.Route{Name: "jobs", Handler: schedule.Type}},
 		observe.Type: {observe.Route{},
 			domain.Scope{ID: "help", Config: domain.Payload{Data: []byte(`{"extensions":[{"type":"observe","config":{"sources":[{"name":"slack-help","reporters":["run"]}]}}]}`)}},
 			domain.Route{Name: "slack-help", Handler: observe.Type, Config: domain.Payload{Data: []byte(`{"source":"slack-help"}`)}}},

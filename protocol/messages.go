@@ -81,8 +81,11 @@ type SourceDecl struct {
 	Families []EventFamily `json:"families"`
 }
 type ConfigureResult struct {
-	Sources      []SourceDecl `json:"sources,omitempty"`
-	WebhookPaths []string     `json:"webhook_paths,omitempty"`
+	Sources []SourceDecl `json:"sources,omitempty"`
+	// WebhookPaths are the webhook paths the extension serves, each under
+	// /<name>/; a path covers the paths beneath it (a schedule entry's
+	// /schedule/<scope>/<entry> serves .../<job>/<token>).
+	WebhookPaths []string `json:"webhook_paths,omitempty"`
 	// KVVersion is the KV layout the extension now holds; the host records
 	// it once configure succeeds.
 	KVVersion int `json:"kv_version"`

@@ -44,9 +44,13 @@ func (b *Bridge) services(host *inproc.Host, h *sdk.Host) {
 		if !own(e.Type) {
 			return domain.AcceptedEvent{}, false, inproc.ErrNotOwn
 		}
-		if parent == "" {
+		// In process an Event may name its parent as its cause, as the host
+		// would; on the wire the host assigns causation, so it goes, and a
+		// cause other than the parent is refused as the runtime refuses it.
+		if parent == "" || e.CausationID != "" && e.CausationID != parent {
 			return domain.AcceptedEvent{}, false, storage.ErrInvalid
 		}
+		e.CausationID = ""
 		return sdk.EmitInTx(tx, scope, parent, e)
 	}
 	host.EventScope = sdk.EventScopeInTx

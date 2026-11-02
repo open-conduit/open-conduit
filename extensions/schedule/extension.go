@@ -75,6 +75,9 @@ type Extension struct {
 	sources    map[string]*source // by namespace, for the daemon's lifetime
 	lastEnsure time.Time
 	codes      map[string]string // by task
+	// jobs are the job Works' IDs as of jobsAt (jobWorksInTx).
+	jobs   []domain.ID
+	jobsAt time.Time
 }
 
 // New returns the schedule extension.
@@ -212,11 +215,16 @@ func (x *Extension) Sources() []inproc.Source {
 }
 
 // Webhook serves an entry's job webhooks: path is "<scope>/<entry>/<job>/
-// <token>".
+// <token>". The entry's mount, "<scope>/<entry>", has the handler too (it
+// finds no job there), so a host that mounts a webhook path with the paths
+// beneath it (a package's configure result) mounts the entry.
 func (x *Extension) Webhook(path string) http.Handler {
 	parts := strings.SplitN(path, "/", 3)
-	if len(parts) != 3 {
+	if len(parts) < 2 {
 		return nil
+	}
+	if len(parts) == 2 {
+		parts = append(parts, "")
 	}
 	mount := Type + "/" + parts[0] + "/" + parts[1]
 	var src *source
@@ -344,6 +352,10 @@ func storageCode(err error) string {
 		return "cancelled"
 	case errors.Is(err, storage.ErrConflict):
 		return "conflict"
+	case errors.Is(err, inproc.ErrCausalLimit):
+		// Out of process, a derived trigger the causal limits refuse is
+		// reported once the rest of the batch has committed (#428).
+		return "causal_rejected"
 	}
 	return "storage_failed"
 }
@@ -457,7 +469,11 @@ func (x *Extension) publishRuns(ctx context.Context, limit int) (int, []string, 
 	now := x.now()
 	err := x.h.Store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
 		published, codes = 0, nil
-		ended, err := EndedRunsInTx(tx, now, limit)
+		works, err := x.jobWorksInTx(tx, now)
+		if err != nil {
+			return err
+		}
+		ended, err := endedRunsInTx(tx, works, now, limit)
 		if err != nil {
 			return err
 		}
@@ -478,6 +494,46 @@ func (x *Extension) publishRuns(ctx context.Context, limit int) (int, []string, 
 		return nil
 	})
 	return published, codes, err
+}
+
+// jobWorksInTx are the job Works. Listing every Work is a full read of the
+// store, and over the protocol a full read crosses the process boundary,
+// so the job Works' IDs are kept and the full list read again only every
+// ensureGap; between, each known job Work is read by ID. A job Work made
+// since is found at the next full read, so its first run is announced up
+// to ensureGap late.
+func (x *Extension) jobWorksInTx(tx storage.Tx, now time.Time) ([]domain.Work, error) {
+	x.mu.Lock()
+	ids, at := x.jobs, x.jobsAt
+	x.mu.Unlock()
+	if ids == nil || now.Sub(at) >= ensureGap || now.Before(at) {
+		all, err := tx.ListWorks()
+		if err != nil {
+			return nil, err
+		}
+		works, ids := []domain.Work{}, []domain.ID{}
+		for _, w := range all {
+			if w.Kind == WorkKind {
+				works, ids = append(works, w), append(ids, w.ID)
+			}
+		}
+		x.mu.Lock()
+		x.jobs, x.jobsAt = ids, now
+		x.mu.Unlock()
+		return works, nil
+	}
+	var works []domain.Work
+	for _, id := range ids {
+		w, err := tx.Work(id)
+		if errors.Is(err, storage.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return nil, err
+		}
+		works = append(works, w)
+	}
+	return works, nil
 }
 
 // Targets resolves `job:<name>` waits (05-02) against the current

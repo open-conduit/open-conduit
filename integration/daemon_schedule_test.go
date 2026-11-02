@@ -135,8 +135,8 @@ func TestDaemonScheduledJobs(t *testing.T) {
 	}
 	d.until("the webhook job runs", 30*time.Second, func() bool { return count(sc.TypeWebhook) == 1 })
 	r, err := d.c.Doctor(ctx, true)
-	if err != nil || !strings.Contains(strings.Join(check(r, "schedule_webhooks").Items, " "), "/schedule/eng/jobs/poke/"+token) {
-		t.Fatalf("doctor --check-secrets: %+v %v", check(r, "schedule_webhooks"), err)
+	if err != nil || !strings.Contains(strings.Join(check(r, "schedule-webhooks").Items, " "), "/schedule/eng/jobs/poke/"+token) {
+		t.Fatalf("doctor --check-secrets: %+v %v", check(r, "schedule-webhooks"), err)
 	}
 	page, err := d.c.Works(ctx, url.Values{"scope_id": {"eng"}, "kind": {sc.WorkKind}})
 	if err != nil || len(page.Items) != 3 {
