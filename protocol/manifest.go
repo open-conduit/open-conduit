@@ -142,6 +142,10 @@ type Provides struct {
 	// DependencyFilter marks an extension whose wait dependencies carry an
 	// opaque filter the host evaluates through dependency.filter.
 	DependencyFilter bool `json:"dependency_filter,omitempty"`
+	// OperationGate marks an extension the host asks, through
+	// operation.gate, before every call of another extension's operation
+	// (extension.Gate).
+	OperationGate bool `json:"operation_gate,omitempty"`
 	// Executors are executor registrations with their mechanical
 	// capabilities and optional controls.
 	Executors []ExecutorDecl `json:"executors,omitempty"`
@@ -785,6 +789,7 @@ func (m Manifest) Enabled() []string {
 		set("operations.commit", o.Commit)
 	}
 	set("dependency_filter", p.DependencyFilter)
+	set("operation_gate", p.OperationGate)
 	set("executors", len(p.Executors) > 0)
 	for _, x := range p.Executors {
 		set("executors.resume", x.Capabilities.Resume)

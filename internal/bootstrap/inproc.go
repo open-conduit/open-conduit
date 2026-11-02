@@ -305,7 +305,7 @@ func (d *daemon) configureInproc(ctx context.Context) {
 }
 
 // registerInprocTools registers each extension's toolbelt registration; one
-// with neither operations nor event families adds nothing and is skipped,
+// with neither operations, event families nor a gate adds nothing and is skipped,
 // as is an entry-gated one no enabled scope of the generation has an entry
 // for.
 func (d *daemon) registerInprocTools(belt *runtime.Toolbelt, s *config.Snapshot) error {
@@ -315,7 +315,7 @@ func (d *daemon) registerInprocTools(belt *runtime.Toolbelt, s *config.Snapshot)
 				continue
 			}
 			reg := t.Registration()
-			if len(reg.Operations) == 0 && len(reg.EventTypes) == 0 {
+			if len(reg.Operations) == 0 && len(reg.EventTypes) == 0 && reg.Gate == nil {
 				continue
 			}
 			if err := belt.Register(reg); err != nil {

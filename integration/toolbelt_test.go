@@ -413,3 +413,85 @@ func TestProductionToolbeltDeclaredOutcomeAppliesOnFinish(t *testing.T) {
 		return nil
 	})
 }
+
+// TestProductionToolbeltGates: a registration's gate decides on every call
+// of another registration's operation, never its own, and builtins pass no
+// gate. Gates are asked in name order; one that panics refuses (fail
+// closed), and a refusal reaches the caller as the gate's own error.
+func TestProductionToolbeltGates(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	ctx := context.Background()
+	var asked []string
+	if err := h.belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "zeta",
+		Operations: []extension.Operation{{Name: "zeta.op", Handler: func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+			return domain.Payload{}, nil
+		}}},
+		Gate: func(_ context.Context, a extension.Authority, c extension.GateCall) (*extension.WaitPlan, error) {
+			asked = append(asked, c.Owner+"/"+c.Operation)
+			if a.WorkID != "work/item" || string(c.Input.Data) != `{"n":1}` {
+				return nil, errors.New("gate saw the wrong call")
+			}
+			return nil, &extension.OperationError{Code: "not_now", Message: "zeta says no"}
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	echo := extension.ToolCall{Operation: "fixture.echo", Input: domain.Payload{Schema: "fixture.echo.v1", Data: []byte(`{"n":1}`)}}
+	_, err := h.belt.Call(ctx, h.token, echo)
+	var oe *extension.OperationError
+	var gr *extension.GateRefusal
+	if !errors.As(err, &oe) || oe.Code != "not_now" || !errors.As(err, &gr) || gr.Gate != "zeta" || *h.echoes != 0 {
+		t.Fatalf("zeta's gate did not refuse fixture.echo: %v (echoes %d)", err, *h.echoes)
+	}
+	if strings.Join(asked, ",") != "fixture/fixture.echo" {
+		t.Fatalf("gate asked: %v", asked)
+	}
+	// zeta.op isn't in the grant, so its own call is unauthorized before any
+	// gate; builtins pass every gate.
+	if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.ReadContext}); err != nil {
+		t.Fatalf("a builtin passed through a gate: %v", err)
+	}
+	if len(asked) != 1 {
+		t.Fatalf("a builtin was gated: %v", asked)
+	}
+	if err = h.belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "alpha",
+		Operations: []extension.Operation{{Name: "alpha.op", Handler: func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+			return domain.Payload{}, nil
+		}}},
+		Gate: func(context.Context, extension.Authority, extension.GateCall) (*extension.WaitPlan, error) {
+			panic("broken gate")
+		}}); err != nil {
+		t.Fatal(err)
+	}
+	_, err = h.belt.Call(ctx, h.token, echo)
+	if !errors.As(err, &oe) || oe.Code != "gate_failed" || !errors.As(err, &gr) || gr.Gate != "alpha" || len(asked) != 1 || *h.echoes != 0 {
+		t.Fatalf("a panicking gate did not refuse first: %v (asked %v, echoes %d)", err, asked, *h.echoes)
+	}
+}
+
+// TestProductionToolbeltGateSkipsItsOwnOperations: a gate never decides on
+// its own registration's operations.
+func TestProductionToolbeltGateSkipsItsOwnOperations(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	ctx := context.Background()
+	var asked []string
+	belt, err := runtime.NewToolbelt(h.f.Store, h.f.Clock.Now, h.f.Driver.(*schedulerDriver).router, runtime.ToolbeltOptions{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	gate := func(_ context.Context, _ extension.Authority, c extension.GateCall) (*extension.WaitPlan, error) {
+		asked = append(asked, c.Operation)
+		return nil, errors.New("refused")
+	}
+	if err = belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "fixture", Gate: gate, Operations: []extension.Operation{{Name: "fixture.echo", Handler: func(_ context.Context, _ extension.Authority, in domain.Payload) (domain.Payload, error) {
+		return in, nil
+	}}}}); err != nil {
+		t.Fatal(err)
+	}
+	token, err := belt.Issue(ctx, extension.Authority{ScopeID: "routing-scope", WorkID: "work/item", ExecutionID: h.attempt.Lease.ExecutionID, Lease: h.attempt.Lease, ExpiresAt: h.f.Clock.Now().Add(time.Minute), Operations: []string{"fixture.echo"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err = belt.Call(ctx, token, extension.ToolCall{Operation: "fixture.echo", Input: domain.Payload{Schema: "fixture.echo.v1", Data: []byte(`{}`)}}); err != nil || len(asked) != 0 {
+		t.Fatalf("a gate decided on its own operation: %v %v", err, asked)
+	}
+}
