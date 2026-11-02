@@ -16,6 +16,7 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extensions/docker"
+	"github.com/open-conduit/open-conduit/extensions/ssh"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -27,13 +28,14 @@ import (
 const containerStopGrace = 10 * time.Second
 
 func containerRegistry(r *config.Registry) {
-	r.Containers = map[string]func(json.RawMessage) error{docker.Type: docker.ValidateConfig}
+	r.Containers = map[string]func(json.RawMessage) error{docker.Type: docker.ValidateConfig, ssh.Type: ssh.ValidateConfig}
 }
 
 // containerState is the host side of the container providers.
 type containerState struct {
 	providers map[string]extension.ContainerProvider
 	docker    *docker.Provider
+	ssh       *ssh.Provider
 	last      time.Time
 	// tokens is when the git tokens of ended executions were last swept.
 	tokens time.Time
@@ -56,7 +58,46 @@ func (d *daemon) openContainers() {
 		}
 		return out
 	}})
-	d.containers.providers = map[string]extension.ContainerProvider{docker.Type: d.containers.docker}
+	d.containers.ssh = ssh.New(ssh.Options{Helper: self, Host: d.containerHost(), Dir: filepath.Join(d.o.StateDir, "remote"), Remotes: func() []ssh.Settings {
+		var out []ssh.Settings
+		for _, b := range d.sshBindings() {
+			out = append(out, b.settings)
+		}
+		return out
+	}})
+	d.containers.providers = map[string]extension.ContainerProvider{docker.Type: d.containers.docker, ssh.Type: d.containers.ssh}
+}
+
+// sshBinding is a binding that runs on a remote over SSH: its name and
+// the remote's settings.
+type sshBinding struct {
+	name     string
+	settings ssh.Settings
+}
+
+// sshBindings are the enabled scopes' bindings that declare an ssh
+// container, in config order.
+func (d *daemon) sshBindings() []sshBinding {
+	snapshot, _ := d.configs.Current()
+	if snapshot == nil {
+		return nil
+	}
+	var out []sshBinding
+	for _, id := range snapshot.Order {
+		scope := snapshot.Scopes[id]
+		if scope == nil || !scope.Enabled {
+			continue
+		}
+		for _, b := range scope.Bindings {
+			if b.Container == nil || b.Container.Provider != ssh.Type {
+				continue
+			}
+			if _, s, err := ssh.ParseConfig(b.Container.Config); err == nil {
+				out = append(out, sshBinding{string(id) + "/" + b.Name, s})
+			}
+		}
+	}
+	return out
 }
 
 // dockerBinding is a binding that runs in a Docker container: its name,
@@ -95,8 +136,8 @@ func (d *daemon) dockerBindings() []dockerBinding {
 // internal-network preflight. Any failure blocks the provider.
 func (d *daemon) containerCheck(ctx context.Context) runtime.Check {
 	check := runtime.Check{Name: "container"}
-	bindings := d.dockerBindings()
-	if len(bindings) == 0 {
+	bindings, remotes := d.dockerBindings(), d.sshBindings()
+	if len(bindings) == 0 && len(remotes) == 0 {
 		check.Status, check.Code, check.Detail = runtime.CheckInfo, "not_configured", "no binding declares a container"
 		return check
 	}
@@ -104,6 +145,11 @@ func (d *daemon) containerCheck(ctx context.Context) runtime.Check {
 	root := filepath.Join(d.o.StateDir, "resources", "git", "workspaces")
 	seen := map[string]bool{}
 	var details, names []string
+	fail := func(code string) {
+		if check.Status == runtime.CheckOK {
+			check.Status, check.Code = runtime.CheckFail, code
+		}
+	}
 	for _, b := range bindings {
 		names = append(names, b.name)
 		if seen[b.context+"\x00"+b.image] {
@@ -112,8 +158,25 @@ func (d *daemon) containerCheck(ctx context.Context) runtime.Check {
 		seen[b.context+"\x00"+b.image] = true
 		h := d.containers.docker.Health(ctx, b.context, b.image, root, false)
 		check.Items = append(check.Items, h.Items...)
-		if h.Status != "ok" && check.Status == runtime.CheckOK {
-			check.Status, check.Code = runtime.CheckFail, h.Code
+		if h.Status != "ok" {
+			fail(h.Code)
+		}
+		details = append(details, h.Detail)
+	}
+	// A remote mirrors the host's paths: the state directory, which holds
+	// the workspaces, run directories, homes and toolbelt tokens, must be
+	// writable there.
+	for _, b := range remotes {
+		names = append(names, b.name)
+		key := "ssh\x00" + b.settings.Endpoint() + "\x00" + b.settings.HostKey
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		h := d.containers.ssh.Health(ctx, b.settings, d.o.StateDir, false)
+		check.Items = append(check.Items, h.Items...)
+		if h.Status != "ok" {
+			fail(h.Code)
 		}
 		details = append(details, h.Detail)
 	}
