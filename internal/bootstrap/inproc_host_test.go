@@ -169,3 +169,14 @@ func TestConfigureParamsCarryDisabledEntries(t *testing.T) {
 	want(p.Entries, "on", "a")
 	want(p.Disabled, "off", "b")
 }
+
+// The first-party extensions' executors join the registrations with the
+// pool each declares: GitHub's hold executor counts against
+// settings.job_concurrency.
+func TestInprocExecutorsCarryPools(t *testing.T) {
+	executors, pools := map[string]extension.Executor{}, map[string]string{}
+	inprocExecutors(firstParty(), executors, pools)
+	if executors["github-hold"] == nil || pools["github-hold"] != inproc.PoolJobs {
+		t.Fatalf("executors %v pools %v", executors, pools)
+	}
+}

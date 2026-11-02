@@ -47,6 +47,7 @@ var parity = map[string][]string{
 	"Sink":       {"manifest:permissions", "method:telemetry.sink"},
 	"ConfigHost": {"manifest:permissions", "method:config.base", "method:config.edit", "method:config.validate", "method:config.trace"},
 	"Timers":     {"method:timer.arm", "method:timer.cancel"},
+	"Executing":  {"manifest:provides.executors", "manifest:provides.executors.pool", "method:executor.run"},
 	"Ingester":   {"manifest:provides.extensions.ingress", "method:configure", "method:ingress.push", "method:ingress.reconcile"},
 	"Webhooker":  {"manifest:provides.webhooks", "method:webhook.handle"},
 

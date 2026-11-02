@@ -24,7 +24,7 @@ The router, toolbelt, scheduler, timers, control and management server are rebui
 | Setting | Maps to |
 | --- | --- |
 | `concurrency` | `GlobalLimit`: attempts of every executor without a pool, which are the agent turns (`claude-code`) and installed extension executors |
-| `job_concurrency` | `PoolLimits["jobs"]`, with `ExecutorPools` placing `shell` and `github-hold` in the `jobs` pool |
+| `job_concurrency` | `PoolLimits["jobs"]`, with `ExecutorPools` placing each executor that declares the `jobs` pool there (`shell`, `github-hold`, and installed executors with `executors[].pool: "jobs"`) |
 | `timeout_seconds` | `Timeout` |
 | `kept_executions` | `KeptExecutions`, with `Artifacts` for content deletion |
 | `kept_finished_days` | `KeptFinished`, in days |

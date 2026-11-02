@@ -410,6 +410,9 @@ func (d *daemon) openExtensions(ctx context.Context) {
 		for _, e := range f.Manifest.Provides.Executors {
 			if adapter, ok := r.Executor(e.Name); ok {
 				d.executors[e.Name] = adapter
+				if e.Pool != "" {
+					d.pools[e.Name] = e.Pool
+				}
 			}
 		}
 		for _, res := range f.Manifest.Provides.Resources {

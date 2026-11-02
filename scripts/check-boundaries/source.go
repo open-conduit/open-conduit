@@ -286,12 +286,11 @@ var wiringFiles = map[string]bool{"inproc.go": true, "adapters.go": true}
 // and an entry nothing needs any more fails the check, so remove it with
 // the import.
 var compositionExceptions = map[string][]string{
-	"capacity.go":   {"extensions/github"},
 	"claudecode.go": {"executors/claudecode"},
 	"container.go":  {"extensions/docker", "extensions/ssh"},
-	"daemon.go":     {"executors/shell", "extensions/git", "extensions/github"},
+	"daemon.go":     {"executors/shell", "extensions/git"},
 	"operator.go":   {"executors/claudecode", "executors/shell", "extensions/github", "extensions/github/playbooks", "extensions/jira", "extensions/linear", "extensions/slack"},
-	"probes.go":     {"executors/claudecode", "extensions/github"},
+	"probes.go":     {"executors/claudecode"},
 	"resources.go":  {"extensions/git"},
 	"sandbox.go":    {"extensions/srt"},
 	"tools.go":      {"executors/claudecode", "extensions/github/playbooks"},

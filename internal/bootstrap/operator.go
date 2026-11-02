@@ -102,7 +102,9 @@ func fileIncludes(configPath string) config.Includes {
 // checks: capability and config checks need only the registrations, and
 // executors' capabilities and config validators do not touch runtime state.
 func offlineExecutors() map[string]extension.Executor {
-	return map[string]extension.Executor{"shell": &shell.Executor{}, ClaudeCodeExecutor: claudecode.Offline(), gh.HoldExecutor: gh.NewHoldExecutor()}
+	out := map[string]extension.Executor{"shell": &shell.Executor{}, ClaudeCodeExecutor: claudecode.Offline()}
+	inprocExecutors(firstParty(), out, map[string]string{})
+	return out
 }
 
 // Setups are the registered extensions' optional setup flows (`open-conduit

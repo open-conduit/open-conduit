@@ -316,6 +316,23 @@ func (t inprocTimers) Cancel(ctx context.Context, id domain.ID, expected domain.
 	return c.timers.Cancel(ctx, id, expected)
 }
 
+// inprocExecutors adds the extensions' executors to executors, and the
+// capacity pool of each that names one to pools.
+func inprocExecutors(xs []inproc.Extension, executors map[string]extension.Executor, pools map[string]string) {
+	for _, x := range xs {
+		e, ok := x.(inproc.Executing)
+		if !ok {
+			continue
+		}
+		for name, reg := range e.Executors() {
+			executors[name] = reg.Executor
+			if reg.Pool != "" {
+				pools[name] = reg.Pool
+			}
+		}
+	}
+}
+
 // causalLimits are the current generation's causal bounds.
 func (d *daemon) causalLimits() runtime.CausalLimits {
 	if s, _ := d.extensionSnapshot(); s != nil {
