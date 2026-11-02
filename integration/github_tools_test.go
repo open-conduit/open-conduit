@@ -385,7 +385,7 @@ func TestGitHubToolsWorkAnIssue(t *testing.T) {
 
 	// Authenticated fetch: signed in on this host, the token never leaves it.
 	e.fake.ServeFile("private.png", png, "")
-	out, err := e.call(a, gh.OpFetch, "", map[string]any{"url": e.fake.URL + "/files/private.png", "save_to": ".local/private.png"})
+	out, err := e.call(a, gh.OpFetch, "", map[string]any{"url": e.fake.URL + "/" + ghRepo + "/files/private.png", "save_to": ".local/private.png"})
 	if err != nil || out.Output.Schema != gh.FileSchema {
 		t.Fatalf("fetch: %v %+v", err, out)
 	}
@@ -406,7 +406,7 @@ func TestGitHubToolsWorkAnIssue(t *testing.T) {
 	}))
 	defer signed.Close()
 	e.fake.ServeFile("redirected.png", nil, signed.URL+"/signed?sig=x")
-	if _, err := e.call(a, gh.OpFetch, "", map[string]any{"url": e.fake.URL + "/files/redirected.png"}); err != nil || leaked != "" {
+	if _, err := e.call(a, gh.OpFetch, "", map[string]any{"url": e.fake.URL + "/" + ghRepo + "/files/redirected.png"}); err != nil || leaked != "" {
 		t.Fatalf("redirected fetch: %v, authorization sent to storage: %q", err, leaked)
 	}
 	before := len(e.fake.Requests())
@@ -414,6 +414,21 @@ func TestGitHubToolsWorkAnIssue(t *testing.T) {
 	refused(t, err, "foreign_link")
 	if len(e.fake.Requests()) != before || leaked != "" {
 		t.Fatal("a foreign link was fetched with the token")
+	}
+
+	// Only this Work's repositories are fetched from: a link to another
+	// repository the token can see is refused before anything is sent.
+	e.fake.ServeFile("secret.env", []byte("TOKEN=x"), "")
+	if _, err := e.call(a, gh.OpFetch, "", map[string]any{"url": e.fake.URL + "/user-attachments/files/secret.env"}); err != nil {
+		t.Fatalf("a comment attachment: %v", err)
+	}
+	before = len(e.fake.FileReads())
+	for _, link := range []string{"/octo/private-b/files/secret.env", "/repos/octo/private-b/contents/.env", "/octo/widgets/../private-b/files/secret.env", "/settings/files/secret.env"} {
+		_, err = e.call(a, gh.OpFetch, "", map[string]any{"url": e.fake.URL + link})
+		refused(t, err, "not_allowed")
+	}
+	if len(e.fake.FileReads()) != before {
+		t.Fatalf("another repository was fetched: %+v", e.fake.FileReads()[before:])
 	}
 
 	// Follow-up child work, held until a PR merges; opened once.
@@ -808,6 +823,32 @@ func TestGitHubCrossScopeWaitNeedsAuthorization(t *testing.T) {
 	}
 	if got := e.work(w.ID); got.State != domain.WorkReady {
 		t.Fatalf("cross-scope merge did not wake: %v", got.State)
+	}
+}
+
+// github.attachment.get reads another project's repository only when
+// this project may read it (read_scopes); without the grant the link is
+// refused before anything is fetched.
+func TestGitHubFetchFromAnotherProjectNeedsReadScope(t *testing.T) {
+	e := newToolsEnv(t)
+	ops := e.opsScope()
+	ops.ServeFile("runbook.md", []byte("# Runbook"), "")
+	_, w := e.claim("Follow the runbook", "", "bug")
+	a := e.start(w.ID)
+	link := map[string]any{"url": ops.URL + "/octo/ops/files/runbook.md"}
+	_, err := e.call(a, gh.OpFetch, "", link)
+	refused(t, err, "not_allowed")
+	if !strings.Contains(err.Error(), "authorization.read_scopes") || len(ops.FileReads()) != 0 {
+		t.Fatalf("refusal %v, reads %+v", err, ops.FileReads())
+	}
+	e.mu.Lock()
+	e.aliasOK = true
+	e.mu.Unlock()
+	if out, err := e.call(a, gh.OpFetch, "", link); err != nil || out.Output.Schema != gh.FileSchema {
+		t.Fatalf("fetch with read_scopes: %v %+v", err, out)
+	}
+	if reads := ops.FileReads(); len(reads) != 1 || reads[0].Token != "tok" {
+		t.Fatalf("ops reads: %+v", reads)
 	}
 }
 

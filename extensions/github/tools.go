@@ -1268,6 +1268,30 @@ func (t *Tools) upload(ctx context.Context, b *bound, data json.RawMessage) (any
 	return map[string]any{"url": link, "markdown": md}, nil
 }
 
+// fetchSource is the registered source github.attachment.get signs a link
+// under repo in with: the Work's own tracker or code repository, another
+// repository its project registers, or one registered by a project it may
+// read (authorization.read_scopes or file_scopes). Anything else is
+// refused, so a link can't reach a repository the connection's token
+// happens to see but the project was never granted.
+func (t *Tools) fetchSource(b *bound, host, repo string) (Source, error) {
+	for _, s := range []Source{b.issue, b.code} {
+		if s.Client != nil && s.Client.Host() == host && strings.EqualFold(s.Settings.Repo, repo) {
+			return s, nil
+		}
+	}
+	for _, s := range t.o.Sources() {
+		if s.Client == nil || s.Client.Host() != host || !strings.EqualFold(s.Settings.Repo, repo) {
+			continue
+		}
+		scope := domain.ID(s.Settings.Scope)
+		if scope == b.work.ScopeID || t.o.MayRead != nil && t.o.MayRead(b.work.ScopeID, scope) == nil || t.o.MayFile != nil && t.o.MayFile(b.work.ScopeID, scope) == nil {
+			return s, nil
+		}
+	}
+	return Source{}, refuse("not_allowed", "%s isn't a repository project %s may read: only this Work's repositories and those of projects in its authorization.read_scopes can be fetched from", repo, b.work.ScopeID)
+}
+
 func (t *Tools) fetch(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
 	var in struct {
 		URL    string `json:"url"`
@@ -1276,18 +1300,39 @@ func (t *Tools) fetch(ctx context.Context, b *bound, data json.RawMessage) (any,
 	if err := decode(data, &in); err != nil {
 		return nil, err
 	}
-	var content []byte
-	var ctype string
-	var err error
-	for _, s := range []Source{b.issue, b.code} {
-		content, ctype, err = s.Client.Fetch(ctx, s.Settings.Repo, in.URL)
-		if !errors.Is(err, ErrForeignLink) {
+	// The link is read on the Work's own host (its tracker's, then its
+	// code repository's), else on the host of another registered
+	// repository; fetchSource then checks the Work may read it.
+	var src Source
+	var link FetchLink
+	err := ErrForeignLink
+	for _, s := range append([]Source{b.issue, b.code}, t.o.Sources()...) {
+		if s.Client == nil {
+			continue
+		}
+		if link, err = s.Client.ParseFetchLink(in.URL); !errors.Is(err, ErrForeignLink) {
+			src = s
 			break
 		}
 	}
-	if errors.Is(err, ErrForeignLink) {
+	switch {
+	case errors.Is(err, ErrForeignLink):
 		return nil, refuse("foreign_link", "%s isn't a link to this GitHub host: fetch it with curl", in.URL)
+	case errors.Is(err, ErrNoRepoLink):
+		return nil, refuse("not_allowed", "%s isn't under a repository: only links to this Work's repositories, ones its project may read, and comment attachments can be fetched", in.URL)
+	case err != nil:
+		return nil, err
 	}
+	// A user attachment is signed in for the repository whose host it is on.
+	repo := link.Repo
+	if repo == "" {
+		repo = src.Settings.Repo
+	}
+	if src, err = t.fetchSource(b, src.Client.Host(), repo); err != nil {
+		return nil, err
+	}
+	repo = src.Settings.Repo
+	content, ctype, err := src.Client.Fetch(ctx, repo, link)
 	if err != nil {
 		return nil, err
 	}

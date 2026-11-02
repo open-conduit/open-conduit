@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"path"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 )
@@ -339,36 +340,158 @@ func (c *Client) ensureAttachBranch(ctx context.Context, write bool, repo string
 // token must not be sent to it.
 var ErrForeignLink = errors.New("github: link is not on this GitHub host")
 
-// Fetch downloads a file a comment links to (an attachment, an image, a file
-// in a repository) signed in as the reader, which a private repository's
-// attachments need. Links to other hosts are refused, never sent the token.
-// Redirects are followed without the Authorization header once they leave
-// the host (the signed storage link an attachment ends at).
-func (c *Client) Fetch(ctx context.Context, repo, link string) ([]byte, string, error) {
+// ErrNoRepoLink means a link is on this GitHub host but under no
+// repository (an organisation's settings, a user's profile, an API call
+// outside /repos/), so no repository's grant covers it.
+var ErrNoRepoLink = errors.New("github: link is under no repository")
+
+// FetchLink is a link Fetch may get: the URL it requests, the repository
+// the link is under ("" for a user attachment, which belongs to whatever
+// issue or PR it was posted on) and whether it is sent signed in.
+type FetchLink struct {
+	URL    *url.URL
+	Repo   string
+	Signed bool
+}
+
+// unsignedHosts serve links that carry their own signature or none at
+// all: images posted in comments (user-images, and private-user-images
+// with its jwt parameter) and camo, GitHub's proxy for images hosted
+// elsewhere. They are fetched without the sign-in token.
+var unsignedHosts = map[string]bool{
+	"user-images.githubusercontent.com":         true,
+	"private-user-images.githubusercontent.com": true,
+	"camo.githubusercontent.com":                true,
+}
+
+// ParseFetchLink reads a link a comment holds into what Fetch gets and
+// which repository it is under:
+//
+//   - <web>/user-attachments/… is a user attachment, signed in;
+//   - <web>/<owner>/<repo>/… and raw.githubusercontent.com/<owner>/<repo>/…
+//     are under <owner>/<repo>, signed in (a github.com blob or raw page is
+//     fetched from raw.githubusercontent.com);
+//   - <api>/repos/<owner>/<repo>/… is under <owner>/<repo>, signed in;
+//   - user-images, private-user-images and camo on githubusercontent.com
+//     are fetched without the token.
+//
+// Any other host is ErrForeignLink; anything else on this host is
+// ErrNoRepoLink.
+func (c *Client) ParseFetchLink(link string) (FetchLink, error) {
 	u, err := url.Parse(link)
-	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" {
-		return nil, "", ErrForeignLink
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.Host == "" || u.User != nil {
+		return FetchLink{}, ErrForeignLink
+	}
+	// The path is checked as the server will read it: a dot segment or an
+	// encoded slash could resolve to a repository other than the one named.
+	esc := strings.ToLower(u.EscapedPath())
+	if strings.Contains(esc, "%2f") || strings.Contains(esc, "%5c") || strings.Contains(u.Path, "\\") {
+		return FetchLink{}, ErrNoRepoLink
+	}
+	var parts []string
+	for _, s := range strings.Split(u.Path, "/") {
+		switch s {
+		case "":
+		case ".", "..":
+			return FetchLink{}, ErrNoRepoLink
+		default:
+			parts = append(parts, s)
+		}
+	}
+	host := strings.ToLower(u.Host)
+	repoOf := func(parts []string) (string, bool) {
+		if len(parts) < 2 {
+			return "", false
+		}
+		return parts[0] + "/" + parts[1], true
 	}
 	api, _ := url.Parse(c.api)
-	switch {
-	case u.Host == c.host:
-		// github.com/<owner>/<repo>/blob/<ref>/<path> is a page; raw.githubusercontent.com serves the file.
-		if parts := strings.SplitN(strings.TrimPrefix(u.Path, "/"), "/", 4); c.host == "github.com" && len(parts) == 4 && (parts[2] == "blob" || parts[2] == "raw") {
-			u = &url.URL{Scheme: "https", Host: "raw.githubusercontent.com", Path: "/" + parts[0] + "/" + parts[1] + "/" + parts[3]}
+	if api != nil && host == strings.ToLower(api.Host) {
+		prefix := strings.Split(strings.Trim(api.Path, "/"), "/")
+		if prefix[0] == "" {
+			prefix = nil
 		}
-	case api != nil && u.Host == api.Host, c.host == "github.com" && strings.HasSuffix(u.Host, ".githubusercontent.com"):
-	default:
+		if len(parts) > len(prefix) && slices.Equal(parts[:len(prefix)], prefix) && parts[len(prefix)] == "repos" {
+			if repo, ok := repoOf(parts[len(prefix)+1:]); ok {
+				return FetchLink{URL: u, Repo: repo, Signed: true}, nil
+			}
+			return FetchLink{}, ErrNoRepoLink
+		}
+		if host != strings.ToLower(c.host) {
+			return FetchLink{}, ErrNoRepoLink
+		}
+	}
+	switch {
+	case host == strings.ToLower(c.host):
+		if len(parts) > 0 && parts[0] == "user-attachments" {
+			return FetchLink{URL: u, Signed: true}, nil
+		}
+		repo, ok := repoOf(parts)
+		if !ok || len(parts) < 3 {
+			return FetchLink{}, ErrNoRepoLink
+		}
+		// github.com/<owner>/<repo>/blob/<ref>/<path> is a page; raw.githubusercontent.com serves the file.
+		if c.host == "github.com" && len(parts) >= 4 && (parts[2] == "blob" || parts[2] == "raw") {
+			u = &url.URL{Scheme: "https", Host: "raw.githubusercontent.com", Path: "/" + repo + "/" + strings.Join(parts[3:], "/")}
+		}
+		return FetchLink{URL: u, Repo: repo, Signed: true}, nil
+	case c.host == "github.com" && host == "raw.githubusercontent.com":
+		repo, ok := repoOf(parts)
+		if !ok || len(parts) < 3 {
+			return FetchLink{}, ErrNoRepoLink
+		}
+		return FetchLink{URL: u, Repo: repo, Signed: true}, nil
+	case c.host == "github.com" && unsignedHosts[host]:
+		return FetchLink{URL: u}, nil
+	}
+	return FetchLink{}, ErrForeignLink
+}
+
+// fetchToken is the token a signed fetch under repo is sent with, and
+// what to call once the fetch is done. A sign-in App mints one read-only
+// for that one repository (readPermissions), revoked afterwards, so a link
+// can never reach another repository the installation covers. A token
+// connection has nothing to mint: its own token goes, and the repository
+// check before the fetch is what bounds it.
+func (c *Client) fetchToken(ctx context.Context, repo string) (string, func(), error) {
+	read := c.who.Load().read
+	app, ok := read.(*appToken)
+	if !ok {
+		tok, err := read.token(ctx, repo)
+		return tok, func() {}, err
+	}
+	tok, _, err := app.scoped(ctx, repo, readPermissions)
+	if err != nil {
+		return "", nil, err
+	}
+	return tok, func() {
+		// A token left unrevoked expires within the hour on its own.
+		_ = c.RevokeToken(context.WithoutCancel(ctx), tok)
+	}, nil
+}
+
+// Fetch downloads a file a comment links to (an attachment, an image, a
+// file in a repository) parsed by ParseFetchLink. A signed link is sent
+// signed in for repo, which the caller has checked the Work may read: the
+// link's own repository, or the Work's for a user attachment. Redirects are
+// followed without the Authorization header once they leave the host (the
+// signed storage link an attachment ends at).
+func (c *Client) Fetch(ctx context.Context, repo string, link FetchLink) ([]byte, string, error) {
+	if link.URL == nil {
 		return nil, "", ErrForeignLink
 	}
-	tok, err := c.who.Load().read.token(ctx, repo)
-	if err != nil {
-		return nil, "", err
-	}
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, u.String(), nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, link.URL.String(), nil)
 	if err != nil {
 		return nil, "", ErrForeignLink
 	}
-	req.Header.Set("Authorization", "token "+tok)
+	if link.Signed {
+		tok, done, err := c.fetchToken(ctx, repo)
+		if err != nil {
+			return nil, "", err
+		}
+		defer done()
+		req.Header.Set("Authorization", "token "+tok)
+	}
 	req.Header.Set("User-Agent", "open-conduit")
 	client := &http.Client{Transport: c.tr.base, Timeout: 2 * time.Minute, CheckRedirect: func(next *http.Request, via []*http.Request) error {
 		if len(via) >= 10 {

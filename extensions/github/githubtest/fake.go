@@ -156,6 +156,7 @@ type Server struct {
 	contents                         map[string][]byte // attachments branch path → content
 	branches                         map[string]bool
 	files                            map[string]string // /files/<name> → redirect target
+	fileReads                        []Write
 	fileData                         map[string][]byte
 	hooks                            []*Hook
 	perms                            map[string]bool
@@ -470,12 +471,38 @@ func (s *Server) Content(path string) ([]byte, bool) {
 	return b, ok
 }
 
-// ServeFile makes GET /files/<name> serve data to an authenticated reader,
-// or redirect to target when it is set (a signed storage link elsewhere).
+// ServeFile makes GET <any prefix>/files/<name> serve data to an
+// authenticated reader, or redirect to target when it is set (a signed
+// storage link elsewhere). Under /<owner>/<repo>/files/<name> a scoped
+// installation token must cover that repository.
 func (s *Server) ServeFile(name string, data []byte, target string) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	s.fileData[name], s.files[name] = data, target
+}
+
+// FileReads lists the GETs of files ServeFile serves, with the token each
+// was sent with, in order.
+func (s *Server) FileReads() []Write {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return slices.Clone(s.fileReads)
+}
+
+// readAllowed reports whether token may read files under repo: an
+// accepted token, an installation token minted for the whole
+// installation, or one whose scope names repo (under the fake's owner).
+func (s *Server) readAllowed(token, repo string) bool {
+	if s.tokens[token] {
+		return true
+	}
+	scope, scoped := s.scopes[token]
+	if !scoped || scope.Repositories == nil {
+		return true
+	}
+	owner, name, _ := strings.Cut(repo, "/")
+	fakeOwner, _, _ := strings.Cut(s.Repo, "/")
+	return strings.EqualFold(owner, fakeOwner) && slices.ContainsFunc(scope.Repositories, func(r string) bool { return strings.EqualFold(r, name) })
 }
 
 // Pull returns a copy of a pull request's state.
@@ -963,6 +990,9 @@ func reviewJSON(r Review, web string) map[string]any {
 var (
 	reInstall     = regexp.MustCompile(`^/repos/([^/]+/[^/]+)/installation$`)
 	reAccessToken = regexp.MustCompile(`^/app/installations/([0-9]+)/access_tokens$`)
+	// reFile is a file ServeFile serves: /files/<name>,
+	// /user-attachments/files/<name> or /<owner>/<repo>/files/<name>.
+	reFile = regexp.MustCompile(`^/(?:(user-attachments|[^/]+/[^/]+)/)?files/(.+)$`)
 )
 
 func (s *Server) authorize(w http.ResponseWriter, r *http.Request) (string, bool) {
@@ -1046,7 +1076,15 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if !ok {
 		return
 	}
-	if name, found := strings.CutPrefix(r.URL.Path, "/files/"); found && r.Method == http.MethodGet {
+	if m := reFile.FindStringSubmatch(r.URL.Path); m != nil && r.Method == http.MethodGet {
+		name := m[2]
+		s.fileReads = append(s.fileReads, Write{Method: r.Method, Path: r.URL.Path, Token: token})
+		// Under /<owner>/<repo>/ a scoped token reads only the
+		// repositories it was minted for, as GitHub's would.
+		if repo := m[1]; repo != "" && repo != "user-attachments" && !s.readAllowed(token, repo) {
+			http.NotFound(w, r)
+			return
+		}
 		if target := s.files[name]; target != "" {
 			http.Redirect(w, r, target, http.StatusFound)
 			return

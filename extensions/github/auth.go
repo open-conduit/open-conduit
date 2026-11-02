@@ -221,10 +221,19 @@ func (a *appToken) invalidate(repo string) {
 	a.key = nil
 }
 
-// scoped mints an installation token for one repository with only
-// contents: write, for git: it is never cached here, so the caller owns
-// it and revokes it (revokeInstallationToken).
-func (a *appToken) scoped(ctx context.Context, repo string) (string, time.Time, error) {
+// gitPermissions is what a git token is minted with: contents: write.
+var gitPermissions = map[string]string{"contents": "write"}
+
+// readPermissions is what a fetch token is minted with: read-only access
+// to the files, issues and pull requests (and their attachments) of the
+// one repository a link is under.
+var readPermissions = map[string]string{"contents": "read", "issues": "read", "pull_requests": "read"}
+
+// scoped mints an installation token for one repository with only perms
+// (gitPermissions for git, readPermissions for a fetch): it is never
+// cached here, so the caller owns it and revokes it
+// (revokeInstallationToken).
+func (a *appToken) scoped(ctx context.Context, repo string, perms map[string]string) (string, time.Time, error) {
 	jwt, err := a.jwt(ctx)
 	if err != nil {
 		return "", time.Time{}, err
@@ -234,13 +243,13 @@ func (a *appToken) scoped(ctx context.Context, repo string) (string, time.Time, 
 		return "", time.Time{}, err
 	}
 	_, name, _ := strings.Cut(repo, "/")
-	body := map[string]any{"repositories": []string{name}, "permissions": map[string]string{"contents": "write"}}
+	body := map[string]any{"repositories": []string{name}, "permissions": perms}
 	var t struct {
 		Token     string    `json:"token"`
 		ExpiresAt time.Time `json:"expires_at"`
 	}
 	if _, err := a.c.raw(ctx, "Bearer "+jwt, http.MethodPost, fmt.Sprintf("/app/installations/%d/access_tokens", id), body, &t); err != nil {
-		return "", time.Time{}, fmt.Errorf("github git token for %s: %w", repo, err)
+		return "", time.Time{}, fmt.Errorf("github scoped token for %s: %w", repo, err)
 	}
 	if t.Token == "" {
 		return "", time.Time{}, ErrCredential
