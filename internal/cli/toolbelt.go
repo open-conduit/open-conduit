@@ -425,6 +425,11 @@ func (t *toolbelt) gitCredential(args []string) int {
 		t.noCredential(err)
 		return 1
 	}
+	if len(ops) == 0 {
+		// Say why, but exit 0 so git still asks any later helper.
+		fmt.Fprintf(t.errOut, "os: no git credential: no granted operation serves %s\n", extension.CapabilityGitCredential)
+		return 0
+	}
 	// An extension operation's input is a payload envelope; git's
 	// attributes are its data.
 	attrs, _ := json.Marshal(in)

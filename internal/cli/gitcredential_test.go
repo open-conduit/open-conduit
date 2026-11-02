@@ -116,8 +116,8 @@ func TestToolbeltGitCredential(t *testing.T) {
 		t.Fatalf("refused: %d %q %q", code, out, errOut)
 	}
 	serving = `[]`
-	if code, out, _ := run("protocol=https\nhost=github.com\n\n", "get"); code != 0 || out != "" {
-		t.Fatalf("nothing serves: %d %q", code, out)
+	if code, out, errOut := run("protocol=https\nhost=github.com\n\n", "get"); code != 0 || out != "" || !strings.Contains(errOut, "no granted operation serves git.credential") {
+		t.Fatalf("nothing serves: %d %q %q", code, out, errOut)
 	}
 	serving = `["acme.git.credential","github.git.credential"]`
 	if code, out, _ := run("protocol=https\nhost=example.com\n\n", "get"); code != 0 || out != "" {
