@@ -9,7 +9,6 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"strconv"
 	"strings"
 	"syscall"
 	"testing"
@@ -224,8 +223,18 @@ func TestDaemonJobParity(t *testing.T) {
 	// catches the checkout up and keeps it; a new remote commit lands; behind
 	// runs alongside and is only told how far behind it is; once hold ends,
 	// behind fast-forwards.
+	activeLeases := func() int {
+		r, err := d.c.Doctor(ctx, false)
+		if err != nil {
+			return -1
+		}
+		return activeResourceLeases(check(r, "resources"))
+	}
 	manual("hold", "h1")
 	d.until("hold runs in the checkout", 30*time.Second, func() bool { return fileHasLine(filepath.Join(d.root, "hold.pid")) })
+	// A resource pass sees hold's lease, so a later count of none means
+	// it was released, not that no pass has run since hold started.
+	d.until("a resource pass sees hold's lease", 30*time.Second, func() bool { return activeLeases() > 0 })
 	other := filepath.Join(d.root, "other")
 	if err := os.WriteFile(filepath.Join(other, "a.txt"), []byte("v3"), 0o644); err != nil {
 		t.Fatal(err)
@@ -245,20 +254,16 @@ func TestDaemonJobParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.until("hold ends", 30*time.Second, settled("hold", 1))
-	// The host releases hold's shared lease on its next resource pass; until
-	// then a run is still told another execution has the checkout.
-	var caught client.Run
-	for i := 2; caught.ID == ""; i++ {
-		if i > 15 {
-			t.Fatal("behind never caught up once hold's lease was released")
-		}
-		manual("behind", "b"+strconv.Itoa(i))
-		d.until("behind ran", 30*time.Second, settled("behind", i))
-		if r := runs("behind")[i-1]; r.Workspace != nil && strings.Contains(r.Workspace.Summary, "fast-forwarded") {
-			caught = r
-		} else {
-			d.settle() // the next resource pass releases hold's lease
-		}
+	// The host releases finished executions' shared leases on its resource
+	// pass, which runs in the background at most once per resource interval
+	// (5s), so loop passes alone don't cover it. Until it has, a run is still
+	// told another execution has the checkout: wait for the release itself.
+	d.until("hold's and behind's leases are released", 30*time.Second, func() bool { return activeLeases() == 0 })
+	manual("behind", "b2")
+	d.until("behind ran", 30*time.Second, settled("behind", 2))
+	caught := runs("behind")[1]
+	if caught.Workspace == nil {
+		t.Fatalf("caught-up run has no workspace: %+v", caught)
 	}
 	if !strings.Contains(caught.Workspace.Summary, "fast-forwarded 1 commit(s) to origin/main") || !strings.HasSuffix(logOf(caught), "v3") {
 		t.Fatalf("caught-up run %+v log %q", caught.Workspace, logOf(caught))
@@ -309,3 +314,37 @@ func TestDaemonJobParity(t *testing.T) {
 }
 
 func fmtSscan(s string, pid *int) (int, error) { return fmt.Sscan(s, pid) }
+
+// activeResourceLeases is the number of resource leases doctor's resources
+// check counted on the host's last resource pass, or -1 before any pass or
+// when the check doesn't say.
+func activeResourceLeases(c client.Check) int {
+	if c.Code == "not_reconciled" {
+		return -1
+	}
+	var n int
+	if _, err := fmt.Sscanf(c.Detail, "%d active resource lease(s)", &n); err != nil {
+		return -1
+	}
+	return n
+}
+
+// TestActiveResourceLeases is the negative control for TestDaemonJobParity's
+// wait on hold's lease: a lease still held, or no resource pass yet, never
+// reads as released.
+func TestActiveResourceLeases(t *testing.T) {
+	for _, tc := range []struct {
+		check client.Check
+		want  int
+	}{
+		{client.Check{Name: "resources", Code: "not_reconciled", Detail: "resource leases not yet reconciled"}, -1},
+		{client.Check{Name: "resources", Code: "ok", Detail: "1 active resource lease(s)"}, 1},
+		{client.Check{Name: "resources", Code: "retained", Detail: "2 active resource lease(s); the sweep at 2026-11-02T11:50:08Z removed 0 spare workspace(s) and kept 1"}, 2},
+		{client.Check{Name: "resources", Code: "ok", Detail: "0 active resource lease(s)"}, 0},
+		{client.Check{}, -1},
+	} {
+		if got := activeResourceLeases(tc.check); got != tc.want {
+			t.Errorf("activeResourceLeases(%+v) = %d, want %d", tc.check, got, tc.want)
+		}
+	}
+}
