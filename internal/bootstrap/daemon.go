@@ -38,7 +38,6 @@ import (
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
-	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -163,7 +162,6 @@ type daemon struct {
 	pipeline      *telemetry.Pipeline
 	ingress       *runtime.Ingress
 	github        githubSources
-	slack         slackSources
 	telemetry     telemetryFanout
 	telemetryFile *rotatingLog
 	resources     resourceState
@@ -172,7 +170,6 @@ type daemon struct {
 	claude        claudeState
 	hooks         webhookState
 	tools         *gh.Tools
-	slackTools    *sl.Tools
 	external      externalState
 	endpoint      string
 	endpoints     *management.Endpoints
@@ -498,7 +495,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	snapshot, generation := d.configs.Current()
 	d.registerGitHub(ctx, snapshot)
-	d.registerSlack(ctx, snapshot)
 	d.publishGeneration(snapshot, generation)
 	c, err := d.build(snapshot, generation)
 	if err != nil {
@@ -518,7 +514,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 		}
 		d.current.Store(next)
 		d.registerGitHub(d.ctx, s)
-		d.registerSlack(d.ctx, s)
 		d.publishGeneration(s, g)
 		d.configureExtensions(d.ctx)
 		d.log.Info("configuration generation activated", "generation", g)
@@ -661,7 +656,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	}
 	c.control = control
 	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Titles: d.titles, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: d.checks(),
-		DeepChecks: append(append([]func(context.Context) runtime.Check{}, d.inprocChecks(true)...), d.slackAuthCheck), Capacity: d.capacityPools, Annotate: d.annotate, Actions: d.actions, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
+		DeepChecks: d.inprocChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Actions: d.actions, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -674,7 +669,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.slackCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.extensionCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.extensionCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

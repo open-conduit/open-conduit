@@ -37,8 +37,7 @@ import (
 // registry is the daemon's registration of executors, route handlers,
 // operations, connection and extension types and resource providers.
 func registry(executors map[string]extension.Executor) config.Registry {
-	reg := config.Registry{Executors: executors, Handlers: handlerNames(), Operations: append(gh.Operations(), sl.Operations()...)}
-	slackRegistry(&reg)
+	reg := config.Registry{Executors: executors, Handlers: handlerNames(), Operations: gh.Operations()}
 	inprocRegistry(&reg, firstParty(nil))
 	resourceRegistry(&reg)
 	sandboxRegistry(&reg)

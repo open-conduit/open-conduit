@@ -23,6 +23,7 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/observe"
 	"github.com/open-conduit/open-conduit/extensions/posthog"
 	"github.com/open-conduit/open-conduit/extensions/schedule"
+	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -42,7 +43,7 @@ import (
 // touches its own package and this list. github is the host's view of the
 // GitHub entries it registers (nil offline).
 func firstParty(github gh.ViewFunc) []inproc.Extension {
-	return []inproc.Extension{gh.NewExtension(github), posthog.New(), human.New(), introspection.New(), observe.New(), schedule.New(), linear.New(), jira.New(), bb.New()}
+	return []inproc.Extension{gh.NewExtension(github), posthog.New(), human.New(), introspection.New(), observe.New(), schedule.New(), linear.New(), jira.New(), bb.New(), sl.New()}
 }
 
 // typeSets are an extension's own entry and connection types: what its

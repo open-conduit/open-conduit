@@ -158,13 +158,12 @@ func TestDaemonSlackHTTPEventsAPI(t *testing.T) {
 		if err != nil {
 			return false
 		}
-		c := check(r, "webhooks")
-		m := listenerAddr.FindStringSubmatch(c.Detail)
-		if m == nil || !strings.Contains(strings.Join(c.Items, " "), "POST /slack/support/helpdesk") {
+		m := listenerAddr.FindStringSubmatch(check(r, "webhooks").Detail)
+		if m == nil || !strings.Contains(strings.Join(check(r, "slack").Items, " "), "POST /slack/support/helpdesk") {
 			return false
 		}
 		addr = m[1]
-		return strings.Contains(strings.Join(check(r, "slack").Items, " "), "reconciled")
+		return strings.Contains(strings.Join(check(r, "reconcile_lag").Items, " "), "slack/support/helpdesk: reconciled")
 	})
 	post := func(body []byte, secret string) (int, string) {
 		req, _ := http.NewRequest(http.MethodPost, "http://"+addr+"/slack/support/helpdesk", bytes.NewReader(body))

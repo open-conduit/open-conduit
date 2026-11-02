@@ -289,17 +289,16 @@ var compositionExceptions = map[string][]string{
 	"capacity.go":   {"extensions/github", "extensions/schedule"},
 	"claudecode.go": {"executors/claudecode", "extensions/github"},
 	"container.go":  {"extensions/docker", "extensions/ssh"},
-	"daemon.go":     {"executors/shell", "extensions/git", "extensions/github", "extensions/schedule", "extensions/slack"},
+	"daemon.go":     {"executors/shell", "extensions/git", "extensions/github", "extensions/schedule"},
 	"github.go":     {"extensions/github"},
 	"operator.go":   {"executors/claudecode", "executors/shell", "extensions/github", "extensions/github/playbooks", "extensions/jira", "extensions/linear", "extensions/schedule", "extensions/slack"},
 	"probes.go":     {"executors/claudecode", "extensions/github"},
 	"resources.go":  {"extensions/git"},
-	"routes.go":     {"extensions/github", "extensions/slack"},
+	"routes.go":     {"extensions/github"},
 	"sandbox.go":    {"extensions/srt"},
-	"slack.go":      {"extensions/slack"},
 	"state.go":      {"extensions/posthog"},
-	"tools.go":      {"executors/claudecode", "extensions/github", "extensions/github/playbooks", "extensions/slack", "extensions/slack/playbooks"},
-	"webhooks.go":   {"extensions/github", "extensions/slack", "extensions/tunnel"},
+	"tools.go":      {"executors/claudecode", "extensions/github", "extensions/github/playbooks"},
+	"webhooks.go":   {"extensions/github", "extensions/tunnel"},
 }
 
 // compositionViolations checks internal/bootstrap's production files import

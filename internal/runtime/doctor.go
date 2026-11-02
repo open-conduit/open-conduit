@@ -166,8 +166,14 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 	if err != nil {
 		return append(checks, Check{Name: "reconcile_lag", Status: CheckFail, Code: "storage_unavailable", Detail: "ingress state could not be read"})
 	}
-	var lagging, failing, limited []string
+	var lagging, failing, limited, current []string
 	for _, s := range statuses {
+		switch {
+		case s.LastError == "" && s.LastComplete.IsZero():
+			current = append(current, s.Name+": first reconcile pending")
+		case s.LastError == "":
+			current = append(current, fmt.Sprintf("%s: reconciled %s ago", s.Name, now.Sub(s.LastComplete).Truncate(time.Second)))
+		}
 		switch {
 		case s.LastError != "":
 			failing = append(failing, fmt.Sprintf("%s: %s (failures %d, next %s)", s.Name, s.LastError, s.Failures, s.NextDue.UTC().Format(time.RFC3339)))
@@ -188,7 +194,7 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 	case len(lagging) > 0:
 		checks = append(checks, Check{Name: "reconcile_lag", Status: CheckWarn, Code: "lagging", Detail: fmt.Sprintf("%d source(s) behind their reconcile interval", len(lagging)), Items: limit(lagging)})
 	default:
-		checks = append(checks, Check{Name: "reconcile_lag", Status: CheckOK, Code: "current", Detail: fmt.Sprintf("%d source(s) within their reconcile interval", len(statuses))})
+		checks = append(checks, Check{Name: "reconcile_lag", Status: CheckOK, Code: "current", Detail: fmt.Sprintf("%d source(s) within their reconcile interval", len(statuses)), Items: limit(current)})
 	}
 	if len(limited) > 0 {
 		checks = append(checks, Check{Name: "non_rederivable", Status: CheckInfo, Code: "declared", Detail: fmt.Sprintf("%d declared delivery famil(ies) cannot be recovered by reconcile if push is lost", len(limited)), Items: limit(limited)})
