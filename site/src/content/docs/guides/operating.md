@@ -11,14 +11,27 @@ open-conduit tui
 
 The TUI lists one row per issue or thread, with its latest turn and how many turns it has had. `g` lists every turn, and `enter` shows one with all of its Work's turns.
 
+<!-- generated: tui keys (go test ./integration -run TestDocsTUIKeys -update-docs) -->
+
 | Key | Does |
 | --- | --- |
+| `enter` | show a run with all of its Work's turns |
+| `g` | switch between one row per issue or thread and one row per turn |
+| `l` | the run's log |
+| `t` | the agent's transcript; in a log, the run's next output |
+| `f` | cycle the state filter (running, parked, failed, …) |
+| `r` | refresh now |
+| `esc` | in a detail or log, go back |
+| `q` | quit from the list; in a detail or log, go back (`ctrl+c` quits from anywhere) |
 | `c` | the scopes' actions, such as claiming an issue by hand |
 | `1`–`9` | in a Work's detail, the actions its extensions offer now |
-| `R` | run or retry |
-| `H` | hold or release |
+| `R` | run or retry, after asking, since it starts a new turn |
+| `H` | hold, asking for a reason (`enter` to skip), or release |
 | `a` | attach to the agent's session |
-| `x` / `X` | cancel a run, or its whole Work |
+| `x` | cancel a live run, after asking |
+| `X` | cancel the whole Work, after asking |
+
+<!-- end generated: tui keys -->
 
 ## The web view
 
