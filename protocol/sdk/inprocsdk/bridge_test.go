@@ -400,3 +400,32 @@ func TestListWaitsIsCarried(t *testing.T) {
 		t.Fatalf("waits %+v", waits)
 	}
 }
+
+// LatestSequence is one state.sequence call over the wire: the latest
+// Event's sequence (#428).
+func TestLatestSequenceIsCarried(t *testing.T) {
+	x := &acme{}
+	b, err := inprocsdk.New(x, base())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	h := sdktest.New(t, b.Extension(), sdktest.WithEvents("eng", domain.Event{Type: "acme.thing", Source: "acme", DeliveryID: "1"}, domain.Event{Type: "acme.thing", Source: "acme", DeliveryID: "2"}))
+	if _, err := h.Configure(ctx, protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: "eng", Type: "acme", Name: "plain", Config: json.RawMessage(`{}`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	x.mu.Lock()
+	host := *x.host
+	x.mu.Unlock()
+	var seq uint64
+	if err := host.Store.Transact(ctx, storage.Guard{}, func(tx storage.Tx) error {
+		var err error
+		seq, err = tx.LatestSequence()
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if seq != 2 {
+		t.Fatalf("latest sequence %d, want 2", seq)
+	}
+}

@@ -3,6 +3,7 @@ package inprocsdk_test
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -106,5 +107,47 @@ func TestBridgeCarriesGatesPanelsAndTelemetry(t *testing.T) {
 	defer g.mu.Unlock()
 	if len(g.captured) != 1 || g.captured[0] != "eng/run_finished" {
 		t.Fatalf("sink captured %v", g.captured)
+	}
+}
+
+// asker is an extension with one action provider that offers nothing now
+// and refuses an invocation in its own words, as human does for an answer
+// to a closed question.
+type asker struct{}
+
+func (asker) Name() string                             { return "asker" }
+func (asker) Start(context.Context, inproc.Host) error { return nil }
+func (asker) Actions(domain.ID) map[string]extension.ActionProvider {
+	return map[string]extension.ActionProvider{"decisions": closedDesk{}}
+}
+
+type closedDesk struct{}
+
+func (closedDesk) Actions(context.Context, extension.ActionTarget) ([]extension.Action, error) {
+	return nil, nil
+}
+func (closedDesk) Invoke(context.Context, extension.ActionCall) (extension.ActionPlan, error) {
+	return extension.ActionPlan{}, &extension.OperationError{Code: "not_outstanding", Message: "already answered"}
+}
+
+// work.act names no provider, so an action no provider offers now goes to
+// the scope's only provider, whose own refusal comes back rather than
+// unknown_action (#428).
+func TestActOnAnUnlistedActionReachesTheOnlyProvider(t *testing.T) {
+	b, err := inprocsdk.New(asker{}, protocol.Manifest{Version: "0.1.0", Command: protocol.HostRunCommand("asker"),
+		Provides: protocol.Provides{Families: []protocol.Family{{Type: "asker.answer", ReDerivable: true}}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	h := sdktest.New(t, b.Extension())
+	if _, err := h.Configure(ctx, protocol.ConfigureParams{}); err != nil {
+		t.Fatal(err)
+	}
+	target := protocol.FromActionTarget(extension.ActionTarget{Scope: domain.Scope{ID: "eng"}, Work: &domain.Work{ID: "w", ScopeID: "eng"}})
+	var out protocol.WorkActResult
+	err = h.Call(ctx, "work.act", protocol.WorkActParams{Target: target, Action: "answer", Input: "yes", Caller: protocol.Caller{Kind: "operator", ID: "alice"}}, &out)
+	if err == nil || !strings.Contains(err.Error(), "not_outstanding") {
+		t.Fatalf("work.act: %+v %v, want the provider's not_outstanding", out, err)
 	}
 }

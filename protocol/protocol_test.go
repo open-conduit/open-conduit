@@ -78,6 +78,7 @@ var useCases = map[string][]string{
 	"state.scopes":               {"github", "introspection"},
 	"state.timers":               {"schedule", "introspection"},
 	"state.waits":                {"human"},
+	"state.sequence":             {"human"},
 	"timer.arm":                  {"schedule", "introspection"},
 	"timer.cancel":               {"schedule", "introspection"},
 	"event.accept":               {"github", "schedule", "introspection"},
@@ -469,5 +470,20 @@ func TestRouteDecisionAndBindingGrantsRoundTrip(t *testing.T) {
 	}
 	if !reflect.DeepEqual(ws.Domain().Bindings[0].Grants, s.Bindings[0].Grants) {
 		t.Fatalf("grants: %+v", ws.Domain().Bindings[0].Grants)
+	}
+}
+
+// entry_named goes by the name of one of the extension's entries, so it
+// needs an extension type to have entries at all.
+func TestEntryNamedNeedsAnExtensionType(t *testing.T) {
+	m := protocol.Manifest{Protocol: protocol.Versions, Name: "asker", Version: "1.0.0", Command: []string{"./asker"}, Provides: protocol.Provides{Actions: true, EntryNamed: true}}
+	raw, _ := json.Marshal(m)
+	if _, err := protocol.ParseManifest(raw); !errors.Is(err, protocol.ErrManifest) {
+		t.Fatalf("entry_named without an extension type: %v", err)
+	}
+	m.Provides.Extensions = []protocol.ExtensionDecl{{Type: "asker"}}
+	raw, _ = json.Marshal(m)
+	if _, err := protocol.ParseManifest(raw); err != nil {
+		t.Fatalf("entry_named with one: %v", err)
 	}
 }

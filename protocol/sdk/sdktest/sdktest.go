@@ -616,7 +616,7 @@ func (h *Host) handle(ctx context.Context, method string, raw json.RawMessage) (
 		h.applyLocked(p.Puts, p.Deletes)
 		h.commits = append(h.commits, p)
 		return out, nil
-	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.scopes", "state.timers", "state.waits":
+	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.scopes", "state.timers", "state.waits", "state.sequence":
 		var p protocol.StateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
@@ -974,6 +974,12 @@ func (h *Host) stateLocked(method string, p protocol.StateParams) (any, error) {
 			}
 		}
 		return nil, notFound
+	case "state.sequence":
+		var seq uint64
+		for _, a := range h.events {
+			seq = max(seq, a.Sequence)
+		}
+		return protocol.StateSequenceResult{Sequence: seq}, nil
 	case "state.events":
 		limit := p.Limit
 		if limit <= 0 || limit > 1000 {

@@ -340,8 +340,13 @@ func (b *Bridge) wire() {
 			}
 			return out, nil
 		}
+		// work.act names no provider: the call goes to the one offering
+		// the action now, else to the scope's only provider, whose own
+		// refusal (an answer to a closed question, say) says why, as the
+		// host's call to a named in-process provider would.
 		e.Act = func(ctx context.Context, _ *sdk.Host, c extension.ActionCall) (extension.ActionPlan, error) {
-			for _, p := range providers(a, c.Target.Scope.ID) {
+			ps := providers(a, c.Target.Scope.ID)
+			for _, p := range ps {
 				actions, err := p.Actions(ctx, c.Target)
 				if err != nil {
 					return extension.ActionPlan{}, err
@@ -351,6 +356,9 @@ func (b *Bridge) wire() {
 						return p.Invoke(ctx, c)
 					}
 				}
+			}
+			if len(ps) == 1 {
+				return ps[0].Invoke(ctx, c)
 			}
 			return extension.ActionPlan{}, &extension.OperationError{Code: "unknown_action", Message: "no such action here"}
 		}

@@ -425,6 +425,13 @@ func EmittedEventID(source, deliveryID string) string {
 
 // State reads.
 
+// StateSequenceResult is what state.sequence answers: the latest accepted
+// Event's sequence in the whole log, a cursor for state.events (0 for an
+// empty log). It says how far the log reaches, not what is in it.
+type StateSequenceResult struct {
+	Sequence uint64 `json:"sequence"`
+}
+
 type StateParams struct {
 	ID      string `json:"id,omitempty"`
 	ScopeID string `json:"scope_id,omitempty"`

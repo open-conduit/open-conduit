@@ -37,6 +37,8 @@ func (t waitsTx) Work(id domain.ID) (domain.Work, error) {
 
 func (t waitsTx) ListWaits(work domain.ID) ([]domain.Wait, error) { return t.s.waits[work], nil }
 
+func (t waitsTx) LatestSequence() (uint64, error) { return 42, nil }
+
 // state.waits answers a Work's Waits only for a Work in one of the
 // extension's scopes; another scope's Work is not found, so its Waits
 // (descriptions, progress, match keys) never cross (#428).
@@ -75,5 +77,19 @@ func TestStateWaitsIsScoped(t *testing.T) {
 	}
 	if _, err := call("missing"); err == nil {
 		t.Fatal("state.waits of no Work answered")
+	}
+}
+
+// state.sequence answers the log's latest sequence, a cursor for
+// state.events, in one call rather than a read of the whole log (#428).
+func TestStateSequenceIsTheLatest(t *testing.T) {
+	m := protocol.Manifest{Protocol: []int{protocol.Version}, Name: "acme", Version: "1.0.0", Command: []string{"./acme"}}
+	s, err := NewService(m, Deps{Store: waitsStore{}, Now: time.Now, Scopes: func() []domain.ID { return []domain.ID{"eng"} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	out, err := s.Handle(context.Background(), "state.sequence", json.RawMessage(`{}`))
+	if r, ok := out.(protocol.StateSequenceResult); err != nil || !ok || r.Sequence != 42 {
+		t.Fatalf("state.sequence: %#v %v", out, err)
 	}
 }
