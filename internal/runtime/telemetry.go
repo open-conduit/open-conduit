@@ -372,6 +372,14 @@ func (r *recorder) resolve(diagnostic func(string)) []observability.Record {
 				// Why routing gave up (Policy "failed"), with a panic's stack.
 				attrs["route.error"], attrs["route.attempts"] = rec.Error, strconv.Itoa(rec.Attempts)
 			}
+			if len(rec.Refusals) > 0 {
+				// Why no route took the Event: "route: reason", one a line.
+				lines := make([]string, len(rec.Refusals))
+				for i, f := range rec.Refusals {
+					lines[i] = f.Route + ": " + f.Reason
+				}
+				attrs["route.refusals"] = strings.Join(lines, "\n")
+			}
 		}
 		add(observability.Record{Name: "route.decided", Correlation: c, To: a.Disposition, Attributes: attrs})
 	}

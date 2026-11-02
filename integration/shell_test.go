@@ -301,7 +301,7 @@ func (h *shellHost) close() {
 func shellRoute(in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
 	if !strings.HasPrefix(e.Type, "operator.") || e.CorrelationKey == nil {
-		return extension.RouteDecision{}, nil
+		return extension.Skip("only keyed operator.* events start Work"), nil
 	}
 	return extension.RouteDecision{Match: true, CreateID: domain.ID("work/" + e.CorrelationKey.ExternalID), Kind: "fixture.work"}, nil
 }

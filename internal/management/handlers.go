@@ -270,18 +270,30 @@ func (s *Server) listEvents(c *call) (int, any, error) {
 	}
 	return 200, map[string]any{"items": out, "next_cursor": next}, nil
 }
+
+// getEvent returns one accepted Event; with=route adds the route that
+// GET /events/{id}/route returns for it, as the list form does.
 func (s *Server) getEvent(c *call) (int, any, error) {
-	if err := noQuery(c); err != nil {
+	ask, err := withOnly(c, "route")
+	if err != nil {
 		return 0, nil, err
 	}
-	var out wireEvent
-	err := s.read(c.ctx, func(tx storage.Tx) error {
+	var out any
+	err = s.read(c.ctx, func(tx storage.Tx) error {
 		a, e := tx.Event(domain.ID(c.params[0]))
 		if e != nil {
 			return e
 		}
 		scope, e := runtime.EventScopeInTx(tx, a)
-		out = toEvent(a, scope)
+		if e != nil {
+			return e
+		}
+		if !ask["route"] {
+			out = toEvent(a, scope)
+			return nil
+		}
+		r, e := routeOf(tx, a, scope)
+		out = wireEventWith{wireEvent: toEvent(a, scope), Route: &r}
 		return e
 	})
 	if err != nil {
@@ -393,6 +405,9 @@ func routeOf(tx storage.Tx, a domain.AcceptedEvent, scope domain.ID) (wireEventR
 		out.Route, out.Binding, out.Generation, out.Policy, out.Reason = rec.Route, rec.Binding, rec.Generation, rec.Policy, rec.Reason
 		out.DisplayRefused = rec.DisplayRefused
 		out.Error, out.Attempts = rec.Error, rec.Attempts
+		for _, f := range rec.Refusals {
+			out.Refusals = append(out.Refusals, wireRouteRefusal{Route: f.Route, Reason: f.Reason})
+		}
 		if out.RoutedWorkID == "" {
 			out.RoutedWorkID = string(rec.WorkID)
 		}

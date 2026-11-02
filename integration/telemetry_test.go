@@ -4,8 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"testing"
@@ -516,5 +518,38 @@ func TestInstrumentationRollbackEmitsNothing(t *testing.T) {
 	got := memory.Records()
 	if len(got) != 1 || got[0].Correlation.EventID != "e-false" || got[0].Name != "event.accepted" {
 		t.Fatalf("records after rollback: %+v", got)
+	}
+}
+
+// TestUnmatchedEventRecordsEachRefusal: an Event no route takes says why in
+// run history, through route.decided, GET /events/{id}?with=route and the
+// chain the CLI prints, rather than only "unmatched" (issue #431).
+func TestUnmatchedEventRecordsEachRefusal(t *testing.T) {
+	ctx := context.Background()
+	state, bin := shellState(t, shellConfig(t, map[string]any{"command": toolbeltScript}))
+	h := newShellHostWith(t, state, bin, conformance.NewClock(), "daemon", false, shellHostOptions{telemetry: true})
+	c := h.operator()
+	ignored := h.submit("tracker.label", "ignored", "thread-9")
+	h.routeAll()
+	const why = "incoming: only keyed operator.* events start Work"
+	decided := recordSet(h.records()).one(t, "route.decided", func(r observability.Record) bool { return r.Correlation.EventID == domain.ID(ignored.ID) })
+	if decided.To != "unmatched" || decided.Attributes["route.refusals"] != why {
+		t.Fatalf("route.decided: %+v", decided)
+	}
+	e, err := c.EventWithRoute(ctx, ignored.ID)
+	if err != nil || e.Route == nil || e.Route.Disposition != "unmatched" || !reflect.DeepEqual(e.Route.Refusals, []client.RouteRefusal{{Route: "incoming", Reason: "only keyed operator.* events start Work"}}) {
+		t.Fatalf("event with route: %+v %v", e.Route, err)
+	}
+	chain, err := c.EventChain(ctx, ignored.ID)
+	if err != nil || len(chain) != 1 || chain[0].Route == nil || len(chain[0].Route.Refusals) != 1 {
+		t.Fatalf("chain: %+v %v", chain, err)
+	}
+	// The single-Event form takes with=route and nothing else.
+	var out client.Event
+	if err := c.Do(ctx, "GET", "events/"+ignored.ID, url.Values{"with": {"actions"}}, nil, "", &out); err == nil {
+		t.Fatal("GET /events/{id}?with=actions was accepted")
+	}
+	if plain, err := c.Event(ctx, ignored.ID); err != nil || plain.Route != nil {
+		t.Fatalf("plain event: %+v %v", plain, err)
 	}
 }

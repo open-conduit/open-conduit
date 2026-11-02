@@ -50,6 +50,20 @@ func with(q listQuery, allowed ...string) (map[string]bool, error) {
 	return out, nil
 }
 
+// withOnly parses the query of a single-target endpoint that takes with=
+// and nothing else, with the list forms' parsing and errors.
+func withOnly(c *call, allowed ...string) (map[string]bool, error) {
+	values := c.r.URL.Query()
+	q := listQuery{filters: map[string]string{}}
+	for k, v := range values {
+		if k != "with" || len(v) != 1 {
+			return nil, fail(400, "invalid_filter", "unknown or repeated query parameter")
+		}
+		q.filters[k] = v[0]
+	}
+	return with(q, allowed...)
+}
+
 // viewer computes the actions and panels providers offer on targets, for
 // the single-target endpoints and the list forms alike. Every provider
 // call is bounded by the provider timeout and the request's view
