@@ -89,7 +89,8 @@ func newSandboxLab(t *testing.T, executor string) *sandboxLab {
 	l.run = filepath.Join(l.state, "runs", "own")
 	l.other = filepath.Join(l.state, "runs", "other")
 	l.execState = filepath.Join(l.state, "executors", executor)
-	for _, d := range []string{l.home + "/.ssh", l.home + "/.docker/run", l.state + "/private", l.run + "/token", l.other + "/token",
+	for _, d := range []string{l.home + "/.ssh", l.home + "/.docker/run", l.home + "/.aws", l.home + "/.kube", l.home + "/Library/Keychains",
+		l.root + "/xdg", l.root + "/agent", l.state + "/private", l.run + "/token", l.other + "/token",
 		l.state + "/resources/git/workspaces/theirs", l.outside, l.ws, l.execState} {
 		if err := os.MkdirAll(d, 0o700); err != nil {
 			t.Fatal(err)
@@ -97,6 +98,9 @@ func newSandboxLab(t *testing.T, executor string) *sandboxLab {
 	}
 	for path, body := range map[string]string{
 		l.home + "/.ssh/id_test":                            "ssh-secret",
+		l.home + "/.aws/credentials":                        "aws-secret",
+		l.home + "/.kube/config":                            "kube-config",
+		l.home + "/Library/Keychains/login.keychain-db":     "keychain-secret",
 		l.state + "/private/operator.token":                 "operator-secret",
 		l.other + "/token/token":                            "other-secret",
 		l.run + "/token/token":                              "own-token",
@@ -136,6 +140,12 @@ func newSandboxLab(t *testing.T, executor string) *sandboxLab {
 	l.serve("unix", l.otherSock, "other-toolbelt")
 	l.serve("unix", filepath.Join(l.state, "management.sock"), "management")
 	l.serve("unix", filepath.Join(l.home, ".docker", "run", "docker.sock"), "docker")
+	// The operator's runtime directory, with the user bus in it, and ssh
+	// agent, which the host's environment names.
+	l.serve("unix", filepath.Join(root, "xdg", "bus"), "user-bus")
+	l.serve("unix", filepath.Join(root, "agent", "agent.sock"), "ssh-agent")
+	t.Setenv("XDG_RUNTIME_DIR", filepath.Join(root, "xdg"))
+	t.Setenv("SSH_AUTH_SOCK", filepath.Join(root, "agent", "agent.sock"))
 	l.loopback = l.serve("tcp", "127.0.0.1:0", "loopback")
 	return l
 }
@@ -153,7 +163,7 @@ func (l *sandboxLab) serve(network, addr, body string) string {
 	return ln.Addr().String()
 }
 
-const sandboxPolicy = `{"write":["{workspace}","~/.claude-sandboxed"],"read":{"deny":["~/.ssh"]},"network":{"allow":["allowed.invalid","api.anthropic.com"]},"sockets":["{toolbelt}"],"unix_sockets":"all"}`
+const sandboxPolicy = `{"write":["{workspace}","~/.claude-sandboxed"],"read":{"deny":["~/.ssh"],"allow":["~/.kube"]},"network":{"allow":["allowed.invalid","api.anthropic.com"]},"sockets":["{toolbelt}"],"unix_sockets":"all"}`
 
 // binding is the host's sandbox for one attempt, as bootstrap binds it.
 func (l *sandboxLab) binding(policy string, pinned string, o srt.Options) *extension.BoundSandbox {
@@ -207,7 +217,7 @@ func (w labWorkspace) Lookup(ctx context.Context, _ string) (extension.Resource,
 
 func (l *sandboxLab) env() map[string]string {
 	return map[string]string{"LAB_STATE": l.state, "LAB_CONFIG": l.config, "LAB_OUTSIDE": l.outside, "LAB_RUN": l.run,
-		"LAB_LOOPBACK": l.loopback, "LAB_OTHER_SOCK": l.otherSock, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
+		"LAB_LOOPBACK": l.loopback, "LAB_OTHER_SOCK": l.otherSock, "LAB_ROOT": l.root, "GIT_CONFIG_GLOBAL": "/dev/null", "GIT_CONFIG_NOSYSTEM": "1"}
 }
 
 // claudeEnv is a claude-code binding's env: the lab's, with a config
@@ -224,6 +234,9 @@ const sandboxProbes = `t() { n=$1; shift; if "$@" >/dev/null 2>&1; then echo "$n
 code() { curl -s -o /dev/null -w '%{http_code}' -m 10 "$@" 2>/dev/null; }
 read() { [ "$(cat "$1" 2>/dev/null)" = "$2" ]; }
 t read_ssh read "$HOME/.ssh/id_test" ssh-secret
+t read_aws read "$HOME/.aws/credentials" aws-secret
+t read_lifted read "$HOME/.kube/config" kube-config
+t read_keychain read "$HOME/Library/Keychains/login.keychain-db" keychain-secret
 t read_other_workspace read "$LAB_STATE/resources/git/workspaces/theirs/secret" their-secret
 t read_operator_token read "$LAB_STATE/private/operator.token" operator-secret
 t read_other_token read "$LAB_STATE/runs/other/token/token" other-secret
@@ -247,6 +260,8 @@ t write_git_info sh -c 'echo x >> .git/info/exclude'
 t rename_git mv .git .git-moved
 t loopback_tcp curl -sf -m 3 --noproxy '*' "http://$LAB_LOOPBACK/"
 t docker_socket curl -sf -m 3 --unix-socket "$HOME/.docker/run/docker.sock" http://x/
+t user_bus curl -sf -m 3 --unix-socket "$LAB_ROOT/xdg/bus" http://x/
+t ssh_agent curl -sf -m 3 --unix-socket "$LAB_ROOT/agent/agent.sock" http://x/
 t management_socket curl -sf -m 3 --unix-socket "$LAB_STATE/management.sock" http://x/
 t other_toolbelt curl -sf -m 3 --unix-socket "$LAB_OTHER_SOCK" http://x/
 t own_toolbelt sh -c 'test "$(curl -sf -m 5 --unix-socket "$LAB_RUN/toolbelt.sock" http://x/)" = toolbelt-ok'
@@ -256,10 +271,10 @@ echo "net_allowed=$(code http://allowed.invalid/)"
 
 // sandboxExpect is what the probes must report from inside a sandbox.
 var sandboxExpect = map[string]string{
-	"read_ssh": "DENIED", "read_other_workspace": "DENIED", "read_operator_token": "DENIED", "read_other_token": "DENIED",
+	"read_ssh": "DENIED", "read_aws": "DENIED", "read_lifted": "ALLOWED", "read_other_workspace": "DENIED", "read_operator_token": "DENIED", "read_other_token": "DENIED",
 	"read_config": "DENIED", "read_own_token": "ALLOWED", "read_symlink_ssh": "DENIED", "read_symlink_state": "DENIED",
 	"read_dotdot": "DENIED", "read_proc_root": "DENIED", "read_case": "DENIED", "new_hardlink": "DENIED", "write_workspace": "ALLOWED", "git_commit": "ALLOWED",
-	"loopback_tcp": "DENIED", "docker_socket": "DENIED", "management_socket": "DENIED", "other_toolbelt": "DENIED", "own_toolbelt": "ALLOWED",
+	"loopback_tcp": "DENIED", "docker_socket": "DENIED", "user_bus": "DENIED", "ssh_agent": "DENIED", "management_socket": "DENIED", "other_toolbelt": "DENIED", "own_toolbelt": "ALLOWED",
 }
 
 func probeResults(out string) map[string]string {
@@ -284,6 +299,9 @@ func (l *sandboxLab) checkIsolation(t *testing.T, out string) {
 		if got[k] != want {
 			t.Errorf("%s: %q from inside the sandbox, want %s\n%s", k, got[k], want, out)
 		}
+	}
+	if runtime.GOOS == "darwin" && got["read_keychain"] != "DENIED" {
+		t.Errorf("read_keychain: %q from inside the sandbox, want DENIED\n%s", got["read_keychain"], out)
 	}
 	if got["net_disallowed"] != "403" {
 		t.Errorf("a host outside the policy got %q from srt's proxy, want 403", got["net_disallowed"])
@@ -384,7 +402,8 @@ func TestSandboxUnsandboxedControl(t *testing.T) {
 	waitResult(t, h)
 	out, _ := os.ReadFile(l.execOutput(t))
 	got := probeResults(string(out))
-	keys := []string{"read_ssh", "read_other_workspace", "read_operator_token", "read_other_token", "read_config", "read_symlink_ssh", "read_dotdot", "management_socket", "loopback_tcp", "docker_socket"}
+	keys := []string{"read_ssh", "read_aws", "read_keychain", "read_other_workspace", "read_operator_token", "read_other_token", "read_config", "read_symlink_ssh", "read_dotdot",
+		"management_socket", "loopback_tcp", "docker_socket", "user_bus", "ssh_agent"}
 	if runtime.GOOS == "darwin" {
 		keys = append(keys, "read_case") // APFS is case-insensitive by default
 	}

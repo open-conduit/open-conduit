@@ -19,10 +19,12 @@ type Policy struct {
 	// own run directory is always writable.
 	Write []string `json:"write,omitempty"`
 	Read  struct {
-		// Deny are paths the process may not read. Everything else is
-		// readable, as srt reads broadly by default.
+		// Deny are paths the process may not read, besides the provider's
+		// default denies (credentials, and on Linux the escape sockets).
+		// Everything else is readable, as srt reads broadly by default.
 		Deny []string `json:"deny,omitempty"`
-		// Allow are exceptions beneath Deny.
+		// Allow are exceptions beneath Deny; one naming a default deny
+		// exactly lifts it.
 		Allow []string `json:"allow,omitempty"`
 	} `json:"read"`
 	Network struct {
@@ -30,7 +32,8 @@ type Policy struct {
 		// a name or *.domain. Everything else is denied.
 		Allow []string `json:"allow,omitempty"`
 	} `json:"network"`
-	// Sockets are the unix sockets the process may connect to.
+	// Sockets are the unix sockets the process may connect to; one the
+	// provider hides by default is lifted by listing it.
 	Sockets []string `json:"sockets,omitempty"`
 	// UnixSockets "all" accepts that on Linux, where seccomp can't allow a
 	// unix socket by path, any socket the filesystem policy leaves visible

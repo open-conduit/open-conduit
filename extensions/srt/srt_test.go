@@ -297,3 +297,91 @@ func TestAdoptRefusesAnotherProcess(t *testing.T) {
 		t.Fatal("adopted a wrapper running a process outside the sandbox")
 	}
 }
+
+// The credential paths are denied by default, the keychain on macOS, and on
+// Linux, where every unix socket is allowed, the operator's runtime
+// directory and ssh agent; a policy lifts one through read.allow or sockets.
+func TestPlanDefaultDenies(t *testing.T) {
+	l := newLab(t, "")
+	home := filepath.Join(filepath.Dir(l.state), "home")
+	xdg, agent := filepath.Join(filepath.Dir(l.state), "xdg"), filepath.Join(filepath.Dir(l.state), "agent.sock")
+	for _, d := range []string{home + "/.config", xdg} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := os.WriteFile(agent, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("HOME", home)
+	plan := func(goos, pol string) settings {
+		t.Helper()
+		p := srt.New(srt.Options{Binary: l.bin, GOOS: goos, Environ: func() []string {
+			return []string{"XDG_RUNTIME_DIR=" + xdg, "SSH_AUTH_SOCK=" + agent, "PATH=/usr/bin:/bin"}
+		}, LookPath: func(s string) (string, error) {
+			if s == l.bin {
+				return l.bin, nil
+			}
+			return "/bin/sh", nil
+		}})
+		if _, err := p.Plan(context.Background(), extension.ResourceOwner{}, l.policy(pol), l.needs(), l.launch()); err != nil {
+			t.Fatalf("%s %s: %v", goos, pol, err)
+		}
+		raw, _ := os.ReadFile(filepath.Join(l.records, "srt.json"))
+		var s settings
+		_ = json.Unmarshal(raw, &s)
+		return s
+	}
+	creds := []string{"/.ssh", "/.aws", "/.config/gh", "/.docker/config.json", "/.netrc", "/.gnupg"}
+	for _, goos := range []string{"darwin", "linux"} {
+		deny := paths(plan(goos, policy).Filesystem.DenyRead)
+		for _, c := range creds {
+			if !has(deny, home+c) {
+				t.Errorf("%s: denyRead %q lacks %s", goos, deny, home+c)
+			}
+		}
+		if has(deny, home+"/Library/Keychains") != (goos == "darwin") {
+			t.Errorf("%s: denyRead %q, want the keychain denied on macOS only", goos, deny)
+		}
+		// macOS allows sockets by path; Linux hides those it can't.
+		if has(deny, xdg) != (goos == "linux") || has(deny, agent) != (goos == "linux") {
+			t.Errorf("%s: denyRead %q, want the runtime dir and agent hidden on Linux only", goos, deny)
+		}
+	}
+	// A policy lifts a default only by naming it: ~/.config doesn't lift
+	// ~/.config/gh.
+	lifted := strings.Replace(policy, `"read":{"deny":["~/.ssh"]}`, `"read":{"allow":["~/.aws","~/.config"]}`, 1)
+	lifted = strings.Replace(lifted, `"sockets":["{toolbelt}"]`, `"sockets":["{toolbelt}","`+agent+`"]`, 1)
+	s := plan("linux", lifted)
+	deny, allow := paths(s.Filesystem.DenyRead), paths(s.Filesystem.AllowRead)
+	if has(deny, home+"/.aws") || has(deny, agent) || !has(deny, home+"/.config/gh") || !has(deny, home+"/.ssh") || !has(deny, xdg) {
+		t.Errorf("denyRead %q, want ~/.aws and the listed agent lifted, the rest kept", deny)
+	}
+	if has(allow, home+"/.aws") {
+		t.Errorf("allowRead %q lists a lifted path that nothing denies", allow)
+	}
+	// A socket inside the runtime directory is an exception beneath it.
+	inside := filepath.Join(xdg, "tool.sock")
+	s = plan("linux", strings.Replace(policy, `"sockets":["{toolbelt}"]`, `"sockets":["{toolbelt}","`+inside+`"]`, 1))
+	if !has(paths(s.Filesystem.DenyRead), xdg) || !has(paths(s.Filesystem.AllowRead), inside) {
+		t.Errorf("a socket in the runtime dir: deny %q allow %q", paths(s.Filesystem.DenyRead), paths(s.Filesystem.AllowRead))
+	}
+	// A default inside a write grant stays unreadable and unwritable there.
+	s = plan("darwin", strings.Replace(policy, `"write":["{workspace}"]`, `"write":["{workspace}","~/.config"]`, 1))
+	if !has(paths(s.Filesystem.DenyRead), home+"/.config/gh") || !has(paths(s.Filesystem.DenyWrite), home+"/.config/gh") {
+		t.Errorf("~/.config/gh inside the ~/.config grant: deny %q denyWrite %q", paths(s.Filesystem.DenyRead), paths(s.Filesystem.DenyWrite))
+	}
+	// An exception that holds a default the policy didn't name is refused,
+	// naming how to lift it.
+	n := l.needs()
+	p := srt.New(srt.Options{Binary: l.bin, GOOS: "darwin"})
+	_, err := p.Plan(context.Background(), extension.ResourceOwner{}, l.policy(strings.Replace(policy, `"read":{"deny":["~/.ssh"]}`, `"read":{"deny":["~"],"allow":["~/.config"]}`, 1)), n, l.launch())
+	if !errors.Is(err, extension.ErrSandboxUnavailable) || !strings.Contains(err.Error(), "denied by default") {
+		t.Errorf("an allow holding ~/.config/gh beneath a deny: %v, want ErrSandboxUnavailable naming the default", err)
+	}
+	// A need beneath a default is refused, as one beneath the policy's own denies.
+	n.Read = append(n.Read, home+"/.aws/config")
+	if _, err := p.Plan(context.Background(), extension.ResourceOwner{}, l.policy(policy), n, l.launch()); !errors.Is(err, extension.ErrSandboxDenied) {
+		t.Errorf("a need beneath ~/.aws: %v, want ErrSandboxDenied", err)
+	}
+}
