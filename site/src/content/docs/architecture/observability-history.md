@@ -125,8 +125,8 @@ Nothing in it interprets executor payloads or Work kinds. Management serves it a
 
 Operator commands:
 
-- `open-conduit runs list|get` returns JSON.
-- `runs table` prints the shared text rows.
+- `open-conduit runs list` prints the shared text rows (`runs table` is the same); `--json` prints the records.
+- `runs get ID` prints the record as JSON.
 - `runs log ID` streams the run's log artifact, which is the first text artifact. On a running run it prints the output so far, and `--follow` keeps printing new output until the run ends. `--transcript` picks the transcript (the JSON-lines output) instead.
 - `open-conduit tui` opens the interactive view.
 

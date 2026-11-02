@@ -54,7 +54,7 @@ Two generic contract pieces make this possible. `extension.RouteInput.Route` car
 | Timed slot (every, at, cron) | `schedule.slot` | A core timer, as a configured independent root. Delivery `slot/<job>/<UTC instant>`. |
 | Webhook POST | `schedule.webhook` | The entry's one-shot ingress. Delivery `webhook/<job>/<id>`: the sender's `Idempotency-Key` (or `X-Request-Id`), else a fresh ID per POST. |
 | Code-host delivery | `schedule.event` | Derived from the accepted raw delivery (`github.delivery`), which is its causal parent. Delivery `event/<job>/<parent Event>`. |
-| Manual | any non-`core.*` type, source `core.manual` | The operator: `open-conduit events emit --scope-id S --type schedule.run --delivery-id D --key-source <namespace> --key-external-id job/<name>`. |
+| Manual | any non-`core.*` type, source `core.manual` | The operator: `open-conduit events emit --scope S --type schedule.run --delivery-id D --key-source <namespace> --key-external-id job/<name>`. |
 
 Every trigger carries the `schedule.trigger.v1` payload: job, kind, run label (`cron 2026-10-25 01:30 Europe/London`, `at 2026-10-21 05:17 UTC`, `every 60m`, `webhook`, `push abc1234`), the slot, and the delivery fields or the webhook body.
 

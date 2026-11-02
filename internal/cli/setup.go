@@ -241,6 +241,26 @@ func (o *operator) listSetups(w io.Writer, configPath string) {
 	}
 }
 
+// initHelp is `init --help` (every setup) or `init TYPE --help` (that
+// setup's usage).
+func (o *operator) initHelp(w io.Writer, args []string) {
+	configFlag, _, _, _, rest, _ := splitInitFlags(args)
+	path := o.configPath(configFlag)
+	for _, a := range rest {
+		if strings.HasPrefix(a, "-") || a == "help" {
+			continue
+		}
+		for _, s := range o.setups(path) {
+			if info := s.SetupInfo(); info.Type == a {
+				fmt.Fprintf(w, "Usage: open-conduit init %s %s [--config PATH] [--force] [--dry-run]\n\n%s\n", a, info.Usage, info.Summary)
+				return
+			}
+		}
+		break
+	}
+	o.listSetups(w, path)
+}
+
 func (o *operator) init(args []string) int {
 	configFlag, with, force, dry, rest, err := splitInitFlags(args)
 	if err != nil {
@@ -310,7 +330,7 @@ func (o *operator) init(args []string) int {
 		}
 	}
 	if existing != nil {
-		fmt.Fprintf(o.out, "A running daemon, even after a restart, keeps its stored configuration until you run: open-conduit config apply %s --generation N (or, if the stored configuration no longer validates, adopts this file when it next starts)\n", path)
+		fmt.Fprintf(o.out, "A running daemon, even after a restart, keeps its stored configuration until you run: open-conduit config apply %s (or, if the stored configuration no longer validates, adopts this file when it next starts)\n", path)
 	}
 	return 0
 }
@@ -620,7 +640,7 @@ func (o *operator) saveConfig(path string, out []byte) int {
 	if err := writePrivate(path, out); err != nil {
 		return o.emit(nil, fmt.Errorf("could not save the config"))
 	}
-	fmt.Fprintf(o.errOut, "Saved %s. A running daemon, even after a restart, keeps its stored configuration until you run: open-conduit config apply %s --generation N (or, if the stored configuration no longer validates, adopts this file when it next starts)\n", path, path)
+	fmt.Fprintf(o.errOut, "Saved %s. A running daemon, even after a restart, keeps its stored configuration until you run: open-conduit config apply %s (or, if the stored configuration no longer validates, adopts this file when it next starts)\n", path, path)
 	return 0
 }
 

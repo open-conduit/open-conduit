@@ -771,7 +771,7 @@ func TestDaemonConfigReload(t *testing.T) {
 	}
 	d.until("pending edit warning", 5*time.Second, func() bool {
 		b, _ := os.ReadFile(d.log.Name())
-		return bytes.Contains(b, []byte("config file differs from the active generation")) && bytes.Contains(b, []byte("config apply "+d.config+" --generation 2"))
+		return bytes.Contains(b, []byte("config file differs from the active generation")) && bytes.Contains(b, []byte("config apply "+d.config))
 	})
 }
 

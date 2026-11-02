@@ -53,7 +53,7 @@ func TestManagementActions(t *testing.T) {
 	}
 
 	var listed []client.Action
-	h.mustCLI(&listed, "actions", "list", "--scope", "ops")
+	h.mustCLI(&listed, "actions", "list", "--json", "--scope", "ops")
 	if len(listed) != 1 || !reflect.DeepEqual(listed[0], client.Action{Provider: "fixture", ID: "approve", Label: "Approve the request", Prompt: "type yes"}) {
 		t.Fatalf("listed: %+v", listed)
 	}
