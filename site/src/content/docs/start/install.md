@@ -10,11 +10,11 @@ Open Conduit ships two commands, kept side by side:
 - `open-conduit` is the daemon and operator client.
 - `os` is the small toolbelt that shell commands call from inside a run. The daemon looks for it beside its own executable.
 
-Homebrew, the release archives and the install script also carry the setup assistant, an extension package in `extensions/setup/` beside the binaries. It runs `init --with claude` and the browser setup, and gives a fresh install its first configuration. `go install` doesn't bring it; see [below](#go-install).
+Homebrew, the release archives and the install script also carry two extension packages beside the binaries: the setup assistant in `extensions/setup/`, which runs `init --with claude` (or `--with codex`) and the browser setup and gives a fresh install its first configuration, and the [Codex executor](/open-conduit/guides/codex/) in `extensions/codex/`. `go install` doesn't bring them; see [below](#go-install).
 
 A release build sends anonymous usage telemetry: a daily count of runs and the scopes and first-party extensions in use. [Usage telemetry](/open-conduit/reference/telemetry/) lists exactly what is sent; `open-conduit serve --no-telemetry` or `DO_NOT_TRACK=1` turns it off.
 
-You also need the CLIs of the services you use: [Claude Code](https://docs.anthropic.com/en/docs/claude-code), signed in, for agent bindings, and optionally the GitHub CLI (`gh`), whose login is the default GitHub credential.
+You also need the CLIs of the services you use: a coding agent for agent bindings, either [Claude Code](https://docs.anthropic.com/en/docs/claude-code) or the [Codex CLI](https://developers.openai.com/codex/cli), installed and signed in, and optionally the GitHub CLI (`gh`), whose login is the default GitHub credential.
 
 ## Homebrew
 
@@ -47,7 +47,7 @@ go install github.com/open-conduit/open-conduit/cmd/os@latest
 
 `os` lands on your PATH there under that generic name. Install both into the same directory, or point the daemon elsewhere with `serve --toolbelt-dir DIR`.
 
-`go install` doesn't bring the setup assistant, which lives in its own repository, [open-conduit/extension-setup](https://github.com/open-conduit/extension-setup). Build it from source as below and install it with `open-conduit extension install dist/packages/setup`. Without it, configure with `open-conduit init github` (or `slack`, `linear`, `jira`) and `config set`, and `serve` needs a config file to start.
+`go install` doesn't bring the setup assistant, which lives in its own repository, [open-conduit/extension-setup](https://github.com/open-conduit/extension-setup), or the Codex executor. Build them from source as below and install them with `open-conduit extension install dist/packages/setup` (and `dist/packages/codex`). Without it, configure with `open-conduit init github` (or `slack`, `linear`, `jira`) and `config set`, and `serve` needs a config file to start.
 
 ## From source
 
@@ -57,9 +57,10 @@ You need Go 1.24.2 or later, Git and Make:
 git clone https://github.com/open-conduit/open-conduit.git
 cd open-conduit
 make build                 # writes bin/open-conduit and bin/os
-make packages              # builds the packages, the setup assistant into dist/packages/setup
+make packages              # builds the packages: the setup assistant into dist/packages/setup, Codex into dist/packages/codex
 cp bin/open-conduit bin/os /usr/local/bin/   # or anywhere on your PATH, side by side
 open-conduit extension install dist/packages/setup
+open-conduit extension install dist/packages/codex   # to run agents on Codex
 ```
 
 ## Upgrading
@@ -75,4 +76,4 @@ A Homebrew install belongs to Homebrew: `upgrade` tells you to run `brew upgrade
 
 The web view says when a newer release is out, in the status line along the bottom, and its Update page installs it the same way (see [the web view](/open-conduit/guides/operating/#the-web-view)).
 
-Next: run `open-conduit init --with claude` and let Claude Code set it up with you, as the [quick start](/open-conduit/start/quick-start/) describes. To talk the setup through in the browser instead, start the daemon with no config (`open-conduit serve`) and open the Setup page of `open-conduit web`; a session there proposes the config and you approve and apply it ([set it up in the browser](/open-conduit/start/quick-start/#set-it-up-in-the-browser)).
+Next: run `open-conduit init --with claude` (or `--with codex`) and let your agent set it up with you, as the [quick start](/open-conduit/start/quick-start/) describes. To talk the setup through in the browser instead, start the daemon with no config (`open-conduit serve`) and open the Setup page of `open-conduit web`; a session there proposes the config and you approve and apply it ([set it up in the browser](/open-conduit/start/quick-start/#set-it-up-in-the-browser)).

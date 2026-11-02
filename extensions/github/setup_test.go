@@ -79,7 +79,7 @@ func TestGitHubSetupFlags(t *testing.T) {
 		t.Fatal(setup.SetupInfo())
 	}
 	h := host{cwd: t.TempDir()}
-	for _, args := range [][]string{{"--token", "ghp_literal"}, {"--repo", "acme/web", "--token", "ghp_literal"}, {"--repo", "acme/web", "--scope", "Bad"}, {"--repo", "acme/web", "extra"}} {
+	for _, args := range [][]string{{"--token", "ghp_literal"}, {"--repo", "acme/web", "--token", "ghp_literal"}, {"--repo", "acme/web", "--scope", "Bad"}, {"--repo", "acme/web", "extra"}, {"--repo", "acme/web", "--executor", "aider"}} {
 		if _, err := setup.Setup(context.Background(), h, args); !errors.Is(err, extension.ErrSetupUsage) {
 			t.Errorf("%v: %v", args, err)
 		}
@@ -89,7 +89,19 @@ func TestGitHubSetupFlags(t *testing.T) {
 		t.Fatal(err)
 	}
 	var s scopeShape
-	if err = json.Unmarshal(r.Scope, &s); err != nil || s.ID != "my-repo" || len(s.Routes) != 2 {
+	if err = json.Unmarshal(r.Scope, &s); err != nil || s.ID != "my-repo" || len(s.Routes) != 2 || s.Bindings[0]["executor"] != "claude-code" {
 		t.Fatalf("%v %s", err, r.Scope)
+	}
+	// --executor codex: the same binding on the Codex executor, its
+	// playbook from the host's directory, so nothing else changes.
+	if r, err = setup.Setup(context.Background(), h, []string{"--repo", "acme/web", "--no-workspace", "--executor", "codex"}); err != nil {
+		t.Fatal(err)
+	}
+	s = scopeShape{}
+	if err = json.Unmarshal(r.Scope, &s); err != nil || s.Bindings[0]["executor"] != "codex" || s.Bindings[0]["config"].(map[string]any)["playbook"] != gh.Playbook {
+		t.Fatalf("%v %s", err, r.Scope)
+	}
+	if !strings.Contains(strings.Join(r.Summary, "\n"), "agent      codex") {
+		t.Fatalf("summary: %v", r.Summary)
 	}
 }

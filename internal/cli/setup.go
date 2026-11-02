@@ -230,6 +230,7 @@ func (o *operator) setups(configPath string) []extension.Setup {
 func (o *operator) listSetups(w io.Writer, configPath string) {
 	fmt.Fprintln(w, "Usage: open-conduit init TYPE [flags] [--config PATH] [--force] [--dry-run]")
 	fmt.Fprintln(w, "       open-conduit init --with claude   start Claude Code with the setup guide")
+	fmt.Fprintln(w, "       open-conduit init --with codex    start the Codex CLI with the setup guide")
 	fmt.Fprintln(w, "\nTypes (from the registered extensions):")
 	list := o.setups(configPath)
 	if len(list) == 0 {

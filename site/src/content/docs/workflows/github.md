@@ -19,6 +19,7 @@ open-conduit config check
 - Issues with a skip label are left alone, and you can require a label before an issue is claimed.
 - `init github --holds` adds a hold route that parks issues until you claim them by hand.
 - `init github --no-workspace` writes a scope whose turns need no checkout.
+- `init github --executor codex` runs the agent on the Codex CLI instead of Claude Code ([run agents on Codex](/open-conduit/guides/codex/)).
 - `open-conduit init --help` lists every flag.
 
 ## How a turn goes

@@ -103,7 +103,8 @@ func offlineChecks(ctx context.Context, path string, data []byte) []client.Check
 	return out
 }
 
-// setup starts Claude Code with the setup guide in this terminal.
+// setup starts the owner's coding agent with the setup guide in this
+// terminal.
 func setup(r cli.SetupRequest) int {
 	cmd, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: r.Agent, ConfigPath: r.ConfigPath, StateDir: r.StateDir, Cwd: r.Cwd, Bin: selfCommand()})
 	if err != nil {
@@ -111,7 +112,11 @@ func setup(r cli.SetupRequest) int {
 		return 1
 	}
 	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
-	fmt.Printf("Starting Claude Code to set up Open Conduit (config %s)…\n", r.ConfigPath)
+	agent := "Claude Code"
+	if r.Agent == bootstrap.CodexAgent {
+		agent = "Codex"
+	}
+	fmt.Printf("Starting %s to set up Open Conduit (config %s)…\n", agent, r.ConfigPath)
 	if err := cmd.Run(); err != nil {
 		return 1
 	}

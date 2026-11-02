@@ -9,6 +9,7 @@ import (
 	"io"
 	"os/exec"
 	"regexp"
+	"slices"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/extension"
@@ -84,8 +85,11 @@ func ScopeID(repo string) string {
 // GitHubScope is what `init github` adds for one repository.
 type GitHubScope struct {
 	Repo, Scope, Connection, Token string
-	Checkout                       string // empty: workspace-free scope
-	Holds                          bool
+	// Executor is the agent binding's executor: claude-code (the
+	// default) or codex.
+	Executor string
+	Checkout string // empty: workspace-free scope
+	Holds    bool
 }
 
 func obj(kv ...any) map[string]any {
@@ -96,7 +100,8 @@ func obj(kv ...any) map[string]any {
 	return m
 }
 
-// ScopeConfig is the scope JSON for g: an agent binding on claude-code with
+// ScopeConfig is the scope JSON for g: an agent binding on claude-code (or
+// g.Executor) with
 // the GitHub tools, a git work resource when a checkout is given, and
 // optionally the hold route and binding.
 func (g GitHubScope) ScopeConfig() map[string]any {
@@ -106,7 +111,7 @@ func (g GitHubScope) ScopeConfig() map[string]any {
 	}
 	authOps := append([]string{"emit"}, ops...)
 	requires := obj("toolbelt", "mcp", "inject", true, "resume", true, "workspace", g.Checkout != "")
-	agent := obj("name", "agent", "executor", "claude-code", "connection", g.Connection, "requires", requires,
+	agent := obj("name", "agent", "executor", g.executor(), "connection", g.Connection, "requires", requires,
 		"operations", ops, "secret_names", []string{},
 		"config", obj("playbook", Playbook, "branch", "agent/issue-{number}"))
 	if g.Checkout != "" {
@@ -128,6 +133,14 @@ func (g GitHubScope) ScopeConfig() map[string]any {
 		"extensions", []any{obj("name", g.Scope, "type", Type, "connection", g.Connection, "secret_names", []string{},
 			"config", obj("namespace", "github/"+host+"/"+g.Repo, "scope", g.Scope, "repo", g.Repo))},
 		"secret_refs", obj())
+}
+
+// executor is the agent binding's executor (claude-code by default).
+func (g GitHubScope) executor() string {
+	if g.Executor == "" {
+		return AgentExecutors[0]
+	}
+	return g.Executor
 }
 
 // ConnectionConfig is the connection JSON g adds when none with its id exists.
@@ -155,7 +168,7 @@ func (g GitHubScope) Result() (extension.SetupResult, error) {
 		Scope:       scope,
 		Summary: []string{"scope      " + g.Scope, "repository " + g.Repo,
 			fmt.Sprintf("credential %s connection, token %s:…", g.Connection, scheme),
-			"workspace  " + workspace, fmt.Sprintf("holds      %t", g.Holds)},
+			"workspace  " + workspace, fmt.Sprintf("holds      %t", g.Holds), "agent      " + g.executor()},
 		Next: []string{
 			"open-conduit serve                 start the daemon (reconcile every 15 minutes; store settings.webhooks for webhooks)",
 			"open-conduit doctor --check-secrets  check the credential privately and GitHub access",
@@ -168,7 +181,7 @@ type Setup struct{}
 
 func (Setup) SetupInfo() extension.SetupInfo {
 	return extension.SetupInfo{Type: Type, Summary: "add a scope that works a GitHub repository's issues",
-		Usage: "[--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF] [--connection ID] [--holds]"}
+		Usage: "[--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF] [--connection ID] [--holds] [--executor claude-code|codex]"}
 }
 
 func usage(msg string) error { return fmt.Errorf("%w: %s", extension.ErrSetupUsage, msg) }
@@ -183,13 +196,17 @@ func (Setup) Setup(_ context.Context, host extension.SetupHost, args []string) (
 	connection := fs.String("connection", "", "")
 	noWorkspace := fs.Bool("no-workspace", false, "")
 	holds := fs.Bool("holds", false, "")
+	executor := fs.String("executor", AgentExecutors[0], "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		if errors.Is(err, flag.ErrHelp) {
 			return extension.SetupResult{}, usage("init github " + Setup{}.SetupInfo().Usage)
 		}
 		return extension.SetupResult{}, usage("invalid init github flags")
 	}
-	g := GitHubScope{Repo: *repo, Scope: *scope, Connection: *connection, Token: *token, Holds: *holds}
+	if !slices.Contains(AgentExecutors, *executor) {
+		return extension.SetupResult{}, usage("--executor is claude-code or codex")
+	}
+	g := GitHubScope{Repo: *repo, Scope: *scope, Connection: *connection, Token: *token, Holds: *holds, Executor: *executor}
 	checkout := *checkoutFlag
 	if checkout != "" && !strings.HasPrefix(checkout, "/") {
 		checkout = strings.TrimSuffix(host.Cwd(), "/") + "/" + checkout

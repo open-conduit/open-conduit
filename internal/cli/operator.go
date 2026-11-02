@@ -130,6 +130,7 @@ Commands:
   init                       list the setups the registered extensions offer
   init TYPE [flags] [--config PATH] [--force] [--dry-run]   run one (for example init github --repo OWNER/NAME, init slack)
   init --with claude         start Claude Code with the setup guide
+  init --with codex          start the Codex CLI with the setup guide
   secret set NAME [--store keyring|file] | secret path   (value read from stdin, never an argument)
   scopes list [--parent-id ID] [--enabled true|false] | scopes get ID | scopes reconcile ID [--revision N]
   work list [--scope-id --state --kind --parent-id] | work get ID
