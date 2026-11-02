@@ -27,6 +27,7 @@ export default defineConfig({
 						{ label: 'Quick start', slug: 'start/quick-start' },
 						{ label: 'Point your agent here', slug: 'start/agents' },
 						{ label: 'How it compares', slug: 'start/compare' },
+						{ label: 'Glossary', slug: 'start/glossary' },
 					],
 				},
 				{
