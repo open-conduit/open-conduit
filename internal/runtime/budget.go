@@ -56,7 +56,9 @@ var ErrBudgetHeld = fmt.Errorf("%w: over budget", ErrNotEligible)
 
 // Budget is one usage limit: at most Max of Unit per Work, per scope or
 // across every scope (Per), over the ledger's life ("" Period) or each UTC
-// "day" or "week" (from Monday). ScopeID narrows it to Work in one scope;
+// "day" or "week" (from Monday). ScopeID narrows a per-Work or per-scope
+// budget to Work in one scope (config refuses it with Per all, whose one
+// ledger every scope shares);
 // with Per scope and no ScopeID every scope has its own ledger. WarnAt is
 // the fraction of Max that fires a warning (zero: none).
 type Budget struct {
@@ -272,11 +274,13 @@ type BudgetNotice struct {
 // budgetEventInTx accepts a routable root Event in the Work's scope that a
 // budget's threshold was crossed. It names the Work in its data rather than
 // addressing it, so it never becomes the Work's own input. One per ledger
-// window, kind and limit: raising the limit can fire it again.
+// window, kind, limit and scope: raising the limit can fire it again.
 func budgetEventInTx(tx storage.Tx, now time.Time, kind string, b Budget, key string, used float64, work, scope domain.ID) error {
 	window := key[strings.LastIndex(key, "/")+1:]
 	data, _ := json.Marshal(BudgetNotice{Unit: b.Unit, Per: b.Per, Period: b.Period, Window: window, Max: b.Max, WarnAt: b.WarnAt, Used: used, WorkID: work, ScopeID: scope, Budget: b.Describe()})
-	delivery := kind + "/" + identity(key, b.Unit, formatAmount(b.Max))
+	// The scope is part of the identity: a budget across every scope
+	// notifies each scope that crosses it, in that scope.
+	delivery := kind + "/" + identity(key, b.Unit, formatAmount(b.Max), string(scope))
 	e := domain.Event{ID: domain.ID("budget-" + delivery), Type: "core.budget." + kind, Source: "core.budget", DeliveryID: delivery, OccurredAt: now, ReceivedAt: now, Data: domain.Payload{Schema: "core.budget.v1", Data: data}}
 	_, _, err := AcceptInTx(tx, scope, e)
 	return err
@@ -295,6 +299,21 @@ type overBudget struct {
 // An admitted turn is charged one turn, and one attempt when it starts a
 // new execution.
 func admitBudgetInTx(tx storage.Tx, now time.Time, budgets []Budget, w domain.Work, newAttempt bool) (held bool, err error) {
+	// A release's pass covers exactly the first admission after it, over
+	// budget or not, so one left by a release whose limit was then raised
+	// (or removed) cannot later let an over-budget turn through unheld.
+	passKey := identity(string(w.ID))
+	var pass domain.ID
+	passed := false
+	switch err := getJSON(tx, budgetPassNamespace, passKey, &pass); {
+	case err == nil:
+		if err = tx.Delete(budgetPassNamespace, passKey); err != nil {
+			return false, err
+		}
+		passed = true
+	case !errors.Is(err, storage.ErrNotFound):
+		return false, err
+	}
 	if len(budgets) == 0 {
 		return false, nil
 	}
@@ -314,19 +333,8 @@ func admitBudgetInTx(tx storage.Tx, now time.Time, budgets []Budget, w domain.Wo
 			over = append(over, overBudget{b, used})
 		}
 	}
-	if len(over) > 0 {
-		passKey := identity(string(w.ID))
-		var pass domain.ID
-		switch err := getJSON(tx, budgetPassNamespace, passKey, &pass); {
-		case err == nil:
-			if err = tx.Delete(budgetPassNamespace, passKey); err != nil {
-				return false, err
-			}
-		case errors.Is(err, storage.ErrNotFound):
-			return true, holdOverBudgetInTx(tx, now, w, over)
-		default:
-			return false, err
-		}
+	if len(over) > 0 && !passed {
+		return true, holdOverBudgetInTx(tx, now, w, over)
 	}
 	counted := map[string]float64{"turns": 1}
 	if newAttempt {

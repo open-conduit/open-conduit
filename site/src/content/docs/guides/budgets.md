@@ -31,7 +31,7 @@ Each budget says:
 | `period` | `day` or `week` (from Monday), in UTC. Without it, the count never resets |
 | `max` | the limit. A turn doesn't start once the count has reached it |
 | `warn_at` | the fraction of `max` at which a warning fires (default `0.8`) |
-| `scope` | only Work in this scope counts towards this budget, and only that Work is held by it |
+| `scope` | with `per: work` or `per: scope`, only Work in this scope counts towards this budget, and only that Work is held by it |
 
 Apply the change as usual with `open-conduit config apply FILE --generation N` ([configuration](../configuration/)). A count starts when its budget is first configured; usage from before then isn't counted.
 
@@ -61,12 +61,12 @@ Held Work shows under **Held** in the web view's Needs you list and in the TUI, 
 You then have two choices:
 
 - **Raise the limit** in the config and apply it, then release the hold. The Work and everything else the budget covers can run until the new limit.
-- **Release the hold** without changing the config (`H` in the TUI, Release in the web view, or `open-conduit work release ID --revision N`). This lets one more turn start. If the budget is still used up, the turn after that is held again.
+- **Release the hold** without changing the config (`H` in the TUI, Release in the web view, or `open-conduit work release ID --revision N`). This lets the next turn start, whatever the budgets say then. If the budget is still used up, the turn after that is held again.
 
 A budget hold doesn't lift when a new day or week begins. Release it when you're ready for the Work to go on.
 
 ## Warnings
 
-When a count crosses a budget's `warn_at`, the daemon accepts a `core.budget.warning` event in the Work's scope. When it reaches `max` it accepts a `core.budget.exceeded` event. Each fires once per budget and period, and again if you change `max`. Their data (schema `core.budget.v1`) names the budget in words (`budget`), the `unit`, `max`, the amount `used`, the `window`, and the `work_id` and `scope_id` that crossed it.
+When a count crosses a budget's `warn_at`, the daemon accepts a `core.budget.warning` event in the Work's scope. When it reaches `max` it accepts a `core.budget.exceeded` event. Each fires once per budget, period and scope (a `per: all` budget notifies each scope whose Work crosses or meets it), and again if you change `max`. Their data (schema `core.budget.v1`) names the budget in words (`budget`), the `unit`, `max`, the amount `used`, the `window`, and the `work_id` and `scope_id` that crossed it.
 
 The events aren't addressed to the Work, so they never wake it. A route in the scope can act on them, for example to post a message in Slack. Without one, they are kept in the event history and telemetry.

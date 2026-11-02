@@ -387,6 +387,9 @@ func (c *checker) budgets(n *node) []Budget {
 				b.WarnAt = w
 			}
 		}
+		if b.Per == "all" && b.Scope != "" {
+			c.fail(p+"/scope", "invalid_value", "a per: all budget counts every scope; use per: scope to limit one scope")
+		}
 		key := [4]string{b.Unit, b.Per, b.Period, b.Scope}
 		if seen[key] {
 			c.fail(p, "duplicate_value", "another budget already limits this unit, per and period for the same scope; merge them")
