@@ -34,6 +34,8 @@ export default defineConfig({
 					label: 'Workflows',
 					items: [
 						{ label: 'GitHub engineering', slug: 'workflows/github' },
+						{ label: 'Linear and Jira', slug: 'workflows/linear-jira' },
+						{ label: 'Pull request review', slug: 'workflows/review-bot' },
 						{ label: 'Slack support', slug: 'workflows/slack' },
 						{ label: 'Scheduled jobs', slug: 'workflows/scheduled-jobs' },
 						{ label: 'Introspection', slug: 'workflows/introspection' },

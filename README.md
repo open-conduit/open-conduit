@@ -69,7 +69,7 @@ To see routing before you set anything up, [look around without credentials](htt
 Where to go next:
 
 - [Quick start](https://open-conduit.github.io/open-conduit/start/quick-start/): set it up with Claude, in the browser or by hand, then start the daemon and check it.
-- Workflows: [GitHub engineering](https://open-conduit.github.io/open-conduit/workflows/github/), [Slack support](https://open-conduit.github.io/open-conduit/workflows/slack/), [scheduled jobs](https://open-conduit.github.io/open-conduit/workflows/scheduled-jobs/) and [introspection](https://open-conduit.github.io/open-conduit/workflows/introspection/).
+- Workflows: [GitHub engineering](https://open-conduit.github.io/open-conduit/workflows/github/), [Linear and Jira](https://open-conduit.github.io/open-conduit/workflows/linear-jira/), [pull request review](https://open-conduit.github.io/open-conduit/workflows/review-bot/), [Slack support](https://open-conduit.github.io/open-conduit/workflows/slack/), [scheduled jobs](https://open-conduit.github.io/open-conduit/workflows/scheduled-jobs/) and [introspection](https://open-conduit.github.io/open-conduit/workflows/introspection/).
 - [Extensions](https://open-conduit.github.io/open-conduit/reference/extensions/): add integrations and executors of your own.
 - [The core in one page](https://open-conduit.github.io/open-conduit/architecture/core/): the design in depth.
 

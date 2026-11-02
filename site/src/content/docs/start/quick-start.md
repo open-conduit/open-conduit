@@ -94,5 +94,5 @@ open-conduit tui                                     # watch and control runs
 
 ## Next steps
 
-- Pick a workflow: [GitHub engineering](/open-conduit/workflows/github/), [Slack support](/open-conduit/workflows/slack/), [scheduled jobs](/open-conduit/workflows/scheduled-jobs/) or [introspection](/open-conduit/workflows/introspection/).
+- Pick a workflow: [GitHub engineering](/open-conduit/workflows/github/), [Linear and Jira](/open-conduit/workflows/linear-jira/), [pull request review](/open-conduit/workflows/review-bot/), [Slack support](/open-conduit/workflows/slack/), [scheduled jobs](/open-conduit/workflows/scheduled-jobs/) or [introspection](/open-conduit/workflows/introspection/).
 - Learn how [configuration and secrets](/open-conduit/guides/configuration/) work.
