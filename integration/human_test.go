@@ -24,6 +24,9 @@ type humanHarness struct {
 	control    *runtime.Control
 	actions    hu.Actions
 	configured bool
+	// deploys counts the runs of fixture.deploy, an operation a gate can
+	// name; fixture.read is another.
+	deploys *int
 }
 
 // humanRoute is the fixture route, except that, like every daemon route, it
@@ -53,7 +56,7 @@ func newHumanHarness(t *testing.T, mode, entry string) *humanHarness {
 	f, executor := schedulerFixture(t, mode, o)
 	base := f.Driver.(*schedulerDriver)
 	th := &toolbeltHarness{f: f, executor: executor, echoes: new(int), deny: new(bool), mu: &sync.Mutex{}}
-	h := &humanHarness{toolbeltHarness: th, configured: true}
+	h := &humanHarness{toolbeltHarness: th, configured: true, deploys: new(int)}
 	e := hu.Entry{Name: x.Name, Config: cfg}
 	h.actions = hu.Actions{Store: f.Store, Entry: e, Now: f.Clock.Now}
 	tools, err := hu.NewTools(hu.Options{Store: f.Store, Now: f.Clock.Now, Entry: func(scope domain.ID) (hu.Entry, bool) {
@@ -62,7 +65,7 @@ func newHumanHarness(t *testing.T, mode, entry string) *humanHarness {
 	if err != nil {
 		t.Fatal(err)
 	}
-	ops := []string{extension.Emit, extension.CreateWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext, hu.OpAsk}
+	ops := []string{extension.Emit, extension.CreateWork, extension.Wait, extension.DeclareOutcome, extension.ReadContext, hu.OpAsk, "fixture.deploy", "fixture.read"}
 	belt, err := runtime.NewToolbelt(f.Store, f.Clock.Now, base.router, runtime.ToolbeltOptions{
 		Grant: func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 			return runtime.ToolbeltGrant{Operations: ops}, nil
@@ -73,6 +76,18 @@ func newHumanHarness(t *testing.T, mode, entry string) *humanHarness {
 		t.Fatal(err)
 	}
 	if err = belt.Register(tools.Registration()); err != nil {
+		t.Fatal(err)
+	}
+	ran := func(n *int) func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+		return func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+			if n != nil {
+				*n++
+			}
+			return domain.Payload{Schema: "fixture.out.v1", Data: json.RawMessage(`{"ok":true}`)}, nil
+		}
+	}
+	if err = belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "fixture", Operations: []extension.Operation{
+		{Name: "fixture.deploy", Handler: ran(h.deploys)}, {Name: "fixture.read", Handler: ran(nil)}}}); err != nil {
 		t.Fatal(err)
 	}
 	options := base.options
@@ -456,4 +471,190 @@ func TestHumanQuestionPanelContract(t *testing.T) {
 		other.Work = nil
 		return conformance.PanelFixture{Provider: h.actions, Shown: h.target(t), Hidden: other}
 	})
+}
+
+// gated is a `human` entry whose gate names fixture.deploy.
+const gated = `{"name":"decisions","type":"human","config":{"gates":[{"operations":["fixture.deploy"],"timeout":"2h"}]}}`
+
+// deploy calls fixture.deploy with input under the attempt's token.
+func (h *humanHarness) deploy(t *testing.T, input string) (extension.ToolResult, error) {
+	t.Helper()
+	return h.belt.Call(context.Background(), h.token, extension.ToolCall{Operation: "fixture.deploy", Input: domain.Payload{Schema: "fixture.deploy.v1", Data: json.RawMessage(input)}})
+}
+
+// park ends the attempt after a gate parked a call, so the wait registers.
+func (h *humanHarness) park(t *testing.T, out extension.ToolResult) {
+	t.Helper()
+	if out.Wait == nil {
+		t.Fatalf("not parked: %+v", out)
+	}
+	if err := h.scheduler.Complete(context.Background(), h.attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Summary: "gated"}}); err != nil {
+		t.Fatalf("complete: %v", err)
+	}
+}
+
+// resume starts the Work's next attempt once its wait has woken.
+func (h *humanHarness) resume(t *testing.T) {
+	t.Helper()
+	var err error
+	if h.attempt, err = h.scheduler.Start(context.Background(), "work/item"); err != nil {
+		t.Fatalf("resume: %v", err)
+	}
+}
+
+// A gated operation never runs on its first call: the host parks the caller
+// on an approval request. An approval lets the same call (the same input,
+// in any key order) through exactly once; the next identical call asks
+// again. Operations the gate doesn't name pass untouched.
+func TestHumanGateApprovesTheSameCallOnce(t *testing.T) {
+	for _, mode := range []string{"persistent", "reopen"} {
+		t.Run(mode, func(t *testing.T) {
+			h := newHumanHarness(t, mode, gated)
+			ctx := context.Background()
+			if _, err := h.belt.Call(ctx, h.token, extension.ToolCall{Operation: "fixture.read", Input: domain.Payload{Schema: "fixture.read.v1", Data: json.RawMessage(`{}`)}}); err != nil {
+				t.Fatalf("an ungated operation was stopped: %v", err)
+			}
+			out, err := h.deploy(t, `{"env":"prod","version":"1.2"}`)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var told map[string]any
+			if json.Unmarshal(out.Output.Data, &told) != nil || told["approval_required"] != true || told["operation"] != "fixture.deploy" {
+				t.Fatalf("output: %s", out.Output.Data)
+			}
+			if *h.deploys != 0 {
+				t.Fatal("the gated operation ran before approval")
+			}
+			// The parked call released authority, like any wait.
+			if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.ReadContext}); !errors.Is(err, extension.ErrUnauthorized) {
+				t.Fatalf("authority kept after parking: %v", err)
+			}
+			h.park(t, out)
+			w, work := waitState(t, h.toolbeltHarness, out.Wait.ID)
+			if w.State != domain.WaitActive || work.State != domain.WorkWaiting || w.Owner != hu.Type || w.TimeoutTimerID == "" {
+				t.Fatalf("not parked on a timed approval: %+v %v", w, work.State)
+			}
+
+			acts, err := h.actions.Actions(ctx, h.target(t))
+			if err != nil || len(acts) != 1 || strings.Join(acts[0].Choices, ",") != "approve,refuse" || !strings.Contains(acts[0].Label, "fixture.deploy") {
+				t.Fatalf("approval not offered: %+v %v", acts, err)
+			}
+			panels, err := h.actions.Panels(ctx, h.target(t))
+			if err != nil || len(panels) != 1 || panels[0].Title != "Approval needed" || !strings.Contains(panels[0].Sections[1].Text, `"env": "prod"`) {
+				t.Fatalf("approval panel: %+v %v", panels, err)
+			}
+			_, err = h.answer(t, extension.Caller{Kind: "slack_user", ID: "U1"}, "approve", "stranger")
+			refusedWith(t, err, "not_allowed")
+			if _, err = h.answer(t, extension.LocalOperator, "approve", "a1"); err != nil {
+				t.Fatal(err)
+			}
+			h.reconcile(t)
+			h.reconcile(t)
+			if w, _ = waitState(t, h.toolbeltHarness, out.Wait.ID); w.State != domain.WaitWoken {
+				t.Fatalf("approval did not wake: %v", w.State)
+			}
+			aliases := h.eventsOfType(t, hu.TypeAnswered)
+			if text, ok := hu.RenderEvent(aliases[0].Event, hu.Lookup(ctx, h.f.Store, h.f.Clock.Now)); !ok || !strings.Contains(text, "approved your call to fixture.deploy") {
+				t.Fatalf("render: %s", text)
+			}
+
+			h.resume(t)
+			// Another input is another call: it asks for itself.
+			if out, err = h.deploy(t, `{"env":"staging","version":"1.2"}`); err != nil || out.Wait == nil || *h.deploys != 0 {
+				t.Fatalf("a different call rode the approval: %+v %v", out, err)
+			}
+			h.park(t, out)
+			if _, err = h.answer(t, extension.LocalOperator, "approve", "a2"); err != nil {
+				t.Fatal(err)
+			}
+			h.reconcile(t)
+			h.reconcile(t)
+			h.resume(t)
+			// The approved call, its keys reordered, goes through once.
+			if out, err = h.deploy(t, ` {"version":"1.2", "env":"staging"}`); err != nil || out.Wait != nil || *h.deploys != 1 {
+				t.Fatalf("the approved call did not run: %+v %v (runs %d)", out, err, *h.deploys)
+			}
+			if out, err = h.deploy(t, `{"env":"staging","version":"1.2"}`); err != nil || out.Wait == nil || *h.deploys != 1 {
+				t.Fatalf("an approval let a second call through: %+v %v (runs %d)", out, err, *h.deploys)
+			}
+		})
+	}
+}
+
+// A refusal, or no answer by the gate's timeout, refuses the call once with
+// a code the caller can act on; the operation never runs.
+func TestHumanGateRefusalAndTimeout(t *testing.T) {
+	h := newHumanHarness(t, "persistent", gated)
+	ctx := context.Background()
+	out, err := h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	if _, err = h.answer(t, extension.LocalOperator, "refuse", "r1"); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(t)
+	h.reconcile(t)
+	h.resume(t)
+	_, err = h.deploy(t, `{"env":"prod"}`)
+	refusedWith(t, err, hu.CodeApprovalRefused)
+	var gr *extension.GateRefusal
+	if !errors.As(err, &gr) || gr.Gate != hu.Type {
+		t.Fatalf("the refusal does not name its gate: %v", err)
+	}
+	if !strings.Contains(err.Error(), "operator:local") {
+		t.Fatalf("the refusal does not say who refused: %v", err)
+	}
+	// The refusal is the call's answer; authority stays for other calls.
+	if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.ReadContext}); err != nil {
+		t.Fatalf("a refusal released authority: %v", err)
+	}
+
+	// Asked again, and left unanswered past the gate's timeout.
+	out, err = h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	h.f.Clock.Advance(3 * time.Hour)
+	if err = h.scheduler.Wake(ctx, out.Wait.ID); err != nil {
+		t.Fatal(err)
+	}
+	h.resume(t)
+	_, err = h.deploy(t, `{"env":"prod"}`)
+	refusedWith(t, err, hu.CodeApprovalTimedOut)
+	if *h.deploys != 0 {
+		t.Fatalf("a refused call ran %d times", *h.deploys)
+	}
+}
+
+// Without a `human` entry, gates are off and every call passes.
+func TestHumanGateNeedsAnEntry(t *testing.T) {
+	h := newHumanHarness(t, "persistent", gated)
+	h.configured = false
+	if out, err := h.deploy(t, `{"env":"prod"}`); err != nil || out.Wait != nil || *h.deploys != 1 {
+		t.Fatalf("an unconfigured gate stopped the call: %+v %v", out, err)
+	}
+}
+
+// An approval holds only for the gate's timeout after it was given: the
+// same call made later asks again rather than riding an old approval.
+func TestHumanGateApprovalExpires(t *testing.T) {
+	h := newHumanHarness(t, "persistent", gated)
+	out, err := h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	if _, err = h.answer(t, extension.LocalOperator, "approve", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(t)
+	h.reconcile(t)
+	h.f.Clock.Advance(3 * time.Hour) // the gate's timeout is 2h
+	h.resume(t)
+	if out, err = h.deploy(t, `{"env":"prod"}`); err != nil || out.Wait == nil || *h.deploys != 0 {
+		t.Fatalf("a stale approval let the call through: %+v %v (runs %d)", out, err, *h.deploys)
+	}
 }

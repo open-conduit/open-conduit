@@ -161,3 +161,56 @@ func TestRequestBeforeServerIsBuilt(t *testing.T) {
 		t.Fatal("the server never answered")
 	}
 }
+
+// A gate answers operation.gate over the wire: no plan lets the call
+// through, a plan parks the caller, and a refusal crosses as the gate's own
+// operation error.
+func TestOperationGateOverTheWire(t *testing.T) {
+	m := manifest()
+	m.Permissions = []string{protocol.PermissionOperationGate}
+	ext := (&sdk.Extension{Manifest: m}).OperationGate(func(_ context.Context, a extension.Authority, c extension.GateCall) (*extension.WaitPlan, error) {
+		switch c.Operation {
+		case "acme.read":
+			return nil, nil
+		case "acme.deploy":
+			key := domain.CorrelationKey{Source: "chat", ExternalID: "approval/1"}
+			return &extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: []string{"chat.approved"}}, Description: "an approval"},
+				Dependencies: []extension.Dependency{{ID: "approval", SourceKey: key, Types: []string{"chat.approval"}, AliasType: "chat.approved"}}}, nil
+		}
+		return nil, &extension.OperationError{Code: "approval_refused", Message: string(a.WorkID) + ": " + c.Owner + " refused"}
+	})
+	if !ext.Manifest.Provides.OperationGate || !slicesContains(ext.Manifest.Enabled(), "operation.gate") {
+		t.Fatal("OperationGate does not declare the gate")
+	}
+	host, _, _ := serve(t, ext)
+	ctx := context.Background()
+	if err := host.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: []int{1}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	call := func(op string) (protocol.OperationGateResult, error) {
+		var out protocol.OperationGateResult
+		err := host.Call(ctx, "operation.gate", protocol.OperationGateParams{Operation: op, Owner: "acme", Authority: protocol.Authority{WorkID: "work/1"}, Input: protocol.Payload{Schema: "acme.in.v1", Data: json.RawMessage(`{}`)}}, &out)
+		return out, err
+	}
+	if out, err := call("acme.read"); err != nil || out.Wait != nil {
+		t.Fatalf("allow: %+v %v", out, err)
+	}
+	out, err := call("acme.deploy")
+	if err != nil || out.Wait == nil || out.Wait.Extension().Dependencies[0].AliasType != "chat.approved" {
+		t.Fatalf("park: %+v %v", out, err)
+	}
+	_, err = call("acme.drop")
+	var oe *extension.OperationError
+	if !errors.As(err, &oe) || oe.Code != "approval_refused" || oe.Message != "work/1: acme refused" {
+		t.Fatalf("refuse: %v", err)
+	}
+}
+
+func slicesContains(xs []string, s string) bool {
+	for _, x := range xs {
+		if x == s {
+			return true
+		}
+	}
+	return false
+}
