@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"strings"
 
@@ -147,4 +148,46 @@ func callGate(ctx context.Context, g extension.Gate, a extension.Authority, call
 	a.Operations = append([]string(nil), a.Operations...)
 	a.EventTypes = append([]string(nil), a.EventTypes...)
 	return g(ctx, a, call)
+}
+
+// AdmitStart asks every registered start gate, in registration-name order,
+// whether Work's first attempt may start. It returns the first hold with
+// the name of the gate that placed it, or the first gate's error (a gate
+// that panics errs). Nil, "" and nil lets the start through.
+func (t *Toolbelt) AdmitStart(ctx context.Context, call extension.StartCall) (*extension.StartHold, string, error) {
+	t.mu.RLock()
+	names := make([]string, 0, len(t.startGates))
+	gates := make(map[string]extension.StartGate, len(t.startGates))
+	for name, g := range t.startGates {
+		names = append(names, name)
+		gates[name] = g
+	}
+	t.mu.RUnlock()
+	sort.Strings(names)
+	for _, name := range names {
+		hold, err := callStartGate(ctx, gates[name], call)
+		if err != nil {
+			return nil, name, err
+		}
+		if hold != nil {
+			return hold, name, nil
+		}
+	}
+	return nil, "", nil
+}
+
+// StartGated reports whether any start gate is registered.
+func (t *Toolbelt) StartGated() bool {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	return len(t.startGates) > 0
+}
+
+func callStartGate(ctx context.Context, g extension.StartGate, call extension.StartCall) (hold *extension.StartHold, err error) {
+	defer func() {
+		if recover() != nil {
+			hold, err = nil, errors.New("start gate panicked")
+		}
+	}()
+	return g(ctx, call)
 }

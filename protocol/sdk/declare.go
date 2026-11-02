@@ -377,6 +377,18 @@ func (e *Extension) OperationGate(fn extension.Gate) *Extension {
 	return e
 }
 
+// StartGate registers the extension's start gate, asked before the first
+// attempt of any Work in its scopes starts, and declares it (see
+// extension.StartGate). The host asks it only when the manifest also
+// declares the work.start_gate permission
+// (sdk.Permissions(protocol.PermissionStartGate)), which the operator sees
+// at install; Host.SettleHold settles the holds it places.
+func (e *Extension) StartGate(fn extension.StartGate) *Extension {
+	e.Start = fn
+	e.Manifest.Provides.StartGate = true
+	return e
+}
+
 // DependencyFilter registers the dependency filter of the extension's wait
 // operations and declares it.
 func (e *Extension) DependencyFilter(fn func(filter domain.Payload, event domain.Event) bool) *Extension {

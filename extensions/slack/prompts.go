@@ -41,7 +41,9 @@ type buttonValue struct {
 }
 
 // promptIntents derives a prompt for each action with choices offered on a
-// waiting conversation's Work, once for what it offers.
+// conversation's Work that is waiting, or ready but not started (held for an
+// approval, say), once for what it offers. What is offered, and when, is
+// each provider's: Slack only shows it.
 func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 	if p.o.Actions == nil {
 		return nil, nil
@@ -58,11 +60,15 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 			return err
 		}
 		for _, w := range works {
-			if string(w.ScopeID) != p.o.Settings.Scope || w.State != domain.WorkWaiting {
+			if string(w.ScopeID) != p.o.Settings.Scope || w.State != domain.WorkWaiting && w.State != domain.WorkReady {
 				continue
 			}
 			channel, thread, ok := p.Thread(w)
 			if !ok {
+				continue
+			}
+			if w.State == domain.WorkReady {
+				ws = append(ws, waiting{w.ID, channel, thread})
 				continue
 			}
 			waits, err := tx.ListWaits(w.ID)

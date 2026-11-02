@@ -217,6 +217,9 @@ func (d *daemon) startInproc(ctx context.Context) error {
 				return id, err
 			},
 			WaitProgress: d.waitProgress(name),
+			SettleHold: func(ctx context.Context, work domain.ID, admit bool, reason, key string) (domain.ID, error) {
+				return d.current.Load().control.SettleGateHold(ctx, name, work, admit, reason, key)
+			},
 			Authorize: func(kind string, from, to domain.ID) error {
 				switch kind {
 				case "read":
@@ -503,7 +506,7 @@ func (d *daemon) registerInprocTools(belt *runtime.Toolbelt, s *config.Snapshot)
 				continue
 			}
 			reg := t.Registration()
-			if len(reg.Operations) == 0 && len(reg.EventTypes) == 0 && reg.Gate == nil {
+			if len(reg.Operations) == 0 && len(reg.EventTypes) == 0 && reg.Gate == nil && reg.StartGate == nil {
 				continue
 			}
 			if err := belt.Register(reg); err != nil {

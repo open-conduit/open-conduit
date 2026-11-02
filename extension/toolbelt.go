@@ -243,6 +243,38 @@ type Registration struct {
 	// an operator's policy (an approval, say) in the host's path rather
 	// than in an executor's instructions. See Gate.
 	Gate Gate
+	// StartGate, when set, is consulted before the first attempt of any
+	// Work starts, so an extension can put an operator's policy (a
+	// person's approval before Work of a kind runs) in the scheduler's
+	// path. See StartGate.
+	StartGate StartGate
+}
+
+// StartGate decides whether Work's first attempt may start. It returns nil
+// and no error to let it start, or a StartHold to hold the Work instead:
+// it stays ready, its input keeps queueing, and no attempt starts until the
+// holding registration settles the hold (inproc.Host.SettleHold), which
+// either lets exactly one start through or cancels the Work. An error means
+// the gate could not decide: the start is refused for now and asked again
+// on the next pass (the host fails closed). The scheduler asks every
+// registered start gate, in registration-name order, outside any
+// transaction, and stops at the first that holds. Later attempts of the
+// same Work are not asked.
+type StartGate func(context.Context, StartCall) (*StartHold, error)
+
+// StartCall is the start a StartGate decides on: the Work (its kind, scope
+// and context), the binding its first attempt would run on and the Event
+// that would be its first input.
+type StartCall struct {
+	Work    domain.Work
+	Binding string
+	Event   domain.Event
+}
+
+// StartHold is a StartGate's hold: why the Work is held, in words an
+// operator or the person who can release it reads.
+type StartHold struct {
+	Reason string
 }
 
 // Gate decides whether a call may proceed. It returns nil and no error to

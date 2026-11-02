@@ -61,7 +61,10 @@ type Extension struct {
 	Filter     func(filter domain.Payload, event domain.Event) bool
 	// Gate decides on calls of other extensions' operations
 	// (extension.Gate; Manifest.Provides.OperationGate).
-	Gate        extension.Gate
+	Gate extension.Gate
+	// Start answers work.admit (extension.StartGate;
+	// Manifest.Provides.StartGate).
+	Start       extension.StartGate
 	Executors   map[string]extension.Executor
 	Recurrences map[string]RecurrenceFunc
 	Triggers    map[string]func([]domain.Event) int
@@ -330,6 +333,23 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 		if plan != nil {
 			w := protocol.FromWaitPlan(*plan)
 			out.Wait = &w
+		}
+		return out, nil
+	case "work.admit":
+		var p protocol.WorkAdmitParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.ext.Start == nil {
+			return nil, notFound(method)
+		}
+		hold, err := s.ext.Start(ctx, extension.StartCall{Work: p.Work.Domain(), Binding: p.Binding, Event: p.Event.Domain()})
+		if err != nil {
+			return nil, err
+		}
+		var out protocol.WorkAdmitResult
+		if hold != nil {
+			out.Hold = &protocol.StartHold{Reason: hold.Reason}
 		}
 		return out, nil
 	case "emit.commit":

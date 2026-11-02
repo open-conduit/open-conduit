@@ -186,6 +186,16 @@ func (h *Host) Capture(ctx context.Context, scope domain.ID, name string, at tim
 	return h.conn.Call(ctx, "telemetry.capture", protocol.TelemetryEvent{ScopeID: string(scope), Name: name, At: at, Properties: props}, nil)
 }
 
+// SettleHold settles the hold the extension's start gate placed on work
+// (permission work.start_gate): admit lets its next start through once;
+// otherwise the Work is cancelled. reason goes in its history; key makes
+// it idempotent.
+func (h *Host) SettleHold(ctx context.Context, work domain.ID, admit bool, reason, key string) (domain.ID, error) {
+	var out protocol.WorkSettleHoldResult
+	err := h.conn.Call(ctx, "work.settle_hold", protocol.WorkSettleHoldParams{WorkID: string(work), Admit: admit, Reason: reason, Key: key}, &out)
+	return domain.ID(out.EventID), err
+}
+
 // Act invokes an action for a person the extension identified on its own
 // surface (permission action.submit), such as answering an approval
 // request from a button they pressed. The host calls the provider with the

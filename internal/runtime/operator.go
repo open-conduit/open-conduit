@@ -31,9 +31,11 @@ type Hold struct {
 	Reason  string    `json:"reason,omitempty"`
 	At      time.Time `json:"at"`
 	// Kind says what placed a hold the runtime placed itself: "budget"
-	// (HoldKindBudget) for Work over a budget. "" is an operator's hold or
-	// a blocked wait's.
+	// (HoldKindBudget) for Work over a budget, "gate" (HoldKindGate) for
+	// Work a start gate held. "" is an operator's hold or a blocked wait's.
 	Kind string `json:"kind,omitempty"`
+	// Holder is the registration whose start gate placed a gate hold.
+	Holder string `json:"holder,omitempty"`
 }
 
 // HoldInTx returns a Work's operator hold, if any.
@@ -243,6 +245,8 @@ func (c *Control) ReleaseWork(ctx context.Context, workID domain.ID, expected do
 			return e
 		} else if !held {
 			return ErrHeld
+		} else if h.Kind == HoldKindGate {
+			return ErrGateHold
 		}
 		event, e = c.controlEvent(tx, w, delivery, "core.manual.release", operatorData("core.manual.release.v1", operatorPayload{Reason: reason, Revision: expected}))
 		if e != nil {

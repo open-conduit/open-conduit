@@ -62,6 +62,10 @@ Wake arbitration is serializable per Wait/Work:
 
 A toolbelt gate (`extension.Registration.Gate`, [toolbelt gates](../toolbelt-management/#gates)) can turn an extension operation call into a Wait before the operation runs. The plan is declared exactly like a translated wait, under the same fence, watermark, authority release and registration handshake, so everything above holds for it: the caller parks on the plan's types and dependencies, a timeout is an ordinary wait timeout Timer, and exactly one wake resumes it. The gated operation never ran, so resuming is not a retry by the runtime: the caller makes the call again, and the gate decides again. Whether the gate lets it through then (an approval it has recorded, say) is the gating extension's semantics, not the core's. A gate's refusal is the call's result and changes no runtime state.
 
+### Gated starts
+
+A start gate (`extension.Registration.StartGate`, [start gates](../execution-scheduling/#start-gates)) can hold Work before its first attempt starts, the way a budget holds a turn. The hold is a scheduling hold, not a Wait: no execution exists to park, input keeps queueing, and nothing polls. The holding extension settles it later, from whatever it observes (a person's answer, say), either letting the next start through once or cancelling the Work. Why a gate holds Work is the extension's semantics, not the core's.
+
 ## Lease recovery, retry and cancellation
 
 Lease expiry is exclusive; `Now == ExpiresAt` has lost authority. Expiry/release makes the same running attempt recoverable, not permission to launch another attempt. Recovery claims that attempt with a higher epoch, persists recovery-in-progress authority and invokes `Recover` outside Tx using opaque executor metadata. Competing recoverers cannot both hold a live epoch. A live lease cannot be stolen. Parked wait continuation uses Resume and is distinct from detached adoption.

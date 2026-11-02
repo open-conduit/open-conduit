@@ -47,6 +47,8 @@ var useCases = map[string][]string{
 	"emit.commit":                {"introspection"},
 	"wait.progress":              {"github"},
 	"operation.gate":             {"human"},
+	"work.admit":                 {"human"},
+	"work.settle_hold":           {"human"},
 	"dependency.filter":          {"github"},
 	"event.render":               {"github", "slack", "introspection"},
 	"executor.run":               {"shell", "claude-code", "github"},
@@ -274,7 +276,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Executors, m.Provides.Resources = e.Executors, e.Resources
 	m.Provides.Recurrences, m.Provides.Exporters, m.Provides.Annotate, m.Provides.Actions, m.Provides.Panels = []string{"chat.calendar"}, true, true, true, true
 	m.Provides.Operations = append(m.Provides.Operations, protocol.OperationDecl{Name: "chat.wait", Kind: protocol.OperationWait}, protocol.OperationDecl{Name: "chat.note", Kind: protocol.OperationEmit, Commit: true})
-	m.Provides.DependencyFilter, m.Provides.RunEnvironment, m.Provides.ConfigCandidate, m.Provides.OperationGate = true, true, true, true
+	m.Provides.DependencyFilter, m.Provides.RunEnvironment, m.Provides.ConfigCandidate, m.Provides.OperationGate, m.Provides.StartGate = true, true, true, true, true
 	m.Provides.Pages = []protocol.PageDecl{{ID: "chat", Title: "Chat", Entry: "chat", WorkKind: "chat.conversation", Start: "start", Compose: []string{"message"}, Route: "chat"}}
 	m.Provides.Routes[0].Samples = true
 	for _, p := range protocol.KnownPermissions {

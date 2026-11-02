@@ -65,6 +65,8 @@ var Methods = []Method{
 	{Name: "operation.emit", Direction: HostToExtension, Provides: "operations.emit", Contract: []string{"extension.Operation.Emit", "extension.EmitPlan"}},
 	{Name: "emit.commit", Direction: HostToExtension, Provides: "operations.commit", InTransaction: true, Contract: []string{"extension.EmitPlan.Commit", "extension.Emitted", "extension.EmitCommit"}},
 	{Name: "wait.progress", Direction: ExtensionToHost, Provides: "operations.wait", Contract: []string{"host:runtime.SetWaitProgressInTx", "host:inproc.Host.WaitProgress"}},
+	{Name: "work.admit", Direction: HostToExtension, Provides: "start_gate", Permission: PermissionStartGate, Contract: []string{"extension.Registration.StartGate", "extension.StartGate", "extension.StartCall", "extension.StartHold"}},
+	{Name: "work.settle_hold", Direction: ExtensionToHost, Permission: PermissionStartGate, Contract: []string{"inproc.Host.SettleHold"}},
 	{Name: "operation.gate", Direction: HostToExtension, Provides: "operation_gate", Permission: PermissionOperationGate, Contract: []string{"extension.Registration.Gate", "extension.Gate", "extension.GateCall", "extension.GateRefusal"}},
 	{Name: "dependency.filter", Direction: HostToExtension, Provides: "dependency_filter", InTransaction: true, Contract: []string{"extension.Registration.DependencyFilter"}},
 	{Name: "event.render", Direction: HostToExtension, Provides: "render", Contract: []string{"host:renderEvents chain (<extension>.RenderEvent)"}},

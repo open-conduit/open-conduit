@@ -857,6 +857,11 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 	var parked domain.ID
 	var wake wakeReady
 	var budgetHeld bool
+	// gated: the start gates are asked (Work's first attempt, with gates
+	// registered and no settlement passing it); gatePassed: a settlement
+	// lets it through without asking them.
+	var gated, gatePassed, gateHeld bool
+	var gateInput domain.Event
 	// Resolve/validate plugin metadata outside the claim transaction.
 	err = s.transact(ctx, nil, func(tx storage.Tx) error {
 		var e error
@@ -932,10 +937,36 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 				parked = x.ID
 			}
 		}
+		if len(xs) == 0 && s.options.Toolbelt != nil && s.options.Toolbelt.StartGated() {
+			// Held Work is not asked again; settled Work is not asked.
+			if e = heldInTx(tx, id); e != nil {
+				return e
+			}
+			if gatePassed, e = gatePassedInTx(tx, id); e != nil || gatePassed {
+				return e
+			}
+			// Asking can have effects (a request a person sees), so the
+			// gates are asked only about a start capacity allows now.
+			if e = s.checkCapacity(tx, ready, pinned.Executor, parked); e != nil {
+				return e
+			}
+			a, e := tx.Event(input.EventID)
+			if e != nil {
+				return e
+			}
+			gated, gateInput = true, a.Event
+		}
 		return nil
 	})
 	if err != nil {
 		return attempt, err
+	}
+	var gateHold *extension.StartHold
+	var gateName string
+	if gated {
+		if gateHold, gateName, err = s.admitStart(ctx, ready, input.Binding, gateInput); err != nil {
+			return attempt, err
+		}
 	}
 	var state AttemptState
 	var executor extension.Executor
@@ -985,9 +1016,24 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 		if e = s.checkCapacity(tx, current, state.Executor, parked); e != nil {
 			return e
 		}
+		if gateHold != nil {
+			// Held before it counts against a budget: the hold commits and
+			// the start is refused.
+			gateHeld = true
+			return holdForGateInTx(tx, s.now(), current, gateName, gateHold.Reason)
+		}
 		if budgetHeld, e = admitBudgetInTx(tx, s.now(), s.options.Budgets, current, parked == ""); e != nil || budgetHeld {
-			// Over budget: commit the hold, then refuse the start.
+			// Over budget: commit the hold, then refuse the start. A gate's
+			// pass stays for the start the budget's release lets through.
 			return e
+		}
+		if gatePassed {
+			if e = tx.Delete(gatePassNamespace, identity(string(id))); e != nil {
+				if errors.Is(e, storage.ErrNotFound) {
+					return storage.ErrConflict
+				}
+				return e
+			}
 		}
 		inputs, e := PendingInputsInTx(tx, id)
 		if e != nil {
@@ -1084,6 +1130,9 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 	})
 	if err != nil {
 		return Attempt{}, err
+	}
+	if gateHeld {
+		return Attempt{}, ErrGateHeld
 	}
 	if budgetHeld {
 		return Attempt{}, ErrBudgetHeld

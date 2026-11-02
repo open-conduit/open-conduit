@@ -933,9 +933,15 @@ func TestSlackPromptsAndTakesButtonAnswers(t *testing.T) {
 	e.reconcile()
 	e.route()
 	w, _ := e.workFor(root)
+	// Like a real provider, it offers the answer only once there is a
+	// question: here, once the Work parks.
+	offering := false
 	e.actions = func(_ context.Context, scope, work domain.ID) ([]extension.ActionOffer, error) {
 		if scope != slScope || work != w.ID {
 			return nil, errors.New("wrong target")
+		}
+		if !offering {
+			return nil, nil
 		}
 		return []extension.ActionOffer{
 			{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve or refuse fixture.deploy", Prompt: "an option", Choices: []string{"approve", "refuse"}}},
@@ -943,8 +949,9 @@ func TestSlackPromptsAndTakesButtonAnswers(t *testing.T) {
 		}, nil
 	}
 	if res := e.converge(); res.Posted != 0 {
-		t.Fatalf("prompted Work that isn't waiting: %+v", res)
+		t.Fatalf("prompted with nothing offered: %+v", res)
 	}
+	offering = true
 	e.park(w.ID, "wait/1")
 	if res := e.converge(); res.Posted != 1 {
 		t.Fatalf("prompt: %+v", res)
@@ -1055,5 +1062,26 @@ func TestSlackPromptShowsTheHumanQuestion(t *testing.T) {
 	offer.Detail = "Ship the migration tomorrow instead?"
 	if res := e.converge(); res.Posted != 1 || len(prompts()) != 2 {
 		t.Fatalf("a new question wasn't prompted: %+v", res)
+	}
+}
+
+// A conversation's Work that is ready but hasn't started (held until a
+// person approves its start, say) is prompted for what is offered on it,
+// as waiting Work is.
+func TestSlackPromptsReadyWork(t *testing.T) {
+	e := newSlackEnv(t, "", sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "Please deploy 1.2")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(root)
+	if w.State != domain.WorkReady {
+		t.Fatalf("Work %s, want ready", w.State)
+	}
+	e.actions = func(_ context.Context, _, work domain.ID) ([]extension.ActionOffer, error) {
+		return []extension.ActionOffer{{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve or refuse the slack.thread Work", Choices: []string{"approve", "refuse"}, Detail: "Allow it to start?"}}}, nil
+	}
+	if res := e.converge(); res.Posted != 1 {
+		t.Fatalf("ready Work not prompted: %+v", res)
 	}
 }

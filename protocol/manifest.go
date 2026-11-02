@@ -89,6 +89,12 @@ const (
 	// always of the extension's own kind ("<name>:<id>"): the provider
 	// decides whether that caller may act.
 	PermissionActionSubmit = "action.submit"
+	// PermissionStartGate is asked, through work.admit, before the first
+	// attempt of any Work starts in a scope the extension is configured
+	// in, and may hold it until the extension settles the hold
+	// (work.settle_hold), which starts it or cancels it
+	// (extension.StartGate).
+	PermissionStartGate = "work.start_gate"
 )
 
 // PermissionInfo says what a permission lets an extension do, in words the
@@ -106,6 +112,7 @@ var KnownPermissions = []PermissionInfo{
 	{PermissionConfigRead, "reads the whole configuration, references redacted, and proposes edits it never applies"},
 	{PermissionOperationGate, "sees every toolbelt call to other extensions in its scopes, with its input, and may hold or refuse it"},
 	{PermissionActionSubmit, "lists and invokes actions, such as answering a person's approval request, for people it identifies on its own surface"},
+	{PermissionStartGate, "sees every Work in its scopes before it first starts, and may hold it until it lets it start or cancels it"},
 }
 
 // PermissionSummary is the summary of a known permission ("" otherwise).
@@ -166,6 +173,9 @@ type Provides struct {
 	// operation.gate, before every call of another extension's operation
 	// (extension.Gate).
 	OperationGate bool `json:"operation_gate,omitempty"`
+	// StartGate marks an extension the host asks, through work.admit,
+	// before the first attempt of any Work starts (extension.StartGate).
+	StartGate bool `json:"start_gate,omitempty"`
 	// Executors are executor registrations with their mechanical
 	// capabilities and optional controls.
 	Executors []ExecutorDecl `json:"executors,omitempty"`
@@ -816,6 +826,7 @@ func (m Manifest) Enabled() []string {
 	}
 	set("dependency_filter", p.DependencyFilter)
 	set("operation_gate", p.OperationGate)
+	set("start_gate", p.StartGate)
 	set("executors", len(p.Executors) > 0)
 	for _, x := range p.Executors {
 		set("executors.resume", x.Capabilities.Resume)

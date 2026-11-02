@@ -141,6 +141,12 @@ type Host struct {
 	// extension.ErrUnauthorized, and Work with no active Wait
 	// storage.ErrNotFound.
 	WaitProgress func(ctx context.Context, work domain.ID, progress string) error
+	// SettleHold settles a hold the extension's start gate placed on work
+	// (extension.StartGate): admit lets its next start through once without
+	// asking the start gates again; otherwise the Work is cancelled. reason
+	// goes in the Work's history. It is idempotent per key. Work the
+	// extension's gate does not hold is an error.
+	SettleHold func(ctx context.Context, work domain.ID, admit bool, reason, key string) (domain.ID, error)
 	// Act invokes an action for a person the extension's own surface
 	// identified (extension.ActRequest): the caller is {Kind: the
 	// extension's name, ID: r.Caller}, and the provider authorises it as it

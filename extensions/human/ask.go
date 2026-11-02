@@ -51,12 +51,17 @@ type Ask struct {
 	// Gate is the operation an approval request is for ("" for a question
 	// an agent asked with human.ask), and Request the call's identity (see
 	// requestHash).
-	Gate     string    `json:"gate,omitempty"`
-	Request  string    `json:"request,omitempty"`
-	Question string    `json:"question"`
-	Options  []string  `json:"options,omitempty"`
-	Context  string    `json:"context,omitempty"`
-	Deadline time.Time `json:"deadline,omitzero"`
+	Gate    string `json:"gate,omitempty"`
+	Request string `json:"request,omitempty"`
+	// Start marks an approval request for a Work's first start (see
+	// StartGate): no execution waits on it, and its answer settles the
+	// Work's hold. SettledAt is when it was settled.
+	Start     bool      `json:"start,omitempty"`
+	SettledAt time.Time `json:"settled_at,omitzero"`
+	Question  string    `json:"question"`
+	Options   []string  `json:"options,omitempty"`
+	Context   string    `json:"context,omitempty"`
+	Deadline  time.Time `json:"deadline,omitzero"`
 	// Responders and Surfaces are the entry's at the time of asking.
 	Responders []string `json:"responders"`
 	// EscalateAt is when an unanswered approval request escalates to
@@ -217,6 +222,11 @@ func outstanding(tx storage.Tx, a Ask, now time.Time) (bool, error) {
 			return false, nil
 		}
 		return false, err
+	}
+	if a.Start {
+		// Nothing waits on a start's approval: the Work is held, ready,
+		// until it is settled.
+		return w.State == domain.WorkReady, nil
 	}
 	if w.State != domain.WorkWaiting {
 		return false, nil

@@ -45,7 +45,8 @@ type Config struct {
 	// surface so far.
 	Surfaces []string `json:"surfaces,omitempty"`
 	// Gates are operations that need a person's approval before they run,
-	// whoever calls them (see Gate).
+	// whoever calls them (see Gate), and Work that needs it before it first
+	// starts (see StartGate).
 	Gates []GateConfig `json:"gates,omitempty"`
 }
 
@@ -53,7 +54,13 @@ type Config struct {
 type GateConfig struct {
 	// Operations are toolbelt operation names ("github.pr.create"), or a
 	// prefix ending in ".*" for every operation under it ("deploy.*").
-	Operations []string `json:"operations"`
+	Operations []string `json:"operations,omitempty"`
+	// Kinds are Work kinds ("github.issue"), or a prefix ending in ".*",
+	// whose Work needs approval before its first attempt starts.
+	Kinds []string `json:"kinds,omitempty"`
+	// Bindings are binding names whose Work needs approval before its
+	// first attempt starts on them.
+	Bindings []string `json:"bindings,omitempty"`
 	// Responders are who may approve, as in Config.Responders. Default the
 	// entry's responders.
 	Responders []string `json:"responders,omitempty"`
@@ -112,8 +119,19 @@ func ParseConfig(data json.RawMessage) (Config, error) {
 	for i := range c.Gates {
 		g := &c.Gates[i]
 		where := fmt.Sprintf("gates[%d]", i)
-		if len(g.Operations) == 0 {
-			return c, fmt.Errorf("%s: operations: name at least one operation", where)
+		if len(g.Operations) == 0 && len(g.Kinds) == 0 && len(g.Bindings) == 0 {
+			return c, fmt.Errorf("%s: name at least one of operations, kinds or bindings", where)
+		}
+		for _, k := range g.Kinds {
+			name := strings.TrimSuffix(k, ".*")
+			if !gateOperation.MatchString(name) || strings.HasSuffix(name, ".") {
+				return c, fmt.Errorf("%s: kinds: %q is not a Work kind or a prefix ending in .* (for example github.issue or github.*)", where, k)
+			}
+		}
+		for _, b := range g.Bindings {
+			if !validPart(b) {
+				return c, fmt.Errorf("%s: bindings: %q is not a binding name", where, b)
+			}
 		}
 		for _, op := range g.Operations {
 			name := strings.TrimSuffix(op, ".*")
@@ -189,12 +207,35 @@ func checkResponders(field string, responders []string) error {
 func (c Config) gate(op string) (GateConfig, bool) {
 	for _, g := range c.Gates {
 		for _, pattern := range g.Operations {
-			if pattern == op || strings.HasSuffix(pattern, ".*") && strings.HasPrefix(op, strings.TrimSuffix(pattern, "*")) {
+			if matches(pattern, op) {
 				return g, true
 			}
 		}
 	}
 	return GateConfig{}, false
+}
+
+// startGate is the first gate that names the Work's kind or the binding
+// its first attempt runs on, if any.
+func (c Config) startGate(kind, binding string) (GateConfig, bool) {
+	for _, g := range c.Gates {
+		for _, pattern := range g.Kinds {
+			if matches(pattern, kind) {
+				return g, true
+			}
+		}
+		for _, b := range g.Bindings {
+			if b == binding {
+				return g, true
+			}
+		}
+	}
+	return GateConfig{}, false
+}
+
+// matches reports whether name is pattern, or under a pattern ending in .*.
+func matches(pattern, name string) bool {
+	return pattern == name || strings.HasSuffix(pattern, ".*") && strings.HasPrefix(name, strings.TrimSuffix(pattern, "*"))
 }
 
 func validPart(s string) bool {
