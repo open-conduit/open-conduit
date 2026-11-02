@@ -39,13 +39,15 @@ type TriggerPayload struct {
 	Spec string `json:"spec,omitempty"`
 	Last string `json:"last,omitempty"`
 	// Code-host delivery fields (TypeEvent).
-	Event    string   `json:"event,omitempty"`
-	Action   string   `json:"action,omitempty"`
-	Ref      string   `json:"ref,omitempty"`
-	Before   string   `json:"before,omitempty"`
-	SHA      string   `json:"sha,omitempty"`
-	Files    []string `json:"files,omitempty"`
-	Delivery string   `json:"delivery,omitempty"`
+	Event  string `json:"event,omitempty"`
+	Action string `json:"action,omitempty"`
+	Ref    string `json:"ref,omitempty"`
+	Before string `json:"before,omitempty"`
+	SHA    string `json:"sha,omitempty"`
+	// Conclusion is how a finished check suite or run ended.
+	Conclusion string   `json:"conclusion,omitempty"`
+	Files      []string `json:"files,omitempty"`
+	Delivery   string   `json:"delivery,omitempty"`
 	// Webhook body (TypeWebhook): JSON when the body is JSON, else Text.
 	ContentType string          `json:"content_type,omitempty"`
 	Body        json.RawMessage `json:"body,omitempty"`

@@ -45,14 +45,16 @@ const (
 )
 
 type deliveryPayload struct {
-	Event    string   `json:"event"`
-	Action   string   `json:"action,omitempty"`
-	Delivery string   `json:"delivery"`
-	Ref      string   `json:"ref,omitempty"`
-	Before   string   `json:"before,omitempty"`
-	After    string   `json:"after,omitempty"`
-	Files    []string `json:"files,omitempty"`
-	Commits  int      `json:"commits,omitempty"`
+	Event    string `json:"event"`
+	Action   string `json:"action,omitempty"`
+	Delivery string `json:"delivery"`
+	Ref      string `json:"ref,omitempty"`
+	Before   string `json:"before,omitempty"`
+	After    string `json:"after,omitempty"`
+	// Conclusion is how a finished check suite or run ended.
+	Conclusion string   `json:"conclusion,omitempty"`
+	Files      []string `json:"files,omitempty"`
+	Commits    int      `json:"commits,omitempty"`
 }
 
 // source is a registered entry's ingress.
@@ -409,7 +411,7 @@ func (x *Extension) translateDeliveries(ctx context.Context, entries map[domain.
 			if err != nil || len(entries[scope]) == 0 {
 				continue
 			}
-			delivery := Delivery{EventID: a.Event.ID, ID: p.Delivery, Event: p.Event, Action: p.Action, Ref: p.Ref, Before: p.Before, SHA: p.After, Files: p.Files,
+			delivery := Delivery{EventID: a.Event.ID, ID: p.Delivery, Event: p.Event, Action: p.Action, Ref: p.Ref, Before: p.Before, SHA: p.After, Conclusion: p.Conclusion, Files: p.Files,
 				Truncated: len(p.Files) >= maxDeliveryFiles || p.Commits >= maxPushCommits}
 			for _, s := range entries[scope] {
 				for _, j := range s.Jobs {
