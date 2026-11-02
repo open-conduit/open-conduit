@@ -57,7 +57,7 @@ func main() {
 
 | Registration | Declares |
 | --- | --- |
-| `Operation(name, sdk.Handler(fn), opts…)`, or `sdk.Wait(fn)`, `sdk.Emit(fn)` | `operations[]` with its kind, `guidance` (`sdk.Guidance`), `commit` (`sdk.Commit`, emit only) and `input` |
+| `Operation(name, sdk.Handler(fn), opts…)`, or `sdk.Wait(fn)`, `sdk.Emit(fn)` | `operations[]` with its kind, `guidance` (`sdk.Guidance`), `commit` (`sdk.Commit`, emit only), `serves` (`sdk.Serves`, handler only) and `input` |
 | `Route(handler, h, opts…)` | `routes[]`, with `samples` when `h` is an `extension.RouteSampler`, `binding` (`sdk.RouteBinding`) and `config` (`sdk.RouteConfig`) |
 | `WorkKind(kind, opts…)` | `work_kinds[]`, `standing` (`sdk.Standing`), `trigger` (`sdk.Trigger(fn)`), `timed` (`sdk.Timed`: a dry run starts none of its Work) |
 | `Task(name, every, fn)`, `Check(name, fn, opts…)` | `tasks[]` with its interval, `checks[]` (`sdk.Deep`) |
@@ -152,7 +152,7 @@ Schemas are built with `t` (`string`, `enum`, `literal`, `integer`, `number`, `b
 
 | Registration | Declares |
 | --- | --- |
-| `operation(name, { input, guidance, output, handler })` | `operations[]`, kind `handler`, with `guidance` and `input` |
+| `operation(name, { input, guidance, serves, output, handler })` | `operations[]`, kind `handler`, with `guidance`, `serves` and `input` |
 | `entryType(type, { config, validate, configure })` | `extensions[]`: a scope entry type. A config that `config` refuses, or that `validate` throws on, is invalid before the daemon applies it, and `configure` receives each generation's entries with their config typed |
 | `check(name, fn, { deep })` | `checks[]`; `fn` returns the detail line and throws to fail |
 | `task(name, intervalSeconds, fn)` | `tasks[]` |

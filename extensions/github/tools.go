@@ -194,7 +194,7 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpUpload, Handler: h(t.upload)},
 			{Name: OpFetch, Handler: repo(t.fetch)},
 			{Name: OpHoldStatus, Handler: h(t.holdStatus)},
-			{Name: OpGitCredential, Handler: pr(t.gitCredential)},
+			{Name: OpGitCredential, Handler: pr(t.gitCredential), Serves: extension.CapabilityGitCredential},
 			{Name: OpWait, Wait: t.waitPlan(false)},
 			{Name: OpHold, Wait: t.waitPlan(true)},
 		}}

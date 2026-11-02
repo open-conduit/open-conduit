@@ -156,6 +156,9 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 		if set != 1 || !operationName.MatchString(op.Name) || len(op.Guidance) > extension.MaxGuidance {
 			return extension.ErrInvalid
 		}
+		if op.Serves != "" && (op.Handler == nil || !operationName.MatchString(op.Serves)) {
+			return fmt.Errorf("%w: operation %q: only a handler serves a capability, named like an operation", extension.ErrInvalid, op.Name)
+		}
 		if builtinOperation(op.Name) {
 			return fmt.Errorf("%w: operation %q is a builtin", extension.ErrConflict, op.Name)
 		}
@@ -226,30 +229,57 @@ func (t *Toolbelt) Operations() []string {
 // that is revoked, expired or issued to another execution than the asserted
 // one is unauthorized.
 func (t *Toolbelt) Guidance(ctx context.Context, token string, execution domain.ID) ([]string, error) {
+	var out []string
+	seen := map[string]bool{}
+	err := t.granted(ctx, token, execution, func(op extension.Operation) {
+		if op.Guidance != "" && !seen[op.Guidance] {
+			seen[op.Guidance] = true
+			out = append(out, op.Guidance)
+		}
+	})
+	return out, err
+}
+
+// Serving names the operations the token's pinned grant includes and
+// current config still enables that serve capability (Operation.Serves), in
+// grant order. Like Guidance, it reveals nothing beyond what the grant
+// already names, and each call to one is authorized as usual.
+func (t *Toolbelt) Serving(ctx context.Context, token string, execution domain.ID, capability string) ([]string, error) {
+	var out []string
+	err := t.granted(ctx, token, execution, func(op extension.Operation) {
+		if capability != "" && op.Serves == capability {
+			out = append(out, op.Name)
+		}
+	})
+	return out, err
+}
+
+// granted visits each registered operation the token's grant includes and
+// current config still enables, once, in grant order.
+func (t *Toolbelt) granted(ctx context.Context, token string, execution domain.ID, visit func(extension.Operation)) error {
 	record, err := t.load(ctx, token)
 	if err != nil {
-		return nil, err
+		return err
 	}
 	a := record.Authority
 	if record.Revoked || !t.now().Before(a.ExpiresAt) || execution != "" && execution != a.ExecutionID {
-		return nil, extension.ErrUnauthorized
+		return extension.ErrUnauthorized
 	}
-	var out []string
 	seen := map[string]bool{}
 	for _, name := range a.Operations {
 		t.mu.RLock()
-		text := t.operations[name].Guidance
+		op, ok := t.operations[name]
 		t.mu.RUnlock()
-		if text == "" || seen[text] {
+		if !ok || seen[name] {
 			continue
 		}
+		seen[name] = true
 		if t.options.Authorize != nil && t.options.Authorize(ctx, AuthorityCheck{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, Binding: record.Binding, Generation: record.Generation, Operation: name}) != nil {
 			continue
 		}
-		seen[text] = true
-		out = append(out, text)
+		visit(op)
 	}
-	return out, nil
+	return nil
 }
 
 // EventTypes lists registered emitted event families.

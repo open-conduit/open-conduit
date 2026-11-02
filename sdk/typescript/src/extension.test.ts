@@ -74,6 +74,18 @@ function weather(): Extension {
     .check("weather", () => "ok");
 }
 
+test("an operation declares the capability it serves", () => {
+  const ext = extension("acme", { version: "0.1.0" }).operation(
+    "acme.git.credential",
+    {
+      input: t.object({ host: t.string() }),
+      serves: "git.credential",
+      handler: () => ({}),
+    },
+  );
+  assert.equal(ext.manifest.provides.operations?.[0]?.serves, "git.credential");
+});
+
 test("the manifest is derived from the registrations", () => {
   assert.deepEqual(weather().manifest, {
     protocol: [1],

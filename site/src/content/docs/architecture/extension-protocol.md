@@ -306,7 +306,7 @@ Validation rules:
 - a non-re-derivable family states its loss, and a re-derivable one cannot;
 - an ingress type declares families, and webhooks need an ingress type;
 - work kinds need a route handler;
-- operation kinds are `handler`, `wait` or `emit`, and only emit may `commit`;
+- operation kinds are `handler`, `wait` or `emit`, only emit may `commit`, and only a handler `serves` a capability (`extension.Operation.Serves`), named like an operation;
 - an operation's `guidance` (its agent guidance, `extension.Operation.Guidance`) is at most 4096 bytes, and its `input` (the JSON Schema of its input's data) is an object;
 - `dependency_filter` needs a wait operation;
 - `entry_gated` needs operations and an extension type;

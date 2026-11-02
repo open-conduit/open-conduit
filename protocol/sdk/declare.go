@@ -76,6 +76,12 @@ func Guidance(text string) OperationOption {
 	return func(d *operationDecl) { d.Guidance = text }
 }
 
+// Serves declares that a Handler answers a capability the host routes by
+// name, such as extension.CapabilityGitCredential.
+func Serves(capability string) OperationOption {
+	return func(d *operationDecl) { d.Serves = capability }
+}
+
 // Commit marks an Emit whose plan writes records through EmitPlan.Commit.
 func Commit() OperationOption { return func(d *operationDecl) { d.Commit = true } }
 
@@ -227,7 +233,11 @@ func (e *Extension) Operation(name string, op Op, opts ...OperationOption) *Exte
 		panic("sdk: operation " + name + ": only sdk.Emit operations commit records")
 	}
 	x := op.bind(name, d.output)
+	if d.Serves != "" && op.kind != protocol.OperationHandler {
+		panic("sdk: operation " + name + ": only sdk.Handler operations serve a capability")
+	}
 	x.Guidance = d.Guidance
+	x.Serves = d.Serves
 	e.Operations = append(e.Operations, x)
 	e.Manifest.Provides.Operations = append(e.Manifest.Provides.Operations, d.OperationDecl)
 	return e

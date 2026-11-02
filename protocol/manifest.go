@@ -401,6 +401,10 @@ const (
 	OperationEmit    = "emit"
 )
 
+// capabilityName is the form of a capability an operation serves, the same
+// as an operation's name.
+var capabilityName = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
+
 // OperationDecl declares one toolbelt operation. Commit marks an emit whose
 // plan writes records through emit.commit. Guidance is the operation's
 // agent guidance (extension.Operation.Guidance), served to executions whose
@@ -413,6 +417,9 @@ type OperationDecl struct {
 	Commit   bool            `json:"commit,omitempty"`
 	Guidance string          `json:"guidance,omitempty"`
 	Input    json.RawMessage `json:"input,omitempty"`
+	// Serves, on a handler, names a capability the operation answers
+	// (extension.Operation.Serves), such as git.credential.
+	Serves string `json:"serves,omitempty"`
 }
 
 // ExecutorDecl declares an executor. Capabilities are exactly the bind-time
@@ -674,6 +681,14 @@ func (m Manifest) Validate() error {
 		dotted("operation", o.Name)
 		if len(o.Guidance) > extension.MaxGuidance {
 			fail("operation %q: guidance is longer than %d bytes", o.Name, extension.MaxGuidance)
+		}
+		if o.Serves != "" {
+			if !capabilityName.MatchString(o.Serves) {
+				fail("operation %q: serves %q is not a capability name", o.Name, o.Serves)
+			}
+			if o.Kind != OperationHandler {
+				fail("operation %q: only a handler serves a capability", o.Name)
+			}
 		}
 		if len(o.Input) > 0 {
 			var schema map[string]any

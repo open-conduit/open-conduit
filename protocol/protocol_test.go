@@ -318,6 +318,8 @@ func TestManifestRejections(t *testing.T) {
 		"external store":       {`"setup":`, `"external_stores": [{"connection": "chat-index", "description": "search index"}], "setup":`},
 		"commit on handler":    {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "commit": true}`},
 		"guidance too long":    {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "guidance": "` + strings.Repeat("x", extension.MaxGuidance+1) + `"}`},
+		"serves bad name":      {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "serves": "Git Credential"}`},
+		"serves on wait":       {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "wait", "serves": "git.credential"}`},
 		"input not an object":  {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "input": ["city"]}`},
 		"filter without wait":  {`"webhooks": true,`, `"webhooks": true, "dependency_filter": true,`},
 		"kinds without routes": {`"routes": [{"handler": "chat", "config": true}],`, ``},

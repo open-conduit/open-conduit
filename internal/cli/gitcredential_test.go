@@ -12,10 +12,12 @@ import (
 	"testing"
 )
 
-// os git-credential get turns git's attributes into a github.git.credential
-// call, without a request ID, and prints the credential as git reads it;
-// a URL the host has nothing for prints nothing, a refusal is reported on
-// stderr, and store and erase do nothing.
+// os git-credential get asks the toolbelt which granted operations serve
+// git.credential and calls each in turn with git's attributes, without a
+// request ID, printing the first credential one answers as git reads it: the
+// owning extension's operation answers whatever order it comes in, a URL no
+// operation owns prints nothing, a refusal is reported on stderr only when
+// no other operation answers, and store and erase do nothing.
 func TestToolbeltGitCredential(t *testing.T) {
 	dir, err := os.MkdirTemp("", "ocgc")
 	if err != nil {
@@ -28,7 +30,18 @@ func TestToolbeltGitCredential(t *testing.T) {
 		t.Fatal(err)
 	}
 	var calls []map[string]any
+	serving := `["acme.git.credential","github.git.credential"]`
 	srv := &http.Server{Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/v1/toolbelt/serving" {
+			w.Header().Set("Content-Type", "application/json")
+			if r.Header.Get("Authorization") != "Bearer tok" || r.URL.Query().Get("capability") != "git.credential" {
+				w.WriteHeader(http.StatusUnauthorized)
+				fmt.Fprint(w, `{"error":{"code":"unauthorized","message":"execution authority rejected"}}`)
+				return
+			}
+			fmt.Fprintf(w, `{"data":{"operations":%s}}`, serving)
+			return
+		}
 		var call map[string]any
 		_ = json.NewDecoder(r.Body).Decode(&call)
 		calls = append(calls, call)
@@ -52,7 +65,12 @@ func TestToolbeltGitCredential(t *testing.T) {
 		case r.Header.Get("Authorization") != "Bearer tok":
 			w.WriteHeader(http.StatusUnauthorized)
 			fmt.Fprint(w, `{"error":{"code":"unauthorized","message":"execution authority rejected"}}`)
-		case in["host"] == "github.com":
+		case call["operation"] == "acme.git.credential" && in["host"] == "git.acme.test":
+			fmt.Fprint(w, `{"data":{"output":{"schema":"acme.v1","data":{"username":"acme","password":"acme_minted"}}}}`)
+		case call["operation"] == "acme.git.credential" && in["host"] == "refusing.test":
+			w.WriteHeader(http.StatusConflict)
+			fmt.Fprint(w, `{"error":{"code":"acme_static","message":"acme refuses"}}`)
+		case call["operation"] == "github.git.credential" && in["host"] == "github.com":
 			fmt.Fprint(w, `{"data":{"output":{"schema":"github.tool.v1","data":{"username":"x-access-token","password":"ghs_minted","expires_at":"2026-10-31T10:00:00Z"}}}}`)
 		default:
 			fmt.Fprint(w, `{"data":{"output":{"schema":"github.tool.v1","data":{}}}}`)
@@ -79,15 +97,29 @@ func TestToolbeltGitCredential(t *testing.T) {
 	if code != 0 || out != "username=x-access-token\npassword=ghs_minted\n" {
 		t.Fatalf("get: %d %q", code, out)
 	}
-	if calls[0]["operation"] != "github.git.credential" || calls[0]["request_id"] != nil {
-		t.Fatalf("call %v", calls[0])
+	// acme's operation comes first in the grant and owns another host.
+	if len(calls) != 2 || calls[0]["operation"] != "acme.git.credential" || calls[1]["operation"] != "github.git.credential" || calls[1]["request_id"] != nil {
+		t.Fatalf("calls %v", calls)
 	}
-	if env := calls[0]["input"].(map[string]any); len(env) != 1 {
+	if env := calls[1]["input"].(map[string]any); len(env) != 1 {
 		t.Fatalf("input envelope %v", env)
 	}
-	if in := calls[0]["input"].(map[string]any)["data"].(map[string]any); len(in) != 3 || in["protocol"] != "https" || in["path"] != "octo/widgets.git" {
+	if in := calls[1]["input"].(map[string]any)["data"].(map[string]any); len(in) != 3 || in["protocol"] != "https" || in["path"] != "octo/widgets.git" {
 		t.Fatalf("input %v", in)
 	}
+	calls = nil
+	if code, out, _ := run("protocol=https\nhost=git.acme.test\n\n", "get"); code != 0 || out != "username=acme\npassword=acme_minted\n" || len(calls) != 1 {
+		t.Fatalf("acme: %d %q %v", code, out, calls)
+	}
+	// One operation's refusal is reported only when no other answers.
+	if code, out, errOut := run("protocol=https\nhost=refusing.test\n\n", "get"); code != 1 || out != "" || !strings.Contains(errOut, "acme refuses") {
+		t.Fatalf("refused: %d %q %q", code, out, errOut)
+	}
+	serving = `[]`
+	if code, out, _ := run("protocol=https\nhost=github.com\n\n", "get"); code != 0 || out != "" {
+		t.Fatalf("nothing serves: %d %q", code, out)
+	}
+	serving = `["acme.git.credential","github.git.credential"]`
 	if code, out, _ := run("protocol=https\nhost=example.com\n\n", "get"); code != 0 || out != "" {
 		t.Fatalf("another host: %d %q", code, out)
 	}

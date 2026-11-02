@@ -90,7 +90,7 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 			onEcho(extension.CallRequestID(ctx))
 		}
 		return in, nil
-	}, Guidance: "Echo with fixture.echo."}, {Name: "fixture.wait", Wait: func(_ context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
+	}, Guidance: "Echo with fixture.echo.", Serves: "fixture.capability"}, {Name: "fixture.wait", Wait: func(_ context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
 		if h.plan == nil {
 			return extension.WaitPlan{}, extension.ErrInvalid
 		}
@@ -233,6 +233,39 @@ func TestProductionToolbeltSharedCases(t *testing.T) {
 				}}
 			})
 		})
+	}
+}
+
+// TestProductionToolbeltServing names the operations serving a capability
+// only to a token whose grant includes them, while current config still
+// enables them; only a handler may serve one.
+func TestProductionToolbeltServing(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	ctx := context.Background()
+	got, err := h.belt.Serving(ctx, h.token, "", "fixture.capability")
+	if err != nil || len(got) != 1 || got[0] != "fixture.echo" {
+		t.Fatalf("serving = %q, %v", got, err)
+	}
+	if got, err = h.belt.Serving(ctx, h.token, "", extension.CapabilityGitCredential); err != nil || len(got) != 0 {
+		t.Fatalf("serving another capability = %q, %v", got, err)
+	}
+	if _, err = h.belt.Serving(ctx, h.token, "execution/other", "fixture.capability"); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("another execution's assertion accepted: %v", err)
+	}
+	h.mu.Lock()
+	*h.deny = true
+	h.mu.Unlock()
+	if got, err = h.belt.Serving(ctx, h.token, "", "fixture.capability"); err != nil || len(got) != 0 {
+		t.Fatalf("serving under a narrowed ceiling = %q, %v", got, err)
+	}
+	h.mu.Lock()
+	*h.deny = false
+	h.mu.Unlock()
+	wait := extension.Operation{Name: "serves.wait", Serves: "fixture.capability", Wait: func(context.Context, extension.Authority, domain.Payload) (extension.WaitPlan, error) {
+		return extension.WaitPlan{}, nil
+	}}
+	if err = h.belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "serves", Operations: []extension.Operation{wait}}); !errors.Is(err, extension.ErrInvalid) {
+		t.Fatalf("a wait serving a capability registered: %v", err)
 	}
 }
 

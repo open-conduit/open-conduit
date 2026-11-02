@@ -273,3 +273,23 @@ func TestSchemaOf(t *testing.T) {
 	}
 	_ = All{}.hidden
 }
+
+// sdk.Serves declares the capability a handler answers, in the manifest and
+// on the registered operation; any other kind of operation refuses it.
+func TestServesDeclaresCapability(t *testing.T) {
+	ext := sdk.New("acme").Operation("acme.git.credential", sdk.Handler(forecast), sdk.Serves(extension.CapabilityGitCredential))
+	if got := ext.Manifest.Provides.Operations[0].Serves; got != extension.CapabilityGitCredential {
+		t.Fatalf("manifest serves %q", got)
+	}
+	if got := ext.Operations[0].Serves; got != extension.CapabilityGitCredential {
+		t.Fatalf("operation serves %q", got)
+	}
+	defer func() {
+		if recover() == nil {
+			t.Fatal("a wait serving a capability was declared")
+		}
+	}()
+	sdk.New("acme").Operation("acme.wait", sdk.Wait(func(context.Context, extension.Authority, ForecastRequest) (extension.WaitPlan, error) {
+		return extension.WaitPlan{}, nil
+	}), sdk.Serves(extension.CapabilityGitCredential))
+}
