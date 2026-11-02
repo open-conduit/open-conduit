@@ -110,3 +110,45 @@ func TestSandboxedConfigDir(t *testing.T) {
 		t.Errorf("the daemon's ~/.claude under another HOME: %+v", res.Outcome)
 	}
 }
+
+// TestSandboxReadsToolbelt: the MCP server runs `os` from the host's
+// toolbelt directory, which may sit in the state directory the sandbox
+// hides, so a sandboxed launch with a toolbelt asks to read it. One without
+// a toolbelt token doesn't, and nor does a container, which has its own `os`.
+func TestSandboxReadsToolbelt(t *testing.T) {
+	h := newHarness(t)
+	e := h.executor()
+	belt := filepath.Join(h.root, "bin")
+	b := &recordingBroker{}
+	r, _ := h.request("work/a", "exec-a", 1, nil)
+	r.Context.Sandbox = b
+	r.Context.ToolbeltToken, r.Context.ToolbeltEndpoint = "belt", "unix:///run/belt.sock"
+	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("sandboxed run failed: %+v", res.Outcome)
+	}
+	if len(b.needs) != 1 || !slices.Contains(b.needs[0].Read, belt) {
+		t.Fatalf("needs %+v, want read of %s", b.needs, belt)
+	}
+	r, _ = h.request("work/b", "exec-b", 1, nil)
+	r.Context.Sandbox = b
+	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("sandboxed run without a toolbelt failed: %+v", res.Outcome)
+	}
+	if len(b.needs) != 2 || slices.Contains(b.needs[1].Read, belt) {
+		t.Fatalf("without a toolbelt, needs %+v", b.needs)
+	}
+	c := &fakeContainer{}
+	home := filepath.Join(h.root, "home")
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		t.Fatal(err)
+	}
+	r, _ = h.request("work/c", "exec-c", 1, nil)
+	r.Context.Container, r.Context.ContainerHome = c, home
+	r.Context.ToolbeltToken, r.Context.ToolbeltEndpoint = "belt", "unix:///run/belt.sock"
+	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("container run failed: %+v", res.Outcome)
+	}
+	if len(c.needs) != 1 || slices.Contains(c.needs[0].Read, belt) {
+		t.Fatalf("container needs %+v, want no read of %s", c.needs, belt)
+	}
+}

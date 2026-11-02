@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -624,3 +625,50 @@ func TestWorkspaceThroughBroker(t *testing.T) {
 
 // The daemon proves physical stops through the public optional interface.
 var _ extension.StopExecutor = (*shell.Executor)(nil)
+
+// recordingSandbox plans a launch unchanged and keeps the needs it got.
+type recordingSandbox struct{ needs []extension.SandboxNeeds }
+
+func (b *recordingSandbox) Plan(_ context.Context, needs extension.SandboxNeeds, l extension.SandboxLaunch) (extension.SandboxPlan, error) {
+	b.needs = append(b.needs, needs)
+	return extension.SandboxPlan{Argv: l.Argv, Env: l.Env, Digest: "digest", Signals: extension.SandboxTerm}, nil
+}
+func (b *recordingSandbox) Adopt(context.Context, int) error { return nil }
+
+// recordingContainer runs a launch on the host as planned and keeps the
+// needs it got.
+type recordingContainer struct{ needs []extension.SandboxNeeds }
+
+func (b *recordingContainer) Launch(_ context.Context, needs extension.SandboxNeeds, l extension.SandboxLaunch) (extension.SandboxPlan, error) {
+	b.needs = append(b.needs, needs)
+	return extension.SandboxPlan{Argv: l.Argv, Env: l.Env, Digest: "digest", Signals: extension.SandboxTerm}, nil
+}
+func (b *recordingContainer) Adopt(context.Context, bool) (extension.ContainerExit, error) {
+	return extension.ContainerExit{}, nil
+}
+
+// TestSandboxReadsToolbelt: the host's toolbelt directory is first on PATH
+// and may sit in the state directory the sandbox hides, so a sandboxed
+// launch asks to read it. A container has its own `os` and doesn't.
+func TestSandboxReadsToolbelt(t *testing.T) {
+	art := &memoryArtifacts{data: map[string][]byte{}}
+	belt := filepath.Join(t.TempDir(), "toolbelt")
+	e, err := shell.New(shell.Options{StateDir: stateDir(t), Artifacts: art, ToolbeltDir: belt, Environ: func() []string { return []string{"PATH=/usr/bin:/bin"} }, Grace: 300 * time.Millisecond, PollInterval: 20 * time.Millisecond})
+	if err != nil {
+		t.Fatal(err)
+	}
+	sandbox := &recordingSandbox{}
+	r, _ := request("exec-sandboxed", 1, `{"command":"true"}`)
+	r.Context.ToolbeltEndpoint, r.Context.ToolbeltToken, r.Context.Sandbox = "unix:///tmp/oc/belt.sock", "token-1", sandbox
+	run(t, e, r)
+	if len(sandbox.needs) != 1 || !slices.Contains(sandbox.needs[0].Read, belt) {
+		t.Fatalf("sandboxed needs %+v, want read of %s", sandbox.needs, belt)
+	}
+	container := &recordingContainer{}
+	r, _ = request("exec-contained", 1, `{"command":"true"}`)
+	r.Context.ToolbeltEndpoint, r.Context.ToolbeltToken, r.Context.Container = "unix:///tmp/oc/belt.sock", "token-1", container
+	run(t, e, r)
+	if len(container.needs) != 1 || slices.Contains(container.needs[0].Read, belt) {
+		t.Fatalf("container needs %+v, want no read of %s", container.needs, belt)
+	}
+}

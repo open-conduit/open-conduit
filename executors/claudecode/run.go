@@ -309,6 +309,12 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	if r.Context.ToolbeltTokenFile != "" {
 		needs.Read = append(needs.Read, filepath.Dir(r.Context.ToolbeltTokenFile))
 	}
+	// The host's toolbelt directory may be inside a directory the sandbox
+	// otherwise hides (the daemon keeps a stable link to `os` in its state
+	// directory); a container has its own `os`.
+	if !contained && e.o.ToolbeltDir != "" && r.Context.ToolbeltToken != "" {
+		needs.Read = append(needs.Read, e.o.ToolbeltDir)
+	}
 	if sock, ok := strings.CutPrefix(r.Context.ToolbeltEndpoint, "unix://"); ok && r.Context.ToolbeltToken != "" {
 		needs.Sockets = []string{sock}
 	}
