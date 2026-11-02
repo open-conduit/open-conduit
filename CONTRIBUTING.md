@@ -15,18 +15,22 @@ make config-deps   # once: installs the config schema checker into .venv-contrac
 make check         # what CI runs
 ```
 
-`make config-deps` is the only step that installs anything. Apart from Go fetching the modules `go.mod` and `tools/go.mod` pin into its module cache the first time, `make check` runs offline. It runs, in order:
+`make config-deps` is the only step that installs anything. Apart from Go fetching the modules `go.mod` and `tools/go.mod` pin into its module cache the first time, `make check` runs offline. It runs `check-static`, which is everything but the tests:
 
 - `fmt-check`: `gofmt` on every Go file. Run `make fmt` to fix it.
 - `vet`: `go vet`, including the fault-injection build tag.
 - `lint`: [staticcheck](https://staticcheck.dev/) with the checks `staticcheck.conf` selects, including the fault-injection build tag. Fix a finding rather than disabling its check; when a check is wrong for this code base, turn it off in `staticcheck.conf` with a comment saying why.
-- `test`: `go test -race ./...`, including the daemon integration tests in `integration/`. This is the slow part. The integration tests run in `INTEGRATION_SHARDS` processes at once (4 by default, `scripts/test-integration.sh`). Each shard is a separate process, so a test there can't rely on state another test left behind.
 - `boundaries`: the package boundary checker (below).
 - `config-check`: the configuration schema and its example fixtures.
 - `docs-check`: the README and docs examples (below), and that the generated reference pages are current.
 - `build` and `smoke`: builds `bin/open-conduit` and `bin/os`, and runs their help and version commands.
 
-CI runs `make check` and `make certify` on one Linux runner with the current stable Go, and `make cross-build` alongside. It doesn't test macOS or the Go 1.24.2 minimum, so check those locally when a change could affect them. A pull request that only changes docs (`site/`, `docs/**/*.md` and the Markdown at the repository root) skips it and runs `make docs-check` instead; the docs site only builds when `site/` changes. To check the minimum toolchain locally (`lint` says it is skipped there, since staticcheck needs Go 1.26 to build and its findings don't depend on the toolchain):
+and then `test`:
+
+- `test-unit`: `go test -race` on every package but `integration/`.
+- `test-integration`: the daemon integration tests in `integration/`, under `-race`. This is the slow part. `scripts/test-integration.sh` splits them into `INTEGRATION_SHARDS` shards (4 by default), sharing the tests out by expected duration from the list of slow tests at its top, and runs the shards at once; `INTEGRATION_RUN` runs only some of them (`make test-integration INTEGRATION_SHARDS=12 INTEGRATION_RUN='1 2 3'`). Each shard is a separate process, so a test there can't rely on state another test left behind. The performance budget tests (`TestInTransactionRPCBudget*`) are in no shard: they run alone after the shards, in the run that takes shard 1. When you add a test that takes more than a few seconds, add it to that list.
+
+CI runs the same checks on Linux with the current stable Go, spread over parallel jobs so a pull request waits only for the slowest: `make check-static`, `make test-unit`, `make test-integration` in four runners of three shards each, and `make ts-check` with `make certify`. The required `check` job passes when they all have. `make cross-build` and `make release-snapshot` run alongside. Each Go job restores a build cache of its own that the same job saved on its last run on `main` (`.github/actions/go`), so a pull request compiles only what it changed; the unit tests still run with `-count=1`, so no test result is reused. It doesn't test macOS or the Go 1.24.2 minimum, so check those locally when a change could affect them. A pull request that only changes docs (`site/`, `docs/**/*.md` and the Markdown at the repository root) skips it and runs `make docs-check` instead; the docs site only builds when `site/` changes. To check the minimum toolchain locally (`lint` says it is skipped there, since staticcheck needs Go 1.26 to build and its findings don't depend on the toolchain):
 
 ```sh
 GOTOOLCHAIN=go1.24.2 make check

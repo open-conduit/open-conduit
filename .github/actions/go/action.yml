@@ -1,0 +1,51 @@
+name: Go with a build cache
+description: >-
+  Sets up stable Go and restores the build, module and staticcheck caches
+  this job saved on its last run on main. Each job keeps a cache of its own
+  (the name input), because the jobs build different things (-race, cross
+  targets, tags) and setup-go's one shared key went to whichever job saved
+  first, often one that built almost nothing. Jobs save with
+  actions/cache/save and the key and paths this action outputs, on pushes
+  to main only, so pull requests restore main's caches and never evict them.
+inputs:
+  cache:
+    description: The cache's name, usually the job's.
+    required: true
+outputs:
+  key:
+    description: The key to save the cache under.
+    value: ${{ steps.paths.outputs.key }}
+  paths:
+    description: The directories to save.
+    value: ${{ steps.paths.outputs.paths }}
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v7
+      id: go
+      with:
+        go-version: stable
+        cache: false
+    - id: paths
+      shell: bash
+      env:
+        NAME: ${{ inputs.cache }}
+        GO_VERSION: ${{ steps.go.outputs.go-version }}
+        SHA: ${{ github.sha }}
+      run: |
+        gocache=$(go env GOCACHE)
+        prefix="go-$RUNNER_OS-$RUNNER_ARCH-$GO_VERSION-$NAME-"
+        {
+          echo "prefix=$prefix"
+          echo "key=$prefix$SHA"
+          echo "paths<<EOF"
+          echo "$gocache"
+          go env GOMODCACHE
+          echo "$(dirname "$gocache")/staticcheck"
+          echo "EOF"
+        } >> "$GITHUB_OUTPUT"
+    - uses: actions/cache/restore@v6
+      with:
+        path: ${{ steps.paths.outputs.paths }}
+        key: ${{ steps.paths.outputs.key }}
+        restore-keys: ${{ steps.paths.outputs.prefix }}
