@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"sort"
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -20,6 +21,12 @@ func (t *Toolbelt) declareTranslatedWait(ctx context.Context, record tokenRecord
 	if err != nil {
 		return out, err
 	}
+	return t.declarePlan(ctx, record, digest, owner, a, plan)
+}
+
+// declarePlan declares a wait plan owner made (a translated wait, or a
+// gate parking a call) under the fence.
+func (t *Toolbelt) declarePlan(ctx context.Context, record tokenRecord, digest, owner string, a extension.Authority, plan extension.WaitPlan) (out extension.ToolResult, err error) {
 	seen := map[string]bool{}
 	for _, d := range plan.Dependencies {
 		if d.ID == "" || len(d.ID) > 256 || seen[d.ID] || d.SourceKey.Source == "" || d.SourceKey.ExternalID == "" || !validType(d.AliasType) || strings.HasPrefix(d.AliasType, "core.") || len(d.Label) > 200 {
@@ -101,4 +108,43 @@ func (t *Toolbelt) declareTranslatedWait(ctx context.Context, record tokenRecord
 	}
 	out.Output = plan.Output
 	return out, nil
+}
+
+// gate asks every registered gate but the operation owner's, in
+// registration-name order, whether the call may proceed. It returns the
+// first gate's plan to park the caller, with the gate's name, or its
+// refusal wrapped in extension.GateRefusal. A gate that panics refuses.
+func (t *Toolbelt) gate(ctx context.Context, owner, operation string, a extension.Authority, input domain.Payload) (*extension.WaitPlan, string, error) {
+	t.mu.RLock()
+	names := make([]string, 0, len(t.gates))
+	gates := make(map[string]extension.Gate, len(t.gates))
+	for name, g := range t.gates {
+		if name != owner {
+			names = append(names, name)
+			gates[name] = g
+		}
+	}
+	t.mu.RUnlock()
+	sort.Strings(names)
+	for _, name := range names {
+		plan, err := callGate(ctx, gates[name], a, extension.GateCall{Operation: operation, Owner: owner, Input: input})
+		if err != nil {
+			return nil, name, &extension.GateRefusal{Gate: name, Err: err}
+		}
+		if plan != nil {
+			return plan, name, nil
+		}
+	}
+	return nil, "", nil
+}
+
+func callGate(ctx context.Context, g extension.Gate, a extension.Authority, call extension.GateCall) (plan *extension.WaitPlan, err error) {
+	defer func() {
+		if recover() != nil {
+			plan, err = nil, &extension.OperationError{Code: "gate_failed", Message: "the host could not decide whether this call may proceed, so it was refused"}
+		}
+	}()
+	a.Operations = append([]string(nil), a.Operations...)
+	a.EventTypes = append([]string(nil), a.EventTypes...)
+	return g(ctx, a, call)
 }

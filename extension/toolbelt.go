@@ -217,6 +217,32 @@ type Registration struct {
 	// dependencies against a type-matching source Event. It must be pure and
 	// deterministic: core calls it inside coordination transactions.
 	DependencyFilter func(filter domain.Payload, event domain.Event) bool
+	// Gate, when set, is consulted before every call of another
+	// registration's operation, after the toolbelt has checked the caller's
+	// authority and before the operation runs. It is how an extension puts
+	// an operator's policy (an approval, say) in the host's path rather
+	// than in an executor's instructions. See Gate.
+	Gate Gate
+}
+
+// Gate decides whether a call may proceed. It returns nil and no error to
+// let the call through; a WaitPlan to park the calling execution instead
+// (the toolbelt declares it exactly like a translated wait owned by the
+// gating registration, so its dependencies use that registration's
+// DependencyFilter, and the operation does not run); or an error to refuse
+// the call, an OperationError reaching the caller verbatim. The toolbelt
+// asks every registered gate in registration-name order and stops at the
+// first that parks or refuses. A gate that cannot decide must refuse: the
+// host fails closed. A registration's own operations never pass its own
+// gate, and builtin operations pass no gate.
+type Gate func(context.Context, Authority, GateCall) (*WaitPlan, error)
+
+// GateCall is the call a Gate decides on.
+type GateCall struct {
+	// Operation is the operation called and Owner the registration that
+	// serves it.
+	Operation, Owner string
+	Input            domain.Payload
 }
 
 // OperationError is a refusal an extension handler authored for its caller:
@@ -226,6 +252,17 @@ type Registration struct {
 type OperationError struct{ Code, Message string }
 
 func (e *OperationError) Error() string { return e.Code + ": " + e.Message }
+
+// GateRefusal wraps a Gate's refusal, so the toolbelt can record that a
+// gate (and which) stopped the call. Unwrap gives the gate's own error,
+// which the caller receives.
+type GateRefusal struct {
+	Gate string
+	Err  error
+}
+
+func (e *GateRefusal) Error() string { return e.Err.Error() }
+func (e *GateRefusal) Unwrap() error { return e.Err }
 
 type requestIDKey struct{}
 

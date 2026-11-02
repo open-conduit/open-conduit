@@ -82,7 +82,8 @@ type Toolbelt struct {
 	operations    map[string]extension.Operation
 	owners        map[string]string // operation → registration name
 	filters       map[string]func(domain.Payload, domain.Event) bool
-	events        map[string]string // emitted family → registration name
+	gates         map[string]extension.Gate // registration name → gate
+	events        map[string]string         // emitted family → registration name
 }
 
 type tokenRecord struct {
@@ -121,7 +122,7 @@ func NewToolbelt(store storage.Store, now func() time.Time, router *Router, opti
 		return nil, err
 	}
 	options.CausalLimits = limits
-	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) bool{}, events: map[string]string{}}, nil
+	return &Toolbelt{store: store, now: now, router: router, options: options, registrations: map[string]bool{}, operations: map[string]extension.Operation{}, owners: map[string]string{}, filters: map[string]func(domain.Payload, domain.Event) bool{}, gates: map[string]extension.Gate{}, events: map[string]string{}}, nil
 }
 
 var operationName = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,127}$`)
@@ -177,6 +178,9 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 	}
 	if r.DependencyFilter != nil {
 		t.filters[r.Name] = r.DependencyFilter
+	}
+	if r.Gate != nil {
+		t.gates[r.Name] = r.Gate
 	}
 	for name := range events {
 		t.events[name] = r.Name
@@ -524,6 +528,8 @@ func callCode(err error) string {
 	switch {
 	case err == nil:
 		return "ok"
+	case errors.As(err, new(*extension.GateRefusal)):
+		return "gate_refused"
 	case errors.Is(err, extension.ErrUnauthorized), errors.Is(err, storage.ErrLeaseLost), errors.Is(err, storage.ErrNotFound):
 		return "unauthorized"
 	case errors.Is(err, extension.ErrUndeclared):
@@ -540,13 +546,18 @@ func callCode(err error) string {
 	return "failed"
 }
 
-func (t *Toolbelt) observeCall(ctx context.Context, record tokenRecord, operation, requestID string, callErr error) {
+func (t *Toolbelt) observeCall(ctx context.Context, record tokenRecord, operation, requestID, gate string, callErr error) {
 	a := record.Authority
 	name := "toolbelt.called"
 	if callErr != nil {
 		name = "toolbelt.rejected"
 	}
 	rec := observability.Record{Name: name, At: t.now(), Correlation: observability.Correlation{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, ExecutorBinding: record.Binding}, Attributes: map[string]string{"toolbelt.operation": operation, "toolbelt.result": callCode(callErr), "lease.epoch": strconv.FormatUint(a.Lease.Epoch, 10)}}
+	if gate != "" {
+		// A gate parked the call (result ok, the caller now waits) or
+		// refused it (result gate_refused).
+		rec.Attributes["toolbelt.gate"] = gate
+	}
 	// A call has no durable revision; a per-call nonce keeps the identity of
 	// this one record stable across exporter retries without colliding.
 	nonce, _ := randomToken()
@@ -599,8 +610,10 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 	if err != nil {
 		return out, err
 	}
+	// gatedBy is the gate that parked or refused the call, if one did.
+	var gatedBy string
 	if t.options.Observer != nil {
-		defer func() { t.observeCall(ctx, record, c.Operation, requestID, err) }()
+		defer func() { t.observeCall(ctx, record, c.Operation, requestID, gatedBy, err) }()
 	}
 	a := record.Authority
 	if record.Revoked || !t.now().Before(a.ExpiresAt) || c.ScopeID != "" && c.ScopeID != a.ScopeID || c.WorkID != "" && c.WorkID != a.WorkID || c.ExecutionID != "" && c.ExecutionID != a.ExecutionID {
@@ -651,6 +664,16 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 		handlerAuthority.Operations = append([]string(nil), a.Operations...)
 		handlerAuthority.EventTypes = append([]string(nil), a.EventTypes...)
 		hctx := extension.WithCallRequestID(ctx, requestID)
+		plan, gate, e := t.gate(hctx, owner, c.Operation, handlerAuthority, c.Input)
+		gatedBy = gate
+		if e != nil {
+			return out, e
+		}
+		if plan != nil {
+			// The gate parks the caller in place of the call: the operation
+			// does not run, and the gate's registration owns the Wait.
+			return t.declarePlan(hctx, record, digest, gate, handlerAuthority, *plan)
+		}
 		if op.Wait != nil {
 			return t.declareTranslatedWait(hctx, record, digest, owner, op, handlerAuthority, c.Input)
 		}
