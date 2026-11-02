@@ -87,11 +87,12 @@ func daemonBinary(t *testing.T) string {
 // bundledHostPackages are the first-party packages the release bundles that
 // open-conduit serves itself (`open-conduit extension-run NAME`, #428), as
 // scripts/bundle-packages.sh lists them (TestBundledHostPackagesMatchRelease).
-var bundledHostPackages = []string{"codex", "posthog", "human", "observe"}
+var bundledHostPackages = []string{"codex", "posthog", "human", "observe", "linear", "jira", "bitbucket"}
 
 // bundleHostPackages lays out each of bundledHostPackages beside the
-// open-conduit in dir, as the release archive does: its manifest and
-// certification, printed by that binary, with no executable of its own.
+// open-conduit in dir, as the release archive does: its manifest,
+// certification and playbooks, written by that binary, with no executable
+// of its own.
 func bundleHostPackages(dir string) error {
 	bin := filepath.Join(dir, "open-conduit")
 	for _, name := range bundledHostPackages {
@@ -107,6 +108,9 @@ func bundleHostPackages(dir string) error {
 			if err := os.WriteFile(filepath.Join(pkg, file), out, 0o644); err != nil {
 				return err
 			}
+		}
+		if out, err := exec.Command(bin, protocol.HostRun, name, "package-playbooks", filepath.Join(pkg, "playbooks")).CombinedOutput(); err != nil {
+			return fmt.Errorf("%s package-playbooks: %w: %s", name, err, out)
 		}
 	}
 	return nil

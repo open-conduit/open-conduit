@@ -325,7 +325,9 @@ func TestSamplesTraceAgainstTheScope(t *testing.T) {
 // namespace; with none it keys the first generation.
 func TestGenerationFromWorks(t *testing.T) {
 	ns := "jira/acme/proj"
-	key := func(source, id string) domain.CorrelationKey { return domain.CorrelationKey{Source: source, ExternalID: id} }
+	key := func(source, id string) domain.CorrelationKey {
+		return domain.CorrelationKey{Source: source, ExternalID: id}
+	}
 	works := []domain.Work{
 		{ScopeID: "proj", CorrelationKeys: []domain.CorrelationKey{key(ns, "issue/PROJ-7")}},
 		{ScopeID: "proj", CorrelationKeys: []domain.CorrelationKey{key(ns, "issue/PROJ-7/generation/reopen-100")}},

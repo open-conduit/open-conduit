@@ -212,7 +212,7 @@ func TestDaemonTrackersAndPostHog(t *testing.T) {
 		codes[c.Name] = c.Code
 	}
 	for _, typ := range []string{"linear", "jira", "bitbucket"} {
-		if codes[typ] != "ok" || codes[typ+"_auth"] != "verified" {
+		if codes[typ] != "ok" || codes[typ+"-auth"] != "verified" {
 			t.Fatalf("doctor %s: %+v", typ, report.Checks)
 		}
 	}

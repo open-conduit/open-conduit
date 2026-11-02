@@ -146,6 +146,9 @@ func TestDefaultConfigValidatesOffline(t *testing.T) {
 // host and a checkout, that merge beside each other and validate against the
 // daemon registry; the kit's Bitbucket operation list matches the extension.
 func TestTrackerSetupScopesValidateOffline(t *testing.T) {
+	// The trackers are bundled packages (#428): validate as the release's
+	// binary would, with them beside it.
+	releaseLayout(t)
 	ctx := context.Background()
 	lr, err := linear.Setup{}.Setup(ctx, nil, []string{"--teams", "eng,ops", "--token", "keyring:linear-token", "--no-workspace",
 		"--bitbucket", "acme/app", "--bitbucket-username", "me@example.com", "--bitbucket-token", "keyring:bitbucket-token"})

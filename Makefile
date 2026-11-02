@@ -169,7 +169,7 @@ protocol-prototype:
 # extension-run NAME`, #428), so it builds no executable of its own. The
 # examples, written as a third party would, ship their own binaries.
 PACKAGES_DIR ?= dist/packages
-RUNNABLE_PACKAGES = slack github shell sentry pagerduty codex posthog human observe
+RUNNABLE_PACKAGES = slack github shell sentry pagerduty codex posthog human observe linear jira bitbucket
 EXTENSION_PACKAGES = notes:./protocol/examples/notes/cmd/notes-extension runner:./protocol/examples/runner/cmd/runner-extension
 
 packages: build
@@ -177,6 +177,7 @@ packages: build
 		dir=$(PACKAGES_DIR)/$$name; rm -rf $$dir; mkdir -p $$dir; \
 		bin/open-conduit extension-run $$name package-manifest > $$dir/open-conduit-extension.json; \
 		bin/open-conduit extension-run $$name package-certification > $$dir/certification.json; \
+		bin/open-conduit extension-run $$name package-playbooks $$dir/playbooks; \
 		echo "packaged $$dir"; \
 	done
 	@set -eu; for spec in $(EXTENSION_PACKAGES); do \
@@ -221,7 +222,7 @@ ts-packages: require-node
 # packages), then the negative controls, which must each fail their
 # criterion.
 certify: require-node build packages ts-packages
-	@set -eu; for name in slack github shell sentry pagerduty codex posthog human observe notes runner setup weather; do \
+	@set -eu; for name in slack github shell sentry pagerduty codex posthog human observe linear jira bitbucket notes runner setup weather; do \
 		bin/open-conduit extension certify $(PACKAGES_DIR)/$$name --report $(PACKAGES_DIR)/$$name.certification.json; \
 	done
 	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -v -run 'TestCertification' ./integration
@@ -251,10 +252,13 @@ release-snapshot:
 		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  posthog .*(bundled with open-conduit)'; \
 		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  human .*(bundled with open-conduit)'; \
 		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  observe .*(bundled with open-conduit)'; \
+		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  linear .*(bundled with open-conduit)'; \
+		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  jira .*(bundled with open-conduit)'; \
+		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  bitbucket .*(bundled with open-conduit)'; \
 		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  codex .*(bundled with open-conduit)'; \
 		cask=$(RELEASE_DIR)/homebrew/Casks/open-conduit.rb; \
 		grep -q '^  binary "open-conduit"$$' $$cask; \
 		test $$(grep -c '^  binary ' $$cask) -eq 1; \
 		! grep -qi 'license' $$cask; \
-		echo "snapshot $$version: 4 archives, checksums verified, setup, codex, posthog, human and observe bundled, cask links open-conduit only"
+		echo "snapshot $$version: 4 archives, checksums verified, setup, codex, posthog, human, observe, linear, jira and bitbucket bundled, cask links open-conduit only"
 	$(MAKE) --no-print-directory smoke-run SMOKE_BIN=$(RELEASE_DIR)/smoke

@@ -62,6 +62,11 @@ func TestDependencyClosures(t *testing.T) {
 		{"slack_cannot_use_kit", []pkg{project("extensions/slack", "extensions/tracker")}, "extensions/tracker"},
 		{"linear_cannot_reach_jira", []pkg{project("extensions/linear", "extensions/jira")}, "extensions/jira"},
 		{"runtime_cannot_import_kit", []pkg{project("internal/runtime", "extensions/tracker")}, "extensions/tracker"},
+		// The kit's package entry point serves a tracker over the protocol
+		// (#428); the kit itself still may not.
+		{"kit_package_serves_protocol", []pkg{project("extensions/tracker/pkg", "extensions/tracker", "protocol/sdk/inprocsdk"), project("extensions/linear/pkg", "extensions/tracker/pkg", "extensions/linear")}, ""},
+		{"kit_cannot_import_sdk", []pkg{project("extensions/tracker", "protocol/sdk/inprocsdk")}, "protocol/sdk/inprocsdk"},
+		{"kit_package_cannot_use_examples", []pkg{project("extensions/tracker/pkg", "protocol/examples/notes")}, "protocol/examples/notes"},
 		// 06-02: the v1 converter reads extension config names, never the
 		// runtime, storage or composition; the CLI reaches it by injection.
 		{"protocol_reads_public_contracts", []pkg{project("protocol", "extension", "domain")}, ""},

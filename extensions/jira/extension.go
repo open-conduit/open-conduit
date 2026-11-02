@@ -9,8 +9,11 @@ import (
 
 // New returns the Jira extension: the tracker kit's in-process extension
 // for Jira entries.
-func New() *tracker.Extension {
-	return tracker.NewExtension(tracker.Kind{Type: Type, ValidateConnection: ValidateConnection, ValidateExtension: ValidateExtension, Open: open, HookPermission: ErrHookPermission})
+func New() *tracker.Extension { return tracker.NewExtension(Kind()) }
+
+// Kind is the tracker kit's description of Jira: its type, validators and client.
+func Kind() tracker.Kind {
+	return tracker.Kind{Type: Type, ValidateConnection: ValidateConnection, ValidateExtension: ValidateExtension, Open: open, HookPermission: ErrHookPermission}
 }
 
 // open builds an entry's settings and Jira client.
