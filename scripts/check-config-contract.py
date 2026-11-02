@@ -120,10 +120,10 @@ def check(config):
             if capabilities is None:
                 fail(bp + '/executor', 'unknown_registration')
                 continue
-            for key, required in binding['requires'].items():
+            for key, required in binding.get('requires', {}).items():
                 if required and (capabilities.get(key, False) != required):
                     fail(bp + '/requires/' + key, 'unsupported_capability')
-            if binding['requires'].get('workspace') and 'resource' not in binding:
+            if binding.get('requires', {}).get('workspace') and 'resource' not in binding:
                 fail(bp + '/resource', 'resource_required')
             if 'resource' in binding and binding['resource']['provider'] != 'git':
                 fail(bp + '/resource/provider', 'unknown_registration')
@@ -142,12 +142,12 @@ def check(config):
                     fail(bp + '/container', 'unsupported_capability')
                 if binding['container']['provider'] not in CONTAINERS:
                     fail(bp + '/container/provider', 'unknown_registration')
-            if not set(binding['operations']) <= set(result['authorization']['operations']):
+            if not set(binding.get('operations', [])) <= set(result['authorization']['operations']):
                 fail(bp + '/operations', 'operation_denied')
             for i, grant in enumerate(binding.get('grants', [])):
                 if not set(grant.get('operations', [])) <= set(result['authorization']['operations']):
                     fail(bp + '/grants/' + str(i) + '/operations', 'operation_denied')
-            for secret in binding['secret_names']:
+            for secret in binding.get('secret_names', []):
                 if not result['secret_refs'].get(secret):
                     fail(bp + '/secret_names', 'unknown_secret')
             if 'connection' in binding and binding['connection'] not in result['authorization']['connections']:
@@ -174,9 +174,9 @@ def check(config):
                 fail(ep + '/type', 'unknown_registration')
             if 'connection' in extension and extension['connection'] not in result['authorization']['connections']:
                 fail(ep + '/connection', 'connection_denied')
-            if any(not result['secret_refs'].get(s) for s in extension['secret_names']):
+            if any(not result['secret_refs'].get(s) for s in extension.get('secret_names', [])):
                 fail(ep + '/secret_names', 'unknown_secret')
-            if extension['type'].endswith('_ingress') and extension['config'].get('scope') != scope_id:
+            if extension['type'].endswith('_ingress') and extension.get('config', {}).get('scope') != scope_id:
                 fail(ep + '/config/scope', 'ingress_target_mismatch')
         visiting.remove(scope_id)
         effective[scope_id] = result
