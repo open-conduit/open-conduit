@@ -159,7 +159,7 @@ func (c *Client) GitToken(ctx context.Context, repo string) (string, time.Time, 
 			return "", time.Time{}, ErrStaticToken
 		}
 	}
-	return app.scoped(ctx, repo)
+	return app.scoped(ctx, repo, gitPermissions)
 }
 
 // GitIdentity is who git commits as for a GitHub App: its bot user's login

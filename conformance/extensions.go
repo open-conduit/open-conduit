@@ -318,6 +318,17 @@ type ToolbeltCase struct {
 	Check func(ToolbeltFixture) error
 }
 
+// registerOps registers handler operations under name.
+func registerOps(r extension.Registrar, name string, ops ...string) error {
+	reg := extension.Registration{Version: extension.ContractVersion, Name: name}
+	for _, op := range ops {
+		reg.Operations = append(reg.Operations, extension.Operation{Name: op, Handler: func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+			return domain.Payload{}, nil
+		}})
+	}
+	return r.Register(reg)
+}
+
 func ToolbeltCases() []ToolbeltCase {
 	return []ToolbeltCase{
 		{"cross_scope_work_execution", func(f ToolbeltFixture) error {
@@ -364,12 +375,8 @@ func ToolbeltCases() []ToolbeltCase {
 			if _, err := f.Belt.Call(ctx, f.Token, extension.ToolCall{Operation: "missing"}); !errors.Is(err, extension.ErrUndeclared) {
 				return fmt.Errorf("undeclared operation accepted: %v", err)
 			}
-			for _, op := range []string{extension.Emit, "fixture.echo"} {
-				if err := f.Registrar.Register(extension.Registration{Version: extension.ContractVersion, Name: "conflict." + op, Operations: []extension.Operation{{Name: op, Handler: func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
-					return domain.Payload{}, nil
-				}}}}); !errors.Is(err, extension.ErrConflict) {
-					return fmt.Errorf("conflicting operation accepted: %v", err)
-				}
+			if err := registerOps(f.Registrar, "fixture", "fixture.echo"); !errors.Is(err, extension.ErrConflict) {
+				return fmt.Errorf("conflicting operation accepted: %v", err)
 			}
 			a := f.Authority
 			a.Operations = []string{extension.ReadContext}
@@ -379,6 +386,37 @@ func ToolbeltCases() []ToolbeltCase {
 			}
 			if _, err := f.Belt.Call(ctx, token, extension.ToolCall{Operation: "fixture.echo"}); !errors.Is(err, extension.ErrUnauthorized) {
 				return fmt.Errorf("operation allowlist ignored: %v", err)
+			}
+			return nil
+		}},
+		// An extension registers operations only under its own name, so
+		// one that loads first can't take the calls meant for another
+		// (an installed package claiming github.*), and a collision is
+		// refused rather than won by whoever came first.
+		{"operation_namespace", func(f ToolbeltFixture) error {
+			if err := registerOps(f.Registrar, "namespaced", "namespaced.echo"); err != nil {
+				return fmt.Errorf("an operation in its own namespace refused: %v", err)
+			}
+			for _, op := range []string{"fixture.squat", "namespaced.squat", "squatterx.echo", "squatter"} {
+				if err := registerOps(f.Registrar, "squatter", op); !errors.Is(err, extension.ErrInvalid) {
+					return fmt.Errorf("operation %q outside its namespace accepted: %v", op, err)
+				}
+			}
+			// The refusals registered nothing: the name is still free.
+			if err := registerOps(f.Registrar, "squatter", "squatter.echo"); err != nil {
+				return fmt.Errorf("a refused registration kept its name: %v", err)
+			}
+			// Names don't nest, so neither do namespaces.
+			if err := registerOps(f.Registrar, "namespaced.sub", "namespaced.sub.echo"); !errors.Is(err, extension.ErrInvalid) {
+				return fmt.Errorf("a registration named inside another's namespace accepted: %v", err)
+			}
+			for _, c := range []struct {
+				name string
+				ops  []string
+			}{{"namespaced", []string{"namespaced.other"}}, {"twice", []string{"twice.echo", "twice.echo"}}, {"builtin", []string{extension.Emit}}} {
+				if err := registerOps(f.Registrar, c.name, c.ops...); !errors.Is(err, extension.ErrConflict) {
+					return fmt.Errorf("collision %s %v accepted: %v", c.name, c.ops, err)
+				}
 			}
 			return nil
 		}},

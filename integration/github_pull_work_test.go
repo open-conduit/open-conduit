@@ -100,7 +100,7 @@ func TestGitHubPullRequestWorkRunsAlongsideTheBuilder(t *testing.T) {
 		t.Fatalf("issue list from the PR's Work: %v", list)
 	}
 	e.fake.ServeFile("wobble.png", []byte("png"), "")
-	if out, err := e.call(r, gh.OpFetch, "attachment", map[string]any{"url": e.fake.URL + "/files/wobble.png"}); err != nil || out.Output.Schema != gh.FileSchema {
+	if out, err := e.call(r, gh.OpFetch, "attachment", map[string]any{"url": e.fake.URL + "/" + ghRepo + "/files/wobble.png"}); err != nil || out.Output.Schema != gh.FileSchema {
 		t.Fatalf("attachment from the PR's Work: %v %+v", err, out)
 	}
 	e.must(r, gh.OpPRReview, "review-1", map[string]any{"number": pr, "event": "request_changes", "body": "Please name the constant.",
