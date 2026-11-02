@@ -37,6 +37,9 @@ func TestJobValidate(t *testing.T) {
 		{sc.Job{Name: "j", On: &sc.Trigger{}}, "on needs events or webhook"},
 		{sc.Job{Name: "j", On: &sc.Trigger{Webhook: true, Branches: []string{"main"}}}, "add events"},
 		{sc.Job{Name: "Post reels"}, "name matching"},
+		{sc.Job{Name: "j", On: &sc.Trigger{Events: []string{"check_suite.completed"}, Conclusions: []string{"failure", "Timed_Out"}}}, ""},
+		{sc.Job{Name: "j", On: &sc.Trigger{Events: []string{"check_suite.completed"}, Conclusions: []string{"failed"}}}, `"failed" isn't a check conclusion; use success, failure`},
+		{sc.Job{Name: "j", On: &sc.Trigger{Webhook: true, Conclusions: []string{"failure"}}}, "add events"},
 	} {
 		errs := strings.Join(c.job.Validate(), "; ")
 		if c.want == "" && errs != "" || c.want != "" && !strings.Contains(errs, c.want) {
