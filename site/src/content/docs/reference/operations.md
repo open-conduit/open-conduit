@@ -110,6 +110,7 @@ Issues, pull requests, comments, reviews and checks of a repository; the enginee
 - `github.issue.view`
 - `github.pr.comment`
 - `github.pr.create`
+- `github.pr.edit`
 - `github.pr.list`
 - `github.pr.reply`
 - `github.pr.resolve`
@@ -119,7 +120,7 @@ Issues, pull requests, comments, reviews and checks of a repository; the enginee
 
 ### Human decisions (`human`)
 
-Lets an agent ask a person for a private decision with human.ask, answered from the TUI or web view; nothing reaches the issue or thread. Add human.ask to the agent binding's operations.
+Lets an agent ask a person for a private decision with human.ask, answered from the TUI or web view; nothing reaches the issue or thread. Add human.ask to the agent binding's operations. Gates make named operations wait for a person's approval, whoever calls them.
 
 - `human.ask`
 

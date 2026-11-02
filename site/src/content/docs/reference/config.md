@@ -28,6 +28,7 @@ The config file is JSON, by default at `~/.config/open-conduit/config.json`. `op
 | `concurrency` | integer |  | `4` | Most agent turns (claude-code and installed extension executors) running at once across every scope. A scope's limits.concurrency can only narrow it. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `job_concurrency` | integer |  | `4` | Most job attempts (the shell and github-hold executors) running at once, counted apart from concurrency so a busy agent pool never holds a due job back. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `kept_executions` | integer |  | `20` | Executions per Work whose content (logs, transcripts, outputs) is kept; older ones are released by the retention sweep. Their coordination history (trigger, timing, outcome, usage) is never deleted. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
+| `kept_finished_days` | integer |  | `14` |  |
 | `reconcile_seconds` | integer |  | `900` | How often each source (a repository, a tracker, a Slack workspace, a schedule) is reconciled against its service, so missed webhooks cost only this much latency. Sources added by a later generation (open-conduit config apply) use the new value; bundled sources already running keep theirs until serve restarts on that generation. |
 | `retry_delays_seconds` | array of integer |  | `[300,600]` | The wait before each retry of a failed attempt, in order; once they are used up automatic retries stop and the Work stays open for an operator to retry. Usage-limit retries wait for the reported reset instead. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `timeout_seconds` | integer |  | `3600` | The deadline of one attempt (an Execution) before the host stops it. A binding's own timeout_seconds replaces it for that binding. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. An attempt already running keeps the deadline it started with. |
@@ -298,7 +299,7 @@ Extension entry `config`:
 
 ### Human decisions (`human`)
 
-Lets an agent ask a person for a private decision with human.ask, answered from the TUI or web view; nothing reaches the issue or thread. Add human.ask to the agent binding's operations. Registers: extension.
+Lets an agent ask a person for a private decision with human.ask, answered from the TUI or web view; nothing reaches the issue or thread. Add human.ask to the agent binding's operations. Gates make named operations wait for a person's approval, whoever calls them. Registers: extension.
 
 Extension entry `config`:
 
@@ -306,6 +307,7 @@ Extension entry `config`:
 | --- | --- | --- |
 | `responders` | `["operator:local"]` | who may answer, each kind:id or a bare kind |
 | `surfaces` | `["tui"]` | where the question is shown |
+| `gates` |  | [{"operations": ["github.pr.create"], "responders": ["operator:local"], "timeout": "24h"}]: operations that need a person's approval before they run |
 
 ### Introspection (`introspection`)
 
