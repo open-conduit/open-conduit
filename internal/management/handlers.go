@@ -274,16 +274,12 @@ func (s *Server) listEvents(c *call) (int, any, error) {
 // getEvent returns one accepted Event; with=route adds the route that
 // GET /events/{id}/route returns for it, as the list form does.
 func (s *Server) getEvent(c *call) (int, any, error) {
-	withRoute := false
-	if c.r.URL.RawQuery != "" {
-		v := c.r.URL.Query()
-		if len(v) != 1 || len(v["with"]) != 1 || v.Get("with") != "route" {
-			return 0, nil, fail(400, "invalid_filter", "this endpoint takes only with=route")
-		}
-		withRoute = true
+	ask, err := withOnly(c, "route")
+	if err != nil {
+		return 0, nil, err
 	}
 	var out any
-	err := s.read(c.ctx, func(tx storage.Tx) error {
+	err = s.read(c.ctx, func(tx storage.Tx) error {
 		a, e := tx.Event(domain.ID(c.params[0]))
 		if e != nil {
 			return e
@@ -292,7 +288,7 @@ func (s *Server) getEvent(c *call) (int, any, error) {
 		if e != nil {
 			return e
 		}
-		if !withRoute {
+		if !ask["route"] {
 			out = toEvent(a, scope)
 			return nil
 		}
