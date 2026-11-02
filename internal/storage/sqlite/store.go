@@ -139,7 +139,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 			return nil, fmt.Errorf("sqlite: rewrite %s: %w", r.key, err)
 		}
 	}
-	if err = s.IntegrityCheck(ctx); err != nil {
+	if err = s.check(ctx, "quick_check"); err != nil {
 		return nil, err
 	}
 	ok = true
@@ -200,9 +200,18 @@ func enableWAL(ctx context.Context, db *sql.DB) error {
 }
 func (s *Store) Close() error          { return s.db.Close() }
 func (s *Store) SchemaVersion() uint32 { return SchemaVersion }
-func (s *Store) IntegrityCheck(ctx context.Context) error {
+
+// IntegrityCheck runs SQLite's full integrity_check and the foreign key
+// check. Its cost grows with the database, so Open runs the quicker
+// quick_check, which skips matching each index against its table; recovery
+// checks, backup verification and restore run this one.
+func (s *Store) IntegrityCheck(ctx context.Context) error { return s.check(ctx, "integrity_check") }
+
+// check runs the integrity pragma named (integrity_check or quick_check),
+// then the foreign key check.
+func (s *Store) check(ctx context.Context, pragma string) error {
 	var result string
-	if err := s.db.QueryRowContext(ctx, "PRAGMA integrity_check").Scan(&result); err != nil {
+	if err := s.db.QueryRowContext(ctx, "PRAGMA "+pragma).Scan(&result); err != nil {
 		return err
 	}
 	if result != "ok" {

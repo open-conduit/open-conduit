@@ -144,7 +144,7 @@ Not measured.
 ### What the design implies
 
 - The large consumers are the executor processes, not the daemon: each agent turn is a full `claude` process with its own workspace checkout. Daemon memory has two parts: bounded buffers, and an unbounded part from decoding the Work, Execution and Wait lists in each pass, which grows with the Work ever made.
-- `conduit.db` grows without bound. Event rows, Work, Executions and their metadata are never deleted, and the store runs no `VACUUM`. The WAL is checkpointed by SQLite's defaults. Pending artifact streams left by a killed daemon and unreferenced artifacts stay on disk until removed by hand ([recovery and retention](../sqlite-artifacts/#recovery-and-retention)).
+- `conduit.db` grows without bound. Event rows, Work, Executions and their metadata are never deleted, and the store runs no `VACUUM`. Each open runs `quick_check` rather than the full `integrity_check`, which also matches every index against its table, so startup grows more slowly with the database ([SQLite](../sqlite-artifacts/)). The WAL is checkpointed by SQLite's defaults. Pending artifact streams left by a killed daemon and unreferenced artifacts stay on disk until removed by hand ([recovery and retention](../sqlite-artifacts/#recovery-and-retention)).
 
 ### Measurements
 

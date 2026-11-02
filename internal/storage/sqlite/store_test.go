@@ -406,3 +406,42 @@ func TestKVPrefixIsLiteralBytes(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestOpenRunsQuickCheck: Open runs quick_check, whose cost doesn't include
+// matching every index to its table, and IntegrityCheck still runs the full
+// check. Here the unrouted-events index is made to disagree with its table
+// (its stored WHERE now admits rows the index never had): Open succeeds and
+// IntegrityCheck, the control, reports the damage.
+func TestOpenRunsQuickCheck(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conduit.db")
+	s := open(t, path)
+	if err := transact(s, func(tx storage.Tx) error {
+		if _, _, err := tx.AcceptEvent(event("one")); err != nil {
+			return err
+		}
+		return tx.MarkRouted("one", "", "ignored")
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Close(); err != nil {
+		t.Fatal(err)
+	}
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, q := range []string{"PRAGMA writable_schema=ON", "UPDATE sqlite_master SET sql='CREATE INDEX events_unrouted ON events(sequence) WHERE 1' WHERE name='events_unrouted'", "PRAGMA writable_schema=OFF"} {
+		if _, err = db.Exec(q); err != nil {
+			t.Fatal(q, err)
+		}
+	}
+	db.Close()
+	reopened, err := sqlite.Open(context.Background(), path)
+	if err != nil {
+		t.Fatalf("open ran more than quick_check: %v", err)
+	}
+	defer reopened.Close()
+	if err = reopened.IntegrityCheck(context.Background()); err == nil {
+		t.Fatal("full integrity check missed an index that disagrees with its table")
+	}
+}

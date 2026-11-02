@@ -301,6 +301,11 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 		return r, nil
 	}
 	defer store.Close()
+	// Open runs only quick_check; an offline check can afford the full one.
+	if err := store.IntegrityCheck(ctx); err != nil {
+		add("database", "fail", "corrupt", "restore the latest verified bundle into a new state directory (backup restore)")
+		return r, nil
+	}
 	add("database", "ok", "schema_1", fmt.Sprintf("schema %d, integrity and foreign keys pass", store.SchemaVersion()))
 	files, ferr := artifacts.Open(filepath.Join(stateDir, "artifacts"))
 	scopes := map[string]*cli.ScopeState{}
