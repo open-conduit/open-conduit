@@ -191,7 +191,7 @@ func do(h http.Handler, method, target string, form url.Values, signedIn *Server
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	}
 	if signedIn != nil {
-		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: signedIn.sess})
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: signedIn.newSession()})
 	}
 	w := httptest.NewRecorder()
 	h.ServeHTTP(w, req)
@@ -227,7 +227,7 @@ func TestSignInAndHostCheck(t *testing.T) {
 		t.Fatalf("login: %d %s", w.Code, w.Header().Get("Location"))
 	}
 	c := w.Result().Cookies()
-	if len(c) != 1 || c[0].Value != s.sess || !c[0].HttpOnly || c[0].SameSite != http.SameSiteStrictMode {
+	if len(c) != 1 || c[0].Domain != "" || !c[0].HttpOnly || c[0].SameSite != http.SameSiteStrictMode {
 		t.Fatalf("cookie: %+v", c)
 	}
 	if w.Header().Get("Referrer-Policy") != "same-origin" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "default-src 'self'") {
@@ -236,7 +236,7 @@ func TestSignInAndHostCheck(t *testing.T) {
 	// A rebound DNS name reaches the listener but is refused, signed in or not.
 	req := httptest.NewRequest("GET", "/", nil)
 	req.Host = "attacker.example:7420"
-	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.sess})
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusMisdirectedRequest {
@@ -245,7 +245,7 @@ func TestSignInAndHostCheck(t *testing.T) {
 	for _, host := range []string{"localhost:7420", addr} {
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Host = host
-		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.sess})
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusOK {
@@ -271,7 +271,7 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	req.Host = "open-conduit.localhost:7420"
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "http://attacker.example")
-	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.sess})
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden || len(f.invoked) != 0 {
@@ -283,7 +283,7 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	req.Host = "open-conduit.localhost:7420"
 	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 	req.Header.Set("Origin", "http://open-conduit.localhost:7420")
-	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.sess})
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
 	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
@@ -301,7 +301,7 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	// The outcome shows once on the page it returns to.
 	req = httptest.NewRequest("GET", "/work?id=wrk_1", nil)
 	req.Host = "open-conduit.localhost:7420"
-	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.sess})
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
 	for _, c := range w.Result().Cookies() {
 		req.AddCookie(c)
 	}
@@ -332,7 +332,7 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 		req.Host = "open-conduit.localhost:7420"
 		req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
 		req.Header.Set("Origin", "http://attacker.example")
-		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.sess})
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
 		rec := httptest.NewRecorder()
 		h.ServeHTTP(rec, req)
 		if rec.Code != http.StatusForbidden {

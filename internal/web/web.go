@@ -101,6 +101,10 @@ type Options struct {
 	// SignIn is the sign-in to accept (see LoadSignIn); nil makes one that
 	// lasts as long as the process.
 	SignIn *SignIn
+	// SaveSignIn keeps a changed sign-in (a new session key, after signing
+	// out everywhere) where SignIn came from; nil keeps it in this process
+	// only.
+	SaveSignIn func(SignIn) error
 	// Updates checks for releases, for the status line's notice and the
 	// update page; nil leaves both out.
 	Updates Updates
@@ -119,14 +123,16 @@ const (
 var assets embed.FS
 
 // Server serves the view. Its CSRF secret lives only as long as the
-// process; its login token and session do too unless Options.SignIn keeps
-// them.
+// process; its login token and session key do too unless Options.SignIn
+// keeps them.
 type Server struct {
-	src    Source
-	opts   Options
-	login  string
+	src   Source
+	opts  Options
+	login string
+	csrf  string
+	// smu guards sess, the key that signs session cookies.
+	smu    sync.Mutex
 	sess   string
-	csrf   string
 	pages  map[string]*template.Template
 	static http.Handler
 
@@ -228,7 +234,7 @@ func (s *Server) Serve(ctx context.Context, l net.Listener, out io.Writer) error
 		return err
 	}
 	urls := s.LoginURLs(addr)
-	fmt.Fprintf(out, "Open Conduit web view on http://%s\nOpen this to sign in:\n  %s\nor, if your browser does not resolve %s:\n  %s\n", net.JoinHostPort(s.opts.Host, portOf(addr)), urls[0], s.opts.Host, urls[1])
+	fmt.Fprintf(out, "Open Conduit web view on http://%s\nOpen this to sign in:\n  %s\nor, if your browser does not resolve %s (%s):\n  %s\n", net.JoinHostPort(s.opts.Host, portOf(addr)), urls[0], s.opts.Host, AddressWarning, urls[1])
 	srv := &http.Server{Handler: s.Handler(addr), ReadHeaderTimeout: 10 * time.Second}
 	done := make(chan error, 1)
 	go func() { done <- srv.Serve(l) }()
@@ -265,6 +271,7 @@ func (s *Server) Handler(addr string) http.Handler {
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /login", s.loginPage)
+	mux.HandleFunc("POST /signout", s.authed(s.changed(s.signOutEverywhere)))
 	mux.Handle("GET /static/", s.static)
 	mux.HandleFunc("GET /{$}", s.authed(s.runsPage))
 	// Work and run IDs contain slashes, so IDs travel in the query and form.
@@ -307,25 +314,81 @@ func (s *Server) Handler(addr string) http.Handler {
 
 func same(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
 
-// loginPage trades the printed token for a session cookie on this name.
+// loginPage trades the printed token for a new session cookie on this
+// name. The cookie is host-only, so it goes back only to the name the
+// browser signed in on.
 func (s *Server) loginPage(w http.ResponseWriter, r *http.Request) {
 	if !same(r.URL.Query().Get("token"), s.login) {
 		http.Error(w, "sign in with the URL open-conduit web url prints", http.StatusUnauthorized)
 		return
 	}
-	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: s.sess, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	s.setSession(w, s.newSession())
 	http.Redirect(w, r, "/", http.StatusSeeOther)
+}
+
+// newSession is a fresh sign-in's cookie value, signed with the current key.
+func (s *Server) newSession() string {
+	now := s.opts.Now()
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	return webSession{issued: now, seen: now, nonce: secret()}.encode(s.sess)
+}
+
+func (s *Server) setSession(w http.ResponseWriter, value string) {
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Value: value, Path: "/", HttpOnly: true, SameSite: http.SameSiteStrictMode})
 }
 
 func (s *Server) authed(next http.HandlerFunc) http.HandlerFunc {
 	return func(w http.ResponseWriter, r *http.Request) {
+		now := s.opts.Now()
+		s.smu.Lock()
+		key := s.sess
+		s.smu.Unlock()
 		c, err := r.Cookie(sessionCookie)
-		if err != nil || !same(c.Value, s.sess) {
-			http.Error(w, "not signed in: open the sign-in URL open-conduit web url prints", http.StatusUnauthorized)
+		var v webSession
+		ok := err == nil
+		if ok {
+			v, ok = decodeSession(key, c.Value, now)
+		}
+		if !ok {
+			http.Error(w, "not signed in, or signed in too long ago: open the sign-in URL open-conduit web url prints", http.StatusUnauthorized)
 			return
+		}
+		if now.Sub(v.seen) >= sessionRefresh {
+			// Seen again: the idle expiry starts over, the absolute one
+			// does not.
+			v.seen = now
+			s.setSession(w, v.encode(key))
 		}
 		next(w, r)
 	}
+}
+
+// signOutEverywhere voids every session by changing the key that signs
+// them, keeping the new key for the next process too. The sign-in URL
+// still works.
+func (s *Server) signOutEverywhere(w http.ResponseWriter, r *http.Request) {
+	s.smu.Lock()
+	old := s.sess
+	s.sess = secret()
+	next := SignIn{Login: s.login, Session: s.sess}
+	var err error
+	if s.opts.SaveSignIn != nil {
+		err = s.opts.SaveSignIn(next)
+	}
+	if err != nil {
+		s.sess = old
+	}
+	s.smu.Unlock()
+	if err != nil {
+		flash(w, "Could not sign out everywhere: "+err.Error(), true)
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+	http.SetCookie(w, &http.Cookie{Name: sessionCookie, Path: "/", MaxAge: -1, HttpOnly: true, SameSite: http.SameSiteStrictMode})
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fmt.Fprintln(w, "Signed out every browser. Open the sign-in URL open-conduit web url prints to sign in again.")
 }
 
 // changed guards a change: the form's CSRF token, and an Origin, when the

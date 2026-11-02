@@ -26,7 +26,7 @@ The TUI lists one row per issue or thread, with its latest turn and how many tur
 open-conduit web
 ```
 
-This serves the same view in a browser on this machine, at `http://open-conduit.localhost:7420`. It prints a sign-in URL; open it to start a session in that browser. Browsers resolve every `*.localhost` name to this machine without any setup. If yours doesn't, use the second URL it prints, which names `127.0.0.1`.
+This serves the same view in a browser on this machine, at `http://open-conduit.localhost:7420`. It prints a sign-in URL; open it to start a session in that browser. Browsers resolve every `*.localhost` name to this machine without any setup. If yours doesn't, use the second URL it prints, which names `127.0.0.1`. Prefer the first: browsers don't keep cookies apart by port, so a browser signed in on `127.0.0.1` sends its session to every other server on that address, such as an agent's dev server.
 
 To have the daemon serve the view itself, start it with `--web`, or install the service that way:
 
@@ -35,7 +35,7 @@ open-conduit serve --web
 open-conduit service install --web
 ```
 
-The sign-in lasts across restarts: the URL stays the same and a signed-in browser stays signed in, so you can bookmark it. `open-conduit web url` prints it at any time. To sign every browser out, delete `private/web.signin` in the state directory and restart the view.
+The sign-in URL lasts across restarts, so you can bookmark it, and `open-conduit web url` prints it at any time. Each sign-in starts a session of its own, which lasts across restarts too until the browser has been idle for 12 hours or signed in for 7 days; then open the URL again. **Sign out everywhere**, at the end of the status line, ends every browser's session at once and leaves the URL working. To change the URL as well, delete `private/web.signin` in the state directory and restart the view.
 
 The web view has five pages, with the daemon's state, the active generation and the agent and job slots in use along the bottom.
 
