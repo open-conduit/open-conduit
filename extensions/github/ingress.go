@@ -93,6 +93,8 @@ type Ingress struct {
 	scanMemo *memo
 	memoID   string
 	answered map[string]int
+	// branches remembers whether a commit is on a branch (checkRef).
+	branches map[string]bool
 }
 
 var _ extension.Ingress = (*Ingress)(nil)
@@ -114,7 +116,7 @@ func NewIngress(s Settings, c *Client, now func() time.Time, o IngressOptions) *
 	if o.MaxRepeats <= 0 {
 		o.MaxRepeats = 3
 	}
-	return &Ingress{s: s, c: c, now: now, o: o, answered: map[string]int{}}
+	return &Ingress{s: s, c: c, now: now, o: o, answered: map[string]int{}, branches: map[string]bool{}}
 }
 
 // Settings returns the bound extension settings.
@@ -168,7 +170,7 @@ func (g *Ingress) Push(ctx context.Context, src extension.Source, d extension.De
 		g.o.Observed(ctx, obs)
 	}
 	out.Observations = obs
-	out.Events = []domain.Event{g.deliveryEvent(env, p, received)}
+	out.Events = []domain.Event{g.deliveryEvent(env, p, g.checkRef(ctx, env.Event, p), received)}
 	return out, nil
 }
 
@@ -299,7 +301,63 @@ func (g *Ingress) pushChecks(ctx context.Context, n *normalizer, event string, p
 	return out, nil
 }
 
-func (g *Ingress) deliveryEvent(env envelope, p webhookPayload, received time.Time) domain.Event {
+// checkHead is a finished check suite's or run's hook and the head branch
+// GitHub names for it; nil for other events.
+func checkHead(event string, p webhookPayload) (*checkHook, string) {
+	hook := p.CheckRun
+	if event == "check_suite" {
+		hook = p.CheckSuite
+	} else if event != "check_run" {
+		return nil, ""
+	}
+	if hook == nil {
+		return nil, ""
+	}
+	branch := hook.HeadBranch
+	if branch == "" && hook.CheckSuite != nil {
+		branch = hook.CheckSuite.HeadBranch
+	}
+	return hook, branch
+}
+
+// maxBranchChecks bounds the remembered answers of checkRef.
+const maxBranchChecks = 512
+
+// checkRef is the ref a check suite or run delivery names: its head branch,
+// but only when the commit is in that branch's history in this repository.
+// GitHub names the head repository's branch, so a fork PR from the fork's
+// own main reports head_branch main for a commit main doesn't have. When
+// GitHub can't be asked, it names no ref (fail closed), so no branch-filtered
+// job runs on it. Answers are remembered per branch and commit, since one
+// commit's suites and runs arrive together.
+func (g *Ingress) checkRef(ctx context.Context, event string, p webhookPayload) string {
+	hook, branch := checkHead(event, p)
+	if hook == nil || branch == "" || hook.HeadSHA == "" {
+		return ""
+	}
+	key := branch + "\x00" + hook.HeadSHA
+	g.mu.Lock()
+	on, known := g.branches[key]
+	g.mu.Unlock()
+	if !known {
+		var err error
+		if on, err = g.c.onBranch(ctx, g.s.Repo, branch, hook.HeadSHA); err != nil {
+			return ""
+		}
+		g.mu.Lock()
+		if len(g.branches) >= maxBranchChecks {
+			g.branches = map[string]bool{}
+		}
+		g.branches[key] = on
+		g.mu.Unlock()
+	}
+	if !on {
+		return ""
+	}
+	return "refs/heads/" + branch
+}
+
+func (g *Ingress) deliveryEvent(env envelope, p webhookPayload, checkRef string, received time.Time) domain.Event {
 	ref := p.Ref
 	if ref != "" && !strings.HasPrefix(ref, "refs/") {
 		if p.RefType == "tag" {
@@ -323,19 +381,8 @@ func (g *Ingress) deliveryEvent(env envelope, p webhookPayload, received time.Ti
 	after, conclusion := p.After, ""
 	// A finished check suite or run names its commit, branch and
 	// conclusion, so a job can run when a branch's checks fail.
-	hook := p.CheckRun
-	if env.Event == "check_suite" {
-		hook = p.CheckSuite
-	}
-	if (env.Event == "check_suite" || env.Event == "check_run") && hook != nil {
-		branch := hook.HeadBranch
-		if branch == "" && hook.CheckSuite != nil {
-			branch = hook.CheckSuite.HeadBranch
-		}
-		if branch != "" {
-			ref = "refs/heads/" + branch
-		}
-		after, conclusion = hook.HeadSHA, hook.Conclusion
+	if hook, _ := checkHead(env.Event, p); hook != nil {
+		ref, after, conclusion = checkRef, hook.HeadSHA, hook.Conclusion
 	}
 	data, _ := json.Marshal(DeliveryPayload{Event: env.Event, Action: p.Action, Delivery: env.Delivery, Repo: g.s.Repo, Ref: ref, Before: p.Before, After: after, Conclusion: conclusion, Files: files, Commits: len(p.Commits)})
 	delivery := "delivery/" + env.Delivery

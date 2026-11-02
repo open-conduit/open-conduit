@@ -114,5 +114,6 @@ Runs coalesce: several failing suites that arrive while a run is going become on
 ## Limits
 
 - **Every check suite counts, required or not.** GitHub sends one suite per app (Actions, a third-party CI), and the delivery doesn't say whether its checks are required. Filter with `conclusions`, and tell the playbook to ignore an app whose failures don't matter.
+- **Only commits on this repository's `main` count.** GitHub names a check suite's branch as the contributor's, so a fork PR opened from the fork's own `main` also says `main`. Open Conduit names the branch only after checking the commit is in `main`'s history here, so such a PR runs nothing.
 - **The issue's agent gets the commit, not the log.** It reproduces the failure in its checkout. `github.checks` reads a PR's checks, not a commit's on main.
 - **A missed delivery is not replayed.** GitHub deliveries are [one-shot](../../architecture/schedule-extension/#recoverability-of-trigger-families-x04): if the listener was down when the suite finished, that failure runs nothing, though the next one will.
