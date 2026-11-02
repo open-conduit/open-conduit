@@ -7,7 +7,7 @@ Dependabot or Renovate opens the upgrade PRs, and Open Conduit gives each one an
 
 This page uses the bots you may already run, rather than a scheduled job that upgrades dependencies itself. They already know your ecosystems, group and schedule upgrades, and open one PR per change. The part they can't do is fix what an upgrade breaks, and that is what the agent does.
 
-It is [pull request Work](../../architecture/github-extension/#pull-request-work): a `pull_requests` route whose `authors` are the bots claims each of their PRs as its own Work. PRs by anyone else fall through to the next route.
+It is [pull request Work](../../architecture/github-extension/#pull-request-work): a `pull_requests` route whose `authors` are the bots claims each of their PRs as its own Work. Naming a bot there admits it, so the entry's `admit` needn't let in strangers for it. PRs by anyone else fall through to the next route.
 
 ## Example config
 

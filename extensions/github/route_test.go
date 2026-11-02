@@ -272,11 +272,20 @@ func TestRouteClaimsPullRequests(t *testing.T) {
 	if d := matchRoute(t, scope, deps, open, nil); d.Match || !strings.Contains(d.Reason, "not one of this route's authors") {
 		t.Fatalf("an authors route claimed alice's PR: %+v", d)
 	}
+	// It admits them by name though admit.authors doesn't name their
+	// association, but not from a fork, and admits no one else by it.
 	for _, login := range []string{"dependabot[bot]", "renovate[bot]"} {
 		bot := pull
-		bot.Author = login
-		if !matchRoute(t, scope, deps, event(gh.TypePullOpen, gh.PullRequestKey(7), gh.SchemaPull, bot), nil).Match {
-			t.Fatalf("an authors route did not claim %s's PR", login)
+		bot.Author, bot.AuthorAssociation = login, "NONE"
+		if d := matchRoute(t, scope, deps, event(gh.TypePullOpen, gh.PullRequestKey(7), gh.SchemaPull, bot), nil); !d.Match {
+			t.Fatalf("an authors route did not claim %s's PR: %+v", login, d)
+		}
+		if d := matchRoute(t, scope, pulls, event(gh.TypePullOpen, gh.PullRequestKey(7), gh.SchemaPull, bot), nil); d.Match {
+			t.Fatalf("a route without authors admitted %s: %+v", login, d)
+		}
+		bot.Fork = true
+		if d := matchRoute(t, scope, deps, event(gh.TypePullOpen, gh.PullRequestKey(7), gh.SchemaPull, bot), nil); d.Match || !strings.Contains(d.Reason, "fork") {
+			t.Fatalf("an authors route claimed %s's fork: %+v", login, d)
 		}
 	}
 	closed := pull
