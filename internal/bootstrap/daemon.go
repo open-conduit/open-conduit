@@ -212,6 +212,45 @@ func toolbeltBeside(self string) string {
 	return ""
 }
 
+// stableToolbelt points <state>/toolbelt/os at the `os` in dir and returns
+// <state>/toolbelt, the toolbelt directory executions are given. A package
+// manager installs each version in a directory of its own and removes the
+// old one on upgrade (Homebrew's Caskroom/open-conduit/<version>), so a run
+// whose PATH, git credential helper or MCP server named that directory
+// would lose its toolbelt mid-turn. The link outlives the install; each
+// daemon start re-points it, atomically, at the install it runs from. With
+// no toolbelt (dir is "") it returns "".
+func stableToolbelt(stateDir, dir string) (string, error) {
+	if dir == "" {
+		return "", nil
+	}
+	target := filepath.Join(dir, "os")
+	if real, err := filepath.EvalSymlinks(target); err == nil {
+		target = real
+	}
+	if !filepath.IsAbs(target) {
+		return "", fmt.Errorf("toolbelt %s is not an absolute path", target)
+	}
+	stable := filepath.Join(stateDir, "toolbelt")
+	if err := os.MkdirAll(stable, 0o755); err != nil {
+		return "", err
+	}
+	link := filepath.Join(stable, "os")
+	if got, err := os.Readlink(link); err == nil && got == target {
+		return stable, nil
+	}
+	tmp := link + ".new"
+	_ = os.Remove(tmp)
+	if err := os.Symlink(target, tmp); err != nil {
+		return "", err
+	}
+	if err := os.Rename(tmp, link); err != nil {
+		_ = os.Remove(tmp)
+		return "", err
+	}
+	return stable, nil
+}
+
 // ErrInstallRemoved reports that the daemon's own executable or its
 // toolbelt went away while it ran, as an upgrade does when it replaces the
 // install directory. The daemon stops rather than give executions a toolbelt
@@ -330,6 +369,14 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer lock.Close()
+	// Executions get the toolbelt through a link this daemon re-points, so
+	// one still running when an upgrade removes the old install finds the
+	// new `os` once the daemon restarts on it.
+	if dir, err := stableToolbelt(o.StateDir, o.ToolbeltDir); err != nil {
+		d.log.Warn("executions get the install's own toolbelt directory, which an upgrade removes", "error", err)
+	} else {
+		d.o.ToolbeltDir, o.ToolbeltDir = dir, dir
+	}
 	// Each execution's toolbelt is served on a socket of its own in its run
 	// directory, answered by the current generation's server.
 	if d.endpoints, err = management.NewEndpoints(lock, o.StateDir, "", func(id domain.ID) http.Handler {
