@@ -60,6 +60,52 @@ func TestReconcileFirstIngress(t *testing.T) {
 		t.Fatal("a one-shot delivery passed without a one-shot family")
 	}
 }
+
+// A push-only source (every family one-shot) has no canonical observation:
+// its delivery yields only the one-shot event and reconcile completes empty.
+// It may not yield or reconcile observations, nor claim a canonical one.
+func TestPushOnlyIngress(t *testing.T) {
+	pushOnly := func() conformance.IngressFixture {
+		f := ingressFixture()
+		i := f.Ingress.(*reference.Ingress)
+		i.Declaration.Families = i.Declaration.Families[1:]
+		i.PushResult.Observations = nil
+		i.Pages = map[string]extension.Snapshot{"": {ScanID: "scan", Complete: true}}
+		f.Canonical = extension.Observation{}
+		return f
+	}
+	conformance.RunIngress(t, pushOnly)
+	for name, c := range map[string]struct {
+		f    func() conformance.IngressFixture
+		want string
+	}{
+		"push yields an observation": {func() conformance.IngressFixture {
+			f := pushOnly()
+			f.Ingress.(*reference.Ingress).PushResult.Observations = ingressFixture().Ingress.(*reference.Ingress).PushResult.Observations
+			return f
+		}, "yields observations"},
+		"reconcile yields an observation": {func() conformance.IngressFixture {
+			f := pushOnly()
+			f.Ingress.(*reference.Ingress).Pages = map[string]extension.Snapshot{"": {ScanID: "scan", Complete: true, Observations: ingressFixture().Ingress.(*reference.Ingress).PushResult.Observations}}
+			return f
+		}, "reconciles observations"},
+		"a canonical observation is claimed": {func() conformance.IngressFixture {
+			f := pushOnly()
+			f.Canonical = ingressFixture().Canonical
+			return f
+		}, "canonical observation"},
+		"push yields no one-shot event": {func() conformance.IngressFixture {
+			f := pushOnly()
+			f.Ingress.(*reference.Ingress).PushResult.Events = nil
+			return f
+		}, "one-shot fixture missing"},
+	} {
+		if err := conformance.CheckIngress(c.f()); err == nil || !strings.Contains(err.Error(), c.want) {
+			t.Errorf("%s: %v, want %q", name, err, c.want)
+		}
+	}
+}
+
 func TestObservationDiffAndPushOverlap(t *testing.T) {
 	f := ingressFixture()
 	current := f.Canonical
