@@ -166,6 +166,16 @@ func TestParseHook(t *testing.T) {
 	if _, err := c.ParseHook(h, body, "s3cret", time.Now()); err == nil {
 		t.Fatal("an hour-old delivery was taken")
 	}
+	h, body = signed(t, map[string]any{"type": "Issue", "action": "create", "webhookTimestamp": time.Now().Add(time.Hour).UnixMilli(), "data": map[string]any{"identifier": "ENG-5"}})
+	if _, err := c.ParseHook(h, body, "s3cret", time.Now()); !errors.Is(err, tracker.ErrSignature) {
+		t.Fatal("a delivery from the future was taken")
+	}
+	body = []byte(`{"type":"Issue","action":"create","data":{"identifier":"ENG-5"}}`)
+	h = http.Header{}
+	h.Set("Linear-Signature", tracker.SignHMAC("s3cret", body))
+	if _, err := c.ParseHook(h, body, "s3cret", time.Now()); !errors.Is(err, tracker.ErrSignature) {
+		t.Fatal("a delivery without a timestamp was taken")
+	}
 	h, body = signed(t, map[string]any{"type": "Issue", "action": "create", "data": map[string]any{"identifier": "eng-5"}})
 	hook, err := c.ParseHook(h, body, "s3cret", time.Now())
 	if err != nil || len(hook.Issues) != 1 || hook.Issues[0] != "ENG-5" || hook.ID == "" {

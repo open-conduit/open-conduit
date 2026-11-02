@@ -207,7 +207,7 @@ GORELEASER ?= goreleaser
 RELEASE_DIR = dist/release
 release-snapshot:
 	@scripts/require-tool.sh $(GORELEASER) 'install GoReleaser v2 (https://goreleaser.com/install/), or set GORELEASER'
-	$(GORELEASER) release --snapshot --clean
+	$(GORELEASER) release --snapshot --clean --skip=sign
 	@set -eu; host=$$($(GO) env GOOS)_$$($(GO) env GOARCH); \
 		test $$(ls $(RELEASE_DIR)/open-conduit_*.tar.gz | wc -l) -eq 4; \
 		test $$(wc -l < $(RELEASE_DIR)/checksums.txt) -eq 4; \

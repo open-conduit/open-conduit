@@ -56,6 +56,9 @@
     <span class="st-item{{if ne .Name "agents"}} st-wide{{end}}"{{with .Setting}} title="{{.}}"{{end}}>{{poolName .Name}} slots <b>{{.InUse}}</b>/{{if .Limit}}{{.Limit}}{{else}}∞{{end}}{{if .Waiting}} · {{.Waiting}} waiting{{end}}</span>
     {{- end}}
     <span class="st-spacer"></span>
+    {{- with .Page.CSRF}}
+    <form class="st-form" method="post" action="/signout"><input type="hidden" name="csrf" value="{{.}}"><button type="submit" class="st-item st-signout" title="End every browser's session; the sign-in URL still works">Sign out everywhere</button></form>
+    {{- end}}
     <button type="button" class="st-item st-help" data-help hidden aria-label="Keyboard shortcuts"><kbd class="kbd">?</kbd></button>
   </footer>
 

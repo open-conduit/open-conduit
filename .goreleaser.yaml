@@ -59,6 +59,20 @@ archives:
 checksum:
   name_template: checksums.txt
 
+# checksums.txt is signed keylessly with cosign, from the release workflow's
+# GitHub OIDC identity, into checksums.txt.sigstore.json (a Sigstore bundle:
+# the signature, its certificate and its transparency-log entry). That says
+# the release workflow on main published the checksums, which in turn cover
+# every archive; install.sh checks it when cosign is installed. Needs cosign
+# on PATH and the workflow's id-token: write; `make release-snapshot` skips it.
+signs:
+  - id: checksums
+    cmd: cosign
+    artifacts: checksum
+    signature: "${artifact}.sigstore.json"
+    args: ["sign-blob", "--yes", "--bundle=${signature}", "${artifact}"]
+    output: true
+
 snapshot:
   version_template: "{{ incpatch .Version }}-snapshot.{{ .ShortCommit }}"
 
