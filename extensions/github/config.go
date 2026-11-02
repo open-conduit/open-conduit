@@ -236,6 +236,12 @@ type ExtensionConfig struct {
 	// with `claim: pull_requests` claims as Work of its own, alongside any
 	// Work that owns the PR's issue.
 	TrackPullRequests bool `json:"track_pull_requests,omitempty"`
+	// AcknowledgeIssues also observes a copy of each newly opened issue
+	// under its own key (`issue/N/ack`), which a route with
+	// `claim: acknowledgements` claims as Work of its own when the issue's
+	// author is one admit.authors doesn't admit. The copy never owns the
+	// issue's key, so the issue can still be claimed.
+	AcknowledgeIssues bool `json:"acknowledge_issues,omitempty"`
 	// Admit is who may start Work by opening an issue or a PR (default:
 	// the repository's owner, members and collaborators, never a fork).
 	Admit *Admit `json:"admit,omitempty"`
@@ -278,6 +284,7 @@ type Settings struct {
 	BaseBranch                 string
 	NoChecks                   time.Duration
 	TrackPulls                 bool
+	AckIssues                  bool
 	// Authors are the admitted author associations (upper case, or
 	// AnyAuthor); Forks admits PRs from forks.
 	Authors []string
@@ -310,7 +317,7 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 	}
 	s = Settings{Namespace: c.Namespace, Scope: c.Scope, Repo: c.Repo, TrackerRepo: c.Repo, TrackerNS: c.Namespace, TrackIssues: true,
 		Labels: DefaultLabels(), ClosedHorizon: 168 * time.Hour, Projection: c.Projection, WebhookSecret: c.WebhookSecret, ManageWebhook: c.ManageWebhook,
-		TrackPulls: c.TrackPullRequests, Authors: DefaultAdmitAuthors}
+		TrackPulls: c.TrackPullRequests, AckIssues: c.AcknowledgeIssues, Authors: DefaultAdmitAuthors}
 	if c.Admit != nil {
 		s.Forks = c.Admit.Forks
 		if c.Admit.Authors != nil {
@@ -395,6 +402,9 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 	case c.NoChecksMinutes > 0:
 		s.NoChecks = time.Duration(c.NoChecksMinutes) * time.Minute
 	}
+	if s.AckIssues && !s.TrackIssues {
+		return s, errors.New("github extension: acknowledge_issues needs track_issues")
+	}
 	if c.ManageWebhook && c.WebhookSecret == "" {
 		return s, errors.New("github extension: manage_webhook needs webhook_secret")
 	}
@@ -431,6 +441,7 @@ func ExtensionSettings(data json.RawMessage) []extension.Setting {
 		extension.Setting{Name: "base_branch", Value: s.BaseBranch},
 		extension.Setting{Name: "manage_webhook", Value: s.ManageWebhook},
 		extension.Setting{Name: "track_pull_requests", Value: s.TrackPulls},
+		extension.Setting{Name: "acknowledge_issues", Value: s.AckIssues},
 		extension.Setting{Name: "admit_authors", Value: strings.Join(s.Authors, ", ")},
 		extension.Setting{Name: "admit_forks", Value: s.Forks},
 		extension.Setting{Name: "closed_horizon_hours", Value: int(s.ClosedHorizon.Hours())})

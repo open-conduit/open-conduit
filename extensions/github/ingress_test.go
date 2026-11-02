@@ -905,3 +905,73 @@ func TestReviewKeepsItsVersionAcrossForcePush(t *testing.T) {
 	// still agree.
 	sameIdentity(t, "review", onlyObservation(t, f.push(t, "pull_request_review", "d-review", hook)), after[item])
 }
+
+// With acknowledge_issues, each newly opened issue's first generation is
+// also observed under its acknowledgement key, the same way by push and
+// reconcile. The copy carries only what the opening fixed, so a later
+// label or body edit doesn't re-observe it, and a reopening isn't copied.
+// An old issue, or one whose author's permission couldn't be read, isn't
+// copied; an entry without the option observes no copies.
+func TestCopiesOfIssueOpeningsForAcknowledgement(t *testing.T) {
+	f := newFixture(t, `,"acknowledge_issues":true`)
+	fk := f.fake
+	outsider := githubtest.User{Login: "mallory", Type: "User"}
+	n := fk.OpenIssue("Header wobbles", "on mobile", outsider)
+	fk.SetAssociation(n, "NONE")
+	item, ack := "issue/"+strconv.Itoa(n), "issue_ack/"+strconv.Itoa(n)
+	scanned := f.scan(t)
+	copied := scanned[ack]
+	if key(scanned[item]) != gh.IssueKey(n, "") || key(copied) != gh.IssueAckKey(n) || copied.Event.Type != gh.TypeIssueOpen {
+		t.Fatalf("original keyed %s, copy %+v", key(scanned[item]), copied.Event)
+	}
+	if p := payload[gh.IssuePayload](t, copied); p.Number != n || p.Author != "mallory" || p.AuthorAssociation != "NONE" || p.Body != "" {
+		t.Fatalf("copy payload %+v", p)
+	}
+	res := f.push(t, "issues", "d-1", fk.IssuesHook("opened", n))
+	if len(res.Observations) != 2 {
+		t.Fatalf("push observed %d, want the issue and its copy", len(res.Observations))
+	}
+	sameIdentity(t, "issue", res.Observations[0], scanned[item])
+	sameIdentity(t, "copy", res.Observations[1], copied)
+
+	fk.SetLabels(n, "bug")
+	res = f.push(t, "issues", "d-2", fk.IssuesHook("labeled", n))
+	if len(res.Observations) != 2 || res.Observations[0].Version == scanned[item].Version || res.Observations[1].Version != copied.Version {
+		t.Fatalf("a label edit re-observed the copy: %+v", res.Observations)
+	}
+	fk.CloseIssue(n, "completed")
+	fk.ReopenIssue(n)
+	if res := f.push(t, "issues", "d-3", fk.IssuesHook("reopened", n)); len(res.Observations) != 1 {
+		t.Fatalf("a reopening was copied: %+v", res.Observations)
+	}
+
+	// A member whose permission couldn't be read is not taken for an
+	// outsider: no copy until a read succeeds.
+	member := fk.OpenIssue("Private member", "", githubtest.User{Login: "priya", Type: "User"})
+	fk.SetAssociation(member, "CONTRIBUTOR")
+	fk.SetCollaborator("priya", "write")
+	fk.FailNext("/repos/"+repo+"/collaborators/", 1)
+	if res := f.push(t, "issues", "d-4", fk.IssuesHook("opened", member)); len(res.Observations) != 1 {
+		t.Fatalf("an unread permission was copied: %+v", res.Observations)
+	}
+	if res := f.push(t, "issues", "d-5", fk.IssuesHook("opened", member)); len(res.Observations) != 2 || payload[gh.IssuePayload](t, res.Observations[1]).AuthorPermission != "write" {
+		t.Fatalf("a read permission was not copied: %+v", res.Observations)
+	}
+
+	// An issue opened longer than AckWindow ago is not acknowledged.
+	f.now = fk.Now().Add(gh.AckWindow + time.Hour)
+	if _, ok := f.scan(t)[ack]; ok {
+		t.Fatal("an old issue's opening was copied")
+	}
+
+	plain := newFixture(t, "")
+	plain.fake.OpenIssue("Header", "", outsider)
+	for item := range plain.scan(t) {
+		if strings.HasPrefix(item, "issue_ack/") {
+			t.Fatalf("%s observed without acknowledge_issues", item)
+		}
+	}
+	if _, err := gh.ParseExtension([]byte(`{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","track_issues":false,"acknowledge_issues":true}`), nil); err == nil {
+		t.Fatal("acknowledge_issues without track_issues validated")
+	}
+}

@@ -288,6 +288,10 @@ type bound struct {
 	// pull is the PR a PR's own Work is for (it owns the PR's key, key,
 	// and no issue); 0 otherwise.
 	pull int
+	// ack marks an issue's acknowledgement Work: it owns the copy of the
+	// issue's opening (key), not the issue, so it reads and comments on
+	// number but does no issue Work's work (PRs, holds, uploads).
+	ack bool
 }
 
 // bind resolves the Work a call serves and the GitHub issue it owns.
@@ -298,6 +302,9 @@ func (t *Tools) bind(ctx context.Context, a extension.Authority) (*bound, error)
 	}
 	if b.number == 0 {
 		return nil, refuse("no_issue", "this Work is not a GitHub issue of a registered repository")
+	}
+	if b.ack {
+		return nil, refuse("acknowledgement", "this Work acknowledges issue #%d; it may read the issue and comment on it, and nothing more", b.number)
 	}
 	return b, nil
 }
@@ -353,6 +360,17 @@ func (t *Tools) bindWork(ctx context.Context, a extension.Authority) (*bound, er
 			}
 		}
 		return b, nil
+	}
+	for _, k := range w.CorrelationKeys {
+		n, ok := ParseIssueAckKey(k.ExternalID)
+		if !ok {
+			continue
+		}
+		for _, s := range sources {
+			if s.Settings.Scope == string(w.ScopeID) && s.Settings.Namespace == k.Source && s.Settings.TrackIssues {
+				return &bound{a: a, work: w, key: k, issue: s, code: s, number: n, ack: true}, nil
+			}
+		}
 	}
 	for _, k := range w.CorrelationKeys {
 		n, ok := ParsePullRequestKey(k.ExternalID)
@@ -532,6 +550,12 @@ func (t *Tools) context(ctx context.Context, b *bound, data json.RawMessage) (an
 			"pr_url": b.code.Client.web + "/" + b.code.Settings.Repo + "/pull/" + strconv.Itoa(b.pull),
 			"work":   string(b.work.ID), "scope": string(b.work.ScopeID),
 			"rules": "the repository's CLAUDE.md or AGENTS.md (and any rule skills they list)"}, nil
+	}
+	if b.ack {
+		// An acknowledgement: the issue it answers, and no branch to work on.
+		return map[string]any{"repo": b.code.Settings.Repo, "issue": b.number, "acknowledgement": true,
+			"issue_url": b.issue.Client.web + "/" + b.issue.Settings.Repo + "/issues/" + strconv.Itoa(b.number),
+			"work":      string(b.work.ID), "scope": string(b.work.ScopeID)}, nil
 	}
 	base, err := t.base(ctx, b)
 	if err != nil {
