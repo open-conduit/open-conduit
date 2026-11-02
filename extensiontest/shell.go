@@ -133,8 +133,16 @@ func shellMain(dir string, stdout, stderr io.Writer) int {
 		return fail(fmt.Errorf("launched for turn %d, but only %d are scripted", n, len(turns)))
 	}
 	turn := turns[n-1]
+	if turn.State == "finished" {
+		// The claude-code participant's finished, which the scaffold's e2e
+		// test used to end on, is completed for one release.
+		fmt.Fprintf(stderr, "extensiontest: turn %d ends \"finished\", which is deprecated: end it with Ends(\"completed\"), or use UseFakeClaude()\n", n)
+		turn.State = "completed"
+	}
 	switch turn.State {
 	case "completed", "failed", "handoff", "waiting":
+	case "building", "review", "help", "done":
+		return fail(fmt.Errorf("turn %d ends %q, a claude-code turn state: a shell turn ends completed, failed, handoff or waiting (after a wait call); use UseFakeClaude() to keep the claude-code participant", n, turn.State))
 	default:
 		return fail(fmt.Errorf("turn %d ends %q: a shell turn ends completed, failed, handoff or waiting", n, turn.State))
 	}

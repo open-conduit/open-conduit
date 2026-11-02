@@ -63,7 +63,8 @@ func TestCLIArgs(t *testing.T) {
 
 // TestScriptedShellTurns plays turns against a stand-in `os` on PATH: each
 // call's output is its result, an exit 1 a refusal, the turn's state is
-// declared with `os outcome` (but not for waiting), an unknown state and a
+// declared with `os outcome` (but not for waiting), the deprecated
+// finished is completed, a claude-code state that keeps the Work open and a
 // launch past the last turn fail.
 func TestScriptedShellTurns(t *testing.T) {
 	bin := t.TempDir()
@@ -83,7 +84,8 @@ func TestScriptedShellTurns(t *testing.T) {
 	s, err := ScriptedShell(t.TempDir(),
 		Turn{Calls: []Call{{Operation: "good", Input: map[string]any{"a": 1}}, {Operation: "bad"}}, State: "completed", Summary: "done"},
 		Turn{Calls: []Call{{Operation: "wait", Input: map[string]any{"match": map[string]any{"types": []string{"e"}}}}}, State: "waiting"},
-		Turn{State: "finished"})
+		Turn{State: "finished"},
+		Turn{State: "help"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -109,11 +111,18 @@ func TestScriptedShellTurns(t *testing.T) {
 	if string(calls) != want {
 		t.Fatalf("os calls:\n%s\nwant\n%s", calls, want)
 	}
-	if code := shellMain(s.dir, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "completed, failed, handoff or waiting") {
-		t.Fatalf("a work-issue state was taken: %d %s", code, errOut.String())
+	if code := shellMain(s.dir, &out, &errOut); code != 0 || !strings.Contains(errOut.String(), `ends "finished", which is deprecated`) {
+		t.Fatalf("turn 3, the deprecated finished: %d %s", code, errOut.String())
+	}
+	if calls, _ := os.ReadFile(log); !strings.HasSuffix(string(calls), "outcome completed --summary turn 3 --request-id turn3-outcome\n") {
+		t.Fatalf("finished was not declared completed:\n%s", calls)
 	}
 	errOut.Reset()
-	if code := shellMain(s.dir, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "only 3 are scripted") {
+	if code := shellMain(s.dir, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "use UseFakeClaude()") {
+		t.Fatalf("a work-issue state that keeps the Work open was taken: %d %s", code, errOut.String())
+	}
+	errOut.Reset()
+	if code := shellMain(s.dir, &out, &errOut); code == 0 || !strings.Contains(errOut.String(), "only 4 are scripted") {
 		t.Fatalf("a launch past the last turn: %d %s", code, errOut.String())
 	}
 }
