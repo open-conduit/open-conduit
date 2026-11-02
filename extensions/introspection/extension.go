@@ -5,8 +5,10 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -57,6 +59,7 @@ type Extension struct {
 	mu         sync.Mutex
 	configured bool
 	enabled    map[domain.ID]Config // enabled scopes' entries
+	disabled   map[domain.ID]Config // disabled scopes' entries
 	force      bool                 // a new generation: reconcile now
 	lastEnsure time.Time
 	lastRead   time.Time
@@ -130,23 +133,30 @@ func (x *Extension) Start(_ context.Context, h inproc.Host) error {
 // Work with the generation at once (startup and every committed apply), as
 // the minute-paced task does between generations.
 func (x *Extension) Configure(ctx context.Context, p protocol.ConfigureParams) {
-	enabled := map[domain.ID]Config{}
+	read := func(entries []protocol.ConfigEntry) map[domain.ID]Config {
+		out := map[domain.ID]Config{}
+		for _, e := range entries {
+			scope := domain.ID(e.ScopeID)
+			if e.Type != Type {
+				continue
+			}
+			if _, seen := out[scope]; seen {
+				continue
+			}
+			// An invalid entry reads as an empty config.
+			c, _ := ParseConfig(e.Config)
+			out[scope] = c
+		}
+		return out
+	}
+	enabled, disabled := read(p.Entries), read(p.Disabled)
 	telemetry := false
-	for _, e := range p.Entries {
-		scope := domain.ID(e.ScopeID)
-		if e.Type != Type {
-			continue
-		}
-		if _, seen := enabled[scope]; seen {
-			continue
-		}
-		c, _ := ParseConfig(e.Config)
-		enabled[scope] = c
+	for _, c := range enabled {
 		telemetry = telemetry || c.Telemetry
 	}
 	x.telemetry.Store(telemetry)
 	x.mu.Lock()
-	x.configured, x.enabled, x.force = true, enabled, true
+	x.configured, x.enabled, x.disabled, x.force = true, enabled, disabled, true
 	x.mu.Unlock()
 	if err := x.ensure(ctx); err != nil {
 		x.setCode("timers", code(err))
@@ -207,49 +217,28 @@ func (x *Extension) Tasks() []inproc.Task {
 	}
 }
 
-// entries are every scope's entry: the enabled scopes' from configure, and
-// a disabled scope's from its stored configuration, whose timers and Work
-// wait for it (B05). configured maps every stored scope to whether it has
-// an entry, for the removal policy.
-func (x *Extension) entries(tx storage.Tx) ([]Entry, map[domain.ID]bool, error) {
-	scopes, err := tx.ListScopes()
-	if err != nil {
-		return nil, nil, err
-	}
+// entries are every scope's entry: the enabled scopes' and the disabled
+// scopes' from configure, whose timers and Work wait for them (B05).
+// configured maps each of those scopes to true; the removal policy adds
+// the scopes of the extension's Work that have no entry (retire).
+func (x *Extension) entries() ([]Entry, map[domain.ID]bool) {
 	x.mu.Lock()
-	enabled := x.enabled
-	x.mu.Unlock()
+	defer x.mu.Unlock()
 	var out []Entry
 	configured := map[domain.ID]bool{}
-	for _, s := range scopes {
-		if c, ok := enabled[s.ID]; ok {
-			out = append(out, Entry{Scope: s.ID, Enabled: true, Config: c})
-			configured[s.ID] = true
+	for scope, c := range x.enabled {
+		out = append(out, Entry{Scope: scope, Enabled: true, Config: c})
+		configured[scope] = true
+	}
+	for scope, c := range x.disabled {
+		if _, ok := x.enabled[scope]; ok {
 			continue
 		}
-		c, on, has := storedEntry(s)
-		if on || !has {
-			// Enabled without an entry in this generation (or a scope the
-			// configuration no longer has): nothing to keep.
-			configured[s.ID] = false
-			continue
-		}
-		out = append(out, Entry{Scope: s.ID, Enabled: false, Config: c})
-		configured[s.ID] = true
+		out = append(out, Entry{Scope: scope, Enabled: false, Config: c})
+		configured[scope] = true
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Scope < out[j].Scope })
-	return out, configured, nil
-}
-
-func (x *Extension) snapshot(ctx context.Context) ([]Entry, map[domain.ID]bool, error) {
-	var entries []Entry
-	var configured map[domain.ID]bool
-	err := x.host.Store.Transact(ctx, storage.Guard{Now: x.host.Now()}, func(tx storage.Tx) error {
-		var err error
-		entries, configured, err = x.entries(tx)
-		return err
-	})
-	return entries, configured, err
+	return out, configured
 }
 
 func (x *Extension) setCode(pass, code string) {
@@ -286,10 +275,7 @@ func (x *Extension) ensure(ctx context.Context) error {
 	if !due {
 		return nil
 	}
-	entries, configured, err := x.snapshot(ctx)
-	if err != nil {
-		return err
-	}
+	entries, configured := x.entries()
 	if !x.host.DryRun {
 		res, err := Ensure(ctx, x.host.Store, x.host.Now(), x.host.Timers, entries)
 		c := strings.Join(res.Codes, ",")
@@ -312,8 +298,19 @@ func (x *Extension) ensure(ctx context.Context) error {
 func (x *Extension) retire(ctx context.Context, configured map[domain.ID]bool) {
 	var retired []domain.Work
 	err := x.host.Store.Transact(ctx, storage.Guard{Now: x.host.Now()}, func(tx storage.Tx) error {
-		var err error
-		retired, err = Retired(tx, configured)
+		// The extension's Work in a scope with no entry, enabled or
+		// disabled, is Work the configuration no longer has a use for.
+		works, err := tx.ListWorks()
+		if err != nil {
+			return err
+		}
+		all := maps.Clone(configured)
+		for _, w := range works {
+			if _, ok := all[w.ScopeID]; !ok && slices.Contains(WorkKinds(), w.Kind) {
+				all[w.ScopeID] = false
+			}
+		}
+		retired, err = Retired(tx, all)
 		return err
 	})
 	c := ""
@@ -435,10 +432,7 @@ func (x *Extension) check(ctx context.Context, _ protocol.CheckConfig) inproc.Ch
 	var entries []Entry
 	timers := map[domain.ID]domain.Timer{}
 	_ = x.host.Store.Transact(ctx, storage.Guard{Now: x.host.Now()}, func(tx storage.Tx) error {
-		var err error
-		if entries, _, err = x.entries(tx); err != nil {
-			return err
-		}
+		entries, _ = x.entries()
 		all, err := tx.ListTimers()
 		for _, t := range all {
 			timers[t.ID] = t
