@@ -1,6 +1,7 @@
 package web
 
 import (
+	"context"
 	"fmt"
 	"strconv"
 	"time"
@@ -73,15 +74,36 @@ func clockTime(t, now time.Time) string {
 	return t.Format("2 Jan") + " " + hm
 }
 
-// sourceNames are display names for sources; any other source shows as
-// its own name, so a new extension needs nothing here.
-var sourceNames = map[string]string{"github": "GitHub", "slack": "Slack", "schedule": "Schedule", "introspection": "Introspection", "core": "Core", "linear": "Linear", "jira": "Jira"}
-
-func sourceLabel(s string) string {
-	if n, ok := sourceNames[s]; ok {
-		return n
+// titleOf is a source's display name: the core's own, or the title its
+// extension gives (GET /v1/extensions, from its manifest), else its name.
+func titleOf(titles map[string]string, s string) string {
+	if s == "core" {
+		return "Core"
+	}
+	if t := titles[s]; t != "" {
+		return t
 	}
 	return s
+}
+
+// sourceLabel is the source's display name, from the extensions' titles,
+// cached briefly; a daemon too old to list them gives none.
+func (s *Server) sourceLabel(name string) string {
+	s.tmu.Lock()
+	defer s.tmu.Unlock()
+	now := s.opts.Now()
+	if s.tat.IsZero() || now.Sub(s.tat) > worldTTL || now.Before(s.tat) {
+		ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
+		defer cancel()
+		s.tcache = map[string]string{}
+		if ts, err := s.src.Extensions(ctx); err == nil {
+			for _, t := range ts {
+				s.tcache[t.Name] = t.Title
+			}
+		}
+		s.tat = now
+	}
+	return titleOf(s.tcache, name)
 }
 
 // money is a cost in dollars.

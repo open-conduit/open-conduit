@@ -64,6 +64,9 @@ var (
 
 func (x *installed) Name() string { return x.m.Name }
 
+// Title is the manifest's display name (inproc.Titled).
+func (x *installed) Title() string { return x.m.Title }
+
 func (x *installed) validator(kind, typ string) func(json.RawMessage, []string) error {
 	switch {
 	case x.r != nil:

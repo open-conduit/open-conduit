@@ -91,6 +91,9 @@ type Options struct {
 	// Pages are the pages extensions contribute to the web view (GET
 	// /pages; optional: without it there are none).
 	Pages func() []Page
+	// Titles are the extensions' display names by name (GET /extensions;
+	// optional: without it each shows as its name).
+	Titles func() map[string]string
 	// Nudge asks the host loop for an immediate pass (optional).
 	Nudge func()
 	// ProviderTimeout and ViewDeadline time the action providers' calls for
@@ -318,6 +321,7 @@ var routes = []route{
 	{"GET", []string{"work", "*", "panels"}, false, false, (*Server).listWorkPanels},
 	{"GET", []string{"work", "*", "config-candidate"}, false, false, (*Server).configCandidate},
 	{"GET", []string{"pages"}, false, false, (*Server).listPages},
+	{"GET", []string{"extensions"}, false, false, (*Server).listExtensions},
 	{"GET", []string{"scopes", "*", "panels"}, false, false, (*Server).listScopePanels},
 	{"GET", []string{"scopes", "*", "route", "samples"}, false, false, (*Server).routeSamples},
 	{"GET", []string{"events"}, false, false, (*Server).listEvents},
