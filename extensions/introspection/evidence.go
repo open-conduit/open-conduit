@@ -40,8 +40,33 @@ type Note struct {
 	Work      string                 `json:"work"`
 	Execution string                 `json:"execution"`
 	Key       *domain.CorrelationKey `json:"key,omitempty"`
-	Body      string                 `json:"body"`
-	At        time.Time              `json:"at"`
+	// Origin is where the note came from, recorded when it was logged
+	// (absent on notes logged before it was, or by other writers).
+	Origin *Origin   `json:"origin,omitempty"`
+	Body   string    `json:"body"`
+	At     time.Time `json:"at"`
+}
+
+// Origin is a note's provenance: the Event that triggered the logging
+// execution and the logging Work as its source describes it (the Work's
+// display: who asked for it, its ref and first link). A reviewer reads it
+// to tell a correction an untrusted author's text led to from one the
+// owner gave.
+type Origin struct {
+	Trigger       string `json:"trigger,omitempty"`
+	TriggerType   string `json:"trigger_type,omitempty"`
+	TriggerSource string `json:"trigger_source,omitempty"`
+	Title         string `json:"title,omitempty"`
+	Ref           string `json:"ref,omitempty"`
+	Link          string `json:"link,omitempty"`
+	Requester     string `json:"requester,omitempty"`
+}
+
+// Provenance is one note of a group and where it came from.
+type Provenance struct {
+	ID     string  `json:"id"`
+	Work   string  `json:"work"`
+	Origin *Origin `json:"origin,omitempty"`
 }
 
 // Note kinds.
@@ -123,11 +148,16 @@ type Group struct {
 	First   time.Time               `json:"first"`
 	Last    time.Time               `json:"last"`
 	Samples []string                `json:"samples"`
+	// Provenance (notes only) lists each note with the Work that logged it
+	// and that Work's trigger and requester.
+	Provenance []Provenance `json:"provenance,omitempty"`
 }
 
 type item struct {
 	id, kind, lead, work, body string
 	key                        *domain.CorrelationKey
+	origin                     *Origin
+	note                       bool
 	at                         time.Time
 }
 
@@ -163,6 +193,9 @@ func groups(items []item) []Group {
 		}
 		if it.key != nil && !slices.Contains(g.Keys, *it.key) {
 			g.Keys = append(g.Keys, *it.key)
+		}
+		if it.note {
+			g.Provenance = append(g.Provenance, Provenance{ID: it.id, Work: it.work, Origin: it.origin})
 		}
 		if it.at.After(g.Last) {
 			g.Last = it.at
@@ -207,7 +240,7 @@ func settings(cfg Config, run string) Settings {
 	if run == WorkTriage {
 		s = cfg.Triage
 	}
-	out := Settings{Notes: cfg.NoteNamespaces(), Land: LandPush, Remote: "origin"}
+	out := Settings{Notes: cfg.NoteNamespaces(), Land: LandPR, Remote: "origin"}
 	if s == nil {
 		return out
 	}
@@ -251,7 +284,7 @@ func Aggregate(tx storage.Tx, cfg Config, scope domain.ID, run string) (Evidence
 		}
 		items := make([]item, 0, len(notes))
 		for _, n := range notes {
-			items = append(items, item{id: n.ID, kind: n.Area, lead: lead(n.Body), work: n.Work, body: n.Body, key: n.Key, at: n.At})
+			items = append(items, item{id: n.ID, kind: n.Area, lead: lead(n.Body), work: n.Work, body: n.Body, key: n.Key, origin: n.Origin, note: true, at: n.At})
 		}
 		return &Section{Count: len(notes), Groups: groups(items)}, nil
 	}

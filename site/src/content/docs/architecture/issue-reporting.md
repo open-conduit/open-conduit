@@ -23,7 +23,7 @@ A scope's `introspection` entry enables the extension for that scope and the sco
 {"extensions": [{"name": "introspection", "type": "introspection", "secret_names": [], "config": {
    "notes": ["team.notes"],
    "sweep":  {"cron": "41 8 * * *", "time_zone": "UTC", "rules": ["CLAUDE.md"], "guide": "docs/rules.md", "land": "pr", "remote": "origin"},
-   "triage": {"cron": "51 8 * * *", "land": "push", "file_issues": true},
+   "triage": {"cron": "51 8 * * *", "land": "pr", "file_issues": true},
    "host_watch": {"interval_seconds": 60, "load": 1.5, "memory": 90, "disk": 90, "disks": ["~/work"]},
    "telemetry": true}}],
  "routes": [
@@ -44,7 +44,7 @@ A scope's `introspection` entry enables the extension for that scope and the sco
 | Field | Meaning |
 | --- | --- |
 | `notes` | Further coordination KV namespaces whose records (the same JSON shape) the sweep and triage read besides the extension's own `introspection.notes`. None by default. This is a data contract, not an import. |
-| `sweep`, `triage` | Standard five-field `cron` and IANA `time_zone`. If a block is absent, that run is not scheduled; it can still run by hand. `rules`/`guide` are sweep settings. `land` is `push` or `pr`, and `remote` defaults to `origin`. `file_issues` is a triage setting. |
+| `sweep`, `triage` | Standard five-field `cron` and IANA `time_zone`. If a block is absent, that run is not scheduled; it can still run by hand. `rules`/`guide` are sweep settings. `land` is `pr` (the default) or `push`, and `remote` defaults to `origin`. A push lands the agents' corrections on the main branch with nobody reviewing them, so it is an explicit opt-in. `file_issues` is a triage setting. |
 | `host_watch` | Reading interval, load per CPU / memory % / disk % thresholds (defaults 1.5/90/90) and extra disk paths besides the state directory's. If absent, the watch is off. |
 | `telemetry` | Writes the extension's telemetry events to `logs/introspection-telemetry.jsonl`. |
 
@@ -102,9 +102,11 @@ A slot Event's identity is its instant, so a replayed firing is deduplicated. It
 - **Sweep**: the scope's unhandled `correction` notes, grouped by area and leading line.
 - **Settings**: `notes`, `rules`, `guide`, `land`, `remote`, `file_issues` and the schedule, read from the current generation.
 
-Each group has its count, the report or note ids, the distinct Work they came from, the distinct correlation keys of the Work notes came from, first and last times, and up to two sample bodies. The groups are a starting point. The playbooks still group by cause.
+Each group has its count, the report or note ids, the distinct Work they came from, the distinct correlation keys of the Work notes came from, first and last times, and up to two sample bodies. A group of notes also has `provenance`: each note's id, the Work that logged it and its origin (below). The groups are a starting point. The playbooks still group by cause.
 
-`introspection.correction` and `introspection.problem` write the extension's own namespace `introspection.notes` (`<kind>/<time>/<digest>`). A note records the logging Work's first correlation key rather than any source's issue number, so a GitHub, tracker or Slack Work logs notes the same way. The evidence reads that namespace, then the configured ones, through public storage, filtered by the note's `scope`. A note's id is `<namespace>:<key>`. The extension never writes another extension's namespace. `introspection.notes.resolve` records a handled note in `introspection.notes` too (`handled/<scope>/<id>`), and later evidence leaves it out. Records in other namespaces stay intact.
+`introspection.correction` and `introspection.problem` write the extension's own namespace `introspection.notes` (`<kind>/<time>/<digest>`). A note records the logging Work's first correlation key rather than any source's issue number, so a GitHub, tracker or Slack Work logs notes the same way. It also records its `origin`, read from the store when it is logged: the Event that triggered the logging execution (id, type and source) and the Work's display as its source set it (title, ref, first link and requester). Neither needs the extension to know the source. The evidence reads that namespace, then the configured ones, through public storage, filtered by the note's `scope`. A note's id is `<namespace>:<key>`. The extension never writes another extension's namespace. `introspection.notes.resolve` records a handled note in `introspection.notes` too (`handled/<scope>/<id>`), and later evidence leaves it out. Records in other namespaces stay intact.
+
+Provenance is there because a correction becomes a standing instruction. Text in an issue or comment can talk an agent into logging a "correction" that is really a stranger's instruction, and once a sweep folds it into `CLAUDE.md` every later session carries it. So the sweep lands through a PR by default, and its playbook lists every folded correction with its provenance in the PR body, so a reviewer can spot one that came from an untrusted author. The requester is who opened the Work, not who wrote the text that triggered the logging turn: on an owner's issue a stranger's comment still shows the owner. `domain.Event` has no source-neutral author, so the triggering event's author is not recorded, and filtering corrections by author membership is not built either; both wait on a source-neutral notion of the actor. Until then provenance can't vouch for a correction, so the sweep playbook drops every correction that asks agents to fetch or install something from outside the project, run a downloaded script, send data out or loosen a check, whoever the provenance names.
 
 ## Fix work and cited causation
 
@@ -202,7 +204,7 @@ The namespace `introspection.reports` has one record per report at `report/<scop
 
 The playbooks join the Claude Code plugin with the other playbooks, and every introspection action goes through the `introspection.*` operations:
 
-- **`sweep`** corrections are folded into the rule files and landed as a push or PR, then resolved.
+- **`sweep`** corrections are folded into the rule files and landed as a PR (or a push when `land` is `push`), then resolved.
 - **`triage-reports`** starts from the evidence and groups by cause. Causes in the project's own files get a requested fix instead of an inline commit, so each fix is its own traceable Work. Remaining causes are filed when `file_issues` is set, or else written up. Handled reports and problems are resolved.
 - **`fix-report`** makes the smallest edit, lands it and resolves the fix's reports.
 

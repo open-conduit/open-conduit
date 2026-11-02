@@ -83,6 +83,7 @@ func (t *Tools) note(ctx context.Context, a extension.Authority, in domain.Paylo
 			}
 		}
 		n := Note{Kind: kind, Area: area, Scope: string(a.ScopeID), Work: string(a.WorkID), Execution: string(a.ExecutionID), Body: body, At: at}
+		n.Origin = noteOrigin(tx, a)
 		if w, err := tx.Work(a.WorkID); err == nil && len(w.CorrelationKeys) > 0 {
 			k := w.CorrelationKeys[0]
 			n.Key = &k
@@ -97,6 +98,29 @@ func (t *Tools) note(ctx context.Context, a extension.Authority, in domain.Paylo
 		return domain.Payload{}, err
 	}
 	return output(map[string]any{"logged": key})
+}
+
+// noteOrigin is where a note came from: the logging execution's trigger
+// Event and the Work's own account of itself (its source's ref, link and
+// requester, from the Work's display). It is best effort: what the store
+// doesn't have stays empty.
+func noteOrigin(tx storage.Tx, a extension.Authority) *Origin {
+	o := Origin{Trigger: string(a.TriggerID)}
+	if a.TriggerID != "" {
+		if e, err := tx.Event(a.TriggerID); err == nil {
+			o.TriggerType, o.TriggerSource = e.Event.Type, e.Event.Source
+		}
+	}
+	if w, err := tx.Work(a.WorkID); err == nil && w.Display != nil {
+		o.Title, o.Ref, o.Requester = w.Display.Title, w.Display.Ref, w.Display.Requester
+		if len(w.Display.Links) > 0 {
+			o.Link = w.Display.Links[0].URL
+		}
+	}
+	if o == (Origin{}) {
+		return nil
+	}
+	return &o
 }
 
 // WorkNotes counts the notes of each kind a Work's agents logged.

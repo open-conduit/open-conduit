@@ -547,6 +547,17 @@ func TestAgentNotes(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	// The Work's source describes it (who asked, its ref and link); each
+	// note records that and the logging execution's trigger as its origin.
+	shown := &domain.WorkDisplay{Title: "Fix the widget", Ref: "ENG-7", Requester: "outsider", Links: []domain.Link{{Label: "ENG-7", URL: "https://tracker.example/ENG-7"}}}
+	e.read(func(tx storage.Tx) error {
+		cur, err := tx.Work(w.ID)
+		if err != nil {
+			return err
+		}
+		cur.Display = shown
+		return tx.PutWork(cur, cur.Revision)
+	})
 	a := e.start(w.ID)
 	c := e.must(a, is.OpCorrection, "c1", map[string]any{"area": "writing", "body": "Summarised the page in the lede.\n\nSay what the page is for."})
 	if again := e.must(a, is.OpCorrection, "c1", map[string]any{"area": "writing", "body": "Summarised the page in the lede.\n\nSay what the page is for."}); again["logged"] != c["logged"] {
@@ -565,6 +576,34 @@ func TestAgentNotes(t *testing.T) {
 		notes, err := is.Notes(tx, []string{is.NotesNamespace}, repScope, is.NoteCorrection, true)
 		if err != nil || len(notes) != 1 || notes[0].Key == nil || *notes[0].Key != key || notes[0].Area != "writing" || notes[0].Work != string(w.ID) {
 			t.Fatalf("corrections: %+v %v", notes, err)
+		}
+		x, err := tx.Execution(a.Lease.ExecutionID)
+		if err != nil {
+			return err
+		}
+		trigger, err := tx.Event(x.TriggerID)
+		if err != nil {
+			return err
+		}
+		want := is.Origin{Trigger: string(x.TriggerID), TriggerType: trigger.Event.Type, TriggerSource: trigger.Event.Source,
+			Title: shown.Title, Ref: shown.Ref, Link: shown.Links[0].URL, Requester: shown.Requester}
+		if o := notes[0].Origin; o == nil || *o != want || want.Trigger == "" || want.TriggerType == "" {
+			t.Fatalf("correction origin: %+v, want %+v", o, want)
+		}
+		// The sweep's evidence lists each correction with its origin, and a
+		// sweep with no land setting opens a PR rather than pushing.
+		ev, err := is.Aggregate(tx, is.Config{}, repScope, is.WorkSweep)
+		if err != nil {
+			return err
+		}
+		if ev.Settings.Land != is.LandPR || ev.Corrections == nil || len(ev.Corrections.Groups) != 1 {
+			t.Fatalf("sweep evidence: %+v", ev)
+		}
+		if p := ev.Corrections.Groups[0].Provenance; len(p) != 1 || p[0].ID != notes[0].ID || p[0].Work != string(w.ID) || p[0].Origin == nil || *p[0].Origin != want {
+			t.Fatalf("sweep provenance: %+v", p)
+		}
+		if tr, err := is.Aggregate(tx, is.Config{}, repScope, is.WorkTriage); err != nil || tr.Settings.Land != is.LandPR || tr.Problems == nil || len(tr.Problems.Groups[0].Provenance) != 1 {
+			t.Fatalf("triage evidence: %+v %v", tr, err)
 		}
 		counts, err := is.WorkNotes(tx, w.ID)
 		if err != nil || counts[is.NoteCorrection] != 1 || counts[is.NoteProblem] != 1 {
