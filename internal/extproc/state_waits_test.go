@@ -93,3 +93,66 @@ func TestStateSequenceIsTheLatest(t *testing.T) {
 		t.Fatalf("state.sequence: %#v %v", out, err)
 	}
 }
+
+func (t waitsTx) ListWorks() ([]domain.Work, error) {
+	var out []domain.Work
+	for _, w := range t.s.works {
+		out = append(out, w)
+	}
+	return out, nil
+}
+
+// An extension reads and cancels Work of its own declared kinds in any
+// scope, so it can retire Work left where its entry was removed (#428);
+// another kind's Work outside its scopes stays not found and uncancellable.
+func TestOwnWorkKindsReachEveryScope(t *testing.T) {
+	now := time.Date(2026, 11, 2, 12, 0, 0, 0, time.UTC)
+	store := waitsStore{works: map[domain.ID]domain.Work{
+		"here":    {ID: "here", ScopeID: "eng", Kind: "other.kind"},
+		"left":    {ID: "left", ScopeID: "gone", Kind: "acme.job"},
+		"foreign": {ID: "foreign", ScopeID: "gone", Kind: "other.kind"},
+	}}
+	m := protocol.Manifest{Protocol: []int{protocol.Version}, Name: "acme", Version: "1.0.0", Command: []string{"./acme"},
+		Provides: protocol.Provides{Routes: []protocol.RouteDecl{{Handler: "acme"}}, WorkKinds: []protocol.WorkKindDecl{{Kind: "acme.job"}}}}
+	var cancelled []domain.ID
+	s, err := NewService(m, Deps{Store: store, Now: func() time.Time { return now }, Scopes: func() []domain.ID { return []domain.ID{"eng"} },
+		CancelWork: func(_ context.Context, w domain.ID, _ domain.Revision, _, _ string) (domain.ID, error) {
+			cancelled = append(cancelled, w)
+			return "cancel-" + w, nil
+		}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	call := func(method string, p any) (any, error) {
+		raw, _ := json.Marshal(p)
+		return s.Handle(context.Background(), method, raw)
+	}
+	out, err := call("state.works", protocol.StateParams{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]bool{}
+	for _, w := range out.([]protocol.Work) {
+		got[w.ID] = true
+	}
+	if !got["here"] || !got["left"] || got["foreign"] {
+		t.Fatalf("state.works: %v, want here and left", got)
+	}
+	if _, err := call("state.work", protocol.StateParams{ID: "left"}); err != nil {
+		t.Fatalf("state.work of its own kind elsewhere: %v", err)
+	}
+	if _, err := call("state.work", protocol.StateParams{ID: "foreign"}); protocol.ErrorCode(err) != protocol.CodeNotFound {
+		t.Fatalf("state.work of another kind elsewhere: %v, want not_found", err)
+	}
+	if _, err := call("work.cancel", protocol.WorkCancelParams{WorkID: "left", Reason: "removed", Key: "k"}); err != nil {
+		t.Fatalf("work.cancel of its own kind elsewhere: %v", err)
+	}
+	for _, id := range []string{"foreign", "here"} {
+		if _, err := call("work.cancel", protocol.WorkCancelParams{WorkID: id, Reason: "removed", Key: "k"}); protocol.ErrorCode(err) != protocol.CodeUnauthorized {
+			t.Fatalf("work.cancel of %s: %v, want unauthorized", id, err)
+		}
+	}
+	if len(cancelled) != 1 || cancelled[0] != "left" {
+		t.Fatalf("cancelled %v, want left", cancelled)
+	}
+}
