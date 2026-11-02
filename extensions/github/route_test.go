@@ -332,3 +332,18 @@ func TestRouteClaimsPullRequests(t *testing.T) {
 		t.Fatal("a pull_requests route fed an issue's Work")
 	}
 }
+
+func TestLabelsBacklog(t *testing.T) {
+	for skip, want := range map[string]string{"": "", "human": "human", "human,Backlog": "Backlog", "backlog,human": "backlog"} {
+		l := gh.Labels{}
+		if skip != "" {
+			l.Skip = strings.Split(skip, ",")
+		}
+		if got := l.Backlog(); got != want {
+			t.Fatalf("skip %q: backlog %q, want %q", skip, got, want)
+		}
+	}
+	if gh.DefaultLabels().Backlog() != "backlog" {
+		t.Fatal("default backlog label")
+	}
+}

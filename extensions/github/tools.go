@@ -768,6 +768,7 @@ func (t *Tools) issueCreate(ctx context.Context, b *bound, data json.RawMessage)
 		Wait    []string `json:"wait"`
 		Until   string   `json:"until"`
 		Project string   `json:"project"`
+		Backlog bool     `json:"backlog"`
 	}
 	if err := decode(data, &in); err != nil {
 		return nil, err
@@ -777,12 +778,22 @@ func (t *Tools) issueCreate(ctx context.Context, b *bound, data json.RawMessage)
 	}
 	body, labels := in.Body, []string(nil)
 	held := len(in.Wait) > 0 || in.Until != ""
+	if held && in.Backlog {
+		return nil, refuse("backlog_held", "a backlogged issue waits for a person to take it off the backlog, so it can't also be held: give backlog, or wait/until, not both")
+	}
 	src, other, err := t.issueProject(ctx, b, in.Project, true)
 	if err != nil {
 		return nil, err
 	}
 	if other && held {
 		return nil, refuse("hold_unsupported", "an issue in project %s can't be held: open it without wait or until, and that project's routes pick it up", in.Project)
+	}
+	if in.Backlog {
+		l := src.Settings.Labels.Backlog()
+		if l == "" {
+			return nil, refuse("backlog_unsupported", "this project keeps no backlog (no skip labels are configured), so the issue would be worked at once")
+		}
+		labels = []string{l}
 	}
 	var h Hold
 	if held {
@@ -806,7 +817,10 @@ func (t *Tools) issueCreate(ctx context.Context, b *bound, data json.RawMessage)
 		out["state"], out["note"] = "pending", "the issue is being confirmed and will be opened once; do not open it again"
 	}
 	if held {
-		out["held"] = "it starts once " + h.Describe()
+		out["held"] = h.Waiting()
+	}
+	if in.Backlog {
+		out["backlog"] = "it is on the backlog and isn't worked until a person takes it off"
 	}
 	return out, nil
 }

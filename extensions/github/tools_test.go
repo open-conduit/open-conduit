@@ -41,6 +41,17 @@ func TestParseCondAndHoldMarkers(t *testing.T) {
 	if h.Describe() != "PR #1257 to merge, or the agent on #12 to end a turn in review, or 25 Oct 2026 09:00 UTC" {
 		t.Fatalf("describe %s", h.Describe())
 	}
+	if h.Waiting() != "it waits for PR #1257 to merge, or the agent on #12 to end a turn in review, or until 25 Oct 2026 09:00 UTC" {
+		t.Fatalf("waiting %s", h.Waiting())
+	}
+	for hold, want := range map[*gh.Hold]string{
+		{Conds: []gh.Cond{{Kind: gh.CondIssue, Ref: "342", On: "closed"}}}: "it waits for #342 to close",
+		{Until: &at}: "it waits until 25 Oct 2026 09:00 UTC",
+	} {
+		if got := hold.Waiting(); got != want {
+			t.Fatalf("waiting %q, want %q", got, want)
+		}
+	}
 	// The last valid marker wins; both runtimes read and write them.
 	body := "a\n<!-- runAt: 2026-10-25T09:00Z -->\nb [waitFor: pr:3] <!-- waitFor: nonsense -->"
 	got, ok := gh.HoldIn(body)

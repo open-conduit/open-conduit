@@ -19,7 +19,7 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | `github.issue.view` | `number`?, `project`? | the issue and every comment on it (another issue with `number`; one in another project with `project` and `number`) |
 | `github.issue.comment` | `body`, `number`?, `project`? | comment on the issue (`number` for another agent's issue; `project` and `number` for one in another project) |
 | `github.issue.list` | `project`? | the repository's open issues (another project's with `project`), to check for one before opening another |
-| `github.issue.create` | `title`, `body`, `wait`?, `until`?, `project`? | open a new issue; with `wait` or `until`, it isn't worked until then (see Waiting); with `project`, in that project instead |
+| `github.issue.create` | `title`, `body`, `wait`?, `until`?, `backlog`?, `project`? | open a new issue; with `wait` or `until`, it isn't worked until then (see Waiting); with `backlog: true`, it goes on the backlog and isn't worked until a person takes it off; with `project`, in that project instead |
 | `github.pr.list` | | the issue's PRs, open or not |
 | `github.pr.create` | `title`, `body`, `base`?, `draft`?, `closes_issue`? | open a PR from the issue's branch; its merge closes the issue unless `closes_issue` is `false` |
 | `github.pr.edit` | `number`, `title`?, `body`?, `draft`? | change the title or description of a PR you opened from the issue's branch, or its draft state (`draft: false` marks it ready for review) |
@@ -56,7 +56,7 @@ Write `<project>/` before the number for another project under the same Open Con
 
 `github.wait` is the last thing you do in a turn, because every call after it is refused until you are resumed: after it, end the turn with the state the work is in (`review` if the owner has something to look at, else `done`). Open Conduit wakes you with what happened (or that the time came first). A comment, a check result or a merge on your own issue also wakes you; that ends the wait, so once you've dealt with it, wait again if what you were waiting for still hasn't happened. Don't use this to wait for your own PR's checks, its merge or a reply: Open Conduit already resumes you for those.
 
-When follow-up work shouldn't start yet (wave 2 once wave 1 merges, a check once a date comes), open it now with the same conditions: `github.issue.create` with `{"title": …, "body": …, "wait": ["pr:1257:merged"]}`. Open Conduit holds it and starts it when the condition is met, so nobody has to remember to open it later.
+When follow-up work shouldn't start yet (wave 2 once wave 1 merges, a check once a date comes), open it now with the same conditions: `github.issue.create` with `{"title": …, "body": …, "wait": ["pr:1257:merged"]}`. Open Conduit holds it and starts it when the condition is met, so nobody has to remember to open it later. When follow-up work should wait for a person instead (an idea for later, something the owner asked to backlog), open it with `"backlog": true`; don't hold it until a far-off date.
 
 ## Ending a turn
 

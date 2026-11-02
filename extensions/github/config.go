@@ -160,6 +160,21 @@ func (l Labels) merge(base Labels) Labels {
 	return out
 }
 
+// Backlog is the skip label that puts a new issue on the backlog: the one
+// named backlog when it is configured, else the first skip label ("" when
+// none is, so nothing keeps an issue back).
+func (l Labels) Backlog() string {
+	for _, s := range l.Skip {
+		if strings.EqualFold(s, "backlog") {
+			return s
+		}
+	}
+	if len(l.Skip) > 0 {
+		return l.Skip[0]
+	}
+	return ""
+}
+
 // Statuses are the projected status labels; they are excluded from issue
 // observations so status projection never generates input.
 func (l Labels) Statuses() []string { return []string{l.Help, l.Review, l.Done} }

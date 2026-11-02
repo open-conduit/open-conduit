@@ -238,6 +238,22 @@ func (h Hold) Describe() string {
 	return strings.Join(parts, ", or ")
 }
 
+// Waiting says, as a sentence, what a held issue waits for before it starts:
+// "it waits for #342 to close", "it waits until 2027-01-01T00:00Z", or both.
+func (h Hold) Waiting() string {
+	if h.Cancel {
+		return "it is no longer held"
+	}
+	var parts []string
+	if len(h.Conds) > 0 {
+		parts = append(parts, "for "+CondsText(h.Conds))
+	}
+	if h.Until != nil {
+		parts = append(parts, "until "+h.Until.UTC().Format(extension.DueLayout))
+	}
+	return "it waits " + strings.Join(parts, ", or ")
+}
+
 // WaitDescription is what a Wait on the hold is for, for operator views:
 // its conditions in words, or its time alone.
 func (h Hold) WaitDescription() string {
