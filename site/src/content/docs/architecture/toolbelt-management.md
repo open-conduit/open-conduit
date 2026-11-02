@@ -56,6 +56,8 @@ The daemon registers each extension's operations on every generation's toolbelt 
 - Slack operations (`slack.context`, `slack.thread`, `slack.reply`) as a second extension registration ([Slack extension](../slack-extension/)).
 - Introspection operations, only for a generation with an enabled `introspection` entry.
 
+**Operation names.** Each extension owns the namespace of its registration name: every operation it registers is `<name>.<suffix>`, so `github.*` belongs to the `github` registration alone. A registration name is a lower-case letter followed by lower-case letters, digits, `-` or `_` (`extension.RegistrationName`, the same rule as a package manifest's name), with no dot, so two namespaces never nest. `Toolbelt.Register` checks `extension.OwnsOperation` and refuses an operation outside the registration's namespace with `invalid` whatever order extensions load in, so a package that starts first can't take the calls meant for another. A collision (a repeated registration name, a builtin such as `emit`, or an operation registered twice) is refused with `conflict`. Either error names the operation and why, and a refused registration registers nothing. An installed package's operations are also checked against its manifest name when it is discovered and installed, and its name can't be one an in-process extension already registers. The shared `operation_namespace` toolbelt case checks the rule on every toolbelt implementation, with a negative control that accepts squatting.
+
 Translated emissions (`Operation.Emit`) are accepted under the same fence, replay and causal checks as `emit` ([issue reporting](../issue-reporting/)). The daemon narrows each binding's grant to the operations registered on the generation's toolbelt, so a binding that still lists the operations of a disabled extension keeps running (its calls are `undeclared`) instead of failing token issuance.
 
 ## Configuration and secrets
@@ -145,4 +147,5 @@ These notes record how this part was built and the evidence gathered at each sta
 - Ticket 03-04 registered the GitHub tool operations, added translated wait operations and made handler refusals return `422`.
 - Ticket 04-01 registered the Slack operations.
 - Issue #162 gave each execution its own toolbelt socket and token directory in a host-owned run directory, a prerequisite for process sandboxes (#160). Before it, every execution's toolbelt was the shared `management.sock`, and executors wrote the token to a single file in their own segment directory.
+- Issue #348 restricted each extension's operations to its own name's namespace. Before it, the first registration to claim an operation name took it, whatever its own name.
 - Ticket 03-08 added translated emissions, passed the configured causal limits to the toolbelt and narrowed binding grants to registered operations. Before it, an execution's first emission off a new root pinned the default causal limits.

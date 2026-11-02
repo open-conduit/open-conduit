@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"sync"
 	"time"
 
@@ -34,19 +35,25 @@ func builtin(n string) bool {
 func (t *Toolbelt) Register(r extension.Registration) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if r.Name == "" || r.Version != extension.ContractVersion {
-		return extension.ErrInvalid
+	if !extension.RegistrationName(r.Name) || r.Version != extension.ContractVersion {
+		return fmt.Errorf("%w: registration name %q", extension.ErrInvalid, r.Name)
 	}
 	if t.registrations[r.Name] {
-		return extension.ErrConflict
+		return fmt.Errorf("%w: extension %q is already registered", extension.ErrConflict, r.Name)
 	}
 	names, events := map[string]bool{}, map[string]bool{}
 	for _, op := range r.Operations {
 		if op.Name == "" || op.Handler == nil {
 			return extension.ErrInvalid
 		}
-		if builtin(op.Name) || t.operations[op.Name].Handler != nil || names[op.Name] {
-			return extension.ErrConflict
+		if builtin(op.Name) {
+			return fmt.Errorf("%w: operation %q is a builtin", extension.ErrConflict, op.Name)
+		}
+		if !extension.OwnsOperation(r.Name, op.Name) {
+			return fmt.Errorf("%w: extension %q may register only %s.<name>, not %q", extension.ErrInvalid, r.Name, r.Name, op.Name)
+		}
+		if t.operations[op.Name].Handler != nil || names[op.Name] {
+			return fmt.Errorf("%w: operation %q is already registered", extension.ErrConflict, op.Name)
 		}
 		names[op.Name] = true
 	}

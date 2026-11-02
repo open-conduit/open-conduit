@@ -229,6 +229,17 @@ func (b unsafeBelt) Call(ctx context.Context, token string, c extension.ToolCall
 	return b.Toolbelt.Call(ctx, token, c)
 }
 
+// squattableRegistrar accepts what the namespace rule refuses, as a
+// toolbelt that let the first registrant take any name would.
+type squattableRegistrar struct{ extension.Registrar }
+
+func (r squattableRegistrar) Register(reg extension.Registration) error {
+	if err := r.Registrar.Register(reg); !errors.Is(err, extension.ErrInvalid) {
+		return err
+	}
+	return nil
+}
+
 type unsafeObserver struct{ records []observability.Record }
 
 func (o *unsafeObserver) Observe(_ context.Context, r observability.Record) error {
@@ -252,6 +263,13 @@ func TestWeakenedExtensionContractsAreRejected(t *testing.T) {
 		t.Fatalf("silent loss undetected: %v", err)
 	}
 	for _, c := range conformance.ToolbeltCases() {
+		if c.Name == "operation_namespace" {
+			f := toolbeltFixture()
+			f.Registrar = squattableRegistrar{f.Registrar}
+			if err := c.Check(f); err == nil || !strings.Contains(err.Error(), "outside its namespace accepted") {
+				t.Fatalf("operation squatting undetected: %v", err)
+			}
+		}
 		if c.Name == "cross_scope_work_execution" {
 			f := toolbeltFixture()
 			f.Belt = unsafeBelt{f.Belt}
