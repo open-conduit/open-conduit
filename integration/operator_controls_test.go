@@ -104,8 +104,9 @@ func TestManagementOperatorControls(t *testing.T) {
 	if w.Hold == nil {
 		t.Fatal("attach must leave an existing hold in place")
 	}
+	// Without --revision, release acts on the current revision.
 	var released client.ControlResult
-	h.mustCLI(&released, "work", "release", id, "--revision", w.Revision, "--key", "release-1")
+	h.mustCLI(&released, "work", "release", id, "--key", "release-1")
 	attempt, err := h.scheduler.Start(ctx, domain.ID(id))
 	if err != nil {
 		t.Fatalf("released Work did not start: %v", err)
@@ -118,7 +119,7 @@ func TestManagementOperatorControls(t *testing.T) {
 	<-h.tokens
 	<-h.secrets
 	var events client.Page[client.Event]
-	h.mustCLI(&events, "events", "list", "--work-id", id)
+	h.mustCLI(&events, "events", "list", "--json", "--work-id", id)
 	var types []string
 	for _, e := range events.Items {
 		types = append(types, e.Type)

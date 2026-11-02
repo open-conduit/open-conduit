@@ -54,7 +54,7 @@ func TestManagementExecutionEndpoints(t *testing.T) {
 	start := func(delivery string) runtime.Attempt {
 		t.Helper()
 		var root client.Event
-		h.mustCLI(&root, "events", "emit", "--scope-id", "ops", "--type", "operator.requested", "--delivery-id", delivery)
+		h.mustCLI(&root, "events", "emit", "--scope", "ops", "--type", "operator.requested", "--delivery-id", delivery)
 		a, err := h.scheduler.Start(ctx, domain.ID(root.RoutedWorkID))
 		if err != nil {
 			t.Fatal(err)

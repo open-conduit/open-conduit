@@ -389,7 +389,7 @@ func TestManagementOperatorWorkflow(t *testing.T) {
 		t.Fatalf("causal chain: %+v", chain)
 	}
 	var events client.Page[client.Event]
-	h.mustCLI(&events, "events", "list", "--work-id", workID)
+	h.mustCLI(&events, "events", "list", "--json", "--work-id", workID)
 	if len(events.Items) != 2 {
 		t.Fatalf("events by work: %d", len(events.Items))
 	}
@@ -465,11 +465,11 @@ func TestManagementOperatorWorkflow(t *testing.T) {
 		t.Fatalf("work cancel: %s", w.State)
 	}
 	var executions client.Page[client.Execution]
-	h.mustCLI(&executions, "executions", "list", "--work-id", workID)
+	h.mustCLI(&executions, "executions", "list", "--json", "--work-id", workID)
 	if len(executions.Items) != 2 {
 		t.Fatalf("executions: %d", len(executions.Items))
 	}
-	for _, args := range [][]string{{"executions", "list"}, {"events", "list"}, {"scopes", "list"}, {"work", "list"}, {"waits", "list"}} {
+	for _, args := range [][]string{{"executions", "list", "--json"}, {"events", "list", "--json"}, {"scopes", "list", "--json"}, {"work", "list", "--json"}, {"waits", "list", "--json"}} {
 		out, _, _ := h.cli(args...)
 		if strings.Contains(out, "super-secret") || strings.Contains(out, "printf") || strings.Contains(out, token) {
 			t.Fatalf("%v leaked a secret, reference or token", args)
@@ -619,8 +619,9 @@ func TestManagementConfigReloadAndRedaction(t *testing.T) {
 	if _, errOut, code = h.cli("config", "apply", write("stale.json", narrowed), "--generation", "0"); code != 1 || !strings.Contains(errOut, "generation_conflict") {
 		t.Fatalf("stale generation: %s", errOut)
 	}
+	// Without --generation, apply reads the current generation itself.
 	var applied client.ConfigApplied
-	h.mustCLI(&applied, "config", "apply", write("narrow.json", narrowed), "--generation", "1", "--key", "apply-1")
+	h.mustCLI(&applied, "config", "apply", write("narrow.json", narrowed), "--key", "apply-1")
 	if applied.Generation != "2" {
 		t.Fatalf("generation %s", applied.Generation)
 	}
@@ -825,7 +826,7 @@ func TestManagementDeclaredWaitAndOperatorWake(t *testing.T) {
 		t.Fatal(err)
 	}
 	var waits client.Page[client.Wait]
-	h.mustCLI(&waits, "waits", "list", "--work-id", root.RoutedWorkID, "--state", "active")
+	h.mustCLI(&waits, "waits", "list", "--json", "--work-id", root.RoutedWorkID, "--state", "active")
 	if len(waits.Items) != 1 || waits.Items[0].ID != declared.Wait.ID {
 		t.Fatalf("active waits: %+v", waits.Items)
 	}
