@@ -110,6 +110,7 @@ func TestUnversionedAndUnsafeFilesRejected(t *testing.T) {
 
 // Outcomes stored under the old source-named turn schema are read as
 // domain.TurnSchema once the store opens; any other schema is left alone.
+// The rewrite runs once: a store that records it as done is not rescanned.
 func TestOpenRewritesLegacyTurnSchemas(t *testing.T) {
 	ctx := context.Background()
 	path := filepath.Join(t.TempDir(), "conduit.db")
@@ -123,7 +124,8 @@ func TestOpenRewritesLegacyTurnSchemas(t *testing.T) {
 		t.Fatal(err)
 	}
 	rows := map[string]string{"x1": "github.status.v1", "x2": "acme.result.v1", "x3": ".status.v1", "x4": "core.turn.v1"}
-	stmts := []string{`INSERT INTO scopes VALUES ('s',NULL,'{}')`, `INSERT INTO works VALUES ('w','s',NULL,'{}')`}
+	// A store from before the rewrite has no record of it.
+	stmts := []string{`DELETE FROM metadata WHERE key='rewrite_turn_schema'`, `INSERT INTO scopes VALUES ('s',NULL,'{}')`, `INSERT INTO works VALUES ('w','s',NULL,'{}')`}
 	attempt := 0
 	for id, schema := range rows {
 		attempt++
@@ -152,5 +154,20 @@ func TestOpenRewritesLegacyTurnSchemas(t *testing.T) {
 		if schema != w || !strings.Contains(data, `"status":"review"`) || !strings.Contains(data, "12345678901234567890") {
 			t.Errorf("%s: schema %q data %s, want %q", id, schema, data, w)
 		}
+	}
+	// Once recorded, a later open does not scan again.
+	if _, err = db.Exec(`INSERT INTO executions VALUES ('x5','w',9,0,CAST('{"ID":"x5","Outcome":{"Kind":"handoff","Data":{"Schema":"jira.status.v1","Data":{}}}}' AS BLOB))`); err != nil {
+		t.Fatal(err)
+	}
+	if s, err = Open(ctx, path); err != nil {
+		t.Fatal(err)
+	}
+	s.Close()
+	var schema string
+	if err = db.QueryRow(`SELECT json_extract(CAST(record AS TEXT),'$.Outcome.Data.Schema') FROM executions WHERE id='x5'`).Scan(&schema); err != nil {
+		t.Fatal(err)
+	}
+	if schema != "jira.status.v1" {
+		t.Fatalf("the rewrite ran again on a store that recorded it: %q", schema)
 	}
 }
