@@ -122,6 +122,9 @@ func (f *fake) WorkConfigCandidate(_ context.Context, work string) (client.Confi
 	return *f.candidate, nil
 }
 func (f *fake) Pages(context.Context) ([]client.ExtensionPage, error) { return f.pages, nil }
+func (f *fake) Extensions(context.Context) ([]client.ExtensionTitle, error) {
+	return f.titles, nil
+}
 func (f *fake) ApplyConfigText(_ context.Context, text []byte, hash, generation, _ string) (client.ConfigApplied, error) {
 	if f.applyErr != nil {
 		return client.ConfigApplied{}, f.applyErr

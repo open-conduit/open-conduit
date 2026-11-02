@@ -1,5 +1,9 @@
 // Command check-boundaries enforces B01 against Go's resolved production and test
-// dependency graph. It uses no runtime implementations or third-party packages.
+// dependency graph, and against the source of the core and of composition
+// (#354): the public contracts and the runtime import no third-party module
+// and name no service, executor or workflow, and composition reaches an
+// extension or executor only from the files that wire them. It uses no
+// runtime implementations or third-party packages.
 package main
 
 import (
@@ -36,6 +40,49 @@ func under(path, prefix string) bool {
 // whose pull requests correlate with a tracker's issue keys.
 func trackerKitUser(family string) bool {
 	return family == "extensions/linear" || family == "extensions/jira" || family == "extensions/bitbucket"
+}
+
+// core names the public contracts and the runtime: the packages that hold
+// orchestration semantics and so may import only the standard library and
+// the modules thirdParty allows, and name no service, executor or workflow.
+func core(path string) bool {
+	return public(path) || under(path, "protocol") || under(path, "internal/runtime")
+}
+
+// thirdParty is the allowlist of modules outside this module and the
+// standard library a core package may import, by the core package family
+// that may. It is empty: the core reaches a database, a service SDK or a
+// telemetry pipeline only through an implementation the composition root
+// injects. An entry needs an explicit ownership decision in B01.
+var thirdParty = map[string][]string{}
+
+// standard reports whether an import path is the standard library's: its
+// first element has no dot (Go reserves those paths).
+func standard(path string) bool {
+	return !strings.Contains(strings.SplitN(path, "/", 2)[0], ".")
+}
+
+// foreign is why a core package may not import a dependency outside this
+// module, or "" when it may: a third-party module not in thirdParty, or the
+// standard library's database/sql, whose drivers belong to the storage
+// implementations behind the storage contract.
+func foreign(owner, dependency string) string {
+	if standard(dependency) {
+		if under(dependency, "database/sql") {
+			return "database/sql belongs to a storage implementation"
+		}
+		return ""
+	}
+	for family, modules := range thirdParty {
+		if under(owner, family) {
+			for _, m := range modules {
+				if under(dependency, m) {
+					return ""
+				}
+			}
+		}
+	}
+	return "third-party module " + dependency + " is not in the core's allowlist"
 }
 
 func public(path string) bool {
@@ -185,6 +232,13 @@ func violations(packages []pkg) []string {
 				seen[imported] = true
 				next := append(append([]string{}, chain...), imported)
 				dependency := clean(imported)
+				if !strings.HasPrefix(dependency, module) && core(owner) {
+					// Keep walking: a module that bridges back into this one
+					// is reported for that edge as well.
+					if why := foreign(owner, dependency); why != "" {
+						errors = append(errors, fmt.Sprintf("%s: %s, via %s", root.ImportPath, why, strings.Join(next, " -> ")))
+					}
+				}
 				if under(dependency, setupPackage) || under(dependency, module+"extensions/setup") {
 					errors = append(errors, fmt.Sprintf("%s: the setup extension is an installed package and is never imported, via %s", root.ImportPath, strings.Join(next, " -> ")))
 					continue
@@ -224,11 +278,17 @@ func main() {
 		}
 		packages = append(packages, p)
 	}
-	if failures := violations(packages); len(failures) > 0 {
+	failures := violations(packages)
+	source, err := sourceViolations(".")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, "boundary check:", err)
+		os.Exit(1)
+	}
+	if failures = append(failures, source...); len(failures) > 0 {
 		for _, failure := range failures {
 			fmt.Fprintln(os.Stderr, failure)
 		}
 		os.Exit(1)
 	}
-	fmt.Println("B01 boundaries: production and test dependency closures pass")
+	fmt.Println("B01 boundaries: production and test dependency closures, core vocabulary and composition imports pass")
 }

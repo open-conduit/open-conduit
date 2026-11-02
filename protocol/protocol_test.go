@@ -24,6 +24,92 @@ var firstParty = map[string]bool{
 	"introspection": true, "human": true, "posthog": true, "git": true, "shell": true, "claude-code": true, "legacy-job": true, "setup": true,
 }
 
+// useCases is the 07-01 inventory: the shipped first-party extensions and
+// executors that need each wire method. It lives with the test, not the
+// catalogue, so the public protocol names no service or executor (#354).
+var useCases = map[string][]string{
+	"initialize":                 {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code"},
+	"configure":                  {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog"},
+	"validate":                   {"setup", "github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code", "legacy-job"},
+	"shutdown":                   {"posthog", "introspection", "slack"},
+	"$/cancel":                   {"github", "slack", "claude-code", "shell"},
+	"ingress.push":               {"github", "slack", "linear", "jira", "bitbucket", "schedule"},
+	"ingress.reconcile":          {"github", "slack", "linear", "jira", "bitbucket", "schedule"},
+	"webhook.handle":             {"github", "slack", "linear", "jira", "bitbucket", "schedule"},
+	"ingress.deliver":            {"slack"},
+	"route.match":                {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection"},
+	"route.samples":              {"slack"},
+	"work_kind.trigger":          {"schedule"},
+	"recurrence.next":            {"schedule", "introspection"},
+	"operation.call":             {"github", "slack", "linear", "jira", "bitbucket", "introspection"},
+	"operation.wait":             {"github"},
+	"operation.emit":             {"introspection"},
+	"emit.commit":                {"introspection"},
+	"wait.progress":              {"github"},
+	"dependency.filter":          {"github"},
+	"event.render":               {"github", "slack", "introspection"},
+	"executor.run":               {"shell", "claude-code", "legacy-job", "github"},
+	"executor.wait":              {"shell", "claude-code", "legacy-job", "github"},
+	"executor.recover":           {"shell", "claude-code", "legacy-job"},
+	"executor.resume":            {"shell", "claude-code", "legacy-job"},
+	"executor.interrupt":         {"shell", "claude-code", "legacy-job"},
+	"executor.inject":            {"shell", "claude-code", "legacy-job"},
+	"executor.stop":              {"shell", "claude-code", "legacy-job"},
+	"executor.forget":            {"shell", "claude-code", "legacy-job"},
+	"executor.attach":            {"claude-code"},
+	"execution.persist_recovery": {"shell", "claude-code", "legacy-job", "github"},
+	"resource.acquire":           {"claude-code", "legacy-job"},
+	"resource.lookup":            {"claude-code", "legacy-job"},
+	"provider.acquire":           {"git"},
+	"provider.lookup":            {"git"},
+	"provider.reconcile":         {"git"},
+	"provider.owner_status":      {"git"},
+	"kv.get":                     {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
+	"kv.list":                    {"github", "slack", "linear", "jira", "introspection", "claude-code"},
+	"kv.commit":                  {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
+	"state.work":                 {"github", "slack", "linear", "jira", "bitbucket", "claude-code"},
+	"state.works":                {"github", "slack", "linear", "jira", "schedule", "introspection"},
+	"state.executions":           {"github", "slack", "linear", "jira", "schedule"},
+	"state.event":                {"github"},
+	"state.events":               {"github", "schedule"},
+	"state.scopes":               {"github", "introspection"},
+	"state.timers":               {"schedule", "introspection"},
+	"timer.arm":                  {"schedule", "introspection"},
+	"timer.cancel":               {"schedule", "introspection"},
+	"event.accept":               {"github", "schedule", "introspection"},
+	"work.cancel":                {"introspection"},
+	"artifact.create":            {"shell", "claude-code", "legacy-job"},
+	"artifact.write":             {"shell", "claude-code", "legacy-job"},
+	"artifact.commit":            {"shell", "claude-code", "legacy-job"},
+	"artifact.abort":             {"shell", "claude-code", "legacy-job"},
+	"secret.resolve":             {"github", "slack", "linear", "jira", "bitbucket", "schedule", "posthog"},
+	"task.run":                   {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
+	"telemetry.export":           {"posthog", "introspection"},
+	"telemetry.sink":             {"posthog"},
+	"telemetry.capture":          {"introspection", "posthog"},
+	"probe.list":                 {"setup"},
+	"probe.run":                  {"setup"},
+	"config.base":                {"setup"},
+	"config.edit":                {"setup"},
+	"config.validate":            {"setup"},
+	"config.candidate":           {"setup"},
+	"config.trace":               {"setup"},
+	"check.run":                  {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "claude-code"},
+	"run.environment":            {"github"},
+	"work.annotate":              {"github"},
+	"work.actions":               {"github"},
+	"work.act":                   {"github"},
+	"view.render":                {"human"},
+	"setup.run":                  {"github", "slack", "linear", "jira"},
+	"setup.print":                {"slack", "linear", "jira"},
+	"setup.prompt":               {"slack", "linear", "jira"},
+	"setup.choose":               {"slack"},
+	"setup.open_url":             {"slack", "linear", "jira"},
+	"setup.store_secret":         {"slack", "linear", "jira"},
+	"setup.look_path":            {"slack"},
+	"setup.run_command":          {"slack"},
+}
+
 func TestCatalogueMapsEveryMethodToAShippedUse(t *testing.T) {
 	names := map[string]bool{}
 	for _, m := range protocol.Methods {
@@ -31,10 +117,10 @@ func TestCatalogueMapsEveryMethodToAShippedUse(t *testing.T) {
 			t.Errorf("duplicate method %s", m.Name)
 		}
 		names[m.Name] = true
-		if len(m.UseCases) == 0 || len(m.Contract) == 0 {
+		if len(useCases[m.Name]) == 0 || len(m.Contract) == 0 {
 			t.Errorf("%s: needs a shipped use case and the contract it carries", m.Name)
 		}
-		for _, u := range m.UseCases {
+		for _, u := range useCases[m.Name] {
 			if !firstParty[u] {
 				t.Errorf("%s: unknown use case %q", m.Name, u)
 			}
@@ -51,6 +137,11 @@ func TestCatalogueMapsEveryMethodToAShippedUse(t *testing.T) {
 		// In-transaction calls are host-initiated, answered and bounded.
 		if m.InTransaction && (m.Direction != protocol.HostToExtension || m.Notification) {
 			t.Errorf("%s: an in-transaction method must be a host-to-extension request", m.Name)
+		}
+	}
+	for name := range useCases {
+		if !names[name] {
+			t.Errorf("use cases for %s, which the catalogue doesn't have", name)
 		}
 	}
 	if _, ok := protocol.Lookup("kv.commit"); !ok {

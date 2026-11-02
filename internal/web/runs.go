@@ -242,14 +242,14 @@ func sortWorks(ws []workView, by string, now time.Time) {
 
 // waitingLabel names a sub-rail key: the family's display name, "a time"
 // for a timer alone.
-func waitingLabel(k string) string {
+func waitingLabel(k string, label func(string) string) string {
 	switch k {
 	case "time":
 		return "a time"
 	case "events":
 		return "other events"
 	}
-	return sourceLabel(k)
+	return label(k)
 }
 
 // holdable says whether a hold would be accepted now, as the runtime
@@ -267,8 +267,9 @@ func holdable(w workView) bool {
 	return true
 }
 
-// runsView builds the page from every Work and scope.
-func runsView(wd world, q url.Values, p *page, now time.Time) runsData {
+// runsView builds the page from every Work and scope, labelling sources
+// with label.
+func runsView(wd world, q url.Values, p *page, now time.Time, label func(string) string) runsData {
 	rq := parseRunsQuery(q)
 	d := runsData{Query: rq, Total: len(wd.Works), Watching: len(wd.Scopes)}
 	scopeName := map[string]string{}
@@ -282,7 +283,7 @@ func runsView(wd world, q url.Values, p *page, now time.Time) runsData {
 		spans[w.ScopeID] = true
 		if w.Source != "" && !sources[w.Source] {
 			sources[w.Source] = true
-			d.SourceOpts = append(d.SourceOpts, option{V: w.Source, Label: sourceLabel(w.Source), On: w.Source == rq.Source})
+			d.SourceOpts = append(d.SourceOpts, option{V: w.Source, Label: label(w.Source), On: w.Source == rq.Source})
 		}
 		if w.Executor != "" && !execs[w.Executor] {
 			execs[w.Executor] = true
@@ -341,7 +342,7 @@ func runsView(wd world, q url.Values, p *page, now time.Time) runsData {
 	if rq.G == "waiting" {
 		d.SubAny = railCell{Label: "Anything", N: counts["waiting"], On: rq.W == "", Href: href(q, "w", "")}
 		for k, n := range waiting {
-			d.Sub = append(d.Sub, railCell{Label: waitingLabel(k), N: n, On: rq.W == k, Href: href(q, "w", k)})
+			d.Sub = append(d.Sub, railCell{Label: waitingLabel(k, label), N: n, On: rq.W == k, Href: href(q, "w", k)})
 		}
 		sort.Slice(d.Sub, func(i, j int) bool {
 			if d.Sub[i].N != d.Sub[j].N {
@@ -351,7 +352,7 @@ func runsView(wd world, q url.Values, p *page, now time.Time) runsData {
 		})
 	}
 
-	labels := map[string]string{"scope": "Scope: " + rq.Scope, "source": "Source: " + sourceLabel(rq.Source), "executor": "Executor: " + rq.Executor, "updated": "Changed in the last " + rq.Updated, "q": "“" + rq.Q + "”"}
+	labels := map[string]string{"scope": "Scope: " + rq.Scope, "source": "Source: " + label(rq.Source), "executor": "Executor: " + rq.Executor, "updated": "Changed in the last " + rq.Updated, "q": "“" + rq.Q + "”"}
 	set := map[string]string{"scope": rq.Scope, "source": rq.Source, "executor": rq.Executor, "updated": rq.Updated, "q": rq.Q}
 	var clear []string
 	for _, k := range facetKeys {
@@ -466,7 +467,7 @@ func (s *Server) runsPage(w http.ResponseWriter, r *http.Request) {
 	p := &page{Title: "Runs", Nav: "runs"}
 	wd := s.cachedWorld(ctx, true)
 	p.Err = strings.Join(wd.Errs, "\n")
-	d := runsView(wd, r.URL.Query(), p, s.opts.Now())
+	d := runsView(wd, r.URL.Query(), p, s.opts.Now(), s.sourceLabel)
 	if d.Total == 0 && len(wd.Errs) == 0 {
 		if h, err := s.src.Health(ctx); err == nil {
 			g, _ := strconv.Atoi(h.ConfigGeneration)

@@ -50,6 +50,7 @@ type fake struct {
 
 	// Extension pages, a session's candidate and what applying it does.
 	pages        []client.ExtensionPage
+	titles       []client.ExtensionTitle
 	candidate    *client.ConfigCandidate
 	applyErr     error
 	applied      []string

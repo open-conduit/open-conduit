@@ -36,10 +36,12 @@ type Call struct {
 	RequestID string `json:"request_id,omitempty"`
 }
 
-// Turn is one scripted turn of the fake: its calls in order, then, when
-// Barrier is set, a wait until that file exists (so the test can act while
-// the turn is still running), then the end of the turn with State as its
-// status (finished, review, help, ...).
+// Turn is one scripted turn: its calls in order, then, when Barrier is set,
+// a wait until that file exists (so the test can act while the turn is
+// still running), then the end of the turn with State. For ScriptedShell,
+// State is the attempt's outcome (completed, failed, handoff, or waiting
+// after a wait call); for FakeClaude it is the structured status the turn
+// ends with (whatever the binding's status enum allows).
 type Turn struct {
 	Calls   []Call `json:"calls,omitempty"`
 	Barrier string `json:"barrier,omitempty"`
@@ -47,8 +49,9 @@ type Turn struct {
 	Summary string `json:"summary,omitempty"`
 }
 
-// Result is what one call returned through the toolbelt's MCP server: the
-// tool result's text and whether it was a refusal.
+// Result is what one call returned through the toolbelt: the result's text
+// (the JSON the `os` CLI or its MCP server prints; the error text for a
+// refusal) and whether it was a refusal.
 type Result struct {
 	Operation string `json:"operation"`
 	RequestID string `json:"request_id,omitempty"`
@@ -56,8 +59,9 @@ type Result struct {
 	IsError   bool   `json:"is_error"`
 }
 
-// TurnRecord is what the fake saw in one turn: its arguments, the message
-// it was started or resumed with, its toolbelt endpoint and token, and its
+// TurnRecord is what a participant saw in one turn: its arguments, its
+// input (the message FakeClaude was started or resumed with; the content of
+// OS_INPUT_FILE for ScriptedShell), its toolbelt endpoint and token, and its
 // calls' results. It is written once the calls are made, before the
 // barrier.
 type TurnRecord struct {
@@ -83,53 +87,18 @@ type Claude struct {
 // session transcript under CLAUDE_CONFIG_DIR (so a later turn can resume)
 // and ends each turn with a structured status.
 func FakeClaude(dir string, turns ...Turn) (*Claude, error) {
-	self, err := os.Executable()
+	path, dir, err := writeScript(dir, "claude", fakeEnv, turns)
 	if err != nil {
-		return nil, err
-	}
-	dir, err = filepath.Abs(dir)
-	if err != nil {
-		return nil, err
-	}
-	if err = os.MkdirAll(dir, 0o755); err != nil {
-		return nil, err
-	}
-	b, err := json.Marshal(turns)
-	if err != nil {
-		return nil, err
-	}
-	if err = os.WriteFile(filepath.Join(dir, "turns.json"), b, 0o600); err != nil {
-		return nil, err
-	}
-	script := fmt.Sprintf("#!/bin/sh\n%s=%s exec %s \"$@\"\n", fakeEnv, shellQuote(dir), shellQuote(self))
-	path := filepath.Join(dir, "claude")
-	if err = os.WriteFile(path, []byte(script), 0o755); err != nil {
 		return nil, err
 	}
 	return &Claude{Path: path, dir: dir}, nil
 }
 
 // Turn is the record of turn n (from 1), once that turn has made its calls.
-func (c *Claude) Turn(n int) (TurnRecord, bool) {
-	var r TurnRecord
-	b, err := os.ReadFile(filepath.Join(c.dir, fmt.Sprintf("turn-%d.json", n)))
-	if err != nil || json.Unmarshal(b, &r) != nil {
-		return TurnRecord{}, false
-	}
-	return r, true
-}
+func (c *Claude) Turn(n int) (TurnRecord, bool) { return readTurn(c.dir, n) }
 
 // Turns are the records of the turns played so far.
-func (c *Claude) Turns() []TurnRecord {
-	var out []TurnRecord
-	for n := 1; ; n++ {
-		r, ok := c.Turn(n)
-		if !ok {
-			return out
-		}
-		out = append(out, r)
-	}
-}
+func (c *Claude) Turns() []TurnRecord { return readTurns(c.dir) }
 
 func shellQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", `'\''`) + "'" }
 

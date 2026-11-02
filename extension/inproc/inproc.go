@@ -298,6 +298,14 @@ type Actor interface {
 	Actions(scope domain.ID) map[string]extension.ActionProvider
 }
 
+// Titled extensions give the display name operators read where their Work
+// and sources are listed (an installed package's manifest title). Without
+// one, the extension shows as its name. Title is read after Start and must
+// not change.
+type Titled interface {
+	Title() string
+}
+
 // Paged extensions contribute pages to the operator's web view
 // (extension.Page). Pages is read after Start and must not change.
 type Paged interface {

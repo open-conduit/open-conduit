@@ -193,6 +193,20 @@ func (e manifestExecutor) ResourceMode(raw json.RawMessage) string {
 	return r.ExecutorResourceMode(e.decl.Name)(raw)
 }
 
+// ConfigWarnings asks the package for its warnings about a binding config
+// (config.ConfigWarner): validate with kind executor, whose answer an older
+// package leaves without any.
+func (e manifestExecutor) ConfigWarnings(raw json.RawMessage) []string {
+	if e.x == nil {
+		return nil
+	}
+	r, err := e.x.remote()
+	if err != nil {
+		return nil
+	}
+	return r.ExecutorWarnings(e.decl.Name)(raw)
+}
+
 func (e manifestExecutor) Capabilities() domain.Capabilities { return e.decl.Capabilities.Domain() }
 func (e manifestExecutor) Run(context.Context, extension.RunRequest) (extension.RunHandle, error) {
 	return nil, extension.ErrUnsupported

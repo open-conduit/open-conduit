@@ -251,7 +251,7 @@ func weakenNotes(mode string, ext *sdk.Extension) {
 	case "foreign-kv":
 		base := ext.Configure
 		ext.Configure = func(ctx context.Context, h *sdk.Host, p protocol.ConfigureParams) (protocol.ConfigureResult, error) {
-			_ = h.Commit(ctx, protocol.KVCommitParams{Puts: []protocol.KVPut{{Namespace: "slack.projection.x", Key: "k", Value: []byte("x")}}})
+			_ = h.Commit(ctx, protocol.KVCommitParams{Puts: []protocol.KVPut{{Namespace: "other.projection.x", Key: "k", Value: []byte("x")}}})
 			return base(ctx, h, p)
 		}
 	}

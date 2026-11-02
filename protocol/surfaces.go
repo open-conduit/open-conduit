@@ -76,10 +76,13 @@ type ValidateParams struct {
 	Mode string `json:"mode,omitempty"`
 }
 
-// ValidateResult is the answer to validate: empty for a check, and the mode
-// for kinds resource_mode and executor_mode.
+// ValidateResult is the answer to validate: empty for a check, the mode
+// for kinds resource_mode and executor_mode, and for kind executor the
+// warnings config check shows about a valid binding config
+// (extension.ConfigWarner): fixed sentences that never echo config values.
 type ValidateResult struct {
-	Mode string `json:"mode,omitempty"`
+	Mode     string   `json:"mode,omitempty"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 // RouteBinding is the binding a route binds, as its handler's binding

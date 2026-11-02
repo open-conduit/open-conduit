@@ -75,6 +75,36 @@ func TestGenerate(t *testing.T) {
 		t.Fatalf("secret refs: %v", s.SecretRefs)
 	}
 
+	if s.Bindings[0].Config["playbook"] != "-" {
+		t.Fatalf("claude-code binding config: %v", s.Bindings[0].Config)
+	}
+
+	// With Shell, the binding runs it on the shell executor and the CLI
+	// toolbelt, and asks for no LLM capabilities.
+	cfg, _, err = Generate([]protocol.Manifest{m}, Options{Shell: []string{"/bin/participant"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var shell struct {
+		Scopes []struct {
+			Bindings []struct {
+				Executor   string                     `json:"executor"`
+				Requires   map[string]any             `json:"requires"`
+				Operations []string                   `json:"operations"`
+				Config     map[string]json.RawMessage `json:"config"`
+			} `json:"bindings"`
+		} `json:"scopes"`
+	}
+	if err := json.Unmarshal(cfg, &shell); err != nil {
+		t.Fatal(err)
+	}
+	b := shell.Scopes[0].Bindings[0]
+	var argv bytes.Buffer
+	_ = json.Compact(&argv, b.Config["argv"])
+	if b.Executor != "shell" || len(b.Requires) != 1 || b.Requires["toolbelt"] != "cli" || argv.String() != `["/bin/participant"]` || b.Config["binary"] != nil || !contains(b.Operations, "weather.forecast") {
+		t.Fatalf("shell binding: %+v", b)
+	}
+
 	if _, _, err := Generate([]protocol.Manifest{m}, Options{Entries: map[string]json.RawMessage{"nope": json.RawMessage(`{}`)}}); err == nil || !strings.Contains(err.Error(), "nope") {
 		t.Fatalf("an entry for an undeclared type: %v", err)
 	}

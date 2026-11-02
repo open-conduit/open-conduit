@@ -40,6 +40,9 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 				return nil, protocol.Errorf(protocol.CodeInvalid, "invalid "+p.Kind+" config")
 			}
 		}
+		if w, ok := s.ext.Executors[p.Type].(extension.ConfigWarner); ok && p.Kind == protocol.ValidateExecutor {
+			return protocol.ValidateResult{Warnings: w.ConfigWarnings(p.Config)}, nil
+		}
 		return struct{}{}, nil
 	case "webhook.handle":
 		var p protocol.WebhookHandleParams

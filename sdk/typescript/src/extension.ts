@@ -99,6 +99,8 @@ export type MigrateFn = (
 export interface Options {
   /** The extension's own version (required). */
   version: string;
+  /** The display name operators read (default: the name). */
+  title?: string;
   summary?: string;
   /** The package's command (default ["<name>-extension"]). */
   command?: string[];
@@ -138,6 +140,7 @@ export class Extension {
       protocol: [...ProtocolVersions],
       name,
       version: o.version,
+      ...(o.title === undefined ? {} : { title: o.title }),
       ...(o.summary === undefined ? {} : { summary: o.summary }),
       command: o.command ?? [`${name}-extension`],
       ...(o.kvVersion ? { kv_version: o.kvVersion } : {}),

@@ -133,8 +133,16 @@ func TestDaemonExtensionPackages(t *testing.T) {
 	if err := os.WriteFile(bad, withBinding(strings.Replace(overridden, `"workspace_mode":"work"`, `"workspace_mode":"fresh"`, 1)), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err != nil || strings.Contains(string(out), "never applies") {
+	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err != nil || strings.Contains(string(out), "never applies") || strings.Contains(string(out), "config.retries") {
 		t.Fatalf("offline check of an agreeing scratch mode: %v\n%s", err, out)
+	}
+	// The installed executor's own warnings about a binding config come
+	// through validate, as Claude Code's do in process.
+	if err := os.WriteFile(bad, withBinding(strings.Replace(overridden, `"auto":true`, `"auto":true,"retries":2`, 1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput(); err != nil || !strings.Contains(string(out), "scope notes-scope binding scratch: config.retries is ignored: the runner never retries a job") {
+		t.Fatalf("offline check of an executor's config warning: %v\n%s", err, out)
 	}
 
 	d.start("")
@@ -203,6 +211,16 @@ func TestDaemonExtensionPackages(t *testing.T) {
 	n, ok := byID["notes"]
 	if _, setup := byID["setup"]; err != nil || len(pages) != 2 || !ok || !setup || pages[n].Extension != "notes" || pages[n].WorkKind != notes.Kind || pages[n].Compose[0] != "remark" {
 		t.Fatalf("pages: %+v %v", pages, err)
+	}
+	// The package's manifest title is its display name; a first-party
+	// integration's is the catalogue's.
+	titles, err := d.c.Extensions(ctx)
+	byName := map[string]string{}
+	for _, x := range titles {
+		byName[x.Name] = x.Title
+	}
+	if err != nil || byName["notes"] != "Notes" || byName["github"] != "GitHub" {
+		t.Fatalf("extension titles: %+v %v", titles, err)
 	}
 	works, _ := d.c.Works(ctx, url.Values{"scope_id": {"notes-scope"}})
 	var cand client.ConfigCandidate

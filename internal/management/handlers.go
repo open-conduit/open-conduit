@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"regexp"
 	"slices"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -1009,6 +1010,26 @@ func (s *Server) listPages(c *call) (int, any, error) {
 		}
 	}
 	return 200, map[string]any{"pages": out}, nil
+}
+
+// listExtensions lists the extensions' display names (Options.Titles), by
+// name, for the web view's source labels.
+func (s *Server) listExtensions(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	type wireExtension struct {
+		Name  string `json:"name"`
+		Title string `json:"title"`
+	}
+	out := []wireExtension{}
+	if s.o.Titles != nil {
+		for name, title := range s.o.Titles() {
+			out = append(out, wireExtension{Name: name, Title: title})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return 200, map[string]any{"extensions": out}, nil
 }
 
 // rotate never stores the replacement in idempotency history; a lost response

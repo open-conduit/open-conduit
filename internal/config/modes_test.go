@@ -59,3 +59,44 @@ func TestModeWarnings(t *testing.T) {
 		t.Fatal("nil snapshot warned")
 	}
 }
+
+// warnExecutor warns about a binding config that sets "old".
+type warnExecutor struct{ fakeExecutor }
+
+func (warnExecutor) ConfigWarnings(raw json.RawMessage) []string {
+	var c struct {
+		Old bool `json:"old"`
+	}
+	if json.Unmarshal(raw, &c) != nil || !c.Old {
+		return nil
+	}
+	return []string{"config.old is deprecated"}
+}
+
+// TestBindingWarnings: each executor's warnings about its bindings are
+// prefixed with the scope and binding, a binding a child inherits unchanged
+// warns once, and an executor without ConfigWarner warns about nothing
+// (the negative control).
+func TestBindingWarnings(t *testing.T) {
+	reg := Registry{Executors: map[string]extension.Executor{"warn": warnExecutor{}, "plain": fakeExecutor{}}}
+	old := Binding{Name: "agent", Executor: "warn", Config: json.RawMessage(`{"old": true}`)}
+	snap := &Snapshot{Order: []domain.ID{"root", "child"}, Scopes: map[domain.ID]*EffectiveScope{
+		"root": {ID: "root", Bindings: []Binding{
+			old,
+			{Name: "fine", Executor: "warn", Config: json.RawMessage(`{}`)},
+			{Name: "plain", Executor: "plain", Config: json.RawMessage(`{"old": true}`)},
+		}},
+		"child": {ID: "child", ParentID: "root", Bindings: []Binding{
+			old,
+			{Name: "fine", Executor: "warn", Config: json.RawMessage(`{"old": true}`)},
+		}},
+	}}
+	got := BindingWarnings(snap, reg)
+	want := []string{"scope root binding agent: config.old is deprecated", "scope child binding fine: config.old is deprecated"}
+	if len(got) != len(want) || got[0] != want[0] || got[1] != want[1] {
+		t.Fatalf("%q", got)
+	}
+	if BindingWarnings(nil, reg) != nil {
+		t.Fatal("no snapshot warned")
+	}
+}

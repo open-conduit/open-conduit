@@ -342,7 +342,7 @@ func PanelText(panels []client.Panel, actions []targeted) string {
 			for _, m := range sec.Messages {
 				who := m.Label
 				if who == "" {
-					who = map[string]string{"operator": "You", "agent": "Agent", "note": "Note"}[m.From]
+					who = map[string]string{"operator": "You", "participant": "Agent", "agent": "Agent", "note": "Note"}[m.From]
 				}
 				b.WriteString("  " + boldS.Render(who) + "\n")
 				for _, l := range strings.Split(m.Text, "\n") {

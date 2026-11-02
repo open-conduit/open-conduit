@@ -10,13 +10,13 @@ import (
 )
 
 // TestAgentCallsHello builds this package, installs it in a real Open
-// Conduit daemon and has a scripted agent call {{NAME}}.hello through its
-// toolbelt, as a coding agent would.
+// Conduit daemon and has a scripted participant call {{NAME}}.hello
+// through its toolbelt, with the `os` CLI on the shell executor.
 func TestAgentCallsHello(t *testing.T) {
 	d := extensiontest.Daemon(t, extensiontest.Package("."))
 	agent := d.Agent().
 		Call("{{NAME}}.hello", map[string]any{"name": "Ada"}).
-		Ends("finished")
+		Ends("completed")
 
 	work := d.Start("{{NAME}}.try", nil)
 	if r := agent.Result(1, "{{NAME}}.hello"); r.IsError || !strings.Contains(r.Text, "Hello, Ada!") {

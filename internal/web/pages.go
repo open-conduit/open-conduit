@@ -68,7 +68,7 @@ func (s *Server) parse() error {
 		"until":       func(t time.Time) string { return until(t, now()) },
 		"at":          func(t time.Time) string { return clockTime(t, now()) },
 		"poolName":    poolName,
-		"source":      sourceLabel,
+		"source":      s.sourceLabel,
 		"now":         now,
 		"pageHref":    pageHref,
 		"sessionHref": sessionHref,

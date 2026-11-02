@@ -16,6 +16,9 @@ import (
 // ManifestFile is the manifest's file name inside an extension's directory.
 const ManifestFile = "open-conduit-extension.json"
 
+// MaxTitle is the longest display name a manifest may give (Title).
+const MaxTitle = 64
+
 // Manifest declares what an extension process provides, before it runs. The
 // host reads it at discovery, validates it offline (config validation does
 // not need the process), and checks at the handshake that the process
@@ -33,6 +36,10 @@ type Manifest struct {
 	// Version is the extension's own version, informational for
 	// diagnostics and compatibility reports.
 	Version string `json:"version"`
+	// Title is the extension's display name, as operators read it where
+	// its Work and sources are listed ("Acme Tickets"); its Name when unset.
+	// One line of at most MaxTitle characters.
+	Title   string `json:"title,omitempty"`
 	Summary string `json:"summary,omitempty"`
 	// Command is the argv that starts the process; a relative argv[0] is
 	// resolved against the manifest's directory. It receives the protocol
@@ -499,6 +506,9 @@ func (m Manifest) Validate() error {
 	}
 	if m.Version == "" {
 		fail("version is required")
+	}
+	if len([]rune(m.Title)) > MaxTitle || strings.ContainsAny(m.Title, "\r\n") || m.Title != strings.TrimSpace(m.Title) {
+		fail("title must be one line of at most %d characters, without surrounding spaces", MaxTitle)
 	}
 	if len(m.Command) == 0 || m.Command[0] == "" {
 		fail("command is required")

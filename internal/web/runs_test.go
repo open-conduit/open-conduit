@@ -79,11 +79,11 @@ func TestRunsFiltersSortsAndGroups(t *testing.T) {
 		{"by scope keeps the sort within", "by=scope", "1,5,2,3,4,6"},
 	} {
 		q, _ := url.ParseQuery(c.query)
-		if got := ids(runsView(wd, q, &page{}, runsNow)); got != c.want {
+		if got := ids(runsView(wd, q, &page{}, runsNow, testLabel)); got != c.want {
 			t.Errorf("%s: %s, want %s", c.name, got, c.want)
 		}
 	}
-	d := runsView(wd, url.Values{"g": {"waiting"}}, &page{}, runsNow)
+	d := runsView(wd, url.Values{"g": {"waiting"}}, &page{}, runsNow, testLabel)
 	if d.Rail[0].N != 6 || d.Rail[1].N != 2 || !d.Rail[1].Signal || d.Rail[4].N != 2 || !d.Rail[4].On {
 		t.Errorf("rail: %+v", d.Rail)
 	}
@@ -95,15 +95,15 @@ func TestRunsFiltersSortsAndGroups(t *testing.T) {
 	if strings.Join(sub, ",") != "Slack,a time" {
 		t.Errorf("sub-rail: %v", sub)
 	}
-	d = runsView(wd, url.Values{"by": {"scope"}}, &page{}, runsNow)
+	d = runsView(wd, url.Values{"by": {"scope"}}, &page{}, runsNow, testLabel)
 	if len(d.Sections) != 2 || d.Sections[0].Label != "Alpha" || d.Sections[1].Label != "Beta" {
 		t.Errorf("scope sections: %+v", d.Sections)
 	}
-	d = runsView(wd, url.Values{"scope": {"a"}, "q": {"zzz"}}, &page{}, runsNow)
+	d = runsView(wd, url.Values{"scope": {"a"}, "q": {"zzz"}}, &page{}, runsNow, testLabel)
 	if d.Empty != "nomatch" || len(d.Tokens) != 2 || d.ClearHref != "/" {
 		t.Errorf("filtered empty: %q %+v %s", d.Empty, d.Tokens, d.ClearHref)
 	}
-	if d := runsView(world{}, nil, &page{}, runsNow); d.Empty != "nowork" {
+	if d := runsView(world{}, nil, &page{}, runsNow, testLabel); d.Empty != "nowork" {
 		t.Errorf("no work: %q", d.Empty)
 	}
 }
@@ -217,5 +217,19 @@ func TestBulkHoldAndRelease(t *testing.T) {
 	}
 	if w := do(h, "POST", "/work/bulk/hold", url.Values{"work": {"w_ready"}}, s); w.Code != http.StatusForbidden {
 		t.Fatalf("bulk without CSRF: %d", w.Code)
+	}
+}
+
+// testLabel labels sources as an extension titled "Slack" would.
+func testLabel(s string) string { return titleOf(map[string]string{"slack": "Slack"}, s) }
+
+func TestSourceLabelFromTitles(t *testing.T) {
+	f := newFake()
+	f.titles = []client.ExtensionTitle{{Name: "acme", Title: "Acme Tickets"}}
+	s := &Server{src: f, opts: Options{Now: func() time.Time { return runsNow }}}
+	for in, want := range map[string]string{"acme": "Acme Tickets", "core": "Core", "other": "other"} {
+		if got := s.sourceLabel(in); got != want {
+			t.Errorf("sourceLabel(%q) = %q, want %q", in, got, want)
+		}
 	}
 }
