@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -601,4 +602,47 @@ func TestProductionRoutingControlBindingMismatchUsesExplicitFallback(t *testing.
 	if len(intents) != 0 {
 		t.Fatal("bindingmismatch dispatched control intent")
 	}
+}
+
+// TestProductionRoutingRecordsWhyEachRouteDeclined: an Event no route takes
+// keeps each route's skip reason, in route order and cut to one bounded
+// line, so an operator can see why nothing happened (issue #431). One a
+// later route takes keeps none.
+func TestProductionRoutingRecordsWhyEachRouteDeclined(t *testing.T) {
+	long := strings.Repeat("x", runtime.MaxRefusalReason+50)
+	refuse := func(reason string) extension.RouteHandler {
+		return routingHandlerFunc(func(in extension.RouteInput) (extension.RouteDecision, error) {
+			if in.Event.Event.ID == "taken" && reason == "" {
+				return routingDecision(in)
+			}
+			return extension.Skip(reason), nil
+		})
+	}
+	f := routingFixture(t, "reopen", conformance.RuntimeOptions{Routes: []conformance.RuntimeRoute{
+		{Route: domain.Route{Name: "pulls", ActivePolicy: "queue"}, Handler: refuse("the PR's author is CONTRIBUTOR\nadmit.authors admits OWNER")},
+		{Route: domain.Route{Name: "long", ActivePolicy: "queue"}, Handler: refuse(long)},
+		{Route: domain.Route{Name: "silent", ActivePolicy: "queue"}, Handler: refuse("")},
+	}})
+	requireAccept(t, f, "refused", nil)
+	requireRoute(t, f.Driver, "refused")
+	requireAccept(t, f, "taken", nil)
+	requireRoute(t, f.Driver, "taken")
+	routingRead(t, f, func(tx storage.Tx) error {
+		rec, ok, err := runtime.RouteDecisionInTx(tx, "refused")
+		if err != nil || !ok {
+			return fmt.Errorf("no decision: %v", err)
+		}
+		if rec.Policy != "unmatched" || len(rec.Refusals) != 3 {
+			return fmt.Errorf("refusals: %+v", rec)
+		}
+		want := []runtime.RouteRefusal{{Route: "pulls", Reason: "the PR's author is CONTRIBUTOR"}, {Route: "long", Reason: rec.Refusals[1].Reason}, {Route: "silent"}}
+		if !reflect.DeepEqual(rec.Refusals, want) || len(rec.Refusals[1].Reason) > runtime.MaxRefusalReason || !strings.HasSuffix(rec.Refusals[1].Reason, "…") {
+			return fmt.Errorf("refusals: %+v", rec.Refusals)
+		}
+		rec, _, err = runtime.RouteDecisionInTx(tx, "taken")
+		if err == nil && (rec.Route != "silent" || rec.Refusals != nil) {
+			return fmt.Errorf("a matched Event kept refusals: %+v", rec)
+		}
+		return err
+	})
 }

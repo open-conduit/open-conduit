@@ -464,6 +464,13 @@ func (c *Client) Event(ctx context.Context, id string) (Event, error) {
 	return get[Event](c, ctx, "events/"+esc(id))
 }
 
+// EventWithRoute is Event with its routing explanation (Route) attached,
+// in one request.
+func (c *Client) EventWithRoute(ctx context.Context, id string) (e Event, err error) {
+	err = c.Do(ctx, "GET", "events/"+esc(id), url.Values{"with": {"route"}}, nil, "", &e)
+	return
+}
+
 // EventRoute explains how an accepted Event was routed: its disposition and
 // the durable route decision.
 func (c *Client) EventRoute(ctx context.Context, id string) (EventRoute, error) {
@@ -490,6 +497,15 @@ type EventRoute struct {
 	// many times they have.
 	Error    string `json:"error,omitempty"`
 	Attempts int    `json:"attempts,omitempty"`
+	// Refusals is, for an unmatched Event, each route that declined it and
+	// the reason its handler gave.
+	Refusals []RouteRefusal `json:"refusals,omitempty"`
+}
+
+// RouteRefusal is one route declining an Event and why.
+type RouteRefusal struct {
+	Route  string `json:"route"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // TraceEvent is a hypothetical Event for a route trace.
@@ -595,11 +611,12 @@ func (c *Client) ArtifactContent(ctx context.Context, id, byteRange string, w io
 	return err
 }
 
-// EventChain walks causation links from id to its root (inclusive), newest first.
+// EventChain walks causation links from id to its root (inclusive), newest
+// first, each Event with its routing explanation.
 func (c *Client) EventChain(ctx context.Context, id string) ([]Event, error) {
 	var chain []Event
 	for id != "" && len(chain) < 1024 {
-		e, err := c.Event(ctx, id)
+		e, err := c.EventWithRoute(ctx, id)
 		if err != nil {
 			return chain, err
 		}

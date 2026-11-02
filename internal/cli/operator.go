@@ -577,7 +577,7 @@ func (o *operator) events(args []string) int {
 	}, func(c *client.Client, id string) (any, error) {
 		cx, cancel := ctx()
 		defer cancel()
-		return c.Event(cx, id)
+		return c.EventWithRoute(cx, id)
 	})
 }
 

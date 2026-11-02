@@ -163,7 +163,7 @@
       <dl class="ev-detail"{{if not .Open}} hidden{{end}}>
         <dt>Routing</dt>
         <dd>{{with .Route}}{{if .Route}}route <code>{{.Route}}</code>{{with .Binding}} → binding <code>{{.}}</code>{{end}}{{with .Policy}} · active policy <code>{{.}}</code>{{end}}{{with .Generation}} · generation {{.}}{{end}}{{else}}not routed as input{{with .Disposition}} ({{.}}){{end}}{{end}}{{else}}this daemon does not explain routing in lists; <code>open-conduit route {{$.W.ID}}</code>{{end}}</dd>
-        {{with .Route}}{{with .Reason}}<dt>Why</dt><dd>{{.}}</dd>{{end}}{{with .DisplayRefused}}<dt>Display</dt><dd>dropped: {{.}}</dd>{{end}}{{with .Error}}<dt>Route error</dt><dd><pre class="block-code">{{.}}</pre></dd>{{end}}{{with .Attempts}}<dt>Attempts</dt><dd>{{.}}</dd>{{end}}{{end}}
+        {{with .Route}}{{with .Reason}}<dt>Why</dt><dd>{{.}}</dd>{{end}}{{with .DisplayRefused}}<dt>Display</dt><dd>dropped: {{.}}</dd>{{end}}{{with .Error}}<dt>Route error</dt><dd><pre class="block-code">{{.}}</pre></dd>{{end}}{{with .Attempts}}<dt>Attempts</dt><dd>{{.}}</dd>{{end}}{{with .Refusals}}<dt>Declined by</dt><dd><ul class="ev-refusals">{{range .}}<li><code>{{.Route}}</code>{{with .Reason}}: {{.}}{{else}}: no reason given{{end}}</li>{{end}}</ul></dd>{{end}}{{end}}
         {{if or (not .Routed) (eq .Disposition "failed") (eq .Disposition "skipped")}}
         <dt>Routing control</dt>
         <dd class="ev-controls">

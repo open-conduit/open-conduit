@@ -64,6 +64,15 @@ type wireEventRoute struct {
 	// how many times they have.
 	Error    string `json:"error,omitempty"`
 	Attempts int    `json:"attempts,omitempty"`
+	// Refusals is, for an unmatched Event, each route that declined it and
+	// the reason its handler gave.
+	Refusals []wireRouteRefusal `json:"refusals,omitempty"`
+}
+
+// wireRouteRefusal is one route declining an Event.
+type wireRouteRefusal struct {
+	Route  string `json:"route"`
+	Reason string `json:"reason,omitempty"`
 }
 
 // wireRouteTrace is a dry-run route trace for a hypothetical Event.

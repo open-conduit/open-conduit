@@ -35,7 +35,7 @@ The toolbelt adds `toolbelt.called` and `toolbelt.rejected` records through `Too
 | Record | Source | Key attributes |
 | --- | --- | --- |
 | `event.accepted`, `event.duplicate` | Acceptance, including timer fires and executor emissions | type, source, sequence, causation, `emitted_by_execution` |
-| `route.decided` | Routing checkpoint (`To` = disposition) | route name, binding, generation, reason; for `failed`, the error (a panic's with its stack) and attempts |
+| `route.decided` | Routing checkpoint (`To` = disposition) | route name, binding, generation, reason; for `failed`, the error (a panic's with its stack) and attempts; for `unmatched`, `route.refusals`: each route that declined the Event and its handler's reason, as `route: reason`, one a line |
 | `causal.rejected` | Committed causal refusal | reason, depth, count, root, limits |
 | `work.created`, `work.transitioned` | Work (`From`/`To`) | kind, revision, parent |
 | `execution.queued` | New attempt | trigger ID, type and trace |

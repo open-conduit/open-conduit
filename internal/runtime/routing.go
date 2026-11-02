@@ -61,7 +61,20 @@ type RouteRecord struct {
 	// "failed") and after how many tries.
 	Error    string `json:",omitempty"`
 	Attempts int    `json:",omitempty"`
+	// Refusals is, for an Event no route selected (Policy "unmatched"),
+	// each route that declined it and why, in route order.
+	Refusals []RouteRefusal `json:",omitempty"`
 }
+
+// RouteRefusal is one route declining an Event: the route's name and the
+// reason its handler gave (extension.Skip), cut to MaxRefusalReason bytes.
+type RouteRefusal struct {
+	Route, Reason string
+}
+
+// MaxRefusalReason bounds each recorded refusal reason, in bytes.
+const MaxRefusalReason = 500
+
 type QueuedInput struct {
 	EventID  domain.ID
 	Sequence uint64
@@ -310,6 +323,9 @@ type routePlan struct {
 	decision extension.RouteDecision
 	// refused is why the decision's display was dropped.
 	refused string
+	// refusals are the routes tried before one matched, or all of them
+	// when none did, with each handler's reason.
+	refusals []RouteRefusal
 }
 
 // binding resolves the whole nearest Scope binding before looking up its
@@ -370,6 +386,9 @@ func (r *Router) evaluate(ctx context.Context, s routeSnapshot, record func(doma
 		}
 		if record != nil {
 			record(route, d)
+		}
+		if !d.Match {
+			p.refusals = append(p.refusals, RouteRefusal{Route: route.Name, Reason: extension.Clip(d.Reason, MaxRefusalReason)})
 		}
 		if d.Match {
 			// A display is optional: one over the limits is dropped and
@@ -747,6 +766,9 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 	}
 	if p.selected == nil && !(w != nil && w.State.Terminal()) {
 		rec.WorkID = ""
+		// Nothing else reports why no route took the Event, so keep what
+		// each handler said.
+		rec.Refusals = p.refusals
 	}
 	if err := putJSON(tx, routeNamespace, identity(string(rec.EventID)), rec); err != nil {
 		return err

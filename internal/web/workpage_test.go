@@ -115,6 +115,15 @@ func TestWorkPageEventsAndMissingWork(t *testing.T) {
 			t.Errorf("events tab lacks %q", want)
 		}
 	}
+	// An Event no route took lists each route's refusal (issue #431).
+	f.events = []client.Event{{ID: "evt_2", Type: "github.pull_request.open", Source: "github/example", WorkID: "wrk_1", Sequence: "5", OccurredAt: "2026-10-28T00:00:00Z", Routed: true, Disposition: "unmatched",
+		Route: &client.EventRoute{Disposition: "unmatched", Policy: "unmatched", Reason: "no_match", Refusals: []client.RouteRefusal{{Route: "pulls", Reason: "author is CONTRIBUTOR"}, {Route: "quiet"}}}}}
+	body = do(h, "GET", "/work?id=wrk_1&tab=events&event=evt_2", nil, s).Body.String()
+	for _, want := range []string{"Declined by", "<code>pulls</code>: author is CONTRIBUTOR", "<code>quiet</code>: no reason given"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("events tab lacks %q", want)
+		}
+	}
 	w := do(h, "GET", "/work?id=nope", nil, s)
 	if w.Code != http.StatusNotFound || !strings.Contains(w.Body.String(), "No work with ID nope") {
 		t.Fatalf("missing: %d", w.Code)
