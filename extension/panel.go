@@ -56,16 +56,24 @@ type PanelSection struct {
 	Actions  []string
 }
 
-// Who wrote a panel message.
+// Who wrote a panel message: the operator, the Work's other participant
+// (whoever the session talks to: an LLM, a script, another person), or
+// nobody, for a note of something that happened.
 const (
-	MessageOperator = "operator"
-	MessageAgent    = "agent"
-	MessageNote     = "note"
+	MessageOperator    = "operator"
+	MessageParticipant = "participant"
+	MessageNote        = "note"
+
+	// MessageAgent is MessageParticipant's old name and value, still
+	// accepted from a package that sends it.
+	//
+	// Deprecated: use MessageParticipant.
+	MessageAgent = "agent"
 )
 
 // PanelMessage is one line of a conversation (issue #242): what the
-// operator or the agent said, or a note of something that happened. An
-// agent's text is Markdown; the others are plain. Label, when set, reads
+// operator or the participant said, or a note of something that happened.
+// A participant's text is Markdown; the others are plain. Label, when set, reads
 // in place of who wrote it ("Assistant asks"). Choices are the answers a
 // question offered, and Chosen the one the operator gave.
 type PanelMessage struct {
@@ -193,8 +201,8 @@ func (s PanelSection) validate() error {
 }
 
 func (m PanelMessage) validate() error {
-	if m.From != MessageOperator && m.From != MessageAgent && m.From != MessageNote {
-		return fmt.Errorf("message from %q is not operator, agent or note", m.From)
+	if m.From != MessageOperator && m.From != MessageParticipant && m.From != MessageAgent && m.From != MessageNote {
+		return fmt.Errorf("message from %q is not operator, participant or note", m.From)
 	}
 	if err := line("message label", m.Label, MaxPanelTitle, false); err != nil {
 		return err
