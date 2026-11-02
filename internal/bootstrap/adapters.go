@@ -1,9 +1,13 @@
 package bootstrap
 
 import (
+	"slices"
+	"sort"
+
 	bb "github.com/open-conduit/open-conduit/extensions/bitbucket"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/human"
+	"github.com/open-conduit/open-conduit/extensions/introspection"
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
 	"github.com/open-conduit/open-conduit/extensions/observe"
@@ -86,7 +90,8 @@ func Adapters() []cli.Adapter {
 			Kinds: []string{"extension", "route"},
 			Entry: []cli.Field{f("notes", ""), f("sweep", "{cron, time_zone, rules, guide, land, remote}"), f("triage", "{cron, time_zone, file_issues}"),
 				f("host_watch", "{interval_seconds, load, memory, disk, disks}"), f("telemetry", "write telemetry events (and send them to PostHog entries)")},
-			Route: []cli.Field{opt("work", "report", []string{"report", "sweep", "triage", "fix"}, "")}},
+			Route:      []cli.Field{opt("work", "report", []string{"report", "sweep", "triage", "fix"}, "")},
+			Operations: introspection.Operations()},
 		{Type: human.Type, Title: "Human decisions", Description: "Lets an agent ask a person for a private decision with human.ask, answered from the TUI or web view; nothing reaches the issue or thread. Add human.ask to the agent binding's operations. Gates make named operations wait for a person's approval, whoever calls them.",
 			Kinds:      []string{"extension"},
 			Entry:      []cli.Field{def("responders", `["operator:local"]`, "who may answer, each kind:id or a bare kind"), def("surfaces", `["tui"]`, "where the question is shown"), f("gates", `[{"operations": ["github.pr.create"], "responders": ["operator:local"], "timeout": "24h"}]: operations that need a person's approval before they run`)},
@@ -114,4 +119,14 @@ func Adapters() []cli.Adapter {
 			Binding: []cli.Field{req("addr", "the listener, for example 127.0.0.1:8787"), opt("tunnel", "", []string{"ngrok", "cloudflared", "static"}, ""), f("tunnel_domain", "ngrok reserved domain"),
 				f("tunnel_name", "cloudflared named tunnel"), f("tunnel_hostname", "its hostname"), f("public_url", "static")}},
 	}
+}
+
+// OperationNames are the toolbelt operations a config may grant offline
+// (the registry config check validates authorization.operations against),
+// sorted. Each extension's are in its Adapters entry; the generated
+// operations reference page lists them by extension.
+func OperationNames() []string {
+	names := append([]string(nil), registry(offlineExecutors()).Operations...)
+	sort.Strings(names)
+	return slices.Compact(names)
 }

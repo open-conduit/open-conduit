@@ -5,23 +5,27 @@
   "type": "object",
   "properties": {
     "version": {
-      "const": 1
+      "const": 1,
+      "description": "Config format version; always 1."
     },
     "settings": {
-      "$ref": "#/$defs/settings"
+      "$ref": "#/$defs/settings",
+      "description": "Daemon-wide limits and timing."
     },
     "connections": {
       "type": "array",
       "items": {
         "$ref": "#/$defs/connection"
-      }
+      },
+      "description": "Credentials and endpoints for the services integrations talk to."
     },
     "scopes": {
       "type": "array",
       "minItems": 1,
       "items": {
         "$ref": "#/$defs/scope"
-      }
+      },
+      "description": "The tree of scopes: what each watches, how its Work runs and what it may do."
     },
     "includes": {
       "description": "Folders whose .open-conduit/config.json adds scopes beneath parent, a scope of this file. path is absolute or relative to this file's directory.",
@@ -31,11 +35,13 @@
         "properties": {
           "path": {
             "type": "string",
-            "minLength": 1
+            "minLength": 1,
+            "description": "The folder holding .open-conduit/config.json, absolute or relative to this file's directory (no ~)."
           },
           "parent": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+            "description": "A scope defined in this file that the folder's scopes sit beneath."
           }
         },
         "required": [
@@ -61,43 +67,50 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
-          "default": 4
+          "default": 4,
+          "description": "Most agent turns (claude-code and installed extension executors) running at once across every scope. A scope's limits.concurrency can only narrow it. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "job_concurrency": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
-          "default": 4
+          "default": 4,
+          "description": "Most job attempts (the shell and github-hold executors) running at once, counted apart from concurrency so a busy agent pool never holds a due job back. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "admission_limit": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
-          "default": 10
+          "default": 10,
+          "description": "Reserved for a cap on claimed Work per scope. Validated but not enforced: config check warns where a config sets it."
         },
         "reconcile_seconds": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
-          "default": 900
+          "default": 900,
+          "description": "How often each source (a repository, a tracker, a Slack workspace, a schedule) is reconciled against its service, so missed webhooks cost only this much latency. Sources added by a later generation (open-conduit config apply) use the new value; bundled sources already running keep theirs until serve restarts on that generation."
         },
         "timeout_seconds": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
-          "default": 3600
+          "default": 3600,
+          "description": "The deadline of one attempt (an Execution) before the host stops it. A binding's own timeout_seconds replaces it for that binding. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. An attempt already running keeps the deadline it started with."
         },
         "kept_executions": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
-          "default": 20
+          "default": 20,
+          "description": "Executions per Work whose content (logs, transcripts, outputs) is kept; older ones are released by the retention sweep. Their coordination history (trigger, timing, outcome, usage) is never deleted. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "kept_finished_days": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
-          "default": 14
+          "default": 14,
+          "description": "Days a finished Work keeps its attempts' content (logs, transcripts, outputs) after it last changed; the retention sweep then releases all of it. Coordination history is never deleted. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "retry_delays_seconds": {
           "type": "array",
@@ -110,19 +123,22 @@
           "default": [
             300,
             600
-          ]
+          ],
+          "description": "The wait before each retry of a failed attempt, in order; once they are used up automatic retries stop and the Work stays open for an operator to retry. Usage-limit retries wait for the reported reset instead. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "causal_max_depth": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
-          "default": 32
+          "default": 32,
+          "description": "How many Events one chain of causes may reach (an Event caused by an execution that an Event started, and so on). The Event past it is refused with a depth_limit diagnostic, which stops feedback loops without the extension's cooperation. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "causal_per_minute": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
-          "default": 128
+          "default": 128,
+          "description": "How many Events one causal chain may add per minute; a burst past it is refused. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "budgets": {
           "description": "Usage limits the host enforces before it starts a turn: at most max of unit per Work, per scope or across every scope, over the Work's life or each UTC day or week. Work over a limit is held with the reason.",
@@ -131,49 +147,93 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["unit", "per", "max"],
-            "if": {"properties": {"per": {"const": "all"}}},
-            "then": {"not": {"required": ["scope"]}},
+            "required": [
+              "unit",
+              "per",
+              "max"
+            ],
+            "if": {
+              "properties": {
+                "per": {
+                  "const": "all"
+                }
+              }
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "scope"
+                ]
+              }
+            },
             "properties": {
               "unit": {
                 "description": "attempts and turns are counted by the host; any other unit (usd, tokens, minutes, ...) is what executors report.",
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_.-]{0,31}$"
               },
-              "per": {"enum": ["work", "scope", "all"]},
-              "period": {"enum": ["day", "week"]},
-              "max": {"type": "number", "exclusiveMinimum": 0},
-              "warn_at": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.8},
-              "scope": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$"}
+              "per": {
+                "enum": [
+                  "work",
+                  "scope",
+                  "all"
+                ]
+              },
+              "period": {
+                "enum": [
+                  "day",
+                  "week"
+                ]
+              },
+              "max": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "warn_at": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "exclusiveMaximum": 1,
+                "default": 0.8
+              },
+              "scope": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              }
             }
           }
         },
         "webhooks": {
-          "description": "The webhook listener and tunnel serve starts with; serve flags override it for one run.",
+          "description": "The webhook listener and tunnel serve starts with; serve flags override it for one run. Without it the daemon is reconcile-only. Takes effect at the next serve start after the generation holding it is applied with open-conduit config apply.",
           "type": "object",
           "properties": {
             "addr": {
               "type": "string",
-              "minLength": 1
+              "minLength": 1,
+              "description": "Local address the listener binds, such as 127.0.0.1:8787."
             },
             "tunnel": {
               "enum": [
                 "ngrok",
                 "cloudflared",
                 "static"
-              ]
+              ],
+              "description": "How the listener is reached from outside: ngrok, cloudflared, or static (public_url already reaches it)."
             },
             "tunnel_domain": {
-              "type": "string"
+              "type": "string",
+              "description": "The ngrok domain to use."
             },
             "tunnel_name": {
-              "type": "string"
+              "type": "string",
+              "description": "The cloudflared named tunnel to run."
             },
             "tunnel_hostname": {
-              "type": "string"
+              "type": "string",
+              "description": "The cloudflared tunnel's public hostname."
             },
             "public_url": {
-              "type": "string"
+              "type": "string",
+              "description": "The URL services deliver webhooks to, for tunnel static."
             }
           },
           "required": [
@@ -194,7 +254,8 @@
             "type": "string",
             "pattern": "^[a-z][a-z0-9_-]{0,62}$"
           },
-          "uniqueItems": true
+          "uniqueItems": true,
+          "description": "Connection IDs this scope (and its bindings) may use."
         },
         "operations": {
           "type": "array",
@@ -202,7 +263,8 @@
             "type": "string",
             "pattern": "^[a-z][a-z0-9_.-]*$"
           },
-          "uniqueItems": true
+          "uniqueItems": true,
+          "description": "Toolbelt operations executions in this scope may call (see the operations reference). A binding's operations narrow it."
         },
         "read_scopes": {
           "type": "array",
@@ -210,7 +272,8 @@
             "type": "string",
             "pattern": "^[a-z][a-z0-9_-]{0,62}$"
           },
-          "uniqueItems": true
+          "uniqueItems": true,
+          "description": "Other scopes whose Events this scope's executions may wait on."
         },
         "file_scopes": {
           "type": "array",
@@ -218,7 +281,8 @@
             "type": "string",
             "pattern": "^[a-z][a-z0-9_-]{0,62}$"
           },
-          "uniqueItems": true
+          "uniqueItems": true,
+          "description": "Other scopes whose trackers this scope's agents may file issues in and comment on."
         }
       },
       "required": [
@@ -233,14 +297,17 @@
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+          "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+          "description": "Stable ID that scopes, bindings and extension entries name."
         },
         "type": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+          "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+          "description": "The integration that owns it (open-conduit adapters lists them)."
         },
         "config": {
-          "type": "object"
+          "type": "object",
+          "description": "The integration's connection fields (open-conduit adapters TYPE)."
         },
         "secret_refs": {
           "type": "object",
@@ -254,7 +321,8 @@
             "not": {
               "pattern": "[\\r\\n]"
             }
-          }
+          },
+          "description": "Secret name to reference (keyring:NAME, file:NAME, env:VAR or cmd:COMMAND); values never appear in the config."
         }
       },
       "required": [
@@ -269,19 +337,23 @@
       "properties": {
         "interrupt": {
           "type": "boolean",
-          "default": false
+          "default": false,
+          "description": "The executor must support interrupting a running attempt."
         },
         "inject": {
           "type": "boolean",
-          "default": false
+          "default": false,
+          "description": "The executor must accept messages into a running attempt."
         },
         "resume": {
           "type": "boolean",
-          "default": false
+          "default": false,
+          "description": "The executor must resume a parked attempt's session."
         },
         "workspace": {
           "type": "boolean",
-          "default": false
+          "default": false,
+          "description": "The executor must run in a workspace."
         },
         "toolbelt": {
           "enum": [
@@ -289,7 +361,8 @@
             "cli",
             "mcp",
             "sdk"
-          ]
+          ],
+          "description": "How the executor reaches the toolbelt."
         }
       },
       "required": [],
@@ -319,18 +392,22 @@
           "properties": {
             "name": {
               "type": "string",
-              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+              "description": "Name routes and Work refer to."
             },
             "executor": {
               "type": "string",
-              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+              "description": "The registered executor that runs attempts."
             },
             "connection": {
               "type": "string",
-              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+              "description": "Connection the executor's tools act through."
             },
             "requires": {
-              "$ref": "#/$defs/requires"
+              "$ref": "#/$defs/requires",
+              "description": "Capabilities the executor must declare; binding fails closed otherwise."
             },
             "operations": {
               "type": "array",
@@ -338,7 +415,8 @@
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_.-]*$"
               },
-              "uniqueItems": true
+              "uniqueItems": true,
+              "description": "Narrows the scope's authorization.operations for this binding."
             },
             "secret_names": {
               "type": "array",
@@ -346,7 +424,8 @@
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_-]{0,62}$"
               },
-              "uniqueItems": true
+              "uniqueItems": true,
+              "description": "Scope secrets the executor may resolve."
             },
             "resource": {
               "type": "object",
@@ -363,7 +442,8 @@
                 "provider",
                 "config"
               ],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "Resource provider and its config (such as a git workspace)."
             },
             "sandbox": {
               "type": "object",
@@ -380,7 +460,8 @@
                 "provider",
                 "config"
               ],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "Process sandbox provider and its config."
             },
             "container": {
               "type": "object",
@@ -406,15 +487,18 @@
                 "provider",
                 "config"
               ],
-              "additionalProperties": false
+              "additionalProperties": false,
+              "description": "Container provider and its config, pinned to an image digest."
             },
             "timeout_seconds": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 2147483647
+              "maximum": 2147483647,
+              "description": "Replaces settings.timeout_seconds for this binding's attempts."
             },
             "config": {
-              "type": "object"
+              "type": "object",
+              "description": "The executor's own config (open-conduit adapters TYPE)."
             },
             "grants": {
               "type": "array",
@@ -444,7 +528,8 @@
                   "name"
                 ],
                 "additionalProperties": false
-              }
+              },
+              "description": "Named sets of extra operations and config a Work can opt into."
             }
           },
           "required": [
@@ -453,7 +538,8 @@
           ],
           "additionalProperties": false
         }
-      ]
+      ],
+      "description": "How Work is executed: an executor and what it is given. {\"name\", \"disabled\": true} turns off an inherited binding."
     },
     "route": {
       "oneOf": [
@@ -479,15 +565,18 @@
           "properties": {
             "name": {
               "type": "string",
-              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+              "description": "Stable route name."
             },
             "handler": {
               "type": "string",
-              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+              "description": "The registered route handler that matches Events."
             },
             "binding": {
               "type": "string",
-              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+              "description": "Binding new Work runs with."
             },
             "active_policy": {
               "enum": [
@@ -495,22 +584,26 @@
                 "drop",
                 "inject",
                 "interrupt"
-              ]
+              ],
+              "description": "What a matching Event does while the Work already has an attempt running: queue it for the next attempt, drop it, inject it into the running attempt, or interrupt the attempt."
             },
             "unsupported_fallback": {
               "enum": [
                 "queue",
                 "drop"
-              ]
+              ],
+              "description": "What to do when the executor cannot inject or interrupt as active_policy asks."
             },
             "error_fallback": {
               "enum": [
                 "queue",
                 "drop"
-              ]
+              ],
+              "description": "What to do when injecting or interrupting fails."
             },
             "config": {
-              "type": "object"
+              "type": "object",
+              "description": "The handler's own config (open-conduit adapters TYPE)."
             }
           },
           "required": [
@@ -521,7 +614,8 @@
           ],
           "additionalProperties": false
         }
-      ]
+      ],
+      "description": "Which Events start or reach Work, and with which binding. {\"name\", \"disabled\": true} turns off an inherited route."
     },
     "extension": {
       "oneOf": [
@@ -547,18 +641,22 @@
           "properties": {
             "name": {
               "type": "string",
-              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+              "description": "Stable entry name."
             },
             "type": {
               "type": "string",
-              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+              "description": "The registered extension type (open-conduit adapters)."
             },
             "connection": {
               "type": "string",
-              "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+              "description": "Connection it reads and writes through."
             },
             "config": {
-              "type": "object"
+              "type": "object",
+              "description": "The entry's fields (open-conduit adapters TYPE)."
             },
             "secret_names": {
               "type": "array",
@@ -566,7 +664,8 @@
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_-]{0,62}$"
               },
-              "uniqueItems": true
+              "uniqueItems": true,
+              "description": "Scope secrets it may resolve."
             }
           },
           "required": [
@@ -575,26 +674,31 @@
           ],
           "additionalProperties": false
         }
-      ]
+      ],
+      "description": "An extension entry: an integration watching a source for this scope. {\"name\", \"disabled\": true} turns off an inherited entry."
     },
     "scope": {
       "type": "object",
       "properties": {
         "id": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+          "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+          "description": "Stable scope ID."
         },
         "name": {
           "type": "string",
-          "minLength": 1
+          "minLength": 1,
+          "description": "Display name."
         },
         "parent": {
           "type": "string",
-          "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+          "pattern": "^[a-z][a-z0-9_-]{0,62}$",
+          "description": "Parent scope; a child inherits its bindings, routes, extensions and authorization, and can only narrow them."
         },
         "enabled": {
           "type": "boolean",
-          "default": true
+          "default": true,
+          "description": "false stops new Work and attempts in the scope and its descendants."
         },
         "limits": {
           "type": "object",
@@ -602,37 +706,44 @@
             "concurrency": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 2147483647
+              "maximum": 2147483647,
+              "description": "Most attempts running in this scope at once, at most the parent's."
             },
             "admission_limit": {
               "type": "integer",
               "minimum": 1,
-              "maximum": 2147483647
+              "maximum": 2147483647,
+              "description": "Reserved; validated but not enforced."
             }
           },
           "required": [],
-          "additionalProperties": false
+          "additionalProperties": false,
+          "description": "Limits that narrow the parent's."
         },
         "authorization": {
-          "$ref": "#/$defs/authorization"
+          "$ref": "#/$defs/authorization",
+          "description": "What executions in the scope may do. Omitted, a child inherits its parent's; given, each list must be a subset of the parent's."
         },
         "bindings": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/binding"
-          }
+          },
+          "description": "Executor bindings."
         },
         "routes": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/route"
-          }
+          },
+          "description": "Event routes."
         },
         "extensions": {
           "type": "array",
           "items": {
             "$ref": "#/$defs/extension"
-          }
+          },
+          "description": "Extension entries."
         },
         "secret_refs": {
           "type": "object",
@@ -653,7 +764,8 @@
                 "const": false
               }
             ]
-          }
+          },
+          "description": "Scope secret name to reference."
         }
       },
       "required": [

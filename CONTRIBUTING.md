@@ -23,7 +23,7 @@ make check         # what CI runs
 - `test`: `go test -race ./...`, including the daemon integration tests in `integration/`. This is the slow part. The integration tests run in `INTEGRATION_SHARDS` processes at once (4 by default, `scripts/test-integration.sh`). Each shard is a separate process, so a test there can't rely on state another test left behind.
 - `boundaries`: the package boundary checker (below).
 - `config-check`: the configuration schema and its example fixtures.
-- `docs-check`: the README and docs examples (below).
+- `docs-check`: the README and docs examples (below), and that the generated reference pages are current.
 - `build` and `smoke`: builds `bin/open-conduit` and `bin/os`, and runs their help and version commands.
 
 CI runs `make check` and `make certify` on one Linux runner with the current stable Go, and `make cross-build` alongside. It doesn't test macOS or the Go 1.24.2 minimum, so check those locally when a change could affect them. A pull request that only changes docs (`site/`, `docs/**/*.md` and the Markdown at the repository root) skips it and runs `make docs-check` instead; the docs site only builds when `site/` changes. To check the minimum toolchain locally (`lint` says it is skipped there, since staticcheck needs Go 1.26 to build and its findings don't depend on the toolchain):
@@ -42,6 +42,7 @@ make ts-check             # Prettier, typecheck and unit tests for the TypeScrip
 make certify              # builds the extension packages and certifies them, plus the negative controls (needs Node and npm)
 make protocol-prototype   # the extension transport comparison; downloads its own modules on first run
 make docs-check           # only the docs example checks
+make docs-gen             # rewrite the generated reference pages (CLI, config, toolbelt operations)
 make release-snapshot     # a local release build with GoReleaser (below); publishes nothing
 ```
 
@@ -67,7 +68,7 @@ staticcheck is a `tool` in a module of its own, `tools/go.mod`, which `make lint
 
 Use [Conventional Commits](https://www.conventionalcommits.org/): `type(scope): summary`, for example `feat(slack): …` or `fix(runtime): …`. The history uses `feat`, `fix`, `docs`, `test` and `build`; `refactor` and `chore` are fine too. The scope is usually the package or area, such as `runtime`, `github`, `workspaces` or `readme`. The commitlint workflow checks every pull request's title and commits, because the release workflow reads them to pick the next version.
 
-Keep each commit to one change, and run `make check` before you push. If a change alters behavior that an architecture document describes, update that document in the same change. If it changes a README example or command, `make docs-check` tells you when the docs and the code disagree.
+Keep each commit to one change, and run `make check` before you push. If a change alters behavior that an architecture document describes, update that document in the same change. If it changes a README example or command, `make docs-check` tells you when the docs and the code disagree. The site's command line, configuration and toolbelt operations references are generated from the CLI's help, the config schema with the adapter catalog, and the operation registry: change those sources, then run `make docs-gen`.
 
 ## Releases
 
