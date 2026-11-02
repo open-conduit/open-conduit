@@ -316,7 +316,7 @@ func (x *installed) Executors() map[string]inproc.Executor {
 func (x *installed) WorkKinds() []inproc.WorkKind {
 	var out []inproc.WorkKind
 	for _, k := range x.m.Provides.WorkKinds {
-		w := inproc.WorkKind{Kind: k.Kind, Standing: k.Standing, Timed: k.Timed}
+		w := inproc.WorkKind{Kind: k.Kind, Standing: k.Standing, RunOnce: k.RunOnce, Timed: k.Timed}
 		if x.r != nil {
 			if p, ok := x.r.WorkKind(k.Kind); ok {
 				w.Trigger = p.Trigger

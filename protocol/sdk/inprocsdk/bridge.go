@@ -191,7 +191,7 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 	}
 	if k, ok := b.x.(inproc.WorkKinder); ok && len(p.WorkKinds) == 0 {
 		for _, w := range k.WorkKinds() {
-			p.WorkKinds = append(p.WorkKinds, protocol.WorkKindDecl{Kind: w.Kind, Standing: w.Standing, Trigger: w.Trigger != nil, Timed: w.Timed})
+			p.WorkKinds = append(p.WorkKinds, protocol.WorkKindDecl{Kind: w.Kind, Standing: w.Standing, Trigger: w.Trigger != nil, Timed: w.Timed, RunOnce: w.RunOnce})
 		}
 	}
 	if r, ok := b.x.(inproc.Recurring); ok && len(p.Recurrences) == 0 {

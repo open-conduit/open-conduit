@@ -188,3 +188,27 @@ func TestBridgeDeclaresRouteSamples(t *testing.T) {
 		t.Fatalf("routes declared %v, want sampler with samples and plain without", got)
 	}
 }
+
+// once has a run-once Work kind.
+type once struct{ sampled }
+
+func (once) Name() string { return "sampled" }
+func (once) WorkKinds() []inproc.WorkKind {
+	return []inproc.WorkKind{{Kind: "sampled.fix", RunOnce: true}, {Kind: "sampled.sweep", Standing: true}}
+}
+
+// TestBridgeDeclaresRunOnce: a run-once Work kind is declared so, so the
+// host completes it on a handoff as it does in process (#428).
+func TestBridgeDeclaresRunOnce(t *testing.T) {
+	b, err := inprocsdk.New(once{}, protocol.Manifest{Protocol: []int{protocol.Version}, Name: "sampled", Version: "0.1.0", Command: []string{"sampled"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := map[string]protocol.WorkKindDecl{}
+	for _, k := range b.Extension().Manifest.Provides.WorkKinds {
+		got[k.Kind] = k
+	}
+	if !got["sampled.fix"].RunOnce || got["sampled.sweep"].RunOnce || !got["sampled.sweep"].Standing {
+		t.Fatalf("work kinds declared %+v", got)
+	}
+}
