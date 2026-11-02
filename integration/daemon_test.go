@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -21,6 +22,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/client"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // The 02-09 core gate drives the real `open-conduit serve` daemon as a child
@@ -69,12 +71,63 @@ func daemonBinary(t *testing.T) string {
 			daemonErr = err
 			return
 		}
+		// So are the packages open-conduit serves itself (#428).
+		if err := bundleHostPackages(dir); err != nil {
+			daemonErr = err
+			return
+		}
 		daemonBin = filepath.Join(dir, "open-conduit")
 	})
 	if daemonErr != nil {
 		t.Fatal(daemonErr)
 	}
 	return daemonBin
+}
+
+// bundledHostPackages are the first-party packages the release bundles that
+// open-conduit serves itself (`open-conduit extension-run NAME`, #428), as
+// scripts/bundle-packages.sh lists them (TestBundledHostPackagesMatchRelease).
+var bundledHostPackages = []string{"codex", "posthog"}
+
+// bundleHostPackages lays out each of bundledHostPackages beside the
+// open-conduit in dir, as the release archive does: its manifest and
+// certification, printed by that binary, with no executable of its own.
+func bundleHostPackages(dir string) error {
+	bin := filepath.Join(dir, "open-conduit")
+	for _, name := range bundledHostPackages {
+		pkg := filepath.Join(dir, "extensions", name)
+		if err := os.MkdirAll(pkg, 0o755); err != nil {
+			return err
+		}
+		for file, sub := range map[string]string{protocol.ManifestFile: "package-manifest", "certification.json": "package-certification"} {
+			out, err := exec.Command(bin, protocol.HostRun, name, sub).Output()
+			if err != nil {
+				return fmt.Errorf("%s %s: %w", name, sub, err)
+			}
+			if err := os.WriteFile(filepath.Join(pkg, file), out, 0o644); err != nil {
+				return err
+			}
+		}
+	}
+	return nil
+}
+
+// TestBundledHostPackagesMatchRelease keeps the drills' bundled packages
+// those the release bundles.
+func TestBundledHostPackagesMatchRelease(t *testing.T) {
+	raw, err := os.ReadFile(filepath.Join("..", "scripts", "bundle-packages.sh"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, line := range strings.Split(string(raw), "\n") {
+		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "bundled="); ok {
+			if got := strings.Fields(strings.Trim(v, `"`)); !slices.Equal(got, bundledHostPackages) {
+				t.Fatalf("the release bundles %v, the drills %v", got, bundledHostPackages)
+			}
+			return
+		}
+	}
+	t.Fatal("scripts/bundle-packages.sh names no bundled packages")
 }
 
 const drillLease = 2 * time.Second

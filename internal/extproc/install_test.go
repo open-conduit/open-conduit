@@ -217,3 +217,33 @@ func TestDiscoverHostRunManifest(t *testing.T) {
 		t.Fatalf("errors %v, want gone refused as not served", errs)
 	}
 }
+
+// Discovery holds every HostManifest to the package it was asked about: an
+// answer naming another extension, or one that doesn't run on the host, is
+// refused, so the package fails closed whatever answered.
+func TestDiscoverRefusesAMismatchedHostManifest(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "served")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(protocol.Manifest{Protocol: []int{protocol.Version}, Name: "served", Version: "1.0.0", Command: protocol.HostRunCommand("served")})
+	if err := os.WriteFile(filepath.Join(dir, protocol.ManifestFile), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	prev := HostManifest
+	t.Cleanup(func() { HostManifest = prev })
+	for name, m := range map[string]protocol.Manifest{
+		"another name":    {Protocol: []int{protocol.Version}, Name: "other", Version: "1.0.0", Command: protocol.HostRunCommand("other")},
+		"not on the host": {Protocol: []int{protocol.Version}, Name: "served", Version: "1.0.0", Command: []string{"./served-extension"}},
+	} {
+		HostManifest = func(string) ([]byte, protocol.Manifest, error) {
+			raw, _ := json.Marshal(m)
+			return raw, m, nil
+		}
+		found, errs := Discover(root)
+		if len(found) != 0 || len(errs) != 1 || !errors.Is(errs[0], ErrNotServed) {
+			t.Fatalf("%s: found %+v errors %v, want it refused as not served", name, found, errs)
+		}
+	}
+}

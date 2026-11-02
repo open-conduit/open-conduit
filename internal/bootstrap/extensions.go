@@ -230,7 +230,7 @@ func (e manifestExecutor) Attach(context.Context, domain.ID) (extension.AttachSp
 }
 
 // offlineExternal adds the packages installed beside configPath (but
-// exclude) to an offline registry: their declared types and executors, with
+// exclude), and those bundled with the binary, to an offline registry: their declared types and executors, with
 // each package's config validated by the package itself. A package starts,
 // only once a config object of its types needs checking, for validate alone:
 // no coordination store, a throwaway state directory, and stopped by the
@@ -238,9 +238,9 @@ func (e manifestExecutor) Attach(context.Context, domain.ID) (extension.AttachSp
 // objects, and the validation says why (offlinePackages.diagnostics).
 func offlineExternal(reg *config.Registry, configPath, exclude string) *offlinePackages {
 	o := &offlinePackages{}
-	if configPath == "" {
-		return o
-	}
+	// With no config file, the bundled packages still count: a first-party
+	// extension served by open-conduit itself (#428) validates its own
+	// config objects however the config is given.
 	found, _ := discoverPackages(configPath, exclude)
 	if len(found) == 0 || extproc.CheckConflicts(found, takenNames(*reg)) != nil {
 		return o
@@ -390,10 +390,26 @@ func (d *daemon) openExtensions(ctx context.Context) {
 		d.log.Error("installed extensions refused: registration conflict", "error", err)
 		return
 	}
-	for _, f := range found {
+	// Each package is its own process: start them all at once, so the
+	// daemon's start (and with it the adoption of attempts a graceful
+	// restart released) takes the slowest handshake, not their sum. They
+	// join in discovery order.
+	loaded := make([]*extproc.Remote, len(found))
+	failures := make([]error, len(found))
+	var wg sync.WaitGroup
+	for i, f := range found {
+		deps, opts := d.extensionDeps(f.Manifest), d.extensionOptions(f, extproc.StatePaths(d.o.StateDir, f.Manifest.Name))
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			loaded[i], failures[i] = extproc.Load(ctx, f, deps, opts)
+		}()
+	}
+	wg.Wait()
+	for i, f := range found {
 		name := f.Manifest.Name
 		paths := extproc.StatePaths(d.o.StateDir, name)
-		r, err := extproc.Load(ctx, f, d.extensionDeps(f.Manifest), d.extensionOptions(f, paths))
+		r, err := loaded[i], failures[i]
 		if err != nil {
 			diag := extproc.Diagnose(name, err, paths)
 			x.failed = append(x.failed, diag)

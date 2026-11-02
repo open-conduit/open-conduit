@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/protocol"
 )
 
@@ -121,5 +122,31 @@ func TestInstalledEntryGated(t *testing.T) {
 	}
 	if !entryGated(&installed{m: protocol.Manifest{Name: "acme", Provides: protocol.Provides{EntryGated: true}}}) {
 		t.Fatal("entry_gated package not gated")
+	}
+}
+
+// Offline validation with no config file (ValidateConfig, `config check`
+// from stdin) counts the packages bundled with the binary (#428): a bundled
+// package's connection type is registered, not unknown. Without the bundled
+// package the same config is refused as an unknown type.
+func TestValidateWithoutConfigPathCountsBundled(t *testing.T) {
+	cfg := []byte(`{"version":1,"settings":{},"connections":[{"id":"acme","type":"acme","config":{},"secret_refs":{}}],"scopes":[{"id":"eng","name":"eng"}]}`)
+	unknown := func(diags []config.Diagnostic) bool {
+		for _, d := range diags {
+			if d.Path == "connections/0/type" && d.Code == "unknown_registration" {
+				return true
+			}
+		}
+		return false
+	}
+	root := withBundled(t)
+	diags, err := ValidateConfig(cfg)
+	if err != nil || !unknown(diags) {
+		t.Fatalf("with no bundled package: %+v %v, want the type unknown", diags, err)
+	}
+	writeManifest(t, root, "acme", protocol.Provides{Connections: []protocol.TypeDecl{{Type: "acme"}}})
+	diags, err = ValidateConfig(cfg)
+	if err != nil || unknown(diags) {
+		t.Fatalf("with a bundled package declaring the type: %+v %v, want it registered", diags, err)
 	}
 }

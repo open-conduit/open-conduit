@@ -90,8 +90,16 @@ func Discover(root string) ([]Found, []error) {
 			// The host's own executable serves it, so its manifest is the
 			// host's, not the copy written at install: an upgraded
 			// open-conduit that changes the extension needs no reinstall.
-			if raw, m, err = HostManifest(m.Name); err != nil {
+			want := m.Name
+			if raw, m, err = HostManifest(want); err != nil {
 				errs = append(errs, fmt.Errorf("%s: %w", e.Name(), err))
+				continue
+			}
+			// Whatever answers for the host, its manifest must be the
+			// named extension's and run on the host, or the package fails
+			// closed.
+			if m.Name != want || !m.RunsOnHost() {
+				errs = append(errs, fmt.Errorf("%s: %w: the host answered for %q with command %q", e.Name(), ErrNotServed, m.Name, m.Command))
 				continue
 			}
 		}
@@ -130,9 +138,6 @@ var HostManifest = func(name string) ([]byte, protocol.Manifest, error) {
 			h.raw = out
 			h.m, err = protocol.ParseManifest(out)
 		}
-	}
-	if err == nil && (h.m.Name != name || !h.m.RunsOnHost()) {
-		err = fmt.Errorf("%w: it answered for %q", ErrNotServed, h.m.Name)
 	}
 	if err != nil {
 		h = hostManifest{err: fmt.Errorf("%w: %s (%v)", ErrNotServed, name, err)}
