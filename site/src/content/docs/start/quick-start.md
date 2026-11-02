@@ -1,7 +1,39 @@
 ---
 title: Quick start
-description: Let Claude Code set Open Conduit up with you, talk it through in the browser, or set up a GitHub repository and a Slack support channel by hand.
+description: See how Open Conduit routes work without any credentials, then let Claude Code set it up with you, talk it through in the browser, or set up a GitHub repository and a Slack support channel by hand.
 ---
+
+## Look around without credentials
+
+You can see how Open Conduit routes work before you give it any GitHub access. Set up a repository that doesn't need to exist, start the daemon in dry-run mode, and ask it what it would do with a sample event. Everything lives in `/tmp/oc-demo`, away from your own config and state:
+
+```sh
+mkdir -p /tmp/oc-demo/repo && git -C /tmp/oc-demo/repo init -q
+open-conduit init github --repo acme/web --checkout /tmp/oc-demo/repo --config /tmp/oc-demo/config.json
+open-conduit --data-dir /tmp/oc-demo/state serve --config /tmp/oc-demo/config.json --dry-run
+```
+
+Leave that running, and in a second terminal:
+
+```sh
+open-conduit --data-dir /tmp/oc-demo/state route --samples --scope web             # the sample events this scope's routes offer
+open-conduit --data-dir /tmp/oc-demo/state route --trace issue-opened --scope web  # what a newly opened issue would do
+```
+
+The trace shows each route's verdict and the effect, and records nothing:
+
+```json
+{
+  "scope_id": "web",
+  "generation": "1",
+  "routes": [
+    { "route": "issues", "handler": "github", "binding": "agent", "verdict": "match", "reason": "an open issue the labels admit" }
+  ],
+  "effect": { "kind": "start", "binding": "agent", "detail": "starts new github.issue Work owning issue/1 on agent" }
+}
+```
+
+Try `--trace comment` too: a comment on an issue that nobody is working on starts nothing, because only an opened issue starts Work. `serve --dry-run` makes no external writes, so nothing reaches GitHub. When you're done, stop the daemon and delete `/tmp/oc-demo`.
 
 ## Set it up with Claude
 
@@ -58,7 +90,7 @@ open-conduit tui                                     # watch and control runs
 
 ## Try it out first
 
-`open-conduit serve` runs the same daemon in the foreground, which is handy for watching its output. `serve --dry-run` makes no external writes and runs agents as cheap stubs, a safe way to watch a new setup before it touches anything.
+`open-conduit serve` runs the same daemon in the foreground, which is handy for watching its output. `serve --dry-run` makes no external writes and runs agents as cheap stubs, a safe way to watch a new setup before it touches anything. `route --trace` (see [Look around without credentials](#look-around-without-credentials)) shows how an event would route, without recording it.
 
 ## Next steps
 

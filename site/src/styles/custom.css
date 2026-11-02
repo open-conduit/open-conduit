@@ -1,0 +1,13 @@
+/* The landing page's three pillars sit in one row on wide screens. */
+.pillars {
+	display: grid;
+	gap: 1rem;
+}
+.pillars > * {
+	margin: 0 !important;
+}
+@media (min-width: 50rem) {
+	.pillars {
+		grid-template-columns: repeat(3, 1fr);
+	}
+}
