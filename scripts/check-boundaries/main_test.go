@@ -184,3 +184,190 @@ func TestNoPrivilegedReportingPath(t *testing.T) {
 		}
 	}
 }
+
+// TestCoreImportsNoThirdPartyModule checks the core's allowlist of modules
+// outside this one (#354): a database driver, a service SDK or database/sql
+// in a core package is refused, while composition may import them.
+func TestCoreImportsNoThirdPartyModule(t *testing.T) {
+	external := func(owner string, imports ...string) pkg {
+		return pkg{ImportPath: module + owner, Imports: imports}
+	}
+	for _, test := range []struct {
+		name   string
+		pkg    pkg
+		forbid string
+	}{
+		{"runtime_uses_stdlib", external("internal/runtime", "strings", "context"), ""},
+		{"runtime_sqlite_driver", external("internal/runtime", "modernc.org/sqlite"), "modernc.org/sqlite"},
+		{"domain_database_sql", external("domain", "database/sql"), "database/sql"},
+		{"storage_database_sql_driver", external("storage", "database/sql/driver"), "database/sql"},
+		{"extension_slack_sdk", external("extension", "github.com/slack-go/slack"), "github.com/slack-go/slack"},
+		{"protocol_sdk_third_party", external("protocol/sdk", "gopkg.in/yaml.v3"), "gopkg.in/yaml.v3"},
+		{"inproc_third_party", external("extension/inproc", "go.opentelemetry.io/otel"), "go.opentelemetry.io/otel"},
+		{"bootstrap_composes_sqlite", external("internal/bootstrap", "modernc.org/sqlite", "database/sql"), ""},
+		{"sqlite_store_uses_driver", external("internal/storage/sqlite", "modernc.org/sqlite", "database/sql"), ""},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			failures := strings.Join(violations([]pkg{test.pkg}), "\n")
+			if test.forbid == "" {
+				if failures != "" {
+					t.Fatal(failures)
+				}
+			} else if !strings.Contains(failures, test.forbid) {
+				t.Fatalf("third-party import not rejected: %q", failures)
+			}
+		})
+	}
+	// A transitive import through a dependency of this module is caught too.
+	graph := []pkg{project("internal/runtime", "domain"), {ImportPath: module + "domain", Imports: []string{"modernc.org/sqlite"}}}
+	if failures := strings.Join(violations(graph), "\n"); !strings.Contains(failures, "internal/runtime: third-party module modernc.org/sqlite") {
+		t.Fatalf("transitive third-party import not rejected: %q", failures)
+	}
+}
+
+func TestWords(t *testing.T) {
+	for in, want := range map[string]string{
+		"GitHubIssue":    "git hub issue",
+		"pull_request":   "pullrequest",
+		"PullRequests":   "pullrequests",
+		"claude-code":    "claude code",
+		"HTTPServer":     "http server",
+		"Preview":        "preview",
+		"slack.events.x": "slack events x",
+	} {
+		if got := strings.Join(words(in), " "); got != want {
+			t.Errorf("words(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// TestCoreVocabulary is the vocabulary scan's negative control: service,
+// executor and workflow words in identifiers and strings are caught, and
+// comments, imports, the module's own path and the toolbelt's issued
+// tokens are not.
+func TestCoreVocabulary(t *testing.T) {
+	src := `package x
+
+import (
+	"github.com/slack-go/slack"
+	gh "github.com/google/go-github"
+)
+
+import "github.com/open-conduit/open-conduit/domain"
+
+// A GitHub issue under review is the github extension's business.
+/* claude, slack */
+type TokenIssuer interface{ Issue() }
+
+const Preview = "github.com/open-conduit/open-conduit/x"
+
+var GitHubIssue = 1
+var kind = "pull_request"
+var executor = "claude-code"
+var states = []string{"review"}
+var Reviewer = ` + "`slack`" + `
+`
+	found, err := tokenWords("x.go", []byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var got []string
+	for _, f := range found {
+		parts := strings.SplitN(f, "\x00", 3)
+		got = append(got, parts[1]+"="+parts[2])
+	}
+	want := []string{"github=GitHubIssue", "pullrequest=\"pull_request\"", "claude=\"claude-code\"", "review=\"review\"", "reviewer=Reviewer", "slack=`slack`"}
+	if strings.Join(got, " ") != strings.Join(want, " ") {
+		t.Fatalf("found %q\nwant  %q", got, want)
+	}
+
+	root := t.TempDir()
+	write := func(path, body string) {
+		t.Helper()
+		full := filepath.Join(root, path)
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	write("internal/runtime/routes.go", "package runtime\n\nvar source = \"github\"\n")
+	write("internal/runtime/routes_test.go", "package runtime\n\nvar fixture = \"slack\"\n")
+	write("domain/turn.go", "package domain\n\nvar states = []string{\"review\"}\n")
+	write("protocol/sdk/sdk.go", "package sdk\n\n// Slack and GitHub packages use this.\nfunc Serve() {}\n")
+	failures, err := vocabularyViolations(root, map[string][]string{"domain/turn.go": {"review"}, "extension/gone.go": {"slack"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(failures, "\n")
+	for _, want := range []string{`internal/runtime/routes.go:3:14: the core names "github"`, `extension/gone.go: no longer names "slack"`} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in\n%s", want, joined)
+		}
+	}
+	if len(failures) != 2 {
+		t.Errorf("want exactly the runtime string and the stale exception, got\n%s", joined)
+	}
+}
+
+// TestCompositionImports is the negative control for the composition rule:
+// internal/bootstrap reaches a first-party extension or executor only from
+// the wiring files, or a listed exception, and the list can only shrink.
+func TestCompositionImports(t *testing.T) {
+	root := t.TempDir()
+	dir := filepath.Join(root, "internal", "bootstrap")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for name, body := range map[string]string{
+		"adapters.go":     `import ( "` + module + `extensions/slack"; "` + module + `executors/shell" )`,
+		"inproc.go":       `import "` + module + `extensions/human"`,
+		"slack.go":        `import ( "` + module + `extensions/slack"; "` + module + `extensions/github"; "` + module + `internal/runtime" )`,
+		"daemon.go":       `import "` + module + `domain"`,
+		"new.go":          `import x "` + module + `executors/claudecode"`,
+		"github_test.go":  `import "` + module + `extensions/github"`,
+		"external.go":     `import "github.com/slack-go/slack"`,
+		"no_imports.go":   ``,
+		"setup_scope.go":  `import "` + module + `extensionsetup"`,
+		"playbook_fs.go":  `import "` + module + `extensions/slack/playbooks"`,
+		"ingress_file.go": `import "` + module + `extension"`,
+	} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte("package bootstrap\n\n"+body+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failures, err := compositionViolations(root, map[string][]string{
+		"slack.go":       {"extensions/slack"},
+		"daemon.go":      {"executors/shell"},
+		"playbook_fs.go": {"extensions/slack/playbooks"},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(failures, "\n")
+	for _, want := range []string{
+		"internal/bootstrap/slack.go: imports extensions/github outside the wiring files",
+		"internal/bootstrap/new.go: imports executors/claudecode outside the wiring files",
+		"internal/bootstrap/daemon.go: no longer imports executors/shell",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in\n%s", want, joined)
+		}
+	}
+	if len(failures) != 3 {
+		t.Errorf("want exactly three failures, got\n%s", joined)
+	}
+}
+
+// TestSourceRulesPassToday checks the repository itself passes the source
+// rules, with every exception still needed.
+func TestSourceRulesPassToday(t *testing.T) {
+	failures, err := sourceViolations(filepath.Join("..", ".."))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(failures) > 0 {
+		t.Fatal(strings.Join(failures, "\n"))
+	}
+}
