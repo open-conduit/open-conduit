@@ -376,9 +376,14 @@ func (r *Remote) Render(ctx context.Context, e domain.Event) (string, bool) {
 }
 
 // Target resolves a wait target of a kind the package declares (manifest
-// targets) through target.resolve; a failed call resolves nothing.
+// targets) through target.resolve, only in scopes the package is
+// configured for: it never learns another scope's targets, and never
+// claims one there; a failed call resolves nothing.
 func (r *Remote) Target(kind string) func(ctx context.Context, scope domain.ID, name string) (domain.CorrelationKey, []string, bool) {
 	return func(ctx context.Context, scope domain.ID, name string) (domain.CorrelationKey, []string, bool) {
+		if !r.s.allowedScopes()[scope] {
+			return domain.CorrelationKey{}, nil, false
+		}
 		ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 		defer cancel()
 		var out protocol.TargetResolveResult
@@ -396,15 +401,19 @@ func (r *Remote) Target(kind string) func(ctx context.Context, scope domain.ID, 
 }
 
 // SegmentEnded tells the package an execution's container segment ended
-// (segment.ended), so it revokes what it issued for it. It is best effort:
-// the package sweeps what it misses itself.
-func (r *Remote) SegmentEnded(ctx context.Context, execution domain.ID) {
+// (segment.ended), so it revokes what it issued for it. It is best effort
+// (the package sweeps what it misses itself), so it doesn't wait: the call
+// runs on its own goroutine with its own deadline, and a slow package
+// never holds up the execution's settle.
+func (r *Remote) SegmentEnded(_ context.Context, execution domain.ID) {
 	if !r.m.Provides.SegmentEnd {
 		return
 	}
-	ctx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	defer cancel()
-	_ = r.p.Call(ctx, "segment.ended", protocol.SegmentEndedParams{ExecutionID: string(execution)}, nil)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		defer cancel()
+		_ = r.p.Call(ctx, "segment.ended", protocol.SegmentEndedParams{ExecutionID: string(execution)}, nil)
+	}()
 }
 
 // Task runs one declared background pass.

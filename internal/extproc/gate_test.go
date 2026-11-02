@@ -69,3 +69,18 @@ func TestInstalledStartGateNeedsPermissionAndScope(t *testing.T) {
 		t.Fatalf("Work outside the package's scopes was gated: %+v %v", hold, err)
 	}
 }
+
+// An installed package resolves wait targets only in scopes it is
+// configured for: a target elsewhere never reaches the process.
+func TestInstalledTargetsStayInScope(t *testing.T) {
+	m := protocol.Manifest{Protocol: []int{1}, Name: "jobs", Version: "1", Command: []string{"./jobs"}, Provides: protocol.Provides{Targets: []string{"job"}}}
+	s, err := NewService(m, Deps{Now: time.Now, Scopes: func() []domain.ID { return []domain.ID{"mine"} }})
+	if err != nil {
+		t.Fatal(err)
+	}
+	// There is no process here: reaching it would panic.
+	key, types, ok := (&Remote{m: m, s: s}).Target("job")(context.Background(), "theirs", "nightly")
+	if ok || types != nil || key != (domain.CorrelationKey{}) {
+		t.Fatalf("a target outside the package's scopes resolved: %+v %v %v", key, types, ok)
+	}
+}
