@@ -267,7 +267,7 @@ var executor = "claude-code"
 var states = []string{"review"}
 var Reviewer = ` + "`slack`" + `
 `
-	found, err := tokenWords("x.go", []byte(src))
+	found, err := tokenWords("x.go", []byte(src), []string{"Issue"})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -296,18 +296,24 @@ var Reviewer = ` + "`slack`" + `
 	write("internal/runtime/routes_test.go", "package runtime\n\nvar fixture = \"slack\"\n")
 	write("domain/turn.go", "package domain\n\nvar states = []string{\"review\"}\n")
 	write("protocol/sdk/sdk.go", "package sdk\n\n// Slack and GitHub packages use this.\nfunc Serve() {}\n")
-	failures, err := vocabularyViolations(root, map[string][]string{"domain/turn.go": {"review"}, "extension/gone.go": {"slack"}})
+	// "Issue" is a verb only where verbIdentifiers says so: a tracker's
+	// Issue type elsewhere is caught.
+	write("extension/toolbelt.go", "package extension\n\ntype TokenIssuer interface{ Issue() }\n")
+	write("domain/issue.go", "package domain\n\ntype Issue struct{ Number int }\n")
+	failures, err := vocabularyViolations(root, map[string][]string{"domain/turn.go": {"review"}, "extension/gone.go": {"slack"}},
+		map[string][]string{"extension/toolbelt.go": {"Issue"}, "internal/runtime/toolbelt.go": {"issueInTx"}})
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(failures, "\n")
-	for _, want := range []string{`internal/runtime/routes.go:3:14: the core names "github"`, `extension/gone.go: no longer names "slack"`} {
+	for _, want := range []string{`internal/runtime/routes.go:3:14: the core names "github"`, `extension/gone.go: no longer names "slack"`,
+		`domain/issue.go:3:6: the core names "issue"`, "internal/runtime/toolbelt.go: no longer names issueInTx"} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q in\n%s", want, joined)
 		}
 	}
-	if len(failures) != 2 {
-		t.Errorf("want exactly the runtime string and the stale exception, got\n%s", joined)
+	if len(failures) != 4 {
+		t.Errorf("want exactly the runtime string, the Issue type and the two stale exceptions, got\n%s", joined)
 	}
 }
 

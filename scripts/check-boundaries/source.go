@@ -18,7 +18,7 @@ import (
 // core's vocabulary (vocabularyViolations) and composition's extension and
 // executor imports (compositionViolations).
 func sourceViolations(root string) ([]string, error) {
-	vocabulary, err := vocabularyViolations(root, vocabularyExceptions)
+	vocabulary, err := vocabularyViolations(root, vocabularyExceptions, verbIdentifiers)
 	if err != nil {
 		return nil, err
 	}
@@ -47,9 +47,16 @@ var serviceWords = map[string]bool{
 // organisation is the module's own code host path, which names no service.
 const organisation = "github.com/open-conduit"
 
-// verbIdentifiers use "issue" as a verb, for the toolbelt's issued tokens,
-// not a tracker's issues.
-var verbIdentifiers = map[string]bool{"Issue": true, "IssueWithID": true, "issueInTx": true, "issueForAttempt": true, "issueErr": true}
+// verbIdentifiers are the identifiers that use "issue" as a verb, for the
+// toolbelt's issued tokens rather than a tracker's issues, by the file that
+// names them. Only these identifiers in these files are exempt, so a
+// tracker's Issue type or field anywhere else is still caught. An entry
+// nothing needs any more fails the check.
+var verbIdentifiers = map[string][]string{
+	"extension/toolbelt.go":         {"Issue"},
+	"internal/runtime/toolbelt.go":  {"Issue", "IssueWithID", "issueInTx", "issueForAttempt"},
+	"internal/runtime/scheduler.go": {"issueForAttempt", "issueErr"},
+}
 
 // vocabularyExceptions are the words a core file still names today, by its
 // path under the module root. The list may only shrink: an entry nothing
@@ -118,7 +125,8 @@ func serviceWord(s string) string {
 // tokenWords returns the service words in Go source, outside comments and
 // import declarations, each with its position. The module's own import
 // path is not a service word.
-func tokenWords(path string, src []byte) ([]string, error) {
+// Identifiers in verbs are not scanned.
+func tokenWords(path string, src []byte, verbs []string) ([]string, error) {
 	fset := token.NewFileSet()
 	file := fset.AddFile(path, -1, len(src))
 	var errs scanner.ErrorList
@@ -150,7 +158,7 @@ func tokenWords(path string, src []byte) ([]string, error) {
 		var w string
 		switch tok {
 		case token.IDENT:
-			if !verbIdentifiers[lit] {
+			if !contains(verbs, lit) {
 				w = serviceWord(lit)
 			}
 		case token.STRING:
@@ -172,8 +180,9 @@ func tokenWords(path string, src []byte) ([]string, error) {
 
 // vocabularyViolations scans the core's production source (coreDirs, not
 // its tests) for service words in identifiers and string literals, but for
-// the exceptions, each of which must still be needed.
-func vocabularyViolations(root string, exceptions map[string][]string) ([]string, error) {
+// the exceptions and the verb identifiers, each of which must still be
+// needed.
+func vocabularyViolations(root string, exceptions, verbs map[string][]string) ([]string, error) {
 	used := map[string]bool{}
 	var errors []string
 	for _, dir := range coreDirs {
@@ -190,9 +199,20 @@ func vocabularyViolations(root string, exceptions map[string][]string) ([]string
 			}
 			rel, _ := filepath.Rel(root, path)
 			rel = filepath.ToSlash(rel)
-			found, err := tokenWords(rel, src)
+			found, err := tokenWords(rel, src, verbs[rel])
 			if err != nil {
 				return err
+			}
+			if len(verbs[rel]) > 0 {
+				names, err := identifiers(rel, src)
+				if err != nil {
+					return err
+				}
+				for _, v := range verbs[rel] {
+					if names[v] {
+						used["verb\x00"+rel+"\x00"+v] = true
+					}
+				}
 			}
 			for _, f := range found {
 				parts := strings.SplitN(f, "\x00", 3)
@@ -215,8 +235,37 @@ func vocabularyViolations(root string, exceptions map[string][]string) ([]string
 			}
 		}
 	}
+	for file, vs := range verbs {
+		for _, v := range vs {
+			if !used["verb\x00"+file+"\x00"+v] {
+				errors = append(errors, fmt.Sprintf("%s: no longer names %s; remove it from verbIdentifiers", file, v))
+			}
+		}
+	}
 	sort.Strings(errors)
 	return errors, nil
+}
+
+// identifiers are the identifiers Go source names.
+func identifiers(path string, src []byte) (map[string]bool, error) {
+	fset := token.NewFileSet()
+	var errs scanner.ErrorList
+	var s scanner.Scanner
+	s.Init(fset.AddFile(path, -1, len(src)), src, func(pos token.Position, msg string) { errs.Add(pos, msg) }, 0)
+	out := map[string]bool{}
+	for {
+		_, tok, lit := s.Scan()
+		if tok == token.EOF {
+			break
+		}
+		if tok == token.IDENT {
+			out[lit] = true
+		}
+	}
+	if len(errs) > 0 {
+		return nil, errs.Err()
+	}
+	return out, nil
 }
 
 func contains(list []string, s string) bool {
