@@ -1,42 +1,70 @@
 ---
 title: Open Conduit
-description: Run coding and support agents against GitHub issues, Slack threads, schedules and their own defect reports.
+description: Open Conduit turns issues, pull requests, threads and alerts into durable Work that survives waits, restarts and failed runs, with permissions enforced outside the prompt.
 template: splash
 hero:
-  tagline: Run coding and support agents where your work arrives, and keep them going across waits, restarts and failures.
+  title: Your coding agents finish the job
+  tagline: Open Conduit turns issues, pull requests, threads and alerts into durable Work that survives waits, restarts and failed runs. Claude Code, a script or a person can run it, with permissions enforced outside the prompt.
   actions:
     - text: Quick start
       link: /open-conduit/start/quick-start/
       icon: right-arrow
-    - text: Point your agent here
-      link: /open-conduit/start/agents/
+    - text: Look without credentials
+      link: /open-conduit/start/quick-start/#look-around-without-credentials
       variant: minimal
-    - text: Install
-      link: /open-conduit/start/install/
+    - text: How it compares
+      link: /open-conduit/start/compare/
       variant: minimal
 ---
 
 import { Card, CardGrid } from '@astrojs/starlight/components';
 
-Open Conduit is a single local daemon. It accepts what happens in GitHub, Slack, on a schedule or in its own defect reports, decides which agent or command handles it, runs that attempt, and keeps going until the work is done. You watch and steer it from a terminal UI.
+Open Conduit is a single daemon on your own machine. It picks up what happens in GitHub, Slack, Linear, Jira, on a schedule or on a webhook, hands each piece of work to the agent or command that should do it, and stays with it until it's done.
+
+## What makes it different
+
+<div class="pillars">
+	<Card title="Durable Work">
+		Not fire-and-forget: a run can end without the work ending. The Work parks for hours or days and wakes on the merge, the CI result or the reply it was waiting for, even after a restart. A failed attempt is retried; it doesn't fail the Work.
+		[How waits work](/open-conduit/architecture/timers-waits/)
+	</Card>
+	<Card title="Any executor">
+		Each run goes to whichever executor its binding names. Agents run on Claude Code today. A shell command runs the same way, with the same history and retries, and a person can answer an agent's question or take over its session.
+		[Executors and bindings](/open-conduit/start/overview/#how-the-pieces-fit)
+	</Card>
+	<Card title="Authority at the host">
+		Each run gets only the operations its binding grants, checked by the daemon rather than asked for in a prompt. A binding can run its agent in a sandbox or a container, away from your credentials.
+		[Sandbox your agents](/open-conduit/guides/sandboxes/)
+	</Card>
+</div>
+
+## Built by itself
+
+Open Conduit's own issues are worked by Open Conduit agents. They post the start comment, open the pull request, fix the red checks and answer the reviews. Then a person merges.
+
+On 2 November 2026, **158 of the 168** pull requests merged into the repository came from an agent's `agent/issue-N` branch.
+
+[See the merged agent pull requests](https://github.com/open-conduit/open-conduit/pulls?q=is%3Apr+is%3Amerged+head%3Aagent%2F)
+
+## What it runs
 
 <CardGrid>
 	<Card title="GitHub engineering" icon="github">
-		Claims issues, works each on its own branch and checkout with Claude Code, opens a pull request and answers checks and review comments.
+		Claims issues and works each one on its own branch and checkout. It opens a pull request, then comes back for every check result, review and comment until the PR merges.
 		[Set it up](/open-conduit/workflows/github/)
 	</Card>
 	<Card title="Slack support" icon="slack">
-		Answers threads in a channel. Follow-ups reach the agent mid-turn, and it never answers itself.
+		Answers threads in a channel. Follow-ups reach the agent while it's still working, and it never answers itself.
 		[Set it up](/open-conduit/workflows/slack/)
 	</Card>
 	<Card title="Scheduled jobs" icon="seti:clock">
-		Runs commands or agent turns on cron, at fixed times, every N minutes, on a webhook or by hand, and catches up on missed slots.
+		Runs commands or agent turns on cron, at fixed times, every N minutes, on a webhook or by hand, and catches up on the slots it missed.
 		[Set it up](/open-conduit/workflows/scheduled-jobs/)
 	</Card>
-	<Card title="Introspection" icon="magnifier">
-		Agents report what breaks for them; a daily triage groups the reports and lands fixes.
-		[Set it up](/open-conduit/workflows/introspection/)
+	<Card title="Human decisions" icon="approve-check">
+		An agent asks a person a private question. Its Work parks until the answer comes from the terminal UI or the web view.
+		[Set it up](/open-conduit/workflows/human-decisions/)
 	</Card>
 </CardGrid>
 
-To add your own integrations and toolbelt operations, [build your first extension](/open-conduit/guides/first-extension/).
+To add your own integrations, executors and toolbelt operations, [build your first extension](/open-conduit/guides/first-extension/).

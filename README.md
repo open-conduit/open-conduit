@@ -1,17 +1,22 @@
 # Open Conduit
 
-**An agent-native orchestration platform for work of every kind.**
+**Your coding agents finish the job.** Open Conduit turns issues, pull requests, threads and alerts into durable Work that survives waits, restarts and failed runs. Claude Code, a script or a person can run it, with permissions enforced outside the prompt.
 
-***Open Conduit builds itself!*** Its own issues are worked by Open Conduit agents: they claim them, open the pull requests, answer the reviews and fix the problems they run into along the way.
+***Open Conduit builds itself.*** Its own issues are worked by Open Conduit agents: they post the start comment, open the pull request, fix the red checks and answer the reviews. On 2 November 2026, 158 of the 168 pull requests merged into this repository came from an agent's `agent/issue-N` branch ([see them](https://github.com/open-conduit/open-conduit/pulls?q=is%3Apr+is%3Amerged+head%3Aagent%2F)).
 
-Work turns up in many places: an issue on GitHub, a ticket in Linear or Jira, a question in a Slack thread, a job due at 7am, a defect an agent ran into yesterday. Open Conduit picks each one up, gives it to the right agent or command, and sees it through. It waits on checks, reviews and replies, survives restarts and failures, and keeps going until the work is done. You watch and steer it all from one terminal UI.
+Most agent tools fire once per trigger: an issue is assigned, a job runs, and if the pull request goes red an hour later the next comment starts from scratch. Open Conduit keeps the work, not the run. Three things set it apart:
 
-- **One daemon, every source.** GitHub, Linear, Jira, Slack, schedules and webhooks all feed the same core. That means one history, one retry and timeout model, and one view of everything in flight.
-- **Built for agents.** Each run gets a toolbelt of outcomes it can ask for, like "comment on this issue", "open a pull request" or "wait until that PR merges". Agents never deal with labels, markers or a tracker's conventions.
-- **Durable by design.** Every event is recorded before anything acts on it. Work can park for hours or days and wake on the event it is waiting for, even after a restart.
+- **Durable, not fire-and-forget.** Every event is recorded before anything acts on it. Work parks for hours or days and wakes on the merge, the CI result or the reply it is waiting for, even after a restart. A failed attempt is retried; it doesn't fail the Work.
+- **Any executor.** An Execution is one attempt to move Work forward, through whichever executor its binding names. Agents run on Claude Code today; a shell command runs with the same history, retries and timeouts; a person can answer an agent's private question or take over its session. Extensions can add other executors.
+- **Authority at the host.** Each run gets a toolbelt of only the operations its binding grants, such as "comment on this issue", "open a pull request" or "wait until that PR merges", and the daemon checks every call. A binding can run its agent in a sandbox or a container, away from your credentials and Open Conduit's own state.
+
+And around those:
+
+- **One daemon, every source.** GitHub, Linear, Jira, Slack, schedules and webhooks all feed the same core, with one history and one view of everything in flight, in a terminal UI or a browser.
 - **It improves itself.** Agents report what trips them up and log the corrections they are given. A daily triage turns the reports into fixes, and a sweep folds the corrections into your project's rules.
-- **Any executor you can imagine.** An Execution is just one attempt to move Work forward. Claude Code is one executor, a shell command is another, and an extension can add any other agent, model or tool. Swap them per workflow without touching the rest.
 - **Runs on your machine.** It is a single local daemon that uses your own CLI and keyring logins. Nothing is hosted for you and no credential ever sits in the config.
+
+[How it compares](https://open-conduit.github.io/open-conduit/start/compare/) sets it beside Copilot's coding agent, Claude Code GitHub Actions, Devin, OpenHands, Temporal and n8n.
 
 ## Why it exists
 
@@ -29,7 +34,7 @@ Open Conduit is the heart of that orchestrator, re-architected around the right 
 - **Timer** and **Wait** make time and suspension durable.
 - **Scope** holds the configuration, routes and bindings for one area of work.
 
-GitHub, Slack, schedules and introspection are integrations that plug in around that core, and Claude Code is just one executor among any you care to add. None of them is the core itself. And it builds itself: this README was written by an Open Conduit agent working [issue #26](https://github.com/open-conduit/open-conduit/issues/26).
+GitHub, Slack, schedules and introspection are integrations that plug in around that core, and Claude Code is one executor beside the shell executor and any an extension adds. None of them is the core itself. And it builds itself: this README was written by an Open Conduit agent working [issue #26](https://github.com/open-conduit/open-conduit/issues/26).
 
 ## Get going
 
@@ -57,6 +62,8 @@ open-conduit web                                     # the same in a browser, on
 ```
 
 The GitHub setup runs its agents with the Claude Code executor, and the GitHub CLI's (`gh`) login is its default credential. To run something else, point a binding at a shell command or at an executor from an extension. Release binaries, an install script and `go install` are covered in [Install](https://open-conduit.github.io/open-conduit/start/install/).
+
+To see routing before you set anything up, [look around without credentials](https://open-conduit.github.io/open-conduit/start/quick-start/#look-around-without-credentials): a dry-run daemon and a sample event, no GitHub access needed.
 
 Where to go next:
 

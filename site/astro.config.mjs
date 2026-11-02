@@ -9,8 +9,9 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'Open Conduit',
+			customCss: ['./src/styles/custom.css'],
 			description:
-				'Run coding and support agents against GitHub issues, Slack threads, schedules and their own defect reports.',
+				'Durable Work for coding agents: issues, pull requests, threads and alerts that survive waits, restarts and failed runs, with permissions enforced outside the prompt.',
 			social: [
 				{ icon: 'github', label: 'GitHub', href: 'https://github.com/open-conduit/open-conduit' },
 			],
@@ -25,6 +26,7 @@ export default defineConfig({
 						{ label: 'Install', slug: 'start/install' },
 						{ label: 'Quick start', slug: 'start/quick-start' },
 						{ label: 'Point your agent here', slug: 'start/agents' },
+						{ label: 'How it compares', slug: 'start/compare' },
 					],
 				},
 				{
