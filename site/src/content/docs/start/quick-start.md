@@ -28,7 +28,7 @@ Claude Code must be installed and signed in. The session can run only `open-cond
 The web view has a **Setup** page where you start a session with a setup assistant and talk to it in the browser. It needs a scope with a `setup` entry:
 
 - **A fresh install has one already.** With no config file and nothing stored yet, the daemon (`open-conduit serve`, or the service) starts on a default `setup` scope as generation 1. It doesn't write the file; the first `config apply` does.
-- **With a config, add it** with `open-conduit init setup` (`--scope ID` names it, `setup` by default; `--dry-run` prints it instead). Before the daemon has ever run, that's all. Once it has, it keeps running the configuration it last applied, so make the file the next generation: `open-conduit config validate FILE` prints the current generation, then `open-conduit config apply FILE --generation N`. `open-conduit config path` prints the file's path.
+- **With a config, add it** with `open-conduit init setup` (`--scope ID` names it, `setup` by default; `--dry-run` prints it instead). Before the daemon has ever run, that's all. Once it has, it keeps running the configuration it last applied, so make the file the next generation with `open-conduit config apply FILE`. `open-conduit config path` prints the file's path.
 
 Then run `open-conduit web`, open the Setup page and start a session, choosing the model. You can also give that one session a shell, so it can look around your machine itself, or your own MCP servers and claude.ai connectors; both are off by default, and it still proposes config changes for you to apply. `open-conduit actions run setup start --scope setup --input "opus +shell"` starts one from a terminal.
 

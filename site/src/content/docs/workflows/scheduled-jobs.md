@@ -53,7 +53,7 @@ Each workflow is a scope in the config. The example below is a complete, minimal
 ## Run a job by hand
 
 ```sh
-open-conduit events emit --scope-id ops --type schedule.run --delivery-id run-1 --key-source schedule/ops --key-external-id job/nightly-report
+open-conduit events emit --scope ops --type schedule.run --delivery-id run-1 --key-source schedule/ops --key-external-id job/nightly-report
 ```
 
 See [scheduled jobs](../../architecture/schedule-extension/) for every trigger.

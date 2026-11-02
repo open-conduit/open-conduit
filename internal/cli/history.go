@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -25,20 +24,18 @@ func (o *operator) runs(args []string) int {
 		return usageError(o.errOut, "missing runs subcommand")
 	}
 	switch args[0] {
-	case "list", "get":
-		return o.listOrGet(args, runFilters, func(c *client.Client, q url.Values) (any, error) {
-			cx, cancel := ctx()
-			defer cancel()
-			return c.Runs(cx, q)
-		}, func(c *client.Client, id string) (any, error) {
+	case "get":
+		return o.listOrGet(args, runFilters, nil, nil, func(c *client.Client, id string) (any, error) {
 			cx, cancel := ctx()
 			defer cancel()
 			return c.Run(cx, id)
 		})
-	case "table":
-		f := newFlags("table", append(runFilters, "limit", "cursor")...)
+	case "list", "table":
+		// table is the old name for what list prints by default.
+		f := newFlags(args[0], append(runFilters, "limit", "cursor")...)
+		asJSON := f.fs.Bool("json", false, "")
 		if pos, err := f.parse(args[1:]); err != nil || len(pos) != 0 {
-			return usageError(o.errOut, "invalid runs table flags")
+			return usageError(o.errOut, "invalid runs "+args[0]+" flags")
 		}
 		c, _, err := o.client()
 		if err != nil {
@@ -47,8 +44,8 @@ func (o *operator) runs(args []string) int {
 		cx, cancel := ctx()
 		defer cancel()
 		page, err := c.Runs(cx, f.query(runFilters...))
-		if err != nil {
-			return o.emit(nil, err)
+		if err != nil || *asJSON {
+			return o.emit(page, err)
 		}
 		now := time.Now()
 		fmt.Fprintln(o.out, runview.Header)
@@ -104,9 +101,15 @@ func (o *operator) doctor(args []string) int {
 	} else {
 		w := tabwriter.NewWriter(o.out, 0, 2, 2, ' ', 0)
 		for _, ch := range d.Checks {
-			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", strings.ToUpper(ch.Status), ch.Name, ch.Code, ch.Detail)
-			for _, item := range ch.Items {
-				fmt.Fprintf(w, "\t\t\t  %s\n", item)
+			// A check with no detail of its own shows its first item in
+			// the detail column, not an empty row over an indented line.
+			detail, items := ch.Detail, ch.Items
+			if detail == "" && len(items) > 0 {
+				detail, items = items[0], items[1:]
+			}
+			fmt.Fprintf(w, "%s\t%s\t%s\t%s\n", strings.ToUpper(ch.Status), ch.Name, ch.Code, detail)
+			for _, item := range items {
+				fmt.Fprintf(w, "\t\t\t%s\n", item)
 			}
 		}
 		_ = w.Flush()

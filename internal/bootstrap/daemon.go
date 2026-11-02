@@ -480,7 +480,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	case "default":
 		d.log.Info("no config file: running the default configuration, a setup scope; the first apply writes the file", "generation", generation, "config", o.ConfigPath)
 	case "pending_edit":
-		d.log.Warn("config file differs from the active generation and was not applied; restarting does not apply it", "generation", generation, "config", o.ConfigPath, "apply_with", fmt.Sprintf("open-conduit config apply %s --generation %d", o.ConfigPath, generation))
+		d.log.Warn("config file differs from the active generation and was not applied; restarting does not apply it", "generation", generation, "config", o.ConfigPath, "apply_with", fmt.Sprintf("open-conduit config apply %s", o.ConfigPath))
 	case "invalid":
 		d.log.Warn("config file is invalid; the active generation keeps running", "generation", generation, "config", o.ConfigPath, "check_with", "open-conduit config validate "+o.ConfigPath)
 	}

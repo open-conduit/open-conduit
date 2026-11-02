@@ -395,11 +395,10 @@ open-conduit config set /scopes/web/authorization/operations/- '"weather.forecas
 open-conduit config set /scopes/web/bindings/agent/operations/- '"weather.forecast"'
 ```
 
-The first adds the entry. The second lets the scope use the operation at all, and the third lets its agent call it. Then hand the changed file to the running daemon: `config validate` prints the generation it is running, and `config apply` takes it, so a change made elsewhere in the meantime isn't overwritten:
+The first adds the entry. The second lets the scope use the operation at all, and the third lets its agent call it. Then hand the changed file to the running daemon:
 
 ```sh
-open-conduit config validate "$(open-conduit config path)"
-open-conduit config apply "$(open-conduit config path)" --generation N
+open-conduit config apply "$(open-conduit config path)"
 ```
 
 ### Ask an agent
@@ -409,7 +408,7 @@ Open an issue in the repository: "What's the weather forecast for Leeds? Answer 
 Watch it happen in `open-conduit tui`, or find the run and read the agent's transcript, where the call and its result appear:
 
 ```sh
-open-conduit runs list --scope-id web
+open-conduit runs list --scope web
 open-conduit runs log ID --transcript
 ```
 

@@ -111,76 +111,6 @@ func usageError(errOut io.Writer, msg string) int {
 	return 2
 }
 
-const operatorHelp = `open-conduit — Open Conduit operator client
-
-Usage: open-conduit [--endpoint unix:///path] [--token-file PATH] [--socket PATH] [--data-dir DIR] COMMAND
-
-Commands:
-  serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h]
-        [--webhook-addr 127.0.0.1:8787] [--tunnel ngrok|cloudflared|static] [--tunnel-domain D] [--tunnel-name N] [--tunnel-hostname H] [--public-url URL]
-                             (override the config's settings.webhooks for this run)
-        [--no-tunnel] [--dry-run] [--claude-usage] [--no-telemetry]
-        (--webhook-addr takes any free local port; 8787 is only an example)
-        (--no-telemetry, OPEN_CONDUIT_NO_TELEMETRY=1 or DO_NOT_TRACK=1 turn off the anonymous usage reports)
-        [--web] [--web-addr 127.0.0.1:7420] [--web-host open-conduit.localhost]
-                             also serve the web view from the daemon (open-conduit web url prints its sign-in URL)
-  service install [--no-start] [serve flags] | service uninstall|start|stop|status
-                             run the daemon in the background (launchd on macOS, systemd --user on Linux)
-  health
-  init                       list the setups the registered extensions offer
-  init TYPE [flags] [--config PATH] [--force] [--dry-run]   run one (for example init github --repo OWNER/NAME, init slack)
-  init --with claude         start Claude Code with the setup guide
-  secret set NAME [--store keyring|file] | secret path   (value read from stdin, never an argument)
-  scopes list [--parent-id ID] [--enabled true|false] | scopes get ID | scopes reconcile ID [--revision N]
-  work list [--scope-id --state --kind --parent-id] | work get ID
-  work create --scope-id S --kind K --binding B [--schema S --data JSON] [--key K]
-  work cancel|retry|hold|release ID --revision N [--reason TEXT] [--key K]
-  work rebind ID --revision N --binding B [--reason TEXT] [--key K]
-  work attach ID [--keep-held]   hold, attach to the executor's session, release on exit
-  container attach ID        attach to held Work's session in a container, as work attach does for Work that ran in one
-  claim [SCOPE#]N [--scope S] [--entry NAME]   claim an issue by hand (the scope's claim action)
-  actions list (--scope S | --work W)   the actions extensions offer there now
-  actions run PROVIDER ID (--scope S | --work W) [--input TEXT] [--key K]   invoke one as the local operator
-  adapters [TYPE] [--json]   the registered integrations and the fields each takes
-  route KEY [--scope S] [--limit N]   explain how a key's Events were routed (KEY: ENG-12, issue/ENG-12, #12 or an external ID)
-  route --trace TYPE|SAMPLE --scope S [--source SRC] [--key-source S --key-external-id X] [--work-id W] [--schema S --data JSON]
-                             dry-run how an Event would route now (nothing is recorded)
-  route --samples --scope S  the sample Events the scope's routes offer for --trace
-  work wake ID --revision N --type T --delivery-id D --key-source S --key-external-id X [--schema S --data JSON] [--key K]
-  events list [--scope-id --work-id --type --after-sequence] | events get ID | events chain ID
-  events emit --scope-id S --type T --delivery-id D [--key-source S --key-external-id X] [--work-id W] [--causation-id E] [--schema S --data JSON] [--key K]
-  executions list [--scope-id --work-id --state] | executions get ID | executions cancel ID --revision N [--reason TEXT] [--key K]
-  waits list [--scope-id --work-id --execution-id --state] | waits get ID
-  artifacts list [--work-id --execution-id --kind] | artifacts cat ID [--range bytes=A-B]
-  runs list|table [--scope-id --work-id --state --executor-binding --executor --work-kind --outcome] | runs get ID
-  runs log ID [--follow] [--transcript] [--range bytes=A-B]
-  doctor [--check-secrets] [--json]
-  tui
-  web [--addr 127.0.0.1:7420] [--host open-conduit.localhost]   the same view in a browser on this machine (prints a sign-in URL)
-  web url [--addr ADDR] [--host NAME]   print the web view's sign-in URL (it lasts across restarts)
-  config validate FILE | config apply FILE --generation N [--key K]
-  config path | config show [--file F] | config check [--file F]
-  config get POINTER | config set POINTER JSON | config unset POINTER   [--file F] (local file, validated before saving)
-  config include add [FOLDER] --parent SCOPE | config include remove [FOLDER]   [--file F] (compose a folder's .open-conduit/config.json)
-  config edit [--file F]     full-screen editor with the adapters' documented fields, validated before saving
-  auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
-  auth recover               (daemon stopped) revoke every operator credential and write a fresh token file
-  migrate config --from V1_CONFIG [--out FILE | --write] [--force] [--no-repo-files] [--time-zone ZONE] [--shell-jobs] [--detached-timeout S] [--json]
-  migrate upgrade [--config FILE] [--write] [--json]
-                             convert an Open Supervisor config (preview unless --out/--write; v1 files are never modified)
-  backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR   (daemon stopped; restore writes a new state directory)
-  state check [--json]       (daemon stopped) diagnose the state directory: permissions, schema, integrity, artifacts, drain status
-  extension list|inspect DIR|install DIR|update DIR|rollback NAME|remove NAME [--force]   manage extension packages (next serve)
-  extension certify DIR [--json] [--report FILE]   run the conformance runner on a package
-  dev [DIR] [--secret NAME=VALUE|NAME=env:VAR]... [--entry TYPE=JSON]... [--agent PATH] [--web-addr 127.0.0.1:PORT]
-                             run the package in DIR (default .) against a throwaway daemon and its web view,
-                             rebuilding and restarting it when its files change; Ctrl-C stops everything
-  upgrade [--check] [--version V] [--no-restart] [--json]   install the latest release and restart the background service
-  version
-
-Lists accept --limit and --cursor. Mutations accept --key to retry safely with the same Idempotency-Key.
-`
-
 func defaultStateDir(env Env) string {
 	if v := env.Getenv("XDG_STATE_HOME"); v != "" {
 		return filepath.Join(v, "open-conduit")
@@ -227,6 +157,16 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.
 		return usageError(errOut, "unknown command")
+	}
+	// Help never needs the daemon, whichever command asks for it.
+	if helpRequested(rest[1:]) {
+		o.printHelp(out, rest[0], rest[1:])
+		return 0
+	}
+	// A command that needs a subcommand shows what it takes.
+	if len(rest) == 1 && needsSubcommand[rest[0]] {
+		fmt.Fprint(errOut, commandHelp(rest[0]))
+		return 2
 	}
 	return cmd(rest[1:])
 }
@@ -344,6 +284,12 @@ func newFlags(name string, names ...string) *flags {
 	for _, n := range names {
 		f.values[n] = f.fs.String(n, "", "")
 	}
+	// --scope and --scope-id name the same thing on every command.
+	for n, alias := range map[string]string{"scope-id": "scope", "scope": "scope-id"} {
+		if v, ok := f.values[n]; ok && f.values[alias] == nil {
+			f.fs.StringVar(v, alias, "", "")
+		}
+	}
 	return f
 }
 func (f *flags) get(n string) string { return *f.values[n] }
@@ -389,27 +335,37 @@ func (f *flags) payload() (*client.Payload, error) {
 	return &client.Payload{Schema: schema, Data: json.RawMessage(data)}, nil
 }
 
-// listOrGet implements "<noun> list|get" with shared filter flags.
-func (o *operator) listOrGet(args []string, filters []string, list func(*client.Client, url.Values) (any, error), get func(*client.Client, string) (any, error)) int {
+// listOrGet implements "<noun> list|get" with shared filter flags. A list
+// prints a table of columns (JSON field names, dotted for nested ones)
+// unless --json asks for the records.
+func (o *operator) listOrGet(args []string, filters, columns []string, list func(*client.Client, url.Values) (any, error), get func(*client.Client, string) (any, error)) int {
 	if len(args) == 0 {
 		return usageError(o.errOut, "missing subcommand")
 	}
 	f := newFlags(args[0], append(filters, "limit", "cursor")...)
+	asJSON := f.fs.Bool("json", false, "")
 	pos, err := f.parse(args[1:])
 	if err != nil {
 		return usageError(o.errOut, "invalid flag")
+	}
+	switch {
+	case args[0] == "list" && len(pos) == 0:
+	case args[0] == "get" && len(pos) == 1:
+	default:
+		return usageError(o.errOut, "expected list or get ID")
 	}
 	c, _, err := o.client()
 	if err != nil {
 		return o.emit(nil, err)
 	}
-	switch {
-	case args[0] == "list" && len(pos) == 0:
-		return o.emit(list(c, f.query(filters...)))
-	case args[0] == "get" && len(pos) == 1:
+	if args[0] == "get" {
 		return o.emit(get(c, pos[0]))
 	}
-	return usageError(o.errOut, "expected list or get ID")
+	v, err := list(c, f.query(filters...))
+	if err != nil || *asJSON {
+		return o.emit(v, err)
+	}
+	return o.table(v, columns)
 }
 
 func (o *operator) health(args []string) int {
@@ -429,7 +385,7 @@ func (o *operator) scopes(args []string) int {
 	if len(args) > 0 && args[0] == "reconcile" {
 		return o.reconcileScope(args[1:])
 	}
-	return o.listOrGet(args, []string{"parent-id", "enabled"}, func(c *client.Client, q url.Values) (any, error) {
+	return o.listOrGet(args, []string{"parent-id", "enabled"}, scopeColumns, func(c *client.Client, q url.Values) (any, error) {
 		cx, cancel := ctx()
 		defer cancel()
 		return c.Scopes(cx, q)
@@ -440,17 +396,62 @@ func (o *operator) scopes(args []string) int {
 	})
 }
 
-func (o *operator) control(args []string, run func(c *client.Client, id, revision, reason, key string) (any, error)) int {
+// control runs a revisioned control on ID. Without --revision it acts on
+// the current revision (current fetches it, refetching once if the record
+// moved meanwhile); with it, only if that revision is still current.
+func (o *operator) control(args []string, current func(c *client.Client, id string) (string, error), run func(c *client.Client, id, revision, reason, key string) (any, error)) int {
 	f := newFlags("control", "revision", "reason", "key")
 	pos, err := f.parse(args)
-	if err != nil || len(pos) != 1 || f.get("revision") == "" {
-		return usageError(o.errOut, "expected ID --revision N")
+	if err != nil || len(pos) != 1 {
+		return usageError(o.errOut, "expected ID [--revision N]")
 	}
 	c, _, err := o.client()
 	if err != nil {
 		return o.emit(nil, err)
 	}
-	return o.emit(run(c, pos[0], f.get("revision"), f.get("reason"), f.key()))
+	key := f.key()
+	return o.emit(withRevision(c, pos[0], f.get("revision"), current, func(rev string) (any, error) {
+		return run(c, pos[0], rev, f.get("reason"), key)
+	}))
+}
+
+// withRevision runs fn at revision, or, when revision is "", at the
+// record's current one, fetching it again if a concurrent change made it
+// stale before fn ran.
+func withRevision(c *client.Client, id, revision string, current func(c *client.Client, id string) (string, error), fn func(rev string) (any, error)) (any, error) {
+	if revision != "" {
+		return fn(revision)
+	}
+	var (
+		v   any
+		err error
+	)
+	for attempt := 0; attempt < 3; attempt++ {
+		var rev string
+		if rev, err = current(c, id); err != nil {
+			return nil, err
+		}
+		v, err = fn(rev)
+		var api *client.Error
+		if !errors.As(err, &api) || api.Code != "revision_conflict" {
+			return v, err
+		}
+	}
+	return v, err
+}
+
+func workRevision(c *client.Client, id string) (string, error) {
+	cx, cancel := ctx()
+	defer cancel()
+	w, err := c.Work(cx, id)
+	return w.Revision, err
+}
+
+func executionRevision(c *client.Client, id string) (string, error) {
+	cx, cancel := ctx()
+	defer cancel()
+	e, err := c.Execution(cx, id)
+	return e.Revision, err
 }
 
 func (o *operator) work(args []string) int {
@@ -476,13 +477,13 @@ func (o *operator) work(args []string) int {
 		defer cancel()
 		return o.emit(c.CreateWork(cx, client.WorkRequest{ScopeID: f.get("scope-id"), Kind: f.get("kind"), Binding: f.get("binding"), ParentID: f.get("parent-id"), Context: p}, f.key()))
 	case "cancel":
-		return o.control(args[1:], func(c *client.Client, id, rev, reason, key string) (any, error) {
+		return o.control(args[1:], workRevision, func(c *client.Client, id, rev, reason, key string) (any, error) {
 			cx, cancel := ctx()
 			defer cancel()
 			return c.CancelWork(cx, id, rev, reason, key)
 		})
 	case "retry":
-		return o.control(args[1:], func(c *client.Client, id, rev, reason, key string) (any, error) {
+		return o.control(args[1:], workRevision, func(c *client.Client, id, rev, reason, key string) (any, error) {
 			cx, cancel := ctx()
 			defer cancel()
 			return c.RetryWork(cx, id, rev, reason, key)
@@ -503,11 +504,14 @@ func (o *operator) work(args []string) int {
 		if err != nil {
 			return o.emit(nil, err)
 		}
-		cx, cancel := ctx()
-		defer cancel()
-		return o.emit(c.Wake(cx, pos[0], client.WakeRequest{ExpectedRevision: f.get("revision"), Type: f.get("type"), DeliveryID: f.get("delivery-id"), Data: p, CorrelationKey: &client.Key{Source: f.get("key-source"), ExternalID: f.get("key-external-id")}}, f.key()))
+		key := f.key()
+		return o.emit(withRevision(c, pos[0], f.get("revision"), workRevision, func(rev string) (any, error) {
+			cx, cancel := ctx()
+			defer cancel()
+			return c.Wake(cx, pos[0], client.WakeRequest{ExpectedRevision: rev, Type: f.get("type"), DeliveryID: f.get("delivery-id"), Data: p, CorrelationKey: &client.Key{Source: f.get("key-source"), ExternalID: f.get("key-external-id")}}, key)
+		}))
 	}
-	return o.listOrGet(args, []string{"scope-id", "state", "kind", "parent-id"}, func(c *client.Client, q url.Values) (any, error) {
+	return o.listOrGet(args, []string{"scope-id", "state", "kind", "parent-id"}, workColumns, func(c *client.Client, q url.Values) (any, error) {
 		cx, cancel := ctx()
 		defer cancel()
 		return c.Works(cx, q)
@@ -553,7 +557,7 @@ func (o *operator) events(args []string) int {
 		defer cancel()
 		return o.emit(c.SubmitEvent(cx, client.EventRequest{ScopeID: f.get("scope-id"), Type: f.get("type"), DeliveryID: f.get("delivery-id"), WorkID: f.get("work-id"), CausationID: f.get("causation-id"), CorrelationKey: correlation, Data: p}, f.key()))
 	}
-	return o.listOrGet(args, []string{"scope-id", "work-id", "type", "after-sequence"}, func(c *client.Client, q url.Values) (any, error) {
+	return o.listOrGet(args, []string{"scope-id", "work-id", "type", "after-sequence"}, eventColumns, func(c *client.Client, q url.Values) (any, error) {
 		cx, cancel := ctx()
 		defer cancel()
 		return c.Events(cx, q)
@@ -566,13 +570,13 @@ func (o *operator) events(args []string) int {
 
 func (o *operator) executions(args []string) int {
 	if len(args) > 0 && args[0] == "cancel" {
-		return o.control(args[1:], func(c *client.Client, id, rev, reason, key string) (any, error) {
+		return o.control(args[1:], executionRevision, func(c *client.Client, id, rev, reason, key string) (any, error) {
 			cx, cancel := ctx()
 			defer cancel()
 			return c.CancelExecution(cx, id, rev, reason, key)
 		})
 	}
-	return o.listOrGet(args, []string{"scope-id", "work-id", "state"}, func(c *client.Client, q url.Values) (any, error) {
+	return o.listOrGet(args, []string{"scope-id", "work-id", "state"}, executionColumns, func(c *client.Client, q url.Values) (any, error) {
 		cx, cancel := ctx()
 		defer cancel()
 		return c.Executions(cx, q)
@@ -584,7 +588,7 @@ func (o *operator) executions(args []string) int {
 }
 
 func (o *operator) waits(args []string) int {
-	return o.listOrGet(args, []string{"scope-id", "work-id", "execution-id", "state"}, func(c *client.Client, q url.Values) (any, error) {
+	return o.listOrGet(args, []string{"scope-id", "work-id", "execution-id", "state"}, waitColumns, func(c *client.Client, q url.Values) (any, error) {
 		cx, cancel := ctx()
 		defer cancel()
 		return c.Waits(cx, q)
@@ -617,6 +621,7 @@ func (o *operator) artifacts(args []string) int {
 		return usageError(o.errOut, "expected artifacts list or cat ID")
 	}
 	f := newFlags("list", "work-id", "execution-id", "kind", "limit", "cursor")
+	asJSON := f.fs.Bool("json", false, "")
 	if pos, err := f.parse(args[1:]); err != nil || len(pos) != 0 {
 		return usageError(o.errOut, "invalid artifacts list flags")
 	}
@@ -626,12 +631,17 @@ func (o *operator) artifacts(args []string) int {
 	}
 	cx, cancel := ctx()
 	defer cancel()
-	return o.emit(c.Artifacts(cx, f.query("work-id", "execution-id", "kind")))
+	page, err := c.Artifacts(cx, f.query("work-id", "execution-id", "kind"))
+	if err != nil || *asJSON {
+		return o.emit(page, err)
+	}
+	return o.table(page, artifactColumns)
 }
 
 func (o *operator) config(args []string) int {
+	const configUsage = "expected config check|path|show|get|set|unset|include|edit (local file) or config validate|apply FILE (running daemon)"
 	if len(args) == 0 {
-		return usageError(o.errOut, "missing config subcommand")
+		return usageError(o.errOut, configUsage)
 	}
 	if args[0] == "edit" {
 		return o.editConfig(args[1:])
@@ -641,8 +651,11 @@ func (o *operator) config(args []string) int {
 	}
 	f := newFlags(args[0], "generation", "key")
 	pos, err := f.parse(args[1:])
+	if args[0] != "validate" && args[0] != "apply" {
+		return usageError(o.errOut, configUsage)
+	}
 	if err != nil || len(pos) != 1 {
-		return usageError(o.errOut, "expected config validate|apply FILE")
+		return usageError(o.errOut, "expected config "+args[0]+" FILE")
 	}
 	data, err := os.ReadFile(o.abs(pos[0]))
 	if err != nil {
@@ -661,16 +674,23 @@ func (o *operator) config(args []string) int {
 	case "validate":
 		return o.emit(c.ValidateConfig(cx, data))
 	case "apply":
-		if f.get("generation") == "" {
-			return usageError(o.errOut, "config apply requires --generation (the current committed generation)")
+		// Without --generation, apply over whatever is current; with it,
+		// only if that generation is still current (compare-and-swap).
+		generation := f.get("generation")
+		if generation == "" {
+			current, err := c.Config(cx)
+			if err != nil {
+				return o.emit(nil, err)
+			}
+			generation = current.Generation
 		}
 		v, err := c.ValidateConfig(cx, data)
 		if err != nil {
 			return o.emit(nil, err)
 		}
-		return o.emit(c.ApplyConfigText(cx, data, v.CandidateHash, f.get("generation"), f.key()))
+		return o.emit(c.ApplyConfigText(cx, data, v.CandidateHash, generation, f.key()))
 	}
-	return usageError(o.errOut, "expected config validate|apply FILE")
+	return usageError(o.errOut, configUsage)
 }
 
 func (o *operator) auth(args []string) int {
