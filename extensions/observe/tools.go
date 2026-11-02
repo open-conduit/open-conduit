@@ -38,10 +38,13 @@ func NewTools(store storage.Store, now func() time.Time) (*Tools, error) {
 //go:embed guidance/record.md
 var recordGuidance string
 
+// RecordGuidance is observe.record's guidance, as the toolbelt serves it.
+func RecordGuidance() string { return strings.TrimSpace(recordGuidance) }
+
 // Registration is the toolbelt registration.
 func (t *Tools) Registration() extension.Registration {
 	return extension.Registration{Version: extension.ContractVersion, Name: Type, EventTypes: []string{TypeRecorded},
-		Operations: []extension.Operation{{Name: OpRecord, Emit: t.record, Guidance: strings.TrimSpace(recordGuidance)}}}
+		Operations: []extension.Operation{{Name: OpRecord, Emit: t.record, Guidance: RecordGuidance()}}}
 }
 
 func refuse(code, format string, args ...any) error {
@@ -87,11 +90,17 @@ func (t *Tools) record(ctx context.Context, a extension.Authority, raw domain.Pa
 	var binding string
 	var scope domain.Scope
 	if err := t.store.Transact(ctx, storage.Guard{Now: t.now()}, func(tx storage.Tx) error {
-		x, err := tx.Execution(a.ExecutionID)
+		// The caller's own Work's executions: one read, in process or over
+		// the wire, where a lookup by execution alone lists every Work's.
+		xs, err := tx.ListExecutions(a.WorkID)
 		if err != nil {
 			return err
 		}
-		binding = x.ExecutorBinding
+		i := slices.IndexFunc(xs, func(x domain.Execution) bool { return x.ID == a.ExecutionID })
+		if i < 0 {
+			return storage.ErrNotFound
+		}
+		binding = xs[i].ExecutorBinding
 		scope, err = tx.Scope(a.ScopeID)
 		return err
 	}); err != nil {

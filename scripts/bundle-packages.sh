@@ -37,7 +37,7 @@ src=$($go list -m -f '{{.Dir}}' "$module")
 [ -n "$src" ] || { echo "bundle-packages: $module is not in the module cache" >&2; exit 1; }
 host="$out/.host-setup-extension"
 $go build -trimpath -o "$host" "$pkg"
-bundled="codex posthog human"
+bundled="codex posthog human observe"
 hostbin="$out/.host-open-conduit"
 $go build -trimpath -o "$hostbin" ./cmd/open-conduit
 

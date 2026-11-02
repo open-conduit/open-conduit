@@ -186,6 +186,7 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		// none of which a fixture exercises.
 		{"posthog", "", nil},
 		{"human", "", nil},
+		{"observe", "", nil},
 		{"codex", "", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace"}},
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},

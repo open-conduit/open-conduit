@@ -140,8 +140,6 @@ func samplesConfig() []byte {
 					entry("app", "bitbucket", "bitbucket", map[string]any{"namespace": "bitbucket/acme/app", "scope": "proj", "repo": "acme/app", "tracker": map[string]any{"namespace": "jira/acme/proj", "keys": []string{"PROJ"}}})}),
 			scope("self", []string{}, shell(introspection.OpReport), []any{route("reports", introspection.Type, map[string]any{"work": introspection.WorkReport})},
 				[]any{entry("introspection", introspection.Type, "", map[string]any{})}),
-			scope("help", []string{}, shell(observe.OpRecord), []any{route("slack-help", observe.Type, map[string]any{"source": "slack-help"})},
-				[]any{entry("help", observe.Type, "", map[string]any{"sources": []any{map[string]any{"name": "slack-help", "reporters": []string{"run"}}}})}),
 		},
 	}
 	b, _ := json.Marshal(cfg)
@@ -195,5 +193,37 @@ func TestEveryBuiltInSampleTraces(t *testing.T) {
 		if _, ok := h.(extension.RouteSampler); ok && offered[name] == 0 {
 			t.Errorf("handler %s offered no samples: give it a scope in samplesConfig", name)
 		}
+	}
+	// A bundled package's handler is served over the wire, so it isn't in
+	// the registry here; its samples must still trace (#428).
+	for name, c := range packagedSamplers() {
+		samples := c.h.Samples(ctx, extension.SampleInput{Scope: c.scope, Route: c.route, Now: time.Date(2026, 10, 29, 9, 0, 0, 0, time.UTC)})
+		if len(samples) == 0 {
+			t.Errorf("packaged handler %s offered no samples", name)
+		}
+		for _, s := range samples {
+			if err := runtime.CheckTraceEvent(s.Event); err != nil {
+				t.Errorf("packaged handler %s sample %s: %v", name, s.ID, err)
+			}
+		}
+	}
+}
+
+// packagedSamplers are the route handlers bundled packages serve that offer
+// samples, each with a scope and route it offers them on.
+func packagedSamplers() map[string]struct {
+	h     extension.RouteSampler
+	scope domain.Scope
+	route domain.Route
+} {
+	type c = struct {
+		h     extension.RouteSampler
+		scope domain.Scope
+		route domain.Route
+	}
+	return map[string]c{
+		observe.Type: {observe.Route{},
+			domain.Scope{ID: "help", Config: domain.Payload{Data: []byte(`{"extensions":[{"type":"observe","config":{"sources":[{"name":"slack-help","reporters":["run"]}]}}]}`)}},
+			domain.Route{Name: "slack-help", Handler: observe.Type, Config: domain.Payload{Data: []byte(`{"source":"slack-help"}`)}}},
 	}
 }
