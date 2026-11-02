@@ -1037,7 +1037,7 @@ func TestProductionSchedulerRunEnvironment(t *testing.T) {
 func TestProductionSchedulerRenewSurvivesClockStepBack(t *testing.T) {
 	f, executor := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	work := seedSchedulerWork(t, f, "stepback")
-	s := f.Driver.(*schedulerDriver).scheduler
+	s := f.Driver.(*schedulerDriver).Scheduler
 	a, err := s.Start(context.Background(), work)
 	if err != nil {
 		t.Fatal(err)
@@ -1078,7 +1078,7 @@ func TestProductionSchedulerRenewSurvivesClockStepBack(t *testing.T) {
 func TestProductionSchedulerLapsedLeaseIsAdoptedNotStopped(t *testing.T) {
 	f, executor := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	work := seedSchedulerWork(t, f, "sleep")
-	s := f.Driver.(*schedulerDriver).scheduler
+	s := f.Driver.(*schedulerDriver).Scheduler
 	a, err := s.Start(context.Background(), work)
 	if err != nil {
 		t.Fatal(err)
@@ -1097,7 +1097,7 @@ func TestProductionSchedulerLapsedLeaseIsAdoptedNotStopped(t *testing.T) {
 	if recovered.Lease.ExecutionID != a.Lease.ExecutionID || recovered.Lease.Epoch <= a.Lease.Epoch {
 		t.Fatalf("bad recovered authority: %+v", recovered.Lease)
 	}
-	if runs, recovers, _, _ := executor.counts(); runs != 1 || recovers != 1 {
+	if runs, recovers, _, _ := executor.Counts(); runs != 1 || recovers != 1 {
 		t.Fatalf("recovery replaced the process: run%d recover%d", runs, recovers)
 	}
 	// The old holder, seeing a newer epoch, still leaves it to its adopter.
