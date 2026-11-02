@@ -11,6 +11,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"runtime"
+	"sort"
 	"strings"
 	"time"
 )
@@ -18,8 +19,9 @@ import (
 // What extensiontest builds (open-conduit, os and the packages under test)
 // it keeps in a cache directory rather than a new temporary directory per
 // test binary, which nothing could remove afterwards: this package can't
-// own its importers' TestMain. A later run reuses an entry, and an entry no
-// run has used for cacheTTL is removed by the next run that looks (#445).
+// own its importers' TestMain. A later run reuses an entry, and the next
+// run that looks removes an entry no run has used for cacheTTL, and every
+// binaries entry beyond the keptBins most recently used (#445).
 
 // CacheEnv names a directory to keep the cache in instead of
 // <user cache directory>/open-conduit/extensiontest.
@@ -27,6 +29,14 @@ const CacheEnv = "OPEN_CONDUIT_EXTENSIONTEST_CACHE"
 
 // cacheTTL is how long an unused entry is kept.
 const cacheTTL = 24 * time.Hour
+
+// keptBins is how many binaries entries (bin-, up to 100 MB each) are kept
+// whatever their age: each change to the source makes a new one. One used
+// within inUse is kept too, since a test binary may still be running it.
+const (
+	keptBins = 4
+	inUse    = time.Hour
+)
 
 // cacheRoot is the cache directory.
 func cacheRoot() (string, error) {
@@ -54,12 +64,18 @@ func openCache() (string, error) {
 }
 
 // pruneCache removes every entry (and every half-built one) under root
-// last used before now less cacheTTL.
+// last used before now less cacheTTL, and every bin- entry but the
+// keptBins most recently used, unless it was used within inUse.
 func pruneCache(root string, now time.Time) {
 	entries, err := os.ReadDir(root)
 	if err != nil {
 		return
 	}
+	type bin struct {
+		name string
+		used time.Time
+	}
+	var bins []bin
 	for _, e := range entries {
 		info, err := e.Info()
 		if err != nil || !e.IsDir() {
@@ -67,6 +83,14 @@ func pruneCache(root string, now time.Time) {
 		}
 		if now.Sub(info.ModTime()) > cacheTTL {
 			_ = os.RemoveAll(filepath.Join(root, e.Name()))
+		} else if strings.HasPrefix(e.Name(), "bin-") {
+			bins = append(bins, bin{e.Name(), info.ModTime()})
+		}
+	}
+	sort.Slice(bins, func(i, j int) bool { return bins[i].used.After(bins[j].used) })
+	for i, b := range bins {
+		if i >= keptBins && now.Sub(b.used) > inUse {
+			_ = os.RemoveAll(filepath.Join(root, b.name))
 		}
 	}
 }

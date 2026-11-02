@@ -2,6 +2,7 @@ package extensiontest
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"testing"
@@ -89,6 +90,40 @@ func TestPruneCacheRemovesUnused(t *testing.T) {
 	// Unused, bin-recent would be past cacheTTL by then.
 	pruneCache(root, now.Add(cacheTTL-30*time.Minute))
 	assertOnly(t, root, "bin-recent", "pkg-just-now")
+}
+
+// Beyond the keptBins most recently used, pruning removes bin- entries
+// whatever their age, except one used within inUse; pkg- entries are
+// bounded by cacheTTL alone.
+func TestPruneCacheCapsBinaries(t *testing.T) {
+	root := t.TempDir()
+	now := time.Now()
+	ages := map[string]time.Duration{
+		"bin-1": 2 * inUse, "bin-2": 3 * inUse, "bin-3": 4 * inUse, "bin-4": 5 * inUse,
+		"bin-5": 6 * inUse,
+		"bin-6": 7 * inUse,
+		"pkg-1": 8 * inUse, "pkg-2": 9 * inUse, "pkg-3": 10 * inUse, "pkg-4": 11 * inUse, "pkg-5": 12 * inUse,
+	}
+	for name, age := range ages {
+		dir := filepath.Join(root, name)
+		if err := os.Mkdir(dir, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chtimes(dir, now.Add(-age), now.Add(-age)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pruneCache(root, now)
+	assertOnly(t, root, "bin-1", "bin-2", "bin-3", "bin-4", "pkg-1", "pkg-2", "pkg-3", "pkg-4", "pkg-5")
+
+	// Seven entries in use: none is removed, and the older ones go.
+	for i := 1; i <= 7; i++ {
+		if err := os.Mkdir(filepath.Join(root, fmt.Sprintf("bin-new-%d", i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	pruneCache(root, now)
+	assertOnly(t, root, "bin-new-1", "bin-new-2", "bin-new-3", "bin-new-4", "bin-new-5", "bin-new-6", "bin-new-7", "pkg-1", "pkg-2", "pkg-3", "pkg-4", "pkg-5")
 }
 
 // treeKey changes with a file's content and name, and not otherwise.
