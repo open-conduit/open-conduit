@@ -172,7 +172,7 @@ Either side cancels an in-flight request with the `$/cancel {id}` notification. 
 
 - cancelling `executor.wait` cancels observation only. The execution keeps running, as `RunHandle.Wait` documents.
 - `executor.interrupt` and `executor.stop` are the controls that act on a process.
-- a cancelled `operation.call` may already have made its external write. Its `request_id` (`CallRequestID`) makes a retry idempotent, and adapters keep their reconcile markers.
+- a cancelled `operation.call` may already have made its external write. A retry carries the same `request_id` (`CallRequestID`), and the handler uses it to avoid making the write twice ([below](#operation-handlers-and-request-ids)); adapters keep their reconcile markers.
 
 The host cancels everything in flight when it stops. Ingress pages run under the runtime's page timeout, and in-transaction methods under their own deadline (below).
 
@@ -227,11 +227,17 @@ A broken pipe or process exit fails every pending request with a transport error
 | `ingress.reconcile` | Partial scan: no absence is inferred and no checkpoint advances. The runtime retries the generation. |
 | `route.match` | The routing pass fails and the Event stays pending. Routing is deterministic and retried. |
 | `route.samples` | That handler's samples are left out of the list, which the operator can ask for again. |
-| `operation.call` / `.wait` / `.emit` | The toolbelt caller gets a retryable internal error. Its `request_id` makes the retry idempotent. A declared wait or emission either committed or did not. |
+| `operation.call` / `.wait` / `.emit` | The toolbelt caller gets a retryable internal error. The retry carries the same `request_id`, which the handler must be idempotent on ([below](#operation-handlers-and-request-ids)). A declared wait or emission either committed or did not. |
 | In-transaction method | The transaction aborts and is retried after restart. |
 | `executor.*` | The extension's crash is not the execution's failure. After restart the host calls `executor.recover` with the persisted recovery metadata, as after a daemon restart. `not_adoptable` leads to `executor.stop`, `ConfirmStopped` and retry policy. Old per-execution tokens stay fenced by lease epoch. |
 | `provider.*` | Acquisition is idempotent per owner and mode, and `provider.reconcile` repairs the rest (the existing contract). |
 | `task.run`, `check.run`, `telemetry.export` | Reported, and retried next pass. A dropped telemetry batch is accounted. |
+
+### Operation handlers and request IDs
+
+The contract for every operation handler, in-process (`extension.Operation.Handler`) or over the protocol (`operation.call`): **a handler must be idempotent on the call's `request_id`.**
+
+The host runs a handler outside any transaction, then commits its result under the request ID, and a retry with that ID replays the committed result without calling the handler. A crash in between, after the handler's effect and before that commit, leaves no result, so the caller's retry runs the handler again. The same happens when the call is cancelled in that window or the extension restarts mid-call. A handler whose effect isn't naturally idempotent (posting a comment, opening an issue) derives an intent identity from `CallRequestID` and checks for it before acting: the GitHub extension writes its intent ID into what it creates and looks for it first. A call without a request ID has no replay at all, so a handler can't tell a retry from a new call. `TestProductionToolbeltReplayWindow` drills the window: the call ends after the effect and before the commit, the retry runs the handler again, and a handler keyed by the request ID makes its effect once.
 
 If the *host* crashes, extensions see EOF and exit. The new daemon starts them again. Durable progress is all in host storage, recovery metadata or the extension's own state directory, so there is nothing to reattach to.
 

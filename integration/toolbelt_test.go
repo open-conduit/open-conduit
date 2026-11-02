@@ -29,6 +29,9 @@ type toolbeltHarness struct {
 	// connection is the Authority.Connection the last fixture.echo saw.
 	connection *string
 	mu         *sync.Mutex
+	// onEcho runs inside fixture.echo, after its effect, with the call's
+	// request ID.
+	onEcho func(requestID string)
 	// plan translates the fixture.wait operation (see translated wait cases).
 	plan    func(extension.Authority, domain.Payload) (extension.WaitPlan, error)
 	aliasOK bool
@@ -77,11 +80,15 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 	if err != nil {
 		t.Fatal(err)
 	}
-	if err = belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "fixture", EventTypes: []string{"fixture.changed.v1"}, Operations: []extension.Operation{{Name: "fixture.echo", Handler: func(_ context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
+	if err = belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "fixture", EventTypes: []string{"fixture.changed.v1"}, Operations: []extension.Operation{{Name: "fixture.echo", Handler: func(ctx context.Context, a extension.Authority, in domain.Payload) (domain.Payload, error) {
 		h.mu.Lock()
 		*h.echoes++
 		*h.connection = a.Connection
+		onEcho := h.onEcho
 		h.mu.Unlock()
+		if onEcho != nil {
+			onEcho(extension.CallRequestID(ctx))
+		}
 		return in, nil
 	}, Guidance: "Echo with fixture.echo."}, {Name: "fixture.wait", Wait: func(_ context.Context, a extension.Authority, in domain.Payload) (extension.WaitPlan, error) {
 		if h.plan == nil {
@@ -143,6 +150,48 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 }
 func (h *toolbeltHarness) authority() extension.Authority {
 	return extension.Authority{ScopeID: "routing-scope", WorkID: "work/item", ExecutionID: h.attempt.Lease.ExecutionID, Lease: h.attempt.Lease, ExpiresAt: h.f.Clock.Now().Add(time.Minute), Operations: allToolbeltOperations(), EventTypes: []string{"fixture.changed.v1"}, TriggerID: "trigger", Connection: "fixture-connection"}
+}
+
+// TestProductionToolbeltReplayWindow drills the crash window between an
+// extension handler's effect and the commit of its replay record: the call
+// ends after the handler ran but before the record commits, as when the
+// daemon dies there. The retry with the same request ID runs the handler
+// again, which is why handlers must be idempotent on the request ID; a
+// handler that keys its effect by CallRequestID makes it once.
+func TestProductionToolbeltReplayWindow(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	in := domain.Payload{Schema: "fixture.echo.v1", Data: []byte(`{"x":1}`)}
+	effects := map[string]int{}
+	crash, cancel := context.WithCancel(context.Background())
+	h.onEcho = func(id string) {
+		if effects[id] == 0 { // the handler's own dedupe on the request ID
+			effects[id]++
+		}
+		cancel() // the host dies before the replay record commits
+	}
+	if _, err := h.belt.CallRequest(crash, h.token, "window", extension.ToolCall{Operation: "fixture.echo", Input: in}); !errors.Is(err, context.Canceled) {
+		t.Fatalf("call survived the crash: %v", err)
+	}
+	h.onEcho = func(id string) {
+		if effects[id] == 0 {
+			effects[id]++
+		}
+	}
+	ctx := context.Background()
+	for range 2 {
+		if _, err := h.belt.CallRequest(ctx, h.token, "window", extension.ToolCall{Operation: "fixture.echo", Input: in}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Negative control: the handler did run again after the crash (once,
+	// then the committed record replayed), so a handler that didn't dedupe
+	// would have made its effect twice.
+	if *h.echoes != 2 {
+		t.Fatalf("handler ran %d times, want 2 (once before the crash, once on the retry)", *h.echoes)
+	}
+	if effects["window"] != 1 {
+		t.Fatalf("idempotent handler made its effect %d times", effects["window"])
+	}
 }
 
 // TestProductionToolbeltAuthorityCarriesConnection: an operation handler's
