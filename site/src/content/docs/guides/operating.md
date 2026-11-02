@@ -118,6 +118,6 @@ Alice then points the CLI at her file with `--token-file` or `OPEN_CONDUIT_TOKEN
   | `operate` | also send Events and run every control and action: create, cancel, retry, wake, hold, release, rebind and attach Work, cancel executions, skip and reroute Events, reconcile scopes, answer asks; rotate and revoke their own credential |
   | `admin` | also apply config, add operators and revoke other operators' credentials |
 
-  You are always `admin`. A call the role doesn't allow is refused with `forbidden_role` before it does anything.
+  You are always `admin`. A call the role doesn't allow is refused with `forbidden_role` before it does anything. A credential added before roles existed is `view`. Revoke it and add it again with `--role` to restore its controls.
 - No one but you can revoke your own credential, not even an `admin`. `auth recover` (with the daemon stopped) revokes every operator credential, named ones included, and writes you a fresh one.
 - The web view still signs browsers in with its one sign-in URL and acts as `operator:local`.
