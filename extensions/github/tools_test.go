@@ -173,7 +173,7 @@ func TestDependencyFilterSelectsTheNamedItem(t *testing.T) {
 func TestRouteHoldsAndToolInputs(t *testing.T) {
 	scope := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`"}`)
 	hold := func(labels ...string) extension.RouteDecision {
-		e := event(gh.TypeIssueOpen, "issue/3", gh.SchemaIssue, gh.IssuePayload{Repo: repo, Number: 3, State: "open", Labels: labels})
+		e := event(gh.TypeIssueOpen, "issue/3", gh.SchemaIssue, gh.IssuePayload{Repo: repo, Number: 3, State: "open", Labels: labels, AuthorAssociation: "OWNER"})
 		d, err := gh.HoldRoute{}.Match(context.Background(), extension.RouteInput{Event: e, Scope: scope})
 		if err != nil {
 			t.Fatal(err)
@@ -182,6 +182,10 @@ func TestRouteHoldsAndToolInputs(t *testing.T) {
 	}
 	if d := hold("scheduled"); !d.Match || d.Kind != gh.WorkKindHeld {
 		t.Fatalf("scheduled issue not held: %+v", d)
+	}
+	stranger := event(gh.TypeIssueOpen, "issue/3", gh.SchemaIssue, gh.IssuePayload{Repo: repo, Number: 3, State: "open", Labels: []string{"scheduled"}, AuthorAssociation: "NONE"})
+	if d, _ := (gh.HoldRoute{}).Match(context.Background(), extension.RouteInput{Event: stranger, Scope: scope}); d.Match {
+		t.Fatal("a stranger's scheduled issue was held")
 	}
 	if hold().Match || hold("scheduled", "backlog").Match || hold("scheduled", "agent-in-progress").Match {
 		t.Fatal("hold route ignored admission rules")

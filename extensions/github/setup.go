@@ -86,6 +86,9 @@ type GitHubScope struct {
 	Repo, Scope, Connection, Token string
 	Checkout                       string // empty: workspace-free scope
 	Holds                          bool
+	// Require is the labels.require label: only issues carrying it are
+	// picked up (empty: every admitted issue).
+	Require string
 }
 
 func obj(kv ...any) map[string]any {
@@ -122,11 +125,15 @@ func (g GitHubScope) ScopeConfig() map[string]any {
 	}
 	routes = append(routes, obj("name", "issues", "handler", Type, "binding", "agent", "active_policy", "inject", "config", obj()))
 	host := "github.com"
+	entry := obj("namespace", "github/"+host+"/"+g.Repo, "scope", g.Scope, "repo", g.Repo)
+	if g.Require != "" {
+		entry["labels"] = obj("require", []string{g.Require})
+	}
 	return obj("id", g.Scope, "name", g.Repo,
 		"authorization", obj("connections", []string{g.Connection}, "read_scopes", []string{}, "operations", authOps),
 		"bindings", bindings, "routes", routes,
 		"extensions", []any{obj("name", g.Scope, "type", Type, "connection", g.Connection, "secret_names", []string{},
-			"config", obj("namespace", "github/"+host+"/"+g.Repo, "scope", g.Scope, "repo", g.Repo))},
+			"config", entry)},
 		"secret_refs", obj())
 }
 
@@ -155,12 +162,25 @@ func (g GitHubScope) Result() (extension.SetupResult, error) {
 		Scope:       scope,
 		Summary: []string{"scope      " + g.Scope, "repository " + g.Repo,
 			fmt.Sprintf("credential %s connection, token %s:…", g.Connection, scheme),
-			"workspace  " + workspace, fmt.Sprintf("holds      %t", g.Holds)},
+			"workspace  " + workspace, fmt.Sprintf("holds      %t", g.Holds), "picks up   " + g.pickedUp()},
 		Next: []string{
+			"open-conduit serve --dry-run       preview which issues it picks up, with no GitHub writes and stub agents",
 			"open-conduit serve                 start the daemon (reconcile every 15 minutes; store settings.webhooks for webhooks)",
 			"open-conduit doctor --check-secrets  check the credential privately and GitHub access",
-			"open-conduit tui                   watch it work"},
+			"open-conduit tui                   watch it work",
+			"",
+			"What gets picked up: " + g.pickedUp() + ". PRs and issues from anyone else, and PRs from forks, are never picked up",
+			"(the entry's admit.authors and admit.forks widen that). Label an issue backlog, human or milestone to keep it back."},
 	}, nil
+}
+
+// pickedUp says which issues the scope starts Work for.
+func (g GitHubScope) pickedUp() string {
+	who := "every open issue opened by the repository's owner, members or collaborators"
+	if g.Require != "" {
+		return "open issues labelled " + g.Require + " opened by the repository's owner, members or collaborators"
+	}
+	return who + " (on a repository with a backlog, rerun with --require LABEL to start with only the issues you label)"
 }
 
 // Setup is the GitHub extension's `init github`.
@@ -168,7 +188,7 @@ type Setup struct{}
 
 func (Setup) SetupInfo() extension.SetupInfo {
 	return extension.SetupInfo{Type: Type, Summary: "add a scope that works a GitHub repository's issues",
-		Usage: "[--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF] [--connection ID] [--holds]"}
+		Usage: "[--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF] [--connection ID] [--holds] [--require LABEL]"}
 }
 
 func usage(msg string) error { return fmt.Errorf("%w: %s", extension.ErrSetupUsage, msg) }
@@ -183,13 +203,17 @@ func (Setup) Setup(_ context.Context, host extension.SetupHost, args []string) (
 	connection := fs.String("connection", "", "")
 	noWorkspace := fs.Bool("no-workspace", false, "")
 	holds := fs.Bool("holds", false, "")
+	require := fs.String("require", "", "")
 	if err := fs.Parse(args); err != nil || fs.NArg() != 0 {
 		if errors.Is(err, flag.ErrHelp) {
 			return extension.SetupResult{}, usage("init github " + Setup{}.SetupInfo().Usage)
 		}
 		return extension.SetupResult{}, usage("invalid init github flags")
 	}
-	g := GitHubScope{Repo: *repo, Scope: *scope, Connection: *connection, Token: *token, Holds: *holds}
+	g := GitHubScope{Repo: *repo, Scope: *scope, Connection: *connection, Token: *token, Holds: *holds, Require: strings.TrimSpace(*require)}
+	if len(g.Require) > 100 || strings.ContainsAny(g.Require, ",\r\n") {
+		return extension.SetupResult{}, usage("--require takes one label name")
+	}
 	checkout := *checkoutFlag
 	if checkout != "" && !strings.HasPrefix(checkout, "/") {
 		checkout = strings.TrimSuffix(host.Cwd(), "/") + "/" + checkout

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -166,6 +167,46 @@ func (l Labels) refusal(p IssuePayload) string {
 	return ""
 }
 
+// authorRefusal says why an issue's or PR's author may not start Work ("" when
+// they may): their association with the repository is not one admit.authors
+// names. This connection's own App bot (byConnection: the normalizer matched
+// the author against the identity its writes go out as) is admitted, so the
+// follow-up issues its agents file start; no other bot is, whatever its body.
+func (s Settings) authorRefusal(what, author, association string, byConnection bool) string {
+	if slices.Contains(s.Authors, AnyAuthor) || byConnection {
+		return ""
+	}
+	association = strings.ToUpper(association)
+	if association != "" && slices.Contains(s.Authors, association) {
+		return ""
+	}
+	if association == "" {
+		association = "of unknown association"
+	}
+	if author == "" {
+		author = "(unknown)"
+	}
+	return fmt.Sprintf("the %s's author %s is %s on the repository; admit.authors admits %s", what, author, association, strings.Join(s.Authors, ", "))
+}
+
+// issueRefusal says why an unowned issue may not start Work ("" when it
+// may): its labels, then its author.
+func (s Settings) issueRefusal(l Labels, p IssuePayload) string {
+	if reason := l.refusal(p); reason != "" {
+		return reason
+	}
+	return s.authorRefusal("issue", p.Author, p.AuthorAssociation, p.ByConnection)
+}
+
+// pullRefusal says why an open PR may not start Work ("" when it may): a
+// fork, unless admit.forks, then its author.
+func (s Settings) pullRefusal(p PullPayload) string {
+	if p.Fork && !s.Forks {
+		return "the PR comes from a fork, and admit.forks is off"
+	}
+	return s.authorRefusal("PR", p.Author, p.AuthorAssociation, p.ByConnection)
+}
+
 // selfAuthored reports whether an agent comment was written for this Work
 // (its own note), which is never handed back to it.
 func selfAuthored(a *Agent, w *domain.Work) bool {
@@ -246,10 +287,10 @@ func (Route) match(_ context.Context, in extension.RouteInput) (extension.RouteD
 		if json.Unmarshal(e.Data.Data, &p) != nil {
 			return extension.Skip("the issue data is unreadable"), nil
 		}
-		if reason := s.Labels.refusal(p); reason != "" {
+		if reason := s.issueRefusal(s.Labels, p); reason != "" {
 			return extension.Skip(reason), nil
 		}
-		return extension.RouteDecision{Match: true, Kind: WorkKind, Reason: "an open issue the labels admit"}, nil
+		return extension.RouteDecision{Match: true, Kind: WorkKind, Reason: "an open issue the labels and its author admit"}, nil
 	}
 	switch e.Type {
 	case TypeIssueClosed, TypePullMerged, TypePullClosed, TypePullConflicts, TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing:
@@ -314,7 +355,10 @@ func matchPull(in extension.RouteInput, rc RouteConfig) extension.RouteDecision 
 		if p.Draft && !rc.Drafts {
 			return extension.Skip("the PR is a draft; it is claimed once it is marked ready")
 		}
-		return extension.RouteDecision{Match: true, Kind: WorkKindPull, Reason: "an open PR"}
+		if reason := s.pullRefusal(p); reason != "" {
+			return extension.Skip(reason)
+		}
+		return extension.RouteDecision{Match: true, Kind: WorkKindPull, Reason: "an open PR its author and head admit"}
 	}
 	if in.Work.Kind != WorkKindPull {
 		return extension.Skip("not a PR's own Work")

@@ -71,6 +71,30 @@ func TestGitHubScopeConfig(t *testing.T) {
 	if !strings.Contains(strings.Join(r.Summary, "\n"), "workspace-free") {
 		t.Fatalf("summary: %v", r.Summary)
 	}
+	// Next says what gets picked up and how to preview it.
+	next := strings.Join(r.Next, "\n")
+	for _, want := range []string{"serve --dry-run", "owner, members or collaborators", "forks", "backlog, human or milestone", "--require LABEL"} {
+		if !strings.Contains(next, want) {
+			t.Fatalf("next lacks %q: %s", want, next)
+		}
+	}
+	// --require LABEL picks up only the issues labelled with it.
+	opt := gh.GitHubScope{Repo: "acme/support", Scope: "support", Connection: "github", Token: "env:GH", Require: "agent"}
+	if r, err = opt.Result(); err != nil {
+		t.Fatal(err)
+	}
+	var cfg struct {
+		Extensions []struct {
+			Config json.RawMessage `json:"config"`
+		} `json:"extensions"`
+	}
+	if err = json.Unmarshal(r.Scope, &cfg); err != nil || len(cfg.Extensions) != 1 {
+		t.Fatalf("scope %s: %v", r.Scope, err)
+	}
+	settings, err := gh.ParseExtension(cfg.Extensions[0].Config, nil)
+	if err != nil || len(settings.Labels.Require) != 1 || settings.Labels.Require[0] != "agent" || !strings.Contains(strings.Join(r.Next, "\n"), "labelled agent") {
+		t.Fatalf("require: %+v %v %v", settings.Labels, err, r.Next)
+	}
 }
 
 func TestGitHubSetupFlags(t *testing.T) {

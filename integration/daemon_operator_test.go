@@ -141,13 +141,15 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 		report, err = d.c.Doctor(ctx, true)
 		return err == nil && check(report, "github").Code == "ok" && strings.Contains(strings.Join(check(report, "github").Items, " "), "reconciled")
 	})
-	for name, code := range map[string]string{"github_auth": "verified", "claude_code": "installed", "github_capability": "ok", "webhooks": "reconcile_only", "secrets": ""} {
+	// A fresh repository's main has no protection, so doctor warns that a
+	// run's credential could push straight to it (#346).
+	for name, code := range map[string]string{"github_auth": "base_unprotected", "claude_code": "installed", "github_capability": "ok", "webhooks": "reconcile_only", "secrets": ""} {
 		c := check(report, name)
 		if code != "" && c.Code != code {
 			t.Fatalf("doctor %s: %+v\n%+v", name, c, report.Checks)
 		}
 	}
-	if s := strings.Join(check(report, "github_auth").Items, " "); !strings.Contains(s, "push=true") || strings.Contains(s, "tok\"") {
+	if s := strings.Join(check(report, "github_auth").Items, " "); !strings.Contains(s, "push=true") || !strings.Contains(s, "main has no branch protection or ruleset") || strings.Contains(s, "tok\"") {
 		t.Fatalf("auth items: %s", s)
 	}
 	if blob, _ := json.Marshal(report); bytes.Contains(blob, []byte("file:github-token")) || bytes.Contains(blob, []byte(`tok"`)) {

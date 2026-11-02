@@ -27,6 +27,9 @@ type Access struct {
 	Writer bool
 	// DefaultBranch is the repository's default branch.
 	DefaultBranch string
+	// Public is true when the repository is public: anyone can open an
+	// issue or a PR on it.
+	Public bool
 	// Checks is how CI results can be read: "check_runs", "workflow_runs"
 	// (check runs refused, as for a fine-grained token, which cannot hold the
 	// Checks permission; Actions workflow runs stand in) or "unreadable"
@@ -39,12 +42,13 @@ type Access struct {
 func (c *Client) Verify(ctx context.Context, repo string) (Access, error) {
 	var out struct {
 		DefaultBranch string           `json:"default_branch"`
+		Private       *bool            `json:"private"`
 		Permissions   *map[string]bool `json:"permissions"`
 	}
 	if _, err := c.call(ctx, false, repo, http.MethodGet, "/repos/"+repo, nil, &out); err != nil {
 		return Access{}, err
 	}
-	a := Access{DefaultBranch: out.DefaultBranch}
+	a := Access{DefaultBranch: out.DefaultBranch, Public: out.Private != nil && !*out.Private}
 	if out.Permissions != nil {
 		p := *out.Permissions
 		a.Known, a.Pull, a.Push, a.Admin = true, p["pull"], p["push"] || p["maintain"] || p["admin"], p["admin"]

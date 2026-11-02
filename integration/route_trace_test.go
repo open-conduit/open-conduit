@@ -160,6 +160,21 @@ func TestRouteTraceHeldBeforeIssues(t *testing.T) {
 	if tr.Effect.Kind != runtime.EffectStart || tr.Effect.Binding != "agent" {
 		t.Fatalf("new issue effect: %+v", tr.Effect)
 	}
+	// The same issue from a stranger starts nothing, and the trace says why.
+	var stranger gh.IssuePayload
+	if err := json.Unmarshal(issue.Data.Data, &stranger); err != nil {
+		t.Fatal(err)
+	}
+	stranger.Author, stranger.AuthorAssociation = "mallory", "NONE"
+	refused := issue
+	refused.Data.Data, _ = json.Marshal(stranger)
+	tr = e.trace(refused)
+	if got := reasons(tr)["issues"]; verdicts(tr)["issues"] != runtime.VerdictSkip || !strings.Contains(got, "mallory is NONE on the repository; admit.authors admits OWNER, MEMBER, COLLABORATOR") {
+		t.Fatalf("a stranger's issue: %+v", tr.Routes)
+	}
+	if tr.Effect.Kind == runtime.EffectStart {
+		t.Fatalf("a stranger's issue started Work: %+v", tr.Effect)
+	}
 
 	// Input for the waiting Work itself that doesn't wake it: the routes
 	// say whether it reaches the Work. A comment the issue route passes on
