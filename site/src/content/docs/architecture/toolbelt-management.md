@@ -7,7 +7,7 @@ The toolbelt is how a running execution asks Open Conduit for outcomes, and the 
 
 ## Toolbelt authority
 
-`runtime.Toolbelt` implements `extension.Toolbelt`, `TokenIssuer` and `Registrar`. Tokens are unpadded base64url encodings of 32 random bytes. Coordination storage keeps only their SHA-256 digest, the pinned authority, binding and generation, a revocation ID and revocation state. Plaintext is returned once to the trusted issuer. With `SchedulerOptions.Toolbelt` set, the scheduler issues a fresh token after every claim, recovery and resume, for executors whose transport is not `none`. It places the token in `RunRequest.Context`, with the execution's own endpoint (see [Execution endpoints](#execution-endpoints)). Issuing a token revokes all lower-epoch tokens for that execution. Token lifetime is limited by the attempt deadline (or an optional `Lifetime`), so it can never outlive active authority.
+`runtime.Toolbelt` implements `extension.Toolbelt`, `TokenIssuer` and `Registrar`. Tokens are unpadded base64url encodings of 32 random bytes. Coordination storage keeps only their SHA-256 digest, the pinned authority, binding and generation, a revocation ID and revocation state. Plaintext is returned once to the trusted issuer. With `SchedulerOptions.Toolbelt` set, the scheduler issues a fresh token after every claim, recovery and resume, for executors whose transport is not `none`. It places the token in `RunRequest.Context`, with the execution's own endpoint (see [Execution endpoints](#execution-endpoints)). Issuing a token revokes all lower-epoch tokens for that execution. Token lifetime is limited by the attempt deadline (or an optional `Lifetime`), so it can never outlive active authority. The same sweep deletes a token record, with its ID and per-execution index rows, 24 hours after it was revoked or expired; a deleted token is unknown, which every check refuses just as it refused the revoked one.
 
 Every call, reads included, passes these checks in order:
 
@@ -23,7 +23,7 @@ Emit uses only declared and allowed families. It assigns trusted execution sourc
 Idempotency semantics:
 
 - **emit**: idempotent by delivery identity.
-- **Request IDs** (`request_id`, or the HTTP `Idempotency-Key` when absent): replay the committed result for the same execution and operation, and reject a changed body with `ErrRequestConflict`.
+- **Request IDs** (`request_id`, or the HTTP `Idempotency-Key` when absent): replay the committed result for the same execution and operation, and reject a changed body with `ErrRequestConflict`. Replay records name their execution. The retention pass (`Toolbelt.SweepToolbelt`) deletes them 24 hours after they were written once their execution has finished, since only that execution's tokens could replay them and those are revoked when it finishes. Records written before they named their execution are kept.
 - **Children**: allocate stable IDs from the request ID before commit.
 - **Extension handlers**: run once per request ID, unless the host crashes in the window between the handler's effect and the commit of its result: the retry then runs the handler again. Handlers must be idempotent on the request ID ([extension protocol](../extension-protocol/#operation-handlers-and-request-ids)). `TestProductionToolbeltReplayWindow` drills that window.
 - **wait and declare_outcome**: release authority, so a duplicate after a lost response fails authorization. Resolve it by inspection, as B05 requires.

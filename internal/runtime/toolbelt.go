@@ -111,6 +111,10 @@ type ToolbeltDeclaration struct {
 type toolbeltReplay struct {
 	Hash   string
 	Result extension.ToolResult
+	// Execution and At let SweepToolbelt drop the record once its
+	// execution has finished; records written before them are kept.
+	Execution domain.ID `json:",omitempty"`
+	At        time.Time `json:",omitzero"`
 }
 
 func NewToolbelt(store storage.Store, now func() time.Time, router *Router, options ToolbeltOptions) (*Toolbelt, error) {
@@ -704,7 +708,7 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 			if _, _, _, _, e := t.authorizedInTx(tx, digest); e != nil {
 				return e
 			}
-			return putJSON(tx, requestNamespace, replayKey, toolbeltReplay{Hash: hash, Result: out})
+			return putJSON(tx, requestNamespace, replayKey, toolbeltReplay{Hash: hash, Result: out, Execution: a.ExecutionID, At: t.now()})
 		})
 		return out, err
 	}
@@ -822,7 +826,7 @@ func (t *Toolbelt) CallRequest(ctx context.Context, token, requestID string, c e
 			out.Wait = &planned
 		}
 		if replayKey != "" && c.Operation != extension.Wait && c.Operation != extension.DeclareOutcome {
-			return putJSON(tx, requestNamespace, replayKey, toolbeltReplay{Hash: hash, Result: out})
+			return putJSON(tx, requestNamespace, replayKey, toolbeltReplay{Hash: hash, Result: out, Execution: a.ExecutionID, At: t.now()})
 		}
 		return nil
 	})
