@@ -52,6 +52,8 @@ type Connection struct {
 
 // Settings is a pagerduty entry's config.
 type Settings struct {
+	// Scope is the scope the entry is in (the host checks it).
+	Scope string `json:"scope"`
 	// Namespace is the source namespace (default "pagerduty").
 	Namespace string `json:"namespace,omitempty"`
 	// Services limits the entry to these service IDs (all when empty).
@@ -73,6 +75,9 @@ func ParseSettings(raw json.RawMessage, secrets []string) (Settings, error) {
 	var s Settings
 	if err := strictJSON(raw, &s); err != nil {
 		return s, err
+	}
+	if s.Scope == "" {
+		return s, errors.New("a pagerduty entry needs its scope")
 	}
 	if s.Namespace == "" {
 		s.Namespace = Name
@@ -290,7 +295,7 @@ func (st *state) configure(_ context.Context, h *sdk.Host, p protocol.ConfigureP
 			continue
 		}
 		settings, err := ParseSettings(e.Config, e.Secrets)
-		if err != nil {
+		if err != nil || settings.Scope != e.ScopeID {
 			return out, protocol.Errorf(protocol.CodeInvalid, "invalid pagerduty entry")
 		}
 		if e.Connection == nil || e.Connection.Type != Name {
@@ -339,6 +344,14 @@ type Route struct{}
 
 func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
+	if e.Type == TypeAbsent {
+		// Reconcile no longer lists the incident (a missed webhook): its Work
+		// hears it, and nothing new opens.
+		if in.Work != nil && e.CorrelationKey != nil && protocol.SourceNamespace(Name, e.CorrelationKey.Source) {
+			return extension.RouteDecision{Match: true, Reason: "an incident with Work is no longer open"}, nil
+		}
+		return extension.RouteDecision{Reason: "not an open PagerDuty incident with Work"}, nil
+	}
 	if e.CorrelationKey == nil || !protocol.SourceNamespace(Name, e.Source) {
 		return extension.RouteDecision{Reason: "not a PagerDuty event"}, nil
 	}

@@ -158,7 +158,7 @@ func TestAcknowledgeIsOffByDefault(t *testing.T) {
 	if i, _ := fake.Incident("Q1"); i.Status != "triggered" {
 		t.Fatalf("status %s", i.Status)
 	}
-	h2, fake2 := harness(t, "signing-secret", json.RawMessage(`{"services":["PWEB"],"webhook_secret":"`+pagerduty.FixtureSecret+`","allow_acknowledge":true}`))
+	h2, fake2 := harness(t, "signing-secret", json.RawMessage(`{"scope":"`+scope+`","services":["PWEB"],"webhook_secret":"`+pagerduty.FixtureSecret+`","allow_acknowledge":true}`))
 	raw, err := call(t, h2, own, pagerduty.OpAcknowledge, `{}`)
 	if err != nil {
 		t.Fatal(err)
@@ -223,10 +223,23 @@ func TestRoute(t *testing.T) {
 	if d, _ := h.Route(ctx, pagerduty.Name, extension.RouteInput{Event: domain.AcceptedEvent{Event: ev}, Route: route, Work: &domain.Work{ID: "pagerduty/Q4"}}); !d.Match {
 		t.Fatalf("resolution didn't reach the Work: %+v", d)
 	}
+	// So does reconcile finding the incident gone after a missed webhook,
+	// and that alone opens nothing.
+	absent := domain.Event{ID: "a1", Type: pagerduty.TypeAbsent, Source: "core.ingress", CorrelationKey: ev.CorrelationKey}
+	if d, _ := h.Route(ctx, pagerduty.Name, extension.RouteInput{Event: domain.AcceptedEvent{Event: absent}, Route: route, Work: &domain.Work{ID: "pagerduty/Q4"}}); !d.Match {
+		t.Fatalf("absence didn't reach the Work: %+v", d)
+	}
+	if d, _ := h.Route(ctx, pagerduty.Name, extension.RouteInput{Event: domain.AcceptedEvent{Event: absent}, Route: route}); d.Match {
+		t.Fatalf("absence opened Work: %+v", d)
+	}
+	absent.CorrelationKey = &domain.CorrelationKey{Source: "slack/T1", ExternalID: "Q4"}
+	if d, _ := h.Route(ctx, pagerduty.Name, extension.RouteInput{Event: domain.AcceptedEvent{Event: absent}, Route: route, Work: &domain.Work{ID: "x"}}); d.Match {
+		t.Fatalf("another source's absence matched: %+v", d)
+	}
 }
 
 func TestConfigValidation(t *testing.T) {
-	for _, raw := range []string{`{"namespace":"other"}`, `{"interval_seconds":5}`, `{"bogus":1}`} {
+	for _, raw := range []string{`{}`, `{"scope":"prod","namespace":"other"}`, `{"scope":"prod","interval_seconds":5}`, `{"scope":"prod","bogus":1}`} {
 		if _, err := pagerduty.ParseSettings(json.RawMessage(raw), nil); err == nil {
 			t.Errorf("%s was accepted", raw)
 		}
@@ -234,7 +247,7 @@ func TestConfigValidation(t *testing.T) {
 	if _, err := pagerduty.ParseConnection(json.RawMessage(`{"from":"not an email"}`)); err == nil {
 		t.Error("a from that isn't an email was accepted")
 	}
-	if s, err := pagerduty.ParseSettings(json.RawMessage(`{}`), nil); err != nil || s.AllowAcknowledge {
+	if s, err := pagerduty.ParseSettings(json.RawMessage(`{"scope":"prod"}`), nil); err != nil || s.AllowAcknowledge {
 		t.Errorf("default settings %+v %v", s, err)
 	}
 }

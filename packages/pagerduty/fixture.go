@@ -23,14 +23,14 @@ const (
 	FixtureScope   = "incidents"
 	FixtureService = "PWEB"
 	FixtureToken   = "pd-certify"
-	FixtureSecret  = "PAGERDUTY_WEBHOOK_SECRET"
+	FixtureSecret  = "pagerduty-webhook"
 	FixtureFrom    = "oncall-agent@acme.example"
 	fixtureSigning = "signing-secret"
 )
 
 // FixtureEntry is the pagerduty entry config the fixture configures.
 func FixtureEntry() json.RawMessage {
-	return json.RawMessage(`{"services":["` + FixtureService + `"],"webhook_secret":"` + FixtureSecret + `"}`)
+	return json.RawMessage(`{"scope":"` + FixtureScope + `","services":["` + FixtureService + `"],"webhook_secret":"` + FixtureSecret + `"}`)
 }
 
 // SeedFixture fills a fake with the fixture's incidents: open ones across

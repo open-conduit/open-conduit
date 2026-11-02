@@ -26,6 +26,11 @@ const (
 	TypeResolved     = "pagerduty.incident.resolved"
 )
 
+// TypeAbsent is the core's generic absence Event: a complete reconcile no
+// longer lists an incident it listed before (resolved while a webhook
+// was missed). Its correlation key is the incident's.
+const TypeAbsent = "core.ingress.absent"
+
 // SchemaIncident is the incident payload schema.
 const SchemaIncident = "pagerduty.incident.v1"
 

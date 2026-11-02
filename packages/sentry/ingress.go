@@ -27,6 +27,11 @@ const (
 	TypeAlert     = "sentry.alert.triggered"
 )
 
+// TypeAbsent is the core's generic absence Event: a complete reconcile no
+// longer lists an issue it listed before (resolved or ignored while a webhook
+// was missed). Its correlation key is the issue's.
+const TypeAbsent = "core.ingress.absent"
+
 // Payload schemas.
 const (
 	SchemaIssue = "sentry.issue.v1"

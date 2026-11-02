@@ -23,13 +23,13 @@ const (
 	FixtureScope  = "incidents"
 	FixtureOrg    = "acme"
 	FixtureToken  = "sntrys-certify"
-	FixtureSecret = "SENTRY_CLIENT_SECRET"
+	FixtureSecret = "sentry-client-secret"
 	fixtureClient = "client-secret"
 )
 
 // FixtureEntry is the sentry entry config the fixture configures.
 func FixtureEntry() json.RawMessage {
-	return json.RawMessage(`{"org":"` + FixtureOrg + `","projects":["web"],"webhook_secret":"` + FixtureSecret + `"}`)
+	return json.RawMessage(`{"scope":"` + FixtureScope + `","org":"` + FixtureOrg + `","projects":["web"],"webhook_secret":"` + FixtureSecret + `"}`)
 }
 
 // SeedFixture fills a fake with the fixture's issues: enough unresolved

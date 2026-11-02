@@ -249,12 +249,12 @@ func TestRouteOpensOneWorkPerIssue(t *testing.T) {
 }
 
 func TestConfigValidation(t *testing.T) {
-	for _, raw := range []string{`{}`, `{"org":"a/b"}`, `{"org":"acme","namespace":"other"}`, `{"org":"acme","interval_seconds":5}`, `{"org":"acme","bogus":1}`} {
+	for _, raw := range []string{`{"org":"acme"}`, `{"scope":"prod"}`, `{"scope":"prod","org":"a/b"}`, `{"scope":"prod","org":"acme","namespace":"other"}`, `{"scope":"prod","org":"acme","interval_seconds":5}`, `{"scope":"prod","org":"acme","bogus":1}`} {
 		if _, err := sentry.ParseSettings(json.RawMessage(raw), nil); err == nil {
 			t.Errorf("%s was accepted", raw)
 		}
 	}
-	if _, err := sentry.ParseSettings(json.RawMessage(`{"org":"acme","webhook_secret":"S"}`), []string{"T"}); err == nil {
+	if _, err := sentry.ParseSettings(json.RawMessage(`{"scope":"prod","org":"acme","webhook_secret":"S"}`), []string{"T"}); err == nil {
 		t.Error("a webhook secret outside secret_names was accepted")
 	}
 	if _, err := sentry.ParseRoute(json.RawMessage(`{"triggers":["resolved"]}`)); err == nil {

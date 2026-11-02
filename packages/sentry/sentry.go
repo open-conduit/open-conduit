@@ -51,6 +51,8 @@ type Connection struct {
 
 // Settings is a sentry entry's config.
 type Settings struct {
+	// Scope is the scope the entry is in (the host checks it).
+	Scope string `json:"scope"`
 	// Org is the organization slug.
 	Org string `json:"org"`
 	// Namespace is the source namespace (default "sentry/<org>").
@@ -71,6 +73,9 @@ func ParseSettings(raw json.RawMessage, secrets []string) (Settings, error) {
 	var s Settings
 	if err := strictJSON(raw, &s); err != nil {
 		return s, err
+	}
+	if s.Scope == "" {
+		return s, errors.New("a sentry entry needs its scope")
 	}
 	if s.Org == "" || strings.ContainsAny(s.Org, "/ ") {
 		return s, errors.New("a sentry entry needs an org slug")
@@ -287,7 +292,7 @@ func (st *state) configure(_ context.Context, h *sdk.Host, p protocol.ConfigureP
 			continue
 		}
 		settings, err := ParseSettings(e.Config, e.Secrets)
-		if err != nil {
+		if err != nil || settings.Scope != e.ScopeID {
 			return out, protocol.Errorf(protocol.CodeInvalid, "invalid sentry entry")
 		}
 		if e.Connection == nil || e.Connection.Type != Name {
@@ -336,6 +341,14 @@ type Route struct{}
 
 func (Route) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
 	e := in.Event.Event
+	if e.Type == TypeAbsent {
+		// Reconcile no longer lists the issue (a missed webhook): its Work
+		// hears it, and nothing new opens.
+		if in.Work != nil && e.CorrelationKey != nil && protocol.SourceNamespace(Name, e.CorrelationKey.Source) {
+			return extension.RouteDecision{Match: true, Reason: "an issue with Work is no longer open"}, nil
+		}
+		return extension.RouteDecision{Reason: "not an open Sentry issue with Work"}, nil
+	}
 	if e.CorrelationKey == nil || !protocol.SourceNamespace(Name, e.Source) {
 		return extension.RouteDecision{Reason: "not a Sentry event"}, nil
 	}
