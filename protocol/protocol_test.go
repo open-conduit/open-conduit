@@ -77,6 +77,7 @@ var useCases = map[string][]string{
 	"state.events":               {"github", "schedule"},
 	"state.scopes":               {"github", "introspection"},
 	"state.timers":               {"schedule", "introspection"},
+	"state.waits":                {"human"},
 	"timer.arm":                  {"schedule", "introspection"},
 	"timer.cancel":               {"schedule", "introspection"},
 	"event.accept":               {"github", "schedule", "introspection"},

@@ -609,7 +609,7 @@ func (h *Host) handle(ctx context.Context, method string, raw json.RawMessage) (
 		h.applyLocked(p.Puts, p.Deletes)
 		h.commits = append(h.commits, p)
 		return out, nil
-	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.scopes", "state.timers":
+	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.scopes", "state.timers", "state.waits":
 		var p protocol.StateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
@@ -928,6 +928,13 @@ func (h *Host) stateLocked(method string, p protocol.StateParams) (any, error) {
 			}
 		}
 		return list, nil
+	case "state.waits":
+		for i := range h.works {
+			if h.works[i].ID == domain.ID(p.ID) && h.allowedLocked(h.works[i].ScopeID) {
+				return []protocol.Wait{}, nil
+			}
+		}
+		return nil, notFound
 	case "state.executions":
 		var work *domain.Work
 		for i := range h.works {

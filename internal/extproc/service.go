@@ -202,7 +202,7 @@ func (s *Service) Handle(ctx context.Context, method string, raw json.RawMessage
 	return out, err
 }
 
-var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.event": true, "state.events": true, "state.scopes": true, "state.timers": true, "event.accept": true, "timer.cancel": true, "work.cancel": true, "wait.progress": true}
+var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.event": true, "state.events": true, "state.scopes": true, "state.timers": true, "state.waits": true, "event.accept": true, "timer.cancel": true, "work.cancel": true, "wait.progress": true}
 
 func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	m, ok := protocol.Lookup(method)
@@ -237,7 +237,7 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return s.kvCommit(ctx, p)
-	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.scopes", "state.timers":
+	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.scopes", "state.timers", "state.waits":
 		var p protocol.StateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
@@ -713,6 +713,23 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 				if allowed[sc.ID] {
 					list = append(list, protocol.FromScope(sc))
 				}
+			}
+			out = list
+		case "state.waits":
+			w, err := tx.Work(domain.ID(p.ID))
+			if err != nil {
+				return err
+			}
+			if !allowed[w.ScopeID] {
+				return notFound
+			}
+			waits, err := tx.ListWaits(w.ID)
+			if err != nil {
+				return err
+			}
+			list := []protocol.Wait{}
+			for _, x := range waits {
+				list = append(list, protocol.FromWait(x))
 			}
 			out = list
 		case "state.timers":

@@ -84,6 +84,7 @@ func New(x inproc.Extension, base protocol.Manifest) (*Bridge, error) {
 	}
 	b.ext = &sdk.Extension{Manifest: m}
 	b.wire()
+	b.wireSurfaces()
 	if err := m.Validate(); err != nil {
 		return nil, err
 	}
@@ -233,6 +234,7 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 	_, p.Actions = b.x.(inproc.Actor)
 	_, p.RunEnvironment = b.x.(extension.RunEnvironment)
 	_, p.SegmentEnd = b.x.(inproc.SegmentEnder)
+	_, p.Exporters = b.x.(inproc.Exporting)
 	return m, nil
 }
 
