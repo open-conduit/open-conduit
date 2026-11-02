@@ -597,10 +597,12 @@ func (g *Ingress) issuesPage(ctx context.Context, n *normalizer, c cursor, horiz
 		if it.State == "closed" || strings.EqualFold(it.StateReason, "reopened") {
 			b.units++
 		}
+		reads := n.permissionReads()
 		o, err := n.issueObservation(ctx, it)
 		if err != nil {
 			return nil, 0, false, 0, err
 		}
+		b.units += n.permissionReads() - reads
 		out = append(out, o)
 	}
 	return out, len(items), more, i, nil
@@ -623,10 +625,12 @@ func (g *Ingress) pullsPage(ctx context.Context, n *normalizer, c cursor, horizo
 		}
 		b.units += 4
 		n.remember(p)
+		reads := n.permissionReads()
 		o, err := n.pullObservation(ctx, p)
 		if err != nil {
 			return nil, 0, false, 0, err
 		}
+		b.units += n.permissionReads() - reads
 		out = append(out, o)
 		reviews, err := n.reviewObservations(ctx, p)
 		if err != nil {

@@ -723,8 +723,10 @@ func TestUnadmittedAuthorCarriesRepositoryPermission(t *testing.T) {
 	stranger := fk.OpenIssue("Outside contributor", "", outsider)
 	owner := fk.OpenIssue("Owner", "", alice)
 	bot := fk.OpenIssue("Bot", "", githubtest.User{Login: "dependabot[bot]", Type: "Bot"})
+	closed := fk.OpenIssue("Closed", "", githubtest.User{Login: "eve", Type: "User"})
+	fk.CloseIssue(closed, "completed")
 	pr := fk.OpenPull("Private member's PR", "", "fix", "s1", member)
-	for _, n := range []int{first, second, stranger, bot, pr} {
+	for _, n := range []int{first, second, stranger, bot, closed, pr} {
 		fk.SetAssociation(n, "CONTRIBUTOR")
 	}
 	fk.SetCollaborator("priya", "write")
@@ -741,7 +743,7 @@ func TestUnadmittedAuthorCarriesRepositoryPermission(t *testing.T) {
 	scanned := f.scan(t)
 	for item, want := range map[string]string{
 		"issue/" + strconv.Itoa(first): "write", "issue/" + strconv.Itoa(second): "write", "issue/" + strconv.Itoa(stranger): "read",
-		"issue/" + strconv.Itoa(owner): "", "issue/" + strconv.Itoa(bot): "", "pr/" + strconv.Itoa(pr): "write",
+		"issue/" + strconv.Itoa(owner): "", "issue/" + strconv.Itoa(bot): "", "issue/" + strconv.Itoa(closed): "", "pr/" + strconv.Itoa(pr): "write",
 	} {
 		if got := permission(scanned[item]); got != want {
 			t.Fatalf("%s: author_permission %q, want %q", item, got, want)
@@ -764,6 +766,27 @@ func TestUnadmittedAuthorCarriesRepositoryPermission(t *testing.T) {
 	fk.FailNext("/repos/"+repo+"/collaborators/", 100)
 	if got := permission(onlyObservation(t, f.push(t, "issues", "d-fail", fk.IssuesHook("opened", first)))); got != "" {
 		t.Fatalf("a failed read carried author_permission %q", got)
+	}
+}
+
+// A permission read is spent from a scan page's budget, so a page of
+// issues by many unadmitted authors ends sooner than one by the owner.
+func TestPermissionReadsSpendTheScanBudget(t *testing.T) {
+	firstPage := func(association string) int {
+		f := newFixture(t, "")
+		for i := 0; i < 3; i++ {
+			n := f.fake.OpenIssue("issue "+strconv.Itoa(i), "", githubtest.User{Login: "user" + strconv.Itoa(i), Type: "User"})
+			f.fake.SetAssociation(n, association)
+		}
+		f.in = gh.NewIngress(f.in.Settings(), clientFor(t, f), func() time.Time { return f.now }, gh.IngressOptions{BatchUnits: 2, PageBudget: time.Minute})
+		page, err := f.in.Reconcile(context.Background(), extension.Scan{Source: src})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(page.Observations)
+	}
+	if owners, contributors := firstPage("OWNER"), firstPage("CONTRIBUTOR"); owners != 3 || contributors != 2 {
+		t.Fatalf("first page held %d issues by owners and %d by contributors, want 3 and 2", owners, contributors)
 	}
 }
 
