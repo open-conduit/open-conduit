@@ -222,6 +222,9 @@ type ControlResult struct {
 	EventID     string `json:"event_id"`
 	WorkID      string `json:"work_id,omitempty"`
 	ExecutionID string `json:"execution_id,omitempty"`
+	// RoutedEventID is the Event an Event skip or reroute routes: the Event
+	// itself, or the copy a reroute accepted.
+	RoutedEventID string `json:"routed_event_id,omitempty"`
 }
 type Detail struct {
 	Path    string `json:"path"`
@@ -479,6 +482,11 @@ type EventRoute struct {
 	Reason       string `json:"reason,omitempty"`
 	// DisplayRefused is why the route's Work display was dropped.
 	DisplayRefused string `json:"display_refused,omitempty"`
+	// Error is why routing gave up on the Event (disposition "failed"),
+	// or why its routes last failed while it is unrouted; Attempts is how
+	// many times they have.
+	Error    string `json:"error,omitempty"`
+	Attempts int    `json:"attempts,omitempty"`
 }
 
 // TraceEvent is a hypothetical Event for a route trace.
@@ -646,6 +654,24 @@ func (c *Client) RetryWork(ctx context.Context, id, revision, reason, key string
 }
 func (c *Client) CancelExecution(ctx context.Context, id, revision, reason, key string) (out ControlResult, err error) {
 	err = c.Do(ctx, "POST", "executions/"+esc(id)+"/cancel", nil, controlRequest{revision, reason}, key, &out)
+	return
+}
+
+// SkipEvent routes an Event routing is stuck on as skipped, so the Work it
+// holds takes its later input.
+func (c *Client) SkipEvent(ctx context.Context, id, reason, key string) (out ControlResult, err error) {
+	err = c.Do(ctx, "POST", "events/"+esc(id)+"/skip", nil, struct {
+		Reason string `json:"reason"`
+	}{reason}, key, &out)
+	return
+}
+
+// RerouteEvent routes an Event again: one still unrouted is tried at once,
+// one routing gave up on or that was skipped is accepted again as a copy.
+func (c *Client) RerouteEvent(ctx context.Context, id, reason, key string) (out ControlResult, err error) {
+	err = c.Do(ctx, "POST", "events/"+esc(id)+"/reroute", nil, struct {
+		Reason string `json:"reason"`
+	}{reason}, key, &out)
 	return
 }
 

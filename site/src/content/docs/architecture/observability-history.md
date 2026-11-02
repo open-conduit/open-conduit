@@ -35,7 +35,7 @@ The toolbelt adds `toolbelt.called` and `toolbelt.rejected` records through `Too
 | Record | Source | Key attributes |
 | --- | --- | --- |
 | `event.accepted`, `event.duplicate` | Acceptance, including timer fires and executor emissions | type, source, sequence, causation, `emitted_by_execution` |
-| `route.decided` | Routing checkpoint (`To` = disposition) | route name, binding, generation, reason |
+| `route.decided` | Routing checkpoint (`To` = disposition) | route name, binding, generation, reason; for `failed`, the error (a panic's with its stack) and attempts |
 | `causal.rejected` | Committed causal refusal | reason, depth, count, root, limits |
 | `work.created`, `work.transitioned` | Work (`From`/`To`) | kind, revision, parent |
 | `execution.queued` | New attempt | trigger ID, type and trace |
@@ -162,6 +162,7 @@ The shell executor's `Forget` removes the execution's run directories. It refuse
 | `lease_recovery` | Running attempts holding expired leases that await recovery. |
 | `resource_holds` | Finished attempts still holding capacity without a confirmed stop. |
 | `retention` | Expired attempts with release pending. |
+| `routing` | Events unrouted for over ten minutes, each holding the Work it targets, with its route failures (`unrouted_events`); `events skip` lets the Work move on ([route failures](../routing-lifecycle/#route-failures)). |
 | `reconcile_lag` | Sources that are failing (safe code only), have no complete scan, or are older than two intervals. |
 | `non_rederivable` | Declared delivery families with their loss statements. |
 | `config` | The active generation against the config file: `pending_edit`, invalid, unreadable, `disk_missing`, or `default_config` (info) while the daemon runs on the default configuration with no file. |

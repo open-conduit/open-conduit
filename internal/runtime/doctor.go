@@ -35,6 +35,9 @@ type DoctorOptions struct {
 	LagFactor int
 	// Limit bounds identifiers listed per check (default 20).
 	Limit int
+	// UnroutedAge is how long an Event may stay unrouted before the
+	// routing check warns about it (default 10m).
+	UnroutedAge time.Duration
 }
 
 const doctorNamespace = "core.doctor"
@@ -48,6 +51,9 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 	}
 	if o.Limit <= 0 {
 		o.Limit = 20
+	}
+	if o.UnroutedAge <= 0 {
+		o.UnroutedAge = 10 * time.Minute
 	}
 	limit := func(items []string) []string {
 		sort.Strings(items)
@@ -127,6 +133,7 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 	} else {
 		checks = append(checks, Check{Name: "retention", Status: CheckOK, Code: "current", Detail: "no pending retention releases"})
 	}
+	checks = append(checks, routingCheck(ctx, store, now, o.UnroutedAge, limit))
 
 	if o.Ingress == nil {
 		return append(checks, Check{Name: "reconcile_lag", Status: CheckInfo, Code: "no_ingress", Detail: "no ingress sources are registered"})
@@ -202,4 +209,37 @@ func (s *Scheduler) PinnedExecutorCheck(ctx context.Context) Check {
 		return Check{Name: "pinned_executors", Status: CheckFail, Code: "executor_missing", Detail: fmt.Sprintf("%d attempt(s) pin an executor that is not installed", len(missing)), Items: missing}
 	}
 	return Check{Name: "pinned_executors", Status: CheckOK, Code: "installed", Detail: "every live or held attempt has its pinned executor installed"}
+}
+
+// routingCheck warns about Events still unrouted after age: each holds the
+// Work it targets. Routing gives up on a failing one by itself; one stuck
+// for another reason (its identity no longer resolves) needs `events skip`.
+func routingCheck(ctx context.Context, store storage.Store, now time.Time, age time.Duration, limit func([]string) []string) Check {
+	var stuck []string
+	err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+		events, err := tx.UnroutedEvents(0, 0)
+		if err != nil {
+			return err
+		}
+		for _, a := range events {
+			if a.Routed || now.Sub(a.Event.ReceivedAt) < age {
+				continue
+			}
+			item := fmt.Sprintf("%s (%s, unrouted for %s)", a.Event.ID, a.Event.Type, now.Sub(a.Event.ReceivedAt).Round(time.Minute))
+			if f, ok, e := RouteFailureInTx(tx, a.Event.ID); e != nil {
+				return e
+			} else if ok {
+				item += fmt.Sprintf(": %d route failure(s), last %s", f.Attempts, f.Code)
+			}
+			stuck = append(stuck, item)
+		}
+		return nil
+	})
+	if err != nil {
+		return Check{Name: "routing", Status: CheckFail, Code: "storage_unavailable", Detail: "unrouted events could not be read"}
+	}
+	if len(stuck) > 0 {
+		return Check{Name: "routing", Status: CheckWarn, Code: "unrouted_events", Detail: fmt.Sprintf("%d event(s) unrouted for over %s hold their Work; open-conduit events skip ID lets it move on", len(stuck), age), Items: limit(stuck)}
+	}
+	return Check{Name: "routing", Status: CheckOK, Code: "current", Detail: "no event has been waiting to be routed"}
 }

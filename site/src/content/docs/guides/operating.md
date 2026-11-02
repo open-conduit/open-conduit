@@ -70,9 +70,12 @@ open-conduit route issue/12                          # explain how an issue's Ev
 open-conduit route --samples --scope eng             # sample Events to trace
 open-conduit route --trace issue-opened --scope eng  # how a new issue would be routed now (records nothing)
 open-conduit events chain ID
+open-conduit events skip ID --reason "bad payload"   # route an Event routing is stuck on as skipped
+open-conduit events reroute ID                       # route a failed or skipped Event again
 ```
 
 - `work retry|hold|release|cancel` take the Work's current `--revision`, which `work get ID` shows.
 - `runs log ID` shows a run's output; `--transcript` shows the agent's transcript.
 - `events chain ID` shows the chain of Events that led to something.
+- An Event whose route keeps failing is retried with a growing backoff and, after five failures over at least 15 minutes (or at once when retrying can't help, such as a route whose extension is gone), routed as `failed`. Doctor's `routing` check lists Events still unrouted after ten minutes. `events skip` lets the Work behind one move on; `events reroute` tries an unrouted one now, or accepts a failed or skipped one again as a copy.
 - `doctor --check-secrets` checks connections, credentials, webhooks, bindings and the executors' CLIs.

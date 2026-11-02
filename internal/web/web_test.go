@@ -110,6 +110,16 @@ func (f *fake) CancelExecution(_ context.Context, id, rev, reason, _ string) (cl
 	f.reasons = append(f.reasons, reason)
 	return f.control("cancel-execution", id, rev)
 }
+func (f *fake) SkipEvent(_ context.Context, id, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
+	return f.control("skip-event", id, "")
+}
+func (f *fake) RerouteEvent(_ context.Context, id, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
+	res, err := f.control("reroute-event", id, "")
+	res.RoutedEventID = id + "-copy"
+	return res, err
+}
 func (f *fake) CancelWork(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
 	f.reasons = append(f.reasons, reason)
 	return f.control("cancel", id, rev)
@@ -322,8 +332,8 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 
 	// Every control needs the token and the view's own origin.
 	f.controls = nil
-	for _, path := range []string{"/work/hold", "/work/release", "/work/retry", "/work/cancel", "/work/wake", "/work/rebind", "/run/cancel"} {
-		form := url.Values{"work": {"wrk_1"}, "run": {"exe_2"}, "type": {"x.y"}, "binding": {"b"}}
+	for _, path := range []string{"/work/hold", "/work/release", "/work/retry", "/work/cancel", "/work/wake", "/work/rebind", "/run/cancel", "/events/skip", "/events/reroute"} {
+		form := url.Values{"work": {"wrk_1"}, "run": {"exe_2"}, "event": {"evt_1"}, "type": {"x.y"}, "binding": {"b"}}
 		if w := do(h, "POST", path, form, s); w.Code != http.StatusForbidden {
 			t.Fatalf("%s without csrf: %d", path, w.Code)
 		}

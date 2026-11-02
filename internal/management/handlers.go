@@ -391,8 +391,18 @@ func routeOf(tx storage.Tx, a domain.AcceptedEvent, scope domain.ID) (wireEventR
 	if ok {
 		out.Route, out.Binding, out.Generation, out.Policy, out.Reason = rec.Route, rec.Binding, rec.Generation, rec.Policy, rec.Reason
 		out.DisplayRefused = rec.DisplayRefused
+		out.Error, out.Attempts = rec.Error, rec.Attempts
 		if out.RoutedWorkID == "" {
 			out.RoutedWorkID = string(rec.WorkID)
+		}
+	}
+	if !a.Routed {
+		f, failing, err := runtime.RouteFailureInTx(tx, a.Event.ID)
+		if err != nil {
+			return wireEventRoute{}, err
+		}
+		if failing {
+			out.Route, out.Reason, out.Error, out.Attempts = f.Route, f.Code, f.Error, f.Attempts
 		}
 	}
 	return out, nil
@@ -772,6 +782,47 @@ func (s *Server) cancelExecution(c *call) (int, any, error) {
 		return 0, nil, err
 	}
 	return 202, map[string]any{"event_id": string(event), "work_id": string(work), "execution_id": c.params[0]}, nil
+}
+
+// eventReason reads an Event control's {reason}.
+func eventReason(c *call) (string, error) {
+	var in struct {
+		Reason string `json:"reason"`
+	}
+	if err := c.decode(&in); err != nil {
+		return "", err
+	}
+	if len(in.Reason) > 1024 {
+		return "", fail(400, "malformed", "reason is too long")
+	}
+	return in.Reason, nil
+}
+
+// skipEvent routes an unrouted Event as skipped (issue #342).
+func (s *Server) skipEvent(c *call) (int, any, error) {
+	reason, err := eventReason(c)
+	if err != nil {
+		return 0, nil, err
+	}
+	event, err := s.o.Control.SkipEvent(c.ctx, domain.ID(c.params[0]), reason, c.key)
+	if err != nil {
+		return 0, nil, err
+	}
+	return 202, map[string]any{"event_id": string(event), "routed_event_id": c.params[0]}, nil
+}
+
+// rerouteEvent routes an Event again: an unrouted one at once, one routing
+// gave up on or skipped as an accepted copy.
+func (s *Server) rerouteEvent(c *call) (int, any, error) {
+	reason, err := eventReason(c)
+	if err != nil {
+		return 0, nil, err
+	}
+	event, routed, err := s.o.Control.RerouteEvent(c.ctx, domain.ID(c.params[0]), reason, c.key)
+	if err != nil {
+		return 0, nil, err
+	}
+	return 202, map[string]any{"event_id": string(event), "routed_event_id": string(routed)}, nil
 }
 func (s *Server) wakeWork(c *call) (int, any, error) {
 	var in struct {

@@ -350,6 +350,8 @@ var routes = []route{
 	{"POST", []string{"scopes", "*", "route", "trace"}, true, false, (*Server).traceRoute},
 	{"POST", []string{"scopes", "*", "actions", "*", "*"}, true, true, (*Server).invokeScopeAction},
 	{"POST", []string{"executions", "*", "cancel"}, true, true, (*Server).cancelExecution},
+	{"POST", []string{"events", "*", "skip"}, true, true, (*Server).skipEvent},
+	{"POST", []string{"events", "*", "reroute"}, true, true, (*Server).rerouteEvent},
 	{"POST", []string{"config", "validate"}, true, false, (*Server).validateConfig},
 	{"POST", []string{"config", "apply"}, true, true, (*Server).applyConfig},
 	{"POST", []string{"auth", "rotate"}, true, false, (*Server).rotate},

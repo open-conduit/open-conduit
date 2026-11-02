@@ -2,7 +2,16 @@
 title: "Backup, restore and state recovery"
 ---
 
-Open Conduit's offline recovery commands are backup bundles with verify and restore, a locked local credential reset (`auth recover`) and a read-only state diagnosis (`state check`). This page describes them, with the runbooks for SQLite migration recovery and corrupted state. The commands live in [`internal/backup`](https://github.com/open-conduit/open-conduit/tree/main/internal/backup) and [`internal/cli`](https://github.com/open-conduit/open-conduit/tree/main/internal/cli).
+This page covers recovering a daemon's progress from one bad Event or a wedged dependency, and Open Conduit's offline recovery commands. The offline commands are backup bundles with verify and restore, a locked local credential reset (`auth recover`) and a read-only state diagnosis (`state check`). This page describes them, with the runbooks for SQLite migration recovery and corrupted state. The commands live in [`internal/backup`](https://github.com/open-conduit/open-conduit/tree/main/internal/backup) and [`internal/cli`](https://github.com/open-conduit/open-conduit/tree/main/internal/cli).
+
+## A stuck Event or a wedged dependency
+
+The daemon is built so that one bad input can't stop it:
+
+- **A route that keeps failing.** An Event whose route errs, times out or panics is retried with a growing backoff and, after five failures over at least 15 minutes or at once when retrying can't help, routed as `failed` ([route failures](../routing-lifecycle/#route-failures)). The Work it was holding then takes its later input, and an agent that has finished can complete. The failed Event stays in the Work's history with its error. `open-conduit events reroute ID` accepts it again as a copy once the cause is fixed.
+- **An Event stuck for another reason.** Doctor's `routing` check lists Events unrouted for over ten minutes, such as one whose identity no longer resolves. `open-conduit events skip ID --reason …` routes it as skipped so its Work moves on; the web view's Work page and the TUI's run detail offer the same control.
+- **A hung extension or container runtime.** A route's decision and the Docker provider's `info`, `ps` and `inspect` each have a deadline (`serve --call-timeout`, default 5s), and container reconcile runs off the host loop. A deadlocked extension or a wedged Docker Desktop therefore can't stop routing, timers, wakes, recovery or new starts.
+- **A panic in extension code.** A route handler's panic fails that Event's route. A panic in a projection, extension task, resource pass or container reconcile is recovered, logged at error with its stack and reported as `panic`; the next pass runs it again.
 
 ## Backup, restore and credential recovery
 

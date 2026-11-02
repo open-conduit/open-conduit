@@ -1588,6 +1588,19 @@ a.token {
   margin: 0;
   word-break: break-all;
 }
+.ev-detail pre {
+  margin: 0;
+  max-height: 16em;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+.ev-controls {
+  display: flex;
+  gap: 8px;
+}
+.ev-controls form {
+  margin: 0;
+}
 
 /* facts */
 .facts {
