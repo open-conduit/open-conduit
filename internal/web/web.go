@@ -271,10 +271,14 @@ func (s *Server) Handler(addr string) http.Handler {
 		net.JoinHostPort(s.opts.Host, port): true,
 		net.JoinHostPort("localhost", port): true,
 		addr:                                true,
+		// Browsers leave the default port out of Host, so the view's own
+		// name arrives bare from a reverse proxy on 443 that passes Host
+		// through. Only the operator chooses that name, so it can't be a
+		// rebound one.
+		s.opts.Host: true,
 	}
 	if port == "80" {
-		// Browsers leave the default port out of Host.
-		allowed[s.opts.Host], allowed["localhost"] = true, true
+		allowed["localhost"] = true
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /login", s.loginPage)

@@ -244,16 +244,20 @@ func TestSignInAndHostCheck(t *testing.T) {
 	if w.Header().Get("Referrer-Policy") != "same-origin" || !strings.Contains(w.Header().Get("Content-Security-Policy"), "default-src 'self'") {
 		t.Fatalf("headers: %v", w.Header())
 	}
-	// A rebound DNS name reaches the listener but is refused, signed in or not.
-	req := httptest.NewRequest("GET", "/", nil)
-	req.Host = "attacker.example:7420"
-	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
-	rec := httptest.NewRecorder()
-	h.ServeHTTP(rec, req)
-	if rec.Code != http.StatusMisdirectedRequest {
-		t.Fatalf("foreign host: %d", rec.Code)
+	// A rebound DNS name reaches the listener but is refused, signed in or
+	// not. Bare localhost is another server's (port 80), not ours.
+	for _, host := range []string{"attacker.example:7420", "attacker.example", "localhost"} {
+		req := httptest.NewRequest("GET", "/", nil)
+		req.Host = host
+		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		if rec.Code != http.StatusMisdirectedRequest {
+			t.Fatalf("foreign host %s: %d", host, rec.Code)
+		}
 	}
-	for _, host := range []string{"localhost:7420", addr} {
+	// The view's own name arrives bare through a reverse proxy on 443.
+	for _, host := range []string{"localhost:7420", addr, "open-conduit.localhost"} {
 		req := httptest.NewRequest("GET", "/", nil)
 		req.Host = host
 		req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
@@ -299,6 +303,19 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 	h.ServeHTTP(rec, req)
 	if rec.Code != http.StatusSeeOther {
 		t.Fatalf("same origin: %d %s", rec.Code, rec.Body)
+	}
+	f.invoked = nil
+
+	// So do they through a TLS reverse proxy that passes Host through.
+	req = httptest.NewRequest("POST", "/actions", strings.NewReader(form.Encode()))
+	req.Host = "open-conduit.localhost"
+	req.Header.Set("Content-Type", "application/x-www-form-urlencoded")
+	req.Header.Set("Origin", "https://open-conduit.localhost")
+	req.AddCookie(&http.Cookie{Name: sessionCookie, Value: s.newSession()})
+	rec = httptest.NewRecorder()
+	h.ServeHTTP(rec, req)
+	if rec.Code != http.StatusSeeOther {
+		t.Fatalf("proxied same origin: %d %s", rec.Code, rec.Body)
 	}
 	f.invoked = nil
 
