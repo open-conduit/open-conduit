@@ -10,6 +10,7 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -44,7 +45,7 @@ func (r *Remote) Validator(kind, typ string) func(json.RawMessage, []string) err
 			return ErrInvalidConfig
 		}
 		if kind == protocol.ValidateExtension || kind == protocol.ValidateRoute {
-			r.described.Store(describeKey(kind, typ, config), out.Describe)
+			r.described.put(describeKey(kind, typ, config), out.Describe)
 		}
 		return nil
 	}
@@ -55,11 +56,43 @@ func (r *Remote) Validator(kind, typ string) func(json.RawMessage, []string) err
 // (protocol.ValidateResult.Describe); ok is false when it has not
 // validated it.
 func (r *Remote) Described(kind, typ string, config json.RawMessage) (lines []protocol.DescribeLine, ok bool) {
-	v, ok := r.described.Load(describeKey(kind, typ, config))
-	if !ok {
-		return nil, false
+	return r.described.get(describeKey(kind, typ, config))
+}
+
+// describedCap bounds each of describedCache's two maps.
+const describedCap = 512
+
+// describedCache keeps the describe lines of the objects validated lately,
+// bounded however many drafts are validated (a setup session's or the
+// config tools' candidates): once the newer map holds describedCap
+// objects it becomes the older one and the oldest are dropped. Every
+// validation of the configuration writes its objects' lines again, so the
+// current generation's stay.
+type describedCache struct {
+	mu           sync.Mutex
+	newer, older map[string][]protocol.DescribeLine
+}
+
+func (c *describedCache) put(key string, lines []protocol.DescribeLine) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.newer == nil {
+		c.newer = map[string][]protocol.DescribeLine{}
 	}
-	return v.([]protocol.DescribeLine), true
+	if _, ok := c.newer[key]; !ok && len(c.newer) >= describedCap {
+		c.older, c.newer = c.newer, map[string][]protocol.DescribeLine{}
+	}
+	c.newer[key] = lines
+}
+
+func (c *describedCache) get(key string) ([]protocol.DescribeLine, bool) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if lines, ok := c.newer[key]; ok {
+		return lines, true
+	}
+	lines, ok := c.older[key]
+	return lines, ok
 }
 
 func describeKey(kind, typ string, config json.RawMessage) string {
