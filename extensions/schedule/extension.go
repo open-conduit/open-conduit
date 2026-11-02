@@ -551,9 +551,7 @@ func (x *Extension) check(ctx context.Context, _ protocol.CheckConfig) inproc.Ch
 			check.Items = append(check.Items, item+": "+strings.Join(triggers, "; "))
 		}
 	}
-	for _, item := range x.webhookItems() {
-		check.Items = append(check.Items, item)
-	}
+	check.Items = append(check.Items, x.webhookItems()...)
 	sort.Strings(check.Items)
 	return check
 }
