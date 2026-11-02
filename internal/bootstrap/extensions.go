@@ -408,7 +408,7 @@ func (d *daemon) openExtensions(ctx context.Context) {
 		// configuration start after this.
 		d.inproc = append(d.inproc, pkg)
 		for _, e := range f.Manifest.Provides.Executors {
-			if adapter, ok := r.Executor(e.Name); ok {
+			if adapter, ok := r.Executor(e.Name); ok && knownPool(e.Pool) {
 				d.executors[e.Name] = adapter
 				if e.Pool != "" {
 					d.pools[e.Name] = e.Pool

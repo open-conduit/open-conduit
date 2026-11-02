@@ -454,7 +454,10 @@ func Serve(ctx context.Context, o Options) (err error) {
 	defer d.closeClaudeCode()
 	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor}
 	d.pools = map[string]string{"shell": jobPool}
-	inprocExecutors(d.inproc, d.executors, d.pools)
+	for _, name := range inprocExecutors(d.inproc, d.executors, d.pools) {
+		d.log.Warn("executor not registered: its capacity pool is not one a setting bounds", "executor", name)
+		d.report("executor_pool", domain.ID(name), "unknown_pool")
+	}
 	if usage != nil {
 		usage.known = knownTypes(registry(maps.Clone(d.executors)))
 	}

@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"path/filepath"
 	"slices"
+	"sort"
 	"strings"
 	"time"
 
@@ -317,21 +318,34 @@ func (t inprocTimers) Cancel(ctx context.Context, id domain.ID, expected domain.
 }
 
 // inprocExecutors adds the extensions' executors to executors, and the
-// capacity pool of each that names one to pools.
-func inprocExecutors(xs []inproc.Extension, executors map[string]extension.Executor, pools map[string]string) {
+// capacity pool of each that names one to pools. An executor naming a pool
+// no setting bounds is not registered, so it can never run unbounded; its
+// name is returned for the host to report.
+func inprocExecutors(xs []inproc.Extension, executors map[string]extension.Executor, pools map[string]string) (refused []string) {
 	for _, x := range xs {
 		e, ok := x.(inproc.Executing)
 		if !ok {
 			continue
 		}
 		for name, reg := range e.Executors() {
+			if !knownPool(reg.Pool) {
+				refused = append(refused, name)
+				continue
+			}
 			executors[name] = reg.Executor
 			if reg.Pool != "" {
 				pools[name] = reg.Pool
 			}
 		}
 	}
+	sort.Strings(refused)
+	return refused
 }
+
+// knownPool reports whether a capacity pool is one a setting bounds: ""
+// (agent turns, settings.concurrency) or jobs (settings.job_concurrency).
+// Installed packages' manifests are held to the same rule.
+func knownPool(pool string) bool { return pool == "" || pool == inproc.PoolJobs }
 
 // causalLimits are the current generation's causal bounds.
 func (d *daemon) causalLimits() runtime.CausalLimits {

@@ -175,8 +175,27 @@ func TestConfigureParamsCarryDisabledEntries(t *testing.T) {
 // settings.job_concurrency.
 func TestInprocExecutorsCarryPools(t *testing.T) {
 	executors, pools := map[string]extension.Executor{}, map[string]string{}
-	inprocExecutors(firstParty(), executors, pools)
+	if refused := inprocExecutors(firstParty(), executors, pools); len(refused) != 0 {
+		t.Fatalf("refused %v", refused)
+	}
 	if executors["github-hold"] == nil || pools["github-hold"] != inproc.PoolJobs {
 		t.Fatalf("executors %v pools %v", executors, pools)
 	}
+	// A pool no setting bounds is refused rather than left unbounded.
+	executors, pools = map[string]extension.Executor{}, map[string]string{}
+	refused := inprocExecutors([]inproc.Extension{typoPool{}}, executors, pools)
+	if len(refused) != 1 || refused[0] != "typo" || executors["typo"] != nil || pools["typo"] != "" {
+		t.Fatalf("an unknown pool: refused %v executors %v pools %v", refused, executors, pools)
+	}
 }
+
+// typoPool registers an executor in a pool no setting bounds.
+type typoPool struct{}
+
+func (typoPool) Name() string { return "typo" }
+func (typoPool) Executors() map[string]inproc.Executor {
+	return map[string]inproc.Executor{"typo": {Executor: &shellStub{}, Pool: "job"}}
+}
+
+// shellStub is an executor that is never run.
+type shellStub struct{ extension.Executor }
