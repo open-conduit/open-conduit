@@ -10,6 +10,7 @@ import (
 	codexext "github.com/open-conduit/open-conduit/extensions/codex/pkg"
 	githubext "github.com/open-conduit/open-conduit/extensions/github/pkg"
 	"github.com/open-conduit/open-conduit/extensions/pagerduty"
+	posthogext "github.com/open-conduit/open-conduit/extensions/posthog/pkg"
 	"github.com/open-conduit/open-conduit/extensions/sentry"
 	shellext "github.com/open-conduit/open-conduit/extensions/shell/pkg"
 	slackext "github.com/open-conduit/open-conduit/extensions/slack/pkg"
@@ -27,6 +28,7 @@ var runnable = map[string]func(args []string) int{
 	"codex":     codexext.Main,
 	"github":    githubext.Main,
 	"pagerduty": pagerduty.Main,
+	"posthog":   posthogext.Main,
 	"sentry":    sentry.Main,
 	"shell":     shellext.Main,
 	"slack":     slackext.Main,

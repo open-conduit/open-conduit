@@ -230,7 +230,7 @@ func (e manifestExecutor) Attach(context.Context, domain.ID) (extension.AttachSp
 }
 
 // offlineExternal adds the packages installed beside configPath (but
-// exclude) to an offline registry: their declared types and executors, with
+// exclude), and those bundled with the binary, to an offline registry: their declared types and executors, with
 // each package's config validated by the package itself. A package starts,
 // only once a config object of its types needs checking, for validate alone:
 // no coordination store, a throwaway state directory, and stopped by the
@@ -238,9 +238,9 @@ func (e manifestExecutor) Attach(context.Context, domain.ID) (extension.AttachSp
 // objects, and the validation says why (offlinePackages.diagnostics).
 func offlineExternal(reg *config.Registry, configPath, exclude string) *offlinePackages {
 	o := &offlinePackages{}
-	if configPath == "" {
-		return o
-	}
+	// With no config file, the bundled packages still count: a first-party
+	// extension served by open-conduit itself (#428) validates its own
+	// config objects however the config is given.
 	found, _ := discoverPackages(configPath, exclude)
 	if len(found) == 0 || extproc.CheckConflicts(found, takenNames(*reg)) != nil {
 		return o

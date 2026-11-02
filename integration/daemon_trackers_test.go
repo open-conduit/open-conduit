@@ -216,7 +216,7 @@ func TestDaemonTrackersAndPostHog(t *testing.T) {
 			t.Fatalf("doctor %s: %+v", typ, report.Checks)
 		}
 	}
-	if codes["posthog"] != "ok" || codes["posthog_auth"] != "verified" {
+	if codes["posthog"] != "ok" || codes["posthog-auth"] != "verified" {
 		t.Fatalf("doctor: %+v", report.Checks)
 	}
 	// Route explanation agrees with execution: the claim and the inputs are
