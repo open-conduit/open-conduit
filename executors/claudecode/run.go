@@ -1298,7 +1298,7 @@ func writeJSON(path string, v any) error {
 	return writeFile(path, out.Bytes())
 }
 
-// writeFile atomically replaces an owner-only file.
+// writeFile atomically and durably replaces an owner-only file.
 func writeFile(path string, data []byte) error {
 	tmp, err := os.CreateTemp(filepath.Dir(path), ".tmp-*")
 	if err != nil {
@@ -1314,7 +1314,19 @@ func writeFile(path string, data []byte) error {
 	if err != nil {
 		return err
 	}
-	return os.Rename(tmp.Name(), path)
+	if err = os.Rename(tmp.Name(), path); err != nil {
+		return err
+	}
+	// Sync the directory too, or a power loss can undo the rename.
+	dir, err := os.Open(filepath.Dir(path))
+	if err != nil {
+		return err
+	}
+	err = dir.Sync()
+	if cerr := dir.Close(); err == nil {
+		err = cerr
+	}
+	return err
 }
 
 // unavailable is the workspace_unavailable summary: the provider's reason in
