@@ -7,7 +7,7 @@ Open Conduit runs commands on a cron schedule, at fixed times, every N minutes, 
 
 - Each job keeps one run going and at most one waiting.
 - A slot missed while the daemon was down is caught up if it is less than six hours late.
-- A job can run an agent turn instead of a command: point its route at a `claude-code` binding instead of a `shell` one.
+- A job can run an agent turn instead of a command: point its route at a `claude-code` binding instead of a `shell` one. [Fix red CI on main](../red-ci/) runs one when the default branch's checks fail.
 
 ## Example config
 
