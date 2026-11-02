@@ -126,28 +126,34 @@ func budgetPrepared(t *testing.T, name string, prepare func() func() bool) {
 }
 
 // TestInTransactionRPCBudgetCatchesASlowCall is the budget's negative
-// control: a call just over the median limit, and one whose slowest
-// twentieth is over the 95th-percentile limit, are both over budget, and a
-// fast call is within it.
+// control, on synthetic durations (tests don't wait on real time): calls
+// just over the median limit, and a tenth of calls over the
+// 95th-percentile limit, are both over budget; calls well inside both are
+// within it.
 func TestInTransactionRPCBudgetCatchesASlowCall(t *testing.T) {
 	limit50, limit95 := budgetLimits()
-	slow, _ := measure(20, func() bool { time.Sleep(limit50 + time.Millisecond); return true })
-	if slow.within() {
-		t.Fatalf("a call over the median limit is within budget: %v", slow)
-	}
-	n := 0
-	tail, _ := measure(40, func() bool {
-		n++
-		if n%10 == 0 {
-			time.Sleep(limit95 + time.Millisecond)
+	durations := func(n int, at func(i int) time.Duration) measurement {
+		m := make(measurement, n)
+		for i := range m {
+			m[i] = at(i)
 		}
-		return true
+		slices.Sort(m)
+		return m
+	}
+	if slow := durations(40, func(int) time.Duration { return limit50 + time.Millisecond }); slow.within() {
+		t.Fatalf("calls over the median limit are within budget: %v", slow)
+	}
+	tail := durations(40, func(i int) time.Duration {
+		if i%10 == 9 {
+			return limit95 + time.Millisecond
+		}
+		return limit50 / 10
 	})
 	if tail.within() {
 		t.Fatalf("a tenth of calls over the 95th-percentile limit is within budget: %v", tail)
 	}
-	if fast, _ := measure(40, func() bool { return true }); !fast.within() {
-		t.Fatalf("a call that does nothing is over budget: %v", fast)
+	if fast := durations(40, func(int) time.Duration { return limit50 / 10 }); !fast.within() {
+		t.Fatalf("fast calls are over budget: %v", fast)
 	}
 }
 
