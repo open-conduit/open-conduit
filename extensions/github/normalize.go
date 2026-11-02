@@ -291,6 +291,85 @@ func (n *normalizer) withPullCopies(obs []extension.Observation) ([]extension.Ob
 	return out, nil
 }
 
+// IssueAckKey is the correlation external ID of an issue's acknowledgement
+// Work: the key the copy of the issue's opening carries (Settings.AckIssues),
+// apart from the issue's own key, which only the Work that claims the issue
+// owns. The copy is of the opening, not of a generation, so a reopened issue
+// is not acknowledged again.
+func IssueAckKey(number int) string { return "issue/" + strconv.Itoa(number) + "/ack" }
+
+var issueAckKeyPattern = regexp.MustCompile(`^issue/([0-9]+)/ack$`)
+
+// ParseIssueAckKey extracts the issue number from an IssueAckKey.
+func ParseIssueAckKey(id string) (int, bool) {
+	m := issueAckKeyPattern.FindStringSubmatch(id)
+	if m == nil {
+		return 0, false
+	}
+	return parseNumber(m[1])
+}
+
+// AckWindow is how long after an issue was opened its opening is still
+// copied for acknowledgement: an entry that starts acknowledging, or a
+// reconcile after a long outage, doesn't thank the authors of old issues.
+const AckWindow = 72 * time.Hour
+
+// ackItemPrefix names the copy of an issue's opening. It sorts after the
+// issue's own item, so the original is delivered first.
+const ackItemPrefix = "issue_ack/"
+
+// withIssueAcks appends, when the entry acknowledges issues, a copy of each
+// newly opened issue's first generation under IssueAckKey. The copy carries
+// only what the opening fixed (who opened which issue, and when) plus the
+// title, so later edits, labels and comments don't re-observe it; its
+// identity is the same from push and reconcile. Whether the author is
+// acknowledged is the route's decision. An opening whose author's
+// permission couldn't be read is not copied yet: the next observation, once
+// it reads, copies it, so a maintainer is never mistaken for an outsider by
+// a failed read.
+func (n *normalizer) withIssueAcks(obs []extension.Observation) ([]extension.Observation, error) {
+	if !n.s.AckIssues {
+		return obs, nil
+	}
+	out := obs
+	for _, o := range obs {
+		e := o.Event
+		if e.Type != TypeIssueOpen || e.Data.Schema != SchemaIssue || e.CorrelationKey == nil {
+			continue
+		}
+		var p IssuePayload
+		if json.Unmarshal(e.Data.Data, &p) != nil || p.Generation != "" || p.State != "open" || e.CorrelationKey.ExternalID != IssueKey(p.Number, "") {
+			continue
+		}
+		if !n.received.IsZero() && n.received.Sub(p.CreatedAt) > AckWindow {
+			continue
+		}
+		if p.AuthorPermission == "" && n.needsPermission(p.AuthorType, p.Author, p.AuthorAssociation, p.State) {
+			continue
+		}
+		ack := IssuePayload{Repo: p.Repo, Number: p.Number, Title: p.Title, State: "open", Labels: []string{}, Assignees: []string{},
+			Author: p.Author, AuthorType: p.AuthorType, AuthorAssociation: p.AuthorAssociation, AuthorPermission: p.AuthorPermission,
+			ByConnection: p.ByConnection, URL: p.URL, CreatedAt: p.CreatedAt}
+		c, err := n.observation(ackItemPrefix+strconv.Itoa(p.Number), TypeIssueOpen, domain.CorrelationKey{Source: n.s.Namespace, ExternalID: IssueAckKey(p.Number)},
+			p.CreatedAt, SchemaIssue, ack)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, c)
+	}
+	return out, nil
+}
+
+// withCopies appends the copies the entry observes under keys of their own:
+// PRs' (withPullCopies) and issue openings' (withIssueAcks).
+func (n *normalizer) withCopies(obs []extension.Observation) ([]extension.Observation, error) {
+	obs, err := n.withPullCopies(obs)
+	if err != nil {
+		return nil, err
+	}
+	return n.withIssueAcks(obs)
+}
+
 var pullItemPattern = regexp.MustCompile(`^pr/([0-9]+)(/.*)?$`)
 
 // pullItem splits a PR-scoped item ID (`pr/N`, `pr/N/...`) into the PR's
@@ -400,9 +479,7 @@ func (n *normalizer) byConnection(ctx context.Context, user rawUser) bool {
 // when no read is needed or the read fails, so admission fails closed and
 // a later observation, once it resolves, admits.
 func (n *normalizer) permission(ctx context.Context, user rawUser, association, state string) string {
-	authors := n.s.Authors
-	if state != "open" || user.Type == "Bot" || user.Login == "" || n.c == nil || slices.Contains(authors, AnyAuthor) ||
-		!slices.Contains(authors, CollaboratorAssociation) || slices.Contains(authors, strings.ToUpper(association)) {
+	if !n.needsPermission(user.Type, user.Login, association, state) {
 		return ""
 	}
 	key := strings.ToLower(user.Login)
@@ -421,6 +498,15 @@ func (n *normalizer) permission(ctx context.Context, user rawUser, association, 
 	n.m.permissionReads++
 	n.m.mu.Unlock()
 	return perm
+}
+
+// needsPermission reports whether admission needs an author's repository
+// permission: an open issue or PR by a person whose association alone
+// wouldn't admit them but COLLABORATOR would.
+func (n *normalizer) needsPermission(userType, login, association, state string) bool {
+	authors := n.s.Authors
+	return state == "open" && userType != "Bot" && login != "" && n.c != nil && !slices.Contains(authors, AnyAuthor) &&
+		slices.Contains(authors, CollaboratorAssociation) && !slices.Contains(authors, strings.ToUpper(association))
 }
 
 // permissionReads is how many permission reads the normalizer has made.

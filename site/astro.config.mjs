@@ -45,6 +45,7 @@ export default defineConfig({
 						{ label: 'Fix red CI on main', slug: 'workflows/red-ci' },
 						{ label: 'Slack to PR', slug: 'workflows/slack-to-pr' },
 						{ label: 'Dependency upgrades', slug: 'workflows/dependency-upgrades' },
+						{ label: 'Acknowledge outside issues', slug: 'workflows/acknowledge-issues' },
 						{ label: 'Multi-repo changes', slug: 'workflows/multi-repo' },
 					],
 				},

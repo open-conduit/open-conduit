@@ -21,16 +21,25 @@ const WorkKind = "github.issue"
 // any Work that owns the issue the PR belongs to.
 const WorkKindPull = "github.pull_request"
 
+// WorkKindAck is the kind of Work that acknowledges an issue opened by an
+// author admit.authors doesn't admit: it owns the copy of the issue's
+// opening (IssueAckKey), never the issue's key, so the issue can still be
+// claimed, and projection leaves the issue's labels and comments alone.
+const WorkKindAck = "github.issue.ack"
+
 // What a `github` route claims (RouteConfig.Claim).
 const (
 	ClaimIssues       = "issues"
 	TrackPullRequests = "pull_requests"
+	ClaimAcks         = "acknowledgements"
 )
 
 // RouteConfig is the opaque config of a `github` route. Claim is what it
-// claims as Work: issues (the default) or pull_requests, each open PR's
+// claims as Work: issues (the default); pull_requests, each open PR's
 // own Work, from the copies an entry with track_pull_requests
-// observes. Drafts lets a pull_requests route claim draft PRs too; by
+// observes; or acknowledgements, Work for each new issue whose author
+// admit.authors doesn't admit, from the copies an entry with
+// acknowledge_issues observes. Drafts lets a pull_requests route claim draft PRs too; by
 // default a draft is claimed once it is marked ready. Authors limits a
 // pull_requests route to PRs opened by those logins (dependabot[bot],
 // renovate[bot]), compared without case, and admits them by name in place
@@ -51,9 +60,9 @@ func ParseRoute(data []byte) (RouteConfig, error) {
 	switch c.Claim {
 	case "":
 		c.Claim = ClaimIssues
-	case ClaimIssues, TrackPullRequests:
+	case ClaimIssues, TrackPullRequests, ClaimAcks:
 	default:
-		return c, errors.New("github route: claim must be issues or pull_requests")
+		return c, errors.New("github route: claim must be issues, pull_requests or acknowledgements")
 	}
 	if c.Drafts && c.Claim != TrackPullRequests {
 		return c, errors.New("github route: drafts applies only to claim pull_requests")
@@ -275,8 +284,19 @@ func (Route) match(_ context.Context, in extension.RouteInput) (extension.RouteD
 	if rc.Claim == TrackPullRequests {
 		return matchPull(in, rc), nil
 	}
+	if rc.Claim == ClaimAcks {
+		return matchAck(in), nil
+	}
 	if in.Work != nil && in.Work.Kind == WorkKindPull {
 		return extension.Skip("a PR's own Work takes input from a pull_requests route"), nil
+	}
+	if in.Work != nil && in.Work.Kind == WorkKindAck {
+		return extension.Skip("an acknowledgement takes input from an acknowledgements route"), nil
+	}
+	if k := e.CorrelationKey; k != nil {
+		if _, ok := ParseIssueAckKey(k.ExternalID); ok {
+			return extension.Skip("a copy of an issue's opening, for an acknowledgements route"), nil
+		}
 	}
 	source := e.Source
 	if e.Type == TypeHoldReleased && e.CorrelationKey != nil {
@@ -411,4 +431,42 @@ func matchPull(in extension.RouteInput, rc RouteConfig) extension.RouteDecision 
 		return commentNews(e, in.Work)
 	}
 	return extension.Skip(e.Type + " is not passed to the agent")
+}
+
+// matchAck is an acknowledgements route: it creates Work for the copy of a
+// new issue's opening when admit.authors does not admit its author, the
+// inverse of what an issues route claims. The Work owns only the copy's key
+// and takes no input after it starts: an acknowledgement is one comment,
+// made once, so a re-observation of the copy, or the issue's later news,
+// never reaches it.
+func matchAck(in extension.RouteInput) extension.RouteDecision {
+	e := in.Event.Event
+	if e.CorrelationKey == nil {
+		return extension.Skip("the event names no issue")
+	}
+	number, ok := ParseIssueAckKey(e.CorrelationKey.ExternalID)
+	if !ok {
+		return extension.Skip("not the copy of an issue's opening")
+	}
+	s, ok := settingsFor(in.Scope, e.Source)
+	if !ok || !s.AckIssues {
+		return extension.Skip("no github entry in this scope acknowledges the issues of " + e.Source + " (acknowledge_issues)")
+	}
+	if in.Work != nil {
+		return extension.Skip("the issue was already acknowledged")
+	}
+	if e.Type != TypeIssueOpen || e.Data.Schema != SchemaIssue {
+		return extension.Skip("only an opened issue is acknowledged")
+	}
+	var p IssuePayload
+	if json.Unmarshal(e.Data.Data, &p) != nil || p.Number != number {
+		return extension.Skip("the issue data is unreadable")
+	}
+	if p.AuthorType == "Bot" || p.ByConnection {
+		return extension.Skip("the issue's author " + p.Author + " is a bot")
+	}
+	if s.authorRefusal("issue", p.Author, p.AuthorAssociation, p.AuthorPermission, false) == "" {
+		return extension.Skip("admit.authors admits the issue's author " + p.Author + "; an issues route claims it instead")
+	}
+	return extension.RouteDecision{Match: true, Kind: WorkKindAck, Reason: "a new issue by " + p.Author + ", whom admit.authors doesn't admit"}
 }

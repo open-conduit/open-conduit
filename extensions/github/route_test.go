@@ -218,12 +218,12 @@ func matchRoute(t *testing.T, scope domain.Scope, config string, e domain.Accept
 }
 
 func TestParseRoute(t *testing.T) {
-	for _, raw := range []string{``, `{}`, `null`, `{"claim":"issues"}`, `{"claim":"pull_requests"}`, `{"claim":"pull_requests","drafts":true}`, `{"claim":"pull_requests","authors":["dependabot[bot]","renovate[bot]"]}`} {
+	for _, raw := range []string{``, `{}`, `null`, `{"claim":"issues"}`, `{"claim":"pull_requests"}`, `{"claim":"pull_requests","drafts":true}`, `{"claim":"pull_requests","authors":["dependabot[bot]","renovate[bot]"]}`, `{"claim":"acknowledgements"}`} {
 		if err := gh.ValidateRoute(json.RawMessage(raw)); err != nil {
 			t.Fatalf("%q: %v", raw, err)
 		}
 	}
-	for _, raw := range []string{`{"claim":"prs"}`, `{"claim":"issues","drafts":true}`, `{"label":"x"}`, `{"authors":["dependabot[bot]"]}`, `{"claim":"pull_requests","authors":[""]}`, `{"claim":"pull_requests","authors":["acme/bots"]}`} {
+	for _, raw := range []string{`{"claim":"prs"}`, `{"claim":"issues","drafts":true}`, `{"label":"x"}`, `{"authors":["dependabot[bot]"]}`, `{"claim":"pull_requests","authors":[""]}`, `{"claim":"pull_requests","authors":["acme/bots"]}`, `{"claim":"acknowledgements","drafts":true}`, `{"claim":"acknowledgements","authors":["mallory"]}`} {
 		if gh.ValidateRoute(json.RawMessage(raw)) == nil {
 			t.Fatalf("%q validated", raw)
 		}
@@ -387,5 +387,84 @@ func TestLabelsBacklog(t *testing.T) {
 	}
 	if gh.DefaultLabels().Backlog() != "backlog" {
 		t.Fatal("default backlog label")
+	}
+}
+
+// An acknowledgements route claims the copy of a new issue's opening when
+// admit.authors doesn't admit its author, the inverse of an issues route,
+// and says why it skips anyone else. The Work owns only the copy's key,
+// takes no input once it exists, and leaves the issue's key free for an
+// issues route or a claim by hand.
+func TestRouteClaimsAcknowledgements(t *testing.T) {
+	scope := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","acknowledge_issues":true}`)
+	const acks = `{"claim":"acknowledgements"}`
+	issue := gh.IssuePayload{Repo: repo, Number: 9, State: "open", Title: "Header wobbles", Author: "mallory", AuthorAssociation: "NONE", URL: "https://github.com/" + repo + "/issues/9"}
+	copied := event(gh.TypeIssueOpen, gh.IssueAckKey(9), gh.SchemaIssue, issue)
+
+	d := matchRoute(t, scope, acks, copied, nil)
+	if !d.Match || d.Kind != gh.WorkKindAck || !strings.Contains(d.Reason, "mallory") {
+		t.Fatalf("an outsider's issue was not acknowledged: %+v", d)
+	}
+	if d.Display == nil || d.Display.Ref != "#9" || d.Display.Title != "Header wobbles" {
+		t.Fatalf("ack display %+v", d.Display)
+	}
+	for name, tc := range map[string]struct {
+		mutate func(*gh.IssuePayload)
+		reason string
+	}{
+		"member":          {func(p *gh.IssuePayload) { p.AuthorAssociation = "MEMBER" }, "admit.authors admits"},
+		"private member":  {func(p *gh.IssuePayload) { p.AuthorAssociation, p.AuthorPermission = "CONTRIBUTOR", "write" }, "admit.authors admits"},
+		"other bot":       {func(p *gh.IssuePayload) { p.Author, p.AuthorType = "dependabot[bot]", "Bot" }, "bot"},
+		"own follow-up":   {func(p *gh.IssuePayload) { p.Author, p.AuthorType, p.ByConnection = "conduit[bot]", "Bot", true }, "bot"},
+		"another's issue": {func(p *gh.IssuePayload) { p.Number = 10 }, "unreadable"},
+	} {
+		p := issue
+		tc.mutate(&p)
+		if d := matchRoute(t, scope, acks, event(gh.TypeIssueOpen, gh.IssueAckKey(9), gh.SchemaIssue, p), nil); d.Match || !strings.Contains(d.Reason, tc.reason) {
+			t.Fatalf("%s: %+v, want a skip saying %q", name, d, tc.reason)
+		}
+	}
+	// admit.authors "*" admits everyone, so no one is acknowledged.
+	open := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","acknowledge_issues":true,"admit":{"authors":["*"]}}`)
+	if d := matchRoute(t, open, acks, copied, nil); d.Match {
+		t.Fatalf("acknowledged an admitted author: %+v", d)
+	}
+	// Only the copy: the issue's own observation, a comment and an entry
+	// without acknowledge_issues start nothing.
+	if d := matchRoute(t, scope, acks, event(gh.TypeIssueOpen, gh.IssueKey(9, ""), gh.SchemaIssue, issue), nil); d.Match {
+		t.Fatalf("acknowledged the issue's own observation: %+v", d)
+	}
+	plain := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`"}`)
+	if d := matchRoute(t, plain, acks, copied, nil); d.Match || !strings.Contains(d.Reason, "acknowledge_issues") {
+		t.Fatalf("acknowledged without acknowledge_issues: %+v", d)
+	}
+	// Once acknowledged, nothing reaches the Work: a re-observation of the
+	// copy (reconcile, a redelivery) is not a second acknowledgement.
+	ack := &domain.Work{ID: "work/a9", Kind: gh.WorkKindAck, ScopeID: "eng", State: domain.WorkCompleted,
+		CorrelationKeys: []domain.CorrelationKey{{Source: ns, ExternalID: gh.IssueAckKey(9)}}}
+	if d := matchRoute(t, scope, acks, copied, ack); d.Match || !strings.Contains(d.Reason, "already acknowledged") {
+		t.Fatalf("re-acknowledged: %+v", d)
+	}
+	// An issues route and a hold route leave the copy alone, and the
+	// issue's own key stays free to claim, by admission or by hand.
+	if d := match(t, scope, copied, nil); d.Match {
+		t.Fatalf("an issues route claimed the copy: %+v", d)
+	}
+	if d := match(t, scope, copied, ack); d.Match {
+		t.Fatalf("an issues route fed the ack Work: %+v", d)
+	}
+	scheduled := issue
+	scheduled.Labels = []string{"scheduled"}
+	if d, _ := (gh.HoldRoute{}).Match(context.Background(), extension.RouteInput{Event: event(gh.TypeIssueOpen, gh.IssueAckKey(9), gh.SchemaIssue, scheduled), Scope: scope}); d.Match {
+		t.Fatalf("a hold route claimed the copy: %+v", d)
+	}
+	claim := domain.AcceptedEvent{Event: domain.Event{ID: "c", Type: gh.TypeClaimRequested, Source: extension.ActionSource, DeliveryID: "c",
+		CorrelationKey: &domain.CorrelationKey{Source: ns, ExternalID: gh.IssueKey(9, "")}}}
+	if d := match(t, scope, claim, nil); !d.Match || d.Kind != gh.WorkKind {
+		t.Fatalf("the acknowledged issue could not be claimed by hand: %+v", d)
+	}
+	widened := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","acknowledge_issues":true,"admit":{"authors":["*"]}}`)
+	if d := match(t, widened, event(gh.TypeIssueOpen, gh.IssueKey(9, ""), gh.SchemaIssue, issue), nil); !d.Match || d.Kind != gh.WorkKind {
+		t.Fatalf("a widened admit did not claim the acknowledged issue: %+v", d)
 	}
 }

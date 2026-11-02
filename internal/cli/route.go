@@ -33,10 +33,14 @@ type routedEvent struct {
 }
 
 // keyMatches reports whether an external ID names the key: the ID itself, an
-// issue key (any generation), or a number (#12 or 12).
+// issue key (any generation, or the copy of its opening an acknowledgement
+// route reads), or a number (#12 or 12).
 func keyMatches(external, key string) bool {
 	k := strings.TrimPrefix(key, "#")
 	if external == key || external == k {
+		return true
+	}
+	if external == "issue/"+k+"/ack" {
 		return true
 	}
 	for _, prefix := range []string{"issue/", "pr/"} {

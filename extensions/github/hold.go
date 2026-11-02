@@ -49,6 +49,9 @@ func (HoldRoute) Match(_ context.Context, in extension.RouteInput) (extension.Ro
 	if e.Type != TypeIssueOpen || e.Data.Schema != SchemaIssue || e.CorrelationKey == nil {
 		return extension.Skip("only an opened issue is held"), nil
 	}
+	if _, ack := ParseIssueAckKey(e.CorrelationKey.ExternalID); ack {
+		return extension.Skip("a copy of an issue's opening, for an acknowledgements route"), nil
+	}
 	s, ok := settingsFor(in.Scope, e.Source)
 	if !ok {
 		return extension.Skip("no github entry in this scope reads " + e.Source), nil
