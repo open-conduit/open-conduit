@@ -351,6 +351,37 @@ func TestPullRequestCorrelation(t *testing.T) {
 	sameIdentity(t, "merged", merged, f.scan(t)["pr/"+strconv.Itoa(byBody)])
 }
 
+// Issues and PRs carry their author's association, and a PR whether its
+// head is a fork, the same from push and reconcile, for admission.
+func TestAuthorAssociationAndForkAreObserved(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	issue := fk.OpenIssue("Stranger", "", alice)
+	fk.SetAssociation(issue, "NONE")
+	own := fk.OpenPull("Own", "", "own", "s1", alice)
+	fork := fk.OpenPull("Fork", "", "patch-1", "s2", alice)
+	fk.SetHeadRepo(fork, "mallory/repo")
+	gone := fk.OpenPull("Gone", "", "patch-2", "s3", alice)
+	fk.SetHeadRepo(gone, "-")
+	fk.SetAssociation(gone, "FIRST_TIME_CONTRIBUTOR")
+	scanned := f.scan(t)
+	var ip gh.IssuePayload
+	if err := json.Unmarshal(scanned["issue/"+strconv.Itoa(issue)].Event.Data.Data, &ip); err != nil || ip.AuthorAssociation != "NONE" {
+		t.Fatalf("issue association %q (%v)", ip.AuthorAssociation, err)
+	}
+	for n, want := range map[int]struct {
+		fork  bool
+		assoc string
+	}{own: {false, "OWNER"}, fork: {true, "OWNER"}, gone: {true, "FIRST_TIME_CONTRIBUTOR"}} {
+		var p gh.PullPayload
+		if err := json.Unmarshal(scanned["pr/"+strconv.Itoa(n)].Event.Data.Data, &p); err != nil || p.Fork != want.fork || p.AuthorAssociation != want.assoc {
+			t.Fatalf("PR %d: fork=%v association=%q, want %+v (%v)", n, p.Fork, p.AuthorAssociation, want, err)
+		}
+	}
+	pushed := onlyObservation(t, f.push(t, "pull_request", "d-fork", fk.PullHook("opened", fork)))
+	sameIdentity(t, "fork", pushed, scanned["pr/"+strconv.Itoa(fork)])
+}
+
 // GitHub sends no webhook when a PR picks up conflicts (#209), so reconcile
 // reads each open issue PR's mergeability. One conflicting head is observed
 // once however often main moves after it; a new head is new news.

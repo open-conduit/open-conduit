@@ -41,6 +41,10 @@ type RequiredChecks struct {
 	// (403 or 404), with no names from them: a fine-grained token without
 	// the permission, or rulesets on a plan without them.
 	Refused []string `json:"refused,omitempty"`
+	// Guarded is true when the branch has protection or at least one
+	// ruleset rule applies to it: something host-side stands between a push
+	// and the branch. Meaningful only when nothing was refused.
+	Guarded bool `json:"guarded,omitempty"`
 }
 
 // RequiredChecks reads the checks a PR into branch needs from the branch's
@@ -72,6 +76,7 @@ func (c *Client) RequiredChecks(ctx context.Context, repo, branch string) (Requi
 	// the protection endpoint itself needs. 404 is a branch that does not
 	// exist (yet) or one this identity cannot see.
 	var b struct {
+		Protected  bool `json:"protected"`
 		Protection struct {
 			RequiredStatusChecks struct {
 				Contexts []string `json:"contexts"`
@@ -83,6 +88,7 @@ func (c *Client) RequiredChecks(ctx context.Context, repo, branch string) (Requi
 	switch {
 	case err == nil:
 		out.From = append(out.From, RequiredFromProtection)
+		out.Guarded = b.Protected
 		for _, x := range b.Protection.RequiredStatusChecks.Contexts {
 			add(x)
 		}
@@ -106,6 +112,7 @@ func (c *Client) RequiredChecks(ctx context.Context, repo, branch string) (Requi
 	switch {
 	case err == nil:
 		out.From = append(out.From, RequiredFromRulesets)
+		out.Guarded = out.Guarded || len(rules) > 0
 		for _, r := range rules {
 			if r.Type == "required_status_checks" {
 				for _, x := range r.Parameters.RequiredStatusChecks {

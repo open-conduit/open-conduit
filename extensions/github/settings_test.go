@@ -12,7 +12,7 @@ import (
 // never the webhook secret's name.
 func TestExtensionSettings(t *testing.T) {
 	got := ExtensionSettings(json.RawMessage(`{"namespace":"github/o/r","scope":"eng","repo":"o/r","webhook_secret":"hook","base_branch":"dev"}`))
-	want := []extension.Setting{{Name: "repo", Value: "o/r"}, {Name: "track_issues", Value: true}, {Name: "base_branch", Value: "dev"}, {Name: "manage_webhook", Value: false}, {Name: "track_pull_requests", Value: false}, {Name: "closed_horizon_hours", Value: 168}}
+	want := []extension.Setting{{Name: "repo", Value: "o/r"}, {Name: "track_issues", Value: true}, {Name: "base_branch", Value: "dev"}, {Name: "manage_webhook", Value: false}, {Name: "track_pull_requests", Value: false}, {Name: "admit_authors", Value: "OWNER, MEMBER, COLLABORATOR"}, {Name: "admit_forks", Value: false}, {Name: "closed_horizon_hours", Value: 168}}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("settings: %+v", got)
 	}

@@ -372,6 +372,7 @@ type rawIssue struct {
 	Body        string           `json:"body"`
 	HTMLURL     string           `json:"html_url"`
 	User        rawUser          `json:"user"`
+	Association string           `json:"author_association"`
 	Labels      []rawLabel       `json:"labels"`
 	State       string           `json:"state"`
 	StateReason string           `json:"state_reason"`
@@ -407,22 +408,27 @@ type rawComment struct {
 }
 
 type rawPull struct {
-	Number    int        `json:"number"`
-	Title     string     `json:"title"`
-	Body      string     `json:"body"`
-	HTMLURL   string     `json:"html_url"`
-	State     string     `json:"state"`
-	Draft     bool       `json:"draft"`
-	Merged    bool       `json:"merged"`
-	MergedAt  *time.Time `json:"merged_at"`
-	ClosedAt  *time.Time `json:"closed_at"`
-	CreatedAt time.Time  `json:"created_at"`
-	UpdatedAt time.Time  `json:"updated_at"`
-	User      rawUser    `json:"user"`
-	Labels    []rawLabel `json:"labels"`
-	Head      struct {
+	Number      int        `json:"number"`
+	Title       string     `json:"title"`
+	Body        string     `json:"body"`
+	HTMLURL     string     `json:"html_url"`
+	State       string     `json:"state"`
+	Draft       bool       `json:"draft"`
+	Merged      bool       `json:"merged"`
+	MergedAt    *time.Time `json:"merged_at"`
+	ClosedAt    *time.Time `json:"closed_at"`
+	CreatedAt   time.Time  `json:"created_at"`
+	UpdatedAt   time.Time  `json:"updated_at"`
+	User        rawUser    `json:"user"`
+	Association string     `json:"author_association"`
+	Labels      []rawLabel `json:"labels"`
+	Head        struct {
 		Ref string `json:"ref"`
 		SHA string `json:"sha"`
+		// Repo is the head's repository: null once a fork is deleted.
+		Repo *struct {
+			FullName string `json:"full_name"`
+		} `json:"repo"`
 	} `json:"head"`
 	Base struct {
 		Ref string `json:"ref"`

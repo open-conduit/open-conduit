@@ -75,21 +75,24 @@ func Families() []extension.EventFamily {
 // nor status projection create issue observations. Lifecycle recurrences stay
 // distinct through closed_at and the reopen generation.
 type IssuePayload struct {
-	Repo        string     `json:"repo"`
-	Number      int        `json:"number"`
-	Title       string     `json:"title"`
-	Body        string     `json:"body"`
-	State       string     `json:"state"`
-	StateReason string     `json:"state_reason,omitempty"`
-	Labels      []string   `json:"labels"`
-	Assignees   []string   `json:"assignees"`
-	Milestone   string     `json:"milestone,omitempty"`
-	IssueType   string     `json:"issue_type,omitempty"`
-	Author      string     `json:"author"`
-	AuthorType  string     `json:"author_type,omitempty"`
-	URL         string     `json:"url"`
-	CreatedAt   time.Time  `json:"created_at"`
-	ClosedAt    *time.Time `json:"closed_at,omitempty"`
+	Repo        string   `json:"repo"`
+	Number      int      `json:"number"`
+	Title       string   `json:"title"`
+	Body        string   `json:"body"`
+	State       string   `json:"state"`
+	StateReason string   `json:"state_reason,omitempty"`
+	Labels      []string `json:"labels"`
+	Assignees   []string `json:"assignees"`
+	Milestone   string   `json:"milestone,omitempty"`
+	IssueType   string   `json:"issue_type,omitempty"`
+	Author      string   `json:"author"`
+	AuthorType  string   `json:"author_type,omitempty"`
+	// AuthorAssociation is the author's relation to the repository
+	// (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE…), which admission reads.
+	AuthorAssociation string     `json:"author_association,omitempty"`
+	URL               string     `json:"url"`
+	CreatedAt         time.Time  `json:"created_at"`
+	ClosedAt          *time.Time `json:"closed_at,omitempty"`
 	// Generation is the reopen generation ("" before any reopening);
 	// Predecessor is the previous generation's external ID.
 	Generation  string `json:"generation,omitempty"`
@@ -104,23 +107,28 @@ type IssueRef struct {
 
 // PullPayload is the canonical observed pull request state.
 type PullPayload struct {
-	Repo      string     `json:"repo"`
-	Number    int        `json:"number"`
-	Title     string     `json:"title"`
-	Body      string     `json:"body"`
-	State     string     `json:"state"`
-	Merged    bool       `json:"merged"`
-	MergedAt  *time.Time `json:"merged_at,omitempty"`
-	ClosedAt  *time.Time `json:"closed_at,omitempty"`
-	Draft     bool       `json:"draft"`
-	HeadRef   string     `json:"head_ref"`
-	HeadSHA   string     `json:"head_sha"`
-	BaseRef   string     `json:"base_ref"`
-	Labels    []string   `json:"labels"`
-	Author    string     `json:"author"`
-	URL       string     `json:"url"`
-	CreatedAt time.Time  `json:"created_at"`
-	Issue     *IssueRef  `json:"issue,omitempty"`
+	Repo     string     `json:"repo"`
+	Number   int        `json:"number"`
+	Title    string     `json:"title"`
+	Body     string     `json:"body"`
+	State    string     `json:"state"`
+	Merged   bool       `json:"merged"`
+	MergedAt *time.Time `json:"merged_at,omitempty"`
+	ClosedAt *time.Time `json:"closed_at,omitempty"`
+	Draft    bool       `json:"draft"`
+	HeadRef  string     `json:"head_ref"`
+	HeadSHA  string     `json:"head_sha"`
+	BaseRef  string     `json:"base_ref"`
+	Labels   []string   `json:"labels"`
+	Author   string     `json:"author"`
+	// AuthorType and AuthorAssociation are as on IssuePayload; Fork marks
+	// a head in another repository (or one since deleted).
+	AuthorType        string    `json:"author_type,omitempty"`
+	AuthorAssociation string    `json:"author_association,omitempty"`
+	Fork              bool      `json:"fork,omitempty"`
+	URL               string    `json:"url"`
+	CreatedAt         time.Time `json:"created_at"`
+	Issue             *IssueRef `json:"issue,omitempty"`
 }
 
 // CommentPayload is a conversation comment, inline review comment or review.
@@ -484,7 +492,8 @@ func (n *normalizer) issueObservation(ctx context.Context, i rawIssue) (extensio
 		return extension.Observation{}, err
 	}
 	p := IssuePayload{Repo: n.s.Repo, Number: i.Number, Title: i.Title, Body: i.Body, State: i.State, StateReason: i.StateReason,
-		Labels: n.labels(i.Labels), Assignees: []string{}, Author: i.User.Login, AuthorType: i.User.Type, URL: i.HTMLURL,
+		Labels: n.labels(i.Labels), Assignees: []string{}, Author: i.User.Login, AuthorType: i.User.Type,
+		AuthorAssociation: i.Association, URL: i.HTMLURL,
 		CreatedAt: utc(i.CreatedAt), ClosedAt: utcPtr(i.ClosedAt), Generation: gen, Predecessor: pred}
 	if i.State != "closed" {
 		p.ClosedAt = nil
@@ -577,7 +586,9 @@ func (n *normalizer) pullObservation(ctx context.Context, p rawPull) (extension.
 	merged := p.MergedAt != nil
 	payload := PullPayload{Repo: n.s.Repo, Number: p.Number, Title: p.Title, Body: p.Body, State: p.State, Merged: merged,
 		MergedAt: utcPtr(p.MergedAt), ClosedAt: utcPtr(p.ClosedAt), Draft: p.Draft, HeadRef: p.Head.Ref, HeadSHA: p.Head.SHA,
-		BaseRef: p.Base.Ref, Labels: n.labels(p.Labels), Author: p.User.Login, URL: p.HTMLURL, CreatedAt: utc(p.CreatedAt), Issue: ref}
+		BaseRef: p.Base.Ref, Labels: n.labels(p.Labels), Author: p.User.Login,
+		AuthorType: p.User.Type, AuthorAssociation: p.Association, Fork: p.Head.Repo == nil || !strings.EqualFold(p.Head.Repo.FullName, n.s.Repo),
+		URL: p.HTMLURL, CreatedAt: utc(p.CreatedAt), Issue: ref}
 	if p.State != "closed" {
 		payload.ClosedAt, payload.MergedAt, payload.Merged = nil, nil, false
 	}

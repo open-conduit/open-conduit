@@ -529,6 +529,12 @@ func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]ex
 			if b.Resource != nil {
 				cb.Resource = &protocol.CheckResource{Provider: b.Resource.Provider, Config: b.Resource.Config}
 			}
+			switch {
+			case b.Sandbox != nil:
+				cb.Isolation = protocol.IsolationSandbox
+			case b.Container != nil:
+				cb.Isolation = protocol.IsolationContainer
+			}
 			v.Bindings = append(v.Bindings, cb)
 			named[b.Connection] = true
 		}

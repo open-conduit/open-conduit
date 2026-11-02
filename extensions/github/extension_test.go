@@ -113,6 +113,7 @@ func TestExtensionDoctorLiveWriter(t *testing.T) {
 	fake := githubtest.New("octo/widgets", "tok", "rev")
 	t.Cleanup(fake.Close)
 	fake.SetPermissions(map[string]bool{"pull": true, "push": true})
+	fake.RequireChecks("main", "ci")
 	settings, err := gh.ParseExtension([]byte(`{"namespace":"github/w","scope":"eng","repo":"octo/widgets"}`), nil)
 	if err != nil {
 		t.Fatal(err)
@@ -153,5 +154,78 @@ func TestExtensionDoctorLiveWriter(t *testing.T) {
 	configure(`{"api_url":"` + fake.URL + `"}`)
 	if c := deep(context.Background()); c.Status != inproc.CheckOK || c.Code != "verified" || strings.Contains(strings.Join(c.Items, "\n"), "restart_required") {
 		t.Fatalf("in step: %+v", c)
+	}
+}
+
+// TestExtensionDoctorExposure: the connection test warns when the base
+// branch has no protection or ruleset, and when a public repository with no
+// labels.require starts a binding that runs unconfined on the host (#346).
+// Either is quiet once fixed.
+func TestExtensionDoctorExposure(t *testing.T) {
+	fake := githubtest.New("octo/widgets", "tok", "rev")
+	t.Cleanup(fake.Close)
+	fake.SetPermissions(map[string]bool{"pull": true, "push": true})
+	secrets := func(_ context.Context, name string) (string, error) { return "tok", nil }
+	client, err := gh.NewClient(gh.ConnectionConfig{APIURL: fake.URL, Auth: "token"}, secrets, gh.ClientOptions{Now: fake.Now})
+	if err != nil {
+		t.Fatal(err)
+	}
+	entry := func(cfg string) gh.View {
+		settings, err := gh.ParseExtension([]byte(cfg), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return gh.View{Entries: []gh.ViewEntry{{Name: "github/eng/main", Scope: "eng", Connection: "owner", Settings: settings, Client: client}}}
+	}
+	view := entry(`{"namespace":"github/w","scope":"eng","repo":"octo/widgets"}`)
+	x := gh.NewExtension(func(context.Context) gh.View { return view })
+	if err := x.Start(context.Background(), inproc.Host{Now: fake.Now, Secrets: func(context.Context, domain.ID, string, []string) (map[string]string, error) {
+		return map[string]string{gh.SecretToken: "tok"}, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	owner := protocol.ConnectionEntry{ID: "owner", Type: gh.Type, Config: json.RawMessage(`{"api_url":"` + fake.URL + `"}`), Secrets: []string{gh.SecretToken}}
+	x.Configure(context.Background(), protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: "eng", Type: gh.Type, Name: "main", Connection: &owner}}})
+	var deep func(context.Context, protocol.CheckConfig) inproc.CheckResult
+	for _, c := range x.Checks() {
+		if c.Deep {
+			deep = c.Run
+		}
+	}
+	scope := func(isolation string) protocol.CheckConfig {
+		return protocol.CheckConfig{Scopes: []protocol.CheckScope{{ID: "eng",
+			Routes:   []protocol.CheckRoute{{Name: "issues", Handler: gh.Type, Binding: "agent"}},
+			Bindings: []protocol.CheckBinding{{Name: "agent", Executor: "claude-code", Isolation: isolation}}}}}
+	}
+	run := func(cfg protocol.CheckConfig) (inproc.CheckResult, string) {
+		c := deep(context.Background(), cfg)
+		return c, strings.Join(c.Items, "\n")
+	}
+
+	// Private, unprotected: only the branch warns.
+	c, items := run(scope(""))
+	if c.Code != "base_unprotected" || !strings.Contains(items, "octo/widgets main has no branch protection or ruleset") || strings.Contains(items, "is public") {
+		t.Fatalf("unprotected: %+v", c)
+	}
+	// A ruleset on main is protection enough.
+	fake.RequireRulesetChecks("main", "ci")
+	if c, items = run(scope("")); c.Status != inproc.CheckOK || strings.Contains(items, "no branch protection") {
+		t.Fatalf("ruleset: %+v", c)
+	}
+
+	// Public with no labels.require and an unsandboxed agent warns; a
+	// sandbox, a container or a require label each quiets it.
+	fake.SetPublic(true)
+	if c, items = run(scope("")); c.Code != "public_unconfined" || !strings.Contains(items, "octo/widgets is public, no labels.require is set and binding agent run unsandboxed") {
+		t.Fatalf("public: %+v", c)
+	}
+	for _, iso := range []string{protocol.IsolationSandbox, protocol.IsolationContainer} {
+		if c, _ = run(scope(iso)); c.Status != inproc.CheckOK {
+			t.Fatalf("public with %s: %+v", iso, c)
+		}
+	}
+	view = entry(`{"namespace":"github/w","scope":"eng","repo":"octo/widgets","labels":{"require":["agent"]}}`)
+	if c, _ = run(scope("")); c.Status != inproc.CheckOK {
+		t.Fatalf("public with labels.require: %+v", c)
 	}
 }

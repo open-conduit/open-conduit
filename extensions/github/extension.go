@@ -288,7 +288,7 @@ func verifyCode(err error) string {
 // authCheck resolves each entry's credentials privately and reads its
 // repository: the connection test. It reports codes and permissions, never
 // a reference or a token.
-func (x *Extension) authCheck(ctx context.Context, _ protocol.CheckConfig) inproc.CheckResult {
+func (x *Extension) authCheck(ctx context.Context, cfg protocol.CheckConfig) inproc.CheckResult {
 	check := inproc.CheckResult{Name: "github_auth", Status: inproc.CheckOK, Code: "verified"}
 	raise := func(status, code string) {
 		if rank(status) > rank(check.Status) {
@@ -358,11 +358,22 @@ func (x *Extension) authCheck(ctx context.Context, _ protocol.CheckConfig) inpro
 			warn("checks_unreadable")
 			notes = append(notes, "neither check runs nor Actions workflow runs are readable: only commit statuses are seen and no-checks is never reported; grant Actions: read or use a GitHub App")
 		}
-		if note, unreadable := requiredChecksNote(ctx, client, s, a); note != "" {
+		note, unreadable, unguarded := requiredChecksNote(ctx, client, s, a)
+		if note != "" {
 			if unreadable {
 				warn("required_checks_unreadable")
 			}
 			notes = append(notes, note)
+		}
+		if unguarded != "" {
+			warn("base_unprotected")
+			notes = append(notes, unguarded+" has no branch protection or ruleset, so nothing on GitHub stops a run's credential (contents: write) pushing straight to it; protect it or add a ruleset that requires a pull request")
+		}
+		if a.Public && len(s.Labels.Require) == 0 {
+			if open := unconfinedAgents(cfg, string(e.Scope)); len(open) > 0 {
+				warn("public_unconfined")
+				notes = append(notes, fmt.Sprintf("%s is public, no labels.require is set and %s run unsandboxed on this machine: an issue or comment is untrusted text an agent acts on with your access; set labels.require, or run the binding in a sandbox or container", s.TrackerRepo, strings.Join(open, ", ")))
+			}
 		}
 		check.Items = append(check.Items, item+strings.Join(notes, "; "))
 		for _, w := range x.writerItems(ctx, e, client) {
@@ -434,11 +445,35 @@ func (x *Extension) writerItems(ctx context.Context, e ViewEntry, entry *Client)
 	return out
 }
 
+// unconfinedAgents names the bindings the scope's github routes start that
+// run on the host with no sandbox or container.
+func unconfinedAgents(cfg protocol.CheckConfig, scope string) []string {
+	var out []string
+	for _, sc := range cfg.Scopes {
+		if sc.ID != scope {
+			continue
+		}
+		bindings := map[string]protocol.CheckBinding{}
+		for _, b := range sc.Bindings {
+			bindings[b.Name] = b
+		}
+		for _, r := range sc.Routes {
+			b, ok := bindings[r.Binding]
+			if r.Handler == Type && ok && b.Isolation == "" && !slices.Contains(out, "binding "+b.Name) {
+				out = append(out, "binding "+b.Name)
+			}
+		}
+	}
+	return out
+}
+
 // requiredChecksNote reports where the checks the base branch requires
 // (08-01) are read from: the branch protection and rulesets of the entry's
 // base branch. A refused protection read warns, since a check it requires is
 // then not waited for; refused rulesets (a plan without them) are a note.
-func requiredChecksNote(ctx context.Context, c *Client, s Settings, a Access) (string, bool) {
+// unguarded names the base branch when both reads answered and neither
+// protects it.
+func requiredChecksNote(ctx context.Context, c *Client, s Settings, a Access) (note string, unreadable bool, unguarded string) {
 	cx, cancel := context.WithTimeout(ctx, 20*time.Second)
 	defer cancel()
 	base := s.BaseBranch
@@ -448,12 +483,15 @@ func requiredChecksNote(ctx context.Context, c *Client, s Settings, a Access) (s
 	if base == "" {
 		var err error
 		if base, err = c.DefaultBranch(cx, s.Repo); err != nil || base == "" {
-			return "", false
+			return "", false, ""
 		}
 	}
 	req, err := c.RequiredChecks(cx, s.Repo, base)
 	if err != nil {
-		return "required checks on " + base + " could not be read", false
+		return "required checks on " + base + " could not be read", false, ""
+	}
+	if len(req.Refused) == 0 && !req.Guarded {
+		unguarded = s.Repo + " " + base
 	}
 	var parts []string
 	if len(req.Names) > 0 {
@@ -462,5 +500,5 @@ func requiredChecksNote(ctx context.Context, c *Client, s Settings, a Access) (s
 	if note := RequiredNote(req, a.Checks); note != "" {
 		parts = append(parts, note)
 	}
-	return strings.Join(parts, "; "), slices.Contains(req.Refused, RequiredFromProtection)
+	return strings.Join(parts, "; "), slices.Contains(req.Refused, RequiredFromProtection), unguarded
 }

@@ -16,6 +16,7 @@ import (
 	"fmt"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 
@@ -220,7 +221,28 @@ type ExtensionConfig struct {
 	// with `claim: pull_requests` claims as Work of its own, alongside any
 	// Work that owns the PR's issue.
 	TrackPullRequests bool `json:"track_pull_requests,omitempty"`
+	// Admit is who may start Work by opening an issue or a PR (default:
+	// the repository's owner, members and collaborators, never a fork).
+	Admit *Admit `json:"admit,omitempty"`
 }
+
+// Admit widens or narrows who may start Work. Authors are GitHub author
+// associations (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR,
+// FIRST_TIME_CONTRIBUTOR, FIRST_TIMER, MANNEQUIN, NONE), or "*" for anyone;
+// Forks lets a PR from a fork start Work too.
+type Admit struct {
+	Authors []string `json:"authors,omitempty"`
+	Forks   bool     `json:"forks,omitempty"`
+}
+
+// DefaultAdmitAuthors are the associations admitted when admit.authors is
+// not set: people the repository's owner already trusts with it.
+var DefaultAdmitAuthors = []string{"OWNER", "MEMBER", "COLLABORATOR"}
+
+// AnyAuthor in admit.authors admits every author.
+const AnyAuthor = "*"
+
+var associations = []string{"OWNER", "MEMBER", "COLLABORATOR", "CONTRIBUTOR", "FIRST_TIME_CONTRIBUTOR", "FIRST_TIMER", "MANNEQUIN", "NONE"}
 
 // Settings is a parsed, defaulted extension entry.
 type Settings struct {
@@ -237,6 +259,10 @@ type Settings struct {
 	BaseBranch                 string
 	NoChecks                   time.Duration
 	TrackPulls                 bool
+	// Authors are the admitted author associations (upper case, or
+	// AnyAuthor); Forks admits PRs from forks.
+	Authors []string
+	Forks   bool
 }
 
 func validNamespace(ns string) bool {
@@ -265,7 +291,23 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 	}
 	s = Settings{Namespace: c.Namespace, Scope: c.Scope, Repo: c.Repo, TrackerRepo: c.Repo, TrackerNS: c.Namespace, TrackIssues: true,
 		Labels: DefaultLabels(), ClosedHorizon: 168 * time.Hour, Projection: c.Projection, WebhookSecret: c.WebhookSecret, ManageWebhook: c.ManageWebhook,
-		TrackPulls: c.TrackPullRequests}
+		TrackPulls: c.TrackPullRequests, Authors: DefaultAdmitAuthors}
+	if c.Admit != nil {
+		s.Forks = c.Admit.Forks
+		if c.Admit.Authors != nil {
+			if len(c.Admit.Authors) == 0 {
+				return s, errors.New("github extension: admit.authors must name at least one association, or \"*\" for anyone")
+			}
+			s.Authors = nil
+			for _, a := range c.Admit.Authors {
+				a = strings.ToUpper(strings.TrimSpace(a))
+				if a != AnyAuthor && !slices.Contains(associations, a) {
+					return s, fmt.Errorf("github extension: admit.authors: %q is not one of %s or \"*\"", a, strings.Join(associations, ", "))
+				}
+				s.Authors = append(s.Authors, a)
+			}
+		}
+	}
 	if c.Tracker != nil {
 		if !repoPattern.MatchString(c.Tracker.Repo) || !validNamespace(c.Tracker.Namespace) {
 			return s, errors.New("github extension: tracker needs repo owner/name and a namespace")
@@ -370,5 +412,7 @@ func ExtensionSettings(data json.RawMessage) []extension.Setting {
 		extension.Setting{Name: "base_branch", Value: s.BaseBranch},
 		extension.Setting{Name: "manage_webhook", Value: s.ManageWebhook},
 		extension.Setting{Name: "track_pull_requests", Value: s.TrackPulls},
+		extension.Setting{Name: "admit_authors", Value: strings.Join(s.Authors, ", ")},
+		extension.Setting{Name: "admit_forks", Value: s.Forks},
 		extension.Setting{Name: "closed_horizon_hours", Value: int(s.ClosedHorizon.Hours())})
 }

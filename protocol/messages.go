@@ -409,7 +409,8 @@ type CheckRoute struct {
 // CheckBinding is one binding. Toolbelt is its executor's toolbelt
 // capability (none, cli, mcp or sdk; empty when the executor is not
 // registered). Resource is its workspace provider and that provider's
-// config.
+// config. Isolation is how its executor is confined: "sandbox" (a process
+// sandbox), "container", or empty when it runs unconfined on the host.
 type CheckBinding struct {
 	Name       string         `json:"name"`
 	Executor   string         `json:"executor"`
@@ -417,7 +418,15 @@ type CheckBinding struct {
 	Operations []string       `json:"operations,omitempty"`
 	Connection string         `json:"connection,omitempty"`
 	Resource   *CheckResource `json:"resource,omitempty"`
+	Isolation  string         `json:"isolation,omitempty"`
 }
+
+// CheckBinding.Isolation values.
+const (
+	IsolationSandbox   = "sandbox"
+	IsolationContainer = "container"
+)
+
 type CheckResource struct {
 	Provider string          `json:"provider"`
 	Config   json.RawMessage `json:"config,omitempty"`

@@ -38,8 +38,21 @@ func match(t *testing.T, scope domain.Scope, e domain.AcceptedEvent, w *domain.W
 func TestRouteClaimAdmission(t *testing.T) {
 	scope := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","webhook_secret":"hook"}`)
 	issue := func(labels ...string) gh.IssuePayload {
-		return gh.IssuePayload{Repo: repo, Number: 1, State: "open", Labels: append([]string{}, labels...)}
+		return gh.IssuePayload{Repo: repo, Number: 1, State: "open", Labels: append([]string{}, labels...), Author: "alice", AuthorAssociation: "MEMBER"}
 	}
+	stranger := issue()
+	stranger.Author, stranger.AuthorAssociation = "mallory", "NONE"
+	unknown := issue()
+	unknown.AuthorAssociation = ""
+	contributor := issue()
+	contributor.AuthorAssociation = "CONTRIBUTOR"
+	agentFiled := issue()
+	agentFiled.Author, agentFiled.AuthorType, agentFiled.AuthorAssociation = "openconduit-bot[bot]", "Bot", "NONE"
+	agentFiled.Body = "Follow-up.\n\n<!-- open-conduit:agent work=work/1 -->"
+	otherBot := agentFiled
+	otherBot.Body = "Bump a dependency"
+	forgedMarker := stranger
+	forgedMarker.Body = agentFiled.Body
 	for name, tc := range map[string]struct {
 		p     gh.IssuePayload
 		claim bool
@@ -50,6 +63,14 @@ func TestRouteClaimAdmission(t *testing.T) {
 		"claimed by another owner": {issue("agent-in-progress"), false},
 		"scheduled waits for hold": {issue("scheduled"), false},
 		"closed":                   {gh.IssuePayload{State: "closed"}, false},
+		"owner":                    {func() gh.IssuePayload { p := issue(); p.AuthorAssociation = "OWNER"; return p }(), true},
+		"collaborator":             {func() gh.IssuePayload { p := issue(); p.AuthorAssociation = "COLLABORATOR"; return p }(), true},
+		"stranger":                 {stranger, false},
+		"contributor":              {contributor, false},
+		"unknown association":      {unknown, false},
+		"an agent's follow-up":     {agentFiled, true},
+		"another App's bot":        {otherBot, false},
+		"a stranger's marker":      {forgedMarker, false},
 	} {
 		d := match(t, scope, event(gh.TypeIssueOpen, "issue/1", gh.SchemaIssue, tc.p), nil)
 		if d.Match != tc.claim || d.Match && d.Kind != gh.WorkKind {
@@ -67,6 +88,24 @@ func TestRouteClaimAdmission(t *testing.T) {
 	}
 	if !match(t, optIn, event(gh.TypeIssueOpen, "issue/1", gh.SchemaIssue, issue("agent")), nil).Match {
 		t.Fatal("opt-in label ignored")
+	}
+	d := match(t, scope, event(gh.TypeIssueOpen, "issue/1", gh.SchemaIssue, stranger), nil)
+	if !strings.Contains(d.Reason, "mallory is NONE") || !strings.Contains(d.Reason, "admit.authors") {
+		t.Fatalf("a refused author's reason doesn't say why: %q", d.Reason)
+	}
+	widened := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","admit":{"authors":["owner","member","collaborator","contributor"]}}`)
+	if !match(t, widened, event(gh.TypeIssueOpen, "issue/1", gh.SchemaIssue, contributor), nil).Match || match(t, widened, event(gh.TypeIssueOpen, "issue/1", gh.SchemaIssue, stranger), nil).Match {
+		t.Fatal("admit.authors did not widen to exactly the associations named")
+	}
+	anyone := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","admit":{"authors":["*"]}}`)
+	if !match(t, anyone, event(gh.TypeIssueOpen, "issue/1", gh.SchemaIssue, stranger), nil).Match {
+		t.Fatal(`admit.authors "*" refused a stranger`)
+	}
+	// A claim by hand overrides the author rule, as it does the labels.
+	claim := event(gh.TypeClaimRequested, "issue/1", "", struct{}{})
+	claim.Event.Source = extension.ActionSource
+	if !match(t, scope, claim, nil).Match {
+		t.Fatal("a claim by hand was refused")
 	}
 	// Comments, PRs and checks never create Work.
 	for _, typ := range []string{gh.TypeCommentHuman, gh.TypePullOpen, gh.TypeChecksFailed, gh.TypeIssueClosed} {
@@ -130,7 +169,7 @@ func TestRouteInputSelection(t *testing.T) {
 // and link, then the link of a PR whose input reaches it.
 func TestRouteDisplay(t *testing.T) {
 	scope := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","webhook_secret":"hook"}`)
-	issue := gh.IssuePayload{Repo: repo, Number: 136, State: "open", Title: "TUI: show a held Work's reason in the list\nmore", Author: "example-user", URL: "https://github.com/" + repo + "/issues/136"}
+	issue := gh.IssuePayload{Repo: repo, Number: 136, State: "open", Title: "TUI: show a held Work's reason in the list\nmore", Author: "example-user", AuthorAssociation: "OWNER", URL: "https://github.com/" + repo + "/issues/136"}
 	d := match(t, scope, event(gh.TypeIssueOpen, "issue/136", gh.SchemaIssue, issue), nil)
 	want := domain.WorkDisplay{Title: "TUI: show a held Work's reason in the list", Ref: "#136", Requester: "example-user", Links: []domain.Link{{Label: "Issue #136", URL: "https://github.com/" + repo + "/issues/136"}}}
 	if d.Display == nil || !reflect.DeepEqual(*d.Display, want) {
@@ -180,7 +219,7 @@ func TestRouteClaimsPullRequests(t *testing.T) {
 	cfg := `{"namespace":"` + ns + `","scope":"eng","repo":"` + repo + `","track_pull_requests":true}`
 	scope := scopeWith(t, cfg)
 	const pulls = `{"claim":"pull_requests"}`
-	pull := gh.PullPayload{Repo: repo, Number: 7, State: "open", Title: "Make the header blue", Author: "alice", URL: "https://github.com/" + repo + "/pull/7", HeadSHA: "a1"}
+	pull := gh.PullPayload{Repo: repo, Number: 7, State: "open", Title: "Make the header blue", Author: "alice", AuthorAssociation: "COLLABORATOR", URL: "https://github.com/" + repo + "/pull/7", HeadSHA: "a1"}
 	open := event(gh.TypePullOpen, gh.PullRequestKey(7), gh.SchemaPull, pull)
 
 	d := matchRoute(t, scope, pulls, open, nil)
@@ -190,6 +229,23 @@ func TestRouteClaimsPullRequests(t *testing.T) {
 	want := domain.WorkDisplay{Title: "Make the header blue", Ref: "#7", Requester: "alice", Links: []domain.Link{{Label: "PR #7", URL: pull.URL}}}
 	if d.Display == nil || !reflect.DeepEqual(*d.Display, want) {
 		t.Fatalf("PR display %+v", d.Display)
+	}
+	// A fork's PR, or a stranger's, starts nothing unless admit widens it.
+	fork := pull
+	fork.Fork = true
+	stranger := pull
+	stranger.Author, stranger.AuthorAssociation = "mallory", "FIRST_TIME_CONTRIBUTOR"
+	for name, p := range map[string]gh.PullPayload{"fork": fork, "stranger": stranger} {
+		if d := matchRoute(t, scope, pulls, event(gh.TypePullOpen, gh.PullRequestKey(7), gh.SchemaPull, p), nil); d.Match || d.Reason == "" {
+			t.Fatalf("%s's PR claimed: %+v", name, d)
+		}
+	}
+	widened := scopeWith(t, `{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","track_pull_requests":true,"admit":{"forks":true}}`)
+	if !matchRoute(t, widened, pulls, event(gh.TypePullOpen, gh.PullRequestKey(7), gh.SchemaPull, fork), nil).Match {
+		t.Fatal("admit.forks refused a collaborator's fork")
+	}
+	if matchRoute(t, widened, pulls, event(gh.TypePullOpen, gh.PullRequestKey(7), gh.SchemaPull, stranger), nil).Match {
+		t.Fatal("admit.forks admitted a stranger")
 	}
 	// The issues route leaves the copy alone, and the pull_requests route
 	// the PR's original observation (keyed to its issue or to pr/N).
