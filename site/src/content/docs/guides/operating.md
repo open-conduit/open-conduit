@@ -64,7 +64,7 @@ When a newer release is out than the daemon runs, the status line says so. Its l
 
 Every change (run again, rebind, send a wake event, hold, release, cancel a turn or the Work, and the actions extensions offer) asks first, says what it will do, and sends the Work's current revision; the confirmation names the call and shows the event the daemon accepted. Every page works without JavaScript. With it, `⌘K` jumps to any Work, scope or page, `g` then `r`, `a`, `c` or `s` goes to a page, `/` searches, `j`/`k` move through rows or turns, `x` selects, `e` jumps to the first error in a transcript, and `?` lists the keys. To attach to an agent's session, use the terminal.
 
-- `--addr HOST:PORT` (or `OPEN_CONDUIT_WEB_ADDR`) changes where it listens. Only a loopback address is accepted, so the view is never reachable from another machine.
+- `--addr HOST:PORT` (or `OPEN_CONDUIT_WEB_ADDR`) changes where it listens. Only a loopback address is accepted, so the view is never reachable from another machine on its own. To reach it from elsewhere, put it behind a reverse proxy with your own sign-in (see [share it with a team](../team/#4-the-web-view-behind-your-own-sign-in)).
 - `--host NAME` (or `OPEN_CONDUIT_WEB_HOST`) changes the name it answers to.
 - With `serve`, the same choices are `--web-addr` and `--web-host`. Either one also turns the view on. Pass the same values to `web url`.
 
@@ -121,3 +121,4 @@ Alice then points the CLI at her file with `--token-file` or `OPEN_CONDUIT_TOKEN
   You are always `admin`. A call the role doesn't allow is refused with `forbidden_role` before it does anything. A credential added before roles existed is `view`. Revoke it and add it again with `--role` to restore its controls.
 - No one but you can revoke your own credential, not even an `admin`. `auth recover` (with the daemon stopped) revokes every operator credential, named ones included, and writes you a fresh one.
 - The web view still signs browsers in with its one sign-in URL and acts as `operator:local`.
+- To reach the daemon from another machine, see [share it with a team](../team/#3-a-credential-and-a-role-for-each-person).

@@ -271,10 +271,14 @@ func (s *Server) Handler(addr string) http.Handler {
 		net.JoinHostPort(s.opts.Host, port): true,
 		net.JoinHostPort("localhost", port): true,
 		addr:                                true,
+		// Browsers leave the default port out of Host, so the view's own
+		// name arrives bare from a reverse proxy on 443 that passes Host
+		// through. Only the operator chooses that name, so it can't be a
+		// rebound one.
+		s.opts.Host: true,
 	}
 	if port == "80" {
-		// Browsers leave the default port out of Host.
-		allowed[s.opts.Host], allowed["localhost"] = true, true
+		allowed["localhost"] = true
 	}
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /login", s.loginPage)
@@ -316,9 +320,45 @@ func (s *Server) Handler(addr string) http.Handler {
 			http.Error(w, "unknown host", http.StatusMisdirectedRequest)
 			return
 		}
+		if port != "80" && strings.EqualFold(r.Host, s.opts.Host) {
+			// The bare name off port 80 came through an HTTPS proxy, so
+			// the browser must never send these cookies over plain HTTP.
+			w = &secureCookies{ResponseWriter: w}
+		}
 		mux.ServeHTTP(w, r)
 	})
 }
+
+// secureCookies marks every cookie it sets Secure, just before the
+// headers go out.
+type secureCookies struct {
+	http.ResponseWriter
+	done bool
+}
+
+func (w *secureCookies) mark() {
+	if w.done {
+		return
+	}
+	w.done = true
+	h := w.Header()
+	for i, c := range h["Set-Cookie"] {
+		h["Set-Cookie"][i] = c + "; Secure"
+	}
+}
+
+func (w *secureCookies) WriteHeader(code int) { w.mark(); w.ResponseWriter.WriteHeader(code) }
+
+func (w *secureCookies) Write(b []byte) (int, error) { w.mark(); return w.ResponseWriter.Write(b) }
+
+func (w *secureCookies) Flush() {
+	w.mark()
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+func (w *secureCookies) Unwrap() http.ResponseWriter { return w.ResponseWriter }
 
 func same(a, b string) bool { return subtle.ConstantTimeCompare([]byte(a), []byte(b)) == 1 }
 
