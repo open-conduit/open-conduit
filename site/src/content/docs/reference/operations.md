@@ -13,6 +13,7 @@ The host checks every call where it serves it, from the execution's token, and r
 
 - The scope's `authorization.operations` lists the operations its executions may call. A child scope's list can only narrow its parent's.
 - A binding's `operations` is the exact list its executions get, within the scope's. A Work whose route opts into one of the binding's `grants` also gets that grant's operations, still within the scope's.
+- An operation a `human` extension entry lists in `gates` waits at the host for a person's approval before it runs, whoever calls it (see [configuration](../config/#human-decisions-human)).
 - A call acts on the execution's own Work, and only while its lease is current. Waiting on another scope's Events needs that scope in `read_scopes`; filing an issue in, or commenting on, another scope's tracker needs it in `file_scopes`.
 
 See [configuration](../config/#authorization) for the fields and [toolbelt authority](../../architecture/toolbelt-management/) for the design.

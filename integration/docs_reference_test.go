@@ -107,6 +107,29 @@ func TestDocsSchemaDefaultsMatchConfig(t *testing.T) {
 	}
 }
 
+// Every settings field says what it does and when it takes effect, so a new
+// setting can't land on the reference page with an empty Meaning.
+func TestDocsSchemaSettingsDescribed(t *testing.T) {
+	if missing := undescribed(loadSchema(t).defs("settings")); len(missing) > 0 {
+		t.Errorf("settings fields without a description in config.schema.json: %v", missing)
+	}
+	// Negative control: a field without one is reported.
+	if got := undescribed(schemaNode{"properties": map[string]any{"x": map[string]any{"type": "integer"}}}); len(got) != 1 {
+		t.Errorf("undescribed missed a field with no description: %v", got)
+	}
+}
+
+func undescribed(s schemaNode) []string {
+	var out []string
+	for k, p := range s.props() {
+		if d, _ := p["description"].(string); strings.TrimSpace(d) == "" {
+			out = append(out, k)
+		}
+	}
+	sort.Strings(out)
+	return out
+}
+
 func camel(key string) string {
 	var b strings.Builder
 	for _, part := range strings.Split(key, "_") {
@@ -385,6 +408,7 @@ The host checks every call where it serves it, from the execution's token, and r
 
 - The scope's ` + "`authorization.operations`" + ` lists the operations its executions may call. A child scope's list can only narrow its parent's.
 - A binding's ` + "`operations`" + ` is the exact list its executions get, within the scope's. A Work whose route opts into one of the binding's ` + "`grants`" + ` also gets that grant's operations, still within the scope's.
+- An operation a ` + "`human`" + ` extension entry lists in ` + "`gates`" + ` waits at the host for a person's approval before it runs, whoever calls it (see [configuration](../config/#human-decisions-human)).
 - A call acts on the execution's own Work, and only while its lease is current. Waiting on another scope's Events needs that scope in ` + "`read_scopes`" + `; filing an issue in, or commenting on, another scope's tracker needs it in ` + "`file_scopes`" + `.
 
 See [configuration](../config/#authorization) for the fields and [toolbelt authority](../../architecture/toolbelt-management/) for the design.

@@ -109,7 +109,8 @@
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
-          "default": 14
+          "default": 14,
+          "description": "Days a finished Work keeps its attempts' content (logs, transcripts, outputs) after it last changed; the retention sweep then releases all of it. Coordination history is never deleted. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "retry_delays_seconds": {
           "type": "array",
@@ -146,20 +147,58 @@
           "items": {
             "type": "object",
             "additionalProperties": false,
-            "required": ["unit", "per", "max"],
-            "if": {"properties": {"per": {"const": "all"}}},
-            "then": {"not": {"required": ["scope"]}},
+            "required": [
+              "unit",
+              "per",
+              "max"
+            ],
+            "if": {
+              "properties": {
+                "per": {
+                  "const": "all"
+                }
+              }
+            },
+            "then": {
+              "not": {
+                "required": [
+                  "scope"
+                ]
+              }
+            },
             "properties": {
               "unit": {
                 "description": "attempts and turns are counted by the host; any other unit (usd, tokens, minutes, ...) is what executors report.",
                 "type": "string",
                 "pattern": "^[a-z][a-z0-9_.-]{0,31}$"
               },
-              "per": {"enum": ["work", "scope", "all"]},
-              "period": {"enum": ["day", "week"]},
-              "max": {"type": "number", "exclusiveMinimum": 0},
-              "warn_at": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.8},
-              "scope": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$"}
+              "per": {
+                "enum": [
+                  "work",
+                  "scope",
+                  "all"
+                ]
+              },
+              "period": {
+                "enum": [
+                  "day",
+                  "week"
+                ]
+              },
+              "max": {
+                "type": "number",
+                "exclusiveMinimum": 0
+              },
+              "warn_at": {
+                "type": "number",
+                "exclusiveMinimum": 0,
+                "exclusiveMaximum": 1,
+                "default": 0.8
+              },
+              "scope": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+              }
             }
           }
         },
