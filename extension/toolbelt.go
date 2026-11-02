@@ -25,6 +25,16 @@ const (
 	ReadContext    = "read_context"
 )
 
+// BuiltinOperation reports whether name is one of the toolbelt's builtin
+// operations, which no extension may declare and no gate decides on.
+func BuiltinOperation(name string) bool {
+	switch name {
+	case Emit, CreateWork, Wait, DeclareOutcome, ReadContext:
+		return true
+	}
+	return false
+}
+
 // Authority is resolved by trusted code from the token, never client-supplied.
 // Every call, including reads, checks expiry/revocation and the current lease.
 type Authority struct {

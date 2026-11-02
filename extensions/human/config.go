@@ -105,6 +105,9 @@ func ParseConfig(data json.RawMessage) (Config, error) {
 			if !gateOperation.MatchString(name) || strings.HasSuffix(name, ".") {
 				return c, fmt.Errorf("%s: operations: %q is not an operation name or a prefix ending in .* (for example github.pr.create or deploy.*)", where, op)
 			}
+			if extension.BuiltinOperation(name) {
+				return c, fmt.Errorf("%s: operations: %q is a builtin toolbelt operation, which a gate can't hold; name an extension's operation", where, op)
+			}
 			if name == Type || strings.HasPrefix(name, Type+".") {
 				return c, fmt.Errorf("%s: operations: %q is human's own; its operations can't need approval", where, op)
 			}
