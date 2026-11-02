@@ -68,14 +68,14 @@
           "minimum": 1,
           "maximum": 2147483647,
           "default": 4,
-          "description": "Most agent turns (claude-code and installed extension executors) running at once across every scope. A scope's limits.concurrency can only narrow it. Takes effect when the next config generation is applied (open-conduit config apply, or serve restarting); editing the file alone changes nothing."
+          "description": "Most agent turns (claude-code and installed extension executors) running at once across every scope. A scope's limits.concurrency can only narrow it. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "job_concurrency": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
           "default": 4,
-          "description": "Most job attempts (the shell and github-hold executors) running at once, counted apart from concurrency so a busy agent pool never holds a due job back. Takes effect when the next config generation is applied (open-conduit config apply, or serve restarting); editing the file alone changes nothing."
+          "description": "Most job attempts (the shell and github-hold executors) running at once, counted apart from concurrency so a busy agent pool never holds a due job back. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "admission_limit": {
           "type": "integer",
@@ -89,21 +89,21 @@
           "minimum": 1,
           "maximum": 2147483647,
           "default": 900,
-          "description": "How often each source (a repository, a tracker, a Slack workspace, a schedule) is reconciled against its service, so missed webhooks cost only this much latency. Sources added by a later generation use the new value; bundled sources already running keep theirs until serve restarts."
+          "description": "How often each source (a repository, a tracker, a Slack workspace, a schedule) is reconciled against its service, so missed webhooks cost only this much latency. Sources added by a later generation (open-conduit config apply) use the new value; bundled sources already running keep theirs until serve restarts on that generation."
         },
         "timeout_seconds": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
           "default": 3600,
-          "description": "The deadline of one attempt (an Execution) before the host stops it. A binding's own timeout_seconds replaces it for that binding. Takes effect when the next config generation is applied (open-conduit config apply, or serve restarting); editing the file alone changes nothing. An attempt already running keeps the deadline it started with."
+          "description": "The deadline of one attempt (an Execution) before the host stops it. A binding's own timeout_seconds replaces it for that binding. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. An attempt already running keeps the deadline it started with."
         },
         "kept_executions": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
           "default": 20,
-          "description": "Executions per Work whose content (logs, transcripts, outputs) is kept; older ones are released by the retention sweep. Their coordination history (trigger, timing, outcome, usage) is never deleted. Takes effect when the next config generation is applied (open-conduit config apply, or serve restarting); editing the file alone changes nothing."
+          "description": "Executions per Work whose content (logs, transcripts, outputs) is kept; older ones are released by the retention sweep. Their coordination history (trigger, timing, outcome, usage) is never deleted. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "kept_finished_days": {
           "type": "integer",
@@ -123,21 +123,21 @@
             300,
             600
           ],
-          "description": "The wait before each retry of a failed attempt, in order; once they are used up automatic retries stop and the Work stays open for an operator to retry. Usage-limit retries wait for the reported reset instead. Takes effect when the next config generation is applied (open-conduit config apply, or serve restarting); editing the file alone changes nothing."
+          "description": "The wait before each retry of a failed attempt, in order; once they are used up automatic retries stop and the Work stays open for an operator to retry. Usage-limit retries wait for the reported reset instead. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "causal_max_depth": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
           "default": 32,
-          "description": "How many Events one chain of causes may reach (an Event caused by an execution that an Event started, and so on). The Event past it is refused with a depth_limit diagnostic, which stops feedback loops without the extension's cooperation. Takes effect when the next config generation is applied (open-conduit config apply, or serve restarting); editing the file alone changes nothing."
+          "description": "How many Events one chain of causes may reach (an Event caused by an execution that an Event started, and so on). The Event past it is refused with a depth_limit diagnostic, which stops feedback loops without the extension's cooperation. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "causal_per_minute": {
           "type": "integer",
           "minimum": 1,
           "maximum": 2147483647,
           "default": 128,
-          "description": "How many Events one causal chain may add per minute; a burst past it is refused. Takes effect when the next config generation is applied (open-conduit config apply, or serve restarting); editing the file alone changes nothing."
+          "description": "How many Events one causal chain may add per minute; a burst past it is refused. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing."
         },
         "budgets": {
           "description": "Usage limits the host enforces before it starts a turn: at most max of unit per Work, per scope or across every scope, over the Work's life or each UTC day or week. Work over a limit is held with the reason.",
@@ -164,7 +164,7 @@
           }
         },
         "webhooks": {
-          "description": "The webhook listener and tunnel serve starts with; serve flags override it for one run. Without it the daemon is reconcile-only. Takes effect when serve restarts.",
+          "description": "The webhook listener and tunnel serve starts with; serve flags override it for one run. Without it the daemon is reconcile-only. Takes effect at the next serve start after the generation holding it is applied with open-conduit config apply.",
           "type": "object",
           "properties": {
             "addr": {
