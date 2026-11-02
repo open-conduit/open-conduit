@@ -3,12 +3,14 @@ package sdk
 import (
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"sort"
 	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -65,22 +67,42 @@ var ErrNotBuffered = errors.New("sdk: not a transaction of sdk.Store")
 // a transaction of Store.Transact, for the host to accept in the same
 // transaction as tx's writes when it commits (a kv.commit Emission): a
 // root Event of scope when parent is empty, else one derived from parent.
-// It answers the Event as it will be accepted (its ID is the host's,
-// EmittedEventID; its sequence is unknown until commit), so the
-// transaction's own records can name it. The host's refusal of the Event
-// refuses the commit, except a causal bound, which the host records and
-// the rest commits through.
-func EmitInTx(tx storage.Tx, scope, parent domain.ID, e domain.Event) (domain.AcceptedEvent, error) {
+//
+// It answers as an in-process acceptance does, as far as the wire allows.
+// An Event already accepted (the same source and delivery ID, read through
+// state.event, or emitted earlier in tx) is answered as it stands with
+// added false and is not emitted again. A new one is answered with added
+// true, its ID the host's (EmittedEventID) and Sequence 0: its sequence is
+// assigned only at commit, so a record must not be keyed by it. The host's
+// answer at commit stays authoritative for a race. The host's refusal of
+// the Event refuses the commit, except a causal bound: the rest of the
+// batch commits and Transact returns an error wrapping
+// inproc.ErrCausalLimit.
+func EmitInTx(tx storage.Tx, scope, parent domain.ID, e domain.Event) (domain.AcceptedEvent, bool, error) {
 	t, ok := tx.(*storeTx)
 	if !ok {
-		return domain.AcceptedEvent{}, ErrNotBuffered
+		return domain.AcceptedEvent{}, false, ErrNotBuffered
 	}
 	if e.Source == "" || e.DeliveryID == "" {
-		return domain.AcceptedEvent{}, storage.ErrInvalid
+		return domain.AcceptedEvent{}, false, storage.ErrInvalid
+	}
+	id := protocol.EmittedEventID(e.Source, e.DeliveryID)
+	for _, em := range t.emits {
+		if protocol.EmittedEventID(em.Event.Source, em.Event.DeliveryID) == id {
+			e.ID = domain.ID(id)
+			return domain.AcceptedEvent{Event: e}, false, nil
+		}
+	}
+	var existing protocol.AcceptedEvent
+	switch err := t.h.Call(t.ctx, "state.event", protocol.StateParams{ID: id}, &existing); {
+	case err == nil:
+		return existing.Domain(), false, nil
+	case !errors.Is(err, storage.ErrNotFound):
+		return domain.AcceptedEvent{}, false, err
 	}
 	t.emits = append(t.emits, protocol.Emission{ScopeID: string(scope), Parent: string(parent), Event: protocol.FromEvent(e)})
-	e.ID = domain.ID(protocol.EmittedEventID(e.Source, e.DeliveryID))
-	return domain.AcceptedEvent{Event: e}, nil
+	e.ID = domain.ID(id)
+	return domain.AcceptedEvent{Event: e}, true, nil
 }
 
 // EventScopeInTx is the scope an accepted Event was accepted into, read
@@ -128,7 +150,26 @@ func (s *Store) Transact(ctx context.Context, _ storage.Guard, fn func(storage.T
 			b.Puts = append(b.Puts, protocol.KVPut{Namespace: k.ns, Key: k.key, Value: v})
 		}
 	}
-	return s.h.Commit(ctx, b)
+	r, err := s.h.CommitBatch(ctx, b)
+	if err != nil {
+		return err
+	}
+	if refused := refusedEmissions(r); refused > 0 {
+		return fmt.Errorf("%w: the batch committed, and the host refused %d of its Events", inproc.ErrCausalLimit, refused)
+	}
+	return nil
+}
+
+// refusedEmissions counts the Emissions the host refused over a causal
+// bound while the rest of the batch committed.
+func refusedEmissions(r protocol.KVCommitResult) int {
+	n := 0
+	for _, em := range r.Emissions {
+		if em.Refused == protocol.CodeCausalLimit {
+			n++
+		}
+	}
+	return n
 }
 
 func (t *storeTx) read(k kvKey) ([]byte, bool, error) {

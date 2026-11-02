@@ -19,11 +19,14 @@ import (
 //
 // AcceptInTx and AcceptDerivedInTx return the Event from the transaction
 // (sdk.EmitInTx): the host accepts it as a kv.commit Emission, in its own
-// transaction with the transaction's KV writes. So, unlike in process, the
-// answer is the Event as it will be accepted (added is true; whether it was
-// new is known only at commit), and a causal bound is not an
-// inproc.ErrCausalLimit here: the host records it for the operator and the
-// rest of the batch commits, as an in-process transaction may after one.
+// transaction with the transaction's KV writes. The answer keeps the
+// in-process contract as far as the wire allows: an Event already accepted
+// is answered as it stands with added false (so a caller's dedupe holds),
+// and a new one with added true but Sequence 0, since its sequence is
+// assigned only at commit (see inproc.Host.AcceptInTx). A causal bound
+// can't refuse the call itself: the host records it, the rest of the batch
+// commits, and the transaction's Transact returns an error wrapping
+// inproc.ErrCausalLimit.
 
 // services sets the inproc.Host services carried by h.
 func (b *Bridge) services(host *inproc.Host, h *sdk.Host) {
@@ -35,8 +38,7 @@ func (b *Bridge) services(host *inproc.Host, h *sdk.Host) {
 		if !own(e.Type) {
 			return domain.AcceptedEvent{}, false, inproc.ErrNotOwn
 		}
-		a, err := sdk.EmitInTx(tx, scope, "", e)
-		return a, err == nil, err
+		return sdk.EmitInTx(tx, scope, "", e)
 	}
 	host.AcceptDerivedInTx = func(tx storage.Tx, scope, parent domain.ID, e domain.Event) (domain.AcceptedEvent, bool, error) {
 		if !own(e.Type) {
@@ -45,8 +47,7 @@ func (b *Bridge) services(host *inproc.Host, h *sdk.Host) {
 		if parent == "" {
 			return domain.AcceptedEvent{}, false, storage.ErrInvalid
 		}
-		a, err := sdk.EmitInTx(tx, scope, parent, e)
-		return a, err == nil, err
+		return sdk.EmitInTx(tx, scope, parent, e)
 	}
 	host.EventScope = sdk.EventScopeInTx
 	if len(m.Provides.Recurrences) > 0 {

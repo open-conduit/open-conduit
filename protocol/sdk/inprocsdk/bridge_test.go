@@ -341,4 +341,31 @@ func TestAcceptInTxIsCarried(t *testing.T) {
 	if string(h.KV("acme")["origin/"+string(root.Event.ID)]) != "r1" {
 		t.Fatal("the transaction's write, naming the Event, did not land with it")
 	}
+
+	// Accepting it again, in a later transaction or twice in one, answers
+	// the Event as it stands with added false, as in process, so a caller's
+	// dedupe holds; nothing is emitted again.
+	before := len(h.Events())
+	err = host.Store.Transact(ctx, storage.Guard{}, func(tx storage.Tx) error {
+		again, added, err := host.AcceptInTx(tx, "eng", domain.Event{Type: "acme.thing", Source: "acme", DeliveryID: "r1"})
+		if err != nil {
+			return err
+		}
+		if added || again.Event.ID != root.Event.ID || again.Sequence == 0 {
+			t.Errorf("accepted again: %+v added %v, want the accepted Event, not added", again, added)
+		}
+		if _, added, err := host.AcceptInTx(tx, "eng", domain.Event{Type: "acme.thing", Source: "acme", DeliveryID: "r2"}); err != nil || !added {
+			t.Errorf("a new Event: added %v %v", added, err)
+		}
+		if _, added, err := host.AcceptInTx(tx, "eng", domain.Event{Type: "acme.thing", Source: "acme", DeliveryID: "r2"}); err != nil || added {
+			t.Errorf("the same new Event twice in one transaction: added %v %v", added, err)
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := len(h.Events()); got != before+1 {
+		t.Fatalf("%d Events accepted by the second transaction, want 1", got-before)
+	}
 }
