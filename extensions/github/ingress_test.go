@@ -709,6 +709,87 @@ func TestTrackedPullConflictsWithoutAnIssue(t *testing.T) {
 	}
 }
 
+// An author whose association wouldn't be admitted carries their
+// permission on the repository, read once per login per scan: GitHub
+// reports a member whose org membership is private as CONTRIBUTOR (#432).
+// An admitted association, a bot and a failed read carry none.
+func TestUnadmittedAuthorCarriesRepositoryPermission(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	member := githubtest.User{Login: "Priya", Type: "User"}
+	outsider := githubtest.User{Login: "mallory", Type: "User"}
+	first := fk.OpenIssue("Private member", "", member)
+	second := fk.OpenIssue("Private member again", "", member)
+	stranger := fk.OpenIssue("Outside contributor", "", outsider)
+	owner := fk.OpenIssue("Owner", "", alice)
+	bot := fk.OpenIssue("Bot", "", githubtest.User{Login: "dependabot[bot]", Type: "Bot"})
+	closed := fk.OpenIssue("Closed", "", githubtest.User{Login: "eve", Type: "User"})
+	fk.CloseIssue(closed, "completed")
+	pr := fk.OpenPull("Private member's PR", "", "fix", "s1", member)
+	for _, n := range []int{first, second, stranger, bot, closed, pr} {
+		fk.SetAssociation(n, "CONTRIBUTOR")
+	}
+	fk.SetCollaborator("priya", "write")
+	fk.SetCollaborator("mallory", "read")
+	permission := func(o extension.Observation) string {
+		var p struct {
+			Permission string `json:"author_permission"`
+		}
+		if err := json.Unmarshal(o.Event.Data.Data, &p); err != nil {
+			t.Fatal(err)
+		}
+		return p.Permission
+	}
+	scanned := f.scan(t)
+	for item, want := range map[string]string{
+		"issue/" + strconv.Itoa(first): "write", "issue/" + strconv.Itoa(second): "write", "issue/" + strconv.Itoa(stranger): "read",
+		"issue/" + strconv.Itoa(owner): "", "issue/" + strconv.Itoa(bot): "", "issue/" + strconv.Itoa(closed): "", "pr/" + strconv.Itoa(pr): "write",
+	} {
+		if got := permission(scanned[item]); got != want {
+			t.Fatalf("%s: author_permission %q, want %q", item, got, want)
+		}
+	}
+	reads := map[string]int{}
+	for _, r := range fk.Requests() {
+		if strings.Contains(r, "/collaborators/") {
+			reads[r]++
+		}
+	}
+	if len(reads) != 2 || reads["GET /repos/"+repo+"/collaborators/Priya/permission"] != 1 {
+		t.Fatalf("permission reads %v, want one per unadmitted person", reads)
+	}
+	// A webhook delivery reads it too; a failed read leaves it out, so
+	// admission fails closed.
+	if got := permission(onlyObservation(t, f.push(t, "issues", "d-member", fk.IssuesHook("opened", first)))); got != "write" {
+		t.Fatalf("pushed author_permission %q", got)
+	}
+	fk.FailNext("/repos/"+repo+"/collaborators/", 100)
+	if got := permission(onlyObservation(t, f.push(t, "issues", "d-fail", fk.IssuesHook("opened", first)))); got != "" {
+		t.Fatalf("a failed read carried author_permission %q", got)
+	}
+}
+
+// A permission read is spent from a scan page's budget, so a page of
+// issues by many unadmitted authors ends sooner than one by the owner.
+func TestPermissionReadsSpendTheScanBudget(t *testing.T) {
+	firstPage := func(association string) int {
+		f := newFixture(t, "")
+		for i := 0; i < 3; i++ {
+			n := f.fake.OpenIssue("issue "+strconv.Itoa(i), "", githubtest.User{Login: "user" + strconv.Itoa(i), Type: "User"})
+			f.fake.SetAssociation(n, association)
+		}
+		f.in = gh.NewIngress(f.in.Settings(), clientFor(t, f), func() time.Time { return f.now }, gh.IngressOptions{BatchUnits: 2, PageBudget: time.Minute})
+		page, err := f.in.Reconcile(context.Background(), extension.Scan{Source: src})
+		if err != nil {
+			t.Fatal(err)
+		}
+		return len(page.Observations)
+	}
+	if owners, contributors := firstPage("OWNER"), firstPage("CONTRIBUTOR"); owners != 3 || contributors != 2 {
+		t.Fatalf("first page held %d issues by owners and %d by contributors, want 3 and 2", owners, contributors)
+	}
+}
+
 // Only this connection's own App bot is marked by_connection, which admits
 // what its agents file: another App's bot isn't, nor is anyone on a token
 // connection, which has no App bot of its own (#346).

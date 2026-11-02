@@ -254,6 +254,10 @@ type Admit struct {
 // not set: people the repository's owner already trusts with it.
 var DefaultAdmitAuthors = []string{"OWNER", "MEMBER", "COLLABORATOR"}
 
+// CollaboratorAssociation is the association write or admin permission on
+// the repository counts as.
+const CollaboratorAssociation = "COLLABORATOR"
+
 // AnyAuthor in admit.authors admits every author.
 const AnyAuthor = "*"
 

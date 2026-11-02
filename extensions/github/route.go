@@ -182,15 +182,21 @@ func (l Labels) refusal(p IssuePayload) string {
 
 // authorRefusal says why an issue's or PR's author may not start Work ("" when
 // they may): their association with the repository is not one admit.authors
-// names. This connection's own App bot (byConnection: the normalizer matched
-// the author against the identity its writes go out as) is admitted, so the
-// follow-up issues its agents file start; no other bot is, whatever its body.
-func (s Settings) authorRefusal(what, author, association string, byConnection bool) string {
+// names. Write or admin permission on the repository counts as COLLABORATOR,
+// whatever the association says, since GitHub reports a member whose org
+// membership is private as a CONTRIBUTOR. This connection's own App bot
+// (byConnection: the normalizer matched the author against the identity its
+// writes go out as) is admitted, so the follow-up issues its agents file
+// start; no other bot is, whatever its body.
+func (s Settings) authorRefusal(what, author, association, permission string, byConnection bool) string {
 	if slices.Contains(s.Authors, AnyAuthor) || byConnection {
 		return ""
 	}
 	association = strings.ToUpper(association)
 	if association != "" && slices.Contains(s.Authors, association) {
+		return ""
+	}
+	if writesRepository(permission) && slices.Contains(s.Authors, CollaboratorAssociation) {
 		return ""
 	}
 	if association == "" {
@@ -202,13 +208,23 @@ func (s Settings) authorRefusal(what, author, association string, byConnection b
 	return fmt.Sprintf("the %s's author %s is %s on the repository; admit.authors admits %s", what, author, association, strings.Join(s.Authors, ", "))
 }
 
+// writesRepository reports whether a repository permission can push to it
+// (admin, or write, which is maintain's too).
+func writesRepository(permission string) bool {
+	switch strings.ToLower(permission) {
+	case "admin", "maintain", "write":
+		return true
+	}
+	return false
+}
+
 // issueRefusal says why an unowned issue may not start Work ("" when it
 // may): its labels, then its author.
 func (s Settings) issueRefusal(l Labels, p IssuePayload) string {
 	if reason := l.refusal(p); reason != "" {
 		return reason
 	}
-	return s.authorRefusal("issue", p.Author, p.AuthorAssociation, p.ByConnection)
+	return s.authorRefusal("issue", p.Author, p.AuthorAssociation, p.AuthorPermission, p.ByConnection)
 }
 
 // pullRefusal says why an open PR may not start Work ("" when it may): a
@@ -217,7 +233,7 @@ func (s Settings) pullRefusal(p PullPayload) string {
 	if p.Fork && !s.Forks {
 		return "the PR comes from a fork, and admit.forks is off"
 	}
-	return s.authorRefusal("PR", p.Author, p.AuthorAssociation, p.ByConnection)
+	return s.authorRefusal("PR", p.Author, p.AuthorAssociation, p.AuthorPermission, p.ByConnection)
 }
 
 // selfAuthored reports whether an agent comment was written for this Work

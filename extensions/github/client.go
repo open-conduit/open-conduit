@@ -496,6 +496,21 @@ func (c *Client) Issue(ctx context.Context, repo string, n int) (rawIssue, error
 	return i, err
 }
 
+// CollaboratorPermission reads a user's permission on a repository: admin,
+// write, read or none (GitHub folds maintain into write, triage into read
+// and a custom role into its base). It is answered from the repository's
+// own access, which a body's author_association reflects only for public
+// org membership.
+func (c *Client) CollaboratorPermission(ctx context.Context, repo, login string) (string, error) {
+	var out struct {
+		Permission string `json:"permission"`
+	}
+	if _, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/collaborators/%s/permission", url.PathEscape(login)), nil, &out); err != nil {
+		return "", err
+	}
+	return strings.ToLower(out.Permission), nil
+}
+
 // Pull reads one pull request.
 func (c *Client) Pull(ctx context.Context, repo string, n int) (rawPull, error) {
 	var p rawPull

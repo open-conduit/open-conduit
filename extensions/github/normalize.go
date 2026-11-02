@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"net/http"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -90,6 +91,11 @@ type IssuePayload struct {
 	// AuthorAssociation is the author's relation to the repository
 	// (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE…), which admission reads.
 	AuthorAssociation string `json:"author_association,omitempty"`
+	// AuthorPermission is the author's permission on the repository
+	// (admin, write, read, none), read only when the association alone
+	// wouldn't admit them: GitHub reports a private org member as
+	// CONTRIBUTOR, and admission takes write or admin as COLLABORATOR.
+	AuthorPermission string `json:"author_permission,omitempty"`
 	// ByConnection marks an author who is this connection's own App bot:
 	// what the connection's agents file is admitted whatever admit.authors.
 	ByConnection bool       `json:"by_connection,omitempty"`
@@ -124,10 +130,12 @@ type PullPayload struct {
 	BaseRef  string     `json:"base_ref"`
 	Labels   []string   `json:"labels"`
 	Author   string     `json:"author"`
-	// AuthorType and AuthorAssociation are as on IssuePayload; Fork marks
+	// AuthorType, AuthorAssociation and AuthorPermission are as on
+	// IssuePayload; Fork marks
 	// a head in another repository (or one since deleted).
 	AuthorType        string    `json:"author_type,omitempty"`
 	AuthorAssociation string    `json:"author_association,omitempty"`
+	AuthorPermission  string    `json:"author_permission,omitempty"`
 	ByConnection      bool      `json:"by_connection,omitempty"`
 	Fork              bool      `json:"fork,omitempty"`
 	URL               string    `json:"url"`
@@ -338,10 +346,15 @@ type memo struct {
 	// once writerRead.
 	writer     string
 	writerRead bool
+	// permissions are authors' repository permissions by lower-case
+	// login ("" for one that couldn't be read); permissionReads counts
+	// the reads made, which a scan spends from its page budget.
+	permissions     map[string]string
+	permissionReads int
 }
 
 func newMemo() *memo {
-	return &memo{issues: map[string]rawIssue{}, pulls: map[int]rawPull{}, reopens: map[string][]rawIssueEvent{}, notFound: map[string]bool{}, required: map[string]RequiredChecks{}}
+	return &memo{issues: map[string]rawIssue{}, pulls: map[int]rawPull{}, reopens: map[string][]rawIssueEvent{}, notFound: map[string]bool{}, required: map[string]RequiredChecks{}, permissions: map[string]string{}}
 }
 
 // normalizer turns service objects into canonical observations. Push and
@@ -376,6 +389,45 @@ func (n *normalizer) byConnection(ctx context.Context, user rawUser) bool {
 		n.m.mu.Unlock()
 	}
 	return login != "" && strings.EqualFold(login, user.Login)
+}
+
+// permission reads a person's permission on the repository when their
+// association alone wouldn't admit them but COLLABORATOR would, on an
+// open issue or PR (a closed one is never claimed; its reopening is a new
+// observation, which reads it): GitHub
+// reports a member whose org membership is private as CONTRIBUTOR (or
+// NONE) to an App, though their access is the same (#432). It returns ""
+// when no read is needed or the read fails, so admission fails closed and
+// a later observation, once it resolves, admits.
+func (n *normalizer) permission(ctx context.Context, user rawUser, association, state string) string {
+	authors := n.s.Authors
+	if state != "open" || user.Type == "Bot" || user.Login == "" || n.c == nil || slices.Contains(authors, AnyAuthor) ||
+		!slices.Contains(authors, CollaboratorAssociation) || slices.Contains(authors, strings.ToUpper(association)) {
+		return ""
+	}
+	key := strings.ToLower(user.Login)
+	n.m.mu.Lock()
+	perm, read := n.m.permissions[key]
+	n.m.mu.Unlock()
+	if read {
+		return perm
+	}
+	perm, err := n.c.CollaboratorPermission(ctx, n.s.Repo, user.Login)
+	if err != nil {
+		perm = ""
+	}
+	n.m.mu.Lock()
+	n.m.permissions[key] = perm
+	n.m.permissionReads++
+	n.m.mu.Unlock()
+	return perm
+}
+
+// permissionReads is how many permission reads the normalizer has made.
+func (n *normalizer) permissionReads() int {
+	n.m.mu.Lock()
+	defer n.m.mu.Unlock()
+	return n.m.permissionReads
 }
 
 func (n *normalizer) issue(ctx context.Context, repo string, number int) (rawIssue, error) {
@@ -530,7 +582,7 @@ func (n *normalizer) issueObservation(ctx context.Context, i rawIssue) (extensio
 	}
 	p := IssuePayload{Repo: n.s.Repo, Number: i.Number, Title: i.Title, Body: i.Body, State: i.State, StateReason: i.StateReason,
 		Labels: n.labels(i.Labels), Assignees: []string{}, Author: i.User.Login, AuthorType: i.User.Type,
-		AuthorAssociation: i.Association, ByConnection: n.byConnection(ctx, i.User), URL: i.HTMLURL,
+		AuthorAssociation: i.Association, AuthorPermission: n.permission(ctx, i.User, i.Association, i.State), ByConnection: n.byConnection(ctx, i.User), URL: i.HTMLURL,
 		CreatedAt: utc(i.CreatedAt), ClosedAt: utcPtr(i.ClosedAt), Generation: gen, Predecessor: pred}
 	if i.State != "closed" {
 		p.ClosedAt = nil
@@ -641,7 +693,7 @@ func (n *normalizer) pullObservation(ctx context.Context, p rawPull) (extension.
 	payload := PullPayload{Repo: n.s.Repo, Number: p.Number, Title: p.Title, Body: p.Body, State: p.State, Merged: merged,
 		MergedAt: utcPtr(p.MergedAt), ClosedAt: utcPtr(p.ClosedAt), Draft: p.Draft, HeadRef: p.Head.Ref, HeadSHA: p.Head.SHA,
 		BaseRef: p.Base.Ref, Labels: n.labels(p.Labels), Author: p.User.Login,
-		AuthorType: p.User.Type, AuthorAssociation: p.Association, ByConnection: n.byConnection(ctx, p.User), Fork: p.Head.Repo == nil || !strings.EqualFold(p.Head.Repo.FullName, n.s.Repo),
+		AuthorType: p.User.Type, AuthorAssociation: p.Association, AuthorPermission: n.permission(ctx, p.User, p.Association, p.State), ByConnection: n.byConnection(ctx, p.User), Fork: p.Head.Repo == nil || !strings.EqualFold(p.Head.Repo.FullName, n.s.Repo),
 		URL: p.HTMLURL, CreatedAt: utc(p.CreatedAt), Issue: ref}
 	if p.State != "closed" {
 		payload.ClosedAt, payload.MergedAt, payload.Merged = nil, nil, false

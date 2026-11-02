@@ -168,6 +168,9 @@ type Server struct {
 	fileData                         map[string][]byte
 	hooks                            []*Hook
 	perms                            map[string]bool
+	// collaborators are users' repository permissions by lower-case login
+	// (none for a user not listed).
+	collaborators map[string]string
 	// resolved holds the review threads resolved through GraphQL, by the
 	// ID of the inline comment that opened them; threadPage is how many
 	// threads a reviewThreads page holds; refuseResolve makes resolving
@@ -202,6 +205,17 @@ func (s *Server) Hooks() []Hook {
 
 // SetPermissions makes GET /repos/{repo} report the caller's permissions.
 func (s *Server) SetPermissions(p map[string]bool) { s.mu.Lock(); s.perms = p; s.mu.Unlock() }
+
+// SetCollaborator sets a user's permission on the repository (admin, write,
+// read), as GET /repos/{repo}/collaborators/{login}/permission reports it.
+func (s *Server) SetCollaborator(login, permission string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.collaborators == nil {
+		s.collaborators = map[string]string{}
+	}
+	s.collaborators[strings.ToLower(login)] = permission
+}
 
 type limit struct {
 	status     int
@@ -1373,6 +1387,13 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 			out["permissions"] = s.perms
 		}
 		return http.StatusOK, out
+	case get && strings.HasPrefix(rest, "/collaborators/") && strings.HasSuffix(rest, "/permission"):
+		login := strings.TrimSuffix(strings.TrimPrefix(rest, "/collaborators/"), "/permission")
+		perm, ok := s.collaborators[strings.ToLower(login)]
+		if !ok {
+			perm = "none"
+		}
+		return http.StatusOK, map[string]any{"permission": perm, "user": map[string]any{"login": login}}
 	case get && rest == "/hooks":
 		list := []map[string]any{}
 		for _, h := range s.hooks {
