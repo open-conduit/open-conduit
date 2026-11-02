@@ -6,12 +6,14 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -32,6 +34,10 @@ type ProjectorOptions struct {
 	// SearchDelay is how long after an ambiguous post the marker search waits,
 	// so GitHub's listing reflects a comment that was created (default 30s).
 	SearchDelay time.Duration
+	// Act invokes an action for the author of a human comment that asks
+	// for one ("/answer approve"), as the caller github:<login>
+	// (inproc.Host.Act). Nil leaves such comments as ordinary comments.
+	Act func(ctx context.Context, r extension.ActRequest) (extension.ActResult, error)
 	// AfterPost runs after a comment was created and before local completion
 	// is recorded. Tests use it to crash at exactly that boundary.
 	AfterPost func(intent string)
@@ -719,9 +725,23 @@ func (p *Projector) acknowledge(ctx context.Context, limit int) (int, error) {
 			break
 		}
 		var c CommentPayload
-		if a.RoutedWorkID != "" && delivered[a.Disposition] &&
-			json.Unmarshal(e.Data.Data, &c) == nil && !c.Edited && c.ID != 0 && !p.o.Settings.Projection.DryRun {
-			err := p.o.Client.React(ctx, p.o.Settings.Repo, c.Kind, c.ID, "+1")
+		if a.RoutedWorkID == "" || json.Unmarshal(e.Data.Data, &c) != nil || c.Edited || c.ID == 0 {
+			next = a.Sequence
+			continue
+		}
+		reaction, err := p.command(ctx, a.RoutedWorkID, c)
+		if err != nil {
+			// The host could not take the answer now; ask again next pass.
+			if saveErr := p.saveCursor(ctx, next); saveErr != nil {
+				return reacted, saveErr
+			}
+			return reacted, err
+		}
+		if reaction == "" && delivered[a.Disposition] {
+			reaction = "+1"
+		}
+		if reaction != "" && !p.o.Settings.Projection.DryRun {
+			err := p.o.Client.React(ctx, p.o.Settings.Repo, c.Kind, c.ID, reaction)
 			var limitErr *RateLimitError
 			if errors.As(err, &limitErr) || errors.Is(err, ErrCredential) || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
 				// Retry this comment later; never skip it for a transient cause.
@@ -739,6 +759,46 @@ func (p *Projector) acknowledge(ctx context.Context, limit int) (int, error) {
 		next = a.Sequence
 	}
 	return reacted, p.saveCursor(ctx, next)
+}
+
+// command answers a comment that asks for an action on its Work: a first
+// line "/<action>" or "/<action> <input>" ("/answer approve"). The author
+// is the caller, as github:<login>, and the action's provider decides
+// whether they may act. It returns the reaction that acknowledges the
+// comment: "+1" when the action was taken, "confused" when it was refused,
+// "" for a comment that asks for no action here (an ordinary comment, or a
+// "/word" nothing on the Work offers). An error is transient.
+func (p *Projector) command(ctx context.Context, work domain.ID, c CommentPayload) (string, error) {
+	action, input, ok := parseCommand(c.Body)
+	if !ok || p.o.Act == nil || c.Author == "" {
+		return "", nil
+	}
+	_, err := p.o.Act(ctx, extension.ActRequest{Scope: p.o.Scope, Work: work, Action: action, Input: input, Caller: c.Author, Key: fmt.Sprintf("%s/%d", c.Kind, c.ID)})
+	var oe *extension.OperationError
+	switch {
+	case err == nil:
+		return "+1", nil
+	case errors.As(err, &oe) && oe.Code == extension.CodeNoAction:
+		return "", nil
+	case errors.As(err, &oe):
+		return "confused", nil
+	case errors.Is(err, extension.ErrInvalid), errors.Is(err, storage.ErrNotFound), errors.Is(err, storage.ErrInvalid):
+		return "", nil
+	}
+	return "", err
+}
+
+// commandLine is a comment's first line asking for an action.
+var commandLine = regexp.MustCompile(`^/([a-z][a-z0-9_]{0,63})(?:[ \t]+(.*))?$`)
+
+// parseCommand reads a "/<action> [input]" first line.
+func parseCommand(body string) (action, input string, ok bool) {
+	line, _, _ := strings.Cut(strings.TrimSpace(body), "\n")
+	m := commandLine.FindStringSubmatch(strings.TrimSpace(line))
+	if m == nil {
+		return "", "", false
+	}
+	return m[1], strings.TrimSpace(m[2]), true
 }
 
 func (p *Projector) saveCursor(ctx context.Context, after uint64) error {

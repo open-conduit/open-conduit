@@ -161,6 +161,8 @@ The body carries `<!-- open-conduit:agent work=<id> intent=<digest> -->`. If a p
 
 **Reactions:** a `+1` acknowledges each human comment the router delivered to Work. Reactions are idempotent at GitHub. The cursor never passes an unrouted comment. It retries rate-limit and credential failures, and skips permanent refusals.
 
+**Answers in comments:** a human comment or review routed to Work whose first line is `/<action>` or `/<action> <input>` (`/answer approve`) asks for that action on the Work. The projector hands it to `Host.Act` as the comment's author, `github:<login>`, keyed by the comment, and the action's provider decides whether that login may act: a `human` gate's responders, say. A taken action is acknowledged with `+1` and a refused one with `confused`; a `/word` nothing on the Work offers (`no_action`) is an ordinary comment. Edited comments ask for nothing. A failure that isn't a refusal leaves the comment for the next pass, which reuses its key.
+
 ## Setup probes
 
 For [setup sessions](../setup-sessions/) the extension offers two probes (`extension.SetupProbes`). `github.accounts` runs `gh auth status --json hosts` and returns each account's host, login, active flag, token source and state, never the token. `github.repos` runs `gh repo list OWNER` for an owner that must be a GitHub login, and returns repository names.
