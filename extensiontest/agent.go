@@ -16,19 +16,23 @@ import (
 // fail the test.
 const Deadline = 30 * time.Second
 
-// Agent is the scripted agent of the scope Daemon generated: it plays its
-// turns in order, one each time the daemon starts or resumes a turn, of
-// any Work. Script it before starting the Work it serves:
+// Agent is the scripted participant of the scope Daemon generated: it
+// plays its turns in order, one each time the daemon launches it, of any
+// Work. By default it is a ScriptedShell on the shell executor, making each
+// call with the `os` CLI and ending each turn with an outcome; with
+// UseFakeClaude it is a FakeClaude on the claude-code executor. Script it
+// before starting the Work it serves:
 //
 //	agent := d.Agent().
-//		Call("weather.forecast", map[string]any{"city": "Leeds"}).Ends("help").
-//		Turn().Ends("finished")
+//		Call("weather.forecast", map[string]any{"city": "Leeds"}).
+//		Call("wait", map[string]any{"match": map[string]any{"types": []string{"weather.alert"}}}).Ends("waiting").
+//		Turn().Ends("completed")
 //
-// Each call goes through the toolbelt as an agent's would. A launch past
-// the last turn fails that turn.
+// Each call goes through the toolbelt as any participant's would. A launch
+// past the last turn fails that turn.
 type Agent struct {
 	d     *Instance
-	c     *Claude
+	dir   string
 	turns []Turn
 	open  bool
 }
@@ -38,7 +42,7 @@ type Agent struct {
 func (d *Instance) Agent() *Agent {
 	d.t.Helper()
 	if d.scope == nil {
-		d.t.Fatalf("extensiontest: Agent needs the scope Daemon generates from extensiontest.Package; with Options.Config, name a FakeClaude in your own binding; %s", docs)
+		d.t.Fatalf("extensiontest: Agent needs the scope Daemon generates from extensiontest.Package; with Options.Config, name a ScriptedShell or FakeClaude in your own binding; %s", docs)
 	}
 	return d.scope.agent
 }
@@ -59,9 +63,10 @@ func (a *Agent) Call(operation string, input any) *Agent {
 	return a.save()
 }
 
-// Ends ends the turn being scripted with state (finished, review, help,
-// ...), as the agent's structured status. With no turn open it scripts a
-// turn that makes no calls.
+// Ends ends the turn being scripted with state: for the default shell
+// participant the attempt's outcome (completed, failed or handoff, or
+// waiting after a wait call); with UseFakeClaude the structured status the
+// turn ends with. With no turn open it scripts a turn that makes no calls.
 func (a *Agent) Ends(state string) *Agent {
 	a.d.t.Helper()
 	if !a.open {
@@ -87,7 +92,7 @@ func (a *Agent) save() *Agent {
 	a.d.t.Helper()
 	b, err := json.Marshal(a.turns)
 	if err == nil {
-		err = os.WriteFile(filepath.Join(a.c.dir, "turns.json"), b, 0o600)
+		err = os.WriteFile(filepath.Join(a.dir, "turns.json"), b, 0o600)
 	}
 	if err != nil {
 		a.d.t.Fatal(err)
@@ -103,7 +108,7 @@ func (a *Agent) Played(n int) TurnRecord {
 	var r TurnRecord
 	a.d.Until(fmt.Sprintf("the agent to play turn %d", n), Deadline, func() bool {
 		var ok bool
-		r, ok = a.c.Turn(n)
+		r, ok = readTurn(a.dir, n)
 		return ok
 	})
 	return r

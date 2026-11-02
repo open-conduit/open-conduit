@@ -24,7 +24,8 @@ const (
 // so the test's author knows what to change.
 const docs = devscope.Docs
 
-// Option configures Daemon: Options, Package, Secret or Entry.
+// Option configures Daemon: Options, Package, Secret, Entry or
+// UseFakeClaude.
 type Option interface{ apply(*settings) }
 
 type settings struct {
@@ -32,6 +33,7 @@ type settings struct {
 	packages []string
 	secrets  []secret
 	entries  map[string]any
+	claude   bool
 }
 
 type secret struct{ name, value string }
@@ -58,7 +60,8 @@ func (f optionFunc) apply(s *settings) { f(s) }
 // Without Options.Config, Daemon generates one scope, ScopeID, for the
 // packages: an entry for each extension type a manifest declares (named
 // after its type, with config {} unless Entry gives one, and every Secret
-// selected), a binding AgentBinding running the scripted agent (Agent)
+// selected), a binding AgentBinding running the scripted agent (Agent: a
+// ScriptedShell on the shell executor, or a FakeClaude with UseFakeClaude)
 // granted every operation the manifests declare plus read_context, wait and
 // declare_outcome, a route for each route handler they declare, and a
 // manual route last. Options.Config is the escape hatch when a test needs
@@ -84,6 +87,15 @@ func Entry(typ string, config any) Option {
 		}
 		s.entries[typ] = config
 	})
+}
+
+// UseFakeClaude runs the generated scope's agent as a FakeClaude on a
+// claude-code binding (the MCP toolbelt, inject and resume) instead of the
+// default ScriptedShell on a shell binding. Use it to test a package
+// against an LLM executor's turns: Ends then takes the structured status
+// each turn ends with.
+func UseFakeClaude() Option {
+	return optionFunc(func(s *settings) { s.claude = true })
 }
 
 var (
@@ -131,11 +143,21 @@ type scope struct{ agent *Agent }
 // (devscope.Generate), its agent the scripted one.
 func (d *Instance) generate(set *settings, manifests []protocol.Manifest) {
 	d.t.Helper()
-	claude, err := FakeClaude(filepath.Join(d.root, "agent"))
-	if err != nil {
-		d.t.Fatal(err)
+	var o devscope.Options
+	dir := filepath.Join(d.root, "agent")
+	if set.claude {
+		claude, err := FakeClaude(dir)
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		o.Agent, o.AgentEnv = claude.Path, map[string]string{"CLAUDE_CONFIG_DIR": filepath.Join(d.root, "claude-config")}
+	} else {
+		shell, err := ScriptedShell(dir)
+		if err != nil {
+			d.t.Fatal(err)
+		}
+		o.Shell = []string{shell.Path}
 	}
-	o := devscope.Options{Agent: claude.Path, AgentEnv: map[string]string{"CLAUDE_CONFIG_DIR": filepath.Join(d.root, "claude-config")}}
 	for _, s := range set.secrets {
 		o.Secrets = append(o.Secrets, devscope.Secret{Name: s.name, Value: s.value})
 	}
@@ -154,7 +176,7 @@ func (d *Instance) generate(set *settings, manifests []protocol.Manifest) {
 		d.t.Fatalf("extensiontest: %v", err)
 	}
 	d.opts.Config, d.opts.Env = cfg, append(append([]string{}, d.opts.Env...), env...)
-	d.scope = &scope{agent: &Agent{d: d, c: claude}}
+	d.scope = &scope{agent: &Agent{d: d, dir: dir}}
 }
 
 // check runs `config check` on the generated config, so a refusal names
