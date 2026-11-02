@@ -166,7 +166,9 @@ func TestRequestBeforeServerIsBuilt(t *testing.T) {
 // through, a plan parks the caller, and a refusal crosses as the gate's own
 // operation error.
 func TestOperationGateOverTheWire(t *testing.T) {
-	ext := (&sdk.Extension{Manifest: manifest()}).OperationGate(func(_ context.Context, a extension.Authority, c extension.GateCall) (*extension.WaitPlan, error) {
+	m := manifest()
+	m.Permissions = []string{protocol.PermissionOperationGate}
+	ext := (&sdk.Extension{Manifest: m}).OperationGate(func(_ context.Context, a extension.Authority, c extension.GateCall) (*extension.WaitPlan, error) {
 		switch c.Operation {
 		case "acme.read":
 			return nil, nil
