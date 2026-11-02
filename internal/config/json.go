@@ -114,11 +114,22 @@ func decode(data []byte) (*node, []Diagnostic) {
 		}
 	}
 	if err != nil {
-		msg := "invalid JSON; fix the document syntax"
+		// The decoder stops at the problem: a syntax error's offset is
+		// just past the offending byte; anything else (trailing data) is
+		// where reading stopped.
+		offset := d.dec.InputOffset()
+		what := "invalid JSON"
 		var syntax *json.SyntaxError
-		if errors.As(err, &syntax) {
-			msg = fmt.Sprintf("invalid JSON near byte %d; fix the document syntax", syntax.Offset)
+		switch {
+		case errors.As(err, &syntax) && syntax.Error() == "unexpected end of JSON input", errors.Is(err, io.ErrUnexpectedEOF):
+			what, offset = "invalid JSON: the document ends early", int64(len(bytes.TrimRight(data, " \t\r\n")))
+		case syntax != nil:
+			what, offset = "invalid JSON: "+syntax.Error(), max(syntax.Offset-1, 0)
+		case err.Error() == "trailing data":
+			what = "invalid JSON: more follows the end of the document"
 		}
+		line, col := lineColumn(data, offset)
+		msg := fmt.Sprintf("%s at line %d, column %d; fix the document syntax", what, line, col)
 		return nil, []Diagnostic{{"", "invalid_json", msg}}
 	}
 	return n, d.diags
@@ -199,7 +210,7 @@ func (c *checker) object(n *node, path string, required []string, optional ...st
 	}
 	for _, k := range n.keys {
 		if !slices.Contains(required, k) && !slices.Contains(optional, k) {
-			c.fail(ptr(path, k), "unknown_field", "unknown field; remove it")
+			c.fail(ptr(path, k), "unknown_field", unknownField(k, append(slices.Clone(required), optional...)))
 		}
 	}
 	for _, k := range required {
