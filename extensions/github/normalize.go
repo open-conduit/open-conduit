@@ -726,11 +726,18 @@ func (n *normalizer) commentObservation(kind string, number int, c rawComment, k
 		updated = created
 	case KindReviewComment:
 		item = parent + "/review_comment/" + strconv.FormatInt(c.ID, 10)
+		// An inline comment is observed where it was made: commit_id and
+		// line follow the PR's head, so a push that moves the anchor would
+		// otherwise be a new version of an unchanged comment and hand it to
+		// the agent again (#402).
 		p.Path, p.InReplyTo, p.CommitID = c.Path, c.InReplyTo, c.CommitID
-		if c.Line != nil {
-			p.Line = *c.Line
-		} else if c.OriginalLine != nil {
+		if c.OriginalCommitID != "" {
+			p.CommitID = c.OriginalCommitID
+		}
+		if c.OriginalLine != nil {
 			p.Line = *c.OriginalLine
+		} else if c.Line != nil {
+			p.Line = *c.Line
 		}
 	}
 	if updated.IsZero() {
