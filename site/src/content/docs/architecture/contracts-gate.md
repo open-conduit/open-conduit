@@ -17,7 +17,7 @@ make cross-build
 
 `make check` checks formatting without modifying files, vets (including the `faultinject` build of the composition root), race-tests all packages (including the daemon drills in `integration/`), checks the resolved production/test import graph, validates the configuration schema/examples, checks the documentation examples (`make docs-check`), builds both binaries and smoke-checks help/version and that unknown or incomplete commands exit with code 2. It does not install dependencies or use the network. `make fmt` formats Go sources; `make build` writes ignored `bin/open-conduit` and `bin/os`. Set `CONFIG_PYTHON=/path/to/venv/bin/python` to reuse an existing checker environment; `make config-deps` bootstraps the ignored `.venv-contracts/` otherwise. Build metadata uses `VERSION` and `COMMIT`, with local defaults `dev` and the current short revision.
 
-`make docs-check` checks the user-facing documents, including every page of the docs site: complete example configs (`json` code blocks containing `"version"`) pass offline validation, every `open-conduit` command in an `sh` code block exists with the flags it uses, and every `make` target shown is in the Makefile.
+`make docs-check` checks the user-facing documents, including every page of the docs site: complete example configs (`json` code blocks containing `"version"`) pass offline validation without a warning from `config check` (all but the one for a `cmd:` secret whose program isn't installed, which depends on the machine), every `open-conduit` command in an `sh` code block exists with the flags it uses, and every `make` target shown is in the Makefile.
 
 Other targets run evidence that `make check` does not show on its own:
 
@@ -105,3 +105,4 @@ All five commands passed locally on macOS arm64 with Go 1.27.3, including a sepa
 - `make protocol-prototype` (07-01), `make packages` and `make certify` (07-03) were added for the extension protocol work.
 - `make release-snapshot` (09-03) added release packaging without publishing.
 - `make docs-check` added the documentation example checks, and CI gained change detection so docs-only pull requests skip builds and tests.
+- `make docs-check` fails on an example config that `config check` warns about, not only one it rejects, so an example can't teach a deprecated setting.

@@ -87,7 +87,7 @@ Each workflow is a scope in the config. The example below is a complete, minimal
           "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
                          "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
           "secret_names": [],
-          "config": {"branch": "agent/issue-{number}"},
+          "config": {"playbook": "work-issue", "branch": "agent/issue-{number}"},
           "resource": {"provider": "git", "config": {"checkout": "/path/to/web", "mode": "work"}}
         }
       ]
