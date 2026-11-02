@@ -211,7 +211,12 @@ func TestDaemonTrackersAndPostHog(t *testing.T) {
 	for _, c := range report.Checks {
 		codes[c.Name] = c.Code
 	}
-	if codes["trackers"] != "ok" || codes["trackers_auth"] != "verified" || codes["posthog"] != "ok" || codes["posthog_auth"] != "verified" {
+	for _, typ := range []string{"linear", "jira", "bitbucket"} {
+		if codes[typ] != "ok" || codes[typ+"_auth"] != "verified" {
+			t.Fatalf("doctor %s: %+v", typ, report.Checks)
+		}
+	}
+	if codes["posthog"] != "ok" || codes["posthog_auth"] != "verified" {
 		t.Fatalf("doctor: %+v", report.Checks)
 	}
 	// Route explanation agrees with execution: the claim and the inputs are

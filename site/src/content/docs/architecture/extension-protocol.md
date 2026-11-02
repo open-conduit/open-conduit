@@ -71,7 +71,7 @@ The table groups what the first-party code actually does across the host boundar
 Some couplings exist only as bootstrap glue between first-party packages. They have no protocol equivalent, because a subprocess extension may depend on another only through events, correlation keys and public state reads:
 
 - GitHub `job:` waits resolve schedule job keys through the extensions that implement `inproc.Targeter` (in process only until a wire method carries it; #357 lists it in `parityGaps`). The schedule translator reads `github.delivery.v1` payloads from the event log by their public schema, without importing the GitHub extension;
-- Bitbucket reads the tracker's reopen generations;
+- Bitbucket reads the tracker's reopen generations through the tracker kit's in-process registry (`tracker.Generation`), which both link;
 - bootstrap parses Slack thread keys for the socket's active-thread filter. That one can move into the extension as a `state.works` read.
 
 These stay in-process, which the design allows: first-party extensions run in-process behind the public interfaces. They also decide which first-party integrations can run as a subprocess package without change.

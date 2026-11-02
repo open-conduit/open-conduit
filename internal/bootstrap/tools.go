@@ -13,7 +13,6 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	slplaybooks "github.com/open-conduit/open-conduit/extensions/slack/playbooks"
-	trackerplaybooks "github.com/open-conduit/open-conduit/extensions/tracker/playbooks"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
@@ -45,7 +44,7 @@ func (d *daemon) openTools() error {
 	if d.slackTools, err = sl.NewTools(sl.ToolsOptions{Store: d.coord, Sources: d.slackSourcesList, Now: d.now}); err != nil {
 		return err
 	}
-	return d.openTrackerTools()
+	return nil
 }
 
 // registerTools adds the extension operations to a generation's toolbelt.
@@ -53,10 +52,7 @@ func (d *daemon) registerTools(belt *runtime.Toolbelt) error {
 	if err := belt.Register(d.tools.Registration()); err != nil {
 		return err
 	}
-	if err := belt.Register(d.slackTools.Registration()); err != nil {
-		return err
-	}
-	return d.registerTrackerTools(belt)
+	return belt.Register(d.slackTools.Registration())
 }
 
 // authorizeAlias is the B04 cross-scope dependency ceiling: the waiting
@@ -97,9 +93,6 @@ func (d *daemon) preparePlaybooks() error {
 		return err
 	}
 	books := slplaybooks.All()
-	for name, text := range trackerplaybooks.All() {
-		books[name] = text
-	}
 	d.inprocPlaybooks(books)
 	for name, text := range books {
 		dir := filepath.Join(d.pluginDir(), "skills", name)

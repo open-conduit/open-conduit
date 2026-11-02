@@ -289,7 +289,7 @@ var compositionExceptions = map[string][]string{
 	"capacity.go":   {"extensions/github", "extensions/schedule"},
 	"claudecode.go": {"executors/claudecode", "extensions/github"},
 	"container.go":  {"extensions/docker", "extensions/ssh"},
-	"daemon.go":     {"executors/shell", "extensions/bitbucket", "extensions/git", "extensions/github", "extensions/schedule", "extensions/slack", "extensions/tracker"},
+	"daemon.go":     {"executors/shell", "extensions/git", "extensions/github", "extensions/schedule", "extensions/slack"},
 	"github.go":     {"extensions/github"},
 	"operator.go":   {"executors/claudecode", "executors/shell", "extensions/github", "extensions/github/playbooks", "extensions/jira", "extensions/linear", "extensions/schedule", "extensions/slack"},
 	"probes.go":     {"executors/claudecode", "extensions/github"},
@@ -298,8 +298,7 @@ var compositionExceptions = map[string][]string{
 	"sandbox.go":    {"extensions/srt"},
 	"slack.go":      {"extensions/slack"},
 	"state.go":      {"extensions/posthog"},
-	"tools.go":      {"executors/claudecode", "extensions/github", "extensions/github/playbooks", "extensions/slack", "extensions/slack/playbooks", "extensions/tracker/playbooks"},
-	"trackers.go":   {"extensions/bitbucket", "extensions/jira", "extensions/linear", "extensions/tracker"},
+	"tools.go":      {"executors/claudecode", "extensions/github", "extensions/github/playbooks", "extensions/slack", "extensions/slack/playbooks"},
 	"webhooks.go":   {"extensions/github", "extensions/slack", "extensions/tunnel"},
 }
 

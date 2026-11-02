@@ -35,12 +35,10 @@ import (
 	"github.com/open-conduit/open-conduit/executors/shell"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
-	bb "github.com/open-conduit/open-conduit/extensions/bitbucket"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
-	"github.com/open-conduit/open-conduit/extensions/tracker"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -150,39 +148,36 @@ type daemon struct {
 	configHandles configHandles
 	// defaultDoc is the first-run setup's configuration (DefaultConfig),
 	// built once the packages have started.
-	defaultDoc     []byte
-	log            *slog.Logger
-	now            func() time.Time
-	owner          string
-	coord          storage.Store
-	artifacts      *artifacts.Store
-	backups        backupState
-	shell          *shell.Executor
-	executors      map[string]extension.Executor
-	inproc         []inproc.Extension
-	configs        *management.ConfigService
-	resolver       *config.Resolver
-	pipeline       *telemetry.Pipeline
-	ingress        *runtime.Ingress
-	github         githubSources
-	slack          slackSources
-	trackers       trackerSources
-	telemetry      telemetryFanout
-	telemetryFile  *rotatingLog
-	resources      resourceState
-	sandboxes      sandboxState
-	containers     containerState
-	claude         claudeState
-	hooks          webhookState
-	tools          *gh.Tools
-	slackTools     *sl.Tools
-	trackerTools   map[string]*tracker.Tools
-	bitbucketTools *bb.Tools
-	external       externalState
-	endpoint       string
-	endpoints      *management.Endpoints
-	cursorKey      []byte
-	current        atomic.Pointer[components]
+	defaultDoc    []byte
+	log           *slog.Logger
+	now           func() time.Time
+	owner         string
+	coord         storage.Store
+	artifacts     *artifacts.Store
+	backups       backupState
+	shell         *shell.Executor
+	executors     map[string]extension.Executor
+	inproc        []inproc.Extension
+	configs       *management.ConfigService
+	resolver      *config.Resolver
+	pipeline      *telemetry.Pipeline
+	ingress       *runtime.Ingress
+	github        githubSources
+	slack         slackSources
+	telemetry     telemetryFanout
+	telemetryFile *rotatingLog
+	resources     resourceState
+	sandboxes     sandboxState
+	containers    containerState
+	claude        claudeState
+	hooks         webhookState
+	tools         *gh.Tools
+	slackTools    *sl.Tools
+	external      externalState
+	endpoint      string
+	endpoints     *management.Endpoints
+	cursorKey     []byte
+	current       atomic.Pointer[components]
 
 	ctx      context.Context
 	mu       sync.Mutex
@@ -456,7 +451,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	snapshot, generation := d.configs.Current()
 	d.registerGitHub(ctx, snapshot)
-	d.registerTrackers(ctx, snapshot)
 	d.registerSlack(ctx, snapshot)
 	d.publishGeneration(snapshot, generation)
 	c, err := d.build(snapshot, generation)
@@ -477,7 +471,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 		}
 		d.current.Store(next)
 		d.registerGitHub(d.ctx, s)
-		d.registerTrackers(d.ctx, s)
 		d.registerSlack(d.ctx, s)
 		d.publishGeneration(s, g)
 		d.configureExtensions(d.ctx)
@@ -621,7 +614,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	}
 	c.control = control
 	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Titles: d.titles, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: d.checks(),
-		DeepChecks: append(append([]func(context.Context) runtime.Check{}, d.inprocChecks(true)...), d.trackerAuthCheck, d.slackAuthCheck), Capacity: d.capacityPools, Annotate: d.annotate, Actions: d.actions, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
+		DeepChecks: append(append([]func(context.Context) runtime.Check{}, d.inprocChecks(true)...), d.slackAuthCheck), Capacity: d.capacityPools, Annotate: d.annotate, Actions: d.actions, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -634,7 +627,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.trackerCheck, d.slackCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.extensionCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.slackCheck, d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.extensionCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency
