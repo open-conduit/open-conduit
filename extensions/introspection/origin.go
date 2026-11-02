@@ -46,7 +46,18 @@ func PutOriginInTx(tx storage.Tx, accepted domain.AcceptedEvent, r Report) error
 	if err != nil {
 		return err
 	}
-	return tx.Put(Namespace, recordKey(domain.ID(r.Scope), accepted.Sequence, r.ID), value)
+	seq := accepted.Sequence
+	if seq == 0 {
+		// Accepted as a returned emission (a package), the Event gets its
+		// sequence only at commit: key the record after the latest one, so
+		// it still lists after every earlier report.
+		latest, err := tx.LatestSequence()
+		if err != nil {
+			return err
+		}
+		seq = latest + 1
+	}
+	return tx.Put(Namespace, recordKey(domain.ID(r.Scope), seq, r.ID), value)
 }
 
 // recoverAt is the share of a threshold a reading must fall back under

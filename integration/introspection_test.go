@@ -599,3 +599,31 @@ func TestExtensionOriginatedReportChain(t *testing.T) {
 	}
 	e.finish(tr)
 }
+
+// A host-watch report accepted as a returned emission (introspection as a
+// package) has no sequence until commit; its record still lists after
+// every earlier report (#428).
+func TestOriginReportWithoutASequenceListsLast(t *testing.T) {
+	e := newIntrospectionEnv(t, runtime.CausalLimits{}, map[string]any{"host_watch": map[string]any{}})
+	put := func(alert is.HostAlert, unsequenced bool) {
+		ev, rep := is.HostReport(repScope, alert, e.clock.Now())
+		if err := e.store.Transact(context.Background(), storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
+			accepted, ok, err := runtime.AcceptInTx(tx, repScope, ev)
+			if err != nil || !ok {
+				return err
+			}
+			if unsequenced {
+				accepted.Sequence = 0
+			}
+			return is.PutOriginInTx(tx, accepted, rep)
+		}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	put(is.HostAlert{Metric: "disk", Path: "/", Value: 95, Threshold: 90, Over: true}, false)
+	put(is.HostAlert{Metric: "memory", Value: 97, Threshold: 90, Over: true}, true)
+	reports := e.reports(repScope)
+	if len(reports) != 2 || !strings.Contains(reports[0].Title, "disk") || !strings.Contains(reports[1].Title, "memory") {
+		t.Fatalf("reports, oldest first: %+v", reports)
+	}
+}
