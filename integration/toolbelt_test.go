@@ -523,7 +523,7 @@ func TestProductionToolbeltGateSkipsItsOwnOperations(t *testing.T) {
 	h := newToolbeltHarness(t, "persistent")
 	ctx := context.Background()
 	var asked []string
-	belt, err := runtime.NewToolbelt(h.f.Store, h.f.Clock.Now, h.f.Driver.(*schedulerDriver).router, runtime.ToolbeltOptions{})
+	belt, err := runtime.NewToolbelt(h.f.Store, h.f.Clock.Now, h.f.Driver.(*schedulerDriver).Router, runtime.ToolbeltOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}
