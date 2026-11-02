@@ -171,6 +171,7 @@ This first step doesn't include `wait` and `emit` operations, routes, ingress or
 - [`protocol/examples/runner`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/runner): an executor with detached jobs, inject, interrupt, stop and forget.
 - [`protocol/examples/weather`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/weather): an extension in TypeScript, with one operation answered from its scope's config and a lookup count in host KV.
 - [`packages/slack`](https://github.com/open-conduit/open-conduit/tree/main/packages/slack) and [`packages/shell`](https://github.com/open-conduit/open-conduit/tree/main/packages/shell): real first-party workloads packaged.
+- [`packages/codex`](https://github.com/open-conduit/open-conduit/tree/main/packages/codex): the Codex CLI executor, which exists only as a package and is bundled with the release ([Codex executor](../codex-executor/)).
 
 ## Package layout
 
