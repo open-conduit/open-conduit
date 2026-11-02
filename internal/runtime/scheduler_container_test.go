@@ -1,4 +1,4 @@
-package integration_test
+package runtime_test
 
 import (
 	"context"
@@ -32,7 +32,7 @@ func (pinningContainers) Adopt(context.Context, bool) (extension.ContainerExit, 
 // the attempt before any executor call.
 func TestProductionSchedulerContainerHook(t *testing.T) {
 	f, executor := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
-	executor.onRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	executor.OnRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		if r.Context.Container != nil {
 			if _, err := r.Context.Container.Launch(ctx, extension.SandboxNeeds{}, extension.SandboxLaunch{Argv: []string{"x"}}); err != nil {
 				return nil, err
@@ -41,13 +41,13 @@ func TestProductionSchedulerContainerHook(t *testing.T) {
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
-		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
 	}
-	executor.onRecover = func(_ context.Context, r extension.RunRequest, state domain.Payload) (extension.RunHandle, error) {
+	executor.OnRecover = func(_ context.Context, r extension.RunRequest, state domain.Payload) (extension.RunHandle, error) {
 		if err := r.PersistRecovery(state); err != nil {
 			return nil, err
 		}
-		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
 	}
 	contained, broken := seedSchedulerWork(t, f, "contained"), seedSchedulerWork(t, f, "broken")
 	var recovering []runtime.AttemptState
@@ -94,10 +94,10 @@ func TestProductionSchedulerContainerHook(t *testing.T) {
 	if err != nil || done.Result == nil || done.Result.Outcome.Summary != "interrupted" {
 		t.Fatalf("result %+v %v, want the host's Settle applied", done.Result, err)
 	}
-	before := len(executor.runs)
+	before := len(executor.Runs)
 	b, err := s.Start(context.Background(), broken)
-	if !errors.Is(err, extension.ErrSandboxUnavailable) || len(executor.runs) != before {
-		t.Fatalf("broken container: %v (runs %d -> %d)", err, before, len(executor.runs))
+	if !errors.Is(err, extension.ErrSandboxUnavailable) || len(executor.Runs) != before {
+		t.Fatalf("broken container: %v (runs %d -> %d)", err, before, len(executor.Runs))
 	}
 	failed, err := s.InspectAttempt(context.Background(), b.Lease.ExecutionID)
 	if err != nil || failed.Result == nil || failed.Result.Outcome.Summary != "container unavailable" || !failed.Excluded {

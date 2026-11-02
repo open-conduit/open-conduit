@@ -1,10 +1,9 @@
-package integration_test
+package runtime_test
 
 import (
 	"context"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"reflect"
 	"sync"
 	"testing"
@@ -14,181 +13,9 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/runtime"
-	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// Each transaction gets an independent SQLite handle, without a test-level
-// mutex that could conceal cross-instance coordination problems.
-type routingReopening struct{ path string }
-
-func (s *routingReopening) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
-	db, err := sqlite.Open(ctx, s.path)
-	if err != nil {
-		return err
-	}
-	err = db.Transact(ctx, g, fn)
-	closeErr := db.Close()
-	if err != nil {
-		return err
-	}
-	return closeErr
-}
-
-// Fixture controls must never be invoked by routing: this ticket persists
-// intents only. Advertising a capability also requires its concrete interface.
-type routingFixtureExecutor struct{ caps domain.Capabilities }
-
-func (e routingFixtureExecutor) Capabilities() domain.Capabilities {
-	c := e.caps
-	if c.Toolbelt == "" {
-		c.Toolbelt = extension.ToolbeltNone
-	}
-	return c
-}
-func (routingFixtureExecutor) Run(context.Context, extension.RunRequest) (extension.RunHandle, error) {
-	return nil, errRoutingFixtureUnsupported
-}
-func (routingFixtureExecutor) Recover(context.Context, extension.RunRequest, domain.Payload) (extension.RunHandle, error) {
-	return nil, errRoutingFixtureUnsupported
-}
-func (routingFixtureExecutor) Resume(context.Context, extension.RunRequest, domain.Payload) (extension.RunHandle, error) {
-	return nil, errRoutingFixtureUnsupported
-}
-func (routingFixtureExecutor) Inject(context.Context, domain.ID, domain.Event) error {
-	return errRoutingFixtureUnsupported
-}
-func (routingFixtureExecutor) Interrupt(context.Context, domain.ID) error {
-	return errRoutingFixtureUnsupported
-}
-
-// These shared cases exercise the production router and lifecycle. Start only
-// installs a fixture execution through the public storage contract: production
-// scheduling, dispatch, waits and recovery are delivered by subsequent tickets.
-type routingDriver struct {
-	store   storage.Store
-	clock   *conformance.Clock
-	router  *runtime.Router
-	ingress *runtime.Ingress
-	initErr error
-}
-
-func (d *routingDriver) Accept(e domain.Event) error {
-	if d.initErr != nil {
-		return d.initErr
-	}
-	_, _, err := d.ingress.Accept(context.Background(), "routing-scope", e)
-	return err
-}
-func (d *routingDriver) Route(id domain.ID) error {
-	if d.initErr != nil {
-		return d.initErr
-	}
-	return d.router.Route(context.Background(), id)
-}
-func (d *routingDriver) Complete(ref domain.LeaseRef) error {
-	return d.router.Complete(context.Background(), ref)
-}
-func (d *routingDriver) Cancel(id domain.ID) error { return d.router.Cancel(context.Background(), id) }
-func (d *routingDriver) Start(id domain.ID) (ref domain.LeaseRef, err error) {
-	if d.initErr != nil {
-		return ref, d.initErr
-	}
-	err = d.store.Transact(context.Background(), storage.Guard{Now: d.clock.Now()}, func(tx storage.Tx) error {
-		w, e := tx.Work(id)
-		if e != nil {
-			return e
-		}
-		if w.State != domain.WorkReady {
-			return storage.ErrConflict
-		}
-		inputs, e := runtime.PendingInputsInTx(tx, id)
-		if e != nil {
-			return e
-		}
-		if len(inputs) == 0 {
-			return storage.ErrInvalid
-		}
-		xs, e := tx.ListExecutions(id)
-		if e != nil {
-			return e
-		}
-		var attempt uint32
-		for _, x := range xs {
-			if x.Attempt > attempt {
-				attempt = x.Attempt
-			}
-		}
-		xid := domain.ID(fmt.Sprintf("%s/fixture-attempt/%d", id, attempt+1))
-		if e = tx.PutExecution(domain.Execution{ID: xid, WorkID: id, Attempt: attempt + 1, State: domain.ExecutionPending, ExecutorBinding: "fixture", TriggerID: inputs[0].EventID}, 0); e != nil {
-			return e
-		}
-		ref, e = tx.Claim(xid, "fixture-owner", time.Minute)
-		if e != nil {
-			return e
-		}
-		_, e = runtime.ConsumeInputsInTx(tx, id, xid)
-		return e
-	})
-	return
-}
-
-var errRoutingFixtureUnsupported = errors.New("routing fixture has no scheduler/wait/recovery implementation")
-
-func (*routingDriver) Wait(domain.LeaseRef, domain.Wait, bool) error {
-	return errRoutingFixtureUnsupported
-}
-func (*routingDriver) Wake(domain.ID) error                   { return errRoutingFixtureUnsupported }
-func (*routingDriver) Fail(domain.LeaseRef) error             { return errRoutingFixtureUnsupported }
-func (*routingDriver) Retry(domain.ID, domain.ID, bool) error { return errRoutingFixtureUnsupported }
-func (*routingDriver) Recover(domain.ID, bool) (domain.LeaseRef, error) {
-	return domain.LeaseRef{}, errRoutingFixtureUnsupported
-}
-func (*routingDriver) Derive(domain.Event) error { return errRoutingFixtureUnsupported }
-
-func routingFixture(t *testing.T, mode string, o conformance.RuntimeOptions) conformance.RuntimeFixture {
-	t.Helper()
-	path := filepath.Join(t.TempDir(), "routing.db")
-	var backend storage.Store
-	if mode == "reopen" {
-		backend = &routingReopening{path: path}
-	} else if mode == "instrumented" {
-		backend = instrumentedBackend(t, path)
-	} else {
-		db, err := sqlite.Open(context.Background(), path)
-		if err != nil {
-			t.Fatal(err)
-		}
-		t.Cleanup(func() { _ = db.Close() })
-		backend = db
-	}
-	clock := conformance.NewClock()
-	handlers := map[string]extension.RouteHandler{}
-	routes := make([]domain.Route, len(o.Routes))
-	for i, r := range o.Routes {
-		routes[i] = r.Route
-		routes[i].Handler = fmt.Sprintf("handler-%d", i)
-		if routes[i].Binding == "" {
-			routes[i].Binding = "fixture"
-		}
-		handlers[routes[i].Handler] = r.Handler
-	}
-	if err := backend.Transact(context.Background(), storage.Guard{Now: clock.Now()}, func(tx storage.Tx) error {
-		return tx.PutScope(domain.Scope{ID: "routing-scope", Name: "routing", Routes: routes, Bindings: []domain.Binding{{Name: "fixture", Executor: "fixture"}}}, 0)
-	}); err != nil {
-		t.Fatal(err)
-	}
-	options := runtime.RouterOptions{Generation: "fixture-generation", Handlers: handlers, CausalLimits: runtime.CausalLimits{MaxDepth: o.MaxDepth, PerMinute: o.PerMinute}, Bindings: map[string]runtime.RouteBinding{"fixture": {Capabilities: o.Capabilities, Fallback: o.Fallback, Executor: routingFixtureExecutor{o.Capabilities}}}}
-	makeDriver := func() *routingDriver {
-		r, err := runtime.NewRouter(backend, clock.Now, options)
-		i, ie := runtime.NewIngress(backend, clock.Now, runtime.IngressOptions{})
-		if err == nil {
-			err = ie
-		}
-		return &routingDriver{store: backend, clock: clock, router: r, ingress: i, initErr: err}
-	}
-	return conformance.RuntimeFixture{Driver: makeDriver(), Store: backend, Clock: clock, Restart: func() conformance.RuntimeDriver { return makeDriver() }}
-}
 func TestProductionRoutingSharedCases(t *testing.T) {
 	selected := map[string]bool{"concurrent_correlations_and_attempts": true, "independent_work_progress": true, "first_match_replay_and_drop_audit": true, "multi_key_attachment_conflict_and_order": true, "uncorrelated_and_terminal_successor": true, "scope_route_inheritance": true, "unsupported_policy_explicit_fallback": true, "completion_inject_orders": true, "unmatched_and_contradictory_target": true}
 	for _, mode := range []string{"persistent", "reopen"} {
@@ -204,43 +31,6 @@ func TestProductionRoutingSharedCases(t *testing.T) {
 				})
 			}
 		})
-	}
-}
-
-type routingHandlerFunc func(extension.RouteInput) (extension.RouteDecision, error)
-
-func (f routingHandlerFunc) Match(_ context.Context, in extension.RouteInput) (extension.RouteDecision, error) {
-	return f(in)
-}
-func routingDecision(in extension.RouteInput) (extension.RouteDecision, error) {
-	id := domain.ID("work/" + string(in.Event.Event.ID))
-	if in.Event.Event.CorrelationKey != nil {
-		id = domain.ID("work/" + in.Event.Event.CorrelationKey.ExternalID)
-	}
-	return extension.RouteDecision{Match: true, CreateID: id, Kind: "fixture.work"}, nil
-}
-func routingOptions(handler extension.RouteHandler, policy string) conformance.RuntimeOptions {
-	return conformance.RuntimeOptions{Routes: []conformance.RuntimeRoute{{Route: domain.Route{Name: "default", ActivePolicy: policy}, Handler: handler}}}
-}
-func routingEvent(f conformance.RuntimeFixture, id string, key *domain.CorrelationKey) domain.Event {
-	return domain.Event{ID: domain.ID(id), Type: "fixture.changed", Source: "fixture/account", DeliveryID: id, OccurredAt: f.Clock.Now(), ReceivedAt: f.Clock.Now(), CorrelationKey: key}
-}
-func requireRoute(t *testing.T, d conformance.RuntimeDriver, id domain.ID) {
-	t.Helper()
-	if err := d.Route(id); err != nil {
-		t.Fatal(err)
-	}
-}
-func requireAccept(t *testing.T, f conformance.RuntimeFixture, id string, key *domain.CorrelationKey) {
-	t.Helper()
-	if err := f.Driver.Accept(routingEvent(f, id, key)); err != nil {
-		t.Fatal(err)
-	}
-}
-func routingRead(t *testing.T, f conformance.RuntimeFixture, fn func(storage.Tx) error) {
-	t.Helper()
-	if err := conformance.RuntimeRead(f, fn); err != nil {
-		t.Fatal(err)
 	}
 }
 
@@ -301,7 +91,7 @@ func TestProductionRoutingAttachmentBacklogAndReplay(t *testing.T) {
 	})
 	f.Driver = f.Restart()
 	requireRoute(t, f.Driver, "attach")
-	inputs, err := f.Driver.(*routingDriver).router.PendingInputs(context.Background(), "work/primary")
+	inputs, err := f.Driver.(*routingDriver).Router.PendingInputs(context.Background(), "work/primary")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -564,7 +354,7 @@ func TestProductionRoutingAttachmentDoesNotResurrectCheckpointedEvent(t *testing
 		}
 		return err
 	})
-	inputs, err := f.Driver.(*routingDriver).router.PendingInputs(context.Background(), "work/primary")
+	inputs, err := f.Driver.(*routingDriver).Router.PendingInputs(context.Background(), "work/primary")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -592,7 +382,7 @@ func TestProductionRoutingDurableControlIntentIdentity(t *testing.T) {
 			requireRoute(t, f.Driver, "control")
 			f.Driver = f.Restart()
 			requireRoute(t, f.Driver, "control")
-			router := f.Driver.(*routingDriver).router
+			router := f.Driver.(*routingDriver).Router
 			intents, err := router.Intents(context.Background(), "work/control")
 			if err != nil {
 				t.Fatal(err)
@@ -679,13 +469,13 @@ func TestProductionRoutingScopeBindingOverrideUsesInstalledExecutor(t *testing.T
 		return tx.PutScope(s, s.Revision)
 	})
 	router, err := runtime.NewRouter(f.Store, f.Clock.Now, runtime.RouterOptions{Generation: "override-generation", Handlers: map[string]extension.RouteHandler{"handler-0": h}, Bindings: map[string]runtime.RouteBinding{
-		"supports-inject": {Capabilities: domain.Capabilities{Inject: true}, Executor: routingFixtureExecutor{domain.Capabilities{Inject: true}}},
+		"supports-inject": {Capabilities: domain.Capabilities{Inject: true}, Executor: routingFixtureExecutor{Caps: domain.Capabilities{Inject: true}}},
 		"queue-only":      {Fallback: "drop", Executor: routingFixtureExecutor{}},
 	}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.Driver.(*routingDriver).router = router
+	f.Driver.(*routingDriver).Router = router
 	requireAccept(t, f, "initial", &key)
 	requireRoute(t, f.Driver, "initial")
 	if _, err = f.Driver.Start("work/override"); err != nil {
@@ -746,7 +536,7 @@ func TestProductionSuccessorPreservesAcceptedTargetScope(t *testing.T) {
 	f := routingFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	routingRead(t, f, func(tx storage.Tx) error { return tx.PutScope(domain.Scope{ID: "other-scope", Name: "other"}, 0) })
 	driver := f.Driver.(*routingDriver)
-	if _, _, err := driver.ingress.Accept(context.Background(), "other-scope", routingEvent(f, "foreign-target", &key)); err != nil {
+	if _, _, err := driver.Ingress.Accept(context.Background(), "other-scope", routingEvent(f, "foreign-target", &key)); err != nil {
 		t.Fatal(err)
 	}
 	// Ownership can be established after an unresolved acceptance. That cannot
@@ -754,11 +544,11 @@ func TestProductionSuccessorPreservesAcceptedTargetScope(t *testing.T) {
 	routingRead(t, f, func(tx storage.Tx) error {
 		return tx.PutWork(domain.Work{ID: "old", Kind: "fixture.work", ScopeID: "routing-scope", State: domain.WorkReady, CorrelationKeys: []domain.CorrelationKey{key}}, 0)
 	})
-	if err := driver.router.Cancel(context.Background(), "old"); err != nil {
+	if err := driver.Router.Cancel(context.Background(), "old"); err != nil {
 		t.Fatal(err)
 	}
 	successorKey := domain.CorrelationKey{Source: key.Source, ExternalID: key.ExternalID + "/generation/2"}
-	_, err := driver.router.CreateSuccessor(context.Background(), "old", "foreign-target", runtime.ChildRequest{ID: "successor", Kind: "fixture.work", Keys: []domain.CorrelationKey{successorKey}})
+	_, err := driver.Router.CreateSuccessor(context.Background(), "old", "foreign-target", runtime.ChildRequest{ID: "successor", Kind: "fixture.work", Keys: []domain.CorrelationKey{successorKey}})
 	if !errors.Is(err, storage.ErrConflict) && !errors.Is(err, storage.ErrInvalid) {
 		t.Fatalf("successor escaped immutable acceptedtarget scope: %v", err)
 	}
@@ -796,7 +586,7 @@ func TestProductionRoutingControlBindingMismatchUsesExplicitFallback(t *testing.
 	}
 	requireAccept(t, f, "active", &key)
 	requireRoute(t, f.Driver, "active")
-	router := f.Driver.(*routingDriver).router
+	router := f.Driver.(*routingDriver).Router
 	decision, err := router.Decision(context.Background(), "active")
 	if err != nil {
 		t.Fatal(err)

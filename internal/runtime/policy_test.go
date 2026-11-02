@@ -1,4 +1,4 @@
-package integration_test
+package runtime_test
 
 import (
 	"context"
@@ -16,7 +16,7 @@ func TestSchedulerRetryPolicyPinnedAcrossGeneration(t *testing.T) {
 	ctx := context.Background()
 	f, executor := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	work := seedSchedulerWork(t, f, "retry-policy-pin")
-	original := f.Driver.(*schedulerDriver).scheduler
+	original := f.Driver.(*schedulerDriver).Scheduler
 	first, err := original.Start(ctx, work)
 	if err != nil {
 		t.Fatal(err)
@@ -85,15 +85,15 @@ func TestSchedulerRetryPolicyConfigurationBounds(t *testing.T) {
 	for i := range options.Retry.Delays {
 		options.Retry.Delays[i] = time.Second
 	}
-	if _, err := runtime.NewScheduler(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).router, options); err != nil {
+	if _, err := runtime.NewScheduler(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).Router, options); err != nil {
 		t.Fatalf("B05's hundred-delay maximum rejected: %v", err)
 	}
 	options.Retry = runtime.RetryPolicy{MaxAttempts: 102}
-	if _, err := runtime.NewScheduler(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).router, options); !errors.Is(err, storage.ErrInvalid) {
+	if _, err := runtime.NewScheduler(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).Router, options); !errors.Is(err, storage.ErrInvalid) {
 		t.Fatalf("unbounded attempt policy accepted: %v", err)
 	}
 	options.Retry = runtime.RetryPolicy{MaxAttempts: 3, Delays: []time.Duration{time.Second}}
-	if _, err := runtime.NewScheduler(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).router, options); !errors.Is(err, storage.ErrInvalid) {
+	if _, err := runtime.NewScheduler(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).Router, options); !errors.Is(err, storage.ErrInvalid) {
 		t.Fatalf("contradictory attempt/delay counts accepted: %v", err)
 	}
 }
@@ -102,7 +102,7 @@ func TestSchedulerControlUsesPinnedCapabilitiesAfterReload(t *testing.T) {
 	ctx := context.Background()
 	f, _ := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	work := seedSchedulerWork(t, f, "pinned-control")
-	if _, err := f.Driver.(*schedulerDriver).scheduler.Start(ctx, work); err != nil {
+	if _, err := f.Driver.(*schedulerDriver).Scheduler.Start(ctx, work); err != nil {
 		t.Fatal(err)
 	}
 	routingRead(t, f, func(tx storage.Tx) error {
@@ -113,7 +113,7 @@ func TestSchedulerControlUsesPinnedCapabilitiesAfterReload(t *testing.T) {
 		scope.Routes[0].ActivePolicy = "inject"
 		return tx.PutScope(scope, scope.Revision)
 	})
-	replacement := &schedulerExecutor{caps: domain.Capabilities{Inject: true}}
+	replacement := &schedulerExecutor{Caps: domain.Capabilities{Inject: true}}
 	options := runtime.RouterOptions{Generation: "replacement", Handlers: map[string]extension.RouteHandler{"handler-0": routingHandlerFunc(routingDecision)}, Bindings: map[string]runtime.RouteBinding{"fixture": {Executor: replacement}}}
 	router, err := runtime.NewRouter(f.Store, f.Clock.Now, options)
 	if err != nil {
@@ -149,10 +149,10 @@ func TestSchedulerRequiresDurableLaunchAcknowledgement(t *testing.T) {
 	ctx := context.Background()
 	f, e := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	work := seedSchedulerWork(t, f, "missing-ack")
-	e.onRun = func(context.Context, extension.RunRequest) (extension.RunHandle, error) {
+	e.OnRun = func(context.Context, extension.RunRequest) (extension.RunHandle, error) {
 		return &schedulerHandle{}, nil
 	}
-	s := f.Driver.(*schedulerDriver).scheduler
+	s := f.Driver.(*schedulerDriver).Scheduler
 	attempt, err := s.Start(ctx, work)
 	if !errors.Is(err, extension.ErrInvalid) {
 		t.Fatalf("unpersisted launch acknowledged: %v", err)
@@ -193,11 +193,11 @@ func TestSchedulerControlErrorPolicies(t *testing.T) {
 			key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "control-errors"}
 			requireAccept(t, f, "incoming-error", &key)
 			requireRoute(t, f.Driver, "incoming-error")
-			intents, err := f.Driver.(*schedulerDriver).router.Intents(ctx, work)
+			intents, err := f.Driver.(*schedulerDriver).Router.Intents(ctx, work)
 			if err != nil || len(intents) != 1 {
 				t.Fatalf("intents: %+v %v", intents, err)
 			}
-			e.onInject = func(context.Context, domain.ID, domain.Event) error { return errors.New("sensitive provider detail") }
+			e.OnInject = func(context.Context, domain.ID, domain.Event) error { return errors.New("sensitive provider detail") }
 			if err = s.DispatchControl(ctx, intents[0].ID); !errors.Is(err, runtime.ErrControlDispatch) {
 				t.Fatalf("ambiguous delivery: %v", err)
 			}
@@ -205,7 +205,7 @@ func TestSchedulerControlErrorPolicies(t *testing.T) {
 			if err != nil {
 				t.Fatal(err)
 			}
-			pending, err := f.Driver.(*schedulerDriver).router.PendingInputs(ctx, work)
+			pending, err := f.Driver.(*schedulerDriver).Router.PendingInputs(ctx, work)
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -213,7 +213,7 @@ func TestSchedulerControlErrorPolicies(t *testing.T) {
 				if state.Status != "retryable" || len(pending) != 1 {
 					t.Fatalf("ambiguous input lost: %+v %+v", state, pending)
 				}
-				e.onInject = nil
+				e.OnInject = nil
 				if err = s.DispatchControl(ctx, intents[0].ID); err != nil {
 					t.Fatal(err)
 				}
@@ -230,9 +230,9 @@ func TestSchedulerControlErrorPolicies(t *testing.T) {
 					t.Fatalf("explicit fallback: %+v %+v", state, pending)
 				}
 			}
-			e.mu.Lock()
-			targets := append([]domain.ID(nil), e.injects...)
-			e.mu.Unlock()
+			e.Mu.Lock()
+			targets := append([]domain.ID(nil), e.Injects...)
+			e.Mu.Unlock()
 			for _, target := range targets {
 				if target != attempt.Lease.ExecutionID {
 					t.Fatalf("retargeted control to %s", target)

@@ -131,7 +131,7 @@ func newExternalToolbeltHarness(t *testing.T, mode string, reg extension.Registr
 	f, executor := schedulerFixture(t, mode, o)
 	base := f.Driver.(*schedulerDriver)
 	h := &toolbeltHarness{f: f, executor: executor, echoes: new(int), deny: new(bool), mu: &sync.Mutex{}}
-	belt, err := runtime.NewToolbelt(f.Store, f.Clock.Now, base.router, runtime.ToolbeltOptions{
+	belt, err := runtime.NewToolbelt(f.Store, f.Clock.Now, base.Router, runtime.ToolbeltOptions{
 		Grant: func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 			return runtime.ToolbeltGrant{Operations: ops, EventTypes: []string{"fixture.changed.v1"}}, nil
 		},
@@ -148,25 +148,25 @@ func newExternalToolbeltHarness(t *testing.T, mode string, reg extension.Registr
 	if err = belt.Register(reg); err != nil {
 		t.Fatal(err)
 	}
-	options := base.options
+	options := base.Options
 	options.Toolbelt, options.ToolbeltEndpoints = belt, fixtureEndpoint("unix:///fixture/toolbelt.sock")
 	options.AliasFilter = belt.DependencyFilter
 	h.scheduler = newTestScheduler(t, f, options)
 	h.belt = belt
-	executor.onRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	executor.OnRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		h.mu.Lock()
 		h.token = r.Context.ToolbeltToken
 		h.mu.Unlock()
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
-		handle := &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}
-		executor.mu.Lock()
-		if executor.handles == nil {
-			executor.handles = map[domain.ID]extension.RunHandle{}
+		handle := &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}
+		executor.Mu.Lock()
+		if executor.Handles == nil {
+			executor.Handles = map[domain.ID]extension.RunHandle{}
 		}
-		executor.handles[r.Execution.ID] = handle
-		executor.mu.Unlock()
+		executor.Handles[r.Execution.ID] = handle
+		executor.Mu.Unlock()
 		return handle, nil
 	}
 	key := toolbeltKey

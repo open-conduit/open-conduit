@@ -1,4 +1,4 @@
-package integration_test
+package runtime_test
 
 import (
 	"context"
@@ -25,12 +25,12 @@ func (opaqueBroker) Lookup(context.Context, string) (extension.Resource, error) 
 func TestProductionSchedulerResourceHook(t *testing.T) {
 	f, executor := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	got := make(chan extension.ResourceBroker, 4)
-	executor.onRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	executor.OnRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		got <- r.Context.Resources
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
-		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
 	}
 	bound, none, broken := seedSchedulerWork(t, f, "bound"), seedSchedulerWork(t, f, "none"), seedSchedulerWork(t, f, "broken")
 	o := schedulerDefaultOptions(f, executor)
@@ -59,10 +59,10 @@ func TestProductionSchedulerResourceHook(t *testing.T) {
 	if b := <-got; b != nil {
 		t.Fatalf("attempt without a resource got %#v", b)
 	}
-	before := len(executor.runs)
+	before := len(executor.Runs)
 	a, err := s.Start(context.Background(), broken)
-	if !errors.Is(err, runtime.ErrResourceUnavailable) || len(executor.runs) != before {
-		t.Fatalf("broken binding: %v (runs %d -> %d)", err, before, len(executor.runs))
+	if !errors.Is(err, runtime.ErrResourceUnavailable) || len(executor.Runs) != before {
+		t.Fatalf("broken binding: %v (runs %d -> %d)", err, before, len(executor.Runs))
 	}
 	state, err := s.InspectAttempt(context.Background(), a.Lease.ExecutionID)
 	if err != nil || state.Result == nil || state.Result.Outcome.Kind != domain.OutcomeFailed || !state.Excluded {

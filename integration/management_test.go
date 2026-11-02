@@ -115,8 +115,8 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 	if h.artifacts, err = artifacts.Open(filepath.Join(state, "artifacts")); err != nil {
 		t.Fatal(err)
 	}
-	h.executor = &schedulerExecutor{caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}
-	h.executor.onRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	h.executor = &schedulerExecutor{Caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}
+	h.executor.OnRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
@@ -125,7 +125,7 @@ func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Re
 		h.socketsMu.Unlock()
 		h.tokens <- r.Context.ToolbeltToken
 		h.secrets <- r.Context.Secrets
-		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+		return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
 	}
 	h.configPath = filepath.Join(state, "config", "config.json")
 	if err = config.SaveAtomic(h.configPath, []byte(cfg)); err != nil {
@@ -670,7 +670,7 @@ func TestManagementAdoptsFileOverInvalidStoredGeneration(t *testing.T) {
 	if err = config.SaveAtomic(path, []byte(withOld)); err != nil {
 		t.Fatal(err)
 	}
-	executors := map[string]extension.Executor{"fixture": &schedulerExecutor{caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}}
+	executors := map[string]extension.Executor{"fixture": &schedulerExecutor{Caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}}
 	older := config.Registry{Executors: executors, Handlers: map[string]bool{"manual": true}, Operations: []string{"ext.removed"}}
 	if _, err = management.OpenConfig(ctx, db, clock.Now, older, path, nil); err != nil {
 		t.Fatal(err)
@@ -885,7 +885,7 @@ func TestManagementIncludedFolderSurvivesDeletion(t *testing.T) {
 	if err = config.SaveAtomic(path, data); err != nil {
 		t.Fatal(err)
 	}
-	registry := config.Registry{Executors: map[string]extension.Executor{"fixture": &schedulerExecutor{caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}}, Handlers: map[string]bool{"manual": true}}
+	registry := config.Registry{Executors: map[string]extension.Executor{"fixture": &schedulerExecutor{Caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}}, Handlers: map[string]bool{"manual": true}}
 	configs, err := management.OpenConfig(ctx, db, clock.Now, registry, path, nil)
 	if err != nil {
 		t.Fatal(err)

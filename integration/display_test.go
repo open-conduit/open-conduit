@@ -351,7 +351,7 @@ func TestBackfillDisplays(t *testing.T) {
 	requireAccept(t, f, "other-later", &other)
 	requireRoute(t, f.Driver, "other-later")
 	giving = true
-	router := f.Driver.(*routingDriver).router
+	router := f.Driver.(*routingDriver).Router
 	n, err := router.BackfillDisplays(ctx)
 	if err != nil || n != 1 {
 		t.Fatalf("backfill gave %d displays: %v", n, err)
@@ -406,7 +406,7 @@ func TestBackfillDisplaysFromTheFirstEvent(t *testing.T) {
 		requireRoute(t, f.Driver, domain.ID(id))
 	}
 	giving = true
-	n, err := f.Driver.(*routingDriver).router.BackfillDisplays(ctx)
+	n, err := f.Driver.(*routingDriver).Router.BackfillDisplays(ctx)
 	if err != nil || n != 1 {
 		t.Fatalf("backfill gave %d displays: %v", n, err)
 	}

@@ -49,7 +49,7 @@ func (x *mdExecutor) segment(r extension.RunRequest, p domain.Payload, resumed b
 	x.token = r.Context.ToolbeltToken
 	x.turns = append(x.turns, turn)
 	x.mu.Unlock()
-	return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+	return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
 }
 func (x *mdExecutor) Run(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 	return x.segment(r, domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}, false)

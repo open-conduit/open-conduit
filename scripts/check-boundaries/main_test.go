@@ -134,7 +134,7 @@ func TestRuntimeTestVariantBoundaries(t *testing.T) {
 	if failures := violations(graph); len(failures) > 0 {
 		t.Fatal(failures)
 	}
-	for _, forbidden := range []string{"extensions/github", "internal/storage/sqlite", "conformance/reference"} {
+	for _, forbidden := range []string{"extensions/github", "conformance/reference", "internal/bootstrap"} {
 		leaking := variant
 		leaking.Imports = append(append([]string{}, variant.Imports...), module+forbidden)
 		if failures := violations(append(graph[:len(graph)-1:len(graph)-1], leaking)); len(failures) == 0 {
@@ -154,6 +154,39 @@ func TestRuntimeTestVariantBoundaries(t *testing.T) {
 	contractTests.ForTest = module + "conformance"
 	if failures := violations(append(graph, contractTests)); len(failures) > 0 {
 		t.Fatal(failures)
+	}
+}
+
+// TestRuntimeFixtureBoundaries checks the runtime's SQLite fixtures (#355):
+// the runtime's tests may run it over SQLite through them, but production
+// code may reach neither SQLite from the runtime nor the fixtures at all, and
+// the fixtures never substitute the reference doubles.
+func TestRuntimeFixtureBoundaries(t *testing.T) {
+	fixtures := project("internal/runtime/runtimetest", "internal/runtime", "internal/storage/sqlite", "conformance", "storage")
+	variant := project("internal/runtime_test [" + module + "internal/runtime.test]")
+	variant.ForTest = module + "internal/runtime"
+	variant.Imports = []string{module + "internal/runtime", module + "internal/runtime/runtimetest"}
+	base := []pkg{project("internal/runtime", "domain"), project("internal/storage/sqlite", "storage"), project("conformance", "domain"), project("domain"), project("storage", "domain")}
+	if failures := violations(append(append([]pkg{}, base...), fixtures, variant)); len(failures) > 0 {
+		t.Fatal(failures)
+	}
+	for _, test := range []struct {
+		name   string
+		graph  []pkg
+		forbid string
+	}{
+		{"runtime_cannot_open_sqlite", []pkg{project("internal/runtime", "internal/storage/sqlite")}, "internal/storage/sqlite"},
+		{"production_cannot_use_fixtures", []pkg{project("internal/bootstrap", "internal/runtime/runtimetest"), project("internal/runtime/runtimetest")}, "internal/runtime/runtimetest"},
+		{"runtime_cannot_use_fixtures", []pkg{project("internal/runtime/scheduler", "internal/runtime/runtimetest"), project("internal/runtime/runtimetest")}, "internal/runtime/runtimetest"},
+		{"fixtures_cannot_substitute_reference", []pkg{project("internal/runtime/runtimetest", "conformance/reference")}, "conformance/reference"},
+		{"fixtures_cannot_reach_extension", []pkg{project("internal/runtime/runtimetest", "extensions/github")}, "extensions/github"},
+	} {
+		t.Run(test.name, func(t *testing.T) {
+			failures := strings.Join(violations(append(append([]pkg{}, base...), test.graph...)), "\n")
+			if !strings.Contains(failures, test.forbid) {
+				t.Fatalf("weakened graph not rejected: %v", failures)
+			}
+		})
 	}
 }
 

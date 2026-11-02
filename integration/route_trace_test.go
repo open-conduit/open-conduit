@@ -297,7 +297,7 @@ func (e *toolsEnv) scope(id domain.ID) domain.Scope {
 // requires the trace's effect to be the policy the router recorded.
 func traceThenRoute(t *testing.T, f conformance.RuntimeFixture, id string, key *domain.CorrelationKey) runtime.RouteTrace {
 	t.Helper()
-	router := f.Driver.(*routingDriver).router
+	router := f.Driver.(*routingDriver).Router
 	tr, err := router.Trace(context.Background(), "routing-scope", routingEvent(f, id, key), nil)
 	if err != nil {
 		t.Fatalf("trace %s: %v", id, err)
