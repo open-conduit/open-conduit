@@ -182,3 +182,30 @@ func (o *operator) printHelp(w io.Writer, cmd string, args []string) {
 		fmt.Fprint(w, commandHelp(cmd))
 	}
 }
+
+// HelpGroup is one heading of the global help and the commands under it,
+// in the order `open-conduit --help` lists them. A command listed under
+// several headings belongs to the first.
+type HelpGroup struct {
+	Title    string
+	Commands []string
+}
+
+// HelpGroups lists the commands the help documents, for the generated CLI
+// reference page (site/src/content/docs/reference/cli.md): each command's
+// text is what `open-conduit COMMAND --help` prints.
+func HelpGroups() []HelpGroup {
+	seen := map[string]bool{}
+	var out []HelpGroup
+	for _, g := range helpGroups {
+		hg := HelpGroup{Title: g.title}
+		for _, e := range g.entries {
+			if !seen[e.cmd] {
+				seen[e.cmd] = true
+				hg.Commands = append(hg.Commands, e.cmd)
+			}
+		}
+		out = append(out, hg)
+	}
+	return out
+}

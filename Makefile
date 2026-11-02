@@ -12,7 +12,7 @@ TEST_TIMEOUT ?= 20m
 # shards overlap well even on a 4-vCPU hosted runner.
 INTEGRATION_SHARDS ?= 4
 
-.PHONY: build fmt fmt-check vet lint test boundaries config-check config-deps docs-check container-test gateway-image check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
+.PHONY: build fmt fmt-check vet lint test boundaries config-check config-deps docs-check docs-gen container-test gateway-image check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
 
 build:
 	$(GO) build ./...
@@ -67,6 +67,11 @@ config-check:
 # shown is in the help and every make target shown is in this Makefile.
 docs-check:
 	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -run 'TestDocs' ./integration
+
+# Rewrite the generated reference pages (CLI, config, toolbelt operations)
+# from their sources; docs-check fails while one is stale.
+docs-gen:
+	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -run 'TestDocsReferenceCurrent' ./integration -args -update
 
 # Real isolation tests for the Docker container provider, on the Docker
 # context OPEN_CONDUIT_DOCKER_CONTEXT names (the CLI's current one when

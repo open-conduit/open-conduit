@@ -307,3 +307,22 @@ func callInput(input json.RawMessage) (json.RawMessage, error) {
 	}
 	return json.Marshal(map[string]json.RawMessage{"data": data})
 }
+
+// BuiltinOperation is one builtin toolbelt operation as the MCP server
+// presents it, for the generated operations reference page.
+type BuiltinOperation struct {
+	Name, Description string
+	InputSchema       map[string]any
+}
+
+// BuiltinOperations are the core's toolbelt operations (every one but
+// `call`, which reaches the operations extensions register).
+func BuiltinOperations() []BuiltinOperation {
+	var out []BuiltinOperation
+	for _, t := range mcpTools {
+		if t.Name != "call" {
+			out = append(out, BuiltinOperation{Name: t.Name, Description: t.Description, InputSchema: t.InputSchema})
+		}
+	}
+	return out
+}
