@@ -51,12 +51,19 @@ func TestActPinsTheCallerToTheExtension(t *testing.T) {
 		"tracker":   recordingProvider{action: "claim", calls: &calls},
 		"other":     recordingProvider{action: "claim", calls: &calls},
 	}
+	submitted := map[string]domain.AcceptedEvent{}
 	h := actHost{store: store, now: now,
+		prior: func(_ context.Context, _ domain.ID, provider, action, key string) (domain.AcceptedEvent, bool, error) {
+			old, ok := submitted[provider+"/"+action+"/"+key]
+			return old, ok, nil
+		},
 		providers: func(context.Context, domain.ID) map[string]extension.ActionProvider { return providers },
 		submit: func(ctx context.Context, name string, p extension.ActionProvider, call extension.ActionCall, key string) (domain.AcceptedEvent, bool, string, error) {
 			plan, err := p.Invoke(ctx, call)
 			keys, names = append(keys, key), append(names, name)
-			return domain.AcceptedEvent{Event: plan.Event}, true, plan.Message, err
+			a := domain.AcceptedEvent{Event: plan.Event, Sequence: uint64(len(keys))}
+			submitted[name+"/"+call.Action+"/"+key] = a
+			return a, true, plan.Message, err
 		}}
 
 	res, err := h.act("github")(ctx, extension.ActRequest{Scope: "eng", Action: "answer", Input: "approve", Caller: "octocat", Key: "issue/1"})
@@ -65,6 +72,18 @@ func TestActPinsTheCallerToTheExtension(t *testing.T) {
 	}
 	if len(calls) != 1 || calls[0].Caller != (extension.Caller{Kind: "github", ID: "octocat"}) || calls[0].Input != "approve" || names[0] != "decisions" {
 		t.Fatalf("calls: %+v names %v", calls, names)
+	}
+	// A replay returns the first Event without asking the provider again.
+	again, err := h.act("github")(ctx, extension.ActRequest{Scope: "eng", Action: "answer", Input: "approve", Caller: "octocat", Key: "issue/1"})
+	if err != nil || again.Added || again.Event.Sequence != 1 || len(calls) != 1 {
+		t.Fatalf("replay: %+v %v (%d calls)", again, err, len(calls))
+	}
+	// Nothing can act as the local operator, even an extension named for it.
+	if _, err = h.act(extension.CallerOperator)(ctx, extension.ActRequest{Scope: "eng", Action: "answer", Caller: "local", Key: "op"}); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("acted as the operator: %v", err)
+	}
+	if len(calls) != 1 {
+		t.Fatalf("a refused request reached a provider: %+v", calls)
 	}
 	// Another extension's identical key is another request.
 	if _, err = h.act("slack")(ctx, extension.ActRequest{Scope: "eng", Action: "answer", Caller: "U1", Key: "issue/1"}); err != nil {

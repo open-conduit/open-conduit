@@ -690,3 +690,32 @@ func TestHumanGateAnsweredFromAnotherSurface(t *testing.T) {
 		t.Fatalf("answer trail: %+v", answers)
 	}
 }
+
+// The action path returns a replay's first Event without asking the
+// provider again: once the question is answered, the provider would refuse
+// a second answer, but the same request (a retried GitHub comment) is the
+// same answer, not a second one.
+func TestActReplayReturnsTheFirstAnswer(t *testing.T) {
+	h := newHumanHarness(t, "persistent", gated)
+	out, err := h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	ctx := context.Background()
+	call := extension.ActionCall{Target: h.target(t), Action: hu.ActionAnswer, Input: "approve", Caller: extension.LocalOperator}
+	first, added, msg, err := h.control.Act(ctx, "decisions", h.actions, call, "github:issue_comment/7")
+	if err != nil || !added || msg == "" {
+		t.Fatalf("act: %v %v %q", err, added, msg)
+	}
+	again, added, _, err := h.control.Act(ctx, "decisions", h.actions, call, "github:issue_comment/7")
+	if err != nil || added || again.Event.ID != first.Event.ID {
+		t.Fatalf("replay: %+v %v %v", again, added, err)
+	}
+	// A new request is a second answer, which the provider refuses.
+	_, _, _, err = h.control.Act(ctx, "decisions", h.actions, call, "github:issue_comment/8")
+	refusedWith(t, err, "not_outstanding")
+	if old, ok, err := h.control.PriorAction(ctx, h.target(t).Scope.ID, "decisions", hu.ActionAnswer, "github:issue_comment/7"); err != nil || !ok || old.Event.ID != first.Event.ID {
+		t.Fatalf("prior: %+v %v %v", old, ok, err)
+	}
+}

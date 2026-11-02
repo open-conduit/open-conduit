@@ -85,6 +85,12 @@ func (c *Control) SubmitAction(ctx context.Context, a ActionEvent) (accepted dom
 // that person as caller. A refusal is the provider's *OperationError and
 // leaves no Event. The message is the provider's, trimmed to 500 bytes.
 func (c *Control) Act(ctx context.Context, name string, p extension.ActionProvider, call extension.ActionCall, key string) (accepted domain.AcceptedEvent, added bool, message string, err error) {
+	// A replay returns the first Event without asking the provider again:
+	// what it would decide now (a question already answered) is not what
+	// it decided then.
+	if old, ok, err := c.PriorAction(ctx, call.Target.Scope.ID, name, call.Action, key); err != nil || ok {
+		return old, false, "", err
+	}
 	plan, err := p.Invoke(ctx, call)
 	if err != nil {
 		return accepted, false, "", err
@@ -104,4 +110,26 @@ func (c *Control) Act(ctx context.Context, name string, p extension.ActionProvid
 		message = strings.ToValidUTF8(message[:500], "")
 	}
 	return accepted, added, message, nil
+}
+
+// PriorAction is the Event an earlier invocation of provider's action under
+// key accepted into scope, if there was one.
+func (c *Control) PriorAction(ctx context.Context, scope domain.ID, provider, action, key string) (old domain.AcceptedEvent, ok bool, err error) {
+	delivery := provider + "/" + action + "/" + key
+	if provider == "" || action == "" || !validDelivery(key) || !validDelivery(delivery) {
+		return old, false, nil
+	}
+	err = c.transact(ctx, func(tx storage.Tx) error {
+		var e error
+		old, ok, e = deliveryDuplicate(tx, domain.Event{Source: extension.ActionSource, DeliveryID: delivery})
+		if e != nil || !ok {
+			return e
+		}
+		if s, er := scopeForEvent(tx, old); er != nil || s != scope {
+			old, ok = domain.AcceptedEvent{}, false
+			return storage.ErrConflict
+		}
+		return nil
+	})
+	return old, ok, err
 }

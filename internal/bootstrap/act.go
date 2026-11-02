@@ -22,6 +22,9 @@ func (d *daemon) act(kind string) func(context.Context, extension.ActRequest) (e
 	h := actHost{store: d.coord, now: d.now, providers: d.actions, poke: d.poke,
 		submit: func(ctx context.Context, name string, p extension.ActionProvider, call extension.ActionCall, key string) (domain.AcceptedEvent, bool, string, error) {
 			return d.current.Load().control.Act(ctx, name, p, call, key)
+		},
+		prior: func(ctx context.Context, scope domain.ID, provider, action, key string) (domain.AcceptedEvent, bool, error) {
+			return d.current.Load().control.PriorAction(ctx, scope, provider, action, key)
 		}}
 	return h.act(kind)
 }
@@ -33,11 +36,18 @@ type actHost struct {
 	now       func() time.Time
 	providers func(ctx context.Context, scope domain.ID) map[string]extension.ActionProvider
 	submit    func(ctx context.Context, name string, p extension.ActionProvider, call extension.ActionCall, key string) (domain.AcceptedEvent, bool, string, error)
-	poke      func()
+	// prior is the Event an earlier request with the same provider,
+	// action and key produced (runtime.Control.PriorAction).
+	prior func(ctx context.Context, scope domain.ID, provider, action, key string) (domain.AcceptedEvent, bool, error)
+	poke  func()
 }
 
 func (h actHost) act(kind string) func(context.Context, extension.ActRequest) (extension.ActResult, error) {
 	return func(ctx context.Context, r extension.ActRequest) (extension.ActResult, error) {
+		// The local operator's kind is never an extension's to vouch for.
+		if kind == "" || kind == extension.CallerOperator {
+			return extension.ActResult{}, extension.ErrUnauthorized
+		}
 		if !actField(r.Caller) || !actField(r.Key) || r.Scope == "" || r.Action == "" || len(r.Input) > 4096 {
 			return extension.ActResult{}, extension.ErrInvalid
 		}
@@ -59,12 +69,34 @@ func (h actHost) act(kind string) func(context.Context, extension.ActRequest) (e
 		}); err != nil {
 			return extension.ActResult{}, err
 		}
+		key := kind + ":" + r.Key
+		// A replay returns the first Event, before anything is authorised
+		// again against what has changed since (an answered question).
+		if h.prior != nil {
+			names := []string{r.Provider}
+			if r.Provider == "" {
+				names = names[:0]
+				for n := range h.providers(ctx, t.Scope.ID) {
+					names = append(names, n)
+				}
+				sort.Strings(names)
+			}
+			for _, n := range names {
+				old, ok, err := h.prior(ctx, t.Scope.ID, n, r.Action, key)
+				if err != nil {
+					return extension.ActResult{}, err
+				}
+				if ok {
+					return extension.ActResult{Event: old}, nil
+				}
+			}
+		}
 		name, p, err := h.provider(ctx, t, r.Provider, r.Action)
 		if err != nil {
 			return extension.ActResult{}, err
 		}
 		call := extension.ActionCall{Target: t, Action: r.Action, Input: r.Input, Caller: extension.Caller{Kind: kind, ID: r.Caller}}
-		accepted, added, msg, err := h.submit(ctx, name, p, call, kind+":"+r.Key)
+		accepted, added, msg, err := h.submit(ctx, name, p, call, key)
 		if err != nil {
 			return extension.ActResult{}, err
 		}

@@ -817,6 +817,35 @@ func TestGitHubCommentAnswersAnAction(t *testing.T) {
 	if last := got[len(got)-1]; last.Input != "refuse" || fk.Reactions(again)["+1"] != 1 {
 		t.Fatalf("retry: %+v %v", last, fk.Reactions(again))
 	}
+
+	// An answer taken whose reaction failed is asked again next pass under
+	// the same key; the host returns the first answer (added false), which
+	// is still acknowledged +1, never confused.
+	taken := map[string]bool{}
+	e.act = func(_ context.Context, r extension.ActRequest) (extension.ActResult, error) {
+		got = append(got, r)
+		if taken[r.Key] {
+			return extension.ActResult{}, nil
+		}
+		taken[r.Key] = true
+		return extension.ActResult{Added: true}, nil
+	}
+	late := fk.AddComment(n, ghAlice, "/answer approve")
+	e.deliver("issue_comment", "d-6", fk.CommentHook("created", late))
+	e.route()
+	before := len(got)
+	fk.RateLimitSecondary(60)
+	if _, err := e.projector.Converge(context.Background(), 50); err == nil {
+		t.Fatal("the reaction's rate limit was not reported")
+	}
+	if len(got) != before+1 || len(fk.Reactions(late)) != 0 {
+		t.Fatalf("first pass: %d acts, reactions %v", len(got)-before, fk.Reactions(late))
+	}
+	e.clock.Add(2 * time.Minute)
+	e.converge()
+	if len(got) != before+2 || got[len(got)-1].Key != got[len(got)-2].Key || fk.Reactions(late)["+1"] != 1 || fk.Reactions(late)["confused"] != 0 {
+		t.Fatalf("replay pass: %+v reactions %v", got[before:], fk.Reactions(late))
+	}
 }
 
 func TestGitHubAcknowledgesDeliveredHumanComments(t *testing.T) {
