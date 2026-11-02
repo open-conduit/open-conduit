@@ -74,6 +74,12 @@ func WithWorks(works ...domain.Work) Option {
 	}
 }
 
+// WithWaits seeds Waits, read with state.waits (a Work's Waits, for a Work
+// seeded with WithWorks in a configured scope).
+func WithWaits(ws ...domain.Wait) Option {
+	return func(h *Host) { h.waits = append(h.waits, ws...) }
+}
+
 // WithExecutions seeds Executions, read with state.executions.
 func WithExecutions(xs ...domain.Execution) Option {
 	return func(h *Host) { h.executions = append(h.executions, xs...) }
@@ -144,6 +150,7 @@ type Host struct {
 	scopes     []domain.Scope
 	works      []domain.Work
 	executions []domain.Execution
+	waits      []domain.Wait
 	events     []domain.AcceptedEvent
 	causal     map[domain.ID]causal
 	kv         map[string]map[string][]byte
@@ -931,7 +938,13 @@ func (h *Host) stateLocked(method string, p protocol.StateParams) (any, error) {
 	case "state.waits":
 		for i := range h.works {
 			if h.works[i].ID == domain.ID(p.ID) && h.allowedLocked(h.works[i].ScopeID) {
-				return []protocol.Wait{}, nil
+				list := []protocol.Wait{}
+				for _, w := range h.waits {
+					if w.WorkID == h.works[i].ID {
+						list = append(list, protocol.FromWait(w))
+					}
+				}
+				return list, nil
 			}
 		}
 		return nil, notFound
