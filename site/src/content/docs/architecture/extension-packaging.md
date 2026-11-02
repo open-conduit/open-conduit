@@ -171,6 +171,7 @@ This first step doesn't include `wait` and `emit` operations, routes, ingress or
 - [`protocol/examples/runner`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/runner): an executor with detached jobs, inject, interrupt, stop and forget.
 - [`protocol/examples/weather`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/weather): an extension in TypeScript, with one operation answered from its scope's config and a lookup count in host KV.
 - [`packages/slack`](https://github.com/open-conduit/open-conduit/tree/main/packages/slack) and [`packages/shell`](https://github.com/open-conduit/open-conduit/tree/main/packages/shell): real first-party workloads packaged.
+- [`packages/sentry`](https://github.com/open-conduit/open-conduit/tree/main/packages/sentry): a source built only on `protocol/sdk`, as a third party would build one. It verifies Sentry's signed webhooks, reconciles against Sentry's API, opens one Work per issue and binds its operations to the calling Work's issue. Its fake (`sentrytest`) serves both its tests and its certification fixture.
 
 ## Package layout
 
