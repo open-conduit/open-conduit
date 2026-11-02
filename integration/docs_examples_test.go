@@ -12,7 +12,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/internal/bootstrap"
 	"github.com/open-conduit/open-conduit/internal/cli"
-	"github.com/open-conduit/open-conduit/internal/config"
 )
 
 // userDocs are the user-facing documents whose examples must work as
@@ -63,8 +62,9 @@ func fencedBlocks(t *testing.T, path, lang string) []string {
 // Every complete config document (a JSON object with "version") in the
 // user-facing docs passes the same offline validation as
 // `open-conduit config check`, without a warning: an example that prints one
-// teaches a reader something deprecated or ineffective. Warnings that depend
-// on the machine (a cmd: secret's program being installed) are left out.
+// teaches a reader something deprecated or ineffective. The warnings that
+// depend on the machine (a cmd: secret's program not being installed, an
+// included folder being missing) are left out.
 func TestDocsExampleConfigsValidate(t *testing.T) {
 	total := 0
 	for _, path := range userDocs {
@@ -82,7 +82,7 @@ func TestDocsExampleConfigsValidate(t *testing.T) {
 			if err != nil || len(diags) != 0 {
 				t.Errorf("%s: json block %d is not a valid config: %v %v", filepath.Base(path), i+1, diags, err)
 			}
-			if w := configWarnings([]byte(block), modes); len(w) != 0 {
+			if w := bootstrap.ConfigWarnings("", []byte(block), modes, false); len(w) != 0 {
 				t.Errorf("%s: json block %d warns when checked: %v", filepath.Base(path), i+1, w)
 			}
 		}
@@ -90,14 +90,6 @@ func TestDocsExampleConfigsValidate(t *testing.T) {
 	if total < 4 {
 		t.Fatalf("found %d example configs in the user docs, want at least one per workflow (4)", total)
 	}
-}
-
-// configWarnings are the warnings `open-conduit config check` prints for a
-// config, but for config.CommandWarnings, which depend on what is installed.
-func configWarnings(data []byte, modes []string) []string {
-	w := append(config.UnenforcedWarnings(data), config.RemovedWarnings(data)...)
-	w = append(w, bootstrap.RenamedWarnings(data)...)
-	return append(w, modes...)
 }
 
 // validateFolderExample checks an included folder's config (a document with
