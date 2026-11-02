@@ -31,6 +31,7 @@ var updateReference = flag.Bool("update", false, "rewrite the generated referenc
 const referenceDir = "../site/src/content/docs/reference"
 
 func TestDocsReferenceCurrent(t *testing.T) {
+	releaseLayout(t)
 	pages := map[string]string{
 		"cli.md":        cliReference(t),
 		"config.md":     configReference(t),
@@ -55,6 +56,7 @@ func TestDocsReferenceCurrent(t *testing.T) {
 // when its sources changed or it was edited by hand, and the CLI page covers
 // the commands no other page documents.
 func TestDocsReferenceDetectsDrift(t *testing.T) {
+	releaseLayout(t)
 	a, b := cliReference(t), cliReference(t)
 	if a != b {
 		t.Fatal("the CLI reference is not deterministic")

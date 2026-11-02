@@ -108,6 +108,7 @@ var Methods = []Method{
 	{Name: "state.scopes", Direction: ExtensionToHost, Contract: []string{"storage.Tx.ListScopes", "storage.Tx.Scope"}},
 	{Name: "state.timers", Direction: ExtensionToHost, Contract: []string{"storage.Tx.ListTimers"}},
 	{Name: "state.waits", Direction: ExtensionToHost, Contract: []string{"storage.Tx.ListWaits"}},
+	{Name: "state.sequence", Direction: ExtensionToHost, Contract: []string{"storage.Tx.LatestSequence"}},
 
 	// Timers, derived events and control, from background tasks.
 	{Name: "timer.arm", Direction: ExtensionToHost, Provides: "recurrences", Contract: []string{"host:runtime.Timers.ArmRecurrence (Armer)"}},

@@ -68,7 +68,7 @@ func NewTools(o Options) (*Tools, error) {
 // through the toolbelt: answers come only through its action.
 func (t *Tools) Registration() extension.Registration {
 	return extension.Registration{Version: extension.ContractVersion, Name: Type,
-		Operations:       []extension.Operation{{Name: OpAsk, Wait: t.ask, Guidance: strings.TrimSpace(askGuidance)}},
+		Operations:       []extension.Operation{{Name: OpAsk, Wait: t.ask, Guidance: AskGuidance()}},
 		DependencyFilter: DependencyFilter, Gate: t.Gate, StartGate: t.StartGate}
 }
 
@@ -77,6 +77,10 @@ func (t *Tools) Registration() extension.Registration {
 //
 //go:embed guidance/ask.md
 var askGuidance string
+
+// AskGuidance is human.ask's guidance, which a package declares in its
+// manifest.
+func AskGuidance() string { return strings.TrimSpace(askGuidance) }
 
 func refuse(code, format string, args ...any) error {
 	return &extension.OperationError{Code: code, Message: fmt.Sprintf(format, args...)}

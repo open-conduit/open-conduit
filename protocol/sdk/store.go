@@ -398,12 +398,15 @@ func (t *storeTx) UnroutedEvents(after uint64, limit int) ([]domain.AcceptedEven
 	return out, nil
 }
 
+// LatestSequence is the log's latest sequence, through state.sequence: a
+// cursor for Events, which may lie past the last Event of the extension's
+// own scopes.
 func (t *storeTx) LatestSequence() (uint64, error) {
-	all, err := t.Events(0, 0)
-	if err != nil || len(all) == 0 {
+	var out protocol.StateSequenceResult
+	if err := t.h.Call(t.ctx, "state.sequence", protocol.StateParams{}, &out); err != nil {
 		return 0, err
 	}
-	return all[len(all)-1].Sequence, nil
+	return out.Sequence, nil
 }
 
 func (t *storeTx) EventByDelivery(source, deliveryID string) (domain.AcceptedEvent, error) {

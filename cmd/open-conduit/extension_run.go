@@ -10,6 +10,7 @@ import (
 
 	codexext "github.com/open-conduit/open-conduit/extensions/codex/pkg"
 	githubext "github.com/open-conduit/open-conduit/extensions/github/pkg"
+	humanext "github.com/open-conduit/open-conduit/extensions/human/pkg"
 	"github.com/open-conduit/open-conduit/extensions/pagerduty"
 	posthogext "github.com/open-conduit/open-conduit/extensions/posthog/pkg"
 	"github.com/open-conduit/open-conduit/extensions/sentry"
@@ -33,6 +34,7 @@ var runnable = map[string]struct {
 }{
 	"codex":     {codexext.Main, codexext.Manifest},
 	"github":    {githubext.Main, githubext.Manifest},
+	"human":     {humanext.Main, humanext.Manifest},
 	"pagerduty": {pagerduty.Main, pagerduty.Manifest},
 	"posthog":   {posthogext.Main, posthogext.Manifest},
 	"sentry":    {sentry.Main, sentry.Manifest},

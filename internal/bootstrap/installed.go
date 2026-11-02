@@ -364,8 +364,9 @@ func (x *installed) Stop() { _ = x.r.Process().Close() }
 // Registration is the package's toolbelt registration.
 func (x *installed) Registration() extension.Registration { return x.r.Registration() }
 
-// Actions offers the package's action provider, keyed by its name, on a
-// scope whose current configuration uses it.
+// Actions offers the package's action provider, keyed by its name (or,
+// entry_named, its first entry's), on a scope whose current configuration
+// uses it.
 func (x *installed) Actions(scope domain.ID) map[string]extension.ActionProvider {
 	s, _ := x.d.extensionSnapshot()
 	if s == nil || s.Scopes[scope] == nil || !s.Scopes[scope].Enabled {
@@ -375,7 +376,20 @@ func (x *installed) Actions(scope domain.ID) map[string]extension.ActionProvider
 	if !ok || !usesExtension(s.Scopes[scope], x.m) {
 		return nil
 	}
-	return map[string]extension.ActionProvider{x.m.Name: p}
+	return map[string]extension.ActionProvider{x.nameIn(s.Scopes[scope]): p}
+}
+
+// nameIn is the name the package goes by on a scope: its own, or with
+// entry_named the name of its first entry there (protocol.Provides).
+func (x *installed) nameIn(scope *config.EffectiveScope) string {
+	if x.m.Provides.EntryNamed && scope != nil {
+		for _, e := range scope.Extensions {
+			if slices.ContainsFunc(x.m.Provides.Extensions, func(d protocol.ExtensionDecl) bool { return d.Type == e.Type }) {
+				return e.Name
+			}
+		}
+	}
+	return x.m.Name
 }
 
 // Pages are the manifest's pages.
@@ -405,10 +419,18 @@ func (x *installed) ConfigCandidate(ctx context.Context, w domain.Work) (extensi
 	return x.r.ConfigCandidate(ctx, w)
 }
 
+// Annotate is what the package says about the Work, under the name it
+// goes by on the Work's scope.
 func (x *installed) Annotate(ctx context.Context, w domain.Work) []inproc.Annotation {
+	source := x.m.Name
+	if x.m.Provides.EntryNamed {
+		if s, _ := x.d.extensionSnapshot(); s != nil {
+			source = x.nameIn(s.Scopes[w.ScopeID])
+		}
+	}
 	var out []inproc.Annotation
 	for _, a := range x.r.Annotate(ctx, w) {
-		out = append(out, inproc.Annotation{Source: x.m.Name, Name: a.Name, Value: a.Value})
+		out = append(out, inproc.Annotation{Source: source, Name: a.Name, Value: a.Value})
 	}
 	return out
 }

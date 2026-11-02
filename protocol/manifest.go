@@ -224,6 +224,11 @@ type Provides struct {
 	// Panels marks an extension that shows panels on scope and Work pages
 	// (view.render). Their buttons invoke its actions.
 	Panels bool `json:"panels,omitempty"`
+	// EntryNamed marks an extension that goes, on a scope, by the name of
+	// the first of its entries there rather than by its own: its action
+	// provider (so an action's delivery is "<entry>/<action>/...") and the
+	// source of its annotations. It needs an extension type.
+	EntryNamed bool `json:"entry_named,omitempty"`
 	// Pages are pages the extension contributes to the operator's web view
 	// (extension.Page). Each names one of its extension types, work kinds
 	// and, optionally, route handlers, and its actions: it needs actions.
@@ -815,6 +820,9 @@ func (m Manifest) Validate() error {
 		if !p.Actions {
 			fail("page %q needs actions", pg.ID)
 		}
+	}
+	if p.EntryNamed && len(p.Extensions) == 0 {
+		fail("entry_named needs an extension type")
 	}
 	if p.ConfigCandidate && len(p.WorkKinds) == 0 {
 		fail("config_candidate needs a work kind")

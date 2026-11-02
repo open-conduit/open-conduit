@@ -150,3 +150,20 @@ func TestValidateWithoutConfigPathCountsBundled(t *testing.T) {
 		t.Fatalf("with a bundled package declaring the type: %+v %v, want it registered", diags, err)
 	}
 }
+
+// An entry_named package goes by its first entry's name on a scope (its
+// action provider and annotation source); any other by its own (#428).
+func TestEntryNamedPackageGoesByItsEntry(t *testing.T) {
+	scope := &config.EffectiveScope{Extensions: []config.Extension{{Name: "widgets", Type: "github"}, {Name: "decisions", Type: "human"}, {Name: "later", Type: "human"}}}
+	m := protocol.Manifest{Name: "human", Provides: protocol.Provides{Extensions: []protocol.ExtensionDecl{{Type: "human"}}, EntryNamed: true}}
+	if got := (&installed{m: m}).nameIn(scope); got != "decisions" {
+		t.Fatalf("entry_named: %q, want decisions", got)
+	}
+	if got := (&installed{m: m}).nameIn(&config.EffectiveScope{}); got != "human" {
+		t.Fatalf("entry_named with no entry: %q, want human", got)
+	}
+	m.Provides.EntryNamed = false
+	if got := (&installed{m: m}).nameIn(scope); got != "human" {
+		t.Fatalf("not entry_named: %q, want human", got)
+	}
+}
