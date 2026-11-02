@@ -96,21 +96,27 @@ func TestReconcilePaginationCommentsAndChecks(t *testing.T) {
 	f.SetStatus("aaa1111abc", "build", "SUCCESSFUL", "https://ci/1")
 	f.SetStatus("aaa1111abc", "deploy-preview", "SUCCESSFUL", "https://preview/1")
 	f.SetStatus("bbb2222abc", "build", "INPROGRESS", "")
+	reads := 0
 	in := bitbucket.NewIngress(s, c, f.Now, bitbucket.IngressOptions{BatchUnits: 2,
-		Generations: func(_ context.Context, key string, _ time.Time) (string, error) {
-			if key == "PROJ-7" {
-				return "reopen-5", nil
-			}
-			return "", nil
+		Generations: func(context.Context) (bitbucket.GenerationAt, error) {
+			reads++
+			return func(key string, _ time.Time) string {
+				if key == "PROJ-7" {
+					return "reopen-5"
+				}
+				return ""
+			}, nil
 		}})
 	src := extension.Source{Namespace: "bitbucket/acme/app", ScopeID: "proj"}
 	var all []extension.Observation
 	scan := extension.Scan{Source: src}
+	pages := 0
 	for n := 0; n < 10; n++ {
 		snap, err := in.Reconcile(context.Background(), scan)
 		if err != nil {
 			t.Fatal(err)
 		}
+		pages++
 		all = append(all, snap.Observations...)
 		if snap.NextCursor == "" {
 			if !snap.Complete {
@@ -119,6 +125,10 @@ func TestReconcilePaginationCommentsAndChecks(t *testing.T) {
 			break
 		}
 		scan.ScanID, scan.Cursor = snap.ScanID, snap.NextCursor
+	}
+	// Generations are read at most once a page, not once a pull request.
+	if reads == 0 || reads > pages {
+		t.Errorf("generations read %d times over %d pages", reads, pages)
 	}
 	types := map[string]string{}
 	for _, o := range all {

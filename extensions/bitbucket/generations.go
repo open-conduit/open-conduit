@@ -16,9 +16,10 @@ import (
 // run in another process (#428). A tracker opens each reopened generation's
 // Work under issue/<key>/generation/reopen-<unix> in its namespace, so the
 // generation current at a time is the latest such reopen at or before it.
-// One read of the scope's Work per call.
+// It reads the Work once for each push or reconcile page, and resolves
+// every PR of it from that read.
 func StoreGenerations(store storage.Store, scope domain.ID, ns string, now func() time.Time) Generations {
-	return func(ctx context.Context, key string, at time.Time) (string, error) {
+	return func(ctx context.Context) (GenerationAt, error) {
 		var works []domain.Work
 		err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
 			var err error
@@ -26,9 +27,9 @@ func StoreGenerations(store storage.Store, scope domain.ID, ns string, now func(
 			return err
 		})
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		return GenerationFromWorks(works, scope, ns, key, at), nil
+		return func(key string, at time.Time) string { return GenerationFromWorks(works, scope, ns, key, at) }, nil
 	}
 }
 
