@@ -50,14 +50,13 @@ func read(t *testing.T, path string) string {
 // fixture is a bare origin, the scope's main checkout cloned from it and a
 // second clone that pushes changes "from elsewhere".
 type fixture struct {
-	t                    *testing.T
-	dir                  string
-	origin, root, other  string
-	clock                time.Time
-	provider             *Provider
-	status               map[domain.ID]extension.ResourceOwnerStatus
-	mu                   sync.Mutex
-	workDone, workFailed map[domain.ID]bool
+	t                   *testing.T
+	dir                 string
+	origin, root, other string
+	clock               time.Time
+	provider            *Provider
+	status              map[domain.ID]extension.ResourceOwnerStatus
+	mu                  sync.Mutex
 	// total and free are what the injected disk probe reports; probed lists
 	// the paths it was asked about.
 	total, free uint64

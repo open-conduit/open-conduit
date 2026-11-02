@@ -85,7 +85,7 @@ func fixtureObservation(source extension.Source, id, version string) extension.O
 }
 
 // Keep fixture errors stable and inspectable without service/network behavior.
-var ingressFailure = errors.New("fixture scan unavailable")
+var errIngressFailure = errors.New("fixture scan unavailable")
 
 type ingressClock struct {
 	mu sync.Mutex
@@ -194,7 +194,7 @@ func TestDurableIngressReconcileOnlyAndGenerationRecovery(t *testing.T) {
 	}
 	db, r = openIngress(t, path, clock)
 	registerIngress(t, r, "source_a", source, f)
-	f.failure = ingressFailure
+	f.failure = errIngressFailure
 	if _, err := r.Reconcile(ctx, "source_a"); err == nil {
 		t.Fatalf("failed page ignored: %v", err)
 	}
@@ -708,7 +708,7 @@ func TestIngressExpiredGenerationRestartPreservesAuthoritativeState(t *testing.T
 	reconcilePage(t, r, "source_a")
 	f.pages[""] = extension.Snapshot{ScanID: "expired_generation", NextCursor: "expired_cursor", Checkpoint: "page_only", Observations: []extension.Observation{a2}}
 	reconcilePage(t, r, "source_a")
-	f.failure = ingressFailure
+	f.failure = errIngressFailure
 	if _, err := r.Reconcile(ctx, "source_a"); err == nil {
 		t.Fatal("expired provider generation did not fail")
 	}
