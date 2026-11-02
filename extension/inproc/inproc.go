@@ -19,6 +19,7 @@ import (
 	"encoding/json"
 	"errors"
 	"log/slog"
+	"net/http"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -103,6 +104,19 @@ type Host struct {
 	// families (Event types named <Name>.*) into scope, inside the
 	// extension's own transaction, so its own records commit with it.
 	AcceptInTx func(tx storage.Tx, scope domain.ID, e domain.Event) (domain.AcceptedEvent, bool, error)
+	// AcceptDerivedInTx accepts an Event of one of the extension's own
+	// families as derived from parent, an accepted Event in scope, inside
+	// the extension's own transaction: it lands in parent's causal chain,
+	// bounded by the generation's causal limits. A bound it would exceed is
+	// ErrCausalLimit, recorded by the host for the operator.
+	AcceptDerivedInTx func(tx storage.Tx, scope, parent domain.ID, e domain.Event) (domain.AcceptedEvent, bool, error)
+	// EventScope is the scope an accepted Event was accepted into, read in
+	// the extension's own transaction.
+	EventScope func(tx storage.Tx, a domain.AcceptedEvent) (domain.ID, error)
+	// Deliver pushes a delivery to one of the extension's own ingress
+	// sources (Ingester) by its registration name, acknowledged once it is
+	// durably accepted.
+	Deliver func(ctx context.Context, source string, d extension.Delivery) error
 	// Timers arms and cancels the extension's recurring timers through the
 	// current generation: only its own recurrence kinds and timers whose
 	// Event is of its own families.
@@ -231,6 +245,11 @@ type CandidateEffect struct {
 // kind it did not declare.
 var ErrNotOwn = errors.New("not the extension's own")
 
+// ErrCausalLimit refuses a derived Event that would exceed the causal depth
+// or rate bounds of its chain (Host.AcceptDerivedInTx). The host has
+// recorded the refusal; the extension's transaction may still commit.
+var ErrCausalLimit = errors.New("causal depth or rate bound")
+
 // Timers is the host's timer control.
 type Timers interface {
 	ArmRecurrence(ctx context.Context, scope domain.ID, timer domain.Timer, expected domain.Revision, kind string, spec []byte) error
@@ -253,11 +272,14 @@ type Stopper interface {
 // Work does all its work in one attempt, so an attempt that hands back
 // counts as completed; Trigger,
 // when set, picks the input that triggers an attempt from the pending batch
-// and must be pure and deterministic.
+// and must be pure and deterministic. Timed Work runs on a clock rather
+// than for something that happened (a scheduled job), so a dry run starts
+// none of it and its triggers wait.
 type WorkKind struct {
 	Kind     string
 	Standing bool
 	RunOnce  bool
+	Timed    bool
 	Trigger  func(inputs []domain.Event) int
 }
 
@@ -282,6 +304,47 @@ type Recurring interface {
 // the connection each names when that is one of their connection types.
 type Configurer interface {
 	Configure(ctx context.Context, p protocol.ConfigureParams)
+}
+
+// Configure also carries the entries in scopes that are configured but
+// disabled, in ConfigureParams.Disabled: the extension starts nothing for
+// them, but keeps what it holds for them (timers, cursors) until the scope
+// is enabled again or the entry removed.
+
+// Source is an ingress source the extension registers: Name is its
+// registration name, the extension's name or one beginning with name + "/";
+// Interval is how often the host reconciles it (zero: the configured
+// reconcile interval).
+type Source struct {
+	Name     string
+	Source   extension.Source
+	Ingress  extension.Ingress
+	Interval time.Duration
+}
+
+// Ingester extensions register ingress sources. Sources is read after
+// every Configure; a registration is immutable for the daemon's lifetime,
+// so a source already registered keeps its first registration until
+// restart.
+type Ingester interface {
+	Sources() []Source
+}
+
+// Webhooker extensions receive the webhook requests under /<Name>/ on the
+// host's webhook listener. Webhook is given the path below that prefix
+// ("a/b" for /<Name>/a/b) and returns the handler for it, or nil for none
+// (the host answers 404). The handler verifies the request itself and
+// pushes what it accepts through Host.Deliver.
+type Webhooker interface {
+	Webhook(path string) http.Handler
+}
+
+// Targeter extensions resolve named wait targets in a scope, by kind
+// ("job" for a `job:<name>` wait): the correlation key and Event types
+// that end the thing named, so another extension's wait operation can wait
+// on it through ordinary dependencies.
+type Targeter interface {
+	Targets() map[string]func(ctx context.Context, scope domain.ID, name string) (key domain.CorrelationKey, types []string, ok bool)
 }
 
 // Tooled extensions register toolbelt operations on every generation's

@@ -525,7 +525,9 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			if err != nil || !allowed[scope] {
 				return notFound
 			}
-			out = protocol.FromAccepted(a)
+			event := protocol.FromAccepted(a)
+			event.ScopeID = string(scope)
+			out = event
 		case "state.events":
 			limit := p.Limit
 			if limit <= 0 || limit > 1000 {
@@ -546,7 +548,9 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 						break
 					}
 					if scope, err := runtime.EventScopeInTx(tx, a); err == nil && allowed[scope] {
-						list = append(list, protocol.FromAccepted(a))
+						event := protocol.FromAccepted(a)
+						event.ScopeID = string(scope)
+						list = append(list, event)
 					}
 				}
 				if len(events) < limit {

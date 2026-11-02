@@ -40,7 +40,6 @@ func registry(executors map[string]extension.Executor) config.Registry {
 	reg := config.Registry{Executors: executors, Handlers: handlerNames(), Operations: append(append(gh.Operations(), sl.Operations()...), trackerOperations()...)}
 	trackerRegistry(&reg)
 	slackRegistry(&reg)
-	scheduleRegistry(&reg)
 	inprocRegistry(&reg, firstParty(nil))
 	resourceRegistry(&reg)
 	sandboxRegistry(&reg)

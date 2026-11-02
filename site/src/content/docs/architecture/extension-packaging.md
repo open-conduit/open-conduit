@@ -59,7 +59,7 @@ func main() {
 | --- | --- |
 | `Operation(name, sdk.Handler(fn), opts…)`, or `sdk.Wait(fn)`, `sdk.Emit(fn)` | `operations[]` with its kind, `guidance` (`sdk.Guidance`), `commit` (`sdk.Commit`, emit only) and `input` |
 | `Route(handler, h, opts…)` | `routes[]`, with `samples` when `h` is an `extension.RouteSampler`, `binding` (`sdk.RouteBinding`) and `config` (`sdk.RouteConfig`) |
-| `WorkKind(kind, opts…)` | `work_kinds[]`, `standing` (`sdk.Standing`), `trigger` (`sdk.Trigger(fn)`) |
+| `WorkKind(kind, opts…)` | `work_kinds[]`, `standing` (`sdk.Standing`), `trigger` (`sdk.Trigger(fn)`), `timed` (`sdk.Timed`: a dry run starts none of its Work) |
 | `Task(name, every, fn)`, `Check(name, fn, opts…)` | `tasks[]` with its interval, `checks[]` (`sdk.Deep`) |
 | `IngressType(type, lookup, families…)`, `Family(families…)` | `extensions[]` with `ingress`, and `families[]` |
 | `Recurrence(kind, fn)`, `DependencyFilter(fn)` | `recurrences[]`, `dependency_filter` |

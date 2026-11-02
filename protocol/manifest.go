@@ -378,6 +378,9 @@ type WorkKindDecl struct {
 	Kind     string `json:"kind"`
 	Standing bool   `json:"standing,omitempty"`
 	Trigger  bool   `json:"trigger,omitempty"`
+	// Timed marks Work that runs on a clock (inproc.WorkKind.Timed): a dry
+	// run starts none of it.
+	Timed bool `json:"timed,omitempty"`
 }
 
 // Operation kinds mirror extension.Operation's three mutually exclusive

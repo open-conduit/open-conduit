@@ -291,18 +291,16 @@ var compositionExceptions = map[string][]string{
 	"container.go":  {"extensions/docker", "extensions/ssh"},
 	"daemon.go":     {"executors/shell", "extensions/bitbucket", "extensions/git", "extensions/github", "extensions/schedule", "extensions/slack", "extensions/tracker"},
 	"github.go":     {"extensions/github"},
-	"loop.go":       {"extensions/schedule"},
 	"operator.go":   {"executors/claudecode", "executors/shell", "extensions/github", "extensions/github/playbooks", "extensions/jira", "extensions/linear", "extensions/schedule", "extensions/slack"},
 	"probes.go":     {"executors/claudecode", "extensions/github"},
 	"resources.go":  {"extensions/git"},
-	"routes.go":     {"extensions/github", "extensions/schedule", "extensions/slack"},
+	"routes.go":     {"extensions/github", "extensions/slack"},
 	"sandbox.go":    {"extensions/srt"},
-	"schedule.go":   {"extensions/github", "extensions/schedule"},
 	"slack.go":      {"extensions/slack"},
 	"state.go":      {"extensions/posthog"},
 	"tools.go":      {"executors/claudecode", "extensions/github", "extensions/github/playbooks", "extensions/slack", "extensions/slack/playbooks", "extensions/tracker/playbooks"},
 	"trackers.go":   {"extensions/bitbucket", "extensions/jira", "extensions/linear", "extensions/tracker"},
-	"webhooks.go":   {"extensions/github", "extensions/schedule", "extensions/slack", "extensions/tunnel"},
+	"webhooks.go":   {"extensions/github", "extensions/slack", "extensions/tunnel"},
 }
 
 // compositionViolations checks internal/bootstrap's production files import

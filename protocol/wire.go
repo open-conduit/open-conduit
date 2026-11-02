@@ -111,6 +111,9 @@ type AcceptedEvent struct {
 	Routed       bool   `json:"routed"`
 	RoutedWorkID string `json:"routed_work_id,omitempty"`
 	Disposition  string `json:"disposition,omitempty"`
+	// ScopeID is the scope the Event was accepted into, on the events
+	// state.event and state.events return.
+	ScopeID string `json:"scope_id,omitempty"`
 }
 
 func FromAccepted(a domain.AcceptedEvent) AcceptedEvent {

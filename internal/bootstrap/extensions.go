@@ -649,7 +649,15 @@ func (d *daemon) configureParams(types, connTypes map[string]bool) protocol.Conf
 	params.Generation = strconv.FormatUint(gen, 10)
 	for _, id := range s.Order {
 		scope := s.Scopes[id]
-		if scope == nil || !scope.Enabled {
+		if scope == nil {
+			continue
+		}
+		if !scope.Enabled {
+			for _, x := range scope.Extensions {
+				if types[x.Type] {
+					params.Disabled = append(params.Disabled, protocol.ConfigEntry{ScopeID: string(id), Type: x.Type, Name: x.Name, Config: x.Config, Secrets: x.SecretNames})
+				}
+			}
 			continue
 		}
 		var bound []protocol.ConnectionEntry
