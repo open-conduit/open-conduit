@@ -539,6 +539,10 @@ func TestHumanGateApprovesTheSameCallOnce(t *testing.T) {
 			if err != nil || len(acts) != 1 || strings.Join(acts[0].Choices, ",") != "approve,refuse" || !strings.Contains(acts[0].Label, "fixture.deploy") {
 				t.Fatalf("approval not offered: %+v %v", acts, err)
 			}
+			// What a surface away from the panel shows: the call and its input.
+			if !strings.Contains(acts[0].Detail, "Allow fixture.deploy?") || !strings.Contains(acts[0].Detail, `"env": "prod"`) {
+				t.Fatalf("approval detail: %q", acts[0].Detail)
+			}
 			panels, err := h.actions.Panels(ctx, h.target(t))
 			if err != nil || len(panels) != 1 || panels[0].Title != "Approval needed" || !strings.Contains(panels[0].Sections[1].Text, `"env": "prod"`) {
 				t.Fatalf("approval panel: %+v %v", panels, err)

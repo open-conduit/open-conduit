@@ -58,6 +58,11 @@ type Action struct {
 	Label   string
 	Prompt  string
 	Choices []string
+	// Detail, when set, is what a person needs to decide (the question
+	// asked, or the call an approval is for), for a surface that shows the
+	// action away from the Work's own panels (a Slack prompt). Plain text,
+	// at most 3000 bytes.
+	Detail string
 }
 
 // ActionCall is one invocation.

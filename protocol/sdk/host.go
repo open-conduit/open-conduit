@@ -210,7 +210,7 @@ func (h *Host) Actions(ctx context.Context, scope, work domain.ID) ([]extension.
 	}
 	offers := make([]extension.ActionOffer, 0, len(out.Actions))
 	for _, a := range out.Actions {
-		offers = append(offers, extension.ActionOffer{Provider: a.Provider, Action: extension.Action{ID: a.ID, Label: a.Label, Prompt: a.Prompt, Choices: a.Choices}})
+		offers = append(offers, extension.ActionOffer{Provider: a.Provider, Action: extension.Action{ID: a.ID, Label: a.Label, Prompt: a.Prompt, Choices: a.Choices, Detail: a.Detail}})
 	}
 	return offers, nil
 }

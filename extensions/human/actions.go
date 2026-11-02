@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -91,7 +92,20 @@ func (a Actions) Actions(ctx context.Context, t extension.ActionTarget) ([]exten
 	if rec.Gate != "" {
 		label = "Approve or refuse " + rec.Gate
 	}
-	return []extension.Action{{ID: ActionAnswer, Label: label, Prompt: prompt, Choices: rec.Options}}, nil
+	return []extension.Action{{ID: ActionAnswer, Label: label, Prompt: prompt, Choices: rec.Options, Detail: detail(rec)}}, nil
+}
+
+// detail is what a person needs to decide an ask away from its panel: the
+// question, then its context (for an approval, the call's input).
+func detail(rec Ask) string {
+	d := rec.Question
+	if rec.Context != "" {
+		d += "\n\n" + rec.Context
+	}
+	if len(d) > 3000 {
+		d = strings.ToValidUTF8(d[:2997], "") + "..."
+	}
+	return d
 }
 
 func refuseAction(code, message string) (extension.ActionPlan, error) {
