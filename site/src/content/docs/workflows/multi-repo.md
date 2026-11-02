@@ -1,6 +1,6 @@
 ---
 title: Multi-repo changes
-description: Track one change across several repositories: a parent issue whose agent files one issue per repository, waits for all of them to close, then reports the set of PRs.
+description: "Track one change across several repositories: a parent issue whose agent files one issue per repository, waits for all of them to close, then reports the set of PRs."
 ---
 
 Some changes span repositories: renaming a field in an API and its clients, or bumping a shared library everywhere it is used. Open Conduit tracks such a change as one parent issue. The parent's agent files one issue in each repository, and each is worked by that repository's own agent and lands as its own PR. The parent waits until every one has closed, then reports the set of PRs on the parent issue.
