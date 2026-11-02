@@ -74,14 +74,8 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.reconcileEndpoints(ctx)
 		d.sweepResources(c)
 		d.maintainClaudeCode(ctx)
-		if d.now().Sub(lastSweep) >= d.o.RetentionInterval {
-			if _, err = c.scheduler.SweepRetention(ctx, passLimit); err != nil && ctx.Err() == nil {
-				d.report("retention", "", errorCode(err))
-			} else {
-				lastSweep = d.now()
-			}
-			d.collectArtifacts(ctx)
-		}
+		d.retentionPass(ctx, c, &lastSweep)
+		d.scheduleBackup(ctx)
 		select {
 		case <-ctx.Done():
 			return nil
@@ -93,6 +87,26 @@ func (d *daemon) loop(ctx context.Context) error {
 			return fmt.Errorf("%w (%s)", ErrInstallRemoved, p)
 		}
 	}
+}
+
+// retentionPass runs the retention sweep and artifact collection once
+// RetentionInterval has passed since the last sweep. Both take the artifact
+// store's exclusive gate, which a running backup holds shared for its whole
+// artifact copy, and a waiting writer would also block every artifact read
+// and write behind it. So while a backup runs the pass is skipped, leaving
+// lastSweep where it was, and the first pass after the backup runs it. It
+// reports whether it ran.
+func (d *daemon) retentionPass(ctx context.Context, c *components, lastSweep *time.Time) bool {
+	if d.now().Sub(*lastSweep) < d.o.RetentionInterval || d.backupRunning() {
+		return false
+	}
+	if _, err := c.scheduler.SweepRetention(ctx, passLimit); err != nil && ctx.Err() == nil {
+		d.report("retention", "", errorCode(err))
+	} else {
+		*lastSweep = d.now()
+	}
+	d.collectArtifacts(ctx)
+	return true
 }
 
 // routePending routes every accepted but unrouted Event in acceptance order,
