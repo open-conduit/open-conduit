@@ -90,7 +90,7 @@ A remote binding declares a `container` with the `ssh` provider:
     "connection": "github",
     "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": true},
     "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                   "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait",
+                   "github.issue.comment", "github.pr.view", "github.pr.create", "github.pr.edit", "github.checks", "github.wait",
                    "github.git.credential"],
     "secret_names": ["claude-token"],
     "config": {"branch": "agent/issue-{number}", "workspace_mode": "clone",

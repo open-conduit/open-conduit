@@ -421,7 +421,9 @@ type rawComment struct {
 }
 
 type rawPull struct {
-	Number      int        `json:"number"`
+	Number int `json:"number"`
+	// NodeID is the PR's GraphQL ID, which changing its draft state needs.
+	NodeID      string     `json:"node_id"`
 	Title       string     `json:"title"`
 	Body        string     `json:"body"`
 	HTMLURL     string     `json:"html_url"`

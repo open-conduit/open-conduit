@@ -87,6 +87,25 @@ func (c *Client) CreatePull(ctx context.Context, repo, title, body, head, base s
 	return out, err
 }
 
+// EditPull changes a PR's title or body as the writer: fields holds only
+// what changes ("title", "body").
+func (c *Client) EditPull(ctx context.Context, repo string, n int, fields map[string]string) (rawPull, error) {
+	var out rawPull
+	_, err := c.call(ctx, true, repo, http.MethodPatch, repoPath(repo, "/pulls/%d", n), fields, &out)
+	return out, err
+}
+
+// SetPullDraft marks a PR ready for review (draft false) or converts it to
+// a draft (draft true) as the writer. REST can't change a PR's draft state,
+// so this goes through GraphQL with the PR's node ID.
+func (c *Client) SetPullDraft(ctx context.Context, repo, nodeID string, draft bool) error {
+	mutation := `mutation($pr: ID!) { markPullRequestReadyForReview(input: {pullRequestId: $pr}) { pullRequest { id isDraft } } }`
+	if draft {
+		mutation = `mutation($pr: ID!) { convertPullRequestToDraft(input: {pullRequestId: $pr}) { pullRequest { id isDraft } } }`
+	}
+	return c.graphql(ctx, true, repo, mutation, map[string]any{"pr": nodeID}, nil)
+}
+
 // PullComments lists a PR's inline review comments.
 func (c *Client) PullComments(ctx context.Context, repo string, n int) ([]rawComment, error) {
 	return all[rawComment](ctx, c, repo, repoPath(repo, "/pulls/%d/comments", n))

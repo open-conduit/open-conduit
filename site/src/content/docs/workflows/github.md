@@ -68,7 +68,7 @@ Each workflow is a scope in the config. The example below is a complete, minimal
       "authorization": {
         "connections": ["github"],
         "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                       "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
+                       "github.issue.comment", "github.pr.view", "github.pr.create", "github.pr.edit", "github.checks", "github.wait"],
         "read_scopes": []
       },
       "extensions": [
@@ -85,7 +85,7 @@ Each workflow is a scope in the config. The example below is a complete, minimal
           "connection": "github",
           "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": true},
           "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                         "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
+                         "github.issue.comment", "github.pr.view", "github.pr.create", "github.pr.edit", "github.checks", "github.wait"],
           "secret_names": [],
           "config": {"playbook": "work-issue", "branch": "agent/issue-{number}"},
           "resource": {"provider": "git", "config": {"checkout": "/path/to/web", "mode": "work"}}

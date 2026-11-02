@@ -64,6 +64,19 @@ func WithMarker(body, work, intent string) string {
 	return strings.TrimRight(body, "\n") + "\n\n" + marker + " -->\n" + LegacyMarker + "\n"
 }
 
+// withPullMarker marks a PR body as opened by work, which is how
+// github.pr.edit recognises the Work's own PRs. Any Open Conduit marker
+// already in body (one copied from github.pr.view, say) is dropped first,
+// so the body carries exactly one. A PR body takes no intent and no legacy
+// marker: it is not a comment, and it can become a squash commit's message.
+func withPullMarker(body, work string) string {
+	body = strings.TrimRight(conduitMark.ReplaceAllString(body, ""), "\n ")
+	if !markValue.MatchString(work) {
+		return body
+	}
+	return body + "\n\n<!-- open-conduit:agent work=" + work + " -->\n"
+}
+
 // hasIntent reports whether body carries the marker for intent.
 func hasIntent(body, intent string) bool {
 	a := ParseAgent(body)
