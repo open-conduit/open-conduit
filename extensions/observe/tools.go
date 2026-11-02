@@ -38,10 +38,13 @@ func NewTools(store storage.Store, now func() time.Time) (*Tools, error) {
 //go:embed guidance/record.md
 var recordGuidance string
 
+// RecordGuidance is observe.record's guidance, as the toolbelt serves it.
+func RecordGuidance() string { return strings.TrimSpace(recordGuidance) }
+
 // Registration is the toolbelt registration.
 func (t *Tools) Registration() extension.Registration {
 	return extension.Registration{Version: extension.ContractVersion, Name: Type, EventTypes: []string{TypeRecorded},
-		Operations: []extension.Operation{{Name: OpRecord, Emit: t.record, Guidance: strings.TrimSpace(recordGuidance)}}}
+		Operations: []extension.Operation{{Name: OpRecord, Emit: t.record, Guidance: RecordGuidance()}}}
 }
 
 func refuse(code, format string, args ...any) error {
