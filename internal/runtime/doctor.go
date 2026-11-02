@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"sort"
@@ -78,7 +79,7 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 	}
 	checks = append(checks, storageCheck)
 
-	var expired, holds, retention []string
+	var expired, holds, retention, overBudget []string
 	parked := 0
 	err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
 		xs, err := tx.ListExecutions("")
@@ -113,6 +114,24 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 				retention = append(retention, string(r.ExecutionID))
 			}
 		}
+		held, err := tx.List(holdNamespace, "")
+		if err != nil {
+			return err
+		}
+		for _, row := range held {
+			var h Hold
+			if err = json.Unmarshal(row.Value, &h); err != nil {
+				return err
+			}
+			if h.Kind != HoldKindBudget {
+				continue
+			}
+			if a, err := tx.Event(h.EventID); err == nil {
+				overBudget = append(overBudget, string(a.Event.WorkID)+": "+h.Reason)
+			} else if !errors.Is(err, storage.ErrNotFound) {
+				return err
+			}
+		}
 		return nil
 	})
 	if err != nil {
@@ -134,6 +153,11 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 		checks = append(checks, Check{Name: "retention", Status: CheckOK, Code: "current", Detail: "no pending retention releases"})
 	}
 	checks = append(checks, routingCheck(ctx, store, now, o.UnroutedAge, limit))
+	if len(overBudget) > 0 {
+		checks = append(checks, Check{Name: "budgets", Status: CheckWarn, Code: "over_budget", Detail: fmt.Sprintf("%d Work held over budget; raise the limit or release the hold", len(overBudget)), Items: limit(overBudget)})
+	} else {
+		checks = append(checks, Check{Name: "budgets", Status: CheckOK, Code: "within", Detail: "no Work is held over budget"})
+	}
 
 	if o.Ingress == nil {
 		return append(checks, Check{Name: "reconcile_lag", Status: CheckInfo, Code: "no_ingress", Detail: "no ingress sources are registered"})

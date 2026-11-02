@@ -404,6 +404,14 @@ func (e *Executor) finalizeWith(ctx context.Context, rn *run, preset *domain.Out
 	outcome.Data = resultData(f)
 	result.Outcome = outcome
 	result.ConsumedInputs = consumedInputs(rn.dir)
+	// The segment's wall time is what a shell command costs: budgets can
+	// limit it in minutes (#361).
+	var in intent
+	if readJSON(filepath.Join(rn.dir, "intent.json"), &in) == nil && !in.StartedAt.IsZero() {
+		if d := e.o.Now().Sub(in.StartedAt); d > 0 {
+			result.Usage.Units = map[string]float64{"minutes": d.Minutes()}
+		}
+	}
 	if err = writeJSON(filepath.Join(rn.dir, "result.json"), result); err != nil {
 		return extension.Result{}, err
 	}

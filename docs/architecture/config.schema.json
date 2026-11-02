@@ -118,6 +118,28 @@
           "maximum": 2147483647,
           "default": 128
         },
+        "budgets": {
+          "description": "Usage limits the host enforces before it starts a turn: at most max of unit per Work, per scope or across every scope, over the Work's life or each UTC day or week. Work over a limit is held with the reason.",
+          "type": "array",
+          "maxItems": 64,
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["unit", "per", "max"],
+            "properties": {
+              "unit": {
+                "description": "attempts and turns are counted by the host; any other unit (usd, tokens, minutes, ...) is what executors report.",
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.-]{0,31}$"
+              },
+              "per": {"enum": ["work", "scope", "all"]},
+              "period": {"enum": ["day", "week"]},
+              "max": {"type": "number", "exclusiveMinimum": 0},
+              "warn_at": {"type": "number", "exclusiveMinimum": 0, "exclusiveMaximum": 1, "default": 0.8},
+              "scope": {"type": "string", "pattern": "^[a-z][a-z0-9_-]{0,62}$"}
+            }
+          }
+        },
         "webhooks": {
           "description": "The webhook listener and tunnel serve starts with; serve flags override it for one run.",
           "type": "object",
