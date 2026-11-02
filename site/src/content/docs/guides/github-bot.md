@@ -145,6 +145,8 @@ Which binding reviews which PR is up to your routes and playbooks; the writer on
 
 ## A review bot for every PR
 
+The [review bot](../../workflows/review-bot/) is a ready-made reviewer you can include in your config. To build one into a scope you already have, read on.
+
 Open Conduit can give each newly opened PR its own reviewer, alongside the agent working the issue the PR belongs to. Each review is its own Work: the reviewer reviews, waits for changes, reviews again, and stops when the PR merges or closes.
 
 1. On the repository's `github` entry, track pull requests, so Open Conduit hears each PR's news under the PR's own key as well as for the issue's agent:

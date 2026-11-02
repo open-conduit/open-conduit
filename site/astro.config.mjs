@@ -27,12 +27,15 @@ export default defineConfig({
 						{ label: 'Quick start', slug: 'start/quick-start' },
 						{ label: 'Point your agent here', slug: 'start/agents' },
 						{ label: 'How it compares', slug: 'start/compare' },
+						{ label: 'Glossary', slug: 'start/glossary' },
 					],
 				},
 				{
 					label: 'Workflows',
 					items: [
 						{ label: 'GitHub engineering', slug: 'workflows/github' },
+						{ label: 'Linear and Jira', slug: 'workflows/linear-jira' },
+						{ label: 'Pull request review', slug: 'workflows/review-bot' },
 						{ label: 'Slack support', slug: 'workflows/slack' },
 						{ label: 'Scheduled jobs', slug: 'workflows/scheduled-jobs' },
 						{ label: 'Introspection', slug: 'workflows/introspection' },

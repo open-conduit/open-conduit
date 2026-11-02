@@ -61,7 +61,10 @@ func fencedBlocks(t *testing.T, path, lang string) []string {
 
 // Every complete config document (a JSON object with "version") in the
 // user-facing docs passes the same offline validation as
-// `open-conduit config check`.
+// `open-conduit config check`, without a warning: an example that prints one
+// teaches a reader something deprecated or ineffective. The warnings that
+// depend on the machine (a cmd: secret's program not being installed, an
+// included folder being missing) are left out.
 func TestDocsExampleConfigsValidate(t *testing.T) {
 	total := 0
 	for _, path := range userDocs {
@@ -75,9 +78,12 @@ func TestDocsExampleConfigsValidate(t *testing.T) {
 				continue
 			}
 			total++
-			diags, err := bootstrap.ValidateConfig([]byte(block))
+			diags, modes, err := bootstrap.CheckConfigAt("", []byte(block))
 			if err != nil || len(diags) != 0 {
 				t.Errorf("%s: json block %d is not a valid config: %v %v", filepath.Base(path), i+1, diags, err)
+			}
+			if w := bootstrap.ConfigWarnings("", []byte(block), modes, false); len(w) != 0 {
+				t.Errorf("%s: json block %d warns when checked: %v", filepath.Base(path), i+1, w)
 			}
 		}
 	}

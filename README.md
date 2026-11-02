@@ -51,10 +51,11 @@ open-conduit init --with claude
 
 To talk it through in the browser instead, start the daemon with no config (`open-conduit serve`), or add a setup scope to an existing one with `open-conduit init setup`, and open the Setup page of `open-conduit web`. A browser session explains Open Conduit and plans the setup with you, then gives you the commands; in this release it has no shell and can't change the config itself. See [Set it up in the browser](https://open-conduit.github.io/open-conduit/start/quick-start/#set-it-up-in-the-browser).
 
-Prefer to do it by hand? The same setup takes four commands:
+Prefer to do it by hand? Write the scope, check it, start the daemon and check its credentials, then watch it in the terminal or the browser:
 
 ```sh
 open-conduit init github --repo acme/web --checkout ~/Code/web
+open-conduit config check                            # validate the config offline
 open-conduit service install                         # run the daemon in the background
 open-conduit doctor --check-secrets                  # every connection, credential and binding
 open-conduit tui                                     # watch and control runs
@@ -68,7 +69,7 @@ To see routing before you set anything up, [look around without credentials](htt
 Where to go next:
 
 - [Quick start](https://open-conduit.github.io/open-conduit/start/quick-start/): set it up with Claude, in the browser or by hand, then start the daemon and check it.
-- Workflows: [GitHub engineering](https://open-conduit.github.io/open-conduit/workflows/github/), [Slack support](https://open-conduit.github.io/open-conduit/workflows/slack/), [scheduled jobs](https://open-conduit.github.io/open-conduit/workflows/scheduled-jobs/) and [introspection](https://open-conduit.github.io/open-conduit/workflows/introspection/).
+- Workflows: [GitHub engineering](https://open-conduit.github.io/open-conduit/workflows/github/), [Linear and Jira](https://open-conduit.github.io/open-conduit/workflows/linear-jira/), [pull request review](https://open-conduit.github.io/open-conduit/workflows/review-bot/), [Slack support](https://open-conduit.github.io/open-conduit/workflows/slack/), [scheduled jobs](https://open-conduit.github.io/open-conduit/workflows/scheduled-jobs/) and [introspection](https://open-conduit.github.io/open-conduit/workflows/introspection/).
 - [Extensions](https://open-conduit.github.io/open-conduit/reference/extensions/): add integrations and executors of your own.
 - [The core in one page](https://open-conduit.github.io/open-conduit/architecture/core/): the design in depth.
 

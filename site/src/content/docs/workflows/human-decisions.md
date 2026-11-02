@@ -35,7 +35,7 @@ An agent working a GitHub issue or a Slack thread sometimes needs a person's dec
       "bindings": [
         {"name": "agent", "executor": "claude-code", "requires": {"toolbelt": "mcp"},
          "operations": ["read_context", "declare_outcome", "human.ask"],
-         "secret_names": [], "config": {}}
+         "secret_names": [], "config": {"playbook": "-"}}
       ]
     }
   ]

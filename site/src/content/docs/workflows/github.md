@@ -87,7 +87,7 @@ Each workflow is a scope in the config. The example below is a complete, minimal
           "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
                          "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
           "secret_names": [],
-          "config": {"branch": "agent/issue-{number}"},
+          "config": {"playbook": "work-issue", "branch": "agent/issue-{number}"},
           "resource": {"provider": "git", "config": {"checkout": "/path/to/web", "mode": "work"}}
         }
       ]
@@ -98,6 +98,12 @@ Each workflow is a scope in the config. The example below is a complete, minimal
 
 Leave out `resource` (and set `workspace` to `false`) for a scope whose turns need no checkout.
 
+The operations appear twice on purpose. The scope's `authorization.operations` is the most any binding in the scope, or in a scope beneath it, may ever be given; it grants nothing by itself. Each binding's `operations` is exactly what its runs get, and must sit within that ceiling. With one binding the two lists match, but a scope with a second binding, such as a reviewer that may review and never open PRs, gives each binding only what it needs.
+
+## Pull request review
+
+To have an agent review every pull request as well, see [pull request review](../review-bot/).
+
 ## Linear, Jira and Bitbucket
 
-Linear and Jira trackers, with GitHub or Bitbucket as the code host, have their own setups (`init linear`, `init jira`). See [installed integrations](../../architecture/installed-integrations/).
+Linear and Jira issues, with Bitbucket Cloud as the code host, have their own setups (`init linear`, `init jira`). See [Linear and Jira](../linear-jira/).

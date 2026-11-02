@@ -25,4 +25,4 @@ A binding can also run its agent in a [sandbox or a container](../../guides/sand
 
 Because GitHub, Slack, scheduled jobs and introspection all go through the same core, they share one history, one retry and timeout model, and one view in the terminal UI.
 
-For the design in depth, see [the core in one page](../../architecture/core/).
+For the other terms the docs use, such as playbook, generation, hold and marker, see the [glossary](../glossary/). For the design in depth, see [the core in one page](../../architecture/core/).
