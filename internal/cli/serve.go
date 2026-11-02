@@ -15,6 +15,12 @@ type ServeRequest struct {
 	PollInterval, LeaseDuration, RetentionInterval          time.Duration
 	// SweepInterval paces the spare-workspace sweep (default 6h).
 	SweepInterval time.Duration
+	// BackupInterval paces the scheduled backups into BackupDir, keeping
+	// BackupsKept (24h, StateDir/backups and 7 by default); negative turns
+	// them off.
+	BackupInterval time.Duration
+	BackupDir      string
+	BackupsKept    int
 	// WebhookAddr enables the webhook listener; Tunnel* expose it. Empty
 	// values fall back to the config's settings.webhooks.
 	WebhookAddr                                                   string
@@ -56,7 +62,7 @@ func (o *operator) serve(args []string) int {
 // parseServe resolves serve's flags (shared with service install); code is
 // the exit code when they are invalid, else -1.
 func (o *operator) parseServe(args []string) (ServeRequest, int) {
-	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "webhook-addr", "tunnel", "tunnel-binary", "tunnel-domain", "tunnel-name", "tunnel-hostname", "public-url", "web-addr", "web-host")
+	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "webhook-addr", "tunnel", "tunnel-binary", "tunnel-domain", "tunnel-name", "tunnel-hostname", "public-url", "web-addr", "web-host")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
 	usage := fs.fs.Bool("claude-usage", false, "")
@@ -66,7 +72,9 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	lease := fs.fs.Duration("lease-duration", time.Minute, "")
 	retention := fs.fs.Duration("retention-interval", 10*time.Minute, "")
 	sweep := fs.fs.Duration("sweep-interval", 6*time.Hour, "")
-	if pos, err := fs.parse(args); err != nil || len(pos) != 0 || *poll <= 0 || *lease <= 0 || *retention <= 0 || *sweep <= 0 {
+	backups := fs.fs.Duration("backup-interval", 24*time.Hour, "")
+	kept := fs.fs.Int("backups-kept", 7, "")
+	if pos, err := fs.parse(args); err != nil || len(pos) != 0 || *poll <= 0 || *lease <= 0 || *retention <= 0 || *sweep <= 0 || *backups < 0 || *kept < 1 {
 		return ServeRequest{}, usageError(o.errOut, "invalid serve flags")
 	}
 	switch fs.get("tunnel") {
@@ -77,6 +85,11 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	r := ServeRequest{StateDir: o.stateDir(), ConfigPath: o.abs(fs.get("config")), Socket: o.abs(o.socket), ToolbeltDir: o.abs(fs.get("toolbelt-dir")), LifecycleLog: o.abs(fs.get("lifecycle-log")), PollInterval: *poll, LeaseDuration: *lease, RetentionInterval: *retention, SweepInterval: *sweep,
 		WebhookAddr: fs.get("webhook-addr"), TunnelKind: fs.get("tunnel"), TunnelBinary: fs.get("tunnel-binary"), TunnelDomain: fs.get("tunnel-domain"),
 		TunnelName: fs.get("tunnel-name"), TunnelHostname: fs.get("tunnel-hostname"), PublicURL: fs.get("public-url"), NoTunnel: *noTunnel, DryRun: *dryRun, ClaudeUsage: *usage}
+	// --backup-interval 0 turns the scheduled backups off.
+	r.BackupInterval, r.BackupDir, r.BackupsKept = *backups, o.abs(fs.get("backup-dir")), *kept
+	if r.BackupInterval == 0 {
+		r.BackupInterval = -1
+	}
 	// --web-addr or --web-host alone also turn the view on.
 	r.WebAddr, r.WebHost = fs.get("web-addr"), fs.get("web-host")
 	r.Web = *web || r.WebAddr != "" || r.WebHost != ""

@@ -23,6 +23,8 @@ Digests detect corruption and incomplete copies; they do not authenticate a bund
 
 `open-conduit backup create DEST`, `backup verify BUNDLE` and `backup restore BUNDLE --to DIR` run offline under the state directory's daemon lock ([`internal/bootstrap/state.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/state.go)). A restore also revokes the bundle's operator credential and writes a fresh `private/operator.token` through the locked local reset (`auth recover`). `backup.Inspect` reads a manifest without verifying its bytes.
 
+The running daemon also calls `backup.Create` on a schedule ([`internal/bootstrap/autobackup.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/autobackup.go)), without stopping: every `--backup-interval` (default 24h) it publishes `conduit-<UTC time>` into `--backup-dir` (default `<data-dir>/backups`) and removes the oldest such bundles beyond `--backups-kept` (default 7). The [recovery](../recovery/#scheduled-backups) page has the details and the restore runbook.
+
 ## Evidence
 
 `go test -race ./internal/backup` exercises captured correlation/timer/history/content, exclusion of later live changes, lease fencing, existing-destination refusal, manifest/database/artifact corruption, missing-reference rejection and refusal of an omission on an unexpired Execution. `TestShellRetentionReleasesRunDirectories` runs the retention sweep on real shell attempts, then backs up and restores, with the expired attempt's references omitted. SQLite and artifact suites separately exercise process kill/reopen and transaction/publication fault boundaries. `TestDaemonMigrationRehearsal` restores a bundle and restarts on it with no repeated external write, claim or job run, and refuses a tampered bundle.
@@ -35,4 +37,5 @@ These notes record how this part was built and the evidence gathered at each sta
 
 - Ticket 02-01 implemented backup composition alongside SQLite and artifacts as backend APIs and tested bundle mechanics. Operator commands and recovery runbooks were left to 06-02, and instance credentials/config were left to later bootstrap work.
 - Ticket 06-02 added the `open-conduit backup` commands, the restore-time operator credential reset, the [recovery](../recovery/) runbooks and `TestDaemonMigrationRehearsal`.
+- Until [#352](https://github.com/open-conduit/open-conduit/issues/352), bundles were made only by the offline `backup create`; the daemon now makes them on a schedule while it runs.
 - Until [#37](https://github.com/open-conduit/open-conduit/issues/37), `Create` copied every reference, so a backup failed with "not found" once the retention sweep had released any attempt's content. Expired references are now recorded as omitted.

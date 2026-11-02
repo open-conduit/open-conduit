@@ -24,7 +24,41 @@ open-conduit auth recover                                 # a lost or ambiguous 
   - It revokes the bundle's operator credential and writes a fresh `private/operator.token` (`auth recover` under the lock).
   - A process running at backup time is not adopted after a restore: its attempt recovers or retries through ordinary recovery. Take bundles after a drain.
   - Worktrees of the old state directory stay registered in the checkout: run `git worktree prune` once the old directory is gone.
-- **Timing.** Back up before every binary upgrade. A daily bundle with the daemon briefly stopped is the minimal routine; online bundles through the management API are not provided.
+- **Timing.** The running daemon takes a bundle itself on a schedule (below). Also take one by hand before every binary upgrade and keep it: the scheduled ones rotate, and after an upgrade they hold the newer binary's records.
+
+## Scheduled backups
+
+While it runs, the daemon publishes a bundle of its own state every `--backup-interval` (default `24h`) into `--backup-dir` (default `<data-dir>/backups`) and keeps the newest `--backups-kept` (default 7). `--backup-interval 0` turns them off. Each is the bundle `backup create` makes, named `conduit-<UTC time>` (`conduit-20261102T090000Z`), so `backup verify` and `backup restore` take it as they are. The database is copied with SQLite's online backup API, which holds the store's connection only while it copies pages; the artifacts are copied after, so the daemon keeps working throughout.
+
+- The first runs at start when the directory has no scheduled bundle, then one interval after the newest; a restart doesn't add one.
+- Only `conduit-<time>` directories are counted and pruned. Anything else in the directory, such as a bundle you took before an upgrade, is left alone.
+- A failed backup is logged as a `backup` runtime diagnostic and tried again 15 minutes later. A staging directory a crash left (`.conduit-snapshot-*`) is removed at the next start.
+- The default directory is on the same disk as the state. To survive losing the disk, point `--backup-dir` elsewhere (a flag of `serve` and of `service install`).
+
+## Restoring after a bad release or lost state
+
+Restore puts the bundle's database and artifacts back. The rest of the data directory (installed extensions, workspaces, executor run directories, logs) stays where it is. The paths below are the defaults; substitute `--data-dir` if you set one.
+
+```sh
+open-conduit service stop                          # or stop serve
+ls ~/.local/state/open-conduit/backups              # pick the newest bundle from before the problem
+open-conduit backup verify ~/.local/state/open-conduit/backups/conduit-20261102T090000Z
+open-conduit backup restore ~/.local/state/open-conduit/backups/conduit-20261102T090000Z --to ~/.local/state/oc-restored
+
+cd ~/.local/state/open-conduit
+mkdir before-restore
+mv conduit.db conduit.db-wal conduit.db-shm artifacts private/operator.token before-restore/ 2>/dev/null
+mv ~/.local/state/oc-restored/conduit.db ~/.local/state/oc-restored/artifacts .
+mv ~/.local/state/oc-restored/private/operator.token private/
+
+open-conduit state check                           # database schema_1, artifacts complete
+open-conduit service start                         # with the binary the bundle came from, when going back a release
+```
+
+- To go back a release, install the older binary before starting. A bundle a newer binary took may hold records the older one refuses (`records_newer`); pick one from before the upgrade.
+- The restored `operator.token` is new: the bundle's credentials were revoked, so clients read the new file.
+- Work that happened after the bundle is re-derived from the services when reconcile runs, apart from declared one-shot deliveries. Attempts running at backup time are recovered or retried, never adopted.
+- Keep `before-restore/` until the restored instance has run for a while, then delete it and `~/.local/state/oc-restored`.
 
 ## SQLite migration recovery
 
@@ -71,10 +105,13 @@ Recovery order:
 - corrupted and newer-schema databases diagnosed;
 - a tampered bundle refused.
 
+`TestScheduledBackupsKeepTheNewest` and `TestScheduledBackupsResumeFromTheNewestBundle` (in `internal/bootstrap`) cover the schedule with a fake clock: a scheduled bundle restores, the newest are kept and others in the directory left alone, a restart resumes from the newest bundle and clears interrupted staging.
+
 ## History
 
 :::note
 These notes record how this part was built and the evidence gathered at each stage. They describe the code at the time; the sections above describe current behaviour.
 :::
 
+- Until [#352](https://github.com/open-conduit/open-conduit/issues/352), backups ran only by hand with the daemon stopped; the daemon now takes them on a schedule.
 - Ticket 06-02 delivered the offline recovery commands (backup create, verify and restore, `auth recover`, `state check`) and the runbooks above, with `TestDaemonMigrationRehearsal` as its drill.
