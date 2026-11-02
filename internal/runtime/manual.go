@@ -61,9 +61,9 @@ func prior(tx storage.Tx, delivery string) (domain.AcceptedEvent, bool, error) {
 	return deliveryDuplicate(tx, domain.Event{Source: ManualSource, DeliveryID: delivery})
 }
 
-func (c *Control) acceptInTx(tx storage.Tx, scope domain.ID, m ManualEvent, typ string) (domain.AcceptedEvent, bool, error) {
+func (c *Control) acceptInTx(ctx context.Context, tx storage.Tx, scope domain.ID, m ManualEvent, typ string) (domain.AcceptedEvent, bool, error) {
 	now := c.now()
-	e := domain.Event{ID: manualEventID(m.DeliveryID), Type: typ, Source: ManualSource, DeliveryID: m.DeliveryID, OccurredAt: now, ReceivedAt: now, CorrelationKey: m.CorrelationKey, WorkID: m.WorkID, Data: m.Data}
+	e := domain.Event{ID: manualEventID(m.DeliveryID), Type: typ, Source: ManualSource, DeliveryID: m.DeliveryID, OccurredAt: now, ReceivedAt: now, CorrelationKey: m.CorrelationKey, WorkID: m.WorkID, Data: m.Data, Actor: ActorFrom(ctx)}
 	if m.CausationID != "" {
 		parent, err := tx.Event(m.CausationID)
 		if err != nil {
@@ -112,7 +112,7 @@ func (c *Control) SubmitEvent(ctx context.Context, m ManualEvent) (accepted doma
 			}
 		}
 		var e error
-		accepted, added, e = c.acceptInTx(tx, m.ScopeID, m, m.Type)
+		accepted, added, e = c.acceptInTx(ctx, tx, m.ScopeID, m, m.Type)
 		if errors.Is(e, ErrCausalRejected) {
 			refusal = e
 			return nil
@@ -191,7 +191,7 @@ func (c *Control) CreateWork(ctx context.Context, m ManualWork) (work domain.Wor
 		if e != nil {
 			return e
 		}
-		created, _, e = c.acceptInTx(tx, m.ScopeID, ManualEvent{WorkID: id, DeliveryID: "work/" + m.DeliveryID, Data: domain.Payload{Schema: "core.work.created.v1", Data: data}}, "core.work.created")
+		created, _, e = c.acceptInTx(ctx, tx, m.ScopeID, ManualEvent{WorkID: id, DeliveryID: "work/" + m.DeliveryID, Data: domain.Payload{Schema: "core.work.created.v1", Data: data}}, "core.work.created")
 		if e != nil {
 			return e
 		}
@@ -249,7 +249,7 @@ func (c *Control) CancelWork(ctx context.Context, workID domain.ID, expected dom
 		}
 		// Control checkpoints keep Work in the envelope but use an empty routed
 		// association so earlier runnable input cannot delay fencing.
-		accepted, _, e := c.acceptInTx(tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.cancel.v1", reason, "", expected)}, "core.manual.cancel")
+		accepted, _, e := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.cancel.v1", reason, "", expected)}, "core.manual.cancel")
 		if e != nil {
 			return e
 		}
@@ -288,7 +288,7 @@ func (c *Control) CancelExecution(ctx context.Context, executionID domain.ID, ex
 		if e != nil {
 			return e
 		}
-		accepted, _, e := c.acceptInTx(tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.cancel.v1", reason, x.ID, expected)}, "core.manual.cancel")
+		accepted, _, e := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.cancel.v1", reason, x.ID, expected)}, "core.manual.cancel")
 		if e != nil {
 			return e
 		}
@@ -414,7 +414,7 @@ func (c *Control) RetryWork(ctx context.Context, workID domain.ID, expected doma
 				return storage.ErrConflict
 			}
 		}
-		accepted, _, e := c.acceptInTx(tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.retry.v1", reason, "", expected)}, "core.manual.retry")
+		accepted, _, e := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.retry.v1", reason, "", expected)}, "core.manual.retry")
 		event = accepted.Event.ID
 		return e
 	})
@@ -463,7 +463,7 @@ func (c *Control) Wake(ctx context.Context, workID domain.ID, expected domain.Re
 			return storage.ErrInvalid
 		}
 		m.WorkID = w.ID
-		accepted, _, e = c.acceptInTx(tx, w.ScopeID, m, m.Type)
+		accepted, _, e = c.acceptInTx(ctx, tx, w.ScopeID, m, m.Type)
 		return e
 	})
 	if err != nil {

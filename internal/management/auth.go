@@ -8,6 +8,7 @@ import (
 	"net"
 	"os"
 	"path/filepath"
+	"regexp"
 	"syscall"
 	"time"
 
@@ -21,10 +22,34 @@ const authNamespace = "core.management.auth"
 var ErrCredentialExists = errors.New("operator credential already exists")
 
 type operatorRecord struct {
-	TokenID   string
+	TokenID string
+	// Name is whose credential it is; empty is the owner's own
+	// (LocalOperatorName), the credential the daemon writes to its state
+	// directory.
+	Name      string `json:",omitempty"`
 	Revoked   bool
 	CreatedAt time.Time
 	RevokedAt time.Time
+}
+
+// LocalOperatorName is the owner's own operator: the credential in the
+// state directory, recorded as operator:local.
+const LocalOperatorName = "local"
+
+func (r operatorRecord) name() string {
+	if r.Name == "" {
+		return LocalOperatorName
+	}
+	return r.Name
+}
+
+var operatorName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,31}$`)
+
+// ValidOperatorName reports whether name can name an operator: lower case
+// letters, digits and dashes, starting with a letter, up to 32 characters,
+// and not the owner's own "local".
+func ValidOperatorName(name string) bool {
+	return operatorName.MatchString(name) && name != LocalOperatorName
 }
 
 // TokenFile is the private operator credential file shape.
@@ -42,7 +67,7 @@ func newTokenID(prefix string) (string, error) {
 }
 
 // issueOperatorInTx stores only the digest of a fresh operator bearer.
-func issueOperatorInTx(tx storage.Tx, now time.Time) (TokenFile, error) {
+func issueOperatorInTx(tx storage.Tx, now time.Time, name string) (TokenFile, error) {
 	token, err := runtime.NewBearer()
 	if err != nil {
 		return TokenFile{}, err
@@ -52,7 +77,7 @@ func issueOperatorInTx(tx storage.Tx, now time.Time) (TokenFile, error) {
 		return TokenFile{}, err
 	}
 	digest := runtime.TokenDigest(token)
-	b, _ := json.Marshal(operatorRecord{TokenID: id, CreatedAt: now})
+	b, _ := json.Marshal(operatorRecord{TokenID: id, Name: name, CreatedAt: now})
 	if err = tx.Put(authNamespace, "operator/"+digest, b); err != nil {
 		return TokenFile{}, err
 	}
@@ -153,11 +178,13 @@ func BootstrapOperator(ctx context.Context, store storage.Store, now func() time
 		}
 		for _, row := range rows {
 			var r operatorRecord
-			if err = json.Unmarshal(row.Value, &r); err == nil && !r.Revoked {
+			// Only the owner's own credential stands in the way: a named
+			// operator's is no substitute for the state directory's file.
+			if err = json.Unmarshal(row.Value, &r); err == nil && !r.Revoked && r.Name == "" {
 				return ErrCredentialExists
 			}
 		}
-		file, err = issueOperatorInTx(tx, now())
+		file, err = issueOperatorInTx(tx, now(), "")
 		return err
 	})
 	if err != nil {
@@ -176,7 +203,7 @@ func RecoverOperator(ctx context.Context, store storage.Store, now func() time.T
 			return err
 		}
 		var err error
-		file, err = issueOperatorInTx(tx, now())
+		file, err = issueOperatorInTx(tx, now(), "")
 		return err
 	})
 	if err != nil {

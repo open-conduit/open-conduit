@@ -87,6 +87,7 @@ var helpGroups = []helpGroup{
 	}},
 	{"Maintain", []helpEntry{
 		{"auth", `  auth rotate | auth revoke TOKEN_ID [--reason TEXT] [--key K]
+  auth operators | auth add NAME --out FILE   list operator credentials; issue one for a named operator, recorded as operator:NAME
   auth recover               (daemon stopped) revoke every operator credential and write a fresh token file`},
 		{"backup", `  backup create DEST | backup verify BUNDLE | backup restore BUNDLE --to DIR   (daemon stopped; restore writes a new state directory)`},
 		{"state", `  state check [--json]       (daemon stopped) diagnose the state directory: permissions, schema, integrity, artifacts, drain status`},

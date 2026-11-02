@@ -47,6 +47,9 @@ export const Event = t.object(
     work_id: t.optional(t.string()),
     execution_id: t.optional(t.string()),
     data: t.optional(Payload),
+    // Who caused the Event, as kind:id, when the host knows. The host sets
+    // it; an Event an extension submits never carries one.
+    actor: t.optional(t.string()),
   },
   open,
 );

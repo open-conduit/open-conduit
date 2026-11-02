@@ -200,7 +200,22 @@ type principal struct {
 	operator bool
 	tokenID  string
 	token    string
+	// name is the operator's name (LocalOperatorName for the owner's own
+	// credential); empty for an execution token.
+	name string
 }
+
+// actor is the operator as kind:id, as recorded on what it does.
+func (p principal) actor() string { return p.caller().String() }
+
+// caller is the operator as an action caller.
+func (p principal) caller() extension.Caller {
+	return extension.Caller{Kind: extension.CallerOperator, ID: p.name}
+}
+
+// local is the owner's own credential, which keeps the request keys and
+// idempotency slots it always had.
+func (p principal) local() bool { return p.name == LocalOperatorName }
 
 func requestID() string {
 	b := make([]byte, 12)
@@ -277,7 +292,7 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request) (principal, 
 		if record.Revoked {
 			return principal{}, fail(401, "unauthenticated", "credential revoked")
 		}
-		return principal{operator: true, tokenID: record.TokenID, token: token}, nil
+		return principal{operator: true, tokenID: record.TokenID, token: token, name: record.name()}, nil
 	}
 	known, err := s.o.Toolbelt.Known(ctx, token)
 	if err != nil {
@@ -359,6 +374,8 @@ var routes = []route{
 	{"POST", []string{"config", "validate"}, true, false, (*Server).validateConfig},
 	{"POST", []string{"config", "apply"}, true, true, (*Server).applyConfig},
 	{"POST", []string{"auth", "rotate"}, true, false, (*Server).rotate},
+	{"GET", []string{"auth", "operators"}, false, false, (*Server).listOperators},
+	{"POST", []string{"auth", "operators"}, true, false, (*Server).addOperator},
 	{"POST", []string{"auth", "revoke"}, true, true, (*Server).revoke},
 	{"POST", []string{"toolbelt", "call"}, true, false, (*Server).toolbeltCall},
 	{"GET", []string{"toolbelt", "guidance"}, false, false, (*Server).toolbeltGuidance},
@@ -433,6 +450,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 	if who.operator == (scopedExecution(ctx) != "") {
 		return fail(403, "wrong_credential_class", "credential class not permitted for this endpoint")
 	}
+	// Everything an operator does is recorded as theirs: the host stamps the
+	// credential's principal, never anything the request says.
+	if who.operator {
+		ctx = runtime.WithActor(ctx, who.actor())
+	}
 	c := &call{ctx: ctx, r: r, w: w, who: who, params: params}
 	if matched.mutation {
 		if r.URL.RawQuery != "" {
@@ -452,6 +474,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 		c.key = r.Header.Get("Idempotency-Key")
 		if c.key != "" && !validKey(c.key) {
 			return fail(400, "invalid_idempotency_key", "Idempotency-Key must be 1-128 printable ASCII characters")
+		}
+		// A named operator's keys are their own: the same key from two
+		// operators is two requests, never one replayed to the other.
+		if c.key != "" && who.operator && !who.local() {
+			c.key = who.actor() + "/" + c.key
 		}
 		if matched.idem {
 			if c.key == "" {
@@ -500,6 +527,9 @@ func (s *Server) idempotent(c *call, rt *route) error {
 	sum := sha256.Sum256(canonical)
 	hash := hex.EncodeToString(sum[:])
 	principalID := "operator"
+	if !c.who.local() {
+		principalID = c.who.actor()
+	}
 	slot := hex.EncodeToString(func() []byte {
 		h := sha256.Sum256([]byte(principalID + "\x00" + c.r.Method + "\x00" + c.r.URL.Path + "\x00" + c.key))
 		return h[:]

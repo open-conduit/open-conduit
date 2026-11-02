@@ -85,6 +85,9 @@ type Event struct {
 	Routed         bool     `json:"routed"`
 	RoutedWorkID   string   `json:"routed_work_id,omitempty"`
 	Disposition    string   `json:"disposition,omitempty"`
+	// Actor is who caused the Event, as kind:id ("operator:alice"), when
+	// the host knows.
+	Actor string `json:"actor,omitempty"`
 	// Route is present on a list asked for it (EventsWithRoutes).
 	Route *EventRoute `json:"route,omitempty"`
 }
@@ -1073,6 +1076,30 @@ func (c *Client) Extensions(ctx context.Context) ([]ExtensionTitle, error) {
 // Rotate returns the one-time replacement credential.
 func (c *Client) Rotate(ctx context.Context, expectedTokenID string) (out TokenFile, err error) {
 	err = c.Do(ctx, "POST", "auth/rotate", nil, map[string]string{"expected_token_id": expectedTokenID}, "", &out)
+	return
+}
+
+// Operator is one operator credential: whose it is, and whether it is
+// still active. It never carries the token.
+type Operator struct {
+	Name      string `json:"name"`
+	TokenID   string `json:"token_id"`
+	CreatedAt string `json:"created_at"`
+	RevokedAt string `json:"revoked_at,omitempty"`
+}
+
+// Operators lists every operator credential, active or revoked.
+func (c *Client) Operators(ctx context.Context) ([]Operator, error) {
+	var out struct {
+		Operators []Operator `json:"operators"`
+	}
+	err := c.Do(ctx, "GET", "auth/operators", nil, nil, "", &out)
+	return out.Operators, err
+}
+
+// AddOperator issues a credential for the named operator, returned once.
+func (c *Client) AddOperator(ctx context.Context, name string) (out TokenFile, err error) {
+	err = c.Do(ctx, "POST", "auth/operators", nil, map[string]string{"name": name}, "", &out)
 	return
 }
 

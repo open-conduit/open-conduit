@@ -1,6 +1,7 @@
-format 1
+format 2
 AcceptedEvent.Disposition string
 AcceptedEvent.Event struct
+AcceptedEvent.Event.Actor string
 AcceptedEvent.Event.CausationID string
 AcceptedEvent.Event.CorrelationKey ptr
 AcceptedEvent.Event.CorrelationKey.ExternalID string
@@ -85,6 +86,7 @@ Scope.SecretRefs map
 Scope.UpdatedAt struct
 Timer.CreatedAt struct
 Timer.Event struct
+Timer.Event.Actor string
 Timer.Event.CausationID string
 Timer.Event.CorrelationKey ptr
 Timer.Event.CorrelationKey.ExternalID string

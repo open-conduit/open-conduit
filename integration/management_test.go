@@ -974,3 +974,91 @@ func TestManagementGrantPinsBindingConnection(t *testing.T) {
 		t.Fatalf("grant connection %q: %v", g.Connection, err)
 	}
 }
+
+// TestManagementNamedOperators issues a credential for a named operator and
+// checks that what each operator does is recorded as theirs, that their
+// request keys never meet, and that a named operator can't lock the owner
+// out.
+func TestManagementNamedOperators(t *testing.T) {
+	h := newManagementHarness(t)
+	ctx := context.Background()
+	owner := h.operatorClient()
+	aliceFile := filepath.Join(h.state, "alice.token")
+	var added map[string]string
+	h.mustCLI(&added, "auth", "add", "alice", "--out", aliceFile)
+	if added["name"] != "alice" || added["token_file"] != aliceFile {
+		t.Fatalf("auth add: %v", added)
+	}
+	if _, errOut, code := h.cli("auth", "add", "alice", "--out", aliceFile+".2"); code == 0 || !strings.Contains(errOut, "operator_exists") {
+		t.Fatalf("second credential for alice: %d %s", code, errOut)
+	}
+	if _, _, code := h.cli("auth", "add", "local", "--out", aliceFile+".3"); code == 0 {
+		t.Fatal("named an operator local")
+	}
+	if _, _, code := h.cli("auth", "add", "bo", "--out", aliceFile); code == 0 {
+		t.Fatal("auth add overwrote an existing file")
+	}
+	f, err := client.ReadTokenFile(aliceFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	alice, err := client.New(h.endpoint, f.Token)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Each operator's Event records who sent it. The same Idempotency-Key
+	// from both is two requests: before keys were per operator, alice's
+	// would have been refused as a reuse of the owner's.
+	mine, err := owner.SubmitEvent(ctx, client.EventRequest{ScopeID: "ops", Type: "operator.requested", DeliveryID: "owner-1"}, "same-key")
+	if err != nil {
+		t.Fatal(err)
+	}
+	theirs, err := alice.SubmitEvent(ctx, client.EventRequest{ScopeID: "ops", Type: "operator.requested", DeliveryID: "alice-1"}, "same-key")
+	if err != nil {
+		t.Fatalf("alice's request under the owner's key: %v", err)
+	}
+	if mine.Actor != "operator:local" || theirs.Actor != "operator:alice" {
+		t.Fatalf("actors: owner %q, alice %q", mine.Actor, theirs.Actor)
+	}
+
+	// A control is recorded as the operator who made it.
+	w, err := alice.Work(ctx, theirs.RoutedWorkID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	held, err := alice.HoldWork(ctx, w.ID, w.Revision, "looking", "hold-1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	e, err := owner.Event(ctx, held.EventID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.Type != "core.manual.hold" || e.Actor != "operator:alice" {
+		t.Fatalf("hold event: %s by %q", e.Type, e.Actor)
+	}
+
+	var operators []client.Operator
+	h.mustCLI(&operators, "auth", "operators")
+	if len(operators) != 2 || operators[0].Name != "alice" || operators[1].Name != "local" {
+		t.Fatalf("operators: %+v", operators)
+	}
+	local := operators[1].TokenID
+
+	// Alice can't revoke the owner's credential; the owner can revoke hers.
+	if _, err = alice.Revoke(ctx, local, "", "rv-owner"); !isStatus(err, 404) {
+		t.Fatalf("alice revoked the owner: %v", err)
+	}
+	if _, err = owner.Health(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = owner.Revoke(ctx, f.TokenID, "left", "rv-alice"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = alice.Health(ctx); !isStatus(err, 401) {
+		t.Fatalf("revoked operator still accepted: %v", err)
+	}
+	// Once revoked, the name can be issued again.
+	h.mustCLI(nil, "auth", "add", "alice", "--out", aliceFile+".new")
+}
