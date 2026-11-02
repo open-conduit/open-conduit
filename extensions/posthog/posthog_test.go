@@ -116,8 +116,20 @@ func TestExporterAndFanout(t *testing.T) {
 	if err := f.Capture(context.Background(), "", "host_metrics", time.Now(), map[string]any{"load": 1}); err != nil {
 		t.Fatal(err)
 	}
-	if len(primary.events) != 1 || len(c.events) != before+2 {
-		t.Fatalf("an event with no scope goes to every entry that takes them: primary %d posthog %d", len(primary.events), len(c.events)-before)
+	if len(primary.events) != 1 || len(c.events) != before+1 {
+		t.Fatalf("an event with no scope goes once to each project that takes them, though two scopes' entries share it: primary %d posthog %d", len(primary.events), len(c.events)-before)
+	}
+	otherProject := NewSink(ConnectionConfig{Host: srv.URL, DistinctID: "me"}, func(context.Context) (string, error) { return "phc_other", nil }, nil)
+	two := &Fanout{Targets: func() []Target {
+		return []Target{{Scope: "eng", Settings: Settings{TelemetryEvents: true}, Sink: sink}, {Scope: "web", Settings: Settings{TelemetryEvents: true}, Sink: otherProject}}
+	}}
+	before = len(c.events)
+	if err := two.Capture(context.Background(), "", "host_metrics", time.Now(), map[string]any{}); err != nil || len(c.events) != before+2 {
+		t.Fatalf("another project still gets it: %v %d", err, len(c.events)-before)
+	}
+	before = len(c.events)
+	if err := f.Capture(context.Background(), "", "host_metrics", time.Now(), map[string]any{"load": 1}); err != nil {
+		t.Fatal(err)
 	}
 	if _, ok := c.events[before]["properties"].(map[string]any)["scope"]; ok {
 		t.Fatal("no scope, no scope property")

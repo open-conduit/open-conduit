@@ -203,6 +203,16 @@ func (s *Sink) Check(ctx context.Context) (string, error) {
 	return "sending to " + s.conn.Host, nil
 }
 
+// destination identifies where the sink's events land: the host, project key
+// and distinct_id.
+func (s *Sink) destination(ctx context.Context) (string, error) {
+	key, err := s.token(ctx)
+	if err != nil {
+		return "", err
+	}
+	return s.conn.Host + "\x00" + key + "\x00" + s.conn.DistinctID, nil
+}
+
 // StatusError is a rejected capture (never carries the body).
 type StatusError struct{ Status int }
 
@@ -498,9 +508,21 @@ func (f *Fanout) Capture(ctx context.Context, scope, name string, at time.Time, 
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
+	// An event with no scope goes to every scope's entries, so entries that
+	// share a project (one connection in several scopes) would each send the
+	// same event; it goes once per project and distinct_id.
+	sent := map[string]bool{}
 	for _, t := range f.Targets() {
 		if !t.Settings.TelemetryEvents || (scope != "" && t.Scope != scope) {
 			continue
+		}
+		if scope == "" {
+			if dest, err := t.Sink.destination(ctx); err == nil {
+				if sent[dest] {
+					continue
+				}
+				sent[dest] = true
+			}
 		}
 		cx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		if e := t.Sink.Capture(cx, scope, name, at, props); e != nil && f.Diagnostic != nil {
