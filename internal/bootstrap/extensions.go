@@ -93,6 +93,16 @@ var bundledRoot = func() string {
 	return filepath.Join(filepath.Dir(self), extproc.Dir)
 }
 
+// UseBundledRoot points discovery of bundled packages at root instead of
+// beside this executable, and returns what restores it: for a test that
+// checks configuration offline as the release's binary would, with the
+// release's packages beside it.
+func UseBundledRoot(root string) (restore func()) {
+	prev := bundledRoot
+	bundledRoot = func() string { return root }
+	return func() { bundledRoot = prev }
+}
+
 // discoverPackages finds the packages installed beside configPath, then
 // the bundled ones no installed package of the same name replaces. An
 // installed copy replaces the bundled one even when it is refused, so a

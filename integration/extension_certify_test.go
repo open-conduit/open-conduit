@@ -185,6 +185,7 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		// PostHog through inprocsdk: an exporter, a sink and two checks,
 		// none of which a fixture exercises.
 		{"posthog", "", nil},
+		{"human", "", nil},
 		{"codex", "", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace"}},
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},

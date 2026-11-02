@@ -12,6 +12,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/internal/bootstrap"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/extproc"
 )
 
 // userDocs are the user-facing documents whose examples must work as
@@ -65,7 +66,24 @@ func fencedBlocks(t *testing.T, path, lang string) []string {
 // teaches a reader something deprecated or ineffective. The warnings that
 // depend on the machine (a cmd: secret's program not being installed, an
 // included folder being missing) are left out.
+// releaseLayout checks configuration offline, for the rest of the test, as
+// the release's binary would: with the packages it bundles beside it,
+// which the built open-conduit serves (#428). Packages are found there
+// and run by that binary rather than this test's own.
+func releaseLayout(t *testing.T) {
+	t.Helper()
+	bin := daemonBinary(t)
+	restore := bootstrap.UseBundledRoot(filepath.Join(filepath.Dir(bin), extproc.Dir))
+	prev := extproc.HostExecutable
+	extproc.HostExecutable = func() (string, error) { return bin, nil }
+	t.Cleanup(func() {
+		restore()
+		extproc.HostExecutable = prev
+	})
+}
+
 func TestDocsExampleConfigsValidate(t *testing.T) {
+	releaseLayout(t)
 	total := 0
 	for _, path := range userDocs {
 		for i, block := range fencedBlocks(t, path, "json") {
