@@ -375,6 +375,26 @@ type SegmentEnder interface {
 	SegmentEnded(ctx context.Context, execution domain.ID)
 }
 
+// PoolJobs is the capacity pool of job executors: settings.job_concurrency
+// bounds them, and settings.concurrency every other executor (agent turns),
+// so neither starves the other.
+const PoolJobs = "jobs"
+
+// Executor is an executor an extension registers, by name: the executor
+// and the capacity pool it counts against ("" for agent turns, PoolJobs for
+// jobs).
+type Executor struct {
+	Executor extension.Executor
+	Pool     string
+}
+
+// Executing extensions register executors bindings name. Executors is read
+// before Start (configuration validation checks bindings against them) and
+// must not depend on host services.
+type Executing interface {
+	Executors() map[string]Executor
+}
+
 // Tooled extensions register toolbelt operations on every generation's
 // toolbelt.
 type Tooled interface {

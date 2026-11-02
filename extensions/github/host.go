@@ -84,8 +84,19 @@ var (
 	_ inproc.Renderer     = (*Extension)(nil)
 	_ inproc.SegmentEnder = (*Extension)(nil)
 
+	_ inproc.Executing = (*Extension)(nil)
+
 	_ extension.RunEnvironment = (*Extension)(nil)
+	_ extension.SetupProbes    = (*Extension)(nil)
 )
+
+// Executors is the hold executor that runs held issues, a job.
+func (*Extension) Executors() map[string]inproc.Executor {
+	return map[string]inproc.Executor{HoldExecutor: {Executor: NewHoldExecutor(), Pool: inproc.PoolJobs}}
+}
+
+// SetupProbes are the GitHub probes a setup session may run.
+func (*Extension) SetupProbes() []extension.SetupProbe { return Probes{}.SetupProbes() }
 
 func (*Extension) Operations() []string { return Operations() }
 

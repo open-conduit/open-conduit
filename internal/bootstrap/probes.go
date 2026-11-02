@@ -11,7 +11,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/executors/claudecode"
 	"github.com/open-conduit/open-conduit/extension"
-	gh "github.com/open-conduit/open-conduit/extensions/github"
 )
 
 // setupProbes are the probes a setup session may run besides the setup
@@ -31,9 +30,17 @@ func (d *daemon) setupProbes() map[string]extension.SetupProbe {
 }
 
 // probeOwners are the extensions and executors whose probes a setup
-// session may run, by the name that prefixes them.
+// session may run, by the name that prefixes them: the Claude Code
+// executor's, and every first-party extension's that offers probes
+// (extension.SetupProbes).
 func probeOwners() map[string]extension.SetupProbes {
-	return map[string]extension.SetupProbes{ClaudeCodeExecutor: claudecode.Probes{}, gh.Type: gh.Probes{}}
+	out := map[string]extension.SetupProbes{ClaudeCodeExecutor: claudecode.Probes{}}
+	for _, x := range firstParty() {
+		if p, ok := x.(extension.SetupProbes); ok {
+			out[x.Name()] = p
+		}
+	}
+	return out
 }
 
 // hostProbeNames are the full names of setupProbes, offline.

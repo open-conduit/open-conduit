@@ -97,7 +97,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Routes`, `Triggers` | `routes` (`samples` for a handler that is an `extension.RouteSampler`), `work_kinds` | `route.match`, `route.samples`, `work_kind.trigger` |
 | `Recurrences` | `recurrences` | `recurrence.next` |
 | `Operations`, `Filter` | `operations` (`entry_gated` to offer them only with an entry), `dependency_filter` | `operation.*`, `emit.commit`, `dependency.filter` |
-| `Executors` | `executors` | `executor.*` |
+| `Executors` | `executors` (`pool: "jobs"` for an executor whose runs count against `settings.job_concurrency`) | `executor.*` |
 | `Providers` | `resources` | `provider.*` |
 | `Tasks`, `Checks`, `CheckRuns` (a check that reads the configuration view or reports its own status, code and items) | `tasks`, `checks` | `task.run`, `check.run` |
 | `Exporter` | `exporters` | `telemetry.export` |

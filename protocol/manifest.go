@@ -427,6 +427,10 @@ type ExecutorDecl struct {
 	// mode never applies and pass the requested mode to a provider's sandbox
 	// check (config.ResourceModer).
 	ResourceMode bool `json:"resource_mode,omitempty"`
+	// Pool is the capacity pool the executor's runs count against: "" for
+	// agent turns (settings.concurrency), "jobs" for jobs
+	// (settings.job_concurrency).
+	Pool string `json:"pool,omitempty"`
 }
 
 // Capabilities are the PRD's mechanical labels, checked at bind time. No
@@ -702,6 +706,9 @@ func (m Manifest) Validate() error {
 		case extension.ToolbeltNone, extension.ToolbeltCLI, extension.ToolbeltMCP, extension.ToolbeltSDK:
 		default:
 			fail("executor %q toolbelt %q must be none, cli, mcp or sdk", x.Name, x.Capabilities.Toolbelt)
+		}
+		if x.Pool != "" && x.Pool != "jobs" {
+			fail("executor %q pool %q must be empty (agent turns) or jobs", x.Name, x.Pool)
 		}
 	}
 	for _, r := range p.Resources {

@@ -36,7 +36,6 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
-	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -146,15 +145,17 @@ type daemon struct {
 	configHandles configHandles
 	// defaultDoc is the first-run setup's configuration (DefaultConfig),
 	// built once the packages have started.
-	defaultDoc    []byte
-	log           *slog.Logger
-	now           func() time.Time
-	owner         string
-	coord         storage.Store
-	artifacts     *artifacts.Store
-	backups       backupState
-	shell         *shell.Executor
-	executors     map[string]extension.Executor
+	defaultDoc []byte
+	log        *slog.Logger
+	now        func() time.Time
+	owner      string
+	coord      storage.Store
+	artifacts  *artifacts.Store
+	backups    backupState
+	shell      *shell.Executor
+	executors  map[string]extension.Executor
+	// pools are the capacity pools of the executors that name one.
+	pools         map[string]string
 	inproc        []inproc.Extension
 	configs       *management.ConfigService
 	resolver      *config.Resolver
@@ -451,7 +452,12 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.closeClaudeCode()
-	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor, gh.HoldExecutor: gh.NewHoldExecutor()}
+	d.executors = map[string]extension.Executor{"shell": d.shell, ClaudeCodeExecutor: d.claude.executor}
+	d.pools = map[string]string{"shell": jobPool}
+	for _, name := range inprocExecutors(d.inproc, d.executors, d.pools) {
+		d.log.Warn("executor not registered: its capacity pool is not one a setting bounds", "executor", name)
+		d.report("executor_pool", domain.ID(name), "unknown_pool")
+	}
 	if usage != nil {
 		usage.known = knownTypes(registry(maps.Clone(d.executors)))
 	}
@@ -622,7 +628,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	if c.scheduler, err = runtime.NewScheduler(d.coord, d.now, c.router, runtime.SchedulerOptions{
 		Owner: d.owner, LeaseDuration: d.o.LeaseDuration, Generation: c.generation,
 		Executors: d.executors, HistoricalExecutors: history,
-		GlobalLimit: set.Concurrency, ExecutorPools: jobExecutors(), PoolLimits: map[string]int{jobPool: set.JobConcurrency},
+		GlobalLimit: set.Concurrency, ExecutorPools: d.pools, PoolLimits: map[string]int{jobPool: set.JobConcurrency},
 		ScopeLimits: scopeLimits(s), Retry: runtime.RetryPolicy{Delays: delays}, CausalLimits: limits,
 		Timeout:  time.Duration(set.TimeoutSeconds) * time.Second,
 		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, ToolbeltDir: d.o.ToolbeltDir, PlaybookDir: d.pluginDir(), Secrets: d.configs.Secrets(d.resolver), Environment: d.runEnvironment,

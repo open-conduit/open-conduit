@@ -40,14 +40,15 @@ const Name = "shell"
 const Version = "0.1.0"
 
 // Manifest is the package manifest: the in-process executor's capabilities
-// (resume off, as the daemon registers it) and its stop and forget controls.
+// (resume off, as the daemon registers it), its stop and forget controls,
+// and its capacity pool (jobs, as the daemon registers it).
 func Manifest() protocol.Manifest {
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version,
 		Summary: "The first-party shell executor as a subprocess package.",
 		Command: []string{"shell-extension"},
 		Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: Name,
 			Capabilities: protocol.Capabilities{Interrupt: true, Inject: true, Workspace: true, Toolbelt: extension.ToolbeltCLI},
-			Controls:     protocol.Controls{Stop: true, Forget: true}}}}}
+			Controls:     protocol.Controls{Stop: true, Forget: true}, Pool: "jobs"}}}}
 }
 
 // executor creates the shell executor on first use, once the state
