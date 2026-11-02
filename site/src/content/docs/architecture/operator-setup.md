@@ -50,6 +50,8 @@ open-conduit tui
   - The command is an interactive `claude /open-conduit:setup --plugin-dir … --allowedTools …` with `OPEN_CONDUIT_CONFIG` set.
   - Only `open-conduit config`, `doctor`, `health`, `secret path` and `init TYPE --dry-run` for each registered or installed setup other than the first-run one are pre-allowed, and `OS_*` credentials are removed from the environment.
   - The guide teaches `init`, `config set`, `secret set`, webhooks, permissions, dry run and the TUI controls. Its example config still validates against the daemon registry.
+- **`init --with codex`**: the same playbook, rendered the same way, as the first message of an interactive `codex --sandbox workspace-write --ask-for-approval on-request <guide>` with `OPEN_CONDUIT_CONFIG` set and `OS_*` credentials removed. Codex loads no plugin skills and has no list of pre-allowed commands, so no plugin is written: Codex's own sandbox asks the owner before any command that writes outside the checkout, the config included ([Codex executor](../codex-executor/#setup)).
+- **`init github --executor codex`** writes the agent binding on the [Codex executor](../codex-executor/) instead of `claude-code`, with the same playbook, tools, branch and workspace. Its playbook comes from the host's playbook directory, so the binding needs no path. The `github_capability` check treats either executor's agent binding the same.
 
 `config edit` opens a full-screen editor with the adapters' documented fields, validated before saving ([installed integrations](../installed-integrations/)). The commands above cover the same outcomes from a script: validated edits, add/remove bindings, references for secrets and handwritten routes kept.
 

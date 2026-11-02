@@ -76,8 +76,8 @@ if the daemon exits with an error.
 
 install takes the same flags as serve (for example --webhook-addr 127.0.0.1:8787
 --tunnel cloudflared) and the global --data-dir and --socket, and records the
-config path, the state directory and a PATH that finds claude, git, gh and the
-tunnel binary. Run it again to change the flags or after installing a tool the
+config path, the state directory and a PATH that finds claude or codex, git, gh
+and the tunnel binary. Run it again to change the flags or after installing a tool the
 daemon needs. Output goes to <state>/logs/service.log.
 `
 
@@ -222,8 +222,8 @@ func (o *operator) servicePath(h *ServiceHost, r ServeRequest) (string, []string
 	for _, d := range filepath.SplitList(o.env.Getenv("PATH")) {
 		add(d)
 	}
-	tools := []string{"claude", "git", "gh"}
-	required := map[string]bool{"claude": true, "git": true}
+	tools := []string{"claude", "codex", "git", "gh"}
+	required := map[string]bool{"git": true}
 	kind := r.TunnelKind
 	if kind == "" && r.TunnelDomain == "" && r.TunnelName == "" && r.TunnelHostname == "" && r.PublicURL == "" {
 		kind = storedTunnel(r.ConfigPath)
@@ -233,12 +233,21 @@ func (o *operator) servicePath(h *ServiceHost, r ServeRequest) (string, []string
 		required[kind] = r.TunnelBinary == ""
 	}
 	var missing []string
+	agents := 0
 	for _, t := range tools {
 		if p, err := h.LookPath(t); err == nil {
 			add(filepath.Dir(p))
+			if t == "claude" || t == "codex" {
+				agents++
+			}
 		} else if required[t] {
 			missing = append(missing, t)
 		}
+	}
+	// The daemon's agents run on Claude Code or the Codex CLI: one of them
+	// is needed, whichever the bindings name.
+	if agents == 0 {
+		missing = append(missing, "claude (or codex)")
 	}
 	if r.TunnelBinary != "" && filepath.IsAbs(r.TunnelBinary) {
 		add(filepath.Dir(r.TunnelBinary))
