@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -30,10 +31,14 @@ const (
 // claims as Work: issues (the default) or pull_requests, each open PR's
 // own Work, from the copies an entry with track_pull_requests
 // observes. Drafts lets a pull_requests route claim draft PRs too; by
-// default a draft is claimed once it is marked ready.
+// default a draft is claimed once it is marked ready. Authors limits a
+// pull_requests route to PRs opened by those logins (dependabot[bot],
+// renovate[bot]), compared without case; a PR by anyone else falls through
+// to the next route.
 type RouteConfig struct {
-	Claim  string `json:"claim,omitempty"`
-	Drafts bool   `json:"drafts,omitempty"`
+	Claim   string   `json:"claim,omitempty"`
+	Drafts  bool     `json:"drafts,omitempty"`
+	Authors []string `json:"authors,omitempty"`
 }
 
 // ParseRoute decodes and defaults a `github` route's config.
@@ -51,6 +56,14 @@ func ParseRoute(data []byte) (RouteConfig, error) {
 	}
 	if c.Drafts && c.Claim != TrackPullRequests {
 		return c, errors.New("github route: drafts applies only to claim pull_requests")
+	}
+	if len(c.Authors) > 0 && c.Claim != TrackPullRequests {
+		return c, errors.New("github route: authors applies only to claim pull_requests")
+	}
+	for _, a := range c.Authors {
+		if strings.TrimSpace(a) == "" || strings.ContainsAny(a, " \t\n/") {
+			return c, errors.New("github route: authors are GitHub logins, such as dependabot[bot]")
+		}
 	}
 	return c, nil
 }
@@ -313,6 +326,9 @@ func matchPull(in extension.RouteInput, rc RouteConfig) extension.RouteDecision 
 		}
 		if p.Draft && !rc.Drafts {
 			return extension.Skip("the PR is a draft; it is claimed once it is marked ready")
+		}
+		if len(rc.Authors) > 0 && !slices.ContainsFunc(rc.Authors, func(a string) bool { return strings.EqualFold(a, p.Author) }) {
+			return extension.Skip("the PR is by " + p.Author + ", not one of this route's authors (" + strings.Join(rc.Authors, ", ") + ")")
 		}
 		return extension.RouteDecision{Match: true, Kind: WorkKindPull, Reason: "an open PR"}
 	}
