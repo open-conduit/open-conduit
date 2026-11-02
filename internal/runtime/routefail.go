@@ -12,7 +12,7 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// Route failures (issue #342). A route that errs, hangs or panics must not
+// Route failures. A route that errs, hangs or panics must not
 // hold its Event, and with it the Work it targets, pending forever: each
 // failure is counted on the Event, retried after a growing backoff, and
 // after MaxRouteFailures (or straight away when retrying cannot help) the
