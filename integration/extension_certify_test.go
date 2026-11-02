@@ -43,6 +43,7 @@ func packageBinaries(t *testing.T) map[string]string {
 			{"shell-extension", "./packages/shell/cmd/shell-extension"},
 			{"sentry-extension", "./packages/sentry/cmd/sentry-extension"},
 			{"pagerduty-extension", "./packages/pagerduty/cmd/pagerduty-extension"},
+			{"codex-extension", "./packages/codex/cmd/codex-extension"},
 			{"weakened-extension", "./protocol/examples/weakened/cmd/weakened-extension"},
 			{"os", "./cmd/os"},
 		} {
@@ -125,6 +126,7 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		{"shell", "shell-extension", []string{"executor.conformance", "executor.inject", "executor.controls"}},
 		{"sentry", "sentry-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
 		{"pagerduty", "pagerduty-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
+		{"codex", "codex-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace"}},
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 	} {
