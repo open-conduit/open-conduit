@@ -13,8 +13,10 @@ import (
 	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	hu "github.com/open-conduit/open-conduit/extensions/human"
 	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -794,5 +796,51 @@ func TestHumanGateEscalatesBeforeRefusing(t *testing.T) {
 	refusedWith(t, err, hu.CodeApprovalTimedOut)
 	if *h.deploys != 1 {
 		t.Fatalf("a timed-out call ran: %d", *h.deploys)
+	}
+}
+
+// The extension's own `asks` task leaves the escalation's trail: one
+// human_gate_escalated telemetry event linked to the Work, its attempt,
+// the request and who it went to, and nothing on a later pass.
+func TestHumanGateEscalationIsCaptured(t *testing.T) {
+	h := newHumanHarness(t, "persistent", escalating)
+	ctx := context.Background()
+	type captured struct {
+		scope, name string
+		props       map[string]any
+	}
+	var got []captured
+	x := hu.New()
+	if err := x.Start(ctx, inproc.Host{Store: h.f.Store, Now: h.f.Clock.Now, Capture: func(_ context.Context, scope, name string, _ time.Time, props map[string]any) error {
+		got = append(got, captured{scope, name, props})
+		return nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	x.Configure(ctx, protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: "routing-scope", Type: hu.Type, Name: "decisions",
+		Config: json.RawMessage(`{"gates":[{"operations":["fixture.deploy"],"timeout":"1h","escalate":{"responders":["github:octocat"],"timeout":"1h"}}]}`)}}})
+	tasks := x.Tasks()
+	if len(tasks) != 1 || tasks[0].Name != "asks" {
+		t.Fatalf("tasks: %+v", tasks)
+	}
+	out, err := h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	if err = tasks[0].Run(ctx); err != nil || len(got) != 0 {
+		t.Fatalf("captured before escalating: %+v %v", got, err)
+	}
+	h.f.Clock.Advance(90 * time.Minute)
+	if err = tasks[0].Run(ctx); err != nil || len(got) != 1 {
+		t.Fatalf("escalation not captured once: %+v %v", got, err)
+	}
+	c := got[0]
+	if c.scope != "routing-scope" || c.name != hu.EventGateEscalated || c.props["work_id"] != "work/item" || c.props["execution_id"] != string(h.attempt.Lease.ExecutionID) ||
+		c.props["ask_id"] == "" || c.props["operation"] != "fixture.deploy" || fmt.Sprint(c.props["escalated_to"]) != "[github:octocat]" {
+		t.Fatalf("captured: %+v", c)
+	}
+	if err = tasks[0].Run(ctx); err != nil || len(got) != 1 {
+		t.Fatalf("captured again on a later pass: %+v %v", got, err)
 	}
 }
