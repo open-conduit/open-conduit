@@ -45,6 +45,9 @@ func Annotate(ctx context.Context, store storage.Store, entry Entry, w domain.Wo
 	if !ok {
 		return nil, false
 	}
+	if rec.Gate != "" {
+		return []Line{{"approval", rec.Question}}, true
+	}
 	return []Line{{"question", rec.Question}}, true
 }
 
@@ -83,7 +86,11 @@ func Panel(ctx context.Context, store storage.Store, entry Entry, w domain.Work,
 		about.Actions = []string{ActionAnswer}
 	}
 	sections = append(sections, about)
-	return extension.Panel{ID: PanelQuestion, Title: "The agent asks", Sections: sections}, true
+	title := "The agent asks"
+	if rec.Gate != "" {
+		title = "Approval needed"
+	}
+	return extension.Panel{ID: PanelQuestion, Title: title, Sections: sections}, true
 }
 
 // clean drops control characters a panel may not carry (all but newline
@@ -109,6 +116,9 @@ func RenderEvent(e domain.Event, answer func(domain.ID) (domain.Event, bool)) (s
 		if src, ok := answer(e.CausationID); ok {
 			var p AnswerPayload
 			if src.Type == TypeAnswer && src.Data.Schema == SchemaAnswer && json.Unmarshal(src.Data.Data, &p) == nil {
+				if p.Operation != "" {
+					return renderApproval(p), true
+				}
 				return "### A person answered your question\nQuestion: " + p.Question + "\nAnswer: " + p.Answer, true
 			}
 		}

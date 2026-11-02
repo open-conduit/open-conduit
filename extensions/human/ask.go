@@ -48,10 +48,15 @@ type Ask struct {
 	// Execution is the asking attempt, whose wait carries the ask.
 	Execution domain.ID `json:"execution,omitempty"`
 	Provider  string    `json:"provider"`
-	Question  string    `json:"question"`
-	Options   []string  `json:"options,omitempty"`
-	Context   string    `json:"context,omitempty"`
-	Deadline  time.Time `json:"deadline,omitzero"`
+	// Gate is the operation an approval request is for ("" for a question
+	// an agent asked with human.ask), and Request the call's identity (see
+	// requestHash).
+	Gate     string    `json:"gate,omitempty"`
+	Request  string    `json:"request,omitempty"`
+	Question string    `json:"question"`
+	Options  []string  `json:"options,omitempty"`
+	Context  string    `json:"context,omitempty"`
+	Deadline time.Time `json:"deadline,omitzero"`
 	// Responders and Surfaces are the entry's at the time of asking.
 	Responders []string  `json:"responders"`
 	Surfaces   []string  `json:"surfaces"`
@@ -89,6 +94,9 @@ type AnswerPayload struct {
 	Answer    string `json:"answer"`
 	Option    int    `json:"option,omitempty"`
 	Responder string `json:"responder"`
+	// Operation is the gated operation when the ask is an approval
+	// request.
+	Operation string `json:"operation,omitempty"`
 }
 
 // filter is a dependency's opaque filter: the ask, and the provider whose
