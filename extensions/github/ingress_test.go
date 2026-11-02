@@ -721,3 +721,40 @@ func TestOwnBotIsMarkedByConnection(t *testing.T) {
 		t.Fatalf("token connection: %v", got)
 	}
 }
+
+// An inline comment and a review stay one observation when a push moves
+// the comment's anchor and when someone replies in its thread: only the
+// reply is news (#402).
+func TestReviewCommentsKeepTheirVersionAcrossPushesAndReplies(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	fk.OpenIssue("Header", "wobbles", alice)
+	pr := fk.OpenPull("Blue header", "Closes #1", "feature/blue", "sha1", alice)
+	review := fk.AddReview(pr, alice, "APPROVED", "ship it")
+	inline := fk.AddReviewComment(pr, alice, "nit", "header.go", 12)
+	reviewItem := "pr/" + strconv.Itoa(pr) + "/review/" + strconv.FormatInt(review, 10)
+	inlineItem := "pr/" + strconv.Itoa(pr) + "/review_comment/" + strconv.FormatInt(inline, 10)
+	before := f.scan(t)
+
+	fk.PushPull(pr, "sha2")
+	reply := fk.AddReviewReply(pr, alice, inline, "thanks, fixed")
+	after := f.scan(t)
+	for _, item := range []string{reviewItem, inlineItem} {
+		if before[item].Version != after[item].Version {
+			t.Fatalf("%s changed version after a push and a reply:\n%s\n%s", item, before[item].Event.Data.Data, after[item].Event.Data.Data)
+		}
+	}
+	c := payload[gh.CommentPayload](t, after[inlineItem])
+	if c.CommitID != "sha1" || c.Line != 12 {
+		t.Fatalf("inline comment observed at %s:%d, want where it was made (sha1:12)", c.CommitID, c.Line)
+	}
+	if _, ok := before["pr/"+strconv.Itoa(pr)+"/review_comment/"+strconv.FormatInt(reply, 10)]; ok {
+		t.Fatal("reply observed before it was made")
+	}
+	if _, ok := after["pr/"+strconv.Itoa(pr)+"/review_comment/"+strconv.FormatInt(reply, 10)]; !ok {
+		t.Fatal("reply not observed")
+	}
+	// Push and reconcile still agree on the moved comment and the review.
+	sameIdentity(t, "inline after push", onlyObservation(t, f.push(t, "pull_request_review_comment", "d-inline", fk.ReviewCommentHook("edited", inline))), after[inlineItem])
+	sameIdentity(t, "review", onlyObservation(t, f.push(t, "pull_request_review", "d-review", fk.ReviewHook("submitted", pr, review))), after[reviewItem])
+}

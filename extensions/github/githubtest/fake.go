@@ -579,6 +579,9 @@ func (s *Server) AddComment(n int, user User, body string) int64 {
 func (s *Server) addComment(n int, user User, body string, inline bool, path string, line int) int64 {
 	t := s.tick()
 	c := &Comment{ID: s.id(), Number: n, User: user, Body: body, Created: t, Updated: t, Inline: inline, Path: path, Line: line, Reacts: map[string]int{}}
+	if p := s.pulls[n]; inline && p != nil {
+		c.CommitID = p.HeadSHA
+	}
 	s.comments = append(s.comments, c)
 	s.issue(n).Updated = t
 	return c.ID
@@ -600,6 +603,16 @@ func (s *Server) AddReviewComment(n int, user User, body, path string, line int)
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.addComment(n, user, body, true, path, line)
+}
+
+// AddReviewReply replies in the inline review thread holding parent.
+func (s *Server) AddReviewReply(n int, user User, parent int64, body string) int64 {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	p := s.comment(parent)
+	id := s.addComment(n, user, body, true, p.Path, p.Line)
+	s.comment(id).ReplyTo = parent
+	return id
 }
 
 // AddReview submits a review.
@@ -1012,7 +1025,16 @@ func (s *Server) commentJSON(c *Comment) map[string]any {
 		"created_at": ts(c.Created), "updated_at": ts(c.Updated), "author_association": "OWNER"}
 	if c.Inline {
 		m["pull_request_url"] = s.URL + "/repos/" + s.Repo + "/pulls/" + strconv.Itoa(c.Number)
-		m["path"], m["line"], m["commit_id"] = c.Path, c.Line, s.pulls[c.Number].HeadSHA
+		// Like GitHub, commit_id and line follow the PR's head: once a push
+		// moves past the comment's commit, it is outdated and line is null.
+		// original_commit_id and original_line never change.
+		head := s.pulls[c.Number].HeadSHA
+		m["path"], m["commit_id"], m["original_commit_id"], m["original_line"] = c.Path, head, c.CommitID, c.Line
+		if c.CommitID == "" || c.CommitID == head {
+			m["line"] = c.Line
+		} else {
+			m["line"] = nil
+		}
 		if c.ReplyTo != 0 {
 			m["in_reply_to_id"] = c.ReplyTo
 		}

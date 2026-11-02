@@ -418,6 +418,10 @@ type rawComment struct {
 	InReplyTo      int64      `json:"in_reply_to_id"`
 	State          string     `json:"state"`
 	CommitID       string     `json:"commit_id"`
+	// OriginalCommitID is the commit an inline comment was made on. Unlike
+	// commit_id and line, which follow the PR's head, it and original_line
+	// never change.
+	OriginalCommitID string `json:"original_commit_id"`
 }
 
 type rawPull struct {
