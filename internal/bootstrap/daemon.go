@@ -605,9 +605,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		history[strconv.FormatUint(g, 10)] = d.executors
 	}
 	kinds := workKinds(d.inproc)
-	d.extensionWorkKinds(kinds)
 	recurring := recurrences(d.inproc)
-	d.extensionRecurrences(recurring)
 	delays := make([]time.Duration, len(set.RetryDelaysSeconds))
 	for i, seconds := range set.RetryDelaysSeconds {
 		delays[i] = time.Duration(seconds) * time.Second

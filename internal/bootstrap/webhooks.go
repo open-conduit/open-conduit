@@ -187,10 +187,6 @@ func (d *daemon) startWebhooks(ctx context.Context, stored config.Webhooks) (fun
 func (d *daemon) webhookHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")
-		if h := d.extensionWebhook(name); h != nil {
-			h.ServeHTTP(w, r)
-			return
-		}
 		if h := d.inprocWebhook(name); h != nil {
 			h.ServeHTTP(w, r)
 			return
