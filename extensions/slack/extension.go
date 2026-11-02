@@ -37,6 +37,10 @@ type source struct {
 	ingress   *Ingress
 	projector *Projector
 	socket    *Socket // receiver socket only
+	started   bool
+	// deliver is the code of the last failed delivery to the host ("" once
+	// one succeeds): an unregistered source refuses every push.
+	deliver string
 }
 
 // Extension is the Slack extension.
@@ -51,6 +55,7 @@ type Extension struct {
 	codes    map[string]string
 	sockets  sync.WaitGroup
 	stop     context.CancelFunc
+	stopped  bool
 	stopping context.Context
 }
 
@@ -109,6 +114,11 @@ func (x *Extension) Start(_ context.Context, h inproc.Host) error {
 // Stop ends the Socket Mode receivers. Their unacknowledged envelopes are
 // redelivered by Slack, and reconcile recovers the rest.
 func (x *Extension) Stop() {
+	// startSockets starts no receiver once stopped is set, and setting it
+	// under mu waits out one in progress, so Wait sees every Add.
+	x.mu.Lock()
+	x.stopped = true
+	x.mu.Unlock()
 	x.stop()
 	x.sockets.Wait()
 }
@@ -229,11 +239,6 @@ func (x *Extension) add(e protocol.ConfigEntry, settings Settings) error {
 	s.ingress = NewIngress(settings, client, x.now, IngressOptions{ActiveThreads: x.activeThreads(settings)})
 	if settings.Receiver == ReceiverSocket {
 		s.socket = NewSocket(client, SocketOptions{Now: x.now})
-		x.sockets.Add(1)
-		go func() {
-			defer x.sockets.Done()
-			s.socket.Run(x.stopping, x.push(s.name))
-		}()
 	}
 	x.mu.Lock()
 	x.sources[settings.Namespace] = s
@@ -242,9 +247,42 @@ func (x *Extension) add(e protocol.ConfigEntry, settings Settings) error {
 }
 
 // push hands a delivery to the host, which answers after durable
-// acceptance; the receiver acknowledges Slack only after it returns.
-func (x *Extension) push(name string) func(context.Context, extension.Delivery) error {
-	return func(ctx context.Context, d extension.Delivery) error { return x.h.Deliver(ctx, name, d) }
+// acceptance; the receiver acknowledges Slack only after it returns. A
+// refusal is kept for the entry's doctor line.
+func (x *Extension) push(s *source) func(context.Context, extension.Delivery) error {
+	return func(ctx context.Context, d extension.Delivery) error {
+		err := x.h.Deliver(ctx, s.name, d)
+		code := ""
+		if err != nil {
+			code = "deliver_failed"
+		}
+		x.mu.Lock()
+		s.deliver = code
+		x.mu.Unlock()
+		return err
+	}
+}
+
+// startSockets starts the Socket Mode receiver of every registered entry
+// that has none running yet. It runs as a task, so after configure has
+// registered the entries' sources. Receivers stop with the daemon; their
+// unacknowledged envelopes are redelivered by Slack and reconcile recovers
+// the rest.
+func (x *Extension) startSockets(context.Context) error {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	for _, s := range x.sources {
+		if s.socket == nil || s.started || x.stopped {
+			continue
+		}
+		s.started = true
+		x.sockets.Add(1)
+		go func(s *source) {
+			defer x.sockets.Done()
+			s.socket.Run(x.stopping, x.push(s))
+		}(s)
+	}
+	return nil
 }
 
 // activeThreads lists the threads live Work owns in an entry's namespace,
@@ -306,7 +344,7 @@ func (x *Extension) Sources() []inproc.Source {
 func (x *Extension) Webhook(path string) http.Handler {
 	for _, s := range x.list() {
 		if s.name == Type+"/"+path && s.settings.Receiver == ReceiverHTTP {
-			return WebhookHandler(x.signingSecret(s), x.push(s.name), x.now)
+			return WebhookHandler(x.signingSecret(s), x.push(s), x.now)
 		}
 	}
 	return nil
@@ -328,9 +366,13 @@ func (x *Extension) signingSecret(s *source) func(context.Context) (string, erro
 	}
 }
 
-// Tasks: one bounded reply pass every few seconds.
+// Tasks: the Socket Mode receivers started once their sources are
+// registered, and one bounded reply pass every few seconds.
 func (x *Extension) Tasks() []inproc.Task {
-	return []inproc.Task{{Name: "projection", Pace: 5 * time.Second, Run: x.project}}
+	return []inproc.Task{
+		{Name: "sockets", Pace: time.Second, Run: x.startSockets},
+		{Name: "projection", Pace: 5 * time.Second, Run: x.project},
+	}
 }
 
 func (x *Extension) project(ctx context.Context) error {
@@ -380,6 +422,10 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 	for ns, c := range x.replies {
 		replies[ns] = c
 	}
+	delivers := map[string]string{}
+	for ns, s := range x.sources {
+		delivers[ns] = s.deliver
+	}
 	x.mu.Unlock()
 	sources := x.list()
 	if len(sources) == 0 && len(failed) == 0 {
@@ -396,6 +442,10 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 		if until, paused := s.client.PausedUntil(); paused {
 			raise(inproc.CheckWarn, "rate_limited")
 			notes = append(notes, "rate limited until "+until.UTC().Format(time.RFC3339))
+		}
+		if code := delivers[set.Namespace]; code != "" {
+			raise(inproc.CheckFail, code)
+			notes = append(notes, "deliveries refused by the host (is the source registered? see extension_ingress)")
 		}
 		if code := replies[set.Namespace]; code != "" {
 			raise(inproc.CheckWarn, "replies_failing")
