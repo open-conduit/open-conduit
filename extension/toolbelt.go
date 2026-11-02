@@ -78,6 +78,10 @@ type TokenIssuer interface {
 type Operation struct {
 	Name string
 	// Handler receives validated authority, not a bearer token or secrets.
+	// It must be idempotent on the call's request ID (CallRequestID): the
+	// toolbelt records a result for replay only after Handler returns, so a
+	// crash between Handler's effect and that record runs Handler again when
+	// the caller retries with the same request ID.
 	Handler func(context.Context, Authority, domain.Payload) (domain.Payload, error)
 	// Wait, set instead of Handler, translates domain wait syntax into a
 	// generic plan for the current Work. The toolbelt declares the returned

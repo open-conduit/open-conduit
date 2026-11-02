@@ -108,6 +108,9 @@ func verifySnapshot(ctx context.Context, path string) error {
 	if metadata != "1" {
 		return fmt.Errorf("sqlite: snapshot schema metadata mismatch")
 	}
+	if err = checkRecordFormat(ctx, db); err != nil {
+		return err
+	}
 	return (&Store{db: db}).IntegrityCheck(ctx)
 }
 func readonlyDB(path string) (*sql.DB, error) {

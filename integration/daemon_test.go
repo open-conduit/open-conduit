@@ -799,6 +799,15 @@ func TestServeCommandResolution(t *testing.T) {
 	if code := run(capture, "serve", "--lease-duration", "-1s"); code != 2 {
 		t.Fatalf("invalid flag accepted: %d", code)
 	}
+	if code := run(capture, "serve"); code != 0 || got.BackupInterval != 24*time.Hour || got.BackupsKept != 7 || got.BackupDir != "" {
+		t.Fatalf("backup defaults: %+v", got)
+	}
+	if code := run(capture, "serve", "--backup-interval", "0", "--backup-dir", "bk", "--backups-kept", "3"); code != 0 || got.BackupInterval >= 0 || got.BackupDir != "/work/bk" || got.BackupsKept != 3 {
+		t.Fatalf("backup flags: %+v", got)
+	}
+	if code := run(capture, "serve", "--backups-kept", "0"); code != 2 {
+		t.Fatalf("no kept backups accepted: %d", code)
+	}
 	if code := run(nil, "serve"); code != 1 {
 		t.Fatalf("serve without composition: %d", code)
 	}

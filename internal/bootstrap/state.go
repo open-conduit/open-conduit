@@ -288,6 +288,8 @@ func CheckState(ctx context.Context, stateDir string) (cli.StateReport, error) {
 		code, remedy := "open_failed", "restore the latest verified bundle into a new state directory (backup restore)"
 		msg := err.Error()
 		switch {
+		case errors.Is(err, sqlite.ErrRecordsNewer):
+			code, remedy = "records_newer", "a newer Open Conduit wrote these records and this binary would drop the fields it doesn't know: run that binary, or restore the bundle taken before the upgrade"
 		case strings.Contains(msg, "newer than supported"):
 			code, remedy = "schema_newer", "a newer Open Conduit migrated this database: run that binary, or restore the bundle taken before the upgrade"
 		case strings.Contains(msg, "explicit migration required"), strings.Contains(msg, "metadata"):

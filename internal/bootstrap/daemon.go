@@ -59,7 +59,8 @@ type Options struct {
 	// ToolbeltDir contains the `os` binary (default: beside the executable).
 	ToolbeltDir string
 	// LifecycleLog receives one JSON line per lifecycle record (default
-	// StateDir/logs/lifecycle.jsonl, appended across restarts).
+	// StateDir/logs/lifecycle.jsonl, appended across restarts and rotated
+	// by size; logfile.go).
 	LifecycleLog string
 	// Log receives daemon diagnostics (default stderr).
 	Log io.Writer
@@ -70,6 +71,12 @@ type Options struct {
 	LeaseDuration time.Duration
 	// RetentionInterval paces the kept_executions sweep (default 10m).
 	RetentionInterval time.Duration
+	// BackupInterval paces the scheduled online backups (default 24h;
+	// negative turns them off). BackupDir receives them (default
+	// StateDir/backups) and BackupsKept is how many are kept (default 7).
+	BackupInterval time.Duration
+	BackupDir      string
+	BackupsKept    int
 	// ArtifactGrace is how old unreferenced artifact content must be before
 	// the retention pass collects it (default 24h).
 	ArtifactGrace time.Duration
@@ -142,6 +149,7 @@ type daemon struct {
 	owner          string
 	coord          storage.Store
 	artifacts      *artifacts.Store
+	backups        backupState
 	shell          *shell.Executor
 	executors      map[string]extension.Executor
 	inproc         []inproc.Extension
@@ -154,7 +162,7 @@ type daemon struct {
 	trackers       trackerSources
 	schedule       scheduleState
 	telemetry      telemetryFanout
-	telemetryFile  *os.File
+	telemetryFile  *rotatingLog
 	resources      resourceState
 	sandboxes      sandboxState
 	containers     containerState
@@ -257,6 +265,18 @@ func (o *Options) defaults() error {
 	}
 	if o.RetentionInterval == 0 {
 		o.RetentionInterval = 10 * time.Minute
+	}
+	if o.BackupInterval == 0 {
+		o.BackupInterval = 24 * time.Hour
+	}
+	if o.BackupDir == "" {
+		o.BackupDir = filepath.Join(o.StateDir, "backups")
+	}
+	if o.BackupsKept == 0 {
+		o.BackupsKept = 7
+	}
+	if !filepath.IsAbs(o.BackupDir) || o.BackupsKept < 1 {
+		return errors.New("backups need an absolute directory and at least one kept")
 	}
 	if o.ArtifactGrace == 0 {
 		o.ArtifactGrace = 24 * time.Hour
@@ -365,6 +385,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.artifacts.Close()
+	if err = d.startBackups(store); err != nil {
+		return fmt.Errorf("backups: %w", err)
+	}
 	// The state lock is held and nothing writes yet: pending streams are a
 	// killed process's unfinished writes.
 	if err = d.artifacts.Recover(ctx); err != nil {
@@ -515,13 +538,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	d.log.Info("open-conduit stopped")
 	return loopErr
-}
-
-func openLog(path string) (*os.File, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
-	}
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 }
 
 func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {

@@ -23,6 +23,21 @@ import (
 
 const SchemaVersion uint32 = 1
 
+// RecordFormat is the version of the JSON records this binary writes. Records
+// are decoded into this binary's structs and re-encoded on every write, so an
+// older binary drops any field it doesn't know from each record it rewrites.
+// Bump it whenever a stored record gains or loses a field: the database keeps
+// the highest format that opened it, and Open refuses a database whose format
+// is newer than its own (ErrRecordsNewer), before it changes anything.
+// TestRecordFieldsArePinned fails until a field change comes with a bump.
+const RecordFormat uint32 = 1
+
+// recordFormat is RecordFormat, replaced by tests that simulate another binary.
+var recordFormat = RecordFormat
+
+// ErrRecordsNewer is Open's refusal of a database a newer binary has written.
+var ErrRecordsNewer = errors.New("sqlite: records are newer than this binary writes")
+
 // busyTimeout bounds how long a connection waits for a competing connection's lock.
 const busyTimeout = 5 * time.Second
 
@@ -103,6 +118,13 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if storedVersion != "1" {
 		return nil, fmt.Errorf("sqlite: schema metadata mismatch")
 	}
+	if err = checkRecordFormat(ctx, db); err != nil {
+		return nil, err
+	}
+	// Raise the stored format, never lower it: two binaries can open together.
+	if _, err = db.ExecContext(ctx, `INSERT INTO metadata VALUES ('record_format',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value WHERE CAST(value AS INTEGER)<CAST(excluded.value AS INTEGER)`, fmt.Sprint(recordFormat)); err != nil {
+		return nil, err
+	}
 
 	if err = enableWAL(ctx, db); err != nil {
 		return nil, err
@@ -117,6 +139,26 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	}
 	ok = true
 	return s, nil
+}
+
+// checkRecordFormat refuses a database whose records a newer binary wrote. A
+// database without the entry predates it and holds format 1.
+func checkRecordFormat(ctx context.Context, db *sql.DB) error {
+	var stored uint32 = 1
+	var value string
+	switch err := db.QueryRowContext(ctx, "SELECT value FROM metadata WHERE key='record_format'").Scan(&value); {
+	case errors.Is(err, sql.ErrNoRows):
+	case err != nil:
+		return err
+	default:
+		if _, err = fmt.Sscan(value, &stored); err != nil {
+			return fmt.Errorf("sqlite: invalid record format %q", value)
+		}
+	}
+	if stored > recordFormat {
+		return fmt.Errorf("%w (format %d; this binary writes %d) and would lose the fields it doesn't know: run the newer binary, or restore the bundle taken before the upgrade with open-conduit backup restore", ErrRecordsNewer, stored, recordFormat)
+	}
+	return nil
 }
 
 // enableWAL switches the database to WAL, waiting out competing connections.

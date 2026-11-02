@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -23,7 +22,7 @@ type claudeState struct {
 	mu       sync.Mutex
 	running  bool
 	last     time.Time
-	log      *os.File
+	log      *rotatingLog
 	logMu    sync.Mutex
 }
 
