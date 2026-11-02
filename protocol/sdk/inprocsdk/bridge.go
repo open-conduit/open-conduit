@@ -56,13 +56,17 @@ type Bridge struct {
 	ext *sdk.Extension
 	srv *sdk.Server
 
-	mu       sync.Mutex
-	started  bool
-	dryRun   bool
-	sources  map[string]inproc.Source
-	types    map[string]inproc.ConfigType // by validate kind and type
-	checks   []string                     // declared check names, in order
-	startErr error
+	mu      sync.Mutex
+	started bool
+	dryRun  bool
+	sources map[string]inproc.Source
+	types   map[string]inproc.ConfigType // by validate kind and type
+	checks  []string                     // declared check names, in order
+
+	// startMu serialises starting: the extension counts as started only
+	// once Start has succeeded, so a configure after a failed Start tries
+	// again rather than configuring an extension that never started.
+	startMu sync.Mutex
 }
 
 // New bridges x, completing base into its manifest. It fails when base
@@ -430,24 +434,15 @@ func (b *Bridge) validate(_ context.Context, p protocol.ValidateParams) error {
 	return nil
 }
 
-// configure starts the extension on its first call, hands it the
-// generation, and answers the sources it registers and the webhook paths
-// it serves.
+// configure starts the extension unless it has started (retrying a
+// failed Start), hands it the generation, and answers the sources it
+// registers and the webhook paths it serves.
 func (b *Bridge) configure(ctx context.Context, h *sdk.Host, p protocol.ConfigureParams) (protocol.ConfigureResult, error) {
 	b.mu.Lock()
 	b.dryRun = p.DryRun
-	first := !b.started
-	b.started = true
 	b.mu.Unlock()
-	if first {
-		if s, ok := b.x.(inproc.Starter); ok {
-			if err := s.Start(ctx, b.host(h)); err != nil {
-				b.mu.Lock()
-				b.startErr = err
-				b.mu.Unlock()
-				return protocol.ConfigureResult{}, err
-			}
-		}
+	if err := b.start(ctx, h); err != nil {
+		return protocol.ConfigureResult{}, err
 	}
 	if c, ok := b.x.(inproc.Configurer); ok {
 		c.Configure(ctx, p)
@@ -477,6 +472,29 @@ func (b *Bridge) configure(ctx context.Context, h *sdk.Host, p protocol.Configur
 		}
 	}
 	return out, nil
+}
+
+// start starts the extension once: started is set only after Start
+// succeeds, so a failed Start is retried by the next configure and the
+// extension is never configured, registered or served unstarted.
+func (b *Bridge) start(ctx context.Context, h *sdk.Host) error {
+	b.startMu.Lock()
+	defer b.startMu.Unlock()
+	b.mu.Lock()
+	started := b.started
+	b.mu.Unlock()
+	if started {
+		return nil
+	}
+	if s, ok := b.x.(inproc.Starter); ok {
+		if err := s.Start(ctx, b.host(h)); err != nil {
+			return err
+		}
+	}
+	b.mu.Lock()
+	b.started = true
+	b.mu.Unlock()
+	return nil
 }
 
 // host is the inproc.Host the extension starts with, over the host's

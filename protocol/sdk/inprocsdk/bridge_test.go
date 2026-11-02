@@ -3,6 +3,7 @@ package inprocsdk_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"slices"
 	"strings"
@@ -25,6 +26,8 @@ type acme struct {
 	mu      sync.Mutex
 	host    *inproc.Host
 	starts  int
+	// failStarts is how many Starts fail before one succeeds.
+	failStarts int
 	entries []protocol.ConfigEntry
 	ran     []string
 }
@@ -55,7 +58,12 @@ func (x *acme) Types() []inproc.ConfigType {
 func (x *acme) Start(_ context.Context, h inproc.Host) error {
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	x.host, x.starts = &h, x.starts+1
+	x.starts++
+	if x.failStarts > 0 {
+		x.failStarts--
+		return errors.New("no credentials yet")
+	}
+	x.host = &h
 	return nil
 }
 
@@ -224,5 +232,43 @@ func TestBridgeServesTheInprocContract(t *testing.T) {
 	}
 	if err := h.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateExtension, Type: "acme", Config: json.RawMessage(`{}`)}, &v); err != nil {
 		t.Fatalf("a good entry refused: %v", err)
+	}
+}
+
+// A failed Start fails its configure and is tried again by the next one:
+// the extension is never configured, registered or served unstarted.
+func TestFailedStartIsRetried(t *testing.T) {
+	x := &acme{failStarts: 1}
+	b, err := inprocsdk.New(x, base())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	h := sdktest.New(t, b.Extension())
+	entries := []protocol.ConfigEntry{{ScopeID: "eng", Type: "acme", Name: "plain", Config: json.RawMessage(`{}`)}}
+	if _, err := h.Configure(ctx, protocol.ConfigureParams{Entries: entries}); err == nil {
+		t.Fatal("a configure whose Start failed succeeded")
+	}
+	x.mu.Lock()
+	configured := len(x.entries)
+	x.mu.Unlock()
+	if configured != 0 {
+		t.Fatal("an unstarted extension was configured")
+	}
+	if _, err := h.Operation(ctx, "acme.ping", domain.Payload{Data: json.RawMessage(`{}`)}); err == nil {
+		t.Fatal("an unstarted extension's operation answered")
+	}
+	res, err := h.Configure(ctx, protocol.ConfigureParams{Entries: entries})
+	if err != nil || len(res.Sources) != 1 {
+		t.Fatalf("the retried configure: %+v %v", res, err)
+	}
+	x.mu.Lock()
+	starts := x.starts
+	x.mu.Unlock()
+	if starts != 2 {
+		t.Fatalf("started %d times, want 2", starts)
+	}
+	if _, err := h.Operation(ctx, "acme.ping", domain.Payload{Data: json.RawMessage(`{}`)}); err != nil {
+		t.Fatalf("operation after the retried start: %v", err)
 	}
 }
