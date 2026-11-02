@@ -806,3 +806,83 @@ func TestPermissionsOverProtocol(t *testing.T) {
 		}
 	})
 }
+
+// TestHostResolversOverProtocol: wait.target (a wait operation's),
+// scope.authorize (any extension's) and event.render_owned (an executor's)
+// reach the host for the extension's own scopes only, and each is refused
+// to a manifest that doesn't enable it.
+func TestHostResolversOverProtocol(t *testing.T) {
+	e := newExtEnv(t)
+	ctx := context.Background()
+	deps := e.deps()
+	deps.WaitTarget = func(_ context.Context, scope domain.ID, kind, name string) (domain.CorrelationKey, []string, bool) {
+		if scope != extensionScope || kind != "job" || name != "nightly" {
+			return domain.CorrelationKey{}, nil, false
+		}
+		return domain.CorrelationKey{Source: "schedule/notes-scope", ExternalID: "nightly"}, []string{"schedule.run.completed"}, true
+	}
+	var asked []string
+	deps.Authorize = func(kind string, from, to domain.ID) error {
+		asked = append(asked, kind+" "+string(from)+" "+string(to))
+		if to == "private" {
+			return errors.New("scope private is not in authorization.read_scopes")
+		}
+		return nil
+	}
+	deps.Render = func(_ context.Context, ev domain.Event) (string, bool) {
+		return "rendered " + ev.Type, ev.Type == "acme.ping"
+	}
+
+	// A plain extension may authorize but neither resolve wait targets nor
+	// render through the owner.
+	plain, err := extproc.NewService(notes.Manifest(notes.Options{Release: 2}), deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ph := pipeHost(t, plain)
+	if _, _, _, err := ph.WaitTarget(ctx, extensionScope, "job", "nightly"); !errors.Is(err, extension.ErrUndeclared) {
+		t.Fatalf("wait.target without a wait operation: %v", err)
+	}
+	if _, _, err := ph.RenderOwned(ctx, domain.Event{Type: "acme.ping"}); !errors.Is(err, extension.ErrUndeclared) {
+		t.Fatalf("event.render_owned without an executor: %v", err)
+	}
+	if err := ph.Authorize(ctx, "read", extensionScope, "shared"); err != nil {
+		t.Fatalf("an allowed read: %v", err)
+	}
+	if err := ph.Authorize(ctx, "read", extensionScope, "private"); err == nil || !strings.Contains(err.Error(), "authorization.read_scopes") {
+		t.Fatalf("a refused read: %v", err)
+	}
+	if err := ph.Authorize(ctx, "read", "other-scope", "shared"); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("asking for a scope not its own: %v", err)
+	}
+	if err := ph.Authorize(ctx, "admin", extensionScope, "shared"); err == nil {
+		t.Fatal("an unknown kind was answered")
+	}
+	if want := []string{"read notes-scope shared", "read notes-scope private"}; !reflect.DeepEqual(asked, want) {
+		t.Fatalf("asked %v, want %v", asked, want)
+	}
+
+	m := notes.Manifest(notes.Options{Fixture: true})
+	m.Provides.Executors = append(m.Provides.Executors, protocol.ExecutorDecl{Name: m.Name + "-run", Capabilities: protocol.Capabilities{Toolbelt: "none"}})
+	svc, err := extproc.NewService(m, deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	host := pipeHost(t, svc)
+	key, types, ok, err := host.WaitTarget(ctx, extensionScope, "job", "nightly")
+	if err != nil || !ok || key.ExternalID != "nightly" || !reflect.DeepEqual(types, []string{"schedule.run.completed"}) {
+		t.Fatalf("wait.target: %+v %v %v %v", key, types, ok, err)
+	}
+	if _, _, ok, err := host.WaitTarget(ctx, extensionScope, "job", "missing"); err != nil || ok {
+		t.Fatalf("an unknown target: %v %v", ok, err)
+	}
+	if _, _, _, err := host.WaitTarget(ctx, "other-scope", "job", "nightly"); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("a target in a scope not its own: %v", err)
+	}
+	if text, ok, err := host.RenderOwned(ctx, domain.Event{Type: "acme.ping"}); err != nil || !ok || text != "rendered acme.ping" {
+		t.Fatalf("event.render_owned: %q %v %v", text, ok, err)
+	}
+	if _, ok, err := host.RenderOwned(ctx, domain.Event{Type: "other.thing"}); err != nil || ok {
+		t.Fatalf("an Event no extension renders: %v %v", ok, err)
+	}
+}

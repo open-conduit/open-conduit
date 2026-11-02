@@ -106,13 +106,15 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Annotate` | `annotate` | `work.annotate` |
 | `Actions`, `Act` | `actions` | `work.actions`, `work.act` |
 | `Render` | `render` | `event.render` |
+| `Target` (`TargetResolvers`) | `targets` | `target.resolve` |
+| `OnSegmentEnd` (`SegmentEnded`) | `segment_end` | `segment.ended` |
 | `Setups` | `setup` (`first_run` for the setup that builds the default configuration) | `setup.run` with the `setup.*` callbacks |
 | `Upcasters` | `schemas` | applied before extension code sees an older payload |
 | — | `extensions[].settings`, `extensions[].describe` | none: the host reads an entry's [safe settings and describe lines](../extension-protocol/#manifest) from its config |
 
 Reaching the host:
 
-- **`sdk.Host`** is passed to `Configure`, `Migrate` and tasks, and is available inside any handler through `sdk.HostFrom(ctx)`. It has KV (`Get`, `List`, `Commit`, `Update`), `Accept` (derived Events with records), `Deliver` (your own receiver's deliveries), state reads (`Works`, `Events`), `Secrets` and `ConnectionSecrets`, and `Artifact`. With the matching [permission](../extension-protocol/#permissions) it also has `Capture` (`telemetry.capture`), `Probes` and `Probe` (`probes`), `ConfigBase`, `ConfigEdit`, `ConfigValidate` and `ConfigTrace` (`config.read`), `Act` and `Actions` (`action.submit`), which invoke and list actions for a person the package identified on its own surface, and `SettleHold` (`work.start_gate`), which settles a hold its start gate placed.
+- **`sdk.Host`** is passed to `Configure`, `Migrate` and tasks, and is available inside any handler through `sdk.HostFrom(ctx)`. It has KV (`Get`, `List`, `Commit`, `Update`), `Accept` (derived Events with records), `Deliver` (your own receiver's deliveries), state reads (`Works`, `Events`), `Secrets` and `ConnectionSecrets`, and `Artifact`, `Authorize` (`scope.authorize`, whether one of its scopes may read or file in another), `WaitTarget` (`wait.target`, with a wait operation) and `RenderOwned` (`event.render_owned`, with an executor). With the matching [permission](../extension-protocol/#permissions) it also has `Capture` (`telemetry.capture`), `Probes` and `Probe` (`probes`), `ConfigBase`, `ConfigEdit`, `ConfigValidate` and `ConfigTrace` (`config.read`), `Act` and `Actions` (`action.submit`), which invoke and list actions for a person the package identified on its own surface, and `SettleHold` (`work.start_gate`), which settles a hold its start gate placed.
 - **`sdk.Store`** is `storage.Store` over the host. It lets code written against a coordination transaction run unchanged. KV reads carry version tokens, and one `Transact`'s writes commit as a single `kv.commit` batch whose preconditions are every key it read. A concurrent change to one of those keys is `storage.ErrConflict`. State reads are the scoped `state.*` methods. Every core write returns `sdk.ErrReadOnly`. Conflict detection covers keys read, not prefix ranges, so it is weaker than the host's serializable transactions. The Slack projector and tools run on it.
 - **`sdk.Artifacts`** is `storage.Artifacts` over `artifact.*`. It writes in acknowledged chunks; Open and Delete are host-only. The shell executor writes its logs through it.
 

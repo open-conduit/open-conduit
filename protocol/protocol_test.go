@@ -101,6 +101,11 @@ var useCases = map[string][]string{
 	"config.trace":               {"setup"},
 	"check.run":                  {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "claude-code"},
 	"run.environment":            {"github"},
+	"event.render_owned":         {"claude-code"},
+	"target.resolve":             {"schedule"},
+	"wait.target":                {"github"},
+	"scope.authorize":            {"github"},
+	"segment.ended":              {"github"},
 	"work.annotate":              {"github"},
 	"work.actions":               {"github"},
 	"work.act":                   {"github"},
@@ -279,6 +284,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.DependencyFilter, m.Provides.RunEnvironment, m.Provides.ConfigCandidate, m.Provides.OperationGate, m.Provides.StartGate = true, true, true, true, true
 	m.Provides.Pages = []protocol.PageDecl{{ID: "chat", Title: "Chat", Entry: "chat", WorkKind: "chat.conversation", Start: "start", Compose: []string{"message"}, Route: "chat"}}
 	m.Provides.Routes[0].Samples = true
+	m.Provides.Targets, m.Provides.SegmentEnd = []string{"chat"}, true
 	for _, p := range protocol.KnownPermissions {
 		m.Permissions = append(m.Permissions, p.Name)
 	}
@@ -319,6 +325,8 @@ func TestManifestRejections(t *testing.T) {
 		"commit on handler":    {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "commit": true}`},
 		"guidance too long":    {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "guidance": "` + strings.Repeat("x", extension.MaxGuidance+1) + `"}`},
 		"serves bad name":      {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "serves": "Git Credential"}`},
+		"target kind":          {`"webhooks": true,`, `"webhooks": true, "targets": ["Job"],`},
+		"target twice":         {`"webhooks": true,`, `"webhooks": true, "targets": ["job", "job"],`},
 		"serves on wait":       {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "wait", "serves": "git.credential"}`},
 		"input not an object":  {`{"name": "chat.reply", "kind": "handler"}`, `{"name": "chat.reply", "kind": "handler", "input": ["city"]}`},
 		"filter without wait":  {`"webhooks": true,`, `"webhooks": true, "dependency_filter": true,`},

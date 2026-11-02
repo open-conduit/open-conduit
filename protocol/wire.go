@@ -30,6 +30,12 @@ type Key struct {
 }
 
 func fromKey(k domain.CorrelationKey) Key { return Key{Source: k.Source, ExternalID: k.ExternalID} }
+
+// FromKey is a correlation key on the wire.
+func FromKey(k domain.CorrelationKey) Key { return fromKey(k) }
+
+// Domain is the wire key as a correlation key.
+func (k Key) Domain() domain.CorrelationKey { return k.domain() }
 func (k Key) domain() domain.CorrelationKey {
 	return domain.CorrelationKey{Source: k.Source, ExternalID: k.ExternalID}
 }

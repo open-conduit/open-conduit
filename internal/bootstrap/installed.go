@@ -52,26 +52,28 @@ type installed struct {
 }
 
 var (
-	_ inproc.Typed      = (*installed)(nil)
-	_ inproc.Operator   = (*installed)(nil)
-	_ inproc.Router     = (*installed)(nil)
-	_ inproc.Configurer = (*installed)(nil)
-	_ inproc.Stopper    = (*installed)(nil)
-	_ inproc.Tooled     = (*installed)(nil)
-	_ inproc.Actor      = (*installed)(nil)
-	_ inproc.Annotator  = (*installed)(nil)
-	_ inproc.Renderer   = (*installed)(nil)
-	_ inproc.Tasker     = (*installed)(nil)
-	_ inproc.Checker    = (*installed)(nil)
-	_ inproc.Exporting  = (*installed)(nil)
-	_ inproc.Sink       = (*installed)(nil)
-	_ inproc.Paged      = (*installed)(nil)
-	_ inproc.Playbooker = (*installed)(nil)
-	_ inproc.Executing  = (*installed)(nil)
-	_ inproc.WorkKinder = (*installed)(nil)
-	_ inproc.Recurring  = (*installed)(nil)
-	_ inproc.Ingester   = (*installed)(nil)
-	_ inproc.Webhooker  = (*installed)(nil)
+	_ inproc.Typed        = (*installed)(nil)
+	_ inproc.Operator     = (*installed)(nil)
+	_ inproc.Router       = (*installed)(nil)
+	_ inproc.Configurer   = (*installed)(nil)
+	_ inproc.Stopper      = (*installed)(nil)
+	_ inproc.Tooled       = (*installed)(nil)
+	_ inproc.Actor        = (*installed)(nil)
+	_ inproc.Annotator    = (*installed)(nil)
+	_ inproc.Renderer     = (*installed)(nil)
+	_ inproc.Tasker       = (*installed)(nil)
+	_ inproc.Checker      = (*installed)(nil)
+	_ inproc.Exporting    = (*installed)(nil)
+	_ inproc.Sink         = (*installed)(nil)
+	_ inproc.Paged        = (*installed)(nil)
+	_ inproc.Playbooker   = (*installed)(nil)
+	_ inproc.Executing    = (*installed)(nil)
+	_ inproc.WorkKinder   = (*installed)(nil)
+	_ inproc.Recurring    = (*installed)(nil)
+	_ inproc.Ingester     = (*installed)(nil)
+	_ inproc.Webhooker    = (*installed)(nil)
+	_ inproc.Targeter     = (*installed)(nil)
+	_ inproc.SegmentEnder = (*installed)(nil)
 
 	_ extension.ConfigCandidate = (*installed)(nil)
 )
@@ -331,6 +333,27 @@ func (x *installed) Recurrences() map[string]inproc.RecurrenceFunc {
 		out[kind] = inproc.RecurrenceFunc(x.r.Recurrence(kind))
 	}
 	return out
+}
+
+// Targets are the wait target kinds the package resolves (manifest
+// targets), each through target.resolve.
+func (x *installed) Targets() map[string]func(ctx context.Context, scope domain.ID, name string) (domain.CorrelationKey, []string, bool) {
+	out := map[string]func(ctx context.Context, scope domain.ID, name string) (domain.CorrelationKey, []string, bool){}
+	if x.r == nil {
+		return out
+	}
+	for _, kind := range x.m.Provides.Targets {
+		out[kind] = x.r.Target(kind)
+	}
+	return out
+}
+
+// SegmentEnded tells the package an execution's container segment ended
+// (segment.ended), when its manifest asks to be told.
+func (x *installed) SegmentEnded(ctx context.Context, execution domain.ID) {
+	if x.r != nil {
+		x.r.SegmentEnded(ctx, execution)
+	}
 }
 
 // Stop shuts the package down (shutdown, stdin closed, then signals to its

@@ -77,6 +77,16 @@ type Deps struct {
 	// SettleHold settles the hold owner's start gate placed on work
 	// (work.settle_hold, permission work.start_gate).
 	SettleHold func(ctx context.Context, owner string, work domain.ID, admit bool, reason, key string) (domain.ID, error)
+	// Render renders an input Event for an agent's prompt through the
+	// extension that owns its family (event.render_owned, for executors).
+	Render func(ctx context.Context, e domain.Event) (string, bool)
+	// WaitTarget resolves a named wait target through the extensions that
+	// resolve its kind (wait.target, for wait operations).
+	WaitTarget func(ctx context.Context, scope domain.ID, kind, name string) (domain.CorrelationKey, []string, bool)
+	// Authorize answers whether scope from may read ("read") or file in
+	// ("file") scope to under the operator's authorization config
+	// (scope.authorize); the error says how to allow it.
+	Authorize func(kind string, from, to domain.ID) error
 	// Config is the host's config service, which keeps config text behind
 	// handles and answers only redacted copies (config.base, config.edit,
 	// config.validate, config.trace; permission config.read).
@@ -280,6 +290,51 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.WorkSettleHoldResult{EventID: string(id)}, nil
+	case "event.render_owned":
+		var p protocol.EventRenderOwnedParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.deps.Render == nil {
+			return nil, protocol.Errorf(protocol.CodeUnsupported, "event.render_owned")
+		}
+		text, ok := s.deps.Render(ctx, p.Event.Domain())
+		return protocol.EventRenderResult{Text: text, OK: ok}, nil
+	case "wait.target":
+		var p protocol.WaitTargetParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if !s.allowedScopes()[domain.ID(p.ScopeID)] {
+			return nil, unauthorized("scope is not configured for this extension")
+		}
+		if s.deps.WaitTarget == nil {
+			return nil, protocol.Errorf(protocol.CodeUnsupported, "wait.target")
+		}
+		key, types, ok := s.deps.WaitTarget(ctx, domain.ID(p.ScopeID), p.Kind, p.Name)
+		if !ok {
+			return protocol.WaitTargetResult{}, nil
+		}
+		return protocol.WaitTargetResult{Key: protocol.FromKey(key), Types: types, OK: true}, nil
+	case "scope.authorize":
+		var p protocol.ScopeAuthorizeParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		// The extension asks on behalf of one of its own scopes only.
+		if !s.allowedScopes()[domain.ID(p.From)] {
+			return nil, unauthorized("scope is not configured for this extension")
+		}
+		if p.Kind != "read" && p.Kind != "file" {
+			return nil, invalid("kind is read or file")
+		}
+		if s.deps.Authorize == nil {
+			return nil, protocol.Errorf(protocol.CodeUnsupported, "scope.authorize")
+		}
+		if err := s.deps.Authorize(p.Kind, domain.ID(p.From), domain.ID(p.To)); err != nil {
+			return protocol.ScopeAuthorizeResult{Reason: err.Error()}, nil
+		}
+		return protocol.ScopeAuthorizeResult{Allowed: true}, nil
 	case "artifact.create", "artifact.write", "artifact.commit", "artifact.abort":
 		return s.artifact(ctx, method, raw)
 	case "secret.resolve":
