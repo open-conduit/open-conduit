@@ -1062,3 +1062,84 @@ func TestManagementNamedOperators(t *testing.T) {
 	// Once revoked, the name can be issued again.
 	h.mustCLI(nil, "auth", "add", "alice", "--out", aliceFile+".new")
 }
+
+// TestManagementOperatorRoles checks each role at the routes it gates:
+// view only reads, operate also runs controls, and only admin applies
+// config or manages other operators. The owner is always admin.
+func TestManagementOperatorRoles(t *testing.T) {
+	h := newManagementHarness(t)
+	ctx := context.Background()
+	owner := h.operatorClient()
+	login := func(name, role string) (*client.Client, client.TokenFile) {
+		t.Helper()
+		path := filepath.Join(h.state, name+".token")
+		h.mustCLI(nil, "auth", "add", name, "--role", role, "--out", path)
+		f, err := client.ReadTokenFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		c, err := client.New(h.endpoint, f.Token)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return c, f
+	}
+	if _, errOut, code := h.cli("auth", "add", "eve", "--role", "root", "--out", filepath.Join(h.state, "eve.token")); code == 0 {
+		t.Fatalf("unknown role accepted: %s", errOut)
+	}
+	viewer, viewerFile := login("vic", "view")
+	operator, _ := login("olly", "operate")
+	admin, _ := login("ada", "admin")
+	forbidden := func(what string, err error) {
+		t.Helper()
+		var api *client.Error
+		if !errors.As(err, &api) || api.Status != 403 || api.Code != "forbidden_role" {
+			t.Fatalf("%s: want 403 forbidden_role, got %v", what, err)
+		}
+	}
+
+	// view reads, and is refused every control.
+	if _, err := viewer.Health(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := viewer.Events(ctx, nil); err != nil {
+		t.Fatal(err)
+	}
+	_, err := viewer.SubmitEvent(ctx, client.EventRequest{ScopeID: "ops", Type: "operator.requested", DeliveryID: "vic-1"}, "k")
+	forbidden("view sending an Event", err)
+
+	// operate runs controls, but can't manage operators.
+	e, err := operator.SubmitEvent(ctx, client.EventRequest{ScopeID: "ops", Type: "operator.requested", DeliveryID: "olly-1"}, "k")
+	if err != nil || e.Actor != "operator:olly" {
+		t.Fatalf("operate sending an Event: %+v %v", e, err)
+	}
+	_, err = operator.AddOperator(ctx, "mal", "admin")
+	forbidden("operate adding an operator", err)
+	_, err = operator.Revoke(ctx, viewerFile.TokenID, "", "rv-1")
+	forbidden("operate revoking another operator", err)
+	_, err = operator.ApplyConfigText(ctx, []byte(`{}`), "hash", "1", "ap-1")
+	forbidden("operate applying config", err)
+
+	// admin manages operators; the owner is admin without being told.
+	if _, err = admin.AddOperator(ctx, "zed", "view"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = admin.Revoke(ctx, viewerFile.TokenID, "", "rv-2"); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = viewer.Health(ctx); !isStatus(err, 401) {
+		t.Fatalf("revoked viewer still accepted: %v", err)
+	}
+	if _, err = owner.AddOperator(ctx, "yan", "operate"); err != nil {
+		t.Fatal(err)
+	}
+	var operators []client.Operator
+	h.mustCLI(&operators, "auth", "operators")
+	roles := map[string]string{}
+	for _, o := range operators {
+		roles[o.Name] = o.Role
+	}
+	if roles["local"] != "admin" || roles["olly"] != "operate" || roles["zed"] != "view" {
+		t.Fatalf("roles: %v", roles)
+	}
+}

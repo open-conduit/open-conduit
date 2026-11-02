@@ -1083,6 +1083,7 @@ func (c *Client) Rotate(ctx context.Context, expectedTokenID string) (out TokenF
 // still active. It never carries the token.
 type Operator struct {
 	Name      string `json:"name"`
+	Role      string `json:"role"`
 	TokenID   string `json:"token_id"`
 	CreatedAt string `json:"created_at"`
 	RevokedAt string `json:"revoked_at,omitempty"`
@@ -1097,9 +1098,10 @@ func (c *Client) Operators(ctx context.Context) ([]Operator, error) {
 	return out.Operators, err
 }
 
-// AddOperator issues a credential for the named operator, returned once.
-func (c *Client) AddOperator(ctx context.Context, name string) (out TokenFile, err error) {
-	err = c.Do(ctx, "POST", "auth/operators", nil, map[string]string{"name": name}, "", &out)
+// AddOperator issues a credential for the named operator with role
+// (admin, operate or view), returned once.
+func (c *Client) AddOperator(ctx context.Context, name, role string) (out TokenFile, err error) {
+	err = c.Do(ctx, "POST", "auth/operators", nil, map[string]string{"name": name, "role": role}, "", &out)
 	return
 }
 

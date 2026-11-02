@@ -26,7 +26,11 @@ type operatorRecord struct {
 	// Name is whose credential it is; empty is the owner's own
 	// (LocalOperatorName), the credential the daemon writes to its state
 	// directory.
-	Name      string `json:",omitempty"`
+	Name string `json:",omitempty"`
+	// Role is what the operator may do (RoleAdmin, RoleOperate, RoleView).
+	// The owner's own credential is always RoleAdmin; a named credential
+	// without one, issued before roles, is RoleView.
+	Role      string `json:",omitempty"`
 	Revoked   bool
 	CreatedAt time.Time
 	RevokedAt time.Time
@@ -35,6 +39,30 @@ type operatorRecord struct {
 // LocalOperatorName is the owner's own operator: the credential in the
 // state directory, recorded as operator:local.
 const LocalOperatorName = "local"
+
+// Operator roles, from least to most: view reads; operate also runs every
+// control and action; admin also applies config and manages other
+// operators' credentials.
+const (
+	RoleView    = "view"
+	RoleOperate = "operate"
+	RoleAdmin   = "admin"
+)
+
+var roleRank = map[string]int{RoleView: 1, RoleOperate: 2, RoleAdmin: 3}
+
+// ValidRole reports whether role names an operator role.
+func ValidRole(role string) bool { return roleRank[role] > 0 }
+
+func (r operatorRecord) role() string {
+	switch {
+	case r.Name == "":
+		return RoleAdmin
+	case ValidRole(r.Role):
+		return r.Role
+	}
+	return RoleView
+}
 
 func (r operatorRecord) name() string {
 	if r.Name == "" {
@@ -67,7 +95,7 @@ func newTokenID(prefix string) (string, error) {
 }
 
 // issueOperatorInTx stores only the digest of a fresh operator bearer.
-func issueOperatorInTx(tx storage.Tx, now time.Time, name string) (TokenFile, error) {
+func issueOperatorInTx(tx storage.Tx, now time.Time, name, role string) (TokenFile, error) {
 	token, err := runtime.NewBearer()
 	if err != nil {
 		return TokenFile{}, err
@@ -77,7 +105,7 @@ func issueOperatorInTx(tx storage.Tx, now time.Time, name string) (TokenFile, er
 		return TokenFile{}, err
 	}
 	digest := runtime.TokenDigest(token)
-	b, _ := json.Marshal(operatorRecord{TokenID: id, Name: name, CreatedAt: now})
+	b, _ := json.Marshal(operatorRecord{TokenID: id, Name: name, Role: role, CreatedAt: now})
 	if err = tx.Put(authNamespace, "operator/"+digest, b); err != nil {
 		return TokenFile{}, err
 	}
@@ -184,7 +212,7 @@ func BootstrapOperator(ctx context.Context, store storage.Store, now func() time
 				return ErrCredentialExists
 			}
 		}
-		file, err = issueOperatorInTx(tx, now(), "")
+		file, err = issueOperatorInTx(tx, now(), "", "")
 		return err
 	})
 	if err != nil {
@@ -203,7 +231,7 @@ func RecoverOperator(ctx context.Context, store storage.Store, now func() time.T
 			return err
 		}
 		var err error
-		file, err = issueOperatorInTx(tx, now(), "")
+		file, err = issueOperatorInTx(tx, now(), "", "")
 		return err
 	})
 	if err != nil {

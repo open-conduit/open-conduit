@@ -205,6 +205,15 @@ type principal struct {
 	// name is the operator's name (LocalOperatorName for the owner's own
 	// credential); empty for an execution token.
 	name string
+	// role is the operator's role (RoleAdmin for the owner).
+	role string
+}
+
+// may reports whether the operator's role is at least role.
+func (p principal) may(role string) bool { return roleRank[p.role] >= roleRank[role] }
+
+func forbiddenRole(p principal, role string) error {
+	return fail(403, "forbidden_role", "operator "+p.name+" has role "+p.role+"; this needs "+role)
 }
 
 // actor is the operator as kind:id, as recorded on what it does.
@@ -294,7 +303,7 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request) (principal, 
 		if record.Revoked {
 			return principal{}, fail(401, "unauthenticated", "credential revoked")
 		}
-		return principal{operator: true, tokenID: record.TokenID, token: token, name: record.name()}, nil
+		return principal{operator: true, tokenID: record.TokenID, token: token, name: record.name(), role: record.role()}, nil
 	}
 	known, err := s.o.Toolbelt.Known(ctx, token)
 	if err != nil {
@@ -383,6 +392,25 @@ var routes = []route{
 	{"GET", []string{"toolbelt", "guidance"}, false, false, (*Server).toolbeltGuidance},
 }
 
+// requiredRole is the least operator role a route needs. Reads, and the
+// POSTs that change nothing (route trace, config validate), need view;
+// applying config and issuing operators' credentials need admin; every
+// other control needs operate. Revoking another operator's credential
+// needs admin too, which revoke checks itself.
+func requiredRole(rt *route, parts []string) string {
+	if !rt.mutation {
+		return RoleView
+	}
+	path := strings.Join(rt.pattern, "/")
+	switch path {
+	case "scopes/*/route/trace", "config/validate":
+		return RoleView
+	case "config/apply", "auth/operators":
+		return RoleAdmin
+	}
+	return RoleOperate
+}
+
 // split matches routes on escaped segments so opaque IDs may contain "/".
 func split(escaped string) ([]string, bool) {
 	rest, ok := strings.CutPrefix(escaped, "/v1/")
@@ -451,6 +479,13 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 	// and an execution's token reaches only the toolbelt on its own socket.
 	if who.operator == (scopedExecution(ctx) != "") {
 		return fail(403, "wrong_credential_class", "credential class not permitted for this endpoint")
+	}
+	// An operator's role is checked where the route is served, before
+	// anything is read or written: fail closed.
+	if who.operator {
+		if need := requiredRole(matched, parts); !who.may(need) {
+			return forbiddenRole(who, need)
+		}
 	}
 	// Everything an operator does is recorded as theirs: the host stamps the
 	// credential's principal, never anything the request says.
