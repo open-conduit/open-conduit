@@ -77,9 +77,9 @@ Only the entry's **answer** action counts, and only while the question is open a
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `operations` | required | Operation names, such as `github.pr.create`, or a prefix ending in `.*` for every operation under it, such as `deploy.*`. Any extension's operations can be gated, installed ones included, except `human`'s own. |
+| `operations` | required | Operation names, such as `github.pr.create`, or a prefix ending in `.*` for every operation under it, such as `deploy.*`. Any extension's operations can be gated, installed ones included, except `human`'s own. The builtins (`emit`, `create_work`, `wait`, `declare_outcome`, `read_context`) can't be gated, and naming one is an error. |
 | `responders` | the entry's | Who may approve or refuse. |
-| `timeout` | `24h` | How long a request waits for an answer, from `1m` to `8760h`. With no answer by then, the call is refused. |
+| `timeout` | `24h` | How long a request waits for an answer, from `1m` to `8760h`. With no answer by then, the call is refused. An approval also holds only this long. |
 
 The binding doesn't need `human.ask` for its calls to be gated: a gate applies to every call in the scope, whatever the binding grants.
 
@@ -87,7 +87,7 @@ When a gated call comes in:
 
 1. The operation does not run. Open Conduit records an approval request and parks the Work, the same way `human.ask` does. The request shows on the Work as **Approval needed**, with the operation, its input and the options **approve** and **refuse**. Answer it from the TUI, the web view or the CLI, as for a question.
 2. The answer resumes the caller. It is told whether it was approved, and makes the same call again.
-3. An approval lets that exact call (the same operation with the same input, in the same Work) through once. A different input asks again, and so does the same call made a second time.
+3. An approval lets that exact call (the same operation with the same input, in the same Work) through once, if it is made within the gate's `timeout` of the answer. A different input asks again, and so does the same call made a second time or after that window.
 4. A refusal returns `approval_refused` to the caller, naming who refused; no answer by the timeout returns `approval_timed_out`. Either way the operation never runs, and the caller keeps its toolbelt for anything else.
 
 Each request and its answer are in the Work's run history: the answer Event and the alias that woke the Work, linked to the Work, and the toolbelt telemetry records the call as gated (`toolbelt.gate`) or refused by a gate (`toolbelt.result` `gate_refused`). Work that has no conversation to resume (no correlation key) can't wait for an answer, so a gated call there is refused with `approval_unavailable`.

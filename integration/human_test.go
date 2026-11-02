@@ -637,3 +637,24 @@ func TestHumanGateNeedsAnEntry(t *testing.T) {
 		t.Fatalf("an unconfigured gate stopped the call: %+v %v", out, err)
 	}
 }
+
+// An approval holds only for the gate's timeout after it was given: the
+// same call made later asks again rather than riding an old approval.
+func TestHumanGateApprovalExpires(t *testing.T) {
+	h := newHumanHarness(t, "persistent", gated)
+	out, err := h.deploy(t, `{"env":"prod"}`)
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.park(t, out)
+	if _, err = h.answer(t, extension.LocalOperator, "approve", "a1"); err != nil {
+		t.Fatal(err)
+	}
+	h.reconcile(t)
+	h.reconcile(t)
+	h.f.Clock.Advance(3 * time.Hour) // the gate's timeout is 2h
+	h.resume(t)
+	if out, err = h.deploy(t, `{"env":"prod"}`); err != nil || out.Wait == nil || *h.deploys != 0 {
+		t.Fatalf("a stale approval let the call through: %+v %v (runs %d)", out, err, *h.deploys)
+	}
+}
