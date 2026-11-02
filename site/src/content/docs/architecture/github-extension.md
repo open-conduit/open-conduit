@@ -39,7 +39,7 @@ A `github` extension entry (an ingress entry: `config.scope` must be the contain
 | `no_checks_minutes` | Default 10; `-1` disables. How long a PR head with no checks waits before `github.checks.none`, and how long a head without a check the base branch requires is held before `github.checks.missing`. With `-1` such a head stays pending. |
 | `track_pull_requests` | Default false. Also observes everything about each PR (its state, comments, reviews, checks and conflicts) under the PR's own key, for a route that [claims pull requests](#pull-request-work). |
 
-The entry also needs a `connection`. A route uses handler `github`, with optional config `{"claim": "issues"}` (the default) or `{"claim": "pull_requests"}`, which claims [pull request Work](#pull-request-work); `"drafts": true` lets a `pull_requests` route claim draft PRs as well.
+The entry also needs a `connection`. A route uses handler `github`, with optional config `{"claim": "issues"}` (the default) or `{"claim": "pull_requests"}`, which claims [pull request Work](#pull-request-work); `"drafts": true` lets a `pull_requests` route claim draft PRs as well, and `"authors": ["dependabot[bot]", "renovate[bot]"]` limits it to PRs those logins opened (compared without case), so a PR by anyone else falls through to the next route.
 
 ## Client and transport
 
@@ -123,7 +123,7 @@ A route with `claim` `issues` never takes input for a PR's Work, so the two can 
 
 A route with `{"claim": "pull_requests"}` claims each open PR as its own `github.pull_request` Work, owning the PR's key `pull_request/N`. What that Work does is up to the route's binding and its playbook; a review bot is one use ([recipe](../../guides/github-bot/#a-review-bot-for-every-pr)). The route reads only PR copies, so it needs an entry with `track_pull_requests`; otherwise its trace reason says so.
 
-- **Unowned PR copies** create Work for a `github.pull_request.open` copy of an open PR that isn't a draft (with `drafts`, a draft too). A draft is claimed when it is marked ready, because that is a new observation of the open PR. A PR that belongs to an issue another Work owns is claimed all the same: the keys differ.
+- **Unowned PR copies** create Work for a `github.pull_request.open` copy of an open PR that isn't a draft (with `drafts`, a draft too) and, when the route lists `authors`, was opened by one of them ([dependency upgrades](../../workflows/dependency-upgrades/) uses this for Dependabot and Renovate). A draft is claimed when it is marked ready, because that is a new observation of the open PR. A PR that belongs to an issue another Work owns is claimed all the same: the keys differ.
 - **A PR's Work** receives what an issue's Work hears of its PRs (the merge or close, completed checks, merge conflicts, new human comments and reviews with a body, and comments from other Works' agents), and new versions of the open PR (a push, or a change of title, body or draft state) as well. Its own comments, reviews and replies carry its Work in the marker and are never delivered, nor are edits, unmarked bot comments and pending checks.
 - **Lifecycle.** Each pass is an Execution. Between passes the agent parks with `github.wait`, and needs no condition: what wakes an issue's agent (comments, check results, conflicts, the merge or close) and a push to its PR wake it, and another agent's comment wakes it through the same peer dependency an issue's agent has ([waits](../engineering-tools/#waits)). Nothing is posted for the wait. The agent ends the Work when the PR merges or closes.
 

@@ -811,6 +811,56 @@ func TestGitHubCrossScopeWaitNeedsAuthorization(t *testing.T) {
 	}
 }
 
+// A Work in a scope that registers no repository (a Slack thread) files an
+// issue in another project and waits for it to close: conditions naming that
+// project resolve there, one naming its own project is refused, and the
+// close wakes it.
+func TestGitHubWaitFromAScopeWithoutARepository(t *testing.T) {
+	e := newToolsEnv(t)
+	ops := e.opsScope()
+	n := ops.OpenIssue("Add the export button", "Asked for in Slack.", ghAlice)
+	e.putScope("bare", `{"namespace":"github/github.com/octo/bare","scope":"bare","repo":"octo/bare"}`)
+	key := domain.CorrelationKey{Source: "slack/T1", ExternalID: "thread-9"}
+	at := e.clock.Now()
+	if _, _, err := e.ingress.Accept(context.Background(), "bare", domain.Event{ID: "request-thread-9", Type: "fixture.request", Source: "slack/T1",
+		DeliveryID: "thread-9", OccurredAt: at, ReceivedAt: at, CorrelationKey: &key}); err != nil {
+		t.Fatal(err)
+	}
+	e.route()
+	w := e.work("work/thread-9")
+	a := e.start(w.ID)
+	e.mu.Lock()
+	e.aliasOK = true
+	e.mu.Unlock()
+	_, err := e.call(a, gh.OpWait, "", map[string]any{"conditions": []string{"issue:" + itoa(n) + ":closed"}, "reason": "until it ships"})
+	refused(t, err, "no_repository")
+	out := e.must(a, gh.OpWait, "", map[string]any{"conditions": []string{"issue:ops/" + itoa(n) + ":closed"}, "until": e.clock.Now().Add(30 * 24 * time.Hour).UTC().Format(time.RFC3339), "reason": "until it ships"})
+	if !strings.Contains(string(mustJSON(out)), "end your turn now") {
+		t.Fatalf("wait: %v", out)
+	}
+	e.finish(a, nil)
+	if got := e.work(w.ID); got.State != domain.WorkWaiting {
+		t.Fatalf("thread Work after its wait: %v", got.State)
+	}
+	ops.CloseIssue(n, "completed")
+	for i := 0; i < 50; i++ {
+		res, err := e.ingress.Reconcile(context.Background(), "github/ops")
+		if err != nil {
+			t.Fatal(err)
+		}
+		if res.Complete {
+			break
+		}
+	}
+	e.route()
+	if err := e.scheduler.ReconcileSubscriptions(context.Background(), 50); err != nil {
+		t.Fatal(err)
+	}
+	if got := e.work(w.ID); got.State != domain.WorkReady {
+		t.Fatalf("the other project's close did not wake the thread: %v", got.State)
+	}
+}
+
 // An agent finds and files issues in another project by naming it. Filing
 // and commenting need that project in file_scopes, and looking needs it in
 // file_scopes or read_scopes; each refusal names the grant to add.

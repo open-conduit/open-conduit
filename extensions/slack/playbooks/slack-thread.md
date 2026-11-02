@@ -30,6 +30,8 @@ Your toolbelt may also offer operations other extensions add, such as `introspec
 3. Reply once with `slack.reply`. Write for Slack: short paragraphs, no headings, code in backticks.
 4. Unless the conversation is over, wait on the thread: call `wait` with the `wait` object `slack.context` returns (`{"match": {"types": ["slack.message.human"]}, "timeout_seconds": 604800}`), then end the turn. Waiting keeps your session: when a person writes in the thread, Open Conduit resumes you with what they wrote, even days later and across restarts.
 
+   When your instructions have you wait on something else instead, such as an issue you filed (`github.wait`), use that wait and end the turn. A message in the thread then doesn't resume you; it is handed to you with whatever does.
+
    When you need a decision from a person who isn't in the thread, ask with `human.ask` instead of calling `wait`, then end the turn. Without it, say in your status what you need. Say in your reply that you're checking with someone first. A message in the thread doesn't resume you while you wait for the answer; you get it alongside the answer.
 
 A message that arrives while you are working is handed to you straight away, headed `## Arrived during this turn`. Take it into account now, in this turn (it may change what is asked), and answer it in the same reply where you can. It is not handed to you again.

@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -87,14 +88,20 @@ type Job struct {
 // Trigger runs a job on deliveries. Events are the code host's event names,
 // optionally with an action ("push", "release.published"); Branches limits
 // ref-carrying events to branch globs; Paths limits a push to those changing
-// a matching file (GitHub Actions rules, ! negates). Webhook accepts custom
-// POSTs at the job's signed URL.
+// a matching file (GitHub Actions rules, ! negates); Conclusions limits a
+// finished check suite or run to those ending one of these ways ("failure",
+// "timed_out"). Webhook accepts custom POSTs at the job's signed URL.
 type Trigger struct {
-	Events   []string `json:"events,omitempty"`
-	Branches []string `json:"branches,omitempty"`
-	Paths    []string `json:"paths,omitempty"`
-	Webhook  bool     `json:"webhook,omitempty"`
+	Events      []string `json:"events,omitempty"`
+	Branches    []string `json:"branches,omitempty"`
+	Paths       []string `json:"paths,omitempty"`
+	Conclusions []string `json:"conclusions,omitempty"`
+	Webhook     bool     `json:"webhook,omitempty"`
 }
+
+// Conclusions are the ways GitHub says a check suite or run can end, what
+// on.conclusions may list.
+var Conclusions = []string{"success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required", "stale", "startup_failure"}
 
 // Settings is a validated entry.
 type Settings struct {
@@ -155,6 +162,9 @@ func (j Job) Describe() string {
 			}
 			if len(j.On.Paths) > 0 {
 				on += " changing " + strings.Join(j.On.Paths, ", ")
+			}
+			if len(j.On.Conclusions) > 0 {
+				on += " ending " + strings.Join(j.On.Conclusions, " or ")
 			}
 			parts = append(parts, on)
 		}
@@ -288,8 +298,13 @@ func (j Job) Validate() []string {
 				errs = append(errs, name+": an empty path pattern")
 			}
 		}
-		if (len(j.On.Branches) > 0 || len(j.On.Paths) > 0) && len(j.On.Events) == 0 {
-			errs = append(errs, name+": branches and paths filter events; add events")
+		for _, c := range j.On.Conclusions {
+			if !slices.Contains(Conclusions, strings.ToLower(c)) {
+				errs = append(errs, fmt.Sprintf("%s: %q isn't a check conclusion; use %s", name, c, strings.Join(Conclusions, ", ")))
+			}
+		}
+		if (len(j.On.Branches) > 0 || len(j.On.Paths) > 0 || len(j.On.Conclusions) > 0) && len(j.On.Events) == 0 {
+			errs = append(errs, name+": branches, paths and conclusions filter events; add events")
 		}
 	}
 	return errs

@@ -161,12 +161,12 @@ func matchRoute(t *testing.T, scope domain.Scope, config string, e domain.Accept
 }
 
 func TestParseRoute(t *testing.T) {
-	for _, raw := range []string{``, `{}`, `null`, `{"claim":"issues"}`, `{"claim":"pull_requests"}`, `{"claim":"pull_requests","drafts":true}`} {
+	for _, raw := range []string{``, `{}`, `null`, `{"claim":"issues"}`, `{"claim":"pull_requests"}`, `{"claim":"pull_requests","drafts":true}`, `{"claim":"pull_requests","authors":["dependabot[bot]","renovate[bot]"]}`} {
 		if err := gh.ValidateRoute(json.RawMessage(raw)); err != nil {
 			t.Fatalf("%q: %v", raw, err)
 		}
 	}
-	for _, raw := range []string{`{"claim":"prs"}`, `{"claim":"issues","drafts":true}`, `{"label":"x"}`} {
+	for _, raw := range []string{`{"claim":"prs"}`, `{"claim":"issues","drafts":true}`, `{"label":"x"}`, `{"authors":["dependabot[bot]"]}`, `{"claim":"pull_requests","authors":[""]}`, `{"claim":"pull_requests","authors":["acme/bots"]}`} {
 		if gh.ValidateRoute(json.RawMessage(raw)) == nil {
 			t.Fatalf("%q validated", raw)
 		}
@@ -208,6 +208,18 @@ func TestRouteClaimsPullRequests(t *testing.T) {
 	}
 	if !matchRoute(t, scope, `{"claim":"pull_requests","drafts":true}`, event(gh.TypePullOpen, gh.PullRequestKey(7), gh.SchemaPull, draft), nil).Match {
 		t.Fatal("drafts: true did not claim a draft")
+	}
+	// authors claims only those logins' PRs; another's falls through.
+	const deps = `{"claim":"pull_requests","authors":["dependabot[bot]","Renovate[bot]"]}`
+	if d := matchRoute(t, scope, deps, open, nil); d.Match || !strings.Contains(d.Reason, "not one of this route's authors") {
+		t.Fatalf("an authors route claimed alice's PR: %+v", d)
+	}
+	for _, login := range []string{"dependabot[bot]", "renovate[bot]"} {
+		bot := pull
+		bot.Author = login
+		if !matchRoute(t, scope, deps, event(gh.TypePullOpen, gh.PullRequestKey(7), gh.SchemaPull, bot), nil).Match {
+			t.Fatalf("an authors route did not claim %s's PR", login)
+		}
 	}
 	closed := pull
 	closed.State = "closed"

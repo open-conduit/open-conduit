@@ -11,6 +11,7 @@ import (
 	"github.com/open-conduit/open-conduit/executors/claudecode"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
+	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	slplaybooks "github.com/open-conduit/open-conduit/extensions/slack/playbooks"
 	trackerplaybooks "github.com/open-conduit/open-conduit/extensions/tracker/playbooks"
@@ -127,6 +128,10 @@ func (d *daemon) renderEvents(events []domain.Event) string {
 			continue
 		}
 		if text, ok := sl.RenderEvent(e); ok {
+			parts = append(parts, text)
+			continue
+		}
+		if text, ok := sc.RenderEvent(e); ok {
 			parts = append(parts, text)
 			continue
 		}
