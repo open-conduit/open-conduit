@@ -51,11 +51,13 @@ lint:
 
 test: test-unit test-integration
 
+# Both run under scripts/check-temp-dir.sh, which fails a run that leaves
+# anything in the temp directory (#445).
 test-unit:
-	$(GO) test -race -timeout $(TEST_TIMEOUT) $$($(GO) list ./... | grep -v '/integration$$')
+	scripts/check-temp-dir.sh $(GO) test -race -timeout $(TEST_TIMEOUT) $$($(GO) list ./... | grep -v '/integration$$')
 
 test-integration:
-	GO='$(GO)' TEST_TIMEOUT='$(TEST_TIMEOUT)' scripts/test-integration.sh $(INTEGRATION_SHARDS) $(INTEGRATION_RUN)
+	GO='$(GO)' TEST_TIMEOUT='$(TEST_TIMEOUT)' scripts/check-temp-dir.sh scripts/test-integration.sh $(INTEGRATION_SHARDS) $(INTEGRATION_RUN)
 
 boundaries:
 	$(GO) run ./scripts/check-boundaries

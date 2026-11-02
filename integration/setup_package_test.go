@@ -36,7 +36,7 @@ func setupPackage(t *testing.T) string {
 
 func buildSetupPackage() (string, error) {
 	setupOnce.Do(func() {
-		out, err := os.MkdirTemp("", "oc-setup-package-")
+		out, err := keptDir("oc-setup-package-")
 		if err != nil {
 			setupErr = err
 			return

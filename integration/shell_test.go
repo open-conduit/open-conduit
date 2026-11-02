@@ -36,13 +36,14 @@ import (
 // through the symlink placed on a shell execution's PATH.
 // It first tries to build the shipped cmd/os binary (without the race
 // runtime, whose start-up makes every toolbelt call slow), falling back to the
-// symlinked test binary.
+// symlinked test binary. After the run it removes every directory keptDir
+// made.
 func TestMain(m *testing.M) {
 	if filepath.Base(os.Args[0]) == "os" {
 		cwd, _ := os.Getwd()
 		os.Exit(cli.RunToolbelt("test", "test", os.Args[1:], cli.Env{Getenv: os.Getenv, Cwd: cwd}, os.Stdin, os.Stdout, os.Stderr))
 	}
-	dir, err := os.MkdirTemp("", "oc-osbin-")
+	dir, err := keptDir("oc-osbin-")
 	if err == nil {
 		build := exec.Command("go", "build", "-o", filepath.Join(dir, "os"), "github.com/open-conduit/open-conduit/cmd/os")
 		if build.Run() == nil {
@@ -51,9 +52,7 @@ func TestMain(m *testing.M) {
 	}
 	code := m.Run()
 	cleanupHistory()
-	if dir != "" {
-		os.RemoveAll(dir)
-	}
+	removeKeptDirs()
 	os.Exit(code)
 }
 

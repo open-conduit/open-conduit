@@ -127,13 +127,33 @@ func buildPackage(src string) (string, protocol.Manifest, error) {
 	return p.dir, p.m, p.err
 }
 
-// build is devscope.Build, its errors named as extensiontest's.
+// build is devscope.Build, its errors named as extensiontest's. A package
+// it compiles is kept in the cache, keyed by its content, rather than in a
+// new temporary directory nothing would remove.
 func build(src string) (string, protocol.Manifest, error) {
-	dir, m, err := devscope.Build(src)
+	root, err := openCache()
+	if err != nil {
+		return "", protocol.Manifest{}, err
+	}
+	dir, m, err := devscope.BuildIn(src, root)
 	if err != nil {
 		return "", m, fmt.Errorf("extensiontest: %w", err)
 	}
-	return dir, m, nil
+	built := filepath.Dir(dir)
+	if filepath.Dir(built) != root {
+		// src was a built package directory, used where it is.
+		return dir, m, nil
+	}
+	key, err := treeKey(built)
+	if err != nil {
+		_ = os.RemoveAll(built)
+		return "", m, fmt.Errorf("extensiontest: %w", err)
+	}
+	entry, err := settleEntry(built, filepath.Join(root, "pkg-"+key))
+	if err != nil {
+		return "", m, err
+	}
+	return filepath.Join(entry, filepath.Base(dir)), m, nil
 }
 
 // scope is what Daemon generated: the scope's agent.

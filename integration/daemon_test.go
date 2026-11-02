@@ -42,7 +42,7 @@ var (
 func daemonBinary(t *testing.T) string {
 	t.Helper()
 	daemonOnce.Do(func() {
-		dir, err := os.MkdirTemp("", "oc-daemon-bin-")
+		dir, err := keptDir("oc-daemon-bin-")
 		if err != nil {
 			daemonErr = err
 			return
