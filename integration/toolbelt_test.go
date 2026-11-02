@@ -218,7 +218,7 @@ func TestProductionToolbeltGuidance(t *testing.T) {
 	if got, err = h.belt.Guidance(ctx, narrow, ""); err != nil || len(got) != 0 {
 		t.Fatalf("guidance for an ungranted operation = %q, %v", got, err)
 	}
-	long := extension.Operation{Name: "fixture.long", Handler: func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+	long := extension.Operation{Name: "long.op", Handler: func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
 		return domain.Payload{}, nil
 	}, Guidance: strings.Repeat("x", extension.MaxGuidance+1)}
 	if err = h.belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "long", Operations: []extension.Operation{long}}); !errors.Is(err, extension.ErrInvalid) {

@@ -3,6 +3,7 @@ package extension
 import (
 	"context"
 	"errors"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -209,7 +210,12 @@ type Dependency struct {
 const ContractVersion uint32 = 1
 
 type Registration struct {
-	Version    uint32
+	Version uint32
+	// Name is the extension's name and the namespace of everything it
+	// registers: every operation is Name + "." + a suffix (OwnsOperation).
+	// It is [a-z][a-z0-9_-]* (RegistrationName), with no dot, so no two
+	// extensions' namespaces nest; an installed package's is its manifest
+	// name, which follows the same rule.
 	Name       string
 	EventTypes []string
 	Operations []Operation
@@ -217,6 +223,31 @@ type Registration struct {
 	// dependencies against a type-matching source Event. It must be pure and
 	// deterministic: core calls it inside coordination transactions.
 	DependencyFilter func(filter domain.Payload, event domain.Event) bool
+}
+
+// RegistrationName reports whether name may name a registration: a
+// lower-case letter, then up to 62 lower-case letters, digits, hyphens or
+// underscores (the manifest name rule).
+func RegistrationName(name string) bool {
+	if name == "" || len(name) > 63 || name[0] < 'a' || name[0] > 'z' {
+		return false
+	}
+	for _, c := range name {
+		if !(c >= 'a' && c <= 'z' || c >= '0' && c <= '9' || c == '-' || c == '_') {
+			return false
+		}
+	}
+	return true
+}
+
+// OwnsOperation reports whether an operation name is in the namespace of
+// the registration named name: name + "." + a non-empty suffix. A
+// toolbelt refuses any other, so an extension that registers first can't
+// take the calls meant for another (an installed package claiming
+// github.*).
+func OwnsOperation(name, op string) bool {
+	rest, ok := strings.CutPrefix(op, name+".")
+	return ok && rest != ""
 }
 
 // OperationError is a refusal an extension handler authored for its caller:
@@ -244,6 +275,10 @@ func CallRequestID(ctx context.Context) string {
 	return id
 }
 
-// Registration is atomic. Duplicate names, reserved operations and undeclared
-// operation calls fail. Builtins are reserved even when no extension is loaded.
+// Registration is atomic. An operation outside the registration's own
+// namespace (OwnsOperation) is ErrInvalid; a duplicate registration name,
+// a reserved (builtin) operation or one another registration holds is
+// ErrConflict. Each refusal names the operation and why. Undeclared
+// operation calls fail. Builtins are reserved even when no extension is
+// loaded.
 type Registrar interface{ Register(Registration) error }

@@ -139,11 +139,11 @@ func builtinOperation(name string) bool {
 func (t *Toolbelt) Register(r extension.Registration) error {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	if r.Version != extension.ContractVersion || r.Name == "" || strings.ContainsAny(r.Name, " \t\r\n") {
-		return extension.ErrInvalid
+	if r.Version != extension.ContractVersion || !extension.RegistrationName(r.Name) {
+		return fmt.Errorf("%w: registration name %q must be a lower-case letter then letters, digits, - or _", extension.ErrInvalid, r.Name)
 	}
 	if t.registrations[r.Name] {
-		return extension.ErrConflict
+		return fmt.Errorf("%w: extension %q is already registered", extension.ErrConflict, r.Name)
 	}
 	names, events := map[string]bool{}, map[string]bool{}
 	for _, op := range r.Operations {
@@ -156,8 +156,14 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 		if set != 1 || !operationName.MatchString(op.Name) || len(op.Guidance) > extension.MaxGuidance {
 			return extension.ErrInvalid
 		}
-		if builtinOperation(op.Name) || t.declaredLocked(op.Name) || names[op.Name] {
-			return extension.ErrConflict
+		if builtinOperation(op.Name) {
+			return fmt.Errorf("%w: operation %q is a builtin", extension.ErrConflict, op.Name)
+		}
+		if !extension.OwnsOperation(r.Name, op.Name) {
+			return fmt.Errorf("%w: extension %q may register only operations named %s.<name>, not %q", extension.ErrInvalid, r.Name, r.Name, op.Name)
+		}
+		if t.declaredLocked(op.Name) || names[op.Name] {
+			return fmt.Errorf("%w: operation %q is already registered by %s", extension.ErrConflict, op.Name, t.ownerLocked(op.Name, r.Name, names))
 		}
 		names[op.Name] = true
 	}
@@ -182,6 +188,18 @@ func (t *Toolbelt) Register(r extension.Registration) error {
 		t.events[name] = r.Name
 	}
 	return nil
+}
+
+// ownerLocked is who already registered op, for a conflict's message:
+// another extension, or this registration itself (a repeated name).
+func (t *Toolbelt) ownerLocked(op, self string, mine map[string]bool) string {
+	if owner := t.owners[op]; owner != "" {
+		return "extension " + owner
+	}
+	if mine[op] {
+		return self + " twice"
+	}
+	return "the host"
 }
 
 // Operations lists builtins and registered extension operations.
