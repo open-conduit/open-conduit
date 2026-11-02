@@ -76,7 +76,7 @@ func TestGoSafeRecoversAPanic(t *testing.T) {
 	reached := false
 	d.goSafe("github_projection", func() {
 		if !reached {
-			panic("background goroutine panic")
+			panic("projection failed")
 		}
 		reached = true
 	})
@@ -87,7 +87,7 @@ func TestGoSafeRecoversAPanic(t *testing.T) {
 	if got := d.reportedCode("github_projection", ""); got != "panic" {
 		t.Fatalf("reported %q", got)
 	}
-	if out := logs.String(); !strings.Contains(out, "recovered from a panic") || !strings.Contains(out, "background goroutine panic") || !strings.Contains(out, "goroutine") {
+	if out := logs.String(); !strings.Contains(out, "recovered from a panic") || !strings.Contains(out, "projection failed") || !strings.Contains(out, "goroutine ") || !strings.Contains(out, "loop_safety_test.go") {
 		t.Fatalf("log lacks the panic and its stack:\n%s", out)
 	}
 }
