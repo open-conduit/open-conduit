@@ -200,7 +200,7 @@ func Build(o Options) *sdk.Extension {
 		o.Now = time.Now
 	}
 	st := &state{o: o, entries: map[string]*entry{}}
-	ext := sdk.New(Name, sdk.Version(Version),
+	ext := sdk.New(Name, sdk.Version(Version), sdk.Command(protocol.HostRunCommand(Name)...),
 		sdk.Summary("Sentry issues and issue alerts as Work, with operations to read, comment on and resolve the issue."))
 	ext.Manifest.Provides.Connections = []protocol.TypeDecl{{Type: Name}}
 	ext.Manifest.Provides.Webhooks = true

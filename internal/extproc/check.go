@@ -147,7 +147,7 @@ func manifestRules(err error) []string {
 }
 
 func layout(dir string, m protocol.Manifest, add func(Finding)) {
-	if len(m.Command) > 0 && m.Command[0] != "" {
+	if len(m.Command) > 0 && m.Command[0] != "" && !m.RunsOnHost() {
 		cmd := m.Command[0]
 		bin := filepath.Join(dir, cmd)
 		info, err := os.Stat(bin)

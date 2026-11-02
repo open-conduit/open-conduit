@@ -6,16 +6,18 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol/sdk"
 )
 
 // Certification is the package's certification.json: a fixture command
 // that writes a fake Codex CLI into the runner's directory and names it as
 // the binding's binary, so certification never runs the real one.
 func Certification() protocol.CertificationFile {
-	return protocol.CertificationFile{Command: []string{"codex-extension", "certify-fixture"}}
+	return protocol.CertificationFile{Command: append(protocol.HostRunCommand(Name), "certify-fixture")}
 }
 
 // barrierEnv names a file the fake's first turn of a thread waits for.
@@ -35,11 +37,11 @@ func Fixture(binary string) protocol.Fixture {
 	}
 }
 
-// ServeFixture is `codex-extension certify-fixture`: in the runner's fresh
+// ServeFixture is `open-conduit extension-run codex certify-fixture`: in the runner's fresh
 // directory it writes ./codex, which runs this binary's fake-codex, prints
 // the fixture and serves until stdin closes.
 func ServeFixture(stdin io.Reader, stdout io.Writer) error {
-	self, err := os.Executable()
+	self, err := sdk.Self()
 	if err != nil {
 		return err
 	}
@@ -47,7 +49,11 @@ func ServeFixture(stdin io.Reader, stdout io.Writer) error {
 	if err != nil {
 		return err
 	}
-	script := fmt.Sprintf("#!/bin/sh\nexec '%s' fake-codex \"$@\"\n", self)
+	quoted := make([]string, len(self))
+	for i, a := range self {
+		quoted[i] = "'" + strings.ReplaceAll(a, "'", `'\''`) + "'"
+	}
+	script := fmt.Sprintf("#!/bin/sh\nexec %s fake-codex \"$@\"\n", strings.Join(quoted, " "))
 	if err = os.WriteFile(filepath.Join(dir, "codex"), []byte(script), 0o755); err != nil {
 		return err
 	}
@@ -62,7 +68,7 @@ func ServeFixture(stdin io.Reader, stdout io.Writer) error {
 	return nil
 }
 
-// FakeCodex is `codex-extension fake-codex`: one `codex exec --json` turn
+// FakeCodex is `open-conduit extension-run codex fake-codex`: one `codex exec --json` turn
 // of a thread called fake-thread. A fresh thread's turn waits for the
 // barrier file when CODEX_FAKE_BARRIER names one. Every turn ends with the
 // status review.

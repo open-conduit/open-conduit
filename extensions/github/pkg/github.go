@@ -64,7 +64,7 @@ func base() protocol.Manifest {
 	}
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version,
 		Summary: "The first-party GitHub extension (issues, pull requests, reviews and checks) as a subprocess package.",
-		Command: []string{"github-extension"}, Provides: p}
+		Command: protocol.HostRunCommand(Name), Provides: p}
 }
 
 // New returns the bridge serving a new GitHub extension.

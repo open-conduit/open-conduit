@@ -45,7 +45,6 @@ import (
 // posts through the projector (KV over sdk.Store), and the projection task
 // runs over the protocol.
 func TestExternalSlackRoundTrip(t *testing.T) {
-	bins := packageBinaries(t)
 	const team, channel = "T0TEAM", "C0SUPPORT"
 	fake := slacktest.New(team, "xoxb-test")
 	t.Cleanup(fake.Close)
@@ -89,7 +88,7 @@ func TestExternalSlackRoundTrip(t *testing.T) {
 		return protocol.ConfigureParams{Generation: "1", Entries: []protocol.ConfigEntry{{ScopeID: "support", Type: "slack", Name: "helpdesk", Config: entry,
 			Connection: &protocol.ConnectionEntry{ID: "slack", Type: "slack", Config: json.RawMessage(`{"api_url":"` + fake.URL + `"}`), Secrets: []string{sl.SecretAppToken, sl.SecretBotToken}}}}}
 	}
-	r := e.load(e.install(slackext.Manifest(), bins["slack-extension"]), deps, o)
+	r := e.load(e.install(slackext.Manifest(), daemonBinary(t)), deps, o)
 	srcs := r.Process().Configured().Sources
 	if len(srcs) != 1 || srcs[0].Name != "slack/support/helpdesk" || srcs[0].Source.Namespace != "slack/"+team {
 		t.Fatalf("configure registered %+v", srcs)
@@ -207,7 +206,6 @@ func TestExternalSlackRoundTrip(t *testing.T) {
 // host re-adopts the run through executor.recover, and the combined log is
 // written to the host's artifact store through artifact.*.
 func TestExternalShellAdoptionAndArtifacts(t *testing.T) {
-	bins := packageBinaries(t)
 	e := newExtEnv(t)
 	arts, err := artifacts.Open(filepath.Join(t.TempDir(), "artifacts"))
 	if err != nil {
@@ -216,7 +214,7 @@ func TestExternalShellAdoptionAndArtifacts(t *testing.T) {
 	t.Cleanup(func() { _ = arts.Close() })
 	deps := e.deps()
 	deps.Artifacts = arts
-	f := e.install(shellext.Manifest(), bins["shell-extension"])
+	f := e.install(shellext.Manifest(), daemonBinary(t))
 	r := e.load(f, deps, e.options(shellext.Name))
 	x, ok := r.Executor(shellext.Name)
 	if !ok {

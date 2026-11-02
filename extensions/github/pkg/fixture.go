@@ -17,7 +17,7 @@ import (
 // Certification is the package's certification.json: a fixture command
 // that serves the GitHub fake for the run.
 func Certification() protocol.CertificationFile {
-	return protocol.CertificationFile{Command: []string{"github-extension", "certify-fixture"}}
+	return protocol.CertificationFile{Command: append(protocol.HostRunCommand(Name), "certify-fixture")}
 }
 
 // Fixture identities: an engineering scope watching one repository of the

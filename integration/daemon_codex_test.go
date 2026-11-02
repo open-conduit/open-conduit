@@ -14,7 +14,7 @@ import (
 )
 
 // TestDaemonCodexExecution runs the composed daemon with the Codex
-// executor installed as a package (extensions/codex), nothing in the daemon
+// executor installed as a package (extensions/codex, served by open-conduit extension-run codex), nothing in the daemon
 // knowing about it, against a fake codex. The agent reads its context
 // through the real `os mcp` server; an Event arriving mid-turn is injected
 // and taken in by a follow-up turn on the same thread, so it starts no
@@ -45,7 +45,10 @@ func TestDaemonCodexExecution(t *testing.T) {
 			"secret_refs": map[string]any{},
 		}},
 	})
-	d := extensiontest.Daemon(t, extensiontest.Package("../extensions/codex"), extensiontest.Options{Config: cfg})
+	// Its package is a manifest and certification: the daemon's own
+	// executable serves it (`open-conduit extension-run codex`, #428).
+	pkg, _ := hostPackage(t, t.TempDir(), "codex")
+	d := extensiontest.Daemon(t, extensiontest.Package(pkg), extensiontest.Options{Config: cfg})
 	c := d.Client()
 	submit := func(typ, delivery string) {
 		t.Helper()

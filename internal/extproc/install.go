@@ -67,6 +67,17 @@ func ReadPackage(dir string) (Package, error) {
 	if err != nil {
 		return Package{}, err
 	}
+	if m.RunsOnHost() {
+		// The host's own executable runs it: the package is its manifest,
+		// certification and playbooks.
+		if m.Provides.Playbooks != "" {
+			if info, err := os.Stat(filepath.Join(dir, m.Provides.Playbooks)); err != nil || !info.IsDir() {
+				return Package{}, fmt.Errorf("%w: playbooks directory %q is missing", ErrPackage, m.Provides.Playbooks)
+			}
+		}
+		sum := sha256.Sum256(raw)
+		return Package{Dir: dir, Manifest: m, Raw: raw, Digest: hex.EncodeToString(sum[:])}, nil
+	}
 	cmd := m.Command[0]
 	if filepath.IsAbs(cmd) {
 		return Package{}, fmt.Errorf("%w: command %q must be a file inside the package", ErrPackage, cmd)
@@ -141,8 +152,10 @@ func Install(root, src string, o InstallOptions) (InstallResult, error) {
 	if err != nil {
 		return InstallResult{}, err
 	}
-	if err := checkPlatform(filepath.Join(pkg.Dir, pkg.Manifest.Command[0])); err != nil {
-		return InstallResult{}, err
+	if !pkg.Manifest.RunsOnHost() {
+		if err := checkPlatform(filepath.Join(pkg.Dir, pkg.Manifest.Command[0])); err != nil {
+			return InstallResult{}, err
+		}
 	}
 	m := pkg.Manifest
 	if _, err := protocol.Negotiate(m.Protocol, protocol.Versions); err != nil {

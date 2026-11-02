@@ -125,10 +125,18 @@ func (e *extEnv) install(m protocol.Manifest, binary string) extproc.Found {
 	if err := os.MkdirAll(dir, 0o755); err != nil {
 		e.t.Fatal(err)
 	}
-	link := filepath.Join(dir, filepath.Base(m.Command[0]))
-	_ = os.Remove(link)
-	if err := os.Symlink(binary, link); err != nil {
-		e.t.Fatal(err)
+	if m.RunsOnHost() {
+		// open-conduit's own executable serves it: binary is that
+		// executable, the host's (extproc.HostExecutable).
+		prev := extproc.HostExecutable
+		extproc.HostExecutable = func() (string, error) { return binary, nil }
+		e.t.Cleanup(func() { extproc.HostExecutable = prev })
+	} else {
+		link := filepath.Join(dir, filepath.Base(m.Command[0]))
+		_ = os.Remove(link)
+		if err := os.Symlink(binary, link); err != nil {
+			e.t.Fatal(err)
+		}
 	}
 	raw, err := json.MarshalIndent(m, "", "  ")
 	if err != nil {

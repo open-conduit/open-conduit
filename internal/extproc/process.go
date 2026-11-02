@@ -257,10 +257,25 @@ func (p *Process) stderr() io.Writer {
 // environ (the B05 baseline only).
 func Environment(environ []string) []string { return sanitized(environ) }
 
-// Argv resolves the manifest's command: a relative argv[0] that names a
-// path, or a file inside the extension directory, is resolved against it.
+// HostExecutable is the host's own executable, which runs a package whose
+// command is protocol.HostRunCommand (`open-conduit extension-run <name>`).
+// Tests that run the host inside a test binary point it at a built
+// open-conduit.
+var HostExecutable = os.Executable
+
+// Argv resolves the manifest's command: the host's own executable for one
+// run on the host (protocol.Manifest.RunsOnHost), never a file the package
+// ships under that name; otherwise a relative
+// argv[0] that names a path, or a file inside the extension directory, is
+// resolved against it.
 func (f Found) Argv() []string {
 	argv := append([]string(nil), f.Manifest.Command...)
+	if f.Manifest.RunsOnHost() {
+		if self, err := HostExecutable(); err == nil {
+			argv[0] = self
+		}
+		return argv
+	}
 	if !filepath.IsAbs(argv[0]) && strings.ContainsRune(argv[0], filepath.Separator) {
 		argv[0] = filepath.Join(f.Dir, argv[0])
 	} else if !filepath.IsAbs(argv[0]) {

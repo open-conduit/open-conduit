@@ -13,6 +13,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/internal/certify"
+	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/examples/weakened"
 )
@@ -27,8 +28,9 @@ var (
 	pkgErr  error
 )
 
-// packageBinaries builds the first-party packages' and the negative
-// controls' commands once per test binary.
+// packageBinaries builds the negative controls' and the examples' commands
+// once per test binary. First-party packages have none of their own: the
+// built open-conduit serves them (hostPackage).
 func packageBinaries(t *testing.T) map[string]string {
 	t.Helper()
 	pkgOnce.Do(func() {
@@ -39,12 +41,6 @@ func packageBinaries(t *testing.T) map[string]string {
 		}
 		out := map[string]string{}
 		for _, b := range []struct{ out, pkg string }{
-			{"slack-extension", "./extensions/slack/cmd/slack-extension"},
-			{"github-extension", "./extensions/github/cmd/github-extension"},
-			{"shell-extension", "./extensions/shell/cmd/shell-extension"},
-			{"sentry-extension", "./extensions/sentry/cmd/sentry-extension"},
-			{"pagerduty-extension", "./extensions/pagerduty/cmd/pagerduty-extension"},
-			{"codex-extension", "./extensions/codex/cmd/codex-extension"},
 			{"weakened-extension", "./protocol/examples/weakened/cmd/weakened-extension"},
 			{"os", "./cmd/os"},
 		} {
@@ -108,6 +104,46 @@ func assemble(t *testing.T, root, bin string, args ...string) (string, protocol.
 	return dir, m
 }
 
+// hostPackage lays out the first-party package name under root as `make
+// packages` does: the manifest and certification the built open-conduit
+// prints (`open-conduit extension-run NAME package-manifest`), with no
+// executable, since that open-conduit runs it (#428). It points the host's
+// own executable, which an in-process certification or host resolves the
+// command to, at that binary.
+func hostPackage(t *testing.T, root, name string) (string, protocol.Manifest) {
+	t.Helper()
+	bin := daemonBinary(t)
+	prev := extproc.HostExecutable
+	extproc.HostExecutable = func() (string, error) { return bin, nil }
+	t.Cleanup(func() { extproc.HostExecutable = prev })
+	raw, err := exec.Command(bin, protocol.HostRun, name, "package-manifest").Output()
+	if err != nil {
+		t.Fatalf("%s package-manifest: %v", name, err)
+	}
+	m, err := protocol.ParseManifest(raw)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !m.RunsOnHost() {
+		t.Fatalf("%s's command %v is not open-conduit's own", name, m.Command)
+	}
+	dir := filepath.Join(root, m.Name)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, protocol.ManifestFile), raw, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cert, err := exec.Command(bin, protocol.HostRun, name, "package-certification").Output()
+	if err != nil {
+		t.Fatalf("%s package-certification: %v", name, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "certification.json"), cert, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return dir, m
+}
+
 func runCertify(t *testing.T, dir string) certify.Report {
 	t.Helper()
 	rep, err := certify.Run(context.Background(), certify.Options{Dir: dir, HostVersion: "test", HostCommit: "test", HandshakeTimeout: extensionHandshakeMax})
@@ -123,20 +159,28 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		name, bin string
 		must      []string // criteria that must pass (not skip)
 	}{
-		{"slack", "slack-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
+		{"slack", "", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
 		// GitHub through inprocsdk: the in-process extension, unchanged,
 		// served over the protocol (#357).
-		{"github", "github-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "executor.conformance", "executor.controls", "surfaces.served"}},
-		{"shell", "shell-extension", []string{"executor.conformance", "executor.inject", "executor.controls"}},
-		{"sentry", "sentry-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
-		{"pagerduty", "pagerduty-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
-		{"codex", "codex-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
+		{"github", "", []string{"ingress.conformance", "routes.decisions", "operations.cases", "executor.conformance", "executor.controls", "surfaces.served"}},
+		{"shell", "", []string{"executor.conformance", "executor.inject", "executor.controls"}},
+		{"sentry", "", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
+		{"pagerduty", "", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
+		{"codex", "", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace"}},
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			root := t.TempDir()
-			dir, m := assemble(t, root, bins[c.bin])
+			// A first-party package (no bin of its own) is served by
+			// open-conduit itself.
+			var dir string
+			var m protocol.Manifest
+			if c.bin == "" {
+				dir, m = hostPackage(t, root, c.name)
+			} else {
+				dir, m = assemble(t, root, bins[c.bin])
+			}
 			if c.name == "shell" {
 				if err := os.Symlink(bins["os"], filepath.Join(dir, "os")); err != nil {
 					t.Fatal(err)

@@ -18,6 +18,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/tui"
 	"github.com/open-conduit/open-conduit/internal/web"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 var version = "dev"
@@ -35,6 +36,10 @@ func webUpdates(o web.Options) web.Options {
 }
 
 func main() {
+	// A first-party extension served as its own supervised process (#428).
+	if len(os.Args) > 1 && os.Args[1] == protocol.HostRun {
+		os.Exit(extensionRun(os.Args[2:], os.Stderr))
+	}
 	// The hidden helper an executor's wrapper runs to start a container.
 	if len(os.Args) > 2 && os.Args[1] == "container" && os.Args[2] == "run" {
 		os.Exit(docker.RunHelper(os.Args[3:], docker.HelperOptions{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}))

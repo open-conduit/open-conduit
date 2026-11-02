@@ -151,11 +151,21 @@ protocol-prototype:
 	cd prototypes/transport && $(GO) test -timeout $(TEST_TIMEOUT) -count=1 -v ./...
 
 # 07-03 extension packages: each first-party subprocess package and example
-# as an installable directory (manifest, binary, certification fixture).
+# as an installable directory. A first-party package is its manifest and
+# certification fixture: bin/open-conduit serves it (`open-conduit
+# extension-run NAME`, #428), so it builds no executable of its own. The
+# examples, written as a third party would, ship their own binaries.
 PACKAGES_DIR ?= dist/packages
-EXTENSION_PACKAGES = slack:./extensions/slack/cmd/slack-extension github:./extensions/github/cmd/github-extension shell:./extensions/shell/cmd/shell-extension sentry:./extensions/sentry/cmd/sentry-extension pagerduty:./extensions/pagerduty/cmd/pagerduty-extension codex:./extensions/codex/cmd/codex-extension notes:./protocol/examples/notes/cmd/notes-extension runner:./protocol/examples/runner/cmd/runner-extension
+RUNNABLE_PACKAGES = slack github shell sentry pagerduty codex
+EXTENSION_PACKAGES = notes:./protocol/examples/notes/cmd/notes-extension runner:./protocol/examples/runner/cmd/runner-extension
 
-packages:
+packages: build
+	@set -eu; for name in $(RUNNABLE_PACKAGES); do \
+		dir=$(PACKAGES_DIR)/$$name; rm -rf $$dir; mkdir -p $$dir; \
+		bin/open-conduit extension-run $$name package-manifest > $$dir/open-conduit-extension.json; \
+		bin/open-conduit extension-run $$name package-certification > $$dir/certification.json; \
+		echo "packaged $$dir"; \
+	done
 	@set -eu; for spec in $(EXTENSION_PACKAGES); do \
 		name=$${spec%%:*}; pkg=$${spec#*:}; dir=$(PACKAGES_DIR)/$$name; \
 		rm -rf $$dir; mkdir -p $$dir; \
@@ -224,6 +234,7 @@ release-snapshot:
 		$(RELEASE_DIR)/smoke/open-conduit --version | grep -q "^open-conduit $$version "; \
 		$(RELEASE_DIR)/smoke/os --version | grep -q "^os $$version "; \
 		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  setup .*(bundled with open-conduit)'; \
+		test ! -e $(RELEASE_DIR)/smoke/extensions/codex/codex-extension; \
 		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  codex .*(bundled with open-conduit)'; \
 		cask=$(RELEASE_DIR)/homebrew/Casks/open-conduit.rb; \
 		grep -q '^  binary "open-conduit"$$' $$cask; \
