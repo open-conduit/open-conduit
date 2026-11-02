@@ -18,12 +18,12 @@ import (
 )
 
 // Extension is the GitHub extension on the in-process contract: its config
-// types and its doctor checks. The host still registers each entry's
-// ingress and projector; it hands the extension a read-only view of those
-// registrations (View), and the extension resolves the credentials it
-// verifies through the host's scoped resolver (inproc.Host.Secrets), for
-// the entry's connection and for each `github` connection a binding in the
-// scope names.
+// types, entries, ingress, webhooks, projection, tools, actions,
+// annotations and doctor checks (host.go). It resolves the credentials it
+// uses through the host's scoped resolver (inproc.Host.Secrets), for the
+// entry's connection and for each `github` connection a binding in the
+// scope names. NewExtension with a view reports a host's registrations
+// instead of its own, for tests of the checks.
 type Extension struct {
 	view ViewFunc
 
@@ -32,6 +32,11 @@ type Extension struct {
 	started bool
 	entries []protocol.ConfigEntry
 	clients *Writers
+
+	// own is the entries the extension registers itself (New); nil when
+	// view reports a host's (tests).
+	own   *registry
+	tools *Tools
 }
 
 // ViewFunc reports the host's GitHub registrations for the doctor checks.
@@ -101,7 +106,7 @@ func (x *Extension) Start(_ context.Context, h inproc.Host) error {
 	x.mu.Lock()
 	x.host, x.started = h, true
 	x.mu.Unlock()
-	return nil
+	return x.startTools(h)
 }
 
 // Configure keeps the generation's entries, with the connection each names
@@ -110,6 +115,9 @@ func (x *Extension) Configure(_ context.Context, p protocol.ConfigureParams) {
 	x.mu.Lock()
 	x.entries = p.Entries
 	x.mu.Unlock()
+	if x.own != nil {
+		x.register(p)
+	}
 }
 
 func (x *Extension) now() time.Time {
@@ -183,6 +191,9 @@ func (x *Extension) dryRun() bool {
 }
 
 func (x *Extension) registrations(ctx context.Context) View {
+	if x.own != nil {
+		return x.ownView()
+	}
 	if x.view == nil {
 		return View{}
 	}
@@ -227,6 +238,10 @@ func (x *Extension) check(ctx context.Context, _ protocol.CheckConfig) inproc.Ch
 		check.Items = append(check.Items, ns+": not registered ("+code+")")
 	}
 	now, dry := x.now(), x.dryRun()
+	hooks := map[string]string{}
+	if x.own != nil {
+		hooks = x.hookItems(raise)
+	}
 	for _, e := range v.Entries {
 		var notes []string
 		if !e.PausedUntil.IsZero() {
@@ -247,6 +262,9 @@ func (x *Extension) check(ctx context.Context, _ protocol.CheckConfig) inproc.Ch
 		if e.Projection != "" {
 			raise(inproc.CheckWarn, "projection_failing")
 			notes = append(notes, "projection "+e.Projection)
+		}
+		if item, ok := hooks[e.Settings.Namespace]; ok {
+			notes = append(notes, item)
 		}
 		if dry || e.Settings.Projection.DryRun {
 			notes = append(notes, "dry run (no GitHub writes)")

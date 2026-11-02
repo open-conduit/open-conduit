@@ -37,8 +37,8 @@ import (
 // registry is the daemon's registration of executors, route handlers,
 // operations, connection and extension types and resource providers.
 func registry(executors map[string]extension.Executor) config.Registry {
-	reg := config.Registry{Executors: executors, Handlers: handlerNames(), Operations: gh.Operations()}
-	inprocRegistry(&reg, firstParty(nil))
+	reg := config.Registry{Executors: executors, Handlers: handlerNames()}
+	inprocRegistry(&reg, firstParty())
 	resourceRegistry(&reg)
 	sandboxRegistry(&reg)
 	containerRegistry(&reg)
@@ -305,39 +305,16 @@ func firstRunPlaybook(configPath, bin string) (string, string, error) {
 	return "", "", errors.New("no setup package is installed: install it with open-conduit extension install")
 }
 
-// annotate contributes the GitHub entries' context for Work they own.
+// annotate contributes capacity and the extensions' context for Work.
 func (d *daemon) annotate(ctx context.Context, w domain.Work) []management.Annotation {
-	d.github.mu.Lock()
-	sources := make([]*githubSource, 0, len(d.github.sources))
-	for _, s := range d.github.sources {
-		sources = append(sources, s)
-	}
-	d.github.mu.Unlock()
 	out := d.capacityAnnotation(ctx, w)
 	out = append(out, d.inprocAnnotations(ctx, w)...)
-	for _, src := range sources {
-		lines, ok := gh.Annotate(src.ingress.Settings(), src.client.Web(), w)
-		if !ok {
-			continue
-		}
-		for _, l := range lines {
-			out = append(out, management.Annotation{Source: src.name, Name: l.Name, Value: l.Value})
-		}
-	}
 	return out
 }
 
-// actions are the action providers on a scope: each GitHub entry the scope
-// configures (by entry name, as its annotations) and each package it uses.
+// actions are the action providers on a scope, every extension's.
 func (d *daemon) actions(_ context.Context, scope domain.ID) map[string]extension.ActionProvider {
 	out := map[string]extension.ActionProvider{}
-	d.github.mu.Lock()
-	for _, src := range d.github.sources {
-		if src.scope == scope {
-			out[src.name] = gh.Actions{Store: d.coord, Settings: src.ingress.Settings()}
-		}
-	}
-	d.github.mu.Unlock()
 	d.inprocActions(scope, out)
 	return out
 }

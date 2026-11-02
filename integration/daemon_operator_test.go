@@ -139,7 +139,7 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 	d.until("doctor passes", 30*time.Second, func() bool {
 		var err error
 		report, err = d.c.Doctor(ctx, true)
-		return err == nil && check(report, "github").Code == "ok" && strings.Contains(strings.Join(check(report, "github").Items, " "), "reconciled")
+		return err == nil && check(report, "github").Code == "ok" && strings.Contains(strings.Join(check(report, "reconcile_lag").Items, " "), ": reconciled")
 	})
 	// A fresh repository's main has no protection, so doctor warns that a
 	// run's credential could push straight to it (#346).
@@ -302,7 +302,7 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 	o.must(nil, "scopes", "reconcile", "eng")
 	d.until("reconcile failure diagnosed", 30*time.Second, func() bool {
 		r, err := d.c.Doctor(ctx, false)
-		return err == nil && check(r, "github").Code == "reconcile_failing"
+		return err == nil && check(r, "reconcile_lag").Code == "scan_failing"
 	})
 	r, err := d.c.Doctor(ctx, true)
 	if err != nil || check(r, "github_auth").Status != "fail" || check(r, "github_auth").Code != "credential_rejected" {
@@ -354,11 +354,11 @@ func TestDaemonGitHubWebhookListener(t *testing.T) {
 		}
 		c := check(r, "webhooks")
 		m := listenerAddr.FindStringSubmatch(c.Detail)
-		if m == nil || c.Code != "listening" || !strings.Contains(strings.Join(c.Items, " "), "hook ok") {
+		if m == nil || c.Code != "listening" || !strings.Contains(strings.Join(check(r, "github").Items, " "), "hook ok") {
 			return false
 		}
 		addr = m[1]
-		return strings.Contains(strings.Join(check(r, "github").Items, " "), "reconciled")
+		return strings.Contains(strings.Join(check(r, "reconcile_lag").Items, " "), ": reconciled")
 	})
 	hooks := fake.Hooks()
 	if len(hooks) != 1 || hooks[0].URL != "https://hooks.example.test/github/eng/widgets" || hooks[0].Secret != "hook-secret" {
@@ -458,7 +458,7 @@ func TestDaemonGitHubDryRun(t *testing.T) {
 	d.until("dry run reported", 30*time.Second, func() bool {
 		var err error
 		r, err = d.c.Doctor(ctx, false)
-		return err == nil && strings.Contains(strings.Join(check(r, "webhooks").Items, " "), "hook dry_run")
+		return err == nil && strings.Contains(strings.Join(check(r, "github").Items, " "), "hook dry_run")
 	})
 	if !strings.Contains(strings.Join(check(r, "github").Items, " "), "dry run") {
 		t.Fatalf("doctor github: %+v", check(r, "github"))

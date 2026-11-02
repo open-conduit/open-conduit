@@ -117,6 +117,16 @@ type Host struct {
 	// sources (Ingester) by its registration name, acknowledged once it is
 	// durably accepted.
 	Deliver func(ctx context.Context, source string, d extension.Delivery) error
+	// Authorize answers whether scope from may use scope to's events or
+	// tracker, by kind, under the operator's authorization config: "read"
+	// (authorization.read_scopes, a cross-scope wait or read) or "file"
+	// (authorization.file_scopes, filing issues in and commenting on its
+	// tracker). nil is allowed; the error says how to allow it.
+	Authorize func(kind string, from, to domain.ID) error
+	// WaitTarget resolves a named wait target of kind in scope ("job" for
+	// a `job:<name>` condition) through the extensions that resolve that
+	// kind (Targeter): the correlation key and Event types that end it.
+	WaitTarget func(ctx context.Context, scope domain.ID, kind, name string) (key domain.CorrelationKey, types []string, ok bool)
 	// Timers arms and cancels the extension's recurring timers through the
 	// current generation: only its own recurrence kinds and timers whose
 	// Event is of its own families.
@@ -349,6 +359,14 @@ type Webhooker interface {
 // on it through ordinary dependencies.
 type Targeter interface {
 	Targets() map[string]func(ctx context.Context, scope domain.ID, name string) (key domain.CorrelationKey, types []string, ok bool)
+}
+
+// SegmentEnder extensions are told when an execution segment run in a
+// container ends, so they revoke what they issued for it (git tokens). The
+// host calls it before the segment settles; an extension sweeps what it
+// misses itself.
+type SegmentEnder interface {
+	SegmentEnded(ctx context.Context, execution domain.ID)
 }
 
 // Tooled extensions register toolbelt operations on every generation's
