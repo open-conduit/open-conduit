@@ -134,23 +134,21 @@ func TestHostTokenFile(t *testing.T) {
 	}
 }
 
-// TestPlaybookDefault checks that a binding naming no playbook starts its
-// turns on the rendered input alone, with no skill, unless the host gives
-// the executor a default playbook. The control: a binding that names one
-// starts on it whatever the default.
+// TestPlaybookDefault checks that a binding naming no playbook (or "-")
+// starts its turns on the rendered input alone, with no skill. The control:
+// a binding that names one starts on it.
 func TestPlaybookDefault(t *testing.T) {
 	for _, c := range []struct {
-		name, playbook, def, want, setting string
+		name, playbook, want, setting string
 	}{
-		{"none", "", "", "12\n\n## Already waiting", "-"},
-		{"dash", "-", "work-issue", "12\n\n## Already waiting", "-"},
-		{"host default", "", "work-issue", "/open-conduit:work-issue 12\n\n## Already waiting", "work-issue"},
-		{"named", "review-pr", "work-issue", "/open-conduit:review-pr 12\n\n## Already waiting", "review-pr"},
+		{"none", "", "12\n\n## Already waiting", "-"},
+		{"dash", "-", "12\n\n## Already waiting", "-"},
+		{"named", "review-pr", "/open-conduit:review-pr 12\n\n## Already waiting", "review-pr"},
 	} {
 		t.Run(c.name, func(t *testing.T) {
 			h := newHarness(t)
 			h.mode("review")
-			e := h.executorWith(func(o *claudecode.Options) { o.DefaultPlaybook = c.def })
+			e := h.executorWith(func(*claudecode.Options) {})
 			r, _ := h.request("work/1", "exec-1", 1, map[string]any{"playbook": c.playbook})
 			h.run(e, r)
 			if p := h.prompts(); len(p) != 1 || !strings.HasPrefix(p[0], c.want) {
@@ -889,14 +887,12 @@ func TestLiveOutput(t *testing.T) {
 	}
 }
 
-// TestConfigWarnings: the executor warns about the removed handoff_share
-// and, when the host gives bindings a default playbook, about a binding
-// that relies on it; one that names a playbook or "-", or a host with no
-// default, is quiet.
+// TestConfigWarnings: the executor warns about the removed handoff_share;
+// a binding that names a playbook, "-" or none is otherwise quiet.
 func TestConfigWarnings(t *testing.T) {
-	e := claudecode.Offline("triage")
+	e := claudecode.Offline()
 	for config, want := range map[string]string{
-		`{}`: "names no playbook: it runs triage for now",
+		`{}`: "",
 		`{"playbook":"triage","handoff_share":0}`: "config.handoff_share is ignored",
 		`{"playbook":"-"}`:                        "",
 		`{"playbook":"other"}`:                    "",
@@ -905,9 +901,6 @@ func TestConfigWarnings(t *testing.T) {
 		if want == "" && got != "" || !strings.HasPrefix(got, want) || want != "" && strings.Count(got, "\n") != 0 {
 			t.Errorf("%s: warnings %q, want %q", config, got, want)
 		}
-	}
-	if got := claudecode.Offline("").ConfigWarnings(json.RawMessage(`{}`)); len(got) != 0 {
-		t.Errorf("no host default, yet warned %q", got)
 	}
 	var _ extension.ConfigWarner = e
 }

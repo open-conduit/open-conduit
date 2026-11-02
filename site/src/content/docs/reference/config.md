@@ -453,7 +453,7 @@ Extension entry `config`:
 
 ### Scheduled jobs (`schedule`)
 
-Every/at/cron jobs and webhook, code-host and manual triggers as standing Work. Registers: extension, route, executor:legacy-job.
+Every/at/cron jobs and webhook, code-host and manual triggers as standing Work. Registers: extension, route.
 
 Extension entry `config`:
 

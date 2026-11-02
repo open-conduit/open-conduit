@@ -30,8 +30,7 @@ In scope is the code in this repository:
 - configuration loading, secret reference resolution and redaction;
 - the webhook listener and signature verification;
 - the extension host's enforcement of the subprocess protocol, and the extension install commands;
-- the first-party extensions, executors and packages;
-- the Open Supervisor configuration converter.
+- the first-party extensions, executors and packages.
 
 Out of scope:
 

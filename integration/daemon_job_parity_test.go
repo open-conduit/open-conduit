@@ -23,8 +23,8 @@ const parityNS = "schedule/jobs"
 
 // jobParityConfig ports v1's job fixtures onto bindings of one scope:
 //
-//   - slow (webhook): waits for a gate and appends its delivery body (v1
-//     TestJobDeliveryWhileRunningRunsAgain), through the legacy-job wrapper;
+//   - slow (webhook): waits for a gate and records each run (v1
+//     TestJobDeliveryWhileRunningRunsAgain);
 //   - check: alternates exit codes (v1 TestJobRunsAreKept);
 //   - hold, behind: two jobs in the shared main checkout (v1
 //     TestJobCatchesUpTheMainCheckout);
@@ -37,19 +37,15 @@ func jobParityConfig(root, checkout string) []byte {
 		return map[string]any{"name": name, "executor": "shell", "requires": map[string]any{}, "operations": []string{}, "secret_names": []any{},
 			"config": map[string]any{"command": command, "env": map[string]string{"DIR": root}}}
 	}
-	legacy := func(name, command string) map[string]any {
-		return map[string]any{"name": name, "executor": sc.LegacyExecutorName, "requires": map[string]any{}, "operations": []string{}, "secret_names": []any{},
-			"config": map[string]any{"shell": map[string]any{"command": command, "env": map[string]string{"DIR": root}}}}
-	}
-	slow := legacy("slow-cmd", `while [ ! -f "$DIR/gate" ]; do sleep 0.02; done; cat "$OPEN_SUPERVISOR_EVENT_FILE" >> "$DIR/slow"`)
+	slow := shell("slow-cmd", `while [ ! -f "$DIR/gate" ]; do sleep 0.02; done; echo run >> "$DIR/slow"`)
 	check := shell("check-cmd", `n=$(cat "$DIR/check.n" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$DIR/check.n"; code=0; [ $n -eq 2 ] && code=3; echo "run $code"; exit $code`)
 	shared := map[string]any{"provider": "git", "config": map[string]any{"checkout": checkout, "mode": "shared"}}
 	hold := shell("hold-cmd", `echo $$ > "$DIR/hold.pid"; while [ ! -f "$DIR/hold.release" ]; do sleep 0.02; done`)
 	hold["resource"], hold["requires"] = shared, map[string]any{"workspace": true}
 	behind := shell("behind-cmd", `cat a.txt`)
 	behind["resource"], behind["requires"] = shared, map[string]any{"workspace": true}
-	env := legacy("env-cmd", `echo "$POST_TOKEN $PLAIN $OPEN_SUPERVISOR_JOB" > "$DIR/env"`)
-	envShell := env["config"].(map[string]any)["shell"].(map[string]any)
+	env := shell("env-cmd", `echo "$POST_TOKEN $PLAIN" > "$DIR/env"`)
+	envShell := env["config"].(map[string]any)
 	envShell["env"].(map[string]string)["PLAIN"] = "https://example.com"
 	envShell["secret_env"] = map[string]string{"post-token": "POST_TOKEN"}
 	env["secret_names"] = []string{"post-token"}
@@ -82,8 +78,8 @@ func jobParityConfig(root, checkout string) []byte {
 
 // TestDaemonJobParity runs the ported v1 job fixtures on the composed
 // daemon: queueing (one pending run, newest delivery), kept runs under the
-// shared retention, a stale shared checkout and its catch-up, secrets and
-// the legacy environment, the shell's process timeout and the binding's
+// shared retention, a stale shared checkout and its catch-up, secrets, the
+// shell's process timeout and the binding's
 // runtime deadline. There is no separate job record or scheduler: every run
 // is an Execution of the job's standing Work in the unified history.
 func TestDaemonJobParity(t *testing.T) {
@@ -201,11 +197,11 @@ func TestDaemonJobParity(t *testing.T) {
 		t.Fatal(err)
 	}
 	d.until("both runs", 30*time.Second, settled("slow", 2))
-	if got := readFile(t, filepath.Join(d.root, "slow")); got != "13" {
-		t.Fatalf("slow ran on %q; want deliveries 1 then 3", got)
+	if got := readFile(t, filepath.Join(d.root, "slow")); got != "run\nrun\n" {
+		t.Fatalf("slow ran %q; want two runs (the first delivery, then 2 and 3 coalesced)", got)
 	}
-	// The delivery body is also the run's payload artifact.
-	if second := runs("slow")[1]; second.Inputs != 2 || !hasMedia(second, "application/json") {
+	// The second run took both deliveries that arrived while the first ran.
+	if second := runs("slow")[1]; second.Inputs != 2 {
 		t.Fatalf("second slow run %+v", second)
 	}
 
@@ -269,10 +265,10 @@ func TestDaemonJobParity(t *testing.T) {
 	}
 
 	// Secrets (v1 TestJobEnvResolvesSecrets): the binding's selected secret
-	// and plain env, beside the legacy job name.
+	// and plain env.
 	manual("env", "e1")
 	d.until("env ran", 30*time.Second, settled("env", 1))
-	if got := strings.TrimSpace(readFile(t, filepath.Join(d.root, "env"))); got != "t0ken https://example.com env" {
+	if got := strings.TrimSpace(readFile(t, filepath.Join(d.root, "env"))); got != "t0ken https://example.com" {
 		t.Fatalf("env job saw %q", got)
 	}
 
@@ -310,15 +306,6 @@ func TestDaemonJobParity(t *testing.T) {
 			t.Fatalf("run %s of kind %s", r.ID, r.WorkKind)
 		}
 	}
-}
-
-func hasMedia(r client.Run, media string) bool {
-	for _, a := range r.Artifacts {
-		if a.MediaType == media {
-			return true
-		}
-	}
-	return false
 }
 
 func fmtSscan(s string, pid *int) (int, error) { return fmt.Sscan(s, pid) }

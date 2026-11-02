@@ -12,102 +12,18 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/extensions/posthog"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/backup"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/management"
-	"github.com/open-conduit/open-conduit/internal/migrate"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// 06-02: explicit Open Supervisor conversion and the offline state
-// operations behind `migrate config`, `backup`, `state check` and
+// The offline state operations behind `backup`, `state check` and
 // `auth recover`. Every state operation takes the directory's exclusive
 // daemon lock first, so none runs beside a daemon owning the directory.
-
-// Migrate converts an Open Supervisor v1 config (internal/migrate) with the
-// operator's files: project checkouts are read only when asked, and a
-// missing time zone is taken from the machine (v1 read sweep and triage
-// times in local time).
-func Migrate(r cli.MigrateRequest) (cli.MigrateResult, error) {
-	opts := migrate.Options{Home: r.Home, TimeZone: r.TimeZone, ShellJobs: r.ShellJobs, DetachedTimeoutSeconds: r.DetachedTimeoutSeconds}
-	if opts.TimeZone == "" {
-		opts.TimeZone = localZone()
-	}
-	if r.RepoFiles {
-		opts.ReadFile = func(path string) ([]byte, bool) {
-			info, err := os.Stat(path)
-			if err != nil || !info.Mode().IsRegular() || info.Size() > 1<<20 {
-				return nil, false
-			}
-			b, err := os.ReadFile(path)
-			return b, err == nil
-		}
-	}
-	res, err := migrate.Convert(r.Source, opts)
-	if err != nil {
-		return cli.MigrateResult{}, err
-	}
-	out := cli.MigrateResult{Config: res.Config, Scopes: res.Scopes}
-	for _, it := range res.Items {
-		out.Items = append(out.Items, cli.MigrateItem(it))
-	}
-	for _, s := range res.Secrets {
-		out.Secrets = append(out.Secrets, cli.MigrateSecret(s))
-	}
-	return out, nil
-}
-
-// renames are the extension settings this release renamed, from each
-// extension's own table.
-var renames = migrate.Renames{posthog.Type: posthog.Renamed}
-
-// Upgrade renames them in an Open Conduit config (`migrate upgrade`).
-func Upgrade(config []byte) (cli.MigrateResult, error) {
-	res, err := migrate.Upgrade(config, renames)
-	if err != nil {
-		return cli.MigrateResult{}, err
-	}
-	out := cli.MigrateResult{Config: res.Config, Scopes: res.Scopes, Items: []cli.MigrateItem{}, Secrets: []cli.MigrateSecret{}}
-	for _, it := range res.Items {
-		out.Items = append(out.Items, cli.MigrateItem(it))
-	}
-	return out, nil
-}
-
-// RenamedWarnings is one warning per renamed setting a config still uses,
-// for `config check` and setup; the old names work for one release.
-func RenamedWarnings(config []byte) []string {
-	res, err := migrate.Upgrade(config, renames)
-	if err != nil {
-		return nil
-	}
-	var out []string
-	for _, it := range res.Items {
-		out = append(out, it.Path+" is a renamed setting ("+it.Message+"); the old name works for one release: run open-conduit migrate upgrade")
-	}
-	return out
-}
-
-// localZone is the machine's IANA zone from TZ or /etc/localtime, else "".
-func localZone() string {
-	if tz := os.Getenv("TZ"); tz != "" && !strings.HasPrefix(tz, ":") {
-		if _, err := time.LoadLocation(tz); err == nil {
-			return tz
-		}
-	}
-	if target, err := os.Readlink("/etc/localtime"); err == nil {
-		if _, zone, ok := strings.Cut(target, "zoneinfo/"); ok {
-			if _, err := time.LoadLocation(zone); err == nil {
-				return zone
-			}
-		}
-	}
-	return ""
-}
 
 // StateOps are the offline state operations for the operator CLI.
 func StateOps() *cli.StateOps {

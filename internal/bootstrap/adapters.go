@@ -83,7 +83,7 @@ func Adapters() []cli.Adapter {
 				f("refresh_minutes", ""), opt("receiver", "socket", []string{"socket", "events", "none"}, ""), f("signing_secret", ""), f("projection", "")},
 			Operations: sl.Operations()},
 		{Type: "schedule", Title: "Scheduled jobs", Description: "Every/at/cron jobs and webhook, code-host and manual triggers as standing Work.",
-			Kinds: []string{"extension", "route", "executor:legacy-job"},
+			Kinds: []string{"extension", "route"},
 			Entry: []cli.Field{req("namespace", ""), req("scope", ""), f("webhook_secret", ""), req("jobs", "name, every_minutes | at | cron, time_zone, on {events, branches, paths, webhook}")},
 			Route: []cli.Field{f("jobs", "job names the route takes"), f("triggers", "trigger kinds")}},
 		{Type: "introspection", Title: "Introspection", Description: "Issue reports, scheduled sweep and triage, fix Work and the optional host watch.",

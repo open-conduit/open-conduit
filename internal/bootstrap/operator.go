@@ -20,7 +20,6 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
-	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
@@ -103,12 +102,7 @@ func fileIncludes(configPath string) config.Includes {
 // checks: capability and config checks need only the registrations, and
 // executors' capabilities and config validators do not touch runtime state.
 func offlineExecutors() map[string]extension.Executor {
-	inner := &shell.Executor{}
-	out := map[string]extension.Executor{"shell": inner, ClaudeCodeExecutor: claudecode.Offline(gh.Playbook), gh.HoldExecutor: gh.NewHoldExecutor()}
-	if legacy, err := sc.NewLegacyExecutor(sc.LegacyOptions{Inner: inner}); err == nil {
-		out[sc.LegacyExecutorName] = legacy
-	}
-	return out
+	return map[string]extension.Executor{"shell": &shell.Executor{}, ClaudeCodeExecutor: claudecode.Offline(), gh.HoldExecutor: gh.NewHoldExecutor()}
 }
 
 // Setups are the registered extensions' optional setup flows (`open-conduit

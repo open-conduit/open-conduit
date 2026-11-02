@@ -286,15 +286,14 @@ var wiringFiles = map[string]bool{"inproc.go": true, "adapters.go": true}
 // and an entry nothing needs any more fails the check, so remove it with
 // the import.
 var compositionExceptions = map[string][]string{
-	"capacity.go":   {"extensions/github", "extensions/schedule"},
-	"claudecode.go": {"executors/claudecode", "extensions/github"},
+	"capacity.go":   {"extensions/github"},
+	"claudecode.go": {"executors/claudecode"},
 	"container.go":  {"extensions/docker", "extensions/ssh"},
-	"daemon.go":     {"executors/shell", "extensions/git", "extensions/github", "extensions/schedule"},
-	"operator.go":   {"executors/claudecode", "executors/shell", "extensions/github", "extensions/github/playbooks", "extensions/jira", "extensions/linear", "extensions/schedule", "extensions/slack"},
+	"daemon.go":     {"executors/shell", "extensions/git", "extensions/github"},
+	"operator.go":   {"executors/claudecode", "executors/shell", "extensions/github", "extensions/github/playbooks", "extensions/jira", "extensions/linear", "extensions/slack"},
 	"probes.go":     {"executors/claudecode", "extensions/github"},
 	"resources.go":  {"extensions/git"},
 	"sandbox.go":    {"extensions/srt"},
-	"state.go":      {"extensions/posthog"},
 	"tools.go":      {"executors/claudecode", "extensions/github/playbooks"},
 	"webhooks.go":   {"extensions/tunnel"},
 }

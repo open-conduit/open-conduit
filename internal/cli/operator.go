@@ -74,14 +74,9 @@ type Env struct {
 	// saved; only the open-conduit entrypoint supplies it (the os binary
 	// carries no terminal UI).
 	EditConfig func(EditRequest) (bool, error)
-	// Migrate converts an Open Supervisor v1 config (06-02); State runs the
-	// offline backup, restore, diagnosis and credential recovery. Only the
-	// open-conduit entrypoint supplies them.
-	Migrate func(MigrateRequest) (MigrateResult, error)
-	// Upgrade renames the extension settings a release renamed in an Open
-	// Conduit config (`migrate upgrade`), keeping the rest of the file.
-	Upgrade func(config []byte) (MigrateResult, error)
-	State   *StateOps
+	// State runs the offline backup, restore, diagnosis and credential
+	// recovery. Only the open-conduit entrypoint supplies it.
+	State *StateOps
 	// Service runs the background service commands and doctor's service
 	// check; only the open-conduit entrypoint supplies it.
 	Service *ServiceHost
@@ -152,7 +147,7 @@ func RunOperator(version, commit string, args []string, env Env, out, errOut io.
 		fmt.Fprintf(out, "open-conduit %s (%s)\n", version, commit)
 		return 0
 	}
-	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "migrate": o.migrate, "backup": o.backup, "state": o.state, "extension": o.extension, "dev": o.dev, "service": o.service, "container": o.container, "upgrade": o.selfUpgrade}
+	commands := map[string]func([]string) int{"health": o.health, "scopes": o.scopes, "work": o.work, "events": o.events, "executions": o.executions, "waits": o.waits, "artifacts": o.artifacts, "config": o.config, "auth": o.auth, "runs": o.runs, "doctor": o.doctor, "tui": o.tui, "web": o.web, "serve": o.serve, "claim": o.claim, "actions": o.actions, "init": o.init, "secret": o.secret, "adapters": o.adapters, "route": o.route, "backup": o.backup, "state": o.state, "extension": o.extension, "dev": o.dev, "service": o.service, "container": o.container, "upgrade": o.selfUpgrade}
 	cmd, ok := commands[rest[0]]
 	if !ok {
 		// Do not echo arguments: a mistaken invocation could contain credentials.

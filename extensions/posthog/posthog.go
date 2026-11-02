@@ -105,9 +105,6 @@ type ExtensionConfig struct {
 	// TelemetryEvents forwards the host's telemetry events (reports, fixes,
 	// host readings) while the host writes them (default true).
 	TelemetryEvents *bool `json:"telemetry_events,omitempty"`
-	// Introspection is TelemetryEvents' old name, accepted for one release
-	// with a doctor warning; `migrate upgrade` renames it.
-	Introspection *bool `json:"introspection,omitempty"`
 	// Records names the lifecycle records of the entry's scope to send, each
 	// as a PostHog event named after the record: an exact name
 	// ("work.transitioned"), a family ("execution.*") or every record ("*").
@@ -115,16 +112,10 @@ type ExtensionConfig struct {
 	Records []string `json:"records,omitempty"`
 }
 
-// Renamed maps each entry setting renamed in this release to its new name,
-// for `migrate upgrade`.
-var Renamed = map[string]string{"introspection": "telemetry_events"}
-
-// Settings is a parsed entry. OldNames lists the renamed settings it still
-// uses.
+// Settings is a parsed entry.
 type Settings struct {
 	Turns, TelemetryEvents bool
 	Records                []string
-	OldNames               []string
 }
 
 // Sends reports whether the entry selects the lifecycle record name.
@@ -146,13 +137,6 @@ func ParseExtension(data []byte) (Settings, error) {
 	s := Settings{Turns: true, TelemetryEvents: true}
 	if c.Turns != nil {
 		s.Turns = *c.Turns
-	}
-	if c.Introspection != nil {
-		if c.TelemetryEvents != nil {
-			return Settings{}, errors.New("posthog extension: introspection is the old name of telemetry_events; give only telemetry_events")
-		}
-		c.TelemetryEvents = c.Introspection
-		s.OldNames = append(s.OldNames, "introspection")
 	}
 	if c.TelemetryEvents != nil {
 		s.TelemetryEvents = *c.TelemetryEvents

@@ -8,7 +8,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
-	sc "github.com/open-conduit/open-conduit/extensions/schedule"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
@@ -22,7 +21,7 @@ const jobPool = "jobs"
 // jobExecutors are the executor registrations that count against
 // settings.job_concurrency instead of settings.concurrency.
 func jobExecutors() map[string]string {
-	return map[string]string{"shell": jobPool, sc.LegacyExecutorName: jobPool, gh.HoldExecutor: jobPool}
+	return map[string]string{"shell": jobPool, gh.HoldExecutor: jobPool}
 }
 
 // capacitySource is the Annotation source of a Work's capacity wait; WorkLabel

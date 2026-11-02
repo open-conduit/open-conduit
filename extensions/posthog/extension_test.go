@@ -47,11 +47,6 @@ func TestExtensionConfigureAndChecks(t *testing.T) {
 	x.mu.Lock()
 	x.failing = ""
 	x.mu.Unlock()
-	params.Entries[0].Config = json.RawMessage(`{"introspection":false}`)
-	x.Configure(context.Background(), params)
-	if r := x.check(context.Background(), protocol.CheckConfig{}); r.Status != inproc.CheckWarn || r.Code != "renamed_setting" || len(r.Items) != 2 {
-		t.Fatalf("the old setting name warns: %+v", r)
-	}
 	params.DryRun = true
 	x.Configure(context.Background(), params)
 	if len(x.targets()) != 0 {
