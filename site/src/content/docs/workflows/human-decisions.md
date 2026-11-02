@@ -106,7 +106,7 @@ A taken answer gets a 👍 reaction on the comment, and a refused one (a login t
 
 ## Answering from Slack
 
-When the Work is a Slack conversation, the question or approval request is posted in its thread with a button per option, such as **approve** and **refuse**. Pressing one answers as `slack:<your user id>`, which the `human` entry checks against the responders, and Slack shows you, and only you, whether it was taken. List the Slack user IDs you trust (a member ID such as `U0123ABCD`, from a profile's **Copy member ID**):
+When the Work is a Slack conversation, the question (with its context) or the approval request (with the call and its input) is posted once in its thread, with a button per option, such as **approve** and **refuse**. Pressing one answers as `slack:<your user id>`, which the `human` entry checks against the responders, and Slack shows you, and only you, whether it was taken. List the Slack user IDs you trust (a member ID such as `U0123ABCD`, from a profile's **Copy member ID**):
 
 ```json
 {"operations": ["deploy.*"], "responders": ["slack:U0123ABCD", "operator:local"]}

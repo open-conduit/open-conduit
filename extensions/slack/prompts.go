@@ -15,7 +15,8 @@ import (
 // Prompts and button answers (issue #364). While a conversation's Work
 // waits, every action offered on it with choices (an approval request's
 // approve and refuse, a question's options) is posted once in its thread as
-// a message with one button per choice. A press arrives over Socket Mode as
+// a message with its label, the provider's detail (what is being decided)
+// and one button per choice. A press arrives over Socket Mode as
 // an interactive envelope; the extension hands it to the host's Act as the
 // person who pressed it, slack:<user>, and the action's provider decides
 // whether they may. The person is told the outcome in a message only they
@@ -40,14 +41,13 @@ type buttonValue struct {
 }
 
 // promptIntents derives a prompt for each action with choices offered on a
-// waiting conversation's Work, once per active Wait.
+// waiting conversation's Work, once for what it offers.
 func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 	if p.o.Actions == nil {
 		return nil, nil
 	}
 	type waiting struct {
 		work            domain.ID
-		wait            domain.ID
 		channel, thread string
 	}
 	var ws []waiting
@@ -71,7 +71,8 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 			}
 			for _, wt := range waits {
 				if wt.State == domain.WaitActive {
-					ws = append(ws, waiting{w.ID, wt.ID, channel, thread})
+					ws = append(ws, waiting{w.ID, channel, thread})
+					break
 				}
 			}
 		}
@@ -81,6 +82,7 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 		return nil, err
 	}
 	var out []Intent
+	seen := map[string]bool{}
 	for _, w := range ws {
 		offers, err := p.o.Actions(ctx, domain.ID(p.o.Settings.Scope), w.work)
 		if err != nil {
@@ -91,8 +93,15 @@ func (p *Projector) promptIntents(ctx context.Context) ([]Intent, error) {
 			if !ok {
 				continue
 			}
-			out = append(out, Intent{ID: "prompt/" + string(w.wait) + "/" + o.Provider + "/" + o.ID, Work: w.work,
-				Channel: w.channel, Thread: w.thread, Text: o.Label, Blocks: blocks})
+			// Keyed by what is offered, not by the Wait: the same open
+			// question is prompted once however often the Work waits, and
+			// a new question (new text or options) is prompted afresh.
+			id := "prompt/" + string(w.work) + "/" + o.Provider + "/" + o.ID + "/" + digest(append([]string{o.Label, o.Detail}, o.Choices...)...)[:16]
+			if seen[id] {
+				continue
+			}
+			seen[id] = true
+			out = append(out, Intent{ID: id, Work: w.work, Channel: w.channel, Thread: w.thread, Text: o.Label, Blocks: blocks})
 		}
 	}
 	return out, nil
@@ -118,7 +127,12 @@ func promptBlocks(work domain.ID, o extension.ActionOffer) ([]map[string]any, bo
 		buttons = append(buttons, map[string]any{"type": "button", "action_id": buttonPrefix + strconv.Itoa(i),
 			"text": map[string]any{"type": "plain_text", "text": label}, "value": string(v)})
 	}
+	// The detail is what the person is deciding: the question, or the call
+	// an approval is for. The provider writes it; Slack only shows it.
 	text := o.Label
+	if d := strings.TrimSpace(o.Detail); d != "" {
+		text += "\n\n" + d
+	}
 	if len(text) > 3000 {
 		text = strings.ToValidUTF8(text[:3000], "")
 	}

@@ -1004,3 +1004,56 @@ func TestSlackPromptsAndTakesButtonAnswers(t *testing.T) {
 		t.Fatalf("another app's button was taken: %v %d", err, len(got))
 	}
 }
+
+// What a person in the Slack thread sees comes from the real `human`
+// provider: the question it was asked (not only "Answer the agent's
+// question") and its options as buttons. A new question on the same Work is
+// prompted afresh, and the same one isn't reposted.
+func TestSlackPromptShowsTheHumanQuestion(t *testing.T) {
+	h := newHumanHarness(t, "persistent", decisions)
+	h.ask(t, `{"question":"Ship the migration tonight?","options":["yes","no"],"context":"The backup finished at 21:00."}`)
+	acts, err := h.actions.Actions(context.Background(), h.target(t))
+	if err != nil || len(acts) != 1 {
+		t.Fatalf("human offers: %+v %v", acts, err)
+	}
+
+	e := newSlackEnv(t, "", sl.IngressOptions{})
+	root := e.fake.Post(slChannel, slAlice, "Can we migrate?")
+	e.sync()
+	e.reconcile()
+	e.route()
+	w, _ := e.workFor(root)
+	offer := extension.ActionOffer{Provider: "decisions", Action: acts[0]}
+	e.actions = func(context.Context, domain.ID, domain.ID) ([]extension.ActionOffer, error) {
+		return []extension.ActionOffer{offer}, nil
+	}
+	e.park(w.ID, "wait/1")
+	if res := e.converge(); res.Posted != 1 {
+		t.Fatalf("prompt: %+v", res)
+	}
+	prompts := func() []sl.Message {
+		var out []sl.Message
+		for _, m := range e.fake.Thread(slChannel, root) {
+			if len(m.Blocks) > 0 {
+				out = append(out, m)
+			}
+		}
+		return out
+	}
+	shown := prompts()[0]
+	text, _ := shown.Blocks[0]["text"].(map[string]any)["text"].(string)
+	if !strings.Contains(text, "Ship the migration tonight?") || !strings.Contains(text, "The backup finished at 21:00.") {
+		t.Fatalf("the prompt doesn't show the question: %q", text)
+	}
+	buttons, _ := shown.Blocks[1]["elements"].([]any)
+	if len(buttons) != 2 || buttons[0].(map[string]any)["text"].(map[string]any)["text"] != "yes" {
+		t.Fatalf("buttons: %+v", shown.Blocks[1])
+	}
+	if res := e.converge(); res.Posted != 0 || len(prompts()) != 1 {
+		t.Fatalf("the same question was posted again: %+v", res)
+	}
+	offer.Detail = "Ship the migration tomorrow instead?"
+	if res := e.converge(); res.Posted != 1 || len(prompts()) != 2 {
+		t.Fatalf("a new question wasn't prompted: %+v", res)
+	}
+}
