@@ -118,7 +118,7 @@ func (f *fakeRemote) needs() extension.SandboxNeeds {
 
 func (f *fakeRemote) launch(script string) extension.SandboxLaunch {
 	return extension.SandboxLaunch{Argv: []string{"/bin/sh", "-c", script}, Dir: f.ws, RunDir: f.run,
-		Env: []string{"PATH=/usr/bin:/bin", "FOO=bar baz"}, Secrets: []string{"SECRET_TOKEN=s3'cret"}}
+		Env: []string{"PATH=/usr/bin:/bin", "FOO=bar baz"}, Secrets: []string{"SECRET_TOKEN=s3'cret-value"}}
 }
 
 // helper runs the wrapper's argv as the executor would: the helper is
@@ -159,7 +159,7 @@ func TestRunOnRemote(t *testing.T) {
 	if len(f.pins) != 1 || f.pins[0].Daemon != f.settings.Daemon() || !strings.HasPrefix(f.pins[0].ID, f.settings.Endpoint()+"/") {
 		t.Fatalf("pins %+v, want the run pinned on the remote", f.pins)
 	}
-	if strings.Contains(string(plan.Data.Data), "s3") || strings.Contains(string(plan.Data.Data), "bar baz") {
+	if strings.Contains(string(plan.Data.Data), "cret-value") || strings.Contains(string(plan.Data.Data), "bar baz") {
 		t.Errorf("the plan holds a value: %s", plan.Data.Data)
 	}
 	// The host's paths are copied to the remote, at the same paths; the
@@ -200,7 +200,7 @@ func TestRunOnRemote(t *testing.T) {
 	if got := read(t, filepath.Join(f.ws, ".git", "config")); got != "[core]\n" {
 		t.Errorf(".git/config came back as %q; a read-only need never does", got)
 	}
-	if got := read(t, filepath.Join(f.ws, "sub", "env.txt")); got != "bar baz/s3'cret\n" {
+	if got := read(t, filepath.Join(f.ws, "sub", "env.txt")); got != "bar baz/s3'cret-value\n" {
 		t.Errorf("the run saw %q, want its environment and secret", got)
 	}
 	if link, err := os.Readlink(filepath.Join(f.ws, "link")); err != nil || link != "a.txt" {
@@ -213,7 +213,7 @@ func TestRunOnRemote(t *testing.T) {
 	if len(entries) != 0 {
 		t.Errorf("the secrets file outlived the run's start: %v", entries)
 	}
-	if strings.Contains(read(t, f.log), "s3") {
+	if strings.Contains(read(t, f.log), "cret-value") {
 		t.Error("a secret was on ssh's command line")
 	}
 	if !strings.Contains(read(t, f.log), "-R "+f.root+f.tb+":"+f.tb) {
