@@ -584,7 +584,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		Toolbelt: belt, ToolbeltEndpoints: d.endpoints.Serve, Secrets: d.configs.Secrets(d.resolver), Environment: d.runEnvironment,
 		Resources: d.bindResources, Sandbox: d.bindSandbox, Container: d.bindContainer, Signalled: d.containerSignalled, KeptExecutions: set.KeptExecutions, Artifacts: d.artifacts,
 		AuthorizeAlias: d.authorizeAlias, AliasFilter: belt.DependencyFilter,
-		WorkKinds: kinds,
+		WorkKinds: kinds, Budgets: budgets(set.Budgets),
 	}); err != nil {
 		return nil, err
 	}
@@ -616,6 +616,15 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 // scopeLimits gives the scheduler each scope whose limits.concurrency
 // narrows its parent's (or settings.concurrency at the root). The scheduler
 // checks every ancestor, so an inherited limit needs no entry of its own.
+// budgets maps settings.budgets onto the runtime's admission budgets.
+func budgets(in []config.Budget) []runtime.Budget {
+	out := make([]runtime.Budget, 0, len(in))
+	for _, b := range in {
+		out = append(out, runtime.Budget{Unit: b.Unit, Per: b.Per, Period: b.Period, ScopeID: domain.ID(b.Scope), Max: b.Max, WarnAt: b.WarnAt})
+	}
+	return out
+}
+
 func scopeLimits(s *config.Snapshot) map[domain.ID]int {
 	out := map[domain.ID]int{}
 	for id, sc := range s.Scopes {

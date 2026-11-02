@@ -124,6 +124,9 @@ type SchedulerOptions struct {
 	// WorkKinds are extension-registered lifecycle policies by Work kind
 	// (05-01). Kinds without an entry keep the default lifecycle.
 	WorkKinds map[string]WorkKindPolicy
+	// Budgets are the usage limits admission enforces (#361); none means
+	// no limit.
+	Budgets []Budget
 }
 
 // ContainerBinding is what the Container hook binds to an attempt: the
@@ -212,6 +215,9 @@ type AttemptState struct {
 	// Result holds only the latest segment's result, so a resume, or a
 	// timeout replacing a parked result, moves its usage here; Usage reports the two together as the attempt's usage.
 	EarlierUsage *extension.Usage `json:",omitempty"`
+	// Charged is the attempt's usage in named units already staged for the
+	// budget ledgers (stageUsageInTx), so each amount is charged once.
+	Charged map[string]float64 `json:",omitempty"`
 }
 
 // Usage is the attempt's usage across all its segments.
@@ -263,11 +269,20 @@ func addUsage(a, b extension.Usage) extension.Usage {
 		c := *a.Cost + *b.Cost
 		out.Cost, out.Currency = &c, a.Currency
 	}
+	if len(a.Units)+len(b.Units) > 0 {
+		out.Units = map[string]float64{}
+		for k, v := range a.Units {
+			out.Units[k] += v
+		}
+		for k, v := range b.Units {
+			out.Units[k] += v
+		}
+	}
 	return out
 }
 
 func usageEmpty(u extension.Usage) bool {
-	return u.InputTokens == nil && u.OutputTokens == nil && u.CachedTokens == nil && u.Cost == nil
+	return u.InputTokens == nil && u.OutputTokens == nil && u.CachedTokens == nil && u.Cost == nil && len(u.Units) == 0
 }
 
 // MaxSegments bounds the segments an attempt keeps; a standing turn can
@@ -371,6 +386,9 @@ func normalizePayload(p *domain.Payload) {
 	}
 }
 func putAttemptState(tx storage.Tx, state AttemptState) error {
+	if err := stageUsageInTx(tx, &state); err != nil {
+		return err
+	}
 	return putJSON(tx, attemptNamespace, identity(string(state.ExecutionID)), state)
 }
 func NewScheduler(store storage.Store, now func() time.Time, router *Router, o SchedulerOptions) (*Scheduler, error) {
@@ -712,6 +730,7 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 	var input QueuedInput
 	var parked domain.ID
 	var wake wakeReady
+	var budgetHeld bool
 	// Resolve/validate plugin metadata outside the claim transaction.
 	err = s.transact(ctx, nil, func(tx storage.Tx) error {
 		var e error
@@ -840,6 +859,10 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 		if e = s.checkCapacity(tx, current, state.Executor, parked); e != nil {
 			return e
 		}
+		if budgetHeld, e = admitBudgetInTx(tx, s.now(), s.options.Budgets, current, parked == ""); e != nil || budgetHeld {
+			// Over budget: commit the hold, then refuse the start.
+			return e
+		}
 		inputs, e := PendingInputsInTx(tx, id)
 		if e != nil {
 			return e
@@ -935,6 +958,9 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 	})
 	if err != nil {
 		return Attempt{}, err
+	}
+	if budgetHeld {
+		return Attempt{}, ErrBudgetHeld
 	}
 	return s.launch(ctx, attempt, state, executor, parked != "", false)
 }

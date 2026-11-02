@@ -48,6 +48,9 @@ func (d *daemon) loop(ctx context.Context) error {
 		if len(poll.Timers) > 0 {
 			d.routePending(ctx, c)
 		}
+		if err = c.scheduler.SettleBudgets(ctx); err != nil && ctx.Err() == nil {
+			d.report("budgets", "", errorCode(err))
+		}
 		d.startReady(ctx, c)
 		d.dispatchControls(ctx, c)
 		if err = c.scheduler.ReconcileSubscriptions(ctx, passLimit); err != nil && ctx.Err() == nil {
@@ -339,6 +342,8 @@ func errorCode(err error) string {
 		return capacityCode(capacity)
 	case errors.Is(err, runtime.ErrCapacity):
 		return "capacity"
+	case errors.Is(err, runtime.ErrBudgetHeld):
+		return "over_budget"
 	case errors.Is(err, runtime.ErrNotEligible):
 		return "not_eligible"
 	case errors.Is(err, runtime.ErrSecretUnavailable):

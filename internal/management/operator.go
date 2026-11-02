@@ -51,6 +51,8 @@ type wireHold struct {
 	EventID string `json:"event_id"`
 	Reason  string `json:"reason,omitempty"`
 	At      string `json:"at"`
+	// Kind is "budget" for a hold a budget placed, else empty.
+	Kind string `json:"kind,omitempty"`
 }
 
 // workDetail is GET /work/{id}: the primitive plus its operator hold, the
@@ -69,7 +71,7 @@ func (s *Server) detail(ctx context.Context, w domain.Work) (workDetail, error) 
 	err := s.read(ctx, func(tx storage.Tx) error {
 		h, held, e := runtime.HoldInTx(tx, w.ID)
 		if held {
-			out.Hold = &wireHold{EventID: string(h.EventID), Reason: h.Reason, At: ts(h.At)}
+			out.Hold = &wireHold{EventID: string(h.EventID), Reason: h.Reason, At: ts(h.At), Kind: h.Kind}
 		}
 		if e != nil {
 			return e

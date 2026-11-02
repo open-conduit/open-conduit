@@ -29,6 +29,9 @@ type wireUsage struct {
 	CachedTokens *uint64  `json:"cached_tokens,omitempty"`
 	Cost         *float64 `json:"cost,omitempty"`
 	Currency     string   `json:"currency,omitempty"`
+	// Units are the amounts in named units the executor reported, which
+	// budgets are charged in ("minutes", ...).
+	Units map[string]float64 `json:"units,omitempty"`
 }
 type wireWorkspace struct {
 	Kind    string `json:"kind,omitempty"`
@@ -148,7 +151,7 @@ func toRun(r runtime.Run) wireRun {
 	out.SegmentsDropped = r.DroppedSegments
 	out.ActiveMS = r.ActiveTime.Milliseconds()
 	if u := r.Usage; u != nil {
-		out.Usage = &wireUsage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, Cost: u.Cost, Currency: u.Currency}
+		out.Usage = &wireUsage{InputTokens: u.InputTokens, OutputTokens: u.OutputTokens, CachedTokens: u.CachedTokens, Cost: u.Cost, Currency: u.Currency, Units: u.Units}
 	}
 	if ws := r.Workspace; ws != nil {
 		out.Workspace = &wireWorkspace{Kind: ws.Kind, Ref: ws.Ref, Dir: ws.Dir, Summary: ws.Summary}

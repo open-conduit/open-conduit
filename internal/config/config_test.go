@@ -951,3 +951,47 @@ func TestWebhookSettings(t *testing.T) {
 		}
 	}
 }
+
+func TestBudgets(t *testing.T) {
+	m := generic(t, example(t, "inheritance"))
+	settings, _ := m["settings"].(map[string]any)
+	if settings == nil {
+		settings = map[string]any{}
+		m["settings"] = settings
+	}
+	settings["budgets"] = []any{
+		map[string]any{"unit": "attempts", "per": "work", "max": 20},
+		map[string]any{"unit": "usd", "per": "scope", "period": "day", "max": 12.5, "warn_at": 0.9, "scope": "child"},
+	}
+	snap, err := Validate(encode(t, m), registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Budget{{Unit: "attempts", Per: "work", Max: 20, WarnAt: DefaultBudgetWarnAt}, {Unit: "usd", Per: "scope", Period: "day", Scope: "child", Max: 12.5, WarnAt: 0.9}}
+	if !slices.Equal(snap.Settings.Budgets, want) {
+		t.Fatalf("budgets %+v", snap.Settings.Budgets)
+	}
+	if !strings.Contains(string(snap.Normalized), `"budgets"`) {
+		t.Fatalf("budgets not normalized: %s", snap.Normalized)
+	}
+	plain, err := Validate(example(t, "inheritance"), registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(string(plain.Normalized), `"budgets"`) {
+		t.Fatal("a config without budgets normalized them, changing its hash")
+	}
+	for name, b := range map[string]map[string]any{
+		"zero max":      {"unit": "usd", "per": "work", "max": 0},
+		"reserved per":  {"unit": "usd", "per": "team", "max": 1},
+		"bad unit":      {"unit": "US Dollars", "per": "work", "max": 1},
+		"warn too high": {"unit": "usd", "per": "work", "max": 1, "warn_at": 1},
+		"unknown scope": {"unit": "usd", "per": "scope", "max": 1, "scope": "nowhere"},
+	} {
+		bad := clone(t, m)
+		bad["settings"].(map[string]any)["budgets"] = []any{b}
+		if _, err := Validate(encode(t, bad), registry()); err == nil {
+			t.Fatalf("%s: accepted", name)
+		}
+	}
+}

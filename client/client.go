@@ -1092,6 +1092,8 @@ type Usage struct {
 	CachedTokens *uint64  `json:"cached_tokens,omitempty"`
 	Cost         *float64 `json:"cost,omitempty"`
 	Currency     string   `json:"currency,omitempty"`
+	// Units are the amounts in named units the executor reported.
+	Units map[string]float64 `json:"units,omitempty"`
 }
 type RetryStatus struct {
 	FailureCount  int    `json:"failure_count"`
