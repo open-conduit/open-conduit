@@ -73,10 +73,11 @@ The table groups what the first-party code actually does across the host boundar
 
 Some couplings exist only as bootstrap glue between first-party packages. They have no protocol equivalent, because a subprocess extension may depend on another only through events, correlation keys and public state reads:
 
-- The schedule translator reads `github.delivery.v1` payloads from the event log by their public schema, without importing the GitHub extension;
-- Bitbucket reads the tracker's reopen generations through the tracker kit's in-process registry (`tracker.Generation`), which both link.
+- The schedule translator reads `github.delivery.v1` payloads from the event log by their public schema, without importing the GitHub extension.
 
-These stay in-process, which the design allows: first-party extensions run in-process behind the public interfaces. They also decide which first-party integrations can run as a subprocess package without change.
+Bitbucket used to read the tracker's reopen generations through an in-process registry the tracker kit kept; it now reads them from the tracker's Work in its scope, through public state reads (#428).
+
+This stays in-process, which the design allows: first-party extensions run in-process behind the public interfaces. They also decide which first-party integrations can run as a subprocess package without change.
 
 In-process extensions also hold the whole `storage.Store` and the daemon's clock and dry-run flag. A subprocess gets only its KV namespaces, scoped reads, its own clock, and `dry_run` in `configure`.
 

@@ -49,40 +49,6 @@ type CodeError string
 
 func (e CodeError) Error() string { return string(e) }
 
-// reopens is the in-process registry of the tracker entries' services by
-// namespace, through which a code host (Bitbucket) keys a pull request to
-// a reopened issue's generation. Both link the kit; a tracker in another
-// process is not found, and the code host keys the first generation.
-var reopens = struct {
-	sync.Mutex
-	m map[string]Service
-}{m: map[string]Service{}}
-
-// Generation resolves a tracker issue's reopen generation at a time through
-// the tracker entry registered for namespace ns. ok is false when no such
-// entry is registered in this process.
-func Generation(ctx context.Context, ns, key string, at time.Time) (gen string, ok bool, err error) {
-	reopens.Lock()
-	svc := reopens.m[ns]
-	reopens.Unlock()
-	if svc == nil {
-		return "", false, nil
-	}
-	r, err := svc.Reopens(ctx, key)
-	if err != nil {
-		return "", true, err
-	}
-	return GenerationAt(r, at), true, nil
-}
-
-// Registered reports whether a tracker entry of namespace ns is registered
-// in this process.
-func Registered(ns string) bool {
-	reopens.Lock()
-	defer reopens.Unlock()
-	return reopens.m[ns] != nil
-}
-
 // source is one registered entry.
 type source struct {
 	name      string
@@ -127,7 +93,6 @@ var (
 	_ inproc.Tasker     = (*Extension)(nil)
 	_ inproc.Checker    = (*Extension)(nil)
 	_ inproc.Playbooker = (*Extension)(nil)
-	_ inproc.Stopper    = (*Extension)(nil)
 )
 
 func (x *Extension) Name() string { return x.k.Type }
@@ -271,25 +236,7 @@ func (x *Extension) add(e protocol.ConfigEntry, ns string) error {
 	x.mu.Lock()
 	x.sources[ns] = src
 	x.mu.Unlock()
-	reopens.Lock()
-	reopens.m[ns] = service
-	reopens.Unlock()
 	return nil
-}
-
-// Stop withdraws the extension's entries from the reopen registry, each
-// only while the registry still holds its own service, so a code host
-// stops finding a stopped daemon's tracker.
-func (x *Extension) Stop() {
-	x.mu.Lock()
-	defer x.mu.Unlock()
-	reopens.Lock()
-	defer reopens.Unlock()
-	for ns, s := range x.sources {
-		if reopens.m[ns] == s.service {
-			delete(reopens.m, ns)
-		}
-	}
 }
 
 func (x *Extension) list() []*source {
