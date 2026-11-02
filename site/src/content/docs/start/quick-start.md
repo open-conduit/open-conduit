@@ -63,4 +63,5 @@ open-conduit tui                                     # watch and control runs
 ## Next steps
 
 - Pick a workflow: [GitHub engineering](/open-conduit/workflows/github/), [Slack support](/open-conduit/workflows/slack/), [scheduled jobs](/open-conduit/workflows/scheduled-jobs/) or [introspection](/open-conduit/workflows/introspection/).
+- Or combine them: [fix red CI on main](/open-conduit/workflows/red-ci/), [Slack to PR](/open-conduit/workflows/slack-to-pr/), [dependency upgrades](/open-conduit/workflows/dependency-upgrades/) and [multi-repo changes](/open-conduit/workflows/multi-repo/).
 - Learn how [configuration and secrets](/open-conduit/guides/configuration/) work.
