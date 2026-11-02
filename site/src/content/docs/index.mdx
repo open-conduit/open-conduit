@@ -46,6 +46,18 @@ On 2 November 2026, **158 of the 168** pull requests merged into the repository 
 
 [See the merged agent pull requests](https://github.com/open-conduit/open-conduit/pulls?q=is%3Apr+is%3Amerged+head%3Aagent%2F)
 
+Here is one of those runs in the web view: [issue #324](https://github.com/open-conduit/open-conduit/issues/324) and its [pull request #326](https://github.com/open-conduit/open-conduit/pull/326). The agent opened the PR in its first turn and parked. A check failed, which woke it for a second turn: it found the failing test, pushed a fix and parked again. The checks passed, it posted its report, and the PR merged. Three turns, 13 minutes of executing across 27 minutes of Work.
+
+<figure class="run-shot">
+	<img src="/open-conduit/screenshots/run-timeline.webp" width="1600" height="463" alt="The web view of the Work for issue #324: completed, with PR #326 merged. Its lifetime bar shows three turns: issue open (11 minutes), checks failed (1 minute 40 seconds) and checks passed (17 seconds), with the Work waiting 7 and 6 minutes between them." />
+	<figcaption>The Work outlives each run. It waits between turns and wakes on the next event.</figcaption>
+</figure>
+
+<figure class="run-shot">
+	<img src="/open-conduit/screenshots/run-red-check.webp" width="1200" height="1003" alt="Turn 2 of the same Work, woken by github.checks.failed. The agent reads the failing check on PR #326, explains the cause, fixes the test and ends the turn after pushing commit 7487116." />
+	<figcaption>Turn 2, woken by the failing check: the agent finds the cause, pushes a fix and ends the turn.</figcaption>
+</figure>
+
 ## What it runs
 
 <CardGrid>
