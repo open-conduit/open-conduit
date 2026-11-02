@@ -1551,6 +1551,100 @@ func TestGitHubPRResolveResolvesTheCommentsThread(t *testing.T) {
 	}
 }
 
+// An agent edits the title, description and draft state of the PR it
+// opened, and only that PR: another PR, a closed one and a connection
+// without Pull requests write are refused, a repeated edit changes nothing,
+// and the edit isn't handed back to the Work as news.
+func TestGitHubPREditChangesOnlyTheWorksOwnPR(t *testing.T) {
+	e := newToolsEnv(t)
+	n, w := e.claim("Header wobbles", "", "bug")
+	a := e.start(w.ID)
+	marker := "<!-- open-conduit:agent work=" + string(w.ID) + " -->"
+	markers := func(body string) int { return strings.Count(body, "<!-- open-conduit:agent") }
+
+	pr := e.must(a, gh.OpPRCreate, "pr", map[string]any{"title": "Fix the wobble", "body": "Not done yet: the mobile layout.", "draft": true})
+	number := int(pr["number"].(float64))
+	if body := e.fake.Issue(number).Body; !strings.HasPrefix(body, "Closes #"+itoa(n)+"\n\n") || !strings.Contains(body, marker) || markers(body) != 1 || strings.Contains(body, gh.LegacyMarker) {
+		t.Fatalf("created PR body: %q", body)
+	}
+
+	_, err := e.call(a, gh.OpPREdit, "", map[string]any{"number": number})
+	refused(t, err, "missing_field")
+	_, err = e.call(a, gh.OpPREdit, "", map[string]any{"number": number, "title": " "})
+	refused(t, err, "missing_field")
+
+	// A new description keeps the issue link and the marker, once each,
+	// even when the agent sends back a body it read with the marker in it.
+	out := e.must(a, gh.OpPREdit, "body", map[string]any{"number": number, "title": "Steady the header", "body": "Steadies the header on desktop and mobile.\n\n" + marker})
+	if out["state"] != "edited" || !strings.Contains(string(mustJSON(out["changed"])), "body") {
+		t.Fatalf("edit: %v", out)
+	}
+	got := e.fake.Issue(number)
+	if got.Title != "Steady the header" || !strings.HasPrefix(got.Body, "Closes #"+itoa(n)+"\n\nSteadies the header on desktop and mobile.") || markers(got.Body) != 1 || !strings.Contains(got.Body, marker) {
+		t.Fatalf("edited PR: %q %q", got.Title, got.Body)
+	}
+
+	// Ready for review, through GraphQL; applying it again changes nothing.
+	before := len(e.fake.Writes())
+	if out := e.must(a, gh.OpPREdit, "ready", map[string]any{"number": number, "draft": false}); out["state"] != "edited" || e.fake.Pull(number).Draft {
+		t.Fatalf("ready: %v, draft %v", out, e.fake.Pull(number).Draft)
+	}
+	mutations := 0
+	for _, x := range e.fake.Writes()[before:] {
+		if strings.Contains(string(x.Body), "markPullRequestReadyForReview") {
+			mutations++
+		}
+	}
+	if mutations != 1 {
+		t.Fatalf("%d ready mutations", mutations)
+	}
+	before = len(e.fake.Writes())
+	again := e.must(a, gh.OpPREdit, "ready-again", map[string]any{"number": number, "draft": false, "title": "Steady the header", "body": "Steadies the header on desktop and mobile."})
+	if again["state"] != "unchanged" || len(e.fake.Writes()) != before {
+		t.Fatalf("repeated edit: %v, %d writes", again, len(e.fake.Writes())-before)
+	}
+	if out := e.must(a, gh.OpPREdit, "draft", map[string]any{"number": number, "draft": true}); out["state"] != "edited" || !e.fake.Pull(number).Draft {
+		t.Fatalf("back to draft: %v", out)
+	}
+
+	// Its own edits aren't news for the Work.
+	e.sync()
+	for _, typ := range e.queued(w.ID) {
+		if typ == gh.TypePullOpen {
+			t.Fatal("the Work's own PR edit was queued as input")
+		}
+	}
+
+	// Negative controls: a PR this Work didn't open, whether it carries no
+	// marker or another Work's, is refused without a write.
+	other := e.fake.OpenPull("Someone else's", "Refs #"+itoa(n)+"\n\nTheirs.", "feature/other", "o1", ghAlice)
+	stolen := e.fake.OpenPull("Another Work's", "Theirs.\n\n<!-- open-conduit:agent work=other-work -->", "feature/stolen", "s1", ghAlice)
+	before = len(e.fake.Writes())
+	for _, p := range []int{other, stolen} {
+		_, err = e.call(a, gh.OpPREdit, "", map[string]any{"number": p, "title": "Mine now"})
+		refused(t, err, "not_own_pull_request")
+	}
+	if len(e.fake.Writes()) != before || e.fake.Issue(other).Title != "Someone else's" {
+		t.Fatal("another PR was edited")
+	}
+
+	// A connection without Pull requests write.
+	e.fake.RefusePullEdits()
+	_, err = e.call(a, gh.OpPREdit, "", map[string]any{"number": number, "title": "Refused"})
+	refused(t, err, "github_forbidden")
+	_, err = e.call(a, gh.OpPREdit, "", map[string]any{"number": number, "draft": false})
+	refused(t, err, "github_forbidden")
+	if e.fake.Issue(number).Title != "Steady the header" || !e.fake.Pull(number).Draft {
+		t.Fatal("a refused edit changed the PR")
+	}
+
+	// A closed PR.
+	e.fake.CloseIssue(number, "")
+	_, err = e.call(a, gh.OpPREdit, "", map[string]any{"number": number, "title": "Too late"})
+	refused(t, err, "pull_request_closed")
+	e.finish(a, nil)
+}
+
 // A reviewing agent waits for the next reply on a PR and, separately, the
 // next push to it: each wakes it once, its own posts on the PR don't, and
 // the wait survives a restart.

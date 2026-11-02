@@ -578,12 +578,29 @@ func (n *normalizer) pullIssue(p rawPull) (int, bool) {
 // reference keyword (`Closes #N`, `Refs #N`), in order.
 func bodyRefs(s Settings, body string) []int {
 	var out []int
+	for _, l := range bodyLinks(s, body) {
+		out = append(out, l.number)
+	}
+	return out
+}
+
+// bodyLink is one tracker issue a PR body names, and whether its keyword
+// closes the issue on merge (`Closes`, `Fixes`, `Resolves`) or only refers
+// to it (`Refs`).
+type bodyLink struct {
+	number int
+	closes bool
+}
+
+// bodyLinks is every tracker issue a PR body names with a keyword, in order.
+func bodyLinks(s Settings, body string) []bodyLink {
+	var out []bodyLink
 	for _, m := range refsPattern.FindAllStringSubmatch(body, -1) {
 		if s.SharedTracker && !strings.EqualFold(m[1], s.TrackerRepo) || !s.SharedTracker && m[1] != "" && !strings.EqualFold(m[1], s.Repo) {
 			continue
 		}
 		if v, ok := parseNumber(m[2]); ok {
-			out = append(out, v)
+			out = append(out, bodyLink{number: v, closes: !strings.HasPrefix(strings.ToLower(m[0]), "ref")})
 		}
 	}
 	return out

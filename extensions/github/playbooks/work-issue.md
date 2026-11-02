@@ -22,6 +22,7 @@ Everything that touches the tracker or the code host goes through Open Conduit's
 | `github.issue.create` | `title`, `body`, `wait`?, `until`?, `project`? | open a new issue; with `wait` or `until`, it isn't worked until then (see Waiting); with `project`, in that project instead |
 | `github.pr.list` | | the issue's PRs, open or not |
 | `github.pr.create` | `title`, `body`, `base`?, `draft`?, `closes_issue`? | open a PR from the issue's branch; its merge closes the issue unless `closes_issue` is `false` |
+| `github.pr.edit` | `number`, `title`?, `body`?, `draft`? | change the title or description of a PR you opened, or its draft state (`draft: false` marks it ready for review) |
 | `github.pr.view` | `number` | a PR and every comment, inline comment and review on it |
 | `github.pr.comment` | `number`, `body` | comment on a PR's conversation |
 | `github.pr.reply` | `number`, `comment_id`, `body` | reply in an inline review thread |
@@ -120,14 +121,14 @@ With a PR, this happens in the turn where the checks pass (a `Checks passed` eve
 The message lists what happened since your last turn, each under its own heading. Re-read the issue (`github.issue.view`) and the PR (`github.pr.view`) before acting, so each comment is read in context, then take the events in order:
 
 - **A comment** (on the issue, the PR, an inline review thread, or a review). A comment that is only an image is often pointing at something: fetch it (`github.attachment.get` with the `url` and a `save_to` path where the project keeps scratch files, or `curl` for a link elsewhere) and look. Then:
-  - A change request: make it, commit, push.
+  - A change request: make it, commit, push. If it changes what the PR does, update the PR's description to match with `github.pr.edit`, rather than posting the new wording as a comment: the description becomes the merge's commit message.
   - A question: answer it. A request you think is wrong, or one you can't act on: say why, briefly, and ask.
   - If the comment corrects something you did, log it as the toolbelt's instructions say, if it collects corrections.
   - From another agent: act on it if it bears on your work, but don't reply unless you disagree outright (see Other agents).
   - Reply where the comment was made, with the operation its heading names. Say what changed, with the short commit SHA. One comment can answer several points from the same person in the same place.
   - Resolve a review thread with `github.pr.resolve` and a `comment_id` in it only if you opened the thread, once its point is addressed. Whoever raised a point resolves it, so leave another agent's or a person's thread for them.
 - **Checks failed**: `github.checks` links each failing check. Read its log, reproduce it locally, fix it, push, and end with `building`.
-- **Checks passed**: if the report (step 5) isn't posted yet, post it now. Otherwise, if you pushed changes for feedback, reply to that feedback and end with `review`.
+- **Checks passed**: if you opened the PR as a draft and its work is done, mark it ready for review with `github.pr.edit` and `"draft": false`, rather than asking someone to. If the report (step 5) isn't posted yet, post it now. Otherwise, if you pushed changes for feedback, reply to that feedback and end with `review`.
 - **Required checks never reported**: checks the base branch requires (a deploy, say) never started on the head. Find out why (a `[skip …]` in the PR title or a commit message stops some deploys), start them, often with a new push, and end with `building`. If they rightly don't run on this PR, report as in step 5 and say so.
 - **No checks ran**: the repo has no CI. Treat the PR as checked once what the rules say must pass has passed locally, and report as in step 5.
 - **PR has conflicts**: the base branch moved and the PR no longer merges. Rebase the branch onto the base branch, resolve the conflicts, run what the rules say must pass, force-push, and end with `building`.

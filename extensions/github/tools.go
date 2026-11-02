@@ -61,6 +61,7 @@ const (
 	OpPRComment    = "github.pr.comment"
 	OpPRReply      = "github.pr.reply"
 	OpPRResolve    = "github.pr.resolve"
+	OpPREdit       = "github.pr.edit"
 	OpPRReview     = "github.pr.review"
 	OpChecks       = "github.checks"
 	OpUpload       = "github.attachment.upload"
@@ -73,7 +74,7 @@ const (
 // Operations lists every tool operation (for binding operation lists).
 func Operations() []string {
 	return []string{OpContext, OpIssueView, OpIssueComment, OpIssueList, OpIssueCreate, OpPRList, OpPRView, OpPRCreate,
-		OpPRComment, OpPRReply, OpPRResolve, OpPRReview, OpChecks, OpUpload, OpFetch, OpWait, OpHoldStatus, OpHold, OpGitCredential}
+		OpPRComment, OpPRReply, OpPRResolve, OpPREdit, OpPRReview, OpChecks, OpUpload, OpFetch, OpWait, OpHoldStatus, OpHold, OpGitCredential}
 }
 
 // Source is one registered GitHub extension entry the tools can act on.
@@ -182,6 +183,9 @@ func (t *Tools) Registration() extension.Registration {
 			{Name: OpPRList, Handler: h(t.prList)},
 			{Name: OpPRView, Handler: pr(t.prView)},
 			{Name: OpPRCreate, Handler: h(t.prCreate)},
+			// Edit acts only on a PR whose body carries the calling Work's
+			// marker, which only create (an issue's Work) puts there.
+			{Name: OpPREdit, Handler: h(t.prEdit)},
 			{Name: OpPRComment, Handler: pr(t.prComment)},
 			{Name: OpPRReply, Handler: pr(t.prReply)},
 			{Name: OpPRResolve, Handler: pr(t.prResolve)},
@@ -938,6 +942,8 @@ func (t *Tools) prCreate(ctx context.Context, b *bound, data json.RawMessage) (a
 		}
 		body = linkBody(b.code.Settings, b.number, body, in.ClosesIssue == nil || *in.ClosesIssue)
 	}
+	// The marker is how github.pr.edit knows the PR as this Work's own.
+	body = withPullMarker(body, string(b.work.ID))
 	base := in.Base
 	if base == "" {
 		var err error
@@ -964,6 +970,110 @@ func (t *Tools) prCreate(ctx context.Context, b *bound, data json.RawMessage) (a
 		return nil, err
 	}
 	return map[string]any{"state": "open", "number": p.Number, "url": p.HTMLURL}, nil
+}
+
+// prEdit changes the title, body or draft state of a PR this Work opened,
+// recognised by the marker github.pr.create put in its body; any other PR,
+// and a closed or merged one, is refused. A new body gets the marker back,
+// and keeps the link to the Work's issue when it drops it. Only what differs
+// from the PR is sent, so a retry changes nothing. Title and body go
+// through REST, draft state through GraphQL (REST can't change it), both
+// as the connection that opened the PR. The issue's Work never hears its
+// own edit: its routes pass on no PR edits.
+func (t *Tools) prEdit(ctx context.Context, b *bound, data json.RawMessage) (any, error) {
+	var in struct {
+		Number int     `json:"number"`
+		Title  *string `json:"title"`
+		Body   *string `json:"body"`
+		Draft  *bool   `json:"draft"`
+		Repo   string  `json:"repo"`
+	}
+	if err := decode(data, &in); err != nil {
+		return nil, err
+	}
+	if in.Number <= 0 {
+		return nil, refuse("missing_field", "number (the PR) is required")
+	}
+	if in.Title == nil && in.Body == nil && in.Draft == nil {
+		return nil, refuse("missing_field", "give at least one of title, body and draft")
+	}
+	if in.Title != nil && strings.TrimSpace(*in.Title) == "" || in.Body != nil && strings.TrimSpace(*in.Body) == "" {
+		return nil, refuse("missing_field", "title and body can't be empty")
+	}
+	src, err := t.pullSource(b, in.Repo)
+	if err != nil {
+		return nil, err
+	}
+	repo, c := src.Settings.Repo, src.Client
+	p, err := c.Pull(ctx, repo, in.Number)
+	if err != nil {
+		return nil, err
+	}
+	if a := ParseAgent(p.Body); a == nil || a.Work != string(b.work.ID) {
+		return nil, refuse("not_own_pull_request", "PR #%d wasn't opened by this Work, so it can't be edited from here; comment on it with %s instead", in.Number, OpPRComment)
+	}
+	if state := pullState(p); state != "open" {
+		return nil, refuse("pull_request_closed", "PR #%d is %s, so it can't be edited", in.Number, state)
+	}
+	fields := map[string]string{}
+	changed := []string{}
+	if in.Title != nil && *in.Title != p.Title {
+		fields["title"] = *in.Title
+		changed = append(changed, "title")
+	}
+	if in.Body != nil {
+		body := *in.Body
+		if b.number > 0 {
+			for _, l := range bodyLinks(src.Settings, p.Body) {
+				if l.number == b.number {
+					body = linkBody(src.Settings, b.number, body, l.closes)
+					break
+				}
+			}
+		}
+		if body = withPullMarker(body, string(b.work.ID)); !sameBody(body, p.Body) {
+			fields["body"] = body
+			changed = append(changed, "body")
+		}
+	}
+	draft := in.Draft != nil && *in.Draft != p.Draft
+	if draft {
+		changed = append(changed, "draft")
+	}
+	out := map[string]any{"number": p.Number, "url": p.HTMLURL}
+	if len(changed) == 0 {
+		out["state"], out["note"] = "unchanged", "the PR already reads this way; nothing was changed"
+		return out, nil
+	}
+	if src.Settings.Projection.DryRun {
+		out["state"], out["note"] = "dry_run", fmt.Sprintf("dry run: would change the %s of PR #%d", strings.Join(changed, ", "), in.Number)
+		return out, nil
+	}
+	forbidden := func(err error) error {
+		if IsStatus(err, http.StatusForbidden) {
+			return refuse("github_forbidden", "this connection can't edit PRs on %s: it needs Pull requests write access", repo)
+		}
+		return err
+	}
+	if len(fields) > 0 {
+		if _, err := c.EditPull(ctx, repo, in.Number, fields); err != nil {
+			return nil, forbidden(err)
+		}
+	}
+	if draft {
+		if err := c.SetPullDraft(ctx, repo, p.NodeID, *in.Draft); err != nil {
+			return nil, forbidden(err)
+		}
+	}
+	out["state"], out["changed"] = "edited", changed
+	return out, nil
+}
+
+// sameBody reports whether two PR bodies read the same; GitHub may hand a
+// body back with CRLF line ends or trimmed.
+func sameBody(a, b string) bool {
+	norm := func(s string) string { return strings.TrimSpace(strings.ReplaceAll(s, "\r\n", "\n")) }
+	return norm(a) == norm(b)
 }
 
 func (t *Tools) prComment(ctx context.Context, b *bound, data json.RawMessage) (any, error) {

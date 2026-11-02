@@ -174,6 +174,9 @@ type Server struct {
 	resolved      map[int64]string
 	threadPage    int
 	refuseResolve bool
+	// refusePullEdits makes editing a PR (PATCH and the draft mutations)
+	// forbidden, as for a connection without Pull requests write.
+	refusePullEdits bool
 }
 
 // Hook is a repository webhook.
@@ -797,6 +800,10 @@ func (s *Server) SetThreadPage(n int) { s.mu.Lock(); s.threadPage = n; s.mu.Unlo
 // a connection without Pull requests write.
 func (s *Server) RefuseThreadResolution() { s.mu.Lock(); s.refuseResolve = true; s.mu.Unlock() }
 
+// RefusePullEdits makes editing a PR's title, body or draft state
+// forbidden, as for a connection without Pull requests write.
+func (s *Server) RefusePullEdits() { s.mu.Lock(); s.refusePullEdits = true; s.mu.Unlock() }
+
 // Forbid makes the next request an ordinary 403 (no access).
 func (s *Server) Forbid() {
 	s.mu.Lock()
@@ -967,7 +974,7 @@ func (s *Server) pullJSON(n int) map[string]any {
 	default:
 		headRepo = map[string]any{"full_name": p.HeadRepo}
 	}
-	return map[string]any{"number": n, "title": i.Title, "body": i.Body, "html_url": s.web(n), "state": i.State, "draft": p.Draft,
+	return map[string]any{"number": n, "node_id": "PR_" + strconv.Itoa(n), "title": i.Title, "body": i.Body, "html_url": s.web(n), "state": i.State, "draft": p.Draft,
 		"merged_at": tp(p.MergedAt), "closed_at": tp(i.Closed), "created_at": ts(i.Created), "updated_at": ts(i.Updated), "user": i.User,
 		"author_association": association(i.Association), "labels": labels,
 		"head": map[string]any{"ref": p.HeadRef, "sha": p.HeadSHA, "repo": headRepo}, "base": map[string]any{"ref": p.BaseRef, "repo": map[string]any{"full_name": s.Repo}}}
@@ -1551,6 +1558,29 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		}
 		return 0, nil
 	}
+	if x := rePull.FindStringSubmatch(rest); x != nil && r.Method == http.MethodPatch {
+		n := atoi(x[1])
+		if _, ok := s.pulls[n]; !ok {
+			return 0, nil
+		}
+		if s.refusePullEdits {
+			return http.StatusForbidden, map[string]any{"message": "Resource not accessible by integration"}
+		}
+		var req struct {
+			Title *string `json:"title"`
+			Body  *string `json:"body"`
+		}
+		_ = json.Unmarshal(body, &req)
+		i := s.issues[n]
+		if req.Title != nil {
+			i.Title = *req.Title
+		}
+		if req.Body != nil {
+			i.Body = *req.Body
+		}
+		i.Updated = s.tick()
+		return http.StatusOK, s.pullJSON(n)
+	}
 	if x := rePull.FindStringSubmatch(rest); x != nil && get {
 		if _, ok := s.pulls[atoi(x[1])]; ok {
 			pr := s.pullJSON(atoi(x[1]))
@@ -1729,8 +1759,9 @@ func (s *Server) threadRoot(id int64) int64 {
 	return id
 }
 
-// graphql answers the two GraphQL calls the extension makes: a PR's review
-// threads, a page at a time, and resolveReviewThread. Errors come back as
+// graphql answers the GraphQL calls the extension makes: a PR's review
+// threads, a page at a time, resolveReviewThread, and the draft mutations
+// markPullRequestReadyForReview and convertPullRequestToDraft. Errors come back as
 // GitHub sends them, in a 200's errors.
 func (s *Server) graphql(token string, body json.RawMessage) (int, any) {
 	var req struct {
@@ -1755,6 +1786,22 @@ func (s *Server) graphql(token string, body json.RawMessage) (int, any) {
 		}
 		s.resolved[root] = s.writer(token).Login
 		return http.StatusOK, map[string]any{"data": map[string]any{"resolveReviewThread": map[string]any{"thread": map[string]any{"id": str("thread"), "isResolved": true}}}}
+	case strings.Contains(req.Query, "markPullRequestReadyForReview"), strings.Contains(req.Query, "convertPullRequestToDraft"):
+		n, err := strconv.Atoi(strings.TrimPrefix(str("pr"), "PR_"))
+		p, ok := s.pulls[n]
+		if err != nil || !ok {
+			return fail("NOT_FOUND", "Could not resolve to a node with the global id of '"+str("pr")+"'")
+		}
+		if s.refusePullEdits {
+			return fail("FORBIDDEN", "Resource not accessible by integration")
+		}
+		p.Draft = strings.Contains(req.Query, "convertPullRequestToDraft")
+		s.issues[n].Updated = s.tick()
+		key := "markPullRequestReadyForReview"
+		if p.Draft {
+			key = "convertPullRequestToDraft"
+		}
+		return http.StatusOK, map[string]any{"data": map[string]any{key: map[string]any{"pullRequest": map[string]any{"id": str("pr"), "isDraft": p.Draft}}}}
 	case strings.Contains(req.Query, "reviewThreads"):
 		if !strings.EqualFold(str("owner")+"/"+str("name"), s.Repo) {
 			return fail("NOT_FOUND", "Could not resolve to a Repository")
