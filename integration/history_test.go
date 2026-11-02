@@ -427,6 +427,22 @@ func TestShellRetentionExpiresFinishedWorkByAge(t *testing.T) {
 	if result, err := h.scheduler.SweepRetention(ctx, 10); err != nil || len(result.Expired) != 0 {
 		t.Fatalf("sweep within kept_finished_days: %+v %v", result, err)
 	}
+	// Until then the Work is marked settled, so later sweeps skip its attempts;
+	// the marker goes once it expires whole.
+	countedRows := func() int {
+		var n int
+		if err := h.store.Transact(ctx, storage.Guard{Now: clock.Now()}, func(tx storage.Tx) error {
+			rows, err := tx.List("core.retention.counted", "")
+			n = len(rows)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := countedRows(); n != 1 {
+		t.Fatalf("settled markers after the first sweep: %d, want 1", n)
+	}
 	clock.Advance(2 * time.Hour)
 	result, err := h.scheduler.SweepRetention(ctx, 10)
 	if err != nil || len(result.Expired) != 1 || result.Expired[0] != run || len(result.Released) != 1 {
@@ -434,6 +450,9 @@ func TestShellRetentionExpiresFinishedWorkByAge(t *testing.T) {
 	}
 	if _, err = os.Stat(shellRunDir(state, run)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expired run directory kept: %v", err)
+	}
+	if n := countedRows(); n != 0 {
+		t.Fatalf("settled marker kept after the Work expired whole: %d", n)
 	}
 	x, err := h.operator().Run(ctx, string(run))
 	if err != nil || x.Retention.State != "expired" || x.Outcome == nil {

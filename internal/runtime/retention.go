@@ -20,6 +20,12 @@ const retentionNamespace = "core.retention"
 // that still have content to release.
 const retentionDoneNamespace = "core.retention.done"
 
+// retentionCountedNamespace marks a finished Work, not yet old enough to
+// expire whole, whose attempts beyond kept_executions have all expired. The
+// value is that kept_executions: a lower setting makes the sweep read the
+// Work again.
+const retentionCountedNamespace = "core.retention.counted"
+
 // retentionPendingNamespace lists the ledger entries whose content is not
 // yet fully released, keyed like the ledger, so a sweep reads those and not
 // every expiration ever made. retentionIndexKey in retentionIndexNamespace
@@ -143,8 +149,20 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 		for _, row := range doneRows {
 			done[row.Key] = true
 		}
+		countedRows, e := tx.List(retentionCountedNamespace, "")
+		if e != nil {
+			return e
+		}
+		counted := make(map[string]int, len(countedRows))
+		for _, row := range countedRows {
+			var n int
+			if e = json.Unmarshal(row.Value, &n); e != nil {
+				return e
+			}
+			counted[row.Key] = n
+		}
 		// Work records are read in full (there are far fewer than attempts
-		// or Events); attempts only for Work not yet fully expired.
+		// or Events); attempts only for Work that can have one to expire.
 		works, e := tx.ListWorks()
 		if e != nil {
 			return e
@@ -153,6 +171,10 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 			work := w.ID
 			if done[retentionKey(work)] {
 				continue
+			}
+			finishedAge := w.State.Terminal() && !w.UpdatedAt.After(finishedBefore)
+			if n, ok := counted[retentionKey(work)]; ok && w.State.Terminal() && !finishedAge && n <= kept {
+				continue // Nothing more to expire until it reaches kept_finished_days.
 			}
 			attempts, e := tx.ListExecutions(work)
 			if e != nil {
@@ -166,15 +188,17 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 				break
 			}
 			// A Work whose newest attempt is still live has not finished.
-			finished := false
-			if attempts[0].State.Terminal() {
-				finished = w.State.Terminal() && !w.UpdatedAt.After(finishedBefore)
-			}
-			// allExpired stays true while every attempt has a ledger entry.
-			allExpired := finished
+			finished := attempts[0].State.Terminal() && finishedAge
+			// allExpired stays true while every attempt has a ledger entry,
+			// countSettled while every attempt beyond kept has one.
+			allExpired, countSettled := finished, true
 			for i, x := range attempts {
-				if (i < kept && !finished) || !x.State.Terminal() || len(result.Expired) >= limit {
+				if i < kept && !finished {
 					allExpired = false
+					continue
+				}
+				if !x.State.Terminal() || len(result.Expired) >= limit {
+					allExpired, countSettled = false, false
 					continue
 				}
 				reason := RetentionCount
@@ -191,7 +215,7 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 					return e
 				}
 				if e == nil && !state.Excluded {
-					allExpired = false
+					allExpired, countSettled = false, false
 					continue // Uncertain resource hold: never release private state.
 				}
 				record := retentionRecord{ExecutionID: x.ID, WorkID: x.WorkID, Generation: state.Generation, Executor: state.Executor, Artifacts: append([]domain.ArtifactRef(nil), x.Artifacts...), Kept: kept, Reason: reason, ExpiredAt: now}
@@ -205,6 +229,15 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 			}
 			if allExpired {
 				if e := tx.Put(retentionDoneNamespace, retentionKey(work), []byte("{}")); e != nil {
+					return e
+				}
+				if e := tx.Delete(retentionCountedNamespace, retentionKey(work)); e != nil {
+					return e
+				}
+			} else if w.State.Terminal() && !finished && countSettled {
+				// A finished Work gets no new attempts, so until it is old
+				// enough to expire whole, later sweeps need not read it.
+				if e := putJSON(tx, retentionCountedNamespace, retentionKey(work), kept); e != nil {
 					return e
 				}
 			}
