@@ -13,6 +13,12 @@ import (
 
 const retentionNamespace = "core.retention"
 
+// retentionDoneNamespace marks a finished Work all of whose attempts have
+// expired. A finished Work can't run again, so later sweeps skip it without
+// reading it or its ledger entries, and the sweep's cost stays with the Work
+// that still have content to release.
+const retentionDoneNamespace = "core.retention.done"
+
 // DefaultKeptExecutions is the B05 kept_executions default (per Work).
 const DefaultKeptExecutions = 20
 
@@ -104,7 +110,18 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 			works = append(works, id)
 		}
 		sort.Slice(works, func(i, j int) bool { return works[i] < works[j] })
+		doneRows, e := tx.List(retentionDoneNamespace, "")
+		if e != nil {
+			return e
+		}
+		done := make(map[string]bool, len(doneRows))
+		for _, row := range doneRows {
+			done[row.Key] = true
+		}
 		for _, work := range works {
+			if done[retentionKey(work)] {
+				continue
+			}
 			attempts := byWork[work]
 			sort.Slice(attempts, func(i, j int) bool { return attempts[i].Attempt > attempts[j].Attempt })
 			if len(result.Expired) >= limit {
@@ -119,8 +136,11 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 				}
 				finished = e == nil && w.State.Terminal() && !w.UpdatedAt.After(finishedBefore)
 			}
+			// allExpired stays true while every attempt has a ledger entry.
+			allExpired := finished
 			for i, x := range attempts {
 				if (i < kept && !finished) || !x.State.Terminal() || len(result.Expired) >= limit {
+					allExpired = false
 					continue
 				}
 				reason := RetentionCount
@@ -137,6 +157,7 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 					return e
 				}
 				if e == nil && !state.Excluded {
+					allExpired = false
 					continue // Uncertain resource hold: never release private state.
 				}
 				record := retentionRecord{ExecutionID: x.ID, WorkID: x.WorkID, Generation: state.Generation, Executor: state.Executor, Artifacts: append([]domain.ArtifactRef(nil), x.Artifacts...), Kept: kept, Reason: reason, ExpiredAt: now}
@@ -144,6 +165,11 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 					return e
 				}
 				result.Expired = append(result.Expired, x.ID)
+			}
+			if allExpired {
+				if e := tx.Put(retentionDoneNamespace, retentionKey(work), []byte("{}")); e != nil {
+					return e
+				}
 			}
 		}
 		return nil

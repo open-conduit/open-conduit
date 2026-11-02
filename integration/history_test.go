@@ -451,6 +451,24 @@ func TestShellRetentionExpiresFinishedWorkByAge(t *testing.T) {
 	if expired.Attributes["retention.reason"] != runtime.RetentionFinished {
 		t.Fatalf("retention telemetry: %+v", expired.Attributes)
 	}
+
+	// Once all its attempts have expired, later sweeps skip the Work without
+	// reading its ledger: with the ledger rows removed, a sweep that still
+	// read them would expire the run again.
+	if err = h.store.Transact(ctx, storage.Guard{Now: clock.Now()}, func(tx storage.Tx) error {
+		rows, err := tx.List("core.retention", "")
+		for _, row := range rows {
+			if err == nil {
+				err = tx.Delete("core.retention", row.Key)
+			}
+		}
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := h.scheduler.SweepRetention(ctx, 10); err != nil || len(again.Expired) != 0 {
+		t.Fatalf("a fully expired finished Work was swept again: %+v %v", again, err)
+	}
 }
 
 // TestDoctorChecks covers storage, config, bindings, connections, secrets,
