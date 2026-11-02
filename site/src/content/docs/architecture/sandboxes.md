@@ -174,7 +174,7 @@ Claude Code's own config directory is the same kind of path: a user-level hook, 
 
 ## Evidence
 
-Real isolation tests run in CI on Linux (the `sandbox` job: srt from npm, bubblewrap, socat and ripgrep on Ubuntu 24.04, with the AppArmor userns restriction relaxed). The macOS run is off while GitHub is short of macOS runners, so macOS is checked locally until it returns. They skip without srt, and fail without it under `OPEN_CONDUIT_SANDBOX_TESTS=1`. They call no real service.
+Real isolation tests run in CI on Linux (the `sandbox` job: srt from npm, bubblewrap, socat and ripgrep on Ubuntu 24.04, with the AppArmor userns restriction relaxed). The macOS run is off while GitHub is short of macOS runners, so until it returns, run them on a Mac with srt installed: `OPEN_CONDUIT_SANDBOX_TESTS=1 go test -count=1 -run 'TestSandbox|TestSweepFindsSandboxedChildren|TestHealth' ./integration/ ./extensions/git/ ./extensions/srt/ ./extension/`. They skip without srt, and fail without it under `OPEN_CONDUIT_SANDBOX_TESTS=1`. They call no real service.
 
 - [Isolation tests](https://github.com/open-conduit/open-conduit/blob/main/integration/sandbox_test.go), for the shell executor and for Claude Code's launch path (a stand-in `claude`), in a lab laid out as the daemon's state directory, from inside the sandbox:
   - denied reads of `~/.ssh`, a default-denied `~/.aws` and (macOS) the keychain files, another workspace, `private/operator.token`, another execution's token and the config file, also through a symlink in the workspace, `..`, `/proc/self/root` and an upper-case spelling (which reaches it unsandboxed on macOS's case-insensitive APFS); the attempt's own token readable, and a credential the policy lifts readable
