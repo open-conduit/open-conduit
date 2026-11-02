@@ -33,22 +33,12 @@ import (
 )
 
 // TestMain lets this test binary act as the `os` toolbelt CLI when invoked
-// through the symlink placed on a shell execution's PATH.
-// It first tries to build the shipped cmd/os binary (without the race
-// runtime, whose start-up makes every toolbelt call slow), falling back to the
-// symlinked test binary. After the run it removes every directory keptDir
-// made.
+// through the symlink placed on a shell execution's PATH. After the run it
+// removes every directory keptDir made.
 func TestMain(m *testing.M) {
 	if filepath.Base(os.Args[0]) == "os" {
 		cwd, _ := os.Getwd()
 		os.Exit(cli.RunToolbelt("test", "test", os.Args[1:], cli.Env{Getenv: os.Getenv, Cwd: cwd}, os.Stdin, os.Stdout, os.Stderr))
-	}
-	dir, err := keptDir("oc-osbin-")
-	if err == nil {
-		build := exec.Command("go", "build", "-o", filepath.Join(dir, "os"), "github.com/open-conduit/open-conduit/cmd/os")
-		if build.Run() == nil {
-			builtToolbelt = filepath.Join(dir, "os")
-		}
 	}
 	code := m.Run()
 	cleanupHistory()
@@ -56,7 +46,29 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-var builtToolbelt string
+var (
+	toolbeltOnce  sync.Once
+	toolbeltBuilt string
+)
+
+// builtToolbelt is the shipped cmd/os binary (without the race runtime,
+// whose start-up makes every toolbelt call slow), built on first use, or ""
+// when it can't be built and the symlinked test binary serves instead. It
+// is built lazily so the helper processes the crash tests start and
+// SIGKILL never build one, which would outlive them (#445).
+func builtToolbelt() string {
+	toolbeltOnce.Do(func() {
+		dir, err := keptDir("oc-osbin-")
+		if err != nil {
+			return
+		}
+		build := exec.Command("go", "build", "-o", filepath.Join(dir, "os"), "github.com/open-conduit/open-conduit/cmd/os")
+		if build.Run() == nil {
+			toolbeltBuilt = filepath.Join(dir, "os")
+		}
+	})
+	return toolbeltBuilt
+}
 
 func shellConfig(t *testing.T, binding map[string]any) string {
 	t.Helper()
@@ -135,7 +147,7 @@ func shellState(t *testing.T, cfg string) (string, string) {
 	}
 	t.Cleanup(func() { os.RemoveAll(state) })
 	bin := filepath.Join(state, "bin")
-	self := builtToolbelt
+	self := builtToolbelt()
 	if self == "" {
 		var err error
 		if self, err = os.Executable(); err != nil {

@@ -92,7 +92,7 @@ func newGitBotLab(t *testing.T, root string) *gitBotLab {
 	if out, err := exec.Command(gitPath, "init", "-q", "--bare", filepath.Join(l.bare, "octo", "widgets.git")).CombinedOutput(); err != nil {
 		t.Fatalf("git init: %v %s", err, out)
 	}
-	self := builtToolbelt
+	self := builtToolbelt()
 	if self == "" {
 		if self, err = os.Executable(); err != nil {
 			t.Fatal(err)
