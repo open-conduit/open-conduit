@@ -23,13 +23,13 @@ import (
 // those that ask for one), one operation it registers only once started, a
 // task and a check.
 type acme struct {
-	mu      sync.Mutex
-	host    *inproc.Host
-	starts  int
+	mu     sync.Mutex
+	host   *inproc.Host
+	starts int
 	// failStarts is how many Starts fail before one succeeds.
 	failStarts int
-	entries []protocol.ConfigEntry
-	ran     []string
+	entries    []protocol.ConfigEntry
+	ran        []string
 }
 
 var (
