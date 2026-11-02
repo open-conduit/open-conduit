@@ -69,7 +69,8 @@ The script needs to know nothing about keys or issue numbers: `github.issue.comm
 ## What gets acknowledged
 
 - **Acknowledged:** a new, open issue whose author's association isn't in `admit.authors`, such as `CONTRIBUTOR`, `FIRST_TIME_CONTRIBUTOR` or `NONE` with the default `admit`.
-- **Not acknowledged:** an issue by someone `admit` trusts, which the `issues` route claims instead; an issue by any bot, including this connection's own follow-ups; an issue opened more than 72 hours before Open Conduit saw it, so turning this on doesn't thank the authors of old issues. Each skip has its reason in the route trace.
+- **Skipped by the route:** an issue by someone `admit` trusts, which the `issues` route claims instead, and an issue by any bot, including this connection's own follow-ups. `open-conduit route '#12'` shows the `acks` route's verdict on issue 12 and its reason.
+- **Never observed:** an issue opened more than 72 hours before Open Conduit saw it, so turning this on doesn't thank the authors of old issues, and, until a later read succeeds, an issue whose author's repository permission couldn't be read, so a maintainer isn't mistaken for an outsider. Nothing reaches the route for these, so `route` shows no `acks` verdict for them.
 - **Once per issue.** A webhook redelivery, a reconcile or an edit doesn't comment again, and neither does closing and reopening the issue.
 
 The comment carries the acknowledgement Work's marker, and run history links the issue's Event, the acknowledgement Work and its Execution to it.
