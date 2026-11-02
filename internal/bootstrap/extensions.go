@@ -514,8 +514,11 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		},
 		Nudge:   d.poke,
 		Capture: d.telemetry.Capture,
-		Probes:  d.setupProbes,
-		Config:  d.configHost(),
+		Act: func(ctx context.Context, owner string, r extension.ActRequest) (extension.ActResult, error) {
+			return d.act(owner)(ctx, r)
+		},
+		Probes: d.setupProbes,
+		Config: d.configHost(),
 	}
 }
 

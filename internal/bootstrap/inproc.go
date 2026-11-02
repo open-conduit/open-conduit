@@ -172,6 +172,7 @@ func (d *daemon) startInproc(ctx context.Context) error {
 				return id, err
 			},
 			WaitProgress: d.waitProgress(name),
+			Act:          d.act(name),
 			Config:       d.configHost(),
 			Probes:       d.setupProbes,
 			Capture:      d.telemetry.Capture,

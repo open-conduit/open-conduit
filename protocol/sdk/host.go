@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
 	"github.com/open-conduit/open-conduit/storage"
@@ -183,6 +184,20 @@ func (h *Host) Artifact(ctx context.Context, mediaType string, data []byte) (dom
 // the machine; the zero time is the host's now.
 func (h *Host) Capture(ctx context.Context, scope domain.ID, name string, at time.Time, props map[string]any) error {
 	return h.conn.Call(ctx, "telemetry.capture", protocol.TelemetryEvent{ScopeID: string(scope), Name: name, At: at, Properties: props}, nil)
+}
+
+// Act invokes an action for a person the extension identified on its own
+// surface (permission action.submit), such as answering an approval
+// request from a button they pressed. The host calls the provider with the
+// caller {Kind: the extension's name, ID: r.Caller}; a refusal is the
+// provider's *extension.OperationError.
+func (h *Host) Act(ctx context.Context, r extension.ActRequest) (extension.ActResult, error) {
+	var out protocol.ActionSubmitResult
+	err := h.conn.Call(ctx, "action.submit", protocol.ActionSubmitParams{ScopeID: string(r.Scope), WorkID: string(r.Work), Provider: r.Provider, Action: r.Action, Input: r.Input, Caller: r.Caller, Key: r.Key}, &out)
+	if err != nil {
+		return extension.ActResult{}, err
+	}
+	return extension.ActResult{Event: out.Event.Domain(), Added: out.Added, Message: out.Message}, nil
 }
 
 // ConfigBase reads the configuration now (permission config.read): its

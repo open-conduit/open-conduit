@@ -64,6 +64,10 @@ type Deps struct {
 	// log and hands it to every sink (telemetry.capture, permission
 	// telemetry.capture).
 	Capture func(ctx context.Context, scope, name string, at time.Time, props map[string]any) error
+	// Act invokes an action for a person owner identified on its own
+	// surface (action.submit, permission action.submit): the caller's kind
+	// is owner.
+	Act func(ctx context.Context, owner string, r extension.ActRequest) (extension.ActResult, error)
 	// Probes are the setup probes the host, its extensions and executors
 	// offer, by full name (probe.list and probe.run, permission probes).
 	Probes func() map[string]extension.SetupProbe
@@ -328,6 +332,12 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return struct{}{}, s.capture(ctx, p)
+	case "action.submit":
+		var p protocol.ActionSubmitParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		return s.actionSubmit(ctx, p)
 	case "probe.list":
 		return s.probeList()
 	case "probe.run":

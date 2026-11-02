@@ -3,6 +3,7 @@ package runtime
 import (
 	"context"
 	"errors"
+	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -75,4 +76,32 @@ func (c *Control) SubmitAction(ctx context.Context, a ActionEvent) (accepted dom
 		})
 	}
 	return
+}
+
+// Act authorises call with its provider and accepts the Event it plans,
+// under key (a replay of the same key returns the first Event). It is the
+// one action path: the management API invokes it as the local operator,
+// and an extension acting for a person on its own surface (Host.Act) with
+// that person as caller. A refusal is the provider's *OperationError and
+// leaves no Event. The message is the provider's, trimmed to 500 bytes.
+func (c *Control) Act(ctx context.Context, name string, p extension.ActionProvider, call extension.ActionCall, key string) (accepted domain.AcceptedEvent, added bool, message string, err error) {
+	plan, err := p.Invoke(ctx, call)
+	if err != nil {
+		return accepted, false, "", err
+	}
+	a := ActionEvent{ScopeID: call.Target.Scope.ID, Provider: name, Action: call.Action, Key: key, Event: plan.Event}
+	// An Event that names a correlation key is addressed by it (an answer
+	// on a key no Work owns, say); one without is the target Work's.
+	if call.Target.Work != nil && plan.Event.CorrelationKey == nil {
+		a.WorkID = call.Target.Work.ID
+	}
+	accepted, added, err = c.SubmitAction(ctx, a)
+	if err != nil {
+		return accepted, false, "", err
+	}
+	message = strings.ToValidUTF8(plan.Message, "")
+	if len(message) > 500 {
+		message = strings.ToValidUTF8(message[:500], "")
+	}
+	return accepted, added, message, nil
 }

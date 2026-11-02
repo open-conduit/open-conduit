@@ -76,6 +76,12 @@ const (
 	// extension is configured in: it sees each call's input and may hold
 	// or refuse the call (extension.Gate).
 	PermissionOperationGate = "operation.gate"
+	// PermissionActionSubmit invokes actions for people the extension
+	// identifies on its own surface (action.submit), such as answering a
+	// person's approval request from a button they pressed. The caller is
+	// always of the extension's own kind ("<name>:<id>"): the provider
+	// decides whether that caller may act.
+	PermissionActionSubmit = "action.submit"
 )
 
 // PermissionInfo says what a permission lets an extension do, in words the
@@ -92,6 +98,7 @@ var KnownPermissions = []PermissionInfo{
 	{PermissionProbes, "runs the read-only setup probes of the host, its extensions and executors"},
 	{PermissionConfigRead, "reads the whole configuration, references redacted, and proposes edits it never applies"},
 	{PermissionOperationGate, "sees every toolbelt call to other extensions in its scopes, with its input, and may hold or refuse it"},
+	{PermissionActionSubmit, "invokes actions, such as answering a person's approval request, for people it identifies on its own surface"},
 }
 
 // PermissionSummary is the summary of a known permission ("" otherwise).

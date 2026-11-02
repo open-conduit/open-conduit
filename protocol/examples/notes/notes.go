@@ -113,7 +113,7 @@ func Manifest(o Options) protocol.Manifest {
 		// It mirrors the host's telemetry events to sink.log, records one
 		// per indexing pass, runs the host's probes (TelemetryTask) and
 		// proposes config (ConfigTask).
-		Permissions: []string{protocol.PermissionTelemetrySink, protocol.PermissionTelemetryCapture, protocol.PermissionProbes, protocol.PermissionConfigRead},
+		Permissions: []string{protocol.PermissionTelemetrySink, protocol.PermissionTelemetryCapture, protocol.PermissionProbes, protocol.PermissionConfigRead, protocol.PermissionActionSubmit},
 		Provides: protocol.Provides{
 			// An entry's service file and labels are safe to show the operator.
 			Extensions: []protocol.ExtensionDecl{{Type: "notes", Ingress: true,

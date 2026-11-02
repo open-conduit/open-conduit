@@ -122,6 +122,7 @@ var Methods = []Method{
 	{Name: "telemetry.export", Direction: HostToExtension, Provides: "exporters", Contract: []string{"observability.Exporter.Export"}, UseCases: []string{"posthog", "introspection"}},
 	{Name: "telemetry.sink", Direction: HostToExtension, Permission: PermissionTelemetrySink, Contract: []string{"inproc.Sink.Capture"}, UseCases: []string{"posthog"}},
 	{Name: "telemetry.capture", Direction: ExtensionToHost, Permission: PermissionTelemetryCapture, Contract: []string{"inproc.Host.Capture"}, UseCases: []string{"introspection", "posthog"}},
+	{Name: "action.submit", Direction: ExtensionToHost, Permission: PermissionActionSubmit, Contract: []string{"inproc.Host.Act", "extension.ActRequest", "extension.ActResult"}, UseCases: []string{"github"}},
 	{Name: "probe.list", Direction: ExtensionToHost, Permission: PermissionProbes, Contract: []string{"inproc.Host.Probes", "extension.SetupProbe.Name", "extension.SetupProbe.Summary", "extension.SetupProbe.Args"}, UseCases: []string{"setup"}},
 	{Name: "probe.run", Direction: ExtensionToHost, Permission: PermissionProbes, Contract: []string{"extension.SetupProbe.Run", "extension.ProbeResult"}, UseCases: []string{"setup"}},
 	{Name: "config.base", Direction: ExtensionToHost, Permission: PermissionConfigRead, Contract: []string{"inproc.Host.Config", "inproc.ConfigHost.Base", "inproc.ConfigBase"}, UseCases: []string{"setup"}},

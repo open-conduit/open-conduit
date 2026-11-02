@@ -86,3 +86,41 @@ type ActionProvider interface {
 	Actions(ctx context.Context, t ActionTarget) ([]Action, error)
 	Invoke(ctx context.Context, c ActionCall) (ActionPlan, error)
 }
+
+// Acting for a person (issue #364). A surface with real identities (a Slack
+// workspace, a GitHub repository) hears a person ask for an action: a
+// button pressed, a comment posted. Its extension asks the host to invoke
+// that action for them with an ActRequest. The host fixes the caller's Kind
+// to the requesting extension's own name, so an extension can vouch only
+// for identities on its own surface ("github:octocat", never
+// "operator:local"); the provider then authorises that caller exactly as it
+// would anyone else's, and the host accepts the Event under ActionSource.
+
+// CodeNoAction is Host.Act's refusal when no provider names the action, or
+// none offers it on the target now: the person asked for nothing that is
+// here to do, which a surface may treat as an ordinary message.
+const CodeNoAction = "no_action"
+
+// ActRequest is an action an extension invokes for a person its own surface
+// identified. Work is the target Work (empty for a scope action). Provider
+// is the action provider's name; empty means the one provider offering
+// Action on the target. Caller is the person's ID on the surface. Key makes
+// the request idempotent: the same Key returns the first answer.
+type ActRequest struct {
+	Scope    domain.ID
+	Work     domain.ID
+	Provider string
+	Action   string
+	Input    string
+	Caller   string
+	Key      string
+}
+
+// ActResult is an accepted ActRequest: the Event it produced, whether this
+// request added it (false for a replay of the same Key), and the
+// provider's message for the person.
+type ActResult struct {
+	Event   domain.AcceptedEvent
+	Added   bool
+	Message string
+}

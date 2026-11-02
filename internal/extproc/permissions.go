@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/protocol"
 )
 
@@ -49,6 +50,23 @@ func (s *Service) capture(ctx context.Context, p protocol.TelemetryEvent) error 
 		at = s.deps.Now()
 	}
 	return s.deps.Capture(ctx, p.ScopeID, p.Name, at, p.Properties)
+}
+
+// actionSubmit invokes an action for a person the extension identified on
+// its own surface, in a scope it is configured for, as a caller of its own
+// kind.
+func (s *Service) actionSubmit(ctx context.Context, p protocol.ActionSubmitParams) (protocol.ActionSubmitResult, error) {
+	if s.deps.Act == nil {
+		return protocol.ActionSubmitResult{}, protocol.Errorf(protocol.CodeUnsupported, "action.submit")
+	}
+	if !s.allowedScopes()[domain.ID(p.ScopeID)] {
+		return protocol.ActionSubmitResult{}, unauthorized("scope is not configured for this extension")
+	}
+	r, err := s.deps.Act(ctx, s.name, extension.ActRequest{Scope: domain.ID(p.ScopeID), Work: domain.ID(p.WorkID), Provider: p.Provider, Action: p.Action, Input: p.Input, Caller: p.Caller, Key: p.Key})
+	if err != nil {
+		return protocol.ActionSubmitResult{}, err
+	}
+	return protocol.ActionSubmitResult{Event: protocol.FromAccepted(r.Event), Added: r.Added, Message: r.Message}, nil
 }
 
 func (s *Service) probeList() (protocol.ProbeListResult, error) {
