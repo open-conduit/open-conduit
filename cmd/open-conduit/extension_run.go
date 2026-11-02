@@ -18,6 +18,7 @@ import (
 	observeext "github.com/open-conduit/open-conduit/extensions/observe/pkg"
 	"github.com/open-conduit/open-conduit/extensions/pagerduty"
 	posthogext "github.com/open-conduit/open-conduit/extensions/posthog/pkg"
+	scheduleext "github.com/open-conduit/open-conduit/extensions/schedule/pkg"
 	"github.com/open-conduit/open-conduit/extensions/sentry"
 	shellext "github.com/open-conduit/open-conduit/extensions/shell/pkg"
 	slackext "github.com/open-conduit/open-conduit/extensions/slack/pkg"
@@ -48,6 +49,7 @@ var runnable = map[string]struct {
 	"observe":   {observeext.Main, observeext.Manifest, nil},
 	"pagerduty": {pagerduty.Main, pagerduty.Manifest, nil},
 	"posthog":   {posthogext.Main, posthogext.Manifest, nil},
+	"schedule":  {scheduleext.Main, scheduleext.Manifest, nil},
 	"sentry":    {sentry.Main, sentry.Manifest, nil},
 	"shell":     {shellext.Main, shellext.Manifest, nil},
 	"slack":     {slackext.Main, slackext.Manifest, nil},

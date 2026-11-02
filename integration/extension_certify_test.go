@@ -195,6 +195,7 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		{"linear", "", []string{"ingress.conformance"}},
 		{"jira", "", []string{"ingress.conformance"}},
 		{"bitbucket", "", []string{"ingress.conformance"}},
+		{"schedule", "", []string{"ingress.conformance"}},
 		{"codex", "", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace"}},
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},

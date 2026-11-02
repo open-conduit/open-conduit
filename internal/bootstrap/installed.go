@@ -103,13 +103,14 @@ func (x *installed) Types() []inproc.ConfigType {
 	}
 	for _, e := range p.Extensions {
 		out = append(out, inproc.ConfigType{Kind: protocol.ValidateExtension, Type: e.Type, Ingress: e.Ingress, Validate: x.validator(protocol.ValidateExtension, e.Type),
-			Settings: declaredSettings(e.Settings), Describe: declaredDescribe(e.Describe)})
+			Settings: declaredSettings(e.Settings), Describe: x.describe(protocol.ValidateExtension, e.Type, declaredDescribe(e.Describe))})
 	}
 	for _, r := range p.Routes {
 		if r.Config || r.Binding {
 			t := inproc.ConfigType{Kind: protocol.ValidateRoute, Type: r.Handler}
 			if r.Config {
 				t.Validate = x.validator(protocol.ValidateRoute, r.Handler)
+				t.Describe = x.describe(protocol.ValidateRoute, r.Handler, nil)
 			}
 			if r.Binding {
 				t.Binding = x.bindingCheck(r.Handler)
@@ -278,12 +279,16 @@ func (x *installed) Sources() []inproc.Source {
 	return out
 }
 
-// Webhook is the handler of a path under /<name>/ a configure result
-// declared, through webhook.handle; any other path has none.
+// Webhook is the handler of a path under /<name>/ that a configure result
+// declared, or beneath one, through webhook.handle; any other path has
+// none.
 func (x *installed) Webhook(path string) http.Handler {
 	full := x.m.Name + "/" + path
 	x.mu.Lock()
-	ok := x.hooks[full]
+	ok := false
+	for mount := range x.hooks {
+		ok = ok || full == mount || strings.HasPrefix(full, mount+"/")
+	}
 	x.mu.Unlock()
 	if !ok || x.r == nil {
 		return nil
@@ -542,6 +547,32 @@ func declaredSettings(decls []protocol.SettingDecl) func(json.RawMessage) []exte
 			}
 		}
 		return out
+	}
+}
+
+// describe says what a config object of an extension or route type sets
+// up: the lines the package gave when it validated that object
+// (protocol.ValidateResult.Describe), else the declared ones. It never
+// calls the package.
+func (x *installed) describe(kind, typ string, declared func(json.RawMessage) []inproc.Entry) func(json.RawMessage) []inproc.Entry {
+	return func(raw json.RawMessage) []inproc.Entry {
+		r := x.r
+		if r == nil && x.offline != nil && x.offline.started {
+			r = x.offline.r
+		}
+		if r != nil {
+			if lines, ok := r.Described(kind, typ, raw); ok && len(lines) > 0 {
+				out := make([]inproc.Entry, len(lines))
+				for i, l := range lines {
+					out[i] = inproc.Entry{Name: l.Name, Detail: l.Detail}
+				}
+				return out
+			}
+		}
+		if declared == nil {
+			return nil
+		}
+		return declared(raw)
 	}
 }
 
