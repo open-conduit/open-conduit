@@ -64,6 +64,10 @@ var parity = map[string][]string{
 	"Host.AcceptDerivedInTx": {"method:event.accept"},
 	"Host.EventScope":        {"method:state.event", "method:state.events"},
 	"Host.Deliver":           {"method:ingress.deliver"},
+	"Host.Artifacts":         {"method:artifact.create", "method:artifact.write", "method:artifact.commit"},
+	"Host.ToolbeltDir":       {"process:each run's ExecutionContext.ToolbeltDir carries it"},
+	"Host.PlaybookDir":       {"process:each run's ExecutionContext.PlaybookDir carries it"},
+	"Host.OpenLog":           {"process:its own files under the state directory initialize gives it"},
 	"Host.Timers":            {"method:timer.arm", "method:timer.cancel"},
 	"Host.CancelWork":        {"method:work.cancel"},
 	"Host.WaitProgress":      {"method:wait.progress"},
@@ -93,6 +97,7 @@ var parityGaps = map[string]int{
 	"Host.WaitTarget": 357,
 	"Host.Authorize":  357,
 	"SegmentEnder":    357,
+	"Host.Render":     357,
 }
 
 // inprocSurfaces lists the contract's interfaces, inproc.Host's fields and

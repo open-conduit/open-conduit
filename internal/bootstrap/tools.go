@@ -5,10 +5,8 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
-	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/executors/claudecode"
 	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
@@ -73,18 +71,4 @@ func (d *daemon) preparePlaybooks() error {
 		}
 	}
 	return nil
-}
-
-// renderEvents renders the extensions' own families, first-party and installed (event.render), and
-// falls back to the executor's generic renderer for everything else.
-func (d *daemon) renderEvents(events []domain.Event) string {
-	parts := make([]string, 0, len(events))
-	for _, e := range events {
-		if text, ok := d.inprocRender(e); ok {
-			parts = append(parts, text)
-			continue
-		}
-		parts = append(parts, claudecode.RenderEvents([]domain.Event{e}))
-	}
-	return strings.Join(parts, "\n\n")
 }

@@ -18,6 +18,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io"
 	"log/slog"
 	"net/http"
 	"time"
@@ -100,6 +101,21 @@ type Host struct {
 	// daemon makes no external writes and starts no timed work.
 	StateDir string
 	DryRun   bool
+	// Artifacts is the host's artifact store, for an executor's logs and
+	// output files.
+	Artifacts storage.Artifacts
+	// ToolbeltDir holds the `os` binary runs reach the toolbelt through, and
+	// PlaybookDir the playbook plugin the host writes; each run's
+	// ExecutionContext carries them too.
+	ToolbeltDir, PlaybookDir string
+	// Render renders an input Event for an agent's prompt through the
+	// extension that owns its family (Renderer); false leaves it to the
+	// caller's own generic rendering.
+	Render func(ctx context.Context, e domain.Event) (string, bool)
+	// OpenLog opens the extension's own JSON-lines log, <state>/logs/
+	// <name>.jsonl, rotated by size like the host's logs. Each Write must be
+	// one whole line.
+	OpenLog func(name string) (io.WriteCloser, error)
 	// AcceptInTx accepts a root Event of one of the extension's own
 	// families (Event types named <Name>.*) into scope, inside the
 	// extension's own transaction, so its own records commit with it.

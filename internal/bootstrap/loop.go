@@ -64,7 +64,6 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.reconcileResources(c)
 		d.reconcileEndpoints(ctx)
 		d.sweepResources(c)
-		d.maintainClaudeCode(ctx)
 		d.retentionPass(ctx, c, &lastSweep)
 		d.scheduleBackup(ctx)
 		d.passed()

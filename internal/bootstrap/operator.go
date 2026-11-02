@@ -14,7 +14,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/executors/claudecode"
-	"github.com/open-conduit/open-conduit/executors/shell"
 	"github.com/open-conduit/open-conduit/extension"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
@@ -102,7 +101,7 @@ func fileIncludes(configPath string) config.Includes {
 // checks: capability and config checks need only the registrations, and
 // executors' capabilities and config validators do not touch runtime state.
 func offlineExecutors() map[string]extension.Executor {
-	out := map[string]extension.Executor{"shell": &shell.Executor{}, ClaudeCodeExecutor: claudecode.Offline()}
+	out := map[string]extension.Executor{}
 	inprocExecutors(firstParty(), out, map[string]string{})
 	return out
 }
@@ -175,7 +174,7 @@ type SetupOptions struct {
 // nothing else is pre-allowed.
 func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	codex := o.Agent == CodexAgent
-	if o.Agent != "claude" && o.Agent != ClaudeCodeExecutor && !codex {
+	if o.Agent != "claude" && o.Agent != claudecode.Name && !codex {
 		return nil, fmt.Errorf("no setup agent %q: use --with claude or --with codex", o.Agent)
 	}
 	if o.Binary == "" {
@@ -400,7 +399,7 @@ func claudeVersionCheck(ctx context.Context, snapshot *config.Snapshot) runtime.
 				continue
 			}
 			for _, b := range scope.Bindings {
-				if b.Executor != ClaudeCodeExecutor {
+				if b.Executor != claudecode.Name {
 					continue
 				}
 				cfg, err := claudecode.ParseConfig(b.Config)

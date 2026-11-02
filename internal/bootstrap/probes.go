@@ -9,7 +9,6 @@ import (
 	"os/exec"
 	"strings"
 
-	"github.com/open-conduit/open-conduit/executors/claudecode"
 	"github.com/open-conduit/open-conduit/extension"
 )
 
@@ -30,11 +29,10 @@ func (d *daemon) setupProbes() map[string]extension.SetupProbe {
 }
 
 // probeOwners are the extensions and executors whose probes a setup
-// session may run, by the name that prefixes them: the Claude Code
-// executor's, and every first-party extension's that offers probes
-// (extension.SetupProbes).
+// session may run, by the name that prefixes them: every first-party
+// extension's and executor's that offers probes (extension.SetupProbes).
 func probeOwners() map[string]extension.SetupProbes {
-	out := map[string]extension.SetupProbes{ClaudeCodeExecutor: claudecode.Probes{}}
+	out := map[string]extension.SetupProbes{}
 	for _, x := range firstParty() {
 		if p, ok := x.(extension.SetupProbes); ok {
 			out[x.Name()] = p

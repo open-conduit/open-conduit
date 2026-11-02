@@ -286,15 +286,13 @@ var wiringFiles = map[string]bool{"inproc.go": true, "adapters.go": true}
 // and an entry nothing needs any more fails the check, so remove it with
 // the import.
 var compositionExceptions = map[string][]string{
-	"claudecode.go": {"executors/claudecode"},
-	"container.go":  {"extensions/docker", "extensions/ssh"},
-	"daemon.go":     {"executors/shell", "extensions/git"},
-	"operator.go":   {"executors/claudecode", "executors/shell", "extensions/github", "extensions/github/playbooks", "extensions/jira", "extensions/linear", "extensions/slack"},
-	"probes.go":     {"executors/claudecode"},
-	"resources.go":  {"extensions/git"},
-	"sandbox.go":    {"extensions/srt"},
-	"tools.go":      {"executors/claudecode", "extensions/github/playbooks"},
-	"webhooks.go":   {"extensions/tunnel"},
+	"container.go": {"extensions/docker", "extensions/ssh"},
+	"daemon.go":    {"extensions/git"},
+	"operator.go":  {"executors/claudecode", "extensions/github", "extensions/github/playbooks", "extensions/jira", "extensions/linear", "extensions/slack"},
+	"resources.go": {"extensions/git"},
+	"sandbox.go":   {"extensions/srt"},
+	"tools.go":     {"extensions/github/playbooks"},
+	"webhooks.go":  {"extensions/tunnel"},
 }
 
 // compositionViolations checks internal/bootstrap's production files import

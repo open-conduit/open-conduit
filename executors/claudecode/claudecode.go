@@ -135,22 +135,34 @@ func Offline() *Executor {
 
 // New validates options and creates the private state directory.
 func New(o Options) (*Executor, error) {
+	e := &Executor{}
+	if err := e.Open(o); err != nil {
+		return nil, err
+	}
+	return e, nil
+}
+
+// Open validates options, creates the private state directory and makes
+// the executor ready to run, in place: an extension registers the executor
+// before its host services exist and opens it at Start. Open runs once,
+// before any run.
+func (e *Executor) Open(o Options) error {
 	if !processSupported {
-		return nil, errors.New("claude code executor requires a Unix platform")
+		return errors.New("claude code executor requires a Unix platform")
 	}
 	if !filepath.IsAbs(o.StateDir) {
-		return nil, errors.New("claude code executor state directory must be absolute")
+		return errors.New("claude code executor state directory must be absolute")
 	}
 	if o.Store == nil {
-		return nil, errors.New("claude code executor needs coordination storage for continuity")
+		return errors.New("claude code executor needs coordination storage for continuity")
 	}
 	for _, sub := range []string{"runs", "work"} {
 		if err := os.MkdirAll(filepath.Join(o.StateDir, sub), 0o700); err != nil {
-			return nil, err
+			return err
 		}
 	}
 	if info, err := os.Stat(o.StateDir); err != nil || info.Mode().Perm()&0o077 != 0 {
-		return nil, errors.New("claude code executor state directory must be owner-only (0700)")
+		return errors.New("claude code executor state directory must be owner-only (0700)")
 	}
 	if o.Namespace == "" {
 		o.Namespace = "executor.claudecode"
@@ -185,7 +197,8 @@ func New(o Options) (*Executor, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	return &Executor{o: o, runs: map[domain.ID]*run{}}, nil
+	e.o, e.runs = o, map[domain.ID]*run{}
+	return nil
 }
 
 // Capabilities advertises interrupt, inject, resume, a workspace, the MCP

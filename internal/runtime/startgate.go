@@ -116,7 +116,7 @@ func (c *Control) SettleGateHold(ctx context.Context, gate string, workID domain
 			Gate   string `json:"gate"`
 			Reason string `json:"reason,omitempty"`
 		}{gate, reason})
-		event, e = c.controlEvent(tx, w, delivery, typ, domain.Payload{Schema: typ + ".v1", Data: data})
+		event, e = c.controlEvent(ctx, tx, w, delivery, typ, domain.Payload{Schema: typ + ".v1", Data: data})
 		if e != nil {
 			return e
 		}

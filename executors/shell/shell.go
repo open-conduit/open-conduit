@@ -98,17 +98,29 @@ type Executor struct {
 
 // New validates options and creates the private state directory.
 func New(o Options) (*Executor, error) {
-	if !processSupported {
-		return nil, errors.New("shell executor requires a Unix platform")
-	}
-	if !filepath.IsAbs(o.StateDir) {
-		return nil, errors.New("shell executor state directory must be absolute")
-	}
-	if err := os.MkdirAll(filepath.Join(o.StateDir, "runs"), 0o700); err != nil {
+	e := &Executor{}
+	if err := e.Open(o); err != nil {
 		return nil, err
 	}
+	return e, nil
+}
+
+// Open validates options, creates the private state directory and makes
+// the executor ready to run, in place: an extension registers the executor
+// before its host services exist and opens it at Start. Open runs once,
+// before any run.
+func (e *Executor) Open(o Options) error {
+	if !processSupported {
+		return errors.New("shell executor requires a Unix platform")
+	}
+	if !filepath.IsAbs(o.StateDir) {
+		return errors.New("shell executor state directory must be absolute")
+	}
+	if err := os.MkdirAll(filepath.Join(o.StateDir, "runs"), 0o700); err != nil {
+		return err
+	}
 	if info, err := os.Stat(o.StateDir); err != nil || info.Mode().Perm()&0o077 != 0 {
-		return nil, errors.New("shell executor state directory must be owner-only (0700)")
+		return errors.New("shell executor state directory must be owner-only (0700)")
 	}
 	if o.ToolbeltDir == "" {
 		if self, err := os.Executable(); err == nil {
@@ -130,7 +142,8 @@ func New(o Options) (*Executor, error) {
 	if o.Now == nil {
 		o.Now = time.Now
 	}
-	return &Executor{o: o, runs: map[domain.ID]*run{}}, nil
+	e.o, e.runs = o, map[domain.ID]*run{}
+	return nil
 }
 
 func (e *Executor) Capabilities() domain.Capabilities {
