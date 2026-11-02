@@ -1,4 +1,4 @@
-package integration_test
+package runtime_test
 
 import (
 	"context"
@@ -33,8 +33,8 @@ func newInjectAckFixture(t *testing.T, name string) *injectAckFixture {
 	o := routingOptions(routingHandlerFunc(routingDecision), "inject")
 	o.Capabilities = domain.Capabilities{Inject: true}
 	f, e := schedulerFixture(t, "reopen", o)
-	x := &injectAckFixture{t: t, f: f, e: e, s: f.Driver.(*schedulerDriver).scheduler, work: seedSchedulerWork(t, f, name), key: domain.CorrelationKey{Source: "fixture/account", ExternalID: name}}
-	e.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	x := &injectAckFixture{t: t, f: f, e: e, s: f.Driver.(*schedulerDriver).Scheduler, work: seedSchedulerWork(t, f, name), key: domain.CorrelationKey{Source: "fixture/account", ExternalID: name}}
+	e.OnRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
@@ -53,7 +53,7 @@ func (x *injectAckFixture) inject(id string) string {
 	x.t.Helper()
 	requireAccept(x.t, x.f, id, &x.key)
 	requireRoute(x.t, x.f.Driver, domain.ID(id))
-	intents, err := x.f.Driver.(*schedulerDriver).router.Intents(context.Background(), x.work)
+	intents, err := x.f.Driver.(*schedulerDriver).Router.Intents(context.Background(), x.work)
 	if err != nil {
 		x.t.Fatal(err)
 	}
@@ -68,7 +68,7 @@ func (x *injectAckFixture) inject(id string) string {
 
 func (x *injectAckFixture) pending() []domain.ID {
 	x.t.Helper()
-	in, err := x.f.Driver.(*schedulerDriver).router.PendingInputs(context.Background(), x.work)
+	in, err := x.f.Driver.(*schedulerDriver).Router.PendingInputs(context.Background(), x.work)
 	if err != nil {
 		x.t.Fatal(err)
 	}
@@ -109,7 +109,7 @@ func (x *injectAckFixture) workState() domain.WorkState {
 func TestInjectProofWhileDispatchInFlight(t *testing.T) {
 	x := newInjectAckFixture(t, "inflight")
 	intent := x.inject("echoed")
-	x.e.onInject = func(ctx context.Context, _ domain.ID, ev domain.Event) error {
+	x.e.OnInject = func(ctx context.Context, _ domain.ID, ev domain.Event) error {
 		// The finished result is recorded while Inject is still outside
 		// storage, before the dispatch acknowledgement.
 		return x.s.Complete(ctx, x.first.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, ConsumedInputs: []domain.ID{ev.ID}})
@@ -130,7 +130,7 @@ func TestInjectProofWhileDispatchInFlight(t *testing.T) {
 	if err := x.s.DispatchControl(context.Background(), intent); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, injects, _ := x.e.counts(); injects != 1 {
+	if _, _, injects, _ := x.e.Counts(); injects != 1 {
 		t.Fatalf("consumed intent dispatched again (%d)", injects)
 	}
 }
@@ -205,14 +205,14 @@ func TestInjectProofOnFailedResult(t *testing.T) {
 func TestInjectNotAcceptingSettlesWithoutRetry(t *testing.T) {
 	x := newInjectAckFixture(t, "refused")
 	intent := x.inject("refused")
-	x.e.onInject = func(context.Context, domain.ID, domain.Event) error { return extension.ErrNotAccepting }
+	x.e.OnInject = func(context.Context, domain.ID, domain.Event) error { return extension.ErrNotAccepting }
 	if err := x.s.DispatchControl(context.Background(), intent); err != nil {
 		t.Fatalf("a definitive refusal is not a dispatch failure: %v", err)
 	}
 	if err := x.s.DispatchControl(context.Background(), intent); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, injects, _ := x.e.counts(); injects != 1 {
+	if _, _, injects, _ := x.e.Counts(); injects != 1 {
 		t.Fatalf("not-accepting intent retried (%d)", injects)
 	}
 	if st := x.status(intent); st != "not_accepting" {
@@ -257,9 +257,9 @@ func TestInjectUndispatchedOrUnknownProofIgnored(t *testing.T) {
 	if st := x.status(intent); st != "stale" {
 		t.Fatalf("old intent %s", st)
 	}
-	x.e.mu.Lock()
-	targets := append([]domain.ID(nil), x.e.injects...)
-	x.e.mu.Unlock()
+	x.e.Mu.Lock()
+	targets := append([]domain.ID(nil), x.e.Injects...)
+	x.e.Mu.Unlock()
 	if len(targets) != 0 || next.Lease.ExecutionID == x.first.Lease.ExecutionID {
 		t.Fatalf("old intent retargeted: %v", targets)
 	}

@@ -56,7 +56,7 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 	f, executor := schedulerFixture(t, mode, o)
 	base := f.Driver.(*schedulerDriver)
 	h := &toolbeltHarness{f: f, executor: executor, echoes: new(int), deny: new(bool), connection: new(string), mu: &sync.Mutex{}}
-	belt, err := runtime.NewToolbelt(f.Store, f.Clock.Now, base.router, runtime.ToolbeltOptions{
+	belt, err := runtime.NewToolbelt(f.Store, f.Clock.Now, base.Router, runtime.ToolbeltOptions{
 		Grant: func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 			return runtime.ToolbeltGrant{Operations: allToolbeltOperations(), EventTypes: []string{"fixture.changed.v1"}, Connection: "fixture-connection"}, nil
 		},
@@ -100,7 +100,7 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 	}}); err != nil {
 		t.Fatal(err)
 	}
-	options := base.options
+	options := base.Options
 	options.Toolbelt, options.ToolbeltEndpoints = belt, fixtureEndpoint("unix:///fixture/toolbelt.sock")
 	options.AliasFilter = belt.DependencyFilter
 	options.AuthorizeAlias = func(context.Context, runtime.AliasAuthorization) error {
@@ -115,12 +115,12 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 	// per-execution endpoints.
 	shared := options
 	shared.ToolbeltEndpoints = nil
-	if _, err := runtime.NewScheduler(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).router, shared); !errors.Is(err, storage.ErrInvalid) {
+	if _, err := runtime.NewScheduler(f.Store, f.Clock.Now, f.Driver.(*schedulerDriver).Router, shared); !errors.Is(err, storage.ErrInvalid) {
 		t.Fatalf("scheduler accepted a toolbelt without per-execution endpoints: %v", err)
 	}
 	h.scheduler = newTestScheduler(t, f, options)
 	h.belt = belt
-	executor.onRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+	executor.OnRun = func(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 		if r.Context.ToolbeltEndpoint != "unix:///fixture/toolbelt.sock" || r.Context.ToolbeltToken == "" {
 			return nil, errors.New("missing toolbelt credentials")
 		}
@@ -130,13 +130,13 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
-		handle := &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}
-		executor.mu.Lock()
-		if executor.handles == nil {
-			executor.handles = map[domain.ID]extension.RunHandle{}
+		handle := &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}
+		executor.Mu.Lock()
+		if executor.Handles == nil {
+			executor.Handles = map[domain.ID]extension.RunHandle{}
 		}
-		executor.handles[r.Execution.ID] = handle
-		executor.mu.Unlock()
+		executor.Handles[r.Execution.ID] = handle
+		executor.Mu.Unlock()
 		return handle, nil
 	}
 	key := toolbeltKey
@@ -523,7 +523,7 @@ func TestProductionToolbeltGateSkipsItsOwnOperations(t *testing.T) {
 	h := newToolbeltHarness(t, "persistent")
 	ctx := context.Background()
 	var asked []string
-	belt, err := runtime.NewToolbelt(h.f.Store, h.f.Clock.Now, h.f.Driver.(*schedulerDriver).router, runtime.ToolbeltOptions{})
+	belt, err := runtime.NewToolbelt(h.f.Store, h.f.Clock.Now, h.f.Driver.(*schedulerDriver).Router, runtime.ToolbeltOptions{})
 	if err != nil {
 		t.Fatal(err)
 	}

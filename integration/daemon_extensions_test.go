@@ -272,7 +272,7 @@ func TestDaemonExtensionPackages(t *testing.T) {
 		return err == nil && !strings.Contains(string(out), root)
 	})
 	d.start("")
-	time.Sleep(2 * time.Second)
+	d.settle()
 	if !completed(3)() {
 		t.Fatal("work changed across the restart")
 	}

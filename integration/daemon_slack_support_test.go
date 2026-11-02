@@ -193,7 +193,7 @@ func TestDaemonSlackSupportConversation(t *testing.T) {
 	d.until("third segment running", 45*time.Second, func() bool { return exists(filepath.Join(d.root, "started-3")) })
 	human("It only happens on wifi")
 	d.until("third answer, parked", 45*time.Second, waiting(3, 3))
-	time.Sleep(3 * time.Second)
+	d.settle()
 	if !waiting(3, 3)() {
 		t.Fatalf("a consumed injection woke the wait or started another segment: %v", invocations())
 	}

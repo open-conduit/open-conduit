@@ -136,7 +136,7 @@ Turning off webhooks (`--no-tunnel`, no listener) affects only these explicitly 
   - webhook-off operation, and a route per binding.
 
   Every run is checked to have come through an accepted Event routed by a `schedule` route to the job's Work.
-- **Runtime recurrence contract** (`integration/recurrence_test.go`): substitution without accepting the template, skip ledger replay across restart, an unregistered kind and invalid answers.
+- **Runtime recurrence contract** (`internal/runtime/recurrence_test.go`): substitution without accepting the template, skip ledger replay across restart, an unregistered kind and invalid answers.
 - **Composed daemon** (`TestDaemonScheduledJobs`, part of `make drill`): an interval job at start and not again after a restart; a signed GitHub push selecting a job by event and branch, with a non-matching branch running nothing; a signed job webhook, a wrong token refused, and the deep doctor URL.
 
 ## Job runs

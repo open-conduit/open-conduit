@@ -38,6 +38,10 @@ func trackerKitUser(family string) bool {
 	return family == "extensions/linear" || family == "extensions/jira" || family == "extensions/bitbucket"
 }
 
+// runtimeFixtures is the test-only package that drives the production
+// runtime over SQLite (internal/runtime/runtimetest).
+const runtimeFixtures = "internal/runtime/runtimetest"
+
 func public(path string) bool {
 	return path == "domain" || path == "extension" || path == "storage" || path == "observability" || path == "protocol" || path == "extension/inproc"
 }
@@ -48,6 +52,10 @@ func public(path string) bool {
 func allowed(owner, dependency string, test bool) bool {
 	if owner == dependency {
 		return true
+	}
+	if under(dependency, runtimeFixtures) && !test && !under(owner, runtimeFixtures) {
+		// The runtime's SQLite test fixtures never reach production code.
+		return false
 	}
 	if test && !public(owner) && (dependency == "conformance" || public(dependency)) {
 		return true
@@ -93,8 +101,15 @@ func allowed(owner, dependency string, test bool) bool {
 		return public(dependency) || under(dependency, "protocol") || under(dependency, "packages/"+name) || under(dependency, "extensions/"+name) || under(dependency, "executors/"+name)
 	case under(owner, "conformance"):
 		return public(dependency) || under(dependency, "conformance")
+	case under(owner, runtimeFixtures):
+		// The runtime's test fixtures (#355) drive the production runtime
+		// over real SQLite and the public conformance clock and suites;
+		// never the reference doubles, bootstrap or an extension.
+		return public(dependency) || under(dependency, "internal/runtime") || under(dependency, "internal/storage/sqlite") || dependency == "conformance"
 	case under(owner, "internal/runtime"):
-		return public(dependency) || under(dependency, "internal/runtime")
+		// The runtime's own tests may run it over real SQLite, through
+		// runtimeFixtures; production runtime code never may.
+		return public(dependency) || under(dependency, "internal/runtime") || test && under(dependency, "internal/storage/sqlite")
 	case under(owner, "internal/storage/sqlite"):
 		return dependency == "domain" || dependency == "storage" || under(dependency, "internal/storage/sqlite")
 	case under(owner, "internal/artifacts"):

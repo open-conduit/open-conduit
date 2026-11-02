@@ -105,7 +105,7 @@ func TestDaemonGitHubReconcileToProjection(t *testing.T) {
 	// Restart: nothing is claimed or posted again.
 	d.kill()
 	d.start("")
-	time.Sleep(2 * time.Second)
+	d.settle()
 	if s := works(); len(s) != 1 || len(fake.Comments(n)) != 2 {
 		t.Fatalf("after restart: works %v comments %d", s, len(fake.Comments(n)))
 	}

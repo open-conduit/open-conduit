@@ -161,12 +161,14 @@ func TestDaemonGitWorkspaces(t *testing.T) {
 	if strings.TrimSpace(readFile(t, filepath.Join(checkout, "a.txt"))) != "v1" {
 		t.Fatal("a fresh run moved the main checkout")
 	}
+	fresh := d.executions(work("fresh").ID)
 	d.kill()
 	if syscall.Kill(pid, 0) != nil {
 		t.Fatal("the fresh run did not survive the daemon")
 	}
 	d.start("")
-	time.Sleep(drillLease) // the dead daemon's lease must expire before adoption
+	// The new daemon adopts the run once the dead daemon's lease expires.
+	d.adopted(fresh[len(fresh)-1].ID, 30*time.Second)
 	if !exists(ran) {
 		t.Fatal("the running fresh workspace was removed across the restart")
 	}

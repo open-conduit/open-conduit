@@ -72,7 +72,7 @@ func (x *jobExecutor) Run(_ context.Context, r extension.RunRequest) (extension.
 	if x.hint != nil && kind == domain.OutcomeFailed {
 		res.RetryHint = &extension.RetryHint{ResetAt: x.hint}
 	}
-	return &schedulerHandle{result: res}, nil
+	return &schedulerHandle{Result: res}, nil
 }
 func (x *jobExecutor) Recover(context.Context, extension.RunRequest, domain.Payload) (extension.RunHandle, error) {
 	return nil, extension.ErrNotAdoptable

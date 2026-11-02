@@ -177,7 +177,7 @@ func (d *drill) start(fault string) {
 		bin = daemonBinary(d.t)
 	}
 	cmd := exec.Command(bin, append([]string{"--data-dir", d.state, "serve", "--config", d.config, "--poll-interval", "50ms", "--lease-duration", drillLease.String()}, d.extra...)...)
-	cmd.Env = append(os.Environ(), "OPEN_CONDUIT_FAULT="+fault)
+	cmd.Env = d.env(fault)
 	cmd.Stdout, cmd.Stderr = d.log, d.log
 	if err := cmd.Start(); err != nil {
 		d.t.Fatal(err)
@@ -233,13 +233,7 @@ func (d *drill) kill() {
 
 func (d *drill) until(what string, timeout time.Duration, fn func() bool) {
 	d.t.Helper()
-	deadline := time.Now().Add(timeout)
-	for !fn() {
-		if time.Now().After(deadline) {
-			d.t.Fatalf("timed out waiting for %s", what)
-		}
-		time.Sleep(25 * time.Millisecond)
-	}
+	waitWithin(d.t, what, timeout, fn)
 }
 
 func (d *drill) submit(typ string) (client.Event, error) {
@@ -405,7 +399,7 @@ func (d *drill) verify(root client.Event, want string, lossy bool) string {
 	if lossy {
 		// The kill landed right after the final commit, so its records died
 		// with the process; give any survivors time to flush.
-		time.Sleep(500 * time.Millisecond)
+		d.settle()
 	} else {
 		d.until("final lifecycle records exported", 10*time.Second, func() bool {
 			return len(d.recordsNamed("execution.completed", last.ID)) == 1

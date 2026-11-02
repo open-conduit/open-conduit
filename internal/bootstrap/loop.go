@@ -51,7 +51,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		if err = c.scheduler.SettleBudgets(ctx); err != nil && ctx.Err() == nil {
 			d.report("budgets", "", errorCode(err))
 		}
-		d.startReady(ctx, c)
+		d.startReady(ctx)
 		d.dispatchControls(ctx, c)
 		if err = c.scheduler.ReconcileSubscriptions(ctx, passLimit); err != nil && ctx.Err() == nil {
 			d.report("subscriptions", "", errorCode(err))
@@ -79,6 +79,7 @@ func (d *daemon) loop(ctx context.Context) error {
 		d.maintainClaudeCode(ctx)
 		d.retentionPass(ctx, c, &lastSweep)
 		d.scheduleBackup(ctx)
+		d.passed()
 		select {
 		case <-ctx.Done():
 			return nil
@@ -149,7 +150,7 @@ func (d *daemon) routePending(ctx context.Context, c *components) {
 	}
 }
 
-func (d *daemon) startReady(ctx context.Context, c *components) {
+func (d *daemon) startReady(ctx context.Context) {
 	var ready, idle []domain.ID
 	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
 		works, err := tx.ListWorks()
@@ -190,7 +191,7 @@ func (d *daemon) startReady(ctx context.Context, c *components) {
 		}
 		// Load the generation immediately before each claim, so an attempt
 		// claimed after a reload returned pins the new generation.
-		c = d.current.Load()
+		c := d.current.Load()
 		a, err := c.scheduler.Start(ctx, id)
 		if err != nil {
 			code := errorCode(err)

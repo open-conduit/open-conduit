@@ -162,7 +162,7 @@ func TestDaemonScheduledJobs(t *testing.T) {
 		r, err := d.c.Doctor(ctx, false)
 		return err == nil && strings.Contains(strings.Join(check(r, "schedule").Items, "\n"), "job tick: next ")
 	})
-	time.Sleep(time.Second)
+	d.settle()
 	if got := jobs(); len(got) != 3 || count(sc.TypeSlot) != 1 || count(sc.TypeEvent) != 1 {
 		t.Fatalf("runs after restart: %v", got)
 	}

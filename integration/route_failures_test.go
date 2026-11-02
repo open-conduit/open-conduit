@@ -201,9 +201,7 @@ func TestRouteHandlerPanicIsRecovered(t *testing.T) {
 	ctx := context.Background()
 	f := routingFixture(t, "persistent", routingOptions(routingHandlerFunc(routingDecision), "queue"))
 	h := poisonHandler(func(context.Context) (extension.RouteDecision, error) {
-		var m map[string]int
-		m["x"] = 1
-		return extension.RouteDecision{}, nil
+		panic("route handler panic")
 	})
 	func() {
 		defer func() {
@@ -220,7 +218,7 @@ func TestRouteHandlerPanicIsRecovered(t *testing.T) {
 		t.Fatalf("%+v", re)
 	}
 	d, err := r.Decision(ctx, "poison")
-	if err != nil || d.Policy != runtime.DispositionFailed || !strings.Contains(d.Error, "assignment to entry in nil map") || !strings.Contains(d.Error, "goroutine") {
+	if err != nil || d.Policy != runtime.DispositionFailed || !strings.Contains(d.Error, "route handler panic") || !strings.Contains(d.Error, "goroutine") {
 		t.Fatalf("decision lacks the panic and its stack: %+v %v", d, err)
 	}
 	if err := r.Route(ctx, "later"); err != nil {

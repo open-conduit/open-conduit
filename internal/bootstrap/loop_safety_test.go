@@ -69,14 +69,15 @@ func TestContainerReconcileRunsOffTheLoop(t *testing.T) {
 
 // TestGoSafeRecoversAPanic: a panic on a background goroutine is logged
 // with its stack and reported, and the daemon carries on. The control: fn
-// really panicked (it never got past the nil map).
+// really panicked (it never got past the panic).
 func TestGoSafeRecoversAPanic(t *testing.T) {
 	var logs bytes.Buffer
 	d := &daemon{log: slog.New(slog.NewTextHandler(&logs, nil)), now: func() time.Time { return time.Unix(0, 0) }, reported: map[string]string{}, reportedAt: map[string]time.Time{}}
 	reached := false
 	d.goSafe("github_projection", func() {
-		var m map[string]int
-		m["x"] = 1
+		if !reached {
+			panic("projection failed")
+		}
 		reached = true
 	})
 	d.wg.Wait()
@@ -86,7 +87,7 @@ func TestGoSafeRecoversAPanic(t *testing.T) {
 	if got := d.reportedCode("github_projection", ""); got != "panic" {
 		t.Fatalf("reported %q", got)
 	}
-	if out := logs.String(); !strings.Contains(out, "recovered from a panic") || !strings.Contains(out, "assignment to entry in nil map") || !strings.Contains(out, "goroutine") {
+	if out := logs.String(); !strings.Contains(out, "recovered from a panic") || !strings.Contains(out, "projection failed") || !strings.Contains(out, "goroutine ") || !strings.Contains(out, "loop_safety_test.go") {
 		t.Fatalf("log lacks the panic and its stack:\n%s", out)
 	}
 }
