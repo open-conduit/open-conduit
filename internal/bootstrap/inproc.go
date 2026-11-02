@@ -385,14 +385,6 @@ func workKinds(xs []inproc.Extension) map[string]runtime.WorkKindPolicy {
 func (d *daemon) timedKinds() map[string]bool {
 	out := map[string]bool{}
 	for _, x := range d.inproc {
-		if p, ok := x.(*installed); ok {
-			for _, k := range p.m.Provides.WorkKinds {
-				if k.Timed {
-					out[k.Kind] = true
-				}
-			}
-			continue
-		}
 		if k, ok := x.(inproc.WorkKinder); ok {
 			for _, w := range k.WorkKinds() {
 				if w.Timed {

@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"net/http"
+	"slices"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -23,10 +26,10 @@ import (
 // installed extensions through one list. Every surface reads the manifest
 // and goes through the existing Remote methods.
 //
-// Executors, resource providers, work kinds, recurrences, ingress sources
-// and webhook paths stay on the package's own path in extensions.go: the
-// contract has the last four now (inproc.WorkKinder, Recurring, Ingester,
-// Webhooker), and the adapter moves onto them with the rest of #357.
+// Its executors, Work kinds, recurrences, ingress sources and webhook
+// paths go through the same surfaces as a first-party extension's
+// (inproc.Executing, WorkKinder, Recurring, Ingester, Webhooker); only its
+// resource providers stay on the package's own path in extensions.go.
 //
 // Offline (config validation) r is nil: offline starts the package to
 // validate its declared types when a config object of one needs checking;
@@ -40,6 +43,12 @@ type installed struct {
 	// offline starts the package to validate config when there is no
 	// daemon (offlineExternal).
 	offline *offlinePackage
+
+	// mu guards what the package's configure results declared: its ingress
+	// sources (by name, the first declaration kept) and webhook paths.
+	mu      sync.Mutex
+	sources []protocol.SourceDecl
+	hooks   map[string]bool
 }
 
 var (
@@ -58,6 +67,11 @@ var (
 	_ inproc.Sink       = (*installed)(nil)
 	_ inproc.Paged      = (*installed)(nil)
 	_ inproc.Playbooker = (*installed)(nil)
+	_ inproc.Executing  = (*installed)(nil)
+	_ inproc.WorkKinder = (*installed)(nil)
+	_ inproc.Recurring  = (*installed)(nil)
+	_ inproc.Ingester   = (*installed)(nil)
+	_ inproc.Webhooker  = (*installed)(nil)
 
 	_ extension.ConfigCandidate = (*installed)(nil)
 )
@@ -226,6 +240,97 @@ func (x *installed) Configure(ctx context.Context, _ protocol.ConfigureParams) {
 		return
 	}
 	x.d.clear("extension_configure", domain.ID(x.m.Name))
+}
+
+// configured records the ingress sources and webhook paths a configure
+// result declares (extproc has checked they are the package's own).
+func (x *installed) configured(res protocol.ConfigureResult) {
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	for _, s := range res.Sources {
+		if !slices.ContainsFunc(x.sources, func(o protocol.SourceDecl) bool { return o.Name == s.Name }) {
+			x.sources = append(x.sources, s)
+		}
+	}
+	if x.hooks == nil {
+		x.hooks = map[string]bool{}
+	}
+	for _, path := range res.WebhookPaths {
+		x.hooks[strings.TrimPrefix(path, "/")] = true
+	}
+}
+
+// Sources are the ingress sources the package's configure results
+// declared, each pushing through ingress.push. Without an interval, the
+// host's reconcile setting applies.
+func (x *installed) Sources() []inproc.Source {
+	if x.r == nil {
+		return nil
+	}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	out := make([]inproc.Source, 0, len(x.sources))
+	for _, s := range x.sources {
+		out = append(out, inproc.Source{Name: s.Name, Source: s.Source.Extension(), Ingress: x.r.Ingress(s), Interval: time.Duration(s.IntervalSeconds) * time.Second})
+	}
+	return out
+}
+
+// Webhook is the handler of a path under /<name>/ a configure result
+// declared, through webhook.handle; any other path has none.
+func (x *installed) Webhook(path string) http.Handler {
+	full := x.m.Name + "/" + path
+	x.mu.Lock()
+	ok := x.hooks[full]
+	x.mu.Unlock()
+	if !ok || x.r == nil {
+		return nil
+	}
+	return x.r.Webhook("/"+full, 0)
+}
+
+// Executors are the package's declared executors, each with the capacity
+// pool its manifest names, calling the package's executor methods.
+func (x *installed) Executors() map[string]inproc.Executor {
+	out := map[string]inproc.Executor{}
+	if x.r == nil {
+		return out
+	}
+	for _, e := range x.m.Provides.Executors {
+		if adapter, ok := x.r.Executor(e.Name); ok {
+			out[e.Name] = inproc.Executor{Executor: adapter, Pool: e.Pool}
+		}
+	}
+	return out
+}
+
+// WorkKinds are the package's declared Work kinds; a trigger kind's choice
+// goes through work_kind.trigger.
+func (x *installed) WorkKinds() []inproc.WorkKind {
+	var out []inproc.WorkKind
+	for _, k := range x.m.Provides.WorkKinds {
+		w := inproc.WorkKind{Kind: k.Kind, Standing: k.Standing, Timed: k.Timed}
+		if x.r != nil {
+			if p, ok := x.r.WorkKind(k.Kind); ok {
+				w.Trigger = p.Trigger
+			}
+		}
+		out = append(out, w)
+	}
+	return out
+}
+
+// Recurrences are the package's declared timer recurrence kinds, each
+// through recurrence.next.
+func (x *installed) Recurrences() map[string]inproc.RecurrenceFunc {
+	out := map[string]inproc.RecurrenceFunc{}
+	if x.r == nil {
+		return out
+	}
+	for _, kind := range x.m.Provides.Recurrences {
+		out[kind] = inproc.RecurrenceFunc(x.r.Recurrence(kind))
+	}
+	return out
 }
 
 // Stop shuts the package down (shutdown, stdin closed, then signals to its

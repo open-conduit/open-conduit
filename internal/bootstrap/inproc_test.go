@@ -81,6 +81,40 @@ func TestInstalledCompose(t *testing.T) {
 	}
 }
 
+// An installed package's Work kinds, recurrences, ingress sources, webhook
+// paths and executors go through the same contract surfaces as a
+// first-party extension's. Offline (no running package) it declares its
+// Work kinds, so a dry run still knows its timed ones, and serves nothing;
+// a configure result's sources are kept by name, its webhook paths by path.
+func TestInstalledSurfaces(t *testing.T) {
+	m := protocol.Manifest{Name: "acme", Provides: protocol.Provides{
+		WorkKinds:   []protocol.WorkKindDecl{{Kind: "acme.job", Standing: true, Timed: true}, {Kind: "acme.chat"}},
+		Recurrences: []string{"acme.every"},
+		Executors:   []protocol.ExecutorDecl{{Name: "acme-run", Pool: inproc.PoolJobs}},
+	}}
+	x := &installed{m: m}
+	kinds := x.WorkKinds()
+	if len(kinds) != 2 || kinds[0].Kind != "acme.job" || !kinds[0].Standing || !kinds[0].Timed || kinds[0].Trigger != nil || kinds[1].Kind != "acme.chat" || kinds[1].Timed {
+		t.Fatalf("work kinds %+v", kinds)
+	}
+	d := &daemon{inproc: []inproc.Extension{x}}
+	if timed := d.timedKinds(); !timed["acme.job"] || timed["acme.chat"] {
+		t.Fatalf("timed kinds %v", timed)
+	}
+	if len(x.Recurrences()) != 0 || len(x.Executors()) != 0 || len(x.Sources()) != 0 {
+		t.Fatalf("an offline package serves recurrences %v executors %v sources %v", x.Recurrences(), x.Executors(), x.Sources())
+	}
+	src := protocol.SourceDecl{Name: "acme/one"}
+	x.configured(protocol.ConfigureResult{Sources: []protocol.SourceDecl{src}, WebhookPaths: []string{"/acme/hook"}})
+	x.configured(protocol.ConfigureResult{Sources: []protocol.SourceDecl{src, {Name: "acme/two"}}})
+	if len(x.sources) != 2 || x.sources[0].Name != "acme/one" || x.sources[1].Name != "acme/two" || !x.hooks["acme/hook"] {
+		t.Fatalf("configured sources %+v hooks %v", x.sources, x.hooks)
+	}
+	if x.Webhook("other") != nil || x.Webhook("hook") != nil {
+		t.Fatal("an offline package served a webhook")
+	}
+}
+
 // The turn plugin carries the work-issue playbook and the in-process
 // extensions' own, filled in. The setup playbook is the setup package's
 // (#243): it joins the plugin as every package's does, and nothing compiled

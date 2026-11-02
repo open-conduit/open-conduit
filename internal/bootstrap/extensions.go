@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"path/filepath"
 	"sort"
@@ -52,11 +51,10 @@ type externalState struct {
 	packages []*installed
 	byName   map[string]*installed
 	failed   []extproc.Diagnostic
-	sources  map[string]bool       // registered ingress names
-	webhooks map[string]*installed // webhook path (no leading slash) → package
-	tasks    map[string]time.Time  // last start by package/task
-	running  map[string]bool       // task in flight
-	public   string                // public URL last sent in configure
+	sources  map[string]bool      // registered ingress names
+	tasks    map[string]time.Time // last start by package/task
+	running  map[string]bool      // task in flight
+	public   string               // public URL last sent in configure
 }
 
 type generationSnapshot struct {
@@ -373,7 +371,10 @@ func (p *offlinePackage) close() {
 func (d *daemon) openExtensions(ctx context.Context) {
 	x := &d.external
 	x.root = extensionsRoot(d.o.ConfigPath)
-	x.byName, x.sources, x.webhooks, x.tasks, x.running = map[string]*installed{}, map[string]bool{}, map[string]*installed{}, map[string]time.Time{}, map[string]bool{}
+	x.byName, x.tasks, x.running = map[string]*installed{}, map[string]time.Time{}, map[string]bool{}
+	if x.sources == nil {
+		x.sources = map[string]bool{}
+	}
 	found, errs := discoverPackages(d.o.ConfigPath, "")
 	for _, err := range errs {
 		name, _, _ := strings.Cut(err.Error(), ":")
@@ -407,13 +408,9 @@ func (d *daemon) openExtensions(ctx context.Context) {
 		// Nothing reads the list concurrently yet: the loop, servers and
 		// configuration start after this.
 		d.inproc = append(d.inproc, pkg)
-		for _, e := range f.Manifest.Provides.Executors {
-			if adapter, ok := r.Executor(e.Name); ok && knownPool(e.Pool) {
-				d.executors[e.Name] = adapter
-				if e.Pool != "" {
-					d.pools[e.Name] = e.Pool
-				}
-			}
+		for _, refused := range inprocExecutors([]inproc.Extension{pkg}, d.executors, d.pools) {
+			d.log.Warn("executor not registered: its capacity pool is not one a setting bounds", "executor", refused)
+			d.report("executor_pool", domain.ID(refused), "unknown_pool")
 		}
 		for _, res := range f.Manifest.Provides.Resources {
 			if p, ok := r.Provider(res.Type); ok {
@@ -701,47 +698,18 @@ func connectionEntry(c config.Connection) protocol.ConnectionEntry {
 	return protocol.ConnectionEntry{ID: c.ID, Type: c.Type, Config: c.Config, Secrets: names}
 }
 
-// extensionConfigured registers the ingress sources and webhook paths a
-// configure result declares. Registrations are immutable for one runtime
-// instance, as for first-party ingress: a source registered earlier keeps
-// its registration until restart.
+// extensionConfigured records what a package's configure result declares
+// and registers its new ingress sources at once (a package that restarts
+// configures again); configureInproc registers them after each apply too.
 func (d *daemon) extensionConfigured(name string, res protocol.ConfigureResult) {
-	x := &d.external
-	x.mu.Lock()
-	r := x.byName[name]
-	for _, path := range res.WebhookPaths {
-		if r != nil {
-			x.webhooks[strings.TrimPrefix(path, "/")] = r
-		}
-	}
-	x.mu.Unlock()
-	if r == nil || d.ingress == nil {
+	d.external.mu.Lock()
+	pkg := d.external.byName[name]
+	d.external.mu.Unlock()
+	if pkg == nil {
 		return
 	}
-	for _, decl := range res.Sources {
-		x.mu.Lock()
-		done := x.sources[decl.Name]
-		x.sources[decl.Name] = true
-		x.mu.Unlock()
-		if done {
-			continue
-		}
-		interval := time.Duration(decl.IntervalSeconds) * time.Second
-		if interval < time.Second {
-			interval = time.Minute
-			if s, _ := d.extensionSnapshot(); s != nil && s.Settings.ReconcileSeconds > 0 {
-				interval = time.Duration(s.Settings.ReconcileSeconds) * time.Second
-			}
-		}
-		if err := d.ingress.Register(d.lifetime(), decl.Name, decl.Source.Extension(), r.r.Ingress(decl), interval); err != nil {
-			x.mu.Lock()
-			delete(x.sources, decl.Name)
-			x.mu.Unlock()
-			d.report("extension_ingress", domain.ID(decl.Name), errorCode(err))
-			continue
-		}
-		d.log.Info("extension ingress registered", "extension", name, "name", decl.Name, "namespace", decl.Source.Namespace)
-	}
+	pkg.configured(res)
+	d.registerInprocSources(pkg, pkg.Sources())
 }
 
 func (d *daemon) lifetime() context.Context {
@@ -774,38 +742,6 @@ func (d *daemon) reconfigureOnURLChange(ctx context.Context) {
 	if changed {
 		d.configureExtensions(ctx)
 	}
-}
-
-// extensionWorkKinds and extensionRecurrences are the packages' runtime
-// callbacks for one generation's scheduler and timers.
-func (d *daemon) extensionWorkKinds(into map[string]runtime.WorkKindPolicy) {
-	for _, x := range d.extensionPackages() {
-		for _, k := range x.m.Provides.WorkKinds {
-			if p, ok := x.r.WorkKind(k.Kind); ok {
-				into[k.Kind] = p
-			}
-		}
-	}
-}
-
-func (d *daemon) extensionRecurrences(into map[string]runtime.RecurrenceFunc) {
-	for _, x := range d.extensionPackages() {
-		for _, kind := range x.m.Provides.Recurrences {
-			into[kind] = x.r.Recurrence(kind)
-		}
-	}
-}
-
-// extensionWebhook returns the handler of a webhook path a package
-// registered at configure.
-func (d *daemon) extensionWebhook(name string) http.Handler {
-	d.external.mu.Lock()
-	r := d.external.webhooks[name]
-	d.external.mu.Unlock()
-	if r == nil {
-		return nil
-	}
-	return r.r.Webhook("/"+name, 0)
 }
 
 // runTask starts an extension task, keyed extension/task, on its own
