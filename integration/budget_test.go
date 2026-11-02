@@ -7,6 +7,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -168,6 +169,13 @@ func TestUsageUnitsContract(t *testing.T) {
 	if err := extension.ValidateResult(ok); err != nil {
 		t.Fatal(err)
 	}
+	turnsCost := 5.0
+	if err := extension.ValidateResult(extension.Result{Outcome: ok.Outcome, Usage: extension.Usage{Cost: &turnsCost, Currency: "TURNS"}}); !errors.Is(err, extension.ErrInvalid) {
+		t.Fatal("a currency naming a reserved unit was accepted")
+	}
+	if got := (extension.Usage{Cost: &turnsCost, Currency: "Turns"}).Amounts(); len(got) != 0 {
+		t.Fatalf("a reserved currency was charged as a unit: %v", got)
+	}
 	for _, units := range []map[string]float64{{"turns": 1}, {"attempts": 1}, {"Bad Unit": 1}, {"usd": -1}} {
 		bad := ok
 		bad.Usage.Units = units
@@ -179,5 +187,139 @@ func TestUsageUnitsContract(t *testing.T) {
 	got := extension.Usage{Cost: &cost, Currency: "USD", InputTokens: &in, OutputTokens: &out, Units: map[string]float64{"minutes": 1}}.Amounts()
 	if got["usd"] != 0.25 || got["tokens"] != 15 || got["minutes"] != 1 {
 		t.Fatalf("amounts %v", got)
+	}
+}
+
+// budgetFixture seeds Work in two scopes whose executor reports cost each
+// turn, and a scheduler over the given budgets.
+func budgetFixture(t *testing.T, cost float64, budgets []runtime.Budget) (f conformanceFixture, s *runtime.Scheduler, control *runtime.Control, a, b domain.ID) {
+	t.Helper()
+	fx, e := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	a = seedSchedulerWork(t, fx, "scope-a")
+	routingRead(t, fx, func(tx storage.Tx) error {
+		sc, err := tx.Scope("routing-scope")
+		if err != nil {
+			return err
+		}
+		sc.ID, sc.Name = "other-scope", "other"
+		return tx.PutScope(sc, 0)
+	})
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: "scope-b"}
+	event := routingEvent(fx, "scope-b-trigger", &key)
+	if _, _, err := fx.Driver.(*schedulerDriver).ingress.Accept(context.Background(), "other-scope", event); err != nil {
+		t.Fatal(err)
+	}
+	requireRoute(t, fx.Driver, event.ID)
+	b = "work/scope-b"
+	e.onRun = func(_ context.Context, r extension.RunRequest) (extension.RunHandle, error) {
+		if err := r.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+			return nil, err
+		}
+		c := cost
+		return &schedulerHandle{result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Usage: extension.Usage{Cost: &c, Currency: "USD"}}}, nil
+	}
+	o := schedulerDefaultOptions(fx, e)
+	o.Budgets = budgets
+	s = newTestScheduler(t, fx, o)
+	var err error
+	if control, err = runtime.NewControl(fx.Store, fx.Clock.Now, fx.Driver.(*schedulerDriver).router, s, runtime.CausalLimits{}); err != nil {
+		t.Fatal(err)
+	}
+	return fx, s, control, a, b
+}
+
+type conformanceFixture = conformance.RuntimeFixture
+
+// requeue routes another input to Work so it is ready for another turn.
+func requeue(t *testing.T, f conformanceFixture, external, id string) {
+	t.Helper()
+	key := domain.CorrelationKey{Source: "fixture/account", ExternalID: external}
+	event := routingEvent(f, id, &key)
+	scope := domain.ID("routing-scope")
+	if external == "scope-b" {
+		scope = "other-scope"
+	}
+	if _, _, err := f.Driver.(*schedulerDriver).ingress.Accept(context.Background(), scope, event); err != nil {
+		t.Fatal(err)
+	}
+	requireRoute(t, f.Driver, event.ID)
+}
+
+// TestProductionSchedulerBudgetAcrossScopes: one per: all budget holds Work
+// in a second scope once Work in the first used it up, with each scope's
+// own exceeded notice, rather than failing the claim.
+func TestProductionSchedulerBudgetAcrossScopes(t *testing.T) {
+	f, s, _, a, b := budgetFixture(t, 2, []runtime.Budget{{Unit: "usd", Per: runtime.BudgetPerAll, Period: "week", Max: 1, WarnAt: 0.5}})
+	ctx := context.Background()
+	x, err := s.Start(ctx, a)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = s.Observe(ctx, x); err != nil {
+		t.Fatal(err)
+	}
+	if err = s.SettleBudgets(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = s.Start(ctx, b); !errors.Is(err, runtime.ErrBudgetHeld) {
+		t.Fatalf("Work in a second scope over a per: all budget: %v", err)
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		h, held, err := runtime.HoldInTx(tx, b)
+		if !held || h.Kind != runtime.HoldKindBudget {
+			t.Fatalf("second scope's Work not held: %v %+v", held, h)
+		}
+		return err
+	})
+	scopes := map[domain.ID]bool{}
+	for _, n := range budgetEvents(t, func(fn func(storage.Tx) error) { routingRead(t, f, fn) })["core.budget.exceeded"] {
+		scopes[n.ScopeID] = true
+	}
+	if !scopes["routing-scope"] || !scopes["other-scope"] || len(scopes) != 2 {
+		t.Fatalf("exceeded notices by scope: %v", scopes)
+	}
+}
+
+// TestProductionSchedulerBudgetPassIsSpentOnce: a release whose limit was
+// then raised spends its pass on the next turn, so the Work is held when it
+// goes over the new limit.
+func TestProductionSchedulerBudgetPassIsSpentOnce(t *testing.T) {
+	f, s, control, a, _ := budgetFixture(t, 0.6, []runtime.Budget{{Unit: "usd", Per: runtime.BudgetPerWork, Max: 0.5}})
+	ctx := context.Background()
+	turn := func(next string) error {
+		t.Helper()
+		x, err := s.Start(ctx, a)
+		if err != nil {
+			return err
+		}
+		if next != "" {
+			requeue(t, f, "scope-a", next)
+		}
+		return s.Observe(ctx, x)
+	}
+	if err := turn("pass-2"); err != nil {
+		t.Fatal(err)
+	}
+	if err := turn(""); !errors.Is(err, runtime.ErrBudgetHeld) {
+		t.Fatalf("over budget not held: %v", err)
+	}
+	var w domain.Work
+	routingRead(t, f, func(tx storage.Tx) (err error) { w, err = tx.Work(a); return })
+	if _, err := control.ReleaseWork(ctx, a, w.Revision, "raised", "pass-release"); err != nil {
+		t.Fatal(err)
+	}
+	// The operator also raises the limit: the next turn is within it, and
+	// still spends the pass.
+	raised := newTestScheduler(t, f, func() runtime.SchedulerOptions {
+		o := schedulerDefaultOptions(f, f.Driver.(*schedulerDriver).executor)
+		o.Budgets = []runtime.Budget{{Unit: "usd", Per: runtime.BudgetPerWork, Max: 1}}
+		return o
+	}())
+	s = raised
+	if err := turn("pass-3"); err != nil {
+		t.Fatalf("a turn within the raised limit: %v", err)
+	}
+	if err := turn(""); !errors.Is(err, runtime.ErrBudgetHeld) {
+		t.Fatalf("a pass left from the release let an over-budget turn through: %v", err)
 	}
 }

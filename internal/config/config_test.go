@@ -987,6 +987,7 @@ func TestBudgets(t *testing.T) {
 		"bad unit":      {"unit": "US Dollars", "per": "work", "max": 1},
 		"warn too high": {"unit": "usd", "per": "work", "max": 1, "warn_at": 1},
 		"unknown scope": {"unit": "usd", "per": "scope", "max": 1, "scope": "nowhere"},
+		"scope on all":  {"unit": "usd", "per": "all", "max": 1, "scope": "child"},
 	} {
 		bad := clone(t, m)
 		bad["settings"].(map[string]any)["budgets"] = []any{b}

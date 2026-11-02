@@ -93,14 +93,15 @@ const MaxUnits = 16
 
 // Amounts is the usage in named units: Units, then the cost in its
 // currency's lower-case code ("usd") and the input plus output tokens
-// ("tokens"), unless Units already names them.
+// ("tokens"), unless Units already names them. A currency that names a
+// reserved unit is never charged as one.
 func (u Usage) Amounts() map[string]float64 {
 	out := map[string]float64{}
 	for k, v := range u.Units {
 		out[k] = v
 	}
 	if u.Cost != nil && u.Currency != "" {
-		if unit := strings.ToLower(u.Currency); UnitPattern.MatchString(unit) {
+		if unit := strings.ToLower(u.Currency); UnitPattern.MatchString(unit) && !slices.Contains(ReservedUnits, unit) {
 			if _, ok := out[unit]; !ok {
 				out[unit] = *u.Cost
 			}
@@ -333,6 +334,9 @@ func ValidateResult(r Result) error {
 	}
 	if r.Usage.Cost != nil && (math.IsNaN(*r.Usage.Cost) || math.IsInf(*r.Usage.Cost, 0) || *r.Usage.Cost < 0 || r.Usage.Currency == "") {
 		return fmt.Errorf("%w: cost", ErrInvalid)
+	}
+	if slices.Contains(ReservedUnits, strings.ToLower(r.Usage.Currency)) {
+		return fmt.Errorf("%w: currency names a unit core counts", ErrInvalid)
 	}
 	if !validUnits(r.Usage.Units) {
 		return fmt.Errorf("%w: usage units", ErrInvalid)

@@ -126,6 +126,8 @@
             "type": "object",
             "additionalProperties": false,
             "required": ["unit", "per", "max"],
+            "if": {"properties": {"per": {"const": "all"}}},
+            "then": {"not": {"required": ["scope"]}},
             "properties": {
               "unit": {
                 "description": "attempts and turns are counted by the host; any other unit (usd, tokens, minutes, ...) is what executors report.",
