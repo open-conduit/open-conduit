@@ -208,6 +208,7 @@ func TestManifestRejections(t *testing.T) {
 		"unknown toolbelt":     {`"setup":`, `"executors": [{"name": "chat-agent", "capabilities": {"toolbelt": "http"}}], "setup":`},
 		"unsupported protocol": {`"protocol": [1]`, `"protocol": [2]`},
 		"reserved name":        {`"name": "chat"`, `"name": "core"`},
+		"operator name":        {`"name": "chat"`, `"name": "operator"`},
 		"foreign family":       {`"chat.message.edited"`, `"other.message.edited"`},
 		"family without loss":  {`"re_derivable": false, "loss": "Deletions arrive only by push; a deletion missed while push is down is never observed."`, `"re_derivable": false`},
 		"foreign operation":    {`"chat.reply"`, `"slack.reply"`},

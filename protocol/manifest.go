@@ -481,7 +481,7 @@ var (
 
 // reserved names belong to core: its event families and sources (core.*,
 // execution/<id>), the toolbelt protocol identifiers and the product.
-var reserved = map[string]bool{"core": true, "execution": true, "os": true, "open-conduit": true, "manual": true}
+var reserved = map[string]bool{"core": true, "execution": true, "os": true, "open-conduit": true, "manual": true, "operator": true}
 
 // ParseManifest decodes a manifest strictly (unknown fields, including any
 // attempt to negotiate storage, are rejected with ErrNewerManifest) and

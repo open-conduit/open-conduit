@@ -139,7 +139,7 @@ func discoverPackages(configPath, exclude string) ([]extproc.Found, []error) {
 // package cannot claim one.
 func takenNames(reg config.Registry) extproc.Taken {
 	t := extproc.Taken{}
-	t.Add("name", "core", "execution", "manual", "os", "open-conduit")
+	t.Add("name", "core", "execution", "manual", "os", "open-conduit", extension.CallerOperator)
 	for name := range reg.Connections {
 		t.Add("type", name)
 		t.Add("name", name)
