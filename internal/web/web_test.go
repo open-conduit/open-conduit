@@ -267,6 +267,18 @@ func TestSignInAndHostCheck(t *testing.T) {
 			t.Fatalf("%s: %d", host, rec.Code)
 		}
 	}
+	// Signed in through an HTTPS proxy, the cookie must never go out over
+	// plain HTTP; signed in locally, it stays as it was.
+	for host, secure := range map[string]bool{"open-conduit.localhost": true, "open-conduit.localhost:7420": false} {
+		req := httptest.NewRequest("GET", "/login?token="+s.login, nil)
+		req.Host = host
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, req)
+		c := rec.Result().Cookies()
+		if rec.Code != http.StatusSeeOther || len(c) != 1 || c[0].Secure != secure {
+			t.Fatalf("%s: %d %+v", host, rec.Code, c)
+		}
+	}
 	if urls := s.LoginURLs(addr); urls[0] != "http://open-conduit.localhost:7420/login?token="+s.login || urls[1] != "http://"+addr+"/login?token="+s.login {
 		t.Fatalf("login urls: %v", urls)
 	}

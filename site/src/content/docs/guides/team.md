@@ -80,12 +80,15 @@ The proxy must pass the browser's `Host` header through unchanged, so that the v
 
 ```
 conduit.example.com {
+	header Strict-Transport-Security "max-age=31536000"
 	# your sign-in goes here, e.g. forward_auth to oauth2-proxy
 	reverse_proxy 127.0.0.1:7420
 }
 ```
 
-With nginx, add `proxy_set_header Host $host;`.
+With nginx, add `proxy_set_header Host $host;` and the same `Strict-Transport-Security` header.
+
+The view marks its cookies `Secure` when a request arrives by its bare name, as it does through the proxy, so a signed-in browser never sends its session over plain HTTP. The HSTS header makes the browser use HTTPS for the name from the start, so a typed `http://` address never leaves the machine either.
 
 Once signed in to the proxy, a person opens the view's own sign-in URL once to start a session. `open-conduit web url --host conduit.example.com` prints its token; use it as `https://conduit.example.com/login?token=…`.
 
