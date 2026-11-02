@@ -185,6 +185,19 @@ func (c *Client) GitIdentity(ctx context.Context, repo string) (GitIdentity, err
 	return app.identity(ctx, repo)
 }
 
+// WriterBot is the bot login (`<slug>[bot]`) this connection's writes go
+// out as when they go out as a GitHub App: the bot App, else the sign-in
+// App. A token connection has none (ErrStaticToken): it writes as the
+// token's user. The login is looked up once.
+func (c *Client) WriterBot(ctx context.Context, repo string) (string, error) {
+	app, ok := c.who.Load().write.(*appToken)
+	if !ok {
+		return "", ErrStaticToken
+	}
+	ident, err := app.identity(ctx, repo)
+	return ident.Name, err
+}
+
 // GitBot reports whether git works as the App's bot in the runs of this
 // connection's repositories (connection git "bot").
 func (c *Client) GitBot() bool { return c.who.Load().gitBot }

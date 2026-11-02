@@ -169,18 +169,15 @@ func (l Labels) refusal(p IssuePayload) string {
 
 // authorRefusal says why an issue's or PR's author may not start Work ("" when
 // they may): their association with the repository is not one admit.authors
-// names. An App's bot (the connection's own, filing follow-up issues) is
-// admitted when the body carries an Open Conduit agent marker, since only
-// an App installed on the repository can author as a bot there.
-func (s Settings) authorRefusal(what, author, authorType, association, body string) string {
-	if slices.Contains(s.Authors, AnyAuthor) {
+// names. This connection's own App bot (byConnection: the normalizer matched
+// the author against the identity its writes go out as) is admitted, so the
+// follow-up issues its agents file start; no other bot is, whatever its body.
+func (s Settings) authorRefusal(what, author, association string, byConnection bool) string {
+	if slices.Contains(s.Authors, AnyAuthor) || byConnection {
 		return ""
 	}
 	association = strings.ToUpper(association)
 	if association != "" && slices.Contains(s.Authors, association) {
-		return ""
-	}
-	if authorType == "Bot" && ParseAgent(body) != nil {
 		return ""
 	}
 	if association == "" {
@@ -198,7 +195,7 @@ func (s Settings) issueRefusal(l Labels, p IssuePayload) string {
 	if reason := l.refusal(p); reason != "" {
 		return reason
 	}
-	return s.authorRefusal("issue", p.Author, p.AuthorType, p.AuthorAssociation, p.Body)
+	return s.authorRefusal("issue", p.Author, p.AuthorAssociation, p.ByConnection)
 }
 
 // pullRefusal says why an open PR may not start Work ("" when it may): a
@@ -207,7 +204,7 @@ func (s Settings) pullRefusal(p PullPayload) string {
 	if p.Fork && !s.Forks {
 		return "the PR comes from a fork, and admit.forks is off"
 	}
-	return s.authorRefusal("PR", p.Author, p.AuthorType, p.AuthorAssociation, p.Body)
+	return s.authorRefusal("PR", p.Author, p.AuthorAssociation, p.ByConnection)
 }
 
 // selfAuthored reports whether an agent comment was written for this Work

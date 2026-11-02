@@ -47,10 +47,12 @@ func TestRouteClaimAdmission(t *testing.T) {
 	contributor := issue()
 	contributor.AuthorAssociation = "CONTRIBUTOR"
 	agentFiled := issue()
-	agentFiled.Author, agentFiled.AuthorType, agentFiled.AuthorAssociation = "openconduit-bot[bot]", "Bot", "NONE"
+	agentFiled.Author, agentFiled.AuthorType, agentFiled.AuthorAssociation, agentFiled.ByConnection = "openconduit-bot[bot]", "Bot", "NONE", true
 	agentFiled.Body = "Follow-up.\n\n<!-- open-conduit:agent work=work/1 -->"
+	// Another App's bot carrying a marker (release notes Dependabot copied
+	// in, say) is not this connection's, so it is refused.
 	otherBot := agentFiled
-	otherBot.Body = "Bump a dependency"
+	otherBot.Author, otherBot.ByConnection = "dependabot[bot]", false
 	forgedMarker := stranger
 	forgedMarker.Body = agentFiled.Body
 	for name, tc := range map[string]struct {
@@ -69,7 +71,7 @@ func TestRouteClaimAdmission(t *testing.T) {
 		"contributor":              {contributor, false},
 		"unknown association":      {unknown, false},
 		"an agent's follow-up":     {agentFiled, true},
-		"another App's bot":        {otherBot, false},
+		"another App's marked bot": {otherBot, false},
 		"a stranger's marker":      {forgedMarker, false},
 	} {
 		d := match(t, scope, event(gh.TypeIssueOpen, "issue/1", gh.SchemaIssue, tc.p), nil)

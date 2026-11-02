@@ -2,7 +2,11 @@ package github_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"reflect"
 	"strconv"
@@ -658,5 +662,62 @@ func TestTrackedPullConflictsWithoutAnIssue(t *testing.T) {
 	plain.fake.SetMergeable(pr, &no)
 	if _, ok := plain.scan(t)["pr/"+strconv.Itoa(pr)+"/conflicts"]; ok {
 		t.Fatal("conflicts observed on a PR with no issue and no tracking")
+	}
+}
+
+// Only this connection's own App bot is marked by_connection, which admits
+// what its agents file: another App's bot isn't, nor is anyone on a token
+// connection, which has no App bot of its own (#346).
+func TestOwnBotIsMarkedByConnection(t *testing.T) {
+	fake := githubtest.New(repo, "tok")
+	t.Cleanup(fake.Close)
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.AddApp("42", &key.PublicKey)
+	pemText := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	_, own, _ := githubtest.AppBot("42")
+	marker := "Follow-up\n\n<!-- open-conduit:agent work=work/1 -->"
+	mine := fake.OpenIssue("Mine", marker, githubtest.User{Login: own, Type: "Bot"})
+	other := fake.OpenIssue("Other", marker, githubtest.User{Login: "dependabot[bot]", Type: "Bot"})
+	person := fake.OpenIssue("Person", marker, alice)
+	for _, n := range []int{mine, other, person} {
+		fake.SetAssociation(n, "NONE")
+	}
+	now := time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)
+	scan := func(conn string) map[string]bool {
+		cfg, err := gh.ParseConnection([]byte(`{"api_url":"` + fake.URL + `"` + conn + `}`))
+		if err != nil {
+			t.Fatal(err)
+		}
+		client, err := gh.NewClient(cfg, func(_ context.Context, name string) (string, error) {
+			if name == gh.SecretToken {
+				return "tok", nil
+			}
+			return pemText, nil
+		}, gh.ClientOptions{Now: func() time.Time { return now }})
+		if err != nil {
+			t.Fatal(err)
+		}
+		s, err := gh.ParseExtension([]byte(`{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`"}`), nil)
+		if err != nil {
+			t.Fatal(err)
+		}
+		f := &fixture{fake: fake, now: now, in: gh.NewIngress(s, client, func() time.Time { return now }, gh.IngressOptions{BatchUnits: 1000, PageBudget: time.Minute})}
+		out := map[string]bool{}
+		for item, o := range f.scan(t) {
+			var p gh.IssuePayload
+			if strings.Count(item, "/") == 1 && json.Unmarshal(o.Event.Data.Data, &p) == nil {
+				out[p.Author] = p.ByConnection
+			}
+		}
+		return out
+	}
+	if got := scan(`,"bot_app_id":"42"`); !got[own] || got["dependabot[bot]"] || got["alice"] {
+		t.Fatalf("bot App connection: %v", got)
+	}
+	if got := scan(""); got[own] || got["dependabot[bot]"] || got["alice"] {
+		t.Fatalf("token connection: %v", got)
 	}
 }

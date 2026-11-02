@@ -89,10 +89,13 @@ type IssuePayload struct {
 	AuthorType  string   `json:"author_type,omitempty"`
 	// AuthorAssociation is the author's relation to the repository
 	// (OWNER, MEMBER, COLLABORATOR, CONTRIBUTOR, NONE…), which admission reads.
-	AuthorAssociation string     `json:"author_association,omitempty"`
-	URL               string     `json:"url"`
-	CreatedAt         time.Time  `json:"created_at"`
-	ClosedAt          *time.Time `json:"closed_at,omitempty"`
+	AuthorAssociation string `json:"author_association,omitempty"`
+	// ByConnection marks an author who is this connection's own App bot:
+	// what the connection's agents file is admitted whatever admit.authors.
+	ByConnection bool       `json:"by_connection,omitempty"`
+	URL          string     `json:"url"`
+	CreatedAt    time.Time  `json:"created_at"`
+	ClosedAt     *time.Time `json:"closed_at,omitempty"`
 	// Generation is the reopen generation ("" before any reopening);
 	// Predecessor is the previous generation's external ID.
 	Generation  string `json:"generation,omitempty"`
@@ -125,6 +128,7 @@ type PullPayload struct {
 	// a head in another repository (or one since deleted).
 	AuthorType        string    `json:"author_type,omitempty"`
 	AuthorAssociation string    `json:"author_association,omitempty"`
+	ByConnection      bool      `json:"by_connection,omitempty"`
 	Fork              bool      `json:"fork,omitempty"`
 	URL               string    `json:"url"`
 	CreatedAt         time.Time `json:"created_at"`
@@ -324,6 +328,10 @@ type memo struct {
 	reopens  map[string][]rawIssueEvent
 	notFound map[string]bool
 	required map[string]RequiredChecks
+	// writer is the connection's own bot login ("" for none or unknown),
+	// once writerRead.
+	writer     string
+	writerRead bool
 }
 
 func newMemo() *memo {
@@ -340,6 +348,29 @@ type normalizer struct {
 }
 
 var errGone = errors.New("github object gone")
+
+// byConnection reports whether user is this connection's own App bot, the
+// identity its agents' writes (github.issue.create) go out as. Only a Bot
+// is looked up; an identity that can't be resolved reads as not ours, so
+// admission fails closed and a later observation, once it resolves, admits.
+func (n *normalizer) byConnection(ctx context.Context, user rawUser) bool {
+	if user.Type != "Bot" || user.Login == "" || n.c == nil {
+		return false
+	}
+	n.m.mu.Lock()
+	login, read := n.m.writer, n.m.writerRead
+	n.m.mu.Unlock()
+	if !read {
+		var err error
+		if login, err = n.c.WriterBot(ctx, n.s.Repo); err != nil {
+			login = ""
+		}
+		n.m.mu.Lock()
+		n.m.writer, n.m.writerRead = login, true
+		n.m.mu.Unlock()
+	}
+	return login != "" && strings.EqualFold(login, user.Login)
+}
 
 func (n *normalizer) issue(ctx context.Context, repo string, number int) (rawIssue, error) {
 	key := repo + "#" + strconv.Itoa(number)
@@ -493,7 +524,7 @@ func (n *normalizer) issueObservation(ctx context.Context, i rawIssue) (extensio
 	}
 	p := IssuePayload{Repo: n.s.Repo, Number: i.Number, Title: i.Title, Body: i.Body, State: i.State, StateReason: i.StateReason,
 		Labels: n.labels(i.Labels), Assignees: []string{}, Author: i.User.Login, AuthorType: i.User.Type,
-		AuthorAssociation: i.Association, URL: i.HTMLURL,
+		AuthorAssociation: i.Association, ByConnection: n.byConnection(ctx, i.User), URL: i.HTMLURL,
 		CreatedAt: utc(i.CreatedAt), ClosedAt: utcPtr(i.ClosedAt), Generation: gen, Predecessor: pred}
 	if i.State != "closed" {
 		p.ClosedAt = nil
@@ -587,7 +618,7 @@ func (n *normalizer) pullObservation(ctx context.Context, p rawPull) (extension.
 	payload := PullPayload{Repo: n.s.Repo, Number: p.Number, Title: p.Title, Body: p.Body, State: p.State, Merged: merged,
 		MergedAt: utcPtr(p.MergedAt), ClosedAt: utcPtr(p.ClosedAt), Draft: p.Draft, HeadRef: p.Head.Ref, HeadSHA: p.Head.SHA,
 		BaseRef: p.Base.Ref, Labels: n.labels(p.Labels), Author: p.User.Login,
-		AuthorType: p.User.Type, AuthorAssociation: p.Association, Fork: p.Head.Repo == nil || !strings.EqualFold(p.Head.Repo.FullName, n.s.Repo),
+		AuthorType: p.User.Type, AuthorAssociation: p.Association, ByConnection: n.byConnection(ctx, p.User), Fork: p.Head.Repo == nil || !strings.EqualFold(p.Head.Repo.FullName, n.s.Repo),
 		URL: p.HTMLURL, CreatedAt: utc(p.CreatedAt), Issue: ref}
 	if p.State != "closed" {
 		payload.ClosedAt, payload.MergedAt, payload.Merged = nil, nil, false
