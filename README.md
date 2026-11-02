@@ -67,7 +67,7 @@ Where to go next:
 
 ## Contributing
 
-Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for setting up a checkout, the checks a change must pass and the rules the code follows. [The architecture section of the docs site](https://open-conduit.github.io/open-conduit/architecture/) describes how each part is built and what it guarantees, and [the docs index](docs/README.md) lists the build and check commands. AI coding agents should also follow [AGENTS.md](AGENTS.md).
+Issues and pull requests are welcome. Read [CONTRIBUTING.md](CONTRIBUTING.md) for setting up a checkout (its [Toolchain](CONTRIBUTING.md#toolchain) section lists what to install), the checks a change must pass and the rules the code follows. [The architecture section of the docs site](https://open-conduit.github.io/open-conduit/architecture/) describes how each part is built and what it guarantees, and [the docs index](docs/README.md) lists the build and check commands. AI coding agents should also follow [AGENTS.md](AGENTS.md).
 
 Report bugs and ask questions in [GitHub issues](https://github.com/open-conduit/open-conduit/issues). Ask before starting a large change.
 
