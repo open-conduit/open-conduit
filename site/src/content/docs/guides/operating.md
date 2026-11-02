@@ -101,7 +101,7 @@ open-conduit events reroute ID                       # route a failed or skipped
 By default there is one operator: you, with the token the daemon writes to `private/operator.token` in its state directory. Everything you do is recorded as `operator:local`. To let someone else run controls under their own name, issue them a credential of their own:
 
 ```sh
-open-conduit auth add alice --out /path/to/alice.token   # an owner-only token file for alice
+open-conduit auth add alice --out /path/to/alice.token   # an owner-only token file for alice, role operate
 open-conduit auth operators                              # every operator credential, active or revoked
 open-conduit auth revoke TOKEN_ID                        # revoke one (the IDs are in auth operators)
 ```
@@ -110,6 +110,14 @@ Alice then points the CLI at her file with `--token-file` or `OPEN_CONDUIT_TOKEN
 
 - A name is lower case letters, digits and dashes, up to 32 characters. A name has one active credential at a time; revoke it before you issue another.
 - `auth rotate` replaces the caller's own credential and keeps its name.
-- A named operator can revoke their own credential and other named operators', but not yours. `auth recover` (with the daemon stopped) revokes every operator credential, named ones included, and writes you a fresh one.
-- **Every operator can do everything for now**, including adding operators and applying config. Per-operator roles are still to come.
+- Each credential has a role, set with `--role` when you add it (default `operate`). To change a role, revoke the credential and add it again.
+
+  | Role | May |
+  | --- | --- |
+  | `view` | read everything: Work, Events, runs and their logs, config, doctor, the operator list; trace a route and validate config, which change nothing |
+  | `operate` | also send Events and run every control and action: create, cancel, retry, wake, hold, release, rebind and attach Work, cancel executions, skip and reroute Events, reconcile scopes, answer asks; rotate and revoke their own credential |
+  | `admin` | also apply config, add operators and revoke other operators' credentials |
+
+  You are always `admin`. A call the role doesn't allow is refused with `forbidden_role` before it does anything. A credential added before roles existed is `view`. Revoke it and add it again with `--role` to restore its controls.
+- No one but you can revoke your own credential, not even an `admin`. `auth recover` (with the daemon stopped) revokes every operator credential, named ones included, and writes you a fresh one.
 - The web view still signs browsers in with its one sign-in URL and acts as `operator:local`.

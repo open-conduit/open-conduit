@@ -1115,7 +1115,7 @@ func (s *Server) rotate(c *call) (int, any, error) {
 		if err = tx.Put(authNamespace, "operator/"+digest, b); err != nil {
 			return err
 		}
-		file, err = issueOperatorInTx(tx, s.o.Now(), r.Name)
+		file, err = issueOperatorInTx(tx, s.o.Now(), r.Name, r.Role)
 		return err
 	})
 	if err != nil {
@@ -1163,6 +1163,10 @@ func (s *Server) revoke(c *call) (int, any, error) {
 			if r.TokenID != in.TokenID || in.TokenID != c.who.tokenID && r.Name == "" {
 				return storage.ErrNotFound
 			}
+			// Revoking someone else's credential is managing operators.
+			if in.TokenID != c.who.tokenID && !c.who.may(RoleAdmin) {
+				return forbiddenRole(c.who, RoleAdmin)
+			}
 			if !r.Revoked {
 				r.Revoked, r.RevokedAt = true, s.o.Now()
 			}
@@ -1184,6 +1188,7 @@ func (s *Server) revoke(c *call) (int, any, error) {
 
 type wireOperator struct {
 	Name      string `json:"name"`
+	Role      string `json:"role"`
 	TokenID   string `json:"token_id"`
 	CreatedAt string `json:"created_at"`
 	RevokedAt string `json:"revoked_at,omitempty"`
@@ -1203,7 +1208,7 @@ func (s *Server) listOperators(c *call) (int, any, error) {
 			if err = json.Unmarshal(row.Value, &r); err != nil {
 				return err
 			}
-			o := wireOperator{Name: r.name(), TokenID: r.TokenID, CreatedAt: ts(r.CreatedAt)}
+			o := wireOperator{Name: r.name(), Role: r.role(), TokenID: r.TokenID, CreatedAt: ts(r.CreatedAt)}
 			if r.Revoked {
 				o.RevokedAt = ts(r.RevokedAt)
 			}
@@ -1230,9 +1235,13 @@ func (s *Server) listOperators(c *call) (int, any, error) {
 func (s *Server) addOperator(c *call) (int, any, error) {
 	var in struct {
 		Name string `json:"name"`
+		Role string `json:"role"`
 	}
 	if err := c.decode(&in); err != nil {
 		return 0, nil, err
+	}
+	if !ValidRole(in.Role) {
+		return 0, nil, fail(400, "malformed", "role must be admin, operate or view")
 	}
 	if !ValidOperatorName(in.Name) {
 		return 0, nil, fail(400, "malformed", "name must be 1-32 lower case letters, digits or dashes, start with a letter, and not be local")
@@ -1252,14 +1261,14 @@ func (s *Server) addOperator(c *call) (int, any, error) {
 				return fail(409, "operator_exists", "operator "+in.Name+" already has an active credential; revoke it first")
 			}
 		}
-		file, err = issueOperatorInTx(tx, s.o.Now(), in.Name)
+		file, err = issueOperatorInTx(tx, s.o.Now(), in.Name, in.Role)
 		return err
 	})
 	if err != nil {
 		return 0, nil, err
 	}
 	c.w.Header().Set("Cache-Control", "no-store")
-	return 201, map[string]any{"name": in.Name, "token_id": file.TokenID, "token": file.Token}, nil
+	return 201, map[string]any{"name": in.Name, "role": in.Role, "token_id": file.TokenID, "token": file.Token}, nil
 }
 
 // ---- toolbelt ----
