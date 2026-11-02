@@ -12,7 +12,7 @@ TEST_TIMEOUT ?= 20m
 # shards overlap well even on a 4-vCPU hosted runner.
 INTEGRATION_SHARDS ?= 4
 
-.PHONY: build fmt fmt-check vet lint test boundaries config-check config-deps docs-check docs-gen container-test gateway-image check cross-build smoke smoke-run drill bench-history protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
+.PHONY: build fmt fmt-check vet lint test boundaries config-check config-deps docs-check docs-gen container-test gateway-image check cross-build smoke smoke-run drill bench-history bench-extension protocol-prototype packages certify release-snapshot ts-deps ts-check ts-packages require-node
 
 build:
 	$(GO) build ./...
@@ -137,6 +137,12 @@ drill:
 # against 1k, 10k and 50k retained events on real SQLite. Not part of check.
 bench-history:
 	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -run '^$$' -bench 'BenchmarkHistory' -benchtime 20x -benchmem ./integration
+
+# The in-transaction extension calls' performance budget (#428), without
+# -race so the numbers are the protocol's: make check runs the same test
+# under -race with the budget scaled.
+bench-extension:
+	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -run 'TestInTransactionRPCBudget' -v ./integration
 
 # 07-01 transport evidence: JSON-RPC over stdio versus go-plugin/gRPC on one
 # workload. A separate module keeps go-plugin and gRPC out of go.mod; it
