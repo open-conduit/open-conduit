@@ -51,6 +51,8 @@ export interface OperationSpec<S extends Type<unknown>, Out> {
   input: S;
   /** When an agent should call the operation, in Markdown. */
   guidance?: string;
+  /** A capability the operation answers, routed by name (e.g. "git.credential"). */
+  serves?: string;
   /** The payload schema the output is sent as (default "<operation>.v1"). */
   output?: string;
   /** Returns the output's data, or throws OperationError to refuse. */
@@ -172,6 +174,7 @@ export class Extension {
       kind: "handler",
       ...(spec.guidance === undefined ? {} : { guidance: spec.guidance }),
       input: json(input),
+      ...(spec.serves === undefined ? {} : { serves: spec.serves }),
     };
     (this.manifest.provides.operations ??= []).push(decl);
     return this;

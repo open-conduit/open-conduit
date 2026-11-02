@@ -390,6 +390,7 @@ var routes = []route{
 	{"POST", []string{"auth", "revoke"}, true, true, (*Server).revoke},
 	{"POST", []string{"toolbelt", "call"}, true, false, (*Server).toolbeltCall},
 	{"GET", []string{"toolbelt", "guidance"}, false, false, (*Server).toolbeltGuidance},
+	{"GET", []string{"toolbelt", "serving"}, false, false, (*Server).toolbeltServing},
 }
 
 // requiredRole is the least operator role a route needs. Reads, and the
@@ -435,7 +436,7 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) error {
 		return fail(404, "not_found", "unknown endpoint")
 	}
 	// An execution's own socket serves the toolbelt and nothing else.
-	if scopedExecution(ctx) != "" && (len(parts) != 2 || parts[0] != "toolbelt" || parts[1] != "call" && parts[1] != "guidance") {
+	if scopedExecution(ctx) != "" && (len(parts) != 2 || parts[0] != "toolbelt" || parts[1] != "call" && parts[1] != "guidance" && parts[1] != "serving") {
 		return fail(404, "not_found", "this socket serves only toolbelt calls")
 	}
 	who, err := s.authenticate(ctx, r)

@@ -493,6 +493,7 @@ export const OperationDecl = t.object(
     commit: t.optional(t.boolean()),
     guidance: t.optional(t.string()),
     input: t.optional(t.record(t.any())),
+    serves: t.optional(t.string()),
   },
   open,
 );

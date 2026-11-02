@@ -1147,6 +1147,16 @@ func (c *Client) ToolbeltGuidance(ctx context.Context) ([]string, error) {
 	return out.Guidance, err
 }
 
+// ToolbeltServing names the operations the execution's token is granted
+// that serve capability (extension.Operation.Serves), in grant order.
+func (c *Client) ToolbeltServing(ctx context.Context, capability string) ([]string, error) {
+	var out struct {
+		Operations []string `json:"operations"`
+	}
+	err := c.Do(ctx, "GET", "toolbelt/serving", url.Values{"capability": {capability}}, nil, "", &out)
+	return out.Operations, err
+}
+
 // ---- unified run history and doctor ----
 
 type Trigger struct {

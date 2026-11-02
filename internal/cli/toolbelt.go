@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 const toolbeltHelp = `os — Open Conduit execution toolbelt (CLI transport)
@@ -386,10 +387,11 @@ func (t *toolbelt) call(args []string) int {
 	})
 }
 
-// gitCredential is git's credential helper protocol over
-// github.git.credential: for `get` it reads git's attributes from stdin and
-// prints the username and password the host minted for this execution, or
-// nothing when the host has none for that URL. `store` and `erase` do
+// gitCredential is git's credential helper protocol over the git.credential
+// capability: for `get` it reads git's attributes from stdin, asks each
+// granted operation serving the capability in turn (GitHub's, Bitbucket's,
+// an installed code host's), and prints the first username and password one
+// answers for that URL, or nothing when none does. `store` and `erase` do
 // nothing: the host owns the token and revokes it. It sends no request ID,
 // so the credential is never kept for replay.
 func (t *toolbelt) gitCredential(args []string) int {
@@ -416,31 +418,56 @@ func (t *toolbelt) gitCredential(args []string) int {
 		fmt.Fprintf(t.errOut, "os: %s\n", err)
 		return 1
 	}
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+	ops, err := c.ToolbeltServing(ctx, extension.CapabilityGitCredential)
+	if err != nil {
+		t.noCredential(err)
+		return 1
+	}
+	if len(ops) == 0 {
+		// Say why, but exit 0 so git still asks any later helper.
+		fmt.Fprintf(t.errOut, "os: no git credential: no granted operation serves %s\n", extension.CapabilityGitCredential)
+		return 0
+	}
 	// An extension operation's input is a payload envelope; git's
 	// attributes are its data.
 	attrs, _ := json.Marshal(in)
 	data, _ := json.Marshal(client.Payload{Data: attrs})
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
-	defer cancel()
-	result, err := c.ToolbeltCall(ctx, client.ToolCall{Operation: "github.git.credential", Input: data})
-	if err != nil {
-		var api *client.Error
-		if errors.As(err, &api) {
-			fmt.Fprintf(t.errOut, "os: no git credential: %s\n", api.Error())
-		} else {
-			fmt.Fprintln(t.errOut, "os: no git credential: management endpoint unreachable")
+	var refused error
+	for _, op := range ops {
+		result, err := c.ToolbeltCall(ctx, client.ToolCall{Operation: op, Input: data})
+		if err != nil {
+			// Another operation may still own the URL; report the
+			// refusal only if none does.
+			refused = err
+			continue
 		}
-		return 1
-	}
-	var cred struct{ Username, Password string }
-	if result.Output != nil {
-		_ = json.Unmarshal(result.Output.Data, &cred)
-	}
-	if cred.Username == "" || cred.Password == "" || strings.ContainsAny(cred.Username+cred.Password, "\n\x00") {
+		var cred struct{ Username, Password string }
+		if result.Output != nil {
+			_ = json.Unmarshal(result.Output.Data, &cred)
+		}
+		if cred.Username == "" || cred.Password == "" || strings.ContainsAny(cred.Username+cred.Password, "\n\x00") {
+			continue
+		}
+		fmt.Fprintf(t.out, "username=%s\npassword=%s\n", cred.Username, cred.Password)
 		return 0
 	}
-	fmt.Fprintf(t.out, "username=%s\npassword=%s\n", cred.Username, cred.Password)
+	if refused != nil {
+		t.noCredential(refused)
+		return 1
+	}
 	return 0
+}
+
+// noCredential reports why git gets no credential.
+func (t *toolbelt) noCredential(err error) {
+	var api *client.Error
+	if errors.As(err, &api) {
+		fmt.Fprintf(t.errOut, "os: no git credential: %s\n", api.Error())
+	} else {
+		fmt.Fprintln(t.errOut, "os: no git credential: management endpoint unreachable")
+	}
 }
 
 // inbox reads the executor's inject inbox (OS_INBOX; the shell executor's

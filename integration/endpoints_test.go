@@ -123,6 +123,12 @@ func TestManagementExecutionEndpoints(t *testing.T) {
 	if _, err := dial(ca.ToolbeltEndpoint, cb.ToolbeltToken).ToolbeltGuidance(ctx); !isStatus(err, 403) {
 		t.Fatalf("another execution's guidance was served: %v", err)
 	}
+	if _, err := dial(ca.ToolbeltEndpoint, ca.ToolbeltToken).ToolbeltServing(ctx, extension.CapabilityGitCredential); err != nil {
+		t.Fatalf("own serving on own socket: %v", err)
+	}
+	if _, err := dial(ca.ToolbeltEndpoint, cb.ToolbeltToken).ToolbeltServing(ctx, extension.CapabilityGitCredential); !isStatus(err, 403) {
+		t.Fatalf("another execution's serving was served: %v", err)
+	}
 
 	// Operator endpoints are not served on it, to either credential class.
 	operatorToken, err := client.ReadTokenFile(filepath.Join(h.state, "private", "operator.token"))
@@ -141,6 +147,9 @@ func TestManagementExecutionEndpoints(t *testing.T) {
 	}
 	if _, err = op.ToolbeltGuidance(ctx); !isStatus(err, 403) {
 		t.Fatalf("operator credential reached the toolbelt guidance: %v", err)
+	}
+	if _, err = op.ToolbeltServing(ctx, extension.CapabilityGitCredential); !isStatus(err, 403) {
+		t.Fatalf("operator credential reached the toolbelt serving: %v", err)
 	}
 	if _, err = dial(ca.ToolbeltEndpoint, ca.ToolbeltToken).Execution(ctx, string(a.Lease.ExecutionID)); !isStatus(err, 404) {
 		t.Fatalf("operator endpoint served to an execution token: %v", err)

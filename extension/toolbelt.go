@@ -113,7 +113,19 @@ type Operation struct {
 	// execution only while the execution's grant includes the operation, so
 	// a playbook need not describe another extension's operations.
 	Guidance string
+	// Serves, on a Handler, names a capability the operation answers, such
+	// as CapabilityGitCredential. A client that needs the capability asks
+	// the toolbelt which of the operations its grant includes serve it
+	// (Serving) and calls each in turn until one answers, so the host routes
+	// a capability without knowing which extension's domain it belongs to.
+	Serves string
 }
+
+// CapabilityGitCredential is git's credential helper as a capability: input
+// {protocol, host, path?}, git's credential request; output {username,
+// password, expires_at?} for a remote the operation's extension owns, or {}
+// for any other, so the caller can ask the next operation serving it.
+const CapabilityGitCredential = "git.credential"
 
 // MaxOnce bounds EmitPlan.Once.
 const MaxOnce = 1024

@@ -1287,6 +1287,25 @@ func (s *Server) toolbeltGuidance(c *call) (int, any, error) {
 	return 200, map[string]any{"guidance": guidance}, nil
 }
 
+// toolbeltServing answers which of the operations the caller's token is
+// granted serve ?capability= (git's credential helper asks for
+// git.credential). On an execution's own socket the token must belong to
+// that execution.
+func (s *Server) toolbeltServing(c *call) (int, any, error) {
+	capability := c.r.URL.Query().Get("capability")
+	if capability == "" {
+		return 0, nil, fail(400, "bad_request", "capability is required")
+	}
+	ops, err := s.o.Toolbelt.Serving(c.ctx, c.who.token, scopedExecution(c.ctx), capability)
+	if err != nil {
+		return 0, nil, err
+	}
+	if ops == nil {
+		ops = []string{}
+	}
+	return 200, map[string]any{"operations": ops}, nil
+}
+
 func (s *Server) toolbeltCall(c *call) (int, any, error) {
 	var in struct {
 		Operation   string          `json:"operation"`

@@ -265,6 +265,16 @@ func TestDockerGitCredential(t *testing.T) {
 			owner, ok := valid[strings.TrimPrefix(r.Header.Get("Authorization"), "Bearer ")]
 			mu.Unlock()
 			w.Header().Set("Content-Type", "application/json")
+			if ok && owner == exec && r.URL.Path == "/v1/toolbelt/serving" {
+				// os git-credential asks which granted operations serve
+				// git credentials; GitHub's declares it does.
+				serving := []string{}
+				if credOp.Serves == r.URL.Query().Get("capability") {
+					serving = append(serving, credOp.Name)
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"operations": serving}})
+				return
+			}
 			if !ok || owner != exec || call.Operation != gh.OpGitCredential {
 				w.WriteHeader(http.StatusUnauthorized)
 				fmt.Fprint(w, `{"error":{"code":"unauthorized","message":"execution authority rejected"}}`)

@@ -60,7 +60,7 @@ A connection's `git` is who git works as in the runs of its repositories' Work: 
 
 The extension does this through the generic run environment hook (`extension.RunEnvironment`, protocol `run.environment`; see [extension protocol](../extension-protocol/)), with nothing in an executor or the core that knows about GitHub. `Tools.RunEnvironment` binds the run's Work as a toolbelt call would (its issue's repository, else the scope's only one). The connection that decides is the binding's own `github` connection (`RunEnvironmentRequest.Connection`, built by `Writers` as for a binding's writes) when it names one, else the repository's entry connection; a binding naming none, the entry's, or one of another type uses the entry's. When that connection has `git` `bot`, it returns this layer:
 
-- `credential.helper` set empty, then to `!os git-credential`, through `GIT_CONFIG_*`. The empty entry clears the helpers git would otherwise ask first (the operator's keychain or `gh`), so pushes go only through [`github.git.credential`](../engineering-tools/#tool-operations), which the binding must be granted.
+- `credential.helper` set empty, then to `!os git-credential`, through `GIT_CONFIG_*`. The empty entry clears the helpers git would otherwise ask first (the operator's keychain or `gh`), so pushes go only through the operations serving git credentials that the binding is granted: for GitHub, [`github.git.credential`](../engineering-tools/#tool-operations).
 - `commit.gpgsign` and `tag.gpgsign` off, because the operator's key isn't the bot's.
 - `GIT_AUTHOR_NAME`, `GIT_AUTHOR_EMAIL`, `GIT_COMMITTER_NAME` and `GIT_COMMITTER_EMAIL` set to `GitIdentity`.
 

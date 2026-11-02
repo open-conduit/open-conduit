@@ -184,8 +184,20 @@ func newGitBotLab(t *testing.T, root string) *gitBotLab {
 					Data   json.RawMessage `json:"data"`
 				}
 			}
-			_ = json.NewDecoder(r.Body).Decode(&call)
 			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Path == "/v1/toolbelt/serving" && r.Header.Get("Authorization") == "Bearer belt-"+string(exec) {
+				// os git-credential asks which granted operations serve
+				// git credentials; GitHub's declares it does.
+				serving := []string{}
+				for name, op := range ops {
+					if op.Serves == r.URL.Query().Get("capability") {
+						serving = append(serving, name)
+					}
+				}
+				_ = json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"operations": serving}})
+				return
+			}
+			_ = json.NewDecoder(r.Body).Decode(&call)
 			op, ok := ops[call.Operation]
 			if !ok || r.Header.Get("Authorization") != "Bearer belt-"+string(exec) {
 				w.WriteHeader(http.StatusUnauthorized)
