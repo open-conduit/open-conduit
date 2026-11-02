@@ -229,15 +229,7 @@ func (d *daemon) startInproc(ctx context.Context) error {
 			SettleHold: func(ctx context.Context, work domain.ID, admit bool, reason, key string) (domain.ID, error) {
 				return d.current.Load().control.SettleGateHold(ctx, name, work, admit, reason, key)
 			},
-			Authorize: func(kind string, from, to domain.ID) error {
-				switch kind {
-				case "read":
-					return d.mayRead(from, to)
-				case "file":
-					return d.mayFile(from, to)
-				}
-				return fmt.Errorf("unknown authorization %q", kind)
-			},
+			Authorize: d.authorize,
 			WaitTarget: func(ctx context.Context, scope domain.ID, kind, name string) (domain.CorrelationKey, []string, bool) {
 				return d.waitTarget(kind)(ctx, scope, name)
 			},
@@ -505,6 +497,18 @@ func (d *daemon) inprocWebhook(path string) http.Handler {
 		}
 	}
 	return nil
+}
+
+// authorize answers whether scope from may read ("read") or file in
+// ("file") scope to under the operator's authorization config.
+func (d *daemon) authorize(kind string, from, to domain.ID) error {
+	switch kind {
+	case "read":
+		return d.mayRead(from, to)
+	case "file":
+		return d.mayFile(from, to)
+	}
+	return fmt.Errorf("unknown authorization %q", kind)
 }
 
 // waitTarget resolves a named wait target of kind ("job:<name>") through

@@ -539,6 +539,11 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		SettleHold: func(ctx context.Context, owner string, work domain.ID, admit bool, reason, key string) (domain.ID, error) {
 			return d.current.Load().control.SettleGateHold(ctx, owner, work, admit, reason, key)
 		},
+		Render: func(ctx context.Context, e domain.Event) (string, bool) { return d.inprocRender(e) },
+		WaitTarget: func(ctx context.Context, scope domain.ID, kind, name string) (domain.CorrelationKey, []string, bool) {
+			return d.waitTarget(kind)(ctx, scope, name)
+		},
+		Authorize: d.authorize,
 	}
 }
 

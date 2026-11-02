@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strings"
 
@@ -216,6 +217,14 @@ type Provides struct {
 	// Render marks an extension that renders its own families for agent
 	// prompts (event.render).
 	Render bool `json:"render,omitempty"`
+	// Targets are the wait target kinds the extension resolves
+	// (target.resolve; inproc.Targeter), such as "job" for a `job:<name>`
+	// wait another extension's wait operation names.
+	Targets []string `json:"targets,omitempty"`
+	// SegmentEnd marks an extension told when an execution segment run in
+	// a container ends (segment.ended; inproc.SegmentEnder), so it revokes
+	// what it issued for it.
+	SegmentEnd bool `json:"segment_end,omitempty"`
 	// Playbooks is a directory, relative to the manifest, of prompt
 	// material the host offers agent executors (a first-party convention).
 	Playbooks string `json:"playbooks,omitempty"`
@@ -400,6 +409,10 @@ const (
 	OperationWait    = "wait"
 	OperationEmit    = "emit"
 )
+
+// targetKind is the form of a wait target kind an extension resolves: the
+// prefix of a `<kind>:<name>` wait condition.
+var targetKind = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,31}$`)
 
 // capabilityName is the form of a capability an operation serves, the same
 // as an operation's name.
@@ -677,6 +690,11 @@ func (m Manifest) Validate() error {
 	for _, r := range p.Recurrences {
 		dotted("recurrence", r)
 	}
+	for i, k := range p.Targets {
+		if !targetKind.MatchString(k) || slices.Contains(p.Targets[:i], k) {
+			fail("target kind %q must be lower-case letters, digits, - or _, and declared once", k)
+		}
+	}
 	for _, o := range p.Operations {
 		dotted("operation", o.Name)
 		if len(o.Guidance) > extension.MaxGuidance {
@@ -870,6 +888,8 @@ func (m Manifest) Enabled() []string {
 	set("panels", p.Panels)
 	set("config_candidate", p.ConfigCandidate)
 	set("render", p.Render)
+	set("targets", len(p.Targets) > 0)
+	set("segment_end", p.SegmentEnd)
 	var out []string
 	for _, method := range Methods {
 		if on[method.Provides] && (method.Permission == "" || m.Allows(method.Permission)) {

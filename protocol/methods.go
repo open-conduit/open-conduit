@@ -70,6 +70,11 @@ var Methods = []Method{
 	{Name: "operation.gate", Direction: HostToExtension, Provides: "operation_gate", Permission: PermissionOperationGate, Contract: []string{"extension.Registration.Gate", "extension.Gate", "extension.GateCall", "extension.GateRefusal"}},
 	{Name: "dependency.filter", Direction: HostToExtension, Provides: "dependency_filter", InTransaction: true, Contract: []string{"extension.Registration.DependencyFilter"}},
 	{Name: "event.render", Direction: HostToExtension, Provides: "render", Contract: []string{"host:renderEvents chain (<extension>.RenderEvent)"}},
+	{Name: "event.render_owned", Direction: ExtensionToHost, Provides: "executors", Contract: []string{"inproc.Host.Render"}},
+	{Name: "target.resolve", Direction: HostToExtension, Provides: "targets", Contract: []string{"inproc.Targeter.Targets"}},
+	{Name: "wait.target", Direction: ExtensionToHost, Provides: "operations.wait", Contract: []string{"inproc.Host.WaitTarget"}},
+	{Name: "scope.authorize", Direction: ExtensionToHost, Contract: []string{"inproc.Host.Authorize"}},
+	{Name: "segment.ended", Direction: HostToExtension, Provides: "segment_end", Contract: []string{"inproc.SegmentEnder.SegmentEnded"}},
 
 	// Executors.
 	{Name: "executor.run", Direction: HostToExtension, Provides: "executors", Contract: []string{"extension.Executor.Run", "extension.RunRequest", "extension.ExecutionContext"}},

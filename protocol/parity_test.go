@@ -24,32 +24,34 @@ import (
 // of its own>".
 var parity = map[string][]string{
 	// Interfaces an extension implements.
-	"Extension":  {"manifest:name", "method:initialize"},
-	"Typed":      {"manifest:provides.connections", "manifest:provides.extensions", "manifest:provides.routes.config", "method:validate"},
-	"Operator":   {"manifest:provides.operations"},
-	"EntryGated": {"manifest:provides.entry_gated"},
-	"Router":     {"manifest:provides.routes", "method:route.match"},
-	"Starter":    {"method:initialize"},
-	"Stopper":    {"method:shutdown"},
-	"WorkKinder": {"manifest:provides.work_kinds", "method:work_kind.trigger"},
-	"Recurring":  {"manifest:provides.recurrences", "method:recurrence.next"},
-	"Configurer": {"method:configure"},
-	"Tooled":     {"method:operation.call", "method:operation.wait", "method:operation.emit"},
-	"Actor":      {"manifest:provides.actions", "method:work.actions", "method:work.act"},
-	"Annotator":  {"manifest:provides.annotate", "method:work.annotate"},
-	"Renderer":   {"manifest:provides.render", "method:event.render"},
-	"Tasker":     {"manifest:provides.tasks", "method:task.run"},
-	"Checker":    {"manifest:provides.checks", "method:check.run"},
-	"Playbooker": {"manifest:provides.playbooks"},
-	"Paged":      {"manifest:provides.pages"},
-	"Titled":     {"manifest:title"},
-	"Exporting":  {"manifest:provides.exporters", "method:telemetry.export"},
-	"Sink":       {"manifest:permissions", "method:telemetry.sink"},
-	"ConfigHost": {"manifest:permissions", "method:config.base", "method:config.edit", "method:config.validate", "method:config.trace"},
-	"Timers":     {"method:timer.arm", "method:timer.cancel"},
-	"Executing":  {"manifest:provides.executors", "manifest:provides.executors.pool", "method:executor.run"},
-	"Ingester":   {"manifest:provides.extensions.ingress", "method:configure", "method:ingress.push", "method:ingress.reconcile"},
-	"Webhooker":  {"manifest:provides.webhooks", "method:webhook.handle"},
+	"Extension":    {"manifest:name", "method:initialize"},
+	"Typed":        {"manifest:provides.connections", "manifest:provides.extensions", "manifest:provides.routes.config", "method:validate"},
+	"Operator":     {"manifest:provides.operations"},
+	"EntryGated":   {"manifest:provides.entry_gated"},
+	"Router":       {"manifest:provides.routes", "method:route.match"},
+	"Starter":      {"method:initialize"},
+	"Stopper":      {"method:shutdown"},
+	"WorkKinder":   {"manifest:provides.work_kinds", "method:work_kind.trigger"},
+	"Recurring":    {"manifest:provides.recurrences", "method:recurrence.next"},
+	"Configurer":   {"method:configure"},
+	"Tooled":       {"method:operation.call", "method:operation.wait", "method:operation.emit"},
+	"Actor":        {"manifest:provides.actions", "method:work.actions", "method:work.act"},
+	"Annotator":    {"manifest:provides.annotate", "method:work.annotate"},
+	"Renderer":     {"manifest:provides.render", "method:event.render"},
+	"Tasker":       {"manifest:provides.tasks", "method:task.run"},
+	"Checker":      {"manifest:provides.checks", "method:check.run"},
+	"Playbooker":   {"manifest:provides.playbooks"},
+	"Paged":        {"manifest:provides.pages"},
+	"Titled":       {"manifest:title"},
+	"Exporting":    {"manifest:provides.exporters", "method:telemetry.export"},
+	"Sink":         {"manifest:permissions", "method:telemetry.sink"},
+	"ConfigHost":   {"manifest:permissions", "method:config.base", "method:config.edit", "method:config.validate", "method:config.trace"},
+	"Timers":       {"method:timer.arm", "method:timer.cancel"},
+	"Executing":    {"manifest:provides.executors", "manifest:provides.executors.pool", "method:executor.run"},
+	"Ingester":     {"manifest:provides.extensions.ingress", "method:configure", "method:ingress.push", "method:ingress.reconcile"},
+	"Webhooker":    {"manifest:provides.webhooks", "method:webhook.handle"},
+	"Targeter":     {"manifest:provides.targets", "method:target.resolve"},
+	"SegmentEnder": {"manifest:provides.segment_end", "method:segment.ended"},
 
 	// Host services, inproc.Host's fields.
 	"Host.Store":             {"method:kv.get", "method:kv.list", "method:kv.commit", "method:state.work", "method:state.works", "method:state.events"},
@@ -67,6 +69,9 @@ var parity = map[string][]string{
 	"Host.Artifacts":         {"method:artifact.create", "method:artifact.write", "method:artifact.commit"},
 	"Host.ToolbeltDir":       {"process:each run's ExecutionContext.ToolbeltDir carries it"},
 	"Host.PlaybookDir":       {"process:each run's ExecutionContext.PlaybookDir carries it"},
+	"Host.Render":            {"method:event.render_owned"},
+	"Host.WaitTarget":        {"method:wait.target"},
+	"Host.Authorize":         {"method:scope.authorize"},
 	"Host.OpenLog":           {"process:its own files under the state directory initialize gives it"},
 	"Host.Timers":            {"method:timer.arm", "method:timer.cancel"},
 	"Host.CancelWork":        {"method:work.cancel"},
@@ -90,15 +95,7 @@ var parity = map[string][]string{
 
 // parityGaps are the surfaces no wire method or manifest field carries yet,
 // each with the open issue that closes it. Only those issues own entries.
-var parityGaps = map[string]int{
-	// Wait targets (`job:<name>`) resolve only for in-process extensions
-	// until a wire method carries them.
-	"Targeter":        357,
-	"Host.WaitTarget": 357,
-	"Host.Authorize":  357,
-	"SegmentEnder":    357,
-	"Host.Render":     357,
-}
+var parityGaps = map[string]int{}
 
 // inprocSurfaces lists the contract's interfaces, inproc.Host's fields and
 // inproc.ConfigType's fields from its source, so a new surface fails here

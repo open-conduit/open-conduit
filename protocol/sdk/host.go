@@ -196,6 +196,40 @@ func (h *Host) SettleHold(ctx context.Context, work domain.ID, admit bool, reaso
 	return domain.ID(out.EventID), err
 }
 
+// RenderOwned renders an input Event for an agent's prompt through the
+// extension that owns its family (an executor's prompt; manifest
+// executors); false leaves it to the caller's own rendering.
+func (h *Host) RenderOwned(ctx context.Context, e domain.Event) (string, bool, error) {
+	var out protocol.EventRenderResult
+	err := h.conn.Call(ctx, "event.render_owned", protocol.EventRenderOwnedParams{Event: protocol.FromEvent(e)}, &out)
+	return out.Text, out.OK, err
+}
+
+// WaitTarget resolves a named wait target of kind in one of the
+// extension's scopes ("job" for a `job:<name>` condition) through the
+// extensions that resolve that kind (a wait operation's; manifest wait
+// operations): the correlation key and Event types that end it.
+func (h *Host) WaitTarget(ctx context.Context, scope domain.ID, kind, name string) (domain.CorrelationKey, []string, bool, error) {
+	var out protocol.WaitTargetResult
+	err := h.conn.Call(ctx, "wait.target", protocol.WaitTargetParams{ScopeID: string(scope), Kind: kind, Name: name}, &out)
+	return out.Key.Domain(), out.Types, out.OK, err
+}
+
+// Authorize answers whether scope from, one of the extension's, may read
+// ("read", authorization.read_scopes) or file in ("file",
+// authorization.file_scopes) scope to under the operator's configuration.
+// A refusal is an error saying how the operator would allow it.
+func (h *Host) Authorize(ctx context.Context, kind string, from, to domain.ID) error {
+	var out protocol.ScopeAuthorizeResult
+	if err := h.conn.Call(ctx, "scope.authorize", protocol.ScopeAuthorizeParams{Kind: kind, From: string(from), To: string(to)}, &out); err != nil {
+		return err
+	}
+	if !out.Allowed {
+		return errors.New(out.Reason)
+	}
+	return nil
+}
+
 // Act invokes an action for a person the extension identified on its own
 // surface (permission action.submit), such as answering an approval
 // request from a button they pressed. The host calls the provider with the

@@ -75,6 +75,13 @@ type Extension struct {
 	// both maps runs from CheckRuns.
 	CheckRuns map[string]func(ctx context.Context, h *Host, p protocol.CheckRunParams) (protocol.CheckRunResult, error)
 	Render    func(domain.Event) (string, bool)
+	// TargetResolvers resolve the wait target kinds the extension declares
+	// (Manifest.Provides.Targets; inproc.Targeter): the correlation key and
+	// Event types, of its own families, that end the target named in scope.
+	TargetResolvers map[string]func(ctx context.Context, h *Host, scope domain.ID, name string) (domain.CorrelationKey, []string, bool)
+	// SegmentEnded is told an execution's container segment ended
+	// (Manifest.Provides.SegmentEnd; inproc.SegmentEnder).
+	SegmentEnded func(ctx context.Context, h *Host, execution domain.ID)
 	// Upcasters by schema base name.
 	Upcasters map[string]Upcaster
 
@@ -369,6 +376,30 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			return nil, err
 		}
 		return protocol.FromEmitCommit(c), nil
+	case "target.resolve":
+		var p protocol.TargetResolveParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		f, ok := s.ext.TargetResolvers[p.Kind]
+		if !ok {
+			return nil, notFound(method)
+		}
+		key, types, found := f(ctx, s.host, domain.ID(p.ScopeID), p.Name)
+		if !found {
+			return protocol.TargetResolveResult{}, nil
+		}
+		return protocol.TargetResolveResult{Key: protocol.FromKey(key), Types: types, OK: true}, nil
+	case "segment.ended":
+		var p protocol.SegmentEndedParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		if s.ext.SegmentEnded == nil {
+			return nil, notFound(method)
+		}
+		s.ext.SegmentEnded(ctx, s.host, domain.ID(p.ExecutionID))
+		return struct{}{}, nil
 	case "event.render":
 		var p protocol.EventRenderParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

@@ -226,6 +226,61 @@ type EventRenderResult struct {
 	OK   bool   `json:"ok"`
 }
 
+// EventRenderOwnedParams ask the host to render an input Event for an
+// agent's prompt through the extension that owns its family
+// (inproc.Host.Render); OK false leaves it to the caller's own rendering.
+type EventRenderOwnedParams struct {
+	Event Event `json:"event"`
+}
+
+// TargetResolveParams name a wait target of a kind the extension resolves
+// (manifest targets) in a scope: `job:<name>` is kind job, name <name>.
+type TargetResolveParams struct {
+	ScopeID string `json:"scope_id"`
+	Kind    string `json:"kind"`
+	Name    string `json:"name"`
+}
+
+// TargetResolveResult is the correlation key and Event types that end the
+// target; OK false when the extension has no such target in the scope.
+type TargetResolveResult struct {
+	Key   Key      `json:"key"`
+	Types []string `json:"types,omitempty"`
+	OK    bool     `json:"ok"`
+}
+
+// WaitTargetParams ask the host to resolve a wait target through the
+// extensions that resolve its kind (inproc.Host.WaitTarget), in one of the
+// extension's configured scopes.
+type WaitTargetParams = TargetResolveParams
+
+// WaitTargetResult is TargetResolveResult as the host answers it.
+type WaitTargetResult = TargetResolveResult
+
+// ScopeAuthorizeParams ask whether scope from may use scope to's events
+// ("read", authorization.read_scopes) or tracker ("file",
+// authorization.file_scopes) under the operator's configuration
+// (inproc.Host.Authorize). From must be one of the extension's configured
+// scopes.
+type ScopeAuthorizeParams struct {
+	Kind string `json:"kind"`
+	From string `json:"from"`
+	To   string `json:"to"`
+}
+
+// ScopeAuthorizeResult is the answer: allowed, or the reason it isn't and
+// how the operator would allow it.
+type ScopeAuthorizeResult struct {
+	Allowed bool   `json:"allowed"`
+	Reason  string `json:"reason,omitempty"`
+}
+
+// SegmentEndedParams name an execution whose container segment ended
+// (inproc.SegmentEnder), so the extension revokes what it issued for it.
+type SegmentEndedParams struct {
+	ExecutionID string `json:"execution_id"`
+}
+
 // Executors.
 
 type ExecutorRunParams struct {

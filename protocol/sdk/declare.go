@@ -369,6 +369,26 @@ func (e *Extension) Recurrence(kind string, fn RecurrenceFunc) *Extension {
 	return e
 }
 
+// Target registers the resolver of a wait target kind ("job" for a
+// `job:<name>` wait another extension's wait operation names) and declares
+// it. The Event types it answers must be the extension's own families.
+func (e *Extension) Target(kind string, fn func(ctx context.Context, h *Host, scope domain.ID, name string) (domain.CorrelationKey, []string, bool)) *Extension {
+	if e.TargetResolvers == nil {
+		e.TargetResolvers = map[string]func(ctx context.Context, h *Host, scope domain.ID, name string) (domain.CorrelationKey, []string, bool){}
+	}
+	e.TargetResolvers[kind] = fn
+	e.Manifest.Provides.Targets = append(e.Manifest.Provides.Targets, kind)
+	return e
+}
+
+// OnSegmentEnd registers what the extension does when an execution's
+// container segment ends (revoking what it issued for it) and declares it.
+func (e *Extension) OnSegmentEnd(fn func(ctx context.Context, h *Host, execution domain.ID)) *Extension {
+	e.SegmentEnded = fn
+	e.Manifest.Provides.SegmentEnd = true
+	return e
+}
+
 // Family declares event families the extension emits or derives (an
 // ingress type's families come with Ingress).
 func (e *Extension) Family(families ...protocol.Family) *Extension {

@@ -293,3 +293,36 @@ func TestServesDeclaresCapability(t *testing.T) {
 		return extension.WaitPlan{}, nil
 	}), sdk.Serves(extension.CapabilityGitCredential))
 }
+
+// sdk.Target and sdk.OnSegmentEnd declare a wait target kind and segment
+// ends in the manifest, and serve target.resolve and segment.ended.
+func TestTargetsAndSegmentEnds(t *testing.T) {
+	ctx := context.Background()
+	var ended []domain.ID
+	ext := sdk.New("acme", sdk.Version("0.1.0")).Operation("acme.ping", sdk.Handler(forecast)).
+		Target("job", func(_ context.Context, _ *sdk.Host, scope domain.ID, name string) (domain.CorrelationKey, []string, bool) {
+			if name != "nightly" {
+				return domain.CorrelationKey{}, nil, false
+			}
+			return domain.CorrelationKey{Source: "acme/" + string(scope), ExternalID: name}, []string{"acme.run.completed"}, true
+		}).
+		OnSegmentEnd(func(_ context.Context, _ *sdk.Host, execution domain.ID) { ended = append(ended, execution) })
+	if p := ext.Manifest.Provides; !reflect.DeepEqual(p.Targets, []string{"job"}) || !p.SegmentEnd {
+		t.Fatalf("manifest targets %v segment_end %v", p.Targets, p.SegmentEnd)
+	}
+	h := sdktest.New(t, ext)
+	var out protocol.TargetResolveResult
+	if err := h.Call(ctx, "target.resolve", protocol.TargetResolveParams{ScopeID: "s1", Kind: "job", Name: "nightly"}, &out); err != nil || !out.OK || out.Key.Domain() != (domain.CorrelationKey{Source: "acme/s1", ExternalID: "nightly"}) || !reflect.DeepEqual(out.Types, []string{"acme.run.completed"}) {
+		t.Fatalf("resolve: %+v %v", out, err)
+	}
+	out = protocol.TargetResolveResult{}
+	if err := h.Call(ctx, "target.resolve", protocol.TargetResolveParams{ScopeID: "s1", Kind: "job", Name: "missing"}, &out); err != nil || out.OK {
+		t.Fatalf("an unknown target: %+v %v", out, err)
+	}
+	if err := h.Call(ctx, "target.resolve", protocol.TargetResolveParams{ScopeID: "s1", Kind: "build", Name: "nightly"}, &out); err == nil {
+		t.Fatal("an undeclared kind was resolved")
+	}
+	if err := h.Call(ctx, "segment.ended", protocol.SegmentEndedParams{ExecutionID: "execution/1"}, nil); err != nil || !reflect.DeepEqual(ended, []domain.ID{"execution/1"}) {
+		t.Fatalf("segment.ended: %v %v", ended, err)
+	}
+}
