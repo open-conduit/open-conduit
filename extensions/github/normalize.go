@@ -197,7 +197,7 @@ type DeliveryPayload struct {
 	After string `json:"after,omitempty"`
 	// Conclusion is a finished check suite's or run's conclusion (success,
 	// failure, timed_out, cancelled, action_required, neutral, skipped,
-	// stale); empty for other events.
+	// stale, startup_failure); empty for other events.
 	Conclusion string   `json:"conclusion,omitempty"`
 	Files      []string `json:"files,omitempty"`
 	// Commits is how many commits the push listed. Files covers only those,

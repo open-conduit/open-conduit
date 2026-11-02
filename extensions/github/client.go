@@ -590,6 +590,24 @@ func (c *Client) pullsForCommit(ctx context.Context, repo, sha string) ([]rawPul
 	return all[rawPull](ctx, c, repo, repoPath(repo, "/commits/%s/pulls", url.PathEscape(sha)))
 }
 
+// onBranch reports whether sha is in branch's history in repo: the branch's
+// head is sha or a descendant of it. A commit only in a fork (a fork PR
+// whose branch shares the name) is not, and nor is one on an unknown branch.
+func (c *Client) onBranch(ctx context.Context, repo, branch, sha string) (bool, error) {
+	var out struct {
+		Status string `json:"status"`
+	}
+	_, err := c.call(ctx, false, repo, http.MethodGet, repoPath(repo, "/compare/%s...%s", url.PathEscape(branch), url.PathEscape(sha)), nil, &out)
+	if IsStatus(err, http.StatusNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	// The sha is behind or at the branch head, so the branch contains it.
+	return out.Status == "identical" || out.Status == "behind", nil
+}
+
 // IssueComments lists an issue's (or PR conversation's) comments.
 func (c *Client) IssueComments(ctx context.Context, repo string, n int, since time.Time) ([]rawComment, error) {
 	path := repoPath(repo, "/issues/%d/comments", n)

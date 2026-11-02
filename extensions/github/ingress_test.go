@@ -279,6 +279,8 @@ func TestCheckDeliveryNamesBranchAndConclusion(t *testing.T) {
 		}
 		return p
 	}
+	f.fake.CommitOnBranch("main", "abc123")
+	f.fake.CommitOnBranch("main", "def456")
 	suite := raw("check_suite", "d-suite", f.fake.CheckSuiteHook("main", "abc123", "failure"))
 	if suite.Ref != "refs/heads/main" || suite.After != "abc123" || suite.Conclusion != "failure" || suite.Action != "completed" {
 		t.Fatalf("check_suite delivery: %+v", suite)
@@ -287,6 +289,16 @@ func TestCheckDeliveryNamesBranchAndConclusion(t *testing.T) {
 		`"check_run":{"head_sha":"def456","status":"completed","conclusion":"timed_out","check_suite":{"head_branch":"main"},"pull_requests":[]}}`))
 	if run.Ref != "refs/heads/main" || run.After != "def456" || run.Conclusion != "timed_out" {
 		t.Fatalf("check_run delivery: %+v", run)
+	}
+	// A fork PR from the fork's own main: GitHub names head_branch main for
+	// a commit this repository's main doesn't have, so no branch is named.
+	fork := raw("check_suite", "d-fork", f.fake.CheckSuiteHook("main", "f0rk", "failure"))
+	if fork.Ref != "" || fork.After != "f0rk" || fork.Conclusion != "failure" {
+		t.Fatalf("fork check_suite delivery: %+v", fork)
+	}
+	// Nor for a branch this repository doesn't have.
+	if gone := raw("check_suite", "d-gone", f.fake.CheckSuiteHook("feature", "abc123", "failure")); gone.Ref != "" {
+		t.Fatalf("unknown branch check_suite delivery: %+v", gone)
 	}
 	// A push keeps its own fields and names no conclusion.
 	push := raw("push", "d-push", f.fake.PushHook("refs/heads/main", "a", "b"))

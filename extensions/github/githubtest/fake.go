@@ -155,7 +155,8 @@ type Server struct {
 	commits                          map[string]time.Time
 	contents                         map[string][]byte // attachments branch path → content
 	branches                         map[string]bool
-	files                            map[string]string // /files/<name> → redirect target
+	onBranch                         map[string]map[string]bool // branch → commits in its history
+	files                            map[string]string          // /files/<name> → redirect target
 	fileData                         map[string][]byte
 	hooks                            []*Hook
 	perms                            map[string]bool
@@ -203,7 +204,7 @@ func New(repo string, tokens ...string) *Server {
 	s := &Server{Repo: repo, now: time.Date(2026, 10, 1, 9, 0, 0, 0, time.UTC), nextID: 1000, issues: map[int]*Issue{}, pulls: map[int]*Pull{},
 		events: map[int][]IssueEvent{}, checks: map[string][]CheckRun{}, statuses: map[string][]Status{}, tokens: map[string]bool{},
 		apps: map[string]*rsa.PublicKey{}, identities: map[string]User{}, installs: map[string]string{}, scopes: map[string]TokenScope{}, failNext: map[string]int{}, loseNext: map[string]int{}, tokenTTL: time.Hour,
-		commits: map[string]time.Time{}, contents: map[string][]byte{}, branches: map[string]bool{}, files: map[string]string{}, fileData: map[string][]byte{},
+		commits: map[string]time.Time{}, contents: map[string][]byte{}, branches: map[string]bool{}, onBranch: map[string]map[string]bool{}, files: map[string]string{}, fileData: map[string][]byte{},
 		protection: map[string][]string{}, rulesets: map[string][]string{}, resolved: map[int64]string{}, threadPage: 100}
 	for _, t := range tokens {
 		s.tokens[t] = true
@@ -842,6 +843,17 @@ func (s *Server) CheckRunHook(sha string, prs ...int) []byte {
 	return mustJSON(map[string]any{"action": "completed", "repository": s.repository(), "check_run": map[string]any{"head_sha": sha, "status": "completed", "pull_requests": list}})
 }
 
+// CommitOnBranch puts sha in branch's history, as the compare endpoint
+// reads it.
+func (s *Server) CommitOnBranch(branch, sha string) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.onBranch[branch] == nil {
+		s.onBranch[branch] = map[string]bool{}
+	}
+	s.onBranch[branch][sha] = true
+}
+
 // CheckSuiteHook is a completed `check_suite` delivery body for a commit on
 // a branch, ending in conclusion.
 func (s *Server) CheckSuiteHook(branch, sha, conclusion string) []byte {
@@ -1325,6 +1337,16 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		s.pulls[n] = &Pull{Number: n, HeadRef: req.Head, HeadSHA: sha, BaseRef: req.Base, Draft: req.Draft, CreatedAt: t}
 		s.commits[sha] = t
 		return http.StatusCreated, s.pullJSON(n)
+	case get && strings.HasPrefix(rest, "/compare/"):
+		branch, sha, ok := strings.Cut(strings.TrimPrefix(rest, "/compare/"), "...")
+		commits, known := s.onBranch[branch]
+		if !ok || !known {
+			return 0, nil
+		}
+		if commits[sha] {
+			return http.StatusOK, map[string]any{"status": "behind"}
+		}
+		return http.StatusOK, map[string]any{"status": "diverged"}
 	case get && strings.HasPrefix(rest, "/branches/"):
 		name := strings.TrimPrefix(rest, "/branches/")
 		if s.branches[name] {
