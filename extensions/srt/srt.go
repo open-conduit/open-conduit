@@ -113,9 +113,65 @@ type record struct {
 	File     string          `json:"file"`
 }
 
+// credentialPaths are denied by default on both platforms: a sandboxed
+// process reads everything else, and each of these hands it a credential.
+// A policy lifts one by listing it, or a directory holding it, in
+// read.allow. The state directory (the operator token and the rest of
+// private/) is the host's to deny, whatever the policy says.
+var credentialPaths = []string{"~/.ssh", "~/.gnupg", "~/.aws", "~/.azure", "~/.config/gcloud", "~/.kube", "~/.config/gh",
+	"~/.docker/config.json", "~/.netrc", "~/.git-credentials"}
+
+// macCredentialPaths are macOS's: srt's Seatbelt profile lets a process ask
+// securityd for the login keychain's items (gh's token, say), and only
+// hiding the keychain files stops it.
+var macCredentialPaths = []string{"~/Library/Keychains"}
+
 // knownSockets are local services a process could reach on Linux once every
-// unix socket is allowed, hidden unless the policy lists them.
-var knownSockets = []string{"/var/run/docker.sock", "/run/docker.sock", "~/.docker/run/docker.sock", "/run/containerd/containerd.sock", "/run/podman/podman.sock"}
+// unix socket is allowed, each a way out of the sandbox: container daemons
+// that run anything, the system bus, and (escapeSockets) the user's runtime
+// directory, with the user bus (systemd-run --user), rootless Docker and
+// podman and gpg-agent, and the ssh agent. They are hidden unless the policy
+// lists them in sockets or read.allow.
+var knownSockets = []string{"/var/run/docker.sock", "/run/docker.sock", "~/.docker/run/docker.sock", "~/.docker/desktop/docker.sock",
+	"/run/containerd/containerd.sock", "/run/podman/podman.sock", "/run/dbus/system_bus_socket"}
+
+// escapeSockets are knownSockets and the user's own: the runtime directory
+// (XDG_RUNTIME_DIR, and /run/user/<uid> whatever it says) and SSH_AUTH_SOCK,
+// from the host's environment.
+func (p *Provider) escapeSockets() []string {
+	out := append([]string{fmt.Sprintf("/run/user/%d", os.Getuid())}, knownSockets...)
+	for _, kv := range p.o.Environ() {
+		if k, v, ok := strings.Cut(kv, "="); ok && (k == "XDG_RUNTIME_DIR" || k == "SSH_AUTH_SOCK") && v != "" {
+			out = append(out, v)
+		}
+	}
+	return out
+}
+
+// defaultDenies are the credential paths and, on Linux once every unix
+// socket is allowed, the escape sockets that exist, less what the policy
+// lifts: a path it lists, or a directory holding it, in read.allow or
+// sockets.
+func (p *Provider) defaultDenies(expand func([]string) []string, allSockets bool, lifted []string) []string {
+	list := expand(credentialPaths)
+	if p.o.GOOS == "darwin" {
+		list = append(list, expand(macCredentialPaths)...)
+	}
+	if allSockets {
+		for _, s := range expand(p.escapeSockets()) {
+			if _, err := os.Lstat(s); err == nil {
+				list = append(list, s)
+			}
+		}
+	}
+	var out []string
+	for _, d := range unique(list) {
+		if !extension.Within(d, lifted) {
+			out = append(out, d)
+		}
+	}
+	return out
+}
 
 func (p *Provider) Plan(ctx context.Context, _ extension.ResourceOwner, policy extension.SandboxPolicy, needs extension.SandboxNeeds, l extension.SandboxLaunch) (extension.SandboxPlan, error) {
 	o := p.o
@@ -147,8 +203,14 @@ func (p *Provider) Plan(ctx context.Context, _ extension.ResourceOwner, policy e
 	}
 	run := extension.CanonicalPath(paths.Run)
 	grants := append(expand(pol.Write), run)
-	readDeny, readAllow := expand(pol.Read.Deny), expand(pol.Read.Allow)
+	readAllow := expand(pol.Read.Allow)
 	sockets := expand(pol.Sockets)
+	if len(sockets) > 0 && o.GOOS == "linux" && pol.UnixSockets != "all" {
+		return extension.SandboxPlan{}, fmt.Errorf(`%w: Linux can't allow a unix socket by path; set unix_sockets to "all" to accept every socket the filesystem policy leaves visible`, extension.ErrSandboxUnavailable)
+	}
+	allSockets := len(sockets) > 0 && o.GOOS == "linux"
+	defaults := p.defaultDenies(expand, allSockets, append(append([]string{}, readAllow...), sockets...))
+	readDeny := append(expand(pol.Read.Deny), defaults...)
 
 	// The host's denies are not the operator's to lift: a grant never
 	// reaches into one except at its own exceptions (this attempt's run
@@ -246,6 +308,18 @@ func (p *Provider) Plan(ctx context.Context, _ extension.ResourceOwner, policy e
 			}
 		}
 	}
+	// A default deny inside a write grant is read-only there too, unless a
+	// grant beneath it is the operator's exception.
+	for _, d := range defaults {
+		inGrant, holdsGrant := false, false
+		for _, g := range grants {
+			inGrant = inGrant || g != d && extension.Within(d, []string{g})
+			holdsGrant = holdsGrant || extension.Within(g, []string{d})
+		}
+		if inGrant && !holdsGrant {
+			denyWrite = append(denyWrite, d)
+		}
+	}
 	readOnly := append(append([]string{}, needs.ReadOnly...), denyWrite...)
 	for _, r := range readOnly {
 		for _, g := range grants {
@@ -254,20 +328,10 @@ func (p *Provider) Plan(ctx context.Context, _ extension.ResourceOwner, policy e
 			}
 		}
 	}
-	if len(sockets) > 0 {
-		if o.GOOS == "linux" {
-			if pol.UnixSockets != "all" {
-				return extension.SandboxPlan{}, fmt.Errorf(`%w: Linux can't allow a unix socket by path; set unix_sockets to "all" to accept every socket the filesystem policy leaves visible`, extension.ErrSandboxUnavailable)
-			}
-			s.Network.AllowAllUnixSockets = true
-			for _, known := range expand(knownSockets) {
-				if _, err := os.Lstat(known); err == nil && !extension.Within(known, sockets) {
-					deny = append(deny, known)
-				}
-			}
-		} else {
-			s.Network.AllowUnixSockets = sockets
-		}
+	if allSockets {
+		s.Network.AllowAllUnixSockets = true
+	} else if len(sockets) > 0 {
+		s.Network.AllowUnixSockets = sockets
 	}
 	s.Filesystem.DenyRead = literals(deny)
 	s.Filesystem.AllowRead = literals(allow)

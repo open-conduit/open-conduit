@@ -13,7 +13,7 @@ You pick the sandbox per binding, so one scope can say "Claude Code, in a contai
 
 | | No sandbox | Process sandbox (`sandbox`, srt) | Container (`container`, Docker) |
 | --- | --- | --- | --- |
-| Filesystem | everything you can reach | what you can reach, minus `read.deny`; writes only to `write` | nothing from the host unless granted: the workspace, the Work's own home and what you list in `read` and `write` |
+| Filesystem | everything you can reach | what you can reach, minus your common credentials and `read.deny`; writes only to `write` | nothing from the host unless granted: the workspace, the Work's own home and what you list in `read` and `write` |
 | Network | any host | only `network.allow`, through srt's proxy | only `network.allow`, through a gateway container; no route out without it |
 | Open Conduit's state, config and other runs | readable | denied | not mounted |
 | GitHub credential for git | yours, or the bot's with the connection's `git` `bot` | yours, if you grant it, or the bot's with the connection's `git` `bot` | none with a GitHub App connection: a token minted for the one repository and revoked when the run ends ([below](#git-credentials)) |
@@ -235,7 +235,7 @@ This is the GitHub workflow's binding in a process sandbox:
   "resource": {"provider": "git", "config": {"checkout": "/path/to/web", "mode": "clone"}},
   "sandbox": {"provider": "srt", "config": {
     "write": ["{workspace}", "/path/to/sandboxed-claude", "~/.npm"],
-    "read": {"deny": ["~/.ssh", "~/.aws", "~/.config/gh"]},
+    "read": {"deny": ["~/.config/op"]},
     "network": {"allow": ["api.anthropic.com", "github.com", "*.githubusercontent.com", "registry.npmjs.org"]},
     "sockets": ["{toolbelt}"],
     "unix_sockets": "all"
@@ -248,20 +248,22 @@ The policy is exactly what runs get:
 | Field | What it grants |
 | --- | --- |
 | `write` | Paths a run may write. Its workspace is `{workspace}`. Claude Code also needs its config directory (below). |
-| `read.deny` | Paths a run may not read. Everything else is readable, so deny your credentials. `read.allow` makes exceptions beneath a deny. |
+| `read.deny` | Paths a run may not read, on top of the credentials Open Conduit denies anyway (below). `read.allow` makes exceptions beneath a deny, or lifts one of Open Conduit's. |
 | `network.allow` | Hosts a run may reach (`github.com`, `*.githubusercontent.com`). Everything else is refused. |
-| `sockets` | Unix sockets a run may use. `{toolbelt}` is the run's own toolbelt, which the agent needs. |
-| `unix_sockets` | Set it to `"all"` on Linux, which can't allow a socket by path. Any socket a run can see is then usable, so the daemon gives each run a socket of its own and hides the Docker, containerd and podman sockets. |
+| `sockets` | Unix sockets a run may use. `{toolbelt}` is the run's own toolbelt, which the agent needs. Listing a socket Open Conduit hides lifts it. |
+| `unix_sockets` | Set it to `"all"` on Linux, which can't allow a socket by path. Any socket a run can see is then usable, so the daemon gives each run a socket of its own and hides the sockets that lead out of the sandbox (below). |
 
 `{run}` names the run's own directory. Paths start with `/`, `~/` or a placeholder.
 
-Unlike a container, a process sandbox reads broadly by default. **List your credentials in `read.deny`**: `~/.ssh`, `~/.aws`, `~/.config/gh`, and any token file or keychain export you keep.
+Unlike a container, a process sandbox reads broadly by default. **Open Conduit denies the common credentials unless the policy lifts one:** `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`, `~/.config/gh`, `~/.docker/config.json`, `~/.netrc`, `~/.git-credentials` and, on macOS, the login keychain (`~/Library/Keychains`), which would otherwise hand a run your gh token and every `keyring:` secret. On Linux with `"unix_sockets": "all"` it also hides your runtime directory (`$XDG_RUNTIME_DIR`, with the user bus that `systemd-run --user` would use to run anything outside the sandbox, rootless Docker and podman, and gpg-agent), your ssh agent (`$SSH_AUTH_SOCK`), the Docker, containerd and podman sockets and the system bus. List any other credential you keep in `read.deny`.
+
+To let a run read one of these, name it in `read.allow`, for example `"read": {"allow": ["~/.ssh/known_hosts"]}` (the rest of `~/.ssh` stays denied) or `"read": {"allow": ["~/.kube"]}`. To let it use your ssh agent, list `$SSH_AUTH_SOCK`'s path in `sockets`. Granting a directory in `write` doesn't lift a deny inside it.
 
 **A sandboxed Claude Code binding needs a config directory of its own.** Anything a run writes in claude's config, such as a hook, an MCP server or a plugin, would run as you in every claude session you start. So `~/.claude` and `~/.claude.json` stay out of a sandbox's reach. Set `CLAUDE_CONFIG_DIR` in the binding's `env` to an absolute path that no claude of yours uses, create it, and grant it in `write`. `config check` refuses a sandboxed Claude Code binding without one, or with one that is `~/.claude`, contains it or is inside it.
 
-Claude signs in separately there, since its credentials belong to the config directory (on macOS, in a Keychain entry of its own). Sign in once with `CLAUDE_CONFIG_DIR=/path/to/sandboxed-claude claude` and `/login`. Or make a token with `claude setup-token` and select it as a secret mapped to `CLAUDE_CODE_OAUTH_TOKEN` in `secret_env`.
+Claude signs in separately there, since its credentials belong to the config directory. Make a token with `claude setup-token` and select it as a secret mapped to `CLAUDE_CODE_OAUTH_TOKEN` in `secret_env`. On Linux you can instead sign in once with `CLAUDE_CONFIG_DIR=/path/to/sandboxed-claude claude` and `/login`. On macOS that login goes in the keychain, which a sandboxed run can't read, so use the token.
 
-**To push as the bot rather than as you**, set `git` to `bot` on the GitHub connection ([push and commit as the bot](../github-bot/#push-and-commit-as-the-bot)). git then signs in through the run's own toolbelt with a token minted for the one repository, so you can keep `~/.config/gh` and your other GitHub credentials in `read.deny`. Add `github.com` to `network.allow` and use an HTTPS remote.
+**To push as the bot rather than as you**, set `git` to `bot` on the GitHub connection ([push and commit as the bot](../github-bot/#push-and-commit-as-the-bot)). git then signs in through the run's own toolbelt with a token minted for the one repository, so `~/.config/gh` and your other GitHub credentials can stay denied. Add `github.com` to `network.allow` and use an HTTPS remote.
 
 `work attach` is refused for Work that ran in a process sandbox. On your machine, claude would load hooks and MCP servers the agent wrote into the workspace. If you want to attach to sandboxed Work, run it in a container instead.
 
@@ -287,7 +289,7 @@ Every run's history records the exact policy it ran under: for a container, its 
 - **The run's own credentials are readable inside.** That includes the Claude sign-in, any secret you select, and a static GitHub token if you use one. With a GitHub App connection, the GitHub token only reaches the one repository, and only while the run lasts.
 - **The agent can change its own sign-in.** It can write its home's `settings.json`, for example to plant an `apiKeyHelper`. That only affects its own runs, inside the boundary.
 - **The tools are trusted.** srt, Docker and the gateway run as you, outside the sandbox.
-- **Process sandboxes deny, rather than allow.** Anything you don't list in `read.deny` is readable. On Linux, any unix socket the run can see is usable.
+- **Process sandboxes deny, rather than allow.** Anything outside the common credentials and your `read.deny` is readable. On Linux, any unix socket the run can see is usable, other than those Open Conduit hides.
 - **pnpm's hard links are refused.** In a process sandbox, a package manager that hard-links files from a store outside the workspace is refused. Set pnpm's `package-import-method=copy`.
 
 For the full contract, see [process sandboxes and containers](../../architecture/sandboxes/). It covers what the host protects whatever the policy says, how a run's policy is pinned and checked on recovery, and the isolation tests that run in CI.

@@ -106,7 +106,7 @@ These checks, with the protected-set checks of invariant 2, are one host functio
 ```json
 {
   "write": ["{workspace}", "/srv/open-conduit/claude"],
-  "read": {"deny": ["~/.ssh", "~/.aws"], "allow": []},
+  "read": {"deny": ["~/.config/op"], "allow": ["~/.ssh/known_hosts"]},
   "network": {"allow": ["api.anthropic.com", "github.com", "*.githubusercontent.com"]},
   "sockets": ["{toolbelt}"],
   "unix_sockets": "all"
@@ -116,17 +116,29 @@ These checks, with the protected-set checks of invariant 2, are one host functio
 | Field | Meaning |
 | --- | --- |
 | `write` | Paths the process may write and read. The run directory is always writable. |
-| `read.deny`, `read.allow` | Paths it may not read (srt reads broadly by default), and exceptions beneath them. |
+| `read.deny`, `read.allow` | Paths it may not read (srt reads broadly by default), on top of the [default denies](#default-denies), and exceptions beneath them. `read.allow` naming a default deny, or a directory holding one, lifts it. |
 | `network.allow` | Host names or `*.domain` it may reach through srt's proxy, with `strictAllowlist`. Everything else is refused before it is resolved. |
-| `sockets` | Unix sockets it may connect to. |
-| `unix_sockets` | `"all"` accepts that Linux can't allow a socket by path (seccomp blocks `socket(AF_UNIX)` wholesale or not at all), so any socket the filesystem policy leaves visible is reachable; the known Docker, containerd and podman sockets are then hidden. Without it a socket on Linux is refused as unenforceable. The execution's own toolbelt socket makes "all" reach nothing else of the daemon's. |
+| `sockets` | Unix sockets it may connect to. Listing a hidden socket ([default denies](#default-denies)) lifts it. |
+| `unix_sockets` | `"all"` accepts that Linux can't allow a socket by path (seccomp blocks `socket(AF_UNIX)` wholesale or not at all), so any socket the filesystem policy leaves visible is reachable; the escape sockets are then hidden ([default denies](#default-denies)). Without it a socket on Linux is refused as unenforceable. The execution's own toolbelt socket makes "all" reach nothing else of the daemon's. |
 
 Paths are absolute, `~/…` or start with a placeholder; patterns are refused. The config is checked strictly at load (`srt.ValidateConfig`), with a fixed, secret-free message.
 
+### Default denies
+
+srt reads everything it isn't told to deny, so the provider denies these unless the policy lifts one:
+
+- **Credentials, on both platforms:** `~/.ssh`, `~/.gnupg`, `~/.aws`, `~/.azure`, `~/.config/gcloud`, `~/.kube`, `~/.config/gh`, `~/.docker/config.json`, `~/.netrc` and `~/.git-credentials`.
+- **The login keychain, on macOS:** `~/Library/Keychains`. srt's Seatbelt profile lets a process ask securityd for keychain items, and `security find-generic-password -w` hands back any item whose access list trusts `security` itself without a prompt. That includes gh's token and every `keyring:` secret Open Conduit keeps. Hiding the keychain files is what stops it.
+- **Escape sockets, on Linux once every unix socket is allowed:** the operator's runtime directory (`$XDG_RUNTIME_DIR` and `/run/user/<uid>`), which holds the user bus (`systemd-run --user` runs a command outside the sandbox), the Secret Service, rootless Docker and podman and gpg-agent; `$SSH_AUTH_SOCK`; the root Docker, containerd and podman sockets, `~/.docker/run/docker.sock`, `~/.docker/desktop/docker.sock` and the system bus. Each that exists is hidden. On macOS srt allows sockets by path, so nothing else is reachable.
+
+A policy lifts a default by naming it, or a directory holding it, in `read.allow` (a credential) or `sockets` (a socket); a path beneath one is an exception like any other, so `"sockets": ["{toolbelt}"]` with a toolbelt in the runtime directory keeps the rest of it hidden. A write grant never lifts one: a default deny inside a grant stays unreadable and unwritable there, so granting `/tmp` doesn't expose an ssh agent under it. An executor's or a resource's need beneath a default deny is refused, as one beneath the policy's own. Open Conduit's state directory, `private/` included, is the host's to deny ([invariant 2](#2-the-host-merges-needs-from-three-places)), and no policy lifts it.
+
+The toolbelt can't be given its own path through the seccomp filter instead of `"all"`: the filter refuses `socket(AF_UNIX)` without seeing a path, and the sandbox's network namespace reaches the host only through srt's proxy, which would have to be opened to the host's loopback for a TCP toolbelt. So the filesystem policy is what keeps the other sockets out of reach.
+
 ### How the policy maps to srt
 
-- `denyRead` is the policy's read denies and the protected set. `allowRead` lists the exceptions (the policy's, the attempt's own paths and the shared host paths), but only those beneath a deny, since a broader one would lift the denies inside it. An exception that holds a deeper deny can't be expressed and is refused.
-- `allowWrite` is the policy's write grants and the run directory. `denyWrite` is the read-only needs (a clone's `.git/config`, `.git/hooks` and `.git/info`) and the protected paths inside a grant, which srt applies over the write grants. A read-only path that holds a write grant is refused.
+- `denyRead` is the policy's read denies, the default denies and the protected set. `allowRead` lists the exceptions (the policy's, the attempt's own paths and the shared host paths), but only those beneath a deny, since a broader one would lift the denies inside it. An exception that holds a deeper deny can't be expressed and is refused.
+- `allowWrite` is the policy's write grants and the run directory. `denyWrite` is the read-only needs (a clone's `.git/config`, `.git/hooks` and `.git/info`) and the protected paths and default denies inside a grant, which srt applies over the write grants. A read-only path that holds a write grant is refused.
 - On Linux srt binds a read exception after, and over, the writable paths beneath it, so a write grant beneath a read exception that isn't itself writable is refused. A deny on a path that doesn't exist is masked with `/dev/null`, and a grant on one is ignored: the git provider makes a clone's `hooks` and `info` before handing it out, and a grant should name a path that exists.
 - `allowLocalBinding` is off. On macOS that refuses loopback TCP, and on Linux the sandbox has its own network namespace.
 
@@ -144,7 +156,7 @@ A version newer than the tested one is a `warn` (`untested_version`). The detail
 ## Executors
 
 - **Shell** needs its workspace, its outputs and inbox directories, its input file, its token directory and its toolbelt socket. The `os` toolbelt binary runs inside the sandbox.
-- **Claude Code** needs its workspace, its own config directory, its MCP config, the playbooks, its token directory and toolbelt socket, and `api.anthropic.com`. Sandboxed, its temporary files go in the segment's own directory (`TMPDIR` and `CLAUDE_CODE_TMPDIR`) while srt keeps `/tmp` for its own sockets (`WrapperEnv`), whose paths would otherwise pass the platform's limit. The policy must grant the config directory and the hosts the work needs (GitHub, a package registry).
+- **Claude Code** needs its workspace, its own config directory, its MCP config, the playbooks, its token directory and toolbelt socket, and `api.anthropic.com`. Sandboxed, its temporary files go in the segment's own directory (`TMPDIR` and `CLAUDE_CODE_TMPDIR`) while srt keeps `/tmp` for its own sockets (`WrapperEnv`), whose paths would otherwise pass the platform's limit. The policy must grant the config directory and the hosts the work needs (GitHub, a package registry). On macOS the default keychain deny hides a login kept in the keychain, so a sandboxed claude signs in with a token (`CLAUDE_CODE_OAUTH_TOKEN` or `ANTHROPIC_API_KEY` from the binding's secrets).
 - **Claude Code's config directory** is the binding's own. Host-side claude loads user-level hooks, MCP servers and plugins from `~/.claude` and `~/.claude.json` in every session the operator starts, so an agent that could write them would run code as the operator outside the sandbox, and making them read-only doesn't work: claude writes its sessions and state there. So a sandboxed claude-code binding must set `CLAUDE_CONFIG_DIR` in its `env` to an absolute path that is not, doesn't hold and isn't inside `~/.claude` or `~/.claude.json` (`SandboxConfig`, a `config.SandboxChecker`: refused at load as `sandbox_config`). The launch checks the resolved directory again, symbolic links followed, and refuses it as `sandbox_denied`. Its needs also deny `~/.claude` and `~/.claude.json`, under the daemon's home and under any `HOME` the binding's `env` sets in its place, so a policy that still grants them is refused (the provider won't let a grant reach into a deny) and their credentials aren't readable inside. Claude signs in separately there: on macOS its Keychain entry is `Claude Code-credentials-<hash of the directory>`, so the operator's own sign-in isn't shared. A one-off `CLAUDE_CONFIG_DIR=<dir> claude` with `/login`, or a `claude setup-token` token selected as a secret mapped to `CLAUDE_CODE_OAUTH_TOKEN`, signs it in.
 - **Claude Code's own sandbox** (`sandbox.*` in its settings) is executor config, not a provider. It wraps only Claude's Bash tool. Under the executor's default `bypassPermissions` its network allowlist doesn't hold, and Open Conduit can't see, pin or verify it. Inside an srt sandbox it can still be turned on with `extra_args: ["--settings", "<file>"]` as defence in depth.
 
@@ -165,10 +177,10 @@ Claude Code's own config directory is the same kind of path: a user-level hook, 
 Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from npm and, on Ubuntu 24.04, bubblewrap, socat and ripgrep, with the AppArmor userns restriction relaxed). They skip without srt, and fail without it under `OPEN_CONDUIT_SANDBOX_TESTS=1`. They call no real service.
 
 - [Isolation tests](https://github.com/open-conduit/open-conduit/blob/main/integration/sandbox_test.go), for the shell executor and for Claude Code's launch path (a stand-in `claude`), in a lab laid out as the daemon's state directory, from inside the sandbox:
-  - denied reads of `~/.ssh`, another workspace, `private/operator.token`, another execution's token and the config file, also through a symlink in the workspace, `..`, `/proc/self/root` and an upper-case spelling (which reaches it unsandboxed on macOS's case-insensitive APFS); the attempt's own token readable
+  - denied reads of `~/.ssh`, a default-denied `~/.aws` and (macOS) the keychain files, another workspace, `private/operator.token`, another execution's token and the config file, also through a symlink in the workspace, `..`, `/proc/self/root` and an upper-case spelling (which reaches it unsandboxed on macOS's case-insensitive APFS); the attempt's own token readable, and a credential the policy lifts readable
   - denied writes outside the workspace, to the home, the state directory, the record directory, `.git/config`, `.git/hooks` and `.git/info`, and renaming `.git`, each checked on the host (on Linux a denied write lands in a throwaway tmpfs); a write and `git commit` in the workspace
   - no new hard link to a protected file
-  - a host outside the policy refused by srt's proxy (403) and one in it let through; loopback TCP, a Docker socket, `management.sock` and another execution's toolbelt socket refused; the own toolbelt reachable
+  - a host outside the policy refused by srt's proxy (403) and one in it let through; loopback TCP, a Docker socket, a user bus in the runtime directory, the ssh agent, `management.sock` and another execution's toolbelt socket refused; the own toolbelt reachable
   - a control run without a sandbox that reaches everything the sandbox denies
   - fail-closed: a missing binary, an unsupported platform, an old srt, a failed preflight, a degraded srt, a socket by path on Linux, the workspace or socket outside the policy, a policy reaching into or re-reading the state directory and a pre-existing hard link, each with nothing run
   - `Inject` reaching the inbox inside, `Interrupt` reporting `term` (macOS, handler run) or `kill` (Linux), `Stop` leaving nothing
@@ -178,14 +190,15 @@ Real isolation tests run in CI on macOS and Linux (the `sandbox` jobs: srt from 
 - [Sweep test](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/sandbox_test.go): the git provider's stray-process sweep finds and stops a sandboxed process tied to a workspace only by its working directory.
 - `TestManagementAttachRefusesSandboxedWork`: a sandboxed run plants a `SessionStart` hook in `.claude/settings.json` and a server in `.mcp.json`; attach is refused as `attach_sandboxed` without asking the executor and neither runs, while unsandboxed Work still attaches.
 - [Contract tests](https://github.com/open-conduit/open-conduit/blob/main/extension/sandbox_test.go), with a fake provider: needs merged with the resource's and the protected set, the plan pinned and recorded read-only, and refusals of a run directory outside the executor's or through a symlink, a workspace holding the state, a need inside the state or through `..`, a socket there, a hard link, a workspace without sandbox needs and an incomplete plan; adoption only under the pinned, unchanged record. [Mount aliases](https://github.com/open-conduit/open-conduit/blob/main/extension/sandboxmount_test.go) from a mountinfo fixture.
-- [srt provider tests](https://github.com/open-conduit/open-conduit/blob/main/extensions/srt/srt_test.go), with a stand-in `srt`: strict config, the settings for macOS and Linux, the wrapper's environment, every refusal, `Adopt` refusing another process, and [doctor's health](https://github.com/open-conduit/open-conduit/blob/main/extensions/srt/health_test.go) (also against the real srt in the sandbox jobs).
+- [srt provider tests](https://github.com/open-conduit/open-conduit/blob/main/extensions/srt/srt_test.go), with a stand-in `srt`: strict config, the settings for macOS and Linux, the default denies and how a policy lifts them, the wrapper's environment, every refusal, `Adopt` refusing another process, and [doctor's health](https://github.com/open-conduit/open-conduit/blob/main/extensions/srt/health_test.go) (also against the real srt in the sandbox jobs).
 - [Scheduler hook test](https://github.com/open-conduit/open-conduit/blob/main/integration/scheduler_sandbox_test.go): the pin recorded with the segment and carried into recovery, and a binding failure failing the attempt before any executor call.
 - [Config tests](https://github.com/open-conduit/open-conduit/blob/main/internal/config/config_test.go) (`TestSandboxBinding`, with an executor's `sandbox_config` refusal of a binding and a grant), claude-code's `TestSandboxConfig` (no `CLAUDE_CONFIG_DIR`, a relative one, `~/.claude`, inside it, the home that holds it, a link to it, and either home's when the binding's `env` sets `HOME`) and the [git provider's](https://github.com/open-conduit/open-conduit/blob/main/extensions/git/clone_test.go) `TestSandboxedAcquire`: worktree modes and setup refused before anything is made or run.
 
 ## Limitations
 
 - Only macOS and Linux, through srt. Remote sandboxes need a contract of their own; [containers](#containers) have one.
-- On Linux, `"unix_sockets": "all"` makes every unix socket the filesystem policy leaves visible reachable; only the known container sockets are hidden.
+- On Linux, `"unix_sockets": "all"` makes every unix socket the filesystem policy leaves visible reachable; only the [escape sockets](#default-denies) are hidden. A service listening somewhere else (`/tmp`, a project directory) is reachable unless the policy denies it.
+- The default denies are a list of common credential paths. A credential kept elsewhere is readable unless the policy denies it.
 - The hard-link check covers the workspace, not the policy's other write grants. A package manager that hard-links from a store outside the workspace (pnpm) is refused until it is set to copy (`package-import-method=copy`).
 - On Linux srt grants only paths that exist when the segment starts.
 - srt itself runs as the operator, outside its sandbox, and is trusted.
