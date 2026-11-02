@@ -20,6 +20,7 @@ import (
 	"errors"
 	"fmt"
 	"regexp"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -97,6 +98,10 @@ type Trigger struct {
 	Conclusions []string `json:"conclusions,omitempty"`
 	Webhook     bool     `json:"webhook,omitempty"`
 }
+
+// Conclusions are the ways GitHub says a check suite or run can end, what
+// on.conclusions may list.
+var Conclusions = []string{"success", "failure", "neutral", "cancelled", "skipped", "timed_out", "action_required", "stale", "startup_failure"}
 
 // Settings is a validated entry.
 type Settings struct {
@@ -294,8 +299,8 @@ func (j Job) Validate() []string {
 			}
 		}
 		for _, c := range j.On.Conclusions {
-			if c == "" {
-				errs = append(errs, name+": an empty conclusion")
+			if !slices.Contains(Conclusions, strings.ToLower(c)) {
+				errs = append(errs, fmt.Sprintf("%s: %q isn't a check conclusion; use %s", name, c, strings.Join(Conclusions, ", ")))
 			}
 		}
 		if (len(j.On.Branches) > 0 || len(j.On.Paths) > 0 || len(j.On.Conclusions) > 0) && len(j.On.Events) == 0 {
