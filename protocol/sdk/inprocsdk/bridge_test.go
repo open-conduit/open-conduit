@@ -369,3 +369,34 @@ func TestAcceptInTxIsCarried(t *testing.T) {
 		t.Fatalf("%d Events accepted by the second transaction, want 1", got-before)
 	}
 }
+
+// A Work's Waits are read through state.waits (#428): an extension's
+// store sees its own scopes' Waits, seeded with sdktest.WithWaits.
+func TestListWaitsIsCarried(t *testing.T) {
+	x := &acme{}
+	b, err := inprocsdk.New(x, base())
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	work := domain.Work{ID: "w1", Kind: "acme.thing", ScopeID: "eng", State: domain.WorkWaiting}
+	wait := domain.Wait{ID: "wait-1", WorkID: "w1", State: domain.WaitActive, Description: "an answer", Match: domain.EventMatch{Types: []string{"acme.thing"}}}
+	h := sdktest.New(t, b.Extension(), sdktest.WithWorks(work), sdktest.WithWaits(wait))
+	if _, err := h.Configure(ctx, protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: "eng", Type: "acme", Name: "plain", Config: json.RawMessage(`{}`)}}}); err != nil {
+		t.Fatal(err)
+	}
+	x.mu.Lock()
+	host := *x.host
+	x.mu.Unlock()
+	var waits []domain.Wait
+	if err := host.Store.Transact(ctx, storage.Guard{}, func(tx storage.Tx) error {
+		var err error
+		waits, err = tx.ListWaits("w1")
+		return err
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if len(waits) != 1 || waits[0].ID != "wait-1" || waits[0].Description != "an answer" {
+		t.Fatalf("waits %+v", waits)
+	}
+}

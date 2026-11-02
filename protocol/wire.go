@@ -287,6 +287,37 @@ func (x Execution) Domain() domain.Execution {
 	return out
 }
 
+// Wait is a Work's Wait, as state.waits returns it.
+type Wait struct {
+	ID             string    `json:"id"`
+	WorkID         string    `json:"work_id"`
+	ExecutionID    string    `json:"execution_id,omitempty"`
+	State          string    `json:"state"`
+	Keys           []Key     `json:"keys,omitempty"`
+	Types          []string  `json:"types,omitempty"`
+	TimeoutTimerID string    `json:"timeout_timer_id,omitempty"`
+	AfterSequence  uint64    `json:"after_sequence,omitempty"`
+	WakeEventID    string    `json:"wake_event_id,omitempty"`
+	Description    string    `json:"description,omitempty"`
+	Owner          string    `json:"owner,omitempty"`
+	Progress       string    `json:"progress,omitempty"`
+	Revision       uint64    `json:"revision"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
+}
+
+func FromWait(w domain.Wait) Wait {
+	return Wait{ID: string(w.ID), WorkID: string(w.WorkID), ExecutionID: string(w.ExecutionID), State: string(w.State), Keys: fromKeys(w.Match.Keys), Types: w.Match.Types,
+		TimeoutTimerID: string(w.TimeoutTimerID), AfterSequence: w.AfterSequence, WakeEventID: string(w.WakeEventID), Description: w.Description, Owner: w.Owner, Progress: w.Progress,
+		Revision: uint64(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
+}
+
+func (w Wait) Domain() domain.Wait {
+	return domain.Wait{ID: domain.ID(w.ID), WorkID: domain.ID(w.WorkID), ExecutionID: domain.ID(w.ExecutionID), State: domain.WaitState(w.State), Match: domain.EventMatch{Keys: toKeys(w.Keys), Types: w.Types},
+		TimeoutTimerID: domain.ID(w.TimeoutTimerID), AfterSequence: w.AfterSequence, WakeEventID: domain.ID(w.WakeEventID), Description: w.Description, Owner: w.Owner, Progress: w.Progress,
+		Revision: domain.Revision(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
+}
+
 // Domain returns the bind-time capability labels (Capabilities is the
 // manifest's executor capability declaration, which is also its wire shape).
 func (c Capabilities) Domain() domain.Capabilities {

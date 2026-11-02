@@ -480,11 +480,24 @@ func (t *storeTx) Release(domain.LeaseRef) error                             { r
 func (t *storeTx) DeleteTimer(domain.ID, domain.Revision) error              { return ErrReadOnly }
 func (t *storeTx) PutTimer(domain.Timer, domain.Revision) error              { return ErrReadOnly }
 func (t *storeTx) FireTimer(domain.ID, domain.Revision, *domain.Timer) error { return ErrReadOnly }
-func (t *storeTx) ListWaits(domain.ID) ([]domain.Wait, error)                { return nil, ErrReadOnly }
-func (t *storeTx) ActiveWaits() ([]domain.Wait, error)                       { return nil, ErrReadOnly }
-func (t *storeTx) Wait(domain.ID) (domain.Wait, error)                       { return domain.Wait{}, ErrReadOnly }
-func (t *storeTx) PutWait(domain.Wait, domain.Revision) error                { return ErrReadOnly }
-func (t *storeTx) PutScope(domain.Scope, domain.Revision) error              { return ErrReadOnly }
+
+// ListWaits is a Work's Waits, through state.waits (a Work outside the
+// extension's scopes is not found).
+func (t *storeTx) ListWaits(work domain.ID) ([]domain.Wait, error) {
+	var out []protocol.Wait
+	if err := t.h.Call(t.ctx, "state.waits", protocol.StateParams{ID: string(work)}, &out); err != nil {
+		return nil, err
+	}
+	waits := make([]domain.Wait, 0, len(out))
+	for _, w := range out {
+		waits = append(waits, w.Domain())
+	}
+	return waits, nil
+}
+func (t *storeTx) ActiveWaits() ([]domain.Wait, error)          { return nil, ErrReadOnly }
+func (t *storeTx) Wait(domain.ID) (domain.Wait, error)          { return domain.Wait{}, ErrReadOnly }
+func (t *storeTx) PutWait(domain.Wait, domain.Revision) error   { return ErrReadOnly }
+func (t *storeTx) PutScope(domain.Scope, domain.Revision) error { return ErrReadOnly }
 
 var _ storage.Store = (*Store)(nil)
 
