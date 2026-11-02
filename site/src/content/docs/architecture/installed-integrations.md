@@ -40,7 +40,7 @@ The runtime holds no tracker vocabulary. Labels and transitions exist only in th
 - **Entry.** `teams` and `states` (claim-from state types or names; default unstarted, started), plus the kit's fields.
 - **Rate limits and credentials.** A `RATELIMITED` answer pauses the client until `X-RateLimit-Requests-Reset`. A 401 re-resolves the token once.
 - **Marks.** Linear drops HTML comments, so a comment carries a visible line `*open-conduit work=… intent=…*`. The line is visible in Linear: a provisional decision, not yet checked against how Linear renders it.
-- **Webhooks.** `Linear-Signature` (hex HMAC-SHA256), a ten-minute replay window and `Linear-Delivery` as the identity. `manage_webhook` creates a team's hook, or an all-public-teams hook for several teams. That needs a workspace admin.
+- **Webhooks.** `Linear-Signature` (hex HMAC-SHA256), a ten-minute replay window on the signed `webhookTimestamp` (a delivery without one, or dated more than ten minutes ahead, is refused) and `Linear-Delivery` as the identity. `manage_webhook` creates a team's hook, or an all-public-teams hook for several teams. That needs a workspace admin.
 - **Labels.** A missing managed label is created on first use.
 
 ## Jira
