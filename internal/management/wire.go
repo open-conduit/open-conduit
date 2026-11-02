@@ -59,6 +59,11 @@ type wireEventRoute struct {
 	Reason       string `json:"reason,omitempty"`
 	// DisplayRefused is why the route's Work display was dropped.
 	DisplayRefused string `json:"display_refused,omitempty"`
+	// Error is why routing gave up on the Event (disposition "failed"),
+	// or, while it is unrouted, why its routes last failed; Attempts is
+	// how many times they have.
+	Error    string `json:"error,omitempty"`
+	Attempts int    `json:"attempts,omitempty"`
 }
 
 // wireRouteTrace is a dry-run route trace for a hypothetical Event.

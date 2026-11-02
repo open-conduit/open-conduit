@@ -33,7 +33,9 @@ type workData struct {
 	Side      []panelView
 	Repair    *repairNote
 	Events    []eventRow
-	Facts     facts
+	// CSRF and Back are the page's, for the Events' controls.
+	CSRF, Back string
+	Facts      facts
 	// Since is how long the disposition has held, as the header says it.
 	Since string
 	// Missing is set instead of everything else when the Work could not
@@ -258,7 +260,7 @@ func (s *Server) workData(ctx context.Context, p *page, work client.Work, q url.
 	sort.SliceStable(events, func(i, j int) bool { return seq(events[i].Sequence) < seq(events[j].Sequence) })
 	v := newWork(work, runs, active, now)
 	v.Events = events
-	d := workData{W: v, Tab: q.Get("tab")}
+	d := workData{W: v, Tab: q.Get("tab"), CSRF: p.CSRF, Back: p.Back}
 	if d.Tab != "events" {
 		d.Tab = ""
 	}

@@ -192,9 +192,7 @@ func (d *daemon) projectSlack(ctx context.Context) {
 		sources = append(sources, src)
 	}
 	d.slack.mu.Unlock()
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.goSafe("slack_projection", func() {
 		defer func() {
 			d.slack.mu.Lock()
 			d.slack.running = false
@@ -211,7 +209,7 @@ func (d *daemon) projectSlack(ctx context.Context) {
 			}
 			d.report("slack_projection", domain.ID(src.name), code)
 		}
-	}()
+	})
 }
 
 // push hands a delivery to the runtime, which durably accepts it first.

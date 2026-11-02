@@ -121,6 +121,41 @@ func TestWorkPageEventsAndMissingWork(t *testing.T) {
 	}
 }
 
+// TestWorkPageEventControls: an Event routing is stuck on offers skip and
+// route now, one it gave up on shows why and offers route again, and one
+// routed as usual offers neither (issue #342).
+func TestWorkPageEventControls(t *testing.T) {
+	f, s, h := setup(t)
+	f.events = []client.Event{
+		{ID: "evt_ok", Type: "github.issue.open", Source: "github/example", WorkID: "wrk_1", Sequence: "1", OccurredAt: "2026-10-28T00:00:00Z", Routed: true, Disposition: "queue", Route: &client.EventRoute{Route: "issues", Policy: "queue"}},
+		{ID: "evt_stuck", Type: "github.issue.comment", Source: "github/example", WorkID: "wrk_1", Sequence: "2", OccurredAt: "2026-10-28T00:01:00Z", Route: &client.EventRoute{Route: "issues", Reason: "handler_timeout", Error: "no decision within 5s", Attempts: 2}},
+		{ID: "evt_failed", Type: "github.issue.comment", Source: "github/example", WorkID: "wrk_1", Sequence: "3", OccurredAt: "2026-10-28T00:02:00Z", Routed: true, Disposition: "failed", Route: &client.EventRoute{Route: "issues", Policy: "failed", Reason: "handler_panic", Error: "panic: nil map", Attempts: 1}},
+	}
+	body := do(h, "GET", "/work?id=wrk_1&tab=events", nil, s).Body.String()
+	for _, want := range []string{"no decision within 5s", "panic: nil map", `action="/events/skip"`, "Route now", "Route again"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("events tab lacks %q", want)
+		}
+	}
+	if n := strings.Count(body, `action="/events/skip"`); n != 1 {
+		t.Errorf("skip offered %d times, want once (the stuck event)", n)
+	}
+	if n := strings.Count(body, `action="/events/reroute"`); n != 2 {
+		t.Errorf("reroute offered %d times, want twice", n)
+	}
+	for _, c := range []string{"skip", "reroute"} {
+		if w := do(h, "POST", "/events/"+c, url.Values{"csrf": {s.csrf}, "work": {"wrk_1"}, "event": {"evt_stuck"}}, s); w.Code != http.StatusSeeOther {
+			t.Fatalf("%s: %d", c, w.Code)
+		}
+	}
+	if got := strings.Join(f.controls, ","); got != "skip-event evt_stuck@,reroute-event evt_stuck@" {
+		t.Fatalf("controls: %s", got)
+	}
+	if w := do(h, "POST", "/events/delete", url.Values{"csrf": {s.csrf}, "event": {"evt_stuck"}}, s); w.Code != http.StatusNotFound {
+		t.Fatalf("unknown control: %d", w.Code)
+	}
+}
+
 func TestRunRedirectsToItsWorkAndTurn(t *testing.T) {
 	_, s, h := setup(t)
 	w := do(h, "GET", "/run?id=exe_2", nil, s)

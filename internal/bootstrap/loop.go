@@ -111,6 +111,14 @@ func (d *daemon) routePending(ctx context.Context, c *components) {
 				continue
 			}
 			if err = c.router.Route(ctx, p.Event.Event.ID); err != nil {
+				var re *runtime.RouteError
+				if errors.As(err, &re) && re.DeadLettered {
+					// Routing gave up: the Event is routed as failed, in
+					// its Work's history, and holds nothing any more.
+					d.log.Warn("event routed as failed", "event", string(re.EventID), "route", re.Route, "code", re.Code, "attempts", re.Attempts, "error", re.Err)
+					d.clear("route", p.Event.Event.ID)
+					continue
+				}
 				d.report("route", p.Event.Event.ID, errorCode(err))
 			} else {
 				d.clear("route", p.Event.Event.ID)
@@ -330,9 +338,14 @@ func (d *daemon) releaseAll(ctx context.Context) {
 // errorCode maps runtime errors to safe stable diagnostic codes.
 func errorCode(err error) string {
 	var capacity *runtime.CapacityError
+	var route *runtime.RouteError
 	switch {
 	case err == nil:
 		return ""
+	case errors.As(err, &route):
+		// A retry still in its backoff reports the failure it follows,
+		// so each failure is logged once.
+		return "route_" + route.Code
 	case errors.Is(err, context.Canceled), errors.Is(err, context.DeadlineExceeded):
 		return "cancelled"
 	case errors.As(err, &capacity):

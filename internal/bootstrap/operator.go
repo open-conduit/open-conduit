@@ -429,7 +429,7 @@ func claudeVersionCheck(ctx context.Context, snapshot *config.Snapshot) runtime.
 }
 
 // daemonChecks are the doctor checks only a running daemon makes.
-var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource_holds", "retention", "reconcile_lag", "bindings", "connections", "secrets", "pinned_executors", "telemetry", "github", "trackers", "slack", "posthog", "webhooks", "schedule", "resources", "introspection", "extensions"}
+var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource_holds", "retention", "routing", "reconcile_lag", "bindings", "connections", "secrets", "pinned_executors", "telemetry", "github", "trackers", "slack", "posthog", "webhooks", "schedule", "resources", "introspection", "extensions"}
 
 // OfflineChecks are the doctor checks that need no daemon: the config file
 // validated against the same registrations `serve` uses, the first-party

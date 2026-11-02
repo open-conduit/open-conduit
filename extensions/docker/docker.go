@@ -107,7 +107,15 @@ type Options struct {
 	// when empty).
 	Forward string
 	Now     func() time.Time
+	// QueryTimeout bounds each read of the daemon's state (info, ps,
+	// inspect), so a wedged Docker can't hold the caller (default 5s).
+	// Creating, stopping and removing containers keep the caller's
+	// context.
+	QueryTimeout time.Duration
 }
+
+// DefaultQueryTimeout bounds a docker info, ps or inspect.
+const DefaultQueryTimeout = 5 * time.Second
 
 // Provider implements extension.ContainerProvider.
 type Provider struct {
@@ -935,7 +943,19 @@ func notFound(err error) bool {
 
 // docker runs the CLI on a context and returns its stdout.
 func (p *Provider) docker(ctx context.Context, dctx string, args ...string) ([]byte, error) {
+	if len(args) > 0 && (args[0] == "info" || args[0] == "ps" || args[0] == "inspect") {
+		timeout := p.o.QueryTimeout
+		if timeout <= 0 {
+			timeout = DefaultQueryTimeout
+		}
+		var cancel context.CancelFunc
+		ctx, cancel = context.WithTimeout(ctx, timeout)
+		defer cancel()
+	}
 	cmd := exec.CommandContext(ctx, p.o.Docker, append([]string{"--context", dctx}, args...)...)
+	// A docker that leaves a child holding its output must not hold the
+	// call past its context either.
+	cmd.WaitDelay = time.Second
 	cmd.Env = p.cliEnv()
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr

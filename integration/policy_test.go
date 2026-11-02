@@ -125,6 +125,8 @@ func TestSchedulerControlUsesPinnedCapabilitiesAfterReload(t *testing.T) {
 		t.Fatalf("new registration granted old attempt capability: %v", err)
 	}
 	options.Bindings["fixture"] = runtime.RouteBinding{Executor: replacement, Fallback: "queue"}
+	// The failure is retried once its backoff has passed.
+	f.Clock.Advance(time.Minute)
 	router, err = runtime.NewRouter(f.Store, f.Clock.Now, options)
 	if err != nil {
 		t.Fatal(err)

@@ -116,7 +116,7 @@ const operatorHelp = `open-conduit — Open Conduit operator client
 Usage: open-conduit [--endpoint unix:///path] [--token-file PATH] [--socket PATH] [--data-dir DIR] COMMAND
 
 Commands:
-  serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h]
+  serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h] [--call-timeout 5s]
         [--webhook-addr 127.0.0.1:8787] [--tunnel ngrok|cloudflared|static] [--tunnel-domain D] [--tunnel-name N] [--tunnel-hostname H] [--public-url URL]
                              (override the config's settings.webhooks for this run)
         [--no-tunnel] [--dry-run] [--claude-usage] [--no-telemetry]
@@ -148,6 +148,7 @@ Commands:
   route --samples --scope S  the sample Events the scope's routes offer for --trace
   work wake ID --revision N --type T --delivery-id D --key-source S --key-external-id X [--schema S --data JSON] [--key K]
   events list [--scope-id --work-id --type --after-sequence] | events get ID | events chain ID
+  events skip ID [--reason TEXT] | events reroute ID [--reason TEXT]
   events emit --scope-id S --type T --delivery-id D [--key-source S --key-external-id X] [--work-id W] [--causation-id E] [--schema S --data JSON] [--key K]
   executions list [--scope-id --work-id --state] | executions get ID | executions cancel ID --revision N [--reason TEXT] [--key K]
   waits list [--scope-id --work-id --execution-id --state] | waits get ID
@@ -530,6 +531,24 @@ func (o *operator) events(args []string) int {
 		cx, cancel := ctx()
 		defer cancel()
 		return o.emit(c.EventChain(cx, args[1]))
+	}
+	if len(args) > 0 && (args[0] == "skip" || args[0] == "reroute") {
+		sub := args[0]
+		f := newFlags(sub, "reason", "key")
+		pos, err := f.parse(args[1:])
+		if err != nil || len(pos) != 1 {
+			return usageError(o.errOut, "expected events "+sub+" ID [--reason TEXT]")
+		}
+		c, _, err := o.client()
+		if err != nil {
+			return o.emit(nil, err)
+		}
+		cx, cancel := ctx()
+		defer cancel()
+		if sub == "skip" {
+			return o.emit(c.SkipEvent(cx, pos[0], f.get("reason"), f.key()))
+		}
+		return o.emit(c.RerouteEvent(cx, pos[0], f.get("reason"), f.key()))
 	}
 	if len(args) > 0 && args[0] == "emit" {
 		f := newFlags("emit", "scope-id", "type", "delivery-id", "work-id", "causation-id", "schema", "data", "key", "key-source", "key-external-id")

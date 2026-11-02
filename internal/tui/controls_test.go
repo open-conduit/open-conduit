@@ -23,6 +23,7 @@ type controlSource struct {
 	scopeActions map[string][]client.Action
 	workActions  []client.Action
 	panels       []client.Panel
+	events       []client.Event
 }
 
 func (c *controlSource) Work(context.Context, string) (client.Work, error) { return c.work, nil }
@@ -49,6 +50,17 @@ func (c *controlSource) HoldWork(_ context.Context, id, rev, _, _ string) (clien
 func (c *controlSource) ReleaseWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
 	c.work.Hold = nil
 	return c.rec("release", id, rev)
+}
+func (c *controlSource) EventsWithRoutes(context.Context, url.Values) (client.Page[client.Event], error) {
+	return client.Page[client.Event]{Items: c.events}, nil
+}
+func (c *controlSource) SkipEvent(_ context.Context, id, _, _ string) (client.ControlResult, error) {
+	return c.rec("skip-event", id, "")
+}
+func (c *controlSource) RerouteEvent(_ context.Context, id, _, _ string) (client.ControlResult, error) {
+	res, err := c.rec("reroute-event", id, "")
+	res.RoutedEventID = id
+	return res, err
 }
 func (c *controlSource) Scopes(context.Context, url.Values) (client.Page[client.Scope], error) {
 	var out client.Page[client.Scope]
@@ -208,6 +220,43 @@ func TestOperatorControls(t *testing.T) {
 	}
 	if _, cmd = press(m, "a"); cmd == nil {
 		t.Fatal("a must attach")
+	}
+}
+
+// TestStuckEventControls: the Work detail lists the Events routing is stuck
+// on or gave up on; S skips the first unrouted one after a confirmation and
+// E routes the first again. A routed Event is not listed (issue #342).
+func TestStuckEventControls(t *testing.T) {
+	live := run("r1", "running", "github.issue", 1, "1")
+	src := &controlSource{fakeSource: fakeSource{runs: []client.Run{live}}, work: client.Work{ID: "w-github.issue", State: "running", Revision: "9"},
+		events: []client.Event{
+			{ID: "evt-ok", Type: "github.issue.open", Routed: true, Disposition: "queue"},
+			{ID: "evt-failed", Type: "github.issue.comment", Routed: true, Disposition: "failed", Route: &client.EventRoute{Reason: "handler_panic", Attempts: 1}},
+			{ID: "evt-stuck", Type: "github.issue.comment", Route: &client.EventRoute{Reason: "handler_timeout", Attempts: 2}},
+		}}
+	var m tea.Model = New(src, time.Hour)
+	m = drain(t, m, m.(Model).fetch())
+	m, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	m = drain(t, m, cmd)
+	view := m.View()
+	for _, want := range []string{"Events routing is stuck on", "evt-failed failed: handler_panic after 1 attempt(s)", "evt-stuck unrouted: handler_timeout after 2 attempt(s)"} {
+		if !strings.Contains(view, want) {
+			t.Fatalf("detail lacks %q:\n%s", want, view)
+		}
+	}
+	if strings.Contains(view, "evt-ok") {
+		t.Fatalf("a routed event is listed as stuck:\n%s", view)
+	}
+	m, _ = press(m, "S")
+	if !strings.Contains(m.View(), "skip event evt-stuck?") {
+		t.Fatalf("no confirmation:\n%s", m.View())
+	}
+	m, cmd = press(m, "y")
+	m = drain(t, m, cmd)
+	m, cmd = press(m, "E")
+	m = drain(t, m, cmd)
+	if got := strings.Join(src.calls, ","); got != "skip-event evt-stuck ,reroute-event evt-failed " {
+		t.Fatalf("calls: %s", got)
 	}
 }
 

@@ -84,9 +84,7 @@ func (d *daemon) maintainClaudeCode(ctx context.Context) {
 	}
 	c.running, c.last = true, d.now()
 	c.mu.Unlock()
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.goSafe("claude_code_maintain", func() {
 		defer func() {
 			c.mu.Lock()
 			c.running = false
@@ -98,5 +96,5 @@ func (d *daemon) maintainClaudeCode(ctx context.Context) {
 			code = errorCode(err)
 		}
 		d.report("claude_code_maintain", "", code)
-	}()
+	})
 }

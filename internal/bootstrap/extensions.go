@@ -790,21 +790,20 @@ func (d *daemon) runTask(ctx context.Context, key string, pace time.Duration, ru
 	if !due {
 		return
 	}
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.goSafe("extension_task", func() {
+		defer func() {
+			d.external.mu.Lock()
+			d.external.running[key] = false
+			d.external.mu.Unlock()
+		}()
 		cx, cancel := context.WithTimeout(ctx, min(max(pace, time.Minute), 10*time.Minute))
-		err := run(cx)
-		cancel()
-		d.external.mu.Lock()
-		d.external.running[key] = false
-		d.external.mu.Unlock()
-		if err != nil && ctx.Err() == nil {
+		defer cancel()
+		if err := run(cx); err != nil && ctx.Err() == nil {
 			d.report("extension_task", domain.ID(key), errorCode(err))
 		} else {
 			d.clear("extension_task", domain.ID(key))
 		}
-	}()
+	})
 }
 
 // extensionCheck reports each installed package's own health for doctor:

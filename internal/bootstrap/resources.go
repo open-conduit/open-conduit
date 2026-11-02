@@ -69,9 +69,12 @@ func (d *daemon) sweepResources(c *components) {
 	}
 	r.sweeping = true
 	r.mu.Unlock()
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.goSafe("resource_sweep", func() {
+		defer func() {
+			r.mu.Lock()
+			r.sweeping = false
+			r.mu.Unlock()
+		}()
 		var total extension.ResourceSweepReport
 		var errs []error
 		for _, name := range providerNames(r.providers) {
@@ -91,7 +94,7 @@ func (d *daemon) sweepResources(c *components) {
 		r.mu.Lock()
 		r.sweeping, r.swept, r.lastSweep, r.sweep, r.sweepErr = false, true, d.now(), total, errors.Join(errs...)
 		r.mu.Unlock()
-	}()
+	})
 }
 
 // bindResources gives an attempt its binding's resource provider, bound to the
@@ -125,9 +128,12 @@ func (d *daemon) reconcileResources(c *components) {
 	}
 	r.running = true
 	r.mu.Unlock()
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
+	d.goSafe("resources", func() {
+		defer func() {
+			r.mu.Lock()
+			r.running = false
+			r.mu.Unlock()
+		}()
 		var total extension.ResourceReport
 		var errs []error
 		for _, name := range providerNames(r.providers) {
@@ -152,7 +158,7 @@ func (d *daemon) reconcileResources(c *components) {
 		r.mu.Lock()
 		r.running, r.last, r.report, r.err = false, d.now(), total, err
 		r.mu.Unlock()
-	}()
+	})
 }
 
 func providerNames(m map[string]extension.ResourceProvider) []string {

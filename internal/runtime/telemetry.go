@@ -368,6 +368,10 @@ func (r *recorder) resolve(diagnostic func(string)) []observability.Record {
 		var rec RouteRecord
 		if getJSON(r.Tx, routeNamespace, identity(string(id)), &rec) == nil {
 			attrs["route.name"], attrs["route.binding"], attrs["route.generation"], attrs["route.reason"] = rec.Route, rec.Binding, rec.Generation, rec.Reason
+			if rec.Error != "" {
+				// Why routing gave up (Policy "failed"), with a panic's stack.
+				attrs["route.error"], attrs["route.attempts"] = rec.Error, strconv.Itoa(rec.Attempts)
+			}
 		}
 		add(observability.Record{Name: "route.decided", Correlation: c, To: a.Disposition, Attributes: attrs})
 	}
