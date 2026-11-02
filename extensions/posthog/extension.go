@@ -17,7 +17,8 @@ import (
 
 // Extension is the in-process PostHog extension (issue #66). An enabled
 // scope's `posthog` entry sends that scope's agent_turn events (one per
-// finished execution, from the lifecycle pipeline) and the host's
+// finished execution, from the lifecycle pipeline), the lifecycle records
+// it selects and the host's
 // telemetry events through its connection. Each applied generation
 // replaces the entries without a restart; sinks are cached per scope and
 // connection config and resolve the project key lazily, so a rotated
@@ -185,6 +186,9 @@ func (x *Extension) check(context.Context, protocol.CheckConfig) inproc.CheckRes
 		var parts []string
 		if e.settings.Turns {
 			parts = append(parts, "agent_turn events")
+		}
+		if len(e.settings.Records) > 0 {
+			parts = append(parts, "lifecycle records "+strings.Join(e.settings.Records, " "))
 		}
 		if e.settings.TelemetryEvents {
 			parts = append(parts, "host telemetry events")
