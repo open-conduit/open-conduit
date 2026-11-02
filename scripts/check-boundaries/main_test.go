@@ -78,6 +78,7 @@ func TestDependencyClosures(t *testing.T) {
 		{"certify_cannot_use_reference", []pkg{project("internal/certify", "conformance/reference")}, "conformance/reference"},
 		{"certify_cannot_reach_bootstrap", []pkg{project("internal/certify", "internal/bootstrap")}, "internal/bootstrap"},
 		{"package_wraps_its_implementation", []pkg{project("packages/slack", "extensions/slack", "protocol/sdk")}, ""},
+		{"package_implementation_uses_client", []pkg{project("packages/github", "extensions/github", "protocol/sdk"), project("extensions/github", "client"), project("client", "domain")}, ""},
 		{"package_cannot_reach_another", []pkg{project("packages/slack", "executors/shell")}, "executors/shell"},
 		{"package_cannot_reach_host", []pkg{project("packages/shell", "internal/extproc")}, "internal/extproc"},
 		{"bootstrap_cannot_use_reference", []pkg{project("internal/bootstrap", "conformance/reference")}, "conformance/reference"},

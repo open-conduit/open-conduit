@@ -40,6 +40,7 @@ func packageBinaries(t *testing.T) map[string]string {
 		out := map[string]string{}
 		for _, b := range []struct{ out, pkg string }{
 			{"slack-extension", "./packages/slack/cmd/slack-extension"},
+			{"github-extension", "./packages/github/cmd/github-extension"},
 			{"shell-extension", "./packages/shell/cmd/shell-extension"},
 			{"sentry-extension", "./packages/sentry/cmd/sentry-extension"},
 			{"pagerduty-extension", "./packages/pagerduty/cmd/pagerduty-extension"},
@@ -123,6 +124,9 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		must      []string // criteria that must pass (not skip)
 	}{
 		{"slack", "slack-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
+		// GitHub through inprocsdk: the in-process extension, unchanged,
+		// served over the protocol (#357).
+		{"github", "github-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "executor.conformance", "executor.controls", "surfaces.served"}},
 		{"shell", "shell-extension", []string{"executor.conformance", "executor.inject", "executor.controls"}},
 		{"sentry", "sentry-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
 		{"pagerduty", "pagerduty-extension", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},

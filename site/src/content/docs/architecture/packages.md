@@ -34,7 +34,7 @@ This page records decision B01: the ownership and import rules for every Go pack
 | `protocol/jsonrpc`, `protocol/sdk`, `protocol/examples/*` | The transport, the minimal extension-side SDK, and the example external extension (`notes`) and executor (`runner`) with their commands | Public packages and `protocol/*` only, exactly as a third party would |
 | `internal/extproc` | Host runtime for extension processes: discovery, atomic conflicts, supervised processes, the scoped extension-to-host service and adapters onto the public contracts; install, update, rollback, removal and diagnostics | Public packages, `protocol/*` and `internal/runtime`; never SQLite, bootstrap or another extension |
 | `internal/certify` | The extension conformance runner, shipped as `open-conduit extension certify` | Public packages, `protocol/*`, `conformance` (never `conformance/reference`), `internal/extproc`, `internal/runtime`, SQLite and artifacts |
-| `packages/<name>` | First-party subprocess packages: `packages/slack` serves `extensions/slack`, `packages/shell` serves `executors/shell` and `packages/codex` serves `executors/codex`, each over `protocol/sdk` with its command; `packages/sentry` and `packages/pagerduty` are sources written only on `protocol/sdk`, with no in-process twin | Public packages, `protocol/*` and the one implementation it wraps |
+| `packages/<name>` | First-party subprocess packages: `packages/slack` serves `extensions/slack`, `packages/github` serves `extensions/github` unchanged through `protocol/sdk/inprocsdk`, `packages/shell` serves `executors/shell` and `packages/codex` serves `executors/codex`, each over `protocol/sdk` with its command; `packages/sentry` and `packages/pagerduty` are sources written only on `protocol/sdk`, with no in-process twin | Public packages, `protocol/*`, `client` and the one implementation it wraps |
 | `internal/bootstrap`, `cmd/open-conduit`, `cmd/os` | Composition root and entrypoints; wire implementations and optional registrations | Packages required to assemble the binary; `cmd/os` uses `client` |
 
 Arrows below mean “imports”; implementations point toward contracts. Bootstrap assembles runtime implementations; the local backup service composes only SQLite and artifact storage.
@@ -111,7 +111,7 @@ Composition may depend on the public `conformance` checks, because the certifica
 
 The transport comparison lives in `prototypes/transport`, a separate Go module (with its own `go.mod`) so go-plugin and gRPC stay out of the main module. `./...` patterns, `make check` and the boundary checker do not include it; `make protocol-prototype` runs it.
 
-**Extension packages.** `internal/certify` and `packages/{slack,shell}` have their own checker rules. The daemon loads installed packages through `internal/bootstrap/extensions.go` ([extension packaging, SDK and certification](../extension-packaging/)). `make packages` builds the package directories; `make certify` runs the runner and the negative controls.
+**Extension packages.** `internal/certify` and `packages/*` have their own checker rules. A package may use the public management client, as the implementation it wraps may (GitHub's hold executor reaches the toolbelt through it). The daemon loads installed packages through `internal/bootstrap/extensions.go` ([extension packaging, SDK and certification](../extension-packaging/)). `make packages` builds the package directories; `make certify` runs the runner and the negative controls.
 
 ## Non-goals
 
