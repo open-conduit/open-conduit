@@ -142,10 +142,13 @@ func allowed(owner, dependency string, test bool) bool {
 		// A first-party subprocess package (07-03) serves exactly one
 		// in-process implementation over the protocol, as a third party
 		// would: packages/<name> wraps extensions/<name> or
-		// executors/<name>, never another implementation or the host.
+		// executors/<name>, never another implementation or the host. The
+		// public management client is open to it, as it is to the
+		// implementation it wraps (GitHub's hold executor reaches the
+		// toolbelt through it).
 		parts := strings.Split(owner, "/")
 		name := parts[min(len(parts)-1, 1)]
-		return public(dependency) || under(dependency, "protocol") || under(dependency, "packages/"+name) || under(dependency, "extensions/"+name) || under(dependency, "executors/"+name)
+		return public(dependency) || under(dependency, "protocol") || under(dependency, "client") || under(dependency, "packages/"+name) || under(dependency, "extensions/"+name) || under(dependency, "executors/"+name)
 	case under(owner, "conformance"):
 		return public(dependency) || under(dependency, "conformance")
 	case under(owner, runtimeFixtures):
