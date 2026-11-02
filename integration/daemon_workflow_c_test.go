@@ -94,7 +94,7 @@ func (d *drill) launch(fault string) {
 	d.starts++
 	fmt.Fprintf(d.log, "--- start %d fault=%q\n", d.starts, fault)
 	cmd := exec.Command(daemonBinary(d.t), append([]string{"--data-dir", d.state, "serve", "--config", d.config, "--poll-interval", "50ms", "--lease-duration", drillLease.String()}, d.extra...)...)
-	cmd.Env = append(os.Environ(), "OPEN_CONDUIT_FAULT="+fault)
+	cmd.Env = d.env(fault)
 	cmd.Stdout, cmd.Stderr = d.log, d.log
 	if err := cmd.Start(); err != nil {
 		d.t.Fatal(err)
@@ -198,8 +198,8 @@ func TestDaemonWorkflowC(t *testing.T) {
 	}
 	d.start("")
 	d.until("tick runs once after the restart", 30*time.Second, idle("tick", 1))
-	time.Sleep(500 * time.Millisecond)
-	if got := lines(filepath.Join(d.root, "tick")); len(got) != 1 || !strings.HasSuffix(got[0], " "+sc.TypeSlot) {
+	d.settle()
+	if got := lines(filepath.Join(d.root, "tick")); !idle("tick", 1)() || len(got) != 1 || !strings.HasSuffix(got[0], " "+sc.TypeSlot) {
 		t.Fatalf("tick runs: %v", got)
 	}
 	d.until("tick's next slot is an hour out", 30*time.Second, func() bool {
@@ -223,8 +223,8 @@ func TestDaemonWorkflowC(t *testing.T) {
 		t.Fatalf("report runs: %v", got)
 	}
 	apply(hm(-7 * time.Hour))
-	time.Sleep(2 * time.Second)
-	if got := lines(filepath.Join(d.root, "report")); len(got) != 1 {
+	d.settle()
+	if got := lines(filepath.Join(d.root, "report")); !idle("report", 1)() || len(got) != 1 {
 		t.Fatalf("a slot seven hours past ran: %v", got)
 	}
 
@@ -259,12 +259,14 @@ func TestDaemonWorkflowC(t *testing.T) {
 		}
 		return false
 	})
+	running := d.executions(jobWork("refresh").ID)
 	d.kill()
 	if syscall.Kill(pid, 0) != nil {
 		t.Fatal("the detached job did not survive the daemon")
 	}
 	d.start("")
-	time.Sleep(drillLease)
+	// The new daemon adopts the job once the dead daemon's lease expires.
+	d.adopted(running[len(running)-1].ID, 30*time.Second)
 	if err := os.WriteFile(filepath.Join(d.root, "release"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}

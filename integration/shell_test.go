@@ -586,10 +586,7 @@ echo adopted-finish`
 		t.Fatal(err)
 	}
 	pidFile := filepath.Join(state, "pid")
-	deadline := time.Now().Add(10 * time.Second)
-	for !fileHasLine(pidFile) && time.Now().Before(deadline) {
-		time.Sleep(10 * time.Millisecond)
-	}
+	waitUntil(t, "the detached process's pid", func() bool { return fileHasLine(pidFile) })
 	oldToken := a.Request.Context.ToolbeltToken
 	first.close() // daemon gone; the process keeps running in its own session
 	pid, _ := strconv.Atoi(strings.TrimSpace(readFile(t, pidFile)))

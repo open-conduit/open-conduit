@@ -253,7 +253,7 @@ func TestDaemonTrackersAndPostHog(t *testing.T) {
 	// Restart: nothing is claimed or posted again.
 	d.kill()
 	d.start("")
-	time.Sleep(3 * time.Second)
+	d.settle()
 	_, _, lc = lf.Snapshot("ENG-1")
 	_, _, jc := jf.Snapshot("PROJ-1")
 	if s := works("eng"); len(s) != 1 || len(lc) != 2 || len(jc) != 2 || len(bf.PRComments(1)) != 1 {

@@ -261,7 +261,7 @@ func TestDaemonJobParity(t *testing.T) {
 		if r := runs("behind")[i-1]; r.Workspace != nil && strings.Contains(r.Workspace.Summary, "fast-forwarded") {
 			caught = r
 		} else {
-			time.Sleep(time.Second)
+			d.settle() // the next resource pass releases hold's lease
 		}
 	}
 	if !strings.Contains(caught.Workspace.Summary, "fast-forwarded 1 commit(s) to origin/main") || !strings.HasSuffix(logOf(caught), "v3") {

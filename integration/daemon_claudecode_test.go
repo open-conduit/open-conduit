@@ -205,7 +205,7 @@ func TestDaemonClaudeCodeExecution(t *testing.T) {
 		x := d.executions(w.ID)
 		return len(x) == 2 && x[1].State == "handoff"
 	})
-	time.Sleep(time.Second)
+	d.settle()
 	if x := d.executions(w.ID); len(x) != 2 {
 		t.Fatalf("a consumed interjection started another attempt: %d attempts", len(x))
 	}
@@ -224,12 +224,14 @@ func TestDaemonClaudeCodeExecution(t *testing.T) {
 	pidFile := filepath.Join(d.root, "pid")
 	d.until("slow turn running", 30*time.Second, func() bool { return fileHasLine(pidFile) })
 	pid, _ := strconv.Atoi(strings.TrimSpace(readFile(t, pidFile)))
+	slow := d.executions(w.ID)
 	d.kill()
 	if syscall.Kill(pid, 0) != nil {
 		t.Fatal("the turn did not survive the daemon")
 	}
 	d.start("")
-	time.Sleep(drillLease)
+	// The new daemon adopts the turn once the dead daemon's lease expires.
+	d.adopted(slow[len(slow)-1].ID, 30*time.Second)
 	set("release", "")
 	d.until("adopted turn finished", 60*time.Second, func() bool {
 		x := d.executions(w.ID)

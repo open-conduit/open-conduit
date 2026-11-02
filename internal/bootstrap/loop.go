@@ -82,6 +82,7 @@ func (d *daemon) loop(ctx context.Context) error {
 			}
 			d.collectArtifacts(ctx)
 		}
+		d.passed()
 		select {
 		case <-ctx.Done():
 			return nil

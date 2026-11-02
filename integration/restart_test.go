@@ -82,10 +82,7 @@ func TestDeclarationSurvivesRecovery(t *testing.T) {
 				t.Fatal(err)
 			}
 			marker := filepath.Join(state, "declared")
-			deadline := time.Now().Add(20 * time.Second)
-			for !fileExists(marker) && time.Now().Before(deadline) {
-				time.Sleep(10 * time.Millisecond)
-			}
+			waitWithin(t, "the declaration", 20*time.Second, func() bool { return fileExists(marker) })
 			// The host dies after the declaration, before observing the result.
 			first.close()
 			clock.Advance(conformance.RuntimeLease + time.Second)

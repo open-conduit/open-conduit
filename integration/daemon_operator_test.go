@@ -461,7 +461,7 @@ func TestDaemonGitHubDryRun(t *testing.T) {
 	if !strings.Contains(strings.Join(check(r, "github").Items, " "), "dry run") {
 		t.Fatalf("doctor github: %+v", check(r, "github"))
 	}
-	time.Sleep(6 * time.Second) // at least one projection pass after completion
+	d.settle() // projection passes after completion
 	for _, w := range fake.Writes() {
 		t.Errorf("dry run wrote to GitHub: %s %s", w.Method, w.Path)
 	}

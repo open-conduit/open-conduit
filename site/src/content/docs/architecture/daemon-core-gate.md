@@ -104,6 +104,10 @@ The fixture is a scope with one shell binding and the `manual` route. Its script
 
 A `kv` boundary (an extension KV `Put`, optionally in one namespace) is also available. [`TestDaemonClaudeCodeContinuityKill`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) arms it at the Claude Code executor's pre-launch continuity decision, before and after the commit. [`TestDaemonClaudeCodeExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_claudecode_test.go) kills the daemon externally while a claude turn runs. See [the Claude Code executor](../claude-code-executor/).
 
+### Loop barrier
+
+The `faultinject` build also gives the drills a barrier instead of sleeps. With `OPEN_CONDUIT_PASS_FILE` set, each completed pass of the host loop (routing, starting ready Work, dispatching controls, projecting to trackers and Slack, reconciling resources) atomically rewrites that file with the number of passes the process has completed. Production builds compile the hook as a no-op. A drill that must show something did not happen, such as nothing posted again after a restart, calls `drill.settle`: it waits until three full passes that began after the call have completed, then checks. That is faster than a fixed sleep and stronger, since the check runs only once the loop has really looked at the state. It does not cover an executor's process, which runs outside the loop; a drill waits on that process's own effect instead. A drill that needs a recovered attempt waits for its `execution.launched` record with `launch.mode` `recover` rather than sleeping out the lease.
+
 When the test binary is race-enabled, as under `make check`, the daemon is also built with `-race`. Any data race report in a daemon log fails the drill. Telemetry is at most once from memory, so records queued when a daemon is killed can be lost. The durable history is asserted in full. Lifecycle completeness is required only for records produced after the last kill.
 
 ## Limitations

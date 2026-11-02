@@ -211,16 +211,13 @@ func TestDockerGitCredential(t *testing.T) {
 			var d net.Dialer
 			return d.DialContext(ctx, network, published)
 		}}}
-	ready := false
-	for i := 0; i < 100 && !ready; i++ {
-		if res, err := httpClient.Get("https://api.github.com/"); err == nil {
+	if !eventually(30*time.Second, func() bool {
+		res, err := httpClient.Get("https://api.github.com/")
+		if err == nil {
 			res.Body.Close()
-			ready = true
-		} else {
-			time.Sleep(100 * time.Millisecond)
 		}
-	}
-	if !ready {
+		return err == nil
+	}) {
 		logs, _ := l.docker("logs", id)
 		t.Fatalf("the stand-in GitHub never answered:\n%s", logs)
 	}

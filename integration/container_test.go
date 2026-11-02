@@ -587,26 +587,19 @@ func TestDockerFailClosed(t *testing.T) {
 
 func waitRunning(t *testing.T, l *dockerLab, ref string) {
 	t.Helper()
-	deadline := time.Now().Add(time.Minute)
-	for time.Now().Before(deadline) {
-		if out, _ := l.docker("inspect", "--format", "{{.State.Running}}", dockerID(ref)); out == "true" {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	if !eventually(time.Minute, func() bool {
+		out, _ := l.docker("inspect", "--format", "{{.State.Running}}", dockerID(ref))
+		return out == "true"
+	}) {
+		t.Fatal("the container never ran")
 	}
-	t.Fatal("the container never ran")
 }
 
 func waitPath(t *testing.T, path string) {
 	t.Helper()
-	deadline := time.Now().Add(time.Minute)
-	for time.Now().Before(deadline) {
-		if _, err := os.Stat(path); err == nil {
-			return
-		}
-		time.Sleep(100 * time.Millisecond)
+	if !eventually(time.Minute, func() bool { _, err := os.Stat(path); return err == nil }) {
+		t.Fatalf("%s never appeared", path)
 	}
-	t.Fatalf("%s never appeared", path)
 }
 
 // TestDockerProcessControl: the helper's exit code is the container's;
