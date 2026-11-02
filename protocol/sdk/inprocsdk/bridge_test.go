@@ -304,7 +304,7 @@ func TestAcceptInTxIsCarried(t *testing.T) {
 	if host.Timers != nil || host.CancelWork != nil || host.Config != nil || host.Probes != nil {
 		t.Fatal("a service the manifest declares nothing for is set")
 	}
-	var root, derived domain.AcceptedEvent
+	var root, derived, named domain.AcceptedEvent
 	err = host.Store.Transact(ctx, storage.Guard{}, func(tx storage.Tx) error {
 		if _, _, err := host.AcceptInTx(tx, "eng", domain.Event{Type: "other.thing", Source: "acme", DeliveryID: "x"}); !errors.Is(err, inproc.ErrNotOwn) {
 			t.Errorf("a foreign family: %v, want ErrNotOwn", err)
@@ -323,6 +323,14 @@ func TestAcceptInTxIsCarried(t *testing.T) {
 		if derived, _, err = host.AcceptDerivedInTx(tx, "eng", "parent", domain.Event{Type: "acme.thing", Source: "acme", DeliveryID: "d1"}); err != nil {
 			return err
 		}
+		// An Event naming its parent as its cause is accepted as in
+		// process; one naming another cause is refused.
+		if named, _, err = host.AcceptDerivedInTx(tx, "eng", "parent", domain.Event{Type: "acme.thing", Source: "acme", DeliveryID: "d2", CausationID: "parent"}); err != nil {
+			return err
+		}
+		if _, _, err := host.AcceptDerivedInTx(tx, "eng", "parent", domain.Event{Type: "acme.thing", Source: "acme", DeliveryID: "d3", CausationID: "elsewhere"}); !errors.Is(err, storage.ErrInvalid) {
+			t.Errorf("another cause: %v, want ErrInvalid", err)
+		}
 		return tx.Put("acme", "origin/"+string(root.Event.ID), []byte("r1"))
 	})
 	if err != nil {
@@ -337,6 +345,9 @@ func TestAcceptInTxIsCarried(t *testing.T) {
 	}
 	if d, ok := byID[derived.Event.ID]; !ok || d.Event.CausationID != "parent" {
 		t.Fatalf("the derived Event: %+v", d)
+	}
+	if d, ok := byID[named.Event.ID]; !ok || d.Event.CausationID != "parent" {
+		t.Fatalf("the derived Event naming its parent: %+v", d)
 	}
 	if string(h.KV("acme")["origin/"+string(root.Event.ID)]) != "r1" {
 		t.Fatal("the transaction's write, naming the Event, did not land with it")
