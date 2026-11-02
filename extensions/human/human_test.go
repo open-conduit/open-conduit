@@ -32,6 +32,26 @@ func TestParseConfig(t *testing.T) {
 	if c, err := ParseConfig(json.RawMessage(`{"gates":[{"operations":["x.y"],"escalate":{"responders":["github:o"]}}]}`)); err != nil || c.Gates[0].Escalate.timeout != DefaultGateTimeout {
 		t.Errorf("escalate defaults: %+v %v", c, err)
 	}
+	for _, bad := range []string{`{"gates":[{}]}`, `{"gates":[{"kinds":["Bad Kind"]}]}`, `{"gates":[{"kinds":["github."]}]}`, `{"gates":[{"bindings":["a:b"]}]}`} {
+		if _, err := ParseConfig(json.RawMessage(bad)); err == nil {
+			t.Errorf("accepted %s", bad)
+		}
+	}
+	c, err = ParseConfig(json.RawMessage(`{"gates":[{"operations":["deploy.*"]},{"kinds":["github.*"]},{"bindings":["release"]}]}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		kind, binding string
+		want          bool
+	}{{"github.issue", "agent", true}, {"linear.issue", "release", true}, {"linear.issue", "agent", false}, {"deploy.run", "agent", false}} {
+		if _, ok := c.startGate(tc.kind, tc.binding); ok != tc.want {
+			t.Errorf("start gate for %s on %s: %v", tc.kind, tc.binding, ok)
+		}
+	}
+	if _, ok := c.gate("github.issue"); ok {
+		t.Error("a kind gate gated an operation")
+	}
 	if ValidateExtension(nil, []string{"token"}) == nil {
 		t.Error("accepted secrets")
 	}

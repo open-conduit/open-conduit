@@ -135,6 +135,13 @@ func (x *Extension) Tasks() []inproc.Task {
 		for _, a := range res.Escalated {
 			x.escalated(ctx, a)
 		}
+		if err != nil || x.host.SettleHold == nil {
+			return err
+		}
+		n, err := SettleStarts(ctx, x.host.Store, x.host.Now(), x.host.SettleHold)
+		if n > 0 && x.host.Log != nil {
+			x.host.Log.Info("start approvals settled", "settled", n)
+		}
 		return err
 	}}}
 }

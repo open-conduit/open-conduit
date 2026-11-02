@@ -117,7 +117,8 @@ func newHumanHarness(t *testing.T, mode, entry string) *humanHarness {
 	key := toolbeltKey
 	requireAccept(t, f, "trigger", &key)
 	requireRoute(t, f.Driver, "trigger")
-	if th.attempt, err = th.scheduler.Start(context.Background(), "work/item"); err != nil {
+	// A start gate may hold the Work: then there is no attempt yet.
+	if th.attempt, err = th.scheduler.Start(context.Background(), "work/item"); err != nil && !errors.Is(err, runtime.ErrGateHeld) {
 		t.Fatal(err)
 	}
 	if h.control, err = runtime.NewControl(f.Store, f.Clock.Now, base.Router, th.scheduler, runtime.CausalLimits{}); err != nil {
@@ -842,5 +843,133 @@ func TestHumanGateEscalationIsCaptured(t *testing.T) {
 	}
 	if err = tasks[0].Run(ctx); err != nil || len(got) != 1 {
 		t.Fatalf("captured again on a later pass: %+v %v", got, err)
+	}
+}
+
+// startGated is a `human` entry whose gate holds fixture.* Work before it
+// first starts, for github:octocat to approve within an hour.
+const startGated = `{"name":"decisions","type":"human","config":{"gates":[{"kinds":["fixture.*"],"responders":["github:octocat"],"timeout":"1h"}]}}`
+
+// settleStarts runs the asks task's settlement against the harness's
+// control, as the human registration.
+func (h *humanHarness) settleStarts(t *testing.T) int {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := hu.Sync(ctx, h.f.Store, h.f.Clock.Now()); err != nil {
+		t.Fatal(err)
+	}
+	n, err := hu.SettleStarts(ctx, h.f.Store, h.f.Clock.Now(), func(ctx context.Context, work domain.ID, admit bool, reason, key string) (domain.ID, error) {
+		return h.control.SettleGateHold(ctx, hu.Type, work, admit, reason, key)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func (h *humanHarness) work(t *testing.T) domain.Work {
+	t.Helper()
+	var w domain.Work
+	routingRead(t, h.f, func(tx storage.Tx) error {
+		var err error
+		w, err = tx.Work("work/item")
+		return err
+	})
+	return w
+}
+
+// Work of a kind a gate names doesn't start until a responder approves it:
+// the first start holds it and records an approval request on it, offered
+// with what would start; only a listed responder can approve; once
+// approved, it starts exactly once without being asked again.
+func TestHumanGateHoldsAStartUntilApproved(t *testing.T) {
+	h := newHumanHarness(t, "persistent", startGated)
+	ctx := context.Background()
+	if h.attempt.Lease.ExecutionID != "" {
+		t.Fatal("gated Work started before approval")
+	}
+	var hold runtime.Hold
+	routingRead(t, h.f, func(tx storage.Tx) error {
+		var held bool
+		var err error
+		hold, held, err = runtime.HoldInTx(tx, "work/item")
+		if !held {
+			t.Fatal("gated Work not held")
+		}
+		return err
+	})
+	if hold.Kind != runtime.HoldKindGate || hold.Holder != hu.Type || !strings.Contains(hold.Reason, "approval before the fixture.work Work starts") {
+		t.Fatalf("hold: %+v", hold)
+	}
+	acts, err := h.actions.Actions(ctx, h.target(t))
+	if err != nil || len(acts) != 1 || strings.Join(acts[0].Choices, ",") != "approve,refuse" || !strings.Contains(acts[0].Label, "the fixture.work Work") ||
+		!strings.Contains(acts[0].Detail, "Allow the fixture.work Work to start?") || !strings.Contains(acts[0].Detail, "Work: work/item") {
+		t.Fatalf("start approval not offered: %+v %v", acts, err)
+	}
+	panels, err := h.actions.Panels(ctx, h.target(t))
+	if err != nil || len(panels) != 1 || panels[0].Title != "Approval needed" {
+		t.Fatalf("panel: %+v %v", panels, err)
+	}
+	// Nothing to settle while it is unanswered, and it stays held.
+	if n := h.settleStarts(t); n != 0 {
+		t.Fatalf("settled %d before an answer", n)
+	}
+	if _, err = h.scheduler.Start(ctx, "work/item"); !errors.Is(err, runtime.ErrNotEligible) {
+		t.Fatalf("held Work started: %v", err)
+	}
+	_, err = h.answer(t, extension.LocalOperator, "approve", "local")
+	refusedWith(t, err, "not_allowed")
+	if _, err = h.answer(t, extension.Caller{Kind: "github", ID: "octocat"}, "approve", "octocat"); err != nil {
+		t.Fatal(err)
+	}
+	if n := h.settleStarts(t); n != 1 {
+		t.Fatalf("settled %d", n)
+	}
+	if n := h.settleStarts(t); n != 0 {
+		t.Fatalf("settled again: %d", n)
+	}
+	if h.attempt, err = h.scheduler.Start(ctx, "work/item"); err != nil {
+		t.Fatalf("approved Work did not start: %v", err)
+	}
+	if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.ReadContext}); err != nil {
+		t.Fatalf("the approved attempt has no toolbelt: %v", err)
+	}
+	if got := h.eventsOfType(t, "core.gate.released"); len(got) != 1 || !strings.Contains(string(got[0].Event.Data.Data), "github:octocat approved the start") {
+		t.Fatalf("release trail: %+v", got)
+	}
+}
+
+// A refusal, or no answer by the gate's timeout, cancels the held Work.
+func TestHumanGateRefusedOrUnansweredStartCancels(t *testing.T) {
+	for name, act := range map[string]func(h *humanHarness){
+		"refused": func(h *humanHarness) {
+			if _, err := h.answer(t, extension.Caller{Kind: "github", ID: "octocat"}, "refuse", "no"); err != nil {
+				t.Fatal(err)
+			}
+		},
+		"timed out": func(h *humanHarness) { h.f.Clock.Advance(2 * time.Hour) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHumanHarness(t, "persistent", startGated)
+			act(h)
+			if n := h.settleStarts(t); n != 1 {
+				t.Fatalf("settled %d", n)
+			}
+			if w := h.work(t); w.State != domain.WorkCancelled {
+				t.Fatalf("Work %s, want cancelled", w.State)
+			}
+			if got := h.eventsOfType(t, "core.gate.refused"); len(got) != 1 {
+				t.Fatalf("refusal trail: %+v", got)
+			}
+		})
+	}
+}
+
+// Work the scope's gates don't name starts without asking anyone: the
+// negative control for the kind gate.
+func TestHumanStartGateSkipsOtherKinds(t *testing.T) {
+	h := newHumanHarness(t, "persistent", `{"name":"decisions","type":"human","config":{"gates":[{"kinds":["deploy.*"]},{"operations":["fixture.deploy"]}]}}`)
+	if h.attempt.Lease.ExecutionID == "" {
+		t.Fatal("ungated Work was held")
 	}
 }

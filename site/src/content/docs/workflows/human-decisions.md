@@ -77,7 +77,9 @@ Only the entry's **answer** action counts, and only while the question is open a
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `operations` | required | Operation names, such as `github.pr.create`, or a prefix ending in `.*` for every operation under it, such as `deploy.*`. Any extension's operations can be gated, installed ones included, except `human`'s own. The builtins (`emit`, `create_work`, `wait`, `declare_outcome`, `read_context`) can't be gated, and naming one is an error. |
+| `operations` | none | Operation names, such as `github.pr.create`, or a prefix ending in `.*` for every operation under it, such as `deploy.*`. Any extension's operations can be gated, installed ones included, except `human`'s own. The builtins (`emit`, `create_work`, `wait`, `declare_outcome`, `read_context`) can't be gated, and naming one is an error. |
+| `kinds` | none | Work kinds, such as `github.issue`, or a prefix ending in `.*`, such as `github.*`. Work of a named kind waits for a person's approval before it first starts. See [Approving a start](#approving-a-start). |
+| `bindings` | none | Binding names. Work whose first attempt would run on a named binding waits for approval before it starts. |
 | `responders` | the entry's | Who may approve or refuse. |
 | `timeout` | `24h` | How long a request waits for an answer, from `1m` to `8760h`. With no answer by then, the call is refused, unless the gate escalates. An approval also holds only this long. |
 | `escalate` | none | Who an unanswered request goes to next, rather than being refused at `timeout`: `{"responders": [...], "timeout": "24h"}`. See [Escalation](#escalation). |
@@ -128,4 +130,18 @@ Here, nobody approving a deploy within 2 hours escalates it. For the next 4 hour
 
 Once it has escalated, the request is offered as **Approve or refuse … (escalated)**. Its text says nobody answered in time, who it now goes to and when it will be refused. Because the offer has changed, Slack posts it in the thread again. The panel lists the wider responders and the time it escalated. The escalation is recorded on the request and as a `human_gate_escalated` telemetry event, which carries the Work, the execution, the operation and who it went to.
 
-Gates on route or kind transitions, rather than operations, are not built yet.
+## Approving a start
+
+A gate can also name Work, rather than an operation: Work of a kind (`kinds`) or Work that would run on a binding (`bindings`) waits for a person's approval before its first attempt starts. A gate needs at least one of `operations`, `kinds` or `bindings`.
+
+```json
+{"kinds": ["github.issue"], "responders": ["github:octocat", "slack:U0123ABCD"], "timeout": "4h"}
+```
+
+When such Work would first start:
+
+1. It doesn't start. Open Conduit holds it and records an approval request on it, shown as **Approval needed**: what would start (the Work, its title and links, its binding and what triggered it) and the options **approve** and **refuse**. Its input keeps queueing while it is held.
+2. Answer it as you would any approval: from the TUI, the web view, the CLI, a GitHub `/answer` comment or a Slack button.
+3. An approval lets the Work start, once. Its later turns aren't asked again. A refusal, or no answer by the timeout, cancels the Work, with the reason in its history. A gate with `escalate` escalates first, as above.
+
+The hold and its settlement are in the Work's history (`core.gate.held`, then `core.gate.released` or `core.gate.refused`). An operator can't release the hold with `open-conduit work release`, because the gate's responders decide. They can cancel the Work. Only the first start is gated: Work that has already run once starts its later turns without asking.

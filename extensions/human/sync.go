@@ -131,6 +131,11 @@ func withdrawn(tx storage.Tx, a Ask) (bool, error) {
 	if w.State.Terminal() {
 		return true, nil
 	}
+	if a.Start {
+		// The Work is held until the answer settles it: only its end
+		// withdraws the request.
+		return false, nil
+	}
 	if latest, err := latestAsk(tx, a.Work); err == nil && latest.ID != a.ID {
 		return true, nil
 	}
