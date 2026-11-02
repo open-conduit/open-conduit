@@ -77,6 +77,7 @@ func StorageCases() []StorageCase {
 		{"wait_wake_and_timeout_cancellation", waitWakeAndTimerCancel},
 		{"terminal_correlation_and_causation", terminalCorrelationAndCausation},
 		{"event_identity_not_correlation", eventIdentity},
+		{"event_actor_round_trip", eventActor},
 		{"acceptance_separate_from_routing", routeReplay},
 		{"atomic_route_work_kv_timer", atomicRoute},
 		{"correlation_revision_and_copy_isolation", workRevision},
@@ -96,6 +97,56 @@ func StorageCases() []StorageCase {
 		{"per_work_routing_order", routingOrder},
 		{"live_reads_follow_state", liveReads},
 	}
+}
+
+// eventActor checks that an Event's Actor, part of its immutable envelope,
+// survives acceptance and every read, in the accepting transaction and after.
+func eventActor(s storage.Store) error {
+	c := NewClock()
+	e := event("acted", c.Now())
+	e.Actor = "operator:alice"
+	check := func(where string, got domain.AcceptedEvent) error {
+		if got.Event.Actor != e.Actor {
+			return fmt.Errorf("event actor lost %s: got %q, want %q", where, got.Event.Actor, e.Actor)
+		}
+		return nil
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		accepted, _, err := tx.AcceptEvent(e)
+		if err != nil {
+			return err
+		}
+		return check("on acceptance", accepted)
+	}); err != nil {
+		return err
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		got, err := tx.Event(e.ID)
+		if err != nil {
+			return err
+		}
+		if err = check("by Event", got); err != nil {
+			return err
+		}
+		rows, err := tx.Events(0, 0)
+		if err != nil {
+			return err
+		}
+		if len(rows) != 1 {
+			return fmt.Errorf("events: got %d, want 1", len(rows))
+		}
+		if err = check("by Events", rows[0]); err != nil {
+			return err
+		}
+		dup, added, err := tx.AcceptEvent(event("acted", c.Now()))
+		if err != nil {
+			return err
+		}
+		if added {
+			return fmt.Errorf("duplicate delivery accepted")
+		}
+		return check("on a duplicate delivery", dup)
+	})
 }
 func eventIdentity(s storage.Store) error {
 	c := NewClock()

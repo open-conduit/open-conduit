@@ -66,10 +66,13 @@ type Event struct {
 	WorkID         string    `json:"work_id,omitempty"`
 	ExecutionID    string    `json:"execution_id,omitempty"`
 	Data           Payload   `json:"data"`
+	// Actor is who caused the Event, as kind:id, when the host knows. The
+	// host sets it; an Event an extension submits never carries one.
+	Actor string `json:"actor,omitempty"`
 }
 
 func FromEvent(e domain.Event) Event {
-	out := Event{ID: string(e.ID), Type: e.Type, Source: e.Source, DeliveryID: e.DeliveryID, OccurredAt: e.OccurredAt, ReceivedAt: e.ReceivedAt, CausationID: string(e.CausationID), WorkID: string(e.WorkID), ExecutionID: string(e.ExecutionID), Data: FromPayload(e.Data)}
+	out := Event{ID: string(e.ID), Type: e.Type, Source: e.Source, DeliveryID: e.DeliveryID, OccurredAt: e.OccurredAt, ReceivedAt: e.ReceivedAt, CausationID: string(e.CausationID), WorkID: string(e.WorkID), ExecutionID: string(e.ExecutionID), Data: FromPayload(e.Data), Actor: e.Actor}
 	if e.CorrelationKey != nil {
 		k := fromKey(*e.CorrelationKey)
 		out.CorrelationKey = &k
@@ -77,7 +80,7 @@ func FromEvent(e domain.Event) Event {
 	return out
 }
 func (e Event) Domain() domain.Event {
-	out := domain.Event{ID: domain.ID(e.ID), Type: e.Type, Source: e.Source, DeliveryID: e.DeliveryID, OccurredAt: e.OccurredAt, ReceivedAt: e.ReceivedAt, CausationID: domain.ID(e.CausationID), WorkID: domain.ID(e.WorkID), ExecutionID: domain.ID(e.ExecutionID), Data: e.Data.Domain()}
+	out := domain.Event{ID: domain.ID(e.ID), Type: e.Type, Source: e.Source, DeliveryID: e.DeliveryID, OccurredAt: e.OccurredAt, ReceivedAt: e.ReceivedAt, CausationID: domain.ID(e.CausationID), WorkID: domain.ID(e.WorkID), ExecutionID: domain.ID(e.ExecutionID), Data: e.Data.Domain(), Actor: e.Actor}
 	if e.CorrelationKey != nil {
 		k := e.CorrelationKey.domain()
 		out.CorrelationKey = &k

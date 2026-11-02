@@ -747,8 +747,47 @@ func (o *operator) auth(args []string) int {
 		cx, cancel := ctx()
 		defer cancel()
 		return o.emit(c.Revoke(cx, pos[0], f.get("reason"), f.key()))
+	case "operators":
+		if len(args) != 1 {
+			return usageError(o.errOut, "auth operators takes no arguments")
+		}
+		c, _, err := o.client()
+		if err != nil {
+			return o.emit(nil, err)
+		}
+		cx, cancel := ctx()
+		defer cancel()
+		return o.emit(c.Operators(cx))
+	case "add":
+		f := newFlags("add", "out")
+		pos, err := f.parse(args[1:])
+		if err != nil || len(pos) != 1 || f.get("out") == "" {
+			return usageError(o.errOut, "expected auth add NAME --out FILE")
+		}
+		out := o.abs(f.get("out"))
+		// Never overwrite: the file may be someone's live credential.
+		if _, err := os.Lstat(out); err == nil {
+			return o.emit(nil, fmt.Errorf("%s already exists; choose another --out", out))
+		}
+		if info, err := os.Stat(filepath.Dir(out)); err != nil || !info.IsDir() {
+			return o.emit(nil, fmt.Errorf("--out must be in an existing directory"))
+		}
+		c, _, err := o.client()
+		if err != nil {
+			return o.emit(nil, err)
+		}
+		cx, cancel := ctx()
+		defer cancel()
+		file, err := c.AddOperator(cx, pos[0])
+		if err != nil {
+			return o.emit(nil, err)
+		}
+		if err = writePrivateJSON(out, client.TokenFile{TokenID: file.TokenID, Token: file.Token}); err != nil {
+			return o.emit(nil, fmt.Errorf("operator %s was added but its token file could not be saved; revoke %s with auth revoke and add it again", pos[0], file.TokenID))
+		}
+		return o.emit(map[string]string{"name": pos[0], "token_id": file.TokenID, "token_file": out}, nil)
 	}
-	return usageError(o.errOut, "expected auth rotate|revoke|recover")
+	return usageError(o.errOut, "expected auth rotate|revoke|recover|operators|add")
 }
 
 func writePrivateJSON(path string, v any) error {

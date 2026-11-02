@@ -119,7 +119,7 @@ func (s *Server) invokeAction(c *call, work bool) (int, any, error) {
 	if !ok {
 		return 0, nil, fail(404, "not_found", "no such action provider on this target")
 	}
-	accepted, added, msg, err := s.o.Control.Act(c.ctx, name, p, extension.ActionCall{Target: t, Action: id, Input: in.Input, Caller: extension.LocalOperator}, c.key)
+	accepted, added, msg, err := s.o.Control.Act(c.ctx, name, p, extension.ActionCall{Target: t, Action: id, Input: in.Input, Caller: c.who.caller()}, c.key)
 	if err != nil {
 		return 0, nil, err
 	}

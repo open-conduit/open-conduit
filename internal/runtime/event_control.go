@@ -35,7 +35,7 @@ func eventScopeInTx(tx storage.Tx, a domain.AcceptedEvent) (domain.ID, error) {
 }
 
 // eventControlInTx accepts the control event recording an action on a.
-func (c *Control) eventControlInTx(tx storage.Tx, a domain.AcceptedEvent, delivery, typ string, payload eventControlPayload) (domain.ID, domain.ID, error) {
+func (c *Control) eventControlInTx(ctx context.Context, tx storage.Tx, a domain.AcceptedEvent, delivery, typ string, payload eventControlPayload) (domain.ID, domain.ID, error) {
 	scope, err := eventScopeInTx(tx, a)
 	if err != nil {
 		return "", "", err
@@ -48,7 +48,7 @@ func (c *Control) eventControlInTx(tx storage.Tx, a domain.AcceptedEvent, delive
 	if err != nil {
 		return "", "", err
 	}
-	accepted, _, err := c.acceptInTx(tx, scope, ManualEvent{WorkID: work, DeliveryID: delivery, Data: domain.Payload{Schema: typ + ".v1", Data: b}}, typ)
+	accepted, _, err := c.acceptInTx(ctx, tx, scope, ManualEvent{WorkID: work, DeliveryID: delivery, Data: domain.Payload{Schema: typ + ".v1", Data: b}}, typ)
 	if err != nil {
 		return "", "", err
 	}
@@ -75,7 +75,7 @@ func (c *Control) SkipEvent(ctx context.Context, event domain.ID, reason, key st
 			return storage.ErrConflict
 		}
 		var work domain.ID
-		if control, work, e = c.eventControlInTx(tx, a, delivery, "core.manual.skip_event", eventControlPayload{Reason: reason, EventID: event}); e != nil {
+		if control, work, e = c.eventControlInTx(ctx, tx, a, delivery, "core.manual.skip_event", eventControlPayload{Reason: reason, EventID: event}); e != nil {
 			return e
 		}
 		rec := RouteRecord{EventID: event, WorkID: work, Generation: c.router.options.Generation, Policy: DispositionSkipped, Reason: "operator", Error: reason}
@@ -149,7 +149,7 @@ func (c *Control) RerouteEvent(ctx context.Context, event domain.ID, reason, key
 		if routed != event {
 			payload.RoutedAs = routed
 		}
-		control, _, e = c.eventControlInTx(tx, a, delivery, "core.manual.reroute_event", payload)
+		control, _, e = c.eventControlInTx(ctx, tx, a, delivery, "core.manual.reroute_event", payload)
 		return e
 	})
 	return

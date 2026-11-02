@@ -31,8 +31,10 @@ const Type = "human"
 // and answers it through the Work's "answer" action.
 const SurfaceTUI = "tui"
 
-// DefaultResponder is the local operator: the owner of the management
-// socket, who answers from the TUI or the CLI.
+// DefaultResponder is the owner's own operator credential (the state
+// directory's), who answers from the TUI, the web view or the CLI. A named
+// operator (operator:alice) is not it: a scope lets others answer by
+// listing them, or a bare "operator" for any operator, in responders.
 var DefaultResponder = extension.LocalOperator.Kind + ":" + extension.LocalOperator.ID
 
 // Config is a scope's `human` entry.

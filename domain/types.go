@@ -79,6 +79,11 @@ type Event struct {
 	CorrelationKey                   *CorrelationKey
 	CausationID, WorkID, ExecutionID ID
 	Data                             Payload
+	// Actor is who caused the Event, as kind:id ("operator:alice",
+	// "github:octocat"), when the host knows: it sets it from the operator
+	// credential for core.manual Events and from the caller for
+	// core.action Events, never from the request. Empty otherwise.
+	Actor string `json:",omitempty"`
 }
 
 // AcceptedEvent adds storage metadata without changing the immutable envelope.

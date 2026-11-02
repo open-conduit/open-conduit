@@ -36,6 +36,14 @@ type Caller struct {
 	Kind, ID string
 }
 
+// String is the caller as kind:id, or "" for no caller.
+func (c Caller) String() string {
+	if c.Kind == "" {
+		return ""
+	}
+	return c.Kind + ":" + c.ID
+}
+
 // LocalOperator is the caller of every management API invocation.
 var LocalOperator = Caller{Kind: CallerOperator, ID: "local"}
 

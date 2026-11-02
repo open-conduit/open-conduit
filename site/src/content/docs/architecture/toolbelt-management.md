@@ -101,12 +101,14 @@ Authentication:
 - Every endpoint requires a bearer token.
 - Operator credentials (digest-only records, bootstrapped under the lock into `private/operator.token`) never reach `/v1/toolbelt/call` or `/v1/toolbelt/guidance`. Execution tokens reach only those endpoints.
 - Rotation atomically revokes the caller and returns a replacement once; it is never stored in idempotency history. `RecoverOperator` is the locked local path after a lost response.
-- Revocation by token ID covers execution tokens and the caller's own operator token.
+- Revocation by token ID covers execution tokens, the caller's own operator token and any named operator's. The owner's own credential (the state directory's) is revoked only by itself or by `RecoverOperator`, so no named operator can lock the owner out.
+- An operator credential names its operator. The state directory's is the owner's, `local`. `POST /v1/auth/operators` issues one for a named operator (`[a-z][a-z0-9-]{0,31}`, not `local`, one active credential per name) and returns its token once, uncached and never stored in idempotency history, as rotation does. `GET /v1/auth/operators` lists every credential by name, without tokens. `BootstrapOperator` looks only at the owner's credential, so a named operator's never stands in for a missing token file.
+- **Every operator is recorded as itself.** The server puts the authenticated principal (`operator:<name>`) on the request context (`runtime.WithActor`), and `runtime.Control` stamps it as the `Actor` of every `core.manual` Event it accepts. Actions are invoked with the same principal as `Caller`, and `Control.Act` stamps the caller on the `core.action` Event. Acceptance (`AcceptInTx`) drops the `Actor` of an Event from any other source, so only the host can say who did something.
 
 Request handling:
 
 - Mutations require `application/json`, a body of at most 1 MiB, strict fields (no unknown, duplicate or null fields) and no query string.
-- Every mutating POST except validate, rotate, route trace and toolbelt calls requires `Idempotency-Key`. The key is bound to principal, method, path and canonical body hash, and kept for 30 days. A replay returns the original status and body; a changed body is `409 idempotency_conflict`.
+- Every mutating POST except validate, rotate, operator issue, route trace and toolbelt calls requires `Idempotency-Key`. The key is bound to principal, method, path and canonical body hash, and kept for 30 days. A named operator's key is prefixed with its principal before anything derives an identity from it, so two operators' requests under the same key never meet; the owner's keys are unchanged. A replay returns the original status and body; a changed body is `409 idempotency_conflict`.
 - Operator actions derive durable identities from the key, so retrying a timed-out request completes the same operation.
 - Opaque IDs may contain `/`. Routes match escaped path segments.
 
@@ -137,7 +139,7 @@ The client dials only the configured socket, with the fixed host `localhost`, no
 - scopes, work, events (including causal `events chain`), executions, waits and artifacts (`artifacts cat` for logs)
 - emit, work create/cancel/retry/wake and execution cancel
 - config validate/apply
-- auth rotate/revoke
+- auth rotate/revoke, and auth operators/add for named operators
 - unified run history (`runs list|get|table|log`), `doctor` and `tui` ([observability and history](../observability-history/))
 
 ## Evidence

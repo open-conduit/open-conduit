@@ -95,3 +95,21 @@ open-conduit events reroute ID                       # route a failed or skipped
 - `events chain ID` shows the chain of Events that led to something.
 - An Event whose route keeps failing is retried with a growing backoff and, after five failures over at least 15 minutes (or at once when retrying can't help, such as a route whose extension is gone), routed as `failed`. Doctor's `routing` check lists Events still unrouted after ten minutes. `events skip` lets the Work behind one move on; `events reroute` tries an unrouted one now, or accepts a failed or skipped one again as a copy.
 - `doctor --check-secrets` checks connections, credentials, webhooks, bindings and the executors' CLIs.
+
+## More than one operator
+
+By default there is one operator: you, with the token the daemon writes to `private/operator.token` in its state directory. Everything you do is recorded as `operator:local`. To let someone else run controls under their own name, issue them a credential of their own:
+
+```sh
+open-conduit auth add alice --out /path/to/alice.token   # an owner-only token file for alice
+open-conduit auth operators                              # every operator credential, active or revoked
+open-conduit auth revoke TOKEN_ID                        # revoke one (the IDs are in auth operators)
+```
+
+Alice then points the CLI at her file with `--token-file` or `OPEN_CONDUIT_TOKEN_FILE`, on a machine that can reach the management socket. Everything she does (an Event she sends, a hold, a cancel, a rebind, an action such as answering an approval) is recorded as `operator:alice`. The web view's **Events** tab shows who sent each Event, and `events get` and `--json` lists show it as `actor`. An Event a person sent from Slack or GitHub shows their identity there, such as `github:octocat`. **By default only you (`operator:local`) may answer asks and approvals.** To let others answer, add `operator:alice`, or a bare `operator` for any operator, to the `human` entry's `responders`.
+
+- A name is lower case letters, digits and dashes, up to 32 characters. A name has one active credential at a time; revoke it before you issue another.
+- `auth rotate` replaces the caller's own credential and keeps its name.
+- A named operator can revoke their own credential and other named operators', but not yours. `auth recover` (with the daemon stopped) revokes every operator credential, named ones included, and writes you a fresh one.
+- **Every operator can do everything for now**, including adding operators and applying config. Per-operator roles are still to come.
+- The web view still signs browsers in with its one sign-in URL and acts as `operator:local`.

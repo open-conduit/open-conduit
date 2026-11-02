@@ -75,8 +75,8 @@ func operatorData(schema string, p operatorPayload) domain.Payload {
 
 // controlEvent accepts a core.manual.* control Event addressed to Work and
 // marks it routed as control, so it never becomes runnable input.
-func (c *Control) controlEvent(tx storage.Tx, w domain.Work, delivery, typ string, data domain.Payload) (domain.ID, error) {
-	accepted, _, err := c.acceptInTx(tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: data}, typ)
+func (c *Control) controlEvent(ctx context.Context, tx storage.Tx, w domain.Work, delivery, typ string, data domain.Payload) (domain.ID, error) {
+	accepted, _, err := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: data}, typ)
 	if err != nil {
 		return "", err
 	}
@@ -149,7 +149,7 @@ func (c *Control) Rebind(ctx context.Context, workID domain.ID, expected domain.
 				previous = append(previous, in.Binding)
 			}
 		}
-		event, e = c.controlEvent(tx, w, delivery, "core.manual.rebind", operatorData("core.manual.rebind.v1", operatorPayload{Reason: reason, Revision: expected, Binding: binding, Previous: previous, Generation: c.scheduler.options.Generation}))
+		event, e = c.controlEvent(ctx, tx, w, delivery, "core.manual.rebind", operatorData("core.manual.rebind.v1", operatorPayload{Reason: reason, Revision: expected, Binding: binding, Previous: previous, Generation: c.scheduler.options.Generation}))
 		if e != nil {
 			return e
 		}
@@ -207,7 +207,7 @@ func (c *Control) HoldWork(ctx context.Context, workID domain.ID, expected domai
 		if e = noLiveAttempt(tx, w.ID, true); e != nil {
 			return e
 		}
-		event, e = c.controlEvent(tx, w, delivery, "core.manual.hold", operatorData("core.manual.hold.v1", operatorPayload{Reason: reason, Revision: expected}))
+		event, e = c.controlEvent(ctx, tx, w, delivery, "core.manual.hold", operatorData("core.manual.hold.v1", operatorPayload{Reason: reason, Revision: expected}))
 		if e != nil {
 			return e
 		}
@@ -248,7 +248,7 @@ func (c *Control) ReleaseWork(ctx context.Context, workID domain.ID, expected do
 		} else if h.Kind == HoldKindGate {
 			return ErrGateHold
 		}
-		event, e = c.controlEvent(tx, w, delivery, "core.manual.release", operatorData("core.manual.release.v1", operatorPayload{Reason: reason, Revision: expected}))
+		event, e = c.controlEvent(ctx, tx, w, delivery, "core.manual.release", operatorData("core.manual.release.v1", operatorPayload{Reason: reason, Revision: expected}))
 		if e != nil {
 			return e
 		}
@@ -331,7 +331,7 @@ func (c *Control) RequestReconcile(ctx context.Context, scopeID domain.ID, expec
 			sources = append(sources, state.Name)
 			states = append(states, state)
 		}
-		accepted, _, e := c.acceptInTx(tx, scopeID, ManualEvent{DeliveryID: delivery, Data: operatorData("core.manual.reconcile.v1", operatorPayload{Revision: expected, Sources: sources})}, "core.manual.reconcile")
+		accepted, _, e := c.acceptInTx(ctx, tx, scopeID, ManualEvent{DeliveryID: delivery, Data: operatorData("core.manual.reconcile.v1", operatorPayload{Revision: expected, Sources: sources})}, "core.manual.reconcile")
 		if e != nil {
 			return e
 		}

@@ -59,12 +59,26 @@ func (b brokenStepBackTx) Renew(ref domain.LeaseRef, ttl time.Duration) error {
 	return b.Tx.Renew(ref, ttl)
 }
 
+// brokenActor stores Events without who caused them, as a store mapping
+// Events to columns might if it missed the field.
+type brokenActor struct{ storage.Store }
+type brokenActorTx struct{ storage.Tx }
+
+func (b brokenActor) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(brokenActorTx{tx}) })
+}
+func (b brokenActorTx) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, error) {
+	e.Actor = ""
+	return b.Tx.AcceptEvent(e)
+}
+
 func TestWeakenedBackendsAreRejected(t *testing.T) {
 	cases := []struct {
 		name, diagnostic string
 		factory          func() storage.Store
 	}{
 		{"event_identity_not_correlation", "duplicate delivery", func() storage.Store { return brokenDedup{reference.New()} }},
+		{"event_actor_round_trip", "event actor lost", func() storage.Store { return brokenActor{reference.New()} }},
 		{"atomic_route_work_kv_timer", "event leaked", func() storage.Store { return brokenAtomic{reference.New()} }},
 		{"timer_fire_rearm_rollback", "rollback was not atomic", func() storage.Store { return brokenAtomic{reference.New()} }},
 		{"lease_renew_survives_clock_step_back", "renewal after clock step back", func() storage.Store { return brokenStepBack{reference.New()} }},

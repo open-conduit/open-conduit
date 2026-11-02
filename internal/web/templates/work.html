@@ -156,7 +156,7 @@
         <span class="ev-seq">{{.Sequence}}</span>
         <time>{{at .At}}</time>
         <code class="ev-type">{{.Type}}</code>
-        <span class="ev-sum">{{.Source}}</span>
+        <span class="ev-sum">{{.Source}}{{with .Actor}} · {{.}}{{end}}</span>
         <span class="ev-eff">{{.Effect}}</span>
         {{with .Turn}}<span class="ev-turn">turn {{.}}</span>{{end}}
       </a>
@@ -172,6 +172,7 @@
         </dd>
         {{end}}
         <dt>Source</dt><dd><code>{{.Source}}</code> · accepted {{stamp (parseTime .ReceivedAt)}}</dd>
+        {{with .Actor}}<dt>By</dt><dd><code>{{.}}</code></dd>{{end}}
         <dt>Event ID</dt><dd><code>{{.ID}}</code> <button type="button" class="btn btn-quiet btn-xs" data-copy="{{.ID}}" hidden>Copy</button></dd>
         <dt>CLI</dt><dd><code>open-conduit events chain {{.ID}}</code></dd>
       </dl>

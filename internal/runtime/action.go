@@ -20,6 +20,8 @@ type ActionEvent struct {
 	Provider, Action string
 	Key              string
 	Event            domain.Event
+	// Actor is who invoked the action, as kind:id (the caller).
+	Actor string
 }
 
 // SubmitAction accepts an action's Event as an operator root of its own
@@ -53,7 +55,7 @@ func (c *Control) SubmitAction(ctx context.Context, a ActionEvent) (accepted dom
 			}
 		}
 		now := c.now()
-		e := domain.Event{ID: domain.ID("action/" + identity(delivery)), Type: a.Event.Type, Source: extension.ActionSource, DeliveryID: delivery, OccurredAt: now, ReceivedAt: now, CorrelationKey: a.Event.CorrelationKey, WorkID: a.WorkID, Data: a.Event.Data}
+		e := domain.Event{ID: domain.ID("action/" + identity(delivery)), Type: a.Event.Type, Source: extension.ActionSource, DeliveryID: delivery, OccurredAt: now, ReceivedAt: now, CorrelationKey: a.Event.CorrelationKey, WorkID: a.WorkID, Data: a.Event.Data, Actor: a.Actor}
 		var err error
 		accepted, added, err = AcceptInTx(tx, a.ScopeID, e)
 		if errors.Is(err, ErrCausalRejected) {
@@ -95,7 +97,7 @@ func (c *Control) Act(ctx context.Context, name string, p extension.ActionProvid
 	if err != nil {
 		return accepted, false, "", err
 	}
-	a := ActionEvent{ScopeID: call.Target.Scope.ID, Provider: name, Action: call.Action, Key: key, Event: plan.Event}
+	a := ActionEvent{ScopeID: call.Target.Scope.ID, Provider: name, Action: call.Action, Key: key, Event: plan.Event, Actor: call.Caller.String()}
 	// An Event that names a correlation key is addressed by it (an answer
 	// on a key no Work owns, say); one without is the target Work's.
 	if call.Target.Work != nil && plan.Event.CorrelationKey == nil {

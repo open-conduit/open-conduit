@@ -1084,7 +1084,8 @@ func (s *Server) listExtensions(c *call) (int, any, error) {
 }
 
 // rotate never stores the replacement in idempotency history; a lost response
-// recovers through the locked local CLI (RecoverOperator).
+// recovers through the locked local CLI (RecoverOperator). The replacement
+// belongs to the same operator.
 func (s *Server) rotate(c *call) (int, any, error) {
 	var in struct {
 		ExpectedTokenID string `json:"expected_token_id"`
@@ -1114,7 +1115,7 @@ func (s *Server) rotate(c *call) (int, any, error) {
 		if err = tx.Put(authNamespace, "operator/"+digest, b); err != nil {
 			return err
 		}
-		file, err = issueOperatorInTx(tx, s.o.Now())
+		file, err = issueOperatorInTx(tx, s.o.Now(), r.Name)
 		return err
 	})
 	if err != nil {
@@ -1123,6 +1124,11 @@ func (s *Server) rotate(c *call) (int, any, error) {
 	c.w.Header().Set("Cache-Control", "no-store")
 	return 200, map[string]any{"token_id": file.TokenID, "token": file.Token}, nil
 }
+
+// revoke revokes an operator credential (otok_) or an execution token. An
+// operator may revoke its own credential or a named operator's; the owner's
+// own credential is revoked only by itself, or by auth recover, so no named
+// operator can lock the owner out.
 func (s *Server) revoke(c *call) (int, any, error) {
 	var in struct {
 		TokenID string `json:"token_id"`
@@ -1132,12 +1138,20 @@ func (s *Server) revoke(c *call) (int, any, error) {
 		return 0, nil, err
 	}
 	if strings.HasPrefix(in.TokenID, "otok_") {
-		if in.TokenID != c.who.tokenID {
-			return 0, nil, storage.ErrNotFound
-		}
 		var at time.Time
 		err := s.o.Store.Transact(c.ctx, storage.Guard{Now: s.o.Now()}, func(tx storage.Tx) error {
-			digest := runtime.TokenDigest(c.who.token)
+			var digest string
+			if in.TokenID == c.who.tokenID {
+				digest = runtime.TokenDigest(c.who.token)
+			} else {
+				b, err := tx.Get(authNamespace, "operator_id/"+in.TokenID)
+				if err != nil {
+					return err
+				}
+				if err = json.Unmarshal(b, &digest); err != nil {
+					return err
+				}
+			}
 			b, err := tx.Get(authNamespace, "operator/"+digest)
 			if err != nil {
 				return err
@@ -1145,6 +1159,9 @@ func (s *Server) revoke(c *call) (int, any, error) {
 			var r operatorRecord
 			if err = json.Unmarshal(b, &r); err != nil {
 				return err
+			}
+			if r.TokenID != in.TokenID || in.TokenID != c.who.tokenID && r.Name == "" {
+				return storage.ErrNotFound
 			}
 			if !r.Revoked {
 				r.Revoked, r.RevokedAt = true, s.o.Now()
@@ -1163,6 +1180,86 @@ func (s *Server) revoke(c *call) (int, any, error) {
 		return 0, nil, err
 	}
 	return 200, map[string]any{"token_id": in.TokenID, "revoked_at": ts(at)}, nil
+}
+
+type wireOperator struct {
+	Name      string `json:"name"`
+	TokenID   string `json:"token_id"`
+	CreatedAt string `json:"created_at"`
+	RevokedAt string `json:"revoked_at,omitempty"`
+}
+
+// listOperators is GET /auth/operators: every operator credential, active or
+// revoked, by name. It never shows a token.
+func (s *Server) listOperators(c *call) (int, any, error) {
+	out := []wireOperator{}
+	err := s.read(c.ctx, func(tx storage.Tx) error {
+		rows, err := tx.List(authNamespace, "operator/")
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			var r operatorRecord
+			if err = json.Unmarshal(row.Value, &r); err != nil {
+				return err
+			}
+			o := wireOperator{Name: r.name(), TokenID: r.TokenID, CreatedAt: ts(r.CreatedAt)}
+			if r.Revoked {
+				o.RevokedAt = ts(r.RevokedAt)
+			}
+			out = append(out, o)
+		}
+		return nil
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Name != out[j].Name {
+			return out[i].Name < out[j].Name
+		}
+		return out[i].CreatedAt < out[j].CreatedAt
+	})
+	return 200, map[string]any{"operators": out}, nil
+}
+
+// addOperator is POST /auth/operators: a credential for a named operator,
+// whose every control is then recorded as operator:<name>. Like rotate, the
+// token is returned once and never kept in idempotency history. A name has
+// at most one active credential; revoke it to issue a new one.
+func (s *Server) addOperator(c *call) (int, any, error) {
+	var in struct {
+		Name string `json:"name"`
+	}
+	if err := c.decode(&in); err != nil {
+		return 0, nil, err
+	}
+	if !ValidOperatorName(in.Name) {
+		return 0, nil, fail(400, "malformed", "name must be 1-32 lower case letters, digits or dashes, start with a letter, and not be local")
+	}
+	var file TokenFile
+	err := s.o.Store.Transact(c.ctx, storage.Guard{Now: s.o.Now()}, func(tx storage.Tx) error {
+		rows, err := tx.List(authNamespace, "operator/")
+		if err != nil {
+			return err
+		}
+		for _, row := range rows {
+			var r operatorRecord
+			if err = json.Unmarshal(row.Value, &r); err != nil {
+				return err
+			}
+			if !r.Revoked && r.Name == in.Name {
+				return fail(409, "operator_exists", "operator "+in.Name+" already has an active credential; revoke it first")
+			}
+		}
+		file, err = issueOperatorInTx(tx, s.o.Now(), in.Name)
+		return err
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	c.w.Header().Set("Cache-Control", "no-store")
+	return 201, map[string]any{"name": in.Name, "token_id": file.TokenID, "token": file.Token}, nil
 }
 
 // ---- toolbelt ----
