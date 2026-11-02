@@ -58,12 +58,9 @@ func (d *daemon) loop(ctx context.Context) error {
 		if _, err = d.ingress.ReconcileDue(ctx, passLimit); err != nil && ctx.Err() == nil {
 			d.report("ingress", "", errorCode(err))
 		}
-		d.projectGitHub(ctx)
-		d.manageHooks(ctx)
 		d.reconfigureOnURLChange(ctx)
 		d.runInprocTasks(ctx)
 		d.reconcileContainers(ctx)
-		d.sweepGitTokens(ctx)
 		d.reconcileResources(c)
 		d.reconcileEndpoints(ctx)
 		d.sweepResources(c)

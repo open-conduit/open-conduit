@@ -40,10 +40,9 @@ import (
 // are still wired by their own files.
 
 // firstParty is the list of first-party in-process extensions. Adding one
-// touches its own package and this list. github is the host's view of the
-// GitHub entries it registers (nil offline).
-func firstParty(github gh.ViewFunc) []inproc.Extension {
-	return []inproc.Extension{gh.NewExtension(github), posthog.New(), human.New(), introspection.New(), observe.New(), schedule.New(), linear.New(), jira.New(), bb.New(), sl.New()}
+// touches its own package and this list.
+func firstParty() []inproc.Extension {
+	return []inproc.Extension{gh.New(), posthog.New(), human.New(), introspection.New(), observe.New(), schedule.New(), linear.New(), jira.New(), bb.New(), sl.New()}
 }
 
 // typeSets are an extension's own entry and connection types: what its
@@ -218,11 +217,23 @@ func (d *daemon) startInproc(ctx context.Context) error {
 				return id, err
 			},
 			WaitProgress: d.waitProgress(name),
-			Act:          d.act(name),
-			Actions:      d.listActions(name),
-			Config:       d.configHost(),
-			Probes:       d.setupProbes,
-			Capture:      d.telemetry.Capture,
+			Authorize: func(kind string, from, to domain.ID) error {
+				switch kind {
+				case "read":
+					return d.mayRead(from, to)
+				case "file":
+					return d.mayFile(from, to)
+				}
+				return fmt.Errorf("unknown authorization %q", kind)
+			},
+			WaitTarget: func(ctx context.Context, scope domain.ID, kind, name string) (domain.CorrelationKey, []string, bool) {
+				return d.waitTarget(kind)(ctx, scope, name)
+			},
+			Act:     d.act(name),
+			Actions: d.listActions(name),
+			Config:  d.configHost(),
+			Probes:  d.setupProbes,
+			Capture: d.telemetry.Capture,
 		}
 		if err := s.Start(ctx, h); err != nil {
 			return fmt.Errorf("extension %s: %w", name, err)
@@ -611,7 +622,7 @@ func (d *daemon) inprocChecks(deep bool) []func(context.Context) runtime.Check {
 // validated without a daemon; dir is the config file's directory.
 func offlineChecks(ctx context.Context, s *config.Snapshot, executors map[string]extension.Executor, dir string) []runtime.Check {
 	var out []runtime.Check
-	for _, x := range firstParty(nil) {
+	for _, x := range firstParty() {
 		c, ok := x.(inproc.Checker)
 		if !ok {
 			continue

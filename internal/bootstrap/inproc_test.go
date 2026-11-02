@@ -20,7 +20,7 @@ import (
 func TestFirstPartyCompose(t *testing.T) {
 	reg := registry(offlineExecutors())
 	seen := map[string]bool{}
-	for _, x := range firstParty(nil) {
+	for _, x := range firstParty() {
 		if seen[x.Name()] {
 			t.Fatalf("%s listed twice", x.Name())
 		}
@@ -86,7 +86,7 @@ func TestInstalledCompose(t *testing.T) {
 // (#243): it joins the plugin as every package's does, and nothing compiled
 // in supplies it.
 func TestTurnPluginCarriesFirstPartyPlaybooks(t *testing.T) {
-	d := &daemon{o: Options{StateDir: t.TempDir()}, inproc: firstParty(nil)}
+	d := &daemon{o: Options{StateDir: t.TempDir()}, inproc: firstParty()}
 	if err := d.preparePlaybooks(); err != nil {
 		t.Fatal(err)
 	}

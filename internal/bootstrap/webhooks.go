@@ -11,8 +11,6 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/open-conduit/open-conduit/extension"
-	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/tunnel"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -41,11 +39,6 @@ type TunnelOptions struct {
 	Kind, Binary, Domain, Name, Hostname, PublicURL string
 }
 
-type hookState struct {
-	id, url, code string
-	next          time.Time
-}
-
 type webhookState struct {
 	mu        sync.Mutex
 	listening string // bound address, "" when reconcile-only
@@ -58,8 +51,6 @@ type webhookState struct {
 	// listener never follows a reload, so doctor flags a change.
 	stored    config.Webhooks
 	tunnelErr string
-	hooks     map[string]*hookState // by source namespace
-	managing  bool
 	server    *http.Server
 }
 
@@ -137,7 +128,6 @@ func (d *daemon) startWebhooks(ctx context.Context, stored config.Webhooks) (fun
 	d.hooks.listening = ln.Addr().String()
 	d.hooks.listenFrom, d.hooks.tunnelFrom = addrFrom, tunnelFrom
 	d.hooks.server = srv
-	d.hooks.hooks = map[string]*hookState{}
 	d.hooks.mu.Unlock()
 	go func() { _ = srv.Serve(ln) }()
 	d.log.Info("webhook listener serving", "address", ln.Addr().String())
@@ -193,23 +183,6 @@ func (d *daemon) startWebhooks(ctx context.Context, stored config.Webhooks) (fun
 	}, nil
 }
 
-// webhookSecret resolves an entry's webhook_secret from its scope's
-// effective references in the current generation.
-func (d *daemon) webhookSecret(src *githubSource) func(context.Context) (string, error) {
-	return func(ctx context.Context) (string, error) {
-		name := src.ingress.Settings().WebhookSecret
-		snapshot, _ := d.configs.Current()
-		if name == "" || snapshot == nil || snapshot.Scopes[src.scope] == nil {
-			return "", gh.ErrCredential
-		}
-		values, err := d.resolver.ResolveNames(ctx, snapshot.Scopes[src.scope], []string{name})
-		if err != nil {
-			return "", gh.ErrCredential
-		}
-		return values[name], nil
-	}
-}
-
 // webhookHandler serves only the registered routes listed above.
 func (d *daemon) webhookHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -222,113 +195,16 @@ func (d *daemon) webhookHandler() http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
-		var src *githubSource
-		d.github.mu.Lock()
-		for _, s := range d.github.sources {
-			if s.name == name && s.ingress.Settings().WebhookSecret != "" {
-				src = s
-			}
-		}
-		d.github.mu.Unlock()
-		if src == nil {
-			http.NotFound(w, r)
-			return
-		}
-		gh.WebhookHandler(d.webhookSecret(src), func(ctx context.Context, delivery extension.Delivery) error {
-			_, err := d.ingress.Push(ctx, src.name, delivery)
-			if err == nil {
-				d.poke()
-			}
-			return err
-		}, d.now).ServeHTTP(w, r)
+		http.NotFound(w, r)
 	})
 }
 
-// manageHooks points each manage_webhook entry's repository webhook at the
-// current public URL, in the background, retrying a failure after a minute.
-// A dry run (daemon or entry) only reports what it would do.
-func (d *daemon) manageHooks(ctx context.Context) {
-	d.hooks.mu.Lock()
-	public := d.hooks.public
-	if public == "" || d.hooks.managing {
-		d.hooks.mu.Unlock()
-		return
-	}
-	type job struct {
-		src *githubSource
-		url string
-	}
-	var jobs []job
-	d.github.mu.Lock()
-	for ns, src := range d.github.sources {
-		s := src.ingress.Settings()
-		if !s.ManageWebhook || s.WebhookSecret == "" {
-			continue
-		}
-		st := d.hooks.hooks[ns]
-		target := public + "/" + src.name
-		if st != nil && (st.url == target && (st.code == "ok" || st.code == "dry_run") || d.now().Before(st.next)) {
-			continue
-		}
-		jobs = append(jobs, job{src, target})
-	}
-	d.github.mu.Unlock()
-	if len(jobs) == 0 {
-		d.hooks.mu.Unlock()
-		return
-	}
-	d.hooks.managing = true
-	d.hooks.mu.Unlock()
-	d.wg.Add(1)
-	go func() {
-		defer d.wg.Done()
-		defer func() {
-			d.hooks.mu.Lock()
-			d.hooks.managing = false
-			d.hooks.mu.Unlock()
-		}()
-		for _, j := range jobs {
-			s := j.src.ingress.Settings()
-			st := &hookState{url: j.url, code: "ok"}
-			d.hooks.mu.Lock()
-			if prev := d.hooks.hooks[s.Namespace]; prev != nil {
-				st.id = prev.id
-			}
-			d.hooks.mu.Unlock()
-			cx, cancel := context.WithTimeout(ctx, 30*time.Second)
-			secret, err := d.webhookSecret(j.src)(cx)
-			if err == nil {
-				dry := d.o.DryRun || s.Projection.DryRun
-				var id string
-				id, _, err = j.src.client.EnsureWebhook(cx, s.Repo, j.url, "/"+j.src.name, secret, st.id, dry)
-				st.id = id
-				if dry {
-					st.code = "dry_run"
-				}
-			}
-			cancel()
-			if err != nil {
-				st.code, st.next = hookCode(err), d.now().Add(time.Minute)
-			}
-			d.hooks.mu.Lock()
-			d.hooks.hooks[s.Namespace] = st
-			d.hooks.mu.Unlock()
-			d.report("github_webhook", "", st.code)
-		}
-	}()
-}
-
-func hookCode(err error) string { return gh.CallCode(err) }
-
-// webhookCheck reports listener, tunnel and per-entry webhook exposure.
+// webhookCheck reports the listener and tunnel; each extension's check
+// lists its own entries' routes and hooks.
 func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 	d.hooks.mu.Lock()
 	listening, public, kind, terr := d.hooks.listening, d.hooks.public, d.hooks.tunnel, d.hooks.tunnelErr
 	listenFrom, tunnelFrom, stored := d.hooks.listenFrom, d.hooks.tunnelFrom, d.hooks.stored
-	hooks := map[string]hookState{}
-	for k, v := range d.hooks.hooks {
-		hooks[k] = *v
-	}
 	d.hooks.mu.Unlock()
 	check = runtime.Check{Name: "webhooks", Status: runtime.CheckOK, Code: "listening"}
 	if snapshot, _ := d.configs.Current(); snapshot != nil && snapshot.Settings.Webhooks != stored {
@@ -357,27 +233,6 @@ func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 	default:
 		check.Detail += "; public " + public + " (" + kind + ", from " + tunnelFrom + ")"
 	}
-	d.github.mu.Lock()
-	for ns, src := range d.github.sources {
-		s := src.ingress.Settings()
-		item := ns + ": "
-		switch {
-		case s.WebhookSecret == "":
-			item += "no webhook_secret (not mounted; reconcile only)"
-		default:
-			item += "POST /" + src.name
-			if h, ok := hooks[ns]; ok {
-				item += "; hook " + h.code
-				if h.code != "ok" && h.code != "dry_run" && check.Status == runtime.CheckOK {
-					check.Status, check.Code = runtime.CheckWarn, h.code
-				}
-			} else if s.ManageWebhook {
-				item += "; hook pending"
-			}
-		}
-		check.Items = append(check.Items, item)
-	}
-	d.github.mu.Unlock()
 	sort.Strings(check.Items)
 	return check
 }

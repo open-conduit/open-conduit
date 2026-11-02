@@ -87,7 +87,10 @@ var parity = map[string][]string{
 var parityGaps = map[string]int{
 	// Wait targets (`job:<name>`) resolve only for in-process extensions
 	// until a wire method carries them.
-	"Targeter": 357,
+	"Targeter":        357,
+	"Host.WaitTarget": 357,
+	"Host.Authorize":  357,
+	"SegmentEnder":    357,
 }
 
 // inprocSurfaces lists the contract's interfaces, inproc.Host's fields and

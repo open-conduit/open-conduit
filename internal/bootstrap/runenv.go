@@ -13,8 +13,7 @@ import (
 
 // runEnvironment is the scheduler's Environment hook: every extension that
 // contributes a run environment layer (extension.RunEnvironment) is asked
-// for the attempt's run, the GitHub tools first and then the extensions in
-// load order, and the layers are merged with extension.ApplyEnv. An
+// for the attempt's run, in load order, and the layers are merged with extension.ApplyEnv. An
 // in-process extension is asked only in a scope with an entry of one of its
 // types; an installed one decides for itself (its manifest and the scope).
 func (d *daemon) runEnvironment(ctx context.Context, state runtime.AttemptState) (map[string]string, error) {
@@ -24,9 +23,6 @@ func (d *daemon) runEnvironment(ctx context.Context, state runtime.AttemptState)
 		env  extension.RunEnvironment
 	}
 	var sources []source
-	if d.tools != nil {
-		sources = append(sources, source{"github", d.tools})
-	}
 	snapshot, _ := d.configs.Current()
 	for _, x := range d.inproc {
 		e, ok := x.(extension.RunEnvironment)

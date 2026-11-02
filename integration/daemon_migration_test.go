@@ -176,7 +176,7 @@ func TestDaemonMigrationRehearsal(t *testing.T) {
 	o.must(nil, "scopes", "reconcile", "widgets")
 	d.until("a reconcile after the transfer", 30*time.Second, func() bool {
 		r, err := d.c.Doctor(ctx, false)
-		return err == nil && strings.Contains(strings.Join(check(r, "github").Items, " "), "reconciled")
+		return err == nil && strings.Contains(strings.Join(check(r, "reconcile_lag").Items, " "), ": reconciled")
 	})
 	if _, ok := workFor(v1Owned); ok {
 		t.Fatal("claimed an issue Open Supervisor still owns")
@@ -237,7 +237,7 @@ func TestDaemonMigrationRehearsal(t *testing.T) {
 	o.must(nil, "scopes", "reconcile", "widgets")
 	d.until("a reconcile after the return", 30*time.Second, func() bool {
 		r, err := d.c.Doctor(ctx, false)
-		return err == nil && strings.Contains(strings.Join(check(r, "github").Items, " "), "reconciled")
+		return err == nil && strings.Contains(strings.Join(check(r, "reconcile_lag").Items, " "), ": reconciled")
 	})
 	d.settle() // let any projection pass run
 	for _, issue := range []int{fresh, released} {

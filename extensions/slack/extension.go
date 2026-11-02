@@ -52,6 +52,7 @@ type Extension struct {
 	sources  map[string]*source // by namespace, for the daemon's lifetime
 	failed   map[string]string
 	replies  map[string]string // last projection code by namespace
+	next     int               // the entry the next projection pass starts at
 	codes    map[string]string
 	sockets  sync.WaitGroup
 	stop     context.CancelFunc
@@ -381,11 +382,19 @@ func (x *Extension) Tasks() []inproc.Task {
 	}
 }
 
+// project converges the entries in turn, starting after the one the last
+// pass reached, so a pass its deadline cuts short never starves the later
+// entries; one the deadline interrupted keeps its last code.
 func (x *Extension) project(ctx context.Context) error {
-	var codes []string
-	for _, s := range x.list() {
+	sources := x.list()
+	x.mu.Lock()
+	start := x.next
+	x.mu.Unlock()
+	for i := range sources {
+		k := (start + i) % len(sources)
+		s := sources[k]
 		if ctx.Err() != nil {
-			return nil
+			break
 		}
 		res, err := s.projector.Converge(ctx, 100)
 		code := strings.Join(res.Codes, ",")
@@ -393,12 +402,20 @@ func (x *Extension) project(ctx context.Context) error {
 			code = ErrorCode(err)
 		}
 		x.mu.Lock()
-		x.replies[s.settings.Namespace] = code
+		if ctx.Err() == nil {
+			x.replies[s.settings.Namespace] = code
+		}
+		x.next = k + 1
 		x.mu.Unlock()
-		if code != "" {
-			codes = append(codes, code)
+	}
+	var codes []string
+	x.mu.Lock()
+	for _, s := range sources {
+		if c := x.replies[s.settings.Namespace]; c != "" {
+			codes = append(codes, c)
 		}
 	}
+	x.mu.Unlock()
 	x.report("projection", strings.Join(codes, ","))
 	return nil
 }

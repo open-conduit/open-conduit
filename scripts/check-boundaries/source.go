@@ -290,15 +290,13 @@ var compositionExceptions = map[string][]string{
 	"claudecode.go": {"executors/claudecode", "extensions/github"},
 	"container.go":  {"extensions/docker", "extensions/ssh"},
 	"daemon.go":     {"executors/shell", "extensions/git", "extensions/github", "extensions/schedule"},
-	"github.go":     {"extensions/github"},
 	"operator.go":   {"executors/claudecode", "executors/shell", "extensions/github", "extensions/github/playbooks", "extensions/jira", "extensions/linear", "extensions/schedule", "extensions/slack"},
 	"probes.go":     {"executors/claudecode", "extensions/github"},
 	"resources.go":  {"extensions/git"},
-	"routes.go":     {"extensions/github"},
 	"sandbox.go":    {"extensions/srt"},
 	"state.go":      {"extensions/posthog"},
-	"tools.go":      {"executors/claudecode", "extensions/github", "extensions/github/playbooks"},
-	"webhooks.go":   {"extensions/github", "extensions/tunnel"},
+	"tools.go":      {"executors/claudecode", "extensions/github/playbooks"},
+	"webhooks.go":   {"extensions/tunnel"},
 }
 
 // compositionViolations checks internal/bootstrap's production files import

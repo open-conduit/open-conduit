@@ -161,7 +161,6 @@ type daemon struct {
 	resolver      *config.Resolver
 	pipeline      *telemetry.Pipeline
 	ingress       *runtime.Ingress
-	github        githubSources
 	telemetry     telemetryFanout
 	telemetryFile *rotatingLog
 	resources     resourceState
@@ -169,7 +168,6 @@ type daemon struct {
 	containers    containerState
 	claude        claudeState
 	hooks         webhookState
-	tools         *gh.Tools
 	external      externalState
 	endpoint      string
 	endpoints     *management.Endpoints
@@ -346,7 +344,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	d := &daemon{o: o, log: slog.New(slog.NewTextHandler(o.Log, nil)), now: time.Now, inflight: map[attemptKey]domain.LeaseRef{}, reported: map[string]string{}, reportedAt: map[string]time.Time{}, nudge: make(chan struct{}, 1), resolver: &config.Resolver{SecretsFile: filepath.Join(filepath.Dir(o.ConfigPath), "secrets.json")}}
-	d.inproc = firstParty(d.githubView)
+	d.inproc = firstParty()
 	suffix := make([]byte, 4)
 	if _, err = rand.Read(suffix); err != nil {
 		return err
@@ -466,9 +464,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.stopInproc()
-	if err = d.openTools(); err != nil {
-		return err
-	}
 	if err = d.openResources(); err != nil {
 		return err
 	}
@@ -494,7 +489,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	snapshot, generation := d.configs.Current()
-	d.registerGitHub(ctx, snapshot)
 	d.publishGeneration(snapshot, generation)
 	c, err := d.build(snapshot, generation)
 	if err != nil {
@@ -513,7 +507,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 			return
 		}
 		d.current.Store(next)
-		d.registerGitHub(d.ctx, s)
 		d.publishGeneration(s, g)
 		d.configureExtensions(d.ctx)
 		d.log.Info("configuration generation activated", "generation", g)
@@ -611,9 +604,6 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		return g, err
 	}, Observer: d.pipeline, AuthorizeAlias: d.authorizeAlias})
 	if err != nil {
-		return nil, err
-	}
-	if err = d.registerTools(belt); err != nil {
 		return nil, err
 	}
 	if err = d.registerInprocTools(belt, s); err != nil {

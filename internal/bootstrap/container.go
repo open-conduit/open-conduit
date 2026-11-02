@@ -16,6 +16,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/extensions/docker"
 	"github.com/open-conduit/open-conduit/extensions/ssh"
 	"github.com/open-conduit/open-conduit/internal/config"
@@ -40,8 +41,6 @@ type containerState struct {
 	last      time.Time
 	// reconciling is set while a reconcile pass runs off the loop.
 	reconciling atomic.Bool
-	// tokens is when the git tokens of ended executions were last swept.
-	tokens time.Time
 }
 
 // openContainers makes the providers. The gateway image is the one this
@@ -273,9 +272,9 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 		Pinned: pinned,
 		Now:    d.now,
 	})
-	// The segment's end is the end of the git tokens minted for it.
+	// The segment's end is the end of what extensions issued for it.
 	settle := func(r extension.Result) extension.Result {
-		d.revokeGitTokens(state.ExecutionID)
+		d.segmentEnded(state.ExecutionID)
 		return b.Settle(r)
 	}
 	return runtime.ContainerBinding{Broker: b, Resources: b.Resources(resources), Settle: settle, Home: workHome}, nil
@@ -428,52 +427,16 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 	d.clear("containers", "")
 }
 
-// revokeGitTokens revokes the git tokens the GitHub tools minted for an
-// execution (github.git.credential, behind `os git-credential`) once its
-// segment has ended. One GitHub couldn't be told about is kept for
-// sweepGitTokens.
-func (d *daemon) revokeGitTokens(id domain.ID) {
-	if d.tools == nil {
-		return
-	}
+// segmentEnded tells every extension that issued something for an
+// execution's container segment (git tokens) that the segment has ended.
+func (d *daemon) segmentEnded(id domain.ID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	if err := d.tools.RevokeGitTokens(ctx, id); err != nil {
-		d.report("git_credentials", "", "revoke_failed")
+	for _, x := range d.inproc {
+		if e, ok := x.(inproc.SegmentEnder); ok {
+			e.SegmentEnded(ctx, id)
+		}
 	}
-}
-
-// sweepGitTokens revokes the git tokens of every execution that isn't
-// running, at most once per resource interval: those whose segment ended
-// without the host's Settle (a stop, a lost lease) or whose revocation
-// failed.
-func (d *daemon) sweepGitTokens(ctx context.Context) {
-	if d.tools == nil || d.now().Sub(d.containers.tokens) < d.o.ResourceInterval {
-		return
-	}
-	d.containers.tokens = d.now()
-	err := d.tools.SweepGitTokens(ctx, func(ids []domain.ID) (map[domain.ID]bool, error) {
-		live := map[domain.ID]bool{}
-		err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
-			for _, id := range ids {
-				x, err := tx.Execution(id)
-				if errors.Is(err, storage.ErrNotFound) {
-					continue
-				}
-				if err != nil {
-					return err
-				}
-				live[id] = x.State == domain.ExecutionRunning
-			}
-			return nil
-		})
-		return live, err
-	})
-	if err != nil && ctx.Err() == nil {
-		d.report("git_credentials", "", "revoke_failed")
-		return
-	}
-	d.clear("git_credentials", "")
 }
 
 // containerStatus adds the owner's containers to a resource owner's status:

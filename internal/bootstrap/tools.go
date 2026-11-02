@@ -9,7 +9,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/executors/claudecode"
-	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
@@ -20,32 +19,6 @@ import (
 // executor; agent turn outcomes are published as derived turn Events (the
 // source of `issue:N:<state>` waits); and the playbooks are written once as
 // the Claude Code plugin every claude-code binding uses by default.
-
-// githubSourcesList is the tools' view of the registered sources.
-func (d *daemon) githubSourcesList() []gh.Source {
-	d.github.mu.Lock()
-	defer d.github.mu.Unlock()
-	out := make([]gh.Source, 0, len(d.github.sources))
-	for _, s := range d.github.sources {
-		out = append(out, gh.Source{Settings: s.ingress.Settings(), Connection: s.connection, Client: s.client, Projector: s.projector})
-	}
-	return out
-}
-
-// openTools prepares the shared tools instance.
-func (d *daemon) openTools() error {
-	tools, err := gh.NewTools(gh.ToolsOptions{Store: d.coord, Sources: d.githubSourcesList, Now: d.now, Jobs: d.waitTarget("job"), WaitProgress: d.waitProgress(gh.Type), Writers: d.githubWriters(), MayRead: d.mayRead, MayFile: d.mayFile})
-	if err != nil {
-		return err
-	}
-	d.tools = tools
-	return nil
-}
-
-// registerTools adds the extension operations to a generation's toolbelt.
-func (d *daemon) registerTools(belt *runtime.Toolbelt) error {
-	return belt.Register(d.tools.Registration())
-}
 
 // authorizeAlias is the B04 cross-scope dependency ceiling: the waiting
 // (target) scope must list the source scope in authorization.read_scopes.
@@ -102,16 +75,11 @@ func (d *daemon) preparePlaybooks() error {
 	return nil
 }
 
-// renderEvents renders GitHub Events with their reply hints, then
-// extensions' own families, first-party and installed (event.render), and
+// renderEvents renders the extensions' own families, first-party and installed (event.render), and
 // falls back to the executor's generic renderer for everything else.
 func (d *daemon) renderEvents(events []domain.Event) string {
 	parts := make([]string, 0, len(events))
 	for _, e := range events {
-		if text, ok := gh.RenderEvent(e); ok {
-			parts = append(parts, text)
-			continue
-		}
 		if text, ok := d.inprocRender(e); ok {
 			parts = append(parts, text)
 			continue

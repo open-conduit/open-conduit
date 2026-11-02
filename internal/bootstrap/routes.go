@@ -7,7 +7,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
@@ -81,7 +80,7 @@ func (d *daemon) admitTrace(scope domain.ID, e domain.Event) error {
 }
 
 func handlers() map[string]extension.RouteHandler {
-	h := map[string]extension.RouteHandler{"manual": manualRoute{}, gh.Type: gh.Route{}, gh.HoldHandler: gh.HoldRoute{}}
+	h := map[string]extension.RouteHandler{"manual": manualRoute{}}
 	return h
 }
 

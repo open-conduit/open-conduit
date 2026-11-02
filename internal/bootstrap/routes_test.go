@@ -159,7 +159,7 @@ func TestEveryBuiltInSampleTraces(t *testing.T) {
 		t.Fatal(err)
 	}
 	all := handlers()
-	inprocHandlers(all, firstParty(nil))
+	inprocHandlers(all, firstParty())
 	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "conduit.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -171,7 +171,7 @@ func TestEveryBuiltInSampleTraces(t *testing.T) {
 	}
 	// The host's own sources need no ingress, so their samples are admitted
 	// here too; a registered source's are TestAdmitTrace's.
-	d := &daemon{ingress: ingress, inproc: firstParty(nil)}
+	d := &daemon{ingress: ingress, inproc: firstParty()}
 	offered := map[string]int{}
 	for _, scope := range snap.DomainScopes() {
 		for _, route := range scope.Routes {
