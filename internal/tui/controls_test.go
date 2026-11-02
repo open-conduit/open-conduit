@@ -305,7 +305,7 @@ func TestStuckEventControls(t *testing.T) {
 	m, cmd = press(m, "y")
 	m = drain(t, m, cmd)
 	m, cmd = press(m, "E")
-	m = drain(t, m, cmd)
+	drain(t, m, cmd)
 	if got := strings.Join(src.calls, ","); got != "skip-event evt-stuck ,reroute-event evt-failed " {
 		t.Fatalf("calls: %s", got)
 	}
