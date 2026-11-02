@@ -21,7 +21,10 @@ type Status struct {
 	Report  string `json:"report,omitempty"`
 }
 
-// Turn states a status may report (domain.TurnStates).
+// The turn states a structured status may report. They are this executor's
+// default vocabulary for the playbooks it runs, not the core's: the host
+// publishes a turn's end for any status (domain.ValidTurnStatus), and what
+// each means is for the playbook and the extensions that read it.
 const (
 	StateBuilding = "building"
 	StateReview   = "review"

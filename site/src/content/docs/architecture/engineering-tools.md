@@ -74,7 +74,7 @@ Dry-run is handled per entry by `projection.dry_run`: writes report `dry_run` an
 
 ## Waits
 
-`github.wait {conditions, until, reason}` takes `pr:N[:merged|closed|commented|pushed|checks]`, `issue:N[:closed|<turn state>]`, `job:<name>`, `<project>/` prefixes and `until`. It translates as follows:
+`github.wait {conditions, until, reason}` takes `pr:N[:merged|closed|commented|pushed|checks]`, `issue:N[:closed|<turn state>]` (any turn status: the playbook's `review`, or a job's `approved`), `job:<name>`, `<project>/` prefixes and `until`. It translates as follows:
 
 | Condition | Source key | Types | Filter | History |
 | --- | --- | --- | --- | --- |

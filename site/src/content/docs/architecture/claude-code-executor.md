@@ -59,7 +59,7 @@ The executor adds no core state. The structured status uses `--json-schema` (sta
 | Error, no result, no status, interrupt | failed | retry policy |
 | Usage limit | failed with `Result.RetryHint{ResetAt}` | retried at the reset plus two minutes (or after 30 minutes if unknown) |
 
-The outcome data schema is the binding's optional `status_schema`. The default is `core.turn.v1`, which every projector reads and from which the host publishes the turn-ended Event; a source-named `<source>.status.v1` that earlier setups wrote is read as `core.turn.v1`. A config that cannot be read fails under `open-conduit.claudecode.result.v1`. The projector maps `help`, `review` and `done` to labels. `building` and `finished` project no status label. The other data fields are:
+The outcome data schema is the binding's optional `status_schema`. The default is `core.turn.v1`, which every projector reads and from which the host publishes the turn-ended Event; a source-named `<source>.status.v1` that earlier setups wrote in their config is read as `core.turn.v1`. The five states are this executor's default vocabulary, not the core's: the host publishes a turn's end for any status. A config that cannot be read fails under `open-conduit.claudecode.result.v1`. The projector maps `help`, `review` and `done` to labels. `building` and `finished` project no status label. The other data fields are:
 
 - `reason` and `kind`
 - `report`, the status's optional write-up for the operator (at most 20,000 bytes), which the web view shows under the turn's summary

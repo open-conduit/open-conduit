@@ -9,7 +9,7 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// Work displays outside a route decision (issue #134). Input a Wait takes
+// Work displays outside a route decision. Input a Wait takes
 // never reaches a route policy, yet a waiting Work's source can still say
 // what the Work is; and Work created before sources gave displays has none
 // until its source routes again. Both ask the routes for a display alone:
@@ -74,7 +74,7 @@ func putDisplayInTx(tx storage.Tx, was domain.Work, d *domain.WorkDisplay) error
 // history, once per store: for each such Work it asks the routes about its
 // latest keyed Events and its first, newest first, until one says what
 // the Work is, then replays the Events after that one so each can add to it
-// (a PR's link).
+// (a link to what it changed).
 // No service is called. It reports how many Work it gave a display.
 func (r *Router) BackfillDisplays(ctx context.Context) (int, error) {
 	// v2 runs it again for Slack threads, whose route gave no display for
