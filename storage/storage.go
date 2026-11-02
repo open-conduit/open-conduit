@@ -57,6 +57,8 @@ type Tx interface {
 	PutExecution(domain.Execution, domain.Revision) error
 	// Claim enters running on both Work and Execution and advances the lease epoch.
 	Claim(domain.ID, string, time.Duration) (domain.LeaseRef, error)
+	// Renew extends the lease to now+ttl, keeping the stored expiry when
+	// that is later (the clock stepped back): it never shortens a lease.
 	Renew(domain.LeaseRef, time.Duration) error
 	Release(domain.LeaseRef) error
 	ListTimers() ([]domain.Timer, error)

@@ -83,6 +83,7 @@ func StorageCases() []StorageCase {
 		{"competing_claims", competingClaims},
 		{"lease_expiry_recovery_and_fencing", leaseFencing},
 		{"lease_renew_release", leaseRenew},
+		{"lease_renew_survives_clock_step_back", leaseRenewStepBack},
 		{"terminal_work_cancellation_fences_worker", cancelFencing},
 		{"timer_fire_rearm_rollback", timerRollback},
 		{"one_shot_timer_and_duplicate_fire", oneShotTimer},
@@ -428,6 +429,41 @@ func leaseFencing(s storage.Store) error {
 		}
 		return tx.Put("test", "fresh", []byte("ok"))
 	})
+}
+
+// leaseRenewStepBack: a wall clock stepped back while the lease is held
+// (an NTP correction, a VM resume) neither fails the renewal nor shortens
+// the stored expiry, so the holder keeps its authority.
+func leaseRenewStepBack(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	ref, err := claim(s, c)
+	if err != nil {
+		return err
+	}
+	held := c.Now().Add(time.Minute)
+	c.Advance(-30 * time.Second)
+	if err := s.Transact(context.Background(), storage.Guard{Now: c.Now(), Lease: &ref}, func(tx storage.Tx) error { return tx.Renew(ref, time.Minute) }); err != nil {
+		return fmt.Errorf("renewal after clock step back: %w", err)
+	}
+	var expires time.Time
+	if err := transact(s, c, func(tx storage.Tx) error {
+		x, err := tx.Execution("execution")
+		expires = x.Lease.ExpiresAt
+		return err
+	}); err != nil {
+		return err
+	}
+	if expires.Before(held) {
+		return fmt.Errorf("renewal after clock step back shortened the lease to %s, held until %s", expires, held)
+	}
+	c.Advance(time.Minute)
+	if err := s.Transact(context.Background(), storage.Guard{Now: c.Now(), Lease: &ref}, func(tx storage.Tx) error { return tx.Renew(ref, time.Minute) }); err != nil {
+		return fmt.Errorf("renewal once the clock caught up: %w", err)
+	}
+	return nil
 }
 func leaseRenew(s storage.Store) error {
 	c := NewClock()

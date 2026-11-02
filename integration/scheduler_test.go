@@ -1222,3 +1222,112 @@ func TestProductionSchedulerRunEnvironment(t *testing.T) {
 		t.Fatal("the executor ran without its run environment")
 	}
 }
+
+// Issue #351: a clock step back, a sleep past the lease and a newer holder.
+// Each control proves the scenario is the one under test.
+
+// TestProductionSchedulerRenewSurvivesClockStepBack: a wall clock stepped
+// back 30 s under a running agent renews its lease instead of failing it,
+// and the attempt stays running and unrecoverable by anyone else.
+func TestProductionSchedulerRenewSurvivesClockStepBack(t *testing.T) {
+	f, executor := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	work := seedSchedulerWork(t, f, "stepback")
+	s := f.Driver.(*schedulerDriver).scheduler
+	a, err := s.Start(context.Background(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(20 * time.Second)
+	if err = s.Renew(context.Background(), a.Lease); err != nil {
+		t.Fatal(err)
+	}
+	held := f.Clock.Now().Add(conformance.RuntimeLease)
+	f.Clock.Advance(-30 * time.Second)
+	// Control: the renewal's own expiry really is earlier than the stored one.
+	if !f.Clock.Now().Add(conformance.RuntimeLease).Before(held) {
+		t.Fatal("control: the clock did not step back past the stored expiry")
+	}
+	if err = s.Renew(context.Background(), a.Lease); err != nil {
+		t.Fatalf("renewal after a clock step back: %v", err)
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		x, err := tx.Execution(a.Lease.ExecutionID)
+		if err == nil && (x.State != domain.ExecutionRunning || x.Lease.Epoch != a.Lease.Epoch || x.Lease.ExpiresAt.Before(held)) {
+			return fmt.Errorf("the step back cost the attempt its lease: %+v", x)
+		}
+		return err
+	})
+	second := newTestScheduler(t, f, schedulerDefaultOptions(f, executor))
+	if _, err = second.Recover(context.Background(), a.Lease.ExecutionID); err == nil {
+		t.Fatal("a renewed lease was recovered by another owner")
+	}
+	if err = s.Observe(context.Background(), a); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// TestProductionSchedulerLapsedLeaseIsAdoptedNotStopped: a host that slept
+// past its lease finds the renewal lost, but the attempt is still running,
+// so it is left to recovery, which adopts the same process. Once it is
+// cancelled it is no longer adoptable and its old holder stops it.
+func TestProductionSchedulerLapsedLeaseIsAdoptedNotStopped(t *testing.T) {
+	f, executor := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	work := seedSchedulerWork(t, f, "sleep")
+	s := f.Driver.(*schedulerDriver).scheduler
+	a, err := s.Start(context.Background(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.Clock.Advance(2 * conformance.RuntimeLease)
+	if err = s.Renew(context.Background(), a.Lease); !errors.Is(err, storage.ErrLeaseLost) {
+		t.Fatalf("control: the lease did not lapse: %v", err)
+	}
+	if !s.Adoptable(context.Background(), a.Lease) {
+		t.Fatal("a lapsed but running attempt would be stopped")
+	}
+	recovered, err := s.Recover(context.Background(), a.Lease.ExecutionID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if recovered.Lease.ExecutionID != a.Lease.ExecutionID || recovered.Lease.Epoch <= a.Lease.Epoch {
+		t.Fatalf("bad recovered authority: %+v", recovered.Lease)
+	}
+	if runs, recovers, _, _ := executor.counts(); runs != 1 || recovers != 1 {
+		t.Fatalf("recovery replaced the process: run%d recover%d", runs, recovers)
+	}
+	// The old holder, seeing a newer epoch, still leaves it to its adopter.
+	if !s.Adoptable(context.Background(), a.Lease) {
+		t.Fatal("the old holder would stop a process its adopter holds")
+	}
+	if err = s.Cancel(context.Background(), work); err != nil {
+		t.Fatal(err)
+	}
+	if s.Adoptable(context.Background(), recovered.Lease) {
+		t.Fatal("a cancelled attempt was left running")
+	}
+}
+
+// TestProductionSchedulerEndedAttemptIsStopped: once the attempt has ended
+// (here it timed out, leaving the Work free for a newer attempt), its old
+// holder stops its process. The control: before the timeout it would not.
+func TestProductionSchedulerEndedAttemptIsStopped(t *testing.T) {
+	f, executor := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	work := seedSchedulerWork(t, f, "ended")
+	options := schedulerDefaultOptions(f, executor)
+	options.Timeout = 30 * time.Second
+	s := newTestScheduler(t, f, options)
+	a, err := s.Start(context.Background(), work)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !s.Adoptable(context.Background(), a.Lease) {
+		t.Fatal("control: a running attempt is not adoptable")
+	}
+	f.Clock.Advance(30 * time.Second)
+	if err = s.Timeout(context.Background(), a.Lease); err != nil {
+		t.Fatal(err)
+	}
+	if s.Adoptable(context.Background(), a.Lease) {
+		t.Fatal("an attempt that timed out was left running")
+	}
+}
