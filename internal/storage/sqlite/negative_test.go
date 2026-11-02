@@ -46,6 +46,18 @@ func (b lostFencing) Transact(ctx context.Context, g storage.Guard, fn func(stor
 	return b.Store.Transact(ctx, g, fn)
 }
 
+// staleLive answers the live reads from the full lists, so finished Work,
+// finished attempts and woken Waits stay in them.
+type staleLive struct{ storage.Store }
+type staleLiveTx struct{ storage.Tx }
+
+func (b staleLive) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(staleLiveTx{tx}) })
+}
+func (b staleLiveTx) LiveWorks() ([]domain.Work, error)           { return b.Tx.ListWorks() }
+func (b staleLiveTx) LiveExecutions() ([]domain.Execution, error) { return b.Tx.ListExecutions("") }
+func (b staleLiveTx) ActiveWaits() ([]domain.Wait, error)         { return b.Tx.ListWaits("") }
+
 func TestWeakenedSQLiteIsRejected(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -55,6 +67,7 @@ func TestWeakenedSQLiteIsRejected(t *testing.T) {
 		{"lost_atomicity", func(s storage.Store) storage.Store { return lostAtomicity{s} }, []string{"atomic_route_work_kv_timer", "timer_fire_rearm_rollback", "namespaced_kv_and_checkpoint_rollback", "wait_registration_atomic_with_park"}},
 		{"lost_dedup", func(s storage.Store) storage.Store { return lostDedup{s} }, []string{"event_identity_not_correlation"}},
 		{"lost_fencing", func(s storage.Store) storage.Store { return lostFencing{s} }, []string{"lease_expiry_recovery_and_fencing", "terminal_work_cancellation_fences_worker"}},
+		{"stale_live_reads", func(s storage.Store) storage.Store { return staleLive{s} }, []string{"live_reads_follow_state"}},
 	}
 	byName := map[string]conformance.StorageCase{}
 	for _, c := range conformance.StorageCases() {

@@ -9,7 +9,7 @@ Open Conduit is a single local daemon ([overview](../../start/overview/)). Its m
 
 ## What is measured
 
-- **Cost against retained history.** [`history_bench_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/history_bench_test.go) times the daemon's hot paths on real SQLite with 1,000, 10,000 and 50,000 retained Events: roughly days, months and a year or more of one operator's repositories and threads. Routing one Event and the idle routing pass are flat; `Poll` and the Work list grow with the number of Work and Executions, by a few milliseconds a year ([results](#history-growth)). Rerun it with:
+- **Cost against retained history.** [`history_bench_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/history_bench_test.go) times the daemon's hot paths on real SQLite with 1,000, 10,000, 50,000 and 1,000,000 retained Events. One install took in about 20,000 Events in its first week, so 50,000 is a few weeks and a million a year or two. Routing, `Poll`, the live Work read and the capacity check are flat up to a million Events; the retention sweep and the full Work list grow with the Work ever made ([results](#history-growth)). Rerun it with (`OC_HISTORY_SIZES=1000,50000` picks sizes):
 
   ```sh
   make bench-history
@@ -68,12 +68,12 @@ Accepting and routing one Event that opens a new Work is flat against retained h
 ### What the design implies
 
 - The pass is serial. Routing, `Poll`, starting ready Work, control dispatch, subscription reconcile, `ReconcileDue`, extension projections and resource reconcile all run one after another in one goroutine ([`loop`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/loop.go)). The time from a webhook to a started attempt is therefore the rest of the current pass, plus routing, plus `Start`. A slow provider page holds the pass for up to its page budget (10 s for GitHub and Slack, 30 s by default), once per due source.
-- The routing pass and `Poll`'s Event phase read only unrouted Events. `Poll` still reads every Wait and every Execution, and `startReady` reads every Work, each inside a transaction. So an idle pass grows with the number of Work and attempts ever made, not with the Events retained ([history growth](#history-growth)).
+- The routing pass and `Poll`'s Event phase read only unrouted Events. `Poll`'s Wait and lease phases read only active Waits and unfinished attempts, `startReady` and control dispatch read only unfinished Work, and the capacity check reads only unfinished attempts plus those whose resource exclusion is unconfirmed (a KV index the scheduler keeps, `core.scheduler.unexcluded`). So an idle pass follows the live set, not the Work and attempts ever made ([history growth](#history-growth)).
 - Executor calls run outside transactions ([execution scheduling](../execution-scheduling/)), so a slow `claude -p` launch delays the pass but holds no storage lock.
 
 ### Measurements
 
-The parts of an idle pass that read history are measured against retained history ([history growth](#history-growth)): at 50,000 Events the routing pass takes 27 µs, `Poll` 7 ms and the `startReady` Work list 5 ms. No test records the time from acceptance to `execution.started`, or the duration of a whole pass.
+The parts of an idle pass that read history are measured against retained history ([history growth](#history-growth)): at a million Events the routing pass takes 18 µs, `Poll` 80 µs and the live Work read `startReady` and control dispatch each make 57 µs, about the same as at a thousand. No test records the time from acceptance to `execution.started`, or the duration of a whole pass.
 
 ### To measure
 
@@ -87,7 +87,7 @@ The parts of an idle pass that read history are measured against retained histor
 - WAL mode and `synchronous=FULL` are required, not tuning options ([coordination backend](../sqlite-artifacts/#coordination-backend)).
 - Each `Store` has one pooled connection (`SetMaxOpenConns(1)`) with a 5 s busy timeout (`busyTimeout` in [`store.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store.go)). The daemon opens one `Store` on `conduit.db` ([`daemon.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/daemon.go)).
 - Every `Transact`, including read-only management and TUI reads, starts with `BEGIN IMMEDIATE`. No callback is retried ([`Transact`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store.go)).
-- Records are stored as JSON blobs. Indexes cover primary keys, correlation keys, the delivery key, Event sequence, unrouted Events, Executions by Work and the one-active-attempt rule. The unrouted index is a partial index over the routed flag in the Event record, so it needs no schema version change: it is created when the store opens, and a binary without it keeps it current. Waits by Work and Work by Scope are not indexed (the schema in [`store.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store.go)). KV prefix listing compares a substring over the namespace rather than using a range ([`timers_kv.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/timers_kv.go)).
+- Records are stored as JSON blobs. Indexes cover primary keys, correlation keys, the delivery key, Event sequence, unrouted Events, unfinished Work, unfinished Executions, active Waits, Executions by Work and the one-active-attempt rule. The unrouted, unfinished-Work and active-Wait indexes are partial indexes over a state in the JSON record, so they need no schema version change: they are created when the store opens, and a binary without them keeps them current. Waits by Work and Work by Scope are not indexed (the schema in [`store.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store.go)). KV prefix listing compares a substring over the namespace rather than using a range ([`timers_kv.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/timers_kv.go)).
 - Four extension callbacks run inside a transaction and are bounded at 250 ms (`InTransactionDeadlineMillis` in [`protocol.go`](https://github.com/open-conduit/open-conduit/blob/main/protocol/protocol.go); [in-transaction calls](../extension-protocol/#transactions-and-in-transaction-calls)). Every other host call to an extension or executor runs outside transactions.
 - The TUI refreshes every 2 s (`interval` in [`tui.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/tui/tui.go)). Management lists take 1–200 items per page, default 50 ([API version 1](../config-management/#api-version-1)).
 
@@ -144,7 +144,7 @@ Not measured.
 ### What the design implies
 
 - The large consumers are the executor processes, not the daemon: each agent turn is a full `claude` process with its own workspace checkout. Daemon memory has two parts: bounded buffers, and an unbounded part from decoding the Work, Execution and Wait lists in each pass, which grows with the Work ever made.
-- `conduit.db` grows without bound. Event rows, Work, Executions and their metadata are never deleted, and the store runs no `VACUUM`. Each open runs `quick_check` rather than the full `integrity_check`, which also matches every index against its table, so startup grows more slowly with the database ([SQLite](../sqlite-artifacts/)). The WAL is checkpointed by SQLite's defaults. Pending artifact streams left by a killed daemon and unreferenced artifacts stay on disk until removed by hand ([recovery and retention](../sqlite-artifacts/#recovery-and-retention)).
+- `conduit.db` grows without bound. Event rows, Work, Executions and their metadata, and each Event's acceptance and route records in KV, are never deleted, and the store runs no `VACUUM`. Revoked and expired toolbelt tokens and finished executions' replay records are deleted a day later ([toolbelt](../toolbelt-management/)). On one install after under a week, Events held 36 MB of 115 MB (29,600 rows), KV 21 MB (93,000 rows, of which acceptance and route records were 57,000), and toolbelt tokens and replays about 2 MB. Each open runs `quick_check` rather than the full `integrity_check`, which also matches every index against its table, so startup grows more slowly with the database ([SQLite](../sqlite-artifacts/)). The WAL is checkpointed by SQLite's defaults. Pending artifact streams left by a killed daemon and unreferenced artifacts stay on disk until removed by hand ([recovery and retention](../sqlite-artifacts/#recovery-and-retention)).
 
 ### Measurements
 
@@ -153,7 +153,7 @@ Not measured.
 ### To measure
 
 - A soak test against a composed daemon at full default capacity (4 agent turns using a fake `claude` that streams output for a set time, and 4 shell jobs), with webhook traffic, for several hours. Sample the daemon's RSS, goroutine count, open file descriptors and CPU every 10 s, and the sizes of `conduit.db`, its WAL and `artifacts/`. Report peak and slope. Drive it from a new `make` target outside `make check`. Its results would go in a table on this page, with the host, Go version and commit, the way the transport table is reported.
-- A history-growth run of the whole daemon: idle at 1,000, 10,000 and 50,000 retained Events, recording RSS and the duration of a whole pass. The [history benchmarks](#history-growth) cover the storage reads, not the rest of the pass.
+- A history-growth run of the whole daemon: idle at 1,000, 50,000 and 1,000,000 retained Events, recording RSS and the duration of a whole pass. The [history benchmarks](#history-growth) cover the storage reads, not the rest of the pass.
 
 ## History growth
 
@@ -183,13 +183,44 @@ Before is the code as of #34, which read every Event in routing and in `Poll`. A
 
 Before, routing one Event at a year's history held the daemon's only connection for over a second, and an idle pass spent about 0.6 s reading Events, which also delayed management and TUI reads. Routing now allocates the same 81 KB at every size, where before it allocated 978 MB at 50,000 Events.
 
-What still grows is `Poll`, which reads every Execution and Wait, and the Work list. At 2,000 Work and Executions (50,000 Events) they cost about 12 ms a pass together, so they were left as they are. If they ever matter, the fix is the same shape: an index on running Executions and active Waits, and a ready-Work index for `startReady`.
+### Live reads at a million Events (#353)
+
+Every seeded Work is finished, so the live set is the few Work the accept-and-route benchmark opens. Three more passes are timed:
+
+- **Live Work**: the `LiveWorks` read `startReady` and control dispatch each make per pass, which replaced the full Work list.
+- **Capacity**: `Scheduler.Capacity`, the read of the attempts holding a slot that `Start` makes for every claim.
+- **Retention**: one `SweepRetention` with nothing to expire, every Work finished within `kept_finished_days`.
+
+Before is the code as of #388, which read every Work, Execution and Wait in these paths. After adds the live reads, the unexcluded-attempts index and the retention markers. One run, darwin/arm64 (Apple M1 Pro), Go 1.27.3, without `-race`, 20 iterations:
+
+| Pass | Events | Before | After |
+| --- | ---: | ---: | ---: |
+| Accept and route | 1,000 | 0.84 ms | 1.0 ms |
+| | 50,000 | 0.77 ms | 0.82 ms |
+| | 1,000,000 | 0.76 ms | 0.82 ms |
+| Routing pass | 1,000,000 | | 18 µs |
+| `Poll` | 1,000 | 0.20 ms | 88 µs |
+| | 50,000 | 7.3 ms | 82 µs |
+| | 1,000,000 | 171 ms | 80 µs |
+| Work list (`startReady`, twice a pass) | 1,000 | 0.15 ms | 67 µs |
+| | 50,000 | 4.7 ms | 59 µs |
+| | 1,000,000 | 109 ms | 57 µs |
+| Capacity (every claim) | 1,000 | 0.34 ms | 27 µs |
+| | 50,000 | 17 ms | 27 µs |
+| | 1,000,000 | 354 ms | 27 µs |
+| Retention (every 10 minutes) | 1,000 | 0.45 ms | 0.19 ms |
+| | 50,000 | 22 ms | 7.9 ms |
+| | 1,000,000 | 502 ms | 190 ms |
+
+Before, an idle pass at a million Events spent about 0.4 s of every second in `Poll` and the two Work lists, all holding the only connection, and each claim added a third of a second. After, the idle pass reads only what is live and costs the same at every size.
+
+What still grows is the retention sweep, which reads every Work record (109 ms at a million Events, 40,000 Work) and its markers, once every 10 minutes. The full Work list is still what management and the projections read.
 
 ## Gaps
 
 - No load or soak test exists. The timed figures are the extension transport prototype's and the history benchmarks.
 - Event-ingress throughput, end-to-end scheduler latency, SQLite transaction hold and wait times, recovery time with a large backlog, and daemon RSS, CPU and disk growth under load are all unmeasured.
-- `Poll` reads every Execution and Wait and `startReady` every Work inside `BEGIN IMMEDIATE`, so an idle pass grows with the Work ever made: about 12 ms at a year's history ([history growth](#history-growth)). Draining an unrouted backlog grows with the backlog's square.
+- The retention sweep reads every Work record, about 190 ms every 10 minutes at a million Events ([history growth](#history-growth)). Draining an unrouted backlog grows with the backlog's square.
 - The host loop is serial, so one slow reconcile page delays starting Work. No test measures by how much.
 - `admission_limit` is configurable but not enforced by the daemon.
-- The SQLite file has no compaction or Event retention.
+- The SQLite file has no compaction or Event retention: Events and their acceptance and route records are kept for ever, and they are most of the file.

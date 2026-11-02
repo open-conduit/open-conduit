@@ -544,3 +544,37 @@ func TestProductionToolbeltGateSkipsItsOwnOperations(t *testing.T) {
 		t.Fatalf("a gate decided on its own operation: %v %v", err, asked)
 	}
 }
+
+// TestProductionToolbeltSweepDropsDeadRecords: once an execution has finished
+// and its token is revoked, the retention pass's toolbelt sweep deletes the
+// token and the execution's replay records after the grace. Within the grace,
+// and while the execution runs, nothing is deleted (the controls), and the
+// swept token is refused like the revoked one.
+func TestProductionToolbeltSweepDropsDeadRecords(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	ctx := context.Background()
+	in := domain.Payload{Schema: "fixture.echo.v1", Data: []byte(`{"x":1}`)}
+	if _, err := h.belt.CallRequest(ctx, h.token, "kept", extension.ToolCall{Operation: "fixture.echo", Input: in}); err != nil {
+		t.Fatal(err)
+	}
+	h.f.Clock.Advance(time.Second)
+	if got, err := h.belt.SweepToolbelt(ctx, 0, 100); err != nil || got != (runtime.ToolbeltSweep{}) {
+		t.Fatalf("swept a running execution's records: %+v %v", got, err)
+	}
+	if err := h.scheduler.Complete(ctx, h.attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := h.belt.SweepToolbelt(ctx, time.Hour, 100); err != nil || got != (runtime.ToolbeltSweep{}) {
+		t.Fatalf("swept records within the grace: %+v %v", got, err)
+	}
+	h.f.Clock.Advance(2 * time.Hour)
+	if got, err := h.belt.SweepToolbelt(ctx, time.Hour, 100); err != nil || got.Tokens < 1 || got.Replays != 1 {
+		t.Fatalf("dead records kept past the grace: %+v %v", got, err)
+	}
+	if known, err := h.belt.Known(ctx, h.token); err != nil || known {
+		t.Fatalf("swept token still known: %v %v", known, err)
+	}
+	if _, err := h.belt.CallRequest(ctx, h.token, "kept", extension.ToolCall{Operation: "fixture.echo", Input: in}); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("swept token accepted: %v", err)
+	}
+}

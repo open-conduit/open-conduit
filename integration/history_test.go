@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -426,6 +427,22 @@ func TestShellRetentionExpiresFinishedWorkByAge(t *testing.T) {
 	if result, err := h.scheduler.SweepRetention(ctx, 10); err != nil || len(result.Expired) != 0 {
 		t.Fatalf("sweep within kept_finished_days: %+v %v", result, err)
 	}
+	// Until then the Work is marked settled, so later sweeps skip its attempts;
+	// the marker goes once it expires whole.
+	countedRows := func() int {
+		var n int
+		if err := h.store.Transact(ctx, storage.Guard{Now: clock.Now()}, func(tx storage.Tx) error {
+			rows, err := tx.List("core.retention.counted", "")
+			n = len(rows)
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return n
+	}
+	if n := countedRows(); n != 1 {
+		t.Fatalf("settled markers after the first sweep: %d, want 1", n)
+	}
 	clock.Advance(2 * time.Hour)
 	result, err := h.scheduler.SweepRetention(ctx, 10)
 	if err != nil || len(result.Expired) != 1 || result.Expired[0] != run || len(result.Released) != 1 {
@@ -433,6 +450,9 @@ func TestShellRetentionExpiresFinishedWorkByAge(t *testing.T) {
 	}
 	if _, err = os.Stat(shellRunDir(state, run)); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("expired run directory kept: %v", err)
+	}
+	if n := countedRows(); n != 0 {
+		t.Fatalf("settled marker kept after the Work expired whole: %d", n)
 	}
 	x, err := h.operator().Run(ctx, string(run))
 	if err != nil || x.Retention.State != "expired" || x.Outcome == nil {
@@ -450,6 +470,32 @@ func TestShellRetentionExpiresFinishedWorkByAge(t *testing.T) {
 	expired := recordSet(h.records()).one(t, "execution.retention_expired", forExecution(run))
 	if expired.Attributes["retention.reason"] != runtime.RetentionFinished {
 		t.Fatalf("retention telemetry: %+v", expired.Attributes)
+	}
+
+	// A ledger written before the pending list existed is indexed once: an
+	// entry still unreleased is picked up and released by the next sweep.
+	if err = h.store.Transact(ctx, storage.Guard{Now: clock.Now()}, func(tx storage.Tx) error {
+		rows, err := tx.List("core.retention", "")
+		if err != nil || len(rows) != 1 {
+			return fmt.Errorf("ledger rows %d: %v", len(rows), err)
+		}
+		var record map[string]any
+		if err = json.Unmarshal(rows[0].Value, &record); err != nil {
+			return err
+		}
+		record["ArtifactsReleased"], record["Forgotten"] = false, false
+		b, _ := json.Marshal(record)
+		for _, e := range []error{tx.Put("core.retention", rows[0].Key, b), tx.Delete("core.retention.pending", rows[0].Key), tx.Delete("core.retention.index", "pending")} {
+			if e != nil {
+				return e
+			}
+		}
+		return nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if again, err := h.scheduler.SweepRetention(ctx, 10); err != nil || len(again.Released) != 1 || again.Released[0] != run {
+		t.Fatalf("an unreleased ledger entry from before the pending list was not released: %+v %v", again, err)
 	}
 
 	// Once all its attempts have expired, later sweeps skip the Work without

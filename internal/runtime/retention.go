@@ -2,6 +2,7 @@ package runtime
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"sort"
 	"time"
@@ -18,6 +19,46 @@ const retentionNamespace = "core.retention"
 // reading it or its ledger entries, and the sweep's cost stays with the Work
 // that still have content to release.
 const retentionDoneNamespace = "core.retention.done"
+
+// retentionCountedNamespace marks a finished Work, not yet old enough to
+// expire whole, whose attempts beyond kept_executions have all expired. The
+// value is that kept_executions: a lower setting makes the sweep read the
+// Work again.
+const retentionCountedNamespace = "core.retention.counted"
+
+// retentionPendingNamespace lists the ledger entries whose content is not
+// yet fully released, keyed like the ledger, so a sweep reads those and not
+// every expiration ever made. retentionIndexKey in retentionIndexNamespace
+// records that a ledger written before the list existed has been indexed.
+const (
+	retentionPendingNamespace = "core.retention.pending"
+	retentionIndexNamespace   = "core.retention.index"
+	retentionIndexKey         = "pending"
+)
+
+// indexRetentionPending adds every unreleased ledger entry to the pending
+// list, once per store.
+func indexRetentionPending(tx storage.Tx) error {
+	if _, err := tx.Get(retentionIndexNamespace, retentionIndexKey); err == nil || !errors.Is(err, storage.ErrNotFound) {
+		return err
+	}
+	rows, err := tx.List(retentionNamespace, "")
+	if err != nil {
+		return err
+	}
+	for _, row := range rows {
+		var r retentionRecord
+		if err = json.Unmarshal(row.Value, &r); err != nil {
+			return err
+		}
+		if !r.ArtifactsReleased || !r.Forgotten {
+			if err = putJSON(tx, retentionPendingNamespace, row.Key, true); err != nil {
+				return err
+			}
+		}
+	}
+	return putJSON(tx, retentionIndexNamespace, retentionIndexKey, true)
+}
 
 // DefaultKeptExecutions is the B05 kept_executions default (per Work).
 const DefaultKeptExecutions = 20
@@ -97,19 +138,9 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 	now := s.now()
 	finishedBefore := now.Add(-s.options.KeptFinished)
 	err = s.transact(ctx, nil, func(tx storage.Tx) error {
-		xs, e := tx.ListExecutions("")
-		if e != nil {
+		if e := indexRetentionPending(tx); e != nil {
 			return e
 		}
-		byWork := map[domain.ID][]domain.Execution{}
-		for _, x := range xs {
-			byWork[x.WorkID] = append(byWork[x.WorkID], x)
-		}
-		works := make([]domain.ID, 0, len(byWork))
-		for id := range byWork {
-			works = append(works, id)
-		}
-		sort.Slice(works, func(i, j int) bool { return works[i] < works[j] })
 		doneRows, e := tx.List(retentionDoneNamespace, "")
 		if e != nil {
 			return e
@@ -118,29 +149,56 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 		for _, row := range doneRows {
 			done[row.Key] = true
 		}
-		for _, work := range works {
+		countedRows, e := tx.List(retentionCountedNamespace, "")
+		if e != nil {
+			return e
+		}
+		counted := make(map[string]int, len(countedRows))
+		for _, row := range countedRows {
+			var n int
+			if e = json.Unmarshal(row.Value, &n); e != nil {
+				return e
+			}
+			counted[row.Key] = n
+		}
+		// Work records are read in full (there are far fewer than attempts
+		// or Events); attempts only for Work that can have one to expire.
+		works, e := tx.ListWorks()
+		if e != nil {
+			return e
+		}
+		for _, w := range works {
+			work := w.ID
 			if done[retentionKey(work)] {
 				continue
 			}
-			attempts := byWork[work]
+			finishedAge := w.State.Terminal() && !w.UpdatedAt.After(finishedBefore)
+			if n, ok := counted[retentionKey(work)]; ok && w.State.Terminal() && !finishedAge && n <= kept {
+				continue // Nothing more to expire until it reaches kept_finished_days.
+			}
+			attempts, e := tx.ListExecutions(work)
+			if e != nil {
+				return e
+			}
+			if len(attempts) == 0 {
+				continue
+			}
 			sort.Slice(attempts, func(i, j int) bool { return attempts[i].Attempt > attempts[j].Attempt })
 			if len(result.Expired) >= limit {
 				break
 			}
 			// A Work whose newest attempt is still live has not finished.
-			finished := false
-			if attempts[0].State.Terminal() {
-				w, e := tx.Work(work)
-				if e != nil && !errors.Is(e, storage.ErrNotFound) {
-					return e
-				}
-				finished = e == nil && w.State.Terminal() && !w.UpdatedAt.After(finishedBefore)
-			}
-			// allExpired stays true while every attempt has a ledger entry.
-			allExpired := finished
+			finished := attempts[0].State.Terminal() && finishedAge
+			// allExpired stays true while every attempt has a ledger entry,
+			// countSettled while every attempt beyond kept has one.
+			allExpired, countSettled := finished, true
 			for i, x := range attempts {
-				if (i < kept && !finished) || !x.State.Terminal() || len(result.Expired) >= limit {
+				if i < kept && !finished {
 					allExpired = false
+					continue
+				}
+				if !x.State.Terminal() || len(result.Expired) >= limit {
+					allExpired, countSettled = false, false
 					continue
 				}
 				reason := RetentionCount
@@ -157,17 +215,29 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 					return e
 				}
 				if e == nil && !state.Excluded {
-					allExpired = false
+					allExpired, countSettled = false, false
 					continue // Uncertain resource hold: never release private state.
 				}
 				record := retentionRecord{ExecutionID: x.ID, WorkID: x.WorkID, Generation: state.Generation, Executor: state.Executor, Artifacts: append([]domain.ArtifactRef(nil), x.Artifacts...), Kept: kept, Reason: reason, ExpiredAt: now}
 				if e = putJSON(tx, retentionNamespace, retentionKey(x.ID), record); e != nil {
 					return e
 				}
+				if e = putJSON(tx, retentionPendingNamespace, retentionKey(x.ID), true); e != nil {
+					return e
+				}
 				result.Expired = append(result.Expired, x.ID)
 			}
 			if allExpired {
 				if e := tx.Put(retentionDoneNamespace, retentionKey(work), []byte("{}")); e != nil {
+					return e
+				}
+				if e := tx.Delete(retentionCountedNamespace, retentionKey(work)); e != nil {
+					return e
+				}
+			} else if w.State.Terminal() && !finished && countSettled {
+				// A finished Work gets no new attempts, so until it is old
+				// enough to expire whole, later sweeps need not read it.
+				if e := putJSON(tx, retentionCountedNamespace, retentionKey(work), kept); e != nil {
 					return e
 				}
 			}
@@ -179,13 +249,15 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 	}
 	var pending []retentionRecord
 	if err = s.transact(ctx, nil, func(tx storage.Tx) error {
-		rows, e := tx.List(retentionNamespace, "")
+		rows, e := tx.List(retentionPendingNamespace, "")
 		if e != nil {
 			return e
 		}
 		for _, row := range rows {
 			var r retentionRecord
-			if e = getJSON(tx, retentionNamespace, row.Key, &r); e != nil {
+			if e = getJSON(tx, retentionNamespace, row.Key, &r); errors.Is(e, storage.ErrNotFound) {
+				continue
+			} else if e != nil {
 				return e
 			}
 			if !r.ArtifactsReleased || !r.Forgotten {
@@ -238,7 +310,13 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 			if !forgotten {
 				current.ForgetError++
 			}
-			return putJSON(tx, retentionNamespace, key, current)
+			if e := putJSON(tx, retentionNamespace, key, current); e != nil {
+				return e
+			}
+			if artifactsDone && forgotten {
+				return tx.Delete(retentionPendingNamespace, key)
+			}
+			return nil
 		}); e != nil {
 			return result, e
 		}

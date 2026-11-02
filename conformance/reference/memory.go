@@ -696,6 +696,33 @@ func sortedValues[K ~string, V any](values map[K]V) []V {
 func (t *transaction) ListWorks() ([]domain.Work, error)   { return sortedValues(t.data.Works), nil }
 func (t *transaction) ListScopes() ([]domain.Scope, error) { return sortedValues(t.data.Scopes), nil }
 func (t *transaction) ListTimers() ([]domain.Timer, error) { return sortedValues(t.data.Timers), nil }
+func (t *transaction) LiveWorks() ([]domain.Work, error) {
+	out := []domain.Work{}
+	for _, w := range sortedValues(t.data.Works) {
+		if !w.State.Terminal() {
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
+func (t *transaction) LiveExecutions() ([]domain.Execution, error) {
+	out := []domain.Execution{}
+	for _, x := range sortedValues(t.data.Executions) {
+		if !x.State.Terminal() {
+			out = append(out, x)
+		}
+	}
+	return out, nil
+}
+func (t *transaction) ActiveWaits() ([]domain.Wait, error) {
+	out := []domain.Wait{}
+	for _, w := range sortedValues(t.data.Waits) {
+		if w.State == domain.WaitActive {
+			out = append(out, w)
+		}
+	}
+	return out, nil
+}
 func (t *transaction) ListExecutions(work domain.ID) ([]domain.Execution, error) {
 	out := []domain.Execution{}
 	for _, x := range sortedValues(t.data.Executions) {

@@ -3,8 +3,11 @@ package integration_test
 import (
 	"context"
 	"fmt"
+	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -16,11 +19,34 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// How the daemon's hot paths cost as retained history grows (#36). History
-// is one operator's: events of about 1 KiB spread over threads of 25 events,
-// every one routed, and each thread's Work finished by one attempt. 1k, 10k and 50k events are roughly
-// days, months and a year or more. Run with `make bench-history`.
-var historySizes = []int{1_000, 10_000, 50_000}
+// How the daemon's hot paths cost as retained history grows (#36, #353).
+// History is one operator's: events of about 1 KiB spread over threads of 25
+// events, every one routed, and each thread's Work finished by one attempt.
+// One install took in about 20,000 events in its first week, so 50k is a few
+// weeks and 1M a year or two. Run with `make bench-history`;
+// OC_HISTORY_SIZES (comma-separated) picks other sizes.
+var historySizes = func() []int {
+	sizes := []int{1_000, 10_000, 50_000, 1_000_000}
+	if v := os.Getenv("OC_HISTORY_SIZES"); v != "" {
+		sizes = nil
+		for _, f := range strings.Split(v, ",") {
+			n, err := strconv.Atoi(strings.TrimSpace(f))
+			if err != nil || n < 1 {
+				panic("OC_HISTORY_SIZES: " + f)
+			}
+			sizes = append(sizes, n)
+		}
+	}
+	return sizes
+}()
+
+// seeded keeps each size's store for every benchmark in the run, since
+// seeding a million events takes minutes. Benchmarks read it, and the one
+// that writes adds a handful of threads.
+var (
+	seededMu sync.Mutex
+	seeded   = map[int]*history{}
+)
 
 const historyThread = 25
 
@@ -32,6 +58,7 @@ type history struct {
 	sched   *runtime.Scheduler
 	timers  *runtime.Timers
 	next    int
+	dir     string
 }
 
 var historyPayload = domain.Payload{Schema: "fixture.github.v1", Data: []byte(`{"body":"` + strings.Repeat("x", 1000) + `"}`)}
@@ -44,12 +71,20 @@ func historyEvent(clock *conformance.Clock, id string, thread string) domain.Eve
 // seedHistory writes n routed events and their finished Works straight
 // through storage, which is far cheaper than routing each one.
 func seedHistory(b *testing.B, n int) *history {
+	seededMu.Lock()
+	defer seededMu.Unlock()
+	if h, ok := seeded[n]; ok {
+		return h
+	}
 	ctx := context.Background()
-	store, err := sqlite.Open(ctx, filepath.Join(b.TempDir(), "history.db"))
+	dir, err := os.MkdirTemp("", "oc-history-")
 	if err != nil {
 		b.Fatal(err)
 	}
-	b.Cleanup(func() { _ = store.Close() })
+	store, err := sqlite.Open(ctx, filepath.Join(dir, "history.db"))
+	if err != nil {
+		b.Fatal(err)
+	}
 	clock := conformance.NewClock()
 	guard := storage.Guard{Now: clock.Now()}
 	route := domain.Route{Name: "default", ActivePolicy: "queue", Handler: "default", Binding: "fixture"}
@@ -126,7 +161,25 @@ func seedHistory(b *testing.B, n int) *history {
 	if h.timers, err = runtime.NewTimers(store, clock.Now, runtime.TimerOptions{}); err != nil {
 		b.Fatal(err)
 	}
+	// One Poll builds the scheduler's indexes, as the daemon's first pass does.
+	if _, err = h.sched.Poll(ctx, h.timers, 100); err != nil {
+		b.Fatal(err)
+	}
+	h.dir = dir
+	seeded[n] = h
 	return h
+}
+
+// cleanupHistory removes the seeded stores the history benchmarks kept;
+// TestMain calls it after the run.
+func cleanupHistory() {
+	seededMu.Lock()
+	defer seededMu.Unlock()
+	for n, h := range seeded {
+		_ = h.store.Close()
+		_ = os.RemoveAll(h.dir)
+		delete(seeded, n)
+	}
 }
 
 // routePending is the daemon loop's routing pass (bootstrap.routePending):
@@ -191,7 +244,38 @@ func BenchmarkHistoryPoll(b *testing.B) {
 	})
 }
 
-// The read startReady makes each pass: every Work, in one transaction.
+// The read startReady and control dispatch make each pass: the unfinished
+// Work, in one transaction.
+func BenchmarkHistoryLiveWorks(b *testing.B) {
+	benchHistory(b, func(b *testing.B, h *history) {
+		if err := h.store.Transact(context.Background(), storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error { _, e := tx.LiveWorks(); return e }); err != nil {
+			b.Fatal(err)
+		}
+	})
+}
+
+// The capacity check's read of the attempts holding a slot, as Start makes
+// it for every claim.
+func BenchmarkHistoryCapacity(b *testing.B) {
+	benchHistory(b, func(b *testing.B, h *history) {
+		if _, err := h.sched.Capacity(context.Background()); err != nil {
+			b.Fatal(err)
+		}
+	})
+}
+
+// A retention sweep with nothing to expire: every Work finished within
+// kept_finished_days, one attempt each.
+func BenchmarkHistoryRetention(b *testing.B) {
+	benchHistory(b, func(b *testing.B, h *history) {
+		if _, err := h.sched.SweepRetention(context.Background(), 100); err != nil {
+			b.Fatal(err)
+		}
+	})
+}
+
+// Every Work, in one transaction: what startReady read before LiveWorks, and
+// what the retention sweep still reads.
 func BenchmarkHistoryListWorks(b *testing.B) {
 	benchHistory(b, func(b *testing.B, h *history) {
 		if err := h.store.Transact(context.Background(), storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error { _, e := tx.ListWorks(); return e }); err != nil {

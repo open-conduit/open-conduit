@@ -111,8 +111,17 @@ func (d *daemon) retentionPass(ctx context.Context, c *components, lastSweep *ti
 	}
 	d.collectArtifacts(ctx)
 	d.pruneReported()
+	if c.toolbelt != nil {
+		if _, err := c.toolbelt.SweepToolbelt(ctx, toolbeltGrace, passLimit); err != nil && ctx.Err() == nil {
+			d.report("toolbelt_sweep", "", errorCode(err))
+		}
+	}
 	return true
 }
+
+// toolbeltGrace is how long a revoked or expired token, and a finished
+// execution's replay record, are kept before the retention pass deletes them.
+const toolbeltGrace = 24 * time.Hour
 
 // routePending routes every accepted but unrouted Event in acceptance order,
 // including Events accepted by a timer fire or an execution's emission.
@@ -153,7 +162,7 @@ func (d *daemon) routePending(ctx context.Context, c *components) {
 func (d *daemon) startReady(ctx context.Context) {
 	var ready, idle []domain.ID
 	err := d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
-		works, err := tx.ListWorks()
+		works, err := tx.LiveWorks()
 		for _, w := range works {
 			if w.State != domain.WorkReady {
 				continue
@@ -212,7 +221,7 @@ func (d *daemon) startReady(ctx context.Context) {
 func (d *daemon) dispatchControls(ctx context.Context, c *components) {
 	var running []domain.ID
 	_ = d.coord.Transact(ctx, storage.Guard{Now: d.now()}, func(tx storage.Tx) error {
-		works, err := tx.ListWorks()
+		works, err := tx.LiveWorks()
 		for _, w := range works {
 			if w.State == domain.WorkRunning {
 				running = append(running, w.ID)

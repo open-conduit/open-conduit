@@ -9,6 +9,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -443,5 +444,47 @@ func TestOpenRunsQuickCheck(t *testing.T) {
 	defer reopened.Close()
 	if err = reopened.IntegrityCheck(context.Background()); err == nil {
 		t.Fatal("full integrity check missed an index that disagrees with its table")
+	}
+}
+
+// TestLiveReadsUseIndexes: the live reads are answered from the partial
+// indexes, so their cost follows the live rows and not retained history.
+// The plan for the plain full scan is the control.
+func TestLiveReadsUseIndexes(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "conduit.db")
+	open(t, path)
+	db, err := sql.Open("sqlite", path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	plan := func(query string) string {
+		rows, err := db.Query("EXPLAIN QUERY PLAN " + query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		defer rows.Close()
+		var out []string
+		for rows.Next() {
+			var id, parent, unused int
+			var detail string
+			if err = rows.Scan(&id, &parent, &unused, &detail); err != nil {
+				t.Fatal(err)
+			}
+			out = append(out, detail)
+		}
+		return fmt.Sprint(out)
+	}
+	for query, index := range map[string]string{
+		"SELECT record FROM works WHERE json_extract(CAST(record AS TEXT),'$.State') NOT IN ('completed','failed','cancelled') ORDER BY id": "works_live",
+		"SELECT record FROM waits WHERE json_extract(CAST(record AS TEXT),'$.State')='active' ORDER BY id":                                  "waits_active",
+		"SELECT record FROM executions WHERE active=1 ORDER BY id":                                                                          "executions_live",
+	} {
+		if got := plan(query); !strings.Contains(got, index) {
+			t.Errorf("%s: plan %s does not use %s", query, got, index)
+		}
+	}
+	if got := plan("SELECT record FROM works ORDER BY id"); strings.Contains(got, "works_live") {
+		t.Errorf("full scan plan uses the partial index: %s", got)
 	}
 }

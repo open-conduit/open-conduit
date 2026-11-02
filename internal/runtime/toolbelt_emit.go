@@ -162,7 +162,7 @@ func (t *Toolbelt) translatedEmit(ctx context.Context, digest, owner string, op 
 		}
 		out.Event, out.Output = &accepted, commit.Output
 		if replayKey != "" {
-			return putJSON(tx, requestNamespace, replayKey, toolbeltReplay{Hash: hash, Result: out})
+			return putJSON(tx, requestNamespace, replayKey, toolbeltReplay{Hash: hash, Result: out, Execution: a.ExecutionID, At: t.now()})
 		}
 		return nil
 	})

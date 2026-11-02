@@ -293,7 +293,20 @@ const unrouted = "json_extract(CAST(record AS TEXT),'$.Routed')=0"
 // binary that opens a database with them keeps them current.
 var indexes = []string{
 	`CREATE INDEX IF NOT EXISTS events_unrouted ON events(sequence) WHERE ` + unrouted,
+	`CREATE INDEX IF NOT EXISTS works_live ON works(id) WHERE ` + liveWork,
+	`CREATE INDEX IF NOT EXISTS waits_active ON waits(id) WHERE ` + activeWait,
+	`CREATE INDEX IF NOT EXISTS executions_live ON executions(id) WHERE active=1`,
 }
+
+// liveWork and activeWait select Work not yet finished and Waits still
+// active. Like unrouted, the state lives in the record, the partial indexes
+// above cover exactly those rows, and queries must repeat the expressions
+// for SQLite to use them. Unfinished attempts have the executions table's
+// active column; executions_live orders them by ID.
+const (
+	liveWork   = "json_extract(CAST(record AS TEXT),'$.State') NOT IN ('completed','failed','cancelled')"
+	activeWait = "json_extract(CAST(record AS TEXT),'$.State')='active'"
+)
 
 // rewrites bring records written by earlier binaries up to date. Each runs
 // once per store: it and its metadata key commit in one transaction, so a

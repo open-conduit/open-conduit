@@ -180,6 +180,9 @@ func (t *transaction) WorkByCorrelation(k domain.CorrelationKey) (domain.Work, e
 func (t *transaction) ListWorks() ([]domain.Work, error) {
 	return list[domain.Work](t, "SELECT record FROM works ORDER BY id")
 }
+func (t *transaction) LiveWorks() ([]domain.Work, error) {
+	return list[domain.Work](t, "SELECT record FROM works WHERE "+liveWork+" ORDER BY id")
+}
 func (t *transaction) PutWork(w domain.Work, expected domain.Revision) error {
 	old, err := t.Work(w.ID)
 	exists := err == nil
@@ -309,6 +312,9 @@ func (t *transaction) ListWaits(work domain.ID) ([]domain.Wait, error) {
 	}
 	return list[domain.Wait](t, "SELECT record FROM waits WHERE work_id=? ORDER BY id", work)
 }
+func (t *transaction) ActiveWaits() ([]domain.Wait, error) {
+	return list[domain.Wait](t, "SELECT record FROM waits WHERE "+activeWait+" ORDER BY id")
+}
 func (t *transaction) PutWait(v domain.Wait, expected domain.Revision) error {
 	old, err := t.Wait(v.ID)
 	exists := err == nil
@@ -404,6 +410,9 @@ func (t *transaction) ListExecutions(work domain.ID) ([]domain.Execution, error)
 		return list[domain.Execution](t, "SELECT record FROM executions ORDER BY id")
 	}
 	return list[domain.Execution](t, "SELECT record FROM executions WHERE work_id=? ORDER BY id", work)
+}
+func (t *transaction) LiveExecutions() ([]domain.Execution, error) {
+	return list[domain.Execution](t, "SELECT record FROM executions WHERE active=1 ORDER BY id")
 }
 func expectedOutcome(x domain.Execution) bool {
 	if x.State == domain.ExecutionPending || x.State == domain.ExecutionCancelled || x.State == domain.ExecutionRunning {

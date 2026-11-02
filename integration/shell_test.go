@@ -50,6 +50,7 @@ func TestMain(m *testing.M) {
 		}
 	}
 	code := m.Run()
+	cleanupHistory()
 	if dir != "" {
 		os.RemoveAll(dir)
 	}
