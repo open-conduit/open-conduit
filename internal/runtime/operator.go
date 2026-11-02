@@ -30,6 +30,10 @@ type Hold struct {
 	EventID domain.ID `json:"event_id"`
 	Reason  string    `json:"reason,omitempty"`
 	At      time.Time `json:"at"`
+	// Kind says what placed a hold the runtime placed itself: "budget"
+	// (HoldKindBudget) for Work over a budget. "" is an operator's hold or
+	// a blocked wait's.
+	Kind string `json:"kind,omitempty"`
 }
 
 // HoldInTx returns a Work's operator hold, if any.
@@ -234,7 +238,8 @@ func (c *Control) ReleaseWork(ctx context.Context, workID domain.ID, expected do
 		if w.Revision != expected {
 			return ErrRevision
 		}
-		if _, held, e := HoldInTx(tx, w.ID); e != nil {
+		h, held, e := HoldInTx(tx, w.ID)
+		if e != nil {
 			return e
 		} else if !held {
 			return ErrHeld
@@ -242,6 +247,13 @@ func (c *Control) ReleaseWork(ctx context.Context, workID domain.ID, expected do
 		event, e = c.controlEvent(tx, w, delivery, "core.manual.release", operatorData("core.manual.release.v1", operatorPayload{Reason: reason, Revision: expected}))
 		if e != nil {
 			return e
+		}
+		// Releasing a budget hold lets the next turn start past the limits
+		// that held it; the one after is checked again.
+		if h.Kind == HoldKindBudget {
+			if e = passBudgetInTx(tx, w.ID, event); e != nil {
+				return e
+			}
 		}
 		if e = tx.Delete(holdNamespace, identity(string(w.ID))); e != nil {
 			return e

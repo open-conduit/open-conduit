@@ -14,6 +14,7 @@ import (
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // MaxSize bounds configuration, secrets files and command secret output reads.
@@ -83,7 +84,25 @@ type Settings struct {
 	// Webhooks is the stored webhook listener and tunnel (settings.webhooks);
 	// serve flags override it for one run. Zero means reconcile-only.
 	Webhooks Webhooks
+	// Budgets are the usage limits the host enforces at admission
+	// (settings.budgets); none means no limit.
+	Budgets []Budget
 }
+
+// Budget is one usage limit: at most Max of Unit per Work, per scope or
+// across every scope (Per), over the Work's life or each UTC day or week
+// (Period, "" for no window). Scope narrows it to Work in that one scope.
+// WarnAt is the fraction of Max at which a warning event fires.
+type Budget struct {
+	Unit, Per, Period, Scope string
+	Max, WarnAt              float64
+}
+
+// DefaultBudgetWarnAt is the warning threshold of a budget that sets none.
+const DefaultBudgetWarnAt = 0.8
+
+// MaxBudgets bounds settings.budgets.
+const MaxBudgets = 64
 
 // Webhooks records how serve exposes the webhook listener. Tunnel is ngrok,
 // cloudflared or static; "" with PublicURL means static, as with the flags.
@@ -292,7 +311,7 @@ func (c *checker) document(n *node) *Document {
 	return doc
 }
 func (c *checker) settings(n *node) Settings {
-	s := Settings{4, 10, 900, 3600, 20, []int{300, 600}, 32, 128, 4, Webhooks{}}
+	s := Settings{4, 10, 900, 3600, 20, []int{300, 600}, 32, 128, 4, Webhooks{}, nil}
 	fields := []struct {
 		key string
 		dst *int
@@ -300,7 +319,7 @@ func (c *checker) settings(n *node) Settings {
 		{"timeout_seconds", &s.TimeoutSeconds}, {"kept_executions", &s.KeptExecutions},
 		{"causal_max_depth", &s.CausalMaxDepth}, {"causal_per_minute", &s.CausalPerMinute},
 		{"job_concurrency", &s.JobConcurrency}}
-	names := []string{"retry_delays_seconds", "webhooks"}
+	names := []string{"retry_delays_seconds", "webhooks", "budgets"}
 	for _, f := range fields {
 		names = append(names, f.key)
 	}
@@ -324,7 +343,61 @@ func (c *checker) settings(n *node) Settings {
 		}
 	}
 	s.Webhooks = c.webhooks(n.field("webhooks"))
+	s.Budgets = c.budgets(n.field("budgets"))
 	return s
+}
+
+// budgets checks settings.budgets offline; that a named scope exists is
+// checked with the scope graph.
+func (c *checker) budgets(n *node) []Budget {
+	const path = "settings/budgets"
+	if n == nil || !c.typed(n, path, kArray, "array") {
+		return nil
+	}
+	if len(n.items) > MaxBudgets {
+		c.fail(path, "invalid_value", fmt.Sprintf("at most %d budgets are allowed", MaxBudgets))
+	}
+	out := []Budget{}
+	seen := map[[4]string]bool{}
+	for i, item := range n.items {
+		p := ptr(path, i)
+		if !c.object(item, p, []string{"unit", "per", "max"}, "period", "warn_at", "scope") {
+			continue
+		}
+		b := Budget{WarnAt: DefaultBudgetWarnAt}
+		b.Unit, _ = c.str(item.field("unit"), p+"/unit", extension.UnitPattern)
+		b.Per, _ = c.enum(item.field("per"), p+"/per", "work", "scope", "all")
+		if v := item.field("period"); v != nil {
+			b.Period, _ = c.enum(v, p+"/period", "day", "week")
+		}
+		if v := item.field("scope"); v != nil {
+			b.Scope, _ = c.str(v, p+"/scope", idPattern)
+		}
+		if v, ok := c.number(item.field("max"), p+"/max"); ok {
+			if v <= 0 {
+				c.fail(p+"/max", "invalid_value", "max must be greater than 0")
+			}
+			b.Max = v
+		}
+		if v := item.field("warn_at"); v != nil {
+			if w, ok := c.number(v, p+"/warn_at"); ok {
+				if w <= 0 || w >= 1 {
+					c.fail(p+"/warn_at", "invalid_value", "warn_at is a fraction of max, greater than 0 and less than 1")
+				}
+				b.WarnAt = w
+			}
+		}
+		if b.Per == "all" && b.Scope != "" {
+			c.fail(p+"/scope", "invalid_value", "a per: all budget counts every scope; use per: scope to limit one scope")
+		}
+		key := [4]string{b.Unit, b.Per, b.Period, b.Scope}
+		if seen[key] {
+			c.fail(p, "duplicate_value", "another budget already limits this unit, per and period for the same scope; merge them")
+		}
+		seen[key] = true
+		out = append(out, b)
+	}
+	return out
 }
 
 // webhooks checks settings.webhooks offline: the same combinations serve
@@ -690,6 +763,22 @@ func (d *Document) normalized(redact bool) any {
 		"concurrency": s.Concurrency, "admission_limit": s.AdmissionLimit, "reconcile_seconds": s.ReconcileSeconds,
 		"timeout_seconds": s.TimeoutSeconds, "kept_executions": s.KeptExecutions, "retry_delays_seconds": s.RetryDelaysSeconds,
 		"causal_max_depth": s.CausalMaxDepth, "causal_per_minute": s.CausalPerMinute, "job_concurrency": s.JobConcurrency,
+	}
+	// Only configured budgets join the hash, so configurations without them
+	// keep their generation hash.
+	if len(s.Budgets) > 0 {
+		list := []any{}
+		for _, b := range s.Budgets {
+			m := map[string]any{"unit": b.Unit, "per": b.Per, "max": b.Max, "warn_at": b.WarnAt}
+			if b.Period != "" {
+				m["period"] = b.Period
+			}
+			if b.Scope != "" {
+				m["scope"] = b.Scope
+			}
+			list = append(list, m)
+		}
+		settings["budgets"] = list
 	}
 	// Only a stored listener joins the hash, so configurations without one
 	// keep their generation hash.

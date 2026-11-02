@@ -5,6 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"math"
+	"regexp"
+	"slices"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -63,11 +66,72 @@ type RunRequest struct {
 	// is acknowledged. It is fenced by this execution's current lease.
 	PersistRecovery func(domain.Payload) error
 }
+
+// Usage is what one segment of an attempt consumed, as its executor counts
+// it. Budgets (runtime budgets) are charged in named units: Units holds any
+// the executor reports ("usd", "tokens", "minutes", or its own), and Amounts
+// derives the rest from the typed fields. What counts as a cost stays with
+// each executor; core only adds the amounts up and compares them with limits.
 type Usage struct {
 	InputTokens, OutputTokens, CachedTokens *uint64
 	Cost                                    *float64
 	Currency                                string
+	// Units are amounts in named units (UnitPattern), each finite and not
+	// negative. The names core counts itself (ReservedUnits) are refused.
+	Units map[string]float64 `json:",omitempty"`
 }
+
+// UnitPattern is the form of a usage unit's name.
+var UnitPattern = regexp.MustCompile(`^[a-z][a-z0-9_.-]{0,31}$`)
+
+// ReservedUnits are the units core counts at admission, which no executor
+// may report: every start of a turn (turns) and every new attempt (attempts).
+var ReservedUnits = []string{"attempts", "turns"}
+
+// MaxUnits bounds the named units one result reports.
+const MaxUnits = 16
+
+// Amounts is the usage in named units: Units, then the cost in its
+// currency's lower-case code ("usd") and the input plus output tokens
+// ("tokens"), unless Units already names them. A currency that names a
+// reserved unit is never charged as one.
+func (u Usage) Amounts() map[string]float64 {
+	out := map[string]float64{}
+	for k, v := range u.Units {
+		out[k] = v
+	}
+	if u.Cost != nil && u.Currency != "" {
+		if unit := strings.ToLower(u.Currency); UnitPattern.MatchString(unit) && !slices.Contains(ReservedUnits, unit) {
+			if _, ok := out[unit]; !ok {
+				out[unit] = *u.Cost
+			}
+		}
+	}
+	if _, ok := out["tokens"]; !ok && (u.InputTokens != nil || u.OutputTokens != nil) {
+		var n uint64
+		if u.InputTokens != nil {
+			n += *u.InputTokens
+		}
+		if u.OutputTokens != nil {
+			n += *u.OutputTokens
+		}
+		out["tokens"] = float64(n)
+	}
+	return out
+}
+
+func validUnits(units map[string]float64) bool {
+	if len(units) > MaxUnits {
+		return false
+	}
+	for k, v := range units {
+		if !UnitPattern.MatchString(k) || slices.Contains(ReservedUnits, k) || math.IsNaN(v) || math.IsInf(v, 0) || v < 0 {
+			return false
+		}
+	}
+	return true
+}
+
 type Result struct {
 	Outcome   domain.Outcome
 	Usage     Usage
@@ -270,6 +334,12 @@ func ValidateResult(r Result) error {
 	}
 	if r.Usage.Cost != nil && (math.IsNaN(*r.Usage.Cost) || math.IsInf(*r.Usage.Cost, 0) || *r.Usage.Cost < 0 || r.Usage.Currency == "") {
 		return fmt.Errorf("%w: cost", ErrInvalid)
+	}
+	if slices.Contains(ReservedUnits, strings.ToLower(r.Usage.Currency)) {
+		return fmt.Errorf("%w: currency names a unit core counts", ErrInvalid)
+	}
+	if !validUnits(r.Usage.Units) {
+		return fmt.Errorf("%w: usage units", ErrInvalid)
 	}
 	return nil
 }

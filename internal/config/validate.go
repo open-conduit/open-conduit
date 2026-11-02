@@ -204,6 +204,11 @@ func ValidateDocument(doc *Document, reg Registry) (*Snapshot, error) {
 	for _, s := range doc.Scopes {
 		v.resolve(s.ID)
 	}
+	for i, b := range doc.Settings.Budgets {
+		if _, ok := v.index[b.Scope]; b.Scope != "" && !ok {
+			v.fail(ptr("settings/budgets", i)+"/scope", "unknown_scope", "budget names a scope that is not defined; use a scope id")
+		}
+	}
 	if len(v.diags) > 0 {
 		return nil, invalid(v.diags)
 	}
@@ -605,6 +610,7 @@ func (v *validator) snapshot() *Snapshot {
 	s := &Snapshot{Hash: hash, Normalized: normalized, Settings: v.doc.Settings, Scopes: map[domain.ID]*EffectiveScope{},
 		redacted: canonical(v.doc.normalized(true))}
 	s.Settings.RetryDelaysSeconds = slices.Clone(s.Settings.RetryDelaysSeconds)
+	s.Settings.Budgets = slices.Clone(s.Settings.Budgets)
 	for _, c := range v.doc.Connections {
 		refs := make(map[string]string, len(c.SecretRefs))
 		for k, ref := range c.SecretRefs {

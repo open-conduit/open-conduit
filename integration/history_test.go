@@ -206,7 +206,7 @@ func TestUnifiedHistoryMixedExecutors(t *testing.T) {
 		t.Fatalf("agent run: %+v usage %+v", a, a.Usage)
 	}
 	s := byID[string(shellRun)]
-	if s.Executor != "shell" || s.Usage != nil || s.Outcome.Summary != "exit status 0" || s.Trigger.Type != "operator.requested" {
+	if s.Executor != "shell" || s.Usage != nil && (s.Usage.Cost != nil || s.Usage.InputTokens != nil) || s.Outcome.Summary != "exit status 0" || s.Trigger.Type != "operator.requested" {
 		t.Fatalf("shell run: %+v", s)
 	}
 	j2 := byID[string(jobRun2)]

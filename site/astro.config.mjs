@@ -50,6 +50,7 @@ export default defineConfig({
 						{ label: 'Run agents on another machine', slug: 'guides/remote-runners' },
 						{ label: 'Run it in the background', slug: 'guides/background-service' },
 						{ label: 'Watch and steer runs', slug: 'guides/operating' },
+						{ label: 'Cap spend and attempts', slug: 'guides/budgets' },
 						{ label: 'Backups and recovery', slug: 'guides/backups' },
 						{ label: 'Build your first extension', slug: 'guides/first-extension' },
 					],

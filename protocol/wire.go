@@ -693,6 +693,9 @@ type Usage struct {
 	CachedTokens *uint64  `json:"cached_tokens,omitempty"`
 	Cost         *float64 `json:"cost,omitempty"`
 	Currency     string   `json:"currency,omitempty"`
+	// Units are amounts in named units ("usd", "minutes", ...) that budgets
+	// are charged in (extension.Usage.Units).
+	Units map[string]float64 `json:"units,omitempty"`
 }
 type WorkspaceRecord struct {
 	Kind    string  `json:"kind"`
@@ -712,7 +715,7 @@ type Result struct {
 }
 
 func FromResult(r extension.Result) Result {
-	out := Result{Outcome: FromOutcome(r.Outcome), Usage: Usage{InputTokens: r.Usage.InputTokens, OutputTokens: r.Usage.OutputTokens, CachedTokens: r.Usage.CachedTokens, Cost: r.Usage.Cost, Currency: r.Usage.Currency}, Artifacts: fromArtifacts(r.Artifacts)}
+	out := Result{Outcome: FromOutcome(r.Outcome), Usage: Usage{InputTokens: r.Usage.InputTokens, OutputTokens: r.Usage.OutputTokens, CachedTokens: r.Usage.CachedTokens, Cost: r.Usage.Cost, Currency: r.Usage.Currency, Units: r.Usage.Units}, Artifacts: fromArtifacts(r.Artifacts)}
 	if r.RetryHint != nil {
 		out.RetryAfter, out.RetryResetAt = true, r.RetryHint.ResetAt
 	}
@@ -725,7 +728,7 @@ func FromResult(r extension.Result) Result {
 	return out
 }
 func (r Result) Extension() extension.Result {
-	out := extension.Result{Outcome: r.Outcome.Domain(), Usage: extension.Usage{InputTokens: r.Usage.InputTokens, OutputTokens: r.Usage.OutputTokens, CachedTokens: r.Usage.CachedTokens, Cost: r.Usage.Cost, Currency: r.Usage.Currency}, Artifacts: toArtifacts(r.Artifacts)}
+	out := extension.Result{Outcome: r.Outcome.Domain(), Usage: extension.Usage{InputTokens: r.Usage.InputTokens, OutputTokens: r.Usage.OutputTokens, CachedTokens: r.Usage.CachedTokens, Cost: r.Usage.Cost, Currency: r.Usage.Currency, Units: r.Usage.Units}, Artifacts: toArtifacts(r.Artifacts)}
 	if r.RetryAfter {
 		out.RetryHint = &extension.RetryHint{ResetAt: r.RetryResetAt}
 	}
