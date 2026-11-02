@@ -161,7 +161,7 @@ func (firstRunHost) LookPath(string) (string, bool) { return "", false }
 
 // SetupOptions start a coding agent with the setup guide.
 type SetupOptions struct {
-	// Agent is claude or claude-code.
+	// Agent is claude (or claude-code) or codex.
 	Agent      string
 	ConfigPath string
 	StateDir   string
@@ -169,7 +169,7 @@ type SetupOptions struct {
 	// Bin is how the agent runs open-conduit (its name when PATH finds this
 	// executable, else the path).
 	Bin string
-	// Binary is the Claude Code CLI (default claude).
+	// Binary is the agent's CLI (default claude or codex).
 	Binary string
 	// Environ is the process environment (default os.Environ).
 	Environ []string
@@ -181,11 +181,15 @@ type SetupOptions struct {
 // config, running doctor and dry runs of each setup go without asking;
 // nothing else is pre-allowed.
 func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
-	if o.Agent != "claude" && o.Agent != ClaudeCodeExecutor {
-		return nil, fmt.Errorf("no setup agent %q: use --with claude", o.Agent)
+	codex := o.Agent == CodexAgent
+	if o.Agent != "claude" && o.Agent != ClaudeCodeExecutor && !codex {
+		return nil, fmt.Errorf("no setup agent %q: use --with claude or --with codex", o.Agent)
 	}
 	if o.Binary == "" {
 		o.Binary = "claude"
+		if codex {
+			o.Binary = "codex"
+		}
 	}
 	if o.Bin == "" {
 		o.Bin = "open-conduit"
@@ -198,11 +202,23 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err := playbooks.WritePlugin(dir, "Sets Open Conduit up", map[string]string{name: text}); err != nil {
-		return nil, err
+	if !codex {
+		if err := playbooks.WritePlugin(dir, "Sets Open Conduit up", map[string]string{name: text}); err != nil {
+			return nil, err
+		}
 	}
 	if _, err := exec.LookPath(o.Binary); err != nil {
+		if codex {
+			return nil, fmt.Errorf("%s is not on PATH: install the Codex CLI first", o.Binary)
+		}
 		return nil, fmt.Errorf("%s is not on PATH: install Claude Code first", o.Binary)
+	}
+	if codex {
+		// Codex loads no plugin skills and has no allowed-tools list: the
+		// guide is the session's first message, and Codex's own sandbox
+		// asks the owner before any command that writes outside the
+		// checkout, the config included.
+		return agentCommand(o, []string{"--sandbox", "workspace-write", "--ask-for-approval", "on-request", setupPrompt(text)}), nil
 	}
 	// The prompt first and the tools last: --allowedTools takes every
 	// argument after it.
@@ -214,6 +230,28 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	for _, sub := range allowed {
 		args = append(args, "Bash("+o.Bin+" "+sub+":*)")
 	}
+	return agentCommand(o, args), nil
+}
+
+// CodexAgent is `init --with codex`: the Codex CLI.
+const CodexAgent = "codex"
+
+// setupPrompt is the setup playbook as a first message: its text without
+// the skill frontmatter.
+func setupPrompt(text string) string {
+	text = strings.ReplaceAll(text, "\r\n", "\n")
+	if strings.HasPrefix(text, "---\n") {
+		if i := strings.Index(text[4:], "\n---\n"); i >= 0 {
+			text = text[4+i+5:]
+		}
+	}
+	return strings.TrimSpace(text)
+}
+
+// agentCommand is the interactive agent command in the owner's
+// directory, with no toolbelt credential in its environment and the
+// config it sets up named.
+func agentCommand(o SetupOptions, args []string) *exec.Cmd {
 	cmd := exec.Command(o.Binary, args...)
 	cmd.Dir = o.Cwd
 	env := o.Environ
@@ -228,7 +266,7 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 		cmd.Env = append(cmd.Env, kv)
 	}
 	cmd.Env = append(cmd.Env, "OPEN_CONDUIT_CONFIG="+o.ConfigPath)
-	return cmd, nil
+	return cmd
 }
 
 // dryRunSetups are the setup types whose `init TYPE --dry-run` the setup

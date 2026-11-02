@@ -226,7 +226,39 @@ func TestSetupCommand(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(plugin, "skills", "work-issue")); err == nil {
 		t.Fatal("turn playbooks leaked into the setup plugin")
 	}
-	if _, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "codex", StateDir: state, Binary: fake}); err == nil {
+	if _, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "aider", StateDir: state, Binary: fake}); err == nil {
 		t.Fatal("unknown agent accepted")
+	}
+}
+
+// init --with codex starts the Codex CLI with the setup guide as its first
+// message (Codex loads no plugin skills), in its workspace-write sandbox
+// asking before anything else, and with the same environment rules.
+func TestSetupCommandCodex(t *testing.T) {
+	dir := t.TempDir()
+	fake := filepath.Join(dir, "codex")
+	if err := os.WriteFile(fake, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	state := filepath.Join(dir, "state")
+	placeSetup(t, dir)
+	cmd, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "codex", ConfigPath: filepath.Join(dir, "config.json"), StateDir: state, Cwd: dir, Bin: "/opt/bin/open-conduit", Binary: fake,
+		Environ: []string{"PATH=/usr/bin", "OS_TOKEN=leak", "OPEN_CONDUIT_CONFIG=/elsewhere"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(cmd.Args) != 6 || strings.Join(cmd.Args[1:5], " ") != "--sandbox workspace-write --ask-for-approval on-request" {
+		t.Fatalf("args: %q", cmd.Args)
+	}
+	guide := cmd.Args[5]
+	if strings.HasPrefix(guide, "---") || !strings.Contains(guide, "/opt/bin/open-conduit init") || strings.Contains(guide, "{{bin}}") {
+		t.Fatalf("guide: %.300s", guide)
+	}
+	env := strings.Join(cmd.Env, "\n")
+	if strings.Contains(env, "OS_TOKEN") || strings.Contains(env, "/elsewhere") || !strings.Contains(env, "OPEN_CONDUIT_CONFIG="+filepath.Join(dir, "config.json")) {
+		t.Fatalf("env: %s", env)
+	}
+	if _, err := os.Stat(filepath.Join(state, "playbooks", "setup")); err == nil {
+		t.Fatal("a Claude Code plugin was written for codex")
 	}
 }

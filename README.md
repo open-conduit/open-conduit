@@ -7,7 +7,7 @@
 Most agent tools fire once per trigger: an issue is assigned, a job runs, and if the pull request goes red an hour later the next comment starts from scratch. Open Conduit keeps the work, not the run. Three things set it apart:
 
 - **Durable, not fire-and-forget.** Every event is recorded before anything acts on it. Work parks for hours or days and wakes on the merge, the CI result or the reply it is waiting for, even after a restart. A failed attempt is retried; it doesn't fail the Work.
-- **Any executor.** An Execution is one attempt to move Work forward, through whichever executor its binding names. Agents run on Claude Code today; a shell command runs with the same history, retries and timeouts; a person can answer an agent's private question or take over its session. Extensions can add other executors.
+- **Any executor.** An Execution is one attempt to move Work forward, through whichever executor its binding names. Agents run on Claude Code or the Codex CLI (an installed package, like any you could write); a shell command runs with the same history, retries and timeouts; a person can answer an agent's private question or take over its session. Extensions can add other executors.
 - **Authority at the host.** Each run gets a toolbelt of only the operations its binding grants, such as "comment on this issue", "open a pull request" or "wait until that PR merges", and the daemon checks every call. A binding can run its agent in a sandbox or a container, away from your credentials and Open Conduit's own state.
 
 And around those:
@@ -30,7 +30,7 @@ Open Conduit is the heart of that orchestrator, re-architected around the right 
 
 - **Work** is a durable objective, such as an issue to fix or a thread to answer.
 - **Event** is an immutable record of something that happened.
-- **Execution** is one attempt to advance Work, through whichever executor fits: Claude Code, a shell command, or one you plug in.
+- **Execution** is one attempt to advance Work, through whichever executor fits: Claude Code, Codex, a shell command, or one you plug in.
 - **Timer** and **Wait** make time and suspension durable.
 - **Scope** holds the configuration, routes and bindings for one area of work.
 

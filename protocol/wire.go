@@ -662,6 +662,10 @@ type ExecutionContext struct {
 	ToolbeltToken    string            `json:"toolbelt_token,omitempty"`
 	// ToolbeltTokenFile is the host-kept token file (extension.ExecutionContext).
 	ToolbeltTokenFile string `json:"toolbelt_token_file,omitempty"`
+	// ToolbeltDir is the host's directory holding `os` (extension.ExecutionContext).
+	ToolbeltDir string `json:"toolbelt_dir,omitempty"`
+	// PlaybookDir is the host's playbook directory (extension.ExecutionContext).
+	PlaybookDir string `json:"playbook_dir,omitempty"`
 	// Env is the run's environment layer (extension.ExecutionContext).
 	Env map[string]string `json:"env,omitempty"`
 }
@@ -678,13 +682,13 @@ type RunRequest struct {
 }
 
 func FromRunRequest(r extension.RunRequest) RunRequest {
-	return RunRequest{Work: FromWork(r.Work), Execution: FromExecution(r.Execution), Trigger: FromEvent(r.Trigger), Inputs: FromEvents(r.Inputs), Context: ExecutionContext{Config: FromPayload(r.Context.Config), Secrets: r.Context.Secrets, Resources: r.Context.Resources != nil, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, Env: r.Context.Env}}
+	return RunRequest{Work: FromWork(r.Work), Execution: FromExecution(r.Execution), Trigger: FromEvent(r.Trigger), Inputs: FromEvents(r.Inputs), Context: ExecutionContext{Config: FromPayload(r.Context.Config), Secrets: r.Context.Secrets, Resources: r.Context.Resources != nil, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, ToolbeltDir: r.Context.ToolbeltDir, PlaybookDir: r.Context.PlaybookDir, Env: r.Context.Env}}
 }
 
 // Extension returns the request without callbacks; the receiving side
 // installs PersistRecovery and Resources.
 func (r RunRequest) Extension() extension.RunRequest {
-	return extension.RunRequest{Work: r.Work.Domain(), Execution: r.Execution.Domain(), Trigger: r.Trigger.Domain(), Inputs: ToEvents(r.Inputs), Context: extension.ExecutionContext{Config: r.Context.Config.Domain(), Secrets: r.Context.Secrets, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, Env: r.Context.Env}}
+	return extension.RunRequest{Work: r.Work.Domain(), Execution: r.Execution.Domain(), Trigger: r.Trigger.Domain(), Inputs: ToEvents(r.Inputs), Context: extension.ExecutionContext{Config: r.Context.Config.Domain(), Secrets: r.Context.Secrets, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, ToolbeltDir: r.Context.ToolbeltDir, PlaybookDir: r.Context.PlaybookDir, Env: r.Context.Env}}
 }
 
 type Usage struct {

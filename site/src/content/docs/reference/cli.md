@@ -25,10 +25,11 @@ Run open-conduit COMMAND --help for one command.
 ```text
 Usage: open-conduit init TYPE [flags] [--config PATH] [--force] [--dry-run]
        open-conduit init --with claude   start Claude Code with the setup guide
+       open-conduit init --with codex    start the Codex CLI with the setup guide
 
 Types (from the registered extensions):
   github   add a scope that works a GitHub repository's issues
-           [--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF] [--connection ID] [--holds] [--require LABEL]
+           [--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF] [--connection ID] [--holds] [--require LABEL] [--executor claude-code|codex]
   jira     add a scope that works Jira projects' issues
            [--bitbucket WORKSPACE/SLUG --bitbucket-username EMAIL --bitbucket-token REF] --site https://acme.atlassian.net --projects PROJ[,WEB] [--email E | --auth bearer] [--jql JQL] [--fields customfield_1,…] [--scope ID] [--token REF] [--connection ID] [--checkout DIR | --no-workspace]
   linear   add a scope that works Linear teams' issues
@@ -89,8 +90,8 @@ if the daemon exits with an error.
 
 install takes the same flags as serve (for example --webhook-addr 127.0.0.1:8787
 --tunnel cloudflared) and the global --data-dir and --socket, and records the
-config path, the state directory and a PATH that finds claude, git, gh and the
-tunnel binary. Run it again to change the flags or after installing a tool the
+config path, the state directory and a PATH that finds claude or codex, git, gh
+and the tunnel binary. Run it again to change the flags or after installing a tool the
 daemon needs. Output goes to <state>/logs/service.log.
 ```
 

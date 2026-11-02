@@ -23,8 +23,14 @@ import (
 // view of the configuration and the machine, so doctor runs them without a
 // daemon too.
 
-// agentExecutor is the executor whose bindings run the work-issue playbook.
+// agentExecutor is the default executor whose bindings run the work-issue
+// playbook; AgentExecutors are all that do.
 const agentExecutor = "claude-code"
+
+// AgentExecutors are the coding-agent executors an agent binding can name,
+// the default first: Claude Code (in the daemon) and the Codex CLI (the
+// bundled codex package).
+var AgentExecutors = []string{agentExecutor, "codex"}
 
 // capabilityCheck reports, for each scope a GitHub entry claims issues for:
 // no `github` route, an agent binding without the GitHub tools, scheduled
@@ -72,7 +78,7 @@ func capabilityCheck(_ context.Context, cfg protocol.CheckConfig) inproc.CheckRe
 						missing = append(missing, op)
 					}
 				}
-				if len(missing) > 0 && b.Executor == agentExecutor {
+				if len(missing) > 0 && slices.Contains(AgentExecutors, b.Executor) {
 					warn("agent_operations_missing", fmt.Sprintf("%s: binding %s lacks %s (the work-issue playbook needs them)", id, r.Binding, strings.Join(missing, ", ")))
 				}
 			case HoldHandler:

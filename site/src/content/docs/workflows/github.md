@@ -19,6 +19,7 @@ open-conduit config check
 - `init github --require agent` picks up only the issues you label `agent` (see below).
 - `init github --holds` adds a hold route that parks issues until you claim them by hand.
 - `init github --no-workspace` writes a scope whose turns need no checkout.
+- `init github --executor codex` runs the agent on the Codex CLI instead of Claude Code ([run agents on Codex](/open-conduit/guides/codex/)).
 - `open-conduit init --help` lists every flag.
 
 ## What gets picked up
