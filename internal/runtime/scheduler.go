@@ -500,6 +500,30 @@ func (s *Scheduler) InspectAttempt(ctx context.Context, id domain.ID) (state Att
 func (s *Scheduler) Renew(ctx context.Context, ref domain.LeaseRef) error {
 	return s.transact(ctx, &ref, func(tx storage.Tx) error { return tx.Renew(ref, s.options.LeaseDuration) })
 }
+
+// Adoptable reports whether an attempt whose holder lost its lease is still
+// running and so belongs to recovery rather than to a stop: its Execution
+// is running and its Work is open, whether the lease merely lapsed (a
+// laptop slept past it; Poll recovers and adopts the same process) or a
+// newer epoch has already adopted it. Only an attempt that is no longer
+// running (cancelled, timed out, failed, parked) needs the old holder to
+// stop its process. A read that fails reports false, so the caller stops.
+func (s *Scheduler) Adoptable(ctx context.Context, ref domain.LeaseRef) bool {
+	adoptable := false
+	_ = s.transact(ctx, nil, func(tx storage.Tx) error {
+		x, err := tx.Execution(ref.ExecutionID)
+		if err != nil {
+			return err
+		}
+		w, err := tx.Work(x.WorkID)
+		if err != nil {
+			return err
+		}
+		adoptable = x.State == domain.ExecutionRunning && !w.State.Terminal() && x.Lease.Epoch >= ref.Epoch
+		return nil
+	})
+	return adoptable
+}
 func (s *Scheduler) Release(ctx context.Context, ref domain.LeaseRef) error {
 	return s.transact(ctx, &ref, func(tx storage.Tx) error { return tx.Release(ref) })
 }

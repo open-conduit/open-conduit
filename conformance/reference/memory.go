@@ -431,11 +431,12 @@ func (t *transaction) Renew(ref domain.LeaseRef, ttl time.Duration) error {
 		return storage.ErrInvalid
 	}
 	x := t.data.Executions[ref.ExecutionID]
-	expires := t.now.Add(ttl)
-	if expires.Before(x.Lease.ExpiresAt) {
-		return storage.ErrInvalid
+	// A wall clock stepped back (an NTP correction, a VM resume) makes the
+	// new expiry earlier than the stored one; keep the later, so a renewal
+	// never shortens a lease and never fails a healthy holder.
+	if expires := t.now.Add(ttl); expires.After(x.Lease.ExpiresAt) {
+		x.Lease.ExpiresAt = expires
 	}
-	x.Lease.ExpiresAt = expires
 	x.Revision++
 	x.UpdatedAt = t.now
 	t.data.Executions[x.ID] = x

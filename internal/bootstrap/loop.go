@@ -215,8 +215,10 @@ func (d *daemon) dispatchControls(ctx context.Context, c *components) {
 }
 
 // observe waits for an attempt's result while renewing its lease. Losing
-// authority (cancel, deadline, supersession) or an observation failure leads
-// to a trusted physical stop and ConfirmStopped; daemon shutdown only stops
+// authority to an end (cancel, deadline, a failed observation) leads to a
+// trusted physical stop and ConfirmStopped. A lease that merely lapsed, with
+// the attempt still running, is left for Poll's recovery to adopt, as is one
+// a newer epoch already holds; daemon shutdown likewise only stops
 // observing, leaving the detached process for the next daemon to adopt.
 func (d *daemon) observe(c *components, a runtime.Attempt) {
 	key := attemptKey{a.Lease.ExecutionID, a.Lease.Epoch}
@@ -279,6 +281,13 @@ func (d *daemon) observe(c *components, a runtime.Attempt) {
 		}
 		if d.ctx.Err() != nil {
 			return // shutdown: keep the process for adoption
+		}
+		if errors.Is(err, storage.ErrLeaseLost) && c.scheduler.Adoptable(d.ctx, a.Lease) {
+			// The lease lapsed (the host slept or stalled past it) but the
+			// attempt still runs and nothing has ended it: Poll's recovery
+			// adopts the process, or already has, so it is left running.
+			d.log.Warn("lease lost; leaving the running attempt for recovery to adopt", "execution", string(a.Lease.ExecutionID), "epoch", a.Lease.Epoch)
+			return
 		}
 		d.report("observe", a.Lease.ExecutionID, errorCode(err), runtime.FailureCause(err))
 		d.confirmStopped(d.ctx, c, a.Lease.ExecutionID, a.Lease.Epoch)

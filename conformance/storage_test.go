@@ -4,6 +4,7 @@ import (
 	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/conformance"
 	"github.com/open-conduit/open-conduit/conformance/reference"
@@ -38,6 +39,26 @@ func (b brokenDedupTx) AcceptEvent(e domain.Event) (domain.AcceptedEvent, bool, 
 	e.DeliveryID += ":" + string(e.ID)
 	return b.Tx.AcceptEvent(e)
 }
+
+// brokenStepBack renews the way backends did before a stepped-back clock
+// was tolerated: it refuses a renewal whose new expiry is earlier than the
+// stored one.
+type brokenStepBack struct{ storage.Store }
+type brokenStepBackTx struct {
+	storage.Tx
+	now time.Time
+}
+
+func (b brokenStepBack) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(brokenStepBackTx{tx, g.Now}) })
+}
+func (b brokenStepBackTx) Renew(ref domain.LeaseRef, ttl time.Duration) error {
+	if x, err := b.Execution(ref.ExecutionID); err == nil && b.now.Add(ttl).Before(x.Lease.ExpiresAt) {
+		return storage.ErrInvalid
+	}
+	return b.Tx.Renew(ref, ttl)
+}
+
 func TestWeakenedBackendsAreRejected(t *testing.T) {
 	cases := []struct {
 		name, diagnostic string
@@ -46,6 +67,7 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"event_identity_not_correlation", "duplicate delivery", func() storage.Store { return brokenDedup{reference.New()} }},
 		{"atomic_route_work_kv_timer", "event leaked", func() storage.Store { return brokenAtomic{reference.New()} }},
 		{"timer_fire_rearm_rollback", "rollback was not atomic", func() storage.Store { return brokenAtomic{reference.New()} }},
+		{"lease_renew_survives_clock_step_back", "renewal after clock step back", func() storage.Store { return brokenStepBack{reference.New()} }},
 	}
 	for _, negative := range cases {
 		t.Run(negative.name, func(t *testing.T) {
