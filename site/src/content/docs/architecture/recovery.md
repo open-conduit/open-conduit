@@ -17,7 +17,7 @@ open-conduit auth recover                                 # a lost or ambiguous 
 ```
 
 - **What a bundle holds.** A bundle holds `conduit.db` and the artifacts the database references ([backup bundles](../backup-bundles/)). Keep bundles owner-only: they hold private Work, Events, config snapshots and executor continuity.
-- **What a bundle does not hold.** It holds no credentials, config, secrets, executor run directories (`executors/`), workspaces (`resources/git/`) or logs.
+- **What a bundle does not hold.** It holds no credentials, config, secrets, executor run directories (`executors/`), workspaces (`resources/git/`) or logs. The daemon's logs in `logs/` rotate by size on their own (10 MB, five rotated files kept).
 - **Restore.**
   - A restore never replaces an existing directory.
   - It fences every backed-up lease, so an old execution credential can never commit.

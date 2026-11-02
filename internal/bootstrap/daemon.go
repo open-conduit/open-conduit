@@ -59,7 +59,8 @@ type Options struct {
 	// ToolbeltDir contains the `os` binary (default: beside the executable).
 	ToolbeltDir string
 	// LifecycleLog receives one JSON line per lifecycle record (default
-	// StateDir/logs/lifecycle.jsonl, appended across restarts).
+	// StateDir/logs/lifecycle.jsonl, appended across restarts and rotated
+	// by size; logfile.go).
 	LifecycleLog string
 	// Log receives daemon diagnostics (default stderr).
 	Log io.Writer
@@ -161,7 +162,7 @@ type daemon struct {
 	trackers       trackerSources
 	schedule       scheduleState
 	telemetry      telemetryFanout
-	telemetryFile  *os.File
+	telemetryFile  *rotatingLog
 	resources      resourceState
 	sandboxes      sandboxState
 	containers     containerState
@@ -537,13 +538,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	d.log.Info("open-conduit stopped")
 	return loopErr
-}
-
-func openLog(path string) (*os.File, error) {
-	if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
-		return nil, err
-	}
-	return os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_APPEND, 0o600)
 }
 
 func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {

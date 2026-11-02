@@ -3,7 +3,6 @@ package bootstrap
 import (
 	"context"
 	"encoding/json"
-	"os"
 	"path/filepath"
 	"sync"
 	"time"
@@ -16,7 +15,7 @@ import (
 
 type telemetryLog struct {
 	mu   sync.Mutex
-	file *os.File
+	file *rotatingLog
 }
 
 // Capture writes the event, with its scope (when it has one) among the
