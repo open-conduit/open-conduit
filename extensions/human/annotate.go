@@ -78,7 +78,10 @@ func Panel(ctx context.Context, store storage.Store, entry Entry, w domain.Work,
 		}
 		sections = append(sections, extension.PanelSection{Title: "Options", Table: t})
 	}
-	about := extension.PanelSection{Fields: []extension.PanelField{{Name: "for", Value: clean(strings.Join(rec.Responders, ", "))}, {Name: "status", Value: status}}}
+	if rec.escalated(now) {
+		status += "; escalated at " + rec.EscalateAt.Format(time.RFC3339) + ", unanswered"
+	}
+	about := extension.PanelSection{Fields: []extension.PanelField{{Name: "for", Value: clean(strings.Join(rec.responders(now), ", "))}, {Name: "status", Value: status}}}
 	if !rec.Deadline.IsZero() {
 		about.Fields = append(about.Fields, extension.PanelField{Name: "answer by", Value: rec.Deadline.Format(time.RFC3339)})
 	}

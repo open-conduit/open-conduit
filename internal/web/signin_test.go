@@ -53,7 +53,12 @@ func TestSessionsRotateAndExpire(t *testing.T) {
 		t.Fatal("two sign-ins shared a session")
 	}
 	// A forged or planted cookie gets nowhere.
-	for _, bad := range []string{s.sess, "1.2.3.4", a[:len(a)-1] + "0", strings.Replace(a, ".", "9.", 1)} {
+	// The tampered cookie changes a's last hex digit, whatever it was.
+	last := "0"
+	if strings.HasSuffix(a, "0") {
+		last = "1"
+	}
+	for _, bad := range []string{s.sess, "1.2.3.4", a[:len(a)-1] + last, strings.Replace(a, ".", "9.", 1)} {
 		if w := withSession(h, "GET", "/attention", bad); w.Code != http.StatusUnauthorized {
 			t.Fatalf("forged %q: %d", bad, w.Code)
 		}

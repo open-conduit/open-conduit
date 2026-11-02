@@ -18,11 +18,14 @@ const auditWindow = time.Hour
 // SyncResult counts what a pass changed.
 type SyncResult struct {
 	Answered, Expired, Withdrawn, Late int
+	// Escalated are the asks this pass escalated.
+	Escalated []Ask
 }
 
 // Sync settles ask records against what happened: the first accepted
 // answer (lowest sequence, the one that woke the asker) is recorded as the
-// answer and the rest as late; an ask past its deadline expires; an ask
+// answer and the rest as late; an ask past its deadline expires; an
+// approval request past its escalation time records that it escalated; an ask
 // whose asker stopped waiting is withdrawn. It is idempotent and
 // restart-safe: everything it reads is durable.
 func Sync(ctx context.Context, store storage.Store, now time.Time) (SyncResult, error) {
@@ -102,9 +105,13 @@ func settle(tx storage.Tx, id string, now time.Time, res *SyncResult) error {
 		if err != nil {
 			return err
 		}
-		if gone {
+		switch {
+		case gone:
 			a.State, a.ClosedAt = StateWithdrawn, now
 			res.Withdrawn++
+		case a.escalated(now) && a.EscalatedAt.IsZero():
+			a.Responders, a.EscalatedAt = a.responders(now), now
+			res.Escalated = append(res.Escalated, a)
 		}
 	}
 	return putAsk(tx, a)

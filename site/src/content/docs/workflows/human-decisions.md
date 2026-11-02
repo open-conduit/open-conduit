@@ -79,7 +79,8 @@ Only the entry's **answer** action counts, and only while the question is open a
 | --- | --- | --- |
 | `operations` | required | Operation names, such as `github.pr.create`, or a prefix ending in `.*` for every operation under it, such as `deploy.*`. Any extension's operations can be gated, installed ones included, except `human`'s own. The builtins (`emit`, `create_work`, `wait`, `declare_outcome`, `read_context`) can't be gated, and naming one is an error. |
 | `responders` | the entry's | Who may approve or refuse. |
-| `timeout` | `24h` | How long a request waits for an answer, from `1m` to `8760h`. With no answer by then, the call is refused. An approval also holds only this long. |
+| `timeout` | `24h` | How long a request waits for an answer, from `1m` to `8760h`. With no answer by then, the call is refused, unless the gate escalates. An approval also holds only this long. |
+| `escalate` | none | Who an unanswered request goes to next, rather than being refused at `timeout`: `{"responders": [...], "timeout": "24h"}`. See [Escalation](#escalation). |
 
 The binding doesn't need `human.ask` for its calls to be gated: a gate applies to every call in the scope, whatever the binding grants.
 
@@ -114,4 +115,17 @@ When the Work is a Slack conversation, the question (with its context) or the ap
 
 A question that takes free text, with no options, has no buttons; answer it from the TUI, the web view or the CLI. The buttons work only with Socket Mode, the default receiver, and the Slack app needs **Interactivity** turned on (apps created by `init slack` from now on have it).
 
-A timeout that escalates to someone else rather than refusing, and gates on route or kind transitions rather than operations, are not built yet.
+## Escalation
+
+A gate with `escalate` doesn't refuse a request nobody answered by its `timeout`. It hands the request on:
+
+```json
+{"operations": ["deploy.*"], "responders": ["slack:U0123ABCD"], "timeout": "2h",
+ "escalate": {"responders": ["slack:U0456EFGH", "operator:local"], "timeout": "4h"}}
+```
+
+Here, nobody approving a deploy within 2 hours escalates it. For the next 4 hours, the escalation's responders can answer it as well as the gate's own. The call is refused with `approval_timed_out` only if that time passes too. The caller stays parked throughout, so escalating costs no agent turn. `escalate.responders` is required, and `escalate.timeout` defaults to `24h`. The two timeouts together may be at most `8760h`.
+
+Once it has escalated, the request is offered as **Approve or refuse … (escalated)**. Its text says nobody answered in time, who it now goes to and when it will be refused. Because the offer has changed, Slack posts it in the thread again. The panel lists the wider responders and the time it escalated. The escalation is recorded on the request and as a `human_gate_escalated` telemetry event, which carries the Work, the execution, the operation and who it went to.
+
+Gates on route or kind transitions, rather than operations, are not built yet.

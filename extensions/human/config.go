@@ -59,9 +59,24 @@ type GateConfig struct {
 	Responders []string `json:"responders,omitempty"`
 	// Timeout is how long an approval request waits for an answer, a Go
 	// duration ("24h", at most a year). With no answer by then, the call
-	// is refused. Default "24h".
+	// is refused, or with Escalate set, escalated. Default "24h".
 	Timeout string `json:"timeout,omitempty"`
+	// Escalate, when set, widens an unanswered request to more responders
+	// once Timeout passes, rather than refusing it; the call is refused
+	// only if nobody answers by the escalation's own timeout as well.
+	Escalate *EscalateConfig `json:"escalate,omitempty"`
 	// timeout is Timeout parsed.
+	timeout time.Duration
+}
+
+// EscalateConfig is who an unanswered approval request goes to next.
+type EscalateConfig struct {
+	// Responders may answer the request once it escalates, as well as the
+	// gate's own. Required.
+	Responders []string `json:"responders"`
+	// Timeout is how much longer the escalated request waits, as the
+	// gate's Timeout. Default "24h".
+	Timeout string `json:"timeout,omitempty"`
 	timeout time.Duration
 }
 
@@ -118,13 +133,23 @@ func ParseConfig(data json.RawMessage) (Config, error) {
 		if err := checkResponders(where+": responders", g.Responders); err != nil {
 			return c, err
 		}
-		g.timeout = DefaultGateTimeout
-		if g.Timeout != "" {
-			d, err := time.ParseDuration(g.Timeout)
-			if err != nil || d < time.Minute || d > maxGateTimeout {
-				return c, fmt.Errorf("%s: timeout: %q must be a duration from 1m to 8760h, such as 24h", where, g.Timeout)
+		var err error
+		if g.timeout, err = gateTimeout(where+": timeout", g.Timeout); err != nil {
+			return c, err
+		}
+		if e := g.Escalate; e != nil {
+			if len(e.Responders) == 0 {
+				return c, fmt.Errorf("%s: escalate: responders: name who an unanswered request goes to next", where)
 			}
-			g.timeout = d
+			if err = checkResponders(where+": escalate: responders", e.Responders); err != nil {
+				return c, err
+			}
+			if e.timeout, err = gateTimeout(where+": escalate: timeout", e.Timeout); err != nil {
+				return c, err
+			}
+			if g.timeout+e.timeout > maxGateTimeout {
+				return c, fmt.Errorf("%s: timeout and escalate.timeout together must be at most 8760h", where)
+			}
 		}
 	}
 	if len(c.Surfaces) == 0 {
@@ -136,6 +161,18 @@ func ParseConfig(data json.RawMessage) (Config, error) {
 		}
 	}
 	return c, nil
+}
+
+// gateTimeout parses a gate's timeout, DefaultGateTimeout when empty.
+func gateTimeout(field, s string) (time.Duration, error) {
+	if s == "" {
+		return DefaultGateTimeout, nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil || d < time.Minute || d > maxGateTimeout {
+		return 0, fmt.Errorf("%s: %q must be a duration from 1m to 8760h, such as 24h", field, s)
+	}
+	return d, nil
 }
 
 func checkResponders(field string, responders []string) error {

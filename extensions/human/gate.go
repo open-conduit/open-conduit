@@ -36,7 +36,9 @@ const (
 // again (the same operation and input, in the same Work): an approval lets
 // exactly that call through once, if it is made within the gate's timeout
 // of the answer (later, it asks again); a refusal, or no answer by the gate's
-// timeout, refuses it with an operation error, once. A later identical call
+// timeout, refuses it with an operation error, once. A gate that escalates
+// instead widens an unanswered request to its escalation responders at its
+// timeout, and refuses only at the escalation's. A later identical call
 // asks again. Calls the scope's gates don't name pass, and so does every
 // call in a scope without a `human` entry.
 func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.GateCall) (*extension.WaitPlan, error) {
@@ -107,6 +109,11 @@ func (t *Tools) Gate(ctx context.Context, a extension.Authority, c extension.Gat
 			Gate: c.Operation, Request: request, Question: "Allow " + c.Operation + "?", Options: []string{OptionApprove, OptionRefuse},
 			Context: gateContext(c.Input), Deadline: now.Add(rule.timeout), Responders: rule.Responders, Surfaces: entry.Config.Surfaces,
 			AskedAt: now, Sequence: seq, State: StateOpen}
+		if e := rule.Escalate; e != nil {
+			// The caller waits through both timeouts; settling widens
+			// who may answer once the first passes.
+			rec.EscalateAt, rec.EscalateTo, rec.Deadline = rec.Deadline, e.Responders, rec.Deadline.Add(e.timeout)
+		}
 		if err = putAsk(tx, rec); err != nil {
 			return err
 		}
