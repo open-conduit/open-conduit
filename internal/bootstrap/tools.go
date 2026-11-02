@@ -11,8 +11,6 @@ import (
 	"github.com/open-conduit/open-conduit/executors/claudecode"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
-	sl "github.com/open-conduit/open-conduit/extensions/slack"
-	slplaybooks "github.com/open-conduit/open-conduit/extensions/slack/playbooks"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
@@ -41,18 +39,12 @@ func (d *daemon) openTools() error {
 		return err
 	}
 	d.tools = tools
-	if d.slackTools, err = sl.NewTools(sl.ToolsOptions{Store: d.coord, Sources: d.slackSourcesList, Now: d.now}); err != nil {
-		return err
-	}
 	return nil
 }
 
 // registerTools adds the extension operations to a generation's toolbelt.
 func (d *daemon) registerTools(belt *runtime.Toolbelt) error {
-	if err := belt.Register(d.tools.Registration()); err != nil {
-		return err
-	}
-	return belt.Register(d.slackTools.Registration())
+	return belt.Register(d.tools.Registration())
 }
 
 // authorizeAlias is the B04 cross-scope dependency ceiling: the waiting
@@ -86,13 +78,13 @@ func (d *daemon) mayFile(filer, target domain.ID) error {
 func (d *daemon) pluginDir() string { return filepath.Join(d.o.StateDir, "playbooks", "plugin") }
 
 // preparePlaybooks writes the plugin (rewritten at every start, so an
-// upgrade replaces old playbook text): the GitHub playbooks, then the Slack
-// support and tracker playbooks and the extensions' own beside them.
+// upgrade replaces old playbook text): the GitHub playbooks, then the
+// extensions' own beside them (Slack's and the trackers' among them).
 func (d *daemon) preparePlaybooks() error {
 	if err := playbooks.Prepare(d.pluginDir()); err != nil {
 		return err
 	}
-	books := slplaybooks.All()
+	books := map[string]string{}
 	d.inprocPlaybooks(books)
 	for name, text := range books {
 		dir := filepath.Join(d.pluginDir(), "skills", name)
@@ -110,17 +102,13 @@ func (d *daemon) preparePlaybooks() error {
 	return nil
 }
 
-// renderEvents renders GitHub and Slack Events with their reply hints, then
+// renderEvents renders GitHub Events with their reply hints, then
 // extensions' own families, first-party and installed (event.render), and
 // falls back to the executor's generic renderer for everything else.
 func (d *daemon) renderEvents(events []domain.Event) string {
 	parts := make([]string, 0, len(events))
 	for _, e := range events {
 		if text, ok := gh.RenderEvent(e); ok {
-			parts = append(parts, text)
-			continue
-		}
-		if text, ok := sl.RenderEvent(e); ok {
 			parts = append(parts, text)
 			continue
 		}

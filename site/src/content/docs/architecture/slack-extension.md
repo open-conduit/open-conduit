@@ -2,7 +2,7 @@
 title: "Slack ingress, conversations and marked replies"
 ---
 
-The first-party Slack extension in [`extensions/slack`](https://github.com/open-conduit/open-conduit/tree/main/extensions/slack) turns Slack threads into support conversations: a person's message starts a `slack.conversation` Work, an agent replies in the thread with marked replies, and later messages in the thread reach the same Work. It is built only against the public contracts: [B03 ingress](../extensions/), [B04 routing](../runtime-semantics/) and [B02 storage/KV](../domain-storage/). It has no workspace, repository or tracker concept, and the runtime does not import it. [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/slack.go) registers it.
+The first-party Slack extension in [`extensions/slack`](https://github.com/open-conduit/open-conduit/tree/main/extensions/slack) turns Slack threads into support conversations: a person's message starts a `slack.conversation` Work, an agent replies in the thread with marked replies, and later messages in the thread reach the same Work. It is built only against the public contracts: [B03 ingress](../extensions/), [B04 routing](../runtime-semantics/) and [B02 storage/KV](../domain-storage/). It has no workspace, repository or tracker concept, and the runtime does not import it. It runs in process on the public [`extension/inproc`](https://github.com/open-conduit/open-conduit/blob/main/extension/inproc/inproc.go) contract (`extensions/slack/extension.go`), named only in bootstrap's `firstParty()`, and out of process as `packages/slack`.
 
 This page records two decisions: the manifest requests `metadata.message:read` for reply markers, and a support conversation waits while it is open and completes only on resolution. The tests use fixtures and the [`slacktest`](https://github.com/open-conduit/open-conduit/tree/main/extensions/slack/slacktest) fake (Web API, Socket Mode and Events API); one short run on real Slack is recorded under [History](#history).
 
@@ -111,7 +111,7 @@ The payload deliberately omits reply counts and latest-reply times, so a new rep
 - Answers pings, and reconnects on Slack's `disconnect` refresh, a dropped connection or idleness (3 minutes). Backoff runs from 1 s to 1 min. A rate-limited `apps.connections.open` waits out its `Retry-After`.
 - Acknowledges and ignores other envelope types.
 
-The TLS connection opened with the app token is the authentication boundary. Bootstrap starts one receiver per registered entry, and doctor's `slack` check reports whether it is connected, plus counts of acknowledged and unacknowledged envelopes.
+The TLS connection opened with the app token is the authentication boundary. The extension starts one receiver per registered entry and stops them when the daemon stops, and doctor's `slack` check reports whether it is connected, plus counts of acknowledged and unacknowledged envelopes.
 
 **HTTP Events API** (`receiver: http`). The webhook listener mounts `POST /slack/<scope>/<entry>`, which is the app's Request URL. `VerifyDelivery` handles each request:
 
@@ -265,3 +265,4 @@ A short run on 2026-10-25 used a real workspace app created with `init slack` fr
 - **One real thread.** The top-level message created one `slack.conversation` Work over Socket Mode. The marked reply came back as `slack.message.agent` and was never input. The first thread reply woke the wait and resumed the same execution and Claude session. The daemon was SIGKILLed mid-wait and restarted, and the next reply woke the same Work, execution and session. A message posted 14 s into that turn was routed `inject`, echoed (`injected {accepted 1, consumed 1}`) and answered in the same reply. It neither woke the next wait nor started an attempt. Attempt 1 was the only execution, across three turns.
 - **No workspace or Git.** `github` stayed `not_configured`, with 0 resource leases.
 - **Not observed.** No 429 was seen, so real rate limits are unmeasured. No mention was posted, so `app_mention` duplication was not seen. `--via slack-cli` was not run.
+- Issue #357 moved the extension off its bespoke bootstrap wiring (`internal/bootstrap/slack.go`) onto `extension/inproc`. An entry's webhook route moved from doctor `webhooks` to doctor `slack`, and its reconcile state to the host's `reconcile_lag` check, which now lists every source's last scan.

@@ -168,7 +168,7 @@ The shell executor's `Forget` removes the execution's run directories. It refuse
 | `resource_holds` | Finished attempts still holding capacity without a confirmed stop. |
 | `retention` | Expired attempts with release pending. |
 | `routing` | Events unrouted for over ten minutes, each holding the Work it targets, with its route failures (`unrouted_events`); `events skip` lets the Work move on ([route failures](../routing-lifecycle/#route-failures)). |
-| `reconcile_lag` | Sources that are failing (safe code only), have no complete scan, or are older than two intervals. |
+| `reconcile_lag` | Sources that are failing (safe code only), have no complete scan, or are older than two intervals; when none is, each source's last complete scan (or that its first is pending). |
 | `non_rederivable` | Declared delivery families with their loss statements. |
 | `config` | The active generation against the config file: `pending_edit`, invalid, unreadable, `disk_missing`, or `default_config` (info) while the daemon runs on the default configuration with no file. |
 | `bindings` | Each binding resolves to a registered executor that satisfies its required capabilities. |

@@ -13,7 +13,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/extension"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
-	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/extensions/tunnel"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -25,10 +24,10 @@ import (
 // serves only the routes registered entries name, each verified by its own
 // adapter before anything is accepted:
 //   - POST /github/<scope>/<entry> for a GitHub entry with a webhook_secret;
-//   - POST /slack/<scope>/<entry> for a Slack entry with receiver http (04-01);
 //   - POST /<extension>/..., served by an in-process extension's Webhook:
 //     a schedule job's signed URL /schedule/<scope>/<entry>/<job>/<token>
-//     (05-01), and /linear|jira|bitbucket/<scope>/<entry> for tracker and
+//     (05-01), /slack/<scope>/<entry> for a Slack entry with receiver http
+//     (04-01), and /linear|jira|bitbucket/<scope>/<entry> for tracker and
 //     code-host entries (06-01);
 //   - the paths an installed extension package registers at configure (07-02, 07-03).
 // Anything else is 404. It never mounts /v1, never sees management
@@ -223,14 +222,6 @@ func (d *daemon) webhookHandler() http.Handler {
 			h.ServeHTTP(w, r)
 			return
 		}
-		if strings.HasPrefix(name, sl.Type+"/") {
-			if h := d.slackWebhook(name); h != nil {
-				h.ServeHTTP(w, r)
-				return
-			}
-			http.NotFound(w, r)
-			return
-		}
 		var src *githubSource
 		d.github.mu.Lock()
 		for _, s := range d.github.sources {
@@ -387,7 +378,6 @@ func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 		check.Items = append(check.Items, item)
 	}
 	d.github.mu.Unlock()
-	check.Items = append(check.Items, d.slackWebhookItems()...)
 	sort.Strings(check.Items)
 	return check
 }
