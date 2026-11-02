@@ -80,9 +80,23 @@ type ValidateParams struct {
 // for kinds resource_mode and executor_mode, and for kind executor the
 // warnings config check shows about a valid binding config
 // (extension.ConfigWarner): fixed sentences that never echo config values.
+// For kinds extension and route, Describe optionally says what a valid
+// object sets up, for the operator's view of the config
+// (inproc.ConfigType.Describe): a schedule entry's jobs and when they run,
+// or which jobs a route takes. The host keeps the lines of the config it
+// validated, so its view needs no call; without them it reads the entry
+// type's declared describe. They must not reveal secrets.
 type ValidateResult struct {
-	Mode     string   `json:"mode,omitempty"`
-	Warnings []string `json:"warnings,omitempty"`
+	Mode     string         `json:"mode,omitempty"`
+	Warnings []string       `json:"warnings,omitempty"`
+	Describe []DescribeLine `json:"describe,omitempty"`
+}
+
+// DescribeLine is one thing a config object sets up: a named element of
+// an entry (Name and Detail), or a route's one line (Detail alone).
+type DescribeLine struct {
+	Name   string `json:"name,omitempty"`
+	Detail string `json:"detail,omitempty"`
 }
 
 // RouteBinding is the binding a route binds, as its handler's binding

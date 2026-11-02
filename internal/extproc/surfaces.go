@@ -3,6 +3,8 @@ package extproc
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"io"
@@ -37,11 +39,32 @@ func (r *Remote) Validator(kind, typ string) func(json.RawMessage, []string) err
 	return func(config json.RawMessage, secretNames []string) error {
 		ctx, cancel := context.WithTimeout(context.Background(), ValidateTimeout)
 		defer cancel()
-		if err := r.p.Call(ctx, "validate", protocol.ValidateParams{Kind: kind, Type: typ, Config: config, SecretNames: secretNames}, nil); err != nil {
+		var out protocol.ValidateResult
+		if err := r.p.Call(ctx, "validate", protocol.ValidateParams{Kind: kind, Type: typ, Config: config, SecretNames: secretNames}, &out); err != nil {
 			return ErrInvalidConfig
+		}
+		if kind == protocol.ValidateExtension || kind == protocol.ValidateRoute {
+			r.described.Store(describeKey(kind, typ, config), out.Describe)
 		}
 		return nil
 	}
+}
+
+// Described is what the package said a config object of an extension or
+// route type sets up when it last validated that object
+// (protocol.ValidateResult.Describe); ok is false when it has not
+// validated it.
+func (r *Remote) Described(kind, typ string, config json.RawMessage) (lines []protocol.DescribeLine, ok bool) {
+	v, ok := r.described.Load(describeKey(kind, typ, config))
+	if !ok {
+		return nil, false
+	}
+	return v.([]protocol.DescribeLine), true
+}
+
+func describeKey(kind, typ string, config json.RawMessage) string {
+	sum := sha256.Sum256(config)
+	return kind + "/" + typ + "/" + hex.EncodeToString(sum[:])
 }
 
 // BindingCheck returns the binding check of a route handler declared with

@@ -245,6 +245,7 @@ func (b *Bridge) wire() {
 	e, name := b.ext, b.x.Name()
 	e.Validate = b.validate
 	e.Configure = b.configure
+	e.Describe = b.describe
 	e.Ingress = func(source string) (extension.Ingress, bool) {
 		b.mu.Lock()
 		defer b.mu.Unlock()
@@ -464,6 +465,20 @@ func (b *Bridge) validate(_ context.Context, p protocol.ValidateParams) error {
 		return ct.Validate(p.Config, p.SecretNames)
 	}
 	return nil
+}
+
+// describe is what a valid entry or route config sets up, by its config
+// type's Describe.
+func (b *Bridge) describe(p protocol.ValidateParams) []protocol.DescribeLine {
+	ct, ok := b.types[p.Kind+"/"+p.Type]
+	if !ok || ct.Describe == nil {
+		return nil
+	}
+	var out []protocol.DescribeLine
+	for _, e := range ct.Describe(p.Config) {
+		out = append(out, protocol.DescribeLine{Name: e.Name, Detail: e.Detail})
+	}
+	return out
 }
 
 // configure starts the extension unless it has started (retrying a

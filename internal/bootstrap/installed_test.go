@@ -38,7 +38,9 @@ func TestInstalledEntrySettingsAndDescribe(t *testing.T) {
 	if got, want := typ.Describe(entry), []config.Entry{{Name: "C1", Detail: "support"}}; !reflect.DeepEqual(got, want) {
 		t.Fatalf("describe %v, want %v", got, want)
 	}
-	if plain := reg.Extensions["chat-plain"]; plain.Settings != nil || plain.Describe != nil {
+	// A type that declares nothing shows fields by name alone, and no lines
+	// until the package describes a config it validated.
+	if plain := reg.Extensions["chat-plain"]; plain.Settings != nil || plain.Describe != nil && plain.Describe(entry) != nil {
 		t.Fatal("a type that declares nothing shows fields by name alone")
 	}
 }
