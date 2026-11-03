@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -394,12 +395,22 @@ func recurrences(xs []inproc.Extension) map[string]runtime.RecurrenceFunc {
 	return r
 }
 
+// stopInproc stops every extension at once and waits for the slowest, as
+// startup launches the packages at once: each package's process is told to
+// go and given time to exit, so stopping them in turn would add those
+// times together.
 func (d *daemon) stopInproc() {
+	var wg sync.WaitGroup
 	for _, x := range d.inproc {
 		if s, ok := x.(inproc.Stopper); ok {
-			s.Stop()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				s.Stop()
+			}()
 		}
 	}
+	wg.Wait()
 }
 
 // configureInproc hands each extension the current generation's entries of
