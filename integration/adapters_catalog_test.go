@@ -14,7 +14,10 @@ import (
 // come from their manifests.
 func TestAdaptersCatalogueListsBundledTypes(t *testing.T) {
 	releaseLayout(t)
-	catalog := bootstrap.Adapters("")
+	catalog, refused := bootstrap.Adapters("")
+	if len(refused) != 0 {
+		t.Fatalf("the release refuses bundled packages: %v", refused)
+	}
 	find := func(typ string) *cli.Adapter {
 		for i := range catalog {
 			if catalog[i].Type == typ {

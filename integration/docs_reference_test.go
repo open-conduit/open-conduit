@@ -359,7 +359,7 @@ func configReference(t *testing.T) string {
 	}
 
 	b.WriteString("\n## Integration fields\n\nThe `config` objects of connections, extension entries, routes, bindings and binding resources belong to the package that registers each type, which checks them and describes their fields in its manifest. `open-conduit adapters TYPE` prints the same list.\n")
-	catalog := bootstrap.Adapters("")
+	catalog, _ := bootstrap.Adapters("")
 	sort.Slice(catalog, func(i, j int) bool { return catalog[i].Type < catalog[j].Type })
 	for _, a := range catalog {
 		fmt.Fprintf(&b, "\n### %s (`%s`)\n\n%s Registers: %s.\n", a.Title, a.Type, a.Description, strings.Join(a.Kinds, ", "))
@@ -437,7 +437,7 @@ See [configuration](../config/#authorization) for the fields and [toolbelt autho
 	b.WriteString("\n## Bundled extensions\n\nThe extensions built into the daemon register these operations, each with the input it takes; `open-conduit adapters TYPE` lists them too.\n")
 	owner := map[string]string{}
 	declared := bootstrap.OperationDeclarations()
-	catalog := bootstrap.Adapters("")
+	catalog, _ := bootstrap.Adapters("")
 	sort.Slice(catalog, func(i, j int) bool { return catalog[i].Type < catalog[j].Type })
 	// The packages this binary serves (host-run) are built here, so each of
 	// their operations must be documented; a bundled package built

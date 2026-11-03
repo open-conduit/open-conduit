@@ -60,7 +60,12 @@ func (o *operator) adapters(args []string) int {
 		fmt.Fprintln(o.errOut, "open-conduit: no adapter catalog in this binary")
 		return 1
 	}
-	catalog := o.env.Adapters(o.configPath(""))
+	catalog, refused := o.env.Adapters(o.configPath(""))
+	// A refused package is missing from the catalog; say why, so the gap
+	// can be seen.
+	for _, err := range refused {
+		fmt.Fprintf(o.errOut, "open-conduit: a package is not in the catalog: %v\n", err)
+	}
 	sort.Slice(catalog, func(i, j int) bool { return catalog[i].Type < catalog[j].Type })
 	if len(rest) == 1 {
 		for _, a := range catalog {

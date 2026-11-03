@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"path/filepath"
 	"reflect"
@@ -12,6 +13,15 @@ import (
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/examples/notes"
 )
+
+func catalogAt(t *testing.T, configPath string) []cli.Adapter {
+	t.Helper()
+	catalog, errs := Adapters(configPath)
+	if len(errs) != 0 {
+		t.Fatalf("refused packages: %v", errs)
+	}
+	return catalog
+}
 
 func adapter(catalog []cli.Adapter, typ string) (cli.Adapter, bool) {
 	i := slices.IndexFunc(catalog, func(a cli.Adapter) bool { return a.Type == typ })
@@ -39,10 +49,10 @@ func TestAdaptersFromInstalledManifest(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, protocol.ManifestFile), raw, 0o644); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := adapter(Adapters(""), notes.Name); ok {
+	if _, ok := adapter(catalogAt(t, ""), notes.Name); ok {
 		t.Fatal("notes is in the catalogue without being installed")
 	}
-	a, ok := adapter(Adapters(configPath), notes.Name)
+	a, ok := adapter(catalogAt(t, configPath), notes.Name)
 	if !ok {
 		t.Fatal("the installed notes package is not in the catalogue")
 	}
@@ -53,6 +63,7 @@ func TestAdaptersFromInstalledManifest(t *testing.T) {
 	if !slices.Equal(a.Kinds, want) {
 		t.Errorf("kinds %v, want %v", a.Kinds, want)
 	}
+	// watch's default is its setting's, declared once.
 	if len(a.Entry) != 3 || !reflect.DeepEqual(a.Entry[0], cli.Field{Name: "service", Help: "the note service's JSON file", Required: true}) ||
 		a.Entry[1].Default != "true" || !slices.Equal(a.Entry[1].Options, []string{"true", "false"}) {
 		t.Errorf("entry fields %+v", a.Entry)
@@ -61,7 +72,7 @@ func TestAdaptersFromInstalledManifest(t *testing.T) {
 		t.Errorf("operations %v", a.Operations)
 	}
 	// The core's own webhook listener is still described.
-	if _, ok := adapter(Adapters(configPath), "tunnel"); !ok {
+	if _, ok := adapter(catalogAt(t, configPath), "tunnel"); !ok {
 		t.Error("the tunnel entry is gone")
 	}
 }
@@ -94,5 +105,29 @@ func TestManifestAdapters(t *testing.T) {
 	// A package of operations alone has no config type to describe.
 	if got := manifestAdapters(protocol.Manifest{Name: "ops", Provides: protocol.Provides{Operations: []protocol.OperationDecl{{Name: "ops.x"}}}}); len(got) != 0 {
 		t.Errorf("an operations-only package: %+v", got)
+	}
+}
+
+// A package discovery refuses is missing from the catalogue, and Adapters
+// says so, so `open-conduit adapters` can report the gap: here an installed
+// package built for a newer Open Conduit, which also shadows the bundled
+// one of its name.
+func TestAdaptersReportRefusedPackages(t *testing.T) {
+	bundled := withBundled(t)
+	writeManifest(t, bundled, "acme", protocol.Provides{Extensions: []protocol.ExtensionDecl{{Type: "acme"}}})
+	configPath := filepath.Join(t.TempDir(), "config.json")
+	if _, ok := adapter(catalogAt(t, configPath), "acme"); !ok {
+		t.Fatal("the bundled acme is not in the catalogue")
+	}
+	dir := filepath.Join(extensionsRoot(configPath), "acme")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, protocol.ManifestFile), []byte(`{"protocol":[1],"name":"acme","version":"9","command":["./a"],"provides":{},"from_the_future":true}`), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	catalog, errs := Adapters(configPath)
+	if _, ok := adapter(catalog, "acme"); ok || len(errs) != 1 || !errors.Is(errs[0], protocol.ErrNewerManifest) {
+		t.Fatalf("catalogue lists acme %v, refusals %v", ok, errs)
 	}
 }

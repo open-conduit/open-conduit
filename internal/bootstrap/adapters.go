@@ -16,16 +16,17 @@ import (
 // bundled with the binary, as its manifest describes them (title, summary,
 // types, fields, operations and setup), and the core's own webhook
 // listener. It is descriptive only; validation stays with each type's
-// validate. The full-screen config editor builds its forms from it.
-func Adapters(configPath string) []cli.Adapter {
-	found, _ := discoverPackages(configPath, "")
+// validate. The full-screen config editor builds its forms from it. The
+// errors are the packages discovery refused, which are missing from it.
+func Adapters(configPath string) ([]cli.Adapter, []error) {
+	found, errs := discoverPackages(configPath, "")
 	var out []cli.Adapter
 	for _, f := range found {
 		out = append(out, manifestAdapters(f.Manifest)...)
 	}
 	out = append(out, tunnelAdapter())
 	sort.Slice(out, func(i, j int) bool { return out[i].Type < out[j].Type })
-	return out
+	return out, errs
 }
 
 // manifestAdapters are a package's catalog entries: one under its name with
