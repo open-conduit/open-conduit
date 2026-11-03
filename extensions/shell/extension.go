@@ -2,6 +2,7 @@ package shell
 
 import (
 	"context"
+	"errors"
 	"path/filepath"
 
 	"github.com/open-conduit/open-conduit/extension/inproc"
@@ -32,11 +33,15 @@ func (x *Extension) Executors() map[string]inproc.Executor {
 }
 
 func (x *Extension) Start(_ context.Context, h inproc.Host) error {
-	dir := filepath.Join(h.StateDir, "executors", Name)
+	var dir string
 	if h.ExecutorDir != nil {
-		if d := h.ExecutorDir(Name); d != "" {
-			dir = d
-		}
+		dir = h.ExecutorDir(Name)
+	}
+	if dir == "" && h.StateDir != "" {
+		dir = filepath.Join(h.StateDir, "executors", Name)
+	}
+	if dir == "" {
+		return errors.New("shell: the host named no state directory")
 	}
 	return x.exec.Open(Options{StateDir: dir, Artifacts: h.Artifacts, ToolbeltDir: h.ToolbeltDir, Now: h.Now})
 }
