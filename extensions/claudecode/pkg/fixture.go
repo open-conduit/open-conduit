@@ -20,8 +20,9 @@ func Certification() protocol.CertificationFile {
 // fakeClaude is a Claude Code CLI as the executor drives it: stream-json
 // in and out. It echoes FAKE_MESSAGES user messages back as replays (1 by
 // default; the inject case's second is the injected Event, so the replay
-// is its consumption proof), writes the session transcript where claude
-// keeps it, and ends with a structured status of review.
+// is its consumption proof), waits for the FAKE_BARRIER file when one is
+// named, writes the session transcript where claude keeps it, and ends with
+// a structured status of review.
 const fakeClaude = `#!/bin/sh
 [ "$1" = --version ] && { echo "9.9.9 (Claude Code)"; exit 0; }
 session=""
@@ -42,6 +43,9 @@ while IFS= read -r line; do
   printf '{"type":"user","isReplay":true,"message":{"role":"user","content":"%s"}}\n' "$content"
   [ "$n" -ge "$want" ] && break
 done
+if [ -n "$FAKE_BARRIER" ]; then
+  while [ ! -e "$FAKE_BARRIER" ]; do sleep 0.02; done
+fi
 echo '{"type":"user","timestamp":"2026-11-03T10:00:00Z"}' >> "$t/$session.jsonl"
 printf '{"type":"result","subtype":"success","is_error":false,"result":"certified","session_id":"%s","num_turns":1,"total_cost_usd":0,"structured_output":{"state":"review","summary":"certified","handoff":"none"}}\n' "$session"
 `
@@ -49,7 +53,10 @@ printf '{"type":"result","subtype":"success","is_error":false,"result":"certifie
 // Fixture is the certification fixture for the fake at binary, with
 // Claude's config directory under {tmp}: one turn for the executor case,
 // and for the inject case a turn that waits for the injected Event as its
-// second message. Both run without the toolbelt.
+// second message and then for the runner's finish file, so the attempt is
+// still running when the runner delivers that Event again (a retried
+// dispatch must be accepted, not refused as not_accepting). Both run
+// without the toolbelt.
 func Fixture(binary string) protocol.Fixture {
 	env := func(extra map[string]string) map[string]string {
 		out := map[string]string{"CLAUDE_CONFIG_DIR": "{tmp}/claude-config"}
@@ -59,7 +66,7 @@ func Fixture(binary string) protocol.Fixture {
 		return out
 	}
 	run, _ := json.Marshal(map[string]any{"binary": binary, "env": env(nil)})
-	inject, _ := json.Marshal(map[string]any{"binary": binary, "env": env(map[string]string{"FAKE_MESSAGES": "2"})})
+	inject, _ := json.Marshal(map[string]any{"binary": binary, "env": env(map[string]string{"FAKE_MESSAGES": "2", "FAKE_BARRIER": "{tmp}/inject-go"})})
 	return protocol.Fixture{
 		Executor:      &protocol.ExecutorCase{Executor: Name, Config: protocol.Payload{Data: run}},
 		Inject:        &protocol.InjectCase{Executor: Name, Config: protocol.Payload{Data: inject}, FinishFile: "{tmp}/inject-go"},
