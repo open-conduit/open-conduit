@@ -337,13 +337,15 @@ type Segment struct {
 	// binding declared one. A recovered segment carries the pin of the
 	// container it adopted.
 	Container *extension.ContainerPin `json:",omitempty"`
-	// Invoked says the segment's launch handed the attempt to its
-	// executor: recorded, fenced by the lease, before the executor is
-	// called, so a launch without it started nothing. Isolated says it
-	// bound a sandbox or a container first, so no process of it can run
-	// until one is pinned (Sandbox, Container).
-	Invoked  bool `json:",omitempty"`
-	Isolated bool `json:",omitempty"`
+	// Invoke is how far the segment's launch got towards its executor:
+	// InvokePending from the claim that began the segment, InvokeCalled
+	// from the fenced write just before the executor is called. A segment
+	// without it (one written before it was recorded) proves nothing, so
+	// recovery adopts it. Isolated says the launch bound a sandbox or a
+	// container first, so no process of it can run until one is pinned
+	// (Sandbox, Container).
+	Invoke   string `json:",omitempty"`
+	Isolated bool   `json:",omitempty"`
 	// Relaunched says a new owner recovered the attempt while its launch
 	// had started nothing, and launched it afresh (Recovered is set too).
 	Relaunched bool `json:",omitempty"`
@@ -351,6 +353,12 @@ type Segment struct {
 	// phase is recorded as it begins and again as it ends.
 	Launch []LaunchPhase `json:",omitempty"`
 }
+
+// A segment's Invoke: its launch hasn't called its executor yet, or has.
+const (
+	InvokePending = "pending"
+	InvokeCalled  = "called"
+)
 
 // MaxLaunchPhases bounds the phases a segment's launch records.
 const MaxLaunchPhases = 32
@@ -1245,7 +1253,7 @@ func (s *Scheduler) Claim(ctx context.Context, id domain.ID) (attempt Attempt, e
 		// A parked attempt from before segments were recorded stays without
 		// them: one resume-to-finish segment would understate its active time.
 		if parked == "" || len(state.Segments) > 0 {
-			state.beginSegment(Segment{StartedAt: s.now(), WakeEventID: wake.EventID})
+			state.beginSegment(Segment{StartedAt: s.now(), WakeEventID: wake.EventID, Invoke: InvokePending})
 		}
 		if input.Sequence > state.ObservedSequence {
 			state.ObservedSequence = input.Sequence
@@ -1438,7 +1446,7 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 			if n == 0 || current.Segments[n-1].EndedAt != nil {
 				return nil
 			}
-			current.Segments[n-1].Invoked, current.Segments[n-1].Isolated = true, isolated
+			current.Segments[n-1].Invoke, current.Segments[n-1].Isolated = InvokeCalled, isolated
 			return putAttemptState(tx, current)
 		}); err != nil {
 			return attempt, err
@@ -1524,11 +1532,13 @@ func (s *Scheduler) ClaimRecovery(ctx context.Context, id domain.ID) (Attempt, e
 
 // relaunchable reports whether a lost attempt's launch had started
 // nothing: still launching (or resuming), nothing pinned with its open
-// segment, and either never handed to its executor (Invoked) or bound to a
-// sandbox or container first (Isolated), which holds every process until
-// it is pinned. An executor called without isolation may have started a
-// process before recording any metadata, so that launch is adopted (and
-// fails closed when it can't be), never relaunched.
+// segment, and either known never to have been handed to its executor
+// (InvokePending) or bound to a sandbox or container first (Isolated),
+// which holds every process until it is pinned. An executor called without
+// isolation may have started a process before recording any metadata, so
+// that launch is adopted (and fails closed when it can't be), never
+// relaunched; so is a segment that doesn't say (no Invoke), such as one an
+// earlier release began.
 func relaunchable(state AttemptState) bool {
 	n := len(state.Segments)
 	if n == 0 {
@@ -1541,7 +1551,7 @@ func relaunchable(state AttemptState) bool {
 	if state.LaunchState != "launching" && state.LaunchState != "resuming" {
 		return false
 	}
-	return !g.Invoked || g.Isolated
+	return g.Invoke == InvokePending || g.Invoke == InvokeCalled && g.Isolated
 }
 
 func (s *Scheduler) claimRecovery(ctx context.Context, id domain.ID, mayRelaunch bool) (attempt Attempt, err error) {
@@ -1580,7 +1590,7 @@ func (s *Scheduler) claimRecovery(ctx context.Context, id domain.ID, mayRelaunch
 			pin, container := current.Segments[n-1].Sandbox, current.Segments[n-1].Container
 			current.endSegment(now, false)
 			if relaunch {
-				current.beginSegment(Segment{StartedAt: now, Recovered: true, Relaunched: true})
+				current.beginSegment(Segment{StartedAt: now, Recovered: true, Relaunched: true, Invoke: InvokePending})
 			} else {
 				current.beginSegment(Segment{StartedAt: now, Recovered: true, Sandbox: pin, Container: container})
 			}

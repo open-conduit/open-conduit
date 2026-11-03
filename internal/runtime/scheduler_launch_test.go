@@ -205,9 +205,12 @@ func TestProductionSchedulerHeldLaunchOutlastsItsLease(t *testing.T) {
 // lease was lost before the executor was called relaunches.
 func TestProductionSchedulerRelaunchesALaunchThatPinnedNothing(t *testing.T) {
 	cases := []struct {
-		name               string
-		contained, pinned  bool
-		startFirst         bool
+		name              string
+		contained, pinned bool
+		startFirst        bool
+		// legacy strips the open segment's Invoke after the lost launch,
+		// as a segment an earlier release began would have none.
+		legacy             bool
 		relaunch           bool
 		runs, recoveries   int
 		beforeExecutorCall bool
@@ -215,6 +218,8 @@ func TestProductionSchedulerRelaunchesALaunchThatPinnedNothing(t *testing.T) {
 		{name: "container, nothing pinned", contained: true, relaunch: true, runs: 2},
 		{name: "container pinned", contained: true, pinned: true, runs: 1, recoveries: 1},
 		{name: "no container, metadata recorded", pinned: true, runs: 1, recoveries: 1},
+		{name: "segment from an earlier release, metadata recorded", pinned: true, legacy: true, runs: 1, recoveries: 1},
+		{name: "segment from an earlier release, nothing pinned", contained: true, legacy: true, runs: 1, recoveries: 1},
 		{name: "no container, process started before its metadata", startFirst: true, runs: 1, recoveries: 1},
 		{name: "no container, before the executor", beforeExecutorCall: true, relaunch: true, runs: 1},
 	}
@@ -241,6 +246,13 @@ func TestProductionSchedulerRelaunchesALaunchThatPinnedNothing(t *testing.T) {
 			}
 			_, err = first.Launch(context.Background(), a)
 			r.slow, r.lapse = nil, nil
+			if tc.legacy {
+				if err := r.f.Store.Transact(context.Background(), storage.Guard{Now: r.f.Clock.Now()}, func(tx storage.Tx) error {
+					return runtime.ForgetInvoke(tx, a.Lease.ExecutionID)
+				}); err != nil {
+					t.Fatal(err)
+				}
+			}
 			if err == nil {
 				t.Fatal("a launch that lost its lease succeeded")
 			}
