@@ -466,8 +466,10 @@ func (x *Extension) writerItems(ctx context.Context, e ViewEntry, entry *Client)
 // permissionItems warns about each binding in the entry's scope granted an
 // operation (opPermissions) whose GitHub App installation on the code
 // repository lacks a permission it needs, so GitHub would refuse every
-// call: github.pr.resolve without Contents write, say. A binding writes as
-// its own GitHub connection, else as the entry's. A token connection, whose
+// call: github.pr.resolve without Contents write, say. Each operation is
+// checked against the connection it writes as: a reply, review or resolve
+// as the binding's own GitHub connection when it names one, opening or
+// editing a PR always as the entry's (bindingWriterOps). A token connection, whose
 // permissions GitHub doesn't report, and an installation that can't be read
 // (the connection items say why) add nothing.
 func (x *Extension) permissionItems(ctx context.Context, cfg protocol.CheckConfig, e ViewEntry, entry *Client) []writerItem {
@@ -489,47 +491,52 @@ func (x *Extension) permissionItems(ctx context.Context, cfg protocol.CheckConfi
 			continue
 		}
 		for _, b := range scope.Bindings {
-			needs := grantedNeeds(b.Operations)
-			if len(needs) == 0 {
-				continue
+			own := b.Connection
+			if own == e.Connection || !github[own] {
+				own = ""
 			}
-			conn := b.Connection
-			if conn == "" || !github[conn] {
-				conn = e.Connection
+			byConn := grantedNeeds(b.Operations, own, e.Connection)
+			conns := make([]string, 0, len(byConn))
+			for conn := range byConn {
+				conns = append(conns, conn)
 			}
-			client := entry
-			if conn != e.Connection {
-				c, err := x.clients.Client(e.Scope, conn, entry)
-				if err != nil {
+			sort.Strings(conns)
+			for _, conn := range conns {
+				needs := byConn[conn]
+				client := entry
+				if conn != e.Connection {
+					c, err := x.clients.Client(e.Scope, conn, entry)
+					if err != nil {
+						continue
+					}
+					client = c
+				}
+				h, ok := read[conn]
+				if !ok {
+					cx, cancel := context.WithTimeout(ctx, 20*time.Second)
+					perms, known, err := client.WriterPermissions(cx, s.Repo)
+					cancel()
+					h = held{perms, known && err == nil}
+					read[conn] = h
+				}
+				if !h.known {
 					continue
 				}
-				client = c
-			}
-			h, ok := read[conn]
-			if !ok {
-				cx, cancel := context.WithTimeout(ctx, 20*time.Second)
-				perms, known, err := client.WriterPermissions(cx, s.Repo)
-				cancel()
-				h = held{perms, known && err == nil}
-				read[conn] = h
-			}
-			if !h.known {
-				continue
-			}
-			perms := make([]Permission, 0, len(needs))
-			for p := range needs {
-				perms = append(perms, p)
-			}
-			sort.Slice(perms, func(i, j int) bool { return perms[i].String() < perms[j].String() })
-			for _, p := range perms {
-				if covers(h.perms[p.Name], p.Level) {
-					continue
+				perms := make([]Permission, 0, len(needs))
+				for p := range needs {
+					perms = append(perms, p)
 				}
-				has := h.perms[p.Name]
-				if has == "" {
-					has = "none"
+				sort.Slice(perms, func(i, j int) bool { return perms[i].String() < perms[j].String() })
+				for _, p := range perms {
+					if covers(h.perms[p.Name], p.Level) {
+						continue
+					}
+					has := h.perms[p.Name]
+					if has == "" {
+						has = "none"
+					}
+					out = append(out, writerItem{inproc.CheckWarn, "permission_missing", fmt.Sprintf("%s: binding %s is granted %s, but %s has %s %s on %s, not %s, so GitHub refuses it; grant %s in the App's settings, or take the operation off the binding", s.Namespace, b.Name, strings.Join(needs[p], ", "), client.Writer(), permissionLabel(p.Name), has, s.Repo, p.Level, p)})
 				}
-				out = append(out, writerItem{inproc.CheckWarn, "permission_missing", fmt.Sprintf("%s: binding %s is granted %s, but %s has %s %s on %s, not %s, so GitHub refuses it; grant %s in the App's settings, or take the operation off the binding", s.Namespace, b.Name, strings.Join(needs[p], ", "), client.Writer(), permissionLabel(p.Name), has, s.Repo, p.Level, p)})
 			}
 		}
 	}

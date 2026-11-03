@@ -96,6 +96,12 @@ var opPermissions = map[string][]Permission{
 	OpPRResolve: {{"pull_requests", "write"}, {"contents", "write"}},
 }
 
+// bindingWriterOps are the operations opPermissions lists that go out as
+// the binding's own GitHub connection when it names one (bindingClient):
+// a reply, a review, a resolve. The rest (opening and editing a PR) always
+// go out as the entry's connection.
+var bindingWriterOps = map[string]bool{OpPRReply: true, OpPRReview: true, OpPRResolve: true}
+
 // lacking is what of need a connection holding have doesn't.
 func lacking(have map[string]string, need []Permission) []Permission {
 	var out []Permission
@@ -176,18 +182,29 @@ func forbidden(ctx context.Context, c *Client, repo, op, doing string, err error
 	return refuse("github_forbidden", "this connection can't %s on %s%s", doing, repo, said)
 }
 
-// grantedNeeds are the permissions the operations granted need, sorted,
-// with the operations that need each.
-func grantedNeeds(ops []string) map[Permission][]string {
-	out := map[Permission][]string{}
+// grantedNeeds are the permissions the operations granted need, by the
+// connection each operation writes as (own, the binding's own connection,
+// for bindingWriterOps when own isn't ""; entry otherwise), with the
+// operations that need each, sorted.
+func grantedNeeds(ops []string, own, entry string) map[string]map[Permission][]string {
+	out := map[string]map[Permission][]string{}
 	for _, op := range ops {
+		conn := entry
+		if own != "" && bindingWriterOps[op] {
+			conn = own
+		}
 		for _, p := range opPermissions[op] {
-			out[p] = append(out[p], op)
+			if out[conn] == nil {
+				out[conn] = map[Permission][]string{}
+			}
+			out[conn][p] = append(out[conn][p], op)
 		}
 	}
-	for p := range out {
-		sort.Strings(out[p])
-		out[p] = slices.Compact(out[p])
+	for _, needs := range out {
+		for p := range needs {
+			sort.Strings(needs[p])
+			needs[p] = slices.Compact(needs[p])
+		}
 	}
 	return out
 }

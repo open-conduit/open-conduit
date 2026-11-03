@@ -299,4 +299,17 @@ func TestExtensionDoctorBindingPermissions(t *testing.T) {
 	if c := deep(context.Background(), cfg); c.Code == "permission_missing" || strings.Contains(strings.Join(c.Items, "\n"), "is granted") {
 		t.Fatalf("with Contents write: %+v", c)
 	}
+
+	// Opening and editing a PR go out as the entry's connection, even for a
+	// binding with its own: the reviewer App's permissions don't bear on
+	// them. With Pull requests read only, the binding's review is flagged
+	// and its edit isn't.
+	cfg.Scopes[0].Bindings = []protocol.CheckBinding{{Name: "review", Executor: "claude-code", Connection: "reviewer", Operations: []string{gh.OpPREdit, gh.OpPRCreate, gh.OpPRReview}}}
+	fake.SetInstallationPermissions(map[string]string{"pull_requests": "read", "contents": "write", "metadata": "read"})
+	c = deep(context.Background(), cfg)
+	items = strings.Join(c.Items, "\n")
+	if c.Code != "permission_missing" || !strings.Contains(items, "binding review is granted github.pr.review, but bot App 7 has Pull requests read") ||
+		strings.Contains(items, gh.OpPREdit) || strings.Contains(items, gh.OpPRCreate) {
+		t.Fatalf("edit and create judged against the binding's App: %+v", c)
+	}
 }
