@@ -188,7 +188,6 @@ packages: build
 		$$dir/$$name-extension package-certification > $$dir/certification.json; \
 		echo "packaged $$dir"; \
 	done
-	$(GO) build -trimpath -ldflags '$(LDFLAGS)' -o $(PACKAGES_DIR)/shell/os ./cmd/os
 	@# setup lives in github.com/open-conduit/extension-setup (go.mod tool)
 	@# and is laid out as the release archive bundles it.
 	GO='$(GO)' LDFLAGS='$(LDFLAGS)' scripts/bundle-packages.sh $(PACKAGES_DIR)/.bundled
@@ -259,10 +258,11 @@ release-snapshot:
 		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  introspection .*(bundled with open-conduit)'; \
 		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  slack .*(bundled with open-conduit)'; \
 		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  github .*(bundled with open-conduit)'; \
+		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  shell .*(bundled with open-conduit)'; \
 		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  codex .*(bundled with open-conduit)'; \
 		cask=$(RELEASE_DIR)/homebrew/Casks/open-conduit.rb; \
 		grep -q '^  binary "open-conduit"$$' $$cask; \
 		test $$(grep -c '^  binary ' $$cask) -eq 1; \
 		! grep -qi 'license' $$cask; \
-		echo "snapshot $$version: 4 archives, checksums verified, setup, codex, posthog, human, observe, linear, jira, bitbucket, schedule, introspection, slack and github bundled, cask links open-conduit only"
+		echo "snapshot $$version: 4 archives, checksums verified, setup, codex, posthog, human, observe, linear, jira, bitbucket, schedule, introspection, slack, github and shell bundled, cask links open-conduit only"
 	$(MAKE) --no-print-directory smoke-run SMOKE_BIN=$(RELEASE_DIR)/smoke

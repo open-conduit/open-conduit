@@ -163,7 +163,7 @@ func TestCheckConfig(t *testing.T) {
 			"other": {ID: "other", Enabled: true, Bindings: []config.Binding{{Name: "b", Executor: "shell", Operations: []string{"read_context"}}}},
 			"off":   {ID: "off", Extensions: []config.Extension{{Name: "e", Type: "acme"}}},
 		}}
-	cfg := checkConfig(s, x, offlineExecutors(), "/cfg")
+	cfg := checkConfig(s, x, withShell(), "/cfg")
 	var ids []string
 	for _, sc := range cfg.Scopes {
 		ids = append(ids, sc.ID)

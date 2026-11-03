@@ -18,7 +18,6 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/extensions/claudecode"
-	"github.com/open-conduit/open-conduit/extensions/shell"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -37,7 +36,7 @@ import (
 // firstParty is the list of first-party in-process extensions. Adding one
 // touches its own package and this list.
 func firstParty() []inproc.Extension {
-	return []inproc.Extension{shell.NewExtension(), claudecode.NewExtension()}
+	return []inproc.Extension{claudecode.NewExtension()}
 }
 
 // typeSets are an extension's own entry and connection types: what its

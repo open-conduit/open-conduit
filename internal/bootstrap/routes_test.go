@@ -131,7 +131,7 @@ func samplesConfig() []byte {
 // joins the check.
 func TestEveryBuiltInSampleTraces(t *testing.T) {
 	ctx := context.Background()
-	snap, err := config.Validate(samplesConfig(), registry(offlineExecutors()))
+	snap, err := config.Validate(samplesConfig(), registry(withShell()))
 	if err != nil {
 		t.Fatal(err)
 	}
