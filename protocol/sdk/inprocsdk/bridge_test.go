@@ -464,7 +464,7 @@ func TestLatestSequenceIsCarried(t *testing.T) {
 }
 
 // operated is an extension whose executor offers an operator's live view
-// and container attach.
+// and container attach, and names a binding's resource mode and playbook.
 type operated struct{ live liveExecutor }
 
 func (*operated) Name() string { return "operated" }
@@ -487,6 +487,8 @@ func (*liveExecutor) Run(context.Context, extension.RunRequest) (extension.RunHa
 func (*liveExecutor) Recover(context.Context, extension.RunRequest, domain.Payload) (extension.RunHandle, error) {
 	return nil, extension.ErrNotAdoptable
 }
+func (*liveExecutor) ResourceMode(json.RawMessage) string { return "work" }
+func (*liveExecutor) Playbook(json.RawMessage) string     { return "operate" }
 func (e *liveExecutor) Live(_ context.Context, execution domain.ID, tail int64) ([]extension.LiveOutput, error) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -512,8 +514,8 @@ func TestLiveAndContainerAttachAreCarried(t *testing.T) {
 		t.Fatal(err)
 	}
 	decl := b.Extension().Manifest.Provides.Executors
-	if len(decl) != 1 || !decl[0].Controls.Live || !decl[0].Controls.ContainerAttach {
-		t.Fatalf("executors %+v, want live and container_attach controls", decl)
+	if len(decl) != 1 || !decl[0].Controls.Live || !decl[0].Controls.ContainerAttach || !decl[0].ResourceMode || !decl[0].Playbook {
+		t.Fatalf("executors %+v, want live and container_attach controls, resource_mode and playbook", decl)
 	}
 	h := sdktest.New(t, b.Extension())
 	ctx := context.Background()
