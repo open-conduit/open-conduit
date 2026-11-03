@@ -13,12 +13,14 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"syscall"
 	"time"
 
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
 )
@@ -67,6 +69,11 @@ type Options struct {
 	// Environ is the baseline the sanitized environment is drawn from
 	// (default os.Environ). Only safe process variables survive (B05).
 	Environ []string
+	// PassEnv names the variables of Environ the operator granted this
+	// package (config settings.extensions.<name>.pass_env), added to the
+	// sanitized baseline. It is asked at each launch, so a restart after a
+	// crash starts with the grant then current; nil grants none.
+	PassEnv func() []string
 	Service *Service
 	// Configure returns the current generation's configure params; nil
 	// sends an empty generation.
@@ -101,6 +108,7 @@ type Process struct {
 	fatal   error
 	closed  bool
 	config  protocol.ConfigureResult
+	passed  []string
 	intx    atomic.Int32
 	restart int
 	stop    chan struct{}
@@ -176,6 +184,14 @@ func (p *Process) Configured() protocol.ConfigureResult {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	return p.config
+}
+
+// PassedEnv names the granted variables (Options.PassEnv) the running
+// process was started with, those Environ had set: names only, never values.
+func (p *Process) PassedEnv() []string {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return slices.Clone(p.passed)
 }
 
 // Restarts counts restarts after crashes.
@@ -261,9 +277,45 @@ func (p *Process) stderr() io.Writer {
 	return &boundedLog{f: f, max: p.o.MaxLogBytes, size: size}
 }
 
-// Environment is the sanitized environment an extension process gets from
-// environ (the B05 baseline only).
-func Environment(environ []string) []string { return sanitized(environ) }
+// granted adds to env the variables of environ that names grant, those
+// set, never a reserved one (domain.ReservedEnv; config refuses them
+// already, so this fails closed). It returns the granted names the process
+// gets, including any the baseline already carries.
+func granted(env, environ, names []string) ([]string, []string) {
+	have := map[string]bool{}
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		have[name] = true
+	}
+	want := map[string]bool{}
+	var passed []string
+	for _, name := range names {
+		switch {
+		case name == "" || domain.ReservedEnv(name) || want[name]:
+		case have[name]:
+			passed = append(passed, name)
+		default:
+			want[name] = true
+		}
+	}
+	for _, kv := range environ {
+		name, _, ok := strings.Cut(kv, "=")
+		if ok && want[name] {
+			env = append(env, kv)
+			passed = append(passed, name)
+			delete(want, name)
+		}
+	}
+	slices.Sort(passed)
+	return env, slices.Compact(passed)
+}
+
+// Environment is the environment an extension process gets from environ:
+// the sanitized B05 baseline plus the variables passEnv grants it.
+func Environment(environ, passEnv []string) []string {
+	env, _ := granted(sanitized(environ), environ, passEnv)
+	return env
+}
 
 // HostExecutable is the host's own executable, which runs a package whose
 // command is protocol.HostRunCommand (`open-conduit extension-run <name>`).
@@ -310,7 +362,12 @@ func (p *Process) launch(ctx context.Context) (chan struct{}, error) {
 	}
 	cmd := exec.Command(argv[0], argv[1:]...)
 	cmd.Dir = p.o.Found.Dir
-	cmd.Env = sanitized(p.o.Environ)
+	var grant []string
+	if p.o.PassEnv != nil {
+		grant = p.o.PassEnv()
+	}
+	env, passed := granted(sanitized(p.o.Environ), p.o.Environ, grant)
+	cmd.Env = env
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	logw := p.stderr()
 	cmd.Stderr = logw
@@ -361,7 +418,7 @@ func (p *Process) launch(ctx context.Context) (chan struct{}, error) {
 		return nil, err
 	}
 	p.mu.Lock()
-	p.conn, p.cmd = conn, cmd
+	p.conn, p.cmd, p.passed = conn, cmd, passed
 	p.gen++
 	p.notify()
 	p.mu.Unlock()

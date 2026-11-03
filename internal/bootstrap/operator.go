@@ -59,8 +59,9 @@ func validateWith(configPath, exclude string, data []byte) ([]config.Diagnostic,
 	return diags, err
 }
 
-// CheckConfigAt is ValidateConfigAt plus config.ModeWarnings and the
-// executors' config.BindingWarnings and config.GrantWarnings from the same validation, so a config
+// CheckConfigAt is ValidateConfigAt plus config.ModeWarnings, the
+// executors' config.BindingWarnings, config.GrantWarnings and
+// config.PackageWarnings from the same validation, so a config
 // check starts each installed package once. A config that doesn't validate
 // has no such warnings (its diagnostics say what is wrong).
 func CheckConfigAt(configPath string, data []byte) ([]config.Diagnostic, []string, error) {
@@ -69,11 +70,12 @@ func CheckConfigAt(configPath string, data []byte) ([]config.Diagnostic, []strin
 
 func checkWith(configPath, exclude string, data []byte) ([]config.Diagnostic, []string, error) {
 	reg := registry(offlineExecutors())
-	pkgs := offlineExternal(&reg, configPath, exclude)
+	pkgs := offlineExternal(&reg, configPath, exclude, data)
 	defer pkgs.close()
 	s, err := config.ValidateFile(data, reg, fileIncludes(configPath))
 	if err == nil {
-		return nil, append(append(config.ModeWarnings(s, reg), config.BindingWarnings(s, reg)...), config.GrantWarnings(s, reg)...), nil
+		warnings := append(append(config.ModeWarnings(s, reg), config.BindingWarnings(s, reg)...), config.GrantWarnings(s, reg)...)
+		return nil, append(warnings, config.PackageWarnings(s, reg)...), nil
 	}
 	var invalid *config.ValidationError
 	if errors.As(err, &invalid) {
@@ -370,7 +372,7 @@ func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtim
 	skipped := runtime.Check{Name: "skipped", Status: runtime.CheckInfo, Code: "daemon_not_running", Detail: "need a running daemon: " + strings.Join(daemonChecks, ", ")}
 	executors := offlineExecutors()
 	reg := registry(executors)
-	pkgs := offlineExternal(&reg, configPath, "")
+	pkgs := offlineExternal(&reg, configPath, "", data)
 	snapshot, err := config.ValidateFile(data, reg, fileIncludes(configPath))
 	defer pkgs.close()
 	var invalid *config.ValidationError

@@ -95,6 +95,24 @@ type Settings struct {
 	// Budgets are the usage limits the host enforces at admission
 	// (settings.budgets); none means no limit.
 	Budgets []Budget
+	// Extensions are the operator's grants to installed or bundled
+	// extension packages by package name (settings.extensions).
+	Extensions map[string]PackageSettings
+}
+
+// PackageSettings are one package's grants (settings.extensions.<name>).
+type PackageSettings struct {
+	// PassEnv names daemon variables the host adds to the package's own
+	// process environment, on top of the sanitized baseline, when it starts
+	// the package: an ssh agent a container provider reaches remotes with.
+	// They reach that package alone, and a running package sees a change
+	// only at its next start.
+	PassEnv []string
+}
+
+// PackagePassEnv is the pass_env the settings grant the named package.
+func (s Settings) PackagePassEnv(name string) []string {
+	return slices.Clone(s.Extensions[name].PassEnv)
 }
 
 // Budget is one usage limit: at most Max of Unit per Work, per scope or
@@ -339,7 +357,7 @@ func (c *checker) document(n *node) *Document {
 	return doc
 }
 func (c *checker) settings(n *node) Settings {
-	s := Settings{4, 10, 900, 3600, 20, []int{300, 600}, 32, 128, 4, DefaultKeptFinishedDays, Webhooks{}, nil}
+	s := Settings{4, 10, 900, 3600, 20, []int{300, 600}, 32, 128, 4, DefaultKeptFinishedDays, Webhooks{}, nil, nil}
 	fields := []struct {
 		key string
 		dst *int
@@ -347,7 +365,7 @@ func (c *checker) settings(n *node) Settings {
 		{"timeout_seconds", &s.TimeoutSeconds}, {"kept_executions", &s.KeptExecutions},
 		{"causal_max_depth", &s.CausalMaxDepth}, {"causal_per_minute", &s.CausalPerMinute},
 		{"job_concurrency", &s.JobConcurrency}, {"kept_finished_days", &s.KeptFinishedDays}}
-	names := []string{"retry_delays_seconds", "webhooks", "budgets"}
+	names := []string{"retry_delays_seconds", "webhooks", "budgets", "extensions"}
 	for _, f := range fields {
 		names = append(names, f.key)
 	}
@@ -372,7 +390,36 @@ func (c *checker) settings(n *node) Settings {
 	}
 	s.Webhooks = c.webhooks(n.field("webhooks"))
 	s.Budgets = c.budgets(n.field("budgets"))
+	s.Extensions = c.packages(n.field("extensions"))
 	return s
+}
+
+// packages checks settings.extensions offline: an object keyed by package
+// name, each with an optional pass_env. Whether the package is installed is
+// a warning (PackageWarnings), so a config survives removing one; which
+// names pass_env may hold is checked with the document (validator.passEnv).
+func (c *checker) packages(n *node) map[string]PackageSettings {
+	const path = "settings/extensions"
+	if n == nil || !c.typed(n, path, kObject, "object") {
+		return nil
+	}
+	out := map[string]PackageSettings{}
+	for _, name := range n.keys {
+		p := ptr(path, name)
+		if !idPattern.MatchString(name) {
+			c.fail(p, "invalid_value", "a package name is lower case letters, digits, - and _, starting with a letter")
+		}
+		item := n.obj[name]
+		if !c.object(item, p, nil, "pass_env") {
+			continue
+		}
+		var ps PackageSettings
+		if pe := item.field("pass_env"); pe != nil {
+			ps.PassEnv = c.list(pe, p+"/pass_env", envPattern)
+		}
+		out[name] = ps
+	}
+	return out
 }
 
 // budgets checks settings.budgets offline; that a named scope exists is
@@ -842,6 +889,19 @@ func (d *Document) normalized(redact bool) any {
 			}
 		}
 		settings["webhooks"] = hooks
+	}
+	// Only configured package grants join the hash, so configurations
+	// without them keep their generation hash.
+	if len(s.Extensions) > 0 {
+		pkgs := map[string]any{}
+		for name, ps := range s.Extensions {
+			m := map[string]any{}
+			if len(ps.PassEnv) > 0 {
+				m["pass_env"] = ps.PassEnv
+			}
+			pkgs[name] = m
+		}
+		settings["extensions"] = pkgs
 	}
 	return map[string]any{
 		"version":     d.Version,

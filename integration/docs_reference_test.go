@@ -338,6 +338,9 @@ func configReference(t *testing.T) string {
 	section("settings", "", s.defs("settings"))
 	fmt.Fprintf(&b, "\n### settings.webhooks\n\n%s\n", s.defs("settings").props()["webhooks"]["description"])
 	fieldTable(&b, s.defs("settings").props()["webhooks"], anchors)
+	packages := s.defs("settings").props()["extensions"]
+	fmt.Fprintf(&b, "\n### settings.extensions\n\n%s\n\nThe grant to each package, under its name.\n", packages["description"])
+	fieldTable(&b, schemaNode(packages).child("additionalProperties"), anchors)
 	section("connections", "Each entry of `connections`.", s.defs("connection"))
 	section("scopes", "Each entry of `scopes`.", s.defs("scope"))
 	fmt.Fprintf(&b, "\n### limits\n")

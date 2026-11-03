@@ -26,6 +26,7 @@ The config file is JSON, by default at `~/.config/open-conduit/config.json`. `op
 | `causal_max_depth` | integer |  | `32` | How many Events one chain of causes may reach (an Event caused by an execution that an Event started, and so on). The Event past it is refused with a depth_limit diagnostic, which stops feedback loops without the extension's cooperation. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `causal_per_minute` | integer |  | `128` | How many Events one causal chain may add per minute; a burst past it is refused. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `concurrency` | integer |  | `4` | Most agent turns (claude-code and installed extension executors) running at once across every scope. A scope's limits.concurrency can only narrow it. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
+| `extensions` | object |  |  | Grants to installed or bundled extension packages, by package name. A name no package has is a warning, not an error. Takes effect at a package's next start after the generation holding it is applied with open-conduit config apply: a serve restart, or the package's restart after a crash; a running package keeps the environment it started with. |
 | `job_concurrency` | integer |  | `4` | Most job attempts (the shell and github-hold executors) running at once, counted apart from concurrency so a busy agent pool never holds a due job back. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `kept_executions` | integer |  | `20` | Executions per Work whose content (logs, transcripts, outputs) is kept; older ones are released by the retention sweep. Their coordination history (trigger, timing, outcome, usage) is never deleted. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
 | `kept_finished_days` | integer |  | `14` | Days a finished Work keeps its attempts' content (logs, transcripts, outputs) after it last changed; the retention sweep then releases all of it. Coordination history is never deleted. Takes effect when the next config generation is applied with open-conduit config apply; editing the file or restarting serve alone changes nothing. |
@@ -46,6 +47,16 @@ The webhook listener and tunnel serve starts with; serve flags override it for o
 | `tunnel_domain` | string |  |  | The ngrok domain to use. |
 | `tunnel_hostname` | string |  |  | The cloudflared tunnel's public hostname. |
 | `tunnel_name` | string |  |  | The cloudflared named tunnel to run. |
+
+### settings.extensions
+
+Grants to installed or bundled extension packages, by package name. A name no package has is a warning, not an error. Takes effect at a package's next start after the generation holding it is applied with open-conduit config apply: a serve restart, or the package's restart after a crash; a running package keeps the environment it started with.
+
+The grant to each package, under its name.
+
+| Field | Type | Required | Default | Meaning |
+| --- | --- | --- | --- | --- |
+| `pass_env` | array of string |  |  | Variables of the daemon's environment added to this package's own process environment (SSH_AUTH_SOCK, DOCKER_HOST). They reach no other package. Never OS_* or OPEN_CONDUIT_*, nor one an env: secret reference names. |
 
 ## connections
 
