@@ -98,6 +98,9 @@ func (x *executor) ResourceMode(raw json.RawMessage) string {
 	return codex.ResourceMode(raw)
 }
 func (x *executor) Playbook(raw json.RawMessage) string { return codex.Playbook(raw) }
+func (x *executor) ConfigWarnings(raw json.RawMessage) []string {
+	return codex.ConfigWarnings(raw)
+}
 func (x *executor) Run(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 	e, err := x.get()
 	if err != nil {
@@ -175,4 +178,5 @@ var _ interface {
 	extension.StopExecutor
 	extension.ForgetExecutor
 	extension.ResourceModer
+	extension.ConfigWarner
 } = (*executor)(nil)

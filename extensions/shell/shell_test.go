@@ -228,6 +228,9 @@ func TestEnvironmentLayers(t *testing.T) {
 	r, _ := request("exec-env", 1, `{"command":"env > \"$OS_OUTPUT_DIR/env.txt\"","env":{"MODE":"fixture","HOME":"/override"},"secret_env":{"api":"API_KEY"}}`)
 	r.Context.Secrets = map[string]string{"api": "s1", "support-key": "s2"}
 	r.Context.ToolbeltEndpoint, r.Context.ToolbeltToken = "unix:///tmp/oc/management.sock", "token-1"
+	// The binding's pass_env reaches the command, under the config's env
+	// and never as an OS_* variable.
+	r.Context.HostEnv = map[string]string{"HTTPS_PROXY": "http://proxy:3128", "MODE": "host", "OS_WORK_ID": "forged"}
 	res := run(t, e, r)
 	env := map[string]string{}
 	for _, line := range strings.Split(art.content(data(t, res).Outputs["env.txt"]), "\n") {
@@ -235,7 +238,7 @@ func TestEnvironmentLayers(t *testing.T) {
 			env[k] = v
 		}
 	}
-	for k, want := range map[string]string{"HOME": "/override", "LC_ALL": "C", "MODE": "fixture", "API_KEY": "s1", "SUPPORT_KEY": "s2", "OS_ENDPOINT": "unix:///tmp/oc/management.sock", "OS_TOKEN": "token-1", "OS_WORK_ID": "work/1", "OS_EXECUTION_ID": "exec-env", "OS_SCOPE_ID": "ops", "OS_TRIGGER_TYPE": "fixture.requested", "OS_ATTEMPT": "1"} {
+	for k, want := range map[string]string{"HOME": "/override", "LC_ALL": "C", "MODE": "fixture", "HTTPS_PROXY": "http://proxy:3128", "API_KEY": "s1", "SUPPORT_KEY": "s2", "OS_ENDPOINT": "unix:///tmp/oc/management.sock", "OS_TOKEN": "token-1", "OS_WORK_ID": "work/1", "OS_EXECUTION_ID": "exec-env", "OS_SCOPE_ID": "ops", "OS_TRIGGER_TYPE": "fixture.requested", "OS_ATTEMPT": "1"} {
 		if env[k] != want {
 			t.Fatalf("%s = %q, want %q", k, env[k], want)
 		}

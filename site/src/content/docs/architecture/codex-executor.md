@@ -103,7 +103,7 @@ With a binding resource, a segment calls `Acquire({Mode: workspace_mode (default
 
 The environment follows B05:
 
-1. **Sanitized baseline.** `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, `TERM` and `CODEX_HOME`, plus the binding's `pass_env` names. `OPENAI_API_KEY` and other credentials are dropped.
+1. **Sanitized baseline.** `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, `TERM` and `CODEX_HOME` of the executor's own process, plus the executor config's `pass_env` names from that process. Out of process that environment is sanitized, so the daemon's own variables (a proxy, the daemon's `CODEX_HOME`) come from the binding's `pass_env`: the operator names them, the host validates them with the configuration and passes its values as `ExecutionContext.HostEnv`, which the executor adds here, never as an `OS_*` name. Validating an executor config that sets `pass_env` warns that it reaches only the executor's own process. `OPENAI_API_KEY` and other credentials are dropped.
 2. **Provider layer.** `OS_*` names are dropped.
 3. **Run layer** (`ExecutionContext.Env`), with `extension.ApplyEnv`. When there is one and a toolbelt, codex also gets the toolbelt client (`OS_ENDPOINT`, `OS_TOKEN_FILE` and the toolbelt directory first on `PATH`, never `OS_TOKEN`), so the layer can call `os`.
 4. **Binding `env`.**
@@ -125,7 +125,7 @@ The config is strict and validated at load. Every field is optional:
 | `structured` | Default true. |
 | `branch`, `workspace_mode` | The workspace request. |
 | `dir` | An absolute folder a workspace-free binding's turns run in. |
-| `env`, `pass_env`, `secret_env` | The environment. |
+| `env`, `pass_env`, `secret_env` | The environment. `pass_env` here admits variables of the executor's own process only, with a `config check` warning (`ConfigWarnings`); name the daemon's variables in the binding's `pass_env`. |
 | `extra_args` | Added to every `codex exec`. They may not set the session, the output, the sandbox, the approval policy, the model or the toolbelt server, whether as flags (`--full-auto` and `--dangerously-bypass-approvals-and-sandbox` included) or as `-c`/`--config` overrides of `sandbox_mode`, `approval_policy`, `model` or `mcp_servers.open-conduit`. |
 | `timeout_seconds` | A segment's deadline, persisted across restart. |
 | `handoff_minutes` | How long after a turn the thread counts as cold (default 55). |

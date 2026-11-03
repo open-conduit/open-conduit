@@ -387,6 +387,14 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, l
 			vars[name] = value
 		}
 	}
+	// The host's values of the variables the binding's pass_env names
+	// (HostEnv, which the host authorized) join the baseline: out of
+	// process, this process's own environment is sanitized.
+	for name, value := range r.Context.HostEnv {
+		if !reserved(name) {
+			vars[name] = value
+		}
+	}
 	if vars["PATH"] == "" {
 		vars["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
 	}
