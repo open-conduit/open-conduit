@@ -395,8 +395,12 @@ type ConfigBaseResult struct {
 	Folders    []string `json:"folders,omitempty"`
 }
 
-// ConfigEditParams is one `config set`/`config unset` edit to the text
-// behind Handle: op add, replace or remove at a JSON pointer.
+// ConfigEditParams is one edit to the text behind Handle: op add, replace
+// or remove at a JSON pointer, as in RFC 6902. add adds or replaces an
+// object member and inserts into an array before a numeric index
+// (appending at the length or "-"), refusing an element named by id or
+// name since one is there; replace sets a value that exists and remove
+// removes one.
 type ConfigEditParams struct {
 	Handle  string          `json:"handle"`
 	Op      string          `json:"op"`
@@ -405,7 +409,7 @@ type ConfigEditParams struct {
 }
 
 // ConfigEditResult is the candidate the edit built: its handle, its text
-// redacted and the value that was at the pointer, redacted.
+// redacted and the value the edit replaced (none for an insert), redacted.
 type ConfigEditResult struct {
 	Handle string          `json:"handle"`
 	Text   string          `json:"text"`
