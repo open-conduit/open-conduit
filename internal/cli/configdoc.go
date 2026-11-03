@@ -127,18 +127,41 @@ func (d *ConfigDoc) Raw(ptr string) ([]byte, error) {
 // Set replaces or adds the JSON value at pointer ("-" appends to an array).
 // A secret_refs value must be a reference, never a secret.
 func (d *ConfigDoc) Set(ptr, value string) error {
-	parts, err := pointer(ptr)
+	parts, v, err := setting(ptr, value)
 	if err != nil {
 		return err
 	}
+	return d.root.set(parts, v)
+}
+
+// Add is RFC 6902 add: it adds or replaces an object member, and inserts
+// into an array before the element at a numeric index ("-", or the array's
+// length, appends) rather than replacing it. An array element named by id
+// or name is refused, since it already exists. A secret_refs value must be
+// a reference, as for Set.
+func (d *ConfigDoc) Add(ptr, value string) error {
+	parts, v, err := setting(ptr, value)
+	if err != nil {
+		return err
+	}
+	return d.root.add(parts, v)
+}
+
+// setting parses a pointer and the JSON value to put there, refusing a
+// secret_refs value that isn't a reference.
+func setting(ptr, value string) ([]string, *node, error) {
+	parts, err := pointer(ptr)
+	if err != nil {
+		return nil, nil, err
+	}
 	v, err := parseNode([]byte(value))
 	if err != nil {
-		return errors.New("the value must be JSON (quote strings: \"text\")")
+		return nil, nil, errors.New("the value must be JSON (quote strings: \"text\")")
 	}
 	if len(parts) >= 2 && parts[len(parts)-2] == "secret_refs" && (v.kind != 's' || !refPattern.MatchString(strings.Trim(string(v.scalar), `"`))) {
-		return errors.New("a secret_refs value is a reference (keyring:, file:, env:, cmd:); store values with open-conduit secret set")
+		return nil, nil, errors.New("a secret_refs value is a reference (keyring:, file:, env:, cmd:); store values with open-conduit secret set")
 	}
-	return d.root.set(parts, v)
+	return parts, v, nil
 }
 
 // Unset removes the value at pointer.

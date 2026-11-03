@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"strings"
 )
@@ -238,6 +239,40 @@ func (n *node) set(parts []string, value *node) error {
 		return nil
 	}
 	return errors.New("cannot set inside a scalar")
+}
+
+// add is RFC 6902 add: it adds or replaces an object member, and inserts
+// into an array before the element at a numeric index (the array's length,
+// or "-", appends), never replacing one. An element addressed by id or name
+// already exists, so adding there is refused: replace it, or give an index.
+func (n *node) add(parts []string, value *node) error {
+	if len(parts) == 0 {
+		return errors.New("refusing to replace the whole config; set a field")
+	}
+	parent, err := n.lookup(parts[:len(parts)-1])
+	if err != nil {
+		return err
+	}
+	last := parts[len(parts)-1]
+	if parent.kind != 'a' {
+		return n.set(parts, value)
+	}
+	if last == "-" {
+		parent.arr = append(parent.arr, value)
+		return nil
+	}
+	i, err := strconv.Atoi(last)
+	if err != nil {
+		if _, ok := parent.index(last); ok {
+			return fmt.Errorf("%q is already there; replace it, or add at an index (inserting before it) or at - (appending)", last)
+		}
+		return fmt.Errorf("no element %q; add at an index (inserting before it) or at - (appending)", last)
+	}
+	if i < 0 || i > len(parent.arr) {
+		return fmt.Errorf("index %d is past the end of the array (%d elements; use - to append)", i, len(parent.arr))
+	}
+	parent.arr = slices.Insert(parent.arr, i, value)
+	return nil
 }
 
 func (n *node) unset(parts []string) error {

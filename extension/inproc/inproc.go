@@ -287,10 +287,12 @@ var ErrConfigHandle = errors.New("the host no longer holds that configuration; r
 type ConfigHost interface {
 	// Base is the configuration now.
 	Base(ctx context.Context) (ConfigBase, error)
-	// Edit makes one `config set`/`config unset` edit to the text behind
-	// handle, keeping its layout and key order, and holds the result as a
-	// new candidate: op "add" sets (appending with "-"), "replace" sets a
-	// value that exists and "remove" removes one. value may set a new
+	// Edit makes one edit to the text behind handle, keeping its layout
+	// and key order, and holds the result as a new candidate. op is RFC
+	// 6902's: "add" adds or replaces an object member and inserts into an
+	// array before a numeric index (appending at the length or "-"),
+	// refusing an element named by id or name since one is there;
+	// "replace" sets a value that exists and "remove" removes one. value may set a new
 	// reference. Pointers address array elements by id or name. Its errors
 	// are fixed, secret-free reasons.
 	Edit(ctx context.Context, handle, op, pointer string, value json.RawMessage) (ConfigEdited, error)
