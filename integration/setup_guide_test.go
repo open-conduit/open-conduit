@@ -65,6 +65,7 @@ func TestSetupGuideExampleConfigValidates(t *testing.T) {
 // `config set` use) accepts the setup guide's example and every scope shape
 // `init` writes: with a checkout, workspace-free, and with holds.
 func TestOfflineValidationMatchesTheDaemonRegistry(t *testing.T) {
+	releaseLayout(t)
 	g := setupPlaybook(t, "open-conduit")
 	start, end := strings.Index(g, "```json\n"), strings.Index(g, "\n```\n\nOther `github`")
 	if diags, err := bootstrap.ValidateConfig([]byte(g[start+8 : end])); err != nil || len(diags) != 0 {

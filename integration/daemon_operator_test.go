@@ -30,7 +30,11 @@ type operatorCLI struct {
 	attach func(argv []string, dir string) error
 }
 
+// newOperatorCLI runs the operator commands in this process, so it checks
+// configuration as the release's binary would, with its bundled packages
+// beside it (#428).
 func newOperatorCLI(t *testing.T, d *drill) *operatorCLI {
+	releaseLayout(t)
 	return &operatorCLI{t: t, cwd: d.root, env: map[string]string{
 		"HOME": d.root, "XDG_CONFIG_HOME": filepath.Join(d.root, "xdg"), "OPEN_CONDUIT_DATA_DIR": d.state,
 	}}
