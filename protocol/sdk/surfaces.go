@@ -72,7 +72,7 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, notFound(method)
 		}
 		var log bytes.Buffer
-		res, err := prov.Acquire(ctx, extension.ResourceAcquisition{Owner: p.Owner.Extension(), Config: p.Config.Domain(), Request: extension.ResourceRequest{Mode: p.Mode, Params: p.Params.Domain(), Log: &log}})
+		res, err := prov.Acquire(ctx, extension.ResourceAcquisition{Owner: p.Owner.Extension(), Config: p.Config.Domain(), Request: extension.ResourceRequest{Mode: p.Mode, Params: p.Params.Domain(), Log: &log}, HostEnv: p.HostEnv})
 		out := protocol.ResourceResult{Resource: protocol.FromResource(res), Log: log.String()}
 		if err != nil {
 			if !isSetup(err) {
@@ -114,6 +114,25 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.FromReport(rep), nil
+	case "provider.sweep":
+		var p protocol.ProviderReconcileParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Providers[p.Type].(extension.ResourceSweeper)
+		if !ok {
+			return nil, notFound(method)
+		}
+		status := func(ctx context.Context, o extension.ResourceOwner) (extension.ResourceOwnerStatus, error) {
+			var out protocol.OwnerStatus
+			err := s.conn.Call(ctx, "provider.owner_status", protocol.OwnerStatusParams{Reconcile: p.Reconcile, Owner: protocol.FromOwner(o)}, &out)
+			return out.Extension(), err
+		}
+		rep, err := prov.Sweep(ctx, status)
+		if err != nil {
+			return nil, err
+		}
+		return protocol.FromSweepReport(rep), nil
 	case "sandbox_provider.plan":
 		var p protocol.SandboxProviderPlanParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

@@ -277,10 +277,47 @@ func (r *Remote) Webhook(path string, maxBody int64) http.Handler {
 func (r *Remote) Provider(typ string) (extension.ResourceProvider, bool) {
 	for _, d := range r.m.Provides.Resources {
 		if d.Type == typ {
-			return &remoteProvider{r: r, typ: typ}, true
+			p := &remoteProvider{r: r, typ: typ}
+			if d.Sweep {
+				return sweepingProvider{p}, true
+			}
+			return p, true
 		}
 	}
 	return nil, false
+}
+
+// sweepingProvider is a remote provider declared with sweep
+// (extension.ResourceSweeper).
+type sweepingProvider struct{ *remoteProvider }
+
+// Sweep binds status to a fresh ID for the call, as Reconcile does, so the
+// package's provider.owner_status quoting it is answered from the host's
+// durable state.
+func (p sweepingProvider) Sweep(ctx context.Context, status extension.ResourceStatusFunc) (extension.ResourceSweepReport, error) {
+	id := p.r.ownerStatus(status)
+	defer p.r.endOwnerStatus(id)
+	var out protocol.ResourceSweepReport
+	if err := p.r.p.Call(ctx, "provider.sweep", protocol.ProviderReconcileParams{Type: p.typ, Reconcile: id}, &out); err != nil {
+		return extension.ResourceSweepReport{}, err
+	}
+	return out.Extension(), nil
+}
+
+// ownerStatus registers status under a fresh ID, which
+// provider.owner_status quotes while the call that holds it runs.
+func (r *Remote) ownerStatus(status extension.ResourceStatusFunc) string {
+	id := newID()
+	r.s.mu.Lock()
+	r.s.reconciles[id] = status
+	r.s.mu.Unlock()
+	return id
+}
+
+func (r *Remote) endOwnerStatus(id string) {
+	r.s.mu.Lock()
+	delete(r.s.reconciles, id)
+	r.s.mu.Unlock()
 }
 
 type remoteProvider struct {
@@ -334,7 +371,7 @@ func sandboxErr(err error) error {
 
 func (p *remoteProvider) Acquire(ctx context.Context, a extension.ResourceAcquisition) (extension.Resource, error) {
 	var out protocol.ResourceResult
-	err := p.r.p.Call(ctx, "provider.acquire", protocol.ProviderAcquireParams{Type: p.typ, Owner: protocol.FromOwner(a.Owner), Config: protocol.FromPayload(a.Config), Mode: a.Request.Mode, Params: protocol.FromPayload(a.Request.Params)}, &out)
+	err := p.r.p.Call(ctx, "provider.acquire", protocol.ProviderAcquireParams{Type: p.typ, Owner: protocol.FromOwner(a.Owner), Config: protocol.FromPayload(a.Config), Mode: a.Request.Mode, Params: protocol.FromPayload(a.Request.Params), HostEnv: a.HostEnv}, &out)
 	if a.Request.Log != nil && out.Log != "" {
 		_, _ = io.WriteString(a.Request.Log, out.Log)
 	}
@@ -359,15 +396,8 @@ func (p *remoteProvider) Lookup(ctx context.Context, owner extension.ResourceOwn
 // call: provider.owner_status quoting that ID is answered from the host's
 // durable state; any other ID is refused.
 func (p *remoteProvider) Reconcile(ctx context.Context, status extension.ResourceStatusFunc) (extension.ResourceReport, error) {
-	id := newID()
-	p.r.s.mu.Lock()
-	p.r.s.reconciles[id] = status
-	p.r.s.mu.Unlock()
-	defer func() {
-		p.r.s.mu.Lock()
-		delete(p.r.s.reconciles, id)
-		p.r.s.mu.Unlock()
-	}()
+	id := p.r.ownerStatus(status)
+	defer p.r.endOwnerStatus(id)
 	var out protocol.ResourceReport
 	if err := p.r.p.Call(ctx, "provider.reconcile", protocol.ProviderReconcileParams{Type: p.typ, Reconcile: id}, &out); err != nil {
 		return extension.ResourceReport{}, err

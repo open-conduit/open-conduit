@@ -149,6 +149,11 @@ type Server struct {
 	// executors are the declared executors' state directories
 	// (protocol.InitializeParams.ExecutorDirs).
 	executors map[string]string
+	// resources are the declared resource types' state directories and
+	// configDir the config file's directory
+	// (protocol.InitializeParams.ResourceDirs and ConfigDir).
+	resources map[string]string
+	configDir string
 
 	mu       sync.Mutex
 	ready    bool
@@ -240,7 +245,7 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			_ = s.ext.Exporter.Shutdown(ctx)
 		}
 		return struct{}{}, nil
-	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "sandbox_provider.plan", "sandbox_provider.adopt", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.act", "view.render", "config.candidate", "setup.run":
+	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "provider.sweep", "sandbox_provider.plan", "sandbox_provider.adopt", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.act", "view.render", "config.candidate", "setup.run":
 		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)
@@ -480,7 +485,7 @@ func (s *Server) initialize(raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	s.mu.Lock()
-	s.ready, s.state, s.executors = true, p.StateDir, p.ExecutorDirs
+	s.ready, s.state, s.executors, s.resources, s.configDir = true, p.StateDir, p.ExecutorDirs, p.ResourceDirs, p.ConfigDir
 	s.mu.Unlock()
 	return protocol.InitializeResult{ProtocolVersion: v, Manifest: manifest}, nil
 }
@@ -491,6 +496,23 @@ func (s *Server) ExecutorDir(name string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.executors[name]
+}
+
+// ResourceDir is the state directory the host named at initialize for one
+// of the extension's resource provider types ("" when it named none).
+func (s *Server) ResourceDir(typ string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.resources[typ]
+}
+
+// ConfigDir is the directory of the operator's config file the host named
+// at initialize, against which a relative path in a config object resolves
+// ("" for none).
+func (s *Server) ConfigDir() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.configDir
 }
 
 // StateDir is the private state directory the host gave at initialize.

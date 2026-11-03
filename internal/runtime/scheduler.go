@@ -108,8 +108,9 @@ type SchedulerOptions struct {
 	// a failure fails the attempt before the executor is called.
 	Environment func(context.Context, AttemptState) (map[string]string, error)
 	// Resources binds the attempt's optional resource provider immediately
-	// before Run/Recover/Resume, outside coordination transactions. A nil
-	// broker means the binding declares no resource. Core never inspects it.
+	// before Run/Recover/Resume, outside coordination transactions, with
+	// the attempt's HostEnv set. A nil broker means the binding declares no
+	// resource. Core never inspects it.
 	Resources func(context.Context, AttemptState) (extension.ResourceBroker, error)
 	// Sandbox binds the attempt's optional process sandbox (B09) after
 	// Resources, outside coordination transactions. It returns the broker
@@ -214,7 +215,11 @@ type AttemptState struct {
 	Binding                           domain.Binding
 	// Grants are the binding grants the Work opted into that the binding
 	// offered when the attempt started; Binding.Config has them applied.
-	Grants               []string `json:",omitempty"`
+	Grants []string `json:",omitempty"`
+	// HostEnv are the host's values of the variables the binding's
+	// pass_env names, resolved for this attempt before its hooks run
+	// (extension.ExecutionContext.HostEnv). They are never persisted.
+	HostEnv              map[string]string `json:"-"`
 	Recovery             domain.Payload
 	RecoveryRecorded     bool
 	Excluded             bool
@@ -1342,6 +1347,7 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 	}
 	attempt.Request.Context.PlaybookDir = s.options.PlaybookDir
 	attempt.Request.Context.HostEnv = s.hostEnv(state.Binding.PassEnv)
+	state.HostEnv = attempt.Request.Context.HostEnv
 	if s.options.Secrets != nil {
 		var secrets map[string]string
 		secretErr := trail.phase("secrets", func() (e error) { secrets, e = s.options.Secrets(ctx, state); return e })

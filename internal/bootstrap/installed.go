@@ -184,6 +184,12 @@ func (x *installed) providerTypes(reg *config.Registry) {
 	}
 	for _, r := range x.m.Provides.Resources {
 		reg.Resources[r.Type] = true
+		if s := declaredSettings(r.Settings); s != nil {
+			if reg.ResourceSettings == nil {
+				reg.ResourceSettings = map[string]func(json.RawMessage) []extension.Setting{}
+			}
+			reg.ResourceSettings[r.Type] = s
+		}
 		v := x.validator(protocol.ValidateResource, r.Type)
 		if v == nil {
 			v = func(json.RawMessage, []string) error { return nil }

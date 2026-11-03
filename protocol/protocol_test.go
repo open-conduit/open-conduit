@@ -70,6 +70,7 @@ var useCases = map[string][]string{
 	"provider.lookup":            {"git"},
 	"provider.reconcile":         {"git"},
 	"provider.owner_status":      {"git"},
+	"provider.sweep":             {"git"},
 	"sandbox_provider.plan":      {"srt"},
 	"sandbox_provider.adopt":     {"srt"},
 	"kv.get":                     {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
@@ -303,6 +304,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Routes[0].Samples = true
 	m.Provides.Targets, m.Provides.SegmentEnd = []string{"chat"}, true
 	m.Provides.Sandboxes = []protocol.SandboxDecl{{Type: "chat-jail"}}
+	m.Provides.Resources[0].Sweep = true
 	m.Provides.Probes = []protocol.ProbeInfo{{Name: "accounts", Summary: "the signed-in accounts"}}
 	for _, p := range protocol.KnownPermissions {
 		m.Permissions = append(m.Permissions, p.Name)

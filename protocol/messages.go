@@ -29,6 +29,15 @@ type InitializeParams struct {
 	// directory (extension.SandboxPaths), and a run outlives a move of the
 	// executor in or out of process.
 	ExecutorDirs map[string]string `json:"executor_dirs,omitempty"`
+	// ResourceDirs are the state directories of the resource provider types
+	// the manifest declares, by type: the host's <state>/resources/<type>,
+	// the same for a provider in process or out, so its leases and
+	// workspaces outlive a move of the provider in or out of process.
+	ResourceDirs map[string]string `json:"resource_dirs,omitempty"`
+	// ConfigDir is the directory of the operator's config file, against
+	// which a relative path in a config object resolves ("" when the
+	// configuration has no file).
+	ConfigDir string `json:"config_dir,omitempty"`
 }
 type InitializeResult struct {
 	ProtocolVersion int `json:"protocol_version"`
