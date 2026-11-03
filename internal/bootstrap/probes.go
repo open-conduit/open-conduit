@@ -14,8 +14,9 @@ import (
 
 // setupProbes are the probes a setup session may run besides the setup
 // extension's own, by full name: each extension's and executor's
-// (extension.SetupProbes), and the host's own init and doctor probes,
-// under HostProbeOwner.
+// (extension.SetupProbes), each installed package's (provides.probes,
+// through probe.serve), and the host's own init and doctor probes, under
+// HostProbeOwner.
 func (d *daemon) setupProbes() map[string]extension.SetupProbe {
 	out := map[string]extension.SetupProbe{}
 	for owner, p := range probeOwners() {
@@ -23,6 +24,13 @@ func (d *daemon) setupProbes() map[string]extension.SetupProbe {
 			out[owner+"."+x.Name] = x
 		}
 	}
+	d.external.mu.Lock()
+	for _, p := range d.external.packages {
+		for _, x := range p.r.Probes() {
+			out[p.m.Name+"."+x.Name] = x
+		}
+	}
+	d.external.mu.Unlock()
 	out[HostProbeOwner+".init"] = d.initProbe()
 	out[HostProbeOwner+".doctor"] = d.doctorProbe()
 	return out
@@ -41,12 +49,19 @@ func probeOwners() map[string]extension.SetupProbes {
 	return out
 }
 
-// hostProbeNames are the full names of setupProbes, offline.
+// hostProbeNames are the full names of setupProbes, offline: the host's,
+// the first-party extensions' and the bundled packages'.
 func hostProbeNames() []string {
 	out := []string{HostProbeOwner + ".init", HostProbeOwner + ".doctor"}
 	for owner, p := range probeOwners() {
 		for _, x := range p.SetupProbes() {
 			out = append(out, owner+"."+x.Name)
+		}
+	}
+	found, _ := discoverPackages("", "")
+	for _, f := range found {
+		for _, x := range f.Manifest.Provides.Probes {
+			out = append(out, f.Manifest.Name+"."+x.Name)
 		}
 	}
 	return out

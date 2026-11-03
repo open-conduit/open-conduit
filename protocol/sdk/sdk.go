@@ -70,6 +70,9 @@ type Extension struct {
 	Triggers    map[string]func([]domain.Event) int
 	Tasks       map[string]func(ctx context.Context, h *Host) error
 	Checks      map[string]func(ctx context.Context, h *Host, deep bool) (string, error)
+	// Probes are the read-only setup probes the extension offers
+	// (Manifest.Provides.Probes), served through probe.serve.
+	Probes []extension.SetupProbe
 	// CheckRuns are checks that read the host's view of the configuration
 	// (p.Config) or report a status, code and items of their own. A name in
 	// both maps runs from CheckRuns.
@@ -227,7 +230,7 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			_ = s.ext.Exporter.Shutdown(ctx)
 		}
 		return struct{}{}, nil
-	case "validate", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.act", "view.render", "config.candidate", "setup.run":
+	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.act", "view.render", "config.candidate", "setup.run":
 		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)

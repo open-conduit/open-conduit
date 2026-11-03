@@ -3,6 +3,7 @@ package inprocsdk_test
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"strings"
 	"sync"
 	"testing"
@@ -210,5 +211,42 @@ func TestBridgeDeclaresRunOnce(t *testing.T) {
 	}
 	if !got["sampled.fix"].RunOnce || got["sampled.sweep"].RunOnce || !got["sampled.sweep"].Standing {
 		t.Fatalf("work kinds declared %+v", got)
+	}
+}
+
+// probing offers a setup probe.
+type probing struct{ sampled }
+
+func (probing) SetupProbes() []extension.SetupProbe {
+	return []extension.SetupProbe{{Name: "accounts", Summary: "the signed-in accounts", Args: []extension.ProbeArg{{Name: "host", Required: true}},
+		Run: func(_ context.Context, args map[string]string) (extension.ProbeResult, error) {
+			if args["host"] == "bad" {
+				return extension.ProbeResult{}, errors.New("no such host")
+			}
+			return extension.ProbeResult{Command: "gh auth status", Output: map[string]string{"host": args["host"]}}, nil
+		}}}
+}
+
+// TestBridgeServesSetupProbes: an extension's setup probes are declared
+// and served over the wire, a failure answered as its reason (#428).
+func TestBridgeServesSetupProbes(t *testing.T) {
+	b, err := inprocsdk.New(probing{}, protocol.Manifest{Protocol: []int{protocol.Version}, Name: "sampled", Version: "0.1.0", Command: []string{"sampled"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m := b.Extension().Manifest
+	if len(m.Provides.Probes) != 1 || m.Provides.Probes[0].Name != "accounts" || !m.Provides.Probes[0].Args[0].Required {
+		t.Fatalf("probes declared %+v", m.Provides.Probes)
+	}
+	h := sdktest.New(t, b.Extension())
+	var res protocol.ProbeRunResult
+	if err := h.Call(context.Background(), "probe.serve", protocol.ProbeRunParams{Name: "accounts", Args: map[string]string{"host": "github.com"}}, &res); err != nil {
+		t.Fatal(err)
+	}
+	if res.Command != "gh auth status" || !strings.Contains(string(res.Output), "github.com") || res.Error != "" {
+		t.Fatalf("probe.serve: %+v", res)
+	}
+	if err := h.Call(context.Background(), "probe.serve", protocol.ProbeRunParams{Name: "accounts", Args: map[string]string{"host": "bad"}}, &res); err != nil || res.Error != "no such host" {
+		t.Fatalf("a failing probe: %+v %v", res, err)
 	}
 }

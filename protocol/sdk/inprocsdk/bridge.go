@@ -194,6 +194,15 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 	if _, ok := b.x.(inproc.EntryGated); ok {
 		p.EntryGated = true
 	}
+	if s, ok := b.x.(extension.SetupProbes); ok && len(p.Probes) == 0 {
+		for _, pr := range s.SetupProbes() {
+			info := protocol.ProbeInfo{Name: pr.Name, Summary: pr.Summary}
+			for _, a := range pr.Args {
+				info.Args = append(info.Args, protocol.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required})
+			}
+			p.Probes = append(p.Probes, info)
+		}
+	}
 	if k, ok := b.x.(inproc.WorkKinder); ok && len(p.WorkKinds) == 0 {
 		for _, w := range k.WorkKinds() {
 			p.WorkKinds = append(p.WorkKinds, protocol.WorkKindDecl{Kind: w.Kind, Standing: w.Standing, Trigger: w.Trigger != nil, Timed: w.Timed, RunOnce: w.RunOnce})
@@ -251,6 +260,9 @@ func (b *Bridge) wire() {
 	e.Validate = b.validate
 	e.Configure = b.configure
 	e.Describe = b.describe
+	if s, ok := b.x.(extension.SetupProbes); ok {
+		e.Probes = s.SetupProbes()
+	}
 	e.Ingress = func(source string) (extension.Ingress, bool) {
 		b.mu.Lock()
 		defer b.mu.Unlock()

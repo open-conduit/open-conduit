@@ -208,6 +208,28 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.WorkActResult{Event: protocol.FromEvent(plan.Event), Message: plan.Message}, nil
+	case "probe.serve":
+		var p protocol.ProbeRunParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		for _, probe := range s.ext.Probes {
+			if probe.Name != p.Name {
+				continue
+			}
+			res, err := probe.Run(ctx, p.Args)
+			if err != nil {
+				// A probe that ran and failed answers its reason, which
+				// must be fixed and secret-free (extension.SetupProbe).
+				return protocol.ProbeRunResult{Error: err.Error()}, nil
+			}
+			out, err := json.Marshal(res.Output)
+			if err != nil {
+				return nil, err
+			}
+			return protocol.ProbeRunResult{Command: res.Command, Output: out}, nil
+		}
+		return nil, notFound(method)
 	case "setup.run":
 		var p protocol.SetupRunParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
