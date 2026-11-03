@@ -23,12 +23,43 @@ func firstLine(s string) string {
 	return line
 }
 
-// gitEnv is the environment of the provider's own git commands: the daemon's
-// environment without toolbelt variables, never prompting for credentials and
-// with stable messages for parsing.
-func (p *Provider) gitEnv() []string {
+type hostEnvKey struct{}
+
+// withHostEnv carries an acquisition's HostEnv to the commands it runs.
+func withHostEnv(ctx context.Context, env map[string]string) context.Context {
+	if len(env) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, hostEnvKey{}, env)
+}
+
+// environ is the provider's own environment with the acquisition's HostEnv
+// (the binding's pass_env) over it, when ctx carries one.
+func (p *Provider) environ(ctx context.Context) []string {
+	env := p.o.Environ()
+	host, _ := ctx.Value(hostEnvKey{}).(map[string]string)
+	if len(host) == 0 {
+		return env
+	}
+	out := make([]string, 0, len(env)+len(host))
+	for _, kv := range env {
+		name, _, _ := strings.Cut(kv, "=")
+		if _, ok := host[name]; !ok {
+			out = append(out, kv)
+		}
+	}
+	for name, value := range host {
+		out = append(out, name+"="+value)
+	}
+	return out
+}
+
+// gitEnv is the environment of the provider's own git commands: its own
+// environment and the acquisition's HostEnv without toolbelt variables, never
+// prompting for credentials and with stable messages for parsing.
+func (p *Provider) gitEnv(ctx context.Context) []string {
 	var env []string
-	for _, kv := range p.o.Environ() {
+	for _, kv := range p.environ(ctx) {
 		name, _, _ := strings.Cut(kv, "=")
 		if strings.HasPrefix(strings.ToUpper(name), "OS_") || name == "LC_ALL" || name == "GIT_TERMINAL_PROMPT" || name == "GIT_DIR" || name == "GIT_WORK_TREE" {
 			continue
@@ -42,7 +73,7 @@ func (p *Provider) gitEnv() []string {
 // output, never a configured credential. In a clone, whose config the agent
 // may have written, it runs distrusted.
 func (p *Provider) git(ctx context.Context, dir string, args ...string) (string, error) {
-	pre, env := []string{"-C", dir}, p.gitEnv()
+	pre, env := []string{"-C", dir}, p.gitEnv(ctx)
 	if p.inClone(dir) {
 		over, err := p.distrust(ctx, dir)
 		if err != nil {
@@ -95,7 +126,7 @@ func (p *Provider) inClone(dir string) bool {
 // runs nothing. A driver name -c can't express makes the command fail.
 func (p *Provider) distrust(ctx context.Context, dir string) ([]string, error) {
 	cmd := exec.CommandContext(ctx, p.o.Git, "-C", dir, "config", "--show-scope", "--name-only", "--get-regexp", `^filter\.`)
-	cmd.Env = append(p.gitEnv(), cloneDirs(dir)...)
+	cmd.Env = append(p.gitEnv(ctx), cloneDirs(dir)...)
 	out, _ := cmd.Output() // exit 1: no filters
 	over := slices.Clone(distrusted)
 	seen := map[string]bool{}

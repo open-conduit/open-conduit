@@ -853,3 +853,20 @@ func TestCheckoutSpelledInAnotherCase(t *testing.T) {
 		t.Errorf("subdirectory checkout: %v", err)
 	}
 }
+
+// TestHostEnvReachesSetup: an acquisition's HostEnv (the binding's
+// pass_env) reaches its setup, over the provider's own environment, and
+// never as an OS_* variable.
+func TestHostEnvReachesSetup(t *testing.T) {
+	f := newFixture(t)
+	c := cfg(map[string]any{"mode": "fresh", "setup": `printf '%s|%s' "$PROXY_FOR_TEST" "$OS_FORGED" > env.log`})
+	var log strings.Builder
+	r, err := extension.BindResourcesEnv(f.provider, owner("w1", "x1"), c, map[string]string{"PROXY_FOR_TEST": "http://proxy:3128", "OS_FORGED": "x"}).
+		Acquire(context.Background(), extension.ResourceRequest{Mode: extension.ResourceFresh, Log: &log})
+	if err != nil {
+		t.Fatal(err, log.String())
+	}
+	if got := read(t, filepath.Join(r.Dir, "env.log")); got != "http://proxy:3128|" {
+		t.Fatalf("setup environment: %q", got)
+	}
+}

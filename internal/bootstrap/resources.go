@@ -2,18 +2,14 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	gitws "github.com/open-conduit/open-conduit/extensions/git"
-	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -40,22 +36,11 @@ type resourceState struct {
 	sweepErr  error
 }
 
-func resourceRegistry(r *config.Registry) {
-	r.Resources = map[string]bool{gitws.Type: true}
-	r.ResourceConfig = map[string]func(json.RawMessage) error{gitws.Type: gitws.ValidateConfig}
-	r.ResourceSandbox = map[string]func(json.RawMessage, string) error{gitws.Type: gitws.ValidateSandbox}
-	r.ResourceModeDefault = map[string]func(json.RawMessage) string{gitws.Type: gitws.ModeDefault}
-	r.ResourceSettings = map[string]func(json.RawMessage) []extension.Setting{gitws.Type: gitws.Settings}
-}
-
-func (d *daemon) openResources() error {
-	p, err := gitws.New(gitws.Options{StateDir: filepath.Join(d.o.StateDir, "resources", gitws.Type), BaseDir: filepath.Dir(d.o.ConfigPath), Now: d.now, DiskSpace: d.o.ResourceDiskSpace})
-	if err != nil {
-		return err
-	}
-	d.resources.providers = map[string]extension.ResourceProvider{gitws.Type: p}
+// openResources starts the host side of the resource providers, which the
+// packages' declared ones (manifest resources) join as they start.
+func (d *daemon) openResources() {
+	d.resources.providers = map[string]extension.ResourceProvider{}
 	d.resources.lastSweep = d.now()
-	return nil
 }
 
 // sweepResources runs each sweeping provider's spare-workspace sweep in the
@@ -113,7 +98,7 @@ func (d *daemon) bindResources(ctx context.Context, state runtime.AttemptState) 
 		return nil, fmt.Errorf("%w: resource provider %s", extension.ErrUnsupported, desc.Provider)
 	}
 	owner := extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID}
-	broker := extension.BindResources(p, owner, domain.Payload{Schema: ResourceConfigSchema, Data: append([]byte(nil), desc.Config...)})
+	broker := extension.BindResourcesEnv(p, owner, domain.Payload{Schema: ResourceConfigSchema, Data: append([]byte(nil), desc.Config...)}, state.HostEnv)
 	return phasedResources{broker, runtime.LaunchPhases(ctx)}, nil
 }
 

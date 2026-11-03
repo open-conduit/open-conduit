@@ -13,6 +13,7 @@ import (
 	bitbucketext "github.com/open-conduit/open-conduit/extensions/bitbucket/pkg"
 	claudecodeext "github.com/open-conduit/open-conduit/extensions/claudecode/pkg"
 	codexext "github.com/open-conduit/open-conduit/extensions/codex/pkg"
+	gitext "github.com/open-conduit/open-conduit/extensions/git/pkg"
 	githubext "github.com/open-conduit/open-conduit/extensions/github/pkg"
 	humanext "github.com/open-conduit/open-conduit/extensions/human/pkg"
 	introspectionext "github.com/open-conduit/open-conduit/extensions/introspection/pkg"
@@ -50,6 +51,7 @@ var runnable = map[string]struct {
 	"bitbucket":     {bitbucketext.Main, bitbucketext.Manifest, nil, true},
 	"claude-code":   {claudecodeext.Main, claudecodeext.Manifest, nil, true},
 	"codex":         {codexext.Main, codexext.Manifest, nil, true},
+	"git":           {gitext.Main, gitext.Manifest, nil, true},
 	"github":        {githubext.Main, githubext.Manifest, githubext.Playbooks, true},
 	"human":         {humanext.Main, humanext.Manifest, nil, true},
 	"introspection": {introspectionext.Main, introspectionext.Manifest, introspectionext.Playbooks, true},
