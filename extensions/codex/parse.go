@@ -2,8 +2,11 @@ package codex
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"os"
+	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -173,4 +176,48 @@ func readStatus(path string) *Status {
 func limited(text string) bool {
 	t := strings.ToLower(text)
 	return strings.Contains(t, "usage limit") || strings.Contains(t, "rate limit") || strings.Contains(t, "quota")
+}
+
+// threadContext is the context a thread's last model call left, in tokens:
+// the last token_count event in the session file codex keeps under
+// <home>/sessions/YYYY/MM/DD/rollout-<time>-<thread>.jsonl. The file is
+// codex's own, not an interface, so anything missing or unreadable is 0,
+// which never hands a thread off.
+func threadContext(home, thread string) int64 {
+	if home == "" || thread == "" || strings.ContainsAny(thread, `/\*?[`) {
+		return 0
+	}
+	files, _ := filepath.Glob(filepath.Join(home, "sessions", "*", "*", "*", "rollout-*-"+thread+".jsonl"))
+	if len(files) == 0 {
+		return 0
+	}
+	sort.Strings(files)
+	f, err := os.Open(files[len(files)-1])
+	if err != nil {
+		return 0
+	}
+	defer f.Close()
+	var n int64
+	sc := bufio.NewScanner(f)
+	sc.Buffer(make([]byte, 64*1024), 64*1024*1024)
+	for sc.Scan() {
+		line := sc.Bytes()
+		if !bytes.Contains(line, []byte(`"token_count"`)) {
+			continue
+		}
+		var ev struct {
+			Payload struct {
+				Type string `json:"type"`
+				Info *struct {
+					Last *struct {
+						Total int64 `json:"total_tokens"`
+					} `json:"last_token_usage"`
+				} `json:"info"`
+			} `json:"payload"`
+		}
+		if json.Unmarshal(line, &ev) == nil && ev.Payload.Type == "token_count" && ev.Payload.Info != nil && ev.Payload.Info.Last != nil {
+			n = ev.Payload.Info.Last.Total
+		}
+	}
+	return n
 }

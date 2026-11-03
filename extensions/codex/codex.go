@@ -170,10 +170,15 @@ type recovery struct {
 
 // turnRecord is what finishing a segment needs to know about its turn.
 type turnRecord struct {
-	Work         domain.ID `json:"work"`
-	Kind         string    `json:"kind"`
-	Structured   bool      `json:"structured"`
-	StatusSchema string    `json:"status_schema,omitempty"`
+	Work domain.ID `json:"work"`
+	Kind string    `json:"kind"`
+	// HandoffReason is why a handoff turn left its thread ("size").
+	HandoffReason string `json:"handoff_reason,omitempty"`
+	// CodexHome is where codex keeps its sessions, for the context the
+	// turn ended with.
+	CodexHome    string `json:"codex_home,omitempty"`
+	Structured   bool   `json:"structured"`
+	StatusSchema string `json:"status_schema,omitempty"`
 }
 
 // workspaceRecord is the acquired resource's opaque lease reference and
@@ -282,13 +287,19 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 		return e.preset(ctx, rn, "start_failed", "could not prepare codex")
 	}
 	// The turn: a Work with a thread resumes it on the events since its
-	// last turn; one without starts a new thread.
-	thread, err := e.loadThread(r.Work.ID)
+	// last turn; one without starts a new thread. A thread whose last turn
+	// ended with more than handoff_tokens of context is left for a new one
+	// started from that turn's handoff note.
+	rec, err := e.loadThread(r.Work.ID)
 	if err != nil {
 		return e.preset(ctx, rn, "start_failed", "could not read the Work's thread")
 	}
-	kind := kindStart
-	if thread != "" {
+	thread, kind, reason := rec.Thread, kindStart, ""
+	switch {
+	case thread == "":
+	case strings.TrimSpace(rec.Handoff) != "" && *cfg.HandoffTokens > 0 && rec.Context > *cfg.HandoffTokens:
+		thread, kind, reason = "", kindHandoff, handoffSize
+	default:
 		kind = kindEvents
 	}
 	plugins := cfg.PluginDir
@@ -299,7 +310,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	if err != nil {
 		return e.preset(ctx, rn, "invalid_config", "the binding's playbook "+cfg.Playbook+" was not found")
 	}
-	args, text := body(kind, expand(cfg.Args, r.Work), RenderEvents(r.Inputs))
+	args, text := body(kind, expand(cfg.Args, r.Work), rec.Handoff, RenderEvents(r.Inputs))
 	text = withAdditions(text, projectAdditions(workdir, cfg.Playbook))
 	if err = writeFile(filepath.Join(dir, promptFile), []byte(prompt(playbook, args, text))); err != nil {
 		return e.preset(ctx, rn, "start_failed", "could not prepare codex")
@@ -318,12 +329,12 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	if err = writeJSON(filepath.Join(dir, specFile), spec); err != nil {
 		return e.preset(ctx, rn, "start_failed", "could not prepare codex")
 	}
-	if err = writeJSON(filepath.Join(dir, "turn.json"), turnRecord{Work: r.Work.ID, Kind: string(kind), Structured: *cfg.Structured, StatusSchema: domain.TurnSchema}); err != nil {
-		return e.preset(ctx, rn, "start_failed", "could not prepare codex")
-	}
 	env, err := e.environment(cfg, r, dir, layer)
 	if err != nil {
 		return e.preset(ctx, rn, "invalid_config", "invalid codex binding config")
+	}
+	if err = writeJSON(filepath.Join(dir, "turn.json"), turnRecord{Work: r.Work.ID, Kind: string(kind), HandoffReason: reason, CodexHome: codexHome(env), Structured: *cfg.Structured, StatusSchema: domain.TurnSchema}); err != nil {
+		return e.preset(ctx, rn, "start_failed", "could not prepare codex")
 	}
 	argv := append(append([]string{}, e.o.Driver...), dir)
 	cmd := exec.Command("/bin/sh", append([]string{"-c", wrapper, marker + nonce, dir}, argv...)...)
@@ -372,6 +383,9 @@ func (e *Executor) codexArgs(cfg Config, r extension.RunRequest, dir string) ([]
 			"-c", prefix+"command="+tomlString(filepath.Join(toolbelt, "os")),
 			"-c", prefix+`args=["mcp"]`,
 			"-c", prefix+"env={OS_ENDPOINT="+tomlString(r.Context.ToolbeltEndpoint)+",OS_TOKEN_FILE="+tomlString(token)+"}")
+	}
+	if n := cfg.AutoCompactTokens; n != nil && *n > 0 {
+		args = append(args, "-c", "model_auto_compact_token_limit="+strconv.FormatInt(*n, 10))
 	}
 	return append(args, cfg.ExtraArgs...), nil
 }
@@ -475,27 +489,59 @@ func baseline(name string) bool {
 }
 
 // thread is a Work's private continuity: the Codex session its turns
-// resume. Core never reads it.
+// resume, the last turn's handoff note and the context that turn ended
+// with. Core never reads it.
 type thread struct {
-	Thread string    `json:"thread"`
-	At     time.Time `json:"at"`
+	Thread  string    `json:"thread"`
+	At      time.Time `json:"at"`
+	Handoff string    `json:"handoff,omitempty"`
+	Context int64     `json:"context,omitempty"`
 }
 
 func (e *Executor) threadPath(work domain.ID) string {
 	return filepath.Join(e.o.StateDir, "work", executionKey(work)+".json")
 }
 
-func (e *Executor) loadThread(work domain.ID) (string, error) {
+func (e *Executor) loadThread(work domain.ID) (thread, error) {
 	var t thread
 	err := readJSON(e.threadPath(work), &t)
 	if errors.Is(err, os.ErrNotExist) {
-		return "", nil
+		return thread{}, nil
 	}
-	return t.Thread, err
+	return t, err
 }
 
-func (e *Executor) saveThread(work domain.ID, id string) error {
-	return writeJSON(e.threadPath(work), thread{Thread: id, At: e.o.Now().UTC()})
+// saveThread records the thread a segment ran on and the context it ended
+// with, and the turn's handoff note when it gave one (a turn without a
+// status keeps the earlier note).
+func (e *Executor) saveThread(work domain.ID, id, note string, context int64) error {
+	t, err := e.loadThread(work)
+	if err != nil {
+		t = thread{}
+	}
+	if note != "" {
+		t.Handoff = note
+	}
+	t.Thread, t.At, t.Context = id, e.o.Now().UTC(), context
+	return writeJSON(e.threadPath(work), t)
+}
+
+// codexHome is where codex keeps its sessions, from the environment it
+// runs in: CODEX_HOME, else ~/.codex.
+func codexHome(env []string) string {
+	var home string
+	for _, kv := range env {
+		if v, ok := strings.CutPrefix(kv, "CODEX_HOME="); ok && v != "" {
+			return v
+		}
+		if v, ok := strings.CutPrefix(kv, "HOME="); ok {
+			home = v
+		}
+	}
+	if home == "" {
+		return ""
+	}
+	return filepath.Join(home, ".codex")
 }
 
 // Recover adopts a verified live segment or returns its finished result. It

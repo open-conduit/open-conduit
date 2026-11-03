@@ -52,7 +52,24 @@ type Config struct {
 	ExtraArgs []string `json:"extra_args,omitempty"`
 	// TimeoutSeconds bounds a segment; the deadline survives restart.
 	TimeoutSeconds int64 `json:"timeout_seconds,omitempty"`
+	// HandoffTokens starts a fresh thread from the last turn's handoff note
+	// when that turn ended with more context than this (default 200000; 0
+	// turns it off and always resumes).
+	HandoffTokens *int64 `json:"handoff_tokens,omitempty"`
+	// AutoCompactTokens is where Codex compacts a thread in the middle of a
+	// turn, passed as -c model_auto_compact_token_limit (default 250000; 0
+	// leaves Codex's own). A -c in extra_args overrides it.
+	AutoCompactTokens *int64 `json:"auto_compact_tokens,omitempty"`
 }
+
+// The context limits on by default, under the context windows of Codex's
+// models: a turn after one that ended with more context than
+// DefaultHandoffTokens starts a fresh thread from the handoff note, and
+// Codex compacts in the middle of a turn at DefaultAutoCompactTokens.
+const (
+	DefaultHandoffTokens     int64 = 200_000
+	DefaultAutoCompactTokens int64 = 250_000
+)
 
 const maxTimeoutSeconds = 365 * 24 * 60 * 60
 
@@ -119,6 +136,17 @@ func ParseConfig(data []byte) (Config, error) {
 		if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) != p) {
 			return Config{}, configError("dir and plugin_dir must be clean absolute paths")
 		}
+	}
+	if c.HandoffTokens == nil {
+		n := DefaultHandoffTokens
+		c.HandoffTokens = &n
+	}
+	if c.AutoCompactTokens == nil {
+		n := DefaultAutoCompactTokens
+		c.AutoCompactTokens = &n
+	}
+	if *c.HandoffTokens < 0 || *c.AutoCompactTokens < 0 {
+		return Config{}, configError("handoff_tokens and auto_compact_tokens must not be negative")
 	}
 	if !extraArgsAllowed(c.ExtraArgs) {
 		return Config{}, configError("extra_args may not set the session, output, sandbox, approvals, model or toolbelt")

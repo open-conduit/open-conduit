@@ -290,9 +290,15 @@ type resultFields struct {
 	Turns     int     `json:"turns,omitempty"`
 	ToolCalls int     `json:"tool_calls,omitempty"`
 	Tokens    *Tokens `json:"tokens,omitempty"`
-	Limited   bool    `json:"limited,omitempty"`
-	ExitCode  *int    `json:"exit_code,omitempty"`
-	Signal    string  `json:"signal,omitempty"`
+	// Context is the thread's context when the segment ended, in tokens
+	// (0 when codex's session file doesn't say).
+	Context int64 `json:"context_tokens,omitempty"`
+	// HandoffReason is why the turn started a new thread from the handoff
+	// note ("size"); empty otherwise.
+	HandoffReason string `json:"handoff_reason,omitempty"`
+	Limited       bool   `json:"limited,omitempty"`
+	ExitCode      *int   `json:"exit_code,omitempty"`
+	Signal        string `json:"signal,omitempty"`
 	// Injected counts the events delivered to this segment and those a
 	// follow-up turn took in.
 	Injected       *injected `json:"injected,omitempty"`
@@ -441,11 +447,25 @@ func (e *Executor) finalizeWith(ctx context.Context, rn *run, preset *domain.Out
 		if f.Status != "" && turn.StatusSchema != "" {
 			schema = turn.StatusSchema
 		}
-		if thread := threadOf(filepath.Join(rn.dir, eventsFile)); thread != "" && turn.Work != "" {
-			if err := e.saveThread(turn.Work, thread); err != nil {
+		thread := threadOf(filepath.Join(rn.dir, eventsFile))
+		if thread == "" {
+			// A resumed turn may not announce its thread again.
+			var spec segmentSpec
+			if readJSON(filepath.Join(rn.dir, specFile), &spec) == nil {
+				thread = spec.Thread
+			}
+		}
+		if thread != "" && turn.Work != "" {
+			note := ""
+			if s := readStatus(filepath.Join(rn.dir, lastFile)); s != nil {
+				note = s.Handoff
+			}
+			f.Context = threadContext(turn.CodexHome, thread)
+			if err := e.saveThread(turn.Work, thread, note, f.Context); err != nil {
 				return extension.Result{}, err
 			}
 		}
+		f.HandoffReason = turn.HandoffReason
 		u := extension.Usage{}
 		if f.Tokens != nil {
 			in, out, cached := uint64(max(f.Tokens.Input, 0)), uint64(max(f.Tokens.Output, 0)), uint64(max(f.Tokens.CacheRead, 0))

@@ -9,6 +9,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -34,20 +35,29 @@ func TestMain(m *testing.M) {
 // stdin and environment as call-N, stdin-N and env-N, starts thread-1 on a
 // fresh launch, waits on a fresh launch for FAKE_BARRIER when it is set,
 // fails with FAKE_FAIL when set, and otherwise ends with FAKE_STATE (default
-// review) written to --output-last-message.
+// review) written to --output-last-message, with the handoff "note N". A
+// fresh launch's thread is the thread file's (thread-1 by default); when
+// the context file is there, the thread's session file under CODEX_HOME
+// ends with a token_count of that context.
 const fakeCodex = `#!/bin/sh
 d="$FAKE_DIR"
 n=1; while [ -e "$d/call-$n" ]; do n=$((n+1)); done
 printf '%s\n' "$@" > "$d/call-$n"
 cat > "$d/stdin-$n"
 env > "$d/env-$n"
-last=; prev=; resume=0
+last=; prev=; resume=0; penult=; ult=
 for a in "$@"; do
   [ "$prev" = --output-last-message ] && last=$a
   [ "$a" = resume ] && resume=1
-  prev=$a
+  prev=$a; penult=$ult; ult=$a
 done
-[ $resume = 0 ] && echo '{"type":"thread.started","thread_id":"thread-1"}'
+thread=$penult
+[ $resume = 0 ] && thread=$(cat "$d/thread" 2>/dev/null || echo thread-1)
+[ $resume = 0 ] && echo '{"type":"thread.started","thread_id":"'"$thread"'"}'
+if [ -e "$d/context" ] && [ -n "$CODEX_HOME" ]; then
+  mkdir -p "$CODEX_HOME/sessions/2026/11/03"
+  printf '{"type":"event_msg","payload":{"type":"token_count","info":{"last_token_usage":{"input_tokens":1,"total_tokens":%s}}}}\n' "$(cat "$d/context")" >> "$CODEX_HOME/sessions/2026/11/03/rollout-2026-11-03T00-00-00-$thread.jsonl"
+fi
 echo '{"type":"turn.started"}'
 : > "$d/started-$n"
 if [ $resume = 0 ] && [ -n "$FAKE_BARRIER" ]; then
@@ -61,7 +71,7 @@ fi
 echo '{"type":"item.completed","item":{"type":"mcp_tool_call"}}'
 echo '{"type":"item.completed","item":{"type":"agent_message","text":"done"}}'
 echo '{"type":"turn.completed","usage":{"input_tokens":10,"cached_input_tokens":4,"output_tokens":3}}'
-printf '{"state":"%s","summary":"turn %s","handoff":"","report":""}' "${FAKE_STATE:-review}" "$n" > "$last"
+printf '{"state":"%s","summary":"turn %s","handoff":"note %s","report":""}' "${FAKE_STATE:-review}" "$n" "$n" > "$last"
 `
 
 type fixture struct {
@@ -170,6 +180,75 @@ func data(t *testing.T, res extension.Result) fields {
 		t.Fatal(err)
 	}
 	return f
+}
+
+// TestLargeThreadHandsOff: a thread whose last turn ended with more than
+// handoff_tokens of context (codex's session file says how much) is left
+// for a new one started from the turn's handoff note; a smaller one
+// resumes, and handoff_tokens 0 always resumes. auto_compact_tokens reaches
+// codex as -c model_auto_compact_token_limit, 250000 by default.
+func TestLargeThreadHandsOff(t *testing.T) {
+	f := newFixture(t)
+	e := f.executor()
+	extra := map[string]any{}
+	env := map[string]string{"CODEX_HOME": filepath.Join(f.fake, "home")}
+	set := func(name, value string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(f.fake, name), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	type extra2 struct {
+		Context       int64  `json:"context_tokens"`
+		HandoffReason string `json:"handoff_reason"`
+	}
+	turn := func(n int) extra2 {
+		t.Helper()
+		res := run(t, e, request("work-h", "exec-h-"+strconv.Itoa(n), f.config(extra, env)))
+		var x extra2
+		if err := json.Unmarshal(res.Outcome.Data.Data, &x); err != nil {
+			t.Fatal(err)
+		}
+		return x
+	}
+
+	set("context", "150000")
+	if x := turn(1); x.Context != 150000 {
+		t.Fatalf("context %+v", x)
+	}
+	if call := f.read("call-1"); !strings.Contains(call, "\nmodel_auto_compact_token_limit=250000\n") {
+		t.Fatalf("the default auto-compact limit isn't passed:\n%s", call)
+	}
+	set("context", "250000")
+	turn(2)
+	if call := f.read("call-2"); !strings.HasPrefix(call, "exec\nresume\n") || !strings.Contains(call, "\nthread-1\n-\n") {
+		t.Fatalf("a small thread didn't resume:\n%s", call)
+	}
+	// Over the default 200000: a new thread from the note.
+	set("thread", "thread-2")
+	set("context", "1000")
+	if x := turn(3); x.HandoffReason != "size" {
+		t.Fatalf("handoff reason %+v", x)
+	}
+	if call := f.read("call-3"); strings.Contains(call, "\nresume\n") {
+		t.Fatalf("a large thread was resumed:\n%s", call)
+	}
+	if in := f.read("stdin-3"); !strings.Contains(in, "42 handoff\n\n## Handoff from your last session\n\nnote 2\n\n## Since your last turn") {
+		t.Fatalf("handoff prompt:\n%s", in)
+	}
+	// The new thread is the one resumed next.
+	turn(4)
+	if call := f.read("call-4"); !strings.Contains(call, "\nthread-2\n-\n") {
+		t.Fatalf("the new thread wasn't resumed:\n%s", call)
+	}
+	// handoff_tokens 0 always resumes; auto_compact_tokens 0 passes nothing.
+	extra["handoff_tokens"], extra["auto_compact_tokens"] = 0, 0
+	set("context", "900000")
+	turn(5)
+	turn(6)
+	if call := f.read("call-6"); !strings.Contains(call, "\nthread-2\n-\n") || strings.Contains(call, "model_auto_compact_token_limit") {
+		t.Fatalf("handoff_tokens 0 or auto_compact_tokens 0 ignored:\n%s", call)
+	}
 }
 
 func TestExecutorConformance(t *testing.T) {

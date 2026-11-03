@@ -16,18 +16,27 @@ import (
 type turnKind string
 
 const (
-	kindStart  turnKind = "start"
-	kindEvents turnKind = "events"
+	kindStart   turnKind = "start"
+	kindEvents  turnKind = "events"
+	kindHandoff turnKind = "handoff"
 )
 
+// handoffSize is why a handoff turn left its thread: the last turn ended
+// with more than handoff_tokens of context.
+const handoffSize = "size"
+
 // body composes the arguments and body of a turn, as Claude Code's do, so
-// a playbook reads the same message whichever agent runs it.
-func body(kind turnKind, args, events string) (string, string) {
-	if kind == kindStart {
+// a playbook reads the same message whichever agent runs it. A handoff
+// turn starts a new thread on the last turn's note.
+func body(kind turnKind, args, note, events string) (string, string) {
+	switch kind {
+	case kindStart:
 		if events == "" {
 			return args, ""
 		}
 		return args, "## Already waiting\n\n" + events
+	case kindHandoff:
+		return strings.TrimSpace(args + " handoff"), "## Handoff from your last session\n\n" + strings.TrimSpace(note) + "\n\n## Since your last turn\n\n" + events
 	}
 	return strings.TrimSpace(args + " events"), "## Since your last turn\n\n" + events
 }

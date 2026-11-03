@@ -47,6 +47,8 @@ All of these are optional and go in the binding's `config`:
 | `pass_env` | Variables from the daemon's environment that Codex should see. `CODEX_HOME` always passes. |
 | `extra_args` | More `codex exec` arguments, such as `["--search"]` for web search. |
 | `timeout_seconds` | The longest a turn may run. |
+| `handoff_tokens` | Once a turn ends with more context than this, the next turn starts a new thread from the agent's handoff note instead of resuming (default 200000; 0 always resumes). |
+| `auto_compact_tokens` | Where Codex compacts a thread in the middle of a turn (default 250000; 0 leaves Codex's own threshold). |
 
 `playbook`, `branch`, `args`, `workspace_mode`, `dir`, `env` and `secret_env` work as they do for Claude Code. The [Codex executor](/open-conduit/architecture/codex-executor/#binding-config) page lists every field.
 
