@@ -20,13 +20,15 @@ func Certification() protocol.CertificationFile {
 	return protocol.CertificationFile{Command: append(protocol.HostRunCommand(Name), "certify-fixture")}
 }
 
-// barrierEnv names a file the fake's first turn of a thread waits for.
+// barrierEnv names a file every turn of the fake waits for.
 const barrierEnv = "CODEX_FAKE_BARRIER"
 
 // Fixture is the certification fixture for a fake codex at binary: one
-// turn for the executor case, and for the inject case a first turn that
-// waits for the runner's finish file, so the injected Event becomes the
-// segment's follow-up turn.
+// turn for the executor case, and for the inject case turns that wait for
+// the runner's finish file, so the segment's first turn is still running
+// when the runner injects and the injected Event becomes its follow-up
+// turn. The first turn may resume a thread: the cases share a Work, and
+// the executor case has already started one for it.
 func Fixture(binary string) protocol.Fixture {
 	run, _ := json.Marshal(map[string]any{"binary": binary})
 	inject, _ := json.Marshal(map[string]any{"binary": binary, "env": map[string]string{barrierEnv: "{tmp}/inject-go"}})
@@ -69,7 +71,7 @@ func ServeFixture(stdin io.Reader, stdout io.Writer) error {
 }
 
 // FakeCodex is `open-conduit extension-run codex fake-codex`: one `codex exec --json` turn
-// of a thread called fake-thread. A fresh thread's turn waits for the
+// of a thread called fake-thread. A turn, fresh or resumed, waits for the
 // barrier file when CODEX_FAKE_BARRIER names one. Every turn ends with the
 // status review.
 func FakeCodex(args []string, stdin io.Reader, stdout io.Writer) int {
@@ -90,7 +92,7 @@ func FakeCodex(args []string, stdin io.Reader, stdout io.Writer) int {
 		_ = out.Encode(map[string]any{"type": "thread.started", "thread_id": "fake-thread"})
 	}
 	_ = out.Encode(map[string]any{"type": "turn.started"})
-	if barrier := os.Getenv(barrierEnv); barrier != "" && !resume {
+	if barrier := os.Getenv(barrierEnv); barrier != "" {
 		for {
 			if _, err := os.Stat(barrier); err == nil {
 				break
