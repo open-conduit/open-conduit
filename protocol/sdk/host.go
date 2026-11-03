@@ -48,6 +48,24 @@ func (h *Host) ResourceDir(typ string) string {
 	return h.srv.ResourceDir(typ)
 }
 
+// ContainerDir is the state directory the host named at initialize for one
+// of the extension's container provider types ("" when it named none).
+func (h *Host) ContainerDir(typ string) string {
+	if h.srv == nil {
+		return ""
+	}
+	return h.srv.ContainerDir(typ)
+}
+
+// ContainerHost is the host's container label (extension.ContainerLabelHost)
+// named at initialize ("" when it named none).
+func (h *Host) ContainerHost() string {
+	if h.srv == nil {
+		return ""
+	}
+	return h.srv.ContainerHost()
+}
+
 // ConfigDir is the operator's config file's directory the host named at
 // initialize ("" for none).
 func (h *Host) ConfigDir() string {

@@ -62,7 +62,16 @@ type Options struct {
 	// (protocol.InitializeParams.ResourceDirs and ConfigDir).
 	ResourceDirs map[string]string
 	ConfigDir    string
-	Host         protocol.HostInfo
+	// ContainerDirs and ContainerHost are the declared container types'
+	// state directories and the host's container label
+	// (protocol.InitializeParams.ContainerDirs and ContainerHost).
+	ContainerDirs map[string]string
+	ContainerHost string
+	// Env are variables the host itself sets in the process's environment,
+	// on top of the sanitized baseline and the grant: host switches a
+	// surface's packages read (never a secret).
+	Env  []string
+	Host protocol.HostInfo
 	// Versions are the protocol versions the host speaks (default
 	// protocol.Versions).
 	Versions []int
@@ -368,7 +377,7 @@ func (p *Process) launch(ctx context.Context) (chan struct{}, error) {
 		grant = p.o.PassEnv()
 	}
 	env, passed := granted(sanitized(p.o.Environ), p.o.Environ, grant)
-	cmd.Env = env
+	cmd.Env = append(env, p.o.Env...)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	logw := p.stderr()
 	cmd.Stderr = logw
@@ -444,7 +453,7 @@ func (p *Process) handshake(ctx context.Context, conn *jsonrpc.Conn) error {
 	ctx, cancel := context.WithTimeout(ctx, p.o.HandshakeTimeout)
 	defer cancel()
 	var init protocol.InitializeResult
-	err := conn.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: p.o.Versions, Host: p.o.Host, StateDir: p.o.StateDir, ExecutorDirs: p.o.ExecutorDirs, ResourceDirs: p.o.ResourceDirs, ConfigDir: p.o.ConfigDir}, &init)
+	err := conn.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: p.o.Versions, Host: p.o.Host, StateDir: p.o.StateDir, ExecutorDirs: p.o.ExecutorDirs, ResourceDirs: p.o.ResourceDirs, ConfigDir: p.o.ConfigDir, ContainerDirs: p.o.ContainerDirs, ContainerHost: p.o.ContainerHost}, &init)
 	if errors.Is(err, protocol.ErrIncompatible) {
 		return p.refuse(err)
 	}

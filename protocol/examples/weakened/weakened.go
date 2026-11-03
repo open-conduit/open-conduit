@@ -51,6 +51,7 @@ var Modes = []Mode{
 	{"mode-blind", notes.Name, "resources.workspace", "names no default mode whatever its resource config says"},
 	{"sandbox-open", notes.Name, "resources.workspace", "passes every resource config for a sandboxed binding"},
 	{"adopt-any", notes.Name, "sandboxes.policy", "adopts any recovered segment, even one it never planned"},
+	{"list-any", notes.Name, "containers.policy", "lists a running container for any execution, even one it never saw"},
 }
 
 // Lookup returns a mode by name.
@@ -202,6 +203,8 @@ func weakenNotes(mode string, ext *sdk.Extension) {
 		ext.Providers[notes.Scratch] = weakProvider{ResourceProvider: p, base: p.(workspaceChecks), mode: mode}
 	case "adopt-any":
 		ext.Sandboxes[notes.Jail] = adoptAny{ext.Sandboxes[notes.Jail]}
+	case "list-any":
+		ext.Containers[notes.Pod] = listAny{ext.Containers[notes.Pod]}
 	case "unstable-push":
 		base := ext.Ingress
 		ext.Ingress = func(name string) (extension.Ingress, bool) {
@@ -283,6 +286,15 @@ func (u unstable) Push(ctx context.Context, s extension.Source, d extension.Deli
 type adoptAny struct{ extension.SandboxProvider }
 
 func (adoptAny) Adopt(context.Context, extension.SandboxPlan, int, int) error { return nil }
+
+// listAny reports a running container of the owner's execution for any
+// owner it is asked about.
+type listAny struct{ extension.ContainerProvider }
+
+func (listAny) List(_ context.Context, owner extension.ResourceOwner) ([]extension.ContainerState, error) {
+	ref := extension.ContainerRef{ID: "pod-any", Labels: map[string]string{extension.ContainerLabelExecution: string(owner.ExecutionID)}}
+	return []extension.ContainerState{{Ref: ref, Daemon: "notes", Running: true}}, nil
+}
 
 type workspaceChecks interface {
 	extension.ResourceModeDefaulter

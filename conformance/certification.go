@@ -11,7 +11,7 @@ package conformance
 // CriteriaVersion versions the certification criteria. A report states it;
 // a package certified under one version is not implied certified under a
 // later one.
-const CriteriaVersion = 4
+const CriteriaVersion = 5
 
 // Criterion is one certification check.
 type Criterion struct {
@@ -50,5 +50,6 @@ var Criteria = []Criterion{
 	{"executor.resource_mode", "executors", "an executor with resource_mode", "Each executor mode fixture case answers validate executor_mode with the mode the case expects, twice identically, and every executor declaring resource_mode has a case."},
 	{"resources.workspace", "resources", "a resource type with mode_default or sandbox", "Each resource fixture case is answered as it expects, twice identically: validate resource_mode names the mode the config writes (mode_default), and validate resource_sandbox refuses exactly the configs a sandboxed binding can't use, with a reason (sandbox). Every such type has a case."},
 	{"sandboxes.policy", "sandboxes", "a sandbox provider type", "Each sandbox fixture case answers validate sandbox as it expects, twice identically, with an accepted and a refused case for every declared sandbox type, and sandbox_provider.adopt of a plan the provider never made is refused, so a restarted host adopts only a segment it can prove is confined."},
+	{"containers.policy", "containers", "a container provider type", "Each container fixture case answers validate container as it expects, twice identically, with an accepted and a refused case for every declared container type; container_provider.inspect never reports a container the provider never made as running, and container_provider.list for an execution it never saw lists nothing, so the host never stops, adopts or removes a container that isn't the owner's on the provider's say-so."},
 	{"surfaces.served", "lifecycle", "checks or tasks", "Every declared check answers check.run and every declared task is served by task.run."},
 }

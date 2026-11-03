@@ -131,6 +131,17 @@ type ContainerProvider interface {
 	Remove(ctx context.Context, ref ContainerRef) error
 }
 
+// ContainerForwarder is an optional ContainerProvider capability: a
+// provider whose containers can't reach a host socket (Docker on macOS,
+// where the socket can't cross the VM) reach the execution's toolbelt
+// through a TCP address the host serves for that execution instead.
+// Forward names the address to listen on for a binding's container config,
+// or "" when its containers reach the socket itself. The host asks before
+// each launch and recovery and serves the toolbelt there itself.
+type ContainerForwarder interface {
+	Forward(ctx context.Context, config domain.Payload) (string, error)
+}
+
 // ContainerExit is what Adopt found when a recovered segment's wrapper was
 // dead and its container had exited: the container's exit code, and
 // whether it was stopped by a TERM the host didn't send.

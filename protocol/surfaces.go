@@ -67,6 +67,11 @@ const (
 	// ValidateSandbox checks a binding's sandbox config for a provider
 	// declared in sandboxes. Type is the provider, Config its config.
 	ValidateSandbox = "sandbox"
+	// ValidateContainer checks a binding's container config for a provider
+	// declared in containers. Type is the provider, Config the whole
+	// container config (extension.ContainerConfig, provider settings
+	// included).
+	ValidateContainer = "container"
 )
 
 // ValidateParams asks the extension to check one opaque config object of
@@ -878,4 +883,123 @@ type ContainerExit struct {
 	Exited      bool `json:"exited,omitempty"`
 	ExitCode    int  `json:"exit_code,omitempty"`
 	Interrupted bool `json:"interrupted,omitempty"`
+}
+
+// ContainerRef identifies a container (extension.ContainerRef).
+type ContainerRef struct {
+	ID     string            `json:"id"`
+	Labels map[string]string `json:"labels,omitempty"`
+}
+
+func FromContainerRef(r extension.ContainerRef) ContainerRef {
+	return ContainerRef{ID: r.ID, Labels: r.Labels}
+}
+func (r ContainerRef) Extension() extension.ContainerRef {
+	return extension.ContainerRef{ID: r.ID, Labels: r.Labels}
+}
+
+// ContainerState is a provider's view of one container
+// (extension.ContainerState).
+type ContainerState struct {
+	Ref       ContainerRef `json:"ref"`
+	Daemon    string       `json:"daemon,omitempty"`
+	Image     string       `json:"image,omitempty"`
+	Running   bool         `json:"running,omitempty"`
+	Gone      bool         `json:"gone,omitempty"`
+	ExitCode  int          `json:"exit_code,omitempty"`
+	StartedAt time.Time    `json:"started_at,omitzero"`
+	Mounts    []string     `json:"mounts,omitempty"`
+}
+
+func FromContainerState(s extension.ContainerState) ContainerState {
+	return ContainerState{Ref: FromContainerRef(s.Ref), Daemon: s.Daemon, Image: s.Image, Running: s.Running, Gone: s.Gone, ExitCode: s.ExitCode, StartedAt: s.StartedAt, Mounts: s.Mounts}
+}
+func (s ContainerState) Extension() extension.ContainerState {
+	return extension.ContainerState{Ref: s.Ref.Extension(), Daemon: s.Daemon, Image: s.Image, Running: s.Running, Gone: s.Gone, ExitCode: s.ExitCode, StartedAt: s.StartedAt, Mounts: s.Mounts}
+}
+
+// ContainerPlan is what a provider will create (extension.ContainerPlan).
+// The host computes Digest itself from Image and Data.
+type ContainerPlan struct {
+	Image   string  `json:"image"`
+	Digest  string  `json:"digest,omitempty"`
+	Summary string  `json:"summary,omitempty"`
+	Data    Payload `json:"data"`
+}
+
+func FromContainerPlan(p extension.ContainerPlan) ContainerPlan {
+	return ContainerPlan{Image: p.Image, Digest: p.Digest, Summary: p.Summary, Data: FromPayload(p.Data)}
+}
+func (p ContainerPlan) Extension() extension.ContainerPlan {
+	return extension.ContainerPlan{Image: p.Image, Digest: p.Digest, Summary: p.Summary, Data: p.Data.Domain()}
+}
+
+// ContainerCreated is a container created and not started
+// (extension.ContainerCreated).
+type ContainerCreated struct {
+	Ref    ContainerRef `json:"ref"`
+	Daemon string       `json:"daemon,omitempty"`
+	Argv   []string     `json:"argv"`
+	Env    []string     `json:"env,omitempty"`
+}
+
+func FromContainerCreated(c extension.ContainerCreated) ContainerCreated {
+	return ContainerCreated{Ref: FromContainerRef(c.Ref), Daemon: c.Daemon, Argv: c.Argv, Env: c.Env}
+}
+func (c ContainerCreated) Extension() extension.ContainerCreated {
+	return extension.ContainerCreated{Ref: c.Ref.Extension(), Daemon: c.Daemon, Argv: c.Argv, Env: c.Env}
+}
+
+// ContainerProviderPlanParams asks a container provider to plan one launch
+// (container_provider.plan; extension.ContainerProvider.Plan). The host has
+// already merged the resource's needs and its protected set into Needs,
+// and computes the plan's digest itself from what comes back.
+type ContainerProviderPlanParams struct {
+	Type   string        `json:"type"`
+	Owner  ResourceOwner `json:"owner"`
+	Config Payload       `json:"config"`
+	Paths  SandboxPaths  `json:"paths"`
+	Needs  SandboxNeeds  `json:"needs"`
+	Launch SandboxLaunch `json:"launch"`
+}
+
+// ContainerProviderCreateParams asks a provider to create a plan's
+// container, not started (container_provider.create).
+type ContainerProviderCreateParams struct {
+	Type   string            `json:"type"`
+	Plan   ContainerPlan     `json:"plan"`
+	Labels map[string]string `json:"labels"`
+}
+
+// ContainerProviderRefParams names one container: signal (Signal), stop
+// (GraceMillis), inspect and remove.
+type ContainerProviderRefParams struct {
+	Type        string       `json:"type"`
+	Ref         ContainerRef `json:"ref"`
+	Signal      string       `json:"signal,omitempty"`
+	GraceMillis int64        `json:"grace_millis,omitempty"`
+}
+
+// ContainerProviderListParams lists the containers carrying an owner's
+// labels; an owner with no execution_id lists every container of the host
+// (container_provider.list). The answer is a ContainerList; a listing that
+// fails is an error, never an empty list.
+type ContainerProviderListParams struct {
+	Type  string        `json:"type"`
+	Owner ResourceOwner `json:"owner"`
+}
+type ContainerList struct {
+	Containers []ContainerState `json:"containers"`
+}
+
+// ContainerProviderForwardParams asks a provider declared with forward for
+// the address the host serves an execution's toolbelt on for a container
+// config, before each launch and recovery (container_provider.forward). An
+// empty Address means its containers reach the toolbelt's socket itself.
+type ContainerProviderForwardParams struct {
+	Type   string  `json:"type"`
+	Config Payload `json:"config"`
+}
+type ContainerForward struct {
+	Address string `json:"address,omitempty"`
 }

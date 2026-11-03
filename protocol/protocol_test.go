@@ -22,16 +22,16 @@ import (
 var firstParty = map[string]bool{
 	"github": true, "slack": true, "linear": true, "jira": true, "bitbucket": true, "schedule": true,
 	"introspection": true, "human": true, "posthog": true, "git": true, "shell": true, "claude-code": true, "setup": true,
-	"srt": true, "codex": true,
+	"srt": true, "codex": true, "docker": true, "ssh": true,
 }
 
 // useCases is the 07-01 inventory: the shipped first-party extensions and
 // executors that need each wire method. It lives with the test, not the
 // catalogue, so the public protocol names no service or executor (#354).
 var useCases = map[string][]string{
-	"initialize":                  {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code", "codex", "srt"},
-	"configure":                   {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog"},
-	"validate":                    {"setup", "github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code", "srt"},
+	"initialize":                  {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code", "codex", "srt", "docker", "ssh"},
+	"configure":                   {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "docker", "ssh"},
+	"validate":                    {"setup", "github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code", "srt", "docker", "ssh"},
 	"shutdown":                    {"posthog", "introspection", "slack"},
 	"$/cancel":                    {"github", "slack", "claude-code", "shell"},
 	"ingress.push":                {"github", "slack", "linear", "jira", "bitbucket", "schedule"},
@@ -74,6 +74,14 @@ var useCases = map[string][]string{
 	"provider.sweep":              {"git"},
 	"sandbox_provider.plan":       {"srt"},
 	"sandbox_provider.adopt":      {"srt"},
+	"container_provider.plan":     {"docker", "ssh"},
+	"container_provider.create":   {"docker", "ssh"},
+	"container_provider.signal":   {"docker", "ssh"},
+	"container_provider.stop":     {"docker", "ssh"},
+	"container_provider.inspect":  {"docker", "ssh"},
+	"container_provider.list":     {"docker", "ssh"},
+	"container_provider.remove":   {"docker", "ssh"},
+	"container_provider.forward":  {"docker"},
 	"kv.get":                      {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
 	"kv.list":                     {"github", "slack", "linear", "jira", "introspection", "claude-code"},
 	"kv.commit":                   {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
@@ -113,7 +121,7 @@ var useCases = map[string][]string{
 	"config.validate":             {"setup"},
 	"config.candidate":            {"setup"},
 	"config.trace":                {"setup"},
-	"check.run":                   {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "claude-code", "srt"},
+	"check.run":                   {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "claude-code", "srt", "docker", "ssh"},
 	"run.environment":             {"github"},
 	"event.render_owned":          {"claude-code"},
 	"target.resolve":              {"schedule"},
@@ -306,6 +314,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Routes[0].Samples = true
 	m.Provides.Targets, m.Provides.SegmentEnd = []string{"chat"}, true
 	m.Provides.Sandboxes = []protocol.SandboxDecl{{Type: "chat-jail"}}
+	m.Provides.Containers = []protocol.ContainerDecl{{Type: "chat-pod", Forward: true}}
 	m.Provides.Resources[0].Sweep = true
 	m.Provides.Probes = []protocol.ProbeInfo{{Name: "accounts", Summary: "the signed-in accounts"}}
 	for _, p := range protocol.KnownPermissions {

@@ -109,6 +109,10 @@ type Extension struct {
 	// Sandboxes are process sandbox providers by declared type (manifest
 	// sandboxes).
 	Sandboxes map[string]extension.SandboxProvider
+	// Containers are container providers by declared type (manifest
+	// containers). One declared with forward implements
+	// extension.ContainerForwarder.
+	Containers map[string]extension.ContainerProvider
 	// Exporter receives telemetry batches (manifest exporters) and is shut
 	// down with the extension.
 	Exporter observability.Exporter
@@ -154,6 +158,11 @@ type Server struct {
 	// (protocol.InitializeParams.ResourceDirs and ConfigDir).
 	resources map[string]string
 	configDir string
+	// containers are the declared container types' state directories and
+	// containerHost the host's container label
+	// (protocol.InitializeParams.ContainerDirs and ContainerHost).
+	containers    map[string]string
+	containerHost string
 
 	mu       sync.Mutex
 	ready    bool
@@ -245,7 +254,7 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			_ = s.ext.Exporter.Shutdown(ctx)
 		}
 		return struct{}{}, nil
-	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "provider.sweep", "sandbox_provider.plan", "sandbox_provider.adopt", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.act", "view.render", "config.candidate", "setup.run":
+	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "provider.sweep", "sandbox_provider.plan", "sandbox_provider.adopt", "container_provider.plan", "container_provider.create", "container_provider.signal", "container_provider.stop", "container_provider.inspect", "container_provider.list", "container_provider.remove", "container_provider.forward", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.act", "view.render", "config.candidate", "setup.run":
 		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)
@@ -486,6 +495,7 @@ func (s *Server) initialize(raw json.RawMessage) (any, error) {
 	}
 	s.mu.Lock()
 	s.ready, s.state, s.executors, s.resources, s.configDir = true, p.StateDir, p.ExecutorDirs, p.ResourceDirs, p.ConfigDir
+	s.containers, s.containerHost = p.ContainerDirs, p.ContainerHost
 	s.mu.Unlock()
 	return protocol.InitializeResult{ProtocolVersion: v, Manifest: manifest}, nil
 }
@@ -504,6 +514,22 @@ func (s *Server) ResourceDir(typ string) string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	return s.resources[typ]
+}
+
+// ContainerDir is the state directory the host named at initialize for one
+// of the extension's container provider types ("" when it named none).
+func (s *Server) ContainerDir(typ string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.containers[typ]
+}
+
+// ContainerHost is the host's container label the host named at initialize
+// (extension.ContainerLabelHost; "" when it named none).
+func (s *Server) ContainerHost() string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.containerHost
 }
 
 // ConfigDir is the directory of the operator's config file the host named

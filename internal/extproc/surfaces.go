@@ -359,6 +359,100 @@ func (p *remoteSandbox) Adopt(ctx context.Context, plan extension.SandboxPlan, p
 	return nil
 }
 
+// Container returns the container provider adapter of a declared type.
+// The host binds it to an attempt (extension.BindContainer), which merges
+// the protected set into the needs, pins the plan's digest and the
+// container, and keeps stop, reconcile and removal, so the package only
+// plans, creates and reports containers. One declared with forward is an
+// extension.ContainerForwarder.
+func (r *Remote) Container(typ string) (extension.ContainerProvider, bool) {
+	for _, d := range r.m.Provides.Containers {
+		if d.Type == typ {
+			p := &remoteContainer{r: r, typ: typ}
+			if d.Forward {
+				return forwardingContainer{p}, true
+			}
+			return p, true
+		}
+	}
+	return nil, false
+}
+
+type remoteContainer struct {
+	r   *Remote
+	typ string
+}
+
+// forwardingContainer is a remote container provider declared with forward.
+type forwardingContainer struct{ *remoteContainer }
+
+func (p forwardingContainer) Forward(ctx context.Context, config domain.Payload) (string, error) {
+	var out protocol.ContainerForward
+	if err := p.r.p.Call(ctx, "container_provider.forward", protocol.ContainerProviderForwardParams{Type: p.typ, Config: protocol.FromPayload(config)}, &out); err != nil {
+		return "", sandboxErr(err)
+	}
+	return out.Address, nil
+}
+
+// Plan and Create fail closed as a sandbox does: a refusal stays itself
+// and anything else means nothing may run.
+func (p *remoteContainer) Plan(ctx context.Context, owner extension.ResourceOwner, policy extension.ContainerPolicy, needs extension.SandboxNeeds, launch extension.SandboxLaunch) (extension.ContainerPlan, error) {
+	var out protocol.ContainerPlan
+	err := p.r.p.Call(ctx, "container_provider.plan", protocol.ContainerProviderPlanParams{Type: p.typ, Owner: protocol.FromOwner(owner), Config: protocol.FromPayload(policy.Config), Paths: protocol.FromSandboxPaths(policy.Paths), Needs: protocol.FromSandboxNeeds(needs), Launch: protocol.FromSandboxLaunch(launch)}, &out)
+	if err != nil {
+		return extension.ContainerPlan{}, sandboxErr(err)
+	}
+	return out.Extension(), nil
+}
+
+func (p *remoteContainer) Create(ctx context.Context, plan extension.ContainerPlan, labels map[string]string) (extension.ContainerCreated, error) {
+	var out protocol.ContainerCreated
+	if err := p.r.p.Call(ctx, "container_provider.create", protocol.ContainerProviderCreateParams{Type: p.typ, Plan: protocol.FromContainerPlan(plan), Labels: labels}, &out); err != nil {
+		return extension.ContainerCreated{}, sandboxErr(err)
+	}
+	return out.Extension(), nil
+}
+
+func (p *remoteContainer) Signal(ctx context.Context, ref extension.ContainerRef, signal string) error {
+	return p.r.p.Call(ctx, "container_provider.signal", protocol.ContainerProviderRefParams{Type: p.typ, Ref: protocol.FromContainerRef(ref), Signal: signal}, nil)
+}
+
+func (p *remoteContainer) Stop(ctx context.Context, ref extension.ContainerRef, grace time.Duration) error {
+	return p.r.p.Call(ctx, "container_provider.stop", protocol.ContainerProviderRefParams{Type: p.typ, Ref: protocol.FromContainerRef(ref), GraceMillis: grace.Milliseconds()}, nil)
+}
+
+// Inspect's failure is an error, never Gone: a package that is down can't
+// confirm a container stopped.
+func (p *remoteContainer) Inspect(ctx context.Context, ref extension.ContainerRef) (extension.ContainerState, error) {
+	var out protocol.ContainerState
+	if err := p.r.p.Call(ctx, "container_provider.inspect", protocol.ContainerProviderRefParams{Type: p.typ, Ref: protocol.FromContainerRef(ref)}, &out); err != nil {
+		return extension.ContainerState{}, err
+	}
+	return out.Extension(), nil
+}
+
+// List keeps only what carries the owner's execution label.
+func (p *remoteContainer) List(ctx context.Context, owner extension.ResourceOwner) ([]extension.ContainerState, error) {
+	var out protocol.ContainerList
+	if err := p.r.p.Call(ctx, "container_provider.list", protocol.ContainerProviderListParams{Type: p.typ, Owner: protocol.FromOwner(owner)}, &out); err != nil {
+		return nil, err
+	}
+	// The host acts only on what carries the owner's labels, whatever the
+	// package listed.
+	states := make([]extension.ContainerState, 0, len(out.Containers))
+	for _, st := range out.Containers {
+		if owner.ExecutionID != "" && st.Ref.Labels[extension.ContainerLabelExecution] != string(owner.ExecutionID) {
+			continue
+		}
+		states = append(states, st.Extension())
+	}
+	return states, nil
+}
+
+func (p *remoteContainer) Remove(ctx context.Context, ref extension.ContainerRef) error {
+	return p.r.p.Call(ctx, "container_provider.remove", protocol.ContainerProviderRefParams{Type: p.typ, Ref: protocol.FromContainerRef(ref)}, nil)
+}
+
 // sandboxErr fails a sandbox call closed: a refusal the package authored as
 // sandbox_denied stays a denial, and anything else (the package down, an
 // internal error) means the sandbox can't be enforced, so nothing runs.
