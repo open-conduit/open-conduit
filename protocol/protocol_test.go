@@ -22,14 +22,14 @@ import (
 var firstParty = map[string]bool{
 	"github": true, "slack": true, "linear": true, "jira": true, "bitbucket": true, "schedule": true,
 	"introspection": true, "human": true, "posthog": true, "git": true, "shell": true, "claude-code": true, "setup": true,
-	"srt": true, "codex": true, "docker": true, "ssh": true,
+	"srt": true, "codex": true, "docker": true, "ssh": true, "ngrok": true, "cloudflared": true,
 }
 
 // useCases is the 07-01 inventory: the shipped first-party extensions and
 // executors that need each wire method. It lives with the test, not the
 // catalogue, so the public protocol names no service or executor (#354).
 var useCases = map[string][]string{
-	"initialize":                  {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code", "codex", "srt", "docker", "ssh"},
+	"initialize":                  {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code", "codex", "srt", "docker", "ssh", "ngrok", "cloudflared"},
 	"configure":                   {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "docker", "ssh"},
 	"validate":                    {"setup", "github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code", "srt", "docker", "ssh"},
 	"shutdown":                    {"posthog", "introspection", "slack"},
@@ -82,6 +82,8 @@ var useCases = map[string][]string{
 	"container_provider.list":     {"docker", "ssh"},
 	"container_provider.remove":   {"docker", "ssh"},
 	"container_provider.forward":  {"docker"},
+	"tunnel.run":                  {"ngrok", "cloudflared"},
+	"tunnel.url":                  {"ngrok", "cloudflared"},
 	"kv.get":                      {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
 	"kv.list":                     {"github", "slack", "linear", "jira", "introspection", "claude-code"},
 	"kv.commit":                   {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
@@ -121,7 +123,7 @@ var useCases = map[string][]string{
 	"config.validate":             {"setup"},
 	"config.candidate":            {"setup"},
 	"config.trace":                {"setup"},
-	"check.run":                   {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "claude-code", "srt", "docker", "ssh"},
+	"check.run":                   {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "claude-code", "srt", "docker", "ssh", "ngrok", "cloudflared"},
 	"run.environment":             {"github"},
 	"event.render_owned":          {"claude-code"},
 	"target.resolve":              {"schedule"},
@@ -215,6 +217,8 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 		"extension.Setup":                   reflect.TypeFor[extension.Setup](),
 		"extension.SetupProbes":             reflect.TypeFor[extension.SetupProbes](),
 		"extension.SandboxBroker":           reflect.TypeFor[extension.SandboxBroker](),
+		"extension.SandboxProvider":         reflect.TypeFor[extension.SandboxProvider](),
+		"extension.TunnelProvider":          reflect.TypeFor[extension.TunnelProvider](),
 		"extension.ContainerBroker":         reflect.TypeFor[extension.ContainerBroker](),
 		"extension.SetupHost":               reflect.TypeFor[extension.SetupHost](),
 		"observability.Exporter":            reflect.TypeFor[observability.Exporter](),
@@ -315,6 +319,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Targets, m.Provides.SegmentEnd = []string{"chat"}, true
 	m.Provides.Sandboxes = []protocol.SandboxDecl{{Type: "chat-jail"}}
 	m.Provides.Containers = []protocol.ContainerDecl{{Type: "chat-pod", Forward: true}}
+	m.Provides.Tunnels = []protocol.TunnelDecl{{Type: "chat-tunnel"}}
 	m.Provides.Resources[0].Sweep = true
 	m.Provides.Probes = []protocol.ProbeInfo{{Name: "accounts", Summary: "the signed-in accounts"}}
 	for _, p := range protocol.KnownPermissions {

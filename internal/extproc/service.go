@@ -123,6 +123,7 @@ type Service struct {
 	writers    map[string]storage.ArtifactWriter
 	sources    map[string]bool
 	reconciles map[string]extension.ResourceStatusFunc
+	tunnels    map[string]func(string)
 	setups     map[string]extension.SetupHost
 	refused    int64
 }
@@ -138,7 +139,7 @@ func NewService(m protocol.Manifest, deps Deps) (*Service, error) {
 	if deps.Scopes == nil {
 		deps.Scopes = func() []domain.ID { return nil }
 	}
-	s := &Service{name: m.Name, manifest: m, enabled: map[string]bool{}, deps: deps, inTx: func() bool { return false }, runs: map[string]*run{}, writers: map[string]storage.ArtifactWriter{}, sources: map[string]bool{}, reconciles: map[string]extension.ResourceStatusFunc{}, setups: map[string]extension.SetupHost{}}
+	s := &Service{name: m.Name, manifest: m, enabled: map[string]bool{}, deps: deps, inTx: func() bool { return false }, runs: map[string]*run{}, writers: map[string]storage.ArtifactWriter{}, sources: map[string]bool{}, reconciles: map[string]extension.ResourceStatusFunc{}, tunnels: map[string]func(string){}, setups: map[string]extension.SetupHost{}}
 	for _, method := range m.Enabled() {
 		s.enabled[method] = true
 	}
@@ -415,6 +416,26 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.FromOwnerStatus(st), nil
+	case "tunnel.url":
+		var p protocol.TunnelURLParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		s.mu.Lock()
+		publish := s.tunnels[p.Run]
+		s.mu.Unlock()
+		if publish == nil {
+			return nil, protocol.Errorf(protocol.CodeConflict, "no tunnel.run in progress under that ID")
+		}
+		// Webhooks are pointed at this URL: the host takes only what the
+		// operator's own public_url could be.
+		if p.URL != "" {
+			if err := extension.CheckPublicURL(p.URL); err != nil {
+				return nil, invalid(err.Error())
+			}
+		}
+		publish(p.URL)
+		return struct{}{}, nil
 	case "setup.print", "setup.prompt", "setup.choose", "setup.open_url", "setup.store_secret", "setup.look_path", "setup.run_command":
 		return s.setup(ctx, method, raw)
 	case "telemetry.capture":

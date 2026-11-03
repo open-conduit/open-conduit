@@ -29,6 +29,8 @@ import (
 	slackext "github.com/open-conduit/open-conduit/extensions/slack/pkg"
 	srtext "github.com/open-conduit/open-conduit/extensions/srt/pkg"
 	sshext "github.com/open-conduit/open-conduit/extensions/ssh/pkg"
+	"github.com/open-conduit/open-conduit/extensions/tunnel"
+	tunnelext "github.com/open-conduit/open-conduit/extensions/tunnel/pkg"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/sdk"
@@ -52,6 +54,7 @@ var runnable = map[string]struct {
 }{
 	"bitbucket":     {bitbucketext.Main, bitbucketext.Manifest, nil, true},
 	"claude-code":   {claudecodeext.Main, claudecodeext.Manifest, nil, true},
+	"cloudflared":   {tunnelext.Main(tunnel.Cloudflared), func() protocol.Manifest { return tunnelext.Manifest(tunnel.Cloudflared) }, nil, true},
 	"codex":         {codexext.Main, codexext.Manifest, nil, true},
 	"docker":        {dockerext.Main, dockerext.Manifest, nil, true},
 	"git":           {gitext.Main, gitext.Manifest, nil, true},
@@ -59,6 +62,7 @@ var runnable = map[string]struct {
 	"human":         {humanext.Main, humanext.Manifest, nil, true},
 	"introspection": {introspectionext.Main, introspectionext.Manifest, introspectionext.Playbooks, true},
 	"jira":          {jiraext.Main, jiraext.Manifest, jiraext.Playbooks, true},
+	"ngrok":         {tunnelext.Main(tunnel.Ngrok), func() protocol.Manifest { return tunnelext.Manifest(tunnel.Ngrok) }, nil, true},
 	"linear":        {linearext.Main, linearext.Manifest, linearext.Playbooks, true},
 	"observe":       {observeext.Main, observeext.Manifest, nil, true},
 	"pagerduty":     {pagerduty.Main, pagerduty.Manifest, nil, false},

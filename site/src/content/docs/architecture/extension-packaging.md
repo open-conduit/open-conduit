@@ -101,6 +101,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Providers` | `resources` | `provider.*` |
 | `Sandboxes` | `sandboxes` | `sandbox_provider.*` |
 | `Containers` | `containers` (`forward` for an `extension.ContainerForwarder`) | `container_provider.*` |
+| `Tunnels` | `tunnels` | `tunnel.run`, `tunnel.url` (E→H) |
 | `Tasks`, `Checks`, `CheckRuns` (a check that reads the configuration view or reports its own status, code and items) | `tasks`, `checks` | `task.run`, `check.run` |
 | `Exporter` | `exporters` | `telemetry.export` |
 | `Sink` | permission `telemetry.sink` | `telemetry.sink` |
@@ -166,7 +167,7 @@ The `Host` client (`ctx.host`) offers `get`, `list`, `commit`, `update`, `accept
 
 `main()` moves stdout to stderr while it serves, so `console.log` can't corrupt the protocol stream, and it exits when stdin closes. The manifest's command must be an executable file inside the package, so bundle the extension to one file with a `#!/usr/bin/env node` line and make it executable. [`protocol/examples/weather`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/weather) does this with esbuild in `scripts/package.mjs`. Its unit tests serve the extension over a pair of in-memory streams, with the SDK's `Conn` standing in for the host, and `make certify` certifies its package.
 
-This first step doesn't include `wait` and `emit` operations, routes, ingress or executors, an in-process test host like `sdktest`, a TypeScript `extension new` scaffold, or an npm release. `src/wire.ts` is written by hand. `TestTypeScriptWireMatchesGo` fails when a field there is no longer a JSON field of the Go type it names, or when Go can send null for a field the SDK doesn't accept null for.
+This first step doesn't include `wait` and `emit` operations, routes, ingress, executors or the provider kinds (resources, sandboxes, tunnels), an in-process test host like `sdktest`, a TypeScript `extension new` scaffold, or an npm release. `src/wire.ts` is written by hand. `TestTypeScriptWireMatchesGo` fails when a field there is no longer a JSON field of the Go type it names, or when Go can send null for a field the SDK doesn't accept null for.
 
 ### Examples
 
@@ -288,7 +289,7 @@ Secrets reach a package only through `secret.resolve`. It returns the secret nam
 
 ### Process environment
 
-A package's process starts with the sanitized baseline only (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, `TERM`), so no credential or Open Conduit setting reaches it through its environment. A package that needs a variable of the daemon's own outside any binding (the ssh agent a container provider reaches every remote with, `DOCKER_HOST` for the docker CLI, a tunnel's variables) is granted it by the operator, by package name, in the configuration:
+A package's process starts with the sanitized baseline only (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, `TERM`), so no credential or Open Conduit setting reaches it through its environment. A package that needs a variable of the daemon's own outside any binding (the ssh agent a container provider reaches every remote with, `DOCKER_HOST` for the docker CLI, `NGROK_AUTHTOKEN` for the ngrok tunnel) is granted it by the operator, by package name, in the configuration:
 
 ```json
 "settings": { "extensions": { "ssh": { "pass_env": ["SSH_AUTH_SOCK"] } } }
@@ -344,7 +345,7 @@ There are two harnesses. Use `sdktest` for a handler's logic: it runs in millise
 [`protocol/sdk/sdktest`](https://github.com/open-conduit/open-conduit/blob/main/protocol/sdk/sdktest/sdktest.go) serves your `sdk.Extension` on an in-memory host behind a real `jsonrpc` pipe, so every call crosses the wire as it would in the daemon. `sdktest.New(t, ext, opts...)` initializes it with a temporary state directory.
 
 - **Seeding (options):** `WithScopes`, `WithWorks`, `WithExecutions`, `WithWaits`, `WithEvents(scope, events...)` (accepted as causal roots), `WithKV`, `WithKVVersion` (the stored layout, so `Configure` runs `Migrate`), `WithSecrets` and `WithConnectionSecrets`, `WithAuthority` (what `Operation` calls carry) and `WithClock`. Pass `conformance.NewClock()` and advance it; the default clock is fixed at `sdktest.Start`.
-- **Calling in:** `sdktest.Call[Out](ctx, h, name, in)` calls a declared operation with `in` encoded as its input and decodes the output into `Out`, so a test never builds a payload by hand. `Operation(ctx, name, input)` calls a declared operation by its kind and returns an `OperationResult`: a handler's output, a wait's plan, or an emission's accepted Event with its commit's output (the records are written to KV). `Configure`, `Route`, `RunTask`, `Check` and `CheckRun` cover the other common surfaces, and `Call` reaches any other method (`webhook.handle`, `event.render` …).
+- **Calling in:** `sdktest.Call[Out](ctx, h, name, in)` calls a declared operation with `in` encoded as its input and decodes the output into `Out`, so a test never builds a payload by hand. `Operation(ctx, name, input)` calls a declared operation by its kind and returns an `OperationResult`: a handler's output, a wait's plan, or an emission's accepted Event with its commit's output (the records are written to KV). `Configure`, `Route`, `RunTask`, `Check` and `CheckRun` cover the other common surfaces, `Tunnel` holds a `tunnel.run` open and collects the URLs the package reports, and `Call` reaches any other method (`webhook.handle`, `event.render` …).
 - **Inspecting:** `KV(namespace)`, `Events()` (seeded, derived, delivered and emitted), `Commits()` (each applied `kv.commit` batch), `Artifacts()`, `Captured()` and `KVVersion()`.
 
 The host answers the scoped methods the way the daemon does. KV values carry the same version tokens, a stale check is `storage.ErrConflict`, and another extension's namespace is unauthorized. `event.accept` needs a parent Event in the same configured scope, deduplicates by source and delivery ID, and writes its records only when the Event is new. A `kv.commit` batch's Emissions are accepted with its writes, or, on a failed check or a refused Emission, nothing is. `ingress.deliver` runs the delivery through the source's adapter (`ingress.push`) from the last `Configure`. State reads and secrets see only configured scopes. A method the manifest does not enable is refused as undeclared. It does not enforce causal depth and rate limits, and it does not serve timers, Work control, probes or `config.*` (they answer unsupported). [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/blob/main/protocol/examples/notes/notes_test.go) is tested this way.
@@ -463,7 +464,7 @@ Flags:
 | `containers.policy` | container provider type | Each container case's `validate container` refuses exactly as expected, twice identically, with an accepted and a refused case for every type; `container_provider.inspect` never reports a container the provider never made as running, and `container_provider.list` for an execution it never saw lists nothing (negative control `list-any`) |
 | `surfaces.served` | checks or tasks | Every check answers; every task is served |
 
-A package is certified when every applicable criterion passes. A declared ingress type or executor, an executor declaring `resource_mode`, a resource type declaring `mode_default` or `sandbox`, or a sandbox type without its fixture cases fails. Missing route and operation cases are noted.
+A package is certified when every applicable criterion passes. A declared ingress type or executor, an executor declaring `resource_mode`, a resource type declaring `mode_default` or `sandbox`, or a sandbox type without its fixture cases fails. Missing route and operation cases are noted. A tunnel type has no criterion of its own: the host keeps the listener and what it serves, so a provider can only report where webhooks point, which the operator's `public_url` does too, and running one needs its third-party program.
 
 ### Fixtures
 

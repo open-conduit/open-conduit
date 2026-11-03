@@ -682,7 +682,11 @@ func (d *daemon) inprocChecks(deep bool) []func(context.Context) runtime.Check {
 			run := check.Run
 			out = append(out, func(ctx context.Context) runtime.Check {
 				s, _ := d.configs.Current()
-				return runtimeCheck(run(ctx, checkConfig(s, x, d.executors, filepath.Dir(d.o.ConfigPath))))
+				cfg := checkConfig(s, x, d.executors, filepath.Dir(d.o.ConfigPath))
+				d.hooks.mu.Lock()
+				cfg.Tunnel = tunnelView(x, d.hooks.options)
+				d.hooks.mu.Unlock()
+				return runtimeCheck(run(ctx, cfg))
 			})
 		}
 	}
@@ -695,9 +699,13 @@ func (d *daemon) inprocChecks(deep bool) []func(context.Context) runtime.Check {
 // the configuration doesn't use (as offline validation starts none).
 func offlineChecks(ctx context.Context, s *config.Snapshot, executors map[string]extension.Executor, dir string, pkgs []*installed) []runtime.Check {
 	var out []runtime.Check
+	var tunnel TunnelOptions
+	if s != nil {
+		_, _, tunnel, _ = exposure(Options{}, s.Settings.Webhooks)
+	}
 	xs := firstParty()
 	for _, p := range pkgs {
-		if usedBy(s, p.m) {
+		if usedBy(s, p.m) || tunnelView(p, tunnel) != nil {
 			xs = append(xs, p)
 		}
 	}
@@ -708,11 +716,29 @@ func offlineChecks(ctx context.Context, s *config.Snapshot, executors map[string
 		}
 		for _, check := range c.Checks() {
 			if check.Offline && !check.Deep {
-				out = append(out, runtimeCheck(check.Run(ctx, checkConfig(s, x, executors, dir))))
+				cfg := checkConfig(s, x, executors, dir)
+				cfg.Tunnel = tunnelView(x, tunnel)
+				out = append(out, runtimeCheck(check.Run(ctx, cfg)))
 			}
 		}
 	}
 	return out
+}
+
+// tunnelView is the webhook tunnel in x's check view
+// (protocol.CheckConfig.Tunnel): t, when x is a package that provides its
+// type; nil otherwise.
+func tunnelView(x inproc.Extension, t TunnelOptions) *protocol.CheckTunnel {
+	pkg, ok := x.(*installed)
+	if !ok || t.Kind == "" {
+		return nil
+	}
+	for _, d := range pkg.m.Provides.Tunnels {
+		if d.Type == t.Kind {
+			return &protocol.CheckTunnel{Type: t.Kind, Config: tunnelConfig(t).Data}
+		}
+	}
+	return nil
 }
 
 func runtimeCheck(r inproc.CheckResult) runtime.Check {

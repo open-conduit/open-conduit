@@ -285,9 +285,7 @@ var wiringFiles = map[string]bool{"inproc.go": true, "adapters.go": true}
 // onto them). The list may only shrink: a file may not import anything new,
 // and an entry nothing needs any more fails the check, so remove it with
 // the import.
-var compositionExceptions = map[string][]string{
-	"webhooks.go": {"extensions/tunnel"},
-}
+var compositionExceptions = map[string][]string{}
 
 // compositionViolations checks internal/bootstrap's production files import
 // a first-party extension or executor only from wiringFiles, or as the

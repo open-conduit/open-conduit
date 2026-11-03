@@ -485,6 +485,11 @@ func (d *daemon) openExtensions(ctx context.Context) {
 				d.containers.providers[c.Type] = p
 			}
 		}
+		for _, t := range f.Manifest.Provides.Tunnels {
+			if p, ok := r.Tunnel(t.Type); ok {
+				d.hooks.addTunnel(t.Type, p)
+			}
+		}
 		d.log.Info("extension started", "extension", name, "version", f.Manifest.Version, "protocol", protocol.Version, "pass_env", strings.Join(r.Process().PassedEnv(), ","))
 	}
 }

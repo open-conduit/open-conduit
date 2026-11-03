@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -504,26 +503,44 @@ func (c *checker) webhooks(n *node) Webhooks {
 			c.fail(path+"/addr", "invalid_value", "use host:port, for example 127.0.0.1:8787")
 		}
 	}
+	for _, p := range w.TunnelProblems() {
+		c.fail(path+"/"+p.Field, "invalid_value", p.Message)
+	}
+	return w
+}
+
+// TunnelProblem is one field of a tunnel's settings that doesn't fit the
+// tunnel type.
+type TunnelProblem struct {
+	Field, Message string
+}
+
+// TunnelProblems checks that the tunnel fields fit the tunnel type (no
+// type with a public URL means static). settings.webhooks is checked this
+// way, and so are serve's flags of the same names.
+func (w Webhooks) TunnelProblems() []TunnelProblem {
+	var out []TunnelProblem
+	fail := func(field, msg string) { out = append(out, TunnelProblem{field, msg}) }
 	kind := w.Tunnel
 	if kind == "" && w.PublicURL != "" {
 		kind = "static"
 	}
 	if w.TunnelDomain != "" && kind != "ngrok" {
-		c.fail(path+"/tunnel_domain", "invalid_value", "tunnel_domain is for the ngrok tunnel")
+		fail("tunnel_domain", "tunnel_domain is for the ngrok tunnel")
 	}
 	if (w.TunnelName != "" || w.TunnelHostname != "") && kind != "cloudflared" {
-		c.fail(path+"/tunnel_name", "invalid_value", "tunnel_name and tunnel_hostname are for the cloudflared tunnel")
+		fail("tunnel_name", "tunnel_name and tunnel_hostname are for the cloudflared tunnel")
 	} else if kind == "cloudflared" && (w.TunnelName == "") != (w.TunnelHostname == "") {
-		c.fail(path+"/tunnel_name", "invalid_value", "a named cloudflared tunnel needs both tunnel_name and tunnel_hostname")
+		fail("tunnel_name", "a named cloudflared tunnel needs both tunnel_name and tunnel_hostname")
 	}
 	if w.PublicURL != "" && kind != "static" {
-		c.fail(path+"/public_url", "invalid_value", "public_url is for the static tunnel")
+		fail("public_url", "public_url is for the static tunnel")
 	} else if kind == "static" {
-		if u, err := url.Parse(w.PublicURL); err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
-			c.fail(path+"/public_url", "invalid_value", "the static tunnel needs an http(s) public URL without credentials")
+		if extension.CheckPublicURL(w.PublicURL) != nil {
+			fail("public_url", "the static tunnel needs an http(s) public URL without credentials")
 		}
 	}
-	return w
+	return out
 }
 func (c *checker) secretRefs(n *node, path string, overlay bool) map[string]string {
 	if n == nil || !c.typed(n, path, kObject, "object") {

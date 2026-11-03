@@ -5,7 +5,7 @@
 // the state.* reads of seeded scopes, Works and Events, secrets from
 // options, artifacts and telemetry.capture. A test then calls into the
 // extension (Operation, or the typed Call, and Configure, Route, RunTask,
-// Check and Host.Call for any other method) and inspects what it wrote
+// Check, Tunnel and Host.Call for any other method) and inspects what it wrote
 // (KV, Events, Commits, Artifacts, Captured).
 //
 // It is not the host: causal depth and rate limits, timers, Work control,
@@ -169,6 +169,7 @@ type Host struct {
 	captured   []protocol.TelemetryEvent
 	authority  extension.Authority
 	calls      int
+	tunnels    map[string]chan<- string
 	seeds      []func() // run once every option is applied (the clock is set)
 }
 
@@ -204,7 +205,7 @@ func New(t testing.TB, ext *sdk.Extension, opts ...Option) *Host {
 	}
 	h := &Host{t: t, ext: ext, clock: fixedClock{Start}, kvVersion: ext.Manifest.KVVersion,
 		causal: map[domain.ID]causal{}, kv: map[string]map[string][]byte{}, secrets: map[secretKey]map[string]string{},
-		sources: map[string]protocol.SourceDecl{}, writers: map[string]*writer{}, enabled: map[string]bool{}}
+		sources: map[string]protocol.SourceDecl{}, writers: map[string]*writer{}, enabled: map[string]bool{}, tunnels: map[string]chan<- string{}}
 	for _, m := range ext.Manifest.Enabled() {
 		h.enabled[m] = true
 	}
@@ -247,6 +248,29 @@ func (h *Host) Now() time.Time { return h.clock.Now() }
 // Call makes any host-to-extension call, for a surface without a helper.
 func (h *Host) Call(ctx context.Context, method string, params, out any) error {
 	return h.conn.Call(ctx, method, params, out)
+}
+
+// Tunnel holds a tunnel.run of type typ open, as the host does for the
+// daemon's life, until ctx ends or the extension ends the run, and sends
+// each URL the extension reports through tunnel.url to urls. It returns the
+// run's result: nil once ctx ends, an error coded invalid for a config the
+// provider refused (extension.ErrTunnelConfig).
+func (h *Host) Tunnel(ctx context.Context, typ, addr string, config domain.Payload, urls chan<- string) error {
+	h.mu.Lock()
+	h.calls++
+	id := "run-" + strconv.Itoa(h.calls)
+	h.tunnels[id] = urls
+	h.mu.Unlock()
+	defer func() {
+		h.mu.Lock()
+		delete(h.tunnels, id)
+		h.mu.Unlock()
+	}()
+	err := h.conn.Call(ctx, "tunnel.run", protocol.TunnelRunParams{Type: typ, Run: id, Addr: addr, Config: protocol.FromPayload(config)}, nil)
+	if ctx.Err() != nil {
+		return nil
+	}
+	return err
 }
 
 // Configure applies a configuration generation. With p.KV unset it sends
@@ -665,6 +689,28 @@ func (h *Host) handle(ctx context.Context, method string, raw json.RawMessage) (
 		return out, nil
 	case "artifact.create", "artifact.write", "artifact.commit", "artifact.abort":
 		return h.artifact(method, raw)
+	case "tunnel.url":
+		var p protocol.TunnelURLParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		h.mu.Lock()
+		urls := h.tunnels[p.Run]
+		h.mu.Unlock()
+		if urls == nil {
+			return nil, protocol.Errorf(protocol.CodeConflict, "no tunnel.run in progress under that ID")
+		}
+		if p.URL != "" {
+			if err := extension.CheckPublicURL(p.URL); err != nil {
+				return nil, invalid(err.Error())
+			}
+		}
+		select {
+		case urls <- p.URL:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return struct{}{}, nil
 	case "telemetry.capture":
 		var p protocol.TelemetryEvent
 		if err := jsonrpc.Params(raw, &p); err != nil {

@@ -30,7 +30,8 @@ This page records decision B01: the ownership and import rules for every Go pack
 | `extensions/git` | Optional resource provider: shared/fresh workspace, copying, setup, cleanup | Public packages and process/filesystem utilities |
 | `extensions/srt` | Optional process sandbox provider (B09) wrapping launches in srt; `extensions/srt/pkg` serves it as a bundled package | Public packages and process/filesystem utilities |
 | `extensions/docker`, `extensions/ssh` | Optional container providers: Docker containers behind a gateway, and runs on a remote over SSH; `extensions/docker/pkg` and `extensions/ssh/pkg` serve them as bundled packages | Public packages and process/filesystem utilities |
-| `extensions/{schedule,introspection,observe,posthog,tunnel}` | Scheduling rules, reporting/sweep/triage and the host watch (`extensions/introspection/host`), observed sources, telemetry export and webhook exposure | Public packages and service libraries; `client` if calling management |
+| `extensions/tunnel` | Optional webhook tunnel providers (ngrok, cloudflared); `extensions/tunnel/pkg` serves each as a bundled package of that name | Public packages and process utilities |
+| `extensions/{schedule,introspection,observe,posthog}` | Scheduling rules, reporting/sweep/triage and the host watch (`extensions/introspection/host`), observed sources and telemetry export | Public packages and service libraries; `client` if calling management |
 | `extensions/shell`, `extensions/claudecode`, `extensions/codex` (executors) | Execution processes, adoption and executor-private continuity; CLI/MCP toolbelt presentation | Public packages, `client`, generic process helpers; no runtime/SQLite imports |
 | `protocol` | The third-party subprocess protocol: version, manifest validation, method catalogue and error codes; wire types, error mapping and payload schema evolution | Public packages only |
 | `protocol/jsonrpc`, `protocol/sdk`, `protocol/examples/*` | The transport, the minimal extension-side SDK, and the example external extension (`notes`) and executor (`runner`) with their commands | Public packages and `protocol/*` only, exactly as a third party would |
@@ -97,7 +98,7 @@ Composition may depend on the public `conformance` checks, because the certifica
 
 **Git workspaces.** `extensions/git` ([B07](../workspaces/)) imports only public contracts plus process/filesystem utilities. `extensions/git/pkg` serves it as a bundled package over `protocol/sdk`.
 
-**Webhook exposure.** `extensions/tunnel` provides ngrok, cloudflared and static webhook exposure, using the standard library only.
+**Webhook exposure.** `extensions/tunnel` provides the ngrok and cloudflared tunnel types (`extension.TunnelProvider`), using the standard library only, and `extensions/tunnel/pkg` serves each as a bundled package of that name over `tunnel.run`. A static public URL needs no provider.
 
 **Slack.** `extensions/slack` ([Slack extension](../slack-extension/)) uses public contracts plus the standard library, including its own minimal WebSocket client for Socket Mode, so it adds no module. Its `extensions/slack/slacktest` fake is test support only. `extensions/slack/playbooks` holds the `slack-thread` playbook, which bootstrap writes into the Claude Code plugin beside the GitHub playbooks. `internal/bootstrap` registers it; no Git or workspace code is involved.
 
