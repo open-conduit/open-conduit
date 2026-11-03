@@ -11,10 +11,9 @@ concurrency:
 jobs:
   # What a PR touches. Docs are site/, docs/**/*.md and the Markdown at the
   # repository root; anything else is code (the playbooks' Markdown is
-  # embedded in the binaries, so it is code too). The required jobs below
-  # always run, so branch protection sees every check report, but skip
-  # their steps when there is nothing for them to check. Pushes to main
-  # check everything.
+  # embedded in the binaries, so it is code too). Every job below is
+  # skipped when there is nothing for it to check, and check gates them all.
+  # Pushes to main check everything.
   changes:
     runs-on: ubuntu-latest
     outputs:
@@ -148,10 +147,14 @@ jobs:
         with:
           path: ${{ steps.go.outputs.paths }}
           key: ${{ steps.go.outputs.key }}
-  # The required check: passes when every part above passed, or was skipped
-  # because no code changed.
+  # The one required check from this workflow: passes when every other job
+  # passed or was skipped because the PR has nothing for it to check, and
+  # fails when any failed or was cancelled (a failed changes job included,
+  # so a broken diff fails closed). A job added to this workflow goes in
+  # its needs, not in the ruleset: a skipped job reports no result under a
+  # matrix name, so requiring jobs directly blocks PRs that skip them.
   check:
-    needs: [changes, static, unit, integration, certify]
+    needs: [changes, static, unit, integration, certify, ts-node22, cross-build, sandbox, container, docs-check, release-snapshot, workflows]
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
     steps:
@@ -167,22 +170,15 @@ jobs:
   # package.json supports (engines: >=22.18).
   ts-node22:
     needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    env:
-      RUN: ${{ needs.changes.outputs.code }}
     steps:
-      - if: env.RUN != 'true'
-        run: echo "No code changed; nothing to check."
       - uses: actions/checkout@v7
-        if: env.RUN == 'true'
       - uses: actions/setup-node@v7
-        if: env.RUN == 'true'
         with:
           node-version: '22.18'
       - run: make ts-deps
-        if: env.RUN == 'true'
       - run: make ts-check
-        if: env.RUN == 'true'
   cross-build:
     needs: changes
     if: needs.changes.outputs.code == 'true'
@@ -207,39 +203,32 @@ jobs:
   # a missing srt fail the tests instead of skipping them.
   sandbox:
     needs: changes
+    if: needs.changes.outputs.code == 'true'
     strategy:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04]
     runs-on: ${{ matrix.os }}
     env:
-      RUN: ${{ needs.changes.outputs.code }}
       OPEN_CONDUIT_SANDBOX_TESTS: "1"
     steps:
-      - if: env.RUN != 'true'
-        run: echo "No code changed; nothing to check."
       - uses: actions/checkout@v7
-        if: env.RUN == 'true'
       - uses: ./.github/actions/go
         id: go
-        if: env.RUN == 'true'
         with:
           cache: sandbox-${{ matrix.os }}
       - uses: actions/setup-node@v7
-        if: env.RUN == 'true'
         with:
           node-version: 22
       - run: npm install -g @anthropic-ai/sandbox-runtime@0.0.81
-        if: env.RUN == 'true'
-      - if: env.RUN == 'true' && runner.os == 'Linux'
+      - if: runner.os == 'Linux'
         run: |
           sudo apt-get update -qq
           sudo apt-get install -y -qq bubblewrap socat ripgrep
           sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: go test -count=1 -v -run 'TestSandbox|TestSweepFindsSandboxedChildren|TestHealth' ./integration/ ./extensions/git/ ./extensions/srt/ ./extension/
-        if: env.RUN == 'true'
       - uses: actions/cache/save@v6
-        if: github.event_name == 'push' && !cancelled() && env.RUN == 'true'
+        if: github.event_name == 'push' && !cancelled()
         with:
           path: ${{ steps.go.outputs.paths }}
           key: ${{ steps.go.outputs.key }}
@@ -254,29 +243,21 @@ jobs:
   # instead of skipping them.
   container:
     needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-24.04
-    env:
-      RUN: ${{ needs.changes.outputs.code }}
     steps:
-      - if: env.RUN != 'true'
-        run: echo "No code changed; nothing to check."
       - uses: actions/checkout@v7
-        if: env.RUN == 'true'
       - uses: ./.github/actions/go
         id: go
-        if: env.RUN == 'true'
         with:
           cache: container
       - run: docker version
-        if: env.RUN == 'true'
       - run: make container-test
-        if: env.RUN == 'true'
       - run: make container-test CONTAINER_TEST_RUN='TestDockerGateway|TestDockerShell|TestDockerGitCredential'
-        if: env.RUN == 'true'
         env:
           OPEN_CONDUIT_CONTAINER_FORWARD: tcp
       - uses: actions/cache/save@v6
-        if: github.event_name == 'push' && !cancelled() && env.RUN == 'true'
+        if: github.event_name == 'push' && !cancelled()
         with:
           path: ${{ steps.go.outputs.paths }}
           key: ${{ steps.go.outputs.key }}
@@ -299,47 +280,34 @@ jobs:
   # without publishing anything, with the same stable Go the release uses.
   release-snapshot:
     needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: ubuntu-latest
-    env:
-      RUN: ${{ needs.changes.outputs.code }}
     steps:
-      - if: env.RUN != 'true'
-        run: echo "No code changed; nothing to package."
       - uses: actions/checkout@v7
-        if: env.RUN == 'true'
         with:
           fetch-depth: 0
       - uses: ./.github/actions/go
         id: go
-        if: env.RUN == 'true'
         with:
           cache: cross-build
       - uses: goreleaser/goreleaser-action@v7
-        if: env.RUN == 'true'
         with:
           version: "~> v2"
           install-only: true
       - run: make release-snapshot
-        if: env.RUN == 'true'
   workflows:
     needs: changes
+    if: needs.changes.outputs.workflows == 'true'
     runs-on: ubuntu-latest
-    env:
-      RUN: ${{ needs.changes.outputs.workflows }}
     steps:
-      - if: env.RUN != 'true'
-        run: echo "No workflow changed; nothing to lint."
       - uses: actions/checkout@v7
-        if: env.RUN == 'true'
       - uses: ./.github/actions/go
         id: go
-        if: env.RUN == 'true'
         with:
           cache: workflows
       - run: go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.12
-        if: env.RUN == 'true'
       - uses: actions/cache/save@v6
-        if: github.event_name == 'push' && !cancelled() && env.RUN == 'true'
+        if: github.event_name == 'push' && !cancelled()
         with:
           path: ${{ steps.go.outputs.paths }}
           key: ${{ steps.go.outputs.key }}
