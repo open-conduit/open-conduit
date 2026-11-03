@@ -1,4 +1,4 @@
-package bootstrap
+package sdk
 
 import (
 	"fmt"
@@ -12,7 +12,7 @@ import (
 // line, and appends to an existing file across a reopen.
 func TestLogRotatesBySize(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "logs", "lifecycle.jsonl")
-	l, err := openRotatingLog(path, 100, 2)
+	l, err := OpenRotatingLog(path, 100, 2)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -28,7 +28,7 @@ func TestLogRotatesBySize(t *testing.T) {
 		t.Fatal(err)
 	}
 	// Reopening appends rather than truncates, and counts the bytes there.
-	if l, err = openRotatingLog(path, 100, 2); err != nil {
+	if l, err = OpenRotatingLog(path, 100, 2); err != nil {
 		t.Fatal(err)
 	}
 	for i := 4; i < 10; i++ {
@@ -62,7 +62,7 @@ func TestLogRotatesBySize(t *testing.T) {
 // A line longer than the limit is written whole to its own file.
 func TestLogKeepsAnOversizedLineWhole(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "log.jsonl")
-	l, err := openRotatingLog(path, 10, 1)
+	l, err := OpenRotatingLog(path, 10, 1)
 	if err != nil {
 		t.Fatal(err)
 	}

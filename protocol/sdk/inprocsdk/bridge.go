@@ -596,12 +596,9 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 			text, ok, err := h.RenderOwned(ctx, e)
 			return text, ok && err == nil
 		},
+		// Rotated by size, as the daemon's own logs are.
 		OpenLog: func(name string) (io.WriteCloser, error) {
-			dir := filepath.Join(h.StateDir(), "logs")
-			if err := os.MkdirAll(dir, 0o700); err != nil {
-				return nil, err
-			}
-			return os.OpenFile(filepath.Join(dir, name+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+			return sdk.OpenLog(filepath.Join(h.StateDir(), "logs", name+".jsonl"))
 		},
 		Deliver: func(ctx context.Context, source string, d extension.Delivery) error {
 			_, err := h.Deliver(ctx, source, protocol.FromDelivery(d))

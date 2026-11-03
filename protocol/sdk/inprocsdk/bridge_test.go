@@ -5,6 +5,8 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
@@ -15,6 +17,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/protocol"
+	"github.com/open-conduit/open-conduit/protocol/sdk"
 	"github.com/open-conduit/open-conduit/protocol/sdk/inprocsdk"
 	"github.com/open-conduit/open-conduit/protocol/sdk/sdktest"
 	"github.com/open-conduit/open-conduit/storage"
@@ -545,5 +548,34 @@ func TestLiveAndContainerAttachAreCarried(t *testing.T) {
 	defer x.live.mu.Unlock()
 	if x.live.attach.Work.ID != "work/1" || x.live.attach.Secrets["TOKEN"] != "s" || x.live.attach.Config.Schema != "operated.config.v1" {
 		t.Fatalf("attach request %+v", x.live.attach)
+	}
+}
+
+// The bridge's OpenLog is the daemon's rotating log, in the package's state
+// directory, so an executor's per-turn log is bounded out of process too.
+func TestOpenLogRotates(t *testing.T) {
+	x := &acme{}
+	b, err := inprocsdk.New(x, base())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state := t.TempDir()
+	h := sdktest.New(t, b.Extension(), sdktest.WithStateDir(state))
+	if _, err := h.Configure(context.Background(), protocol.ConfigureParams{}); err != nil {
+		t.Fatal(err)
+	}
+	x.mu.Lock()
+	open := x.host.OpenLog
+	x.mu.Unlock()
+	l, err := open("acme")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer l.Close()
+	if _, ok := l.(*sdk.RotatingLog); !ok {
+		t.Fatalf("OpenLog gave %T, want a rotating log", l)
+	}
+	if _, err := os.Stat(filepath.Join(state, "logs", "acme.jsonl")); err != nil {
+		t.Fatal(err)
 	}
 }
