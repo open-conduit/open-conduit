@@ -9,6 +9,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -25,7 +26,9 @@ import (
 // --replay-user-messages does), writes the session transcript where claude
 // keeps it, and ends with a result whose totals are cumulative for the session
 // (0.50 USD, 10 input and 100 cache-read tokens per turn so far). The mode
-// file selects review, finished, limit, error or wait (block until released).
+// file selects review, finished, limit, error or wait (block until released);
+// the context file, the context its last main-thread call reports (1000 by
+// default).
 const fakeClaude = `#!/bin/sh
 [ "$1" = --version ] && { echo "9.9.9 (Claude Code)"; exit 0; }
 session=""; resume=0; mcp=""; model=""; tools="-"; strict=0
@@ -45,7 +48,7 @@ mode=$(cat "$f/mode" 2>/dev/null || echo review)
 printf 'session=%s resume=%s tools=%s strict=%s mcp=%s\n' "$session" "$resume" "$tools" "$strict" "$mcp" >> "$f/invocations"
 printf '%s\n' "$model" >> "$f/models"
 pwd -P > "$f/cwd"
-env | grep -E '^(ANTHROPIC_API_KEY|CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|OS_[A-Z_]+|GIT_[A-Z_0-9]+|PATH|UNRELATED)=' | sort > "$f/env"
+env | grep -E '^(ANTHROPIC_API_KEY|CLAUDECODE|CLAUDE_CODE_ENTRYPOINT|OS_[A-Z_]+|GIT_[A-Z_0-9]+|PATH|UNRELATED|CLAUDE_CODE_AUTO_COMPACT_WINDOW)=' | sort > "$f/env"
 t="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$t"
 echo '{"type":"system","subtype":"init"}'
@@ -77,7 +80,9 @@ case "$mode" in
   finished) state=finished ;;
   *) state=review ;;
 esac
-echo '{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Bash"},{"type":"tool_use","name":"Read"}]}}'
+ctx=$(cat "$f/context" 2>/dev/null || echo 1000)
+echo '{"type":"assistant","parent_tool_use_id":"toolu_sub","message":{"content":[],"usage":{"input_tokens":1,"cache_read_input_tokens":999999,"output_tokens":1}}}'
+echo '{"type":"assistant","parent_tool_use_id":null,"message":{"content":[{"type":"tool_use","name":"Bash"},{"type":"tool_use","name":"Read"}],"usage":{"input_tokens":2,"cache_read_input_tokens":'"$((ctx-12))"',"cache_creation_input_tokens":5,"output_tokens":5}}}'
 printf '{"type":"result","subtype":"success","is_error":false,"result":"all done","session_id":"%s","num_turns":2,"total_cost_usd":%s.%02d,"structured_output":{"state":"%s","summary":"turn %s","handoff":"note %s"},"modelUsage":{"claude-x":{"inputTokens":%s,"outputTokens":%s,"cacheReadInputTokens":%s,"cacheCreationInputTokens":%s}}}\n' "$session" $((cost/100)) $((cost%100)) "$state" "$turns" "$turns" $((turns*10)) $((turns*5)) $((turns*100)) $((turns*3))
 `
 
@@ -314,6 +319,14 @@ func (h *harness) executorWith(set func(*claudecode.Options)) *claudecode.Execut
 		h.t.Fatal(err)
 	}
 	return e
+}
+
+// context sets the context the fake's next turns end with.
+func (h *harness) context(n int) {
+	h.t.Helper()
+	if err := os.WriteFile(filepath.Join(h.fake, "context"), []byte(strconv.Itoa(n)), 0o600); err != nil {
+		h.t.Fatal(err)
+	}
 }
 
 func (h *harness) mode(m string) {

@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -52,17 +53,18 @@ type pendingInput struct {
 // turnRecord is the segment's own description of its turn, written before
 // launch and read back when it is finalized (possibly by a later instance).
 type turnRecord struct {
-	ExecutionID  string    `json:"execution_id"`
-	WorkID       string    `json:"work_id"`
-	ScopeID      string    `json:"scope_id"`
-	Nonce        string    `json:"nonce"`
-	StartedAt    time.Time `json:"started_at"`
-	Kind         turnKind  `json:"kind"`
-	Resume       bool      `json:"resume"`
-	Structured   bool      `json:"structured"`
-	StatusSchema string    `json:"status_schema"`
-	FollowUps    int       `json:"follow_ups"`
-	InputTypes   []string  `json:"input_types,omitempty"`
+	ExecutionID   string    `json:"execution_id"`
+	WorkID        string    `json:"work_id"`
+	ScopeID       string    `json:"scope_id"`
+	Nonce         string    `json:"nonce"`
+	StartedAt     time.Time `json:"started_at"`
+	Kind          turnKind  `json:"kind"`
+	HandoffReason string    `json:"handoff_reason,omitempty"`
+	Resume        bool      `json:"resume"`
+	Structured    bool      `json:"structured"`
+	StatusSchema  string    `json:"status_schema"`
+	FollowUps     int       `json:"follow_ups"`
+	InputTypes    []string  `json:"input_types,omitempty"`
 }
 
 type processRecord struct {
@@ -264,7 +266,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		}
 		first = dryRunPrompt(first, cfg.structured())
 	}
-	turn := turnRecord{ExecutionID: string(r.Execution.ID), WorkID: string(r.Work.ID), ScopeID: string(r.Work.ScopeID), Nonce: nonce, StartedAt: now, Kind: d.Kind, Resume: d.Resume, Structured: cfg.structured(), StatusSchema: cfg.StatusSchema, FollowUps: len(inputs)}
+	turn := turnRecord{ExecutionID: string(r.Execution.ID), WorkID: string(r.Work.ID), ScopeID: string(r.Work.ScopeID), Nonce: nonce, StartedAt: now, Kind: d.Kind, HandoffReason: d.Reason, Resume: d.Resume, Structured: cfg.structured(), StatusSchema: cfg.StatusSchema, FollowUps: len(inputs)}
 	for _, ev := range inputs {
 		turn.InputTypes = append(turn.InputTypes, ev.Type)
 	}
@@ -482,6 +484,11 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, layer map[str
 	}
 	extension.ApplyEnv(vars, layer)
 	extension.ApplyEnv(vars, r.Context.Env)
+	// auto_compact_tokens, unless the operator passes the variable through
+	// themselves; env still overrides it.
+	if n := cfg.AutoCompactTokens; n != nil && *n > 0 && !(slices.Contains(cfg.PassEnv, autoCompactVar) && vars[autoCompactVar] != "") {
+		vars[autoCompactVar] = strconv.FormatInt(*n, 10)
+	}
 	for name, value := range cfg.Env {
 		vars[name] = value
 	}
@@ -1217,6 +1224,12 @@ func (e *Executor) reportTurn(turn turnRecord, end turnEnd, outcome domain.Outco
 		"model_calls": p.ModelCalls, "tool_calls": p.ToolCalls, "kind": string(turn.Kind),
 		"handoff": turn.Kind == kindHandoff, "session": end.session, "turn": end.turn,
 		"events": turn.InputTypes, "limited": p.Limited,
+	}
+	if turn.HandoffReason != "" {
+		a["handoff_reason"] = turn.HandoffReason
+	}
+	if p.Context > 0 {
+		a["context_tokens"] = p.Context
 	}
 	if p.Cost != nil {
 		a["cost_usd"] = *p.Cost

@@ -69,7 +69,7 @@ Every turn ends with a status (the structured result Open Conduit asks for):
   - `done`: everything the thread asked for is handled and only a merge or close is left.
   - `finished`: the issue closed, on its own or with its PR. An issue still open after its PR merged or closed isn't finished (see Later turns).
 - `summary`: what the turn did, in one line.
-- `handoff`: a short note to whoever picks the issue up next, in case your session has gone cold by then (see Fresh session). Write it every turn. Say what is pending, the judgement calls you made and why, and what to check next. Leave out what the issue, the PR and git already show.
+- `handoff`: a short note to whoever picks the issue up next, in case your session has gone cold or grown too large by then (see Fresh session). Write it every turn. Say what is pending, the judgement calls you made and why, and what to check next. Leave out what the issue, the PR and git already show.
 
 Open Conduit sets the issue's status labels from `state`; never change those yourself.
 
@@ -146,7 +146,7 @@ If you pushed, end with `building`; Open Conduit comes back with the checks. Oth
 
 ## Fresh session: `work-issue <number> handoff`
 
-When your last turn ended long enough ago that resuming would cost more than starting again, Open Conduit may start a new session instead. The message carries the handoff note the last turn wrote, under `## Handoff from your last session`, then the events. You don't have the earlier session's memory, so first rebuild the picture: read the issue (`github.issue.view`) and every PR (`github.pr.list`, `github.pr.view`), and look at the branch's commits in the workspace. Then take the events as in Later turns, with the note as your guide to what was pending and why. Where the note and the thread disagree, the thread wins.
+When resuming your session would cost more than starting again (your last turn ended long enough ago, or the session has grown large), Open Conduit may start a new session instead. The message carries the handoff note the last turn wrote, under `## Handoff from your last session`, then the events. You don't have the earlier session's memory, so first rebuild the picture: read the issue (`github.issue.view`) and every PR (`github.pr.list`, `github.pr.view`), and look at the branch's commits in the workspace. Then take the events as in Later turns, with the note as your guide to what was pending and why. Where the note and the thread disagree, the thread wins.
 
 ## Don't
 

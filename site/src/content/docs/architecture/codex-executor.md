@@ -46,6 +46,7 @@ Codex has no plugin skills to start a turn on, so the playbook's text starts the
 | --- | --- | --- |
 | A Work's first (no thread yet) | `<args>` | `## Already waiting` + the rendered inputs |
 | Any later turn | `<args> events` | `## Since your last turn` + inputs |
+| A later turn on a new thread, after a large or cold one | `<args> handoff` | `## Handoff from your last session` + note + `## Since your last turn` + inputs |
 
 `args` and `branch` are the same templates (`{key}`, `{number}`, `{work}`). A project's additions in `.open-conduit/playbooks/<playbook>.md` in the turn's workspace are appended. Inputs are rendered by the generic renderer, which shows each Event's type and its common payload fields (author, kind, number, path, line, state, title, URL, body or text).
 
@@ -86,7 +87,11 @@ An unstructured binding (`structured: false`) completes with codex's last agent 
 
 ## Private continuity
 
-A Work's thread lives in the executor's state directory (`work/<key>.json`, holding the thread ID and the time of its last turn). Core never reads it. A segment records the thread when it finishes, from the `thread.started` event of its first turn. There is no cold-session handoff: every later turn of the Work resumes the thread, however long ago its last turn ended. `Forget` removes an execution's segments and keeps the Work's thread.
+A Work's thread lives in the executor's state directory (`work/<key>.json`, holding the thread ID, the time of its last turn, the last handoff note and the context the last turn ended with). Core never reads it. A segment records the thread when it finishes, from the `thread.started` event of its first turn, or the thread it resumed. The handoff note is the last status's `handoff`; a turn without a status keeps the earlier note.
+
+The context is the `total_tokens` of the last `token_count` event's `last_token_usage` in the session file codex keeps for the thread (`$CODEX_HOME/sessions/YYYY/MM/DD/rollout-<time>-<thread>.jsonl`, `CODEX_HOME` defaulting to `~/.codex` in codex's environment). That file is codex's own, not an interface, so a missing or unreadable one counts as 0. The segment's result data carries it as `context_tokens`.
+
+A thread whose last turn ended with more than `handoff_tokens` of context (default 200000) is left: the next turn starts a new thread from the note, with `handoff_reason: size` in its result data. Starting over costs one cache fill of the small new context, which soon costs less than reading the large one on every call. A thread is *cold* when its last turn ended more than `handoff_minutes` ago (default 55), as a Claude Code session is; a cold thread follows `cold_turns`: `handoff` (the default) starts a new thread from the note, with `handoff_reason: cold`, and `resume` resumes it. Either handoff needs a note: without one the thread resumes. Otherwise every later turn resumes the thread. `Forget` removes an execution's segments and keeps the Work's thread.
 
 ## Toolbelt over MCP
 
@@ -123,6 +128,10 @@ The config is strict and validated at load. Every field is optional:
 | `env`, `pass_env`, `secret_env` | The environment. |
 | `extra_args` | Added to every `codex exec`. They may not set the session, the output, the sandbox, the approval policy, the model or the toolbelt server, whether as flags (`--full-auto` and `--dangerously-bypass-approvals-and-sandbox` included) or as `-c`/`--config` overrides of `sandbox_mode`, `approval_policy`, `model` or `mcp_servers.open-conduit`. |
 | `timeout_seconds` | A segment's deadline, persisted across restart. |
+| `handoff_minutes` | How long after a turn the thread counts as cold (default 55). |
+| `cold_turns` | What a cold turn does: `handoff` (default) starts a new thread from the note, `resume` resumes the thread. |
+| `handoff_tokens` | How much context a thread may end a turn with before the next turn starts a new thread from the handoff note (default 200000; 0 always resumes). |
+| `auto_compact_tokens` | Where codex compacts a thread in the middle of a turn, passed as `-c model_auto_compact_token_limit=<n>` (default 250000, under the context windows of Codex's models; 0 leaves codex's own). A `-c` for the same key in `extra_args` comes later and wins. |
 
 ## Setup
 
@@ -139,6 +148,8 @@ The config is strict and validated at load. Every field is optional:
   - failures, a usage limit, a missing binary, a missing status and an unstructured turn
   - adoption by a second instance without a second launch, interrupt and lower-epoch refusal
   - config validation and the resource mode
+  - a cold thread left for a new one from the note, a warm one resuming and `cold_turns: resume` resuming a cold one (`TestColdThreadHandsOff`)
+  - a large thread left for a new one from the note, a smaller one resuming, `handoff_tokens: 0` always resuming, and `auto_compact_tokens` in codex's arguments (`TestLargeThreadHandsOff`)
 - `open-conduit extension certify` certifies the package (`TestCertificationFirstPartyPackages`). Its fixture command writes a fake codex into the runner's directory, so certification never runs the real CLI.
 - [`TestDaemonCodexExecution`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_codex_test.go) runs the composed daemon with the package installed and `extensiontest.FakeCodex`. The fake reads its context through the real `os mcp`. An Event submitted mid-turn is taken in by a follow-up turn and starts no attempt, and the next Event resumes the thread as attempt 2.
 
@@ -147,5 +158,4 @@ The config is strict and validated at load. Every field is optional:
 - **Rendering.** Inputs use the generic renderer. Claude Code, inside the daemon, gets the GitHub and Slack renderers with their reply hints. A package executor has no host method to render Events yet.
 - **No attach.** There is no `codex resume` takeover through `open-conduit work attach`.
 - **No process sandbox or container.** Process sandboxes and containers are host brokers the extension protocol doesn't carry yet, so the package advertises neither. Codex's own `sandbox_mode` is the binding's `sandbox`.
-- **No cold handoff.** A Work's thread is always resumed. Claude Code's `handoff_minutes` and `cold_turns` have no Codex equivalent.
 - **Limits.** A usage limit is retried on core's backoff, because Codex's error gives no reset time the executor can read.

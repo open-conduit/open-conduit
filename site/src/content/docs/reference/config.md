@@ -228,6 +228,8 @@ Binding `config`:
 | `dir` |  | a folder a workspace-free binding runs in, as-is |
 | `handoff_minutes` |  |  |
 | `cold_turns` | `handoff` | what a turn does once the session is handoff_minutes old One of handoff, resume. |
+| `handoff_tokens` | `400000` | a turn after one that ended with more context starts afresh from the handoff note; 0 turns it off |
+| `auto_compact_tokens` | `600000` | where Claude Code compacts mid-turn (CLAUDE_CODE_AUTO_COMPACT_WINDOW); 0 leaves its own |
 | `env` |  |  |
 | `pass_env` |  |  |
 | `secret_env` |  |  |

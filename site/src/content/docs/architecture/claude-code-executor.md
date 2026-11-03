@@ -81,6 +81,7 @@ Continuity lives in namespaced coordination KV (`executor.claudecode`, key `work
 - the count of turns that ended with a status
 - the handoff note and the last state
 - the last turn's end time
+- the session's context when the last turn ended
 - the session's cumulative totals
 - the in-flight decision
 - the attach command
@@ -91,12 +92,13 @@ The resume and handoff rules are:
 
 - A session whose transcript exists in the workspace (`<config>/projects/<cwd with non-alphanumerics as ->/<session>.jsonl`) resumes, even when its first turn never ended.
 - A session with a handoff note that was never written starts afresh from the note.
+- A session is *large* when its last turn ended with more than `handoff_tokens` of context (default 400000; 0 turns this off). A large session starts a fresh session from the note, even while its cache is warm: one cache write of the small new context soon costs less than reading the large one on every call. The context is the last main-thread model call's input (cached or not) and output, from that message's `usage` in the stream-json output; a subagent's calls don't count.
 - A session is *cold* when its last turn ended more than `handoff_minutes` ago (default 55). A cold session follows `cold_turns`: `handoff` (the default, and what the playbook tells agents to expect) starts a fresh session from the note, `resume` resumes it.
 - `Attach` returns `claude --resume <session>` in the workspace and clears the note, so the next turn resumes even when cold. It implements the public `extension.AttachExecutor`; Work without a session returns `ErrNoSession`, which wraps `extension.ErrNothingToAttach`.
 
 **Release.** `Maintain` releases terminal Work's continuity. Records written while the handoff experiment ran may still carry a trial and feedback questions; they are ignored.
 
-Telemetry goes to `Options.Report`. The executor's in-process extension (`claudecode.NewExtension`, registered through `inproc.Executing`) writes it to its own log, `logs/claude-code.jsonl` (`inproc.Host.OpenLog`, rotated like the host's logs), outside core, as one `agent_turn` record per turn. Its housekeeping (`Maintain`) is the extension's `maintain` task, every 30 seconds.
+Telemetry goes to `Options.Report`. The executor's in-process extension (`claudecode.NewExtension`, registered through `inproc.Executing`) writes it to its own log, `logs/claude-code.jsonl` (`inproc.Host.OpenLog`, rotated like the host's logs), outside core, as one `agent_turn` record per turn. A record carries `context_tokens` (the session's context when the turn ended) and, for a handoff turn, `handoff_reason`: `size`, `cold` or `missing` (the session's transcript was gone). Its housekeeping (`Maintain`) is the extension's `maintain` task, every 30 seconds.
 
 Like core telemetry, it is at most once across a kill.
 
@@ -167,6 +169,8 @@ The config is strict and validated at load. Every field is optional:
 | `dir` | An absolute folder a workspace-free binding's sessions run in, used as-is. A folder that has gone fails only that binding's turns, as `workspace_unavailable`, never the config. In an [included folder](../config-management/#included-folders), `dir` defaults to the folder (unless the binding has a resource), and a relative `dir` or `plugin_dir` resolves against it. |
 | `handoff_minutes` | How long after a turn the session counts as cold (default 55). |
 | `cold_turns` | What a cold turn does: `handoff` (default) or `resume`. `handoff_share`, the removed experiment's setting, is ignored with a `config check` warning from the executor (`ConfigWarnings`) for one release, then rejected. |
+| `handoff_tokens` | How much context a session may end a turn with before the next turn starts a fresh one from the note (default 400000; 0 turns it off). |
+| `auto_compact_tokens` | Where Claude Code compacts a session in the middle of a turn, set as `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it compacts a little before this, or before the model's window if that is smaller (default 600000; 0 leaves Claude Code's own threshold). `env` setting the variable overrides it, and so does `pass_env` naming it when the variable is set. |
 | `env`, `pass_env`, `secret_env` | The environment. |
 | `extra_args` | Extra arguments. These may not override `-p`, the session or the MCP flags, nor `--tools` when `builtin_tools` is set. |
 | `builtin_tools` | The only built-in tools Claude Code offers, passed as `--tools`. An empty list turns them all off, so the agent has only its MCP toolbelt: no shell, file access or web. Unset keeps Claude Code's default set. Attaching to the session keeps the same limit. |
@@ -185,6 +189,7 @@ The config is strict and validated at load. Every field is optional:
   - the invocation, the MCP config and the sanitized environment
   - resumed and fresh sessions with per-turn usage deltas
   - the port of `TestColdSessionHandsOffToAFreshOne`: warm resume, a cold handoff, a cold resume under `cold_turns: resume`, attach forcing resume and release of terminal Work
+  - a warm but large session handing off by size, a smaller one resuming and `handoff_tokens: 0` turning it off (`TestLargeSessionHandsOff`), and `auto_compact_tokens` reaching claude's environment (`TestAutoCompactTokens`)
   - the cold decision across executor restart: adopting the running turn and taking over an undone decision
   - continuity left by the handoff experiment loading and releasing without error
   - interjection consumption

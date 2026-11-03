@@ -28,6 +28,9 @@ type pendingTurn struct {
 	Segment   string    `json:"segment"`
 	Session   string    `json:"session"`
 	Kind      turnKind  `json:"kind"`
+	// Reason is why a handoff turn is one (handoffCold, handoffSize or
+	// handoffMissing).
+	Reason    string    `json:"reason,omitempty"`
 	StartedAt time.Time `json:"started_at"`
 }
 
@@ -56,6 +59,9 @@ type record struct {
 	Handoff     string     `json:"handoff,omitempty"`
 	LastState   string     `json:"last_state,omitempty"`
 	LastEndedAt *time.Time `json:"last_ended_at,omitempty"`
+	// LastContext is the session's context, in tokens, when its last turn
+	// ended (0 when unknown).
+	LastContext int64 `json:"last_context,omitempty"`
 	// Totals are the session's cumulative totals at its latest result;
 	// AppliedBase the totals the latest applied turn was measured against,
 	// so applying that turn again yields the same per-turn delta.
@@ -127,23 +133,35 @@ func newSession() string {
 }
 
 // decision is how one segment continues the Work's conversation.
+// Why a turn hands off to a fresh session (decision.Reason).
+const (
+	handoffCold    = "cold"
+	handoffSize    = "size"
+	handoffMissing = "missing"
+)
+
 type decision struct {
 	Session string
 	Resume  bool
 	Kind    turnKind
+	// Reason is why a handoff turn is one.
+	Reason string
 	// Reused means an earlier undone decision was taken over.
 	Reused bool
 }
 
 // decide chooses resume or fresh for a new segment. A session that has run
-// before is resumed, even when its first turn never ended. A cold one (the
-// last turn ended more than handoff_minutes ago, so its prompt cache has
-// expired) follows cold_turns: "handoff" starts a fresh session from the last
-// turn's note, "resume" resumes it. A session that never got as far as being
-// written always starts afresh from the note.
+// before is resumed, even when its first turn never ended. A large one (the
+// last turn ended with more than handoff_tokens of context) starts a fresh
+// session from the last turn's note, since a small new cache soon costs less
+// than reading the large one on every call. A cold one (the last turn ended
+// more than handoff_minutes ago, so its prompt cache has expired) follows
+// cold_turns: "handoff" starts a fresh session from the note, "resume"
+// resumes it. A session that never got as far as being written always starts
+// afresh from the note.
 func (e *Executor) decide(rec record, cfg Config, now time.Time, exists func(string) bool) decision {
 	if p := rec.Pending; p != nil && p.Session != "" {
-		return decision{Session: p.Session, Resume: exists(p.Session), Kind: p.Kind, Reused: true}
+		return decision{Session: p.Session, Resume: exists(p.Session), Kind: p.Kind, Reason: p.Reason, Reused: true}
 	}
 	d := decision{Session: rec.Session, Kind: kindEvents}
 	if rec.Turns == 0 {
@@ -154,16 +172,17 @@ func (e *Executor) decide(rec record, cfg Config, now time.Time, exists func(str
 		return d
 	}
 	d.Resume = exists(d.Session)
-	handoff := false
 	switch {
 	case rec.Turns == 0 || strings.TrimSpace(rec.Handoff) == "":
 	case !d.Resume:
-		handoff = true
+		d.Reason = handoffMissing
+	case cfg.HandoffTokens != nil && *cfg.HandoffTokens > 0 && rec.LastContext > *cfg.HandoffTokens:
+		d.Reason = handoffSize
 	case cfg.ColdTurns != ColdHandoff || rec.LastEndedAt == nil:
 	case now.Sub(*rec.LastEndedAt) > time.Duration(*cfg.HandoffMinutes)*time.Minute:
-		handoff = true
+		d.Reason = handoffCold
 	}
-	if handoff {
+	if d.Reason != "" {
 		d.Kind = kindHandoff
 		if d.Resume {
 			d.Session, d.Resume = newSession(), false
@@ -180,7 +199,7 @@ func beginTurn(rec *record, d decision, execution domain.ID, segment string, now
 		}
 		rec.Session = d.Session
 	}
-	rec.Pending = &pendingTurn{Execution: execution, Segment: segment, Session: d.Session, Kind: d.Kind, StartedAt: now}
+	rec.Pending = &pendingTurn{Execution: execution, Segment: segment, Session: d.Session, Kind: d.Kind, Reason: d.Reason, StartedAt: now}
 	rec.Attach = &attach
 }
 
@@ -208,6 +227,7 @@ func finishTurn(rec *record, segment string, p parsed, now time.Time) turnEnd {
 	}
 	rec.Applied = segment
 	rec.LastEndedAt = &now
+	rec.LastContext = p.Context
 	if p.OK {
 		rec.Turns++
 		if p.Status != nil {

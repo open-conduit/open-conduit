@@ -33,7 +33,7 @@ open-conduit config set /scopes/web/bindings/agent/executor '"codex"'
 open-conduit config check
 ```
 
-Settings only Claude Code reads, such as `permission_mode`, `cold_turns` or `builtin_tools`, are refused on a Codex binding. Remove them, then use the settings below.
+Settings only Claude Code reads, such as `permission_mode` or `builtin_tools`, are refused on a Codex binding. Remove them, then use the settings below.
 
 ## Settings
 
@@ -47,6 +47,9 @@ All of these are optional and go in the binding's `config`:
 | `pass_env` | Variables from the daemon's environment that Codex should see. `CODEX_HOME` always passes. |
 | `extra_args` | More `codex exec` arguments, such as `["--search"]` for web search. |
 | `timeout_seconds` | The longest a turn may run. |
+| `handoff_minutes`, `cold_turns` | As for Claude Code: a turn more than `handoff_minutes` (55) after the last starts a new thread from the agent's handoff note, unless `cold_turns` is `resume`. |
+| `handoff_tokens` | Once a turn ends with more context than this, the next turn starts a new thread from the agent's handoff note instead of resuming (default 200000; 0 always resumes). |
+| `auto_compact_tokens` | Where Codex compacts a thread in the middle of a turn (default 250000; 0 leaves Codex's own threshold). |
 
 `playbook`, `branch`, `args`, `workspace_mode`, `dir`, `env` and `secret_env` work as they do for Claude Code. The [Codex executor](/open-conduit/architecture/codex-executor/#binding-config) page lists every field.
 

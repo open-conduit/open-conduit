@@ -51,7 +51,7 @@ var StatusSchema = map[string]any{
 				"finished: the work is over and you have cleaned up; it completes, and nothing resumes it.",
 		},
 		"summary": map[string]any{"type": "string", "description": "What this turn did, in one line."},
-		"handoff": map[string]any{"type": "string", "description": "A note to the session that picks this work up next if this one has gone cold: " +
+		"handoff": map[string]any{"type": "string", "description": "A note to the session that picks this work up next if this one has gone cold or grown too large: " +
 			"what is pending, the judgement calls you made and why, and what to look at next. Intent only; leave out what the work's own record already shows."},
 		"report": map[string]any{"type": "string", "description": "Optional: a write-up for the operator, in Markdown, shown with this turn in the run's history. " +
 			"Use it for findings too long for the one-line summary that aren't written down anywhere else; leave it out otherwise."},
@@ -103,11 +103,15 @@ type parsed struct {
 	Models     []string
 	ModelCalls int
 	ToolCalls  int
-	Error      string
-	Subtype    string
-	Limited    bool
-	ResetsAt   *time.Time
-	Totals     *Totals
+	// Context is the session's context after the turn's last main-thread
+	// model call (its input, cached or not, and its output), in tokens; 0
+	// when the output carries no usage.
+	Context  int64
+	Error    string
+	Subtype  string
+	Limited  bool
+	ResetsAt *time.Time
+	Totals   *Totals
 }
 
 type result struct {
@@ -169,6 +173,36 @@ func toolCalls(stdout string) int {
 		}
 	}
 	return n
+}
+
+// lastContext is the size of the session's context after the last model
+// call of the main thread (a subagent's calls have their own context): the
+// call's input, cached or not, and its output, which the next call reads.
+func lastContext(stdout string) int64 {
+	lines := strings.Split(stdout, "\n")
+	for i := len(lines) - 1; i >= 0; i-- {
+		if !strings.Contains(lines[i], `"usage"`) {
+			continue
+		}
+		var m struct {
+			Type    string  `json:"type"`
+			Parent  *string `json:"parent_tool_use_id"`
+			Message struct {
+				Usage *struct {
+					Input         int64 `json:"input_tokens"`
+					CacheRead     int64 `json:"cache_read_input_tokens"`
+					CacheCreation int64 `json:"cache_creation_input_tokens"`
+					Output        int64 `json:"output_tokens"`
+				} `json:"usage"`
+			} `json:"message"`
+		}
+		if json.Unmarshal([]byte(lines[i]), &m) != nil || m.Type != "assistant" || m.Parent != nil || m.Message.Usage == nil {
+			continue
+		}
+		u := m.Message.Usage
+		return u.Input + u.CacheRead + u.CacheCreation + u.Output
+	}
+	return 0
 }
 
 func num(m map[string]any, k string) int64 {
@@ -266,7 +300,7 @@ func parse(stdout, stderr string, code *int, structured bool, now time.Time) par
 	if r.SessionID != "" {
 		p.Totals = &Totals{Session: r.SessionID, Cost: r.TotalCostUSD, Models: models}
 	}
-	p.ModelCalls, p.ToolCalls = r.NumTurns, toolCalls(stdout)
+	p.ModelCalls, p.ToolCalls, p.Context = r.NumTurns, toolCalls(stdout), lastContext(stdout)
 	p.Tokens, p.Models = usage(models, nil)
 	if r.IsError || (code != nil && *code != 0) {
 		p.Limited, p.ResetsAt = limitHit(r, stdout, now)
