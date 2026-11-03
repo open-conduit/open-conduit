@@ -120,10 +120,18 @@ A remote binding declares a `container` with the `ssh` provider:
 | `network.allow` | The hosts the executor may say it needs. It isn't enforced on the remote. |
 | `provider.host`, `user`, `port` | Where to connect (port 22 unless you set one). |
 | `provider.host_key` | The remote's host key, `<type> <base64>`. |
-| `provider.identity` | The key to sign in with. Without it, ssh uses your agent and `~/.ssh/config`. |
+| `provider.identity` | The key to sign in with. Without it, ssh uses your `~/.ssh/config` and, if you grant it, your agent (below). |
 | `provider.network` | Must be `host`: you accept that the remote's own network applies. |
 
 Leave `limits` out: the provider can't enforce them and refuses a config with them. Your `~/.ssh/config` still applies, so a `ProxyJump` to reach the remote works. Nothing there can change the host key Open Conduit checks.
+
+The ssh provider runs as a package of its own, which sees only the variables you grant it. To sign in with your ssh agent rather than an `identity`, grant it the agent's socket in the config's settings:
+
+```json
+"settings": {"extensions": {"ssh": {"pass_env": ["SSH_AUTH_SOCK"]}}}
+```
+
+Granting it there never gives it to the run, as a binding's `pass_env` would. When the remote refuses the key and no agent is granted, the error says so.
 
 ## Check it
 
@@ -132,7 +140,7 @@ open-conduit config check
 open-conduit doctor
 ```
 
-Doctor's `container` check connects to each remote with its pinned key. It checks that the remote has the tools a run needs and can write the run's records and your state directory's path. It also says whether `os` is on the remote's `PATH`. While a check fails, the remote's bindings run nothing.
+Doctor's `ssh` check connects to each remote with its pinned key. It checks that the remote has the tools a run needs and can write the run's records and your state directory's path. It also says whether `os` is on the remote's `PATH`. While a check fails, the remote's bindings run nothing.
 
 ## Stopping and restarts
 

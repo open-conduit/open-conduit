@@ -41,12 +41,15 @@ func main() {
 	if len(os.Args) > 1 && os.Args[1] == protocol.HostRun {
 		os.Exit(extensionRun(os.Args[2:], os.Stderr))
 	}
-	// The hidden helper an executor's wrapper runs to start a container.
+	// The hidden helper an executor's wrapper ran to start a container
+	// before the docker provider became a package (now `extension-run docker
+	// run`). It stays, because a segment recovered after an upgrade may
+	// still have it pinned.
 	if len(os.Args) > 2 && os.Args[1] == "container" && os.Args[2] == "run" {
 		os.Exit(docker.RunHelper(os.Args[3:], docker.HelperOptions{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}))
 	}
-	// The hidden helper an executor's wrapper runs to start a run on a
-	// remote over SSH.
+	// The same for a run on a remote over SSH (now `extension-run ssh
+	// run`).
 	if len(os.Args) > 2 && os.Args[1] == "remote" && os.Args[2] == "run" {
 		os.Exit(ssh.RunHelper(os.Args[3:], ssh.HelperOptions{Stdin: os.Stdin, Stdout: os.Stdout, Stderr: os.Stderr}))
 	}

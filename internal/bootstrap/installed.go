@@ -162,7 +162,8 @@ func (x *installed) remote() (*extproc.Remote, error) {
 var errNoPackage = errors.New("extension package is not running")
 
 // providerTypes adds the package's name (Registry.Packages) and its
-// manifest's resource and sandbox provider types to a registry: each validates its own config through the package, and a
+// manifest's resource, sandbox and container provider types to a registry:
+// each validates its own config through the package, and a
 // resource type's workspace checks (mode_default, sandbox) are answered
 // through it too.
 func (x *installed) providerTypes(reg *config.Registry) {
@@ -170,6 +171,16 @@ func (x *installed) providerTypes(reg *config.Registry) {
 		reg.Packages = map[string]bool{}
 	}
 	reg.Packages[x.m.Name] = true
+	if len(x.m.Provides.Containers) > 0 && reg.Containers == nil {
+		reg.Containers = map[string]func(json.RawMessage) error{}
+	}
+	for _, c := range x.m.Provides.Containers {
+		v := x.validator(protocol.ValidateContainer, c.Type)
+		if v == nil {
+			v = func(json.RawMessage, []string) error { return nil }
+		}
+		reg.Containers[c.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
+	}
 	if len(x.m.Provides.Sandboxes) > 0 && reg.Sandboxes == nil {
 		reg.Sandboxes = map[string]func(json.RawMessage) error{}
 	}

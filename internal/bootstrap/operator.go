@@ -31,7 +31,6 @@ import (
 func registry(executors map[string]extension.Executor) config.Registry {
 	reg := config.Registry{Executors: executors, Handlers: handlerNames()}
 	inprocRegistry(&reg, firstParty())
-	containerRegistry(&reg)
 	return reg
 }
 

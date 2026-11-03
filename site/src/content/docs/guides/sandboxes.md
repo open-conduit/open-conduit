@@ -49,7 +49,7 @@ A binding names the Docker context it uses (`docker context ls`), so changing yo
 A released `open-conduit` binary carries the digest of the gateway image built with it. Pull the image once, using the exact command `open-conduit doctor` prints:
 
 ```sh
-open-conduit doctor        # the container check names the image to pull
+open-conduit doctor        # the docker check names the image to pull
 docker pull ghcr.io/open-conduit/open-conduit-gateway@sha256:…
 ```
 
@@ -59,6 +59,8 @@ A build from source has no pinned gateway image. Build one for your Docker and p
 make gateway-image                               # prints the image ID
 export OPEN_CONDUIT_GATEWAY_IMAGE=sha256:…       # set it where the daemon runs
 ```
+
+The Docker provider runs as a package of its own with a minimal environment. If your Docker CLI needs `DOCKER_CONFIG` or `XDG_RUNTIME_DIR` (rootless Docker) to reach its daemon, grant them in the config's settings, `"settings": {"extensions": {"docker": {"pass_env": ["XDG_RUNTIME_DIR"]}}}`. Doctor's message names the grant when it can't reach Docker without them.
 
 ### 3. An image for the agent
 
@@ -196,7 +198,7 @@ open-conduit config check
 open-conduit doctor
 ```
 
-Doctor's `container` check runs for each Docker context and image your bindings use. It checks that:
+Doctor's `docker` check runs for each Docker context and image your bindings use. It checks that:
 
 - the daemon is reachable and runs version 28 or later;
 - a file written in a container is owned by you;

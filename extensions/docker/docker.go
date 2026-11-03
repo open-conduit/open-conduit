@@ -4,9 +4,9 @@
 // with the granted host paths mounted at the same paths, beside a gateway
 // container that is its only way out: an allowlisting proxy for the
 // grant's network.allow and a forward to the execution's toolbelt. It
-// returns the argv of `open-conduit container run`, the host helper that
-// starts the container, attached, relays signals to it and exits with its
-// code.
+// returns the argv of its package's helper (`open-conduit extension-run
+// docker run`, RunHelper), which starts the container, attached, relays
+// signals to it and exits with its code.
 package docker
 
 import (
@@ -23,6 +23,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -84,9 +85,10 @@ type Options struct {
 	// Docker is the docker CLI, resolved on PATH when not absolute
 	// (default "docker").
 	Docker string
-	// Helper is the open-conduit binary whose hidden `container run`
-	// starts a container for an executor's wrapper.
-	Helper string
+	// Helper is the command that starts a created container for an
+	// executor's wrapper (RunHelper), to which its arguments are appended:
+	// the package's own `run` (`open-conduit extension-run docker run`).
+	Helper []string
 	// Host is this daemon's ContainerLabelHost value.
 	Host string
 	// UID and GID the container runs as (the operator's when zero and
@@ -156,10 +158,10 @@ func New(o Options) *Provider {
 	return &Provider{o: o, health: map[string]time.Time{}}
 }
 
-// Forward is how gateways reach the toolbelt: ForwardUnix or ForwardTCP.
+// ForwardMode is how gateways reach the toolbelt: ForwardUnix or ForwardTCP.
 // With tcp the host serves each container execution's toolbelt on a
 // loopback port (ForwardListen) and writes it in PortFile.
-func (p *Provider) Forward() string { return p.o.Forward }
+func (p *Provider) ForwardMode() string { return p.o.Forward }
 
 // ForwardListen is the address the host serves a tcp toolbelt forward on
 // for a context: loopback on macOS, which Docker's VM reaches as
@@ -179,6 +181,21 @@ func (p *Provider) ForwardListen(ctx context.Context, dctx string) (string, erro
 		}
 	}
 	return "", fmt.Errorf("the default bridge on context %s has no IPv4 gateway", dctx)
+}
+
+// Forward is extension.ContainerForwarder: with a tcp forward, the address
+// the host serves an execution's toolbelt on for a binding's container
+// (ForwardListen on its context); with a unix one, "", since the gateway
+// mounts the toolbelt's socket.
+func (p *Provider) Forward(ctx context.Context, config domain.Payload) (string, error) {
+	if p.o.Forward != ForwardTCP {
+		return "", nil
+	}
+	_, s, err := ParseConfig(config.Data)
+	if err != nil {
+		return "", err
+	}
+	return p.ForwardListen(ctx, s.Context)
 }
 
 // Mount is one bind mount: a host path at the same path in the container,
@@ -610,7 +627,7 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 	}
 	created = true
 	ref := extension.ContainerRef{ID: d.Context + "/" + id, Labels: labels}
-	argv := []string{p.o.Helper, "container", "run", "--records", d.Records, ref.ID}
+	argv := append(slices.Clone(p.o.Helper), "--records", d.Records, ref.ID)
 	if d.TTY {
 		// The operator's terminal drives an attach directly: the helper
 		// would put the CLI in a process group of its own, off the terminal.
@@ -964,6 +981,27 @@ func (p *Provider) docker(ctx context.Context, dctx string, args ...string) ([]b
 		return out, &dockerError{args: args, stderr: stderr.String(), err: err}
 	}
 	return out, nil
+}
+
+// envHint is what a docker CLI that can't reach its daemon may lack out of
+// process: a variable of the daemon's environment the operator hasn't
+// granted the package (settings.extensions.docker.pass_env).
+func (p *Provider) envHint() string {
+	have := map[string]bool{}
+	for _, kv := range p.o.Environ() {
+		name, _, _ := strings.Cut(kv, "=")
+		have[name] = true
+	}
+	var missing []string
+	for _, name := range []string{"DOCKER_CONFIG", "XDG_RUNTIME_DIR"} {
+		if !have[name] {
+			missing = append(missing, name)
+		}
+	}
+	if len(missing) == 0 {
+		return ""
+	}
+	return fmt.Sprintf(" (the docker provider's environment has no %s: if the docker CLI needs it, name it in settings.extensions.docker.pass_env)", strings.Join(missing, " or "))
 }
 
 // cliEnv is the docker CLI's environment: what it needs to find itself

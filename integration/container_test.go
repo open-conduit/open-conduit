@@ -1,9 +1,9 @@
 package integration_test
 
 // Real isolation tests for the Docker container provider: containers
-// created through the host's container binding and started by the
-// `open-conduit container run` helper, as an executor's wrapper would,
-// probed from inside. They run only with OPEN_CONDUIT_CONTAINER_TESTS=1
+// created through the host's container binding and started by the docker
+// package's helper (`open-conduit extension-run docker run`), as an
+// executor's wrapper would, probed from inside. They run only with OPEN_CONDUIT_CONTAINER_TESTS=1
 // (make container-test and the container CI job), and need a Docker Engine
 // 28 or later on the context OPEN_CONDUIT_DOCKER_CONTEXT names (the CLI's
 // current one when unset): without it they fail. They build the gateway
@@ -36,6 +36,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extensions/docker"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // dockerTestImage is the image the tests run, pinned by digest: Alpine
@@ -209,7 +210,7 @@ func newDockerLab(t *testing.T) *dockerLab {
 // toolbelt as OPEN_CONDUIT_CONTAINER_FORWARD says (the platform's way when
 // unset).
 func (l *dockerLab) newProvider(gateway string) *docker.Provider {
-	return docker.New(docker.Options{Helper: dockerHelper, Host: l.host, Home: l.home, Gateway: gateway, Forward: os.Getenv("OPEN_CONDUIT_CONTAINER_FORWARD"),
+	return docker.New(docker.Options{Helper: []string{dockerHelper, protocol.HostRun, "docker", "run"}, Host: l.host, Home: l.home, Gateway: gateway, Forward: os.Getenv("OPEN_CONDUIT_CONTAINER_FORWARD"),
 		Contexts: func() []string { return []string{l.dctx} }})
 }
 

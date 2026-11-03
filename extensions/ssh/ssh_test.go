@@ -83,7 +83,7 @@ exec perl -e 'use POSIX qw(setsid); setsid() or die "setsid: $!"; exec @ARGV or 
 	write(t, filepath.Join(f.ws, "b.txt"), "beta\n", 0o644)
 	write(t, filepath.Join(f.ws, ".git", "config"), "[core]\n", 0o644)
 	write(t, filepath.Join(filepath.Dir(f.tb), "token"), "toolbelt-token", 0o600)
-	f.p = New(Options{SSH: filepath.Join(bin, "ssh"), Helper: "open-conduit", Host: "host-a", Dir: filepath.Join(tmp, "provider"), Root: f.root,
+	f.p = New(Options{SSH: filepath.Join(bin, "ssh"), Helper: []string{"open-conduit", "remote", "run"}, Host: "host-a", Dir: filepath.Join(tmp, "provider"), Root: f.root,
 		Remotes: func() []Settings { return []Settings{f.settings} }, Environ: func() []string { return []string{"PATH=" + path, "HOME=" + tmp} }})
 	f.config = f.configFor(f.settings)
 	return f

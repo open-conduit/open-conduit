@@ -32,7 +32,8 @@ type HelperOptions struct {
 	Now                   func() time.Time
 }
 
-// RunHelper is `open-conduit remote run --records <dir> <ref>`: what an
+// RunHelper is `open-conduit extension-run ssh run --records <dir> <ref>`
+// (and the older `open-conduit remote run`): what an
 // executor's wrapper runs to start a created run. It stays in the
 // wrapper's process group, so an Interrupt reaches it, and runs ssh in a
 // group of its own, with the execution's toolbelt socket forwarded to the
