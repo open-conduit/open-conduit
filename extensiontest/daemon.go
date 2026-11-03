@@ -37,6 +37,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"syscall"
@@ -266,6 +267,9 @@ func (d *Instance) start() {
 	args := append([]string{"--data-dir", d.state, "serve", "--config", d.config, "--poll-interval", poll.String(), "--lease-duration", lease.String()}, d.opts.Args...)
 	cmd := exec.Command(filepath.Join(dir, "open-conduit"), args...)
 	cmd.Env = append(os.Environ(), d.opts.Env...)
+	if raceEnabled {
+		cmd.Env = append(cmd.Env, "GORACE="+shortRaceExit(lastEnv(cmd.Env, "GORACE")))
+	}
 	cmd.Stdout, cmd.Stderr = d.log, d.log
 	if err := cmd.Start(); err != nil {
 		d.t.Fatal(err)
@@ -377,4 +381,34 @@ func (d *Instance) descendants() []devscope.Process {
 	default:
 	}
 	return devscope.Descendants(d.cmd.Process.Pid)
+}
+
+// raceExitMillis is how long a race-built process waits at exit for late
+// race reports (GORACE atexit_sleep_ms). The race runtime's default is a
+// second, which every package process, toolbelt call and daemon a test
+// starts and stops paid in turn: most of a package's certification, and
+// enough over a whole run to push the integration tests past go test's
+// default timeout (#491). A report is printed by the goroutine that finds
+// the race, so a short wait still lets one finish.
+const raceExitMillis = 50
+
+// shortRaceExit adds raceExitMillis to the GORACE options gorace unless
+// they set atexit_sleep_ms themselves.
+func shortRaceExit(gorace string) string {
+	if strings.Contains(gorace, "atexit_sleep_ms=") {
+		return gorace
+	}
+	return strings.TrimSpace(gorace + " atexit_sleep_ms=" + strconv.Itoa(raceExitMillis))
+}
+
+// lastEnv is the value environ gives name, the last entry winning as it
+// does for exec.
+func lastEnv(environ []string, name string) string {
+	v := ""
+	for _, kv := range environ {
+		if k, val, ok := strings.Cut(kv, "="); ok && k == name {
+			v = val
+		}
+	}
+	return v
 }

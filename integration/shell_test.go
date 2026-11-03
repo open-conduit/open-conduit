@@ -35,8 +35,8 @@ import (
 // TestMain lets this test binary act as the `os` toolbelt CLI when invoked
 // through the symlink placed on a shell execution's PATH, and as the
 // environment-recording package (envPackageMain) through its command's
-// symlink. After the run it
-// removes every directory keptDir made.
+// symlink. Under -race it shortens the race runtime's exit for every process
+// the tests start. After the run it removes every directory keptDir made.
 func TestMain(m *testing.M) {
 	if filepath.Base(os.Args[0]) == "os" {
 		cwd, _ := os.Getwd()
@@ -44,6 +44,12 @@ func TestMain(m *testing.M) {
 	}
 	if filepath.Base(os.Args[0]) == envPackageCommand {
 		os.Exit(envPackageMain())
+	}
+	if raceEnabled {
+		// Every race-built process these tests start (daemons, packages,
+		// certification sessions) would otherwise sleep a second at exit
+		// (#491); see raceExitMillis.
+		_ = os.Setenv("GORACE", shortRaceExit(os.Getenv("GORACE")))
 	}
 	code := m.Run()
 	cleanupHistory()

@@ -394,7 +394,7 @@ Provisional, like the rest of the protocol. Code:
 - **Conflicts.** `extproc.CheckConflicts` checks a whole set atomically against names already taken in-process, and against each other. The checked kinds are the name, config types, handlers, executors, resource types, operations, families, work kinds, recurrences and schemas. Either every extension is admitted or none is.
 - **Start.**
   - The command runs in the extension directory, in its own process group.
-  - The environment is the B05 baseline (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, `TERM`), plus the daemon variables the operator grants that package by name (`settings.extensions.<name>.pass_env`, [process environment](../extension-packaging/#process-environment)), those set. No credential or Open Conduit setting reaches it.
+  - The environment is the B05 baseline (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, `TERM`), plus the daemon variables the operator grants that package by name (`settings.extensions.<name>.pass_env`, [process environment](../extension-packaging/#process-environment)), those set. No credential or Open Conduit setting reaches it. A host built with the race detector, which only tests build, also passes `GORACE`, so a test's race settings, such as the short exit wait the test harnesses set, reach the race-built packages it starts.
   - stderr goes to a bounded log, `<state>/logs/extensions/<name>.log`. It is truncated with a marker at 1 MiB.
   - The private state directory is `<state>/extensions/<name>`.
 - **Handshake.**
