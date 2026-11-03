@@ -712,6 +712,15 @@ func (c *Client) HoldWork(ctx context.Context, id, revision, reason, key string)
 	return
 }
 
+// InterruptWork stops running Work's current attempt without ending the
+// Work: the attempt is fenced, the Work's queued input is kept, and the next
+// attempt starts with it. It is refused (interrupt_unsupported) when the
+// running attempt's executor does not support interrupt.
+func (c *Client) InterruptWork(ctx context.Context, id, revision, reason, key string) (out ControlResult, err error) {
+	err = c.Do(ctx, "POST", "work/"+esc(id)+"/interrupt", nil, controlRequest{revision, reason}, key, &out)
+	return
+}
+
 // ReleaseWork removes an operator hold.
 func (c *Client) ReleaseWork(ctx context.Context, id, revision, reason, key string) (out ControlResult, err error) {
 	err = c.Do(ctx, "POST", "work/"+esc(id)+"/release", nil, controlRequest{revision, reason}, key, &out)
@@ -1258,8 +1267,12 @@ type Run struct {
 	Inputs      int           `json:"inputs"`
 	WaitID      string        `json:"wait_id,omitempty"`
 	WakeEventID string        `json:"wake_event_id,omitempty"`
-	Retry       *RetryStatus  `json:"retry,omitempty"`
-	Retention   Retention     `json:"retention"`
+	// InterruptEventID is the Event whose interrupt ended the run: an
+	// operator's core.manual.interrupt, or input a route with policy
+	// interrupt delivered.
+	InterruptEventID string       `json:"interrupt_event_id,omitempty"`
+	Retry            *RetryStatus `json:"retry,omitempty"`
+	Retention        Retention    `json:"retention"`
 }
 
 // Active is the run's active time as of now: ActiveMS plus the segment

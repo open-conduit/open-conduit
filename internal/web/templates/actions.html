@@ -132,6 +132,17 @@ else the content of the confirmation page. */}}
   <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Close")}}</footer>
   {{- end}}
 </form>
+{{- else if eq .Action "interrupt"}}
+<form method="post" action="/work/interrupt">{{template "dialog-hidden" .}}
+  <ul class="consequences">
+    <li><span>{{with .Live}}Stops turn {{.Number}} now, even in the middle of a long tool call.{{else}}Stops the running turn now.{{end}} Work done so far in the workspace is kept.</span></li>
+    <li><span>The Work stays open. Input queued for it, such as messages the turn hasn't read yet, starts the next turn, which continues the same session where the executor can.</span></li>
+    <li><span>Refused, with nothing stopped, when the turn's executor can't be interrupted.</span></li>
+  </ul>
+  <label class="field"><span>Reason</span><input name="reason" placeholder="e.g. Read my latest message" autocomplete="off"></label>
+  {{template "endpoint" .}}
+  <footer class="dialog-foot">{{template "dialog-dismiss" (dict "D" . "Label" "Let it run")}}<button class="btn btn-primary" autofocus>Interrupt</button></footer>
+</form>
 {{- else if eq .Action "cancel-turn"}}{{with .Turn}}
 <form method="post" action="/run/cancel"><input type="hidden" name="csrf" value="{{$d.Page.CSRF}}"><input type="hidden" name="back" value="{{$d.Back}}"><input type="hidden" name="run" value="{{.ID}}">
   <ul class="consequences">

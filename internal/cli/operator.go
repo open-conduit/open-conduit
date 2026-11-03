@@ -483,6 +483,12 @@ func (o *operator) work(args []string) int {
 			defer cancel()
 			return c.RetryWork(cx, id, rev, reason, key)
 		})
+	case "interrupt":
+		return o.control(args[1:], workRevision, func(c *client.Client, id, rev, reason, key string) (any, error) {
+			cx, cancel := ctx()
+			defer cancel()
+			return c.InterruptWork(cx, id, rev, reason, key)
+		})
 	case "hold", "release", "rebind", "attach":
 		return o.workControl(args[0], args[1:])
 	case "wake":

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -377,4 +378,97 @@ func RecordAttachInTx(tx storage.Tx, execution domain.ID, pin extension.Containe
 // registration, binding and generation) to composition and management.
 func AttemptStateInTx(tx storage.Tx, execution domain.ID) (AttemptState, error) {
 	return attemptState(tx, execution)
+}
+
+// ErrInterruptUnsupported reports that the running attempt's executor does
+// not advertise interrupt, so an operator's interrupt is refused rather
+// than turned into a cancel.
+var ErrInterruptUnsupported = errors.New("the running attempt's executor does not support interrupt")
+
+// InterruptWork stops running Work's current attempt without ending the
+// Work, through the same interrupt dispatch a route with policy interrupt
+// uses. It commits a core.manual.interrupt control Event and an interrupt
+// intent against the running attempt and its lease epoch; dispatch fences
+// the attempt (cancelled, with the Event recorded as its InterruptEventID),
+// leaves the Work ready with its queued input kept, and calls the
+// executor's Interrupt. The next attempt starts with that input; with none
+// queued, the Work stays ready for its next input. It fails closed: Work
+// whose running attempt was not pinned with interrupt, or whose executor
+// does not implement it, is refused with ErrInterruptUnsupported, and a
+// failed dispatch never takes the binding's control_error_fallback.
+// Replaying the same key returns the original Event and attempt.
+func (c *Control) InterruptWork(ctx context.Context, workID domain.ID, expected domain.Revision, reason, key string) (event, execution domain.ID, err error) {
+	if !validDelivery(key) {
+		return "", "", storage.ErrInvalid
+	}
+	delivery := "interrupt/" + key
+	var intentID string
+	err = c.transact(ctx, func(tx storage.Tx) error {
+		if old, dup, e := prior(tx, delivery); e != nil || dup {
+			if e != nil {
+				return e
+			}
+			if old.Event.WorkID != workID {
+				return storage.ErrConflict
+			}
+			var p controlPayload
+			_ = json.Unmarshal(old.Event.Data.Data, &p)
+			event, execution = old.Event.ID, p.ExecutionID
+			return nil
+		}
+		w, e := tx.Work(workID)
+		if e != nil {
+			return e
+		}
+		if w.Revision != expected {
+			return ErrRevision
+		}
+		if w.State != domain.WorkRunning {
+			return storage.ErrConflict
+		}
+		xs, e := tx.ListExecutions(w.ID)
+		if e != nil {
+			return e
+		}
+		var target *domain.Execution
+		for i := range xs {
+			if xs[i].State == domain.ExecutionRunning {
+				target = &xs[i]
+			}
+		}
+		if target == nil {
+			return storage.ErrConflict
+		}
+		attempt, e := attemptState(tx, target.ID)
+		if errors.Is(e, storage.ErrNotFound) {
+			return storage.ErrConflict
+		} else if e != nil {
+			return e
+		}
+		executor, e := c.scheduler.executorFor(attempt)
+		if e != nil {
+			return ErrInterruptUnsupported
+		}
+		if _, ok := executor.(extension.InterruptExecutor); !ok || !attempt.Capabilities.Interrupt {
+			return ErrInterruptUnsupported
+		}
+		accepted, _, e := c.acceptInTx(ctx, tx, w.ScopeID, ManualEvent{WorkID: w.ID, DeliveryID: delivery, Data: controlData("core.manual.interrupt.v1", reason, target.ID, expected)}, "core.manual.interrupt")
+		if e != nil {
+			return e
+		}
+		event, execution = accepted.Event.ID, target.ID
+		if e = tx.MarkRouted(event, "", "control"); e != nil {
+			return e
+		}
+		intent := ControlIntent{ID: identity(string(event), string(target.ID), fmt.Sprint(target.Lease.Epoch), "interrupt"), EventID: event, WorkID: w.ID, ExecutionID: target.ID, Epoch: target.Lease.Epoch, Policy: "interrupt", Binding: target.ExecutorBinding, Operator: true}
+		intentID = intent.ID
+		return putJSON(tx, intentNamespace, intent.ID, intent)
+	})
+	if err == nil && intentID != "" {
+		// Dispatch now rather than on the host's next pass; a failure
+		// leaves the intent for that pass, and a fenced attempt is stopped
+		// by its holder either way.
+		_ = c.scheduler.DispatchControl(ctx, intentID)
+	}
+	return
 }

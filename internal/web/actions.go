@@ -115,6 +115,14 @@ func controls(w workView, pinned string) []control {
 		attach.Why = "No turn has run yet"
 	}
 	out = append(out, attach)
+	// Interrupt stops a running turn and keeps the Work; the daemon refuses
+	// it (interrupt_unsupported) when the turn's executor can't be
+	// interrupted, and the confirmation shows why.
+	it := control{ID: "interrupt", Label: "Interrupt this turn", Enabled: w.State == "running" && live != nil && live.State == "running"}
+	if !it.Enabled {
+		it.Why = "No turn is running"
+	}
+	out = append(out, it)
 	ct := control{ID: "cancel-turn", Label: "Cancel this turn", Enabled: live != nil || parked != nil, Destructive: true}
 	if !ct.Enabled {
 		ct.Why = "No turn is running or parked"
@@ -417,10 +425,11 @@ func (s *Server) workControl(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	name := r.PathValue("control")
 	simple := map[string]func(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error){
-		"retry":   s.src.RetryWork,
-		"hold":    s.src.HoldWork,
-		"release": s.src.ReleaseWork,
-		"cancel":  s.src.CancelWork,
+		"retry":     s.src.RetryWork,
+		"hold":      s.src.HoldWork,
+		"release":   s.src.ReleaseWork,
+		"cancel":    s.src.CancelWork,
+		"interrupt": s.src.InterruptWork,
 	}
 	if _, ok := simple[name]; !ok && name != "wake" && name != "rebind" {
 		http.NotFound(w, r)
@@ -463,7 +472,7 @@ func (s *Server) workControl(w http.ResponseWriter, r *http.Request) {
 		s.record(w, r, "Rebound "+label+" to "+binding+".", rc, err)
 		return
 	}
-	defaults := map[string]string{"hold": "Held from the web view", "cancel": "Cancelled from the web view"}
+	defaults := map[string]string{"hold": "Held from the web view", "cancel": "Cancelled from the web view", "interrupt": "Interrupted from the web view"}
 	reasonText := formReason(r, defaults[name])
 	if reasonText == "" {
 		reasonText = reason
@@ -479,6 +488,8 @@ func (s *Server) workControl(w http.ResponseWriter, r *http.Request) {
 		rc.Summary, text = "Release hold", "Released "+label+"."
 	case "cancel":
 		rc.Summary, text = "Cancel Work · “"+reasonText+"”", "Cancelled "+label+"."
+	case "interrupt":
+		rc.Summary, text = "Interrupt turn · “"+reasonText+"”", "Interrupted "+label+"'s running turn. Its next turn starts with the input queued for it."
 	}
 	s.record(w, r, text, rc, err)
 }
@@ -664,6 +675,7 @@ func (s *Server) confirmPage(w http.ResponseWriter, r *http.Request) {
 			"retry":       "Run " + name + " again",
 			"wake":        "Send a wake event to " + name,
 			"rebind":      "Rebind " + name,
+			"interrupt":   "Interrupt " + name + "'s running turn",
 			"cancel-turn": "Cancel this turn of " + name,
 			"cancel-work": "Cancel " + name + " for good",
 			"attach":      "Attach to " + name + "'s session",

@@ -170,6 +170,8 @@ func mapError(err error) *apiError {
 		return fail(409, "scope_in_use", "scope has nonterminal work; drain it first")
 	case errors.Is(err, runtime.ErrGateHold):
 		return fail(409, "gate_hold", "a start gate holds this Work until its approval request is answered; answer it, or cancel the Work")
+	case errors.Is(err, runtime.ErrInterruptUnsupported):
+		return fail(422, "interrupt_unsupported", "the running attempt's executor does not support interrupt; cancel the turn instead")
 	case errors.Is(err, runtime.ErrHeld):
 		return fail(409, "hold_conflict", "the Work is already held, or not held")
 	case errors.Is(err, ErrNothingToAttach):
@@ -373,6 +375,7 @@ var routes = []route{
 	{"POST", []string{"work", "*", "wake"}, true, true, (*Server).wakeWork},
 	{"POST", []string{"work", "*", "rebind"}, true, true, (*Server).rebindWork},
 	{"POST", []string{"work", "*", "hold"}, true, true, (*Server).holdWork},
+	{"POST", []string{"work", "*", "interrupt"}, true, true, (*Server).interruptWork},
 	{"POST", []string{"work", "*", "release"}, true, true, (*Server).releaseWork},
 	{"POST", []string{"work", "*", "attach"}, true, true, (*Server).attachWork},
 	{"POST", []string{"work", "*", "container-attach"}, true, true, (*Server).containerAttach},

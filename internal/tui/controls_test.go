@@ -47,6 +47,9 @@ func (c *controlSource) HoldWork(_ context.Context, id, rev, reason, _ string) (
 	c.work.Hold = &client.Hold{EventID: "h", Reason: reason}
 	return c.rec("hold", id, rev)
 }
+func (c *controlSource) InterruptWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
+	return c.rec("interrupt", id, rev)
+}
 func (c *controlSource) ReleaseWork(_ context.Context, id, rev, _, _ string) (client.ControlResult, error) {
 	c.work.Hold = nil
 	return c.rec("release", id, rev)
@@ -308,6 +311,39 @@ func TestStuckEventControls(t *testing.T) {
 	drain(t, m, cmd)
 	if got := strings.Join(src.calls, ","); got != "skip-event evt-stuck ,reroute-event evt-failed " {
 		t.Fatalf("calls: %s", got)
+	}
+}
+
+// TestInterruptKey: i asks before interrupting the running turn, at the
+// Work's revision, and refuses a turn that isn't running.
+func TestInterruptKey(t *testing.T) {
+	live := run("r1", "running", "github.issue", 1, "1")
+	src := &controlSource{fakeSource: fakeSource{runs: []client.Run{live}}, work: client.Work{ID: "w-github.issue", State: "running", Revision: "9"}}
+	var m tea.Model = New(src, time.Hour)
+	m = drain(t, m, m.(Model).fetch())
+	if !strings.Contains(m.View(), "i interrupt") {
+		t.Fatalf("interrupt not offered:\n%s", m.View())
+	}
+	m, _ = press(m, "i")
+	if !strings.Contains(m.View(), "interrupt the running turn of w-github.issue? its queued input starts the next turn y/n") {
+		t.Fatalf("no confirmation:\n%s", m.View())
+	}
+	m, cmd := press(m, "n")
+	if cmd != nil || len(src.calls) != 0 {
+		t.Fatal("declined interrupt ran")
+	}
+	m, _ = press(m, "i")
+	m, cmd = press(m, "y")
+	m = drain(t, m, cmd)
+	if len(src.calls) != 1 || src.calls[0] != "interrupt w-github.issue 9" {
+		t.Fatalf("interrupt: %v\n%s", src.calls, m.View())
+	}
+
+	done := &controlSource{fakeSource: fakeSource{runs: []client.Run{run("r2", "completed", "github.issue", 1, "1")}}, work: client.Work{ID: "w-github.issue", State: "ready", Revision: "3"}}
+	m = New(done, time.Hour)
+	m = drain(t, m, m.(Model).fetch())
+	if m, cmd = press(m, "i"); cmd != nil || len(done.calls) != 0 || !strings.Contains(m.View(), "only a running turn can be interrupted") {
+		t.Fatalf("interrupt of a finished turn: %v\n%s", done.calls, m.View())
 	}
 }
 

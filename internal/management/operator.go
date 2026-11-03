@@ -137,6 +137,20 @@ func (s *Server) holdWork(c *call) (int, any, error) {
 	return 202, map[string]any{"event_id": string(event), "work_id": c.params[0]}, nil
 }
 
+// interruptWork stops running Work's current attempt and keeps the Work,
+// with its queued input, for the next attempt (runtime.Control.InterruptWork).
+func (s *Server) interruptWork(c *call) (int, any, error) {
+	rev, reason, err := s.control(c)
+	if err != nil {
+		return 0, nil, err
+	}
+	event, execution, err := s.o.Control.InterruptWork(c.ctx, domain.ID(c.params[0]), rev, reason, c.key)
+	if err != nil {
+		return 0, nil, err
+	}
+	return 202, map[string]any{"event_id": string(event), "work_id": c.params[0], "execution_id": string(execution)}, nil
+}
+
 func (s *Server) releaseWork(c *call) (int, any, error) {
 	rev, reason, err := s.control(c)
 	if err != nil {

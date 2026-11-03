@@ -30,6 +30,7 @@ type Controls interface {
 	CancelWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	RetryWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	HoldWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
+	InterruptWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	ReleaseWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	// EventsWithRoutes lists Events with how each was routed, for the
 	// Events routing is stuck on or gave up on; SkipEvent and
@@ -318,6 +319,15 @@ func (m Model) controlKey(k string, r client.Run) (Model, tea.Cmd, bool) {
 			}
 			return actionMsg{text: "execution cancel accepted (event " + res.EventID + ")"}
 		}}
+		return m, nil, true
+	case "i":
+		if r.State != "running" {
+			m.notice = "the run is not running; only a running turn can be interrupted"
+			return m, nil, true
+		}
+		m.confirm = &pending{prompt: "interrupt the running turn of " + r.WorkID + "? its queued input starts the next turn", cmd: m.action("interrupt", func(ctx context.Context, ctl Controls, w client.Work) (client.ControlResult, error) {
+			return ctl.InterruptWork(ctx, w.ID, w.Revision, operatorReason, key())
+		}, r.WorkID)}
 		return m, nil, true
 	case "X":
 		m.confirm = &pending{prompt: "cancel work " + r.WorkID + " (terminal)?", cmd: m.action("work cancel", func(ctx context.Context, ctl Controls, w client.Work) (client.ControlResult, error) {

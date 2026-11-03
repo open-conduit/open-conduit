@@ -116,6 +116,16 @@ func TestManagementOperatorControls(t *testing.T) {
 	if x.ExecutorBinding != "run" {
 		t.Fatalf("attempt binding %q, want the rebound run", x.ExecutorBinding)
 	}
+	// Interrupt fails closed: this binding's executor doesn't advertise
+	// interrupt, so the running attempt is left alone and no Event is
+	// recorded (the history below has none), rather than a cancel.
+	if _, errOut, code := h.cli("work", "interrupt", id, "--reason", "read this", "--key", "interrupt-1"); code != 1 || !strings.Contains(errOut, "interrupt_unsupported") {
+		t.Fatalf("interrupt without the capability: %d %s", code, errOut)
+	}
+	h.mustCLI(&x, "executions", "get", string(attempt.Lease.ExecutionID))
+	if x.State != "running" {
+		t.Fatalf("refused interrupt changed the attempt: %s", x.State)
+	}
 	<-h.tokens
 	<-h.secrets
 	var events client.Page[client.Event]

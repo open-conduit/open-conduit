@@ -74,6 +74,7 @@ var helpGroups = []helpGroup{
 	{"Control", []helpEntry{
 		{"work", `  work create --scope S --kind K --binding B [--schema S --data JSON] [--key K]
   work cancel|retry|hold|release ID [--revision N] [--reason TEXT] [--key K]
+  work interrupt ID [--revision N] [--reason TEXT] [--key K]   stop the running turn; the Work and its queued input stay for the next
   work rebind ID --binding B [--revision N] [--reason TEXT] [--key K]
   work attach ID [--keep-held]   hold, attach to the executor's session, release on exit
   work wake ID --type T --delivery-id D --key-source S --key-external-id X [--revision N] [--schema S --data JSON] [--key K]`},
