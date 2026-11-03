@@ -68,6 +68,9 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 			_, err := extension.ParseContainerConfig(p.Config)
 			return err
 		}
+		if p.Kind == protocol.ValidateTunnel && p.Type == Relay {
+			return parseRelay(p.Config)
+		}
 		if p.Kind == protocol.ValidateSandbox && p.Type == Jail {
 			_, err := parseJail(p.Config)
 			return err
@@ -206,6 +209,7 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 	ext.Providers = map[string]extension.ResourceProvider{Scratch: scratch{stateDir: o.StateDir}}
 	ext.Sandboxes = map[string]extension.SandboxProvider{Jail: jail{}}
 	ext.Containers = map[string]extension.ContainerProvider{Pod: newPod()}
+	ext.Tunnels = map[string]extension.TunnelProvider{Relay: relay{}}
 	ext.Exporter = exporter{stateDir: o.StateDir}
 	ext.Annotate = annotate
 	ext.RunEnvironment = func(_ context.Context, _ *sdk.Host, r extension.RunEnvironmentRequest) (map[string]string, error) {

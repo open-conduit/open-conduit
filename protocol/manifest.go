@@ -216,9 +216,11 @@ type Provides struct {
 	// binding's container config through validate with kind container.
 	Containers []ContainerDecl `json:"containers,omitempty"`
 	// Tunnels are tunnel provider types (extension.TunnelProvider) that
-	// expose the host's webhook listener: the host holds tunnel.run open
-	// for the daemon's life and the package reports each public URL back
-	// through tunnel.url.
+	// expose the host's webhook listener: settings.webhooks.tunnel names
+	// one, the package checks its config through validate with kind
+	// tunnel, the host holds tunnel.run open with that config for the
+	// daemon's life, and the package reports each public URL back through
+	// tunnel.url.
 	Tunnels []TunnelDecl `json:"tunnels,omitempty"`
 	// Tasks are host-paced background passes (projection, timer ensure,
 	// executor housekeeping, webhook management).
@@ -730,6 +732,9 @@ type ContainerDecl struct {
 // TunnelDecl declares a tunnel provider type (settings.webhooks.tunnel).
 type TunnelDecl struct {
 	Type string `json:"type"`
+	// Fields describe the tunnel config's fields
+	// (settings.webhooks.tunnel.config, FieldDecl).
+	Fields []FieldDecl `json:"fields,omitempty"`
 }
 type TaskDecl struct {
 	Name            string `json:"name"`
@@ -1079,6 +1084,7 @@ func (m Manifest) Validate() error {
 	tunnels := map[string]bool{}
 	for _, x := range p.Tunnels {
 		ident("tunnel provider", x.Type)
+		fieldDecls("tunnel provider", x.Type, x.Fields, false)
 		if tunnels[x.Type] {
 			fail("tunnel provider %q is declared twice", x.Type)
 		}

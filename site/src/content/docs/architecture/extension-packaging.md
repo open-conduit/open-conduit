@@ -101,7 +101,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Providers` | `resources` | `provider.*` |
 | `Sandboxes` | `sandboxes` | `sandbox_provider.*` |
 | `Containers` | `containers` (`forward` for an `extension.ContainerForwarder`) | `container_provider.*` |
-| `Tunnels` | `tunnels` | `tunnel.run`, `tunnel.url` (E→H) |
+| `Tunnels` | `tunnels` | `tunnel.run`, `tunnel.url` (E→H), `validate` kind `tunnel` (`Validate`) |
 | `Tasks`, `Checks`, `CheckRuns` (a check that reads the configuration view or reports its own status, code and items) | `tasks`, `checks` | `task.run`, `check.run` |
 | `Exporter` | `exporters` | `telemetry.export` |
 | `Sink` | permission `telemetry.sink` | `telemetry.sink` |
@@ -438,7 +438,7 @@ Flags:
 
 `open-conduit extension certify DIR [--json] [--report FILE]` is the distributable conformance runner. It ships in the `open-conduit` binary. It starts the package exactly as the daemon does: `internal/extproc`, with a real SQLite coordination store and artifact store in a temporary directory, and the package's own fixture. It then runs the criteria and prints or writes a report. The exit status is 0 only when the package is certified. `make certify` certifies the first-party packages and the examples, and runs the negative controls.
 
-### Criteria (version 3)
+### Criteria (version 6)
 
 | ID | Applies | Requirement |
 | --- | --- | --- |
@@ -463,9 +463,10 @@ Flags:
 | `resources.workspace` | resource type with `mode_default` or `sandbox` | Each resource case's `validate resource_mode` names the expected mode and `validate resource_sandbox` refuses exactly as expected, twice identically |
 | `sandboxes.policy` | sandbox provider type | Each sandbox case's `validate sandbox` refuses exactly as expected, twice identically, with an accepted and a refused case for every type; `sandbox_provider.adopt` of a plan the provider never made is refused |
 | `containers.policy` | container provider type | Each container case's `validate container` refuses exactly as expected, twice identically, with an accepted and a refused case for every type; `container_provider.inspect` never reports a container the provider never made as running, and `container_provider.list` for an execution it never saw lists nothing (negative control `list-any`) |
+| `tunnels.policy` | tunnel provider type | Each tunnel case's `validate tunnel` refuses exactly as expected, twice identically, with an accepted and a refused case for every type (negative control `tunnel-open`) |
 | `surfaces.served` | checks or tasks | Every check answers; every task is served |
 
-A package is certified when every applicable criterion passes. A declared ingress type or executor, an executor declaring `resource_mode`, a resource type declaring `mode_default` or `sandbox`, or a sandbox type without its fixture cases fails. Missing route and operation cases are noted. A tunnel type has no criterion of its own: the host keeps the listener and what it serves, so a provider can only report where webhooks point, which the operator's `public_url` does too, and running one needs its third-party program.
+A package is certified when every applicable criterion passes. A declared ingress type or executor, an executor declaring `resource_mode`, a resource type declaring `mode_default` or `sandbox`, or a sandbox, container or tunnel type without its fixture cases fails. Missing route and operation cases are noted. `tunnel.run` has no criterion: the host keeps the listener and what it serves, so a provider can only report where webhooks point, which the operator's `public_url` does too, and running one needs its third-party program. A tunnel type's config check does have one (`tunnels.policy`), because the host passes the operator's config on unread.
 
 ### Fixtures
 
@@ -533,7 +534,7 @@ A report states:
 25. The SDK's final shape: `sdk.Extension` fields per surface, `sdk.Host`, `sdk.Store` (precondition-on-read optimistic commits; prefix ranges not protected) and `sdk.Artifacts`, plus `sdk.PackageCommand` for packaging. `sdk.New` and its registrations (`Operation` with typed `sdk.Handler`, `sdk.Wait` and `sdk.Emit`, `Route`, `WorkKind`, `Task`, `Check`, `IngressType` …) fill the same fields and derive the manifest from them; an operation's input struct gives its manifest `input` schema.
 26. `secret.resolve` takes a `connection` field and `configure` entries carry `name` and `connection`, so a package reaches its connections' secrets without bootstrap glue (B05 scoping kept).
 27. Packages start before the configuration opens. A package that fails to start leaves its types unregistered, so a config using them fails validation and the daemon refuses to start with the diagnostic.
-28. Certification criteria version 5 (above; version 2 added the Work display limits to `routes.decisions`, version 3 `executor.resource_mode` and `resources.workspace`, version 4 `sandboxes.policy`, version 5 `containers.policy`), run against the package's own fixture by `open-conduit extension certify`. The fixture format lives in `protocol`. A declared ingress type or executor requires a fixture case.
+28. Certification criteria version 6 (above; version 2 added the Work display limits to `routes.decisions`, version 3 `executor.resource_mode` and `resources.workspace`, version 4 `sandboxes.policy`, version 5 `containers.policy`, version 6 `tunnels.policy`), run against the package's own fixture by `open-conduit extension certify`. The fixture format lives in `protocol`. A declared ingress type or executor requires a fixture case.
 29. `receive_time_varies` relaxes only `received_at` equality for packages that stamp reconcile observations with their own clock.
 30. The certification runner is production code in the `open-conduit` binary, so composition may depend on the public `conformance` checks (never `conformance/reference`); the boundary rule says so.
 31. The Slack package requires source namespaces `slack` or `slack/…` (the subprocess namespacing rule), which the in-process extension does not.

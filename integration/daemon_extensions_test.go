@@ -140,6 +140,28 @@ func TestDaemonExtensionPackages(t *testing.T) {
 		t.Fatalf("offline check of an executor's config warning: %v\n%s", err, out)
 	}
 
+	// settings.webhooks selects an installed package's tunnel type as it
+	// does a bundled one's, and each package checks its own tunnel config.
+	withTunnel := func(tunnel string) []byte {
+		raw := config(map[string]any{"service": service, "scope": "notes-scope"})
+		return bytes.Replace(raw, []byte(`"settings":{`), []byte(`"settings":{"webhooks":{"addr":"127.0.0.1:8787","tunnel":`+tunnel+`},`), 1)
+	}
+	for tunnel, ok := range map[string]bool{
+		`{"provider":"notes-relay","config":{"region":"eu"}}`:        true,
+		`{"provider":"notes-relay","config":{"domain":"x.example"}}`: false,
+		`{"provider":"ngrok","config":{"domain":"hooks.ngrok.app"}}`: true,
+		`{"provider":"ngrok","config":{"name":"hooks"}}`:             false,
+		`{"provider":"tailscale-funnel","config":{"region":"eu"}}`:   false,
+	} {
+		if err := os.WriteFile(bad, withTunnel(tunnel), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		out, err := exec.Command(daemonBinary(t), "config", "check", "--file", bad).CombinedOutput()
+		if (err == nil) != ok || (!ok && !strings.Contains(string(out), "settings/webhooks/tunnel/")) {
+			t.Errorf("offline check of tunnel %s: %v\n%s", tunnel, err, out)
+		}
+	}
+
 	d.start("")
 	completed := func(n int) func() bool {
 		return func() bool {

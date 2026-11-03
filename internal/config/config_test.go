@@ -53,6 +53,17 @@ func registry() Registry {
 		Extensions:  map[string]ExtensionType{"chat_ingress": {Ingress: true}, "code_ingress": {Ingress: true}, "schedule": {}},
 		Connections: map[string]func(json.RawMessage) error{"chat": nil, "code": nil},
 		Resources:   map[string]bool{"git": true},
+		// A package's tunnel type checks its own config; one without a
+		// check accepts any object.
+		Tunnels: map[string]func(json.RawMessage) error{
+			"ngrok": func(raw json.RawMessage) error {
+				if strings.Contains(string(raw), "refused") {
+					return errors.New("the package refused the tunnel config")
+				}
+				return nil
+			},
+			"tailscale-funnel": nil,
+		},
 	}
 }
 
@@ -988,27 +999,29 @@ func TestWebhookSettings(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if plain.Settings.Webhooks != (Webhooks{}) || strings.Contains(string(plain.Normalized), "webhooks") {
+	if !plain.Settings.Webhooks.IsZero() || strings.Contains(string(plain.Normalized), "webhooks") {
 		t.Fatalf("no stored listener: %+v %s", plain.Settings.Webhooks, plain.Normalized)
 	}
-	snap, err := with(map[string]any{"addr": "127.0.0.1:8787", "tunnel": "cloudflared", "tunnel_name": "oc", "tunnel_hostname": "hooks.example.com"})
+	snap, err := with(map[string]any{"addr": "127.0.0.1:8787", "tunnel": map[string]any{"provider": "ngrok", "config": map[string]any{"domain": "hooks.ngrok.app"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	want := Webhooks{Addr: "127.0.0.1:8787", Tunnel: "cloudflared", TunnelName: "oc", TunnelHostname: "hooks.example.com"}
-	if snap.Settings.Webhooks != want || snap.Hash == plain.Hash {
-		t.Fatalf("stored listener %+v", snap.Settings.Webhooks)
+	want := Webhooks{Addr: "127.0.0.1:8787", Tunnel: &Tunnel{Provider: "ngrok", Config: json.RawMessage(`{"domain":"hooks.ngrok.app"}`)}}
+	if !snap.Settings.Webhooks.Equal(want) || snap.Hash == plain.Hash {
+		t.Fatalf("stored listener %+v %s", snap.Settings.Webhooks, snap.Settings.Webhooks.Tunnel.Config)
 	}
 	// The normalized form (what a committed generation restores) keeps it.
 	again, err := Validate(snap.Normalized, registry())
-	if err != nil || again.Settings.Webhooks != want || again.Hash != snap.Hash {
+	if err != nil || !again.Settings.Webhooks.Equal(want) || again.Hash != snap.Hash {
 		t.Fatalf("round trip %+v %v", again, err)
 	}
 	for _, ok := range []map[string]any{
 		{"addr": "127.0.0.1:0"},
-		{"addr": ":8787", "tunnel": "ngrok", "tunnel_domain": "hooks.ngrok.app"},
+		{"addr": ":8787", "tunnel": map[string]any{"provider": "ngrok"}},
+		// Any type a package declares, its config opaque to the host.
+		{"addr": ":8787", "tunnel": map[string]any{"provider": "tailscale-funnel", "config": map[string]any{"port": 443, "anything": []any{"x"}}}},
 		{"addr": "127.0.0.1:8787", "public_url": "https://hooks.example.com"},
-		{"addr": "127.0.0.1:8787", "tunnel": "static", "public_url": "http://box.tail.ts.net"},
+		{"addr": "127.0.0.1:8787", "public_url": "http://box.tail.ts.net"},
 	} {
 		if _, err := with(ok); err != nil {
 			t.Fatalf("%v rejected: %v", ok, err)
@@ -1017,26 +1030,41 @@ func TestWebhookSettings(t *testing.T) {
 	for _, c := range []struct {
 		hooks any
 		path  string
+		code  string
 	}{
-		{map[string]any{"tunnel": "ngrok"}, "settings/webhooks/addr"},
-		{map[string]any{"addr": "8787"}, "settings/webhooks/addr"},
-		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "frp"}, "settings/webhooks/tunnel"},
-		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "cloudflared", "tunnel_domain": "x"}, "settings/webhooks/tunnel_domain"},
-		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "cloudflared", "tunnel_name": "oc"}, "settings/webhooks/tunnel_name"},
-		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "ngrok", "tunnel_hostname": "h"}, "settings/webhooks/tunnel_name"},
-		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "ngrok", "public_url": "https://x"}, "settings/webhooks/public_url"},
-		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "static"}, "settings/webhooks/public_url"},
-		{map[string]any{"addr": "127.0.0.1:8787", "public_url": "https://u:p@x"}, "settings/webhooks/public_url"},
-		{map[string]any{"addr": "127.0.0.1:8787", "port": 8787}, "settings/webhooks/port"},
-		{"127.0.0.1:8787", "settings/webhooks"},
+		{map[string]any{"tunnel": map[string]any{"provider": "ngrok"}}, "settings/webhooks/addr", "missing_field"},
+		{map[string]any{"addr": "8787"}, "settings/webhooks/addr", "invalid_value"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": map[string]any{"provider": "frp"}}, "settings/webhooks/tunnel/provider", "unknown_registration"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": map[string]any{"provider": "ngrok", "config": map[string]any{"domain": "refused"}}}, "settings/webhooks/tunnel/config", "invalid_config"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": map[string]any{"provider": "ngrok", "config": "x"}}, "settings/webhooks/tunnel/config", "invalid_type"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": map[string]any{"provider": "ngrok", "domain": "x"}}, "settings/webhooks/tunnel/domain", "unknown_field"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": map[string]any{}}, "settings/webhooks/tunnel/provider", "missing_field"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": map[string]any{"provider": "ngrok"}, "public_url": "https://x"}, "settings/webhooks/public_url", "invalid_value"},
+		{map[string]any{"addr": "127.0.0.1:8787", "public_url": "https://u:p@x"}, "settings/webhooks/public_url", "invalid_value"},
+		{map[string]any{"addr": "127.0.0.1:8787", "port": 8787}, "settings/webhooks/port", "unknown_field"},
+		{"127.0.0.1:8787", "settings/webhooks", "invalid_type"},
+		// The old per-type form is refused, naming its replacement.
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "ngrok"}, "settings/webhooks/tunnel", "moved_field"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel": "static", "public_url": "https://x.example.com"}, "settings/webhooks/tunnel", "moved_field"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel_domain": "hooks.ngrok.app"}, "settings/webhooks/tunnel_domain", "moved_field"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel_name": "oc"}, "settings/webhooks/tunnel_name", "moved_field"},
+		{map[string]any{"addr": "127.0.0.1:8787", "tunnel_hostname": "h"}, "settings/webhooks/tunnel_hostname", "moved_field"},
 	} {
 		_, err := with(c.hooks)
 		if err == nil {
 			t.Fatalf("%v accepted", c.hooks)
 		}
-		if d := diagnostics(t, err); len(d) != 1 || d[0].Path != c.path {
+		if d := diagnostics(t, err); len(d) != 1 || d[0].Path != c.path || d[0].Code != c.code {
 			t.Fatalf("%v: %v", c.hooks, d)
 		}
+	}
+	_, err = with(map[string]any{"addr": "127.0.0.1:8787", "tunnel": "static", "public_url": "https://x.example.com"})
+	if d := diagnostics(t, err); len(d) != 1 || !strings.Contains(d[0].Message, "drop tunnel and keep public_url") || strings.Contains(d[0].Message, `"provider"`) {
+		t.Fatalf("the old static form: %v", d)
+	}
+	_, err = with(map[string]any{"addr": "127.0.0.1:8787", "tunnel": "ngrok", "tunnel_domain": "hooks.ngrok.app"})
+	if d := diagnostics(t, err); len(d) != 1 || !strings.Contains(d[0].Message, `"provider": "ngrok", "config": {"domain"`) {
+		t.Fatalf("the old ngrok form: %v", d)
 	}
 }
 

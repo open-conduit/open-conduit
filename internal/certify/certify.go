@@ -150,7 +150,7 @@ var limits = []string{
 	"Certification checks protocol conformance, not safety: an extension runs with the operator's privileges (process separation is fault isolation, not a sandbox).",
 	"Only the package's own fixture is exercised, against its fakes; no live service is contacted and no real credential is used.",
 	"One host build, one platform and one protocol version are tested: the ones stated above.",
-	"Not certified by criteria version 5: webhook.handle, setup.run and setup.* callbacks, provider.* resource providers, sandbox_provider.plan (a plan is only as good as the provider's mechanism), container_provider.plan, create, signal, stop, remove and forward (they need the provider's container runtime), telemetry.export, run.environment, work.annotate, work.actions and work.act, view.render, event.render, target.resolve and segment.ended, emit and wait operations (the host cuts a wait plan's description to fit as it is declared), the in-transaction callbacks (recurrence.next, work_kind.trigger, emit.commit, dependency.filter) and the message-size and overload limits. The host's own suites cover those adapters.",
+	"Not certified by criteria version 6: webhook.handle, setup.run and setup.* callbacks, provider.* resource providers, sandbox_provider.plan (a plan is only as good as the provider's mechanism), container_provider.plan, create, signal, stop, remove and forward (they need the provider's container runtime), tunnel.run (it needs the provider's own program), telemetry.export, run.environment, work.annotate, work.actions and work.act, view.render, event.render, target.resolve and segment.ended, emit and wait operations (the host cuts a wait plan's description to fit as it is declared), the in-transaction callbacks (recurrence.next, work_kind.trigger, emit.commit, dependency.filter) and the message-size and overload limits. The host's own suites cover those adapters.",
 	"Executor checks run one attempt each without a toolbelt endpoint or workspace; resume, interrupt and attach are not exercised.",
 }
 
@@ -275,6 +275,7 @@ func Run(ctx context.Context, o Options) (rep Report, err error) {
 	r.resources(remote)
 	r.sandboxes(ctx, remote)
 	r.containers(ctx, remote)
+	r.tunnels(remote)
 	r.surfaces(ctx, remote)
 	r.restart(ctx, remote)
 	if n := remote.Service().Refused(); n > 0 {
@@ -1121,6 +1122,50 @@ func (r *runner) sandboxes(ctx context.Context, remote *extproc.Remote) {
 		}
 	}
 	r.pass("sandboxes.policy", fmt.Sprintf("%d case(s)", len(r.fixture.Sandboxes)))
+}
+
+// tunnels runs tunnels.policy: each tunnel case's validate verdict, asked
+// twice, with an accepted and a refused case for every declared tunnel
+// type, so a package checks the operator's tunnel config before the host
+// runs it.
+func (r *runner) tunnels(remote *extproc.Remote) {
+	if len(r.m.Provides.Tunnels) == 0 {
+		r.skip("tunnels.policy", "no tunnel provider type")
+		return
+	}
+	declared := map[string]bool{}
+	for _, d := range r.m.Provides.Tunnels {
+		declared[d.Type] = true
+	}
+	accepted, refused := map[string]bool{}, map[string]bool{}
+	for i, c := range r.fixture.Tunnels {
+		if !declared[c.Type] {
+			r.fail("tunnels.policy", "case %d: %q is not a declared tunnel type", i, c.Type)
+			return
+		}
+		check := remote.Validator(protocol.ValidateTunnel, c.Type)
+		first, second := check(c.Config, nil), check(c.Config, nil)
+		if (first == nil) != (second == nil) {
+			r.fail("tunnels.policy", "case %d: %s answered validate tunnel differently twice", i, c.Type)
+			return
+		}
+		if got := first != nil; got != c.Refused {
+			r.fail("tunnels.policy", "case %d: %s validate tunnel refused=%t, want %t", i, c.Type, got, c.Refused)
+			return
+		}
+		if c.Refused {
+			refused[c.Type] = true
+		} else {
+			accepted[c.Type] = true
+		}
+	}
+	for typ := range declared {
+		if !accepted[typ] || !refused[typ] {
+			r.fail("tunnels.policy", "the fixture needs an accepted and a refused tunnel case for %s", typ)
+			return
+		}
+	}
+	r.pass("tunnels.policy", fmt.Sprintf("%d case(s)", len(r.fixture.Tunnels)))
 }
 
 // containers runs containers.policy: each container case's validate

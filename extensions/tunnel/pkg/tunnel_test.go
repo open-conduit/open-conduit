@@ -7,7 +7,6 @@ import (
 	"testing"
 	"time"
 
-	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extensions/tunnel"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/sdk/sdktest"
@@ -42,7 +41,7 @@ func TestTunnelRunOverTheWire(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
 	urls, done := make(chan string, 4), make(chan error, 1)
 	go func() {
-		done <- h.Tunnel(ctx, tunnel.Cloudflared, "127.0.0.1:8787", tunnel.Config(extension.TunnelConfig{Binary: fakeCloudflared(t)}), urls)
+		done <- h.Tunnel(ctx, tunnel.Cloudflared, "127.0.0.1:8787", tunnel.Payload(tunnel.Config{Binary: fakeCloudflared(t)}), urls)
 	}()
 	if got := next(t, urls); got != "https://brave-fox-12.trycloudflare.com" {
 		t.Fatalf("url %q", got)
@@ -51,7 +50,7 @@ func TestTunnelRunOverTheWire(t *testing.T) {
 	if err := <-done; err != nil {
 		t.Fatalf("cancelled run: %v", err)
 	}
-	err := h.Tunnel(context.Background(), tunnel.Cloudflared, "127.0.0.1:8787", tunnel.Config(extension.TunnelConfig{Name: "hooks"}), urls)
+	err := h.Tunnel(context.Background(), tunnel.Cloudflared, "127.0.0.1:8787", tunnel.Payload(tunnel.Config{Name: "hooks"}), urls)
 	if protocol.ErrorCode(err) != protocol.CodeInvalid {
 		t.Fatalf("refused config: %v", err)
 	}
@@ -67,8 +66,8 @@ func TestCheck(t *testing.T) {
 	}{
 		{nil, "not_configured"},
 		{&protocol.CheckTunnel{Type: tunnel.Ngrok}, "not_configured"},
-		{&protocol.CheckTunnel{Type: tunnel.Cloudflared, Config: tunnel.Config(extension.TunnelConfig{Binary: fakeCloudflared(t)}).Data}, "ok"},
-		{&protocol.CheckTunnel{Type: tunnel.Cloudflared, Config: tunnel.Config(extension.TunnelConfig{Binary: "/nonexistent/cloudflared"}).Data}, "tunnel_unavailable"},
+		{&protocol.CheckTunnel{Type: tunnel.Cloudflared, Config: tunnel.Payload(tunnel.Config{Binary: fakeCloudflared(t)}).Data}, "ok"},
+		{&protocol.CheckTunnel{Type: tunnel.Cloudflared, Config: tunnel.Payload(tunnel.Config{Binary: "/nonexistent/cloudflared"}).Data}, "tunnel_unavailable"},
 	} {
 		if got := check(context.Background(), tunnel.Cloudflared, p, c.view); got.Code != c.code {
 			t.Errorf("%+v: %+v", c.view, got)

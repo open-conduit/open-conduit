@@ -700,7 +700,8 @@ type CheckContainer struct {
 
 // CheckTunnel is the tunnel the host runs (or, offline, would run) when its
 // type is one the extension declares (manifest tunnels): settings.webhooks,
-// or serve's flags over it, as the provider's TunnelConfig.
+// or serve's flags over it, with the tunnel's config as the operator wrote
+// it (settings.webhooks.tunnel.config).
 type CheckTunnel struct {
 	Type   string          `json:"type"`
 	Config json.RawMessage `json:"config,omitempty"`

@@ -210,11 +210,11 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		// container reported or listed that they never made.
 		{"docker", "", []string{"containers.policy", "surfaces.served"}},
 		{"ssh", "", []string{"containers.policy", "surfaces.served"}},
-		// The tunnel providers: no criterion reaches tunnel.run (see
-		// conformance), so the generic ones.
-		{"ngrok", "", nil},
-		{"cloudflared", "", nil},
-		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace", "sandboxes.policy", "containers.policy"}},
+		// The tunnel providers: their config cases (no criterion reaches
+		// tunnel.run, which needs the provider's own program).
+		{"ngrok", "", []string{"tunnels.policy", "surfaces.served"}},
+		{"cloudflared", "", []string{"tunnels.policy", "surfaces.served"}},
+		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace", "sandboxes.policy", "containers.policy", "tunnels.policy"}},
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

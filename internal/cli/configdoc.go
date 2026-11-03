@@ -184,8 +184,9 @@ func (d *ConfigDoc) str(parts []string, key string) string {
 
 // Schema is the documented fields for the node at pointer, from the adapter
 // catalog: a connection's config and secret_refs, an extension entry's config,
-// a route's config (by handler) and a binding's config (by executor) or
-// resource config (by provider). Title names what they belong to.
+// a route's config (by handler), a binding's config (by executor) or
+// resource config (by provider), and the webhook tunnel's config (by
+// provider). Title names what they belong to.
 func (d *ConfigDoc) Schema(ptr string, catalog []Adapter) (title string, fields []Field) {
 	parts, err := pointer(ptr)
 	if err != nil {
@@ -212,6 +213,12 @@ func (d *ConfigDoc) Schema(ptr string, catalog []Adapter) (title string, fields 
 			return a.Title + " connection secret_refs", a.Secrets
 		}
 		return a.Title + " connection config", a.Connection
+	case n >= 3 && parts[0] == "settings" && parts[1] == "webhooks" && parts[2] == "tunnel":
+		a := find(d.str(parts[:3], "provider"))
+		if a == nil {
+			return "", nil
+		}
+		return a.Title + " tunnel config", a.Tunnel
 	case n >= 4 && parts[0] == "scopes" && parts[2] == "extensions":
 		a := find(d.str(parts[:4], "type"))
 		if a == nil {

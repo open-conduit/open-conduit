@@ -457,13 +457,12 @@ func TestDaemonPackagedTunnel(t *testing.T) {
 	}
 	var cfg map[string]any
 	_ = json.Unmarshal(webhookConfig(fake.URL), &cfg)
-	cfg["settings"].(map[string]any)["webhooks"] = map[string]any{"addr": "127.0.0.1:0", "tunnel": "cloudflared"}
+	cfg["settings"].(map[string]any)["webhooks"] = map[string]any{"addr": "127.0.0.1:0", "tunnel": map[string]any{"provider": "cloudflared", "config": map[string]any{"binary": bin}}}
 	b, _ := json.Marshal(cfg)
 	if err := os.WriteFile(d.config, b, 0o600); err != nil {
 		t.Fatal(err)
 	}
 	ctx := context.Background()
-	d.extra = []string{"--tunnel-binary", bin}
 	d.start("")
 	d.until("the packaged tunnel's URL", 30*time.Second, func() bool {
 		r, err := d.c.Doctor(ctx, false)

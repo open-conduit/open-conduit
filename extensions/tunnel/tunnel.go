@@ -60,39 +60,66 @@ func New(kind string) (*Provider, error) {
 	return nil, fmt.Errorf("tunnel: unknown type %q (ngrok or cloudflared)", kind)
 }
 
-// Config returns cfg as the payload a provider runs with.
-func Config(cfg extension.TunnelConfig) domain.Payload {
+// Config is a tunnel's config, settings.webhooks.tunnel.config: the
+// package's own shape, which the host passes on as the operator wrote it.
+// ngrok takes Binary and Domain; cloudflared takes Binary, and Name with
+// Hostname for a named tunnel (a quick tunnel without them).
+type Config struct {
+	// Binary overrides the provider's executable (ngrok or cloudflared on
+	// the daemon's PATH).
+	Binary string `json:"binary,omitempty"`
+	// Domain is ngrok's reserved domain (a stable URL).
+	Domain string `json:"domain,omitempty"`
+	// Name and Hostname select a named Cloudflare tunnel and its public
+	// hostname.
+	Name     string `json:"name,omitempty"`
+	Hostname string `json:"hostname,omitempty"`
+}
+
+// Payload returns cfg as the payload a provider runs with.
+func Payload(cfg Config) domain.Payload {
 	data, _ := json.Marshal(cfg)
 	return domain.Payload{Schema: extension.TunnelConfigSchema, Data: data}
 }
 
+// Validate checks a tunnel config for the provider's type (validate kind
+// tunnel). Its error is a fixed reason that names the rule, never a value.
+func (p *Provider) Validate(raw json.RawMessage) error {
+	_, err := p.parse(raw)
+	return err
+}
+
 // parse reads and checks a run's config for the provider's type.
-func (p *Provider) parse(raw json.RawMessage) (extension.TunnelConfig, error) {
-	var c extension.TunnelConfig
+func (p *Provider) parse(raw json.RawMessage) (Config, error) {
+	var c Config
+	invalid := func(msg string) (Config, error) {
+		return c, fmt.Errorf("%w: %s", extension.ErrTunnelConfig, msg)
+	}
+	fields := map[string]string{Ngrok: "binary and domain", Cloudflared: "binary, and name with hostname"}[p.kind]
 	if len(bytes.TrimSpace(raw)) > 0 {
 		d := json.NewDecoder(bytes.NewReader(raw))
 		d.DisallowUnknownFields()
 		if err := d.Decode(&c); err != nil {
-			return c, fmt.Errorf("%w: %v", extension.ErrTunnelConfig, err)
+			return invalid("the " + p.kind + " tunnel config is an object of " + fields)
 		}
-	}
-	invalid := func(msg string) (extension.TunnelConfig, error) {
-		return c, fmt.Errorf("%w: %s", extension.ErrTunnelConfig, msg)
 	}
 	switch p.kind {
 	case Ngrok:
 		if c.Name != "" || c.Hostname != "" {
-			return invalid("ngrok takes a binary and a domain")
+			return invalid("the ngrok tunnel config takes " + fields)
 		}
 		if c.Binary == "" {
 			c.Binary = "ngrok"
 		}
 	case Cloudflared:
 		if c.Domain != "" {
-			return invalid("cloudflared takes a binary, and a name and hostname for a named tunnel")
+			return invalid("the cloudflared tunnel config takes " + fields + " for a named tunnel")
 		}
 		if (c.Name == "") != (c.Hostname == "") {
 			return invalid("a named cloudflared tunnel needs both name and hostname")
+		}
+		if c.Hostname != "" && extension.CheckPublicURL(c.Hostname) != nil {
+			return invalid("a named cloudflared tunnel's hostname is its public https URL")
 		}
 		if c.Binary == "" {
 			c.Binary = "cloudflared"

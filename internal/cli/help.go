@@ -40,8 +40,9 @@ var helpGroups = []helpGroup{
 		{"serve", `  serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h] [--call-timeout 5s]
         [--backup-interval 24h] [--backups-kept 7] [--backup-dir DIR]
                              (scheduled online backups into <data-dir>/backups; --backup-interval 0 turns them off)
-        [--webhook-addr 127.0.0.1:8787] [--tunnel ngrok|cloudflared|static] [--tunnel-domain D] [--tunnel-name N] [--tunnel-hostname H] [--public-url URL]
-                             (override the config's settings.webhooks for this run)
+        [--webhook-addr 127.0.0.1:8787] [--tunnel TYPE [--tunnel-config JSON] | --public-url URL]
+                             (override the config's settings.webhooks for this run; TYPE is a tunnel
+                             a package provides, such as ngrok or cloudflared, and JSON its config)
         [--no-tunnel] [--dry-run] [--no-telemetry]
         (--webhook-addr takes any free local port; 8787 is only an example)
         (--no-telemetry, OPEN_CONDUIT_NO_TELEMETRY=1 or DO_NOT_TRACK=1 turn off the anonymous usage reports)

@@ -43,7 +43,7 @@ var Methods = []Method{
 	// Lifecycle.
 	{Name: "initialize", Direction: HostToExtension, Contract: []string{"extension.Registration.Version", "extension.Executor.Capabilities (manifest executors[].capabilities)", "extension.InteractiveLauncher.LaunchNames (manifest executors[].launch_names)", "extension.Registration.Name", "extension.Registration.EventTypes"}},
 	{Name: "configure", Direction: HostToExtension, Contract: []string{"host:config apply (register<Extension> on OnApply)", "extension.Source", "host:webhook routes"}},
-	{Name: "validate", Direction: HostToExtension, Contract: []string{"host:config.Registry validators (connection, extension, route, resource, executor config)", "extension.ResourceModeDefaulter.ModeDefault", "extension.ResourceSandboxChecker.SandboxWorkspace", "extension.ResourceModer.ResourceMode", "extension.PlaybookNamer.Playbook", "inproc.ConfigType.Binding", "extension.RouteBinding"}},
+	{Name: "validate", Direction: HostToExtension, Contract: []string{"host:config.Registry validators (connection, extension, route, resource, executor, sandbox, container, tunnel config)", "extension.ResourceModeDefaulter.ModeDefault", "extension.ResourceSandboxChecker.SandboxWorkspace", "extension.ResourceModer.ResourceMode", "extension.PlaybookNamer.Playbook", "inproc.ConfigType.Binding", "extension.RouteBinding"}},
 	{Name: "shutdown", Direction: HostToExtension, Contract: []string{"observability.Exporter.Shutdown", "host:daemon stop"}},
 	{Name: "$/cancel", Direction: Both, Notification: true, Contract: []string{"context.Context cancellation"}},
 
@@ -113,7 +113,7 @@ var Methods = []Method{
 	{Name: "container_provider.list", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.List"}},
 	{Name: "container_provider.remove", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.Remove"}},
 	{Name: "container_provider.forward", Direction: HostToExtension, Provides: "containers.forward", Contract: []string{"extension.ContainerForwarder.Forward"}},
-	{Name: "tunnel.run", Direction: HostToExtension, Provides: "tunnels", Contract: []string{"extension.TunnelProvider.Run", "extension.TunnelRun", "extension.TunnelConfig"}},
+	{Name: "tunnel.run", Direction: HostToExtension, Provides: "tunnels", Contract: []string{"extension.TunnelProvider.Run", "extension.TunnelRun", "extension.TunnelConfigSchema"}},
 	{Name: "tunnel.url", Direction: ExtensionToHost, Provides: "tunnels", Contract: []string{"host:extension.TunnelProvider.Run publish"}},
 
 	// Namespaced KV (mandatory, never negotiated) and read-only state.

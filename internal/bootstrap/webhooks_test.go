@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,9 +19,10 @@ import (
 
 // exposure takes the address and the tunnel from the serve flags over
 // settings.webhooks, each on its own; a tunnel flag replaces the whole
-// stored tunnel.
+// stored tunnel, its config included.
 func TestExposure(t *testing.T) {
-	stored := config.Webhooks{Addr: "127.0.0.1:8787", Tunnel: "ngrok", TunnelDomain: "hooks.ngrok.app"}
+	domain := json.RawMessage(`{"domain":"hooks.ngrok.app"}`)
+	stored := config.Webhooks{Addr: "127.0.0.1:8787", Tunnel: &config.Tunnel{Provider: "ngrok", Config: domain}}
 	for _, c := range []struct {
 		name           string
 		o              Options
@@ -31,22 +33,34 @@ func TestExposure(t *testing.T) {
 	}{
 		{name: "nothing"},
 		{name: "stored", stored: stored, addr: "127.0.0.1:8787", addrFrom: fromSettings, tunnelFrom: fromSettings,
-			t: TunnelOptions{Kind: "ngrok", Domain: "hooks.ngrok.app"}},
+			t: TunnelOptions{Kind: "ngrok", Config: domain}},
 		{name: "flags only", o: Options{WebhookAddr: ":9000", Tunnel: TunnelOptions{PublicURL: "https://x.test"}}, addr: ":9000", addrFrom: fromFlags, tunnelFrom: fromFlags,
 			t: TunnelOptions{Kind: "static", PublicURL: "https://x.test"}},
 		{name: "address flag keeps the stored tunnel", o: Options{WebhookAddr: ":9000"}, stored: stored, addr: ":9000", addrFrom: fromFlags, tunnelFrom: fromSettings,
-			t: TunnelOptions{Kind: "ngrok", Domain: "hooks.ngrok.app"}},
-		{name: "tunnel flag replaces the stored tunnel", o: Options{Tunnel: TunnelOptions{Kind: "cloudflared"}}, stored: stored, addr: "127.0.0.1:8787", addrFrom: fromSettings, tunnelFrom: fromFlags,
+			t: TunnelOptions{Kind: "ngrok", Config: domain}},
+		{name: "tunnel flag replaces the stored tunnel and its config", o: Options{Tunnel: TunnelOptions{Kind: "cloudflared"}}, stored: stored, addr: "127.0.0.1:8787", addrFrom: fromSettings, tunnelFrom: fromFlags,
 			t: TunnelOptions{Kind: "cloudflared"}},
-		{name: "binary flag applies to the stored tunnel", o: Options{Tunnel: TunnelOptions{Binary: "/opt/ngrok"}}, stored: stored, addr: "127.0.0.1:8787", addrFrom: fromSettings, tunnelFrom: fromSettings,
-			t: TunnelOptions{Kind: "ngrok", Binary: "/opt/ngrok", Domain: "hooks.ngrok.app"}},
+		{name: "an installed package's type, its config as given", o: Options{Tunnel: TunnelOptions{Kind: "tailscale-funnel", Config: json.RawMessage(`{"port": 443}`)}}, stored: stored, addr: "127.0.0.1:8787", addrFrom: fromSettings, tunnelFrom: fromFlags,
+			t: TunnelOptions{Kind: "tailscale-funnel", Config: json.RawMessage(`{"port": 443}`)}},
 		{name: "stored public URL means static", stored: config.Webhooks{Addr: ":1", PublicURL: "https://s.test"}, addr: ":1", addrFrom: fromSettings, tunnelFrom: fromSettings,
 			t: TunnelOptions{Kind: "static", PublicURL: "https://s.test"}},
 	} {
 		addr, addrFrom, tun, tunnelFrom := exposure(c.o, c.stored)
-		if addr != c.addr || addrFrom != c.addrFrom || tun != c.t || tunnelFrom != c.tunnelFrom {
+		if addr != c.addr || addrFrom != c.addrFrom || tun.Kind != c.t.Kind || string(tun.Config) != string(c.t.Config) || tun.PublicURL != c.t.PublicURL || tunnelFrom != c.tunnelFrom {
 			t.Errorf("%s: %q %q %+v %q", c.name, addr, addrFrom, tun, tunnelFrom)
 		}
+	}
+}
+
+// The provider's run gets the operator's tunnel config as written, and {}
+// when there is none.
+func TestTunnelConfigPassesThrough(t *testing.T) {
+	raw := json.RawMessage(`{"port": 443, "tags": ["a"]}`)
+	if p := tunnelConfig(TunnelOptions{Kind: "tailscale-funnel", Config: raw}); p.Schema != extension.TunnelConfigSchema || string(p.Data) != string(raw) {
+		t.Fatalf("config %+v", p)
+	}
+	if p := tunnelConfig(TunnelOptions{Kind: "cloudflared"}); string(p.Data) != "{}" {
+		t.Fatalf("no config %s", p.Data)
 	}
 }
 
@@ -98,7 +112,7 @@ func TestSuperviseTunnelRestartsAStoppedRun(t *testing.T) {
 	d.hooks.addTunnel("ngrok", f)
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
-	run := extension.TunnelRun{Addr: "127.0.0.1:8787", Config: tunnelConfig(TunnelOptions{Kind: "ngrok", Domain: "hooks.ngrok.app"})}
+	run := extension.TunnelRun{Addr: "127.0.0.1:8787", Config: tunnelConfig(TunnelOptions{Kind: "ngrok", Config: json.RawMessage(`{"domain":"hooks.ngrok.app"}`)})}
 	go func() { defer close(done); d.superviseTunnel(ctx, "ngrok", run) }()
 	for range 2 {
 		if r := <-f.seen; r.Addr != "127.0.0.1:8787" || !strings.Contains(string(r.Config.Data), `"domain":"hooks.ngrok.app"`) {

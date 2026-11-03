@@ -7,7 +7,8 @@
 // Its offline check is doctor's view of whether the provider can run here.
 // Nothing in the daemon knows about ngrok or cloudflared: settings.webhooks
 // names the tunnel type, and the package of that name (bundled beside the
-// binary, or installed) provides it. open-conduit serves them as
+// binary, or installed) provides it. The tunnel's config is the package's
+// own (tunnel.Config), which it checks through validate (kind tunnel). open-conduit serves them as
 // `open-conduit extension-run ngrok` and `… cloudflared`.
 //
 // The host keeps the listener and decides what it serves; the package only
@@ -18,6 +19,7 @@ package tunnelext
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"os"
 
@@ -35,6 +37,20 @@ var titles = map[string][2]string{
 	tunnel.Cloudflared: {"Cloudflare tunnel", "Exposes the webhook listener at a public URL through a quick or named Cloudflare tunnel."},
 }
 
+// fields are each type's config fields (tunnel.Config), as the operator
+// writes them in settings.webhooks.tunnel.config.
+var fields = map[string][]protocol.FieldDecl{
+	tunnel.Ngrok: {
+		{Name: "domain", Help: "a reserved ngrok domain, for a stable URL (a random one without it)"},
+		{Name: "binary", Help: "the ngrok executable", Default: "ngrok"},
+	},
+	tunnel.Cloudflared: {
+		{Name: "name", Help: "a named Cloudflare tunnel (a quick tunnel without it); needs hostname"},
+		{Name: "hostname", Help: "the named tunnel's public https URL"},
+		{Name: "binary", Help: "the cloudflared executable", Default: "cloudflared"},
+	},
+}
+
 // Manifest declares the package of a tunnel type: the type, named after
 // the package, and its offline check.
 func Manifest(kind string) protocol.Manifest {
@@ -42,7 +58,7 @@ func Manifest(kind string) protocol.Manifest {
 		Summary: titles[kind][1],
 		Command: protocol.HostRunCommand(kind),
 		Provides: protocol.Provides{
-			Tunnels: []protocol.TunnelDecl{{Type: kind}},
+			Tunnels: []protocol.TunnelDecl{{Type: kind, Fields: fields[kind]}},
 			Checks:  []protocol.CheckDecl{{Name: kind, Offline: true}},
 		}}
 }
@@ -50,6 +66,12 @@ func Manifest(kind string) protocol.Manifest {
 // Build returns the served package around p.
 func Build(kind string, p *tunnel.Provider) *sdk.Extension {
 	return &sdk.Extension{Manifest: Manifest(kind), Tunnels: map[string]extension.TunnelProvider{kind: p},
+		Validate: func(_ context.Context, v protocol.ValidateParams) error {
+			if v.Kind == protocol.ValidateTunnel && v.Type == kind {
+				return p.Validate(v.Config)
+			}
+			return nil
+		},
 		CheckRuns: map[string]func(context.Context, *sdk.Host, protocol.CheckRunParams) (protocol.CheckRunResult, error){
 			kind: func(ctx context.Context, _ *sdk.Host, c protocol.CheckRunParams) (protocol.CheckRunResult, error) {
 				return check(ctx, kind, p, c.Config.Tunnel), nil
@@ -71,6 +93,26 @@ func check(ctx context.Context, kind string, p *tunnel.Provider, t *protocol.Che
 	return protocol.CheckRunResult{OK: true, Status: "ok", Code: "ok", Detail: v}
 }
 
+// Certification is kind's certification.json: a static fixture of tunnel
+// configs it accepts and ones it refuses (another type's field, an
+// unknown one).
+func Certification(kind string) protocol.CertificationFile {
+	cases := map[string][]protocol.TunnelCase{
+		tunnel.Ngrok: {
+			{Type: tunnel.Ngrok, Config: json.RawMessage(`{"domain":"hooks.example.ngrok.app"}`)},
+			{Type: tunnel.Ngrok, Config: json.RawMessage(`{"name":"hooks","hostname":"https://hooks.example.com"}`), Refused: true},
+			{Type: tunnel.Ngrok, Config: json.RawMessage(`{"region":"eu"}`), Refused: true},
+		},
+		tunnel.Cloudflared: {
+			{Type: tunnel.Cloudflared, Config: json.RawMessage(`{}`)},
+			{Type: tunnel.Cloudflared, Config: json.RawMessage(`{"name":"hooks","hostname":"https://hooks.example.com"}`)},
+			{Type: tunnel.Cloudflared, Config: json.RawMessage(`{"name":"hooks"}`), Refused: true},
+			{Type: tunnel.Cloudflared, Config: json.RawMessage(`{"domain":"hooks.example.ngrok.app"}`), Refused: true},
+		},
+	}
+	return protocol.CertificationFile{Fixture: &protocol.Fixture{Tunnels: cases[kind]}}
+}
+
 // provider returns kind's provider, logging to stderr (the host's log of
 // the package).
 func provider(kind string) *tunnel.Provider {
@@ -90,7 +132,7 @@ func Main(kind string) func(args []string) int {
 	return func(args []string) int {
 		p := provider(kind)
 		ext := Build(kind, p)
-		if sdk.PackageCommand(args, ext.Manifest, protocol.CertificationFile{}, os.Stdout) {
+		if sdk.PackageCommand(args, ext.Manifest, Certification(kind), os.Stdout) {
 			return 0
 		}
 		// Serve returns once the host closes the connection, perhaps before

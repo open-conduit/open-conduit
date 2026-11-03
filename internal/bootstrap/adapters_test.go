@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/internal/cli"
@@ -71,9 +72,14 @@ func TestAdaptersFromInstalledManifest(t *testing.T) {
 	if !slices.Equal(a.Operations, []string{"notes.annotate", "notes.lookup"}) {
 		t.Errorf("operations %v", a.Operations)
 	}
-	// The core's own webhook listener is still described.
-	if _, ok := adapter(catalogAt(t, configPath), "tunnel"); !ok {
-		t.Error("the tunnel entry is gone")
+	// An installed package's tunnel type is one settings.webhooks can
+	// select, its config fields found under its own name.
+	hooks, ok := adapter(catalogAt(t, configPath), "tunnel")
+	if !ok || len(hooks.Binding) < 2 || hooks.Binding[1].Name != "tunnel" || !strings.Contains(hooks.Binding[1].Help, notes.Relay) {
+		t.Errorf("the webhook listener's entry: %+v", hooks)
+	}
+	if relay, ok := adapter(catalogAt(t, configPath), notes.Relay); !ok || !slices.Equal(relay.Kinds, []string{"tunnel"}) || len(relay.Tunnel) != 1 || relay.Tunnel[0].Name != "region" {
+		t.Errorf("the notes-relay tunnel entry: %+v", relay)
 	}
 }
 
