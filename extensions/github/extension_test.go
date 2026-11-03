@@ -2,7 +2,11 @@ package github_test
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
+	"crypto/x509"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"strings"
 	"testing"
@@ -227,5 +231,85 @@ func TestExtensionDoctorExposure(t *testing.T) {
 	view = entry(`{"namespace":"github/w","scope":"eng","repo":"octo/widgets","labels":{"require":["agent"]}}`)
 	if c, _ = run(scope("")); c.Status != inproc.CheckOK {
 		t.Fatalf("public with labels.require: %+v", c)
+	}
+}
+
+// TestExtensionDoctorBindingPermissions: the connection test reads the App
+// installation's permissions and warns about a binding granted an operation
+// they don't cover: github.pr.resolve on a bot App without Contents write
+// (#459). Negative control: the same binding once the App has Contents
+// write reports nothing.
+func TestExtensionDoctorBindingPermissions(t *testing.T) {
+	fake := githubtest.New("octo/widgets", "tok")
+	t.Cleanup(fake.Close)
+	fake.SetPermissions(map[string]bool{"pull": true, "push": true})
+	fake.RequireRulesetChecks("main", "ci")
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatal(err)
+	}
+	fake.AddApp("7", &key.PublicKey)
+	pemText := string(pem.EncodeToMemory(&pem.Block{Type: "RSA PRIVATE KEY", Bytes: x509.MarshalPKCS1PrivateKey(key)}))
+	settings, err := gh.ParseExtension([]byte(`{"namespace":"github/w","scope":"eng","repo":"octo/widgets"}`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	view := gh.View{Entries: []gh.ViewEntry{{Name: "github/eng/main", Scope: "eng", Connection: "owner", Settings: settings}}}
+	x := gh.NewExtension(func(context.Context) gh.View { return view })
+	if err := x.Start(context.Background(), inproc.Host{Now: fake.Now, Secrets: func(_ context.Context, _ domain.ID, _ string, names []string) (map[string]string, error) {
+		out := map[string]string{}
+		for _, n := range names {
+			out[n] = map[string]string{gh.SecretToken: "tok", gh.SecretBotPrivateKey: pemText}[n]
+		}
+		return out, nil
+	}}); err != nil {
+		t.Fatal(err)
+	}
+	owner := protocol.ConnectionEntry{ID: "owner", Type: gh.Type, Config: json.RawMessage(`{"api_url":"` + fake.URL + `"}`), Secrets: []string{gh.SecretToken}}
+	reviewerCfg := json.RawMessage(`{"api_url":"` + fake.URL + `","bot_app_id":"7"}`)
+	reviewer := protocol.ConnectionEntry{ID: "reviewer", Type: gh.Type, Config: reviewerCfg, Secrets: []string{gh.SecretToken, gh.SecretBotPrivateKey}}
+	x.Configure(context.Background(), protocol.ConfigureParams{Entries: []protocol.ConfigEntry{{ScopeID: "eng", Type: gh.Type, Name: "main", Connection: &owner,
+		BindingConnections: []protocol.ConnectionEntry{owner, reviewer}}}})
+	var deep func(context.Context, protocol.CheckConfig) inproc.CheckResult
+	for _, c := range x.Checks() {
+		if c.Deep {
+			deep = c.Run
+		}
+	}
+	cfg := protocol.CheckConfig{
+		Connections: []protocol.CheckConnection{{ID: "owner", Type: gh.Type}, {ID: "reviewer", Type: gh.Type, Config: reviewerCfg}},
+		Scopes: []protocol.CheckScope{{ID: "eng", Bindings: []protocol.CheckBinding{
+			{Name: "review", Executor: "claude-code", Connection: "reviewer", Operations: []string{gh.OpPRView, gh.OpPRReview, gh.OpPRResolve}},
+			// The entry's own token connection: GitHub doesn't report a
+			// token's permissions, so nothing is said of it.
+			{Name: "agent", Executor: "claude-code", Operations: []string{gh.OpPRResolve}},
+		}}},
+	}
+
+	fake.SetInstallationPermissions(map[string]string{"pull_requests": "write", "contents": "read", "metadata": "read"})
+	c := deep(context.Background(), cfg)
+	items := strings.Join(c.Items, "\n")
+	want := "github/w: binding review is granted github.pr.resolve, but bot App 7 has Contents read on octo/widgets, not write, so GitHub refuses it; grant Contents write"
+	if c.Status != inproc.CheckWarn || c.Code != "permission_missing" || !strings.Contains(items, want) ||
+		strings.Contains(items, "Pull requests") || strings.Contains(items, "binding agent") {
+		t.Fatalf("lacking Contents write: %+v", c)
+	}
+
+	fake.SetInstallationPermissions(map[string]string{"pull_requests": "write", "contents": "write", "metadata": "read"})
+	if c := deep(context.Background(), cfg); c.Code == "permission_missing" || strings.Contains(strings.Join(c.Items, "\n"), "is granted") {
+		t.Fatalf("with Contents write: %+v", c)
+	}
+
+	// Opening and editing a PR go out as the entry's connection, even for a
+	// binding with its own: the reviewer App's permissions don't bear on
+	// them. With Pull requests read only, the binding's review is flagged
+	// and its edit isn't.
+	cfg.Scopes[0].Bindings = []protocol.CheckBinding{{Name: "review", Executor: "claude-code", Connection: "reviewer", Operations: []string{gh.OpPREdit, gh.OpPRCreate, gh.OpPRReview}}}
+	fake.SetInstallationPermissions(map[string]string{"pull_requests": "read", "contents": "write", "metadata": "read"})
+	c = deep(context.Background(), cfg)
+	items = strings.Join(c.Items, "\n")
+	if c.Code != "permission_missing" || !strings.Contains(items, "binding review is granted github.pr.review, but bot App 7 has Pull requests read") ||
+		strings.Contains(items, gh.OpPREdit) || strings.Contains(items, gh.OpPRCreate) {
+		t.Fatalf("edit and create judged against the binding's App: %+v", c)
 	}
 }

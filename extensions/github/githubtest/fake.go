@@ -178,6 +178,14 @@ type Server struct {
 	resolved      map[int64]string
 	threadPage    int
 	refuseResolve bool
+	// accepted is the X-Accepted-GitHub-Permissions header a refused
+	// resolve or PR edit answers with ("" sends none); header is what the
+	// request being answered adds to its response.
+	accepted string
+	header   http.Header
+	// installPerms are the App installation's permissions, as
+	// GET /repos/<repo>/installation reports them (none when nil).
+	installPerms map[string]string
 	// refusePullEdits makes editing a PR (PATCH and the draft mutations)
 	// forbidden, as for a connection without Pull requests write.
 	refusePullEdits bool
@@ -837,8 +845,29 @@ func (s *Server) ResolveThread(commentID int64, login string) {
 func (s *Server) SetThreadPage(n int) { s.mu.Lock(); s.threadPage = n; s.mu.Unlock() }
 
 // RefuseThreadResolution makes resolving a review thread FORBIDDEN, as for
-// a connection without Pull requests write.
+// a connection without Contents write or Pull requests write.
 func (s *Server) RefuseThreadResolution() { s.mu.Lock(); s.refuseResolve = true; s.mu.Unlock() }
+
+// SetAcceptedPermissions makes refused thread resolutions and PR edits
+// answer with an X-Accepted-GitHub-Permissions header of v
+// ("contents=write"), as GitHub does when it names what the call needs.
+func (s *Server) SetAcceptedPermissions(v string) { s.mu.Lock(); s.accepted = v; s.mu.Unlock() }
+
+// SetInstallationPermissions sets the App installation's permissions on
+// the repository ({"pull_requests": "write", "contents": "read"}).
+func (s *Server) SetInstallationPermissions(p map[string]string) {
+	s.mu.Lock()
+	s.installPerms = p
+	s.mu.Unlock()
+}
+
+// refusedHeader adds the accepted-permissions header, if set, to the
+// response being answered.
+func (s *Server) refusedHeader() {
+	if s.accepted != "" {
+		s.header = http.Header{"X-Accepted-Github-Permissions": {s.accepted}}
+	}
+}
 
 // RefusePullEdits makes editing a PR's title, body or draft state
 // forbidden, as for a connection without Pull requests write.
@@ -1220,7 +1249,11 @@ func (s *Server) serve(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
 		s.writes = append(s.writes, Write{Method: r.Method, Path: r.URL.Path, Token: token, Body: body})
 	}
+	s.header = nil
 	status, out := s.route(r, token, body)
+	for k, v := range s.header {
+		w.Header()[k] = v
+	}
 	for prefix, n := range s.loseNext {
 		if n > 0 && strings.HasPrefix(r.URL.Path, prefix) {
 			s.loseNext[prefix] = n - 1
@@ -1371,7 +1404,11 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		if !strings.EqualFold(m[1], s.Repo) {
 			return 0, nil
 		}
-		return http.StatusOK, map[string]any{"id": 77}
+		out := map[string]any{"id": 77}
+		if s.installPerms != nil {
+			out["permissions"] = s.installPerms
+		}
+		return http.StatusOK, out
 	}
 	m := reRepo.FindStringSubmatch(r.URL.Path)
 	if m == nil || !strings.EqualFold(m[1], s.Repo) {
@@ -1648,6 +1685,7 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 			return 0, nil
 		}
 		if s.refusePullEdits {
+			s.refusedHeader()
 			return http.StatusForbidden, map[string]any{"message": "Resource not accessible by integration"}
 		}
 		var req struct {
@@ -1866,6 +1904,7 @@ func (s *Server) graphql(token string, body json.RawMessage) (int, any) {
 			return fail("NOT_FOUND", "Could not resolve to a node with the global id of '"+str("thread")+"'")
 		}
 		if s.refuseResolve {
+			s.refusedHeader()
 			return fail("FORBIDDEN", "Resource not accessible by integration")
 		}
 		s.resolved[root] = s.writer(token).Login
@@ -1877,6 +1916,7 @@ func (s *Server) graphql(token string, body json.RawMessage) (int, any) {
 			return fail("NOT_FOUND", "Could not resolve to a node with the global id of '"+str("pr")+"'")
 		}
 		if s.refusePullEdits {
+			s.refusedHeader()
 			return fail("FORBIDDEN", "Resource not accessible by integration")
 		}
 		p.Draft = strings.Contains(req.Query, "convertPullRequestToDraft")

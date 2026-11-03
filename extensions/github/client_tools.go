@@ -132,7 +132,8 @@ func (c *Client) graphqlURL() string {
 // graphql runs one GraphQL query or mutation as the reader (or writer) of
 // repo and decodes its data into out. GitHub answers GraphQL errors with a
 // 200; the first is returned as a StatusError (FORBIDDEN as 403, NOT_FOUND
-// as 404, anything else as 422) so callers map it like a REST refusal.
+// as 404, anything else as 422) so callers map it like a REST refusal,
+// with the error's type and any X-Accepted-GitHub-Permissions header.
 func (c *Client) graphql(ctx context.Context, write bool, repo, query string, vars map[string]any, out any) error {
 	var res struct {
 		Data   json.RawMessage `json:"data"`
@@ -141,7 +142,8 @@ func (c *Client) graphql(ctx context.Context, write bool, repo, query string, va
 			Message string `json:"message"`
 		} `json:"errors"`
 	}
-	if _, err := c.call(ctx, write, repo, http.MethodPost, c.graphqlURL(), map[string]any{"query": query, "variables": vars}, &res); err != nil {
+	resp, err := c.call(ctx, write, repo, http.MethodPost, c.graphqlURL(), map[string]any{"query": query, "variables": vars}, &res)
+	if err != nil {
 		return err
 	}
 	if len(res.Errors) > 0 {
@@ -157,7 +159,11 @@ func (c *Client) graphql(ctx context.Context, write bool, repo, query string, va
 		if len(msg) > 200 {
 			msg = msg[:200]
 		}
-		return &StatusError{Status: status, Message: msg}
+		se := &StatusError{Status: status, Message: msg, Type: e.Type}
+		if resp != nil {
+			se.Accepted = resp.Header.Get(acceptedHeader)
+		}
+		return se
 	}
 	if out != nil && len(res.Data) > 0 {
 		if err := json.Unmarshal(res.Data, out); err != nil {

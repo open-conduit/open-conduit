@@ -268,6 +268,12 @@ func refusal(err error) error {
 	case IsStatus(err, http.StatusNotFound), IsStatus(err, http.StatusGone):
 		return refuse("not_found", "GitHub has no such item (or this connection cannot see it)")
 	case IsStatus(err, http.StatusForbidden):
+		var se *StatusError
+		if errors.As(err, &se) {
+			if needs := acceptedNeeds(se.Accepted); needs != "" {
+				return refuse("github_forbidden", "GitHub refused the request for this connection: it says it needs %s", needs)
+			}
+		}
 		return refuse("github_forbidden", "GitHub refused the request for this connection")
 	case IsStatus(err, http.StatusUnprocessableEntity):
 		return refuse("github_unprocessable", "GitHub rejected the request as invalid")
@@ -1153,20 +1159,14 @@ func (t *Tools) prEdit(ctx context.Context, b *bound, data json.RawMessage) (any
 		out["state"], out["note"] = "dry_run", fmt.Sprintf("dry run: would change the %s of PR #%d", strings.Join(changed, ", "), in.Number)
 		return out, nil
 	}
-	forbidden := func(err error) error {
-		if IsStatus(err, http.StatusForbidden) {
-			return refuse("github_forbidden", "this connection can't edit PRs on %s: it needs Pull requests write access", repo)
-		}
-		return err
-	}
 	if len(fields) > 0 {
 		if _, err := c.EditPull(ctx, repo, in.Number, fields); err != nil {
-			return nil, forbidden(err)
+			return nil, forbidden(ctx, c, repo, OpPREdit, "edit PRs", err)
 		}
 	}
 	if draft {
 		if err := c.SetPullDraft(ctx, repo, p.NodeID, *in.Draft); err != nil {
-			return nil, forbidden(err)
+			return nil, forbidden(ctx, c, repo, OpPREdit, "edit PRs", err)
 		}
 	}
 	out["state"], out["changed"] = "edited", changed
@@ -1245,8 +1245,9 @@ func (t *Tools) prReply(ctx context.Context, b *bound, data json.RawMessage) (an
 // github.pr.view or a reply hint; the thread and GitHub's GraphQL are the
 // extension's business. It is written as the binding's GitHub connection,
 // like a reply, and resolving a resolved thread changes nothing, so a retry
-// is safe. Any thread on a PR the Work can reach may be resolved: GitHub's
-// own rule is Pull requests write, which the host's connection carries.
+// is safe. Any thread on a PR the Work can reach may be resolved. GitHub's
+// rule is Pull requests write and Contents write (opPermissions); a refusal
+// names what GitHub, or the App's installation, says is missing.
 type prResolveInput struct {
 	Number    int             `json:"number" doc:"the PR the review thread is on"`
 	CommentID json.RawMessage `json:"comment_id" doc:"the ID (a number, or a string of digits) of an inline review comment in the thread to resolve, not a review's or a conversation comment's"`
@@ -1284,12 +1285,8 @@ func (t *Tools) prResolve(ctx context.Context, b *bound, data json.RawMessage) (
 	if src.Settings.Projection.DryRun {
 		return map[string]any{"state": "dry_run", "note": fmt.Sprintf("dry run: would resolve the thread holding comment %d on PR #%d", id, in.Number)}, nil
 	}
-	switch err := c.ResolveReviewThread(ctx, repo, thread.ID); {
-	case err == nil:
-	case IsStatus(err, http.StatusForbidden):
-		return nil, refuse("github_forbidden", "this connection can't resolve review threads on %s: it needs Pull requests write access", repo)
-	default:
-		return nil, err
+	if err := c.ResolveReviewThread(ctx, repo, thread.ID); err != nil {
+		return nil, forbidden(ctx, c, repo, OpPRResolve, "resolve review threads", err)
 	}
 	return map[string]any{"state": "resolved"}, nil
 }
@@ -1350,7 +1347,11 @@ func (t *Tools) prReview(ctx context.Context, b *bound, data json.RawMessage) (a
 	case IsStatus(err, http.StatusUnprocessableEntity):
 		return nil, refuse("github_unprocessable", "GitHub rejected the review: each inline comment must be on a line of the PR's diff (side RIGHT for the new file, LEFT for the old), and the PR must be open; nothing was posted")
 	case IsStatus(err, http.StatusForbidden):
-		return nil, refuse("github_forbidden", "this connection can't submit reviews on %s: it needs Pull requests write access", src.Settings.Repo)
+		_, c, cerr := t.bindingClient(b, src)
+		if cerr != nil {
+			c = nil
+		}
+		return nil, forbidden(ctx, c, src.Settings.Repo, OpPRReview, "submit reviews", err)
 	default:
 		return nil, err
 	}

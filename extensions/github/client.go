@@ -21,6 +21,12 @@ import (
 type StatusError struct {
 	Status  int
 	Message string
+	// Type is a GraphQL error's type (FORBIDDEN, NOT_FOUND, …), empty for
+	// REST.
+	Type string
+	// Accepted is GitHub's X-Accepted-GitHub-Permissions header, when it
+	// sent one: the permissions the call needs (accepted.go).
+	Accepted string
 }
 
 func (e *StatusError) Error() string {
@@ -312,7 +318,7 @@ func (c *Client) raw(ctx context.Context, authorization, method, path string, bo
 		if len(msg) > 200 {
 			msg = msg[:200]
 		}
-		return res, &StatusError{Status: res.StatusCode, Message: msg}
+		return res, &StatusError{Status: res.StatusCode, Message: msg, Accepted: res.Header.Get(acceptedHeader)}
 	}
 	if out != nil && len(bytes.TrimSpace(data)) > 0 {
 		if err := json.Unmarshal(data, out); err != nil {

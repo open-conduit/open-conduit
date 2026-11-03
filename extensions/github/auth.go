@@ -211,6 +211,24 @@ func (a *appToken) token(ctx context.Context, repo string) (string, error) {
 	return t.Token, nil
 }
 
+// permissions reads the App installation's permissions on repo afresh
+// (GET /repos/<repo>/installation as the App), so a permission the owner
+// has just granted counts at once: pull_requests → write, contents → read.
+func (a *appToken) permissions(ctx context.Context, repo string) (map[string]string, error) {
+	jwt, err := a.jwt(ctx)
+	if err != nil {
+		return nil, err
+	}
+	var inst struct {
+		ID          int64             `json:"id"`
+		Permissions map[string]string `json:"permissions"`
+	}
+	if _, err := a.c.raw(ctx, "Bearer "+jwt, http.MethodGet, "/repos/"+repo+"/installation", nil, &inst); err != nil {
+		return nil, fmt.Errorf("github app installation for %s: %w", repo, err)
+	}
+	return inst.Permissions, nil
+}
+
 func (a *appToken) invalidate(repo string) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
