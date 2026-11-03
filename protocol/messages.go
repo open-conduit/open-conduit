@@ -316,6 +316,9 @@ type ExecutorTargetParams struct {
 	WorkID      string `json:"work_id,omitempty"`
 	Epoch       uint64 `json:"epoch,omitempty"`
 	Event       *Event `json:"event,omitempty"`
+	// Tail is executor.live's limit: at most the last Tail bytes of each
+	// output (all of it when not positive).
+	Tail int64 `json:"tail,omitempty"`
 }
 type PersistRecoveryParams struct {
 	RunID string  `json:"run_id"`

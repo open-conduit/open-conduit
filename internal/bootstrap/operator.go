@@ -321,6 +321,10 @@ func (d *daemon) attach(ctx context.Context, executor string, w domain.Work) (ma
 		return management.AttachSpec{}, management.ErrAttachUnsupported
 	}
 	spec, err := a.Attach(ctx, w.ID)
+	if errors.Is(err, extension.ErrUnsupported) {
+		// A package's executor that doesn't declare the control.
+		return management.AttachSpec{}, management.ErrAttachUnsupported
+	}
 	if err != nil {
 		return management.AttachSpec{}, err
 	}
@@ -334,7 +338,11 @@ func (d *daemon) live(ctx context.Context, executor string, execution domain.ID,
 	if !ok {
 		return nil, management.ErrLiveUnsupported
 	}
-	return l.Live(ctx, execution, tail)
+	out, err := l.Live(ctx, execution, tail)
+	if errors.Is(err, extension.ErrUnsupported) {
+		return nil, management.ErrLiveUnsupported
+	}
+	return out, err
 }
 
 func rank(status string) int {

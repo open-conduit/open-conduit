@@ -16,7 +16,7 @@ The protocol was extracted from the shipped first-party code: the GitHub, Slack,
 | Transport | JSON-RPC 2.0 over the extension process's stdin/stdout, one JSON object per line, standard library only, symmetric (both sides send requests). Not go-plugin/gRPC. |
 | Version | Integer protocol versions. `initialize` picks the highest common version. No common version is a deterministic refusal before any other call (`unsupported_protocol_version`). Version 1 is the first. A version changes only for a breaking change; additive methods and manifest fields ship in a release without one, and an older host refuses a manifest that uses them as needing a newer Open Conduit. |
 | Manifest | `open-conduit-extension.json` beside the binary: name, own version, command, and `provides` (mechanical declarations only). Validated offline. The handshake must return the same manifest. |
-| Capabilities | Executor labels are exactly the core's mechanical labels (`interrupt`, `inject`, `resume`, `workspace`, `toolbelt: none\|cli\|mcp\|sdk`), plus optional controls (`stop`, `forget`, `attach`) that are methods, not suitability claims. Unknown fields are rejected, so a semantic label cannot be expressed. |
+| Capabilities | Executor labels are exactly the core's mechanical labels (`interrupt`, `inject`, `resume`, `workspace`, `toolbelt: none\|cli\|mcp\|sdk`), plus optional controls (`stop`, `forget`, `attach`, `container_attach`, `live`) that are methods, not suitability claims. Unknown fields are rejected, so a semantic label cannot be expressed. |
 | Storage | Mandatory namespaced KV under the extension's name, always available and never negotiated (a `storage` field is rejected). A store larger than coordination state is an `external_stores` entry naming a connection type, so it is explicit in config. |
 | Transactions | The host never holds a coordination transaction across an open-ended call. Four pure callbacks run inside a transaction today (`recurrence.next`, `work_kind.trigger`, `dependency.filter`, `emit.commit`). They are bounded (250 ms) and may make no callback. KV writes from an extension are one atomic `kv.commit` with preconditions. |
 | Process model | Extension processes are disposable. Durable state lives in host KV, executor recovery metadata or the extension's own state directory, so a crash or host restart means restart plus recover. The host never reattaches to an old process. |
@@ -43,7 +43,8 @@ The table groups what the first-party code actually does across the host boundar
 | Container segment end | `inproc.SegmentEnder`, told before a container segment settles so it revokes what it issued (git tokens) | GH | `segment.ended` (with manifest `segment_end`) |
 | Executor lifecycle | `Executor.Run/Recover`, `RunHandle.Wait`, `Resume`, `Interrupt`, `Inject`, `Forget`, `PersistRecovery` | SH CC (GH hold) | `executor.*`, `execution.persist_recovery` (E→H) |
 | Physical-stop evidence | `extension.StopExecutor` (`Stop(execution, epoch)`), so the host can `ConfirmStopped` | SH CC | `executor.stop` |
-| Operator attach | `extension.AttachExecutor` (`Attach`, `ErrNothingToAttach`, wire `nothing_to_attach`) | CC | `executor.attach` |
+| Operator attach | `extension.AttachExecutor` (`Attach`, `ErrNothingToAttach`, wire `nothing_to_attach`), and `extension.ContainerAttachExecutor` for Work that ran in a container | CC | `executor.attach`, `executor.container_attach` (controls `attach`, `container_attach`) |
+| Live output | `extension.LiveExecutor` (`Live`, `ErrNotLive`, wire `not_live`): a running attempt's output so far | CC | `executor.live` (control `live`) |
 | Workspaces | `ResourceBroker.Acquire/Lookup` (executor side). `ResourceProvider.Acquire/Lookup/Reconcile` with the host's `ResourceStatusFunc` | CC, GIT | `resource.*` (E→H), `provider.*`, `provider.owner_status` (E→H) |
 | Sandboxes and containers | `SandboxBroker.Plan/Adopt` and `ContainerBroker.Launch/Adopt` (executor side): a run's launch in its binding's sandbox or container, through the provider the host bound to the attempt | SH CC | `sandbox.*`, `container.*` (E→H, executor capabilities `sandbox`, `container`) |
 | Namespaced KV | `Store.Transact` with `Get/Put/Delete/List` in the extension's namespaces (`introspection.notes`, `github.projection.*`, `executor.claudecode`, `schedule.runs`, `introspection.*`, `<type>.tools.*` …) | GH SL TR BB SC IS CC | `kv.get`, `kv.list`, `kv.commit` |
@@ -152,6 +153,7 @@ What would reverse the decision: a need for very high-throughput streaming (the 
 | `not_adoptable` | `extension.ErrNotAdoptable` |
 | `not_accepting` | `extension.ErrNotAccepting` |
 | `nothing_to_attach` | `extension.ErrNothingToAttach` |
+| `not_live` | `extension.ErrNotLive` |
 | `resource_setup_failed` | `extension.ErrResourceSetup` (the resource still returned) |
 | `resource_not_found` | `extension.ErrResourceNotFound` |
 | `resource_exhausted` | `extension.ErrResourceExhausted` (the provider's message, which says what to free, crosses with it) |
@@ -362,6 +364,9 @@ First-party extensions registered in-process have no manifest; only the claude-c
 
 - `extension.StopExecutor` is public because an external executor must be able to supply physical-stop evidence. The shell and claude-code executors implement it.
 - `extension.AttachExecutor`, `extension.AttachSpec` and `extension.ErrNothingToAttach` make attach a public optional executor method. Bootstrap does not branch on claude-code. The management wire code is `nothing_to_attach`, and `claudecode.ErrNoSession` wraps `ErrNothingToAttach`. The operator's shell supplies the attach environment.
+- `extension.ContainerAttachExecutor` is attach for Work that ran in a container: `executor.container_attach` sends the Work, its binding's config and secrets and the Work's container home, and the package answers the needs and launch, which the host's container broker plans under the binding's current policy. The package never launches the attach container itself.
+- `extension.LiveExecutor` and `extension.ErrNotLive` give an operator a running attempt's output so far: `executor.live` takes the execution and a `tail`, and answers each output's name, media type, size and last `tail` bytes, or `not_live`.
+- A package's executor that doesn't declare one of these controls answers `unsupported` without a call, which the operator API reports as the executor not supporting it.
 - `extension.ContractVersion` versions the in-process API. `protocol.Version` versions the wire.
 
 ## Runtime, trust model and schema evolution

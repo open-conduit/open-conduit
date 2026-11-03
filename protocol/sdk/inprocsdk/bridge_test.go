@@ -462,3 +462,86 @@ func TestLatestSequenceIsCarried(t *testing.T) {
 		t.Fatalf("latest sequence %d, want 2", seq)
 	}
 }
+
+// operated is an extension whose executor offers an operator's live view
+// and container attach.
+type operated struct{ live liveExecutor }
+
+func (*operated) Name() string { return "operated" }
+func (x *operated) Executors() map[string]inproc.Executor {
+	return map[string]inproc.Executor{"operated": {Executor: &x.live}}
+}
+
+type liveExecutor struct {
+	mu      sync.Mutex
+	attach  extension.ContainerAttachRequest
+	running bool
+}
+
+func (*liveExecutor) Capabilities() domain.Capabilities {
+	return domain.Capabilities{Toolbelt: "none"}
+}
+func (*liveExecutor) Run(context.Context, extension.RunRequest) (extension.RunHandle, error) {
+	return nil, extension.ErrUnsupported
+}
+func (*liveExecutor) Recover(context.Context, extension.RunRequest, domain.Payload) (extension.RunHandle, error) {
+	return nil, extension.ErrNotAdoptable
+}
+func (e *liveExecutor) Live(_ context.Context, execution domain.ID, tail int64) ([]extension.LiveOutput, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if !e.running || execution != "exec-1" {
+		return nil, extension.ErrNotLive
+	}
+	return []extension.LiveOutput{{Name: "activity", MediaType: "text/plain", Size: 11, Content: []byte("hello world")[11-tail:]}}, nil
+}
+func (e *liveExecutor) ContainerAttach(_ context.Context, r extension.ContainerAttachRequest) (extension.ContainerAttachSpec, error) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	e.attach = r
+	return extension.ContainerAttachSpec{Needs: extension.SandboxNeeds{Write: []string{r.Home}}, Launch: extension.SandboxLaunch{Argv: []string{"agent", "--resume"}, Dir: "/work", TTY: true}}, nil
+}
+
+// An executor's live output and container attach cross the wire (#428):
+// the bridge declares both controls, a running execution's tail comes back
+// and a finished one is ErrNotLive, and the attach request arrives whole.
+func TestLiveAndContainerAttachAreCarried(t *testing.T) {
+	x := &operated{}
+	b, err := inprocsdk.New(x, protocol.Manifest{Version: "0.1.0", Command: []string{"operated"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	decl := b.Extension().Manifest.Provides.Executors
+	if len(decl) != 1 || !decl[0].Controls.Live || !decl[0].Controls.ContainerAttach {
+		t.Fatalf("executors %+v, want live and container_attach controls", decl)
+	}
+	h := sdktest.New(t, b.Extension())
+	ctx := context.Background()
+	var out protocol.LiveResult
+	err = h.Call(ctx, "executor.live", protocol.ExecutorTargetParams{Executor: "operated", ExecutionID: "exec-1", Tail: 5}, &out)
+	if !errors.Is(err, extension.ErrNotLive) {
+		t.Fatalf("live of a finished execution: %v, want ErrNotLive", err)
+	}
+	x.live.mu.Lock()
+	x.live.running = true
+	x.live.mu.Unlock()
+	if err := h.Call(ctx, "executor.live", protocol.ExecutorTargetParams{Executor: "operated", ExecutionID: "exec-1", Tail: 5}, &out); err != nil {
+		t.Fatal(err)
+	}
+	if len(out.Outputs) != 1 || string(out.Outputs[0].Content) != "world" || out.Outputs[0].Size != 11 || out.Outputs[0].MediaType != "text/plain" {
+		t.Fatalf("live %+v", out)
+	}
+	var spec protocol.ContainerAttachSpec
+	p := protocol.ContainerAttachParams{Executor: "operated", Work: protocol.FromWork(domain.Work{ID: "work/1", ScopeID: "eng"}), Config: protocol.Payload{Schema: "operated.config.v1", Data: json.RawMessage(`{}`)}, Secrets: map[string]string{"TOKEN": "s"}, Home: "/homes/1"}
+	if err := h.Call(ctx, "executor.container_attach", p, &spec); err != nil {
+		t.Fatal(err)
+	}
+	if !spec.Launch.TTY || spec.Launch.Dir != "/work" || !slices.Equal(spec.Needs.Write, []string{"/homes/1"}) {
+		t.Fatalf("attach spec %+v", spec)
+	}
+	x.live.mu.Lock()
+	defer x.live.mu.Unlock()
+	if x.live.attach.Work.ID != "work/1" || x.live.attach.Secrets["TOKEN"] != "s" || x.live.attach.Config.Schema != "operated.config.v1" {
+		t.Fatalf("attach request %+v", x.live.attach)
+	}
+}

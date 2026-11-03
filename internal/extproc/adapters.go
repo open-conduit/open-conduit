@@ -595,6 +595,33 @@ func (e *remoteExecutor) Attach(ctx context.Context, work domain.ID) (extension.
 	return extension.AttachSpec{Argv: out.Argv, Dir: out.Dir}, nil
 }
 
+// ContainerAttach asks the package for the attach container's launch; the
+// host's container broker plans and runs it under the binding's policy.
+func (e *remoteExecutor) ContainerAttach(ctx context.Context, r extension.ContainerAttachRequest) (extension.ContainerAttachSpec, error) {
+	if !e.decl.Controls.ContainerAttach {
+		return extension.ContainerAttachSpec{}, extension.ErrUnsupported
+	}
+	var out protocol.ContainerAttachSpec
+	p := protocol.ContainerAttachParams{Executor: e.decl.Name, Work: protocol.FromWork(r.Work), Config: protocol.FromPayload(r.Config), Secrets: r.Secrets, Home: r.Home}
+	if err := e.r.p.Call(ctx, "executor.container_attach", p, &out); err != nil {
+		return extension.ContainerAttachSpec{}, err
+	}
+	return extension.ContainerAttachSpec{Needs: out.Needs.Extension(), Launch: out.Launch.Extension()}, nil
+}
+
+// Live is a running attempt's output so far, from the package.
+func (e *remoteExecutor) Live(ctx context.Context, execution domain.ID, tail int64) ([]extension.LiveOutput, error) {
+	var out protocol.LiveResult
+	if err := e.target(ctx, "executor.live", e.decl.Controls.Live, protocol.ExecutorTargetParams{ExecutionID: string(execution), Tail: tail}, &out); err != nil {
+		return nil, err
+	}
+	outs := make([]extension.LiveOutput, 0, len(out.Outputs))
+	for _, o := range out.Outputs {
+		outs = append(outs, extension.LiveOutput{Name: o.Name, MediaType: o.MediaType, Size: o.Size, Content: o.Content})
+	}
+	return outs, nil
+}
+
 type remoteHandle struct {
 	e      *remoteExecutor
 	run    string

@@ -690,6 +690,24 @@ func (s *Server) executor(ctx context.Context, method string, raw json.RawMessag
 		delete(s.handles, p.Handle)
 		s.mu.Unlock()
 		return protocol.FromResult(r), nil
+	case "executor.container_attach":
+		var p protocol.ContainerAttachParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		e, ok := s.ext.Executors[p.Executor]
+		if !ok {
+			return nil, notFound(method)
+		}
+		x, ok := e.(extension.ContainerAttachExecutor)
+		if !ok {
+			return nil, protocol.Errorf(protocol.CodeUnsupported, method)
+		}
+		spec, err := x.ContainerAttach(ctx, extension.ContainerAttachRequest{Work: p.Work.Domain(), Config: p.Config.Domain(), Secrets: p.Secrets, Home: p.Home})
+		if err != nil {
+			return nil, err
+		}
+		return protocol.ContainerAttachSpec{Needs: protocol.FromSandboxNeeds(spec.Needs), Launch: protocol.FromSandboxLaunch(spec.Launch)}, nil
 	}
 	var p protocol.ExecutorTargetParams
 	if err := jsonrpc.Params(raw, &p); err != nil {
@@ -725,6 +743,18 @@ func (s *Server) executor(ctx context.Context, method string, raw json.RawMessag
 				return nil, err
 			}
 			return protocol.AttachSpec{Argv: spec.Argv, Dir: spec.Dir}, nil
+		}
+	case "executor.live":
+		if x, ok := e.(extension.LiveExecutor); ok {
+			outs, err := x.Live(ctx, domain.ID(p.ExecutionID), p.Tail)
+			if err != nil {
+				return nil, err
+			}
+			res := protocol.LiveResult{Outputs: []protocol.LiveOutput{}}
+			for _, o := range outs {
+				res.Outputs = append(res.Outputs, protocol.LiveOutput{Name: o.Name, MediaType: o.MediaType, Size: o.Size, Content: o.Content})
+			}
+			return res, nil
 		}
 	default:
 		return nil, notFound(method)

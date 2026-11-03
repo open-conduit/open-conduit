@@ -41,6 +41,7 @@ var sentinels = []struct {
 	{CodeNotAdoptable, extension.ErrNotAdoptable},
 	{CodeNotAccepting, extension.ErrNotAccepting},
 	{CodeNothingToAttach, extension.ErrNothingToAttach},
+	{CodeNotLive, extension.ErrNotLive},
 	{CodeResourceSetup, extension.ErrResourceSetup},
 	{CodeResourceNotFound, extension.ErrResourceNotFound},
 	{CodeResourceExhausted, extension.ErrResourceExhausted},
@@ -136,7 +137,7 @@ func Decode(code, message string, resetAt *time.Time) error {
 // Known reports whether code is one of the protocol's own codes.
 func Known(code string) bool {
 	switch code {
-	case CodeUnsupportedVersion, CodeMethodNotFound, CodeInvalid, CodeUnsupported, CodeUnauthorized, CodeUndeclared, CodeNotFound, CodeConflict, CodeCausalLimit, CodeNotAdoptable, CodeNotAccepting, CodeNothingToAttach, CodeResourceSetup, CodeResourceNotFound, CodeResourceExhausted, CodeSandboxDenied, CodeSandboxUnavailable, CodeContainerRunning, CodeContainerUnknown, CodeRetryAfter, CodeReentrant, CodeOverloaded, CodeCancelled, CodeShuttingDown, CodeInternal, CodeSchema, CodeKVDowngrade:
+	case CodeUnsupportedVersion, CodeMethodNotFound, CodeInvalid, CodeUnsupported, CodeUnauthorized, CodeUndeclared, CodeNotFound, CodeConflict, CodeCausalLimit, CodeNotAdoptable, CodeNotAccepting, CodeNothingToAttach, CodeNotLive, CodeResourceSetup, CodeResourceNotFound, CodeResourceExhausted, CodeSandboxDenied, CodeSandboxUnavailable, CodeContainerRunning, CodeContainerUnknown, CodeRetryAfter, CodeReentrant, CodeOverloaded, CodeCancelled, CodeShuttingDown, CodeInternal, CodeSchema, CodeKVDowngrade:
 		return true
 	}
 	return false

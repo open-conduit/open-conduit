@@ -813,3 +813,36 @@ type AttachSpec struct {
 	Argv []string `json:"argv"`
 	Dir  string   `json:"dir,omitempty"`
 }
+
+// ContainerAttachParams are executor.container_attach's: the Work to
+// attach to, its binding's config and secrets as a launch would get them,
+// and the Work's container home (extension.ContainerAttachRequest).
+type ContainerAttachParams struct {
+	Executor string            `json:"executor"`
+	Work     Work              `json:"work"`
+	Config   Payload           `json:"config"`
+	Secrets  map[string]string `json:"secrets,omitempty"`
+	Home     string            `json:"home"`
+}
+
+// ContainerAttachSpec is the interactive launch executor.container_attach
+// returns for the host's container broker to plan
+// (extension.ContainerAttachSpec).
+type ContainerAttachSpec struct {
+	Needs  SandboxNeeds  `json:"needs"`
+	Launch SandboxLaunch `json:"launch"`
+}
+
+// LiveOutput is one output of a running execution (extension.LiveOutput):
+// Content holds at most the requested tail, Size the whole output's length.
+type LiveOutput struct {
+	Name      string `json:"name"`
+	MediaType string `json:"media_type"`
+	Size      int64  `json:"size"`
+	Content   []byte `json:"content,omitempty"`
+}
+
+// LiveResult is executor.live's result.
+type LiveResult struct {
+	Outputs []LiveOutput `json:"outputs"`
+}

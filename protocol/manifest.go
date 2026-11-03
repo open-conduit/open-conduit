@@ -526,12 +526,15 @@ type Capabilities struct {
 }
 
 // Controls are optional executor methods that are not capabilities: stop
-// (physical-stop evidence), forget (retention cleanup) and attach (operator
-// takeover).
+// (physical-stop evidence), forget (retention cleanup), attach and
+// container_attach (operator takeover, on the host or in the binding's
+// container) and live (a running attempt's output so far).
 type Controls struct {
-	Stop   bool `json:"stop,omitempty"`
-	Forget bool `json:"forget,omitempty"`
-	Attach bool `json:"attach,omitempty"`
+	Stop            bool `json:"stop,omitempty"`
+	Forget          bool `json:"forget,omitempty"`
+	Attach          bool `json:"attach,omitempty"`
+	ContainerAttach bool `json:"container_attach,omitempty"`
+	Live            bool `json:"live,omitempty"`
 }
 
 // ResourceDecl declares a resource provider and the modes it supports.
@@ -974,6 +977,8 @@ func (m Manifest) Enabled() []string {
 		set("executors.stop", x.Controls.Stop)
 		set("executors.forget", x.Controls.Forget)
 		set("executors.attach", x.Controls.Attach)
+		set("executors.container_attach", x.Controls.ContainerAttach)
+		set("executors.live", x.Controls.Live)
 	}
 	set("resources", len(p.Resources) > 0)
 	set("tasks", len(p.Tasks) > 0)
