@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -23,6 +24,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/protocol/examples/runner"
 )
 
 // The setup guide's example configuration is a valid Open Conduit config
@@ -228,8 +230,9 @@ func (h *setupHost) Cwd() string                                          { retu
 func (h *setupHost) StateDir() string                                     { return h.cwd }
 func (h *setupHost) DryRun() bool                                         { return true }
 
-// init --with claude prepares the setup playbook as its own plugin and starts
-// claude on it, pre-allowing only open-conduit's config, doctor and health.
+// init --with claude asks the claude-code package for its interactive
+// launch (#495): the setup playbook as its own plugin, and claude started
+// on it, pre-allowing only the commands the host decided on.
 func TestSetupCommand(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "claude")
@@ -238,38 +241,48 @@ func TestSetupCommand(t *testing.T) {
 	}
 	state := filepath.Join(dir, "state")
 	placeSetup(t, dir) // installed beside config.json
-	// The other setups the agent may dry-run come from the bundled
-	// packages (#477).
+	// The executors and the other setups the agent may dry-run come from
+	// the bundled packages (#477).
 	releaseLayout(t)
-	cmd, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "claude", ConfigPath: filepath.Join(dir, "config.json"), StateDir: state, Cwd: dir, Bin: "/opt/bin/open-conduit", Binary: fake,
-		Environ: []string{"PATH=/usr/bin", "OS_TOKEN=leak", "OPEN_CONDUIT_CONFIG=/elsewhere"}})
-	if err != nil {
-		t.Fatal(err)
+	for _, with := range []string{"claude", "claude-code"} {
+		launch, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: with, ConfigPath: filepath.Join(dir, "config.json"), StateDir: state, Cwd: dir, Bin: "/opt/bin/open-conduit", Binary: fake,
+			Environ: []string{"PATH=/usr/bin", "OS_TOKEN=leak", "OPEN_CONDUIT_CONFIG=/elsewhere"}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		cmd := launch.Cmd
+		if launch.Executor != "claude-code" || launch.Title != "Claude Code" || cmd.Dir != dir {
+			t.Fatalf("--with %s launched %+v in %s", with, launch, cmd.Dir)
+		}
+		args := strings.Join(cmd.Args, " ")
+		plugin := filepath.Join(state, "playbooks", "setup")
+		if !strings.HasPrefix(args, fake+" /open-conduit:setup --plugin-dir "+plugin+" --allowedTools") || !strings.Contains(args, "Bash(/opt/bin/open-conduit config:*)") || !strings.Contains(args, "Bash(/opt/bin/open-conduit doctor:*)") || !strings.Contains(args, "Bash(/opt/bin/open-conduit init github --dry-run:*)") || strings.Contains(args, "init setup") || strings.Contains(args, "serve") {
+			t.Fatalf("args: %s", args)
+		}
+		env := strings.Join(cmd.Env, "\n")
+		if strings.Contains(env, "OS_TOKEN") || strings.Contains(env, "/elsewhere") || !strings.Contains(env, "OPEN_CONDUIT_CONFIG="+filepath.Join(dir, "config.json")) {
+			t.Fatalf("env: %s", env)
+		}
+		skill, err := os.ReadFile(filepath.Join(plugin, "skills", "setup", "SKILL.md"))
+		if err != nil || !strings.Contains(string(skill), "/opt/bin/open-conduit init") || strings.Contains(string(skill), "{{bin}}") {
+			t.Fatalf("skill: %v", err)
+		}
+		if _, err := os.Stat(filepath.Join(plugin, "skills", "work-issue")); err == nil {
+			t.Fatal("turn playbooks leaked into the setup plugin")
+		}
 	}
-	args := strings.Join(cmd.Args, " ")
-	plugin := filepath.Join(state, "playbooks", "setup")
-	if !strings.HasPrefix(args, fake+" /open-conduit:setup --plugin-dir "+plugin+" --allowedTools") || !strings.Contains(args, "Bash(/opt/bin/open-conduit config:*)") || !strings.Contains(args, "Bash(/opt/bin/open-conduit doctor:*)") || !strings.Contains(args, "Bash(/opt/bin/open-conduit init github --dry-run:*)") || strings.Contains(args, "init setup") || strings.Contains(args, "serve") {
-		t.Fatalf("args: %s", args)
-	}
-	env := strings.Join(cmd.Env, "\n")
-	if strings.Contains(env, "OS_TOKEN") || strings.Contains(env, "/elsewhere") || !strings.Contains(env, "OPEN_CONDUIT_CONFIG="+filepath.Join(dir, "config.json")) {
-		t.Fatalf("env: %s", env)
-	}
-	skill, err := os.ReadFile(filepath.Join(plugin, "skills", "setup", "SKILL.md"))
-	if err != nil || !strings.Contains(string(skill), "/opt/bin/open-conduit init") || strings.Contains(string(skill), "{{bin}}") {
-		t.Fatalf("skill: %v", err)
-	}
-	if _, err := os.Stat(filepath.Join(plugin, "skills", "work-issue")); err == nil {
-		t.Fatal("turn playbooks leaked into the setup plugin")
-	}
-	if _, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "aider", StateDir: state, Binary: fake}); err == nil {
-		t.Fatal("unknown agent accepted")
+	// Negative control: an executor nobody offers a launch for is refused,
+	// naming the ones that do.
+	_, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "aider", ConfigPath: filepath.Join(dir, "config.json"), StateDir: state, Binary: fake})
+	if err == nil || !strings.Contains(err.Error(), "claude-code (or claude)") || !strings.Contains(err.Error(), "codex") {
+		t.Fatalf("unknown agent: %v", err)
 	}
 }
 
-// init --with codex starts the Codex CLI with the setup guide as its first
-// message (Codex loads no plugin skills), in its workspace-write sandbox
-// asking before anything else, and with the same environment rules.
+// init --with codex asks the codex package: the Codex CLI with the setup
+// guide as its first message (Codex loads no plugin skills), in its
+// workspace-write sandbox asking before anything else, and with the same
+// environment rules.
 func TestSetupCommandCodex(t *testing.T) {
 	dir := t.TempDir()
 	fake := filepath.Join(dir, "codex")
@@ -278,13 +291,15 @@ func TestSetupCommandCodex(t *testing.T) {
 	}
 	state := filepath.Join(dir, "state")
 	placeSetup(t, dir)
-	cmd, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "codex", ConfigPath: filepath.Join(dir, "config.json"), StateDir: state, Cwd: dir, Bin: "/opt/bin/open-conduit", Binary: fake,
+	releaseLayout(t)
+	launch, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "codex", ConfigPath: filepath.Join(dir, "config.json"), StateDir: state, Cwd: dir, Bin: "/opt/bin/open-conduit", Binary: fake,
 		Environ: []string{"PATH=/usr/bin", "OS_TOKEN=leak", "OPEN_CONDUIT_CONFIG=/elsewhere"}})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(cmd.Args) != 6 || strings.Join(cmd.Args[1:5], " ") != "--sandbox workspace-write --ask-for-approval on-request" {
-		t.Fatalf("args: %q", cmd.Args)
+	cmd := launch.Cmd
+	if launch.Title != "Codex" || len(cmd.Args) != 6 || cmd.Args[0] != fake || strings.Join(cmd.Args[1:5], " ") != "--sandbox workspace-write --ask-for-approval on-request" {
+		t.Fatalf("launch: %s %q", launch.Title, cmd.Args)
 	}
 	guide := cmd.Args[5]
 	if strings.HasPrefix(guide, "---") || !strings.Contains(guide, "/opt/bin/open-conduit init") || strings.Contains(guide, "{{bin}}") {
@@ -296,5 +311,49 @@ func TestSetupCommandCodex(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(state, "playbooks", "setup")); err == nil {
 		t.Fatal("a Claude Code plugin was written for codex")
+	}
+}
+
+// init --with takes any installed executor that declares the interactive
+// launch control, through the public contract alone (#495): the example
+// runner, a shell rather than an agent, is launched with the environment
+// it answers, still without the toolbelt credential. An executor that
+// doesn't declare the control is refused.
+func TestSetupCommandThroughTheContract(t *testing.T) {
+	_, runnerBin := extensionBinaries(t)
+	e := newExtEnv(t)
+	cfgDir := filepath.Dir(e.root)
+	placeSetup(t, cfgDir)
+	e.install(runner.Manifest(), runnerBin)
+	plain := runner.Manifest()
+	plain.Name = "plain"
+	plain.Provides.Executors[0].Name, plain.Provides.Executors[0].Controls.InteractiveLaunch = "plain", false
+	plain.Provides.Checks = nil
+	e.install(plain, runnerBin)
+	state := filepath.Join(t.TempDir(), "state")
+	sh, err := exec.LookPath("sh")
+	if err != nil {
+		t.Skip("no sh")
+	}
+	launch, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "runner", ConfigPath: filepath.Join(cfgDir, "config.json"), StateDir: state, Cwd: cfgDir, Bin: "/opt/bin/open-conduit", Binary: sh,
+		Environ: []string{"PATH=/usr/bin:/bin", "OS_TOKEN=leak"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	cmd := launch.Cmd
+	book := filepath.Join(state, "playbooks", "setup", "playbook.md")
+	if launch.Executor != "runner" || cmd.Args[0] != sh || cmd.Args[len(cmd.Args)-1] != book {
+		t.Fatalf("launch: %+v %q", launch, cmd.Args)
+	}
+	if text, err := os.ReadFile(book); err != nil || !strings.Contains(string(text), "/opt/bin/open-conduit init") {
+		t.Fatalf("playbook: %v", err)
+	}
+	env := strings.Join(cmd.Env, "\n")
+	if strings.Contains(env, "OS_TOKEN") || !strings.Contains(env, "RUNNER_PLAYBOOK="+book) || !strings.Contains(env, "OPEN_CONDUIT_CONFIG="+filepath.Join(cfgDir, "config.json")) {
+		t.Fatalf("env: %s", env)
+	}
+	_, err = bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "plain", ConfigPath: filepath.Join(cfgDir, "config.json"), StateDir: state, Binary: sh})
+	if err == nil || !strings.Contains(err.Error(), "no setup agent \"plain\"") || !strings.Contains(err.Error(), "runner") {
+		t.Fatalf("an executor without the control: %v", err)
 	}
 }

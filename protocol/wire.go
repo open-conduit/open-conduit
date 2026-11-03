@@ -839,6 +839,29 @@ type ContainerAttachSpec struct {
 	Launch SandboxLaunch `json:"launch"`
 }
 
+// InteractiveLaunchParams are executor.interactive_launch's: the executor
+// and what its interactive session starts on
+// (extension.InteractiveLaunchRequest).
+type InteractiveLaunchParams struct {
+	Executor string   `json:"executor"`
+	Playbook string   `json:"playbook"`
+	Name     string   `json:"name"`
+	Summary  string   `json:"summary,omitempty"`
+	Allow    []string `json:"allow,omitempty"`
+	Dir      string   `json:"dir,omitempty"`
+	Env      []string `json:"env,omitempty"`
+	FilesDir string   `json:"files_dir"`
+	Program  string   `json:"program,omitempty"`
+}
+
+// InteractiveLaunchSpec is the command executor.interactive_launch returns
+// for the host to exec (extension.InteractiveLaunchSpec).
+type InteractiveLaunchSpec struct {
+	Argv []string `json:"argv"`
+	Dir  string   `json:"dir,omitempty"`
+	Env  []string `json:"env,omitempty"`
+}
+
 // LiveOutput is one output of a running execution (extension.LiveOutput):
 // Content holds at most the requested tail, Size the whole output's length.
 type LiveOutput struct {

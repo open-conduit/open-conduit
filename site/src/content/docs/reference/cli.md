@@ -24,8 +24,7 @@ Run open-conduit COMMAND --help for one command.
 
 ```text
 Usage: open-conduit init TYPE [flags] [--config PATH] [--force] [--dry-run]
-       open-conduit init --with claude   start Claude Code with the setup guide
-       open-conduit init --with codex    start the Codex CLI with the setup guide
+       open-conduit init --with EXECUTOR   start an executor's CLI on the setup guide (--with claude, --with codex)
 
 Types (from the registered extensions):
   github   add a scope that works a GitHub repository's issues (package github 0.1.0)

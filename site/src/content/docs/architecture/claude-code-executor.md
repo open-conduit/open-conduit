@@ -130,9 +130,13 @@ A `call github.wait` parks the attempt exactly like `wait`, because `Complete` a
 
 ## Operator controls
 
-[Operator setup](../operator-setup/) covers attach through `POST /work/{id}/attach` under an operator hold, transcripts reachable as run artifacts, `Usage` (opt-in, doctor), `Version` (doctor), `Options.DryRun` (a stub turn on `haiku`) and the `init --with claude` setup command. The executor also renders each turn's activity as a run artifact, shown by the TUI and `runs log` ([installed integrations](../installed-integrations/#operator-tools)).
+[Operator setup](../operator-setup/) covers attach through `POST /work/{id}/attach` under an operator hold, transcripts reachable as run artifacts, `Usage` (opt-in, doctor), `Version` (doctor), `Options.DryRun` (a stub turn on `haiku`) and the `init --with claude` setup command, which starts through the executor's interactive launch (below). The executor also renders each turn's activity as a run artifact, shown by the TUI and `runs log` ([installed integrations](../installed-integrations/#operator-tools)).
 
 Handed-back Work sits `ready` with no pending input, and the host loop skips it quietly.
+
+## Interactive launch
+
+The executor offers an interactive launch (`extension.InteractiveLauncher`), which `init --with claude` (or `--with claude-code`) starts the setup playbook through ([operator setup](../operator-setup/)). It writes the playbook as the one skill of its own plugin, named `open-conduit`, into the files directory the host gives it (`<state>/playbooks/setup`), removing any other skill an earlier launch left there, and answers `claude /open-conduit:<name> --plugin-dir <dir> --allowedTools Bash(<command>:*)…`, one entry for each command the host allows, so nothing else goes without asking. The prompt comes first because `--allowedTools` takes every argument after it. It declares `claude` as its launch name, and uses `claude` as the program unless the request names another.
 
 ## Workspace and environment
 

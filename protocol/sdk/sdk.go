@@ -733,6 +733,24 @@ func (s *Server) executor(ctx context.Context, method string, raw json.RawMessag
 			return nil, err
 		}
 		return protocol.ContainerAttachSpec{Needs: protocol.FromSandboxNeeds(spec.Needs), Launch: protocol.FromSandboxLaunch(spec.Launch)}, nil
+	case "executor.interactive_launch":
+		var p protocol.InteractiveLaunchParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		e, ok := s.ext.Executors[p.Executor]
+		if !ok {
+			return nil, notFound(method)
+		}
+		x, ok := e.(extension.InteractiveLauncher)
+		if !ok {
+			return nil, protocol.Errorf(protocol.CodeUnsupported, method)
+		}
+		spec, err := x.InteractiveLaunch(ctx, extension.InteractiveLaunchRequest{Playbook: p.Playbook, Name: p.Name, Summary: p.Summary, Allow: p.Allow, Dir: p.Dir, Env: p.Env, FilesDir: p.FilesDir, Program: p.Program})
+		if err != nil {
+			return nil, err
+		}
+		return protocol.InteractiveLaunchSpec{Argv: spec.Argv, Dir: spec.Dir, Env: spec.Env}, nil
 	}
 	var p protocol.ExecutorTargetParams
 	if err := jsonrpc.Params(raw, &p); err != nil {

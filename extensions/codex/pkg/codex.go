@@ -37,17 +37,17 @@ const Name = codex.Name
 const Version = "0.1.0"
 
 // Manifest declares the executor's capabilities (interrupt, inject,
-// resume, workspace, the MCP toolbelt), its stop and forget controls, and
-// that it says which workspace mode a binding requests and which playbook
-// it starts on.
+// resume, workspace, the MCP toolbelt), its stop, forget and interactive
+// launch controls, and that it says which workspace mode a binding requests
+// and which playbook it starts on.
 func Manifest() protocol.Manifest {
 	c := codex.Capabilities()
-	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version,
+	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "Codex",
 		Summary: "Runs agent turns on the Codex CLI, with the toolbelt over MCP.",
 		Command: protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: Name,
 			Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt},
-			Controls:     protocol.Controls{Stop: true, Forget: true},
+			Controls:     protocol.Controls{Stop: true, Forget: true, InteractiveLaunch: true},
 			ResourceMode: true, Playbook: true}}}}
 }
 
@@ -94,6 +94,13 @@ func (a hostArtifacts) Delete(ctx context.Context, ref storage.ArtifactRef) erro
 }
 
 func (x *executor) Capabilities() domain.Capabilities { return codex.Capabilities() }
+
+// InteractiveLaunch needs no state of the executor's: `init --with codex`
+// asks for it before anything runs.
+func (x *executor) InteractiveLaunch(_ context.Context, r extension.InteractiveLaunchRequest) (extension.InteractiveLaunchSpec, error) {
+	return codex.InteractiveLaunch(r), nil
+}
+func (x *executor) LaunchNames() []string { return nil }
 func (x *executor) ResourceMode(raw json.RawMessage) string {
 	return codex.ResourceMode(raw)
 }

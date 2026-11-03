@@ -41,7 +41,7 @@ type Method struct {
 // Methods is the protocol version 1 catalogue.
 var Methods = []Method{
 	// Lifecycle.
-	{Name: "initialize", Direction: HostToExtension, Contract: []string{"extension.Registration.Version", "extension.Executor.Capabilities (manifest executors[].capabilities)", "extension.Registration.Name", "extension.Registration.EventTypes"}},
+	{Name: "initialize", Direction: HostToExtension, Contract: []string{"extension.Registration.Version", "extension.Executor.Capabilities (manifest executors[].capabilities)", "extension.InteractiveLauncher.LaunchNames (manifest executors[].launch_names)", "extension.Registration.Name", "extension.Registration.EventTypes"}},
 	{Name: "configure", Direction: HostToExtension, Contract: []string{"host:config apply (register<Extension> on OnApply)", "extension.Source", "host:webhook routes"}},
 	{Name: "validate", Direction: HostToExtension, Contract: []string{"host:config.Registry validators (connection, extension, route, resource, executor config)", "extension.ResourceModeDefaulter.ModeDefault", "extension.ResourceSandboxChecker.SandboxWorkspace", "extension.ResourceModer.ResourceMode", "extension.PlaybookNamer.Playbook", "inproc.ConfigType.Binding", "extension.RouteBinding"}},
 	{Name: "shutdown", Direction: HostToExtension, Contract: []string{"observability.Exporter.Shutdown", "host:daemon stop"}},
@@ -87,6 +87,7 @@ var Methods = []Method{
 	{Name: "executor.forget", Direction: HostToExtension, Provides: "executors.forget", Contract: []string{"extension.ForgetExecutor.Forget"}},
 	{Name: "executor.attach", Direction: HostToExtension, Provides: "executors.attach", Contract: []string{"extension.AttachExecutor.Attach"}},
 	{Name: "executor.container_attach", Direction: HostToExtension, Provides: "executors.container_attach", Contract: []string{"extension.ContainerAttachExecutor.ContainerAttach", "extension.ContainerAttachRequest", "extension.ContainerAttachSpec"}},
+	{Name: "executor.interactive_launch", Direction: HostToExtension, Provides: "executors.interactive_launch", Contract: []string{"extension.InteractiveLauncher.InteractiveLaunch", "extension.InteractiveLaunchRequest", "extension.InteractiveLaunchSpec"}},
 	{Name: "executor.live", Direction: HostToExtension, Provides: "executors.live", Contract: []string{"extension.LiveExecutor.Live", "extension.LiveOutput"}},
 	{Name: "execution.persist_recovery", Direction: ExtensionToHost, Provides: "executors", Contract: []string{"extension.RunRequest.PersistRecovery"}},
 

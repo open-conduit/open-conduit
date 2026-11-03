@@ -308,6 +308,56 @@ type ContainerAttachSpec struct {
 	Launch SandboxLaunch
 }
 
+// InteractiveLauncher is optional. InteractiveLaunch returns the command
+// that starts an interactive session of the executor's own CLI on a
+// playbook in the operator's terminal, outside any Work (`init --with`
+// starts the setup playbook this way). The host decides everything with
+// authority (the playbook, the commands the session may run without asking,
+// the working directory and the environment); the executor only expresses
+// them in its CLI's terms, and the host filters the environment it returns
+// again before it runs the command. LaunchNames are other names an operator
+// may give the executor where it picks one to launch (`init --with claude`
+// for claude-code); nil for none.
+type InteractiveLauncher interface {
+	InteractiveLaunch(context.Context, InteractiveLaunchRequest) (InteractiveLaunchSpec, error)
+	LaunchNames() []string
+}
+
+// InteractiveLaunchRequest is what the host asks an interactive session to
+// start on.
+type InteractiveLaunchRequest struct {
+	// Playbook is the playbook's text, as a playbook skill is written
+	// (frontmatter and all), and Name is its name.
+	Playbook string
+	Name     string
+	// Summary is a line describing the playbook.
+	Summary string
+	// Allow are the command prefixes the session may run without asking
+	// (for example "open-conduit config"); every other command is the
+	// CLI's own default, normally asking the operator. An executor whose CLI
+	// has no such list leaves them to ask.
+	Allow []string
+	// Dir is the session's working directory, and Env its environment.
+	Dir string
+	Env []string
+	// FilesDir is a host directory the executor may create and write the
+	// files its launch needs into (a plugin, a prompt file); it may not
+	// exist yet, and what was in it may be replaced.
+	FilesDir string
+	// Program is the operator's choice of the CLI to run, "" for the
+	// executor's default.
+	Program string
+}
+
+// InteractiveLaunchSpec is the command to exec: argv, its working
+// directory ("" for the request's) and its environment (nil for the
+// request's).
+type InteractiveLaunchSpec struct {
+	Argv []string
+	Dir  string
+	Env  []string
+}
+
 // ErrNothingToAttach is the definitive "nothing to attach to yet" answer of
 // Attach.
 var ErrNothingToAttach = errors.New("nothing to attach to")

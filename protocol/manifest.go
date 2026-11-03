@@ -512,6 +512,10 @@ type ExecutorDecl struct {
 	// agent turns (settings.concurrency), "jobs" for jobs
 	// (settings.job_concurrency).
 	Pool string `json:"pool,omitempty"`
+	// LaunchNames are other names an operator may give the executor where
+	// it picks one to launch interactively (`init --with`); they need the
+	// interactive_launch control (extension.InteractiveLauncher.LaunchNames).
+	LaunchNames []string `json:"launch_names,omitempty"`
 }
 
 // Capabilities are the PRD's mechanical labels, checked at bind time. No
@@ -533,13 +537,16 @@ type Capabilities struct {
 // Controls are optional executor methods that are not capabilities: stop
 // (physical-stop evidence), forget (retention cleanup), attach and
 // container_attach (operator takeover, on the host or in the binding's
-// container) and live (a running attempt's output so far).
+// container), live (a running attempt's output so far) and
+// interactive_launch (a session of the executor's CLI on a playbook in the
+// operator's terminal, outside any Work).
 type Controls struct {
-	Stop            bool `json:"stop,omitempty"`
-	Forget          bool `json:"forget,omitempty"`
-	Attach          bool `json:"attach,omitempty"`
-	ContainerAttach bool `json:"container_attach,omitempty"`
-	Live            bool `json:"live,omitempty"`
+	Stop              bool `json:"stop,omitempty"`
+	Forget            bool `json:"forget,omitempty"`
+	Attach            bool `json:"attach,omitempty"`
+	ContainerAttach   bool `json:"container_attach,omitempty"`
+	Live              bool `json:"live,omitempty"`
+	InteractiveLaunch bool `json:"interactive_launch,omitempty"`
 }
 
 // ResourceDecl declares a resource provider and the modes it supports.
@@ -852,6 +859,20 @@ func (m Manifest) Validate() error {
 		if x.Pool != "" && x.Pool != "jobs" {
 			fail("executor %q pool %q must be empty (agent turns) or jobs", x.Name, x.Pool)
 		}
+		if len(x.LaunchNames) > 0 && !x.Controls.InteractiveLaunch {
+			fail("executor %q launch_names need the interactive_launch control", x.Name)
+		}
+		for i, n := range x.LaunchNames {
+			// A launch name is what an operator types, not a namespaced
+			// registration: any identifier, resolved after the
+			// executors' own names and refused where two packages claim it.
+			if !identPattern.MatchString(n) {
+				fail("executor %q launch name %q is not a name", x.Name, n)
+			}
+			if slices.Contains(x.LaunchNames[:i], n) || slices.ContainsFunc(p.Executors, func(o ExecutorDecl) bool { return o.Name == n }) {
+				fail("executor %q launch name %q repeats an executor name or launch name", x.Name, n)
+			}
+		}
 	}
 	for _, r := range p.Resources {
 		ident("resource provider", r.Type)
@@ -1008,6 +1029,7 @@ func (m Manifest) Enabled() []string {
 		set("executors.attach", x.Controls.Attach)
 		set("executors.container_attach", x.Controls.ContainerAttach)
 		set("executors.live", x.Controls.Live)
+		set("executors.interactive_launch", x.Controls.InteractiveLaunch)
 	}
 	set("resources", len(p.Resources) > 0)
 	for _, r := range p.Resources {

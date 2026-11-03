@@ -135,7 +135,7 @@ The config is strict and validated at load. Every field is optional:
 
 ## Setup
 
-`open-conduit init --with codex` starts Codex on the setup guide, and `init github --executor codex` writes the agent binding on Codex ([operator setup](../operator-setup/)). The daemon's service install looks for `claude` or `codex` on `PATH` and warns only when neither is there.
+`open-conduit init --with codex` starts Codex on the setup guide through the executor's interactive launch: `codex --sandbox workspace-write --ask-for-approval on-request <guide>`, the guide being the playbook without its skill frontmatter as the first message. Codex loads no plugin skills and has no list of commands to allow ahead of time, so it writes no files and the host's allowed commands still ask: Codex's own sandbox asks the owner before any command that writes outside the working directory, the config included. The launch needs none of the executor's state, so it answers before anything has run. `init github --executor codex` `init github --executor codex` writes the agent binding on Codex (both in [operator setup](../operator-setup/)). The daemon's service install looks for `claude` or `codex` on `PATH` and warns only when neither is there.
 
 ## Verification
 

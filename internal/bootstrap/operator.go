@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -17,6 +18,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // Operator setup, doctor and controls (03-05) composed from public
@@ -138,7 +140,8 @@ func (firstRunHost) LookPath(string) (string, bool) { return "", false }
 
 // SetupOptions start a coding agent with the setup guide.
 type SetupOptions struct {
-	// Agent is claude (or claude-code) or codex.
+	// Agent is the executor `--with` names: its name or one of its launch
+	// names, among the installed executors that offer an interactive launch.
 	Agent      string
 	ConfigPath string
 	StateDir   string
@@ -146,104 +149,174 @@ type SetupOptions struct {
 	// Bin is how the agent runs open-conduit (its name when PATH finds this
 	// executable, else the path).
 	Bin string
-	// Binary is the agent's CLI (default claude or codex).
+	// Binary is the agent's CLI, "" for the executor's default.
 	Binary string
 	// Environ is the process environment (default os.Environ).
 	Environ []string
 }
 
-// SetupCommand prepares the setup playbook as its own one-skill plugin and
-// returns the interactive claude command
-// started on it (v1 `init --with`). Reading and changing Open Conduit's own
-// config, running doctor and dry runs of each setup go without asking;
-// nothing else is pre-allowed.
-func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
-	codex := o.Agent == CodexAgent
-	if o.Agent != "claude" && o.Agent != "claude-code" && !codex {
-		return nil, fmt.Errorf("no setup agent %q: use --with claude or --with codex", o.Agent)
-	}
-	if o.Binary == "" {
-		o.Binary = "claude"
-		if codex {
-			o.Binary = "codex"
-		}
-	}
+// SetupLaunch is the interactive setup session to run: the command, and
+// the executor and title of the package that launches it.
+type SetupLaunch struct {
+	Cmd      *exec.Cmd
+	Executor string
+	Title    string
+}
+
+// SetupCommand returns the interactive command `init --with` runs: the
+// setup playbook, started by the executor --with names through its
+// interactive launch (extension.InteractiveLauncher). The host decides what
+// the session may do without asking (reading and changing Open Conduit's
+// own config, doctor, health, the secret store's path and a dry run of each
+// setup), its directory and its environment (no toolbelt credential, the
+// config it sets up named); the executor only says how its CLI expresses
+// them, and the host filters the environment it answers again.
+func SetupCommand(o SetupOptions) (SetupLaunch, error) {
 	if o.Bin == "" {
 		o.Bin = "open-conduit"
 	}
-	dir := filepath.Join(o.StateDir, "playbooks", "setup")
+	f, decl, err := launcherFor(o.ConfigPath, o.Agent)
+	if err != nil {
+		return SetupLaunch{}, err
+	}
 	if err := os.MkdirAll(o.StateDir, 0o700); err != nil {
-		return nil, err
+		return SetupLaunch{}, err
 	}
 	name, text, err := firstRunPlaybook(o.ConfigPath, o.Bin)
 	if err != nil {
-		return nil, err
+		return SetupLaunch{}, err
 	}
-	if !codex {
-		if err := writePlugin(dir, "Sets Open Conduit up", map[string]string{name: text}); err != nil {
-			return nil, err
-		}
-	}
-	if _, err := exec.LookPath(o.Binary); err != nil {
-		if codex {
-			return nil, fmt.Errorf("%s is not on PATH: install the Codex CLI first", o.Binary)
-		}
-		return nil, fmt.Errorf("%s is not on PATH: install Claude Code first", o.Binary)
-	}
-	if codex {
-		// Codex loads no plugin skills and has no allowed-tools list: the
-		// guide is the session's first message, and Codex's own sandbox
-		// asks the owner before any command that writes outside the
-		// checkout, the config included.
-		return agentCommand(o, []string{"--sandbox", "workspace-write", "--ask-for-approval", "on-request", setupPrompt(text)}), nil
-	}
-	// The prompt first and the tools last: --allowedTools takes every
-	// argument after it.
-	args := []string{"/" + pluginName + ":" + name, "--plugin-dir", dir, "--allowedTools"}
 	allowed := []string{"config", "doctor", "health", "secret path"}
 	for _, t := range dryRunSetups(o.ConfigPath, o.StateDir) {
 		allowed = append(allowed, "init "+t+" --dry-run")
 	}
-	for _, sub := range allowed {
-		args = append(args, "Bash("+o.Bin+" "+sub+":*)")
+	for i, sub := range allowed {
+		allowed[i] = o.Bin + " " + sub
 	}
-	return agentCommand(o, args), nil
+	env := setupEnv(o.Environ, o.ConfigPath)
+	req := extension.InteractiveLaunchRequest{Playbook: text, Name: name, Summary: "Sets Open Conduit up", Allow: allowed,
+		Dir: o.Cwd, Env: env, FilesDir: filepath.Join(o.StateDir, "playbooks", name), Program: o.Binary}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
+	defer cancel()
+	spec, err := interactiveLaunch(ctx, f, decl.Name, o.ConfigPath, o.StateDir, req)
+	if err != nil {
+		return SetupLaunch{}, fmt.Errorf("the %s executor's launch: %w", decl.Name, err)
+	}
+	title := f.Manifest.Title
+	if title == "" {
+		title = decl.Name
+	}
+	if len(spec.Argv) == 0 || spec.Argv[0] == "" {
+		return SetupLaunch{}, fmt.Errorf("the %s executor's launch has no command", decl.Name)
+	}
+	if _, err := exec.LookPath(spec.Argv[0]); err != nil {
+		return SetupLaunch{}, fmt.Errorf("%s is not on PATH: install %s first", spec.Argv[0], title)
+	}
+	cmd := exec.Command(spec.Argv[0], spec.Argv[1:]...)
+	cmd.Dir = o.Cwd
+	if spec.Dir != "" {
+		cmd.Dir = spec.Dir
+	}
+	if spec.Env == nil {
+		spec.Env = env
+	}
+	cmd.Env = setupEnv(spec.Env, o.ConfigPath)
+	return SetupLaunch{Cmd: cmd, Executor: decl.Name, Title: title}, nil
 }
 
-// CodexAgent is `init --with codex`: the Codex CLI.
-const CodexAgent = "codex"
-
-// setupPrompt is the setup playbook as a first message: its text without
-// the skill frontmatter.
-func setupPrompt(text string) string {
-	text = strings.ReplaceAll(text, "\r\n", "\n")
-	if strings.HasPrefix(text, "---\n") {
-		if i := strings.Index(text[4:], "\n---\n"); i >= 0 {
-			text = text[4+i+5:]
+// launcherFor is the installed or bundled executor that offers an
+// interactive launch under name: its own name first, then a launch name
+// only one package claims. The error lists the executors that offer one.
+func launcherFor(configPath, name string) (extproc.Found, protocol.ExecutorDecl, error) {
+	found, _ := discoverPackages(configPath, "")
+	if err := extproc.CheckConflicts(found, firstPartyTaken()); err != nil {
+		return extproc.Found{}, protocol.ExecutorDecl{}, err
+	}
+	type launcher struct {
+		f    extproc.Found
+		decl protocol.ExecutorDecl
+	}
+	var all, aliased []launcher
+	for _, f := range found {
+		for _, x := range f.Manifest.Provides.Executors {
+			if !x.Controls.InteractiveLaunch {
+				continue
+			}
+			if x.Name == name {
+				return f, x, nil
+			}
+			all = append(all, launcher{f, x})
+			if slices.Contains(x.LaunchNames, name) {
+				aliased = append(aliased, launcher{f, x})
+			}
 		}
 	}
-	return strings.TrimSpace(text)
+	if len(aliased) == 1 {
+		return aliased[0].f, aliased[0].decl, nil
+	}
+	if len(aliased) > 1 {
+		names := make([]string, 0, len(aliased))
+		for _, l := range aliased {
+			names = append(names, l.decl.Name)
+		}
+		return extproc.Found{}, protocol.ExecutorDecl{}, fmt.Errorf("--with %s names more than one executor (%s): name one of them", name, strings.Join(names, ", "))
+	}
+	var offered []string
+	for _, l := range all {
+		label := l.decl.Name
+		if len(l.decl.LaunchNames) > 0 {
+			label += " (or " + strings.Join(l.decl.LaunchNames, ", ") + ")"
+		}
+		offered = append(offered, label)
+	}
+	if len(offered) == 0 {
+		return extproc.Found{}, protocol.ExecutorDecl{}, fmt.Errorf("no setup agent %q: no installed executor offers an interactive launch", name)
+	}
+	return extproc.Found{}, protocol.ExecutorDecl{}, fmt.Errorf("no setup agent %q: --with takes an executor that offers an interactive launch: %s", name, strings.Join(offered, ", "))
 }
 
-// agentCommand is the interactive agent command in the owner's
-// directory, with no toolbelt credential in its environment and the
-// config it sets up named.
-func agentCommand(o SetupOptions, args []string) *exec.Cmd {
-	cmd := exec.Command(o.Binary, args...)
-	cmd.Dir = o.Cwd
-	env := o.Environ
+// interactiveLaunch starts the executor's package for the one call, with
+// the grant the config gives it, as a setup flow does.
+func interactiveLaunch(ctx context.Context, f extproc.Found, executor, configPath, stateDir string, req extension.InteractiveLaunchRequest) (extension.InteractiveLaunchSpec, error) {
+	paths := extproc.StatePaths(stateDir, f.Manifest.Name)
+	var passEnv []string
+	if configPath != "" {
+		if data, err := config.ReadFile(configPath); err == nil {
+			passEnv = config.FileGrants(data)[f.Manifest.Name]
+		}
+	}
+	r, err := extproc.Load(ctx, f, extproc.Deps{Now: time.Now}, extproc.Options{StateDir: paths.State, LogDir: filepath.Dir(paths.Log), Host: protocol.HostInfo{Name: "open-conduit"},
+		PassEnv: func() []string { return passEnv }})
+	if err != nil {
+		return extension.InteractiveLaunchSpec{}, diagnosed(f.Manifest.Name, err)
+	}
+	defer r.Process().Close()
+	e, ok := r.Executor(executor)
+	if !ok {
+		return extension.InteractiveLaunchSpec{}, extension.ErrUnsupported
+	}
+	l, ok := e.(extension.InteractiveLauncher)
+	if !ok {
+		return extension.InteractiveLaunchSpec{}, extension.ErrUnsupported
+	}
+	return l.InteractiveLaunch(ctx, req)
+}
+
+// setupEnv is the setup session's environment: env with no toolbelt
+// credential and the config it sets up named.
+func setupEnv(env []string, configPath string) []string {
 	if env == nil {
 		env = os.Environ()
 	}
+	out := make([]string, 0, len(env)+1)
 	for _, kv := range env {
 		name, _, _ := strings.Cut(kv, "=")
 		if name == "OS_TOKEN" || name == "OS_ENDPOINT" || name == "OS_TOKEN_FILE" || name == "OPEN_CONDUIT_CONFIG" {
 			continue
 		}
-		cmd.Env = append(cmd.Env, kv)
+		out = append(out, kv)
 	}
-	cmd.Env = append(cmd.Env, "OPEN_CONDUIT_CONFIG="+o.ConfigPath)
-	return cmd
+	return append(out, "OPEN_CONDUIT_CONFIG="+configPath)
 }
 
 // dryRunSetups are the setup types whose `init TYPE --dry-run` the setup
@@ -262,7 +335,7 @@ func dryRunSetups(configPath, stateDir string) []string {
 	return out
 }
 
-// firstRunPlaybook is the setup playbook `init --with claude` starts on:
+// firstRunPlaybook is the setup playbook `init --with` starts on:
 // the first-run setup's playbook, named after its type, with `{{bin}}` as
 // the agent runs open-conduit. It comes from the first-run package
 // installed beside configPath or bundled with the binary (#243).
