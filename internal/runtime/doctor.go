@@ -176,7 +176,11 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 		}
 		switch {
 		case s.LastError != "":
-			failing = append(failing, fmt.Sprintf("%s: %s (failures %d, next %s)", s.Name, s.LastError, s.Failures, s.NextDue.UTC().Format(time.RFC3339)))
+			cause := s.LastError
+			if s.Failure != nil {
+				cause += ": " + s.Failure.String()
+			}
+			failing = append(failing, fmt.Sprintf("%s: %s (failures %d, next %s)", s.Name, cause, s.Failures, s.NextDue.UTC().Format(time.RFC3339)))
 		case s.LastComplete.IsZero() && now.Sub(s.NextDue) > s.Interval:
 			lagging = append(lagging, s.Name+": no complete scan yet")
 		case !s.LastComplete.IsZero() && now.Sub(s.LastComplete) > time.Duration(o.LagFactor)*s.Interval:

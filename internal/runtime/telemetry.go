@@ -753,7 +753,17 @@ func (r *recorder) ingressRecords(add func(observability.Record), before *ingres
 		if after.LastError == "partial_snapshot" {
 			name = "ingress.scan_partial"
 		}
-		record(name, map[string]string{"ingress.error": after.LastError, "ingress.failures": strconv.FormatUint(uint64(after.Failures), 10), "ingress.next_due": timeAttr(after.NextDue)})
+		attrs := map[string]string{"ingress.error": after.LastError, "ingress.failures": strconv.FormatUint(uint64(after.Failures), 10), "ingress.next_due": timeAttr(after.NextDue)}
+		if f := after.Failure; f != nil {
+			attrs["ingress.error_class"] = f.Class
+			if f.Code != "" {
+				attrs["ingress.error_code"] = f.Code
+			}
+			if f.Message != "" {
+				attrs["ingress.error_message"] = f.Message
+			}
+		}
+		record(name, attrs)
 	case after.ScanID != "" && before.ScanID == "":
 		record("ingress.scan_started", map[string]string{})
 		record("ingress.scan_page", map[string]string{"ingress.more": strconv.FormatBool(after.Cursor != "")})
