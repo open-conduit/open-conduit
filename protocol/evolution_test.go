@@ -130,6 +130,17 @@ func TestErrorCodesRoundTrip(t *testing.T) {
 	if got := protocol.Decode(hint.Code, hint.Message, hint.ResetAt); !errors.As(got, &p) || !p.RetryHint().ResetAt.Equal(reset) {
 		t.Errorf("retry hint crossed as %v", got)
 	}
+	// Only retry_after carries a hint: an executor's other refusals (a
+	// recover that finds nothing to adopt) are no reason to wait, and the
+	// scheduler reads any hint as one (thirty minutes with no reset).
+	for _, code := range []string{protocol.CodeNotAdoptable, protocol.CodeInvalid, protocol.CodeInternal, protocol.CodeConflict} {
+		if got := protocol.Decode(code, code, nil); errors.As(got, &p) {
+			t.Errorf("%s crossed with a retry hint", code)
+		}
+	}
+	if got := protocol.Encode(protocol.Decode(hint.Code, hint.Message, hint.ResetAt)); got.Code != protocol.CodeRetryAfter || !got.ResetAt.Equal(reset) {
+		t.Errorf("a relayed retry hint crossed as %+v", got)
+	}
 	if e := protocol.Encode(errors.New("secret detail")); e.Code != protocol.CodeInternal || e.Message != "internal error" {
 		t.Errorf("unauthored error leaked: %+v", e)
 	}

@@ -161,7 +161,7 @@ What would reverse the decision: a need for very high-throughput streaming (the 
 | `sandbox_unavailable` | `extension.ErrSandboxUnavailable` (with the provider's reason) |
 | `container_running` | `extension.ErrContainerRunning` (with the reason) |
 | `container_unconfirmed` | `extension.ErrContainerUnconfirmed` (with the reason) |
-| `retry_after` | `extension.RetryHint` (`data.reset_at` optional) |
+| `retry_after` | `extension.RetryHint` (`data.reset_at` optional). It is the only code that crosses as a retry hint (`protocol.RetryAfter`); every other code is a plain refusal, so an executor's `not_adoptable` never delays its retry. |
 
 The protocol also has its own codes: `unsupported_protocol_version`, `reentrant_call`, `overloaded`, `cancelled`, `shutting_down` and `internal`.
 

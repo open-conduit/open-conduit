@@ -71,8 +71,21 @@ func (e *Error) Unwrap() error {
 	return nil
 }
 
-// RetryHint implements extension.RetryHintProvider for CodeRetryAfter.
-func (e *Error) RetryHint() extension.RetryHint { return extension.RetryHint{ResetAt: e.ResetAt} }
+// RetryAfter is a received CodeRetryAfter error: the only authored error
+// that is an extension.RetryHintProvider, so a peer's other refusals (not
+// adoptable, invalid, internal) never read as "wait and retry". Its
+// Err carries the code, message and reset.
+type RetryAfter struct{ Err *Error }
+
+func (e RetryAfter) Error() string { return e.Err.Error() }
+
+// RetryHint implements extension.RetryHintProvider.
+func (e RetryAfter) RetryHint() extension.RetryHint {
+	return extension.RetryHint{ResetAt: e.Err.ResetAt}
+}
+
+// Unwrap returns the authored error, so errors.As finds the *Error.
+func (e RetryAfter) Unwrap() error { return e.Err }
 
 // Errorf returns an authored protocol error.
 func Errorf(code, message string) error { return &Error{Code: code, Message: message} }
@@ -128,8 +141,11 @@ func Encode(err error) *Error {
 // a sentinel-carrying *Error for protocol codes, and an
 // extension.OperationError for an extension's own operation codes.
 func Decode(code, message string, resetAt *time.Time) error {
+	if code == CodeRetryAfter {
+		return RetryAfter{&Error{Code: code, Message: message, ResetAt: resetAt}}
+	}
 	if Known(code) {
-		return &Error{Code: code, Message: message, ResetAt: resetAt}
+		return &Error{Code: code, Message: message}
 	}
 	return &extension.OperationError{Code: code, Message: message}
 }
