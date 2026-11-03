@@ -201,7 +201,10 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		{"schedule", "", []string{"ingress.conformance"}},
 		{"introspection", "", nil},
 		{"codex", "", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
-		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace"}},
+		// srt, a sandbox provider: its policy cases, and adopt refusing a
+		// plan it never made.
+		{"srt", "", []string{"sandboxes.policy", "surfaces.served"}},
+		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace", "sandboxes.policy"}},
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 	} {
 		t.Run(c.name, func(t *testing.T) {

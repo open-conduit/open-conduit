@@ -290,7 +290,6 @@ var compositionExceptions = map[string][]string{
 	"daemon.go":    {"extensions/git"},
 	"operator.go":  {"extensions/github", "extensions/jira", "extensions/linear", "extensions/slack"},
 	"resources.go": {"extensions/git"},
-	"sandbox.go":   {"extensions/srt"},
 	"webhooks.go":  {"extensions/tunnel"},
 }
 

@@ -212,10 +212,10 @@ A process sandbox runs the executor under Anthropic's [sandbox-runtime](https://
 ```sh
 npm install -g @anthropic-ai/sandbox-runtime
 sudo apt-get install bubblewrap socat ripgrep   # Linux only
-open-conduit doctor                       # the sandbox check runs srt once
+open-conduit doctor                       # the srt check runs srt once
 ```
 
-On Ubuntu 24.04, AppArmor stops bubblewrap from making user namespaces. Either run `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0` or give bwrap an AppArmor profile. Doctor's `sandbox` check tells you when this is the problem.
+On Ubuntu 24.04, AppArmor stops bubblewrap from making user namespaces. Either run `sudo sysctl kernel.apparmor_restrict_unprivileged_userns=0` or give bwrap an AppArmor profile. Doctor's `srt` check tells you when this is the problem.
 
 This is the GitHub workflow's binding in a process sandbox:
 

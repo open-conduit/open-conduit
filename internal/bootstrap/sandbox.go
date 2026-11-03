@@ -2,16 +2,11 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"path/filepath"
-	"sort"
-	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extensions/srt"
-	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
@@ -19,19 +14,14 @@ import (
 // provider.
 const SandboxConfigSchema = "core.config.sandbox.v1"
 
-func sandboxRegistry(r *config.Registry) {
-	r.Sandboxes = map[string]func(json.RawMessage) error{srt.Type: srt.ValidateConfig}
-}
-
-// sandboxState is the host side of the process sandbox providers (B09).
+// sandboxState is the host side of the process sandbox providers (B09):
+// the packages' declared ones (manifest sandboxes), by type.
 type sandboxState struct {
 	providers map[string]extension.SandboxProvider
-	srt       *srt.Provider
 }
 
 func (d *daemon) openSandboxes() {
-	d.sandboxes.srt = srt.New(srt.Options{})
-	d.sandboxes.providers = map[string]extension.SandboxProvider{srt.Type: d.sandboxes.srt}
+	d.sandboxes.providers = map[string]extension.SandboxProvider{}
 }
 
 // protectedPaths are what no sandboxed process may read or write, whatever
@@ -98,45 +88,4 @@ func (d *daemon) bindSandbox(ctx context.Context, state runtime.AttemptState, re
 		Phase:     runtime.LaunchPhases(ctx),
 	})
 	return b, b.Resources(resources), nil
-}
-
-// sandboxCheck is doctor's view of the sandbox providers the config uses:
-// for srt, that it is present at a known version and that the kernel lets
-// it isolate (on Linux, user namespaces and seccomp), by running a command
-// under an empty policy.
-func (d *daemon) sandboxCheck(ctx context.Context) runtime.Check {
-	snapshot, _ := d.configs.Current()
-	check := runtime.Check{Name: "sandbox"}
-	var bindings []string
-	if snapshot != nil {
-		for _, id := range snapshot.Order {
-			scope := snapshot.Scopes[id]
-			if scope == nil || !scope.Enabled {
-				continue
-			}
-			for _, b := range scope.Bindings {
-				if b.Sandbox != nil && b.Sandbox.Provider == srt.Type {
-					bindings = append(bindings, string(id)+"/"+b.Name)
-				}
-			}
-		}
-	}
-	if len(bindings) == 0 {
-		check.Status, check.Code, check.Detail = runtime.CheckInfo, "not_configured", "no binding declares a sandbox"
-		return check
-	}
-	sort.Strings(bindings)
-	h := d.sandboxes.srt.Health(ctx)
-	check.Code, check.Detail, check.Items = h.Code, h.Detail, h.Items
-	switch h.Status {
-	case "ok":
-		check.Status = runtime.CheckOK
-	case "warn":
-		check.Status = runtime.CheckWarn
-	default:
-		check.Status = runtime.CheckFail
-		check.Detail += "; sandboxed bindings run nothing until this is fixed"
-	}
-	check.Items = append(check.Items, "sandboxed: "+strings.Join(bindings, ", "))
-	return check
 }
