@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -41,11 +42,18 @@ func (d *daemon) openContainers() {
 // adoptLegacyContainerDirs moves what a container provider kept in process
 // under a directory of its own to the directory the host names its type
 // (containerDir): the ssh provider's pinned host keys, once under
-// <state>/remote. A file already in the new directory stays.
+// <state>/remote. A file already in the new directory stays. The old
+// directory becomes a link to the new one, because a run created before
+// the upgrade pinned its ssh argv, known_hosts path included, in its run
+// record, and its helper keeps using it to start, signal, inspect and copy
+// back.
 func adoptLegacyContainerDirs(state string) (int, error) {
 	moved := 0
 	for old, typ := range map[string]string{"remote": "ssh"} {
 		from, to := filepath.Join(state, old), containerDir(state, typ)
+		if fi, err := os.Lstat(from); err == nil && fi.Mode()&os.ModeSymlink != 0 {
+			continue
+		}
 		entries, err := os.ReadDir(from)
 		if errors.Is(err, os.ErrNotExist) {
 			continue
@@ -67,6 +75,9 @@ func adoptLegacyContainerDirs(state string) (int, error) {
 			moved++
 		}
 		if err := os.RemoveAll(from); err != nil {
+			return moved, err
+		}
+		if err := os.Symlink(filepath.Join("containers", typ), from); err != nil {
 			return moved, err
 		}
 	}
@@ -117,7 +128,9 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 	if f, ok := p.(extension.ContainerForwarder); ok && socket != "" {
 		host, err := f.Forward(ctx, domain.Payload{Schema: extension.ContainerConfigSchema, Data: append([]byte(nil), desc.Config...)})
 		if err == nil && host != "" {
-			_, err = d.endpoints.ServeTCP(state.ExecutionID, host)
+			if err = forwardAddress(host); err == nil {
+				_, err = d.endpoints.ServeTCP(state.ExecutionID, host)
+			}
 		}
 		if err != nil {
 			return runtime.ContainerBinding{}, fmt.Errorf("%w: the toolbelt forward: %v", extension.ErrSandboxUnavailable, err)
@@ -450,4 +463,17 @@ func (d *daemon) containerDetach(ctx context.Context, w domain.Work, ref string)
 		return fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, pin.Provider)
 	}
 	return p.Remove(ctx, extension.ContainerRef{ID: pin.ID})
+}
+
+// forwardAddress checks an address a provider names for an execution's
+// toolbelt forward before the host serves on it: a literal loopback or
+// private IP (macOS's loopback, a Linux bridge's gateway), never an
+// unspecified one or a name, so no package can have the toolbelt served
+// on every interface or a public one.
+func forwardAddress(host string) error {
+	ip := net.ParseIP(host)
+	if ip == nil || ip.IsUnspecified() || !(ip.IsLoopback() || ip.IsPrivate()) {
+		return fmt.Errorf("the provider named %q, not a loopback or private IP address", host)
+	}
+	return nil
 }

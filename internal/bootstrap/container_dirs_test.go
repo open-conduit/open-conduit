@@ -37,11 +37,31 @@ func TestAdoptLegacyContainerDirs(t *testing.T) {
 			t.Fatalf("%s: %q %v, want %q", name, got, err, want)
 		}
 	}
-	if _, err := os.Stat(old); !os.IsNotExist(err) {
-		t.Fatalf("the old directory is still there: %v", err)
+	// A run created before the upgrade pinned the old known_hosts path in
+	// its ssh argv: it still resolves, to the moved file.
+	if got, err := os.ReadFile(filepath.Join(old, "known_hosts-a")); err != nil || string(got) != "old a" {
+		t.Fatalf("the old path no longer resolves: %q %v", got, err)
+	}
+	if fi, err := os.Lstat(old); err != nil || fi.Mode()&os.ModeSymlink == 0 {
+		t.Fatalf("the old directory isn't a link: %v", err)
 	}
 	if moved, err := adoptLegacyContainerDirs(state); err != nil || moved != 0 {
 		t.Fatalf("a second start moved %d, %v", moved, err)
+	}
+}
+
+// TestForwardAddress: the host serves a toolbelt forward only on a literal
+// loopback or private address a provider names.
+func TestForwardAddress(t *testing.T) {
+	for _, ok := range []string{"127.0.0.1", "172.17.0.1", "::1"} {
+		if err := forwardAddress(ok); err != nil {
+			t.Fatalf("%s refused: %v", ok, err)
+		}
+	}
+	for _, bad := range []string{"0.0.0.0", "::", "8.8.8.8", "localhost", "example.com", ""} {
+		if err := forwardAddress(bad); err == nil {
+			t.Fatalf("%q accepted", bad)
+		}
 	}
 }
 
