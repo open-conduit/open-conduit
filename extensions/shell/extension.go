@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 
 	"github.com/open-conduit/open-conduit/extension/inproc"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 // Name is the shell executor's registration name.
@@ -29,7 +30,14 @@ var (
 func (*Extension) Name() string { return Name }
 
 func (x *Extension) Executors() map[string]inproc.Executor {
-	return map[string]inproc.Executor{Name: {Executor: x.exec, Pool: inproc.PoolJobs}}
+	return map[string]inproc.Executor{Name: {Executor: x.exec, Pool: inproc.PoolJobs, Fields: []protocol.FieldDecl{
+		{Name: "command", Help: "a shell command"},
+		{Name: "argv", Help: "or an argument vector"},
+		{Name: "dir"},
+		{Name: "env"},
+		{Name: "secret_env"},
+		{Name: "timeout_seconds"},
+	}}}
 }
 
 func (x *Extension) Start(_ context.Context, h inproc.Host) error {

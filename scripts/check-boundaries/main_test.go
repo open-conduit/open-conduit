@@ -440,13 +440,16 @@ func TestCompositionImports(t *testing.T) {
 		"internal/bootstrap/slack.go: imports extensions/github outside the wiring files",
 		"internal/bootstrap/new.go: imports extensions/claudecode outside the wiring files",
 		"internal/bootstrap/daemon.go: no longer imports extensions/shell",
+		// The catalogue reads manifests (#494), so it is no wiring file.
+		"internal/bootstrap/adapters.go: imports extensions/slack outside the wiring files",
+		"internal/bootstrap/adapters.go: imports extensions/shell outside the wiring files",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q in\n%s", want, joined)
 		}
 	}
-	if len(failures) != 3 {
-		t.Errorf("want exactly three failures, got\n%s", joined)
+	if len(failures) != 5 {
+		t.Errorf("want exactly five failures, got\n%s", joined)
 	}
 }
 

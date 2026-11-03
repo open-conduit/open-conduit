@@ -61,8 +61,8 @@ func base() protocol.Manifest {
 	for _, c := range []string{"github", "github-capability", "github-git-bot", "github-auth"} {
 		p.Checks = append(p.Checks, protocol.CheckDecl{Name: c})
 	}
-	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version,
-		Summary: "The first-party GitHub extension (issues, pull requests, reviews and checks) as a subprocess package.",
+	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "GitHub",
+		Summary: "Issues, pull requests, comments, reviews and checks of a repository; the engineering tools.",
 		Command: protocol.HostRunCommand(Name), Provides: p}
 }
 

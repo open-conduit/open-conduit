@@ -150,7 +150,7 @@ func TestSlackSetupScopeValidatesOffline(t *testing.T) {
 	// Every init setup has an adapters entry, so what init can add can
 	// also be looked up with `adapters TYPE`.
 	for typ := range names {
-		if !slices.ContainsFunc(bootstrap.Adapters(), func(a cli.Adapter) bool { return a.Type == typ }) {
+		if !slices.ContainsFunc(bootstrap.Adapters(""), func(a cli.Adapter) bool { return a.Type == typ }) {
 			t.Errorf("init %s has no adapters entry", typ)
 		}
 	}

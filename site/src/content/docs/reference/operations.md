@@ -156,7 +156,7 @@ The extensions built into the daemon register these operations, each with the in
 
 ### Bitbucket Cloud (`bitbucket`)
 
-Pull requests, their comments and commit statuses of a repository, correlated with a tracker's issues.
+Works Bitbucket Cloud pull requests: ingests pull requests, comments and build statuses, and correlates each with its tracker issue's Work. `open-conduit init linear` or `init jira` adds it with --bitbucket.
 
 #### `bitbucket.checks`
 
@@ -411,9 +411,9 @@ Park this Work until a PR, issue or job condition is met or a time comes; end th
 | `repo` | string |  | the repository (owner/name) conditions in this project refer to; defaults to this Work's own, else this project's only one |
 | `until` | string |  | a future ISO time (e.g. 2026-10-25T09:00Z) to wake at if nothing else has |
 
-### Human decisions (`human`)
+### Human (`human`)
 
-Lets an agent ask a person for a private decision with human.ask, answered from the TUI or web view; nothing reaches the issue or thread. Add human.ask to the agent binding's operations. Gates make named operations wait for a person's approval, whoever calls them.
+Lets an agent ask a person a question, or ask approval for a call or a start, and parks its Work until they answer.
 
 #### `human.ask`
 
@@ -428,7 +428,7 @@ Ask the person the project has set up to answer for a decision, then end your tu
 
 ### Introspection (`introspection`)
 
-Issue reports, scheduled sweep and triage, fix Work and the optional host watch.
+Lets agents report defects in Open Conduit and log corrections and problems, and runs the daily sweep, triage and fixes that act on them.
 
 #### `introspection.correction`
 
@@ -506,7 +506,7 @@ List this scope's defect reports in a given state, oldest first.
 
 ### Jira (`jira`)
 
-Issues in one or more Jira projects, Cloud or Data Center, through REST API v2 and webhooks.
+Works Jira issues: ingests issues and comments, gives each claimed issue Work, and projects its state back to Jira.
 
 #### `jira.context`
 
@@ -549,7 +549,7 @@ Read an issue with its status, labels and every comment; this Work's issue unles
 
 ### Linear (`linear`)
 
-Issues in one or more Linear teams through the GraphQL API and webhooks.
+Works Linear issues: ingests issues and comments, gives each claimed issue Work, and projects its state back to Linear.
 
 #### `linear.context`
 
@@ -590,9 +590,9 @@ Read an issue with its status, labels and every comment; this Work's issue unles
 | --- | --- | --- | --- |
 | `key` | string |  | another issue of the same tracker entry to read, such as ABC-123; defaults to this Work's issue |
 
-### Observed sources (`observe`)
+### Observe (`observe`)
 
-Lets a binding's executor report what it observed in an outside source with observe.record; the observe route gives each thread of a source Work. Add observe.record to the reporting binding's operations.
+Lets an agent watching an outside source record each item it sees, so a thread becomes Work and its later items join it.
 
 #### `observe.record`
 
@@ -605,33 +605,6 @@ Record an item you saw in an outside source so it becomes Work or joins its thre
 | `source` | string |  | the outside source the item is from; needed only when you report for more than one |
 | `text` | string |  | the item's content as you saw it, at most 16384 bytes |
 | `thread` | string | yes | the ID of the thread the item belongs to, its own ID if it starts one; at most 256 bytes |
-
-### Slack (`slack`)
-
-Support conversations in Slack channels over Socket Mode or the Events API.
-
-#### `slack.context`
-
-Show the Slack thread this Work serves and how to read it, reply in it and wait for the next message.
-
-Takes no input.
-
-#### `slack.reply`
-
-Post a reply in this Work's Slack thread; a retried call posts it once.
-
-| Input | Type | Required | Meaning |
-| --- | --- | --- | --- |
-| `broadcast` | boolean |  | also post the reply to the channel, not only the thread; default false |
-| `text` | string | yes | the reply as Slack mrkdwn text, not blank and at most 40000 bytes |
-
-#### `slack.thread`
-
-Read the messages of this Work's Slack thread, oldest first.
-
-| Input | Type | Required | Meaning |
-| --- | --- | --- | --- |
-| `limit` | integer |  | how many of the latest messages to return, 1 to 1000; default (and any value outside that range) 200 |
 
 ### setup (`setup`)
 
@@ -668,6 +641,33 @@ It declares no input schema.
 #### `setup.withdraw`
 
 It declares no input schema.
+
+### Slack (`slack`)
+
+Works support conversations in Slack channels over Socket Mode or the Events API, each thread its own Work.
+
+#### `slack.context`
+
+Show the Slack thread this Work serves and how to read it, reply in it and wait for the next message.
+
+Takes no input.
+
+#### `slack.reply`
+
+Post a reply in this Work's Slack thread; a retried call posts it once.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `broadcast` | boolean |  | also post the reply to the channel, not only the thread; default false |
+| `text` | string | yes | the reply as Slack mrkdwn text, not blank and at most 40000 bytes |
+
+#### `slack.thread`
+
+Read the messages of this Work's Slack thread, oldest first.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `limit` | integer |  | how many of the latest messages to return, 1 to 1000; default (and any value outside that range) 200 |
 
 ## Installable packages
 

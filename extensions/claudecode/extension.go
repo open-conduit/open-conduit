@@ -55,7 +55,7 @@ var (
 func (*Extension) Name() string { return Name }
 
 func (x *Extension) Executors() map[string]inproc.Executor {
-	return map[string]inproc.Executor{Name: {Executor: x.exec}}
+	return map[string]inproc.Executor{Name: {Executor: x.exec, Fields: bindingFields()}}
 }
 
 // SetupProbes are the executor's probes for setup sessions

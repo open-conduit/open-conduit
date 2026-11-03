@@ -100,8 +100,8 @@ func (*Extension) SetupFlow() extension.Setup { return Setup{} }
 // Types are the `github` connection and ingress entry types.
 func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{
-		{Kind: protocol.ValidateConnection, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateConnection(raw) }},
-		{Kind: protocol.ValidateExtension, Type: Type, Ingress: true, Validate: ValidateExtension, Settings: ExtensionSettings},
+		{Kind: protocol.ValidateConnection, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateConnection(raw) }, Fields: connectionFields()},
+		{Kind: protocol.ValidateExtension, Type: Type, Ingress: true, Validate: ValidateExtension, Settings: ExtensionSettings, Fields: entryFields()},
 		{Kind: protocol.ValidateRoute, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateRoute(raw) }},
 	}
 }

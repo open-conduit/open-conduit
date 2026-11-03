@@ -85,7 +85,7 @@ Composition may depend on the public `conformance` checks, because the certifica
 - `cli.Env.ValidateConfig`: the daemon registry's offline validation (`bootstrap.ValidateConfig`).
 - `cli.Env.Setup`: the setup agent (`bootstrap.SetupCommand`).
 - `cli.Env.Extensions.Setups`: the installed and bundled packages' `open-conduit init` flows (manifest `setup`), each run in its own package over `setup.run`; setup itself lives in the extensions.
-- `cli.Env.Adapters`: the adapter catalogue.
+- `cli.Env.Adapters`: the adapter catalogue, built from the installed and bundled packages' manifests (`fields`), so the composition root names no extension for it.
 - `cli.Env.EditConfig`: the config editor, implemented in `internal/tui`.
 - `cli.Env.State`: the offline state operations in `internal/bootstrap/state.go` ([recovery](../recovery/)).
 
