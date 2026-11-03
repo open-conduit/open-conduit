@@ -433,6 +433,31 @@ func TestToolbeltOverMCP(t *testing.T) {
 	}
 }
 
+// TestHostEnv: the binding's pass_env (ExecutionContext.HostEnv) reaches
+// codex, over the executor's own sanitized process, but never sets an OS_*
+// variable; an executor-config pass_env is valid but warned about.
+func TestHostEnv(t *testing.T) {
+	f := newFixture(t)
+	r := request("work-h", "exec-h", f.config(nil, nil))
+	r.Context.HostEnv = map[string]string{"HTTPS_PROXY": "http://proxy:3128", "CODEX_HOME": "/srv/codex", "HOME": "/home/daemon", "OS_WORK_ID": "forged"}
+	run(t, f.executor(), r)
+	env := f.read("env-1")
+	for _, want := range []string{"HTTPS_PROXY=http://proxy:3128", "CODEX_HOME=/srv/codex", "HOME=/home/daemon", "OS_WORK_ID=work-h"} {
+		if !strings.Contains(env, want) {
+			t.Fatalf("environment lacks %q:\n%s", want, env)
+		}
+	}
+	if strings.Contains(env, "forged") {
+		t.Fatalf("HostEnv set an OS_* variable:\n%s", env)
+	}
+	if w := codex.ConfigWarnings([]byte(`{"pass_env":["HTTPS_PROXY"]}`)); len(w) != 1 || !strings.Contains(w[0], "binding's pass_env") {
+		t.Fatalf("pass_env warning: %v", w)
+	}
+	if w := codex.ConfigWarnings([]byte(`{}`)); len(w) != 0 {
+		t.Fatalf("warned without pass_env: %v", w)
+	}
+}
+
 func TestFailuresAndLimits(t *testing.T) {
 	f := newFixture(t)
 	e := f.executor()

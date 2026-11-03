@@ -42,9 +42,15 @@ type Config struct {
 	WorkspaceMode string `json:"workspace_mode,omitempty"`
 	// Dir is an absolute folder a workspace-free binding's sessions run in.
 	Dir string `json:"dir,omitempty"`
-	// Env, PassEnv and SecretEnv are the environment.
-	Env       map[string]string `json:"env,omitempty"`
-	PassEnv   []string          `json:"pass_env,omitempty"`
+	// Env adds explicit non-secret variables after the baseline.
+	Env map[string]string `json:"env,omitempty"`
+	// PassEnv names additional variables of the executor's own process
+	// admitted to the baseline. Out of process that environment is
+	// sanitized: the daemon's variables come through the binding's
+	// pass_env (ExecutionContext.HostEnv) instead, and validating a config
+	// that sets this warns so.
+	PassEnv []string `json:"pass_env,omitempty"`
+	// SecretEnv maps binding secret names to variable names.
 	SecretEnv map[string]string `json:"secret_env,omitempty"`
 	// ExtraArgs are added to every `codex exec`; they may not set the
 	// session, the output files, the sandbox, the approval policy, the
@@ -269,6 +275,17 @@ func ValidateConfig(raw json.RawMessage, secretNames []string) error {
 		}
 	}
 	return nil
+}
+
+// ConfigWarnings are what the executor warns an operator about in a valid
+// binding config (extension.ConfigWarner): an executor-config pass_env,
+// which reaches only the executor's own sanitized process.
+func ConfigWarnings(raw json.RawMessage) []string {
+	c, err := ParseConfig(raw)
+	if err != nil || len(c.PassEnv) == 0 {
+		return nil
+	}
+	return []string{"config.pass_env admits only variables of the executor's own process, which runs as a package with a sanitized environment; to pass variables of the daemon's environment (a proxy, CODEX_HOME), name them in the binding's pass_env"}
 }
 
 // ResourceMode is the workspace mode a binding requests (default "work":

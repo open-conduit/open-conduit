@@ -429,8 +429,8 @@ func (e *Executor) register(rn *run) {
 	e.mu.Unlock()
 }
 
-// environment applies the B05 order: sanitized baseline and pass_env →
-// resource-provider layer → the extensions' run layer → binding env →
+// environment applies the B05 order: sanitized baseline, the executor
+// config's pass_env and the binding's (HostEnv) → resource-provider layer → the extensions' run layer → binding env →
 // selected secrets → execution identity. codex never gets the toolbelt
 // credential; only its MCP server does. A run layer gets the toolbelt
 // client (OS_ENDPOINT, OS_TOKEN_FILE, `os` on PATH) so it can call `os`.
@@ -439,6 +439,15 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, l
 	for _, kv := range e.o.Environ() {
 		name, value, ok := strings.Cut(kv, "=")
 		if ok && (baseline(name) || contains(cfg.PassEnv, name)) && !reserved(name) {
+			vars[name] = value
+		}
+	}
+	// The host's values of the variables the binding's pass_env names
+	// (HostEnv, which the host authorized) win over this process's: out of
+	// process, its environment is sanitized, so the daemon's CODEX_HOME
+	// or proxy reaches a run only this way.
+	for name, value := range r.Context.HostEnv {
+		if !reserved(name) {
 			vars[name] = value
 		}
 	}

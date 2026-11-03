@@ -44,7 +44,6 @@ All of these are optional and go in the binding's `config`:
 | `model` | The Codex model, for example `gpt-5-codex`. Unset, Codex uses its own default. |
 | `sandbox` | What the agent's commands may touch: `danger-full-access` (the default: it pushes branches and calls the network), `workspace-write` or `read-only`. Codex never stops to ask for approval, because nobody is there to answer. |
 | `binary` | The Codex CLI, if it isn't `codex` on the daemon's `PATH`. |
-| `pass_env` | Variables from the daemon's environment that Codex should see. `CODEX_HOME` always passes. |
 | `extra_args` | More `codex exec` arguments, such as `["--search"]` for web search. |
 | `timeout_seconds` | The longest a turn may run. |
 | `handoff_minutes`, `cold_turns` | As for Claude Code: a turn more than `handoff_minutes` (55) after the last starts a new thread from the agent's handoff note, unless `cold_turns` is `resume`. |
@@ -52,6 +51,12 @@ All of these are optional and go in the binding's `config`:
 | `auto_compact_tokens` | Where Codex compacts a thread in the middle of a turn (default 250000; 0 leaves Codex's own threshold). |
 
 `playbook`, `branch`, `args`, `workspace_mode`, `dir`, `env` and `secret_env` work as they do for Claude Code. The [Codex executor](/open-conduit/architecture/codex-executor/#binding-config) page lists every field.
+
+Codex runs with a clean environment of its own. For it to see variables from the daemon's environment, such as a proxy or a `CODEX_HOME` that keeps its login somewhere other than `~/.codex`, name them in the binding's own `pass_env`, beside `config` rather than inside it:
+
+```sh
+open-conduit config set /scopes/web/bindings/agent/pass_env '["CODEX_HOME", "HTTPS_PROXY"]'
+```
 
 ### Use an API key
 
