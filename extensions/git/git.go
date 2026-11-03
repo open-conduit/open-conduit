@@ -133,20 +133,32 @@ func (p *Provider) hasRemote(ctx context.Context, dir, remote string) bool {
 }
 
 // toplevel is the canonical work-tree root of dir, or an error when dir is not
-// the root of a git work tree.
+// the root of a git work tree. It asks whether git's root and dir name the same
+// directory, not whether their spellings match: on a case-insensitive or
+// normalising file system a configured path may differ from the on-disk one
+// in case or Unicode form and still name the root. The result is git's own
+// spelling, so leases and locks keyed on it agree however the path was written.
 func (p *Provider) toplevel(ctx context.Context, dir string) (string, error) {
 	top, err := p.git(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
 		return "", err
 	}
-	want, err := filepath.EvalSymlinks(dir)
+	got, err := filepath.EvalSymlinks(top)
 	if err != nil {
 		return "", err
 	}
-	if got, err := filepath.EvalSymlinks(top); err != nil || got != want {
+	a, err := os.Stat(got)
+	if err != nil {
+		return "", err
+	}
+	b, err := os.Stat(dir)
+	if err != nil {
+		return "", err
+	}
+	if !os.SameFile(a, b) {
 		return "", errors.New("not the root of a git work tree")
 	}
-	return want, nil
+	return got, nil
 }
 
 // validWorktree reports whether path is a work tree of the checkout's

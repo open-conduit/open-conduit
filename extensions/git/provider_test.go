@@ -823,3 +823,25 @@ func TestRedactsCredentialURLs(t *testing.T) {
 		t.Fatalf("redact: %s", got)
 	}
 }
+
+// TestCheckoutSpelledInAnotherCase acquires through a checkout path that
+// differs from the on-disk one only in case, which a case-insensitive file
+// system resolves to the same root; a subdirectory of the root is still
+// refused.
+func TestCheckoutSpelledInAnotherCase(t *testing.T) {
+	f := newFixture(t)
+	upper := filepath.Join(f.dir, "REPO")
+	if _, err := os.Stat(upper); err != nil {
+		t.Skip("file system is case-sensitive")
+	}
+	if top, err := f.provider.toplevel(context.Background(), upper); err != nil || top != f.root {
+		t.Errorf("toplevel(%s) = %q, %v; want git's spelling %q", upper, top, err, f.root)
+	}
+	if _, err := f.acquire(owner("w", "x"), cfg(map[string]any{"checkout": upper}), "", nil); err != nil {
+		t.Fatalf("checkout spelled %s: %v", upper, err)
+	}
+	write(t, f.root, "sub/keep.txt", "x")
+	if _, err := f.acquire(owner("w2", "x2"), cfg(map[string]any{"checkout": filepath.Join(upper, "sub")}), "", nil); !errors.Is(err, extension.ErrInvalid) {
+		t.Errorf("subdirectory checkout: %v", err)
+	}
+}

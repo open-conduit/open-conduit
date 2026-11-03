@@ -29,6 +29,8 @@ These are the guarantees a provider must meet:
 4. A setup failure returns the usable resource together with `ErrResourceSetup`, so it can be inspected.
 5. `Reconcile` is repeatable and restart-safe. It releases leases whose owners finished, applies retention and retries failed cleanup.
 
+The binding's `checkout` must be the root of a git work tree (a relative one is resolved against the config's directory). The provider checks that git's `--show-toplevel` and the configured path name the same directory (`os.SameFile`), not that they are spelled alike, so on a case-insensitive or normalising file system a path written in another case still counts. From then on it uses git's on-disk spelling, so leases and per-repository locks agree however the path was written. A subdirectory of a work tree is refused as `ErrInvalid`.
+
 ## Modes, from the real GitHub needs
 
 | Mode | Owner | Behavior |
