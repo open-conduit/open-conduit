@@ -169,7 +169,7 @@ protocol-prototype:
 # extension-run NAME`, #428), so it builds no executable of its own. The
 # examples, written as a third party would, ship their own binaries.
 PACKAGES_DIR ?= dist/packages
-RUNNABLE_PACKAGES = slack github shell claude-code sentry pagerduty codex posthog human observe linear jira bitbucket schedule introspection
+RUNNABLE_PACKAGES = slack github shell claude-code sentry pagerduty codex posthog human observe linear jira bitbucket schedule introspection srt
 EXTENSION_PACKAGES = notes:./protocol/examples/notes/cmd/notes-extension runner:./protocol/examples/runner/cmd/runner-extension
 
 packages: build
@@ -221,7 +221,7 @@ ts-packages: require-node
 # packages), then the negative controls, which must each fail their
 # criterion.
 certify: require-node build packages ts-packages
-	@set -eu; for name in slack github shell claude-code sentry pagerduty codex posthog human observe linear jira bitbucket schedule introspection notes runner setup weather; do \
+	@set -eu; for name in slack github shell claude-code sentry pagerduty codex posthog human observe linear jira bitbucket schedule introspection srt notes runner setup weather; do \
 		bin/open-conduit extension certify $(PACKAGES_DIR)/$$name --report $(PACKAGES_DIR)/$$name.certification.json; \
 	done
 	$(GO) test -timeout $(TEST_TIMEOUT) -count=1 -v -run 'TestCertification' ./integration
@@ -264,5 +264,5 @@ release-snapshot:
 		grep -q '^  binary "open-conduit"$$' $$cask; \
 		test $$(grep -c '^  binary ' $$cask) -eq 1; \
 		! grep -qi 'license' $$cask; \
-		echo "snapshot $$version: 4 archives, checksums verified, setup, codex, posthog, human, observe, linear, jira, bitbucket, schedule, introspection, slack, github and shell bundled, cask links open-conduit only"
+		echo "snapshot $$version: 4 archives, checksums verified, setup, codex, posthog, human, observe, linear, jira, bitbucket, schedule, introspection, slack, github, shell and srt bundled, cask links open-conduit only"
 	$(MAKE) --no-print-directory smoke-run SMOKE_BIN=$(RELEASE_DIR)/smoke
