@@ -258,7 +258,7 @@ func TestDaemonClaudeCodeExecution(t *testing.T) {
 		t.Fatal("the private session reached a runtime API")
 	}
 	// Per-turn telemetry is reported outside core.
-	f, err := os.Open(filepath.Join(d.state, "logs", "claude-code.jsonl"))
+	f, err := os.Open(filepath.Join(d.state, "extensions", "claude-code", "logs", "claude-code.jsonl"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -318,7 +318,7 @@ func TestDaemonClaudeCodeContinuityKill(t *testing.T) {
 			session := strings.TrimPrefix(strings.Fields(invocations()[0])[1], "session=")
 			d.kill()
 
-			d.start("kv:" + phase + ":executor.claudecode")
+			d.start("kv:" + phase + ":claude-code")
 			submit("agent.more", "more-1")
 			d.killed()
 			if n := len(invocations()); n != 1 {

@@ -14,7 +14,7 @@ import (
 	"github.com/open-conduit/open-conduit/protocol"
 )
 
-// Checks() is doctor's claude_code: `--version` for every claude-code
+// Checks() is doctor's claude-code: `--version` for every claude-code
 // binding's binary and, for a binding that sets usage, its login's
 // subscription usage windows. It reads only the configuration and the
 // machine, so doctor runs it without a daemon too.
@@ -30,9 +30,9 @@ func readUsage(ctx context.Context, configDir string) ([]UsageWindow, error) {
 	return Usage(ctx, UsageOptions{ConfigDir: configDir, HTTP: &http.Client{Timeout: 10 * time.Second}})
 }
 
-// diagnose is claude_code.
+// diagnose is claude-code.
 func (x *Extension) diagnose(ctx context.Context, cfg protocol.CheckConfig) inproc.CheckResult {
-	res := inproc.CheckResult{Name: "claude_code", Status: inproc.CheckOK, Code: "installed"}
+	res := inproc.CheckResult{Name: "claude-code", Status: inproc.CheckOK, Code: "installed"}
 	binaries := map[string][]string{}
 	logins := map[string]bool{}
 	for _, scope := range cfg.Scopes {

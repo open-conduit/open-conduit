@@ -12,7 +12,7 @@
 #
 #   scripts/bundle-packages.sh OUT [GOOS_GOARCH...]
 #
-# writes OUT/<goos>_<goarch>/extensions/{setup,codex,posthog,human,observe,linear,jira,bitbucket,schedule,introspection,slack,github,shell} for each platform (this host's
+# writes OUT/<goos>_<goarch>/extensions/{setup,claude-code,codex,posthog,human,observe,linear,jira,bitbucket,schedule,introspection,slack,github,shell} for each platform (this host's
 # when none is given): setup's binary, each package's manifest and certification
 # (printed by a build for this host, since they don't depend on the
 # platform) and its playbooks. GoReleaser runs it before building and puts

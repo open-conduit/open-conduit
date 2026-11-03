@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
-	"github.com/open-conduit/open-conduit/protocol"
 	"net/url"
 	"os"
 	"os/exec"
@@ -43,12 +42,6 @@ func TestDaemonExtensionPackages(t *testing.T) {
 		if out, err := cli("extension", "install", dir); err != nil || !strings.Contains(out, "Installed") {
 			t.Fatalf("install %s: %v\n%s", bin, err, out)
 		}
-	}
-	// A package claiming the name of a first-party executor registered in
-	// process (claude-code) is refused at install.
-	clashDir := clashingPackage(t, pkgs, bins["runner-extension"], "claude-code")
-	if out, err := cli("extension", "install", clashDir); err == nil || !strings.Contains(out, "registration_conflict") {
-		t.Fatalf("installing a first-party name: %v\n%s", err, out)
 	}
 	if out, err := cli("extension", "list"); err != nil || !strings.Contains(out, "notes") || !strings.Contains(out, "runner") {
 		t.Fatalf("list: %v\n%s", err, out)
@@ -303,30 +296,4 @@ func TestDaemonExtensionPackages(t *testing.T) {
 	if out, err := cli("extension", "remove", "notes"); err == nil || !strings.Contains(out, "still uses notes") {
 		t.Fatalf("remove while used: %v\n%s", err, out)
 	}
-}
-
-// clashingPackage lays out the runner example under name, its executor
-// renamed to name too: a package that claims a name already registered.
-func clashingPackage(t *testing.T, root, bin, name string) string {
-	t.Helper()
-	dir, m := assemble(t, filepath.Join(root, "clash"), bin)
-	m.Name = name
-	for i := range m.Provides.Executors {
-		m.Provides.Executors[i].Name = name
-	}
-	for i := range m.Provides.Checks {
-		m.Provides.Checks[i].Name = name
-	}
-	raw, err := json.Marshal(m)
-	if err != nil {
-		t.Fatal(err)
-	}
-	out := filepath.Join(root, name)
-	if err := os.Rename(dir, out); err != nil {
-		t.Fatal(err)
-	}
-	if err := os.WriteFile(filepath.Join(out, protocol.ManifestFile), raw, 0o644); err != nil {
-		t.Fatal(err)
-	}
-	return out
 }

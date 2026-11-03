@@ -17,7 +17,6 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
-	"github.com/open-conduit/open-conduit/extensions/claudecode"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -33,11 +32,10 @@ import (
 // once started (installed.go, issue #69). Extensions not yet on the contract
 // are still wired by their own files.
 
-// firstParty is the list of first-party in-process extensions. Adding one
-// touches its own package and this list.
-func firstParty() []inproc.Extension {
-	return []inproc.Extension{claudecode.NewExtension()}
-}
+// firstParty is the list of first-party in-process extensions. It is
+// empty: every first-party extension and executor runs as a package
+// (#428), and the list goes once the composition below no longer reads it.
+func firstParty() []inproc.Extension { return nil }
 
 // typeSets are an extension's own entry and connection types: what its
 // configure carries and which secrets it may resolve.

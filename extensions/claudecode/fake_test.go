@@ -132,7 +132,7 @@ func (s *memStore) record(t *testing.T, work string) map[string]any {
 	s.mu.Lock()
 	defer s.mu.Unlock()
 	m := map[string]any{}
-	if b, ok := s.kv["executor.claudecode\x00work/"+work]; ok {
+	if b, ok := s.kv["claude-code\x00work/"+work]; ok {
 		if err := json.Unmarshal(b, &m); err != nil {
 			t.Fatal(err)
 		}
@@ -146,7 +146,7 @@ func (s *memStore) edit(t *testing.T, work string, fn func(map[string]any)) {
 	fn(m)
 	b, _ := json.Marshal(m)
 	s.mu.Lock()
-	s.kv["executor.claudecode\x00work/"+work] = b
+	s.kv["claude-code\x00work/"+work] = b
 	s.mu.Unlock()
 }
 

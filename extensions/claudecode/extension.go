@@ -25,7 +25,8 @@ const maintainPace = 30 * time.Second
 // contract (#357): an agent turn, in no job pool. Before Start
 // (configuration validation) the executor validates and describes config
 // but runs nothing; Start opens it with the host's services. Per-turn
-// telemetry goes to its own log, <state>/logs/claude-code.jsonl.
+// telemetry goes to its own log, logs/claude-code.jsonl in the state
+// directory the host gives it (its package's, <state>/extensions/claude-code).
 type Extension struct {
 	exec *Executor
 	h    inproc.Host

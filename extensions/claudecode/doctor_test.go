@@ -47,7 +47,7 @@ func TestCheck(t *testing.T) {
 		binding("shell", "shell", map[string]any{"usage": true}),
 	}}}}
 	got := checks[0].Run(context.Background(), cfg)
-	if got.Name != "claude_code" || got.Status != inproc.CheckWarn || got.Code != "usage_high" {
+	if got.Name != "claude-code" || got.Status != inproc.CheckWarn || got.Code != "usage_high" {
 		t.Fatalf("check %+v, want a usage_high warning", got)
 	}
 	if !slices.Equal(reads, []string{"", "/broken"}) {

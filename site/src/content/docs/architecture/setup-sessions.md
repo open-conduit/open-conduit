@@ -113,7 +113,7 @@ To work on an existing scope, the agent proposes a change to it; the outline nam
 | `setup` | `tools` | whether each of `gh`, `git`, `ngrok` and `cloudflared` is on the daemon's `PATH`, with its path and whether it's a symlink or a script |
 | `open-conduit` (the host) | `init` | `init TYPE --dry-run` for every setup but the first-run one, registered (`github`, `slack`, `linear`, `jira`) or installed. It calls the type's `extension.Setup` with a non-interactive host: `Prompt` returns `ErrSetupNoInput`, `StoreSecret` stores nothing and returns the reference it would use, and `Run` and `OpenURL` refuse. Flags take references as `init` does, and refuse literals |
 | `open-conduit` (the host) | `doctor` | the daemon checks that need no secret (`config`, `webhooks`, `service`, the executors'). This is a new narrow host function over the same checks as `GET /v1/doctor`, without `check_secrets` |
-| `claude-code` | `status` | whether `claude` is on the daemon's `PATH`, its version, and whether it is signed in and how (subscription login or API key), with no account detail or key. The `claude_code` doctor check doesn't report it yet |
+| `claude-code` | `status` | whether `claude` is on the daemon's `PATH`, its version, and whether it is signed in and how (subscription login or API key), with no account detail or key. The `claude-code` doctor check doesn't report it yet |
 | `github` | `accounts` | `gh auth status --json hosts`: each account's host, login, active flag, token source and state |
 | `github` | `repos` | `gh repo list OWNER --json nameWithOwner` |
 
@@ -184,7 +184,7 @@ The build amends each of these pages in the same change:
 - **[B05 configuration](../config-management/)** and **[toolbelt and management](../toolbelt-management/):** "The first start activates the config file as generation 1" gains the default configuration when there is no file and no stored generation. `POST /config/apply` gains `config_text`, saved as given. New: `GET /v1/work/{id}/config-candidate`. The change set's review is the one view that shows reference text, and only to the operator.
 - **[Claude Code executor](../claude-code-executor/):** new `builtin_tools` and `models` options, and the `claude-code.status` probe.
 - **[Extensions](../extensions/):** new optional `extension.SetupProbes` and `extension.ConfigCandidate`, and in-process host functions for validation, narrow doctor checks and setup registrations.
-- **[Operator setup](../operator-setup/):** `init setup`, the playbook's new home and its session mode, the `default_config` doctor code, and the `claude_code` check's sign-in state.
+- **[Operator setup](../operator-setup/):** `init setup`, the playbook's new home and its session mode, the `default_config` doctor code, and the `claude-code` check's sign-in state.
 - **[Observability](../observability-history/):** the web view's Setup page, since [#242](https://github.com/open-conduit/open-conduit/issues/242) a generic [extension page](../extension-protocol/#pages).
 - **[#126 route trace](https://github.com/open-conduit/open-conduit/issues/126):** tracing against a candidate snapshot.
 
@@ -200,7 +200,7 @@ Each step landed with its tests and the page amendments above:
 
 6. The move to an installed package in its own repository ([#243](https://github.com/open-conduit/open-conduit/issues/243)): core gained `entry_gated`, route binding checks, `setup.first_run`, package playbooks and bundled packages first ([#248](https://github.com/open-conduit/open-conduit/pull/248)); then the extension moved to open-conduit/extension-setup on `protocol/sdk`, and the release archive bundles it.
 
-Not built: naming scopes when a session starts, the operator's `doctor` action with secrets checked recorded as `setup.checks`, and the sign-in state on the `claude_code` doctor check.
+Not built: naming scopes when a session starts, the operator's `doctor` action with secrets checked recorded as `setup.checks`, and the sign-in state on the `claude-code` doctor check.
 
 ## Decided in review
 

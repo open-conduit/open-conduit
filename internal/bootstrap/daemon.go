@@ -429,6 +429,13 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = os.MkdirAll(filepath.Join(o.StateDir, "executors"), 0o700); err != nil {
 		return err
 	}
+	// Records an extension wrote in process move to its package's
+	// namespace before any package starts.
+	if moved, err := adoptLegacyKV(ctx, d.coord, d.now()); err != nil {
+		return fmt.Errorf("adopting in-process KV: %w", err)
+	} else if moved > 0 {
+		d.log.Info("moved in-process records to their packages", "records", moved)
+	}
 	// The playbook plugin exists before the executors that read it start.
 	if err = d.preparePlaybooks(); err != nil {
 		return err

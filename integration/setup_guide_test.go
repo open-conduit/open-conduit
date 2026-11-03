@@ -151,6 +151,8 @@ func TestDefaultConfigValidatesOffline(t *testing.T) {
 	}
 	placeSetup(t, dir)
 	doc := bootstrap.DefaultConfig(path, filepath.Join(dir, "state"))
+	// Its binding runs claude-code, a bundled package.
+	releaseLayout(t)
 	if diags, err := bootstrap.ValidateConfigAt(path, doc); doc == nil || err != nil || len(diags) != 0 {
 		t.Fatalf("default config: %v %v\n%s", diags, err, doc)
 	}

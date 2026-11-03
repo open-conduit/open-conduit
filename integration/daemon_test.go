@@ -109,7 +109,7 @@ func TestReleaseBundlesThroughTheBinary(t *testing.T) {
 	if out, err := exec.Command(daemonBinary(t), protocol.HostRun, "--bundle", dir).CombinedOutput(); err != nil {
 		t.Fatalf("--bundle: %v %s", err, out)
 	}
-	for _, name := range []string{"github", "shell", "slack", "schedule"} {
+	for _, name := range []string{"github", "shell", "claude-code", "slack", "schedule"} {
 		if _, err := os.Stat(filepath.Join(dir, name, protocol.ManifestFile)); err != nil {
 			t.Errorf("%s is not bundled: %v", name, err)
 		}

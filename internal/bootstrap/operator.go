@@ -12,7 +12,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extensions/claudecode"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
@@ -171,7 +170,7 @@ type SetupOptions struct {
 // nothing else is pre-allowed.
 func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	codex := o.Agent == CodexAgent
-	if o.Agent != "claude" && o.Agent != claudecode.Name && !codex {
+	if o.Agent != "claude" && o.Agent != "claude-code" && !codex {
 		return nil, fmt.Errorf("no setup agent %q: use --with claude or --with codex", o.Agent)
 	}
 	if o.Binary == "" {
@@ -367,7 +366,7 @@ var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource
 // OfflineChecks are the doctor checks that need no daemon: the config file
 // validated against the same registrations `serve` uses, the first-party
 // extensions' Offline checks on it (github-capability, github-git-bot,
-// claude_code), then a skipped check naming the daemon's own. The CLI runs them
+// claude-code), then a skipped check naming the daemon's own. The CLI runs them
 // when no daemon is reachable.
 func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtime.Check {
 	skipped := runtime.Check{Name: "skipped", Status: runtime.CheckInfo, Code: "daemon_not_running", Detail: "need a running daemon: " + strings.Join(daemonChecks, ", ")}
