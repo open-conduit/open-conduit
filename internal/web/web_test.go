@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -64,6 +65,13 @@ func (f *fake) Runs(_ context.Context, q url.Values) (client.Page[client.Run], e
 		if (q.Get("state") == "" || q.Get("state") == r.State) && (q.Get("work_id") == "" || q.Get("work_id") == r.WorkID) {
 			out = append(out, r)
 		}
+	}
+	// Pages like the daemon: oldest first, limit at a time, the cursor the
+	// offset of the next page.
+	from, _ := strconv.Atoi(q.Get("cursor"))
+	out = out[min(from, len(out)):]
+	if n, _ := strconv.Atoi(q.Get("limit")); n > 0 && n < len(out) {
+		return client.Page[client.Run]{Items: out[:n], NextCursor: strconv.Itoa(from + n)}, nil
 	}
 	return client.Page[client.Run]{Items: out}, nil
 }

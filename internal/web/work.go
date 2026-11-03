@@ -530,6 +530,9 @@ func (s *Server) world(ctx context.Context) world {
 	for _, r := range runs {
 		byWork[r.WorkID] = append(byWork[r.WorkID], r)
 	}
+	if len(runs) >= fetchCap {
+		keep(s.openRuns(ctx, openW, byWork))
+	}
 	waitOf := map[string]*client.Wait{}
 	for i := range waits {
 		waitOf[waits[i].WorkID] = &waits[i]
@@ -586,6 +589,67 @@ func (s *Server) works(ctx context.Context) (openW, closedW []client.Work, err e
 	}
 	wg.Wait()
 	return openW, closedW, err
+}
+
+// openRuns reads the runs of each open Work by its ID, eight at a time, into
+// byWork. The run list is read oldest first and stops at fetchCap, so once a
+// daemon holds more runs than that the newest, an open Work's live turn among
+// them, are missing from it (#450). A Work with fetchCap runs of its own has
+// the same gap, so its live runs are read by state as well: its row shows a
+// running turn, though its older turn history stays cut short.
+func (s *Server) openRuns(ctx context.Context, works []client.Work, byWork map[string][]client.Run) error {
+	sem := make(chan struct{}, 8)
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		first error
+	)
+	for _, w := range works {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(id string) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			runs, err := listAll(ctx, url.Values{"work_id": {id}, "limit": {"200"}}, s.src.Runs)
+			if err == nil && len(runs) >= fetchCap {
+				runs, err = s.liveRuns(ctx, id, runs)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if first == nil {
+					first = err
+				}
+				return
+			}
+			byWork[id] = runs
+		}(w.ID)
+	}
+	wg.Wait()
+	return first
+}
+
+// liveRuns adds Work id's pending, running and parked runs to runs, where
+// they are not already in it: the row's status and its Cancel this turn
+// control read them.
+func (s *Server) liveRuns(ctx context.Context, id string, runs []client.Run) ([]client.Run, error) {
+	seen := map[string]bool{}
+	for _, r := range runs {
+		seen[r.ID] = true
+	}
+	for _, state := range []string{"pending", "running", "parked"} {
+		live, err := listAll(ctx, url.Values{"work_id": {id}, "state": {state}, "limit": {"200"}}, s.src.Runs)
+		if err != nil {
+			return runs, err
+		}
+		for _, r := range live {
+			if !seen[r.ID] {
+				seen[r.ID] = true
+				runs = append(runs, r)
+			}
+		}
+	}
+	return runs, nil
 }
 
 // holds fills in the hold, queued input count and annotations of each ready

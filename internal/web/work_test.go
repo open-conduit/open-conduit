@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"fmt"
 	"slices"
 	"strings"
 	"testing"
@@ -221,6 +222,60 @@ func TestWorldOnADaemonWithoutListForms(t *testing.T) {
 		if v.ID == "wrk_1" && v.Disp.Kind != "decision" {
 			t.Fatalf("offers on waiting Work not read one by one: %+v", v.Disp)
 		}
+	}
+}
+
+// Past fetchCap runs the run list stops short of the newest, so an open
+// Work's runs are read by its ID: its live turn still shows (#450).
+func TestWorldReadsOpenWorksRunsPastTheCap(t *testing.T) {
+	f, s, _ := setup(t)
+	f.work["wrk_old"] = client.Work{ID: "wrk_old", State: "completed", Revision: "1"}
+	f.work["wrk_live"] = client.Work{ID: "wrk_live", State: "running", Revision: "2"}
+	for i := range fetchCap {
+		r := turnRun(uint32(i+1), "completed", 0, time.Minute)
+		r.WorkID = "wrk_old"
+		f.runs = append(f.runs, r)
+	}
+	live := turnRun(1, "running", 0, 0)
+	live.ID, live.WorkID = "work/wrk_live/attempt/1", "wrk_live"
+	f.runs = append(f.runs, live)
+	w := s.world(context.Background())
+	if len(w.Errs) != 0 {
+		t.Fatalf("errs %v", w.Errs)
+	}
+	for _, v := range w.Works {
+		if v.ID != "wrk_live" {
+			continue
+		}
+		if len(v.Turns) != 1 || v.Disp.Group == "queued" {
+			t.Fatalf("live turn past the cap missing: turns %d disp %+v", len(v.Turns), v.Disp)
+		}
+		return
+	}
+	t.Fatal("no row for the running Work")
+}
+
+// A Work with fetchCap runs of its own still shows its live and parked
+// turns: they are read by state too.
+func TestWorldReadsAWorksLiveRunPastItsOwnCap(t *testing.T) {
+	f, s, _ := setup(t)
+	f.work["wrk_live"] = client.Work{ID: "wrk_live", State: "running", Revision: "2"}
+	for i := range fetchCap {
+		r := turnRun(uint32(i+1), "completed", 0, time.Minute)
+		r.ID, r.WorkID = fmt.Sprintf("work/wrk_live/attempt/%d", i+1), "wrk_live"
+		f.runs = append(f.runs, r)
+	}
+	parked := turnRun(fetchCap+1, "parked", 0, 0)
+	parked.ID, parked.WorkID = "work/wrk_live/attempt/parked", "wrk_live"
+	live := turnRun(fetchCap+2, "running", 0, 0)
+	live.ID, live.WorkID = "work/wrk_live/attempt/live", "wrk_live"
+	f.runs = append(f.runs, parked, live)
+	w := s.world(context.Background())
+	if len(w.Errs) != 0 || len(w.Works) != 1 {
+		t.Fatalf("works %d errs %v", len(w.Works), w.Errs)
+	}
+	if v := w.Works[0]; len(v.Turns) != fetchCap+2 || v.Disp.Group != "running" {
+		t.Fatalf("live turn past the Work's own cap missing: turns %d disp %+v", len(v.Turns), v.Disp)
 	}
 }
 
