@@ -27,7 +27,7 @@ The running daemon also calls `backup.Create` on a schedule ([`internal/bootstra
 
 ## Evidence
 
-`go test -race ./internal/backup` exercises captured correlation/timer/history/content, exclusion of later live changes, lease fencing, existing-destination refusal, manifest/database/artifact corruption, missing-reference rejection and refusal of an omission on an unexpired Execution. `TestShellRetentionReleasesRunDirectories` runs the retention sweep on real shell attempts, then backs up and restores, with the expired attempt's references omitted. SQLite and artifact suites separately exercise process kill/reopen and transaction/publication fault boundaries. `TestDaemonMigrationRehearsal` restores a bundle and restarts on it with no repeated external write, claim or job run, and refuses a tampered bundle.
+`go test -race ./internal/backup` exercises captured correlation/timer/history/content, exclusion of later live changes, lease fencing, existing-destination refusal, manifest/database/artifact corruption, missing-reference rejection and refusal of an omission on an unexpired Execution. `TestShellRetentionReleasesRunDirectories` runs the retention sweep on real shell attempts, then backs up and restores, with the expired attempt's references omitted. SQLite and artifact suites separately exercise process kill/reopen and transaction/publication fault boundaries. No composed-daemon drill exercises the offline commands since `TestDaemonMigrationRehearsal` went with the migrator in [#413](https://github.com/open-conduit/open-conduit/pull/413).
 
 ## History
 

@@ -39,7 +39,7 @@ The environment follows the B05 order:
 5. Binding-selected secrets, resolved by the scheduler immediately before launch.
 6. The trusted toolbelt and execution variables, which no earlier layer can override.
 
-`OS_ENDPOINT`, `OS_TOKEN` and the `os` binary are the toolbelt protocol names and keep their `OS_` form despite the product rename. The executor prepends `Options.ToolbeltDir` (by default the directory of the running executable when it contains `os`) to `PATH`. `OS_TOKEN_FILE` points at a private 0600 file holding the same credential: the host-kept `ToolbeltTokenFile` in the execution's run directory when the host gives one ([execution endpoints](../toolbelt-management/#execution-endpoints)), otherwise a file the segment writes itself. Adoption replaces that file, so the `os` CLI reads it first and falls back to `OS_TOKEN`. Without a toolbelt token none of the three transport variables is set. Identity variables are always present:
+`OS_ENDPOINT`, `OS_TOKEN` and the `os` binary are the toolbelt protocol names and keep their `OS_` form despite the product rename. The executor prepends the host's toolbelt directory for the run (`ExecutionContext.ToolbeltDir`), else `Options.ToolbeltDir` (by default the directory of the running executable when it contains `os`), to `PATH`. `OS_TOKEN_FILE` points at a private 0600 file holding the same credential: the host-kept `ToolbeltTokenFile` in the execution's run directory when the host gives one ([execution endpoints](../toolbelt-management/#execution-endpoints)), otherwise a file the segment writes itself. Adoption replaces that file, so the `os` CLI reads it first and falls back to `OS_TOKEN`. Without a toolbelt token none of the three transport variables is set. Identity variables are always present:
 
 - `OS_SCOPE_ID`, `OS_WORK_ID`, `OS_EXECUTION_ID`, `OS_ATTEMPT`
 - `OS_TRIGGER_ID`, `OS_TRIGGER_TYPE`
@@ -124,7 +124,7 @@ Binding an inject route to shell therefore needs no unsupported-capability fallb
 
 ## Evidence
 
-- [Unit cases](https://github.com/open-conduit/open-conduit/blob/main/executors/shell/shell_test.go) cover:
+- [Unit cases](https://github.com/open-conduit/open-conduit/blob/main/extensions/shell/shell_test.go) cover:
   - the shared executor conformance case
   - log and output artifacts, the input file and the scratch directory
   - every environment layer and the stripping of credentials and reserved variables

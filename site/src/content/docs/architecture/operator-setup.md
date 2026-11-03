@@ -208,7 +208,7 @@ The setups are the packages' own (manifest `setup`): GitHub, Slack, Linear, Jira
 ## Verification
 
 ```sh
-go test -race ./internal/cli ./internal/tui ./extensions/tunnel ./extensions/github/... ./executors/claudecode
+go test -race ./internal/cli ./internal/tui ./extensions/tunnel ./extensions/github/... ./extensions/claudecode
 go test -race -run 'TestManagementOperatorControls|TestOfflineValidation|TestSetupCommand|TestSetupGuide|TestDaemonFreshInstall|TestDaemonGitHubWebhookListener|TestDaemonGitHubDryRun' ./integration
 make check && GOTOOLCHAIN=go1.24.2 make check && make cross-build && make drill
 ```

@@ -1,11 +1,11 @@
 ---
 title: "Codex executor"
-description: "How the Codex CLI executor runs agent turns as detached segments on a Work's thread, takes injected input as follow-up turns, and gives the agent its toolbelt over MCP, all as an installed package."
+description: "How the Codex CLI executor runs agent turns as detached segments on a Work's thread, takes injected input as follow-up turns, and gives the agent its toolbelt over MCP, all as a bundled package."
 ---
 
-The Codex executor runs each agent turn as a detached `codex exec --json` segment on the Work's Codex thread, resumes that thread on the Work's next turn, takes Events injected mid-turn as follow-up turns on the same thread, and gives the agent its toolbelt over MCP. The executor is [`extensions/codex`](https://github.com/open-conduit/open-conduit/tree/main/extensions/codex). It reaches the daemon only as an installed package, [`extensions/codex/pkg`](https://github.com/open-conduit/open-conduit/tree/main/extensions/codex/pkg), served over [`protocol/sdk`](../extension-packaging/) like the shell package. Nothing in the daemon knows about Codex: a binding names executor `codex`, and the host binds it from the capabilities in the package's manifest. The release archive bundles the package as `extensions/codex/` beside the binaries ([install](../../start/install/)). The executor imports only public contracts. Its process identity helpers are copied from `extensions/shell`, because B01 forbids one executor importing another.
+The Codex executor runs each agent turn as a detached `codex exec --json` segment on the Work's Codex thread, resumes that thread on the Work's next turn, takes Events injected mid-turn as follow-up turns on the same thread, and gives the agent its toolbelt over MCP. The executor is [`extensions/codex`](https://github.com/open-conduit/open-conduit/tree/main/extensions/codex). It reaches the daemon only as a package, [`extensions/codex/pkg`](https://github.com/open-conduit/open-conduit/tree/main/extensions/codex/pkg), served over [`protocol/sdk`](../extension-packaging/) like the shell package. Nothing in the daemon knows about Codex: a binding names executor `codex`, and the host binds it from the capabilities in the package's manifest. The release archive bundles the package as `extensions/codex/` beside the binaries ([install](../../start/install/)). The executor imports only public contracts. Its process identity helpers are copied from `extensions/shell`, because B01 forbids one executor importing another.
 
-It advertises `interrupt`, `inject`, `resume`, `workspace` and `toolbelt: mcp`, the stop and forget controls, and `resource_mode`. It does not advertise `sandbox`, `container` or attach (see [limitations](#limitations)).
+It advertises `interrupt`, `inject`, `resume`, `workspace` and `toolbelt: mcp`, the stop, forget and interactive launch controls, and `resource_mode`. It does not advertise `sandbox`, `container` or attach (see [limitations](#limitations)).
 
 ## Why Codex, and how its capabilities map
 
@@ -135,11 +135,11 @@ The config is strict and validated at load. Every field is optional:
 
 ## Setup
 
-`open-conduit init --with codex` starts Codex on the setup guide through the executor's interactive launch: `codex --sandbox workspace-write --ask-for-approval on-request <guide>`, the guide being the playbook without its skill frontmatter as the first message. Codex loads no plugin skills and has no list of commands to allow ahead of time, so it writes no files and the host's allowed commands still ask: Codex's own sandbox asks the owner before any command that writes outside the working directory, the config included. The launch needs none of the executor's state, so it answers before anything has run. `init github --executor codex` `init github --executor codex` writes the agent binding on Codex (both in [operator setup](../operator-setup/)). The daemon's service install looks for `claude` or `codex` on `PATH` and warns only when neither is there.
+`open-conduit init --with codex` starts Codex on the setup guide through the executor's interactive launch: `codex --sandbox workspace-write --ask-for-approval on-request <guide>`, the guide being the playbook without its skill frontmatter as the first message. Codex loads no plugin skills and has no list of commands to allow ahead of time, so it writes no files and the host's allowed commands still ask: Codex's own sandbox asks the owner before any command that writes outside the working directory, the config included. The launch needs none of the executor's state, so it answers before anything has run. `init github --executor codex` writes the agent binding on Codex (both in [operator setup](../operator-setup/)). The daemon's service install looks for `claude` or `codex` on `PATH` and warns only when neither is there.
 
 ## Verification
 
-- [Unit tests](https://github.com/open-conduit/open-conduit/tree/main/executors/codex) run a fake `codex` script, with the test binary as the segment driver. They cover:
+- [Unit tests](https://github.com/open-conduit/open-conduit/tree/main/extensions/codex) run a fake `codex` script, with the test binary as the segment driver. They cover:
   - the shared executor and inject conformance cases (the injected Event is taken in by a resume turn, and no further turn runs)
   - the first turn on the playbook text, its arguments and inputs, and a later turn resuming the thread on the events since
   - the host's playbook directory when the binding names none
@@ -155,7 +155,7 @@ The config is strict and validated at load. Every field is optional:
 
 ## Limitations
 
-- **Rendering.** Inputs use the generic renderer. Claude Code, inside the daemon, gets the GitHub and Slack renderers with their reply hints. A package executor has no host method to render Events yet.
+- **Rendering.** Inputs use the generic renderer. Claude Code asks the host to render each input through the extension that owns it (`event.render_owned`), so it gets the GitHub and Slack renderers with their reply hints; the Codex executor doesn't ask yet.
 - **No attach.** There is no `codex resume` takeover through `open-conduit work attach`.
-- **No process sandbox or container.** Process sandboxes and containers are host brokers the extension protocol doesn't carry yet, so the package advertises neither. Codex's own `sandbox_mode` is the binding's `sandbox`.
+- **No process sandbox or container.** The package advertises neither, though the extension protocol carries both host brokers (`sandbox.plan`, `container.launch`) as Claude Code uses them. Codex's own `sandbox_mode` is the binding's `sandbox`.
 - **Limits.** A usage limit is retried on core's backoff, because Codex's error gives no reset time the executor can read.

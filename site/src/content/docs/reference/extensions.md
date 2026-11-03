@@ -3,7 +3,7 @@ title: Extensions
 description: Add integrations, executors and toolbelt operations as separate extension packages.
 ---
 
-Integrations outside the built-in set run as separate processes that speak a JSON-RPC protocol over stdio. A package is a directory holding a manifest, an executable and a certification fixture.
+Integrations, executors and toolbelt operations, the first-party ones included, run as separate processes that speak a JSON-RPC protocol over stdio. A package is a directory holding a manifest, an executable and a certification fixture.
 
 A package can contribute integrations, executors, toolbelt operations, setups and doctor checks. Once installed, its types are known to `config check`. To write one, start with [Build your first extension](../../guides/first-extension/).
 

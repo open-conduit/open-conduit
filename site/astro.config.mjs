@@ -98,6 +98,7 @@ export default defineConfig({
 								{ label: 'B06 Contracts and checks', slug: 'architecture/contracts-gate' },
 								{ label: 'B07 Workspaces', slug: 'architecture/workspaces' },
 								{ label: 'B08 Extension protocol', slug: 'architecture/extension-protocol' },
+								{ label: 'B09 Sandboxes and containers', slug: 'architecture/sandboxes' },
 							],
 						},
 						{

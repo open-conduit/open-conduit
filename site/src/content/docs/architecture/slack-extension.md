@@ -51,7 +51,7 @@ With `--bot-token REF --app-token REF --team T… --channel C…`, setup prompts
 
 The `slack-cli` path is unverified against a real Slack CLI. The manifest URL path and the token checks have been run against real Slack.
 
-**Doctor.** `slack-auth` (`--check-secrets`) runs the extension-owned `slack.CheckAuth`. It checks that the token's team is the entry's team and its user is the entry's bot user. It also compares the granted scopes with the manifest (`MissingScopes`). A missing `chat:write`, or both history scopes missing, fails with `scopes_missing`. Any other missing scope warns with `scopes_missing` and says what it costs (for `metadata.message:read`: markers found only by the text fallback). Bootstrap only maps the severity onto the check.
+**Doctor.** `slack-auth` (`--check-secrets`) runs the extension-owned `slack.CheckAuth`. It checks that the token's team is the entry's team and its user is the entry's bot user. It also compares the granted scopes with the manifest (`MissingScopes`). A missing `chat:write`, or both history scopes missing, fails with `scopes_missing`. Any other missing scope warns with `scopes_missing` and says what it costs (for `metadata.message:read`: markers found only by the text fallback). The extension maps its severity onto the check it serves.
 
 ## Configuration
 

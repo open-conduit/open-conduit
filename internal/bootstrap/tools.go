@@ -11,8 +11,8 @@ import (
 
 // Engineering tools, waits and playbooks (03-04). The GitHub extension's
 // toolbelt operations are registered on every generation's toolbelt through
-// the public Registrar; held issues run on the in-process github-hold
-// executor; agent turn outcomes are published as derived turn Events (the
+// the public Registrar; held issues run on the github-hold executor the
+// GitHub package serves; agent turn outcomes are published as derived turn Events (the
 // source of `issue:N:<state>` waits); and the playbooks are written once as
 // the Claude Code plugin every claude-code binding uses by default.
 
