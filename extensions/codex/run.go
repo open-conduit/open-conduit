@@ -31,6 +31,9 @@ type run struct {
 	pid      int
 	done     chan struct{}
 	state    *os.ProcessState
+	// permanent marks a preset failure that trying again cannot cure (see
+	// extension.Result.Permanent).
+	permanent bool
 }
 
 type intent struct {
@@ -498,6 +501,7 @@ func (e *Executor) finalizeWith(ctx context.Context, rn *run, preset *domain.Out
 	}
 	outcome.Data = resultData(schema, f)
 	result.Outcome = outcome
+	result.Permanent = preset != nil && rn.permanent
 	result.RetryHint = hint
 	if err = writeJSON(filepath.Join(rn.dir, "result.json"), result); err != nil {
 		return extension.Result{}, err

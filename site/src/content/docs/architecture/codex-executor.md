@@ -99,7 +99,7 @@ When the attempt has a toolbelt token and the host names its toolbelt directory 
 
 ## Workspace and environment
 
-With a binding resource, a segment calls `Acquire({Mode: workspace_mode (default "work"), Params: {"branch": …} when branch is set})`, and reports that mode to configuration validation (`resource_mode`). A setup failure or an unavailable workspace is a structured failure with no process. Without a resource the turn runs in the binding's `dir` (which must exist) or in a private folder that stays the same for the Work. A binding with both a resource and `dir` fails as `invalid_config`.
+With a binding resource, a segment calls `Acquire({Mode: workspace_mode (default "work"), Params: {"branch": …} when branch is set})`, and reports that mode to configuration validation (`resource_mode`). A setup failure or an unavailable workspace is a structured failure with no process. Without a resource the turn runs in the binding's `dir` (which must exist) or in a private folder that stays the same for the Work. A binding with both a resource and `dir` fails as `invalid_config`. An `invalid_config` result, or a workspace the provider refused as `extension.ErrInvalid`, is marked `Permanent` and not retried.
 
 The environment follows B05:
 
