@@ -32,7 +32,7 @@ A binding with a [container](../sandboxes/#containers) runs the command in one i
 
 The environment follows the B05 order:
 
-1. A sanitized baseline: only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR` and `TERM` survive. Unrelated credentials, `OPEN_CONDUIT_*` and inherited `OS_*` variables are dropped.
+1. A sanitized baseline: only `PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR` and `TERM` survive. Unrelated credentials, `OPEN_CONDUIT_*` and inherited `OS_*` variables are dropped. The daemon's own variables that the binding's `pass_env` names (a proxy, say) join it: the host validates them with the configuration and passes their values as `ExecutionContext.HostEnv`, never an `OS_*` name, so they mean the same for the shell executor as for any other.
 2. The workspace provider's layer, when a workspace is bound. Reserved and invalid names are dropped from it. With no workspace there is no provider layer.
 3. The extensions' run layer (`ExecutionContext.Env`), applied the same way, its `GIT_CONFIG_*` entries after the provider layer's.
 4. Binding `env`.
