@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"net/url"
 	"os"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -149,30 +150,34 @@ func githubToolsDaemonConfig(apiURL string) []byte {
 // hold route and parked by the in-process github-hold executor over the real
 // management socket (a core timeout timer), released when its time comes,
 // and the agent stand-in then comments through `os call` exactly once.
+//
+// The hold is checked from the run history once the Work completes, not by
+// catching it parked: on a loaded runner the parked window can pass between
+// two polls. The runAt is set after the daemon binary is built and leaves
+// holdMargin for the daemon to start and claim the issue before it comes.
 func TestDaemonGitHubHeldIssueAndTools(t *testing.T) {
+	const holdMargin = 10 * time.Second
 	fake := githubtest.New("octo/widgets", "tok")
 	defer fake.Close()
-	at := time.Now().Add(4 * time.Second).UTC().Format(time.RFC3339)
-	n := fake.OpenIssue("Match day", "Report on it.\n\n<!-- runAt: "+at+" -->", githubtest.User{Login: "alice", Type: "User"}, "scheduled")
 	t.Setenv("OC_TEST_GITHUB_TOKEN", "tok")
-	d := newDrill(t)
+	d := newDrill(t) // builds the daemon binary, outside the hold's margin
 	if err := os.WriteFile(d.config, githubToolsDaemonConfig(fake.URL), 0o600); err != nil {
 		t.Fatal(err)
 	}
+	at := time.Now().Add(holdMargin).UTC().Truncate(time.Second)
+	n := fake.OpenIssue("Match day", "Report on it.\n\n<!-- runAt: "+at.Format(time.RFC3339)+" -->", githubtest.User{Login: "alice", Type: "User"}, "scheduled")
 	d.start("")
-	state := func() string {
+	work := func() (string, string) {
 		page, err := d.c.Works(context.Background(), url.Values{"scope_id": {"eng"}})
 		if err != nil || len(page.Items) != 1 {
-			return ""
+			return "", ""
 		}
-		return page.Items[0].Kind + ":" + page.Items[0].State
+		return page.Items[0].ID, page.Items[0].Kind + ":" + page.Items[0].State
 	}
-	d.until("held issue parked", 30*time.Second, func() bool { return state() == "github.issue.held:waiting" })
-	d.until("held labels", 30*time.Second, func() bool { return equal(fake.Labels(n), "scheduled") })
-	if len(fake.Comments(n)) != 0 {
-		t.Fatal("the agent ran while the issue was held")
-	}
-	d.until("released and worked", 60*time.Second, func() bool { return state() == "github.issue.held:completed" })
+	d.until("released and worked", holdMargin+60*time.Second, func() bool {
+		_, s := work()
+		return s == "github.issue.held:completed"
+	})
 	d.until("comment and labels", 30*time.Second, func() bool {
 		return len(fake.Comments(n)) == 2 && len(withoutFinishedNotice(fake.Comments(n))) == 1 && equal(fake.Labels(n), "might-be-done")
 	})
@@ -180,8 +185,44 @@ func TestDaemonGitHubHeldIssueAndTools(t *testing.T) {
 	if !strings.Contains(body, "Picked up by the daemon.") || !strings.Contains(body, "open-conduit:agent") {
 		t.Fatalf("tool comment: %q", body)
 	}
-	page, err := d.c.Events(context.Background(), url.Values{"type": {"github.hold.released"}})
-	if err != nil || len(page.Items) != 1 {
-		t.Fatalf("release events: %v %d", err, len(page.Items))
+	// The history shows the hold: the first github-hold attempt parked the
+	// issue, a later one (woken by the timer) released it, and the agent's
+	// attempt started only after the time came.
+	id, _ := work()
+	page, err := d.c.Executions(context.Background(), url.Values{"work_id": {id}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	execs := page.Items
+	sort.Slice(execs, func(i, j int) bool { return execs[i].Attempt < execs[j].Attempt })
+	var summaries []string
+	for _, x := range execs {
+		s := x.ExecutorBinding + ": "
+		if x.Outcome != nil {
+			s += x.Outcome.Summary
+		}
+		summaries = append(summaries, s)
+	}
+	if len(execs) < 3 || !strings.HasPrefix(summaries[0], "hold: held: waiting for") {
+		t.Fatalf("the issue was not parked first (claimed after its time?); attempts: %q", summaries)
+	}
+	released, ran := -1, -1
+	for i, x := range execs {
+		switch {
+		case released < 0 && x.ExecutorBinding == "hold" && strings.HasPrefix(summaries[i], "hold: released: "):
+			released = i
+		case ran < 0 && x.ExecutorBinding == "run":
+			ran = i
+		}
+	}
+	if released < 1 || ran < released {
+		t.Fatalf("expected park, release, then the agent's attempt; attempts: %q", summaries)
+	}
+	if started, err := time.Parse(time.RFC3339Nano, execs[ran].StartedAt); err != nil || started.Before(at) {
+		t.Fatalf("the agent's attempt started at %q, before the hold's time %s (%v)", execs[ran].StartedAt, at.Format(time.RFC3339), err)
+	}
+	events, err := d.c.Events(context.Background(), url.Values{"type": {"github.hold.released"}})
+	if err != nil || len(events.Items) != 1 {
+		t.Fatalf("release events: %v %d", err, len(events.Items))
 	}
 }
