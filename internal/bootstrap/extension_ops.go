@@ -12,6 +12,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/certify"
 	"github.com/open-conduit/open-conduit/internal/cli"
+	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/protocol"
 )
@@ -183,24 +184,35 @@ func extensionSetups(configPath, stateDir, version string) []extension.Setup {
 	var out []extension.Setup
 	for _, f := range found {
 		if d := f.Manifest.Provides.Setup; d != nil {
-			out = append(out, packageSetup{f: f, stateDir: stateDir, version: version, info: extension.SetupInfo{Type: d.Type, Summary: d.Summary + " (package " + f.Manifest.Name + " " + f.Manifest.Version + ")", Usage: d.Usage, FirstRun: d.FirstRun}})
+			out = append(out, packageSetup{f: f, configPath: configPath, stateDir: stateDir, version: version, info: extension.SetupInfo{Type: d.Type, Summary: d.Summary + " (package " + f.Manifest.Name + " " + f.Manifest.Version + ")", Usage: d.Usage, FirstRun: d.FirstRun}})
 		}
 	}
 	return out
 }
 
 type packageSetup struct {
-	f        extproc.Found
-	stateDir string
-	version  string
-	info     extension.SetupInfo
+	f extproc.Found
+	// configPath is the config file whose grant (settings.extensions) the
+	// package starts with for the flow.
+	configPath string
+	stateDir   string
+	version    string
+	info       extension.SetupInfo
 }
 
 func (s packageSetup) SetupInfo() extension.SetupInfo { return s.info }
 
 func (s packageSetup) Setup(ctx context.Context, host extension.SetupHost, args []string) (extension.SetupResult, error) {
 	paths := extproc.StatePaths(s.stateDir, s.f.Manifest.Name)
-	r, err := extproc.Load(ctx, s.f, extproc.Deps{Now: time.Now}, extproc.Options{StateDir: paths.State, LogDir: filepath.Dir(paths.Log), Host: protocol.HostInfo{Name: "open-conduit", Version: s.version}})
+	var grants map[string][]string
+	if s.configPath != "" {
+		if data, err := config.ReadFile(s.configPath); err == nil {
+			grants = config.FileGrants(data)
+		}
+	}
+	passEnv := grants[s.f.Manifest.Name]
+	r, err := extproc.Load(ctx, s.f, extproc.Deps{Now: time.Now}, extproc.Options{StateDir: paths.State, LogDir: filepath.Dir(paths.Log), Host: protocol.HostInfo{Name: "open-conduit", Version: s.version},
+		PassEnv: func() []string { return passEnv }})
 	if err != nil {
 		return extension.SetupResult{}, diagnosed(s.f.Manifest.Name, err)
 	}

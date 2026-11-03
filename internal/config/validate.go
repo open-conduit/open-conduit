@@ -32,6 +32,9 @@ type Registry struct {
 	// relies on (extension.PlaybookOperations), by playbook name.
 	Playbooks map[string][]string
 	Resources map[string]bool
+	// Packages are the installed and bundled extension packages by name,
+	// which settings.extensions grants (PackageWarnings).
+	Packages map[string]bool
 	// ResourceConfig optionally validates a registered provider's binding
 	// resource config at load/apply time. Its error text is never echoed.
 	ResourceConfig map[string]func(json.RawMessage) error
@@ -239,6 +242,9 @@ func ValidateDocument(doc *Document, reg Registry) (*Snapshot, error) {
 		if _, ok := v.index[b.Scope]; b.Scope != "" && !ok {
 			v.fail(ptr("settings/budgets", i)+"/scope", "unknown_scope", "budget names a scope that is not defined; use a scope id")
 		}
+	}
+	for _, name := range slices.Sorted(maps.Keys(doc.Settings.Extensions)) {
+		v.checkPassEnv(ptr("settings/extensions", name)+"/pass_env", doc.Settings.Extensions[name].PassEnv)
 	}
 	if len(v.diags) > 0 {
 		return nil, invalid(v.diags)
@@ -557,20 +563,23 @@ func (v *validator) registration(p string, b Binding) {
 // document names, which only a binding's selected secrets may carry.
 // The binding's resource's own pass_env follows the same rules.
 func (v *validator) passEnv(p string, b Binding) {
-	refs := envSecretNames(v.doc)
-	check := func(path string, names []string) {
-		for i, name := range names {
-			switch {
-			case domain.ReservedEnv(name):
-				v.fail(ptr(path, i), "pass_env_reserved", "OS_* and OPEN_CONDUIT_* variables are Open Conduit's own; remove it")
-			case refs[name]:
-				v.fail(ptr(path, i), "pass_env_secret", "an env: secret reference names this variable; select the secret with secret_names instead")
-			}
-		}
-	}
-	check(p+"/pass_env", b.PassEnv)
+	v.checkPassEnv(p+"/pass_env", b.PassEnv)
 	if b.Resource != nil {
-		check(p+"/resource/pass_env", b.Resource.PassEnv)
+		v.checkPassEnv(p+"/resource/pass_env", b.Resource.PassEnv)
+	}
+}
+
+// checkPassEnv applies the pass_env rules to one list of names at path, a
+// binding's, its resource's or a package's (settings.extensions).
+func (v *validator) checkPassEnv(path string, names []string) {
+	refs := envSecretNames(v.doc)
+	for i, name := range names {
+		switch {
+		case domain.ReservedEnv(name):
+			v.fail(ptr(path, i), "pass_env_reserved", "OS_* and OPEN_CONDUIT_* variables are Open Conduit's own; remove it")
+		case refs[name]:
+			v.fail(ptr(path, i), "pass_env_secret", "an env: secret reference names this variable; select the secret with secret_names instead")
+		}
 	}
 }
 
@@ -795,6 +804,7 @@ func (v *validator) snapshot() *Snapshot {
 		redacted: canonical(v.doc.normalized(true))}
 	s.Settings.RetryDelaysSeconds = slices.Clone(s.Settings.RetryDelaysSeconds)
 	s.Settings.Budgets = slices.Clone(s.Settings.Budgets)
+	s.Settings.Extensions = maps.Clone(s.Settings.Extensions)
 	for _, c := range v.doc.Connections {
 		refs := make(map[string]string, len(c.SecretRefs))
 		for k, ref := range c.SecretRefs {

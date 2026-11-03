@@ -163,7 +163,7 @@ func BundledManifests() []protocol.Manifest {
 // bundled packages' declarations (#428); it starts no package.
 func bundledRegistry() config.Registry {
 	reg := registry(offlineExecutors())
-	offlineExternal(&reg, "", "").close()
+	offlineExternal(&reg, "", "", nil).close()
 	return reg
 }
 

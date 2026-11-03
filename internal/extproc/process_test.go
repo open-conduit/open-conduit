@@ -19,6 +19,24 @@ func TestSanitizedEnvironment(t *testing.T) {
 	}
 }
 
+// TestGrantedEnvironment: the operator's grant adds the daemon variables it
+// names that are set, on top of the baseline, never a reserved one; an
+// ungranted variable stays out (the negative control).
+func TestGrantedEnvironment(t *testing.T) {
+	environ := []string{"PATH=/bin", "SSH_AUTH_SOCK=/s", "DOCKER_HOST=d", "OS_TOKEN=t", "GITHUB_TOKEN=x"}
+	got := Environment(environ, []string{"SSH_AUTH_SOCK", "OS_TOKEN", "UNSET", "PATH", "SSH_AUTH_SOCK"})
+	if want := []string{"PATH=/bin", "SSH_AUTH_SOCK=/s"}; !slices.Equal(got, want) {
+		t.Fatalf("environment %v, want %v", got, want)
+	}
+	_, passed := granted(sanitized(environ), environ, []string{"SSH_AUTH_SOCK", "OS_TOKEN", "UNSET", "PATH"})
+	if want := []string{"PATH", "SSH_AUTH_SOCK"}; !slices.Equal(passed, want) {
+		t.Fatalf("passed %v, want %v", passed, want)
+	}
+	if got := Environment(environ, nil); !slices.Equal(got, []string{"PATH=/bin"}) {
+		t.Fatalf("without a grant %v, want the baseline", got)
+	}
+}
+
 func TestStderrLogIsBounded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.log")
 	f, err := os.Create(path)

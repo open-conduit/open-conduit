@@ -161,11 +161,15 @@ func (x *installed) remote() (*extproc.Remote, error) {
 // errNoPackage is a package with neither a process nor an offline start.
 var errNoPackage = errors.New("extension package is not running")
 
-// providerTypes adds the manifest's resource and sandbox provider types to
-// a registry: each validates its own config through the package, and a
+// providerTypes adds the package's name (Registry.Packages) and its
+// manifest's resource and sandbox provider types to a registry: each validates its own config through the package, and a
 // resource type's workspace checks (mode_default, sandbox) are answered
 // through it too.
 func (x *installed) providerTypes(reg *config.Registry) {
+	if reg.Packages == nil {
+		reg.Packages = map[string]bool{}
+	}
+	reg.Packages[x.m.Name] = true
 	if len(x.m.Provides.Sandboxes) > 0 && reg.Sandboxes == nil {
 		reg.Sandboxes = map[string]func(json.RawMessage) error{}
 	}

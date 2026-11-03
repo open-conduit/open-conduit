@@ -77,25 +77,11 @@ func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 			c.defaultHash = s.Hash
 		}
 	}
-	var active activation
-	var normalized []byte
-	err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
-		b, err := tx.Get(configNamespace, "active")
-		if errors.Is(err, storage.ErrNotFound) {
-			return nil
-		}
-		if err != nil {
-			return err
-		}
-		if err = json.Unmarshal(b, &active); err != nil {
-			return err
-		}
-		normalized, err = tx.Get(configNamespace, "generation/"+u64(active.Generation))
-		return err
-	})
+	generation, normalized, err := StoredGeneration(ctx, store, now)
 	if err != nil {
 		return nil, err
 	}
+	active := activation{Generation: generation}
 	if active.Generation == 0 {
 		data, err := config.ReadFile(path)
 		if errors.Is(err, fs.ErrNotExist) && def != nil {
@@ -120,6 +106,33 @@ func OpenConfig(ctx context.Context, store storage.Store, now func() time.Time, 
 	c.current, c.generation = snapshot, active.Generation
 	c.history[active.Generation] = snapshot
 	return c, nil
+}
+
+// StoredGeneration reads the committed generation's number and normalized
+// document without validating it: 0 and nil when none is committed. The
+// daemon reads the operator's package grants from it (settings.extensions)
+// to start the packages, which run before the configuration opens.
+func StoredGeneration(ctx context.Context, store storage.Store, now func() time.Time) (uint64, []byte, error) {
+	var active activation
+	var normalized []byte
+	err := store.Transact(ctx, storage.Guard{Now: now()}, func(tx storage.Tx) error {
+		b, err := tx.Get(configNamespace, "active")
+		if errors.Is(err, storage.ErrNotFound) {
+			return nil
+		}
+		if err != nil {
+			return err
+		}
+		if err = json.Unmarshal(b, &active); err != nil {
+			return err
+		}
+		normalized, err = tx.Get(configNamespace, "generation/"+u64(active.Generation))
+		return err
+	})
+	if err != nil {
+		return 0, nil, err
+	}
+	return active.Generation, normalized, nil
 }
 
 // adopt publishes the config file over a stored generation that failed

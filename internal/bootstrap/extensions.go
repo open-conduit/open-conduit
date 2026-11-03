@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -19,6 +20,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
+	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/observability"
 	"github.com/open-conduit/open-conduit/protocol"
@@ -55,6 +57,11 @@ type externalState struct {
 	tasks    map[string]time.Time // last start by package/task
 	running  map[string]bool      // task in flight
 	public   string               // public URL last sent in configure
+	// startGrants are the package grants (settings.extensions) the
+	// packages start with before a generation is published: the
+	// committed generation's, or the config file's on a first start.
+	// Written before any package starts, read-only after.
+	startGrants map[string][]string
 }
 
 type generationSnapshot struct {
@@ -260,8 +267,11 @@ func (e manifestExecutor) Attach(context.Context, domain.ID) (extension.AttachSp
 // no coordination store, a throwaway state directory, and stopped by the
 // returned validation's close. A package that cannot start refuses its
 // objects, and the validation says why (offlinePackages.diagnostics).
-func offlineExternal(reg *config.Registry, configPath, exclude string) *offlinePackages {
+func offlineExternal(reg *config.Registry, configPath, exclude string, data []byte) *offlinePackages {
 	o := &offlinePackages{}
+	// A package started to check a config starts with the grant that
+	// config gives it, as the daemon would start it.
+	grants := config.FileGrants(data)
 	// With no config file, the bundled packages still count: a first-party
 	// extension served by open-conduit itself (#428) validates its own
 	// config objects however the config is given.
@@ -271,7 +281,7 @@ func offlineExternal(reg *config.Registry, configPath, exclude string) *offlineP
 	}
 	var xs []inproc.Extension
 	for _, f := range found {
-		v := &offlinePackage{f: f}
+		v := &offlinePackage{f: f, passEnv: grants[f.Manifest.Name]}
 		o.packages = append(o.packages, v)
 		x := &installed{m: f.Manifest, offline: v, dir: f.Dir}
 		xs = append(xs, x)
@@ -334,6 +344,7 @@ func (o *offlinePackages) diagnostics() []config.Diagnostic {
 // validate config offline.
 type offlinePackage struct {
 	f       extproc.Found
+	passEnv []string
 	started bool
 	r       *extproc.Remote
 	dir     string
@@ -379,6 +390,7 @@ func (p *offlinePackage) start() {
 	// package never migrates: there is no store to migrate.
 	kv := p.f.Manifest.KVVersion
 	p.r, p.err = extproc.Load(ctx, p.f, extproc.Deps{Now: time.Now}, extproc.Options{StateDir: filepath.Join(p.dir, "state"), Host: protocol.HostInfo{Name: "open-conduit"},
+		PassEnv:   func() []string { return p.passEnv },
 		Configure: func() protocol.ConfigureParams { return protocol.ConfigureParams{KV: protocol.KVState{Stored: kv}} }})
 }
 
@@ -412,6 +424,7 @@ func (d *daemon) openExtensions(ctx context.Context) {
 	if len(found) == 0 {
 		return
 	}
+	x.startGrants = d.startGrants(ctx)
 	if err := extproc.CheckConflicts(found, takenNames(registry(d.executors))); err != nil {
 		for _, f := range found {
 			x.failed = append(x.failed, extproc.Diagnose(f.Manifest.Name, err, extproc.Paths{}))
@@ -467,7 +480,7 @@ func (d *daemon) openExtensions(ctx context.Context) {
 				d.sandboxes.providers[s.Type] = p
 			}
 		}
-		d.log.Info("extension started", "extension", name, "version", f.Manifest.Version, "protocol", protocol.Version)
+		d.log.Info("extension started", "extension", name, "version", f.Manifest.Version, "protocol", protocol.Version, "pass_env", strings.Join(r.Process().PassedEnv(), ","))
 	}
 }
 
@@ -691,6 +704,40 @@ func (t currentTimers) Cancel(ctx context.Context, id domain.ID, expected domain
 	return c.timers.Cancel(ctx, id, expected)
 }
 
+// startGrants are the package grants to start packages with before the
+// configuration opens: the committed generation's (validated when it was
+// applied), or on a first start the config file's (PackageGrants leaves
+// out what validation would refuse). None when neither can be read.
+func (d *daemon) startGrants(ctx context.Context) map[string][]string {
+	generation, normalized, err := management.StoredGeneration(ctx, d.coord, d.now)
+	switch {
+	case err != nil:
+		return nil
+	case generation != 0:
+		doc, err := config.Parse(normalized)
+		if err != nil {
+			return nil
+		}
+		return doc.PackageGrants()
+	case d.o.ConfigPath == "":
+		return nil
+	}
+	data, err := config.ReadFile(d.o.ConfigPath)
+	if err != nil {
+		return nil
+	}
+	return config.FileGrants(data)
+}
+
+// packagePassEnv is the grant a package starts with now: the published
+// generation's, or before one is published the start grant.
+func (d *daemon) packagePassEnv(name string) []string {
+	if s, _ := d.extensionSnapshot(); s != nil {
+		return s.Settings.PackagePassEnv(name)
+	}
+	return slices.Clone(d.external.startGrants[name])
+}
+
 func (d *daemon) extensionOptions(f extproc.Found, paths extproc.Paths) extproc.Options {
 	name := f.Manifest.Name
 	executors := map[string]string{}
@@ -708,6 +755,7 @@ func (d *daemon) extensionOptions(f extproc.Found, paths extproc.Paths) extproc.
 	return extproc.Options{
 		StateDir: paths.State, LogDir: filepath.Dir(paths.Log), ExecutorDirs: executors, ResourceDirs: resources, ConfigDir: configDir,
 		Host:      protocol.HostInfo{Name: "open-conduit", Version: d.o.Version},
+		PassEnv:   func() []string { return d.packagePassEnv(name) },
 		Configure: func() protocol.ConfigureParams { return d.extensionConfigure(f.Manifest) },
 		OnConfigured: func(res protocol.ConfigureResult) {
 			d.extensionConfigured(name, res)
@@ -906,10 +954,49 @@ func (d *daemon) extensionCheck(context.Context) runtime.Check {
 		if p.Restarts() > 0 {
 			raise(runtime.CheckWarn, "extension_restarted")
 		}
+		env, pending := grantItem(p.PassedEnv(), d.packagePassEnv(m.Name), p.Options().Environ)
+		item += env
+		if pending {
+			raise(runtime.CheckWarn, "extension_grant_pending")
+		}
 		check.Items = append(check.Items, item)
 	}
 	sort.Strings(check.Items)
 	return check
+}
+
+// grantItem describes a package's environment grant for doctor, names only:
+// the granted variables it started with, those granted but unset in the
+// daemon's environment, and pending when the current generation grants
+// other names than it started with, which it takes at its next start.
+func grantItem(passed, granted, environ []string) (string, bool) {
+	set := map[string]bool{}
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		set[name] = true
+	}
+	var unset, want []string
+	for _, name := range granted {
+		if set[name] {
+			want = append(want, name)
+		} else {
+			unset = append(unset, name)
+		}
+	}
+	slices.Sort(want)
+	slices.Sort(unset)
+	var out string
+	if len(passed) > 0 {
+		out += ", pass_env " + strings.Join(passed, " ")
+	}
+	if len(unset) > 0 {
+		out += ", pass_env not set in the daemon's environment: " + strings.Join(unset, " ")
+	}
+	pending := !slices.Equal(passed, want)
+	if pending {
+		out += ", pass_env changed since it started (restart the daemon to apply)"
+	}
+	return out, pending
 }
 
 // extensionExporter fans telemetry out to the packages. It joins the

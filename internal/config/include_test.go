@@ -121,6 +121,7 @@ func TestIncludedScopesStayBeneathTheirParent(t *testing.T) {
 		{"workspace variables", `{"version":1,"scopes":[{"id":"web","name":"web","bindings":[{"name":"run","executor":"folder_agent","resource":{"provider":"git","config":{},"pass_env":["SSH_AUTH_SOCK"]},"config":{"command":"x"}}]}]}`, "includes/0/scopes/0/bindings/0/resource/pass_env", "unknown_field"},
 		{"source", `{"version":1,"scopes":[{"id":"web","name":"web","source":"/elsewhere"}]}`, "includes/0/scopes/0/source", "unknown_field"},
 		{"connections", `{"version":1,"connections":[],"scopes":[]}`, "includes/0/connections", "unknown_field"},
+		{"package variables", `{"version":1,"settings":{"extensions":{"ssh":{"pass_env":["SSH_AUTH_SOCK"]}}},"scopes":[]}`, "includes/0/settings", "unknown_field"},
 		{"another parent", `{"version":1,"scopes":[{"id":"web","name":"web","parent":"other"}]}`, "includes/0/scopes/0/parent", "invalid_value"},
 		{"wider ceiling", `{"version":1,"scopes":[{"id":"web","name":"web","authorization":{"connections":[],"operations":["github.issue.comment"],"read_scopes":[]}}]}`, "includes/0/scopes/0/authorization/operations", ""},
 		{"duplicate id", `{"version":1,"scopes":[{"id":"home","name":"again"}]}`, "includes/0/scopes/0/id", "duplicate_id"},

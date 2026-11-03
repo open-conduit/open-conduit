@@ -240,6 +240,28 @@
             "addr"
           ],
           "additionalProperties": false
+        },
+        "extensions": {
+          "description": "Grants to installed or bundled extension packages, by package name. A name no package has is a warning, not an error. Takes effect at a package's next start after the generation holding it is applied with open-conduit config apply: a serve restart, or the package's restart after a crash; a running package keeps the environment it started with.",
+          "type": "object",
+          "propertyNames": {
+            "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+          },
+          "additionalProperties": {
+            "type": "object",
+            "properties": {
+              "pass_env": {
+                "type": "array",
+                "items": {
+                  "type": "string",
+                  "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                },
+                "uniqueItems": true,
+                "description": "Variables of the daemon's environment added to this package's own process environment (SSH_AUTH_SOCK, DOCKER_HOST). They reach no other package. Never OS_* or OPEN_CONDUIT_*, nor one an env: secret reference names."
+              }
+            },
+            "additionalProperties": false
+          }
         }
       },
       "required": [],

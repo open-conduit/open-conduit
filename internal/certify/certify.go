@@ -362,7 +362,7 @@ func (r *runner) loadFixture(ctx context.Context) (func(), error) {
 			return stop, err
 		}
 		cmd := exec.Command(argv[0], argv[1:]...)
-		cmd.Dir, cmd.Env = work, extproc.Environment(os.Environ())
+		cmd.Dir, cmd.Env = work, extproc.Environment(os.Environ(), nil)
 		cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 		cmd.Stderr = io.Discard
 		stdin, err := cmd.StdinPipe()
@@ -527,7 +527,7 @@ type rawSession struct {
 func (r *runner) startRaw() (*rawSession, error) {
 	argv := r.found.Argv()
 	cmd := exec.Command(argv[0], argv[1:]...)
-	cmd.Dir, cmd.Env = r.found.Dir, extproc.Environment(os.Environ())
+	cmd.Dir, cmd.Env = r.found.Dir, extproc.Environment(os.Environ(), nil)
 	cmd.SysProcAttr = &syscall.SysProcAttr{Setpgid: true}
 	cmd.Stderr = io.Discard
 	stdin, err := cmd.StdinPipe()

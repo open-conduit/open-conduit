@@ -285,6 +285,18 @@ It then sends `configure` again on every config apply and every tunnel URL chang
 
 Secrets reach a package only through `secret.resolve`. It returns the secret names selected by the package's own entries in a configured scope, or, with `connection` set, the secret names of a connection one of those entries names (B05). `config check` offline knows the installed packages' types, and each package checks its own opaque config there too: it is started for `validate` alone, without a coordination store, on a throwaway state directory, and stopped afterwards ([doctor checks](../extension-protocol/#doctor-checks)). `open-conduit init TYPE` offers installed packages' setups by starting the package for the duration of the flow, without a coordination store.
 
+### Process environment
+
+A package's process starts with the sanitized baseline only (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, `TERM`), so no credential or Open Conduit setting reaches it through its environment. A package that needs a variable of the daemon's own outside any binding (the ssh agent a container provider reaches every remote with, `DOCKER_HOST` for the docker CLI, a tunnel's variables) is granted it by the operator, by package name, in the configuration:
+
+```json
+"settings": { "extensions": { "ssh": { "pass_env": ["SSH_AUTH_SOCK"] } } }
+```
+
+The host checks the names with the rules of a binding's `pass_env` (`pass_env_reserved` for `OS_*` and `OPEN_CONDUIT_*`, `pass_env_secret` for a variable an `env:` secret reference names), and an included folder's fragment has no `settings`, so a checkout can't grant one. A name no installed or bundled package has is a `config check` warning, not an error, so a config survives removing a package. When it starts the package, the host adds the named variables it has set to that package's process environment, on top of the baseline. The grant reaches that package alone, and never through a run: a binding's `pass_env` reaches its runs (`ExecutionContext.HostEnv`) and its resource's `pass_env` the provider's acquisitions (`ResourceAcquisition.HostEnv`), each apart.
+
+Every start takes the grant then current: a daemon start (from the committed generation, or the config file on the first start, before the configuration opens), a restart after a crash, an offline start for `config check` or doctor (from the config being checked) and a setup run (from the config file). A running package keeps the environment it started with, so a change applied with `config apply` reaches it at its next start, a serve restart or its restart after a crash. The `extension started` log line and the doctor `extensions` check name the variables each package was granted (names only, never values), those granted but not set in the daemon's environment, and a grant changed since it started (`extension_grant_pending`).
+
 An installed package's `work_kind.trigger`, `recurrence.next` and `dependency.filter` run through the [bounded in-transaction calls](../extension-protocol/#transactions-and-in-transaction-calls), with the same fallbacks.
 
 A package's playbooks join the Claude Code plugin the daemon writes at start, beside the first-party ones. Each `<name>.md` file in the manifest's `playbooks` directory is the playbook (a skill) of that name; other files are ignored. `{{bin}}` in the text becomes how the agent runs Open Conduit (`open-conduit` in a turn). A package playbook never replaces a first-party one of the same name: it is logged and left out. `init --with claude` starts on the first-run setup's playbook, the one named after its setup type, from the package.

@@ -33,12 +33,17 @@ import (
 )
 
 // TestMain lets this test binary act as the `os` toolbelt CLI when invoked
-// through the symlink placed on a shell execution's PATH. After the run it
+// through the symlink placed on a shell execution's PATH, and as the
+// environment-recording package (envPackageMain) through its command's
+// symlink. After the run it
 // removes every directory keptDir made.
 func TestMain(m *testing.M) {
 	if filepath.Base(os.Args[0]) == "os" {
 		cwd, _ := os.Getwd()
 		os.Exit(cli.RunToolbelt("test", "test", os.Args[1:], cli.Env{Getenv: os.Getenv, Cwd: cwd}, os.Stdin, os.Stdout, os.Stderr))
+	}
+	if filepath.Base(os.Args[0]) == envPackageCommand {
+		os.Exit(envPackageMain())
 	}
 	code := m.Run()
 	cleanupHistory()
