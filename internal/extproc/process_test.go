@@ -37,6 +37,20 @@ func TestGrantedEnvironment(t *testing.T) {
 	}
 }
 
+// TestSanitizedKeepsGORACEOnlyInARaceBuild: a race-built (test) host hands
+// its race detector settings to the packages it starts; any other host
+// drops GORACE with the rest of its environment.
+func TestSanitizedKeepsGORACEOnlyInARaceBuild(t *testing.T) {
+	got := sanitized([]string{"PATH=/bin", "GORACE=atexit_sleep_ms=50", "GODEBUG=x=1"})
+	want := []string{"PATH=/bin"}
+	if raceEnv != "" {
+		want = append(want, "GORACE=atexit_sleep_ms=50")
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("sanitized %v, want %v (race build %t)", got, want, raceEnv != "")
+	}
+}
+
 func TestStderrLogIsBounded(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "x.log")
 	f, err := os.Create(path)

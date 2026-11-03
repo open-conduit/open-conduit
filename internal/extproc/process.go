@@ -215,7 +215,8 @@ func (p *Process) notify() {
 
 // sanitized keeps only safe process variables (the B05 baseline): no
 // credentials, toolbelt variables or Open Conduit settings reach an
-// extension through its environment. Secrets are resolved explicitly.
+// extension through its environment. Secrets are resolved explicitly. A
+// race-built (test) host also keeps GORACE (race_on.go).
 func sanitized(environ []string) []string {
 	var out []string
 	for _, kv := range environ {
@@ -228,7 +229,7 @@ func sanitized(environ []string) []string {
 			out = append(out, kv)
 			continue
 		}
-		if strings.HasPrefix(name, "LC_") {
+		if strings.HasPrefix(name, "LC_") || (raceEnv != "" && name == raceEnv) {
 			out = append(out, kv)
 		}
 	}
