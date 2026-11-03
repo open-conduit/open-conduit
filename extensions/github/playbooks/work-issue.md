@@ -1,6 +1,7 @@
 ---
 name: work-issue
 description: Work a GitHub issue in turns under Open Conduit. The first turn reads the issue and does what it asks in the issue's own workspace, opening a PR when it changes the repository or answering on the issue when it doesn't; later turns, started by Open Conduit, act on new comments, check results and merges. Started by Open Conduit as /open-conduit:work-issue <number>.
+operations: [github.context, github.issue.view, github.issue.comment, github.issue.list, github.issue.create, github.pr.list, github.pr.create, github.pr.edit, github.pr.view, github.pr.comment, github.pr.reply, github.pr.resolve, github.pr.review, github.checks, github.attachment.upload, github.attachment.get, github.wait]
 ---
 
 # Work an issue

@@ -122,10 +122,41 @@ func inprocRegistry(reg *config.Registry, xs []inproc.Extension) {
 		if o, ok := x.(inproc.Operator); ok {
 			reg.Operations = append(reg.Operations, o.Operations()...)
 		}
+		if t, ok := x.(inproc.Toolsetter); ok {
+			if reg.Toolsets == nil {
+				reg.Toolsets = map[string]extension.Toolset{}
+			}
+			for _, ts := range t.Toolsets() {
+				// One outside the extension's namespace, or granting
+				// another's operations, is never registered: config that
+				// names it fails closed (an installed package's manifest
+				// is refused for it at discovery).
+				if extension.CheckToolset(x.Name(), ts) == nil {
+					reg.Toolsets[ts.Name] = ts
+				}
+			}
+		}
+		if p, ok := x.(inproc.Playbooker); ok {
+			addPlaybooks(reg, p.Playbooks())
+		}
 		if r, ok := x.(inproc.Router); ok {
 			for name := range r.Routes() {
 				reg.Handlers[name] = true
 			}
+		}
+	}
+}
+
+// addPlaybooks registers the operations each playbook declares it relies
+// on. The first playbook of a name is the one written to the plugin
+// (inprocPlaybooks), so it is the one kept.
+func addPlaybooks(reg *config.Registry, books map[string]string) {
+	if reg.Playbooks == nil {
+		reg.Playbooks = map[string][]string{}
+	}
+	for name, text := range books {
+		if _, ok := reg.Playbooks[name]; !ok {
+			reg.Playbooks[name] = extension.PlaybookOperations(text)
 		}
 	}
 }

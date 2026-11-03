@@ -488,4 +488,5 @@ var _ interface {
 	extension.ResumeExecutor
 	extension.ForgetExecutor
 	extension.LiveExecutor
+	extension.PlaybookNamer
 } = (*Executor)(nil)

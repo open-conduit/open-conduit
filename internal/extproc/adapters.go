@@ -478,6 +478,16 @@ func (e *remoteExecutor) ResourceMode(raw json.RawMessage) string {
 	return e.r.ExecutorResourceMode(e.decl.Name)(raw)
 }
 
+// Playbook is the playbook a binding config starts the executor's turns
+// on (extension.PlaybookNamer), asked through validate when the manifest
+// declares playbook; "" otherwise.
+func (e *remoteExecutor) Playbook(raw json.RawMessage) string {
+	if !e.decl.Playbook {
+		return ""
+	}
+	return e.r.ExecutorPlaybook(e.decl.Name)(raw)
+}
+
 // open binds the RunRequest's trusted callbacks to a fresh run ID. The run
 // remembers the last metadata persisted through it, so the host can
 // re-adopt the execution after the extension crashes.

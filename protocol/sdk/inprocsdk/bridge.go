@@ -186,6 +186,11 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 			}
 		}
 	}
+	if t, ok := b.x.(inproc.Toolsetter); ok && len(p.Toolsets) == 0 {
+		for _, ts := range t.Toolsets() {
+			p.Toolsets = append(p.Toolsets, protocol.ToolsetDecl{Name: ts.Name, Summary: ts.Summary, Operations: slices.Clone(ts.Operations)})
+		}
+	}
 	if _, ok := b.x.(inproc.EntryGated); ok {
 		p.EntryGated = true
 	}

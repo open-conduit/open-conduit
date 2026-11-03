@@ -261,10 +261,10 @@
           "type": "array",
           "items": {
             "type": "string",
-            "pattern": "^[a-z][a-z0-9_.-]*$"
+            "pattern": "^!?@?[a-z][a-z0-9_.-]*$"
           },
           "uniqueItems": true,
-          "description": "Toolbelt operations executions in this scope may call (see the operations reference). A binding's operations narrow it."
+          "description": "Toolbelt operations executions in this scope may call (see the operations reference): an operation, a toolset an extension publishes as `@<name>` (every operation it has in the running release), or either denied with a leading `!`. A binding's operations narrow it."
         },
         "read_scopes": {
           "type": "array",
@@ -413,10 +413,10 @@
               "type": "array",
               "items": {
                 "type": "string",
-                "pattern": "^[a-z][a-z0-9_.-]*$"
+                "pattern": "^!?@?[a-z][a-z0-9_.-]*$"
               },
               "uniqueItems": true,
-              "description": "Narrows the scope's authorization.operations for this binding."
+              "description": "Narrows the scope's authorization.operations for this binding: operations, toolsets as `@<name>` and denials with a leading `!`, as there. A toolset is narrowed to what the scope grants."
             },
             "secret_names": {
               "type": "array",
@@ -516,7 +516,7 @@
                     "type": "array",
                     "items": {
                       "type": "string",
-                      "pattern": "^[a-z][a-z0-9_.-]*$"
+                      "pattern": "^!?@?[a-z][a-z0-9_.-]*$"
                     },
                     "uniqueItems": true
                   },

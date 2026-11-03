@@ -8,6 +8,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/protocol"
 )
 
@@ -64,6 +65,8 @@ var typescriptWire = map[string]any{
 	"Family":               protocol.Family{},
 	"ExtensionDecl":        protocol.ExtensionDecl{},
 	"OperationDecl":        protocol.OperationDecl{},
+	"ToolsetDecl":          protocol.ToolsetDecl{},
+	"ToolsetOperation":     extension.ToolsetOperation{},
 	"TaskDecl":             protocol.TaskDecl{},
 	"CheckDecl":            protocol.CheckDecl{},
 	"Provides":             protocol.Provides{},

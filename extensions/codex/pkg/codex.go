@@ -38,7 +38,8 @@ const Version = "0.1.0"
 
 // Manifest declares the executor's capabilities (interrupt, inject,
 // resume, workspace, the MCP toolbelt), its stop and forget controls, and
-// that it says which workspace mode a binding requests.
+// that it says which workspace mode a binding requests and which playbook
+// it starts on.
 func Manifest() protocol.Manifest {
 	c := codex.Capabilities()
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version,
@@ -47,7 +48,7 @@ func Manifest() protocol.Manifest {
 		Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: Name,
 			Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt},
 			Controls:     protocol.Controls{Stop: true, Forget: true},
-			ResourceMode: true}}}}
+			ResourceMode: true, Playbook: true}}}}
 }
 
 // executor creates the codex executor on first use, once the state
@@ -96,6 +97,7 @@ func (x *executor) Capabilities() domain.Capabilities { return codex.Capabilitie
 func (x *executor) ResourceMode(raw json.RawMessage) string {
 	return codex.ResourceMode(raw)
 }
+func (x *executor) Playbook(raw json.RawMessage) string { return codex.Playbook(raw) }
 func (x *executor) Run(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
 	e, err := x.get()
 	if err != nil {

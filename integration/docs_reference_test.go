@@ -410,6 +410,7 @@ The host checks every call where it serves it, from the execution's token, and r
 
 - The scope's ` + "`authorization.operations`" + ` lists the operations its executions may call. A child scope's list can only narrow its parent's.
 - A binding's ` + "`operations`" + ` is the exact list its executions get, within the scope's. A Work whose route opts into one of the binding's ` + "`grants`" + ` also gets that grant's operations, still within the scope's.
+- Either list can name a [toolset](#toolsets) as ` + "`@<name>`" + `: every operation the toolset has in the running release, so an install granting it gets what a later release adds to the role. ` + "`!<operation>`" + ` (or ` + "`!@<toolset>`" + `) takes one back out. A toolset a binding names is narrowed to what the scope grants, and a name that isn't registered fails the config.
 - An operation a ` + "`human`" + ` extension entry lists in ` + "`gates`" + ` waits at the host for a person's approval before it runs, whoever calls it (see [configuration](../config/#human-decisions-human)).
 - A call acts on the execution's own Work, and only while its lease is current. Waiting on another scope's Events needs that scope in ` + "`read_scopes`" + `; filing an issue in, or commenting on, another scope's tracker needs it in ` + "`file_scopes`" + `.
 
@@ -419,6 +420,14 @@ See [configuration](../config/#authorization) for the fields and [toolbelt autho
 	for _, op := range cli.BuiltinOperations() {
 		fmt.Fprintf(&b, "\n### `%s`\n\n%s\n", op.Name, op.Description)
 		inputTable(&b, op.InputSchema)
+	}
+
+	b.WriteString("\n## Toolsets\n\nThe operations an extension's agents need for a role, granted together as `@<name>`. Each operation joined its toolset in the version shown; a toolset only gains operations. `open-conduit doctor` reports a list that names an earlier version's operations one by one, with the `config set` that grants the toolset instead.\n")
+	for _, ts := range bootstrap.Toolsets() {
+		fmt.Fprintf(&b, "\n### `@%s`\n\n%s\n\n| Operation | Since version |\n| --- | --- |\n", ts.Name, ts.Summary)
+		for _, op := range ts.Operations {
+			fmt.Fprintf(&b, "| `%s` | %d |\n", op.Name, max(op.Since, 1))
+		}
 	}
 
 	b.WriteString("\n## Bundled extensions\n\nThe extensions built into the daemon register these operations, each with the input it takes; `open-conduit adapters TYPE` lists them too.\n")

@@ -500,6 +500,28 @@ export const OperationDecl = t.object(
 );
 export type OperationDecl = Infer<typeof OperationDecl>;
 
+export const ToolsetOperation = t.object(
+  {
+    name: t.string(),
+    // The toolset version the operation joined in (1 when left out).
+    since: t.optional(t.integer()),
+  },
+  open,
+);
+export type ToolsetOperation = Infer<typeof ToolsetOperation>;
+
+// A toolset config grants as "@<name>": the operations (the extension's own
+// or builtins) an agent playing one of its roles is given.
+export const ToolsetDecl = t.object(
+  {
+    name: t.string(),
+    summary: t.optional(t.string()),
+    operations: t.array(ToolsetOperation),
+  },
+  open,
+);
+export type ToolsetDecl = Infer<typeof ToolsetDecl>;
+
 export const TaskDecl = t.object(
   {
     name: t.string(),
@@ -524,6 +546,7 @@ export const Provides = t.object(
     extensions: t.optional(t.array(ExtensionDecl)),
     families: t.optional(t.array(Family)),
     operations: t.optional(t.array(OperationDecl)),
+    toolsets: t.optional(t.array(ToolsetDecl)),
     tasks: t.optional(t.array(TaskDecl)),
     checks: t.optional(t.array(CheckDecl)),
   },

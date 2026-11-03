@@ -59,6 +59,11 @@ const (
 	// ValidateResult whose Mode is the requested mode, "" for the resource
 	// config's default.
 	ValidateExecutorMode = "executor_mode"
+	// ValidateExecutorPlaybook asks an executor declared with playbook
+	// which playbook a binding config starts its turns on. Type is the
+	// executor, Config the binding's executor config; the answer is a
+	// ValidateResult whose Playbook is the playbook's name, "" for none.
+	ValidateExecutorPlaybook = "executor_playbook"
 )
 
 // ValidateParams asks the extension to check one opaque config object of
@@ -88,6 +93,7 @@ type ValidateParams struct {
 // type's declared describe. They must not reveal secrets.
 type ValidateResult struct {
 	Mode     string         `json:"mode,omitempty"`
+	Playbook string         `json:"playbook,omitempty"`
 	Warnings []string       `json:"warnings,omitempty"`
 	Describe []DescribeLine `json:"describe,omitempty"`
 }

@@ -21,9 +21,11 @@ import (
 const MaxSize = 1 << 20
 
 var (
-	idPattern  = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
-	opPattern  = regexp.MustCompile(`^[a-z][a-z0-9_.-]*$`)
-	envPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
+	idPattern = regexp.MustCompile(`^[a-z][a-z0-9_-]{0,62}$`)
+	// grantPattern is an entry of an operations list: an operation, a
+	// toolset ("@github.author") or either denied ("!github.pr.edit").
+	grantPattern = regexp.MustCompile(`^!?@?[a-z][a-z0-9_.-]*$`)
+	envPattern   = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 )
 
 // Diagnostic paths are JSON pointers without the leading slash. Messages are
@@ -117,8 +119,13 @@ type Webhooks struct {
 }
 type Authorization struct {
 	Connections []string `json:"connections"`
-	Operations  []string `json:"operations"`
-	ReadScopes  []string `json:"read_scopes"`
+	// Operations are the operations the scope's bindings may be granted.
+	// As written, an entry is an operation, a toolset an extension
+	// publishes ("@github.author", every operation it has in the running
+	// release) or either denied ("!github.pr.edit"); in an EffectiveScope
+	// they are resolved to operation names (ResolveOperations).
+	Operations []string `json:"operations"`
+	ReadScopes []string `json:"read_scopes"`
 	// FileScopes are the other scopes whose trackers this scope's agents
 	// may file issues in and comment on (optional; empty grants none).
 	FileScopes []string `json:"file_scopes,omitempty"`
@@ -160,6 +167,13 @@ type Binding struct {
 	// config, which the Work opts into by name when it is created (for
 	// example the shell an operator turns on for one setup session).
 	Grants []Grant
+	// Playbook and PlaybookOperations are, in an EffectiveScope, the
+	// playbook the binding's executor starts its turns on with its config
+	// and the operations that playbook declares it relies on
+	// (BindingPlaybook), worked out once when the generation is
+	// validated. They are never parsed from config.
+	Playbook           string
+	PlaybookOperations []string
 }
 
 // domainGrants are the binding's grants as domain.BindingGrant.
@@ -531,7 +545,7 @@ func (c *checker) scope(n *node, path string) ScopeConfig {
 		if c.object(a, p, []string{"connections", "operations", "read_scopes"}, "file_scopes") {
 			out.Authorization = &Authorization{
 				Connections: c.list(a.field("connections"), p+"/connections", idPattern),
-				Operations:  c.list(a.field("operations"), p+"/operations", opPattern),
+				Operations:  c.list(a.field("operations"), p+"/operations", grantPattern),
 				ReadScopes:  c.list(a.field("read_scopes"), p+"/read_scopes", idPattern),
 				FileScopes:  c.list(a.field("file_scopes"), p+"/file_scopes", idPattern),
 			}
@@ -599,7 +613,7 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 			b.Requires.Toolbelt, _ = c.enum(t, p+"/toolbelt", "none", "cli", "mcp", "sdk")
 		}
 	}
-	b.Operations = c.list(n.field("operations"), path+"/operations", opPattern)
+	b.Operations = c.list(n.field("operations"), path+"/operations", grantPattern)
 	b.SecretNames = c.list(n.field("secret_names"), path+"/secret_names", idPattern)
 	if r := n.field("resource"); r != nil && c.object(r, path+"/resource", []string{"provider", "config"}) {
 		b.Resource = &Resource{}
@@ -631,7 +645,7 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 			if l := item.field("label"); l != nil {
 				grant.Label, _ = c.str(l, p+"/label", nil)
 			}
-			grant.Operations = c.list(item.field("operations"), p+"/operations", opPattern)
+			grant.Operations = c.list(item.field("operations"), p+"/operations", grantPattern)
 			if cfg := item.field("config"); cfg != nil {
 				grant.Config = c.opaque(cfg, p+"/config")
 			}

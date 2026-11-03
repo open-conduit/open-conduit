@@ -145,6 +145,18 @@ func OperationDeclarations() map[string]extension.Operation {
 	return out
 }
 
+// Toolsets are the toolsets the bundled extensions publish, which config
+// grants as "@<name>", sorted by name.
+func Toolsets() []extension.Toolset {
+	reg := registry(offlineExecutors())
+	out := make([]extension.Toolset, 0, len(reg.Toolsets))
+	for _, t := range reg.Toolsets {
+		out = append(out, t)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
 // OperationNames are the toolbelt operations a config may grant offline
 // (the registry config check validates authorization.operations against),
 // sorted. Each extension's are in its Adapters entry; the generated

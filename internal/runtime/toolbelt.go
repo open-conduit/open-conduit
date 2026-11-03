@@ -48,6 +48,11 @@ type ToolbeltGrant struct {
 	Connection             string
 }
 
+// RefusalConfigDrift classifies a refused call whose operation the
+// binding's own playbook declares: the grant lags what the playbook uses,
+// so the operator's configuration needs the fix, not the agent.
+const RefusalConfigDrift = "config_drift"
+
 type ToolbeltOptions struct {
 	CausalLimits CausalLimits
 	// Grant selects the pinned allowlist from trusted config when the scheduler
@@ -63,6 +68,11 @@ type ToolbeltOptions struct {
 	// storage transactions when the wait is declared; registration rechecks it.
 	// A nil AuthorizeAlias refuses every cross-scope dependency.
 	AuthorizeAlias func(context.Context, AliasAuthorization) error
+	// Refusal optionally classifies a call refused as unauthorized for its
+	// toolbelt.rejected record (toolbelt.refusal): RefusalConfigDrift when
+	// the configuration, not the caller, is what is wrong. "" leaves it
+	// unclassified. It is called outside storage transactions.
+	Refusal func(context.Context, AuthorityCheck) string
 	// Observer receives a toolbelt.called or toolbelt.rejected record for every
 	// call whose credential resolves to an execution authority. State changes
 	// made by a call are reported separately by the instrumented store.
@@ -620,6 +630,11 @@ func (t *Toolbelt) observeCall(ctx context.Context, record tokenRecord, operatio
 		name = "toolbelt.rejected"
 	}
 	rec := observability.Record{Name: name, At: t.now(), Correlation: observability.Correlation{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, ExecutorBinding: record.Binding}, Attributes: map[string]string{"toolbelt.operation": operation, "toolbelt.result": callCode(callErr), "lease.epoch": strconv.FormatUint(a.Lease.Epoch, 10)}}
+	if t.options.Refusal != nil && rec.Attributes["toolbelt.result"] == "unauthorized" {
+		if kind := t.options.Refusal(ctx, AuthorityCheck{ScopeID: a.ScopeID, WorkID: a.WorkID, ExecutionID: a.ExecutionID, Binding: record.Binding, Generation: record.Generation, Operation: operation}); kind != "" {
+			rec.Attributes["toolbelt.refusal"] = kind
+		}
+	}
 	if gate != "" {
 		// A gate parked the call (result ok, the caller now waits) or
 		// refused it (result gate_refused).

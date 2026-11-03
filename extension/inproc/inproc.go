@@ -74,6 +74,14 @@ type Operator interface {
 	Operations() []string
 }
 
+// Toolsetter extensions publish toolsets: named sets of their operations
+// (and builtins) for the roles their agents play, which config grants as
+// "@<name>" (extension.Toolset). Toolsets is read offline, like
+// Declarations, and must not depend on host services.
+type Toolsetter interface {
+	Toolsets() []extension.Toolset
+}
+
 // Declarer extensions declare their toolbelt operations: each one's Name,
 // and its Summary and Input (see extension.Operation), with no handler.
 // Declarations is read before Start, offline (config validation and the

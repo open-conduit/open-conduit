@@ -138,6 +138,21 @@ func (r *Remote) ExecutorResourceMode(name string) func(json.RawMessage) string 
 	}
 }
 
+// ExecutorPlaybook returns the playbook a declared executor starts its
+// turns on with a binding config: validate with kind executor_playbook, ""
+// for none or a failed call.
+func (r *Remote) ExecutorPlaybook(name string) func(json.RawMessage) string {
+	return func(config json.RawMessage) string {
+		ctx, cancel := context.WithTimeout(context.Background(), ValidateTimeout)
+		defer cancel()
+		var out protocol.ValidateResult
+		if err := r.p.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateExecutorPlaybook, Type: name, Config: config}, &out); err != nil {
+			return ""
+		}
+		return oneLine(out.Playbook)
+	}
+}
+
 // ExecutorWarnings returns the config warnings of a declared executor:
 // validate with kind executor, whose answer may carry warnings. A failed
 // call or a refusal gives none (the config check reports a refusal), and

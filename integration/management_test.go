@@ -1143,3 +1143,67 @@ func TestManagementOperatorRoles(t *testing.T) {
 		t.Fatalf("roles: %v", roles)
 	}
 }
+
+// playbookFixture is the fixture executor, starting its turns on the
+// binding config's playbook (extension.PlaybookNamer).
+type playbookFixture struct{ *schedulerExecutor }
+
+func (playbookFixture) Playbook(raw json.RawMessage) string {
+	var c struct {
+		Playbook string `json:"playbook"`
+	}
+	_ = json.Unmarshal(raw, &c)
+	return c.Playbook
+}
+
+// A refused call is classified as configuration drift against the
+// generation its execution is pinned to, from what validating that
+// generation found its binding's playbook declares; applying a generation
+// whose binding runs no playbook changes neither the pinned answer nor
+// asks the executor again.
+func TestManagementRefusalFollowsThePinnedGeneration(t *testing.T) {
+	ctx := context.Background()
+	clock := conformance.NewClock()
+	state := t.TempDir()
+	db, err := sqlite.Open(ctx, filepath.Join(state, "conduit.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { db.Close() })
+	path := filepath.Join(state, "config.json")
+	withPlaybook := strings.Replace(managementConfig, `"secret_names": ["api"], "config": {}`, `"secret_names": ["api"], "config": {"playbook": "work"}`, 1)
+	if withPlaybook == managementConfig {
+		t.Fatal("fixture replace failed")
+	}
+	if err = config.SaveAtomic(path, []byte(withPlaybook)); err != nil {
+		t.Fatal(err)
+	}
+	registry := config.Registry{Executors: map[string]extension.Executor{"fixture": playbookFixture{&schedulerExecutor{Caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}}},
+		Handlers: map[string]bool{"manual": true}, Operations: []string{"ext.edit"}, Playbooks: map[string][]string{"work": {"ext.edit"}}}
+	configs, err := management.OpenConfig(ctx, db, clock.Now, registry, path, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	check := func(gen, op string) string {
+		return configs.Refusal(ctx, runtime.AuthorityCheck{ScopeID: "ops", Binding: "run", Generation: gen, Operation: op})
+	}
+	if got := check("1", "ext.edit"); got != runtime.RefusalConfigDrift {
+		t.Fatalf("declared operation: %q", got)
+	}
+	if got := check("1", "create_work"); got != "" {
+		t.Fatalf("undeclared operation: %q", got)
+	}
+	s, err := configs.Validate([]byte(managementConfig))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err = configs.Apply(ctx, []byte(managementConfig), s.Hash, 1); err != nil {
+		t.Fatal(err)
+	}
+	if got := check("2", "ext.edit"); got != "" {
+		t.Fatalf("generation 2 runs no playbook: %q", got)
+	}
+	if got := check("1", "ext.edit"); got != runtime.RefusalConfigDrift {
+		t.Fatalf("generation 1 after apply: %q", got)
+	}
+}

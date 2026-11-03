@@ -316,6 +316,18 @@ func (c *ConfigService) Authorize(_ context.Context, check runtime.AuthorityChec
 	return s.AuthorizeOperation(check.ScopeID, check.Binding, check.Operation)
 }
 
+// Refusal classifies a refused toolbelt call (runtime.ToolbeltOptions.Refusal)
+// against the generation the call's execution is pinned to: an operation
+// its binding's playbook declares is runtime.RefusalConfigDrift, the grant
+// lagging what the playbook uses. The playbook was worked out when that
+// generation was validated, so no executor is asked here.
+func (c *ConfigService) Refusal(_ context.Context, check runtime.AuthorityCheck) string {
+	if s := c.snapshotFor(check.Generation); s != nil && s.Declared(check.ScopeID, check.Binding, check.Operation) {
+		return runtime.RefusalConfigDrift
+	}
+	return ""
+}
+
 func (c *ConfigService) snapshotFor(generation string) *config.Snapshot {
 	c.mu.Lock()
 	defer c.mu.Unlock()
