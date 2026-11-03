@@ -88,8 +88,7 @@ type Options struct {
 	// (and reads Work state in Maintain).
 	Store storage.Store
 	// Namespace separates this registration's continuity (default
-	// "claude-code", the package's own; it was "executor.claudecode" while
-	// the executor ran in process).
+	// "claude-code", the package's own).
 	Namespace string
 	// Artifacts receives each turn's transcript and stderr. Optional.
 	Artifacts storage.Artifacts
