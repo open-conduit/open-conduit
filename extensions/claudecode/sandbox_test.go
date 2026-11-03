@@ -152,3 +152,26 @@ func TestSandboxReadsToolbelt(t *testing.T) {
 		t.Fatalf("container needs %+v, want no read of %s", c.needs, belt)
 	}
 }
+
+// TestRunDirectoriesWin: the toolbelt and playbook directories the host
+// names for a run win over the executor's own, so an executor out of
+// process, away from the host's os, still reaches the host's.
+func TestRunDirectoriesWin(t *testing.T) {
+	h := newHarness(t)
+	e := h.executorWith(func(o *claudecode.Options) { o.PluginDir = filepath.Join(h.root, "own-plugins") })
+	hostBelt, hostBooks := filepath.Join(h.root, "host-belt"), filepath.Join(h.root, "host-plugins")
+	b := &recordingBroker{}
+	r, _ := h.request("work/a", "exec-a", 1, nil)
+	r.Context.Sandbox = b
+	r.Context.ToolbeltToken, r.Context.ToolbeltEndpoint = "belt", "unix:///run/belt.sock"
+	r.Context.ToolbeltDir, r.Context.PlaybookDir = hostBelt, hostBooks
+	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("sandboxed run failed: %+v", res.Outcome)
+	}
+	if len(b.needs) != 1 || !slices.Contains(b.needs[0].Read, hostBelt) || !slices.Contains(b.needs[0].Read, hostBooks) {
+		t.Fatalf("needs %+v, want reads of %s and %s", b.needs, hostBelt, hostBooks)
+	}
+	if slices.Contains(b.needs[0].Read, filepath.Join(h.root, "bin")) || slices.Contains(b.needs[0].Read, filepath.Join(h.root, "own-plugins")) {
+		t.Fatalf("needs %+v read the executor's own directories", b.needs)
+	}
+}
