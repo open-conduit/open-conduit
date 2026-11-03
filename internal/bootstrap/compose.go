@@ -167,14 +167,6 @@ func packageExecutors(xs []*installed, executors map[string]extension.Executor, 
 // Discovery holds a package's manifest to the same rule.
 func knownPool(pool string) bool { return pool == "" || pool == jobPool }
 
-// causalLimits are the current generation's causal bounds.
-func (d *daemon) causalLimits() runtime.CausalLimits {
-	if s, _ := d.extensionSnapshot(); s != nil {
-		return runtime.CausalLimits{MaxDepth: s.Settings.CausalMaxDepth, PerMinute: s.Settings.CausalPerMinute}
-	}
-	return runtime.CausalLimits{}
-}
-
 // workKinds are the scheduler's Work kind policies: the packages' own
 // kinds.
 func workKinds(xs []*installed) map[string]runtime.WorkKindPolicy {

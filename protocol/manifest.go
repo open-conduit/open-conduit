@@ -624,13 +624,13 @@ type ToolsetDecl struct {
 	Operations []extension.ToolsetOperation `json:"operations"`
 }
 
-// ExecutorDecl declares an executor. Capabilities are exactly the bind-time
-// labels of domain.Capabilities; Controls are optional host-driven methods.
 // PoolJobs is the capacity pool of job executors: settings.job_concurrency
 // bounds them, and settings.concurrency every other executor (agent turns),
 // so neither starves the other.
 const PoolJobs = "jobs"
 
+// ExecutorDecl declares an executor. Capabilities are exactly the bind-time
+// labels of domain.Capabilities; Controls are optional host-driven methods.
 type ExecutorDecl struct {
 	Name         string       `json:"name"`
 	Capabilities Capabilities `json:"capabilities"`
