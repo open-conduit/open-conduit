@@ -52,7 +52,10 @@ type Options struct {
 	// StateDir is the extension's private state directory; LogDir receives
 	// its captured stderr (<LogDir>/<name>.log, bounded).
 	StateDir, LogDir string
-	Host             protocol.HostInfo
+	// ExecutorDirs are the declared executors' state directories
+	// (protocol.InitializeParams.ExecutorDirs).
+	ExecutorDirs map[string]string
+	Host         protocol.HostInfo
 	// Versions are the protocol versions the host speaks (default
 	// protocol.Versions).
 	Versions []int
@@ -376,7 +379,7 @@ func (p *Process) handshake(ctx context.Context, conn *jsonrpc.Conn) error {
 	ctx, cancel := context.WithTimeout(ctx, p.o.HandshakeTimeout)
 	defer cancel()
 	var init protocol.InitializeResult
-	err := conn.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: p.o.Versions, Host: p.o.Host, StateDir: p.o.StateDir}, &init)
+	err := conn.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: p.o.Versions, Host: p.o.Host, StateDir: p.o.StateDir, ExecutorDirs: p.o.ExecutorDirs}, &init)
 	if errors.Is(err, protocol.ErrIncompatible) {
 		return p.refuse(err)
 	}

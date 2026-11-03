@@ -189,7 +189,8 @@ func (d *daemon) startInproc(ctx context.Context) error {
 			Nudge:    d.poke,
 			StateDir: d.o.StateDir, DryRun: d.o.DryRun,
 			Artifacts: d.artifacts, ToolbeltDir: d.o.ToolbeltDir, PlaybookDir: d.pluginDir(),
-			Render: func(ctx context.Context, e domain.Event) (string, bool) { return d.inprocRender(e) },
+			ExecutorDir: func(name string) string { return executorDir(d.o.StateDir, name) },
+			Render:      func(ctx context.Context, e domain.Event) (string, bool) { return d.inprocRender(e) },
 			OpenLog: func(name string) (io.WriteCloser, error) {
 				return openLog(filepath.Join(d.o.StateDir, "logs", name+".jsonl"))
 			},

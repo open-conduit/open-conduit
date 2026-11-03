@@ -852,3 +852,42 @@ func TestSandboxClaudeCodeProcessControl(t *testing.T) {
 		t.Fatalf("claude left processes running: %s", out)
 	}
 }
+
+// TestSandboxedShellPackageInDaemon runs a sandboxed shell binding through
+// the bundled shell package (#428): the package plans its launch through
+// sandbox.plan, the host's guard accepts the run directory under the
+// executor's state directory, and the run completes inside srt.
+func TestSandboxedShellPackageInDaemon(t *testing.T) {
+	if testing.Short() {
+		t.Skip("process drills")
+	}
+	bin := srtBinary(t)
+	t.Setenv("PATH", filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	d := newDrill(t)
+	cfg := map[string]any{
+		"version": 1, "settings": map[string]any{}, "connections": []any{},
+		"scopes": []any{map[string]any{
+			"id": "drill", "name": "Drill",
+			"authorization": map[string]any{"connections": []any{}, "operations": []string{"read_context"}, "read_scopes": []any{}},
+			"bindings": []any{map[string]any{"name": "run", "executor": "shell", "requires": map[string]any{"toolbelt": "cli"}, "operations": []string{"read_context"}, "secret_names": []any{},
+				"config":  map[string]any{"command": `os outcome completed --summary sandboxed --schema core.turn.v1 --data '{"status":"done"}' --request-id done >/dev/null`},
+				"sandbox": map[string]any{"provider": "srt", "config": map[string]any{"sockets": []string{"{toolbelt}"}, "unix_sockets": "all"}}}},
+			"routes":      []any{map[string]any{"name": "incoming", "handler": "manual", "binding": "run", "active_policy": "queue", "config": map[string]any{}}},
+			"secret_refs": map[string]any{},
+		}},
+	}
+	raw, _ := json.Marshal(cfg)
+	if err := os.WriteFile(d.config, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.start("")
+	if _, err := d.submit("drill.sandboxed"); err != nil {
+		t.Fatal(err)
+	}
+	w := d.waitState("completed")
+	xs := d.executions(w.ID)
+	if len(xs) != 1 {
+		t.Fatalf("executions: %+v", xs)
+	}
+	d.settle()
+}

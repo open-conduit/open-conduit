@@ -143,6 +143,9 @@ type Server struct {
 	conn  *jsonrpc.Conn
 	host  *Host
 	state string
+	// executors are the declared executors' state directories
+	// (protocol.InitializeParams.ExecutorDirs).
+	executors map[string]string
 
 	mu       sync.Mutex
 	ready    bool
@@ -470,12 +473,20 @@ func (s *Server) initialize(raw json.RawMessage) (any, error) {
 		return nil, err
 	}
 	s.mu.Lock()
-	s.ready, s.state = true, p.StateDir
+	s.ready, s.state, s.executors = true, p.StateDir, p.ExecutorDirs
 	s.mu.Unlock()
 	return protocol.InitializeResult{ProtocolVersion: v, Manifest: manifest}, nil
 }
 
 // StateDir is the private state directory the host gave at initialize.
+// ExecutorDir is the state directory the host named at initialize for one
+// of the extension's executors ("" when it named none).
+func (s *Server) ExecutorDir(name string) string {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.executors[name]
+}
+
 func (s *Server) StateDir() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()

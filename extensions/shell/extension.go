@@ -32,5 +32,11 @@ func (x *Extension) Executors() map[string]inproc.Executor {
 }
 
 func (x *Extension) Start(_ context.Context, h inproc.Host) error {
-	return x.exec.Open(Options{StateDir: filepath.Join(h.StateDir, "executors", Name), Artifacts: h.Artifacts, ToolbeltDir: h.ToolbeltDir, Now: h.Now})
+	dir := filepath.Join(h.StateDir, "executors", Name)
+	if h.ExecutorDir != nil {
+		if d := h.ExecutorDir(Name); d != "" {
+			dir = d
+		}
+	}
+	return x.exec.Open(Options{StateDir: dir, Artifacts: h.Artifacts, ToolbeltDir: h.ToolbeltDir, Now: h.Now})
 }

@@ -586,8 +586,16 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 				slog.New(slog.NewJSONHandler(os.Stderr, nil)).Warn("extension report", "extension", b.x.Name(), "code", code)
 			}
 		},
-		Nudge:     func() {},
-		StateDir:  state,
+		Nudge:    func() {},
+		StateDir: state,
+		ExecutorDir: func(name string) string {
+			b.mu.Lock()
+			defer b.mu.Unlock()
+			if b.srv == nil {
+				return ""
+			}
+			return b.srv.ExecutorDir(name)
+		},
 		DryRun:    b.isDryRun(),
 		Artifacts: sdk.NewArtifacts(h),
 		Render: func(ctx context.Context, e domain.Event) (string, bool) {

@@ -72,7 +72,7 @@ func (x *Extension) Start(_ context.Context, h inproc.Host) error {
 		render = func(events []domain.Event) string { return renderVia(h.Render, events) }
 	}
 	return x.exec.Open(Options{
-		StateDir: filepath.Join(h.StateDir, "executors", Name), Store: h.Store, Artifacts: h.Artifacts,
+		StateDir: executorDir(h), Store: h.Store, Artifacts: h.Artifacts,
 		ToolbeltDir: h.ToolbeltDir, Report: x.report, Now: h.Now,
 		Render: render, PluginDir: h.PlaybookDir, DryRun: h.DryRun,
 	})
@@ -127,4 +127,15 @@ func (x *Extension) Tasks() []inproc.Task {
 		_, err := x.exec.Maintain(ctx)
 		return err
 	}}}
+}
+
+// executorDir is the executor's state directory: the one the host names
+// (inproc.Host.ExecutorDir), else StateDir/executors/claude-code.
+func executorDir(h inproc.Host) string {
+	if h.ExecutorDir != nil {
+		if d := h.ExecutorDir(Name); d != "" {
+			return d
+		}
+	}
+	return filepath.Join(h.StateDir, "executors", Name)
 }

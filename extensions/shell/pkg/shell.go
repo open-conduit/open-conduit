@@ -26,8 +26,8 @@ const Version = "0.1.0"
 // executor's own config schema.
 func base() protocol.Manifest {
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "Shell",
-		Summary: "Runs a binding's shell command as a Work's execution, with the os toolbelt CLI on its PATH.",
-		Command: protocol.HostRunCommand(Name),
+		Summary:  "Runs a binding's shell command as a Work's execution, with the os toolbelt CLI on its PATH.",
+		Command:  protocol.HostRunCommand(Name),
 		Provides: protocol.Provides{Schemas: []protocol.SchemaDecl{{Name: "shell.config", Versions: []int{1}}}}}
 }
 
