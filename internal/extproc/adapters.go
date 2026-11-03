@@ -609,6 +609,25 @@ func (e *remoteExecutor) ContainerAttach(ctx context.Context, r extension.Contai
 	return extension.ContainerAttachSpec{Needs: out.Needs.Extension(), Launch: out.Launch.Extension()}, nil
 }
 
+// InteractiveLaunch asks the package for the command that starts its
+// CLI's interactive session; the host adds the variables it names to the
+// session's environment and runs it.
+func (e *remoteExecutor) InteractiveLaunch(ctx context.Context, r extension.InteractiveLaunchRequest) (extension.InteractiveLaunchSpec, error) {
+	if !e.decl.Controls.InteractiveLaunch {
+		return extension.InteractiveLaunchSpec{}, extension.ErrUnsupported
+	}
+	var out protocol.InteractiveLaunchSpec
+	p := protocol.InteractiveLaunchParams{Executor: e.decl.Name, Playbook: r.Playbook, Name: r.Name, Summary: r.Summary, Allow: r.Allow, Dir: r.Dir, FilesDir: r.FilesDir, Program: r.Program}
+	if err := e.r.p.Call(ctx, "executor.interactive_launch", p, &out); err != nil {
+		return extension.InteractiveLaunchSpec{}, err
+	}
+	return extension.InteractiveLaunchSpec{Argv: out.Argv, Dir: out.Dir, SetEnv: out.SetEnv}, nil
+}
+
+// LaunchNames are the names the manifest declares for an interactive
+// launch.
+func (e *remoteExecutor) LaunchNames() []string { return e.decl.LaunchNames }
+
 // Live is a running attempt's output so far, from the package.
 func (e *remoteExecutor) Live(ctx context.Context, execution domain.ID, tail int64) ([]extension.LiveOutput, error) {
 	var out protocol.LiveResult

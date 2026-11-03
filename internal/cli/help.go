@@ -26,8 +26,7 @@ var helpGroups = []helpGroup{
 	{"Set up", []helpEntry{
 		{"init", `  init                       list the setups the registered extensions offer
   init TYPE [flags] [--config PATH] [--force] [--dry-run]   run one (for example init github --repo OWNER/NAME, init slack)
-  init --with claude         start Claude Code with the setup guide
-  init --with codex          start the Codex CLI with the setup guide`},
+  init --with EXECUTOR       start an executor's CLI on the setup guide (--with claude, --with codex)`},
 		{"config", `  config check [--file F]    validate the config file offline (no daemon needed)
   config path | config show [--file F]
   config get POINTER | config set POINTER JSON | config unset POINTER   [--file F] (local file, validated before saving)

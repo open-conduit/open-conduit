@@ -7,7 +7,8 @@
 // reattaching to the old extension process.
 //
 // Capabilities: interrupt and inject; controls: stop (epoch-fenced
-// physical-stop evidence) and forget. A job finishes when its run directory
+// physical-stop evidence), forget and an interactive launch (a shell that
+// prints the playbook first: no agent is needed to fit the contract). A job finishes when its run directory
 // gets a "finish" file (or at once with config {"auto":true}); it then
 // takes in its inbox and proves consumption in the result.
 //
@@ -44,7 +45,7 @@ const (
 // Manifest is the runner extension's manifest.
 func Manifest() protocol.Manifest {
 	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: "0.1.0", Summary: "Example external executor: detached jobs with inject, interrupt, stop and forget.", Command: []string{"runner-extension"}, Provides: protocol.Provides{
-		Executors: []protocol.ExecutorDecl{{Name: Name, Capabilities: protocol.Capabilities{Interrupt: true, Inject: true, Toolbelt: extension.ToolbeltNone}, Controls: protocol.Controls{Stop: true, Forget: true}, ResourceMode: true}},
+		Executors: []protocol.ExecutorDecl{{Name: Name, Capabilities: protocol.Capabilities{Interrupt: true, Inject: true, Toolbelt: extension.ToolbeltNone}, Controls: protocol.Controls{Stop: true, Forget: true, InteractiveLaunch: true}, ResourceMode: true}},
 		Checks:    []protocol.CheckDecl{{Name: Name}},
 	}}
 }
@@ -84,8 +85,9 @@ type jobConfig struct {
 }
 
 var (
-	_ extension.ResourceModer = (*Executor)(nil)
-	_ extension.ConfigWarner  = (*Executor)(nil)
+	_ extension.InteractiveLauncher = (*Executor)(nil)
+	_ extension.ResourceModer       = (*Executor)(nil)
+	_ extension.ConfigWarner        = (*Executor)(nil)
 )
 
 // ConfigWarnings are config check's warnings about a binding config: the
@@ -96,6 +98,27 @@ func (e *Executor) ConfigWarnings(raw json.RawMessage) []string {
 		return nil
 	}
 	return []string{"config.retries is ignored: the runner never retries a job; remove it"}
+}
+
+// LaunchNames: the runner goes by its own name alone.
+func (e *Executor) LaunchNames() []string { return nil }
+
+// InteractiveLaunch writes the playbook into the files directory and
+// starts a shell that prints it first. A shell has no list of commands to
+// allow, so the request's allowed commands are left to the operator.
+func (e *Executor) InteractiveLaunch(_ context.Context, r extension.InteractiveLaunchRequest) (extension.InteractiveLaunchSpec, error) {
+	if err := os.MkdirAll(r.FilesDir, 0o755); err != nil {
+		return extension.InteractiveLaunchSpec{}, err
+	}
+	path := filepath.Join(r.FilesDir, "playbook.md")
+	if err := os.WriteFile(path, []byte(r.Playbook), 0o644); err != nil {
+		return extension.InteractiveLaunchSpec{}, err
+	}
+	program := r.Program
+	if program == "" {
+		program = "sh"
+	}
+	return extension.InteractiveLaunchSpec{Argv: []string{program, "-c", `cat "$0"; exec "${SHELL:-sh}"`, path}, SetEnv: map[string]string{"RUNNER_PLAYBOOK": path}}, nil
 }
 
 // ResourceMode is the resource mode a binding config requests.

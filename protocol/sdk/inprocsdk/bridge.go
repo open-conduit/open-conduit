@@ -227,12 +227,17 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 			_, attach := x.(extension.AttachExecutor)
 			_, containerAttach := x.(extension.ContainerAttachExecutor)
 			_, live := x.(extension.LiveExecutor)
+			launcher, interactive := x.(extension.InteractiveLauncher)
+			var launchNames []string
+			if interactive {
+				launchNames = launcher.LaunchNames()
+			}
 			_, moded := x.(extension.ResourceModer)
 			_, playbook := x.(extension.PlaybookNamer)
 			p.Executors = append(p.Executors, protocol.ExecutorDecl{Name: n, Pool: execs[n].Pool,
 				Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container},
-				Controls:     protocol.Controls{Stop: stop, Forget: forget, Attach: attach, ContainerAttach: containerAttach, Live: live},
-				ResourceMode: moded, Playbook: playbook})
+				Controls:     protocol.Controls{Stop: stop, Forget: forget, Attach: attach, ContainerAttach: containerAttach, Live: live, InteractiveLaunch: interactive},
+				ResourceMode: moded, Playbook: playbook, LaunchNames: launchNames})
 		}
 	}
 	if t, ok := b.x.(inproc.Tasker); ok && len(p.Tasks) == 0 {

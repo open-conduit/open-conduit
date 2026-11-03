@@ -15,8 +15,7 @@ const pluginName = "open-conduit"
 // dir (.claude-plugin/plugin.json and skills/<name>/SKILL.md), one skill
 // each. It rewrites every file each time, so an upgrade replaces old text,
 // and removes skills it no longer carries. The playbooks every extension
-// offers are written this way, and `init --with claude` writes the setup
-// playbook as its own plugin.
+// offers are written this way.
 func writePlugin(dir, description string, books map[string]string) error {
 	if err := os.MkdirAll(filepath.Join(dir, ".claude-plugin"), 0o755); err != nil {
 		return err
