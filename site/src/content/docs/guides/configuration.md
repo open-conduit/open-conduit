@@ -93,4 +93,10 @@ Secrets go to the macOS Keychain or, on Linux, the Secret Service through `secre
 
 Without webhooks the daemon reconciles with each service on an interval, so nothing is lost. For lower latency, store a listener and tunnel in `settings.webhooks`, for example `{"addr": "127.0.0.1:8787", "tunnel": "ngrok"}`. Any free local port works. `serve --webhook-addr … --tunnel …` overrides it for one run.
 
+The tunnel runs from the bundled package of the same name, which sees only a minimal environment. ngrok and cloudflared still read their own config files (`ngrok config add-authtoken` writes one). If yours reads a variable instead, such as `NGROK_AUTHTOKEN`, grant it to the package:
+
+```sh
+open-conduit config set /settings/extensions/ngrok '{"pass_env": ["NGROK_AUTHTOKEN"]}'
+```
+
 Every field, its default and when a change takes effect is in [the configuration reference](../../reference/config/), and the operations `authorization.operations` can grant are in [the toolbelt operations reference](../../reference/operations/). For the full contract, see [configuration, secrets and local management](../../architecture/config-management/) and [the configuration schema](https://github.com/open-conduit/open-conduit/blob/main/docs/architecture/config.schema.json).

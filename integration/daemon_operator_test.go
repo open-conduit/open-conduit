@@ -438,6 +438,48 @@ func TestDaemonStoredWebhookSettings(t *testing.T) {
 	hooked("flag tunnel over the stored address", "(from settings.webhooks); public https://flag.example.test (static, from serve flags)", "https://flag.example.test/github/eng/widgets")
 }
 
+// TestDaemonPackagedTunnel: a tunnel type is the bundled package of that
+// name. The daemon holds its tunnel.run open with the listener's address,
+// takes the URL it reports through tunnel.url, points the GitHub hook at it,
+// and doctor shows both the run (webhooks) and the package's own check.
+func TestDaemonPackagedTunnel(t *testing.T) {
+	fake := githubtest.New("octo/widgets", "tok")
+	defer fake.Close()
+	t.Setenv("OC_TEST_GITHUB_TOKEN", "tok")
+	t.Setenv("OC_TEST_HOOK_SECRET", "hook-secret")
+	d := newDrill(t)
+	args := filepath.Join(t.TempDir(), "args")
+	bin := filepath.Join(t.TempDir(), "cloudflared")
+	script := "#!/bin/sh\ncase \"$1\" in --version) echo 'cloudflared version 2026.1.0'; exit 0 ;; esac\n" +
+		"echo \"$@\" > " + args + "\necho 'INF |  https://brave-fox-12.trycloudflare.com  |'\nexec sleep 300\n"
+	if err := os.WriteFile(bin, []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	var cfg map[string]any
+	_ = json.Unmarshal(webhookConfig(fake.URL), &cfg)
+	cfg["settings"].(map[string]any)["webhooks"] = map[string]any{"addr": "127.0.0.1:0", "tunnel": "cloudflared"}
+	b, _ := json.Marshal(cfg)
+	if err := os.WriteFile(d.config, b, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	ctx := context.Background()
+	d.extra = []string{"--tunnel-binary", bin}
+	d.start("")
+	d.until("the packaged tunnel's URL", 30*time.Second, func() bool {
+		r, err := d.c.Doctor(ctx, false)
+		if err != nil {
+			return false
+		}
+		hooks := fake.Hooks()
+		return check(r, "webhooks").Code == "listening" && strings.Contains(check(r, "webhooks").Detail, "public https://brave-fox-12.trycloudflare.com (cloudflared, from settings.webhooks)") &&
+			check(r, "cloudflared").Code == "ok" && len(hooks) == 1 && hooks[0].URL == "https://brave-fox-12.trycloudflare.com/github/eng/widgets"
+	})
+	got, _ := os.ReadFile(args)
+	if !strings.HasPrefix(string(got), "tunnel --no-autoupdate --url http://127.0.0.1:") {
+		t.Fatalf("cloudflared ran with %q", got)
+	}
+}
+
 // TestDaemonGitHubDryRun: serve --dry-run makes no GitHub writes (labels,
 // comments, reactions, hooks) while issues are still claimed and worked, and
 // doctor says so.
