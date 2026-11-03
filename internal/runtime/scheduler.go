@@ -337,9 +337,12 @@ type Segment struct {
 	// binding declared one. A recovered segment carries the pin of the
 	// container it adopted.
 	Container *extension.ContainerPin `json:",omitempty"`
-	// Isolated says the segment's launch bound a sandbox or a container
-	// before calling its executor, so no process of it can run until one
-	// is pinned (Sandbox, Container).
+	// Invoked says the segment's launch handed the attempt to its
+	// executor: recorded, fenced by the lease, before the executor is
+	// called, so a launch without it started nothing. Isolated says it
+	// bound a sandbox or a container first, so no process of it can run
+	// until one is pinned (Sandbox, Container).
+	Invoked  bool `json:",omitempty"`
 	Isolated bool `json:",omitempty"`
 	// Relaunched says a new owner recovered the attempt while its launch
 	// had started nothing, and launched it afresh (Recovered is set too).
@@ -1420,10 +1423,12 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 			attempt.Request.Context.ContainerHome = c.Home
 		}
 	}
-	if !recovering && (attempt.Request.Context.Sandbox != nil || attempt.Request.Context.Container != nil) {
-		// A sandbox or container holds every process of the launch until
-		// it is pinned: recorded first, a lost lease with nothing pinned
-		// is known to have run nothing (relaunchable).
+	if !recovering {
+		// Recorded before the executor is called: a lost lease with the
+		// executor never called, or with nothing pinned by a sandbox or
+		// container that holds every process until it is pinned, is known
+		// to have run nothing (relaunchable).
+		isolated := attempt.Request.Context.Sandbox != nil || attempt.Request.Context.Container != nil
 		if err = s.transact(ctx, &attempt.Lease, func(tx storage.Tx) error {
 			current, e := attemptState(tx, state.ExecutionID)
 			if e != nil {
@@ -1433,7 +1438,7 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 			if n == 0 || current.Segments[n-1].EndedAt != nil {
 				return nil
 			}
-			current.Segments[n-1].Isolated = true
+			current.Segments[n-1].Invoked, current.Segments[n-1].Isolated = true, isolated
 			return putAttemptState(tx, current)
 		}); err != nil {
 			return attempt, err
@@ -1508,9 +1513,9 @@ func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (Attempt, error) 
 // epoch, without launching it. Usually the claim adopts: Launch calls the
 // executor's Recover on the process the attempt was running. An attempt
 // whose launch had started nothing (Relaunch) is launched afresh instead:
-// still launching (or resuming), nothing pinned with its open segment and,
-// unless a sandbox or container was bound first, no recovery metadata
-// recorded. Nothing ran, so it isn't failed and doesn't count towards its
+// still launching (or resuming), nothing pinned with its open segment and
+// either never handed to its executor or bound to a sandbox or container
+// first (relaunchable). Nothing ran, so it isn't failed and doesn't count towards its
 // retries; the old epoch's writes are already fenced, so its launch can
 // only stop.
 func (s *Scheduler) ClaimRecovery(ctx context.Context, id domain.ID) (Attempt, error) {
@@ -1518,11 +1523,12 @@ func (s *Scheduler) ClaimRecovery(ctx context.Context, id domain.ID) (Attempt, e
 }
 
 // relaunchable reports whether a lost attempt's launch had started
-// nothing. A launching attempt with no recovery metadata never reached a
-// process (an executor persists it before launching one). A sandbox or
-// container, bound before the executor was called (Isolated), holds every
-// process until it is pinned, so with nothing pinned nothing ran whatever
-// the executor recorded.
+// nothing: still launching (or resuming), nothing pinned with its open
+// segment, and either never handed to its executor (Invoked) or bound to a
+// sandbox or container first (Isolated), which holds every process until
+// it is pinned. An executor called without isolation may have started a
+// process before recording any metadata, so that launch is adopted (and
+// fails closed when it can't be), never relaunched.
 func relaunchable(state AttemptState) bool {
 	n := len(state.Segments)
 	if n == 0 {
@@ -1532,13 +1538,10 @@ func relaunchable(state AttemptState) bool {
 	if g.EndedAt != nil || g.Sandbox != nil || g.Container != nil {
 		return false
 	}
-	switch state.LaunchState {
-	case "launching":
-		return g.Isolated || !state.RecoveryRecorded
-	case "resuming":
-		return g.Isolated
+	if state.LaunchState != "launching" && state.LaunchState != "resuming" {
+		return false
 	}
-	return false
+	return !g.Invoked || g.Isolated
 }
 
 func (s *Scheduler) claimRecovery(ctx context.Context, id domain.ID, mayRelaunch bool) (attempt Attempt, err error) {

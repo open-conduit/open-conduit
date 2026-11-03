@@ -71,6 +71,10 @@ type launchRig struct {
 	// lapse, when set, runs after the container is pinned and before the
 	// executor acknowledges the launch.
 	lapse func()
+	// startFirst makes the executor start its process before recording
+	// its metadata (the discovery option the executor contract allows),
+	// with lapse run in between.
+	startFirst bool
 }
 
 func newLaunchRig(t *testing.T) *launchRig {
@@ -89,6 +93,15 @@ func newLaunchRig(t *testing.T) *launchRig {
 		return runtime.ContainerBinding{Broker: slowContainers{pin: pin, phase: runtime.LaunchPhases(ctx), slow: r.slow, mu: &r.mu, created: &r.created, removed: &r.removed, id: id}, Resources: resources}, nil
 	}
 	executor.OnRun = func(ctx context.Context, req extension.RunRequest) (extension.RunHandle, error) {
+		if r.startFirst {
+			if r.lapse != nil {
+				r.lapse()
+			}
+			if err := req.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
+				return nil, err
+			}
+			return &schedulerHandle{Result: extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}}, nil
+		}
 		if err := req.PersistRecovery(domain.Payload{Schema: "fixture.recovery.v1", Data: []byte(`{}`)}); err != nil {
 			return nil, err
 		}
@@ -187,12 +200,14 @@ func TestProductionSchedulerHeldLaunchOutlastsItsLease(t *testing.T) {
 // recovery at the new epoch: Run again, not Recover, the attempt not
 // failed, no retry used, the old epoch's container removed. The negative
 // controls: a lease lost after the pin goes through adoption (Recover),
-// and so does an unisolated launch whose executor recorded its metadata,
-// since its process may be running; one that recorded nothing relaunches.
+// and so does any unisolated launch its executor was called for, with
+// metadata recorded or not, since its process may be running; one whose
+// lease was lost before the executor was called relaunches.
 func TestProductionSchedulerRelaunchesALaunchThatPinnedNothing(t *testing.T) {
 	cases := []struct {
 		name               string
 		contained, pinned  bool
+		startFirst         bool
 		relaunch           bool
 		runs, recoveries   int
 		beforeExecutorCall bool
@@ -200,12 +215,13 @@ func TestProductionSchedulerRelaunchesALaunchThatPinnedNothing(t *testing.T) {
 		{name: "container, nothing pinned", contained: true, relaunch: true, runs: 2},
 		{name: "container pinned", contained: true, pinned: true, runs: 1, recoveries: 1},
 		{name: "no container, metadata recorded", pinned: true, runs: 1, recoveries: 1},
+		{name: "no container, process started before its metadata", startFirst: true, runs: 1, recoveries: 1},
 		{name: "no container, before the executor", beforeExecutorCall: true, relaunch: true, runs: 1},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			r := newLaunchRig(t)
-			r.contained = tc.contained
+			r.contained, r.startFirst = tc.contained, tc.startFirst
 			work := seedSchedulerWork(t, r.f, "lapse")
 			first := r.scheduler(t, "host-a")
 			a, err := first.Claim(context.Background(), work)
@@ -218,14 +234,14 @@ func TestProductionSchedulerRelaunchesALaunchThatPinnedNothing(t *testing.T) {
 				// The lease lapses before the launch reaches its executor:
 				// the launch's first fenced write refuses it.
 				lapse()
-			case tc.pinned:
+			case tc.pinned, tc.startFirst:
 				r.lapse = lapse
 			default:
 				r.slow = lapse
 			}
 			_, err = first.Launch(context.Background(), a)
 			r.slow, r.lapse = nil, nil
-			if err == nil && !tc.pinned {
+			if err == nil {
 				t.Fatal("a launch that lost its lease succeeded")
 			}
 			second := r.scheduler(t, "host-b")
