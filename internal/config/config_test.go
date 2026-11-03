@@ -1058,6 +1058,10 @@ func TestWebhookSettings(t *testing.T) {
 			t.Fatalf("%v: %v", c.hooks, d)
 		}
 	}
+	_, err = with(map[string]any{"addr": "127.0.0.1:8787", "tunnel": "static", "public_url": "https://x.example.com"})
+	if d := diagnostics(t, err); len(d) != 1 || !strings.Contains(d[0].Message, "drop tunnel and keep public_url") || strings.Contains(d[0].Message, `"provider"`) {
+		t.Fatalf("the old static form: %v", d)
+	}
 	_, err = with(map[string]any{"addr": "127.0.0.1:8787", "tunnel": "ngrok", "tunnel_domain": "hooks.ngrok.app"})
 	if d := diagnostics(t, err); len(d) != 1 || !strings.Contains(d[0].Message, `"provider": "ngrok", "config": {"domain"`) {
 		t.Fatalf("the old ngrok form: %v", d)

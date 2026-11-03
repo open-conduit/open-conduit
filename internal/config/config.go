@@ -521,7 +521,9 @@ func (c *checker) webhooks(n *node) Webhooks {
 	w.Addr, _ = c.str(n.field("addr"), path+"/addr", nil)
 	w.PublicURL, _ = c.str(n.field("public_url"), path+"/public_url", nil)
 	if t := n.field("tunnel"); t != nil {
-		if t.kind == kString {
+		if t.kind == kString && t.str == "static" {
+			c.fail(path+"/tunnel", "moved_field", "the static tunnel is gone: drop tunnel and keep public_url, the URL that already reaches the listener")
+		} else if t.kind == kString {
 			c.fail(path+"/tunnel", "moved_field", `tunnel is an object naming the providing package's type: use "tunnel": {"provider": "`+t.str+`", "config": {…}}, or public_url alone for a static URL`)
 		} else if c.object(t, path+"/tunnel", []string{"provider"}, "config") {
 			w.Tunnel = &Tunnel{}
