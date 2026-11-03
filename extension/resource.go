@@ -197,6 +197,18 @@ type ResourceModer interface {
 	ResourceMode(config json.RawMessage) string
 }
 
+// FolderConfigurer is optionally implemented by an executor whose binding
+// config names folders. When a binding comes from an included folder's
+// config, the host calls it once, before validation, with that folder and
+// whether the binding has a resource: it resolves relative paths against
+// folder and may default the folder a workspace-free binding (one without a
+// resource) runs in. The host stores the config it returns in the
+// generation, so the binding runs with it unchanged. An error rejects the
+// binding config; its message is not shown.
+type FolderConfigurer interface {
+	FolderConfig(config json.RawMessage, folder string, resource bool) (json.RawMessage, error)
+}
+
 // ConfigWarner is optionally implemented by an executor to warn about a
 // binding config that is valid but should change: a setting that is
 // deprecated or ignored, or a default a later release drops. Config check

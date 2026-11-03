@@ -11,6 +11,8 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+
+	"github.com/open-conduit/open-conduit/extension"
 )
 
 // FragmentFile is where an included folder keeps its scopes.
@@ -26,13 +28,12 @@ type Includes struct {
 }
 
 // FolderConfigurer is optionally implemented by an executor registration
-// whose binding config names folders. Compose calls it once for each binding
-// from an included folder, before validation: it resolves relative paths
-// against folder and may default the folder a workspace-free binding (one
-// without a resource) runs in. The result is what the generation stores.
-type FolderConfigurer interface {
-	FolderConfig(config json.RawMessage, folder string, resource bool) (json.RawMessage, error)
-}
+// whose binding config names folders (extension.FolderConfigurer; a
+// package's executor declares folder_config). Compose calls it once for each
+// binding from an included folder, before validation: it resolves relative
+// paths against folder and may default the folder a workspace-free binding
+// (one without a resource) runs in. The result is what the generation stores.
+type FolderConfigurer = extension.FolderConfigurer
 
 // ValidateFile composes a config file's includes (Compose) and validates the
 // result. Diagnostics about an included scope point into its include, as

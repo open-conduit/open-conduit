@@ -648,6 +648,11 @@ type ExecutorDecl struct {
 	// config check can tell when a binding doesn't grant the operations
 	// the playbook declares (extension.PlaybookNamer).
 	Playbook bool `json:"playbook,omitempty"`
+	// FolderConfig marks an executor whose binding config names folders,
+	// so a binding from an included folder is adapted to that folder
+	// through validate with kind executor_folder before it is validated
+	// and stored (extension.FolderConfigurer).
+	FolderConfig bool `json:"folder_config,omitempty"`
 	// Pool is the capacity pool the executor's runs count against: "" for
 	// agent turns (settings.concurrency), PoolJobs for jobs
 	// (settings.job_concurrency).

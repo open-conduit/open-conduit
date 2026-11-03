@@ -215,6 +215,24 @@ func (e manifestExecutor) Playbook(raw json.RawMessage) string {
 	return r.ExecutorPlaybook(e.decl.Name)(raw)
 }
 
+// FolderConfig asks the package to adapt a binding config from an included
+// folder, when the manifest declares folder_config
+// (extension.FolderConfigurer); the config unchanged otherwise. A package
+// that cannot start refuses it, so the binding is never stored unadapted.
+func (e manifestExecutor) FolderConfig(raw json.RawMessage, folder string, resource bool) (json.RawMessage, error) {
+	if !e.decl.FolderConfig {
+		return raw, nil
+	}
+	if e.x == nil {
+		return nil, errNoPackage
+	}
+	r, err := e.x.remote()
+	if err != nil {
+		return nil, err
+	}
+	return r.ExecutorFolderConfig(e.decl.Name)(raw, folder, resource)
+}
+
 // ConfigWarnings asks the package for its warnings about a binding config
 // (config.ConfigWarner): validate with kind executor, whose answer an older
 // package leaves without any.

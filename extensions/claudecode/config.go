@@ -452,7 +452,7 @@ func (e *Executor) Playbook(raw json.RawMessage) string {
 }
 
 // FolderConfig adapts a binding from an included folder's config
-// (config.FolderConfigurer): relative dir and plugin_dir resolve against the
+// (extension.FolderConfigurer): relative dir and plugin_dir resolve against the
 // folder, and a workspace-free binding without dir runs in the folder itself.
 func (e *Executor) FolderConfig(raw json.RawMessage, folder string, resource bool) (json.RawMessage, error) {
 	fields := map[string]json.RawMessage{}
