@@ -441,7 +441,7 @@ var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource
 
 // OfflineChecks are the doctor checks that need no daemon: the config file
 // validated against the same registrations `serve` uses, the first-party
-// extensions' Offline checks on it (github_capability, git_bot), and
+// extensions' Offline checks on it (github-capability, github-git-bot), and
 // `claude --version` for its claude-code bindings, then a skipped check naming the daemon's own. The CLI runs them
 // when no daemon is reachable.
 func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtime.Check {
@@ -450,7 +450,7 @@ func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtim
 	reg := registry(executors)
 	pkgs := offlineExternal(&reg, configPath, "")
 	snapshot, err := config.ValidateFile(data, reg, fileIncludes(configPath))
-	pkgs.close()
+	defer pkgs.close()
 	var invalid *config.ValidationError
 	switch {
 	case errors.As(err, &invalid):
@@ -464,6 +464,6 @@ func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtim
 		return []runtime.Check{{Name: "config", Status: runtime.CheckFail, Code: "unvalidated", Detail: "config could not be validated: " + err.Error()}, skipped}
 	}
 	out := []runtime.Check{{Name: "config", Status: runtime.CheckOK, Code: "valid", Detail: configPath}, grantsCheck(snapshot, reg)}
-	out = append(out, offlineChecks(ctx, snapshot, executors, filepath.Dir(configPath))...)
+	out = append(out, offlineChecks(ctx, snapshot, executors, filepath.Dir(configPath), pkgs.installed)...)
 	return append(out, claudeVersionCheck(ctx, snapshot), skipped)
 }

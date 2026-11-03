@@ -549,6 +549,10 @@ type TaskDecl struct {
 type CheckDecl struct {
 	Name string `json:"name"`
 	Deep bool   `json:"deep,omitempty"`
+	// Offline marks a check that reads nothing but the configuration it is
+	// given and the machine (inproc.Check.Offline), so doctor also runs it
+	// with no daemon, through a package started for that alone.
+	Offline bool `json:"offline,omitempty"`
 }
 type SetupDecl struct {
 	Type    string `json:"type"`

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -18,7 +19,6 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/extensions/claudecode"
-	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/shell"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
@@ -694,9 +694,13 @@ func (d *daemon) inprocChecks(deep bool) []func(context.Context) runtime.Check {
 
 // offlineChecks are the first-party extensions' Offline checks on a config
 // validated without a daemon; dir is the config file's directory.
-func offlineChecks(ctx context.Context, s *config.Snapshot, executors map[string]extension.Executor, dir string) []runtime.Check {
+func offlineChecks(ctx context.Context, s *config.Snapshot, executors map[string]extension.Executor, dir string, pkgs []*installed) []runtime.Check {
 	var out []runtime.Check
-	for _, x := range firstParty() {
+	xs := firstParty()
+	for _, p := range pkgs {
+		xs = append(xs, p)
+	}
+	for _, x := range xs {
 		c, ok := x.(inproc.Checker)
 		if !ok {
 			continue

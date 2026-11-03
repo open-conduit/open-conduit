@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -226,5 +227,23 @@ func TestDocsMakeTargetsExist(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no make commands found in the user docs")
+	}
+}
+
+// Offline doctor runs a bundled package's offline checks through the
+// package it starts for validation (#428): GitHub's capability and git-bot
+// checks need no daemon.
+func TestOfflineDoctorRunsPackageChecks(t *testing.T) {
+	releaseLayout(t)
+	config := []byte(`{"version": 1, "settings": {}, "connections": [], "scopes": [{"id": "ops", "name": "Operations",
+		"authorization": {"connections": [], "operations": ["read_context"], "read_scopes": []},
+		"bindings": [{"name": "run", "executor": "shell", "requires": {"toolbelt": "cli"}, "operations": ["read_context"], "secret_names": [], "config": {"command": "true"}}],
+		"routes": [{"name": "incoming", "handler": "manual", "binding": "run", "active_policy": "queue", "config": {}}], "secret_refs": {}}]}`)
+	got := map[string]bool{}
+	for _, c := range bootstrap.OfflineChecks(context.Background(), filepath.Join(t.TempDir(), "config.json"), config) {
+		got[c.Name] = true
+	}
+	if !got["config"] || !got["github-capability"] || !got["github-git-bot"] {
+		t.Fatalf("offline checks: %v", got)
 	}
 }

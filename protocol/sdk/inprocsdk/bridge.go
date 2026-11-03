@@ -239,6 +239,7 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 		}
 		for i, ch := range c.Checks() {
 			p.Checks[i].Deep = p.Checks[i].Deep || ch.Deep
+			p.Checks[i].Offline = p.Checks[i].Offline || ch.Offline
 		}
 	}
 	if t, ok := b.x.(inproc.Targeter); ok && len(p.Targets) == 0 {

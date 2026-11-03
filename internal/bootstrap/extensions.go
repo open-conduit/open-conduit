@@ -275,6 +275,7 @@ func offlineExternal(reg *config.Registry, configPath, exclude string) *offlineP
 		o.packages = append(o.packages, v)
 		x := &installed{m: f.Manifest, offline: v, dir: f.Dir}
 		xs = append(xs, x)
+		o.installed = append(o.installed, x)
 		x.resourceTypes(reg)
 		for _, e := range f.Manifest.Provides.Executors {
 			reg.Executors[e.Name] = manifestExecutor{decl: e, x: x}
@@ -302,7 +303,11 @@ func (d *daemon) defaultConfig() []byte {
 const offlineStartTimeout = 15 * time.Second
 
 // offlinePackages are the packages one offline validation may start.
-type offlinePackages struct{ packages []*offlinePackage }
+type offlinePackages struct {
+	packages []*offlinePackage
+	// installed adapt them as extensions, for their offline checks.
+	installed []*installed
+}
 
 // close stops every package the validation started and removes its state.
 func (o *offlinePackages) close() {
