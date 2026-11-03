@@ -19,6 +19,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 const (
@@ -1119,5 +1120,21 @@ func TestCopiesOfIssueOpeningsForAcknowledgement(t *testing.T) {
 	}
 	if _, err := gh.ParseExtension([]byte(`{"namespace":"`+ns+`","scope":"eng","repo":"`+repo+`","track_issues":false,"acknowledge_issues":true}`), nil); err == nil {
 		t.Fatal("acknowledge_issues without track_issues validated")
+	}
+}
+
+// A failed page authors GitHub's answer, so the host can record it rather
+// than an unauthored failure (#517).
+func TestFailedScanAuthorsGitHubsAnswer(t *testing.T) {
+	f := newFixture(t, "")
+	f.fake.OpenIssue("One", "", alice)
+	page, err := f.in.Reconcile(context.Background(), extension.Scan{Source: src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	f.fake.RateLimitPrimary(f.now.Add(time.Hour))
+	_, err = f.in.Reconcile(context.Background(), extension.Scan{Source: src, ScanID: page.ScanID, Cursor: page.NextCursor})
+	if e := protocol.Encode(err); e.Code != "rate_limited" || !strings.Contains(e.Message, "primary rate limit until") {
+		t.Fatalf("rate limited page crossed as %+v (%v)", e, err)
 	}
 }

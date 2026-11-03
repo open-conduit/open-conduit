@@ -531,7 +531,7 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 	n := &normalizer{s: g.s, c: g.c, m: m, received: now}
 	snap, err := g.scanPage(ctx, n, c, horizon)
 	if err != nil {
-		return extension.Snapshot{}, err
+		return extension.Snapshot{}, scanFailure(err)
 	}
 	snap.ScanID, snap.Checkpoint = id, id
 	if g.o.Observed != nil {
@@ -810,3 +810,29 @@ func (g *Ingress) commentsPage(ctx context.Context, n *normalizer, c cursor, hor
 	}
 	return out, len(items), more, i, nil
 }
+
+// scanFailure authors a failed page's cause, so the host records what GitHub
+// said (a rate limit, an HTTP status and GitHub's message) rather than an
+// unauthored failure. Both carry only GitHub's own message field, never the
+// request or credentials. The cause stays reachable with errors.As; other
+// errors stay unauthored and reach the extension's log.
+func scanFailure(err error) error {
+	var limit *RateLimitError
+	var status *StatusError
+	switch {
+	case errors.As(err, &limit):
+		return authoredScanError{&extension.OperationError{Code: "rate_limited", Message: limit.Error()}, err}
+	case errors.As(err, &status):
+		return authoredScanError{&extension.OperationError{Code: "http_" + strconv.Itoa(status.Status), Message: status.Error()}, err}
+	}
+	return err
+}
+
+// authoredScanError is a scan failure's authored form and its cause.
+type authoredScanError struct {
+	op    *extension.OperationError
+	cause error
+}
+
+func (e authoredScanError) Error() string   { return e.op.Error() }
+func (e authoredScanError) Unwrap() []error { return []error{e.op, e.cause} }
