@@ -188,6 +188,8 @@ func mapError(err error) *apiError {
 		return fail(409, "state_conflict", "target state does not allow this operation")
 	case errors.Is(err, runtime.ErrCausalRejected):
 		return fail(429, "causal_limit", "causal depth or rate bound reached")
+	case errors.Is(err, extension.ErrAuthorityReleased):
+		return fail(403, "authority_released", "this execution already declared a wait or its outcome, which released its authority: no further calls are accepted in this run (a wait resumes the Work in a new run with fresh authority)")
 	case errors.Is(err, extension.ErrUnauthorized), errors.Is(err, storage.ErrLeaseLost):
 		return fail(403, "forbidden", "execution authority rejected")
 	case errors.Is(err, extension.ErrUndeclared):

@@ -18,6 +18,13 @@ var (
 	ErrUndeclared   = errors.New("undeclared operation or event")
 	ErrConflict     = errors.New("registration conflict")
 	ErrNotAdoptable = errors.New("execution cannot be adopted")
+	// ErrAuthorityReleased refuses a call made with a genuine token after
+	// its execution gave up authority for the segment by declaring a wait
+	// (directly, through an operation that waits, or a gate that parked
+	// the call) or its outcome. It wraps ErrUnauthorized, so everything that
+	// refuses an unauthorized call refuses it too; it only lets the caller
+	// tell "already parked" apart from "not authorised".
+	ErrAuthorityReleased = fmt.Errorf("%w: authority released by a declared wait or outcome", ErrUnauthorized)
 )
 
 const (

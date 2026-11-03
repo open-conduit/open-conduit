@@ -394,8 +394,8 @@ func TestProductionToolbeltTokenLifecycle(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if _, err = h.belt.Call(ctx, old, read); !errors.Is(err, extension.ErrUnauthorized) {
-		t.Fatalf("superseded token accepted: %v", err)
+	if _, err = h.belt.Call(ctx, old, read); !errors.Is(err, extension.ErrUnauthorized) || errors.Is(err, extension.ErrAuthorityReleased) {
+		t.Fatalf("superseded token accepted, or refused as released: %v", err)
 	}
 	id, fresh, err := h.belt.IssueWithID(ctx, extension.Authority{ScopeID: "routing-scope", WorkID: "work/item", ExecutionID: recovered.Lease.ExecutionID, Lease: recovered.Lease, ExpiresAt: h.f.Clock.Now().Add(time.Minute), Operations: []string{extension.ReadContext}})
 	if err != nil {
@@ -491,8 +491,13 @@ func TestProductionToolbeltDeclaredWaitRegistersAfterSegmentFinishes(t *testing.
 		}
 		return nil
 	})
-	if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.ReadContext}); !errors.Is(err, extension.ErrUnauthorized) {
+	// The refusal names the release, and still fails closed as unauthorized.
+	_, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.ReadContext})
+	if !errors.Is(err, extension.ErrAuthorityReleased) || !errors.Is(err, extension.ErrUnauthorized) {
 		t.Fatalf("declared wait retained authority: %v", err)
+	}
+	if _, err = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: "fixture.echo", Input: domain.Payload{Schema: "fixture.v1", Data: json.RawMessage(`{}`)}}); !errors.Is(err, extension.ErrAuthorityReleased) {
+		t.Fatalf("extension operation after declared wait: %v", err)
 	}
 	usage := uint64(7)
 	if err = h.scheduler.Complete(ctx, h.attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted, Summary: "segment done"}, Usage: extension.Usage{InputTokens: &usage}}); err != nil {
@@ -528,7 +533,7 @@ func TestProductionToolbeltDeclaredOutcomeAppliesOnFinish(t *testing.T) {
 		}
 		return nil
 	})
-	if _, err := h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.DeclareOutcome, Outcome: &domain.Outcome{Kind: domain.OutcomeCompleted}}); !errors.Is(err, extension.ErrUnauthorized) {
+	if _, err := h.belt.Call(ctx, h.token, extension.ToolCall{Operation: extension.DeclareOutcome, Outcome: &domain.Outcome{Kind: domain.OutcomeCompleted}}); !errors.Is(err, extension.ErrAuthorityReleased) {
 		t.Fatalf("second declaration accepted: %v", err)
 	}
 	if err := h.scheduler.Complete(ctx, h.attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}}); err != nil {
