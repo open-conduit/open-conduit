@@ -16,7 +16,6 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extensions/claudecode"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
-	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
@@ -197,7 +196,7 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 		return nil, err
 	}
 	if !codex {
-		if err := playbooks.WritePlugin(dir, "Sets Open Conduit up", map[string]string{name: text}); err != nil {
+		if err := writePlugin(dir, "Sets Open Conduit up", map[string]string{name: text}); err != nil {
 			return nil, err
 		}
 	}
@@ -216,7 +215,7 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	}
 	// The prompt first and the tools last: --allowedTools takes every
 	// argument after it.
-	args := []string{"/" + playbooks.PluginName + ":" + name, "--plugin-dir", dir, "--allowedTools"}
+	args := []string{"/" + pluginName + ":" + name, "--plugin-dir", dir, "--allowedTools"}
 	allowed := []string{"config", "doctor", "health", "secret path"}
 	for _, t := range dryRunSetups(o.ConfigPath, o.StateDir) {
 		allowed = append(allowed, "init "+t+" --dry-run")

@@ -3,11 +3,9 @@ package bootstrap
 import (
 	"context"
 	"errors"
-	"os"
 	"path/filepath"
 
 	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
@@ -49,26 +47,10 @@ func (d *daemon) mayFile(filer, target domain.ID) error {
 func (d *daemon) pluginDir() string { return filepath.Join(d.o.StateDir, "playbooks", "plugin") }
 
 // preparePlaybooks writes the plugin (rewritten at every start, so an
-// upgrade replaces old playbook text): the GitHub playbooks, then the
-// extensions' own beside them (Slack's and the trackers' among them).
+// upgrade replaces old playbook text): every extension's playbooks,
+// GitHub's, Slack's and the trackers' among them.
 func (d *daemon) preparePlaybooks() error {
-	if err := playbooks.Prepare(d.pluginDir()); err != nil {
-		return err
-	}
 	books := map[string]string{}
 	d.inprocPlaybooks(books)
-	for name, text := range books {
-		dir := filepath.Join(d.pluginDir(), "skills", name)
-		if err := os.MkdirAll(dir, 0o755); err != nil {
-			return err
-		}
-		tmp := filepath.Join(dir, ".SKILL.md.tmp")
-		if err := os.WriteFile(tmp, []byte(text), 0o644); err != nil {
-			return err
-		}
-		if err := os.Rename(tmp, filepath.Join(dir, "SKILL.md")); err != nil {
-			return err
-		}
-	}
-	return nil
+	return writePlugin(d.pluginDir(), "Playbooks for agents run by Open Conduit", books)
 }

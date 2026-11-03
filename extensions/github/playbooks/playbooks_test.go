@@ -1,14 +1,12 @@
-package playbooks
+package playbooks_test
 
 import (
-	"encoding/json"
-	"os"
-	"path/filepath"
 	"regexp"
 	"strings"
 	"testing"
 
 	gh "github.com/open-conduit/open-conduit/extensions/github"
+	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
 )
 
 var opName = regexp.MustCompile("[`\"](github\\.[a-z.]+)[`\"]")
@@ -25,7 +23,7 @@ func registered() map[string]bool {
 // github extension registers, and v1's agent commands are gone.
 func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 	ops := registered()
-	books := All()
+	books := playbooks.All()
 	for name, text := range books {
 		found := 0
 		for _, m := range opName.FindAllStringSubmatch(text, -1) {
@@ -51,28 +49,15 @@ func TestPlaybooksNameRegisteredOperations(t *testing.T) {
 	}
 }
 
-func TestPrepareWritesThePlugin(t *testing.T) {
-	dir := t.TempDir()
-	stale := filepath.Join(dir, "skills", "sweep")
-	if err := os.MkdirAll(stale, 0o755); err != nil {
-		t.Fatal(err)
+// The playbooks are skills: each has a description, and work-issue's body
+// is the playbook. The setup playbook is the setup package's, not GitHub's.
+func TestPlaybooksAreSkills(t *testing.T) {
+	books := playbooks.All()
+	skill := books["work-issue"]
+	if playbooks.Description(skill) == "" || !strings.HasPrefix(playbooks.Body(skill), "# Work an issue") {
+		t.Fatalf("work-issue: %q", skill[:min(len(skill), 80)])
 	}
-	if err := Prepare(dir); err != nil {
-		t.Fatal(err)
-	}
-	var manifest map[string]string
-	data, err := os.ReadFile(filepath.Join(dir, ".claude-plugin", "plugin.json"))
-	if err != nil || json.Unmarshal(data, &manifest) != nil || manifest["name"] != PluginName {
-		t.Fatalf("manifest: %s %v", data, err)
-	}
-	skill, err := os.ReadFile(filepath.Join(dir, "skills", "work-issue", "SKILL.md"))
-	if err != nil || Description(string(skill)) == "" || !strings.HasPrefix(Body(string(skill)), "# Work an issue") {
-		t.Fatalf("skill: %v", err)
-	}
-	if _, err := os.Stat(stale); !os.IsNotExist(err) {
-		t.Fatal("a skill no longer shipped was kept")
-	}
-	if _, ok := All()["setup"]; ok {
+	if _, ok := books["setup"]; ok {
 		t.Fatal("the GitHub playbooks still carry the setup playbook")
 	}
 }
