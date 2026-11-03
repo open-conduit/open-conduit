@@ -294,7 +294,7 @@ type resultFields struct {
 	// (0 when codex's session file doesn't say).
 	Context int64 `json:"context_tokens,omitempty"`
 	// HandoffReason is why the turn started a new thread from the handoff
-	// note ("size"); empty otherwise.
+	// note ("size" or "cold"); empty otherwise.
 	HandoffReason string `json:"handoff_reason,omitempty"`
 	Limited       bool   `json:"limited,omitempty"`
 	ExitCode      *int   `json:"exit_code,omitempty"`

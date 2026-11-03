@@ -52,6 +52,13 @@ type Config struct {
 	ExtraArgs []string `json:"extra_args,omitempty"`
 	// TimeoutSeconds bounds a segment; the deadline survives restart.
 	TimeoutSeconds int64 `json:"timeout_seconds,omitempty"`
+	// HandoffMinutes is how long after a turn the thread counts as cold
+	// (default 55, as Claude Code's).
+	HandoffMinutes *int `json:"handoff_minutes,omitempty"`
+	// ColdTurns is what a cold turn does: "handoff" starts a new thread from
+	// the last turn's handoff note, "resume" resumes the thread (default
+	// "handoff").
+	ColdTurns string `json:"cold_turns,omitempty"`
 	// HandoffTokens starts a fresh thread from the last turn's handoff note
 	// when that turn ended with more context than this (default 200000; 0
 	// turns it off and always resumes).
@@ -61,6 +68,12 @@ type Config struct {
 	// leaves Codex's own). A -c in extra_args overrides it.
 	AutoCompactTokens *int64 `json:"auto_compact_tokens,omitempty"`
 }
+
+// What a cold turn does (Config.ColdTurns).
+const (
+	ColdHandoff = "handoff"
+	ColdResume  = "resume"
+)
 
 // The context limits on by default, under the context windows of Codex's
 // models: a turn after one that ended with more context than
@@ -136,6 +149,20 @@ func ParseConfig(data []byte) (Config, error) {
 		if p != "" && (!filepath.IsAbs(p) || filepath.Clean(p) != p) {
 			return Config{}, configError("dir and plugin_dir must be clean absolute paths")
 		}
+	}
+	if c.HandoffMinutes == nil {
+		n := 55
+		c.HandoffMinutes = &n
+	}
+	if *c.HandoffMinutes < 0 || *c.HandoffMinutes > 7*24*60 {
+		return Config{}, configError("handoff_minutes must be between 0 and 10080")
+	}
+	switch c.ColdTurns {
+	case "":
+		c.ColdTurns = ColdHandoff
+	case ColdHandoff, ColdResume:
+	default:
+		return Config{}, configError("cold_turns must be handoff or resume")
 	}
 	if c.HandoffTokens == nil {
 		n := DefaultHandoffTokens

@@ -172,7 +172,7 @@ type recovery struct {
 type turnRecord struct {
 	Work domain.ID `json:"work"`
 	Kind string    `json:"kind"`
-	// HandoffReason is why a handoff turn left its thread ("size").
+	// HandoffReason is why a handoff turn left its thread ("size" or "cold").
 	HandoffReason string `json:"handoff_reason,omitempty"`
 	// CodexHome is where codex keeps its sessions, for the context the
 	// turn ended with.
@@ -288,8 +288,9 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	}
 	// The turn: a Work with a thread resumes it on the events since its
 	// last turn; one without starts a new thread. A thread whose last turn
-	// ended with more than handoff_tokens of context is left for a new one
-	// started from that turn's handoff note.
+	// ended with more than handoff_tokens of context, or (cold_turns:
+	// handoff) more than handoff_minutes ago, is left for a new one started
+	// from that turn's handoff note.
 	rec, err := e.loadThread(r.Work.ID)
 	if err != nil {
 		return e.preset(ctx, rn, "start_failed", "could not read the Work's thread")
@@ -299,6 +300,8 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	case thread == "":
 	case strings.TrimSpace(rec.Handoff) != "" && *cfg.HandoffTokens > 0 && rec.Context > *cfg.HandoffTokens:
 		thread, kind, reason = "", kindHandoff, handoffSize
+	case strings.TrimSpace(rec.Handoff) != "" && cfg.ColdTurns == ColdHandoff && !rec.At.IsZero() && e.o.Now().Sub(rec.At) > time.Duration(*cfg.HandoffMinutes)*time.Minute:
+		thread, kind, reason = "", kindHandoff, handoffCold
 	default:
 		kind = kindEvents
 	}

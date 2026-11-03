@@ -21,9 +21,12 @@ const (
 	kindHandoff turnKind = "handoff"
 )
 
-// handoffSize is why a handoff turn left its thread: the last turn ended
-// with more than handoff_tokens of context.
-const handoffSize = "size"
+// Why a handoff turn left its thread: the last turn ended with more than
+// handoff_tokens of context, or more than handoff_minutes ago.
+const (
+	handoffSize = "size"
+	handoffCold = "cold"
+)
 
 // body composes the arguments and body of a turn, as Claude Code's do, so
 // a playbook reads the same message whichever agent runs it. A handoff

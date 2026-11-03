@@ -80,6 +80,8 @@ type fixture struct {
 	fake  string
 	bin   string
 	art   *memoryArtifacts
+	// clock, when set, is the executor's wall clock.
+	clock *time.Time
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -106,7 +108,11 @@ func (f *fixture) executor() *codex.Executor {
 	if err != nil {
 		f.t.Fatal(err)
 	}
-	e, err := codex.New(codex.Options{StateDir: f.state, Artifacts: f.art, Driver: []string{self, codex.SegmentCommand},
+	var now func() time.Time
+	if f.clock != nil {
+		now = func() time.Time { return *f.clock }
+	}
+	e, err := codex.New(codex.Options{StateDir: f.state, Artifacts: f.art, Driver: []string{self, codex.SegmentCommand}, Now: now,
 		PollInterval: 20 * time.Millisecond, Grace: 200 * time.Millisecond,
 		Environ: func() []string {
 			return []string{"PATH=" + os.Getenv("PATH"), "HOME=/nonexistent", "OPENAI_API_KEY=leak", "OS_TOKEN=leak"}
@@ -248,6 +254,53 @@ func TestLargeThreadHandsOff(t *testing.T) {
 	turn(6)
 	if call := f.read("call-6"); !strings.Contains(call, "\nthread-2\n-\n") || strings.Contains(call, "model_auto_compact_token_limit") {
 		t.Fatalf("handoff_tokens 0 or auto_compact_tokens 0 ignored:\n%s", call)
+	}
+}
+
+// TestColdThreadHandsOff: a thread whose last turn ended more than
+// handoff_minutes ago (55 by default) is left for a new one from the note,
+// as Claude Code's cold session is; cold_turns: resume resumes it.
+func TestColdThreadHandsOff(t *testing.T) {
+	f := newFixture(t)
+	clock := time.Date(2026, 11, 3, 9, 0, 0, 0, time.UTC)
+	f.clock = &clock
+	e := f.executor()
+	extra := map[string]any{}
+	turn := func(n int) string {
+		t.Helper()
+		res := run(t, e, request("work-cold", "exec-cold-"+strconv.Itoa(n), f.config(extra, nil)))
+		var x struct {
+			HandoffReason string `json:"handoff_reason"`
+		}
+		if err := json.Unmarshal(res.Outcome.Data.Data, &x); err != nil {
+			t.Fatal(err)
+		}
+		return x.HandoffReason
+	}
+	set := func(name, value string) {
+		t.Helper()
+		if err := os.WriteFile(filepath.Join(f.fake, name), []byte(value), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	turn(1)
+	clock = clock.Add(30 * time.Minute)
+	if turn(2) != "" || !strings.Contains(f.read("call-2"), "\nthread-1\n-\n") {
+		t.Fatalf("a warm thread didn't resume:\n%s", f.read("call-2"))
+	}
+	clock = clock.Add(2 * time.Hour)
+	set("thread", "thread-2")
+	if r := turn(3); r != "cold" || strings.Contains(f.read("call-3"), "\nresume\n") {
+		t.Fatalf("a cold thread wasn't handed off (%q):\n%s", r, f.read("call-3"))
+	}
+	if in := f.read("stdin-3"); !strings.Contains(in, "42 handoff\n\n## Handoff from your last session\n\nnote 2") {
+		t.Fatalf("handoff prompt:\n%s", in)
+	}
+	extra["cold_turns"] = "resume"
+	clock = clock.Add(2 * time.Hour)
+	if turn(4) != "" || !strings.Contains(f.read("call-4"), "\nthread-2\n-\n") {
+		t.Fatalf("cold_turns: resume didn't resume:\n%s", f.read("call-4"))
 	}
 }
 
