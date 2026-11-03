@@ -194,6 +194,12 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 	if _, ok := b.x.(inproc.EntryGated); ok {
 		p.EntryGated = true
 	}
+	if s, ok := b.x.(inproc.SetupFlower); ok && p.Setup == nil {
+		if flow := s.SetupFlow(); flow != nil {
+			info := flow.SetupInfo()
+			p.Setup = &protocol.SetupDecl{Type: info.Type, Summary: info.Summary, Usage: info.Usage, FirstRun: info.FirstRun}
+		}
+	}
 	if s, ok := b.x.(extension.SetupProbes); ok && len(p.Probes) == 0 {
 		for _, pr := range s.SetupProbes() {
 			info := protocol.ProbeInfo{Name: pr.Name, Summary: pr.Summary}
@@ -268,6 +274,11 @@ func (b *Bridge) wire() {
 	e.Describe = b.describe
 	if s, ok := b.x.(extension.SetupProbes); ok {
 		e.Probes = s.SetupProbes()
+	}
+	if s, ok := b.x.(inproc.SetupFlower); ok {
+		if flow := s.SetupFlow(); flow != nil {
+			e.Setups = map[string]extension.Setup{flow.SetupInfo().Type: flow}
+		}
 	}
 	e.Ingress = func(source string) (extension.Ingress, bool) {
 		b.mu.Lock()

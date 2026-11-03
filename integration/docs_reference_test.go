@@ -151,7 +151,8 @@ func frontmatter(title, description string) string {
 // run is what the CLI prints for args.
 func run(t *testing.T, args ...string) string {
 	t.Helper()
-	env := cli.Env{Getenv: func(string) string { return "" }, Cwd: t.TempDir(), Setups: bootstrap.Setups(), Adapters: bootstrap.Adapters}
+	releaseLayout(t)
+	env := cli.Env{Getenv: func(string) string { return "" }, Cwd: t.TempDir(), Adapters: bootstrap.Adapters, Extensions: bootstrap.ExtensionOps("test", "docs")}
 	var out, errOut bytes.Buffer
 	cli.RunOperator("test", "docs", args, env, &out, &errOut)
 	return strings.TrimRight(out.String()+errOut.String(), "\n")

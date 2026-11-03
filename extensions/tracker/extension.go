@@ -42,6 +42,8 @@ type Kind struct {
 	// HookPermission is the service's error for a webhook it may not
 	// manage, reported as hook_permission_denied.
 	HookPermission error
+	// Setup is the kind's `open-conduit init <type>` flow, nil for none.
+	Setup extension.Setup
 }
 
 // CodeError is a fixed, secret-free registration diagnostic.
@@ -96,6 +98,10 @@ var (
 )
 
 func (x *Extension) Name() string { return x.k.Type }
+
+// SetupFlow is the kind's `open-conduit init <type>` (inproc.SetupFlower),
+// nil for none.
+func (x *Extension) SetupFlow() extension.Setup { return x.k.Setup }
 
 func (x *Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{

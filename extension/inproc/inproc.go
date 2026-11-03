@@ -562,6 +562,12 @@ type Checker interface {
 	Checks() []Check
 }
 
+// SetupFlower extensions offer an `open-conduit init <type>` flow
+// (manifest setup). SetupFlow returns nil for none.
+type SetupFlower interface {
+	SetupFlow() extension.Setup
+}
+
 // Playbooker extensions contribute agent playbooks: skill name to its
 // SKILL.md text, written into the Claude Code plugin.
 type Playbooker interface {

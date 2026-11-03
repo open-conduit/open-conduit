@@ -288,7 +288,7 @@ func offlineExternal(reg *config.Registry, configPath, exclude string) *offlineP
 // defaultConfig is DefaultConfig for the running daemon: a running
 // package's first-run setup is asked through its own process.
 func (d *daemon) defaultConfig() []byte {
-	setups := Setups()
+	var setups []extension.Setup
 	d.external.mu.Lock()
 	for _, p := range d.external.packages {
 		if s, ok := p.r.Setup(); ok {

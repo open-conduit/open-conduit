@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
+	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/protocol"
 )
@@ -92,6 +93,9 @@ var (
 )
 
 func (*Extension) Name() string { return Type }
+
+// SetupFlow is `open-conduit init github` (inproc.SetupFlower).
+func (*Extension) SetupFlow() extension.Setup { return Setup{} }
 
 // Types are the `github` connection and ingress entry types.
 func (*Extension) Types() []inproc.ConfigType {

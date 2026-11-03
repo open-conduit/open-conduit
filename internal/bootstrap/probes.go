@@ -77,7 +77,7 @@ const HostProbeOwner = "open-conduit"
 func (d *daemon) initProbe() extension.SetupProbe {
 	var types []string
 	setups := map[string]extension.Setup{}
-	all := Setups()
+	var all []extension.Setup
 	d.external.mu.Lock()
 	for _, p := range d.external.packages {
 		if s, ok := p.r.Setup(); ok {
