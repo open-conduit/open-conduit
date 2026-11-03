@@ -528,6 +528,39 @@ func parseJail(raw json.RawMessage) (jailConfig, error) {
 	return c, nil
 }
 
+// Relay is the example tunnel type: it reports no public URL, so a run
+// only holds the call open, but its config check is real.
+const Relay = "notes-relay"
+
+// parseRelay checks a notes-relay tunnel config: a region, and nothing
+// else.
+func parseRelay(raw json.RawMessage) error {
+	var c struct {
+		Region string `json:"region"`
+	}
+	if len(bytes.TrimSpace(raw)) == 0 {
+		return nil
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&c); err != nil {
+		return fmt.Errorf("%w: a notes-relay config names only a region", extension.ErrTunnelConfig)
+	}
+	return nil
+}
+
+// relay is the example tunnel provider.
+type relay struct{}
+
+// Run holds the tunnel until ctx ends, reporting no URL.
+func (relay) Run(ctx context.Context, r extension.TunnelRun, _ func(string)) error {
+	if err := parseRelay(r.Config.Data); err != nil {
+		return err
+	}
+	<-ctx.Done()
+	return nil
+}
+
 // jail is the example sandbox provider.
 type jail struct{}
 

@@ -42,11 +42,8 @@ The webhook listener and tunnel serve starts with; serve flags override it for o
 | Field | Type | Required | Default | Meaning |
 | --- | --- | --- | --- | --- |
 | `addr` | string | yes |  | Local address the listener binds, such as 127.0.0.1:8787. |
-| `public_url` | string |  |  | The URL services deliver webhooks to, for tunnel static. |
-| `tunnel` | one of `ngrok`, `cloudflared`, `static` |  |  | How the listener is reached from outside: ngrok, cloudflared, or static (public_url already reaches it). |
-| `tunnel_domain` | string |  |  | The ngrok domain to use. |
-| `tunnel_hostname` | string |  |  | The cloudflared tunnel's public hostname. |
-| `tunnel_name` | string |  |  | The cloudflared named tunnel to run. |
+| `public_url` | string |  |  | A URL that already reaches the listener (no tunnel runs); services deliver webhooks to it. Can't be combined with tunnel. |
+| `tunnel` | object |  |  | A tunnel that exposes the listener: provider is a tunnel type an installed or bundled package declares (ngrok, cloudflared or another), and config is that package's tunnel config, which the package checks and runs as written. Can't be combined with public_url. |
 
 ### settings.extensions
 
@@ -181,7 +178,7 @@ Folders whose .open-conduit/config.json adds scopes beneath parent, a scope of t
 
 ## Integration fields
 
-The `config` objects of connections, extension entries, routes, bindings and binding resources belong to the package that registers each type, which checks them and describes their fields in its manifest. `open-conduit adapters TYPE` prints the same list.
+The `config` objects of connections, extension entries, routes, bindings, binding resources and the webhook tunnel belong to the package that registers each type, which checks them and describes their fields in its manifest. `open-conduit adapters TYPE` prints the same list.
 
 ### Bitbucket Cloud (`bitbucket`)
 
@@ -247,6 +244,18 @@ Binding `config`:
 | `builtin_tools` |  | the only built-in tools offered; [] turns them all off |
 | `models` |  | models a Work may pick with model in its context |
 | `usage` |  | doctor reads the subscription usage windows of this binding's Claude login |
+
+### Cloudflare tunnel (`cloudflared`)
+
+Exposes the webhook listener at a public URL through a quick or named Cloudflare tunnel. Registers: tunnel.
+
+Tunnel `config` (`settings.webhooks.tunnel.config`):
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `name` |  | a named Cloudflare tunnel (a quick tunnel without it); needs hostname |
+| `hostname` |  | the named tunnel's public https URL |
+| `binary` | `cloudflared` | the cloudflared executable |
 
 ### Codex (`codex`)
 
@@ -453,6 +462,17 @@ Route `config`:
 | --- | --- | --- |
 | `match` |  | attribute -> values the route claims (labels, status, title, team, project, priority, assignee, components, custom fields); one entry per scope for multi-scope routing |
 
+### ngrok tunnel (`ngrok`)
+
+Exposes the webhook listener at a public URL through ngrok. Registers: tunnel.
+
+Tunnel `config` (`settings.webhooks.tunnel.config`):
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `domain` |  | a reserved ngrok domain, for a stable URL (a random one without it) |
+| `binary` | `ngrok` | the ngrok executable |
+
 ### Observe (`observe`)
 
 Lets an agent watching an outside source record each item it sees, so a thread becomes Work and its later items join it. Registers: extension, route.
@@ -573,17 +593,14 @@ Extension entry `config`:
 
 Runs a sandboxed binding's launches under Anthropic's sandbox runtime (srt), with the operator's filesystem and network policy. Registers: sandbox.
 
-### Webhook tunnels (`tunnel`)
+### Webhook listener (`tunnel`)
 
-Exposes the webhook listener: ngrok, cloudflared or a static public URL (settings.webhooks; serve flags of the same names override it for one run). Registers: serve.
+Exposes the webhook listener through a tunnel a package provides, or at a public URL that already reaches it (settings.webhooks; serve's --webhook-addr, --tunnel, --tunnel-config and --public-url override it for one run). Registers: serve.
 
 Binding `config`:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
 | `addr` |  | Required. the listener, for example 127.0.0.1:8787 |
-| `tunnel` |  | One of ngrok, cloudflared, static. |
-| `tunnel_domain` |  | ngrok reserved domain |
-| `tunnel_name` |  | cloudflared named tunnel |
-| `tunnel_hostname` |  | its hostname |
-| `public_url` |  | static |
+| `tunnel` |  | an object: provider, a tunnel type a package provides, and config, that package's tunnel config (its fields are under the package); provided here: cloudflared, ngrok |
+| `public_url` |  | a URL that already reaches the listener (no tunnel) |

@@ -237,7 +237,7 @@ The [SQLite integration cases](https://github.com/open-conduit/open-conduit/blob
 
 ## Related parts
 
-- **Webhook exposure.** [Operator setup](../operator-setup/) covers the separate listener mounting `WebhookHandler` per entry, ngrok/cloudflared/static tunnels, `manage_webhook` (`Client.EnsureWebhook`), `serve --dry-run`, the manual claim (`github.claim.requested`), `Client.Verify` for doctor's `github-auth`, and `Annotate` for operator views.
+- **Webhook exposure.** [Operator setup](../operator-setup/) covers the separate listener mounting `WebhookHandler` per entry, tunnels (ngrok, cloudflared or an installed package's) and a static `public_url`, `manage_webhook` (`Client.EnsureWebhook`), `serve --dry-run`, the manual claim (`github.claim.requested`), `Client.Verify` for doctor's `github-auth`, and `Annotate` for operator views.
 - **Holds, waits and tools.** [Engineering tools, waits and playbooks](../engineering-tools/) covers:
   - the agent-facing operations, posting through `Projector.Deliver` durable intents (re-driven by `Converge`) and `CreateIssue`;
   - translated waits with dependency filters;

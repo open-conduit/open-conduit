@@ -50,6 +50,18 @@ type Fixture struct {
 	// refuses them: each declared container type needs an accepted and a
 	// refused one.
 	Containers []ContainerCase `json:"containers,omitempty"`
+	// Tunnels are tunnel configs (settings.webhooks.tunnel.config) and
+	// whether validate tunnel refuses them: each declared tunnel type needs
+	// an accepted and a refused one.
+	Tunnels []TunnelCase `json:"tunnels,omitempty"`
+}
+
+// TunnelCase is one tunnel config of a declared tunnel type and whether
+// validate with kind tunnel must refuse it.
+type TunnelCase struct {
+	Type    string          `json:"type"`
+	Config  json.RawMessage `json:"config,omitempty"`
+	Refused bool            `json:"refused,omitempty"`
 }
 
 // ContainerCase is one whole container config (extension.ContainerConfig)

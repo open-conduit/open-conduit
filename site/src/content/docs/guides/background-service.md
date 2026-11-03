@@ -13,7 +13,7 @@ open-conduit service start
 open-conduit service uninstall
 ```
 
-- `install` records the config path, the state directory, the `serve` flags you give it and a PATH built from your shell's PATH and wherever `claude`, `git`, `gh` and the tunnel binary are. It warns about any it can't find.
+- `install` records the config path, the state directory, the `serve` flags you give it and a PATH built from your shell's PATH and wherever `claude`, `git` and `gh` are. It warns about any it can't find. A tunnel's program (ngrok, cloudflared) is found on your shell's PATH, or at the tunnel config's `binary`. Its package's doctor check reports when it is missing.
 - Run `install` again after changing flags or installing a tool the daemon needs (a repository's toolchain, say): it replaces the unit and restarts the daemon.
 - `open-conduit upgrade`, or the web view's Update page, installs a new release and restarts the service on it (see [upgrading](/open-conduit/start/install/#upgrading)).
 - A `brew upgrade` restarts the daemon on the new version too. When the files the daemon runs from are removed, as `brew upgrade` does with the old version's directory, it stops with an error, and the service starts the new binary. Running turns carry on and the new daemon adopts them, but a shell step that calls `os` after the upgrade fails, since its PATH still names the removed directory. Upgrading while `open-conduit doctor` shows nothing running under `capacity` avoids that.

@@ -3,6 +3,7 @@
 package config
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/json"
 	"fmt"
@@ -129,11 +130,34 @@ const DefaultBudgetWarnAt = 0.8
 // MaxBudgets bounds settings.budgets.
 const MaxBudgets = 64
 
-// Webhooks records how serve exposes the webhook listener. Tunnel is ngrok,
-// cloudflared or static; "" with PublicURL means static, as with the flags.
+// Webhooks records how serve exposes the webhook listener: through a
+// tunnel a package provides (Tunnel), or at a public URL the operator
+// already routes to it (PublicURL, the static tunnel). They can't be
+// combined, and neither means the listener is reachable only locally.
 type Webhooks struct {
-	Addr, Tunnel, TunnelDomain, TunnelName, TunnelHostname, PublicURL string
+	Addr, PublicURL string
+	Tunnel          *Tunnel
 }
+
+// Tunnel is a webhook tunnel: a type some package declares (manifest
+// tunnels) and its config, opaque to the host. The package checks the
+// config (validate kind tunnel) and runs it as written (tunnel.run).
+type Tunnel struct {
+	Provider string          `json:"provider"`
+	Config   json.RawMessage `json:"config,omitempty"`
+}
+
+// Equal says whether w and o expose the listener the same way.
+func (w Webhooks) Equal(o Webhooks) bool {
+	if w.Addr != o.Addr || w.PublicURL != o.PublicURL || (w.Tunnel == nil) != (o.Tunnel == nil) {
+		return false
+	}
+	return w.Tunnel == nil || (w.Tunnel.Provider == o.Tunnel.Provider && bytes.Equal(w.Tunnel.Config, o.Tunnel.Config))
+}
+
+// IsZero says whether w stores no listener.
+func (w Webhooks) IsZero() bool { return w.Equal(Webhooks{}) }
+
 type Authorization struct {
 	Connections []string `json:"connections"`
 	// Operations are the operations the scope's bindings may be granted.
@@ -476,27 +500,34 @@ func (c *checker) budgets(n *node) []Budget {
 
 // webhooks checks settings.webhooks offline: the same combinations serve
 // accepts as flags, without binding the address or starting a tunnel.
+// Whether a package declares the tunnel's type, and whether it accepts the
+// tunnel's config, is checked against the registry (validator.tunnel).
 func (c *checker) webhooks(n *node) Webhooks {
 	const path = "settings/webhooks"
 	var w Webhooks
-	fields := []struct {
-		key string
-		dst *string
-	}{{"addr", &w.Addr}, {"tunnel_domain", &w.TunnelDomain}, {"tunnel_name", &w.TunnelName}, {"tunnel_hostname", &w.TunnelHostname}, {"public_url", &w.PublicURL}}
-	names := []string{"tunnel"}
-	for _, f := range fields {
-		names = append(names, f.key)
-	}
-	if n == nil || !c.object(n, path, []string{"addr"}, names...) {
+	if n == nil || !c.typed(n, path, kObject, "object") {
 		return w
 	}
-	for _, f := range fields {
-		if v, ok := c.str(n.field(f.key), ptr(path, f.key), nil); ok {
-			*f.dst = v
+	moved := false
+	for _, k := range n.keys {
+		if msg, ok := movedTunnelField[k]; ok {
+			c.fail(ptr(path, k), "moved_field", msg)
+			moved = true
 		}
 	}
+	if moved || !c.object(n, path, []string{"addr"}, "tunnel", "public_url") {
+		return w
+	}
+	w.Addr, _ = c.str(n.field("addr"), path+"/addr", nil)
+	w.PublicURL, _ = c.str(n.field("public_url"), path+"/public_url", nil)
 	if t := n.field("tunnel"); t != nil {
-		w.Tunnel, _ = c.enum(t, path+"/tunnel", "ngrok", "cloudflared", "static")
+		if t.kind == kString {
+			c.fail(path+"/tunnel", "moved_field", `tunnel is an object naming the providing package's type: use "tunnel": {"provider": "`+t.str+`", "config": {…}}, or public_url alone for a static URL`)
+		} else if c.object(t, path+"/tunnel", []string{"provider"}, "config") {
+			w.Tunnel = &Tunnel{}
+			w.Tunnel.Provider, _ = c.str(t.field("provider"), path+"/tunnel/provider", idPattern)
+			w.Tunnel.Config = c.opaque(t.field("config"), path+"/tunnel/config")
+		}
 	}
 	if a := n.field("addr"); a != nil && a.kind == kString {
 		if _, port, err := net.SplitHostPort(w.Addr); err != nil || port == "" {
@@ -509,36 +540,30 @@ func (c *checker) webhooks(n *node) Webhooks {
 	return w
 }
 
-// TunnelProblem is one field of a tunnel's settings that doesn't fit the
-// tunnel type.
+// movedTunnelField are the per-type tunnel fields settings.webhooks took
+// before a tunnel's config became its package's: each names its
+// replacement.
+var movedTunnelField = map[string]string{
+	"tunnel_domain":   `tunnel_domain moved into the ngrok package's config: use "tunnel": {"provider": "ngrok", "config": {"domain": …}}`,
+	"tunnel_name":     `tunnel_name moved into the cloudflared package's config: use "tunnel": {"provider": "cloudflared", "config": {"name": …, "hostname": …}}`,
+	"tunnel_hostname": `tunnel_hostname moved into the cloudflared package's config: use "tunnel": {"provider": "cloudflared", "config": {"name": …, "hostname": …}}`,
+}
+
+// TunnelProblem is one field of the webhook exposure that doesn't fit.
 type TunnelProblem struct {
 	Field, Message string
 }
 
-// TunnelProblems checks that the tunnel fields fit the tunnel type (no
-// type with a public URL means static). settings.webhooks is checked this
-// way, and so are serve's flags of the same names.
+// TunnelProblems checks the host's part of the exposure: a tunnel and a
+// static public URL exclude each other, and a public URL is one webhooks
+// can point at. settings.webhooks is checked this way, and so are serve's
+// flags of the same names. The tunnel's config is its package's to check.
 func (w Webhooks) TunnelProblems() []TunnelProblem {
 	var out []TunnelProblem
-	fail := func(field, msg string) { out = append(out, TunnelProblem{field, msg}) }
-	kind := w.Tunnel
-	if kind == "" && w.PublicURL != "" {
-		kind = "static"
-	}
-	if w.TunnelDomain != "" && kind != "ngrok" {
-		fail("tunnel_domain", "tunnel_domain is for the ngrok tunnel")
-	}
-	if (w.TunnelName != "" || w.TunnelHostname != "") && kind != "cloudflared" {
-		fail("tunnel_name", "tunnel_name and tunnel_hostname are for the cloudflared tunnel")
-	} else if kind == "cloudflared" && (w.TunnelName == "") != (w.TunnelHostname == "") {
-		fail("tunnel_name", "a named cloudflared tunnel needs both tunnel_name and tunnel_hostname")
-	}
-	if w.PublicURL != "" && kind != "static" {
-		fail("public_url", "public_url is for the static tunnel")
-	} else if kind == "static" {
-		if extension.CheckPublicURL(w.PublicURL) != nil {
-			fail("public_url", "the static tunnel needs an http(s) public URL without credentials")
-		}
+	if w.Tunnel != nil && w.PublicURL != "" {
+		out = append(out, TunnelProblem{"public_url", "public_url is a static URL the operator already routes to the listener; use it or a tunnel, not both"})
+	} else if w.PublicURL != "" && extension.CheckPublicURL(w.PublicURL) != nil {
+		out = append(out, TunnelProblem{"public_url", "public_url needs an http(s) URL without credentials"})
 	}
 	return out
 }
@@ -898,12 +923,13 @@ func (d *Document) normalized(redact bool) any {
 	}
 	// Only a stored listener joins the hash, so configurations without one
 	// keep their generation hash.
-	if w := s.Webhooks; w != (Webhooks{}) {
+	if w := s.Webhooks; !w.IsZero() {
 		hooks := map[string]any{"addr": w.Addr}
-		for k, v := range map[string]string{"tunnel": w.Tunnel, "tunnel_domain": w.TunnelDomain, "tunnel_name": w.TunnelName, "tunnel_hostname": w.TunnelHostname, "public_url": w.PublicURL} {
-			if v != "" {
-				hooks[k] = v
-			}
+		if w.PublicURL != "" {
+			hooks["public_url"] = w.PublicURL
+		}
+		if w.Tunnel != nil {
+			hooks["tunnel"] = w.Tunnel
 		}
 		settings["webhooks"] = hooks
 	}

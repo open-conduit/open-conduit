@@ -71,6 +71,10 @@ func NewFixture(dir string) (protocol.Fixture, error) {
 			{Type: Jail, Config: json.RawMessage(`{"hosts":["example.com"]}`)},
 			{Type: Jail, Config: json.RawMessage(`{"paths":["/"]}`), Refused: true},
 		},
+		Tunnels: []protocol.TunnelCase{
+			{Type: Relay, Config: json.RawMessage(`{"region":"eu"}`)},
+			{Type: Relay, Config: json.RawMessage(`{"domain":"hooks.example.com"}`), Refused: true},
+		},
 	}, nil
 }
 

@@ -3,8 +3,10 @@ package bootstrap
 import (
 	"slices"
 	"sort"
+	"strings"
 
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/protocol"
 
 	"github.com/open-conduit/open-conduit/extension"
@@ -24,7 +26,7 @@ func Adapters(configPath string) ([]cli.Adapter, []error) {
 	for _, f := range found {
 		out = append(out, manifestAdapters(f.Manifest)...)
 	}
-	out = append(out, tunnelAdapter())
+	out = append(out, tunnelAdapter(found))
 	sort.Slice(out, func(i, j int) bool { return out[i].Type < out[j].Type })
 	return out, errs
 }
@@ -104,6 +106,13 @@ func manifestAdapters(m protocol.Manifest) []cli.Adapter {
 	for _, sb := range p.Sandboxes {
 		add("sandbox", sb.Type, nil, func(*cli.Adapter, []cli.Field) {})
 	}
+	for _, t := range p.Tunnels {
+		add("tunnel", t.Type, t.Fields, func(a *cli.Adapter, f []cli.Field) {
+			if len(f) > 0 || a.Tunnel == nil {
+				a.Tunnel = f
+			}
+		})
+	}
 	if len(own.Kinds) == 0 && len(others) == 0 {
 		return nil
 	}
@@ -130,13 +139,25 @@ func catalogFields(decls []protocol.FieldDecl) []cli.Field {
 }
 
 // tunnelAdapter is the core's own webhook listener (settings.webhooks),
-// which no package provides.
-func tunnelAdapter() cli.Adapter {
-	f := func(name, help string) cli.Field { return cli.Field{Name: name, Help: help} }
-	return cli.Adapter{Type: "tunnel", Title: "Webhook tunnels", Description: "Exposes the webhook listener: ngrok, cloudflared or a static public URL (settings.webhooks; serve flags of the same names override it for one run).",
+// which no package provides: a tunnel of a type the found packages
+// declare, whose config each package describes, or a static public URL.
+func tunnelAdapter(found []extproc.Found) cli.Adapter {
+	var types []string
+	for _, f := range found {
+		for _, t := range f.Manifest.Provides.Tunnels {
+			types = append(types, t.Type)
+		}
+	}
+	sort.Strings(types)
+	tunnelHelp := "an object: provider, a tunnel type a package provides, and config, that package's tunnel config (its fields are under the package)"
+	if len(types) > 0 {
+		tunnelHelp += "; provided here: " + strings.Join(types, ", ")
+	}
+	return cli.Adapter{Type: "tunnel", Title: "Webhook listener", Description: "Exposes the webhook listener through a tunnel a package provides, or at a public URL that already reaches it (settings.webhooks; serve's --webhook-addr, --tunnel, --tunnel-config and --public-url override it for one run).",
 		Kinds: []string{"serve"},
-		Binding: []cli.Field{{Name: "addr", Help: "the listener, for example 127.0.0.1:8787", Required: true}, {Name: "tunnel", Options: []string{"ngrok", "cloudflared", "static"}}, f("tunnel_domain", "ngrok reserved domain"),
-			f("tunnel_name", "cloudflared named tunnel"), f("tunnel_hostname", "its hostname"), f("public_url", "static")}}
+		Binding: []cli.Field{{Name: "addr", Help: "the listener, for example 127.0.0.1:8787", Required: true},
+			{Name: "tunnel", Help: tunnelHelp},
+			{Name: "public_url", Help: "a URL that already reaches the listener (no tunnel)"}}}
 }
 
 // OperationDeclarations are the bundled packages' operation declarations

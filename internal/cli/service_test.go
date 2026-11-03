@@ -60,7 +60,7 @@ func TestServiceLifecycle(t *testing.T) {
 			fake := &fakeServiceManager{}
 			host := &ServiceHost{GOOS: goos, Executable: "/opt/oc/open-conduit", UID: 501, Run: fake.run,
 				LookPath: func(name string) (string, error) {
-					if name == "claude" || name == "cloudflared" {
+					if name == "claude" {
 						return "/Users/me/.local/bin/" + name, nil
 					}
 					return "", errors.New("not found")
@@ -75,11 +75,12 @@ func TestServiceLifecycle(t *testing.T) {
 			if out, _, code := run("service", "status"); code != 3 || !strings.Contains(out, "not installed") {
 				t.Fatalf("status before install: %d %q", code, out)
 			}
-			// A tunnel stored in settings.webhooks needs its binary like a --tunnel flag.
-			if err := os.WriteFile(filepath.Join(root, "stored.json"), []byte(`{"settings": {"webhooks": {"addr": "127.0.0.1:8787", "tunnel": "ngrok"}}}`), 0o600); err != nil {
+			// A tunnel's tool is its package's to find (doctor): install
+			// doesn't look for it.
+			if err := os.WriteFile(filepath.Join(root, "stored.json"), []byte(`{"settings": {"webhooks": {"addr": "127.0.0.1:8787", "tunnel": {"provider": "ngrok"}}}}`), 0o600); err != nil {
 				t.Fatal(err)
 			}
-			if out, errOut, code := run("service", "install", "--no-start", "--config", "stored.json"); code != 0 || !strings.Contains(out, "warning: ngrok is not on PATH") {
+			if out, errOut, code := run("service", "install", "--no-start", "--config", "stored.json"); code != 0 || strings.Contains(out, "ngrok") {
 				t.Fatalf("install with a stored tunnel: %d %q %s", code, out, errOut)
 			}
 			out, errOut, code := run("service", "install", "--webhook-addr", "127.0.0.1:8787", "--tunnel", "cloudflared", "--config", "cfg.json")

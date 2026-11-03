@@ -72,6 +72,11 @@ const (
 	// container config (extension.ContainerConfig, provider settings
 	// included).
 	ValidateContainer = "container"
+	// ValidateTunnel checks the webhook tunnel's config
+	// (settings.webhooks.tunnel.config) for a type declared in tunnels.
+	// Type is the tunnel type, Config its config as the operator wrote it,
+	// which the host passes to tunnel.run unchanged.
+	ValidateTunnel = "tunnel"
 )
 
 // ValidateParams asks the extension to check one opaque config object of

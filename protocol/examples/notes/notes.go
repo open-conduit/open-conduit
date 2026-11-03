@@ -146,8 +146,10 @@ func Manifest(o Options) protocol.Manifest {
 			Sandboxes: []protocol.SandboxDecl{{Type: Jail}},
 			// A container provider whose containers are records only.
 			Containers: []protocol.ContainerDecl{{Type: Pod}},
-			Exporters:  true,
-			Annotate:   true,
+			// A tunnel type that reports no URL, with a real config check.
+			Tunnels:   []protocol.TunnelDecl{{Type: Relay, Fields: []protocol.FieldDecl{{Name: "region", Help: "where the relay runs"}}}},
+			Exporters: true,
+			Annotate:  true,
 			// A run of Work in a notes scope gets NOTES_WORK, the Work it runs,
 			// and NOTES_CONNECTION, the connection its binding names.
 			RunEnvironment: true,

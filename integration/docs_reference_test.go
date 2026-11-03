@@ -358,7 +358,7 @@ func configReference(t *testing.T) string {
 		b.WriteString("\n" + d + "\n")
 	}
 
-	b.WriteString("\n## Integration fields\n\nThe `config` objects of connections, extension entries, routes, bindings and binding resources belong to the package that registers each type, which checks them and describes their fields in its manifest. `open-conduit adapters TYPE` prints the same list.\n")
+	b.WriteString("\n## Integration fields\n\nThe `config` objects of connections, extension entries, routes, bindings, binding resources and the webhook tunnel belong to the package that registers each type, which checks them and describes their fields in its manifest. `open-conduit adapters TYPE` prints the same list.\n")
 	catalog, _ := bootstrap.Adapters("")
 	sort.Slice(catalog, func(i, j int) bool { return catalog[i].Type < catalog[j].Type })
 	for _, a := range catalog {
@@ -369,7 +369,7 @@ func configReference(t *testing.T) string {
 		for _, sec := range []struct {
 			title  string
 			fields []cli.Field
-		}{{"Connection `config`", a.Connection}, {"Connection `secret_refs`", a.Secrets}, {"Extension entry `config`", a.Entry}, {"Route `config`", a.Route}, {"Binding `config`", a.Binding}, {"Resource `config`", a.Resource}} {
+		}{{"Connection `config`", a.Connection}, {"Connection `secret_refs`", a.Secrets}, {"Extension entry `config`", a.Entry}, {"Route `config`", a.Route}, {"Binding `config`", a.Binding}, {"Resource `config`", a.Resource}, {"Tunnel `config` (`settings.webhooks.tunnel.config`)", a.Tunnel}} {
 			if len(sec.fields) == 0 {
 				continue
 			}

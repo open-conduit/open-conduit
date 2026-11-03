@@ -33,7 +33,9 @@ type Adapter struct {
 	Route       []Field  `json:"route,omitempty"`
 	Binding     []Field  `json:"binding,omitempty"`
 	// Resource is a resource provider's config (a binding's resource).
-	Resource   []Field  `json:"resource,omitempty"`
+	Resource []Field `json:"resource,omitempty"`
+	// Tunnel is a tunnel type's config (settings.webhooks.tunnel.config).
+	Tunnel     []Field  `json:"tunnel,omitempty"`
 	Operations []string `json:"operations,omitempty"`
 	// Setup is the `init` setup that adds it, when there is one.
 	Setup string `json:"setup,omitempty"`
@@ -127,6 +129,7 @@ func writeAdapter(w io.Writer, a Adapter) {
 	section("route config", a.Route)
 	section("binding config", a.Binding)
 	section("resource config", a.Resource)
+	section("tunnel config", a.Tunnel)
 	if len(a.Operations) > 0 {
 		fmt.Fprintf(w, "\ntool operations: %s\n", strings.Join(a.Operations, ", "))
 	}

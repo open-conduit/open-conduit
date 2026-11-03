@@ -35,17 +35,30 @@ import (
 // Anything else is 404. It never mounts /v1, never sees management
 // credentials and never forwards to the management socket. An optional
 // tunnel exposes only that listener; entries with manage_webhook point the
-// service's webhook at it. A tunnel type (ngrok, cloudflared) is provided by
-// the package of that name (manifest tunnels, extension.TunnelProvider): the
-// host holds its run open for the daemon's life, takes each public URL it
-// reports, and starts it again with a growing wait when it stops. A static
+// service's webhook at it. A tunnel type (ngrok, cloudflared, or any an
+// installed package declares) is provided by its package (manifest
+// tunnels, extension.TunnelProvider), which checks the tunnel's config and
+// runs it as written: the host holds its run open for the daemon's life,
+// takes each public URL it reports, and starts it again with a growing
+// wait when it stops. A static
 // public URL is one the operator already routes to the listener, so nothing
 // runs for it.
 
 // TunnelOptions select webhook exposure.
 type TunnelOptions struct {
-	// Kind is ngrok, cloudflared or static ("" with PublicURL means static).
-	Kind, Binary, Domain, Name, Hostname, PublicURL string
+	// Kind is a tunnel type a package declares, or static for PublicURL
+	// ("" with PublicURL means static).
+	Kind string
+	// Config is the tunnel's config, opaque to the host: the providing
+	// package checks it and runs it as written. Empty means {}.
+	Config json.RawMessage
+	// PublicURL is a URL the operator already routes to the listener.
+	PublicURL string
+}
+
+// set says whether any tunnel option is given.
+func (t TunnelOptions) set() bool {
+	return t.Kind != "" || len(t.Config) > 0 || t.PublicURL != ""
 }
 
 type webhookState struct {
@@ -90,9 +103,13 @@ func (h *webhookState) addTunnel(typ string, p extension.TunnelProvider) {
 	h.providers[typ] = p
 }
 
-// tunnelConfig is the provider's config for t.
+// tunnelConfig is the provider's config for t: the operator's object as
+// written.
 func tunnelConfig(t TunnelOptions) domain.Payload {
-	data, _ := json.Marshal(extension.TunnelConfig{Binary: t.Binary, Domain: t.Domain, Name: t.Name, Hostname: t.Hostname})
+	data := t.Config
+	if len(data) == 0 {
+		data = json.RawMessage("{}")
+	}
 	return domain.Payload{Schema: extension.TunnelConfigSchema, Data: data}
 }
 
@@ -104,9 +121,8 @@ const (
 
 // exposure resolves the listener address and tunnel from the serve flags
 // over the stored settings.webhooks. The address and the tunnel override
-// separately, and a tunnel flag replaces the whole stored tunnel, so a stored
-// ngrok domain never leaks into a --tunnel cloudflared run. --tunnel-binary
-// is a flag only and applies to either.
+// separately, and a tunnel flag replaces the whole stored tunnel, so one
+// type's stored config never leaks into a run of another.
 func exposure(o Options, stored config.Webhooks) (addr, addrFrom string, t TunnelOptions, tunnelFrom string) {
 	addr, t = o.WebhookAddr, o.Tunnel
 	if addr != "" {
@@ -114,10 +130,13 @@ func exposure(o Options, stored config.Webhooks) (addr, addrFrom string, t Tunne
 	} else if stored.Addr != "" {
 		addr, addrFrom = stored.Addr, fromSettings
 	}
-	if t.Kind != "" || t.Domain != "" || t.Name != "" || t.Hostname != "" || t.PublicURL != "" {
+	if t.set() {
 		tunnelFrom = fromFlags
-	} else if stored.Tunnel != "" || stored.PublicURL != "" {
-		t = TunnelOptions{Kind: stored.Tunnel, Binary: t.Binary, Domain: stored.TunnelDomain, Name: stored.TunnelName, Hostname: stored.TunnelHostname, PublicURL: stored.PublicURL}
+	} else if stored.Tunnel != nil || stored.PublicURL != "" {
+		t = TunnelOptions{PublicURL: stored.PublicURL}
+		if stored.Tunnel != nil {
+			t.Kind, t.Config = stored.Tunnel.Provider, stored.Tunnel.Config
+		}
 		tunnelFrom = fromSettings
 	}
 	if t.Kind == "" && t.PublicURL != "" {
@@ -176,7 +195,15 @@ func (d *daemon) startWebhooks(ctx context.Context, stored config.Webhooks) (fun
 	tctx, cancel := context.WithCancel(ctx)
 	var wg sync.WaitGroup
 	if t.Kind != "" {
-		w := config.Webhooks{Tunnel: t.Kind, TunnelDomain: t.Domain, TunnelName: t.Name, TunnelHostname: t.Hostname, PublicURL: t.PublicURL}
+		w := config.Webhooks{PublicURL: t.PublicURL}
+		switch {
+		case t.Kind != staticTunnel:
+			w.Tunnel = &config.Tunnel{Provider: t.Kind, Config: t.Config}
+		case len(t.Config) > 0:
+			cancel()
+			_ = srv.Close()
+			return nil, errors.New("webhook tunnel (from " + tunnelFrom + "): a static public URL takes no tunnel config")
+		}
 		if problems := w.TunnelProblems(); len(problems) > 0 {
 			cancel()
 			_ = srv.Close()
@@ -325,7 +352,7 @@ func (d *daemon) webhookCheck(context.Context) (check runtime.Check) {
 	if d.configs != nil {
 		current, _ = d.configs.Current()
 	}
-	if current != nil && current.Settings.Webhooks != stored {
+	if current != nil && !current.Settings.Webhooks.Equal(stored) {
 		defer func() {
 			check.Status, check.Code = runtime.CheckWarn, "restart_required"
 			check.Detail += "; settings.webhooks changed since serve started: restart serve to use it"

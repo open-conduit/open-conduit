@@ -58,6 +58,11 @@ type Registry struct {
 	// shared shape (an image pinned by digest, the grant) is checked by the
 	// host whatever the provider.
 	Containers map[string]func(json.RawMessage) error
+	// Tunnels are the webhook tunnel types packages declare (manifest
+	// tunnels), each with its package's check of a tunnel config
+	// (settings.webhooks.tunnel). Its error is a fixed, secret-free
+	// reason, shown in the diagnostic.
+	Tunnels map[string]func(json.RawMessage) error
 	// HandlerConfig optionally validates a registered route handler's opaque
 	// route config at load/apply time (05-01). Its error text is never echoed.
 	HandlerConfig map[string]func(json.RawMessage) error
@@ -243,6 +248,7 @@ func ValidateDocument(doc *Document, reg Registry) (*Snapshot, error) {
 			v.fail(ptr("settings/budgets", i)+"/scope", "unknown_scope", "budget names a scope that is not defined; use a scope id")
 		}
 	}
+	v.tunnel(doc.Settings.Webhooks.Tunnel)
 	for _, name := range slices.Sorted(maps.Keys(doc.Settings.Extensions)) {
 		v.checkPassEnv(ptr("settings/extensions", name)+"/pass_env", doc.Settings.Extensions[name].PassEnv)
 	}
@@ -601,6 +607,23 @@ func envSecretNames(doc *Document) map[string]bool {
 		add(s.SecretRefs)
 	}
 	return out
+}
+
+// tunnel checks settings.webhooks.tunnel against the packages: its type is
+// one a package declares, and that package accepts its config.
+func (v *validator) tunnel(t *Tunnel) {
+	if t == nil {
+		return
+	}
+	const p = "settings/webhooks/tunnel"
+	check, ok := v.reg.Tunnels[t.Provider]
+	if !ok {
+		v.fail(p+"/provider", "unknown_registration", "no installed or bundled package provides this tunnel type; install one, or use public_url for a static URL"+registeredNames(v.reg.Tunnels, t.Provider))
+	} else if check != nil {
+		if err := check(t.Config); err != nil {
+			v.fail(p+"/config", "invalid_config", err.Error())
+		}
+	}
 }
 
 func (v *validator) sandboxed(p string, b Binding) {

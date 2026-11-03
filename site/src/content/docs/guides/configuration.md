@@ -26,7 +26,7 @@ The [workflow pages](/open-conduit/workflows/github/) each show a complete, mini
 ```sh
 open-conduit config show
 open-conduit config get /scopes/0/name
-open-conduit config set /settings/webhooks '{"addr": "127.0.0.1:8787", "tunnel": "ngrok"}'
+open-conduit config set /settings/webhooks '{"addr": "127.0.0.1:8787", "tunnel": {"provider": "ngrok"}}'
 open-conduit config unset /settings/webhooks
 open-conduit config edit                             # a full-screen editor
 open-conduit config check                            # validate offline
@@ -91,9 +91,9 @@ Secrets go to the macOS Keychain or, on Linux, the Secret Service through `secre
 
 ## Webhooks
 
-Without webhooks the daemon reconciles with each service on an interval, so nothing is lost. For lower latency, store a listener and tunnel in `settings.webhooks`, for example `{"addr": "127.0.0.1:8787", "tunnel": "ngrok"}`. Any free local port works. `serve --webhook-addr … --tunnel …` overrides it for one run.
+Without webhooks the daemon reconciles with each service on an interval, so nothing is lost. For lower latency, store a listener and tunnel in `settings.webhooks`, for example `{"addr": "127.0.0.1:8787", "tunnel": {"provider": "ngrok", "config": {"domain": "hooks.example.ngrok.app"}}}`. Any free local port works. `provider` is any tunnel type a bundled or installed package provides (`ngrok` and `cloudflared` are bundled), and `config` is that package's own. `open-conduit adapters ngrok` lists its fields. If a URL already reaches the listener, give `{"addr": …, "public_url": "https://…"}` instead. `serve --webhook-addr … --tunnel TYPE --tunnel-config '{…}'` overrides it for one run.
 
-The tunnel runs from the bundled package of the same name, which sees only a minimal environment. ngrok and cloudflared still read their own config files (`ngrok config add-authtoken` writes one). If yours reads a variable instead, such as `NGROK_AUTHTOKEN`, grant it to the package:
+The tunnel runs from its package, which sees only a minimal environment. ngrok and cloudflared still read their own config files (`ngrok config add-authtoken` writes one). If yours reads a variable instead, such as `NGROK_AUTHTOKEN`, grant it to the package:
 
 ```sh
 open-conduit config set /settings/extensions/ngrok '{"pass_env": ["NGROK_AUTHTOKEN"]}'

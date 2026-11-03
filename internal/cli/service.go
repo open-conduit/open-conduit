@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"os"
@@ -76,8 +75,8 @@ if the daemon exits with an error.
 
 install takes the same flags as serve (for example --webhook-addr 127.0.0.1:8787
 --tunnel cloudflared) and the global --data-dir and --socket, and records the
-config path, the state directory and a PATH that finds claude or codex, git, gh
-and the tunnel binary. Run it again to change the flags or after installing a tool the
+config path, the state directory and a PATH that finds claude or codex, git and
+gh (and keeps the installer's own, where a tunnel's tool is found). Run it again to change the flags or after installing a tool the
 daemon needs. Output goes to <state>/logs/service.log.
 `
 
@@ -154,7 +153,7 @@ func (o *operator) serviceInstall(h *ServiceHost, args []string) int {
 	}
 	argv = append(argv, "serve", "--config", r.ConfigPath)
 	argv = append(argv, withoutFlag(serveArgs, "config")...)
-	path, missing := o.servicePath(h, r)
+	path, missing := o.servicePath(h)
 	unit, log := o.unitPath(h), o.serviceLog()
 	var content string
 	if h.GOOS == "darwin" {
@@ -210,7 +209,7 @@ func (o *operator) serviceInstall(h *ServiceHost, args []string) int {
 // servicePath is the PATH the unit runs with: the installer's own, then the
 // directories of the tools the daemon starts, then the system defaults.
 // It also names the required tools it could not find.
-func (o *operator) servicePath(h *ServiceHost, r ServeRequest) (string, []string) {
+func (o *operator) servicePath(h *ServiceHost) (string, []string) {
 	var dirs []string
 	seen := map[string]bool{}
 	add := func(d string) {
@@ -224,14 +223,9 @@ func (o *operator) servicePath(h *ServiceHost, r ServeRequest) (string, []string
 	}
 	tools := []string{"claude", "codex", "git", "gh"}
 	required := map[string]bool{"git": true}
-	kind := r.TunnelKind
-	if kind == "" && r.TunnelDomain == "" && r.TunnelName == "" && r.TunnelHostname == "" && r.PublicURL == "" {
-		kind = storedTunnel(r.ConfigPath)
-	}
-	if kind == "ngrok" || kind == "cloudflared" {
-		tools = append(tools, kind)
-		required[kind] = r.TunnelBinary == ""
-	}
+	// A tunnel's tool is its package's concern: the unit keeps the
+	// installer's PATH, and the package's own check (doctor) says when the
+	// tool is missing.
 	var missing []string
 	agents := 0
 	for _, t := range tools {
@@ -249,29 +243,10 @@ func (o *operator) servicePath(h *ServiceHost, r ServeRequest) (string, []string
 	if agents == 0 {
 		missing = append(missing, "claude (or codex)")
 	}
-	if r.TunnelBinary != "" && filepath.IsAbs(r.TunnelBinary) {
-		add(filepath.Dir(r.TunnelBinary))
-	}
 	for _, d := range []string{"/opt/homebrew/bin", "/usr/local/bin", "/usr/bin", "/bin", "/usr/sbin", "/sbin"} {
 		add(d)
 	}
 	return strings.Join(dirs, string(os.PathListSeparator)), missing
-}
-
-// storedTunnel is the config's settings.webhooks.tunnel, which serve uses
-// when no tunnel flag overrides it; "" when the file can't be read.
-func storedTunnel(path string) string {
-	var doc struct {
-		Settings struct {
-			Webhooks struct {
-				Tunnel string `json:"tunnel"`
-			} `json:"webhooks"`
-		} `json:"settings"`
-	}
-	if data, err := os.ReadFile(path); err == nil {
-		_ = json.Unmarshal(data, &doc)
-	}
-	return doc.Settings.Webhooks.Tunnel
 }
 
 // withoutFlag drops --name and its value (both spellings) from args.

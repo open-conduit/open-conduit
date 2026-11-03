@@ -212,28 +212,25 @@
               "description": "Local address the listener binds, such as 127.0.0.1:8787."
             },
             "tunnel": {
-              "enum": [
-                "ngrok",
-                "cloudflared",
-                "static"
+              "description": "A tunnel that exposes the listener: provider is a tunnel type an installed or bundled package declares (ngrok, cloudflared or another), and config is that package's tunnel config, which the package checks and runs as written. Can't be combined with public_url.",
+              "type": "object",
+              "properties": {
+                "provider": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_-]{0,62}$"
+                },
+                "config": {
+                  "type": "object"
+                }
+              },
+              "required": [
+                "provider"
               ],
-              "description": "How the listener is reached from outside: ngrok, cloudflared, or static (public_url already reaches it)."
-            },
-            "tunnel_domain": {
-              "type": "string",
-              "description": "The ngrok domain to use."
-            },
-            "tunnel_name": {
-              "type": "string",
-              "description": "The cloudflared named tunnel to run."
-            },
-            "tunnel_hostname": {
-              "type": "string",
-              "description": "The cloudflared tunnel's public hostname."
+              "additionalProperties": false
             },
             "public_url": {
               "type": "string",
-              "description": "The URL services deliver webhooks to, for tunnel static."
+              "description": "A URL that already reaches the listener (no tunnel runs); services deliver webhooks to it. Can't be combined with tunnel."
             }
           },
           "required": [

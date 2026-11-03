@@ -9,21 +9,11 @@ import (
 )
 
 // TunnelConfigSchema labels the tunnel config the host hands a provider:
-// the operator's settings.webhooks (or serve flags) for that tunnel type.
-const TunnelConfigSchema = "core.config.tunnel.v1"
-
-// TunnelConfig is the config a tunnel provider runs with. Every field is
-// optional and a provider reads only those of its own type; the host has
-// already checked the combination (config settings.webhooks).
-type TunnelConfig struct {
-	// Binary overrides the provider's executable.
-	Binary string `json:"binary,omitempty"`
-	// Domain is a reserved domain (a stable URL).
-	Domain string `json:"domain,omitempty"`
-	// Name and Hostname select a named tunnel and its hostname.
-	Name     string `json:"name,omitempty"`
-	Hostname string `json:"hostname,omitempty"`
-}
+// the operator's settings.webhooks.tunnel.config (or serve's
+// --tunnel-config), an object the host passes on as written. Its shape is
+// the providing package's own, which it checks through validate (kind
+// tunnel) before the host ever runs it.
+const TunnelConfigSchema = "core.config.tunnel.v2"
 
 // TunnelRun is one run of a tunnel: the listener it exposes and the
 // provider's config.
@@ -33,7 +23,7 @@ type TunnelRun struct {
 	// to this address and nothing else.
 	Addr string
 	// Config is the operator's tunnel config (schema TunnelConfigSchema,
-	// data a TunnelConfig).
+	// data the object as written; {} when there is none).
 	Config domain.Payload
 }
 

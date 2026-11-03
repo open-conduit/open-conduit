@@ -52,6 +52,7 @@ var Modes = []Mode{
 	{"sandbox-open", notes.Name, "resources.workspace", "passes every resource config for a sandboxed binding"},
 	{"adopt-any", notes.Name, "sandboxes.policy", "adopts any recovered segment, even one it never planned"},
 	{"list-any", notes.Name, "containers.policy", "lists a running container for any execution, even one it never saw"},
+	{"tunnel-open", notes.Name, "tunnels.policy", "accepts any tunnel config, even one it can't run"},
 }
 
 // Lookup returns a mode by name.
@@ -205,6 +206,14 @@ func weakenNotes(mode string, ext *sdk.Extension) {
 		ext.Sandboxes[notes.Jail] = adoptAny{ext.Sandboxes[notes.Jail]}
 	case "list-any":
 		ext.Containers[notes.Pod] = listAny{ext.Containers[notes.Pod]}
+	case "tunnel-open":
+		base := ext.Validate
+		ext.Validate = func(ctx context.Context, p protocol.ValidateParams) error {
+			if p.Kind == protocol.ValidateTunnel {
+				return nil
+			}
+			return base(ctx, p)
+		}
 	case "unstable-push":
 		base := ext.Ingress
 		ext.Ingress = func(name string) (extension.Ingress, bool) {
