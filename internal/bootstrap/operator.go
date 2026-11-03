@@ -12,10 +12,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	gh "github.com/open-conduit/open-conduit/extensions/github"
-	"github.com/open-conduit/open-conduit/extensions/jira"
-	"github.com/open-conduit/open-conduit/extensions/linear"
-	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
@@ -100,20 +96,13 @@ func offlineExecutors() map[string]extension.Executor {
 	return out
 }
 
-// Setups are the registered extensions' optional setup flows (`open-conduit
-// init <type>`). Core CLI hosts them through cli.Env.Setups and imports no
-// extension.
-func Setups() []extension.Setup {
-	return []extension.Setup{gh.Setup{}, sl.Setup{}, linear.Setup{}, jira.Setup{}}
-}
-
 // DefaultConfig is the configuration the daemon runs on when it starts with
 // no config file and no stored generation: what `init` of the first-run
 // setup would write into an empty file, so the web view can start a setup
 // session. The first-run setup is a registered one, or one of the packages
 // installed beside configPath or bundled with the binary.
 func DefaultConfig(configPath, stateDir string) []byte {
-	return firstRunConfig(append(Setups(), extensionSetups(configPath, stateDir, "")...))
+	return firstRunConfig(extensionSetups(configPath, stateDir, ""))
 }
 
 // firstRunConfig is the first first-run setup's result with no flags,
@@ -261,7 +250,7 @@ func agentCommand(o SetupOptions, args []string) *exec.Cmd {
 func dryRunSetups(configPath, stateDir string) []string {
 	var out []string
 	seen := map[string]bool{}
-	for _, s := range append(Setups(), extensionSetups(configPath, stateDir, "")...) {
+	for _, s := range extensionSetups(configPath, stateDir, "") {
 		info := s.SetupInfo()
 		if !info.FirstRun && !seen[info.Type] {
 			seen[info.Type] = true

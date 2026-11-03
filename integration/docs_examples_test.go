@@ -143,7 +143,8 @@ var (
 // print, with the registered setups.
 func helpText(t *testing.T) string {
 	t.Helper()
-	env := cli.Env{Getenv: func(string) string { return "" }, Cwd: t.TempDir(), Setups: bootstrap.Setups()}
+	releaseLayout(t)
+	env := cli.Env{Getenv: func(string) string { return "" }, Cwd: t.TempDir(), Extensions: bootstrap.ExtensionOps("test", "docs")}
 	var all bytes.Buffer
 	for _, args := range [][]string{{"--help"}, {"init", "--help"}, {"extension", "--help"}} {
 		var out, errOut bytes.Buffer

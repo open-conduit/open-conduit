@@ -85,6 +85,9 @@ var (
 
 func (*Extension) Name() string { return Type }
 
+// SetupFlow is `open-conduit init slack` (inproc.SetupFlower).
+func (*Extension) SetupFlow() extension.Setup { return Setup{} }
+
 func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{
 		{Kind: protocol.ValidateConnection, Type: Type, Validate: func(c json.RawMessage, _ []string) error { return ValidateConnection(c) }},

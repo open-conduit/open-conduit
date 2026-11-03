@@ -6,6 +6,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 
@@ -131,12 +132,25 @@ func TestSlackSetupScopeValidatesOffline(t *testing.T) {
 	if strings.Contains(string(r.Scope), `"resource"`) || strings.Contains(string(r.Scope), "git") {
 		t.Fatalf("init slack scope reaches a Git concept: %s", r.Scope)
 	}
-	names := []string{}
-	for _, s := range bootstrap.Setups() {
-		names = append(names, s.SetupInfo().Type)
+	// The setups come from the bundled packages (#477), each its own.
+	releaseLayout(t)
+	names := map[string]bool{}
+	for _, s := range bootstrap.ExtensionOps("test", "abc").Setups("", t.TempDir()) {
+		if info := s.SetupInfo(); !info.FirstRun {
+			names[info.Type] = true
+		}
 	}
-	if strings.Join(names, ",") != "github,slack,linear,jira" {
-		t.Fatalf("registered setups: %v", names)
+	for _, want := range []string{"github", "slack", "linear", "jira"} {
+		if !names[want] {
+			t.Fatalf("bundled setups %v lack %s", names, want)
+		}
+	}
+	// Every init setup has an adapters entry, so what init can add can
+	// also be looked up with `adapters TYPE`.
+	for typ := range names {
+		if !slices.ContainsFunc(bootstrap.Adapters(), func(a cli.Adapter) bool { return a.Type == typ }) {
+			t.Errorf("init %s has no adapters entry", typ)
+		}
 	}
 }
 
@@ -224,6 +238,9 @@ func TestSetupCommand(t *testing.T) {
 	}
 	state := filepath.Join(dir, "state")
 	placeSetup(t, dir) // installed beside config.json
+	// The other setups the agent may dry-run come from the bundled
+	// packages (#477).
+	releaseLayout(t)
 	cmd, err := bootstrap.SetupCommand(bootstrap.SetupOptions{Agent: "claude", ConfigPath: filepath.Join(dir, "config.json"), StateDir: state, Cwd: dir, Bin: "/opt/bin/open-conduit", Binary: fake,
 		Environ: []string{"PATH=/usr/bin", "OS_TOKEN=leak", "OPEN_CONDUIT_CONFIG=/elsewhere"}})
 	if err != nil {

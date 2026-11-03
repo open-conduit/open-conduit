@@ -28,13 +28,15 @@ Usage: open-conduit init TYPE [flags] [--config PATH] [--force] [--dry-run]
        open-conduit init --with codex    start the Codex CLI with the setup guide
 
 Types (from the registered extensions):
-  github   add a scope that works a GitHub repository's issues
+  github   add a scope that works a GitHub repository's issues (package github 0.1.0)
            [--repo OWNER/NAME] [--scope ID] [--checkout DIR | --no-workspace] [--token REF] [--connection ID] [--holds] [--require LABEL] [--executor claude-code|codex]
-  jira     add a scope that works Jira projects' issues
+  jira     add a scope that works Jira projects' issues (package jira 0.1.0)
            [--bitbucket WORKSPACE/SLUG --bitbucket-username EMAIL --bitbucket-token REF] --site https://acme.atlassian.net --projects PROJ[,WEB] [--email E | --auth bearer] [--jql JQL] [--fields customfield_1,…] [--scope ID] [--token REF] [--connection ID] [--checkout DIR | --no-workspace]
-  linear   add a scope that works Linear teams' issues
+  linear   add a scope that works Linear teams' issues (package linear 0.1.0)
            [--bitbucket WORKSPACE/SLUG --bitbucket-username EMAIL --bitbucket-token REF] --teams ENG[,OPS] [--scope ID] [--token REF] [--connection ID] [--checkout DIR | --no-workspace] [--states unstarted,started] [--agent-account NAME]
-  slack    add a workspace-free scope whose agent works Slack threads
+  setup    a scope for setting Open Conduit up from the web view (package setup 0.1.0)
+           [--scope ID]
+  slack    add a workspace-free scope whose agent works Slack threads (package slack 0.1.0)
            [--scope ID] [--name APP] [--channel C…] [--start all|mention] [--bot-token REF --app-token REF --team T…] [--via slack-cli] [--no-open] [--connection ID] [--dir FOLDER]
 ```
 

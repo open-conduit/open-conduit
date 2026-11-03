@@ -287,7 +287,6 @@ var wiringFiles = map[string]bool{"inproc.go": true, "adapters.go": true}
 // the import.
 var compositionExceptions = map[string][]string{
 	"container.go": {"extensions/docker", "extensions/ssh"},
-	"operator.go":  {"extensions/github", "extensions/jira", "extensions/linear", "extensions/slack"},
 	"webhooks.go":  {"extensions/tunnel"},
 }
 
