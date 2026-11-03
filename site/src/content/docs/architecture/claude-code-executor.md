@@ -75,7 +75,7 @@ The data never carries the session or the handoff note. Usage maps to `extension
 
 ## Private continuity
 
-Continuity lives in namespaced coordination KV (the package's own `claude-code`, key `work/<work id>`; the executor kept it in `executor.claudecode` while it ran in process, and the daemon moves those records to `claude-code` when it starts). Core never interprets it. It holds:
+Continuity lives in namespaced coordination KV (the package's own `claude-code`, key `work/<work id>`). Core never interprets it. It holds:
 
 - the session and past sessions
 - the count of turns that ended with a status
@@ -234,4 +234,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - `extension.Result.RetryHint` was a contract clarification made for this executor; the bounded failure budget it still uses dates from 02-04.
 - **#73** removed the handoff experiment (the draw, trials, the blinded feedback question and `handoff_share`); a cold turn now follows the binding's `cold_turns`.
 - **#164** added the sandbox wrap ([B09](../sandboxes/)).
-- **#428** moved it out of process. It runs as a package bundled with the release (`extensions/claudecode/pkg`, `open-conduit extension-run claude-code`), the executor itself served through `inprocsdk`, with its live output and container attach crossing the wire (`executor.live`, `executor.container_attach`). A run takes the toolbelt and playbook directories the host names for it (`ExecutionContext.ToolbeltDir`, `PlaybookDir`). Its continuity moved from `executor.claudecode` to the package's own `claude-code` namespace, which the daemon does once at start. Its doctor check is its own (`claude-code`, formerly `claude_code` in bootstrap), and usage reading moved from `serve --claude-usage` to the binding's `usage`. Certification runs it against a fake `claude` the fixture command writes.
+- **#428** moved it out of process. It runs as a package bundled with the release (`extensions/claudecode/pkg`, `open-conduit extension-run claude-code`), the executor itself served through `inprocsdk`, with its live output and container attach crossing the wire (`executor.live`, `executor.container_attach`). A run takes the toolbelt and playbook directories the host names for it (`ExecutionContext.ToolbeltDir`, `PlaybookDir`). Its continuity moved from `executor.claudecode` to the package's own `claude-code` namespace; the daemon moved existing records once at start until #497 dropped that step, so continuity an older release left in `executor.claudecode` is no longer carried over. Its doctor check is its own (`claude-code`, formerly `claude_code` in bootstrap), and usage reading moved from `serve --claude-usage` to the binding's `usage`. Certification runs it against a fake `claude` the fixture command writes.

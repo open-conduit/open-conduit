@@ -426,15 +426,9 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = os.MkdirAll(filepath.Join(o.StateDir, "executors"), 0o700); err != nil {
 		return err
 	}
-	// Records an extension wrote in process move to its package's
-	// namespace before any package starts.
-	if moved, err := adoptLegacyKV(ctx, d.coord, d.now()); err != nil {
-		return fmt.Errorf("adopting in-process KV: %w", err)
-	} else if moved > 0 {
-		d.log.Info("moved in-process records to their packages", "records", moved)
-	}
-	// So are the files a container provider kept in process under a
-	// directory of its own (the ssh provider's pinned host keys).
+	// The files a container provider kept in process under a directory of
+	// its own (the ssh provider's pinned host keys) move to its package's
+	// directory before any package starts.
 	if moved, err := adoptLegacyContainerDirs(o.StateDir); err != nil {
 		return fmt.Errorf("adopting in-process container files: %w", err)
 	} else if moved > 0 {
