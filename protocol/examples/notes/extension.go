@@ -64,6 +64,10 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 			_, err := parseScratch(p.Config)
 			return err
 		}
+		if p.Kind == protocol.ValidateSandbox && p.Type == Jail {
+			_, err := parseJail(p.Config)
+			return err
+		}
 		if p.Kind != protocol.ValidateExtension || p.Type != "notes" {
 			return nil
 		}
@@ -196,6 +200,7 @@ func Build(o Options, onFault func(Fault)) *sdk.Extension {
 		return webhook(name), true
 	}
 	ext.Providers = map[string]extension.ResourceProvider{Scratch: scratch{stateDir: o.StateDir}}
+	ext.Sandboxes = map[string]extension.SandboxProvider{Jail: jail{}}
 	ext.Exporter = exporter{stateDir: o.StateDir}
 	ext.Annotate = annotate
 	ext.RunEnvironment = func(_ context.Context, _ *sdk.Host, r extension.RunEnvironmentRequest) (map[string]string, error) {

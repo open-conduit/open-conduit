@@ -288,6 +288,50 @@ type remoteProvider struct {
 	typ string
 }
 
+// Sandbox returns the process sandbox provider adapter of a declared type.
+// The host binds it to an attempt (extension.BindSandbox), which merges the
+// protected set into the needs and pins the plan's digest itself, so the
+// package only turns a policy and needs into a wrapped launch.
+func (r *Remote) Sandbox(typ string) (extension.SandboxProvider, bool) {
+	for _, d := range r.m.Provides.Sandboxes {
+		if d.Type == typ {
+			return &remoteSandbox{r: r, typ: typ}, true
+		}
+	}
+	return nil, false
+}
+
+type remoteSandbox struct {
+	r   *Remote
+	typ string
+}
+
+func (p *remoteSandbox) Plan(ctx context.Context, owner extension.ResourceOwner, policy extension.SandboxPolicy, needs extension.SandboxNeeds, launch extension.SandboxLaunch) (extension.SandboxPlan, error) {
+	var out protocol.SandboxPlan
+	err := p.r.p.Call(ctx, "sandbox_provider.plan", protocol.SandboxProviderPlanParams{Type: p.typ, Owner: protocol.FromOwner(owner), Config: protocol.FromPayload(policy.Config), Paths: protocol.FromSandboxPaths(policy.Paths), Needs: protocol.FromSandboxNeeds(needs), Launch: protocol.FromSandboxLaunch(launch)}, &out)
+	if err != nil {
+		return extension.SandboxPlan{}, sandboxErr(err)
+	}
+	return out.Extension(), nil
+}
+
+func (p *remoteSandbox) Adopt(ctx context.Context, plan extension.SandboxPlan, parent, root int) error {
+	if err := p.r.p.Call(ctx, "sandbox_provider.adopt", protocol.SandboxProviderAdoptParams{Type: p.typ, Plan: protocol.FromSandboxPlan(plan), Parent: parent, Root: root}, nil); err != nil {
+		return sandboxErr(err)
+	}
+	return nil
+}
+
+// sandboxErr fails a sandbox call closed: a refusal the package authored as
+// sandbox_denied stays a denial, and anything else (the package down, an
+// internal error) means the sandbox can't be enforced, so nothing runs.
+func sandboxErr(err error) error {
+	if errors.Is(err, extension.ErrSandboxDenied) || errors.Is(err, extension.ErrSandboxUnavailable) {
+		return err
+	}
+	return errors.Join(extension.ErrSandboxUnavailable, err)
+}
+
 func (p *remoteProvider) Acquire(ctx context.Context, a extension.ResourceAcquisition) (extension.Resource, error) {
 	var out protocol.ResourceResult
 	err := p.r.p.Call(ctx, "provider.acquire", protocol.ProviderAcquireParams{Type: p.typ, Owner: protocol.FromOwner(a.Owner), Config: protocol.FromPayload(a.Config), Mode: a.Request.Mode, Params: protocol.FromPayload(a.Request.Params)}, &out)

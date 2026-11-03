@@ -22,15 +22,16 @@ import (
 var firstParty = map[string]bool{
 	"github": true, "slack": true, "linear": true, "jira": true, "bitbucket": true, "schedule": true,
 	"introspection": true, "human": true, "posthog": true, "git": true, "shell": true, "claude-code": true, "setup": true,
+	"srt": true,
 }
 
 // useCases is the 07-01 inventory: the shipped first-party extensions and
 // executors that need each wire method. It lives with the test, not the
 // catalogue, so the public protocol names no service or executor (#354).
 var useCases = map[string][]string{
-	"initialize":                 {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code"},
+	"initialize":                 {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code", "srt"},
 	"configure":                  {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog"},
-	"validate":                   {"setup", "github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code"},
+	"validate":                   {"setup", "github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "shell", "claude-code", "srt"},
 	"shutdown":                   {"posthog", "introspection", "slack"},
 	"$/cancel":                   {"github", "slack", "claude-code", "shell"},
 	"ingress.push":               {"github", "slack", "linear", "jira", "bitbucket", "schedule"},
@@ -69,6 +70,8 @@ var useCases = map[string][]string{
 	"provider.lookup":            {"git"},
 	"provider.reconcile":         {"git"},
 	"provider.owner_status":      {"git"},
+	"sandbox_provider.plan":      {"srt"},
+	"sandbox_provider.adopt":     {"srt"},
 	"kv.get":                     {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
 	"kv.list":                    {"github", "slack", "linear", "jira", "introspection", "claude-code"},
 	"kv.commit":                  {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "claude-code"},
@@ -108,7 +111,7 @@ var useCases = map[string][]string{
 	"config.validate":            {"setup"},
 	"config.candidate":           {"setup"},
 	"config.trace":               {"setup"},
-	"check.run":                  {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "claude-code"},
+	"check.run":                  {"github", "slack", "linear", "jira", "bitbucket", "schedule", "introspection", "posthog", "git", "claude-code", "srt"},
 	"run.environment":            {"github"},
 	"event.render_owned":         {"claude-code"},
 	"target.resolve":             {"schedule"},
@@ -299,6 +302,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Pages = []protocol.PageDecl{{ID: "chat", Title: "Chat", Entry: "chat", WorkKind: "chat.conversation", Start: "start", Compose: []string{"message"}, Route: "chat"}}
 	m.Provides.Routes[0].Samples = true
 	m.Provides.Targets, m.Provides.SegmentEnd = []string{"chat"}, true
+	m.Provides.Sandboxes = []protocol.SandboxDecl{{Type: "chat-jail"}}
 	m.Provides.Probes = []protocol.ProbeInfo{{Name: "accounts", Summary: "the signed-in accounts"}}
 	for _, p := range protocol.KnownPermissions {
 		m.Permissions = append(m.Permissions, p.Name)

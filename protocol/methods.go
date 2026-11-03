@@ -101,6 +101,8 @@ var Methods = []Method{
 	{Name: "provider.lookup", Direction: HostToExtension, Provides: "resources", Contract: []string{"extension.ResourceProvider.Lookup"}},
 	{Name: "provider.reconcile", Direction: HostToExtension, Provides: "resources", Contract: []string{"extension.ResourceProvider.Reconcile"}},
 	{Name: "provider.owner_status", Direction: ExtensionToHost, Provides: "resources", Contract: []string{"extension.ResourceStatusFunc"}},
+	{Name: "sandbox_provider.plan", Direction: HostToExtension, Provides: "sandboxes", Contract: []string{"extension.SandboxProvider.Plan", "extension.SandboxPolicy", "extension.SandboxPaths"}},
+	{Name: "sandbox_provider.adopt", Direction: HostToExtension, Provides: "sandboxes", Contract: []string{"extension.SandboxProvider.Adopt"}},
 
 	// Namespaced KV (mandatory, never negotiated) and read-only state.
 	{Name: "kv.get", Direction: ExtensionToHost, Contract: []string{"storage.Tx.Get"}},

@@ -43,6 +43,17 @@ type Fixture struct {
 	// ExecutorModes are the resource modes executors declared with
 	// resource_mode request: each such executor needs at least one.
 	ExecutorModes []ExecutorModeCase `json:"executor_modes,omitempty"`
+	// Sandboxes are sandbox configs and whether validate sandbox refuses
+	// them: each declared sandbox type needs an accepted and a refused one.
+	Sandboxes []SandboxCase `json:"sandboxes,omitempty"`
+}
+
+// SandboxCase is one sandbox config of a declared sandbox type and whether
+// validate with kind sandbox must refuse it.
+type SandboxCase struct {
+	Type    string          `json:"type"`
+	Config  json.RawMessage `json:"config,omitempty"`
+	Refused bool            `json:"refused,omitempty"`
 }
 
 // ResourceCase is one resource config and the answers config check must

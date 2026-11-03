@@ -25,6 +25,7 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/sentry"
 	shellext "github.com/open-conduit/open-conduit/extensions/shell/pkg"
 	slackext "github.com/open-conduit/open-conduit/extensions/slack/pkg"
+	srtext "github.com/open-conduit/open-conduit/extensions/srt/pkg"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/sdk"
@@ -61,6 +62,7 @@ var runnable = map[string]struct {
 	"sentry":        {sentry.Main, sentry.Manifest, nil, false},
 	"shell":         {shellext.Main, shellext.Manifest, nil, true},
 	"slack":         {slackext.Main, slackext.Manifest, slackext.Playbooks, true},
+	"srt":           {srtext.Main, srtext.Manifest, nil, true},
 }
 
 // hostManifest is extproc.HostManifest for this binary: discovery asks the

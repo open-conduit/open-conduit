@@ -106,6 +106,9 @@ type Extension struct {
 	Webhooks func(path string) (http.Handler, bool)
 	// Providers are resource providers by declared type.
 	Providers map[string]extension.ResourceProvider
+	// Sandboxes are process sandbox providers by declared type (manifest
+	// sandboxes).
+	Sandboxes map[string]extension.SandboxProvider
 	// Exporter receives telemetry batches (manifest exporters) and is shut
 	// down with the extension.
 	Exporter observability.Exporter
@@ -237,7 +240,7 @@ func (s *Server) handle(ctx context.Context, method string, raw json.RawMessage)
 			_ = s.ext.Exporter.Shutdown(ctx)
 		}
 		return struct{}{}, nil
-	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.act", "view.render", "config.candidate", "setup.run":
+	case "validate", "probe.serve", "webhook.handle", "provider.acquire", "provider.lookup", "provider.reconcile", "sandbox_provider.plan", "sandbox_provider.adopt", "telemetry.export", "run.environment", "work.annotate", "work.actions", "work.act", "view.render", "config.candidate", "setup.run":
 		return s.surface(ctx, method, raw)
 	case "ingress.push", "ingress.reconcile":
 		return s.ingress(ctx, method, raw)

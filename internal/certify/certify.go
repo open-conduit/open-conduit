@@ -150,7 +150,7 @@ var limits = []string{
 	"Certification checks protocol conformance, not safety: an extension runs with the operator's privileges (process separation is fault isolation, not a sandbox).",
 	"Only the package's own fixture is exercised, against its fakes; no live service is contacted and no real credential is used.",
 	"One host build, one platform and one protocol version are tested: the ones stated above.",
-	"Not certified by criteria version 3: webhook.handle, setup.run and setup.* callbacks, provider.* resource providers, telemetry.export, run.environment, work.annotate, work.actions and work.act, view.render, event.render, target.resolve and segment.ended, emit and wait operations (the host cuts a wait plan's description to fit as it is declared), the in-transaction callbacks (recurrence.next, work_kind.trigger, emit.commit, dependency.filter) and the message-size and overload limits. The host's own suites cover those adapters.",
+	"Not certified by criteria version 4: webhook.handle, setup.run and setup.* callbacks, provider.* resource providers, sandbox_provider.plan (a plan is only as good as the provider's mechanism), telemetry.export, run.environment, work.annotate, work.actions and work.act, view.render, event.render, target.resolve and segment.ended, emit and wait operations (the host cuts a wait plan's description to fit as it is declared), the in-transaction callbacks (recurrence.next, work_kind.trigger, emit.commit, dependency.filter) and the message-size and overload limits. The host's own suites cover those adapters.",
 	"Executor checks run one attempt each without a toolbelt endpoint or workspace; resume, interrupt and attach are not exercised.",
 }
 
@@ -273,6 +273,7 @@ func Run(ctx context.Context, o Options) (rep Report, err error) {
 	r.executors(ctx, remote)
 	r.executorModes(remote)
 	r.resources(remote)
+	r.sandboxes(ctx, remote)
 	r.surfaces(ctx, remote)
 	r.restart(ctx, remote)
 	if n := remote.Service().Refused(); n > 0 {
@@ -1058,6 +1059,58 @@ func (r *runner) resources(remote *extproc.Remote) {
 		}
 	}
 	r.pass("resources.workspace", fmt.Sprintf("%d case(s)", len(r.fixture.Resources)))
+}
+
+// sandboxes runs sandboxes.policy: each sandbox case's validate verdict,
+// asked twice, with an accepted and a refused case for every declared
+// sandbox type, and adopt of a plan the provider never made refused, so a
+// restarted host never adopts a segment it can't prove is confined.
+func (r *runner) sandboxes(ctx context.Context, remote *extproc.Remote) {
+	if len(r.m.Provides.Sandboxes) == 0 {
+		r.skip("sandboxes.policy", "no sandbox provider type")
+		return
+	}
+	declared := map[string]bool{}
+	for _, d := range r.m.Provides.Sandboxes {
+		declared[d.Type] = true
+	}
+	accepted, refused := map[string]bool{}, map[string]bool{}
+	for i, c := range r.fixture.Sandboxes {
+		if !declared[c.Type] {
+			r.fail("sandboxes.policy", "case %d: %q is not a declared sandbox type", i, c.Type)
+			return
+		}
+		check := remote.Validator(protocol.ValidateSandbox, c.Type)
+		first, second := check(c.Config, nil), check(c.Config, nil)
+		if (first == nil) != (second == nil) {
+			r.fail("sandboxes.policy", "case %d: %s answered validate sandbox differently twice", i, c.Type)
+			return
+		}
+		if got := first != nil; got != c.Refused {
+			r.fail("sandboxes.policy", "case %d: %s validate sandbox refused=%t, want %t", i, c.Type, got, c.Refused)
+			return
+		}
+		if c.Refused {
+			refused[c.Type] = true
+		} else {
+			accepted[c.Type] = true
+		}
+	}
+	for typ := range declared {
+		if !accepted[typ] || !refused[typ] {
+			r.fail("sandboxes.policy", "the fixture needs an accepted and a refused sandbox case for %s", typ)
+			return
+		}
+		p, _ := remote.Sandbox(typ)
+		cx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		err := p.Adopt(cx, extension.SandboxPlan{Argv: []string{"true"}, Digest: "certify-unknown", Data: domain.Payload{Schema: "certify.unknown.v1", Data: json.RawMessage(`{}`)}}, 0, 0)
+		cancel()
+		if err == nil {
+			r.fail("sandboxes.policy", "%s adopted a plan it never made", typ)
+			return
+		}
+	}
+	r.pass("sandboxes.policy", fmt.Sprintf("%d case(s)", len(r.fixture.Sandboxes)))
 }
 
 // unserved reports an answer that means the method was not served at all.

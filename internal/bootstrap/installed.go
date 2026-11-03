@@ -161,11 +161,21 @@ func (x *installed) remote() (*extproc.Remote, error) {
 // errNoPackage is a package with neither a process nor an offline start.
 var errNoPackage = errors.New("extension package is not running")
 
-// resourceTypes adds the manifest's resource types to a registry, with the
-// workspace checks a type declares (mode_default, sandbox) answered through
-// the package as git answers them in process (resource providers are not
-// on the in-process contract yet).
-func (x *installed) resourceTypes(reg *config.Registry) {
+// providerTypes adds the manifest's resource and sandbox provider types to
+// a registry: each validates its own config through the package, and a
+// resource type's workspace checks (mode_default, sandbox) are answered
+// through it too.
+func (x *installed) providerTypes(reg *config.Registry) {
+	if len(x.m.Provides.Sandboxes) > 0 && reg.Sandboxes == nil {
+		reg.Sandboxes = map[string]func(json.RawMessage) error{}
+	}
+	for _, s := range x.m.Provides.Sandboxes {
+		v := x.validator(protocol.ValidateSandbox, s.Type)
+		if v == nil {
+			v = func(json.RawMessage, []string) error { return nil }
+		}
+		reg.Sandboxes[s.Type] = func(raw json.RawMessage) error { return v(raw, nil) }
+	}
 	if reg.Resources == nil {
 		reg.Resources = map[string]bool{}
 	}

@@ -7,7 +7,9 @@ description: "Decision B09: how a binding runs its executor in a process sandbox
 To set up a sandbox, see [Sandbox your agents](../../guides/sandboxes/). This page is the design record.
 :::
 
-This page records decision B09: a binding may run its executor's process in a local process sandbox. The resource says where the agent works (B07), the executor how it runs, and the sandbox what it may reach. The public contract is [`extension/sandbox.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/sandbox.go), and the host's half of it is [`extension/sandboxbind.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/sandboxbind.go). The [srt provider](https://github.com/open-conduit/open-conduit/tree/main/extensions/srt) implements it with Anthropic's sandbox-runtime. The [shell](../shell-executor/) and [Claude Code](../claude-code-executor/) executors consume it, and [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/sandbox.go) composes them.
+This page records decision B09: a binding may run its executor's process in a local process sandbox. The resource says where the agent works (B07), the executor how it runs, and the sandbox what it may reach. The public contract is [`extension/sandbox.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/sandbox.go), and the host's half of it is [`extension/sandboxbind.go`](https://github.com/open-conduit/open-conduit/blob/main/extension/sandboxbind.go). The [srt provider](https://github.com/open-conduit/open-conduit/tree/main/extensions/srt) implements it with Anthropic's sandbox-runtime. The [shell](../shell-executor/) and [Claude Code](../claude-code-executor/) executors consume it, and [`internal/bootstrap`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/sandbox.go) binds whichever provider a binding names to the attempt.
+
+A sandbox provider is an extension like any other. srt runs as a package bundled with the release (`open-conduit extension-run srt`), and any installed package can declare a provider of its own (manifest `sandboxes`, [extension protocol](../extension-protocol/)). The host calls it over `sandbox_provider.plan` and `sandbox_provider.adopt`, and checks a binding's sandbox config through `validate` with kind `sandbox`. The host keeps the authority either way. It merges its protected set into the needs before the provider sees them, computes and pins the plan's digest itself, and fails closed. A refusal, a provider that isn't running or any other failure means nothing runs.
 
 A sandbox here is local and process-scoped: the sandbox is the process tree the executor starts. Containers (Docker, `sbx`) and remote sandboxes are not providers of this contract. They fail it on stopping, adoption, the stray-process sweep, host sockets and credentials (#161). Containers have a contract of their own, with a lifecycle the host owns ([Containers](#containers)), which shares this one's rules and path checks. A remote machine is a provider of that contract ([the SSH provider](#the-ssh-provider)), not of this one.
 
@@ -144,14 +146,14 @@ The toolbelt can't be given its own path through the seccomp filter instead of `
 
 ### Doctor
 
-The `sandbox` check runs when a binding declares an srt sandbox. It reports `srt <version> at <path>` and, as `fail`:
+The srt package's `srt` check runs when a binding declares an srt sandbox (doctor runs a package's checks only when the configuration uses it). It reports `srt <version> at <path>` and, as `fail`:
 
 - `srt_unavailable`: srt, bwrap, socat or rg missing, or srt too old
 - `userns_unavailable`: `kernel.apparmor_restrict_unprivileged_userns=1`, `unprivileged_userns_clone=0` or `user.max_user_namespaces=0`
 - `seccomp_unavailable`
 - `preflight_failed`: `/usr/bin/true` under an empty policy failed or warned
 
-A version newer than the tested one is a `warn` (`untested_version`). The detail adds that sandboxed bindings run nothing until it is fixed.
+A version newer than the tested one is a `warn` (`untested_version`). The detail adds that sandboxed bindings run nothing until it is fixed, and the items list the sandboxed bindings.
 
 ## Executors
 
