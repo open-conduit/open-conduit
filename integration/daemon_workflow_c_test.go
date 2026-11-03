@@ -199,7 +199,13 @@ func TestDaemonWorkflowC(t *testing.T) {
 	if ctxOut := readFile(t, filepath.Join(d.root, "tick.context")); !json.Valid([]byte(ctxOut)) {
 		t.Fatalf("os context: %s", ctxOut)
 	}
-	calls := d.recordsNamed("toolbelt.called", d.executions(tickWork.ID)[0].ID)
+	// The record reaches lifecycle.jsonl through the telemetry exporter,
+	// after the call returns, so it is waited for, not read once.
+	tickExec := d.executions(tickWork.ID)[0].ID
+	d.until("the shell job's toolbelt call is exported", 30*time.Second, func() bool {
+		return len(d.recordsNamed("toolbelt.called", tickExec)) > 0
+	})
+	calls := d.recordsNamed("toolbelt.called", tickExec)
 	if len(calls) != 1 || calls[0].Attributes["toolbelt.operation"] != "read_context" {
 		t.Fatalf("toolbelt.called records for the shell job: %+v", calls)
 	}
