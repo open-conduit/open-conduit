@@ -334,6 +334,7 @@ Park this Work until a PR, issue or job condition is met or a time comes; end th
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `conditions` | array of string |  | what to wait for, any one of which wakes you: pr:<n>[:merged\|closed\|commented\|pushed\|checks], issue:<n>[:closed\|<state>] or job:<name>, with <project>/<n> or <project>/<name> for another project's; give conditions, until or both (a PR's own Work may give neither) |
+| `ignore` | array of string |  | news of this Work's own issue or PR that shouldn't wake you, for news your role doesn't act on: conflicts (the PR no longer merges with its base) or checks (check results); it is handed to you with whatever does wake you |
 | `reason` | string | yes | what you're waiting for and why; posted on this Work's issue when it has one |
 | `repo` | string |  | the repository (owner/name) conditions in this project refer to; defaults to this Work's own, else this project's only one |
 | `until` | string |  | a future ISO time (e.g. 2026-10-25T09:00Z) to wake at if nothing else has |

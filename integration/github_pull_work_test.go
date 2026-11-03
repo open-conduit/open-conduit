@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -162,5 +163,57 @@ func TestGitHubReconcileClaimsMissedPullRequests(t *testing.T) {
 	e.sync()
 	if _, ok := e.workFor(gh.PullRequestKey(draft)); !ok {
 		t.Fatal("a draft marked ready was not claimed")
+	}
+}
+
+// A wait subscribes to the news its role acts on (issue #460). The
+// reviewer parks ignoring conflicts: the PR picking them up doesn't wake
+// it, and the push that resolves them does. The builder's wait, ignoring
+// nothing, is woken by the same conflicts (the negative control).
+func TestGitHubReviewerWaitIgnoresConflicts(t *testing.T) {
+	e := newPullEnv(t)
+	n, builder := e.claim("Header wobbles", "It wobbles on scroll.", "bug")
+	pr := e.fake.OpenPull("Steady the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "sha1", ghAlice)
+	b := e.start(builder.ID)
+	e.must(b, gh.OpWait, "builder-park", map[string]any{"until": e.clock.Now().Add(72 * time.Hour).UTC().Format(time.RFC3339), "reason": "Waiting for review."})
+	e.finish(b, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("review")}})
+	e.sync()
+	pull, ok := e.workFor(gh.PullRequestKey(pr))
+	if !ok {
+		t.Fatalf("no Work for PR %d", pr)
+	}
+	r := e.start(pull.ID)
+	_, err := e.call(r, gh.OpWait, "reviewer-park-bad", map[string]any{"reason": "Waiting for changes.", "ignore": []string{"comments"}})
+	refused(t, err, "invalid_ignore")
+	out := e.must(r, gh.OpWait, "reviewer-park", map[string]any{"reason": "Waiting for changes.", "ignore": []string{"conflicts"}})
+	if w, _ := out["waiting_for"].(string); !strings.Contains(w, "its checks") {
+		t.Fatalf("waiting for %q", w)
+	}
+	e.finish(r, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("review")}})
+	e.sync()
+	for _, w := range []domain.ID{builder.ID, pull.ID} {
+		if got := e.work(w); got.State != domain.WorkWaiting {
+			t.Fatalf("%s not parked: %v (input %v)", w, got.State, e.queued(w))
+		}
+	}
+
+	// main moves under the PR and it no longer merges.
+	no := false
+	e.fake.SetMergeable(pr, &no)
+	e.sync()
+	if got := e.work(builder.ID); got.State != domain.WorkReady || !contains(e.queued(builder.ID), gh.TypePullConflicts) {
+		t.Fatalf("the conflicts did not wake the builder: %v %v", got.State, e.queued(builder.ID))
+	}
+	if got := e.work(pull.ID); got.State != domain.WorkWaiting {
+		t.Fatalf("the conflicts woke the reviewer: %v (input %v)", got.State, e.queued(pull.ID))
+	}
+
+	// The builder rebases and pushes: that wakes the reviewer.
+	yes := true
+	e.fake.SetMergeable(pr, &yes)
+	e.fake.PushPull(pr, "sha2")
+	e.sync()
+	if got := e.work(pull.ID); got.State != domain.WorkReady || !contains(e.queued(pull.ID), gh.TypePullOpen) {
+		t.Fatalf("the push did not wake the reviewer: %v %v", got.State, e.queued(pull.ID))
 	}
 }
