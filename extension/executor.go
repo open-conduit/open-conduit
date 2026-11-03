@@ -314,8 +314,9 @@ type ContainerAttachSpec struct {
 // starts the setup playbook this way). The host decides everything with
 // authority (the playbook, the commands the session may run without asking,
 // the working directory and the environment); the executor only expresses
-// them in its CLI's terms, and the host filters the environment it returns
-// again before it runs the command. LaunchNames are other names an operator
+// them in its CLI's terms. It never sees the operator's environment: it
+// names only the variables to add, and the host refuses a launch that would
+// set one the host decides (the toolbelt credentials, the config path). LaunchNames are other names an operator
 // may give the executor where it picks one to launch (`init --with claude`
 // for claude-code); nil for none.
 type InteractiveLauncher interface {
@@ -337,9 +338,8 @@ type InteractiveLaunchRequest struct {
 	// CLI's own default, normally asking the operator. An executor whose CLI
 	// has no such list leaves them to ask.
 	Allow []string
-	// Dir is the session's working directory, and Env its environment.
+	// Dir is the session's working directory.
 	Dir string
-	Env []string
 	// FilesDir is a host directory the executor may create and write the
 	// files its launch needs into (a plugin, a prompt file); it may not
 	// exist yet, and what was in it may be replaced.
@@ -350,12 +350,12 @@ type InteractiveLaunchRequest struct {
 }
 
 // InteractiveLaunchSpec is the command to exec: argv, its working
-// directory ("" for the request's) and its environment (nil for the
-// request's).
+// directory ("" for the request's) and the variables to add to the
+// environment the host gives the session.
 type InteractiveLaunchSpec struct {
-	Argv []string
-	Dir  string
-	Env  []string
+	Argv   []string
+	Dir    string
+	SetEnv map[string]string
 }
 
 // ErrNothingToAttach is the definitive "nothing to attach to yet" answer of

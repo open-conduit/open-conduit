@@ -118,7 +118,7 @@ func (e *Executor) InteractiveLaunch(_ context.Context, r extension.InteractiveL
 	if program == "" {
 		program = "sh"
 	}
-	return extension.InteractiveLaunchSpec{Argv: []string{program, "-c", `cat "$0"; exec "${SHELL:-sh}"`, path}, Env: append(r.Env, "RUNNER_PLAYBOOK="+path)}, nil
+	return extension.InteractiveLaunchSpec{Argv: []string{program, "-c", `cat "$0"; exec "${SHELL:-sh}"`, path}, SetEnv: map[string]string{"RUNNER_PLAYBOOK": path}}, nil
 }
 
 // ResourceMode is the resource mode a binding config requests.

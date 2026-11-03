@@ -170,7 +170,8 @@ type SetupLaunch struct {
 // own config, doctor, health, the secret store's path and a dry run of each
 // setup), its directory and its environment (no toolbelt credential, the
 // config it sets up named); the executor only says how its CLI expresses
-// them, and the host filters the environment it answers again.
+// them, never sees the operator's environment, and may only add variables
+// the host does not decide.
 func SetupCommand(o SetupOptions) (SetupLaunch, error) {
 	if o.Bin == "" {
 		o.Bin = "open-conduit"
@@ -193,9 +194,8 @@ func SetupCommand(o SetupOptions) (SetupLaunch, error) {
 	for i, sub := range allowed {
 		allowed[i] = o.Bin + " " + sub
 	}
-	env := setupEnv(o.Environ, o.ConfigPath)
 	req := extension.InteractiveLaunchRequest{Playbook: text, Name: name, Summary: "Sets Open Conduit up", Allow: allowed,
-		Dir: o.Cwd, Env: env, FilesDir: filepath.Join(o.StateDir, "playbooks", name), Program: o.Binary}
+		Dir: o.Cwd, FilesDir: filepath.Join(o.StateDir, "playbooks", name), Program: o.Binary}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Minute)
 	defer cancel()
 	spec, err := interactiveLaunch(ctx, f, decl.Name, o.ConfigPath, o.StateDir, req)
@@ -217,10 +217,9 @@ func SetupCommand(o SetupOptions) (SetupLaunch, error) {
 	if spec.Dir != "" {
 		cmd.Dir = spec.Dir
 	}
-	if spec.Env == nil {
-		spec.Env = env
+	if cmd.Env, err = launchEnv(o.Environ, o.ConfigPath, spec.SetEnv); err != nil {
+		return SetupLaunch{}, fmt.Errorf("the %s executor's launch: %w", decl.Name, err)
 	}
-	cmd.Env = setupEnv(spec.Env, o.ConfigPath)
 	return SetupLaunch{Cmd: cmd, Executor: decl.Name, Title: title}, nil
 }
 
@@ -317,6 +316,30 @@ func setupEnv(env []string, configPath string) []string {
 		out = append(out, kv)
 	}
 	return append(out, "OPEN_CONDUIT_CONFIG="+configPath)
+}
+
+// launchEnv is the session's environment (setupEnv) with the variables the
+// executor adds, refusing one only the host decides.
+func launchEnv(environ []string, configPath string, add map[string]string) ([]string, error) {
+	env := setupEnv(environ, configPath)
+	names := make([]string, 0, len(add))
+	for k := range add {
+		names = append(names, k)
+	}
+	slices.Sort(names)
+	for _, k := range names {
+		if k == "" || strings.ContainsAny(k, "=\x00") || hostSetEnv(k) {
+			return nil, fmt.Errorf("it may not set %q: the host decides it", k)
+		}
+		env = append(env, k+"="+add[k])
+	}
+	return env, nil
+}
+
+// hostSetEnv reports the variables a launch may not set: the toolbelt's
+// namespace (the session has no toolbelt credential) and the config path.
+func hostSetEnv(name string) bool {
+	return strings.HasPrefix(name, "OS_") || name == "OPEN_CONDUIT_CONFIG"
 }
 
 // dryRunSetups are the setup types whose `init TYPE --dry-run` the setup

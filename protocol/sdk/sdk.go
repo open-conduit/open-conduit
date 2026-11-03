@@ -746,11 +746,11 @@ func (s *Server) executor(ctx context.Context, method string, raw json.RawMessag
 		if !ok {
 			return nil, protocol.Errorf(protocol.CodeUnsupported, method)
 		}
-		spec, err := x.InteractiveLaunch(ctx, extension.InteractiveLaunchRequest{Playbook: p.Playbook, Name: p.Name, Summary: p.Summary, Allow: p.Allow, Dir: p.Dir, Env: p.Env, FilesDir: p.FilesDir, Program: p.Program})
+		spec, err := x.InteractiveLaunch(ctx, extension.InteractiveLaunchRequest{Playbook: p.Playbook, Name: p.Name, Summary: p.Summary, Allow: p.Allow, Dir: p.Dir, FilesDir: p.FilesDir, Program: p.Program})
 		if err != nil {
 			return nil, err
 		}
-		return protocol.InteractiveLaunchSpec{Argv: spec.Argv, Dir: spec.Dir, Env: spec.Env}, nil
+		return protocol.InteractiveLaunchSpec{Argv: spec.Argv, Dir: spec.Dir, SetEnv: spec.SetEnv}, nil
 	}
 	var p protocol.ExecutorTargetParams
 	if err := jsonrpc.Params(raw, &p); err != nil {

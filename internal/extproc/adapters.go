@@ -610,17 +610,18 @@ func (e *remoteExecutor) ContainerAttach(ctx context.Context, r extension.Contai
 }
 
 // InteractiveLaunch asks the package for the command that starts its
-// CLI's interactive session; the host filters its environment and runs it.
+// CLI's interactive session; the host adds the variables it names to the
+// session's environment and runs it.
 func (e *remoteExecutor) InteractiveLaunch(ctx context.Context, r extension.InteractiveLaunchRequest) (extension.InteractiveLaunchSpec, error) {
 	if !e.decl.Controls.InteractiveLaunch {
 		return extension.InteractiveLaunchSpec{}, extension.ErrUnsupported
 	}
 	var out protocol.InteractiveLaunchSpec
-	p := protocol.InteractiveLaunchParams{Executor: e.decl.Name, Playbook: r.Playbook, Name: r.Name, Summary: r.Summary, Allow: r.Allow, Dir: r.Dir, Env: r.Env, FilesDir: r.FilesDir, Program: r.Program}
+	p := protocol.InteractiveLaunchParams{Executor: e.decl.Name, Playbook: r.Playbook, Name: r.Name, Summary: r.Summary, Allow: r.Allow, Dir: r.Dir, FilesDir: r.FilesDir, Program: r.Program}
 	if err := e.r.p.Call(ctx, "executor.interactive_launch", p, &out); err != nil {
 		return extension.InteractiveLaunchSpec{}, err
 	}
-	return extension.InteractiveLaunchSpec{Argv: out.Argv, Dir: out.Dir, Env: out.Env}, nil
+	return extension.InteractiveLaunchSpec{Argv: out.Argv, Dir: out.Dir, SetEnv: out.SetEnv}, nil
 }
 
 // LaunchNames are the names the manifest declares for an interactive

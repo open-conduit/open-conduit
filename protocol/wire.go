@@ -841,7 +841,7 @@ type ContainerAttachSpec struct {
 
 // InteractiveLaunchParams are executor.interactive_launch's: the executor
 // and what its interactive session starts on
-// (extension.InteractiveLaunchRequest).
+// (extension.InteractiveLaunchRequest). They carry no environment.
 type InteractiveLaunchParams struct {
 	Executor string   `json:"executor"`
 	Playbook string   `json:"playbook"`
@@ -849,7 +849,6 @@ type InteractiveLaunchParams struct {
 	Summary  string   `json:"summary,omitempty"`
 	Allow    []string `json:"allow,omitempty"`
 	Dir      string   `json:"dir,omitempty"`
-	Env      []string `json:"env,omitempty"`
 	FilesDir string   `json:"files_dir"`
 	Program  string   `json:"program,omitempty"`
 }
@@ -857,9 +856,9 @@ type InteractiveLaunchParams struct {
 // InteractiveLaunchSpec is the command executor.interactive_launch returns
 // for the host to exec (extension.InteractiveLaunchSpec).
 type InteractiveLaunchSpec struct {
-	Argv []string `json:"argv"`
-	Dir  string   `json:"dir,omitempty"`
-	Env  []string `json:"env,omitempty"`
+	Argv   []string          `json:"argv"`
+	Dir    string            `json:"dir,omitempty"`
+	SetEnv map[string]string `json:"set_env,omitempty"`
 }
 
 // LiveOutput is one output of a running execution (extension.LiveOutput):
