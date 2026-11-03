@@ -62,6 +62,10 @@ func NewFixture(dir string) (protocol.Fixture, error) {
 			{Type: Scratch, Config: json.RawMessage(`{}`), Mode: extension.ResourceWork},
 			{Type: Scratch, Config: json.RawMessage(`{"cache":true}`), SandboxRefused: true},
 		},
+		Sandboxes: []protocol.SandboxCase{
+			{Type: Jail, Config: json.RawMessage(`{"hosts":["example.com"]}`)},
+			{Type: Jail, Config: json.RawMessage(`{"paths":["/"]}`), Refused: true},
+		},
 	}, nil
 }
 

@@ -64,6 +64,9 @@ const (
 	// executor, Config the binding's executor config; the answer is a
 	// ValidateResult whose Playbook is the playbook's name, "" for none.
 	ValidateExecutorPlaybook = "executor_playbook"
+	// ValidateSandbox checks a binding's sandbox config for a provider
+	// declared in sandboxes. Type is the provider, Config its config.
+	ValidateSandbox = "sandbox"
 )
 
 // ValidateParams asks the extension to check one opaque config object of
@@ -764,6 +767,46 @@ func FromSandboxPlan(p extension.SandboxPlan) SandboxPlan {
 }
 func (p SandboxPlan) Extension() extension.SandboxPlan {
 	return extension.SandboxPlan{Argv: p.Argv, Env: p.Env, Digest: p.Digest, Signals: p.Signals, Summary: p.Summary, Data: p.Data.Domain()}
+}
+
+// SandboxPaths are one attempt's host-set paths (extension.SandboxPaths).
+type SandboxPaths struct {
+	Workspace string `json:"workspace,omitempty"`
+	Run       string `json:"run,omitempty"`
+	Toolbelt  string `json:"toolbelt,omitempty"`
+	Records   string `json:"records,omitempty"`
+	Home      string `json:"home,omitempty"`
+}
+
+func FromSandboxPaths(p extension.SandboxPaths) SandboxPaths {
+	return SandboxPaths{Workspace: p.Workspace, Run: p.Run, Toolbelt: p.Toolbelt, Records: p.Records, Home: p.Home}
+}
+func (p SandboxPaths) Extension() extension.SandboxPaths {
+	return extension.SandboxPaths{Workspace: p.Workspace, Run: p.Run, Toolbelt: p.Toolbelt, Records: p.Records, Home: p.Home}
+}
+
+// SandboxProviderPlanParams asks a sandbox provider to wrap one launch
+// (sandbox_provider.plan; extension.SandboxProvider.Plan). The host has
+// already merged the resource's needs and its protected set into Needs, and
+// computes the plan's digest itself from what comes back.
+type SandboxProviderPlanParams struct {
+	Type   string        `json:"type"`
+	Owner  ResourceOwner `json:"owner"`
+	Config Payload       `json:"config"`
+	Paths  SandboxPaths  `json:"paths"`
+	Needs  SandboxNeeds  `json:"needs"`
+	Launch SandboxLaunch `json:"launch"`
+}
+
+// SandboxProviderAdoptParams asks a sandbox provider to prove a recovered
+// segment still runs inside its plan (sandbox_provider.adopt;
+// extension.SandboxProvider.Adopt). The answer is an empty object, or a
+// refusal.
+type SandboxProviderAdoptParams struct {
+	Type   string      `json:"type"`
+	Plan   SandboxPlan `json:"plan"`
+	Parent int         `json:"parent"`
+	Root   int         `json:"root"`
 }
 
 // LaunchParams plans one launch (sandbox.plan) or creates its container

@@ -402,6 +402,48 @@ func TestExternalSurfacesRoundTrip(t *testing.T) {
 			t.Fatalf("owner_status outside a reconcile: %v", err)
 		}
 	})
+	t.Run("sandbox", func(t *testing.T) {
+		p, ok := r.Sandbox(notes.Jail)
+		if !ok {
+			t.Fatal("sandbox provider not declared")
+		}
+		owner := extension.ResourceOwner{ScopeID: extensionScope, WorkID: "work-1", ExecutionID: "exec-1"}
+		policy := extension.SandboxPolicy{Config: domain.Payload{Schema: "core.config.sandbox.v1", Data: json.RawMessage(`{"hosts":["example.com"]}`)}}
+		launch := extension.SandboxLaunch{Argv: []string{"true"}, Dir: t.TempDir()}
+		plan, err := p.Plan(ctx, owner, policy, extension.SandboxNeeds{Hosts: []string{"example.com"}}, launch)
+		if err != nil || len(plan.Argv) != 2 || plan.Argv[1] != "true" || plan.Signals != extension.SandboxTerm {
+			t.Fatalf("plan: %+v %v", plan, err)
+		}
+		// A need outside the policy is a denial, a policy the provider
+		// can't apply is unavailable, and both cross as themselves.
+		if _, err := p.Plan(ctx, owner, policy, extension.SandboxNeeds{Hosts: []string{"other.example"}}, launch); !errors.Is(err, extension.ErrSandboxDenied) {
+			t.Fatalf("a need outside the policy: %v", err)
+		}
+		bad := extension.SandboxPolicy{Config: domain.Payload{Schema: "core.config.sandbox.v1", Data: json.RawMessage(`{"paths":["/"]}`)}}
+		if _, err := p.Plan(ctx, owner, bad, extension.SandboxNeeds{}, launch); !errors.Is(err, extension.ErrSandboxUnavailable) {
+			t.Fatalf("an unusable policy: %v", err)
+		}
+		if err := p.Adopt(ctx, plan, 1, 0); err != nil {
+			t.Fatalf("adopt its own plan: %v", err)
+		}
+		if err := p.Adopt(ctx, extension.SandboxPlan{Argv: []string{"true"}}, 1, 0); !errors.Is(err, extension.ErrSandboxUnavailable) {
+			t.Fatalf("adopt a plan it never made: %v", err)
+		}
+		// Bound by the host, the plan carries the host's digest.
+		var pinned extension.SandboxPlan
+		runs := t.TempDir()
+		bound := launch
+		bound.RunDir = filepath.Join(runs, "exec-1")
+		if err := os.MkdirAll(bound.RunDir, 0o700); err != nil {
+			t.Fatal(err)
+		}
+		b := extension.BindSandbox(extension.SandboxBinding{Provider: p, Owner: owner, Config: policy.Config, RunRoot: runs, Records: t.TempDir(),
+			Pin: func(sp extension.SandboxPlan) error { pinned = sp; return nil }})
+		got, err := extension.WrapLaunch(ctx, b, extension.SandboxNeeds{Hosts: []string{"example.com"}}, bound)
+		if err != nil || got.Digest == "" || pinned.Digest != got.Digest {
+			t.Fatalf("bound plan: %+v %v (pinned %q)", got, err, pinned.Digest)
+		}
+	})
 	t.Run("telemetry", func(t *testing.T) {
 		x, ok := r.Exporter()
 		if !ok {

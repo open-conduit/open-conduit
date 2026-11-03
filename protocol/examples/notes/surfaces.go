@@ -1,6 +1,7 @@
 package notes
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -9,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -34,6 +36,11 @@ const (
 	// sandboxed executor could only use by writing outside its sandbox.
 	Scratch   = "notes-scratch"
 	ScratchNS = "notes.scratch"
+	// Jail is the example process sandbox provider. It enforces nothing
+	// itself (it runs the launch under env): it shows the contract, a
+	// policy ({"hosts": [...]}) that a need never widens, and a plan it
+	// can read back when the host asks it to adopt a recovered segment.
+	Jail = "notes-jail"
 	// WebhookToken is the toy shared secret a webhook request carries in
 	// X-Notes-Token (a real extension verifies a signature).
 	WebhookToken = "notes-webhook"
@@ -494,5 +501,56 @@ func appendLine(stateDir func() string, file, line string) error {
 	}
 	defer f.Close()
 	_, err = fmt.Fprintln(f, line)
+	return err
+}
+
+// jailConfig is a binding's notes-jail sandbox config: the outbound hosts
+// its launches may reach.
+type jailConfig struct {
+	Hosts []string `json:"hosts,omitempty"`
+}
+
+// jailPlanSchema labels the effective policy a notes-jail plan records.
+const jailPlanSchema = "notes.jail.plan.v1"
+
+func parseJail(raw json.RawMessage) (jailConfig, error) {
+	var c jailConfig
+	if len(raw) == 0 {
+		return c, nil
+	}
+	d := json.NewDecoder(bytes.NewReader(raw))
+	d.DisallowUnknownFields()
+	if err := d.Decode(&c); err != nil {
+		return c, errors.New("a notes-jail config names only hosts")
+	}
+	return c, nil
+}
+
+// jail is the example sandbox provider.
+type jail struct{}
+
+// Plan refuses a need for a host the policy doesn't list, and otherwise
+// runs the launch under env, recording the policy it applied.
+func (jail) Plan(_ context.Context, _ extension.ResourceOwner, policy extension.SandboxPolicy, needs extension.SandboxNeeds, l extension.SandboxLaunch) (extension.SandboxPlan, error) {
+	c, err := parseJail(policy.Config.Data)
+	if err != nil {
+		return extension.SandboxPlan{}, fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
+	}
+	for _, h := range needs.Hosts {
+		if !slices.Contains(c.Hosts, h) {
+			return extension.SandboxPlan{}, fmt.Errorf("%w: host %s", extension.ErrSandboxDenied, h)
+		}
+	}
+	data, _ := json.Marshal(c)
+	return extension.SandboxPlan{Argv: append([]string{"/usr/bin/env"}, l.Argv...), Env: l.Env, Signals: extension.SandboxTerm, Summary: "notes jail",
+		Data: domain.Payload{Schema: jailPlanSchema, Data: data}}, nil
+}
+
+// Adopt refuses a plan it didn't make: anything it can't prove is an error.
+func (jail) Adopt(_ context.Context, plan extension.SandboxPlan, _, _ int) error {
+	if plan.Data.Schema != jailPlanSchema {
+		return fmt.Errorf("%w: not a notes-jail plan", extension.ErrSandboxUnavailable)
+	}
+	_, err := parseJail(plan.Data.Data)
 	return err
 }

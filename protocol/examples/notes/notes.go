@@ -136,6 +136,7 @@ func Manifest(o Options) protocol.Manifest {
 			// 07-03 surfaces.
 			Webhooks:  true,
 			Resources: []protocol.ResourceDecl{{Type: Scratch, Modes: []string{extension.ResourceWork, extension.ResourceFresh}, ModeDefault: true, Sandbox: true}},
+			Sandboxes: []protocol.SandboxDecl{{Type: Jail}},
 			Exporters: true,
 			Annotate:  true,
 			// A run of Work in a notes scope gets NOTES_WORK, the Work it runs,

@@ -63,7 +63,7 @@ func TestInstalledCompose(t *testing.T) {
 	}}
 	x := &installed{m: m}
 	reg := config.Registry{}
-	x.resourceTypes(&reg)
+	x.providerTypes(&reg)
 	inprocRegistry(&reg, []inproc.Extension{x})
 	if reg.Connections["acme_conn"] == nil || !reg.Extensions["acme"].Ingress || reg.HandlerConfig["acme_route"] == nil {
 		t.Fatalf("types not registered: %+v", reg)

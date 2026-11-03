@@ -114,6 +114,33 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.FromReport(rep), nil
+	case "sandbox_provider.plan":
+		var p protocol.SandboxProviderPlanParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Sandboxes[p.Type]
+		if !ok {
+			return nil, notFound(method)
+		}
+		plan, err := prov.Plan(ctx, p.Owner.Extension(), extension.SandboxPolicy{Config: p.Config.Domain(), Paths: p.Paths.Extension()}, p.Needs.Extension(), p.Launch.Extension())
+		if err != nil {
+			return nil, err
+		}
+		return protocol.FromSandboxPlan(plan), nil
+	case "sandbox_provider.adopt":
+		var p protocol.SandboxProviderAdoptParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Sandboxes[p.Type]
+		if !ok {
+			return nil, notFound(method)
+		}
+		if err := prov.Adopt(ctx, p.Plan.Extension(), p.Parent, p.Root); err != nil {
+			return nil, err
+		}
+		return struct{}{}, nil
 	case "telemetry.export":
 		var p protocol.TelemetryExportParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

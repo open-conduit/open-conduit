@@ -50,6 +50,7 @@ var Modes = []Mode{
 	{"mode-deaf", runner.Name, "executor.resource_mode", "says it requests no resource mode whatever its config asks for"},
 	{"mode-blind", notes.Name, "resources.workspace", "names no default mode whatever its resource config says"},
 	{"sandbox-open", notes.Name, "resources.workspace", "passes every resource config for a sandboxed binding"},
+	{"adopt-any", notes.Name, "sandboxes.policy", "adopts any recovered segment, even one it never planned"},
 }
 
 // Lookup returns a mode by name.
@@ -199,6 +200,8 @@ func weakenNotes(mode string, ext *sdk.Extension) {
 	case "mode-blind", "sandbox-open":
 		p := ext.Providers[notes.Scratch]
 		ext.Providers[notes.Scratch] = weakProvider{ResourceProvider: p, base: p.(workspaceChecks), mode: mode}
+	case "adopt-any":
+		ext.Sandboxes[notes.Jail] = adoptAny{ext.Sandboxes[notes.Jail]}
 	case "unstable-push":
 		base := ext.Ingress
 		ext.Ingress = func(name string) (extension.Ingress, bool) {
@@ -276,6 +279,11 @@ func (u unstable) Push(ctx context.Context, s extension.Source, d extension.Deli
 }
 
 // workspaceChecks are the config check answers a resource provider gives.
+// adoptAny is the jail sandbox provider that proves nothing on adopt.
+type adoptAny struct{ extension.SandboxProvider }
+
+func (adoptAny) Adopt(context.Context, extension.SandboxPlan, int, int) error { return nil }
+
 type workspaceChecks interface {
 	extension.ResourceModeDefaulter
 	extension.ResourceSandboxChecker

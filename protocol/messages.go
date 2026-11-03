@@ -649,6 +649,15 @@ type CheckBinding struct {
 	Connection string          `json:"connection,omitempty"`
 	Resource   *CheckResource  `json:"resource,omitempty"`
 	Isolation  string          `json:"isolation,omitempty"`
+	// Sandbox is the binding's sandbox, when its provider is one the
+	// extension declares (manifest sandboxes).
+	Sandbox *CheckSandbox `json:"sandbox,omitempty"`
+}
+
+// CheckSandbox is a binding's sandbox provider and its config.
+type CheckSandbox struct {
+	Provider string          `json:"provider"`
+	Config   json.RawMessage `json:"config,omitempty"`
 }
 
 // CheckBinding.Isolation values.

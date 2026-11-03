@@ -276,7 +276,7 @@ func offlineExternal(reg *config.Registry, configPath, exclude string) *offlineP
 		x := &installed{m: f.Manifest, offline: v, dir: f.Dir}
 		xs = append(xs, x)
 		o.installed = append(o.installed, x)
-		x.resourceTypes(reg)
+		x.providerTypes(reg)
 		for _, e := range f.Manifest.Provides.Executors {
 			reg.Executors[e.Name] = manifestExecutor{decl: e, x: x}
 		}
@@ -462,6 +462,11 @@ func (d *daemon) openExtensions(ctx context.Context) {
 				d.resources.providers[res.Type] = p
 			}
 		}
+		for _, s := range f.Manifest.Provides.Sandboxes {
+			if p, ok := r.Sandbox(s.Type); ok {
+				d.sandboxes.providers[s.Type] = p
+			}
+		}
 		d.log.Info("extension started", "extension", name, "version", f.Manifest.Version, "protocol", protocol.Version)
 	}
 }
@@ -477,7 +482,7 @@ func (d *daemon) extensionPackages() []*installed {
 func (d *daemon) installedRegistry(reg *config.Registry) {
 	var xs []inproc.Extension
 	for _, x := range d.extensionPackages() {
-		x.resourceTypes(reg)
+		x.providerTypes(reg)
 		xs = append(xs, x)
 	}
 	inprocRegistry(reg, xs)
@@ -513,8 +518,12 @@ func usesExtension(scope *config.EffectiveScope, m protocol.Manifest) bool {
 	for _, r := range p.Resources {
 		resources[r.Type] = true
 	}
+	sandboxes := map[string]bool{}
+	for _, s := range p.Sandboxes {
+		sandboxes[s.Type] = true
+	}
 	for _, b := range scope.Bindings {
-		if executors[b.Executor] || b.Resource != nil && resources[b.Resource.Provider] {
+		if executors[b.Executor] || b.Resource != nil && resources[b.Resource.Provider] || b.Sandbox != nil && sandboxes[b.Sandbox.Provider] {
 			return true
 		}
 	}

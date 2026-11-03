@@ -205,6 +205,11 @@ type Provides struct {
 	Executors []ExecutorDecl `json:"executors,omitempty"`
 	// Resources are resource provider types.
 	Resources []ResourceDecl `json:"resources,omitempty"`
+	// Sandboxes are process sandbox provider types (extension.SandboxProvider):
+	// the host plans a binding's launches through sandbox_provider.plan and
+	// proves a recovered one through sandbox_provider.adopt, and checks a
+	// binding's sandbox config through validate with kind sandbox.
+	Sandboxes []SandboxDecl `json:"sandboxes,omitempty"`
 	// Tasks are host-paced background passes (projection, timer ensure,
 	// executor housekeeping, webhook management).
 	Tasks []TaskDecl `json:"tasks,omitempty"`
@@ -551,6 +556,11 @@ type ResourceDecl struct {
 	// (config.Registry.ResourceSandbox).
 	Sandbox bool `json:"sandbox,omitempty"`
 }
+
+// SandboxDecl declares a process sandbox provider type.
+type SandboxDecl struct {
+	Type string `json:"type"`
+}
 type TaskDecl struct {
 	Name            string `json:"name"`
 	IntervalSeconds int    `json:"interval_seconds"`
@@ -846,6 +856,14 @@ func (m Manifest) Validate() error {
 			modes[mode] = true
 		}
 	}
+	sandboxes := map[string]bool{}
+	for _, x := range p.Sandboxes {
+		ident("sandbox provider", x.Type)
+		if sandboxes[x.Type] {
+			fail("sandbox provider %q is declared twice", x.Type)
+		}
+		sandboxes[x.Type] = true
+	}
 	for _, t := range p.Tasks {
 		ident("task", t.Name)
 		if t.IntervalSeconds < 1 {
@@ -981,6 +999,7 @@ func (m Manifest) Enabled() []string {
 		set("executors.live", x.Controls.Live)
 	}
 	set("resources", len(p.Resources) > 0)
+	set("sandboxes", len(p.Sandboxes) > 0)
 	set("tasks", len(p.Tasks) > 0)
 	set("exporters", p.Exporters)
 	set("checks", len(p.Checks) > 0)
