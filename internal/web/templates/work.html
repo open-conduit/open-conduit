@@ -123,6 +123,17 @@
       {{if or .Calls .Tool}}<div><dt>Calls</dt><dd>{{.Calls}} model · {{.Tool}} tool</dd></div>{{end}}
       {{if not .Deadline.IsZero}}<div><dt>Deadline</dt><dd>{{until .Deadline}}</dd></div>{{end}}
     </dl>
+    {{range .Launches}}
+    <details class="turn-launch"{{if $t.Live}} open{{end}}>
+      <summary>{{.Label}} <span class="turn-when">· {{durp .Took}}</span></summary>
+      <table class="launch-phases">
+        <thead><tr><th scope="col">Phase</th><th scope="col" class="num">Took</th><th scope="col">Outcome</th></tr></thead>
+        <tbody>
+        {{range .Phases}}<tr><td{{if .Inside}} class="launch-inside"{{end}}>{{.Name}}</td><td class="num">{{durp .Took}}{{if .Running}} so far{{end}}</td><td>{{if .Running}}running{{else if .Outcome}}<span class="launch-{{.Outcome}}">{{.Outcome}}</span>{{else}}ok{{end}}</td></tr>
+        {{end}}</tbody>
+      </table>
+    </details>
+    {{end}}
   </div>
   {{template "tx-tools" $}}
   <div class="tx" data-conv{{if $t.Live}} data-live="/run/conversation?run={{$t.ID}}{{with $.TV.View.Query}}&amp;q={{.}}{{end}}"{{end}}>

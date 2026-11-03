@@ -161,6 +161,17 @@ func Detail(r client.Run, attempts []client.Run, now time.Time) string {
 			line("container", fmt.Sprintf("%s (%s), image %s, daemon %s", c.Summary, short(c.Digest), c.Image, c.Daemon))
 		}
 	}
+	// Each segment's launch, phase by phase.
+	for _, g := range r.Segments {
+		if len(g.Launch) == 0 {
+			continue
+		}
+		label := "launch"
+		if g.Relaunched {
+			label = "relaunch"
+		}
+		line(label, LaunchPhases(g.Launch, now))
+	}
 	line("inputs", strconv.Itoa(r.Inputs))
 	line("wait", r.WaitID)
 	if rt := r.Retry; rt != nil {
@@ -227,4 +238,22 @@ func short(digest string) string {
 		d = d[:12]
 	}
 	return "sha256:" + d
+}
+
+// LaunchPhases is a segment's launch in one line: each phase with how long
+// it took, and its outcome when it didn't succeed ("running" for one that
+// hasn't ended).
+func LaunchPhases(phases []client.LaunchPhase, now time.Time) string {
+	parts := make([]string, 0, len(phases))
+	for _, p := range phases {
+		part := p.Name + " " + p.Took(now).Round(time.Millisecond).String()
+		switch {
+		case p.EndedAt == "":
+			part += " (running)"
+		case p.Outcome != "" && p.Outcome != "ok":
+			part += " (" + p.Outcome + ")"
+		}
+		parts = append(parts, part)
+	}
+	return strings.Join(parts, ", ")
 }

@@ -52,6 +52,10 @@ type SandboxBinding struct {
 	// 1,000,000 entries); a larger workspace can't be checked and is
 	// refused.
 	MaxScan int
+	// Phase, when set, records a step of the launch for the attempt's
+	// history: it is called as the step begins and the function it returns
+	// as it ends, with the step's error.
+	Phase func(name string) func(error)
 }
 
 // BoundSandbox is a SandboxBroker bound to one attempt. Its Resources wraps
@@ -161,7 +165,9 @@ func (s *BoundSandbox) Plan(ctx context.Context, needs SandboxNeeds, l SandboxLa
 	}
 	paths := SandboxPaths{Workspace: workspace, Run: run, Toolbelt: b.Toolbelt, Records: dir}
 	l.Dir, l.RunDir = workspace, run
+	end := phase(b.Phase, "sandbox plan")
 	p, err := b.Provider.Plan(ctx, b.Owner, SandboxPolicy{Config: b.Config, Paths: paths}, merged, l)
+	end(err)
 	if err != nil {
 		return SandboxPlan{}, err
 	}
@@ -230,4 +236,12 @@ func writeOnce(path string, data []byte) error {
 		return err
 	}
 	return os.Rename(tmp, path)
+}
+
+// phase begins a launch step through record, or does nothing without one.
+func phase(record func(string) func(error), name string) func(error) {
+	if record == nil {
+		return func(error) {}
+	}
+	return record(name)
 }

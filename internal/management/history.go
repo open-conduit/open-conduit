@@ -62,6 +62,20 @@ type wireSegment struct {
 	// Container is the container the segment ran in: its plan, image and
 	// container daemon, pinned at launch.
 	Container *wireContainer `json:"container,omitempty"`
+	// Relaunched says a new owner recovered the run while its launch had
+	// started nothing, and launched it afresh.
+	Relaunched bool `json:"relaunched,omitempty"`
+	// Launch is the segment's launch, phase by phase; a phase still
+	// running has no ended_at (and a duration_ms of 0).
+	Launch []wireLaunchPhase `json:"launch,omitempty"`
+}
+
+type wireLaunchPhase struct {
+	Name       string `json:"name"`
+	StartedAt  string `json:"started_at"`
+	EndedAt    string `json:"ended_at,omitempty"`
+	DurationMS int64  `json:"duration_ms"`
+	Outcome    string `json:"outcome,omitempty"`
 }
 type wireContainer struct {
 	Digest  string `json:"digest"`
@@ -136,7 +150,10 @@ func toRun(r runtime.Run) wireRun {
 		out.DurationMS = x.FinishedAt.Sub(*x.StartedAt).Milliseconds()
 	}
 	for _, g := range r.Segments {
-		seg := wireSegment{StartedAt: ts(g.StartedAt), EndedAt: tsPtr(g.EndedAt), WakeEventID: string(g.WakeEventID), Parked: g.Parked, Recovered: g.Recovered}
+		seg := wireSegment{StartedAt: ts(g.StartedAt), EndedAt: tsPtr(g.EndedAt), WakeEventID: string(g.WakeEventID), Parked: g.Parked, Recovered: g.Recovered, Relaunched: g.Relaunched}
+		for _, p := range g.Launch {
+			seg.Launch = append(seg.Launch, wireLaunchPhase{Name: p.Name, StartedAt: ts(p.StartedAt), EndedAt: tsPtr(p.EndedAt), DurationMS: p.Duration(p.StartedAt).Milliseconds(), Outcome: p.Outcome})
+		}
 		if g.Sandbox != nil {
 			seg.Sandbox = &wireSandbox{Digest: g.Sandbox.Digest, Summary: g.Sandbox.Summary}
 		}

@@ -271,6 +271,7 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 		},
 		Pinned: pinned,
 		Now:    d.now,
+		Phase:  runtime.LaunchPhases(ctx),
 	})
 	// The segment's end is the end of what extensions issued for it.
 	settle := func(r extension.Result) extension.Result {

@@ -80,6 +80,11 @@ func (s *Scheduler) DispatchControl(ctx context.Context, id string) error {
 			state.Reason = "target_authority_lost"
 			return putJSON(tx, controlNamespace, id, state)
 		}
+		if !state.Fenced && (attempt.LaunchState == "launching" || attempt.LaunchState == "resuming" || attempt.LaunchState == "recovering") {
+			// The launch runs off the host's pass: the intent waits for it
+			// to finish (or fail) and is dispatched on a later pass.
+			return nil
+		}
 		executor, err = s.executorFor(attempt)
 		if err != nil {
 			return err

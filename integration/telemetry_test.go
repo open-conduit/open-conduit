@@ -149,6 +149,14 @@ func TestLifecycleTelemetryExplainsRuns(t *testing.T) {
 	if l := rs.one(t, "execution.launched", forExecution(first.Lease.ExecutionID)); l.Attributes["launch.mode"] != "run" {
 		t.Fatalf("launch acknowledgement: %+v", l)
 	}
+	// Where did the launch's time go? Each phase that ended is a record
+	// with its outcome and duration (#456).
+	phase := rs.one(t, "execution.launch_phase", func(r observability.Record) bool {
+		return r.Correlation.ExecutionID == first.Lease.ExecutionID && r.Attributes["launch.phase"] == "executor"
+	})
+	if phase.To != "ok" || phase.Attributes["launch.outcome"] != "ok" || phase.Attributes["launch.duration_ms"] == "" || phase.Attributes["segment"] != "1" {
+		t.Fatalf("launch phase record: %+v", phase)
+	}
 	// What did it emit? Emissions, child Work and toolbelt calls carry the
 	// attempt's correlation and trace.
 	emitted := rs.one(t, "event.accepted", func(r observability.Record) bool { return r.Attributes["event.type"] == "fixture.reported.v1" })

@@ -1046,6 +1046,56 @@ a.token {
   color: var(--ink-3);
   font-size: 11px;
 }
+.turn-launch {
+  border: 1px solid var(--rule);
+  border-radius: 3px;
+  padding: 8px 14px;
+}
+.turn-launch summary {
+  cursor: pointer;
+  color: var(--ink-2);
+}
+.launch-phases {
+  width: 100%;
+  max-width: 32rem;
+  table-layout: fixed;
+  margin-top: 8px;
+  border-collapse: collapse;
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+}
+.launch-phases th {
+  text-align: left;
+  font-family: var(--font-cond);
+  font-size: var(--t-micro);
+  font-weight: 600;
+  color: var(--ink-3);
+  padding: 0 24px 4px 0;
+}
+.launch-phases td {
+  padding: 2px 24px 2px 0;
+  border-top: 1px solid var(--rule);
+}
+.launch-phases th.num,
+.launch-phases .num {
+  text-align: right;
+}
+.launch-phases th:nth-child(2) {
+  width: 7rem;
+}
+.launch-phases th:nth-child(3) {
+  width: 8rem;
+  padding-left: 24px;
+}
+.launch-phases td:nth-child(3) {
+  padding-left: 24px;
+}
+.launch-phases .launch-inside {
+  padding-left: 18px;
+}
+.launch-failed {
+  color: var(--fail);
+}
 
 .tx-tools {
   display: flex;

@@ -464,6 +464,13 @@ func (r *recorder) resolve(diagnostic func(string)) []observability.Record {
 			}
 			add(observability.Record{Name: "execution.launched", Correlation: c, Attributes: map[string]string{"launch.mode": mode, "lease.epoch": epoch, "executor": after.Executor, "config.generation": after.Generation, "record_id": identity("execution.launched", string(x.ID), epoch)}})
 		}
+		for _, p := range endedLaunchPhases(before, after) {
+			add(observability.Record{Name: "execution.launch_phase", Correlation: c, To: p.phase.Outcome, Attributes: map[string]string{
+				"launch.phase": p.phase.Name, "launch.outcome": p.phase.Outcome, "launch.duration_ms": strconv.FormatInt(p.phase.Duration(p.phase.StartedAt).Milliseconds(), 10),
+				"launch.started_at": timeAttr(p.phase.StartedAt), "lease.epoch": epoch, "segment": strconv.Itoa(after.SegmentNumber()),
+				"record_id": identity("execution.launch_phase", string(x.ID), strconv.Itoa(after.SegmentNumber()), strconv.Itoa(p.index)),
+			}})
+		}
 		if prior := r.execs[x.ID]; after.Excluded && before != nil && !before.Excluded && x.State.Terminal() && (prior == nil || prior.State == x.State) {
 			add(observability.Record{Name: "execution.stop_confirmed", Correlation: c, Attributes: map[string]string{"lease.epoch": epoch, "record_id": identity("execution.stop_confirmed", string(x.ID), epoch)}})
 		}
@@ -925,4 +932,30 @@ func observeDirect(ctx context.Context, o observability.Observer, rec observabil
 		return
 	}
 	_ = o.Observe(context.WithoutCancel(ctx), rec)
+}
+
+type endedPhase struct {
+	index int
+	phase LaunchPhase
+}
+
+// endedLaunchPhases are the launch phases of after's open segment that
+// ended since before.
+func endedLaunchPhases(before *AttemptState, after AttemptState) []endedPhase {
+	n := len(after.Segments)
+	if n == 0 {
+		return nil
+	}
+	var was []LaunchPhase
+	if before != nil && before.SegmentNumber() == after.SegmentNumber() && len(before.Segments) > 0 {
+		was = before.Segments[len(before.Segments)-1].Launch
+	}
+	var out []endedPhase
+	for i, p := range after.Segments[n-1].Launch {
+		if p.EndedAt == nil || i < len(was) && was[i].EndedAt != nil {
+			continue
+		}
+		out = append(out, endedPhase{i, p})
+	}
+	return out
 }
