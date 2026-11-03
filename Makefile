@@ -170,6 +170,9 @@ protocol-prototype:
 # examples, written as a third party would, ship their own binaries.
 PACKAGES_DIR ?= dist/packages
 RUNNABLE_PACKAGES = slack github shell claude-code sentry pagerduty codex posthog human observe linear jira bitbucket schedule introspection srt git docker ssh ngrok cloudflared
+# BUNDLED_PACKAGES are the runnable packages the release archive carries
+# (Bundled in cmd/open-conduit/extension_run.go); release-snapshot checks each.
+BUNDLED_PACKAGES = $(filter-out sentry pagerduty,$(RUNNABLE_PACKAGES))
 EXTENSION_PACKAGES = notes:./protocol/examples/notes/cmd/notes-extension runner:./protocol/examples/runner/cmd/runner-extension
 
 packages: build
@@ -246,23 +249,14 @@ release-snapshot:
 		rm -rf $(RELEASE_DIR)/smoke; mkdir -p $(RELEASE_DIR)/smoke; tar -xzf $$archive -C $(RELEASE_DIR)/smoke; \
 		$(RELEASE_DIR)/smoke/open-conduit --version | grep -q "^open-conduit $$version "; \
 		$(RELEASE_DIR)/smoke/os --version | grep -q "^os $$version "; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  setup .*(bundled with open-conduit)'; \
 		test ! -e $(RELEASE_DIR)/smoke/extensions/codex/codex-extension; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  posthog .*(bundled with open-conduit)'; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  human .*(bundled with open-conduit)'; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  observe .*(bundled with open-conduit)'; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  linear .*(bundled with open-conduit)'; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  jira .*(bundled with open-conduit)'; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  bitbucket .*(bundled with open-conduit)'; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  schedule .*(bundled with open-conduit)'; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  introspection .*(bundled with open-conduit)'; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  slack .*(bundled with open-conduit)'; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  github .*(bundled with open-conduit)'; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  shell .*(bundled with open-conduit)'; \
-		$(RELEASE_DIR)/smoke/open-conduit extension list | grep -q '^  codex .*(bundled with open-conduit)'; \
+		listed=$$($(RELEASE_DIR)/smoke/open-conduit extension list); \
+		for name in setup $(BUNDLED_PACKAGES); do \
+			printf '%s\n' "$$listed" | grep -q "^  $$name .*(bundled with open-conduit)" || { echo "release-snapshot: $$name is not bundled" >&2; exit 1; }; \
+		done; \
 		cask=$(RELEASE_DIR)/homebrew/Casks/open-conduit.rb; \
 		grep -q '^  binary "open-conduit"$$' $$cask; \
 		test $$(grep -c '^  binary ' $$cask) -eq 1; \
 		! grep -qi 'license' $$cask; \
-		echo "snapshot $$version: 4 archives, checksums verified, setup, codex, posthog, human, observe, linear, jira, bitbucket, schedule, introspection, slack, github, shell, srt, git, docker, ssh, ngrok and cloudflared bundled, cask links open-conduit only"
+		echo "snapshot $$version: 4 archives, checksums verified, setup $(BUNDLED_PACKAGES) bundled, cask links open-conduit only"
 	$(MAKE) --no-print-directory smoke-run SMOKE_BIN=$(RELEASE_DIR)/smoke
