@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -418,7 +419,11 @@ var pullWaitTypes = append([]string{TypePullOpen}, waitInputTypes...)
 // condition named, so its agent can simply wait for changes; conditions and
 // until add to that. It posts nothing: the reason goes in the Wait's
 // description, not on the PR.
-func (t *Tools) pullWaitPlan(ctx context.Context, b *bound, conds []string, until, reason string) (extension.WaitPlan, error) {
+func (t *Tools) pullWaitPlan(ctx context.Context, b *bound, conds []string, until, reason string, ignore []string) (extension.WaitPlan, error) {
+	types, err := withoutIgnored(pullWaitTypes, ignore)
+	if err != nil {
+		return extension.WaitPlan{}, err
+	}
 	var h Hold
 	var resolved []resolvedCond
 	if len(conds) > 0 || until != "" {
@@ -427,11 +432,15 @@ func (t *Tools) pullWaitPlan(ctx context.Context, b *bound, conds []string, unti
 			return extension.WaitPlan{}, err
 		}
 	}
-	waiting := fmt.Sprintf("news of PR #%d: a push, a comment or review, its checks, or its merge or close", b.pull)
+	checks := ", its checks,"
+	if !slices.Contains(types, TypeChecksPassed) {
+		checks = ","
+	}
+	waiting := fmt.Sprintf("news of PR #%d: a push, a comment or review%s or its merge or close", b.pull, checks)
 	if d := h.Describe(); d != "" {
 		waiting += ", or " + d
 	}
-	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: append([]string(nil), pullWaitTypes...)}, Timeout: h.Until,
+	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: types}, Timeout: h.Until,
 		Description: extension.Clip(waiting, extension.MaxWaitDescription)}}
 	for _, r := range resolved {
 		plan.Dependencies = append(plan.Dependencies, r.dep)
@@ -448,6 +457,37 @@ type waitInput struct {
 	Until      string   `json:"until,omitempty" doc:"a future ISO time (e.g. 2026-10-25T09:00Z) to wake at if nothing else has"`
 	Reason     string   `json:"reason" doc:"what you're waiting for and why; posted on this Work's issue when it has one"`
 	Repo       string   `json:"repo,omitempty" doc:"the repository (owner/name) conditions in this project refer to; defaults to this Work's own, else this project's only one"`
+	Ignore     []string `json:"ignore,omitempty" doc:"news of this Work's own issue or PR that shouldn't wake you, for news your role doesn't act on: conflicts (the PR no longer merges with its base) or checks (check results); it is handed to you with whatever does wake you"`
+}
+
+// ignorable is the own-key news a wait may decline to be woken by
+// (waitInput.Ignore), so a role subscribes only to what it acts on: a PR's
+// reviewer leaves conflicts to the PR's author and re-reviews on the push
+// that resolves them. A merge, a close, a comment and a push always wake.
+var ignorable = map[string][]string{
+	"conflicts": {TypePullConflicts},
+	"checks":    {TypeChecksPassed, TypeChecksFailed, TypeChecksNone, TypeChecksMissing},
+}
+
+// withoutIgnored is a copy of types less the families ignore names.
+func withoutIgnored(types, ignore []string) ([]string, error) {
+	drop := map[string]bool{}
+	for _, name := range ignore {
+		families, ok := ignorable[strings.ToLower(strings.TrimSpace(name))]
+		if !ok {
+			return nil, refuse("invalid_ignore", "ignore takes conflicts or checks, not %q", name)
+		}
+		for _, f := range families {
+			drop[f] = true
+		}
+	}
+	out := make([]string, 0, len(types))
+	for _, typ := range types {
+		if !drop[typ] {
+			out = append(out, typ)
+		}
+	}
+	return out, nil
 }
 
 func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessage) (extension.WaitPlan, error) {
@@ -478,7 +518,11 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 		}
 	}
 	if b.pull > 0 {
-		return t.pullWaitPlan(ctx, rb, in.Conditions, in.Until, in.Reason)
+		return t.pullWaitPlan(ctx, rb, in.Conditions, in.Until, in.Reason, in.Ignore)
+	}
+	types, err := withoutIgnored(waitInputTypes, in.Ignore)
+	if err != nil {
+		return extension.WaitPlan{}, err
 	}
 	h, resolved, err := t.holdFor(ctx, rb, in.Conditions, in.Until)
 	if err != nil {
@@ -511,13 +555,17 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 	if err != nil {
 		return extension.WaitPlan{}, err
 	}
-	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: append([]string(nil), waitInputTypes...)}, Timeout: h.Until, Description: h.WaitDescription()}}
+	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Types: types}, Timeout: h.Until, Description: h.WaitDescription()}}
 	for _, r := range resolved {
 		plan.Dependencies = append(plan.Dependencies, r.dep)
 	}
 	plan.Dependencies = append(plan.Dependencies, peerComments(b))
+	also := "comments and check results also resume you"
+	if !slices.Contains(types, TypeChecksPassed) {
+		also = "comments also resume you"
+	}
 	result := map[string]any{"waiting_for": h.Describe(), "comment": posted,
-		"next": "end your turn now; any other call is refused until you are resumed with what happened (comments and check results also resume you)"}
+		"next": "end your turn now; any other call is refused until you are resumed with what happened (" + also + ")"}
 	if len(kept) > 0 {
 		result["kept"] = kept
 		result["note"] = "the issue was already waiting for " + strings.Join(kept, ", ") + "; that still wakes you too"

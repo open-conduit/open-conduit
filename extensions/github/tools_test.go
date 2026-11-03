@@ -240,7 +240,7 @@ func TestRenderEventsWithReplyHints(t *testing.T) {
 		// v1 c37edf1 core TestRender: a required check that never reported.
 		"### Required checks never reported on PR #5 at 995bdda: netlify/site/deploy-preview\nThe PR can't merge without them.":                                               ev(gh.TypeChecksMissing, gh.SchemaChecks, gh.ChecksPayload{Number: 5, SHA: "995bdda12", Missing: []string{"netlify/site/deploy-preview"}}),
 		"### Checks failed on PR #6 at abcdef1: lint\nSee `call github.checks {\"number\": 6}` for links to each.\nThese required checks never reported either: deploy.":      ev(gh.TypeChecksFailed, gh.SchemaChecks, gh.ChecksPayload{Number: 6, SHA: "abcdef1234", Failed: []string{"lint"}, Missing: []string{"deploy"}}),
-		"### PR #4 has conflicts with main at abcdef1\nIt can't merge until they're resolved: rebase the branch onto `main`":                                                  ev(gh.TypePullConflicts, gh.SchemaConflict, gh.ConflictsPayload{Number: 4, HeadSHA: "abcdef1234", BaseRef: "main"}),
+		"### PR #4 has conflicts with main at abcdef1\nIt can't merge until they're resolved.":                                                                                ev(gh.TypePullConflicts, gh.SchemaConflict, gh.ConflictsPayload{Number: 4, HeadSHA: "abcdef1234", BaseRef: "main"}),
 		"### PR #4 is open at abcdef1\nOpened by bob at 2026-10-01T09:00:00Z\nTitle: t\nu\nThis comes when the PR opens and again whenever anything about it changes: a push": ev(gh.TypePullOpen, gh.SchemaPull, gh.PullPayload{Number: 4, State: "open", HeadSHA: "abcdef1234", Author: "bob", CreatedAt: at, Title: "t", URL: "u", Body: "b"}),
 		"### PR #4 is open as a draft at abcdef1\n":          ev(gh.TypePullOpen, gh.SchemaPull, gh.PullPayload{Number: 4, State: "open", Draft: true, HeadSHA: "abcdef1234"}),
 		"### PR #4 merged":                                   ev(gh.TypePullMerged, gh.SchemaPull, gh.PullPayload{Number: 4}),
@@ -256,6 +256,46 @@ func TestRenderEventsWithReplyHints(t *testing.T) {
 	}
 	if _, ok := gh.RenderEvent(domain.Event{Type: "manual.note"}); ok {
 		t.Fatal("rendered an Event the extension does not own")
+	}
+}
+
+// TestRenderStatesFactsNotInstructions: the same render reaches every Work
+// subscribed to an item, an issue's author and a PR's reviewer alike, so it
+// says what happened and leaves the response to the role's playbook (issue
+// #460).
+func TestRenderStatesFactsNotInstructions(t *testing.T) {
+	ev := func(typ, schema string, p any) domain.Event {
+		data, _ := json.Marshal(p)
+		return domain.Event{Type: typ, Data: domain.Payload{Schema: schema, Data: data}}
+	}
+	conflicts := ev(gh.TypePullConflicts, gh.SchemaConflict, gh.ConflictsPayload{Number: 4, HeadSHA: "abcdef1234", BaseRef: "main"})
+	if got, _ := gh.RenderEvent(conflicts); got != "### PR #4 has conflicts with main at abcdef1\nIt can't merge until they're resolved." {
+		t.Fatalf("conflicts render %q", got)
+	}
+	issue := domain.CorrelationKey{Source: "github", ExternalID: gh.IssueKey(3, "")}
+	events := []domain.Event{
+		conflicts,
+		ev(gh.TypeChecksNone, gh.SchemaChecks, gh.ChecksPayload{Number: 4, SHA: "abcdef1234", None: true}),
+		ev(gh.TypeChecksMissing, gh.SchemaChecks, gh.ChecksPayload{Number: 4, SHA: "abcdef1234", Missing: []string{"deploy"}}),
+		ev(gh.TypeChecksFailed, gh.SchemaChecks, gh.ChecksPayload{Number: 4, SHA: "abcdef1234", Failed: []string{"ci"}, Missing: []string{"deploy"}}),
+		ev(gh.TypeDependencyMet, "core.subscription.alias.v1", map[string]string{"label": "pr:9:merged", "source_type": gh.TypePullMerged}),
+		ev(gh.TypeDependencyMet, "core.subscription.alias.v1", map[string]string{"label": "comment:peer", "source_type": gh.TypeCommentAgent}),
+		ev(gh.TypeDependencyMet, "core.subscription.alias.v1", map[string]string{"label": "nonsense", "source_type": gh.TypePullMerged}),
+		{Type: "core.wait.timeout"},
+		{Type: gh.TypeClaimRequested, CorrelationKey: &issue},
+	}
+	// What a render used to tell its reader to do.
+	instructions := []string{"rebase", "resolve them", "push", "wait again", "treat the PR", "find out", "start them", "read it", "act on it", "check where", "say so"}
+	for _, e := range events {
+		got, ok := gh.RenderEvent(e)
+		if !ok {
+			t.Fatalf("%s: not rendered", e.Type)
+		}
+		for _, w := range instructions {
+			if strings.Contains(strings.ToLower(got), w) {
+				t.Errorf("%s render tells its reader to act (%q):\n%s", e.Type, w, got)
+			}
+		}
 	}
 }
 

@@ -13,6 +13,12 @@ import (
 // start of a turn (Open Supervisor's core.Render), with each comment's
 // reply hint naming the tool that answers it. ok is false for Events this
 // extension does not own; the host falls back to the generic renderer.
+//
+// A render states what happened and never what to do about it: the same
+// text reaches every Work subscribed to the item, whatever its role (the
+// issue's author, a PR's reviewer), and the response belongs to that role's
+// playbook. Pointers to the operation that shows more (`github.checks` for
+// failed checks, the reply operation for a comment) are information.
 func RenderEvent(e domain.Event) (string, bool) {
 	switch e.Type {
 	case TypeCommentHuman, TypeCommentAgent, TypeCommentBot:
@@ -28,7 +34,7 @@ func RenderEvent(e domain.Event) (string, bool) {
 		}
 		switch e.Type {
 		case TypeChecksNone:
-			return fmt.Sprintf("### No checks ran on PR #%d at %s\nThe repo has no CI or deploy previews: treat the PR as checked once what the project's rules say must pass has passed locally.", c.Number, short(c.SHA)), true
+			return fmt.Sprintf("### No checks ran on PR #%d at %s\nThe repo has no CI or deploy previews.", c.Number, short(c.SHA)), true
 		case TypeChecksPassed:
 			s := fmt.Sprintf("### Checks passed on PR #%d at %s", c.Number, short(c.SHA))
 			if c.Preview != "" {
@@ -36,11 +42,11 @@ func RenderEvent(e domain.Event) (string, bool) {
 			}
 			return s, true
 		case TypeChecksMissing:
-			return fmt.Sprintf("### Required checks never reported on PR #%d at %s: %s\n%s", c.Number, short(c.SHA), strings.Join(c.Missing, ", "), missingAdvice), true
+			return fmt.Sprintf("### Required checks never reported on PR #%d at %s: %s\n%s", c.Number, short(c.SHA), strings.Join(c.Missing, ", "), missingFact), true
 		}
 		s := fmt.Sprintf("### Checks failed on PR #%d at %s: %s\nSee `call %s {\"number\": %d}` for links to each.", c.Number, short(c.SHA), strings.Join(c.Failed, ", "), OpChecks, c.Number)
 		if len(c.Missing) > 0 {
-			s += fmt.Sprintf("\nThese required checks never reported either: %s. %s", strings.Join(c.Missing, ", "), missingAdvice)
+			s += fmt.Sprintf("\nThese required checks never reported either: %s. %s", strings.Join(c.Missing, ", "), missingFact)
 		}
 		return s, true
 	case TypePullConflicts:
@@ -48,7 +54,7 @@ func RenderEvent(e domain.Event) (string, bool) {
 		if e.Data.Schema != SchemaConflict || json.Unmarshal(e.Data.Data, &c) != nil {
 			return "", false
 		}
-		return fmt.Sprintf("### PR #%d has conflicts with %s at %s\nIt can't merge until they're resolved: rebase the branch onto `%s`, resolve them, run what must pass and push.", c.Number, c.BaseRef, short(c.HeadSHA), c.BaseRef), true
+		return fmt.Sprintf("### PR #%d has conflicts with %s at %s\nIt can't merge until they're resolved.", c.Number, c.BaseRef, short(c.HeadSHA)), true
 	case TypePullOpen:
 		var p PullPayload
 		if e.Data.Schema != SchemaPull || json.Unmarshal(e.Data.Data, &p) != nil {
@@ -72,7 +78,7 @@ func RenderEvent(e domain.Event) (string, bool) {
 		if e.CorrelationKey != nil {
 			n, _, _ = ParseIssueKey(e.CorrelationKey.ExternalID)
 		}
-		return fmt.Sprintf("### Claimed by hand\nYour operator claimed issue #%d for you. Read it with `call %s` before you start.", n, OpContext), true
+		return fmt.Sprintf("### Claimed by hand\nYour operator claimed issue #%d for you, whatever its labels; `call %s` shows it.", n, OpContext), true
 	case TypeDependencyMet:
 		var p struct {
 			SourceType string `json:"source_type"`
@@ -80,15 +86,15 @@ func RenderEvent(e domain.Event) (string, bool) {
 		}
 		_ = json.Unmarshal(e.Data.Data, &p)
 		if p.Label == peerLabel {
-			return "### What you were waiting for\nAnother agent commented while you waited; its comment is with this turn. Act on it if it bears on your work, then wait again if what you were waiting for still hasn't happened.", true
+			return "### What you were waiting for\nAnother agent commented while you waited; its comment is with this turn. What you were waiting for may not have happened yet.", true
 		}
 		c, err := ParseCond(p.Label)
 		if err != nil {
 			return "### What you were waiting for\nWhat you were waiting for has happened.", true
 		}
-		return fmt.Sprintf("### What you were waiting for\nYou were waiting for %s. That has happened: %s. If you were also waiting for something else that hasn't happened, wait again if you still need it.", c.Describe(), c.Happened(p.SourceType)), true
+		return fmt.Sprintf("### What you were waiting for\nYou were waiting for %s. That has happened: %s. Anything else you were waiting for may not have.", c.Describe(), c.Happened(p.SourceType)), true
 	case "core.wait.timeout":
-		return "### What you were waiting for\nIt is now past the latest time you said to wait until, and none of what you waited for has happened. Check where it has got to, and wait again if it still matters.", true
+		return "### What you were waiting for\nIt is now past the latest time you said to wait until, and none of what you waited for has happened.", true
 	case TypeHoldReleased:
 		var p ReleasedPayload
 		_ = json.Unmarshal(e.Data.Data, &p)
@@ -97,9 +103,8 @@ func RenderEvent(e domain.Event) (string, bool) {
 	return "", false
 }
 
-// missingAdvice follows the required checks that never reported (v1
-// c37edf1).
-const missingAdvice = "The PR can't merge without them. Find out why they didn't start (a `[skip …]` in the PR title or a commit message stops some deploys) and start them, often with a new push; if they shouldn't run on this PR, say so in your report."
+// missingFact follows the required checks that never reported.
+const missingFact = "The PR can't merge without them."
 
 func short(sha string) string {
 	if len(sha) > 7 {
