@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 )
 
 // inspectProcess reads /proc. A zombie or vanished process is reported absent.
@@ -18,7 +19,7 @@ func inspectProcess(pid int) (procInfo, bool, error) {
 	}
 	dir := filepath.Join("/proc", strconv.Itoa(pid))
 	stat, err := os.ReadFile(filepath.Join(dir, "stat"))
-	if errors.Is(err, os.ErrNotExist) {
+	if procGone(err) {
 		return procInfo{}, false, nil
 	} else if err != nil {
 		return procInfo{}, false, err
@@ -40,12 +41,19 @@ func inspectProcess(pid int) (procInfo, bool, error) {
 		return procInfo{}, false, err
 	}
 	cmdline, err := os.ReadFile(filepath.Join(dir, "cmdline"))
-	if errors.Is(err, os.ErrNotExist) {
+	if procGone(err) {
 		return procInfo{}, false, nil
 	} else if err != nil {
 		return procInfo{}, false, err
 	}
 	return procInfo{PID: pid, PGID: pgid, Args: strings.TrimSpace(string(bytes.ReplaceAll(cmdline, []byte{0}, []byte{' '})))}, true, nil
+}
+
+// procGone reports whether a /proc read failed because the process is gone:
+// ENOENT when it was reaped before the open, ESRCH when it was reaped between
+// the open and the read (an adopted segment exiting while it is observed).
+func procGone(err error) bool {
+	return errors.Is(err, os.ErrNotExist) || errors.Is(err, syscall.ESRCH)
 }
 
 func scanProcesses() ([]procInfo, error) {
