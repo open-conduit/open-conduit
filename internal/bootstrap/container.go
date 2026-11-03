@@ -16,7 +16,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
@@ -326,10 +325,8 @@ func (d *daemon) reconcileContainersPass(ctx context.Context) {
 func (d *daemon) segmentEnded(id domain.ID) {
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
-	for _, x := range d.inproc {
-		if e, ok := x.(inproc.SegmentEnder); ok {
-			e.SegmentEnded(ctx, id)
-		}
+	for _, x := range d.packages {
+		x.SegmentEnded(ctx, id)
 	}
 }
 

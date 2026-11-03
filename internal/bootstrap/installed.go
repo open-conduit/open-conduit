@@ -13,23 +13,21 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
+	"github.com/open-conduit/open-conduit/internal/management"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/observability"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// installed adapts an installed package (extproc.Remote) onto the
-// in-process contract (issue #69), so bootstrap composes first-party and
-// installed extensions through one list. Every surface reads the manifest
-// and goes through the existing Remote methods.
-//
-// Its executors, Work kinds, recurrences, ingress sources and webhook
-// paths go through the same surfaces as a first-party extension's
-// (inproc.Executing, WorkKinder, Recurring, Ingester, Webhooker); only its
-// resource providers stay on the package's own path in extensions.go.
+// installed is one extension package, bundled or installed, as bootstrap
+// composes it: every surface reads the manifest and goes through the
+// running package (extproc.Remote). Every extension, first-party or not,
+// runs as a package, so this is the only shape composition knows; its
+// resource, sandbox, container and tunnel providers are registered where
+// the package starts (extensions.go).
 //
 // Offline (config validation) r is nil: offline starts the package to
 // validate its declared types when a config object of one needs checking;
@@ -51,36 +49,68 @@ type installed struct {
 	hooks   map[string]bool
 }
 
-var (
-	_ inproc.Typed        = (*installed)(nil)
-	_ inproc.Operator     = (*installed)(nil)
-	_ inproc.Router       = (*installed)(nil)
-	_ inproc.Configurer   = (*installed)(nil)
-	_ inproc.Stopper      = (*installed)(nil)
-	_ inproc.Tooled       = (*installed)(nil)
-	_ inproc.Actor        = (*installed)(nil)
-	_ inproc.Annotator    = (*installed)(nil)
-	_ inproc.Renderer     = (*installed)(nil)
-	_ inproc.Tasker       = (*installed)(nil)
-	_ inproc.Checker      = (*installed)(nil)
-	_ inproc.Exporting    = (*installed)(nil)
-	_ inproc.Sink         = (*installed)(nil)
-	_ inproc.Paged        = (*installed)(nil)
-	_ inproc.Playbooker   = (*installed)(nil)
-	_ inproc.Executing    = (*installed)(nil)
-	_ inproc.WorkKinder   = (*installed)(nil)
-	_ inproc.Recurring    = (*installed)(nil)
-	_ inproc.Ingester     = (*installed)(nil)
-	_ inproc.Webhooker    = (*installed)(nil)
-	_ inproc.Targeter     = (*installed)(nil)
-	_ inproc.SegmentEnder = (*installed)(nil)
+var _ extension.ConfigCandidate = (*installed)(nil)
 
-	_ extension.ConfigCandidate = (*installed)(nil)
-)
+// configType is a config type a package declares. Kind is
+// protocol.ValidateConnection, protocol.ValidateExtension or
+// protocol.ValidateRoute; Validate checks a config object through the
+// package (nil accepts any), Binding a route's binding for a handler that
+// declares a binding check, and Settings and Describe an entry's safe
+// fields and what it sets up.
+type configType struct {
+	Kind     string
+	Type     string
+	Ingress  bool
+	Validate func(config json.RawMessage, secretNames []string) error
+	Binding  func(extension.RouteBinding) error
+	Settings func(config json.RawMessage) []extension.Setting
+	Describe func(config json.RawMessage) []config.Entry
+}
+
+// ingressSource is an ingress source a package's configure result
+// declared; without an Interval the host's reconcile setting applies.
+type ingressSource struct {
+	Name     string
+	Source   extension.Source
+	Ingress  extension.Ingress
+	Interval time.Duration
+}
+
+// packageExecutor is an executor a package declares, with the capacity
+// pool it counts against ("" for agent turns, jobPool for jobs).
+type packageExecutor struct {
+	Executor extension.Executor
+	Pool     string
+}
+
+// workKind is the lifecycle of a Work kind a package declares. Timed
+// marks a kind that runs on a clock, which a dry run never starts.
+type workKind struct {
+	Kind     string
+	Standing bool
+	RunOnce  bool
+	Timed    bool
+	Trigger  func(inputs []domain.Event) int
+}
+
+// task is a package's paced background task.
+type task struct {
+	Name string
+	Pace time.Duration
+	Run  func(ctx context.Context) error
+}
+
+// packageCheck is a doctor check a package declares: Deep runs only with
+// --deep, Offline also without a daemon.
+type packageCheck struct {
+	Deep    bool
+	Offline bool
+	Run     func(ctx context.Context, cfg protocol.CheckConfig) runtime.Check
+}
 
 func (x *installed) Name() string { return x.m.Name }
 
-// Title is the manifest's display name (inproc.Titled).
+// Title is the manifest's display name.
 func (x *installed) Title() string { return x.m.Title }
 
 func (x *installed) validator(kind, typ string) func(json.RawMessage, []string) error {
@@ -95,19 +125,19 @@ func (x *installed) validator(kind, typ string) func(json.RawMessage, []string) 
 
 // Types are the manifest's connection, extension and configurable route
 // types, validated through the package.
-func (x *installed) Types() []inproc.ConfigType {
+func (x *installed) Types() []configType {
 	p := x.m.Provides
-	var out []inproc.ConfigType
+	var out []configType
 	for _, c := range p.Connections {
-		out = append(out, inproc.ConfigType{Kind: protocol.ValidateConnection, Type: c.Type, Validate: x.validator(protocol.ValidateConnection, c.Type)})
+		out = append(out, configType{Kind: protocol.ValidateConnection, Type: c.Type, Validate: x.validator(protocol.ValidateConnection, c.Type)})
 	}
 	for _, e := range p.Extensions {
-		out = append(out, inproc.ConfigType{Kind: protocol.ValidateExtension, Type: e.Type, Ingress: e.Ingress, Validate: x.validator(protocol.ValidateExtension, e.Type),
+		out = append(out, configType{Kind: protocol.ValidateExtension, Type: e.Type, Ingress: e.Ingress, Validate: x.validator(protocol.ValidateExtension, e.Type),
 			Settings: declaredSettings(e.Settings), Describe: x.describe(protocol.ValidateExtension, e.Type, declaredDescribe(e.Describe))})
 	}
 	for _, r := range p.Routes {
 		if r.Config || r.Binding {
-			t := inproc.ConfigType{Kind: protocol.ValidateRoute, Type: r.Handler}
+			t := configType{Kind: protocol.ValidateRoute, Type: r.Handler}
 			if r.Config {
 				t.Validate = x.validator(protocol.ValidateRoute, r.Handler)
 				t.Describe = x.describe(protocol.ValidateRoute, r.Handler, nil)
@@ -144,7 +174,7 @@ func (x *installed) Playbooks() map[string]string {
 }
 
 // entryGated says whether the package's operations join only a generation
-// with one of its entries (provides.entry_gated, inproc.EntryGated).
+// with one of its entries (provides.entry_gated).
 func (x *installed) entryGated() bool { return x.m.Provides.EntryGated }
 
 // remote is the running package, started on first use offline.
@@ -275,7 +305,7 @@ func (x *installed) Routes() map[string]extension.RouteHandler {
 // current generation itself (extproc.Options.Configure), the same params
 // p carries. A failure is reported and retried at the next apply or URL
 // change.
-func (x *installed) Configure(ctx context.Context, _ protocol.ConfigureParams) {
+func (x *installed) Configure(ctx context.Context) {
 	cx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	err := x.r.Process().Reconfigure(cx)
 	cancel()
@@ -307,15 +337,15 @@ func (x *installed) configured(res protocol.ConfigureResult) {
 // Sources are the ingress sources the package's configure results
 // declared, each pushing through ingress.push. Without an interval, the
 // host's reconcile setting applies.
-func (x *installed) Sources() []inproc.Source {
+func (x *installed) Sources() []ingressSource {
 	if x.r == nil {
 		return nil
 	}
 	x.mu.Lock()
 	defer x.mu.Unlock()
-	out := make([]inproc.Source, 0, len(x.sources))
+	out := make([]ingressSource, 0, len(x.sources))
 	for _, s := range x.sources {
-		out = append(out, inproc.Source{Name: s.Name, Source: s.Source.Extension(), Ingress: x.r.Ingress(s), Interval: time.Duration(s.IntervalSeconds) * time.Second})
+		out = append(out, ingressSource{Name: s.Name, Source: s.Source.Extension(), Ingress: x.r.Ingress(s), Interval: time.Duration(s.IntervalSeconds) * time.Second})
 	}
 	return out
 }
@@ -339,14 +369,14 @@ func (x *installed) Webhook(path string) http.Handler {
 
 // Executors are the package's declared executors, each with the capacity
 // pool its manifest names, calling the package's executor methods.
-func (x *installed) Executors() map[string]inproc.Executor {
-	out := map[string]inproc.Executor{}
+func (x *installed) Executors() map[string]packageExecutor {
+	out := map[string]packageExecutor{}
 	if x.r == nil {
 		return out
 	}
 	for _, e := range x.m.Provides.Executors {
 		if adapter, ok := x.r.Executor(e.Name); ok {
-			out[e.Name] = inproc.Executor{Executor: adapter, Pool: e.Pool}
+			out[e.Name] = packageExecutor{Executor: adapter, Pool: e.Pool}
 		}
 	}
 	return out
@@ -354,10 +384,10 @@ func (x *installed) Executors() map[string]inproc.Executor {
 
 // WorkKinds are the package's declared Work kinds; a trigger kind's choice
 // goes through work_kind.trigger.
-func (x *installed) WorkKinds() []inproc.WorkKind {
-	var out []inproc.WorkKind
+func (x *installed) WorkKinds() []workKind {
+	var out []workKind
 	for _, k := range x.m.Provides.WorkKinds {
-		w := inproc.WorkKind{Kind: k.Kind, Standing: k.Standing, RunOnce: k.RunOnce, Timed: k.Timed}
+		w := workKind{Kind: k.Kind, Standing: k.Standing, RunOnce: k.RunOnce, Timed: k.Timed}
 		if x.r != nil {
 			if p, ok := x.r.WorkKind(k.Kind); ok {
 				w.Trigger = p.Trigger
@@ -370,13 +400,13 @@ func (x *installed) WorkKinds() []inproc.WorkKind {
 
 // Recurrences are the package's declared timer recurrence kinds, each
 // through recurrence.next.
-func (x *installed) Recurrences() map[string]inproc.RecurrenceFunc {
-	out := map[string]inproc.RecurrenceFunc{}
+func (x *installed) Recurrences() map[string]runtime.RecurrenceFunc {
+	out := map[string]runtime.RecurrenceFunc{}
 	if x.r == nil {
 		return out
 	}
 	for _, kind := range x.m.Provides.Recurrences {
-		out[kind] = inproc.RecurrenceFunc(x.r.Recurrence(kind))
+		out[kind] = x.r.Recurrence(kind)
 	}
 	return out
 }
@@ -467,16 +497,16 @@ func (x *installed) ConfigCandidate(ctx context.Context, w domain.Work) (extensi
 
 // Annotate is what the package says about the Work, under the name it
 // goes by on the Work's scope.
-func (x *installed) Annotate(ctx context.Context, w domain.Work) []inproc.Annotation {
+func (x *installed) Annotate(ctx context.Context, w domain.Work) []management.Annotation {
 	source := x.m.Name
 	if x.m.Provides.EntryNamed {
 		if s, _ := x.d.extensionSnapshot(); s != nil {
 			source = x.nameIn(s.Scopes[w.ScopeID])
 		}
 	}
-	var out []inproc.Annotation
+	var out []management.Annotation
 	for _, a := range x.r.Annotate(ctx, w) {
-		out = append(out, inproc.Annotation{Source: source, Name: a.Name, Value: a.Value})
+		out = append(out, management.Annotation{Source: source, Name: a.Name, Value: a.Value})
 	}
 	return out
 }
@@ -490,11 +520,11 @@ func (x *installed) Render(ctx context.Context, e domain.Event) (string, bool) {
 }
 
 // Tasks are the manifest's tasks, paced by their intervals.
-func (x *installed) Tasks() []inproc.Task {
-	var out []inproc.Task
+func (x *installed) Tasks() []task {
+	var out []task
 	for _, t := range x.m.Provides.Tasks {
 		name := t.Name
-		out = append(out, inproc.Task{Name: name, Pace: time.Duration(t.IntervalSeconds) * time.Second, Run: func(ctx context.Context) error { return x.r.Task(ctx, name) }})
+		out = append(out, task{Name: name, Pace: time.Duration(t.IntervalSeconds) * time.Second, Run: func(ctx context.Context) error { return x.r.Task(ctx, name) }})
 	}
 	return out
 }
@@ -502,12 +532,12 @@ func (x *installed) Tasks() []inproc.Task {
 // Checks are the declared checks, each listed in doctor under its own
 // name (checkName). check.run carries the package's view of the
 // configuration; a result without a status is ok or, when not OK, a warning.
-func (x *installed) Checks() []inproc.Check {
-	var out []inproc.Check
+func (x *installed) Checks() []packageCheck {
+	var out []packageCheck
 	for _, c := range x.m.Provides.Checks {
 		name, deep := c.Name, c.Deep
-		out = append(out, inproc.Check{Deep: deep, Offline: c.Offline, Run: func(ctx context.Context, cfg protocol.CheckConfig) inproc.CheckResult {
-			res := inproc.CheckResult{Name: checkName(x.m.Name, name), Status: inproc.CheckOK, Code: "ok"}
+		out = append(out, packageCheck{Deep: deep, Offline: c.Offline, Run: func(ctx context.Context, cfg protocol.CheckConfig) runtime.Check {
+			res := runtime.Check{Name: checkName(x.m.Name, name), Status: runtime.CheckOK, Code: "ok"}
 			var r protocol.CheckRunResult
 			remote, err := x.remote()
 			if err == nil {
@@ -517,19 +547,19 @@ func (x *installed) Checks() []inproc.Check {
 			}
 			switch {
 			case err != nil:
-				res.Status, res.Code, res.Detail = inproc.CheckWarn, "extension_check_failed", "unavailable ("+errorCode(err)+")"
+				res.Status, res.Code, res.Detail = runtime.CheckWarn, "extension_check_failed", "unavailable ("+errorCode(err)+")"
 			case r.Status != "":
 				res.Status, res.Code, res.Detail, res.Items = r.Status, r.Code, r.Detail, r.Items
 				switch r.Status {
-				case inproc.CheckOK, inproc.CheckInfo, inproc.CheckWarn, inproc.CheckFail:
+				case runtime.CheckOK, runtime.CheckInfo, runtime.CheckWarn, runtime.CheckFail:
 				default:
-					res.Status, res.Code, res.Detail, res.Items = inproc.CheckWarn, "extension_check_invalid", "unknown status "+strconv.Quote(r.Status), nil
+					res.Status, res.Code, res.Detail, res.Items = runtime.CheckWarn, "extension_check_invalid", "unknown status "+strconv.Quote(r.Status), nil
 				}
 				if res.Code == "" {
 					res.Code = res.Status
 				}
 			case !r.OK:
-				res.Status, res.Code, res.Detail = inproc.CheckWarn, "extension_check_failed", r.Detail
+				res.Status, res.Code, res.Detail = runtime.CheckWarn, "extension_check_failed", r.Detail
 			default:
 				res.Detail = r.Detail
 			}
@@ -581,13 +611,13 @@ func declaredSettings(decls []protocol.SettingDecl) func(json.RawMessage) []exte
 		return nil
 	}
 	return func(raw json.RawMessage) []extension.Setting {
-		var config map[string]json.RawMessage
-		if json.Unmarshal(raw, &config) != nil {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) != nil {
 			return nil
 		}
 		var out []extension.Setting
 		for _, d := range decls {
-			if v, ok := d.Value(config); ok {
+			if v, ok := d.Value(fields); ok {
 				out = append(out, extension.Setting{Name: d.Field, Value: v})
 			}
 		}
@@ -599,17 +629,17 @@ func declaredSettings(decls []protocol.SettingDecl) func(json.RawMessage) []exte
 // up: the lines the package gave when it validated that object
 // (protocol.ValidateResult.Describe), else the declared ones. It never
 // calls the package.
-func (x *installed) describe(kind, typ string, declared func(json.RawMessage) []inproc.Entry) func(json.RawMessage) []inproc.Entry {
-	return func(raw json.RawMessage) []inproc.Entry {
+func (x *installed) describe(kind, typ string, declared func(json.RawMessage) []config.Entry) func(json.RawMessage) []config.Entry {
+	return func(raw json.RawMessage) []config.Entry {
 		r := x.r
 		if r == nil && x.offline != nil && x.offline.started {
 			r = x.offline.r
 		}
 		if r != nil {
 			if lines, ok := r.Described(kind, typ, raw); ok && len(lines) > 0 {
-				out := make([]inproc.Entry, len(lines))
+				out := make([]config.Entry, len(lines))
 				for i, l := range lines {
-					out[i] = inproc.Entry{Name: l.Name, Detail: l.Detail}
+					out[i] = config.Entry{Name: l.Name, Detail: l.Detail}
 				}
 				return out
 			}
@@ -623,18 +653,18 @@ func (x *installed) describe(kind, typ string, declared func(json.RawMessage) []
 
 // declaredDescribe reads the lines an entry type's describe declaration
 // yields from an entry's config.
-func declaredDescribe(d *protocol.DescribeDecl) func(json.RawMessage) []inproc.Entry {
+func declaredDescribe(d *protocol.DescribeDecl) func(json.RawMessage) []config.Entry {
 	if d == nil {
 		return nil
 	}
-	return func(raw json.RawMessage) []inproc.Entry {
-		var config map[string]json.RawMessage
-		if json.Unmarshal(raw, &config) != nil {
+	return func(raw json.RawMessage) []config.Entry {
+		var fields map[string]json.RawMessage
+		if json.Unmarshal(raw, &fields) != nil {
 			return nil
 		}
-		var out []inproc.Entry
-		for _, e := range d.Entries(config) {
-			out = append(out, inproc.Entry{Name: e.Name, Detail: e.Detail})
+		var out []config.Entry
+		for _, e := range d.Entries(fields) {
+			out = append(out, config.Entry{Name: e.Name, Detail: e.Detail})
 		}
 		return out
 	}

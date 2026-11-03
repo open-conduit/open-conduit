@@ -51,8 +51,7 @@ func (manualRoute) Samples(context.Context, extension.SampleInput) []extension.R
 // admitTrace refuses a route trace's Event that acceptance would refuse from
 // its source (runtime.CheckTraceEvent has checked the envelope): an
 // operator's Event may have any type; a registered source must be this
-// scope's; any other source is unknown unless an in-process extension or
-// package owns the type, as AcceptInTx and event.accept require. A
+// scope's; any other source is unknown unless a package owns the type, as AcceptInTx and event.accept require. A
 // package's payload must be one it may write.
 func (d *daemon) admitTrace(scope domain.ID, e domain.Event) error {
 	if e.Source == runtime.ManualSource {
@@ -62,15 +61,13 @@ func (d *daemon) admitTrace(scope domain.ID, e domain.Event) error {
 	if err != nil {
 		return err
 	}
-	for _, x := range d.inproc {
-		if !(ownership{x: x}).family(e.Type) {
+	for _, x := range d.packages {
+		if !x.ownsFamily(e.Type) {
 			continue
 		}
 		known = true
-		if p, ok := x.(*installed); ok {
-			if err = p.m.CheckWrite(e.Data); err != nil {
-				return err
-			}
+		if err = x.m.CheckWrite(e.Data); err != nil {
+			return err
 		}
 	}
 	if !known {

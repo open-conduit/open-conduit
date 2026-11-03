@@ -1,4 +1,4 @@
-package bootstrap
+package main
 
 import (
 	"encoding/json"
@@ -7,33 +7,19 @@ import (
 	"unicode"
 
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extension/inproc"
 )
 
-// Every operation a first-party extension declares says what it does and
-// what it takes, so the operations reference and the agents granted it can
-// show both.
-func TestFirstPartyOperationsDescribed(t *testing.T) {
-	for _, x := range firstParty() {
-		o, ok := x.(inproc.Operator)
-		if !ok {
+// Every operation a package bundled with the release declares says what it
+// does and what it takes, so the operations reference and the agents
+// granted it can show both.
+func TestServedOperationsDescribed(t *testing.T) {
+	for name, r := range runnable {
+		if !r.Bundled {
 			continue
 		}
-		d, ok := x.(inproc.Declarer)
-		if !ok {
-			t.Errorf("%s names operations but declares none", x.Name())
-			continue
-		}
-		declared := map[string]bool{}
-		for _, op := range d.Declarations() {
-			declared[op.Name] = true
-			for _, problem := range describedProblems(op) {
-				t.Errorf("%s: %s", op.Name, problem)
-			}
-		}
-		for _, name := range o.Operations() {
-			if !declared[name] {
-				t.Errorf("%s: named but not declared", name)
+		for _, op := range r.Manifest().Provides.Operations {
+			for _, problem := range describedProblems(extension.Operation{Name: op.Name, Summary: op.Summary, Input: op.Input}) {
+				t.Errorf("%s %s: %s", name, op.Name, problem)
 			}
 		}
 	}
@@ -41,7 +27,7 @@ func TestFirstPartyOperationsDescribed(t *testing.T) {
 
 // The check catches an undescribed operation, one with an empty input
 // schema and one whose summary isn't a sentence.
-func TestFirstPartyOperationsDescribedNegative(t *testing.T) {
+func TestServedOperationsDescribedNegative(t *testing.T) {
 	for _, op := range []extension.Operation{
 		{Name: "x.none"},
 		{Name: "x.summary", Summary: "Do it."},

@@ -18,15 +18,16 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// configHost is inproc.ConfigHost over the daemon's config service: it
+// configHost is extproc.ConfigHost over the daemon's config service: it
 // reads, validates and edits config text it keeps behind handles, hands
 // extensions only redacted copies, and never applies it.
 type configHost struct {
@@ -37,7 +38,7 @@ type configHost struct {
 	handles *configHandles
 }
 
-var _ inproc.ConfigHost = configHost{}
+var _ extproc.ConfigHost = configHost{}
 
 func (d *daemon) configHost() configHost {
 	return configHost{configs: func() *management.ConfigService { return d.configs }, path: d.o.ConfigPath, def: func() []byte { return d.defaultDoc }, handles: &d.configHandles,
@@ -49,23 +50,23 @@ func (d *daemon) configHost() configHost {
 		}}
 }
 
-func (h configHost) Base(context.Context) (inproc.ConfigBase, error) {
+func (h configHost) Base(context.Context) (protocol.ConfigBaseResult, error) {
 	c := h.configs()
 	if c == nil {
-		return inproc.ConfigBase{}, errors.New("no configuration yet")
+		return protocol.ConfigBaseResult{}, errors.New("no configuration yet")
 	}
 	s, generation := c.Current()
 	if s == nil {
-		return inproc.ConfigBase{}, errors.New("no configuration yet")
+		return protocol.ConfigBaseResult{}, errors.New("no configuration yet")
 	}
 	text, err := config.ReadFile(h.path)
 	if errors.Is(err, fs.ErrNotExist) {
 		text, err = h.def(), nil
 	}
 	if err != nil {
-		return inproc.ConfigBase{}, errors.New("the config file could not be read")
+		return protocol.ConfigBaseResult{}, errors.New("the config file could not be read")
 	}
-	b := inproc.ConfigBase{Generation: strconv.FormatUint(generation, 10), Hash: s.Hash, Handle: h.handles.put(text), Text: redactText(text)}
+	b := protocol.ConfigBaseResult{Generation: strconv.FormatUint(generation, 10), Hash: s.Hash, Handle: h.handles.put(text), Text: string(redactText(text))}
 	for id, scope := range s.Scopes {
 		if scope.Source != "" {
 			b.Folders = append(b.Folders, string(id))
@@ -75,10 +76,10 @@ func (h configHost) Base(context.Context) (inproc.ConfigBase, error) {
 	return b, nil
 }
 
-func (h configHost) Validate(_ context.Context, handle string) (string, []inproc.ConfigDiagnostic, error) {
+func (h configHost) Validate(_ context.Context, handle string) (string, []protocol.ConfigDiagnostic, error) {
 	text, ok := h.handles.get(handle)
 	if !ok {
-		return "", nil, inproc.ErrConfigHandle
+		return "", nil, extproc.ErrConfigHandle
 	}
 	c := h.configs()
 	if c == nil {
@@ -88,27 +89,27 @@ func (h configHost) Validate(_ context.Context, handle string) (string, []inproc
 	var invalid *config.ValidationError
 	switch {
 	case errors.As(err, &invalid):
-		out := make([]inproc.ConfigDiagnostic, len(invalid.Diagnostics))
+		out := make([]protocol.ConfigDiagnostic, len(invalid.Diagnostics))
 		for i, d := range invalid.Diagnostics {
-			out[i] = inproc.ConfigDiagnostic{Path: d.Path, Code: d.Code, Message: d.Message}
+			out[i] = protocol.ConfigDiagnostic{Path: d.Path, Code: d.Code, Message: d.Message}
 		}
 		return "", out, nil
 	case err != nil:
-		return "", []inproc.ConfigDiagnostic{{Path: "", Code: "invalid", Message: "the configuration is not valid JSON"}}, nil
+		return "", []protocol.ConfigDiagnostic{{Path: "", Code: "invalid", Message: "the configuration is not valid JSON"}}, nil
 	}
 	return s.Hash, nil, nil
 }
 
-func (h configHost) Edit(_ context.Context, handle, op, pointer string, value json.RawMessage) (inproc.ConfigEdited, error) {
+func (h configHost) Edit(_ context.Context, handle, op, pointer string, value json.RawMessage) (protocol.ConfigEditResult, error) {
 	text, ok := h.handles.get(handle)
 	if !ok {
-		return inproc.ConfigEdited{}, inproc.ErrConfigHandle
+		return protocol.ConfigEditResult{}, extproc.ErrConfigHandle
 	}
 	out, before, err := edit(text, op, pointer, value)
 	if err != nil {
-		return inproc.ConfigEdited{}, err
+		return protocol.ConfigEditResult{}, err
 	}
-	return inproc.ConfigEdited{Handle: h.handles.put(out), Text: redactText(out), Before: redactAt(pointer, before)}, nil
+	return protocol.ConfigEditResult{Handle: h.handles.put(out), Text: string(redactText(out)), Before: redactAt(pointer, before)}, nil
 }
 
 // edit makes one edit to config text: the new text and the value that was
@@ -164,16 +165,15 @@ func inArray(doc *cli.ConfigDoc, pointer string) bool {
 }
 
 // configCandidate is the configuration a Work proposes, from the extension
-// that owns its kind, in-process or installed (GET
+// package that owns its kind (GET
 // /work/{id}/config-candidate): its changes for review and, once one is
 // approved, the text behind the candidate's handle, for the operator alone.
 func (d *daemon) configCandidate(ctx context.Context, w domain.Work) (management.ConfigCandidate, error) {
-	for _, x := range d.inproc {
-		c, ok := x.(extension.ConfigCandidate)
-		if !ok || !ownsKind(x, w.Kind) {
+	for _, x := range d.packages {
+		if !x.ownsKind(w.Kind) {
 			continue
 		}
-		cand, err := c.ConfigCandidate(ctx, w)
+		cand, err := x.ConfigCandidate(ctx, w)
 		if err != nil {
 			return management.ConfigCandidate{}, err
 		}
@@ -190,39 +190,26 @@ func (d *daemon) configCandidate(ctx context.Context, w domain.Work) (management
 	return management.ConfigCandidate{}, storage.ErrNotFound
 }
 
-// ownsKind reports whether x owns the Work kind: one it declares, in
-// process or in its manifest.
-func ownsKind(x inproc.Extension, kind string) bool {
-	if p, ok := x.(*installed); ok {
-		return p.ownsKind(kind)
-	}
-	return ownership{x: x}.workKind(kind)
-}
-
-// titles are the display names of the extensions, by name: each one's own
-// (inproc.Titled, a package manifest's title).
+// titles are the display names of the packages, by name: each manifest's
+// title.
 func (d *daemon) titles() map[string]string {
 	out := map[string]string{}
-	for _, x := range d.inproc {
-		if t, ok := x.(inproc.Titled); ok && t.Title() != "" {
-			out[x.Name()] = t.Title()
+	for _, x := range d.packages {
+		if t := x.Title(); t != "" {
+			out[x.Name()] = t
 		}
 	}
 	return out
 }
 
-// pages are every extension's pages, in-process and installed, by the
-// extension that declares them. A page that doesn't validate, or whose ID
-// an earlier extension took, is left out.
+// pages are every package's pages, by the package that declares them. A
+// page that doesn't validate, or whose ID an earlier package took, is
+// left out.
 func (d *daemon) pages() []management.Page {
 	var out []management.Page
 	taken := map[string]bool{}
-	for _, x := range d.inproc {
-		p, ok := x.(inproc.Paged)
-		if !ok {
-			continue
-		}
-		for i, pg := range p.Pages() {
+	for _, x := range d.packages {
+		for i, pg := range x.Pages() {
 			if i == extension.MaxPages || pg.Validate() != nil || taken[pg.ID] {
 				continue
 			}
@@ -233,32 +220,32 @@ func (d *daemon) pages() []management.Page {
 	return out
 }
 
-func (h configHost) Trace(ctx context.Context, handle, scope, sample string) (inproc.CandidateTrace, error) {
+func (h configHost) Trace(ctx context.Context, handle, scope, sample string) (protocol.ConfigTraceResult, error) {
 	text, ok := h.handles.get(handle)
 	if !ok {
-		return inproc.CandidateTrace{}, inproc.ErrConfigHandle
+		return protocol.ConfigTraceResult{}, extproc.ErrConfigHandle
 	}
 	c, control := h.configs(), h.control()
 	if c == nil || control == nil {
-		return inproc.CandidateTrace{}, errors.New("no configuration yet")
+		return protocol.ConfigTraceResult{}, errors.New("no configuration yet")
 	}
 	s, err := c.Validate(text)
 	if err != nil {
-		return inproc.CandidateTrace{}, errors.New("the candidate doesn't validate; validate it to see why")
+		return protocol.ConfigTraceResult{}, errors.New("the candidate doesn't validate; validate it to see why")
 	}
 	if _, ok := s.Scope(domain.ID(scope)); !ok {
-		return inproc.CandidateTrace{}, errors.New("the candidate has no scope " + scope)
+		return protocol.ConfigTraceResult{}, errors.New("the candidate has no scope " + scope)
 	}
 	scopes := s.DomainScopes()
 	samples, err := control.SamplesCandidate(ctx, domain.ID(scope), scopes)
 	if err != nil {
-		return inproc.CandidateTrace{}, errors.New("the scope's samples can't be listed")
+		return protocol.ConfigTraceResult{}, errors.New("the scope's samples can't be listed")
 	}
-	var out inproc.CandidateTrace
+	var out protocol.ConfigTraceResult
 	var chosen *runtime.TraceSample
 	for i, x := range samples {
 		id := x.Handler + "/" + x.ID
-		out.Samples = append(out.Samples, inproc.CandidateSample{ID: id, Title: x.Title})
+		out.Samples = append(out.Samples, protocol.ConfigTraceSample{ID: id, Title: x.Title})
 		if id == sample || x.ID == sample {
 			chosen = &samples[i]
 		}
@@ -281,9 +268,9 @@ func (h configHost) Trace(ctx context.Context, handle, scope, sample string) (in
 	}
 	out.Samples, out.Sample = nil, chosen.Handler+"/"+chosen.ID
 	for _, r := range t.Routes {
-		out.Routes = append(out.Routes, inproc.CandidateRoute{Route: r.Route, Handler: r.Handler, Binding: r.Binding, Verdict: r.Verdict, Reason: r.Reason})
+		out.Routes = append(out.Routes, protocol.ConfigTraceRoute{Route: r.Route, Handler: r.Handler, Binding: r.Binding, Verdict: r.Verdict, Reason: r.Reason})
 	}
-	out.Effect = inproc.CandidateEffect{Kind: t.Effect.Kind, WorkID: string(t.Effect.WorkID), Binding: t.Effect.Binding, Detail: t.Effect.Detail}
+	out.Effect = protocol.ConfigTraceEffect{Kind: t.Effect.Kind, WorkID: string(t.Effect.WorkID), Binding: t.Effect.Binding, Detail: t.Effect.Detail}
 	return out, nil
 }
 

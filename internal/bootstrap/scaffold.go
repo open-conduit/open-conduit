@@ -198,7 +198,7 @@ func checkPackageName(name string) error {
 	if err := m.Validate(); err != nil {
 		return fmt.Errorf("%q cannot name a package: %w", name, err)
 	}
-	if err := extproc.CheckConflicts([]extproc.Found{{Manifest: m}}, firstPartyTaken()); err != nil {
+	if err := extproc.CheckConflicts([]extproc.Found{{Manifest: m}}, hostTaken()); err != nil {
 		return fmt.Errorf("%q cannot name a package: %w", name, err)
 	}
 	found, _ := discoverPackages("", "")

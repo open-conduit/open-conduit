@@ -47,7 +47,7 @@ func ExtensionOps(version, commit string) *cli.ExtensionOps {
 				}
 			}
 			if len(all) > 0 {
-				if err := extproc.CheckConflicts(all, firstPartyTaken()); err != nil {
+				if err := extproc.CheckConflicts(all, hostTaken()); err != nil {
 					out.Problems = append(out.Problems, extproc.Diagnose("", err, extproc.Paths{}).Summary+": "+err.Error())
 				}
 			}
@@ -61,7 +61,7 @@ func ExtensionOps(version, commit string) *cli.ExtensionOps {
 			return describe(pkg), nil
 		},
 		Check: func(dir string, allow []string) cli.ExtensionCheck {
-			r := extproc.Check(dir, extproc.Known{Taken: firstPartyTaken(), Probes: hostProbeNames(), Allow: allow})
+			r := extproc.Check(dir, extproc.Known{Taken: hostTaken(), Probes: hostProbeNames(), Allow: allow})
 			out := cli.ExtensionCheck{Dir: r.Dir, Name: r.Name, Version: r.Version, Protocol: r.Protocol, OK: r.OK, Findings: []cli.CheckFinding{}, Notes: r.Notes}
 			for _, f := range r.Findings {
 				out.Findings = append(out.Findings, cli.CheckFinding(f))
@@ -72,7 +72,7 @@ func ExtensionOps(version, commit string) *cli.ExtensionOps {
 			ctx, cancel := context.WithTimeout(context.Background(), 10*time.Minute)
 			defer cancel()
 			src := extproc.Source{Location: r.Source, SHA256: r.SHA256}
-			res, err := extproc.InstallSource(ctx, extensionsRoot(configPath), src, extproc.InstallOptions{Update: r.Update, Taken: firstPartyTaken()})
+			res, err := extproc.InstallSource(ctx, extensionsRoot(configPath), src, extproc.InstallOptions{Update: r.Update, Taken: hostTaken()})
 			if err != nil {
 				return cli.ExtensionChange{}, diagnosed(path.Base(r.Source), err)
 			}
@@ -167,9 +167,10 @@ func permissions(names []string) []cli.ExtensionPermission {
 	return out
 }
 
-// firstPartyTaken lists the in-process registrations' names, offline.
-func firstPartyTaken() extproc.Taken {
-	reg := registry(offlineExecutors())
+// hostTaken lists the names the host itself takes (its own route handlers
+// and reserved names), which no package may declare.
+func hostTaken() extproc.Taken {
+	reg := registry(map[string]extension.Executor{})
 	return takenNames(reg)
 }
 
@@ -178,7 +179,7 @@ func firstPartyTaken() extproc.Taken {
 // setup needs only the operator, the config document and the secret store).
 func extensionSetups(configPath, stateDir, version string) []extension.Setup {
 	found, _ := discoverPackages(configPath, "")
-	if extproc.CheckConflicts(found, firstPartyTaken()) != nil {
+	if extproc.CheckConflicts(found, hostTaken()) != nil {
 		return nil
 	}
 	var out []extension.Setup

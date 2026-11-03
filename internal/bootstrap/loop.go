@@ -59,7 +59,7 @@ func (d *daemon) loop(ctx context.Context) error {
 			d.report("ingress", "", errorCode(err))
 		}
 		d.reconfigureOnURLChange(ctx)
-		d.runInprocTasks(ctx)
+		d.runPackageTasks(ctx)
 		d.reconcileContainers(ctx)
 		d.reconcileResources(c)
 		d.reconcileEndpoints(ctx)

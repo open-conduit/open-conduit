@@ -9,7 +9,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/jsonrpc"
 	"github.com/open-conduit/open-conduit/storage"
@@ -30,6 +29,36 @@ const (
 	maxConfigID = 200
 )
 
+// ConfigHost is the host's config service behind config.*: it keeps the
+// config file's text behind handles and answers only copies with every
+// secret_refs value replaced by "[redacted]", so a package never holds
+// reference text. Nothing in it applies a configuration: only the operator
+// does that, through POST /config/apply. Its errors are fixed, secret-free
+// reasons.
+type ConfigHost interface {
+	// Base is the configuration now: the committed generation and its
+	// hash, a handle on the config file's text, its redacted copy and the
+	// IDs of the scopes that come from included folders.
+	Base(ctx context.Context) (protocol.ConfigBaseResult, error)
+	// Edit makes one RFC 6902 edit (add, replace or remove) to the text
+	// behind handle, keeping its layout and key order, and holds the
+	// result as a new candidate.
+	Edit(ctx context.Context, handle, op, pointer string, value json.RawMessage) (protocol.ConfigEditResult, error)
+	// Validate runs the side-effect-free validation POST /config/validate
+	// runs on the text behind handle: the candidate's hash when it is
+	// valid, its diagnostics when not.
+	Validate(ctx context.Context, handle string) (hash string, diagnostics []protocol.ConfigDiagnostic, err error)
+	// Trace runs the route trace for one of a scope's named samples
+	// against the text behind handle, writing nothing. With no sample it
+	// lists the scope's samples. An error is the trace's reason, answered
+	// with what the trace got to (ConfigTraceResult.Error).
+	Trace(ctx context.Context, handle, scope, sample string) (protocol.ConfigTraceResult, error)
+}
+
+// ErrConfigHandle refuses a config handle the host doesn't hold (one from
+// before a restart, or long unused): read the base again.
+var ErrConfigHandle = errors.New("the host no longer holds that configuration; read the base again")
+
 func (s *Service) config(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	host := s.deps.Config
 	if host == nil {
@@ -41,7 +70,7 @@ func (s *Service) config(ctx context.Context, method string, raw json.RawMessage
 		if err != nil {
 			return nil, configError(err)
 		}
-		return protocol.ConfigBaseResult{Generation: b.Generation, Hash: b.Hash, Handle: b.Handle, Text: string(b.Text), Folders: b.Folders}, nil
+		return b, nil
 	case "config.edit":
 		var p protocol.ConfigEditParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
@@ -63,13 +92,13 @@ func (s *Service) config(ctx context.Context, method string, raw json.RawMessage
 			return nil, invalid("op is add, replace or remove")
 		}
 		e, err := host.Edit(ctx, p.Handle, p.Op, p.Pointer, p.Value)
-		if errors.Is(err, inproc.ErrConfigHandle) {
+		if errors.Is(err, ErrConfigHandle) {
 			return nil, configError(err)
 		}
 		if err != nil {
 			return nil, invalid(err.Error())
 		}
-		return protocol.ConfigEditResult{Handle: e.Handle, Text: string(e.Text), Before: e.Before}, nil
+		return e, nil
 	case "config.validate":
 		var p protocol.ConfigHandleParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
@@ -83,9 +112,7 @@ func (s *Service) config(ctx context.Context, method string, raw json.RawMessage
 		if len(diags) == 0 {
 			out.Hash = hash
 		}
-		for _, d := range diags {
-			out.Diagnostics = append(out.Diagnostics, protocol.ConfigDiagnostic{Path: d.Path, Code: d.Code, Message: d.Message})
-		}
+		out.Diagnostics = diags
 		return out, nil
 	case "config.trace":
 		var p protocol.ConfigTraceParams
@@ -95,17 +122,9 @@ func (s *Service) config(ctx context.Context, method string, raw json.RawMessage
 		if p.Scope == "" || len(p.Scope) > maxConfigID || len(p.Sample) > maxConfigID {
 			return nil, invalid("a scope's ID, and a sample's ID from the list a trace without one returns")
 		}
-		t, err := host.Trace(ctx, p.Handle, p.Scope, p.Sample)
-		if errors.Is(err, inproc.ErrConfigHandle) {
+		out, err := host.Trace(ctx, p.Handle, p.Scope, p.Sample)
+		if errors.Is(err, ErrConfigHandle) {
 			return nil, configError(err)
-		}
-		out := protocol.ConfigTraceResult{Sample: t.Sample,
-			Effect: protocol.ConfigTraceEffect{Kind: t.Effect.Kind, WorkID: t.Effect.WorkID, Binding: t.Effect.Binding, Detail: t.Effect.Detail}}
-		for _, x := range t.Samples {
-			out.Samples = append(out.Samples, protocol.ConfigTraceSample{ID: x.ID, Title: x.Title})
-		}
-		for _, r := range t.Routes {
-			out.Routes = append(out.Routes, protocol.ConfigTraceRoute{Route: r.Route, Handler: r.Handler, Binding: r.Binding, Verdict: r.Verdict, Reason: r.Reason})
 		}
 		if err != nil {
 			// The host's trace reasons are fixed and secret-free.
@@ -120,7 +139,7 @@ func (s *Service) config(ctx context.Context, method string, raw json.RawMessage
 // longer holds is not_found (read the base again); the host's other
 // reasons are fixed and secret-free.
 func configError(err error) error {
-	if errors.Is(err, inproc.ErrConfigHandle) {
+	if errors.Is(err, ErrConfigHandle) {
 		return protocol.Errorf(protocol.CodeNotFound, err.Error())
 	}
 	return protocol.Errorf(protocol.CodeInternal, err.Error())

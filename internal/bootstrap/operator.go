@@ -30,7 +30,6 @@ import (
 // operations, connection and extension types and resource providers.
 func registry(executors map[string]extension.Executor) config.Registry {
 	reg := config.Registry{Executors: executors, Handlers: handlerNames()}
-	inprocRegistry(&reg, firstParty())
 	return reg
 }
 
@@ -66,7 +65,7 @@ func CheckConfigAt(configPath string, data []byte) ([]config.Diagnostic, []strin
 }
 
 func checkWith(configPath, exclude string, data []byte) ([]config.Diagnostic, []string, error) {
-	reg := registry(offlineExecutors())
+	reg := registry(map[string]extension.Executor{})
 	pkgs := offlineExternal(&reg, configPath, exclude, data)
 	defer pkgs.close()
 	s, err := config.ValidateFile(data, reg, fileIncludes(configPath))
@@ -88,15 +87,6 @@ func fileIncludes(configPath string) config.Includes {
 		return config.Includes{}
 	}
 	return config.Includes{Base: filepath.Dir(configPath)}
-}
-
-// offlineExecutors are the first-party executor registrations for offline
-// checks: capability and config checks need only the registrations, and
-// executors' capabilities and config validators do not touch runtime state.
-func offlineExecutors() map[string]extension.Executor {
-	out := map[string]extension.Executor{}
-	inprocExecutors(firstParty(), out, map[string]string{})
-	return out
 }
 
 // DefaultConfig is the configuration the daemon runs on when it starts with
@@ -227,7 +217,7 @@ func SetupCommand(o SetupOptions) (SetupLaunch, error) {
 // only one package claims. The error lists the executors that offer one.
 func launcherFor(configPath, name string) (extproc.Found, protocol.ExecutorDecl, error) {
 	found, _ := discoverPackages(configPath, "")
-	if err := extproc.CheckConflicts(found, firstPartyTaken()); err != nil {
+	if err := extproc.CheckConflicts(found, hostTaken()); err != nil {
 		return extproc.Found{}, protocol.ExecutorDecl{}, err
 	}
 	type launcher struct {
@@ -383,14 +373,14 @@ func firstRunPlaybook(configPath, bin string) (string, string, error) {
 // annotate contributes capacity and the extensions' context for Work.
 func (d *daemon) annotate(ctx context.Context, w domain.Work) []management.Annotation {
 	out := d.capacityAnnotation(ctx, w)
-	out = append(out, d.inprocAnnotations(ctx, w)...)
+	out = append(out, d.packageAnnotations(ctx, w)...)
 	return out
 }
 
 // actions are the action providers on a scope, every extension's.
 func (d *daemon) actions(_ context.Context, scope domain.ID) map[string]extension.ActionProvider {
 	out := map[string]extension.ActionProvider{}
-	d.inprocActions(scope, out)
+	d.packageActions(scope, out)
 	return out
 }
 
@@ -454,7 +444,7 @@ var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource
 // when no daemon is reachable.
 func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtime.Check {
 	skipped := runtime.Check{Name: "skipped", Status: runtime.CheckInfo, Code: "daemon_not_running", Detail: "need a running daemon: " + strings.Join(daemonChecks, ", ")}
-	executors := offlineExecutors()
+	executors := map[string]extension.Executor{}
 	reg := registry(executors)
 	pkgs := offlineExternal(&reg, configPath, "", data)
 	snapshot, err := config.ValidateFile(data, reg, fileIncludes(configPath))

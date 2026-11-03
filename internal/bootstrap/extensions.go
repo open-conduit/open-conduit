@@ -17,7 +17,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -27,16 +26,15 @@ import (
 	"github.com/open-conduit/open-conduit/storage"
 )
 
-// Installed extension packages (07-03). At start the daemon discovers
-// <config dir>/extensions/<name>/open-conduit-extension.json, refuses any
-// set that conflicts with the first-party registrations (atomically, as the
-// in-process Registrar does), starts each package behind its scoped host
-// service and appends it to the in-process list (installed.go), so config
+// Extension packages (07-03), bundled and installed. At start the daemon
+// discovers <config dir>/extensions/<name>/open-conduit-extension.json and
+// the bundled packages, refuses any set that conflicts with the host's own
+// names (atomically), starts each package behind its scoped host service
+// and adds it to the packages composition iterates (compose.go), so config
 // types and validators, route handlers, toolbelt operations, configure,
-// tasks, checks, actions, annotations, prompt rendering and telemetry export
-// go through the same path as first-party extensions. Executors, resource
-// providers, work kinds, recurrences, ingress sources and webhook paths are
-// registered here until the contract has them. Nothing here names an
+// tasks, checks, actions, annotations, prompt rendering and telemetry
+// export all come from it. Its resource, sandbox, container and tunnel
+// providers are registered here as it starts. Nothing here names an
 // extension: every decision reads the manifest. Packages are
 // read only at start, so install, update and removal take effect at the
 // next serve; configuration changes reach running packages through
@@ -150,8 +148,9 @@ func discoverPackages(configPath, exclude string) ([]extproc.Found, []error) {
 	return found, errs
 }
 
-// takenNames lists the names the first-party registrations own, so a
-// package cannot claim one.
+// takenNames lists the names a registry already holds (the host's own, and
+// at offline validation those of the packages it has), so a package
+// cannot claim one.
 func takenNames(reg config.Registry) extproc.Taken {
 	t := extproc.Taken{}
 	t.Add("name", "core", "execution", "manual", "os", "open-conduit", extension.CallerOperator)
@@ -177,12 +176,6 @@ func takenNames(reg config.Registry) extproc.Taken {
 	}
 	t.Add("operation", reg.Operations...)
 	t.Add("operation", extension.CreateWork, extension.DeclareOutcome, extension.Emit, extension.ReadContext, extension.Wait)
-	for kind := range workKinds(firstParty()) {
-		t.Add("work_kind", kind)
-	}
-	for kind := range recurrences(firstParty()) {
-		t.Add("recurrence", kind)
-	}
 	return t
 }
 
@@ -279,19 +272,17 @@ func offlineExternal(reg *config.Registry, configPath, exclude string, data []by
 	if len(found) == 0 || extproc.CheckConflicts(found, takenNames(*reg)) != nil {
 		return o
 	}
-	var xs []inproc.Extension
 	for _, f := range found {
 		v := &offlinePackage{f: f, passEnv: grants[f.Manifest.Name]}
 		o.packages = append(o.packages, v)
 		x := &installed{m: f.Manifest, offline: v, dir: f.Dir}
-		xs = append(xs, x)
 		o.installed = append(o.installed, x)
 		x.providerTypes(reg)
 		for _, e := range f.Manifest.Provides.Executors {
 			reg.Executors[e.Name] = manifestExecutor{decl: e, x: x}
 		}
 	}
-	inprocRegistry(reg, xs)
+	packageRegistry(reg, o.installed)
 	return o
 }
 
@@ -403,9 +394,9 @@ func (p *offlinePackage) close() {
 	}
 }
 
-// openExtensions discovers, admits and starts the installed packages,
-// appends them to the in-process list and registers their executors and
-// resource providers. It runs before the
+// openExtensions discovers, admits and starts the packages, adds them to
+// the packages composition iterates and registers their executors and
+// providers. It runs before the
 // configuration opens, so the packages' validators can check it; the first
 // configure carries an empty generation, and configureExtensions sends the
 // real one once the configuration and ingress exist.
@@ -465,8 +456,8 @@ func (d *daemon) openExtensions(ctx context.Context) {
 		x.mu.Unlock()
 		// Nothing reads the list concurrently yet: the loop, servers and
 		// configuration start after this.
-		d.inproc = append(d.inproc, pkg)
-		for _, refused := range inprocExecutors([]inproc.Extension{pkg}, d.executors, d.pools) {
+		d.packages = append(d.packages, pkg)
+		for _, refused := range packageExecutors([]*installed{pkg}, d.executors, d.pools) {
 			d.log.Warn("executor not registered: its capacity pool is not one a setting bounds", "executor", refused)
 			d.report("executor_pool", domain.ID(refused), "unknown_pool")
 		}
@@ -503,12 +494,11 @@ func (d *daemon) extensionPackages() []*installed {
 // installedRegistry adds the running packages' declared types, validated
 // through their validate method, to the serve registry.
 func (d *daemon) installedRegistry(reg *config.Registry) {
-	var xs []inproc.Extension
-	for _, x := range d.extensionPackages() {
+	xs := d.extensionPackages()
+	for _, x := range xs {
 		x.providerTypes(reg)
-		xs = append(xs, x)
 	}
-	inprocRegistry(reg, xs)
+	packageRegistry(reg, xs)
 }
 
 // usesExtension reports whether a scope's configuration uses one of the
@@ -631,7 +621,7 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 			}
 			return c.control.SettleGateHold(ctx, owner, work, admit, reason, key)
 		},
-		Render: func(ctx context.Context, e domain.Event) (string, bool) { return d.inprocRender(e) },
+		Render: func(ctx context.Context, e domain.Event) (string, bool) { return d.packageRender(e) },
 		WaitTarget: func(ctx context.Context, scope domain.ID, kind, name string) (domain.CorrelationKey, []string, bool) {
 			return d.waitTarget(kind)(ctx, scope, name)
 		},
@@ -654,7 +644,7 @@ func (d *daemon) waitProgress(owner string) func(ctx context.Context, work domai
 // scope: their selected secret names, or the secret names of a connection
 // of one of its types that one of them or one of the scope's bindings names
 // (B05, config.Snapshot.ExtensionConnection). It is the one host resolver
-// for in-process extensions and installed packages alike.
+// for every package.
 func (d *daemon) scopedSecrets(extTypes, connTypes map[string]bool) func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
 	return func(ctx context.Context, id domain.ID, connection string, names []string) (map[string]string, error) {
 		s, _ := d.extensionSnapshot()
@@ -893,7 +883,7 @@ func connectionEntry(c config.Connection) protocol.ConnectionEntry {
 
 // extensionConfigured records what a package's configure result declares
 // and registers its new ingress sources at once (a package that restarts
-// configures again); configureInproc registers them after each apply too.
+// configures again); configurePackages registers them after each apply too.
 func (d *daemon) extensionConfigured(name string, res protocol.ConfigureResult) {
 	d.external.mu.Lock()
 	pkg := d.external.byName[name]
@@ -902,7 +892,7 @@ func (d *daemon) extensionConfigured(name string, res protocol.ConfigureResult) 
 		return
 	}
 	pkg.configured(res)
-	d.registerInprocSources(pkg, pkg.Sources())
+	d.registerSources(pkg, pkg.Sources())
 }
 
 func (d *daemon) lifetime() context.Context {
@@ -912,10 +902,10 @@ func (d *daemon) lifetime() context.Context {
 	return context.Background()
 }
 
-// configureExtensions configures every extension, first-party and
-// installed (config apply, tunnel URL change).
+// configureExtensions configures every package, bundled and installed
+// (config apply, tunnel URL change).
 func (d *daemon) configureExtensions(ctx context.Context) {
-	d.configureInproc(ctx)
+	d.configurePackages(ctx)
 	d.hooks.mu.Lock()
 	d.external.mu.Lock()
 	d.external.public = d.hooks.public
@@ -971,8 +961,7 @@ func (d *daemon) runTask(ctx context.Context, key string, pace time.Duration, ru
 
 // extensionCheck reports each installed package's own health for doctor:
 // refused or failed packages, process state, version and restarts. Its
-// declared checks are listed beside the first-party extensions' under their
-// own names (inprocChecks).
+// declared checks are listed under their own names (packageChecks).
 func (d *daemon) extensionCheck(context.Context) runtime.Check {
 	check := runtime.Check{Name: "extensions", Status: runtime.CheckOK, Code: "ok"}
 	raise := func(status, code string) {
