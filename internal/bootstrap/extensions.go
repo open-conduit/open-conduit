@@ -547,7 +547,13 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		Artifacts: d.artifacts,
 		Timers:    currentTimers{d},
 		CancelWork: func(ctx context.Context, work domain.ID, expected domain.Revision, reason, key string) (domain.ID, error) {
-			return d.current.Load().control.CancelWork(ctx, work, expected, reason, key)
+			// A package's first configure comes at its handshake, before a
+			// generation is active (currentTimers).
+			c := d.current.Load()
+			if c == nil {
+				return "", errNoGeneration
+			}
+			return c.control.CancelWork(ctx, work, expected, reason, key)
 		},
 		WaitProgress: func(ctx context.Context, owner string, work domain.ID, progress string) error {
 			return d.waitProgress(owner)(ctx, work, progress)
@@ -563,7 +569,11 @@ func (d *daemon) extensionDeps(m protocol.Manifest) extproc.Deps {
 		Probes: d.setupProbes,
 		Config: d.configHost(),
 		SettleHold: func(ctx context.Context, owner string, work domain.ID, admit bool, reason, key string) (domain.ID, error) {
-			return d.current.Load().control.SettleGateHold(ctx, owner, work, admit, reason, key)
+			c := d.current.Load()
+			if c == nil {
+				return "", errNoGeneration
+			}
+			return c.control.SettleGateHold(ctx, owner, work, admit, reason, key)
 		},
 		Render: func(ctx context.Context, e domain.Event) (string, bool) { return d.inprocRender(e) },
 		WaitTarget: func(ctx context.Context, scope domain.ID, kind, name string) (domain.CorrelationKey, []string, bool) {

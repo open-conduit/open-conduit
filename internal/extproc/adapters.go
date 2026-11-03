@@ -231,7 +231,7 @@ func (r *Remote) WorkKind(kind string) (runtime.WorkKindPolicy, bool) {
 		if k.Kind != kind {
 			continue
 		}
-		policy := runtime.WorkKindPolicy{Standing: k.Standing}
+		policy := runtime.WorkKindPolicy{Standing: k.Standing, RunOnce: k.RunOnce}
 		if k.Trigger {
 			policy.Trigger = func(inputs []domain.Event) int {
 				var out protocol.WorkKindTriggerResult

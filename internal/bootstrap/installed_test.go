@@ -44,3 +44,16 @@ func TestInstalledEntrySettingsAndDescribe(t *testing.T) {
 		t.Fatal("a type that declares nothing shows fields by name alone")
 	}
 }
+
+// A package's run-once Work kind keeps RunOnce in the host's policy.
+func TestInstalledRunOnceWorkKind(t *testing.T) {
+	m := protocol.Manifest{Protocol: []int{protocol.Version}, Name: "acme", Version: "1", Command: []string{"./acme"}, Provides: protocol.Provides{
+		Routes: []protocol.RouteDecl{{Handler: "acme"}}, WorkKinds: []protocol.WorkKindDecl{{Kind: "acme.fix", RunOnce: true}, {Kind: "acme.job", Standing: true}}}}
+	kinds := map[string]inproc.WorkKind{}
+	for _, k := range (&installed{m: m}).WorkKinds() {
+		kinds[k.Kind] = k
+	}
+	if !kinds["acme.fix"].RunOnce || kinds["acme.job"].RunOnce || !kinds["acme.job"].Standing {
+		t.Fatalf("work kinds %+v", kinds)
+	}
+}

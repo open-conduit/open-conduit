@@ -424,6 +424,10 @@ type WorkKindDecl struct {
 	// Timed marks Work that runs on a clock (inproc.WorkKind.Timed): a dry
 	// run starts none of it.
 	Timed bool `json:"timed,omitempty"`
+	// RunOnce marks Work that does all its work in one attempt
+	// (inproc.WorkKind.RunOnce): a handoff completes it rather than
+	// leaving it waiting for input.
+	RunOnce bool `json:"run_once,omitempty"`
 }
 
 // Operation kinds mirror extension.Operation's three mutually exclusive

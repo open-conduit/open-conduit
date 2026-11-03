@@ -179,6 +179,18 @@ func (s *Service) allowedScopes() map[domain.ID]bool {
 	return out
 }
 
+// ownKind says whether a Work kind is one the extension declares. Its own
+// Work is readable and cancellable in any scope, so it can retire Work
+// left in a scope that no longer uses it (introspection's removal policy).
+func (s *Service) ownKind(kind string) bool {
+	for _, k := range s.manifest.Provides.WorkKinds {
+		if k.Kind == kind {
+			return true
+		}
+	}
+	return false
+}
+
 func unauthorized(msg string) error { return protocol.Errorf(protocol.CodeUnauthorized, msg) }
 func invalid(msg string) error      { return protocol.Errorf(protocol.CodeInvalid, msg) }
 
@@ -599,8 +611,9 @@ func (s *Service) kvCommit(ctx context.Context, p protocol.KVCommitParams) (prot
 	return out, nil
 }
 
-// State reads, limited to configured scopes. A record outside them is
-// not_found, so a read is never an existence oracle for other scopes.
+// State reads, limited to configured scopes, and Work of the extension's
+// own kinds wherever it is. A record outside them is not_found, so a read
+// is never an existence oracle for other scopes.
 
 func (s *Service) state(ctx context.Context, method string, p protocol.StateParams) (any, error) {
 	allowed := s.allowedScopes()
@@ -613,7 +626,7 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			if err != nil {
 				return err
 			}
-			if !allowed[w.ScopeID] {
+			if !allowed[w.ScopeID] && !s.ownKind(w.Kind) {
 				return notFound
 			}
 			out = protocol.FromWork(w)
@@ -627,7 +640,7 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			}
 			list := []protocol.Work{}
 			for _, w := range works {
-				if allowed[w.ScopeID] && (p.ScopeID == "" || w.ScopeID == domain.ID(p.ScopeID)) {
+				if (allowed[w.ScopeID] || s.ownKind(w.Kind)) && (p.ScopeID == "" || w.ScopeID == domain.ID(p.ScopeID)) {
 					list = append(list, protocol.FromWork(w))
 				}
 			}
@@ -637,7 +650,7 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			if err != nil {
 				return err
 			}
-			if !allowed[w.ScopeID] {
+			if !allowed[w.ScopeID] && !s.ownKind(w.Kind) {
 				return notFound
 			}
 			xs, err := tx.ListExecutions(w.ID)
@@ -924,7 +937,6 @@ func (s *Service) cancelWork(ctx context.Context, p protocol.WorkCancelParams) (
 	if s.deps.CancelWork == nil {
 		return protocol.WorkCancelResult{}, protocol.Errorf(protocol.CodeUnsupported, "work.cancel")
 	}
-	allowed := s.allowedScopes()
 	var w domain.Work
 	err := s.deps.Store.Transact(ctx, storage.Guard{Now: s.deps.Now()}, func(tx storage.Tx) error {
 		var err error
@@ -934,12 +946,8 @@ func (s *Service) cancelWork(ctx context.Context, p protocol.WorkCancelParams) (
 	if err != nil {
 		return protocol.WorkCancelResult{}, err
 	}
-	own := false
-	for _, k := range s.manifest.Provides.WorkKinds {
-		own = own || k.Kind == w.Kind
-	}
-	if !allowed[w.ScopeID] || !own {
-		return protocol.WorkCancelResult{}, unauthorized("work is not of the extension's kinds in its scopes")
+	if !s.ownKind(w.Kind) {
+		return protocol.WorkCancelResult{}, unauthorized("work is not of the extension's kinds")
 	}
 	id, err := s.deps.CancelWork(ctx, w.ID, domain.Revision(p.Expected), p.Reason, s.name+"/"+p.Key)
 	return protocol.WorkCancelResult{EventID: string(id)}, err

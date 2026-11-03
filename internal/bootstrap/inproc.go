@@ -11,6 +11,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -18,7 +19,6 @@ import (
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/extensions/claudecode"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
-	"github.com/open-conduit/open-conduit/extensions/introspection"
 	"github.com/open-conduit/open-conduit/extensions/shell"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/internal/config"
@@ -39,7 +39,7 @@ import (
 // firstParty is the list of first-party in-process extensions. Adding one
 // touches its own package and this list.
 func firstParty() []inproc.Extension {
-	return []inproc.Extension{shell.NewExtension(), claudecode.NewExtension(), gh.New(), introspection.New(), sl.New()}
+	return []inproc.Extension{shell.NewExtension(), claudecode.NewExtension(), gh.New(), sl.New()}
 }
 
 // typeSets are an extension's own entry and connection types: what its
@@ -395,12 +395,22 @@ func recurrences(xs []inproc.Extension) map[string]runtime.RecurrenceFunc {
 	return r
 }
 
+// stopInproc stops every extension at once and waits for the slowest, as
+// startup launches the packages at once: each package's process is told to
+// go and given time to exit, so stopping them in turn would add those
+// times together.
 func (d *daemon) stopInproc() {
+	var wg sync.WaitGroup
 	for _, x := range d.inproc {
 		if s, ok := x.(inproc.Stopper); ok {
-			s.Stop()
+			wg.Add(1)
+			go func() {
+				defer wg.Done()
+				s.Stop()
+			}()
 		}
 	}
+	wg.Wait()
 }
 
 // configureInproc hands each extension the current generation's entries of

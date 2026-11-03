@@ -2,7 +2,7 @@
 title: "Introspection: reporting, sweep, triage and fixes"
 ---
 
-Introspection is the first-party extension [`extensions/introspection`](https://github.com/open-conduit/open-conduit/tree/main/extensions/introspection), which the daemon composes through the [in-process extension contract](../extensions/#subprocess-extensions) like any other first-party extension. It lets agents report what breaks in daily use and turns those reports, and the corrections and problems agents note, into improvements:
+Introspection is the first-party extension [`extensions/introspection`](https://github.com/open-conduit/open-conduit/tree/main/extensions/introspection), written against the [in-process extension contract](../extensions/#subprocess-extensions) and run as a package bundled with the release (`open-conduit extension-run introspection`), like the other first-party extensions. It lets agents report what breaks in daily use and turns those reports, and the corrections and problems agents note, into improvements:
 
 - `report-issue`, with report processing and triage;
 - the agents' notes: the corrections they are given and the problems they work around;
@@ -165,12 +165,12 @@ Removing the `introspection` entry, or one of its schedules, takes effect on the
 - **Operations and routes.** The operations are undeclared, the route matches nothing (even for Events in flight), and bindings that still list the operations keep running, because the extension is entry-gated (`inproc.EntryGated`: its registration joins only a generation with an entry) and the host narrows grants to registered operations.
 - **Timers.** `Ensure` cancels the schedule's timers. A run already going carries on.
 - **Existing Work.** Work of the extension's kinds is **retired** once idle. The rules are in `is.Retired`:
-  - every non-terminal, not-running Work of the extension's kinds in a configured scope that has no entry is retired;
+  - every non-terminal, not-running Work of the extension's kinds in a scope that has no entry, enabled or disabled, is retired (a package reads and cancels Work of its own kinds in any scope);
   - standing sweep or triage Work whose run key is no longer a live timer's is retired (its schedule was removed or replaced);
   - the extension cancels retired Work through the host's `CancelWork`, the ordinary operator cancellation, and the reason `introspection removed from configuration`;
   - a running attempt finishes first, and its calls to the operations are undeclared. Standing Work that is idle afterwards is cancelled by the next pass.
 - **Records.** Reports, fixes, handled notes, Events and run history stay readable. Retiring cancels Work and never deletes records.
-- **Disabled scopes.** Disabling a scope is not removal. Its timers and Work wait for re-enable (B05), as scheduled jobs do. Configure carries only enabled scopes' entries, so the extension reads a disabled scope's entry from its stored configuration.
+- **Disabled scopes.** Disabling a scope is not removal. Its timers and Work wait for re-enable (B05), as scheduled jobs do. Configure carries disabled scopes' entries (`disabled`) beside the enabled ones, and the extension keeps both.
 
 No core code changes. `scripts/check-boundaries` keeps core packages from importing the extension. Its `TestNoPrivilegedReportingPath` finds no introspection, reporting, triage, sweep-slot, fix-request or host-watch vocabulary in core, contract or operator packages.
 
@@ -240,3 +240,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - At 05-03, telemetry went only to the JSON-lines log; a PostHog sink was left to 06-01, which added it ([installed integrations](../installed-integrations/#posthog)).
 - Real use (real reports, a real triage and a real fix) was left to the deferred 03-09.
 - Issue #70 moved the extension onto the in-process contract (bootstrap's `introspection.go` went away) and, per #67's plan, replaced the GitHub tools' `github.correction`/`github.problem` and their `github.notes` namespace with `introspection.correction`/`introspection.problem`.
+- Issue #428 moved it out of process. It takes disabled scopes' entries from configure rather than reading stored scopes, which a package can't, and a package may read and cancel Work of its own kinds in any scope, so the removal policy still reaches Work left where the entry was removed. A host-watch report, a returned emission with no sequence until commit, keys its record after the log's latest sequence. Run-once Work kinds (`work_kinds[].run_once`) now cross the wire.

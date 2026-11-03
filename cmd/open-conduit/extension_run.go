@@ -13,6 +13,7 @@ import (
 	codexext "github.com/open-conduit/open-conduit/extensions/codex/pkg"
 	githubext "github.com/open-conduit/open-conduit/extensions/github/pkg"
 	humanext "github.com/open-conduit/open-conduit/extensions/human/pkg"
+	introspectionext "github.com/open-conduit/open-conduit/extensions/introspection/pkg"
 	jiraext "github.com/open-conduit/open-conduit/extensions/jira/pkg"
 	linearext "github.com/open-conduit/open-conduit/extensions/linear/pkg"
 	observeext "github.com/open-conduit/open-conduit/extensions/observe/pkg"
@@ -40,19 +41,20 @@ var runnable = map[string]struct {
 	Manifest  func() protocol.Manifest
 	Playbooks func() map[string]string
 }{
-	"bitbucket": {bitbucketext.Main, bitbucketext.Manifest, nil},
-	"codex":     {codexext.Main, codexext.Manifest, nil},
-	"github":    {githubext.Main, githubext.Manifest, nil},
-	"human":     {humanext.Main, humanext.Manifest, nil},
-	"jira":      {jiraext.Main, jiraext.Manifest, jiraext.Playbooks},
-	"linear":    {linearext.Main, linearext.Manifest, linearext.Playbooks},
-	"observe":   {observeext.Main, observeext.Manifest, nil},
-	"pagerduty": {pagerduty.Main, pagerduty.Manifest, nil},
-	"posthog":   {posthogext.Main, posthogext.Manifest, nil},
-	"schedule":  {scheduleext.Main, scheduleext.Manifest, nil},
-	"sentry":    {sentry.Main, sentry.Manifest, nil},
-	"shell":     {shellext.Main, shellext.Manifest, nil},
-	"slack":     {slackext.Main, slackext.Manifest, nil},
+	"bitbucket":     {bitbucketext.Main, bitbucketext.Manifest, nil},
+	"codex":         {codexext.Main, codexext.Manifest, nil},
+	"github":        {githubext.Main, githubext.Manifest, nil},
+	"human":         {humanext.Main, humanext.Manifest, nil},
+	"introspection": {introspectionext.Main, introspectionext.Manifest, introspectionext.Playbooks},
+	"jira":          {jiraext.Main, jiraext.Manifest, jiraext.Playbooks},
+	"linear":        {linearext.Main, linearext.Manifest, linearext.Playbooks},
+	"observe":       {observeext.Main, observeext.Manifest, nil},
+	"pagerduty":     {pagerduty.Main, pagerduty.Manifest, nil},
+	"posthog":       {posthogext.Main, posthogext.Manifest, nil},
+	"schedule":      {scheduleext.Main, scheduleext.Manifest, nil},
+	"sentry":        {sentry.Main, sentry.Manifest, nil},
+	"shell":         {shellext.Main, shellext.Manifest, nil},
+	"slack":         {slackext.Main, slackext.Manifest, nil},
 }
 
 // hostManifest is extproc.HostManifest for this binary: discovery asks the
