@@ -203,6 +203,14 @@ func newDrill(t *testing.T) *drill {
 		}
 		if t.Failed() {
 			t.Logf("daemon log:\n%s", out)
+			// Each package logs to its own file; a refused configure or a
+			// failed launch is explained there, not in the daemon log.
+			logs, _ := filepath.Glob(filepath.Join(d.state, "logs", "extensions", "*.log"))
+			for _, l := range logs {
+				if b, _ := os.ReadFile(l); len(bytes.TrimSpace(b)) > 0 {
+					t.Logf("%s:\n%s", filepath.Base(l), b)
+				}
+			}
 		}
 	})
 	return d
