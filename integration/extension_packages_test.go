@@ -771,7 +771,7 @@ func TestPermissionsOverProtocol(t *testing.T) {
 		if owner != notes.Name || work != "work/1" {
 			return nil, errors.New("wrong request")
 		}
-		return []extension.ActionOffer{{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve", Prompt: "choose", Choices: []string{"approve", "refuse"}}}}, nil
+		return []extension.ActionOffer{{Provider: "decisions", Action: extension.Action{ID: "answer", Label: "Approve", Prompt: "choose", Choices: []string{"approve", "refuse"}, Awaited: true}}}, nil
 	}
 	o := e.options(notes.Name)
 	r := e.load(e.install(notes.Manifest(notes.Options{Release: 2}), notesPath), deps, o)
@@ -826,7 +826,7 @@ func TestPermissionsOverProtocol(t *testing.T) {
 		mu.Lock()
 		defer mu.Unlock()
 		offers, err := host.Actions(ctx, extensionScope, "work/1")
-		if err != nil || len(offers) != 1 || offers[0].Provider != "decisions" || offers[0].ID != "answer" || len(offers[0].Choices) != 2 {
+		if err != nil || len(offers) != 1 || offers[0].Provider != "decisions" || offers[0].ID != "answer" || len(offers[0].Choices) != 2 || !offers[0].Awaited {
 			t.Fatalf("offers: %+v %v", offers, err)
 		}
 		if len(acts) != 1 || actors[0] != notes.Name || acts[0].Caller != "U1" || acts[0].Work != "work/1" || acts[0].Input != "approve" || acts[0].Key != "press/1" {

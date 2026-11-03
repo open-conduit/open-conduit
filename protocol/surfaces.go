@@ -556,6 +556,9 @@ type Action struct {
 	Prompt  string   `json:"prompt,omitempty"`
 	Choices []string `json:"choices,omitempty"`
 	Detail  string   `json:"detail,omitempty"`
+	// Awaited: the Work waits for a person to take this action
+	// (extension.Action.Awaited).
+	Awaited bool `json:"awaited,omitempty"`
 }
 type WorkActionsParams struct {
 	Target ActionTarget `json:"target"`

@@ -736,6 +736,9 @@ type Action struct {
 	Label    string   `json:"label"`
 	Prompt   string   `json:"prompt,omitempty"`
 	Choices  []string `json:"choices,omitempty"`
+	// Awaited: the Work waits for a person to take this action, rather
+	// than offering one they may take at any time.
+	Awaited bool `json:"awaited,omitempty"`
 }
 
 // ActionTarget names what actions apply to: a scope, or Work.

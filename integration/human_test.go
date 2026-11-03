@@ -229,7 +229,7 @@ func TestHumanAskAnsweredThroughTheAction(t *testing.T) {
 			}
 
 			acts, err := h.actions.Actions(ctx, h.target(t))
-			if err != nil || len(acts) != 1 || acts[0].ID != hu.ActionAnswer || acts[0].Prompt == "" || strings.Join(acts[0].Choices, ",") != "yes,no" {
+			if err != nil || len(acts) != 1 || acts[0].ID != hu.ActionAnswer || acts[0].Prompt == "" || strings.Join(acts[0].Choices, ",") != "yes,no" || !acts[0].Awaited {
 				t.Fatalf("answer not offered: %+v %v", acts, err)
 			}
 			if lines, ok := hu.Annotate(ctx, h.f.Store, h.actions.Entry, work, h.f.Clock.Now()); !ok || lines[0].Value != "Ship the migration tonight?" {
@@ -540,7 +540,7 @@ func TestHumanGateApprovesTheSameCallOnce(t *testing.T) {
 			}
 
 			acts, err := h.actions.Actions(ctx, h.target(t))
-			if err != nil || len(acts) != 1 || strings.Join(acts[0].Choices, ",") != "approve,refuse" || !strings.Contains(acts[0].Label, "fixture.deploy") {
+			if err != nil || len(acts) != 1 || strings.Join(acts[0].Choices, ",") != "approve,refuse" || !strings.Contains(acts[0].Label, "fixture.deploy") || !acts[0].Awaited {
 				t.Fatalf("approval not offered: %+v %v", acts, err)
 			}
 			// What a surface away from the panel shows: the call and its input.

@@ -67,7 +67,7 @@ func (s *Service) actionList(ctx context.Context, p protocol.ActionListParams) (
 	}
 	out := protocol.ActionListResult{Actions: []protocol.ActionOffer{}}
 	for _, o := range offers {
-		out.Actions = append(out.Actions, protocol.ActionOffer{Provider: o.Provider, ID: o.ID, Label: o.Label, Prompt: o.Prompt, Choices: o.Choices, Detail: o.Detail})
+		out.Actions = append(out.Actions, protocol.ActionOffer{Provider: o.Provider, ID: o.ID, Label: o.Label, Prompt: o.Prompt, Choices: o.Choices, Detail: o.Detail, Awaited: o.Awaited})
 	}
 	return out, nil
 }
