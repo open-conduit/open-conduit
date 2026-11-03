@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"sort"
 	"sync"
 	"time"
@@ -98,8 +99,28 @@ func (d *daemon) bindResources(ctx context.Context, state runtime.AttemptState) 
 		return nil, fmt.Errorf("%w: resource provider %s", extension.ErrUnsupported, desc.Provider)
 	}
 	owner := extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID}
-	broker := extension.BindResourcesEnv(p, owner, domain.Payload{Schema: ResourceConfigSchema, Data: append([]byte(nil), desc.Config...)}, state.HostEnv)
+	broker := extension.BindResourcesEnv(p, owner, domain.Payload{Schema: ResourceConfigSchema, Data: append([]byte(nil), desc.Config...)}, resourceEnv(desc.PassEnv, os.LookupEnv))
 	return phasedResources{broker, runtime.LaunchPhases(ctx)}, nil
+}
+
+// resourceEnv is the host's values of the variables a binding's resource
+// pass_env names, those it has set (extension.ResourceAcquisition.HostEnv).
+// It is the provider's own grant, apart from the binding's pass_env, which
+// reaches the run. Reserved names never pass, whatever the config says.
+func resourceEnv(names []string, lookup func(string) (string, bool)) map[string]string {
+	var out map[string]string
+	for _, name := range names {
+		if domain.ReservedEnv(name) {
+			continue
+		}
+		if value, ok := lookup(name); ok {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[name] = value
+		}
+	}
+	return out
 }
 
 // phasedResources records each acquisition of the attempt's resource (its

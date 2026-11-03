@@ -863,6 +863,50 @@ func TestBindingPassEnv(t *testing.T) {
 	}
 }
 
+// TestResourcePassEnv: a binding's resource has a pass_env of its own, the
+// provider's grant apart from the run's, which reaches the normalized
+// config and fails closed on the same names as the binding's.
+func TestResourcePassEnv(t *testing.T) {
+	m := generic(t, example(t, "git-scope"))
+	res, ok := entry(m, 0, "bindings", 0)["resource"].(map[string]any)
+	if !ok {
+		t.Fatal("the git-scope example's first binding has no resource")
+	}
+	res["pass_env"] = []any{"SSH_AUTH_SOCK"}
+	snap, err := Validate(encode(t, m), registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := snap.DomainScopes()[0].Bindings[0]; len(b.PassEnv) != 0 {
+		t.Fatalf("the resource's pass_env reached the run's: %+v", b.PassEnv)
+	}
+	if !strings.Contains(string(snap.Redacted()), `"pass_env":["SSH_AUTH_SOCK"]`) {
+		t.Fatal("normalized config dropped the resource's pass_env")
+	}
+	for name, tc := range map[string]struct {
+		pass []any
+		refs map[string]any
+		code string
+	}{
+		"toolbelt": {[]any{"OS_TOKEN"}, nil, "pass_env_reserved"},
+		"secret":   {[]any{"OC_TEST_GH_TOKEN"}, map[string]any{"token": "env:OC_TEST_GH_TOKEN"}, "pass_env_secret"},
+	} {
+		m := generic(t, example(t, "git-scope"))
+		entry(m, 0, "bindings", 0)["resource"].(map[string]any)["pass_env"] = tc.pass
+		if tc.refs != nil {
+			m["scopes"].([]any)[0].(map[string]any)["secret_refs"] = tc.refs
+		}
+		_, err := Validate(encode(t, m), registry())
+		found := false
+		for _, d := range diagnostics(t, err) {
+			found = found || d.Code == tc.code && strings.HasPrefix(d.Path, "scopes/0/bindings/0/resource/pass_env/")
+		}
+		if !found {
+			t.Errorf("%s: diagnostics %+v, want %s", name, diagnostics(t, err), tc.code)
+		}
+	}
+}
+
 // sandboxCheckingExecutor refuses, in a sandbox, a binding config that sets
 // "shared".
 type sandboxCheckingExecutor struct{ interruptExecutor }

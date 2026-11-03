@@ -92,9 +92,24 @@ func (p *Provider) git(ctx context.Context, dir string, args ...string) (string,
 		if msg == "" {
 			msg = err.Error()
 		}
-		return "", fmt.Errorf("git %s: %s", args[0], msg)
+		return "", fmt.Errorf("git %s: %s%s", args[0], msg, authHint(msg, env))
 	}
 	return strings.TrimSpace(string(out)), nil
+}
+
+// authHint says how to fix a remote git couldn't authenticate to when the
+// provider's environment has no ssh agent: out of process, git sees only the
+// daemon variables the binding's resource names in its pass_env.
+func authHint(msg string, env []string) string {
+	if !strings.Contains(msg, "Permission denied (publickey") && !strings.Contains(msg, "Could not read from remote repository") {
+		return ""
+	}
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "SSH_AUTH_SOCK=") {
+			return ""
+		}
+	}
+	return " (the workspace provider has no ssh agent: name SSH_AUTH_SOCK, or what else git needs, in the binding's resource pass_env)"
 }
 
 // distrusted pins off the config that makes the provider's own git commands

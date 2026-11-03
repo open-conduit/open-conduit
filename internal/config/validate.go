@@ -555,15 +555,22 @@ func (v *validator) registration(p string, b Binding) {
 // passEnv fails closed on a pass_env name the host must never pass: a
 // reserved one (domain.ReservedEnv), or one an env: secret reference in the
 // document names, which only a binding's selected secrets may carry.
+// The binding's resource's own pass_env follows the same rules.
 func (v *validator) passEnv(p string, b Binding) {
 	refs := envSecretNames(v.doc)
-	for i, name := range b.PassEnv {
-		switch {
-		case domain.ReservedEnv(name):
-			v.fail(ptr(p+"/pass_env", i), "pass_env_reserved", "OS_* and OPEN_CONDUIT_* variables are Open Conduit's own; remove it")
-		case refs[name]:
-			v.fail(ptr(p+"/pass_env", i), "pass_env_secret", "an env: secret reference names this variable; select the secret with secret_names instead")
+	check := func(path string, names []string) {
+		for i, name := range names {
+			switch {
+			case domain.ReservedEnv(name):
+				v.fail(ptr(path, i), "pass_env_reserved", "OS_* and OPEN_CONDUIT_* variables are Open Conduit's own; remove it")
+			case refs[name]:
+				v.fail(ptr(path, i), "pass_env_secret", "an env: secret reference names this variable; select the secret with secret_names instead")
+			}
 		}
+	}
+	check(p+"/pass_env", b.PassEnv)
+	if b.Resource != nil {
+		check(p+"/resource/pass_env", b.Resource.PassEnv)
 	}
 }
 

@@ -133,6 +133,11 @@ type Authorization struct {
 type Resource struct {
 	Provider string          `json:"provider"`
 	Config   json.RawMessage `json:"config"`
+	// PassEnv names daemon variables the provider's own commands and setup
+	// see for the binding's acquisitions (extension.ResourceAcquisition.
+	// HostEnv), apart from the binding's pass_env, which reaches the run:
+	// an ssh agent git fetches with need not reach the agent.
+	PassEnv []string `json:"pass_env,omitempty"`
 }
 
 // Sandbox is a binding's process sandbox (B09): the provider and its
@@ -628,10 +633,19 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 	if pe := n.field("pass_env"); pe != nil {
 		b.PassEnv = c.list(pe, path+"/pass_env", envPattern)
 	}
-	if r := n.field("resource"); r != nil && c.object(r, path+"/resource", []string{"provider", "config"}) {
+	var resourceOptional []string
+	if !c.fragment {
+		// As for the binding's own pass_env, a folder's resource passes
+		// no daemon variables.
+		resourceOptional = append(resourceOptional, "pass_env")
+	}
+	if r := n.field("resource"); r != nil && c.object(r, path+"/resource", []string{"provider", "config"}, resourceOptional...) {
 		b.Resource = &Resource{}
 		b.Resource.Provider, _ = c.str(r.field("provider"), path+"/resource/provider", idPattern)
 		b.Resource.Config = c.opaque(r.field("config"), path+"/resource/config")
+		if pe := r.field("pass_env"); pe != nil {
+			b.Resource.PassEnv = c.list(pe, path+"/resource/pass_env", envPattern)
+		}
 	}
 	if r := n.field("sandbox"); r != nil && c.object(r, path+"/sandbox", []string{"provider", "config"}) {
 		b.Sandbox = &Sandbox{}

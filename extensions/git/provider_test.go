@@ -870,3 +870,18 @@ func TestHostEnvReachesSetup(t *testing.T) {
 		t.Fatalf("setup environment: %q", got)
 	}
 }
+
+// TestAuthHint: a remote git can't authenticate to, with no ssh agent in the
+// provider's environment, names the resource's pass_env as the fix.
+func TestAuthHint(t *testing.T) {
+	denied := "git@github.com: Permission denied (publickey)."
+	if h := authHint(denied, []string{"PATH=/bin"}); !strings.Contains(h, "resource pass_env") {
+		t.Fatalf("no agent: %q", h)
+	}
+	if h := authHint(denied, []string{"SSH_AUTH_SOCK=/tmp/a"}); h != "" {
+		t.Fatalf("with an agent: %q", h)
+	}
+	if h := authHint("fatal: not a git repository", nil); h != "" {
+		t.Fatalf("another failure: %q", h)
+	}
+}

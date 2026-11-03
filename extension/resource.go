@@ -91,10 +91,13 @@ type ResourceAcquisition struct {
 	Config  domain.Payload
 	Request ResourceRequest
 	// HostEnv are the host's values of the variables the binding's
-	// pass_env names (ExecutionContext.HostEnv), the only variables of the
-	// host's environment a provider adds to its own sanitized one for the
-	// acquisition (its commands and setup). The operator names them and the
-	// host resolves them; a provider never chooses them.
+	// resource names in its own pass_env: the only variables of the host's
+	// environment a provider adds to its own sanitized one for the
+	// acquisition (its commands and setup). It is the provider's grant,
+	// apart from the binding's pass_env (ExecutionContext.HostEnv), which
+	// reaches the run, so an ssh agent the provider fetches with need not
+	// reach the agent. The operator names them and the host resolves them;
+	// a provider never chooses them.
 	HostEnv map[string]string
 }
 
@@ -216,8 +219,8 @@ func BindResources(p ResourceProvider, owner ResourceOwner, config domain.Payloa
 	return boundResources{p: p, owner: owner, config: config}
 }
 
-// BindResourcesEnv is BindResources for an attempt with the host's values of
-// its binding's pass_env (ResourceAcquisition.HostEnv).
+// BindResourcesEnv is BindResources with the host's values of the
+// binding's resource pass_env (ResourceAcquisition.HostEnv).
 func BindResourcesEnv(p ResourceProvider, owner ResourceOwner, config domain.Payload, hostEnv map[string]string) ResourceBroker {
 	return boundResources{p: p, owner: owner, config: config, hostEnv: hostEnv}
 }
