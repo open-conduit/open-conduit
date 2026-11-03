@@ -721,10 +721,10 @@ func runtimeCheck(r inproc.CheckResult) runtime.Check {
 
 // checkConfig is an extension's read-only view of a configuration for its
 // checks (protocol.CheckConfig): each enabled scope that uses it (an entry,
-// a route, a binding of its executor, resource or sandbox, or one granted
-// its operations), with the scope's routes and bindings, its own entries,
-// the sandboxes of its own providers, and the connections of its own types
-// they name. Secret reference text never enters it.
+// a route, a binding of its executor, resource, sandbox or container, or
+// one granted its operations), with the scope's routes and bindings, its
+// own entries, the sandboxes and containers of its own providers, and the
+// connections of its own types they name. Secret reference text never enters it.
 func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]extension.Executor, dir string) protocol.CheckConfig {
 	cfg := protocol.CheckConfig{Dir: dir}
 	if s == nil {
@@ -743,10 +743,13 @@ func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]ex
 		}
 	}
 	own := ownExecutors(x)
-	ownSandboxes := map[string]bool{}
+	ownSandboxes, ownContainers := map[string]bool{}, map[string]bool{}
 	if pkg, ok := x.(*installed); ok {
 		for _, s := range pkg.m.Provides.Sandboxes {
 			ownSandboxes[s.Type] = true
+		}
+		for _, c := range pkg.m.Provides.Containers {
+			ownContainers[c.Type] = true
 		}
 	}
 	uses := func(scope *config.EffectiveScope) bool {
@@ -810,6 +813,9 @@ func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]ex
 			}
 			if b.Sandbox != nil && ownSandboxes[b.Sandbox.Provider] {
 				cb.Sandbox = &protocol.CheckSandbox{Provider: b.Sandbox.Provider, Config: b.Sandbox.Config}
+			}
+			if b.Container != nil && ownContainers[b.Container.Provider] {
+				cb.Container = &protocol.CheckContainer{Provider: b.Container.Provider, Config: b.Container.Config}
 			}
 			switch {
 			case b.Sandbox != nil:

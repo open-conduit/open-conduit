@@ -286,8 +286,7 @@ var wiringFiles = map[string]bool{"inproc.go": true, "adapters.go": true}
 // and an entry nothing needs any more fails the check, so remove it with
 // the import.
 var compositionExceptions = map[string][]string{
-	"container.go": {"extensions/docker", "extensions/ssh"},
-	"webhooks.go":  {"extensions/tunnel"},
+	"webhooks.go": {"extensions/tunnel"},
 }
 
 // compositionViolations checks internal/bootstrap's production files import

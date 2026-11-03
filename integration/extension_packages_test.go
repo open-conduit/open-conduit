@@ -444,6 +444,54 @@ func TestExternalSurfacesRoundTrip(t *testing.T) {
 			t.Fatalf("bound plan: %+v %v (pinned %q)", got, err, pinned.Digest)
 		}
 	})
+	t.Run("container", func(t *testing.T) {
+		p, ok := r.Container(notes.Pod)
+		if !ok {
+			t.Fatal("container provider not declared")
+		}
+		if _, ok := p.(extension.ContainerForwarder); ok {
+			t.Fatal("a provider not declared with forward is a forwarder")
+		}
+		owner := extension.ResourceOwner{ScopeID: extensionScope, WorkID: "work-1", ExecutionID: "exec-1"}
+		image := "notes@sha256:" + strings.Repeat("0", 64)
+		policy := extension.ContainerPolicy{Config: domain.Payload{Schema: extension.ContainerConfigSchema, Data: json.RawMessage(`{"image":"` + image + `"}`)}}
+		plan, err := p.Plan(ctx, owner, policy, extension.SandboxNeeds{}, extension.SandboxLaunch{Argv: []string{"true"}})
+		if err != nil || plan.Image != image || plan.Data.Schema == "" {
+			t.Fatalf("plan: %+v %v", plan, err)
+		}
+		// A policy the provider can't apply is unavailable, and crosses
+		// as itself.
+		bad := extension.ContainerPolicy{Config: domain.Payload{Schema: extension.ContainerConfigSchema, Data: json.RawMessage(`{"image":"notes:latest"}`)}}
+		if _, err := p.Plan(ctx, owner, bad, extension.SandboxNeeds{}, extension.SandboxLaunch{Argv: []string{"true"}}); !errors.Is(err, extension.ErrSandboxUnavailable) {
+			t.Fatalf("an unusable policy: %v", err)
+		}
+		labels := map[string]string{extension.ContainerLabelHost: "h", extension.ContainerLabelExecution: "exec-1"}
+		created, err := p.Create(ctx, plan, labels)
+		if err != nil || created.Ref.ID == "" || created.Ref.Labels[extension.ContainerLabelExecution] != "exec-1" || len(created.Argv) == 0 {
+			t.Fatalf("create: %+v %v", created, err)
+		}
+		if st, err := p.Inspect(ctx, created.Ref); err != nil || st.Gone || st.Image != image {
+			t.Fatalf("inspect: %+v %v", st, err)
+		}
+		if err := p.Signal(ctx, created.Ref, "TERM"); err != nil {
+			t.Fatal(err)
+		}
+		if err := p.Stop(ctx, created.Ref, 1500*time.Millisecond); err != nil {
+			t.Fatal(err)
+		}
+		if got, err := p.List(ctx, owner); err != nil || len(got) != 1 || got[0].Ref.ID != created.Ref.ID {
+			t.Fatalf("list: %+v %v", got, err)
+		}
+		if got, err := p.List(ctx, extension.ResourceOwner{ExecutionID: "exec-2"}); err != nil || len(got) != 0 {
+			t.Fatalf("another execution's list: %+v %v", got, err)
+		}
+		if err := p.Remove(ctx, created.Ref); err != nil {
+			t.Fatal(err)
+		}
+		if st, err := p.Inspect(ctx, created.Ref); err != nil || !st.Gone {
+			t.Fatalf("inspect after remove: %+v %v", st, err)
+		}
+	})
 	t.Run("telemetry", func(t *testing.T) {
 		x, ok := r.Exporter()
 		if !ok {

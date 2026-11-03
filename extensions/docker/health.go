@@ -55,7 +55,7 @@ func (p *Provider) Health(ctx context.Context, dctx, image, dir string, cached b
 func (p *Provider) check(ctx context.Context, dctx, image, dir string) Health {
 	out, err := p.docker(ctx, dctx, "info", "--format", "{{.ID}}|{{.ServerVersion}}|{{.OperatingSystem}}")
 	if err != nil {
-		return Health{Status: "fail", Code: "docker_unreachable", Detail: fmt.Sprintf("no Docker daemon on context %s: %v", dctx, err)}
+		return Health{Status: "fail", Code: "docker_unreachable", Detail: fmt.Sprintf("no Docker daemon on context %s: %v%s", dctx, err, p.envHint())}
 	}
 	parts := strings.SplitN(strings.TrimSpace(string(out)), "|", 3)
 	for len(parts) < 3 {

@@ -137,8 +137,10 @@ func Manifest(o Options) protocol.Manifest {
 			Webhooks:  true,
 			Resources: []protocol.ResourceDecl{{Type: Scratch, Modes: []string{extension.ResourceWork, extension.ResourceFresh}, ModeDefault: true, Sandbox: true}},
 			Sandboxes: []protocol.SandboxDecl{{Type: Jail}},
-			Exporters: true,
-			Annotate:  true,
+			// A container provider whose containers are records only.
+			Containers: []protocol.ContainerDecl{{Type: Pod}},
+			Exporters:  true,
+			Annotate:   true,
 			// A run of Work in a notes scope gets NOTES_WORK, the Work it runs,
 			// and NOTES_CONNECTION, the connection its binding names.
 			RunEnvironment: true,

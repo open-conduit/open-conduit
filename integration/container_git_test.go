@@ -314,7 +314,7 @@ func TestDockerGitCredential(t *testing.T) {
 			t.Fatal(err)
 		}
 		socket := strings.TrimPrefix(endpoint, "unix://")
-		if l.provider.Forward() == "tcp" {
+		if l.provider.ForwardMode() == "tcp" {
 			host, err := l.provider.ForwardListen(ctx, l.dctx)
 			if err == nil {
 				_, err = endpoints.ServeTCP(exec, host)

@@ -23,7 +23,8 @@ type HelperOptions struct {
 	SignalRetry, Interval time.Duration
 }
 
-// RunHelper is `open-conduit container run [--records <dir>] <ref>`: what
+// RunHelper is `open-conduit extension-run docker run [--records <dir>]
+// <ref>` (and the older `open-conduit container run`): what
 // an executor's wrapper runs to start a created container. It stays in the
 // wrapper's process group, so an Interrupt reaches it, and runs `docker
 // start -a -i` in a group of its own, so a signal to the group never reaches

@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -61,6 +62,10 @@ func NewFixture(dir string) (protocol.Fixture, error) {
 			{Type: Scratch, Config: json.RawMessage(`{"mode":"fresh"}`), ModeDefault: extension.ResourceFresh},
 			{Type: Scratch, Config: json.RawMessage(`{}`), Mode: extension.ResourceWork},
 			{Type: Scratch, Config: json.RawMessage(`{"cache":true}`), SandboxRefused: true},
+		},
+		Containers: []protocol.ContainerCase{
+			{Type: Pod, Config: json.RawMessage(`{"image":"notes@sha256:` + strings.Repeat("0", 64) + `"}`)},
+			{Type: Pod, Config: json.RawMessage(`{"image":"notes:latest"}`), Refused: true},
 		},
 		Sandboxes: []protocol.SandboxCase{
 			{Type: Jail, Config: json.RawMessage(`{"hosts":["example.com"]}`)},

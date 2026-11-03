@@ -100,6 +100,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Executors` | `executors` (`pool: "jobs"` for an executor whose runs count against `settings.job_concurrency`) | `executor.*` |
 | `Providers` | `resources` | `provider.*` |
 | `Sandboxes` | `sandboxes` | `sandbox_provider.*` |
+| `Containers` | `containers` (`forward` for an `extension.ContainerForwarder`) | `container_provider.*` |
 | `Tasks`, `Checks`, `CheckRuns` (a check that reads the configuration view or reports its own status, code and items) | `tasks`, `checks` | `task.run`, `check.run` |
 | `Exporter` | `exporters` | `telemetry.export` |
 | `Sink` | permission `telemetry.sink` | `telemetry.sink` |
@@ -459,6 +460,7 @@ Flags:
 | `executor.resource_mode` | executor with `resource_mode` | Each executor mode case's `validate executor_mode` answer is the expected mode, twice identically |
 | `resources.workspace` | resource type with `mode_default` or `sandbox` | Each resource case's `validate resource_mode` names the expected mode and `validate resource_sandbox` refuses exactly as expected, twice identically |
 | `sandboxes.policy` | sandbox provider type | Each sandbox case's `validate sandbox` refuses exactly as expected, twice identically, with an accepted and a refused case for every type; `sandbox_provider.adopt` of a plan the provider never made is refused |
+| `containers.policy` | container provider type | Each container case's `validate container` refuses exactly as expected, twice identically, with an accepted and a refused case for every type; `container_provider.inspect` never reports a container the provider never made as running, and `container_provider.list` for an execution it never saw lists nothing (negative control `list-any`) |
 | `surfaces.served` | checks or tasks | Every check answers; every task is served |
 
 A package is certified when every applicable criterion passes. A declared ingress type or executor, an executor declaring `resource_mode`, a resource type declaring `mode_default` or `sandbox`, or a sandbox type without its fixture cases fails. Missing route and operation cases are noted.
@@ -529,7 +531,7 @@ A report states:
 25. The SDK's final shape: `sdk.Extension` fields per surface, `sdk.Host`, `sdk.Store` (precondition-on-read optimistic commits; prefix ranges not protected) and `sdk.Artifacts`, plus `sdk.PackageCommand` for packaging. `sdk.New` and its registrations (`Operation` with typed `sdk.Handler`, `sdk.Wait` and `sdk.Emit`, `Route`, `WorkKind`, `Task`, `Check`, `IngressType` …) fill the same fields and derive the manifest from them; an operation's input struct gives its manifest `input` schema.
 26. `secret.resolve` takes a `connection` field and `configure` entries carry `name` and `connection`, so a package reaches its connections' secrets without bootstrap glue (B05 scoping kept).
 27. Packages start before the configuration opens. A package that fails to start leaves its types unregistered, so a config using them fails validation and the daemon refuses to start with the diagnostic.
-28. Certification criteria version 4 (above; version 2 added the Work display limits to `routes.decisions`, version 3 `executor.resource_mode` and `resources.workspace`, version 4 `sandboxes.policy`), run against the package's own fixture by `open-conduit extension certify`. The fixture format lives in `protocol`. A declared ingress type or executor requires a fixture case.
+28. Certification criteria version 5 (above; version 2 added the Work display limits to `routes.decisions`, version 3 `executor.resource_mode` and `resources.workspace`, version 4 `sandboxes.policy`, version 5 `containers.policy`), run against the package's own fixture by `open-conduit extension certify`. The fixture format lives in `protocol`. A declared ingress type or executor requires a fixture case.
 29. `receive_time_varies` relaxes only `received_at` equality for packages that stamp reconcile observations with their own clock.
 30. The certification runner is production code in the `open-conduit` binary, so composition may depend on the public `conformance` checks (never `conformance/reference`); the boundary rule says so.
 31. The Slack package requires source namespaces `slack` or `slack/…` (the subprocess namespacing rule), which the in-process extension does not.

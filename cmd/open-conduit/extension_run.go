@@ -13,6 +13,7 @@ import (
 	bitbucketext "github.com/open-conduit/open-conduit/extensions/bitbucket/pkg"
 	claudecodeext "github.com/open-conduit/open-conduit/extensions/claudecode/pkg"
 	codexext "github.com/open-conduit/open-conduit/extensions/codex/pkg"
+	dockerext "github.com/open-conduit/open-conduit/extensions/docker/pkg"
 	gitext "github.com/open-conduit/open-conduit/extensions/git/pkg"
 	githubext "github.com/open-conduit/open-conduit/extensions/github/pkg"
 	humanext "github.com/open-conduit/open-conduit/extensions/human/pkg"
@@ -27,6 +28,7 @@ import (
 	shellext "github.com/open-conduit/open-conduit/extensions/shell/pkg"
 	slackext "github.com/open-conduit/open-conduit/extensions/slack/pkg"
 	srtext "github.com/open-conduit/open-conduit/extensions/srt/pkg"
+	sshext "github.com/open-conduit/open-conduit/extensions/ssh/pkg"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/sdk"
@@ -51,6 +53,7 @@ var runnable = map[string]struct {
 	"bitbucket":     {bitbucketext.Main, bitbucketext.Manifest, nil, true},
 	"claude-code":   {claudecodeext.Main, claudecodeext.Manifest, nil, true},
 	"codex":         {codexext.Main, codexext.Manifest, nil, true},
+	"docker":        {dockerext.Main, dockerext.Manifest, nil, true},
 	"git":           {gitext.Main, gitext.Manifest, nil, true},
 	"github":        {githubext.Main, githubext.Manifest, githubext.Playbooks, true},
 	"human":         {humanext.Main, humanext.Manifest, nil, true},
@@ -65,6 +68,7 @@ var runnable = map[string]struct {
 	"shell":         {shellext.Main, shellext.Manifest, nil, true},
 	"slack":         {slackext.Main, slackext.Manifest, slackext.Playbooks, true},
 	"srt":           {srtext.Main, srtext.Manifest, nil, true},
+	"ssh":           {sshext.Main, sshext.Manifest, nil, true},
 }
 
 // hostManifest is extproc.HostManifest for this binary: discovery asks the

@@ -12,7 +12,9 @@ import (
 	"path/filepath"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -553,4 +555,84 @@ func (jail) Adopt(_ context.Context, plan extension.SandboxPlan, _, _ int) error
 	}
 	_, err := parseJail(plan.Data.Data)
 	return err
+}
+
+// Pod is the example container provider type: its containers are records
+// in memory that never run anything, enough to show the contract's shape.
+const Pod = "notes-pod"
+
+const podPlanSchema = "notes.pod.plan.v1"
+
+// pod is the example container provider.
+type pod struct {
+	mu   sync.Mutex
+	next int
+	made map[string]extension.ContainerState
+}
+
+func newPod() *pod { return &pod{made: map[string]extension.ContainerState{}} }
+
+// Plan pins the binding's image and records the paths it would mount.
+func (*pod) Plan(_ context.Context, _ extension.ResourceOwner, policy extension.ContainerPolicy, _ extension.SandboxNeeds, l extension.SandboxLaunch) (extension.ContainerPlan, error) {
+	c, err := extension.ParseContainerConfig(policy.Config.Data)
+	if err != nil {
+		return extension.ContainerPlan{}, fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
+	}
+	data, _ := json.Marshal(map[string]any{"argv": l.Argv, "write": c.Write})
+	return extension.ContainerPlan{Image: c.Image, Summary: "notes pod", Data: domain.Payload{Schema: podPlanSchema, Data: data}}, nil
+}
+
+// Create records a container, not started.
+func (p *pod) Create(_ context.Context, plan extension.ContainerPlan, labels map[string]string) (extension.ContainerCreated, error) {
+	if plan.Data.Schema != podPlanSchema {
+		return extension.ContainerCreated{}, fmt.Errorf("%w: not a notes-pod plan", extension.ErrSandboxUnavailable)
+	}
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	p.next++
+	ref := extension.ContainerRef{ID: "pod-" + strconv.Itoa(p.next), Labels: labels}
+	p.made[ref.ID] = extension.ContainerState{Ref: ref, Daemon: "notes", Image: plan.Image}
+	return extension.ContainerCreated{Ref: ref, Daemon: "notes", Argv: []string{"/usr/bin/true"}}, nil
+}
+
+func (*pod) Signal(context.Context, extension.ContainerRef, string) error { return nil }
+
+func (p *pod) Stop(_ context.Context, ref extension.ContainerRef, _ time.Duration) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if st, ok := p.made[ref.ID]; ok {
+		st.Running = false
+		p.made[ref.ID] = st
+	}
+	return nil
+}
+
+// Inspect reports a container it never made as gone.
+func (p *pod) Inspect(_ context.Context, ref extension.ContainerRef) (extension.ContainerState, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if st, ok := p.made[ref.ID]; ok {
+		return st, nil
+	}
+	return extension.ContainerState{Ref: ref, Daemon: "notes", Gone: true}, nil
+}
+
+// List reports only the owner's containers.
+func (p *pod) List(_ context.Context, owner extension.ResourceOwner) ([]extension.ContainerState, error) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	var out []extension.ContainerState
+	for _, st := range p.made {
+		if owner.ExecutionID == "" || st.Ref.Labels[extension.ContainerLabelExecution] == string(owner.ExecutionID) {
+			out = append(out, st)
+		}
+	}
+	return out, nil
+}
+
+func (p *pod) Remove(_ context.Context, ref extension.ContainerRef) error {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	delete(p.made, ref.ID)
+	return nil
 }

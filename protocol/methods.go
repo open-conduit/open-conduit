@@ -105,6 +105,14 @@ var Methods = []Method{
 	{Name: "provider.sweep", Direction: HostToExtension, Provides: "resources.sweep", Contract: []string{"extension.ResourceSweeper.Sweep", "extension.ResourceSweepReport", "extension.ResourceSpare"}},
 	{Name: "sandbox_provider.plan", Direction: HostToExtension, Provides: "sandboxes", Contract: []string{"extension.SandboxProvider.Plan", "extension.SandboxPolicy", "extension.SandboxPaths"}},
 	{Name: "sandbox_provider.adopt", Direction: HostToExtension, Provides: "sandboxes", Contract: []string{"extension.SandboxProvider.Adopt"}},
+	{Name: "container_provider.plan", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.Plan", "extension.ContainerPolicy", "extension.ContainerPlan"}},
+	{Name: "container_provider.create", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.Create", "extension.ContainerCreated"}},
+	{Name: "container_provider.signal", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.Signal", "extension.ContainerRef"}},
+	{Name: "container_provider.stop", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.Stop"}},
+	{Name: "container_provider.inspect", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.Inspect", "extension.ContainerState"}},
+	{Name: "container_provider.list", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.List"}},
+	{Name: "container_provider.remove", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.Remove"}},
+	{Name: "container_provider.forward", Direction: HostToExtension, Provides: "containers.forward", Contract: []string{"extension.ContainerForwarder.Forward"}},
 
 	// Namespaced KV (mandatory, never negotiated) and read-only state.
 	{Name: "kv.get", Direction: ExtensionToHost, Contract: []string{"storage.Tx.Get"}},

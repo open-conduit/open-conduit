@@ -34,6 +34,15 @@ type InitializeParams struct {
 	// the same for a provider in process or out, so its leases and
 	// workspaces outlive a move of the provider in or out of process.
 	ResourceDirs map[string]string `json:"resource_dirs,omitempty"`
+	// ContainerDirs are the state directories of the container provider
+	// types the manifest declares, by type: the host's
+	// <state>/containers/<type>, the same for a provider in process or out.
+	ContainerDirs map[string]string `json:"container_dirs,omitempty"`
+	// ContainerHost is the host's extension.ContainerLabelHost value (a hash
+	// of its state directory), given to a package declaring containers: it
+	// lists and names only this host's containers, so two daemons sharing a
+	// container daemon never touch each other's.
+	ContainerHost string `json:"container_host,omitempty"`
 	// ConfigDir is the directory of the operator's config file, against
 	// which a relative path in a config object resolves ("" when the
 	// configuration has no file).
@@ -82,6 +91,20 @@ type ConfigureParams struct {
 	PublicURL string        `json:"public_url,omitempty"`
 	DryRun    bool          `json:"dry_run,omitempty"`
 	KV        KVState       `json:"kv"`
+	// Containers are the enabled scopes' bindings whose container provider
+	// is one the extension declares (manifest containers), in config order:
+	// the contexts or remotes a provider lists and reaches containers on
+	// when a reference alone doesn't say.
+	Containers []ContainerUse `json:"containers,omitempty"`
+}
+
+// ContainerUse is one binding's container: its scope and name, the
+// provider and the binding's whole container config.
+type ContainerUse struct {
+	ScopeID  string          `json:"scope_id"`
+	Binding  string          `json:"binding"`
+	Provider string          `json:"provider"`
+	Config   json.RawMessage `json:"config"`
 }
 
 // SourceDecl is an ingress source the extension registers for an entry.
@@ -661,6 +684,15 @@ type CheckBinding struct {
 	// Sandbox is the binding's sandbox, when its provider is one the
 	// extension declares (manifest sandboxes).
 	Sandbox *CheckSandbox `json:"sandbox,omitempty"`
+	// Container is the binding's container, when its provider is one the
+	// extension declares (manifest containers).
+	Container *CheckContainer `json:"container,omitempty"`
+}
+
+// CheckContainer is a binding's container provider and its whole config.
+type CheckContainer struct {
+	Provider string          `json:"provider"`
+	Config   json.RawMessage `json:"config,omitempty"`
 }
 
 // CheckSandbox is a binding's sandbox provider and its config.

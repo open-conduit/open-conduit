@@ -150,7 +150,7 @@ var limits = []string{
 	"Certification checks protocol conformance, not safety: an extension runs with the operator's privileges (process separation is fault isolation, not a sandbox).",
 	"Only the package's own fixture is exercised, against its fakes; no live service is contacted and no real credential is used.",
 	"One host build, one platform and one protocol version are tested: the ones stated above.",
-	"Not certified by criteria version 4: webhook.handle, setup.run and setup.* callbacks, provider.* resource providers, sandbox_provider.plan (a plan is only as good as the provider's mechanism), telemetry.export, run.environment, work.annotate, work.actions and work.act, view.render, event.render, target.resolve and segment.ended, emit and wait operations (the host cuts a wait plan's description to fit as it is declared), the in-transaction callbacks (recurrence.next, work_kind.trigger, emit.commit, dependency.filter) and the message-size and overload limits. The host's own suites cover those adapters.",
+	"Not certified by criteria version 5: webhook.handle, setup.run and setup.* callbacks, provider.* resource providers, sandbox_provider.plan (a plan is only as good as the provider's mechanism), container_provider.plan, create, signal, stop, remove and forward (they need the provider's container runtime), telemetry.export, run.environment, work.annotate, work.actions and work.act, view.render, event.render, target.resolve and segment.ended, emit and wait operations (the host cuts a wait plan's description to fit as it is declared), the in-transaction callbacks (recurrence.next, work_kind.trigger, emit.commit, dependency.filter) and the message-size and overload limits. The host's own suites cover those adapters.",
 	"Executor checks run one attempt each without a toolbelt endpoint or workspace; resume, interrupt and attach are not exercised.",
 }
 
@@ -274,6 +274,7 @@ func Run(ctx context.Context, o Options) (rep Report, err error) {
 	r.executorModes(remote)
 	r.resources(remote)
 	r.sandboxes(ctx, remote)
+	r.containers(ctx, remote)
 	r.surfaces(ctx, remote)
 	r.restart(ctx, remote)
 	if n := remote.Service().Refused(); n > 0 {
@@ -498,7 +499,16 @@ func (r *runner) deps() extproc.Deps {
 }
 
 func (r *runner) options() extproc.Options {
+	var containers map[string]string
+	var containerHost string
+	if len(r.m.Provides.Containers) > 0 {
+		containers, containerHost = map[string]string{}, "certify"
+		for _, c := range r.m.Provides.Containers {
+			containers[c.Type] = filepath.Join(r.tmp, "state", "containers", c.Type)
+		}
+	}
 	return extproc.Options{StateDir: r.state, LogDir: filepath.Join(r.tmp, "state", "logs", "extensions"),
+		ContainerDirs: containers, ContainerHost: containerHost,
 		Host: protocol.HostInfo{Name: "open-conduit", Version: r.o.HostVersion},
 		Configure: func() protocol.ConfigureParams {
 			return protocol.ConfigureParams{Generation: "certify", Entries: r.fixture.Entries}
@@ -1111,6 +1121,68 @@ func (r *runner) sandboxes(ctx context.Context, remote *extproc.Remote) {
 		}
 	}
 	r.pass("sandboxes.policy", fmt.Sprintf("%d case(s)", len(r.fixture.Sandboxes)))
+}
+
+// containers runs containers.policy: each container case's validate
+// verdict, asked twice, with an accepted and a refused case for every
+// declared container type; a container the provider never made is never
+// reported running; and a listing for an execution it never saw lists
+// nothing (or fails), so the host never stops, adopts or removes a
+// container on a provider's say-so that isn't the owner's. The calls are
+// made raw: the host's own adapter would drop a listing's strangers.
+func (r *runner) containers(ctx context.Context, remote *extproc.Remote) {
+	if len(r.m.Provides.Containers) == 0 {
+		r.skip("containers.policy", "no container provider type")
+		return
+	}
+	declared := map[string]bool{}
+	for _, d := range r.m.Provides.Containers {
+		declared[d.Type] = true
+	}
+	accepted, refused := map[string]bool{}, map[string]bool{}
+	for i, c := range r.fixture.Containers {
+		if !declared[c.Type] {
+			r.fail("containers.policy", "case %d: %q is not a declared container type", i, c.Type)
+			return
+		}
+		check := remote.Validator(protocol.ValidateContainer, c.Type)
+		first, second := check(c.Config, nil), check(c.Config, nil)
+		if (first == nil) != (second == nil) {
+			r.fail("containers.policy", "case %d: %s answered validate container differently twice", i, c.Type)
+			return
+		}
+		if got := first != nil; got != c.Refused {
+			r.fail("containers.policy", "case %d: %s validate container refused=%t, want %t", i, c.Type, got, c.Refused)
+			return
+		}
+		if c.Refused {
+			refused[c.Type] = true
+		} else {
+			accepted[c.Type] = true
+		}
+	}
+	stranger := protocol.ResourceOwner{ScopeID: "certify", WorkID: "certify-unknown", ExecutionID: "certify-unknown"}
+	for typ := range declared {
+		if !accepted[typ] || !refused[typ] {
+			r.fail("containers.policy", "the fixture needs an accepted and a refused container case for %s", typ)
+			return
+		}
+		cx, cancel := context.WithTimeout(ctx, 10*time.Second)
+		var st protocol.ContainerState
+		err := remote.Process().Call(cx, "container_provider.inspect", protocol.ContainerProviderRefParams{Type: typ, Ref: protocol.ContainerRef{ID: "certify-unknown/certify-unknown"}}, &st)
+		var list protocol.ContainerList
+		lerr := remote.Process().Call(cx, "container_provider.list", protocol.ContainerProviderListParams{Type: typ, Owner: stranger}, &list)
+		cancel()
+		if err == nil && st.Running {
+			r.fail("containers.policy", "%s reported a container it never made as running", typ)
+			return
+		}
+		if lerr == nil && len(list.Containers) > 0 {
+			r.fail("containers.policy", "%s listed %d container(s) for an execution it never saw", typ, len(list.Containers))
+			return
+		}
+	}
+	r.pass("containers.policy", fmt.Sprintf("%d case(s)", len(r.fixture.Containers)))
 }
 
 // unserved reports an answer that means the method was not served at all.

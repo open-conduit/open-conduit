@@ -210,6 +210,11 @@ type Provides struct {
 	// proves a recovered one through sandbox_provider.adopt, and checks a
 	// binding's sandbox config through validate with kind sandbox.
 	Sandboxes []SandboxDecl `json:"sandboxes,omitempty"`
+	// Containers are container provider types (extension.ContainerProvider):
+	// the host plans, creates, signals, stops, inspects, lists and removes a
+	// binding's containers through container_provider.*, and checks a
+	// binding's container config through validate with kind container.
+	Containers []ContainerDecl `json:"containers,omitempty"`
 	// Tasks are host-paced background passes (projection, timer ensure,
 	// executor housekeeping, webhook management).
 	Tasks []TaskDecl `json:"tasks,omitempty"`
@@ -575,6 +580,15 @@ type ResourceDecl struct {
 type SandboxDecl struct {
 	Type string `json:"type"`
 }
+
+// ContainerDecl declares a container provider type. Forward marks one whose
+// containers may reach the execution's toolbelt through a TCP address the
+// host serves rather than its socket (extension.ContainerForwarder): the
+// host asks container_provider.forward before each launch and recovery.
+type ContainerDecl struct {
+	Type    string `json:"type"`
+	Forward bool   `json:"forward,omitempty"`
+}
 type TaskDecl struct {
 	Name            string `json:"name"`
 	IntervalSeconds int    `json:"interval_seconds"`
@@ -896,6 +910,14 @@ func (m Manifest) Validate() error {
 		}
 		sandboxes[x.Type] = true
 	}
+	containers := map[string]bool{}
+	for _, x := range p.Containers {
+		ident("container provider", x.Type)
+		if containers[x.Type] {
+			fail("container provider %q is declared twice", x.Type)
+		}
+		containers[x.Type] = true
+	}
 	for _, t := range p.Tasks {
 		ident("task", t.Name)
 		if t.IntervalSeconds < 1 {
@@ -1036,6 +1058,10 @@ func (m Manifest) Enabled() []string {
 		set("resources.sweep", r.Sweep)
 	}
 	set("sandboxes", len(p.Sandboxes) > 0)
+	set("containers", len(p.Containers) > 0)
+	for _, c := range p.Containers {
+		set("containers.forward", c.Forward)
+	}
 	set("tasks", len(p.Tasks) > 0)
 	set("exporters", p.Exporters)
 	set("checks", len(p.Checks) > 0)

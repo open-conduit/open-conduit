@@ -46,6 +46,19 @@ type Fixture struct {
 	// Sandboxes are sandbox configs and whether validate sandbox refuses
 	// them: each declared sandbox type needs an accepted and a refused one.
 	Sandboxes []SandboxCase `json:"sandboxes,omitempty"`
+	// Containers are container configs and whether validate container
+	// refuses them: each declared container type needs an accepted and a
+	// refused one.
+	Containers []ContainerCase `json:"containers,omitempty"`
+}
+
+// ContainerCase is one whole container config (extension.ContainerConfig)
+// of a declared container type and whether validate with kind container
+// must refuse it.
+type ContainerCase struct {
+	Type    string          `json:"type"`
+	Config  json.RawMessage `json:"config,omitempty"`
+	Refused bool            `json:"refused,omitempty"`
 }
 
 // SandboxCase is one sandbox config of a declared sandbox type and whether

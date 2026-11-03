@@ -480,6 +480,11 @@ func (d *daemon) openExtensions(ctx context.Context) {
 				d.sandboxes.providers[s.Type] = p
 			}
 		}
+		for _, c := range f.Manifest.Provides.Containers {
+			if p, ok := r.Container(c.Type); ok {
+				d.containers.providers[c.Type] = p
+			}
+		}
 		d.log.Info("extension started", "extension", name, "version", f.Manifest.Version, "protocol", protocol.Version, "pass_env", strings.Join(r.Process().PassedEnv(), ","))
 	}
 }
@@ -502,7 +507,8 @@ func (d *daemon) installedRegistry(reg *config.Registry) {
 }
 
 // usesExtension reports whether a scope's configuration uses one of the
-// package's declared types, handlers, executors or resource providers.
+// package's declared types, handlers, executors or resource, sandbox or
+// container providers.
 func usesExtension(scope *config.EffectiveScope, m protocol.Manifest) bool {
 	p := m.Provides
 	types := map[string]bool{}
@@ -535,8 +541,12 @@ func usesExtension(scope *config.EffectiveScope, m protocol.Manifest) bool {
 	for _, s := range p.Sandboxes {
 		sandboxes[s.Type] = true
 	}
+	containers := map[string]bool{}
+	for _, c := range p.Containers {
+		containers[c.Type] = true
+	}
 	for _, b := range scope.Bindings {
-		if executors[b.Executor] || b.Resource != nil && resources[b.Resource.Provider] || b.Sandbox != nil && sandboxes[b.Sandbox.Provider] {
+		if executors[b.Executor] || b.Resource != nil && resources[b.Resource.Provider] || b.Sandbox != nil && sandboxes[b.Sandbox.Provider] || b.Container != nil && containers[b.Container.Provider] {
 			return true
 		}
 	}
@@ -748,12 +758,22 @@ func (d *daemon) extensionOptions(f extproc.Found, paths extproc.Paths) extproc.
 	for _, r := range f.Manifest.Provides.Resources {
 		resources[r.Type] = resourceDir(d.o.StateDir, r.Type)
 	}
+	var containers map[string]string
+	var containerHost string
+	var env []string
+	if len(f.Manifest.Provides.Containers) > 0 {
+		containers, containerHost, env = map[string]string{}, d.containerHost(), containerSwitches(os.Environ())
+		for _, c := range f.Manifest.Provides.Containers {
+			containers[c.Type] = containerDir(d.o.StateDir, c.Type)
+		}
+	}
 	var configDir string
 	if d.o.ConfigPath != "" {
 		configDir = filepath.Dir(d.o.ConfigPath)
 	}
 	return extproc.Options{
 		StateDir: paths.State, LogDir: filepath.Dir(paths.Log), ExecutorDirs: executors, ResourceDirs: resources, ConfigDir: configDir,
+		ContainerDirs: containers, ContainerHost: containerHost, Env: env,
 		Host:      protocol.HostInfo{Name: "open-conduit", Version: d.o.Version},
 		PassEnv:   func() []string { return d.packagePassEnv(name) },
 		Configure: func() protocol.ConfigureParams { return d.extensionConfigure(f.Manifest) },
@@ -776,7 +796,35 @@ func (d *daemon) extensionConfigure(m protocol.Manifest) protocol.ConfigureParam
 	for _, c := range m.Provides.Connections {
 		connTypes[c.Type] = true
 	}
-	return d.configureParams(types, connTypes)
+	params := d.configureParams(types, connTypes)
+	params.Containers = d.containerUses(m)
+	return params
+}
+
+// containerUses are the enabled scopes' bindings whose container provider
+// the manifest declares, in config order (protocol.ConfigureParams.Containers).
+func (d *daemon) containerUses(m protocol.Manifest) []protocol.ContainerUse {
+	own := map[string]bool{}
+	for _, c := range m.Provides.Containers {
+		own[c.Type] = true
+	}
+	s, _ := d.extensionSnapshot()
+	if s == nil || len(own) == 0 {
+		return nil
+	}
+	var out []protocol.ContainerUse
+	for _, id := range s.Order {
+		scope := s.Scopes[id]
+		if scope == nil || !scope.Enabled {
+			continue
+		}
+		for _, b := range scope.Bindings {
+			if b.Container != nil && own[b.Container.Provider] {
+				out = append(out, protocol.ContainerUse{ScopeID: string(id), Binding: b.Name, Provider: b.Container.Provider, Config: b.Container.Config})
+			}
+		}
+	}
+	return out
 }
 
 // configureParams are an extension's configure params: every enabled
@@ -1022,3 +1070,28 @@ func executorDir(state, name string) string { return filepath.Join(state, "execu
 // resourceDir is a resource provider type's state directory, the same in
 // process or out (protocol.InitializeParams.ResourceDirs).
 func resourceDir(state, typ string) string { return filepath.Join(state, "resources", typ) }
+
+// containerDir is a container provider type's state directory
+// (protocol.InitializeParams.ContainerDirs).
+func containerDir(state, typ string) string { return filepath.Join(state, "containers", typ) }
+
+// containerSwitchNames are the host's container switches: the gateway
+// image a build without a pinned one runs (make gateway-image), and the
+// toolbelt forward a test forces. They are the operator's settings for
+// the host's container isolation, never secrets, so the host sets them
+// itself in a container provider package's environment, which the
+// sanitized baseline and the operator's grant (OPEN_CONDUIT_* is the
+// host's own) would otherwise never carry.
+var containerSwitchNames = []string{"OPEN_CONDUIT_GATEWAY_IMAGE", "OPEN_CONDUIT_CONTAINER_FORWARD"}
+
+// containerSwitches are the container switches set in environ.
+func containerSwitches(environ []string) []string {
+	var out []string
+	for _, kv := range environ {
+		name, _, _ := strings.Cut(kv, "=")
+		if slices.Contains(containerSwitchNames, name) {
+			out = append(out, kv)
+		}
+	}
+	return out
+}

@@ -55,7 +55,7 @@ func (l *dockerLab) labToolbelt(t *testing.T, id domain.ID) (endpoints *manageme
 	socket = strings.TrimPrefix(endpoint, "unix://")
 	// The tcp forward reaches it on a port the host serves, as the
 	// daemon's binding does.
-	if l.provider.Forward() == docker.ForwardTCP {
+	if l.provider.ForwardMode() == docker.ForwardTCP {
 		host, err := l.provider.ForwardListen(context.Background(), l.dctx)
 		if err == nil {
 			_, err = e.ServeTCP(id, host)
@@ -139,7 +139,7 @@ func TestDockerGateway(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(plan.Summary, "gateway allowing allowed.test") || !strings.Contains(plan.Summary, "toolbelt forwarded ("+l.provider.Forward()+")") {
+	if !strings.Contains(plan.Summary, "gateway allowing allowed.test") || !strings.Contains(plan.Summary, "toolbelt forwarded ("+l.provider.ForwardMode()+")") {
 		t.Errorf("summary %q", plan.Summary)
 	}
 	l.networkOf(t, l.pinned().ID)

@@ -4,9 +4,9 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
@@ -17,9 +17,6 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
-	"github.com/open-conduit/open-conduit/extensions/docker"
-	"github.com/open-conduit/open-conduit/extensions/ssh"
-	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
@@ -29,165 +26,62 @@ import (
 // host's stop before it is killed.
 const containerStopGrace = 10 * time.Second
 
-func containerRegistry(r *config.Registry) {
-	r.Containers = map[string]func(json.RawMessage) error{docker.Type: docker.ValidateConfig, ssh.Type: ssh.ValidateConfig}
-}
-
-// containerState is the host side of the container providers.
+// containerState is the host side of the container providers: the
+// packages' declared ones (manifest containers), by type.
 type containerState struct {
 	providers map[string]extension.ContainerProvider
-	docker    *docker.Provider
-	ssh       *ssh.Provider
 	last      time.Time
 	// reconciling is set while a reconcile pass runs off the loop.
 	reconciling atomic.Bool
 }
 
-// openContainers makes the providers. The gateway image is the one this
-// build pins (docker.GatewayImage) unless OPEN_CONDUIT_GATEWAY_IMAGE names
-// another, and OPEN_CONDUIT_CONTAINER_FORWARD=tcp forces the toolbelt
-// forward macOS uses, for its tests on Linux.
 func (d *daemon) openContainers() {
-	self, _ := os.Executable()
-	gateway := docker.GatewayImage
-	if v := os.Getenv("OPEN_CONDUIT_GATEWAY_IMAGE"); v != "" {
-		gateway = v
-	}
-	d.containers.docker = docker.New(docker.Options{QueryTimeout: d.o.CallTimeout, Helper: self, Host: d.containerHost(), Gateway: gateway, Forward: os.Getenv("OPEN_CONDUIT_CONTAINER_FORWARD"), Contexts: func() []string {
-		var out []string
-		for _, b := range d.dockerBindings() {
-			out = append(out, b.context)
-		}
-		return out
-	}})
-	d.containers.ssh = ssh.New(ssh.Options{Helper: self, Host: d.containerHost(), Dir: filepath.Join(d.o.StateDir, "remote"), Remotes: func() []ssh.Settings {
-		var out []ssh.Settings
-		for _, b := range d.sshBindings() {
-			out = append(out, b.settings)
-		}
-		return out
-	}})
-	d.containers.providers = map[string]extension.ContainerProvider{docker.Type: d.containers.docker, ssh.Type: d.containers.ssh}
+	d.containers.providers = map[string]extension.ContainerProvider{}
 }
 
-// sshBinding is a binding that runs on a remote over SSH: its name and
-// the remote's settings.
-type sshBinding struct {
-	name     string
-	settings ssh.Settings
-}
-
-// sshBindings are the enabled scopes' bindings that declare an ssh
-// container, in config order.
-func (d *daemon) sshBindings() []sshBinding {
-	snapshot, _ := d.configs.Current()
-	if snapshot == nil {
-		return nil
-	}
-	var out []sshBinding
-	for _, id := range snapshot.Order {
-		scope := snapshot.Scopes[id]
-		if scope == nil || !scope.Enabled {
+// adoptLegacyContainerDirs moves what a container provider kept in process
+// under a directory of its own to the directory the host names its type
+// (containerDir): the ssh provider's pinned host keys, once under
+// <state>/remote. A file already in the new directory stays. The old
+// directory becomes a link to the new one, because a run created before
+// the upgrade pinned its ssh argv, known_hosts path included, in its run
+// record, and its helper keeps using it to start, signal, inspect and copy
+// back.
+func adoptLegacyContainerDirs(state string) (int, error) {
+	moved := 0
+	for old, typ := range map[string]string{"remote": "ssh"} {
+		from, to := filepath.Join(state, old), containerDir(state, typ)
+		if fi, err := os.Lstat(from); err == nil && fi.Mode()&os.ModeSymlink != 0 {
 			continue
 		}
-		for _, b := range scope.Bindings {
-			if b.Container == nil || b.Container.Provider != ssh.Type {
+		entries, err := os.ReadDir(from)
+		if errors.Is(err, os.ErrNotExist) {
+			continue
+		}
+		if err != nil {
+			return moved, err
+		}
+		if err := os.MkdirAll(to, 0o700); err != nil {
+			return moved, err
+		}
+		for _, e := range entries {
+			dst := filepath.Join(to, e.Name())
+			if _, err := os.Lstat(dst); err == nil {
 				continue
 			}
-			if _, s, err := ssh.ParseConfig(b.Container.Config); err == nil {
-				out = append(out, sshBinding{string(id) + "/" + b.Name, s})
+			if err := os.Rename(filepath.Join(from, e.Name()), dst); err != nil {
+				return moved, err
 			}
+			moved++
+		}
+		if err := os.RemoveAll(from); err != nil {
+			return moved, err
+		}
+		if err := os.Symlink(filepath.Join("containers", typ), from); err != nil {
+			return moved, err
 		}
 	}
-	return out
-}
-
-// dockerBinding is a binding that runs in a Docker container: its name,
-// context and image.
-type dockerBinding struct{ name, context, image string }
-
-// dockerBindings are the enabled scopes' bindings that declare a docker
-// container, in config order.
-func (d *daemon) dockerBindings() []dockerBinding {
-	snapshot, _ := d.configs.Current()
-	if snapshot == nil {
-		return nil
-	}
-	var out []dockerBinding
-	for _, id := range snapshot.Order {
-		scope := snapshot.Scopes[id]
-		if scope == nil || !scope.Enabled {
-			continue
-		}
-		for _, b := range scope.Bindings {
-			if b.Container == nil || b.Container.Provider != docker.Type {
-				continue
-			}
-			if cfg, s, err := docker.ParseConfig(b.Container.Config); err == nil {
-				out = append(out, dockerBinding{string(id) + "/" + b.Name, s.Context, cfg.Image})
-			}
-		}
-	}
-	return out
-}
-
-// containerCheck is doctor's view of the Docker provider for each context
-// and image the config uses: the daemon reachable, and its ID; Engine 28
-// or later; a file written under --user into the workspace root owned by
-// the operator on the host; the gateway image there by digest; and the
-// internal-network preflight. Any failure blocks the provider.
-func (d *daemon) containerCheck(ctx context.Context) runtime.Check {
-	check := runtime.Check{Name: "container"}
-	bindings, remotes := d.dockerBindings(), d.sshBindings()
-	if len(bindings) == 0 && len(remotes) == 0 {
-		check.Status, check.Code, check.Detail = runtime.CheckInfo, "not_configured", "no binding declares a container"
-		return check
-	}
-	check.Status, check.Code = runtime.CheckOK, "ok"
-	root := filepath.Join(d.o.StateDir, "resources", "git", "workspaces")
-	seen := map[string]bool{}
-	var details, names []string
-	fail := func(code string) {
-		if check.Status == runtime.CheckOK {
-			check.Status, check.Code = runtime.CheckFail, code
-		}
-	}
-	for _, b := range bindings {
-		names = append(names, b.name)
-		if seen[b.context+"\x00"+b.image] {
-			continue
-		}
-		seen[b.context+"\x00"+b.image] = true
-		h := d.containers.docker.Health(ctx, b.context, b.image, root, false)
-		check.Items = append(check.Items, h.Items...)
-		if h.Status != "ok" {
-			fail(h.Code)
-		}
-		details = append(details, h.Detail)
-	}
-	// A remote mirrors the host's paths: the state directory, which holds
-	// the workspaces, run directories, homes and toolbelt tokens, must be
-	// writable there.
-	for _, b := range remotes {
-		names = append(names, b.name)
-		key := "ssh\x00" + b.settings.Endpoint() + "\x00" + b.settings.HostKey
-		if seen[key] {
-			continue
-		}
-		seen[key] = true
-		h := d.containers.ssh.Health(ctx, b.settings, d.o.StateDir, false)
-		check.Items = append(check.Items, h.Items...)
-		if h.Status != "ok" {
-			fail(h.Code)
-		}
-		details = append(details, h.Detail)
-	}
-	check.Detail = strings.Join(details, "; ")
-	if check.Status == runtime.CheckFail {
-		check.Detail += "; container bindings run nothing until this is fixed"
-	}
-	check.Items = append(check.Items, "in containers: "+strings.Join(names, ", "))
-	return check
+	return moved, nil
 }
 
 // containerHost is this daemon's ContainerLabelHost value: a hash of its
@@ -227,17 +121,16 @@ func (d *daemon) bindContainer(ctx context.Context, state runtime.AttemptState, 
 	if socket != "" {
 		shared = append(shared, filepath.Dir(socket))
 	}
-	// A gateway that can't reach a host socket (macOS) reaches the
-	// toolbelt on a loopback port the host serves for the execution, on
-	// each launch and recovery (a restarted daemon serves a new one).
-	if socket != "" && desc.Provider == docker.Type && d.containers.docker.Forward() == docker.ForwardTCP {
-		_, s, err := docker.ParseConfig(desc.Config)
-		if err != nil {
-			return runtime.ContainerBinding{}, fmt.Errorf("%w: %v", extension.ErrSandboxUnavailable, err)
-		}
-		host, err := d.containers.docker.ForwardListen(ctx, s.Context)
-		if err == nil {
-			_, err = d.endpoints.ServeTCP(state.ExecutionID, host)
+	// A container that can't reach a host socket (Docker on macOS) reaches
+	// the toolbelt on an address the host serves for the execution, which
+	// the provider names, on each launch and recovery (a restarted daemon
+	// serves a new one).
+	if f, ok := p.(extension.ContainerForwarder); ok && socket != "" {
+		host, err := f.Forward(ctx, domain.Payload{Schema: extension.ContainerConfigSchema, Data: append([]byte(nil), desc.Config...)})
+		if err == nil && host != "" {
+			if err = forwardAddress(host); err == nil {
+				_, err = d.endpoints.ServeTCP(state.ExecutionID, host)
+			}
 		}
 		if err != nil {
 			return runtime.ContainerBinding{}, fmt.Errorf("%w: the toolbelt forward: %v", extension.ErrSandboxUnavailable, err)
@@ -570,4 +463,17 @@ func (d *daemon) containerDetach(ctx context.Context, w domain.Work, ref string)
 		return fmt.Errorf("%w: container provider %s", extension.ErrSandboxUnavailable, pin.Provider)
 	}
 	return p.Remove(ctx, extension.ContainerRef{ID: pin.ID})
+}
+
+// forwardAddress checks an address a provider names for an execution's
+// toolbelt forward before the host serves on it: a literal loopback or
+// private IP (macOS's loopback, a Linux bridge's gateway), never an
+// unspecified one or a name, so no package can have the toolbelt served
+// on every interface or a public one.
+func forwardAddress(host string) error {
+	ip := net.ParseIP(host)
+	if ip == nil || ip.IsUnspecified() || !(ip.IsLoopback() || ip.IsPrivate()) {
+		return fmt.Errorf("the provider named %q, not a loopback or private IP address", host)
+	}
+	return nil
 }

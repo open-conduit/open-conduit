@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"time"
 
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/protocol"
@@ -160,6 +161,95 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return struct{}{}, nil
+	case "container_provider.plan":
+		var p protocol.ContainerProviderPlanParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Containers[p.Type]
+		if !ok {
+			return nil, notFound(method)
+		}
+		plan, err := prov.Plan(ctx, p.Owner.Extension(), extension.ContainerPolicy{Config: p.Config.Domain(), Paths: p.Paths.Extension()}, p.Needs.Extension(), p.Launch.Extension())
+		if err != nil {
+			return nil, err
+		}
+		return protocol.FromContainerPlan(plan), nil
+	case "container_provider.create":
+		var p protocol.ContainerProviderCreateParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Containers[p.Type]
+		if !ok {
+			return nil, notFound(method)
+		}
+		c, err := prov.Create(ctx, p.Plan.Extension(), p.Labels)
+		if err != nil {
+			return nil, err
+		}
+		return protocol.FromContainerCreated(c), nil
+	case "container_provider.signal", "container_provider.stop", "container_provider.inspect", "container_provider.remove":
+		var p protocol.ContainerProviderRefParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Containers[p.Type]
+		if !ok {
+			return nil, notFound(method)
+		}
+		ref := p.Ref.Extension()
+		var err error
+		switch method {
+		case "container_provider.signal":
+			err = prov.Signal(ctx, ref, p.Signal)
+		case "container_provider.stop":
+			err = prov.Stop(ctx, ref, time.Duration(p.GraceMillis)*time.Millisecond)
+		case "container_provider.remove":
+			err = prov.Remove(ctx, ref)
+		default:
+			st, err := prov.Inspect(ctx, ref)
+			if err != nil {
+				return nil, err
+			}
+			return protocol.FromContainerState(st), nil
+		}
+		if err != nil {
+			return nil, err
+		}
+		return struct{}{}, nil
+	case "container_provider.list":
+		var p protocol.ContainerProviderListParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Containers[p.Type]
+		if !ok {
+			return nil, notFound(method)
+		}
+		states, err := prov.List(ctx, p.Owner.Extension())
+		if err != nil {
+			return nil, err
+		}
+		out := protocol.ContainerList{Containers: []protocol.ContainerState{}}
+		for _, st := range states {
+			out.Containers = append(out.Containers, protocol.FromContainerState(st))
+		}
+		return out, nil
+	case "container_provider.forward":
+		var p protocol.ContainerProviderForwardParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Containers[p.Type].(extension.ContainerForwarder)
+		if !ok {
+			return nil, notFound(method)
+		}
+		addr, err := prov.Forward(ctx, p.Config.Domain())
+		if err != nil {
+			return nil, err
+		}
+		return protocol.ContainerForward{Address: addr}, nil
 	case "telemetry.export":
 		var p protocol.TelemetryExportParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

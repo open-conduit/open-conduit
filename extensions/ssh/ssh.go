@@ -1,8 +1,9 @@
 // Package ssh is the container provider that runs a launch on another
 // machine over SSH. It is a container in the contract's terms: created
 // (the launch's granted paths copied to the remote at the same paths, its
-// records and entry stub written) without starting, started by `open-conduit
-// remote run`, the host helper the executor's wrapper runs, and stopped,
+// records and entry stub written) without starting, started by its
+// package's helper (`open-conduit extension-run ssh run`, RunHelper), which
+// the executor's wrapper runs, and stopped,
 // inspected, listed and removed by the host. The helper reaches the
 // execution's toolbelt back through a forward of its socket over the same
 // SSH connection, relays signals, and on the run's exit copies what the
@@ -30,6 +31,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -58,9 +60,10 @@ type Options struct {
 	// SSH is the ssh client, resolved on PATH when not absolute (default
 	// "ssh").
 	SSH string
-	// Helper is the open-conduit binary whose hidden `remote run` starts a
-	// run for an executor's wrapper.
-	Helper string
+	// Helper is the command that starts a created run for an executor's
+	// wrapper (RunHelper), to which its arguments are appended: the
+	// package's own `run` (`open-conduit extension-run ssh run`).
+	Helper []string
 	// Host is this daemon's ContainerLabelHost value.
 	Host string
 	// Dir is a host-owned directory for the provider's own files: the
@@ -416,7 +419,7 @@ func (p *Provider) Create(ctx context.Context, plan extension.ContainerPlan, lab
 	return extension.ContainerCreated{
 		Ref:    extension.ContainerRef{ID: ref, Labels: labels},
 		Daemon: d.Daemon,
-		Argv:   []string{p.o.Helper, "remote", "run", "--records", d.Records, ref},
+		Argv:   append(slices.Clone(p.o.Helper), "--records", d.Records, ref),
 		Env:    p.cliEnv(),
 	}, nil
 }
@@ -654,8 +657,8 @@ func (p *Provider) knownHosts(s Settings, alias string) string {
 
 // sshError is a failed remote call, with what the remote said.
 type sshError struct {
-	endpoint, stderr string
-	err              error
+	endpoint, stderr, hint string
+	err                    error
 }
 
 func (e *sshError) Error() string {
@@ -663,7 +666,22 @@ func (e *sshError) Error() string {
 	if msg == "" {
 		msg = e.err.Error()
 	}
-	return "ssh " + e.endpoint + ": " + msg
+	return "ssh " + e.endpoint + ": " + msg + e.hint
+}
+
+// authHint names the grant when a remote refused the client's keys and the
+// provider has no ssh agent: out of process it has only the variables the
+// operator grants it (settings.extensions.ssh.pass_env).
+func authHint(stderr string, env []string) string {
+	if !strings.Contains(stderr, "Permission denied") {
+		return ""
+	}
+	for _, kv := range env {
+		if strings.HasPrefix(kv, "SSH_AUTH_SOCK=") {
+			return ""
+		}
+	}
+	return " (the ssh provider has no ssh agent: name SSH_AUTH_SOCK in settings.extensions.ssh.pass_env, or give the binding an identity)"
 }
 
 func (e *sshError) Unwrap() error { return e.err }
@@ -681,7 +699,7 @@ func (p *Provider) ssh(ctx context.Context, s Settings, stdin io.Reader, script 
 	cmd.Stderr = &stderr
 	out, err := cmd.Output()
 	if err != nil {
-		return out, &sshError{endpoint: s.Endpoint(), stderr: stderr.String(), err: err}
+		return out, &sshError{endpoint: s.Endpoint(), stderr: stderr.String(), hint: authHint(stderr.String(), cmd.Env), err: err}
 	}
 	return out, nil
 }
