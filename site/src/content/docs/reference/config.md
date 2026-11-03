@@ -90,7 +90,7 @@ A scope's `authorization`.
 | --- | --- | --- | --- | --- |
 | `connections` | array of string | yes |  | Connection IDs this scope (and its bindings) may use. |
 | `file_scopes` | array of string |  |  | Other scopes whose trackers this scope's agents may file issues in and comment on. |
-| `operations` | array of string | yes |  | Toolbelt operations executions in this scope may call (see the operations reference). A binding's operations narrow it. |
+| `operations` | array of string | yes |  | Toolbelt operations executions in this scope may call (see the operations reference): an operation, a toolset an extension publishes as `@<name>` (every operation it has in the running release), or either denied with a leading `!`. A binding's operations narrow it. |
 | `read_scopes` | array of string | yes |  | Other scopes whose Events this scope's executions may wait on. |
 
 ## bindings
@@ -107,7 +107,7 @@ Each entry of a scope's `bindings`.
 | `executor` | string | yes |  | The registered executor that runs attempts. |
 | `grants` | array of object |  |  | Named sets of extra operations and config a Work can opt into. |
 | `name` | string | yes |  | Name routes and Work refer to. |
-| `operations` | array of string |  |  | Narrows the scope's authorization.operations for this binding. |
+| `operations` | array of string |  |  | Narrows the scope's authorization.operations for this binding: operations, toolsets as `@<name>` and denials with a leading `!`, as there. A toolset is narrowed to what the scope grants. |
 | `requires` | [requires](#requires) |  |  | Capabilities the executor must declare; binding fails closed otherwise. |
 | `resource` | object |  |  | Resource provider and its config (such as a git workspace). |
 | `sandbox` | object |  |  | Process sandbox provider and its config. |

@@ -252,6 +252,16 @@ func (e *Extension) Operation(name string, op Op, opts ...OperationOption) *Exte
 	return e
 }
 
+// Toolset declares a toolset (extension.Toolset): a named set of the
+// extension's operations and builtins for a role its agents play, which
+// config grants as "@<name>". Give each operation the toolset version it
+// joined in, and only ever add to it, so an install granting the toolset
+// gets what a later version adds.
+func (e *Extension) Toolset(t extension.Toolset) *Extension {
+	e.Manifest.Provides.Toolsets = append(e.Manifest.Provides.Toolsets, protocol.ToolsetDecl{Name: t.Name, Summary: t.Summary, Operations: t.Operations})
+	return e
+}
+
 // RouteOption adds to a route handler's declaration.
 type RouteOption func(*protocol.RouteDecl)
 

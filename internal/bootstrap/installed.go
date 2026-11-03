@@ -209,6 +209,16 @@ func (x *installed) resourceTypes(reg *config.Registry) {
 	}
 }
 
+// Toolsets are the package's declared toolsets (provides.toolsets),
+// checked with the manifest at discovery.
+func (x *installed) Toolsets() []extension.Toolset {
+	var out []extension.Toolset
+	for _, t := range x.m.Provides.Toolsets {
+		out = append(out, extension.Toolset{Name: t.Name, Summary: t.Summary, Operations: slices.Clone(t.Operations)})
+	}
+	return out
+}
+
 func (x *installed) Operations() []string {
 	var out []string
 	for _, o := range x.m.Provides.Operations {

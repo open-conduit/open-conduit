@@ -25,7 +25,7 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		switch p.Kind {
-		case protocol.ValidateResourceMode, protocol.ValidateResourceSandbox, protocol.ValidateExecutorMode:
+		case protocol.ValidateResourceMode, protocol.ValidateResourceSandbox, protocol.ValidateExecutorMode, protocol.ValidateExecutorPlaybook:
 			return s.workspaceCheck(p)
 		}
 		if s.ext.Validate != nil {
@@ -326,7 +326,8 @@ var _ extension.SetupHost = (*setupHost)(nil)
 // answers through its optional interfaces: the mode a resource config names
 // (extension.ResourceModeDefaulter), whether a sandboxed binding may use it
 // (extension.ResourceSandboxChecker) and the mode a binding config makes an
-// executor request (extension.ResourceModer). A type that doesn't implement
+// executor request (extension.ResourceModer), and the playbook a binding
+// config starts its turns on (extension.PlaybookNamer). A type that doesn't implement
 // the interface names no mode and passes the sandbox check, as a first-party
 // registration without the hook does.
 func (s *Server) workspaceCheck(p protocol.ValidateParams) (any, error) {
@@ -345,6 +346,10 @@ func (s *Server) workspaceCheck(p protocol.ValidateParams) (any, error) {
 	case protocol.ValidateExecutorMode:
 		if m, ok := s.ext.Executors[p.Type].(extension.ResourceModer); ok {
 			return protocol.ValidateResult{Mode: m.ResourceMode(p.Config)}, nil
+		}
+	case protocol.ValidateExecutorPlaybook:
+		if n, ok := s.ext.Executors[p.Type].(extension.PlaybookNamer); ok {
+			return protocol.ValidateResult{Playbook: n.Playbook(p.Config)}, nil
 		}
 	}
 	return protocol.ValidateResult{}, nil

@@ -21,19 +21,16 @@ import (
 // resource, the agent binding with the GitHub tools, the github route and,
 // with --holds, the github-hold binding and route.
 
-// AgentOperations are the toolbelt operations an agent binding gets for a
-// GitHub scope (the builtins it uses plus the github.* tools); HoldOperations
-// those of the github-hold binding. They mirror the setup guide.
+// AgentOperations are what an agent binding is granted for a GitHub scope:
+// the author toolset, so the scope gets every operation a later release
+// adds to the role. HoldOperations are the github-hold binding's.
 // WorkspaceOperations are added for a binding with a git workspace: git
 // itself calls them, through the credential helper a connection with git
 // "bot" installs, so the owner never has to know to grant them.
 var (
-	AgentOperations = []string{"read_context", "wait", "declare_outcome",
-		"github.context", "github.issue.view", "github.issue.comment", "github.issue.list", "github.issue.create",
-		"github.pr.list", "github.pr.view", "github.pr.create", "github.pr.edit", "github.pr.comment", "github.pr.reply", "github.pr.resolve", "github.pr.review", "github.checks",
-		"github.attachment.upload", "github.attachment.get", "github.wait"}
-	HoldOperations      = []string{"emit", "github.hold.status", "github.hold"}
-	WorkspaceOperations = []string{OpGitCredential}
+	AgentOperations     = []string{"@" + ToolsetAuthor}
+	HoldOperations      = []string{"@" + ToolsetHold}
+	WorkspaceOperations = []string{"@" + ToolsetWorkspace}
 )
 
 // Playbook is the skill the agent binding `init github` writes starts its
@@ -123,7 +120,7 @@ func (g GitHubScope) ScopeConfig() map[string]any {
 	bindings := []any{agent}
 	routes := []any{}
 	if g.Holds {
-		authOps = append(authOps, "github.hold.status", "github.hold")
+		authOps = append(authOps, HoldOperations...)
 		bindings = append(bindings, obj("name", "hold", "executor", HoldExecutor, "connection", g.Connection,
 			"requires", obj("toolbelt", "sdk"), "operations", HoldOperations, "secret_names", []string{}, "config", obj()))
 		routes = append(routes, obj("name", "held", "handler", HoldHandler, "binding", "hold", "active_policy", "queue", "config", obj()))

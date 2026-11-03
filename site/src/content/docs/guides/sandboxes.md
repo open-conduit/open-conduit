@@ -102,9 +102,7 @@ This is the [GitHub workflow](../../workflows/github/)'s binding in a container,
       "secret_refs": {"claude-token": "keyring:claude-token"},
       "authorization": {
         "connections": ["github"],
-        "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                       "github.issue.comment", "github.pr.view", "github.pr.create", "github.pr.edit", "github.checks", "github.wait",
-                       "github.git.credential"],
+        "operations": ["@github.author", "@github.workspace"],
         "read_scopes": []
       },
       "extensions": [
@@ -120,9 +118,7 @@ This is the [GitHub workflow](../../workflows/github/)'s binding in a container,
           "executor": "claude-code",
           "connection": "github",
           "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": true},
-          "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                         "github.issue.comment", "github.pr.view", "github.pr.create", "github.pr.edit", "github.checks", "github.wait",
-                         "github.git.credential"],
+          "operations": ["@github.author", "@github.workspace"],
           "secret_names": ["claude-token"],
           "config": {"playbook": "work-issue", "branch": "agent/issue-{number}", "workspace_mode": "clone",
                      "secret_env": {"claude-token": "CLAUDE_CODE_OAUTH_TOKEN"},
@@ -179,7 +175,7 @@ Then select it in the binding's `secret_names` and map it to `CLAUDE_CODE_OAUTH_
 
 The agent runs `git fetch` and `git push` as usual. How git signs in depends on the GitHub connection.
 
-**With a GitHub App connection** (`"auth": "app"`), no GitHub credential enters the container. When git needs one, its credential helper asks the run's toolbelt. Open Conduit then mints an installation token for the Work's one repository, with only `contents: write`. The bot App mints it if you've configured one. Open Conduit revokes the token when the run ends. Revoking the run's toolbelt token at the same time means the helper can't mint another. So code in the container can only push to that repository, and only while the run lasts. For this to work, `github.git.credential` must be in the binding's `operations` and the scope's `authorization.operations`. Agents never call it themselves. If it's missing, `git push` fails to authenticate.
+**With a GitHub App connection** (`"auth": "app"`), no GitHub credential enters the container. When git needs one, its credential helper asks the run's toolbelt. Open Conduit then mints an installation token for the Work's one repository, with only `contents: write`. The bot App mints it if you've configured one. Open Conduit revokes the token when the run ends. Revoking the run's toolbelt token at the same time means the helper can't mint another. So code in the container can only push to that repository, and only while the run lasts. For this to work, `github.git.credential` must be in the binding's `operations` and the scope's `authorization.operations`, which the `@github.workspace` toolset grants. Agents never call it themselves. If it's missing, `git push` fails to authenticate.
 
 Open Conduit keeps the tokens it has minted in memory. If the daemon restarts during a run, it can't revoke tokens minted before the restart, but they expire on their own within the hour.
 
@@ -229,8 +225,7 @@ This is the GitHub workflow's binding in a process sandbox:
   "executor": "claude-code",
   "connection": "github",
   "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": true},
-  "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                 "github.issue.comment", "github.pr.view", "github.pr.create", "github.pr.edit", "github.checks", "github.wait"],
+  "operations": ["@github.author"],
   "secret_names": [],
   "config": {"playbook": "work-issue", "branch": "agent/issue-{number}", "workspace_mode": "clone",
              "env": {"CLAUDE_CONFIG_DIR": "/path/to/sandboxed-claude"}},

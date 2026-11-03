@@ -86,6 +86,16 @@ func TestOfflineValidationMatchesTheDaemonRegistry(t *testing.T) {
 	if diags, err := bootstrap.ValidateConfig(doc); err != nil || len(diags) != 0 {
 		t.Fatalf("init output: %v %v\n%s", diags, err, doc)
 	}
+	// What init grants covers what the agent's playbook uses, through the
+	// toolset, so nothing is reported.
+	if _, warnings, err := bootstrap.CheckConfigAt("", doc); err != nil || len(warnings) != 0 {
+		t.Fatalf("init output warnings: %q %v", warnings, err)
+	}
+	// Negative control: denying an operation the playbook uses is.
+	denied := strings.Replace(string(doc), `"@github.author"`, `"@github.author", "!github.pr.edit"`, 1)
+	if _, warnings, err := bootstrap.CheckConfigAt("", []byte(denied)); err != nil || len(warnings) == 0 || !strings.Contains(strings.Join(warnings, "\n"), "uses github.pr.edit") {
+		t.Fatalf("denied github.pr.edit not reported: %q %v", warnings, err)
+	}
 	bad := strings.Replace(string(doc), `"executor": "claude-code"`, `"executor": "nope"`, 1)
 	if diags, err := bootstrap.ValidateConfig([]byte(bad)); err != nil || len(diags) == 0 {
 		t.Fatalf("invalid executor accepted: %v %v", diags, err)

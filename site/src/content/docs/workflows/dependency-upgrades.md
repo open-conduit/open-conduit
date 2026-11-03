@@ -27,8 +27,7 @@ The `github` entry tracks pull requests. The `upgrades` route claims PRs opened 
       "secret_refs": {},
       "authorization": {
         "connections": ["github"],
-        "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                       "github.issue.comment", "github.pr.view", "github.pr.create", "github.pr.comment", "github.checks", "github.wait"],
+        "operations": ["@github.author"],
         "read_scopes": []
       },
       "extensions": [
@@ -57,8 +56,7 @@ The `github` entry tracks pull requests. The `upgrades` route claims PRs opened 
           "executor": "claude-code",
           "connection": "github",
           "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": true},
-          "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                         "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
+          "operations": ["@github.author"],
           "secret_names": [],
           "config": {"playbook": "work-issue", "branch": "agent/issue-{number}"},
           "resource": {"provider": "git", "config": {"checkout": "/path/to/web", "mode": "work"}}

@@ -68,8 +68,7 @@ Each workflow is a scope in the config. The example below is a complete, minimal
       "secret_refs": {},
       "authorization": {
         "connections": ["github"],
-        "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                       "github.issue.comment", "github.pr.view", "github.pr.create", "github.pr.edit", "github.checks", "github.wait"],
+        "operations": ["@github.author"],
         "read_scopes": []
       },
       "extensions": [
@@ -85,8 +84,7 @@ Each workflow is a scope in the config. The example below is a complete, minimal
           "executor": "claude-code",
           "connection": "github",
           "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": true},
-          "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                         "github.issue.comment", "github.pr.view", "github.pr.create", "github.pr.edit", "github.checks", "github.wait"],
+          "operations": ["@github.author"],
           "secret_names": [],
           "config": {"playbook": "work-issue", "branch": "agent/issue-{number}"},
           "resource": {"provider": "git", "config": {"checkout": "/path/to/web", "mode": "work"}}
@@ -100,6 +98,8 @@ Each workflow is a scope in the config. The example below is a complete, minimal
 Leave out `resource` (and set `workspace` to `false`) for a scope whose turns need no checkout.
 
 The operations appear twice on purpose. The scope's `authorization.operations` is the most any binding in the scope, or in a scope beneath it, may ever be given; it grants nothing by itself. Each binding's `operations` is exactly what its runs get, and must sit within that ceiling. With one binding the two lists match, but a scope with a second binding, such as a reviewer that may review and never open PRs, gives each binding only what it needs.
+
+`@github.author` is a toolset: every operation an agent working an issue needs, as the running release defines it. Granting the toolset rather than listing its operations means an upgrade that gives that role a new operation gives it to your scope too, with no config change. To keep one back, add it with a `!`: `["@github.author", "!github.pr.edit"]`. `open-conduit doctor` warns when a binding isn't granted an operation its playbook uses, and when a list names an older version of a toolset's operations one by one. The [toolbelt operations reference](../../reference/operations/#toolsets) lists the toolsets.
 
 ## Pull request review
 

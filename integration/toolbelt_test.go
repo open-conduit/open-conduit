@@ -13,6 +13,7 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/observability"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -36,6 +37,20 @@ type toolbeltHarness struct {
 	// plan translates the fixture.wait operation (see translated wait cases).
 	plan    func(extension.Authority, domain.Payload) (extension.WaitPlan, error)
 	aliasOK bool
+	// records are the toolbelt's call records; refusal classifies a
+	// refused call (ToolbeltOptions.Refusal) when set.
+	records *[]observability.Record
+	refusal func(runtime.AuthorityCheck) string
+}
+
+// harnessObserver keeps the toolbelt's call records.
+type harnessObserver struct{ h *toolbeltHarness }
+
+func (o harnessObserver) Observe(_ context.Context, r observability.Record) error {
+	o.h.mu.Lock()
+	defer o.h.mu.Unlock()
+	*o.h.records = append(*o.h.records, r)
+	return nil
 }
 
 func allToolbeltOperations() []string {
@@ -56,7 +71,7 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 	o.Capabilities = domain.Capabilities{Toolbelt: extension.ToolbeltCLI}
 	f, executor := schedulerFixture(t, mode, o)
 	base := f.Driver.(*schedulerDriver)
-	h := &toolbeltHarness{f: f, executor: executor, echoes: new(int), deny: new(bool), connection: new(string), mu: &sync.Mutex{}}
+	h := &toolbeltHarness{f: f, executor: executor, echoes: new(int), deny: new(bool), connection: new(string), mu: &sync.Mutex{}, records: new([]observability.Record)}
 	belt, err := runtime.NewToolbelt(f.Store, f.Clock.Now, base.Router, runtime.ToolbeltOptions{
 		Grant: func(context.Context, runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 			return runtime.ToolbeltGrant{Operations: allToolbeltOperations(), EventTypes: []string{"fixture.changed.v1"}, Connection: "fixture-connection"}, nil
@@ -76,6 +91,15 @@ func newToolbeltHarnessRouting(t *testing.T, mode string, handler extension.Rout
 				return errors.New("denied")
 			}
 			return nil
+		},
+		Observer: harnessObserver{h},
+		Refusal: func(_ context.Context, c runtime.AuthorityCheck) string {
+			h.mu.Lock()
+			defer h.mu.Unlock()
+			if h.refusal == nil {
+				return ""
+			}
+			return h.refusal(c)
 		},
 	})
 	if err != nil {
@@ -570,6 +594,49 @@ func TestProductionToolbeltGates(t *testing.T) {
 	_, err = h.belt.Call(ctx, h.token, echo)
 	if !errors.As(err, &oe) || oe.Code != "gate_failed" || !errors.As(err, &gr) || gr.Gate != "alpha" || len(asked) != 1 || *h.echoes != 0 {
 		t.Fatalf("a panicking gate did not refuse first: %v (asked %v, echoes %d)", err, asked, *h.echoes)
+	}
+}
+
+// TestProductionToolbeltRecordsConfigDrift: a refused call the host
+// classifies (an operation the binding's playbook declares, which config
+// doesn't grant) records why, so it reaches the operator as configuration
+// drift rather than as the agent reaching outside its role. Negative
+// control: an unclassified refusal and a granted call carry no reason.
+func TestProductionToolbeltRecordsConfigDrift(t *testing.T) {
+	h := newToolbeltHarness(t, "persistent")
+	ctx := context.Background()
+	// Registered, but not in the attempt's grant.
+	noop := func(context.Context, extension.Authority, domain.Payload) (domain.Payload, error) {
+		return domain.Payload{}, nil
+	}
+	if err := h.belt.Register(extension.Registration{Version: extension.ContractVersion, Name: "tracker",
+		Operations: []extension.Operation{{Name: "tracker.edit", Handler: noop}, {Name: "tracker.delete", Handler: noop}}}); err != nil {
+		t.Fatal(err)
+	}
+	h.refusal = func(c runtime.AuthorityCheck) string {
+		if c.Operation == "tracker.edit" && c.Binding == "fixture" && c.ScopeID == "routing-scope" {
+			return runtime.RefusalConfigDrift
+		}
+		return ""
+	}
+	for _, op := range []string{"tracker.edit", "tracker.delete", "fixture.echo"} {
+		_, _ = h.belt.Call(ctx, h.token, extension.ToolCall{Operation: op, Input: domain.Payload{Schema: "fixture.echo.v1", Data: []byte(`{}`)}})
+	}
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	got := map[string]string{}
+	for _, r := range *h.records {
+		got[r.Attributes["toolbelt.operation"]] = r.Name + " " + r.Attributes["toolbelt.result"] + " " + r.Attributes["toolbelt.refusal"]
+	}
+	want := map[string]string{
+		"tracker.edit":   "toolbelt.rejected unauthorized config_drift",
+		"tracker.delete": "toolbelt.rejected unauthorized ",
+		"fixture.echo":   "toolbelt.called ok ",
+	}
+	for op, w := range want {
+		if got[op] != w {
+			t.Errorf("%s: %q, want %q", op, got[op], w)
+		}
 	}
 }
 

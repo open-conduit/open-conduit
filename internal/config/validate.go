@@ -25,7 +25,13 @@ type Registry struct {
 	Extensions  map[string]ExtensionType
 	Connections map[string]func(config json.RawMessage) error // nil func accepts any object
 	Operations  []string
-	Resources   map[string]bool
+	// Toolsets are the registered extensions' toolsets by name
+	// (extension.Toolset), which operations lists grant as "@<name>".
+	Toolsets map[string]extension.Toolset
+	// Playbooks are the operations each registered playbook declares it
+	// relies on (extension.PlaybookOperations), by playbook name.
+	Playbooks map[string][]string
+	Resources map[string]bool
 	// ResourceConfig optionally validates a registered provider's binding
 	// resource config at load/apply time. Its error text is never echoed.
 	ResourceConfig map[string]func(json.RawMessage) error
@@ -151,6 +157,9 @@ type effective struct {
 	bindings    slots[Binding]
 	routes      slots[Route]
 	extensions  slots[Extension]
+	// resolved are the scope's bindings with their operations lists
+	// resolved against its authorization, by name.
+	resolved map[string]Binding
 }
 
 type validator struct {
@@ -245,7 +254,7 @@ func (v *validator) resolve(id string) *effective {
 		auth: Authorization{[]string{}, []string{}, []string{}, []string{}}, refs: map[string]string{}}
 	if parent != nil {
 		e = &effective{parent.enabled, parent.concurrency, parent.admission, parent.auth, maps.Clone(parent.refs),
-			parent.bindings.clone(), parent.routes.clone(), parent.extensions.clone()}
+			parent.bindings.clone(), parent.routes.clone(), parent.extensions.clone(), nil}
 	}
 	e.enabled = e.enabled && sc.Enabled
 	if a := sc.Authorization; a != nil {
@@ -255,7 +264,6 @@ func (v *validator) resolve(id string) *effective {
 			known              func(string) bool
 		}{
 			{"connections", a.Connections, e.auth.Connections, func(s string) bool { return v.connections[s] }},
-			{"operations", a.Operations, e.auth.Operations, v.operation},
 			{"read_scopes", a.ReadScopes, e.auth.ReadScopes, func(s string) bool { _, ok := v.index[s]; return ok }},
 			{"file_scopes", a.FileScopes, e.auth.FileScopes, func(s string) bool { _, ok := v.index[s]; return ok }},
 		}
@@ -268,7 +276,14 @@ func (v *validator) resolve(id string) *effective {
 				v.fail(p, "unknown_reference", "authorization names an undefined or unregistered "+c.key+" entry: "+strings.Join(unknown, ", "))
 			}
 		}
+		var ceiling []string
+		if parent != nil {
+			ceiling = e.auth.Operations
+		}
+		ops := v.resolveOperations(a.Operations, ceiling, path+"/authorization/operations", "authority_widening",
+			"child authorization must be a subset of the parent's effective operations")
 		e.auth = *a
+		e.auth.Operations = ops
 	}
 	if l := sc.Limits.Concurrency; l > 0 {
 		if l > e.concurrency {
@@ -343,14 +358,18 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 		if own {
 			v.registration(p, b)
 		}
-		if !subset(b.Operations, e.auth.Operations) {
-			v.fail(p+"/operations", "operation_denied", "binding operations must be registered and within the scope authorization")
-		}
+		resolved := b
+		resolved.Operations = v.resolveOperations(b.Operations, e.auth.Operations, p+"/operations", "operation_denied",
+			"binding operations must be registered and within the scope authorization")
+		resolved.Grants = slices.Clone(b.Grants)
 		for k, g := range b.Grants {
-			if !subset(g.Operations, e.auth.Operations) {
-				v.fail(fmt.Sprintf("%s/grants/%d/operations", p, k), "operation_denied", "grant operations must be registered and within the scope authorization")
-			}
+			resolved.Grants[k].Operations = v.resolveOperations(g.Operations, e.auth.Operations, fmt.Sprintf("%s/grants/%d/operations", p, k), "operation_denied",
+				"grant operations must be registered and within the scope authorization")
 		}
+		if e.resolved == nil {
+			e.resolved = map[string]Binding{}
+		}
+		e.resolved[name] = resolved
 		if !secrets(b.SecretNames) {
 			v.fail(p+"/secret_names", "unknown_secret", "selected secret name has no effective reference in this scope")
 		}
@@ -376,7 +395,17 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 			continue
 		}
 		if check := v.reg.HandlerBinding[r.Handler]; check != nil {
-			if err := check(extension.RouteBinding{Executor: b.value.Executor, Operations: b.value.Operations, Config: b.value.Config, Grants: b.value.domainGrants()}); err != nil {
+			// The handler judges what the binding asks for, toolsets
+			// expanded but not narrowed to the scope's grant, so a binding
+			// is refused for what it names even where the ceiling would
+			// take it away.
+			rb := b.value
+			rb.Operations = ResolveOperations(rb.Operations, v.reg, nil)
+			rb.Grants = slices.Clone(rb.Grants)
+			for k := range rb.Grants {
+				rb.Grants[k].Operations = ResolveOperations(rb.Grants[k].Operations, v.reg, nil)
+			}
+			if err := check(extension.RouteBinding{Executor: rb.Executor, Operations: rb.Operations, Config: rb.Config, Grants: rb.domainGrants()}); err != nil {
 				v.fail(p+"/binding", "binding_refused", fmt.Sprintf("route handler %s refuses this binding: %s. Change the binding (its executor, operations, grants or config) to meet that, or route to a handler that accepts it", r.Handler, err))
 			}
 		}
@@ -583,6 +612,95 @@ type ConfigValidator interface {
 func (v *validator) operation(op string) bool {
 	return slices.Contains(Builtins, op) || slices.Contains(v.reg.Operations, op)
 }
+
+// resolveOperations resolves an operations list as written (ResolveOperations)
+// and reports what in it is wrong at path: an entry naming no registered
+// operation or toolset (unknown_reference, so a typo never grants or fails
+// to deny), and an operation named outside ceiling (code, with message).
+// A nil ceiling is the root's: every registered operation. A toolset is
+// narrowed to the ceiling rather than refused, so a release that adds an
+// operation to it never stops a config that grants the toolset from
+// loading; doctor reports what that leaves out (GrantWarnings).
+func (v *validator) resolveOperations(list, ceiling []string, path, code, message string) []string {
+	var ops, toolsets []string
+	for _, entry := range list {
+		name, toolset, _ := grantEntry(entry)
+		if _, ok := v.reg.Toolsets[name]; toolset && !ok {
+			toolsets = append(toolsets, entry)
+		} else if !toolset && !v.operation(name) {
+			ops = append(ops, entry)
+		}
+	}
+	if len(ops) > 0 {
+		v.fail(path, "unknown_reference", "operations name an unregistered operation: "+strings.Join(ops, ", ")+"; use a registered operation")
+	}
+	if len(toolsets) > 0 {
+		name, _, _ := grantEntry(toolsets[0])
+		v.fail(path, "unknown_reference", "operations name an unregistered toolset: "+strings.Join(toolsets, ", ")+
+			"; name a registered toolset as @<name>"+registeredNames(v.reg.Toolsets, name))
+	}
+	if ceiling != nil {
+		for _, entry := range list {
+			if name, toolset, denied := grantEntry(entry); !toolset && !denied && v.operation(name) && !slices.Contains(ceiling, name) {
+				v.fail(path, code, message)
+				break
+			}
+		}
+	}
+	return ResolveOperations(list, v.reg, ceiling)
+}
+
+// grantEntry splits an operations list entry into the name it grants or
+// denies, whether that names a toolset and whether it is denied.
+func grantEntry(entry string) (name string, toolset, denied bool) {
+	entry, denied = strings.CutPrefix(entry, "!")
+	name, toolset = strings.CutPrefix(entry, "@")
+	return name, toolset, denied
+}
+
+// ResolveOperations resolves an operations list as written into operation
+// names: the operations it names and those of the toolsets it names, less
+// the ones it denies ("!op", or "!@toolset" for all of a toolset's). Only
+// registered operations and builtins are granted, and only those in
+// ceiling when it isn't nil: a toolset is narrowed to it. An unregistered
+// toolset grants nothing. The result keeps the list's order, toolsets
+// expanded in place, each operation once.
+func ResolveOperations(list []string, reg Registry, ceiling []string) []string {
+	known := func(op string) bool {
+		return (slices.Contains(Builtins, op) || slices.Contains(reg.Operations, op)) && (ceiling == nil || slices.Contains(ceiling, op))
+	}
+	denied := map[string]bool{}
+	for _, entry := range list {
+		name, toolset, deny := grantEntry(entry)
+		switch {
+		case deny && toolset:
+			for _, op := range reg.Toolsets[name].Names() {
+				denied[op] = true
+			}
+		case deny:
+			denied[name] = true
+		}
+	}
+	out := []string{}
+	add := func(op string) {
+		if known(op) && !denied[op] && !slices.Contains(out, op) {
+			out = append(out, op)
+		}
+	}
+	for _, entry := range list {
+		name, toolset, deny := grantEntry(entry)
+		switch {
+		case deny:
+		case toolset:
+			for _, op := range reg.Toolsets[name].Names() {
+				add(op)
+			}
+		default:
+			add(name)
+		}
+	}
+	return out
+}
 func subset(a, b []string) bool { return all(a, func(s string) bool { return slices.Contains(b, s) }) }
 
 // missing returns the entries of a that f does not know, in order.
@@ -624,9 +742,22 @@ func (v *validator) snapshot() *Snapshot {
 		s.Order = append(s.Order, id)
 		s.Scopes[id] = &EffectiveScope{ID: id, ParentID: domain.ID(sc.Parent), Name: sc.Name, Enabled: e.enabled,
 			Concurrency: e.concurrency, AdmissionLimit: e.admission, Authorization: e.auth,
-			Bindings: e.bindings.active(), Routes: e.routes.active(), Extensions: e.extensions.active(), SecretRefs: e.refs, Source: sc.Source}
+			Bindings: e.activeBindings(), Routes: e.routes.active(), Extensions: e.extensions.active(), SecretRefs: e.refs, Source: sc.Source}
 	}
 	return s
+}
+
+// activeBindings are the scope's enabled bindings, in slot order, with their
+// operations resolved.
+func (e *effective) activeBindings() []Binding {
+	var out []Binding
+	for _, b := range e.bindings.active() {
+		if r, ok := e.resolved[b.Name]; ok {
+			b = r
+		}
+		out = append(out, b)
+	}
+	return out
 }
 
 func (s *Snapshot) Scope(id domain.ID) (*EffectiveScope, bool) {

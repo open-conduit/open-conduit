@@ -29,8 +29,7 @@ Three scopes: `platform`, where parent issues live, and `web` and `api`, where t
       "secret_refs": {},
       "authorization": {
         "connections": ["github"],
-        "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view", "github.issue.list",
-                       "github.issue.create", "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
+        "operations": ["@github.author"],
         "read_scopes": ["web", "api"],
         "file_scopes": ["web", "api"]
       },
@@ -47,8 +46,7 @@ Three scopes: `platform`, where parent issues live, and `web` and `api`, where t
           "executor": "claude-code",
           "connection": "github",
           "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": true},
-          "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view", "github.issue.list",
-                         "github.issue.create", "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
+          "operations": ["@github.author"],
           "secret_names": [],
           "config": {"playbook": "work-issue", "branch": "agent/issue-{number}"},
           "resource": {"provider": "git", "config": {"checkout": "/path/to/platform", "mode": "work"}}
@@ -61,8 +59,7 @@ Three scopes: `platform`, where parent issues live, and `web` and `api`, where t
       "secret_refs": {},
       "authorization": {
         "connections": ["github"],
-        "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                       "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
+        "operations": ["@github.author"],
         "read_scopes": []
       },
       "extensions": [
@@ -78,8 +75,7 @@ Three scopes: `platform`, where parent issues live, and `web` and `api`, where t
           "executor": "claude-code",
           "connection": "github",
           "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": true},
-          "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                         "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
+          "operations": ["@github.author"],
           "secret_names": [],
           "config": {"playbook": "work-issue", "branch": "agent/issue-{number}"},
           "resource": {"provider": "git", "config": {"checkout": "/path/to/web", "mode": "work"}}
@@ -92,8 +88,7 @@ Three scopes: `platform`, where parent issues live, and `web` and `api`, where t
       "secret_refs": {},
       "authorization": {
         "connections": ["github"],
-        "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                       "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
+        "operations": ["@github.author"],
         "read_scopes": []
       },
       "extensions": [
@@ -109,8 +104,7 @@ Three scopes: `platform`, where parent issues live, and `web` and `api`, where t
           "executor": "claude-code",
           "connection": "github",
           "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": true},
-          "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                         "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
+          "operations": ["@github.author"],
           "secret_names": [],
           "config": {"playbook": "work-issue", "branch": "agent/issue-{number}"},
           "resource": {"provider": "git", "config": {"checkout": "/path/to/api", "mode": "work"}}

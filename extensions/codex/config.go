@@ -281,6 +281,16 @@ func ResourceMode(raw json.RawMessage) string {
 	return c.WorkspaceMode
 }
 
+// Playbook is the playbook a binding config starts turns on
+// (extension.PlaybookNamer), "" for none.
+func Playbook(raw json.RawMessage) string {
+	c, err := ParseConfig(raw)
+	if err != nil || c.Playbook == "-" {
+		return ""
+	}
+	return c.Playbook
+}
+
 // expand fills an argument or branch template: {key} is the Work's first
 // correlation key, {number} the first number in it (the key when it has
 // none) and {work} the Work ID.

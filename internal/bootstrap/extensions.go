@@ -201,6 +201,20 @@ func (e manifestExecutor) ResourceMode(raw json.RawMessage) string {
 	return r.ExecutorResourceMode(e.decl.Name)(raw)
 }
 
+// Playbook asks the package which playbook a binding config starts its
+// executor's turns on, when the manifest declares playbook
+// (extension.PlaybookNamer); "" otherwise.
+func (e manifestExecutor) Playbook(raw json.RawMessage) string {
+	if !e.decl.Playbook || e.x == nil {
+		return ""
+	}
+	r, err := e.x.remote()
+	if err != nil {
+		return ""
+	}
+	return r.ExecutorPlaybook(e.decl.Name)(raw)
+}
+
 // ConfigWarnings asks the package for its warnings about a binding config
 // (config.ConfigWarner): validate with kind executor, whose answer an older
 // package leaves without any.
@@ -259,7 +273,7 @@ func offlineExternal(reg *config.Registry, configPath, exclude string) *offlineP
 	for _, f := range found {
 		v := &offlinePackage{f: f}
 		o.packages = append(o.packages, v)
-		x := &installed{m: f.Manifest, offline: v}
+		x := &installed{m: f.Manifest, offline: v, dir: f.Dir}
 		xs = append(xs, x)
 		x.resourceTypes(reg)
 		for _, e := range f.Manifest.Provides.Executors {

@@ -34,8 +34,7 @@ The `red-main` job runs when a check suite on `main` completes with `failure` or
       "secret_refs": {},
       "authorization": {
         "connections": ["github"],
-        "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view", "github.issue.list",
-                       "github.issue.create", "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
+        "operations": ["@github.author"],
         "read_scopes": []
       },
       "extensions": [
@@ -66,8 +65,7 @@ The `red-main` job runs when a check suite on `main` completes with `failure` or
           "executor": "claude-code",
           "connection": "github",
           "requires": {"toolbelt": "mcp", "inject": true, "resume": true, "workspace": true},
-          "operations": ["read_context", "wait", "declare_outcome", "github.context", "github.issue.view",
-                         "github.issue.comment", "github.pr.view", "github.pr.create", "github.checks", "github.wait"],
+          "operations": ["@github.author"],
           "secret_names": [],
           "config": {"playbook": "work-issue", "branch": "agent/issue-{number}"},
           "resource": {"provider": "git", "config": {"checkout": "/path/to/web", "mode": "work"}}

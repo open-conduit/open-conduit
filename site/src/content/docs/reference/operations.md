@@ -13,6 +13,7 @@ The host checks every call where it serves it, from the execution's token, and r
 
 - The scope's `authorization.operations` lists the operations its executions may call. A child scope's list can only narrow its parent's.
 - A binding's `operations` is the exact list its executions get, within the scope's. A Work whose route opts into one of the binding's `grants` also gets that grant's operations, still within the scope's.
+- Either list can name a [toolset](#toolsets) as `@<name>`: every operation the toolset has in the running release, so an install granting it gets what a later release adds to the role. `!<operation>` (or `!@<toolset>`) takes one back out. A toolset a binding names is narrowed to what the scope grants, and a name that isn't registered fails the config.
 - An operation a `human` extension entry lists in `gates` waits at the host for a person's approval before it runs, whoever calls it (see [configuration](../config/#human-decisions-human)).
 - A call acts on the execution's own Work, and only while its lease is current. Waiting on another scope's Events needs that scope in `read_scopes`; filing an issue in, or commenting on, another scope's tracker needs it in `file_scopes`.
 
@@ -77,6 +78,77 @@ Declare how this attempt ends (completed, failed or handoff); it applies when yo
 | `kind` | one of `completed`, `failed`, `handoff` | yes |  |
 | `request_id` | string |  | Optional idempotency key: retrying with the same ID never repeats the effect. |
 | `summary` | string |  |  |
+
+## Toolsets
+
+The operations an extension's agents need for a role, granted together as `@<name>`. Each operation joined its toolset in the version shown; a toolset only gains operations. `open-conduit doctor` reports a list that names an earlier version's operations one by one, with the `config set` that grants the toolset instead.
+
+### `@github.author`
+
+Work a GitHub issue: read it, comment, open and edit its PRs, answer their reviews and wait on them.
+
+| Operation | Since version |
+| --- | --- |
+| `read_context` | 1 |
+| `wait` | 1 |
+| `declare_outcome` | 1 |
+| `github.context` | 1 |
+| `github.issue.view` | 1 |
+| `github.issue.comment` | 1 |
+| `github.issue.list` | 1 |
+| `github.issue.create` | 1 |
+| `github.pr.list` | 1 |
+| `github.pr.view` | 1 |
+| `github.pr.create` | 1 |
+| `github.pr.comment` | 1 |
+| `github.pr.reply` | 1 |
+| `github.checks` | 1 |
+| `github.attachment.upload` | 1 |
+| `github.attachment.get` | 1 |
+| `github.wait` | 1 |
+| `github.pr.review` | 2 |
+| `github.pr.resolve` | 3 |
+| `github.pr.edit` | 4 |
+
+### `@github.holds`
+
+Run held issues: read and settle holds.
+
+| Operation | Since version |
+| --- | --- |
+| `emit` | 1 |
+| `github.hold.status` | 1 |
+| `github.hold` | 1 |
+
+### `@github.reviewer`
+
+Review GitHub PRs: read them and their checks, comment, reply in and resolve threads, and submit reviews.
+
+| Operation | Since version |
+| --- | --- |
+| `read_context` | 1 |
+| `wait` | 1 |
+| `declare_outcome` | 1 |
+| `github.context` | 1 |
+| `github.issue.view` | 1 |
+| `github.pr.list` | 1 |
+| `github.pr.view` | 1 |
+| `github.pr.comment` | 1 |
+| `github.pr.reply` | 1 |
+| `github.pr.resolve` | 1 |
+| `github.pr.review` | 1 |
+| `github.checks` | 1 |
+| `github.attachment.upload` | 1 |
+| `github.attachment.get` | 1 |
+| `github.wait` | 1 |
+
+### `@github.workspace`
+
+Push from a git workspace: git's credential helper asks for a short-lived token.
+
+| Operation | Since version |
+| --- | --- |
+| `github.git.credential` | 1 |
 
 ## Bundled extensions
 

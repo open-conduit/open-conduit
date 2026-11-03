@@ -36,6 +36,8 @@ import (
 // operations, connection and extension types and resource providers.
 func registry(executors map[string]extension.Executor) config.Registry {
 	reg := config.Registry{Executors: executors, Handlers: handlerNames()}
+	// The GitHub playbooks are written to the plugin first (preparePlaybooks).
+	addPlaybooks(&reg, playbooks.All())
 	inprocRegistry(&reg, firstParty())
 	resourceRegistry(&reg)
 	sandboxRegistry(&reg)
@@ -66,7 +68,7 @@ func validateWith(configPath, exclude string, data []byte) ([]config.Diagnostic,
 }
 
 // CheckConfigAt is ValidateConfigAt plus config.ModeWarnings and the
-// executors' config.BindingWarnings from the same validation, so a config
+// executors' config.BindingWarnings and config.GrantWarnings from the same validation, so a config
 // check starts each installed package once. A config that doesn't validate
 // has no such warnings (its diagnostics say what is wrong).
 func CheckConfigAt(configPath string, data []byte) ([]config.Diagnostic, []string, error) {
@@ -79,7 +81,7 @@ func checkWith(configPath, exclude string, data []byte) ([]config.Diagnostic, []
 	defer pkgs.close()
 	s, err := config.ValidateFile(data, reg, fileIncludes(configPath))
 	if err == nil {
-		return nil, append(config.ModeWarnings(s, reg), config.BindingWarnings(s, reg)...), nil
+		return nil, append(append(config.ModeWarnings(s, reg), config.BindingWarnings(s, reg)...), config.GrantWarnings(s, reg)...), nil
 	}
 	var invalid *config.ValidationError
 	if errors.As(err, &invalid) {
@@ -462,7 +464,7 @@ func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtim
 	case err != nil:
 		return []runtime.Check{{Name: "config", Status: runtime.CheckFail, Code: "unvalidated", Detail: "config could not be validated: " + err.Error()}, skipped}
 	}
-	out := []runtime.Check{{Name: "config", Status: runtime.CheckOK, Code: "valid", Detail: configPath}}
+	out := []runtime.Check{{Name: "config", Status: runtime.CheckOK, Code: "valid", Detail: configPath}, grantsCheck(snapshot, reg)}
 	out = append(out, offlineChecks(ctx, snapshot, executors, filepath.Dir(configPath))...)
 	return append(out, claudeVersionCheck(ctx, snapshot), skipped)
 }

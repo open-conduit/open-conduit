@@ -181,6 +181,10 @@ type Provides struct {
 	Recurrences []string `json:"recurrences,omitempty"`
 	// Operations are toolbelt operations the extension serves.
 	Operations []OperationDecl `json:"operations,omitempty"`
+	// Toolsets are named sets of the extension's operations (and builtins)
+	// for the roles its agents play, which config grants as "@<name>"
+	// (extension.Toolset).
+	Toolsets []ToolsetDecl `json:"toolsets,omitempty"`
 	// EntryGated marks an extension whose operations join a generation's
 	// toolbelt only when an enabled scope has one of its entries: removing
 	// the last entry removes them, and a binding still granting them keeps
@@ -465,6 +469,15 @@ type OperationDecl struct {
 	Serves string `json:"serves,omitempty"`
 }
 
+// ToolsetDecl declares a toolset (extension.Toolset): its name, in the
+// extension's namespace, and its operations, each with the toolset version
+// it joined in. Each operation is one the manifest declares or a builtin.
+type ToolsetDecl struct {
+	Name       string                       `json:"name"`
+	Summary    string                       `json:"summary,omitempty"`
+	Operations []extension.ToolsetOperation `json:"operations"`
+}
+
 // ExecutorDecl declares an executor. Capabilities are exactly the bind-time
 // labels of domain.Capabilities; Controls are optional host-driven methods.
 type ExecutorDecl struct {
@@ -477,6 +490,11 @@ type ExecutorDecl struct {
 	// mode never applies and pass the requested mode to a provider's sandbox
 	// check (config.ResourceModer).
 	ResourceMode bool `json:"resource_mode,omitempty"`
+	// Playbook marks an executor that says which playbook a binding config
+	// starts its turns on, through validate with kind executor_playbook, so
+	// config check can tell when a binding doesn't grant the operations
+	// the playbook declares (extension.PlaybookNamer).
+	Playbook bool `json:"playbook,omitempty"`
 	// Pool is the capacity pool the executor's runs count against: "" for
 	// agent turns (settings.concurrency), "jobs" for jobs
 	// (settings.job_concurrency).
@@ -762,6 +780,19 @@ func (m Manifest) Validate() error {
 			}
 		default:
 			fail("operation %q kind %q must be handler, wait or emit", o.Name, o.Kind)
+		}
+	}
+	for i, t := range p.Toolsets {
+		if err := extension.CheckToolset(m.Name, extension.Toolset{Name: t.Name, Operations: t.Operations}); err != nil {
+			fail("%s", err)
+		}
+		if slices.ContainsFunc(p.Toolsets[:i], func(o ToolsetDecl) bool { return o.Name == t.Name }) {
+			fail("toolset %q is declared twice", t.Name)
+		}
+		for _, op := range t.Operations {
+			if !extension.BuiltinOperation(op.Name) && !slices.ContainsFunc(p.Operations, func(o OperationDecl) bool { return o.Name == op.Name }) {
+				fail("toolset %q grants %q, which the manifest doesn't declare", t.Name, op.Name)
+			}
 		}
 	}
 	if p.EntryGated && (len(p.Operations) == 0 || len(p.Extensions) == 0) {

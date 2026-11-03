@@ -430,6 +430,16 @@ func (e *Executor) ResourceMode(raw json.RawMessage) string {
 	return c.WorkspaceMode
 }
 
+// Playbook is the playbook a binding config starts turns on
+// (extension.PlaybookNamer), "" for none.
+func (e *Executor) Playbook(raw json.RawMessage) string {
+	c, err := ParseConfig(raw)
+	if err != nil || c.Playbook == "-" {
+		return ""
+	}
+	return c.Playbook
+}
+
 // FolderConfig adapts a binding from an included folder's config
 // (config.FolderConfigurer): relative dir and plugin_dir resolve against the
 // folder, and a workspace-free binding without dir runs in the folder itself.
