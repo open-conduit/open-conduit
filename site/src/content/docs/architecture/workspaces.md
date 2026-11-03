@@ -29,6 +29,8 @@ These are the guarantees a provider must meet:
 4. A setup failure returns the usable resource together with `ErrResourceSetup`, so it can be inspected.
 5. `Reconcile` is repeatable and restart-safe. It releases leases whose owners finished, applies retention and retries failed cleanup.
 
+The binding's `checkout` must be the root of a git work tree (a relative one is resolved against the config's directory). The provider checks that git's `--show-toplevel` and the configured path name the same directory (`os.SameFile`), not that they are spelled alike, so on a case-insensitive or normalising file system a path written in another case still counts. From then on it uses the on-disk spelling, which the provider reads from each parent directory's listing rather than trusting git (on Linux git repeats the caller's spelling), so leases and per-repository locks agree however the path was written. A subdirectory of a work tree is refused as `ErrInvalid`.
+
 ## Modes, from the real GitHub needs
 
 | Mode | Owner | Behavior |
@@ -111,7 +113,7 @@ The daemon reconciles every `ResourceInterval` (default 5s) in the background. D
 
 ## Shell executor
 
-A shell binding with a resource runs in `Resource.Dir` with the provider layer. `dir` and a bound workspace together are rejected (`invalid_config`). Acquisition happens after recovery intent and before the process deadline starts. The provider's explanation (fast-forward, behind/stale reason, copied files, setup output) is written to the run's log artifact. The structured result carries `workspace: {ref, schema, data}`. A setup failure or unavailable workspace becomes a structured failed result with no process (`workspace_setup_failed`, `workspace_unavailable`, and `workspace_no_space` for a full-disk refusal), so no uncertain hold remains. The `workspace_unavailable` summary carries the first line of the provider's error. The shell executor advertises the mechanical `workspace` capability.
+A shell binding with a resource runs in `Resource.Dir` with the provider layer. `dir` and a bound workspace together are rejected (`invalid_config`). Acquisition happens after recovery intent and before the process deadline starts. The provider's explanation (fast-forward, behind/stale reason, copied files, setup output) is written to the run's log artifact. The structured result carries `workspace: {ref, schema, data}`. A setup failure or unavailable workspace becomes a structured failed result with no process (`workspace_setup_failed`, `workspace_unavailable`, and `workspace_no_space` for a full-disk refusal), so no uncertain hold remains. The `workspace_unavailable` summary carries the first line of the provider's error. When the provider refused the request as `extension.ErrInvalid` (a checkout that is not a work tree's root), the result is also `Permanent`, so it is not retried ([outcomes and retry](../execution-scheduling/#outcomes-handoff-and-retry)). The shell executor advertises the mechanical `workspace` capability.
 
 ## Run summaries
 

@@ -171,6 +171,10 @@ func TestWireTypesRoundTripTheContracts(t *testing.T) {
 	if got := roundTrip(t, protocol.FromResult(result)).Extension(); !reflect.DeepEqual(got, result) {
 		t.Errorf("result:\n%+v\n%+v", got, result)
 	}
+	permanent := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "misconfigured"}, Permanent: true}
+	if got := roundTrip(t, protocol.FromResult(permanent)).Extension(); !got.Permanent {
+		t.Error("a permanent failure lost its mark on the wire")
+	}
 	plan := extension.WaitPlan{Wait: extension.WaitRequest{Match: domain.EventMatch{Keys: []domain.CorrelationKey{key}, Types: []string{"chat.message.posted"}}, Timeout: &now, AfterSequence: 4}, Dependencies: []extension.Dependency{{ID: "d", SourceScopeID: "s", SourceKey: key, Types: []string{"t.x"}, AliasType: "chat.alias", Filter: domain.Payload{Schema: "chat.filter.v1", Data: []byte(`{}`)}, Label: "l", FromNow: true}}, Output: domain.Payload{Schema: "chat.out.v1", Data: []byte(`{}`)}}
 	if got := roundTrip(t, protocol.FromWaitPlan(plan)).Extension(); !reflect.DeepEqual(got, plan) {
 		t.Errorf("wait plan differs")

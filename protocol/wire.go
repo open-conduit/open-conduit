@@ -762,6 +762,7 @@ type Result struct {
 	Artifacts      []ArtifactRef    `json:"artifacts,omitempty"`
 	RetryAfter     bool             `json:"retry_after,omitempty"`
 	RetryResetAt   *time.Time       `json:"retry_reset_at,omitempty"`
+	Permanent      bool             `json:"permanent,omitempty"`
 	ConsumedInputs []string         `json:"consumed_inputs,omitempty"`
 	Workspace      *WorkspaceRecord `json:"workspace,omitempty"`
 }
@@ -771,6 +772,7 @@ func FromResult(r extension.Result) Result {
 	if r.RetryHint != nil {
 		out.RetryAfter, out.RetryResetAt = true, r.RetryHint.ResetAt
 	}
+	out.Permanent = r.Permanent
 	for _, id := range r.ConsumedInputs {
 		out.ConsumedInputs = append(out.ConsumedInputs, string(id))
 	}
@@ -784,6 +786,7 @@ func (r Result) Extension() extension.Result {
 	if r.RetryAfter {
 		out.RetryHint = &extension.RetryHint{ResetAt: r.RetryResetAt}
 	}
+	out.Permanent = r.Permanent
 	for _, id := range r.ConsumedInputs {
 		out.ConsumedInputs = append(out.ConsumedInputs, domain.ID(id))
 	}

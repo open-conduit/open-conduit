@@ -152,6 +152,13 @@ type Result struct {
 	// result also establishes that the attempt finished. Only failed outcomes
 	// may carry it.
 	RetryHint *RetryHint
+	// Permanent says a failed outcome is one trying again cannot cure: the
+	// binding, its resource or the executor's own config is wrong, and the
+	// next attempt would fail the same way. Core arms no retry and spends the
+	// Work's retry budget at once, so the operator sees the failure at the
+	// first attempt; a manual retry after fixing the config still runs. Only
+	// failed outcomes may carry it, and never with a RetryHint.
+	Permanent bool
 	// ConsumedInputs is the generic inject acknowledgement (B04, 04-02). It
 	// names Events core delivered to this attempt through Inject that the
 	// executor has evidence the running process took in (an echo of the
@@ -334,6 +341,12 @@ func ValidateResult(r Result) error {
 	}
 	if r.RetryHint != nil && r.Outcome.Kind != domain.OutcomeFailed {
 		return fmt.Errorf("%w: retry hint on a non-failed outcome", ErrInvalid)
+	}
+	if r.Permanent && r.Outcome.Kind != domain.OutcomeFailed {
+		return fmt.Errorf("%w: permanent on a non-failed outcome", ErrInvalid)
+	}
+	if r.Permanent && r.RetryHint != nil {
+		return fmt.Errorf("%w: a permanent failure with a retry hint", ErrInvalid)
 	}
 	seen := map[domain.ID]bool{}
 	for _, id := range r.ConsumedInputs {

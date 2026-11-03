@@ -571,6 +571,15 @@ func TestProductionSchedulerResultRetryHint(t *testing.T) {
 	if err := extension.ValidateResult(extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff}, RetryHint: &extension.RetryHint{}}); !errors.Is(err, extension.ErrInvalid) {
 		t.Fatalf("a hint on a handoff outcome was accepted: %v", err)
 	}
+	if err := extension.ValidateResult(extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted}, Permanent: true}); !errors.Is(err, extension.ErrInvalid) {
+		t.Fatalf("a permanent completed outcome was accepted: %v", err)
+	}
+	if err := extension.ValidateResult(extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed}, Permanent: true, RetryHint: &extension.RetryHint{}}); !errors.Is(err, extension.ErrInvalid) {
+		t.Fatalf("a permanent failure with a retry hint was accepted: %v", err)
+	}
+	if err := extension.ValidateResult(extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed}, Permanent: true}); err != nil {
+		t.Fatalf("a permanent failure was refused: %v", err)
+	}
 }
 
 func TestProductionSchedulerInjectCompletionRaceRetainsInput(t *testing.T) {

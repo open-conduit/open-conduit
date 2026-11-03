@@ -178,6 +178,14 @@ func (s *Scheduler) failureWithHintInTx(tx storage.Tx, x domain.Execution, resul
 		// so standing Work is never exhausted by it.
 		state.Exhausted = false
 	}
+	if result.Permanent && !standing {
+		// The executor says trying again would fail the same way (a
+		// misconfigured binding or resource): spend the budget now rather
+		// than arm retries that cannot help, and say so: one failure of a
+		// longer budget is otherwise indistinguishable from a policy bug. A
+		// manual retry still runs, and clears the reason.
+		state.Exhausted, state.BlockedReason = true, "permanent_failure"
+	}
 	w.State = domain.WorkReady
 	if state.Exhausted && policy.TerminalOnExhaustion {
 		w.State = domain.WorkFailed

@@ -260,3 +260,52 @@ func TestSchedulerControlErrorPolicies(t *testing.T) {
 		})
 	}
 }
+
+// TestSchedulerPermanentFailureArmsNoRetry fails a Work whose executor says
+// trying again cannot help: the budget is spent at once and no retry timer is
+// armed, yet a manual retry still runs. A failure without the mark arms the
+// first delay as before (the negative control).
+func TestSchedulerPermanentFailureArmsNoRetry(t *testing.T) {
+	ctx := context.Background()
+	f, _ := schedulerFixture(t, "reopen", routingOptions(routingHandlerFunc(routingDecision), "queue"))
+	s := f.Driver.(*schedulerDriver).Scheduler
+	fail := func(name string, permanent bool) (domain.ID, runtime.RetryState) {
+		work := seedSchedulerWork(t, f, name)
+		a, err := s.Start(ctx, work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if err = s.Complete(ctx, a.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "workspace acquisition failed"}, Permanent: permanent}); err != nil {
+			t.Fatal(err)
+		}
+		status, err := s.RetryStatus(ctx, work)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return work, status
+	}
+	work, status := fail("permanent-failure", true)
+	if !status.Exhausted || status.FailureCount != 1 || !status.EligibleAt.IsZero() || status.BlockedReason != "permanent_failure" {
+		t.Fatalf("a permanent failure armed a retry: %+v", status)
+	}
+	routingRead(t, f, func(tx storage.Tx) error {
+		if _, er := tx.Timer(status.TimerID); !errors.Is(er, storage.ErrNotFound) {
+			t.Fatalf("retry timer armed: %v", er)
+		}
+		return nil
+	})
+	manual := routingEvent(f, "manual-after-permanent", nil)
+	manual.Type, manual.WorkID = "core.retry.requested", work
+	if err := f.Driver.Accept(manual); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.ProcessRetry(ctx, manual.ID); err != nil {
+		t.Fatalf("manual retry after a permanent failure: %v", err)
+	}
+	if _, err := s.Start(ctx, work); err != nil {
+		t.Fatalf("manual retry did not make the Work runnable: %v", err)
+	}
+	if _, status = fail("ordinary-failure", false); status.Exhausted || status.BlockedReason != "" || !status.EligibleAt.Equal(f.Clock.Now().Add(5*time.Minute)) {
+		t.Fatalf("an ordinary failure did not arm its retry: %+v", status)
+	}
+}

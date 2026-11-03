@@ -602,11 +602,13 @@ func TestWorkspaceThroughBroker(t *testing.T) {
 	for _, c := range []struct {
 		name, config, reason string
 		err                  error
+		permanent            bool
 	}{
-		{"setup", `{"command":"true"}`, "workspace_setup_failed", fmt.Errorf("%w: exit 1", extension.ErrResourceSetup)},
-		{"unavailable", `{"command":"true"}`, "workspace_unavailable", errors.New("checkout missing")},
-		{"no-space", `{"command":"true"}`, "workspace_no_space", fmt.Errorf("%w: not enough disk space; free space, then retry", extension.ErrResourceExhausted)},
-		{"conflict", `{"command":"true","dir":"/tmp"}`, "invalid_config", nil},
+		{"setup", `{"command":"true"}`, "workspace_setup_failed", fmt.Errorf("%w: exit 1", extension.ErrResourceSetup), false},
+		{"unavailable", `{"command":"true"}`, "workspace_unavailable", errors.New("checkout missing"), false},
+		{"invalid", `{"command":"true"}`, "workspace_unavailable", fmt.Errorf("%w: checkout is not the root of a git work tree", extension.ErrInvalid), true},
+		{"no-space", `{"command":"true"}`, "workspace_no_space", fmt.Errorf("%w: not enough disk space; free space, then retry", extension.ErrResourceExhausted), false},
+		{"conflict", `{"command":"true","dir":"/tmp"}`, "invalid_config", nil, true},
 	} {
 		r, _ := request("exec-ws-"+c.name, 1, c.config)
 		r.Context.Resources = &fakeBroker{dir: ws, err: c.err}
@@ -614,10 +616,15 @@ func TestWorkspaceThroughBroker(t *testing.T) {
 		if res.Outcome.Kind != domain.OutcomeFailed || data(t, res).Reason != c.reason {
 			t.Fatalf("%s: %+v %s", c.name, res.Outcome, res.Outcome.Data.Data)
 		}
+		// A misconfigured resource or binding fails every attempt the same
+		// way, so it says retrying cannot help; anything else may pass.
+		if res.Permanent != c.permanent {
+			t.Fatalf("%s: permanent = %v, want %v", c.name, res.Permanent, c.permanent)
+		}
 		if c.reason == "workspace_no_space" && !strings.Contains(res.Outcome.Summary, "free space, then retry") {
 			t.Fatalf("the refusal lost its advice: %q", res.Outcome.Summary)
 		}
-		if c.reason == "workspace_unavailable" && res.Outcome.Summary != "workspace acquisition failed: checkout missing" {
+		if c.name == "unavailable" && res.Outcome.Summary != "workspace acquisition failed: checkout missing" {
 			t.Fatalf("the unavailable summary lost the provider's reason: %q", res.Outcome.Summary)
 		}
 	}

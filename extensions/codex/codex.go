@@ -259,6 +259,10 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 			return e.preset(ctx, rn, "workspace_setup_failed", "workspace setup failed")
 		case errors.Is(err, extension.ErrResourceExhausted):
 			return e.preset(ctx, rn, "workspace_no_space", err.Error())
+		case errors.Is(err, extension.ErrInvalid):
+			// The binding's resource is misconfigured (a checkout that is
+			// not a work tree's root): every attempt would fail the same way.
+			return e.presetWith(ctx, rn, "workspace_unavailable", unavailable(err), true)
 		case err != nil || res.Dir == "":
 			return e.preset(ctx, rn, "workspace_unavailable", unavailable(err))
 		}
@@ -403,6 +407,13 @@ func tomlString(s string) string {
 // preset finishes a segment that never started a process with a structured
 // failed result, so no uncertain resource hold is left behind.
 func (e *Executor) preset(ctx context.Context, rn *run, reason, summary string) (extension.RunHandle, error) {
+	return e.presetWith(ctx, rn, reason, summary, reason == "invalid_config")
+}
+
+// presetWith is preset, saying whether trying again could help: a
+// misconfigured binding or resource fails the same way every time.
+func (e *Executor) presetWith(ctx context.Context, rn *run, reason, summary string, permanent bool) (extension.RunHandle, error) {
+	rn.permanent = permanent
 	out := domain.Outcome{Kind: domain.OutcomeFailed, Summary: summary}
 	out.Data = resultData(ResultSchema, resultFields{Reason: reason})
 	if _, err := e.finalizeWith(ctx, rn, &out); err != nil {

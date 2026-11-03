@@ -33,6 +33,9 @@ type run struct {
 	pid      int
 	done     chan struct{}
 	state    *os.ProcessState
+	// permanent marks a preset failure that trying again cannot cure (see
+	// extension.Result.Permanent).
+	permanent bool
 }
 
 type intent struct {
@@ -403,6 +406,7 @@ func (e *Executor) finalizeWith(ctx context.Context, rn *run, preset *domain.Out
 	}
 	outcome.Data = resultData(f)
 	result.Outcome = outcome
+	result.Permanent = preset != nil && rn.permanent
 	result.ConsumedInputs = consumedInputs(rn.dir)
 	// The segment's wall time is what a shell command costs: budgets can
 	// limit it in minutes (#361).

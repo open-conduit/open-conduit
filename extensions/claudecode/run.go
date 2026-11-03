@@ -196,6 +196,10 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 			// Refused before anything was made (a full disk); the provider's
 			// message says what to free.
 			return e.preset(ctx, rn, cfg.StatusSchema, "workspace_no_space", err.Error(), nil)
+		case errors.Is(err, extension.ErrInvalid):
+			// The binding's resource is misconfigured (a checkout that is
+			// not a work tree's root): every attempt would fail the same way.
+			return e.presetWith(ctx, rn, cfg.StatusSchema, "workspace_unavailable", unavailable(err), nil, true)
 		case err != nil || res.Dir == "":
 			return e.preset(ctx, rn, cfg.StatusSchema, "workspace_unavailable", unavailable(err), nil)
 		}
@@ -448,6 +452,12 @@ func tokenFile(r extension.RunRequest, dir string) string {
 // preset finishes a segment that never started a process with a structured
 // failed result, so no uncertain resource hold is left behind.
 func (e *Executor) preset(ctx context.Context, rn *run, schema, reason, summary string, hint *extension.RetryHint) (extension.RunHandle, error) {
+	return e.presetWith(ctx, rn, schema, reason, summary, hint, hint == nil && reason == "invalid_config")
+}
+
+// presetWith is preset, saying whether trying again could help: a
+// misconfigured binding or resource fails the same way every time.
+func (e *Executor) presetWith(ctx context.Context, rn *run, schema, reason, summary string, hint *extension.RetryHint, permanent bool) (extension.RunHandle, error) {
 	f := resultFields{Reason: reason}
 	if hint != nil && hint.ResetAt != nil {
 		f.Limited, f.ResetsAt = true, hint.ResetAt
@@ -457,7 +467,7 @@ func (e *Executor) preset(ctx context.Context, rn *run, schema, reason, summary 
 		ws.Dir = ""
 		f.Workspace = &ws
 	}
-	res := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: summary, Data: resultData(schema, f)}, RetryHint: hint, Workspace: historyWorkspace(rn.dir)}
+	res := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: summary, Data: resultData(schema, f)}, RetryHint: hint, Permanent: permanent, Workspace: historyWorkspace(rn.dir)}
 	if _, err := e.finalizeWith(ctx, rn, &res); err != nil {
 		return nil, err
 	}
