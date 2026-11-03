@@ -96,6 +96,11 @@ func TestExternalSlackRoundTrip(t *testing.T) {
 	if err := ingress.Register(context.Background(), srcs[0].Name, srcs[0].Source.Extension(), r.Ingress(srcs[0]), 15*time.Minute); err != nil {
 		t.Fatal(err)
 	}
+	// The extension opens its socket from its paced sockets task, which
+	// the daemon's loop runs; this harness runs it by hand.
+	if err := r.Task(context.Background(), "slack-sockets"); err != nil {
+		t.Fatal(err)
+	}
 	waitFor(t, "socket connected", func() bool { return fake.SocketsOpen() == 1 })
 
 	root := fake.Post(channel, "UALICE", "the export is broken")
@@ -190,7 +195,7 @@ func TestExternalSlackRoundTrip(t *testing.T) {
 	if err := r.Task(context.Background(), slackext.ProjectTask); err != nil {
 		t.Fatalf("projection task: %v", err)
 	}
-	if res, err := r.Check(context.Background(), "slack", false, protocol.CheckConfig{}); err != nil || !res.OK || !strings.Contains(res.Detail, "receiver socket") {
+	if res, err := r.Check(context.Background(), "slack", false, protocol.CheckConfig{}); err != nil || !res.OK || !strings.Contains(strings.Join(res.Items, "\n"), "receiver socket") {
 		t.Fatalf("check: %+v %v", res, err)
 	}
 	if text, ok := r.Render(context.Background(), accepted.Event); !ok || !strings.Contains(text, "the export is broken") {

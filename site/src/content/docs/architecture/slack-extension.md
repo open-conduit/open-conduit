@@ -2,7 +2,7 @@
 title: "Slack ingress, conversations and marked replies"
 ---
 
-The first-party Slack extension in [`extensions/slack`](https://github.com/open-conduit/open-conduit/tree/main/extensions/slack) turns Slack threads into support conversations: a person's message starts a `slack.conversation` Work, an agent replies in the thread with marked replies, and later messages in the thread reach the same Work. It is built only against the public contracts: [B03 ingress](../extensions/), [B04 routing](../runtime-semantics/) and [B02 storage/KV](../domain-storage/). It has no workspace, repository or tracker concept, and the runtime does not import it. It runs in process on the public [`extension/inproc`](https://github.com/open-conduit/open-conduit/blob/main/extension/inproc/inproc.go) contract (`extensions/slack/extension.go`), named only in bootstrap's `firstParty()`, and out of process as `extensions/slack/pkg`.
+The first-party Slack extension in [`extensions/slack`](https://github.com/open-conduit/open-conduit/tree/main/extensions/slack) turns Slack threads into support conversations: a person's message starts a `slack.conversation` Work, an agent replies in the thread with marked replies, and later messages in the thread reach the same Work. It is built only against the public contracts: [B03 ingress](../extensions/), [B04 routing](../runtime-semantics/) and [B02 storage/KV](../domain-storage/). It has no workspace, repository or tracker concept, and the runtime does not import it. It is written against the public [`extension/inproc`](https://github.com/open-conduit/open-conduit/blob/main/extension/inproc/inproc.go) contract (`extensions/slack/extension.go`) and runs out of process as a package bundled with the release: `extensions/slack/pkg` serves it unchanged through `protocol/sdk/inprocsdk` as `open-conduit extension-run slack`.
 
 This page records two decisions: the manifest requests `metadata.message:read` for reply markers, and a support conversation waits while it is open and completes only on resolution. The tests use fixtures and the [`slacktest`](https://github.com/open-conduit/open-conduit/tree/main/extensions/slack/slacktest) fake (Web API, Socket Mode and Events API); one short run on real Slack is recorded under [History](#history).
 
@@ -51,7 +51,7 @@ With `--bot-token REF --app-token REF --team T… --channel C…`, setup prompts
 
 The `slack-cli` path is unverified against a real Slack CLI. The manifest URL path and the token checks have been run against real Slack.
 
-**Doctor.** `slack_auth` (`--check-secrets`) runs the extension-owned `slack.CheckAuth`. It checks that the token's team is the entry's team and its user is the entry's bot user. It also compares the granted scopes with the manifest (`MissingScopes`). A missing `chat:write`, or both history scopes missing, fails with `scopes_missing`. Any other missing scope warns with `scopes_missing` and says what it costs (for `metadata.message:read`: markers found only by the text fallback). Bootstrap only maps the severity onto the check.
+**Doctor.** `slack-auth` (`--check-secrets`) runs the extension-owned `slack.CheckAuth`. It checks that the token's team is the entry's team and its user is the entry's bot user. It also compares the granted scopes with the manifest (`MissingScopes`). A missing `chat:write`, or both history scopes missing, fails with `scopes_missing`. Any other missing scope warns with `scopes_missing` and says what it costs (for `metadata.message:read`: markers found only by the text fallback). Bootstrap only maps the severity onto the check.
 
 ## Configuration
 
@@ -270,9 +270,10 @@ These notes record how this part was built and the evidence gathered at each sta
 
 A short run on 2026-10-25 used a real workspace app created with `init slack` from the manifest (Socket Mode, tokens in the keyring) and the support binding on Claude Code with `model: haiku`:
 
-- `doctor --check-secrets`: `slack_auth verified`, with the granted scopes equal to the manifest's (no `scopes_missing`).
+- `doctor --check-secrets`: `slack-auth verified`, with the granted scopes equal to the manifest's (no `scopes_missing`).
 - **Metadata.** With `metadata.message:read`, `conversations.replies` with `include_all_metadata=true` returns the marker's full payload `{work, execution, intent}`. Without `include_all_metadata`, only the `event_type` comes back. The case without the scope was not tested (it needs an install without it), so the text fallback remains fixture-proven.
 - **One real thread.** The top-level message created one `slack.conversation` Work over Socket Mode. The marked reply came back as `slack.message.agent` and was never input. The first thread reply woke the wait and resumed the same execution and Claude session. The daemon was SIGKILLed mid-wait and restarted, and the next reply woke the same Work, execution and session. A message posted 14 s into that turn was routed `inject`, echoed (`injected {accepted 1, consumed 1}`) and answered in the same reply. It neither woke the next wait nor started an attempt. Attempt 1 was the only execution, across three turns.
 - **No workspace or Git.** `github` stayed `not_configured`, with 0 resource leases.
 - **Not observed.** No 429 was seen, so real rate limits are unmeasured. No mention was posted, so `app_mention` duplication was not seen. `--via slack-cli` was not run.
 - Issue #357 moved the extension off its bespoke bootstrap wiring (`internal/bootstrap/slack.go`) onto `extension/inproc`. An entry's webhook route moved from doctor `webhooks` to doctor `slack`, and its reconcile state to the host's `reconcile_lag` check, which now lists every source's last scan.
+- Issue #428 replaced the hand-written package that mirrored the extension with `inprocsdk` serving the extension itself, so there is one implementation, and moved it out of process. The package now ships the `slack-thread` playbook, and its deep check is `slack-auth`.

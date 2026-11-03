@@ -54,7 +54,7 @@ var runnable = map[string]struct {
 	"schedule":      {scheduleext.Main, scheduleext.Manifest, nil},
 	"sentry":        {sentry.Main, sentry.Manifest, nil},
 	"shell":         {shellext.Main, shellext.Manifest, nil},
-	"slack":         {slackext.Main, slackext.Manifest, nil},
+	"slack":         {slackext.Main, slackext.Manifest, slackext.Playbooks},
 }
 
 // hostManifest is extproc.HostManifest for this binary: discovery asks the

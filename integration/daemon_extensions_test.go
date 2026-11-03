@@ -43,9 +43,10 @@ func TestDaemonExtensionPackages(t *testing.T) {
 			t.Fatalf("install %s: %v\n%s", bin, err, out)
 		}
 	}
-	// A package claiming a first-party name is refused at install.
-	slackDir, _ := hostPackage(t, pkgs, "slack")
-	if out, err := cli("extension", "install", slackDir); err == nil || !strings.Contains(out, "registration_conflict") {
+	// A package claiming the name of a first-party extension registered in
+	// process is refused at install.
+	githubDir, _ := hostPackage(t, pkgs, "github")
+	if out, err := cli("extension", "install", githubDir); err == nil || !strings.Contains(out, "registration_conflict") {
 		t.Fatalf("installing a first-party name: %v\n%s", err, out)
 	}
 	if out, err := cli("extension", "list"); err != nil || !strings.Contains(out, "notes") || !strings.Contains(out, "runner") {

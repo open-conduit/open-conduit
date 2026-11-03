@@ -604,16 +604,27 @@ Takes no input.
 
 ### slack
 
-The first-party Slack extension (workspace-free support threads) as a subprocess package.
+Works support conversations in Slack channels over Socket Mode or the Events API, each thread its own Work.
 
 #### `slack.context`
 
-It declares no input schema.
+Show the Slack thread this Work serves and how to read it, reply in it and wait for the next message.
+
+Takes no input.
 
 #### `slack.reply`
 
-It declares no input schema.
+Post a reply in this Work's Slack thread; a retried call posts it once.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `broadcast` | boolean |  | also post the reply to the channel, not only the thread; default false |
+| `text` | string | yes | the reply as Slack mrkdwn text, not blank and at most 40000 bytes |
 
 #### `slack.thread`
 
-It declares no input schema.
+Read the messages of this Work's Slack thread, oldest first.
+
+| Input | Type | Required | Meaning |
+| --- | --- | --- | --- |
+| `limit` | integer |  | how many of the latest messages to return, 1 to 1000; default (and any value outside that range) 200 |
