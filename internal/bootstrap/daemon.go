@@ -15,7 +15,6 @@ import (
 	"io"
 	"io/fs"
 	"log/slog"
-	"maps"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -440,7 +439,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 	}
 	d.executors, d.pools = map[string]extension.Executor{}, map[string]string{}
 	if usage != nil {
-		usage.known = knownTypes(registry(maps.Clone(d.executors)))
+		usage.known = firstPartyTypes()
 	}
 	defer d.stopPackages()
 	d.openResources()

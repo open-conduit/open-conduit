@@ -267,7 +267,14 @@ func (u *usageReporter) report(s *config.Snapshot) map[string]any {
 	return props
 }
 
-// knownTypes are the first-party types a report may name.
+// firstPartyTypes are the first-party types a report may name: those the
+// packages bundled with this binary declare. A type only an installed
+// package declares is counted, never named.
+func firstPartyTypes() map[string]bool {
+	return knownTypes(bundledRegistry())
+}
+
+// knownTypes are the types a registry declares.
 func knownTypes(reg config.Registry) map[string]bool {
 	out := map[string]bool{}
 	for t := range reg.Extensions {

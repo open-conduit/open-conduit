@@ -16,6 +16,7 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/observability"
+	"github.com/open-conduit/open-conduit/protocol"
 )
 
 type captured struct {
@@ -126,5 +127,26 @@ func TestUsageReporterReports(t *testing.T) {
 	again, err := newUsageReporter(o)
 	if err != nil || again.installed || again.id != u.id {
 		t.Fatalf("restart: %+v, %v", again, err)
+	}
+}
+
+// The first-party types a report names are those the bundled packages
+// declare; with none bundled, nothing is named (#512: since packages
+// replaced in-process registration, the known set was always empty).
+func TestFirstPartyTypesComeFromBundledPackages(t *testing.T) {
+	root := withBundled(t)
+	if got := firstPartyTypes(); len(got) != 0 {
+		t.Fatalf("with no bundled package: %v, want none", got)
+	}
+	writeManifest(t, root, "acme", protocol.Provides{
+		Extensions:  []protocol.ExtensionDecl{{Type: "acme"}},
+		Connections: []protocol.TypeDecl{{Type: "acme-conn"}},
+		Executors:   []protocol.ExecutorDecl{{Name: "acme-agent", Capabilities: protocol.Capabilities{Toolbelt: "none"}}},
+	})
+	got := firstPartyTypes()
+	for _, want := range []string{"acme", "acme-conn", "acme-agent"} {
+		if !got[want] {
+			t.Errorf("first-party types %v, want %s", got, want)
+		}
 	}
 }
