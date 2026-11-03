@@ -47,7 +47,7 @@ The binding's sandbox config is exactly what a sandboxed process is granted. The
 The protected set is not operator config, and a policy can't lift it:
 
 - **Denied:** the state directory (the operator token, `management.sock`, the database, every other execution's run directory and workspace), the fallback toolbelt socket root (`/tmp/open-conduit-<uid>`) and the config file.
-- **The only exceptions:** this attempt's run directory and workspace (read and write), and, read-only, the execution's toolbelt directory (its token and socket) and the published playbooks.
+- **The only exceptions:** this attempt's run directory and workspace (read and write), and, read-only, the execution's toolbelt directory (its token and socket), the published playbooks and the daemon's stable link to `os` (`<state>/toolbelt`, first on a run's PATH).
 
 The host refuses, as `sandbox_denied`, an executor need beneath the protected set outside those exceptions, a socket there other than the execution's toolbelt, and a run directory or workspace that would contain a protected path. The provider refuses a policy whose write grant is a protected path, contains one with something writable beneath it (the state directory, which holds the workspace), or reaches into one, or whose read exception reaches into one, other than at those exceptions. A protected path inside a write grant with nothing writable beneath it (the fallback socket root under a granted `/tmp`) is denied inside the grant.
 

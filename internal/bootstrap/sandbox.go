@@ -71,6 +71,11 @@ func (d *daemon) bindSandbox(ctx context.Context, state runtime.AttemptState, re
 	}
 	run := d.endpoints.Dir(state.ExecutionID)
 	shared := []string{run, d.pluginDir()}
+	// The stable link to `os` is first on a run's PATH, so the executor
+	// asks to read it; it holds nothing but that link.
+	if d.o.ToolbeltDir != "" {
+		shared = append(shared, d.o.ToolbeltDir)
+	}
 	socket := d.endpoints.Socket(state.ExecutionID)
 	if socket != "" {
 		shared = append(shared, filepath.Dir(socket))
