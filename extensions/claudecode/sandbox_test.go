@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -173,5 +174,27 @@ func TestRunDirectoriesWin(t *testing.T) {
 	}
 	if slices.Contains(b.needs[0].Read, filepath.Join(h.root, "bin")) || slices.Contains(b.needs[0].Read, filepath.Join(h.root, "own-plugins")) {
 		t.Fatalf("needs %+v read the executor's own directories", b.needs)
+	}
+}
+
+// TestHostEnv: the executor names CLAUDE_CONFIG_DIR and a binding's
+// pass_env as the host variables it admits, and a run takes the host's
+// values of them (ExecutionContext.HostEnv) over its own process's; a host
+// variable the binding doesn't admit is dropped.
+func TestHostEnv(t *testing.T) {
+	h := newHarness(t)
+	e := h.executor()
+	cfg := h.bindingConfig(map[string]any{"pass_env": []string{"HTTPS_PROXY"}})
+	if got := e.HostEnv(cfg); !slices.Equal(got, []string{"CLAUDE_CONFIG_DIR", "HTTPS_PROXY"}) {
+		t.Fatalf("HostEnv %v", got)
+	}
+	r, _ := h.request("work/a", "exec-a", 1, map[string]any{"pass_env": []string{"HTTPS_PROXY"}})
+	r.Context.HostEnv = map[string]string{"HTTPS_PROXY": "http://proxy.test:3128", "NOT_ADMITTED": "x"}
+	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("run failed: %+v", res.Outcome)
+	}
+	env, _ := os.ReadFile(filepath.Join(h.fake, "env"))
+	if !strings.Contains(string(env), "HTTPS_PROXY=http://proxy.test:3128\n") || strings.Contains(string(env), "NOT_ADMITTED") {
+		t.Fatalf("claude's environment:\n%s", env)
 	}
 }

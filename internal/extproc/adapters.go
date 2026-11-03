@@ -488,6 +488,16 @@ func (e *remoteExecutor) Playbook(raw json.RawMessage) string {
 	return e.r.ExecutorPlaybook(e.decl.Name)(raw)
 }
 
+// HostEnv names the host variables a binding config admits to a run
+// (extension.HostEnvNamer), asked through validate when the manifest
+// declares host_env; none otherwise.
+func (e *remoteExecutor) HostEnv(raw json.RawMessage) []string {
+	if !e.decl.HostEnv {
+		return nil
+	}
+	return e.r.ExecutorHostEnv(e.decl.Name)(raw)
+}
+
 // open binds the RunRequest's trusted callbacks to a fresh run ID. The run
 // remembers the last metadata persisted through it, so the host can
 // re-adopt the execution after the extension crashes.

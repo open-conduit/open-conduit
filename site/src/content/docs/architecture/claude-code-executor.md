@@ -98,7 +98,7 @@ The resume and handoff rules are:
 
 **Release.** `Maintain` releases terminal Work's continuity. Records written while the handoff experiment ran may still carry a trial and feedback questions; they are ignored.
 
-Telemetry goes to `Options.Report`. The executor's extension (`claudecode.NewExtension`, served as a package through `inproc.Executing`) writes it to its own log, `logs/claude-code.jsonl` in its package's state directory (`<state>/extensions/claude-code`, through `inproc.Host.OpenLog`; the package's log is appended, not rotated), outside core, as one `agent_turn` record per turn. A record carries `context_tokens` (the session's context when the turn ended) and, for a handoff turn, `handoff_reason`: `size`, `cold` or `missing` (the session's transcript was gone). Its housekeeping (`Maintain`) is the extension's `maintain` task, every 30 seconds.
+Telemetry goes to `Options.Report`. The executor's extension (`claudecode.NewExtension`, served as a package through `inproc.Executing`) writes it to its own log, `logs/claude-code.jsonl` in its package's state directory (`<state>/extensions/claude-code`, through `inproc.Host.OpenLog`, rotated by size like the daemon's own logs, `sdk.RotatingLog`), outside core, as one `agent_turn` record per turn. A record carries `context_tokens` (the session's context when the turn ended) and, for a handoff turn, `handoff_reason`: `size`, `cold` or `missing` (the session's transcript was gone). Its housekeeping (`Maintain`) is the extension's `maintain` task, every 30 seconds.
 
 Like core telemetry, it is at most once across a kill.
 
@@ -144,7 +144,7 @@ A binding with a container ([containers](../sandboxes/#claude-code-in-a-containe
 
 The environment follows B05:
 
-1. **Sanitized baseline.** The shell baseline plus `CLAUDE_CONFIG_DIR` and the binding's `pass_env` names. `ANTHROPIC_API_KEY`, `CLAUDECODE`, `CLAUDE_CODE_*` and other credentials are dropped.
+1. **Sanitized baseline.** The shell baseline plus `CLAUDE_CONFIG_DIR` and the binding's `pass_env` names, with the daemon's own values of those: the executor names them (`extension.HostEnvNamer`), and the host passes what it has set as `ExecutionContext.HostEnv`, because the package's own process environment is sanitized. `ANTHROPIC_API_KEY`, `CLAUDECODE`, `CLAUDE_CODE_*` and other credentials are dropped.
 2. **Provider layer.** Any `OS_*` names are dropped from it.
 3. **Run layer.** The extensions' run environment (`ExecutionContext.Env`, [extension protocol](../extension-protocol/)), applied with `extension.ApplyEnv`: its `GIT_CONFIG_*` entries go after the provider layer's, and `OS_*` names are dropped. A host run with a run layer and a toolbelt also gets the toolbelt client (`OS_ENDPOINT`, `OS_TOKEN_FILE` and the toolbelt directory first on `PATH`, never `OS_TOKEN`), so a layer can call `os`; a container run always has it. Other host runs keep the toolbelt out of claude's environment, and only the MCP server has it.
 4. **Binding `env`.**

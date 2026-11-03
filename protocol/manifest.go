@@ -503,6 +503,11 @@ type ExecutorDecl struct {
 	// config check can tell when a binding doesn't grant the operations
 	// the playbook declares (extension.PlaybookNamer).
 	Playbook bool `json:"playbook,omitempty"`
+	// HostEnv marks an executor that names the host variables a binding
+	// config admits to a run, through validate with kind executor_host_env;
+	// the host passes their values as the run's host_env
+	// (extension.HostEnvNamer).
+	HostEnv bool `json:"host_env,omitempty"`
 	// Pool is the capacity pool the executor's runs count against: "" for
 	// agent turns (settings.concurrency), "jobs" for jobs
 	// (settings.job_concurrency).

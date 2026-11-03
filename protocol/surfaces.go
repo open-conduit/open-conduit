@@ -64,6 +64,11 @@ const (
 	// executor, Config the binding's executor config; the answer is a
 	// ValidateResult whose Playbook is the playbook's name, "" for none.
 	ValidateExecutorPlaybook = "executor_playbook"
+	// ValidateExecutorHostEnv asks an executor declared with host_env which
+	// variables of the host's environment a binding config admits to a run.
+	// Type is the executor, Config the binding's executor config; the
+	// answer is a ValidateResult whose HostEnv names them.
+	ValidateExecutorHostEnv = "executor_host_env"
 )
 
 // ValidateParams asks the extension to check one opaque config object of
@@ -94,6 +99,7 @@ type ValidateParams struct {
 type ValidateResult struct {
 	Mode     string         `json:"mode,omitempty"`
 	Playbook string         `json:"playbook,omitempty"`
+	HostEnv  []string       `json:"host_env,omitempty"`
 	Warnings []string       `json:"warnings,omitempty"`
 	Describe []DescribeLine `json:"describe,omitempty"`
 }

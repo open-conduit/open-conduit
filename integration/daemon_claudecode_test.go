@@ -36,6 +36,7 @@ done
 f=${FAKE_DIR:?}
 mode=$(cat "$f/mode" 2>/dev/null || echo review)
 printf '%s session=%s resume=%s\n' "$OS_EXECUTION_ID" "$session" "$resume" >> "$f/invocations"
+printf '%s\n' "${OC_DRILL_PROXY:-unset}" > "$f/pass-env"
 t="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$t"
 echo '{"type":"system","subtype":"init"}'
@@ -84,7 +85,7 @@ func claudeDrillConfig(root, binary string) []byte {
 			"id": "drill", "name": "Drill",
 			"authorization": map[string]any{"connections": []any{}, "operations": ops, "read_scopes": []any{}},
 			"bindings": []any{map[string]any{"name": "agent", "executor": "claude-code", "requires": map[string]any{"toolbelt": "mcp", "inject": true, "resume": true}, "operations": ops, "secret_names": []any{},
-				"config": map[string]any{"binary": binary, "cold_turns": "resume",
+				"config": map[string]any{"binary": binary, "cold_turns": "resume", "pass_env": []string{"OC_DRILL_PROXY"},
 					"env": map[string]string{"FAKE_DIR": root, "CLAUDE_CONFIG_DIR": filepath.Join(root, "claude-config")}}}},
 			"routes":      []any{map[string]any{"name": "incoming", "handler": "manual", "binding": "agent", "active_policy": "inject", "config": map[string]any{}}},
 			"secret_refs": map[string]any{},
@@ -92,6 +93,36 @@ func claudeDrillConfig(root, binary string) []byte {
 	}
 	b, _ := json.Marshal(cfg)
 	return b
+}
+
+// TestDaemonClaudeCodePassEnv: a variable of the daemon's environment that
+// a binding's pass_env names reaches claude, though the executor runs as a
+// package whose own environment is sanitized: the host passes it
+// (ExecutionContext.HostEnv). One it doesn't name never reaches the
+// package at all.
+func TestDaemonClaudeCodePassEnv(t *testing.T) {
+	t.Setenv("OC_DRILL_PROXY", "http://proxy.test:3128")
+	d := newDrill(t)
+	binary := filepath.Join(d.root, "claude")
+	if err := os.WriteFile(binary, []byte(daemonClaude), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(d.config, claudeDrillConfig(d.root, binary), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.start("")
+	if _, err := d.c.SubmitEvent(context.Background(), client.EventRequest{ScopeID: "drill", Type: "agent.start", DeliveryID: "start-1", CorrelationKey: &client.Key{Source: "drill", ExternalID: "one"}}, "submit-start-1"); err != nil {
+		t.Fatal(err)
+	}
+	var got string
+	d.until("claude launched", 30*time.Second, func() bool {
+		b, err := os.ReadFile(filepath.Join(d.root, "pass-env"))
+		got = strings.TrimSpace(string(b))
+		return err == nil && got != ""
+	})
+	if got != "http://proxy.test:3128" {
+		t.Fatalf("pass_env reached claude as %q", got)
+	}
 }
 
 // TestDaemonClaudeCodeExecution drives the composed daemon with the Claude

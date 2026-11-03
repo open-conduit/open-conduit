@@ -193,6 +193,7 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 		"extension.AttachExecutor":          reflect.TypeFor[extension.AttachExecutor](),
 		"extension.ContainerAttachExecutor": reflect.TypeFor[extension.ContainerAttachExecutor](),
 		"extension.LiveExecutor":            reflect.TypeFor[extension.LiveExecutor](),
+		"extension.HostEnvNamer":            reflect.TypeFor[extension.HostEnvNamer](),
 		"extension.ResourceProvider":        reflect.TypeFor[extension.ResourceProvider](),
 		"extension.ResourceBroker":          reflect.TypeFor[extension.ResourceBroker](),
 		"extension.ResourceModeDefaulter":   reflect.TypeFor[extension.ResourceModeDefaulter](),
