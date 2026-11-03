@@ -91,8 +91,8 @@ open-conduit events skip ID --reason "bad payload"   # route an Event routing is
 open-conduit events reroute ID                       # route a failed or skipped Event again
 ```
 
-- `work retry|hold|release|interrupt|cancel` act on the Work's current revision.
-- `work interrupt` stops a running turn without ending the Work: input queued for it (messages the turn couldn't read during a long tool call, say) starts the next turn, which continues the session where the executor can. It is refused, with nothing stopped, when the turn's executor can't be interrupted; cancel the turn instead. Pass `--revision N` (from `work get ID`) to act only if nothing has changed it since.
+- `work retry|hold|release|interrupt|cancel` act on the Work's current revision. Pass `--revision N` (from `work get ID`) to act only if nothing has changed it since.
+- `work interrupt` stops a running turn without ending the Work: input queued for it (messages the turn couldn't read during a long tool call, say) starts the next turn, which continues the session where the executor can. It is refused, with nothing stopped, when the turn's executor can't be interrupted; cancel the turn instead.
 - Lists print a table; `--json` prints the records. `--scope` filters by scope everywhere.
 - `runs log ID` shows a run's output; `--transcript` shows the agent's transcript.
 - `events chain ID` shows the chain of Events that led to something.
