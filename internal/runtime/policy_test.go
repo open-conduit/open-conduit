@@ -285,7 +285,7 @@ func TestSchedulerPermanentFailureArmsNoRetry(t *testing.T) {
 		return work, status
 	}
 	work, status := fail("permanent-failure", true)
-	if !status.Exhausted || status.FailureCount != 1 || !status.EligibleAt.IsZero() {
+	if !status.Exhausted || status.FailureCount != 1 || !status.EligibleAt.IsZero() || status.BlockedReason != "permanent_failure" {
 		t.Fatalf("a permanent failure armed a retry: %+v", status)
 	}
 	routingRead(t, f, func(tx storage.Tx) error {
@@ -305,7 +305,7 @@ func TestSchedulerPermanentFailureArmsNoRetry(t *testing.T) {
 	if _, err := s.Start(ctx, work); err != nil {
 		t.Fatalf("manual retry did not make the Work runnable: %v", err)
 	}
-	if _, status = fail("ordinary-failure", false); status.Exhausted || !status.EligibleAt.Equal(f.Clock.Now().Add(5*time.Minute)) {
+	if _, status = fail("ordinary-failure", false); status.Exhausted || status.BlockedReason != "" || !status.EligibleAt.Equal(f.Clock.Now().Add(5*time.Minute)) {
 		t.Fatalf("an ordinary failure did not arm its retry: %+v", status)
 	}
 }
