@@ -146,9 +146,19 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 			switch ct.Kind {
 			case protocol.ValidateConnection:
 				p.Connections = appendType(p.Connections, ct.Type)
+				for i := range p.Connections {
+					if p.Connections[i].Type == ct.Type && len(p.Connections[i].Fields) == 0 {
+						p.Connections[i].Fields = slices.Clone(ct.Fields)
+					}
+				}
 			case protocol.ValidateExtension:
 				if !hasExtension(p.Extensions, ct.Type) {
 					p.Extensions = append(p.Extensions, protocol.ExtensionDecl{Type: ct.Type, Ingress: ct.Ingress})
+				}
+				for i := range p.Extensions {
+					if p.Extensions[i].Type == ct.Type && len(p.Extensions[i].Fields) == 0 {
+						p.Extensions[i].Fields = slices.Clone(ct.Fields)
+					}
 				}
 			}
 		}
@@ -160,6 +170,13 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 				ct, configured := b.types[protocol.ValidateRoute+"/"+h]
 				_, samples := routes[h].(extension.RouteSampler)
 				p.Routes = append(p.Routes, protocol.RouteDecl{Handler: h, Config: configured && ct.Validate != nil, Binding: configured && ct.Binding != nil, Samples: samples})
+			}
+			if ct, ok := b.types[protocol.ValidateRoute+"/"+h]; ok {
+				for i := range p.Routes {
+					if p.Routes[i].Handler == h && len(p.Routes[i].Fields) == 0 {
+						p.Routes[i].Fields = slices.Clone(ct.Fields)
+					}
+				}
 			}
 		}
 	}
@@ -237,7 +254,7 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 			p.Executors = append(p.Executors, protocol.ExecutorDecl{Name: n, Pool: execs[n].Pool,
 				Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container},
 				Controls:     protocol.Controls{Stop: stop, Forget: forget, Attach: attach, ContainerAttach: containerAttach, Live: live, InteractiveLaunch: interactive},
-				ResourceMode: moded, Playbook: playbook, LaunchNames: launchNames})
+				ResourceMode: moded, Playbook: playbook, LaunchNames: launchNames, Fields: slices.Clone(execs[n].Fields)})
 		}
 	}
 	if t, ok := b.x.(inproc.Tasker); ok && len(p.Tasks) == 0 {

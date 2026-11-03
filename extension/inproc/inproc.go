@@ -59,6 +59,10 @@ type ConfigType struct {
 	// config sets up (a schedule's jobs and when they run), for the
 	// operator's view of the config. It must not reveal secrets.
 	Describe func(config json.RawMessage) []Entry
+	// Fields describe the type's config fields (and, for a connection,
+	// its secret_refs keys) for the operator's catalogue: manifest fields
+	// (protocol.FieldDecl).
+	Fields []protocol.FieldDecl
 }
 
 // Entry is one thing an extension entry sets up, named and described.
@@ -463,6 +467,9 @@ const PoolJobs = "jobs"
 type Executor struct {
 	Executor extension.Executor
 	Pool     string
+	// Fields describe the binding config's fields for the operator's
+	// catalogue (manifest executors[].fields).
+	Fields []protocol.FieldDecl
 }
 
 // Executing extensions register executors bindings name. Executors is read
