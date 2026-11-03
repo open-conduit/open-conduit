@@ -623,6 +623,12 @@ func (s *Server) executor(ctx context.Context, method string, raw json.RawMessag
 		if p.Request.Context.Resources {
 			r.Context.Resources = &broker{conn: s.conn, run: run}
 		}
+		if p.Request.Context.Sandbox {
+			r.Context.Sandbox = &sandboxBroker{conn: s.conn, run: run}
+		}
+		if p.Request.Context.Container {
+			r.Context.Container = &containerBroker{conn: s.conn, run: run}
+		}
 		var h extension.RunHandle
 		switch method {
 		case "executor.run":
@@ -786,6 +792,41 @@ func (b *broker) Lookup(ctx context.Context, ref string) (extension.Resource, er
 		return extension.Resource{}, err
 	}
 	return out.Resource.Extension(), nil
+}
+
+// sandboxBroker is the run's extension.SandboxBroker over sandbox.plan
+// and sandbox.adopt: the host plans and checks the launch with the
+// provider bound to the attempt.
+type sandboxBroker struct {
+	conn *jsonrpc.Conn
+	run  string
+}
+
+func (b *sandboxBroker) Plan(ctx context.Context, needs extension.SandboxNeeds, launch extension.SandboxLaunch) (extension.SandboxPlan, error) {
+	var out protocol.SandboxPlan
+	err := b.conn.Call(ctx, "sandbox.plan", protocol.LaunchParams{RunID: b.run, Needs: protocol.FromSandboxNeeds(needs), Launch: protocol.FromSandboxLaunch(launch)}, &out)
+	return out.Extension(), err
+}
+func (b *sandboxBroker) Adopt(ctx context.Context, parent int) error {
+	return b.conn.Call(ctx, "sandbox.adopt", protocol.SandboxAdoptParams{RunID: b.run, Parent: parent}, nil)
+}
+
+// containerBroker is the run's extension.ContainerBroker over
+// container.launch and container.adopt.
+type containerBroker struct {
+	conn *jsonrpc.Conn
+	run  string
+}
+
+func (b *containerBroker) Launch(ctx context.Context, needs extension.SandboxNeeds, launch extension.SandboxLaunch) (extension.SandboxPlan, error) {
+	var out protocol.SandboxPlan
+	err := b.conn.Call(ctx, "container.launch", protocol.LaunchParams{RunID: b.run, Needs: protocol.FromSandboxNeeds(needs), Launch: protocol.FromSandboxLaunch(launch)}, &out)
+	return out.Extension(), err
+}
+func (b *containerBroker) Adopt(ctx context.Context, alive bool) (extension.ContainerExit, error) {
+	var out protocol.ContainerExit
+	err := b.conn.Call(ctx, "container.adopt", protocol.ContainerAdoptParams{RunID: b.run, Alive: alive}, &out)
+	return extension.ContainerExit{Exited: out.Exited, ExitCode: out.ExitCode, Interrupted: out.Interrupted}, err
 }
 
 // PackageCommand answers the packaging subcommands every packaged binary

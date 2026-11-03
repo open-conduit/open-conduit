@@ -90,6 +90,10 @@ var Methods = []Method{
 
 	// Resources: the broker an executor sees, and providers.
 	{Name: "resource.acquire", Direction: ExtensionToHost, Provides: "executors.workspace", Contract: []string{"extension.ResourceBroker.Acquire"}},
+	{Name: "sandbox.plan", Direction: ExtensionToHost, Provides: "executors.sandbox", Contract: []string{"extension.SandboxBroker.Plan"}},
+	{Name: "sandbox.adopt", Direction: ExtensionToHost, Provides: "executors.sandbox", Contract: []string{"extension.SandboxBroker.Adopt"}},
+	{Name: "container.launch", Direction: ExtensionToHost, Provides: "executors.container", Contract: []string{"extension.ContainerBroker.Launch"}},
+	{Name: "container.adopt", Direction: ExtensionToHost, Provides: "executors.container", Contract: []string{"extension.ContainerBroker.Adopt"}},
 	{Name: "resource.lookup", Direction: ExtensionToHost, Provides: "executors.workspace", Contract: []string{"extension.ResourceBroker.Lookup"}},
 	{Name: "provider.acquire", Direction: HostToExtension, Provides: "resources", Contract: []string{"extension.ResourceProvider.Acquire"}},
 	{Name: "provider.lookup", Direction: HostToExtension, Provides: "resources", Contract: []string{"extension.ResourceProvider.Lookup"}},

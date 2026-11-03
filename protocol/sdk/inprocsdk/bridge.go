@@ -220,7 +220,7 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 			_, forget := x.(extension.ForgetExecutor)
 			_, attach := x.(extension.AttachExecutor)
 			p.Executors = append(p.Executors, protocol.ExecutorDecl{Name: n, Pool: execs[n].Pool,
-				Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt},
+				Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container},
 				Controls:     protocol.Controls{Stop: stop, Forget: forget, Attach: attach}})
 		}
 	}

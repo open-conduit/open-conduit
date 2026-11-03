@@ -495,7 +495,7 @@ func (e *remoteExecutor) open(req extension.RunRequest) (string, *trackedRun) {
 	id := newID()
 	t := &trackedRun{}
 	persist := req.PersistRecovery
-	e.r.s.openRun(id, &run{resources: req.Context.Resources, persist: func(p domain.Payload) error {
+	e.r.s.openRun(id, &run{resources: req.Context.Resources, sandbox: req.Context.Sandbox, container: req.Context.Container, persist: func(p domain.Payload) error {
 		if persist == nil {
 			return protocol.Errorf(protocol.CodeUnsupported, "no persistence")
 		}

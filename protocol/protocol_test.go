@@ -95,6 +95,10 @@ var useCases = map[string][]string{
 	"action.list":                {"slack"},
 	"action.submit":              {"github"},
 	"probe.serve":                {"github", "claude-code"},
+	"sandbox.plan":               {"shell", "claude-code"},
+	"sandbox.adopt":              {"shell", "claude-code"},
+	"container.launch":           {"shell", "claude-code"},
+	"container.adopt":            {"shell", "claude-code"},
 	"probe.list":                 {"setup"},
 	"probe.run":                  {"setup"},
 	"config.base":                {"setup"},
@@ -192,6 +196,8 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 		"extension.ResourceModer":          reflect.TypeFor[extension.ResourceModer](),
 		"extension.Setup":                  reflect.TypeFor[extension.Setup](),
 		"extension.SetupProbes":            reflect.TypeFor[extension.SetupProbes](),
+		"extension.SandboxBroker":          reflect.TypeFor[extension.SandboxBroker](),
+		"extension.ContainerBroker":        reflect.TypeFor[extension.ContainerBroker](),
 		"extension.SetupHost":              reflect.TypeFor[extension.SetupHost](),
 		"observability.Exporter":           reflect.TypeFor[observability.Exporter](),
 	}
@@ -295,6 +301,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	}
 	m.Provides.WorkKinds = append(m.Provides.WorkKinds, protocol.WorkKindDecl{Kind: "chat.job", Standing: true, Trigger: true})
 	m.Provides.Executors[0].Name, m.Provides.Resources[0].Type = "chat-runner", "chat-ws"
+	m.Provides.Executors[0].Capabilities.Sandbox, m.Provides.Executors[0].Capabilities.Container = true, true
 	if err := m.Validate(); err != nil {
 		t.Fatal(err)
 	}
