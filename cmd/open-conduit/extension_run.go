@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -32,29 +33,32 @@ import (
 // with `open-conduit extension-run <name>` (#428), by manifest name: one
 // download and one build, each still its own supervised process. A
 // package whose manifest command is protocol.HostRunCommand(name) runs
-// here; which of them ship in the release archive is the bundling
-// script's choice. Manifest is what `package-manifest` prints, which the
-// daemon reads in process at discovery (hostManifest). Playbooks, when
-// set, are what `package-playbooks DIR` writes beside the manifest.
+// here. Manifest is what `package-manifest` prints, which the daemon reads
+// in process at discovery (hostManifest). Playbooks, when set, are what
+// `package-playbooks DIR` writes beside the manifest. Bundled marks the
+// ones the release archive carries beside the binary, which
+// `extension-run --bundle DIR` lays out: this table is the one list of
+// them.
 var runnable = map[string]struct {
 	Main      func(args []string) int
 	Manifest  func() protocol.Manifest
 	Playbooks func() map[string]string
+	Bundled   bool
 }{
-	"bitbucket":     {bitbucketext.Main, bitbucketext.Manifest, nil},
-	"codex":         {codexext.Main, codexext.Manifest, nil},
-	"github":        {githubext.Main, githubext.Manifest, githubext.Playbooks},
-	"human":         {humanext.Main, humanext.Manifest, nil},
-	"introspection": {introspectionext.Main, introspectionext.Manifest, introspectionext.Playbooks},
-	"jira":          {jiraext.Main, jiraext.Manifest, jiraext.Playbooks},
-	"linear":        {linearext.Main, linearext.Manifest, linearext.Playbooks},
-	"observe":       {observeext.Main, observeext.Manifest, nil},
-	"pagerduty":     {pagerduty.Main, pagerduty.Manifest, nil},
-	"posthog":       {posthogext.Main, posthogext.Manifest, nil},
-	"schedule":      {scheduleext.Main, scheduleext.Manifest, nil},
-	"sentry":        {sentry.Main, sentry.Manifest, nil},
-	"shell":         {shellext.Main, shellext.Manifest, nil},
-	"slack":         {slackext.Main, slackext.Manifest, slackext.Playbooks},
+	"bitbucket":     {bitbucketext.Main, bitbucketext.Manifest, nil, true},
+	"codex":         {codexext.Main, codexext.Manifest, nil, true},
+	"github":        {githubext.Main, githubext.Manifest, githubext.Playbooks, true},
+	"human":         {humanext.Main, humanext.Manifest, nil, true},
+	"introspection": {introspectionext.Main, introspectionext.Manifest, introspectionext.Playbooks, true},
+	"jira":          {jiraext.Main, jiraext.Manifest, jiraext.Playbooks, true},
+	"linear":        {linearext.Main, linearext.Manifest, linearext.Playbooks, true},
+	"observe":       {observeext.Main, observeext.Manifest, nil, true},
+	"pagerduty":     {pagerduty.Main, pagerduty.Manifest, nil, false},
+	"posthog":       {posthogext.Main, posthogext.Manifest, nil, true},
+	"schedule":      {scheduleext.Main, scheduleext.Manifest, nil, true},
+	"sentry":        {sentry.Main, sentry.Manifest, nil, false},
+	"shell":         {shellext.Main, shellext.Manifest, nil, true},
+	"slack":         {slackext.Main, slackext.Manifest, slackext.Playbooks, true},
 }
 
 // hostManifest is extproc.HostManifest for this binary: discovery asks the
@@ -82,6 +86,9 @@ func hostManifest(name string) ([]byte, protocol.Manifest, error) {
 // itself again (an executor's segments) does so through this same command
 // (sdk.Self).
 func extensionRun(args []string, stderr io.Writer) int {
+	if len(args) == 2 && args[0] == "--bundle" {
+		return bundle(args[1], stderr)
+	}
 	r, ok := runnable[firstArg(args)]
 	if !ok {
 		fmt.Fprintf(stderr, "usage: open-conduit %s NAME [ARGS...]\nNAME is one of: %s\n", protocol.HostRun, strings.Join(runnableNames(), ", "))
@@ -97,6 +104,44 @@ func extensionRun(args []string, stderr io.Writer) int {
 		return writePlaybooks(r.Playbooks, args[2], stderr)
 	}
 	return r.Main(args[1:])
+}
+
+// bundle is `extension-run --bundle DIR`: it writes each package this
+// binary bundles under DIR/<name> as the release archive carries it, its
+// manifest, certification and playbooks, with no executable, since this
+// binary runs it. The release, `make packages` and the test harnesses lay
+// out the bundled packages this way, so the list is runnable's alone.
+func bundle(dir string, stderr io.Writer) int {
+	self, err := os.Executable()
+	if err != nil {
+		fmt.Fprintf(stderr, "open-conduit %s --bundle: %v\n", protocol.HostRun, err)
+		return 1
+	}
+	for _, name := range runnableNames() {
+		r := runnable[name]
+		if !r.Bundled {
+			continue
+		}
+		pkg := filepath.Join(dir, name)
+		if err := os.MkdirAll(pkg, 0o755); err != nil {
+			fmt.Fprintf(stderr, "open-conduit %s --bundle: %v\n", protocol.HostRun, err)
+			return 1
+		}
+		for file, sub := range map[string]string{protocol.ManifestFile: "package-manifest", "certification.json": "package-certification"} {
+			out, err := exec.Command(self, protocol.HostRun, name, sub).Output()
+			if err == nil {
+				err = os.WriteFile(filepath.Join(pkg, file), out, 0o644)
+			}
+			if err != nil {
+				fmt.Fprintf(stderr, "open-conduit %s --bundle: %s %s: %v\n", protocol.HostRun, name, sub, err)
+				return 1
+			}
+		}
+		if code := writePlaybooks(r.Playbooks, filepath.Join(pkg, "playbooks"), stderr); code != 0 {
+			return code
+		}
+	}
+	return 0
 }
 
 // writePlaybooks is `extension-run NAME package-playbooks DIR`: it writes
