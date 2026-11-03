@@ -371,7 +371,7 @@ Extension entry `config`:
 | --- | --- | --- |
 | `notes` |  |  |
 | `sweep` |  | {cron, time_zone, rules, guide, land, remote} |
-| `triage` |  | {cron, time_zone, file_issues} |
+| `triage` |  | {cron, time_zone, file_issues, land, remote} |
 | `host_watch` |  | {interval_seconds, load, memory, disk, disks} |
 | `telemetry` |  | write telemetry events (and send them to PostHog entries) |
 

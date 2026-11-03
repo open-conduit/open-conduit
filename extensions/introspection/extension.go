@@ -99,7 +99,7 @@ func (*Extension) Types() []inproc.ConfigType {
 		{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension, Fields: []protocol.FieldDecl{
 			{Name: "notes"},
 			{Name: "sweep", Help: "{cron, time_zone, rules, guide, land, remote}"},
-			{Name: "triage", Help: "{cron, time_zone, file_issues}"},
+			{Name: "triage", Help: "{cron, time_zone, file_issues, land, remote}"},
 			{Name: "host_watch", Help: "{interval_seconds, load, memory, disk, disks}"},
 			{Name: "telemetry", Help: "write telemetry events (and send them to PostHog entries)"},
 		}},
