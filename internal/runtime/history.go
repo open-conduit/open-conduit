@@ -31,6 +31,10 @@ type Run struct {
 	Workspace           *extension.WorkspaceRecord
 	Inputs              int
 	WaitID, WakeEventID domain.ID
+	// InterruptEventID is the Event whose interrupt ended the attempt: an
+	// operator's core.manual.interrupt or input a route with policy
+	// interrupt delivered (AttemptState.InterruptEventID).
+	InterruptEventID domain.ID
 	// Segments are the attempt's kept active stretches
 	// (AttemptState.Segments), the last ended at the execution's finish once
 	// it is terminal. ActiveTime sums the ended ones and the dropped ones
@@ -81,6 +85,7 @@ func runInTx(tx storage.Tx, x domain.Execution, works map[domain.ID]domain.Work)
 		run.Deadline, run.RemainingTimeout = state.Deadline, state.RemainingTimeout
 		run.Inputs = len(state.InputEventIDs)
 		run.WaitID, run.WakeEventID = state.WaitID, state.WakeEventID
+		run.InterruptEventID = state.InterruptEventID
 		run.Segments, run.ActiveTime = segments(state.Segments, x)
 		run.DroppedSegments, run.ActiveTime = state.DroppedSegments, run.ActiveTime+state.DroppedActive
 		run.Attaches = state.Attaches

@@ -120,6 +120,7 @@ func (s *Scheduler) DispatchControl(ctx context.Context, id string) error {
 					}
 				}
 				attempt.Excluded = false
+				attempt.InterruptEventID = intent.EventID
 				if er = putAttemptState(tx, attempt); er != nil {
 					return er
 				}
@@ -194,7 +195,9 @@ func (s *Scheduler) DispatchControl(ctx context.Context, id string) error {
 			current.Status = "retryable"
 			current.Reason = "dispatch_failed_or_ambiguous"
 			fallback := attempt.ControlErrorFallback
-			if fallback != "" {
+			// An operator's interrupt has no input of its own to fall back
+			// on: it fails closed, never becoming a queue or a drop.
+			if fallback != "" && !intent.Operator {
 				current.Status = "fallback"
 				current.Reason = "configured_dispatch_error_fallback"
 				current.EffectivePolicy = fallback

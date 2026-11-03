@@ -40,6 +40,7 @@ var Keys = []Key{
 	{Key: "S", Detail: "skip event", Does: "in a Work's detail, skip the first Event routing is stuck on, after asking", where: inDetail, control: true},
 	{Key: "E", Detail: "route again", Does: "in a Work's detail, route the first stuck or failed Event again", where: inDetail, control: true},
 	{Key: "a", List: "attach", Detail: "attach", Does: "attach to the agent's session", where: inList | inDetail, control: true},
+	{Key: "i", List: "interrupt", Detail: "interrupt", Does: "interrupt a running turn, after asking; the Work stays, and its next turn starts with the input queued for it", where: inList | inDetail, control: true},
 	{Key: "x", List: "cancel run", Detail: "cancel run", Does: "cancel a live run, after asking", where: inList | inDetail, control: true},
 	{Key: "X", List: "cancel work", Detail: "cancel work", Does: "cancel the whole Work, after asking", where: inList | inDetail, control: true},
 }

@@ -224,10 +224,13 @@ type AttemptState struct {
 	CurrentTriggerID     domain.ID
 	CausalTriggerID      domain.ID
 	WaitID, WakeEventID  domain.ID
-	ObservedSequence     uint64
-	InputEventIDs        []domain.ID
-	RemainingTimeout     time.Duration
-	Declaration          *ToolbeltDeclaration
+	// InterruptEventID is the Event whose interrupt fenced the attempt,
+	// set when DispatchControl fences it.
+	InterruptEventID domain.ID `json:",omitempty"`
+	ObservedSequence uint64
+	InputEventIDs    []domain.ID
+	RemainingTimeout time.Duration
+	Declaration      *ToolbeltDeclaration
 	// Segments are the attempt's active stretches, the time it held a lease
 	// as the deadline budget counts it: the first start (with the waking
 	// event's ID when a wake started it), each resume after a wake, each

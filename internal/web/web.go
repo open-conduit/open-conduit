@@ -63,6 +63,7 @@ type Source interface {
 	CancelWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	RetryWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	HoldWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
+	InterruptWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	ReleaseWork(ctx context.Context, id, revision, reason, key string) (client.ControlResult, error)
 	Actions(ctx context.Context, t client.ActionTarget) ([]client.Action, error)
 	Panels(ctx context.Context, t client.ActionTarget) ([]client.Panel, error)

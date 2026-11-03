@@ -48,16 +48,17 @@ func TestControlsFollowTheRuntimeRules(t *testing.T) {
 		off  []string
 	}{
 		// HoldWork refuses running Work; a running turn can be cancelled.
-		{"running", view("running", false, boundRun("w1", 1, "running", "agent")), []string{"cancel-turn", "cancel-work", "attach"}, []string{"hold", "retry", "wake"}},
+		// A running turn can be interrupted, keeping the Work.
+		{"running", view("running", false, boundRun("w1", 1, "running", "agent")), []string{"interrupt", "cancel-turn", "cancel-work", "attach"}, []string{"hold", "retry", "wake"}},
 		// RetryWork needs ready Work with retry state and every attempt ended.
 		{"failed, retry exhausted", view("ready", false, failed), []string{"retry", "hold", "cancel-work"}, []string{"cancel-turn", "wake"}},
 		{"operator-cancelled turn", view("ready", false, boundRun("w1", 1, "cancelled", "agent")), []string{"retry"}, nil},
 		{"queued after a completed turn", view("ready", false, boundRun("w1", 1, "completed", "agent")), []string{"hold"}, []string{"retry"}},
 		// A parked attempt may be held, not retried, and can be cancelled.
-		{"parked", view("waiting", false, boundRun("w1", 1, "parked", "agent")), []string{"hold", "wake", "cancel-turn"}, []string{"retry"}},
+		{"parked", view("waiting", false, boundRun("w1", 1, "parked", "agent")), []string{"hold", "wake", "cancel-turn"}, []string{"retry", "interrupt"}},
 		// Wake only while waiting, and not while held.
 		{"waiting and held", view("waiting", true, boundRun("w1", 1, "completed", "agent")), []string{"release"}, []string{"wake"}},
-		{"closed", view("completed", false, boundRun("w1", 1, "completed", "agent")), nil, []string{"retry", "hold", "wake", "attach", "cancel-turn", "cancel-work"}},
+		{"closed", view("completed", false, boundRun("w1", 1, "completed", "agent")), nil, []string{"retry", "hold", "wake", "attach", "interrupt", "cancel-turn", "cancel-work"}},
 		{"no turn yet", view("ready", false), []string{"hold"}, []string{"attach", "retry"}},
 	}
 	for _, c := range cases {
@@ -134,6 +135,29 @@ func TestControlsSendRevisionKeyReasonAndChoices(t *testing.T) {
 	rs := s.receipts.list()
 	if len(rs) != 4 || rs[0].Call != "POST /v1/work/wrk_1/rebind" || rs[0].Event != "evt_rebind:agent-opus" || rs[3].Summary != "Hold · “Waiting on a product decision”" {
 		t.Fatalf("receipts: %+v", rs)
+	}
+}
+
+// TestInterruptConfirmation: interrupting a running turn says the Work and
+// its queued input stay, and posts the Work control; with no turn running
+// the dialog says why and offers no submit.
+func TestInterruptConfirmation(t *testing.T) {
+	f, s, h := setup(t)
+	f.work["wrk_1"] = client.Work{ID: "wrk_1", State: "running", Revision: "7", ScopeID: "scope_a", Display: &client.Display{Ref: "#88", Title: "Fix the flaky test"}}
+	live := run("exe_9", "wrk_1", "running", "2026-10-28T01:00:00Z")
+	live.Attempt = 4
+	f.runs = []client.Run{live}
+	part := do(h, "GET", "/work/confirm?action=interrupt&id=wrk_1&back=%2F&part=1", nil, s).Body.String()
+	for _, want := range []string{"Interrupt #88&#39;s running turn", "Stops turn 4 now", "starts the next turn", `action="/work/interrupt"`, "POST /v1/work/wrk_1/interrupt"} {
+		if !strings.Contains(part, want) {
+			t.Errorf("dialog lacks %q:\n%s", want, part)
+		}
+	}
+	f.work["wrk_1"] = client.Work{ID: "wrk_1", State: "ready", Revision: "8"}
+	f.runs = []client.Run{run("exe_9", "wrk_1", "completed", "2026-10-28T01:00:00Z")}
+	part = do(h, "GET", "/work/confirm?action=interrupt&id=wrk_1&back=%2F&part=1", nil, s).Body.String()
+	if !strings.Contains(part, "No turn is running") || strings.Contains(part, `action="/work/interrupt"`) {
+		t.Fatalf("interrupt with no running turn:\n%s", part)
 	}
 }
 

@@ -76,10 +76,13 @@ The GitHub extension contributes `github`, `github-capability`, `github-git-bot`
 
 Every control is a management call with the operator credential and an `Idempotency-Key`. It commits an accepted `core.manual.*` control Event, marked routed as `control`, in the same transaction as its state change. History, `events chain` and telemetry therefore explain it. None launches an executor or forces a wake.
 
+Beside these, `POST /work/{id}/cancel` ends the Work, `POST /executions/{id}/cancel` ends one attempt and holds the Work for an explicit retry, and `POST /work/{id}/interrupt` (below) ends the running attempt and keeps the Work going.
+
 | Endpoint | Semantics |
 | --- | --- |
 | `POST /work/{id}/rebind` `{expected_revision,binding,reason}` | B05 rebind. Ready Work with no live or parked attempt only. The binding must be an enabled binding of the Work's scope. Moves every queued input (and the retry state) to it. `core.manual.rebind` records the binding, the previous bindings and the scheduler's generation. Never moves scope. |
 | `POST /work/{id}/hold`, `/release` `{expected_revision,reason}` | A domain-free scheduling hold (`core.manual.hold`/`release`), held in its own KV record. While held, `Start` refuses (`not_eligible`), including a parked attempt's resume, but input keeps queueing and Waits keep resolving. Release lets the next attempt see everything that arrived. Allowed on nonterminal Work with no pending or running attempt. `GET /work/{id}` shows `hold`. |
+| `POST /work/{id}/interrupt` `{expected_revision,reason}` | Stops running Work's current attempt without ending the Work (`runtime.Control.InterruptWork`), for an operator who wants a turn to stop and read what has queued for it. It commits `core.manual.interrupt` (with the attempt's `execution_id`) and an interrupt intent against the running attempt and its lease epoch, then dispatches it through the same path as a route with policy `interrupt` ([active-event policies](../runtime-semantics/#active-event-policies-and-acknowledgements)): the attempt is fenced (`cancelled`), the Work is left `ready` with its queued input kept, and the executor's `Interrupt` is called. The next attempt takes that input (for claude-code, a `--resume` turn); with none queued, the Work waits ready for its next input. The run records the Event that ended it as `interrupt_event_id`. Only `running` Work (`state_conflict` otherwise). Fails closed: when the running attempt was not pinned with the `interrupt` capability, or its executor doesn't implement it, the call is refused as `interrupt_unsupported` and nothing is stopped; there is no fallback to cancel, and a failed dispatch never takes the binding's `control_error_fallback`. Returns 202 with `event_id`, `work_id` and `execution_id`. |
 | `POST /work/{id}/attach` `{}` | Held Work with no pending or running attempt. Returns the attach command (`argv`, `dir`) of the executor registration that ran the latest attempt, through the optional public `extension.AttachExecutor` (`attach_unsupported`, `nothing_to_attach`). Work any of whose segments ran in a sandbox is refused as `attach_sandboxed` before the executor is asked, since the command runs on the host, outside the sandbox ([process sandboxes](../sandboxes/#attach)). Work that ran in a container gets `open-conduit container attach <work>` from its executor, and any other command is refused as `attach_sandboxed` ([attach in a container](../sandboxes/#attach-in-a-container)). For claude-code this is `claude --resume <session>` in the workspace, and the handoff note is cleared, so the next turn continues the attached session. No environment is returned: the operator's own shell supplies it. |
 | `POST /work/{id}/container-attach` `{}` | Held Work with no pending or running attempt whose segments ran in a container (`not_contained` otherwise; `attach_sandboxed` if any ran in a process sandbox). Makes an attach container under the binding's current container policy for what the executor's `ContainerAttach` says, records its pin with the latest attempt, and returns its `ref` and the `argv` that starts it attached (`container_unavailable` when the container can't be made). `open-conduit container attach` and `work attach` call it. |
 | `POST /work/{id}/container-detach` `{"ref"}` | Removes one of the Work's attach containers, with its gateway and networks. |
@@ -89,7 +92,7 @@ Every control is a management call with the operator credential and an `Idempote
 
 **CLI.** The CLI adds:
 
-- `work rebind|hold|release`;
+- `work rebind|hold|release|interrupt`;
 - `work attach ID [--keep-held]`, which holds (refetching the revision when the host moved the Work), attaches, runs the command with the terminal and releases the hold it placed;
 - `scopes reconcile ID`;
 - `claim [SCOPE#]N [--entry NAME]`, which invokes the scope's `claim` action;
@@ -111,6 +114,7 @@ A `human` entry offers `answer` on Work parked on one of its asks, only while th
 - `R` runs or retries after a y/n prompt, since a retry starts a new turn;
 - `H` reads the Work's current hold: held Work is released, otherwise it asks for a reason (`enter` alone records `operator (tui)`) and holds with it, so history says why;
 - `a` attaches, through `tea.Exec` with the same hold/release flow;
+- `i` interrupts a running attempt after a y/n prompt, keeping the Work and its queued input for the next attempt;
 - `x` cancels the attempt and `X` the Work, each after a y/n prompt;
 - `l` opens a run's log; on a running run it shows the output so far and follows it;
 - `t` opens a run's transcript (live or final) from the list or detail, and in the log view steps to the next output (log, stream-json transcript, stderr).

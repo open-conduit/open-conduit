@@ -126,6 +126,7 @@ type wireRun struct {
 	Inputs                  int            `json:"inputs"`
 	WaitID                  string         `json:"wait_id,omitempty"`
 	WakeEventID             string         `json:"wake_event_id,omitempty"`
+	InterruptEventID        string         `json:"interrupt_event_id,omitempty"`
 	Retry                   *wireRetry     `json:"retry,omitempty"`
 	Retention               wireRetention  `json:"retention"`
 }
@@ -139,7 +140,7 @@ func trigger(e *domain.Event) *wireTrigger {
 
 func toRun(r runtime.Run) wireRun {
 	x := r.Execution
-	out := wireRun{wireExecution: toExecution(x, r.ScopeID), WorkKind: r.WorkKind, WorkState: string(r.WorkState), Trigger: trigger(r.Trigger), CurrentTrigger: trigger(r.CurrentTrigger), Executor: r.Executor, ConfigGeneration: r.Generation, LaunchState: r.LaunchState, ResourceExcluded: r.ResourceExcluded, Inputs: r.Inputs, WaitID: string(r.WaitID), WakeEventID: string(r.WakeEventID), Retention: wireRetention{State: "retained"}}
+	out := wireRun{wireExecution: toExecution(x, r.ScopeID), WorkKind: r.WorkKind, WorkState: string(r.WorkState), Trigger: trigger(r.Trigger), CurrentTrigger: trigger(r.CurrentTrigger), Executor: r.Executor, ConfigGeneration: r.Generation, LaunchState: r.LaunchState, ResourceExcluded: r.ResourceExcluded, Inputs: r.Inputs, WaitID: string(r.WaitID), WakeEventID: string(r.WakeEventID), InterruptEventID: string(r.InterruptEventID), Retention: wireRetention{State: "retained"}}
 	if !x.State.Terminal() && x.State != domain.ExecutionParked {
 		out.Deadline = ts(r.Deadline)
 	}

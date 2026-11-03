@@ -141,6 +141,10 @@ func (f *fake) HoldWork(_ context.Context, id, rev, reason, _ string) (client.Co
 	f.reasons = append(f.reasons, reason)
 	return f.control("hold", id, rev)
 }
+func (f *fake) InterruptWork(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
+	f.reasons = append(f.reasons, reason)
+	return f.control("interrupt", id, rev)
+}
 func (f *fake) ReleaseWork(_ context.Context, id, rev, reason, _ string) (client.ControlResult, error) {
 	f.reasons = append(f.reasons, reason)
 	return f.control("release", id, rev)
@@ -394,13 +398,13 @@ func TestChangesNeedCSRFAndSameOrigin(t *testing.T) {
 
 func TestControlsUseCurrentRevision(t *testing.T) {
 	f, s, h := setup(t)
-	for _, c := range []string{"retry", "hold", "release", "cancel"} {
+	for _, c := range []string{"retry", "hold", "release", "cancel", "interrupt"} {
 		if w := do(h, "POST", "/work/"+c, url.Values{"csrf": {s.csrf}, "work": {"wrk_1"}}, s); w.Code != http.StatusSeeOther {
 			t.Fatalf("%s: %d", c, w.Code)
 		}
 	}
 	do(h, "POST", "/run/cancel", url.Values{"csrf": {s.csrf}, "run": {"exe_2"}}, s)
-	want := []string{"retry wrk_1@7", "hold wrk_1@7", "release wrk_1@7", "cancel wrk_1@7", "cancel-execution exe_2@3"}
+	want := []string{"retry wrk_1@7", "hold wrk_1@7", "release wrk_1@7", "cancel wrk_1@7", "interrupt wrk_1@7", "cancel-execution exe_2@3"}
 	if strings.Join(f.controls, ",") != strings.Join(want, ",") {
 		t.Fatalf("controls: %v", f.controls)
 	}

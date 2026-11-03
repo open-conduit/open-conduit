@@ -85,6 +85,10 @@ type ControlIntent struct {
 	EventID, WorkID, ExecutionID domain.ID
 	Epoch                        uint64
 	Policy, Binding              string
+	// Operator marks an operator's interrupt (Control.InterruptWork): its
+	// Event is a control, not input, and a failed dispatch never takes the
+	// binding's control_error_fallback.
+	Operator bool `json:",omitempty"`
 }
 
 func NewRouter(s storage.Store, now func() time.Time, o RouterOptions) (*Router, error) {
@@ -757,7 +761,7 @@ func (r *Router) apply(tx storage.Tx, p routePlan, w *domain.Work, scope domain.
 				return err
 			}
 			if rec.Policy == "inject" || rec.Policy == "interrupt" {
-				intent := ControlIntent{identity(string(p.event.Event.ID), string(target.ID), fmt.Sprint(target.Lease.Epoch), rec.Policy), p.event.Event.ID, w.ID, target.ID, target.Lease.Epoch, rec.Policy, rec.Binding}
+				intent := ControlIntent{ID: identity(string(p.event.Event.ID), string(target.ID), fmt.Sprint(target.Lease.Epoch), rec.Policy), EventID: p.event.Event.ID, WorkID: w.ID, ExecutionID: target.ID, Epoch: target.Lease.Epoch, Policy: rec.Policy, Binding: rec.Binding}
 				if err := putJSON(tx, intentNamespace, intent.ID, intent); err != nil {
 					return err
 				}

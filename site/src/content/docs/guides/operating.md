@@ -30,6 +30,7 @@ The TUI lists one row per issue or thread, with its latest turn and how many tur
 | `S` | in a Work's detail, skip the first Event routing is stuck on, after asking |
 | `E` | in a Work's detail, route the first stuck or failed Event again |
 | `a` | attach to the agent's session |
+| `i` | interrupt a running turn, after asking; the Work stays, and its next turn starts with the input queued for it |
 | `x` | cancel a live run, after asking |
 | `X` | cancel the whole Work, after asking |
 
@@ -62,7 +63,7 @@ The web view has five pages, with the daemon's state, the active generation and 
 
 When a newer release is out than the daemon runs, the status line says so. Its link opens the Update page, which shows the running and latest versions with a link to the release notes, and installs the new release as `open-conduit upgrade` does, then restarts the background service and reloads until the daemon answers on the new version. Without a running service it says to restart `open-conduit serve`; for a Homebrew install it gives the `brew upgrade` command instead. The view checks GitHub for the latest release at most every six hours.
 
-Every change (run again, rebind, send a wake event, hold, release, cancel a turn or the Work, and the actions extensions offer) asks first, says what it will do, and sends the Work's current revision; the confirmation names the call and shows the event the daemon accepted. Every page works without JavaScript. With it, `⌘K` jumps to any Work, scope or page, `g` then `r`, `a`, `c` or `s` goes to a page, `/` searches, `j`/`k` move through rows or turns, `x` selects, `e` jumps to the first error in a transcript, and `?` lists the keys. To attach to an agent's session, use the terminal.
+Every change (run again, rebind, send a wake event, hold, release, interrupt or cancel a turn, cancel the Work, and the actions extensions offer) asks first, says what it will do, and sends the Work's current revision; the confirmation names the call and shows the event the daemon accepted. Every page works without JavaScript. With it, `⌘K` jumps to any Work, scope or page, `g` then `r`, `a`, `c` or `s` goes to a page, `/` searches, `j`/`k` move through rows or turns, `x` selects, `e` jumps to the first error in a transcript, and `?` lists the keys. To attach to an agent's session, use the terminal.
 
 - `--addr HOST:PORT` (or `OPEN_CONDUIT_WEB_ADDR`) changes where it listens. Only a loopback address is accepted, so the view is never reachable from another machine on its own. To reach it from elsewhere, put it behind a reverse proxy with your own sign-in (see [share it with a team](../team/#4-the-web-view-behind-your-own-sign-in)).
 - `--host NAME` (or `OPEN_CONDUIT_WEB_HOST`) changes the name it answers to.
@@ -78,6 +79,7 @@ open-conduit actions list --work ID                  # what extensions offer on 
 open-conduit work list --state waiting
 open-conduit work retry ID
 open-conduit work hold ID --reason "needs a decision"
+open-conduit work interrupt ID --reason "read my message"   # stop the running turn; its queued input starts the next
 open-conduit work attach ID                          # hold, attach to the agent's session, release on exit
 open-conduit runs list
 open-conduit runs log ID --follow                    # follow a running turn
@@ -89,7 +91,8 @@ open-conduit events skip ID --reason "bad payload"   # route an Event routing is
 open-conduit events reroute ID                       # route a failed or skipped Event again
 ```
 
-- `work retry|hold|release|cancel` act on the Work's current revision. Pass `--revision N` (from `work get ID`) to act only if nothing has changed it since.
+- `work retry|hold|release|interrupt|cancel` act on the Work's current revision. Pass `--revision N` (from `work get ID`) to act only if nothing has changed it since.
+- `work interrupt` stops a running turn without ending the Work: input queued for it (messages the turn couldn't read during a long tool call, say) starts the next turn, which continues the session where the executor can. It is refused, with nothing stopped, when the turn's executor can't be interrupted; cancel the turn instead.
 - Lists print a table; `--json` prints the records. `--scope` filters by scope everywhere.
 - `runs log ID` shows a run's output; `--transcript` shows the agent's transcript.
 - `events chain ID` shows the chain of Events that led to something.
