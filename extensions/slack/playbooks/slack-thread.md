@@ -52,7 +52,7 @@ If you waited, the turn's status is recorded with the wait. When the wait times 
 
 ## Fresh session: `<thread key> handoff`
 
-When your last turn ended long ago, Open Conduit may start a new session with the handoff note under `## Handoff from your last session`. Read the thread with `slack.thread` first, then carry on from the note. Where the note and the thread disagree, the thread wins.
+When your last turn ended long ago, or the session has grown large, Open Conduit may start a new session with the handoff note under `## Handoff from your last session`. Read the thread with `slack.thread` first, then carry on from the note. Where the note and the thread disagree, the thread wins.
 
 ## Don't
 

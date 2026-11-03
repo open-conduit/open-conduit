@@ -380,7 +380,7 @@ func TestManagementConfigDetailWithoutSecrets(t *testing.T) {
 		t.Fatalf("undeclared executor settings: %s", s)
 	}
 	// Claude Code declares its model, which shows its default when unset.
-	if s := settings(agent.Settings); s != `model="opus" permission_mode="acceptEdits" playbook="-" structured=true workspace_mode="work" cold_turns="handoff" handoff_minutes=55 env set extra_args set` {
+	if s := settings(agent.Settings); s != `model="opus" permission_mode="acceptEdits" playbook="-" structured=true workspace_mode="work" cold_turns="handoff" handoff_minutes=55 handoff_tokens=400000 auto_compact_tokens=600000 env set extra_args set` {
 		t.Fatalf("claude settings: %s", s)
 	}
 	if agent.Resource != gitws.Type || !agent.Requires.Workspace {

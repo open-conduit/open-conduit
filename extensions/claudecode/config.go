@@ -63,6 +63,15 @@ type Config struct {
 	// from the last turn's handoff note, "resume" resumes the session
 	// (default "handoff").
 	ColdTurns string `json:"cold_turns,omitempty"`
+	// HandoffTokens hands a warm session off as well: when the last turn
+	// ended with more context than this, the next turn starts a fresh
+	// session from the handoff note (default 400000; 0 turns it off).
+	HandoffTokens *int64 `json:"handoff_tokens,omitempty"`
+	// AutoCompactTokens is where Claude Code compacts a session in the
+	// middle of a turn, set as CLAUDE_CODE_AUTO_COMPACT_WINDOW: it compacts
+	// a little before this, or before the model's window if smaller
+	// (default 600000; 0 leaves Claude Code's own threshold).
+	AutoCompactTokens *int64 `json:"auto_compact_tokens,omitempty"`
 	// HandoffShare is the removed handoff experiment's setting. It is
 	// accepted and ignored for one release (validating the config warns about it),
 	// then rejected.
@@ -107,6 +116,17 @@ var (
 )
 
 var permissionModes = []string{"bypassPermissions", "acceptEdits", "auto", "default", "plan", "dontAsk"}
+
+// The context limits on by default: a turn after one that ended with more
+// context than DefaultHandoffTokens starts afresh from the handoff note, and
+// Claude Code compacts in the middle of a turn near DefaultAutoCompactTokens.
+const (
+	DefaultHandoffTokens     int64 = 400_000
+	DefaultAutoCompactTokens int64 = 600_000
+)
+
+// autoCompactVar is Claude Code's auto-compact window variable.
+const autoCompactVar = "CLAUDE_CODE_AUTO_COMPACT_WINDOW"
 
 // What a cold turn does (Config.ColdTurns).
 const (
@@ -185,6 +205,17 @@ func ParseConfig(data []byte) (Config, error) {
 	}
 	if *c.HandoffMinutes < 0 || *c.HandoffMinutes > 7*24*60 {
 		return Config{}, configError("handoff_minutes must be between 0 and 10080")
+	}
+	if c.HandoffTokens == nil {
+		n := DefaultHandoffTokens
+		c.HandoffTokens = &n
+	}
+	if c.AutoCompactTokens == nil {
+		n := DefaultAutoCompactTokens
+		c.AutoCompactTokens = &n
+	}
+	if *c.HandoffTokens < 0 || *c.AutoCompactTokens < 0 {
+		return Config{}, configError("handoff_tokens and auto_compact_tokens must not be negative")
 	}
 	switch c.ColdTurns {
 	case "":
@@ -444,6 +475,8 @@ func (e *Executor) Settings(raw json.RawMessage) []extension.Setting {
 		{Name: "workspace_mode", Value: c.WorkspaceMode},
 		{Name: "cold_turns", Value: c.ColdTurns},
 		{Name: "handoff_minutes", Value: *c.HandoffMinutes},
+		{Name: "handoff_tokens", Value: *c.HandoffTokens},
+		{Name: "auto_compact_tokens", Value: *c.AutoCompactTokens},
 	}
 }
 

@@ -67,7 +67,7 @@ func TestConfigValidation(t *testing.T) {
 	e := newHarness(t).executor()
 	for _, bad := range []string{
 		`{"unknown":1}`, `{"permission_mode":"yolo"}`, `{"playbook":"../x"}`, `{"plugin_dir":"rel"}`,
-		`{"env":{"OS_TOKEN":"x"}}`, `{"pass_env":["OS_ENDPOINT"]}`, `{"cold_turns":"draw"}`, `{"handoff_minutes":-1}`,
+		`{"env":{"OS_TOKEN":"x"}}`, `{"pass_env":["OS_ENDPOINT"]}`, `{"cold_turns":"draw"}`, `{"handoff_minutes":-1}`, `{"handoff_tokens":-1}`, `{"auto_compact_tokens":-5}`,
 		`{"extra_args":["--mcp-config","x"]}`, `{"extra_args":["--resume"]}`, `{} {}`, `{"dir":"rel"}`, `{"dir":"/a/../b"}`,
 	} {
 		if err := e.ValidateConfig(json.RawMessage(bad), nil); !errors.Is(err, claudecode.ErrConfig) {
@@ -245,6 +245,93 @@ func TestTurnInvocationEnvironmentAndResult(t *testing.T) {
 	rec := h.store.record(t, "work/1")
 	if rec["session"] == "" || rec["handoff"] != "note 1" || rec["turns"] != float64(1) {
 		t.Fatalf("continuity %v", rec)
+	}
+}
+
+// TestLargeSessionHandsOff: a warm session whose last turn ended with more
+// context than handoff_tokens starts afresh from the note, a smaller one
+// resumes, and handoff_tokens 0 turns the size handoff off. Only the main
+// thread's last call counts, not a subagent's.
+func TestLargeSessionHandsOff(t *testing.T) {
+	h := newHarness(t)
+	h.mode("review")
+	e := h.executor()
+	cfg := map[string]any{}
+	turn := func(n int) {
+		t.Helper()
+		r, _ := h.request("work/9", "exec-9-"+strconv.Itoa(n), 1, cfg)
+		h.run(e, r)
+		h.clock.Advance(5 * time.Minute)
+	}
+	session := func() string { return h.store.record(t, "work/9")["session"].(string) }
+	last := func() map[string]any {
+		turns := h.reports.named("agent_turn")
+		return turns[len(turns)-1]
+	}
+
+	h.context(300_000)
+	turn(1)
+	first := session()
+	if last()["context_tokens"] != float64(300_000) && last()["context_tokens"] != int64(300_000) {
+		t.Fatalf("context telemetry %v", last())
+	}
+	// Under the default 400k: the warm session resumes.
+	h.context(450_000)
+	turn(2)
+	if session() != first || !strings.Contains(h.invocations()[1], "resume=1") {
+		t.Fatalf("a small warm session didn't resume: %v", h.invocations())
+	}
+	// Over it: a fresh session from the note, though the cache is warm.
+	h.context(1000)
+	turn(3)
+	fresh := session()
+	if fresh == first || !strings.Contains(h.invocations()[2], "session="+fresh+" resume=0") {
+		t.Fatalf("a large session didn't hand off: %v", h.invocations())
+	}
+	if p := h.prompts()[2]; !strings.HasPrefix(p, "/open-conduit:work-issue 12 handoff\n\n## Handoff from your last session\n\nnote 2") {
+		t.Fatalf("handoff prompt %q", p)
+	}
+	if l := last(); l["handoff"] != true || l["handoff_reason"] != "size" {
+		t.Fatalf("handoff telemetry %v", l)
+	}
+	// handoff_tokens 0 turns it off.
+	cfg["handoff_tokens"] = 0
+	h.context(900_000)
+	turn(4)
+	turn(5)
+	if session() != fresh || !strings.Contains(h.invocations()[4], "session="+fresh+" resume=1") {
+		t.Fatalf("handoff_tokens 0 still handed off: %v", h.invocations())
+	}
+}
+
+// TestAutoCompactTokens: auto_compact_tokens reaches claude as
+// CLAUDE_CODE_AUTO_COMPACT_WINDOW (600000 by default), 0 leaves Claude
+// Code's own, and the binding's env overrides it.
+func TestAutoCompactTokens(t *testing.T) {
+	h := newHarness(t)
+	h.mode("review")
+	e := h.executor()
+	for i, c := range []struct {
+		cfg  map[string]any
+		want string
+	}{
+		{map[string]any{}, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=600000"},
+		{map[string]any{"auto_compact_tokens": 250000}, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=250000"},
+		{map[string]any{"auto_compact_tokens": 0}, ""},
+		{map[string]any{"env": map[string]string{"FAKE_DIR": h.fake, "CLAUDE_CODE_AUTO_COMPACT_WINDOW": "123"}}, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=123"},
+	} {
+		r, _ := h.request("work/ac"+strconv.Itoa(i), "exec-ac-"+strconv.Itoa(i), 1, c.cfg)
+		h.run(e, r)
+		env, _ := os.ReadFile(filepath.Join(h.fake, "env"))
+		got := ""
+		for _, line := range strings.Split(string(env), "\n") {
+			if strings.HasPrefix(line, "CLAUDE_CODE_AUTO_COMPACT_WINDOW=") {
+				got = line
+			}
+		}
+		if got != c.want {
+			t.Errorf("%v: got %q, want %q", c.cfg, got, c.want)
+		}
 	}
 }
 
