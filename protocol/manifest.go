@@ -215,6 +215,11 @@ type Provides struct {
 	// binding's containers through container_provider.*, and checks a
 	// binding's container config through validate with kind container.
 	Containers []ContainerDecl `json:"containers,omitempty"`
+	// Tunnels are tunnel provider types (extension.TunnelProvider) that
+	// expose the host's webhook listener: the host holds tunnel.run open
+	// for the daemon's life and the package reports each public URL back
+	// through tunnel.url.
+	Tunnels []TunnelDecl `json:"tunnels,omitempty"`
 	// Tasks are host-paced background passes (projection, timer ensure,
 	// executor housekeeping, webhook management).
 	Tasks []TaskDecl `json:"tasks,omitempty"`
@@ -589,6 +594,11 @@ type ContainerDecl struct {
 	Type    string `json:"type"`
 	Forward bool   `json:"forward,omitempty"`
 }
+
+// TunnelDecl declares a tunnel provider type (settings.webhooks.tunnel).
+type TunnelDecl struct {
+	Type string `json:"type"`
+}
 type TaskDecl struct {
 	Name            string `json:"name"`
 	IntervalSeconds int    `json:"interval_seconds"`
@@ -918,6 +928,14 @@ func (m Manifest) Validate() error {
 		}
 		containers[x.Type] = true
 	}
+	tunnels := map[string]bool{}
+	for _, x := range p.Tunnels {
+		ident("tunnel provider", x.Type)
+		if tunnels[x.Type] {
+			fail("tunnel provider %q is declared twice", x.Type)
+		}
+		tunnels[x.Type] = true
+	}
 	for _, t := range p.Tasks {
 		ident("task", t.Name)
 		if t.IntervalSeconds < 1 {
@@ -1062,6 +1080,7 @@ func (m Manifest) Enabled() []string {
 	for _, c := range p.Containers {
 		set("containers.forward", c.Forward)
 	}
+	set("tunnels", len(p.Tunnels) > 0)
 	set("tasks", len(p.Tasks) > 0)
 	set("exporters", p.Exporters)
 	set("checks", len(p.Checks) > 0)

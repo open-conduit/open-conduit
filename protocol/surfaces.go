@@ -858,6 +858,28 @@ type SandboxProviderAdoptParams struct {
 	Root   int         `json:"root"`
 }
 
+// TunnelRunParams starts one run of a tunnel (tunnel.run;
+// extension.TunnelProvider.Run). The host holds the call open for as long
+// as it wants the tunnel and cancels it ($/cancel) to stop it; the answer,
+// an empty object, comes only once the tunnel has stopped. A refusal coded
+// invalid is extension.ErrTunnelConfig: the host doesn't start that config
+// again. Run is the host's ID for this call, which tunnel.url quotes.
+type TunnelRunParams struct {
+	Type   string  `json:"type"`
+	Run    string  `json:"run"`
+	Addr   string  `json:"addr"`
+	Config Payload `json:"config"`
+}
+
+// TunnelURLParams reports a running tunnel's public URL (tunnel.url), ""
+// while it is down. It is a request, not a notification, so the host takes
+// the URLs in the order the package sent them; a run the host no longer
+// holds open is refused with conflict.
+type TunnelURLParams struct {
+	Run string `json:"run"`
+	URL string `json:"url"`
+}
+
 // LaunchParams plans one launch (sandbox.plan) or creates its container
 // (container.launch).
 type LaunchParams struct {

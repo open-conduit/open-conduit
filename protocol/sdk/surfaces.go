@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/extension"
@@ -250,6 +251,30 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return protocol.ContainerForward{Address: addr}, nil
+	case "tunnel.run":
+		var p protocol.TunnelRunParams
+		if err := jsonrpc.Params(raw, &p); err != nil {
+			return nil, err
+		}
+		prov, ok := s.ext.Tunnels[p.Type]
+		if !ok {
+			return nil, notFound(method)
+		}
+		// One tunnel.url at a time, each answered before the next, so the
+		// host sees the URLs in the order the provider published them.
+		var mu sync.Mutex
+		publish := func(u string) {
+			mu.Lock()
+			defer mu.Unlock()
+			_ = s.conn.Call(ctx, "tunnel.url", protocol.TunnelURLParams{Run: p.Run, URL: u}, nil)
+		}
+		if err := prov.Run(ctx, extension.TunnelRun{Addr: p.Addr, Config: p.Config.Domain()}, publish); err != nil {
+			if errors.Is(err, extension.ErrTunnelConfig) {
+				return nil, protocol.Errorf(protocol.CodeInvalid, err.Error())
+			}
+			return nil, err
+		}
+		return struct{}{}, nil
 	case "telemetry.export":
 		var p protocol.TelemetryExportParams
 		if err := jsonrpc.Params(raw, &p); err != nil {

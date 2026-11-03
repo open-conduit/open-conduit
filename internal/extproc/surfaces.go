@@ -378,7 +378,25 @@ func (r *Remote) Container(typ string) (extension.ContainerProvider, bool) {
 	return nil, false
 }
 
+// Tunnel returns the tunnel provider adapter of a declared type. Each Run
+// holds tunnel.run open until ctx ends, under a fresh run ID that the
+// package's tunnel.url quotes; a URL quoting any other ID is refused, so a
+// run the host has let go can't move its webhooks.
+func (r *Remote) Tunnel(typ string) (extension.TunnelProvider, bool) {
+	for _, d := range r.m.Provides.Tunnels {
+		if d.Type == typ {
+			return &remoteTunnel{r: r, typ: typ}, true
+		}
+	}
+	return nil, false
+}
+
 type remoteContainer struct {
+	r   *Remote
+	typ string
+}
+
+type remoteTunnel struct {
 	r   *Remote
 	typ string
 }
@@ -451,6 +469,30 @@ func (p *remoteContainer) List(ctx context.Context, owner extension.ResourceOwne
 
 func (p *remoteContainer) Remove(ctx context.Context, ref extension.ContainerRef) error {
 	return p.r.p.Call(ctx, "container_provider.remove", protocol.ContainerProviderRefParams{Type: p.typ, Ref: protocol.FromContainerRef(ref)}, nil)
+}
+
+func (t *remoteTunnel) Run(ctx context.Context, run extension.TunnelRun, publish func(string)) error {
+	id := newID()
+	t.r.s.mu.Lock()
+	t.r.s.tunnels[id] = publish
+	t.r.s.mu.Unlock()
+	defer func() {
+		t.r.s.mu.Lock()
+		delete(t.r.s.tunnels, id)
+		t.r.s.mu.Unlock()
+	}()
+	err := t.r.p.Call(ctx, "tunnel.run", protocol.TunnelRunParams{Type: t.typ, Run: id, Addr: run.Addr, Config: protocol.FromPayload(run.Config)}, nil)
+	switch {
+	case ctx.Err() != nil:
+		return nil
+	case protocol.ErrorCode(err) == protocol.CodeInvalid:
+		return errors.Join(extension.ErrTunnelConfig, err)
+	case err == nil:
+		// The package ended the run without being asked: the tunnel is
+		// down, and the host starts it again.
+		return errors.New("the tunnel provider ended its run")
+	}
+	return err
 }
 
 // sandboxErr fails a sandbox call closed: a refusal the package authored as

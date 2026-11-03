@@ -113,6 +113,8 @@ var Methods = []Method{
 	{Name: "container_provider.list", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.List"}},
 	{Name: "container_provider.remove", Direction: HostToExtension, Provides: "containers", Contract: []string{"extension.ContainerProvider.Remove"}},
 	{Name: "container_provider.forward", Direction: HostToExtension, Provides: "containers.forward", Contract: []string{"extension.ContainerForwarder.Forward"}},
+	{Name: "tunnel.run", Direction: HostToExtension, Provides: "tunnels", Contract: []string{"extension.TunnelProvider.Run", "extension.TunnelRun", "extension.TunnelConfig"}},
+	{Name: "tunnel.url", Direction: ExtensionToHost, Provides: "tunnels", Contract: []string{"host:extension.TunnelProvider.Run publish"}},
 
 	// Namespaced KV (mandatory, never negotiated) and read-only state.
 	{Name: "kv.get", Direction: ExtensionToHost, Contract: []string{"storage.Tx.Get"}},

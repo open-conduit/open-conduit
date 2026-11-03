@@ -641,6 +641,9 @@ type CheckConfig struct {
 	Dir         string            `json:"dir,omitempty"`
 	Scopes      []CheckScope      `json:"scopes,omitempty"`
 	Connections []CheckConnection `json:"connections,omitempty"`
+	// Tunnel is the webhook tunnel, when its type is one the extension
+	// declares; nil otherwise.
+	Tunnel *CheckTunnel `json:"tunnel,omitempty"`
 }
 
 // CheckScope is one scope in a CheckConfig. Entries are the scope's entries
@@ -693,6 +696,14 @@ type CheckBinding struct {
 type CheckContainer struct {
 	Provider string          `json:"provider"`
 	Config   json.RawMessage `json:"config,omitempty"`
+}
+
+// CheckTunnel is the tunnel the host runs (or, offline, would run) when its
+// type is one the extension declares (manifest tunnels): settings.webhooks,
+// or serve's flags over it, as the provider's TunnelConfig.
+type CheckTunnel struct {
+	Type   string          `json:"type"`
+	Config json.RawMessage `json:"config,omitempty"`
 }
 
 // CheckSandbox is a binding's sandbox provider and its config.
