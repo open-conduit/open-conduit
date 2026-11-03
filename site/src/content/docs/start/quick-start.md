@@ -53,7 +53,7 @@ It opens a Claude Code session with Open Conduit's setup guide, and the two of y
 
 Using another coding agent, or one you already have open? Give it [Point your agent here](/open-conduit/start/agents/), which installs Open Conduit and follows the same guide.
 
-Claude Code must be installed and signed in. The session can run only `open-conduit config`, `doctor`, `health`, `secret path` and `init github --dry-run` without asking you. `--config PATH` sets up a config other than the default.
+Claude Code must be installed and signed in. The session can run only `open-conduit config`, `doctor`, `health`, `secret path` and each setup's `init TYPE --dry-run` (such as `init github --dry-run`) without asking you. `--config PATH` sets up a config other than the default.
 
 **On Codex.** `open-conduit init --with codex` opens a Codex session on the same guide instead. Codex has no list of commands to allow ahead of time, so it asks you before each command that changes anything outside the checkout, the config included. To have the agents themselves run on Codex, see [run agents on Codex](/open-conduit/guides/codex/).
 

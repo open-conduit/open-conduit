@@ -108,14 +108,7 @@ Recovery order:
 
 ## Evidence
 
-`TestDaemonMigrationRehearsal` (in [`integration/daemon_migration_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_migration_test.go), part of `make drill`) exercises the commands on the composed daemon:
-
-- offline commands refused beside the daemon;
-- `state check` drained after a graceful stop;
-- a backup created and verified;
-- a restore into a new directory with a fresh credential (the bundle's refused) and no repeated external write, claim or job run after a reconcile;
-- corrupted and newer-schema databases diagnosed;
-- a tampered bundle refused.
+`TestBundleRoundTripAndRefusal` (in `internal/backup`) creates, verifies and restores a bundle (a pre-backup lease fenced off), and refuses an existing destination, a tampered or corrupted bundle and one missing referenced content. `TestShellRetentionReleasesRunDirectories` (in `integration`) backs up and restores after a retention sweep. No composed-daemon drill exercises the offline commands since `TestDaemonMigrationRehearsal` went with the migrator in [#413](https://github.com/open-conduit/open-conduit/pull/413).
 
 `TestScheduledBackupsKeepTheNewest` and `TestScheduledBackupsResumeFromTheNewestBundle` (in `internal/bootstrap`) cover the schedule with a fake clock: a scheduled bundle restores, the newest are kept and others in the directory left alone, a restart resumes from the newest bundle and clears interrupted staging.
 

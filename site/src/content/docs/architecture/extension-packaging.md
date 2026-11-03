@@ -197,7 +197,7 @@ acme/
   acme-extension                the manifest's command[0], relative and executable
   playbooks/                    the manifest's playbooks directory, if declared
   certification.json            the conformance runner's fixture (recommended)
-  …                             anything else the command needs (the shell package ships its toolbelt `os` binary)
+  …                             anything else the command needs
 ```
 
 `open-conduit extension inspect DIR` checks a directory offline. It checks the [strict manifest rules](../extension-protocol/#manifest), a relative command inside the package that exists and is executable (unless the command is `open-conduit extension-run <name>`, [served by open-conduit itself](#served-by-open-conduit-itself)), and the declared playbooks directory. A package is self-contained: install copies it, resolving symlinks.
@@ -221,10 +221,10 @@ A first-party package builds no executable of its own. Its manifest's command is
 
 ### Bundled with the release
 
-The release archive carries packages as well as binaries, under `extensions/<name>/` beside `open-conduit` and `os`. The daemon discovers them there as [bundled packages](../extension-protocol/#loading), and a package of the same name installed in `<config dir>/extensions` replaces the bundled one. Today the archive bundles fourteen: `setup`, the [setup assistant](../setup-sessions/#where-it-lives-and-how-it-ships), which a fresh install needs for its first-run configuration, and thirteen that `open-conduit` itself serves: `claude-code`, the [Claude Code executor](../claude-code-executor/), `codex`, the [Codex executor](../codex-executor/), `posthog`, the [PostHog telemetry exporter](../installed-integrations/#posthog), `human`, [human decisions](../../workflows/human-decisions/), `observe`, observed sources, the [trackers](../installed-integrations/) `linear`, `jira` and `bitbucket`, [`schedule`](../schedule-extension/), [`introspection`](../issue-reporting/), [`slack`](../slack-extension/), [`github`](../github-extension/) and the [`shell`](../shell-executor/) executor. A first-party extension moves out of process by leaving bootstrap's in-process list and gaining a `pkg/` package and a `runnable` entry marked bundled, which `open-conduit extension-run --bundle` and so `scripts/bundle-packages.sh` lay out; offline config validation (`config check`, `ValidateConfig`) includes bundled packages even with no config file, so its types still validate. The integration drills lay the same packages out beside their daemon binary, and `TestBundledHostPackagesMatchRelease` keeps that list the release's.
+The release archive carries packages as well as binaries, under `extensions/<name>/` beside `open-conduit` and `os`. The daemon discovers them there as [bundled packages](../extension-protocol/#loading), and a package of the same name installed in `<config dir>/extensions` replaces the bundled one. Today the archive bundles twenty: `setup`, the [setup assistant](../setup-sessions/#where-it-lives-and-how-it-ships), which a fresh install needs for its first-run configuration, and nineteen that `open-conduit` itself serves: `claude-code`, the [Claude Code executor](../claude-code-executor/), `codex`, the [Codex executor](../codex-executor/), `posthog`, the [PostHog telemetry exporter](../installed-integrations/#posthog), `human`, [human decisions](../../workflows/human-decisions/), `observe`, observed sources, the [trackers](../installed-integrations/) `linear`, `jira` and `bitbucket`, [`schedule`](../schedule-extension/), [`introspection`](../issue-reporting/), [`slack`](../slack-extension/), [`github`](../github-extension/), the [`shell`](../shell-executor/) executor, the [`srt`](../sandboxes/) sandbox provider, the [`git`](../workspaces/) workspace provider, the [`docker` and `ssh`](../sandboxes/) container providers and the [`ngrok` and `cloudflared`](../operator-setup/#webhooks-tunnels-and-reconcile-only-operation) tunnels. Each first-party extension moved out of process by leaving bootstrap's in-process list, which #508 removed, and gaining a `pkg/` package and a `runnable` entry marked bundled, which `open-conduit extension-run --bundle` and so `scripts/bundle-packages.sh` lay out; offline config validation (`config check`, `ValidateConfig`) includes bundled packages even with no config file, so its types still validate. The integration drills lay the same packages out beside their daemon binary through the same command, and `TestReleaseBundlesThroughTheBinary` checks that `scripts/bundle-packages.sh` bundles through it, so the two lists can't drift.
 
-- **Source.** `setup` lives in its own repository and module, built on `protocol/sdk` like any third party's, and is pinned in this repository's `go.mod` with a `tool` directive. Nothing imports it. `codex`, `posthog`, `human`, `observe`, `linear`, `jira`, `bitbucket`, `schedule`, `introspection`, `slack`, `github` and `shell` live in this repository and run as `open-conduit extension-run NAME`, so each bundled directory is a manifest and certification with no binary.
-- **Build.** `scripts/bundle-packages.sh OUT [GOOS_GOARCH…]` builds `setup` from the module cache for each platform and writes its manifest, certification and playbooks beside the binary, and writes each package `open-conduit` serves from a host build's `extension-run NAME package-manifest`. GoReleaser runs it before building and adds each platform's directory to that platform's archive. `make packages` runs it for this host into `dist/packages/setup`, and `make certify` certifies it with the others. `make release-snapshot` checks that `extension list` shows `setup`, `codex`, `posthog`, `human`, `observe`, `linear`, `jira`, `bitbucket`, `schedule`, `introspection`, `slack`, `github` and `shell` as bundled and that `codex` ships no executable.
+- **Source.** `setup` lives in its own repository and module, built on `protocol/sdk` like any third party's, and is pinned in this repository's `go.mod` with a `tool` directive. Nothing imports it. The other nineteen live in this repository and run as `open-conduit extension-run NAME`, so each bundled directory is a manifest and certification with no binary.
+- **Build.** `scripts/bundle-packages.sh OUT [GOOS_GOARCH…]` builds `setup` from the module cache for each platform and writes its manifest, certification and playbooks beside the binary, and writes each package `open-conduit` serves from a host build's `extension-run NAME package-manifest`. GoReleaser runs it before building and adds each platform's directory to that platform's archive. `make packages` runs it for this host into `dist/packages/setup`, and `make certify` certifies it with the others. `make release-snapshot` checks that `extension list` shows `setup` and every package in the Makefile's `BUNDLED_PACKAGES` (the runnable packages but `sentry` and `pagerduty`) as bundled, and that `codex` ships no executable.
 - **Install and upgrade.** install.sh and `open-conduit upgrade` replace `extensions/` beside the binary with the release's as a whole (upgrade stages it, then swaps it in after the binaries, so a failed swap leaves the old one). Packages installed in the config directory are never touched. The Homebrew cask keeps the whole archive in its directory, so the daemon finds `extensions/` beside the linked binary.
 - **Updating the pin.** Bump the version in `go.mod` (`go get github.com/open-conduit/extension-setup@VERSION`). The package's own CI certifies it against the latest release and `main` before it is tagged.
 
@@ -237,7 +237,7 @@ The release archive carries packages as well as binaries, under `extensions/<nam
 | Own release | `version` is informational: shown in `list`, doctor and reports. | — |
 | KV layout | `kv_version` never goes down. A newer release migrates from the stored layout at configure. | at update (refused) and at start (`kv_downgrade`) |
 | Payload schemas | `schemas[].versions` lists what the release reads; the last is what it writes ([schema evolution](../extension-protocol/#event-payload-schema-evolution)). | every call (deterministic read gate) |
-| Executor capabilities | Bindings `requires` mechanical labels; a package declares exactly what it implements. | at config validation (as for in-process executors) |
+| Executor capabilities | Bindings `requires` mechanical labels; a package declares exactly what it implements. | at config validation |
 
 ## Install, update, rollback and removal
 
@@ -272,7 +272,7 @@ At start, `serve`:
 
 1. discovers the packages and refuses a conflicting set atomically;
 2. starts each behind its scoped service, before the configuration opens, so the packages' validators check it. The first `configure` carries an empty generation; the real one follows once the configuration and ingress exist;
-3. registers, next to the first-party registrations:
+3. registers, for bundled and installed packages alike:
    - config types with `validate`-backed validators;
    - route handlers, Work kinds and recurrences;
    - executors (their binding config validated by the package);
@@ -308,7 +308,7 @@ A package's playbooks join the Claude Code plugin the daemon writes at start, be
 
 Every refusal and failure gets a stable code, a summary, a remedy and a link to [Troubleshooting](#troubleshooting) (`extproc.Diagnose`). They appear in the daemon log, the `extensions` doctor check and the CLI. They never include config values or secrets.
 
-Unsupported capabilities are refused at config validation, exactly as for in-process executors: a binding requiring `inject` against an executor that does not declare it is `unsupported_capability` at the binding's `requires` path. An undeclared surface is never called, and callbacks from one are refused with `undeclared`.
+Unsupported capabilities are refused at config validation: a binding requiring `inject` against an executor that does not declare it is `unsupported_capability` at the binding's `requires` path. An undeclared surface is never called, and callbacks from one are refused with `undeclared`.
 
 ## Troubleshooting
 
@@ -320,7 +320,7 @@ What each code means and what to change. `extension check` gives the codes marke
 | `incompatible_protocol` (check) | The package and this host share no protocol version | List a version this host speaks in `protocol` and build against an SDK release for it, or upgrade Open Conduit |
 | `needs_newer_host` (check) | The manifest has a field this Open Conduit doesn't know | Correct it if it's a typo; otherwise upgrade Open Conduit to the release that added it, or install a release of the package built for this one |
 | `wrong_platform` (check) | The command is built for another OS or architecture | Build it for this platform, or install the release archive built for it |
-| `registration_conflict` (check) | The package claims a name Open Conduit or another package registers | Rename what the package declares; first-party names (`slack`, `shell`, `github`, …) can't be installed alongside |
+| `registration_conflict` (check) | The package claims a name Open Conduit or another package registers | Rename what the package declares; names the core registers (`manual`, `core`, the builtin operations, …) can't be taken. A bundled package's name isn't a conflict: the installed package replaces it |
 | `unknown_operation` (check) | A playbook names an operation nobody declares | Declare it under `provides.operations`, correct the name, or `--allow` it if it is one of the package's own setup probes |
 | `no_playbooks` (check, warning) | The playbooks directory has no `<name>.md` | Add one, or drop `playbooks` from the manifest |
 | `no_certification` (check, warning) | No `certification.json` | Add one so `certify` can check each surface ([fixtures](#fixtures)) |
@@ -511,7 +511,7 @@ A report states:
 
 ## Evidence
 
-- `TestCertificationFirstPartyPackages`: Slack, shell, notes and runner are certified, and their reports state versions and limits.
+- `TestCertificationFirstPartyPackages`: every package `open-conduit extension-run` serves, and the `notes` and `runner` examples, are certified, and their reports state versions and limits.
 - `TestCertificationNegativeControls` and `TestCertificationInvalidPackage`.
 - `make certify` certifies the TypeScript example `weather`; `make ts-check` typechecks and unit-tests the TypeScript SDK and the example.
 - `TestTypeScriptWireMatchesGo`: every field of the TypeScript SDK's wire messages is a JSON field of the Go type it encodes, and every field Go can send as null is nullable there.
@@ -523,12 +523,12 @@ A report states:
 - Unit tests in `internal/extproc` (install, update, rollback, removal, diagnostics, and `extension check` in `check_test.go`).
 - `TestExtensionNew`: `extension new` writes a repository whose own `make check` passes against this checkout, and refuses a directory that isn't empty.
 - `TestExtensionCheckCommand`: `extension check` through the binary, text and `--json`.
-- The first-party in-process suites still run unchanged: Slack and shell keep their in-process registration, and workflows A–D pass (`TestDaemonAllWorkflows`).
+- Workflows A–D pass on the composed daemon, with every first-party extension running as a package (`TestDaemonAllWorkflows`).
 
 ## Provisional decisions for user review
 
 21. Packages are directories under `<config dir>/extensions/<name>/`, read only at daemon start. Install, update, rollback and removal are offline CLI commands that take effect at the next serve; there is no hot load.
-22. Install stages and renames atomically, keeps exactly one previous release for rollback, refuses a lower `kv_version`, and refuses first-party names. A first-party package (Slack, shell) therefore cannot replace its in-process registration; the packages exist to prove and certify the boundary.
+22. Install stages and renames atomically, keeps exactly one previous release for rollback, refuses a lower `kv_version`, and refuses names the host registers itself. A package installed under a bundled package's name replaces the bundled one ([bundled with the release](#bundled-with-the-release)).
 23. Removal keeps durable state (KV, recorded layout, state directory, log) and is refused while the config uses the package, unless forced.
 24. Compatibility is the protocol version (no host-version range), which changes only for a breaking change, with a policy of keeping the previous protocol version for at least one release after one. Additive surfaces (new methods and manifest fields) ship without a bump; a package that uses one is refused by an older host with `needs_newer_host`.
 25. The SDK's final shape: `sdk.Extension` fields per surface, `sdk.Host`, `sdk.Store` (precondition-on-read optimistic commits; prefix ranges not protected) and `sdk.Artifacts`, plus `sdk.PackageCommand` for packaging. `sdk.New` and its registrations (`Operation` with typed `sdk.Handler`, `sdk.Wait` and `sdk.Emit`, `Route`, `WorkKind`, `Task`, `Check`, `IngressType` …) fill the same fields and derive the manifest from them; an operation's input struct gives its manifest `input` schema.
@@ -537,8 +537,8 @@ A report states:
 28. Certification criteria version 6 (above; version 2 added the Work display limits to `routes.decisions`, version 3 `executor.resource_mode` and `resources.workspace`, version 4 `sandboxes.policy`, version 5 `containers.policy`, version 6 `tunnels.policy`), run against the package's own fixture by `open-conduit extension certify`. The fixture format lives in `protocol`. A declared ingress type or executor requires a fixture case.
 29. `receive_time_varies` relaxes only `received_at` equality for packages that stamp reconcile observations with their own clock.
 30. The certification runner is production code in the `open-conduit` binary, so composition may depend on the public `conformance` checks (never `conformance/reference`); the boundary rule says so.
-31. The Slack package requires source namespaces `slack` or `slack/…` (the subprocess namespacing rule), which the in-process extension does not.
-32. Playbooks of installed packages are not wired into agent executors (left as a first-party convention).
+31. The Slack package requires source namespaces `slack` or `slack/…` (the subprocess namespacing rule).
+32. Playbooks of installed packages are wired into agent executors as first-party ones are: the host writes every package's playbooks into the turn plugin.
 
 ## History
 

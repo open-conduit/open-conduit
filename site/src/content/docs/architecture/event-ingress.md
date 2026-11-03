@@ -53,7 +53,7 @@ Default limits are 1,000 observations/direct Events per page, 10,000 staged item
 
 ## Evidence
 
-Run the ingress integration cases with `go test -race -count=1 ./integration -run 'Ingress'`. The SQLite fixtures demonstrate reconcile-only convergence, complete/staged checkpoint reopening, repeated/partial/mixed generations, push/reconcile/late-delivery dedup, source/scope isolation, declaration/canonical identity rejection, page-lease fencing, pending identity-conflict isolation and post-commit/pre-ack process kill recovery. B02 weakened-backend controls still run unchanged.
+Run the ingress integration cases with `go test -race -count=1 ./internal/runtime -run 'Ingress'`. The SQLite fixtures demonstrate reconcile-only convergence, complete/staged checkpoint reopening, repeated/partial/mixed generations, push/reconcile/late-delivery dedup, source/scope isolation, declaration/canonical identity rejection, page-lease fencing, pending identity-conflict isolation and post-commit/pre-ack process kill recovery. B02 weakened-backend controls still run unchanged.
 
 ## History
 

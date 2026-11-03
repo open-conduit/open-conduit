@@ -17,7 +17,7 @@ Each workflow is a **scope**. A scope always names what it may use:
 - **`authorization`** is the ceiling of connections and operations the scope may use.
 - **`extensions`** are the integrations that turn what happens in a service into Events.
 - **`routes`** send those Events to a binding, and choose what happens when one arrives while an attempt is running: `queue`, `inject`, `interrupt` or `drop`.
-- **`bindings`** name an executor (`claude-code` or `shell`), the operations its runs may call, optionally a `resource` such as a Git checkout to work in, and optionally a `sandbox` or `container` that limits what its runs can reach.
+- **`bindings`** name an executor (`claude-code`, `codex` or `shell`), the operations its runs may call, optionally a `resource` such as a Git checkout to work in, and optionally a `sandbox` or `container` that limits what its runs can reach.
 
 The [workflow pages](/open-conduit/workflows/github/) each show a complete, minimal example.
 

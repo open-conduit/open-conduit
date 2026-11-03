@@ -7,7 +7,7 @@
 Most agent tools fire once per trigger: an issue is assigned, a job runs, and if the pull request goes red an hour later the next comment starts from scratch. Open Conduit keeps the work, not the run. Three things set it apart:
 
 - **Durable, not fire-and-forget.** Every event is recorded before anything acts on it. Work parks for hours or days and wakes on the merge, the CI result or the reply it is waiting for, even after a restart. A failed attempt is retried; it doesn't fail the Work.
-- **Any executor.** An Execution is one attempt to move Work forward, through whichever executor its binding names. Agents run on Claude Code or the Codex CLI (an installed package, like any you could write); a shell command runs with the same history, retries and timeouts; a person can answer an agent's private question or take over its session. Extensions can add other executors.
+- **Any executor.** An Execution is one attempt to move Work forward, through whichever executor its binding names. Agents run on Claude Code or the Codex CLI (each a bundled package, like any you could write); a shell command runs with the same history, retries and timeouts; a person can answer an agent's private question or take over its session. Extensions can add other executors.
 - **Authority at the host.** Each run gets a toolbelt of only the operations its binding grants, such as "comment on this issue", "open a pull request" or "wait until that PR merges", and the daemon checks every call. A binding can run its agent in a sandbox or a container, away from your credentials and Open Conduit's own state.
 
 And around those:
@@ -49,7 +49,7 @@ open-conduit init --with claude
 
 `init --with claude` opens a Claude Code session with Open Conduit's setup guide. Claude looks at your checkouts and logins, then asks which repositories to watch, how issues map to scopes and how the agent should run. It writes the config and validates it, and checks the result with `open-conduit doctor`. It never asks for a token in the chat: credentials stay as references to your `gh` login, keyring or environment. It ends with the commands to start the daemon, which you run yourself. You need [Claude Code](https://docs.anthropic.com/en/docs/claude-code) installed and signed in.
 
-To talk it through in the browser instead, start the daemon with no config (`open-conduit serve`), or add a setup scope to an existing one with `open-conduit init setup`, and open the Setup page of `open-conduit web`. A browser session explains Open Conduit and plans the setup with you, then gives you the commands; in this release it has no shell and can't change the config itself. See [Set it up in the browser](https://open-conduit.github.io/open-conduit/start/quick-start/#set-it-up-in-the-browser).
+To talk it through in the browser instead, start the daemon with no config (`open-conduit serve`), or add a setup scope to an existing one with `open-conduit init setup`, and open the Setup page of `open-conduit web`. A browser session looks around through named probes and proposes each config change for you to approve and apply; it never edits the config itself. See [Set it up in the browser](https://open-conduit.github.io/open-conduit/start/quick-start/#set-it-up-in-the-browser).
 
 Prefer to do it by hand? Write the scope, check it, start the daemon and check its credentials, then watch it in the terminal or the browser:
 

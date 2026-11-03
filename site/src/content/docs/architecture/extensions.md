@@ -108,7 +108,7 @@ In the same transaction it writes the commit's `Record`s, which must stay in nam
 
 ## Setup hook
 
-The optional [`extension.Setup`](https://github.com/open-conduit/open-conduit/blob/main/extension/setup.go) hook lets an extension own its setup. `SetupInfo` names a type and `Setup(ctx, SetupHost, args)` returns connections plus one scope. Core `open-conduit init <type>` hosts it with prompts, a browser opener, the secret store, a helper-command runner, offline validation and the merge, and it never interprets service details. GitHub (`init github`) and Slack (`init slack`) implement it; see [operator setup](../operator-setup/#extension-owned-setup).
+The optional [`extension.Setup`](https://github.com/open-conduit/open-conduit/blob/main/extension/setup.go) hook lets an extension own its setup. `SetupInfo` names a type and `Setup(ctx, SetupHost, args)` returns connections plus one scope. Core `open-conduit init <type>` hosts it with prompts, a browser opener, the secret store, a helper-command runner, offline validation and the merge, and it never interprets service details. GitHub (`init github`), Slack (`init slack`), Linear (`init linear`) and Jira (`init jira`) implement it, each served from its package; see [operator setup](../operator-setup/#extension-owned-setup).
 
 ## Required lifecycle telemetry
 

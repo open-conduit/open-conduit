@@ -3,7 +3,7 @@ title: "Observe extension"
 description: "How an executor's report of an outside item becomes an Event and per-thread Work: source, reporter and item identity, de-duplication, revisions and trust."
 ---
 
-The [`observe` extension](https://github.com/open-conduit/open-conduit/tree/main/extensions/observe) lets any executor report what it observed in an outside source, and turns each thread of that source into Work. It is in-process and first-party, but uses only public hooks: a translated emission with `EmitPlan.Once` ([extensions](../extensions/#translated-emissions)), a route handler, an entry type and a Work kind. The recipe is [observed sources](../../workflows/observed-sources/).
+The [`observe` extension](https://github.com/open-conduit/open-conduit/tree/main/extensions/observe) lets any executor report what it observed in an outside source, and turns each thread of that source into Work. It is first-party and runs out of process as a package bundled with the release (`extensions/observe/pkg`, `open-conduit extension-run observe`), and it uses only public hooks: a translated emission with `EmitPlan.Once` ([extensions](../extensions/#translated-emissions)), a route handler, an entry type and a Work kind. The recipe is [observed sources](../../workflows/observed-sources/).
 
 ## Three identities
 

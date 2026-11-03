@@ -137,7 +137,7 @@ Open Conduit ships `slack-thread`, which covers working a thread and leaves its 
 
 Threads in `C0REVIEWS01` start on `review`; threads in `C0123456789` fall through to `conversations` and start on `support`. A thread stays with the route that started it.
 
-Other handlers narrow a route the same way. Linear and Jira routes already take `{"match": {"labels": ["review"]}}` (or status, team, project and the other issue attributes) in their config, so one tracker entry can start different playbooks by label. The GitHub route takes no config yet; it would gain the same `match` when there is a need.
+Other handlers narrow a route the same way. Linear and Jira routes already take `{"match": {"labels": ["review"]}}` (or status, team, project and the other issue attributes) in their config, so one tracker entry can start different playbooks by label. The GitHub route's config chooses only what it claims (`claim`, with `drafts` and `authors` for pull requests) and takes no `match` yet; it would gain one when there is a need.
 
 To turn a request in a thread into an issue and a PR, and tell the thread when it merges, see [Slack to PR](../slack-to-pr/).
 

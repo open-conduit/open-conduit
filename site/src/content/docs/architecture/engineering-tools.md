@@ -7,7 +7,7 @@ The engineering workflow is what an agent working a GitHub issue uses: GitHub to
 
 - the GitHub tool operations ([`extensions/github/tools.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/tools.go), [`tools_wait.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/tools_wait.go)), registered through `extension.Registrar`;
 - translated waits: a public `Operation.Wait` contract and the runtime that declares and installs them ([`internal/runtime/toolbelt_wait.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/toolbelt_wait.go), [`waits.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/runtime/waits.go));
-- scheduled holds: the `github-hold` route and in-process executor ([`extensions/github/hold.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/hold.go));
+- scheduled holds: the `github-hold` route and executor ([`extensions/github/hold.go`](https://github.com/open-conduit/open-conduit/blob/main/extensions/github/hold.go));
 - the playbooks ([`extensions/github/playbooks`](https://github.com/open-conduit/open-conduit/tree/main/extensions/github/playbooks)); the setup guide is the `setup` package's ([`playbooks`](https://github.com/open-conduit/extension-setup/tree/main/playbooks) in open-conduit/extension-setup, bundled with the release);
 - composition in [`internal/bootstrap/tools.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/tools.go).
 
@@ -104,14 +104,14 @@ Behaviour:
 
 `issue:N:<state>` waits on the host's turn-ended Event (`core.execution.turn`, [execution scheduling](../execution-scheduling/)), which every turn declaring `core.turn.v1` publishes on its Work's keys, whatever source the Work came from. The issue's key selects the issue and the filter the state. The `github` route never delivers it. A wait registered on the `github.agent.turn` Event of earlier releases is not met by the new Event: give it an `until`, or wait again after upgrading.
 
-The renderer (`RenderEvent`, wired as the Claude Code `Options.Render`) uses this wording: `You were waiting for PR #50 to merge. That has happened: PR #50 was merged.` A timeout reads that the latest time has come. Comments carry their reply call (for example `call github.pr.reply {"number": 4, "comment_id": 77, …}`). A `github.pull_request.open` copy names the PR's head (`### PR #4 is open at abcdef1`), its author and creation time on their own line, and says the same notice comes again whenever anything about the PR changes (a push, or its title, body, labels, base branch or draft state), so a push doesn't read as a repeat of the PR's opening (issue #331). A render states what happened and never what to do about it, because the same text reaches every Work subscribed to the item, the issue's agent and a PR's reviewer alike: a conflict reads `### PR #4 has conflicts with main at abcdef1` and `It can't merge until they're resolved.`, and the response (rebase, or leave it to the author) is in each role's playbook (issue #460). A pointer to the operation that shows more, such as `github.checks` for failed checks, is information and stays.
+The renderer (`RenderEvent`, which the host asks through `event.render` for an agent's prompt) uses this wording: `You were waiting for PR #50 to merge. That has happened: PR #50 was merged.` A timeout reads that the latest time has come. Comments carry their reply call (for example `call github.pr.reply {"number": 4, "comment_id": 77, …}`). A `github.pull_request.open` copy names the PR's head (`### PR #4 is open at abcdef1`), its author and creation time on their own line, and says the same notice comes again whenever anything about the PR changes (a push, or its title, body, labels, base branch or draft state), so a push doesn't read as a repeat of the PR's opening (issue #331). A render states what happened and never what to do about it, because the same text reaches every Work subscribed to the item, the issue's agent and a PR's reviewer alike: a conflict reads `### PR #4 has conflicts with main at abcdef1` and `It can't merge until they're resolved.`, and the response (rebase, or leave it to the author) is in each role's playbook (issue #460). A pointer to the operation that shows more, such as `github.checks` for failed checks, is information and stays.
 
 ## Scheduled holds
 
 A scope enables holds with a `github-hold` route ahead of its `github` route, bound to a `github-hold` binding (executor `github-hold`, toolbelt `sdk`, operations `@github.holds`: `emit`, `github.hold.status`, `github.hold`). The flow is:
 
 1. **Claim.** The route claims an open issue carrying the `scheduled` label that otherwise passes admission (skip, require and claimed rules) as `github.issue.held` Work. The `github` route never claims scheduled issues.
-2. **Hold.** The executor runs in process and calls the toolbelt with the attempt's own credential over the attempt's own toolbelt endpoint. It reads the latest marker (body, then comments; a cancel marker drops it) and declares the translated hold with `github.hold`: dependency aliases plus a core timeout. The attempt then parks.
+2. **Hold.** The executor runs in the GitHub package's own process and calls the toolbelt with the attempt's own credential over the attempt's own toolbelt endpoint. It reads the latest marker (body, then comments; a cancel marker drops it) and declares the translated hold with `github.hold`: dependency aliases plus a core timeout. The attempt then parks.
 3. **Already met.** A condition that already happened is aliased from history at registration and wakes the hold at once. This is the same core path as every wait.
 4. **Release.** When the hold ends, the executor emits `github.hold.released {why}` and hands off. The reason is a dependency met, the time come, a cancel marker, or "no marker", which is a scheduled task that starts now. The `github` route queues the release for the agent binding, so the first agent turn starts with text such as "This issue was held, waiting for PR #61 to merge. That has happened: …".
 5. **Moved time.** A time-out re-reads the marker first, so an owner who moved the time is honoured.
@@ -153,7 +153,7 @@ Projections: held Work carries only `scheduled` (not claimed) until its first ag
 ## Verification
 
 ```sh
-go test -race ./extensions/github/... ./internal/cli ./executors/claudecode
+go test -race ./extensions/github/... ./internal/cli ./extensions/claudecode
 go test -race -run 'TestTranslatedWait|TestGitHubTools|TestGitHubWait|TestGitHubAlready|TestGitHubHeld|TestGitHubCrossScope|TestGitHubNoChecks|TestGitHubRequiredChecks|TestGitHubToolWrites|TestSetupGuide|TestDaemonGitHub' ./integration
 ```
 
@@ -161,9 +161,9 @@ go test -race -run 'TestTranslatedWait|TestGitHubTools|TestGitHubWait|TestGitHub
 - **Tools and holds.** [`github_tools_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/github_tools_test.go) runs against the GitHub fake, through the real toolbelt, router, scheduler, projector and hold executor. It covers:
   - every tool, including retried comments, PRs, replies, uploads, notes and issues being written once, and authenticated fetch with no token leaving the host;
   - lost responses recovered by marker;
-  - `TestWaitOnAnotherPRWakesTheAgentWhenItMerges`, `TestAlreadyMetWaitWakesAtOnce`, `TestHeldIssueStartsWhenAnotherAgentReports`, and a held issue starting at its time;
+  - `TestGitHubWaitOnAnotherPRWakesTheAgentWhenItMerges`, `TestGitHubAlreadyMetWaits`, `TestGitHubHeldIssueStartsWhenAnotherAgentReports`, and a held issue starting at its time (`TestGitHubHeldIssueStartsAtItsTime`);
   - a cross-scope wait and no-checks.
-- **Daemon.** [`TestDaemonGitHubHeldIssueAndTools`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_github_test.go) drives the composed daemon: config validation of the operations, the hold route, the in-process executor over the real socket, a timer release, and `os call github.issue.comment` posting once.
+- **Daemon.** [`TestDaemonGitHubHeldIssueAndTools`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_github_test.go) drives the composed daemon: config validation of the operations, the hold route, the hold executor over the real socket, a timer release, and `os call github.issue.comment` posting once.
 - **Unit and contract tests.** These cover condition and marker parsing, filters, routes, rendering and the registration, the playbooks naming only registered operations, plugin preparation, project additions, and the `os` client's file conventions.
 
 ## History

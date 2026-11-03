@@ -3,7 +3,7 @@ title: "Claude Code executor and private continuity"
 description: "How the Claude Code executor runs agent turns as detached segments, keeps session continuity private to itself, and gives the agent its toolbelt over MCP."
 ---
 
-The Claude Code executor runs each agent turn as a detached `claude -p` segment on the Work's session, resumes or hands off sessions from continuity it keeps private to itself, and gives the agent its toolbelt over MCP. It lives in [`extensions/claudecode`](https://github.com/open-conduit/open-conduit/tree/main/extensions/claudecode) and implements the [B03 executor contract](../extensions/). `os mcp`, the toolbelt's MCP transport, lives in [`internal/cli`](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/mcp.go). Like the shell executor, the package imports only public contracts. Its process identity helpers are copied from `extensions/shell`, because B01 forbids one executor importing another. `internal/bootstrap` registers it as executor `claude-code`.
+The Claude Code executor runs each agent turn as a detached `claude -p` segment on the Work's session, resumes or hands off sessions from continuity it keeps private to itself, and gives the agent its toolbelt over MCP. It lives in [`extensions/claudecode`](https://github.com/open-conduit/open-conduit/tree/main/extensions/claudecode) and implements the [B03 executor contract](../extensions/). `os mcp`, the toolbelt's MCP transport, lives in [`internal/cli`](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/mcp.go). Like the shell executor, the package imports only public contracts. Its process identity helpers are copied from `extensions/shell`, because B01 forbids one executor importing another. Its package, [`extensions/claudecode/pkg`](https://github.com/open-conduit/open-conduit/tree/main/extensions/claudecode/pkg), serves it as executor `claude-code`.
 
 The executor advertises `interrupt`, `inject`, `resume`, `workspace`, `sandbox`, `container` and `toolbelt: mcp`. It runs as a package bundled with the release, served by `open-conduit extension-run claude-code`.
 
@@ -123,7 +123,7 @@ The playbooks, waits and GitHub tools themselves are described in [engineering t
 
 - **Playbooks.** Bootstrap writes the playbook plugin to `<state>/playbooks/plugin`, the default `Options.PluginDir` for bindings without `plugin_dir`.
 - **Project additions.** Read from the turn's workspace (`.open-conduit/playbooks/<playbook>.md`) and appended to the turn body.
-- **Rendering.** A GitHub `Options.Render` with reply hints naming toolbelt calls.
+- **Rendering.** The host renders each input through the extension that owns its family (`inproc.Host.Render`, `event.render_owned`); GitHub's adds reply hints naming toolbelt calls.
 - **Tool calls.** The MCP `call` tool sends its `input` object as payload data, with the `file_path`/`save_to` file conventions.
 
 A `call github.wait` parks the attempt exactly like `wait`, because `Complete` applies the declaration.
@@ -189,7 +189,7 @@ The config is strict and validated at load. Every field is optional:
 
 ## Verification
 
-- [Unit tests](https://github.com/open-conduit/open-conduit/tree/main/executors/claudecode) run a fake `claude`, which records its invocation, echoes stream-json replays, writes the transcript and reports cumulative totals. They cover:
+- [Unit tests](https://github.com/open-conduit/open-conduit/tree/main/extensions/claudecode) run a fake `claude`, which records its invocation, echoes stream-json replays, writes the transcript and reports cumulative totals. They cover:
   - the shared executor conformance case
   - the invocation, the MCP config and the sanitized environment
   - resumed and fresh sessions with per-turn usage deltas

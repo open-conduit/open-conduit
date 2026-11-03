@@ -10,7 +10,7 @@ Open Conduit ships two commands, kept side by side:
 - `open-conduit` is the daemon and operator client.
 - `os` is the small toolbelt that shell commands call from inside a run. The daemon looks for it beside its own executable.
 
-Homebrew, the release archives and the install script also carry two extension packages beside the binaries: the setup assistant in `extensions/setup/`, which runs `init --with claude` (or `--with codex`) and the browser setup and gives a fresh install its first configuration, and the [Codex executor](/open-conduit/guides/codex/) in `extensions/codex/`. `go install` doesn't bring them; see [below](#go-install).
+Homebrew, the release archives and the install script also carry the extension packages beside the binaries, in `extensions/`: the first-party integrations, executors and providers (GitHub, Slack, Linear, Jira, Claude Code, the [Codex executor](/open-conduit/guides/codex/), the shell executor and the rest), and the setup assistant in `extensions/setup/`, which runs `init --with claude` (or `--with codex`) and the browser setup and gives a fresh install its first configuration. `go install` doesn't bring them; see [below](#go-install).
 
 A release build sends anonymous usage telemetry: a daily count of runs and the scopes and first-party extensions in use. [Usage telemetry](/open-conduit/reference/telemetry/) lists exactly what is sent; `open-conduit serve --no-telemetry` or `DO_NOT_TRACK=1` turns it off.
 
@@ -47,7 +47,7 @@ go install github.com/open-conduit/open-conduit/cmd/os@latest
 
 `os` lands on your PATH there under that generic name. Install both into the same directory, or point the daemon elsewhere with `serve --toolbelt-dir DIR`.
 
-`go install` doesn't bring the setup assistant, which lives in its own repository, [open-conduit/extension-setup](https://github.com/open-conduit/extension-setup), or the Codex executor. Build them from source as below and install them with `open-conduit extension install dist/packages/setup` (and `dist/packages/codex`). Without it, configure with `open-conduit init github` (or `slack`, `linear`, `jira`) and `config set`, and `serve` needs a config file to start.
+`go install` doesn't bring the extension packages: neither the first-party ones, without which the daemon has no integrations or executors, nor the setup assistant, which lives in its own repository, [open-conduit/extension-setup](https://github.com/open-conduit/extension-setup). Build them from source as below and install each one you use with `open-conduit extension install dist/packages/NAME` (`setup`, `github`, `claude-code` and so on). Without the setup assistant, configure with `open-conduit init github` (or `slack`, `linear`, `jira`) and `config set`, and `serve` needs a config file to start.
 
 ## From source
 
@@ -57,10 +57,11 @@ You need Go 1.24.2 or later, Git and Make:
 git clone https://github.com/open-conduit/open-conduit.git
 cd open-conduit
 make build                 # writes bin/open-conduit and bin/os
-make packages              # builds the packages: the setup assistant into dist/packages/setup, Codex into dist/packages/codex
+make packages              # builds each package into dist/packages/NAME: setup, github, slack, claude-code, codex, shell and the rest
 cp bin/open-conduit bin/os /usr/local/bin/   # or anywhere on your PATH, side by side
 open-conduit extension install dist/packages/setup
-open-conduit extension install dist/packages/codex   # to run agents on Codex
+open-conduit extension install dist/packages/github        # and each other package you use,
+open-conduit extension install dist/packages/claude-code   # such as codex to run agents on Codex
 ```
 
 ## Upgrading

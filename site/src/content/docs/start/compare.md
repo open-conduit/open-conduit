@@ -11,7 +11,7 @@ This page reflects each product as we understand it in November 2026. Products m
 
 | | Where it runs | What starts work | Who does the work | Between runs |
 | --- | --- | --- | --- | --- |
-| **Open Conduit** | a daemon on your machine | GitHub, Linear, Jira, Slack, schedules, webhooks | Claude Code, a shell command or an extension's executor; a person can step in | Work parks and wakes on the event it waits for |
+| **Open Conduit** | a daemon on your machine | GitHub, Linear, Jira, Slack, schedules, webhooks | Claude Code, Codex, a shell command or an extension's executor; a person can step in | Work parks and wakes on the event it waits for |
 | **Copilot coding agent** | GitHub's cloud | an issue assigned on GitHub, or a request in GitHub or an editor | GitHub's agent | each pull request comment starts a new session |
 | **Claude Code GitHub Actions** | your GitHub Actions runners | a GitHub event or an `@claude` mention | Claude Code | nothing runs; the next event starts a new job |
 | **Devin** | Cognition's cloud | Slack, its web app, issue trackers | Devin | sessions are Devin's own |
@@ -32,7 +32,7 @@ Both put an agent on a GitHub issue or pull request with very little setup, and 
 
 Devin and OpenHands are agents: they write the code. Devin is a hosted product. OpenHands is open source, with a hosted cloud and a self-hosted option.
 
-- **Agent, not orchestrator.** Neither decides which of several executors should handle a piece of work, or holds that work across many runs and waits. Open Conduit could run either as an executor through an extension; it ships with Claude Code.
+- **Agent, not orchestrator.** Neither decides which of several executors should handle a piece of work, or holds that work across many runs and waits. Open Conduit could run either as an executor through an extension; it ships with Claude Code and Codex.
 - **Authority.** Open Conduit checks every operation a run asks for against what its binding grants, at the daemon, and can put the run in a sandbox or a container without your credentials. A hosted agent's limits are the ones its platform sets.
 - **Where to pick them instead.** You want a capable agent with its own workspace and UI, and you're happy for its vendor to host it.
 
@@ -47,5 +47,5 @@ Both are durable: a Temporal workflow survives crashes and can wait for days, an
 ## What Open Conduit doesn't do
 
 - It isn't hosted. It runs on your machine, or a machine you run, with your own logins.
-- Agent runs use Claude Code today. Other agents can be added as executors through extensions, but none ships yet.
+- Agent runs use Claude Code or the Codex CLI today. Other agents can be added as executors through extensions.
 - It's young. Expect rough edges, and read [Getting help](/open-conduit/reference/help/) before relying on it.
