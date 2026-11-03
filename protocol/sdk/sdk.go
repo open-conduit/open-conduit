@@ -478,7 +478,6 @@ func (s *Server) initialize(raw json.RawMessage) (any, error) {
 	return protocol.InitializeResult{ProtocolVersion: v, Manifest: manifest}, nil
 }
 
-// StateDir is the private state directory the host gave at initialize.
 // ExecutorDir is the state directory the host named at initialize for one
 // of the extension's executors ("" when it named none).
 func (s *Server) ExecutorDir(name string) string {
@@ -487,6 +486,7 @@ func (s *Server) ExecutorDir(name string) string {
 	return s.executors[name]
 }
 
+// StateDir is the private state directory the host gave at initialize.
 func (s *Server) StateDir() string {
 	s.mu.Lock()
 	defer s.mu.Unlock()
