@@ -691,13 +691,17 @@ func (d *daemon) inprocChecks(deep bool) []func(context.Context) runtime.Check {
 	return out
 }
 
-// offlineChecks are the first-party extensions' Offline checks on a config
-// validated without a daemon; dir is the config file's directory.
+// offlineChecks are the extensions' Offline checks on a config validated
+// without a daemon; dir is the config file's directory. A package's run
+// only when an enabled scope uses it, so offline doctor starts no package
+// the configuration doesn't use (as offline validation starts none).
 func offlineChecks(ctx context.Context, s *config.Snapshot, executors map[string]extension.Executor, dir string, pkgs []*installed) []runtime.Check {
 	var out []runtime.Check
 	xs := firstParty()
 	for _, p := range pkgs {
-		xs = append(xs, p)
+		if usedBy(s, p.m) {
+			xs = append(xs, p)
+		}
 	}
 	for _, x := range xs {
 		c, ok := x.(inproc.Checker)
@@ -884,4 +888,18 @@ func (d *daemon) sinks() []inproc.Sink {
 		}
 	}
 	return out
+}
+
+// usedBy says whether an enabled scope of the configuration uses the
+// package (usesExtension).
+func usedBy(s *config.Snapshot, m protocol.Manifest) bool {
+	if s == nil {
+		return false
+	}
+	for _, scope := range s.Scopes {
+		if scope != nil && scope.Enabled && usesExtension(scope, m) {
+			return true
+		}
+	}
+	return false
 }
