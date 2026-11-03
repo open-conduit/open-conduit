@@ -35,8 +35,6 @@ import (
 // operations, connection and extension types and resource providers.
 func registry(executors map[string]extension.Executor) config.Registry {
 	reg := config.Registry{Executors: executors, Handlers: handlerNames()}
-	// The GitHub playbooks are written to the plugin first (preparePlaybooks).
-	addPlaybooks(&reg, playbooks.All())
 	inprocRegistry(&reg, firstParty())
 	resourceRegistry(&reg)
 	sandboxRegistry(&reg)
