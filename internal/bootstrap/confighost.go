@@ -126,7 +126,13 @@ func edit(text []byte, op, pointer string, value json.RawMessage) ([]byte, json.
 	}
 	switch op {
 	case "add":
-		err = doc.Set(pointer, string(value))
+		// RFC 6902 add: into an array it inserts, so nothing is replaced
+		// and there is no before; on an object member it replaces what
+		// is there, which before shows.
+		if inArray(doc, pointer) {
+			before = nil
+		}
+		err = doc.Add(pointer, string(value))
 	case "replace":
 		if before == nil {
 			return nil, nil, errors.New("nothing is at " + pointer + " to replace")
@@ -144,6 +150,17 @@ func edit(text []byte, op, pointer string, value json.RawMessage) ([]byte, json.
 		return nil, nil, err
 	}
 	return doc.Bytes(), before, nil
+}
+
+// inArray reports whether pointer's last segment addresses an array
+// element: its parent is an array.
+func inArray(doc *cli.ConfigDoc, pointer string) bool {
+	i := strings.LastIndex(pointer, "/")
+	if i < 0 {
+		return false
+	}
+	parent, err := doc.Raw(pointer[:i])
+	return err == nil && bytes.HasPrefix(parent, []byte("["))
 }
 
 // configCandidate is the configuration a Work proposes, from the extension

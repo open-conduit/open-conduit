@@ -76,3 +76,50 @@ func TestConfigHandlesAreBounded(t *testing.T) {
 		t.Fatalf("holding %d/%d/%d texts", len(h.byID), len(h.byText), len(h.order))
 	}
 }
+
+// add is RFC 6902 add: at an array index it inserts before the element
+// there and replaces nothing, so it has no before; an element named by id
+// or name already exists and is refused rather than overwritten.
+func TestConfigHostAddInsertsIntoArrays(t *testing.T) {
+	h := configHost{handles: &configHandles{}}
+	base := []byte(`{"scopes": [{"id": "assist", "routes": [{"name": "threads", "handler": "slack"}]}]}`)
+	ctx := context.Background()
+	handle := h.handles.put(base)
+
+	e, err := h.Edit(ctx, handle, "add", "/scopes/assist/routes/0", json.RawMessage(`{"name": "inbox-check", "handler": "schedule"}`))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(e.Before) != 0 {
+		t.Fatalf("an insert replaced %s", e.Before)
+	}
+	e, err = h.Edit(ctx, e.Handle, "add", "/scopes/assist/routes/2", json.RawMessage(`{"name": "last"}`))
+	if err != nil {
+		t.Fatalf("add at the array's length: %v", err)
+	}
+	var doc struct {
+		Scopes []struct {
+			Routes []struct{ Name string } `json:"routes"`
+		} `json:"scopes"`
+	}
+	if err := json.Unmarshal(e.Text, &doc); err != nil {
+		t.Fatal(err)
+	}
+	var names []string
+	for _, r := range doc.Scopes[0].Routes {
+		names = append(names, r.Name)
+	}
+	if strings.Join(names, ",") != "inbox-check,threads,last" {
+		t.Fatalf("routes %v, want inbox-check,threads,last", names)
+	}
+
+	for _, p := range []string{"/scopes/assist/routes/threads", "/scopes/assist/routes/4", "/scopes/assist/routes/nope"} {
+		if _, err := h.Edit(ctx, e.Handle, "add", p, json.RawMessage(`{"name": "x"}`)); err == nil {
+			t.Errorf("add at %s was not refused", p)
+		}
+	}
+	e, err = h.Edit(ctx, e.Handle, "replace", "/scopes/assist/routes/threads", json.RawMessage(`{"name": "threads", "handler": "slack2"}`))
+	if err != nil || !strings.Contains(string(e.Before), `"slack"`) {
+		t.Fatalf("replace by name: %v, before %s", err, e.Before)
+	}
+}
