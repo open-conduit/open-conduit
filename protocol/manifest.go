@@ -256,6 +256,10 @@ type Provides struct {
 	// Playbooks is a directory, relative to the manifest, of prompt
 	// material the host offers agent executors (a first-party convention).
 	Playbooks string `json:"playbooks,omitempty"`
+	// Probes are the read-only setup probes the extension offers setup
+	// sessions (extension.SetupProbes), by their own names: the host lists
+	// each under "<name>.<probe>" and runs it through probe.serve.
+	Probes []ProbeInfo `json:"probes,omitempty"`
 	// ExternalStores declare stores larger than coordination state (search
 	// indexes, big tables). Each is reached through a connection of the
 	// named type, so it is visible in config and never hidden in KV.
@@ -323,6 +327,10 @@ type DescribeDecl struct {
 	Name   string `json:"name"`
 	Detail string `json:"detail,omitempty"`
 }
+
+// probeName is a probe's own name, which the host prefixes with the
+// extension's.
+var probeName = regexp.MustCompile(`^[a-z][a-z0-9-]{0,62}$`)
 
 var fieldPattern = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_-]{0,62}$`)
 
@@ -541,6 +549,10 @@ type TaskDecl struct {
 type CheckDecl struct {
 	Name string `json:"name"`
 	Deep bool   `json:"deep,omitempty"`
+	// Offline marks a check that reads nothing but the configuration it is
+	// given and the machine (inproc.Check.Offline), so doctor also runs it
+	// with no daemon, through a package started for that alone.
+	Offline bool `json:"offline,omitempty"`
 }
 type SetupDecl struct {
 	Type    string `json:"type"`
@@ -865,6 +877,13 @@ func (m Manifest) Validate() error {
 	if p.Playbooks != "" && (filepath.IsAbs(p.Playbooks) || strings.HasPrefix(filepath.Clean(p.Playbooks), "..")) {
 		fail("playbooks %q must stay inside the extension directory", p.Playbooks)
 	}
+	probes := map[string]bool{}
+	for _, pr := range p.Probes {
+		if !probeName.MatchString(pr.Name) || probes[pr.Name] {
+			fail("probe %q must be a unique lower-case name of letters, digits and dashes", pr.Name)
+		}
+		probes[pr.Name] = true
+	}
 	connections := map[string]bool{}
 	for _, c := range p.Connections {
 		connections[c.Type] = true
@@ -961,6 +980,7 @@ func (m Manifest) Enabled() []string {
 	set("render", p.Render)
 	set("targets", len(p.Targets) > 0)
 	set("segment_end", p.SegmentEnd)
+	set("probes", len(p.Probes) > 0)
 	var out []string
 	for _, method := range Methods {
 		if on[method.Provides] && (method.Permission == "" || m.Allows(method.Permission)) {

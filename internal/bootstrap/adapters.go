@@ -1,6 +1,8 @@
 package bootstrap
 
 import (
+	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/protocol"
 	"slices"
 	"sort"
 
@@ -145,10 +147,30 @@ func OperationDeclarations() map[string]extension.Operation {
 	return out
 }
 
+// BundledManifests are the manifests of the packages bundled with this
+// binary, by name: for a generated reference to list what they serve.
+func BundledManifests() []protocol.Manifest {
+	found, _ := discoverPackages("", "")
+	out := make([]protocol.Manifest, 0, len(found))
+	for _, f := range found {
+		out = append(out, f.Manifest)
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out
+}
+
+// bundledRegistry is the registry offline config check uses, with the
+// bundled packages' declarations (#428); it starts no package.
+func bundledRegistry() config.Registry {
+	reg := registry(offlineExecutors())
+	offlineExternal(&reg, "", "").close()
+	return reg
+}
+
 // Toolsets are the toolsets the bundled extensions publish, which config
 // grants as "@<name>", sorted by name.
 func Toolsets() []extension.Toolset {
-	reg := registry(offlineExecutors())
+	reg := bundledRegistry()
 	out := make([]extension.Toolset, 0, len(reg.Toolsets))
 	for _, t := range reg.Toolsets {
 		out = append(out, t)
@@ -162,7 +184,7 @@ func Toolsets() []extension.Toolset {
 // sorted. Each extension's are in its Adapters entry; the generated
 // operations reference page lists them by extension.
 func OperationNames() []string {
-	names := append([]string(nil), registry(offlineExecutors()).Operations...)
+	names := append([]string(nil), bundledRegistry().Operations...)
 	sort.Strings(names)
 	return slices.Compact(names)
 }

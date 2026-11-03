@@ -12,6 +12,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/extensions/bitbucket"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/introspection"
 	"github.com/open-conduit/open-conduit/extensions/observe"
 	"github.com/open-conduit/open-conduit/extensions/schedule"
@@ -108,13 +109,6 @@ func samplesConfig() []byte {
 	route := func(name, handler string, config map[string]any) map[string]any {
 		return map[string]any{"name": name, "handler": handler, "binding": "run", "active_policy": "queue", "config": config}
 	}
-	entry := func(name, typ, connection string, config map[string]any) map[string]any {
-		x := map[string]any{"name": name, "type": typ, "secret_names": []any{}, "config": config}
-		if connection != "" {
-			x["connection"] = connection
-		}
-		return x
-	}
 	scope := func(id string, connections []string, bindings []any, routes, entries []any) map[string]any {
 		ops := bindings[0].(map[string]any)["operations"]
 		return map[string]any{"id": id, "name": id, "authorization": map[string]any{"connections": connections, "operations": ops, "read_scopes": []any{}},
@@ -122,13 +116,9 @@ func samplesConfig() []byte {
 	}
 	cfg := map[string]any{
 		"version": 1, "settings": map[string]any{},
-		"connections": []any{
-			map[string]any{"id": "github", "type": "github", "config": map[string]any{}, "secret_refs": map[string]any{"token": "env:OC_TEST_GITHUB_TOKEN"}},
-		},
+		"connections": []any{},
 		"scopes": []any{
 			scope("manual", []string{}, shell(), []any{route("manual", "manual", map[string]any{})}, []any{}),
-			scope("gh", []string{"github"}, shell(), []any{route("held", "github-hold", map[string]any{}), route("issues", "github", map[string]any{})},
-				[]any{entry("widgets", "github", "github", map[string]any{"namespace": "github/github.com/octo/widgets", "scope": "gh", "repo": "octo/widgets"})}),
 		},
 	}
 	b, _ := json.Marshal(cfg)
@@ -213,6 +203,7 @@ func packagedSamplers() map[string]struct {
 	scopeOf := func(id, entries string) domain.Scope {
 		return domain.Scope{ID: domain.ID(id), Config: domain.Payload{Data: []byte(`{"extensions":[` + entries + `]}`)}}
 	}
+	ghScope := scopeOf("gh", `{"type":"github","name":"widgets","config":{"namespace":"github/github.com/octo/widgets","scope":"gh","repo":"octo/widgets"}}`)
 	proj := scopeOf("proj", `{"type":"jira","config":{"namespace":"jira/acme/proj","scope":"proj","projects":["PROJ"],"transitions":{"done":"Done"}}},`+
 		`{"type":"bitbucket","config":{"namespace":"bitbucket/acme/app","scope":"proj","repo":"acme/app","tracker":{"namespace":"jira/acme/proj","keys":["PROJ"]}}}`)
 	return map[string]c{
@@ -224,6 +215,8 @@ func packagedSamplers() map[string]struct {
 		introspection.Type: {introspection.Route{},
 			domain.Scope{ID: "self", Config: domain.Payload{Data: []byte(`{"enabled":true,"extensions":[{"type":"introspection","config":{}}]}`)}},
 			domain.Route{Name: "reports", Handler: introspection.Type, Config: domain.Payload{Data: []byte(`{"work":"` + introspection.WorkReport + `"}`)}}},
+		"github":      {githubRoute("github"), ghScope, domain.Route{Name: "issues", Handler: "github"}},
+		"github-hold": {githubRoute("github-hold"), ghScope, domain.Route{Name: "held", Handler: "github-hold"}},
 		sl.Type: {sl.Route{},
 			scopeOf("chat", `{"type":"slack","config":{"namespace":"slack/T0TEAM","scope":"chat","team":"T0TEAM","channels":["C0SUPPORT"],"bot_user_id":"UBOT","receiver":"socket"}}`),
 			domain.Route{Name: "conversations", Handler: sl.Type}},
@@ -234,4 +227,9 @@ func packagedSamplers() map[string]struct {
 			domain.Scope{ID: "help", Config: domain.Payload{Data: []byte(`{"extensions":[{"type":"observe","config":{"sources":[{"name":"slack-help","reporters":["run"]}]}}]}`)}},
 			domain.Route{Name: "slack-help", Handler: observe.Type, Config: domain.Payload{Data: []byte(`{"source":"slack-help"}`)}}},
 	}
+}
+
+// githubRoute is the GitHub extension's route handler of that name.
+func githubRoute(name string) extension.RouteSampler {
+	return gh.New().Routes()[name].(extension.RouteSampler)
 }

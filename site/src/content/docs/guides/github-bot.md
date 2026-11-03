@@ -73,7 +73,7 @@ open-conduit config apply "$(open-conduit config path)"
 open-conduit doctor --check-secrets
 ```
 
-The `github_auth` check lists each repository's entry, and each should include `bot writer authenticated`. An entry that fails instead says why:
+The `github-auth` check lists each repository's entry, and each should include `bot writer authenticated`. An entry that fails instead says why:
 
 - `credential_unavailable`: the key reference doesn't resolve, or what it holds isn't a private key.
 - `repo_unreachable`: the App isn't installed on that repository.
@@ -110,8 +110,8 @@ and give that binding `"connection": "github-builder"`. The App needs **Contents
 
 A few things to know:
 
-- **Use an HTTPS remote.** Only `https://` remotes go through Open Conduit's credential helper. An `ssh://` or `git@github.com:` remote still pushes with your own SSH key. `open-conduit doctor` warns about this in its `git_bot` check. Change the remote with `git remote set-url origin https://github.com/acme/web.git` in the checkout.
-- **Grant `github.git.credential`.** Without it, the push is refused and git has no other helper to fall back on. `open-conduit doctor` warns about a git workspace binding that isn't granted it, in its `git_bot` check.
+- **Use an HTTPS remote.** Only `https://` remotes go through Open Conduit's credential helper. An `ssh://` or `git@github.com:` remote still pushes with your own SSH key. `open-conduit doctor` warns about this in its `github-git-bot` check. Change the remote with `git remote set-url origin https://github.com/acme/web.git` in the checkout.
+- **Grant `github.git.credential`.** Without it, the push is refused and git has no other helper to fall back on. `open-conduit doctor` warns about a git workspace binding that isn't granted it, in its `github-git-bot` check.
 - **A run that can't get the bot's identity doesn't start.** It fails as `run environment unavailable`, for example when GitHub can't be reached or the bot App's key is wrong.
 - **Without a sandbox, your credentials are still there.** An unsandboxed run uses the bot's credentials by default, but it runs as you. An agent that goes looking can still find your SSH key, your keychain or `gh`'s token. To keep it to the bot's access, run the binding in a [sandbox](../sandboxes/).
 

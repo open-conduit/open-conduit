@@ -2,6 +2,7 @@ package integration_test
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"io/fs"
 	"os"
@@ -226,5 +227,36 @@ func TestDocsMakeTargetsExist(t *testing.T) {
 	}
 	if checked == 0 {
 		t.Fatal("no make commands found in the user docs")
+	}
+}
+
+// Offline doctor runs a bundled package's offline checks when the
+// configuration uses it (#428): GitHub's capability and git-bot checks need
+// no daemon. A package the configuration doesn't use is never started.
+func TestOfflineDoctorRunsPackageChecks(t *testing.T) {
+	releaseLayout(t)
+	config := []byte(`{"version": 1, "settings": {}, "connections": [], "scopes": [{"id": "ops", "name": "Operations",
+		"authorization": {"connections": [], "operations": ["read_context"], "read_scopes": []},
+		"bindings": [{"name": "run", "executor": "shell", "requires": {"toolbelt": "cli"}, "operations": ["read_context"], "secret_names": [], "config": {"command": "true"}}],
+		"routes": [{"name": "incoming", "handler": "manual", "binding": "run", "active_policy": "queue", "config": {}}], "secret_refs": {}}]}`)
+	names := func(config []byte) map[string]bool {
+		got := map[string]bool{}
+		for _, c := range bootstrap.OfflineChecks(context.Background(), filepath.Join(t.TempDir(), "config.json"), config) {
+			got[c.Name] = true
+		}
+		return got
+	}
+	if got := names(config); !got["config"] || got["github-capability"] {
+		t.Fatalf("offline checks of a config without GitHub: %v", got)
+	}
+	withGitHub := []byte(`{"version": 1, "settings": {}, "connections": [{"id": "github", "type": "github", "config": {}, "secret_refs": {"token": "env:OC_TEST_GITHUB_TOKEN"}}],
+		"scopes": [{"id": "eng", "name": "Engineering",
+		"authorization": {"connections": ["github"], "operations": ["read_context"], "read_scopes": []},
+		"bindings": [{"name": "run", "executor": "shell", "requires": {"toolbelt": "cli"}, "operations": ["read_context"], "secret_names": [], "config": {"command": "true"}}],
+		"routes": [{"name": "issues", "handler": "github", "binding": "run", "active_policy": "queue", "config": {}}],
+		"extensions": [{"name": "widgets", "type": "github", "connection": "github", "secret_names": [], "config": {"namespace": "github/github.com/octo/widgets", "scope": "eng", "repo": "octo/widgets"}}],
+		"secret_refs": {}}]}`)
+	if got := names(withGitHub); !got["config"] || !got["github-capability"] || !got["github-git-bot"] {
+		t.Fatalf("offline checks of a config with GitHub: %v", got)
 	}
 }

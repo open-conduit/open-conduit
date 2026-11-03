@@ -16,7 +16,6 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extensions/claudecode"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
-	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
@@ -36,8 +35,6 @@ import (
 // operations, connection and extension types and resource providers.
 func registry(executors map[string]extension.Executor) config.Registry {
 	reg := config.Registry{Executors: executors, Handlers: handlerNames()}
-	// The GitHub playbooks are written to the plugin first (preparePlaybooks).
-	addPlaybooks(&reg, playbooks.All())
 	inprocRegistry(&reg, firstParty())
 	resourceRegistry(&reg)
 	sandboxRegistry(&reg)
@@ -197,7 +194,7 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 		return nil, err
 	}
 	if !codex {
-		if err := playbooks.WritePlugin(dir, "Sets Open Conduit up", map[string]string{name: text}); err != nil {
+		if err := writePlugin(dir, "Sets Open Conduit up", map[string]string{name: text}); err != nil {
 			return nil, err
 		}
 	}
@@ -216,7 +213,7 @@ func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	}
 	// The prompt first and the tools last: --allowedTools takes every
 	// argument after it.
-	args := []string{"/" + playbooks.PluginName + ":" + name, "--plugin-dir", dir, "--allowedTools"}
+	args := []string{"/" + pluginName + ":" + name, "--plugin-dir", dir, "--allowedTools"}
 	allowed := []string{"config", "doctor", "health", "secret path"}
 	for _, t := range dryRunSetups(o.ConfigPath, o.StateDir) {
 		allowed = append(allowed, "init "+t+" --dry-run")
@@ -442,7 +439,7 @@ var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource
 
 // OfflineChecks are the doctor checks that need no daemon: the config file
 // validated against the same registrations `serve` uses, the first-party
-// extensions' Offline checks on it (github_capability, git_bot), and
+// extensions' Offline checks on it (github-capability, github-git-bot), and
 // `claude --version` for its claude-code bindings, then a skipped check naming the daemon's own. The CLI runs them
 // when no daemon is reachable.
 func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtime.Check {
@@ -451,7 +448,7 @@ func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtim
 	reg := registry(executors)
 	pkgs := offlineExternal(&reg, configPath, "")
 	snapshot, err := config.ValidateFile(data, reg, fileIncludes(configPath))
-	pkgs.close()
+	defer pkgs.close()
 	var invalid *config.ValidationError
 	switch {
 	case errors.As(err, &invalid):
@@ -465,6 +462,6 @@ func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtim
 		return []runtime.Check{{Name: "config", Status: runtime.CheckFail, Code: "unvalidated", Detail: "config could not be validated: " + err.Error()}, skipped}
 	}
 	out := []runtime.Check{{Name: "config", Status: runtime.CheckOK, Code: "valid", Detail: configPath}, grantsCheck(snapshot, reg)}
-	out = append(out, offlineChecks(ctx, snapshot, executors, filepath.Dir(configPath))...)
+	out = append(out, offlineChecks(ctx, snapshot, executors, filepath.Dir(configPath), pkgs.installed)...)
 	return append(out, claudeVersionCheck(ctx, snapshot), skipped)
 }

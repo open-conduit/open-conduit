@@ -18,7 +18,6 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/extensions/claudecode"
-	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/shell"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
@@ -38,7 +37,7 @@ import (
 // firstParty is the list of first-party in-process extensions. Adding one
 // touches its own package and this list.
 func firstParty() []inproc.Extension {
-	return []inproc.Extension{shell.NewExtension(), claudecode.NewExtension(), gh.New()}
+	return []inproc.Extension{shell.NewExtension(), claudecode.NewExtension()}
 }
 
 // typeSets are an extension's own entry and connection types: what its
@@ -692,11 +691,19 @@ func (d *daemon) inprocChecks(deep bool) []func(context.Context) runtime.Check {
 	return out
 }
 
-// offlineChecks are the first-party extensions' Offline checks on a config
-// validated without a daemon; dir is the config file's directory.
-func offlineChecks(ctx context.Context, s *config.Snapshot, executors map[string]extension.Executor, dir string) []runtime.Check {
+// offlineChecks are the extensions' Offline checks on a config validated
+// without a daemon; dir is the config file's directory. A package's run
+// only when an enabled scope uses it, so offline doctor starts no package
+// the configuration doesn't use (as offline validation starts none).
+func offlineChecks(ctx context.Context, s *config.Snapshot, executors map[string]extension.Executor, dir string, pkgs []*installed) []runtime.Check {
 	var out []runtime.Check
-	for _, x := range firstParty() {
+	xs := firstParty()
+	for _, p := range pkgs {
+		if usedBy(s, p.m) {
+			xs = append(xs, p)
+		}
+	}
+	for _, x := range xs {
 		c, ok := x.(inproc.Checker)
 		if !ok {
 			continue
@@ -881,4 +888,18 @@ func (d *daemon) sinks() []inproc.Sink {
 		}
 	}
 	return out
+}
+
+// usedBy says whether an enabled scope of the configuration uses the
+// package (usesExtension).
+func usedBy(s *config.Snapshot, m protocol.Manifest) bool {
+	if s == nil {
+		return false
+	}
+	for _, scope := range s.Scopes {
+		if scope != nil && scope.Enabled && usesExtension(scope, m) {
+			return true
+		}
+	}
+	return false
 }

@@ -19,6 +19,7 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	githubext "github.com/open-conduit/open-conduit/extensions/github/pkg"
 	shellext "github.com/open-conduit/open-conduit/extensions/shell/pkg"
 	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	slackext "github.com/open-conduit/open-conduit/extensions/slack/pkg"
@@ -887,5 +888,29 @@ func TestHostResolversOverProtocol(t *testing.T) {
 	}
 	if _, ok, err := host.RenderOwned(ctx, domain.Event{Type: "other.thing"}); err != nil || ok {
 		t.Fatalf("an Event no extension renders: %v %v", ok, err)
+	}
+}
+
+// TestPackageSetupProbes runs the GitHub package's setup probes through the
+// subprocess boundary (#428): it declares them, the host runs one through
+// probe.serve, and a refusal comes back as the probe's reason.
+func TestPackageSetupProbes(t *testing.T) {
+	useHostBinary(t)
+	e := newExtEnv(t)
+	m := githubext.Manifest()
+	r := e.load(e.install(m, daemonBinary(t)), e.deps(), e.options(m.Name))
+	probes := map[string]extension.SetupProbe{}
+	for _, p := range r.Probes() {
+		probes[p.Name] = p
+	}
+	if _, ok := probes["accounts"]; !ok {
+		t.Fatalf("probes: %v", probes)
+	}
+	repos, ok := probes["repos"]
+	if !ok || len(repos.Args) != 1 || !repos.Args[0].Required {
+		t.Fatalf("repos probe: %+v", repos)
+	}
+	if _, err := repos.Run(context.Background(), map[string]string{"owner": "not a login"}); err == nil || !strings.Contains(err.Error(), "owner is a GitHub login") {
+		t.Fatalf("a refused probe: %v", err)
 	}
 }

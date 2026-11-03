@@ -94,6 +94,7 @@ var useCases = map[string][]string{
 	"telemetry.capture":          {"introspection", "posthog"},
 	"action.list":                {"slack"},
 	"action.submit":              {"github"},
+	"probe.serve":                {"github", "claude-code"},
 	"probe.list":                 {"setup"},
 	"probe.run":                  {"setup"},
 	"config.base":                {"setup"},
@@ -190,6 +191,7 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 		"extension.ResourceSandboxChecker": reflect.TypeFor[extension.ResourceSandboxChecker](),
 		"extension.ResourceModer":          reflect.TypeFor[extension.ResourceModer](),
 		"extension.Setup":                  reflect.TypeFor[extension.Setup](),
+		"extension.SetupProbes":            reflect.TypeFor[extension.SetupProbes](),
 		"extension.SetupHost":              reflect.TypeFor[extension.SetupHost](),
 		"observability.Exporter":           reflect.TypeFor[observability.Exporter](),
 	}
@@ -287,6 +289,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.Pages = []protocol.PageDecl{{ID: "chat", Title: "Chat", Entry: "chat", WorkKind: "chat.conversation", Start: "start", Compose: []string{"message"}, Route: "chat"}}
 	m.Provides.Routes[0].Samples = true
 	m.Provides.Targets, m.Provides.SegmentEnd = []string{"chat"}, true
+	m.Provides.Probes = []protocol.ProbeInfo{{Name: "accounts", Summary: "the signed-in accounts"}}
 	for _, p := range protocol.KnownPermissions {
 		m.Permissions = append(m.Permissions, p.Name)
 	}

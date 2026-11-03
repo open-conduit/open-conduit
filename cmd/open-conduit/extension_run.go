@@ -43,7 +43,7 @@ var runnable = map[string]struct {
 }{
 	"bitbucket":     {bitbucketext.Main, bitbucketext.Manifest, nil},
 	"codex":         {codexext.Main, codexext.Manifest, nil},
-	"github":        {githubext.Main, githubext.Manifest, nil},
+	"github":        {githubext.Main, githubext.Manifest, githubext.Playbooks},
 	"human":         {humanext.Main, humanext.Manifest, nil},
 	"introspection": {introspectionext.Main, introspectionext.Manifest, introspectionext.Playbooks},
 	"jira":          {jiraext.Main, jiraext.Manifest, jiraext.Playbooks},

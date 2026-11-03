@@ -130,6 +130,7 @@ var Methods = []Method{
 	{Name: "telemetry.capture", Direction: ExtensionToHost, Permission: PermissionTelemetryCapture, Contract: []string{"inproc.Host.Capture"}},
 	{Name: "action.list", Direction: ExtensionToHost, Permission: PermissionActionSubmit, Contract: []string{"inproc.Host.Actions", "extension.ActionOffer"}},
 	{Name: "action.submit", Direction: ExtensionToHost, Permission: PermissionActionSubmit, Contract: []string{"inproc.Host.Act", "extension.ActRequest", "extension.ActResult"}},
+	{Name: "probe.serve", Direction: HostToExtension, Provides: "probes", Contract: []string{"extension.SetupProbes.SetupProbes"}},
 	{Name: "probe.list", Direction: ExtensionToHost, Permission: PermissionProbes, Contract: []string{"inproc.Host.Probes", "extension.SetupProbe.Name", "extension.SetupProbe.Summary", "extension.SetupProbe.Args"}},
 	{Name: "probe.run", Direction: ExtensionToHost, Permission: PermissionProbes, Contract: []string{"extension.SetupProbe.Run", "extension.ProbeResult"}},
 	{Name: "config.base", Direction: ExtensionToHost, Permission: PermissionConfigRead, Contract: []string{"inproc.Host.Config", "inproc.ConfigHost.Base", "inproc.ConfigBase"}},

@@ -13,6 +13,7 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
+	"github.com/open-conduit/open-conduit/extensions/github/playbooks"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -89,6 +90,7 @@ var (
 
 	_ extension.RunEnvironment = (*Extension)(nil)
 	_ extension.SetupProbes    = (*Extension)(nil)
+	_ inproc.Playbooker        = (*Extension)(nil)
 )
 
 // Executors is the hold executor that runs held issues, a job.
@@ -98,6 +100,10 @@ func (*Extension) Executors() map[string]inproc.Executor {
 
 // SetupProbes are the GitHub probes a setup session may run.
 func (*Extension) SetupProbes() []extension.SetupProbe { return Probes{}.SetupProbes() }
+
+// Playbooks are the GitHub playbooks (work-issue), which the host writes
+// into the plugin agents load.
+func (*Extension) Playbooks() map[string]string { return playbooks.All() }
 
 func (*Extension) Operations() []string { return Operations() }
 

@@ -475,11 +475,15 @@ func (x *installed) Checks() []inproc.Check {
 	var out []inproc.Check
 	for _, c := range x.m.Provides.Checks {
 		name, deep := c.Name, c.Deep
-		out = append(out, inproc.Check{Deep: deep, Run: func(ctx context.Context, cfg protocol.CheckConfig) inproc.CheckResult {
+		out = append(out, inproc.Check{Deep: deep, Offline: c.Offline, Run: func(ctx context.Context, cfg protocol.CheckConfig) inproc.CheckResult {
 			res := inproc.CheckResult{Name: checkName(x.m.Name, name), Status: inproc.CheckOK, Code: "ok"}
-			cx, cancel := context.WithTimeout(ctx, 20*time.Second)
-			r, err := x.r.Check(cx, name, deep, cfg)
-			cancel()
+			var r protocol.CheckRunResult
+			remote, err := x.remote()
+			if err == nil {
+				cx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				r, err = remote.Check(cx, name, deep, cfg)
+				cancel()
+			}
 			switch {
 			case err != nil:
 				res.Status, res.Code, res.Detail = inproc.CheckWarn, "extension_check_failed", "unavailable ("+errorCode(err)+")"

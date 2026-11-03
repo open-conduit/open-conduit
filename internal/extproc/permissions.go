@@ -150,3 +150,35 @@ func (s *Service) probeRun(ctx context.Context, p protocol.ProbeRunParams) (prot
 	}
 	return out, nil
 }
+
+// Probes are the package's declared setup probes (provides.probes), by
+// their own names, each run through probe.serve. A probe that ran and
+// failed answers its reason, which comes back as the probe's error.
+func (r *Remote) Probes() []extension.SetupProbe {
+	var out []extension.SetupProbe
+	for _, info := range r.m.Provides.Probes {
+		name := info.Name
+		p := extension.SetupProbe{Name: name, Summary: info.Summary}
+		for _, a := range info.Args {
+			p.Args = append(p.Args, extension.ProbeArg{Name: a.Name, Summary: a.Summary, Required: a.Required})
+		}
+		p.Run = func(ctx context.Context, args map[string]string) (extension.ProbeResult, error) {
+			var res protocol.ProbeRunResult
+			if err := r.p.Call(ctx, "probe.serve", protocol.ProbeRunParams{Name: name, Args: args}, &res); err != nil {
+				return extension.ProbeResult{}, err
+			}
+			if res.Error != "" {
+				return extension.ProbeResult{}, errors.New(res.Error)
+			}
+			var output any
+			if len(res.Output) > 0 {
+				if err := json.Unmarshal(res.Output, &output); err != nil {
+					return extension.ProbeResult{}, err
+				}
+			}
+			return extension.ProbeResult{Command: res.Command, Output: output}, nil
+		}
+		out = append(out, p)
+	}
+	return out
+}

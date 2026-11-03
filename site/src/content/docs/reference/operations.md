@@ -633,6 +633,42 @@ Read the messages of this Work's Slack thread, oldest first.
 | --- | --- | --- | --- |
 | `limit` | integer |  | how many of the latest messages to return, 1 to 1000; default (and any value outside that range) 200 |
 
+### setup (`setup`)
+
+The web setup assistant: a Claude Code session that looks at this machine and proposes config for the operator to approve and apply.
+
+#### `setup.ask`
+
+It declares no input schema.
+
+#### `setup.probe`
+
+It declares no input schema.
+
+#### `setup.propose`
+
+It declares no input schema.
+
+#### `setup.read`
+
+It declares no input schema.
+
+#### `setup.say`
+
+It declares no input schema.
+
+#### `setup.trace`
+
+It declares no input schema.
+
+#### `setup.validate`
+
+It declares no input schema.
+
+#### `setup.withdraw`
+
+It declares no input schema.
+
 ## Installable packages
 
 Packages installed with `open-conduit extension install` declare their operations in their manifests, with the input each takes.
