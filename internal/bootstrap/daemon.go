@@ -590,7 +590,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 		g, err := grant(ctx, state)
 		g.Operations = registeredOnly(g.Operations, belt.Operations())
 		return g, err
-	}, Observer: d.pipeline, AuthorizeAlias: d.authorizeAlias, Refusal: d.refusal})
+	}, Observer: d.pipeline, AuthorizeAlias: d.authorizeAlias, Refusal: d.configs.Refusal})
 	if err != nil {
 		return nil, err
 	}

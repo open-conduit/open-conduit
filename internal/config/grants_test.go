@@ -161,7 +161,7 @@ func TestGrantWarningsReportPlaybookDrift(t *testing.T) {
 	}
 	// The trail's classification follows the same declaration.
 	s := mustValidate(t, grantConfig(short, short), reg)
-	if !s.Declared(reg, "web", "agent", "tracker.edit") || s.Declared(reg, "web", "agent", "tracker.delete") {
+	if !s.Declared("web", "agent", "tracker.edit") || s.Declared("web", "agent", "tracker.delete") {
 		t.Fatal("Declared does not follow the playbook")
 	}
 }

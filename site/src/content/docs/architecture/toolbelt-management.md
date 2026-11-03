@@ -89,7 +89,7 @@ A grant names operations, but an extension's agents need them by role: an issue'
 
 `config check`, `config validate` and `config apply` print them as warnings, and `doctor` shows them as its `grants` check, offline and from the daemon ([doctor](../operator-setup/#doctor)). None of them fails the config.
 
-**Refusals as drift.** When a refused call's operation is one the binding's own playbook declares, the daemon's `ToolbeltOptions.Refusal` classifies it, and its `toolbelt.rejected` record carries `toolbelt.refusal` `config_drift`: the configuration lags what the playbook uses, which is the operator's to fix, not an agent reaching outside its role. Other refusals carry no `toolbelt.refusal`.
+**Refusals as drift.** Validation records each effective binding's playbook and the operations it declares (`Binding.Playbook`, `PlaybookOperations`), asking each executor once per binding config. When a refused call's operation is one of those, in the generation the call's execution is pinned to, `ConfigService.Refusal` (the daemon's `ToolbeltOptions.Refusal`) classifies it without asking any executor, and its `toolbelt.rejected` record carries `toolbelt.refusal` `config_drift`: the configuration lags what the playbook uses, which is the operator's to fix, not an agent reaching outside its role. Other refusals carry no `toolbelt.refusal`.
 
 ## Configuration and secrets
 

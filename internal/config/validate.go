@@ -171,6 +171,28 @@ type validator struct {
 	state       map[string]*effective
 	visiting    map[string]bool
 	broken      map[string]bool
+	// playbooks caches BindingPlaybook by executor and config, so an
+	// executor in a package is asked once per binding config.
+	playbooks map[string]playbookAnswer
+}
+
+type playbookAnswer struct {
+	name string
+	ops  []string
+}
+
+// playbook is BindingPlaybook for b, asked once per executor and config.
+func (v *validator) playbook(b Binding) (string, []string) {
+	key := b.Executor + "\x00" + string(b.Config)
+	if a, ok := v.playbooks[key]; ok {
+		return a.name, a.ops
+	}
+	name, ops := BindingPlaybook(v.reg, b)
+	if v.playbooks == nil {
+		v.playbooks = map[string]playbookAnswer{}
+	}
+	v.playbooks[key] = playbookAnswer{name, ops}
+	return name, ops
 }
 
 func (v *validator) fail(path, code, msg string) {
@@ -359,6 +381,7 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 			v.registration(p, b)
 		}
 		resolved := b
+		resolved.Playbook, resolved.PlaybookOperations = v.playbook(b)
 		resolved.Operations = v.resolveOperations(b.Operations, e.auth.Operations, p+"/operations", "operation_denied",
 			"binding operations must be registered and within the scope authorization")
 		resolved.Grants = slices.Clone(b.Grants)

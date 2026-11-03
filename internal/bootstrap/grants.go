@@ -24,14 +24,3 @@ func (d *daemon) grantCheck(context.Context) runtime.Check {
 	s, _ := d.configs.Current()
 	return grantsCheck(s, d.configs.Registry())
 }
-
-// refusal classifies a refused toolbelt call for its record: an operation
-// the binding's own playbook declares is configuration drift, the grant
-// lagging what the playbook uses, not the agent reaching outside its role.
-func (d *daemon) refusal(_ context.Context, c runtime.AuthorityCheck) string {
-	s, _ := d.configs.Current()
-	if s != nil && s.Declared(d.configs.Registry(), c.ScopeID, c.Binding, c.Operation) {
-		return runtime.RefusalConfigDrift
-	}
-	return ""
-}

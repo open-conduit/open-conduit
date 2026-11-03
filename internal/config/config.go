@@ -167,6 +167,13 @@ type Binding struct {
 	// config, which the Work opts into by name when it is created (for
 	// example the shell an operator turns on for one setup session).
 	Grants []Grant
+	// Playbook and PlaybookOperations are, in an EffectiveScope, the
+	// playbook the binding's executor starts its turns on with its config
+	// and the operations that playbook declares it relies on
+	// (BindingPlaybook), worked out once when the generation is
+	// validated. They are never parsed from config.
+	Playbook           string
+	PlaybookOperations []string
 }
 
 // domainGrants are the binding's grants as domain.BindingGrant.

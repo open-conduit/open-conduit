@@ -33,10 +33,11 @@ func BindingPlaybook(reg Registry, b Binding) (string, []string) {
 }
 
 // Declared reports whether operation is one the playbook of the scope's
-// binding declares it relies on: a refusal of it is configuration drift,
-// the binding or scope not granting what its own playbook uses, rather
-// than an agent reaching outside its role.
-func (s *Snapshot) Declared(reg Registry, scope domain.ID, binding, operation string) bool {
+// binding declares it relies on, as validation found it: a refusal of it
+// is configuration drift, the binding or scope not granting what its own
+// playbook uses, rather than an agent reaching outside its role. It asks
+// no executor.
+func (s *Snapshot) Declared(scope domain.ID, binding, operation string) bool {
 	e, ok := s.Scopes[scope]
 	if !ok {
 		return false
@@ -45,8 +46,7 @@ func (s *Snapshot) Declared(reg Registry, scope domain.ID, binding, operation st
 	if !ok {
 		return false
 	}
-	_, ops := BindingPlaybook(reg, b)
-	return slices.Contains(ops, operation)
+	return slices.Contains(b.PlaybookOperations, operation)
 }
 
 // GrantWarnings are what doctor and config check report about operation
@@ -72,7 +72,7 @@ func GrantWarnings(s *Snapshot, reg Registry) []string {
 			continue
 		}
 		for _, b := range sc.Bindings {
-			playbook, declared := BindingPlaybook(reg, b)
+			playbook, declared := b.Playbook, b.PlaybookOperations
 			var scope, binding []string
 			for _, op := range declared {
 				switch {
