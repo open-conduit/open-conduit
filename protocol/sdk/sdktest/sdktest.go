@@ -132,19 +132,25 @@ func WithKVVersion(v int) Option { return func(h *Host) { h.kvVersion = v } }
 // (default: t.TempDir()).
 func WithStateDir(dir string) Option { return func(h *Host) { h.stateDir = dir } }
 
+// WithExecutorDirs sets the executor state directories given at initialize.
+func WithExecutorDirs(dirs map[string]string) Option {
+	return func(h *Host) { h.executorDirs = dirs }
+}
+
 // WithAuthority sets the authority Operation calls carry. Unset fields
 // default as Authority describes.
 func WithAuthority(a extension.Authority) Option { return func(h *Host) { h.authority = a } }
 
 // Host is the in-memory host serving one extension.
 type Host struct {
-	t        testing.TB
-	ext      *sdk.Extension
-	conn     *jsonrpc.Conn
-	server   *sdk.Server
-	clock    Clock
-	stateDir string
-	enabled  map[string]bool
+	t            testing.TB
+	ext          *sdk.Extension
+	conn         *jsonrpc.Conn
+	server       *sdk.Server
+	clock        Clock
+	stateDir     string
+	executorDirs map[string]string
+	enabled      map[string]bool
 
 	mu         sync.Mutex
 	scopes     []domain.Scope
@@ -221,7 +227,7 @@ func New(t testing.TB, ext *sdk.Extension, opts ...Option) *Host {
 		_ = sw.Close()
 		<-h.server.Done()
 	})
-	if err := h.conn.Call(context.Background(), "initialize", protocol.InitializeParams{ProtocolVersions: ext.Manifest.Protocol, StateDir: h.stateDir}, nil); err != nil {
+	if err := h.conn.Call(context.Background(), "initialize", protocol.InitializeParams{ProtocolVersions: ext.Manifest.Protocol, StateDir: h.stateDir, ExecutorDirs: h.executorDirs}, nil); err != nil {
 		t.Fatalf("sdktest: initialize: %v", err)
 	}
 	return h

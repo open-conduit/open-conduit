@@ -565,12 +565,8 @@ func (b *Bridge) start(ctx context.Context, h *sdk.Host) error {
 // host is the inproc.Host the extension starts with, over the host's
 // methods.
 func (b *Bridge) host(h *sdk.Host) inproc.Host {
-	state := ""
-	b.mu.Lock()
-	if b.srv != nil {
-		state = b.srv.StateDir()
-	}
-	b.mu.Unlock()
+	// The directories come from the Host serving the call, not b.srv: the
+	// server serves initialize and configure before Attach records it.
 	host := inproc.Host{
 		Store: sdk.NewStore(h),
 		Now:   time.Now,
@@ -586,24 +582,17 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 				slog.New(slog.NewJSONHandler(os.Stderr, nil)).Warn("extension report", "extension", b.x.Name(), "code", code)
 			}
 		},
-		Nudge:    func() {},
-		StateDir: state,
-		ExecutorDir: func(name string) string {
-			b.mu.Lock()
-			defer b.mu.Unlock()
-			if b.srv == nil {
-				return ""
-			}
-			return b.srv.ExecutorDir(name)
-		},
-		DryRun:    b.isDryRun(),
-		Artifacts: sdk.NewArtifacts(h),
+		Nudge:       func() {},
+		StateDir:    h.StateDir(),
+		ExecutorDir: h.ExecutorDir,
+		DryRun:      b.isDryRun(),
+		Artifacts:   sdk.NewArtifacts(h),
 		Render: func(ctx context.Context, e domain.Event) (string, bool) {
 			text, ok, err := h.RenderOwned(ctx, e)
 			return text, ok && err == nil
 		},
 		OpenLog: func(name string) (io.WriteCloser, error) {
-			dir := filepath.Join(state, "logs")
+			dir := filepath.Join(h.StateDir(), "logs")
 			if err := os.MkdirAll(dir, 0o700); err != nil {
 				return nil, err
 			}

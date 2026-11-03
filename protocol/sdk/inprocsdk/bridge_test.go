@@ -279,6 +279,28 @@ func TestFailedStartIsRetried(t *testing.T) {
 	}
 }
 
+// Start gets the directories the host named at initialize even when the
+// first configure arrives before Attach records the server, as it can over
+// a real stdin (#428): a relative state directory made the shell refuse to
+// start, and the daemon refused its whole configuration.
+func TestStartGetsTheHostsDirectoriesBeforeAttach(t *testing.T) {
+	x := &acme{}
+	b, err := inprocsdk.New(x, base())
+	if err != nil {
+		t.Fatal(err)
+	}
+	state, exec := t.TempDir(), t.TempDir()
+	h := sdktest.New(t, b.Extension(), sdktest.WithStateDir(state), sdktest.WithExecutorDirs(map[string]string{"acme-run": exec}))
+	if _, err := h.Configure(context.Background(), protocol.ConfigureParams{}); err != nil {
+		t.Fatal(err)
+	}
+	x.mu.Lock()
+	defer x.mu.Unlock()
+	if x.host == nil || x.host.StateDir != state || x.host.ExecutorDir == nil || x.host.ExecutorDir("acme-run") != exec {
+		t.Fatalf("Start got state %q and executor dir %q", x.host.StateDir, x.host.ExecutorDir("acme-run"))
+	}
+}
+
 // In-transaction acceptance crosses the wire as kv.commit Emissions (#428):
 // the root and derived Events an extension accepts in its transaction land
 // with that transaction's writes, a foreign family is refused at once, and

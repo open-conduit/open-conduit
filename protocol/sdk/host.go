@@ -18,6 +18,25 @@ import (
 // nothing here can name another extension's namespaces or scopes.
 type Host struct {
 	conn *jsonrpc.Conn
+	srv  *Server
+}
+
+// StateDir is the private state directory the host gave at initialize ("" on
+// a Host made by NewHost).
+func (h *Host) StateDir() string {
+	if h.srv == nil {
+		return ""
+	}
+	return h.srv.StateDir()
+}
+
+// ExecutorDir is the state directory the host named at initialize for one
+// of the extension's executors ("" when it named none).
+func (h *Host) ExecutorDir(name string) string {
+	if h.srv == nil {
+		return ""
+	}
+	return h.srv.ExecutorDir(name)
 }
 
 // NewHost returns a Host on an existing connection (tests).
