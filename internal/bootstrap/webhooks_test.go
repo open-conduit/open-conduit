@@ -131,3 +131,14 @@ func TestSuperviseTunnelStopsOnARefusalOrNoProvider(t *testing.T) {
 		}
 	}
 }
+
+// A URL that can't be where webhooks point never becomes the public URL,
+// whichever provider reports it.
+func TestPublicURLRefusesAnUnusableURL(t *testing.T) {
+	d := tunnelDaemon()
+	d.publicURL("ngrok", "https://hooks.example.test/")
+	d.publicURL("ngrok", "https://user:pw@evil.example.test")
+	if d.hooks.public != "https://hooks.example.test" {
+		t.Fatalf("public %q", d.hooks.public)
+	}
+}

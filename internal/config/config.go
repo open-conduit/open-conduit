@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net"
-	"net/url"
 	"regexp"
 	"slices"
 	"sort"
@@ -537,7 +536,7 @@ func (w Webhooks) TunnelProblems() []TunnelProblem {
 	if w.PublicURL != "" && kind != "static" {
 		fail("public_url", "public_url is for the static tunnel")
 	} else if kind == "static" {
-		if u, err := url.Parse(w.PublicURL); err != nil || u.Host == "" || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil {
+		if extension.CheckPublicURL(w.PublicURL) != nil {
 			fail("public_url", "the static tunnel needs an http(s) public URL without credentials")
 		}
 	}

@@ -700,6 +700,11 @@ func (h *Host) handle(ctx context.Context, method string, raw json.RawMessage) (
 		if urls == nil {
 			return nil, protocol.Errorf(protocol.CodeConflict, "no tunnel.run in progress under that ID")
 		}
+		if p.URL != "" {
+			if err := extension.CheckPublicURL(p.URL); err != nil {
+				return nil, invalid(err.Error())
+			}
+		}
 		select {
 		case urls <- p.URL:
 		case <-ctx.Done():

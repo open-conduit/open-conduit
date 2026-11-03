@@ -278,6 +278,12 @@ func (d *daemon) superviseTunnel(ctx context.Context, kind string, run extension
 // change reaches the extensions' next configure through the loop.
 func (d *daemon) publicURL(kind, u string) {
 	u = strings.TrimRight(u, "/")
+	if u != "" && extension.CheckPublicURL(u) != nil {
+		// Never point webhooks at it; the wire refuses one already, and
+		// this holds for any provider.
+		d.log.Warn("tunnel reported an unusable public URL; ignored", "provider", kind)
+		return
+	}
 	d.hooks.mu.Lock()
 	changed := d.hooks.public != u
 	d.hooks.public = u

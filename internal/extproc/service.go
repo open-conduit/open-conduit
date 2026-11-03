@@ -427,6 +427,13 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 		if publish == nil {
 			return nil, protocol.Errorf(protocol.CodeConflict, "no tunnel.run in progress under that ID")
 		}
+		// Webhooks are pointed at this URL: the host takes only what the
+		// operator's own public_url could be.
+		if p.URL != "" {
+			if err := extension.CheckPublicURL(p.URL); err != nil {
+				return nil, invalid(err.Error())
+			}
+		}
 		publish(p.URL)
 		return struct{}{}, nil
 	case "setup.print", "setup.prompt", "setup.choose", "setup.open_url", "setup.store_secret", "setup.look_path", "setup.run_command":
