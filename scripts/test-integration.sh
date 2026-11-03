@@ -52,6 +52,7 @@ TestDaemonClaudeCodeContinuityKill 17
 TestDaemonJobParity 15
 TestDaemonClaudeCodeExecution 13
 TestDaemonGitWorkspaces 13
+TestDaemonGitHubHeldIssueAndTools 12
 TestSDKStoreEventsSkipOtherScopes 10
 TestDaemonWorkflowC 9
 TestCertificationInvalidPackage 9
@@ -67,7 +68,6 @@ TestDaemonTrackersAndPostHog 6
 TestDaemonFreshInstallGitHubIssue 6
 TestExternalSchemaEvolution 6
 TestDaemonGitHubReconcileToProjection 6
-TestDaemonGitHubHeldIssueAndTools 5
 TestSlackPushReconcileOverlapOneWork 5
 TestDaemonOperatorCLI 5
 TestDaemonGracefulRestart 5
