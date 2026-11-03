@@ -323,6 +323,8 @@ func (p *Process) launch(ctx context.Context) (chan struct{}, error) {
 	exited := make(chan struct{})
 	conn := jsonrpc.NewConn(stdout, stdin, p.o.Service.Handle, jsonrpc.Options{OnProtocolError: func(err error) {
 		p.o.Log.Warn("extension protocol error", "extension", p.name, "error", err)
+	}, OnUnauthored: func(method string, err error) {
+		p.o.Log.Warn("host method failed", "extension", p.name, "method", method, "error", err)
 	}})
 	go func() {
 		<-conn.Done()
