@@ -123,7 +123,7 @@ func Manifest(o Options) protocol.Manifest {
 				// (`open-conduit adapters notes`).
 				Fields: []protocol.FieldDecl{
 					{Name: "service", Help: "the note service's JSON file", Required: true},
-					{Name: "watch", Default: "true", Options: []string{"true", "false"}},
+					{Name: "watch", Options: []string{"true", "false"}}, // its default is its setting's
 					{Name: "labels", Help: "[{name, note}]: the labels the entry sets up"},
 				}}},
 			Families: []protocol.Family{

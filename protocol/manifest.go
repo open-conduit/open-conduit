@@ -351,6 +351,56 @@ type FieldDecl struct {
 	Secret   bool     `json:"secret,omitempty"`
 }
 
+// DefaultText is the setting's default as a catalogue field shows it: a
+// string unquoted, any other value as its JSON; "" when it has none.
+func (d SettingDecl) DefaultText() string {
+	if len(d.Default) == 0 {
+		return ""
+	}
+	if d.Type == SettingString {
+		var s string
+		if json.Unmarshal(d.Default, &s) == nil {
+			return s
+		}
+	}
+	var b bytes.Buffer
+	if json.Compact(&b, d.Default) != nil {
+		return string(d.Default)
+	}
+	return b.String()
+}
+
+// WithSettingDefaults is fields with each one that gives no default taking
+// its setting's, so a type that declares both states a default once.
+func WithSettingDefaults(fields []FieldDecl, settings []SettingDecl) []FieldDecl {
+	out := slices.Clone(fields)
+	for i, f := range out {
+		if f.Default != "" || f.Secret {
+			continue
+		}
+		for _, s := range settings {
+			if s.Field == f.Name {
+				out[i].Default = s.DefaultText()
+			}
+		}
+	}
+	return out
+}
+
+// settingDisagreements are the fields whose default differs from their
+// setting's, which would show the operator two defaults for one field.
+func settingDisagreements(fields []FieldDecl, settings []SettingDecl) []error {
+	var errs []error
+	for _, f := range fields {
+		for _, s := range settings {
+			if s.Field == f.Name && f.Default != "" && s.DefaultText() != f.Default {
+				errs = append(errs, fmt.Errorf("field %q default %q is not its setting's %q; declare it once", f.Name, f.Default, s.DefaultText()))
+			}
+		}
+	}
+	return errs
+}
+
 // MaxFieldHelp is the longest help a FieldDecl may give.
 const MaxFieldHelp = 400
 
@@ -835,6 +885,9 @@ func (m Manifest) Validate() error {
 		ingress = ingress || x.Ingress
 		settings("extension type", x.Type, x.Settings)
 		fieldDecls("extension type", x.Type, x.Fields, false)
+		for _, err := range settingDisagreements(x.Fields, x.Settings) {
+			fail("extension type %q %v", x.Type, err)
+		}
 		if d := x.Describe; d != nil {
 			if !fieldPattern.MatchString(d.List) || !fieldPattern.MatchString(d.Name) || d.Detail != "" && !fieldPattern.MatchString(d.Detail) {
 				fail("extension type %q describe must name its list, name and detail fields", x.Type)
@@ -988,6 +1041,9 @@ func (m Manifest) Validate() error {
 		}
 		settings("resource provider", r.Type, r.Settings)
 		fieldDecls("resource provider", r.Type, r.Fields, false)
+		for _, err := range settingDisagreements(r.Fields, r.Settings) {
+			fail("resource provider %q %v", r.Type, err)
+		}
 	}
 	sandboxes := map[string]bool{}
 	for _, x := range p.Sandboxes {

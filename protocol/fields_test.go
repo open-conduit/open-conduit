@@ -1,6 +1,7 @@
 package protocol_test
 
 import (
+	"encoding/json"
 	"errors"
 	"strings"
 	"testing"
@@ -71,5 +72,34 @@ func TestFieldDeclarations(t *testing.T) {
 	parsed, err := protocol.ParseManifest([]byte(raw))
 	if err != nil || len(parsed.Provides.Connections[0].Fields) != 1 || !parsed.Provides.Connections[0].Fields[0].Secret {
 		t.Fatalf("parse: %+v %v", parsed.Provides.Connections, err)
+	}
+}
+
+// A field a type's settings also declare states its default once: the
+// catalogue takes the setting's (WithSettingDefaults), and a field default
+// that disagrees with it is refused, so the operator's two views of the
+// field can't drift apart.
+func TestFieldDefaultsAgreeWithSettings(t *testing.T) {
+	settings := []protocol.SettingDecl{
+		{Field: "mode", Type: protocol.SettingString, Default: json.RawMessage(`"shared"`)},
+		{Field: "sign", Type: protocol.SettingBoolean, Default: json.RawMessage(`false`)},
+	}
+	m := func(fields []protocol.FieldDecl) protocol.Manifest {
+		return protocol.Manifest{Protocol: []int{1}, Name: "acme", Version: "1", Command: []string{"./acme"}, Provides: protocol.Provides{
+			Extensions: []protocol.ExtensionDecl{{Type: "acme", Settings: settings, Fields: fields}},
+			Resources:  []protocol.ResourceDecl{{Type: "acme", Modes: []string{"shared"}, Settings: settings, Fields: fields}},
+		}}
+	}
+	if err := m([]protocol.FieldDecl{{Name: "mode", Default: "shared"}, {Name: "sign", Default: "false"}, {Name: "other", Default: "x"}}).Validate(); err != nil {
+		t.Fatalf("agreeing defaults: %v", err)
+	}
+	err := m([]protocol.FieldDecl{{Name: "mode", Default: "work"}}).Validate()
+	if !errors.Is(err, protocol.ErrManifest) || !strings.Contains(err.Error(), `extension type "acme" field "mode" default "work" is not its setting's "shared"`) ||
+		!strings.Contains(err.Error(), `resource provider "acme" field "mode"`) {
+		t.Fatalf("disagreeing default: %v", err)
+	}
+	got := protocol.WithSettingDefaults([]protocol.FieldDecl{{Name: "mode"}, {Name: "sign", Help: "h"}, {Name: "other"}}, settings)
+	if got[0].Default != "shared" || got[1].Default != "false" || got[2].Default != "" {
+		t.Fatalf("filled defaults: %+v", got)
 	}
 }

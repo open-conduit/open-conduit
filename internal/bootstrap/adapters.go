@@ -77,7 +77,7 @@ func manifestAdapters(m protocol.Manifest) []cli.Adapter {
 		})
 	}
 	for _, x := range p.Extensions {
-		add("extension", x.Type, x.Fields, func(a *cli.Adapter, f []cli.Field) { a.Entry = f })
+		add("extension", x.Type, protocol.WithSettingDefaults(x.Fields, x.Settings), func(a *cli.Adapter, f []cli.Field) { a.Entry = f })
 	}
 	for _, r := range p.Routes {
 		add("route", r.Handler, r.Fields, func(a *cli.Adapter, f []cli.Field) {
@@ -94,7 +94,7 @@ func manifestAdapters(m protocol.Manifest) []cli.Adapter {
 		})
 	}
 	for _, r := range p.Resources {
-		add("resource", r.Type, r.Fields, func(a *cli.Adapter, f []cli.Field) {
+		add("resource", r.Type, protocol.WithSettingDefaults(r.Fields, r.Settings), func(a *cli.Adapter, f []cli.Field) {
 			if len(f) > 0 || a.Resource == nil {
 				a.Resource = f
 			}

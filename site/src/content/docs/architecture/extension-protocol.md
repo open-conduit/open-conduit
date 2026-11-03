@@ -335,7 +335,7 @@ Validation rules:
 - the command and playbooks stay inside the extension directory;
 - external stores name a declared connection type;
 - an extension type's `settings` are distinct top-level field names, each a `string`, `boolean`, `number` or `strings` with a default of that type, and its `describe` names its `list`, `name` and `detail` fields;
-- a type's `fields` each name a distinct field (a connection's `secret` keys apart from its config fields), with help of one line of at most 400 bytes, no default when `required`, distinct non-empty `options` that include the default, and `secret` only on a connection type;
+- a type's `fields` each name a distinct field (a connection's `secret` keys apart from its config fields), with help of one line of at most 400 bytes, no default when `required`, distinct non-empty `options` that include the default, `secret` only on a connection type, and no default that differs from the same field's `settings` default;
 - permissions are known and distinct;
 - payload schema bases are dotted names under the extension's name without a version suffix, with positive, strictly increasing readable versions; `kv_version` is not negative;
 - unknown fields are rejected. Additive manifest fields ship without a protocol version bump, so an unknown field is refused as `ErrNewerManifest` (the package needs a newer Open Conduit), not as an invalid manifest.
@@ -352,7 +352,7 @@ An extension type may declare what the operator's view of an entry shows (`GET /
   "describe": {"list": "jobs", "name": "name", "detail": "schedule"}}]
 ```
 
-Every config type a package declares (a connection, an extension type, a route handler, an executor or a resource provider) may also describe its config's fields for the operator, as `fields` (`inproc.ConfigType.Fields`, `inproc.Executor.Fields`): each field's `name`, `help`, the `default` it takes when absent (as text), whether it is `required` and, for a fixed set of values, its `options`. On a connection type, a field marked `secret` is a key of the connection's `secret_refs` rather than of its config. The fields are descriptive only, since the type's `validate` still checks a config. `open-conduit adapters`, the config editor and the generated configuration reference build their catalogue from them, for every package installed or bundled alike: the core describes no package's types (#494).
+Every config type a package declares (a connection, an extension type, a route handler, an executor or a resource provider) may also describe its config's fields for the operator, as `fields` (`inproc.ConfigType.Fields`, `inproc.Executor.Fields`): each field's `name`, `help`, the `default` it takes when absent (as text), whether it is `required` and, for a fixed set of values, its `options`. On a connection type, a field marked `secret` is a key of the connection's `secret_refs` rather than of its config. The fields are descriptive only, since the type's `validate` still checks a config. A field the type's `settings` also declare takes its default from there when it gives none, so a package states each default once. `open-conduit adapters`, the config editor and the generated configuration reference build their catalogue from them, for every package installed or bundled alike: the core describes no package's types (#494).
 
 ```json
 "connections": [{"type": "chat", "fields": [

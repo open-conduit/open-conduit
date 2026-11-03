@@ -3,15 +3,16 @@ package git
 import "github.com/open-conduit/open-conduit/protocol"
 
 // ResourceFields describe a git resource config (Config) for the
-// operator's catalogue (manifest fields).
+// operator's catalogue (manifest fields). A field the manifest's settings
+// also declare takes its default from there.
 func ResourceFields() []protocol.FieldDecl {
 	return []protocol.FieldDecl{
 		{Name: "checkout", Help: "the main checkout", Required: true},
-		{Name: "mode", Help: "the mode when an executor requests none", Default: "shared", Options: []string{"shared", "work", "fresh", "clone"}},
-		{Name: "remote", Default: "origin"},
+		{Name: "mode", Help: "the mode when an executor requests none", Options: []string{"shared", "work", "fresh", "clone"}},
+		{Name: "remote"},
 		{Name: "base_branch", Help: "where new branches and fresh checkouts start; the remote's HEAD by default"},
-		{Name: "branch_template", Help: "a work-mode branch, with {work} and {scope}", Default: "agent/work-{work}"},
-		{Name: "sign", Help: "keep commit signing as the checkout configures it", Default: "false"},
+		{Name: "branch_template", Help: "a work-mode branch, with {work} and {scope}"},
+		{Name: "sign", Help: "keep commit signing as the checkout configures it"},
 		{Name: "copy", Help: "checkout-relative files (such as .env) copied into every workspace"},
 		{Name: "setup", Help: "a command run in a workspace when it or a setup_when file changed"},
 		{Name: "setup_when"},
