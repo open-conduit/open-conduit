@@ -48,9 +48,21 @@ var sentinels = []struct {
 	{CodeCancelled, context.Canceled},
 }
 
+// confinement are the sandbox and container refusals, whose messages cross
+// with them.
+var confinement = []struct {
+	code string
+	err  error
+}{
+	{CodeSandboxDenied, extension.ErrSandboxDenied},
+	{CodeSandboxUnavailable, extension.ErrSandboxUnavailable},
+	{CodeContainerRunning, extension.ErrContainerRunning},
+	{CodeContainerUnknown, extension.ErrContainerUnconfirmed},
+}
+
 // Unwrap returns the public sentinel the code carries, if any.
 func (e *Error) Unwrap() error {
-	for _, s := range sentinels {
+	for _, s := range append(sentinels[:len(sentinels):len(sentinels)], confinement...) {
 		if s.code == e.Code {
 			return s.err
 		}
@@ -96,6 +108,13 @@ func Encode(err error) *Error {
 		// workspace names only.
 		return &Error{Code: CodeResourceExhausted, Message: err.Error()}
 	}
+	// A sandbox or container refusal says which need or launch it refused,
+	// from paths and the provider's own words, so the executor can report it.
+	for _, s := range confinement {
+		if errors.Is(err, s.err) {
+			return &Error{Code: s.code, Message: err.Error()}
+		}
+	}
 	for _, s := range sentinels {
 		if errors.Is(err, s.err) {
 			return &Error{Code: s.code, Message: s.code}
@@ -117,7 +136,7 @@ func Decode(code, message string, resetAt *time.Time) error {
 // Known reports whether code is one of the protocol's own codes.
 func Known(code string) bool {
 	switch code {
-	case CodeUnsupportedVersion, CodeMethodNotFound, CodeInvalid, CodeUnsupported, CodeUnauthorized, CodeUndeclared, CodeNotFound, CodeConflict, CodeCausalLimit, CodeNotAdoptable, CodeNotAccepting, CodeNothingToAttach, CodeResourceSetup, CodeResourceNotFound, CodeResourceExhausted, CodeRetryAfter, CodeReentrant, CodeOverloaded, CodeCancelled, CodeShuttingDown, CodeInternal, CodeSchema, CodeKVDowngrade:
+	case CodeUnsupportedVersion, CodeMethodNotFound, CodeInvalid, CodeUnsupported, CodeUnauthorized, CodeUndeclared, CodeNotFound, CodeConflict, CodeCausalLimit, CodeNotAdoptable, CodeNotAccepting, CodeNothingToAttach, CodeResourceSetup, CodeResourceNotFound, CodeResourceExhausted, CodeSandboxDenied, CodeSandboxUnavailable, CodeContainerRunning, CodeContainerUnknown, CodeRetryAfter, CodeReentrant, CodeOverloaded, CodeCancelled, CodeShuttingDown, CodeInternal, CodeSchema, CodeKVDowngrade:
 		return true
 	}
 	return false

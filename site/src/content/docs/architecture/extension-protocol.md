@@ -155,6 +155,10 @@ What would reverse the decision: a need for very high-throughput streaming (the 
 | `resource_setup_failed` | `extension.ErrResourceSetup` (the resource still returned) |
 | `resource_not_found` | `extension.ErrResourceNotFound` |
 | `resource_exhausted` | `extension.ErrResourceExhausted` (the provider's message, which says what to free, crosses with it) |
+| `sandbox_denied` | `extension.ErrSandboxDenied` (the refusal, naming the need outside the policy, crosses with it) |
+| `sandbox_unavailable` | `extension.ErrSandboxUnavailable` (with the provider's reason) |
+| `container_running` | `extension.ErrContainerRunning` (with the reason) |
+| `container_unconfirmed` | `extension.ErrContainerUnconfirmed` (with the reason) |
 | `retry_after` | `extension.RetryHint` (`data.reset_at` optional) |
 
 The protocol also has its own codes: `unsupported_protocol_version`, `reentrant_call`, `overloaded`, `cancelled`, `shutting_down` and `internal`.

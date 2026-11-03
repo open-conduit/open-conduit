@@ -68,6 +68,10 @@ const (
 	CodeResourceSetup      = "resource_setup_failed"        // resource exists, setup failed (extension.ErrResourceSetup)
 	CodeResourceNotFound   = "resource_not_found"           // no owned lease (extension.ErrResourceNotFound)
 	CodeResourceExhausted  = "resource_exhausted"           // capacity too low to create a resource (extension.ErrResourceExhausted)
+	CodeSandboxDenied      = "sandbox_denied"               // a launch need outside the binding's sandbox policy (extension.ErrSandboxDenied)
+	CodeSandboxUnavailable = "sandbox_unavailable"          // the binding's sandbox can't run the launch (extension.ErrSandboxUnavailable)
+	CodeContainerRunning   = "container_running"            // a container of the execution is still running (extension.ErrContainerRunning)
+	CodeContainerUnknown   = "container_unconfirmed"        // the container's state could not be confirmed (extension.ErrContainerUnconfirmed)
 	CodeRetryAfter         = "retry_after"                  // retryable executor limit; data.reset_at optional (extension.RetryHint)
 	CodeReentrant          = "reentrant_call"               // a callback was made while serving an in-transaction method
 	CodeOverloaded         = "overloaded"                   // too many requests in flight; retry later
