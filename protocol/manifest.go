@@ -626,6 +626,11 @@ type ToolsetDecl struct {
 
 // ExecutorDecl declares an executor. Capabilities are exactly the bind-time
 // labels of domain.Capabilities; Controls are optional host-driven methods.
+// PoolJobs is the capacity pool of job executors: settings.job_concurrency
+// bounds them, and settings.concurrency every other executor (agent turns),
+// so neither starves the other.
+const PoolJobs = "jobs"
+
 type ExecutorDecl struct {
 	Name         string       `json:"name"`
 	Capabilities Capabilities `json:"capabilities"`
@@ -642,7 +647,7 @@ type ExecutorDecl struct {
 	// the playbook declares (extension.PlaybookNamer).
 	Playbook bool `json:"playbook,omitempty"`
 	// Pool is the capacity pool the executor's runs count against: "" for
-	// agent turns (settings.concurrency), "jobs" for jobs
+	// agent turns (settings.concurrency), PoolJobs for jobs
 	// (settings.job_concurrency).
 	Pool string `json:"pool,omitempty"`
 	// LaunchNames are other names an operator may give the executor where
@@ -1018,7 +1023,7 @@ func (m Manifest) Validate() error {
 		default:
 			fail("executor %q toolbelt %q must be none, cli, mcp or sdk", x.Name, x.Capabilities.Toolbelt)
 		}
-		if x.Pool != "" && x.Pool != "jobs" {
+		if x.Pool != "" && x.Pool != PoolJobs {
 			fail("executor %q pool %q must be empty (agent turns) or jobs", x.Name, x.Pool)
 		}
 		if len(x.LaunchNames) > 0 && !x.Controls.InteractiveLaunch {

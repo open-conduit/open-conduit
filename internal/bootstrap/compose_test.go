@@ -2,7 +2,6 @@ package bootstrap
 
 import (
 	"encoding/json"
-	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"os"
 	"path/filepath"
 	"strings"
@@ -10,48 +9,13 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/protocol"
 )
 
-// The first-party list composes through the contract alone: each
-// extension's config types and operations reach the registry, and no two
-// share a name.
-func TestFirstPartyCompose(t *testing.T) {
-	reg := registry(offlineExecutors())
-	seen := map[string]bool{}
-	for _, x := range firstParty() {
-		if seen[x.Name()] {
-			t.Fatalf("%s listed twice", x.Name())
-		}
-		seen[x.Name()] = true
-		if typed, ok := x.(inproc.Typed); ok {
-			for _, c := range typed.Types() {
-				_, conn := reg.Connections[c.Type]
-				_, entry := reg.Extensions[c.Type]
-				if !conn && !entry {
-					t.Errorf("%s type %s not registered", x.Name(), c.Type)
-				}
-			}
-		}
-		if o, ok := x.(inproc.Operator); ok {
-			for _, op := range o.Operations() {
-				found := false
-				for _, r := range reg.Operations {
-					found = found || r == op
-				}
-				if !found {
-					t.Errorf("%s operation %s not registered", x.Name(), op)
-				}
-			}
-		}
-	}
-}
-
-// An installed package's manifest reaches the registry through the same
-// contract: its types (configurable routes too), handlers, operations and
-// resource types, with its tasks paced by their intervals.
+// A package's manifest reaches the registry: its types (configurable
+// routes too), handlers, operations and resource types, with its tasks
+// paced by their intervals.
 func TestInstalledCompose(t *testing.T) {
 	m := protocol.Manifest{Name: "acme", Provides: protocol.Provides{
 		Connections: []protocol.TypeDecl{{Type: "acme_conn"}},
@@ -64,7 +28,7 @@ func TestInstalledCompose(t *testing.T) {
 	x := &installed{m: m}
 	reg := config.Registry{}
 	x.providerTypes(&reg)
-	inprocRegistry(&reg, []inproc.Extension{x})
+	packageRegistry(&reg, []*installed{x})
 	if reg.Connections["acme_conn"] == nil || !reg.Extensions["acme"].Ingress || reg.HandlerConfig["acme_route"] == nil {
 		t.Fatalf("types not registered: %+v", reg)
 	}
@@ -82,23 +46,22 @@ func TestInstalledCompose(t *testing.T) {
 	}
 }
 
-// An installed package's Work kinds, recurrences, ingress sources, webhook
-// paths and executors go through the same contract surfaces as a
-// first-party extension's. Offline (no running package) it declares its
-// Work kinds, so a dry run still knows its timed ones, and serves nothing;
-// a configure result's sources are kept by name, its webhook paths by path.
+// A package's Work kinds, recurrences, ingress sources, webhook paths and
+// executors. Offline (no running package) it declares its Work kinds, so a
+// dry run still knows its timed ones, and serves nothing; a configure
+// result's sources are kept by name, its webhook paths by path.
 func TestInstalledSurfaces(t *testing.T) {
 	m := protocol.Manifest{Name: "acme", Provides: protocol.Provides{
 		WorkKinds:   []protocol.WorkKindDecl{{Kind: "acme.job", Standing: true, Timed: true}, {Kind: "acme.chat"}},
 		Recurrences: []string{"acme.every"},
-		Executors:   []protocol.ExecutorDecl{{Name: "acme-run", Pool: inproc.PoolJobs}},
+		Executors:   []protocol.ExecutorDecl{{Name: "acme-run", Pool: protocol.PoolJobs}},
 	}}
 	x := &installed{m: m}
 	kinds := x.WorkKinds()
 	if len(kinds) != 2 || kinds[0].Kind != "acme.job" || !kinds[0].Standing || !kinds[0].Timed || kinds[0].Trigger != nil || kinds[1].Kind != "acme.chat" || kinds[1].Timed {
 		t.Fatalf("work kinds %+v", kinds)
 	}
-	d := &daemon{inproc: []inproc.Extension{x}}
+	d := &daemon{packages: []*installed{x}}
 	if timed := d.timedKinds(); !timed["acme.job"] || timed["acme.chat"] {
 		t.Fatalf("timed kinds %v", timed)
 	}
@@ -116,11 +79,19 @@ func TestInstalledSurfaces(t *testing.T) {
 	}
 }
 
-// The turn plugin carries the extensions' playbooks (GitHub's work-issue),
-// filled in. The setup playbook is the setup package's (#243): it joins
-// the plugin as every package's does, and nothing compiled in supplies it.
-func TestTurnPluginCarriesFirstPartyPlaybooks(t *testing.T) {
-	d := &daemon{o: Options{StateDir: t.TempDir()}, inproc: append(firstParty(), gh.New())}
+// The turn plugin carries the packages' playbooks, filled in. The setup
+// playbook is the setup package's (#243): it joins the plugin as every
+// package's does, and nothing compiled in supplies it.
+func TestTurnPluginCarriesPackagePlaybooks(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "playbooks"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "playbooks", "work-issue.md"), []byte("---\nname: work-issue\ndescription: Work an issue.\n---\n\nRun `{{bin}} help`.\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	x := &installed{m: protocol.Manifest{Name: "acme", Provides: protocol.Provides{Playbooks: "playbooks"}}, dir: dir}
+	d := &daemon{o: Options{StateDir: t.TempDir()}, packages: []*installed{x}}
 	if err := d.preparePlaybooks(); err != nil {
 		t.Fatal(err)
 	}

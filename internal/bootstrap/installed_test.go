@@ -6,7 +6,6 @@ import (
 	"testing"
 
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/protocol"
 )
@@ -26,7 +25,7 @@ func TestInstalledEntrySettingsAndDescribe(t *testing.T) {
 		t.Fatal(err)
 	}
 	reg := config.Registry{}
-	inprocRegistry(&reg, []inproc.Extension{&installed{m: m}})
+	packageRegistry(&reg, []*installed{{m: m}})
 	entry := json.RawMessage(`{"team": "T1", "token_ref": "keyring:chat", "channels": [{"id": "C1", "purpose": "support"}]}`)
 	typ := reg.Extensions["chat"]
 	if typ.Settings == nil || typ.Describe == nil {
@@ -49,7 +48,7 @@ func TestInstalledEntrySettingsAndDescribe(t *testing.T) {
 func TestInstalledRunOnceWorkKind(t *testing.T) {
 	m := protocol.Manifest{Protocol: []int{protocol.Version}, Name: "acme", Version: "1", Command: []string{"./acme"}, Provides: protocol.Provides{
 		Routes: []protocol.RouteDecl{{Handler: "acme"}}, WorkKinds: []protocol.WorkKindDecl{{Kind: "acme.fix", RunOnce: true}, {Kind: "acme.job", Standing: true}}}}
-	kinds := map[string]inproc.WorkKind{}
+	kinds := map[string]workKind{}
 	for _, k := range (&installed{m: m}).WorkKinds() {
 		kinds[k.Kind] = k
 	}

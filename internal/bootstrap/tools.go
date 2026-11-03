@@ -51,6 +51,6 @@ func (d *daemon) pluginDir() string { return filepath.Join(d.o.StateDir, "playbo
 // GitHub's, Slack's and the trackers' among them.
 func (d *daemon) preparePlaybooks() error {
 	books := map[string]string{}
-	d.inprocPlaybooks(books)
+	d.packagePlaybooks(books)
 	return writePlugin(d.pluginDir(), "Playbooks for agents run by Open Conduit", books)
 }

@@ -33,7 +33,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -140,8 +139,10 @@ type daemon struct {
 	backups    backupState
 	executors  map[string]extension.Executor
 	// pools are the capacity pools of the executors that name one.
-	pools         map[string]string
-	inproc        []inproc.Extension
+	pools map[string]string
+	// packages are the running extension packages, each composed
+	// through every surface it declares (compose.go).
+	packages      []*installed
 	configs       *management.ConfigService
 	resolver      *config.Resolver
 	pipeline      *telemetry.Pipeline
@@ -325,7 +326,6 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	d := &daemon{o: o, log: slog.New(slog.NewTextHandler(o.Log, nil)), now: time.Now, inflight: map[attemptKey]domain.LeaseRef{}, reported: map[string]string{}, reportedAt: map[string]time.Time{}, nudge: make(chan struct{}, 1), resolver: &config.Resolver{SecretsFile: filepath.Join(filepath.Dir(o.ConfigPath), "secrets.json")}}
-	d.inproc = firstParty()
 	suffix := make([]byte, 4)
 	if _, err = rand.Read(suffix); err != nil {
 		return err
@@ -382,7 +382,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.closeTelemetry()
-	exporters := append(append([]observability.Exporter{telemetry.NewLogExporter(logFile), otel}, d.inprocExporters()...), extensionExporter{d})
+	exporters := append(append([]observability.Exporter{telemetry.NewLogExporter(logFile), otel}, d.packageExporters()...), extensionExporter{d})
 	usage, err := newUsageReporter(o)
 	if err != nil {
 		return err
@@ -445,17 +445,10 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	d.executors, d.pools = map[string]extension.Executor{}, map[string]string{}
-	for _, name := range inprocExecutors(d.inproc, d.executors, d.pools) {
-		d.log.Warn("executor not registered: its capacity pool is not one a setting bounds", "executor", name)
-		d.report("executor_pool", domain.ID(name), "unknown_pool")
-	}
 	if usage != nil {
 		usage.known = knownTypes(registry(maps.Clone(d.executors)))
 	}
-	if err = d.startInproc(ctx); err != nil {
-		return err
-	}
-	defer d.stopInproc()
+	defer d.stopPackages()
 	d.openResources()
 	d.openSandboxes()
 	d.openContainers()
@@ -579,7 +572,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	}
 	var err error
 	routeHandlers := handlers()
-	inprocHandlers(routeHandlers, d.inproc)
+	packageHandlers(routeHandlers, d.packages)
 	if c.router, err = runtime.NewRouter(d.coord, d.now, runtime.RouterOptions{Generation: c.generation, Handlers: routeHandlers, Bindings: bindings, CausalLimits: limits, RouteTimeout: d.o.CallTimeout}); err != nil {
 		return nil, err
 	}
@@ -596,7 +589,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	if err != nil {
 		return nil, err
 	}
-	if err = d.registerInprocTools(belt, s); err != nil {
+	if err = d.registerPackageTools(belt, s); err != nil {
 		return nil, err
 	}
 	c.toolbelt = belt
@@ -606,8 +599,8 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	for g := uint64(1); g < gen; g++ {
 		history[strconv.FormatUint(g, 10)] = d.executors
 	}
-	kinds := workKinds(d.inproc)
-	recurring := recurrences(d.inproc)
+	kinds := workKinds(d.packages)
+	recurring := recurrences(d.packages)
 	delays := make([]time.Duration, len(set.RetryDelaysSeconds))
 	for i, seconds := range set.RetryDelaysSeconds {
 		delays[i] = time.Duration(seconds) * time.Second
@@ -634,7 +627,7 @@ func (d *daemon) build(s *config.Snapshot, gen uint64) (*components, error) {
 	}
 	c.control = control
 	if c.server, err = management.NewServer(management.Options{Store: d.coord, Artifacts: d.artifacts, Now: d.now, Control: control, AdmitTrace: d.admitTrace, ConfigCandidate: d.configCandidate, Pages: d.pages, Titles: d.titles, Toolbelt: belt, Config: d.configs, Version: d.o.Version, InstanceID: d.owner, CursorKey: d.cursorKey, Ingress: d.ingress, Scheduler: c.scheduler, Resolver: d.resolver, Checks: d.checks(),
-		DeepChecks: d.inprocChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Actions: d.actions, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
+		DeepChecks: d.packageChecks(true), Capacity: d.capacityPools, Annotate: d.annotate, Actions: d.actions, Attach: d.attach, ContainerAttach: d.containerAttach, ContainerDetach: d.containerDetach, Live: d.live, Nudge: d.poke}); err != nil {
 		return nil, err
 	}
 	return c, nil
@@ -647,7 +640,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.webhookCheck, d.resourceCheck, d.capacityCheck, d.extensionCheck, d.grantCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.packageChecks(false)...), d.webhookCheck, d.resourceCheck, d.capacityCheck, d.extensionCheck, d.grantCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

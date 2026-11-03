@@ -26,7 +26,7 @@ import (
 // serves only the routes registered entries name, each verified by its own
 // adapter before anything is accepted:
 //   - POST /github/<scope>/<entry> for a GitHub entry with a webhook_secret;
-//   - POST /<extension>/..., served by an in-process extension's Webhook:
+//   - POST /<extension>/..., served by a package's webhook.handle:
 //     a schedule job's signed URL /schedule/<scope>/<entry>/<job>/<token>
 //     (05-01), /slack/<scope>/<entry> for a Slack entry with receiver http
 //     (04-01), and /linear|jira|bitbucket/<scope>/<entry> for tracker and
@@ -304,7 +304,7 @@ func (d *daemon) publicURL(kind, u string) {
 func (d *daemon) webhookHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		name := strings.TrimPrefix(r.URL.Path, "/")
-		if h := d.inprocWebhook(name); h != nil {
+		if h := d.packageWebhook(name); h != nil {
 			h.ServeHTTP(w, r)
 			return
 		}

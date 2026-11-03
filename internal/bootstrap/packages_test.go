@@ -114,13 +114,12 @@ func TestFirstRunConfig(t *testing.T) {
 	}
 }
 
-// An installed package's operations are entry-gated when its manifest says
-// so, as an in-process inproc.EntryGated extension's are.
+// A package's operations are entry-gated when its manifest says so.
 func TestInstalledEntryGated(t *testing.T) {
-	if entryGated(&installed{m: protocol.Manifest{Name: "acme"}}) {
+	if (&installed{m: protocol.Manifest{Name: "acme"}}).entryGated() {
 		t.Fatal("ungated package gated")
 	}
-	if !entryGated(&installed{m: protocol.Manifest{Name: "acme", Provides: protocol.Provides{EntryGated: true}}}) {
+	if !(&installed{m: protocol.Manifest{Name: "acme", Provides: protocol.Provides{EntryGated: true}}}).entryGated() {
 		t.Fatal("entry_gated package not gated")
 	}
 }

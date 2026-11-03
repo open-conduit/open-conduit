@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/open-conduit/open-conduit/extension/inproc"
+	"github.com/open-conduit/open-conduit/internal/extproc"
 )
 
 // The host keeps config text behind handles and hands out only redacted
@@ -50,10 +50,10 @@ func TestConfigHostRedactsBehindHandles(t *testing.T) {
 	if !ok || !strings.Contains(string(full), "Website") || !strings.Contains(string(full), "cmd:pass show new") || !strings.Contains(string(full), "env:SLACK_TOKEN") {
 		t.Fatalf("the held candidate lost its text: %s", full)
 	}
-	if _, err := h.Edit(ctx, "cfg_unknown", "add", "/scopes/-", json.RawMessage(`{}`)); !errors.Is(err, inproc.ErrConfigHandle) {
+	if _, err := h.Edit(ctx, "cfg_unknown", "add", "/scopes/-", json.RawMessage(`{}`)); !errors.Is(err, extproc.ErrConfigHandle) {
 		t.Fatalf("an unknown handle: %v", err)
 	}
-	if _, _, err := h.Validate(ctx, "cfg_unknown"); !errors.Is(err, inproc.ErrConfigHandle) {
+	if _, _, err := h.Validate(ctx, "cfg_unknown"); !errors.Is(err, extproc.ErrConfigHandle) {
 		t.Fatalf("validate an unknown handle: %v", err)
 	}
 }
@@ -102,7 +102,7 @@ func TestConfigHostAddInsertsIntoArrays(t *testing.T) {
 			Routes []struct{ Name string } `json:"routes"`
 		} `json:"scopes"`
 	}
-	if err := json.Unmarshal(e.Text, &doc); err != nil {
+	if err := json.Unmarshal([]byte(e.Text), &doc); err != nil {
 		t.Fatal(err)
 	}
 	var names []string

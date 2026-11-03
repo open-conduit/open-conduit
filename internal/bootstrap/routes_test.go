@@ -10,7 +10,6 @@ import (
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/extensions/bitbucket"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/introspection"
@@ -21,6 +20,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -58,7 +58,7 @@ func (familyIngress) Reconcile(context.Context, extension.Scan) (extension.Snaps
 
 // A trace refuses what acceptance would from the Event's source: any type
 // from an operator; a registered source in its own scope; else a type an
-// in-process extension owns; nothing from a source nobody knows.
+// package owns; nothing from a source nobody knows.
 func TestAdmitTrace(t *testing.T) {
 	ctx := context.Background()
 	clock := func() time.Time { return time.Date(2026, 10, 28, 9, 0, 0, 0, time.UTC) }
@@ -79,7 +79,7 @@ func TestAdmitTrace(t *testing.T) {
 	if err = ingress.Register(ctx, "chat/eng", extension.Source{Namespace: "chat/eng", ScopeID: "eng"}, familyIngress{[]string{"chat.message"}}, time.Minute); err != nil {
 		t.Fatal(err)
 	}
-	d := &daemon{ingress: ingress, inproc: []inproc.Extension{introspection.New()}}
+	d := &daemon{ingress: ingress, packages: []*installed{{m: protocol.Manifest{Name: introspection.Type}}}}
 	for name, c := range map[string]struct {
 		scope domain.ID
 		e     domain.Event
@@ -136,7 +136,6 @@ func TestEveryBuiltInSampleTraces(t *testing.T) {
 		t.Fatal(err)
 	}
 	all := handlers()
-	inprocHandlers(all, firstParty())
 	store, err := sqlite.Open(ctx, filepath.Join(t.TempDir(), "conduit.db"))
 	if err != nil {
 		t.Fatal(err)
@@ -148,7 +147,7 @@ func TestEveryBuiltInSampleTraces(t *testing.T) {
 	}
 	// The host's own sources need no ingress, so their samples are admitted
 	// here too; a registered source's are TestAdmitTrace's.
-	d := &daemon{ingress: ingress, inproc: firstParty()}
+	d := &daemon{ingress: ingress}
 	offered := map[string]int{}
 	for _, scope := range snap.DomainScopes() {
 		for _, route := range scope.Routes {

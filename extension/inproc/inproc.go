@@ -1,8 +1,12 @@
-// Package inproc is the in-process extension contract (issue #66): what an
-// extension running inside the daemon offers the host, and the host
-// services it is given. Bootstrap composes every in-process extension
-// through it by iterating one list, never by naming an extension, so a
-// first-party extension reaches nothing an installed package could not.
+// Package inproc is a way to write an extension as a Go library: the
+// surfaces it offers and the host services it is given, as Go interfaces.
+// It is not how the host composes extensions. An extension written on it
+// runs as a package, served over the protocol by protocol/sdk/inprocsdk,
+// which declares its manifest from these surfaces and gives it the host
+// services through the package's own connection, so it reaches nothing an
+// installed package could not. Nothing registers an extension in process:
+// the host composes only packages, and `make boundaries` lets only an
+// extension and the SDKs that serve it import this package.
 //
 // Every surface but Name is optional: an extension implements the
 // interfaces of the surfaces it has. Types, Operations, Routes, WorkKinds
@@ -456,10 +460,8 @@ type SegmentEnder interface {
 	SegmentEnded(ctx context.Context, execution domain.ID)
 }
 
-// PoolJobs is the capacity pool of job executors: settings.job_concurrency
-// bounds them, and settings.concurrency every other executor (agent turns),
-// so neither starves the other.
-const PoolJobs = "jobs"
+// PoolJobs is the capacity pool of job executors (protocol.PoolJobs).
+const PoolJobs = protocol.PoolJobs
 
 // Executor is an executor an extension registers, by name: the executor
 // and the capacity pool it counts against ("" for agent turns, PoolJobs for

@@ -83,11 +83,7 @@ Some couplings exist only as bootstrap glue between first-party packages. They h
 
 Bitbucket used to read the tracker's reopen generations through an in-process registry the tracker kit kept; it now reads them from the tracker's Work in its scope, through public state reads (#428).
 
-This stays in-process, which the design allows: first-party extensions run in-process behind the public interfaces. They also decide which first-party integrations can run as a subprocess package without change.
-
-In-process extensions also hold the whole `storage.Store` and the daemon's clock and dry-run flag. A subprocess gets only its KV namespaces, scoped reads, its own clock, and `dry_run` in `configure`.
-
-The host's telemetry events, setup probes and config host used to be in-process only too. They now cross the boundary behind [permissions](#permissions).
+Every extension, first-party or not, now runs as a package, so none holds the whole `storage.Store` or the daemon's clock: each gets only its KV namespaces, scoped reads, its own clock, and `dry_run` in `configure`. The host's telemetry events, setup probes and config host, once in-process only, cross the boundary behind [permissions](#permissions).
 
 ## Transport comparison
 
@@ -363,7 +359,7 @@ Every config type a package declares (a connection, an extension type, a route h
   {"name": "token", "help": "an API token", "required": true, "secret": true}]}]
 ```
 
-These manifest fields carry what the in-process contract gives a first-party extension:
+These manifest fields carry what [`extension/inproc`](../extensions/#subprocess-extensions) gives an extension written as a Go library, and `inprocsdk` declares each from the surface it names:
 
 - **`entry_gated`** (`inproc.EntryGated`): the package's operations join a generation's toolbelt only when an enabled scope has one of its entries. Removing the last entry removes them, and a binding that still grants them keeps running, with its calls undeclared.
 - **`routes[].binding`** (`inproc.ConfigType.Binding`): the handler checks the binding each of its routes binds. Config validation calls `validate` with kind `binding`, the handler as `type` and the binding as `binding`: its `executor`, `operations`, executor `config` and `grants`. Unlike every other kind, a refusal's message is shown: it is the reason in the `binding_refused` diagnostic at the route's `binding`, capped at 300 bytes, so it names the rule and never echoes a config value. A call that fails refuses the binding too.
@@ -376,11 +372,11 @@ These manifest fields carry what the in-process contract gives a first-party ext
 - **`toolsets`** (`inproc.Toolsetter`): named sets of the package's operations for its agents' roles, each operation with the version it joined in (`{"name": "notes.author", "operations": [{"name": "notes.read"}, {"name": "notes.write", "since": 2}]}`). Config grants one as `@notes.author` ([toolsets](../toolbelt-management/#toolsets)). The Go SDK declares one with `Extension.Toolset`.
 - **`executors[].playbook`** (`extension.PlaybookNamer`, which Claude Code and Codex implement): validate with kind `executor_playbook`, the executor as `type` and the binding's executor `config`, answered `{playbook}`: the playbook that config starts turns on, empty for none. Config check compares what the playbook declares it uses with what the binding is granted.
 - **A run's `host_env`** (`extension.ExecutionContext.HostEnv`) is the daemon's values of the variables the binding's own `pass_env` names, those set. The operator names them in the configuration and the host checks them there, refusing `OS_*`, `OPEN_CONDUIT_*` and any variable an `env:` secret reference names (`pass_env_reserved`, `pass_env_secret`). A package never chooses which of the daemon's variables it sees, and its own sanitized environment never needs widening.
-- **`executors[].pool`** (`inproc.Executor.Pool`): the capacity pool the executor's runs count against. Empty is agent turns (`settings.concurrency`); `jobs` is jobs (`settings.job_concurrency`). Any other value is refused, by `Manifest.Validate` for a package and at registration for an in-process extension, so no executor runs unbounded.
+- **`executors[].pool`** (`inproc.Executor.Pool`): the capacity pool the executor's runs count against. Empty is agent turns (`settings.concurrency`); `jobs` is jobs (`settings.job_concurrency`). Any other value is refused, by `Manifest.Validate` at discovery and again when the host registers the executor, so no executor runs unbounded.
 - **Executor config warnings** (`extension.ConfigWarner`, which Claude Code implements in process): the answer to `validate` with kind `executor` may carry `{warnings}`, fixed sentences about a valid binding config that should change, such as a deprecated or ignored setting. `config check` shows each one, prefixed with the scope and binding, without failing. A binding a scope inherits unchanged warns once. At most eight warnings are shown, each on one line and capped at 300 characters. A failed call or an older package gives none. No manifest declaration is needed. The Go SDK answers from an executor that implements `ConfigWarner`, and the runner example warns about its ignored `retries`.
 - **`setup.first_run`** (`extension.SetupInfo.FirstRun`): this setup, run with no flags on a host that prompts for nothing, stores nothing and runs nothing, builds the configuration a daemon runs on when it has no config file and no stored generation ([setup sessions](../setup-sessions/#a-fresh-install)).
 
-No first-party extension or executor is registered in-process any more: each runs only as a package ([packaging](../extension-packaging/)). A third-party extension's config entries are validated through `validate`.
+No extension or executor is registered in process: each runs only as a package ([packaging](../extension-packaging/)), and bootstrap composes every one from its manifest and its process. A package's config entries are validated through `validate`.
 
 ## Public executor controls
 
@@ -409,7 +405,7 @@ Provisional, like the rest of the protocol. Code:
 - **Install location.** `<config dir>/extensions/<name>/open-conduit-extension.json`, beside `config.json` (`extproc.Dir`). The directory must be named after the manifest's name. Install, update, rollback and removal are `open-conduit extension` commands ([packaging](../extension-packaging/#install-update-rollback-and-removal)).
 - **Bundled packages.** Packages can also ship with the binary, in `extensions/` beside the real executable (links resolved, as the `os` toolbelt is found). They are discovered after the installed ones. The release archive bundles `setup`, `codex`, `posthog`, `human`, `observe`, `linear`, `jira`, `bitbucket`, `schedule`, `introspection`, `slack`, `github` and `shell` this way ([packaging](../extension-packaging/#bundled-with-the-release)); all but `setup` are served by `open-conduit extension-run NAME`. An installed package of the same name replaces the bundled one, even when the installed one is refused, so a release that needs a newer Open Conduit is reported rather than silently swapped for the bundled one. Removing the installed copy brings the bundled one back. `extension list` shows bundled packages, marked as such. At start the daemon launches every discovered package at once and waits for the slowest handshake, so adding bundled packages doesn't add their start times together (and the adoption of attempts a graceful restart released isn't held up by them); they join the daemon in discovery order.
 - **Discovery.** `extproc.Discover` parses every manifest strictly and offline. Invalid or misnamed manifests are reported and skipped. A missing root means no extensions.
-- **Conflicts.** `extproc.CheckConflicts` checks a whole set atomically against names already taken in-process, and against each other. The checked kinds are the name, config types, handlers, executors, resource types, operations, families, work kinds, recurrences and schemas. Either every extension is admitted or none is.
+- **Conflicts.** `extproc.CheckConflicts` checks a whole set atomically against the names the host itself takes (its own route handlers and reserved names), and against each other. The checked kinds are the name, config types, handlers, executors, resource types, operations, families, work kinds, recurrences and schemas. Either every extension is admitted or none is.
 - **Start.**
   - The command runs in the extension directory, in its own process group.
   - The environment is the B05 baseline (`PATH`, `HOME`, `USER`, `LOGNAME`, `SHELL`, `LANG`, `LC_*`, `TZ`, `TMPDIR`, `TERM`), plus the daemon variables the operator grants that package by name (`settings.extensions.<name>.pass_env`, [process environment](../extension-packaging/#process-environment)), those set. No credential or Open Conduit setting reaches it. A host built with the race detector, which only tests build, also passes `GORACE`, so a test's race settings, such as the short exit wait the test harnesses set, reach the race-built packages it starts.
@@ -426,7 +422,7 @@ Provisional, like the rest of the protocol. Code:
   - `Process.Call` waits, bounded by its context, for a running process, but never retries a call. A crash mid-call is `protocol.ErrTransport`, and the caller applies the crash table above.
   - `Close` sends `shutdown`, closes stdin, then sends SIGTERM and SIGKILL to the group.
   - The SDK exits on stdin EOF, so a host crash never orphans an extension.
-- **Adapters.** `extproc.Remote` presents a process through the same interfaces in-process extensions implement:
+- **Adapters.** `extproc.Remote` presents a process through the public contracts:
   - `Ingress(SourceDecl)` is an `extension.Ingress`;
   - `RouteHandler`;
   - `Registration()` is an `extension.Registration` for the toolbelt, with handler, wait and emit operations, `emit.commit`, `dependency.filter` and, for `provides.operation_gate` with the `operation.gate` permission, a gate over `operation.gate`, asked only about calls in the package's configured scopes (`{operation, owner, authority, input}`, answered with `{wait?}`: no wait lets the call through, and an error refuses it). A gate that times out, crashes or fails with anything but an operation error refuses with `gate_failed`, so the host fails closed. The SDK's `Extension.OperationGate` declares and serves one; the TypeScript SDK has no gates yet, as it has no wait plans;
@@ -436,7 +432,7 @@ Provisional, like the rest of the protocol. Code:
   - `Render`, `Task` and `Check`;
   - `BindingCheck(handler)`, a handler's binding check.
 
-  Core registers these exactly as it registers in-process extensions.
+  Bootstrap composes every package from these (`internal/bootstrap/compose.go`), naming none. The config host behind `config.*` is `extproc.ConfigHost`, which speaks the protocol's own types.
 - **In-transaction calls.** `Process.CallInTx` enforces the 250 ms deadline, does not wait for a restart, and refuses every extension-to-host callback with `reentrant_call` while one is outstanding. Two outcomes cannot fail a transaction:
   - The `bool` dependency filter counts a failure as "no match". The event is not lost; a later matching event still wakes the wait.
   - Work-kind trigger selection falls back to the runtime's documented first input.

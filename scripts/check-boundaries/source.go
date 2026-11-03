@@ -15,18 +15,23 @@ import (
 )
 
 // sourceViolations checks the source rules under the module root: the
-// core's vocabulary (vocabularyViolations) and composition's extension and
-// executor imports (compositionViolations).
+// core's vocabulary (vocabularyViolations), composition's extension and
+// executor imports (compositionViolations) and who uses the in-process
+// authoring contract (inprocViolations).
 func sourceViolations(root string) ([]string, error) {
 	vocabulary, err := vocabularyViolations(root, vocabularyExceptions, verbIdentifiers)
 	if err != nil {
 		return nil, err
 	}
-	composition, err := compositionViolations(root, compositionExceptions)
+	composition, err := compositionViolations(root)
 	if err != nil {
 		return nil, err
 	}
-	return append(vocabulary, composition...), nil
+	authoring, err := inprocViolations(root)
+	if err != nil {
+		return nil, err
+	}
+	return append(append(vocabulary, composition...), authoring...), nil
 }
 
 // coreDirs are the core packages' directories (see core), whose production
@@ -274,56 +279,29 @@ func contains(list []string, s string) bool {
 	return false
 }
 
-// wiringFiles are the composition files that may import any first-party
-// extension or executor: the in-process registrations (firstParty). The
-// adapters catalogue reads each package's manifest instead (#494).
-var wiringFiles = map[string]bool{"inproc.go": true}
-
-// compositionExceptions are the other internal/bootstrap files that import
-// a first-party extension or executor today, and what they import: bespoke
-// per-integration wiring that predates the public contracts (#357 moves it
-// onto them). The list may only shrink: a file may not import anything new,
-// and an entry nothing needs any more fails the check, so remove it with
-// the import.
-var compositionExceptions = map[string][]string{}
-
-// compositionViolations checks internal/bootstrap's production files import
-// a first-party extension or executor only from wiringFiles, or as the
-// exceptions allow, each of which must still be needed.
-func compositionViolations(root string, exceptions map[string][]string) ([]string, error) {
+// compositionViolations checks no internal/bootstrap production file
+// imports an extension or executor: every one runs as a package, bundled or
+// installed, and bootstrap composes only packages, through the public
+// contracts and the protocol (#477).
+func compositionViolations(root string) ([]string, error) {
 	dir := filepath.Join(root, "internal", "bootstrap")
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return nil, err
 	}
-	used := map[string]bool{}
 	var errors []string
 	for _, e := range entries {
 		name := e.Name()
 		if e.IsDir() || !strings.HasSuffix(name, ".go") || strings.HasSuffix(name, "_test.go") {
 			continue
 		}
-		file, err := parser.ParseFile(token.NewFileSet(), filepath.Join(dir, name), nil, parser.ImportsOnly)
+		imports, err := fileImports(filepath.Join(dir, name))
 		if err != nil {
 			return nil, err
 		}
-		for _, spec := range file.Imports {
-			path, _ := strconv.Unquote(spec.Path.Value)
-			dependency := strings.TrimPrefix(path, module)
-			if dependency == path || !under(dependency, "extensions") || wiringFiles[name] {
-				continue
-			}
-			if contains(exceptions[name], dependency) {
-				used[name+"\x00"+dependency] = true
-				continue
-			}
-			errors = append(errors, fmt.Sprintf("internal/bootstrap/%s: imports %s outside the wiring files (%s); register it through the public contracts instead", name, dependency, strings.Join(sortedKeys(wiringFiles), ", ")))
-		}
-	}
-	for file, deps := range exceptions {
-		for _, d := range deps {
-			if !used[file+"\x00"+d] {
-				errors = append(errors, fmt.Sprintf("internal/bootstrap/%s: no longer imports %s; remove it from compositionExceptions", file, d))
+		for _, dependency := range imports {
+			if under(dependency, "extensions") {
+				errors = append(errors, fmt.Sprintf("internal/bootstrap/%s: imports %s; compose the extension as a package (bundled in cmd/open-conduit/extension_run.go) instead", name, dependency))
 			}
 		}
 	}
@@ -331,11 +309,72 @@ func compositionViolations(root string, exceptions map[string][]string) ([]strin
 	return errors, nil
 }
 
-func sortedKeys(m map[string]bool) []string {
-	var out []string
-	for k := range m {
-		out = append(out, k)
+// inprocAuthors are where extension/inproc, the in-process authoring
+// contract, may be imported: an extension's own code, which implements it,
+// and the SDKs that serve it as a package (protocol/sdk/inprocsdk, and
+// protocol/sdk for its sentinel errors). integration's tests drive an
+// extension's library directly. Nothing else registers an extension in
+// process: the host composes only packages.
+var inprocAuthors = []string{"extensions", "protocol/sdk", "integration"}
+
+// inprocViolations checks every Go file in the module, tests included,
+// imports extension/inproc only from inprocAuthors.
+func inprocViolations(root string) ([]string, error) {
+	var errors []string
+	err := filepath.WalkDir(root, func(path string, e fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, err := filepath.Rel(root, path)
+		if err != nil {
+			return err
+		}
+		rel = filepath.ToSlash(rel)
+		if e.IsDir() {
+			if rel != "." && (strings.HasPrefix(e.Name(), ".") || e.Name() == "node_modules" || e.Name() == "testdata" || rel == "site") {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if !strings.HasSuffix(rel, ".go") || under(filepath.ToSlash(filepath.Dir(rel)), "extension/inproc") {
+			return nil
+		}
+		for _, owner := range inprocAuthors {
+			if under(rel, owner) {
+				return nil
+			}
+		}
+		imports, err := fileImports(path)
+		if err != nil {
+			return err
+		}
+		for _, dependency := range imports {
+			if dependency == "extension/inproc" {
+				errors = append(errors, fmt.Sprintf("%s: imports extension/inproc, which only an extension and the SDKs that serve it as a package use (%s); compose it as a package instead", rel, strings.Join(inprocAuthors, ", ")))
+			}
+		}
+		return nil
+	})
+	if err != nil {
+		return nil, err
 	}
-	sort.Strings(out)
-	return out
+	sort.Strings(errors)
+	return errors, nil
+}
+
+// fileImports are a Go file's imports of this module's packages, relative
+// to the module.
+func fileImports(path string) ([]string, error) {
+	file, err := parser.ParseFile(token.NewFileSet(), path, nil, parser.ImportsOnly)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, spec := range file.Imports {
+		p, _ := strconv.Unquote(spec.Path.Value)
+		if dependency := strings.TrimPrefix(p, module); dependency != p {
+			out = append(out, dependency)
+		}
+	}
+	return out, nil
 }

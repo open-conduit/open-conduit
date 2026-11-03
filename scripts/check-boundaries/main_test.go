@@ -402,8 +402,9 @@ var Reviewer = ` + "`slack`" + `
 }
 
 // TestCompositionImports is the negative control for the composition rule:
-// internal/bootstrap reaches a first-party extension or executor only from
-// the wiring files, or a listed exception, and the list can only shrink.
+// no internal/bootstrap production file imports an extension or executor,
+// the adapters catalogue and the old wiring file included; its tests and
+// other imports are not checked.
 func TestCompositionImports(t *testing.T) {
 	root := t.TempDir()
 	dir := filepath.Join(root, "internal", "bootstrap")
@@ -413,7 +414,6 @@ func TestCompositionImports(t *testing.T) {
 	for name, body := range map[string]string{
 		"adapters.go":     `import ( "` + module + `extensions/slack"; "` + module + `extensions/shell" )`,
 		"inproc.go":       `import "` + module + `extensions/human"`,
-		"slack.go":        `import ( "` + module + `extensions/slack"; "` + module + `extensions/github"; "` + module + `internal/runtime" )`,
 		"daemon.go":       `import "` + module + `domain"`,
 		"new.go":          `import x "` + module + `extensions/claudecode"`,
 		"github_test.go":  `import "` + module + `extensions/github"`,
@@ -427,22 +427,70 @@ func TestCompositionImports(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	failures, err := compositionViolations(root, map[string][]string{
-		"slack.go":       {"extensions/slack"},
-		"daemon.go":      {"extensions/shell"},
-		"playbook_fs.go": {"extensions/slack/playbooks"},
-	})
+	failures, err := compositionViolations(root)
 	if err != nil {
 		t.Fatal(err)
 	}
 	joined := strings.Join(failures, "\n")
 	for _, want := range []string{
-		"internal/bootstrap/slack.go: imports extensions/github outside the wiring files",
-		"internal/bootstrap/new.go: imports extensions/claudecode outside the wiring files",
-		"internal/bootstrap/daemon.go: no longer imports extensions/shell",
-		// The catalogue reads manifests (#494), so it is no wiring file.
-		"internal/bootstrap/adapters.go: imports extensions/slack outside the wiring files",
-		"internal/bootstrap/adapters.go: imports extensions/shell outside the wiring files",
+		"internal/bootstrap/adapters.go: imports extensions/slack;",
+		"internal/bootstrap/adapters.go: imports extensions/shell;",
+		"internal/bootstrap/inproc.go: imports extensions/human;",
+		"internal/bootstrap/new.go: imports extensions/claudecode;",
+		"internal/bootstrap/playbook_fs.go: imports extensions/slack/playbooks;",
+	} {
+		if !strings.Contains(joined, want) {
+			t.Errorf("missing %q in\n%s", want, joined)
+		}
+	}
+	if len(failures) != 5 {
+		t.Errorf("want exactly five failures, got\n%s", joined)
+	}
+}
+
+// TestInprocImports is the negative control for the authoring rule: only
+// an extension, the SDKs that serve it and integration's tests import
+// extension/inproc; the host, the CLI and the public contracts don't, in
+// production or in tests.
+func TestInprocImports(t *testing.T) {
+	root := t.TempDir()
+	inproc := `import "` + module + `extension/inproc"`
+	for path, body := range map[string]string{
+		"extension/inproc/inproc.go":         `import "` + module + `extension"`,
+		"extensions/human/extension.go":      inproc,
+		"extensions/human/extension_test.go": inproc,
+		"protocol/sdk/inprocsdk/bridge.go":   inproc,
+		"protocol/sdk/store.go":              inproc,
+		"integration/human_test.go":          inproc,
+		"internal/bootstrap/compose.go":      inproc,
+		"internal/bootstrap/compose_test.go": inproc,
+		"internal/extproc/service.go":        inproc,
+		"cmd/open-conduit/extension_run.go":  `import "` + module + `extensions/human/pkg"`,
+		"cmd/open-conduit/main.go":           inproc,
+		"extension/registration.go":          inproc,
+		"internal/runtime/scheduler.go":      `import "` + module + `extension"`,
+		".git/ignored.go":                    inproc,
+		"site/node_modules/x/ignored.go":     inproc,
+	} {
+		full := filepath.Join(root, filepath.FromSlash(path))
+		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(full, []byte("package x\n\n"+body+"\n"), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	failures, err := inprocViolations(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	joined := strings.Join(failures, "\n")
+	for _, want := range []string{
+		"internal/bootstrap/compose.go: imports extension/inproc",
+		"internal/bootstrap/compose_test.go: imports extension/inproc",
+		"internal/extproc/service.go: imports extension/inproc",
+		"cmd/open-conduit/main.go: imports extension/inproc",
+		"extension/registration.go: imports extension/inproc",
 	} {
 		if !strings.Contains(joined, want) {
 			t.Errorf("missing %q in\n%s", want, joined)

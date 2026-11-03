@@ -9,9 +9,9 @@ import (
 )
 
 // The host's telemetry events log (logs/introspection-telemetry.jsonl): one
-// JSON line per named telemetry event an extension captures through
-// inproc.Host.Capture, which every inproc.Sink (PostHog entries) receives
-// too. Whether an extension captures anything is its own config's choice.
+// JSON line per named telemetry event a package captures
+// (telemetry.capture), which every package with the telemetry.sink
+// permission (PostHog's) receives too. Whether an extension captures anything is its own config's choice.
 
 type telemetryLog struct {
 	mu   sync.Mutex

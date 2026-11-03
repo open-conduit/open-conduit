@@ -7,16 +7,16 @@ import (
 	"strings"
 
 	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
 // jobPool is the capacity pool of job executors (#13): settings.concurrency
 // bounds agent turns (and any executor not listed here) and
 // settings.job_concurrency bounds these, so neither can starve the other.
-const jobPool = inproc.PoolJobs
+const jobPool = protocol.PoolJobs
 
 // capacitySource is the Annotation source of a Work's capacity wait; WorkLabel
 // never names Work by it.

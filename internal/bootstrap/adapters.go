@@ -1,13 +1,13 @@
 package bootstrap
 
 import (
-	"github.com/open-conduit/open-conduit/internal/config"
-	"github.com/open-conduit/open-conduit/protocol"
 	"slices"
 	"sort"
 
+	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/protocol"
+
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/internal/cli"
 )
 
@@ -139,23 +139,15 @@ func tunnelAdapter() cli.Adapter {
 			f("tunnel_name", "cloudflared named tunnel"), f("tunnel_hostname", "its hostname"), f("public_url", "static")}}
 }
 
-// OperationDeclarations are the first-party extensions' operation
-// declarations by name: each one's summary and input, as the generated
-// operations reference renders them. They come from the in-process
-// extensions (inproc.Declarer) and the bundled packages' manifests.
+// OperationDeclarations are the bundled packages' operation declarations
+// by name: each one's summary and input, as the generated operations
+// reference renders them, from their manifests.
 func OperationDeclarations() map[string]extension.Operation {
 	out := map[string]extension.Operation{}
 	found, _ := discoverPackages("", "")
 	for _, f := range found {
 		for _, op := range f.Manifest.Provides.Operations {
 			out[op.Name] = extension.Operation{Name: op.Name, Summary: op.Summary, Input: op.Input, Guidance: op.Guidance}
-		}
-	}
-	for _, x := range firstParty() {
-		if d, ok := x.(inproc.Declarer); ok {
-			for _, op := range d.Declarations() {
-				out[op.Name] = op
-			}
 		}
 	}
 	return out
@@ -176,7 +168,7 @@ func BundledManifests() []protocol.Manifest {
 // bundledRegistry is the registry offline config check uses, with the
 // bundled packages' declarations (#428); it starts no package.
 func bundledRegistry() config.Registry {
-	reg := registry(offlineExecutors())
+	reg := registry(map[string]extension.Executor{})
 	offlineExternal(&reg, "", "", nil).close()
 	return reg
 }

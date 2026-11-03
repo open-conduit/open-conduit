@@ -13,17 +13,11 @@ import (
 )
 
 // setupProbes are the probes a setup session may run besides the setup
-// extension's own, by full name: each extension's and executor's
-// (extension.SetupProbes), each installed package's (provides.probes,
-// through probe.serve), and the host's own init and doctor probes, under
+// extension's own, by full name: each package's (provides.probes, through
+// probe.serve), and the host's own init and doctor probes, under
 // HostProbeOwner.
 func (d *daemon) setupProbes() map[string]extension.SetupProbe {
 	out := map[string]extension.SetupProbe{}
-	for owner, p := range probeOwners() {
-		for _, x := range p.SetupProbes() {
-			out[owner+"."+x.Name] = x
-		}
-	}
 	d.external.mu.Lock()
 	for _, p := range d.external.packages {
 		for _, x := range p.r.Probes() {
@@ -36,28 +30,10 @@ func (d *daemon) setupProbes() map[string]extension.SetupProbe {
 	return out
 }
 
-// probeOwners are the extensions and executors whose probes a setup
-// session may run, by the name that prefixes them: every first-party
-// extension's and executor's that offers probes (extension.SetupProbes).
-func probeOwners() map[string]extension.SetupProbes {
-	out := map[string]extension.SetupProbes{}
-	for _, x := range firstParty() {
-		if p, ok := x.(extension.SetupProbes); ok {
-			out[x.Name()] = p
-		}
-	}
-	return out
-}
-
-// hostProbeNames are the full names of setupProbes, offline: the host's,
-// the first-party extensions' and the bundled packages'.
+// hostProbeNames are the full names of setupProbes, offline: the host's
+// and the bundled packages'.
 func hostProbeNames() []string {
 	out := []string{HostProbeOwner + ".init", HostProbeOwner + ".doctor"}
-	for owner, p := range probeOwners() {
-		for _, x := range p.SetupProbes() {
-			out = append(out, owner+"."+x.Name)
-		}
-	}
 	found, _ := discoverPackages("", "")
 	for _, f := range found {
 		for _, x := range f.Manifest.Provides.Probes {
@@ -102,7 +78,7 @@ func (d *daemon) initProbe() extension.SetupProbe {
 			flags := strings.Fields(args["flags"])
 			var text []byte
 			if b, err := d.configHost().Base(ctx); err == nil {
-				text = b.Text
+				text = []byte(b.Text)
 			}
 			r, err := s.Setup(ctx, probeSetupHost{config: text, state: d.o.StateDir}, flags)
 			if err != nil {
