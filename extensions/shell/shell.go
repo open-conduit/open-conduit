@@ -300,8 +300,8 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest) (extensio
 	// The host's toolbelt directory, first on PATH, may be inside a
 	// directory the sandbox otherwise hides (the daemon keeps a stable link
 	// to `os` in its state directory); a container has its own `os`.
-	if r.Context.Container == nil && e.o.ToolbeltDir != "" {
-		needs.Read = append(needs.Read, e.o.ToolbeltDir)
+	if belt := e.toolbeltDir(r); r.Context.Container == nil && belt != "" {
+		needs.Read = append(needs.Read, belt)
 	}
 	if sock, ok := strings.CutPrefix(r.Context.ToolbeltEndpoint, "unix://"); ok && r.Context.ToolbeltToken != "" {
 		needs.Sockets = []string{sock}
@@ -356,6 +356,18 @@ func (e *Executor) register(rn *run) {
 // environment applies the B05 order: sanitized baseline → resource-provider
 // layer → the extensions' run layer → binding config.env → selected secrets → trusted toolbelt and
 // execution variables, which no earlier layer can override.
+// toolbeltDir is the directory holding the `os` a run reaches its toolbelt
+// through: the one the host names for the run (ExecutionContext.ToolbeltDir,
+// the stable link in its state directory), else the executor's own. Out of
+// process the host's is the one that matters, since the executor's process
+// need not sit beside it.
+func (e *Executor) toolbeltDir(r extension.RunRequest) string {
+	if r.Context.ToolbeltDir != "" {
+		return r.Context.ToolbeltDir
+	}
+	return e.o.ToolbeltDir
+}
+
 func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, layer map[string]string) ([]string, error) {
 	vars := map[string]string{}
 	for _, kv := range e.o.Environ() {
@@ -382,8 +394,8 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, dir string, l
 		}
 		vars[name] = value
 	}
-	if e.o.ToolbeltDir != "" {
-		vars["PATH"] = e.o.ToolbeltDir + string(os.PathListSeparator) + vars["PATH"]
+	if belt := e.toolbeltDir(r); belt != "" {
+		vars["PATH"] = belt + string(os.PathListSeparator) + vars["PATH"]
 	}
 	if r.Context.ToolbeltToken != "" && r.Context.ToolbeltEndpoint != "" {
 		vars["OS_ENDPOINT"] = r.Context.ToolbeltEndpoint

@@ -63,6 +63,7 @@ var parity = map[string][]string{
 	"Host.Report":            {"method:check.run"},
 	"Host.Nudge":             {"method:event.accept", "method:timer.arm"},
 	"Host.StateDir":          {"method:initialize"},
+	"Host.ExecutorDir":       {"method:initialize"},
 	"Host.DryRun":            {"method:configure"},
 	"Host.AcceptInTx":        {"method:event.accept"},
 	"Host.AcceptDerivedInTx": {"method:event.accept"},

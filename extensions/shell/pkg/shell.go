@@ -1,154 +1,46 @@
-// Package shellext packages the first-party shell executor (extensions/shell,
-// unchanged) as an installable subprocess extension (07-03): detached
-// process groups with file-backed output, recovery metadata before launch,
-// adoption across restarts, interrupt, inject through the inbox, verified
-// stop, forget and artifacts, served over protocol version 1 through
-// protocol/sdk. With the Slack package it is the second, materially
-// different first-party workload round-tripped through the subprocess
-// boundary. The daemon keeps registering the shell executor in-process, so
-// this package cannot be installed beside it (the names conflict).
-//
-// What changes across the boundary: artifacts are written through
-// artifact.* (sdk.Artifacts), recovery metadata through
-// execution.persist_recovery, the workspace through resource.*, and the
-// executor's state lives in the extension's state directory. Its detached
-// processes survive the extension process exactly as they survive the
-// daemon, and a restarted extension adopts them through executor.recover.
+// Package shellext serves the shell executor (extensions/shell, unchanged)
+// as a package over protocol version 1, through protocol/sdk/inprocsdk
+// (#428): the shell executor, with interrupt, inject, stop and forget, in
+// the jobs pool. open-conduit serves it as `open-conduit extension-run
+// shell`, and the release bundles it.
 package shellext
 
 import (
-	"context"
 	"encoding/json"
-	"errors"
-	"io"
-	"path/filepath"
-	"sync"
-	"sync/atomic"
+	"fmt"
+	"os"
 
-	"github.com/open-conduit/open-conduit/domain"
-	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extensions/shell"
 	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/protocol/sdk"
-	"github.com/open-conduit/open-conduit/storage"
+	"github.com/open-conduit/open-conduit/protocol/sdk/inprocsdk"
 )
 
-// Name is the package's registration name: the first-party executor name.
-const Name = "shell"
+// Name is the package's registration name: the executor's.
+const Name = shell.Name
 
 // Version is this package build's own version.
 const Version = "0.1.0"
 
-// Manifest is the package manifest: the in-process executor's capabilities
-// (resume off, as the daemon registers it), its stop and forget controls,
-// and its capacity pool (jobs, as the daemon registers it).
+// base is what the bridge cannot read from the extension's surfaces: the
+// executor's own config schema.
+func base() protocol.Manifest {
+	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "Shell",
+		Summary:  "Runs a binding's shell command as a Work's execution, with the os toolbelt CLI on its PATH.",
+		Command:  protocol.HostRunCommand(Name),
+		Provides: protocol.Provides{Schemas: []protocol.SchemaDecl{{Name: "shell.config", Versions: []int{1}}}}}
+}
+
+// New returns the bridge serving a new shell executor.
+func New() (*inprocsdk.Bridge, error) { return inprocsdk.New(shell.NewExtension(), base()) }
+
+// Manifest is the package manifest.
 func Manifest() protocol.Manifest {
-	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version,
-		Summary: "The first-party shell executor as a subprocess package.",
-		Command: protocol.HostRunCommand(Name),
-		Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: Name,
-			Capabilities: protocol.Capabilities{Interrupt: true, Inject: true, Workspace: true, Toolbelt: extension.ToolbeltCLI},
-			Controls:     protocol.Controls{Stop: true, Forget: true}, Pool: "jobs"}}}}
-}
-
-// executor creates the shell executor on first use, once the state
-// directory (initialize) and the host (configure) are known.
-type executor struct {
-	stateDir func() string
-	host     *atomic.Pointer[sdk.Host]
-	once     sync.Once
-	e        *shell.Executor
-	err      error
-}
-
-func (x *executor) get() (*shell.Executor, error) {
-	x.once.Do(func() {
-		dir := x.stateDir()
-		if dir == "" || x.host.Load() == nil {
-			x.err = errors.New("shell extension: not initialized")
-			return
-		}
-		x.e, x.err = shell.New(shell.Options{StateDir: filepath.Join(dir, "shell"), Artifacts: hostArtifacts{x.host}})
-	})
-	return x.e, x.err
-}
-
-// hostArtifacts is sdk.Artifacts over the connection's host.
-type hostArtifacts struct{ host *atomic.Pointer[sdk.Host] }
-
-func (a hostArtifacts) Create(ctx context.Context, media string) (storage.ArtifactWriter, error) {
-	return sdk.NewArtifacts(a.host.Load()).Create(ctx, media)
-}
-func (a hostArtifacts) Open(ctx context.Context, ref storage.ArtifactRef) (io.ReadCloser, error) {
-	return sdk.NewArtifacts(a.host.Load()).Open(ctx, ref)
-}
-func (a hostArtifacts) Delete(ctx context.Context, ref storage.ArtifactRef) error {
-	return sdk.NewArtifacts(a.host.Load()).Delete(ctx, ref)
-}
-
-func (x *executor) Capabilities() domain.Capabilities {
-	return domain.Capabilities{Interrupt: true, Inject: true, Toolbelt: extension.ToolbeltCLI, Workspace: true}
-}
-func (x *executor) Run(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
-	e, err := x.get()
+	b, err := New()
 	if err != nil {
-		return nil, err
+		panic(err)
 	}
-	return e.Run(ctx, r)
-}
-func (x *executor) Recover(ctx context.Context, r extension.RunRequest, state domain.Payload) (extension.RunHandle, error) {
-	e, err := x.get()
-	if err != nil {
-		return nil, err
-	}
-	return e.Recover(ctx, r, state)
-}
-func (x *executor) Interrupt(ctx context.Context, id domain.ID) error {
-	e, err := x.get()
-	if err != nil {
-		return err
-	}
-	return e.Interrupt(ctx, id)
-}
-func (x *executor) Inject(ctx context.Context, id domain.ID, ev domain.Event) error {
-	e, err := x.get()
-	if err != nil {
-		return err
-	}
-	return e.Inject(ctx, id, ev)
-}
-func (x *executor) Stop(ctx context.Context, id domain.ID, epoch uint64) error {
-	e, err := x.get()
-	if err != nil {
-		return err
-	}
-	return e.Stop(ctx, id, epoch)
-}
-func (x *executor) Forget(ctx context.Context, id domain.ID) error {
-	e, err := x.get()
-	if err != nil {
-		return err
-	}
-	return e.Forget(ctx, id)
-}
-
-// Build returns the served extension. stateDir returns the private state
-// directory the host gave at initialize.
-func Build(stateDir func() string) *sdk.Extension {
-	host := &atomic.Pointer[sdk.Host]{}
-	x := &executor{stateDir: stateDir, host: host}
-	return &sdk.Extension{Manifest: Manifest(),
-		Configure: func(_ context.Context, h *sdk.Host, _ protocol.ConfigureParams) (protocol.ConfigureResult, error) {
-			host.Store(h)
-			return protocol.ConfigureResult{}, nil
-		},
-		Validate: func(_ context.Context, p protocol.ValidateParams) error {
-			if p.Kind != protocol.ValidateExecutor {
-				return nil
-			}
-			return (&shell.Executor{}).ValidateConfig(p.Config, p.SecretNames)
-		},
-		Executors: map[string]extension.Executor{Name: x}}
+	return b.Extension().Manifest
 }
 
 // Certification is the package's certification.json: a static fixture.
@@ -164,10 +56,18 @@ func Certification() protocol.CertificationFile {
 	}}
 }
 
-var _ interface {
-	extension.Executor
-	extension.InterruptExecutor
-	extension.InjectExecutor
-	extension.StopExecutor
-	extension.ForgetExecutor
-} = (*executor)(nil)
+// Main serves the package over protocol version 1 on stdin and stdout, as
+// `open-conduit extension-run shell` does. Its subcommands package-manifest
+// and package-certification print the package files.
+func Main(args []string) int {
+	b, err := New()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		return 1
+	}
+	if sdk.PackageCommand(args, b.Extension().Manifest, Certification(), os.Stdout) {
+		return 0
+	}
+	_ = b.Serve()
+	return 0
+}

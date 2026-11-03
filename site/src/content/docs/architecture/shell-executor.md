@@ -155,3 +155,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - `extension.StopExecutor` became a public optional interface in 07-01.
 - Issue #164 added the sandbox wrap ([B09](../sandboxes/)).
 - Issue #179 ran it in containers.
+- Issue #428 moved it out of process. It runs as a package bundled with the release (`extensions/shell/pkg`, `open-conduit extension-run shell`), the executor itself served through `inprocsdk` in the jobs pool, replacing the hand-written package that mirrored it. A run puts the host's toolbelt directory for it (`ExecutionContext.ToolbeltDir`) first on its PATH, since the executor's process need not sit beside the host's `os`.

@@ -220,7 +220,7 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 			_, forget := x.(extension.ForgetExecutor)
 			_, attach := x.(extension.AttachExecutor)
 			p.Executors = append(p.Executors, protocol.ExecutorDecl{Name: n, Pool: execs[n].Pool,
-				Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt},
+				Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container},
 				Controls:     protocol.Controls{Stop: stop, Forget: forget, Attach: attach}})
 		}
 	}
@@ -565,12 +565,8 @@ func (b *Bridge) start(ctx context.Context, h *sdk.Host) error {
 // host is the inproc.Host the extension starts with, over the host's
 // methods.
 func (b *Bridge) host(h *sdk.Host) inproc.Host {
-	state := ""
-	b.mu.Lock()
-	if b.srv != nil {
-		state = b.srv.StateDir()
-	}
-	b.mu.Unlock()
+	// The directories come from the Host serving the call, not b.srv: the
+	// server serves initialize and configure before Attach records it.
 	host := inproc.Host{
 		Store: sdk.NewStore(h),
 		Now:   time.Now,
@@ -586,16 +582,17 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 				slog.New(slog.NewJSONHandler(os.Stderr, nil)).Warn("extension report", "extension", b.x.Name(), "code", code)
 			}
 		},
-		Nudge:     func() {},
-		StateDir:  state,
-		DryRun:    b.isDryRun(),
-		Artifacts: sdk.NewArtifacts(h),
+		Nudge:       func() {},
+		StateDir:    h.StateDir(),
+		ExecutorDir: h.ExecutorDir,
+		DryRun:      b.isDryRun(),
+		Artifacts:   sdk.NewArtifacts(h),
 		Render: func(ctx context.Context, e domain.Event) (string, bool) {
 			text, ok, err := h.RenderOwned(ctx, e)
 			return text, ok && err == nil
 		},
 		OpenLog: func(name string) (io.WriteCloser, error) {
-			dir := filepath.Join(state, "logs")
+			dir := filepath.Join(h.StateDir(), "logs")
 			if err := os.MkdirAll(dir, 0o700); err != nil {
 				return nil, err
 			}

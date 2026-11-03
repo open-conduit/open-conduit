@@ -127,11 +127,15 @@ func cachedBinaries() (string, error) {
 	if err != nil {
 		return "", fmt.Errorf("extensiontest: %w", err)
 	}
-	return cacheEntry(root, "bin-"+daemonKey[:16]+osKey[:16], buildBinaries)
+	// "bundled-" marks an entry with the bundled packages laid out beside
+	// the binaries (#428), so an older entry without them isn't reused.
+	return cacheEntry(root, "bin-bundled-"+daemonKey[:16]+osKey[:16], buildBinaries)
 }
 
 // buildBinaries builds open-conduit (with the race detector when the test
-// runs under it) and os into dir.
+// runs under it) and os into dir, and lays out the packages open-conduit
+// bundles beside it, as the release archive does (its shell executor among
+// them).
 func buildBinaries(dir string) error {
 	for _, name := range []string{"open-conduit", "os"} {
 		args := []string{"build", "-o", filepath.Join(dir, name)}
@@ -142,6 +146,10 @@ func buildBinaries(dir string) error {
 		if err != nil {
 			return fmt.Errorf("extensiontest: build %s: %v\n%s", name, err, out)
 		}
+	}
+	out, err := exec.Command(filepath.Join(dir, "open-conduit"), "extension-run", "--bundle", filepath.Join(dir, "extensions")).CombinedOutput()
+	if err != nil {
+		return fmt.Errorf("extensiontest: bundle packages: %v\n%s", err, out)
 	}
 	return nil
 }

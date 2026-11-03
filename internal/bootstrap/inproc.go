@@ -18,7 +18,6 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
 	"github.com/open-conduit/open-conduit/extensions/claudecode"
-	"github.com/open-conduit/open-conduit/extensions/shell"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/extproc"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -37,7 +36,7 @@ import (
 // firstParty is the list of first-party in-process extensions. Adding one
 // touches its own package and this list.
 func firstParty() []inproc.Extension {
-	return []inproc.Extension{shell.NewExtension(), claudecode.NewExtension()}
+	return []inproc.Extension{claudecode.NewExtension()}
 }
 
 // typeSets are an extension's own entry and connection types: what its
@@ -190,7 +189,8 @@ func (d *daemon) startInproc(ctx context.Context) error {
 			Nudge:    d.poke,
 			StateDir: d.o.StateDir, DryRun: d.o.DryRun,
 			Artifacts: d.artifacts, ToolbeltDir: d.o.ToolbeltDir, PlaybookDir: d.pluginDir(),
-			Render: func(ctx context.Context, e domain.Event) (string, bool) { return d.inprocRender(e) },
+			ExecutorDir: func(name string) string { return executorDir(d.o.StateDir, name) },
+			Render:      func(ctx context.Context, e domain.Event) (string, bool) { return d.inprocRender(e) },
 			OpenLog: func(name string) (io.WriteCloser, error) {
 				return openLog(filepath.Join(d.o.StateDir, "logs", name+".jsonl"))
 			},

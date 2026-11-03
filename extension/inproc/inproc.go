@@ -152,6 +152,12 @@ type Host struct {
 	// PlaybookDir the playbook plugin the host writes; each run's
 	// ExecutionContext carries them too.
 	ToolbeltDir, PlaybookDir string
+	// ExecutorDir is the state directory of one of the extension's
+	// executors, by name: the host's <state>/executors/<name>. An executor
+	// keeps its runs under <dir>/runs, where the host roots a sandboxed or
+	// contained run's directory, in process or out. Nil or empty: the
+	// executor uses StateDir/executors/<name>.
+	ExecutorDir func(name string) string
 	// Render renders an input Event for an agent's prompt through the
 	// extension that owns its family (Renderer); false leaves it to the
 	// caller's own generic rendering.

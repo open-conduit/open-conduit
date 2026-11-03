@@ -28,6 +28,10 @@ func TestDaemonStopsWhenItsInstallIsRemoved(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
+	// An install carries the packages its binary bundles beside it.
+	if err := bundleHostPackages(install); err != nil {
+		t.Fatal(err)
+	}
 	d.bin = filepath.Join(install, "open-conduit")
 	d.start("")
 	// As Homebrew does: the old version's directory is renamed aside.

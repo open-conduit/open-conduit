@@ -672,3 +672,17 @@ func TestSandboxReadsToolbelt(t *testing.T) {
 		t.Fatalf("container needs %+v, want no read of %s", container.needs, belt)
 	}
 }
+
+// TestRunToolbeltDirComesFirst: the host's toolbelt directory for the run
+// (ExecutionContext.ToolbeltDir) goes first on PATH, ahead of the
+// executor's own, since out of process the executor need not sit beside
+// the host's `os`.
+func TestRunToolbeltDirComesFirst(t *testing.T) {
+	art := &memoryArtifacts{data: map[string][]byte{}}
+	e := newExecutor(t, stateDir(t), art, "PATH=/usr/bin:/bin")
+	r, _ := request("exec-belt", 1, `{"command":"printf %s \"$PATH\" > \"$OS_OUTPUT_DIR/path.txt\""}`)
+	r.Context.ToolbeltDir = "/host/state/bin"
+	if got := art.content(data(t, run(t, e, r)).Outputs["path.txt"]); !strings.HasPrefix(got, "/host/state/bin"+string(os.PathListSeparator)) {
+		t.Fatalf("PATH %q does not start with the run's toolbelt directory", got)
+	}
+}

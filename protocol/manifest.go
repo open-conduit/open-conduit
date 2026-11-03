@@ -517,6 +517,12 @@ type Capabilities struct {
 	Resume    bool   `json:"resume,omitempty"`
 	Workspace bool   `json:"workspace,omitempty"`
 	Toolbelt  string `json:"toolbelt"`
+	// Sandbox and Container mark an executor that runs a binding's launch
+	// in its process sandbox or its container (domain.Capabilities), through
+	// the run's brokers: sandbox.plan and sandbox.adopt, container.launch
+	// and container.adopt.
+	Sandbox   bool `json:"sandbox,omitempty"`
+	Container bool `json:"container,omitempty"`
 }
 
 // Controls are optional executor methods that are not capabilities: stop
@@ -963,6 +969,8 @@ func (m Manifest) Enabled() []string {
 		set("executors.interrupt", x.Capabilities.Interrupt)
 		set("executors.inject", x.Capabilities.Inject)
 		set("executors.workspace", x.Capabilities.Workspace)
+		set("executors.sandbox", x.Capabilities.Sandbox)
+		set("executors.container", x.Capabilities.Container)
 		set("executors.stop", x.Controls.Stop)
 		set("executors.forget", x.Controls.Forget)
 		set("executors.attach", x.Controls.Attach)

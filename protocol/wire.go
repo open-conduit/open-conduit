@@ -321,7 +321,7 @@ func (w Wait) Domain() domain.Wait {
 // Domain returns the bind-time capability labels (Capabilities is the
 // manifest's executor capability declaration, which is also its wire shape).
 func (c Capabilities) Domain() domain.Capabilities {
-	return domain.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt}
+	return domain.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container}
 }
 
 type Binding struct {
@@ -698,11 +698,16 @@ func (c EmitCommit) Extension() extension.EmitCommit {
 // Executors.
 
 type ExecutionContext struct {
-	Config           Payload           `json:"config"`
-	Secrets          map[string]string `json:"secrets,omitempty"`
-	Resources        bool              `json:"resources,omitempty"`
-	ToolbeltEndpoint string            `json:"toolbelt_endpoint,omitempty"`
-	ToolbeltToken    string            `json:"toolbelt_token,omitempty"`
+	Config    Payload           `json:"config"`
+	Secrets   map[string]string `json:"secrets,omitempty"`
+	Resources bool              `json:"resources,omitempty"`
+	// Sandbox and Container say the run has a sandbox or container broker
+	// (extension.ExecutionContext): the executor reaches it through
+	// sandbox.* and container.* under the run's ID.
+	Sandbox          bool   `json:"sandbox,omitempty"`
+	Container        bool   `json:"container,omitempty"`
+	ToolbeltEndpoint string `json:"toolbelt_endpoint,omitempty"`
+	ToolbeltToken    string `json:"toolbelt_token,omitempty"`
 	// ToolbeltTokenFile is the host-kept token file (extension.ExecutionContext).
 	ToolbeltTokenFile string `json:"toolbelt_token_file,omitempty"`
 	// ToolbeltDir is the host's directory holding `os` (extension.ExecutionContext).
@@ -725,7 +730,7 @@ type RunRequest struct {
 }
 
 func FromRunRequest(r extension.RunRequest) RunRequest {
-	return RunRequest{Work: FromWork(r.Work), Execution: FromExecution(r.Execution), Trigger: FromEvent(r.Trigger), Inputs: FromEvents(r.Inputs), Context: ExecutionContext{Config: FromPayload(r.Context.Config), Secrets: r.Context.Secrets, Resources: r.Context.Resources != nil, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, ToolbeltDir: r.Context.ToolbeltDir, PlaybookDir: r.Context.PlaybookDir, Env: r.Context.Env}}
+	return RunRequest{Work: FromWork(r.Work), Execution: FromExecution(r.Execution), Trigger: FromEvent(r.Trigger), Inputs: FromEvents(r.Inputs), Context: ExecutionContext{Config: FromPayload(r.Context.Config), Secrets: r.Context.Secrets, Resources: r.Context.Resources != nil, Sandbox: r.Context.Sandbox != nil, Container: r.Context.Container != nil, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, ToolbeltDir: r.Context.ToolbeltDir, PlaybookDir: r.Context.PlaybookDir, Env: r.Context.Env}}
 }
 
 // Extension returns the request without callbacks; the receiving side

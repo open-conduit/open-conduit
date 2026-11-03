@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/open-conduit/open-conduit/client"
 	"github.com/open-conduit/open-conduit/conformance/reference"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -851,4 +852,59 @@ func TestSandboxClaudeCodeProcessControl(t *testing.T) {
 	if out, _ := exec.Command("pgrep", "-f", "sleep 300").Output(); len(strings.TrimSpace(string(out))) > 0 {
 		t.Fatalf("claude left processes running: %s", out)
 	}
+}
+
+// TestSandboxedShellPackageInDaemon runs a sandboxed shell binding through
+// the bundled shell package (#428): the package plans its launch through
+// sandbox.plan, the host's guard accepts the run directory under the
+// executor's state directory, and the run completes inside srt.
+func TestSandboxedShellPackageInDaemon(t *testing.T) {
+	if testing.Short() {
+		t.Skip("process drills")
+	}
+	bin := srtBinary(t)
+	t.Setenv("PATH", filepath.Dir(bin)+string(os.PathListSeparator)+os.Getenv("PATH"))
+	d := newDrill(t)
+	cfg := map[string]any{
+		"version": 1, "settings": map[string]any{}, "connections": []any{},
+		"scopes": []any{map[string]any{
+			"id": "drill", "name": "Drill",
+			"authorization": map[string]any{"connections": []any{}, "operations": []string{"read_context", "declare_outcome"}, "read_scopes": []any{}},
+			"bindings": []any{map[string]any{"name": "run", "executor": "shell", "requires": map[string]any{"toolbelt": "cli"}, "operations": []string{"read_context", "declare_outcome"}, "secret_names": []any{},
+				"config":  map[string]any{"command": `os outcome completed --summary sandboxed --schema core.turn.v1 --data '{"status":"done"}' --request-id done >/dev/null`},
+				"sandbox": map[string]any{"provider": "srt", "config": map[string]any{"sockets": []string{"{toolbelt}"}, "unix_sockets": "all"}}}},
+			"routes":      []any{map[string]any{"name": "incoming", "handler": "manual", "binding": "run", "active_policy": "queue", "config": map[string]any{}}},
+			"secret_refs": map[string]any{},
+		}},
+	}
+	raw, _ := json.Marshal(cfg)
+	if err := os.WriteFile(d.config, raw, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	d.start("")
+	if _, err := d.submit("drill.sandboxed"); err != nil {
+		t.Fatal(err)
+	}
+	// Wait for the first attempt to finish either way, so a refused or
+	// failed launch reports its outcome rather than a timeout (a failure is
+	// retried, so the Work itself may never settle).
+	var xs []client.Execution
+	d.until("the sandboxed attempt to finish", 60*time.Second, func() bool {
+		w, ok := d.work()
+		if !ok {
+			return false
+		}
+		xs = d.executions(w.ID)
+		return len(xs) > 0 && xs[0].Outcome != nil
+	})
+	if xs[0].Outcome.Kind != "completed" {
+		b, _ := json.MarshalIndent(xs[0], "", "  ")
+		var log strings.Builder
+		for _, a := range xs[0].Artifacts {
+			_ = d.c.ArtifactContent(context.Background(), a.ID, "", &log)
+		}
+		t.Fatalf("the sandboxed attempt did not complete:\n%s\nlog:\n%s", b, log.String())
+	}
+	d.waitState("completed")
+	d.settle()
 }

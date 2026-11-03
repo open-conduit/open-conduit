@@ -684,8 +684,12 @@ func (t currentTimers) Cancel(ctx context.Context, id domain.ID, expected domain
 
 func (d *daemon) extensionOptions(f extproc.Found, paths extproc.Paths) extproc.Options {
 	name := f.Manifest.Name
+	executors := map[string]string{}
+	for _, e := range f.Manifest.Provides.Executors {
+		executors[e.Name] = executorDir(d.o.StateDir, e.Name)
+	}
 	return extproc.Options{
-		StateDir: paths.State, LogDir: filepath.Dir(paths.Log),
+		StateDir: paths.State, LogDir: filepath.Dir(paths.Log), ExecutorDirs: executors,
 		Host:      protocol.HostInfo{Name: "open-conduit", Version: d.o.Version},
 		Configure: func() protocol.ConfigureParams { return d.extensionConfigure(f.Manifest) },
 		OnConfigured: func(res protocol.ConfigureResult) {
@@ -904,3 +908,9 @@ func (e extensionExporter) Export(ctx context.Context, records []observability.R
 	return errors.Join(errs...)
 }
 func (e extensionExporter) Shutdown(context.Context) error { return nil }
+
+// executorDir is an executor's state directory, <state>/executors/<name>:
+// the same whether it runs in process or in a package, so its runs live
+// under one root the host's sandbox and container guards know (RunRoot)
+// and survive a move between the two.
+func executorDir(state, name string) string { return filepath.Join(state, "executors", name) }

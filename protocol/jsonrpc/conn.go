@@ -74,6 +74,9 @@ type Options struct {
 	// OnProtocolError, when set, receives the reason a malformed stream
 	// closed the connection (for the side's own diagnostic log).
 	OnProtocolError func(error)
+	// OnUnauthored, when set, receives a handler's error that crosses as
+	// internal with no detail, so the side that failed can log why.
+	OnUnauthored func(method string, err error)
 }
 
 // Conn is one JSON-RPC peer.
@@ -259,6 +262,9 @@ func (c *Conn) serve(m message) {
 		}
 	} else {
 		reply.Error = encodeError(err, cancelled)
+		if reply.Error.Data != nil && reply.Error.Data.Code == protocol.CodeInternal && c.opts.OnUnauthored != nil {
+			c.opts.OnUnauthored(m.Method, err)
+		}
 	}
 	if werr := c.write(reply); werr != nil && reply.Error == nil {
 		// An oversized result is refused rather than closing the stream.

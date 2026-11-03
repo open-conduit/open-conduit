@@ -11,7 +11,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -84,54 +83,40 @@ func daemonBinary(t *testing.T) string {
 	return daemonBin
 }
 
-// bundledHostPackages are the first-party packages the release bundles that
-// open-conduit serves itself (`open-conduit extension-run NAME`, #428), as
-// scripts/bundle-packages.sh lists them (TestBundledHostPackagesMatchRelease).
-var bundledHostPackages = []string{"codex", "posthog", "human", "observe", "linear", "jira", "bitbucket", "schedule", "introspection", "slack", "github"}
-
-// bundleHostPackages lays out each of bundledHostPackages beside the
-// open-conduit in dir, as the release archive does: its manifest,
-// certification and playbooks, written by that binary, with no executable
-// of its own.
+// bundleHostPackages lays out the packages the open-conduit in dir
+// bundles beside it, as the release archive does
+// (`open-conduit extension-run --bundle`): each one's manifest,
+// certification and playbooks, with no executable of its own.
 func bundleHostPackages(dir string) error {
 	bin := filepath.Join(dir, "open-conduit")
-	for _, name := range bundledHostPackages {
-		pkg := filepath.Join(dir, "extensions", name)
-		if err := os.MkdirAll(pkg, 0o755); err != nil {
-			return err
-		}
-		for file, sub := range map[string]string{protocol.ManifestFile: "package-manifest", "certification.json": "package-certification"} {
-			out, err := exec.Command(bin, protocol.HostRun, name, sub).Output()
-			if err != nil {
-				return fmt.Errorf("%s %s: %w", name, sub, err)
-			}
-			if err := os.WriteFile(filepath.Join(pkg, file), out, 0o644); err != nil {
-				return err
-			}
-		}
-		if out, err := exec.Command(bin, protocol.HostRun, name, "package-playbooks", filepath.Join(pkg, "playbooks")).CombinedOutput(); err != nil {
-			return fmt.Errorf("%s package-playbooks: %w: %s", name, err, out)
-		}
+	if out, err := exec.Command(bin, protocol.HostRun, "--bundle", filepath.Join(dir, "extensions")).CombinedOutput(); err != nil {
+		return fmt.Errorf("extension-run --bundle: %w: %s", err, out)
 	}
 	return nil
 }
 
-// TestBundledHostPackagesMatchRelease keeps the drills' bundled packages
-// those the release bundles.
-func TestBundledHostPackagesMatchRelease(t *testing.T) {
+// The release bundles the packages the binary marks bundled, through the
+// same command the drills lay them out with, so the two can't drift.
+func TestReleaseBundlesThroughTheBinary(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "scripts", "bundle-packages.sh"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, line := range strings.Split(string(raw), "\n") {
-		if v, ok := strings.CutPrefix(strings.TrimSpace(line), "bundled="); ok {
-			if got := strings.Fields(strings.Trim(v, `"`)); !slices.Equal(got, bundledHostPackages) {
-				t.Fatalf("the release bundles %v, the drills %v", got, bundledHostPackages)
-			}
-			return
+	if !strings.Contains(string(raw), "extension-run --bundle") {
+		t.Fatal("scripts/bundle-packages.sh does not bundle through open-conduit extension-run --bundle")
+	}
+	dir := t.TempDir()
+	if out, err := exec.Command(daemonBinary(t), protocol.HostRun, "--bundle", dir).CombinedOutput(); err != nil {
+		t.Fatalf("--bundle: %v %s", err, out)
+	}
+	for _, name := range []string{"github", "shell", "slack", "schedule"} {
+		if _, err := os.Stat(filepath.Join(dir, name, protocol.ManifestFile)); err != nil {
+			t.Errorf("%s is not bundled: %v", name, err)
 		}
 	}
-	t.Fatal("scripts/bundle-packages.sh names no bundled packages")
+	if _, err := os.Stat(filepath.Join(dir, "sentry")); !os.IsNotExist(err) {
+		t.Error("a package the release doesn't bundle was laid out")
+	}
 }
 
 const drillLease = 2 * time.Second
@@ -218,6 +203,14 @@ func newDrill(t *testing.T) *drill {
 		}
 		if t.Failed() {
 			t.Logf("daemon log:\n%s", out)
+			// Each package logs to its own file; a refused configure or a
+			// failed launch is explained there, not in the daemon log.
+			logs, _ := filepath.Glob(filepath.Join(d.state, "logs", "extensions", "*.log"))
+			for _, l := range logs {
+				if b, _ := os.ReadFile(l); len(bytes.TrimSpace(b)) > 0 {
+					t.Logf("%s:\n%s", filepath.Base(l), b)
+				}
+			}
 		}
 	})
 	return d

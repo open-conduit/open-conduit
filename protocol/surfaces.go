@@ -712,3 +712,83 @@ type SetupCommandParams struct {
 	Name string   `json:"name"`
 	Args []string `json:"args,omitempty"`
 }
+
+// Sandbox and container brokers (#428): an executor package launches a
+// run in its binding's sandbox or container through the host, which holds
+// the provider bound to the attempt. Each call names the run.
+
+type SandboxNeeds struct {
+	Read     []string `json:"read,omitempty"`
+	Write    []string `json:"write,omitempty"`
+	ReadOnly []string `json:"read_only,omitempty"`
+	Deny     []string `json:"deny,omitempty"`
+	Hosts    []string `json:"hosts,omitempty"`
+	Sockets  []string `json:"sockets,omitempty"`
+}
+
+func FromSandboxNeeds(n extension.SandboxNeeds) SandboxNeeds {
+	return SandboxNeeds{Read: n.Read, Write: n.Write, ReadOnly: n.ReadOnly, Deny: n.Deny, Hosts: n.Hosts, Sockets: n.Sockets}
+}
+func (n SandboxNeeds) Extension() extension.SandboxNeeds {
+	return extension.SandboxNeeds{Read: n.Read, Write: n.Write, ReadOnly: n.ReadOnly, Deny: n.Deny, Hosts: n.Hosts, Sockets: n.Sockets}
+}
+
+type SandboxLaunch struct {
+	Argv       []string `json:"argv"`
+	Dir        string   `json:"dir,omitempty"`
+	Env        []string `json:"env,omitempty"`
+	WrapperEnv []string `json:"wrapper_env,omitempty"`
+	RunDir     string   `json:"run_dir,omitempty"`
+	Secrets    []string `json:"secrets,omitempty"`
+	TTY        bool     `json:"tty,omitempty"`
+}
+
+func FromSandboxLaunch(l extension.SandboxLaunch) SandboxLaunch {
+	return SandboxLaunch{Argv: l.Argv, Dir: l.Dir, Env: l.Env, WrapperEnv: l.WrapperEnv, RunDir: l.RunDir, Secrets: l.Secrets, TTY: l.TTY}
+}
+func (l SandboxLaunch) Extension() extension.SandboxLaunch {
+	return extension.SandboxLaunch{Argv: l.Argv, Dir: l.Dir, Env: l.Env, WrapperEnv: l.WrapperEnv, RunDir: l.RunDir, Secrets: l.Secrets, TTY: l.TTY}
+}
+
+type SandboxPlan struct {
+	Argv    []string `json:"argv"`
+	Env     []string `json:"env,omitempty"`
+	Digest  string   `json:"digest,omitempty"`
+	Signals string   `json:"signals,omitempty"`
+	Summary string   `json:"summary,omitempty"`
+	Data    Payload  `json:"data,omitempty"`
+}
+
+func FromSandboxPlan(p extension.SandboxPlan) SandboxPlan {
+	return SandboxPlan{Argv: p.Argv, Env: p.Env, Digest: p.Digest, Signals: p.Signals, Summary: p.Summary, Data: FromPayload(p.Data)}
+}
+func (p SandboxPlan) Extension() extension.SandboxPlan {
+	return extension.SandboxPlan{Argv: p.Argv, Env: p.Env, Digest: p.Digest, Signals: p.Signals, Summary: p.Summary, Data: p.Data.Domain()}
+}
+
+// LaunchParams plans one launch (sandbox.plan) or creates its container
+// (container.launch).
+type LaunchParams struct {
+	RunID  string        `json:"run_id"`
+	Needs  SandboxNeeds  `json:"needs"`
+	Launch SandboxLaunch `json:"launch"`
+}
+
+// SandboxAdoptParams proves a recovered segment's wrapper, pid Parent,
+// still runs in its sandbox.
+type SandboxAdoptParams struct {
+	RunID  string `json:"run_id"`
+	Parent int    `json:"parent"`
+}
+
+// ContainerAdoptParams proves a recovered segment's container is the one
+// pinned; Alive says its wrapper still runs.
+type ContainerAdoptParams struct {
+	RunID string `json:"run_id"`
+	Alive bool   `json:"alive"`
+}
+type ContainerExit struct {
+	Exited      bool `json:"exited,omitempty"`
+	ExitCode    int  `json:"exit_code,omitempty"`
+	Interrupted bool `json:"interrupted,omitempty"`
+}

@@ -6,12 +6,13 @@
 # The Codex executor (extensions/codex, #360) is served by open-conduit
 # itself (`open-conduit extension-run codex`, #428): its package is a
 # manifest and certification fixture, with no executable of its own, so a
-# binding can name executor codex on a fresh install. `bundled` below names the
-# first-party packages served that way.
+# binding can name executor codex on a fresh install. `open-conduit
+# extension-run --bundle` lays out the first-party packages served that
+# way: the binary holds the one list of them.
 #
 #   scripts/bundle-packages.sh OUT [GOOS_GOARCH...]
 #
-# writes OUT/<goos>_<goarch>/extensions/{setup,codex,posthog,human,observe,linear,jira,bitbucket,schedule,introspection,slack,github} for each platform (this host's
+# writes OUT/<goos>_<goarch>/extensions/{setup,codex,posthog,human,observe,linear,jira,bitbucket,schedule,introspection,slack,github,shell} for each platform (this host's
 # when none is given): setup's binary, each package's manifest and certification
 # (printed by a build for this host, since they don't depend on the
 # platform) and its playbooks. GoReleaser runs it before building and puts
@@ -37,7 +38,6 @@ src=$($go list -m -f '{{.Dir}}' "$module")
 [ -n "$src" ] || { echo "bundle-packages: $module is not in the module cache" >&2; exit 1; }
 host="$out/.host-setup-extension"
 $go build -trimpath -o "$host" "$pkg"
-bundled="codex posthog human observe linear jira bitbucket schedule introspection slack github"
 hostbin="$out/.host-open-conduit"
 $go build -trimpath -o "$hostbin" ./cmd/open-conduit
 
@@ -50,13 +50,7 @@ for target in $targets; do
 	cp -R "$src/playbooks" "$dir/playbooks"
 	chmod -R u+w "$dir/playbooks"
 	echo "bundled $dir"
-	for name in $bundled; do
-		dir="$out/$target/extensions/$name"
-		mkdir -p "$dir"
-		"$hostbin" extension-run "$name" package-manifest >"$dir/open-conduit-extension.json"
-		"$hostbin" extension-run "$name" package-certification >"$dir/certification.json"
-		"$hostbin" extension-run "$name" package-playbooks "$dir/playbooks"
-		echo "bundled $dir"
-	done
+	"$hostbin" extension-run --bundle "$out/$target/extensions"
+	echo "bundled the packages open-conduit serves into $out/$target/extensions"
 done
 rm -f "$host" "$hostbin"

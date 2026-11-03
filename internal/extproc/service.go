@@ -101,6 +101,8 @@ type Deps struct {
 type run struct {
 	persist   func(domain.Payload) error
 	resources extension.ResourceBroker
+	sandbox   extension.SandboxBroker
+	container extension.ContainerBroker
 	closed    bool
 }
 
@@ -395,6 +397,8 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 		return struct{}{}, r.persist(p.State.Domain())
 	case "resource.acquire", "resource.lookup":
 		return s.resource(ctx, method, raw)
+	case "sandbox.plan", "sandbox.adopt", "container.launch", "container.adopt":
+		return s.confine(ctx, method, raw)
 	case "provider.owner_status":
 		var p protocol.OwnerStatusParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
@@ -1057,6 +1061,71 @@ func (s *Service) resource(ctx context.Context, method string, raw json.RawMessa
 		return nil, err
 	}
 	return out, nil
+}
+
+// confine serves a run's sandbox and container brokers: the provider the
+// host bound to the attempt plans, launches and adopts, never the package.
+// A run without one is refused, so a package can't confine itself to a
+// provider its binding didn't name.
+func (s *Service) confine(ctx context.Context, method string, raw json.RawMessage) (any, error) {
+	var p struct {
+		RunID string `json:"run_id"`
+	}
+	if err := jsonrpc.Params(raw, &p); err != nil {
+		return nil, err
+	}
+	s.mu.Lock()
+	r := s.runs[p.RunID]
+	s.mu.Unlock()
+	if r == nil || r.closed {
+		return nil, protocol.Errorf(protocol.CodeConflict, "run is not served by this process")
+	}
+	switch method {
+	case "sandbox.plan", "container.launch":
+		var lp protocol.LaunchParams
+		if err := jsonrpc.Params(raw, &lp); err != nil {
+			return nil, err
+		}
+		var plan extension.SandboxPlan
+		var err error
+		if method == "sandbox.plan" {
+			if r.sandbox == nil {
+				return nil, protocol.Errorf(protocol.CodeUnsupported, "the binding declares no sandbox")
+			}
+			plan, err = r.sandbox.Plan(ctx, lp.Needs.Extension(), lp.Launch.Extension())
+		} else {
+			if r.container == nil {
+				return nil, protocol.Errorf(protocol.CodeUnsupported, "the binding declares no container")
+			}
+			plan, err = r.container.Launch(ctx, lp.Needs.Extension(), lp.Launch.Extension())
+		}
+		if err != nil {
+			return nil, err
+		}
+		return protocol.FromSandboxPlan(plan), nil
+	case "sandbox.adopt":
+		var ap protocol.SandboxAdoptParams
+		if err := jsonrpc.Params(raw, &ap); err != nil {
+			return nil, err
+		}
+		if r.sandbox == nil {
+			return nil, protocol.Errorf(protocol.CodeUnsupported, "the binding declares no sandbox")
+		}
+		return struct{}{}, r.sandbox.Adopt(ctx, ap.Parent)
+	default:
+		var ap protocol.ContainerAdoptParams
+		if err := jsonrpc.Params(raw, &ap); err != nil {
+			return nil, err
+		}
+		if r.container == nil {
+			return nil, protocol.Errorf(protocol.CodeUnsupported, "the binding declares no container")
+		}
+		exit, err := r.container.Adopt(ctx, ap.Alive)
+		if err != nil {
+			return nil, err
+		}
+		return protocol.ContainerExit{Exited: exit.Exited, ExitCode: exit.ExitCode, Interrupted: exit.Interrupted}, nil
+	}
 }
 
 // LocalKV is the service's KV surface called in-process, without the wire:

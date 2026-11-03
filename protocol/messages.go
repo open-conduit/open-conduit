@@ -22,6 +22,13 @@ type InitializeParams struct {
 	Host             HostInfo `json:"host"`
 	// StateDir is the extension's private state directory.
 	StateDir string `json:"state_dir"`
+	// ExecutorDirs are the state directories of the executors the manifest
+	// declares, by name: the host's <state>/executors/<name>, the same for
+	// an executor in process or out. An executor keeps its runs under
+	// <dir>/runs, where the host roots a sandboxed or contained run's
+	// directory (extension.SandboxPaths), and a run outlives a move of the
+	// executor in or out of process.
+	ExecutorDirs map[string]string `json:"executor_dirs,omitempty"`
 }
 type InitializeResult struct {
 	ProtocolVersion int `json:"protocol_version"`
