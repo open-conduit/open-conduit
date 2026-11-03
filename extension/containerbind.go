@@ -57,6 +57,9 @@ type ContainerBinding struct {
 	// when it ran in none.
 	Pinned *ContainerPin
 	Now    func() time.Time
+	// Phase, when set, records a step of the launch (the container's plan
+	// and its creation) for the attempt's history, as SandboxBinding's does.
+	Phase func(name string) func(error)
 }
 
 // BoundContainer is a ContainerBroker bound to one attempt. Its Resources
@@ -165,7 +168,9 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 	}
 	l = canonicalLaunch(l, roots)
 	l.Dir, l.RunDir = g.Workspace, g.Run
+	end := phase(b.Phase, "container plan")
 	plan, err := b.Provider.Plan(ctx, b.Owner, ContainerPolicy{Config: b.Config, Paths: paths}, merged, l)
+	end(err)
 	if err != nil {
 		return SandboxPlan{}, err
 	}
@@ -183,7 +188,9 @@ func (c *BoundContainer) Launch(ctx context.Context, needs SandboxNeeds, l Sandb
 		ContainerLabelSegment:   segment,
 		ContainerLabelDigest:    plan.Digest,
 	}
+	end = phase(b.Phase, "container create")
 	created, err := b.Provider.Create(ctx, plan, labels)
+	end(err)
 	if err != nil {
 		return SandboxPlan{}, fmt.Errorf("%w: could not create the container: %v", ErrSandboxUnavailable, err)
 	}

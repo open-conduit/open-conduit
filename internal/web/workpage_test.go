@@ -188,3 +188,30 @@ func TestTurnShowsItsReport(t *testing.T) {
 		t.Fatal("a turn without a report shows one")
 	}
 }
+
+// TestTurnShowsItsLaunchPhases (#456): the turn shows where its launch's
+// time went, phase by phase, with each phase's time and any failure, and a
+// relaunch after a lost lease under its own label.
+func TestTurnShowsItsLaunchPhases(t *testing.T) {
+	f, s, h := setup(t)
+	f.runs[0].Segments = []client.RunSegment{
+		{StartedAt: "2026-10-28T00:02:49Z", EndedAt: "2026-10-28T00:04:34Z", Launch: []client.LaunchPhase{
+			{Name: "workspace", StartedAt: "2026-10-28T00:02:50Z", EndedAt: "2026-10-28T00:03:31Z", DurationMS: 41000, Outcome: "ok"},
+			{Name: "container create", StartedAt: "2026-10-28T00:03:31Z", EndedAt: "2026-10-28T00:04:08Z", DurationMS: 37000, Outcome: "ok"},
+			{Name: "container pin", StartedAt: "2026-10-28T00:04:08Z", EndedAt: "2026-10-28T00:04:08Z", Outcome: "failed"},
+		}},
+		{StartedAt: "2026-10-28T00:04:34Z", EndedAt: "2026-10-28T00:06:00Z", Recovered: true, Relaunched: true, Launch: []client.LaunchPhase{
+			{Name: "executor", StartedAt: "2026-10-28T00:04:34Z", EndedAt: "2026-10-28T00:04:52Z", DurationMS: 18000, Outcome: "ok"},
+		}},
+	}
+	body := do(h, "GET", "/work?id=wrk_1&turn=1", nil, s).Body.String()
+	for _, want := range []string{`class="turn-launch"`, "<td>workspace</td>", "41s", `class="launch-failed">failed`, "Relaunch after a lost lease", "<td>executor</td>"} {
+		if !strings.Contains(body, want) {
+			t.Fatalf("launch phases: %q missing:\n%s", want, body)
+		}
+	}
+	f.runs[0].Segments = nil
+	if body = do(h, "GET", "/work?id=wrk_1&turn=1", nil, s).Body.String(); strings.Contains(body, `class="turn-launch"`) {
+		t.Fatal("a turn without launch phases shows a launch")
+	}
+}

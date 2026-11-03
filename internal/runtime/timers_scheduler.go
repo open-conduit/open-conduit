@@ -219,7 +219,12 @@ func (s *Scheduler) ProcessExecutionTimeout(ctx context.Context, eventID domain.
 	}
 	now := s.now()
 	if x.Lease.Owner == "" || !now.Before(x.Lease.ExpiresAt) {
-		recovered, e := s.Recover(ctx, x.ID)
+		// Recovery here only regains authority to time the attempt out, so
+		// it adopts whatever there is rather than relaunching.
+		recovered, e := s.claimRecovery(ctx, x.ID, false)
+		if e == nil {
+			recovered, e = s.Launch(ctx, recovered)
+		}
 		if e != nil {
 			// Recovery may have atomically failed an unverifiable attempt. Its durable
 			// hold and retry policy remain authoritative; timeout cannot resurrect it.
@@ -301,10 +306,16 @@ type PollDiagnostic struct {
 	Code string
 }
 type SchedulerPoll struct {
-	Timers      []TimerFire
+	Timers []TimerFire
+	// Recovered are the attempts the pass recovered: launched by Poll,
+	// claimed but not yet launched by PollClaims.
 	Recovered   []Attempt
 	Diagnostics []PollDiagnostic
 }
+
+// RecoveryDiagnostic is the poll diagnostic code for a recovery's error
+// ("" when the error is not one a pass reports and carries on from).
+func RecoveryDiagnostic(err error) string { return pollDiagnostic(err) }
 
 func rotateIDs(ids []domain.ID, cursor string, limit int) []domain.ID {
 	sort.Slice(ids, func(i, j int) bool {
@@ -350,7 +361,18 @@ func pollDiagnostic(err error) string {
 // Poll performs bounded host-driven passes for due timers, accepted retry/timeout
 // Events, active Waits, and expired leases. Each pass uses a durable fair cursor.
 // Recovered handles are returned for host observation; Poll never blocks in Wait.
-func (s *Scheduler) Poll(ctx context.Context, timers *Timers, limit int) (result SchedulerPoll, err error) {
+func (s *Scheduler) Poll(ctx context.Context, timers *Timers, limit int) (SchedulerPoll, error) {
+	return s.poll(ctx, timers, limit, true)
+}
+
+// PollClaims is Poll for a host that launches recoveries itself, off its
+// pass and holding each lease from its claim: Recovered are claimed
+// (ClaimRecovery) but not launched, and the host calls Launch on each.
+func (s *Scheduler) PollClaims(ctx context.Context, timers *Timers, limit int) (SchedulerPoll, error) {
+	return s.poll(ctx, timers, limit, false)
+}
+
+func (s *Scheduler) poll(ctx context.Context, timers *Timers, limit int, launch bool) (result SchedulerPoll, err error) {
 	if timers == nil || limit < 1 || limit > 200 {
 		return result, storage.ErrInvalid
 	}
@@ -423,7 +445,11 @@ func (s *Scheduler) Poll(ctx context.Context, timers *Timers, limit int) (result
 				itemErr = s.Wake(ctx, id)
 			case "executions":
 				var recovered Attempt
-				recovered, itemErr = s.Recover(ctx, id)
+				if launch {
+					recovered, itemErr = s.Recover(ctx, id)
+				} else {
+					recovered, itemErr = s.ClaimRecovery(ctx, id)
+				}
 				if itemErr == nil {
 					result.Recovered = append(result.Recovered, recovered)
 				}

@@ -178,11 +178,32 @@ type Scheduler struct {
 	router  *Router
 	options SchedulerOptions
 }
+
+// Attempt is a claimed attempt. Claim and ClaimRecovery return it before
+// its launch (Handle is nil); Launch, Start and Recover return it launched.
 type Attempt struct {
 	Lease   domain.LeaseRef
 	Handle  extension.RunHandle
 	Request extension.RunRequest
+	pending *pendingLaunch
 }
+
+// pendingLaunch is what a claim leaves for its launch: the attempt state
+// the launch binds, its executor and how it is launched.
+type pendingLaunch struct {
+	state              AttemptState
+	executor           extension.Executor
+	resume, recovering bool
+	relaunch           bool
+}
+
+// Launched reports whether the attempt has been launched (it has a handle).
+func (a Attempt) Launched() bool { return a.Handle != nil }
+
+// Relaunch reports whether a claimed recovery launches the attempt afresh
+// rather than adopting a process: its launch had started nothing.
+func (a Attempt) Relaunch() bool { return a.pending != nil && a.pending.relaunch }
+
 type AttemptState struct {
 	ExecutionID, WorkID, ScopeID      domain.ID
 	Generation, Executor, LaunchState string
@@ -316,6 +337,53 @@ type Segment struct {
 	// binding declared one. A recovered segment carries the pin of the
 	// container it adopted.
 	Container *extension.ContainerPin `json:",omitempty"`
+	// Invoke is how far the segment's launch got towards its executor:
+	// InvokePending from the claim that began the segment, InvokeCalled
+	// from the fenced write just before the executor is called. A segment
+	// without it (one written before it was recorded) proves nothing, so
+	// recovery adopts it. Isolated says the launch bound a sandbox or a
+	// container first, so no process of it can run until one is pinned
+	// (Sandbox, Container).
+	Invoke   string `json:",omitempty"`
+	Isolated bool   `json:",omitempty"`
+	// Relaunched says a new owner recovered the attempt while its launch
+	// had started nothing, and launched it afresh (Recovered is set too).
+	Relaunched bool `json:",omitempty"`
+	// Launch is the segment's launch, phase by phase, as it went: each
+	// phase is recorded as it begins and again as it ends.
+	Launch []LaunchPhase `json:",omitempty"`
+}
+
+// A segment's Invoke: its launch hasn't called its executor yet, or has.
+const (
+	InvokePending = "pending"
+	InvokeCalled  = "called"
+)
+
+// MaxLaunchPhases bounds the phases a segment's launch records.
+const MaxLaunchPhases = 32
+
+// LaunchPhase is one step of a segment's launch: the toolbelt, secrets,
+// the run environment, a resource (a workspace), the sandbox or container
+// and its plan, creation and pin, and the executor's own launch. A phase
+// still running has no EndedAt; Outcome is "ok", "failed" or "cancelled".
+type LaunchPhase struct {
+	Name      string
+	StartedAt time.Time
+	EndedAt   *time.Time `json:",omitempty"`
+	Outcome   string     `json:",omitempty"`
+}
+
+// Duration is how long the phase took, or has taken by now.
+func (p LaunchPhase) Duration(now time.Time) time.Duration {
+	end := now
+	if p.EndedAt != nil {
+		end = *p.EndedAt
+	}
+	if end.Before(p.StartedAt) {
+		return 0
+	}
+	return end.Sub(p.StartedAt)
 }
 
 // SegmentSandbox pins a segment's sandbox: the plan's digest, and its
@@ -605,6 +673,49 @@ func (s *Scheduler) Release(ctx context.Context, ref domain.LeaseRef) error {
 	return s.transact(ctx, &ref, func(tx storage.Tx) error { return tx.Release(ref) })
 }
 
+// ErrLeaseLost is the cause of a held context that ended because its
+// lease was lost (context.Cause); it matches storage.ErrLeaseLost.
+var ErrLeaseLost = fmt.Errorf("%w: renewal refused", storage.ErrLeaseLost)
+
+// Hold holds an attempt's lease from its claim until it is released: it
+// renews ref on every tick until ctx ends or the lease is lost. The
+// returned context ends with the hold, with cause ErrLeaseLost when the
+// lease was lost, so a launch or an observation under it stops at once;
+// lost is closed only then. A renewal that fails for any other reason is
+// passed to report and retried on the next tick. stop ends the hold and
+// waits for its renewer. A host takes ticks every LeaseDuration/3 or so.
+func (s *Scheduler) Hold(parent context.Context, ref domain.LeaseRef, ticks <-chan time.Time, report func(error)) (ctx context.Context, lost <-chan struct{}, stop func()) {
+	held, cancel := context.WithCancelCause(parent)
+	gone := make(chan struct{})
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		for {
+			select {
+			case <-held.Done():
+				return
+			case <-ticks:
+			}
+			err := s.Renew(held, ref)
+			if err == nil || held.Err() != nil {
+				continue
+			}
+			if errors.Is(err, storage.ErrLeaseLost) || errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrInvalid) || errors.Is(err, storage.ErrNotFound) {
+				close(gone)
+				cancel(ErrLeaseLost)
+				return
+			}
+			if report != nil {
+				report(err)
+			}
+		}
+	}()
+	return held, gone, func() {
+		cancel(context.Canceled)
+		<-done
+	}
+}
+
 func scopeChain(tx storage.Tx, id domain.ID) ([]domain.ID, error) {
 	var chain []domain.ID
 	seen := map[domain.ID]bool{}
@@ -848,7 +959,38 @@ func (s *Scheduler) requestInTx(tx storage.Tx, state AttemptState, ref domain.Le
 	req.Context.Config = state.Binding.Config
 	return req, nil
 }
-func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, err error) {
+
+// Start claims ready Work's next attempt and launches it (Claim, then
+// Launch). A host that must not block on a launch claims and launches
+// separately, holding the lease from the claim (Hold).
+func (s *Scheduler) Start(ctx context.Context, id domain.ID) (Attempt, error) {
+	attempt, err := s.Claim(ctx, id)
+	if err != nil {
+		return attempt, err
+	}
+	return s.Launch(ctx, attempt)
+}
+
+// Launch launches a claimed attempt: a fresh Run, a parked attempt's
+// Resume or a recovery's Recover, as its claim decided. It runs outside
+// coordination transactions, under the claim's lease; every write it makes
+// is fenced by that lease, so a launch whose lease is lost stops at its
+// next write. ctx should end when the lease is lost (Hold), so slow launch
+// work stops at once.
+func (s *Scheduler) Launch(ctx context.Context, attempt Attempt) (Attempt, error) {
+	p := attempt.pending
+	if p == nil {
+		return attempt, storage.ErrInvalid
+	}
+	attempt.pending = nil
+	return s.launch(ctx, attempt, p.state, p.executor, p.resume, p.recovering)
+}
+
+// Claim claims ready Work's next attempt: it selects ordered pending
+// input, creates the attempt (or takes the parked one to resume), claims
+// its lease and records the launch intent, but launches nothing. The
+// returned attempt is launched with Launch.
+func (s *Scheduler) Claim(ctx context.Context, id domain.ID) (attempt Attempt, err error) {
 	var pinned domain.Binding
 	var granted []string
 	var scopeRevisions []domain.Scope
@@ -1111,7 +1253,7 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 		// A parked attempt from before segments were recorded stays without
 		// them: one resume-to-finish segment would understate its active time.
 		if parked == "" || len(state.Segments) > 0 {
-			state.beginSegment(Segment{StartedAt: s.now(), WakeEventID: wake.EventID})
+			state.beginSegment(Segment{StartedAt: s.now(), WakeEventID: wake.EventID, Invoke: InvokePending})
 		}
 		if input.Sequence > state.ObservedSequence {
 			state.ObservedSequence = input.Sequence
@@ -1137,7 +1279,8 @@ func (s *Scheduler) Start(ctx context.Context, id domain.ID) (attempt Attempt, e
 	if budgetHeld {
 		return Attempt{}, ErrBudgetHeld
 	}
-	return s.launch(ctx, attempt, state, executor, parked != "", false)
+	attempt.pending = &pendingLaunch{state: state, executor: executor, resume: parked != ""}
+	return attempt, nil
 }
 func validRecovery(p domain.Payload) bool {
 	if p.Schema == "" {
@@ -1149,6 +1292,9 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 	if err := s.transact(ctx, &attempt.Lease, func(tx storage.Tx) error { return nil }); err != nil {
 		return attempt, err
 	}
+	trail := &launchTrail{s: s, ctx: ctx, ref: attempt.Lease}
+	defer trail.closed.Store(true)
+	ctx = context.WithValue(ctx, phaseKey{}, PhaseFunc(trail.begin))
 	var persisted atomic.Bool
 	attempt.Request.PersistRecovery = func(payload domain.Payload) error {
 		if !validRecovery(payload) {
@@ -1171,12 +1317,15 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 	var handle extension.RunHandle
 	var err error
 	if s.options.Toolbelt != nil && state.Capabilities.Toolbelt != "" && state.Capabilities.Toolbelt != extension.ToolbeltNone {
+		endToolbelt := trail.begin("toolbelt")
 		token, issueErr := s.options.Toolbelt.issueForAttempt(ctx, attempt.Lease, state)
 		if issueErr != nil {
+			endToolbelt(issueErr)
 			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "toolbelt authority unavailable"}}
 			return attempt, errors.Join(extension.ErrUnauthorized, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
 		}
 		endpoint, tokenFile, serveErr := s.options.ToolbeltEndpoints(ctx, state.ExecutionID, token)
+		endToolbelt(serveErr)
 		if serveErr != nil {
 			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "toolbelt endpoint unavailable"}}
 			return attempt, errors.Join(extension.ErrUnauthorized, serveErr, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
@@ -1186,7 +1335,8 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 	}
 	attempt.Request.Context.PlaybookDir = s.options.PlaybookDir
 	if s.options.Secrets != nil {
-		secrets, secretErr := s.options.Secrets(ctx, state)
+		var secrets map[string]string
+		secretErr := trail.phase("secrets", func() (e error) { secrets, e = s.options.Secrets(ctx, state); return e })
 		if secretErr != nil {
 			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "secret resolution failed"}}
 			return attempt, errors.Join(ErrSecretUnavailable, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
@@ -1194,7 +1344,8 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		attempt.Request.Context.Secrets = secrets
 	}
 	if s.options.Environment != nil && !recovering {
-		env, envErr := s.options.Environment(ctx, state)
+		var env map[string]string
+		envErr := trail.phase("environment", func() (e error) { env, e = s.options.Environment(ctx, state); return e })
 		if envErr != nil {
 			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "run environment unavailable"}}
 			return attempt, errors.Join(ErrEnvironmentUnavailable, envErr, s.fail(ctx, attempt.Lease, failure, true, nil))
@@ -1211,17 +1362,19 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 	}
 	if s.options.Sandbox != nil {
 		pin := func(plan extension.SandboxPlan) error {
-			return s.transact(ctx, &attempt.Lease, func(tx storage.Tx) error {
-				current, e := attemptState(tx, state.ExecutionID)
-				if e != nil {
-					return e
-				}
-				n := len(current.Segments)
-				if n == 0 || current.Segments[n-1].EndedAt != nil {
-					return storage.ErrInvalid
-				}
-				current.Segments[n-1].Sandbox = &SegmentSandbox{Digest: plan.Digest, Summary: plan.Summary}
-				return putAttemptState(tx, current)
+			return trail.phase("sandbox pin", func() error {
+				return s.transact(ctx, &attempt.Lease, func(tx storage.Tx) error {
+					current, e := attemptState(tx, state.ExecutionID)
+					if e != nil {
+						return e
+					}
+					n := len(current.Segments)
+					if n == 0 || current.Segments[n-1].EndedAt != nil {
+						return storage.ErrInvalid
+					}
+					current.Segments[n-1].Sandbox = &SegmentSandbox{Digest: plan.Digest, Summary: plan.Summary}
+					return putAttemptState(tx, current)
+				})
 			})
 		}
 		// The hook is told a recovery as the state now records it: the
@@ -1230,7 +1383,12 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		if recovering {
 			bound.LaunchState = "recovering"
 		}
-		sandbox, resources, sandboxErr := s.options.Sandbox(ctx, bound, attempt.Request.Context.Resources, pin)
+		var sandbox extension.SandboxBroker
+		var resources extension.ResourceBroker
+		sandboxErr := trail.phase("sandbox", func() (e error) {
+			sandbox, resources, e = s.options.Sandbox(ctx, bound, attempt.Request.Context.Resources, pin)
+			return e
+		})
 		if sandboxErr != nil {
 			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "sandbox unavailable"}}
 			return attempt, errors.Join(extension.ErrSandboxUnavailable, sandboxErr, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
@@ -1240,24 +1398,30 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 	var settle func(extension.Result) extension.Result
 	if s.options.Container != nil {
 		pin := func(c extension.ContainerPin) error {
-			return s.transact(ctx, &attempt.Lease, func(tx storage.Tx) error {
-				current, e := attemptState(tx, state.ExecutionID)
-				if e != nil {
-					return e
-				}
-				n := len(current.Segments)
-				if n == 0 || current.Segments[n-1].EndedAt != nil {
-					return storage.ErrInvalid
-				}
-				current.Segments[n-1].Container = &c
-				return putAttemptState(tx, current)
+			return trail.phase("container pin", func() error {
+				return s.transact(ctx, &attempt.Lease, func(tx storage.Tx) error {
+					current, e := attemptState(tx, state.ExecutionID)
+					if e != nil {
+						return e
+					}
+					n := len(current.Segments)
+					if n == 0 || current.Segments[n-1].EndedAt != nil {
+						return storage.ErrInvalid
+					}
+					current.Segments[n-1].Container = &c
+					return putAttemptState(tx, current)
+				})
 			})
 		}
 		bound := state
 		if recovering {
 			bound.LaunchState = "recovering"
 		}
-		c, containerErr := s.options.Container(ctx, bound, attempt.Request.Context.Resources, pin)
+		var c ContainerBinding
+		containerErr := trail.phase("container", func() (e error) {
+			c, e = s.options.Container(ctx, bound, attempt.Request.Context.Resources, pin)
+			return e
+		})
 		if containerErr != nil {
 			failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "container unavailable"}}
 			return attempt, errors.Join(extension.ErrSandboxUnavailable, containerErr, s.fail(ctx, attempt.Lease, failure, !recovering, nil))
@@ -1267,13 +1431,37 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 			attempt.Request.Context.ContainerHome = c.Home
 		}
 	}
-	if recovering {
-		handle, err = executor.Recover(ctx, attempt.Request, state.Recovery)
-	} else if resume {
-		handle, err = executor.(extension.ResumeExecutor).Resume(ctx, attempt.Request, state.Recovery)
-	} else {
-		handle, err = executor.Run(ctx, attempt.Request)
+	if !recovering {
+		// Recorded before the executor is called: a lost lease with the
+		// executor never called, or with nothing pinned by a sandbox or
+		// container that holds every process until it is pinned, is known
+		// to have run nothing (relaunchable).
+		isolated := attempt.Request.Context.Sandbox != nil || attempt.Request.Context.Container != nil
+		if err = s.transact(ctx, &attempt.Lease, func(tx storage.Tx) error {
+			current, e := attemptState(tx, state.ExecutionID)
+			if e != nil {
+				return e
+			}
+			n := len(current.Segments)
+			if n == 0 || current.Segments[n-1].EndedAt != nil {
+				return nil
+			}
+			current.Segments[n-1].Invoke, current.Segments[n-1].Isolated = InvokeCalled, isolated
+			return putAttemptState(tx, current)
+		}); err != nil {
+			return attempt, err
+		}
 	}
+	err = trail.phase("executor", func() (e error) {
+		if recovering {
+			handle, e = executor.Recover(ctx, attempt.Request, state.Recovery)
+		} else if resume {
+			handle, e = executor.(extension.ResumeExecutor).Resume(ctx, attempt.Request, state.Recovery)
+		} else {
+			handle, e = executor.Run(ctx, attempt.Request)
+		}
+		return e
+	})
 	if err != nil {
 		failure := extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeFailed, Summary: "executor operation failed"}}
 		commitErr := s.fail(ctx, attempt.Lease, failure, false, err)
@@ -1318,7 +1506,55 @@ func (h settledHandle) Wait(ctx context.Context) (extension.Result, error) {
 	}
 	return h.settle(r), nil
 }
-func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt, err error) {
+
+// Recover claims a running attempt whose lease was lost and launches it
+// (ClaimRecovery, then Launch).
+func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (Attempt, error) {
+	attempt, err := s.claimRecovery(ctx, id, true)
+	if err != nil {
+		return attempt, err
+	}
+	return s.Launch(ctx, attempt)
+}
+
+// ClaimRecovery claims a running attempt whose lease was lost at a higher
+// epoch, without launching it. Usually the claim adopts: Launch calls the
+// executor's Recover on the process the attempt was running. An attempt
+// whose launch had started nothing (Relaunch) is launched afresh instead:
+// still launching (or resuming), nothing pinned with its open segment and
+// either never handed to its executor or bound to a sandbox or container
+// first (relaunchable). Nothing ran, so it isn't failed and doesn't count towards its
+// retries; the old epoch's writes are already fenced, so its launch can
+// only stop.
+func (s *Scheduler) ClaimRecovery(ctx context.Context, id domain.ID) (Attempt, error) {
+	return s.claimRecovery(ctx, id, true)
+}
+
+// relaunchable reports whether a lost attempt's launch had started
+// nothing: still launching (or resuming), nothing pinned with its open
+// segment, and either known never to have been handed to its executor
+// (InvokePending) or bound to a sandbox or container first (Isolated),
+// which holds every process until it is pinned. An executor called without
+// isolation may have started a process before recording any metadata, so
+// that launch is adopted (and fails closed when it can't be), never
+// relaunched; so is a segment that doesn't say (no Invoke), such as one an
+// earlier release began.
+func relaunchable(state AttemptState) bool {
+	n := len(state.Segments)
+	if n == 0 {
+		return false
+	}
+	g := state.Segments[n-1]
+	if g.EndedAt != nil || g.Sandbox != nil || g.Container != nil {
+		return false
+	}
+	if state.LaunchState != "launching" && state.LaunchState != "resuming" {
+		return false
+	}
+	return g.Invoke == InvokePending || g.Invoke == InvokeCalled && g.Isolated
+}
+
+func (s *Scheduler) claimRecovery(ctx context.Context, id domain.ID, mayRelaunch bool) (attempt Attempt, err error) {
 	state, err := s.InspectAttempt(ctx, id)
 	if err != nil {
 		return attempt, err
@@ -1327,6 +1563,8 @@ func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt,
 	if err != nil {
 		return attempt, err
 	}
+	var relaunch bool
+	var claimed AttemptState
 	err = s.transact(ctx, nil, func(tx storage.Tx) error {
 		current, e := attemptState(tx, id)
 		if e != nil {
@@ -1342,6 +1580,7 @@ func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt,
 		if execution.State != domain.ExecutionRunning {
 			return storage.ErrInvalid
 		}
+		relaunch = mayRelaunch && relaunchable(current)
 		// A segment is lease-held time, measured as the deadline budget
 		// measures it: recovery keeps the deadline, so the lost-lease gap
 		// stays in the segment it interrupted. The split only marks where a
@@ -1350,18 +1589,31 @@ func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt,
 			now := s.now()
 			pin, container := current.Segments[n-1].Sandbox, current.Segments[n-1].Container
 			current.endSegment(now, false)
-			current.beginSegment(Segment{StartedAt: now, Recovered: true, Sandbox: pin, Container: container})
+			if relaunch {
+				current.beginSegment(Segment{StartedAt: now, Recovered: true, Relaunched: true, Invoke: InvokePending})
+			} else {
+				current.beginSegment(Segment{StartedAt: now, Recovered: true, Sandbox: pin, Container: container})
+			}
 		}
 		ref, e := tx.Claim(id, s.options.Owner, s.options.LeaseDuration)
 		if e != nil {
 			return e
 		}
 		attempt.Lease = ref
-		current.Epoch, current.Excluded, current.LaunchState = ref.Epoch, false, "recovering"
+		current.Epoch, current.Excluded = ref.Epoch, false
+		if relaunch {
+			// The launch starts again: a fresh launch records its metadata
+			// anew, a resume keeps the parked metadata it resumes from.
+			if current.LaunchState == "launching" {
+				current.Recovery, current.RecoveryRecorded = domain.Payload{}, false
+			}
+		} else {
+			current.LaunchState = "recovering"
+		}
 		// An unapplied toolbelt declaration belongs to the segment being
-		// adopted (Recover never relaunches, and wait registration clears it
-		// before any resume). A crash between the declaration and the host's
-		// handshake must not drop it, so it moves to the recovering epoch.
+		// adopted (wait registration clears it before any resume). A crash
+		// between the declaration and the host's handshake must not drop
+		// it, so it moves to the recovering epoch.
 		if current.Declaration != nil {
 			current.Declaration.Epoch = ref.Epoch
 		}
@@ -1371,13 +1623,19 @@ func (s *Scheduler) Recover(ctx context.Context, id domain.ID) (attempt Attempt,
 		if e = ArmExecutionDeadlineInTx(tx, s.now(), current, ref); e != nil {
 			return e
 		}
+		claimed = current
 		attempt.Request, e = s.requestInTx(tx, current, ref, "")
 		return e
 	})
 	if err != nil {
 		return Attempt{}, err
 	}
-	return s.launch(ctx, attempt, state, executor, false, true)
+	if relaunch {
+		attempt.pending = &pendingLaunch{state: claimed, executor: executor, resume: claimed.LaunchState == "resuming", relaunch: true}
+	} else {
+		attempt.pending = &pendingLaunch{state: state, executor: executor, recovering: true}
+	}
+	return attempt, nil
 }
 func (s *Scheduler) Observe(ctx context.Context, attempt Attempt) error {
 	if attempt.Handle == nil {

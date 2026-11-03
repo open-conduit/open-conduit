@@ -54,7 +54,7 @@ func (d *daemon) protectedPaths() []string {
 // host's protected set. A binding without one gets none: a segment launched
 // in a sandbox before its binding dropped it is adopted as it runs, which
 // is no wider than the binding now allows.
-func (d *daemon) bindSandbox(_ context.Context, state runtime.AttemptState, resources extension.ResourceBroker, pin func(extension.SandboxPlan) error) (extension.SandboxBroker, extension.ResourceBroker, error) {
+func (d *daemon) bindSandbox(ctx context.Context, state runtime.AttemptState, resources extension.ResourceBroker, pin func(extension.SandboxPlan) error) (extension.SandboxBroker, extension.ResourceBroker, error) {
 	desc, err := d.configs.Sandbox(state)
 	if err != nil {
 		return nil, nil, err
@@ -90,6 +90,7 @@ func (d *daemon) bindSandbox(_ context.Context, state runtime.AttemptState, reso
 		Records:   filepath.Join(run, "sandbox"),
 		Pin:       pin,
 		Pinned:    pinned,
+		Phase:     runtime.LaunchPhases(ctx),
 	})
 	return b, b.Resources(resources), nil
 }

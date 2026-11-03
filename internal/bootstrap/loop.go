@@ -31,12 +31,12 @@ func (d *daemon) loop(ctx context.Context) error {
 	for {
 		c := d.current.Load()
 		d.routePending(ctx, c)
-		poll, err := c.scheduler.Poll(ctx, c.timers, passLimit)
+		poll, err := c.scheduler.PollClaims(ctx, c.timers, passLimit)
 		if err != nil && ctx.Err() == nil {
 			d.report("poll", "", errorCode(err))
 		}
 		for _, a := range poll.Recovered {
-			d.observe(c, a)
+			d.attend(c, a, "")
 		}
 		for _, diag := range poll.Diagnostics {
 			d.report("poll", diag.ID, diag.Code)
@@ -192,19 +192,13 @@ func (d *daemon) startReady(ctx context.Context) {
 		// Load the generation immediately before each claim, so an attempt
 		// claimed after a reload returned pins the new generation.
 		c := d.current.Load()
-		a, err := c.scheduler.Start(ctx, id)
+		a, err := c.scheduler.Claim(ctx, id)
 		if err != nil {
-			code := errorCode(err)
-			d.report("start", id, code)
-			// A launch failure after claim leaves an uncertain hold until the
-			// executor proves the attempt is not running.
-			if a.Lease.ExecutionID != "" && (code == "executor_failed" || code == "invalid_state") {
-				d.confirmStopped(ctx, c, a.Lease.ExecutionID, a.Lease.Epoch)
-			}
+			d.report("start", id, errorCode(err))
 			continue
 		}
 		d.clear("start", id)
-		d.observe(c, a)
+		d.attend(c, a, id)
 	}
 }
 
@@ -233,13 +227,21 @@ func (d *daemon) dispatchControls(ctx context.Context, c *components) {
 	}
 }
 
-// observe waits for an attempt's result while renewing its lease. Losing
-// authority to an end (cancel, deadline, a failed observation) leads to a
-// trusted physical stop and ConfirmStopped. A lease that merely lapsed, with
-// the attempt still running, is left for Poll's recovery to adopt, as is one
-// a newer epoch already holds; daemon shutdown likewise only stops
-// observing, leaving the detached process for the next daemon to adopt.
-func (d *daemon) observe(c *components, a runtime.Attempt) {
+// attend holds a claimed attempt from its claim to its end, off the
+// host's pass: it renews the lease from the claim (Scheduler.Hold), so a
+// launch that takes many lease durations keeps it, launches the attempt
+// (a start's Run or Resume, a recovery's adoption or relaunch) and then
+// observes it. work is the Work a start claimed for ("" for a recovery),
+// which a failed launch is reported against.
+//
+// A lost lease ends the hold's context, which stops a launch at once.
+// Losing authority to an end (cancel, deadline, a failed observation)
+// leads to a trusted physical stop and ConfirmStopped. A lease that merely
+// lapsed, with the attempt still running, is left for Poll's recovery to
+// adopt or, when its launch had started nothing, to relaunch, as is one a
+// newer epoch already holds; daemon shutdown likewise only stops, leaving
+// the detached process for the next daemon to adopt.
+func (d *daemon) attend(c *components, a runtime.Attempt, work domain.ID) {
 	key := attemptKey{a.Lease.ExecutionID, a.Lease.Epoch}
 	d.mu.Lock()
 	if _, ok := d.inflight[key]; ok {
@@ -257,60 +259,91 @@ func (d *daemon) observe(c *components, a runtime.Attempt) {
 			d.mu.Unlock()
 			d.poke()
 		}()
-		ctx, cancel := context.WithCancel(d.ctx)
-		defer cancel()
-		lost := make(chan struct{})
-		go func() {
-			interval := d.o.LeaseDuration / 3
-			t := time.NewTicker(interval)
-			defer t.Stop()
-			for {
-				select {
-				case <-ctx.Done():
-					return
-				case <-t.C:
-					if err := c.scheduler.Renew(ctx, a.Lease); err != nil && ctx.Err() == nil {
-						if errors.Is(err, storage.ErrLeaseLost) || errors.Is(err, storage.ErrConflict) || errors.Is(err, storage.ErrInvalid) || errors.Is(err, storage.ErrNotFound) {
-							close(lost)
-							cancel()
-							return
-						}
-						d.report("renew", a.Lease.ExecutionID, errorCode(err))
-					}
-				}
+		ticker := time.NewTicker(d.o.LeaseDuration / 3)
+		defer ticker.Stop()
+		ctx, lost, stop := c.scheduler.Hold(d.ctx, a.Lease, ticker.C, func(err error) {
+			d.report("renew", a.Lease.ExecutionID, errorCode(err))
+		})
+		defer stop()
+		if !a.Launched() {
+			launched, err := c.scheduler.Launch(ctx, a)
+			if err != nil {
+				d.launchFailed(c, a, work, lost, err)
+				return
 			}
-		}()
-		err := c.scheduler.Observe(ctx, a)
-		for i := 0; i < 5 && errors.Is(err, storage.ErrConflict); i++ {
-			// Completion cannot overtake accepted unrouted input (such as the
-			// execution's own emission): route it, then reapply the result.
-			d.routePending(ctx, d.current.Load())
-			err = c.scheduler.Observe(ctx, a)
+			a = launched
 		}
-		if err != nil {
-			select {
-			case <-lost:
-				err = storage.ErrLeaseLost
-			default:
-			}
-		}
-		if err == nil {
-			d.clear("observe", a.Lease.ExecutionID)
-			return
-		}
-		if d.ctx.Err() != nil {
-			return // shutdown: keep the process for adoption
-		}
-		if errors.Is(err, storage.ErrLeaseLost) && c.scheduler.Adoptable(d.ctx, a.Lease) {
-			// The lease lapsed (the host slept or stalled past it) but the
-			// attempt still runs and nothing has ended it: Poll's recovery
-			// adopts the process, or already has, so it is left running.
-			d.log.Warn("lease lost; leaving the running attempt for recovery to adopt", "execution", string(a.Lease.ExecutionID), "epoch", a.Lease.Epoch)
-			return
-		}
-		d.report("observe", a.Lease.ExecutionID, errorCode(err), runtime.FailureCause(err))
-		d.confirmStopped(d.ctx, c, a.Lease.ExecutionID, a.Lease.Epoch)
+		d.observe(ctx, c, a, lost)
 	}()
+}
+
+// launchFailed handles an attempt whose launch returned an error. A lost
+// lease leaves it to recovery: with nothing pinned it is relaunched, with
+// a process pinned that process is adopted. Shutdown leaves it for the next
+// daemon. Otherwise the failure is reported, and a launch failure after the
+// claim leaves an uncertain hold until the executor proves the attempt is
+// not running.
+func (d *daemon) launchFailed(c *components, a runtime.Attempt, work domain.ID, lost <-chan struct{}, err error) {
+	select {
+	case <-lost:
+		d.log.Warn("lease lost while launching; leaving the attempt for recovery", "execution", string(a.Lease.ExecutionID), "epoch", a.Lease.Epoch)
+		return
+	default:
+	}
+	if d.ctx.Err() != nil {
+		return
+	}
+	if work != "" {
+		code := errorCode(err)
+		d.report("start", work, code)
+		if code == "executor_failed" || code == "invalid_state" {
+			d.confirmStopped(d.ctx, c, a.Lease.ExecutionID, a.Lease.Epoch)
+		}
+		return
+	}
+	code := runtime.RecoveryDiagnostic(err)
+	if code == "" {
+		code = errorCode(err)
+	}
+	d.report("poll", a.Lease.ExecutionID, code)
+	if code == "executor_recovery_failed" {
+		d.confirmStopped(d.ctx, c, a.Lease.ExecutionID, 0)
+	}
+}
+
+// observe waits for a launched attempt's result under its hold (ctx ends
+// when the lease is lost, and lost is closed then).
+func (d *daemon) observe(ctx context.Context, c *components, a runtime.Attempt, lost <-chan struct{}) {
+	err := c.scheduler.Observe(ctx, a)
+	for i := 0; i < 5 && errors.Is(err, storage.ErrConflict); i++ {
+		// Completion cannot overtake accepted unrouted input (such as the
+		// execution's own emission): route it, then reapply the result.
+		d.routePending(ctx, d.current.Load())
+		err = c.scheduler.Observe(ctx, a)
+	}
+	if err != nil {
+		select {
+		case <-lost:
+			err = storage.ErrLeaseLost
+		default:
+		}
+	}
+	if err == nil {
+		d.clear("observe", a.Lease.ExecutionID)
+		return
+	}
+	if d.ctx.Err() != nil {
+		return // shutdown: keep the process for adoption
+	}
+	if errors.Is(err, storage.ErrLeaseLost) && c.scheduler.Adoptable(d.ctx, a.Lease) {
+		// The lease lapsed (the host slept or stalled past it) but the
+		// attempt still runs and nothing has ended it: Poll's recovery
+		// adopts the process, or already has, so it is left running.
+		d.log.Warn("lease lost; leaving the running attempt for recovery to adopt", "execution", string(a.Lease.ExecutionID), "epoch", a.Lease.Epoch)
+		return
+	}
+	d.report("observe", a.Lease.ExecutionID, errorCode(err), runtime.FailureCause(err))
+	d.confirmStopped(d.ctx, c, a.Lease.ExecutionID, a.Lease.Epoch)
 }
 
 // confirmStopped proves an attempt is not running before releasing its

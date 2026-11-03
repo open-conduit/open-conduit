@@ -100,7 +100,7 @@ func (d *daemon) sweepResources(c *components) {
 // bindResources gives an attempt its binding's resource provider, bound to the
 // attempt's trusted owner. A binding without a resource gets none; core never
 // sees what the provider supplies.
-func (d *daemon) bindResources(_ context.Context, state runtime.AttemptState) (extension.ResourceBroker, error) {
+func (d *daemon) bindResources(ctx context.Context, state runtime.AttemptState) (extension.ResourceBroker, error) {
 	desc, err := d.configs.Resource(state)
 	if err != nil {
 		return nil, err
@@ -113,7 +113,23 @@ func (d *daemon) bindResources(_ context.Context, state runtime.AttemptState) (e
 		return nil, fmt.Errorf("%w: resource provider %s", extension.ErrUnsupported, desc.Provider)
 	}
 	owner := extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID}
-	return extension.BindResources(p, owner, domain.Payload{Schema: ResourceConfigSchema, Data: append([]byte(nil), desc.Config...)}), nil
+	broker := extension.BindResources(p, owner, domain.Payload{Schema: ResourceConfigSchema, Data: append([]byte(nil), desc.Config...)})
+	return phasedResources{broker, runtime.LaunchPhases(ctx)}, nil
+}
+
+// phasedResources records each acquisition of the attempt's resource (its
+// workspace, cloned or reused) as a launch phase named for the provider's
+// kind of resource.
+type phasedResources struct {
+	extension.ResourceBroker
+	phase runtime.PhaseFunc
+}
+
+func (r phasedResources) Acquire(ctx context.Context, req extension.ResourceRequest) (extension.Resource, error) {
+	end := r.phase("workspace")
+	res, err := r.ResourceBroker.Acquire(ctx, req)
+	end(err)
+	return res, err
 }
 
 // reconcileResources releases leases whose owners finished, applies retention

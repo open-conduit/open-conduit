@@ -1291,6 +1291,41 @@ type RunSegment struct {
 	// Container is the container the segment ran in, when its binding
 	// declared one.
 	Container *RunContainer `json:"container,omitempty"`
+	// Relaunched says a new owner recovered the run while its launch had
+	// started nothing, and launched it afresh (Recovered is set too).
+	Relaunched bool `json:"relaunched,omitempty"`
+	// Launch is the segment's launch, phase by phase, in the order the
+	// phases began.
+	Launch []LaunchPhase `json:"launch,omitempty"`
+}
+
+// LaunchPhase is one step of a segment's launch: "toolbelt", "secrets",
+// "environment", "sandbox" or "container" (binding it), "executor" (the
+// executor's own launch), and the steps the executor's launch runs inside
+// it: "workspace", "sandbox plan", "sandbox pin", "container plan",
+// "container create" (which pulls the image when it isn't there) and
+// "container pin". A phase still
+// running has no EndedAt and a DurationMS of 0; Outcome is "ok", "failed"
+// or "cancelled" once it ends.
+type LaunchPhase struct {
+	Name       string `json:"name"`
+	StartedAt  string `json:"started_at"`
+	EndedAt    string `json:"ended_at,omitempty"`
+	DurationMS int64  `json:"duration_ms"`
+	Outcome    string `json:"outcome,omitempty"`
+}
+
+// Took is how long the phase took, or for one still running, how long it
+// has taken by now.
+func (p LaunchPhase) Took(now time.Time) time.Duration {
+	if p.EndedAt != "" {
+		return time.Duration(p.DurationMS) * time.Millisecond
+	}
+	start, err := time.Parse(time.RFC3339Nano, p.StartedAt)
+	if err != nil || !now.After(start) {
+		return 0
+	}
+	return now.Sub(start)
 }
 
 // RunContainer pins a segment's container: the plan's digest and summary,

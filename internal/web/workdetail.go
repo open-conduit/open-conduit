@@ -93,6 +93,28 @@ type turnPanel struct {
 	Usage       *client.Usage
 	Calls, Tool int
 	Deadline    time.Time
+	// Launches are the turn's launches, one per segment that recorded its
+	// phases: where the time went before the executor ran.
+	Launches []launchView
+}
+
+// launchView is one segment's launch, phase by phase.
+type launchView struct {
+	// Label names the segment's launch: "Launch", or how a later one came
+	// about.
+	Label  string
+	Took   time.Duration
+	Phases []launchPhaseRow
+}
+
+type launchPhaseRow struct {
+	Name string
+	// Inside says the phase ran inside an earlier one (a workspace or a
+	// container's creation inside the executor's launch).
+	Inside  bool
+	Took    time.Duration
+	Running bool
+	Outcome string
 }
 
 // repairNote says what failed in the runtime's words.
@@ -583,7 +605,62 @@ func turnPanelOf(v workView, t turnInfo, c chat, now time.Time) turnPanel {
 	if t.Live() && t.Deadline != "" {
 		p.Deadline = parseTime(t.Deadline)
 	}
+	p.Launches = launchesOf(t.Run, now)
 	return p
+}
+
+// launchesOf is each of the run's segments' launches. A launch's time runs
+// from its first phase's start to its last phase's end (now, while one is
+// still running); the phases nest, so they don't add up to it.
+func launchesOf(r client.Run, now time.Time) []launchView {
+	var out []launchView
+	for i, g := range r.Segments {
+		if len(g.Launch) == 0 {
+			continue
+		}
+		label := "Launch"
+		switch {
+		case g.Relaunched:
+			label = "Relaunch after a lost lease"
+		case g.Recovered:
+			label = "Recovery"
+		case i > 0 || r.SegmentsDropped > 0:
+			label = "Resume"
+		}
+		v := launchView{Label: label}
+		var first, last time.Time
+		type span struct{ start, end time.Time }
+		var spans []span
+		for _, ph := range g.Launch {
+			row := launchPhaseRow{Name: ph.Name, Took: ph.Took(now), Running: ph.EndedAt == ""}
+			if ph.Outcome != "" && ph.Outcome != "ok" {
+				row.Outcome = ph.Outcome
+			}
+			start := parseTime(ph.StartedAt)
+			end := now
+			if ph.EndedAt != "" {
+				end = parseTime(ph.EndedAt)
+			}
+			for _, o := range spans {
+				if !start.Before(o.start) && start.Before(o.end) && !end.After(o.end) {
+					row.Inside = true
+				}
+			}
+			spans = append(spans, span{start, end})
+			v.Phases = append(v.Phases, row)
+			if first.IsZero() || start.Before(first) {
+				first = start
+			}
+			if end.After(last) {
+				last = end
+			}
+		}
+		if !first.IsZero() && last.After(first) {
+			v.Took = last.Sub(first)
+		}
+		out = append(out, v)
+	}
+	return out
 }
 
 // workFuncs are the template functions the Work page and its transcript
