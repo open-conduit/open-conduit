@@ -267,6 +267,17 @@ func refused(t *testing.T, err error, code string) {
 	}
 }
 
+// refusedSaying is refused whose message says each of want.
+func refusedSaying(t *testing.T, err error, code string, want ...string) {
+	t.Helper()
+	refused(t, err, code)
+	for _, w := range want {
+		if !strings.Contains(err.Error(), w) {
+			t.Fatalf("refusal %q doesn't say %q", err, w)
+		}
+	}
+}
+
 func (e *toolsEnv) claim(title, body string, labels ...string) (int, domain.Work) {
 	e.t.Helper()
 	n := e.fake.OpenIssue(title, body, ghAlice, labels...)
@@ -1601,9 +1612,18 @@ func TestGitHubPRResolveResolvesTheCommentsThread(t *testing.T) {
 		t.Fatalf("%d resolve mutations", mutations)
 	}
 
+	// Refused, the agent hears what GitHub said and what resolving needs,
+	// and where GitHub names the missing permission, that permission
+	// rather than a guess.
 	e.fake.RefuseThreadResolution()
 	_, err = e.call(a, gh.OpPRResolve, "refused", map[string]any{"number": pr, "comment_id": other})
-	refused(t, err, "github_forbidden")
+	refusedSaying(t, err, "github_forbidden", "Resource not accessible by integration", "needs Pull requests write and Contents write")
+	e.fake.SetAcceptedPermissions("contents=write")
+	_, err = e.call(a, gh.OpPRResolve, "refused-named", map[string]any{"number": pr, "comment_id": other})
+	refusedSaying(t, err, "github_forbidden", "GitHub says it needs Contents write")
+	if msg := err.Error(); strings.Contains(msg, "Pull requests write") {
+		t.Fatalf("the refusal still guesses: %s", msg)
+	}
 	if e.fake.ThreadResolvedBy(other) != "" {
 		t.Fatal("a refused thread was resolved")
 	}
@@ -1698,10 +1718,11 @@ func TestGitHubPREditChangesOnlyTheWorksOwnPR(t *testing.T) {
 		t.Fatal("another PR was edited")
 	}
 
-	// A connection without Pull requests write.
+	// A connection without Pull requests write, which GitHub names.
 	e.fake.RefusePullEdits()
+	e.fake.SetAcceptedPermissions("pull_requests=write")
 	_, err = e.call(a, gh.OpPREdit, "", map[string]any{"number": number, "title": "Refused"})
-	refused(t, err, "github_forbidden")
+	refusedSaying(t, err, "github_forbidden", "GitHub says it needs Pull requests write")
 	_, err = e.call(a, gh.OpPREdit, "", map[string]any{"number": number, "draft": false})
 	refused(t, err, "github_forbidden")
 	if e.fake.Issue(number).Title != "Steady the header" || !e.fake.Pull(number).Draft {

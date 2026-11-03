@@ -119,7 +119,7 @@ A few things to know:
 
 An agent that reviews another agent's PR writes as the same bot, so GitHub sees the PR's author reviewing it and accepts only comments. To let it approve or request changes, give the reviewing binding its own App.
 
-1. Create and install a second App as in steps 1 to 3, for example `acme-reviewer`. It needs **Issues** and **Pull requests** read and write. Store its key, for example as `github-reviewer-key`.
+1. Create and install a second App as in steps 1 to 3, for example `acme-reviewer`. It needs **Issues** and **Pull requests** read and write, and **Contents** read and write to resolve review threads (`github.pr.resolve`): GitHub refuses to resolve a thread for an App with Contents read only. Store its key, for example as `github-reviewer-key`.
 2. Add it as its own connection, beside `github`, with the same `api_url` and sign-in, and the reviewer App as its bot:
 
    ```json
@@ -139,7 +139,7 @@ An agent that reviews another agent's PR writes as the same bot, so GitHub sees 
 
 Use `open-conduit config edit` for all three, then `config check`, and apply the file as in step 4. `config check` refuses a connection that isn't granted to the scope. Keep the same `api_url` as the `github` connection: a reviewer connection on another GitHub is refused when the binding first writes, and `doctor --check-secrets` reports it.
 
-That binding's comments, replies and reviews now show as `acme-reviewer[bot]`, and its git follows `github-reviewer`'s `git` ([choose per binding](#choose-per-binding)). Everything else stays on the `github` connection: Open Conduit still reads and claims each issue and PR once, sets the labels as the first bot, and the builder's PRs are still opened by it. Other bindings are unchanged. `doctor --check-secrets` lists it under each repository's entry, as `binding connection github-reviewer: bot writer authenticated`.
+That binding's comments, replies and reviews now show as `acme-reviewer[bot]`, and its git follows `github-reviewer`'s `git` ([choose per binding](#choose-per-binding)). Everything else stays on the `github` connection: Open Conduit still reads and claims each issue and PR once, sets the labels as the first bot, and the builder's PRs are still opened by it. Other bindings are unchanged. `doctor --check-secrets` lists it under each repository's entry, as `binding connection github-reviewer: bot writer authenticated`. It also reads the App's permissions on the repository and warns `permission_missing` when the binding is granted an operation they don't cover, such as `github.pr.resolve` without Contents write.
 
 Which binding reviews which PR is up to your routes and playbooks; the writer only changes whose name is on the review. To review every PR, see the next section.
 

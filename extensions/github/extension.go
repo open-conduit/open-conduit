@@ -394,7 +394,7 @@ func (x *Extension) authCheck(ctx context.Context, cfg protocol.CheckConfig) inp
 			}
 		}
 		check.Items = append(check.Items, item+strings.Join(notes, "; "))
-		for _, w := range x.writerItems(ctx, e, client) {
+		for _, w := range append(x.writerItems(ctx, e, client), x.permissionItems(ctx, cfg, e, client)...) {
 			raise(w.status, w.code)
 			check.Items = append(check.Items, w.item)
 		}
@@ -459,6 +459,79 @@ func (x *Extension) writerItems(ctx context.Context, e ViewEntry, entry *Client)
 			continue
 		}
 		out = append(out, writerItem{inproc.CheckOK, "verified", item + note})
+	}
+	return out
+}
+
+// permissionItems warns about each binding in the entry's scope granted an
+// operation (opPermissions) whose GitHub App installation on the code
+// repository lacks a permission it needs, so GitHub would refuse every
+// call: github.pr.resolve without Contents write, say. A binding writes as
+// its own GitHub connection, else as the entry's. A token connection, whose
+// permissions GitHub doesn't report, and an installation that can't be read
+// (the connection items say why) add nothing.
+func (x *Extension) permissionItems(ctx context.Context, cfg protocol.CheckConfig, e ViewEntry, entry *Client) []writerItem {
+	s := e.Settings
+	github := map[string]bool{}
+	for _, c := range cfg.Connections {
+		if c.Type == Type {
+			github[c.ID] = true
+		}
+	}
+	type held struct {
+		perms map[string]string
+		known bool
+	}
+	read := map[string]held{}
+	var out []writerItem
+	for _, scope := range cfg.Scopes {
+		if scope.ID != string(e.Scope) {
+			continue
+		}
+		for _, b := range scope.Bindings {
+			needs := grantedNeeds(b.Operations)
+			if len(needs) == 0 {
+				continue
+			}
+			conn := b.Connection
+			if conn == "" || !github[conn] {
+				conn = e.Connection
+			}
+			client := entry
+			if conn != e.Connection {
+				c, err := x.clients.Client(e.Scope, conn, entry)
+				if err != nil {
+					continue
+				}
+				client = c
+			}
+			h, ok := read[conn]
+			if !ok {
+				cx, cancel := context.WithTimeout(ctx, 20*time.Second)
+				perms, known, err := client.WriterPermissions(cx, s.Repo)
+				cancel()
+				h = held{perms, known && err == nil}
+				read[conn] = h
+			}
+			if !h.known {
+				continue
+			}
+			perms := make([]Permission, 0, len(needs))
+			for p := range needs {
+				perms = append(perms, p)
+			}
+			sort.Slice(perms, func(i, j int) bool { return perms[i].String() < perms[j].String() })
+			for _, p := range perms {
+				if covers(h.perms[p.Name], p.Level) {
+					continue
+				}
+				has := h.perms[p.Name]
+				if has == "" {
+					has = "none"
+				}
+				out = append(out, writerItem{inproc.CheckWarn, "permission_missing", fmt.Sprintf("%s: binding %s is granted %s, but %s has %s %s on %s, not %s, so GitHub refuses it; grant %s in the App's settings, or take the operation off the binding", s.Namespace, b.Name, strings.Join(needs[p], ", "), client.Writer(), permissionLabel(p.Name), has, s.Repo, p.Level, p)})
+			}
+		}
 	}
 	return out
 }

@@ -438,3 +438,16 @@ func TestGraphQLURL(t *testing.T) {
 		}
 	}
 }
+
+// ParseAccepted reads GitHub's X-Accepted-GitHub-Permissions: commas join
+// what is needed together, semicolons separate sets any one of which will
+// do.
+func TestParseAccepted(t *testing.T) {
+	got := acceptedNeeds("pull_requests=write,contents=read; issues=write")
+	if want := "Pull requests write and Contents read, or Issues write"; got != want {
+		t.Fatalf("got %q, want %q", got, want)
+	}
+	if got := acceptedNeeds(" "); got != "" {
+		t.Fatalf("empty header: %q", got)
+	}
+}
