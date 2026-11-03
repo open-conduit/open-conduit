@@ -584,8 +584,14 @@ func (t *Toolbelt) authorizedInTx(tx storage.Tx, digest string) (tokenRecord, do
 	if state, err = attemptState(tx, x.ID); err != nil {
 		return record, x, w, state, err
 	}
-	if x.State != domain.ExecutionRunning || x.Lease.Epoch != a.Lease.Epoch || x.Lease.Owner != a.Lease.Owner || !t.now().Before(x.Lease.ExpiresAt) || state.Epoch != a.Lease.Epoch || state.Declaration != nil || x.WorkID != a.WorkID || w.ScopeID != a.ScopeID || w.State != domain.WorkRunning {
+	if x.State != domain.ExecutionRunning || x.Lease.Epoch != a.Lease.Epoch || x.Lease.Owner != a.Lease.Owner || !t.now().Before(x.Lease.ExpiresAt) || state.Epoch != a.Lease.Epoch || x.WorkID != a.WorkID || w.ScopeID != a.ScopeID || w.State != domain.WorkRunning {
 		return record, x, w, state, extension.ErrUnauthorized
+	}
+	if state.Declaration != nil {
+		// The token is genuine and its segment still holds the lease, but it
+		// declared a wait or outcome: say so, rather than the bare refusal a
+		// forged or stale token gets.
+		return record, x, w, state, extension.ErrAuthorityReleased
 	}
 	return record, x, w, state, nil
 }
@@ -597,6 +603,8 @@ func callCode(err error) string {
 		return "ok"
 	case errors.As(err, new(*extension.GateRefusal)):
 		return "gate_refused"
+	case errors.Is(err, extension.ErrAuthorityReleased):
+		return "authority_released"
 	case errors.Is(err, extension.ErrUnauthorized), errors.Is(err, storage.ErrLeaseLost), errors.Is(err, storage.ErrNotFound):
 		return "unauthorized"
 	case errors.Is(err, extension.ErrUndeclared):
