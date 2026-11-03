@@ -19,8 +19,11 @@ import (
 	"github.com/open-conduit/open-conduit/client"
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
+	"github.com/open-conduit/open-conduit/extension/inproc"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/github/githubtest"
+	"github.com/open-conduit/open-conduit/internal/config"
+	"github.com/open-conduit/open-conduit/internal/management"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -51,16 +54,46 @@ type toolsEnv struct {
 	connection string
 	mu         sync.Mutex
 	tokens     map[domain.ID]string
+	// configs, when set, grants and authorizes the agent binding's
+	// toolbelt from a config document, as the daemon does, in place of
+	// agentOps.
+	configs *management.ConfigService
 }
 
 var agentOps = append([]string{extension.ReadContext, extension.Emit, extension.Wait, extension.DeclareOutcome}, gh.Operations()...)
 
 func newToolsEnv(t *testing.T) *toolsEnv {
 	t.Helper()
+	return newToolsEnvWith(t, "")
+}
+
+// newToolsEnvWith is newToolsEnv whose agent binding is granted and
+// authorized by the config document cfg ("" for agentOps), through the
+// daemon's config service.
+func newToolsEnvWith(t *testing.T, cfg string) *toolsEnv {
+	t.Helper()
 	fake := githubtest.New(ghRepo, "tok")
 	t.Cleanup(fake.Close)
 	e := &toolsEnv{ghEnv: &ghEnv{t: t, fake: fake, clock: &ghClock{t: fake.Now()}, path: filepath.Join(t.TempDir(), "conduit.db")}, tokens: map[domain.ID]string{}}
 	e.open()
+	// The config service projects its scopes into the store; the
+	// scope the GitHub runtime needs is put over it.
+	if cfg != "" {
+		toolsets := map[string]extension.Toolset{}
+		for _, ts := range gh.Toolsets() {
+			toolsets[ts.Name] = ts
+		}
+		registry := config.Registry{Executors: map[string]extension.Executor{"fixture": &schedulerExecutor{Caps: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}},
+			Handlers: map[string]bool{"github": true}, Operations: gh.Operations(), Toolsets: toolsets}
+		path := filepath.Join(t.TempDir(), "config.json")
+		if err := config.SaveAtomic(path, []byte(cfg)); err != nil {
+			t.Fatal(err)
+		}
+		var err error
+		if e.configs, err = management.OpenConfig(context.Background(), e.store, e.clock.Now, registry, path, nil); err != nil {
+			t.Fatal(err)
+		}
+	}
 	e.putScope(ghScope, ghExtensionConfig())
 	e.register()
 	e.compose()
@@ -72,10 +105,15 @@ func (e *toolsEnv) putScope(id domain.ID, ext string) {
 		{"name": "widgets", "type": "github", "connection": "github", "config": json.RawMessage(ext), "secret_names": []string{"hook"}},
 	}})
 	if err := e.store.Transact(context.Background(), storage.Guard{Now: e.clock.Now()}, func(tx storage.Tx) error {
+		// Over a scope the config service projected, when there is one.
+		var rev domain.Revision
+		if old, err := tx.Scope(id); err == nil {
+			rev = old.Revision
+		}
 		return tx.PutScope(domain.Scope{ID: id, Name: string(id), Bindings: []domain.Binding{{Name: "agent", Executor: "fixture", Requires: domain.Capabilities{Toolbelt: extension.ToolbeltCLI}}, {Name: "hold", Executor: gh.HoldExecutor, Requires: domain.Capabilities{Toolbelt: extension.ToolbeltSDK}}},
 			Routes: []domain.Route{{Name: "held", Handler: gh.HoldHandler, Binding: "hold", ActivePolicy: "queue"}, {Name: "issues", Handler: "github", Binding: "agent", ActivePolicy: "queue"},
 				{Name: "requests", Handler: "request", Binding: "agent", ActivePolicy: "queue"}},
-			Config: domain.Payload{Schema: "core.config.scope.v1", Data: meta}}, 0)
+			Config: domain.Payload{Schema: "core.config.scope.v1", Data: meta}}, rev)
 	}); err != nil {
 		e.t.Fatal(err)
 	}
@@ -112,17 +150,32 @@ func (e *toolsEnv) compose() {
 		return nil
 	}
 	var belt *runtime.Toolbelt
-	belt, err = runtime.NewToolbelt(e.store, e.clock.Now, e.router, runtime.ToolbeltOptions{
-		Grant: func(_ context.Context, s runtime.AttemptState) (runtime.ToolbeltGrant, error) {
+	options := runtime.ToolbeltOptions{
+		Grant: func(ctx context.Context, s runtime.AttemptState) (runtime.ToolbeltGrant, error) {
 			if s.Binding.Name == "hold" {
 				return runtime.ToolbeltGrant{Operations: []string{extension.Emit, gh.OpHoldStatus, gh.OpHold}, EventTypes: belt.EventTypes()}, nil
 			}
 			e.mu.Lock()
 			defer e.mu.Unlock()
+			if e.configs != nil {
+				g, err := e.configs.Grant(belt.EventTypes)(ctx, s)
+				g.Connection = e.connection
+				return g, err
+			}
 			return runtime.ToolbeltGrant{Operations: agentOps, EventTypes: belt.EventTypes(), Connection: e.connection}, nil
 		},
 		AuthorizeAlias: authorize,
-	})
+	}
+	if e.configs != nil {
+		options.Authorize = func(ctx context.Context, c runtime.AuthorityCheck) error {
+			if c.Binding == "hold" {
+				return nil
+			}
+			err := e.configs.Authorize(ctx, c)
+			return err
+		}
+	}
+	belt, err = runtime.NewToolbelt(e.store, e.clock.Now, e.router, options)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +201,9 @@ func (e *toolsEnv) compose() {
 		t.Fatal(err)
 	}
 	e.observed = e.tools.ObserveChecks
-	if err = belt.Register(e.tools.Registration()); err != nil {
+	// Described as the host registers them (inproc.Declarer), so the
+	// toolbelt lists them as an agent sees them.
+	if err = belt.Register(inproc.Describe(e.tools.Registration(), gh.Declared())); err != nil {
 		t.Fatal(err)
 	}
 	e.belt = belt
@@ -1733,6 +1788,83 @@ func TestGitHubPREditChangesOnlyTheWorksOwnPR(t *testing.T) {
 	e.fake.CloseIssue(number, "")
 	_, err = e.call(a, gh.OpPREdit, "", map[string]any{"number": number, "title": "Too late"})
 	refused(t, err, "pull_request_closed")
+	e.finish(a, nil)
+}
+
+// A work-issue execution granted what `init github` grants its agent
+// binding (the author toolset, #480) finds github.pr.edit in its toolbelt
+// and may edit and mark ready the PR it opened. Negative control: a binding
+// that lists the toolset's operations by name as of an earlier version (as
+// a config written before github.pr.edit joined does) neither lists it nor
+// may call it, and the refusal is the host's, before the extension's own
+// PR ownership check.
+func TestGitHubWorkIssueBindingMayEditItsOwnPR(t *testing.T) {
+	scope := gh.GitHubScope{Repo: ghRepo, Scope: ghScope, Connection: "github", Token: "env:GITHUB_TOKEN", Checkout: t.TempDir()}.ScopeConfig()
+	initOps := scope["bindings"].([]any)[0].(map[string]any)["operations"].([]string)
+	initAuth := scope["authorization"].(map[string]any)["operations"].([]string)
+	var author extension.Toolset
+	for _, ts := range gh.Toolsets() {
+		if ts.Name == gh.ToolsetAuthor {
+			author = ts
+		}
+	}
+	doc := func(ops, auth []string) string {
+		b, _ := json.Marshal(map[string]any{"version": 1, "settings": map[string]any{}, "connections": []any{},
+			"scopes": []any{map[string]any{"id": ghScope, "name": ghRepo,
+				"authorization": map[string]any{"connections": []string{}, "operations": auth, "read_scopes": []string{}},
+				"bindings": []any{map[string]any{"name": "agent", "executor": "fixture", "requires": map[string]any{"toolbelt": "cli"},
+					"operations": ops, "secret_names": []string{}, "config": map[string]any{}}},
+				"routes":      []any{map[string]any{"name": "issues", "handler": "github", "binding": "agent", "active_policy": "queue", "config": map[string]any{}}},
+				"secret_refs": map[string]any{}}}})
+		return string(b)
+	}
+	listed := func(e *toolsEnv, a runtime.Attempt) []string {
+		e.mu.Lock()
+		token := e.tokens[a.Lease.ExecutionID]
+		e.mu.Unlock()
+		ops, err := e.belt.Described(context.Background(), token, a.Lease.ExecutionID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var names []string
+		for _, op := range ops {
+			names = append(names, op.Name)
+		}
+		return names
+	}
+
+	e := newToolsEnvWith(t, doc(initOps, initAuth))
+	_, w := e.claim("Header wobbles", "", "bug")
+	a := e.start(w.ID)
+	if names := listed(e, a); !slices.Contains(names, gh.OpPREdit) || !slices.Contains(names, gh.OpPRResolve) {
+		t.Fatalf("the work-issue toolbelt lists %v, without github.pr.edit", names)
+	}
+	pr := e.must(a, gh.OpPRCreate, "pr", map[string]any{"title": "Fix the wobble", "body": "Not done yet.", "draft": true})
+	number := int(pr["number"].(float64))
+	if out := e.must(a, gh.OpPREdit, "body", map[string]any{"number": number, "body": "Steadies the header."}); out["state"] != "edited" {
+		t.Fatalf("edit: %v", out)
+	}
+	if out := e.must(a, gh.OpPREdit, "ready", map[string]any{"number": number, "draft": false}); out["state"] != "edited" || e.fake.Pull(number).Draft {
+		t.Fatalf("ready: %v", out)
+	}
+	e.finish(a, nil)
+
+	// The pre-#394 grant: the author toolset's version 2, by name.
+	e = newToolsEnvWith(t, doc(author.At(2), append([]string{extension.Emit}, author.At(2)...)))
+	_, w = e.claim("Header wobbles", "", "bug")
+	a = e.start(w.ID)
+	if names := listed(e, a); slices.Contains(names, gh.OpPREdit) || !slices.Contains(names, gh.OpPRCreate) {
+		t.Fatalf("the earlier grant lists %v", names)
+	}
+	pr = e.must(a, gh.OpPRCreate, "pr", map[string]any{"title": "Fix the wobble", "body": "Not done yet.", "draft": true})
+	number = int(pr["number"].(float64))
+	before := len(e.fake.Writes())
+	if _, err := e.call(a, gh.OpPREdit, "", map[string]any{"number": number, "body": "Steadies the header."}); !errors.Is(err, extension.ErrUnauthorized) {
+		t.Fatalf("an ungranted github.pr.edit: %v", err)
+	}
+	if len(e.fake.Writes()) != before {
+		t.Fatal("a refused edit wrote to GitHub")
+	}
 	e.finish(a, nil)
 }
 
