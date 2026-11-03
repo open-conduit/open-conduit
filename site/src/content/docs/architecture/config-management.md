@@ -41,7 +41,7 @@ Errors contain safe JSON pointers, stable codes and remedies, for example `scope
 
 ## Included folders
 
-The config file's optional `includes` list names folders, each as `{ "path": "...", "parent": "<scope id>" }`. `path` is absolute or relative to the config file's directory (no `~`), and `parent` is a scope defined in the config file itself. Each folder keeps its scopes in `<folder>/.open-conduit/config.json`, as `{ "version": 1, "scopes": [...] }`. That fragment has no `connections` or `settings`, and its scopes carry no `secret_refs`, so its references (and any `cmd:` they run) stay in the config file. The fragment must be a regular file owned by the daemon's user that no one else can write, and no larger than 1 MiB. It may be readable by others, as a checkout's files usually are.
+The config file's optional `includes` list names folders, each as `{ "path": "...", "parent": "<scope id>" }`. `path` is absolute or relative to the config file's directory (no `~`), and `parent` is a scope defined in the config file itself. Each folder keeps its scopes in `<folder>/.open-conduit/config.json`, as `{ "version": 1, "scopes": [...] }`. That fragment has no `connections` or `settings`, and its scopes carry no `secret_refs`, and its bindings no `pass_env`, so its references (and any `cmd:` they run) and the daemon variables a run may see stay in the config file. The fragment must be a regular file owned by the daemon's user that no one else can write, and no larger than 1 MiB. It may be readable by others, as a checkout's files usually are.
 
 Composition (`config.ValidateFile`) runs before the validation above and turns the file and its folders into one document:
 

@@ -598,7 +598,14 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 		return BindingEntry{Binding: Binding{Name: name}, Disabled: true}
 	}
 	var b Binding
-	if !c.object(n, path, []string{"name", "executor"}, "requires", "operations", "secret_names", "config", "connection", "resource", "sandbox", "container", "timeout_seconds", "grants", "pass_env") {
+	optional := []string{"requires", "operations", "secret_names", "config", "connection", "resource", "sandbox", "container", "timeout_seconds", "grants"}
+	if !c.fragment {
+		// A folder's bindings pass no daemon variables: like its scopes'
+		// secret references, pass_env stays in the config file, so a
+		// checkout can't read the daemon's environment.
+		optional = append(optional, "pass_env")
+	}
+	if !c.object(n, path, []string{"name", "executor"}, optional...) {
 		return BindingEntry{Binding: b}
 	}
 	b.Name, _ = c.str(n.field("name"), path+"/name", idPattern)
