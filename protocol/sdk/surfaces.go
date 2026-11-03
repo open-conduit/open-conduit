@@ -27,7 +27,7 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		switch p.Kind {
-		case protocol.ValidateResourceMode, protocol.ValidateResourceSandbox, protocol.ValidateExecutorMode, protocol.ValidateExecutorPlaybook:
+		case protocol.ValidateResourceMode, protocol.ValidateResourceSandbox, protocol.ValidateExecutorMode, protocol.ValidateExecutorPlaybook, protocol.ValidateExecutorFolder:
 			return s.workspaceCheck(p)
 		}
 		if s.ext.Validate != nil {
@@ -510,9 +510,11 @@ var _ extension.SetupHost = (*setupHost)(nil)
 // (extension.ResourceModeDefaulter), whether a sandboxed binding may use it
 // (extension.ResourceSandboxChecker) and the mode a binding config makes an
 // executor request (extension.ResourceModer), and the playbook a binding
-// config starts its turns on (extension.PlaybookNamer). A type that doesn't implement
-// the interface names no mode and passes the sandbox check, as a first-party
-// registration without the hook does.
+// config starts its turns on (extension.PlaybookNamer), and a binding config
+// adapted to the included folder it comes from (extension.FolderConfigurer).
+// A type that doesn't implement the interface names no mode, passes the
+// sandbox check and keeps its config, as a first-party registration without
+// the hook does.
 func (s *Server) workspaceCheck(p protocol.ValidateParams) (any, error) {
 	switch p.Kind {
 	case protocol.ValidateResourceMode:
@@ -534,6 +536,16 @@ func (s *Server) workspaceCheck(p protocol.ValidateParams) (any, error) {
 		if n, ok := s.ext.Executors[p.Type].(extension.PlaybookNamer); ok {
 			return protocol.ValidateResult{Playbook: n.Playbook(p.Config)}, nil
 		}
+	case protocol.ValidateExecutorFolder:
+		f, ok := s.ext.Executors[p.Type].(extension.FolderConfigurer)
+		if !ok {
+			return protocol.ValidateResult{Config: p.Config}, nil
+		}
+		config, err := f.FolderConfig(p.Config, p.Folder, p.Resource)
+		if err != nil {
+			return nil, protocol.Errorf(protocol.CodeInvalid, "invalid executor config")
+		}
+		return protocol.ValidateResult{Config: config}, nil
 	}
 	return protocol.ValidateResult{}, nil
 }

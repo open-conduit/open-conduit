@@ -488,6 +488,16 @@ func (e *remoteExecutor) Playbook(raw json.RawMessage) string {
 	return e.r.ExecutorPlaybook(e.decl.Name)(raw)
 }
 
+// FolderConfig adapts a binding config from an included folder
+// (extension.FolderConfigurer), asked through validate when the manifest
+// declares folder_config; the config unchanged otherwise.
+func (e *remoteExecutor) FolderConfig(raw json.RawMessage, folder string, resource bool) (json.RawMessage, error) {
+	if !e.decl.FolderConfig {
+		return raw, nil
+	}
+	return e.r.ExecutorFolderConfig(e.decl.Name)(raw, folder, resource)
+}
+
 // open binds the RunRequest's trusted callbacks to a fresh run ID. The run
 // remembers the last metadata persisted through it, so the host can
 // re-adopt the execution after the extension crashes.

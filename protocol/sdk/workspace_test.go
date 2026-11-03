@@ -136,3 +136,63 @@ func TestExecutorConfigWarnings(t *testing.T) {
 		t.Fatalf("an executor without ConfigWarner warned %q %v", got, err)
 	}
 }
+
+// folderExecutor adapts a binding config to its folder; only that is called.
+type folderExecutor struct{ extension.Executor }
+
+func (folderExecutor) FolderConfig(raw json.RawMessage, folder string, resource bool) (json.RawMessage, error) {
+	var c map[string]any
+	if err := json.Unmarshal(raw, &c); err != nil {
+		return nil, err
+	}
+	if c["refuse"] == true {
+		return nil, errors.New("secret detail")
+	}
+	if !resource {
+		c["dir"] = folder
+	}
+	return json.Marshal(c)
+}
+
+// TestExecutorFolder: validate's executor_folder kind answers with the
+// executor's adapted config (extension.FolderConfigurer), refuses without
+// echoing the executor's error, and never reaches Validate. An executor
+// without the interface keeps its config (the negative control).
+func TestExecutorFolder(t *testing.T) {
+	validated := false
+	ext := &sdk.Extension{Manifest: manifest(),
+		Executors: map[string]extension.Executor{"folder": folderExecutor{}, "plain": struct{ extension.Executor }{}},
+		Validate: func(context.Context, protocol.ValidateParams) error {
+			validated = true
+			return errors.New("not for this kind")
+		},
+	}
+	host, _, _ := serve(t, ext)
+	ctx := context.Background()
+	if err := host.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: []int{1}}, nil); err != nil {
+		t.Fatal(err)
+	}
+	adapt := func(typ, config string, resource bool) (string, error) {
+		t.Helper()
+		var out protocol.ValidateResult
+		err := host.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateExecutorFolder, Type: typ, Config: json.RawMessage(config), Folder: "/work/web", Resource: resource}, &out)
+		return string(out.Config), err
+	}
+	if got, err := adapt("folder", `{"model":"m"}`, false); err != nil || got != `{"dir":"/work/web","model":"m"}` {
+		t.Fatalf("adapted %s: %v", got, err)
+	}
+	if got, err := adapt("folder", `{"model":"m"}`, true); err != nil || got != `{"model":"m"}` {
+		t.Fatalf("with a resource %s: %v", got, err)
+	}
+	_, err := adapt("folder", `{"refuse":true}`, false)
+	var pe *protocol.Error
+	if !errors.As(err, &pe) || pe.Code != protocol.CodeInvalid || pe.Message == "secret detail" {
+		t.Fatalf("refusal: %v", err)
+	}
+	if got, err := adapt("plain", `{"model":"m"}`, false); err != nil || got != `{"model":"m"}` {
+		t.Fatalf("plain executor changed its config to %s: %v", got, err)
+	}
+	if validated {
+		t.Fatal("executor_folder reached Validate")
+	}
+}

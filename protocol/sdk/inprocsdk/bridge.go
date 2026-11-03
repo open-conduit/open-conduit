@@ -251,10 +251,11 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 			}
 			_, moded := x.(extension.ResourceModer)
 			_, playbook := x.(extension.PlaybookNamer)
+			_, folder := x.(extension.FolderConfigurer)
 			p.Executors = append(p.Executors, protocol.ExecutorDecl{Name: n, Pool: execs[n].Pool,
 				Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container},
 				Controls:     protocol.Controls{Stop: stop, Forget: forget, Attach: attach, ContainerAttach: containerAttach, Live: live, InteractiveLaunch: interactive},
-				ResourceMode: moded, Playbook: playbook, LaunchNames: launchNames, Fields: slices.Clone(execs[n].Fields)})
+				ResourceMode: moded, Playbook: playbook, FolderConfig: folder, LaunchNames: launchNames, Fields: slices.Clone(execs[n].Fields)})
 		}
 	}
 	if t, ok := b.x.(inproc.Tasker); ok && len(p.Tasks) == 0 {

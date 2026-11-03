@@ -153,6 +153,26 @@ func (r *Remote) ExecutorPlaybook(name string) func(json.RawMessage) string {
 	}
 }
 
+// ExecutorFolderConfig returns the folder hook of an executor declared with
+// folder_config: validate with kind executor_folder, whose answer is the
+// binding config adapted to the included folder it comes from. A refusal
+// or a failed call is an error, so a binding is never stored unadapted.
+func (r *Remote) ExecutorFolderConfig(name string) func(json.RawMessage, string, bool) (json.RawMessage, error) {
+	return func(config json.RawMessage, folder string, resource bool) (json.RawMessage, error) {
+		ctx, cancel := context.WithTimeout(context.Background(), ValidateTimeout)
+		defer cancel()
+		var out protocol.ValidateResult
+		p := protocol.ValidateParams{Kind: protocol.ValidateExecutorFolder, Type: name, Config: config, Folder: folder, Resource: resource}
+		if err := r.p.Call(ctx, "validate", p, &out); err != nil {
+			return nil, errors.New("the extension could not adapt the binding config to its folder")
+		}
+		if !json.Valid(out.Config) {
+			return nil, errors.New("the extension answered an adapted binding config that is not JSON")
+		}
+		return out.Config, nil
+	}
+}
+
 // ExecutorWarnings returns the config warnings of a declared executor:
 // validate with kind executor, whose answer may carry warnings. A failed
 // call or a refusal gives none (the config check reports a refusal), and

@@ -64,6 +64,13 @@ const (
 	// executor, Config the binding's executor config; the answer is a
 	// ValidateResult whose Playbook is the playbook's name, "" for none.
 	ValidateExecutorPlaybook = "executor_playbook"
+	// ValidateExecutorFolder adapts a binding from an included folder's
+	// config, for an executor declared with folder_config. Type is the
+	// executor, Config the binding's executor config, Folder the included
+	// folder and Resource whether the binding has a resource; the answer
+	// is a ValidateResult whose Config is the adapted config the host
+	// validates and stores. A refusal rejects the binding config.
+	ValidateExecutorFolder = "executor_folder"
 	// ValidateSandbox checks a binding's sandbox config for a provider
 	// declared in sandboxes. Type is the provider, Config its config.
 	ValidateSandbox = "sandbox"
@@ -92,10 +99,16 @@ type ValidateParams struct {
 	// Mode is the resource mode the binding's executor requests, for kind
 	// resource_sandbox only ("" for the resource config's default).
 	Mode string `json:"mode,omitempty"`
+	// Folder and Resource are, for kind executor_folder only, the included
+	// folder a binding comes from and whether it has a resource.
+	Folder   string `json:"folder,omitempty"`
+	Resource bool   `json:"resource,omitempty"`
 }
 
 // ValidateResult is the answer to validate: empty for a check, the mode
-// for kinds resource_mode and executor_mode, and for kind executor the
+// for kinds resource_mode and executor_mode, the playbook for kind
+// executor_playbook, the adapted config for kind executor_folder, and for
+// kind executor the
 // warnings config check shows about a valid binding config
 // (extension.ConfigWarner): fixed sentences that never echo config values.
 // For kinds extension and route, Describe optionally says what a valid
@@ -105,10 +118,11 @@ type ValidateParams struct {
 // validated, so its view needs no call; without them it reads the entry
 // type's declared describe. They must not reveal secrets.
 type ValidateResult struct {
-	Mode     string         `json:"mode,omitempty"`
-	Playbook string         `json:"playbook,omitempty"`
-	Warnings []string       `json:"warnings,omitempty"`
-	Describe []DescribeLine `json:"describe,omitempty"`
+	Mode     string          `json:"mode,omitempty"`
+	Playbook string          `json:"playbook,omitempty"`
+	Config   json.RawMessage `json:"config,omitempty"`
+	Warnings []string        `json:"warnings,omitempty"`
+	Describe []DescribeLine  `json:"describe,omitempty"`
 }
 
 // DescribeLine is one thing a config object sets up: a named element of

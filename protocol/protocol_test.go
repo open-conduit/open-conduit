@@ -214,6 +214,7 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 		"extension.ResourceModeDefaulter":   reflect.TypeFor[extension.ResourceModeDefaulter](),
 		"extension.ResourceSandboxChecker":  reflect.TypeFor[extension.ResourceSandboxChecker](),
 		"extension.ResourceModer":           reflect.TypeFor[extension.ResourceModer](),
+		"extension.FolderConfigurer":        reflect.TypeFor[extension.FolderConfigurer](),
 		"extension.Setup":                   reflect.TypeFor[extension.Setup](),
 		"extension.SetupProbes":             reflect.TypeFor[extension.SetupProbes](),
 		"extension.SandboxBroker":           reflect.TypeFor[extension.SandboxBroker](),
