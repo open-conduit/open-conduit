@@ -2,18 +2,15 @@ package bootstrap
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"path/filepath"
+	"os"
 	"sort"
 	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	gitws "github.com/open-conduit/open-conduit/extensions/git"
-	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/storage"
 )
@@ -40,22 +37,11 @@ type resourceState struct {
 	sweepErr  error
 }
 
-func resourceRegistry(r *config.Registry) {
-	r.Resources = map[string]bool{gitws.Type: true}
-	r.ResourceConfig = map[string]func(json.RawMessage) error{gitws.Type: gitws.ValidateConfig}
-	r.ResourceSandbox = map[string]func(json.RawMessage, string) error{gitws.Type: gitws.ValidateSandbox}
-	r.ResourceModeDefault = map[string]func(json.RawMessage) string{gitws.Type: gitws.ModeDefault}
-	r.ResourceSettings = map[string]func(json.RawMessage) []extension.Setting{gitws.Type: gitws.Settings}
-}
-
-func (d *daemon) openResources() error {
-	p, err := gitws.New(gitws.Options{StateDir: filepath.Join(d.o.StateDir, "resources", gitws.Type), BaseDir: filepath.Dir(d.o.ConfigPath), Now: d.now, DiskSpace: d.o.ResourceDiskSpace})
-	if err != nil {
-		return err
-	}
-	d.resources.providers = map[string]extension.ResourceProvider{gitws.Type: p}
+// openResources starts the host side of the resource providers, which the
+// packages' declared ones (manifest resources) join as they start.
+func (d *daemon) openResources() {
+	d.resources.providers = map[string]extension.ResourceProvider{}
 	d.resources.lastSweep = d.now()
-	return nil
 }
 
 // sweepResources runs each sweeping provider's spare-workspace sweep in the
@@ -113,8 +99,28 @@ func (d *daemon) bindResources(ctx context.Context, state runtime.AttemptState) 
 		return nil, fmt.Errorf("%w: resource provider %s", extension.ErrUnsupported, desc.Provider)
 	}
 	owner := extension.ResourceOwner{ScopeID: state.ScopeID, WorkID: state.WorkID, ExecutionID: state.ExecutionID}
-	broker := extension.BindResources(p, owner, domain.Payload{Schema: ResourceConfigSchema, Data: append([]byte(nil), desc.Config...)})
+	broker := extension.BindResourcesEnv(p, owner, domain.Payload{Schema: ResourceConfigSchema, Data: append([]byte(nil), desc.Config...)}, resourceEnv(desc.PassEnv, os.LookupEnv))
 	return phasedResources{broker, runtime.LaunchPhases(ctx)}, nil
+}
+
+// resourceEnv is the host's values of the variables a binding's resource
+// pass_env names, those it has set (extension.ResourceAcquisition.HostEnv).
+// It is the provider's own grant, apart from the binding's pass_env, which
+// reaches the run. Reserved names never pass, whatever the config says.
+func resourceEnv(names []string, lookup func(string) (string, bool)) map[string]string {
+	var out map[string]string
+	for _, name := range names {
+		if domain.ReservedEnv(name) {
+			continue
+		}
+		if value, ok := lookup(name); ok {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[name] = value
+		}
+	}
+	return out
 }
 
 // phasedResources records each acquisition of the attempt's resource (its

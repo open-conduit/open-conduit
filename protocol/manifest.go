@@ -555,6 +555,13 @@ type ResourceDecl struct {
 	// through validate with kind resource_sandbox
 	// (config.Registry.ResourceSandbox).
 	Sandbox bool `json:"sandbox,omitempty"`
+	// Sweep marks a provider the host asks, on a slow cadence, to remove
+	// the spare resources no lease release covers, through provider.sweep
+	// (extension.ResourceSweeper).
+	Sweep bool `json:"sweep,omitempty"`
+	// Settings are the resource config fields safe to show the operator
+	// (config.Registry.ResourceSettings), as an extension type's are.
+	Settings []SettingDecl `json:"settings,omitempty"`
 }
 
 // SandboxDecl declares a process sandbox provider type.
@@ -699,27 +706,30 @@ func (m Manifest) Validate() error {
 	for _, c := range p.Connections {
 		ident("connection type", c.Type)
 	}
-	ingress := false
-	for _, x := range p.Extensions {
-		ident("extension type", x.Type)
-		ingress = ingress || x.Ingress
+	settings := func(kind, typ string, decls []SettingDecl) {
 		fields := map[string]bool{}
-		for _, st := range x.Settings {
+		for _, st := range decls {
 			if !fieldPattern.MatchString(st.Field) || fields[st.Field] {
-				fail("extension type %q setting %q must be a distinct field name", x.Type, st.Field)
+				fail("%s %q setting %q must be a distinct field name", kind, typ, st.Field)
 			}
 			fields[st.Field] = true
 			switch st.Type {
 			case SettingString, SettingBoolean, SettingNumber, SettingStrings:
 				if len(st.Default) > 0 {
 					if _, ok := settingValue(st.Type, st.Default); !ok {
-						fail("extension type %q setting %q default is not a %s", x.Type, st.Field, st.Type)
+						fail("%s %q setting %q default is not a %s", kind, typ, st.Field, st.Type)
 					}
 				}
 			default:
-				fail("extension type %q setting %q type %q must be string, boolean, number or strings", x.Type, st.Field, st.Type)
+				fail("%s %q setting %q type %q must be string, boolean, number or strings", kind, typ, st.Field, st.Type)
 			}
 		}
+	}
+	ingress := false
+	for _, x := range p.Extensions {
+		ident("extension type", x.Type)
+		ingress = ingress || x.Ingress
+		settings("extension type", x.Type, x.Settings)
 		if d := x.Describe; d != nil {
 			if !fieldPattern.MatchString(d.List) || !fieldPattern.MatchString(d.Name) || d.Detail != "" && !fieldPattern.MatchString(d.Detail) {
 				fail("extension type %q describe must name its list, name and detail fields", x.Type)
@@ -855,6 +865,7 @@ func (m Manifest) Validate() error {
 			}
 			modes[mode] = true
 		}
+		settings("resource provider", r.Type, r.Settings)
 	}
 	sandboxes := map[string]bool{}
 	for _, x := range p.Sandboxes {
@@ -999,6 +1010,9 @@ func (m Manifest) Enabled() []string {
 		set("executors.live", x.Controls.Live)
 	}
 	set("resources", len(p.Resources) > 0)
+	for _, r := range p.Resources {
+		set("resources.sweep", r.Sweep)
+	}
 	set("sandboxes", len(p.Sandboxes) > 0)
 	set("tasks", len(p.Tasks) > 0)
 	set("exporters", p.Exporters)

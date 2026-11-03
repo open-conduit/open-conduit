@@ -52,7 +52,9 @@ type Options struct {
 	BaseDir string
 	// Now is the wall clock for retention (default time.Now).
 	Now func() time.Time
-	// Environ supplies the daemon environment (default os.Environ).
+	// Environ supplies the provider's own environment (default os.Environ).
+	// Out of process it is sanitized; an acquisition adds the host's
+	// values of its binding's pass_env (ResourceAcquisition.HostEnv).
 	Environ func() []string
 	// Git is the git binary (default "git").
 	Git string
@@ -265,6 +267,7 @@ func (p *Provider) checkout(ctx context.Context, cfg Config) (string, error) {
 // Acquire returns the owner's lease for the requested mode, creating the
 // workspace only when none exists. See extension.ResourceProvider.
 func (p *Provider) Acquire(ctx context.Context, a extension.ResourceAcquisition) (extension.Resource, error) {
+	ctx = withHostEnv(ctx, a.HostEnv)
 	cfg, err := ParseConfig(a.Config.Data)
 	if err != nil {
 		return extension.Resource{}, errors.Join(extension.ErrInvalid, err)

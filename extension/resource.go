@@ -90,6 +90,15 @@ type ResourceAcquisition struct {
 	Owner   ResourceOwner
 	Config  domain.Payload
 	Request ResourceRequest
+	// HostEnv are the host's values of the variables the binding's
+	// resource names in its own pass_env: the only variables of the host's
+	// environment a provider adds to its own sanitized one for the
+	// acquisition (its commands and setup). It is the provider's grant,
+	// apart from the binding's pass_env (ExecutionContext.HostEnv), which
+	// reaches the run, so an ssh agent the provider fetches with need not
+	// reach the agent. The operator names them and the host resolves them;
+	// a provider never chooses them.
+	HostEnv map[string]string
 }
 
 // ResourceOwnerStatus is durable runtime state reported by the host for a
@@ -207,17 +216,24 @@ type ResourceBroker interface {
 // BindResources binds a provider to one attempt. Hosts call it; executors only
 // see the returned broker, so they cannot act for another owner.
 func BindResources(p ResourceProvider, owner ResourceOwner, config domain.Payload) ResourceBroker {
-	return boundResources{p, owner, config}
+	return boundResources{p: p, owner: owner, config: config}
+}
+
+// BindResourcesEnv is BindResources with the host's values of the
+// binding's resource pass_env (ResourceAcquisition.HostEnv).
+func BindResourcesEnv(p ResourceProvider, owner ResourceOwner, config domain.Payload, hostEnv map[string]string) ResourceBroker {
+	return boundResources{p: p, owner: owner, config: config, hostEnv: hostEnv}
 }
 
 type boundResources struct {
-	p      ResourceProvider
-	owner  ResourceOwner
-	config domain.Payload
+	p       ResourceProvider
+	owner   ResourceOwner
+	config  domain.Payload
+	hostEnv map[string]string
 }
 
 func (b boundResources) Acquire(ctx context.Context, r ResourceRequest) (Resource, error) {
-	return b.p.Acquire(ctx, ResourceAcquisition{Owner: b.owner, Config: b.config, Request: r})
+	return b.p.Acquire(ctx, ResourceAcquisition{Owner: b.owner, Config: b.config, Request: r, HostEnv: b.hostEnv})
 }
 func (b boundResources) Lookup(ctx context.Context, ref string) (Resource, error) {
 	return b.p.Lookup(ctx, b.owner, ref)

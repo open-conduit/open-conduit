@@ -118,6 +118,7 @@ func TestIncludedScopesStayBeneathTheirParent(t *testing.T) {
 	cases := []struct{ name, fragment, path, code string }{
 		{"secret references", `{"version":1,"scopes":[{"id":"web","name":"web","secret_refs":{"key":"cmd:true"}}]}`, "includes/0/scopes/0/secret_refs", "unknown_field"},
 		{"daemon variables", `{"version":1,"scopes":[{"id":"web","name":"web","bindings":[{"name":"run","executor":"folder_agent","pass_env":["AWS_SECRET_ACCESS_KEY"],"config":{"command":"x"}}]}]}`, "includes/0/scopes/0/bindings/0/pass_env", "unknown_field"},
+		{"workspace variables", `{"version":1,"scopes":[{"id":"web","name":"web","bindings":[{"name":"run","executor":"folder_agent","resource":{"provider":"git","config":{},"pass_env":["SSH_AUTH_SOCK"]},"config":{"command":"x"}}]}]}`, "includes/0/scopes/0/bindings/0/resource/pass_env", "unknown_field"},
 		{"source", `{"version":1,"scopes":[{"id":"web","name":"web","source":"/elsewhere"}]}`, "includes/0/scopes/0/source", "unknown_field"},
 		{"connections", `{"version":1,"connections":[],"scopes":[]}`, "includes/0/connections", "unknown_field"},
 		{"another parent", `{"version":1,"scopes":[{"id":"web","name":"web","parent":"other"}]}`, "includes/0/scopes/0/parent", "invalid_value"},

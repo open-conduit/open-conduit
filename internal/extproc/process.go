@@ -55,6 +55,11 @@ type Options struct {
 	// ExecutorDirs are the declared executors' state directories
 	// (protocol.InitializeParams.ExecutorDirs).
 	ExecutorDirs map[string]string
+	// ResourceDirs and ConfigDir are the declared resource types' state
+	// directories and the config file's directory
+	// (protocol.InitializeParams.ResourceDirs and ConfigDir).
+	ResourceDirs map[string]string
+	ConfigDir    string
 	Host         protocol.HostInfo
 	// Versions are the protocol versions the host speaks (default
 	// protocol.Versions).
@@ -381,7 +386,7 @@ func (p *Process) handshake(ctx context.Context, conn *jsonrpc.Conn) error {
 	ctx, cancel := context.WithTimeout(ctx, p.o.HandshakeTimeout)
 	defer cancel()
 	var init protocol.InitializeResult
-	err := conn.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: p.o.Versions, Host: p.o.Host, StateDir: p.o.StateDir, ExecutorDirs: p.o.ExecutorDirs}, &init)
+	err := conn.Call(ctx, "initialize", protocol.InitializeParams{ProtocolVersions: p.o.Versions, Host: p.o.Host, StateDir: p.o.StateDir, ExecutorDirs: p.o.ExecutorDirs, ResourceDirs: p.o.ResourceDirs, ConfigDir: p.o.ConfigDir}, &init)
 	if errors.Is(err, protocol.ErrIncompatible) {
 		return p.refuse(err)
 	}

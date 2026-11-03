@@ -204,6 +204,8 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		// srt, a sandbox provider: its policy cases, and adopt refusing a
 		// plan it never made.
 		{"srt", "", []string{"sandboxes.policy", "surfaces.served"}},
+		// git, a resource provider: config check's mode and sandbox answers.
+		{"git", "", []string{"resources.workspace"}},
 		{"notes", "notes-extension", []string{"storage.kv_migration", "ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served", "resources.workspace", "sandboxes.policy"}},
 		{"runner", "runner-extension", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode"}},
 	} {

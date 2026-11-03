@@ -853,3 +853,35 @@ func TestCheckoutSpelledInAnotherCase(t *testing.T) {
 		t.Errorf("subdirectory checkout: %v", err)
 	}
 }
+
+// TestHostEnvReachesSetup: an acquisition's HostEnv (the binding's
+// pass_env) reaches its setup, over the provider's own environment, and
+// never as an OS_* variable.
+func TestHostEnvReachesSetup(t *testing.T) {
+	f := newFixture(t)
+	c := cfg(map[string]any{"mode": "fresh", "setup": `printf '%s|%s' "$PROXY_FOR_TEST" "$OS_FORGED" > env.log`})
+	var log strings.Builder
+	r, err := extension.BindResourcesEnv(f.provider, owner("w1", "x1"), c, map[string]string{"PROXY_FOR_TEST": "http://proxy:3128", "OS_FORGED": "x"}).
+		Acquire(context.Background(), extension.ResourceRequest{Mode: extension.ResourceFresh, Log: &log})
+	if err != nil {
+		t.Fatal(err, log.String())
+	}
+	if got := read(t, filepath.Join(r.Dir, "env.log")); got != "http://proxy:3128|" {
+		t.Fatalf("setup environment: %q", got)
+	}
+}
+
+// TestAuthHint: a remote git can't authenticate to, with no ssh agent in the
+// provider's environment, names the resource's pass_env as the fix.
+func TestAuthHint(t *testing.T) {
+	denied := "git@github.com: Permission denied (publickey)."
+	if h := authHint(denied, []string{"PATH=/bin"}); !strings.Contains(h, "resource pass_env") {
+		t.Fatalf("no agent: %q", h)
+	}
+	if h := authHint(denied, []string{"SSH_AUTH_SOCK=/tmp/a"}); h != "" {
+		t.Fatalf("with an agent: %q", h)
+	}
+	if h := authHint("fatal: not a git repository", nil); h != "" {
+		t.Fatalf("another failure: %q", h)
+	}
+}

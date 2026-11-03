@@ -697,8 +697,16 @@ func (d *daemon) extensionOptions(f extproc.Found, paths extproc.Paths) extproc.
 	for _, e := range f.Manifest.Provides.Executors {
 		executors[e.Name] = executorDir(d.o.StateDir, e.Name)
 	}
+	resources := map[string]string{}
+	for _, r := range f.Manifest.Provides.Resources {
+		resources[r.Type] = resourceDir(d.o.StateDir, r.Type)
+	}
+	var configDir string
+	if d.o.ConfigPath != "" {
+		configDir = filepath.Dir(d.o.ConfigPath)
+	}
 	return extproc.Options{
-		StateDir: paths.State, LogDir: filepath.Dir(paths.Log), ExecutorDirs: executors,
+		StateDir: paths.State, LogDir: filepath.Dir(paths.Log), ExecutorDirs: executors, ResourceDirs: resources, ConfigDir: configDir,
 		Host:      protocol.HostInfo{Name: "open-conduit", Version: d.o.Version},
 		Configure: func() protocol.ConfigureParams { return d.extensionConfigure(f.Manifest) },
 		OnConfigured: func(res protocol.ConfigureResult) {
@@ -923,3 +931,7 @@ func (e extensionExporter) Shutdown(context.Context) error { return nil }
 // under one root the host's sandbox and container guards know (RunRoot)
 // and survive a move between the two.
 func executorDir(state, name string) string { return filepath.Join(state, "executors", name) }
+
+// resourceDir is a resource provider type's state directory, the same in
+// process or out (protocol.InitializeParams.ResourceDirs).
+func resourceDir(state, typ string) string { return filepath.Join(state, "resources", typ) }

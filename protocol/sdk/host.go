@@ -39,6 +39,24 @@ func (h *Host) ExecutorDir(name string) string {
 	return h.srv.ExecutorDir(name)
 }
 
+// ResourceDir is the state directory the host named at initialize for one
+// of the extension's resource provider types ("" when it named none).
+func (h *Host) ResourceDir(typ string) string {
+	if h.srv == nil {
+		return ""
+	}
+	return h.srv.ResourceDir(typ)
+}
+
+// ConfigDir is the operator's config file's directory the host named at
+// initialize ("" for none).
+func (h *Host) ConfigDir() string {
+	if h.srv == nil {
+		return ""
+	}
+	return h.srv.ConfigDir()
+}
+
 // NewHost returns a Host on an existing connection (tests).
 func NewHost(conn *jsonrpc.Conn) *Host { return &Host{conn: conn} }
 

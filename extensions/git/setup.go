@@ -156,7 +156,7 @@ func (p *Provider) runSetup(ctx context.Context, log io.Writer, cfg Config, path
 	defer cancel()
 	cmd := exec.Command("/bin/sh", "-c", cfg.Setup)
 	cmd.Dir = path
-	cmd.Env = p.setupEnv(env)
+	cmd.Env = p.setupEnv(ctx, env)
 	if log == nil {
 		log = io.Discard
 	}
@@ -170,11 +170,12 @@ func (p *Provider) runSetup(ctx context.Context, log io.Writer, cfg Config, path
 	return true, os.WriteFile(stamp, []byte(sum+"\n"), 0o644)
 }
 
-// setupEnv is the daemon environment without toolbelt variables, plus the
-// provider layer. Setup is trusted operator configuration, like v1.
-func (p *Provider) setupEnv(layer map[string]string) []string {
+// setupEnv is the provider's environment and the acquisition's HostEnv
+// without toolbelt variables, plus the provider layer. Setup is trusted
+// operator configuration, like v1.
+func (p *Provider) setupEnv(ctx context.Context, layer map[string]string) []string {
 	vars := map[string]string{}
-	for _, kv := range p.o.Environ() {
+	for _, kv := range p.environ(ctx) {
 		if name, value, ok := strings.Cut(kv, "="); ok && !reserved(name) {
 			vars[name] = value
 		}

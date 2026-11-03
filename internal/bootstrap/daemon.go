@@ -34,7 +34,6 @@ import (
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extension/inproc"
-	gitws "github.com/open-conduit/open-conduit/extensions/git"
 	"github.com/open-conduit/open-conduit/internal/artifacts"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/management"
@@ -86,8 +85,6 @@ type Options struct {
 	// SweepInterval paces the spare-workspace sweep (default 6h, as in v1).
 	// The first sweep runs one interval after start.
 	SweepInterval time.Duration
-	// ResourceDiskSpace overrides the git provider's free-space probe (tests).
-	ResourceDiskSpace gitws.DiskSpaceFunc
 	// Ready, when set, is called once the management socket is listening.
 	Ready func()
 	// WebhookAddr enables the webhook listener on this TCP address (for
@@ -452,9 +449,7 @@ func Serve(ctx context.Context, o Options) (err error) {
 		return err
 	}
 	defer d.stopInproc()
-	if err = d.openResources(); err != nil {
-		return err
-	}
+	d.openResources()
 	d.openSandboxes()
 	d.openContainers()
 	// Installed extension packages start before the configuration opens,

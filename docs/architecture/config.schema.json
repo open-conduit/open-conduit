@@ -436,6 +436,15 @@
                 },
                 "config": {
                   "type": "object"
+                },
+                "pass_env": {
+                  "type": "array",
+                  "items": {
+                    "type": "string",
+                    "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+                  },
+                  "uniqueItems": true,
+                  "description": "Variables of the daemon's environment the provider's own commands and setup see (SSH_AUTH_SOCK or a proxy for git's fetch), but not the run. Never OS_* or OPEN_CONDUIT_*, nor one an env: secret reference names."
                 }
               },
               "required": [

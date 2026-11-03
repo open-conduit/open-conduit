@@ -185,6 +185,8 @@ type ProviderAcquireParams struct {
 	Config Payload       `json:"config"`
 	Mode   string        `json:"mode,omitempty"`
 	Params Payload       `json:"params"`
+	// HostEnv is extension.ResourceAcquisition.HostEnv.
+	HostEnv map[string]string `json:"host_env,omitempty"`
 }
 type ProviderLookupParams struct {
 	Type  string        `json:"type"`
@@ -247,6 +249,44 @@ func (s OwnerStatus) Extension() extension.ResourceOwnerStatus {
 type ProviderReconcileParams struct {
 	Type      string `json:"type"`
 	Reconcile string `json:"reconcile"`
+}
+
+// ResourceSpare is one spare resource a sweep found
+// (extension.ResourceSpare).
+type ResourceSpare struct {
+	Ref   string `json:"ref"`
+	Mode  string `json:"mode,omitempty"`
+	Spare string `json:"spare"`
+	Kept  string `json:"kept,omitempty"`
+}
+
+// ResourceSweepReport is what provider.sweep found and did
+// (extension.ResourceSweepReport). provider.sweep's params are a
+// ProviderReconcileParams: the sweep quotes its ID in provider.owner_status.
+type ResourceSweepReport struct {
+	Removed []ResourceSpare `json:"removed,omitempty"`
+	Kept    []ResourceSpare `json:"kept,omitempty"`
+}
+
+func FromSweepReport(r extension.ResourceSweepReport) ResourceSweepReport {
+	conv := func(in []extension.ResourceSpare) []ResourceSpare {
+		var out []ResourceSpare
+		for _, s := range in {
+			out = append(out, ResourceSpare{Ref: s.Ref, Mode: s.Mode, Spare: s.Spare, Kept: s.Kept})
+		}
+		return out
+	}
+	return ResourceSweepReport{Removed: conv(r.Removed), Kept: conv(r.Kept)}
+}
+func (r ResourceSweepReport) Extension() extension.ResourceSweepReport {
+	conv := func(in []ResourceSpare) []extension.ResourceSpare {
+		var out []extension.ResourceSpare
+		for _, s := range in {
+			out = append(out, extension.ResourceSpare{Ref: s.Ref, Mode: s.Mode, Spare: s.Spare, Kept: s.Kept})
+		}
+		return out
+	}
+	return extension.ResourceSweepReport{Removed: conv(r.Removed), Kept: conv(r.Kept)}
 }
 
 // Telemetry.
