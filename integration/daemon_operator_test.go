@@ -143,13 +143,13 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 	})
 	// A fresh repository's main has no protection, so doctor warns that a
 	// run's credential could push straight to it (#346).
-	for name, code := range map[string]string{"github_auth": "base_unprotected", "claude_code": "installed", "github_capability": "ok", "webhooks": "reconcile_only", "secrets": ""} {
+	for name, code := range map[string]string{"github-auth": "base_unprotected", "claude_code": "installed", "github-capability": "ok", "webhooks": "reconcile_only", "secrets": ""} {
 		c := check(report, name)
 		if code != "" && c.Code != code {
 			t.Fatalf("doctor %s: %+v\n%+v", name, c, report.Checks)
 		}
 	}
-	if s := strings.Join(check(report, "github_auth").Items, " "); !strings.Contains(s, "push=true") || !strings.Contains(s, "main has no branch protection or ruleset") || strings.Contains(s, "tok\"") {
+	if s := strings.Join(check(report, "github-auth").Items, " "); !strings.Contains(s, "push=true") || !strings.Contains(s, "main has no branch protection or ruleset") || strings.Contains(s, "tok\"") {
 		t.Fatalf("auth items: %s", s)
 	}
 	if blob, _ := json.Marshal(report); bytes.Contains(blob, []byte("file:github-token")) || bytes.Contains(blob, []byte(`tok"`)) {
@@ -171,13 +171,13 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 	//     rulesets the plan lacks and warns when protection is refused.
 	fake.RequireChecks("main", "test")
 	fake.RefuseRequiredChecks(false, true)
-	if r, err := d.c.Doctor(ctx, true); err != nil || check(r, "github_auth").Code != "verified" ||
-		!strings.Contains(strings.Join(check(r, "github_auth").Items, " "), "main requires test (from branch_protection); required checks were read from branch_protection only: GitHub refused rulesets") {
-		t.Fatalf("required checks: %+v %v", check(r, "github_auth"), err)
+	if r, err := d.c.Doctor(ctx, true); err != nil || check(r, "github-auth").Code != "verified" ||
+		!strings.Contains(strings.Join(check(r, "github-auth").Items, " "), "main requires test (from branch_protection); required checks were read from branch_protection only: GitHub refused rulesets") {
+		t.Fatalf("required checks: %+v %v", check(r, "github-auth"), err)
 	}
 	fake.RefuseRequiredChecks(true, false)
-	if r, err := d.c.Doctor(ctx, true); err != nil || check(r, "github_auth").Status != "warn" || check(r, "github_auth").Code != "required_checks_unreadable" {
-		t.Fatalf("refused protection: %+v %v", check(r, "github_auth"), err)
+	if r, err := d.c.Doctor(ctx, true); err != nil || check(r, "github-auth").Status != "warn" || check(r, "github-auth").Code != "required_checks_unreadable" {
+		t.Fatalf("refused protection: %+v %v", check(r, "github-auth"), err)
 	}
 	fake.RefuseRequiredChecks(false, false)
 	fake.RequireChecks("main")
@@ -305,8 +305,8 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 		return err == nil && check(r, "reconcile_lag").Code == "scan_failing"
 	})
 	r, err := d.c.Doctor(ctx, true)
-	if err != nil || check(r, "github_auth").Status != "fail" || check(r, "github_auth").Code != "credential_rejected" {
-		t.Fatalf("auth failure: %+v %v", check(r, "github_auth"), err)
+	if err != nil || check(r, "github-auth").Status != "fail" || check(r, "github-auth").Code != "credential_rejected" {
+		t.Fatalf("auth failure: %+v %v", check(r, "github-auth"), err)
 	}
 }
 

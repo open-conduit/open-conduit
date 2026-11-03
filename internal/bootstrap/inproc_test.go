@@ -2,6 +2,7 @@ package bootstrap
 
 import (
 	"encoding/json"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"os"
 	"path/filepath"
 	"strings"
@@ -115,12 +116,11 @@ func TestInstalledSurfaces(t *testing.T) {
 	}
 }
 
-// The turn plugin carries the work-issue playbook and the in-process
-// extensions' own, filled in. The setup playbook is the setup package's
-// (#243): it joins the plugin as every package's does, and nothing compiled
-// in supplies it.
+// The turn plugin carries the extensions' playbooks (GitHub's work-issue),
+// filled in. The setup playbook is the setup package's (#243): it joins
+// the plugin as every package's does, and nothing compiled in supplies it.
 func TestTurnPluginCarriesFirstPartyPlaybooks(t *testing.T) {
-	d := &daemon{o: Options{StateDir: t.TempDir()}, inproc: firstParty()}
+	d := &daemon{o: Options{StateDir: t.TempDir()}, inproc: append(firstParty(), gh.New())}
 	if err := d.preparePlaybooks(); err != nil {
 		t.Fatal(err)
 	}

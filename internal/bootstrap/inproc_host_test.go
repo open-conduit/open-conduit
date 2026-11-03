@@ -3,6 +3,7 @@ package bootstrap
 import (
 	"context"
 	"errors"
+	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"log/slog"
 	"net/http"
 	"path/filepath"
@@ -170,12 +171,11 @@ func TestConfigureParamsCarryDisabledEntries(t *testing.T) {
 	want(p.Disabled, "off", "b")
 }
 
-// The first-party extensions' executors join the registrations with the
-// pool each declares: GitHub's hold executor counts against
-// settings.job_concurrency.
+// An extension's executors join the registrations with the pool each
+// declares: GitHub's hold executor counts against settings.job_concurrency.
 func TestInprocExecutorsCarryPools(t *testing.T) {
 	executors, pools := map[string]extension.Executor{}, map[string]string{}
-	if refused := inprocExecutors(firstParty(), executors, pools); len(refused) != 0 {
+	if refused := inprocExecutors([]inproc.Extension{gh.New()}, executors, pools); len(refused) != 0 {
 		t.Fatalf("refused %v", refused)
 	}
 	if executors["github-hold"] == nil || pools["github-hold"] != inproc.PoolJobs {

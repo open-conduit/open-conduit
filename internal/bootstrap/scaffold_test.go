@@ -49,7 +49,7 @@ func TestScaffoldPaths(t *testing.T) {
 // A name the manifest rules or a first-party registration rule out is
 // refused before anything is written.
 func TestNewPackageRefusesNames(t *testing.T) {
-	for _, name := range []string{"Acme", "core", "github", "has.dot"} {
+	for _, name := range []string{"Acme", "core", "claude-code", "has.dot"} {
 		dir := filepath.Join(t.TempDir(), "out")
 		if _, err := newPackage("1.0.0", "", cli.NewRequest{Name: name, Dir: dir}); err == nil || !strings.Contains(err.Error(), "cannot name a package") {
 			t.Errorf("%s: %v", name, err)

@@ -1,12 +1,10 @@
-// Package githubext packages the first-party GitHub extension
-// (extensions/github, unchanged) as an installable subprocess extension: the
-// same entries, ingress, webhooks, routes, tools, projection, actions,
-// annotations, rendering, doctor checks and hold executor, served over
-// protocol version 1 by protocol/sdk/inprocsdk, which serves any extension
-// written against the in-process contract. It is the proof that the
-// contract crosses the process boundary without loss (#357); the daemon
-// keeps registering GitHub in process, so this package cannot be installed
-// beside it (its names conflict).
+// Package githubext serves the first-party GitHub extension
+// (extensions/github, unchanged) as a package over protocol version 1,
+// through protocol/sdk/inprocsdk (#428): the same entries, ingress,
+// webhooks, routes, tools, projection, actions, annotations, rendering,
+// doctor checks, hold executor, setup probes and work-issue playbook.
+// open-conduit serves it as `open-conduit extension-run github`, and the
+// release bundles it.
 package githubext
 
 import (
@@ -52,6 +50,7 @@ func base() protocol.Manifest {
 		p.Operations = append(p.Operations, d)
 	}
 	p.DependencyFilter = true
+	p.Playbooks = PlaybooksDir
 	// The kinds its routes create: in process they need no policy, so the
 	// extension declares none (it is not an inproc.WorkKinder).
 	for _, k := range []string{gh.WorkKind, gh.WorkKindPull, gh.WorkKindHeld} {
@@ -66,6 +65,13 @@ func base() protocol.Manifest {
 		Summary: "The first-party GitHub extension (issues, pull requests, reviews and checks) as a subprocess package.",
 		Command: protocol.HostRunCommand(Name), Provides: p}
 }
+
+// PlaybooksDir is where the package's playbooks are, relative to its
+// manifest.
+const PlaybooksDir = "playbooks"
+
+// Playbooks are the package's playbooks, written beside its manifest.
+func Playbooks() map[string]string { return gh.New().Playbooks() }
 
 // New returns the bridge serving a new GitHub extension.
 func New() (*inprocsdk.Bridge, error) { return inprocsdk.New(gh.New(), base()) }

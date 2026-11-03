@@ -189,8 +189,9 @@ func lastLine(s string) string {
 	return s[strings.LastIndex(s, "\n")+1:]
 }
 
-// checkPackageName refuses a name the manifest rules or Open Conduit's own
-// registrations rule out, before anything is written.
+// checkPackageName refuses a name the manifest rules, Open Conduit's own
+// registrations or the packages it bundles rule out, before anything is
+// written.
 func checkPackageName(name string) error {
 	m := protocol.Manifest{Protocol: []int{protocol.Version}, Name: name, Version: "0.1.0", Command: []string{name + "-extension"},
 		Provides: protocol.Provides{Operations: []protocol.OperationDecl{{Name: name + ".hello", Kind: protocol.OperationHandler}}}}
@@ -199,6 +200,12 @@ func checkPackageName(name string) error {
 	}
 	if err := extproc.CheckConflicts([]extproc.Found{{Manifest: m}}, firstPartyTaken()); err != nil {
 		return fmt.Errorf("%q cannot name a package: %w", name, err)
+	}
+	found, _ := discoverPackages("", "")
+	for _, f := range found {
+		if f.Manifest.Name == name {
+			return fmt.Errorf("%q cannot name a package: open-conduit bundles a package of that name", name)
+		}
 	}
 	return nil
 }

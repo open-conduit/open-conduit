@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"io"
 	"net/http"
 	"path/filepath"
@@ -38,7 +37,7 @@ import (
 // firstParty is the list of first-party in-process extensions. Adding one
 // touches its own package and this list.
 func firstParty() []inproc.Extension {
-	return []inproc.Extension{shell.NewExtension(), claudecode.NewExtension(), gh.New()}
+	return []inproc.Extension{shell.NewExtension(), claudecode.NewExtension()}
 }
 
 // typeSets are an extension's own entry and connection types: what its

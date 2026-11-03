@@ -288,10 +288,9 @@ var wiringFiles = map[string]bool{"inproc.go": true, "adapters.go": true}
 var compositionExceptions = map[string][]string{
 	"container.go": {"extensions/docker", "extensions/ssh"},
 	"daemon.go":    {"extensions/git"},
-	"operator.go":  {"extensions/claudecode", "extensions/github", "extensions/github/playbooks", "extensions/jira", "extensions/linear", "extensions/slack"},
+	"operator.go":  {"extensions/claudecode", "extensions/github", "extensions/jira", "extensions/linear", "extensions/slack"},
 	"resources.go": {"extensions/git"},
 	"sandbox.go":   {"extensions/srt"},
-	"tools.go":     {"extensions/github/playbooks"},
 	"webhooks.go":  {"extensions/tunnel"},
 }
 
