@@ -96,6 +96,9 @@ func TestOfflineValidationMatchesTheDaemonRegistry(t *testing.T) {
 // so nothing is called) merges beside a GitHub scope and validates against
 // the daemon registry, with no git resource or provider in it.
 func TestSlackSetupScopeValidatesOffline(t *testing.T) {
+	// Slack is a bundled package (#428): validate as the release's binary
+	// would, with it beside it.
+	releaseLayout(t)
 	r, err := sl.Setup{}.Setup(context.Background(), nil, []string{"--bot-token", "keyring:slack-bot-token", "--app-token", "keyring:slack-app-token", "--team", "T0123", "--channel", "C0SUPPORT"})
 	if err != nil {
 		t.Fatal(err)

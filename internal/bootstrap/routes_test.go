@@ -15,6 +15,7 @@ import (
 	"github.com/open-conduit/open-conduit/extensions/introspection"
 	"github.com/open-conduit/open-conduit/extensions/observe"
 	"github.com/open-conduit/open-conduit/extensions/schedule"
+	sl "github.com/open-conduit/open-conduit/extensions/slack"
 	"github.com/open-conduit/open-conduit/extensions/tracker"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
@@ -123,14 +124,11 @@ func samplesConfig() []byte {
 		"version": 1, "settings": map[string]any{},
 		"connections": []any{
 			map[string]any{"id": "github", "type": "github", "config": map[string]any{}, "secret_refs": map[string]any{"token": "env:OC_TEST_GITHUB_TOKEN"}},
-			map[string]any{"id": "slack", "type": "slack", "config": map[string]any{}, "secret_refs": map[string]any{"bot_token": "env:OC_TEST_SLACK_BOT_TOKEN", "app_token": "env:OC_TEST_SLACK_APP_TOKEN"}},
 		},
 		"scopes": []any{
 			scope("manual", []string{}, shell(), []any{route("manual", "manual", map[string]any{})}, []any{}),
 			scope("gh", []string{"github"}, shell(), []any{route("held", "github-hold", map[string]any{}), route("issues", "github", map[string]any{})},
 				[]any{entry("widgets", "github", "github", map[string]any{"namespace": "github/github.com/octo/widgets", "scope": "gh", "repo": "octo/widgets"})}),
-			scope("chat", []string{"slack"}, shell(), []any{route("conversations", "slack", map[string]any{})},
-				[]any{entry("support", "slack", "slack", map[string]any{"namespace": "slack/T0TEAM", "scope": "chat", "team": "T0TEAM", "channels": []string{"C0SUPPORT"}, "bot_user_id": "UBOT", "receiver": "socket"})}),
 		},
 	}
 	b, _ := json.Marshal(cfg)
@@ -226,6 +224,9 @@ func packagedSamplers() map[string]struct {
 		introspection.Type: {introspection.Route{},
 			domain.Scope{ID: "self", Config: domain.Payload{Data: []byte(`{"enabled":true,"extensions":[{"type":"introspection","config":{}}]}`)}},
 			domain.Route{Name: "reports", Handler: introspection.Type, Config: domain.Payload{Data: []byte(`{"work":"` + introspection.WorkReport + `"}`)}}},
+		sl.Type: {sl.Route{},
+			scopeOf("chat", `{"type":"slack","config":{"namespace":"slack/T0TEAM","scope":"chat","team":"T0TEAM","channels":["C0SUPPORT"],"bot_user_id":"UBOT","receiver":"socket"}}`),
+			domain.Route{Name: "conversations", Handler: sl.Type}},
 		schedule.Type: {schedule.Route{},
 			scopeOf("ops", `{"type":"schedule","config":{"namespace":"schedule/ops","scope":"ops","jobs":[{"name":"tick","every_minutes":60},{"name":"nightly"}]}}`),
 			domain.Route{Name: "jobs", Handler: schedule.Type}},

@@ -850,6 +850,7 @@ func TestSlackRoutesSelectBindingByChannel(t *testing.T) {
 // validates offline, and a route naming a channel that is not a Slack
 // channel ID is rejected at its config path.
 func TestSlackRouteChannelsValidateAtLoad(t *testing.T) {
+	releaseLayout(t)
 	var doc string
 	for _, block := range fencedBlocks(t, "../site/src/content/docs/workflows/slack.md", "json") {
 		if strings.Contains(block, `"C0REVIEWS01"]}}`) {
