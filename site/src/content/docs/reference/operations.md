@@ -83,6 +83,73 @@ Declare how this attempt ends (completed, failed or handoff); it applies when yo
 
 The operations an extension's agents need for a role, granted together as `@<name>`. Each operation joined its toolset in the version shown; a toolset only gains operations. `open-conduit doctor` reports a list that names an earlier version's operations one by one, with the `config set` that grants the toolset instead.
 
+### `@github.author`
+
+Work a GitHub issue: read it, comment, open and edit its PRs, answer their reviews and wait on them.
+
+| Operation | Since version |
+| --- | --- |
+| `read_context` | 1 |
+| `wait` | 1 |
+| `declare_outcome` | 1 |
+| `github.context` | 1 |
+| `github.issue.view` | 1 |
+| `github.issue.comment` | 1 |
+| `github.issue.list` | 1 |
+| `github.issue.create` | 1 |
+| `github.pr.list` | 1 |
+| `github.pr.view` | 1 |
+| `github.pr.create` | 1 |
+| `github.pr.comment` | 1 |
+| `github.pr.reply` | 1 |
+| `github.checks` | 1 |
+| `github.attachment.upload` | 1 |
+| `github.attachment.get` | 1 |
+| `github.wait` | 1 |
+| `github.pr.review` | 2 |
+| `github.pr.resolve` | 3 |
+| `github.pr.edit` | 4 |
+
+### `@github.holds`
+
+Run held issues: read and settle holds.
+
+| Operation | Since version |
+| --- | --- |
+| `emit` | 1 |
+| `github.hold.status` | 1 |
+| `github.hold` | 1 |
+
+### `@github.reviewer`
+
+Review GitHub PRs: read them and their checks, comment, reply in and resolve threads, and submit reviews.
+
+| Operation | Since version |
+| --- | --- |
+| `read_context` | 1 |
+| `wait` | 1 |
+| `declare_outcome` | 1 |
+| `github.context` | 1 |
+| `github.issue.view` | 1 |
+| `github.pr.list` | 1 |
+| `github.pr.view` | 1 |
+| `github.pr.comment` | 1 |
+| `github.pr.reply` | 1 |
+| `github.pr.resolve` | 1 |
+| `github.pr.review` | 1 |
+| `github.checks` | 1 |
+| `github.attachment.upload` | 1 |
+| `github.attachment.get` | 1 |
+| `github.wait` | 1 |
+
+### `@github.workspace`
+
+Push from a git workspace: git's credential helper asks for a short-lived token.
+
+| Operation | Since version |
+| --- | --- |
+| `github.git.credential` | 1 |
+
 ## Bundled extensions
 
 The extensions built into the daemon register these operations, each with the input it takes; `open-conduit adapters TYPE` lists them too.
@@ -565,6 +632,42 @@ Read the messages of this Work's Slack thread, oldest first.
 | Input | Type | Required | Meaning |
 | --- | --- | --- | --- |
 | `limit` | integer |  | how many of the latest messages to return, 1 to 1000; default (and any value outside that range) 200 |
+
+### setup (`setup`)
+
+The web setup assistant: a Claude Code session that looks at this machine and proposes config for the operator to approve and apply.
+
+#### `setup.ask`
+
+It declares no input schema.
+
+#### `setup.probe`
+
+It declares no input schema.
+
+#### `setup.propose`
+
+It declares no input schema.
+
+#### `setup.read`
+
+It declares no input schema.
+
+#### `setup.say`
+
+It declares no input schema.
+
+#### `setup.trace`
+
+It declares no input schema.
+
+#### `setup.validate`
+
+It declares no input schema.
+
+#### `setup.withdraw`
+
+It declares no input schema.
 
 ## Installable packages
 

@@ -454,6 +454,29 @@ See [configuration](../config/#authorization) for the fields and [toolbelt autho
 			operationSection(t, &b, op, d.Summary, d.Input)
 		}
 	}
+	// A bundled package the catalog has no entry for (the setup assistant)
+	// lists its operations from its manifest.
+	for _, m := range bootstrap.BundledManifests() {
+		var ops []protocol.OperationDecl
+		for _, op := range m.Provides.Operations {
+			if owner[op.Name] == "" {
+				ops = append(ops, op)
+			}
+		}
+		if len(ops) == 0 {
+			continue
+		}
+		title := m.Title
+		if title == "" {
+			title = m.Name
+		}
+		fmt.Fprintf(&b, "\n### %s (`%s`)\n\n%s\n", title, m.Name, m.Summary)
+		sort.Slice(ops, func(i, j int) bool { return ops[i].Name < ops[j].Name })
+		for _, op := range ops {
+			owner[op.Name] = m.Name
+			operationSection(t, &b, op.Name, op.Summary, op.Input)
+		}
+	}
 	for _, op := range bootstrap.OperationNames() {
 		if owner[op] == "" {
 			t.Errorf("operation %s is registered but no extension in the adapter catalog lists it", op)
