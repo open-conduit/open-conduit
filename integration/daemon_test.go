@@ -87,7 +87,7 @@ func daemonBinary(t *testing.T) string {
 // bundledHostPackages are the first-party packages the release bundles that
 // open-conduit serves itself (`open-conduit extension-run NAME`, #428), as
 // scripts/bundle-packages.sh lists them (TestBundledHostPackagesMatchRelease).
-var bundledHostPackages = []string{"codex", "posthog", "human", "observe", "linear", "jira", "bitbucket", "schedule"}
+var bundledHostPackages = []string{"codex", "posthog", "human", "observe", "linear", "jira", "bitbucket", "schedule", "introspection"}
 
 // bundleHostPackages lays out each of bundledHostPackages beside the
 // open-conduit in dir, as the release archive does: its manifest,

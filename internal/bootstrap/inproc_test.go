@@ -127,7 +127,7 @@ func TestTurnPluginCarriesFirstPartyPlaybooks(t *testing.T) {
 	if _, err := os.Stat(filepath.Join(d.pluginDir(), "skills", "setup")); !os.IsNotExist(err) {
 		t.Fatalf("a compiled-in setup playbook: %v", err)
 	}
-	for _, name := range []string{"work-issue", "sweep"} {
+	for _, name := range []string{"work-issue", "slack-thread"} {
 		data, err := os.ReadFile(filepath.Join(d.pluginDir(), "skills", name, "SKILL.md"))
 		if err != nil || len(data) == 0 {
 			t.Fatalf("%s skill: %v", name, err)

@@ -157,6 +157,10 @@ func (t *Tools) Registration() extension.Registration {
 //go:embed guidance/*.md
 var guidanceFS embed.FS
 
+// Guidance is an operation's agent guidance by its file name
+// (report-issue, correction or problem), as the toolbelt serves it.
+func Guidance(name string) string { return guidance(name) }
+
 func guidance(name string) string {
 	b, err := guidanceFS.ReadFile("guidance/" + name + ".md")
 	if err != nil {
