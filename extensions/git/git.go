@@ -136,8 +136,10 @@ func (p *Provider) hasRemote(ctx context.Context, dir, remote string) bool {
 // the root of a git work tree. It asks whether git's root and dir name the same
 // directory, not whether their spellings match: on a case-insensitive or
 // normalising file system a configured path may differ from the on-disk one
-// in case or Unicode form and still name the root. The result is git's own
-// spelling, so leases and locks keyed on it agree however the path was written.
+// in case or Unicode form and still name the root. The result is the on-disk
+// spelling (onDisk), so leases and locks keyed on it agree however the path
+// was written. Git's own answer can't be trusted for that: on Linux it repeats
+// the caller's spelling.
 func (p *Provider) toplevel(ctx context.Context, dir string) (string, error) {
 	top, err := p.git(ctx, dir, "rev-parse", "--show-toplevel")
 	if err != nil {
@@ -158,7 +160,52 @@ func (p *Provider) toplevel(ctx context.Context, dir string) (string, error) {
 	if !os.SameFile(a, b) {
 		return "", errors.New("not the root of a git work tree")
 	}
-	return got, nil
+	return onDisk(got), nil
+}
+
+// onDisk respells an absolute, symlink-free path with each component's name
+// as its parent directory lists it. Where a component is listed under exactly
+// its name, or its parent can't be read, it is kept as written.
+func onDisk(path string) string {
+	vol := filepath.VolumeName(path)
+	out := vol + string(filepath.Separator)
+	for _, name := range strings.Split(strings.TrimLeft(path[len(vol):], `/\`), string(filepath.Separator)) {
+		if name == "" {
+			continue
+		}
+		out = filepath.Join(out, listedName(out, name))
+	}
+	return out
+}
+
+// listedName is the entry of parent that is name: name itself when listed so,
+// else the entry naming the same file in another case or normalisation.
+func listedName(parent, name string) string {
+	entries, err := os.ReadDir(parent)
+	if err != nil {
+		return name
+	}
+	for _, e := range entries {
+		if e.Name() == name {
+			return name
+		}
+	}
+	want, err := os.Stat(filepath.Join(parent, name))
+	if err != nil {
+		return name
+	}
+	// Names equal but for case first; then any (a Unicode normalisation).
+	for _, fold := range []bool{true, false} {
+		for _, e := range entries {
+			if strings.EqualFold(e.Name(), name) != fold {
+				continue
+			}
+			if got, err := os.Stat(filepath.Join(parent, e.Name())); err == nil && os.SameFile(got, want) {
+				return e.Name()
+			}
+		}
+	}
+	return name
 }
 
 // validWorktree reports whether path is a work tree of the checkout's

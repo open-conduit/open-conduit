@@ -834,6 +834,14 @@ func TestCheckoutSpelledInAnotherCase(t *testing.T) {
 	if _, err := os.Stat(upper); err != nil {
 		t.Skip("file system is case-sensitive")
 	}
+	// The respelling is the provider's own: git on Linux repeats the
+	// caller's spelling, so it can't be relied on for the lease key.
+	if got := onDisk(upper); got != f.root {
+		t.Errorf("onDisk(%s) = %q, want %q", upper, got, f.root)
+	}
+	if got := onDisk(f.root); got != f.root {
+		t.Errorf("onDisk changed an on-disk spelling: %q", got)
+	}
 	if top, err := f.provider.toplevel(context.Background(), upper); err != nil || top != f.root {
 		t.Errorf("toplevel(%s) = %q, %v; want git's spelling %q", upper, top, err, f.root)
 	}
