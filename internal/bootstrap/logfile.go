@@ -8,7 +8,3 @@ import "github.com/open-conduit/open-conduit/protocol/sdk"
 type rotatingLog = sdk.RotatingLog
 
 func openLog(path string) (*rotatingLog, error) { return sdk.OpenLog(path) }
-
-func openRotatingLog(path string, maxBytes int64, kept int) (*rotatingLog, error) {
-	return sdk.OpenRotatingLog(path, maxBytes, kept)
-}
