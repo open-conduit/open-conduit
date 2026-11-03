@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -215,5 +216,71 @@ func TestGitHubReviewerWaitIgnoresConflicts(t *testing.T) {
 	e.sync()
 	if got := e.work(pull.ID); got.State != domain.WorkReady || !contains(e.queued(pull.ID), gh.TypePullOpen) {
 		t.Fatalf("the push did not wake the reviewer: %v %v", got.State, e.queued(pull.ID))
+	}
+}
+
+// `"ignore": ["checks"]` leaves the check results out of the Wait on both
+// the issue's path and the PR's, and what the agent is told says so; a
+// wait that ignores nothing keeps them (the control).
+func TestGitHubWaitIgnoresChecks(t *testing.T) {
+	e := newPullEnv(t)
+	n, builder := e.claim("Header wobbles", "It wobbles on scroll.", "bug")
+	pr := e.fake.OpenPull("Steady the header", "Closes #"+itoa(n), "agent/issue-"+itoa(n), "sha1", ghAlice)
+	e.sync()
+	pull, ok := e.workFor(gh.PullRequestKey(pr))
+	if !ok {
+		t.Fatalf("no Work for PR %d", pr)
+	}
+	until := e.clock.Now().Add(72 * time.Hour).UTC().Format(time.RFC3339)
+	types := func(work domain.ID) []string {
+		var got []string
+		e.read(func(tx storage.Tx) error {
+			ws, err := tx.ListWaits(work)
+			for _, w := range ws {
+				if w.State == domain.WaitActive {
+					got = w.Match.Types
+				}
+			}
+			return err
+		})
+		return got
+	}
+	checks := []string{gh.TypeChecksPassed, gh.TypeChecksFailed, gh.TypeChecksNone, gh.TypeChecksMissing}
+	for _, c := range []struct {
+		name   string
+		work   domain.ID
+		ignore []string
+		field  string
+		want   string // in what the agent is told
+		absent string // not in it
+	}{
+		{"issue ignoring checks", builder.ID, []string{"checks"}, "next", "(comments also resume you)", "check results"},
+		{"PR ignoring checks", pull.ID, []string{"checks"}, "waiting_for", "a comment or review, or its merge", "its checks"},
+		{"issue ignoring nothing", builder.ID, nil, "next", "comments and check results also resume you", "\x00"},
+		{"PR ignoring nothing", pull.ID, nil, "waiting_for", "its checks", "\x00"},
+	} {
+		a := e.start(c.work)
+		in := map[string]any{"reason": "Waiting.", "until": until}
+		if c.ignore != nil {
+			in["ignore"] = c.ignore
+		}
+		out := e.must(a, gh.OpWait, "park-"+c.name, in)
+		e.finish(a, &extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeHandoff, Data: statusData("review")}})
+		text, _ := out[c.field].(string)
+		if !strings.Contains(text, c.want) || strings.Contains(text, c.absent) {
+			t.Fatalf("%s: told %s %q", c.name, c.field, text)
+		}
+		got := types(c.work)
+		for _, typ := range checks {
+			if slices.Contains(got, typ) == (c.ignore != nil) {
+				t.Fatalf("%s: Wait types %v", c.name, got)
+			}
+		}
+		if !slices.Contains(got, gh.TypePullMerged) || !slices.Contains(got, gh.TypePullConflicts) {
+			t.Fatalf("%s: Wait types %v lost what it didn't ignore", c.name, got)
+		}
+		// Wake it so the next case can start it again.
+		e.fake.AddComment(pr, ghAlice, "nudge")
+		e.sync()
 	}
 }

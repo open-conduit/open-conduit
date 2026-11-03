@@ -560,8 +560,12 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 		plan.Dependencies = append(plan.Dependencies, r.dep)
 	}
 	plan.Dependencies = append(plan.Dependencies, peerComments(b))
+	also := "comments and check results also resume you"
+	if !slices.Contains(types, TypeChecksPassed) {
+		also = "comments also resume you"
+	}
 	result := map[string]any{"waiting_for": h.Describe(), "comment": posted,
-		"next": "end your turn now; any other call is refused until you are resumed with what happened (comments and check results also resume you)"}
+		"next": "end your turn now; any other call is refused until you are resumed with what happened (" + also + ")"}
 	if len(kept) > 0 {
 		result["kept"] = kept
 		result["note"] = "the issue was already waiting for " + strings.Join(kept, ", ") + "; that still wakes you too"
