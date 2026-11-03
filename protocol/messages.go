@@ -638,14 +638,17 @@ type CheckRoute struct {
 // registered). Resource is its workspace provider and that provider's
 // config. Isolation is how its executor is confined: "sandbox" (a process
 // sandbox), "container", or empty when it runs unconfined on the host.
+// Config is the binding's executor config, given only to the extension
+// whose executor it names.
 type CheckBinding struct {
-	Name       string         `json:"name"`
-	Executor   string         `json:"executor"`
-	Toolbelt   string         `json:"toolbelt,omitempty"`
-	Operations []string       `json:"operations,omitempty"`
-	Connection string         `json:"connection,omitempty"`
-	Resource   *CheckResource `json:"resource,omitempty"`
-	Isolation  string         `json:"isolation,omitempty"`
+	Name       string          `json:"name"`
+	Executor   string          `json:"executor"`
+	Config     json.RawMessage `json:"config,omitempty"`
+	Toolbelt   string          `json:"toolbelt,omitempty"`
+	Operations []string        `json:"operations,omitempty"`
+	Connection string          `json:"connection,omitempty"`
+	Resource   *CheckResource  `json:"resource,omitempty"`
+	Isolation  string          `json:"isolation,omitempty"`
 }
 
 // CheckBinding.Isolation values.

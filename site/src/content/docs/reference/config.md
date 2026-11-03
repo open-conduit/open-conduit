@@ -236,6 +236,7 @@ Binding `config`:
 | `extra_args` |  |  |
 | `builtin_tools` |  | the only built-in tools offered; [] turns them all off |
 | `models` |  | models a Work may pick with model in its context |
+| `usage` |  | doctor reads the subscription usage windows of this binding's Claude login |
 
 ### Git workspace (`git`)
 

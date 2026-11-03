@@ -103,13 +103,6 @@ type Options struct {
 	// webhook management report dry_run, and Claude Code turns run as
 	// stubs on a cheap model.
 	DryRun bool
-	// ClaudeUsage lets doctor read the Claude subscription usage windows
-	// with the machine's Claude login (off by default).
-	ClaudeUsage bool
-	// ClaudeUsageURL and ClaudeUsageToken override the usage endpoint and
-	// token source (tests).
-	ClaudeUsageURL   string
-	ClaudeUsageToken func(context.Context) (string, error)
 	// NoTelemetry turns off the anonymous usage reports (usage.go).
 	NoTelemetry bool
 	// TelemetryURL and TelemetryKey override where usage reports go
@@ -645,7 +638,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.extensionCheck, d.grantCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.webhookCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.extensionCheck, d.grantCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

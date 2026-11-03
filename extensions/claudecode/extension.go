@@ -32,6 +32,11 @@ type Extension struct {
 
 	mu  sync.Mutex
 	log io.WriteCloser
+
+	// usage and versionOf stand in for the usage endpoint and
+	// `--version` in tests.
+	usage     usageRead
+	versionOf func(ctx context.Context, bin string) (string, error)
 }
 
 // NewExtension returns the extension, its executor not yet opened.

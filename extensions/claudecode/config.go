@@ -103,6 +103,11 @@ type Config struct {
 	// container binding's per-Work home on its first use. It is a copy,
 	// never a mount, and its .credentials.json is left out.
 	HomeSeed string `json:"home_seed,omitempty"`
+	// Usage lets doctor read the subscription's 5-hour and 7-day usage
+	// windows with this binding's Claude login (the undocumented endpoint
+	// Claude Code itself uses), warning at 90%. It is off by default
+	// because it reads the login token.
+	Usage bool `json:"usage,omitempty"`
 }
 
 var (

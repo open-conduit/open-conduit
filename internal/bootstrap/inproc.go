@@ -722,7 +722,8 @@ func runtimeCheck(r inproc.CheckResult) runtime.Check {
 }
 
 // checkConfig is an extension's read-only view of a configuration for its
-// checks (protocol.CheckConfig): each enabled scope that uses it, with the
+// checks (protocol.CheckConfig): each enabled scope that uses it (an entry,
+// a route, a binding of its executor or one granted its operations), with the
 // scope's routes and bindings, its own entries, and the connections of its
 // own types they name. Secret reference text never enters it.
 func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]extension.Executor, dir string) protocol.CheckConfig {
@@ -742,6 +743,7 @@ func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]ex
 			operations[op] = true
 		}
 	}
+	own := ownExecutors(x)
 	uses := func(scope *config.EffectiveScope) bool {
 		if pkg, ok := x.(*installed); ok && usesExtension(scope, pkg.m) {
 			return true
@@ -757,7 +759,7 @@ func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]ex
 			}
 		}
 		for _, b := range scope.Bindings {
-			if slices.ContainsFunc(b.Operations, func(op string) bool { return operations[op] }) {
+			if own[b.Executor] || slices.ContainsFunc(b.Operations, func(op string) bool { return operations[op] }) {
 				return true
 			}
 		}
@@ -795,6 +797,9 @@ func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]ex
 			if e, ok := executors[b.Executor]; ok {
 				cb.Toolbelt = e.Capabilities().Toolbelt
 			}
+			if own[b.Executor] {
+				cb.Config = b.Config
+			}
 			if b.Resource != nil {
 				cb.Resource = &protocol.CheckResource{Provider: b.Resource.Provider, Config: b.Resource.Config}
 			}
@@ -815,6 +820,24 @@ func checkConfig(s *config.Snapshot, x inproc.Extension, executors map[string]ex
 		}
 	}
 	return cfg
+}
+
+// ownExecutors are the executors an extension registers: a package's
+// declared ones, whether or not it is running.
+func ownExecutors(x inproc.Extension) map[string]bool {
+	out := map[string]bool{}
+	if pkg, ok := x.(*installed); ok {
+		for _, e := range pkg.m.Provides.Executors {
+			out[e.Name] = true
+		}
+		return out
+	}
+	if e, ok := x.(inproc.Executing); ok {
+		for name := range e.Executors() {
+			out[name] = true
+		}
+	}
+	return out
 }
 
 // inprocPlaybooks adds the extensions' playbooks, first-party then

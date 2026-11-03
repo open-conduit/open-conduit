@@ -29,7 +29,7 @@ type ServeRequest struct {
 	WebhookAddr                                                   string
 	TunnelKind, TunnelBinary, TunnelDomain, TunnelName, PublicURL string
 	TunnelHostname                                                string
-	NoTunnel, DryRun, ClaudeUsage                                 bool
+	NoTunnel, DryRun                                              bool
 	// NoTelemetry turns off the anonymous usage reports: --no-telemetry,
 	// or OPEN_CONDUIT_NO_TELEMETRY or DO_NOT_TRACK set in the environment.
 	NoTelemetry bool
@@ -68,6 +68,7 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	fs := newFlags("serve", "config", "toolbelt-dir", "lifecycle-log", "backup-dir", "webhook-addr", "tunnel", "tunnel-binary", "tunnel-domain", "tunnel-name", "tunnel-hostname", "public-url", "web-addr", "web-host")
 	noTunnel := fs.fs.Bool("no-tunnel", false, "")
 	dryRun := fs.fs.Bool("dry-run", false, "")
+	// --claude-usage is retired: a claude-code binding sets usage.
 	usage := fs.fs.Bool("claude-usage", false, "")
 	noTelemetry := fs.fs.Bool("no-telemetry", false, "")
 	web := fs.fs.Bool("web", false, "")
@@ -88,7 +89,10 @@ func (o *operator) parseServe(args []string) (ServeRequest, int) {
 	}
 	r := ServeRequest{StateDir: o.stateDir(), ConfigPath: o.abs(fs.get("config")), Socket: o.abs(o.socket), ToolbeltDir: o.abs(fs.get("toolbelt-dir")), LifecycleLog: o.abs(fs.get("lifecycle-log")), PollInterval: *poll, LeaseDuration: *lease, RetentionInterval: *retention, SweepInterval: *sweep, CallTimeout: *call,
 		WebhookAddr: fs.get("webhook-addr"), TunnelKind: fs.get("tunnel"), TunnelBinary: fs.get("tunnel-binary"), TunnelDomain: fs.get("tunnel-domain"),
-		TunnelName: fs.get("tunnel-name"), TunnelHostname: fs.get("tunnel-hostname"), PublicURL: fs.get("public-url"), NoTunnel: *noTunnel, DryRun: *dryRun, ClaudeUsage: *usage}
+		TunnelName: fs.get("tunnel-name"), TunnelHostname: fs.get("tunnel-hostname"), PublicURL: fs.get("public-url"), NoTunnel: *noTunnel, DryRun: *dryRun}
+	if *usage {
+		fmt.Fprintln(o.errOut, `open-conduit: --claude-usage is retired and does nothing: set "usage": true in a claude-code binding's config`)
+	}
 	// --backup-interval 0 turns the scheduled backups off.
 	r.BackupInterval, r.BackupDir, r.BackupsKept = *backups, o.abs(fs.get("backup-dir")), *kept
 	if r.BackupInterval == 0 {
