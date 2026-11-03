@@ -496,6 +496,15 @@
               "maximum": 2147483647,
               "description": "Replaces settings.timeout_seconds for this binding's attempts."
             },
+            "pass_env": {
+              "type": "array",
+              "items": {
+                "type": "string",
+                "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+              },
+              "uniqueItems": true,
+              "description": "Variables of the daemon's environment this binding's runs see (a proxy, CLAUDE_CONFIG_DIR). Never OS_* or OPEN_CONDUIT_*, nor one an env: secret reference names."
+            },
             "config": {
               "type": "object",
               "description": "The executor's own config (open-conduit adapters TYPE)."

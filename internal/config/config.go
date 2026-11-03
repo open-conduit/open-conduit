@@ -152,7 +152,10 @@ type Binding struct {
 	Name, Executor, Connection string
 	Requires                   domain.Capabilities
 	Operations, SecretNames    []string
-	Resource                   *Resource
+	// PassEnv names host variables the binding's runs see
+	// (domain.Binding.PassEnv).
+	PassEnv  []string
+	Resource *Resource
 	// Sandbox runs the binding's executor in a process sandbox (B09).
 	Sandbox *Sandbox
 	// Container runs the binding's executor in a container. It can't be
@@ -595,7 +598,7 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 		return BindingEntry{Binding: Binding{Name: name}, Disabled: true}
 	}
 	var b Binding
-	if !c.object(n, path, []string{"name", "executor"}, "requires", "operations", "secret_names", "config", "connection", "resource", "sandbox", "container", "timeout_seconds", "grants") {
+	if !c.object(n, path, []string{"name", "executor"}, "requires", "operations", "secret_names", "config", "connection", "resource", "sandbox", "container", "timeout_seconds", "grants", "pass_env") {
 		return BindingEntry{Binding: b}
 	}
 	b.Name, _ = c.str(n.field("name"), path+"/name", idPattern)
@@ -615,6 +618,9 @@ func (c *checker) binding(n *node, path string) BindingEntry {
 	}
 	b.Operations = c.list(n.field("operations"), path+"/operations", grantPattern)
 	b.SecretNames = c.list(n.field("secret_names"), path+"/secret_names", idPattern)
+	if pe := n.field("pass_env"); pe != nil {
+		b.PassEnv = c.list(pe, path+"/pass_env", envPattern)
+	}
 	if r := n.field("resource"); r != nil && c.object(r, path+"/resource", []string{"provider", "config"}) {
 		b.Resource = &Resource{}
 		b.Resource.Provider, _ = c.str(r.field("provider"), path+"/resource/provider", idPattern)
@@ -848,6 +854,9 @@ func (b BindingEntry) normalized() any {
 	}
 	if b.TimeoutSeconds > 0 {
 		m["timeout_seconds"] = b.TimeoutSeconds
+	}
+	if len(b.PassEnv) > 0 {
+		m["pass_env"] = b.PassEnv
 	}
 	if len(b.Grants) > 0 {
 		grants := make([]any, 0, len(b.Grants))

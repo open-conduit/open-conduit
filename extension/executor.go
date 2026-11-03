@@ -2,7 +2,6 @@ package extension
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"math"
@@ -64,20 +63,13 @@ type ExecutionContext struct {
 	// gives the process the toolbelt client (OS_ENDPOINT, OS_TOKEN_FILE and
 	// `os` on PATH) so the layer can call it.
 	Env map[string]string
-	// HostEnv are the host's own values of the variables the executor's
-	// HostEnvNamer names for the binding config, those the host has set.
-	// The executor admits them to its sanitized baseline in place of its
-	// own process's (an executor out of process has a sanitized
-	// environment of its own), so the host decides what a binding sees.
+	// HostEnv are the host's own values of the variables the binding's
+	// pass_env names (domain.Binding.PassEnv), those the host has set. The
+	// operator names them in the binding and the host validates and
+	// resolves them, so an executor never chooses which of the host's
+	// variables it sees. An executor adds them to its sanitized baseline
+	// (an executor out of process has a sanitized environment of its own).
 	HostEnv map[string]string
-}
-
-// HostEnvNamer is optionally implemented by an executor whose binding
-// config admits variables of the host's environment to a run (claude-code's
-// pass_env, a proxy, say): HostEnv names them, and the host passes their
-// values as ExecutionContext.HostEnv.
-type HostEnvNamer interface {
-	HostEnv(config json.RawMessage) []string
 }
 type RunRequest struct {
 	Work      domain.Work

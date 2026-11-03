@@ -36,7 +36,7 @@ done
 f=${FAKE_DIR:?}
 mode=$(cat "$f/mode" 2>/dev/null || echo review)
 printf '%s session=%s resume=%s\n' "$OS_EXECUTION_ID" "$session" "$resume" >> "$f/invocations"
-printf '%s\n' "${OC_DRILL_PROXY:-unset}" > "$f/pass-env"
+printf '%s %s\n' "${OC_DRILL_PROXY:-unset}" "${OC_DRILL_OTHER:-unset}" > "$f/pass-env"
 t="$CLAUDE_CONFIG_DIR/projects/$(pwd -P | sed 's/[^A-Za-z0-9]/-/g')"
 mkdir -p "$t"
 echo '{"type":"system","subtype":"init"}'
@@ -84,8 +84,8 @@ func claudeDrillConfig(root, binary string) []byte {
 		"scopes": []any{map[string]any{
 			"id": "drill", "name": "Drill",
 			"authorization": map[string]any{"connections": []any{}, "operations": ops, "read_scopes": []any{}},
-			"bindings": []any{map[string]any{"name": "agent", "executor": "claude-code", "requires": map[string]any{"toolbelt": "mcp", "inject": true, "resume": true}, "operations": ops, "secret_names": []any{},
-				"config": map[string]any{"binary": binary, "cold_turns": "resume", "pass_env": []string{"OC_DRILL_PROXY"},
+			"bindings": []any{map[string]any{"name": "agent", "executor": "claude-code", "requires": map[string]any{"toolbelt": "mcp", "inject": true, "resume": true}, "operations": ops, "secret_names": []any{}, "pass_env": []string{"OC_DRILL_PROXY"},
+				"config": map[string]any{"binary": binary, "cold_turns": "resume",
 					"env": map[string]string{"FAKE_DIR": root, "CLAUDE_CONFIG_DIR": filepath.Join(root, "claude-config")}}}},
 			"routes":      []any{map[string]any{"name": "incoming", "handler": "manual", "binding": "agent", "active_policy": "inject", "config": map[string]any{}}},
 			"secret_refs": map[string]any{},
@@ -96,12 +96,13 @@ func claudeDrillConfig(root, binary string) []byte {
 }
 
 // TestDaemonClaudeCodePassEnv: a variable of the daemon's environment that
-// a binding's pass_env names reaches claude, though the executor runs as a
-// package whose own environment is sanitized: the host passes it
-// (ExecutionContext.HostEnv). One it doesn't name never reaches the
-// package at all.
+// the binding's pass_env names reaches claude, though the executor runs as
+// a package whose own environment is sanitized: the host resolves it and
+// passes it (ExecutionContext.HostEnv). One the binding doesn't name never
+// reaches claude (negative control).
 func TestDaemonClaudeCodePassEnv(t *testing.T) {
 	t.Setenv("OC_DRILL_PROXY", "http://proxy.test:3128")
+	t.Setenv("OC_DRILL_OTHER", "not-for-the-agent")
 	d := newDrill(t)
 	binary := filepath.Join(d.root, "claude")
 	if err := os.WriteFile(binary, []byte(daemonClaude), 0o755); err != nil {
@@ -120,8 +121,8 @@ func TestDaemonClaudeCodePassEnv(t *testing.T) {
 		got = strings.TrimSpace(string(b))
 		return err == nil && got != ""
 	})
-	if got != "http://proxy.test:3128" {
-		t.Fatalf("pass_env reached claude as %q", got)
+	if got != "http://proxy.test:3128 unset" {
+		t.Fatalf("claude saw the proxy and the unnamed variable as %q, want the proxy only", got)
 	}
 }
 

@@ -498,10 +498,11 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, layer map[str
 			vars[name] = value
 		}
 	}
-	// The host's values of the variables the binding admits (HostEnv) win
-	// over this process's: out of process, its environment is sanitized.
+	// The host's values of the variables the binding's pass_env names
+	// (HostEnv, which the host authorized) win over this process's: out of
+	// process, its environment is sanitized.
 	for name, value := range r.Context.HostEnv {
-		if baseline(name, cfg.PassEnv) {
+		if !reserved(name) {
 			vars[name] = value
 		}
 	}
@@ -542,19 +543,6 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, layer map[str
 // (ANTHROPIC_API_KEY among them, which comes only from a selected secret),
 // nested-session markers (CLAUDECODE, CLAUDE_CODE_*), toolbelt variables and
 // Open Conduit/Open Supervisor settings never reach claude.
-// HostEnv implements extension.HostEnvNamer: the variables of the host's
-// environment a binding admits beyond the shell baseline, CLAUDE_CONFIG_DIR
-// and its pass_env names.
-func (e *Executor) HostEnv(raw json.RawMessage) []string {
-	cfg, err := ParseConfig(raw)
-	if err != nil {
-		return nil
-	}
-	return append([]string{"CLAUDE_CONFIG_DIR"}, cfg.PassEnv...)
-}
-
-var _ extension.HostEnvNamer = (*Executor)(nil)
-
 func baseline(name string, pass []string) bool {
 	switch name {
 	case "PATH", "HOME", "USER", "LOGNAME", "SHELL", "LANG", "TZ", "TMPDIR", "TERM", "CLAUDE_CONFIG_DIR":

@@ -974,7 +974,8 @@ func TestLiveOutput(t *testing.T) {
 	}
 }
 
-// TestConfigWarnings: the executor warns about the removed handoff_share;
+// TestConfigWarnings: the executor warns about the removed handoff_share and
+// an executor-config pass_env (the binding's pass_env carries the daemon's);
 // a binding that names a playbook, "-" or none is otherwise quiet.
 func TestConfigWarnings(t *testing.T) {
 	e := claudecode.Offline()
@@ -983,6 +984,7 @@ func TestConfigWarnings(t *testing.T) {
 		`{"playbook":"triage","handoff_share":0}`: "config.handoff_share is ignored",
 		`{"playbook":"-"}`:                        "",
 		`{"playbook":"other"}`:                    "",
+		`{"pass_env":["HTTPS_PROXY"]}`:            "config.pass_env admits only",
 	} {
 		got := strings.Join(e.ConfigWarnings(json.RawMessage(config)), "\n")
 		if want == "" && got != "" || !strings.HasPrefix(got, want) || want != "" && strings.Count(got, "\n") != 0 {

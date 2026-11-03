@@ -716,8 +716,8 @@ type ExecutionContext struct {
 	PlaybookDir string `json:"playbook_dir,omitempty"`
 	// Env is the run's environment layer (extension.ExecutionContext).
 	Env map[string]string `json:"env,omitempty"`
-	// HostEnv are the host's values of the variables the executor names
-	// for the binding (extension.ExecutionContext.HostEnv).
+	// HostEnv are the host's values of the variables the binding's
+	// pass_env names (extension.ExecutionContext.HostEnv).
 	HostEnv map[string]string `json:"host_env,omitempty"`
 }
 

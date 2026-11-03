@@ -78,8 +78,11 @@ type Config struct {
 	HandoffShare *float64 `json:"handoff_share,omitempty"`
 	// Env adds explicit non-secret variables after the sanitized baseline.
 	Env map[string]string `json:"env,omitempty"`
-	// PassEnv names additional process variables admitted to the baseline
-	// (for example a proxy or CLAUDE_CONFIG_DIR).
+	// PassEnv names additional variables of the executor's own process
+	// admitted to the baseline. Out of process that environment is
+	// sanitized: the daemon's variables come through the binding's
+	// pass_env (ExecutionContext.HostEnv) instead, and validating a config
+	// that sets this warns so.
 	PassEnv []string `json:"pass_env,omitempty"`
 	// SecretEnv maps binding secret names to variable names (for example an
 	// API key to ANTHROPIC_API_KEY). Unmapped selected secrets use their
@@ -421,6 +424,9 @@ func (e *Executor) ConfigWarnings(raw json.RawMessage) []string {
 	var out []string
 	if c.HandoffShare != nil {
 		out = append(out, "config.handoff_share is ignored: the handoff experiment was removed and a later release rejects it; remove it, and set cold_turns (handoff or resume) to choose what a cold turn does")
+	}
+	if len(c.PassEnv) > 0 {
+		out = append(out, "config.pass_env admits only variables of the executor's own process, which runs as a package with a sanitized environment; to pass variables of the daemon's environment (a proxy, CLAUDE_CONFIG_DIR), name them in the binding's pass_env")
 	}
 	return out
 }

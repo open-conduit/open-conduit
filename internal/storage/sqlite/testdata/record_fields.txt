@@ -1,4 +1,4 @@
-format 2
+format 3
 AcceptedEvent.Disposition string
 AcceptedEvent.Event struct
 AcceptedEvent.Event.Actor string
@@ -57,6 +57,7 @@ Scope.Bindings.Grants.Label string
 Scope.Bindings.Grants.Name string
 Scope.Bindings.Grants.Operations slice
 Scope.Bindings.Name string
+Scope.Bindings.PassEnv slice
 Scope.Bindings.Requires struct
 Scope.Bindings.Requires.Container bool
 Scope.Bindings.Requires.Inject bool

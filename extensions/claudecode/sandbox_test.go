@@ -177,24 +177,20 @@ func TestRunDirectoriesWin(t *testing.T) {
 	}
 }
 
-// TestHostEnv: the executor names CLAUDE_CONFIG_DIR and a binding's
-// pass_env as the host variables it admits, and a run takes the host's
-// values of them (ExecutionContext.HostEnv) over its own process's; a host
-// variable the binding doesn't admit is dropped.
+// TestHostEnv: a run takes the host's values of the variables its binding's
+// pass_env names (ExecutionContext.HostEnv, which the host authorized) over
+// its own process's, whatever the executor config's pass_env says, and
+// never a reserved toolbelt variable.
 func TestHostEnv(t *testing.T) {
 	h := newHarness(t)
 	e := h.executor()
-	cfg := h.bindingConfig(map[string]any{"pass_env": []string{"HTTPS_PROXY"}})
-	if got := e.HostEnv(cfg); !slices.Equal(got, []string{"CLAUDE_CONFIG_DIR", "HTTPS_PROXY"}) {
-		t.Fatalf("HostEnv %v", got)
-	}
-	r, _ := h.request("work/a", "exec-a", 1, map[string]any{"pass_env": []string{"HTTPS_PROXY"}})
-	r.Context.HostEnv = map[string]string{"HTTPS_PROXY": "http://proxy.test:3128", "NOT_ADMITTED": "x"}
+	r, _ := h.request("work/a", "exec-a", 1, nil)
+	r.Context.HostEnv = map[string]string{"HTTPS_PROXY": "http://proxy.test:3128", "OS_TOKEN": "forged"}
 	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
 		t.Fatalf("run failed: %+v", res.Outcome)
 	}
 	env, _ := os.ReadFile(filepath.Join(h.fake, "env"))
-	if !strings.Contains(string(env), "HTTPS_PROXY=http://proxy.test:3128\n") || strings.Contains(string(env), "NOT_ADMITTED") {
+	if !strings.Contains(string(env), "HTTPS_PROXY=http://proxy.test:3128\n") || strings.Contains(string(env), "forged") {
 		t.Fatalf("claude's environment:\n%s", env)
 	}
 }

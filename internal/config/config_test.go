@@ -819,6 +819,50 @@ func TestBindingTimeout(t *testing.T) {
 	}
 }
 
+// TestBindingPassEnv: a binding's pass_env reaches the domain binding the
+// scheduler pins and the normalized config, and fails closed on a reserved
+// name or one an env: secret reference names (the host passes pass_env
+// values to the executor, so they must never carry a secret).
+func TestBindingPassEnv(t *testing.T) {
+	m := generic(t, example(t, "git-scope"))
+	entry(m, 0, "bindings", 0)["pass_env"] = []any{"HTTPS_PROXY", "CLAUDE_CONFIG_DIR"}
+	snap, err := Validate(encode(t, m), registry())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b := snap.DomainScopes()[0].Bindings[0]; !slices.Equal(b.PassEnv, []string{"HTTPS_PROXY", "CLAUDE_CONFIG_DIR"}) {
+		t.Fatalf("domain binding %+v", b)
+	}
+	if !strings.Contains(string(snap.Redacted()), `"pass_env":["HTTPS_PROXY","CLAUDE_CONFIG_DIR"]`) {
+		t.Fatal("normalized config dropped pass_env")
+	}
+	for name, tc := range map[string]struct {
+		pass []any
+		refs map[string]any
+		code string
+	}{
+		"toolbelt":   {[]any{"OS_TOKEN"}, nil, "pass_env_reserved"},
+		"daemon":     {[]any{"open_conduit_config"}, nil, "pass_env_reserved"},
+		"secret":     {[]any{"OC_TEST_GH_TOKEN"}, map[string]any{"token": "env:OC_TEST_GH_TOKEN"}, "pass_env_secret"},
+		"not a name": {[]any{"HTTPS-PROXY"}, nil, "invalid_value"},
+		"duplicate":  {[]any{"A", "A"}, nil, "duplicate_value"},
+	} {
+		m := generic(t, example(t, "git-scope"))
+		entry(m, 0, "bindings", 0)["pass_env"] = tc.pass
+		if tc.refs != nil {
+			m["scopes"].([]any)[0].(map[string]any)["secret_refs"] = tc.refs
+		}
+		_, err := Validate(encode(t, m), registry())
+		found := false
+		for _, d := range diagnostics(t, err) {
+			found = found || d.Code == tc.code && strings.HasPrefix(d.Path, "scopes/0/bindings/0/pass_env/")
+		}
+		if !found {
+			t.Errorf("%s: diagnostics %+v, want %s", name, diagnostics(t, err), tc.code)
+		}
+	}
+}
+
 // sandboxCheckingExecutor refuses, in a sandbox, a binding config that sets
 // "shared".
 type sandboxCheckingExecutor struct{ interruptExecutor }

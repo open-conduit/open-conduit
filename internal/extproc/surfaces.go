@@ -153,21 +153,6 @@ func (r *Remote) ExecutorPlaybook(name string) func(json.RawMessage) string {
 	}
 }
 
-// ExecutorHostEnv returns the host variables a declared executor admits to
-// a run with a binding config: validate with kind executor_host_env, none
-// for a failed call.
-func (r *Remote) ExecutorHostEnv(name string) func(json.RawMessage) []string {
-	return func(config json.RawMessage) []string {
-		ctx, cancel := context.WithTimeout(context.Background(), ValidateTimeout)
-		defer cancel()
-		var out protocol.ValidateResult
-		if err := r.p.Call(ctx, "validate", protocol.ValidateParams{Kind: protocol.ValidateExecutorHostEnv, Type: name, Config: config}, &out); err != nil {
-			return nil
-		}
-		return out.HostEnv
-	}
-}
-
 // ExecutorWarnings returns the config warnings of a declared executor:
 // validate with kind executor, whose answer may carry warnings. A failed
 // call or a refusal gives none (the config check reports a refusal), and

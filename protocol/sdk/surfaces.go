@@ -25,7 +25,7 @@ func (s *Server) surface(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		switch p.Kind {
-		case protocol.ValidateResourceMode, protocol.ValidateResourceSandbox, protocol.ValidateExecutorMode, protocol.ValidateExecutorPlaybook, protocol.ValidateExecutorHostEnv:
+		case protocol.ValidateResourceMode, protocol.ValidateResourceSandbox, protocol.ValidateExecutorMode, protocol.ValidateExecutorPlaybook:
 			return s.workspaceCheck(p)
 		}
 		if s.ext.Validate != nil {
@@ -372,10 +372,6 @@ func (s *Server) workspaceCheck(p protocol.ValidateParams) (any, error) {
 	case protocol.ValidateExecutorPlaybook:
 		if n, ok := s.ext.Executors[p.Type].(extension.PlaybookNamer); ok {
 			return protocol.ValidateResult{Playbook: n.Playbook(p.Config)}, nil
-		}
-	case protocol.ValidateExecutorHostEnv:
-		if n, ok := s.ext.Executors[p.Type].(extension.HostEnvNamer); ok {
-			return protocol.ValidateResult{HostEnv: n.HostEnv(p.Config)}, nil
 		}
 	}
 	return protocol.ValidateResult{}, nil
