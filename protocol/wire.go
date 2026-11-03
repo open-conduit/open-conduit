@@ -716,6 +716,9 @@ type ExecutionContext struct {
 	PlaybookDir string `json:"playbook_dir,omitempty"`
 	// Env is the run's environment layer (extension.ExecutionContext).
 	Env map[string]string `json:"env,omitempty"`
+	// HostEnv are the host's values of the variables the binding's
+	// pass_env names (extension.ExecutionContext.HostEnv).
+	HostEnv map[string]string `json:"host_env,omitempty"`
 }
 
 // RunRequest is extension.RunRequest without its callbacks: PersistRecovery
@@ -730,13 +733,13 @@ type RunRequest struct {
 }
 
 func FromRunRequest(r extension.RunRequest) RunRequest {
-	return RunRequest{Work: FromWork(r.Work), Execution: FromExecution(r.Execution), Trigger: FromEvent(r.Trigger), Inputs: FromEvents(r.Inputs), Context: ExecutionContext{Config: FromPayload(r.Context.Config), Secrets: r.Context.Secrets, Resources: r.Context.Resources != nil, Sandbox: r.Context.Sandbox != nil, Container: r.Context.Container != nil, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, ToolbeltDir: r.Context.ToolbeltDir, PlaybookDir: r.Context.PlaybookDir, Env: r.Context.Env}}
+	return RunRequest{Work: FromWork(r.Work), Execution: FromExecution(r.Execution), Trigger: FromEvent(r.Trigger), Inputs: FromEvents(r.Inputs), Context: ExecutionContext{Config: FromPayload(r.Context.Config), Secrets: r.Context.Secrets, Resources: r.Context.Resources != nil, Sandbox: r.Context.Sandbox != nil, Container: r.Context.Container != nil, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, ToolbeltDir: r.Context.ToolbeltDir, PlaybookDir: r.Context.PlaybookDir, Env: r.Context.Env, HostEnv: r.Context.HostEnv}}
 }
 
 // Extension returns the request without callbacks; the receiving side
 // installs PersistRecovery and Resources.
 func (r RunRequest) Extension() extension.RunRequest {
-	return extension.RunRequest{Work: r.Work.Domain(), Execution: r.Execution.Domain(), Trigger: r.Trigger.Domain(), Inputs: ToEvents(r.Inputs), Context: extension.ExecutionContext{Config: r.Context.Config.Domain(), Secrets: r.Context.Secrets, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, ToolbeltDir: r.Context.ToolbeltDir, PlaybookDir: r.Context.PlaybookDir, Env: r.Context.Env}}
+	return extension.RunRequest{Work: r.Work.Domain(), Execution: r.Execution.Domain(), Trigger: r.Trigger.Domain(), Inputs: ToEvents(r.Inputs), Context: extension.ExecutionContext{Config: r.Context.Config.Domain(), Secrets: r.Context.Secrets, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, ToolbeltDir: r.Context.ToolbeltDir, PlaybookDir: r.Context.PlaybookDir, Env: r.Context.Env, HostEnv: r.Context.HostEnv}}
 }
 
 type Usage struct {
@@ -815,4 +818,37 @@ func (r Resource) Extension() extension.Resource {
 type AttachSpec struct {
 	Argv []string `json:"argv"`
 	Dir  string   `json:"dir,omitempty"`
+}
+
+// ContainerAttachParams are executor.container_attach's: the Work to
+// attach to, its binding's config and secrets as a launch would get them,
+// and the Work's container home (extension.ContainerAttachRequest).
+type ContainerAttachParams struct {
+	Executor string            `json:"executor"`
+	Work     Work              `json:"work"`
+	Config   Payload           `json:"config"`
+	Secrets  map[string]string `json:"secrets,omitempty"`
+	Home     string            `json:"home"`
+}
+
+// ContainerAttachSpec is the interactive launch executor.container_attach
+// returns for the host's container broker to plan
+// (extension.ContainerAttachSpec).
+type ContainerAttachSpec struct {
+	Needs  SandboxNeeds  `json:"needs"`
+	Launch SandboxLaunch `json:"launch"`
+}
+
+// LiveOutput is one output of a running execution (extension.LiveOutput):
+// Content holds at most the requested tail, Size the whole output's length.
+type LiveOutput struct {
+	Name      string `json:"name"`
+	MediaType string `json:"media_type"`
+	Size      int64  `json:"size"`
+	Content   []byte `json:"content,omitempty"`
+}
+
+// LiveResult is executor.live's result.
+type LiveResult struct {
+	Outputs []LiveOutput `json:"outputs"`
 }

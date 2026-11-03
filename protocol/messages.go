@@ -316,6 +316,9 @@ type ExecutorTargetParams struct {
 	WorkID      string `json:"work_id,omitempty"`
 	Epoch       uint64 `json:"epoch,omitempty"`
 	Event       *Event `json:"event,omitempty"`
+	// Tail is executor.live's limit: at most the last Tail bytes of each
+	// output (all of it when not positive).
+	Tail int64 `json:"tail,omitempty"`
 }
 type PersistRecoveryParams struct {
 	RunID string  `json:"run_id"`
@@ -635,14 +638,17 @@ type CheckRoute struct {
 // registered). Resource is its workspace provider and that provider's
 // config. Isolation is how its executor is confined: "sandbox" (a process
 // sandbox), "container", or empty when it runs unconfined on the host.
+// Config is the binding's executor config, given only to the extension
+// whose executor it names.
 type CheckBinding struct {
-	Name       string         `json:"name"`
-	Executor   string         `json:"executor"`
-	Toolbelt   string         `json:"toolbelt,omitempty"`
-	Operations []string       `json:"operations,omitempty"`
-	Connection string         `json:"connection,omitempty"`
-	Resource   *CheckResource `json:"resource,omitempty"`
-	Isolation  string         `json:"isolation,omitempty"`
+	Name       string          `json:"name"`
+	Executor   string          `json:"executor"`
+	Config     json.RawMessage `json:"config,omitempty"`
+	Toolbelt   string          `json:"toolbelt,omitempty"`
+	Operations []string        `json:"operations,omitempty"`
+	Connection string          `json:"connection,omitempty"`
+	Resource   *CheckResource  `json:"resource,omitempty"`
+	Isolation  string          `json:"isolation,omitempty"`
 }
 
 // CheckBinding.Isolation values.

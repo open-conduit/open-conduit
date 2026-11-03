@@ -212,7 +212,7 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		return e.preset(ctx, rn, cfg.StatusSchema, "invalid_config", "invalid claude code binding config", nil)
 	}
 	if cfg.PluginDir == "" && cfg.Playbook != "-" {
-		cfg.PluginDir = e.o.PluginDir
+		cfg.PluginDir = e.pluginDir(r)
 	}
 	// The operator's home is the daemon's, and a binding's env may name
 	// another: a sandboxed claude reaches the claude config under neither.
@@ -318,8 +318,8 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 	// The host's toolbelt directory may be inside a directory the sandbox
 	// otherwise hides (the daemon keeps a stable link to `os` in its state
 	// directory); a container has its own `os`.
-	if !contained && e.o.ToolbeltDir != "" && r.Context.ToolbeltToken != "" {
-		needs.Read = append(needs.Read, e.o.ToolbeltDir)
+	if !contained && e.toolbeltDir(r) != "" && r.Context.ToolbeltToken != "" {
+		needs.Read = append(needs.Read, e.toolbeltDir(r))
 	}
 	if sock, ok := strings.CutPrefix(r.Context.ToolbeltEndpoint, "unix://"); ok && r.Context.ToolbeltToken != "" {
 		needs.Sockets = []string{sock}
@@ -334,12 +334,12 @@ func (e *Executor) launch(ctx context.Context, r extension.RunRequest, prev doma
 		// srt's own sockets go in the host's short temporary directory.
 		wrapperEnv = []string{"TMPDIR=/tmp"}
 	}
-	belt := r.Context.ToolbeltToken != "" && r.Context.ToolbeltEndpoint != "" && e.o.ToolbeltDir != ""
+	belt := r.Context.ToolbeltToken != "" && r.Context.ToolbeltEndpoint != "" && e.toolbeltDir(r) != ""
 	// A run environment layer (the extensions') may call the toolbelt
 	// through `os`, as git's `!os git-credential` does: a host process
 	// that has one gets the toolbelt client too. A container's comes below.
 	if len(r.Context.Env) > 0 && belt && !contained {
-		env = withToolbelt(env, e.o.ToolbeltDir, r.Context.ToolbeltEndpoint, tokenFile(r, dir))
+		env = withToolbelt(env, e.toolbeltDir(r), r.Context.ToolbeltEndpoint, tokenFile(r, dir))
 	}
 	var plan extension.SandboxPlan
 	if contained {
@@ -406,13 +406,32 @@ func (e *Executor) workspace(ctx context.Context, r extension.RunRequest, cfg Co
 	return r.Context.Resources.Acquire(ctx, req)
 }
 
+// toolbeltDir is the directory holding the `os` a run reaches the toolbelt
+// through: the one the host names for the run (the stable link in its
+// state directory), else the executor's own (Options.ToolbeltDir).
+func (e *Executor) toolbeltDir(r extension.RunRequest) string {
+	if r.Context.ToolbeltDir != "" {
+		return r.Context.ToolbeltDir
+	}
+	return e.o.ToolbeltDir
+}
+
+// pluginDir is a run's default --plugin-dir: the playbook directory the
+// host names for the run, else the executor's own (Options.PluginDir).
+func (e *Executor) pluginDir(r extension.RunRequest) string {
+	if r.Context.PlaybookDir != "" {
+		return r.Context.PlaybookDir
+	}
+	return e.o.PluginDir
+}
+
 // mcpConfig writes the toolbelt's MCP server definition for this segment:
 // `os mcp` with the endpoint and the replaceable credential file. Without a
 // toolbelt token or `os` binary the segment gets no toolbelt. In a
 // container, `os` is the container's own (first on its PATH) and the
 // server inherits its endpoint and token file from claude's environment.
 func (e *Executor) mcpConfig(r extension.RunRequest, dir string, contained bool) (string, error) {
-	if r.Context.ToolbeltToken == "" || r.Context.ToolbeltEndpoint == "" || e.o.ToolbeltDir == "" {
+	if r.Context.ToolbeltToken == "" || r.Context.ToolbeltEndpoint == "" || e.toolbeltDir(r) == "" {
 		return "", nil
 	}
 	token := tokenFile(r, dir)
@@ -423,7 +442,7 @@ func (e *Executor) mcpConfig(r extension.RunRequest, dir string, contained bool)
 	}
 	server := map[string]any{
 		"type":    "stdio",
-		"command": filepath.Join(e.o.ToolbeltDir, "os"),
+		"command": filepath.Join(e.toolbeltDir(r), "os"),
 		"args":    []string{"mcp"},
 		"env":     map[string]string{"OS_ENDPOINT": r.Context.ToolbeltEndpoint, "OS_TOKEN_FILE": token},
 	}
@@ -486,6 +505,14 @@ func (e *Executor) environment(cfg Config, r extension.RunRequest, layer map[str
 	for _, kv := range e.o.Environ() {
 		name, value, ok := strings.Cut(kv, "=")
 		if ok && baseline(name, cfg.PassEnv) {
+			vars[name] = value
+		}
+	}
+	// The host's values of the variables the binding's pass_env names
+	// (HostEnv, which the host authorized) win over this process's: out of
+	// process, its environment is sanitized.
+	for name, value := range r.Context.HostEnv {
+		if !reserved(name) {
 			vars[name] = value
 		}
 	}

@@ -17,6 +17,7 @@ export const Code = {
   NotAdoptable: "not_adoptable",
   NotAccepting: "not_accepting",
   NothingToAttach: "nothing_to_attach",
+  NotLive: "not_live",
   ResourceSetup: "resource_setup_failed",
   ResourceNotFound: "resource_not_found",
   ResourceExhausted: "resource_exhausted",

@@ -4,6 +4,7 @@ package domain
 import (
 	"encoding/json"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -228,6 +229,11 @@ type Binding struct {
 	// deadline for attempts of this binding. Zero inherits the default.
 	TimeoutSeconds int `json:",omitempty"`
 	Config         Payload
+	// PassEnv names variables of the host's environment the operator lets
+	// the binding's runs see (a proxy, say). The host checks
+	// them with the configuration and passes their values as
+	// extension.ExecutionContext.HostEnv; an executor never chooses them.
+	PassEnv []string `json:",omitempty"`
 	// Grants are what the binding offers a Work beyond its own operations
 	// and config, by name; a Work opts into some when it is created
 	// (Work.Grants). The config file is still the ceiling.
@@ -293,4 +299,12 @@ type Scope struct {
 	SecretRefs           map[string]string
 	Revision             Revision
 	CreatedAt, UpdatedAt time.Time
+}
+
+// ReservedEnv reports a variable name no binding's pass_env may pass from
+// the host: the toolbelt protocol's (OS_*) and the daemon's own settings
+// (OPEN_CONDUIT_*).
+func ReservedEnv(name string) bool {
+	upper := strings.ToUpper(name)
+	return strings.HasPrefix(upper, "OS_") || strings.HasPrefix(upper, "OPEN_CONDUIT_")
 }

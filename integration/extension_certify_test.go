@@ -183,6 +183,9 @@ func TestCertificationFirstPartyPackages(t *testing.T) {
 		// served over the protocol (#357).
 		{"github", "", []string{"ingress.conformance", "routes.decisions", "operations.cases", "executor.conformance", "executor.controls", "surfaces.served"}},
 		{"shell", "", []string{"executor.conformance", "executor.inject", "executor.controls"}},
+		// Claude Code through inprocsdk, against the fake claude its
+		// fixture command writes.
+		{"claude-code", "", []string{"executor.conformance", "executor.inject", "executor.controls", "executor.resource_mode", "surfaces.served"}},
 		{"sentry", "", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
 		{"pagerduty", "", []string{"ingress.conformance", "routes.decisions", "operations.cases", "surfaces.served"}},
 		// PostHog through inprocsdk: an exporter, a sink and two checks,

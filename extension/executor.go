@@ -63,6 +63,13 @@ type ExecutionContext struct {
 	// gives the process the toolbelt client (OS_ENDPOINT, OS_TOKEN_FILE and
 	// `os` on PATH) so the layer can call it.
 	Env map[string]string
+	// HostEnv are the host's own values of the variables the binding's
+	// pass_env names (domain.Binding.PassEnv), those the host has set. The
+	// operator names them in the binding and the host validates and
+	// resolves them, so an executor never chooses which of the host's
+	// variables it sees. An executor adds them to its sanitized baseline
+	// (an executor out of process has a sanitized environment of its own).
+	HostEnv map[string]string
 }
 type RunRequest struct {
 	Work      domain.Work

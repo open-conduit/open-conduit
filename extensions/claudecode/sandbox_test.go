@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/domain"
@@ -150,5 +151,46 @@ func TestSandboxReadsToolbelt(t *testing.T) {
 	}
 	if len(c.needs) != 1 || slices.Contains(c.needs[0].Read, belt) {
 		t.Fatalf("container needs %+v, want no read of %s", c.needs, belt)
+	}
+}
+
+// TestRunDirectoriesWin: the toolbelt and playbook directories the host
+// names for a run win over the executor's own, so an executor out of
+// process, away from the host's os, still reaches the host's.
+func TestRunDirectoriesWin(t *testing.T) {
+	h := newHarness(t)
+	e := h.executorWith(func(o *claudecode.Options) { o.PluginDir = filepath.Join(h.root, "own-plugins") })
+	hostBelt, hostBooks := filepath.Join(h.root, "host-belt"), filepath.Join(h.root, "host-plugins")
+	b := &recordingBroker{}
+	r, _ := h.request("work/a", "exec-a", 1, nil)
+	r.Context.Sandbox = b
+	r.Context.ToolbeltToken, r.Context.ToolbeltEndpoint = "belt", "unix:///run/belt.sock"
+	r.Context.ToolbeltDir, r.Context.PlaybookDir = hostBelt, hostBooks
+	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("sandboxed run failed: %+v", res.Outcome)
+	}
+	if len(b.needs) != 1 || !slices.Contains(b.needs[0].Read, hostBelt) || !slices.Contains(b.needs[0].Read, hostBooks) {
+		t.Fatalf("needs %+v, want reads of %s and %s", b.needs, hostBelt, hostBooks)
+	}
+	if slices.Contains(b.needs[0].Read, filepath.Join(h.root, "bin")) || slices.Contains(b.needs[0].Read, filepath.Join(h.root, "own-plugins")) {
+		t.Fatalf("needs %+v read the executor's own directories", b.needs)
+	}
+}
+
+// TestHostEnv: a run takes the host's values of the variables its binding's
+// pass_env names (ExecutionContext.HostEnv, which the host authorized) over
+// its own process's, whatever the executor config's pass_env says, and
+// never a reserved toolbelt variable.
+func TestHostEnv(t *testing.T) {
+	h := newHarness(t)
+	e := h.executor()
+	r, _ := h.request("work/a", "exec-a", 1, nil)
+	r.Context.HostEnv = map[string]string{"HTTPS_PROXY": "http://proxy.test:3128", "OS_TOKEN": "forged"}
+	if res := h.run(e, r); res.Outcome.Kind == domain.OutcomeFailed {
+		t.Fatalf("run failed: %+v", res.Outcome)
+	}
+	env, _ := os.ReadFile(filepath.Join(h.fake, "env"))
+	if !strings.Contains(string(env), "HTTPS_PROXY=http://proxy.test:3128\n") || strings.Contains(string(env), "forged") {
+		t.Fatalf("claude's environment:\n%s", env)
 	}
 }

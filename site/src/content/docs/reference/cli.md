@@ -71,7 +71,7 @@ serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interv
                            (scheduled online backups into <data-dir>/backups; --backup-interval 0 turns them off)
       [--webhook-addr 127.0.0.1:8787] [--tunnel ngrok|cloudflared|static] [--tunnel-domain D] [--tunnel-name N] [--tunnel-hostname H] [--public-url URL]
                            (override the config's settings.webhooks for this run)
-      [--no-tunnel] [--dry-run] [--claude-usage] [--no-telemetry]
+      [--no-tunnel] [--dry-run] [--no-telemetry]
       (--webhook-addr takes any free local port; 8787 is only an example)
       (--no-telemetry, OPEN_CONDUIT_NO_TELEMETRY=1 or DO_NOT_TRACK=1 turn off the anonymous usage reports)
       [--web] [--web-addr 127.0.0.1:7420] [--web-host open-conduit.localhost]

@@ -147,7 +147,7 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 	})
 	// A fresh repository's main has no protection, so doctor warns that a
 	// run's credential could push straight to it (#346).
-	for name, code := range map[string]string{"github-auth": "base_unprotected", "claude_code": "installed", "github-capability": "ok", "webhooks": "reconcile_only", "secrets": ""} {
+	for name, code := range map[string]string{"github-auth": "base_unprotected", "claude-code": "installed", "github-capability": "ok", "webhooks": "reconcile_only", "secrets": ""} {
 		c := check(report, name)
 		if code != "" && c.Code != code {
 			t.Fatalf("doctor %s: %+v\n%+v", name, c, report.Checks)

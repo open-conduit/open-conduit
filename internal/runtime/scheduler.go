@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"reflect"
 	"sort"
 	"strings"
@@ -93,6 +94,9 @@ type SchedulerOptions struct {
 	// PlaybookDir is the host's playbook directory, passed to every attempt
 	// (ExecutionContext.PlaybookDir).
 	PlaybookDir string
+	// LookupEnv reads the host's environment for the variables a binding's
+	// pass_env names (ExecutionContext.HostEnv); os.LookupEnv when nil.
+	LookupEnv func(string) (string, bool)
 	// Secrets resolves only the attempt's binding-selected secrets immediately
 	// before Run/Recover/Resume, outside coordination transactions. Values are
 	// never persisted; failure blocks this attempt with a safe diagnostic.
@@ -1337,6 +1341,7 @@ func (s *Scheduler) launch(ctx context.Context, attempt Attempt, state AttemptSt
 		attempt.Request.Context.ToolbeltDir = s.options.ToolbeltDir
 	}
 	attempt.Request.Context.PlaybookDir = s.options.PlaybookDir
+	attempt.Request.Context.HostEnv = s.hostEnv(state.Binding.PassEnv)
 	if s.options.Secrets != nil {
 		var secrets map[string]string
 		secretErr := trail.phase("secrets", func() (e error) { secrets, e = s.options.Secrets(ctx, state); return e })
@@ -1916,4 +1921,27 @@ func (s *Scheduler) ConfirmStopped(ctx context.Context, id domain.ID, expectedEp
 		state.Excluded = true
 		return putAttemptState(tx, state)
 	})
+}
+
+// hostEnv is the host's values of the variables the binding's pass_env
+// names (validated with the configuration), those set. A reserved name
+// never crosses, whatever the configuration says.
+func (s *Scheduler) hostEnv(names []string) map[string]string {
+	lookup := s.options.LookupEnv
+	if lookup == nil {
+		lookup = os.LookupEnv
+	}
+	var out map[string]string
+	for _, name := range names {
+		if domain.ReservedEnv(name) {
+			continue
+		}
+		if value, ok := lookup(name); ok {
+			if out == nil {
+				out = map[string]string{}
+			}
+			out[name] = value
+		}
+	}
+	return out
 }

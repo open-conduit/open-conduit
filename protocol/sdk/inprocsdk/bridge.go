@@ -219,9 +219,14 @@ func (b *Bridge) manifest(base protocol.Manifest) (protocol.Manifest, error) {
 			_, stop := x.(extension.StopExecutor)
 			_, forget := x.(extension.ForgetExecutor)
 			_, attach := x.(extension.AttachExecutor)
+			_, containerAttach := x.(extension.ContainerAttachExecutor)
+			_, live := x.(extension.LiveExecutor)
+			_, moded := x.(extension.ResourceModer)
+			_, playbook := x.(extension.PlaybookNamer)
 			p.Executors = append(p.Executors, protocol.ExecutorDecl{Name: n, Pool: execs[n].Pool,
 				Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container},
-				Controls:     protocol.Controls{Stop: stop, Forget: forget, Attach: attach}})
+				Controls:     protocol.Controls{Stop: stop, Forget: forget, Attach: attach, ContainerAttach: containerAttach, Live: live},
+				ResourceMode: moded, Playbook: playbook})
 		}
 	}
 	if t, ok := b.x.(inproc.Tasker); ok && len(p.Tasks) == 0 {
@@ -591,12 +596,9 @@ func (b *Bridge) host(h *sdk.Host) inproc.Host {
 			text, ok, err := h.RenderOwned(ctx, e)
 			return text, ok && err == nil
 		},
+		// Rotated by size, as the daemon's own logs are.
 		OpenLog: func(name string) (io.WriteCloser, error) {
-			dir := filepath.Join(h.StateDir(), "logs")
-			if err := os.MkdirAll(dir, 0o700); err != nil {
-				return nil, err
-			}
-			return os.OpenFile(filepath.Join(dir, name+".jsonl"), os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0o600)
+			return sdk.OpenLog(filepath.Join(h.StateDir(), "logs", name+".jsonl"))
 		},
 		Deliver: func(ctx context.Context, source string, d extension.Delivery) error {
 			_, err := h.Deliver(ctx, source, protocol.FromDelivery(d))

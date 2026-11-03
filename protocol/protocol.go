@@ -65,6 +65,7 @@ const (
 	CodeNotAdoptable       = "not_adoptable"                // executor.recover found nothing to adopt (extension.ErrNotAdoptable)
 	CodeNotAccepting       = "not_accepting"                // executor.inject definitely not delivered (extension.ErrNotAccepting)
 	CodeNothingToAttach    = "nothing_to_attach"            // executor.attach has nothing yet (extension.ErrNothingToAttach)
+	CodeNotLive            = "not_live"                     // executor.live: no segment of the execution is running (extension.ErrNotLive)
 	CodeResourceSetup      = "resource_setup_failed"        // resource exists, setup failed (extension.ErrResourceSetup)
 	CodeResourceNotFound   = "resource_not_found"           // no owned lease (extension.ErrResourceNotFound)
 	CodeResourceExhausted  = "resource_exhausted"           // capacity too low to create a resource (extension.ErrResourceExhausted)

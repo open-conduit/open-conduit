@@ -70,7 +70,7 @@ The GitHub extension contributes `github`, `github-capability`, `github-git-bot`
 | `grants` | Operation grants that leave an agent short (`config.GrantWarnings`, [toolsets](../toolbelt-management/#toolsets)): a binding whose playbook uses operations the binding or its scope doesn't grant, naming the scope, binding and operations, and an operations list that names an earlier version of a toolset's operations instead of the toolset, with the `config set` that adopts it. `granted` (`ok`) or `drift` (`warn`), each finding an item. Runs offline too. |
 | `webhooks` | `reconcile_only` (info) with no listener; otherwise the bound address, the tunnel and public URL (`tunnel_down`, `tunnel_failed`), where the address and the tunnel came from (`serve flags` or `settings.webhooks`), `restart_required` when an applied generation changed `settings.webhooks` since `serve` started. Each extension's own check lists its entries' routes, a missing `webhook_secret` (not mounted) and the managed hook state (`ok`, `dry_run`, `hook_permission_denied`, …). |
 | `sandbox` | When a binding declares an srt sandbox: `srt <version> at <path>` (`ok`, or `untested_version` as `warn`); `srt_unavailable`, `userns_unavailable`, `seccomp_unavailable` or `preflight_failed` as `fail`, when sandboxed bindings run nothing ([B09](../sandboxes/#doctor)). `not_configured` (info) otherwise. |
-| `claude_code` | Runs `--version` for each claude-code binding's binary (`installed`, or `claude_missing` as `fail`); reports dry run. With `serve --claude-usage` it also reads the subscription's 5-hour and 7-day usage windows (the undocumented OAuth endpoint, with the machine's Claude login) and warns at 90%. A read failure is "usage unknown", never a fault. Usage reading is opt-in because it reads the login token. |
+| `claude-code` | The claude-code executor's own check (named `claude_code` before it moved into the executor), which offline doctor runs too. Runs `--version` for each claude-code binding's binary (`installed`, or `claude_missing` as `fail`); reports dry run. For a binding that sets `usage: true` it also reads the subscription's 5-hour and 7-day usage windows (the undocumented OAuth endpoint, with that binding's Claude login, its `CLAUDE_CONFIG_DIR` or the default) and warns at 90%. A read failure is "usage unknown", never a fault. Usage reading is opt-in because it reads the login token; `serve --claude-usage`, which turned it on for the whole daemon, is retired and only warns. |
 
 ## Operator controls
 
@@ -173,7 +173,7 @@ That maps to these grants:
 - Managed hooks are only reported (`dry_run`).
 - Claude Code turns run as stubs on a cheap model (`claudecode.Options.DryRun`, model `haiku`), told to do nothing and call no tools.
 
-Continuity, outcomes and history behave as usual. Shell executions are not altered, since they are the operator's own commands. Jobs follow their own dry-run rules ([scheduled jobs](../schedule-extension/#dry-run)). Doctor reports dry run on `github` and `claude_code`.
+Continuity, outcomes and history behave as usual. Shell executions are not altered, since they are the operator's own commands. Jobs follow their own dry-run rules ([scheduled jobs](../schedule-extension/#dry-run)). Doctor reports dry run on `github` and `claude-code`.
 
 ## Host loop and attempt state
 
@@ -209,7 +209,7 @@ make check && GOTOOLCHAIN=go1.24.2 make check && make cross-build && make drill
 
 - **Fresh installation.** [`TestDaemonFreshInstallGitHubIssue`](https://github.com/open-conduit/open-conduit/blob/main/integration/daemon_operator_test.go) runs the following steps against the composed daemon, the GitHub fake and a fake claude:
   1. `init`, `secret set` (file store, never echoed), `config set` and `config check`.
-  2. Daemon start, and doctor with `--check-secrets` passing (`github-auth verified`, `claude_code installed`, `github-capability ok`, `webhooks reconcile_only`), with no reference or value in the report.
+  2. Daemon start, and doctor with `--check-secrets` passing (`github-auth verified`, `claude-code installed`, `github-capability ok`, `webhooks reconcile_only`), with no reference or value in the report.
   3. The issue claimed and worked, with labels converging and annotations shown.
   4. `work attach` holding during the session and releasing after, both as `core.manual` Events in the Work's history.
   5. A manual claim of a skip-labelled issue, and a scope reconcile.

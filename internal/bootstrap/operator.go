@@ -4,17 +4,14 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/http"
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"strings"
 	"time"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
-	"github.com/open-conduit/open-conduit/extensions/claudecode"
 	gh "github.com/open-conduit/open-conduit/extensions/github"
 	"github.com/open-conduit/open-conduit/extensions/jira"
 	"github.com/open-conduit/open-conduit/extensions/linear"
@@ -173,7 +170,7 @@ type SetupOptions struct {
 // nothing else is pre-allowed.
 func SetupCommand(o SetupOptions) (*exec.Cmd, error) {
 	codex := o.Agent == CodexAgent
-	if o.Agent != "claude" && o.Agent != claudecode.Name && !codex {
+	if o.Agent != "claude" && o.Agent != "claude-code" && !codex {
 		return nil, fmt.Errorf("no setup agent %q: use --with claude or --with codex", o.Agent)
 	}
 	if o.Binary == "" {
@@ -321,6 +318,10 @@ func (d *daemon) attach(ctx context.Context, executor string, w domain.Work) (ma
 		return management.AttachSpec{}, management.ErrAttachUnsupported
 	}
 	spec, err := a.Attach(ctx, w.ID)
+	if errors.Is(err, extension.ErrUnsupported) {
+		// A package's executor that doesn't declare the control.
+		return management.AttachSpec{}, management.ErrAttachUnsupported
+	}
 	if err != nil {
 		return management.AttachSpec{}, err
 	}
@@ -334,7 +335,11 @@ func (d *daemon) live(ctx context.Context, executor string, execution domain.ID,
 	if !ok {
 		return nil, management.ErrLiveUnsupported
 	}
-	return l.Live(ctx, execution, tail)
+	out, err := l.Live(ctx, execution, tail)
+	if errors.Is(err, extension.ErrUnsupported) {
+		return nil, management.ErrLiveUnsupported
+	}
+	return out, err
 }
 
 func rank(status string) int {
@@ -355,92 +360,13 @@ func (d *daemon) reportedCode(kind, subject string) string {
 	return d.reported[kind+"\x00"+subject]
 }
 
-// claudeCheck runs `claude --version` for every claude-code binding's
-// binary and, when enabled, reads the subscription usage windows.
-func (d *daemon) claudeCheck(ctx context.Context) runtime.Check {
-	snapshot, _ := d.configs.Current()
-	check := claudeVersionCheck(ctx, snapshot)
-	if check.Code == "not_configured" {
-		return check
-	}
-	if d.o.DryRun {
-		check.Items = append(check.Items, "dry run: turns are stubs on a cheap model")
-	}
-	if !d.o.ClaudeUsage {
-		return check
-	}
-	cx, cancel := context.WithTimeout(ctx, 15*time.Second)
-	defer cancel()
-	windows, err := claudecode.Usage(cx, claudecode.UsageOptions{URL: d.o.ClaudeUsageURL, Token: d.o.ClaudeUsageToken, HTTP: &http.Client{Timeout: 10 * time.Second}})
-	if err != nil {
-		check.Items = append(check.Items, "usage unknown")
-		return check
-	}
-	for _, w := range windows {
-		item := fmt.Sprintf("usage %s: %.0f%% (resets %s)", w.Name, w.Used, w.ResetsAt.UTC().Format(time.RFC3339))
-		if w.Used >= 90 && check.Status == runtime.CheckOK {
-			check.Status, check.Code = runtime.CheckWarn, "usage_high"
-		}
-		check.Items = append(check.Items, item)
-	}
-	return check
-}
-
-// claudeVersionCheck runs `claude --version` for every claude-code binding's
-// binary in snapshot.
-func claudeVersionCheck(ctx context.Context, snapshot *config.Snapshot) runtime.Check {
-	check := runtime.Check{Name: "claude_code", Status: runtime.CheckOK, Code: "installed"}
-	binaries := map[string][]string{}
-	if snapshot != nil {
-		for _, id := range snapshot.Order {
-			scope := snapshot.Scopes[id]
-			if scope == nil || !scope.Enabled {
-				continue
-			}
-			for _, b := range scope.Bindings {
-				if b.Executor != claudecode.Name {
-					continue
-				}
-				cfg, err := claudecode.ParseConfig(b.Config)
-				if err != nil {
-					continue
-				}
-				bin := cfg.Binary
-				if bin == "" {
-					bin = "claude"
-				}
-				binaries[bin] = append(binaries[bin], string(id)+"/"+b.Name)
-			}
-		}
-	}
-	if len(binaries) == 0 {
-		check.Status, check.Code, check.Detail = runtime.CheckInfo, "not_configured", "no claude-code bindings"
-		return check
-	}
-	names := make([]string, 0, len(binaries))
-	for bin := range binaries {
-		names = append(names, bin)
-	}
-	sort.Strings(names)
-	for _, bin := range names {
-		v, err := claudecode.Version(ctx, bin)
-		if err != nil {
-			check.Status, check.Code = runtime.CheckFail, "claude_missing"
-			check.Items = append(check.Items, fmt.Sprintf("%s (bindings %s): not runnable", filepath.Base(bin), strings.Join(binaries[bin], ", ")))
-			continue
-		}
-		check.Items = append(check.Items, fmt.Sprintf("%s: %s", filepath.Base(bin), v))
-	}
-	return check
-}
-
 // daemonChecks are the doctor checks only a running daemon makes.
 var daemonChecks = []string{"storage", "executions", "lease_recovery", "resource_holds", "retention", "routing", "reconcile_lag", "bindings", "connections", "secrets", "pinned_executors", "telemetry", "github", "linear", "jira", "bitbucket", "slack", "posthog", "webhooks", "schedule", "resources", "introspection", "extensions"}
 
 // OfflineChecks are the doctor checks that need no daemon: the config file
 // validated against the same registrations `serve` uses, the first-party
-// extensions' Offline checks on it (github-capability, github-git-bot), and
-// `claude --version` for its claude-code bindings, then a skipped check naming the daemon's own. The CLI runs them
+// extensions' Offline checks on it (github-capability, github-git-bot,
+// claude-code), then a skipped check naming the daemon's own. The CLI runs them
 // when no daemon is reachable.
 func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtime.Check {
 	skipped := runtime.Check{Name: "skipped", Status: runtime.CheckInfo, Code: "daemon_not_running", Detail: "need a running daemon: " + strings.Join(daemonChecks, ", ")}
@@ -463,5 +389,5 @@ func OfflineChecks(ctx context.Context, configPath string, data []byte) []runtim
 	}
 	out := []runtime.Check{{Name: "config", Status: runtime.CheckOK, Code: "valid", Detail: configPath}, grantsCheck(snapshot, reg)}
 	out = append(out, offlineChecks(ctx, snapshot, executors, filepath.Dir(configPath), pkgs.installed)...)
-	return append(out, claudeVersionCheck(ctx, snapshot), skipped)
+	return append(out, skipped)
 }

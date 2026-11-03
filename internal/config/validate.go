@@ -476,6 +476,7 @@ func (v *validator) check(i int, scopeID string, e *effective) {
 
 // registration performs context-free executor, capability and resource checks.
 func (v *validator) registration(p string, b Binding) {
+	v.passEnv(p, b)
 	if r := b.Requires; r.Workspace && b.Resource == nil {
 		v.fail(p+"/resource", "resource_required", "workspace requires a bound resource provider; add resource or remove requires.workspace")
 	}
@@ -551,6 +552,41 @@ func (v *validator) registration(p string, b Binding) {
 // executor a workspace that writes through to the operator's own files (a
 // git worktree, whose commits go through the main checkout's .git) or runs
 // setup outside the sandbox.
+// passEnv fails closed on a pass_env name the host must never pass: a
+// reserved one (domain.ReservedEnv), or one an env: secret reference in the
+// document names, which only a binding's selected secrets may carry.
+func (v *validator) passEnv(p string, b Binding) {
+	refs := envSecretNames(v.doc)
+	for i, name := range b.PassEnv {
+		switch {
+		case domain.ReservedEnv(name):
+			v.fail(ptr(p+"/pass_env", i), "pass_env_reserved", "OS_* and OPEN_CONDUIT_* variables are Open Conduit's own; remove it")
+		case refs[name]:
+			v.fail(ptr(p+"/pass_env", i), "pass_env_secret", "an env: secret reference names this variable; select the secret with secret_names instead")
+		}
+	}
+}
+
+// envSecretNames are the variables the document's env: secret references
+// name, on connections and scopes.
+func envSecretNames(doc *Document) map[string]bool {
+	out := map[string]bool{}
+	add := func(refs map[string]string) {
+		for _, ref := range refs {
+			if name, ok := strings.CutPrefix(ref, "env:"); ok {
+				out[name] = true
+			}
+		}
+	}
+	for _, c := range doc.Connections {
+		add(c.SecretRefs)
+	}
+	for _, s := range doc.Scopes {
+		add(s.SecretRefs)
+	}
+	return out
+}
+
 func (v *validator) sandboxed(p string, b Binding) {
 	if b.Sandbox != nil {
 		check, ok := v.reg.Sandboxes[b.Sandbox.Provider]
@@ -946,7 +982,7 @@ func (s *Snapshot) DomainScopes() []domain.Scope {
 		d := domain.Scope{ID: e.ID, Name: e.Name, ParentID: e.ParentID, SecretRefs: maps.Clone(e.SecretRefs)}
 		for _, b := range e.Bindings {
 			d.Bindings = append(d.Bindings, domain.Binding{Name: b.Name, Executor: b.Executor, Requires: b.Requires, TimeoutSeconds: b.TimeoutSeconds,
-				Config: domain.Payload{Schema: BindingSchema, Data: slices.Clone(b.Config)}, Grants: b.domainGrants()})
+				Config: domain.Payload{Schema: BindingSchema, Data: slices.Clone(b.Config)}, PassEnv: slices.Clone(b.PassEnv), Grants: b.domainGrants()})
 			meta.Bindings[b.Name] = bindingMeta{b.Connection, b.Operations, b.SecretNames, b.Resource, b.Sandbox, b.Container}
 		}
 		for _, r := range e.Routes {

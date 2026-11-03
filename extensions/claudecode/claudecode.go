@@ -88,7 +88,8 @@ type Options struct {
 	// (and reads Work state in Maintain).
 	Store storage.Store
 	// Namespace separates this registration's continuity (default
-	// "executor.claudecode").
+	// "claude-code", the package's own; it was "executor.claudecode" while
+	// the executor ran in process).
 	Namespace string
 	// Artifacts receives each turn's transcript and stderr. Optional.
 	Artifacts storage.Artifacts
@@ -165,7 +166,7 @@ func (e *Executor) Open(o Options) error {
 		return errors.New("claude code executor state directory must be owner-only (0700)")
 	}
 	if o.Namespace == "" {
-		o.Namespace = "executor.claudecode"
+		o.Namespace = Name
 	}
 	if o.ToolbeltDir == "" {
 		if self, err := os.Executable(); err == nil {

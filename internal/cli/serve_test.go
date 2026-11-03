@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -33,5 +34,20 @@ func TestServeTelemetryOptOut(t *testing.T) {
 		if r := run(map[string]string{c.key: c.value}); r.NoTelemetry != c.off {
 			t.Errorf("%s=%s: NoTelemetry %v, want %v", c.key, c.value, r.NoTelemetry, c.off)
 		}
+	}
+}
+
+// --claude-usage is retired: serve still starts with it, saying where the
+// setting went (a claude-code binding's usage).
+func TestServeClaudeUsageRetired(t *testing.T) {
+	root := t.TempDir()
+	served := false
+	e := Env{Getenv: func(string) string { return "" }, Cwd: root, Serve: func(ServeRequest) int { served = true; return 0 }}
+	var out, errOut bytes.Buffer
+	if code := RunOperator("test", "abc", []string{"--data-dir", root, "serve", "--config", filepath.Join(root, "c.json"), "--claude-usage"}, e, &out, &errOut); code != 0 || !served {
+		t.Fatalf("serve --claude-usage: %d %s", code, errOut.String())
+	}
+	if !strings.Contains(errOut.String(), `"usage": true`) {
+		t.Errorf("no retirement notice: %q", errOut.String())
 	}
 }

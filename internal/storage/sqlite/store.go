@@ -30,7 +30,7 @@ const SchemaVersion uint32 = 1
 // the highest format that opened it, and Open refuses a database whose format
 // is newer than its own (ErrRecordsNewer), before it changes anything.
 // TestRecordFieldsArePinned fails until a field change comes with a bump.
-const RecordFormat uint32 = 2
+const RecordFormat uint32 = 3
 
 // recordFormat is RecordFormat, replaced by tests that simulate another binary.
 var recordFormat = RecordFormat

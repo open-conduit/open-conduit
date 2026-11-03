@@ -103,13 +103,6 @@ type Options struct {
 	// webhook management report dry_run, and Claude Code turns run as
 	// stubs on a cheap model.
 	DryRun bool
-	// ClaudeUsage lets doctor read the Claude subscription usage windows
-	// with the machine's Claude login (off by default).
-	ClaudeUsage bool
-	// ClaudeUsageURL and ClaudeUsageToken override the usage endpoint and
-	// token source (tests).
-	ClaudeUsageURL   string
-	ClaudeUsageToken func(context.Context) (string, error)
 	// NoTelemetry turns off the anonymous usage reports (usage.go).
 	NoTelemetry bool
 	// TelemetryURL and TelemetryKey override where usage reports go
@@ -436,6 +429,13 @@ func Serve(ctx context.Context, o Options) (err error) {
 	if err = os.MkdirAll(filepath.Join(o.StateDir, "executors"), 0o700); err != nil {
 		return err
 	}
+	// Records an extension wrote in process move to its package's
+	// namespace before any package starts.
+	if moved, err := adoptLegacyKV(ctx, d.coord, d.now()); err != nil {
+		return fmt.Errorf("adopting in-process KV: %w", err)
+	} else if moved > 0 {
+		d.log.Info("moved in-process records to their packages", "records", moved)
+	}
 	// The playbook plugin exists before the executors that read it start.
 	if err = d.preparePlaybooks(); err != nil {
 		return err
@@ -645,7 +645,7 @@ func (d *daemon) checks() []func(context.Context) runtime.Check {
 		status, code, detail := d.pipeline.Health()
 		return runtime.Check{Name: "telemetry", Status: status, Code: code, Detail: detail}
 	}
-	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.webhookCheck, d.claudeCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.extensionCheck, d.grantCheck)
+	return append(append([]func(context.Context) runtime.Check{pipelineCheck}, d.inprocChecks(false)...), d.webhookCheck, d.resourceCheck, d.sandboxCheck, d.containerCheck, d.capacityCheck, d.extensionCheck, d.grantCheck)
 }
 
 // scopeLimits gives the scheduler each scope whose limits.concurrency

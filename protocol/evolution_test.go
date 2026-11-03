@@ -100,7 +100,7 @@ func TestKVLayoutTransitions(t *testing.T) {
 
 func TestErrorCodesRoundTrip(t *testing.T) {
 	reset := time.Date(2026, 10, 26, 0, 0, 0, 0, time.UTC)
-	for _, err := range []error{extension.ErrInvalid, extension.ErrUnsupported, extension.ErrUnauthorized, extension.ErrUndeclared, storage.ErrNotFound, storage.ErrConflict, extension.ErrNotAdoptable, extension.ErrNotAccepting, extension.ErrNothingToAttach, extension.ErrResourceSetup, extension.ErrResourceNotFound, extension.ErrResourceExhausted, extension.ErrSandboxDenied, extension.ErrSandboxUnavailable, extension.ErrContainerRunning, extension.ErrContainerUnconfirmed} {
+	for _, err := range []error{extension.ErrInvalid, extension.ErrUnsupported, extension.ErrUnauthorized, extension.ErrUndeclared, storage.ErrNotFound, storage.ErrConflict, extension.ErrNotAdoptable, extension.ErrNotAccepting, extension.ErrNothingToAttach, extension.ErrNotLive, extension.ErrResourceSetup, extension.ErrResourceNotFound, extension.ErrResourceExhausted, extension.ErrSandboxDenied, extension.ErrSandboxUnavailable, extension.ErrContainerRunning, extension.ErrContainerUnconfirmed} {
 		e := protocol.Encode(errors.Join(errors.New("context"), err))
 		if got := protocol.Decode(e.Code, e.Message, e.ResetAt); !errors.Is(got, err) {
 			t.Errorf("%v crossed as %v", err, got)
@@ -129,6 +129,17 @@ func TestErrorCodesRoundTrip(t *testing.T) {
 	var p extension.RetryHintProvider
 	if got := protocol.Decode(hint.Code, hint.Message, hint.ResetAt); !errors.As(got, &p) || !p.RetryHint().ResetAt.Equal(reset) {
 		t.Errorf("retry hint crossed as %v", got)
+	}
+	// Only retry_after carries a hint: an executor's other refusals (a
+	// recover that finds nothing to adopt) are no reason to wait, and the
+	// scheduler reads any hint as one (thirty minutes with no reset).
+	for _, code := range []string{protocol.CodeNotAdoptable, protocol.CodeInvalid, protocol.CodeInternal, protocol.CodeConflict} {
+		if got := protocol.Decode(code, code, nil); errors.As(got, &p) {
+			t.Errorf("%s crossed with a retry hint", code)
+		}
+	}
+	if got := protocol.Encode(protocol.Decode(hint.Code, hint.Message, hint.ResetAt)); got.Code != protocol.CodeRetryAfter || !got.ResetAt.Equal(reset) {
+		t.Errorf("a relayed retry hint crossed as %+v", got)
 	}
 	if e := protocol.Encode(errors.New("secret detail")); e.Code != protocol.CodeInternal || e.Message != "internal error" {
 		t.Errorf("unauthored error leaked: %+v", e)

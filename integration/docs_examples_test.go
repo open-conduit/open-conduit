@@ -14,6 +14,7 @@ import (
 	"github.com/open-conduit/open-conduit/internal/bootstrap"
 	"github.com/open-conduit/open-conduit/internal/cli"
 	"github.com/open-conduit/open-conduit/internal/extproc"
+	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
 // userDocs are the user-facing documents whose examples must work as
@@ -258,5 +259,48 @@ func TestOfflineDoctorRunsPackageChecks(t *testing.T) {
 		"secret_refs": {}}]}`)
 	if got := names(withGitHub); !got["config"] || !got["github-capability"] || !got["github-git-bot"] {
 		t.Fatalf("offline checks of a config with GitHub: %v", got)
+	}
+	// claude-code's own check runs each claude-code binding's binary, and
+	// names the bindings of one that doesn't run.
+	withClaude := []byte(`{"version": 1, "settings": {}, "connections": [], "scopes": [{"id": "ops", "name": "Operations",
+		"authorization": {"connections": [], "operations": ["read_context", "declare_outcome"], "read_scopes": []},
+		"bindings": [{"name": "agent", "executor": "claude-code", "requires": {"toolbelt": "mcp"}, "operations": ["read_context", "declare_outcome"], "secret_names": [], "config": {"binary": "/nonexistent/claude-oc-test"}}],
+		"routes": [{"name": "incoming", "handler": "manual", "binding": "agent", "active_policy": "queue", "config": {}}], "secret_refs": {}}]}`)
+	var claude runtime.Check
+	for _, c := range bootstrap.OfflineChecks(context.Background(), filepath.Join(t.TempDir(), "config.json"), withClaude) {
+		if c.Name == "claude-code" {
+			claude = c
+		}
+	}
+	if claude.Status != runtime.CheckFail || claude.Code != "claude_missing" || len(claude.Items) != 1 || !strings.Contains(claude.Items[0], "ops/agent") {
+		t.Fatalf("claude-code check offline: %+v", claude)
+	}
+}
+
+// TestModeWarnings: offline, a claude-code binding whose git resource sets a
+// mode the executor's own workspace_mode overrides is warned about, asked of
+// the bundled claude-code package, and the same binding asking for the
+// resource's mode, or a resource naming no mode, is not.
+func TestModeWarnings(t *testing.T) {
+	releaseLayout(t)
+	config := func(executorMode string) []byte {
+		return []byte(`{"version":1,"settings":{},"connections":[],"scopes":[{"id":"review","name":"review","bindings":[{"name":"reviewer","executor":"claude-code",
+			"requires":{"workspace":true},"operations":[],"secret_names":[],"config":{"playbook":"-"` + executorMode + `},
+			"resource":{"provider":"git","config":{"checkout":"./checkout","mode":"fresh"}}}]}]}`)
+	}
+	if diags, err := bootstrap.ValidateConfigAt("", config("")); err != nil || len(diags) != 0 {
+		t.Fatalf("config invalid: %v %+v", err, diags)
+	}
+	got := bootstrap.NewConfigCheck().ModeWarnings("", config(""))
+	if len(got) != 1 || !strings.HasPrefix(got[0], `scope review binding reviewer: the git resource's mode "fresh" never applies, because executor claude-code requests mode "work"`) {
+		t.Fatalf("warnings %q", got)
+	}
+	if got := bootstrap.NewConfigCheck().ModeWarnings("", config(`,"workspace_mode":"fresh"`)); len(got) != 0 {
+		t.Fatalf("agreeing modes warned: %q", got)
+	}
+	// A resource that names no mode is quiet, though its default is shared.
+	unset := strings.Replace(string(config("")), `,"mode":"fresh"`, "", 1)
+	if got := bootstrap.NewConfigCheck().ModeWarnings("", []byte(unset)); len(got) != 0 {
+		t.Fatalf("unset mode warned: %q", got)
 	}
 }

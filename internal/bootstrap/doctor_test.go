@@ -8,18 +8,14 @@ import (
 	"github.com/open-conduit/open-conduit/internal/runtime"
 )
 
-// OfflineChecks validates the config and runs the claude-code bindings'
-// binaries without a daemon; an invalid config stops at its diagnostics.
+// OfflineChecks validates the config without a daemon and names the
+// daemon's checks it skipped; an invalid config stops at its diagnostics.
+// The packages' offline checks (claude-code's, GitHub's) need the release
+// layout: integration's TestOfflineDoctorRunsPackageChecks.
 func TestOfflineChecks(t *testing.T) {
 	config := `{
   "version": 1, "settings": {}, "connections": [],
-  "scopes": [{
-    "id": "ops", "name": "Operations",
-    "authorization": {"connections": [], "operations": ["read_context", "declare_outcome"], "read_scopes": []},
-    "bindings": [{"name": "agent", "executor": "claude-code", "requires": {"toolbelt": "mcp"}, "operations": ["read_context", "declare_outcome"], "secret_names": [], "config": {"binary": "/nonexistent/claude-oc-test"}}],
-    "routes": [{"name": "incoming", "handler": "manual", "binding": "agent", "active_policy": "queue", "config": {}}],
-    "secret_refs": {}
-  }]
+  "scopes": [{"id": "ops", "name": "Operations", "authorization": {"connections": [], "operations": [], "read_scopes": []}, "secret_refs": {}}]
 }`
 	checks := OfflineChecks(context.Background(), "/cfg/config.json", []byte(config))
 	got := map[string]runtime.Check{}
@@ -28,9 +24,6 @@ func TestOfflineChecks(t *testing.T) {
 	}
 	if got["config"].Status != runtime.CheckOK || !strings.Contains(checks[len(checks)-1].Detail, "storage") {
 		t.Fatalf("offline checks: %+v", checks)
-	}
-	if c := got["claude_code"]; c.Status != runtime.CheckFail || c.Code != "claude_missing" || len(c.Items) != 1 || !strings.Contains(c.Items[0], "ops/agent") {
-		t.Fatalf("claude check: %+v", c)
 	}
 
 	checks = OfflineChecks(context.Background(), "/cfg/config.json", []byte(`{"version": 1}`))

@@ -86,6 +86,8 @@ var Methods = []Method{
 	{Name: "executor.stop", Direction: HostToExtension, Provides: "executors.stop", Contract: []string{"extension.StopExecutor.Stop"}},
 	{Name: "executor.forget", Direction: HostToExtension, Provides: "executors.forget", Contract: []string{"extension.ForgetExecutor.Forget"}},
 	{Name: "executor.attach", Direction: HostToExtension, Provides: "executors.attach", Contract: []string{"extension.AttachExecutor.Attach"}},
+	{Name: "executor.container_attach", Direction: HostToExtension, Provides: "executors.container_attach", Contract: []string{"extension.ContainerAttachExecutor.ContainerAttach", "extension.ContainerAttachRequest", "extension.ContainerAttachSpec"}},
+	{Name: "executor.live", Direction: HostToExtension, Provides: "executors.live", Contract: []string{"extension.LiveExecutor.Live", "extension.LiveOutput"}},
 	{Name: "execution.persist_recovery", Direction: ExtensionToHost, Provides: "executors", Contract: []string{"extension.RunRequest.PersistRecovery"}},
 
 	// Resources: the broker an executor sees, and providers.

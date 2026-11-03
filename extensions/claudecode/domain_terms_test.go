@@ -17,9 +17,13 @@ var domainTerms = regexp.MustCompile(`(?i)\bgit\s*hub\b|\bgitlab\b|\bbitbucket\b
 
 const modulePath = "github.com/open-conduit/open-conduit"
 
+// doctorContract are the doctor contract's identifiers (inproc.Checker),
+// which name a doctor diagnosis, not a code host's checks.
+var doctorContract = regexp.MustCompile(`\bChecks\(\)|\binproc\.Check\b`)
+
 func domainTermsIn(src string) []string {
 	var out []string
-	for i, line := range strings.Split(strings.ReplaceAll(src, modulePath, ""), "\n") {
+	for i, line := range strings.Split(doctorContract.ReplaceAllString(strings.ReplaceAll(src, modulePath, ""), ""), "\n") {
 		if m := domainTerms.FindString(line); m != "" {
 			out = append(out, strings.TrimSpace(line)+"  ← "+m+" (line "+strconv.Itoa(i+1)+")")
 		}
@@ -65,6 +69,7 @@ func TestDomainTermsNegativeControl(t *testing.T) {
 		`// open a pull request`,
 		`// a deploy preview`,
 		`// the Bitbucket or GitLab host`,
+		`// Checks() waits for the CI checks`,
 	} {
 		if len(domainTermsIn(src)) == 0 {
 			t.Errorf("not caught: %s", src)
@@ -74,6 +79,7 @@ func TestDomainTermsNegativeControl(t *testing.T) {
 		`import "` + modulePath + `/domain"`,
 		`// a prompt, a process, a preset, issued tokens`,
 		`// the checkout's previewer`,
+		`func (x *Extension) Checks() []inproc.Check {`,
 	} {
 		if hits := domainTermsIn(src); len(hits) != 0 {
 			t.Errorf("false positive: %v", hits)

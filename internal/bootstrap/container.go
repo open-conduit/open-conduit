@@ -500,6 +500,9 @@ func (d *daemon) containerAttach(ctx context.Context, executor string, w domain.
 		return management.ContainerAttachment{}, fmt.Errorf("%w: the Work's home: %v", extension.ErrSandboxUnavailable, err)
 	}
 	spec, err := a.ContainerAttach(ctx, extension.ContainerAttachRequest{Work: w, Config: state.Binding.Config, Secrets: secrets, Home: workHome})
+	if errors.Is(err, extension.ErrUnsupported) {
+		return management.ContainerAttachment{}, management.ErrAttachUnsupported
+	}
 	if err != nil {
 		return management.ContainerAttachment{}, err
 	}

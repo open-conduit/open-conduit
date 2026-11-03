@@ -60,6 +60,8 @@ var useCases = map[string][]string{
 	"executor.stop":              {"shell", "claude-code"},
 	"executor.forget":            {"shell", "claude-code"},
 	"executor.attach":            {"claude-code"},
+	"executor.container_attach":  {"claude-code"},
+	"executor.live":              {"claude-code"},
 	"execution.persist_recovery": {"shell", "claude-code", "github"},
 	"resource.acquire":           {"claude-code"},
 	"resource.lookup":            {"claude-code"},
@@ -178,28 +180,30 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 		}
 	}
 	interfaces := map[string]reflect.Type{
-		"extension.Ingress":                reflect.TypeFor[extension.Ingress](),
-		"extension.RouteHandler":           reflect.TypeFor[extension.RouteHandler](),
-		"extension.RouteSampler":           reflect.TypeFor[extension.RouteSampler](),
-		"extension.Executor":               reflect.TypeFor[extension.Executor](),
-		"extension.RunHandle":              reflect.TypeFor[extension.RunHandle](),
-		"extension.InterruptExecutor":      reflect.TypeFor[extension.InterruptExecutor](),
-		"extension.InjectExecutor":         reflect.TypeFor[extension.InjectExecutor](),
-		"extension.ResumeExecutor":         reflect.TypeFor[extension.ResumeExecutor](),
-		"extension.ForgetExecutor":         reflect.TypeFor[extension.ForgetExecutor](),
-		"extension.StopExecutor":           reflect.TypeFor[extension.StopExecutor](),
-		"extension.AttachExecutor":         reflect.TypeFor[extension.AttachExecutor](),
-		"extension.ResourceProvider":       reflect.TypeFor[extension.ResourceProvider](),
-		"extension.ResourceBroker":         reflect.TypeFor[extension.ResourceBroker](),
-		"extension.ResourceModeDefaulter":  reflect.TypeFor[extension.ResourceModeDefaulter](),
-		"extension.ResourceSandboxChecker": reflect.TypeFor[extension.ResourceSandboxChecker](),
-		"extension.ResourceModer":          reflect.TypeFor[extension.ResourceModer](),
-		"extension.Setup":                  reflect.TypeFor[extension.Setup](),
-		"extension.SetupProbes":            reflect.TypeFor[extension.SetupProbes](),
-		"extension.SandboxBroker":          reflect.TypeFor[extension.SandboxBroker](),
-		"extension.ContainerBroker":        reflect.TypeFor[extension.ContainerBroker](),
-		"extension.SetupHost":              reflect.TypeFor[extension.SetupHost](),
-		"observability.Exporter":           reflect.TypeFor[observability.Exporter](),
+		"extension.Ingress":                 reflect.TypeFor[extension.Ingress](),
+		"extension.RouteHandler":            reflect.TypeFor[extension.RouteHandler](),
+		"extension.RouteSampler":            reflect.TypeFor[extension.RouteSampler](),
+		"extension.Executor":                reflect.TypeFor[extension.Executor](),
+		"extension.RunHandle":               reflect.TypeFor[extension.RunHandle](),
+		"extension.InterruptExecutor":       reflect.TypeFor[extension.InterruptExecutor](),
+		"extension.InjectExecutor":          reflect.TypeFor[extension.InjectExecutor](),
+		"extension.ResumeExecutor":          reflect.TypeFor[extension.ResumeExecutor](),
+		"extension.ForgetExecutor":          reflect.TypeFor[extension.ForgetExecutor](),
+		"extension.StopExecutor":            reflect.TypeFor[extension.StopExecutor](),
+		"extension.AttachExecutor":          reflect.TypeFor[extension.AttachExecutor](),
+		"extension.ContainerAttachExecutor": reflect.TypeFor[extension.ContainerAttachExecutor](),
+		"extension.LiveExecutor":            reflect.TypeFor[extension.LiveExecutor](),
+		"extension.ResourceProvider":        reflect.TypeFor[extension.ResourceProvider](),
+		"extension.ResourceBroker":          reflect.TypeFor[extension.ResourceBroker](),
+		"extension.ResourceModeDefaulter":   reflect.TypeFor[extension.ResourceModeDefaulter](),
+		"extension.ResourceSandboxChecker":  reflect.TypeFor[extension.ResourceSandboxChecker](),
+		"extension.ResourceModer":           reflect.TypeFor[extension.ResourceModer](),
+		"extension.Setup":                   reflect.TypeFor[extension.Setup](),
+		"extension.SetupProbes":             reflect.TypeFor[extension.SetupProbes](),
+		"extension.SandboxBroker":           reflect.TypeFor[extension.SandboxBroker](),
+		"extension.ContainerBroker":         reflect.TypeFor[extension.ContainerBroker](),
+		"extension.SetupHost":               reflect.TypeFor[extension.SetupHost](),
+		"observability.Exporter":            reflect.TypeFor[observability.Exporter](),
 	}
 	for name, typ := range interfaces {
 		for i := 0; i < typ.NumMethod(); i++ {
@@ -302,6 +306,7 @@ func TestEveryMethodIsReachable(t *testing.T) {
 	m.Provides.WorkKinds = append(m.Provides.WorkKinds, protocol.WorkKindDecl{Kind: "chat.job", Standing: true, Trigger: true})
 	m.Provides.Executors[0].Name, m.Provides.Resources[0].Type = "chat-runner", "chat-ws"
 	m.Provides.Executors[0].Capabilities.Sandbox, m.Provides.Executors[0].Capabilities.Container = true, true
+	m.Provides.Executors[0].Controls.ContainerAttach, m.Provides.Executors[0].Controls.Live = true, true
 	if err := m.Validate(); err != nil {
 		t.Fatal(err)
 	}

@@ -5,7 +5,7 @@ description: "How the Claude Code executor runs agent turns as detached segments
 
 The Claude Code executor runs each agent turn as a detached `claude -p` segment on the Work's session, resumes or hands off sessions from continuity it keeps private to itself, and gives the agent its toolbelt over MCP. It lives in [`extensions/claudecode`](https://github.com/open-conduit/open-conduit/tree/main/extensions/claudecode) and implements the [B03 executor contract](../extensions/). `os mcp`, the toolbelt's MCP transport, lives in [`internal/cli`](https://github.com/open-conduit/open-conduit/blob/main/internal/cli/mcp.go). Like the shell executor, the package imports only public contracts. Its process identity helpers are copied from `extensions/shell`, because B01 forbids one executor importing another. `internal/bootstrap` registers it as executor `claude-code`.
 
-The executor advertises `interrupt`, `inject`, `resume`, `workspace` and `toolbelt: mcp`.
+The executor advertises `interrupt`, `inject`, `resume`, `workspace`, `sandbox`, `container` and `toolbelt: mcp`. It runs as a package bundled with the release, served by `open-conduit extension-run claude-code`.
 
 ## A segment
 
@@ -75,7 +75,7 @@ The data never carries the session or the handoff note. Usage maps to `extension
 
 ## Private continuity
 
-Continuity lives in namespaced coordination KV (`executor.claudecode`, key `work/<work id>`). Core never reads it. It holds:
+Continuity lives in namespaced coordination KV (the package's own `claude-code`, key `work/<work id>`; the executor kept it in `executor.claudecode` while it ran in process, and the daemon moves those records to `claude-code` when it starts). Core never interprets it. It holds:
 
 - the session and past sessions
 - the count of turns that ended with a status
@@ -98,7 +98,7 @@ The resume and handoff rules are:
 
 **Release.** `Maintain` releases terminal Work's continuity. Records written while the handoff experiment ran may still carry a trial and feedback questions; they are ignored.
 
-Telemetry goes to `Options.Report`. The executor's in-process extension (`claudecode.NewExtension`, registered through `inproc.Executing`) writes it to its own log, `logs/claude-code.jsonl` (`inproc.Host.OpenLog`, rotated like the host's logs), outside core, as one `agent_turn` record per turn. A record carries `context_tokens` (the session's context when the turn ended) and, for a handoff turn, `handoff_reason`: `size`, `cold` or `missing` (the session's transcript was gone). Its housekeeping (`Maintain`) is the extension's `maintain` task, every 30 seconds.
+Telemetry goes to `Options.Report`. The executor's extension (`claudecode.NewExtension`, served as a package through `inproc.Executing`) writes it to its own log, `logs/claude-code.jsonl` in its package's state directory (`<state>/extensions/claude-code`, through `inproc.Host.OpenLog`, rotated by size like the daemon's own logs, `sdk.RotatingLog`), outside core, as one `agent_turn` record per turn. A record carries `context_tokens` (the session's context when the turn ended) and, for a handoff turn, `handoff_reason`: `size`, `cold` or `missing` (the session's transcript was gone). Its housekeeping (`Maintain`) is the extension's `maintain` task, every 30 seconds.
 
 Like core telemetry, it is at most once across a kill.
 
@@ -144,7 +144,7 @@ A binding with a container ([containers](../sandboxes/#claude-code-in-a-containe
 
 The environment follows B05:
 
-1. **Sanitized baseline.** The shell baseline plus `CLAUDE_CONFIG_DIR` and the binding's `pass_env` names. `ANTHROPIC_API_KEY`, `CLAUDECODE`, `CLAUDE_CODE_*` and other credentials are dropped.
+1. **Sanitized baseline.** The shell baseline of the executor's own process, plus `CLAUDE_CONFIG_DIR` and the executor config's `pass_env` names from that process. Out of process that environment is sanitized, so the daemon's own variables (a proxy, the daemon's `CLAUDE_CONFIG_DIR`) come from the binding's `pass_env`: the operator names them, the host validates them with the configuration and passes its values as `ExecutionContext.HostEnv`, which the executor adds here. Validating an executor config that sets `pass_env` warns that it reaches only the executor's own process. `ANTHROPIC_API_KEY`, `CLAUDECODE`, `CLAUDE_CODE_*` and other credentials are dropped.
 2. **Provider layer.** Any `OS_*` names are dropped from it.
 3. **Run layer.** The extensions' run environment (`ExecutionContext.Env`, [extension protocol](../extension-protocol/)), applied with `extension.ApplyEnv`: its `GIT_CONFIG_*` entries go after the provider layer's, and `OS_*` names are dropped. A host run with a run layer and a toolbelt also gets the toolbelt client (`OS_ENDPOINT`, `OS_TOKEN_FILE` and the toolbelt directory first on `PATH`, never `OS_TOKEN`), so a layer can call `os`; a container run always has it. Other host runs keep the toolbelt out of claude's environment, and only the MCP server has it.
 4. **Binding `env`.**
@@ -171,10 +171,11 @@ The config is strict and validated at load. Every field is optional:
 | `cold_turns` | What a cold turn does: `handoff` (default) or `resume`. `handoff_share`, the removed experiment's setting, is ignored with a `config check` warning from the executor (`ConfigWarnings`) for one release, then rejected. |
 | `handoff_tokens` | How much context a session may end a turn with before the next turn starts a fresh one from the note (default 400000; 0 turns it off). |
 | `auto_compact_tokens` | Where Claude Code compacts a session in the middle of a turn, set as `CLAUDE_CODE_AUTO_COMPACT_WINDOW`: it compacts a little before this, or before the model's window if that is smaller (default 600000; 0 leaves Claude Code's own threshold). `env` setting the variable overrides it, and so does `pass_env` naming it when the variable is set. |
-| `env`, `pass_env`, `secret_env` | The environment. |
+| `env`, `pass_env`, `secret_env` | The environment. `pass_env` here admits variables of the executor's own process only; name the daemon's variables in the binding's `pass_env`. |
 | `extra_args` | Extra arguments. These may not override `-p`, the session or the MCP flags, nor `--tools` when `builtin_tools` is set. |
 | `builtin_tools` | The only built-in tools Claude Code offers, passed as `--tools`. An empty list turns them all off, so the agent has only its MCP toolbelt: no shell, file access or web. Unset keeps Claude Code's default set. Attaching to the session keeps the same limit. |
 | `strict_mcp` | `true` passes `--strict-mcp-config`, so the toolbelt is the agent's only MCP server: none of the operator's own, a project's or claude.ai's servers and connectors load. Attaching keeps it. Default `false`. |
+| `usage` | `true` lets doctor's `claude-code` check read the subscription's 5-hour and 7-day usage windows with this binding's Claude login (its `CLAUDE_CONFIG_DIR`, else the default), warning at 90%. Off by default, because it reads the login token. |
 | `home_seed` | For a binding with a container: an absolute directory (a `settings.json`, plugins) copied into the Work's home on its first use, its `.credentials.json` left out. A copy, never a mount. Use plain files: a symbolic link is copied as a link, and one to a host path dangles inside the container. |
 | `models` | Models a Work may pick for its turns through `model` in its context, for example one an operator chose when starting it. A Work that names none, or one not listed, uses `model`. |
 
@@ -229,3 +230,4 @@ These notes record how this part was built and the evidence gathered at each sta
 - `extension.Result.RetryHint` was a contract clarification made for this executor; the bounded failure budget it still uses dates from 02-04.
 - **#73** removed the handoff experiment (the draw, trials, the blinded feedback question and `handoff_share`); a cold turn now follows the binding's `cold_turns`.
 - **#164** added the sandbox wrap ([B09](../sandboxes/)).
+- **#428** moved it out of process. It runs as a package bundled with the release (`extensions/claudecode/pkg`, `open-conduit extension-run claude-code`), the executor itself served through `inprocsdk`, with its live output and container attach crossing the wire (`executor.live`, `executor.container_attach`). A run takes the toolbelt and playbook directories the host names for it (`ExecutionContext.ToolbeltDir`, `PlaybookDir`). Its continuity moved from `executor.claudecode` to the package's own `claude-code` namespace, which the daemon does once at start. Its doctor check is its own (`claude-code`, formerly `claude_code` in bootstrap), and usage reading moved from `serve --claude-usage` to the binding's `usage`. Certification runs it against a fake `claude` the fixture command writes.
