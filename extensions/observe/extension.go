@@ -36,8 +36,12 @@ func (*Extension) Name() string { return Type }
 
 func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{
-		{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension},
-		{Kind: protocol.ValidateRoute, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateRoute(raw) }},
+		{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension, Fields: []protocol.FieldDecl{
+			{Name: "sources", Help: `[{"name": "slack-help", "reporters": ["watcher"]}]: each source and the bindings that may report for it`, Required: true},
+		}},
+		{Kind: protocol.ValidateRoute, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateRoute(raw) }, Fields: []protocol.FieldDecl{
+			{Name: "source", Help: "the source whose threads the route takes", Required: true},
+		}},
 	}
 }
 

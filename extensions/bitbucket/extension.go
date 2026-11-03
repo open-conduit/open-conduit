@@ -70,8 +70,8 @@ func (*Extension) Name() string { return Type }
 
 func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{
-		{Kind: protocol.ValidateConnection, Type: Type, Validate: func(c json.RawMessage, _ []string) error { return ValidateConnection(c) }},
-		{Kind: protocol.ValidateExtension, Type: Type, Ingress: true, Validate: ValidateExtension},
+		{Kind: protocol.ValidateConnection, Type: Type, Validate: func(c json.RawMessage, _ []string) error { return ValidateConnection(c) }, Fields: connectionFields()},
+		{Kind: protocol.ValidateExtension, Type: Type, Ingress: true, Validate: ValidateExtension, Fields: entryFields()},
 	}
 }
 

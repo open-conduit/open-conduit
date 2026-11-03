@@ -48,7 +48,7 @@ func Manifest() protocol.Manifest {
 		Provides: protocol.Provides{Executors: []protocol.ExecutorDecl{{Name: Name,
 			Capabilities: protocol.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt},
 			Controls:     protocol.Controls{Stop: true, Forget: true, InteractiveLaunch: true},
-			ResourceMode: true, Playbook: true}}}}
+			ResourceMode: true, Playbook: true, Fields: codex.BindingFields()}}}}
 }
 
 // executor creates the codex executor on first use, once the state

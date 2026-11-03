@@ -57,7 +57,8 @@ func Manifest() protocol.Manifest {
 				setting("base_branch", protocol.SettingString, ""),
 				setting("branch_template", protocol.SettingString, `"agent/work-{work}"`),
 				setting("sign", protocol.SettingBoolean, "false"),
-			}}}}}
+			},
+			Fields: git.ResourceFields()}}}}
 }
 
 // provider creates the git provider on first use, once the host has named

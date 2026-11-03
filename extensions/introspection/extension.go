@@ -96,8 +96,16 @@ func (*Extension) Name() string { return Type }
 
 func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{
-		{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension},
-		{Kind: protocol.ValidateRoute, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateRoute(raw) }},
+		{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension, Fields: []protocol.FieldDecl{
+			{Name: "notes"},
+			{Name: "sweep", Help: "{cron, time_zone, rules, guide, land, remote}"},
+			{Name: "triage", Help: "{cron, time_zone, file_issues}"},
+			{Name: "host_watch", Help: "{interval_seconds, load, memory, disk, disks}"},
+			{Name: "telemetry", Help: "write telemetry events (and send them to PostHog entries)"},
+		}},
+		{Kind: protocol.ValidateRoute, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateRoute(raw) }, Fields: []protocol.FieldDecl{
+			{Name: "work", Default: "report", Options: []string{"report", "sweep", "triage", "fix"}},
+		}},
 	}
 }
 

@@ -68,8 +68,9 @@ type Env struct {
 	// so this package never imports an extension.
 	Setups []extension.Setup
 	// Adapters is the registered integrations' catalog (`adapters`, the
-	// config editor); only the open-conduit entrypoint supplies it.
-	Adapters func() []Adapter
+	// config editor), with the packages discovery refused, which it lacks;
+	// only the open-conduit entrypoint supplies it.
+	Adapters func(configPath string) ([]Adapter, []error)
 	// EditConfig runs the full-screen config editor and reports whether it
 	// saved; only the open-conduit entrypoint supplies it (the os binary
 	// carries no terminal UI).

@@ -114,6 +114,7 @@ The SDK serves the public Go contracts unchanged, so code written for the in-pro
 | `Setups` | `setup` (`first_run` for the setup that builds the default configuration) | `setup.run` with the `setup.*` callbacks |
 | `Upcasters` | `schemas` | applied before extension code sees an older payload |
 | — | `extensions[].settings`, `extensions[].describe` | none: the host reads an entry's [safe settings and describe lines](../extension-protocol/#manifest) from its config |
+| — | `fields` on `connections[]`, `extensions[]`, `routes[]`, `executors[]` and `resources[]` | none: `open-conduit adapters` and the config editor show each type's [described fields](../extension-protocol/#manifest) |
 
 Reaching the host:
 
@@ -171,7 +172,7 @@ This first step doesn't include `wait` and `emit` operations, routes, ingress, e
 
 ### Examples
 
-- [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/notes): every extension surface. It has ingress with a webhook receiver, a route with a trigger, operations including a committed emission, a recurrence, tasks, a resource provider, a telemetry exporter, annotations, a setup flow, validation, three releases with schema evolution, and a KV migration. It declares every permission: a task records telemetry events and runs the host's probes, another builds, validates and traces a config candidate, it receives the host's telemetry events as a sink, and its entry type declares settings and describe lines.
+- [`protocol/examples/notes`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/notes): every extension surface. It has ingress with a webhook receiver, a route with a trigger, operations including a committed emission, a recurrence, tasks, a resource provider, a telemetry exporter, annotations, a setup flow, validation, three releases with schema evolution, and a KV migration. It declares every permission: a task records telemetry events and runs the host's probes, another builds, validates and traces a config candidate, it receives the host's telemetry events as a sink, and its entry type declares settings, describe lines and the fields `open-conduit adapters notes` shows.
 - [`protocol/examples/notes` fixture profile](https://github.com/open-conduit/open-conduit/blob/main/protocol/examples/notes/extension.go): the declare-once form. `TestFixtureManifestIsDerived` checks that its derived manifest equals the hand-written one.
 - [`protocol/examples/runner`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/runner): an executor with detached jobs, inject, interrupt, stop and forget.
 - [`protocol/examples/weather`](https://github.com/open-conduit/open-conduit/tree/main/protocol/examples/weather): an extension in TypeScript, with one operation answered from its scope's config and a lookup count in host KV.

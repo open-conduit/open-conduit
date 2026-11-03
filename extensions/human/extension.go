@@ -49,7 +49,11 @@ var (
 func (*Extension) Name() string { return Type }
 
 func (*Extension) Types() []inproc.ConfigType {
-	return []inproc.ConfigType{{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension}}
+	return []inproc.ConfigType{{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension, Fields: []protocol.FieldDecl{
+		{Name: "responders", Help: "who may answer, each kind:id or a bare kind", Default: `["operator:local"]`},
+		{Name: "surfaces", Help: "where the question is shown", Default: `["tui"]`},
+		{Name: "gates", Help: `[{"operations": ["github.pr.create"], "responders": ["operator:local"], "timeout": "24h"}]: operations that need a person's approval before they run`},
+	}}}
 }
 
 func (*Extension) Operations() []string { return Operations() }

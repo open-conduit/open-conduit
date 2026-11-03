@@ -275,9 +275,9 @@ func contains(list []string, s string) bool {
 }
 
 // wiringFiles are the composition files that may import any first-party
-// extension or executor: the in-process registrations (firstParty) and the
-// catalogue adapters.
-var wiringFiles = map[string]bool{"inproc.go": true, "adapters.go": true}
+// extension or executor: the in-process registrations (firstParty). The
+// adapters catalogue reads each package's manifest instead (#494).
+var wiringFiles = map[string]bool{"inproc.go": true}
 
 // compositionExceptions are the other internal/bootstrap files that import
 // a first-party extension or executor today, and what they import: bespoke

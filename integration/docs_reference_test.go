@@ -358,8 +358,8 @@ func configReference(t *testing.T) string {
 		b.WriteString("\n" + d + "\n")
 	}
 
-	b.WriteString("\n## Integration fields\n\nThe `config` objects of connections, extension entries, routes and bindings belong to the integration that registers each type, which checks them. `open-conduit adapters TYPE` prints the same list.\n")
-	catalog := bootstrap.Adapters()
+	b.WriteString("\n## Integration fields\n\nThe `config` objects of connections, extension entries, routes, bindings and binding resources belong to the package that registers each type, which checks them and describes their fields in its manifest. `open-conduit adapters TYPE` prints the same list.\n")
+	catalog, _ := bootstrap.Adapters("")
 	sort.Slice(catalog, func(i, j int) bool { return catalog[i].Type < catalog[j].Type })
 	for _, a := range catalog {
 		fmt.Fprintf(&b, "\n### %s (`%s`)\n\n%s Registers: %s.\n", a.Title, a.Type, a.Description, strings.Join(a.Kinds, ", "))
@@ -369,7 +369,7 @@ func configReference(t *testing.T) string {
 		for _, sec := range []struct {
 			title  string
 			fields []cli.Field
-		}{{"Connection `config`", a.Connection}, {"Connection `secret_refs`", a.Secrets}, {"Extension entry `config`", a.Entry}, {"Route `config`", a.Route}, {"Binding `config`", a.Binding}} {
+		}{{"Connection `config`", a.Connection}, {"Connection `secret_refs`", a.Secrets}, {"Extension entry `config`", a.Entry}, {"Route `config`", a.Route}, {"Binding `config`", a.Binding}, {"Resource `config`", a.Resource}} {
 			if len(sec.fields) == 0 {
 				continue
 			}
@@ -437,8 +437,15 @@ See [configuration](../config/#authorization) for the fields and [toolbelt autho
 	b.WriteString("\n## Bundled extensions\n\nThe extensions built into the daemon register these operations, each with the input it takes; `open-conduit adapters TYPE` lists them too.\n")
 	owner := map[string]string{}
 	declared := bootstrap.OperationDeclarations()
-	catalog := bootstrap.Adapters()
+	catalog, _ := bootstrap.Adapters("")
 	sort.Slice(catalog, func(i, j int) bool { return catalog[i].Type < catalog[j].Type })
+	// The packages this binary serves (host-run) are built here, so each of
+	// their operations must be documented; a bundled package built
+	// elsewhere (the setup assistant) is shown as its manifest declares it.
+	hostRun := map[string]bool{}
+	for _, m := range bootstrap.BundledManifests() {
+		hostRun[m.Name] = m.RunsOnHost()
+	}
 	for _, a := range catalog {
 		if len(a.Operations) == 0 {
 			continue
@@ -452,7 +459,7 @@ See [configuration](../config/#authorization) for the fields and [toolbelt autho
 			}
 			owner[op] = a.Type
 			d, ok := declared[op]
-			if !ok || d.Summary == "" || len(d.Input) == 0 {
+			if hostRun[a.Type] && (!ok || d.Summary == "" || len(d.Input) == 0) {
 				t.Errorf("operation %s is not declared with a summary and an input", op)
 			}
 			operationSection(t, &b, op, d.Summary, d.Input)

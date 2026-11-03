@@ -101,13 +101,19 @@ func (*Extension) Name() string { return Type }
 
 func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{
-		{Kind: protocol.ValidateExtension, Type: Type, Ingress: true, Validate: ValidateExtension, Describe: describeJobs},
-		{Kind: protocol.ValidateRoute, Type: Type, Validate: func(c json.RawMessage, _ []string) error { return ValidateRoute(c) }, Describe: func(c json.RawMessage) []inproc.Entry {
-			if d := DescribeRoute(c); d != "" {
-				return []inproc.Entry{{Detail: d}}
-			}
-			return nil
+		{Kind: protocol.ValidateExtension, Type: Type, Ingress: true, Validate: ValidateExtension, Describe: describeJobs, Fields: []protocol.FieldDecl{
+			{Name: "namespace", Help: "stable source identity and correlation-key source", Required: true},
+			{Name: "scope", Help: "the containing scope's id", Required: true},
+			{Name: "webhook_secret", Help: "names a selected scope secret that verifies webhook triggers"},
+			{Name: "jobs", Help: "name, every_minutes | at | cron, time_zone, on {events, branches, paths, webhook}", Required: true},
 		}},
+		{Kind: protocol.ValidateRoute, Type: Type, Fields: []protocol.FieldDecl{{Name: "jobs", Help: "job names the route takes"}, {Name: "triggers", Help: "trigger kinds"}},
+			Validate: func(c json.RawMessage, _ []string) error { return ValidateRoute(c) }, Describe: func(c json.RawMessage) []inproc.Entry {
+				if d := DescribeRoute(c); d != "" {
+					return []inproc.Entry{{Detail: d}}
+				}
+				return nil
+			}},
 	}
 }
 

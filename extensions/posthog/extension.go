@@ -63,8 +63,8 @@ func (*Extension) Name() string { return Type }
 // Types are the connection and the (non-ingress) entry type.
 func (*Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{
-		{Kind: protocol.ValidateConnection, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateConnection(raw) }},
-		{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension},
+		{Kind: protocol.ValidateConnection, Type: Type, Validate: func(raw json.RawMessage, _ []string) error { return ValidateConnection(raw) }, Fields: connectionFields()},
+		{Kind: protocol.ValidateExtension, Type: Type, Validate: ValidateExtension, Fields: entryFields()},
 	}
 }
 

@@ -95,6 +95,7 @@ var parity = map[string][]string{
 	"ConfigType.Binding":  {"manifest:provides.routes.binding", "method:validate"},
 	"ConfigType.Settings": {"manifest:provides.extensions.settings"},
 	"ConfigType.Describe": {"manifest:provides.extensions.describe"},
+	"ConfigType.Fields":   {"manifest:provides.connections.fields", "manifest:provides.extensions.fields", "manifest:provides.routes.fields"},
 }
 
 // parityGaps are the surfaces no wire method or manifest field carries yet,

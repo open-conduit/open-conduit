@@ -230,7 +230,7 @@ func (d *ConfigDoc) Schema(ptr string, catalog []Adapter) (title string, fields 
 			if a == nil {
 				return "", nil
 			}
-			return a.Title + " resource config", a.Binding
+			return a.Title + " resource config", a.Resource
 		}
 		a := find(d.str(parts[:4], "executor"))
 		if a == nil {
@@ -274,7 +274,7 @@ func (o *operator) editConfig(args []string) int {
 	}
 	var catalog []Adapter
 	if o.env.Adapters != nil {
-		catalog = o.env.Adapters()
+		catalog, _ = o.env.Adapters(path) // `adapters` says which packages it lacks
 	}
 	validate := func(b []byte) ([]client.Detail, error) { return o.validateConfig(path, b) }
 	saved, err := o.env.EditConfig(EditRequest{Path: path, Doc: doc, Catalog: catalog, Validate: validate, Save: func(b []byte) error { return writePrivate(path, b) }})

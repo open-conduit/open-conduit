@@ -44,6 +44,10 @@ type Kind struct {
 	HookPermission error
 	// Setup is the kind's `open-conduit init <type>` flow, nil for none.
 	Setup extension.Setup
+	// ConnectionFields describe the kind's connection config and
+	// secret_refs, and EntryFields the entry config fields it adds to the
+	// kit's own (EntryFields), for the operator's catalogue.
+	ConnectionFields, EntryFields []protocol.FieldDecl
 }
 
 // CodeError is a fixed, secret-free registration diagnostic.
@@ -105,9 +109,9 @@ func (x *Extension) SetupFlow() extension.Setup { return x.k.Setup }
 
 func (x *Extension) Types() []inproc.ConfigType {
 	return []inproc.ConfigType{
-		{Kind: protocol.ValidateConnection, Type: x.k.Type, Validate: func(c json.RawMessage, _ []string) error { return x.k.ValidateConnection(c) }},
-		{Kind: protocol.ValidateExtension, Type: x.k.Type, Ingress: true, Validate: x.k.ValidateExtension},
-		{Kind: protocol.ValidateRoute, Type: x.k.Type, Validate: func(c json.RawMessage, _ []string) error { return ValidateRoute(c) }},
+		{Kind: protocol.ValidateConnection, Type: x.k.Type, Validate: func(c json.RawMessage, _ []string) error { return x.k.ValidateConnection(c) }, Fields: x.k.ConnectionFields},
+		{Kind: protocol.ValidateExtension, Type: x.k.Type, Ingress: true, Validate: x.k.ValidateExtension, Fields: append(EntryFields(), x.k.EntryFields...)},
+		{Kind: protocol.ValidateRoute, Type: x.k.Type, Validate: func(c json.RawMessage, _ []string) error { return ValidateRoute(c) }, Fields: RouteFields()},
 	}
 }
 

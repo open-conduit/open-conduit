@@ -39,8 +39,8 @@ func base() protocol.Manifest {
 		p.Operations = append(p.Operations, protocol.OperationDecl{Name: op, Kind: protocol.OperationHandler})
 	}
 	p.Checks = []protocol.CheckDecl{{Name: Name}, {Name: Name + "-auth"}}
-	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "Bitbucket",
-		Summary: "Works Bitbucket Cloud pull requests: ingests pull requests, comments and build statuses, and correlates each with its tracker issue's Work.",
+	return protocol.Manifest{Protocol: []int{protocol.Version}, Name: Name, Version: Version, Title: "Bitbucket Cloud",
+		Summary: "Works Bitbucket Cloud pull requests: ingests pull requests, comments and build statuses, and correlates each with its tracker issue's Work. `open-conduit init linear` or `init jira` adds it with --bitbucket.",
 		Command: protocol.HostRunCommand(Name), Provides: p}
 }
 

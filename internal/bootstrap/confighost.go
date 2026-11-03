@@ -199,17 +199,10 @@ func ownsKind(x inproc.Extension, kind string) bool {
 	return ownership{x: x}.workKind(kind)
 }
 
-// titles are the display names of the extensions, by name: an in-process
-// or installed extension's own (inproc.Titled, a manifest's title), else
-// the catalogue's, for the first-party integrations not yet on the
-// extension contract.
+// titles are the display names of the extensions, by name: each one's own
+// (inproc.Titled, a package manifest's title).
 func (d *daemon) titles() map[string]string {
 	out := map[string]string{}
-	for _, a := range Adapters() {
-		if a.Title != "" {
-			out[a.Type] = a.Title
-		}
-	}
 	for _, x := range d.inproc {
 		if t, ok := x.(inproc.Titled); ok && t.Title() != "" {
 			out[x.Name()] = t.Title()

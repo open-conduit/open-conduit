@@ -207,8 +207,8 @@ func TestDaemonExtensionPackages(t *testing.T) {
 	if _, setup := byID["setup"]; err != nil || len(pages) != 2 || !ok || !setup || pages[n].Extension != "notes" || pages[n].WorkKind != notes.Kind || pages[n].Compose[0] != "remark" {
 		t.Fatalf("pages: %+v %v", pages, err)
 	}
-	// The package's manifest title is its display name; a first-party
-	// integration's is the catalogue's.
+	// A package's manifest title is its display name, an installed one's
+	// and a bundled first-party one's alike.
 	titles, err := d.c.Extensions(ctx)
 	byName := map[string]string{}
 	for _, x := range titles {

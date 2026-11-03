@@ -281,8 +281,12 @@ type Provides struct {
 	ExternalStores []ExternalStore `json:"external_stores,omitempty"`
 }
 
+// TypeDecl declares a connection type and, optionally, the fields its
+// config and secret_refs take (Fields, those marked Secret being
+// secret_refs).
 type TypeDecl struct {
-	Type string `json:"type"`
+	Type   string      `json:"type"`
+	Fields []FieldDecl `json:"fields,omitempty"`
 }
 
 // PageDecl is a page the extension contributes (extension.Page).
@@ -313,6 +317,9 @@ type ExtensionDecl struct {
 	// Describe lists what an entry sets up (a schedule's jobs), read by the
 	// host from the entry's config.
 	Describe *DescribeDecl `json:"describe,omitempty"`
+	// Fields describe the entry config's fields for the operator's
+	// catalogue (`open-conduit adapters`, the config editor).
+	Fields []FieldDecl `json:"fields,omitempty"`
 }
 
 // Setting value types.
@@ -331,6 +338,120 @@ type SettingDecl struct {
 	Field   string          `json:"field"`
 	Type    string          `json:"type"`
 	Default json.RawMessage `json:"default,omitempty"`
+}
+
+// FieldDecl describes one field of a type's config object for the
+// operator's catalogue (`open-conduit adapters`, the config editor and the
+// configuration reference): its name, what it means, the default it takes
+// when absent, whether it is required and, for a fixed set of values, its
+// options. On a connection type, Secret marks a key of the connection's
+// secret_refs rather than a config field. It is descriptive only: the
+// type's own validate checks the config.
+type FieldDecl struct {
+	Name     string   `json:"name"`
+	Help     string   `json:"help,omitempty"`
+	Default  string   `json:"default,omitempty"`
+	Required bool     `json:"required,omitempty"`
+	Options  []string `json:"options,omitempty"`
+	Secret   bool     `json:"secret,omitempty"`
+}
+
+// DefaultText is the setting's default as a catalogue field shows it: a
+// string unquoted, any other value as its JSON; "" when it has none.
+func (d SettingDecl) DefaultText() string {
+	if len(d.Default) == 0 {
+		return ""
+	}
+	if d.Type == SettingString {
+		var s string
+		if json.Unmarshal(d.Default, &s) == nil {
+			return s
+		}
+	}
+	var b bytes.Buffer
+	if json.Compact(&b, d.Default) != nil {
+		return string(d.Default)
+	}
+	return b.String()
+}
+
+// WithSettingDefaults is fields with each one that gives no default taking
+// its setting's, so a type that declares both states a default once.
+func WithSettingDefaults(fields []FieldDecl, settings []SettingDecl) []FieldDecl {
+	out := slices.Clone(fields)
+	for i, f := range out {
+		if f.Default != "" || f.Secret {
+			continue
+		}
+		for _, s := range settings {
+			if s.Field == f.Name {
+				out[i].Default = s.DefaultText()
+			}
+		}
+	}
+	return out
+}
+
+// settingDisagreements are the fields whose default differs from their
+// setting's, which would show the operator two defaults for one field.
+func settingDisagreements(fields []FieldDecl, settings []SettingDecl) []error {
+	var errs []error
+	for _, f := range fields {
+		for _, s := range settings {
+			if s.Field == f.Name && f.Default != "" && s.DefaultText() != f.Default {
+				errs = append(errs, fmt.Errorf("field %q default %q is not its setting's %q; declare it once", f.Name, f.Default, s.DefaultText()))
+			}
+		}
+	}
+	return errs
+}
+
+// MaxFieldHelp is the longest help a FieldDecl may give.
+const MaxFieldHelp = 400
+
+// validateFields checks a type's field declarations: each a field name
+// declared once (a secret_refs key apart from the config's), help of one
+// line, a required field without a default, distinct non-empty options
+// that include the default, and Secret only where secrets is set (a
+// connection type).
+func validateFields(decls []FieldDecl, secrets bool) []error {
+	var errs []error
+	seen := map[string]bool{}
+	for _, f := range decls {
+		fail := func(format string, args ...any) {
+			errs = append(errs, fmt.Errorf("field %q: "+format, append([]any{f.Name}, args...)...))
+		}
+		key := f.Name
+		if f.Secret {
+			key = "secret_refs." + key
+		}
+		if !fieldPattern.MatchString(f.Name) || seen[key] {
+			fail("must be a distinct field name")
+		}
+		seen[key] = true
+		if len(f.Help) > MaxFieldHelp || strings.ContainsAny(f.Help, "\r\n") || f.Help != strings.TrimSpace(f.Help) {
+			fail("help must be one line of at most %d bytes, without surrounding spaces", MaxFieldHelp)
+		}
+		if strings.ContainsAny(f.Default, "\r\n") {
+			fail("default must be one line")
+		}
+		if f.Required && f.Default != "" {
+			fail("is required, so it has no default")
+		}
+		if f.Secret && !secrets {
+			fail("only a connection type's fields are secret_refs")
+		}
+		for i, o := range f.Options {
+			if o == "" || strings.ContainsAny(o, "\r\n") || slices.Contains(f.Options[:i], o) {
+				fail("options must be distinct, non-empty and one line")
+				break
+			}
+		}
+		if len(f.Options) > 0 && f.Default != "" && !slices.Contains(f.Options, f.Default) {
+			fail("default %q is not one of its options", f.Default)
+		}
+	}
+	return errs
 }
 
 // DescribeDecl says what an entry sets up: one line per element of the
@@ -440,6 +561,8 @@ type RouteDecl struct {
 	// Samples marks a handler that offers sample Events for a route trace
 	// through route.samples (extension.RouteSampler).
 	Samples bool `json:"samples,omitempty"`
+	// Fields describe the route config's fields (FieldDecl).
+	Fields []FieldDecl `json:"fields,omitempty"`
 }
 
 // WorkKindDecl mirrors the host's WorkKindPolicy; Trigger marks a kind whose
@@ -526,6 +649,8 @@ type ExecutorDecl struct {
 	// it picks one to launch interactively (`init --with`); they need the
 	// interactive_launch control (extension.InteractiveLauncher.LaunchNames).
 	LaunchNames []string `json:"launch_names,omitempty"`
+	// Fields describe the binding config's fields (FieldDecl).
+	Fields []FieldDecl `json:"fields,omitempty"`
 }
 
 // Capabilities are the PRD's mechanical labels, checked at bind time. No
@@ -579,6 +704,8 @@ type ResourceDecl struct {
 	// Settings are the resource config fields safe to show the operator
 	// (config.Registry.ResourceSettings), as an extension type's are.
 	Settings []SettingDecl `json:"settings,omitempty"`
+	// Fields describe the resource config's fields (FieldDecl).
+	Fields []FieldDecl `json:"fields,omitempty"`
 }
 
 // SandboxDecl declares a process sandbox provider type.
@@ -734,8 +861,14 @@ func (m Manifest) Validate() error {
 			}
 		}
 	}
+	fieldDecls := func(kind, typ string, decls []FieldDecl, secrets bool) {
+		for _, err := range validateFields(decls, secrets) {
+			fail("%s %q %v", kind, typ, err)
+		}
+	}
 	for _, c := range p.Connections {
 		ident("connection type", c.Type)
+		fieldDecls("connection type", c.Type, c.Fields, true)
 	}
 	settings := func(kind, typ string, decls []SettingDecl) {
 		fields := map[string]bool{}
@@ -761,6 +894,10 @@ func (m Manifest) Validate() error {
 		ident("extension type", x.Type)
 		ingress = ingress || x.Ingress
 		settings("extension type", x.Type, x.Settings)
+		fieldDecls("extension type", x.Type, x.Fields, false)
+		for _, err := range settingDisagreements(x.Fields, x.Settings) {
+			fail("extension type %q %v", x.Type, err)
+		}
 		if d := x.Describe; d != nil {
 			if !fieldPattern.MatchString(d.List) || !fieldPattern.MatchString(d.Name) || d.Detail != "" && !fieldPattern.MatchString(d.Detail) {
 				fail("extension type %q describe must name its list, name and detail fields", x.Type)
@@ -804,6 +941,7 @@ func (m Manifest) Validate() error {
 	}
 	for _, r := range p.Routes {
 		ident("route handler", r.Handler)
+		fieldDecls("route handler", r.Handler, r.Fields, false)
 	}
 	for _, k := range p.WorkKinds {
 		dotted("work kind", k.Kind)
@@ -897,6 +1035,7 @@ func (m Manifest) Validate() error {
 				fail("executor %q launch name %q repeats an executor name or launch name", x.Name, n)
 			}
 		}
+		fieldDecls("executor", x.Name, x.Fields, false)
 	}
 	for _, r := range p.Resources {
 		ident("resource provider", r.Type)
@@ -911,6 +1050,10 @@ func (m Manifest) Validate() error {
 			modes[mode] = true
 		}
 		settings("resource provider", r.Type, r.Settings)
+		fieldDecls("resource provider", r.Type, r.Fields, false)
+		for _, err := range settingDisagreements(r.Fields, r.Settings) {
+			fail("resource provider %q %v", r.Type, err)
+		}
 	}
 	sandboxes := map[string]bool{}
 	for _, x := range p.Sandboxes {

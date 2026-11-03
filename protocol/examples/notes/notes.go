@@ -118,7 +118,14 @@ func Manifest(o Options) protocol.Manifest {
 			// An entry's service file and labels are safe to show the operator.
 			Extensions: []protocol.ExtensionDecl{{Type: "notes", Ingress: true,
 				Settings: []protocol.SettingDecl{{Field: "service", Type: protocol.SettingString}, {Field: "watch", Type: protocol.SettingBoolean, Default: json.RawMessage(`true`)}},
-				Describe: &protocol.DescribeDecl{List: "labels", Name: "name", Detail: "note"}}},
+				Describe: &protocol.DescribeDecl{List: "labels", Name: "name", Detail: "note"},
+				// It describes its own fields for the operator's catalogue
+				// (`open-conduit adapters notes`).
+				Fields: []protocol.FieldDecl{
+					{Name: "service", Help: "the note service's JSON file", Required: true},
+					{Name: "watch", Options: []string{"true", "false"}}, // its default is its setting's
+					{Name: "labels", Help: "[{name, note}]: the labels the entry sets up"},
+				}}},
 			Families: []protocol.Family{
 				{Type: Changed, ReDerivable: true},
 				{Type: Deleted, Loss: "Deletions arrive only by push; one missed while push is down is never observed."},

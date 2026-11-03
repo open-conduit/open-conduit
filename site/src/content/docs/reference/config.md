@@ -181,12 +181,11 @@ Folders whose .open-conduit/config.json adds scopes beneath parent, a scope of t
 
 ## Integration fields
 
-The `config` objects of connections, extension entries, routes and bindings belong to the integration that registers each type, which checks them. `open-conduit adapters TYPE` prints the same list.
+The `config` objects of connections, extension entries, routes, bindings and binding resources belong to the package that registers each type, which checks them and describes their fields in its manifest. `open-conduit adapters TYPE` prints the same list.
 
 ### Bitbucket Cloud (`bitbucket`)
 
-Pull requests, their comments and commit statuses of a repository, correlated with a tracker's issues. Registers: connection, extension, route.
-Set up with `open-conduit init linear|jira --bitbucket`.
+Works Bitbucket Cloud pull requests: ingests pull requests, comments and build statuses, and correlates each with its tracker issue's Work. `open-conduit init linear` or `init jira` adds it with --bitbucket. Registers: connection, extension, route.
 
 Connection `config`:
 
@@ -206,23 +205,22 @@ Extension entry `config`:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `namespace` |  | Required. |
-| `scope` |  | Required. |
+| `namespace` |  | Required. stable source identity and correlation-key source |
+| `scope` |  | Required. the containing scope's id |
 | `repo` |  | Required. workspace/slug |
 | `tracker` |  | {namespace, keys}: the tracker entry and its key prefixes |
 | `branch_pattern` | `^agent/issue/([A-Za-z][A-Za-z0-9_]*-[0-9]+)(?:/\|$)` |  |
 | `preview_pattern` | `preview\|deploy` |  |
 | `issue_ref` | `{key}` | Closes {key} for Linear |
-| `closed_horizon_hours` | `168` |  |
+| `closed_horizon_hours` | `168` | how long closed pull requests stay observed |
 | `base_branch` |  |  |
-| `webhook_secret` |  |  |
-| `manage_webhook` |  |  |
+| `webhook_secret` |  | names a selected scope secret that verifies deliveries |
+| `manage_webhook` |  | create or re-point the repository webhook at the listener's public URL (needs admin) |
 | `dry_run` |  |  |
 
 ### Claude Code (`claude-code`)
 
 Runs Claude Code turns with sessions, handoff, attach and the MCP toolbelt. Registers: executor.
-Set up with `open-conduit init --with claude`.
 
 Binding `config`:
 
@@ -235,7 +233,7 @@ Binding `config`:
 | `plugin_dir` |  |  |
 | `args` | `{number}` | a template of {key}, {number} and {work} |
 | `status_schema` | `core.turn.v1` |  |
-| `branch` |  | agent/issue-{number}; agent/{key} for trackers |
+| `branch` |  | the workspace branch template, of {key}, {number} and {work} |
 | `workspace_mode` |  |  |
 | `dir` |  | a folder a workspace-free binding runs in, as-is |
 | `handoff_minutes` |  |  |
@@ -250,30 +248,60 @@ Binding `config`:
 | `models` |  | models a Work may pick with model in its context |
 | `usage` |  | doctor reads the subscription usage windows of this binding's Claude login |
 
-### Git workspace (`git`)
+### Codex (`codex`)
 
-Shared, fresh or per-Work worktree workspaces of a checkout, or per-Work clones of it. Registers: resource.
+Runs agent turns on the Codex CLI, with the toolbelt over MCP. Registers: executor.
 
 Binding `config`:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
+| `binary` | `codex` |  |
+| `model` |  | passed as --model; empty keeps Codex's own default |
+| `sandbox` | `danger-full-access` | Codex's own sandbox_mode for the commands the agent runs One of read-only, workspace-write, danger-full-access. |
+| `playbook` |  | the playbook a turn starts on; none (or -) starts it on the rendered Work alone |
+| `plugin_dir` |  | holds the playbooks as <dir>/skills/<playbook>/SKILL.md; the host's own by default |
+| `args` | `{number}` | the playbook's argument template |
+| `structured` | `true` | ask for the turn status with --output-schema |
+| `branch` |  |  |
+| `workspace_mode` |  |  |
+| `dir` |  | an absolute folder a workspace-free binding runs in |
+| `env` |  |  |
+| `pass_env` |  |  |
+| `secret_env` |  |  |
+| `extra_args` |  | added to every codex exec; may not set the session, output files, sandbox, approvals, model or toolbelt |
+| `timeout_seconds` |  |  |
+| `handoff_minutes` | `55` |  |
+| `cold_turns` | `handoff` | what a turn does once the thread is handoff_minutes old One of handoff, resume. |
+| `handoff_tokens` | `200000` | a turn after one that ended with more context starts afresh from the handoff note; 0 turns it off |
+| `auto_compact_tokens` | `250000` | where Codex compacts mid-turn (model_auto_compact_token_limit); 0 leaves its own |
+
+### Git workspaces (`git`)
+
+Gives a binding's runs a git workspace: the checkout itself, a worktree per Work or per run, or a clone. Registers: resource.
+
+Resource `config`:
+
+| Field | Default | Meaning |
+| --- | --- | --- |
 | `checkout` |  | Required. the main checkout |
-| `mode` | `work` | One of work, fresh, shared, clone. |
-| `remote` |  |  |
-| `base_branch` |  |  |
-| `branch_template` |  |  |
-| `sign` |  |  |
-| `copy` |  |  |
-| `setup` |  |  |
+| `mode` | `shared` | the mode when an executor requests none One of shared, work, fresh, clone. |
+| `remote` | `origin` |  |
+| `base_branch` |  | where new branches and fresh checkouts start; the remote's HEAD by default |
+| `branch_template` | `agent/work-{work}` | a work-mode branch, with {work} and {scope} |
+| `sign` | `false` | keep commit signing as the checkout configures it |
+| `copy` |  | checkout-relative files (such as .env) copied into every workspace |
+| `setup` |  | a command run in a workspace when it or a setup_when file changed |
 | `setup_when` |  |  |
-| `setup_timeout_seconds` |  |  |
+| `setup_timeout_seconds` | `1800` |  |
+| `dotenv` |  | the checkout's .env as the provider environment layer |
+| `retain_failed_seconds` | `86400` | how long a failed run's workspace is kept for inspection |
 | `disk_full_percent` | `90` | a new workspace may not leave the disk fuller; 100 turns the check off |
 | `disk_reserve_bytes` |  | the most kept free, default 10 GiB |
 
 ### GitHub (`github`)
 
-Issues, pull requests, comments, reviews and checks of a repository; the engineering tools. Registers: connection, extension, route, executor:github-hold.
+Issues, pull requests, comments, reviews and checks of a repository; the engineering tools. Registers: connection, extension, route, route:github-hold, executor:github-hold.
 Set up with `open-conduit init github`.
 
 Connection `config`:
@@ -297,24 +325,24 @@ Extension entry `config`:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `namespace` |  | Required. |
-| `scope` |  | Required. |
+| `namespace` |  | Required. stable source identity and correlation-key source |
+| `scope` |  | Required. the containing scope's id |
 | `repo` |  | Required. owner/name |
 | `tracker` |  | shared tracker {repo, namespace} |
 | `track_issues` | `true` |  |
-| `labels` |  |  |
-| `closed_horizon_hours` | `168` |  |
+| `labels` |  | claimed, help, review, done, skip[], require[] (Open Supervisor's names by default) |
+| `closed_horizon_hours` | `168` | how long closed issues stay observed |
 | `branch_pattern` | `^agent/issue-(\d+)$` |  |
 | `preview_pattern` | `deploy-preview` |  |
-| `projection` |  |  |
-| `webhook_secret` |  |  |
-| `manage_webhook` |  |  |
+| `projection` |  | disabled, verify_seconds (default 900), dry_run |
+| `webhook_secret` |  | names a selected scope secret that verifies deliveries |
+| `manage_webhook` |  | create or re-point the repository webhook at the listener's public URL (needs admin) |
 | `base_branch` |  |  |
 | `no_checks_minutes` | `10` | -1 disables |
 
-### Human decisions (`human`)
+### Human (`human`)
 
-Lets an agent ask a person for a private decision with human.ask, answered from the TUI or web view; nothing reaches the issue or thread. Add human.ask to the agent binding's operations. Gates make named operations wait for a person's approval, whoever calls them. Registers: extension.
+Lets an agent ask a person a question, or ask approval for a call or a start, and parks its Work until they answer. Registers: extension.
 
 Extension entry `config`:
 
@@ -326,7 +354,7 @@ Extension entry `config`:
 
 ### Introspection (`introspection`)
 
-Issue reports, scheduled sweep and triage, fix Work and the optional host watch. Registers: extension, route.
+Lets agents report defects in Open Conduit and log corrections and problems, and runs the daily sweep, triage and fixes that act on them. Registers: extension, route.
 
 Extension entry `config`:
 
@@ -346,7 +374,7 @@ Route `config`:
 
 ### Jira (`jira`)
 
-Issues in one or more Jira projects, Cloud or Data Center, through REST API v2 and webhooks. Registers: connection, extension, route.
+Works Jira issues: ingests issues and comments, gives each claimed issue Work, and projects its state back to Jira. Registers: connection, extension, route.
 Set up with `open-conduit init jira`.
 
 Connection `config`:
@@ -356,7 +384,7 @@ Connection `config`:
 | `base_url` |  | Required. https://acme.atlassian.net |
 | `auth` | `basic` | basic: email + API token (Cloud); bearer: a personal access token One of basic, bearer. |
 | `email` |  | for basic auth |
-| `agent_account` |  |  |
+| `agent_account` |  | a user whose comments always count as an agent's |
 
 Connection `secret_refs`:
 
@@ -388,7 +416,7 @@ Route `config`:
 
 ### Linear (`linear`)
 
-Issues in one or more Linear teams through the GraphQL API and webhooks. Registers: connection, extension, route.
+Works Linear issues: ingests issues and comments, gives each claimed issue Work, and projects its state back to Linear. Registers: connection, extension, route.
 Set up with `open-conduit init linear`.
 
 Connection `config`:
@@ -425,9 +453,9 @@ Route `config`:
 | --- | --- | --- |
 | `match` |  | attribute -> values the route claims (labels, status, title, team, project, priority, assignee, components, custom fields); one entry per scope for multi-scope routing |
 
-### Observed sources (`observe`)
+### Observe (`observe`)
 
-Lets a binding's executor report what it observed in an outside source with observe.record; the observe route gives each thread of a source Work. Add observe.record to the reporting binding's operations. Registers: extension, route.
+Lets an agent watching an outside source record each item it sees, so a thread becomes Work and its later items join it. Registers: extension, route.
 
 Extension entry `config`:
 
@@ -443,7 +471,7 @@ Route `config`:
 
 ### PostHog (`posthog`)
 
-Sends an agent_turn event per finished execution, the lifecycle records an entry selects and the introspection telemetry events to PostHog. Registers: connection, extension.
+Sends an agent_turn event per finished execution, the lifecycle records an entry selects and the host's telemetry events to PostHog. Registers: connection, extension.
 
 Connection `config`:
 
@@ -468,15 +496,15 @@ Extension entry `config`:
 
 ### Scheduled jobs (`schedule`)
 
-Every/at/cron jobs and webhook, code-host and manual triggers as standing Work. Registers: extension, route.
+Runs jobs on a timetable, on a webhook or on code-host events, each as its own standing Work, and announces each finished run. Registers: extension, route.
 
 Extension entry `config`:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `namespace` |  | Required. |
-| `scope` |  | Required. |
-| `webhook_secret` |  |  |
+| `namespace` |  | Required. stable source identity and correlation-key source |
+| `scope` |  | Required. the containing scope's id |
+| `webhook_secret` |  | names a selected scope secret that verifies webhook triggers |
 | `jobs` |  | Required. name, every_minutes \| at \| cron, time_zone, on {events, branches, paths, webhook} |
 
 Route `config`:
@@ -486,9 +514,14 @@ Route `config`:
 | `jobs` |  | job names the route takes |
 | `triggers` |  | trigger kinds |
 
+### setup (`setup`)
+
+The web setup assistant: a Claude Code session that looks at this machine and proposes config for the operator to approve and apply. Registers: extension, route.
+Set up with `open-conduit init setup`.
+
 ### Shell (`shell`)
 
-Runs a command as a detached, adoptable process with the os CLI toolbelt. Registers: executor.
+Runs a binding's shell command as a Work's execution, with the os toolbelt CLI on its PATH. Registers: executor.
 
 Binding `config`:
 
@@ -503,7 +536,7 @@ Binding `config`:
 
 ### Slack (`slack`)
 
-Support conversations in Slack channels over Socket Mode or the Events API. Registers: connection, extension, route.
+Works support conversations in Slack channels over Socket Mode or the Events API, each thread its own Work. Registers: connection, extension, route.
 Set up with `open-conduit init slack`.
 
 Connection `config`:
@@ -523,8 +556,8 @@ Extension entry `config`:
 
 | Field | Default | Meaning |
 | --- | --- | --- |
-| `namespace` |  | Required. |
-| `scope` |  | Required. |
+| `namespace` |  | Required. stable source identity and correlation-key source |
+| `scope` |  | Required. the containing scope's id |
 | `team` |  | Required. |
 | `channels` |  | Required. |
 | `start` |  |  |
@@ -535,6 +568,10 @@ Extension entry `config`:
 | `receiver` | `socket` | One of socket, events, none. |
 | `signing_secret` |  |  |
 | `projection` |  |  |
+
+### srt sandbox (`srt`)
+
+Runs a sandboxed binding's launches under Anthropic's sandbox runtime (srt), with the operator's filesystem and network policy. Registers: sandbox.
 
 ### Webhook tunnels (`tunnel`)
 
