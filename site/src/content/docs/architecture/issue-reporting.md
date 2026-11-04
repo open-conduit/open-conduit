@@ -137,7 +137,7 @@ Citing is bounded by core, not by the extension:
 
 With `host_watch`, a host pass reads the machine's load, memory and disks (`extensions/introspection/host`). An alert fires when a reading goes over its threshold, and recovery under 95% of it.
 
-Each crossing over the threshold becomes an **extension-originated report** in every enabled scope that watches the host: a root `introspection.issue.reported` Event in the scope's report namespace, of kind `env` and origin `host-watch`, with the same index record. It is accepted with its record in one transaction (`is.HostReport`, the host's `AcceptInTx` for the extension's own families, `is.PutOriginInTx`), and the crossing's identity deduplicates a repeat.
+Each crossing over the threshold becomes an **extension-originated report** in every enabled scope that watches the host: a root `introspection.issue.reported` Event in the scope's report namespace, of kind `env` and origin `host-watch`, with the same index record. It is accepted with its record in one transaction (`is.HostReport`, the host's `AcceptInTx` for the extension's own families, `is.PutOriginInTx`), and the crossing's identity deduplicates a repeat. Its title names the condition without the reading (`host: load is over the 3.00 per CPU threshold`) and its body starts with the reading, so the triage evidence, which groups reports by their leading line, puts every crossing of one threshold in one group.
 
 From there it is an ordinary report:
 

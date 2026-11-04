@@ -198,6 +198,20 @@ func TestHostWatcher(t *testing.T) {
 	if e.ID != again.ID || e.CausationID != "" || e.Type != TypeReported || r.Origin != OriginHostWatch || r.Kind != "env" || e.CorrelationKey.Source != SourceNamespace("eng") {
 		t.Fatalf("host report: %+v %+v", e, r)
 	}
+	// Crossings of one threshold share a title, the triage evidence's
+	// grouping line, and keep their own reading in the body; a different
+	// threshold is a different title.
+	_, hi := HostReport("eng", HostAlert{Metric: "load", Value: 7.38, Threshold: 3, Over: true}, at("2026-10-26T10:00:00Z"))
+	_, lo := HostReport("eng", HostAlert{Metric: "load", Value: 3.03, Threshold: 3, Over: true}, at("2026-10-26T11:00:00Z"))
+	_, mem := HostReport("eng", HostAlert{Metric: "memory", Value: 92, Threshold: 90, Over: true}, at("2026-10-26T11:00:00Z"))
+	if hi.Title != "host: load is over the 3.00 per CPU threshold" || lo.Title != hi.Title || mem.Title == hi.Title ||
+		!strings.Contains(hi.Body, "7.38 per CPU") || !strings.Contains(lo.Body, "3.03 per CPU") {
+		t.Fatalf("host report titles: %q %q %q", hi.Title, lo.Title, mem.Title)
+	}
+	gs := groups([]item{{id: hi.ID, kind: hi.Kind, lead: lead(hi.Title)}, {id: lo.ID, kind: lo.Kind, lead: lead(lo.Title)}, {id: mem.ID, kind: mem.Kind, lead: lead(mem.Title)}})
+	if len(gs) != 2 || gs[0].Count != 2 {
+		t.Fatalf("host report groups: %+v", gs)
+	}
 	if props := HostProps(sample(5)); props["disk_path"] != "/" || props["cpus"] != 2 {
 		t.Fatalf("props: %+v", props)
 	}
