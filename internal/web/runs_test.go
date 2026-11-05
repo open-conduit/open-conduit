@@ -36,7 +36,7 @@ func runsWorld() world {
 	return world{
 		Scopes: []client.Scope{{ID: "a", Name: "Alpha"}, {ID: "b", Name: "Beta"}},
 		Works: []workView{
-			mk("1", "a", "github", "waiting", 5*time.Hour, time.Hour, []client.Run{turn(1, "waiting", 5*time.Hour, 4*time.Hour)}, &client.Wait{CreatedAt: ts(4 * time.Hour), Match: client.Match{Types: []string{"human.answer"}}}, []client.Action{{Provider: "human", ID: "answer", Label: "Answer"}}, nil),
+			mk("1", "a", "github", "waiting", 5*time.Hour, time.Hour, []client.Run{turn(1, "waiting", 5*time.Hour, 4*time.Hour)}, &client.Wait{CreatedAt: ts(4 * time.Hour), Match: client.Match{Types: []string{"human.answer"}}}, []client.Action{{Provider: "human", ID: "answer", Label: "Answer", Awaited: true}}, nil),
 			mk("2", "a", "github", "running", 2*time.Hour, 10*time.Minute, []client.Run{turn(1, "running", 10*time.Minute, 0)}, nil, nil, nil),
 			mk("3", "b", "slack", "waiting", 30*time.Hour, 20*time.Hour, []client.Run{turn(1, "waiting", 30*time.Hour, 29*time.Hour)}, &client.Wait{CreatedAt: ts(29 * time.Hour), Description: "a reply in the thread", Match: client.Match{Types: []string{"slack.message"}}}, nil, nil),
 			mk("4", "b", "schedule", "waiting", 3*time.Hour, 3*time.Hour, []client.Run{turn(1, "waiting", 3*time.Hour, 3*time.Hour-time.Minute)}, &client.Wait{CreatedAt: ts(3 * time.Hour), TimeoutTimerID: "t", Description: "until Mon 09:00"}, nil, nil),
@@ -136,7 +136,7 @@ func runsFake(t *testing.T) (*fake, *Server, http.Handler) {
 
 func TestRunsPage(t *testing.T) {
 	f, s, h := runsFake(t)
-	f.actions["w_wait"] = []client.Action{{Provider: "anything", ID: "go", Label: "Pick one"}}
+	f.actions["w_wait"] = []client.Action{{Provider: "anything", ID: "go", Label: "Pick one", Awaited: true}}
 	body := do(h, "GET", "/", nil, s).Body.String()
 	for _, want := range []string{
 		"5 pieces of work across 1 scope.",

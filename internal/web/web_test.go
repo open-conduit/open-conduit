@@ -190,7 +190,7 @@ func newFake() *fake {
 			"wrk_2": {ID: "wrk_2", State: "active", Revision: "2", Hold: &client.Hold{Reason: "busy"}, Annotations: []client.Annotation{{Source: "human", Name: "question", Value: "<script>alert(1)</script>"}}},
 		},
 		actions: map[string][]client.Action{
-			"wrk_1":   {{Provider: "human", ID: "answer", Label: "Answer the agent's question", Prompt: "your answer"}},
+			"wrk_1":   {{Provider: "human", ID: "answer", Label: "Answer the agent's question", Prompt: "your answer", Awaited: true}},
 			"scope_a": {{Provider: "github", ID: "claim", Label: "Claim an issue", Prompt: "issue number"}},
 		},
 		scopes:  []client.Scope{{ID: "scope_a", Name: "Open Conduit", Enabled: true}},

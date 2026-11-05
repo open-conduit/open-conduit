@@ -561,6 +561,7 @@ type ActionOffer struct {
 	Prompt   string   `json:"prompt,omitempty"`
 	Choices  []string `json:"choices,omitempty"`
 	Detail   string   `json:"detail,omitempty"`
+	Awaited  bool     `json:"awaited,omitempty"`
 }
 
 // ActionListResult is what action.list answers.

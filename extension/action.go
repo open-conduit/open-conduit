@@ -71,6 +71,13 @@ type Action struct {
 	// action away from the Work's own panels (a Slack prompt). Plain text,
 	// at most 3000 bytes.
 	Detail string
+	// Awaited says the Work is waiting for a person to take this action: it
+	// answers a question the Work asked or an approval it needs, and the
+	// Work does not go on until someone does. An action a person may take
+	// at any time (sending a message to an open thread, say) is not
+	// awaited, so offering it does not put the Work in front of an operator
+	// as blocked on them.
+	Awaited bool
 }
 
 // ActionCall is one invocation.

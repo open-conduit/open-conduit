@@ -39,8 +39,13 @@ func TestDisposition(t *testing.T) {
 	handoff.Outcome = &client.Outcome{Kind: "handoff", Summary: "Opened PR #12; waiting on checks"}
 	zero, one := 0, 1
 	wait := &client.Wait{ID: "wait/1", State: "active", Match: client.Match{Types: []string{"github.check_suite.completed", "github.pull_request.merged"}}, Description: "checks on PR #137", CreatedAt: at0(4 * time.Hour)}
-	ask := []client.Action{{Provider: "acme", ID: "answer", Label: "Answer the question"}}
+	ask := []client.Action{{Provider: "acme", ID: "answer", Label: "Answer the question", Awaited: true}}
 	panel := []client.Panel{{Provider: "acme", ID: "ask", Title: "The agent asks", Sections: []client.PanelSection{{Text: "May I refund?"}, {Actions: ask}}}}
+	// A standing action a person may take at any time, not one the Work
+	// waits for (#518).
+	message := client.Action{Provider: "acme", ID: "message", Label: "Send a message", Prompt: "your message"}
+	thread := []client.Panel{{Provider: "acme", ID: "thread", Title: "Conversation", Sections: []client.PanelSection{{Text: "Sent the emails."}, {Actions: []client.Action{message}}}}}
+	timer := &client.Wait{State: "active", TimeoutTimerID: "timer/1", Description: "Check Gmail for trade offers", CreatedAt: at0(4 * time.Hour)}
 	cases := []struct {
 		name    string
 		work    client.Work
@@ -57,6 +62,8 @@ func TestDisposition(t *testing.T) {
 		{name: "a waiting Work held for a refused wake", work: client.Work{State: "waiting", Hold: &client.Hold{Reason: "Its wait is blocked: depth_limit", At: at0(5 * time.Hour)}}, runs: []client.Run{turnRun(1, "parked", time.Hour, 2*time.Hour)}, wait: wait, group: "held", kind: "held", detail: "Its wait is blocked: depth_limit"},
 		{name: "an offered action is a decision", work: client.Work{State: "waiting", Actions: ask, Panels: panel}, wait: wait, group: "attention", kind: "decision", label: "The agent asks", detail: "May I refund?"},
 		{name: "an action with no panel", work: client.Work{State: "waiting", Actions: ask}, group: "attention", kind: "decision", label: "Answer the question"},
+		{name: "a standing action is not a decision", work: client.Work{State: "waiting", Actions: []client.Action{message}, Panels: thread}, wait: timer, group: "waiting", kind: "waiting", detail: "Check Gmail for trade offers", waiting: "time"},
+		{name: "an awaited action beside a standing one", work: client.Work{State: "waiting", Actions: append([]client.Action{message}, ask...), Panels: append(thread, panel...)}, wait: wait, group: "attention", kind: "decision", label: "The agent asks", detail: "May I refund?"},
 		{name: "running", work: client.Work{State: "running"}, runs: []client.Run{turnRun(1, "running", time.Hour, 0)}, group: "running", kind: "running", detail: "Turn 1"},
 		{name: "retries exhausted is a repair", work: client.Work{State: "ready"}, runs: []client.Run{exhausted}, group: "attention", kind: "repair", detail: "workspace setup failed"},
 		{name: "retries left is queued", work: client.Work{State: "ready"}, runs: []client.Run{retrying}, group: "queued", kind: "queued", detail: "Retrying after turn 1 failed"},

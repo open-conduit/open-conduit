@@ -24,6 +24,7 @@ type wireAction struct {
 	Label    string   `json:"label"`
 	Prompt   string   `json:"prompt,omitempty"`
 	Choices  []string `json:"choices,omitempty"`
+	Awaited  bool     `json:"awaited,omitempty"`
 }
 
 var actionID = regexp.MustCompile(`^[a-z][a-z0-9_]{0,63}$`)
@@ -61,7 +62,7 @@ func wellFormed(name string, actions []extension.Action) []wireAction {
 		if !actionID.MatchString(a.ID) || strings.TrimSpace(a.Label) == "" || len(a.Label) > 200 || len(a.Prompt) > 200 {
 			continue
 		}
-		out = append(out, wireAction{Provider: name, ID: a.ID, Label: a.Label, Prompt: a.Prompt, Choices: choices(a)})
+		out = append(out, wireAction{Provider: name, ID: a.ID, Label: a.Label, Prompt: a.Prompt, Choices: choices(a), Awaited: a.Awaited})
 	}
 	return out
 }

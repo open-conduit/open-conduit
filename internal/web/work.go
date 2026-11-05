@@ -185,8 +185,8 @@ func (v workView) Label() string {
 }
 
 // dispositionOf derives what the Work is doing or waiting for, in order of
-// precedence: closed, held, a person's decision, running, a repair,
-// waiting, queued.
+// precedence: closed, held, a person's decision (an awaited action),
+// running, a repair, waiting, queued.
 func dispositionOf(v workView, now time.Time) disposition {
 	last := v.Last()
 	updated := v.Updated
@@ -202,13 +202,13 @@ func dispositionOf(v workView, now time.Time) disposition {
 	if h := v.Hold; h != nil {
 		return disposition{Group: "held", Kind: "held", Label: "Held", Detail: h.Reason, Since: parseTime(h.At)}
 	}
-	if v.State == "waiting" && len(v.Actions) > 0 {
-		d := disposition{Group: "attention", Kind: "decision", Label: v.Actions[0].Label, Detail: v.Actions[0].Label, Since: updated}
+	if a, ok := v.Awaited(); ok && v.State == "waiting" {
+		d := disposition{Group: "attention", Kind: "decision", Label: a.Label, Detail: a.Label, Since: updated}
 		if v.Wait != nil {
 			d.Since = parseTime(v.Wait.CreatedAt)
 		}
 		for _, p := range v.Panels {
-			if !panelActs(p) {
+			if !panelAwaits(p) {
 				continue
 			}
 			d.Label = p.Title
@@ -308,6 +308,30 @@ func waitingOn(w client.Wait) string {
 		return "time"
 	}
 	return "events"
+}
+
+// Awaited is the first action the Work waits for a person to take, if an
+// extension offers one. An action a person may take at any time (a standing
+// "send a message") does not make the Work wait on them (#518).
+func (v workView) Awaited() (client.Action, bool) {
+	for _, a := range v.Actions {
+		if a.Awaited {
+			return a, true
+		}
+	}
+	return client.Action{}, false
+}
+
+// panelAwaits says whether a panel offers an action the Work waits for.
+func panelAwaits(p client.Panel) bool {
+	for _, s := range p.Sections {
+		for _, a := range s.Actions {
+			if a.Awaited {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // panelActs says whether a panel offers an action.

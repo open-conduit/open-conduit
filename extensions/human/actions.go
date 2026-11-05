@@ -96,7 +96,7 @@ func (a Actions) Actions(ctx context.Context, t extension.ActionTarget) ([]exten
 	if rec.escalated(now) {
 		label += " (escalated)"
 	}
-	return []extension.Action{{ID: ActionAnswer, Label: label, Prompt: prompt, Choices: rec.Options, Detail: detail(rec, now)}}, nil
+	return []extension.Action{{ID: ActionAnswer, Label: label, Prompt: prompt, Choices: rec.Options, Detail: detail(rec, now), Awaited: true}}, nil
 }
 
 // detail is what a person needs to decide an ask away from its panel: the

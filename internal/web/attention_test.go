@@ -23,9 +23,12 @@ func TestNeedsYouShowsWhatIsBlockedOnAPerson(t *testing.T) {
 		"ok":  {ID: "ok", ScopeID: "sc", State: "completed", Revision: "1"},
 	}
 	f.waits = []client.Wait{{ID: "wait/o", WorkID: "old", State: "active", CreatedAt: "2026-10-25T00:00:00Z", Description: "until Mon 09:00"}}
-	approve := client.Action{Provider: "acme/approvals", ID: "approve", Label: "Approve or decline", Prompt: "decision", Choices: []string{"Approve", "Decline"}}
+	approve := client.Action{Provider: "acme/approvals", ID: "approve", Label: "Approve or decline", Prompt: "decision", Choices: []string{"Approve", "Decline"}, Awaited: true}
 	note := client.Action{Provider: "acme/approvals", ID: "note", Label: "Add a note", Prompt: "note"}
-	f.actions = map[string][]client.Action{"ask": {approve, note}}
+	// "old" sleeps on a timer; the standing message it offers is something
+	// a person may do any time, not something it waits for (#518).
+	message := client.Action{Provider: "acme/assist", ID: "message", Label: "Send a message", Prompt: "your message"}
+	f.actions = map[string][]client.Action{"ask": {approve, note}, "old": {message}}
 	f.panels = map[string][]client.Panel{"ask": {{Provider: "acme/approvals", ID: "refund", Title: "Refund needs approval", Sections: []client.PanelSection{{Text: "Customer asks for €40 back.\n\nOrder shipped late."}, {Actions: []client.Action{approve}}}}}}
 	s.receipts.add(receipt{Summary: "Hold · “busy”", Call: "POST /v1/work/hld/hold", Event: "evt_9", WorkID: "hld"})
 
@@ -43,6 +46,9 @@ func TestNeedsYouShowsWhatIsBlockedOnAPerson(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("Needs you lacks %q", want)
 		}
+	}
+	if strings.Contains(body, "Send a message") {
+		t.Error("lists Work offering only a standing action as a decision")
 	}
 	if strings.Contains(body, "Simulated") {
 		t.Error("shows a simulation tag")

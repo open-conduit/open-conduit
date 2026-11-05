@@ -7,8 +7,9 @@ import (
 
 // attentionData is Needs you: what is blocked on a person.
 type attentionData struct {
-	// Decisions are open Work an extension offers an action on, whatever
-	// the extension.
+	// Decisions are open Work waiting for a person to take an action an
+	// extension offers, whatever the extension. An action a person may take
+	// at any time does not make one (#518).
 	Decisions []attentionItem
 	// Repairs stopped and need one: retry exhausted or blocked, an
 	// operator-cancelled turn.
@@ -41,7 +42,7 @@ const watchAfter = 36 * time.Hour
 func attention(works []workView, p *page, now time.Time) attentionData {
 	d := attentionData{Page: p}
 	for _, w := range works {
-		if w.Open() && len(w.Actions) > 0 {
+		if _, ok := w.Awaited(); ok && w.Open() {
 			d.Decisions = append(d.Decisions, attentionItem{W: w, Panels: workPanels(w, p, "acting"), Extra: unshownOn(w, p)})
 		}
 		if w.Disp.Kind == "repair" {
