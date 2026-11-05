@@ -98,11 +98,28 @@ func (a HostAlert) String() string {
 	return fmt.Sprintf("host: %s is back to %s, under the %s threshold", what, value, threshold)
 }
 
+// Condition names what is wrong without the reading: "host: load is over
+// the 3.00 per CPU threshold". It is a host report's title, so the triage
+// evidence, which groups reports by their leading line, puts every crossing
+// of one threshold in one group however the readings differ.
+func (a HostAlert) Condition() string {
+	what := a.Metric
+	if a.Path != "" {
+		what += " " + a.Path
+	}
+	threshold := fmt.Sprintf("%.0f%%", a.Threshold)
+	if a.Metric == "load" {
+		threshold = fmt.Sprintf("%.2f per CPU", a.Threshold)
+	}
+	return fmt.Sprintf("host: %s is over the %s threshold", what, threshold)
+}
+
 // HostReport is the extension-originated report of a reading going over its
-// threshold. at (the reading's time) makes each crossing its own report.
+// threshold: titled with the condition, the reading in the body. at (the
+// reading's time) makes each crossing its own report.
 func HostReport(scope domain.ID, a HostAlert, at time.Time) (domain.Event, Report) {
 	body := fmt.Sprintf("%s.\n\nThe host watch took this reading at %s. Agents, their tools and their workspaces share this machine, so every scope on it slows or stalls until it recovers. Free what is filling it, or raise the threshold in the introspection entry's host_watch if this level is expected.", a, at.UTC().Format(time.RFC3339))
-	return OriginReport(scope, OriginHostWatch, a.Key()+"/"+at.UTC().Format(time.RFC3339), "env", a.String(), body, at)
+	return OriginReport(scope, OriginHostWatch, a.Key()+"/"+at.UTC().Format(time.RFC3339), "env", a.Condition(), body, at)
 }
 
 // HostWatcher remembers which readings are over their thresholds (v1
