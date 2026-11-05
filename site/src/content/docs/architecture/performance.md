@@ -91,15 +91,15 @@ The parts of an idle pass that read history are measured against retained histor
 ### Design bounds
 
 - WAL mode and `synchronous=FULL` are required, not tuning options ([coordination backend](../sqlite-artifacts/#coordination-backend)).
-- Each `Store` has one pooled connection (`SetMaxOpenConns(1)`) with a 5 s busy timeout (`busyTimeout` in [`store.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store.go)). The daemon opens one `Store` on `conduit.db` ([`daemon.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/daemon.go)).
-- Every `Transact`, including read-only management and TUI reads, starts with `BEGIN IMMEDIATE`. No callback is retried ([`Transact`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store.go)).
+- Each `Store` has one pooled connection for `Transact` (`SetMaxOpenConns(1)`) with a 5 s busy timeout (`busyTimeout` in [`store.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store.go)). The daemon opens one `Store` on `conduit.db` ([`daemon.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/bootstrap/daemon.go)).
+- Every `Transact` starts with `BEGIN IMMEDIATE`. No callback is retried ([`Transact`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store.go)). Management reads, and so the TUI's and the web view's, go through `View` instead: a deferred read transaction on one of up to four `query_only` reader connections (`readerConns`), which in WAL mode reads a committed snapshot without taking the writer's connection.
 - Records are stored as JSON blobs. Indexes cover primary keys, correlation keys, the delivery key, Event sequence, unrouted Events, unfinished Work, unfinished Executions, active Waits, Executions by Work and the one-active-attempt rule. The unrouted, unfinished-Work and active-Wait indexes are partial indexes over a state in the JSON record, so they need no schema version change: they are created when the store opens, and a binary without them keeps them current. Waits by Work and Work by Scope are not indexed (the schema in [`store.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/store.go)). KV prefix listing compares a substring over the namespace rather than using a range ([`timers_kv.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/storage/sqlite/timers_kv.go)).
 - Four extension callbacks run inside a transaction and are bounded at 250 ms (`InTransactionDeadlineMillis` in [`protocol.go`](https://github.com/open-conduit/open-conduit/blob/main/protocol/protocol.go); [in-transaction calls](../extension-protocol/#transactions-and-in-transaction-calls)). Every other host call to an extension or executor runs outside transactions.
 - The TUI refreshes every 2 s (`interval` in [`tui.go`](https://github.com/open-conduit/open-conduit/blob/main/internal/tui/tui.go)). Management lists take 1–200 items per page, default 50 ([API version 1](../config-management/#api-version-1)).
 
 ### What the design implies
 
-- All coordination work, reads included, is serialised through one connection in the daemon. There is no lock contention between SQLite connections in normal running; contention appears as goroutines queuing for the one connection. The 5 s busy timeout matters only when another process opens the same file, and the daemon's exclusive state lock prevents that ([names and paths](../config-management/#names-paths-and-precedence)).
+- All coordination writes, and the runtime's own reads, are serialised through one connection in the daemon. There is no lock contention between SQLite connections in normal running; contention appears as goroutines queuing for the one connection. Operator reads don't queue there: up to four run at once on the reader connections, alongside whatever transaction holds the writer. The 5 s busy timeout matters only when another process opens the same file, and the daemon's exclusive state lock prevents that ([names and paths](../config-management/#names-paths-and-precedence)).
 - So "SQLite contention" here means how long one transaction holds the connection. That time grows with the Work, Execution and Wait lists described above, and with the cost of a `synchronous=FULL` commit on the host's disk.
 - A hung extension can hold the connection for at most 250 ms per in-transaction call.
 
@@ -163,7 +163,7 @@ Not measured.
 
 ## History growth
 
-Event rows are never deleted, so a daemon that runs for months carries every Event it has accepted. [`history_bench_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/history_bench_test.go) seeds a real SQLite store with N Events of about 1 KiB, in threads of 25 Events. Every Event is routed, and each thread's Work is finished by one attempt, so N/25 Work and Executions. Then it times:
+Event rows are never deleted, so a daemon that runs for months carries every Event it has accepted. [`history_bench_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/history_bench_test.go) seeds a real SQLite store with N Events of about 1 KiB, in threads of 25 Events. Every Event is routed to its thread's Work, and each thread's Work is finished by one attempt, so N/25 Work and Executions. Then it times:
 
 - **Accept and route**: accept one Event for a new thread and route it, which opens its Work and queues the input.
 - **Routing pass**: the host loop's `routePending` with nothing to route.
@@ -221,6 +221,32 @@ Before is the code as of #388, which read every Work, Execution and Wait in thes
 Before, an idle pass at a million Events spent about 0.4 s of every second in `Poll` and the two Work lists, all holding the only connection, and each claim added a third of a second. After, the idle pass reads only what is live and costs the same at every size.
 
 What still grows is the retention sweep, which reads every Work record (109 ms at a million Events, 40,000 Work) and its markers, once every 10 minutes. The full Work list is still what management and the projections read.
+
+## Operator views (#523)
+
+The web view's pages are management reads. Measured against a copy of one install's `conduit.db` (66,000 Events, most of them GitHub deliveries for no Work; 410 Work; 1,628 runs; 687 Waits), served by a daemon with that config's scopes but no extensions, so provider calls (actions and panels) cost nothing. Each page loaded 30 times in a row through `internal/web`'s handler, darwin/arm64 (Apple M1 Pro), on a machine busy with other agents, before and after the changes:
+
+| Page | Before p50 | Before p90 | After p50 | After p90 |
+| --- | ---: | ---: | ---: | ---: |
+| Runs (`/`) | 1.47 s | 1.69 s | 77 ms | 112 ms |
+| Needs you | 1.54 s | 1.76 s | 41 ms | 82 ms |
+| Runs, closed group | 1.53 s | 1.62 s | 67 ms | 81 ms |
+| A Work | 5.6 s | 6.0–7.9 s | 62–66 ms | 82–99 ms |
+| A run's output | 45–55 ms | 72–78 ms | 43–47 ms | 68–72 ms |
+| Config | 307 ms | 381 ms | 310 ms | 363 ms |
+
+On a quiet machine the same pages took about 20 ms each after. What it took:
+
+- **A Work's events** (`GET /v1/events?work_id=`) scanned the whole log: 3 s. `WorkEvents` reads them from two expression indexes, `events_work` and `events_routed_work`: 0.2 ms at 1,000 and at 50,000 Events in the history benchmark.
+- **Run lists** built every run's full record for each page of 200: 112 ms of storage work a page, nine pages to read them all. A page now builds only the runs it returns.
+- **The world read** behind the Runs and Needs you pages read every run on every load (6.6 MB of JSON, and only the oldest 1,000). It now reads runs by Work, keeping a finished Work's while its revision stands.
+- **Reads queued on the writer.** Every read, the token check included, was a `BEGIN IMMEDIATE` transaction on the one connection, so a page's concurrent reads queued behind each other and the runtime. They now run as Views on reader connections.
+
+Still slow or unmeasured:
+
+- **Config** runs `doctor`, which reads every attempt's state and every retention record: about 140 ms on a quiet machine.
+- **Artifact content** finds an artifact's execution by reading every execution: about 18 ms per call.
+- **Provider calls.** The list pages ask every open Work's action providers for actions and panels, within a 2 s provider timeout and a 4 s deadline. On the install measured, a third-party package's conversation panel read the whole event log on every call and hit the timeout, so the live pages took 4–5 s whatever the core costs.
 
 ## In-transaction extension calls
 

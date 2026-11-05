@@ -42,11 +42,21 @@ var ErrRecordsNewer = errors.New("sqlite: records are newer than this binary wri
 const busyTimeout = 5 * time.Second
 
 type Store struct {
-	db   *sql.DB
-	path string
+	db *sql.DB
+	// readers are View's connections: query_only, so they can never write,
+	// and in WAL mode each reads a committed snapshot without waiting for
+	// db's writer or for each other.
+	readers *sql.DB
+	path    string
 }
 
-var _ storage.Store = (*Store)(nil)
+// readerConns bounds the connections Views read through at once.
+const readerConns = 4
+
+var (
+	_ storage.Store  = (*Store)(nil)
+	_ storage.Viewer = (*Store)(nil)
+)
 
 // Open initializes an empty database, or validates the version of an existing one.
 // It never resets, downgrades or reuses Open Supervisor state.
@@ -142,6 +152,12 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err = s.check(ctx, "quick_check"); err != nil {
 		return nil, err
 	}
+	q.Add("_pragma", "query_only(1)")
+	u.RawQuery = q.Encode()
+	if s.readers, err = sql.Open("sqlite", u.String()); err != nil {
+		return nil, err
+	}
+	s.readers.SetMaxOpenConns(readerConns)
 	ok = true
 	return s, nil
 }
@@ -198,7 +214,9 @@ func enableWAL(ctx context.Context, db *sql.DB) error {
 		delay = min(2*delay, 50*time.Millisecond)
 	}
 }
-func (s *Store) Close() error          { return s.db.Close() }
+func (s *Store) Close() error {
+	return errors.Join(s.readers.Close(), s.db.Close())
+}
 func (s *Store) SchemaVersion() uint32 { return SchemaVersion }
 
 // IntegrityCheck runs SQLite's full integrity_check and the foreign key
@@ -296,7 +314,19 @@ var indexes = []string{
 	`CREATE INDEX IF NOT EXISTS works_live ON works(id) WHERE ` + liveWork,
 	`CREATE INDEX IF NOT EXISTS waits_active ON waits(id) WHERE ` + activeWait,
 	`CREATE INDEX IF NOT EXISTS executions_live ON executions(id) WHERE active=1`,
+	`CREATE INDEX IF NOT EXISTS events_work ON events(` + eventWork + `, sequence)`,
+	`CREATE INDEX IF NOT EXISTS events_routed_work ON events(` + routedWork + `, sequence)`,
 }
+
+// eventWork and routedWork are the Work an event names and the Work it was
+// routed to. events_work and events_routed_work index them with the
+// sequence, so a Work's events are read by a search of each (SQLite's
+// multi-index OR) rather than a scan of the log; queries must repeat the
+// expressions for SQLite to use them.
+const (
+	eventWork  = "json_extract(CAST(record AS TEXT),'$.Event.WorkID')"
+	routedWork = "json_extract(CAST(record AS TEXT),'$.RoutedWorkID')"
+)
 
 // liveWork and activeWait select Work not yet finished and Waits still
 // active. Like unrouted, the state lives in the record, the partial indexes
@@ -393,6 +423,33 @@ func (s *Store) Transact(ctx context.Context, g storage.Guard, fn func(storage.T
 	}
 	committed = true
 	return nil
+}
+
+// View runs fn in a read transaction on one of the reader connections. In
+// WAL mode the transaction reads the snapshot committed when its first
+// statement runs, alongside the writer and other Views. As in Transact,
+// SQLite never sees the caller's context: it is checked between statements,
+// and the transaction is rolled back before the connection goes back.
+func (s *Store) View(ctx context.Context, fn func(storage.Tx) error) error {
+	if fn == nil {
+		return storage.ErrInvalid
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	conn, err := s.readers.Conn(ctx)
+	if err != nil {
+		return err
+	}
+	defer conn.Close()
+	work := context.WithoutCancel(ctx)
+	if _, err = conn.ExecContext(work, "BEGIN"); err != nil {
+		return mapError(err)
+	}
+	defer rollback(work, conn)
+	t := &transaction{conn: conn, caller: ctx, ctx: work, now: time.Now(), live: true}
+	defer func() { t.live = false }()
+	return fn(storage.ReadOnly(t))
 }
 
 // rollback ends a transaction that did not commit. If ROLLBACK fails the

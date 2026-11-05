@@ -59,6 +59,40 @@ func (b brokenStepBackTx) Renew(ref domain.LeaseRef, ttl time.Duration) error {
 	return b.Tx.Renew(ref, ttl)
 }
 
+// serialView reads in a write transaction, so a View queues behind every
+// Transact, as every read did before Views.
+type serialView struct{ *reference.Memory }
+
+func (b serialView) View(ctx context.Context, fn func(storage.Tx) error) error {
+	return b.Transact(ctx, storage.Guard{Now: time.Unix(1, 0)}, func(tx storage.Tx) error { return fn(storage.ReadOnly(tx)) })
+}
+
+// writingView hands its callback a writable transaction.
+type writingView struct{ *reference.Memory }
+
+func (b writingView) View(ctx context.Context, fn func(storage.Tx) error) error {
+	return b.Transact(ctx, storage.Guard{Now: time.Unix(1, 0)}, fn)
+}
+
+// brokenWorkEvents reads a Work's events by the Work they name alone,
+// missing those routed to it.
+type brokenWorkEvents struct{ storage.Store }
+type brokenWorkEventsTx struct{ storage.Tx }
+
+func (b brokenWorkEvents) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(brokenWorkEventsTx{tx}) })
+}
+func (b brokenWorkEventsTx) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	all, err := b.Events(after, 0)
+	out := []domain.AcceptedEvent{}
+	for _, a := range all {
+		if a.Event.WorkID == work && (limit <= 0 || len(out) < limit) {
+			out = append(out, a)
+		}
+	}
+	return out, err
+}
+
 // brokenActor stores Events without who caused them, as a store mapping
 // Events to columns might if it missed the field.
 type brokenActor struct{ storage.Store }
@@ -82,6 +116,9 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"atomic_route_work_kv_timer", "event leaked", func() storage.Store { return brokenAtomic{reference.New()} }},
 		{"timer_fire_rearm_rollback", "rollback was not atomic", func() storage.Store { return brokenAtomic{reference.New()} }},
 		{"lease_renew_survives_clock_step_back", "renewal after clock step back", func() storage.Store { return brokenStepBack{reference.New()} }},
+		{"work_events_follow_naming_and_routing", "work events", func() storage.Store { return brokenWorkEvents{reference.New()} }},
+		{"view_reads_committed_state_alongside_writes", "view waited for a write", func() storage.Store { return serialView{reference.New()} }},
+		{"view_reads_committed_state_alongside_writes", "view write", func() storage.Store { return writingView{reference.New()} }},
 	}
 	for _, negative := range cases {
 		t.Run(negative.name, func(t *testing.T) {

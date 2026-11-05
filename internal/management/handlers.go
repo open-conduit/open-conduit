@@ -229,8 +229,13 @@ func (s *Server) listEvents(c *call) (int, any, error) {
 				return e
 			}
 		}
+		// A Work's events are read through their index, not the log.
+		page := func(after uint64) ([]domain.AcceptedEvent, error) { return tx.Events(after, 200) }
+		if work := q.filters["work_id"]; work != "" {
+			page = func(after uint64) ([]domain.AcceptedEvent, error) { return tx.WorkEvents(domain.ID(work), after, 200) }
+		}
 		for {
-			batch, e := tx.Events(after, 200)
+			batch, e := page(after)
 			if e != nil {
 				return e
 			}
@@ -489,12 +494,21 @@ func (s *Server) listWaits(c *call) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	var items []keyed
+	var out map[string]any
 	err = s.read(c.ctx, func(tx storage.Tx) error {
-		waits, e := tx.ListWaits(domain.ID(q.filters["work_id"]))
+		// Active Waits are read through their index, not every Wait ever
+		// registered.
+		var waits []domain.Wait
+		var e error
+		if q.filters["state"] == string(domain.WaitActive) && q.filters["work_id"] == "" {
+			waits, e = tx.ActiveWaits()
+		} else {
+			waits, e = tx.ListWaits(domain.ID(q.filters["work_id"]))
+		}
 		if e != nil {
 			return e
 		}
+		var items []lazyKeyed
 		for _, wait := range waits {
 			if _, ok := q.filters["scope_id"]; ok {
 				w, e := tx.Work(wait.WorkID)
@@ -508,14 +522,16 @@ func (s *Server) listWaits(c *call) (int, any, error) {
 			if !match(q, "execution_id", string(wait.ExecutionID)) || !match(q, "state", string(wait.State)) || !match(q, "work_id", string(wait.WorkID)) {
 				continue
 			}
-			items = append(items, keyed{createdKey(wait.CreatedAt, wait.ID), toWait(wait, waitDue(tx, wait))})
+			// Its due time reads its timer: only for the page.
+			items = append(items, lazyKeyed{key: createdKey(wait.CreatedAt, wait.ID), build: func() (any, bool, error) { return toWait(wait, waitDue(tx, wait)), true, nil }})
 		}
-		return nil
+		out, e = s.lazyPage("waits", q, s.nowBound(), items)
+		return e
 	})
 	if err != nil {
 		return 0, nil, err
 	}
-	return 200, s.page("waits", q, s.nowBound(), items), nil
+	return 200, out, nil
 }
 func (s *Server) getWait(c *call) (int, any, error) {
 	if err := noQuery(c); err != nil {

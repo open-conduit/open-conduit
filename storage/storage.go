@@ -16,6 +16,8 @@ var (
 	ErrInvalid   = errors.New("invalid record or transition")
 	ErrLeaseLost = errors.New("lease expired or superseded")
 	ErrClaimed   = errors.New("execution or work already claimed")
+	// ErrReadOnly refuses a write in a View.
+	ErrReadOnly = errors.New("write in a read-only view")
 )
 
 // Guard.Now is supplied by the trusted runtime clock, never by an executor.
@@ -31,6 +33,52 @@ type Store interface {
 	// panic or context cancellation before commit. Tx must not escape the callback.
 	Transact(context.Context, Guard, func(Tx) error) error
 }
+
+// Viewer is a Store that can also read outside its transactions. View
+// invokes fn once over a consistent snapshot of committed state. It is
+// read-only: every write fails with ErrReadOnly and nothing fn does is kept.
+// Views run alongside each other and alongside Transact, so a read never
+// waits for another read, or for a write to commit, and never sees a write
+// that has not. Tx must not escape the callback.
+type Viewer interface {
+	View(context.Context, func(Tx) error) error
+}
+
+// View reads s through fn: through its View when s is a Viewer, else in a
+// Transact at now whose writes are refused, which reads committed state as
+// a View does but waits its turn with the writes.
+func View(ctx context.Context, s Store, now time.Time, fn func(Tx) error) error {
+	if v, ok := s.(Viewer); ok {
+		return v.View(ctx, fn)
+	}
+	return s.Transact(ctx, Guard{Now: now}, func(tx Tx) error { return fn(ReadOnly(tx)) })
+}
+
+// ReadOnly is tx with every write refused with ErrReadOnly, for a backend's
+// View to hand its callback.
+func ReadOnly(tx Tx) Tx { return readOnly{tx} }
+
+type readOnly struct{ Tx }
+
+func (readOnly) AcceptEvent(domain.Event) (domain.AcceptedEvent, bool, error) {
+	return domain.AcceptedEvent{}, false, ErrReadOnly
+}
+func (readOnly) MarkRouted(domain.ID, domain.ID, string) error        { return ErrReadOnly }
+func (readOnly) PutWork(domain.Work, domain.Revision) error           { return ErrReadOnly }
+func (readOnly) PutExecution(domain.Execution, domain.Revision) error { return ErrReadOnly }
+func (readOnly) Claim(domain.ID, string, time.Duration) (domain.LeaseRef, error) {
+	return domain.LeaseRef{}, ErrReadOnly
+}
+func (readOnly) Renew(domain.LeaseRef, time.Duration) error                { return ErrReadOnly }
+func (readOnly) Release(domain.LeaseRef) error                             { return ErrReadOnly }
+func (readOnly) DeleteTimer(domain.ID, domain.Revision) error              { return ErrReadOnly }
+func (readOnly) PutTimer(domain.Timer, domain.Revision) error              { return ErrReadOnly }
+func (readOnly) FireTimer(domain.ID, domain.Revision, *domain.Timer) error { return ErrReadOnly }
+func (readOnly) PutWait(domain.Wait, domain.Revision) error                { return ErrReadOnly }
+func (readOnly) PutScope(domain.Scope, domain.Revision) error              { return ErrReadOnly }
+func (readOnly) Put(string, string, []byte) error                          { return ErrReadOnly }
+func (readOnly) Delete(string, string) error                               { return ErrReadOnly }
+
 type Tx interface {
 	AcceptEvent(domain.Event) (domain.AcceptedEvent, bool, error)
 	Event(domain.ID) (domain.AcceptedEvent, error)
@@ -39,6 +87,11 @@ type Tx interface {
 	// UnroutedEvents is Events restricted to events not yet marked routed.
 	// Its cost follows the unrouted backlog, not retained history.
 	UnroutedEvents(after uint64, limit int) ([]domain.AcceptedEvent, error)
+	// WorkEvents is Events restricted to one Work's events: those naming it
+	// (Event.WorkID) and those routed to it (RoutedWorkID). Like
+	// UnroutedEvents, its cost follows the Work's own events, not retained
+	// history.
+	WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error)
 	// LatestSequence is the last accepted sequence, zero before any event.
 	LatestSequence() (uint64, error)
 	// EventByDelivery finds an event by its delivery identity.

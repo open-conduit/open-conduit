@@ -138,21 +138,9 @@ func RunInTx(tx storage.Tx, id domain.ID) (Run, error) {
 	return runInTx(tx, x, nil)
 }
 
-// RunsInTx returns the unified history for every attempt, optionally limited
-// to one Work, in storage order.
-func RunsInTx(tx storage.Tx, work domain.ID) ([]Run, error) {
-	xs, err := tx.ListExecutions(work)
-	if err != nil {
-		return nil, err
-	}
-	works := map[domain.ID]domain.Work{}
-	out := make([]Run, 0, len(xs))
-	for _, x := range xs {
-		run, err := runInTx(tx, x, works)
-		if err != nil {
-			return nil, err
-		}
-		out = append(out, run)
-	}
-	return out, nil
+// RunOfInTx builds the unified history record of an execution already read.
+// works caches the Work records read so far, so a list of runs reads each
+// Work once.
+func RunOfInTx(tx storage.Tx, x domain.Execution, works map[domain.ID]domain.Work) (Run, error) {
+	return runInTx(tx, x, works)
 }

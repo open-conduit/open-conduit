@@ -96,6 +96,8 @@ func StorageCases() []StorageCase {
 		{"attempt_sequence_and_retry_exhaustion", attempts},
 		{"per_work_routing_order", routingOrder},
 		{"live_reads_follow_state", liveReads},
+		{"work_events_follow_naming_and_routing", workEvents},
+		{"view_reads_committed_state_alongside_writes", viewAlongsideWrites},
 	}
 }
 
@@ -1365,4 +1367,185 @@ func liveReads(s storage.Store) error {
 		return err
 	}
 	return want("")
+}
+
+// workEvents: WorkEvents returns exactly the Events naming the Work or
+// routed to it, once each, in acceptance order after the cursor and within
+// the limit, so a view of one Work reads its own events instead of the log.
+func workEvents(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if err := tx.PutWork(domain.Work{ID: "other", Kind: "test.objective", ScopeID: "scope", State: domain.WorkReady}, 0); err != nil {
+			return err
+		}
+		named := event("named", c.Now())
+		named.WorkID = "work"
+		elsewhere := event("elsewhere", c.Now())
+		elsewhere.WorkID = "other"
+		for _, e := range []domain.Event{named, event("unrelated", c.Now()), elsewhere, event("routed", c.Now()), event("routed-away", c.Now())} {
+			if _, _, err := tx.AcceptEvent(e); err != nil {
+				return err
+			}
+		}
+		// named is routed to its own Work too, and must still come once.
+		// Events are routed in order: an earlier unrouted input of a Work
+		// blocks marking a later one routed to it.
+		for _, r := range []struct{ event, work domain.ID }{{"named", "work"}, {"elsewhere", "other"}, {"routed", "work"}, {"routed-away", "other"}, {"unrelated", ""}} {
+			disposition := "queue"
+			if r.work == "" {
+				disposition = "ignored"
+			}
+			if err := tx.MarkRouted(r.event, r.work, disposition); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		ids := func(work domain.ID, after uint64, limit int) (string, []domain.AcceptedEvent, error) {
+			got, err := tx.WorkEvents(work, after, limit)
+			var parts []string
+			for _, a := range got {
+				parts = append(parts, string(a.Event.ID))
+			}
+			return strings.Join(parts, " "), got, err
+		}
+		all, events, err := ids("work", 0, 0)
+		if err != nil {
+			return err
+		}
+		if all != "named routed" {
+			return fmt.Errorf("work events %q, want %q", all, "named routed")
+		}
+		for _, q := range []struct {
+			work        domain.ID
+			after       uint64
+			limit       int
+			want, label string
+		}{
+			{"work", events[0].Sequence, 0, "routed", "after the first"},
+			{"work", 0, 1, "named", "limited to one"},
+			{"other", 0, 0, "elsewhere routed-away", "of the other Work"},
+			{"missing", 0, 0, "", "of a missing Work"},
+			{"", 0, 0, "", "of no Work"},
+		} {
+			got, _, err := ids(q.work, q.after, q.limit)
+			if err != nil {
+				return err
+			}
+			if got != q.want {
+				return fmt.Errorf("work events %s %q, want %q", q.label, got, q.want)
+			}
+		}
+		return nil
+	})
+}
+
+// viewWait bounds how long a View may take while a Transact is open: a View
+// never waits for one, so it is a deadline on a condition, not a delay.
+const viewWait = 3 * time.Second
+
+// viewAlongsideWrites: storage.View reads committed state and refuses every
+// write, keeping none. A Viewer's View, while a Transact is open, neither
+// waits for it nor sees its writes, which a View after the commit does see:
+// operator reads go through it, so a read never queues behind the
+// runtime's writes.
+func viewAlongsideWrites(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	ctx := context.Background()
+	if err := storage.View(ctx, s, c.Now(), func(tx storage.Tx) error {
+		if w, err := tx.Work("work"); err != nil || w.ID != "work" {
+			return fmt.Errorf("view of committed Work: %+v %v", w, err)
+		}
+		named := event("in-view", c.Now())
+		_, _, acceptErr := tx.AcceptEvent(named)
+		w, _ := tx.Work("work")
+		for name, err := range map[string]error{
+			"Put":         tx.Put("view", "key", []byte("v")),
+			"Delete":      tx.Delete("view", "key"),
+			"AcceptEvent": acceptErr,
+			"MarkRouted":  tx.MarkRouted("trigger", "work", "queue"),
+			"PutWork":     tx.PutWork(w, w.Revision),
+			"PutScope":    tx.PutScope(domain.Scope{ID: "view-scope", Name: "view"}, 0),
+		} {
+			if !errors.Is(err, storage.ErrReadOnly) {
+				return fmt.Errorf("view write %s: got %v, want ErrReadOnly", name, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if _, err := tx.Get("view", "key"); !errors.Is(err, storage.ErrNotFound) {
+			return fmt.Errorf("view write was kept: %v", err)
+		}
+		if _, err := tx.Event("in-view"); !errors.Is(err, storage.ErrNotFound) {
+			return fmt.Errorf("view event was kept: %v", err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// A store that is no Viewer reads in a Transact, which waits its turn.
+	v, ok := s.(storage.Viewer)
+	if !ok {
+		return nil
+	}
+	// Hold a Transact open with a write in it.
+	inside, release := make(chan struct{}), make(chan struct{})
+	committed := make(chan error, 1)
+	go func() {
+		committed <- transact(s, c, func(tx storage.Tx) error {
+			if err := tx.Put("view", "pending", []byte("v")); err != nil {
+				return err
+			}
+			close(inside)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-inside:
+	case err := <-committed:
+		return fmt.Errorf("writer ended early: %v", err)
+	}
+	viewed := make(chan error, 1)
+	go func() {
+		viewed <- v.View(ctx, func(tx storage.Tx) error {
+			if _, err := tx.Get("view", "pending"); !errors.Is(err, storage.ErrNotFound) {
+				return fmt.Errorf("view saw a write not yet committed: %v", err)
+			}
+			_, err := tx.Work("work")
+			return err
+		})
+	}()
+	var err error
+	select {
+	case err = <-viewed:
+	case <-time.After(viewWait):
+		err = fmt.Errorf("view waited for a write to commit")
+	}
+	close(release)
+	if e := <-committed; e != nil {
+		return e
+	}
+	if err != nil {
+		return err
+	}
+	return v.View(ctx, func(tx storage.Tx) error {
+		if _, err := tx.Get("view", "pending"); err != nil {
+			return fmt.Errorf("view after the commit: %v", err)
+		}
+		return nil
+	})
 }

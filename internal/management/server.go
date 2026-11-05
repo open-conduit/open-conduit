@@ -289,7 +289,7 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request) (principal, 
 	digest := runtime.TokenDigest(token)
 	var record operatorRecord
 	found := false
-	err := s.o.Store.Transact(ctx, storage.Guard{Now: s.o.Now()}, func(tx storage.Tx) error {
+	err := s.read(ctx, func(tx storage.Tx) error {
 		b, err := tx.Get(authNamespace, "operator/"+digest)
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil
@@ -804,6 +804,24 @@ type keyed struct {
 // page applies keyset pagination over (created_at,id)-ordered keys with a
 // captured upper bound for the traversal.
 func (s *Server) page(endpoint string, q listQuery, bound string, items []keyed) map[string]any {
+	lazy := make([]lazyKeyed, len(items))
+	for i, it := range items {
+		lazy[i] = lazyKeyed{key: it.key, build: func() (any, bool, error) { return it.item, true, nil }}
+	}
+	out, _ := s.lazyPage(endpoint, q, bound, lazy)
+	return out
+}
+
+// lazyKeyed is a list item built only once the page reaches it; build
+// reports whether the item belongs in the list after all.
+type lazyKeyed struct {
+	key   string
+	build func() (item any, ok bool, err error)
+}
+
+// lazyPage is page over items built on demand, so a page costs the items it
+// returns (and those build drops), not every item in the list.
+func (s *Server) lazyPage(endpoint string, q listQuery, bound string, items []lazyKeyed) (map[string]any, error) {
 	sort.Slice(items, func(i, j int) bool { return items[i].key < items[j].key })
 	if q.cursor != nil {
 		bound = q.cursor.Bound
@@ -814,14 +832,21 @@ func (s *Server) page(endpoint string, q listQuery, bound string, items []keyed)
 		if it.key > bound || q.cursor != nil && it.key <= q.cursor.Last {
 			continue
 		}
+		item, ok, err := it.build()
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
 		if len(out) == q.limit {
 			next = s.sign(cursor{Endpoint: endpoint, Filters: q.norm, Bound: bound, Last: last, Expires: s.o.Now().Add(15 * time.Minute).Unix()})
 			break
 		}
-		out = append(out, it.item)
+		out = append(out, item)
 		last = it.key
 	}
-	return map[string]any{"items": out, "next_cursor": next}
+	return map[string]any{"items": out, "next_cursor": next}, nil
 }
 
 func createdKey(t time.Time, id domain.ID) string {
@@ -829,8 +854,10 @@ func createdKey(t time.Time, id domain.ID) string {
 }
 func (s *Server) nowBound() string { return fmt.Sprintf("%020d/\xff", s.o.Now().UnixNano()) }
 
+// read runs a read-only view: an operator's read never waits for the
+// runtime's writes, or for another read, to finish.
 func (s *Server) read(ctx context.Context, fn func(storage.Tx) error) error {
-	return s.o.Store.Transact(ctx, storage.Guard{Now: s.o.Now()}, fn)
+	return storage.View(ctx, s.o.Store, s.o.Now(), fn)
 }
 
 func etag(c *call, revision domain.Revision) bool {

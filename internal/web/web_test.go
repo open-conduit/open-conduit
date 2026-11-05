@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -57,9 +58,16 @@ type fake struct {
 	applied      []string
 	doctor       *client.Doctor
 	doctorCalled int
+	// runReads are the work_id each runs list was read for; runs are read
+	// concurrently, so rmu guards it.
+	rmu      sync.Mutex
+	runReads []string
 }
 
 func (f *fake) Runs(_ context.Context, q url.Values) (client.Page[client.Run], error) {
+	f.rmu.Lock()
+	f.runReads = append(f.runReads, q.Get("work_id"))
+	f.rmu.Unlock()
 	var out []client.Run
 	for _, r := range f.runs {
 		if (q.Get("state") == "" || q.Get("state") == r.State) && (q.Get("work_id") == "" || q.Get("work_id") == r.WorkID) {
