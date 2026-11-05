@@ -43,7 +43,8 @@ func newFixture(t *testing.T, extra string) *fixture {
 	t.Helper()
 	fake := githubtest.New(repo, "tok")
 	t.Cleanup(fake.Close)
-	f := &fixture{fake: fake, now: time.Date(2026, 10, 2, 9, 0, 0, 0, time.UTC)}
+	// Half an hour after the fake's clock starts, inside the default horizon.
+	f := &fixture{fake: fake, now: time.Date(2026, 10, 1, 9, 30, 0, 0, time.UTC)}
 	cfg, err := gh.ParseConnection([]byte(`{"api_url":"` + fake.URL + `"}`))
 	if err != nil {
 		t.Fatal(err)
@@ -518,6 +519,151 @@ func TestClosedItemsAgeOutOfTheHorizon(t *testing.T) {
 	}
 	if _, ok := scanned["issue/"+strconv.Itoa(open)]; !ok {
 		t.Fatal("old open issue must stay observed regardless of age")
+	}
+	// The horizon runs from the close, so news on a long-closed issue
+	// doesn't bring it back.
+	fk.Advance(3 * time.Hour)
+	fk.AddComment(old, alice, "thanks")
+	f.now = fk.Now().Add(time.Minute)
+	if _, ok := f.scan(t)["issue/"+strconv.Itoa(old)]; ok {
+		t.Fatal("closed issue observed again because of a later comment")
+	}
+}
+
+// scanFrom runs a whole generation after the one checkpoint names, as the
+// runtime does once a generation has completed.
+func (f *fixture) scanFrom(t *testing.T, checkpoint string) (map[string]extension.Observation, string) {
+	t.Helper()
+	out := map[string]extension.Observation{}
+	scan := extension.Scan{Source: src, Checkpoint: checkpoint}
+	for i := 0; i < 1000; i++ {
+		page, err := f.in.Reconcile(context.Background(), scan)
+		if err != nil {
+			t.Fatalf("reconcile: %v", err)
+		}
+		for _, o := range page.Observations {
+			out[o.ID] = o
+		}
+		if page.Complete {
+			return out, page.Checkpoint
+		}
+		scan.ScanID, scan.Cursor, scan.Checkpoint = page.ScanID, page.NextCursor, page.Checkpoint
+	}
+	t.Fatal("scan did not finish")
+	return nil, ""
+}
+
+func TestScanListsOnlyOpenAndRecentlyClosedItems(t *testing.T) {
+	f := newFixture(t, `,"track_pull_requests":true`)
+	fk := f.fake
+	var old []int
+	for i := 0; i < 150; i++ {
+		n := fk.OpenPull("old "+strconv.Itoa(i), "", "old/"+strconv.Itoa(i), "sha-old-"+strconv.Itoa(i), alice)
+		fk.MergePull(n)
+		old = append(old, n)
+	}
+	fk.Advance(2 * time.Hour)
+	open := fk.OpenPull("Open", "", "feature/open", "sha-open", alice)
+	recent := fk.OpenPull("Recent", "", "feature/recent", "sha-recent", alice)
+	fk.MergePull(recent)
+	f.now = fk.Now().Add(time.Minute)
+	before := len(fk.Requests())
+	scanned := f.scan(t)
+	for _, n := range []int{open, recent} {
+		if _, ok := scanned["pr/"+strconv.Itoa(n)]; !ok {
+			t.Fatalf("PR %d not observed", n)
+		}
+	}
+	for _, n := range old {
+		if _, ok := scanned["pr/"+strconv.Itoa(n)]; ok {
+			t.Fatalf("PR %d closed before the horizon was observed", n)
+		}
+	}
+	// The closed listing stops at the horizon, so history costs one page
+	// and no PR's details are read.
+	for _, r := range fk.Requests()[before:] {
+		for _, n := range old {
+			if strings.Contains(r, "/pulls/"+strconv.Itoa(n)+"/") || strings.HasSuffix(r, "/pulls/"+strconv.Itoa(n)) {
+				t.Fatalf("read the details of PR %d, closed long ago: %s", n, r)
+			}
+		}
+		if strings.Contains(r, "/pulls?") && strings.Contains(r, "page=2") {
+			t.Fatalf("listed past the horizon: %s", r)
+		}
+	}
+}
+
+func TestScanAfterAnOutageLooksBackToTheLastCompletedGeneration(t *testing.T) {
+	f := newFixture(t, "")
+	fk := f.fake
+	n := fk.OpenIssue("Header", "", alice)
+	_, checkpoint := f.scanFrom(t, "")
+	// Scans fail for three hours, and the issue closes in the meantime.
+	fk.Advance(time.Hour)
+	fk.CloseIssue(n, "completed")
+	f.now = fk.Now().Add(2 * time.Hour)
+	scanned, _ := f.scanFrom(t, checkpoint)
+	if o, ok := scanned["issue/"+strconv.Itoa(n)]; !ok || o.Event.Type != gh.TypeIssueClosed {
+		t.Fatalf("close made during the outage was not observed: %+v", o)
+	}
+	// Without the earlier generation, the horizon alone applies.
+	if _, ok := f.scan(t)["issue/"+strconv.Itoa(n)]; ok {
+		t.Fatal("closed issue beyond the horizon observed without a checkpoint")
+	}
+}
+
+func TestItemClosedDuringAScanIsObservedOnce(t *testing.T) {
+	f := newFixture(t, `,"track_pull_requests":true`)
+	fk := f.fake
+	first := fk.OpenPull("First", "", "feature/first", "sha-first", alice)
+	fk.OpenPull("Second", "", "feature/second", "sha-second", alice)
+	f.in = gh.NewIngress(f.in.Settings(), clientFor(t, f), func() time.Time { return f.now }, gh.IngressOptions{BatchUnits: 1})
+	seen := map[string]string{}
+	var page extension.Snapshot
+	var err error
+	scan := extension.Scan{Source: src}
+	for seen["pr/"+strconv.Itoa(first)] == "" {
+		if page, err = f.in.Reconcile(context.Background(), scan); err != nil || page.Complete {
+			t.Fatalf("PR %d not observed open: %+v %v", first, page, err)
+		}
+		for _, o := range page.Observations {
+			seen[o.ID] = o.Version
+		}
+		scan.ScanID, scan.Cursor = page.ScanID, page.NextCursor
+	}
+	fk.Advance(time.Hour) // the merge comes after the generation began
+	fk.MergePull(first)
+	for !page.Complete {
+		if page, err = f.in.Reconcile(context.Background(), scan); err != nil {
+			t.Fatal(err)
+		}
+		for _, o := range page.Observations {
+			if v, ok := seen[o.ID]; ok && v != o.Version {
+				t.Fatalf("%s observed twice with different versions in one generation", o.ID)
+			}
+			seen[o.ID] = o.Version
+		}
+		scan.Cursor = page.NextCursor
+	}
+}
+
+func TestEarlierGenerationsRestart(t *testing.T) {
+	f := newFixture(t, "")
+	f.fake.OpenIssue("One", "", alice)
+	old := "gen-" + strconv.FormatInt(f.now.Add(-time.Minute).UnixNano(), 10)
+	for _, cursor := range []string{"", "issues:1:0", "pulls:2:0"} {
+		p, err := f.in.Reconcile(context.Background(), extension.Scan{Source: src, ScanID: old, Cursor: cursor})
+		if err != nil || p.Complete || p.NextCursor != "" || len(p.Observations) != 0 {
+			t.Fatalf("cursor %q of an earlier version's generation must restart: %+v %v", cursor, p, err)
+		}
+	}
+	page, err := f.in.Reconcile(context.Background(), extension.Scan{Source: src})
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := f.in.Reconcile(context.Background(), extension.Scan{Source: src, ScanID: page.ScanID, Cursor: "pulls:1:0"})
+	if err != nil || p.Complete || p.NextCursor != "" {
+		t.Fatalf("an unknown phase must restart: %+v %v", p, err)
 	}
 }
 

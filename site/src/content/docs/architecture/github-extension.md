@@ -30,7 +30,7 @@ A `github` extension entry (an ingress entry: `config.scope` must be the contain
 | `tracker` | Optional shared tracker `{repo, namespace}` whose issues this repository's PRs reference as `owner/repo#N`. |
 | `track_issues` | Default true. False observes only PRs, comments, reviews and checks. |
 | `labels` | `claimed`, `scheduled`, `help`, `review`, `done`, `skip[]`, `require[]`. |
-| `closed_horizon_hours` | Default 168. How long closed items stay observed. |
+| `closed_horizon_hours` | Default 1. How long after it closes an issue or PR stays observed by reconcile. |
 | `branch_pattern` | Default `^agent/issue-(\d+)$`. `""` disables branch correlation. |
 | `preview_pattern` | Default `deploy-preview`. |
 | `projection` | `disabled`, `verify_seconds` (default 900) and `dry_run`. |
@@ -103,9 +103,16 @@ A review payload carries no `commit_id`. GitHub moves a review's `commit_id` to 
 
 Push makes read-only service calls for generation history, PR details and aggregate checks, and no coordination writes. When check runs are refused (a fine-grained token cannot hold Checks), the aggregate uses the head's Actions workflow runs, else statuses only (see [engineering tools](../engineering-tools/#checks-timing)). A review without a body is never observed. GitHub wraps every inline comment and reply in one, the agent's own included, so observing it as a human comment would wake waiting agents in a loop. Check events re-read the aggregate state of each open PR whose head is the delivery's commit, exactly as reconcile evaluates it. A status event finds its PRs through `commits/{sha}/pulls`.
 
-**Reconcile.** GitHub has no snapshot token. A generation lists every issue and every PR in stable creation order, so pagination cannot repeat an item; a deletion can only skip one. It observes open items and items closed within the horizon, then the repository's conversation and inline comments updated within the horizon. Reviews and checks are read for each listed PR. Each open PR that belongs to an issue (every open PR, with `track_pull_requests`) is also read on its own, because only that read carries `mergeable` and GitHub sends no webhook when a PR picks up conflicts (the base branch moving under it). When GitHub says it cannot merge, the PR is `github.pull_request.conflicts`. The payload names the head commit and the base branch but not the base's commit, and the occurrence is the head's commit time, so one conflicting head is one observation however often the base moves after it; a new head that still conflicts is a new one. A `pull_request` delivery that already carries `mergeable: false` observes the same. A PR that is only behind its base is not observed.
+**Reconcile.** GitHub has no snapshot token. A generation lists the open issues, then the closed issues, then the same for PRs, and then the repository's conversation and inline comments updated within the horizon, so its cost follows the open items and recent activity rather than the repository's history:
 
-Each `Reconcile` call is one bounded page. The cursor is `phase:page:offset`, and a call stops after 25 detail reads or 10 seconds. `Complete` certifies that every listing was read to its end in this generation. Rate limits and failed reads return errors, so no absence is inferred.
+- **Open items** are listed oldest first. One opened during the scan lands after the cursor, one closed during it is picked up by the closed listing, and a deletion can only skip one.
+- **Closed items** are listed most recently updated first and observed only if they closed within the horizon. The listing stops at the first item last updated before the horizon (an item closes no later than its last update); GitHub filters the issue listing by `since` as well. The horizon runs from `closed_at`, so a comment on a long-closed item doesn't bring it back.
+- **A close during the scan.** A closed item the open listing already observed in this generation is left to the next one, so no item has two versions in one generation (the runtime refuses that).
+- **The horizon** is `closed_horizon_hours` before the generation starts, or, when the last completed generation began earlier than that, that generation's start, at most 168 hours back. So steady 15-minute scans look back an hour, and a stretch of failed scans loses no close made meanwhile. The generation ID (`gen-<start>-<horizon>`) carries the horizon, so every page reads the same window; a generation or cursor from an earlier version restarts.
+
+Reviews and checks are read for each listed PR. Each open PR that belongs to an issue (every open PR, with `track_pull_requests`) is also read on its own, because only that read carries `mergeable` and GitHub sends no webhook when a PR picks up conflicts (the base branch moving under it). When GitHub says it cannot merge, the PR is `github.pull_request.conflicts`. The payload names the head commit and the base branch but not the base's commit, and the occurrence is the head's commit time, so one conflicting head is one observation however often the base moves after it; a new head that still conflicts is a new one. A `pull_request` delivery that already carries `mergeable: false` observes the same. A PR that is only behind its base is not observed.
+
+Each `Reconcile` call is one bounded page. The cursor is `phase:page:offset` (phases `open_issues`, `closed_issues`, `open_pulls`, `closed_pulls`, `comments`, `review_comments`), and a call stops after 25 detail reads or 10 seconds. `Complete` certifies that every listing was read to its end in this generation. Rate limits and failed reads return errors, so no absence is inferred.
 
 Items that age out of the horizon become generic `core.ingress.absent`, which the route ignores. A false absence caused by a mid-scan deletion is therefore harmless, and the next generation re-observes the item under its original delivery identity.
 
@@ -201,7 +208,7 @@ The [shared ingress conformance](https://github.com/open-conduit/open-conduit/bl
 The unit fixtures cover:
 
 - Push/reconcile identity for every family, including merges, closes, reopen generations, PR attachment and shared-tracker references.
-- Horizon ageing, stable pagination with conditional revalidation, and rate-limited pages that fail and then resume.
+- Horizon ageing from the close, listings that stop at the horizon and read no closed history, a horizon that reaches back over failed scans, a close during a scan observed once, earlier generations restarting, stable pagination with conditional revalidation, and rate-limited pages that fail and then resume.
 - Restart of rejected or stale generations.
 - Webhook signatures and HTTP mapping, primary and secondary rate limits, ordinary 403s, token re-resolution after a 401, App token caching and refresh, bot-App writes, reactions, markers, and config validation.
 - Git tokens minted for one repository with `contents: write`, reused, refused for other URLs, revoked, and refused on a token connection. The fake holds an installation token to what it was minted for, in its API and in its git smart-HTTP handler (`GitHandler`).
