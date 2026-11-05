@@ -312,4 +312,27 @@ func TestExtensionDoctorBindingPermissions(t *testing.T) {
 		strings.Contains(items, gh.OpPREdit) || strings.Contains(items, gh.OpPRCreate) {
 		t.Fatalf("edit and create judged against the binding's App: %+v", c)
 	}
+
+	// A git binding's token is minted by its own connection's App with the
+	// permissions its granted operations add (#524). Without Issues write
+	// there, the token goes without it, and doctor says so. Pull requests
+	// write is held, so nothing is said of it.
+	cfg.Scopes[0].Bindings = []protocol.CheckBinding{{Name: "review", Executor: "claude-code", Connection: "reviewer", Operations: []string{gh.OpIssueComment, gh.OpIssueCreate, gh.OpPRReview, gh.OpGitCredential}}}
+	fake.SetInstallationPermissions(map[string]string{"issues": "read", "pull_requests": "write", "contents": "write", "metadata": "read"})
+	c = deep(context.Background(), cfg)
+	items = strings.Join(c.Items, "\n")
+	want = "github/w: binding review is granted github.issue.comment, github.issue.create and github.git.credential, but bot App 7 has Issues read on octo/widgets, not write, so its git token goes without it"
+	if c.Status != inproc.CheckWarn || c.Code != "git_permission_missing" || !strings.Contains(items, want) || strings.Contains(items, "Pull requests") {
+		t.Fatalf("git token without Issues write: %+v", c)
+	}
+	// Negative controls: with Issues write, and without github.git.credential.
+	fake.SetInstallationPermissions(map[string]string{"issues": "write", "pull_requests": "write", "contents": "write", "metadata": "read"})
+	if c := deep(context.Background(), cfg); strings.Contains(c.Code, "permission_missing") || strings.Contains(strings.Join(c.Items, "\n"), "is granted") {
+		t.Fatalf("with Issues write: %+v", c)
+	}
+	fake.SetInstallationPermissions(map[string]string{"issues": "read", "pull_requests": "write", "contents": "write", "metadata": "read"})
+	cfg.Scopes[0].Bindings[0].Operations = []string{gh.OpIssueComment, gh.OpPRReview}
+	if c := deep(context.Background(), cfg); strings.Contains(c.Code, "permission_missing") || strings.Contains(strings.Join(c.Items, "\n"), "is granted") {
+		t.Fatalf("without %s: %+v", gh.OpGitCredential, c)
+	}
 }

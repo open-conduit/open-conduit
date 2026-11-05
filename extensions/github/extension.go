@@ -475,7 +475,11 @@ func (x *Extension) writerItems(ctx context.Context, e ViewEntry, entry *Client)
 // as the binding's own GitHub connection when it names one, opening or
 // editing a PR always as the entry's (bindingWriterOps). A token connection, whose
 // permissions GitHub doesn't report, and an installation that can't be read
-// (the connection items say why) add nothing.
+// (the connection items say why) add nothing. It also warns
+// (git_permission_missing) about a binding granted github.git.credential
+// whose git token's App lacks a permission its other granted operations
+// add to the token (gitOpPermissions): Issues write for an issue comment,
+// say, without which a pushed closing keyword doesn't close its issue.
 func (x *Extension) permissionItems(ctx context.Context, cfg protocol.CheckConfig, e ViewEntry, entry *Client) []writerItem {
 	s := e.Settings
 	github := map[string]bool{}
@@ -484,11 +488,40 @@ func (x *Extension) permissionItems(ctx context.Context, cfg protocol.CheckConfi
 			github[c.ID] = true
 		}
 	}
-	type held struct {
+	type installed struct {
 		perms map[string]string
 		known bool
 	}
-	read := map[string]held{}
+	read := map[string]installed{}
+	// installation is the client a connection writes with and its App
+	// installation's permissions on the repository, read once; ok is false
+	// for a connection that can't be built and for a token, whose
+	// permissions GitHub doesn't report.
+	installation := func(conn string) (*Client, installed, bool) {
+		client := entry
+		if conn != e.Connection {
+			c, err := x.clients.Client(e.Scope, conn, entry)
+			if err != nil {
+				return nil, installed{}, false
+			}
+			client = c
+		}
+		h, ok := read[conn]
+		if !ok {
+			cx, cancel := context.WithTimeout(ctx, 20*time.Second)
+			perms, known, err := client.WriterPermissions(cx, s.Repo)
+			cancel()
+			h = installed{perms, known && err == nil}
+			read[conn] = h
+		}
+		return client, h, h.known
+	}
+	held := func(level string) string {
+		if level == "" {
+			return "none"
+		}
+		return level
+	}
 	var out []writerItem
 	for _, scope := range cfg.Scopes {
 		if scope.ID != string(e.Scope) {
@@ -507,23 +540,8 @@ func (x *Extension) permissionItems(ctx context.Context, cfg protocol.CheckConfi
 			sort.Strings(conns)
 			for _, conn := range conns {
 				needs := byConn[conn]
-				client := entry
-				if conn != e.Connection {
-					c, err := x.clients.Client(e.Scope, conn, entry)
-					if err != nil {
-						continue
-					}
-					client = c
-				}
-				h, ok := read[conn]
+				client, h, ok := installation(conn)
 				if !ok {
-					cx, cancel := context.WithTimeout(ctx, 20*time.Second)
-					perms, known, err := client.WriterPermissions(cx, s.Repo)
-					cancel()
-					h = held{perms, known && err == nil}
-					read[conn] = h
-				}
-				if !h.known {
 					continue
 				}
 				perms := make([]Permission, 0, len(needs))
@@ -535,12 +553,38 @@ func (x *Extension) permissionItems(ctx context.Context, cfg protocol.CheckConfi
 					if covers(h.perms[p.Name], p.Level) {
 						continue
 					}
-					has := h.perms[p.Name]
-					if has == "" {
-						has = "none"
-					}
-					out = append(out, writerItem{inproc.CheckWarn, "permission_missing", fmt.Sprintf("%s: binding %s is granted %s, but %s has %s %s on %s, not %s, so GitHub refuses it; grant %s in the App's settings, or take the operation off the binding", s.Namespace, b.Name, strings.Join(needs[p], ", "), client.Writer(), permissionLabel(p.Name), has, s.Repo, p.Level, p)})
+					out = append(out, writerItem{inproc.CheckWarn, "permission_missing", fmt.Sprintf("%s: binding %s is granted %s, but %s has %s %s on %s, not %s, so GitHub refuses it; grant %s in the App's settings, or take the operation off the binding", s.Namespace, b.Name, strings.Join(needs[p], ", "), client.Writer(), permissionLabel(p.Name), held(h.perms[p.Name]), s.Repo, p.Level, p)})
 				}
+			}
+			// The git token: minted by the binding's own connection when it
+			// names one, else the entry's, with the permissions its granted
+			// operations need (gitOpPermissions). One the installation
+			// lacks is left out of the token, so a push still works, but
+			// what git does as the pusher with it doesn't: a pushed
+			// closing keyword doesn't close its issue.
+			if !slices.Contains(b.Operations, OpGitCredential) {
+				continue
+			}
+			conn := e.Connection
+			if own != "" {
+				conn = own
+			}
+			client, h, ok := installation(conn)
+			if !ok {
+				continue
+			}
+			for _, p := range gitPermissionsFor(b.Operations) {
+				if covers(h.perms[p.Name], p.Level) {
+					continue
+				}
+				var ops []string
+				for _, op := range b.Operations {
+					if gitOpPermissions[op] == p {
+						ops = append(ops, op)
+					}
+				}
+				sort.Strings(ops)
+				out = append(out, writerItem{inproc.CheckWarn, "git_permission_missing", fmt.Sprintf("%s: binding %s is granted %s and %s, but %s has %s %s on %s, not %s, so its git token goes without it and what git does as the pusher with it fails (a pushed \"Closes #N\" doesn't close the issue); grant %s in the App's settings", s.Namespace, b.Name, strings.Join(slices.Compact(ops), ", "), OpGitCredential, client.Writer(), permissionLabel(p.Name), held(h.perms[p.Name]), s.Repo, p.Level, p)})
 			}
 		}
 	}
