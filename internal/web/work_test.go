@@ -225,8 +225,8 @@ func TestWorldOnADaemonWithoutListForms(t *testing.T) {
 	}
 }
 
-// Past fetchCap runs the run list stops short of the newest, so an open
-// Work's runs are read by its ID: its live turn still shows (#450).
+// Each Work's runs are read by its ID, so however many runs the daemon
+// holds, an open Work's live turn shows (#450).
 func TestWorldReadsOpenWorksRunsPastTheCap(t *testing.T) {
 	f, s, _ := setup(t)
 	f.work["wrk_old"] = client.Work{ID: "wrk_old", State: "completed", Revision: "1"}
@@ -276,6 +276,48 @@ func TestWorldReadsAWorksLiveRunPastItsOwnCap(t *testing.T) {
 	}
 	if v := w.Works[0]; len(v.Turns) != fetchCap+2 || v.Disp.Group != "running" {
 		t.Fatalf("live turn past the Work's own cap missing: turns %d disp %+v", len(v.Turns), v.Disp)
+	}
+}
+
+// A finished Work's runs are read once and kept while its revision stands;
+// an open Work's are read every time, and a finished Work that changes
+// (reopened by a retry, say) is read again.
+func TestWorldKeepsFinishedWorksRuns(t *testing.T) {
+	f, s, _ := setup(t)
+	f.work = map[string]client.Work{
+		"wrk_done": {ID: "wrk_done", State: "completed", Revision: "3"},
+		"wrk_open": {ID: "wrk_open", State: "running", Revision: "5"},
+	}
+	done := turnRun(1, "completed", 0, time.Minute)
+	done.ID, done.WorkID = "work/wrk_done/attempt/1", "wrk_done"
+	live := turnRun(1, "running", 0, 0)
+	live.ID, live.WorkID = "work/wrk_open/attempt/1", "wrk_open"
+	f.runs = []client.Run{done, live}
+	reads := func() []string {
+		s.world(context.Background())
+		got := slices.Clone(f.runReads)
+		f.runReads = nil
+		slices.Sort(got)
+		return got
+	}
+	if got := reads(); !slices.Equal(got, []string{"wrk_done", "wrk_open"}) {
+		t.Fatalf("first read %v", got)
+	}
+	w := s.world(context.Background())
+	f.runReads = nil
+	for _, v := range w.Works {
+		if v.ID == "wrk_done" && len(v.Turns) != 1 {
+			t.Fatalf("kept runs lost: %d turns", len(v.Turns))
+		}
+	}
+	if got := reads(); !slices.Equal(got, []string{"wrk_open"}) {
+		t.Fatalf("second read %v, want only the open Work", got)
+	}
+	retried := f.work["wrk_done"]
+	retried.Revision = "4"
+	f.work["wrk_done"] = retried
+	if got := reads(); !slices.Equal(got, []string{"wrk_done", "wrk_open"}) {
+		t.Fatalf("after the finished Work changed %v", got)
 	}
 }
 

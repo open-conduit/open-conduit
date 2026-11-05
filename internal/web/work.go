@@ -487,7 +487,6 @@ func (s *Server) world(ctx context.Context) world {
 		wg             sync.WaitGroup
 		mu             sync.Mutex
 		openW, closedW []client.Work
-		runs           []client.Run
 		waits          []client.Wait
 		scopes         []client.Scope
 		errs           []string
@@ -499,17 +498,11 @@ func (s *Server) world(ctx context.Context) world {
 			mu.Unlock()
 		}
 	}
-	wg.Add(4)
+	wg.Add(3)
 	go func() {
 		defer wg.Done()
 		var err error
 		openW, closedW, err = s.works(ctx)
-		keep(err)
-	}()
-	go func() {
-		defer wg.Done()
-		var err error
-		runs, err = listAll(ctx, url.Values{"limit": {"200"}}, s.src.Runs)
 		keep(err)
 	}()
 	go func() {
@@ -526,13 +519,8 @@ func (s *Server) world(ctx context.Context) world {
 	}()
 	wg.Wait()
 	s.holds(ctx, openW)
-	byWork := map[string][]client.Run{}
-	for _, r := range runs {
-		byWork[r.WorkID] = append(byWork[r.WorkID], r)
-	}
-	if len(runs) >= fetchCap {
-		keep(s.openRuns(ctx, openW, byWork))
-	}
+	byWork, err := s.runsOf(ctx, openW, closedW)
+	keep(err)
 	waitOf := map[string]*client.Wait{}
 	for i := range waits {
 		waitOf[waits[i].WorkID] = &waits[i]
@@ -543,6 +531,64 @@ func (s *Server) world(ctx context.Context) world {
 		out.Works = append(out.Works, newWork(w, byWork[w.ID], waitOf[w.ID], now))
 	}
 	return out
+}
+
+// closedRuns are the runs of a finished Work as read at its revision.
+type closedRuns struct {
+	revision string
+	runs     []client.Run
+}
+
+// runsOf reads each Work's runs by its ID, eight at a time. A finished
+// Work's runs change only with the Work (a retry reopens it, which changes
+// its revision), so they are kept from the last read while its revision
+// stands, and a world read costs the open Work and what changed, not every
+// run ever made. The caller holds wmu, which guards the kept runs.
+func (s *Server) runsOf(ctx context.Context, openW, closedW []client.Work) (map[string][]client.Run, error) {
+	byWork := map[string][]client.Run{}
+	kept := map[string]closedRuns{}
+	var read []client.Work
+	read = append(read, openW...)
+	for _, w := range closedW {
+		if c, ok := s.closed[w.ID]; ok && c.revision == w.Revision {
+			byWork[w.ID], kept[w.ID] = c.runs, c
+			continue
+		}
+		read = append(read, w)
+	}
+	sem := make(chan struct{}, 8)
+	var (
+		wg    sync.WaitGroup
+		mu    sync.Mutex
+		first error
+	)
+	for _, w := range read {
+		wg.Add(1)
+		sem <- struct{}{}
+		go func(w client.Work) {
+			defer wg.Done()
+			defer func() { <-sem }()
+			runs, err := listAll(ctx, url.Values{"work_id": {w.ID}, "limit": {"200"}}, s.src.Runs)
+			if err == nil && len(runs) >= fetchCap {
+				runs, err = s.liveRuns(ctx, w.ID, runs)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if err != nil {
+				if first == nil {
+					first = err
+				}
+				return
+			}
+			byWork[w.ID] = runs
+			if !isOpen(w.State) {
+				kept[w.ID] = closedRuns{revision: w.Revision, runs: runs}
+			}
+		}(w)
+	}
+	wg.Wait()
+	s.closed = kept
+	return byWork, first
 }
 
 // works reads open Work with the actions and panels on it, and closed Work.
@@ -591,47 +637,11 @@ func (s *Server) works(ctx context.Context) (openW, closedW []client.Work, err e
 	return openW, closedW, err
 }
 
-// openRuns reads the runs of each open Work by its ID, eight at a time, into
-// byWork. The run list is read oldest first and stops at fetchCap, so once a
-// daemon holds more runs than that the newest, an open Work's live turn among
-// them, are missing from it (#450). A Work with fetchCap runs of its own has
-// the same gap, so its live runs are read by state as well: its row shows a
-// running turn, though its older turn history stays cut short.
-func (s *Server) openRuns(ctx context.Context, works []client.Work, byWork map[string][]client.Run) error {
-	sem := make(chan struct{}, 8)
-	var (
-		wg    sync.WaitGroup
-		mu    sync.Mutex
-		first error
-	)
-	for _, w := range works {
-		wg.Add(1)
-		sem <- struct{}{}
-		go func(id string) {
-			defer wg.Done()
-			defer func() { <-sem }()
-			runs, err := listAll(ctx, url.Values{"work_id": {id}, "limit": {"200"}}, s.src.Runs)
-			if err == nil && len(runs) >= fetchCap {
-				runs, err = s.liveRuns(ctx, id, runs)
-			}
-			mu.Lock()
-			defer mu.Unlock()
-			if err != nil {
-				if first == nil {
-					first = err
-				}
-				return
-			}
-			byWork[id] = runs
-		}(w.ID)
-	}
-	wg.Wait()
-	return first
-}
-
 // liveRuns adds Work id's pending, running and parked runs to runs, where
 // they are not already in it: the row's status and its Cancel this turn
-// control read them.
+// control read them. A Work's runs are read oldest first and stop at
+// fetchCap, so a Work with that many runs of its own would miss its newest,
+// its live turn among them; its older turn history stays cut short.
 func (s *Server) liveRuns(ctx context.Context, id string, runs []client.Run) ([]client.Run, error) {
 	seen := map[string]bool{}
 	for _, r := range runs {

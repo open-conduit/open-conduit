@@ -57,9 +57,12 @@ type fake struct {
 	applied      []string
 	doctor       *client.Doctor
 	doctorCalled int
+	// runReads are the work_id each runs list was read for.
+	runReads []string
 }
 
 func (f *fake) Runs(_ context.Context, q url.Values) (client.Page[client.Run], error) {
+	f.runReads = append(f.runReads, q.Get("work_id"))
 	var out []client.Run
 	for _, r := range f.runs {
 		if (q.Get("state") == "" || q.Get("state") == r.State) && (q.Get("work_id") == "" || q.Get("work_id") == r.WorkID) {

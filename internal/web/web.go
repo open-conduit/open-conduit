@@ -145,10 +145,12 @@ type Server struct {
 	// restartErr is a failed post-update restart, for the next update page.
 	restartErr string
 
-	// wmu guards the short-lived read of every Work (cachedWorld).
+	// wmu guards the short-lived read of every Work (cachedWorld) and the
+	// runs of finished Work it keeps between reads (runsOf).
 	wmu    sync.Mutex
 	wcache world
 	wat    time.Time
+	closed map[string]closedRuns
 	// pmu guards the short-lived list of extension pages (navPages).
 	pmu    sync.Mutex
 	pcache []navPage
