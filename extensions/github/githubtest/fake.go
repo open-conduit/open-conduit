@@ -854,7 +854,9 @@ func (s *Server) RefuseThreadResolution() { s.mu.Lock(); s.refuseResolve = true;
 func (s *Server) SetAcceptedPermissions(v string) { s.mu.Lock(); s.accepted = v; s.mu.Unlock() }
 
 // SetInstallationPermissions sets the App installation's permissions on
-// the repository ({"pull_requests": "write", "contents": "read"}).
+// the repository ({"pull_requests": "write", "contents": "read"}). Once
+// set, a scoped installation token asking for more is refused with 422,
+// as GitHub refuses it.
 func (s *Server) SetInstallationPermissions(p map[string]string) {
 	s.mu.Lock()
 	s.installPerms = p
@@ -1364,16 +1366,28 @@ var (
 
 func atoi(s string) int { n, _ := strconv.Atoi(s); return n }
 
+// permLevel orders permission levels: write includes read, admin both.
+var permLevel = map[string]int{"read": 1, "write": 2, "admin": 3}
+
 func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int, any) {
 	if r.URL.Path == "/graphql" && r.Method == http.MethodPost {
 		return s.graphql(token, body)
 	}
 	if m := reAccessToken.FindStringSubmatch(r.URL.Path); m != nil && r.Method == http.MethodPost {
+		var scope TokenScope
+		scoped := len(body) > 0 && json.Unmarshal(body, &scope) == nil && (scope.Repositories != nil || scope.Permissions != nil)
+		// GitHub refuses a token with more than the installation holds.
+		if scoped && s.installPerms != nil {
+			for name, level := range scope.Permissions {
+				if permLevel[s.installPerms[name]] < permLevel[level] {
+					return http.StatusUnprocessableEntity, map[string]any{"message": "The permissions requested are not granted to this installation."}
+				}
+			}
+		}
 		s.issued++
 		tok := fmt.Sprintf("ghs_%s_%d", strings.TrimPrefix(token, "app:"), s.issued)
 		s.installs[tok] = strings.TrimPrefix(token, "app:")
-		var scope TokenScope
-		if len(body) > 0 && json.Unmarshal(body, &scope) == nil && (scope.Repositories != nil || scope.Permissions != nil) {
+		if scoped {
 			s.scopes[tok] = scope
 		}
 		return http.StatusCreated, map[string]any{"token": tok, "expires_at": ts(s.now.Add(s.tokenTTL))}

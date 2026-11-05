@@ -239,7 +239,9 @@ func (a *appToken) invalidate(repo string) {
 	a.key = nil
 }
 
-// gitPermissions is what a git token is minted with: contents: write.
+// gitPermissions is what every git token is minted with: contents: write.
+// GitToken adds what the execution's granted operations need
+// (gitOpPermissions).
 var gitPermissions = map[string]string{"contents": "write"}
 
 // readPermissions is what a fetch token is minted with: read-only access

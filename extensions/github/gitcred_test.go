@@ -119,6 +119,7 @@ type credCall struct {
 	op         extension.Operation
 	work       domain.ID
 	connection string
+	ops        []string
 }
 
 func (c credCall) as(connection string) credCall {
@@ -126,8 +127,14 @@ func (c credCall) as(connection string) credCall {
 	return c
 }
 
+// granted is the call made by an execution granted ops.
+func (c credCall) granted(ops ...string) credCall {
+	c.ops = ops
+	return c
+}
+
 func (c credCall) run(ctx context.Context, exec domain.ID, in string) (domain.Payload, error) {
-	return c.op.Handler(ctx, extension.Authority{ScopeID: "eng", WorkID: c.work, ExecutionID: exec, Connection: c.connection}, domain.Payload{Data: json.RawMessage(in)})
+	return c.op.Handler(ctx, extension.Authority{ScopeID: "eng", WorkID: c.work, ExecutionID: exec, Connection: c.connection, Operations: c.ops}, domain.Payload{Data: json.RawMessage(in)})
 }
 
 func (c credCall) do(exec domain.ID, in string) (domain.Payload, error) {
@@ -231,6 +238,47 @@ func TestGitCredential(t *testing.T) {
 	}
 	if _, ok := fake.Scope(credentialOf(t, next).Password); !ok {
 		t.Fatal("a failed listing revoked a token")
+	}
+}
+
+// TestGitCredentialGrantedPermissions: the git token carries, beyond
+// contents: write, the write permissions the execution's granted
+// operations need (issues for an issue comment, pull requests for the PR
+// operations), so a pushed "Closes #12" closes the issue as the bot. Reads
+// add nothing, and a permission the App's installation lacks is left out
+// rather than failing the push.
+func TestGitCredentialGrantedPermissions(t *testing.T) {
+	fake, _, call := gitCredLab(t, `{"auth":"app","app_id":"42"}`)
+	fake.SetInstallationPermissions(map[string]string{"contents": "write", "issues": "write", "pull_requests": "write", "metadata": "read"})
+	in := `{"protocol":"https","host":"github.com","path":"octo/widgets.git"}`
+	mint := func(exec domain.ID, c credCall) map[string]string {
+		t.Helper()
+		out, err := c.do(exec, in)
+		if err != nil {
+			t.Fatal(err)
+		}
+		scope, ok := fake.Scope(credentialOf(t, out).Password)
+		if !ok {
+			t.Fatalf("%s: no valid token", exec)
+		}
+		return scope.Permissions
+	}
+	author := call.granted(gh.OpIssueView, gh.OpIssueComment, gh.OpIssueCreate, gh.OpPRCreate, gh.OpPRReply, gh.OpChecks, gh.OpGitCredential)
+	if got, want := mint("x/1", author), map[string]string{"contents": "write", "issues": "write", "pull_requests": "write"}; !maps.Equal(got, want) {
+		t.Errorf("author binding: minted %v, want %v", got, want)
+	}
+	if got, want := mint("x/2", call.granted(gh.OpIssueView, gh.OpPRView, gh.OpPRReview, gh.OpGitCredential)), map[string]string{"contents": "write", "pull_requests": "write"}; !maps.Equal(got, want) {
+		t.Errorf("reviewer binding: minted %v, want %v", got, want)
+	}
+	if got, want := mint("x/3", call.granted(gh.OpIssueView, gh.OpPRList, gh.OpGitCredential)), map[string]string{"contents": "write"}; !maps.Equal(got, want) {
+		t.Errorf("read-only binding: minted %v, want %v", got, want)
+	}
+	// An installation with Issues read only: the token goes without, and
+	// git still gets one (the fake refuses a token asking for more than
+	// the installation holds, as GitHub does).
+	fake.SetInstallationPermissions(map[string]string{"contents": "write", "issues": "read", "pull_requests": "write"})
+	if got, want := mint("x/4", author), map[string]string{"contents": "write", "pull_requests": "write"}; !maps.Equal(got, want) {
+		t.Errorf("installation without Issues write: minted %v, want %v", got, want)
 	}
 }
 
