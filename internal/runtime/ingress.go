@@ -91,7 +91,10 @@ type ingressState struct {
 	LeaseToken                                 string
 	Failures                                   uint32
 	LastError                                  string
-	LastComplete                               time.Time
+	// Failure is what the provider reported when LastError is
+	// provider_failed; nil otherwise and in state written before it.
+	Failure      *IngressFailure `json:",omitempty"`
+	LastComplete time.Time
 	// Requests counts operator reconcile requests; GenerationRequests is its
 	// value when the current generation's first page was claimed. A request
 	// that arrives after that claim (a page in flight, or a generation part
@@ -279,10 +282,12 @@ type IngressStatus struct {
 	Checkpoint, ScanID, Cursor string
 	NextDue                    time.Time
 	LastError                  string
-	LastComplete               time.Time
-	LimitedRecovery            bool
-	Interval                   time.Duration
-	Failures                   uint32
+	// Failure is the provider's failure behind a provider_failed LastError.
+	Failure         *IngressFailure
+	LastComplete    time.Time
+	LimitedRecovery bool
+	Interval        time.Duration
+	Failures        uint32
 }
 
 func (i *Ingress) Inspect(ctx context.Context) ([]IngressStatus, error) {
@@ -300,7 +305,7 @@ func (i *Ingress) Inspect(ctx context.Context) ([]IngressStatus, error) {
 			if err := getJSON(tx, sourceNamespace(r.source), "state", &state); err != nil {
 				return err
 			}
-			status := IngressStatus{Name: r.name, Source: r.source, Checkpoint: state.Checkpoint, ScanID: state.ScanID, Cursor: state.Cursor, NextDue: state.NextDue, LastError: state.LastError, LastComplete: state.LastComplete, Interval: r.interval, Failures: state.Failures}
+			status := IngressStatus{Name: r.name, Source: r.source, Checkpoint: state.Checkpoint, ScanID: state.ScanID, Cursor: state.Cursor, NextDue: state.NextDue, LastError: state.LastError, Failure: state.Failure, LastComplete: state.LastComplete, Interval: r.interval, Failures: state.Failures}
 			for _, family := range r.families {
 				status.Families = append(status.Families, family)
 				if !family.ReDerivable {

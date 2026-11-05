@@ -619,7 +619,7 @@ func TestDoctorChecks(t *testing.T) {
 	rs.one(t, "ingress.scan_started", nil)
 	completed := rs.one(t, "ingress.scan_completed", nil)
 	failedScan := rs.one(t, "ingress.scan_failed", nil)
-	if completed.Attributes["ingress.source"] != source.Namespace || completed.Correlation.ScopeID != "ops" || failedScan.Attributes["ingress.error"] != "provider_failed" || strings.Contains(failedScan.Attributes["ingress.error"], "token") {
+	if completed.Attributes["ingress.source"] != source.Namespace || completed.Correlation.ScopeID != "ops" || failedScan.Attributes["ingress.error"] != "provider_failed" || failedScan.Attributes["ingress.error_class"] != "unauthored" || failedScan.Attributes["ingress.error_code"] != "internal" || strings.Contains(fmt.Sprint(failedScan.Attributes), "token") {
 		t.Fatalf("ingress telemetry: %+v %+v", completed, failedScan)
 	}
 

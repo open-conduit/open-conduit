@@ -51,7 +51,7 @@ The toolbelt adds `toolbelt.called` and `toolbelt.rejected` records through `Too
 | `wait.registered`, `wait.woken`, `wait.cancelled` | Waits | types, key count, timeout timer, wake winner ID and type |
 | `toolbelt.declared` | Declared wait or outcome | declaration kind |
 | `toolbelt.called`, `toolbelt.rejected` | Toolbelt | operation, safe result code |
-| `ingress.scan_started`, `_page`, `_completed`, `_partial`, `_failed` | Reconcile scan ledger | source, scan ID, safe error code, failures, next due |
+| `ingress.scan_started`, `_page`, `_completed`, `_partial`, `_failed` | Reconcile scan ledger | source, scan ID, safe error code, failures, next due; for `provider_failed`, the provider's failure class, code and bounded message (`ingress.error_class`, `ingress.error_code`, `ingress.error_message`) |
 
 Every record carries a `record_id` attribute. For state transitions it is derived from the entity and revision. For toolbelt calls it uses a per-call nonce. Exporter retries and duplicate deliveries are therefore identifiable.
 
@@ -169,7 +169,7 @@ The shell executor's `Forget` removes the execution's run directories. It refuse
 | `resource_holds` | Finished attempts still holding capacity without a confirmed stop. |
 | `retention` | Expired attempts with release pending. |
 | `routing` | Events unrouted for over ten minutes, each holding the Work it targets, with its route failures (`unrouted_events`); `events skip` lets the Work move on ([route failures](../routing-lifecycle/#route-failures)). |
-| `reconcile_lag` | Sources that are failing (safe code only), have no complete scan, or are older than two intervals; when none is, each source's last complete scan (or that its first is pending). |
+| `reconcile_lag` | Sources that are failing (safe code, and for `provider_failed` the provider's failure class, code and bounded message), have no complete scan, or are older than two intervals; when none is, each source's last complete scan (or that its first is pending). |
 | `non_rederivable` | Declared delivery families with their loss statements. |
 | `config` | The active generation against the config file: `pending_edit`, invalid, unreadable, `disk_missing`, or `default_config` (info) while the daemon runs on the default configuration with no file. |
 | `bindings` | Each binding resolves to a registered executor that satisfies its required capabilities. |

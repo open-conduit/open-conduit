@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -20,6 +21,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/runtime"
 	"github.com/open-conduit/open-conduit/internal/storage/sqlite"
+	"github.com/open-conduit/open-conduit/protocol"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -912,6 +914,72 @@ func TestIngressAbsentPayloadSurvivesCompleteAndStagedReopen(t *testing.T) {
 			event := ingressEvents(t, db)[0].Event
 			if event.Data.Schema != "" || len(event.Data.Data) != 0 {
 				t.Fatalf("absent payload became literal null: %+v", event.Data)
+			}
+		})
+	}
+}
+
+// A failed page keeps what the provider reported: its class, its code and
+// a bounded message, in ingress state and in doctor. Only authored errors
+// are quoted; an unauthored error's own text is never recorded.
+func TestIngressProviderFailureKeepsItsCause(t *testing.T) {
+	cases := []struct {
+		name    string
+		err     error
+		timeout time.Duration
+		want    runtime.IngressFailure
+	}{
+		// An already-expired page deadline: the fixture sees ctx done at once.
+		{"timeout", nil, time.Nanosecond, runtime.IngressFailure{Class: "timeout", Code: "timeout", Message: "no page within 1ns"}},
+		{"cancelled", context.Canceled, 0, runtime.IngressFailure{Class: "cancelled", Code: "cancelled"}},
+		{"transport", fmt.Errorf("call: %w", protocol.ErrTransport), 0, runtime.IngressFailure{Class: "transport", Code: "transport_closed", Message: "the package's connection closed during the call"}},
+		{"protocol", protocol.Errorf(protocol.CodeOverloaded, "too many requests in flight"), 0, runtime.IngressFailure{Class: "protocol", Code: "overloaded", Message: "too many requests in flight"}},
+		{"provider", &extension.OperationError{Code: "github_http_502", Message: "GitHub answered 502\nBad Gateway"}, 0, runtime.IngressFailure{Class: "provider", Code: "github_http_502", Message: "GitHub answered 502 Bad Gateway"}},
+		{"long", &extension.OperationError{Code: "upstream", Message: strings.Repeat("x", 1000)}, 0, runtime.IngressFailure{Class: "provider", Code: "upstream", Message: strings.Repeat("x", 256)}},
+		{"unauthored", errors.New("fixture scan unavailable: token=abc"), 0, runtime.IngressFailure{Class: "unauthored", Code: "internal", Message: "unauthored error; the extension's log has its detail"}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ctx := context.Background()
+			clock := &ingressClock{at: ingressTime}
+			db, _ := openIngress(t, filepath.Join(t.TempDir(), "conduit.db"), clock)
+			r, err := runtime.NewIngress(db, clock.Now, runtime.IngressOptions{PageTimeout: tc.timeout})
+			if err != nil {
+				t.Fatal(err)
+			}
+			f := newFixtureIngress()
+			f.failure = tc.err
+			registerIngress(t, r, "source_a", extension.Source{Namespace: "fixture/account-a", ScopeID: "scope_a"}, f)
+			result, err := r.Reconcile(ctx, "source_a")
+			if !errors.Is(err, runtime.ErrIngressProvider) || result.ErrorCode != "provider_failed" || result.Failure == nil || *result.Failure != tc.want {
+				t.Fatalf("result %+v (failure %+v), err %v; want %+v", result, result.Failure, err, tc.want)
+			}
+			status := ingressStatus(t, r, "source_a")
+			if status.LastError != "provider_failed" || status.Failure == nil || *status.Failure != tc.want {
+				t.Fatalf("status %+v (failure %+v); want %+v", status, status.Failure, tc.want)
+			}
+			var lag runtime.Check
+			for _, c := range runtime.Diagnose(ctx, db, clock.Now(), runtime.DoctorOptions{Ingress: r}) {
+				if c.Name == "reconcile_lag" {
+					lag = c
+				}
+			}
+			if lag.Code != "scan_failing" || len(lag.Items) != 1 || !strings.Contains(lag.Items[0], "provider_failed: "+tc.want.String()) || strings.Contains(lag.Items[0], "token=abc") {
+				t.Fatalf("doctor reconcile_lag: %+v", lag)
+			}
+
+			// A page that succeeds clears the cause with the code.
+			f.failure = nil
+			f.pages[""] = extension.Snapshot{ScanID: "scan", Complete: true, Checkpoint: "done"}
+			clock.Set(clock.Now().Add(time.Hour))
+			r2, err := runtime.NewIngress(db, clock.Now, runtime.IngressOptions{})
+			if err != nil {
+				t.Fatal(err)
+			}
+			registerIngress(t, r2, "source_a", extension.Source{Namespace: "fixture/account-a", ScopeID: "scope_a"}, f)
+			reconcilePage(t, r2, "source_a")
+			if s := ingressStatus(t, r2, "source_a"); s.LastError != "" || s.Failure != nil {
+				t.Fatalf("recovered source kept its failure: %+v", s)
 			}
 		})
 	}

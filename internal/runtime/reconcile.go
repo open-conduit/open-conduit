@@ -93,6 +93,8 @@ type ReconcileResult struct {
 	Accepted          []domain.AcceptedEvent
 	Complete, Partial bool
 	ScanID, ErrorCode string
+	// Failure is what the provider reported when ErrorCode is provider_failed.
+	Failure *IngressFailure
 }
 
 func (i *Ingress) Reconcile(ctx context.Context, name string) (ReconcileResult, error) {
@@ -141,12 +143,13 @@ func (i *Ingress) reconcile(ctx context.Context, name string, onlyDue bool) (res
 	cancel()
 	if providerErr != nil {
 		result.ErrorCode = "provider_failed"
-		return result, i.finishFailure(ctx, r, token, result.ErrorCode, ErrIngressProvider)
+		result.Failure = classifyProviderFailure(ctx, callCtx, providerErr, i.options.PageTimeout)
+		return result, i.finishFailure(ctx, r, token, result.ErrorCode, result.Failure, ErrIngressProvider)
 	}
 	// Shape checks precede staging; semantic checks and checkpoints join acceptance.
 	if err = i.validatePage(claimed, page); err != nil {
 		result.ErrorCode = "invalid_snapshot"
-		return result, i.finishFailure(ctx, r, token, result.ErrorCode, err)
+		return result, i.finishFailure(ctx, r, token, result.ErrorCode, nil, err)
 	}
 	result.ScanID = page.ScanID
 	err = i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error {
@@ -214,6 +217,7 @@ func (i *Ingress) reconcile(ctx context.Context, name string, onlyDue bool) (res
 		state.LeaseToken = ""
 		state.LeaseUntil = time.Time{}
 		state.LastError = ""
+		state.Failure = nil
 		state.Failures = 0
 		if page.NextCursor != "" {
 			state.SeenCursors = append(state.SeenCursors, page.NextCursor)
@@ -249,6 +253,7 @@ func (i *Ingress) reconcile(ctx context.Context, name string, onlyDue bool) (res
 			state.PageCheckpoint = ""
 			state.SeenCursors = nil
 			state.LastError = "partial_snapshot"
+			state.Failure = nil
 			state.NextDue = now.Add(retryDelay(1, r.interval))
 			state.Failures = 1
 		}
@@ -263,7 +268,7 @@ func (i *Ingress) reconcile(ctx context.Context, name string, onlyDue bool) (res
 			result.ErrorCode = "scan_lease_lost"
 			return result, err
 		}
-		return result, i.finishFailure(ctx, r, token, result.ErrorCode, err)
+		return result, i.finishFailure(ctx, r, token, result.ErrorCode, nil, err)
 	}
 	return result, nil
 }
@@ -290,7 +295,7 @@ func (i *Ingress) validatePage(state ingressState, page extension.Snapshot) erro
 	}
 	return nil
 }
-func (i *Ingress) finishFailure(ctx context.Context, r ingressRegistration, token, code string, cause error) error {
+func (i *Ingress) finishFailure(ctx context.Context, r ingressRegistration, token, code string, failure *IngressFailure, cause error) error {
 	err := i.store.Transact(ctx, storage.Guard{Now: i.now()}, func(tx storage.Tx) error {
 		var state ingressState
 		ns := sourceNamespace(r.source)
@@ -304,6 +309,7 @@ func (i *Ingress) finishFailure(ctx context.Context, r ingressRegistration, toke
 		state.LeaseToken = ""
 		state.LeaseUntil = time.Time{}
 		state.LastError = code
+		state.Failure = failure
 		if state.Failures < 32 {
 			state.Failures++
 		}
@@ -505,6 +511,7 @@ func (i *Ingress) RestartScan(ctx context.Context, name, expectedScanID string) 
 		state.LeaseUntil = time.Time{}
 		state.NextDue = now
 		state.LastError = ""
+		state.Failure = nil
 		state.Failures = 0
 		return putJSON(tx, ns, "state", state)
 	})
