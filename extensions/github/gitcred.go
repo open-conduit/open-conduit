@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"sync"
 	"time"
@@ -18,6 +19,37 @@ import (
 // the git credential helper a container launch sets. It is not an agent's
 // tool; agents run git and never call it themselves.
 const OpGitCredential = "github.git.credential"
+
+// gitOpPermissions are the permissions beyond contents: write a git token
+// carries for each operation the execution is granted: the write each
+// already lets the agent make through the toolbelt, and nothing more,
+// since anything the token allows the agent can do with it outside the
+// toolbelt too. They matter to what git does as the pusher: GitHub closes
+// an issue a pushed commit's closing keyword names ("Closes #12") only
+// when the pusher can write issues.
+var gitOpPermissions = map[string]Permission{
+	OpIssueComment: {"issues", "write"},
+	OpIssueCreate:  {"issues", "write"},
+	OpPRCreate:     {"pull_requests", "write"},
+	OpPREdit:       {"pull_requests", "write"},
+	OpPRComment:    {"pull_requests", "write"},
+	OpPRReply:      {"pull_requests", "write"},
+	OpPRReview:     {"pull_requests", "write"},
+	OpPRResolve:    {"pull_requests", "write"},
+}
+
+// gitPermissionsFor are the permissions gitOpPermissions gives ops, each
+// once, sorted.
+func gitPermissionsFor(ops []string) []Permission {
+	var out []Permission
+	for _, op := range ops {
+		if p, ok := gitOpPermissions[op]; ok && !slices.Contains(out, p) {
+			out = append(out, p)
+		}
+	}
+	slices.SortFunc(out, func(a, b Permission) int { return strings.Compare(a.Name, b.Name) })
+	return out
+}
 
 // gitReuse is how long before it expires a minted token stops being handed
 // out again, as the connection's own installation tokens are.
@@ -53,7 +85,9 @@ type gitCredentialOutput struct {
 
 // gitCredential answers git's `get` for https on the code repository's web
 // host (and, when git sends one, the repository's path) with a token
-// limited to that repository and contents: write. Any other URL gets no
+// limited to that repository, with contents: write and the write
+// permissions the execution's granted operations need (gitOpPermissions)
+// that the App's installation holds. Any other URL gets no
 // credential, so git goes on to its next helper. The token is minted by
 // the connection the calling binding acts as (its own `github` connection,
 // else the entry's), the one RunEnvironment took the identity from. A
@@ -92,7 +126,7 @@ func (t *Tools) gitCredential(ctx context.Context, b *bound, data json.RawMessag
 		}
 	}
 	t.git.mu.Unlock()
-	tok, expires, err := client.GitToken(ctx, repo)
+	tok, expires, err := client.GitToken(ctx, repo, gitPermissionsFor(b.a.Operations))
 	if errors.Is(err, ErrStaticToken) {
 		return nil, refuse("github_static_token", "this GitHub connection signs in with a token, not an App, so there is no token to mint for git")
 	}

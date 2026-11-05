@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -153,11 +154,14 @@ func (c *Client) Host() string { return c.host }
 var ErrStaticToken = errors.New("github: the connection signs in with a token, not an App")
 
 // GitToken mints a token git can push to repo with: a GitHub App
-// installation token limited to that one repository and contents: write,
-// which expires within the hour. It comes from the bot App when there is
-// one (writes are the bot's), else the sign-in App. The caller owns it and
+// installation token limited to that one repository, which expires within
+// the hour. It has contents: write, and each of also the App's
+// installation holds on repo, read afresh (GitHub refuses to mint a token
+// with more than the installation has, so one it lacks is left out rather
+// than failing every push). It comes from the bot App when there is one
+// (writes are the bot's), else the sign-in App. The caller owns it and
 // revokes it with RevokeToken when it is done.
-func (c *Client) GitToken(ctx context.Context, repo string) (string, time.Time, error) {
+func (c *Client) GitToken(ctx context.Context, repo string, also []Permission) (string, time.Time, error) {
 	who := c.who.Load()
 	app, ok := who.write.(*appToken)
 	if !ok {
@@ -165,7 +169,19 @@ func (c *Client) GitToken(ctx context.Context, repo string) (string, time.Time, 
 			return "", time.Time{}, ErrStaticToken
 		}
 	}
-	return app.scoped(ctx, repo, gitPermissions)
+	perms := maps.Clone(gitPermissions)
+	if len(also) > 0 {
+		have, err := app.permissions(ctx, repo)
+		if err != nil {
+			return "", time.Time{}, err
+		}
+		for _, p := range also {
+			if covers(have[p.Name], p.Level) && levels[p.Level] > levels[perms[p.Name]] {
+				perms[p.Name] = p.Level
+			}
+		}
+	}
+	return app.scoped(ctx, repo, perms)
 }
 
 // GitIdentity is who git commits as for a GitHub App: its bot user's login
