@@ -39,6 +39,11 @@ type Tx interface {
 	// UnroutedEvents is Events restricted to events not yet marked routed.
 	// Its cost follows the unrouted backlog, not retained history.
 	UnroutedEvents(after uint64, limit int) ([]domain.AcceptedEvent, error)
+	// WorkEvents is Events restricted to one Work's events: those naming it
+	// (Event.WorkID) and those routed to it (RoutedWorkID). Like
+	// UnroutedEvents, its cost follows the Work's own events, not retained
+	// history.
+	WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error)
 	// LatestSequence is the last accepted sequence, zero before any event.
 	LatestSequence() (uint64, error)
 	// EventByDelivery finds an event by its delivery identity.

@@ -398,6 +398,20 @@ func (t *storeTx) UnroutedEvents(after uint64, limit int) ([]domain.AcceptedEven
 	return out, nil
 }
 
+func (t *storeTx) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	all, err := t.Events(after, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := []domain.AcceptedEvent{}
+	for _, a := range all {
+		if work != "" && (a.Event.WorkID == work || a.RoutedWorkID == work) && (limit <= 0 || len(out) < limit) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
 // LatestSequence is the log's latest sequence, through state.sequence: a
 // cursor for Events, which may lie past the last Event of the extension's
 // own scopes.

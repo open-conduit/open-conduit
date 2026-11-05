@@ -163,7 +163,7 @@ Not measured.
 
 ## History growth
 
-Event rows are never deleted, so a daemon that runs for months carries every Event it has accepted. [`history_bench_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/history_bench_test.go) seeds a real SQLite store with N Events of about 1 KiB, in threads of 25 Events. Every Event is routed, and each thread's Work is finished by one attempt, so N/25 Work and Executions. Then it times:
+Event rows are never deleted, so a daemon that runs for months carries every Event it has accepted. [`history_bench_test.go`](https://github.com/open-conduit/open-conduit/blob/main/integration/history_bench_test.go) seeds a real SQLite store with N Events of about 1 KiB, in threads of 25 Events. Every Event is routed to its thread's Work, and each thread's Work is finished by one attempt, so N/25 Work and Executions. Then it times:
 
 - **Accept and route**: accept one Event for a new thread and route it, which opens its Work and queues the input.
 - **Routing pass**: the host loop's `routePending` with nothing to route.

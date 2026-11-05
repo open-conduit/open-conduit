@@ -172,6 +172,16 @@ func (t *transaction) UnroutedEvents(after uint64, limit int) ([]domain.Accepted
 	}
 	return out, nil
 }
+func (t *transaction) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	all, _ := t.Events(after, 0)
+	out := []domain.AcceptedEvent{}
+	for _, v := range all {
+		if work != "" && (v.Event.WorkID == work || v.RoutedWorkID == work) && (limit <= 0 || len(out) < limit) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
 func (t *transaction) LatestSequence() (uint64, error) {
 	var latest uint64
 	for _, v := range t.data.Events {

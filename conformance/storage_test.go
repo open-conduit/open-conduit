@@ -59,6 +59,25 @@ func (b brokenStepBackTx) Renew(ref domain.LeaseRef, ttl time.Duration) error {
 	return b.Tx.Renew(ref, ttl)
 }
 
+// brokenWorkEvents reads a Work's events by the Work they name alone,
+// missing those routed to it.
+type brokenWorkEvents struct{ storage.Store }
+type brokenWorkEventsTx struct{ storage.Tx }
+
+func (b brokenWorkEvents) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(brokenWorkEventsTx{tx}) })
+}
+func (b brokenWorkEventsTx) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	all, err := b.Events(after, 0)
+	out := []domain.AcceptedEvent{}
+	for _, a := range all {
+		if a.Event.WorkID == work && (limit <= 0 || len(out) < limit) {
+			out = append(out, a)
+		}
+	}
+	return out, err
+}
+
 // brokenActor stores Events without who caused them, as a store mapping
 // Events to columns might if it missed the field.
 type brokenActor struct{ storage.Store }
@@ -82,6 +101,7 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"atomic_route_work_kv_timer", "event leaked", func() storage.Store { return brokenAtomic{reference.New()} }},
 		{"timer_fire_rearm_rollback", "rollback was not atomic", func() storage.Store { return brokenAtomic{reference.New()} }},
 		{"lease_renew_survives_clock_step_back", "renewal after clock step back", func() storage.Store { return brokenStepBack{reference.New()} }},
+		{"work_events_follow_naming_and_routing", "work events", func() storage.Store { return brokenWorkEvents{reference.New()} }},
 	}
 	for _, negative := range cases {
 		t.Run(negative.name, func(t *testing.T) {

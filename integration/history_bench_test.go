@@ -21,7 +21,7 @@ import (
 
 // How the daemon's hot paths cost as retained history grows (#36, #353).
 // History is one operator's: events of about 1 KiB spread over threads of 25
-// events, every one routed, and each thread's Work finished by one attempt.
+// events, every one routed to its thread's Work, and each thread's Work finished by one attempt.
 // One install took in about 20,000 events in its first week, so 50k is a few
 // weeks and 1M a year or two. Run with `make bench-history`;
 // OC_HISTORY_SIZES (comma-separated) picks other sizes.
@@ -108,7 +108,7 @@ func seedHistory(b *testing.B, n int) *history {
 				if _, _, e := runtime.AcceptInTx(tx, "history-scope", historyEvent(clock, id, thread)); e != nil {
 					return e
 				}
-				if e := tx.MarkRouted(domain.ID(id), "", "seeded"); e != nil {
+				if e := tx.MarkRouted(domain.ID(id), domain.ID("work/"+thread), "seeded"); e != nil {
 					return e
 				}
 				if i%historyThread == historyThread-1 || i == n-1 {
@@ -280,6 +280,22 @@ func BenchmarkHistoryRetention(b *testing.B) {
 func BenchmarkHistoryListWorks(b *testing.B) {
 	benchHistory(b, func(b *testing.B, h *history) {
 		if err := h.store.Transact(context.Background(), storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error { _, e := tx.ListWorks(); return e }); err != nil {
+			b.Fatal(err)
+		}
+	})
+}
+
+// One thread's events, as the Work page and the events list read them for
+// one Work: a cost that follows the thread, not the log.
+func BenchmarkHistoryWorkEvents(b *testing.B) {
+	benchHistory(b, func(b *testing.B, h *history) {
+		if err := h.store.Transact(context.Background(), storage.Guard{Now: h.clock.Now()}, func(tx storage.Tx) error {
+			events, e := tx.WorkEvents("work/thread-0", 0, 0)
+			if e == nil && len(events) != historyThread {
+				e = fmt.Errorf("thread has %d events, want %d", len(events), historyThread)
+			}
+			return e
+		}); err != nil {
 			b.Fatal(err)
 		}
 	})

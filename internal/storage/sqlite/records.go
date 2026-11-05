@@ -49,6 +49,18 @@ func (t *transaction) UnroutedEvents(after uint64, limit int) ([]domain.Accepted
 	}
 	return list[domain.AcceptedEvent](t, "SELECT record FROM events WHERE sequence>? AND "+unrouted+" ORDER BY sequence LIMIT ?", after, limit)
 }
+func (t *transaction) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	if !t.live {
+		return nil, storage.ErrInvalid
+	}
+	if work == "" || after > 1<<63-1 {
+		return []domain.AcceptedEvent{}, nil
+	}
+	if limit <= 0 {
+		limit = -1
+	}
+	return list[domain.AcceptedEvent](t, "SELECT record FROM events WHERE sequence>? AND ("+eventWork+"=? OR "+routedWork+"=?) ORDER BY sequence LIMIT ?", after, string(work), string(work), limit)
+}
 func (t *transaction) LatestSequence() (uint64, error) {
 	if !t.live {
 		return 0, storage.ErrInvalid

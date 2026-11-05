@@ -96,6 +96,7 @@ func StorageCases() []StorageCase {
 		{"attempt_sequence_and_retry_exhaustion", attempts},
 		{"per_work_routing_order", routingOrder},
 		{"live_reads_follow_state", liveReads},
+		{"work_events_follow_naming_and_routing", workEvents},
 	}
 }
 
@@ -1365,4 +1366,81 @@ func liveReads(s storage.Store) error {
 		return err
 	}
 	return want("")
+}
+
+// workEvents: WorkEvents returns exactly the Events naming the Work or
+// routed to it, once each, in acceptance order after the cursor and within
+// the limit, so a view of one Work reads its own events instead of the log.
+func workEvents(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if err := tx.PutWork(domain.Work{ID: "other", Kind: "test.objective", ScopeID: "scope", State: domain.WorkReady}, 0); err != nil {
+			return err
+		}
+		named := event("named", c.Now())
+		named.WorkID = "work"
+		elsewhere := event("elsewhere", c.Now())
+		elsewhere.WorkID = "other"
+		for _, e := range []domain.Event{named, event("unrelated", c.Now()), elsewhere, event("routed", c.Now()), event("routed-away", c.Now())} {
+			if _, _, err := tx.AcceptEvent(e); err != nil {
+				return err
+			}
+		}
+		// named is routed to its own Work too, and must still come once.
+		// Events are routed in order: an earlier unrouted input of a Work
+		// blocks marking a later one routed to it.
+		for _, r := range []struct{ event, work domain.ID }{{"named", "work"}, {"elsewhere", "other"}, {"routed", "work"}, {"routed-away", "other"}, {"unrelated", ""}} {
+			disposition := "queue"
+			if r.work == "" {
+				disposition = "ignored"
+			}
+			if err := tx.MarkRouted(r.event, r.work, disposition); err != nil {
+				return err
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		ids := func(work domain.ID, after uint64, limit int) (string, []domain.AcceptedEvent, error) {
+			got, err := tx.WorkEvents(work, after, limit)
+			var parts []string
+			for _, a := range got {
+				parts = append(parts, string(a.Event.ID))
+			}
+			return strings.Join(parts, " "), got, err
+		}
+		all, events, err := ids("work", 0, 0)
+		if err != nil {
+			return err
+		}
+		if all != "named routed" {
+			return fmt.Errorf("work events %q, want %q", all, "named routed")
+		}
+		for _, q := range []struct {
+			work        domain.ID
+			after       uint64
+			limit       int
+			want, label string
+		}{
+			{"work", events[0].Sequence, 0, "routed", "after the first"},
+			{"work", 0, 1, "named", "limited to one"},
+			{"other", 0, 0, "elsewhere routed-away", "of the other Work"},
+			{"missing", 0, 0, "", "of a missing Work"},
+			{"", 0, 0, "", "of no Work"},
+		} {
+			got, _, err := ids(q.work, q.after, q.limit)
+			if err != nil {
+				return err
+			}
+			if got != q.want {
+				return fmt.Errorf("work events %s %q, want %q", q.label, got, q.want)
+			}
+		}
+		return nil
+	})
 }

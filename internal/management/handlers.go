@@ -229,8 +229,13 @@ func (s *Server) listEvents(c *call) (int, any, error) {
 				return e
 			}
 		}
+		// A Work's events are read through their index, not the log.
+		page := func(after uint64) ([]domain.AcceptedEvent, error) { return tx.Events(after, 200) }
+		if work := q.filters["work_id"]; work != "" {
+			page = func(after uint64) ([]domain.AcceptedEvent, error) { return tx.WorkEvents(domain.ID(work), after, 200) }
+		}
 		for {
-			batch, e := tx.Events(after, 200)
+			batch, e := page(after)
 			if e != nil {
 				return e
 			}

@@ -296,7 +296,19 @@ var indexes = []string{
 	`CREATE INDEX IF NOT EXISTS works_live ON works(id) WHERE ` + liveWork,
 	`CREATE INDEX IF NOT EXISTS waits_active ON waits(id) WHERE ` + activeWait,
 	`CREATE INDEX IF NOT EXISTS executions_live ON executions(id) WHERE active=1`,
+	`CREATE INDEX IF NOT EXISTS events_work ON events(` + eventWork + `, sequence)`,
+	`CREATE INDEX IF NOT EXISTS events_routed_work ON events(` + routedWork + `, sequence)`,
 }
+
+// eventWork and routedWork are the Work an event names and the Work it was
+// routed to. events_work and events_routed_work index them with the
+// sequence, so a Work's events are read by a search of each (SQLite's
+// multi-index OR) rather than a scan of the log; queries must repeat the
+// expressions for SQLite to use them.
+const (
+	eventWork  = "json_extract(CAST(record AS TEXT),'$.Event.WorkID')"
+	routedWork = "json_extract(CAST(record AS TEXT),'$.RoutedWorkID')"
+)
 
 // liveWork and activeWait select Work not yet finished and Waits still
 // active. Like unrouted, the state lives in the record, the partial indexes
