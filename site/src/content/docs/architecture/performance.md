@@ -242,9 +242,10 @@ On a quiet machine the same pages took about 20 ms each after. What it took:
 - **The world read** behind the Runs and Needs you pages read every run on every load (6.6 MB of JSON, and only the oldest 1,000). It now reads runs by Work, keeping a finished Work's while its revision stands.
 - **Reads queued on the writer.** Every read, the token check included, was a `BEGIN IMMEDIATE` transaction on the one connection, so a page's concurrent reads queued behind each other and the runtime. They now run as Views on reader connections.
 
+- **Doctor** (#530), which the Config page runs on every load, read every attempt's state twice (for `resource_holds` and `pinned_executors`) and every retention record, all on the writer. It now reads the live attempts, the scheduler's index of attempts whose exclusion is unconfirmed and the retention ledger's pending list, through a View; only the storage probe still writes. Timed directly (`Diagnose` then `PinnedExecutorCheck`, 30 times in a row) on a fresh copy of the same install (1,684 runs, 67,680 Events), on a machine with a load average of 20–50: p50 435–504 ms and p90 0.77–5.5 s before, p50 5.2–5.4 ms and p90 26–409 ms after. The test `TestDoctorReadsOnlyOutstandingAttempts` seeds 300 finished, excluded attempts and fails if doctor reads their state.
+
 Still slow or unmeasured:
 
-- **Config** runs `doctor`, which reads every attempt's state and every retention record: about 140 ms on a quiet machine.
 - **Artifact content** finds an artifact's execution by reading every execution: about 18 ms per call.
 - **Provider calls.** The list pages ask every open Work's action providers for actions and panels, within a 2 s provider timeout and a 4 s deadline. On the install measured, a third-party package's conversation panel read the whole event log on every call and hit the timeout, so the live pages took 4–5 s whatever the core costs.
 

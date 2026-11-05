@@ -60,6 +60,35 @@ func indexRetentionPending(tx storage.Tx) error {
 	return putJSON(tx, retentionIndexNamespace, retentionIndexKey, true)
 }
 
+// pendingRetention lists the ledger entries whose content is not yet fully
+// released: from the pending list once it is indexed, else from the whole
+// ledger.
+func pendingRetention(tx storage.Tx) ([]retentionRecord, error) {
+	ns := retentionPendingNamespace
+	if _, err := tx.Get(retentionIndexNamespace, retentionIndexKey); errors.Is(err, storage.ErrNotFound) {
+		ns = retentionNamespace
+	} else if err != nil {
+		return nil, err
+	}
+	rows, err := tx.List(ns, "")
+	if err != nil {
+		return nil, err
+	}
+	var pending []retentionRecord
+	for _, row := range rows {
+		var r retentionRecord
+		if err = getJSON(tx, retentionNamespace, row.Key, &r); errors.Is(err, storage.ErrNotFound) {
+			continue
+		} else if err != nil {
+			return nil, err
+		}
+		if !r.ArtifactsReleased || !r.Forgotten {
+			pending = append(pending, r)
+		}
+	}
+	return pending, nil
+}
+
 // DefaultKeptExecutions is the B05 kept_executions default (per Work).
 const DefaultKeptExecutions = 20
 
@@ -248,23 +277,9 @@ func (s *Scheduler) SweepRetention(ctx context.Context, limit int) (result Reten
 		return RetentionResult{}, err
 	}
 	var pending []retentionRecord
-	if err = s.transact(ctx, nil, func(tx storage.Tx) error {
-		rows, e := tx.List(retentionPendingNamespace, "")
-		if e != nil {
-			return e
-		}
-		for _, row := range rows {
-			var r retentionRecord
-			if e = getJSON(tx, retentionNamespace, row.Key, &r); errors.Is(e, storage.ErrNotFound) {
-				continue
-			} else if e != nil {
-				return e
-			}
-			if !r.ArtifactsReleased || !r.Forgotten {
-				pending = append(pending, r)
-			}
-		}
-		return nil
+	if err = s.transact(ctx, nil, func(tx storage.Tx) (e error) {
+		pending, e = pendingRetention(tx)
+		return e
 	}); err != nil {
 		return result, err
 	}

@@ -45,7 +45,8 @@ const doctorNamespace = "core.doctor"
 
 // Diagnose runs generic runtime checks: storage read/write, reconcile lag,
 // lease recovery backlog, unconfirmed resource holds, retention backlog and
-// declared non-re-derivable delivery families. It never mutates domain state.
+// declared non-re-derivable delivery families. It never mutates domain state:
+// only the storage probe writes, and every other check reads through a View.
 func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorOptions) []Check {
 	if o.LagFactor <= 0 {
 		o.LagFactor = 2
@@ -81,8 +82,11 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 
 	var expired, holds, retention, overBudget []string
 	parked := 0
-	err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
-		xs, err := tx.ListExecutions("")
+	// The rest only reads, so it runs as a View and never queues behind the
+	// daemon's writes. Its cost follows what is outstanding (live attempts,
+	// unconfirmed holds, unreleased retention), not the whole history.
+	err := storage.View(ctx, store, now, func(tx storage.Tx) error {
+		xs, err := heldCandidates(tx)
 		if err != nil {
 			return err
 		}
@@ -101,18 +105,12 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 				}
 			}
 		}
-		rows, err := tx.List(retentionNamespace, "")
+		pending, err := pendingRetention(tx)
 		if err != nil {
 			return err
 		}
-		for _, row := range rows {
-			var r retentionRecord
-			if err = getJSON(tx, retentionNamespace, row.Key, &r); err != nil {
-				return err
-			}
-			if !r.ArtifactsReleased || !r.Forgotten {
-				retention = append(retention, string(r.ExecutionID))
-			}
+		for _, r := range pending {
+			retention = append(retention, string(r.ExecutionID))
 		}
 		held, err := tx.List(holdNamespace, "")
 		if err != nil {
@@ -209,8 +207,8 @@ func Diagnose(ctx context.Context, store storage.Store, now time.Time, o DoctorO
 // registration are not installed, so recovery, resume or stop cannot run.
 func (s *Scheduler) PinnedExecutorCheck(ctx context.Context) Check {
 	var missing []string
-	err := s.transact(ctx, nil, func(tx storage.Tx) error {
-		xs, err := tx.ListExecutions("")
+	err := storage.View(ctx, s.store, s.now(), func(tx storage.Tx) error {
+		xs, err := heldCandidates(tx)
 		if err != nil {
 			return err
 		}
@@ -246,7 +244,7 @@ func (s *Scheduler) PinnedExecutorCheck(ctx context.Context) Check {
 // for another reason (its identity no longer resolves) needs `events skip`.
 func routingCheck(ctx context.Context, store storage.Store, now time.Time, age time.Duration, limit func([]string) []string) Check {
 	var stuck []string
-	err := store.Transact(ctx, storage.Guard{Now: now}, func(tx storage.Tx) error {
+	err := storage.View(ctx, store, now, func(tx storage.Tx) error {
 		events, err := tx.UnroutedEvents(0, 0)
 		if err != nil {
 			return err
