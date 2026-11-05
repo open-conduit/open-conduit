@@ -188,28 +188,50 @@ func (s *Server) listRuns(c *call) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	var items []keyed
+	// Filter on what the execution and its Work record say, then build the
+	// full history record only for the runs the page returns: building one
+	// reads its attempt state, trigger, retry and retention records, which
+	// for every run would cost the whole history on every page. The
+	// executor is only in the attempt state, so that filter is checked as
+	// each run is built.
+	var out map[string]any
 	err = s.read(c.ctx, func(tx storage.Tx) error {
-		runs, e := runtime.RunsInTx(tx, domain.ID(q.filters["work_id"]))
+		xs, e := tx.ListExecutions(domain.ID(q.filters["work_id"]))
 		if e != nil {
 			return e
 		}
-		for _, r := range runs {
-			outcome := ""
-			if r.Execution.Outcome != nil {
-				outcome = string(r.Execution.Outcome.Kind)
+		works := map[domain.ID]domain.Work{}
+		var items []lazyKeyed
+		for _, x := range xs {
+			w, ok := works[x.WorkID]
+			if !ok {
+				if w, e = tx.Work(x.WorkID); e != nil {
+					return e
+				}
+				works[x.WorkID] = w
 			}
-			if !match(q, "scope_id", string(r.ScopeID)) || !match(q, "state", string(r.Execution.State)) || !match(q, "executor_binding", r.Execution.ExecutorBinding) || !match(q, "executor", r.Executor) || !match(q, "work_kind", r.WorkKind) || !match(q, "outcome", outcome) || !match(q, "work_id", string(r.Execution.WorkID)) {
+			outcome := ""
+			if x.Outcome != nil {
+				outcome = string(x.Outcome.Kind)
+			}
+			if !match(q, "scope_id", string(w.ScopeID)) || !match(q, "state", string(x.State)) || !match(q, "executor_binding", x.ExecutorBinding) || !match(q, "work_kind", w.Kind) || !match(q, "outcome", outcome) || !match(q, "work_id", string(x.WorkID)) {
 				continue
 			}
-			items = append(items, keyed{createdKey(r.Execution.CreatedAt, r.Execution.ID), toRun(r)})
+			items = append(items, lazyKeyed{key: createdKey(x.CreatedAt, x.ID), build: func() (any, bool, error) {
+				r, e := runtime.RunOfInTx(tx, x, works)
+				if e != nil {
+					return nil, false, e
+				}
+				return toRun(r), match(q, "executor", r.Executor), nil
+			}})
 		}
-		return nil
+		out, e = s.lazyPage("runs", q, s.nowBound(), items)
+		return e
 	})
 	if err != nil {
 		return 0, nil, err
 	}
-	return 200, s.page("runs", q, s.nowBound(), items), nil
+	return 200, out, nil
 }
 
 func (s *Server) getRun(c *call) (int, any, error) {
