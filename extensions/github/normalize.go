@@ -430,10 +430,24 @@ type memo struct {
 	// the reads made, which a scan spends from its page budget.
 	permissions     map[string]string
 	permissionReads int
+	// listedOpen is the issue and PR numbers a generation's open listings
+	// observed, which its closed listings then leave alone.
+	listedOpen map[int]bool
 }
 
 func newMemo() *memo {
-	return &memo{issues: map[string]rawIssue{}, pulls: map[int]rawPull{}, reopens: map[string][]rawIssueEvent{}, notFound: map[string]bool{}, required: map[string]RequiredChecks{}, permissions: map[string]string{}}
+	return &memo{issues: map[string]rawIssue{}, pulls: map[int]rawPull{}, reopens: map[string][]rawIssueEvent{}, notFound: map[string]bool{}, required: map[string]RequiredChecks{}, permissions: map[string]string{}, listedOpen: map[int]bool{}}
+}
+
+// listed records that the open listing observed number, or (open false)
+// reports whether it did.
+func (m *memo) listed(number int, open bool) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if open {
+		m.listedOpen[number] = true
+	}
+	return m.listedOpen[number]
 }
 
 // normalizer turns service objects into canonical observations. Push and

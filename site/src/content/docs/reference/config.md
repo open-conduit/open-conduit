@@ -340,7 +340,7 @@ Extension entry `config`:
 | `tracker` |  | shared tracker {repo, namespace} |
 | `track_issues` | `true` |  |
 | `labels` |  | claimed, help, review, done, skip[], require[] (Open Supervisor's names by default) |
-| `closed_horizon_hours` | `168` | how long closed issues stay observed |
+| `closed_horizon_hours` | `1` | how long after closing an issue or PR stays observed |
 | `branch_pattern` | `^agent/issue-(\d+)$` |  |
 | `preview_pattern` | `deploy-preview` |  |
 | `projection` |  | disabled, verify_seconds (default 900), dry_run |

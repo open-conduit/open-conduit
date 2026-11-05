@@ -316,7 +316,7 @@ func parseSettings(data []byte, secretNames []string, checkSecrets bool) (Settin
 		return s, errors.New("github extension: repo must be owner/name")
 	}
 	s = Settings{Namespace: c.Namespace, Scope: c.Scope, Repo: c.Repo, TrackerRepo: c.Repo, TrackerNS: c.Namespace, TrackIssues: true,
-		Labels: DefaultLabels(), ClosedHorizon: 168 * time.Hour, Projection: c.Projection, WebhookSecret: c.WebhookSecret, ManageWebhook: c.ManageWebhook,
+		Labels: DefaultLabels(), ClosedHorizon: time.Hour, Projection: c.Projection, WebhookSecret: c.WebhookSecret, ManageWebhook: c.ManageWebhook,
 		TrackPulls: c.TrackPullRequests, AckIssues: c.AcknowledgeIssues, Authors: DefaultAdmitAuthors}
 	if c.Admit != nil {
 		s.Forks = c.Admit.Forks

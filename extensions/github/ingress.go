@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -393,11 +394,16 @@ func (g *Ingress) deliveryEvent(env envelope, p webhookPayload, checkRef string,
 // ---- reconcile ------------------------------------------------------------
 
 const (
-	phaseIssues         = "issues"
-	phasePulls          = "pulls"
+	phaseOpenIssues     = "open_issues"
+	phaseClosedIssues   = "closed_issues"
+	phaseOpenPulls      = "open_pulls"
+	phaseClosedPulls    = "closed_pulls"
 	phaseComments       = "comments"
 	phaseReviewComments = "review_comments"
 	perPage             = 100
+	// maxLookback bounds how far back a generation looks after a long
+	// stretch without a completed one.
+	maxLookback = 168 * time.Hour
 )
 
 type cursor struct {
@@ -407,9 +413,9 @@ type cursor struct {
 
 func (c cursor) String() string { return fmt.Sprintf("%s:%d:%d", c.phase, c.page, c.offset) }
 
-func parseCursor(s string) (cursor, bool) {
+func (g *Ingress) parseCursor(s string) (cursor, bool) {
 	parts := strings.Split(s, ":")
-	if len(parts) != 3 {
+	if len(parts) != 3 || !slices.Contains(g.phases(), parts[0]) {
 		return cursor{}, false
 	}
 	page, err1 := strconv.Atoi(parts[1])
@@ -422,27 +428,61 @@ func parseCursor(s string) (cursor, bool) {
 
 func (g *Ingress) phases() []string {
 	if g.s.TrackIssues {
-		return []string{phaseIssues, phasePulls, phaseComments, phaseReviewComments}
+		return []string{phaseOpenIssues, phaseClosedIssues, phaseOpenPulls, phaseClosedPulls, phaseComments, phaseReviewComments}
 	}
-	return []string{phasePulls, phaseComments, phaseReviewComments}
+	return []string{phaseOpenPulls, phaseClosedPulls, phaseComments, phaseReviewComments}
 }
 
-func scanStart(id string) (time.Time, bool) {
+// A generation's ID is gen-<start> or gen-<start>-<horizon> (Unix
+// nanoseconds), so every page of it, in any process, reads the same window.
+// An ID without a horizon is an earlier version's generation.
+func scanID(start, horizon time.Time) string {
+	return "gen-" + strconv.FormatInt(start.UnixNano(), 10) + "-" + strconv.FormatInt(horizon.UnixNano(), 10)
+}
+
+func parseScanID(id string) (start, horizon time.Time, ok bool) {
 	v, ok := strings.CutPrefix(id, "gen-")
 	if !ok {
-		return time.Time{}, false
+		return time.Time{}, time.Time{}, false
 	}
-	nanos, err := strconv.ParseInt(v, 10, 64)
+	startPart, horizonPart, both := strings.Cut(v, "-")
+	nanos, err := strconv.ParseInt(startPart, 10, 64)
 	if err != nil || nanos <= 0 {
-		return time.Time{}, false
+		return time.Time{}, time.Time{}, false
 	}
-	return time.Unix(0, nanos).UTC(), true
+	start = time.Unix(0, nanos).UTC()
+	if !both {
+		return start, time.Time{}, true
+	}
+	h, err := strconv.ParseInt(horizonPart, 10, 64)
+	if err != nil || h <= 0 || h > nanos {
+		return time.Time{}, time.Time{}, false
+	}
+	return start, time.Unix(0, h).UTC(), true
 }
 
-// Reconcile returns one bounded page of a generation. A generation lists every
-// issue and PR in stable creation order (so pagination cannot repeat an item),
-// observing open items and those closed within the horizon, then repository
-// conversation and inline comments updated within the horizon. Older closed
+// horizon is how far back a generation starting at start looks for closed
+// items and comments: ClosedHorizon before it, or, when the last completed
+// generation (checkpoint) began before that, back to that generation's
+// start, so a stretch of failed scans loses nothing that closed meanwhile.
+// It never reaches back further than maxLookback.
+func (g *Ingress) horizon(start time.Time, checkpoint string) time.Time {
+	h := start.Add(-g.s.ClosedHorizon)
+	if last, _, ok := parseScanID(checkpoint); ok && last.Before(h) {
+		h = last
+	}
+	if floor := start.Add(-maxLookback); h.Before(floor) {
+		h = floor
+	}
+	return h
+}
+
+// Reconcile returns one bounded page of a generation. A generation lists the
+// open issues and PRs in creation order, then the closed ones most recently
+// updated first, stopping at the first updated before the horizon and
+// observing those that closed within it, then repository conversation and
+// inline comments updated within the horizon. So its cost follows the
+// repository's open items and recent activity, not its history. Older closed
 // items and comments age out as generic absence, which carries no meaning.
 // GitHub has no snapshot token: Complete certifies that every listing was
 // read to its end within this generation; rate limits and failed reads return
@@ -452,52 +492,53 @@ func (g *Ingress) Reconcile(ctx context.Context, scan extension.Scan) (extension
 		return extension.Snapshot{}, err
 	}
 	now := g.now().UTC()
-	scanID := scan.ScanID
-	start, ok := scanStart(scanID)
-	if scanID == "" {
-		start, scanID = now, "gen-"+strconv.FormatInt(now.UnixNano(), 10)
-	} else if !ok {
-		return extension.Snapshot{ScanID: scanID}, nil // foreign generation: restart
+	id := scan.ScanID
+	start, horizon, ok := parseScanID(id)
+	if id == "" {
+		start = now
+		horizon = g.horizon(start, scan.Checkpoint)
+		id = scanID(start, horizon)
+	} else if !ok || horizon.IsZero() {
+		return extension.Snapshot{ScanID: id}, nil // foreign or earlier generation: restart
 	}
 	c := cursor{phase: g.phases()[0], page: 1}
 	if scan.Cursor != "" {
-		if c, ok = parseCursor(scan.Cursor); !ok {
-			return extension.Snapshot{ScanID: scanID}, nil
+		if c, ok = g.parseCursor(scan.Cursor); !ok {
+			return extension.Snapshot{ScanID: id}, nil
 		}
 	}
 	g.mu.Lock()
 	if scan.ScanID == "" {
 		// A new generation never reuses an earlier one's identity or reads.
-		for scanID == g.memoID {
+		for id == g.memoID {
 			start = start.Add(time.Nanosecond)
-			scanID = "gen-" + strconv.FormatInt(start.UnixNano(), 10)
+			id = scanID(start, horizon)
 		}
 		g.memoID = ""
 	}
-	answerKey := scanID + "|" + c.String()
+	answerKey := id + "|" + c.String()
 	repeats := g.answered[answerKey]
-	if g.memoID != scanID {
-		g.memoID, g.scanMemo, g.answered = scanID, newMemo(), map[string]int{}
+	if g.memoID != id {
+		g.memoID, g.scanMemo, g.answered = id, newMemo(), map[string]int{}
 		repeats = 0
 	}
 	m := g.scanMemo
 	g.mu.Unlock()
 	if scan.ScanID != "" && (now.Sub(start) > g.o.MaxScanAge || repeats >= g.o.MaxRepeats) {
 		// An exhausted partial page discards staging; the next scan starts afresh.
-		return extension.Snapshot{ScanID: scanID}, nil
+		return extension.Snapshot{ScanID: id}, nil
 	}
 	n := &normalizer{s: g.s, c: g.c, m: m, received: now}
-	horizon := start.Add(-g.s.ClosedHorizon)
 	snap, err := g.scanPage(ctx, n, c, horizon)
 	if err != nil {
 		return extension.Snapshot{}, err
 	}
-	snap.ScanID, snap.Checkpoint = scanID, scanID
+	snap.ScanID, snap.Checkpoint = id, id
 	if g.o.Observed != nil {
 		g.o.Observed(ctx, snap.Observations)
 	}
 	g.mu.Lock()
-	if g.memoID == scanID {
+	if g.memoID == id {
 		g.answered[answerKey]++
 	}
 	g.mu.Unlock()
@@ -531,9 +572,9 @@ func (g *Ingress) scanPage(ctx context.Context, n *normalizer, c cursor, horizon
 	var next int
 	var err error
 	switch c.phase {
-	case phaseIssues:
+	case phaseOpenIssues, phaseClosedIssues:
 		obs, count, more, next, err = g.issuesPage(ctx, n, c, horizon, b)
-	case phasePulls:
+	case phaseOpenPulls, phaseClosedPulls:
 		obs, count, more, next, err = g.pullsPage(ctx, n, c, horizon, b)
 	case phaseComments, phaseReviewComments:
 		obs, count, more, next, err = g.commentsPage(ctx, n, c, horizon, b)
@@ -575,12 +616,39 @@ func dedupe(obs []extension.Observation) []extension.Observation {
 	return out
 }
 
-func recent(state string, updated time.Time, horizon time.Time) bool {
-	return state == "open" || !updated.Before(horizon)
+// listing is the query a phase lists issues or PRs with. Open items are
+// listed oldest first, so an item opened during the scan lands after the
+// cursor and one closed during it is observed by the closed listing that
+// follows. Closed items are listed most recently updated first, so the
+// listing can stop at the horizon; GitHub filters issues by it too.
+func listing(phase string, horizon time.Time) string {
+	switch phase {
+	case phaseOpenIssues, phaseOpenPulls:
+		return "?state=open&sort=created&direction=asc"
+	case phaseClosedIssues:
+		return "?state=closed&sort=updated&direction=desc&since=" + url.QueryEscape(horizon.Format(time.RFC3339))
+	}
+	return "?state=closed&sort=updated&direction=desc"
+}
+
+// wanted reports whether a listed item is observed in this phase, and stop
+// that the listing has passed the horizon, so no later item is (an item
+// closes no later than its last update). A closed item the open listing
+// already observed, because it closed during the generation, is left to
+// the next one: observing it again, closed, would give one item two
+// versions in one generation.
+func wanted(m *memo, phase string, number int, state string, closedAt *time.Time, updated, horizon time.Time) (want, stop bool) {
+	if phase == phaseOpenIssues || phase == phaseOpenPulls {
+		return state == "open", false
+	}
+	if updated.Before(horizon) {
+		return false, true
+	}
+	return state == "closed" && closedAt != nil && !closedAt.Before(horizon) && !m.listed(number, false), false
 }
 
 func (g *Ingress) issuesPage(ctx context.Context, n *normalizer, c cursor, horizon time.Time, b *budget) ([]extension.Observation, int, bool, int, error) {
-	items, more, err := page[rawIssue](ctx, g.c, g.s.Repo, repoPath(g.s.Repo, "/issues?state=all&sort=created&direction=asc"), c.page, perPage)
+	items, more, err := page[rawIssue](ctx, g.c, g.s.Repo, repoPath(g.s.Repo, "/issues")+listing(c.phase, horizon), c.page, perPage)
 	if err != nil {
 		return nil, 0, false, 0, err
 	}
@@ -591,8 +659,15 @@ func (g *Ingress) issuesPage(ctx context.Context, n *normalizer, c cursor, horiz
 			break
 		}
 		it := items[i]
-		if it.PullRequest != nil || !recent(it.State, it.UpdatedAt, horizon) {
+		want, stop := wanted(n.m, c.phase, it.Number, it.State, it.ClosedAt, it.UpdatedAt, horizon)
+		if stop {
+			return out, len(items), false, len(items), nil
+		}
+		if it.PullRequest != nil || !want {
 			continue
+		}
+		if it.State == "open" {
+			n.m.listed(it.Number, true)
 		}
 		if it.State == "closed" || strings.EqualFold(it.StateReason, "reopened") {
 			b.units++
@@ -609,7 +684,7 @@ func (g *Ingress) issuesPage(ctx context.Context, n *normalizer, c cursor, horiz
 }
 
 func (g *Ingress) pullsPage(ctx context.Context, n *normalizer, c cursor, horizon time.Time, b *budget) ([]extension.Observation, int, bool, int, error) {
-	items, more, err := page[rawPull](ctx, g.c, g.s.Repo, repoPath(g.s.Repo, "/pulls?state=all&sort=created&direction=asc"), c.page, perPage)
+	items, more, err := page[rawPull](ctx, g.c, g.s.Repo, repoPath(g.s.Repo, "/pulls")+listing(c.phase, horizon), c.page, perPage)
 	if err != nil {
 		return nil, 0, false, 0, err
 	}
@@ -620,8 +695,15 @@ func (g *Ingress) pullsPage(ctx context.Context, n *normalizer, c cursor, horizo
 			break
 		}
 		p := items[i]
-		if !recent(p.State, p.UpdatedAt, horizon) {
+		want, stop := wanted(n.m, c.phase, p.Number, p.State, p.ClosedAt, p.UpdatedAt, horizon)
+		if stop {
+			return out, len(items), false, len(items), nil
+		}
+		if !want {
 			continue
+		}
+		if p.State == "open" {
+			n.m.listed(p.Number, true)
 		}
 		b.units += 4
 		n.remember(p)

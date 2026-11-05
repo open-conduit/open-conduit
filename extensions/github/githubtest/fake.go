@@ -1463,9 +1463,10 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		return http.StatusNotFound, map[string]any{"message": "Not Found"}
 	case get && rest == "/issues":
 		var list []map[string]any
-		for _, n := range s.sortedIssues() {
+		from := since(r)
+		for _, n := range s.listed(q) {
 			i := s.issues[n]
-			if st := q.Get("state"); st != "" && st != "all" && i.State != st {
+			if i.Updated.Before(from) {
 				continue
 			}
 			list = append(list, s.issueJSON(i))
@@ -1485,11 +1486,8 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 	case get && rest == "/pulls":
 		owner, _, _ := strings.Cut(s.Repo, "/")
 		var list []map[string]any
-		for _, n := range s.sortedIssues() {
+		for _, n := range s.listed(q) {
 			if !s.issues[n].Pull {
-				continue
-			}
-			if st := q.Get("state"); st == "open" && s.issues[n].State != "open" {
 				continue
 			}
 			if head := q.Get("head"); head != "" && head != owner+":"+s.pulls[n].HeadRef {
@@ -1849,6 +1847,37 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		return http.StatusOK, paged(r, list)
 	}
 	return 0, nil
+}
+
+// listed is the issue numbers a repository listing returns, filtered by its
+// state (GitHub's default is open) and ordered by its sort and direction
+// (created or updated; descending by default, as GitHub does).
+func (s *Server) listed(q url.Values) []int {
+	state := q.Get("state")
+	if state == "" {
+		state = "open"
+	}
+	var ns []int
+	for _, n := range s.sortedIssues() {
+		if state == "all" || s.issues[n].State == state {
+			ns = append(ns, n)
+		}
+	}
+	at := func(n int) time.Time {
+		if q.Get("sort") == "updated" {
+			return s.issues[n].Updated
+		}
+		return s.issues[n].Created
+	}
+	asc := q.Get("direction") == "asc"
+	sort.SliceStable(ns, func(a, b int) bool {
+		ta, tb := at(ns[a]), at(ns[b])
+		if ta.Equal(tb) {
+			return asc == (ns[a] < ns[b])
+		}
+		return asc == ta.Before(tb)
+	})
+	return ns
 }
 
 func (s *Server) sortedIssues() []int {

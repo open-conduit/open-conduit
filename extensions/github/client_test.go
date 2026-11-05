@@ -383,7 +383,7 @@ func TestConfigValidation(t *testing.T) {
 	}
 	good := `{"namespace":"github/github.com/octo/widgets","scope":"eng","repo":"octo/widgets","webhook_secret":"hook"}`
 	s, err := ParseExtension([]byte(good), []string{"hook"})
-	if err != nil || s.Labels.Claimed != "agent-in-progress" || s.ClosedHorizon != 168*time.Hour || s.Branch == nil || !s.TrackIssues {
+	if err != nil || s.Labels.Claimed != "agent-in-progress" || s.ClosedHorizon != time.Hour || s.Branch == nil || !s.TrackIssues {
 		t.Fatalf("defaults: %+v %v", s, err)
 	}
 	for _, bad := range []string{
