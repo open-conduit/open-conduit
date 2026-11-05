@@ -30,11 +30,18 @@ type state struct {
 	Sequence      uint64
 }
 type Memory struct {
+	// mu serialises Transact; cmu guards data, the committed state, which a
+	// Transact replaces only as it commits, so a View copies it without
+	// waiting for a Transact to finish.
 	mu   sync.Mutex
+	cmu  sync.RWMutex
 	data state
 }
 
-var _ storage.Store = (*Memory)(nil)
+var (
+	_ storage.Store  = (*Memory)(nil)
+	_ storage.Viewer = (*Memory)(nil)
+)
 
 func New() *Memory {
 	return &Memory{data: state{
@@ -64,7 +71,9 @@ func (m *Memory) Transact(ctx context.Context, g storage.Guard, fn func(storage.
 	if g.Now.IsZero() {
 		return storage.ErrInvalid
 	}
+	m.cmu.RLock()
 	t := &transaction{data: copyOf(m.data), now: g.Now}
+	m.cmu.RUnlock()
 	if g.Lease != nil {
 		if err := t.authorize(*g.Lease); err != nil {
 			return err
@@ -76,8 +85,24 @@ func (m *Memory) Transact(ctx context.Context, g storage.Guard, fn func(storage.
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	m.data = copyOf(t.data)
+	committed := copyOf(t.data)
+	m.cmu.Lock()
+	m.data = committed
+	m.cmu.Unlock()
 	return nil
+}
+
+// View runs fn over a copy of the committed state, taken under the lock and
+// read without it, so a View neither waits for nor sees a Transact still
+// running.
+func (m *Memory) View(ctx context.Context, fn func(storage.Tx) error) error {
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	m.cmu.RLock()
+	t := &transaction{data: copyOf(m.data), now: time.Now()}
+	m.cmu.RUnlock()
+	return fn(storage.ReadOnly(t))
 }
 
 type transaction struct {

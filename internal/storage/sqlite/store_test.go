@@ -35,7 +35,14 @@ func transact(s storage.Store, fn func(storage.Tx) error) error {
 	return s.Transact(context.Background(), storage.Guard{Now: now}, fn)
 }
 
-type reopening struct{ path string }
+// reopening opens a fresh handle for every Transact. Views read through
+// one handle opened with it: opening a handle writes (it stamps the record
+// format and creates indexes), so an Open per View would queue behind an
+// open writer, which a View itself never does.
+type reopening struct {
+	path  string
+	views *sqlite.Store
+}
 
 func (r reopening) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
 	s, err := sqlite.Open(ctx, r.path)
@@ -44,6 +51,10 @@ func (r reopening) Transact(ctx context.Context, g storage.Guard, fn func(storag
 	}
 	defer s.Close()
 	return s.Transact(ctx, g, fn)
+}
+
+func (r reopening) View(ctx context.Context, fn func(storage.Tx) error) error {
+	return r.views.View(ctx, fn)
 }
 
 type alternating struct {
@@ -57,6 +68,13 @@ func (a *alternating) Transact(ctx context.Context, g storage.Guard, fn func(sto
 	}
 	return a.second.Transact(ctx, g, fn)
 }
+
+func (a *alternating) View(ctx context.Context, fn func(storage.Tx) error) error {
+	if a.next.Add(1)%2 == 0 {
+		return a.first.View(ctx, fn)
+	}
+	return a.second.View(ctx, fn)
+}
 func TestSQLiteStorageConformance(t *testing.T) {
 	for _, mode := range []string{"connection", "reopen_every_transaction", "competing_connections"} {
 		t.Run(mode, func(t *testing.T) {
@@ -64,7 +82,7 @@ func TestSQLiteStorageConformance(t *testing.T) {
 				path := filepath.Join(t.TempDir(), "conduit.db")
 				switch mode {
 				case "reopen_every_transaction":
-					return reopening{path}
+					return reopening{path: path, views: open(t, path)}
 				case "competing_connections":
 					return &alternating{first: open(t, path), second: open(t, path)}
 				default:
@@ -284,7 +302,7 @@ func TestProcessKillAtomicity(t *testing.T) {
 	}
 }
 func TestTimerTombstoneReopen(t *testing.T) {
-	r := reopening{filepath.Join(t.TempDir(), "conduit.db")}
+	r := reopening{path: filepath.Join(t.TempDir(), "conduit.db")}
 	if err := transact(r, func(tx storage.Tx) error {
 		return tx.PutTimer(domain.Timer{ID: "timer", FireAt: now, Event: event("first")}, 0)
 	}); err != nil {

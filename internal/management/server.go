@@ -289,7 +289,7 @@ func (s *Server) authenticate(ctx context.Context, r *http.Request) (principal, 
 	digest := runtime.TokenDigest(token)
 	var record operatorRecord
 	found := false
-	err := s.o.Store.Transact(ctx, storage.Guard{Now: s.o.Now()}, func(tx storage.Tx) error {
+	err := s.read(ctx, func(tx storage.Tx) error {
 		b, err := tx.Get(authNamespace, "operator/"+digest)
 		if errors.Is(err, storage.ErrNotFound) {
 			return nil
@@ -854,8 +854,10 @@ func createdKey(t time.Time, id domain.ID) string {
 }
 func (s *Server) nowBound() string { return fmt.Sprintf("%020d/\xff", s.o.Now().UnixNano()) }
 
+// read runs a read-only view: an operator's read never waits for the
+// runtime's writes, or for another read, to finish.
 func (s *Server) read(ctx context.Context, fn func(storage.Tx) error) error {
-	return s.o.Store.Transact(ctx, storage.Guard{Now: s.o.Now()}, fn)
+	return storage.View(ctx, s.o.Store, s.o.Now(), fn)
 }
 
 func etag(c *call, revision domain.Revision) bool {

@@ -84,6 +84,11 @@ func (s *faultyStore) Transact(ctx context.Context, g storage.Guard, fn func(sto
 	return err
 }
 
+// View reads through the inner store: faults are injected at writes.
+func (s *faultyStore) View(ctx context.Context, fn func(storage.Tx) error) error {
+	return storage.View(ctx, s.inner, time.Now(), fn)
+}
+
 type faultyTx struct {
 	storage.Tx
 	f   *fault

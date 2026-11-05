@@ -65,6 +65,12 @@ func (s *instrumentedStore) Transact(ctx context.Context, g storage.Guard, fn fu
 	return nil
 }
 
+// View reads through the inner store: a view writes nothing, so there is
+// nothing to report.
+func (s *instrumentedStore) View(ctx context.Context, fn func(storage.Tx) error) error {
+	return storage.View(ctx, s.inner, time.Now(), fn)
+}
+
 func observeAll(ctx context.Context, o observability.Observer, records []observability.Record, diagnostic func(string)) {
 	if o == nil || len(records) == 0 {
 		return

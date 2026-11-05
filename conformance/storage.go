@@ -97,6 +97,7 @@ func StorageCases() []StorageCase {
 		{"per_work_routing_order", routingOrder},
 		{"live_reads_follow_state", liveReads},
 		{"work_events_follow_naming_and_routing", workEvents},
+		{"view_reads_committed_state_alongside_writes", viewAlongsideWrites},
 	}
 }
 
@@ -1440,6 +1441,110 @@ func workEvents(s storage.Store) error {
 			if got != q.want {
 				return fmt.Errorf("work events %s %q, want %q", q.label, got, q.want)
 			}
+		}
+		return nil
+	})
+}
+
+// viewWait bounds how long a View may take while a Transact is open: a View
+// never waits for one, so it is a deadline on a condition, not a delay.
+const viewWait = 3 * time.Second
+
+// viewAlongsideWrites: storage.View reads committed state and refuses every
+// write, keeping none. A Viewer's View, while a Transact is open, neither
+// waits for it nor sees its writes, which a View after the commit does see:
+// operator reads go through it, so a read never queues behind the
+// runtime's writes.
+func viewAlongsideWrites(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	ctx := context.Background()
+	if err := storage.View(ctx, s, c.Now(), func(tx storage.Tx) error {
+		if w, err := tx.Work("work"); err != nil || w.ID != "work" {
+			return fmt.Errorf("view of committed Work: %+v %v", w, err)
+		}
+		named := event("in-view", c.Now())
+		_, _, acceptErr := tx.AcceptEvent(named)
+		w, _ := tx.Work("work")
+		for name, err := range map[string]error{
+			"Put":         tx.Put("view", "key", []byte("v")),
+			"Delete":      tx.Delete("view", "key"),
+			"AcceptEvent": acceptErr,
+			"MarkRouted":  tx.MarkRouted("trigger", "work", "queue"),
+			"PutWork":     tx.PutWork(w, w.Revision),
+			"PutScope":    tx.PutScope(domain.Scope{ID: "view-scope", Name: "view"}, 0),
+		} {
+			if !errors.Is(err, storage.ErrReadOnly) {
+				return fmt.Errorf("view write %s: got %v, want ErrReadOnly", name, err)
+			}
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if _, err := tx.Get("view", "key"); !errors.Is(err, storage.ErrNotFound) {
+			return fmt.Errorf("view write was kept: %v", err)
+		}
+		if _, err := tx.Event("in-view"); !errors.Is(err, storage.ErrNotFound) {
+			return fmt.Errorf("view event was kept: %v", err)
+		}
+		return nil
+	}); err != nil {
+		return err
+	}
+
+	// A store that is no Viewer reads in a Transact, which waits its turn.
+	v, ok := s.(storage.Viewer)
+	if !ok {
+		return nil
+	}
+	// Hold a Transact open with a write in it.
+	inside, release := make(chan struct{}), make(chan struct{})
+	committed := make(chan error, 1)
+	go func() {
+		committed <- transact(s, c, func(tx storage.Tx) error {
+			if err := tx.Put("view", "pending", []byte("v")); err != nil {
+				return err
+			}
+			close(inside)
+			<-release
+			return nil
+		})
+	}()
+	select {
+	case <-inside:
+	case err := <-committed:
+		return fmt.Errorf("writer ended early: %v", err)
+	}
+	viewed := make(chan error, 1)
+	go func() {
+		viewed <- v.View(ctx, func(tx storage.Tx) error {
+			if _, err := tx.Get("view", "pending"); !errors.Is(err, storage.ErrNotFound) {
+				return fmt.Errorf("view saw a write not yet committed: %v", err)
+			}
+			_, err := tx.Work("work")
+			return err
+		})
+	}()
+	var err error
+	select {
+	case err = <-viewed:
+	case <-time.After(viewWait):
+		err = fmt.Errorf("view waited for a write to commit")
+	}
+	close(release)
+	if e := <-committed; e != nil {
+		return e
+	}
+	if err != nil {
+		return err
+	}
+	return v.View(ctx, func(tx storage.Tx) error {
+		if _, err := tx.Get("view", "pending"); err != nil {
+			return fmt.Errorf("view after the commit: %v", err)
 		}
 		return nil
 	})
