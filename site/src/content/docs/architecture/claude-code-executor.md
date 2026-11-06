@@ -115,7 +115,7 @@ When the attempt has a toolbelt token and the `os` binary is available, the segm
 - `declare_outcome`
 - `call` (registered extension operations)
 
-Their inputs are the toolbelt wire inputs, and every call goes through `POST /v1/toolbelt/call`, the CLI's authority path. Refusals come back as `isError` tool results carrying only the safe error code. claude's own environment gets the execution identity (`OS_SCOPE_ID`, `OS_WORK_ID`, `OS_EXECUTION_ID`, `OS_ATTEMPT`) but no toolbelt credential.
+Their inputs are the toolbelt wire inputs, and every call goes through `POST /v1/toolbelt/call`, the CLI's authority path. Refusals come back as `isError` tool results carrying only the safe error code. A call that fails without the daemon's answer says why, also as an `isError` result: no answer within the call's 60 seconds (the operation may still finish, and a retry with the same `request_id` never repeats it), the management endpoint unreachable (nothing listening on the socket, with the cause), or the connection breaking mid-call. Only the second reads "unreachable", so a slow operation, such as one that reads an issue and every page of its comments, is not mistaken for a daemon that is down. claude's own environment gets the execution identity (`OS_SCOPE_ID`, `OS_WORK_ID`, `OS_EXECUTION_ID`, `OS_ATTEMPT`) but no toolbelt credential.
 
 ## Playbooks and rendering
 
