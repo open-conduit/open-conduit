@@ -126,7 +126,7 @@ func (r *holdHandle) Wait(ctx context.Context) (extension.Result, error) {
 // Run decides the held attempt in the background: wait (a declared
 // translated wait) or release (emit TypeHoldReleased, hand off).
 func (h *HoldExecutorImpl) Run(ctx context.Context, r extension.RunRequest) (extension.RunHandle, error) {
-	if err := r.PersistRecovery(domain.Payload{Schema: "github.hold.recovery.v1", Data: json.RawMessage(`{}`)}); err != nil {
+	if err := r.PersistRecovery(domain.Payload{Schema: SchemaHoldRecovery, Data: json.RawMessage(`{}`)}); err != nil {
 		return nil, err
 	}
 	if r.Context.ToolbeltEndpoint == "" {
@@ -169,7 +169,7 @@ func (h *HoldExecutorImpl) Run(ctx context.Context, r extension.RunRequest) (ext
 // Recover adopts an attempt this instance started (its handle, deciding or
 // decided); one interrupted by a restart, or past maxHandles, is retried.
 func (h *HoldExecutorImpl) Recover(_ context.Context, r extension.RunRequest, state domain.Payload) (extension.RunHandle, error) {
-	if state.Schema != "github.hold.recovery.v1" {
+	if state.Schema != SchemaHoldRecovery {
 		return nil, extension.ErrNotAdoptable
 	}
 	h.mu.Lock()

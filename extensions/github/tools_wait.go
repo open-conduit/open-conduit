@@ -448,7 +448,7 @@ func (t *Tools) pullWaitPlan(ctx context.Context, b *bound, conds []string, unti
 	plan.Dependencies = append(plan.Dependencies, peerComments(b))
 	out, _ := json.Marshal(map[string]any{"waiting_for": waiting, "reason": strings.TrimSpace(reason),
 		"next": "end your turn now; any other call is refused until you are resumed with what happened"})
-	plan.Output = domain.Payload{Schema: "github.tool.v1", Data: out}
+	plan.Output = domain.Payload{Schema: SchemaTool, Data: out}
 	return plan, nil
 }
 
@@ -542,7 +542,7 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 		}
 		out, _ := json.Marshal(map[string]any{"waiting_for": h.Describe(), "reason": strings.TrimSpace(in.Reason),
 			"next": "end your turn now; any other call is refused until you are resumed with what happened"})
-		plan.Output = domain.Payload{Schema: "github.tool.v1", Data: out}
+		plan.Output = domain.Payload{Schema: SchemaTool, Data: out}
 		return plan, nil
 	}
 	resolved, kept, err := t.keepHeld(ctx, b, &h, resolved)
@@ -571,7 +571,7 @@ func (t *Tools) agentWaitPlan(ctx context.Context, b *bound, data json.RawMessag
 		result["note"] = "the issue was already waiting for " + strings.Join(kept, ", ") + "; that still wakes you too"
 	}
 	out, _ := json.Marshal(result)
-	plan.Output = domain.Payload{Schema: "github.tool.v1", Data: out}
+	plan.Output = domain.Payload{Schema: SchemaTool, Data: out}
 	return plan, nil
 }
 
