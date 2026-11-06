@@ -104,10 +104,22 @@ func TestDaemonObservedSource(t *testing.T) {
 	if refused, _ := os.ReadFile(filepath.Join(d.root, "refused.txt")); !strings.Contains(string(refused), "not_a_reporter") {
 		t.Fatalf("refusal: %q", refused)
 	}
-	page, err := d.c.Events(ctx, url.Values{"type": {"observe.item.recorded"}})
-	if err != nil || len(page.Items) != 2 {
-		t.Fatalf("recorded: %+v %v", page.Items, err)
-	}
+	// Routing follows acceptance, so wait until both items are routed
+	// before checking where they went.
+	var page client.Page[client.Event]
+	d.until("both recorded items are routed", 30*time.Second, func() bool {
+		var err error
+		page, err = d.c.Events(ctx, url.Values{"type": {"observe.item.recorded"}})
+		if err != nil || len(page.Items) != 2 {
+			return false
+		}
+		for _, e := range page.Items {
+			if e.RoutedWorkID == "" {
+				return false
+			}
+		}
+		return true
+	})
 	w := threads()[0]
 	for _, e := range page.Items {
 		if e.RoutedWorkID != w.ID {

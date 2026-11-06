@@ -259,13 +259,16 @@ type OwnerStatus struct {
 	ExecutionSucceeded bool `json:"execution_succeeded"`
 	WorkDone           bool `json:"work_done"`
 	WorkSucceeded      bool `json:"work_succeeded"`
+	// Mounts are the host paths live containers hold, so a sweep keeps a
+	// resource beneath or holding one (extension.ResourceOwnerStatus).
+	Mounts []string `json:"mounts,omitempty"`
 }
 
 func FromOwnerStatus(s extension.ResourceOwnerStatus) OwnerStatus {
-	return OwnerStatus{Known: s.Known, ExecutionDone: s.ExecutionDone, ExecutionSucceeded: s.ExecutionSucceeded, WorkDone: s.WorkDone, WorkSucceeded: s.WorkSucceeded}
+	return OwnerStatus{Known: s.Known, ExecutionDone: s.ExecutionDone, ExecutionSucceeded: s.ExecutionSucceeded, WorkDone: s.WorkDone, WorkSucceeded: s.WorkSucceeded, Mounts: s.Mounts}
 }
 func (s OwnerStatus) Extension() extension.ResourceOwnerStatus {
-	return extension.ResourceOwnerStatus{Known: s.Known, ExecutionDone: s.ExecutionDone, ExecutionSucceeded: s.ExecutionSucceeded, WorkDone: s.WorkDone, WorkSucceeded: s.WorkSucceeded}
+	return extension.ResourceOwnerStatus{Known: s.Known, ExecutionDone: s.ExecutionDone, ExecutionSucceeded: s.ExecutionSucceeded, WorkDone: s.WorkDone, WorkSucceeded: s.WorkSucceeded, Mounts: s.Mounts}
 }
 
 // ProviderReconcileParams carries the reconcile ID the extension quotes in
