@@ -9,11 +9,13 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
+	"syscall"
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
@@ -203,16 +205,11 @@ func (t *toolbelt) do(f *toolFlags, operation string, input any, pick func(clien
 			return t.usage("invalid input")
 		}
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
 	result, err := c.ToolbeltCall(ctx, call)
 	if err != nil {
-		var api *client.Error
-		if errors.As(err, &api) {
-			fmt.Fprintf(t.errOut, "os: %s\n", api.Error())
-		} else {
-			fmt.Fprintln(t.errOut, "os: management endpoint unreachable")
-		}
+		fmt.Fprintf(t.errOut, "os: %s\n", callError(err))
 		return 1
 	}
 	enc := json.NewEncoder(t.out)
@@ -418,7 +415,7 @@ func (t *toolbelt) gitCredential(args []string) int {
 		fmt.Fprintf(t.errOut, "os: %s\n", err)
 		return 1
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
 	ops, err := c.ToolbeltServing(ctx, extension.CapabilityGitCredential)
 	if err != nil {
@@ -462,12 +459,35 @@ func (t *toolbelt) gitCredential(args []string) int {
 
 // noCredential reports why git gets no credential.
 func (t *toolbelt) noCredential(err error) {
+	fmt.Fprintf(t.errOut, "os: no git credential: %s\n", callError(err))
+}
+
+// callTimeout bounds one toolbelt call. An operation can make several
+// requests of its own (an issue and every page of its comments), so a slow
+// upstream can use it up; callError then says so rather than blaming the
+// connection.
+const callTimeout = 60 * time.Second
+
+// callError says why a toolbelt call failed, with its cause, so an agent can
+// tell an operation the daemon refused from one that ran out of time and from
+// a daemon it could not reach. It names no argument or credential.
+func callError(err error) string {
 	var api *client.Error
-	if errors.As(err, &api) {
-		fmt.Fprintf(t.errOut, "os: no git credential: %s\n", api.Error())
-	} else {
-		fmt.Fprintln(t.errOut, "os: no git credential: management endpoint unreachable")
+	var errno syscall.Errno
+	var op *net.OpError
+	switch {
+	case errors.As(err, &api):
+		return api.Error()
+	case errors.Is(err, context.DeadlineExceeded):
+		return fmt.Sprintf("no answer from the management endpoint within %s; the operation may still finish, and a retry with the same request ID never repeats it", callTimeout)
+	case errors.Is(err, client.ErrUnreachable) && errors.As(err, &errno):
+		return "management endpoint unreachable: " + errno.Error()
+	case errors.Is(err, client.ErrUnreachable) && errors.As(err, &op) && op.Err != nil:
+		return "management endpoint unreachable: " + op.Err.Error()
+	case errors.Is(err, client.ErrUnreachable):
+		return "management endpoint unreachable"
 	}
+	return "management call failed: " + err.Error()
 }
 
 // inbox reads the executor's inject inbox (OS_INBOX; the shell executor's

@@ -257,7 +257,28 @@ var ErrNotModified = errors.New("not modified")
 
 // ErrUnreachable wraps a failure to reach the management endpoint at all
 // (no socket, nothing listening), as opposed to an error the daemon returned.
+// A request that reached the daemon and then ran out of time, or whose
+// connection broke mid-exchange, is not unreachable: see transportError.
 var ErrUnreachable = errors.New("management endpoint unreachable")
+
+// transportError classifies a request that got no answer from the daemon.
+// When the caller's context ended, the error wraps its context.DeadlineExceeded
+// or context.Canceled, so a slow operation is never reported as an endpoint
+// that cannot be reached. A failed dial wraps ErrUnreachable. Anything else
+// (the connection closing mid-response, say) is returned as it is.
+func transportError(ctx context.Context, err error) error {
+	if cause := ctx.Err(); cause != nil {
+		if errors.Is(err, cause) {
+			return err
+		}
+		return fmt.Errorf("%w: %w", cause, err)
+	}
+	var op *net.OpError
+	if errors.As(err, &op) && op.Op == "dial" {
+		return fmt.Errorf("%w: %w", ErrUnreachable, err)
+	}
+	return err
+}
 
 type Client struct {
 	http  *http.Client
@@ -372,7 +393,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrUnreachable, err)
+		return transportError(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode == http.StatusNotModified {
@@ -380,7 +401,7 @@ func (c *Client) do(ctx context.Context, method, path string, query url.Values, 
 	}
 	data, err := io.ReadAll(io.LimitReader(resp.Body, 64<<20))
 	if err != nil {
-		return err
+		return transportError(ctx, err)
 	}
 	if resp.StatusCode >= 400 {
 		var env struct {
@@ -596,7 +617,7 @@ func (c *Client) ArtifactContent(ctx context.Context, id, byteRange string, w io
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		return fmt.Errorf("%w: %w", ErrUnreachable, err)
+		return transportError(ctx, err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode >= 400 {

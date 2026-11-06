@@ -309,15 +309,11 @@ func (t *toolbelt) mcpCall(name string, arguments json.RawMessage) map[string]an
 	if err != nil {
 		return fail(err.Error())
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), callTimeout)
 	defer cancel()
 	result, err := c.ToolbeltCall(ctx, call)
 	if err != nil {
-		var api *client.Error
-		if errors.As(err, &api) {
-			return fail(api.Error())
-		}
-		return fail("management endpoint unreachable")
+		return fail(callError(err))
 	}
 	var shown any
 	switch name {
