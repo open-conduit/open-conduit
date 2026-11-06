@@ -69,7 +69,9 @@ func withOnly(c *call, allowed ...string) (map[string]bool, error) {
 // call is bounded by the provider timeout and the request's view
 // deadline. A provider whose Actions or Panels call fails or times out is
 // not asked for that again during the request, and contributes none of it
-// to any target of the request.
+// to any target of the request. A timeout is also remembered across
+// requests (providerHealth), so later requests skip the call until it
+// answers again.
 type viewer struct {
 	s      *Server
 	ctx    context.Context // done at the view deadline
@@ -105,11 +107,25 @@ func (v *viewer) hasFailed(provider, call string) bool {
 	return v.failed[provider+"\x00"+call]
 }
 
-// providerCall runs one provider call within the timeouts, reporting whether it
-// succeeded.
-func providerCall[T any](v *viewer, provider, name string, fn func(context.Context) (T, error)) (T, bool) {
+// providerCall runs one provider call on t within the timeouts, reporting
+// whether it succeeded. A call known to be timing out (providerHealth) is
+// not made: it fails at once, and may start a probe that nothing waits for.
+func providerCall[T any](v *viewer, t extension.ActionTarget, provider, name string, fn func(context.Context) (T, error)) (T, bool) {
 	var zero T
 	key := provider + "\x00" + name
+	var work domain.ID
+	if t.Work != nil {
+		work = t.Work.ID
+	}
+	if skip, probing := v.s.failing.skip(key, v.s.o.Now()); skip {
+		if probing {
+			probe(v.s, key, provider, name, t.Scope.ID, work, fn)
+		}
+		v.mu.Lock()
+		v.failed[key] = true
+		v.mu.Unlock()
+		return zero, false
+	}
 	v.mu.Lock()
 	gate, ok := v.gates[key]
 	if !ok {
@@ -140,19 +156,17 @@ func providerCall[T any](v *viewer, provider, name string, fn func(context.Conte
 		r, err := fn(ctx)
 		done <- result{r, err}
 	}()
-	timeout := v.s.o.ProviderTimeout
-	if timeout == nil {
-		timeout = func(string) <-chan time.Time { return time.After(DefaultProviderTimeout) }
-	}
 	select {
 	case r := <-done:
+		v.s.recovered(key)
 		if r.err == nil {
 			v.mu.Lock()
 			v.proven[key] = true
 			v.mu.Unlock()
 			return r.v, true
 		}
-	case <-timeout(provider):
+	case <-v.s.providerTimeout(provider):
+		v.s.timedOut(key, provider, name, t.Scope.ID, work, false)
 	case <-v.ctx.Done():
 		return zero, false
 	}
@@ -184,7 +198,7 @@ func (v *viewer) view(t extension.ActionTarget, actions, panels bool) targetView
 	actionsOf := func(name string) []wireAction {
 		if !asked[name] {
 			asked[name] = true
-			raw, ok := providerCall(v, name, "actions", func(ctx context.Context) ([]extension.Action, error) { return ps[name].Actions(ctx, t) })
+			raw, ok := providerCall(v, t, name, "actions", func(ctx context.Context) ([]extension.Action, error) { return ps[name].Actions(ctx, t) })
 			if ok {
 				listed[name] = wellFormed(name, raw)
 			}
@@ -199,7 +213,7 @@ func (v *viewer) view(t extension.ActionTarget, actions, panels bool) targetView
 		if !panels || !ok {
 			continue
 		}
-		got, ok := providerCall(v, name, "panels", func(ctx context.Context) ([]extension.Panel, error) { return pp.Panels(ctx, t) })
+		got, ok := providerCall(v, t, name, "panels", func(ctx context.Context) ([]extension.Panel, error) { return pp.Panels(ctx, t) })
 		if !ok || len(got) == 0 || len(got) > extension.MaxPanels {
 			continue
 		}

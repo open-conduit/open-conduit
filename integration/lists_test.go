@@ -258,6 +258,30 @@ func TestManagementListFormsHungProvider(t *testing.T) {
 			t.Fatalf("%s: %+v %+v", w.ID, w.Actions, w.Panels)
 		}
 	}
+
+	// The timeout is remembered: the next page does not ask the provider
+	// at all, and doctor names it with the call that timed out.
+	asked := stuck.calls.Load()
+	again, err := c.WorksWithActions(ctx, url.Values{"scope_id": {"ops"}})
+	if err != nil || !reflect.DeepEqual(again.Items, page.Items) {
+		t.Fatalf("second page: %+v %v", again.Items, err)
+	}
+	if n := stuck.calls.Load(); n != asked {
+		t.Fatalf("a provider known to time out was asked %d more times", n-asked)
+	}
+	doc, err := c.Doctor(ctx, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	found := false
+	for _, ch := range doc.Checks {
+		if ch.Name == "providers" {
+			found = ch.Status == "warn" && ch.Code == "provider_timing_out" && len(ch.Items) > 0 && strings.HasPrefix(ch.Items[0], "stuck ")
+		}
+	}
+	if !found {
+		t.Fatalf("doctor does not name the provider: %+v", doc.Checks)
+	}
 }
 
 // Once a page's view deadline passes, the Work not yet decorated get

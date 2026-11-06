@@ -247,7 +247,7 @@ On a quiet machine the same pages took about 20 ms each after. What it took:
 Still slow or unmeasured:
 
 - **Artifact content** finds an artifact's execution by reading every execution: about 18 ms per call.
-- **Provider calls.** The list pages ask every open Work's action providers for actions and panels, within a 2 s provider timeout and a 4 s deadline. On the install measured, a third-party package's conversation panel read the whole event log on every call and hit the timeout, so the live pages took 4–5 s whatever the core costs.
+- **Provider calls.** The list pages ask every open Work's action providers for actions and panels, within a 2 s provider timeout and a 4 s deadline. On the install measured, a third-party package's conversation panel read the whole event log on every call and hit the timeout, so the live pages took 4–5 s whatever the core costs. Management now remembers a call that timed out across requests and skips it until a probe off the request finds it answering ([#537](https://github.com/open-conduit/open-conduit/issues/537)), so only the first page after it starts timing out pays the timeout, and doctor names the provider.
 
 ## In-transaction extension calls
 

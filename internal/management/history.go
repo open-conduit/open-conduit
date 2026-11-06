@@ -332,6 +332,7 @@ func (s *Server) doctor(c *call) (int, any, error) {
 	if s.o.Scheduler != nil {
 		checks = append(checks, s.o.Scheduler.PinnedExecutorCheck(c.ctx))
 	}
+	checks = append(checks, s.providerCheck())
 	for _, check := range s.o.Checks {
 		if check != nil {
 			checks = append(checks, check(c.ctx))
