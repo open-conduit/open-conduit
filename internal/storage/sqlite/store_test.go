@@ -494,9 +494,10 @@ func TestLiveReadsUseIndexes(t *testing.T) {
 		return fmt.Sprint(out)
 	}
 	for query, index := range map[string]string{
-		"SELECT record FROM works WHERE json_extract(CAST(record AS TEXT),'$.State') NOT IN ('completed','failed','cancelled') ORDER BY id": "works_live",
-		"SELECT record FROM waits WHERE json_extract(CAST(record AS TEXT),'$.State')='active' ORDER BY id":                                  "waits_active",
-		"SELECT record FROM executions WHERE active=1 ORDER BY id":                                                                          "executions_live",
+		"SELECT record FROM works WHERE json_extract(CAST(record AS TEXT),'$.State') NOT IN ('completed','failed','cancelled') ORDER BY id":                       "works_live",
+		"SELECT record FROM waits WHERE json_extract(CAST(record AS TEXT),'$.State')='active' ORDER BY id":                                                        "waits_active",
+		"SELECT record FROM executions WHERE active=1 ORDER BY id":                                                                                                "executions_live",
+		"SELECT record FROM events WHERE sequence>0 AND coalesce(json_extract(CAST(record AS TEXT),'$.ScopeID'),'') IN ('','scope') ORDER BY sequence LIMIT 1000": "events_scope",
 	} {
 		if got := plan(query); !strings.Contains(got, index) {
 			t.Errorf("%s: plan %s does not use %s", query, got, index)

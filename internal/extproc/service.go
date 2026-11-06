@@ -705,7 +705,16 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			event.ScopeID = string(scope)
 			out = event
 		case "state.events":
-			list, err := scopedEvents(tx, allowed, p, tx.Events)
+			// The allowed scopes' events from storage's scope index, with
+			// those whose scope isn't recorded yet ("") resolved one by
+			// one, so a page costs the extension's own events, not the log.
+			scopes := []domain.ID{""}
+			for id := range allowed {
+				scopes = append(scopes, id)
+			}
+			list, err := scopedEvents(tx, allowed, p, func(after uint64, limit int) ([]domain.AcceptedEvent, error) {
+				return tx.ScopeEvents(scopes, after, limit)
+			})
 			if err != nil {
 				return err
 			}
@@ -784,7 +793,7 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 	return out, err
 }
 
-// scopedEvents is one page of read (Events or WorkEvents) after p.After,
+// scopedEvents is one page of read (ScopeEvents or WorkEvents) after p.After,
 // at most p.Limit (1000) of the allowed scopes' events. It filters by scope
 // before the limit: it reads a batch at a time until the page is full or
 // read runs out, so a page comes back short only at the end, however many

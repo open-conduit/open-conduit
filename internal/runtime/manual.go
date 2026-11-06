@@ -484,7 +484,12 @@ func (c *Control) Wake(ctx context.Context, workID domain.ID, expected domain.Re
 	return
 }
 
-// EventScopeInTx returns the scope an accepted event was accepted into.
+// EventScopeInTx returns the scope an accepted event was accepted into: the
+// one its record carries, else (for an event from before scopes were
+// recorded and not yet backfilled) the one its identity resolves to.
 func EventScopeInTx(tx storage.Tx, a domain.AcceptedEvent) (domain.ID, error) {
+	if a.ScopeID != "" {
+		return a.ScopeID, nil
+	}
 	return scopeForEvent(tx, a)
 }

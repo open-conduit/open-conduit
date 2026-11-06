@@ -80,6 +80,16 @@ func AcceptInTx(tx storage.Tx, scopeID domain.ID, event domain.Event) (domain.Ac
 			return fail(err)
 		}
 	}
+	// The event's record carries its scope too, so a scope's events are
+	// read from storage's index rather than resolved one by one.
+	if accepted.ScopeID == "" {
+		if err = tx.SetEventScope(accepted.Event.ID, original); err != nil {
+			return fail(err)
+		}
+		accepted.ScopeID = original
+	} else if accepted.ScopeID != original {
+		return fail(storage.ErrConflict)
+	}
 	return accepted, added, nil
 }
 func resolveScope(tx storage.Tx, event domain.Event, requested domain.ID) (domain.ID, error) {

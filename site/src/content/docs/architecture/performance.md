@@ -238,6 +238,7 @@ The web view's pages are management reads. Measured against a copy of one instal
 On a quiet machine the same pages took about 20 ms each after. What it took:
 
 - **A Work's events** (`GET /v1/events?work_id=`) scanned the whole log: 3 s. `WorkEvents` reads them from two expression indexes, `events_work` and `events_routed_work`: 0.2 ms at 1,000 and at 50,000 Events in the history benchmark.
+- **A scope's events** (an extension's `state.events`) read the whole log and worked out each Event's scope through Work, correlation and acceptance lookups: 3.7 s on a 73,392-Event store, 3.2 s of it the lookups. Each Event now records its scope at acceptance and `ScopeEvents` reads it from the `events_scope` expression index; `TestStateEventsFollowTheExtensionsScopes` bounds the Events the host reads, with a log-scanning store as the negative control.
 - **Run lists** built every run's full record for each page of 200: 112 ms of storage work a page, nine pages to read them all. A page now builds only the runs it returns.
 - **The world read** behind the Runs and Needs you pages read every run on every load (6.6 MB of JSON, and only the oldest 1,000). It now reads runs by Work, keeping a finished Work's while its revision stands.
 - **Reads queued on the writer.** Every read, the token check included, was a `BEGIN IMMEDIATE` transaction on the one connection, so a page's concurrent reads queued behind each other and the runtime. They now run as Views on reader connections.

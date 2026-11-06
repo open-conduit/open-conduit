@@ -207,6 +207,37 @@ func (t *transaction) WorkEvents(work domain.ID, after uint64, limit int) ([]dom
 	}
 	return out, nil
 }
+func (t *transaction) ScopeEvents(scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	all, _ := t.Events(after, 0)
+	out := []domain.AcceptedEvent{}
+	for _, v := range all {
+		if slices.Contains(scopes, v.ScopeID) && (limit <= 0 || len(out) < limit) {
+			out = append(out, v)
+		}
+	}
+	return out, nil
+}
+func (t *transaction) SetEventScope(id, scope domain.ID) error {
+	a, ok := t.data.Events[id]
+	if !ok {
+		return storage.ErrNotFound
+	}
+	if scope == "" {
+		return storage.ErrInvalid
+	}
+	if a.ScopeID != "" {
+		if a.ScopeID == scope {
+			return nil
+		}
+		return storage.ErrConflict
+	}
+	if _, ok := t.data.Scopes[scope]; !ok {
+		return storage.ErrNotFound
+	}
+	a.ScopeID = scope
+	t.data.Events[id] = a
+	return nil
+}
 func (t *transaction) LatestSequence() (uint64, error) {
 	var latest uint64
 	for _, v := range t.data.Events {

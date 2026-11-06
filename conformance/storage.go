@@ -97,6 +97,7 @@ func StorageCases() []StorageCase {
 		{"per_work_routing_order", routingOrder},
 		{"live_reads_follow_state", liveReads},
 		{"work_events_follow_naming_and_routing", workEvents},
+		{"event_scope_recorded_once_and_indexed", scopeEvents},
 		{"view_reads_committed_state_alongside_writes", viewAlongsideWrites},
 	}
 }
@@ -1440,6 +1441,102 @@ func workEvents(s storage.Store) error {
 			}
 			if got != q.want {
 				return fmt.Errorf("work events %s %q, want %q", q.label, got, q.want)
+			}
+		}
+		return nil
+	})
+}
+
+// scopeEvents: SetEventScope records an Event's scope once, the record
+// keeps it through every rewrite (routing, a duplicate delivery), and
+// ScopeEvents returns exactly the Events recorded in the scopes asked for,
+// with "" standing for those not recorded yet, in acceptance order after the
+// cursor and within the limit.
+func scopeEvents(s storage.Store) error {
+	c := NewClock()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	if err := transact(s, c, func(tx storage.Tx) error {
+		if err := tx.PutScope(domain.Scope{ID: "other", Name: "other"}, 0); err != nil {
+			return err
+		}
+		for _, id := range []domain.ID{"mine", "unscoped", "theirs", "later"} {
+			if _, _, err := tx.AcceptEvent(event(id, c.Now())); err != nil {
+				return err
+			}
+		}
+		for _, r := range []struct{ event, scope domain.ID }{{"trigger", "scope"}, {"mine", "scope"}, {"theirs", "other"}, {"later", "scope"}} {
+			if err := tx.SetEventScope(r.event, r.scope); err != nil {
+				return fmt.Errorf("set event scope %s: %w", r.event, err)
+			}
+		}
+		for _, q := range []struct {
+			event, scope domain.ID
+			want         error
+			label        string
+		}{
+			{"mine", "scope", nil, "the same scope again"},
+			{"mine", "other", storage.ErrConflict, "another scope"},
+			{"unscoped", "", storage.ErrInvalid, "an empty scope"},
+			{"missing", "scope", storage.ErrNotFound, "a missing event"},
+			{"unscoped", "missing", storage.ErrNotFound, "a missing scope"},
+		} {
+			if err := tx.SetEventScope(q.event, q.scope); q.want == nil && err != nil || q.want != nil && !errors.Is(err, q.want) {
+				return fmt.Errorf("scope events: set event scope to %s: %v, want %v", q.label, err, q.want)
+			}
+		}
+		// Routing rewrites the record; the scope must survive it.
+		return tx.MarkRouted("mine", "", "ignored")
+	}); err != nil {
+		return err
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		if a, err := tx.Event("mine"); err != nil || a.ScopeID != "scope" || !a.Routed {
+			return fmt.Errorf("scope events: recorded scope %q routed %v after routing (%v), want %q", a.ScopeID, a.Routed, err, "scope")
+		}
+		if a, added, err := tx.AcceptEvent(event("theirs", c.Now())); err != nil || added || a.ScopeID != "other" {
+			return fmt.Errorf("scope events: duplicate delivery scope %q added %v (%v), want %q", a.ScopeID, added, err, "other")
+		}
+		if a, err := tx.Event("unscoped"); err != nil || a.ScopeID != "" {
+			return fmt.Errorf("scope events: unrecorded scope %q (%v), want none", a.ScopeID, err)
+		}
+		ids := func(scopes []domain.ID, after uint64, limit int) (string, []domain.AcceptedEvent, error) {
+			got, err := tx.ScopeEvents(scopes, after, limit)
+			var parts []string
+			for _, a := range got {
+				parts = append(parts, string(a.Event.ID))
+			}
+			return strings.Join(parts, " "), got, err
+		}
+		all, events, err := ids([]domain.ID{"scope", ""}, 0, 0)
+		if err != nil {
+			return err
+		}
+		if want := "trigger mine unscoped later"; all != want {
+			return fmt.Errorf("scope events of a scope and the unrecorded %q, want %q", all, want)
+		}
+		for _, q := range []struct {
+			scopes      []domain.ID
+			after       uint64
+			limit       int
+			want, label string
+		}{
+			{[]domain.ID{"scope"}, 0, 0, "trigger mine later", "of one scope"},
+			{[]domain.ID{""}, 0, 0, "unscoped", "not recorded"},
+			{[]domain.ID{"other", "scope"}, 0, 0, "trigger mine theirs later", "of two scopes"},
+			{[]domain.ID{"scope", "scope"}, 0, 0, "trigger mine later", "of a scope named twice"},
+			{[]domain.ID{"scope", ""}, events[1].Sequence, 0, "unscoped later", "after the second"},
+			{[]domain.ID{"scope", ""}, events[1].Sequence, 1, "unscoped", "after the second, limited to one"},
+			{[]domain.ID{"missing"}, 0, 0, "", "of a missing scope"},
+			{nil, 0, 0, "", "of no scope"},
+		} {
+			got, _, err := ids(q.scopes, q.after, q.limit)
+			if err != nil {
+				return err
+			}
+			if got != q.want {
+				return fmt.Errorf("scope events %s %q, want %q", q.label, got, q.want)
 			}
 		}
 		return nil
