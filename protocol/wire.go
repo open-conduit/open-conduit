@@ -149,6 +149,7 @@ type Work struct {
 	Context         Payload   `json:"context"`
 	ParentID        string    `json:"parent_id,omitempty"`
 	Display         *Display  `json:"display,omitempty"`
+	Grants          []string  `json:"grants,omitempty"`
 	Revision        uint64    `json:"revision"`
 	CreatedAt       time.Time `json:"created_at"`
 	UpdatedAt       time.Time `json:"updated_at"`
@@ -189,10 +190,10 @@ func (d *Display) Domain() *domain.WorkDisplay {
 }
 
 func FromWork(w domain.Work) Work {
-	return Work{ID: string(w.ID), Kind: w.Kind, ScopeID: string(w.ScopeID), State: string(w.State), CorrelationKeys: fromKeys(w.CorrelationKeys), Context: FromPayload(w.Context), ParentID: string(w.ParentID), Display: FromDisplay(w.Display), Revision: uint64(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
+	return Work{ID: string(w.ID), Kind: w.Kind, ScopeID: string(w.ScopeID), State: string(w.State), CorrelationKeys: fromKeys(w.CorrelationKeys), Context: FromPayload(w.Context), ParentID: string(w.ParentID), Display: FromDisplay(w.Display), Grants: w.Grants, Revision: uint64(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
 }
 func (w Work) Domain() domain.Work {
-	return domain.Work{ID: domain.ID(w.ID), Kind: w.Kind, ScopeID: domain.ID(w.ScopeID), State: domain.WorkState(w.State), CorrelationKeys: toKeys(w.CorrelationKeys), Context: w.Context.Domain(), ParentID: domain.ID(w.ParentID), Display: w.Display.Domain(), Revision: domain.Revision(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
+	return domain.Work{ID: domain.ID(w.ID), Kind: w.Kind, ScopeID: domain.ID(w.ScopeID), State: domain.WorkState(w.State), CorrelationKeys: toKeys(w.CorrelationKeys), Context: w.Context.Domain(), ParentID: domain.ID(w.ParentID), Display: w.Display.Domain(), Grants: w.Grants, Revision: domain.Revision(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
 }
 
 type Lease struct {
@@ -321,6 +322,11 @@ func (w Wait) Domain() domain.Wait {
 
 // Domain returns the bind-time capability labels (Capabilities is the
 // manifest's executor capability declaration, which is also its wire shape).
+// FromCapabilities is c on the wire.
+func FromCapabilities(c domain.Capabilities) Capabilities {
+	return Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container}
+}
+
 func (c Capabilities) Domain() domain.Capabilities {
 	return domain.Capabilities{Interrupt: c.Interrupt, Inject: c.Inject, Resume: c.Resume, Workspace: c.Workspace, Toolbelt: c.Toolbelt, Sandbox: c.Sandbox, Container: c.Container}
 }
@@ -331,6 +337,7 @@ type Binding struct {
 	Requires       Capabilities   `json:"requires"`
 	TimeoutSeconds int            `json:"timeout_seconds,omitempty"`
 	Config         Payload        `json:"config"`
+	PassEnv        []string       `json:"pass_env,omitempty"`
 	Grants         []BindingGrant `json:"grants,omitempty"`
 }
 type Route struct {
@@ -366,7 +373,7 @@ type Scope struct {
 func FromScope(s domain.Scope) Scope {
 	out := Scope{ID: string(s.ID), Name: s.Name, ParentID: string(s.ParentID), Config: FromPayload(s.Config), Revision: uint64(s.Revision), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt}
 	for _, b := range s.Bindings {
-		out.Bindings = append(out.Bindings, Binding{Name: b.Name, Executor: b.Executor, Requires: Capabilities{Interrupt: b.Requires.Interrupt, Inject: b.Requires.Inject, Resume: b.Requires.Resume, Workspace: b.Requires.Workspace, Toolbelt: b.Requires.Toolbelt}, TimeoutSeconds: b.TimeoutSeconds, Config: FromPayload(b.Config), Grants: fromGrants(b.Grants)})
+		out.Bindings = append(out.Bindings, Binding{Name: b.Name, Executor: b.Executor, Requires: FromCapabilities(b.Requires), TimeoutSeconds: b.TimeoutSeconds, Config: FromPayload(b.Config), PassEnv: b.PassEnv, Grants: fromGrants(b.Grants)})
 	}
 	for _, r := range s.Routes {
 		out.Routes = append(out.Routes, FromRoute(r))
@@ -376,7 +383,7 @@ func FromScope(s domain.Scope) Scope {
 func (s Scope) Domain() domain.Scope {
 	out := domain.Scope{ID: domain.ID(s.ID), Name: s.Name, ParentID: domain.ID(s.ParentID), Config: s.Config.Domain(), Revision: domain.Revision(s.Revision), CreatedAt: s.CreatedAt, UpdatedAt: s.UpdatedAt}
 	for _, b := range s.Bindings {
-		out.Bindings = append(out.Bindings, domain.Binding{Name: b.Name, Executor: b.Executor, Requires: b.Requires.Domain(), TimeoutSeconds: b.TimeoutSeconds, Config: b.Config.Domain(), Grants: toGrants(b.Grants)})
+		out.Bindings = append(out.Bindings, domain.Binding{Name: b.Name, Executor: b.Executor, Requires: b.Requires.Domain(), TimeoutSeconds: b.TimeoutSeconds, Config: b.Config.Domain(), PassEnv: b.PassEnv, Grants: toGrants(b.Grants)})
 	}
 	for _, r := range s.Routes {
 		out.Routes = append(out.Routes, r.Domain())
@@ -810,13 +817,26 @@ type Resource struct {
 	Env     map[string]string `json:"env,omitempty"`
 	Data    Payload           `json:"data"`
 	Summary string            `json:"summary,omitempty"`
+	// Sandbox is what a sandbox must allow to use the resource; absent, it
+	// can't be used in one (extension.Resource.Sandbox).
+	Sandbox *SandboxNeeds `json:"sandbox,omitempty"`
 }
 
 func FromResource(r extension.Resource) Resource {
-	return Resource{Kind: r.Kind, Ref: r.Ref, Dir: r.Dir, Env: r.Env, Data: FromPayload(r.Data), Summary: r.Summary}
+	out := Resource{Kind: r.Kind, Ref: r.Ref, Dir: r.Dir, Env: r.Env, Data: FromPayload(r.Data), Summary: r.Summary}
+	if r.Sandbox != nil {
+		n := FromSandboxNeeds(*r.Sandbox)
+		out.Sandbox = &n
+	}
+	return out
 }
 func (r Resource) Extension() extension.Resource {
-	return extension.Resource{Kind: r.Kind, Ref: r.Ref, Dir: r.Dir, Env: r.Env, Data: r.Data.Domain(), Summary: r.Summary}
+	out := extension.Resource{Kind: r.Kind, Ref: r.Ref, Dir: r.Dir, Env: r.Env, Data: r.Data.Domain(), Summary: r.Summary}
+	if r.Sandbox != nil {
+		n := r.Sandbox.Extension()
+		out.Sandbox = &n
+	}
+	return out
 }
 
 type AttachSpec struct {
