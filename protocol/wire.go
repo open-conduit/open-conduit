@@ -704,8 +704,11 @@ type ExecutionContext struct {
 	// Sandbox and Container say the run has a sandbox or container broker
 	// (extension.ExecutionContext): the executor reaches it through
 	// sandbox.* and container.* under the run's ID.
-	Sandbox          bool   `json:"sandbox,omitempty"`
-	Container        bool   `json:"container,omitempty"`
+	Sandbox   bool `json:"sandbox,omitempty"`
+	Container bool `json:"container,omitempty"`
+	// ContainerHome is the Work's own home, set with Container
+	// (extension.ExecutionContext).
+	ContainerHome    string `json:"container_home,omitempty"`
 	ToolbeltEndpoint string `json:"toolbelt_endpoint,omitempty"`
 	ToolbeltToken    string `json:"toolbelt_token,omitempty"`
 	// ToolbeltTokenFile is the host-kept token file (extension.ExecutionContext).
@@ -733,13 +736,13 @@ type RunRequest struct {
 }
 
 func FromRunRequest(r extension.RunRequest) RunRequest {
-	return RunRequest{Work: FromWork(r.Work), Execution: FromExecution(r.Execution), Trigger: FromEvent(r.Trigger), Inputs: FromEvents(r.Inputs), Context: ExecutionContext{Config: FromPayload(r.Context.Config), Secrets: r.Context.Secrets, Resources: r.Context.Resources != nil, Sandbox: r.Context.Sandbox != nil, Container: r.Context.Container != nil, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, ToolbeltDir: r.Context.ToolbeltDir, PlaybookDir: r.Context.PlaybookDir, Env: r.Context.Env, HostEnv: r.Context.HostEnv}}
+	return RunRequest{Work: FromWork(r.Work), Execution: FromExecution(r.Execution), Trigger: FromEvent(r.Trigger), Inputs: FromEvents(r.Inputs), Context: ExecutionContext{Config: FromPayload(r.Context.Config), Secrets: r.Context.Secrets, Resources: r.Context.Resources != nil, Sandbox: r.Context.Sandbox != nil, Container: r.Context.Container != nil, ContainerHome: r.Context.ContainerHome, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, ToolbeltDir: r.Context.ToolbeltDir, PlaybookDir: r.Context.PlaybookDir, Env: r.Context.Env, HostEnv: r.Context.HostEnv}}
 }
 
 // Extension returns the request without callbacks; the receiving side
 // installs PersistRecovery and Resources.
 func (r RunRequest) Extension() extension.RunRequest {
-	return extension.RunRequest{Work: r.Work.Domain(), Execution: r.Execution.Domain(), Trigger: r.Trigger.Domain(), Inputs: ToEvents(r.Inputs), Context: extension.ExecutionContext{Config: r.Context.Config.Domain(), Secrets: r.Context.Secrets, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, ToolbeltDir: r.Context.ToolbeltDir, PlaybookDir: r.Context.PlaybookDir, Env: r.Context.Env, HostEnv: r.Context.HostEnv}}
+	return extension.RunRequest{Work: r.Work.Domain(), Execution: r.Execution.Domain(), Trigger: r.Trigger.Domain(), Inputs: ToEvents(r.Inputs), Context: extension.ExecutionContext{Config: r.Context.Config.Domain(), Secrets: r.Context.Secrets, ContainerHome: r.Context.ContainerHome, ToolbeltEndpoint: r.Context.ToolbeltEndpoint, ToolbeltToken: r.Context.ToolbeltToken, ToolbeltTokenFile: r.Context.ToolbeltTokenFile, ToolbeltDir: r.Context.ToolbeltDir, PlaybookDir: r.Context.PlaybookDir, Env: r.Context.Env, HostEnv: r.Context.HostEnv}}
 }
 
 type Usage struct {
