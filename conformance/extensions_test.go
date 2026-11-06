@@ -292,6 +292,22 @@ func (o *unsafeObserver) Observe(_ context.Context, r observability.Record) erro
 	o.records = append(o.records, r)
 	return nil
 }
+
+// looseProviderObserver validates as the contract does, except that it
+// takes any provider.* record as anchored.
+type looseProviderObserver struct{ unsafeObserver }
+
+func (o *looseProviderObserver) Observe(ctx context.Context, r observability.Record) error {
+	check := r
+	if strings.HasPrefix(r.Name, "provider.") {
+		check.Attributes = map[string]string{"provider.name": "any"}
+	}
+	if err := observability.Validate(check); err != nil {
+		return err
+	}
+	return o.unsafeObserver.Observe(ctx, r)
+}
+
 func TestWeakenedExtensionContractsAreRejected(t *testing.T) {
 	f := ingressFixture()
 	i := f.Ingress.(*reference.Ingress)
@@ -327,6 +343,10 @@ func TestWeakenedExtensionContractsAreRejected(t *testing.T) {
 	o := &unsafeObserver{}
 	if err := conformance.CheckObserver(o, func() []observability.Record { return o.records }); err == nil || !strings.Contains(err.Error(), "correlation accepted") {
 		t.Fatalf("missing telemetry undetected: %v", err)
+	}
+	loose := &looseProviderObserver{}
+	if err := conformance.CheckObserver(loose, func() []observability.Record { return loose.records }); err == nil || !strings.Contains(err.Error(), "unanchored provider record accepted") {
+		t.Fatalf("unanchored provider record undetected: %v", err)
 	}
 }
 

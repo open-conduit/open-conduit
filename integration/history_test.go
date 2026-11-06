@@ -571,7 +571,7 @@ func TestDoctorChecks(t *testing.T) {
 		return d, m
 	}
 	d, m := checks(false)
-	for name, status := range map[string]string{"storage": "ok", "lease_recovery": "ok", "resource_holds": "ok", "retention": "ok", "reconcile_lag": "ok", "non_rederivable": "info", "config": "ok", "bindings": "ok", "connections": "ok", "secrets": "info", "pinned_executors": "ok"} {
+	for name, status := range map[string]string{"storage": "ok", "lease_recovery": "ok", "resource_holds": "ok", "retention": "ok", "reconcile_lag": "ok", "non_rederivable": "info", "config": "ok", "bindings": "ok", "connections": "ok", "secrets": "info", "pinned_executors": "ok", "providers": "ok"} {
 		if m[name].Status != status {
 			t.Fatalf("check %s = %+v, want %s (all %+v)", name, m[name], status, d.Checks)
 		}

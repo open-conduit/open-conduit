@@ -26,6 +26,7 @@ import (
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/internal/config"
 	"github.com/open-conduit/open-conduit/internal/runtime"
+	"github.com/open-conduit/open-conduit/observability"
 	"github.com/open-conduit/open-conduit/storage"
 )
 
@@ -102,10 +103,14 @@ type Options struct {
 	// DefaultViewDeadline). Tests inject them; nil uses the defaults.
 	ProviderTimeout func(provider string) <-chan time.Time
 	ViewDeadline    func() <-chan time.Time
+	// Observer receives the host-observed provider.* records: an action
+	// provider's call starting or stopping to time out (optional).
+	Observer observability.Observer
 }
 
 type Server struct {
-	o Options
+	o       Options
+	failing *providerHealth
 }
 
 func NewServer(o Options) (*Server, error) {
@@ -118,7 +123,7 @@ func NewServer(o Options) (*Server, error) {
 			return nil, err
 		}
 	}
-	return &Server{o}, nil
+	return &Server{o: o, failing: newProviderHealth()}, nil
 }
 
 type apiError struct {

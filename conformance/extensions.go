@@ -604,6 +604,11 @@ func CheckObserver(o observability.Observer, records func() []observability.Reco
 	if err := o.Observe(ctx, unanchored); err == nil {
 		return fmt.Errorf("unanchored ingress record accepted")
 	}
+	// So is a provider health record, anchored by the provider's name.
+	unanchored.Name = "provider.timing_out"
+	if err := o.Observe(ctx, unanchored); err == nil {
+		return fmt.Errorf("unanchored provider record accepted")
+	}
 	if err := o.Observe(ctx, valid); err != nil {
 		return err
 	}
