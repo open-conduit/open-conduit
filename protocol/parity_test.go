@@ -57,7 +57,7 @@ var parity = map[string][]string{
 	"SegmentEnder": {"manifest:provides.segment_end", "method:segment.ended"},
 
 	// Host services, inproc.Host's fields.
-	"Host.Store":             {"method:kv.get", "method:kv.list", "method:kv.commit", "method:state.work", "method:state.works", "method:state.events"},
+	"Host.Store":             {"method:kv.get", "method:kv.list", "method:kv.commit", "method:state.work", "method:state.works", "method:state.events", "method:state.work_events"},
 	"Host.Now":               {"process:its own clock; time-dependent calls carry the host's now"},
 	"Host.Log":               {"process:its stderr, which the host keeps as the extension's log"},
 	"Host.Secrets":           {"method:secret.resolve"},
@@ -68,7 +68,7 @@ var parity = map[string][]string{
 	"Host.DryRun":            {"method:configure"},
 	"Host.AcceptInTx":        {"method:event.accept"},
 	"Host.AcceptDerivedInTx": {"method:event.accept"},
-	"Host.EventScope":        {"method:state.event", "method:state.events"},
+	"Host.EventScope":        {"method:state.event", "method:state.events", "method:state.work_events"},
 	"Host.Deliver":           {"method:ingress.deliver"},
 	"Host.Artifacts":         {"method:artifact.create", "method:artifact.write", "method:artifact.commit"},
 	"Host.ToolbeltDir":       {"process:each run's ExecutionContext.ToolbeltDir carries it"},

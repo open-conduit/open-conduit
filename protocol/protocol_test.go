@@ -144,6 +144,15 @@ var useCases = map[string][]string{
 	"setup.run_command":           {"slack"},
 }
 
+// contractReads are methods no shipped extension calls yet but sdk.Store
+// needs to keep a storage.Tx read's promise over the wire, with why. A
+// method listed here still carries its contract.
+var contractReads = map[string]string{
+	// storage.Tx.WorkEvents' cost follows the Work's own events; without
+	// it sdk.Store would scan the whole log through state.events (#536).
+	"state.work_events": "storage.Tx.WorkEvents",
+}
+
 func TestCatalogueMapsEveryMethodToAShippedUse(t *testing.T) {
 	names := map[string]bool{}
 	for _, m := range protocol.Methods {
@@ -151,7 +160,11 @@ func TestCatalogueMapsEveryMethodToAShippedUse(t *testing.T) {
 			t.Errorf("duplicate method %s", m.Name)
 		}
 		names[m.Name] = true
-		if len(useCases[m.Name]) == 0 || len(m.Contract) == 0 {
+		if contract, ok := contractReads[m.Name]; ok {
+			if !slices.Contains(m.Contract, contract) || len(useCases[m.Name]) > 0 {
+				t.Errorf("%s: a contract read carries %s and has no shipped use case yet; once one ships, list it in useCases instead", m.Name, contract)
+			}
+		} else if len(useCases[m.Name]) == 0 || len(m.Contract) == 0 {
 			t.Errorf("%s: needs a shipped use case and the contract it carries", m.Name)
 		}
 		for _, u := range useCases[m.Name] {
@@ -234,7 +247,7 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 	// Storage: the namespaced KV and the read views extensions use. Writes
 	// to core records (AcceptEvent, PutWork, leases, timers) are never
 	// exposed; they go through event.accept, timer.arm and work.cancel.
-	for _, m := range []string{"Get", "Put", "Delete", "List", "Work", "ListWorks", "ListExecutions", "Event", "Events", "ListScopes", "Scope", "ListTimers"} {
+	for _, m := range []string{"Get", "Put", "Delete", "List", "Work", "ListWorks", "ListExecutions", "Event", "Events", "WorkEvents", "ListScopes", "Scope", "ListTimers"} {
 		if _, ok := reflect.TypeFor[storage.Tx]().MethodByName(m); !ok || !carried["storage.Tx."+m] {
 			t.Errorf("storage.Tx.%s is not carried", m)
 		}

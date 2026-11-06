@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
+	"slices"
 	"testing"
 
 	"github.com/open-conduit/open-conduit/conformance"
@@ -139,5 +141,86 @@ func TestArtifactsAndUndeclaredMethods(t *testing.T) {
 	}
 	if protocol.ErrorCode(capture) != protocol.CodeUndeclared {
 		t.Fatalf("capture without permission: %v", capture)
+	}
+}
+
+// scanningTx is the negative control for the WorkEvents bound: a client
+// that answers one Work's events by scanning the whole log through
+// state.events and filtering on its own side, as sdk.Store did before
+// state.work_events (#536).
+type scanningTx struct{ storage.Tx }
+
+func (t scanningTx) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	all, err := t.Events(after, 0)
+	if err != nil {
+		return nil, err
+	}
+	out := []domain.AcceptedEvent{}
+	for _, a := range all {
+		if (a.Event.WorkID == work || a.RoutedWorkID == work) && (limit <= 0 || len(out) < limit) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
+// workEventsRead reads work's events after a sequence through wrap(sdk.Store's
+// transaction) over a log of 2,500 other events with work's three among
+// them, and reports what came back and how many events the host sent.
+func workEventsRead(t *testing.T, wrap func(storage.Tx) storage.Tx, after uint64, limit int) ([]domain.ID, int) {
+	t.Helper()
+	var events []domain.Event
+	for i := range 2500 {
+		work := domain.ID("other")
+		if i == 10 || i == 1200 || i == 2400 {
+			work = "thread"
+		}
+		events = append(events, domain.Event{ID: domain.ID(fmt.Sprintf("e-%d", i)), Type: "acme.thing.changed", Source: "acme", DeliveryID: fmt.Sprint(i), WorkID: work})
+	}
+	var got []domain.ID
+	h := sdktest.New(t, task(func(ctx context.Context, h *sdk.Host) error {
+		return sdk.NewStore(h).Transact(ctx, storage.Guard{}, func(tx storage.Tx) error {
+			list, err := wrap(tx).WorkEvents("thread", after, limit)
+			for _, a := range list {
+				got = append(got, a.Event.ID)
+			}
+			return err
+		})
+	}), sdktest.WithEvents("eng", events...))
+	if err := h.RunTask(context.Background(), "acme-sync"); err != nil {
+		t.Fatal(err)
+	}
+	return got, h.EventsRead()
+}
+
+// sdk.Store reads one Work's events through state.work_events, so the host
+// sends that Work's events and no others: the cost follows the Work, not
+// the retained log (#536). The scanning client gets the same answer but
+// fails the bound.
+func TestStoreWorkEventsReadsOnlyTheWorksEvents(t *testing.T) {
+	direct := func(tx storage.Tx) storage.Tx { return tx }
+	for _, c := range []struct {
+		after uint64
+		limit int
+		want  []domain.ID
+	}{
+		{0, 0, []domain.ID{"e-10", "e-1200", "e-2400"}},
+		{11, 0, []domain.ID{"e-1200", "e-2400"}},
+		{0, 2, []domain.ID{"e-10", "e-1200"}},
+	} {
+		got, read := workEventsRead(t, direct, c.after, c.limit)
+		if !slices.Equal(got, c.want) {
+			t.Fatalf("WorkEvents after %d limit %d: %v, want %v", c.after, c.limit, got, c.want)
+		}
+		if read > len(c.want) {
+			t.Fatalf("WorkEvents after %d limit %d read %d events from the host, want at most %d", c.after, c.limit, read, len(c.want))
+		}
+	}
+	got, read := workEventsRead(t, func(tx storage.Tx) storage.Tx { return scanningTx{tx} }, 0, 0)
+	if want := []domain.ID{"e-10", "e-1200", "e-2400"}; !slices.Equal(got, want) {
+		t.Fatalf("negative control answered %v, want %v", got, want)
+	}
+	if read <= 3 {
+		t.Fatalf("negative control: scanning state.events read only %d events; the bound catches nothing", read)
 	}
 }

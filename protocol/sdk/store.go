@@ -364,13 +364,19 @@ func (t *storeTx) Event(id domain.ID) (domain.AcceptedEvent, error) {
 }
 
 func (t *storeTx) Events(after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	return pages(after, limit, func(after uint64, page int) ([]domain.AcceptedEvent, error) { return t.h.Events(t.ctx, after, page) })
+}
+
+// pages reads read's pages of at most 1000 after a sequence until limit
+// (zero = all) or a short page, which the host sends only at the end.
+func pages(after uint64, limit int, read func(after uint64, page int) ([]domain.AcceptedEvent, error)) ([]domain.AcceptedEvent, error) {
 	var all []domain.AcceptedEvent
 	for {
 		page := 1000
 		if limit > 0 && limit-len(all) < page {
 			page = limit - len(all)
 		}
-		events, err := t.h.Events(t.ctx, after, page)
+		events, err := read(after, page)
 		if err != nil {
 			return nil, err
 		}
@@ -382,8 +388,8 @@ func (t *storeTx) Events(after uint64, limit int) ([]domain.AcceptedEvent, error
 	}
 }
 
-// The indexed event lookups are answered from Events: the protocol has no
-// dedicated call for them and an extension's reads are not on the hot path.
+// UnroutedEvents is answered from Events: the protocol has no dedicated
+// call for it, and no extension reads the routing backlog on a request path.
 func (t *storeTx) UnroutedEvents(after uint64, limit int) ([]domain.AcceptedEvent, error) {
 	all, err := t.Events(after, 0)
 	if err != nil {
@@ -398,18 +404,20 @@ func (t *storeTx) UnroutedEvents(after uint64, limit int) ([]domain.AcceptedEven
 	return out, nil
 }
 
+// WorkEvents reads one Work's events through state.work_events, which the
+// host serves from its index: the cost follows the Work's own events, not
+// the retained log.
 func (t *storeTx) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
-	all, err := t.Events(after, 0)
-	if err != nil {
-		return nil, err
+	if work == "" {
+		return []domain.AcceptedEvent{}, nil
 	}
-	out := []domain.AcceptedEvent{}
-	for _, a := range all {
-		if work != "" && (a.Event.WorkID == work || a.RoutedWorkID == work) && (limit <= 0 || len(out) < limit) {
-			out = append(out, a)
-		}
+	out, err := pages(after, limit, func(after uint64, page int) ([]domain.AcceptedEvent, error) {
+		return t.h.WorkEvents(t.ctx, work, after, page)
+	})
+	if out == nil && err == nil {
+		out = []domain.AcceptedEvent{}
 	}
-	return out, nil
+	return out, err
 }
 
 // LatestSequence is the log's latest sequence, through state.sequence: a

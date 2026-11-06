@@ -216,7 +216,7 @@ func (s *Service) Handle(ctx context.Context, method string, raw json.RawMessage
 	return out, err
 }
 
-var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.event": true, "state.events": true, "state.scopes": true, "state.timers": true, "state.waits": true, "state.sequence": true, "event.accept": true, "timer.cancel": true, "work.cancel": true, "wait.progress": true}
+var storeMethods = map[string]bool{"kv.get": true, "kv.list": true, "kv.commit": true, "state.work": true, "state.works": true, "state.executions": true, "state.event": true, "state.events": true, "state.work_events": true, "state.scopes": true, "state.timers": true, "state.waits": true, "state.sequence": true, "event.accept": true, "timer.cancel": true, "work.cancel": true, "wait.progress": true}
 
 func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage) (any, error) {
 	m, ok := protocol.Lookup(method)
@@ -251,7 +251,7 @@ func (s *Service) handle(ctx context.Context, method string, raw json.RawMessage
 			return nil, err
 		}
 		return s.kvCommit(ctx, p)
-	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.scopes", "state.timers", "state.waits", "state.sequence":
+	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.sequence":
 		var p protocol.StateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
@@ -705,34 +705,25 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 			event.ScopeID = string(scope)
 			out = event
 		case "state.events":
-			limit := p.Limit
-			if limit <= 0 || limit > 1000 {
-				limit = 1000
+			list, err := scopedEvents(tx, allowed, p, tx.Events)
+			if err != nil {
+				return err
 			}
-			// Filter by scope before the limit: read the log a batch at a
-			// time until the page is full or the log ends, so a page comes
-			// back short only at the end of the log however many other
-			// scopes' events sit between the extension's own.
+			out = list
+		case "state.work_events":
+			// One Work's events from the store's index, so the read follows
+			// the Work's own events rather than the retained log. No Work
+			// is looked up: an unknown or foreign Work's page is empty,
+			// never an existence oracle.
 			list := []protocol.AcceptedEvent{}
-			for after := p.After; len(list) < limit; {
-				events, err := tx.Events(after, limit)
+			if p.ID != "" {
+				var err error
+				list, err = scopedEvents(tx, allowed, p, func(after uint64, limit int) ([]domain.AcceptedEvent, error) {
+					return tx.WorkEvents(domain.ID(p.ID), after, limit)
+				})
 				if err != nil {
 					return err
 				}
-				for _, a := range events {
-					if len(list) == limit {
-						break
-					}
-					if scope, err := runtime.EventScopeInTx(tx, a); err == nil && allowed[scope] {
-						event := protocol.FromAccepted(a)
-						event.ScopeID = string(scope)
-						list = append(list, event)
-					}
-				}
-				if len(events) < limit {
-					break
-				}
-				after = events[len(events)-1].Sequence
 			}
 			out = list
 		case "state.scopes":
@@ -791,6 +782,40 @@ func (s *Service) state(ctx context.Context, method string, p protocol.StatePara
 		return nil
 	})
 	return out, err
+}
+
+// scopedEvents is one page of read (Events or WorkEvents) after p.After,
+// at most p.Limit (1000) of the allowed scopes' events. It filters by scope
+// before the limit: it reads a batch at a time until the page is full or
+// read runs out, so a page comes back short only at the end, however many
+// other scopes' events sit between the extension's own.
+func scopedEvents(tx storage.Tx, allowed map[domain.ID]bool, p protocol.StateParams, read func(after uint64, limit int) ([]domain.AcceptedEvent, error)) ([]protocol.AcceptedEvent, error) {
+	limit := p.Limit
+	if limit <= 0 || limit > 1000 {
+		limit = 1000
+	}
+	list := []protocol.AcceptedEvent{}
+	for after := p.After; len(list) < limit; {
+		events, err := read(after, limit)
+		if err != nil {
+			return nil, err
+		}
+		for _, a := range events {
+			if len(list) == limit {
+				break
+			}
+			if scope, err := runtime.EventScopeInTx(tx, a); err == nil && allowed[scope] {
+				event := protocol.FromAccepted(a)
+				event.ScopeID = string(scope)
+				list = append(list, event)
+			}
+		}
+		if len(events) < limit {
+			break
+		}
+		after = events[len(events)-1].Sequence
+	}
+	return list, nil
 }
 
 func (s *Service) ownFamily(t string) bool {
