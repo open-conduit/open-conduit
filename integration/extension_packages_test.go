@@ -1004,3 +1004,146 @@ func TestPackageSetupProbes(t *testing.T) {
 		t.Fatalf("a refused probe: %v", err)
 	}
 }
+
+// countingStore counts the events the host reads from the store for an
+// extension's state reads: what a read costs on the host's side.
+type countingStore struct {
+	storage.Store
+	read *int
+}
+
+func (s countingStore) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return s.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(countingTx{tx, s.read}) })
+}
+
+type countingTx struct {
+	storage.Tx
+	read *int
+}
+
+func (t countingTx) Events(after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	out, err := t.Tx.Events(after, limit)
+	*t.read += len(out)
+	return out, err
+}
+
+func (t countingTx) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	out, err := t.Tx.WorkEvents(work, after, limit)
+	*t.read += len(out)
+	return out, err
+}
+
+// scanningWorkEvents is the negative control: a client answering one
+// Work's events by scanning state.events, as sdk.Store did before
+// state.work_events (#536).
+type scanningWorkEvents struct{ storage.Tx }
+
+func (t scanningWorkEvents) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	all, err := t.Events(after, 0)
+	out := []domain.AcceptedEvent{}
+	for _, a := range all {
+		if a.Event.WorkID == work || a.RoutedWorkID == work {
+			out = append(out, a)
+		}
+	}
+	return out, err
+}
+
+// TestSDKStoreWorkEventsFollowTheWork: sdk.Store reads one Work's events,
+// named by it or routed to it, through state.work_events, which the host
+// answers from the store's index within the extension's scopes (another
+// scope's Work reads as empty). The host
+// reads that Work's events and not the 2,500 others in the log; a client
+// that scans state.events instead gets the same answer but fails the bound
+// (#536).
+func TestSDKStoreWorkEventsFollowTheWork(t *testing.T) {
+	e := newExtEnv(t)
+	ctx := context.Background()
+	g := storage.Guard{Now: e.clock.Now()}
+	accept := func(tx storage.Tx, scope domain.ID, id string, work domain.ID) error {
+		_, _, err := runtime.AcceptInTx(tx, scope, domain.Event{ID: domain.ID(id), Type: "other.thing", Source: "other", DeliveryID: id, WorkID: work, OccurredAt: e.clock.Now(), ReceivedAt: e.clock.Now()})
+		return err
+	}
+	if err := e.store.Transact(ctx, g, func(tx storage.Tx) error {
+		if err := tx.PutWork(domain.Work{ID: "work/thread", Kind: "notes.thread", ScopeID: extensionScope, State: domain.WorkReady}, 0); err != nil {
+			return err
+		}
+		if err := tx.PutWork(domain.Work{ID: "work/foreign", Kind: "notes.thread", ScopeID: "other-scope", State: domain.WorkReady}, 0); err != nil {
+			return err
+		}
+		if err := accept(tx, extensionScope, "named", "work/thread"); err != nil {
+			return err
+		}
+		for i := range 2500 {
+			if err := accept(tx, extensionScope, "unrelated-"+strconv.Itoa(i), ""); err != nil {
+				return err
+			}
+		}
+		if err := accept(tx, extensionScope, "routed", ""); err != nil {
+			return err
+		}
+		// The Work's earlier input is routed first, as the runtime would.
+		if err := tx.MarkRouted("named", "work/thread", "test"); err != nil {
+			return err
+		}
+		if err := tx.MarkRouted("routed", "work/thread", "test"); err != nil {
+			return err
+		}
+		return accept(tx, "other-scope", "foreign", "work/foreign")
+	}); err != nil {
+		t.Fatal(err)
+	}
+
+	read := 0
+	deps := e.deps()
+	deps.Store = countingStore{e.store, &read}
+	svc, err := extproc.NewService(notes.Manifest(notes.Options{Release: 2}), deps)
+	if err != nil {
+		t.Fatal(err)
+	}
+	store := sdk.NewStore(pipeHost(t, svc))
+	workEvents := func(wrap func(storage.Tx) storage.Tx, work domain.ID, after uint64, limit int) ([]string, int) {
+		t.Helper()
+		read = 0
+		var ids []string
+		if err := store.Transact(ctx, g, func(tx storage.Tx) error {
+			list, err := wrap(tx).WorkEvents(work, after, limit)
+			for _, a := range list {
+				ids = append(ids, string(a.Event.ID))
+			}
+			return err
+		}); err != nil {
+			t.Fatal(err)
+		}
+		return ids, read
+	}
+	direct := func(tx storage.Tx) storage.Tx { return tx }
+	// The Work's own two events, named and routed.
+	const bound = 2
+	if ids, n := workEvents(direct, "work/thread", 0, 0); !reflect.DeepEqual(ids, []string{"named", "routed"}) || n > bound {
+		t.Fatalf("WorkEvents: %v, %d events read on the host, want [named routed] within %d", ids, n, bound)
+	}
+	if ids, n := workEvents(direct, "work/thread", 0, 1); !reflect.DeepEqual(ids, []string{"named"}) || n > bound {
+		t.Fatalf("WorkEvents limit 1: %v, %d events read", ids, n)
+	}
+	if ids, _ := workEvents(direct, "work/thread", 1, 0); !reflect.DeepEqual(ids, []string{"routed"}) {
+		t.Fatalf("WorkEvents after the first: %v", ids)
+	}
+	// Another scope's Work's events stay there: an empty page, as for a
+	// Work that doesn't exist.
+	if ids, _ := workEvents(direct, "work/foreign", 0, 0); len(ids) != 0 {
+		t.Fatalf("WorkEvents of another scope's Work: %v", ids)
+	}
+	ids, n := workEvents(func(tx storage.Tx) storage.Tx { return scanningWorkEvents{tx} }, "work/thread", 0, 0)
+	if !reflect.DeepEqual(ids, []string{"named", "routed"}) {
+		t.Fatalf("negative control answered %v", ids)
+	}
+	if n <= bound {
+		t.Fatalf("negative control: scanning state.events read %d events on the host; the bound catches nothing", n)
+	}
+	// An empty Work ID names nothing.
+	host := pipeHost(t, svc)
+	if list, err := host.WorkEvents(ctx, "", 0, 0); err != nil || len(list) != 0 {
+		t.Fatalf("WorkEvents of no Work: %v %v", list, err)
+	}
+}

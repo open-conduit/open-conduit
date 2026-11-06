@@ -14,7 +14,12 @@ import { extension, type Extension } from "./extension.ts";
 import { text } from "./host.ts";
 import { Conn, type Handler } from "./jsonrpc.ts";
 import { type Infer, type Type, matches, t } from "./schema.ts";
-import { InitializeResult, KVCommitParams, KVGetParams } from "./wire.ts";
+import {
+  InitializeResult,
+  KVCommitParams,
+  KVGetParams,
+  StateParams,
+} from "./wire.ts";
 
 /** Decodes what the fake host receives, failing the test when it is malformed. */
 function decode<S extends Type<unknown>>(schema: S, value: unknown): Infer<S> {
@@ -374,6 +379,45 @@ test("a handler calls the host while it serves", async () => {
     "2",
   );
   assert.deepEqual(calls.slice(0, 2), ["kv.get", "kv.commit"]);
+  end();
+});
+
+test("a Work's events are read with state.work_events, not a scan of the log", async () => {
+  const asked: StateParams[] = [];
+  const hostHandler: Handler = async (method, params) => {
+    if (method !== "state.work_events")
+      throw new ProtocolError(Code.MethodNotFound, method);
+    asked.push(decode(StateParams, params));
+    return [
+      {
+        event: { id: "e2", type: "acme.thing.changed", work_id: "w1" },
+        sequence: 7,
+        routed: true,
+        scope_id: "s1",
+      },
+    ];
+  };
+  const ext = extension("acme", { version: "1.0.0" }).operation(
+    "acme.history",
+    {
+      input: t.object({}),
+      handler: async (_, { host }) => {
+        const events = await host.workEvents("w1", 3, 10);
+        const none = await host.workEvents("");
+        return { ids: events.map((e) => e.event.id), none: none.length };
+      },
+    },
+  );
+  const { host, end } = await ready(ext, hostHandler);
+  const out = await host.call("operation.call", {
+    operation: "acme.history",
+    authority,
+    input: { data: {} },
+  });
+  assert.deepEqual(out, {
+    output: { schema: "acme.history.v1", data: { ids: ["e2"], none: 0 } },
+  });
+  assert.deepEqual(asked, [{ id: "w1", after: 3, limit: 10 }]);
   end();
 });
 

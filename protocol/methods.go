@@ -125,6 +125,7 @@ var Methods = []Method{
 	{Name: "state.executions", Direction: ExtensionToHost, Contract: []string{"storage.Tx.ListExecutions"}},
 	{Name: "state.event", Direction: ExtensionToHost, Contract: []string{"storage.Tx.Event"}},
 	{Name: "state.events", Direction: ExtensionToHost, Contract: []string{"storage.Tx.Events"}},
+	{Name: "state.work_events", Direction: ExtensionToHost, Contract: []string{"storage.Tx.WorkEvents"}},
 	{Name: "state.scopes", Direction: ExtensionToHost, Contract: []string{"storage.Tx.ListScopes", "storage.Tx.Scope"}},
 	{Name: "state.timers", Direction: ExtensionToHost, Contract: []string{"storage.Tx.ListTimers"}},
 	{Name: "state.waits", Direction: ExtensionToHost, Contract: []string{"storage.Tx.ListWaits"}},

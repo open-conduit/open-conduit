@@ -169,6 +169,7 @@ type Host struct {
 	captured   []protocol.TelemetryEvent
 	authority  extension.Authority
 	calls      int
+	eventsRead int
 	tunnels    map[string]chan<- string
 	seeds      []func() // run once every option is applied (the clock is set)
 }
@@ -523,6 +524,14 @@ func (h *Host) Events() []domain.AcceptedEvent {
 	return slices.Clone(h.events)
 }
 
+// EventsRead is how many Events state.events and state.work_events have
+// sent the extension: what its reads of the log cost, whatever it kept.
+func (h *Host) EventsRead() int {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	return h.eventsRead
+}
+
 // Commits returns each kv.commit batch the host applied, in order.
 // Refused batches (a failed check) are not included.
 func (h *Host) Commits() []protocol.KVCommitParams {
@@ -646,7 +655,7 @@ func (h *Host) handle(ctx context.Context, method string, raw json.RawMessage) (
 		h.applyLocked(p.Puts, p.Deletes)
 		h.commits = append(h.commits, p)
 		return out, nil
-	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.scopes", "state.timers", "state.waits", "state.sequence":
+	case "state.work", "state.works", "state.executions", "state.event", "state.events", "state.work_events", "state.scopes", "state.timers", "state.waits", "state.sequence":
 		var p protocol.StateParams
 		if err := jsonrpc.Params(raw, &p); err != nil {
 			return nil, err
@@ -1032,15 +1041,21 @@ func (h *Host) stateLocked(method string, p protocol.StateParams) (any, error) {
 			seq = max(seq, a.Sequence)
 		}
 		return protocol.StateSequenceResult{Sequence: seq}, nil
-	case "state.events":
+	case "state.events", "state.work_events":
 		limit := p.Limit
 		if limit <= 0 || limit > 1000 {
 			limit = 1000
 		}
 		list := []protocol.AcceptedEvent{}
+		if method == "state.work_events" && p.ID == "" {
+			return list, nil
+		}
 		for _, a := range h.events {
 			if len(list) == limit {
 				break
+			}
+			if method == "state.work_events" && a.Event.WorkID != domain.ID(p.ID) && a.RoutedWorkID != domain.ID(p.ID) {
+				continue
 			}
 			if scope := h.causal[a.Event.ID].scope; a.Sequence > p.After && h.allowedLocked(scope) {
 				out := protocol.FromAccepted(a)
@@ -1048,6 +1063,7 @@ func (h *Host) stateLocked(method string, p protocol.StateParams) (any, error) {
 				list = append(list, out)
 			}
 		}
+		h.eventsRead += len(list)
 		return list, nil
 	case "state.scopes":
 		if p.ID != "" {

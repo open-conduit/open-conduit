@@ -195,6 +195,33 @@ export class Host {
     );
   }
 
+  /**
+   * One Work's accepted Events of the configured scopes after a sequence:
+   * those naming it and those routed to it. The host reads them from its
+   * index, so the cost follows the Work's own Events, not the whole log.
+   */
+  async workEvents(
+    workId: string,
+    after = 0,
+    limit = 0,
+    signal?: AbortSignal,
+  ): Promise<AcceptedEvent[]> {
+    if (workId === "") return [];
+    const params = {
+      id: workId,
+      ...(after > 0 ? { after } : {}),
+      ...(limit > 0 ? { limit } : {}),
+    };
+    return (
+      (await this.call(
+        "state.work_events",
+        params,
+        t.nullable(t.array(AcceptedEvent)),
+        signal,
+      )) ?? []
+    );
+  }
+
   /** Work of the configured scopes (one scope when scopeId is set). */
   async works(scopeId = "", signal?: AbortSignal): Promise<Work[]> {
     return (

@@ -202,6 +202,20 @@ func (h *Host) Events(ctx context.Context, after uint64, limit int) ([]domain.Ac
 	return accepted, nil
 }
 
+// WorkEvents reads one Work's accepted Events of configured scopes after a
+// sequence: those naming it and those routed to it.
+func (h *Host) WorkEvents(ctx context.Context, work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	var out []protocol.AcceptedEvent
+	if err := h.conn.Call(ctx, "state.work_events", protocol.StateParams{ID: string(work), After: after, Limit: limit}, &out); err != nil {
+		return nil, err
+	}
+	accepted := make([]domain.AcceptedEvent, len(out))
+	for i, a := range out {
+		accepted[i] = a.Domain()
+	}
+	return accepted, nil
+}
+
 // Works lists Work of configured scopes (one scope when scope is set).
 func (h *Host) Works(ctx context.Context, scope domain.ID) ([]domain.Work, error) {
 	var out []protocol.Work
