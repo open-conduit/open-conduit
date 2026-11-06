@@ -1027,6 +1027,12 @@ func (t countingTx) Events(after uint64, limit int) ([]domain.AcceptedEvent, err
 	return out, err
 }
 
+func (t countingTx) ScopeEvents(scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	out, err := t.Tx.ScopeEvents(scopes, after, limit)
+	*t.read += len(out)
+	return out, err
+}
+
 func (t countingTx) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
 	out, err := t.Tx.WorkEvents(work, after, limit)
 	*t.read += len(out)

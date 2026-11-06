@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 	"time"
@@ -420,6 +421,27 @@ func (t *storeTx) WorkEvents(work domain.ID, after uint64, limit int) ([]domain.
 	return out, err
 }
 
+// ScopeEvents reads through state.events, which the host already limits to
+// the extension's configured scopes and serves from its scope index, and
+// keeps those of scopes. Every event the host returns carries its scope, so
+// none is unrecorded here and "" in scopes matches nothing.
+func (t *storeTx) ScopeEvents(scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	out := []domain.AcceptedEvent{}
+	if len(scopes) == 0 {
+		return out, nil
+	}
+	all, err := t.Events(after, 0)
+	if err != nil {
+		return nil, err
+	}
+	for _, a := range all {
+		if slices.Contains(scopes, a.ScopeID) && (limit <= 0 || len(out) < limit) {
+			out = append(out, a)
+		}
+	}
+	return out, nil
+}
+
 // LatestSequence is the log's latest sequence, through state.sequence: a
 // cursor for Events, which may lie past the last Event of the extension's
 // own scopes.
@@ -495,6 +517,7 @@ func (t *storeTx) AcceptEvent(domain.Event) (domain.AcceptedEvent, bool, error) 
 	return domain.AcceptedEvent{}, false, ErrReadOnly
 }
 func (t *storeTx) MarkRouted(domain.ID, domain.ID, string) error        { return ErrReadOnly }
+func (t *storeTx) SetEventScope(domain.ID, domain.ID) error             { return ErrReadOnly }
 func (t *storeTx) PutWork(domain.Work, domain.Revision) error           { return ErrReadOnly }
 func (t *storeTx) PutExecution(domain.Execution, domain.Revision) error { return ErrReadOnly }
 func (t *storeTx) Claim(domain.ID, string, time.Duration) (domain.LeaseRef, error) {

@@ -1,4 +1,4 @@
-format 3
+format 4
 AcceptedEvent.Disposition string
 AcceptedEvent.Event struct
 AcceptedEvent.Event.Actor string
@@ -19,6 +19,7 @@ AcceptedEvent.Event.Type string
 AcceptedEvent.Event.WorkID string
 AcceptedEvent.Routed bool
 AcceptedEvent.RoutedWorkID string
+AcceptedEvent.ScopeID string
 AcceptedEvent.Sequence uint64
 Execution.Artifacts slice
 Execution.Artifacts.ID string

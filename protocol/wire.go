@@ -120,16 +120,17 @@ type AcceptedEvent struct {
 	Routed       bool   `json:"routed"`
 	RoutedWorkID string `json:"routed_work_id,omitempty"`
 	Disposition  string `json:"disposition,omitempty"`
-	// ScopeID is the scope the Event was accepted into, on the events
-	// state.event and state.events return.
+	// ScopeID is the scope the Event was accepted into
+	// (domain.AcceptedEvent.ScopeID). The host always sets it on the events
+	// state.event, state.events and state.work_events return.
 	ScopeID string `json:"scope_id,omitempty"`
 }
 
 func FromAccepted(a domain.AcceptedEvent) AcceptedEvent {
-	return AcceptedEvent{Event: FromEvent(a.Event), Sequence: a.Sequence, Routed: a.Routed, RoutedWorkID: string(a.RoutedWorkID), Disposition: a.Disposition}
+	return AcceptedEvent{Event: FromEvent(a.Event), Sequence: a.Sequence, Routed: a.Routed, RoutedWorkID: string(a.RoutedWorkID), Disposition: a.Disposition, ScopeID: string(a.ScopeID)}
 }
 func (a AcceptedEvent) Domain() domain.AcceptedEvent {
-	return domain.AcceptedEvent{Event: a.Event.Domain(), Sequence: a.Sequence, Routed: a.Routed, RoutedWorkID: domain.ID(a.RoutedWorkID), Disposition: a.Disposition}
+	return domain.AcceptedEvent{Event: a.Event.Domain(), Sequence: a.Sequence, Routed: a.Routed, RoutedWorkID: domain.ID(a.RoutedWorkID), Disposition: a.Disposition, ScopeID: domain.ID(a.ScopeID)}
 }
 func FromAcceptedList(as []domain.AcceptedEvent) []AcceptedEvent {
 	out := make([]AcceptedEvent, len(as))

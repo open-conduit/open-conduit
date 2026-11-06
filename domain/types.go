@@ -89,12 +89,17 @@ type Event struct {
 
 // AcceptedEvent adds storage metadata without changing the immutable envelope.
 // Sequence orders committed acceptance; routing may associate a work later.
+// ScopeID is the Scope the runtime accepted the Event into, recorded once
+// (storage.Tx.SetEventScope) and fixed from then on. It is empty until
+// recorded: for an Event storage accepted on its own, or one accepted before
+// scopes were recorded and not yet backfilled.
 type AcceptedEvent struct {
 	Event        Event
 	Sequence     uint64
 	Routed       bool
 	RoutedWorkID ID
 	Disposition  string
+	ScopeID      ID
 }
 type ExecutionState string
 

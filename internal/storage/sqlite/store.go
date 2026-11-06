@@ -30,7 +30,7 @@ const SchemaVersion uint32 = 1
 // the highest format that opened it, and Open refuses a database whose format
 // is newer than its own (ErrRecordsNewer), before it changes anything.
 // TestRecordFieldsArePinned fails until a field change comes with a bump.
-const RecordFormat uint32 = 3
+const RecordFormat uint32 = 4
 
 // recordFormat is RecordFormat, replaced by tests that simulate another binary.
 var recordFormat = RecordFormat
@@ -316,6 +316,7 @@ var indexes = []string{
 	`CREATE INDEX IF NOT EXISTS executions_live ON executions(id) WHERE active=1`,
 	`CREATE INDEX IF NOT EXISTS events_work ON events(` + eventWork + `, sequence)`,
 	`CREATE INDEX IF NOT EXISTS events_routed_work ON events(` + routedWork + `, sequence)`,
+	`CREATE INDEX IF NOT EXISTS events_scope ON events(` + eventScope + `, sequence)`,
 }
 
 // eventWork and routedWork are the Work an event names and the Work it was
@@ -327,6 +328,13 @@ const (
 	eventWork  = "json_extract(CAST(record AS TEXT),'$.Event.WorkID')"
 	routedWork = "json_extract(CAST(record AS TEXT),'$.RoutedWorkID')"
 )
+
+// eventScope is the Scope recorded for an event, empty when none is: records
+// from before scopes were recorded have no field at all. events_scope
+// indexes it with the sequence, so a scope's events, and the unrecorded
+// ones, are read without a scan of the log; queries must repeat the
+// expression for SQLite to use it.
+const eventScope = "coalesce(json_extract(CAST(record AS TEXT),'$.ScopeID'),'')"
 
 // liveWork and activeWait select Work not yet finished and Waits still
 // active. Like unrouted, the state lives in the record, the partial indexes

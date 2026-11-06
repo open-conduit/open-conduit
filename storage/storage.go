@@ -64,6 +64,7 @@ func (readOnly) AcceptEvent(domain.Event) (domain.AcceptedEvent, bool, error) {
 	return domain.AcceptedEvent{}, false, ErrReadOnly
 }
 func (readOnly) MarkRouted(domain.ID, domain.ID, string) error        { return ErrReadOnly }
+func (readOnly) SetEventScope(domain.ID, domain.ID) error             { return ErrReadOnly }
 func (readOnly) PutWork(domain.Work, domain.Revision) error           { return ErrReadOnly }
 func (readOnly) PutExecution(domain.Execution, domain.Revision) error { return ErrReadOnly }
 func (readOnly) Claim(domain.ID, string, time.Duration) (domain.LeaseRef, error) {
@@ -92,12 +93,22 @@ type Tx interface {
 	// UnroutedEvents, its cost follows the Work's own events, not retained
 	// history.
 	WorkEvents(work domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error)
+	// ScopeEvents is Events restricted to those whose recorded ScopeID is
+	// one of scopes. An empty ID in scopes stands for "not recorded yet", so
+	// a reader can ask for its scopes plus "" and resolve only the
+	// unrecorded few. Like WorkEvents, its cost follows the scopes' own
+	// events, not retained history.
+	ScopeEvents(scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error)
 	// LatestSequence is the last accepted sequence, zero before any event.
 	LatestSequence() (uint64, error)
 	// EventByDelivery finds an event by its delivery identity.
 	EventByDelivery(source, deliveryID string) (domain.AcceptedEvent, error)
 	// MarkRouted commits alongside route effects; replay with identical args is safe.
 	MarkRouted(eventID, workID domain.ID, disposition string) error
+	// SetEventScope records the Scope an Event was accepted into. It is
+	// write-once: the same scope again is nil, another is ErrConflict, an
+	// empty one ErrInvalid, and an unknown Event or Scope ErrNotFound.
+	SetEventScope(eventID, scopeID domain.ID) error
 	ListWorks() ([]domain.Work, error)
 	// LiveWorks is ListWorks restricted to Work that has not finished
 	// (State not Terminal), in ID order. Like UnroutedEvents, its cost

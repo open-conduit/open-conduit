@@ -2,6 +2,7 @@ package conformance_test
 
 import (
 	"context"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -93,6 +94,25 @@ func (b brokenWorkEventsTx) WorkEvents(work domain.ID, after uint64, limit int) 
 	return out, err
 }
 
+// brokenScopeEvents reads only recorded scopes: "" matches nothing, so
+// Events not yet backfilled go missing.
+type brokenScopeEvents struct{ storage.Store }
+type brokenScopeEventsTx struct{ storage.Tx }
+
+func (b brokenScopeEvents) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(brokenScopeEventsTx{tx}) })
+}
+func (b brokenScopeEventsTx) ScopeEvents(scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	all, err := b.Events(after, 0)
+	out := []domain.AcceptedEvent{}
+	for _, a := range all {
+		if a.ScopeID != "" && slices.Contains(scopes, a.ScopeID) && (limit <= 0 || len(out) < limit) {
+			out = append(out, a)
+		}
+	}
+	return out, err
+}
+
 // brokenActor stores Events without who caused them, as a store mapping
 // Events to columns might if it missed the field.
 type brokenActor struct{ storage.Store }
@@ -117,6 +137,7 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"timer_fire_rearm_rollback", "rollback was not atomic", func() storage.Store { return brokenAtomic{reference.New()} }},
 		{"lease_renew_survives_clock_step_back", "renewal after clock step back", func() storage.Store { return brokenStepBack{reference.New()} }},
 		{"work_events_follow_naming_and_routing", "work events", func() storage.Store { return brokenWorkEvents{reference.New()} }},
+		{"event_scope_recorded_once_and_indexed", "scope events", func() storage.Store { return brokenScopeEvents{reference.New()} }},
 		{"view_reads_committed_state_alongside_writes", "view waited for a write", func() storage.Store { return serialView{reference.New()} }},
 		{"view_reads_committed_state_alongside_writes", "view write", func() storage.Store { return writingView{reference.New()} }},
 	}

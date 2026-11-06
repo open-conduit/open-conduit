@@ -21,6 +21,14 @@ func (d *daemon) loop(ctx context.Context) error {
 	ticker := time.NewTicker(d.o.PollInterval)
 	defer ticker.Stop()
 	var lastSweep time.Time
+	// Events from before their scope was recorded get it, so a scope's
+	// events are read from storage's index; a failure only leaves readers
+	// resolving the rest one by one, as before.
+	if n, err := d.current.Load().router.BackfillEventScopes(ctx); err != nil && ctx.Err() == nil {
+		d.report("event_scope_backfill", "", errorCode(err))
+	} else if n > 0 {
+		d.log.Info("event scopes backfilled", "events", n)
+	}
 	// Open Work from before sources gave displays gets one from its
 	// history, once per store; a failure only leaves it without.
 	if n, err := d.current.Load().router.BackfillDisplays(ctx); err != nil && ctx.Err() == nil {

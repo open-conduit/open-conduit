@@ -247,12 +247,12 @@ func TestCatalogueCoversThePublicContract(t *testing.T) {
 	// Storage: the namespaced KV and the read views extensions use. Writes
 	// to core records (AcceptEvent, PutWork, leases, timers) are never
 	// exposed; they go through event.accept, timer.arm and work.cancel.
-	for _, m := range []string{"Get", "Put", "Delete", "List", "Work", "ListWorks", "ListExecutions", "Event", "Events", "WorkEvents", "ListScopes", "Scope", "ListTimers"} {
+	for _, m := range []string{"Get", "Put", "Delete", "List", "Work", "ListWorks", "ListExecutions", "Event", "Events", "WorkEvents", "ScopeEvents", "ListScopes", "Scope", "ListTimers"} {
 		if _, ok := reflect.TypeFor[storage.Tx]().MethodByName(m); !ok || !carried["storage.Tx."+m] {
 			t.Errorf("storage.Tx.%s is not carried", m)
 		}
 	}
-	for _, forbidden := range []string{"AcceptEvent", "PutWork", "Claim", "Renew", "Release", "PutTimer", "FireTimer", "PutWait", "PutScope", "PutExecution", "MarkRouted"} {
+	for _, forbidden := range []string{"AcceptEvent", "PutWork", "Claim", "Renew", "Release", "PutTimer", "FireTimer", "PutWait", "PutScope", "PutExecution", "MarkRouted", "SetEventScope"} {
 		if carried["storage.Tx."+forbidden] {
 			t.Errorf("storage.Tx.%s must not cross the boundary", forbidden)
 		}

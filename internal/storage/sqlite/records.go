@@ -61,6 +61,25 @@ func (t *transaction) WorkEvents(work domain.ID, after uint64, limit int) ([]dom
 	}
 	return list[domain.AcceptedEvent](t, "SELECT record FROM events WHERE sequence>? AND ("+eventWork+"=? OR "+routedWork+"=?) ORDER BY sequence LIMIT ?", after, string(work), string(work), limit)
 }
+func (t *transaction) ScopeEvents(scopes []domain.ID, after uint64, limit int) ([]domain.AcceptedEvent, error) {
+	if !t.live {
+		return nil, storage.ErrInvalid
+	}
+	if len(scopes) == 0 || after > 1<<63-1 {
+		return []domain.AcceptedEvent{}, nil
+	}
+	if limit <= 0 {
+		limit = -1
+	}
+	args := []any{after}
+	marks := make([]string, 0, len(scopes))
+	for _, s := range slices.Compact(slices.Sorted(slices.Values(scopes))) {
+		marks = append(marks, "?")
+		args = append(args, string(s))
+	}
+	args = append(args, limit)
+	return list[domain.AcceptedEvent](t, "SELECT record FROM events WHERE sequence>? AND "+eventScope+" IN ("+strings.Join(marks, ",")+") ORDER BY sequence LIMIT ?", args...)
+}
 func (t *transaction) LatestSequence() (uint64, error) {
 	if !t.live {
 		return 0, storage.ErrInvalid
@@ -176,6 +195,31 @@ func (t *transaction) MarkRouted(id, work domain.ID, disposition string) error {
 	a.Routed = true
 	a.RoutedWorkID = work
 	a.Disposition = disposition
+	b, err := encode(a)
+	if err != nil {
+		return err
+	}
+	_, err = t.exec("UPDATE events SET record=? WHERE id=?", b, id)
+	return err
+}
+func (t *transaction) SetEventScope(id, scope domain.ID) error {
+	a, err := t.Event(id)
+	if err != nil {
+		return err
+	}
+	if scope == "" {
+		return storage.ErrInvalid
+	}
+	if a.ScopeID != "" {
+		if a.ScopeID == scope {
+			return nil
+		}
+		return storage.ErrConflict
+	}
+	if _, err = t.Scope(scope); err != nil {
+		return err
+	}
+	a.ScopeID = scope
 	b, err := encode(a)
 	if err != nil {
 		return err
