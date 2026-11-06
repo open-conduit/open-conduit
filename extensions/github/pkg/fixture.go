@@ -94,10 +94,10 @@ func NewFixture(fake *githubtest.Server) (protocol.Fixture, error) {
 		Routes: []protocol.RouteCase{{Handler: gh.Type, Input: protocol.FromRouteInput(in), Want: protocol.FromRouteDecision(want)}},
 		// The tools bind the calling Work from durable state: an authority
 		// for Work the scope does not hold is refused.
-		Operations: []protocol.OperationCase{{Operation: gh.OpContext, Input: protocol.Payload{Schema: "github.tool.v1", Data: json.RawMessage(`{}`)}, Error: protocol.CodeUnauthorized}},
+		Operations: []protocol.OperationCase{{Operation: gh.OpContext, Input: protocol.Payload{Schema: gh.SchemaTool, Data: json.RawMessage(`{}`)}, Error: protocol.CodeUnauthorized}},
 		// The hold executor finishes its attempt at once; with no toolbelt
 		// endpoint it ends it as failed, which is still a whole result.
-		Executor: &protocol.ExecutorCase{Executor: gh.HoldExecutor, Config: protocol.Payload{Schema: "github.hold.v1", Data: json.RawMessage(`{}`)}},
+		Executor: &protocol.ExecutorCase{Executor: gh.HoldExecutor, Config: protocol.Payload{Schema: gh.SchemaHold, Data: json.RawMessage(`{}`)}},
 	}, nil
 }
 

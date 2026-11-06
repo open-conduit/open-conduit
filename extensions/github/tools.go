@@ -43,6 +43,12 @@ const (
 	SchemaHoldReleased = "github.hold.released.v1"
 	SchemaFilter       = "github.dependency.filter.v1"
 	SchemaHold         = "github.hold.v1"
+	// SchemaHoldRecovery is the hold executor's persisted recovery state.
+	SchemaHoldRecovery = "github.hold.recovery.v1"
+	// SchemaClaim is an operator's claim request (TypeClaimRequested).
+	SchemaClaim = "github.claim.v1"
+	// SchemaTool is the engineering tools' input and output.
+	SchemaTool = "github.tool.v1"
 	// FileSchema is the generic toolbelt file result: the `os` client writes
 	// base64 content to save_to in the agent's own directory.
 	FileSchema = "open-conduit.toolbelt.file.v1"
@@ -199,7 +205,7 @@ func (t *Tools) Registration() extension.Registration {
 			if err != nil {
 				return domain.Payload{}, err
 			}
-			return domain.Payload{Schema: "github.tool.v1", Data: data}, nil
+			return domain.Payload{Schema: SchemaTool, Data: data}, nil
 		}
 	}
 	// h binds the Work's issue; pr binds the Work with or without one;

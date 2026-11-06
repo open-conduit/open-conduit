@@ -58,6 +58,16 @@ const (
 	SchemaDelivery = "github.delivery.v1"
 )
 
+// Schemas is every payload schema the extension writes: its observations and
+// events, the tools' input and output, and the hold executor's recovery
+// state. The package manifest declares exactly these, and the host refuses
+// a payload whose schema it doesn't declare, so a schema missing here
+// fails every write of it.
+func Schemas() []string {
+	return []string{SchemaIssue, SchemaPull, SchemaComment, SchemaChecks, SchemaConflict, SchemaDelivery,
+		SchemaClaim, SchemaFilter, SchemaHold, SchemaHoldRecovery, SchemaHoldReleased, SchemaTool}
+}
+
 // DeliveryLoss is the declared loss limitation of raw webhook deliveries.
 const DeliveryLoss = "Raw webhook deliveries (github.delivery, the trigger input for webhook jobs) are not replayed by reconcile: GitHub keeps no readable per-delivery history for them. The issue, pull request, comment, review and check state they carry is recovered by reconcile as canonical observations; a raw delivery missed while push is unavailable is lost."
 

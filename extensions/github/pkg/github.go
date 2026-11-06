@@ -35,8 +35,12 @@ func base() protocol.Manifest {
 	for _, t := range []string{gh.TypeClaimRequested, gh.TypeHoldReleased} {
 		p.Families = append(p.Families, protocol.Family{Type: t, Loss: emittedLoss})
 	}
-	for _, s := range []string{"checks", "claim", "comment", "conflicts", "delivery", "dependency.filter", "hold", "hold.recovery", "hold.released", "issue", "tool"} {
-		p.Schemas = append(p.Schemas, protocol.SchemaDecl{Name: Name + "." + s, Versions: []int{1}})
+	for _, s := range gh.Schemas() {
+		name, version, ok := protocol.ParseSchemaID(s)
+		if !ok {
+			panic("github: unversioned schema " + s)
+		}
+		p.Schemas = append(p.Schemas, protocol.SchemaDecl{Name: name, Versions: []int{version}})
 	}
 	for _, op := range gh.Operations() {
 		kind := protocol.OperationHandler

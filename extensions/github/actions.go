@@ -67,7 +67,7 @@ func (a Actions) Invoke(ctx context.Context, c extension.ActionCall) (extension.
 	}
 	data, _ := json.Marshal(map[string]int{"number": n})
 	return extension.ActionPlan{
-		Event:   domain.Event{Type: TypeClaimRequested, CorrelationKey: &key, Data: domain.Payload{Schema: "github.claim.v1", Data: data}},
+		Event:   domain.Event{Type: TypeClaimRequested, CorrelationKey: &key, Data: domain.Payload{Schema: SchemaClaim, Data: data}},
 		Message: fmt.Sprintf("claimed %s#%d", a.Settings.TrackerRepo, n),
 	}, nil
 }
