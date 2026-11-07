@@ -46,7 +46,7 @@ func (f *fake) works(q url.Values, with bool) client.Page[client.Work] {
 	return client.Page[client.Work]{Items: out}
 }
 func (f *fake) Works(_ context.Context, q url.Values) (client.Page[client.Work], error) {
-	f.record("works "+q.Get("state"))
+	f.record("works " + q.Get("state"))
 	if f.old && strings.Contains(q.Get("state"), ",") {
 		return client.Page[client.Work]{}, &client.Error{Status: 400, Code: "invalid_filter"}
 	}
@@ -56,7 +56,7 @@ func (f *fake) Works(_ context.Context, q url.Values) (client.Page[client.Work],
 	return f.query(q, false, false), nil
 }
 func (f *fake) WorksWithActions(_ context.Context, q url.Values) (client.Page[client.Work], error) {
-	f.record("works+actions "+q.Get("state"))
+	f.record("works+actions " + q.Get("state"))
 	if f.old {
 		return client.Page[client.Work]{}, &client.Error{Status: 400, Code: "invalid_filter"}
 	}
@@ -210,7 +210,7 @@ func (f *fake) query(q url.Values, runs, with bool) client.Page[client.Work] {
 }
 
 func (f *fake) WorksWithRuns(_ context.Context, q url.Values, actions bool) (client.Page[client.Work], error) {
-	f.record("works+runs "+q.Get("state"))
+	f.record("works+runs " + q.Get("state"))
 	if f.old || f.noRuns {
 		return client.Page[client.Work]{}, &client.Error{Status: 400, Code: "invalid_filter"}
 	}
@@ -218,7 +218,7 @@ func (f *fake) WorksWithRuns(_ context.Context, q url.Values, actions bool) (cli
 }
 
 func (f *fake) WorkFacets(_ context.Context, q url.Values) (client.WorkFacets, error) {
-	f.record("facets "+q.Get("state"))
+	f.record("facets " + q.Get("state"))
 	if f.old || f.noRuns {
 		return client.WorkFacets{}, &client.Error{Status: 400, Code: "invalid_filter"}
 	}
