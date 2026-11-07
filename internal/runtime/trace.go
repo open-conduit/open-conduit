@@ -152,6 +152,9 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		w, err := routeOwner(tx, e)
 		if err == nil {
 			s.work = &w
+			if s.addressed, err = addressedBindingInTx(tx, e, s.work); err != nil {
+				return err
+			}
 			if w.State == domain.WorkWaiting {
 				if waiting, err = r.waitOutcomeInTx(tx, w, s.event); err != nil {
 					return err
@@ -264,6 +267,9 @@ func (r *Router) trace(ctx context.Context, scopeID domain.ID, e domain.Event, f
 		out.Effect.Detail = policy + " into " + string(w.ID) + "'s running attempt " + string(target.ID)
 	default:
 		out.Effect.Detail = "queued for " + string(w.ID) + "'s next turn (it is " + string(w.State) + ")"
+	}
+	if p.addressed {
+		out.Effect.Detail = "no route matched; the operator addressed it to " + string(w.ID) + ", so it is " + out.Effect.Detail + " on " + route.Binding + ", the binding it runs on"
 	}
 	if why, ok := fallbackWhy[reason]; ok {
 		out.Effect.Detail += "; " + why + ", so the route's " + policy + " fallback applies"

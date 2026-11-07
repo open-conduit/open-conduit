@@ -80,6 +80,7 @@ open-conduit work list --state waiting
 open-conduit work retry ID
 open-conduit work hold ID --reason "needs a decision"
 open-conduit work interrupt ID --reason "read my message"   # stop the running turn; its queued input starts the next
+open-conduit events emit --scope eng --work-id ID --type operator.reply --delivery-id reply-1 --schema operator.reply.v1 --data '{"text":"try again"}'   # send a Work input
 open-conduit work attach ID                          # hold, attach to the agent's session, release on exit
 open-conduit runs list
 open-conduit runs log ID --follow                    # follow a running turn
@@ -92,6 +93,7 @@ open-conduit events reroute ID                       # route a failed or skipped
 ```
 
 - `work retry|hold|release|interrupt|cancel` act on the Work's current revision. Pass `--revision N` (from `work get ID`) to act only if nothing has changed it since.
+- `events emit --work-id ID` sends the Work input, whether or not a route would take it: Work you made with `work create` has no route to take its follow-up. With no route matching, the Event queues for the Work's next turn on the binding the Work already runs on (its latest attempt's, or its first input's before it has run), and the route record's reason is `addressed`. A route that matches still decides, as for any input. Ready Work starts its next turn from it, which continues the session where the executor can; running Work takes it next; waiting Work keeps it as context and its wait still decides. Finished Work records it as `terminal`.
 - `work interrupt` stops a running turn without ending the Work: input queued for it (messages the turn couldn't read during a long tool call, say) starts the next turn, which continues the session where the executor can. It is refused, with nothing stopped, when the turn's executor can't be interrupted; cancel the turn instead.
 - Lists print a table; `--json` prints the records. `--scope` filters by scope everywhere.
 - `runs log ID` shows a run's output; `--transcript` shows the agent's transcript.
