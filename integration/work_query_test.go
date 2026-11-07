@@ -41,10 +41,7 @@ func (t workReadsTx) LiveWorks() ([]domain.Work, error) {
 }
 func (t workReadsTx) selected(q storage.WorkQuery) ([]domain.Work, storage.WorkFacets, error) {
 	works, err := t.ListWorks()
-	page, f := storage.SelectWorks(works, func(w domain.Work) string {
-		xs, _ := t.ListExecutions(w.ID)
-		return storage.LatestExecutor(xs)
-	}, q)
+	page, f := storage.SelectWorks(works, q)
 	return page, f, err
 }
 func (t workReadsTx) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {

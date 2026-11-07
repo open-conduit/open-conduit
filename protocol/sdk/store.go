@@ -285,45 +285,30 @@ func (t *storeTx) LiveWorks() ([]domain.Work, error) {
 	return out, nil
 }
 
-// QueryWorks, CountWorks and WorkFacets select from ListWorks, reading
-// each Work's attempts only for an executor filter or the facets: the host
+// QueryWorks, CountWorks and WorkFacets select from ListWorks: the host
 // serves no narrower read.
 func (t *storeTx) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
 	if !q.Order.Valid() {
 		return nil, storage.ErrInvalid
 	}
-	page, _, err := t.selectWorks(q, q.Executor != "")
-	return page, err
+	works, err := t.ListWorks()
+	if err != nil {
+		return nil, err
+	}
+	page, _ := storage.SelectWorks(works, q)
+	return page, nil
 }
 func (t *storeTx) CountWorks(q storage.WorkQuery) (int, error) {
-	_, f, err := t.selectWorks(q, q.Executor != "")
+	f, err := t.WorkFacets(q)
 	return f.Count, err
 }
 func (t *storeTx) WorkFacets(q storage.WorkQuery) (storage.WorkFacets, error) {
-	_, f, err := t.selectWorks(q, true)
-	return f, err
-}
-func (t *storeTx) selectWorks(q storage.WorkQuery, executors bool) ([]domain.Work, storage.WorkFacets, error) {
 	works, err := t.ListWorks()
 	if err != nil {
-		return nil, storage.WorkFacets{}, err
+		return storage.WorkFacets{}, err
 	}
-	var readErr error
-	executor := func(w domain.Work) string {
-		if !executors || readErr != nil {
-			return ""
-		}
-		xs, err := t.ListExecutions(w.ID)
-		if err != nil {
-			readErr = err
-		}
-		return storage.LatestExecutor(xs)
-	}
-	page, f := storage.SelectWorks(works, executor, q)
-	if !executors {
-		f.Executors = []string{}
-	}
-	return page, f, readErr
+	_, f := storage.SelectWorks(works, q)
+	return f, nil
 }
 
 // LiveExecutions filters ListExecutions: the host serves no narrower read.

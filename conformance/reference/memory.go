@@ -352,6 +352,7 @@ func (t *transaction) PutWork(w domain.Work, expected domain.Revision) error {
 		}
 	}
 	w.Revision = expected + 1
+	w.LatestExecutor = old.LatestExecutor
 	w.CreatedAt = old.CreatedAt
 	if !exists {
 		w.CreatedAt = t.now
@@ -447,6 +448,11 @@ func (t *transaction) PutExecution(x domain.Execution, expected domain.Revision)
 	}
 	x.UpdatedAt = t.now
 	t.data.Executions[x.ID] = copyOf(x)
+	if !exists {
+		// The new attempt is the Work's latest.
+		w.LatestExecutor = x.Executor
+		t.data.Works[x.WorkID] = w
+	}
 	return nil
 }
 func (t *transaction) authorize(ref domain.LeaseRef) error {
@@ -776,23 +782,19 @@ func (t *transaction) LiveWorks() ([]domain.Work, error) {
 	}
 	return out, nil
 }
-func (t *transaction) latestExecutor(w domain.Work) string {
-	xs, _ := t.ListExecutions(w.ID)
-	return storage.LatestExecutor(xs)
-}
 func (t *transaction) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
 	if !q.Order.Valid() {
 		return nil, storage.ErrInvalid
 	}
-	page, _ := storage.SelectWorks(sortedValues(t.data.Works), t.latestExecutor, q)
+	page, _ := storage.SelectWorks(sortedValues(t.data.Works), q)
 	return page, nil
 }
 func (t *transaction) CountWorks(q storage.WorkQuery) (int, error) {
-	_, f := storage.SelectWorks(sortedValues(t.data.Works), t.latestExecutor, q)
+	_, f := storage.SelectWorks(sortedValues(t.data.Works), q)
 	return f.Count, nil
 }
 func (t *transaction) WorkFacets(q storage.WorkQuery) (storage.WorkFacets, error) {
-	_, f := storage.SelectWorks(sortedValues(t.data.Works), t.latestExecutor, q)
+	_, f := storage.SelectWorks(sortedValues(t.data.Works), q)
 	return f, nil
 }
 func (t *transaction) SetExecutionExecutor(id domain.ID, executor string) error {
@@ -811,6 +813,14 @@ func (t *transaction) SetExecutionExecutor(id domain.ID, executor string) error 
 	}
 	x.Executor = executor
 	t.data.Executions[id] = x
+	latest := true
+	for _, other := range t.data.Executions {
+		latest = latest && (other.WorkID != x.WorkID || other.Attempt <= x.Attempt)
+	}
+	if w := t.data.Works[x.WorkID]; latest {
+		w.LatestExecutor = executor
+		t.data.Works[x.WorkID] = w
+	}
 	return nil
 }
 func (t *transaction) LiveExecutions() ([]domain.Execution, error) {

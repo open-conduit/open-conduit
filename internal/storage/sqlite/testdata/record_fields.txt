@@ -144,6 +144,7 @@ Work.Display.Title string
 Work.Grants slice
 Work.ID string
 Work.Kind string
+Work.LatestExecutor string
 Work.ParentID string
 Work.Revision uint64
 Work.ScopeID string

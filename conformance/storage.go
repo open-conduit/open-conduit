@@ -1739,7 +1739,8 @@ func workQueries(s storage.Store) error {
 		}},
 		// w2 and w3 are created at the same instant, written in two zones.
 		{2 * time.Second, east, func(tx storage.Tx) error {
-			if err := tx.PutWork(domain.Work{ID: "w2", Kind: "test.other", ScopeID: "other", State: domain.WorkReady}, 0); err != nil {
+			// A writer's LatestExecutor is ignored: storage keeps it.
+			if err := tx.PutWork(domain.Work{ID: "w2", Kind: "test.other", ScopeID: "other", State: domain.WorkReady, LatestExecutor: "forged"}, 0); err != nil {
 				return err
 			}
 			if err := attempt(tx, "w2", 1, "claude"); err != nil {
@@ -1781,6 +1782,12 @@ func workQueries(s storage.Store) error {
 		if err != nil {
 			return err
 		}
+		for _, w := range works {
+			want := map[domain.ID]string{"work": "shell", "w1": "shell", "w2": "claude", "w3": ""}[w.ID]
+			if w.LatestExecutor != want {
+				return fmt.Errorf("work queries: %s's latest executor %q, want %q", w.ID, w.LatestExecutor, want)
+			}
+		}
 		key := func(id domain.ID, o storage.WorkOrder) *storage.WorkKey {
 			for _, w := range works {
 				if w.ID == id {
@@ -1809,6 +1816,7 @@ func workQueries(s storage.Store) error {
 			{storage.WorkQuery{Executor: "shell"}, "work w1", "whose latest attempt is shell's"},
 			{storage.WorkQuery{Executor: "claude"}, "w2", "whose latest attempt is claude's, not an earlier one"},
 			{storage.WorkQuery{Executor: "missing"}, "", "of an executor no attempt has"},
+			{storage.WorkQuery{Executor: "forged"}, "", "of an executor a writer claimed"},
 			{storage.WorkQuery{UpdatedSince: t0.Add(2 * time.Second).In(east)}, "work w2 w3", "updated since an instant, inclusive"},
 			{storage.WorkQuery{States: closed, ScopeID: "scope", Sources: []string{"github.issue"}, Executor: "shell"}, "w1", "of every filter at once"},
 			{storage.WorkQuery{Order: storage.WorkCreatedDesc, Limit: 2}, "w3 w2", "a first page"},

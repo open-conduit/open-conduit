@@ -137,7 +137,10 @@ type Tx interface {
 	Execution(domain.ID) (domain.Execution, error)
 	PutExecution(domain.Execution, domain.Revision) error
 	// SetExecutionExecutor records the Executor of an attempt registered
-	// before attempts recorded it, finished or not. It is write-once: the
+	// before attempts recorded it, finished or not, and the Work's
+	// LatestExecutor when it is the latest. PutExecution keeps a recorded
+	// executor when an update leaves it empty, and registering an attempt
+	// sets its Work's LatestExecutor. It is write-once: the
 	// same executor again is nil, another is ErrConflict, an empty one
 	// ErrInvalid, and an unknown attempt ErrNotFound.
 	SetExecutionExecutor(execution domain.ID, executor string) error

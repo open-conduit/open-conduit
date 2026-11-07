@@ -59,7 +59,8 @@ type WorkQuery struct {
 	ParentID domain.ID
 	// Sources are WorkSource values Work may have, any of them.
 	Sources []string
-	// Executor is the Executor recorded on the Work's latest attempt;
+	// Executor is the Work's LatestExecutor, the Executor recorded on its
+	// latest attempt;
 	// Work with no attempt, or whose latest has none recorded, has none.
 	Executor string
 	// UpdatedSince keeps Work whose UpdatedAt is not before it.
@@ -92,27 +93,26 @@ func WorkSource(w domain.Work) string {
 	return w.Kind
 }
 
-// Matches says whether w, whose latest attempt's executor is executor,
-// is one q selects. It ignores Order, After and Limit.
-func (q WorkQuery) Matches(w domain.Work, executor string) bool {
+// Matches says whether w is one q selects. It ignores Order, After and
+// Limit.
+func (q WorkQuery) Matches(w domain.Work) bool {
 	return (len(q.States) == 0 || slices.Contains(q.States, w.State)) &&
 		(q.ScopeID == "" || w.ScopeID == q.ScopeID) && (q.Kind == "" || w.Kind == q.Kind) &&
 		(q.ParentID == "" || w.ParentID == q.ParentID) &&
 		(len(q.Sources) == 0 || slices.Contains(q.Sources, WorkSource(w))) &&
-		(q.Executor == "" || executor == q.Executor) &&
+		(q.Executor == "" || w.LatestExecutor == q.Executor) &&
 		(q.UpdatedSince.IsZero() || !w.UpdatedAt.Before(q.UpdatedSince))
 }
 
 // SelectWorks answers QueryWorks, CountWorks and WorkFacets over every
-// Work in works by reading them all, given each one's latest attempt's
-// executor. It is the contract's meaning, for a backend with no index to
+// Work in works by reading them all. It is the contract's meaning, for a backend with no index to
 // read through and for tests; its cost follows works, not the answer.
-func SelectWorks(works []domain.Work, executor func(domain.Work) string, q WorkQuery) (page []domain.Work, facets WorkFacets) {
+func SelectWorks(works []domain.Work, q WorkQuery) (page []domain.Work, facets WorkFacets) {
 	scopes, sources, executors := map[domain.ID]bool{}, map[string]bool{}, map[string]bool{}
 	var in []domain.Work
 	for _, w := range works {
-		ex := executor(w)
-		if !q.Matches(w, ex) {
+		ex := w.LatestExecutor
+		if !q.Matches(w) {
 			continue
 		}
 		in = append(in, w)
@@ -150,16 +150,4 @@ func sortedKeys[K ~string](m map[K]bool) []K {
 	}
 	slices.Sort(out)
 	return out
-}
-
-// LatestExecutor is the Executor recorded on the latest of a Work's
-// attempts, "" when it has none.
-func LatestExecutor(xs []domain.Execution) string {
-	var latest domain.Execution
-	for _, x := range xs {
-		if x.Attempt > latest.Attempt {
-			latest = x
-		}
-	}
-	return latest.Executor
 }

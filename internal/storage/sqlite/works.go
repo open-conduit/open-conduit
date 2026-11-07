@@ -34,35 +34,29 @@ const (
 	// workSource is storage.WorkSource: the first correlation key's
 	// source, else the kind.
 	workSource = "coalesce(json_extract(CAST(record AS TEXT),'$.CorrelationKeys[0].Source')," + workKind + ")"
-	// attemptExecutor is an attempt's recorded executor, "" before one is.
-	attemptExecutor = "coalesce(json_extract(CAST(record AS TEXT),'$.Executor'),'')"
+	// workExecutor is the Work's LatestExecutor, "" before one is recorded.
+	workExecutor = "coalesce(json_extract(CAST(record AS TEXT),'$.LatestExecutor'),'')"
 )
 
 // workIndexes serve storage.WorkQuery. works_created and works_updated
-// list Work in either order; works_state_created and works_state_updated
+// list Work in either order. works_state_created and works_state_updated
 // list the Work in one state in either order, so a page of Work in some
-// states reads a page of each, and count Work by state; works_scope and
-// works_source find Work by scope and by source, and step through their
-// distinct values; works_parent finds a Work's children;
-// executions_executor steps through the distinct executors, and
-// executions_latest reads a Work's latest attempt's executor from the
-// index.
+// states reads a page of each, and count Work by state;
+// works_executor_created and works_executor_updated do the same for one
+// executor's Work in one state. works_scope and works_source find Work by
+// scope and by source and step through their distinct values, as
+// works_executor_updated does executors; works_parent finds a Work's
+// children.
 var workIndexes = []string{
 	`CREATE INDEX IF NOT EXISTS works_created ON works(` + workCreated + `, id)`,
 	`CREATE INDEX IF NOT EXISTS works_updated ON works(` + workUpdated + `, id)`,
 	`CREATE INDEX IF NOT EXISTS works_state_created ON works(` + workState + `, ` + workCreated + `, id)`,
 	`CREATE INDEX IF NOT EXISTS works_state_updated ON works(` + workState + `, ` + workUpdated + `, id)`,
+	`CREATE INDEX IF NOT EXISTS works_executor_created ON works(` + workExecutor + `, ` + workState + `, ` + workCreated + `, id)`,
+	`CREATE INDEX IF NOT EXISTS works_executor_updated ON works(` + workExecutor + `, ` + workState + `, ` + workUpdated + `, id)`,
 	`CREATE INDEX IF NOT EXISTS works_scope ON works(scope_id, ` + workState + `)`,
 	`CREATE INDEX IF NOT EXISTS works_source ON works(` + workSource + `, ` + workState + `)`,
 	`CREATE INDEX IF NOT EXISTS works_parent ON works(parent_id)`,
-	`CREATE INDEX IF NOT EXISTS executions_executor ON executions(` + attemptExecutor + `)`,
-	`CREATE INDEX IF NOT EXISTS executions_latest ON executions(work_id, attempt, ` + attemptExecutor + `)`,
-}
-
-// latestIs is the condition that the latest attempt of the Work works.id
-// recorded the executor value (SQL), read from executions_latest.
-func latestIs(value string) string {
-	return "(SELECT " + attemptExecutor + " FROM executions WHERE executions.work_id=works.id ORDER BY executions.attempt DESC LIMIT 1)=" + value
 }
 
 // workWhere is q's filters as a condition on works, with its arguments.
@@ -96,7 +90,7 @@ func workWhere(q storage.WorkQuery) (string, []any) {
 		in(workSource, q.Sources)
 	}
 	if q.Executor != "" {
-		conds, args = append(conds, latestIs("?")), append(args, q.Executor)
+		conds, args = append(conds, workExecutor+"=?"), append(args, q.Executor)
 	}
 	if !q.UpdatedSince.IsZero() {
 		conds, args = append(conds, workUpdated+">=?"), append(args, q.UpdatedSince.UnixNano())
@@ -194,7 +188,7 @@ func facetQueries(q storage.WorkQuery) (scopes, sources, executors string, args 
 	where, args := workWhere(q)
 	scopes = "SELECT s.id FROM scopes s WHERE EXISTS(SELECT 1 FROM works WHERE works.scope_id=s.id AND " + where + ") ORDER BY s.id"
 	sources = distinct("works", workSource, "", "EXISTS(SELECT 1 FROM works WHERE "+workSource+"=v AND "+where+")")
-	executors = distinct("executions", attemptExecutor, "''", "EXISTS(SELECT 1 FROM works WHERE "+latestIs("v")+" AND "+where+")")
+	executors = distinct("works", workExecutor, "''", "EXISTS(SELECT 1 FROM works WHERE "+workExecutor+"=v AND "+where+")")
 	return scopes, sources, executors, args
 }
 
@@ -243,5 +237,19 @@ func (t *transaction) SetExecutionExecutor(id domain.ID, executor string) error 
 		return storage.ErrConflict
 	}
 	x.Executor = executor
-	return t.writeExecution(x, true)
+	if err = t.writeExecution(x, true); err != nil {
+		return err
+	}
+	var latest uint32
+	if err = t.queryRow("SELECT max(attempt) FROM executions WHERE work_id=?", x.WorkID).Scan(&latest); err != nil {
+		return mapError(err)
+	}
+	if x.Attempt != latest {
+		return nil
+	}
+	w, err := t.Work(x.WorkID)
+	if err != nil {
+		return err
+	}
+	return t.setLatestExecutor(w, executor)
 }

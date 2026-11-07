@@ -80,33 +80,24 @@ func parseWorkFilter(q listQuery) (workFilter, error) {
 	return f, nil
 }
 
-// cheap says whether w passes the filters on the Work record alone.
+// cheap says whether w passes the filters on the Work record alone: all
+// but the words.
 func (f workFilter) cheap(w domain.Work) bool {
 	q := f.q
 	return match(q, "scope_id", string(w.ScopeID)) && matchAny(q, "state", string(w.State)) && match(q, "kind", w.Kind) &&
-		match(q, "parent_id", string(w.ParentID)) && match(q, "source", workSource(w)) &&
+		match(q, "parent_id", string(w.ParentID)) && match(q, "source", workSource(w)) && match(q, "executor", w.LatestExecutor) &&
 		(f.updatedAfter.IsZero() || !w.UpdatedAt.Before(f.updatedAfter))
 }
 
 // matches says whether w passes every filter, reading its latest attempt
-// only when the executor or words ask for it.
+// only when the words ask for it.
 func (f workFilter) matches(tx storage.Tx, w domain.Work) (bool, error) {
-	if !f.cheap(w) {
-		return false, nil
-	}
-	_, byExecutor := f.q.filters["executor"]
-	if !byExecutor && len(f.words) == 0 {
-		return true, nil
+	if !f.cheap(w) || len(f.words) == 0 {
+		return f.cheap(w), nil
 	}
 	x, ok, err := latestExecution(tx, w.ID)
 	if err != nil {
 		return false, err
-	}
-	if byExecutor && x.Executor != f.q.filters["executor"] {
-		return false, nil
-	}
-	if len(f.words) == 0 {
-		return true, nil
 	}
 	hay := []string{string(w.ID), w.Kind, string(w.ScopeID), string(w.State)}
 	for _, k := range w.CorrelationKeys {
@@ -466,12 +457,8 @@ func residualFacets(tx storage.Tx, f workFilter) (map[string]any, error) {
 		total++
 		scopes[string(w.ScopeID)] = true
 		sources[workSource(w)] = true
-		x, ok, err := latestExecution(tx, w.ID)
-		if err != nil {
-			return nil, err
-		}
-		if ok && x.Executor != "" {
-			executors[x.Executor] = true
+		if w.LatestExecutor != "" {
+			executors[w.LatestExecutor] = true
 		}
 	}
 	return map[string]any{"total": total, "scope_ids": setKeys(scopes), "sources": setKeys(sources), "executors": setKeys(executors)}, nil
