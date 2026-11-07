@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"os"
@@ -9,6 +10,7 @@ import (
 	goruntime "runtime"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/open-conduit/open-conduit/client"
 )
@@ -35,6 +37,12 @@ type ServiceHost struct {
 	LookPath   func(string) (string, error)
 	// Run runs launchctl or systemctl and returns its combined output.
 	Run func(name string, args ...string) (string, error)
+	// Answers reports whether the daemon answers on its socket; nil asks it
+	// for its health with the operator's client.
+	Answers func() bool
+	// Sleep waits between checks that a started daemon is up; nil is
+	// time.Sleep.
+	Sleep func(time.Duration)
 }
 
 // SystemServiceHost is the real machine.
@@ -314,8 +322,69 @@ func (o *operator) serviceStart(h *ServiceHost) error {
 	} else if err := systemctl(h, "start", systemdUnit); err != nil {
 		return err
 	}
+	if err := o.awaitService(h); err != nil {
+		return err
+	}
 	fmt.Fprintf(o.out, "started; follow it with tail -f %s, check it with open-conduit doctor\n", s.Log)
 	return nil
+}
+
+// launchdThrottle is the plist's ThrottleInterval: launchd starts the daemon
+// no sooner than this after it last exited, so a start right after a stop
+// can be held back.
+const launchdThrottle = 10 * time.Second
+
+// serviceStartWait bounds how long service start waits for the daemon to
+// answer: past launchd's throttle, with time for the daemon to open its
+// store and socket.
+const serviceStartWait = 30 * time.Second
+
+// awaitService waits, up to serviceStartWait, for the started service to run
+// and the daemon to answer. On macOS, once the throttle has passed with the
+// service still not running, it asks launchd to start it once more. A daemon
+// that doesn't come up is an error naming the log, never "started".
+func (o *operator) awaitService(h *ServiceHost) error {
+	sleep := h.Sleep
+	if sleep == nil {
+		sleep = time.Sleep
+	}
+	const step = time.Second
+	kicked := false
+	for waited := time.Duration(0); ; waited += step {
+		s, err := o.serviceQuery(h)
+		if err != nil {
+			return err
+		}
+		if s.Running && o.daemonAnswers(h) {
+			return nil
+		}
+		if waited >= serviceStartWait {
+			state := "is not running"
+			if s.Running {
+				state = fmt.Sprintf("runs (pid %d) but does not answer", s.PID)
+			}
+			return fmt.Errorf("the daemon %s after %s; see %s and open-conduit service status", state, serviceStartWait, s.Log)
+		}
+		if h.GOOS == "darwin" && !s.Running && !kicked && waited > launchdThrottle {
+			kicked = true
+			_, _ = h.Run("launchctl", "kickstart", o.launchdDomain(h)+"/"+launchdLabel)
+		}
+		sleep(step)
+	}
+}
+
+func (o *operator) daemonAnswers(h *ServiceHost) bool {
+	if h.Answers != nil {
+		return h.Answers()
+	}
+	c, _, err := o.client()
+	if err != nil {
+		return false
+	}
+	cx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	_, err = c.Health(cx)
+	return err == nil
 }
 
 func (o *operator) serviceStop(h *ServiceHost) error {

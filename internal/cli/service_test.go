@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/open-conduit/open-conduit/client"
 )
@@ -16,7 +17,11 @@ import (
 // unit is loaded and running once started.
 type fakeServiceManager struct {
 	loaded, running bool
-	calls           []string
+	// throttled loads the unit without running it until a kickstart, as
+	// launchd does inside the ThrottleInterval after the daemon exited;
+	// broken never runs it.
+	throttled, broken bool
+	calls             []string
 }
 
 func (f *fakeServiceManager) run(name string, args ...string) (string, error) {
@@ -36,7 +41,9 @@ func (f *fakeServiceManager) run(name string, args ...string) (string, error) {
 		return "gui/501/" + launchdLabel + " = {\n\tstate = " + state + "\n\targuments = {\n\t\t/opt/oc/open-conduit\n\t}\n" + pid +
 			"\tlast exit code = 1\n\n\tresource coalition = {\n\t\tstate = active\n\t}\n\n\tjetsam coalition = {\n\t\tstate = active\n\t}\n}\n", nil
 	case strings.Contains(call, "launchctl bootstrap"):
-		f.loaded, f.running = true, true
+		f.loaded, f.running = true, !f.throttled && !f.broken
+	case strings.Contains(call, "launchctl kickstart"):
+		f.running = f.loaded && !f.broken
 	case strings.Contains(call, "launchctl bootout"):
 		f.loaded, f.running = false, false
 	case strings.Contains(call, "systemctl --user show"):
@@ -59,6 +66,7 @@ func TestServiceLifecycle(t *testing.T) {
 			env := map[string]string{"HOME": root, "PATH": "/home/me/go/bin:relative"}
 			fake := &fakeServiceManager{}
 			host := &ServiceHost{GOOS: goos, Executable: "/opt/oc/open-conduit", UID: 501, Run: fake.run,
+				Answers: func() bool { return fake.running }, Sleep: func(time.Duration) {},
 				LookPath: func(name string) (string, error) {
 					if name == "claude" {
 						return "/Users/me/.local/bin/" + name, nil
@@ -160,5 +168,49 @@ func TestServiceUnsupportedPlatform(t *testing.T) {
 func TestSystemdQuote(t *testing.T) {
 	if got := systemdQuote(`/a b/100%$x"y`); got != `"/a b/100%%$$x\"y"` {
 		t.Fatal(got)
+	}
+}
+
+// service start reports "started" only once the daemon answers. launchd
+// holding a start back for its ThrottleInterval is waited out and the start
+// asked for again; a daemon that never comes up is an error naming the log.
+func TestServiceStartWaitsForTheDaemon(t *testing.T) {
+	for _, tc := range []struct {
+		name              string
+		throttled, broken bool
+		code              int
+		want              string
+	}{
+		{"throttled", true, false, 0, "started"},
+		{"broken", false, true, 1, "is not running after 30s"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			root := t.TempDir()
+			env := map[string]string{"HOME": root, "PATH": "/usr/bin"}
+			fake := &fakeServiceManager{}
+			var slept time.Duration
+			host := &ServiceHost{GOOS: "darwin", Executable: "/opt/oc/open-conduit", UID: 501, Run: fake.run,
+				Answers: func() bool { return fake.running }, Sleep: func(d time.Duration) { slept += d },
+				LookPath: func(string) (string, error) { return "", errors.New("not found") }}
+			run := func(args ...string) (string, string, int) {
+				var out, errOut bytes.Buffer
+				code := RunOperator("test", "abc", args, Env{Getenv: func(k string) string { return env[k] }, Cwd: root, Service: host}, &out, &errOut)
+				return out.String(), errOut.String(), code
+			}
+			if _, errOut, code := run("service", "install", "--no-start", "--config", "cfg.json"); code != 0 {
+				t.Fatalf("install: %s", errOut)
+			}
+			fake.throttled, fake.broken = tc.throttled, tc.broken
+			out, errOut, code := run("service", "start")
+			if code != tc.code || !strings.Contains(out+errOut, tc.want) || code != 0 && strings.Contains(out, "started") {
+				t.Fatalf("start: %d %q %q", code, out, errOut)
+			}
+			if code != 0 && !strings.Contains(errOut, "service.log") {
+				t.Fatalf("a failed start does not point to the log: %q", errOut)
+			}
+			if tc.throttled && (slept <= launchdThrottle || !strings.Contains(strings.Join(fake.calls, "\n"), "launchctl kickstart")) {
+				t.Fatalf("a throttled start was not waited out and asked again: slept %s, calls %v", slept, fake.calls)
+			}
+		})
 	}
 }
