@@ -30,7 +30,7 @@ const SchemaVersion uint32 = 1
 // the highest format that opened it, and Open refuses a database whose format
 // is newer than its own (ErrRecordsNewer), before it changes anything.
 // TestRecordFieldsArePinned fails until a field change comes with a bump.
-const RecordFormat uint32 = 4
+const RecordFormat uint32 = 5
 
 // recordFormat is RecordFormat, replaced by tests that simulate another binary.
 var recordFormat = RecordFormat
@@ -139,7 +139,7 @@ func Open(ctx context.Context, path string) (*Store, error) {
 	if err = enableWAL(ctx, db); err != nil {
 		return nil, err
 	}
-	for _, statement := range indexes {
+	for _, statement := range append(indexes, workIndexes...) {
 		if _, err = db.ExecContext(ctx, statement); err != nil {
 			return nil, fmt.Errorf("sqlite: index: %w", err)
 		}

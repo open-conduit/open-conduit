@@ -113,6 +113,62 @@ func (b brokenScopeEventsTx) ScopeEvents(scopes []domain.ID, after uint64, limit
 	return out, err
 }
 
+// anyAttemptExecutor selects Work by the executor of any of its attempts,
+// not the latest's, as a store indexing attempts without asking which is
+// latest might.
+type anyAttemptExecutor struct{ storage.Store }
+type anyAttemptExecutorTx struct{ storage.Tx }
+
+func (b anyAttemptExecutor) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(anyAttemptExecutorTx{tx}) })
+}
+func (b anyAttemptExecutorTx) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
+	executor := q.Executor
+	q.Executor = ""
+	all, err := b.Tx.QueryWorks(q)
+	out := []domain.Work{}
+	for _, w := range all {
+		xs, _ := b.ListExecutions(w.ID)
+		if executor == "" || slices.ContainsFunc(xs, func(x domain.Execution) bool { return x.Executor == executor }) {
+			out = append(out, w)
+		}
+	}
+	return out, err
+}
+
+// textTimes orders Work by its times as written, as a store indexing the
+// records' RFC 3339 text might: a time written east of UTC sorts late.
+type textTimes struct{ storage.Store }
+type textTimesTx struct{ storage.Tx }
+
+func (b textTimes) Transact(ctx context.Context, g storage.Guard, fn func(storage.Tx) error) error {
+	return b.Store.Transact(ctx, g, func(tx storage.Tx) error { return fn(textTimesTx{tx}) })
+}
+func (b textTimesTx) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
+	all, err := b.Tx.QueryWorks(storage.WorkQuery{States: q.States, ScopeID: q.ScopeID, Kind: q.Kind, ParentID: q.ParentID, Sources: q.Sources, Executor: q.Executor, UpdatedSince: q.UpdatedSince})
+	text := func(w domain.Work) string {
+		k := q.Order.Key(w)
+		return k.At.Format(time.RFC3339Nano) + "/" + string(k.ID)
+	}
+	slices.SortFunc(all, func(a, b domain.Work) int {
+		if q.Order.Descending() {
+			return strings.Compare(text(b), text(a))
+		}
+		return strings.Compare(text(a), text(b))
+	})
+	out := []domain.Work{}
+	for _, w := range all {
+		if q.After != nil && (q.Order.Descending() != (text(w) < q.After.At.Format(time.RFC3339Nano)+"/"+string(q.After.ID))) {
+			continue
+		}
+		if q.Limit > 0 && len(out) == q.Limit {
+			break
+		}
+		out = append(out, w)
+	}
+	return out, err
+}
+
 // brokenActor stores Events without who caused them, as a store mapping
 // Events to columns might if it missed the field.
 type brokenActor struct{ storage.Store }
@@ -138,6 +194,8 @@ func TestWeakenedBackendsAreRejected(t *testing.T) {
 		{"lease_renew_survives_clock_step_back", "renewal after clock step back", func() storage.Store { return brokenStepBack{reference.New()} }},
 		{"work_events_follow_naming_and_routing", "work events", func() storage.Store { return brokenWorkEvents{reference.New()} }},
 		{"event_scope_recorded_once_and_indexed", "scope events", func() storage.Store { return brokenScopeEvents{reference.New()} }},
+		{"work_queries_select_order_page_and_count", "latest attempt is claude's", func() storage.Store { return anyAttemptExecutor{reference.New()} }},
+		{"work_queries_select_order_page_and_count", "every Work by creation", func() storage.Store { return textTimes{reference.New()} }},
 		{"view_reads_committed_state_alongside_writes", "view waited for a write", func() storage.Store { return serialView{reference.New()} }},
 		{"view_reads_committed_state_alongside_writes", "view write", func() storage.Store { return writingView{reference.New()} }},
 	}

@@ -414,7 +414,7 @@ func (t *transaction) PutExecution(x domain.Execution, expected domain.Revision)
 			return storage.ErrConflict
 		}
 	} else {
-		if x.WorkID != old.WorkID || x.Attempt != old.Attempt || x.TriggerID != old.TriggerID || x.ExecutorBinding != old.ExecutorBinding || x.Lease != old.Lease || old.State.Terminal() {
+		if x.WorkID != old.WorkID || x.Attempt != old.Attempt || x.TriggerID != old.TriggerID || x.ExecutorBinding != old.ExecutorBinding || x.Executor != "" && x.Executor != old.Executor || x.Lease != old.Lease || old.State.Terminal() {
 			return storage.ErrInvalid
 		}
 		// Running is entered only by Claim, including parked continuation/recovery.
@@ -424,6 +424,11 @@ func (t *transaction) PutExecution(x domain.Execution, expected domain.Revision)
 		if x.State != old.State && !domain.ExecutionTransition(old.State, x.State) {
 			return storage.ErrInvalid
 		}
+	}
+	if exists {
+		// An update need not repeat the recorded executor (it may have been
+		// read before SetExecutionExecutor set it); it keeps it.
+		x.Executor = old.Executor
 	}
 	x.StartedAt = old.StartedAt
 	x.FinishedAt = old.FinishedAt
@@ -770,6 +775,43 @@ func (t *transaction) LiveWorks() ([]domain.Work, error) {
 		}
 	}
 	return out, nil
+}
+func (t *transaction) latestExecutor(w domain.Work) string {
+	xs, _ := t.ListExecutions(w.ID)
+	return storage.LatestExecutor(xs)
+}
+func (t *transaction) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
+	if !q.Order.Valid() {
+		return nil, storage.ErrInvalid
+	}
+	page, _ := storage.SelectWorks(sortedValues(t.data.Works), t.latestExecutor, q)
+	return page, nil
+}
+func (t *transaction) CountWorks(q storage.WorkQuery) (int, error) {
+	_, f := storage.SelectWorks(sortedValues(t.data.Works), t.latestExecutor, q)
+	return f.Count, nil
+}
+func (t *transaction) WorkFacets(q storage.WorkQuery) (storage.WorkFacets, error) {
+	_, f := storage.SelectWorks(sortedValues(t.data.Works), t.latestExecutor, q)
+	return f, nil
+}
+func (t *transaction) SetExecutionExecutor(id domain.ID, executor string) error {
+	x, ok := t.data.Executions[id]
+	if !ok {
+		return storage.ErrNotFound
+	}
+	if executor == "" {
+		return storage.ErrInvalid
+	}
+	if x.Executor != "" {
+		if x.Executor == executor {
+			return nil
+		}
+		return storage.ErrConflict
+	}
+	x.Executor = executor
+	t.data.Executions[id] = x
+	return nil
 }
 func (t *transaction) LiveExecutions() ([]domain.Execution, error) {
 	out := []domain.Execution{}

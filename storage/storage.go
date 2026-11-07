@@ -67,6 +67,7 @@ func (readOnly) MarkRouted(domain.ID, domain.ID, string) error        { return E
 func (readOnly) SetEventScope(domain.ID, domain.ID) error             { return ErrReadOnly }
 func (readOnly) PutWork(domain.Work, domain.Revision) error           { return ErrReadOnly }
 func (readOnly) PutExecution(domain.Execution, domain.Revision) error { return ErrReadOnly }
+func (readOnly) SetExecutionExecutor(domain.ID, string) error         { return ErrReadOnly }
 func (readOnly) Claim(domain.ID, string, time.Duration) (domain.LeaseRef, error) {
 	return domain.LeaseRef{}, ErrReadOnly
 }
@@ -114,6 +115,14 @@ type Tx interface {
 	// (State not Terminal), in ID order. Like UnroutedEvents, its cost
 	// follows the live set, not the history retained.
 	LiveWorks() ([]domain.Work, error)
+	// QueryWorks lists the Work q selects (WorkQuery), in q.Order, after
+	// q.After, at most q.Limit. CountWorks is how many Work q selects, and
+	// WorkFacets what they can be told apart by. Their cost follows the
+	// Work they select, read through indexes, not the history retained;
+	// SelectWorks gives their meaning.
+	QueryWorks(q WorkQuery) ([]domain.Work, error)
+	CountWorks(q WorkQuery) (int, error)
+	WorkFacets(q WorkQuery) (WorkFacets, error)
 	Work(domain.ID) (domain.Work, error)
 	WorkByCorrelation(domain.CorrelationKey) (domain.Work, error)
 	// Put methods require expected=0 for create, otherwise the exact current revision.
@@ -127,6 +136,11 @@ type Tx interface {
 	LiveExecutions() ([]domain.Execution, error)
 	Execution(domain.ID) (domain.Execution, error)
 	PutExecution(domain.Execution, domain.Revision) error
+	// SetExecutionExecutor records the Executor of an attempt registered
+	// before attempts recorded it, finished or not. It is write-once: the
+	// same executor again is nil, another is ErrConflict, an empty one
+	// ErrInvalid, and an unknown attempt ErrNotFound.
+	SetExecutionExecutor(execution domain.ID, executor string) error
 	// Claim enters running on both Work and Execution and advances the lease epoch.
 	Claim(domain.ID, string, time.Duration) (domain.LeaseRef, error)
 	// Renew extends the lease to now+ttl, keeping the stored expiry when

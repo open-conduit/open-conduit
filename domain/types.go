@@ -158,14 +158,18 @@ type Execution struct {
 	StartedAt, FinishedAt *time.Time
 	ID, WorkID            ID
 	ExecutorBinding       string
-	Attempt               uint32
-	State                 ExecutionState
-	TriggerID             ID
-	Lease                 Lease
-	Outcome               *Outcome
-	TraceID               string
-	Revision              Revision
-	CreatedAt, UpdatedAt  time.Time
+	// Executor is the executor the attempt's binding named when it was
+	// registered. Attempts registered before it was recorded have it set
+	// once, from their own state (storage.Tx.SetExecutionExecutor).
+	Executor             string `json:",omitempty"`
+	Attempt              uint32
+	State                ExecutionState
+	TriggerID            ID
+	Lease                Lease
+	Outcome              *Outcome
+	TraceID              string
+	Revision             Revision
+	CreatedAt, UpdatedAt time.Time
 }
 
 // ArtifactRef points to separately published immutable content; it is not a primitive.

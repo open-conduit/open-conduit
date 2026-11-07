@@ -98,6 +98,7 @@ func StorageCases() []StorageCase {
 		{"live_reads_follow_state", liveReads},
 		{"work_events_follow_naming_and_routing", workEvents},
 		{"event_scope_recorded_once_and_indexed", scopeEvents},
+		{"work_queries_select_order_page_and_count", workQueries},
 		{"view_reads_committed_state_alongside_writes", viewAlongsideWrites},
 	}
 }
@@ -1642,6 +1643,220 @@ func viewAlongsideWrites(s storage.Store) error {
 	return v.View(ctx, func(tx storage.Tx) error {
 		if _, err := tx.Get("view", "pending"); err != nil {
 			return fmt.Errorf("view after the commit: %v", err)
+		}
+		return nil
+	})
+}
+
+// workQueries checks QueryWorks, CountWorks and WorkFacets against the
+// Work they select: each filter, both orders both ways with ties broken by
+// ID and times compared across zones, keyset paging, counts and facets;
+// that the executor is the latest attempt's; and that an attempt's
+// recorded executor is write-once and survives updates that omit it.
+func workQueries(s storage.Store) error {
+	c := NewClock()
+	t0 := c.Now()
+	if err := seed(s, c); err != nil {
+		return err
+	}
+	at := func(d time.Duration, zone *time.Location, fn func(storage.Tx) error) error {
+		return s.Transact(context.Background(), storage.Guard{Now: t0.Add(d).In(zone)}, fn)
+	}
+	attempt := func(tx storage.Tx, work domain.ID, n uint32, executor string) error {
+		id := domain.ID(fmt.Sprintf("%s/attempt/%d", work, n))
+		if err := tx.PutExecution(domain.Execution{ID: id, WorkID: work, ExecutorBinding: "run", Executor: executor, Attempt: n, State: domain.ExecutionPending, TriggerID: "trigger"}, 0); err != nil {
+			return err
+		}
+		x, err := tx.Execution(id)
+		if err != nil {
+			return err
+		}
+		if x.Executor != executor {
+			return fmt.Errorf("work queries: attempt recorded executor %q, want %q", x.Executor, executor)
+		}
+		x.State, x.Executor = domain.ExecutionCancelled, ""
+		return tx.PutExecution(x, x.Revision)
+	}
+	finish := func(tx storage.Tx, id domain.ID, state domain.WorkState) error {
+		w, err := tx.Work(id)
+		if err != nil {
+			return err
+		}
+		w.State = state
+		return tx.PutWork(w, w.Revision)
+	}
+	east := time.FixedZone("east", 5*3600)
+	github := []domain.CorrelationKey{{Source: "github.issue", ExternalID: "1"}}
+	steps := []struct {
+		d    time.Duration
+		zone *time.Location
+		fn   func(storage.Tx) error
+	}{
+		{0, time.UTC, func(tx storage.Tx) error {
+			if err := tx.PutScope(domain.Scope{ID: "other", Name: "other"}, 0); err != nil {
+				return err
+			}
+			if err := tx.SetExecutionExecutor("execution", "shell"); err != nil {
+				return fmt.Errorf("work queries: set executor: %w", err)
+			}
+			for _, q := range []struct {
+				id       domain.ID
+				executor string
+				want     error
+				label    string
+			}{
+				{"execution", "shell", nil, "the same executor again"},
+				{"execution", "claude", storage.ErrConflict, "another executor"},
+				{"execution", "", storage.ErrInvalid, "an empty executor"},
+				{"missing", "shell", storage.ErrNotFound, "a missing attempt"},
+			} {
+				if err := tx.SetExecutionExecutor(q.id, q.executor); q.want == nil && err != nil || q.want != nil && !errors.Is(err, q.want) {
+					return fmt.Errorf("work queries: set executor to %s: %v, want %v", q.label, err, q.want)
+				}
+			}
+			x, err := tx.Execution("execution")
+			if err != nil {
+				return err
+			}
+			x.Executor = "claude"
+			if err = wantError(tx.PutExecution(x, x.Revision), storage.ErrInvalid); err != nil {
+				return fmt.Errorf("work queries: an update changing the executor: %w", err)
+			}
+			x.Executor = ""
+			return tx.PutExecution(x, x.Revision)
+		}},
+		{time.Second, time.UTC, func(tx storage.Tx) error {
+			if err := tx.PutWork(domain.Work{ID: "w1", Kind: "test.objective", ScopeID: "scope", State: domain.WorkReady, CorrelationKeys: github}, 0); err != nil {
+				return err
+			}
+			if err := attempt(tx, "w1", 1, "claude"); err != nil {
+				return err
+			}
+			if err := attempt(tx, "w1", 2, "shell"); err != nil {
+				return err
+			}
+			return finish(tx, "w1", domain.WorkCancelled)
+		}},
+		// w2 and w3 are created at the same instant, written in two zones.
+		{2 * time.Second, east, func(tx storage.Tx) error {
+			if err := tx.PutWork(domain.Work{ID: "w2", Kind: "test.other", ScopeID: "other", State: domain.WorkReady}, 0); err != nil {
+				return err
+			}
+			if err := attempt(tx, "w2", 1, "claude"); err != nil {
+				return err
+			}
+			return finish(tx, "w2", domain.WorkFailed)
+		}},
+		{2 * time.Second, time.UTC, func(tx storage.Tx) error {
+			return tx.PutWork(domain.Work{ID: "w3", Kind: "test.objective", ScopeID: "scope", ParentID: "w1", State: domain.WorkReady, CorrelationKeys: []domain.CorrelationKey{{Source: "github.issue", ExternalID: "3"}}}, 0)
+		}},
+		// Written five hours east, the time reads later than it is.
+		{5*time.Second + 500*time.Millisecond, east, func(tx storage.Tx) error {
+			w, err := tx.Work("w3")
+			if err != nil {
+				return err
+			}
+			w.Display = &domain.WorkDisplay{Title: "three"}
+			return tx.PutWork(w, w.Revision)
+		}},
+		{6*time.Second + 1, time.UTC, func(tx storage.Tx) error {
+			w, err := tx.Work("work")
+			if err != nil {
+				return err
+			}
+			w.Display = &domain.WorkDisplay{Title: "seed"}
+			return tx.PutWork(w, w.Revision)
+		}},
+	}
+	for _, st := range steps {
+		if err := at(st.d, st.zone, st.fn); err != nil {
+			return err
+		}
+	}
+	return transact(s, c, func(tx storage.Tx) error {
+		if x, err := tx.Execution("execution"); err != nil || x.Executor != "shell" {
+			return fmt.Errorf("work queries: recorded executor %q after an update that omitted it (%v), want shell", x.Executor, err)
+		}
+		works, err := tx.ListWorks()
+		if err != nil {
+			return err
+		}
+		key := func(id domain.ID, o storage.WorkOrder) *storage.WorkKey {
+			for _, w := range works {
+				if w.ID == id {
+					k := o.Key(w)
+					return &k
+				}
+			}
+			return nil
+		}
+		closed := []domain.WorkState{domain.WorkCancelled, domain.WorkFailed}
+		for _, q := range []struct {
+			q           storage.WorkQuery
+			want, label string
+		}{
+			{storage.WorkQuery{}, "work w1 w2 w3", "every Work by creation"},
+			{storage.WorkQuery{Order: storage.WorkCreatedDesc}, "w3 w2 w1 work", "latest created first"},
+			{storage.WorkQuery{Order: storage.WorkUpdated}, "w1 w2 w3 work", "by update"},
+			{storage.WorkQuery{Order: storage.WorkUpdatedDesc}, "work w3 w2 w1", "latest updated first"},
+			{storage.WorkQuery{States: closed}, "w1 w2", "of two states"},
+			{storage.WorkQuery{States: []domain.WorkState{domain.WorkRunning}}, "", "of a state no Work is in"},
+			{storage.WorkQuery{ScopeID: "other"}, "w2", "of a scope"},
+			{storage.WorkQuery{Kind: "test.other"}, "w2", "of a kind"},
+			{storage.WorkQuery{ParentID: "w1"}, "w3", "of a parent"},
+			{storage.WorkQuery{Sources: []string{"github.issue"}}, "w1 w3", "from a correlation source"},
+			{storage.WorkQuery{Sources: []string{"test", "test.other"}}, "work w2", "from a source or kind"},
+			{storage.WorkQuery{Executor: "shell"}, "work w1", "whose latest attempt is shell's"},
+			{storage.WorkQuery{Executor: "claude"}, "w2", "whose latest attempt is claude's, not an earlier one"},
+			{storage.WorkQuery{Executor: "missing"}, "", "of an executor no attempt has"},
+			{storage.WorkQuery{UpdatedSince: t0.Add(2 * time.Second).In(east)}, "work w2 w3", "updated since an instant, inclusive"},
+			{storage.WorkQuery{States: closed, ScopeID: "scope", Sources: []string{"github.issue"}, Executor: "shell"}, "w1", "of every filter at once"},
+			{storage.WorkQuery{Order: storage.WorkCreatedDesc, Limit: 2}, "w3 w2", "a first page"},
+			{storage.WorkQuery{Order: storage.WorkCreatedDesc, After: key("w2", storage.WorkCreatedDesc), Limit: 2}, "w1 work", "the page after a tie"},
+			{storage.WorkQuery{Order: storage.WorkCreated, After: key("w2", storage.WorkCreated)}, "w3", "after a tie, ascending"},
+			{storage.WorkQuery{Order: storage.WorkUpdatedDesc, States: []domain.WorkState{domain.WorkReady}, After: key("work", storage.WorkUpdatedDesc), Limit: 1}, "w3", "a filtered page by update"},
+		} {
+			got, err := tx.QueryWorks(q.q)
+			if err != nil {
+				return fmt.Errorf("work queries %s: %w", q.label, err)
+			}
+			var ids []string
+			for _, w := range got {
+				ids = append(ids, string(w.ID))
+			}
+			if g := strings.Join(ids, " "); g != q.want {
+				return fmt.Errorf("work queries %s: got %q, want %q", q.label, g, q.want)
+			}
+			cq := q.q
+			cq.Order, cq.After, cq.Limit = "", nil, 0
+			all, err := tx.QueryWorks(cq)
+			if err != nil {
+				return err
+			}
+			if n, err := tx.CountWorks(q.q); err != nil || n != len(all) {
+				return fmt.Errorf("work queries count %s: %d (%v), want %d", q.label, n, err, len(all))
+			}
+		}
+		if _, err := tx.QueryWorks(storage.WorkQuery{Order: "sideways"}); !errors.Is(err, storage.ErrInvalid) {
+			return fmt.Errorf("work queries in an unknown order: %v, want %v", err, storage.ErrInvalid)
+		}
+		for _, q := range []struct {
+			q           storage.WorkQuery
+			want, label string
+		}{
+			{storage.WorkQuery{}, "4 [other scope] [github.issue test test.other] [claude shell]", "of every Work"},
+			{storage.WorkQuery{States: closed}, "2 [other scope] [github.issue test.other] [claude shell]", "of closed Work"},
+			{storage.WorkQuery{Executor: "claude"}, "1 [other] [test.other] [claude]", "of an executor's Work"},
+			{storage.WorkQuery{ScopeID: "scope", States: []domain.WorkState{domain.WorkReady}}, "2 [scope] [github.issue test] [shell]", "of ready Work in a scope, one without attempts"},
+			{storage.WorkQuery{ScopeID: "missing"}, "0 [] [] []", "of no Work"},
+		} {
+			f, err := tx.WorkFacets(q.q)
+			if err != nil {
+				return fmt.Errorf("work facets %s: %w", q.label, err)
+			}
+			if g := fmt.Sprintf("%d %v %v %v", f.Count, f.ScopeIDs, f.Sources, f.Executors); g != q.want {
+				return fmt.Errorf("work facets %s: got %q, want %q", q.label, g, q.want)
+			}
 		}
 		return nil
 	})

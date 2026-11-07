@@ -1213,7 +1213,7 @@ func (s *Scheduler) Claim(ctx context.Context, id domain.ID) (attempt Attempt, e
 				return storage.ErrInvalid
 			}
 			executionID = domain.ID(fmt.Sprintf("%s/attempt/%d", id, latest+1))
-			x := domain.Execution{ID: executionID, WorkID: id, Attempt: latest + 1, State: domain.ExecutionPending, ExecutorBinding: pinned.Name, TriggerID: input.EventID, TraceID: identity(string(id), string(input.EventID))}
+			x := domain.Execution{ID: executionID, WorkID: id, Attempt: latest + 1, State: domain.ExecutionPending, ExecutorBinding: pinned.Name, Executor: pinned.Executor, TriggerID: input.EventID, TraceID: identity(string(id), string(input.EventID))}
 			if e = tx.PutExecution(x, 0); e != nil {
 				return e
 			}

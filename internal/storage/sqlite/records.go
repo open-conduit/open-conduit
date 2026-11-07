@@ -520,7 +520,7 @@ func (t *transaction) PutExecution(x domain.Execution, expected domain.Revision)
 			return storage.ErrConflict
 		}
 	} else {
-		if x.WorkID != old.WorkID || x.Attempt != old.Attempt || x.TriggerID != old.TriggerID || x.ExecutorBinding != old.ExecutorBinding || x.Lease != old.Lease || old.State.Terminal() {
+		if x.WorkID != old.WorkID || x.Attempt != old.Attempt || x.TriggerID != old.TriggerID || x.ExecutorBinding != old.ExecutorBinding || x.Executor != "" && x.Executor != old.Executor || x.Lease != old.Lease || old.State.Terminal() {
 			return storage.ErrInvalid
 		}
 		if x.State == domain.ExecutionRunning && old.State != x.State {
@@ -529,6 +529,11 @@ func (t *transaction) PutExecution(x domain.Execution, expected domain.Revision)
 		if x.State != old.State && !domain.ExecutionTransition(old.State, x.State) {
 			return storage.ErrInvalid
 		}
+	}
+	if exists {
+		// An update need not repeat the recorded executor (it may have been
+		// read before SetExecutionExecutor set it); it keeps it.
+		x.Executor = old.Executor
 	}
 	x.StartedAt = old.StartedAt
 	x.FinishedAt = old.FinishedAt
