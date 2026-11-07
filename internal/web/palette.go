@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -31,7 +32,7 @@ func (s *Server) palette(w http.ResponseWriter, r *http.Request) {
 	// current, and finding older closed Work is the Runs page's search.
 	closed, _, _ := s.closedWork(ctx, url.Values{"sort": {"-updated"}}, paletteClosed)
 	var items []paletteItem
-	for _, v := range append(wd.Works, closed...) {
+	for _, v := range slices.Concat(wd.Works, closed) {
 		items = append(items, paletteItem{Label: v.Label(), Hint: joinDot(s.sourceLabel(v.Source), v.ScopeID, strings.ToLower(v.Disp.Label)), Href: "/work?" + url.Values{"id": {v.ID}}.Encode(), Mark: string(markSVG(v.Disp.Kind, 12, "")), Find: v.Summary})
 	}
 	for _, sc := range wd.Scopes {

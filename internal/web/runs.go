@@ -6,6 +6,7 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -559,7 +560,7 @@ func (s *Server) runsPage(w http.ResponseWriter, r *http.Request) {
 	wd := s.cachedWorld(ctx, true)
 	q := r.URL.Query()
 	cl, errs := s.closedFor(ctx, parseRunsQuery(q), wantClosed(q))
-	p.Err = strings.Join(append(wd.Errs, errs...), "\n")
+	p.Err = strings.Join(slices.Concat(wd.Errs, errs), "\n")
 	d := runsView(wd, cl, q, p, s.opts.Now(), s.sourceLabel)
 	if d.Total == 0 && len(wd.Errs) == 0 {
 		if h, err := s.src.Health(ctx); err == nil {
