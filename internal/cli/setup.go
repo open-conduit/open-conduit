@@ -570,7 +570,7 @@ func (o *operator) localConfig(args []string) (int, bool) {
 	}
 	data, err := os.ReadFile(path)
 	if err != nil {
-		return o.emit(nil, fmt.Errorf("no config at %s; create one with open-conduit init", path)), true
+		return o.emit(nil, fmt.Errorf("no config at %s; create one with open-conduit init, or write the running daemon's with open-conduit config export", path)), true
 	}
 	root, err := parseNode(data)
 	if err != nil || root.kind != 'o' {

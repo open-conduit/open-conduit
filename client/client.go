@@ -1074,6 +1074,22 @@ type ConfigGrant struct {
 func (c *Client) Config(ctx context.Context) (Config, error) {
 	return get[Config](c, ctx, "config")
 }
+
+// ConfigExport is the active generation as config file text, with secret
+// references as reference text.
+type ConfigExport struct {
+	Generation string `json:"generation"`
+	Hash       string `json:"hash"`
+	// Path is the config file the daemon saves applied generations to.
+	Path       string `json:"path"`
+	ConfigText string `json:"config_text"`
+}
+
+// ExportConfig reads the active generation as config file text. It needs
+// the admin role.
+func (c *Client) ExportConfig(ctx context.Context) (ConfigExport, error) {
+	return get[ConfigExport](c, ctx, "config/export")
+}
 func (c *Client) ValidateConfig(ctx context.Context, config json.RawMessage) (out ConfigValidation, err error) {
 	err = c.Do(ctx, "POST", "config/validate", nil, map[string]json.RawMessage{"config": config}, "", &out)
 	return

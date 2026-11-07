@@ -378,6 +378,7 @@ var routes = []route{
 	{"GET", []string{"runs", "*", "live"}, false, false, (*Server).liveRun},
 	{"GET", []string{"doctor"}, false, false, (*Server).doctor},
 	{"GET", []string{"config"}, false, false, (*Server).config},
+	{"GET", []string{"config", "export"}, false, false, (*Server).exportConfig},
 	{"GET", []string{"artifacts"}, false, false, (*Server).listArtifacts},
 	{"GET", []string{"artifacts", "*", "content"}, false, false, (*Server).artifactContent},
 	{"POST", []string{"events"}, true, true, (*Server).postEvent},
@@ -412,14 +413,18 @@ var routes = []route{
 
 // requiredRole is the least operator role a route needs. Reads, and the
 // POSTs that change nothing (route trace, config validate), need view;
-// applying config and issuing operators' credentials need admin; every
-// other control needs operate. Revoking another operator's credential
-// needs admin too, which revoke checks itself.
+// applying config, exporting it (it carries secret reference text) and
+// issuing operators' credentials need admin; every other control needs
+// operate. Revoking another operator's credential needs admin too, which
+// revoke checks itself.
 func requiredRole(rt *route, parts []string) string {
+	path := strings.Join(rt.pattern, "/")
+	if path == "config/export" {
+		return RoleAdmin
+	}
 	if !rt.mutation {
 		return RoleView
 	}
-	path := strings.Join(rt.pattern, "/")
 	switch path {
 	case "scopes/*/route/trace", "config/validate":
 		return RoleView

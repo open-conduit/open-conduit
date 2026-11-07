@@ -162,6 +162,9 @@ func (c *ConfigService) Current() (*config.Snapshot, uint64) {
 	return c.current, c.generation
 }
 
+// Path is the config file the daemon saves applied generations to.
+func (c *ConfigService) Path() string { return c.path }
+
 // Registry returns the in-process registrations used for validation.
 func (c *ConfigService) Registry() config.Registry { return c.registry }
 

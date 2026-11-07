@@ -34,7 +34,10 @@ var helpGroups = []helpGroup{
   config edit [--file F]     full-screen editor with the adapters' documented fields, validated before saving
   config validate FILE       validate against the running daemon's registrations (needs the daemon)
   config apply FILE [--generation N] [--key K]   make FILE the running daemon's next generation (needs the daemon;
-                             --generation applies only if N is still current, for scripted compare-and-swap)`},
+                             --generation applies only if N is still current, for scripted compare-and-swap)
+  config export [FILE]       write the running generation as a config file, secret references as references
+                             (needs the daemon and the admin role; FILE defaults to the daemon's config file, - prints it;
+                             never replaces a file)`},
 		{"secret", `  secret set NAME [--store keyring|file] | secret path   (value read from stdin, never an argument)`},
 		{"adapters", `  adapters [TYPE] [--json]   the registered integrations and the fields each takes`},
 		{"serve", `  serve [--config PATH] [--toolbelt-dir DIR] [--lifecycle-log PATH] [--poll-interval 1s] [--lease-duration 1m] [--retention-interval 10m] [--sweep-interval 6h] [--call-timeout 5s]

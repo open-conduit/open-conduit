@@ -941,6 +941,24 @@ func (s *Server) validateConfig(c *call) (int, any, error) {
 // applyConfig applies config, or config_text: the file's text as a JSON
 // string, validated as parsed and saved byte for byte, so the operator's
 // layout and key order survive.
+// exportConfig is the active generation as config file text, with secret
+// references as reference text (never values): what config apply would take
+// back, and the path of the config file the daemon saves to. It is for an operator whose config file is gone or out of step.
+func (s *Server) exportConfig(c *call) (int, any, error) {
+	if err := noQuery(c); err != nil {
+		return 0, nil, err
+	}
+	snap, generation := s.o.Config.Current()
+	if snap == nil {
+		return 0, nil, fail(409, "state_conflict", "no configuration generation is active")
+	}
+	text, err := config.ExportFile(snap.Normalized)
+	if err != nil {
+		return 0, nil, err
+	}
+	return 200, map[string]any{"generation": u64(generation), "hash": snap.Hash, "path": s.o.Config.Path(), "config_text": string(text)}, nil
+}
+
 func (s *Server) applyConfig(c *call) (int, any, error) {
 	var in struct {
 		Config             json.RawMessage `json:"config"`
