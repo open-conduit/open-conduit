@@ -495,9 +495,18 @@ func (x *Extension) manageHooks(ctx context.Context) error {
 			}
 			if err == nil && wrote {
 				// GitHub keeps the last delivery's result across a
-				// re-point; a ping replaces it with the new URL's.
-				_ = e.client.PingWebhook(cx, s.Repo, next.id)
-				next.checked = x.now().Add(hookPingWait - hookCheckEvery)
+				// re-point; a ping replaces it with the new URL's, so the
+				// first read comes soon after one. Without the ping, the
+				// read waits a full interval, for a real delivery to
+				// replace the old URL's result.
+				next.checked = x.now()
+				if perr := e.client.PingWebhook(cx, s.Repo, next.id); perr != nil {
+					if h := x.svc(); h.Log != nil {
+						h.Log.Warn("github hook ping failed; its last delivery is read again later", "name", e.name, "code", CallCode(perr))
+					}
+				} else {
+					next.checked = x.now().Add(hookPingWait - hookCheckEvery)
+				}
 			}
 		}
 		cancel()

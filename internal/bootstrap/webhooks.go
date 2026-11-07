@@ -419,6 +419,8 @@ func (d *daemon) watchPublic(ctx context.Context, kind string, answered *atomic.
 	defer stop()
 	var last string
 	fails := 0
+	// failingSince is when the current run of failed probes began.
+	var failingSince time.Time
 	for {
 		select {
 		case <-ctx.Done():
@@ -445,6 +447,7 @@ func (d *daemon) watchPublic(ctx context.Context, kind string, answered *atomic.
 		}
 		d.hooks.mu.Lock()
 		current := d.hooks.public == public
+		delivered := d.hooks.delivered
 		if current && err == nil {
 			d.hooks.probed, d.hooks.probeFails, d.hooks.probeCause = d.now(), 0, ""
 		} else if current {
@@ -461,13 +464,25 @@ func (d *daemon) watchPublic(ctx context.Context, kind string, answered *atomic.
 			if fails >= tunnelProbeFailures {
 				d.log.Info("webhook public URL answering again", "provider", kind, "url", public)
 				d.report("tunnel", domain.ID(kind), "")
-				d.capture("webhooks.public_url_answering", map[string]any{"provider": kind, "url": public})
+				d.capture(ctx, "webhooks.public_url_answering", map[string]any{"provider": kind, "url": public})
 			}
 			fails = 0
 			continue
 		}
+		if fails == 0 {
+			failingSince = d.now()
+		}
 		fails++
 		if fails != tunnelProbeFailures {
+			continue
+		}
+		if !delivered.Before(failingSince) {
+			// A delivery reached a route while the probes were failing,
+			// so the path works and the probe is what fails (this
+			// machine's DNS or egress, say). Restarting would only lose
+			// deliveries, so start counting again.
+			d.log.Info("webhook probe failing while deliveries arrive; not treated as unreachable", "provider", kind, "url", public, "cause", err.Error())
+			fails = 0
 			continue
 		}
 		cause := "public URL " + public + " is not answering: " + strconv.Itoa(fails) + " probes in a row failed (last: " + err.Error() + ")"
@@ -477,8 +492,8 @@ func (d *daemon) watchPublic(ctx context.Context, kind string, answered *atomic.
 		}
 		d.log.Warn("webhook public URL unreachable", attrs...)
 		d.report("tunnel", domain.ID(kind), "tunnel_unreachable", cause)
-		d.capture("webhooks.public_url_unreachable", map[string]any{"provider": kind, "url": public, "probes": fails, "cause": err.Error()})
 		dead(cause)
+		d.capture(ctx, "webhooks.public_url_unreachable", map[string]any{"provider": kind, "url": public, "probes": fails, "cause": err.Error()})
 	}
 }
 
@@ -515,12 +530,20 @@ func probePublic(ctx context.Context, public, token string) error {
 	return nil
 }
 
-// capture records a host telemetry event about the machine.
-func (d *daemon) capture(name string, props map[string]any) {
+// captureTimeout bounds a telemetry event's capture, since every sink is a
+// package that may be slow when the network is in trouble.
+const captureTimeout = 2 * time.Second
+
+// capture records a host telemetry event about the machine. It outlives
+// ctx (the watch that records an outage has just ended it) but never
+// takes longer than captureTimeout.
+func (d *daemon) capture(ctx context.Context, name string, props map[string]any) {
 	if d.telemetry.primary == nil {
 		return
 	}
-	_ = d.telemetry.Capture(context.Background(), "", name, d.now(), props)
+	cctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), captureTimeout)
+	defer cancel()
+	_ = d.telemetry.Capture(cctx, "", name, d.now(), props)
 }
 
 // webhookHandler serves only the registered routes listed above, and the

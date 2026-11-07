@@ -171,3 +171,34 @@ func TestDeliveryFailing(t *testing.T) {
 		}
 	}
 }
+
+// A re-point whose ping fails doesn't read the hook back soon after, when
+// GitHub would still hold the old URL's result, but a full interval later.
+func TestManagedHookPingFailureWaitsForARealDelivery(t *testing.T) {
+	fake := githubtest.New("octo/widgets", "tok")
+	defer fake.Close()
+	c := &clock{t: time.Now()}
+	client := tokenClient(t, fake, c, "tok")
+	x := New()
+	x.host = inproc.Host{Now: c.now, Secrets: func(context.Context, domain.ID, string, []string) (map[string]string, error) {
+		return map[string]string{"hook": "hook-secret"}, nil
+	}}
+	s := Settings{Namespace: "github/eng/widgets", Repo: "octo/widgets", WebhookSecret: "hook", ManageWebhook: true}
+	x.own.entries[s.Namespace] = &entry{name: "github/eng/widgets", scope: "eng", client: client, ingress: NewIngress(s, client, c.now, IngressOptions{})}
+	x.own.public = "https://a.example"
+	ctx := context.Background()
+	fake.RefusePings(true)
+	_ = x.manageHooks(ctx)
+	fake.SetHookResponse(502, "failed to connect to host")
+	item := func() string { return x.hookItems(func(_, _ string) {})[s.Namespace] }
+	c.add(hookPingWait)
+	_ = x.manageHooks(ctx)
+	if got := item(); got != "POST /github/eng/widgets; hook ok" {
+		t.Fatalf("read the old result after a failed ping: %q", got)
+	}
+	c.add(hookCheckEvery)
+	_ = x.manageHooks(ctx)
+	if got := item(); !strings.Contains(got, "last delivery 502") {
+		t.Fatalf("not read after a full interval: %q", got)
+	}
+}

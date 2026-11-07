@@ -224,3 +224,44 @@ func TestWebhookCheckShowsTheLastDelivery(t *testing.T) {
 		t.Fatalf("check %+v", c)
 	}
 }
+
+// A delivery that reaches a route while the probes fail is proof the path
+// works: the URL is not reported unreachable, so the tunnel isn't
+// restarted for this machine's own trouble reaching it.
+func TestWatchPublicTrustsADeliveryOverFailingProbes(t *testing.T) {
+	tick := manualProbes(t)
+	d := tunnelDaemon()
+	d.hooks.probe = func(context.Context, string, string) error { return errors.New("no answer within 15s") }
+	d.publicURL("cloudflared", "https://one.trycloudflare.com")
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	deaths := make(chan string, 4)
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		d.watchPublic(ctx, "cloudflared", nil, func(cause string) { deaths <- cause })
+	}()
+	tick <- time.Time{}
+	d.hooks.mu.Lock()
+	d.hooks.delivered = d.now()
+	d.hooks.mu.Unlock()
+	for range tunnelProbeFailures {
+		tick <- time.Time{}
+	}
+	// Each tick is taken only once the last one's probe is done.
+	tick <- time.Time{}
+	if len(deaths) != 0 {
+		t.Fatal("restarted a tunnel deliveries were arriving through")
+	}
+	// Without another delivery, a full run of failures still counts: that
+	// tick was the first of a new run.
+	for range tunnelProbeFailures - 1 {
+		tick <- time.Time{}
+	}
+	tick <- time.Time{}
+	cancel()
+	<-done
+	if len(deaths) != 1 {
+		t.Fatalf("%d deaths after failures with no delivery", len(deaths))
+	}
+}

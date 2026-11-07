@@ -186,6 +186,8 @@ type Server struct {
 	// installPerms are the App installation's permissions, as
 	// GET /repos/<repo>/installation reports them (none when nil).
 	installPerms map[string]string
+	// refusePings makes pinging a hook fail.
+	refusePings bool
 	// refusePullEdits makes editing a PR (PATCH and the draft mutations)
 	// forbidden, as for a connection without Pull requests write.
 	refusePullEdits bool
@@ -204,6 +206,9 @@ type Hook struct {
 	LastMessage string
 	Pings       int
 }
+
+// RefusePings makes pinging a hook answer 503.
+func (s *Server) RefusePings(v bool) { s.mu.Lock(); s.refusePings = v; s.mu.Unlock() }
 
 // SetHookResponse sets what every hook's last delivery answered, as GitHub
 // reports it in last_response.
@@ -1471,6 +1476,9 @@ func (s *Server) route(r *http.Request, token string, body json.RawMessage) (int
 		for _, h := range s.hooks {
 			if strconv.FormatInt(h.ID, 10) != id {
 				continue
+			}
+			if !get && s.refusePings {
+				return http.StatusServiceUnavailable, map[string]any{"message": "unavailable"}
 			}
 			if !get {
 				h.Pings++
