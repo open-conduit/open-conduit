@@ -91,6 +91,13 @@ func newManagementHarness(t testing.TB) *managementHarness {
 // additions made by register (nil for none).
 func newManagementHarnessWith(t testing.TB, cfg string, register func(*config.Registry)) *managementHarness {
 	t.Helper()
+	return newManagementHarnessServing(t, cfg, register, nil)
+}
+
+// newManagementHarnessServing is newManagementHarnessWith whose management
+// API reads through wrap(store) (the store itself when wrap is nil).
+func newManagementHarnessServing(t testing.TB, cfg string, register func(*config.Registry), wrap func(storage.Store) storage.Store) *managementHarness {
+	t.Helper()
 	ctx := context.Background()
 	state, err := os.MkdirTemp("/tmp", "oc-")
 	if err != nil {
@@ -177,7 +184,11 @@ func newManagementHarnessWith(t testing.TB, cfg string, register func(*config.Re
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err := management.NewServer(management.Options{Store: db, Artifacts: h.artifacts, Now: h.clock.Now, Control: control, Toolbelt: h.belt, Config: h.configs, Version: "test", InstanceID: "instance-1",
+	var served storage.Store = db
+	if wrap != nil {
+		served = wrap(db)
+	}
+	server, err := management.NewServer(management.Options{Store: served, Artifacts: h.artifacts, Now: h.clock.Now, Control: control, Toolbelt: h.belt, Config: h.configs, Version: "test", InstanceID: "instance-1",
 		Actions: func(context.Context, domain.ID) map[string]extension.ActionProvider { return h.actions },
 		Attach: func(ctx context.Context, executor string, w domain.Work) (management.AttachSpec, error) {
 			if h.attach == nil {

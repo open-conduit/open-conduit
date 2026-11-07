@@ -1,4 +1,4 @@
-format 4
+format 5
 AcceptedEvent.Disposition string
 AcceptedEvent.Event struct
 AcceptedEvent.Event.Actor string
@@ -27,6 +27,7 @@ Execution.Artifacts.MediaType string
 Execution.Artifacts.Size int64
 Execution.Attempt uint32
 Execution.CreatedAt struct
+Execution.Executor string
 Execution.ExecutorBinding string
 Execution.FinishedAt ptr
 Execution.ID string
@@ -143,6 +144,7 @@ Work.Display.Title string
 Work.Grants slice
 Work.ID string
 Work.Kind string
+Work.LatestExecutor string
 Work.ParentID string
 Work.Revision uint64
 Work.ScopeID string

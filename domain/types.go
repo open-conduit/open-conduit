@@ -59,7 +59,12 @@ type Work struct {
 	Display *WorkDisplay `json:",omitempty"`
 	// Grants are the binding grants the Work opted into when it was
 	// created (Binding.Granted); they never change after.
-	Grants               []string `json:",omitempty"`
+	Grants []string `json:",omitempty"`
+	// LatestExecutor is the Executor recorded on the Work's latest attempt
+	// (Execution.Executor), which storage keeps as attempts are registered
+	// and their executors recorded, so Work is selected by it from an
+	// index. Writers' values are ignored, as for the timestamps.
+	LatestExecutor       string `json:",omitempty"`
 	Revision             Revision
 	CreatedAt, UpdatedAt time.Time
 }
@@ -158,14 +163,18 @@ type Execution struct {
 	StartedAt, FinishedAt *time.Time
 	ID, WorkID            ID
 	ExecutorBinding       string
-	Attempt               uint32
-	State                 ExecutionState
-	TriggerID             ID
-	Lease                 Lease
-	Outcome               *Outcome
-	TraceID               string
-	Revision              Revision
-	CreatedAt, UpdatedAt  time.Time
+	// Executor is the executor the attempt's binding named when it was
+	// registered. Attempts registered before it was recorded have it set
+	// once, from their own state (storage.Tx.SetExecutionExecutor).
+	Executor             string `json:",omitempty"`
+	Attempt              uint32
+	State                ExecutionState
+	TriggerID            ID
+	Lease                Lease
+	Outcome              *Outcome
+	TraceID              string
+	Revision             Revision
+	CreatedAt, UpdatedAt time.Time
 }
 
 // ArtifactRef points to separately published immutable content; it is not a primitive.

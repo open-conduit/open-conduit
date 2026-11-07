@@ -1,11 +1,11 @@
 package management
 
 import (
-	"errors"
 	"fmt"
 	"math"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -21,30 +21,23 @@ import (
 // not one request per Work it has ever held. GET /work/facets gives the
 // values a view can filter on.
 
-const (
-	// maxListedRuns bounds the runs with=runs adds to one Work: its latest.
-	maxListedRuns = 200
-	// facetExecutorWork bounds how many of the most recently changed Work
-	// GET /work/facets reads the executor of.
-	facetExecutorWork = 1000
-)
+// maxListedRuns bounds the runs with=runs adds to one Work: its latest.
+const maxListedRuns = 200
 
 // workSorts are the orders GET /work takes; the first is the default.
 var workSorts = []string{"created", "-created", "updated", "-updated"}
 
-// workSource is a Work's source family: the part of its first correlation
-// key's source (else its kind) before the first dot or slash, "github" for
-// "github.issue".
-func workSource(w domain.Work) string {
-	s := w.Kind
-	if len(w.CorrelationKeys) > 0 {
-		s = w.CorrelationKeys[0].Source
-	}
+// sourceFamily is a source's family: the part before the first dot or
+// slash, "github" for "github.issue".
+func sourceFamily(s string) string {
 	if i := strings.IndexAny(s, "./"); i >= 0 {
 		return s[:i]
 	}
 	return s
 }
+
+// workSource is a Work's source family: that of storage.WorkSource.
+func workSource(w domain.Work) string { return sourceFamily(storage.WorkSource(w)) }
 
 // latestExecution is Work's latest attempt, if it has one.
 func latestExecution(tx storage.Tx, work domain.ID) (domain.Execution, bool, error) {
@@ -59,15 +52,6 @@ func latestExecution(tx storage.Tx, work domain.ID) (domain.Execution, bool, err
 		}
 	}
 	return last, true, nil
-}
-
-// executorOf is the executor registered for an attempt, "" before one is.
-func executorOf(tx storage.Tx, x domain.Execution) (string, error) {
-	st, err := runtime.AttemptStateInTx(tx, x.ID)
-	if errors.Is(err, storage.ErrNotFound) {
-		return "", nil
-	}
-	return st.Executor, err
 }
 
 // workFilter is GET /work's query, parsed.
@@ -96,41 +80,24 @@ func parseWorkFilter(q listQuery) (workFilter, error) {
 	return f, nil
 }
 
-// cheap says whether w passes the filters on the Work record alone.
+// cheap says whether w passes the filters on the Work record alone: all
+// but the words.
 func (f workFilter) cheap(w domain.Work) bool {
 	q := f.q
 	return match(q, "scope_id", string(w.ScopeID)) && matchAny(q, "state", string(w.State)) && match(q, "kind", w.Kind) &&
-		match(q, "parent_id", string(w.ParentID)) && match(q, "source", workSource(w)) &&
+		match(q, "parent_id", string(w.ParentID)) && match(q, "source", workSource(w)) && match(q, "executor", w.LatestExecutor) &&
 		(f.updatedAfter.IsZero() || !w.UpdatedAt.Before(f.updatedAfter))
 }
 
 // matches says whether w passes every filter, reading its latest attempt
-// only when the executor or words ask for it.
+// only when the words ask for it.
 func (f workFilter) matches(tx storage.Tx, w domain.Work) (bool, error) {
-	if !f.cheap(w) {
-		return false, nil
-	}
-	_, byExecutor := f.q.filters["executor"]
-	if !byExecutor && len(f.words) == 0 {
-		return true, nil
+	if !f.cheap(w) || len(f.words) == 0 {
+		return f.cheap(w), nil
 	}
 	x, ok, err := latestExecution(tx, w.ID)
 	if err != nil {
 		return false, err
-	}
-	if byExecutor {
-		executor := ""
-		if ok {
-			if executor, err = executorOf(tx, x); err != nil {
-				return false, err
-			}
-		}
-		if executor != f.q.filters["executor"] {
-			return false, nil
-		}
-	}
-	if len(f.words) == 0 {
-		return true, nil
 	}
 	hay := []string{string(w.ID), w.Kind, string(w.ScopeID), string(w.State)}
 	for _, k := range w.CorrelationKeys {
@@ -216,38 +183,174 @@ type listedWork struct {
 	scopes map[domain.ID]domain.Scope
 }
 
+// storageQuery is what of f storage selects through its indexes: every
+// filter given a value but the words. A source family becomes the sources
+// in it, from facets; sources is nil when f names none.
+func (f workFilter) storageQuery(sources []string) storage.WorkQuery {
+	q := storage.WorkQuery{Order: storage.WorkOrder(f.sort), UpdatedSince: f.updatedAfter, Sources: sources}
+	if v, ok := f.q.filters["state"]; ok {
+		for _, st := range strings.Split(v, ",") {
+			q.States = append(q.States, domain.WorkState(st))
+		}
+	}
+	q.ScopeID, q.Kind, q.ParentID = domain.ID(f.q.filters["scope_id"]), f.q.filters["kind"], domain.ID(f.q.filters["parent_id"])
+	q.Executor = f.q.filters["executor"]
+	return q
+}
+
+// residual says whether some of f is left for queryWork to check on each
+// Work storage selects: the words, and a filter given an empty value,
+// which storage reads as no filter.
+func (f workFilter) residual() bool {
+	if len(f.words) > 0 {
+		return true
+	}
+	for _, name := range []string{"scope_id", "kind", "parent_id", "source", "executor"} {
+		if v, ok := f.q.filters[name]; ok && v == "" {
+			return true
+		}
+	}
+	return false
+}
+
+// sources is the sources of f's source family among the Work f's other
+// filters on the record select, read from storage's facets; nil when f
+// names no family, and empty when none is in it.
+func (f workFilter) sources(tx storage.Tx) ([]string, error) {
+	family, ok := f.q.filters["source"]
+	if !ok || family == "" {
+		return nil, nil
+	}
+	q := f.storageQuery(nil)
+	q.Executor = ""
+	facets, err := tx.WorkFacets(q)
+	if err != nil {
+		return nil, err
+	}
+	out := []string{}
+	for _, src := range facets.Sources {
+		if sourceFamily(src) == family {
+			out = append(out, src)
+		}
+	}
+	return out, nil
+}
+
+// after is the storage position a cursor's last key stands for: key's
+// inverse, whose time a descending order inverted.
+func (f workFilter) after(key string) (*storage.WorkKey, error) {
+	n, id, ok := strings.Cut(key, "/")
+	at, err := strconv.ParseInt(n, 10, 64)
+	if !ok || err != nil {
+		return nil, fail(400, "invalid_cursor", "cursor is invalid")
+	}
+	if strings.HasPrefix(f.sort, "-") {
+		at = math.MaxInt64 - at
+	}
+	return &storage.WorkKey{At: time.Unix(0, at), ID: domain.ID(id)}, nil
+}
+
+// workQueryBatch is how many Work queryWork reads from storage at a time
+// when it checks words on each.
+const workQueryBatch = 200
+
 // queryWork reads the page of Work f asks for in tx, with the total that
-// match and, as ask says, each listed Work's runs.
+// match and, as ask says, each listed Work's runs. Storage selects, orders,
+// pages and counts by its indexes, so the page costs its own Work; only
+// words (and an empty filter) are checked here, on each Work storage
+// selects, and those cost the Work they read.
 func (s *Server) queryWork(tx storage.Tx, f workFilter, ask map[string]bool) (listedWork, error) {
 	lw := listedWork{byID: map[string]domain.Work{}, scopes: map[domain.ID]domain.Scope{}}
-	works, err := tx.ListWorks()
+	sources, err := f.sources(tx)
 	if err != nil {
 		return lw, err
 	}
-	var items []keyed
-	for _, w := range works {
-		ok, err := f.matches(tx, w)
+	q := f.storageQuery(sources)
+	bound := s.workBound(f)
+	if f.q.cursor != nil {
+		bound = f.q.cursor.Bound
+		if q.After, err = f.after(f.q.cursor.Last); err != nil {
+			return lw, err
+		}
+	}
+	var page []domain.Work
+	more, total := false, 0
+	if sources != nil && len(sources) == 0 {
+		// No Work is in the family.
+	} else if !f.residual() {
+		if total, err = tx.CountWorks(q); err != nil {
+			return lw, err
+		}
+		q.Limit = f.q.limit + 1
+		ws, err := tx.QueryWorks(q)
 		if err != nil {
 			return lw, err
 		}
-		if ok {
-			items = append(items, keyed{f.key(w), toWork(w)})
-			lw.byID[string(w.ID)] = w
+		for _, w := range ws {
+			if f.key(w) > bound {
+				break
+			}
+			page = append(page, w)
+		}
+		if more = len(page) > f.q.limit; more {
+			page = page[:f.q.limit]
+		}
+	} else {
+		// The words are checked on every Work storage selects, for the
+		// total; the page is the first that pass after the cursor.
+		all := q
+		all.After, all.Limit = nil, workQueryBatch
+		after := q.After
+		for {
+			ws, err := tx.QueryWorks(all)
+			if err != nil {
+				return lw, err
+			}
+			for _, w := range ws {
+				ok, err := f.matches(tx, w)
+				if err != nil {
+					return lw, err
+				}
+				if !ok {
+					continue
+				}
+				total++
+				k := q.Order.Key(w)
+				if after != nil && !(q.Order.Descending() && k.Before(*after) || !q.Order.Descending() && after.Before(k)) || f.key(w) > bound {
+					continue
+				}
+				if len(page) == f.q.limit {
+					more = true
+					continue
+				}
+				page = append(page, w)
+			}
+			if len(ws) < workQueryBatch {
+				break
+			}
+			k := q.Order.Key(ws[len(ws)-1])
+			all.After = &k
 		}
 	}
-	lw.out = s.page("work", f.q, s.workBound(f), items)
-	lw.out["total"] = len(items)
-	page := lw.out["items"].([]any)
+	items := make([]any, 0, len(page))
+	for _, w := range page {
+		items = append(items, toWork(w))
+		lw.byID[string(w.ID)] = w
+	}
+	next := ""
+	if more && len(page) > 0 {
+		next = s.sign(cursor{Endpoint: "work", Filters: f.q.norm, Bound: bound, Last: f.key(page[len(page)-1]), Expires: s.o.Now().Add(15 * time.Minute).Unix()})
+	}
+	lw.out = map[string]any{"items": items, "next_cursor": next, "total": total}
 	if ask["runs"] {
-		if lw.runs, err = runsOf(tx, page, lw.byID); err != nil {
+		if lw.runs, err = runsOf(tx, items, lw.byID); err != nil {
 			return lw, err
 		}
 	}
 	if !ask["actions"] && !ask["panels"] {
 		return lw, nil
 	}
-	for _, it := range page {
-		w := lw.byID[it.(wireWork).ID]
+	for _, w := range page {
 		if _, ok := lw.scopes[w.ScopeID]; !ok {
 			sc, err := tx.Scope(w.ScopeID)
 			if err != nil {
@@ -293,9 +396,8 @@ func (s *Server) listWork(c *call) (int, any, error) {
 }
 
 // workFacets is what a view of Work can filter on among the Work that
-// match the query (state, scope_id, kind): the scopes and sources of every
-// such Work, and the executors of the most recently changed
-// facetExecutorWork of them.
+// match the query (state, scope_id, kind): the scopes, sources and latest
+// attempts' executors of every such Work.
 func (s *Server) workFacets(c *call) (int, any, error) {
 	q, err := s.query(c, "work_facets", "scope_id", "state", "kind")
 	if err != nil {
@@ -316,42 +418,50 @@ func (s *Server) workFacets(c *call) (int, any, error) {
 	return 200, out, nil
 }
 
-// facetsOf is GET /work/facets's answer for f in tx.
+// facetsOf is GET /work/facets's answer for f in tx, from storage's
+// facets of the Work f selects: their sources as families.
 func facetsOf(tx storage.Tx, f workFilter) (map[string]any, error) {
-	scopes, sources, executors := map[string]bool{}, map[string]bool{}, map[string]bool{}
-	works, err := tx.ListWorks()
+	q := f.storageQuery(nil)
+	q.Order = ""
+	if f.residual() {
+		return residualFacets(tx, f)
+	}
+	facets, err := tx.WorkFacets(q)
 	if err != nil {
 		return nil, err
 	}
-	var in []domain.Work
-	for _, w := range works {
+	scopes, sources := []string{}, map[string]bool{}
+	for _, id := range facets.ScopeIDs {
+		scopes = append(scopes, string(id))
+	}
+	for _, src := range facets.Sources {
+		sources[sourceFamily(src)] = true
+	}
+	return map[string]any{"total": facets.Count, "scope_ids": scopes, "sources": setKeys(sources), "executors": facets.Executors}, nil
+}
+
+// residualFacets is facetsOf for a filter given an empty value, which
+// storage can't select: every Work storage selects without it, checked.
+func residualFacets(tx storage.Tx, f workFilter) (map[string]any, error) {
+	q := f.storageQuery(nil)
+	q.Order = ""
+	ws, err := tx.QueryWorks(q)
+	if err != nil {
+		return nil, err
+	}
+	total, scopes, sources, executors := 0, map[string]bool{}, map[string]bool{}, map[string]bool{}
+	for _, w := range ws {
 		if !f.cheap(w) {
 			continue
 		}
-		in = append(in, w)
+		total++
 		scopes[string(w.ScopeID)] = true
-		if src := workSource(w); src != "" {
-			sources[src] = true
+		sources[workSource(w)] = true
+		if w.LatestExecutor != "" {
+			executors[w.LatestExecutor] = true
 		}
 	}
-	sort.Slice(in, func(i, j int) bool { return in[i].UpdatedAt.After(in[j].UpdatedAt) })
-	for _, w := range in[:min(len(in), facetExecutorWork)] {
-		x, ok, err := latestExecution(tx, w.ID)
-		if err != nil {
-			return nil, err
-		}
-		if !ok {
-			continue
-		}
-		ex, err := executorOf(tx, x)
-		if err != nil {
-			return nil, err
-		}
-		if ex != "" {
-			executors[ex] = true
-		}
-	}
-	return map[string]any{"total": len(in), "scope_ids": setKeys(scopes), "sources": setKeys(sources), "executors": setKeys(executors)}, nil
+	return map[string]any{"total": total, "scope_ids": setKeys(scopes), "sources": setKeys(sources), "executors": setKeys(executors)}, nil
 }
 
 func setKeys(m map[string]bool) []string {

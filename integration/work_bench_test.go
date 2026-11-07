@@ -40,7 +40,7 @@ const benchAttempts = 4
 
 // seedClosedWork writes closed Work, each with its attempts, and 20 open
 // Work straight through storage into the harness's scope.
-func seedClosedWork(b *testing.B, h *managementHarness, closed int) {
+func seedClosedWork(b testing.TB, h *managementHarness, closed int) {
 	ctx := context.Background()
 	now := h.clock.Now()
 	guard := storage.Guard{Now: now}
@@ -65,7 +65,7 @@ func seedClosedWork(b *testing.B, h *managementHarness, closed int) {
 						return e
 					}
 					xid := domain.ID(fmt.Sprintf("%s/attempt/%d", id, a))
-					if e := tx.PutExecution(domain.Execution{ID: xid, WorkID: id, ExecutorBinding: "run", Attempt: a, State: domain.ExecutionPending, TriggerID: eid}, 0); e != nil {
+					if e := tx.PutExecution(domain.Execution{ID: xid, WorkID: id, ExecutorBinding: "run", Executor: "fixture", Attempt: a, State: domain.ExecutionPending, TriggerID: eid}, 0); e != nil {
 						return e
 					}
 					if _, e := tx.Claim(xid, "owner", time.Minute); e != nil {

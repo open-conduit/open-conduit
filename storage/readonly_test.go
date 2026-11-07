@@ -49,7 +49,7 @@ func TestReadOnlyRefusesEveryWrite(t *testing.T) {
 			t.Errorf("%s is a read, but ReadOnly does not hand it on", m.Name)
 		}
 	}
-	if refused != 15 {
-		t.Errorf("refused %d writes, want 15", refused)
+	if refused != 16 {
+		t.Errorf("refused %d writes, want 16", refused)
 	}
 }

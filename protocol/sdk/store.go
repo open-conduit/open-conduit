@@ -285,6 +285,32 @@ func (t *storeTx) LiveWorks() ([]domain.Work, error) {
 	return out, nil
 }
 
+// QueryWorks, CountWorks and WorkFacets select from ListWorks: the host
+// serves no narrower read.
+func (t *storeTx) QueryWorks(q storage.WorkQuery) ([]domain.Work, error) {
+	if !q.Order.Valid() {
+		return nil, storage.ErrInvalid
+	}
+	works, err := t.ListWorks()
+	if err != nil {
+		return nil, err
+	}
+	page, _ := storage.SelectWorks(works, q)
+	return page, nil
+}
+func (t *storeTx) CountWorks(q storage.WorkQuery) (int, error) {
+	f, err := t.WorkFacets(q)
+	return f.Count, err
+}
+func (t *storeTx) WorkFacets(q storage.WorkQuery) (storage.WorkFacets, error) {
+	works, err := t.ListWorks()
+	if err != nil {
+		return storage.WorkFacets{}, err
+	}
+	_, f := storage.SelectWorks(works, q)
+	return f, nil
+}
+
 // LiveExecutions filters ListExecutions: the host serves no narrower read.
 func (t *storeTx) LiveExecutions() ([]domain.Execution, error) {
 	xs, err := t.ListExecutions("")
@@ -520,6 +546,7 @@ func (t *storeTx) MarkRouted(domain.ID, domain.ID, string) error        { return
 func (t *storeTx) SetEventScope(domain.ID, domain.ID) error             { return ErrReadOnly }
 func (t *storeTx) PutWork(domain.Work, domain.Revision) error           { return ErrReadOnly }
 func (t *storeTx) PutExecution(domain.Execution, domain.Revision) error { return ErrReadOnly }
+func (t *storeTx) SetExecutionExecutor(domain.ID, string) error         { return ErrReadOnly }
 func (t *storeTx) Claim(domain.ID, string, time.Duration) (domain.LeaseRef, error) {
 	return domain.LeaseRef{}, ErrReadOnly
 }

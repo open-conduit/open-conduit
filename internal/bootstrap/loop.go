@@ -29,6 +29,14 @@ func (d *daemon) loop(ctx context.Context) error {
 	} else if n > 0 {
 		d.log.Info("event scopes backfilled", "events", n)
 	}
+	// Attempts from before they recorded their executor get it, so Work is
+	// selected by its executor from storage's index; a failure only leaves
+	// those attempts out of an executor's Work.
+	if n, err := d.current.Load().router.BackfillExecutors(ctx); err != nil && ctx.Err() == nil {
+		d.report("executor_backfill", "", errorCode(err))
+	} else if n > 0 {
+		d.log.Info("attempt executors backfilled", "attempts", n)
+	}
 	// Open Work from before sources gave displays gets one from its
 	// history, once per store; a failure only leaves it without.
 	if n, err := d.current.Load().router.BackfillDisplays(ctx); err != nil && ctx.Err() == nil {

@@ -141,18 +141,21 @@ func FromAcceptedList(as []domain.AcceptedEvent) []AcceptedEvent {
 }
 
 type Work struct {
-	ID              string    `json:"id"`
-	Kind            string    `json:"kind"`
-	ScopeID         string    `json:"scope_id"`
-	State           string    `json:"state"`
-	CorrelationKeys []Key     `json:"correlation_keys"`
-	Context         Payload   `json:"context"`
-	ParentID        string    `json:"parent_id,omitempty"`
-	Display         *Display  `json:"display,omitempty"`
-	Grants          []string  `json:"grants,omitempty"`
-	Revision        uint64    `json:"revision"`
-	CreatedAt       time.Time `json:"created_at"`
-	UpdatedAt       time.Time `json:"updated_at"`
+	ID              string   `json:"id"`
+	Kind            string   `json:"kind"`
+	ScopeID         string   `json:"scope_id"`
+	State           string   `json:"state"`
+	CorrelationKeys []Key    `json:"correlation_keys"`
+	Context         Payload  `json:"context"`
+	ParentID        string   `json:"parent_id,omitempty"`
+	Display         *Display `json:"display,omitempty"`
+	Grants          []string `json:"grants,omitempty"`
+	// LatestExecutor is the executor of the Work's latest attempt
+	// (domain.Work.LatestExecutor), when recorded.
+	LatestExecutor string    `json:"latest_executor,omitempty"`
+	Revision       uint64    `json:"revision"`
+	CreatedAt      time.Time `json:"created_at"`
+	UpdatedAt      time.Time `json:"updated_at"`
 }
 
 // Display is what a Work is, in its source's words (domain.WorkDisplay,
@@ -190,10 +193,10 @@ func (d *Display) Domain() *domain.WorkDisplay {
 }
 
 func FromWork(w domain.Work) Work {
-	return Work{ID: string(w.ID), Kind: w.Kind, ScopeID: string(w.ScopeID), State: string(w.State), CorrelationKeys: fromKeys(w.CorrelationKeys), Context: FromPayload(w.Context), ParentID: string(w.ParentID), Display: FromDisplay(w.Display), Grants: w.Grants, Revision: uint64(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
+	return Work{ID: string(w.ID), Kind: w.Kind, ScopeID: string(w.ScopeID), State: string(w.State), CorrelationKeys: fromKeys(w.CorrelationKeys), Context: FromPayload(w.Context), ParentID: string(w.ParentID), Display: FromDisplay(w.Display), Grants: w.Grants, LatestExecutor: w.LatestExecutor, Revision: uint64(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
 }
 func (w Work) Domain() domain.Work {
-	return domain.Work{ID: domain.ID(w.ID), Kind: w.Kind, ScopeID: domain.ID(w.ScopeID), State: domain.WorkState(w.State), CorrelationKeys: toKeys(w.CorrelationKeys), Context: w.Context.Domain(), ParentID: domain.ID(w.ParentID), Display: w.Display.Domain(), Grants: w.Grants, Revision: domain.Revision(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
+	return domain.Work{ID: domain.ID(w.ID), Kind: w.Kind, ScopeID: domain.ID(w.ScopeID), State: domain.WorkState(w.State), CorrelationKeys: toKeys(w.CorrelationKeys), Context: w.Context.Domain(), ParentID: domain.ID(w.ParentID), Display: w.Display.Domain(), Grants: w.Grants, LatestExecutor: w.LatestExecutor, Revision: domain.Revision(w.Revision), CreatedAt: w.CreatedAt, UpdatedAt: w.UpdatedAt}
 }
 
 type Lease struct {
@@ -255,25 +258,28 @@ func toArtifacts(rs []ArtifactRef) []domain.ArtifactRef {
 }
 
 type Execution struct {
-	ID              string        `json:"id"`
-	WorkID          string        `json:"work_id"`
-	ExecutorBinding string        `json:"executor_binding"`
-	Attempt         uint32        `json:"attempt"`
-	State           string        `json:"state"`
-	TriggerID       string        `json:"trigger_id"`
-	Lease           Lease         `json:"lease"`
-	Outcome         *Outcome      `json:"outcome,omitempty"`
-	Artifacts       []ArtifactRef `json:"artifacts,omitempty"`
-	TraceID         string        `json:"trace_id,omitempty"`
-	StartedAt       *time.Time    `json:"started_at,omitempty"`
-	FinishedAt      *time.Time    `json:"finished_at,omitempty"`
-	Revision        uint64        `json:"revision"`
-	CreatedAt       time.Time     `json:"created_at"`
-	UpdatedAt       time.Time     `json:"updated_at"`
+	ID              string `json:"id"`
+	WorkID          string `json:"work_id"`
+	ExecutorBinding string `json:"executor_binding"`
+	// Executor is the executor the attempt's binding named
+	// (domain.Execution.Executor), when recorded.
+	Executor   string        `json:"executor,omitempty"`
+	Attempt    uint32        `json:"attempt"`
+	State      string        `json:"state"`
+	TriggerID  string        `json:"trigger_id"`
+	Lease      Lease         `json:"lease"`
+	Outcome    *Outcome      `json:"outcome,omitempty"`
+	Artifacts  []ArtifactRef `json:"artifacts,omitempty"`
+	TraceID    string        `json:"trace_id,omitempty"`
+	StartedAt  *time.Time    `json:"started_at,omitempty"`
+	FinishedAt *time.Time    `json:"finished_at,omitempty"`
+	Revision   uint64        `json:"revision"`
+	CreatedAt  time.Time     `json:"created_at"`
+	UpdatedAt  time.Time     `json:"updated_at"`
 }
 
 func FromExecution(x domain.Execution) Execution {
-	out := Execution{ID: string(x.ID), WorkID: string(x.WorkID), ExecutorBinding: x.ExecutorBinding, Attempt: x.Attempt, State: string(x.State), TriggerID: string(x.TriggerID), Lease: Lease{Owner: x.Lease.Owner, Epoch: x.Lease.Epoch, ExpiresAt: x.Lease.ExpiresAt}, Artifacts: fromArtifacts(x.Artifacts), TraceID: x.TraceID, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Revision: uint64(x.Revision), CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt}
+	out := Execution{ID: string(x.ID), WorkID: string(x.WorkID), ExecutorBinding: x.ExecutorBinding, Executor: x.Executor, Attempt: x.Attempt, State: string(x.State), TriggerID: string(x.TriggerID), Lease: Lease{Owner: x.Lease.Owner, Epoch: x.Lease.Epoch, ExpiresAt: x.Lease.ExpiresAt}, Artifacts: fromArtifacts(x.Artifacts), TraceID: x.TraceID, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Revision: uint64(x.Revision), CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt}
 	if x.Outcome != nil {
 		o := FromOutcome(*x.Outcome)
 		out.Outcome = &o
@@ -281,7 +287,7 @@ func FromExecution(x domain.Execution) Execution {
 	return out
 }
 func (x Execution) Domain() domain.Execution {
-	out := domain.Execution{ID: domain.ID(x.ID), WorkID: domain.ID(x.WorkID), ExecutorBinding: x.ExecutorBinding, Attempt: x.Attempt, State: domain.ExecutionState(x.State), TriggerID: domain.ID(x.TriggerID), Lease: domain.Lease{Owner: x.Lease.Owner, Epoch: x.Lease.Epoch, ExpiresAt: x.Lease.ExpiresAt}, Artifacts: toArtifacts(x.Artifacts), TraceID: x.TraceID, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Revision: domain.Revision(x.Revision), CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt}
+	out := domain.Execution{ID: domain.ID(x.ID), WorkID: domain.ID(x.WorkID), ExecutorBinding: x.ExecutorBinding, Executor: x.Executor, Attempt: x.Attempt, State: domain.ExecutionState(x.State), TriggerID: domain.ID(x.TriggerID), Lease: domain.Lease{Owner: x.Lease.Owner, Epoch: x.Lease.Epoch, ExpiresAt: x.Lease.ExpiresAt}, Artifacts: toArtifacts(x.Artifacts), TraceID: x.TraceID, StartedAt: x.StartedAt, FinishedAt: x.FinishedAt, Revision: domain.Revision(x.Revision), CreatedAt: x.CreatedAt, UpdatedAt: x.UpdatedAt}
 	if x.Outcome != nil {
 		o := x.Outcome.Domain()
 		out.Outcome = &o

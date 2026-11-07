@@ -288,6 +288,7 @@ func (t *transaction) PutWork(w domain.Work, expected domain.Revision) error {
 		}
 	}
 	w.Revision = expected + 1
+	w.LatestExecutor = old.LatestExecutor
 	w.CreatedAt = old.CreatedAt
 	if !exists {
 		w.CreatedAt = t.now
@@ -520,7 +521,7 @@ func (t *transaction) PutExecution(x domain.Execution, expected domain.Revision)
 			return storage.ErrConflict
 		}
 	} else {
-		if x.WorkID != old.WorkID || x.Attempt != old.Attempt || x.TriggerID != old.TriggerID || x.ExecutorBinding != old.ExecutorBinding || x.Lease != old.Lease || old.State.Terminal() {
+		if x.WorkID != old.WorkID || x.Attempt != old.Attempt || x.TriggerID != old.TriggerID || x.ExecutorBinding != old.ExecutorBinding || x.Executor != "" && x.Executor != old.Executor || x.Lease != old.Lease || old.State.Terminal() {
 			return storage.ErrInvalid
 		}
 		if x.State == domain.ExecutionRunning && old.State != x.State {
@@ -529,6 +530,11 @@ func (t *transaction) PutExecution(x domain.Execution, expected domain.Revision)
 		if x.State != old.State && !domain.ExecutionTransition(old.State, x.State) {
 			return storage.ErrInvalid
 		}
+	}
+	if exists {
+		// An update need not repeat the recorded executor (it may have been
+		// read before SetExecutionExecutor set it); it keeps it.
+		x.Executor = old.Executor
 	}
 	x.StartedAt = old.StartedAt
 	x.FinishedAt = old.FinishedAt
@@ -546,7 +552,26 @@ func (t *transaction) PutExecution(x domain.Execution, expected domain.Revision)
 		x.CreatedAt = t.now
 	}
 	x.UpdatedAt = t.now
-	return t.writeExecution(x, exists)
+	if err = t.writeExecution(x, exists); err != nil || exists {
+		return err
+	}
+	// The new attempt is the Work's latest.
+	return t.setLatestExecutor(w, x.Executor)
+}
+
+// setLatestExecutor records w's LatestExecutor, which storage keeps
+// without a new revision, as it does the record's other derived fields.
+func (t *transaction) setLatestExecutor(w domain.Work, executor string) error {
+	if w.LatestExecutor == executor {
+		return nil
+	}
+	w.LatestExecutor = executor
+	b, err := encode(w)
+	if err != nil {
+		return err
+	}
+	_, err = t.exec("UPDATE works SET record=? WHERE id=?", b, w.ID)
+	return err
 }
 func (t *transaction) writeExecution(x domain.Execution, exists bool) error {
 	b, err := encode(x)
