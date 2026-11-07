@@ -496,6 +496,14 @@ a.token {
   gap: 4px;
   align-items: center;
 }
+.ledger-more {
+  padding: 14px 24px;
+  color: var(--ink-2);
+  text-align: center;
+}
+.ledger-more .btn {
+  margin-left: 8px;
+}
 .empty {
   padding: 56px 24px;
   text-align: center;

@@ -218,15 +218,36 @@ func (s *Server) pageSessions(ctx context.Context, p *page, want string, fresh b
 		if v.Kind != d.P.WorkKind || !in[v.ScopeID] {
 			continue
 		}
-		if v.ID == want || want == "" && v.Disp.Group != "closed" && (open == nil || v.Updated.After(open.Updated)) {
+		if v.ID == want || want == "" && (open == nil || v.Updated.After(open.Updated)) {
 			open = &v
 		}
-		if v.Disp.Group == "closed" && v.ID != want {
-			d.Past = append(d.Past, v)
+	}
+	// The past sessions are each scope's latest closed, one more than
+	// shown in case the one asked for is among them.
+	for _, sc := range d.Scopes {
+		past, _, err := s.closedWork(ctx, url.Values{"kind": {d.P.WorkKind}, "scope_id": {sc.ID}, "sort": {"-updated"}}, pagePastSessions+1)
+		if err != nil && !tooOldList(err) {
+			return err
+		}
+		for _, v := range past {
+			if v.ID == want {
+				open = &v
+			} else {
+				d.Past = append(d.Past, v)
+			}
 		}
 	}
 	slices.SortFunc(d.Past, func(a, b workView) int { return b.Updated.Compare(a.Updated) })
 	d.Past = d.Past[:min(len(d.Past), pagePastSessions)]
+	if want != "" && open == nil {
+		v, err := s.oneWork(ctx, want)
+		if err != nil {
+			return err
+		}
+		if v.Kind == d.P.WorkKind && in[v.ScopeID] {
+			open = &v
+		}
+	}
 	if open != nil {
 		return s.pageSession(ctx, p, *open, d)
 	}

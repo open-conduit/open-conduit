@@ -6,9 +6,11 @@ import (
 	"html/template"
 	"net/http"
 	"net/url"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
@@ -115,6 +117,63 @@ type facetView struct {
 type ledgerSection struct {
 	Key, Label string
 	Rows       []rowCtx
+	// N is how many Work the section holds, which for closed Work may be
+	// more than the rows read.
+	N int
+}
+
+// closedSet is the closed Work the Runs page reads by its query: how many
+// closed Work there are and what they can be filtered on (Facets), how
+// many the facets leave (Matching), and the rows read when the state filter
+// shows them, at most Want.
+type closedSet struct {
+	Facets   client.WorkFacets
+	Matching int
+	Rows     []workView
+	Want     int
+}
+
+// closedSorts are the list orders closest to each ledger sort for closed
+// Work, whose disposition began when they closed (their last change).
+// "Most execution time" has no list order; the rows read are the latest
+// closed and sorted as read.
+var closedSorts = map[string]string{"attention": "-updated", "updated": "-updated", "waiting": "updated", "active": "-updated", "created": "-created"}
+
+// closedQuery is the list query for the closed Work the facets leave.
+func (rq runsQuery) closedQuery(now time.Time) url.Values {
+	q := url.Values{}
+	for k, v := range map[string]string{"scope_id": rq.Scope, "source": rq.Source, "executor": rq.Executor, "q": rq.Q, "sort": closedSorts[rq.Sort]} {
+		if v != "" {
+			q.Set(k, v)
+		}
+	}
+	if q.Get("sort") == "" {
+		q.Set("sort", "-updated")
+	}
+	for _, win := range windows {
+		if rq.Updated == win.V {
+			q.Set("updated_after", now.Add(-win.D).UTC().Format(time.RFC3339Nano))
+		}
+	}
+	return q
+}
+
+// faceted says whether a facet narrows the Work.
+func (rq runsQuery) faceted() bool {
+	return rq.Scope != "" || rq.Source != "" || rq.Executor != "" || rq.Updated != "" || rq.Q != ""
+}
+
+// showsClosed says whether the state filter lists closed Work.
+func (rq runsQuery) showsClosed() bool { return rq.G == "closed" || rq.G == "all" }
+
+// closedStep is how many more closed rows "Show more" reads.
+const closedStep = 50
+
+// wantClosed is how many closed rows the page asks for: closedStep, and
+// closedStep more for each "Show more" (the more query key).
+func wantClosed(q url.Values) int {
+	n, _ := strconv.Atoi(q.Get("more"))
+	return closedStep * (1 + min(max(n, 0), 40))
 }
 
 type runsData struct {
@@ -141,6 +200,12 @@ type runsData struct {
 	Empty, GroupLabel string
 	AllHref           string
 	Fresh             bool
+	// MoreHref reads closedStep more closed rows, when more match than
+	// are shown; Shown is how many closed rows are.
+	MoreHref string
+	Shown    int
+	// Closed is how many closed Work the facets leave.
+	Closed int
 }
 
 // href is the page's URL with keys set, and removed where the value is "".
@@ -267,11 +332,11 @@ func holdable(w workView) bool {
 	return true
 }
 
-// runsView builds the page from every Work and scope, labelling sources
-// with label.
-func runsView(wd world, q url.Values, p *page, now time.Time, label func(string) string) runsData {
+// runsView builds the page from the open Work and scopes and the closed
+// Work read for it, labelling sources with label.
+func runsView(wd world, cl closedSet, q url.Values, p *page, now time.Time, label func(string) string) runsData {
 	rq := parseRunsQuery(q)
-	d := runsData{Query: rq, Total: len(wd.Works), Watching: len(wd.Scopes)}
+	d := runsData{Query: rq, Total: len(wd.Works) + cl.Facets.Total, Watching: len(wd.Scopes)}
 	scopeName := map[string]string{}
 	for _, s := range wd.Scopes {
 		scopeName[s.ID] = s.Name
@@ -297,7 +362,26 @@ func runsView(wd world, q url.Values, p *page, now time.Time, label func(string)
 			faceted = append(faceted, w)
 		}
 	}
-	d.Scopes, d.Faceted = len(spans), len(faceted)
+	for _, id := range cl.Facets.ScopeIDs {
+		spans[id] = true
+		if _, ok := scopeName[id]; !ok && id != "" {
+			scopeName[id] = id
+			d.ScopeOpts = append(d.ScopeOpts, option{V: id, Label: id, On: id == rq.Scope})
+		}
+	}
+	for _, src := range cl.Facets.Sources {
+		if !sources[src] {
+			sources[src] = true
+			d.SourceOpts = append(d.SourceOpts, option{V: src, Label: label(src), On: src == rq.Source})
+		}
+	}
+	for _, ex := range cl.Facets.Executors {
+		if !execs[ex] {
+			execs[ex] = true
+			d.ExecOpts = append(d.ExecOpts, option{V: ex, Label: ex, On: ex == rq.Executor})
+		}
+	}
+	d.Scopes, d.Faceted = len(spans), len(faceted)+cl.Matching
 	for _, win := range windows {
 		d.WindowOpts = append(d.WindowOpts, option{V: win.V, Label: win.Label, On: win.V == rq.Updated})
 	}
@@ -319,6 +403,7 @@ func runsView(wd world, q url.Values, p *page, now time.Time, label func(string)
 
 	counts, waiting := map[string]int{}, map[string]int{}
 	open := 0
+	counts["closed"], d.Closed = cl.Matching, cl.Matching
 	for _, w := range faceted {
 		counts[w.Disp.Group]++
 		if w.Disp.Group != "closed" {
@@ -366,16 +451,24 @@ func runsView(wd world, q url.Values, p *page, now time.Time, label func(string)
 
 	var rows []workView
 	for _, w := range faceted {
-		if rq.inState(w) {
+		if rq.inState(w) && w.Disp.Group != "closed" {
 			rows = append(rows, w)
 		}
 	}
-	sortWorks(rows, rq.Sort, now)
 	d.Rows = len(rows)
+	if rq.showsClosed() {
+		rows = append(rows, cl.Rows...)
+		d.Rows += cl.Matching
+		d.Shown = len(cl.Rows)
+		if cl.Matching > len(cl.Rows) && len(cl.Rows) >= cl.Want {
+			d.MoreHref = href(q, "more", strconv.Itoa(cl.Want/closedStep))
+		}
+	}
+	sortWorks(rows, rq.Sort, now)
 	switch rq.By {
 	case "none":
 		if len(rows) > 0 {
-			d.Sections = []ledgerSection{{Key: "all", Rows: rowCtxs(rows, p, now)}}
+			d.Sections = []ledgerSection{{Key: "all", Rows: rowCtxs(rows, p, now), N: d.Rows}}
 		}
 	case "scope":
 		var order []string
@@ -387,7 +480,7 @@ func runsView(wd world, q url.Values, p *page, now time.Time, label func(string)
 			by[w.ScopeID] = append(by[w.ScopeID], w)
 		}
 		for _, id := range order {
-			d.Sections = append(d.Sections, ledgerSection{Key: id, Label: scopeName[id], Rows: rowCtxs(by[id], p, now)})
+			d.Sections = append(d.Sections, ledgerSection{Key: id, Label: scopeName[id], Rows: rowCtxs(by[id], p, now), N: len(by[id])})
 		}
 	default:
 		for _, g := range railGroups {
@@ -398,7 +491,11 @@ func runsView(wd world, q url.Values, p *page, now time.Time, label func(string)
 				}
 			}
 			if len(in) > 0 {
-				d.Sections = append(d.Sections, ledgerSection{Key: g.G, Label: g.Label, Rows: rowCtxs(in, p, now)})
+				n := len(in)
+				if g.G == "closed" {
+					n = cl.Matching
+				}
+				d.Sections = append(d.Sections, ledgerSection{Key: g.G, Label: g.Label, Rows: rowCtxs(in, p, now), N: n})
 			}
 		}
 	}
@@ -466,8 +563,10 @@ func (s *Server) runsPage(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 	p := &page{Title: "Runs", Nav: "runs"}
 	wd := s.cachedWorld(ctx, true)
-	p.Err = strings.Join(wd.Errs, "\n")
-	d := runsView(wd, r.URL.Query(), p, s.opts.Now(), s.sourceLabel)
+	q := r.URL.Query()
+	cl, errs := s.closedFor(ctx, parseRunsQuery(q), wantClosed(q))
+	p.Err = strings.Join(slices.Concat(wd.Errs, errs), "\n")
+	d := runsView(wd, cl, q, p, s.opts.Now(), s.sourceLabel)
 	if d.Total == 0 && len(wd.Errs) == 0 {
 		if h, err := s.src.Health(ctx); err == nil {
 			g, _ := strconv.Atoi(h.ConfigGeneration)
@@ -475,6 +574,86 @@ func (s *Server) runsPage(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.render(w, r, "runs", p, d)
+}
+
+// closedFor reads the closed Work the Runs page shows for rq: what every
+// closed Work can be filtered on, how many the facets leave, and when the
+// state filter lists closed Work, up to want of them with their runs. The
+// facets are cached (closedFacets), and without facets they give the count,
+// so the default view reads no closed Work at all.
+func (s *Server) closedFor(ctx context.Context, rq runsQuery, want int) (closedSet, []string) {
+	cl := closedSet{Want: want}
+	var (
+		wg   sync.WaitGroup
+		mu   sync.Mutex
+		errs []string
+	)
+	keep := func(err error) {
+		if err != nil {
+			mu.Lock()
+			errs = append(errs, closedErr(err))
+			mu.Unlock()
+		}
+	}
+	wg.Add(1)
+	go func() {
+		defer wg.Done()
+		var err error
+		cl.Facets, err = s.closedFacets(ctx)
+		keep(err)
+	}()
+	q := rq.closedQuery(s.opts.Now())
+	switch {
+	case rq.showsClosed():
+		var err error
+		cl.Rows, cl.Matching, err = s.closedWork(ctx, q, want)
+		keep(err)
+	case rq.faceted():
+		q.Set("state", closedStates)
+		q.Set("limit", "1")
+		p, err := s.src.Works(ctx, q)
+		if err == nil && p.Total != nil {
+			cl.Matching = *p.Total
+		}
+		keep(err)
+	default:
+		// Without facets every closed Work matches: the facets count them.
+		wg.Wait()
+		cl.Matching = cl.Facets.Total
+	}
+	wg.Wait()
+	return cl, errs
+}
+
+// facetsTTL is how long the closed Work's facets serve the Runs page
+// before they are read again. They change only as Work closes in a new
+// scope, source or executor, so a page needn't read them on every load.
+const facetsTTL = 30 * time.Second
+
+// closedFacets is what closed Work can be filtered on, read at most
+// facetsTTL ago.
+func (s *Server) closedFacets(ctx context.Context) (client.WorkFacets, error) {
+	s.fmu.Lock()
+	defer s.fmu.Unlock()
+	now := s.opts.Now()
+	if !s.fat.IsZero() && now.Sub(s.fat) <= facetsTTL && !now.Before(s.fat) {
+		return s.fcache, nil
+	}
+	f, err := s.src.WorkFacets(ctx, url.Values{"state": {closedStates}})
+	if err != nil {
+		return f, err
+	}
+	s.fcache, s.fat = f, now
+	return f, nil
+}
+
+// closedErr is a failed read of closed Work, naming a daemon too old to
+// answer it.
+func closedErr(err error) string {
+	if tooOldList(err) {
+		return "this daemon does not list closed work by query; restart it on this version to see closed work here"
+	}
+	return errText(err)
 }
 
 // bulkControl holds or releases each selected Work that can take it, each

@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
@@ -47,6 +48,31 @@ func runsWorld() world {
 	}
 }
 
+// viewOf is runsView over a world holding closed Work too, as the page
+// reads it: the open Work from the world, and the closed Work the facets
+// leave (as the daemon's query would) with every closed Work's facets.
+func viewOf(wd world, q url.Values) runsData {
+	rq := parseRunsQuery(q)
+	open := world{Scopes: wd.Scopes, Errs: wd.Errs}
+	cl := closedSet{Want: closedStep, Facets: client.WorkFacets{}}
+	for _, w := range wd.Works {
+		if w.Open() {
+			open.Works = append(open.Works, w)
+			continue
+		}
+		cl.Facets.Total++
+		cl.Facets.ScopeIDs = append(cl.Facets.ScopeIDs, w.ScopeID)
+		cl.Facets.Sources = append(cl.Facets.Sources, w.Source)
+		if rq.matches(w, runsNow) {
+			cl.Matching++
+			if rq.showsClosed() {
+				cl.Rows = append(cl.Rows, w)
+			}
+		}
+	}
+	return runsView(open, cl, q, &page{}, runsNow, testLabel)
+}
+
 func ids(d runsData) string {
 	var out []string
 	for _, s := range d.Sections {
@@ -79,11 +105,11 @@ func TestRunsFiltersSortsAndGroups(t *testing.T) {
 		{"by scope keeps the sort within", "by=scope", "1,5,2,3,4,6"},
 	} {
 		q, _ := url.ParseQuery(c.query)
-		if got := ids(runsView(wd, q, &page{}, runsNow, testLabel)); got != c.want {
+		if got := ids(viewOf(wd, q)); got != c.want {
 			t.Errorf("%s: %s, want %s", c.name, got, c.want)
 		}
 	}
-	d := runsView(wd, url.Values{"g": {"waiting"}}, &page{}, runsNow, testLabel)
+	d := viewOf(wd, url.Values{"g": {"waiting"}})
 	if d.Rail[0].N != 6 || d.Rail[1].N != 2 || !d.Rail[1].Signal || d.Rail[4].N != 2 || !d.Rail[4].On {
 		t.Errorf("rail: %+v", d.Rail)
 	}
@@ -95,15 +121,15 @@ func TestRunsFiltersSortsAndGroups(t *testing.T) {
 	if strings.Join(sub, ",") != "Slack,a time" {
 		t.Errorf("sub-rail: %v", sub)
 	}
-	d = runsView(wd, url.Values{"by": {"scope"}}, &page{}, runsNow, testLabel)
+	d = viewOf(wd, url.Values{"by": {"scope"}})
 	if len(d.Sections) != 2 || d.Sections[0].Label != "Alpha" || d.Sections[1].Label != "Beta" {
 		t.Errorf("scope sections: %+v", d.Sections)
 	}
-	d = runsView(wd, url.Values{"scope": {"a"}, "q": {"zzz"}}, &page{}, runsNow, testLabel)
+	d = viewOf(wd, url.Values{"scope": {"a"}, "q": {"zzz"}})
 	if d.Empty != "nomatch" || len(d.Tokens) != 2 || d.ClearHref != "/" {
 		t.Errorf("filtered empty: %q %+v %s", d.Empty, d.Tokens, d.ClearHref)
 	}
-	if d := runsView(world{}, nil, &page{}, runsNow, testLabel); d.Empty != "nowork" {
+	if d := viewOf(world{}, nil); d.Empty != "nowork" {
 		t.Errorf("no work: %q", d.Empty)
 	}
 }
@@ -161,10 +187,10 @@ func TestRunsPage(t *testing.T) {
 	if !strings.Contains(do(h, "GET", "/?g=closed", nil, s).Body.String(), "w_done") {
 		t.Error("closed Work missing under Closed")
 	}
-	// The open list asks for actions and panels in the list form.
+	// The open list asks for runs, actions and panels in the list form.
 	var with bool
 	for _, c := range f.calls {
-		with = with || c == "works+actions ready,running,waiting"
+		with = with || c == "works+runs ready,running,waiting"
 	}
 	if !with {
 		t.Errorf("calls: %v", f.calls)
@@ -231,5 +257,56 @@ func TestSourceLabelFromTitles(t *testing.T) {
 		if got := s.sourceLabel(in); got != want {
 			t.Errorf("sourceLabel(%q) = %q, want %q", in, got, want)
 		}
+	}
+}
+
+// Closed Work is read by the page's query: the default view counts it with
+// one list of one item, and the Closed view reads a page of it with its
+// runs and offers more, however much has closed (#544).
+func TestRunsPageReadsClosedWorkByQuery(t *testing.T) {
+	f, s, h := runsFake(t)
+	for i := range 120 {
+		id := fmt.Sprintf("w_old_%03d", i)
+		f.work[id] = client.Work{ID: id, State: "completed", Revision: "1", ScopeID: "scope_b", Kind: "github.issue", CreatedAt: ts(time.Duration(200-i) * time.Hour), UpdatedAt: ts(time.Duration(200-i) * time.Hour)}
+	}
+	f.calls = nil
+	body := do(h, "GET", "/", nil, s).Body.String()
+	if !strings.Contains(body, `rail-n">121<`) || strings.Contains(body, "w_old_") {
+		t.Errorf("default view: closed count or rows wrong")
+	}
+	if len(f.runReads) != 0 {
+		t.Errorf("runs read one Work at a time: %v", f.runReads)
+	}
+	f.calls = nil
+	body = do(h, "GET", "/?g=closed", nil, s).Body.String()
+	if !strings.Contains(body, "w_old_119") || strings.Contains(body, "w_old_069") || !strings.Contains(body, "Show more") {
+		t.Errorf("closed view should show the 50 latest closed and offer more")
+	}
+	var pages int
+	for _, c := range f.calls {
+		if c == "works+runs completed,failed,cancelled" {
+			pages++
+		}
+	}
+	if pages != 1 {
+		t.Errorf("closed pages read %d, want 1: %v", pages, f.calls)
+	}
+	// The facets are read once and serve the next loads.
+	var facets int
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "facets ") {
+			facets++
+		}
+	}
+	if facets != 0 {
+		t.Errorf("facets read again within their TTL: %v", f.calls)
+	}
+	body = do(h, "GET", "/?g=closed&more=2", nil, s).Body.String()
+	if !strings.Contains(body, "w_old_000") || strings.Contains(body, "Show more") {
+		t.Errorf("more=2 should show every closed Work")
+	}
+	body = do(h, "GET", "/?g=closed&scope=scope_a", nil, s).Body.String()
+	if !strings.Contains(body, "w_done") || strings.Contains(body, "w_old_") {
+		t.Errorf("scope facet should reach the closed query")
 	}
 }

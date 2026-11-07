@@ -40,8 +40,10 @@ type fake struct {
 	samples map[string][]client.RouteSample
 
 	healthErr error
-	// old is a daemon from before the list forms (#124).
+	// old is a daemon from before the list forms (#124); noRuns one from
+	// before the Work list's runs and query (#544).
 	old      bool
+	noRuns   bool
 	invoked  []invoked
 	controls []string
 	calls    []string

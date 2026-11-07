@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 )
 
@@ -18,14 +19,20 @@ type paletteItem struct {
 	Find string `json:"find,omitempty"`
 }
 
-// palette feeds the jump palette from the cached read of every Work: each
-// Work, then each scope, then the pages.
+// paletteClosed is how many of the latest closed Work the palette offers.
+const paletteClosed = 100
+
+// palette feeds the jump palette: each open Work (from the cached read)
+// and the latest closed, then each scope, then the pages.
 func (s *Server) palette(w http.ResponseWriter, r *http.Request) {
 	ctx, cancel := call(r)
 	defer cancel()
 	wd := s.cachedWorld(ctx, false)
+	// The open Work, then the latest closed: the palette jumps to what is
+	// current, and finding older closed Work is the Runs page's search.
+	closed, _, _ := s.closedWork(ctx, url.Values{"sort": {"-updated"}}, paletteClosed)
 	var items []paletteItem
-	for _, v := range wd.Works {
+	for _, v := range slices.Concat(wd.Works, closed) {
 		items = append(items, paletteItem{Label: v.Label(), Hint: joinDot(s.sourceLabel(v.Source), v.ScopeID, strings.ToLower(v.Disp.Label)), Href: "/work?" + url.Values{"id": {v.ID}}.Encode(), Mark: string(markSVG(v.Disp.Kind, 12, "")), Find: v.Summary})
 	}
 	for _, sc := range wd.Scopes {

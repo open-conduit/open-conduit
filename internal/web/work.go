@@ -469,8 +469,8 @@ func ratio(active, elapsed time.Duration) float64 {
 	return p
 }
 
-// world is everything the Runs, Needs you and palette pages show: every
-// Work with its turns, active Wait and offers.
+// world is the open Work the Runs, Needs you and palette pages show, each
+// with its turns, active Wait and offers, and the scopes.
 type world struct {
 	Works  []workView
 	Scopes []client.Scope
@@ -503,17 +503,20 @@ func cloneQuery(q url.Values) url.Values {
 	return out
 }
 
-// world reads every Work with its runs, active Waits, scopes, and for open
-// Work the actions and panels on it, concurrently. Holds and queued input are
-// on the single Work record only, so ready Work is read once more for them.
+// world reads the open Work (the live set) with its runs, active Waits,
+// scopes, and the actions and panels on it, concurrently. Holds and queued
+// input are on the single Work record only, so ready and waiting Work is
+// read once more for them. Closed Work is not read here: a page reads the
+// closed Work it shows by its own query (closedWork), so a read costs the
+// live set, not every Work there has been.
 func (s *Server) world(ctx context.Context) world {
 	var (
-		wg             sync.WaitGroup
-		mu             sync.Mutex
-		openW, closedW []client.Work
-		waits          []client.Wait
-		scopes         []client.Scope
-		errs           []string
+		wg     sync.WaitGroup
+		mu     sync.Mutex
+		openW  []client.Work
+		waits  []client.Wait
+		scopes []client.Scope
+		errs   []string
 	)
 	keep := func(err error) {
 		if err != nil {
@@ -526,7 +529,7 @@ func (s *Server) world(ctx context.Context) world {
 	go func() {
 		defer wg.Done()
 		var err error
-		openW, closedW, err = s.works(ctx)
+		openW, err = s.openWork(ctx)
 		keep(err)
 	}()
 	go func() {
@@ -543,53 +546,72 @@ func (s *Server) world(ctx context.Context) world {
 	}()
 	wg.Wait()
 	s.holds(ctx, openW)
-	byWork, err := s.runsOf(ctx, openW, closedW)
-	keep(err)
 	waitOf := map[string]*client.Wait{}
 	for i := range waits {
 		waitOf[waits[i].WorkID] = &waits[i]
 	}
 	now := s.opts.Now()
 	out := world{Scopes: scopes, Errs: errs}
-	for _, w := range append(openW, closedW...) {
-		out.Works = append(out.Works, newWork(w, byWork[w.ID], waitOf[w.ID], now))
+	for _, w := range openW {
+		out.Works = append(out.Works, newWork(w, w.Runs, waitOf[w.ID], now))
 	}
 	return out
 }
 
-// closedRuns are the runs of a finished Work as read at its revision.
-type closedRuns struct {
-	revision string
-	runs     []client.Run
+// openStates are the states of Work that has not closed, and closedStates
+// of Work that has.
+const (
+	openStates   = "ready,running,waiting"
+	closedStates = "completed,failed,cancelled"
+)
+
+// openWork reads open Work with its runs and the actions and panels on it,
+// a page of 50 a request.
+func (s *Server) openWork(ctx context.Context) ([]client.Work, error) {
+	ws, err := listAll(ctx, url.Values{"state": {openStates}, "limit": {"50"}}, func(ctx context.Context, q url.Values) (client.Page[client.Work], error) {
+		return s.src.WorksWithRuns(ctx, q, true)
+	})
+	if !tooOldList(err) {
+		return ws, err
+	}
+	return s.openWorkEach(ctx)
 }
 
-// runsOf reads each Work's runs by its ID, eight at a time. A finished
-// Work's runs change only with the Work (a retry reopens it, which changes
-// its revision), so they are kept from the last read while its revision
-// stands, and a world read costs the open Work and what changed, not every
-// run ever made. The caller holds wmu, which guards the kept runs.
-func (s *Server) runsOf(ctx context.Context, openW, closedW []client.Work) (map[string][]client.Run, error) {
-	byWork := map[string][]client.Run{}
-	kept := map[string]closedRuns{}
-	var read []client.Work
-	read = append(read, openW...)
-	for _, w := range closedW {
-		if c, ok := s.closed[w.ID]; ok && c.revision == w.Revision {
-			byWork[w.ID], kept[w.ID] = c.runs, c
-			continue
+// tooOldList says whether a list refused a filter or with= a daemon older
+// than it does not take.
+func tooOldList(err error) bool {
+	var e *client.Error
+	return errors.As(err, &e) && e.Status == http.StatusBadRequest
+}
+
+// openWorkEach is openWork for a daemon older than the list's runs (#544):
+// it reads the open Work, then each one's runs, eight at a time. One older
+// than the list forms (#124) refuses with= and several states at once;
+// then every Work is read in one list and the offers on waiting Work one
+// Work at a time.
+func (s *Server) openWorkEach(ctx context.Context) ([]client.Work, error) {
+	openW, err := listAll(ctx, url.Values{"state": {openStates}, "limit": {"50"}}, s.src.WorksWithActions)
+	if tooOldList(err) {
+		var all []client.Work
+		all, err = listAll(ctx, url.Values{"limit": {"200"}}, s.src.Works)
+		openW = nil
+		for _, w := range all {
+			if isOpen(w.State) {
+				openW = append(openW, w)
+			}
 		}
-		read = append(read, w)
+		s.workOffers(ctx, openW)
 	}
 	sem := make(chan struct{}, 8)
 	var (
 		wg    sync.WaitGroup
 		mu    sync.Mutex
-		first error
+		first = err
 	)
-	for _, w := range read {
+	for i := range openW {
 		wg.Add(1)
 		sem <- struct{}{}
-		go func(w client.Work) {
+		go func(w *client.Work) {
 			defer wg.Done()
 			defer func() { <-sem }()
 			runs, err := listAll(ctx, url.Values{"work_id": {w.ID}, "limit": {"200"}}, s.src.Runs)
@@ -598,53 +620,23 @@ func (s *Server) runsOf(ctx context.Context, openW, closedW []client.Work) (map[
 			}
 			mu.Lock()
 			defer mu.Unlock()
-			if err != nil {
-				if first == nil {
-					first = err
-				}
-				return
+			if err != nil && first == nil {
+				first = err
 			}
-			byWork[w.ID] = runs
-			if !isOpen(w.State) {
-				kept[w.ID] = closedRuns{revision: w.Revision, runs: runs}
-			}
-		}(w)
+			w.Runs = runs
+		}(&openW[i])
 	}
 	wg.Wait()
-	s.closed = kept
-	return byWork, first
+	return openW, first
 }
 
-// works reads open Work with the actions and panels on it, and closed Work.
-// A daemon older than the list forms (#124) refuses with= and several
-// states at once; then every Work is read in one list and the offers on
-// waiting Work one Work at a time, eight at a time.
-func (s *Server) works(ctx context.Context) (openW, closedW []client.Work, err error) {
-	var cerr error
-	openW, err = listAll(ctx, url.Values{"state": {"ready,running,waiting"}, "limit": {"50"}}, s.src.WorksWithActions)
-	if err == nil {
-		closedW, cerr = listAll(ctx, url.Values{"state": {"completed,failed,cancelled"}, "limit": {"200"}}, s.src.Works)
-	}
-	var e *client.Error
-	if !errors.As(err, &e) && !errors.As(cerr, &e) || e.Status != http.StatusBadRequest {
-		if err == nil {
-			err = cerr
-		}
-		return openW, closedW, err
-	}
-	all, err := listAll(ctx, url.Values{"limit": {"200"}}, s.src.Works)
-	openW, closedW = nil, nil
-	for _, w := range all {
-		if isOpen(w.State) {
-			openW = append(openW, w)
-		} else {
-			closedW = append(closedW, w)
-		}
-	}
+// workOffers reads the actions and panels on each waiting Work, eight at a
+// time, for a daemon that does not list them.
+func (s *Server) workOffers(ctx context.Context, works []client.Work) {
 	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
-	for i := range openW {
-		if openW[i].State != "waiting" {
+	for i := range works {
+		if works[i].State != "waiting" {
 			continue
 		}
 		wg.Add(1)
@@ -655,10 +647,50 @@ func (s *Server) works(ctx context.Context) (openW, closedW []client.Work, err e
 			t := client.ActionTarget{WorkID: w.ID}
 			w.Actions, _ = s.src.Actions(ctx, t)
 			w.Panels, _ = s.src.Panels(ctx, t)
-		}(&openW[i])
+		}(&works[i])
 	}
 	wg.Wait()
-	return openW, closedW, err
+}
+
+// oneWork reads one Work with its runs, for a page that names Work the
+// open set does not hold.
+func (s *Server) oneWork(ctx context.Context, id string) (workView, error) {
+	cw, err := s.src.Work(ctx, id)
+	if err != nil {
+		return workView{}, err
+	}
+	runs, err := listAll(ctx, url.Values{"work_id": {id}, "limit": {"200"}}, s.src.Runs)
+	return newWork(cw, runs, nil, s.opts.Now()), err
+}
+
+// closedPage is how many closed Work one request reads.
+const closedPage = 50
+
+// closedWork reads up to n closed Work matching q (the list's filters and
+// sort), each with its runs, and how many match in all. Its cost follows n,
+// not how much Work has closed.
+func (s *Server) closedWork(ctx context.Context, q url.Values, n int) (ws []workView, total int, err error) {
+	q = cloneQuery(q)
+	q.Set("state", closedStates)
+	q.Set("limit", strconv.Itoa(min(n, closedPage)))
+	now := s.opts.Now()
+	for len(ws) < n {
+		p, err := s.src.WorksWithRuns(ctx, q, false)
+		if err != nil {
+			return ws, total, err
+		}
+		if p.Total != nil {
+			total = *p.Total
+		}
+		for _, w := range p.Items {
+			ws = append(ws, newWork(w, w.Runs, nil, now))
+		}
+		if p.NextCursor == "" {
+			break
+		}
+		q.Set("cursor", p.NextCursor)
+	}
+	return ws[:min(len(ws), n)], total, nil
 }
 
 // liveRuns adds Work id's pending, running and parked runs to runs, where

@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/open-conduit/open-conduit/client"
+	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
 	"github.com/open-conduit/open-conduit/extensions/claudecode"
 	gitws "github.com/open-conduit/open-conduit/extensions/git"
@@ -421,5 +422,106 @@ func TestManagementConfigDetailWithoutSecrets(t *testing.T) {
 		if !strings.Contains(string(raw), want) {
 			t.Fatalf("missing %s in %s", want, raw)
 		}
+	}
+}
+
+// The Work list serves a view's query in one request (#544): filters,
+// sorts and pages Work, says how many match, and lists each Work's runs as
+// GET /runs?work_id= does; GET /work/facets says what the Work can be
+// filtered on.
+func TestManagementWorkQuery(t *testing.T) {
+	h := newManagementHarness(t)
+	ctx := context.Background()
+	c := h.operatorClient()
+	emitWork(h)
+	attempt, err := h.scheduler.Start(ctx, domain.ID("work/a"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = h.scheduler.Complete(ctx, attempt.Lease, extension.Result{Outcome: domain.Outcome{Kind: domain.OutcomeCompleted, Summary: "Shipped the fix"}}); err != nil {
+		t.Fatal(err)
+	}
+
+	all, err := c.WorksWithRuns(ctx, url.Values{"scope_id": {"ops"}}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(all.Items) != 3 || all.Total == nil || *all.Total != 3 {
+		t.Fatalf("works %d total %v", len(all.Items), all.Total)
+	}
+	for _, w := range all.Items {
+		runs, err := c.Runs(ctx, url.Values{"work_id": {w.ID}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if w.ID == "work/a" && len(runs.Items) != 1 || len(w.Runs) != len(runs.Items) || len(runs.Items) > 0 && !reflect.DeepEqual(w.Runs, runs.Items) {
+			t.Fatalf("%s: listed runs %+v, single %+v", w.ID, w.Runs, runs.Items)
+		}
+	}
+
+	count := func(q url.Values) int {
+		t.Helper()
+		p, err := c.Works(ctx, q)
+		if err != nil || p.Total == nil {
+			t.Fatalf("%v: %v %v", q, p.Total, err)
+		}
+		if len(p.Items) > *p.Total {
+			t.Fatalf("%v: %d items but total %d", q, len(p.Items), *p.Total)
+		}
+		return *p.Total
+	}
+	future := time.Now().Add(time.Hour).UTC().Format(time.RFC3339Nano)
+	for q, want := range map[string]int{
+		"source=fixture":                     3,
+		"source=github":                      0,
+		"q=zzzz":                             0,
+		"updated_after=" + future:            0,
+		"updated_after=2000-01-01T00:00:00Z": 3,
+		"limit=1":                            3,
+	} {
+		v, _ := url.ParseQuery(q)
+		if got := count(v); got != want {
+			t.Errorf("%s: total %d, want %d", q, got, want)
+		}
+	}
+
+	// Newest first pages through every Work, newest created first.
+	var newest []client.Work
+	q := url.Values{"scope_id": {"ops"}, "sort": {"-created"}, "limit": {"2"}}
+	for {
+		p, err := c.Works(ctx, q)
+		if err != nil {
+			t.Fatal(err)
+		}
+		newest = append(newest, p.Items...)
+		if p.NextCursor == "" {
+			break
+		}
+		q.Set("cursor", p.NextCursor)
+	}
+	if len(newest) != 3 {
+		t.Fatalf("newest first: %d Work", len(newest))
+	}
+	for i := 1; i < len(newest); i++ {
+		if newest[i].CreatedAt > newest[i-1].CreatedAt {
+			t.Fatalf("not newest first: %s after %s", newest[i].CreatedAt, newest[i-1].CreatedAt)
+		}
+	}
+
+	for _, q := range []url.Values{{"sort": {"bogus"}}, {"updated_after": {"yesterday"}}, {"with": {"runs"}, "limit": {"51"}}} {
+		if _, err := c.Works(ctx, q); !isStatus(err, 400) {
+			t.Fatalf("%v: %v", q, err)
+		}
+	}
+
+	f, err := c.WorkFacets(ctx, url.Values{"scope_id": {"ops"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if f.Total != 3 || !reflect.DeepEqual(f.ScopeIDs, []string{"ops"}) || !reflect.DeepEqual(f.Sources, []string{"fixture"}) || !reflect.DeepEqual(f.Executors, []string{"fixture"}) {
+		t.Fatalf("facets %+v", f)
+	}
+	if _, err := c.WorkFacets(ctx, url.Values{"limit": {"5"}}); !isStatus(err, 400) {
+		t.Fatalf("facets with a limit: %v", err)
 	}
 }

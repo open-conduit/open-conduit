@@ -274,11 +274,21 @@ type wireWorkWith struct {
 	wireWork
 	Actions *[]wireAction `json:"actions,omitempty"`
 	Panels  *[]wirePanel  `json:"panels,omitempty"`
+	// Runs are the Work's runs, oldest first (with=runs).
+	Runs *[]wireRun `json:"runs,omitempty"`
 }
 
-// decorate adds each listed Work's actions and panels, computed as
-// GET /work/{id}/actions and /panels compute them, viewWorkers at a time.
-func (s *Server) decorate(ctx context.Context, items []any, ask map[string]bool, works map[string]domain.Work, scopes map[domain.ID]domain.Scope) {
+// decorate adds each listed Work's runs, and its actions and panels,
+// computed as GET /work/{id}/actions and /panels compute them, viewWorkers
+// at a time.
+func (s *Server) decorate(ctx context.Context, items []any, ask map[string]bool, runs map[string][]wireRun, works map[string]domain.Work, scopes map[domain.ID]domain.Scope) {
+	if ask["runs"] && !ask["actions"] && !ask["panels"] {
+		for i, it := range items {
+			r := runs[it.(wireWork).ID]
+			items[i] = wireWorkWith{wireWork: it.(wireWork), Runs: &r}
+		}
+		return
+	}
 	v, cancel := s.viewer(ctx)
 	defer cancel()
 	views := make([]targetView, len(items))
@@ -308,6 +318,10 @@ func (s *Server) decorate(ctx context.Context, items []any, ask map[string]bool,
 		}
 		if ask["panels"] {
 			out.Panels = &tv.panels
+		}
+		if ask["runs"] {
+			r := runs[out.ID]
+			out.Runs = &r
 		}
 		items[i] = out
 	}
