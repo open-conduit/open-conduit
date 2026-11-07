@@ -134,7 +134,8 @@ func matchAny(q listQuery, name, value string) bool {
 	return !ok || slices.Contains(strings.Split(want, ","), value)
 }
 func (s *Server) getWork(c *call) (int, any, error) {
-	if err := noQuery(c); err != nil {
+	extensions, err := annotationsQuery(c)
+	if err != nil {
 		return 0, nil, err
 	}
 	var w domain.Work
@@ -144,11 +145,26 @@ func (s *Server) getWork(c *call) (int, any, error) {
 	if etag(c, w.Revision) {
 		return 0, nil, nil
 	}
-	d, err := s.detail(c.ctx, w)
+	d, err := s.detail(c.ctx, w, extensions)
 	if err != nil {
 		return 0, nil, err
 	}
 	return 200, d, nil
+}
+
+// annotationsQuery parses GET /work/{id}'s one query parameter:
+// annotations=runtime leaves out the extensions' annotations, keeping the
+// host's own, for a view that needs only the hold, the queued input and
+// the runtime's notes. Without it every annotation is included.
+func annotationsQuery(c *call) (extensions bool, err error) {
+	q := c.r.URL.Query()
+	if c.r.URL.RawQuery == "" {
+		return true, nil
+	}
+	if len(q) != 1 || len(q["annotations"]) != 1 || q.Get("annotations") != "runtime" {
+		return false, fail(400, "invalid_filter", "this endpoint accepts only annotations=runtime")
+	}
+	return false, nil
 }
 
 // ---- events ----

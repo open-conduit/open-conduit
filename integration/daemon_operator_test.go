@@ -224,6 +224,16 @@ func TestDaemonFreshInstallGitHubIssue(t *testing.T) {
 	if ann["issue"] != "octo/widgets#"+itoa(n) || !strings.HasSuffix(ann["url"], "/octo/widgets/issues/"+itoa(n)) {
 		t.Fatalf("annotations: %+v", detail.Annotations)
 	}
+	// annotations=runtime leaves the extensions' out (#545).
+	if own, err := d.c.WorkRuntime(ctx, w.ID); err != nil || own.Inputs == nil {
+		t.Fatalf("runtime detail: %+v %v", own, err)
+	} else {
+		for _, a := range own.Annotations {
+			if a.Source != "runtime" {
+				t.Fatalf("runtime detail carries %+v", a)
+			}
+		}
+	}
 
 	// 7. Attach: held while the operator is in the session, released after.
 	var attached []string

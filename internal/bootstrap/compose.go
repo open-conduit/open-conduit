@@ -374,10 +374,14 @@ func (d *daemon) packageActions(scope domain.ID, out map[string]extension.Action
 	}
 }
 
-func (d *daemon) packageAnnotations(ctx context.Context, w domain.Work) []management.Annotation {
-	var out []management.Annotation
+// annotators are the packages that declare annotations, by package name;
+// management asks them concurrently and remembers which time out.
+func (d *daemon) annotators() []management.Annotator {
+	var out []management.Annotator
 	for _, x := range d.packages {
-		out = append(out, x.Annotate(ctx, w)...)
+		if x.m.Provides.Annotate {
+			out = append(out, management.Annotator{Name: x.Name(), Annotate: x.Annotate})
+		}
 	}
 	return out
 }

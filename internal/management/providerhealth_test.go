@@ -168,3 +168,81 @@ func TestProviderProbeBacksOffAndRunsAlone(t *testing.T) {
 		t.Fatalf("retry %v, want the cap %v", got, providerRetryMax)
 	}
 }
+
+// GET /work/{id} asks every annotator at once (#545): one that hangs costs
+// the read at most its own timeout, the others' annotations still come
+// back, and the hung one is remembered, so the next read skips it without
+// asking and doctor names it. annotations=runtime asks none.
+func TestAnnotatorsAreAskedTogetherAndTimeoutsRemembered(t *testing.T) {
+	now := time.Unix(1_000_000, 0)
+	slowEntered := make(chan struct{})
+	var slowCalls, humanCalls atomic.Int32
+	timeouts := func(name string) <-chan time.Time {
+		if name != "slow" {
+			return nil
+		}
+		c := make(chan time.Time)
+		go func() { <-slowEntered; close(c) }()
+		return c
+	}
+	rec := &recorder{}
+	s := &Server{o: Options{Now: func() time.Time { return now }, ProviderTimeout: timeouts, ViewDeadline: func() <-chan time.Time { return nil }, Observer: rec,
+		Annotate: func(context.Context, domain.Work) []Annotation {
+			return []Annotation{{Source: "runtime", Name: "waiting", Value: "limit reached"}}
+		},
+		Annotators: func() []Annotator {
+			return []Annotator{
+				{Name: "github", Annotate: func(context.Context, domain.Work) []Annotation {
+					return []Annotation{{Source: "github", Name: "issue", Value: "o/r#1"}}
+				}},
+				// human answers only once slow is in its call: asked one
+				// after the other, this read would never finish.
+				{Name: "human", Annotate: func(ctx context.Context, _ domain.Work) []Annotation {
+					humanCalls.Add(1)
+					select {
+					case <-slowEntered:
+					case <-ctx.Done():
+						return nil
+					}
+					return []Annotation{{Source: "human", Name: "question", Value: "Ship?"}}
+				}},
+				{Name: "slow", Annotate: func(ctx context.Context, _ domain.Work) []Annotation {
+					if slowCalls.Add(1) == 1 {
+						close(slowEntered)
+					}
+					<-ctx.Done()
+					return nil
+				}},
+			}
+		}}, failing: newProviderHealth()}
+	w := domain.Work{ID: "w1", ScopeID: "ops"}
+	sources := func(as []Annotation) string {
+		var out []string
+		for _, a := range as {
+			out = append(out, a.Source)
+		}
+		return strings.Join(out, ",")
+	}
+
+	if got := sources(s.annotate(context.Background(), w, true)); got != "github,human,runtime" {
+		t.Fatalf("first read: %s", got)
+	}
+	check := s.providerCheck()
+	if check.Status != runtime.CheckWarn || len(check.Items) != 1 || !strings.Contains(check.Items[0], "slow annotations") {
+		t.Fatalf("doctor: %+v", check)
+	}
+	if got := rec.names(); len(got) != 1 || got[0] != "provider.timing_out" || rec.records[0].Attributes["provider.name"] != "slow" || rec.records[0].Correlation.WorkID != "w1" {
+		t.Fatalf("records: %+v", rec.records)
+	}
+
+	// The next read, before slow's retry time, doesn't ask it.
+	if got := sources(s.annotate(context.Background(), w, true)); got != "github,human,runtime" || slowCalls.Load() != 1 {
+		t.Fatalf("second read: %s, slow asked %d times", got, slowCalls.Load())
+	}
+
+	// annotations=runtime asks no annotator.
+	before := humanCalls.Load()
+	if got := sources(s.annotate(context.Background(), w, false)); got != "runtime" || humanCalls.Load() != before {
+		t.Fatalf("runtime only: %s", got)
+	}
+}

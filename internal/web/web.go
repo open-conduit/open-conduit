@@ -54,6 +54,7 @@ type Source interface {
 	ArtifactContent(ctx context.Context, id, byteRange string, w io.Writer) error
 	RunLive(ctx context.Context, id string, tail int64) (client.LiveRun, error)
 	Work(ctx context.Context, id string) (client.Work, error)
+	WorkRuntime(ctx context.Context, id string) (client.Work, error)
 	Waits(ctx context.Context, q url.Values) (client.Page[client.Wait], error)
 	Scopes(ctx context.Context, q url.Values) (client.Page[client.Scope], error)
 	Config(ctx context.Context) (client.Config, error)

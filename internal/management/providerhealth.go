@@ -15,8 +15,8 @@ import (
 	"github.com/open-conduit/open-conduit/observability"
 )
 
-// Provider health (issue #537): a provider call for actions or panels that
-// times out is remembered across requests, so a provider that keeps timing
+// Provider health (issue #537): a provider call for actions or panels, or
+// an annotator's call for a Work's annotations (issue #545), that times out is remembered across requests, so a provider that keeps timing
 // out stops costing every page its timeout. While a call is known to be
 // timing out, views skip it at once and contribute nothing from it; at most
 // one probe at a time, off the request and within the provider timeout,
@@ -204,14 +204,14 @@ func digest(parts ...string) string {
 }
 
 // providerCheck is doctor's providers check: every provider call for
-// actions or panels that is timing out now, by provider and call.
+// actions, panels or annotations that is timing out now, by provider and call.
 func (s *Server) providerCheck() runtime.Check {
 	calls := s.failing.snapshot()
 	if len(calls) == 0 {
-		return runtime.Check{Name: "providers", Status: runtime.CheckOK, Code: "ok", Detail: "every action provider answered its last call in time"}
+		return runtime.Check{Name: "providers", Status: runtime.CheckOK, Code: "ok", Detail: "every action provider and annotator answered its last call in time"}
 	}
 	check := runtime.Check{Name: "providers", Status: runtime.CheckWarn, Code: "provider_timing_out",
-		Detail: "these action providers' calls time out, so views skip them and show none of their actions or panels until they answer again"}
+		Detail: "these extensions' calls time out, so views skip them and show none of their actions, panels or annotations until they answer again"}
 	for _, c := range calls {
 		item := fmt.Sprintf("%s %s: timing out since %s, %d timeout(s), last on scope %s", c.provider, c.call, c.since.UTC().Format(time.RFC3339), c.timeouts, c.scope)
 		if c.work != "" {

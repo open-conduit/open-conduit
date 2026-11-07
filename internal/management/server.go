@@ -62,8 +62,14 @@ type Options struct {
 	// Capacity reports each capacity pool's slots for GET /capacity
 	// (optional: without it the endpoint lists no pools).
 	Capacity func(context.Context) ([]Pool, error)
-	// Annotate contributes extension context to GET /work/{id}.
+	// Annotate contributes the host's own context to GET /work/{id} (a
+	// capacity wait, say). It reads host state only and is not bounded.
 	Annotate func(context.Context, domain.Work) []Annotation
+	// Annotators are the extensions that annotate Work, by name. GET
+	// /work/{id} asks them concurrently, each like an action provider's
+	// call: within the provider timeout and the view deadline, and skipped
+	// while it is known to be timing out (providerHealth). Optional.
+	Annotators func() []Annotator
 	// Actions returns the extension action providers of a scope by
 	// provider name (an extension entry or package). Optional.
 	Actions func(ctx context.Context, scope domain.ID) map[string]extension.ActionProvider

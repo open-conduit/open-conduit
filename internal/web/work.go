@@ -718,9 +718,12 @@ func (s *Server) liveRuns(ctx context.Context, id string, runs []client.Run) ([]
 	return runs, nil
 }
 
-// holds fills in the hold, queued input count and annotations of each ready
-// or waiting Work, eight at a time: lists do not carry them. A held Work is ready, or waiting when the causal
-// limits refused its wake and held it.
+// holds fills in the hold, queued input count and the runtime's
+// annotations (a capacity wait) of each ready or waiting Work, eight at a
+// time: lists do not carry them. It reads them with annotations=runtime, so
+// a world build never waits on an extension's annotations (#545); a daemon
+// that refuses that is read in full. A held Work is ready, or waiting when
+// the causal limits refused its wake and held it.
 func (s *Server) holds(ctx context.Context, works []client.Work) {
 	sem := make(chan struct{}, 8)
 	var wg sync.WaitGroup
@@ -733,7 +736,12 @@ func (s *Server) holds(ctx context.Context, works []client.Work) {
 		go func(w *client.Work) {
 			defer wg.Done()
 			defer func() { <-sem }()
-			if full, err := s.src.Work(ctx, w.ID); err == nil {
+			full, err := s.src.WorkRuntime(ctx, w.ID)
+			var ce *client.Error
+			if errors.As(err, &ce) && ce.Status == 400 && ce.Code == "invalid_filter" {
+				full, err = s.src.Work(ctx, w.ID)
+			}
+			if err == nil {
 				w.Hold, w.Inputs, w.Annotations = full.Hold, full.Inputs, full.Annotations
 			}
 		}(&works[i])

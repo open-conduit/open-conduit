@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"sort"
+	"sync"
 
 	"github.com/open-conduit/open-conduit/domain"
 	"github.com/open-conduit/open-conduit/extension"
@@ -66,7 +67,7 @@ type workDetail struct {
 	Annotations []Annotation `json:"annotations,omitempty"`
 }
 
-func (s *Server) detail(ctx context.Context, w domain.Work) (workDetail, error) {
+func (s *Server) detail(ctx context.Context, w domain.Work, extensions bool) (workDetail, error) {
 	out := workDetail{wireWork: toWork(w)}
 	err := s.read(ctx, func(tx storage.Tx) error {
 		h, held, e := runtime.HoldInTx(tx, w.ID)
@@ -83,22 +84,69 @@ func (s *Server) detail(ctx context.Context, w domain.Work) (workDetail, error) 
 	if err != nil {
 		return out, err
 	}
-	out.Annotations = s.annotate(ctx, w)
+	out.Annotations = s.annotate(ctx, w, extensions)
 	return out, nil
 }
 
-func (s *Server) annotate(ctx context.Context, w domain.Work) []Annotation {
-	if s.o.Annotate == nil {
-		return nil
+// Annotator is one extension that annotates Work: Name is what its health
+// is known by (providerHealth, doctor, provider.* records), and Annotate
+// what it says about a Work.
+type Annotator struct {
+	Name     string
+	Annotate func(context.Context, domain.Work) []Annotation
+}
+
+// annotate is the host's annotations of w and, when extensions is set, the
+// annotators'.
+func (s *Server) annotate(ctx context.Context, w domain.Work, extensions bool) []Annotation {
+	var raw []Annotation
+	if s.o.Annotate != nil {
+		raw = s.o.Annotate(ctx, w)
+	}
+	if extensions {
+		raw = append(raw, s.extensionAnnotations(ctx, w)...)
 	}
 	var out []Annotation
-	for _, a := range s.o.Annotate(ctx, w) {
+	for _, a := range raw {
 		if a.Name == "" || len(a.Value) > 2048 {
 			continue
 		}
 		out = append(out, a)
 	}
 	sort.SliceStable(out, func(i, j int) bool { return out[i].Source < out[j].Source })
+	return out
+}
+
+// extensionAnnotations asks every annotator about w at once, within one
+// view deadline, each call as an action provider's (providerCall): bounded
+// by the provider timeout, skipped while known to be timing out, and
+// reported when it starts or stops. An annotator that fails or runs out of
+// time contributes nothing.
+func (s *Server) extensionAnnotations(ctx context.Context, w domain.Work) []Annotation {
+	if s.o.Annotators == nil {
+		return nil
+	}
+	as := s.o.Annotators()
+	if len(as) == 0 {
+		return nil
+	}
+	v, cancel := s.viewer(ctx)
+	defer cancel()
+	t := extension.ActionTarget{Scope: domain.Scope{ID: w.ScopeID}, Work: &w}
+	got := make([][]Annotation, len(as))
+	var wg sync.WaitGroup
+	for i, a := range as {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			got[i], _ = providerCall(v, t, a.Name, "annotations", func(ctx context.Context) ([]Annotation, error) { return a.Annotate(ctx, w), nil })
+		}()
+	}
+	wg.Wait()
+	var out []Annotation
+	for _, g := range got {
+		out = append(out, g...)
+	}
 	return out
 }
 

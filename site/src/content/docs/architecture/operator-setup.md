@@ -90,7 +90,7 @@ Beside these, `POST /work/{id}/cancel` ends the Work, `POST /executions/{id}/can
 | `POST /work/{id}/container-detach` `{"ref"}` | Removes one of the Work's attach containers, with its gateway and networks. |
 | `POST /scopes/{id}/reconcile` `{expected_revision}` | B05 operator reconcile. Accepts `core.manual.reconcile` in the scope and makes every ingress source registered for the scope due now. The scan is the normal asynchronous reconcile. A generation already under way when the request commits (a page in flight, or part way through its pages) completes and leaves the source due, so a fresh generation always starts after the request. Returns 202 with the Event and the source names. |
 
-`GET /work/{id}` also carries `annotations`: display-only lines an extension contributes. For GitHub these are the issue, its URL, a held issue's state, projection dry run and the counts of corrections and problems the agent logged (`github.Annotate`, durable state only).
+`GET /work/{id}` also carries `annotations`: display-only lines an extension contributes. Management asks every annotating extension at once, each bounded like an action provider's call, and skips one that keeps timing out until it answers again, so a slow annotator costs a read at most its timeout and doctor's `providers` check names it. For GitHub these are the issue, its URL, a held issue's state, projection dry run and the counts of corrections and problems the agent logged (`github.Annotate`, durable state only).
 
 **CLI.** The CLI adds:
 
