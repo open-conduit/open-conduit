@@ -350,6 +350,7 @@ var routes = []route{
 	{"GET", []string{"scopes"}, false, false, (*Server).listScopes},
 	{"GET", []string{"scopes", "*"}, false, false, (*Server).getScope},
 	{"GET", []string{"work"}, false, false, (*Server).listWork},
+	{"GET", []string{"work", "facets"}, false, false, (*Server).workFacets},
 	{"GET", []string{"work", "*"}, false, false, (*Server).getWork},
 	{"GET", []string{"work", "*", "actions"}, false, false, (*Server).listWorkActions},
 	{"GET", []string{"scopes", "*", "actions"}, false, false, (*Server).listScopeActions},

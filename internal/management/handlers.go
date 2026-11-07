@@ -122,51 +122,6 @@ func (s *Server) getScope(c *call) (int, any, error) {
 
 // ---- work ----
 
-func (s *Server) listWork(c *call) (int, any, error) {
-	q, err := s.query(c, "work", "scope_id", "state", "kind", "parent_id", "with")
-	if err != nil {
-		return 0, nil, err
-	}
-	ask, err := with(q, "actions", "panels")
-	if err != nil {
-		return 0, nil, err
-	}
-	if len(ask) > 0 && q.limit > maxWithLimit {
-		return 0, nil, fail(400, "invalid_filter", "limit must be 1-50 with actions or panels")
-	}
-	var items []keyed
-	byID := map[string]domain.Work{}
-	scopes := map[domain.ID]domain.Scope{}
-	err = s.read(c.ctx, func(tx storage.Tx) error {
-		works, e := tx.ListWorks()
-		for _, w := range works {
-			if !match(q, "scope_id", string(w.ScopeID)) || !matchAny(q, "state", string(w.State)) || !match(q, "kind", w.Kind) || !match(q, "parent_id", string(w.ParentID)) {
-				continue
-			}
-			items = append(items, keyed{createdKey(w.CreatedAt, w.ID), toWork(w)})
-			if len(ask) == 0 {
-				continue
-			}
-			byID[string(w.ID)] = w
-			if _, ok := scopes[w.ScopeID]; !ok {
-				sc, e := tx.Scope(w.ScopeID)
-				if e != nil {
-					return e
-				}
-				scopes[w.ScopeID] = sc
-			}
-		}
-		return e
-	})
-	if err != nil {
-		return 0, nil, err
-	}
-	out := s.page("work", q, s.nowBound(), items)
-	if len(ask) > 0 {
-		s.decorate(c.ctx, out["items"].([]any), ask, byID, scopes)
-	}
-	return 200, out, nil
-}
 func match(q listQuery, name, value string) bool {
 	want, ok := q.filters[name]
 	return !ok || want == value

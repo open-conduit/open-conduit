@@ -53,6 +53,9 @@ type Work struct {
 	// (WorksWithActions).
 	Actions []Action `json:"actions,omitempty"`
 	Panels  []Panel  `json:"panels,omitempty"`
+	// Runs are the Work's latest runs (up to 200), oldest first, on a list
+	// asked for them (WorksWithRuns).
+	Runs []Run `json:"runs,omitempty"`
 }
 
 // Hold is an operator scheduling hold on Work.
@@ -220,6 +223,18 @@ type CapacityPool struct {
 type Page[T any] struct {
 	Items      []T    `json:"items"`
 	NextCursor string `json:"next_cursor"`
+	// Total is how many items match the query across every page, where
+	// the list says (GET /work).
+	Total *int `json:"total,omitempty"`
+}
+
+// WorkFacets are the values a view of Work can filter on among the Work
+// matching a query (state, scope_id, kind), and how many Work match.
+type WorkFacets struct {
+	Total     int      `json:"total"`
+	ScopeIDs  []string `json:"scope_ids"`
+	Sources   []string `json:"sources"`
+	Executors []string `json:"executors"`
 }
 type ControlResult struct {
 	EventID     string `json:"event_id"`
@@ -471,6 +486,26 @@ func (c *Client) WorksWithActions(ctx context.Context, q url.Values) (Page[Work]
 // one Work's Events.
 func (c *Client) EventsWithRoutes(ctx context.Context, q url.Values) (Page[Event], error) {
 	return list[Event](c, ctx, "events", withParam(q, "route"))
+}
+
+// WorksWithRuns lists Work as Works does, each with its runs, and with
+// the actions and panels on it as WorksWithActions does when actions is
+// true. A page holds at most 50. q takes Works' filters and source,
+// executor, updated_after, q (words) and sort (created, -created, updated,
+// -updated).
+func (c *Client) WorksWithRuns(ctx context.Context, q url.Values, actions bool) (Page[Work], error) {
+	with := "runs"
+	if actions {
+		with = "actions,panels,runs"
+	}
+	return list[Work](c, ctx, "work", withParam(q, with))
+}
+
+// WorkFacets reads what Work matching q (state, scope_id, kind) can be
+// filtered on.
+func (c *Client) WorkFacets(ctx context.Context, q url.Values) (out WorkFacets, err error) {
+	err = c.Do(ctx, "GET", "work/facets", q, nil, "", &out)
+	return
 }
 
 func withParam(q url.Values, v string) url.Values {

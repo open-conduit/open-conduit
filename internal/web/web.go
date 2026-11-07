@@ -72,6 +72,8 @@ type Source interface {
 	Capacity(ctx context.Context) (client.Capacity, error)
 	Works(ctx context.Context, q url.Values) (client.Page[client.Work], error)
 	WorksWithActions(ctx context.Context, q url.Values) (client.Page[client.Work], error)
+	WorksWithRuns(ctx context.Context, q url.Values, actions bool) (client.Page[client.Work], error)
+	WorkFacets(ctx context.Context, q url.Values) (client.WorkFacets, error)
 	Events(ctx context.Context, q url.Values) (client.Page[client.Event], error)
 	EventsWithRoutes(ctx context.Context, q url.Values) (client.Page[client.Event], error)
 	EventRoute(ctx context.Context, id string) (client.EventRoute, error)
@@ -145,12 +147,10 @@ type Server struct {
 	// restartErr is a failed post-update restart, for the next update page.
 	restartErr string
 
-	// wmu guards the short-lived read of every Work (cachedWorld) and the
-	// runs of finished Work it keeps between reads (runsOf).
+	// wmu guards the short-lived read of the open Work (cachedWorld).
 	wmu    sync.Mutex
 	wcache world
 	wat    time.Time
-	closed map[string]closedRuns
 	// pmu guards the short-lived list of extension pages (navPages).
 	pmu    sync.Mutex
 	pcache []navPage

@@ -105,10 +105,13 @@
     {{- range $d.Sections}}
     <div role="rowgroup" class="ledger-group">
       {{- if .Label}}
-      <div class="group-rule" role="row"><span role="cell">{{.Label}} <span class="group-n">{{len .Rows}}</span></span></div>
+      <div class="group-rule" role="row"><span role="cell">{{.Label}} <span class="group-n">{{.N}}</span></span></div>
       {{- end}}
       {{- range .Rows}}{{template "ledger-row" .}}{{end}}
     </div>
+    {{- end}}
+    {{- if $d.MoreHref}}
+    <div class="ledger-more" role="row"><span role="cell">Showing the {{$d.Shown}} most recently closed of {{$d.Closed}}. <a class="btn btn-quiet" href="{{$d.MoreHref}}">Show more</a></span></div>
     {{- end}}
     {{- if $d.Empty}}
     <div class="empty" role="row">

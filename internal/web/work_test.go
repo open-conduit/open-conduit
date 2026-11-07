@@ -193,11 +193,10 @@ func TestWorldReadsListsAndOffersOnlyForOpenWork(t *testing.T) {
 	f.work["wrk_3"] = client.Work{ID: "wrk_3", State: "completed", Revision: "9"}
 	f.work["wrk_4"] = client.Work{ID: "wrk_4", State: "waiting", Revision: "4", Hold: &client.Hold{Reason: "Its wait is blocked"}}
 	w := s.world(context.Background())
-	if len(w.Works) != 4 || len(w.Errs) != 0 {
+	if len(w.Works) != 3 || len(w.Errs) != 0 {
 		t.Fatalf("works %d errs %v", len(w.Works), w.Errs)
 	}
-	slices.Sort(f.calls)
-	if !slices.Equal(f.calls, []string{"works completed,failed,cancelled", "works+actions ready,running,waiting"}) {
+	if !slices.Equal(f.calls, []string{"works+runs ready,running,waiting"}) {
 		t.Fatalf("calls %v", f.calls)
 	}
 	if f.withCalls != 3 {
@@ -222,7 +221,7 @@ func TestWorldOnADaemonWithoutListForms(t *testing.T) {
 	f.work["wrk_1"] = client.Work{ID: "wrk_1", State: "waiting", Revision: "7"}
 	f.work["wrk_3"] = client.Work{ID: "wrk_3", State: "completed", Revision: "9"}
 	w := s.world(context.Background())
-	if len(w.Errs) != 0 || len(w.Works) != 3 {
+	if len(w.Errs) != 0 || len(w.Works) != 1 {
 		t.Fatalf("works %d errs %v", len(w.Works), w.Errs)
 	}
 	for _, v := range w.Works {
@@ -232,10 +231,31 @@ func TestWorldOnADaemonWithoutListForms(t *testing.T) {
 	}
 }
 
-// Each Work's runs are read by its ID, so however many runs the daemon
-// holds, an open Work's live turn shows (#450).
+// A daemon from before the Work list's runs (#544) has each open Work's
+// runs read by its ID, and closed Work not read at all.
+func TestWorldOnADaemonWithoutListedRuns(t *testing.T) {
+	f, s, _ := setup(t)
+	f.noRuns = true
+	f.work["wrk_1"] = client.Work{ID: "wrk_1", State: "running", Revision: "7"}
+	f.work["wrk_3"] = client.Work{ID: "wrk_3", State: "completed", Revision: "9"}
+	live := turnRun(1, "running", 0, 0)
+	live.ID, live.WorkID = "work/wrk_1/attempt/1", "wrk_1"
+	f.runs = []client.Run{live}
+	w := s.world(context.Background())
+	if len(w.Errs) != 0 || len(w.Works) != 1 || len(w.Works[0].Turns) != 1 {
+		t.Fatalf("works %+v errs %v", w.Works, w.Errs)
+	}
+	if !slices.Equal(f.runReads, []string{"wrk_1"}) {
+		t.Fatalf("runs read for %v, want the open Work alone", f.runReads)
+	}
+}
+
+// On a daemon without listed runs, each Work's runs are read by its ID,
+// so however many runs the daemon holds, an open Work's live turn shows
+// (#450).
 func TestWorldReadsOpenWorksRunsPastTheCap(t *testing.T) {
 	f, s, _ := setup(t)
+	f.noRuns = true
 	f.work["wrk_old"] = client.Work{ID: "wrk_old", State: "completed", Revision: "1"}
 	f.work["wrk_live"] = client.Work{ID: "wrk_live", State: "running", Revision: "2"}
 	for i := range fetchCap {
@@ -266,6 +286,7 @@ func TestWorldReadsOpenWorksRunsPastTheCap(t *testing.T) {
 // turns: they are read by state too.
 func TestWorldReadsAWorksLiveRunPastItsOwnCap(t *testing.T) {
 	f, s, _ := setup(t)
+	f.noRuns = true
 	f.work["wrk_live"] = client.Work{ID: "wrk_live", State: "running", Revision: "2"}
 	for i := range fetchCap {
 		r := turnRun(uint32(i+1), "completed", 0, time.Minute)
@@ -286,45 +307,25 @@ func TestWorldReadsAWorksLiveRunPastItsOwnCap(t *testing.T) {
 	}
 }
 
-// A finished Work's runs are read once and kept while its revision stands;
-// an open Work's are read every time, and a finished Work that changes
-// (reopened by a retry, say) is read again.
-func TestWorldKeepsFinishedWorksRuns(t *testing.T) {
+// The world is the open Work, its runs listed with it: however much Work
+// has closed, a read is one list of the open Work and no runs read one
+// Work at a time (#544).
+func TestWorldReadsOnlyOpenWorkWithListedRuns(t *testing.T) {
 	f, s, _ := setup(t)
-	f.work = map[string]client.Work{
-		"wrk_done": {ID: "wrk_done", State: "completed", Revision: "3"},
-		"wrk_open": {ID: "wrk_open", State: "running", Revision: "5"},
+	f.work = map[string]client.Work{"wrk_open": {ID: "wrk_open", State: "running", Revision: "5"}}
+	for i := range 300 {
+		id := fmt.Sprintf("wrk_done_%d", i)
+		f.work[id] = client.Work{ID: id, State: "completed", Revision: "3"}
 	}
-	done := turnRun(1, "completed", 0, time.Minute)
-	done.ID, done.WorkID = "work/wrk_done/attempt/1", "wrk_done"
 	live := turnRun(1, "running", 0, 0)
 	live.ID, live.WorkID = "work/wrk_open/attempt/1", "wrk_open"
-	f.runs = []client.Run{done, live}
-	reads := func() []string {
-		s.world(context.Background())
-		got := slices.Clone(f.runReads)
-		f.runReads = nil
-		slices.Sort(got)
-		return got
-	}
-	if got := reads(); !slices.Equal(got, []string{"wrk_done", "wrk_open"}) {
-		t.Fatalf("first read %v", got)
-	}
+	f.runs = []client.Run{live}
 	w := s.world(context.Background())
-	f.runReads = nil
-	for _, v := range w.Works {
-		if v.ID == "wrk_done" && len(v.Turns) != 1 {
-			t.Fatalf("kept runs lost: %d turns", len(v.Turns))
-		}
+	if len(w.Works) != 1 || len(w.Works[0].Turns) != 1 || w.Works[0].Disp.Group != "running" {
+		t.Fatalf("works %+v", w.Works)
 	}
-	if got := reads(); !slices.Equal(got, []string{"wrk_open"}) {
-		t.Fatalf("second read %v, want only the open Work", got)
-	}
-	retried := f.work["wrk_done"]
-	retried.Revision = "4"
-	f.work["wrk_done"] = retried
-	if got := reads(); !slices.Equal(got, []string{"wrk_done", "wrk_open"}) {
-		t.Fatalf("after the finished Work changed %v", got)
+	if len(f.runReads) != 0 || !slices.Equal(f.calls, []string{"works+runs ready,running,waiting"}) {
+		t.Fatalf("runs read %v, calls %v", f.runReads, f.calls)
 	}
 }
 

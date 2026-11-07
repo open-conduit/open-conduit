@@ -78,7 +78,16 @@ func (s *Server) attentionPage(w http.ResponseWriter, r *http.Request) {
 		v := receiptView{receipt: rc}
 		if rc.WorkID != "" {
 			v.Href = workHref(rc.WorkID, 0)
-			if n, ok := names[rc.WorkID]; ok {
+			n, ok := names[rc.WorkID]
+			if !ok {
+				// Closed Work is not in the open set; a receipt names
+				// it from its record.
+				if cw, err := s.src.Work(ctx, rc.WorkID); err == nil {
+					n, ok = workName(newWork(cw, nil, nil, s.opts.Now())), true
+					names[rc.WorkID] = n
+				}
+			}
+			if ok {
 				v.Work = n
 			}
 		}
