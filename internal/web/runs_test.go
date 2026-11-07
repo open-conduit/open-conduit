@@ -291,6 +291,16 @@ func TestRunsPageReadsClosedWorkByQuery(t *testing.T) {
 	if pages != 1 {
 		t.Errorf("closed pages read %d, want 1: %v", pages, f.calls)
 	}
+	// The facets are read once and serve the next loads.
+	var facets int
+	for _, c := range f.calls {
+		if strings.HasPrefix(c, "facets ") {
+			facets++
+		}
+	}
+	if facets != 0 {
+		t.Errorf("facets read again within their TTL: %v", f.calls)
+	}
 	body = do(h, "GET", "/?g=closed&more=2", nil, s).Body.String()
 	if !strings.Contains(body, "w_old_000") || strings.Contains(body, "Show more") {
 		t.Errorf("more=2 should show every closed Work")

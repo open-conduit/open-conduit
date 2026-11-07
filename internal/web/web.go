@@ -151,6 +151,10 @@ type Server struct {
 	wmu    sync.Mutex
 	wcache world
 	wat    time.Time
+	// fmu guards the short-lived facets of closed Work (closedFacets).
+	fmu    sync.Mutex
+	fcache client.WorkFacets
+	fat    time.Time
 	// pmu guards the short-lived list of extension pages (navPages).
 	pmu    sync.Mutex
 	pcache []navPage

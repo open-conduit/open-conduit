@@ -207,6 +207,58 @@ func runsOf(tx storage.Tx, items []any, works map[string]domain.Work) (map[strin
 	return out, nil
 }
 
+// listedWork is a page of Work as queryWork reads it: the response, the
+// runs asked for, and the records and scopes decorate needs.
+type listedWork struct {
+	out    map[string]any
+	runs   map[string][]wireRun
+	byID   map[string]domain.Work
+	scopes map[domain.ID]domain.Scope
+}
+
+// queryWork reads the page of Work f asks for in tx, with the total that
+// match and, as ask says, each listed Work's runs.
+func (s *Server) queryWork(tx storage.Tx, f workFilter, ask map[string]bool) (listedWork, error) {
+	lw := listedWork{byID: map[string]domain.Work{}, scopes: map[domain.ID]domain.Scope{}}
+	works, err := tx.ListWorks()
+	if err != nil {
+		return lw, err
+	}
+	var items []keyed
+	for _, w := range works {
+		ok, err := f.matches(tx, w)
+		if err != nil {
+			return lw, err
+		}
+		if ok {
+			items = append(items, keyed{f.key(w), toWork(w)})
+			lw.byID[string(w.ID)] = w
+		}
+	}
+	lw.out = s.page("work", f.q, s.workBound(f), items)
+	lw.out["total"] = len(items)
+	page := lw.out["items"].([]any)
+	if ask["runs"] {
+		if lw.runs, err = runsOf(tx, page, lw.byID); err != nil {
+			return lw, err
+		}
+	}
+	if !ask["actions"] && !ask["panels"] {
+		return lw, nil
+	}
+	for _, it := range page {
+		w := lw.byID[it.(wireWork).ID]
+		if _, ok := lw.scopes[w.ScopeID]; !ok {
+			sc, err := tx.Scope(w.ScopeID)
+			if err != nil {
+				return lw, err
+			}
+			lw.scopes[w.ScopeID] = sc
+		}
+	}
+	return lw, nil
+}
+
 // listWork lists Work by the query, with the total that match.
 func (s *Server) listWork(c *call) (int, any, error) {
 	q, err := s.query(c, "work", "scope_id", "state", "kind", "parent_id", "source", "executor", "updated_after", "q", "sort", "with")
@@ -224,54 +276,16 @@ func (s *Server) listWork(c *call) (int, any, error) {
 	if err != nil {
 		return 0, nil, err
 	}
-	var (
-		out  map[string]any
-		runs map[string][]wireRun
-	)
-	byID := map[string]domain.Work{}
-	scopes := map[domain.ID]domain.Scope{}
+	var lw listedWork
 	err = s.read(c.ctx, func(tx storage.Tx) error {
-		works, e := tx.ListWorks()
-		if e != nil {
-			return e
-		}
-		var items []keyed
-		for _, w := range works {
-			ok, e := f.matches(tx, w)
-			if e != nil {
-				return e
-			}
-			if ok {
-				items = append(items, keyed{f.key(w), toWork(w)})
-				byID[string(w.ID)] = w
-			}
-		}
-		out = s.page("work", q, s.workBound(f), items)
-		out["total"] = len(items)
-		page := out["items"].([]any)
-		if ask["runs"] {
-			if runs, e = runsOf(tx, page, byID); e != nil {
-				return e
-			}
-		}
-		if !ask["actions"] && !ask["panels"] {
-			return nil
-		}
-		for _, it := range page {
-			w := byID[it.(wireWork).ID]
-			if _, ok := scopes[w.ScopeID]; !ok {
-				sc, e := tx.Scope(w.ScopeID)
-				if e != nil {
-					return e
-				}
-				scopes[w.ScopeID] = sc
-			}
-		}
-		return nil
+		var e error
+		lw, e = s.queryWork(tx, f, ask)
+		return e
 	})
 	if err != nil {
 		return 0, nil, err
 	}
+	out, runs, byID, scopes := lw.out, lw.runs, lw.byID, lw.scopes
 	if len(ask) > 0 {
 		s.decorate(c.ctx, out["items"].([]any), ask, runs, byID, scopes)
 	}
@@ -290,49 +304,54 @@ func (s *Server) workFacets(c *call) (int, any, error) {
 	if q.cursor != nil || c.r.URL.Query().Has("limit") {
 		return 0, nil, fail(400, "invalid_filter", "facets take no limit or cursor")
 	}
-	f := workFilter{q: q}
-	scopes, sources, executors := map[string]bool{}, map[string]bool{}, map[string]bool{}
-	total := 0
+	var out map[string]any
 	err = s.read(c.ctx, func(tx storage.Tx) error {
-		works, e := tx.ListWorks()
-		if e != nil {
-			return e
-		}
-		var in []domain.Work
-		for _, w := range works {
-			if !f.cheap(w) {
-				continue
-			}
-			in = append(in, w)
-			scopes[string(w.ScopeID)] = true
-			if src := workSource(w); src != "" {
-				sources[src] = true
-			}
-		}
-		total = len(in)
-		sort.Slice(in, func(i, j int) bool { return in[i].UpdatedAt.After(in[j].UpdatedAt) })
-		for _, w := range in[:min(len(in), facetExecutorWork)] {
-			x, ok, e := latestExecution(tx, w.ID)
-			if e != nil {
-				return e
-			}
-			if !ok {
-				continue
-			}
-			ex, e := executorOf(tx, x)
-			if e != nil {
-				return e
-			}
-			if ex != "" {
-				executors[ex] = true
-			}
-		}
-		return nil
+		var e error
+		out, e = facetsOf(tx, workFilter{q: q})
+		return e
 	})
 	if err != nil {
 		return 0, nil, err
 	}
-	return 200, map[string]any{"total": total, "scope_ids": setKeys(scopes), "sources": setKeys(sources), "executors": setKeys(executors)}, nil
+	return 200, out, nil
+}
+
+// facetsOf is GET /work/facets's answer for f in tx.
+func facetsOf(tx storage.Tx, f workFilter) (map[string]any, error) {
+	scopes, sources, executors := map[string]bool{}, map[string]bool{}, map[string]bool{}
+	works, err := tx.ListWorks()
+	if err != nil {
+		return nil, err
+	}
+	var in []domain.Work
+	for _, w := range works {
+		if !f.cheap(w) {
+			continue
+		}
+		in = append(in, w)
+		scopes[string(w.ScopeID)] = true
+		if src := workSource(w); src != "" {
+			sources[src] = true
+		}
+	}
+	sort.Slice(in, func(i, j int) bool { return in[i].UpdatedAt.After(in[j].UpdatedAt) })
+	for _, w := range in[:min(len(in), facetExecutorWork)] {
+		x, ok, err := latestExecution(tx, w.ID)
+		if err != nil {
+			return nil, err
+		}
+		if !ok {
+			continue
+		}
+		ex, err := executorOf(tx, x)
+		if err != nil {
+			return nil, err
+		}
+		if ex != "" {
+			executors[ex] = true
+		}
+	}
+	return map[string]any{"total": len(in), "scope_ids": setKeys(scopes), "sources": setKeys(sources), "executors": setKeys(executors)}, nil
 }
 
 func setKeys(m map[string]bool) []string {

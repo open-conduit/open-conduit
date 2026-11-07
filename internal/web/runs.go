@@ -158,6 +158,11 @@ func (rq runsQuery) closedQuery(now time.Time) url.Values {
 	return q
 }
 
+// faceted says whether a facet narrows the Work.
+func (rq runsQuery) faceted() bool {
+	return rq.Scope != "" || rq.Source != "" || rq.Executor != "" || rq.Updated != "" || rq.Q != ""
+}
+
 // showsClosed says whether the state filter lists closed Work.
 func (rq runsQuery) showsClosed() bool { return rq.G == "closed" || rq.G == "all" }
 
@@ -573,9 +578,9 @@ func (s *Server) runsPage(w http.ResponseWriter, r *http.Request) {
 
 // closedFor reads the closed Work the Runs page shows for rq: what every
 // closed Work can be filtered on, how many the facets leave, and when the
-// state filter lists closed Work, up to want of them with their runs. That
-// is two or three requests whose cost follows want, however much has
-// closed.
+// state filter lists closed Work, up to want of them with their runs. The
+// facets are cached (closedFacets), and without facets they give the count,
+// so the default view reads no closed Work at all.
 func (s *Server) closedFor(ctx context.Context, rq runsQuery, want int) (closedSet, []string) {
 	cl := closedSet{Want: want}
 	var (
@@ -590,32 +595,56 @@ func (s *Server) closedFor(ctx context.Context, rq runsQuery, want int) (closedS
 			mu.Unlock()
 		}
 	}
-	wg.Add(2)
+	wg.Add(1)
 	go func() {
 		defer wg.Done()
 		var err error
-		cl.Facets, err = s.src.WorkFacets(ctx, url.Values{"state": {closedStates}})
+		cl.Facets, err = s.closedFacets(ctx)
 		keep(err)
 	}()
-	go func() {
-		defer wg.Done()
-		q := rq.closedQuery(s.opts.Now())
-		if !rq.showsClosed() {
-			q.Set("state", closedStates)
-			q.Set("limit", "1")
-			p, err := s.src.Works(ctx, q)
-			if err == nil && p.Total != nil {
-				cl.Matching = *p.Total
-			}
-			keep(err)
-			return
-		}
+	q := rq.closedQuery(s.opts.Now())
+	switch {
+	case rq.showsClosed():
 		var err error
 		cl.Rows, cl.Matching, err = s.closedWork(ctx, q, want)
 		keep(err)
-	}()
+	case rq.faceted():
+		q.Set("state", closedStates)
+		q.Set("limit", "1")
+		p, err := s.src.Works(ctx, q)
+		if err == nil && p.Total != nil {
+			cl.Matching = *p.Total
+		}
+		keep(err)
+	default:
+		// Without facets every closed Work matches: the facets count them.
+		wg.Wait()
+		cl.Matching = cl.Facets.Total
+	}
 	wg.Wait()
 	return cl, errs
+}
+
+// facetsTTL is how long the closed Work's facets serve the Runs page
+// before they are read again. They change only as Work closes in a new
+// scope, source or executor, so a page needn't read them on every load.
+const facetsTTL = 30 * time.Second
+
+// closedFacets is what closed Work can be filtered on, read at most
+// facetsTTL ago.
+func (s *Server) closedFacets(ctx context.Context) (client.WorkFacets, error) {
+	s.fmu.Lock()
+	defer s.fmu.Unlock()
+	now := s.opts.Now()
+	if !s.fat.IsZero() && now.Sub(s.fat) <= facetsTTL && !now.Before(s.fat) {
+		return s.fcache, nil
+	}
+	f, err := s.src.WorkFacets(ctx, url.Values{"state": {closedStates}})
+	if err != nil {
+		return f, err
+	}
+	s.fcache, s.fat = f, now
+	return f, nil
 }
 
 // closedErr is a failed read of closed Work, naming a daemon too old to
