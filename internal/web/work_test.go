@@ -215,6 +215,29 @@ func TestWorldReadsListsAndOffersOnlyForOpenWork(t *testing.T) {
 	}
 }
 
+// The world reads each open Work's hold and queued input without the
+// extensions' annotations (#545), keeping the runtime's capacity wait; a
+// daemon that refuses annotations=runtime is read in full.
+func TestWorldReadsHoldsWithoutExtensionAnnotations(t *testing.T) {
+	for _, old := range []bool{false, true} {
+		f, s, _ := setup(t)
+		f.old = old
+		one := 1
+		f.work["wrk_1"] = client.Work{ID: "wrk_1", State: "ready", Revision: "2", Inputs: &one, Annotations: []client.Annotation{
+			{Source: "runtime", Name: "waiting", Value: "limit reached: agent turns (settings.concurrency) 5/5 running"},
+			{Source: "github", Name: "issue", Value: "o/r#1"},
+		}}
+		w := s.world(context.Background())
+		if got := f.runtimeReads.Load(); got != 1 {
+			t.Fatalf("old=%v: runtime reads %d, want 1", old, got)
+		}
+		i := slices.IndexFunc(w.Works, func(v workView) bool { return v.ID == "wrk_1" })
+		if i < 0 || w.Works[i].Disp.Detail != "Waiting for a slot: agent turns (settings.concurrency) 5/5 running" {
+			t.Fatalf("old=%v: capacity wait lost: %+v", old, w.Works)
+		}
+	}
+}
+
 func TestWorldOnADaemonWithoutListForms(t *testing.T) {
 	f, s, _ := setup(t)
 	f.old = true

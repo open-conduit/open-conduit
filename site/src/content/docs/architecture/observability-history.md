@@ -52,7 +52,7 @@ The toolbelt adds `toolbelt.called` and `toolbelt.rejected` records through `Too
 | `toolbelt.declared` | Declared wait or outcome | declaration kind |
 | `toolbelt.called`, `toolbelt.rejected` | Toolbelt | operation, safe result code |
 | `ingress.scan_started`, `_page`, `_completed`, `_partial`, `_failed` | Reconcile scan ledger | source, scan ID, safe error code, failures, next due; for `provider_failed`, the provider's failure class, code and bounded message (`ingress.error_class`, `ingress.error_code`, `ingress.error_message`) |
-| `provider.timing_out`, `provider.answering` | An action provider's actions or panels call starts timing out across requests, or answers again (management's provider health) | `provider.name`, `provider.call` (`actions` or `panels`), `provider.since`, `provider.timeouts`, and for `timing_out` the time it is next asked (`provider.retry_at`); correlated with the scope and Work whose view saw it |
+| `provider.timing_out`, `provider.answering` | An action provider's actions or panels call, or an annotating extension's annotations call, starts timing out across requests, or answers again (management's provider health) | `provider.name`, `provider.call` (`actions`, `panels` or `annotations`), `provider.since`, `provider.timeouts`, and for `timing_out` the time it is next asked (`provider.retry_at`); correlated with the scope and Work whose view saw it |
 
 Every record carries a `record_id` attribute. For state transitions it is derived from the entity and revision. For toolbelt calls it uses a per-call nonce. Exporter retries and duplicate deliveries are therefore identifiable.
 
@@ -67,7 +67,7 @@ Correlation always comes from trusted runtime state, never from an executor payl
 
 Recovery keeps the attempt trace and records the new epoch. `execution.queued` carries `trigger.trace_id`, so an operator can follow an Event chain into the attempt it started.
 
-A reconcile scan is host-polled, so no trigger Event exists to anchor it. Ingress scan records (`ingress.` prefix) are instead anchored by their `ingress.source` attribute and a trace derived from source and scan. `observability.Validate` accepts that anchor only for `ingress.` records, and no Event ID is fabricated. A pre-acceptance push rejection is returned synchronously to the ingress caller and is not a lifecycle record. The shared observer case rejects an unanchored ingress record. Provider health records (`provider.` prefix) are host-observed in the same way, when a view finds an action provider's call timing out or answering again: they are anchored by their `provider.name` attribute and a trace derived from the provider, call and when it began timing out, and the shared observer case rejects one without it.
+A reconcile scan is host-polled, so no trigger Event exists to anchor it. Ingress scan records (`ingress.` prefix) are instead anchored by their `ingress.source` attribute and a trace derived from source and scan. `observability.Validate` accepts that anchor only for `ingress.` records, and no Event ID is fabricated. A pre-acceptance push rejection is returned synchronously to the ingress caller and is not a lifecycle record. The shared observer case rejects an unanchored ingress record. Provider health records (`provider.` prefix) are host-observed in the same way, when a view finds an action provider's or annotator's call timing out or answering again: they are anchored by their `provider.name` attribute and a trace derived from the provider, call and when it began timing out, and the shared observer case rejects one without it.
 
 A fired timer's Event is reported once as `event.accepted`, not once by the acceptance and again by `FireTimer`.
 
@@ -177,7 +177,7 @@ The shell executor's `Forget` removes the execution's run directories. It refuse
 | `connections` | Declared connections have registered types. Reachability is extension-specific. |
 | `secrets` | Resolved only with `check_secrets`, reporting names and codes, never values or references. |
 | `pinned_executors` | Live or held attempts whose pinned generation or registration is not installed. |
-| `providers` | Action providers whose actions or panels call is timing out, so views skip it (`provider_timing_out`, `warn`): each with the call, since when, how many timeouts, the scope and Work it last timed out on, and when it is next asked. |
+| `providers` | Action providers and annotating extensions whose actions, panels or annotations call is timing out, so views skip it (`provider_timing_out`, `warn`): each with the call, since when, how many timeouts, the scope and Work it last timed out on, and when it is next asked. |
 
 Only the `storage` probe writes, and so waits its turn with the daemon's writes. Every other runtime check reads through a View ([SQLite](../sqlite-artifacts/)), and reads only what is outstanding. `lease_recovery`, `resource_holds` and `pinned_executors` read the live attempts and the scheduler's index of attempts whose resource exclusion is unconfirmed; `retention` reads the ledger's pending list. An attempt that has finished and confirmed its exclusion is never read again, so doctor costs the same however long the history grows. On a store written before those indexes existed, the checks read every attempt until the daemon's first poll or retention sweep builds them.
 

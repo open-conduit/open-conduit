@@ -370,11 +370,10 @@ func firstRunPlaybook(configPath, bin string) (string, string, error) {
 	return "", "", errors.New("no setup package is installed: install it with open-conduit extension install")
 }
 
-// annotate contributes capacity and the extensions' context for Work.
+// annotate contributes the host's own context for Work: its capacity
+// wait. The extensions' come from annotators.
 func (d *daemon) annotate(ctx context.Context, w domain.Work) []management.Annotation {
-	out := d.capacityAnnotation(ctx, w)
-	out = append(out, d.packageAnnotations(ctx, w)...)
-	return out
+	return d.capacityAnnotation(ctx, w)
 }
 
 // actions are the action providers on a scope, every extension's.

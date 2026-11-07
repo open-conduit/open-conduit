@@ -470,6 +470,15 @@ func (c *Client) Works(ctx context.Context, q url.Values) (Page[Work], error) {
 func (c *Client) Work(ctx context.Context, id string) (Work, error) {
 	return get[Work](c, ctx, "work/"+esc(id))
 }
+
+// WorkRuntime reads one Work as Work does, with its hold and queued input
+// but only the runtime's own annotations (a capacity wait), so it never
+// waits on an extension. A daemon older than annotations=runtime refuses
+// it with 400 invalid_filter.
+func (c *Client) WorkRuntime(ctx context.Context, id string) (out Work, err error) {
+	err = c.Do(ctx, "GET", "work/"+esc(id), url.Values{"annotations": {"runtime"}}, nil, "", &out)
+	return
+}
 func (c *Client) Events(ctx context.Context, q url.Values) (Page[Event], error) {
 	return list[Event](c, ctx, "events", q)
 }

@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -42,11 +43,13 @@ type fake struct {
 	healthErr error
 	// old is a daemon from before the list forms (#124); noRuns one from
 	// before the Work list's runs and query (#544).
-	old      bool
-	noRuns   bool
-	invoked  []invoked
-	controls []string
-	calls    []string
+	old    bool
+	noRuns bool
+	// runtimeReads counts WorkRuntime reads (holds runs them concurrently).
+	runtimeReads atomic.Int32
+	invoked      []invoked
+	controls     []string
+	calls        []string
 	// actions: the reason each control was sent with.
 	reasons   []string
 	traced    []string
@@ -108,6 +111,24 @@ func (f *fake) Work(_ context.Context, id string) (client.Work, error) {
 		return w, nil
 	}
 	return client.Work{}, &client.Error{Status: 404, Code: "not_found"}
+}
+func (f *fake) WorkRuntime(_ context.Context, id string) (client.Work, error) {
+	f.runtimeReads.Add(1)
+	if f.old {
+		return client.Work{}, &client.Error{Status: 400, Code: "invalid_filter"}
+	}
+	w, ok := f.work[id]
+	if !ok {
+		return client.Work{}, &client.Error{Status: 404, Code: "not_found"}
+	}
+	var own []client.Annotation
+	for _, a := range w.Annotations {
+		if a.Source == "runtime" {
+			own = append(own, a)
+		}
+	}
+	w.Annotations = own
+	return w, nil
 }
 func (f *fake) Waits(context.Context, url.Values) (client.Page[client.Wait], error) {
 	return client.Page[client.Wait]{Items: f.waits}, nil
