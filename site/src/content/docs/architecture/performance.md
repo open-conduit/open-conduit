@@ -242,15 +242,15 @@ On a quiet machine the same pages took about 20 ms each after. What it took:
 - **Run lists** built every run's full record for each page of 200: 112 ms of storage work a page, nine pages to read them all. A page now builds only the runs it returns.
 - **The world read** behind the Runs and Needs you pages read every run on every load (6.6 MB of JSON, and only the oldest 1,000). It then read runs by Work, keeping a finished Work's in memory while its revision stood, so the first load after a restart read every Work's runs again, one request per Work, and could pass the view's 15 s call timeout ([#544](https://github.com/open-conduit/open-conduit/issues/544)). Now the world is the open Work alone, listed with its runs (`GET /v1/work?with=actions,panels,runs`, 50 a request), and a page asks for the closed Work it shows by its own query. The Runs page's facets come from `GET /v1/work/facets`, cached for 30 seconds, and without a facet set they also give the Closed count. With a facet set, the count is the list's `total`. The Closed rows are one page of 50 with their runs, and "Show more" reads 50 more. So the default view reads no closed Work, warm or cold. What the daemon still does grows with history: it scans the Work records in process to filter and sort them, and reads the latest attempt of each Work it filters by executor or words.
 
-`BenchmarkWork*` in `internal/management` times each read in its transaction on SQLite. Each closed Work has four finished attempts, and 20 Work are open. One run, darwin/arm64 (Apple M1 Pro), 20 iterations, on a machine with a load average of about 80, so these are upper bounds:
+`BenchmarkRunsPageReads` in `integration` times each request through the management API on SQLite. Each closed Work has four finished attempts, and 20 Work are open. One run, darwin/arm64 (Apple M1 Pro), 20 iterations, on a machine with a load average of about 80, so these are upper bounds:
 
-| Read | 420 closed | 5,000 closed |
+| Request | 420 closed | 5,000 closed |
 | --- | ---: | ---: |
-| Open Work with runs (the world) | 4.3 ms | 47 ms |
-| Facets (at most every 30 s) | 50 ms | 222 ms |
-| Closed count with a facet | 7.4 ms | 75 ms |
-| Closed page of 50 with runs | 39 ms | 125 ms |
-| Closed search (`q`) | 98 ms | 583 ms |
+| Open Work with runs (the world) | 7.3 ms | 49 ms |
+| Facets (at most every 30 s) | 58 ms | 193 ms |
+| Closed count with a facet | 4.9 ms | 54 ms |
+| Closed page of 50 with runs | 45 ms | 110 ms |
+| Closed search (`q`) | 79 ms | 668 ms |
 
 The 50 Work's runs cost about 30 ms at either size. The rest is the scan, and the search also reads each closed Work's latest attempt. A page whose cost doesn't grow with history needs index-backed Work queries in the storage contract (state, scope, updated time, latest executor), which [#548](https://github.com/open-conduit/open-conduit/issues/548) tracks.
 - **Reads queued on the writer.** Every read, the token check included, was a `BEGIN IMMEDIATE` transaction on the one connection, so a page's concurrent reads queued behind each other and the runtime. They now run as Views on reader connections.

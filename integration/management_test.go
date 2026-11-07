@@ -42,7 +42,7 @@ const managementConfig = `{
 }`
 
 type managementHarness struct {
-	t          *testing.T
+	t          testing.TB
 	state      string
 	configPath string
 	store      storage.Store
@@ -82,14 +82,14 @@ type managementHarness struct {
 	containerDetach func(context.Context, domain.Work, string) error
 }
 
-func newManagementHarness(t *testing.T) *managementHarness {
+func newManagementHarness(t testing.TB) *managementHarness {
 	t.Helper()
 	return newManagementHarnessWith(t, managementConfig, nil)
 }
 
 // newManagementHarnessWith starts the harness on cfg, with registry
 // additions made by register (nil for none).
-func newManagementHarnessWith(t *testing.T, cfg string, register func(*config.Registry)) *managementHarness {
+func newManagementHarnessWith(t testing.TB, cfg string, register func(*config.Registry)) *managementHarness {
 	t.Helper()
 	ctx := context.Background()
 	state, err := os.MkdirTemp("/tmp", "oc-")
